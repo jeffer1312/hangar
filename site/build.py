@@ -13,58 +13,60 @@ import strings as S  # noqa: E402
 
 ICONS = json.loads((SITE / "src" / "icons.json").read_text(encoding="utf-8"))
 OS_ICONS = json.loads((SITE / "src" / "os-icons.json").read_text(encoding="utf-8"))
-OS_LOOK = {  # plataforma do cartão: (ícone, tom)
-    "linux": ("linux", "#F2C94C"),
-    "windows": ("windows", "#5AB0F0"),
-    "macos": ("apple", "#ECEBE6"),
-    "android": ("android", "#3DDC84"),
-    "iphone": ("apple", "#ECEBE6"),
-}
+OS_ICON = {"linux": "linux", "windows": "windows", "macos": "apple", "android": "android", "iphone": "apple"}
 HANGAR_ARCS = '<path d="M 34.18 138 A 76 76 0 1 1 165.82 138"></path><path d="M 49.59 116.38 A 53 53 0 1 1 150.41 116.38"></path><path d="M 70.16 103.14 A 30 30 0 1 1 129.84 103.14"></path>'
 DOWNLOAD_ARROW = '<path d="M12 4v12"></path><path d="m7 11 5 5 5-5"></path><path d="M5 20h14"></path>'
 GO_ARROW = '<path d="M5 12h14"></path><path d="m13 6 6 6-6 6"></path>'
+OWN_ICONS = {
+    "pi": '<svg viewBox="0 0 560 560" fill="currentColor" aria-hidden="true"><path d="M420 280H280V140H0V0H420V280Z"></path><path d="M560 560H420V280H560V560Z"></path><path d="M140 560H0V140H140V280H280V420H140V560Z"></path></svg>',
+    "omp": '<svg viewBox="0 0 120 90" fill="currentColor" aria-hidden="true"><rect x="10" y="8" width="100" height="12" rx="2"></rect><rect x="25" y="20" width="12" height="62" rx="2"></rect><rect x="75" y="20" width="12" height="45" rx="2"></rect><rect x="71" y="55" width="20" height="16" rx="3"></rect></svg>',
+}
 esc = html.escape
 
 
+def agent_icon(key):
+    if key in OWN_ICONS:
+        return OWN_ICONS[key]
+    paths = "".join(p.replace("/>", "></path>") for p in ICONS[key])
+    return f'<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">{paths}</svg>'
+
+
+def render_agents_lead(i):
+    names = [f'<span class="ag"><span class="ag-i ag-{key}">{agent_icon(key)}</span>{name}</span>' for key, name in S.AGENTS]
+    return ", ".join(names[:-1]) + S.T["agents_and"][i] + names[-1]
+
+
+def render_flags():
+    return "".join(f'<li class="ag-{key}" style="--i:{n}">{agent_icon(key)}<span>{name}</span></li>' for n, (key, name) in enumerate(S.AGENTS))
+
+
 def lang_switch(lang):
-    on = "padding: 4px 10px; border-radius: 7px; background: rgba(255,255,255,.10); color: #ECEBE6"
-    off = "padding: 4px 10px; border-radius: 7px; color: #8A8C89"
-    pt = f'<span aria-current="true" style="{on}">PT</span>' if lang == "pt" else f'<a href="/" style="{off}" lang="pt-BR">PT</a>'
-    en = f'<span aria-current="true" style="{on}">EN</span>' if lang == "en" else f'<a href="/en/" style="{off}" lang="en">EN</a>'
+    pt = '<span aria-current="true">PT</span>' if lang == "pt" else '<a href="/" lang="pt-BR">PT</a>'
+    en = '<span aria-current="true">EN</span>' if lang == "en" else '<a href="/en/" lang="en">EN</a>'
     return pt + "\n" + en
 
 
 def render_small(i):
-    # corpo do <sc-for list="{{smallFeatures}}"> do molde, linhas 296-300, sem mudança de estilo
     return "\n".join(
-        '<div class="card reveal" style="border-radius: 20px; border: 1px solid rgba(255,255,255,.08); background: #0F1112; padding: 26px; display: flex; flex-direction: column; gap: 10px">'
-        f'<span style="font-family: \'Geist Mono\', monospace; font-size: 12px; color: #7A7D7B">{esc(f["k"])}</span>'
-        f'<h3 style="margin: 0; font-family: \'Space Grotesk\', sans-serif; font-weight: 600; font-size: 20px; letter-spacing: -0.015em">{esc(f["t"])}</h3>'
-        f'<p style="margin: 0; font-size: 15px; color: #A7A9A5">{esc(f["d"])}</p></div>'
+        f'<div class="mini"><span class="mono">{esc(f["k"])}</span><h3>{esc(f["t"])}</h3><p>{esc(f["d"])}</p></div>'
         for f in S.SMALL[S.LANGS[i]]
     )
 
 
 def render_downloads(i):
-    # corpo do <sc-for list="{{downloads}}"> do molde, linhas 460-466; a borda vem de .dl/.dl.is-mine
     out = []
     for platform, os_, arch, file_, href in S.DOWNLOADS:
-        icon, tone = OS_LOOK[platform]
         out.append(
-            f'<a class="card reveal dl" data-platform="{platform}" href="{href}" style="--t: {tone}; border-radius: 16px; background: #0F1112; padding: 22px 24px 18px; display: flex; flex-direction: column; gap: 18px">'
-            f'<svg class="dl-mark" viewBox="0 0 200 200" aria-hidden="true"><g transform="translate(0,16)" fill="none" stroke="currentColor" stroke-width="13" stroke-linecap="round">{HANGAR_ARCS}</g></svg>'
+            f'<a class="dl" data-platform="{platform}" href="{href}">'
             '<span class="dl-head">'
-            f'<span class="dl-ic"><svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="{OS_ICONS[icon]}"></path></svg></span>'
-            '<span style="display: flex; flex-direction: column; gap: 3px; min-width: 0">'
-            '<span class="dl-name">'
-            f'<span style="font-family: \'Space Grotesk\', sans-serif; font-weight: 600; font-size: 22px; line-height: 1.15">{os_[i]}</span>'
-            f'<span class="badge-mine" hidden style="padding: 2px 8px; border-radius: 999px; background: rgba(163,166,255,.12); color: var(--a); font-size: 11.5px; font-weight: 500; white-space: nowrap">{S.T["your_os"][i]}</span>'
-            '</span>'
-            f'<span style="font-size: 14px; color: #8E908D">{arch[i]}</span>'
+            f'<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="{OS_ICONS[OS_ICON[platform]]}"></path></svg>'
+            '<span class="dl-info">'
+            f'<span class="dl-name">{os_[i]}<span class="badge-mine" hidden>{S.T["your_os"][i]}</span></span>'
+            f'<span class="dl-arch">{arch[i]}</span>'
             '</span></span>'
             '<span class="dl-foot">'
-            f'<span style="min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: \'Geist Mono\', monospace; font-size: 12px; color: var(--a)">{file_[i]}</span>'
-            f'<svg class="dl-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{GO_ARROW if href.startswith("#") else DOWNLOAD_ARROW}</svg>'
+            f'<span class="dl-file mono">{file_[i]}</span>'
+            f'<svg class="dl-arrow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{GO_ARROW if href.startswith("#") else DOWNLOAD_ARROW}</svg>'
             '</span></a>'
         )
     return "\n".join(out)
@@ -75,42 +77,38 @@ def media(name):
 
 
 def render_showcase(i):
-    # marcação e estilos de showcase.src.html (linhas 17-33), com os estados em classes de site.css
     tabs = []
     for k, c in enumerate(S.CLIPS):
         tabs.append(
             f'<button type="button" role="tab" class="sc-tab" aria-selected="{"true" if k == 0 else "false"}" tabindex="{0 if k == 0 else -1}" aria-controls="sc-video" '
-            f'data-src="{media(c["video"][i])}" data-poster="{media(c["poster"][i])}" data-caption="{esc(c["caption"][i])}" data-alt="{esc(c["alt"][i])}" '
-            'style="position: relative; flex: none; height: 38px; padding: 0 16px; border: 0; border-radius: 9px; font: inherit; font-size: 13.5px; cursor: pointer; overflow: hidden; transition: background .3s, color .3s">'
+            f'data-src="{media(c["video"][i])}" data-poster="{media(c["poster"][i])}" data-caption="{esc(c["caption"][i])}" data-alt="{esc(c["alt"][i])}">'
             f'{esc(c["tab"][i])}'
-            '<span class="sc-track" aria-hidden="true" style="position: absolute; left: 12px; right: 12px; bottom: 3px; height: 2px; border-radius: 1px; background: rgba(255,255,255,.08)">'
-            '<span class="sc-bar" style="display: block; height: 100%; width: 0%; border-radius: 1px; background: var(--a); transition: width .25s linear"></span></span></button>'
+            '<span class="sc-track" aria-hidden="true"><span class="sc-bar"></span></span></button>'
         )
     first = S.CLIPS[0]
     return (
-        '<div class="showcase" data-showcase style="display: flex; flex-direction: column; gap: 18px">'
-        f'<div role="tablist" aria-label="{S.T["sc_tabs"][i]}" style="align-self: center; max-width: 100%; overflow-x: auto; display: flex; gap: 2px; padding: 4px; border-radius: 12px; border: 1px solid rgba(255,255,255,.09); background: rgba(255,255,255,.02)">{"".join(tabs)}</div>'
-        '<div class="tilt" style="border-radius: 16px; padding: 1px; background: linear-gradient(180deg, rgba(255,255,255,.24), rgba(255,255,255,.05) 40%, rgba(255,255,255,0)); box-shadow: 0 40px 120px -30px rgba(0,0,0,.9)">'
-        f'<div class="sc-frame"><video id="sc-video" class="sc-video" muted playsinline preload="auto" poster="{media(first["poster"][i])}" src="{media(first["video"][i])}" aria-label="{esc(first["alt"][i])}"></video></div></div>'
-        f'<p class="sc-caption" aria-live="polite" style="margin: 0; text-align: center; font-size: 15px; color: #A3A5A2; min-height: 1.6em">{esc(first["caption"][i])}</p></div>'
+        '<div class="showcase" data-showcase>'
+        f'<div class="sc-window"><div class="sc-frame"><video id="sc-video" class="sc-video" muted playsinline preload="auto" poster="{media(first["poster"][i])}" src="{media(first["video"][i])}" aria-label="{esc(first["alt"][i])}"></video></div></div>'
+        f'<div class="sc-tabs" role="tablist" aria-label="{S.T["sc_tabs"][i]}">{"".join(tabs)}</div>'
+        f'<p class="sc-caption" aria-live="polite">{esc(first["caption"][i])}</p></div>'
     )
 
 
 def render_page(i):
     lang = S.LANGS[i]
     page = (SITE / "src" / "page.html").read_text(encoding="utf-8")
-    words = S.T["h1"][i].split(" ")
     clip = {c["key"]: c for c in S.CLIPS}
     extra = {
         "canonical": S.BASE_URL + ("/" if lang == "pt" else "/en/"),
         "og_image": S.BASE_URL + media(f"og-card-{lang}.png"),
         "h1_plain": S.T["h1"][i],
-        "h1_words": " ".join(f'<span class="w" style="animation-delay: {0.1 + j * 0.07:.2f}s">{w}</span>' for j, w in enumerate(words)),
         "lang_switch": lang_switch(lang),
         "SMALL": render_small(i),
         "DOWNLOADS": render_downloads(i),
         "HANGAR_ARCS": HANGAR_ARCS,
         "SHOWCASE": render_showcase(i),
+        "AGENTS_LEAD": render_agents_lead(i),
+        "FLAGS": render_flags(),
         "VIDEO_orq": media(clip["orq"]["video"][i]), "POSTER_orq": media(clip["orq"]["poster"][i]),
         "VIDEO_pair": media(clip["pair"]["video"][i]), "POSTER_pair": media(clip["pair"]["poster"][i]),
     }

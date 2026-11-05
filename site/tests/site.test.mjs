@@ -1,6 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { detectPlatform, deviceFor, installFor, INSTALL, nextIndex, prevIndex } from '../src/site.js';
+import { detectPlatform, deviceFor, heroRise, installFor, INSTALL, nextIndex, prevIndex } from '../src/site.js';
+
+test('hangar sai do lugar devagar e termina na velocidade da página', () => {
+  const travel = 584;
+  const rise = 280;
+  assert.equal(heroRise(0, travel, rise), 0);
+  assert.equal(heroRise(1, travel, rise), rise);
+  const speed = (heroRise(1, travel, rise) - heroRise(0.999, travel, rise)) / 0.001;
+  assert.ok(Math.abs(speed - travel) < 2);
+});
 
 test('celular escolhe o cartão certo', () => {
   assert.equal(deviceFor('phone', 'Mozilla/5.0 (Linux; Android 15; Pixel 9)'), 'android');

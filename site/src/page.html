@@ -18,404 +18,375 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <!-- fontes fora do caminho crítico: com display=swap o texto já pinta na fonte do sistema -->
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
-<noscript><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet"></noscript>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=Geist:wght@400;500&family=Geist+Mono:wght@400&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600&family=Geist:wght@400;500&family=Geist+Mono:wght@400&display=swap" rel="stylesheet"></noscript>
 <link rel="stylesheet" href="/assets/site.css">
 <script type="module" src="/assets/site.js"></script>
 </head>
 <body>
-<!-- --a/--as vêm do :root em site.css; redeclarar aqui com var(--a) seria referência circular -->
-<div class="hg" style="background: #0A0B0C; color: #ECEBE6; font-family: 'Geist', ui-sans-serif, system-ui, sans-serif; font-size: 16px; line-height: 1.55; overflow: hidden; -webkit-font-smoothing: antialiased">
+<div class="hg">
 
-<header style="position: sticky; top: 0; z-index: 10; background: rgba(10,11,12,.72); backdrop-filter: blur(14px); border-bottom: 1px solid rgba(255,255,255,.06)">
-<nav aria-label="«nav_label»" style="max-width: 1200px; margin: 0 auto; padding: 0 clamp(16px, 4vw, 24px); height: 68px; display: flex; align-items: center; gap: 24px">
-<a href="#top" style="display: flex; align-items: center; gap: 10px; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 20px; letter-spacing: -0.02em">
-<svg width="28" height="28" viewBox="0 0 200 200" aria-hidden="true"><g transform="translate(0,16)" fill="none" stroke="currentColor" stroke-width="15" stroke-linecap="round">«HANGAR_ARCS»</g></svg>
+<header class="site-head">
+<nav class="wrap nav" aria-label="«nav_label»">
+<a class="brand" href="#top">
+<svg width="24" height="24" viewBox="0 0 200 200" aria-hidden="true"><g transform="translate(0,16)" fill="none" stroke="currentColor" stroke-width="15" stroke-linecap="round">«HANGAR_ARCS»</g></svg>
 <span>Hangar</span>
 </a>
-<div class="hide-sm" style="display: flex; gap: 4px; margin-left: 12px">
+<div class="nav-links hide-sm">
 <a class="navlink" href="#recursos">«nav_features»</a>
 <a class="navlink" href="#maquinas">«nav_machines»</a>
 <a class="navlink" href="#celular">«nav_phone»</a>
 <a class="navlink" href="#download">Download</a>
 </div>
-<div style="margin-left: auto; display: flex; gap: 10px; align-items: center">
-<div role="group" aria-label="«lang_label»" style="display: flex; padding: 3px; border-radius: 10px; border: 1px solid rgba(255,255,255,.10); font-family: 'Geist Mono', monospace; font-size: 12px">
+<div class="nav-end">
+<div class="lang" role="group" aria-label="«lang_label»">
 «lang_switch»
 </div>
-<a class="navlink hide-sm" href="https://github.com/jeffer1312/hangar" style="display: flex; align-items: center; gap: 8px">
-<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.370-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.770 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.170-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.7 5.4-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"></path></svg>
+<a class="navlink hide-sm" href="https://github.com/jeffer1312/hangar">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.370-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.770 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.170-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.7 5.4-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"></path></svg>
 GitHub
 </a>
-<a class="btn btn-primary" href="#download" style="height: 40px; padding: 0 16px; font-size: 14px">«cta_short»</a>
+<a class="btn btn-primary btn-sm" href="#download">«cta_short»</a>
+<button type="button" class="menu-btn" popovertarget="site-menu" aria-label="«menu_label»">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16"></path><path d="M4 12h16"></path><path d="M4 17h16"></path></svg>
+</button>
 </div>
 </nav>
+<div id="site-menu" class="menu" popover>
+<a class="navlink" href="#recursos">«nav_features»</a>
+<a class="navlink" href="#maquinas">«nav_machines»</a>
+<a class="navlink" href="#celular">«nav_phone»</a>
+<a class="navlink" href="#download">Download</a>
+<a class="navlink" href="https://github.com/jeffer1312/hangar">GitHub</a>
+</div>
 </header>
 
 <main>
-<section id="top" style="position: relative; padding: clamp(64px, 9vw, 104px) clamp(16px, 4vw, 24px) 0">
-<div aria-hidden="true" style="position: absolute; left: 0; right: 0; top: -120px; height: 1100px; pointer-events: none; overflow: hidden">
-<div class="grid-dots"></div>
-<div class="radar"></div>
-<div class="ring"></div><div class="ring r2"></div><div class="ring r3"></div>
-<div style="position: absolute; left: 50%; top: 440px; width: 900px; height: 520px; margin-left: -450px; border-radius: 50%; background: radial-gradient(closest-side, var(--ag), transparent); filter: blur(10px)"></div>
-</div>
-
-<div style="position: relative; max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 28px">
-<a class="rise" href="https://github.com/jeffer1312/hangar" style="display: inline-flex; align-items: center; gap: 10px; padding: 6px 14px 6px 8px; border-radius: 999px; border: 1px solid rgba(255,255,255,.10); background: rgba(255,255,255,.03); font-size: 13px; color: #B9BBB7">
-<span style="padding: 2px 8px; border-radius: 999px; background: rgba(255,255,255,.08); color: #ECEBE6; font-family: 'Geist Mono', monospace; font-size: 12px">MIT</span>
-«badge»
-</a>
-<h1 aria-label="«h1_plain»" style="margin: 0; max-width: 980px; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: clamp(44px, 7.2vw, 92px); line-height: 0.98; letter-spacing: -0.045em">«h1_words»</h1>
-<p class="rise d2" style="margin: 0; max-width: 660px; font-size: clamp(17px, 1.6vw, 20px); color: #A7A9A5">«hero_sub»</p>
-<div class="rise d3" style="display: flex; flex-wrap: wrap; gap: 12px; justify-content: center">
+<section id="top" class="hero">
+<div class="hero-track"><div class="hero-pin">
+<div class="wrap hero-copy">
+<h1>«h1_plain»</h1>
+<p class="lead">«AGENTS_LEAD» «hero_sub»</p>
+<div class="actions">
 <a class="btn btn-primary" href="#download" data-cta-os data-label-linux="«cta_for» Linux" data-label-macos="«cta_for» macOS" data-label-windows="«cta_for» Windows" data-label-phone="«cta_phone»">
-<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path></svg>
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path></svg>
 <span class="cta-text">«cta_main»</span>
 </a>
 <a class="btn btn-ghost" href="https://github.com/jeffer1312/hangar">«cta_github»</a>
 </div>
-<div class="rise d4" style="display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px 26px; margin-top: 8px">
-<span style="font-family: 'Geist Mono', monospace; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: #7A7D7B">«works_with»</span>
-<span class="prov"><svg width="16" height="16" viewBox="0 0 24 24" fill="#D97757" aria-hidden="true">«ICON_claude»</svg>Claude Code</span>
-<span class="prov"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">«ICON_codex»</svg>Codex</span>
-<span class="prov"><span aria-hidden="true" style="width: 16px; text-align: center; font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 16px; line-height: 1">π</span>Pi</span>
-<span class="prov"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 8 4 4-4 4"></path><path d="M12 17h7"></path></svg>omp</span>
-<span class="prov"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">«ICON_kimi»</svg>Kimi Code</span>
-<span style="font-size: 14px; color: #7A7D7B">«more_soon»</span>
 </div>
+<div class="scene">
+<img class="hero-scene" src="/assets/media/hero-hangar.webp" width="1774" height="887" fetchpriority="high" alt="«alt_scene»">
+<ol class="flags" aria-hidden="true">«FLAGS»</ol>
+<i class="scene-end"></i>
 </div>
+</div></div>
 
-<div class="rise d5 stage" style="position: relative; max-width: 1200px; margin: 56px auto 0">
+<div class="wrap stage">
 «SHOWCASE»
-<p style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); margin: 0">«alt_hero»</p>
-<div aria-hidden="true" style="position: absolute; left: 0; right: 0; bottom: -2px; height: 70px; pointer-events: none; background: linear-gradient(180deg, rgba(10,11,12,0), #0A0B0C)"></div>
+<p class="sr-only">«alt_hero»</p>
+<a class="hero-meta" href="https://github.com/jeffer1312/hangar">«badge»</a>
 </div>
 </section>
 
-<section style="padding: clamp(80px, 10vw, 128px) clamp(16px, 4vw, 24px) 32px">
-<div style="max-width: 1200px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(460px, 100%), 1fr)); gap: 56px; align-items: center">
-<div class="reveal" style="display: flex; flex-direction: column; gap: 22px">
-<p style="margin: 0; font-family: 'Geist Mono', monospace; font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--a)">«t_eyebrow»</p>
-<h2 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: clamp(34px, 4.2vw, 54px); line-height: 1.02; letter-spacing: -0.035em">«t_h2»</h2>
-<p style="margin: 0; font-size: 18px; color: #A7A9A5; max-width: 520px">«t_p»</p>
-<ul style="margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 14px">
-<li style="display: flex; gap: 14px; align-items: flex-start"><span style="flex: none; margin-top: 8px; width: 6px; height: 6px; border-radius: 50%; background: var(--a)"></span><span><strong style="font-weight: 600">«t_b1h»</strong> <span style="color: #A7A9A5">«t_b1»</span></span></li>
-<li style="display: flex; gap: 14px; align-items: flex-start"><span style="flex: none; margin-top: 8px; width: 6px; height: 6px; border-radius: 50%; background: var(--a)"></span><span><strong style="font-weight: 600">«t_b2h»</strong> <span style="color: #A7A9A5">«t_b2»</span></span></li>
-<li style="display: flex; gap: 14px; align-items: flex-start"><span style="flex: none; margin-top: 8px; width: 6px; height: 6px; border-radius: 50%; background: var(--a)"></span><span><strong style="font-weight: 600">«t_b3h»</strong> <span style="color: #A7A9A5">«t_b3»</span></span></li>
-<li style="display: flex; gap: 14px; align-items: flex-start"><span style="flex: none; margin-top: 8px; width: 6px; height: 6px; border-radius: 50%; background: var(--a)"></span><span><strong style="font-weight: 600">«t_b4h»</strong> <span style="color: #A7A9A5">«t_b4»</span></span></li>
+<section class="section">
+<div class="wrap split">
+<div class="stack">
+<p class="kicker">«t_eyebrow»</p>
+<h2>«t_h2»</h2>
+<p class="body-lg">«t_p»</p>
+<ul class="points">
+<li><strong>«t_b1h»</strong> <span class="dim">«t_b1»</span></li>
+<li><strong>«t_b2h»</strong> <span class="dim">«t_b2»</span></li>
+<li><strong>«t_b3h»</strong> <span class="dim">«t_b3»</span></li>
+<li><strong>«t_b4h»</strong> <span class="dim">«t_b4»</span></li>
 </ul>
 </div>
 
-<div class="reveal" style="border-radius: 16px; border: 1px solid rgba(255,255,255,.09); background: #0E1011; overflow: hidden; box-shadow: 0 30px 80px -30px rgba(0,0,0,.8)">
-<div style="display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid rgba(255,255,255,.06)">
-<span style="width: 11px; height: 11px; border-radius: 50%; background: #2A2D2F"></span><span style="width: 11px; height: 11px; border-radius: 50%; background: #2A2D2F"></span><span style="width: 11px; height: 11px; border-radius: 50%; background: #2A2D2F"></span>
-<span style="margin-left: 10px; font-family: 'Geist Mono', monospace; font-size: 12px; color: #7A7D7B">~/code/shop — fish</span>
-</div>
-<div data-terminal aria-hidden="true" style="min-height: 400px; padding: 22px 22px 26px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13.5px; line-height: 1.85; color: #C9CBC6; white-space: nowrap; overflow: hidden">
-<div data-at="1"><span style="color: #7F827F">~/code/shop $ </span><span class="type" style="--w: 6ch; --n: 6">claude</span></div>
-<div data-at="3" class="pop"><span style="color: #6FCF97">✓</span> «term1»</div>
-<div style="height: 1.85em"></div>
-<div data-at="6" class="pop" style="color: #7F827F">«term_away»</div>
-<div data-at="8" class="pop"><span style="color: #9DB4FF">▸ </span>«term2»</div>
-<div data-at="10" class="pop"><span style="color: #9DB4FF">▸ </span>«term3»</div>
-<div style="height: 1.85em"></div>
-<div data-at="13" class="pop" style="color: #7F827F">«term_back»</div>
-<div data-at="15"><span style="color: #7F827F">~ $ </span><span class="type" style="--w: 19ch; --n: 19">tmux attach -t shop</span></div>
-<div data-at="19" class="pop"><span style="color: #6FCF97">✓</span> «term4»</div>
-<div data-at="21"><span style="color: #7F827F">&gt; </span><span class="caret" style="background: var(--a)"></span></div>
+<div class="term">
+<div class="term-bar"><i></i><i></i><i></i><span class="mono">~/code/shop · fish</span></div>
+<div class="term-body term-body-live" data-terminal aria-hidden="true">
+<div data-at="1"><span class="t-dim">~/code/shop $ </span><span class="type" style="--w: 6ch; --n: 6">claude</span></div>
+<div data-at="3" class="pop"><span class="t-ok">✓</span> «term1»</div>
+<div class="term-gap"></div>
+<div data-at="6" class="pop t-dim">«term_away»</div>
+<div data-at="8" class="pop"><span class="t-go">▸ </span>«term2»</div>
+<div data-at="10" class="pop"><span class="t-go">▸ </span>«term3»</div>
+<div class="term-gap"></div>
+<div data-at="13" class="pop t-dim">«term_back»</div>
+<div data-at="15"><span class="t-dim">~ $ </span><span class="type" style="--w: 19ch; --n: 19">tmux attach -t shop</span></div>
+<div data-at="19" class="pop"><span class="t-ok">✓</span> «term4»</div>
+<div data-at="21"><span class="t-dim">&gt; </span><span class="caret"></span></div>
 </div>
 </div>
 </div>
 </section>
 
-<section id="recursos" style="padding: clamp(80px, 10vw, 128px) clamp(16px, 4vw, 24px) 32px">
-<div style="max-width: 1200px; margin: 0 auto">
-<div class="reveal" style="max-width: 760px; display: flex; flex-direction: column; gap: 18px; margin-bottom: 56px">
-<p style="margin: 0; font-family: 'Geist Mono', monospace; font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--a)">«f_eyebrow»</p>
-<h2 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: clamp(34px, 4.2vw, 54px); line-height: 1.02; letter-spacing: -0.035em">«f_h2»</h2>
+<section id="recursos" class="section">
+<div class="wrap">
+<div class="head">
+<p class="kicker">«f_eyebrow»</p>
+<h2>«f_h2»</h2>
 </div>
 
-<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(520px, 100%), 1fr)); gap: 20px">
+<div class="grid-2">
 
-<article class="card reveal" style="border-radius: 20px; border: 1px solid rgba(255,255,255,.08); background: linear-gradient(180deg, #121416, #0D0F10); overflow: hidden; display: flex; flex-direction: column">
-<div style="padding: 32px 32px 24px; display: flex; flex-direction: column; gap: 10px">
-<h3 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 26px; letter-spacing: -0.02em">«f1h»</h3>
-<p style="margin: 0; color: #A7A9A5; max-width: 460px">«f1»</p>
+<article class="card">
+<div class="card-text">
+<h3>«f1h»</h3>
+<p>«f1»</p>
 </div>
-<div style="margin: 0 0 0 32px; border-top-left-radius: 12px; overflow: hidden; border: 1px solid rgba(255,255,255,.08); border-right: 0; border-bottom: 0">
+<div class="card-media">
 <video class="shot loop" src="«VIDEO_orq»" poster="«POSTER_orq»" muted loop playsinline preload="metadata" aria-label="«alt_orq»"></video>
 </div>
 </article>
 
-<article class="card reveal" style="border-radius: 20px; border: 1px solid rgba(255,255,255,.08); background: linear-gradient(180deg, #121416, #0D0F10); overflow: hidden; display: flex; flex-direction: column">
-<div style="padding: 32px 32px 24px; display: flex; flex-direction: column; gap: 10px">
-<h3 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 26px; letter-spacing: -0.02em">«f2h»</h3>
-<p style="margin: 0; color: #A7A9A5; max-width: 460px">«f2»</p>
+<article class="card">
+<div class="card-text">
+<h3>«f2h»</h3>
+<p>«f2»</p>
 </div>
-<div style="margin: 0 0 0 32px; border-top-left-radius: 12px; overflow: hidden; border: 1px solid rgba(255,255,255,.08); border-right: 0; border-bottom: 0">
+<div class="card-media">
 <video class="shot loop" src="«VIDEO_pair»" poster="«POSTER_pair»" muted loop playsinline preload="metadata" aria-label="«alt_group»"></video>
 </div>
 </article>
 
-<article class="card reveal" style="border-radius: 20px; border: 1px solid rgba(255,255,255,.08); background: linear-gradient(180deg, #121416, #0D0F10); overflow: hidden; display: flex; flex-direction: column">
-<div style="padding: 32px 32px 24px; display: flex; flex-direction: column; gap: 10px">
-<h3 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 26px; letter-spacing: -0.02em">«f3h»</h3>
-<p style="margin: 0; color: #A7A9A5; max-width: 460px">«f3»</p>
+<article class="card">
+<div class="card-text">
+<h3>«f3h»</h3>
+<p>«f3»</p>
 </div>
-<div style="margin: 0 0 0 32px; border-top-left-radius: 12px; overflow: hidden; border: 1px solid rgba(255,255,255,.08); border-right: 0; border-bottom: 0">
-<img class="shot kb2" src="/assets/media/native-terminal.png" width="1600" height="960" loading="lazy" alt="«alt_term»">
+<div class="card-media">
+<img class="shot" src="/assets/media/native-terminal.png" width="1600" height="960" loading="lazy" alt="«alt_term»">
 </div>
 </article>
 
-<article class="card reveal" style="border-radius: 20px; border: 1px solid rgba(255,255,255,.08); background: linear-gradient(180deg, #121416, #0D0F10); overflow: hidden; display: flex; flex-direction: column">
-<div style="padding: 32px 32px 24px; display: flex; flex-direction: column; gap: 10px">
-<h3 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 26px; letter-spacing: -0.02em">«f4h»</h3>
-<p style="margin: 0; color: #A7A9A5; max-width: 460px">«f4»</p>
+<article class="card">
+<div class="card-text">
+<h3>«f4h»</h3>
+<p>«f4»</p>
 </div>
-<div style="margin: 0 0 0 32px; border-top-left-radius: 12px; overflow: hidden; border: 1px solid rgba(255,255,255,.08); border-right: 0; border-bottom: 0; background: #0B0C0D">
-<div style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid rgba(255,255,255,.06)">
-<span style="flex: 1; padding: 6px 12px; border-radius: 8px; background: #15181A; font-family: 'Geist Mono', monospace; font-size: 12px; color: #8E908D">localhost:5173/checkout</span>
-<span style="font-family: 'Geist Mono', monospace; font-size: 11px; color: var(--a)">● «f4_badge»</span>
+<div class="card-media">
+<div class="browser-bar">
+<span class="browser-url">localhost:5173/checkout</span>
+<span class="state working mono">«f4_badge»</span>
 </div>
-<div style="padding: 22px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px">
-<div style="height: 12px; border-radius: 4px; background: #1B1E20; grid-column: 1 / -1; width: 45%"></div>
-<div style="height: 40px; border-radius: 8px; border: 1px solid #25292B"></div>
-<div style="height: 40px; border-radius: 8px; border: 1px solid #25292B"></div>
-<div class="field" style="height: 40px; border-radius: 8px; border: 1px solid #25292B; grid-column: 1 / -1; position: relative; display: flex; align-items: center; padding: 0 12px; font-family: 'Geist Mono', monospace; font-size: 13px; color: #ECEBE6">
+<div class="browser-page">
+<div class="browser-title"></div>
+<div class="browser-field"></div>
+<div class="browser-field"></div>
+<div class="browser-field field">
 <span class="typing" style="--w: «f4_len»ch; --n: «f4_len»">«f4_fill»</span>
-<svg class="agent-cursor" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3l15 7-6.5 2L10 19z" fill="#ECEBE6" stroke="#0B0C0D" stroke-width="1.5" stroke-linejoin="round"></path></svg>
+<svg class="agent-cursor" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3l15 7-6.5 2L10 19z" fill="#e6e0e2" stroke="#0c0a11" stroke-width="1.5" stroke-linejoin="round"></path></svg>
 </div>
-<span style="grid-column: 1 / -1; font-family: 'Geist Mono', monospace; font-size: 11px; color: #7A7D7B">fill @e7 "«f4_fill»"</span>
-<div style="height: 42px; border-radius: 10px; background: #ECEBE6; width: 50%"></div>
-</div>
-</div>
-</article>
-
-</div>
-
-<article class="card reveal" style="margin-top: 20px; border-radius: 20px; border: 1px solid rgba(255,255,255,.08); background: radial-gradient(90% 120% at 100% 0%, var(--as), rgba(0,0,0,0) 55%), linear-gradient(180deg, #121416, #0D0F10); padding: clamp(24px, 4vw, 44px); display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 40px; align-items: center">
-<div style="display: flex; flex-direction: column; gap: 14px">
-<span style="font-family: 'Geist Mono', monospace; font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--a)">«b_eyebrow»</span>
-<h3 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: clamp(26px, 3vw, 36px); line-height: 1.08; letter-spacing: -0.025em">«b_h»</h3>
-<p style="margin: 0; color: #A7A9A5; font-size: 17px">«b_p»</p>
-</div>
-<div style="display: flex; flex-direction: column; gap: 12px; font-size: 14px">
-<div style="border-radius: 14px; border: 1px solid rgba(255,255,255,.08); background: #0E1011; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px">
-<div style="display: flex; align-items: center; gap: 12px"><span style="width: 120px; color: #C9CBC6">«b_acc1»</span><span style="flex: 1; height: 6px; border-radius: 3px; background: #1C1F21; overflow: hidden"><span class="grow" style="display: block; width: 97%; height: 100%; background: #E5707A"></span></span><span style="width: 88px; text-align: right; font-family: 'Geist Mono', monospace; font-size: 12px; color: #E5707A">97% · 5h</span></div>
-<div style="display: flex; align-items: center; gap: 12px"><span style="width: 120px; color: #C9CBC6">«b_acc2»</span><span style="flex: 1; height: 6px; border-radius: 3px; background: #1C1F21; overflow: hidden"><span class="grow" style="display: block; width: 18%; height: 100%; background: #6FCF97"></span></span><span style="width: 88px; text-align: right; font-family: 'Geist Mono', monospace; font-size: 12px; color: #8E908D">18% · 5h</span></div>
-<div style="font-family: 'Geist Mono', monospace; font-size: 11px; color: #7A7D7B">«b_reset»</div>
-</div>
-<div class="glow" style="border-radius: 14px; border: 1px solid var(--a); background: #0E1011; padding: 16px 18px; display: flex; flex-direction: column; gap: 8px">
-<div style="display: flex; align-items: center; gap: 10px; font-weight: 600"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m13 6 6 6-6 6"></path></svg>«b_card_h»</div>
-<div style="color: #8E908D">«b_card_p»</div>
+<span class="browser-log mono">fill @e7 "«f4_fill»"</span>
+<div class="browser-btn"></div>
 </div>
 </div>
 </article>
 
+</div>
 
-<div style="margin-top: 20px; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(270px, 100%), 1fr)); gap: 20px">
+<article class="card baton">
+<div class="baton-copy">
+<span class="kicker">«b_eyebrow»</span>
+<h3>«b_h»</h3>
+<p class="dim">«b_p»</p>
+</div>
+<div class="baton-side">
+<div class="quota">
+<div class="quota-row quota-full"><span class="quota-name">«b_acc1»</span><span class="quota-track"><span class="quota-fill grow" style="width: 97%"></span></span><span class="quota-val">97% · 5h</span></div>
+<div class="quota-row quota-free"><span class="quota-name">«b_acc2»</span><span class="quota-track"><span class="quota-fill grow" style="width: 18%"></span></span><span class="quota-val">18% · 5h</span></div>
+<div class="mono">«b_reset»</div>
+</div>
+<div class="baton-card">
+<strong><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"></path><path d="m13 6 6 6-6 6"></path></svg>«b_card_h»</strong>
+<div class="dim">«b_card_p»</div>
+</div>
+</div>
+</article>
+
+<div class="mini-list">
 «SMALL»
 </div>
 </div>
 </section>
 
-<section id="maquinas" style="padding: clamp(80px, 10vw, 128px) clamp(16px, 4vw, 24px) 32px">
-<div style="max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; gap: 48px">
-<div class="reveal" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 32px; align-items: end">
-<div style="display: flex; flex-direction: column; gap: 18px">
-<p style="margin: 0; font-family: 'Geist Mono', monospace; font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--a)">«m_eyebrow»</p>
-<h2 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: clamp(34px, 4.2vw, 54px); line-height: 1.02; letter-spacing: -0.035em">«m_h2»</h2>
+<section id="maquinas" class="section">
+<div class="wrap">
+<div class="head-split">
+<div class="head">
+<p class="kicker">«m_eyebrow»</p>
+<h2>«m_h2»</h2>
 </div>
-<p style="margin: 0; font-size: 18px; color: #A7A9A5">«m_p»</p>
+<p class="body-lg">«m_p»</p>
 </div>
 
-<div class="reveal" style="display: flex; flex-wrap: wrap; align-items: stretch; gap: 20px">
-<div style="flex: 1 1 300px; border-radius: 20px; border: 1px solid rgba(255,255,255,.09); background: #0F1112; padding: 22px; display: flex; flex-direction: column; gap: 14px">
-<div style="display: flex; align-items: center; gap: 10px">
-<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#A7A9A5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="20" height="13" rx="2"></rect><path d="M8 21h8"></path><path d="M12 17v4"></path></svg>
-<span style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 17px">desktop</span>
-<span style="margin-left: auto; font-family: 'Geist Mono', monospace; font-size: 11px; color: #7A7D7B">«m_office»</span>
+<div class="machines">
+<div class="machine">
+<div class="machine-head">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="20" height="13" rx="2"></rect><path d="M8 21h8"></path><path d="M12 17v4"></path></svg>
+<span>desktop</span>
+<span class="mono">«m_office»</span>
 </div>
-<div style="display: flex; flex-direction: column; gap: 8px; font-size: 14px">
-<div style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: #15181A" class="arrive late"><span class="live" style="width: 7px; height: 7px; border-radius: 50%; background: #6FCF97"></span>api<span style="margin-left: auto; color: #8E908D">Codex</span></div>
-<div style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: #15181A"><span style="width: 7px; height: 7px; border-radius: 50%; background: #5A5D60"></span>front<span style="margin-left: auto; color: #8E908D">Claude</span></div>
+<div class="rows">
+<div class="row arrive late"><span class="state working">api</span><span class="row-meta">«state_working» · Codex</span></div>
+<div class="row"><span class="state ready">front</span><span class="row-meta">«state_ready» · Claude</span></div>
 </div>
 </div>
 
 <!-- hide-md: abaixo de ~910px a linha não cabe entre os dois cards e fica órfã ao lado do primeiro -->
-<div class="hide-md" aria-hidden="true" style="flex: 0 1 220px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 14px">
-<div style="position: relative; width: 100%; height: 2px; background: repeating-linear-gradient(90deg, rgba(255,255,255,.22) 0 6px, transparent 6px 12px)">
-<span class="packet" style="background: var(--a); box-shadow: 0 0 12px var(--a)"></span>
-<span class="packet back" style="background: #6FCF97; box-shadow: 0 0 12px #6FCF97"></span>
-</div>
-<span style="font-family: 'Geist Mono', monospace; font-size: 11px; color: #7A7D7B">«m_link»</span>
+<div class="link hide-md" aria-hidden="true">
+<div class="link-line"><span class="packet"></span><span class="packet back"></span></div>
+<span class="mono">«m_link»</span>
 </div>
 
-<div style="flex: 1 1 300px; border-radius: 20px; border: 1px solid rgba(255,255,255,.09); background: #0F1112; padding: 22px; display: flex; flex-direction: column; gap: 14px">
-<div style="display: flex; align-items: center; gap: 10px">
-<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#A7A9A5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="11" rx="2"></rect><path d="M2 19h20"></path></svg>
-<span style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 17px">notebook</span>
-<span style="margin-left: auto; font-family: 'Geist Mono', monospace; font-size: 11px; color: #7A7D7B">«m_home»</span>
+<div class="machine">
+<div class="machine-head">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="11" rx="2"></rect><path d="M2 19h20"></path></svg>
+<span>notebook</span>
+<span class="mono">«m_home»</span>
 </div>
-<div style="display: flex; flex-direction: column; gap: 8px; font-size: 14px">
-<div style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: #15181A" class="arrive"><span class="live" style="width: 7px; height: 7px; border-radius: 50%; background: #6FCF97"></span>mobile<span style="margin-left: auto; color: #8E908D">Kimi</span></div>
-<div style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; background: #15181A"><span style="width: 7px; height: 7px; border-radius: 50%; background: #5A5D60"></span>docs<span style="margin-left: auto; color: #8E908D">Pi</span></div>
+<div class="rows">
+<div class="row arrive"><span class="state working">mobile</span><span class="row-meta">«state_working» · Kimi</span></div>
+<div class="row"><span class="state needs">docs</span><span class="row-meta">«state_needs» · Pi</span></div>
 </div>
 </div>
 </div>
 
-<div class="reveal" style="border-radius: 16px; border: 1px solid rgba(255,255,255,.09); background: #0E1011; padding: 20px 22px; font-family: 'Geist Mono', ui-monospace, monospace; font-size: 13.5px; line-height: 1.9; color: #C9CBC6; overflow-x: auto">
-<div style="white-space: nowrap"><span style="color: #7A7D7B">desktop $</span> hangar-send notebook::mobile "«m_cmd»"</div>
-<div style="white-space: nowrap"><span style="color: #6FCF97">✓</span> «m_ok»</div>
-<div style="white-space: nowrap"><span style="color: #7A7D7B">[de: notebook::mobile]</span> «m_reply»</div>
+<div class="term">
+<div class="term-body">
+<div><span class="t-dim">desktop $</span> hangar-send notebook::mobile "«m_cmd»"</div>
+<div><span class="t-ok">✓</span> «m_ok»</div>
+<div><span class="t-dim">[de: notebook::mobile]</span> «m_reply»</div>
+</div>
 </div>
 
-<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr)); gap: 24px">
-<div class="reveal" style="display: flex; flex-direction: column; gap: 6px"><strong style="font-weight: 600">«m_c1h»</strong><span style="color: #A7A9A5; font-size: 15px">«m_c1»</span></div>
-<div class="reveal" style="display: flex; flex-direction: column; gap: 6px"><strong style="font-weight: 600">«m_c2h»</strong><span style="color: #A7A9A5; font-size: 15px">«m_c2»</span></div>
-<div class="reveal" style="display: flex; flex-direction: column; gap: 6px"><strong style="font-weight: 600">«m_c3h»</strong><span style="color: #A7A9A5; font-size: 15px">«m_c3»</span></div>
-<div class="reveal" style="display: flex; flex-direction: column; gap: 6px"><strong style="font-weight: 600">«m_c4h»</strong><span style="color: #A7A9A5; font-size: 15px">«m_c4»</span></div>
+<div class="cols-4">
+<div class="col"><strong>«m_c1h»</strong><span>«m_c1»</span></div>
+<div class="col"><strong>«m_c2h»</strong><span>«m_c2»</span></div>
+<div class="col"><strong>«m_c3h»</strong><span>«m_c3»</span></div>
+<div class="col"><strong>«m_c4h»</strong><span>«m_c4»</span></div>
 </div>
 </div>
 </section>
 
-<section style="padding: clamp(80px, 10vw, 128px) clamp(16px, 4vw, 24px) 32px">
-<div style="max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; gap: 48px">
-<div class="reveal" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 32px; align-items: end">
-<div style="display: flex; flex-direction: column; gap: 18px">
-<p style="margin: 0; font-family: 'Geist Mono', monospace; font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--a)">«n_eyebrow»</p>
-<h2 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: clamp(34px, 4.2vw, 54px); line-height: 1.02; letter-spacing: -0.035em">«n_h2»</h2>
+<section class="section">
+<div class="wrap">
+<div class="head-split">
+<div class="head">
+<p class="kicker">«n_eyebrow»</p>
+<h2>«n_h2»</h2>
 </div>
-<p style="margin: 0; font-size: 18px; color: #A7A9A5">«n_p»</p>
+<p class="body-lg">«n_p»</p>
 </div>
-<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(360px, 100%), 1fr)); gap: 20px">
-<figure class="reveal" style="margin: 0; display: flex; flex-direction: column; gap: 14px">
-<div style="border-radius: 14px; overflow: hidden; border: 1px solid rgba(255,255,255,.09)"><img class="shot kb" src="/assets/media/group.jpg" width="1592" height="952" loading="lazy" alt="«alt_group»"></div>
-<figcaption style="font-size: 15px; color: #A7A9A5"><strong style="color: #ECEBE6; font-weight: 600">«n_c1h»</strong> «n_c1»</figcaption>
+<div class="figs">
+<figure class="fig">
+<div class="fig-shot"><img class="shot" src="/assets/media/group.jpg" width="1592" height="952" loading="lazy" alt="«alt_group»"></div>
+<figcaption><strong>«n_c1h»</strong> «n_c1»</figcaption>
 </figure>
-<figure class="reveal" style="margin: 0; display: flex; flex-direction: column; gap: 14px">
-<div style="border-radius: 14px; overflow: hidden; border: 1px solid rgba(255,255,255,.09)"><img class="shot kb2" src="/assets/media/costs-chart.jpg" width="1592" height="952" loading="lazy" alt="«alt_costs»"></div>
-<figcaption style="font-size: 15px; color: #A7A9A5"><strong style="color: #ECEBE6; font-weight: 600">«n_c2h»</strong> «n_c2»</figcaption>
+<figure class="fig">
+<div class="fig-shot"><img class="shot" src="/assets/media/costs-chart.jpg" width="1592" height="952" loading="lazy" alt="«alt_costs»"></div>
+<figcaption><strong>«n_c2h»</strong> «n_c2»</figcaption>
 </figure>
 </div>
 </div>
 </section>
 
-<section id="celular" style="padding: clamp(80px, 10vw, 128px) clamp(16px, 4vw, 24px) 32px">
-<div style="max-width: 1200px; margin: 0 auto; border-radius: 28px; border: 1px solid rgba(255,255,255,.08); background: radial-gradient(120% 90% at 85% 10%, var(--as), rgba(0,0,0,0) 60%), #0E1011; padding: clamp(28px, 5vw, 72px); display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 56px; align-items: center">
-<div class="reveal" style="display: flex; flex-direction: column; gap: 22px">
-<p style="margin: 0; font-family: 'Geist Mono', monospace; font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--a)">«p_eyebrow»</p>
-<h2 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: clamp(34px, 4.2vw, 54px); line-height: 1.02; letter-spacing: -0.035em">«p_h2»</h2>
-<p style="margin: 0; font-size: 18px; color: #A7A9A5">«p_p»</p>
-<p style="margin: 0; font-size: 18px; color: #A7A9A5">«p_app»</p>
-<div style="display: flex; flex-wrap: wrap; gap: 10px">
-«p_chips»
-</div>
+<section id="celular" class="section">
+<div class="wrap phone-panel">
+<div class="stack">
+<p class="kicker">«p_eyebrow»</p>
+<h2>«p_h2»</h2>
+<p class="body-lg">«p_p»</p>
+<p class="dim">«p_app»</p>
+<p class="phone-list">«p_chips»</p>
 <a class="btn btn-ghost" href="#download" style="align-self: flex-start">«cta_app»</a>
 </div>
-<div class="reveal" style="display: flex; justify-content: center">
-<div class="bob" style="position: relative; width: min(300px, 80%); border-radius: 44px; padding: 10px; background: linear-gradient(160deg, #3A3E41, #151719 45%, #2A2D30); box-shadow: 0 40px 100px -30px rgba(0,0,0,.9)">
-<div style="border-radius: 35px; overflow: hidden; background: #000">
+<div class="phone-wrap">
+<div class="phone">
+<div class="phone-screen">
 <img class="shot" src="/assets/media/mobile-ask-question.png" width="390" height="844" loading="lazy" alt="«alt_phone»">
 </div>
-<div class="notif" aria-hidden="true" style="position: absolute; left: 20px; right: 20px; top: 22px; padding: 10px 12px; border-radius: 16px; background: rgba(40,42,46,.92); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,.12); box-shadow: 0 16px 40px -12px rgba(0,0,0,.8); display: flex; gap: 10px; align-items: center; font-size: 12px; line-height: 1.35">
-<span style="flex: none; width: 28px; height: 28px; border-radius: 8px; background: #1b1d1f; display: grid; place-items: center"><svg width="16" height="16" viewBox="0 0 200 200"><g transform="translate(0,16)" fill="none" stroke="#f5f5f0" stroke-width="17" stroke-linecap="round"><path d="M 33.49 132.44 A 74 74 0 1 1 166.51 132.44"></path><path d="M 56.96 109.15 A 44 44 0 1 1 143.04 109.15"></path></g></svg></span>
-<span><strong style="font-weight: 600">checkout-review</strong><br><span style="color: #B9BBB7">«notif»</span></span>
+<div class="notif" aria-hidden="true">
+<span class="notif-ic"><svg width="16" height="16" viewBox="0 0 200 200"><g transform="translate(0,16)" fill="none" stroke="currentColor" stroke-width="17" stroke-linecap="round"><path d="M 33.49 132.44 A 74 74 0 1 1 166.51 132.44"></path><path d="M 56.96 109.15 A 44 44 0 1 1 143.04 109.15"></path></g></svg></span>
+<span class="notif-text"><strong class="state needs">checkout-review</strong><span>«notif»</span></span>
 </div>
 </div>
 </div>
 </div>
 </section>
 
-<section id="como" style="padding: clamp(80px, 10vw, 128px) clamp(16px, 4vw, 24px) 32px">
-<div style="max-width: 1200px; margin: 0 auto">
-<div class="reveal" style="max-width: 720px; display: flex; flex-direction: column; gap: 18px; margin-bottom: 48px">
-<p style="margin: 0; font-family: 'Geist Mono', monospace; font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--a)">«h_eyebrow»</p>
-<h2 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: clamp(34px, 4.2vw, 54px); line-height: 1.02; letter-spacing: -0.035em">«h_h2»</h2>
+<section id="como" class="section">
+<div class="wrap">
+<div class="head">
+<p class="kicker">«h_eyebrow»</p>
+<h2>«h_h2»</h2>
 </div>
-<ol style="margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 20px">
-<li class="reveal line-grow" style="border-top: 1px solid rgba(255,255,255,.14); padding-top: 24px; display: flex; flex-direction: column; gap: 12px">
-<span style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 44px; color: var(--a); letter-spacing: -0.04em; line-height: 1">01</span>
-<h3 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 22px">«h_s1h»</h3>
-<p style="margin: 0; color: #A7A9A5">«h_s1»</p>
-</li>
-<li class="reveal line-grow" style="border-top: 1px solid rgba(255,255,255,.14); padding-top: 24px; display: flex; flex-direction: column; gap: 12px">
-<span style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 44px; color: var(--a); letter-spacing: -0.04em; line-height: 1">02</span>
-<h3 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 22px">«h_s2h»</h3>
-<p style="margin: 0; color: #A7A9A5">«h_s2»</p>
-</li>
-<li class="reveal line-grow" style="border-top: 1px solid rgba(255,255,255,.14); padding-top: 24px; display: flex; flex-direction: column; gap: 12px">
-<span style="font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 44px; color: var(--a); letter-spacing: -0.04em; line-height: 1">03</span>
-<h3 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 22px">«h_s3h»</h3>
-<p style="margin: 0; color: #A7A9A5">«h_s3»</p>
-</li>
+<ol class="steps">
+<li class="step"><span class="mono">01</span><h3>«h_s1h»</h3><p>«h_s1»</p></li>
+<li class="step"><span class="mono">02</span><h3>«h_s2h»</h3><p>«h_s2»</p></li>
+<li class="step"><span class="mono">03</span><h3>«h_s3h»</h3><p>«h_s3»</p></li>
 </ol>
 </div>
 </section>
 
-<section id="download" style="padding: clamp(80px, 10vw, 128px) clamp(16px, 4vw, 24px) 32px">
-<div style="max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; gap: 40px">
-<div class="reveal" style="text-align: center; display: flex; flex-direction: column; gap: 16px; align-items: center">
-<h2 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: clamp(34px, 4.2vw, 54px); line-height: 1.02; letter-spacing: -0.035em">«d_h2»</h2>
-<p style="margin: 0; font-size: 18px; color: #A7A9A5; max-width: 560px">«d_p»</p>
+<section id="download" class="section">
+<div class="wrap">
+<div class="center">
+<h2>«d_h2»</h2>
+<p class="body-lg">«d_p»</p>
 </div>
 
-<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 16px">
+<div class="dl-grid">
 «DOWNLOADS»
 </div>
-<div style="display: flex; flex-direction: column; gap: 8px; text-align: center; font-size: 14px; color: #8E908D">
-<p style="margin: 0">«d_alt»</p>
-<p style="margin: 0">«d_req»</p>
+<div class="fine">
+<p>«d_alt»</p>
+<p>«d_req»</p>
 </div>
-<div class="reveal" style="text-align: center; display: flex; flex-direction: column; gap: 8px; align-items: center; margin-top: 16px">
-<h3 style="margin: 0; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 22px">«d_cli»</h3>
-<p style="margin: 0; color: #A7A9A5">«d_cli_p»</p>
+<div class="center cli-head">
+<h3>«d_cli»</h3>
+<p>«d_cli_p»</p>
 </div>
-<div class="reveal" data-install style="max-width: 820px; width: 100%; margin: 0 auto; border-radius: 16px; border: 1px solid rgba(255,255,255,.10); background: #0E1011; overflow: hidden">
-<div role="tablist" aria-label="«d_h2»" style="display: flex; gap: 4px; padding: 8px; border-bottom: 1px solid rgba(255,255,255,.06)">
+<div class="install" data-install>
+<div class="install-tabs" role="tablist" aria-label="«d_h2»">
 <button type="button" role="tab" class="inst-tab" data-os="unix" aria-selected="true" tabindex="0" aria-controls="install-cmd">Linux · macOS</button>
 <button type="button" role="tab" class="inst-tab" data-os="win" aria-selected="false" tabindex="-1" aria-controls="install-cmd">Windows</button>
 </div>
-<div id="install-cmd" style="display: flex; align-items: center; gap: 16px; padding: 20px 22px">
+<div id="install-cmd" class="install-row">
 <!-- prompt fora do [data-cmd]: o JS troca o texto do comando inteiro -->
-<div style="flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; font-family: 'Geist Mono', monospace; font-size: 14px; color: #ECEBE6"><span data-prompt style="color: #7A7D7B">$</span> <code data-cmd style="font: inherit">curl -fsSL https://raw.githubusercontent.com/jeffer1312/hangar/main/bootstrap.sh | bash</code></div>
-<button type="button" data-copy data-state="idle" aria-label="«copy_label»" data-label-copy="«copy_label»" data-label-copied="«copied»" data-label-selected="«selected»" style="flex: none; height: 44px; min-width: 44px; padding: 0 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,.12); background: transparent; color: #ECEBE6; display: inline-flex; align-items: center; justify-content: center; gap: 8px; font: inherit; font-size: 13px; cursor: pointer; transition: background .2s, border-color .2s">
-<svg class="ic-copy" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>
-<svg class="ic-ok pop" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#6FCF97" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"></path></svg>
+<div class="install-cmd"><span data-prompt>$</span> <code data-cmd>curl -fsSL https://raw.githubusercontent.com/jeffer1312/hangar/main/bootstrap.sh | bash</code></div>
+<button type="button" class="copy" data-copy data-state="idle" aria-label="«copy_label»" data-label-copy="«copy_label»" data-label-copied="«copied»" data-label-selected="«selected»">
+<svg class="ic-copy" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15V5a2 2 0 0 1 2-2h10"></path></svg>
+<svg class="ic-ok pop" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 5 5 9-10"></path></svg>
 <span class="copy-text"></span>
 </button>
 </div>
 </div>
-
 </div>
 </section>
 
-<section style="position: relative; padding: clamp(112px, 13vw, 168px) clamp(16px, 4vw, 24px) clamp(96px, 11vw, 140px); text-align: center">
-<div aria-hidden="true" style="position: absolute; inset: 0; pointer-events: none; overflow: hidden">
-<div class="ring"></div><div class="ring r2"></div><div class="ring r3"></div>
-</div>
-<div class="reveal" style="position: relative; display: flex; flex-direction: column; align-items: center; gap: 28px">
-<svg width="96" height="96" viewBox="0 0 200 200" aria-hidden="true"><defs><linearGradient id="hgmetal" x2=".18" y2="1"><stop stop-color="#ffffff"></stop><stop offset=".44" stop-color="#f1f1ec"></stop><stop offset="1" stop-color="#9ea3a6"></stop></linearGradient></defs><g transform="translate(0,16)" fill="none" stroke="url(#hgmetal)" stroke-width="13" stroke-linecap="round">«HANGAR_ARCS»</g></svg>
-<h2 style="margin: 0; max-width: 820px; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: clamp(38px, 5.4vw, 72px); line-height: 1; letter-spacing: -0.04em">«close_h2»</h2>
-<div style="display: flex; flex-wrap: wrap; gap: 12px; justify-content: center">
+<section class="closing">
+<svg width="64" height="64" viewBox="0 0 200 200" aria-hidden="true"><g transform="translate(0,16)" fill="none" stroke="currentColor" stroke-width="13" stroke-linecap="round">«HANGAR_ARCS»</g></svg>
+<h2>«close_h2»</h2>
+<div class="actions">
 <a class="btn btn-primary" href="#download">«cta_main»</a>
 <a class="btn btn-ghost" href="https://github.com/jeffer1312/hangar">«cta_star»</a>
-</div>
 </div>
 </section>
 </main>
 
-<footer style="border-top: 1px solid rgba(255,255,255,.07); padding: 36px clamp(16px, 4vw, 24px) 48px">
-<div style="max-width: 1200px; margin: 0 auto; display: flex; flex-wrap: wrap; gap: 20px 40px; align-items: flex-start; justify-content: space-between">
-<div style="display: flex; flex-direction: column; gap: 10px; max-width: 520px">
-<span style="display: flex; align-items: center; gap: 10px; font-family: 'Space Grotesk', sans-serif; font-weight: 600; font-size: 18px">
-<svg width="22" height="22" viewBox="0 0 200 200" aria-hidden="true"><g transform="translate(0,16)" fill="none" stroke="currentColor" stroke-width="17" stroke-linecap="round"><path d="M 33.49 132.44 A 74 74 0 1 1 166.51 132.44"></path><path d="M 56.96 109.15 A 44 44 0 1 1 143.04 109.15"></path></g></svg>
+<footer class="site-foot">
+<div class="wrap foot-row">
+<div class="foot-info">
+<span class="brand">
+<svg width="20" height="20" viewBox="0 0 200 200" aria-hidden="true"><g transform="translate(0,16)" fill="none" stroke="currentColor" stroke-width="17" stroke-linecap="round"><path d="M 33.49 132.44 A 74 74 0 1 1 166.51 132.44"></path><path d="M 56.96 109.15 A 44 44 0 1 1 143.04 109.15"></path></g></svg>
 Hangar
 </span>
-<p style="margin: 0; font-size: 13px; color: #8E908D">«disclaimer»</p>
+<p>«disclaimer»</p>
 </div>
-<div style="display: flex; gap: 8px; flex-wrap: wrap">
+<div class="foot-links">
 <a class="navlink" href="https://github.com/jeffer1312/hangar">GitHub</a>
 <a class="navlink" href="https://github.com/jeffer1312/hangar/releases">Releases</a>
 <a class="navlink" href="https://github.com/jeffer1312/hangar/blob/main/docs/USAGE.md">«docs»</a>

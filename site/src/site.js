@@ -20,7 +20,36 @@ export const installFor = (p) => (p === 'windows' ? 'win' : 'unix');
 export const nextIndex = (i, n) => (i + 1) % n;
 export const prevIndex = (i, n) => (i - 1 + n) % n;
 
+// o hangar termina na velocidade da página: sem isso, a soltura do pino dá um tranco
+export const heroRise = (p, travel, rise) => rise * (0.5 * p + 0.5 * p ** Math.max(1, (2 * travel) / rise - 1));
+
 const reducedMotion = () => globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+
+function initHero(hero) {
+  if (reducedMotion()) return;
+  const track = hero.querySelector('.hero-track');
+  const pin = hero.querySelector('.hero-pin');
+  const scene = hero.querySelector('.scene');
+  const copy = hero.querySelector('.hero-copy');
+  const stage = hero.querySelector('.stage');
+  const ending = hero.querySelector('.scene-end');
+  let queued = false;
+  const paint = () => {
+    queued = false;
+    const travel = track.offsetHeight - pin.offsetHeight;
+    const p = Math.min(1, Math.max(0, scrollY / travel));
+    const end = ending.offsetWidth;
+    // ao soltar, a porta do hangar precisa estar em volta da janela do app
+    const rise = hero.offsetTop + scene.offsetTop - (hero.offsetTop + stage.offsetTop - travel - end * 0.13);
+    const grow = 1 + (end / scene.offsetWidth - 1) * p * p * (3 - 2 * p);
+    scene.style.transform = `translateY(${-heroRise(p, travel, rise)}px) scale(${grow})`;
+    copy.style.transform = `translateY(${-Math.min(scrollY, travel)}px)`;
+  };
+  const ask = () => { if (!queued) { queued = true; requestAnimationFrame(paint); } };
+  addEventListener('scroll', ask, { passive: true });
+  addEventListener('resize', ask);
+  paint();
+}
 
 function initShowcase(root) {
   const tabs = [...root.querySelectorAll('[role=tab]')];
@@ -163,10 +192,16 @@ if (typeof document !== 'undefined') {
     const platform = detectPlatform(navigator.userAgent, navigator.platform, navigator.maxTouchPoints);
     // uma parte quebrada não pode levar as outras junto
     const safe = (name, fn) => { try { fn(); } catch (e) { console.error(`${name} falhou`, e); } };
+    safe('hero', () => initHero(document.querySelector('.hero')));
     safe('showcase', () => document.querySelectorAll('[data-showcase]').forEach(initShowcase));
     safe('terminal', () => document.querySelectorAll('[data-terminal]').forEach(initTerminal));
     safe('install', () => document.querySelectorAll('[data-install]').forEach((el) => initInstall(el, platform)));
     safe('platform', () => initPlatform(platform, deviceFor(platform, navigator.userAgent)));
     safe('loopVideos', initLoopVideos);
+    // link de âncora dentro de popover não o fecha sozinho
+    safe('menu', () => {
+      const menu = document.getElementById('site-menu');
+      menu.addEventListener('click', (e) => { if (e.target.closest('a')) menu.hidePopover(); });
+    });
   });
 }

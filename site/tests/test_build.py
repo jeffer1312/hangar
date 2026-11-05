@@ -73,6 +73,13 @@ class BuildTest(unittest.TestCase):
                 m = MACHINE.search(f.read_text(encoding="utf-8"))
                 self.assertIsNone(m, f"{f}: {m and m.group(0)}")
 
+    def test_every_agent_has_a_banner(self):
+        for page in ("index.html", "en/index.html"):
+            html = (self.out / page).read_text(encoding="utf-8")
+            flags = html[html.index('<ol class="flags"'):html.index("</ol>", html.index('<ol class="flags"'))]
+            for _, name in strings.AGENTS:
+                self.assertIn(f"<span>{name}</span>", flags)
+
     def test_pt_uses_pt_videos(self):
         pt = (self.out / "index.html").read_text(encoding="utf-8")
         en = (self.out / "en/index.html").read_text(encoding="utf-8")
