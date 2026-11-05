@@ -498,7 +498,7 @@ impl Viewer {
         // Ctrl+Z (Cmd+Z no Mac) tira o último traço.
         // Nota em edição: toda tecla é do campo (o "-" e o "0" não podem virar zoom, nem o Ctrl+Z tirar a marcação).
         if self.editing.is_some() { return; }
-        if event.keystroke.modifiers.secondary() && event.keystroke.key == "z" {
+        if event.keystroke.modifiers.secondary(cx) && event.keystroke.key == "z" {
             self.undo(cx);
             cx.stop_propagation();
             return;
@@ -646,7 +646,7 @@ impl Render for Viewer {
         let stage = div().id("viewer-stage").relative().w(px(stage_w)).h(px(stage_h)).overflow_hidden().rounded_md().bg(theme::inset())
             .when(self.pen, |el| el.cursor(CursorStyle::Crosshair))
             .when(zoomed && !self.pen, |el| el.cursor(if self.drag.is_some() { CursorStyle::ClosedHand } else { CursorStyle::OpenHand }))
-            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
+            .on_scroll(cx.listener(|this, event: &ScrollEvent, window, cx| {
                 let Some(stage) = this.stage else { return };
                 let dy = f32::from(event.delta.pixel_delta(window.line_height()).y);
                 let at = event.position - stage.origin;

@@ -757,7 +757,7 @@ impl Hangar {
                 engine.place(bounds, window);
                 // Roda na fase de captura: antes da lista, que senão rolaria a conversa por cima da página.
                 if inside {
-                    window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+                    window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
                         if phase != DispatchPhase::Capture || !hitbox.should_handle_scroll(window) { return; }
                         let delta = event.delta.pixel_delta(px(16.));
                         engine.wheel(event.position - bounds.origin, point(-delta.x, -delta.y));

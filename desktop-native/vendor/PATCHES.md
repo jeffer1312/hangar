@@ -19,23 +19,25 @@ original extraído).
 Depois de qualquer mudança à mão num crate vendorizado, rodar `vendor/rebase.sh export`: o `.patch` é o registro do que
 fizemos, e só vale se acompanhar a cópia.
 
-## Estado na atualização 0.6.6 → 0.7.0 (gpui-pre 0.3.6 → 0.3.7)
+## Estado na atualização 0.7.0 → 0.9.0 (gpui-pre 0.3.7 → 0.3.11)
 
 | Ajuste | Onde | Estado | Por quê |
 |---|---|---|---|
-| Desfoque de fundo (vidro) | gpui-pre `scene.rs`/`window.rs`, gpui-pre-wgpu, -apple, -windows | adaptado no wgpu, mantido nos demais | a 0.3.7 dividiu o renderer wgpu em superfície (`WgpuRenderer`) e dispositivo (`WgpuRendererCore`); buffers, scratch e o alvo copiável foram para o núcleo |
-| Redesenho parcial e pular quadro igual | gpui-pre `scene_damage.rs`/`window.rs`/`platform.rs`, gpui-pre-linux, gpui-pre-wgpu, gpui-pre-windows `directx_renderer.rs`/`backdrop.rs`/`window.rs` | adaptado no wgpu e no windows, mantido nos demais | mesma divisão; `render_frame` recebe textura de destino e regiões. No DirectX 11: textura de quadro persistente copiada para o back buffer, um só retângulo de tesoura e `Present1` com esse retângulo sujo (`GPUI_DX_PARTIAL_RENDER=0` desliga). O upstream não tem nada equivalente |
-| Mapa de elementos das provas, `text_input_focused`, `LineCap` | gpui-pre `window.rs`/`element.rs`/`path_builder.rs` | mantido | upstream não mexeu nesses trechos; duas funções nossas em `window.rs` estavam entre a doc e o `#[inline(always)]` de outra e foram movidas |
-| Seleção de texto em view guardada (`retain_cached_view`) | gpui-base `text_selection.rs` | descartado | a 0.7.0 mantém o participante de uma view guardada registrado (`with_rendered_element`, `text_selection.rs:206-245`); o app deixou de chamar o remendo |
-| Coluna do marcador de lista, cor do marcador | gpui-base `text/node.rs`/`style.rs` | adaptado | o marcador passou a usar `list_start`, então a lista numerada que começa em outro número (#3204) vale com a coluna ligada |
-| Faixa de linguagem do bloco de código | gpui-base `text/node.rs`/`style.rs` | adaptado | o código dentro da faixa usa a estrutura nova do kit (`leaf_key`, `range_backgrounds`, `reveal`) |
-| Fonte própria do código inline | gpui-base `text/*`, gpui-component `text/style.rs`/`compat.rs` | mantido | `compat.rs` ficou com o `with_heading` da 0.7.0 mais o repasse da fonte |
-| `PopupSurface` (vidro nas listas e menus do kit) | gpui-component `popover.rs`, `menu/popup_menu.rs` | mantido | `dropdown_popup` e `popup_menu.rs` não mudaram na 0.7.0 |
-| `PopupMenuAppearance`, `replace_item` | gpui-component `menu/popup_menu.rs`/`mod.rs` | mantido | idem; os consertos de vazamento (#3267, #3279) ficaram em outros arquivos e os acréscimos não guardam entidade |
-| Entrada `menu-in` do menu de contexto | gpui-component `menu/context_menu.rs` | adaptado | a 0.7.0 só monta o menu no desenho (`DeferredMenu::build_menu`); a animação foi para lá |
-| Fundo pintado e entrada `dialog-in` do diálogo | gpui-component `dialog/dialog.rs` | adaptado | o cartão agora fica no `Positioner::corner`; a subida de 2 px substitui a descida do `slide-down` |
+| Desfoque de fundo (vidro) | gpui-pre `scene.rs`/`window.rs`, gpui-pre-wgpu, -apple, -windows | reescrito no -apple, mantido nos demais | a 0.3.11 trocou `metal`/`objc` por `objc2-metal` no renderer do Mac; o desfoque foi portado para essa API e o kernel do MPS passou a viver num `Retained` |
+| Redesenho parcial e pular quadro igual | gpui-pre `scene_damage.rs`/`window.rs`/`platform.rs`, gpui-pre-linux, gpui-pre-wgpu, gpui-pre-windows `directx_renderer.rs`/`backdrop.rs`/`window.rs` | adaptado | o renderer do Linux virou `Option` nas janelas, o `present` passou para a fila e a configuração da superfície saiu de `new_internal`. O upstream não tem nada equivalente |
+| `text_input_focused` | gpui-pre `window.rs` | adaptado | lê `focused_text_input`, o campo novo do upstream |
+| Coluna do marcador de lista, cor do marcador | gpui-base `text/node.rs`/`style.rs` | descartado | o kit passou a ter a coluna e `with_list_style`; o app só pinta o marcador por ela |
+| Imagem por referência no markdown | gpui-base `text/format/markdown.rs` | descartado | a 0.9.0 resolve sozinha |
+| Rótulo de acessibilidade do `Slider` | gpui-base e gpui-component `slider.rs` | descartado | o kit passou a ter `accessibility_label` |
+| Marca de escolhido e primeira opção do menu | gpui-component `menu/menu_item.rs`/`popup_menu.rs` | descartado | o kit anuncia `checked` e pula títulos na primeira seta |
+| Foco do menu de contexto | gpui-component `menu/context_menu.rs` | descartado | o kit foca o menu antes do primeiro quadro, como fazíamos |
+| Faixa de linguagem do bloco de código | gpui-base `text/node.rs`/`style.rs` | mantido | a faixa convive com o rótulo de linguagem novo do kit, que só aparece sem ela |
+| Fonte própria do código inline | gpui-base `text/*`, gpui-component `text/style.rs`/`compat.rs` | adaptado | a fonte da view vence a do `with_inline_code_style` novo do kit |
+| Piso da coluna da tabela | gpui-base `text/node.rs` | adaptado | a tabela do kit foi reescrita com cache de larguras; a largura da maior palavra entrou nesse cache |
+| Entrada `dialog-in` do diálogo | gpui-component `dialog/dialog.rs` | adaptado | o kit trocou `Animation` por `Transition`; a curva `ease` e a subida de 2 px foram para lá |
+| `KeyBinding::load_with_mapper` | gpui-pre `keymap/binding.rs` | novo | `load` passou a pedir `App`, e a config de atalhos e seus testes só têm o mapper |
 
-Não compilados aqui: gpui-pre-apple/-macos (revisados só por leitura).
+Não compilados aqui: gpui-pre-apple/-macos (revisados só por leitura; o CI do `native-macos.yml` compila).
 
 ## Navegador embutido
 
@@ -79,13 +81,12 @@ Não compilados aqui: gpui-pre-apple/-macos (revisados só por leitura).
 | `Window::a11y_snapshot(root)` e `Window::retain_a11y_tree` | gpui-pre `window/a11y.rs`, `window/a11y/snapshot.rs` | o app lê a tela do último quadro em texto, sem leitor de tela ligado |
 | Clique pela acessibilidade só quando o elemento do nó está sob o ponto | gpui-pre `window.rs` (`handle_a11y_action`), `elements/div.rs` | o clique é por coordenada; coberto por popup ele acionava o controle de cima |
 | Nome do `Button` cai na dica; `Button::aria_selected`; botão escolhido (`selected`) anuncia selecionado | gpui-component `button/button.rs` | botão só de ícone saía sem nome; aba, modo e opção escolhidos precisam do estado |
-| `Slider::aria_label` | gpui-base e gpui-component `slider.rs` | slider não tem texto próprio para ser nomeado |
 
 ## Tabela do markdown
 
 | Ajuste | Onde | Por quê |
 |---|---|---|
-| Coluna encolhe até a maior palavra (teto 160 px) e barra horizontal sempre visível quando a tabela rola | gpui-base `text/node.rs` (`measure_table_columns`, `render_scroll_table`), `scrollable_mask.rs` (`horizontal_scroll_area`) | o piso do kit (metade do conteúdo, 160 a 480 px) fazia tabela de prosa de 4 colunas passar da coluna do chat, e a rolagem não tinha barra |
+| Coluna encolhe até a maior palavra (teto 160 px) e barra horizontal sempre visível quando a tabela rola | gpui-base `text/node.rs` (`measure_table_column_widths`, `render_table`), `scrollable_mask.rs` (`horizontal_scroll_area`) | o piso do kit (metade do conteúdo, 160 a 480 px) fazia tabela de prosa de 4 colunas passar da coluna do chat, e a rolagem não tinha barra |
 
 ## Rolagem da conversa
 

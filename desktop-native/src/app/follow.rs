@@ -283,7 +283,7 @@ impl Hangar {
     pub(super) fn wheel_layer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.weak_entity();
         canvas(|bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal), move |_, hitbox, window, _| {
-            window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+            window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
                 let ScrollDelta::Lines(lines) = event.delta else { return };
                 if phase != DispatchPhase::Capture || lines.y == 0. || cx.reduce_motion() || !hitbox.should_handle_scroll(window) { return; }
                 cx.stop_propagation();

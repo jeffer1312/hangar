@@ -9,7 +9,7 @@ use alacritty_terminal::{
     vte::ansi::{Color, CursorShape, NamedColor, Processor, Rgb},
 };
 use gpui_kit::{App, Bounds, ContentMask, Element, ElementId, GlobalElementId, Hsla, InspectorElementId,
-    IntoElement, KeyDownEvent, LayoutId, Pixels, ScrollWheelEvent, ShapedLine, StrikethroughStyle, Style, TextAlign, TextRun, UnderlineStyle,
+    IntoElement, KeyDownEvent, LayoutId, Pixels, ScrollEvent, ShapedLine, StrikethroughStyle, Style, TextAlign, TextRun, UnderlineStyle,
     Window, fill, font, point, px, relative, rgb, size};
 
 pub(crate) fn terminal_font(window: &Window) -> gpui_kit::Font {
@@ -230,7 +230,7 @@ impl TermView {
     /// `x`/`y` relativos à grade. Programa que pediu o mouse recebe a roda na célula; tela alternativa sem
     /// mouse recebe setas (o alternateScroll do xterm), porque nela não há histórico local para rolar.
     /// Sem `can_send` (vista só de leitura) a roda rola só o histórico local.
-    pub fn scroll_wheel(&mut self, event: &ScrollWheelEvent, x: f32, y: f32, can_send: bool) -> bool {
+    pub fn scroll_wheel(&mut self, event: &ScrollEvent, x: f32, y: f32, can_send: bool) -> bool {
         self.wheel_remainder += f32::from(event.delta.pixel_delta(px(self.line_height)).y) / self.line_height;
         let lines = self.wheel_remainder.trunc() as i32;
         self.wheel_remainder -= lines as f32;
@@ -621,8 +621,8 @@ mod tests {
 
     #[test]
     fn wheel_goes_to_the_program_that_asked_for_the_mouse_or_the_alternate_screen() {
-        let up = ScrollWheelEvent { delta: ScrollDelta::Lines(point(0., 1.)), ..Default::default() };
-        let down = ScrollWheelEvent { delta: ScrollDelta::Lines(point(0., -2.)), ..Default::default() };
+        let up = ScrollEvent { delta: ScrollDelta::Lines(point(0., 1.)), ..Default::default() };
+        let down = ScrollEvent { delta: ScrollDelta::Lines(point(0., -2.)), ..Default::default() };
         // Programa com mouse (tmux com `mouse on`, Claude Code em tela cheia): a roda vira botão 64/65 na célula.
         let mut view = TermView::new(20, 5);
         view.feed(b"[?1049h[?1000h[?1006h");
@@ -632,7 +632,7 @@ mod tests {
         view.scroll_wheel(&down, x, y, true);
         assert_eq!(view.take_output().concat(), b"[<65;4;2M[<65;4;2M".to_vec());
         // Giro enorme num evento só não vira rajada: no máximo 5 passos por evento.
-        let big = ScrollWheelEvent { delta: ScrollDelta::Lines(point(0., 40.)), ..Default::default() };
+        let big = ScrollEvent { delta: ScrollDelta::Lines(point(0., 40.)), ..Default::default() };
         view.scroll_wheel(&big, x, y, true);
         assert_eq!(view.take_output().concat(), b"[<64;4;2M".repeat(5));
         // Ponteiro além da grade (folga da borda) cai na última célula.
@@ -674,9 +674,9 @@ d");
         assert!(!view.scroll_lines(0));
         view.scroll_lines(-1);
         for _ in 0..3 {
-            assert!(!view.scroll_wheel(&ScrollWheelEvent { delta: ScrollDelta::Lines(point(0., 0.25)), ..Default::default() }, 0., 0., true));
+            assert!(!view.scroll_wheel(&ScrollEvent { delta: ScrollDelta::Lines(point(0., 0.25)), ..Default::default() }, 0., 0., true));
         }
-        assert!(view.scroll_wheel(&ScrollWheelEvent { delta: ScrollDelta::Lines(point(0., 0.25)), ..Default::default() }, 0., 0., true));
+        assert!(view.scroll_wheel(&ScrollEvent { delta: ScrollDelta::Lines(point(0., 0.25)), ..Default::default() }, 0., 0., true));
         assert!(view.key_down(&key("z", Some("z"), Modifiers::default())).redraw);
         assert_eq!(view.snapshot().offset, 0);
         assert!(view.resize_grid(12, 3));

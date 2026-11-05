@@ -124,15 +124,28 @@ impl Default for Config {
     fn default() -> Self { Self { overrides: BTreeMap::new(), shortcuts: Vec::new(), hold: Modifiers { control: true, shift: true, ..Modifiers::none() }, physical: BTreeMap::new(), yielded: BTreeSet::new() } }
 }
 
+// Quem lê e grava atalho sem `App` à mão (a config, os testes) precisa do sistema para resolver `secondary-`.
+const HOST_OS: gpui_kit::OperatingSystem = if cfg!(target_os = "macos") {
+    gpui_kit::OperatingSystem::Mac
+} else if cfg!(target_os = "windows") {
+    gpui_kit::OperatingSystem::Windows
+} else {
+    gpui_kit::OperatingSystem::Linux
+};
+
+fn parse_key(source: &str) -> Result<Keystroke, gpui_kit::InvalidKeystrokeError> {
+    Keystroke::parse_with_os(source, HOST_OS)
+}
+
 fn canonical_key(source: &str) -> Result<String, String> {
     if source.split_whitespace().count() != 1 { return Err(tr("keyboard_invalid_key")); }
-    let key = Keystroke::parse(source).map_err(|_| tr("keyboard_invalid_key"))?;
+    let key = parse_key(source).map_err(|_| tr("keyboard_invalid_key"))?;
     let function = key.key.strip_prefix('f').and_then(|n| n.parse::<u8>().ok()).is_some_and(|n| (1..=24).contains(&n));
     let named = matches!(key.key.as_str(), "backspace" | "delete" | "escape" | "enter" | "tab" | "space" | "left" | "right" | "up" | "down"
         | "home" | "end" | "pageup" | "pagedown" | "insert");
     if (!function && !named && key.key.chars().count() != 1)
         || (!function && !key.modifiers.control && !key.modifiers.alt && !key.modifiers.platform) { return Err(tr("keyboard_invalid_key")); }
-    Ok(key.unparse())
+    Ok(key.unparse(HOST_OS))
 }
 
 fn captured_stroke(event: &KeyDownEvent, mapper: &dyn PlatformKeyboardMapper) -> Result<KeybindingKeystroke, String> {
@@ -147,7 +160,7 @@ fn reserved_number_key(key: &str, physical: Modifiers, hold: Modifiers, layouts:
 }
 
 fn key_label(source: &str) -> String {
-    let Ok(key) = Keystroke::parse(source) else { return source.to_owned(); };
+    let Ok(key) = parse_key(source) else { return source.to_owned(); };
     let mut parts = modifier_labels(key.modifiers);
     let text = match key.key.as_str() {
         "space" => tr("keyboard_space"), "up" => "↑".into(), "down" => "↓".into(), "left" => "←".into(), "right" => "→".into(),
@@ -160,7 +173,7 @@ fn key_label(source: &str) -> String {
 }
 
 fn display_key(source: &str, physical: Option<Modifiers>, cx: &App) -> String {
-    let Ok(key) = Keystroke::parse(source) else { return source.to_owned(); };
+    let Ok(key) = parse_key(source) else { return source.to_owned(); };
     let mapped = KeybindingKeystroke::new_with_mapper(key, false, cx.keyboard_mapper().as_ref());
     let mut shown = mapped.inner().clone();
     shown.modifiers = physical.unwrap_or(*mapped.modifiers());
@@ -169,7 +182,7 @@ fn display_key(source: &str, physical: Option<Modifiers>, cx: &App) -> String {
         let layout = cx.keyboard_layout();
         if let Some(digit) = super::session_numbers::layout_digit(&shown.key, [layout.id(), layout.name()]) { shown.key = digit.to_string(); }
     }
-    key_label(&shown.unparse())
+    key_label(&shown.unparse(HOST_OS))
 }
 
 fn modifier_labels(modifiers: Modifiers) -> Vec<String> {
@@ -220,7 +233,7 @@ impl Config {
         let mut check = |context: &str, key: &str, label: String| -> Result<(), String> {
             if key.is_empty() { return Ok(()); }
             let key = canonical_key(key)?;
-            let stroke = Keystroke::parse(&key).map_err(|_| tr("keyboard_invalid_key"))?;
+            let stroke = parse_key(&key).map_err(|_| tr("keyboard_invalid_key"))?;
             if stroke.modifiers == self.hold && (number_key(&stroke.key) || matches!(stroke.key.as_str(), "enter" | "escape" | "backspace")) {
                 return Err(tr("keyboard_number_reserved").replace("{key}", &key_label(&key)));
             }
@@ -247,7 +260,7 @@ impl Config {
         let mut seen = HashMap::new();
         let mut check = |context: &str, source: &str, label: String| -> Result<(), String> {
             if source.is_empty() { return Ok(()); }
-            let parsed = Keystroke::parse(source).map_err(|_| tr("keyboard_invalid_key"))?;
+            let parsed = parse_key(source).map_err(|_| tr("keyboard_invalid_key"))?;
             let key = KeybindingKeystroke::new_with_mapper(parsed, false, cx.keyboard_mapper().as_ref());
             let physical = self.physical.get(&canonical_key(source)?).copied().unwrap_or_else(|| {
                 let mut modifiers = *key.modifiers();
@@ -257,7 +270,7 @@ impl Config {
             if reserved_number_key(key.key(), physical, self.hold, [layout.id(), layout.name()]) {
                 return Err(tr("keyboard_number_reserved").replace("{key}", &display_key(source, Some(physical), cx)));
             }
-            if let Some(previous) = seen.insert((context.to_owned(), key.inner().unparse()), label.clone()) {
+            if let Some(previous) = seen.insert((context.to_owned(), key.inner().unparse(HOST_OS)), label.clone()) {
                 return Err(tr("keyboard_conflict").replace("{key}", &key_label(source)).replace("{action}", &previous).replace("{other_action}", &label));
             }
             Ok(())
@@ -287,7 +300,7 @@ impl Config {
 
 fn load_binding(key: &str, action: Box<dyn gpui_kit::Action>, context: &str, mapper: &dyn PlatformKeyboardMapper) -> Result<KeyBinding, String> {
     let predicate = KeyBindingContextPredicate::parse(context).map_err(|error| error.to_string())?;
-    KeyBinding::load(key, action, Some(predicate.into()), false, None, mapper).map_err(|error| error.to_string())
+    KeyBinding::load_with_mapper(key, action, Some(predicate.into()), false, None, HOST_OS, mapper).map_err(|error| error.to_string())
 }
 
 fn managed(action: &dyn gpui_kit::Action) -> bool {
@@ -295,7 +308,7 @@ fn managed(action: &dyn gpui_kit::Action) -> bool {
 }
 
 fn scope_contexts() -> Vec<Vec<KeyContext>> {
-    let root = KeyContext::new_with_defaults();
+    let root = KeyContext::new_with_defaults(HOST_OS);
     let mut file = root.clone();
     file.add("FileViewer");
     let mut terminal = root.clone();
@@ -335,7 +348,7 @@ fn validate_effective_bindings(config: &Config, current: &[KeyBinding], mapper: 
     let scopes = scope_contexts();
     let mut seen: HashMap<String, Vec<usize>> = HashMap::new();
     for (ix, binding) in owned.iter().enumerate() {
-        let signature = binding.keystrokes().iter().map(|key| key.inner().unparse()).collect::<Vec<_>>().join(" ");
+        let signature = binding.keystrokes().iter().map(|key| key.inner().unparse(HOST_OS)).collect::<Vec<_>>().join(" ");
         let matching = seen.entry(signature.clone()).or_default();
         for &other in matching.iter() {
             if scopes.iter().any(|contexts| binding_applies(binding, contexts) && binding_applies(&owned[other], contexts))
@@ -351,12 +364,12 @@ fn validate_effective_bindings(config: &Config, current: &[KeyBinding], mapper: 
         let input: Vec<_> = binding.keystrokes().iter().map(|key| key.inner().clone()).collect();
         for mut contexts in scopes.iter().filter(|contexts| binding_applies(binding, contexts)).cloned() {
             if contexts.iter().any(|context| context.contains("Terminal")) { continue; }
-            let mut editing = KeyContext::new_with_defaults();
+            let mut editing = KeyContext::new_with_defaults(HOST_OS);
             editing.add("Input");
             contexts.push(editing);
             let (matches, pending) = library.bindings_for_input(&input, &contexts);
             if !matches.is_empty() || pending {
-                let key = owned[ix].keystrokes().iter().map(|key| key.unparse()).collect::<Vec<_>>().join(" ");
+                let key = owned[ix].keystrokes().iter().map(|key| key.unparse(HOST_OS)).collect::<Vec<_>>().join(" ");
                 return Err(tr("keyboard_editing_conflict").replace("{key}", &key_label(&key)));
             }
         }
@@ -594,7 +607,7 @@ impl Hangar {
             // A repetição do Ctrl+V (no RDP o soltar da tecla chega atrasado) colaria tudo de novo.
             if is_paste(&event.keystroke) { return true; }
             let event = KeybindingKeystroke::new_with_mapper(event.keystroke.clone(), false, cx.keyboard_mapper().as_ref());
-            return self.keyboard.config.shortcuts.iter().any(|binding| Keystroke::parse(&binding.key).ok().is_some_and(|key| {
+            return self.keyboard.config.shortcuts.iter().any(|binding| parse_key(&binding.key).ok().is_some_and(|key| {
                 let key = KeybindingKeystroke::new_with_mapper(key, false, cx.keyboard_mapper().as_ref());
                 key.inner().key == event.inner().key && key.inner().modifiers == event.inner().modifiers
             }));
@@ -632,9 +645,9 @@ impl Hangar {
         if reserved_number_key(stroke.key(), physical, self.keyboard.config.hold, [layout.id(), layout.name()]) {
             edit.key = None;
             edit.physical = None;
-            self.keyboard.save_error = Some(tr("keyboard_number_reserved").replace("{key}", &display_key(&stroke.unparse(), Some(physical), cx)));
+            self.keyboard.save_error = Some(tr("keyboard_number_reserved").replace("{key}", &display_key(&stroke.unparse(HOST_OS), Some(physical), cx)));
         } else {
-            match canonical_key(&stroke.unparse()) {
+            match canonical_key(&stroke.unparse(HOST_OS)) {
                 Ok(key) => { edit.key = Some(key); edit.physical = Some(physical); self.keyboard.save_error = None; }
                 Err(error) => { edit.key = None; edit.physical = None; self.keyboard.save_error = Some(error); }
             }
@@ -843,7 +856,7 @@ mod tests {
 
     #[test]
     fn paste_shortcuts_are_recognized_and_others_are_not() {
-        let stroke = |s: &str| Keystroke::parse(s).unwrap();
+        let stroke = |s: &str| parse_key(s).unwrap();
         assert!(is_paste(&stroke("ctrl-v")));
         assert!(is_paste(&stroke("cmd-v")));
         assert!(is_paste(&stroke("shift-insert")));
@@ -864,13 +877,13 @@ mod tests {
     fn edited_binding_replaces_default_without_removing_other_keymaps() {
         let mut config = Config::default();
         config.overrides.insert(Command::FocusComposer, "ctrl-alt-l".into());
-        let original = vec![KeyBinding::new("secondary-l", FocusComposer, Some("!Terminal")),
+        let original = vec![load_binding("secondary-l", Box::new(FocusComposer), "!Terminal", &DummyKeyboardMapper).unwrap(),
             KeyBinding::new("tab", NoAction, Some("Terminal"))];
         let updated = replacement_bindings(&original, &config, &DummyKeyboardMapper).unwrap();
         let composer: Vec<_> = updated.iter().filter(|b| b.action().as_any().is::<FocusComposer>()).collect();
         assert_eq!(composer.len(), 1);
-        assert_eq!(composer[0].keystrokes()[0].unparse(), "ctrl-alt-l");
-        assert!(updated.iter().any(|b| b.action().as_any().is::<NoAction>() && b.keystrokes()[0].unparse() == "tab"));
+        assert_eq!(composer[0].keystrokes()[0].unparse(HOST_OS), "ctrl-alt-l");
+        assert!(updated.iter().any(|b| b.action().as_any().is::<NoAction>() && b.keystrokes()[0].unparse(HOST_OS) == "tab"));
         config.overrides.insert(Command::FocusComposer, String::new());
         let disabled = replacement_bindings(&updated, &config, &DummyKeyboardMapper).unwrap();
         assert!(!disabled.iter().any(|b| b.action().as_any().is::<FocusComposer>()));
@@ -878,8 +891,8 @@ mod tests {
 
     #[test]
     fn edited_bindings_cannot_replace_live_input_keys_or_file_commands() {
-        let editing = vec![KeyBinding::new("secondary-c", gpui_kit::base::input::Copy, Some("Input")),
-            KeyBinding::new("secondary-f", gpui_kit::base::input::Search, Some("Input"))];
+        let editing = vec![load_binding("secondary-c", Box::new(gpui_kit::base::input::Copy), "Input", &DummyKeyboardMapper).unwrap(),
+            load_binding("secondary-f", Box::new(gpui_kit::base::input::Search), "Input", &DummyKeyboardMapper).unwrap()];
         assert!(validate_effective_bindings(&Config::default(), &editing, &DummyKeyboardMapper).is_ok());
         let mut config = Config::default();
         config.overrides.insert(Command::FocusComposer, "secondary-c".into());
@@ -894,7 +907,7 @@ mod tests {
     fn close_session_key_stays_out_of_text_fields_and_the_browser_page() {
         let bindings = Config::default().bindings(&DummyKeyboardMapper).unwrap();
         let close = bindings.iter().find(|b| b.action().as_any().is::<CloseSession>()).unwrap();
-        let root = KeyContext::new_with_defaults();
+        let root = KeyContext::new_with_defaults(HOST_OS);
         let inside = |name: &str| { let mut context = KeyContext::default(); context.add(name); vec![root.clone(), context] };
         assert!(binding_applies(close, std::slice::from_ref(&root)));
         assert!(binding_applies(close, &inside("FileViewer")));
@@ -907,8 +920,8 @@ mod tests {
         let bindings = Config::default().bindings(&DummyKeyboardMapper).unwrap();
         let open = bindings.iter().find(|b| b.action().as_any().is::<OpenNewSession>()).unwrap();
         let expected = if cfg!(target_os = "macos") { "cmd-shift-t" } else { "ctrl-shift-t" };
-        assert_eq!(open.keystrokes().iter().map(|k| k.inner().unparse()).collect::<Vec<_>>(), [expected]);
-        let root = KeyContext::new_with_defaults();
+        assert_eq!(open.keystrokes().iter().map(|k| k.inner().unparse(HOST_OS)).collect::<Vec<_>>(), [expected]);
+        let root = KeyContext::new_with_defaults(HOST_OS);
         let inside = |name: &str| { let mut context = KeyContext::default(); context.add(name); vec![root.clone(), context] };
         assert!(binding_applies(open, std::slice::from_ref(&root)));
         assert!(binding_applies(open, &inside("Input")));
@@ -956,8 +969,8 @@ mod tests {
     fn rename_session_is_f2_everywhere_but_the_terminal_and_the_browser_page() {
         let bindings = Config::default().bindings(&DummyKeyboardMapper).unwrap();
         let rename = bindings.iter().find(|b| b.action().as_any().is::<RenameSession>()).unwrap();
-        assert_eq!(rename.keystrokes().iter().map(|k| k.inner().unparse()).collect::<Vec<_>>(), ["f2"]);
-        let root = KeyContext::new_with_defaults();
+        assert_eq!(rename.keystrokes().iter().map(|k| k.inner().unparse(HOST_OS)).collect::<Vec<_>>(), ["f2"]);
+        let root = KeyContext::new_with_defaults(HOST_OS);
         let inside = |name: &str| { let mut context = KeyContext::default(); context.add(name); vec![root.clone(), context] };
         assert!(binding_applies(rename, std::slice::from_ref(&root)));
         assert!(binding_applies(rename, &inside("Input")));
@@ -1034,7 +1047,7 @@ mod tests {
 
     #[test]
     fn text_preferred_key_events_are_not_captured_as_shortcuts() {
-        let mut event = KeyDownEvent { keystroke: Keystroke::parse("ctrl-alt-q").unwrap(), is_held: false, prefer_character_input: true, physical_digit: None };
+        let mut event = KeyDownEvent { keystroke: parse_key("ctrl-alt-q").unwrap(), is_held: false, prefer_character_input: true, physical_digit: None };
         assert!(captured_stroke(&event, &DummyKeyboardMapper).is_err());
         event.prefer_character_input = false;
         assert!(captured_stroke(&event, &DummyKeyboardMapper).is_ok());

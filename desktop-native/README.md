@@ -5,10 +5,10 @@ Cliente desktop em Rust/GPUI para o backend Hangar **já em execução**. É a j
 ## Compilar e abrir
 
 ```bash
-cargo +1.98.1 run --manifest-path desktop-native/Cargo.toml --locked
+cargo +1.99.1 run --manifest-path desktop-native/Cargo.toml --locked
 ```
 
-Execute o comando na raiz desta worktree. O seletor `+1.98.1` mantém a versão do Rust ao executar fora de `desktop-native/`; se ela ainda não estiver instalada, use `rustup toolchain install 1.98.1`. Para uma compilação otimizada, acrescente `--release` depois de `--locked`. A janela pede a URL HTTP(S) do backend existente e o token de acesso; o token fica apenas na memória do processo, sem ser salvo em disco. Para a interface em inglês, use `HANGAR_NATIVE_LANG=en` no ambiente do processo.
+Execute o comando na raiz desta worktree. O seletor `+1.99.1` mantém a versão do Rust ao executar fora de `desktop-native/`; se ela ainda não estiver instalada, use `rustup toolchain install 1.99.1`. Para uma compilação otimizada, acrescente `--release` depois de `--locked`. A janela pede a URL HTTP(S) do backend existente e o token de acesso; o token fica apenas na memória do processo, sem ser salvo em disco. Para a interface em inglês, use `HANGAR_NATIVE_LANG=en` no ambiente do processo.
 
 Em desenvolvimento, preserve o `target-dir` configurado no `~/.cargo/config.toml` da máquina; não abra um cache vazio por sessão. No Linux, builds de desenvolvimento rodam com `nice -n 19 ionice -c3` antes do comando Cargo. O script `tools/build-otimizado.sh` compila com o perfil `dist` (o da main publicada), que sai em `dist/` dentro do `target-dir` em uso (o que o `cargo metadata` informa), à parte do release comum.
 
@@ -77,7 +77,7 @@ trocar, recriar ou limpar a conversa invalida as respostas em voo e a lista ante
 
 ## Ambiente
 
-- Rust 1.98.1, fixado em `rust-toolchain.toml`. `Cargo.lock` fixa as versões usadas nesta worktree.
+- Rust 1.99.1, fixado em `rust-toolchain.toml`. `Cargo.lock` fixa as versões usadas nesta worktree.
 - Linux: sessão Wayland ou X11 e bibliotecas de desenvolvimento de xkbcommon, fontconfig, freetype, Vulkan e ALSA. Compilação e uso real conferidos em CachyOS/Hyprland/Wayland.
 - Windows: Rust com alvo MSVC, Visual Studio C++ Build Tools e Windows SDK para Win32/DirectWrite. A compilação e a janela **não foram conferidas** no Windows.
 - macOS: Xcode e Command Line Tools para Metal. A compilação e a janela **não foram conferidas** no macOS.
