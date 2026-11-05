@@ -123,7 +123,7 @@ pub async fn build(st: &crate::routes::AppState, input: ClientInput) -> Bundle {
         read_logs(base, paths, scrubber.clone(), now, deadline),
     );
     let facts = Facts { now, versions, sessions, accounts, diary, server_log, python, updates };
-    let (app, os) = (facts.versions.app(), facts.versions.arch.clone());
+    let (app, os) = (facts.versions.app(), facts.versions.label());
     let assembled = {
         let s = scrubber.clone();
         tokio::task::spawn_blocking(move || assemble(&facts, &input, &s, BODY_MAX))
@@ -178,9 +178,9 @@ fn head_text(facts: &Facts, input: &ClientInput, scrubber: &Scrubber) -> String 
     failures.sort_by(|a, b| b.ts.total_cmp(&a.ts));
     let failures: Vec<String> = failures.into_iter().map(|f| failure_line(f, scrubber)).collect();
     let accounts: &[collect::AccountFact] = facts.accounts.as_deref().unwrap_or(&[]);
-    let versions = format!("hangar-server {} · pacote {} · commit {} · {} · {} · claude {} · tmux {} · fuso {}",
+    let versions = format!("hangar-server {} · pacote {} · commit {} · {} · {} · claude {} · tmux {} · fuso {} · máquina {}",
         v.server, if v.package.is_empty() { "?" } else { &v.package }, if v.commit.is_empty() { "?" } else { &v.commit },
-        v.os, v.arch, v.claude, v.mux, v.offset);
+        v.os, v.arch, v.claude, v.mux, v.offset, if v.machine.is_empty() { "?" } else { &v.machine });
     let mut t = format!("# Relatório de diagnóstico · {}\n\n", facts.now.format("%Y-%m-%d %H:%M:%S %:z"));
     let said = input.text.as_deref().map(|text| collect::clean(scrubber, text, TEXT_MAX)).filter(|text| !text.is_empty());
     t += &format!("O que aconteceu:\n{}\n\n", said.as_deref().unwrap_or("(não descrito)"));
@@ -240,7 +240,8 @@ fn json_len(text: &str) -> usize {
 pub(crate) fn assemble(facts: &Facts, input: &ClientInput, scrubber: &Scrubber, max: usize) -> Vec<u8> {
     let v = &facts.versions;
     let app = v.app();
-    let body_of = |text: &str| report_body(&app, &v.commit, &v.arch, text);
+    let label = v.label();
+    let body_of = |text: &str| report_body(&app, &v.commit, &label, text);
     let mut text = head_text(facts, input, scrubber);
     let diary: Vec<String> = facts.diary.problems.iter().map(collect::DiaryEntry::compact).collect();
     // Menor corte que cabe, pela soma do tamanho escapado de cada linha (`\n` vira 2 bytes); se

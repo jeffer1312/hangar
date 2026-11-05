@@ -294,7 +294,7 @@ fn full_diary_over_the_cap_drops_the_oldest_days() {
 
 fn versions() -> Versions {
     Versions { server: "0.1.0".into(), package: "0.1.0.8380".into(), commit: "fe204bec6".into(), os: "Linux".into(),
-        arch: "linux-x86_64".into(), claude: "2.1.0".into(), mux: "tmux 3.5".into(), offset: "-03:00".into() }
+        arch: "linux-x86_64".into(), machine: "DELPHI-02".into(), claude: "2.1.0".into(), mux: "tmux 3.5".into(), offset: "-03:00".into() }
 }
 
 fn entry(at: chrono::DateTime<Local>, n: usize) -> DiaryEntry {
@@ -324,7 +324,8 @@ fn report_has_the_summary_first_and_the_sections_in_order() {
     let (value, text) = report(&body);
     assert_eq!((value["v"].as_u64(), value["kind"].as_str(), value["outcome"].as_str()), (Some(1), Some("diagnostico"), Some("aberto")));
     assert_eq!(value["app"], "hangar-server 0.1.0.8380");
-    assert_eq!(value["os"], "linux-x86_64");
+    assert_eq!(value["os"], "DELPHI-02 · linux-x86_64");
+    assert!(text.contains("máquina DELPHI-02"), "{text}");
     assert!(value["code"].is_null() && value["agent"].is_null());
     let said = text.find("travou a fila").unwrap();
     let mut last = said;

@@ -589,6 +589,8 @@ pub(crate) struct Versions {
     pub commit: String,
     pub os: String,
     pub arch: String,
+    /// Nome do computador: o relatório automático não tem quem diga de onde veio.
+    pub machine: String,
     pub claude: String,
     pub mux: String,
     /// Fuso do servidor, que dá a hora das linhas.
@@ -601,6 +603,11 @@ impl Versions {
         format!("hangar-server {}", if self.package == "dev" || self.package.is_empty() { &self.server } else { &self.package })
     }
 
+    /// O `os` do relatório, que o worker põe no assunto: o nome vem antes porque o e-mail corta o fim.
+    pub(crate) fn label(&self) -> String {
+        if self.machine.is_empty() { self.arch.clone() } else { format!("{} · {}", self.machine, self.arch) }
+    }
+
     /// Só o que não depende de sonda: serve quando o prazo do `build` estoura antes.
     pub(crate) fn local() -> Self {
         let (package, commit) = match crate::update::running_package() {
@@ -608,7 +615,8 @@ impl Versions {
             None => ("dev".to_owned(), crate::update::dev::boot_head().map(|h| h.chars().take(9).collect()).unwrap_or_default()),
         };
         Versions { server: env!("CARGO_PKG_VERSION").to_owned(), package, commit, os: "?".into(),
-            arch: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH), claude: "?".into(), mux: "?".into(),
+            arch: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+            machine: sysinfo::System::host_name().unwrap_or_default(), claude: "?".into(), mux: "?".into(),
             offset: Local::now().format("%:z").to_string() }
     }
 }
@@ -634,5 +642,6 @@ pub(crate) async fn versions(st: &crate::routes::AppState, s: &Scrubber) -> Vers
         }
     };
     let (claude, mux, os) = tokio::join!(claude, mux, os);
-    Versions { claude, mux, os, ..Versions::local() }
+    let local = Versions::local();
+    Versions { claude, mux, os, machine: clean(s, &local.machine, 80), ..local }
 }

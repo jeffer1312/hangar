@@ -3496,6 +3496,10 @@ quase simultâneos com a mesma senha podem gravar os dois). O teto diário do KV
 (o diagnóstico custa 2, o diário mais 2) e, passado o teto, o diagnóstico recebe 503 em vez de um
 código que não abre.
 
+**Nome da máquina (05/11/2026).** O relatório leva o nome do computador no texto e, antes do
+sistema, no campo `os`, que o worker põe no assunto. Sem ele, relatório automático só se
+identificava por contas e sessões. O worker não muda: `short()` já tira o que ele recusaria.
+
 **Envio automático:** feito para a falha de atualização, na entrada seguinte.
 
 ## Relatório automático quando a atualização falha (30/10/2026)
