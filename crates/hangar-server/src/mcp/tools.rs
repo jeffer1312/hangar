@@ -253,17 +253,17 @@ fn close_target(alvo: &str, own_server: &str) -> Result<(Option<String>, String)
 /// `close_session` com `servidor::sessao`: fecha lá, pela rota de lá (`peers.json`), como
 /// `hangar-send --close servidor::sessao`. Par externo não está no `peers.json`: sessão de outra pessoa não fecha.
 async fn remote_close(peers: &PeerClient, server: &str, name: &str) -> Outcome {
-    let call = |method, path: String| async move {
-        peers.call(server, method, &path, None).await.map(|v| v.unwrap_or(Value::Null)).map_err(|e| e.text(server))
-    };
     // O DELETE responde ok para nome que não existe: nome errado não pode virar "fechada".
-    let rows = call(reqwest::Method::GET, "/api/sessions".into()).await?;
-    if !rows.as_array().is_some_and(|rows| rows.iter().any(|s| s["name"] == name)) {
+    let rows = peers.call(server, reqwest::Method::GET, "/api/sessions", None).await.map_err(|e| e.text(server))?;
+    if !rows.as_ref().and_then(Value::as_array).is_some_and(|rows| rows.iter().any(|s| s["name"] == name)) {
         return Err(format!("sessão '{name}' não existe em '{server}' (tool `sessions`)"));
     }
-    let resp = call(reqwest::Method::DELETE, format!("/api/sessions/{}", segment(name))).await?;
+    let resp = peers.call(server, reqwest::Method::DELETE, &format!("/api/sessions/{}", segment(name)), None).await.map_err(|e| {
+        // Sem resposta legível o fechamento pode ter acontecido: quem repete ouviria "não existe" sem entender.
+        if e.is_transport() { format!("{} — a sessão pode ter fechado lá: confira com `sessions`", e.text(server)) } else { e.text(server) }
+    })?;
     let mut out = Map::from_iter([("server".to_owned(), json!(server))]);
-    if let Value::Object(fields) = resp { out.extend(fields); }
+    if let Some(Value::Object(fields)) = resp { out.extend(fields); }
     Ok(dict(Value::Object(out)))
 }
 
@@ -988,7 +988,7 @@ mod tests {
         let seen: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
         let sink = seen.clone();
         let app = Router::new()
-            .route("/api/sessions", get(move || async move { reply(json!([{"name": "filha"}, {"name": "dono so"}, {"name": "travada"}])) }))
+            .route("/api/sessions", get(move || async move { reply(json!([{"name": "filha"}, {"name": "dono so"}, {"name": "travada"}, {"name": "muda"}])) }))
             .route("/api/sessions/{name}", delete(move |h: HeaderMap, uri: axum::http::Uri| {
                 let sink = sink.clone();
                 async move {
@@ -996,6 +996,9 @@ mod tests {
                     sink.lock().unwrap().push((auth, uri.path().to_owned()));
                     if uri.path().ends_with("/travada") {
                         return (StatusCode::CONFLICT, [(axum::http::header::CONTENT_TYPE, "application/json")], json!({"detail": "recusada lá"}).to_string());
+                    }
+                    if uri.path().ends_with("/muda") {
+                        return (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "application/json")], "<html>".to_owned());
                     }
                     (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "application/json")], json!({"ok": true, "warning": {"msg": "par não avisado"}}).to_string())
                 }
@@ -1019,7 +1022,10 @@ mod tests {
         assert!(seen.lock().unwrap().is_empty(), "nome que lá não existe não chega ao DELETE");
 
         let err = remote_close(&peers, "lab", "travada").await.unwrap_err();
-        assert!(err.contains("recusada lá"), "{err}");
+        assert!(err.contains("recusada lá") && !err.contains("pode ter fechado"), "{err}");
+
+        let err = remote_close(&peers, "lab", "muda").await.unwrap_err();
+        assert!(err.contains("pode ter fechado"), "resposta ilegível não diz que falhou: {err}");
     }
 
     #[tokio::test]

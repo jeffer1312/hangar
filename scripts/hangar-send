@@ -845,7 +845,11 @@ if [[ "$1" == "--close" ]]; then
     vivas=$(api GET /api/sessions) || exit 1
     printf '%s' "$vivas" | "$PY" -c 'import json,sys; sys.exit(0 if any(s.get("name") == sys.argv[1] for s in json.load(sys.stdin)) else 1)' "$alvo" \
         || { echo "erro: sessão '$rotulo' não existe (hangar-send --list)" >&2; exit 1; }
-    resp=$(api DELETE "/api/sessions/$alvo") || exit 1
+    resp=$(api DELETE "/api/sessions/$alvo") || {
+        # Sem resposta, o fechamento pode ter acontecido lá: repetir só diria "não existe".
+        [[ -n "$remoto" ]] && echo "aviso: '$rotulo' pode ter fechado mesmo assim — confira com hangar-send --list" >&2
+        exit 1
+    }
     echo "fechada: $rotulo"
     # Fechou, mas desfazer o par remoto dela pode ter falhado: isso não some calado.
     printf '%s' "$resp" | "$PY" -c 'import json,sys; w=(json.load(sys.stdin) or {}).get("warning"); w and print("aviso: " + (w.get("msg") or json.dumps(w, ensure_ascii=False)), file=sys.stderr)' || true
