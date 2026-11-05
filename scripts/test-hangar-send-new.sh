@@ -13,6 +13,8 @@ set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d)"
 falhas=0
+# O hangar-send prefere ~/.hangar/config: com a HOME real, o teste falava com o servidor de verdade.
+export HOME="$TMP/home"
 
 # O hangar-send chama `python3`. No Windows ele pode ser o atalho da Microsoft Store, que existe no
 # PATH e não executa nada: acha um Python que RODA e o expõe como python3 só pra este teste.
@@ -43,6 +45,9 @@ class H(http.server.BaseHTTPRequestHandler):
         if self.path.endswith("/pair/contract"):
             self.wfile.write('{"peers":["lab::s2"],"path":"","content":"decisão A\\n","owner":"lab","mtime":"111"}'.encode())
             return
+        if self.path == "/api/sessions":
+            self.wfile.write(b'[{"name":"viva"}]')
+            return
         self.wfile.write(b'{"claude":{"disponivel":true,"default":true},"codex":{"disponivel":true,"default":false}}')
     def do_POST(self):
         corpo = self.rfile.read(int(self.headers.get("Content-Length", 0)))
@@ -55,6 +60,11 @@ class H(http.server.BaseHTTPRequestHandler):
         open(destino + ".rota", "w").write(self.path)
         self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers()
         self.wfile.write(b'{"mtime":"222"}')
+    def do_DELETE(self):
+        open(destino + ".delete", "w").write(self.path)
+        open(destino + ".auth", "w").write(self.headers.get("Authorization", ""))
+        self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers()
+        self.wfile.write(b'{"ok":true}')
     def log_message(self, *a): pass
 http.server.HTTPServer(("127.0.0.1", porta), H).serve_forever()
 PY
@@ -169,6 +179,29 @@ checa "--gravar sem --mtime: só cria" 'null' "$(campo mtime 2>/dev/null || echo
 checa "--mtime sem --gravar: código" '2' "$?"
 bash "$REPO/scripts/hangar-send" --help 2>/dev/null | grep -q -- '--contrato'
 checa "--help menciona --contrato" '0' "$?"
+
+# 10. --close servidor::sessao: confere a lista de lá e fecha lá, com o token de lá.
+printf '{"la":{"base_url":"http://127.0.0.1:%s","token":"tok-la"}}' "$PORTA" > "$TMP/backend/peers.json"
+printf 'CP_AUTH_TOKEN=teste\nCP_PORT=1\nCP_SERVER_ID=aqui\n' > "$TMP/backend/.env"
+saida=$(bash "$TMP/scripts/hangar-send" --close la::viva 2>&1)
+checa "--close remoto: código" '0' "$?"
+checa "--close remoto: saída" 'fechada: la::viva' "$saida"
+checa "--close remoto: rota de lá" '/api/sessions/viva' "$(cat "$TMP/corpo.json.delete" 2>/dev/null)"
+checa "--close remoto: token de lá" 'Bearer tok-la' "$(cat "$TMP/corpo.json.auth" 2>/dev/null)"
+rm -f "$TMP/corpo.json.delete"
+saida=$(bash "$TMP/scripts/hangar-send" --close la::sumiu 2>&1)
+checa "--close remoto sem a sessão: código" '1' "$?"
+[[ "$saida" == *"la::sumiu"* ]]
+checa "--close remoto sem a sessão: nomeia o alvo" '0' "$?"
+checa "--close remoto sem a sessão: nada fechado" 'ausente' "$([[ -e "$TMP/corpo.json.delete" ]] && echo fechado || echo ausente)"
+bash "$TMP/scripts/hangar-send" --close vps::viva >/dev/null 2>&1
+checa "--close servidor desconhecido: código" '1' "$?"
+bash "$TMP/scripts/hangar-send" --close a::b::c >/dev/null 2>&1
+checa "--close com dois '::': código" '2' "$?"
+# O id desta máquina fica aqui: a recusa de fechar a si mesma vale, e nada vai à API.
+CP_SESSION_NAME=viva bash "$TMP/scripts/hangar-send" --close aqui::viva >/dev/null 2>&1
+checa "--close <id daqui>::eu: recusa" '2' "$?"
+checa "--close <id daqui>::eu: nada fechado" 'ausente' "$([[ -e "$TMP/corpo.json.delete" ]] && echo fechado || echo ausente)"
 
 if [[ $falhas -gt 0 ]]; then echo "$falhas falha(s)"; exit 1; fi
 echo "tudo ok"

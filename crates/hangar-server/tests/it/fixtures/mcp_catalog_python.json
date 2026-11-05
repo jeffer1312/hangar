@@ -364,7 +364,7 @@
  },
  {
   "name": "close_session",
-  "description": "Fecha OUTRA sessão desta máquina, com ou sem terminal, como `hangar-send --close <sessao>`: ela sai do grupo sem aviso. Nunca a própria. Use para a sessão que você abriu e que já terminou o trabalho.",
+  "description": "Fecha OUTRA sessão, com ou sem terminal, desta máquina ou de outra (`servidor::sessao`), como `hangar-send --close <sessao>`: ela sai do grupo sem aviso. Nunca a própria. Use para a sessão que você abriu e que já terminou o trabalho.",
   "inputSchema": {
    "properties": {
     "alvo": {

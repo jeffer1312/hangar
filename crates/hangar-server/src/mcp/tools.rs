@@ -240,6 +240,33 @@ async fn remote_session(peers: &PeerClient, server: &str, mut a: NewSession) -> 
     created(&info, Some(server))
 }
 
+/// Para quem vai o `close_session`: `(servidor, nome)`, sem servidor quando é desta máquina. O id daqui
+/// fica aqui, senão `<id>::eu` escapava da recusa de fechar a si mesma.
+fn close_target(alvo: &str, own_server: &str) -> Result<(Option<String>, String), String> {
+    Ok(match remote_target(alvo)? {
+        Some((server, name)) if server != own_server => (Some(server), name),
+        Some((_, name)) => (None, name),
+        None => (None, alvo.to_owned()),
+    })
+}
+
+/// `close_session` com `servidor::sessao`: fecha lá, pela rota de lá (`peers.json`), como
+/// `hangar-send --close servidor::sessao`. Par externo não está no `peers.json`: sessão de outra pessoa não fecha.
+async fn remote_close(peers: &PeerClient, server: &str, name: &str) -> Outcome {
+    let call = |method, path: String| async move {
+        peers.call(server, method, &path, None).await.map(|v| v.unwrap_or(Value::Null)).map_err(|e| e.text(server))
+    };
+    // O DELETE responde ok para nome que não existe: nome errado não pode virar "fechada".
+    let rows = call(reqwest::Method::GET, "/api/sessions".into()).await?;
+    if !rows.as_array().is_some_and(|rows| rows.iter().any(|s| s["name"] == name)) {
+        return Err(format!("sessão '{name}' não existe em '{server}' (tool `sessions`)"));
+    }
+    let resp = call(reqwest::Method::DELETE, format!("/api/sessions/{}", segment(name))).await?;
+    let mut out = Map::from_iter([("server".to_owned(), json!(server))]);
+    if let Value::Object(fields) = resp { out.extend(fields); }
+    Ok(dict(Value::Object(out)))
+}
+
 /// A resposta da retomada do Arquivo, igual para esta e para outra máquina.
 fn resumed(info: &Value, server: Option<&str>) -> CallToolResult {
     let mut out = json!({"name": info["name"], "cwd": info["cwd"], "provider": info["provider"], "headless": info["headless"]});
@@ -515,7 +542,9 @@ impl Tools {
     async fn close_session(&self, headers: &HeaderMap, alvo: &str) -> Outcome {
         let (me, voice) = self.caller(headers).await?;
         if voice { return Err(VOICE_CLOSE_REFUSED.into()); }
-        if alvo.contains("::") { return Err("close_session só fecha sessão desta máquina".into()); }
+        let (server, alvo) = close_target(alvo, &self.server_id)?;
+        if let Some(server) = server { return remote_close(&self.st.peers, &server, &alvo).await; }
+        let alvo = alvo.as_str();
         if alvo == me { return Err(format!("recusado: '{alvo}' é esta sessão — peça pra outra fechar")); }
         // O DELETE responde ok para nome que não existe: nome errado não pode virar "fechada".
         let home = self.home();
@@ -939,6 +968,58 @@ mod tests {
         let out = result.structured_content.unwrap();
         assert_eq!((out["server"].clone(), out["name"].clone(), out["config_dir"].clone()),
             (json!("lab"), json!("filha"), json!("/home/r/.claude-work")));
+    }
+
+    #[test]
+    fn close_target_keeps_this_machine_id_here() {
+        assert_eq!(close_target("eu", "aqui").unwrap(), (None, "eu".into()));
+        assert_eq!(close_target("aqui::eu", "aqui").unwrap(), (None, "eu".into()));
+        assert_eq!(close_target("lab::eu", "aqui").unwrap(), (Some("lab".into()), "eu".into()));
+        assert_eq!(close_target("lab::eu", "").unwrap(), (Some("lab".into()), "eu".into()));
+        assert!(close_target("a::b::c", "aqui").is_err());
+    }
+
+    /// Fecha pela rota de lá, com o token de lá; nome que lá não existe não chega ao DELETE, e a recusa de lá volta.
+    #[tokio::test]
+    async fn remote_close_deletes_on_the_peer_only_a_live_session() {
+        use axum::http::StatusCode;
+        use axum::routing::{delete, get};
+        let reply = |v: Value| ([(axum::http::header::CONTENT_TYPE, "application/json")], v.to_string());
+        let seen: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+        let sink = seen.clone();
+        let app = Router::new()
+            .route("/api/sessions", get(move || async move { reply(json!([{"name": "filha"}, {"name": "dono so"}, {"name": "travada"}])) }))
+            .route("/api/sessions/{name}", delete(move |h: HeaderMap, uri: axum::http::Uri| {
+                let sink = sink.clone();
+                async move {
+                    let auth = h.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or_default().to_owned();
+                    sink.lock().unwrap().push((auth, uri.path().to_owned()));
+                    if uri.path().ends_with("/travada") {
+                        return (StatusCode::CONFLICT, [(axum::http::header::CONTENT_TYPE, "application/json")], json!({"detail": "recusada lá"}).to_string());
+                    }
+                    (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "application/json")], json!({"ok": true, "warning": {"msg": "par não avisado"}}).to_string())
+                }
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let dir = tempfile::tempdir().unwrap();
+        let peers = peers_with_lab(dir.path(), &format!("http://{addr}"));
+
+        let out = remote_close(&peers, "lab", "filha").await.unwrap().structured_content.unwrap();
+        assert_eq!((out["server"].clone(), out["ok"].clone(), out["warning"]["msg"].clone()),
+            (json!("lab"), json!(true), json!("par não avisado")));
+        assert_eq!(seen.lock().unwrap().pop().unwrap(), ("Bearer tok-lab".to_owned(), "/api/sessions/filha".to_owned()));
+
+        remote_close(&peers, "lab", "dono so").await.unwrap();
+        assert_eq!(seen.lock().unwrap().pop().unwrap().1, "/api/sessions/dono%20so");
+
+        let err = remote_close(&peers, "lab", "sumiu").await.unwrap_err();
+        assert!(err.contains("'sumiu'") && err.contains("'lab'"), "{err}");
+        assert!(seen.lock().unwrap().is_empty(), "nome que lá não existe não chega ao DELETE");
+
+        let err = remote_close(&peers, "lab", "travada").await.unwrap_err();
+        assert!(err.contains("recusada lá"), "{err}");
     }
 
     #[tokio::test]

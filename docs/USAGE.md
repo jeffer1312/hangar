@@ -1087,6 +1087,7 @@ hangar-send --group "terminei"        # aviso de marco pro grupo todo, em todas 
 hangar-send --contrato                # lê o contrato do grupo (de qualquer máquina do grupo)
 hangar-send --contrato --gravar c.md --mtime <valor>  # grava; o mtime vem da leitura
 hangar-send --close api-fix           # fecha OUTRA sessão desta máquina
+hangar-send --close lab::api-fix      # fecha sessão de outra máquina do peers.json
 hangar-send --aceitar-par <link>      # pareia com a sessão de outra pessoa (link …ts.net:8443/par/…)
 hangar-send --new front ~/repo/front  # cria sessão nova gerenciada pelo app (visível na UI)
 hangar-send --new front ~/repo/front --headless  # Claude sem terminal

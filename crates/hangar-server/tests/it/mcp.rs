@@ -330,11 +330,11 @@ async fn new_session_with_resume_goes_through_the_archive_resume() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn close_session_refuses_itself_remote_and_unknown() {
+async fn close_session_refuses_itself_unknown_server_and_unknown() {
     let s = scene().await;
     write_json(&s.home.join(".hangar/codex-sessions/outra.json"), json!({"name": "outra"}));
     let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%7")]).await;
-    for (alvo, error) in [("beta", "é esta sessão"), ("srv::outra", "desta máquina"), ("sumiu", "não existe")] {
+    for (alvo, error) in [("beta", "é esta sessão"), ("srv::outra", "peers.json"), ("a::b::c", "um '::' só"), ("sumiu", "não existe")] {
         let result = mcp.call("close_session", json!({"alvo": alvo})).await;
         assert!(failed(&result) && first_text(&result).contains(error), "{alvo}: {result}");
     }
