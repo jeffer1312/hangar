@@ -31,7 +31,7 @@ function closeRefusal(e: unknown, folder: string): string {
   const text = reason(e);
   const busy = text.match(/sessão aberta dentro: (.+)$/);
   if (busy) return m.native_git_elsewhere_busy({ pasta: folder, nomes: busy[1] });
-  if (text.includes('há arquivos que serão perdidos')) return m.native_git_elsewhere_dirty({ pasta: folder });
+  if (/há arquivos que serão perdidos/.test(text)) return m.native_git_elsewhere_dirty({ pasta: folder });
   return m.native_git_elsewhere_failed({ pasta: folder, motivo: text });
 }
 

@@ -145,10 +145,10 @@ describe('BranchPicker', () => {
       await press(el, 'subagentes');
       expect(el.querySelector('[aria-label="agent-0123abcd"]')).toBeTruthy();
       await press(el, 'cheia');
-      expect(onPickFolder).toHaveBeenLastCalledWith('/r/.worktrees/cheia', true);
+      expect(onPickFolder).toHaveBeenLastCalledWith('/r/.worktrees/cheia', true, '/r');
       expect(el.querySelector('[aria-label="voltar"]')).toBeTruthy();
       await press(el, 'livre');
-      expect(onPickFolder).toHaveBeenLastCalledWith('/r/.worktrees/livre', false);
+      expect(onPickFolder).toHaveBeenLastCalledWith('/r/.worktrees/livre', false, '/r');
     } finally { folder.worktrees = []; }
   });
 
