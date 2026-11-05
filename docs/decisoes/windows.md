@@ -69,6 +69,11 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **A tarefa Windows acompanha o processo até ele terminar.** Reinício controlado não encerra
   a árvore inteira: sessões e atualizador sobrevivem. A vigia confirma falha HTTP, respeita
   instalação/atualização e só inicia outra instância após confirmar a parada da anterior.
+- **Início de tarefa só vale com o `LastRunTime` mudado, e a porta do front pode ser do servidor.**
+  `Start-HangarTask` repete o `Start-ScheduledTask` até 3 vezes e falha com erro se a tarefa não
+  rodou: o comando pode voltar sem erro sem abrir instância. Na máquina migrada, porta do front com
+  o `hangar-server` é tela servida, nunca conflito: `hangar-frontend` sai sem subir. Medição em
+  [Reinício sem início e porta do front](#reinício-sem-início-e-porta-do-front-05112026).
 - **O backend abre o próprio log (`python -m app.main --log <arquivo>`), nunca pelo `>` do cmd.**
   O `>` abre sem escrita compartilhada, e qualquer neto que sobreviva ao backend com a cópia
   herdada (jest, `kubectl port-forward`, navegador de teste de uma sessão) fazia a subida seguinte
@@ -168,6 +173,27 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   `%USERPROFILE%\.hangar\current\python\python.exe` (o `hangar-codex-tui` precisa do `websockets`
   dele), e o manifesto se lê por regex: o `ConvertFrom-Json` do 5.1 recusa JSON acima de 2 MB. Regras
   e recusas em [instalacao.md](instalacao.md#pacote-por-versão). Só raciocinado até a prova na VM.
+
+## Reinício sem início e porta do front (05/11/2026)
+
+Relatórios automáticos de 03 a 05/11, de cinco instalações por pacote (Windows 10, 11 e Server
+2025): o reinício saiu com 0 em 2 a 6 s, a tarefa ficou `Ready` com o `LastRunTime` da atualização
+anterior e `0xFFFFFFFF`, e a porta ficou fechada até a volta da versão, 90 s depois. A versão nova
+não era a causa: `0.1.0.9184` para `0.1.0.9186` só mudou o README. Depois disso o automático espera
+24 h. **A causa de o início não abrir instância segue sem prova:** numa tarefa descartável igual à
+real, na DELPHI-02 parada, 30 de 30 reinícios subiram, com início imediato e com 300 ms de espera,
+e o log do Agendador vem desligado. `Start-HangarTask` cobre o sintoma e, se a tarefa não rodar,
+transforma o sucesso falso em erro visível. O `LastRunTime` tem resolução de 1 s; só instância
+nascida no mesmo segundo do início anterior o engana. O reinício por falha do Agendador não agiu
+em nenhum desses 92 s, então não é rede de segurança para processo morto.
+
+Na máquina em modo desenvolvedor com a tarefa do front, 4 de 4 atualizações saíram com "Porta 5173
+ainda ocupada", com o servidor já atualizado. O `Restart-HangarTasks` reinicia o backend primeiro;
+o `hangar-server` novo abre a `CP_FRONT_PORT` (`routes::front_address`) depois da primeira
+conferência do front e antes da última. Provável, não observado direto: o relatório não dizia o
+dono da porta, e o log não tem a tentativa repetida do `bind_when_free`, então o servidor ligou de
+primeira. Matar um `node` não explica: na DELPHI-02 a porta saiu da lista logo depois do processo,
+em 12 de 12. Por isso a mensagem agora traz processo e PID de quem segura a porta.
 
 ## Pacote por versão no Windows (24/10/2026)
 

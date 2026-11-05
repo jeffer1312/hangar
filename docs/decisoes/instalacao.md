@@ -675,8 +675,10 @@ gera `<RestartOnFailure>` com `<Interval>` e sem `<Count>`, e o Agendador recusa
 chamadas: o passo 7/8 morria antes de iniciar a tarefa (pendência "nenhuma tarefa chegou a ser
 iniciada", instalador em exit 1) e a vigia nunca recuperava travamento nenhum. Além de
 impossível, era desnecessário — o reinício por falha só dispara um minuto depois da morte do
-processo, e aí a nova instância já está `Running` e o `MultipleInstances=IgnoreNew` a descarta;
-se a nova instância não subir, o reinício por falha é a rede de segurança que a pausa jogava fora.
+processo, e aí a nova instância já está `Running` e o `MultipleInstances=IgnoreNew` a descarta.
+Ele não socorre processo morto sem início novo (medido em
+[Reinício sem início](windows.md#reinício-sem-início-e-porta-do-front-05112026)): quem garante o
+início é o `Start-HangarTask`.
 
 O instalador segura `Local\HangarInstall` e, na janela longa dele, pausa os reinícios automáticos
 existentes por **re-registro do XML** (`Suspender-Recuperacao` remove o nó `<RestartOnFailure>`,

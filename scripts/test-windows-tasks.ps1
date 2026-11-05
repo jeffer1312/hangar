@@ -40,6 +40,9 @@ function Reset-State {
     }
     $script:owner = 11
     $script:stuckLauncher = $false
+    $script:lateOwner = $null
+    $script:slowRelease = 0
+    $script:ignoredStarts = 0
     $script:stopFails = $false
     $script:tableFails = $false
     $script:processRows = $rows
@@ -56,6 +59,8 @@ function Get-ScheduledTask { param($TaskName, $ErrorAction) return $script:task 
 function Get-ScheduledTaskInfo { param($TaskName, $ErrorAction) return @{ LastRunTime = $script:lastRun } }
 function Set-ScheduledTask { param($TaskName, $Settings, $ErrorAction) $script:events += "settings:$($Settings.RestartCount)" }
 function Get-NetTCPConnection { param($State, $LocalPort, $ErrorAction)
+    if ($script:events.Count -and $script:lateOwner) { return @{ OwningProcess = $script:lateOwner } }
+    if ($script:events.Count -and $script:slowRelease -gt 0) { $script:slowRelease--; return @{ OwningProcess = 777 } }
     if ($script:owner) { return @{ OwningProcess = $script:owner } }
 }
 function Get-Process { param($Id, $ErrorAction) return $script:live[[int]$Id] }
@@ -69,7 +74,9 @@ function Stop-Process { param($InputObject, [switch]$Force, $ErrorAction)
 function Start-ScheduledTask { param($TaskName, $ErrorAction)
     Assert (-not $script:live.Count -and -not $script:owner) 'Nova instancia iniciada antes de encerrar a antiga'
     $script:events += 'start'
+    if ($script:ignoredStarts -gt 0) { $script:ignoredStarts--; return }
     $script:task.State = 'Running'
+    $script:lastRun = $script:lastRun.AddSeconds(1)
 }
 function Start-Sleep { param($Seconds, $Milliseconds) }
 function Test-HangarHttp { param($port) return $script:httpReplies.Dequeue() }
@@ -82,6 +89,55 @@ try {
     # comentario no windows-tasks.ps1 e o scripts/test-windows-tasks-reais.ps1).
     Assert (($script:events -join ',') -eq 'stop:10,stop:11,start') 'Parada/reinicio fora de ordem'
     Assert ('settings:0' -notin $script:events) 'Voltou a pausar a recuperacao por Set-ScheduledTask (o Agendador recusa)'
+    # O Agendador pode aceitar o pedido sem abrir instancia: nao vale como reinicio feito.
+    Reset-State
+    $script:ignoredStarts = 1
+    Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend'
+    Assert (($script:events -join ',') -eq 'stop:10,stop:11,start,start') "Inicio descartado nao foi repetido: $($script:events -join ',')"
+    Reset-State
+    $script:ignoredStarts = 99
+    $failed = $null
+    try { Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' } catch { $failed = "$_" }
+    Assert ($failed -match 'nao iniciou') "Tarefa que nunca iniciou passou por reiniciada: $failed"
+    Assert (@($script:events | Where-Object { $_ -eq 'start' }).Count -eq 3) 'Tentativas de inicio fora do limite'
+    Reset-State
+    $script:slowRelease = 2
+    Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend'
+    Assert ('start' -in $script:events) 'Porta que soltou logo depois barrou o reinicio'
+    # Maquina migrada: o hangar-server novo abre a porta do front entre as duas conferencias.
+    $frontRows = @(
+        (Row 70 1 'node.exe' 'C:\repo\frontend\node_modules\vite\bin\vite.js preview'),
+        (Row 71 1 'hangar-server.exe' 'C:\Users\u\.hangar\current\bin\hangar-server.exe'),
+        (Row 72 1 'node.exe' 'C:\outro\server.js')
+    )
+    foreach ($case in @(@{ late = 71; served = $true }, @{ late = 72; served = $false })) {
+        Reset-State
+        $script:processRows = $frontRows
+        $script:live = @{}
+        $vite = [pscustomobject]@{ Id = 70; StartTime = $old }
+        $vite | Add-Member ScriptMethod WaitForExit { param($timeout) return $true }
+        $script:live[70] = $vite
+        $script:owner = 70
+        $script:lateOwner = $case.late
+        $failed = $null
+        try { Restart-HangarTask 'hangar-frontend' 5173 'C:\repo\frontend' } catch { $failed = "$_" }
+        Assert ('start' -notin $script:events) "Front subiu com a porta tomada: $($case.late)"
+        if ($case.served) { Assert (-not $failed) "Porta do front no hangar-server virou falha: $failed" }
+        else { Assert ($failed -match 'ainda ocupada por node\.exe PID 72') "Porta presa nao disse quem segura: $failed" }
+    }
+    Reset-State
+    $script:processRows = $frontRows
+    $script:live = @{}
+    $script:task.State = 'Ready'
+    $script:owner = 71
+    Restart-HangarTask 'hangar-frontend' 5173 'C:\repo\frontend'
+    Assert ('start' -notin $script:events) 'Front subiu com a tela ja servida pelo hangar-server'
+    Reset-State
+    $script:processRows = $frontRows
+    $script:owner = 71
+    $failed = $false
+    try { Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' } catch { $failed = $true }
+    Assert $failed 'hangar-server alheio aceito na porta do backend'
     Reset-State
     $script:live[10].StartTime = $old.AddTicks(5)
     Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend'

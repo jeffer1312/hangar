@@ -63,6 +63,36 @@ function Test-HangarHttp([int]$port) {
 }
 
 # -NoStart: so para (a migracao para o pacote troca o lancador entre parar e subir).
+function Format-HangarPortOwner($rows, $listener) {
+    $owner = $rows | Where-Object { [int]$_.ProcessId -eq [int]$listener.OwningProcess } | Select-Object -First 1
+    if ($owner) { return "$($owner.Name) PID $($owner.ProcessId): $($owner.CommandLine)" }
+    return "PID $($listener.OwningProcess)"
+}
+
+# Em maquina migrada o hangar-server abre a porta do front e entrega a mesma tela: nao ha o que subir.
+function Test-HangarServedFront($rows, [string]$name, $listeners) {
+    if ($name -ne 'hangar-frontend') { return $false }
+    foreach ($listener in $listeners) {
+        $owner = $rows | Where-Object { [int]$_.ProcessId -eq [int]$listener.OwningProcess } | Select-Object -First 1
+        if (-not $owner -or $owner.Name -ne 'hangar-server.exe') { return $false }
+    }
+    return $true
+}
+
+# Start-ScheduledTask volta sem erro mesmo quando nenhuma instancia abre. So o LastRunTime prova o
+# inicio: State pode ser da instancia que esta saindo, e repetir com uma de pe e descartado pelo IgnoreNew.
+function Start-HangarTask([string]$name) {
+    $before = (Get-ScheduledTaskInfo -TaskName $name -ErrorAction Stop).LastRunTime
+    foreach ($attempt in 1..3) {
+        Start-ScheduledTask -TaskName $name -ErrorAction Stop
+        foreach ($check in 1..10) {
+            if ((Get-ScheduledTaskInfo -TaskName $name -ErrorAction Stop).LastRunTime -ne $before) { return }
+            Start-Sleep -Milliseconds 100
+        }
+    }
+    throw "Tarefa $name nao iniciou depois de 3 tentativas"
+}
+
 function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [switch]$NoStart) {
     $mutex = New-Object Threading.Mutex($false, "Local\HangarRestart-$name")
     $locked = $false
@@ -81,8 +111,8 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [swit
         $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
         foreach ($listener in $listeners) {
             if ($listener.OwningProcess -notin @($candidates.ProcessId)) {
-                $dono = $rows | Where-Object { [int]$_.ProcessId -eq [int]$listener.OwningProcess } | Select-Object -First 1
-                $quem = if ($dono) { "$($dono.Name) PID $($dono.ProcessId): $($dono.CommandLine)" } else { "PID $($listener.OwningProcess)" }
+                if (Test-HangarServedFront $rows $name @($listener)) { continue }
+                $quem = Format-HangarPortOwner $rows $listener
                 throw "Porta $port ocupada por outro processo ($quem); $name nao sera reiniciada. Se nao for seu, encerre: Stop-Process -Id $($listener.OwningProcess) -Force"
             }
         }
@@ -99,11 +129,9 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [swit
         #    travamento nenhum. Set-ScheduledTask tambem nao consegue REMOVER o bloco (ele funde
         #    com o XML existente e o Interval sobrevive sozinho); so re-registrar o XML tira, e
         #    isso e o que o instalador faz na janela LONGA dele (Suspender-Recuperacao).
-        # 2) Nao precisa: o reinicio por falha do Agendador so dispara um minuto depois da morte
-        #    do processo, e a parada/inicio abaixo leva segundos. Quando ele chegar, a tarefa ja
-        #    esta Running e o MultipleInstances=IgnoreNew descarta a instancia extra. E se a nova
-        #    instancia NAO subir, o reinicio por falha e a rede de seguranca - pausar era jogar
-        #    fora a recuperacao exatamente no unico caso em que ela serve.
+        # 2) Nao precisa: a parada/inicio abaixo leva segundos e, se o reinicio por falha do
+        #    Agendador chegar depois, o MultipleInstances=IgnoreNew descarta a instancia extra.
+        #    Ele nao substitui o Start-HangarTask: processo morto sem falha de lancamento nao o aciona.
         foreach ($candidate in $candidates) {
             $process = Get-Process -Id $candidate.ProcessId -ErrorAction SilentlyContinue
             if (-not $process) { continue }
@@ -123,10 +151,19 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [swit
         if ((Get-ScheduledTask -TaskName $name -ErrorAction Stop).State -eq 'Running') {
             throw "Lancador de $name ainda esta rodando; nova instancia nao sera iniciada"
         }
-        if (Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue) {
-            throw "Porta $port ainda ocupada; nova instancia nao sera iniciada"
+        $held = @()
+        foreach ($attempt in 1..10) {
+            $held = @(Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
+            if (-not $held.Count) { break }
+            $rows = Get-HangarProcessTable
+            if (Test-HangarServedFront $rows $name $held) { return }
+            Start-Sleep -Milliseconds 500
         }
-        if (-not $NoStart) { Start-ScheduledTask -TaskName $name -ErrorAction Stop }
+        if ($held.Count) {
+            $quem = Format-HangarPortOwner $rows $held[0]
+            throw "Porta $port ainda ocupada por $quem; nova instancia nao sera iniciada"
+        }
+        if (-not $NoStart) { Start-HangarTask $name }
     } finally {
         if ($locked) { $mutex.ReleaseMutex() }
         $mutex.Dispose()
