@@ -128,12 +128,14 @@ async fn unknown_facts_are_never_served() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn guest_token_goes_to_python() {
+async fn unknown_token_is_refused_without_python() {
     let dir = tempfile::tempdir().unwrap();
     let srv = server(dir.path(), 1).await;
-    assert_eq!(get(srv.addr, "convidado").await, (200, json!("from-python")));
+    let refused = json!({"detail": {"code": "erro_nao_autorizado", "params": {}, "msg": "unauthorized"}});
+    assert_eq!(get(srv.addr, "convidado").await, (401, refused.clone()));
     let resp = client().get(format!("http://{}/api/sessions/events?token=convidado", srv.addr)).send().await.unwrap();
-    assert_eq!(resp.text().await.unwrap(), "from-python");
+    assert_eq!(resp.status().as_u16(), 401);
+    assert_eq!(resp.json::<Value>().await.unwrap(), refused);
     let resp = client().post(format!("http://{}/api/sessions", srv.addr)).bearer_auth(OWNER).send().await.unwrap();
     assert_eq!(resp.text().await.unwrap(), "from-python", "criar sessão continua no Python");
     assert_eq!(calls(dir.path(), "list-panes"), 0);

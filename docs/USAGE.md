@@ -111,9 +111,9 @@ Algo não abriu? `hangar-doctor` diz o que falta e como consertar.
 
 ### hangar-doctor
 
-Diagnóstico read-only, chamado por `--check`/`-SoChecar` e disponível a qualquer hora
-(`hangar-doctor` no PATH depois do instalador, ou `uv run --no-sync python -m app.doctor`
-dentro de `backend/`). Cada linha é um `ok`/`aviso`/`erro` com o conserto ao lado quando
+Diagnóstico somente de leitura, chamado por `--check`/`-SoChecar` e disponível a qualquer hora
+(`hangar-doctor` no PATH depois do instalador, ou `scripts/hangar-doctor` a partir
+da raiz do checkout). Cada linha é um `ok`/`aviso`/`erro` com o conserto ao lado quando
 falha:
 
 - token de acesso definido

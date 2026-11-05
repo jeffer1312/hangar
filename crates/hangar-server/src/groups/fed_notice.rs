@@ -104,13 +104,13 @@ async fn deliver_here(st: &AppState, groups: &GroupService, gid: &str, n: &Notic
     let me = groups.server_id();
     let all = groups.sidecars().await.map_err(|e| { tracing::error!(code = "groups_store_failed", error = %e, "groups: sidecars ilegíveis no aviso"); unavailable("groups_store_failed") })?;
     let mine: Vec<(String, Sidecar)> = all.into_iter().filter(|(_, s)| s.gid == gid && s.fed.is_some()).collect();
-    let line = n.line(me);
+    let line = n.line(&me);
     let mut sends: Vec<(String, futures_util::future::BoxFuture<'_, Result<(), Value>>)> = Vec::new();
     for (name, _) in &mine {
         if !n.from_outside && n.origin == me && *name == n.sender { continue; }
         // O mesmo aviso pode chegar direto do par de fora e pela dona: entra uma vez. A espera por
         // outra entrega em andamento fica dentro do prazo `wait` abaixo.
-        let (key, line) = (notice_key(me, &n.notice, name), &line);
+        let (key, line) = (notice_key(&me, &n.notice, name), &line);
         sends.push((name.clone(), async move {
             let Some(claim) = notice_claim(key).await else { return Ok(()) };
             deliver_text(st, name, line).await.map(|()| claim.delivered())

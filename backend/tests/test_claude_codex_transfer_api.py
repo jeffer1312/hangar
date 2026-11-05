@@ -68,7 +68,6 @@ def scenario(tmp_path, monkeypatch):
     monkeypatch.setattr(api, "_invalidate_lists", Mock())
     monkeypatch.setattr(api, "session_life", lambda name: "k:source-key")
     monkeypatch.setattr(api.share_bridge, "set_life", Mock())
-    monkeypatch.setattr(api.guest_users, "set_life", Mock())
     monkeypatch.setattr(api.settings, "auth_token", "test-secret")
     account = SimpleNamespace(id="chosen", home=tmp_path / ".codex-chosen")
     credential = f"codex:{account.home}"
@@ -290,14 +289,12 @@ async def test_terminal_send_lock_is_nonblocking(scenario):
         lock.release()
 
 
-async def test_transfer_rows_keep_owner_without_physical_poll(scenario, monkeypatch):
+async def test_transfer_rows_remain_without_physical_poll(scenario, monkeypatch):
     row = SessionInfo(name="s", transfer_id=str(uuid.uuid4()), transfer_phase="restore_failed")
-    monkeypatch.setattr(registry_module.guest_users, "has_claims", lambda: True)
-    monkeypatch.setattr(registry_module.guest_users, "owner_name", lambda name: "dono")
     monkeypatch.setattr(registry_module.tmux, "capture_pane", Mock(side_effect=AssertionError("não pode ler estado projetado")))
     result = await scenario.reg.list_with_state([row])
     # `shared` é marcado pela lista do Rust, dona dos convites.
-    assert result == [row] and row.owner == "dono"
+    assert result == [row]
 
 
 def test_prepared_runtime_is_not_discoverable(scenario):

@@ -1,7 +1,6 @@
 import os
 from pathlib import Path
 
-from app import guest_users
 from app.config import resolve_scan_roots, settings
 from app.models import FsEntry, FsRoot, FsScanResult
 
@@ -39,9 +38,7 @@ def _nome_de_raiz(r: Path) -> str:
 
 
 def allowed_roots() -> list[Path]:
-    # Convidado só enxerga a pasta dele; o dono, a allowlist do servidor.
-    guest = guest_users.current.get()
-    return [Path(guest.root)] if guest else resolve_scan_roots(settings)
+    return resolve_scan_roots(settings)
 
 
 def list_roots() -> list[FsRoot]:

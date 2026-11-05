@@ -44,6 +44,10 @@ async fn serve(app: axum::Router) -> SocketAddr {
 async fn server(dir: &Path, with_share: bool) -> Srv {
     let (python, upstream) = fake::spawn_fake().await;
     let mut state = AppState::new(fake::config(upstream, ""));
+    state.login_guests = Arc::new(hangar_server::login_guests::Service::new(hangar_server::login_guests::Settings {
+        guests: dir.join("guests.json"), vault: dir.join("vault.json"), runtime_config: dir.join("runtime-config.json"),
+        sync_enabled: false, bootstrap: String::new(), secret: b"fixture".to_vec(), secure: false, rate_max: 10.into(), rate_window: 300.into(),
+    }));
     let probe = Arc::new(Probe::default());
     let share = Arc::new(ShareState {
         store: ShareStore::open(dir.join("shares.json"), Arc::new(|| 100.0)),
@@ -52,7 +56,7 @@ async fn server(dir: &Path, with_share: bool) -> Srv {
         tailscale: Arc::new(Real),
         tunnel: Default::default(),
     });
-    if with_share { state.share = Some(share.clone()); }
+    state.share = with_share.then(|| share.clone());
     let state = Arc::new(state);
     let public = serve(router(state.clone())).await;
     let private = serve(terminal_router(state)).await;

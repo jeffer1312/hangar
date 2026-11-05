@@ -130,32 +130,8 @@ class PreparationJobs:
                                 raise ValueError("confiança da pasta não foi confirmada")
                         await account_lifecycle.complete_on_cancel(asyncio.to_thread(trust))
                     return result
-                from app import api
-                service = getattr(api.app.state, "codex_contas_login", None)
-                source_result = None
-                if service is not None and service.atualizar_principal is not None:
-                    self.stages[body["operation"]] = "principal"
-                    try:
-                        source_result = await service.atualizar_principal(body["force"])
-                    finally:
-                        self.stages.pop(body["operation"], None)
                 result = await codex_contas_sync._prepare_account_guarded(
                     account, body["force"], validate=lambda: self.validate(body))
-                source_optional = (isinstance(source_result,dict)
-                                   and source_result.get("estado") == "indisponivel"
-                                   and isinstance(source_result.get("etapa"),dict)
-                                   and source_result["etapa"].get("codigo") == "etapa_sem_claude")
-                if isinstance(source_result, dict) and not source_optional and source_result.get("estado") not in (None, "ok", "ocioso"):
-                    if result["status"] == "ready":
-                        result["status"] = "partial"
-                    result.setdefault("issues", []).insert(0, {"code": "codex_account_source_sync_incomplete",
-                                                               "params": {"status": str(source_result.get("estado"))}})
-                if result["status"] == "ready":
-                    from app.codex_preparo import reparar_conta
-                    pending = await reparar_conta(account)
-                    if pending is None:
-                        raise RuntimeError("O Codex CLI não está instalado")
-                    result["trust_pending"] = pending
                 return result
         try:
             return await account_lifecycle.complete_on_cancel(owned())

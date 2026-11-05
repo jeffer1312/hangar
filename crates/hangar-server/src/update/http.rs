@@ -1,8 +1,6 @@
 //! `GET /api/atualizacao`, `POST /api/atualizacao/iniciar`, `POST /api/atualizacao/reiniciar` e
 //! `POST /api/atualizacao/dev-mode`.
-//! O Rust atende o dono só na máquina migrada: pacote (`current` com `manifest.json`) ou modo
-//! desenvolvedor (`current` num checkout git sem manifesto). Máquina não migrada, convidado e quem
-//! não é dono seguem ao motor `git` do Python, como antes.
+//! O dono usa o motor nativo do pacote, do modo desenvolvedor ou do checkout.
 //!
 //! A resposta tem o formato do Python, campo por campo, que os clientes (PWA, nativo, Expo) leem.
 //! No pacote os campos de git ficam neutros: `mudancas` e `passos` vazios, `sujo`/`ahead` 0,
@@ -23,8 +21,9 @@ use super::dev::Checkout;
 use super::executor::{Args, StartError, Started, Task};
 use super::restart::Topology;
 use super::{Layout, Release};
-use crate::routes::{cors, gate, pass_any, AppState};
-use crate::session_write::{detail, json_response};
+use crate::routes::{cors, gate, AppState};
+use crate::session_write::detail;
+use crate::http_cors::json_guarded_ascii;
 
 /// Como esta máquina roda o Hangar.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,7 +32,7 @@ pub enum Mode {
     Package(PathBuf),
     /// `current` → checkout git sem manifesto (caminho real).
     Developer(PathBuf),
-    /// Sem `current`: o motor `git` do Python.
+    /// Sem `current`: o motor nativo do checkout.
     Unmigrated,
 }
 
@@ -45,16 +44,6 @@ pub fn mode(home: &Path) -> Mode {
 }
 
 /// O modo, quando o pedido é do dono numa máquina migrada; senão `None` (segue ao Python).
-fn owned(st: &AppState, peer: SocketAddr, req: &Request)
-    -> impl std::future::Future<Output = Result<Option<Mode>, crate::auth::AuthError>> + Send + use<> {
-    let admission = gate(st, peer, req);
-    let home = st.accounts.env.home.clone();
-    async move {
-        if !admission.await?.1 { return Ok(None); }
-        Ok(Some(mode(&home)).filter(|m| *m != Mode::Unmigrated))
-    }
-}
-
 /// Só o que foi achado fica guardado: `manual` pode ser o `systemctl` falhando num instante.
 fn keeps(topology: Topology) -> bool { topology != Topology::Manual }
 
@@ -124,7 +113,7 @@ fn distance(installed: &str, remote: &str) -> u64 {
 /// O `GET` no modo pacote. `remote_error`: a última leitura do índice falhou; vai ao `pre_voo`, e sem
 /// entrada conhecida a tela oferece o Atualizar, que diz o motivo (como o Python sem `origin`).
 pub fn package_body(installed: Option<&Manifest>, running: Option<&str>, remote: Option<&PlatformEntry>, remote_error: Option<&str>,
-    topology: &str, estado: Map<String, Value>) -> Value {
+    topology: &str, estado: impl Into<super::StateSnapshot>) -> Value {
     let disk = installed.map_or("", |m| m.version.as_str());
     let behind = remote.map_or(0, |r| distance(disk, &r.version));
     let branch = target_branch(installed.map_or("latest", |m| m.channel.as_str()));
@@ -143,8 +132,9 @@ pub fn package_body(installed: Option<&Manifest>, running: Option<&str>, remote:
         "pre_voo": {"pode": true, "faltando": [], "branch": branch, "alvo": branch, "sujo": 0, "ahead": 0, "ahead_incerto": false,
             "behind": behind, "divergiu": false, "branch_de_trabalho": false, "topologia": topology,
             "commit": installed.map_or("", |m| m.commit.as_str())},
-        "estado": estado,
+        "estado": null,
     });
+    body["estado"] = estado.into().into_value();
     if let Some(error) = remote_error {
         body["pre_voo"]["erro"] = "indice_indisponivel".into();
         body["pre_voo"]["detalhe"] = error.into();
@@ -154,7 +144,7 @@ pub fn package_body(installed: Option<&Manifest>, running: Option<&str>, remote:
 }
 
 /// O `GET` no modo desenvolvedor; `checkout` com erro é o `nao_e_repo` do Python.
-pub fn dev_body(checkout: Result<&Checkout, &str>, boot: Option<&str>, topology: &str, estado: Map<String, Value>) -> Value {
+pub fn dev_body(checkout: Result<&Checkout, &str>, boot: Option<&str>, topology: &str, estado: impl Into<super::StateSnapshot>) -> Value {
     let pre = match checkout {
         Ok(c) => {
             let mut pre = json!({"pode": true, "faltando": [], "branch": c.branch, "alvo": c.branch, "sujo": c.dirty, "ahead": c.ahead,
@@ -171,7 +161,7 @@ pub fn dev_body(checkout: Result<&Checkout, &str>, boot: Option<&str>, topology:
     };
     let c = checkout.ok();
     let head = c.map_or("", |c| c.head.as_str());
-    json!({
+    let mut body = json!({
         "modo": "desenvolvedor",
         "versoes": {"repo": head, "backend": boot.unwrap_or(head)},
         "versao_legivel": {"repo": c.map(|c| c.head.clone()), "backend": boot.unwrap_or(head), "remoto": c.and_then(|c| c.upstream_head.clone())},
@@ -182,8 +172,10 @@ pub fn dev_body(checkout: Result<&Checkout, &str>, boot: Option<&str>, topology:
         "mudancas": c.map_or(vec![], |c| c.changes.iter().map(|(sha, title)| json!({"sha": sha, "titulo": title})).collect()),
         "passos": [],
         "pre_voo": pre,
-        "estado": estado,
-    })
+        "estado": null,
+    });
+    body["estado"] = estado.into().into_value();
+    body
 }
 
 fn with_cors(headers: &axum::http::HeaderMap, mut resp: Response) -> Response {
@@ -193,11 +185,9 @@ fn with_cors(headers: &axum::http::HeaderMap, mut resp: Response) -> Response {
 
 /// `GET /api/atualizacao[?procurar=1]`.
 pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let Some(mode) = (match owned(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) }) else {
-        let (owner, home) = ((match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) }).1, st.accounts.env.home.clone());
-        let response = pass_any(State(st), ConnectInfo(peer), req).await;
-        return if owner { with_pending_warning(response, &home).await } else { response };
-    };
+    if mode(&st.accounts.env.home) == Mode::Unmigrated { return super::git_engine::http::serve(st, peer, req).await; }
+    if let Err(response)=crate::routes::owner_gate(&st,peer,&req).await{return response;}
+    let mode=mode(&st.accounts.env.home);
     let refresh = req.uri().query().is_some_and(|q| q.split('&').any(|p| matches!(p, "procurar=1" | "procurar=true")));
     let (home, claude) = (st.accounts.env.home.clone(), st.accounts.env.claude_base.clone());
     let topology = topology().await.name();
@@ -251,31 +241,19 @@ pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     }.into();
     body["checkout"] = suggested.map(|p| p.display().to_string()).into();
     mark_pending_warning(&mut body, &home);
-    with_cors(req.headers(), json_response(StatusCode::OK, body))
+    with_cors(req.headers(), json_guarded_ascii(StatusCode::OK, body))
 }
 
 /// Aviso importante que a pessoa ainda não aceitou (a migração pendente, ou feita sem o aviso): a
 /// tela acende o Atualizar por ele mesmo sem versão nova. `atualizacao_disponivel` fica como veio:
 /// é ele que diz se há versão nova de verdade.
-fn mark_pending_warning(body: &mut Value, home: &Path) {
+pub(super) fn mark_pending_warning(body: &mut Value, home: &Path) {
     // Só sim ou não: a tela relê o status a cada poucos segundos, e o texto do aviso fica para as notas.
     if super::migrate::pending_mode(home).is_some() {
         body["pending_warning"] = true.into();
     }
 }
 
-/// O `GET` do motor `git` do Python com a marca do aviso pendente. Resposta que não é JSON passa igual.
-async fn with_pending_warning(response: Response, home: &Path) -> Response {
-    if !response.status().is_success() { return response; }
-    let (mut parts, body) = response.into_parts();
-    let Ok(bytes) = axum::body::to_bytes(body, 8 * 1024 * 1024).await else {
-        return detail(StatusCode::BAD_GATEWAY, "erro_atualizacao_status", "a resposta do motor git não chegou inteira", json!({}));
-    };
-    let Ok(mut value) = serde_json::from_slice::<Value>(&bytes) else { return Response::from_parts(parts, axum::body::Body::from(bytes)) };
-    mark_pending_warning(&mut value, home);
-    parts.headers.remove(axum::http::header::CONTENT_LENGTH);
-    Response::from_parts(parts, axum::body::Body::from(value.to_string()))
-}
 
 fn busy() -> Response { detail(StatusCode::CONFLICT, "erro_atualizacao_ja_rodando", "ja existe uma atualizacao rodando", json!({})) }
 
@@ -289,8 +267,8 @@ async fn launch(st: &AppState, task: Task) -> Result<Started, StartError> {
 
 fn started(started: Result<Started, StartError>) -> Response {
     match started {
-        Ok(Started { pid, request_id: None }) => json_response(StatusCode::OK, json!({"ok": true, "pid": pid})),
-        Ok(Started { pid, request_id: Some(id) }) => json_response(StatusCode::OK, json!({"ok": true, "pid": pid, "request_id": id})),
+        Ok(Started { pid, request_id: None }) => json_guarded_ascii(StatusCode::OK, json!({"ok": true, "pid": pid})),
+        Ok(Started { pid, request_id: Some(id) }) => json_guarded_ascii(StatusCode::OK, json!({"ok": true, "pid": pid, "request_id": id})),
         Err(StartError::Busy) => busy(),
         Err(StartError::Launch(why)) => detail(StatusCode::INTERNAL_SERVER_ERROR, "erro_atualizacao_lancamento", &why, json!({})),
     }
@@ -298,7 +276,9 @@ fn started(started: Result<Started, StartError>) -> Response {
 
 /// `POST /api/atualizacao/iniciar`: o pacote, ou o `git pull` do modo desenvolvedor.
 pub async fn start(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let Some(mode) = (match owned(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) }) else { return pass_any(State(st), ConnectInfo(peer), req).await };
+    if mode(&st.accounts.env.home) == Mode::Unmigrated { return super::git_engine::http::serve(st, peer, req).await; }
+    if let Err(response)=crate::routes::owner_gate(&st,peer,&req).await{return response;}
+    let mode=mode(&st.accounts.env.home);
     let task = match mode {
         Mode::Developer(root) => {
             // Recusa antes de lançar, com o motivo; o executor confere de novo.
@@ -327,7 +307,8 @@ pub async fn start(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
 
 /// `POST /api/atualizacao/reiniciar`: só reinicia, destacado; na mão não há o que reiniciar.
 pub async fn restart(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    if (match owned(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) }).is_none() { return pass_any(State(st), ConnectInfo(peer), req).await; }
+    if mode(&st.accounts.env.home) == Mode::Unmigrated { return super::git_engine::http::serve(st, peer, req).await; }
+    if let Err(response)=crate::routes::owner_gate(&st,peer,&req).await{return response;}
     let topology = topology().await;
     if topology == Topology::Manual {
         return with_cors(req.headers(), detail(StatusCode::CONFLICT, "erro_reinicio_indisponivel",
@@ -347,16 +328,11 @@ fn channel_snapshot(layout: &Layout) -> Value {
     json!({"branch": branch, "checkout_branch": target_branch(&installed), "last_branch": last})
 }
 
-fn package_only(st: &AppState, peer: SocketAddr, req: &Request)
-    -> impl std::future::Future<Output = Result<bool, crate::auth::AuthError>> + Send + use<> {
-    let owned = owned(st, peer, req);
-    async move { Ok(matches!(owned.await?, Some(Mode::Package(_)))) }
-}
-
 /// `GET /api/update-channel` no pacote; fora dele, a branch do motor `git` do Python.
 pub async fn channel_read(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    if !(match package_only(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) }) { return pass_any(State(st), ConnectInfo(peer), req).await; }
-    with_cors(req.headers(), json_response(StatusCode::OK, channel_snapshot(&Layout::new(&st.accounts.env.home))))
+    if !matches!(mode(&st.accounts.env.home), Mode::Package(_)) { return super::git_engine::http::serve(st, peer, req).await; }
+    if let Err(response)=crate::routes::owner_gate(&st,peer,&req).await{return response;}
+    with_cors(req.headers(), json_guarded_ascii(StatusCode::OK, channel_snapshot(&Layout::new(&st.accounts.env.home))))
 }
 
 #[derive(serde::Deserialize)]
@@ -365,7 +341,8 @@ struct ChannelBody { branch: String }
 /// `PUT /api/update-channel` `{"branch": "beta"}` ou `{"branch": ""}`: grava o canal que o próximo
 /// Atualizar segue. No pacote só a main (`latest`) e a beta são publicadas.
 pub async fn channel_write(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    if !(match package_only(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) }) { return pass_any(State(st), ConnectInfo(peer), req).await; }
+    if !matches!(mode(&st.accounts.env.home), Mode::Package(_)) { return super::git_engine::http::serve(st, peer, req).await; }
+    if let Err(response)=crate::routes::owner_gate(&st,peer,&req).await{return response;}
     let headers = req.headers().clone();
     let parsed = axum::body::to_bytes(req.into_body(), 64 * 1024).await.ok().and_then(|raw| serde_json::from_slice::<ChannelBody>(&raw).ok());
     let Some(ChannelBody { branch }) = parsed else {
@@ -390,7 +367,7 @@ pub async fn channel_write(State(st): State<Arc<AppState>>, ConnectInfo(peer): C
         Ok(channel_snapshot(&layout))
     }).await.unwrap_or_else(|e| Err(Some(e.to_string())));
     let response = match written {
-        Ok(snapshot) => json_response(StatusCode::OK, snapshot),
+        Ok(snapshot) => json_guarded_ascii(StatusCode::OK, snapshot),
         Err(None) => detail(StatusCode::CONFLICT, "update_channel_busy", "Aguarde a atualização terminar antes de mudar o canal.", json!({})),
         Err(Some(why)) => detail(StatusCode::INTERNAL_SERVER_ERROR, "update_channel_write",
             "Não foi possível gravar o canal. O canal anterior continua valendo.", json!({"motivo": why})),
@@ -429,7 +406,7 @@ pub async fn accept(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     let migration = ids.iter().any(|id| id == super::migrate::STEP_ID);
     if !migration {
         return match super::accept(&layout, &ids) {
-            Ok(()) => with_cors(&headers, json_response(StatusCode::OK, json!({"ok": true, "started": false}))),
+            Ok(()) => with_cors(&headers, json_guarded_ascii(StatusCode::OK, json!({"ok": true, "started": false}))),
             Err(e) => write_failed("o aceite não foi gravado", e),
         };
     }
@@ -459,9 +436,9 @@ pub async fn accept(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     };
     if let Err(e) = super::accept(&layout, &ids) { return write_failed("o aceite não foi gravado", e); }
     let response = match task {
-        None => json_response(StatusCode::OK, json!({"ok": true, "started": false})),
+        None => json_guarded_ascii(StatusCode::OK, json!({"ok": true, "started": false})),
         Some(task) => match launch(&st, task).await {
-            Ok(Started { pid, .. }) => json_response(StatusCode::OK, json!({"ok": true, "started": true, "pid": pid})),
+            Ok(Started { pid, .. }) => json_guarded_ascii(StatusCode::OK, json!({"ok": true, "started": true, "pid": pid})),
             // Não subiu: o aviso volta, senão a escolha se perderia sem tela que a ofereça de novo.
             other => {
                 if let Err(e) = super::unaccept(&layout, &ids) { tracing::warn!("update: aceite não desfeito depois do lançamento que falhou: {e}"); }
@@ -489,7 +466,7 @@ struct DevModeBody {
 /// `hangar-server dev-mode`, pelo executor destacado (ela reinicia o servidor). As recusas que não
 /// dependem de trava voltam aqui, antes de lançar; o desfecho sai pelo estado do `GET`.
 pub async fn switch_dev_mode(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    if !(match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) }).1 { return pass_any(State(st), ConnectInfo(peer), req).await; }
+    if let Err(response)=crate::routes::owner_gate(&st,peer,&req).await{return response;}
     let headers = req.headers().clone();
     let parsed = axum::body::to_bytes(req.into_body(), 64 * 1024).await.ok()
         .and_then(|raw| serde_json::from_slice::<DevModeBody>(&raw).ok());
@@ -505,7 +482,7 @@ pub async fn switch_dev_mode(State(st): State<Arc<AppState>>, ConnectInfo(peer):
     let response = match checked {
         Err(e) => detail(StatusCode::INTERNAL_SERVER_ERROR, "erro_dev_mode_falhou", &e.to_string(), json!({})),
         Ok(Err(failure)) => detail(StatusCode::CONFLICT, failure.code, &failure.message, json!({})),
-        Ok(Ok(super::dev_mode::Checked::Already(text))) => json_response(StatusCode::OK, json!({"ok": true, "nada_a_fazer": true, "detalhe": text})),
+        Ok(Ok(super::dev_mode::Checked::Already(text))) => json_guarded_ascii(StatusCode::OK, json!({"ok": true, "nada_a_fazer": true, "detalhe": text})),
         Ok(Ok(super::dev_mode::Checked::Switch { .. } | super::dev_mode::Checked::Download)) => started(launch(&st, Task::DevMode(request)).await),
     };
     with_cors(&headers, response)

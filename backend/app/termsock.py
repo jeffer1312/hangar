@@ -27,7 +27,7 @@ from fastapi import WebSocket
 from starlette.websockets import WebSocketDisconnect
 from uvicorn.protocols.utils import ClientDisconnected
 
-from app import guest_users, tmux
+from app import tmux
 from app.auth import _LOOPBACK, _blocked, _record_fail
 from app.config import settings
 from app.guest_header import guest_of
@@ -141,20 +141,6 @@ def _tamanho_da_janela(name: str) -> Optional[tuple[int, int]]:
     return (int(w), int(h)) if w.isdigit() and h.isdigit() else None
 
 
-def origens_extras() -> list[str]:
-    """CP_TERM_ORIGINS mais o que a tela gravou, sem duplicata e na ordem de declaracao.
-
-    Soma em vez de sobrescrever: quem edita pelo celular esta, quase por definicao, numa origem que
-    so funciona porque alguem a declarou antes — um override por inteiro se tiraria do ar sozinho.
-    """
-    from app import runtime_config
-    vistos: list[str] = []
-    for fonte in (settings.term_origins, str(runtime_config.get("term_origins") or "")):
-        for extra in fonte.split(","):
-            extra = extra.strip()
-            if extra and extra not in vistos:
-                vistos.append(extra)
-    return vistos
 
 
 _DIAG_RESPOSTA_RE = re.compile(rb"^[0-9;?$]*[Rcn~y]?$")
@@ -180,56 +166,8 @@ def _diag_entrada(name: str, b: bytes) -> None:
     _log.warning("termsock: %r entrada do cliente %r (%d bytes)", name, b[:64], len(b))
 
 
-def _origem_aceita(origem: str, host_req: Optional[str]) -> bool:
-    """Origin permitida: a MESMA de onde o app foi servido, ou a `public_url` configurada.
-
-    So comparar com a `public_url` estava errado e quebrou em producao: o dono abre o app em
-    `http://127.0.0.1:8765` (ou no IP de LAN), e a `public_url` aponta pro nome do Tailscale — a
-    origem local era recusada com 403 e o painel so funcionava entrando pelo endereco publico.
-    Passou por todas as revisoes porque na instancia de TESTE a `public_url` estava vazia e a
-    checagem inteira era pulada.
-
-    Mesma-origem e sempre legitima: o navegador so tem essa Origin porque carregou o app DESTE
-    backend. Compara `netloc` (host:porta), nao a URL inteira: o cabecalho `Host` nao traz esquema.
-    """
-    from urllib.parse import urlparse
-    alvo = urlparse(origem).netloc
-    if not alvo:
-        return False
-    if host_req and alvo == host_req.strip():
-        return True
-    if settings.public_url and alvo == urlparse(settings.public_url).netloc:
-        return True
-    # Origens EXTRAS declaradas (CP_TERM_ORIGINS): o front pode ser servido de OUTRA maquina que
-    # nao e peer nenhum — o PWA da VPS carrega de la e fala com este backend pelo Tailscale, entao
-    # a Origin dele nao e mesma-origem, nao e a public_url e nao esta no peers.json. Sem isto o
-    # terminal do celular levava 403 no handshake (medido 21/08/2026).
-    for extra in origens_extras():
-        if alvo == (urlparse(extra).netloc or extra):
-            return True
-    # A MALHA inteira, nao so este backend: o app e servido de UMA maquina e fala com VARIAS (o PWA
-    # do celular carrega de um host e conversa com este backend por outro endereco). Sem isto, o
-    # celular abriria o painel e levaria 403 — mesma classe do bug que a `public_url` sozinha
-    # causou no desktop. `enabled: false` entra igual: o peer desligado sai da VARREDURA, nao da
-    # lista de enderecos legitimos (o comentario do peers.json diz isso).
-    for peer in _peers_conhecidos():
-        if alvo == urlparse(peer).netloc:
-            return True
-    return False
 
 
-def _peers_conhecidos() -> list[str]:
-    """base_url de todo peer do peers.json. Tolerante: malha ausente/ilegivel nao pode derrubar o
-    painel — sem ela sobram mesma-origem e public_url, que ja cobrem a maquina local."""
-    try:
-        from app import peers
-        d = peers._load()
-        itens = d.get("peers", d) if isinstance(d, dict) else d
-        vals = itens.values() if isinstance(itens, dict) else itens
-        return [p["base_url"] for p in vals if isinstance(p, dict) and p.get("base_url")]
-    except Exception as e:                          # noqa: BLE001
-        _log.warning("termsock: nao consegui ler peers.json pra checar Origin: %r", e)
-        return []
 
 
 class Sessao:
@@ -391,8 +329,7 @@ async def _porta_de_entrada(ws: WebSocket, name: str, resolve=None) -> Optional[
     tok = ws.query_params.get("token", "")
     from app import shared_auth
     decision = await shared_auth.websocket(ws, shared_auth.TERMINAL_WS,
-                                          verified_guest=guest_of(ws) is not None,
-                                          login_guest=guest_users.current.get() is not None)
+                                          verified_guest=guest_of(ws) is not None)
     if decision is False:
         return None
     if decision is not None and decision.status not in (shared_auth.OWNER, shared_auth.GUEST):
@@ -408,20 +345,10 @@ async def _porta_de_entrada(ws: WebSocket, name: str, resolve=None) -> Optional[
         # completo. `.encode()` tambem evita o TypeError do compare_digest com string nao-ASCII.
         dono = (decision.status == shared_auth.OWNER if decision is not None else
                 bool(settings.auth_token) and secrets.compare_digest(tok.encode(), settings.auth_token.encode()))
-        if not dono and guest_users.current.get() is None:
+        if not dono:
             if host not in _LOOPBACK:            # mesma isencao do require_auth (auth.py:46)
                 _record_fail(host, agora)
             await ws.close(code=1008)            # fecha SEM accept: o PTY nunca chega a nascer
-            return
-        # A Origin so barra credencial AMBIENTE (o login do convidado, que o navegador manda sozinho):
-        # WebSocket nao e coberto por CORS. O `?token=` do dono uma pagina estranha nao tem.
-        origem = ws.headers.get("origin")
-        if not dono and origem and not _origem_aceita(origem, ws.headers.get("host")):
-            # Igualdade normalizada, nao prefixo: Origin nunca tem path, e um `startswith` deixava
-            # passar "https://<public_url>.evil.com" (achado da revisao).
-            _log.warning("termsock: origem %r recusada (host=%r, public_url=%r)",
-                         origem, ws.headers.get("host"), settings.public_url)
-            await ws.close(code=1008)
             return
     if resolve is not None:
         try:

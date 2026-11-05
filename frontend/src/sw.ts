@@ -38,7 +38,7 @@ self.addEventListener('push', (event) => {
     (async () => {
       // Estes dois fallbacks ficam em portugues DE PROPOSITO e nao entram no sistema de traducao: o SW
       // roda fora do app, nao tem localStorage e nao consegue resolver o idioma escolhido. Quem traduz o
-      // push e o backend (app/push.py, pelo locale gravado na inscricao) — o que chega aqui ja vem
+      // push é o backend (Rust, pelo locale gravado na inscrição) — o que chega aqui já vem
       // pronto, e estes valores so aparecem se o payload vier malformado.
       // Detalhe pratico: no dev o devServiceWorker() (vite.config.ts:24-48) compila este arquivo com
       // esbuild CRU, sem plugin de Vite. Um `import * as m` aqui quebraria no dev antes de aparecer no

@@ -9,7 +9,7 @@ import pytest
 from fastapi import Depends, FastAPI, Request, WebSocket
 from fastapi.testclient import TestClient
 
-from app import guest_header, guest_user_gate, guest_users, internal_api
+from app import guest_header, internal_api
 from app.auth import require_auth
 from app.config import settings
 
@@ -131,20 +131,14 @@ def test_websocket_route_sees_guest():
 @pytest.fixture
 def gated(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "auth_token", "dono")
-    monkeypatch.setattr(guest_users, "_path_override", tmp_path / "guests.json")
-    guest_users._reset()
-    (tmp_path / "p").mkdir()
-    _, login_token = guest_users.create("ana", str(tmp_path / "p"), False, True)
     app = FastAPI()
 
     @app.get("/api/sessions/{name}/history", dependencies=[Depends(require_auth)])
     def history(name: str, request: Request):
         view = guest_header.guest_of(request)
-        return {"sessions": view.sessions if view else None,
-                "login": guest_users.current.get() is not None}
+        return {"sessions": view.sessions if view else None}
 
-    app.add_middleware(guest_user_gate.GuestUserGate)
-    return TestClient(app, client=("127.0.0.1", 5)), login_token
+    return TestClient(app, client=("127.0.0.1", 5)), None
 
 
 def test_require_auth_accepts_valid_header_without_authorization(gated):
@@ -152,17 +146,10 @@ def test_require_auth_accepts_valid_header_without_authorization(gated):
     v = _sign("GET", "/api/sessions/a/history", {"a": "share"}, NOW + 30)
     r = c.get("/api/sessions/a/history?limit=5", headers={"x-hangar-guest": v})
     assert r.status_code == 200
-    assert r.json() == {"sessions": {"a": "share"}, "login": False}
+    assert r.json() == {"sessions": {"a": "share"}}
     assert c.get("/api/sessions/a/history").status_code == 401
 
 
-def test_guest_user_gate_yields_to_valid_header(gated):
-    c, login_token = gated
-    v = _sign("GET", "/api/sessions/dono/history", {"dono": "share"}, NOW + 30)
-    # Sem o cabeçalho, o porteiro do convidado com login recusa a sessão que não é dele.
-    assert c.get(f"/api/sessions/dono/history?token={login_token}").status_code == 403
-    r = c.get(f"/api/sessions/dono/history?token={login_token}", headers={"x-hangar-guest": v})
-    assert r.status_code == 200 and r.json() == {"sessions": {"dono": "share"}, "login": False}
 
 
 def test_verified_once_per_request(gated, monkeypatch):

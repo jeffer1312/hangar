@@ -50,6 +50,14 @@ impl Auth {
     }
 
     pub fn shared(&self) -> bool { !matches!(self.backend, Backend::Local(_)) }
+    pub async fn sync_session_key(&self) -> Result<Option<Vec<u8>>, AuthError> {
+        let auth = self.clone();
+        tokio::task::spawn_blocking(move || match &auth.backend {
+            Backend::Shared(shared) => shared.sync_session_key().map(Some),
+            Backend::Local(_) => Ok(None),
+            Backend::Broken(error) => Err(*error),
+        }).await.map_err(|_| AuthError::Panic)?
+    }
     fn wall(&self, now: Instant) -> f64 {
         if now >= self.clock.0 { self.clock.1 + now.duration_since(self.clock.0).as_secs_f64() }
         else { self.clock.1 - self.clock.0.duration_since(now).as_secs_f64() }

@@ -1,0 +1,2 @@
+# Semente do RED: surrogate isolado recebido em JSON externo.
+cc 54e38054b2d74d3e7f942c56288b9e26212691eecb93deec0611069eaf004929 # caso mínimo: units = [55296]

@@ -1,8 +1,8 @@
 ---
 id: 2026-10-29-codex-preparo-unico
 titulo: O Codex prepara a conta uma vez e reutiliza nas próximas aberturas
-comando: hangar-python scripts/repair-codex-accounts.py
-comando_windows: if exist python\python.exe (python\python.exe scripts\repair-codex-accounts.py) else (backend\.venv\Scripts\python.exe scripts\repair-codex-accounts.py)
+comando: scripts/hangar-server-command harness-setup repair-codex
+comando_windows: if exist bin\hangar-server.exe (bin\hangar-server.exe harness-setup repair-codex) else ("%USERPROFILE%\.hangar\bin\hangar-server.exe" harness-setup repair-codex)
 prova: ~/.hangar/codex-prepare-once-v1.json
 tipo: maquina
 destrutivo: false

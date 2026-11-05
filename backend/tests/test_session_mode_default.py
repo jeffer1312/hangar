@@ -3,8 +3,9 @@ import pytest
 
 
 @pytest.mark.parametrize("flags, expected", [((), None), (("--headless",), True), (("--terminal",), False)])
-def test_cli_preserves_omission_and_explicit_mode(tmp_path, flags, expected):
+def test_cli_preserves_omission_and_explicit_mode(tmp_path, flags, expected, hangar_server_bin):
     import json
+    import os
     import shutil
     import subprocess
     import threading
@@ -34,8 +35,11 @@ def test_cli_preserves_omission_and_explicit_mode(tmp_path, flags, expected):
     (tmp_path / "backend" / ".env").write_text(f"CP_AUTH_TOKEN=test\nCP_PORT={server.server_port}\n")
     script = scripts / "hangar-send"
     shutil.copy(Path(__file__).parents[2] / "scripts" / "hangar-send", script)
+    shutil.copy(Path(__file__).parents[2] / "scripts" / "hangar-server-command", scripts / "hangar-server-command")
+    env = {**os.environ, "HOME": str(tmp_path), "USERPROFILE": str(tmp_path),
+           "CP_RUST_SERVER_BIN": str(hangar_server_bin)}
     try:
-        result = subprocess.run(["bash", str(script), "--new", "test-mode", "/tmp", *flags], capture_output=True, text=True, timeout=10)
+        result = subprocess.run(["bash", str(script), "--new", "test-mode", "/tmp", *flags], capture_output=True, text=True, timeout=10, env=env)
         assert result.returncode == 0, result.stderr
         assert len(requests) == 1 and requests[0][0] == "/api/sessions"
         body = requests[0][1]
@@ -44,7 +48,7 @@ def test_cli_preserves_omission_and_explicit_mode(tmp_path, flags, expected):
         else:
             assert body["headless"] is expected
         for conflict in (("--headless", "--terminal"), ("--terminal", "--headless")):
-            result = subprocess.run(["bash", str(script), "--new", "test-mode", "/tmp", *conflict], capture_output=True, text=True, timeout=10)
+            result = subprocess.run(["bash", str(script), "--new", "test-mode", "/tmp", *conflict], capture_output=True, text=True, timeout=10, env=env)
             assert result.returncode == 2
         assert len(requests) == 1
     finally:

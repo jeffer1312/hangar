@@ -3,6 +3,7 @@ pub mod driver;
 pub mod inbox;
 mod pure;
 mod routes;
+pub(crate) use routes::kimi_working;
 pub use routes::{allowed_method, catalog_request, inbox_http_request, matches, serve};
 pub mod catalog;
 pub use catalog::{catalog, warm};

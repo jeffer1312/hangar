@@ -80,13 +80,13 @@ fn tail(text: &str) -> String {
 }
 
 #[cfg(unix)]
-fn exit_code(status: std::process::ExitStatus) -> i64 {
+pub(crate) fn exit_code(status: std::process::ExitStatus) -> i64 {
     use std::os::unix::process::ExitStatusExt;
     status.code().map(i64::from).or_else(|| status.signal().map(|s| -i64::from(s))).unwrap_or(-1)
 }
 
 #[cfg(not(unix))]
-fn exit_code(status: std::process::ExitStatus) -> i64 { status.code().map_or(-1, i64::from) }
+pub(crate) fn exit_code(status: std::process::ExitStatus) -> i64 { status.code().map_or(-1, i64::from) }
 
 /// `(código, cauda)`. Estourado o prazo, o grupo inteiro do comando morre (netos incluídos) e volta
 /// `(124, "timeout Ns")`.

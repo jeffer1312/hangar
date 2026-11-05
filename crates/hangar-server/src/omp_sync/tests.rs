@@ -385,7 +385,7 @@ async fn op037_disabled_service_never_runs_processes() {
         BTreeMap::new(),
         runner,
     );
-    let service = Service::new(sync, false, 300.0, Arc::new(|| true)).unwrap();
+    let service = Service::new(sync, false, 300.0, Arc::new(|| Ok(true))).unwrap();
     service.start_loop().await;
     service.close().await;
     assert_eq!(service.status()["state"], "disabled");
@@ -438,7 +438,7 @@ async fn op040_close_awaits_native_operation_and_does_not_repeat() {
         BTreeMap::new(),
         runner.clone(),
     );
-    let service = Service::new(sync, true, 300.0, Arc::new(|| true)).unwrap();
+    let service = Service::new(sync, true, 300.0, Arc::new(|| Ok(true))).unwrap();
     service.start_loop().await;
     runner.entered.notified().await;
     assert_eq!(service.status()["state"], "running");
@@ -476,7 +476,7 @@ async fn op041_master_switch_pauses_and_resumes_at_the_next_interval() {
         3.0,
         Arc::new({
             let allowed = allowed.clone();
-            move || allowed.load(std::sync::atomic::Ordering::SeqCst)
+            move || Ok(allowed.load(std::sync::atomic::Ordering::SeqCst))
         }),
     )
     .unwrap();
@@ -1274,7 +1274,7 @@ async fn op038_first_cycle_and_next_interval_are_ordered_and_do_not_overlap() {
         calls: Mutex::new(calls.into()),
     });
     let sync = Synchronizer::new(home.clone(), home.join(".claude"), env, runner.clone());
-    let service = Service::new(sync, true, 2.0, Arc::new(|| true)).unwrap();
+    let service = Service::new(sync, true, 2.0, Arc::new(|| Ok(true))).unwrap();
     service.start_loop().await;
     wait_state(&service, "updated").await;
     assert_eq!(runner.calls.lock().unwrap().len(), 2);
@@ -1301,7 +1301,7 @@ async fn op039_failed_cycle_recovers_without_restarting_service() {
         calls: Mutex::new(calls.into()),
     });
     let sync = Synchronizer::new(home.clone(), home.join(".claude"), env, runner.clone());
-    let service = Service::new(sync, true, 2.0, Arc::new(|| true)).unwrap();
+    let service = Service::new(sync, true, 2.0, Arc::new(|| Ok(true))).unwrap();
     service.start_loop().await;
     wait_state(&service, "error").await;
     assert_eq!(runner.calls.lock().unwrap().len(), 5);
@@ -1354,7 +1354,7 @@ async fn op044_observed_stop_stays_latched_even_when_master_switch_returns() {
         sync,
         true,
         2.0,
-        Arc::new(move || !pulse.swap(false, std::sync::atomic::Ordering::SeqCst)),
+        Arc::new(move || Ok(!pulse.swap(false, std::sync::atomic::Ordering::SeqCst))),
     )
     .unwrap();
     service.start_loop().await;
@@ -1389,7 +1389,7 @@ async fn op047_suspension_wins_over_import_in_the_same_cycle() {
         calls: Mutex::new(calls.into()),
     });
     let sync = Synchronizer::new(home.clone(), home.join(".claude"), env, runner.clone());
-    let service = Service::new(sync, true, 300.0, Arc::new(|| true)).unwrap();
+    let service = Service::new(sync, true, 300.0, Arc::new(|| Ok(true))).unwrap();
     service.start_loop().await;
     wait_state(&service, "suspended").await;
     assert_eq!(
@@ -1426,7 +1426,7 @@ async fn op042_http_status_responds_while_native_worker_is_waiting() {
         BTreeMap::new(),
         runner.clone(),
     );
-    let service = Service::new(sync, true, 300.0, Arc::new(|| true)).unwrap();
+    let service = Service::new(sync, true, 300.0, Arc::new(|| Ok(true))).unwrap();
     service.start_loop().await;
     runner.entered.notified().await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1686,3 +1686,49 @@ async fn measure_omp_dry_reconciliation() {
 
 #[path = "mechanism_tests.rs"]
 mod mechanisms;
+
+#[tokio::test(start_paused = true)]
+async fn guest_omp_invalid_configuration_is_error_without_running_a_cycle() {
+    let home = tempfile::tempdir().unwrap();
+    let runner = Arc::new(Replay {home:home.path().into(),calls:Mutex::new([json!({"sentinel":true})].into())});
+    let sync = Synchronizer::new(home.path().into(),home.path().join(".claude"),BTreeMap::new(),runner.clone());
+    let service = Service::new(sync,true,300.0,Arc::new(||Err("loop_config_invalid"))).unwrap();
+    let preserved = home.path().join("existing.json");
+    fs::write(&preserved,"existing").unwrap();
+    service.start_loop().await;
+    wait_state(&service,"error").await;
+    assert_eq!(service.status()["last_report"]["errors"],json!(["loop_config_invalid"]));
+    assert!(service.status()["started_at"].is_null());
+    assert_eq!(runner.calls.lock().unwrap().len(),1);
+    assert_eq!(fs::read_to_string(preserved).unwrap(),"existing");
+    service.close().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn guest_omp_configuration_error_between_operations_preserves_reports_and_work() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    fs::create_dir(&home).unwrap();
+    let captured = fresh_contract(&home);
+    let (env,import) = loop_plan(&home,&captured,false);
+    let mut calls = vec![import];
+    calls.extend(captured["calls"].as_array().unwrap().clone());
+    let failed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let runner = Arc::new(PulseReplay {replay:Replay {home:home.clone(),calls:Mutex::new(calls.into())},pulse:failed.clone()});
+    let sync = Synchronizer::new(home.clone(),home.join(".claude"),env,runner.clone());
+    let service = Service::new(sync,true,2.0,Arc::new({let failed=failed.clone();move || {
+        if failed.load(std::sync::atomic::Ordering::SeqCst) {Err("loop_config_invalid")} else {Ok(true)}
+    }})).unwrap();
+    service.start_loop().await;
+    wait_state(&service,"error").await;
+    assert_eq!(service.status()["last_report"]["configuration"]["errors"],json!(["loop_config_invalid"]));
+    assert!(!service.status()["last_report"]["marketplaces"].is_null());
+    assert!(service.status()["last_report"]["plugins"].is_null());
+    assert_eq!(runner.replay.calls.lock().unwrap().len(),5);
+    assert!(home.join(".omp/marketplaces.json").is_file());
+    failed.store(false,std::sync::atomic::Ordering::SeqCst);
+    tokio::time::advance(Duration::from_secs(2)).await;
+    wait_state(&service,"updated").await;
+    assert!(runner.replay.calls.lock().unwrap().is_empty());
+    service.close().await;
+}

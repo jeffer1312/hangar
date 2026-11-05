@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use super::procs::ChildrenMap;
 
 const PREFIX: &str = "shortcut-";
-const FORMAT: &str = "#{session_name}\t#{@cp_shortcut_owner}\t#{@cp_shortcut_id}\t#{session_created}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_pid}\t#{@cp_shortcut_seq}\t#{@cp_shortcut_key}\t#{@cp_shortcut_origin}\t#{@cp_shortcut_ask}\t#{@cp_shortcut_label}";
+pub(crate) const FORMAT: &str = "#{session_name}\t#{@cp_shortcut_owner}\t#{@cp_shortcut_id}\t#{session_created}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_pid}\t#{@cp_shortcut_seq}\t#{@cp_shortcut_key}\t#{@cp_shortcut_origin}\t#{@cp_shortcut_ask}\t#{@cp_shortcut_label}";
 const MUX_TIMEOUT: Duration = Duration::from_secs(5);
 const TTY_WAITS: [&str; 2] = ["wait_woken", "n_tty_read"];
 const SCREEN_LINES: usize = 6;
@@ -22,9 +22,9 @@ const MIN_GAP: Duration = Duration::from_secs(1);
 const ORPHAN_GRACE_S: u64 = 60;
 
 #[derive(Debug, Clone, PartialEq)]
-struct Row {
-    tmux: String, owner: String, id: String, created: u64, alive: bool, exit_code: Option<i64>,
-    pid: Option<u32>, label: String, seq: u64, key: String, origin: String, ask: bool,
+pub(crate) struct Row {
+    pub(crate) tmux: String, pub(crate) owner: String, pub(crate) id: String, pub(crate) created: u64, pub(crate) alive: bool, pub(crate) exit_code: Option<i64>,
+    pub(crate) pid: Option<u32>, pub(crate) label: String, pub(crate) seq: u64, pub(crate) key: String, pub(crate) origin: String, pub(crate) ask: bool,
 }
 
 fn is_id(s: &str) -> bool { s.len() == 6 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) }
@@ -32,7 +32,7 @@ fn is_id(s: &str) -> bool { s.len() == 6 && s.bytes().all(|b| matches!(b, b'0'..
 fn digits(s: &str) -> Option<u64> { (!s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())).then(|| s.parse().ok()).flatten() }
 
 /// `_read_rows` sobre a saída do `list-sessions`.
-fn parse(out: &str, windows_status: impl Fn(&str) -> (bool, Option<i64>)) -> Vec<Row> {
+pub(crate) fn parse(out: &str, windows_status: impl Fn(&str) -> (bool, Option<i64>)) -> Vec<Row> {
     out.lines().filter_map(|line| {
         let p: Vec<&str> = line.splitn(12, '\t').collect();
         if p.len() != 12 || !p[0].starts_with(PREFIX) || !is_id(p[2]) { return None; }

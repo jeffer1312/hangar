@@ -10,7 +10,7 @@ import pytest
 
 
 @pytest.fixture
-def backend(tmp_path):
+def backend(tmp_path, hangar_server_bin):
     requests, paths = [], []
 
     class Handler(BaseHTTPRequestHandler):
@@ -37,7 +37,9 @@ def backend(tmp_path):
     (tmp_path / "backend" / ".env").write_text(f"CP_AUTH_TOKEN=test\nCP_PORT={server.server_port}\n")
     script = tmp_path / "scripts" / "hangar-send"
     shutil.copy(Path(__file__).parents[2] / "scripts" / "hangar-send", script)
-    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
+    shutil.copy(Path(__file__).parents[2] / "scripts" / "hangar-server-command", script.parent / "hangar-server-command")
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "USERPROFILE": str(tmp_path),
+           "CP_RUST_SERVER_BIN": str(hangar_server_bin)}
 
     def run(*args):
         return subprocess.run(["bash", str(script), "--new", *args], capture_output=True, text=True, timeout=10, env=env)

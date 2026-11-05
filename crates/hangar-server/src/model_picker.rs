@@ -1,6 +1,8 @@
 //! O seletor do `/model` do Claude Code com terminal: leitura do pane e o percurso de teclas sobre ele.
 //! Porte do `model_picker.py` e do `TerminalInput.set_model_effort`; o golden
 //! `backend/tests/fixtures/contract/golden/model_picker.json` prende as teclas e as respostas.
+pub mod default_model;
+
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -112,7 +114,7 @@ pub fn normalize(model: Option<&str>, effort: Option<&str>) -> Result<(Option<St
 }
 
 /// O `repr()` de uma str do Python, que as mensagens de recusa citam.
-fn py_repr(s: &str) -> String {
+pub(crate) fn py_repr(s: &str) -> String {
     let quote = if s.contains('\'') && !s.contains('"') { '"' } else { '\'' };
     let mut out = String::from(quote);
     for c in s.chars() {
@@ -140,17 +142,17 @@ fn printable(c: char) -> bool {
 /// Recusa do seletor: o texto do Python (`PickerError.detail`) e, quando a falha veio do terminal, o código.
 /// `uncertain`: uma tecla pode ter chegado sem a prova do efeito.
 #[derive(Debug)]
-pub struct Refusal { pub detail: String, pub code: Option<&'static str>, pub uncertain: bool }
+pub struct Refusal { pub detail: String, pub code: Option<&'static str>, pub uncertain: bool, pub typed: bool }
 
-fn refused(detail: impl Into<String>) -> Refusal { Refusal { detail: detail.into(), code: None, uncertain: false } }
-fn coded(code: &'static str, detail: impl Into<String>) -> Refusal { Refusal { detail: detail.into(), code: Some(code), uncertain: false } }
+fn refused(detail: impl Into<String>) -> Refusal { Refusal { detail: detail.into(), code: None, uncertain: false, typed: false } }
+fn coded(code: &'static str, detail: impl Into<String>) -> Refusal { Refusal { detail: detail.into(), code: Some(code), uncertain: false, typed: false } }
 fn rank(level: &str) -> Option<usize> { EFFORT_ORDER.iter().position(|l| *l == level) }
 fn io(failure: IoFailure, typed: bool) -> Refusal {
     let detail = match failure.code {
         "terminal_panel_active" | "terminal_panel_open" => "Terminal aberto nesta sessao. Feche o painel pra responder por aqui.",
         _ => "não consegui dirigir o terminal da sessão",
     };
-    Refusal { detail: detail.into(), code: Some(failure.code), uncertain: typed || failure.may_have_written }
+    Refusal { detail: detail.into(), code: Some(failure.code), uncertain: typed || failure.may_have_written, typed: typed || failure.may_have_written }
 }
 
 struct Picker<'a> { sequence: PermissionSequence<'a>, typed: bool }
@@ -169,8 +171,8 @@ impl Picker<'_> {
         self.typed = true;
         sent
     }
-    async fn abort(&self, detail: impl Into<String>) -> Refusal { let _ = self.sequence.escape().await; refused(detail) }
-    async fn abort_coded(&self, code: &'static str, detail: impl Into<String>) -> Refusal { let _ = self.sequence.escape().await; coded(code, detail) }
+    async fn abort(&self, detail: impl Into<String>) -> Refusal { let _ = self.sequence.escape().await; Refusal { typed: self.typed, ..refused(detail) } }
+    async fn abort_coded(&self, code: &'static str, detail: impl Into<String>) -> Refusal { let _ = self.sequence.escape().await; Refusal { typed: self.typed, ..coded(code, detail) } }
 
     /// Com o Claude trabalhando o `/model` viraria mensagem na fila; com menu aberto, navegaria o menu errado.
     async fn require_drivable(&self) -> Result<(), Refusal> {
@@ -419,6 +421,49 @@ mod tests {
                 let _ = model_nav_steps(&rows, "opus");
                 let _ = normalize(Some(&text), Some(&text));
             }
+        }
+    }
+}
+
+pub fn normalize_engine(model: &str) -> Result<String, String> {
+    let target = trim(model);
+    if target.is_empty() || target.chars().any(|c| whitespace(c) || (c as u32) < 32) {
+        return Err(format!("model invalido: {}", py_repr(model)));
+    }
+    Ok(target.to_owned())
+}
+
+/// Só a confirmação do token completo prova a troca: `k3-256k` não confirma `k3`.
+pub fn result_model(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix("Set model to")?;
+    if !rest.chars().next().is_some_and(whitespace) { return None; }
+    rest.split(whitespace).find(|part| !part.is_empty())
+}
+
+/// Motores aceitam IDs arbitrários por argumento; o seletor só oferece aliases da Anthropic.
+pub async fn drive_engine(driver: &TerminalDriver, model: &str) -> Result<Value, Refusal> {
+    let model = normalize_engine(model).map_err(|detail| coded("erro_corpo_invalido", detail))?;
+    let model = model.as_str();
+    let mut picker = Picker { sequence: driver.permission_sequence().await, typed: false };
+    picker.require_drivable().await?;
+    let typed = picker.sequence.type_text(&format!("/model {model}")).await.map_err(|f| io(f, false));
+    picker.typed = true;
+    typed?;
+    sleep(SETTLE).await;
+    picker.press("Enter").await?;
+    let deadline = Instant::now() + Duration::from_secs(4);
+    loop {
+        sleep(SETTLE).await;
+        let pane = picker.screen().await?;
+        if picker_open(&pane) {
+            return Err(picker.abort(format!("o Claude Code nao aceitou `/model {model}`")).await);
+        }
+        let result = parse_result_line(&pane);
+        if result.as_deref().and_then(result_model) == Some(model) {
+            return Ok(json!({"ok":true,"result":result}));
+        }
+        if Instant::now() >= deadline {
+            return Err(Refusal { typed: true, ..refused(format!("sem confirmacao do `/model {model}` no terminal")) });
         }
     }
 }

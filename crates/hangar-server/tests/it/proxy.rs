@@ -18,7 +18,7 @@ async fn health_answers_without_token_and_with_cors() {
         .unwrap();
     assert_eq!(r.status(), 200);
     assert_eq!(r.headers()["access-control-allow-origin"], "*");
-    assert_eq!(r.headers()["access-control-expose-headers"], "ETag");
+    assert!(r.headers()["access-control-expose-headers"].to_str().unwrap().split(", ").any(|header| header == "ETag"));
     let v: serde_json::Value = serde_json::from_str(&r.text().await.unwrap()).unwrap();
     // `protocol` é o contrato com o Python (RUST_SERVER_PROTOCOL na Task 13): mudar exige os dois.
     assert_eq!(v["ok"], true);
@@ -33,7 +33,7 @@ async fn health_answers_without_token_and_with_cors() {
     assert!(terminal.starts_with("127.0.0.1:"), "{terminal}");
     // Grupos: o Python só passa a pedir ao Rust quando a saúde diz que ele os atende.
     assert!(v["groups"].is_boolean(), "{v}");
-    assert_eq!(hangar_server::INTERNAL_PROTOCOL, 97);
+    assert_eq!(hangar_server::INTERNAL_PROTOCOL, 100);
 }
 
 #[tokio::test]

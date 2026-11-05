@@ -335,27 +335,32 @@ pub(crate) fn restore_notes(head_moved: Option<&(String, String)>, errors: &[Str
     notes
 }
 
-/// O Python e a pasta `backend` do doctor: no clone, o venv; no pacote, o Python embutido da versão em `current`.
+/// O diagnóstico recebe a pasta da instalação que falhou, mesmo com outro Hangar nesta máquina.
 pub(crate) fn doctor_paths(mode: Mode, dest: &Path, windows: bool) -> (PathBuf, PathBuf) {
-    // Os caminhos do `install_root::python_exe` do `hangar-server`, que este crate não importa.
     let root = match mode { Mode::Git => dest.to_owned(), Mode::Package => dest.join("current") };
-    let python = match (mode, windows) {
-        (Mode::Git, true) => root.join(r"backend\.venv\Scripts\python.exe"),
-        (Mode::Git, false) => root.join("backend/.venv/bin/python"),
-        (Mode::Package, true) => root.join("python").join("python.exe"),
-        (Mode::Package, false) => root.join("python").join("bin").join("python3"),
+    let executable = if windows { "hangar-server.exe" } else { "hangar-server" };
+    let binary = match mode {
+        Mode::Package => root.join("bin").join(executable),
+        Mode::Git => root.join("crates/target/release").join(executable),
     };
-    (python, root.join("backend"))
+    (binary, root.join("backend"))
 }
 
-/// `python -m app.doctor` com o PATH refeito. Sem o Python, o backend ainda não existe: `None`.
+/// Sem o binário o diagnóstico ainda não existe; a ausência continua explícita no relatório.
 pub(crate) fn doctor(mode: Mode, dest: &Path) -> Option<String> {
-    let (python, backend) = doctor_paths(mode, dest, cfg!(windows));
-    if !python.is_file() { return None; }
-    // `--qr` imprimiria a URL com o token; sem ele o doctor só lista itens.
-    let mut command = Command::new(python);
-    hidden(&mut command).args(["-m", "app.doctor"]).current_dir(backend)
-        .env("PATH", refreshed_path()).env("PYTHONIOENCODING", "utf-8");
+    let (mut binary, backend) = doctor_paths(mode, dest, cfg!(windows));
+    if matches!(mode, Mode::Git) {
+        if let Some(home) = std::env::home_dir() {
+            let installed = home.join(".hangar/bin").join(if cfg!(windows) { "hangar-server.exe" } else { "hangar-server" });
+            if installed.is_file() && (!binary.is_file() || installed.metadata().and_then(|m|m.modified()).ok() > binary.metadata().and_then(|m|m.modified()).ok()) {
+                binary = installed;
+            }
+        }
+    }
+    if !binary.is_file() { return None; }
+    let mut command = Command::new(binary);
+    hidden(&mut command).args(["doctor", "--backend"]).arg(&backend).current_dir(backend)
+        .env("PATH", refreshed_path());
     Some(run_with_timeout(command, DOCTOR_TIMEOUT))
 }
 
@@ -547,13 +552,13 @@ mod tests {
     }
 
     #[test]
-    fn doctor_runs_the_python_of_each_mode() {
+    fn doctor_runs_the_native_binary_of_each_mode() {
         let clone = Path::new("/home/dev/hangar");
-        assert_eq!(doctor_paths(Mode::Git, clone, false), (clone.join("backend/.venv/bin/python"), clone.join("backend")));
-        assert_eq!(doctor_paths(Mode::Git, clone, true).0, clone.join(r"backend\.venv\Scripts\python.exe"));
+        assert_eq!(doctor_paths(Mode::Git, clone, false), (clone.join("crates/target/release/hangar-server"), clone.join("backend")));
+        assert_eq!(doctor_paths(Mode::Git, clone, true).0, clone.join("crates/target/release/hangar-server.exe"));
         let hangar = Path::new("/home/dev/.hangar");
-        assert_eq!(doctor_paths(Mode::Package, hangar, false), (hangar.join("current/python/bin/python3"), hangar.join("current/backend")));
-        assert_eq!(doctor_paths(Mode::Package, hangar, true), (hangar.join("current").join("python").join("python.exe"), hangar.join("current/backend")));
+        assert_eq!(doctor_paths(Mode::Package, hangar, false), (hangar.join("current/bin/hangar-server"), hangar.join("current/backend")));
+        assert_eq!(doctor_paths(Mode::Package, hangar, true), (hangar.join("current/bin/hangar-server.exe"), hangar.join("current/backend")));
     }
 
     fn facts(log: String) -> Facts {

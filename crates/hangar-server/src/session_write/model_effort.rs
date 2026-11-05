@@ -131,7 +131,7 @@ fn terminal_answer(reply: Result<RuntimeReply, crate::runtime::protocol::Runtime
     }
 }
 
-fn public_code(code: &str) -> &str {
+pub(super) fn public_code(code: &str) -> &str {
     match code { "terminal_panel_active" | "terminal_panel_open" => "erro_terminal_aberto", _ => code }
 }
 

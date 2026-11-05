@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from app import account_bridge, api, groups_bridge, guest_users, runtime_coordinator
+from app import account_bridge, api, groups_bridge, runtime_coordinator
 from app.config import settings
 
 TOKEN = "t-grupos"
@@ -112,15 +112,12 @@ def test_connect_forward_without_failed_list_answers_with_warning(rust, monkeypa
     assert warning["code"] == "erro_pareamento_aviso_parcial" and warning["params"]["avisos"][0]["sessao"] == "pi1"
 
 
-def test_groups_routes_refuse_guest_and_python_mode_with_code(rust, monkeypatch):
+def test_groups_routes_refuse_guest_and_python_mode_with_code(rust, monkeypatch, forwarded_guest):
     client = TestClient(api.app)
     assert client.get("/api/groups/g1").status_code == 401
-    marker = guest_users.current.set(object())
-    try:
+    with forwarded_guest():
         r = client.get("/api/groups/g1", headers=AUTH)
         assert (r.status_code, r.json()["detail"]["code"]) == (403, "erro_fora_do_convite")
-    finally:
-        guest_users.current.reset(marker)
     monkeypatch.setattr(runtime_coordinator, "current", lambda: SimpleNamespace(mode="python"))
     r = client.get("/api/sessions/a/group", headers=AUTH)
     assert (r.status_code, r.json()["detail"]["code"]) == (503, "groups_need_rust_server")

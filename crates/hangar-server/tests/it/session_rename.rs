@@ -321,3 +321,59 @@ async fn rename_clears_the_generic_mark_and_the_suggestion() {
     let (status, body) = srv.suggestion(reqwest::Method::POST, "etiquetas", OWNER).await;
     assert_eq!((status, body["detail"]["code"].clone()), (409, json!("erro_nome_nao_generico")));
 }
+
+/// D59: o nome livre pode guardar loop órfão; o rename não pode adotá-lo.
+#[tokio::test(flavor = "multi_thread")]
+async fn guest_loop_rename_does_not_inherit_the_destination_loop() {
+    let srv = server().await;
+    srv.sessions(&["velho\t\t"]);
+    let stale = srv.claude.join(".hangar-loop/novo.json");
+    srv.write(stale.clone(), json!({"status":"running","goal":"outra vida"}));
+    assert_eq!(srv.rename("velho", json!({"new":"novo"})).await.0, 200);
+    assert!(!stale.exists(), "D59: loop órfão do destino não pertence à sessão renomeada");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn guest_loop_rename_moves_source_and_restores_both_files_on_later_failure() {
+    for has_source in [false, true] {
+        let srv = server().await;
+        srv.sessions(&["velho\t\t"]);
+        let old = srv.claude.join(".hangar-loop/velho.json");
+        let new = srv.claude.join(".hangar-loop/novo.json");
+        let own = b"{\"status\":\"running\",\"goal\":\"minha vida\"}\n";
+        let stale = b"{\"status\":\"running\",\"goal\":\"outra vida\"}\n";
+        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+        if has_source { std::fs::write(&old, own).unwrap(); }
+        std::fs::write(&new, stale).unwrap();
+        // Falha real depois do passo do loop, sem injetar sucesso falso no escritor.
+        std::fs::write(srv.claude.join("guests.json"), "{").unwrap();
+        let (status, body) = srv.rename("velho", json!({"new":"novo"})).await;
+        assert_eq!(status, 500, "{body}");
+        assert_eq!(body["detail"]["params"]["nao_desfeito"], json!([]));
+        assert_eq!(srv.names(), ["velho"]);
+        assert_eq!(std::fs::read(&old).ok().as_deref(), has_source.then_some(own.as_slice()));
+        assert_eq!(std::fs::read(&new).unwrap(), stale);
+        std::fs::remove_file(srv.claude.join("guests.json")).unwrap();
+        assert_eq!(srv.rename("velho", json!({"new":"novo"})).await.0, 200);
+        assert!(!old.exists());
+        assert_eq!(std::fs::read(&new).ok().as_deref(), has_source.then_some(own.as_slice()));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn guest_loop_rename_reports_unreadable_destination_and_undoes_name() {
+    let srv = server().await;
+    srv.sessions(&["velho\t\t"]);
+    let old = srv.claude.join(".hangar-loop/velho.json");
+    let new = srv.claude.join(".hangar-loop/novo.json");
+    srv.write(old.clone(), json!({"status":"running"}));
+    let before = std::fs::read(&old).unwrap();
+    std::fs::create_dir(&new).unwrap();
+    let (status, body) = srv.rename("velho", json!({"new":"novo"})).await;
+    assert_eq!(status, 500, "D59 {body}");
+    assert_eq!(body["detail"]["params"]["etapa"], "loop");
+    assert_eq!(body["detail"]["params"]["nao_desfeito"], json!([]));
+    assert_eq!(srv.names(), ["velho"]);
+    assert_eq!(std::fs::read(&old).unwrap(), before);
+    assert!(new.is_dir());
+}

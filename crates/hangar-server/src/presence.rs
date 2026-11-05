@@ -45,7 +45,7 @@ fn view(state: &AppState, now: Instant) -> Value {
     json!({"mode": mode.as_str(), "desktop_alive": alive, "present": mode == Mode::Pc && alive})
 }
 
-/// O que o push do Python consulta: só `true` retém o envio.
+/// O produtor de avisos consulta em processo: só `true` retém o envio.
 pub fn present(state: &AppState) -> bool { view(state, Instant::now())["present"] == true }
 
 /// `GET /api/presence`, `POST /api/presence {"mode"}` e `POST /api/presence/heartbeat {"leaving"?}`; só o dono.
@@ -86,14 +86,6 @@ pub async fn route(State(state): State<Arc<AppState>>, ConnectInfo(peer): Connec
 
 fn invalid() -> Response {
     json_response(StatusCode::BAD_REQUEST, detail_body("presence_invalid", "status de presença inválido: use pc ou away", json!({})))
-}
-
-/// Ponte privada: o push do Python pergunta antes de cada envio.
-pub async fn private(State(state): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>, request: Request) -> Response {
-    if !crate::workspace_routes::private_ok(&state, peer, request.headers()) {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    json_response(StatusCode::OK, json!({"present": present(&state)}))
 }
 
 #[cfg(test)]

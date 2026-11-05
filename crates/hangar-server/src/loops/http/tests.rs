@@ -6,6 +6,7 @@ struct Fake {
     store: Store,
     rows: Vec<SessionRow>,
     automations: bool,
+    config: Option<Arc<AppState>>,
     branch: Option<String>,
     queued: Mutex<BTreeMap<String, Vec<Value>>>,
     pushed: Mutex<Vec<Value>>,
@@ -14,10 +15,11 @@ struct Fake {
 impl Backend for Fake {
     fn store(&self) -> Store { self.store.clone() }
     fn now(&self) -> f64 { 1000.0 }
-    fn automations(&self) -> bool { self.automations }
+    fn automations(&self) -> Result<bool, &'static str> { self.config.as_ref().map_or(Ok(self.automations), |state| super::super::automations(state)) }
     fn row<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Option<SessionRow>, Reply>> {
         Box::pin(async move { Ok(self.rows.iter().find(|r| r.name == name).cloned()) })
     }
+    fn current_row<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<Option<SessionRow>, Reply>> { self.row(name) }
     fn exists<'a>(&'a self, name: &'a str) -> BoxFuture<'a, bool> { Box::pin(async move { self.rows.iter().any(|r| r.name == name) }) }
     fn branch(&self, _row: &SessionRow) -> Option<String> { self.branch.clone() }
     fn append<'a>(&'a self, name: &'a str, text: &'a str) -> BoxFuture<'a, Result<String, (String, String)>> {
@@ -51,7 +53,7 @@ async fn routes_match_the_python() {
                 row(json!({"name": "cx", "cwd": "/repo", "jsonl": "/repo/x.jsonl", "provider": "codex"})),
                 row(json!({"name": "b", "cwd": "/b", "jsonl": "/b/t.jsonl", "provider": "claude"})),
             ],
-            automations: c["automations"].as_bool().unwrap(),
+            automations: c["automations"].as_bool().unwrap(), config: None,
             branch: c["branch"].as_str().map(str::to_owned),
             queued: Mutex::default(), pushed: Mutex::default(),
         };
@@ -62,7 +64,7 @@ async fn routes_match_the_python() {
         let (status, resp) = handle(&fake, &name, op, &body).await;
         let label = c["label"].as_str().unwrap();
         assert_eq!(status.as_u16() as u64, c["status"].as_u64().unwrap(), "{label}: {resp}");
-        // O 422 do Rust tem o formato do `unprocessable_body`, não o do pydantic.
+        // Esta captura histórica só conserva o status; os erros integrais têm corpus próprio.
         if status != StatusCode::UNPROCESSABLE_ENTITY { assert_eq!(resp, c["response"], "{label}"); }
         assert_eq!(Value::Array(fake.pushed.lock().unwrap().clone()), c["pushed"], "{label}");
         assert_eq!(json!(*fake.queued.lock().unwrap()), c["queued"], "{label}");
@@ -117,9 +119,63 @@ proptest::proptest! {
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let fake = Fake { store: Store::new(dir.path()), rows: vec![row(json!({"name": "s", "jsonl": "/t", "provider": "claude"}))],
-            automations: true, branch: None, queued: Mutex::default(), pushed: Mutex::default() };
+            automations: true, config: None, branch: None, queued: Mutex::default(), pushed: Mutex::default() };
         for op in [Op::ThenSet, Op::Create, Op::Resolve, Op::Refine] {
             let _ = rt.block_on(handle(&fake, "s", op, &raw));
         }
     }
+}
+
+#[tokio::test]
+async fn guest_loop_invalid_config_refuses_create_and_refine_without_effects() {
+    for op in [Op::Create, Op::Refine] {
+        let home = tempfile::tempdir().unwrap();
+        let fake = Fake {store:Store::new(home.path()),rows:vec![row(json!({"name":"s","provider":"claude"}))],automations:true,
+            config:Some(crate::loops::tests::invalid_config_state(home.path())),branch:None,queued:Mutex::default(),pushed:Mutex::default()};
+        let (status, body) = handle(&fake,"s",op,br#"{"goal":"g"}"#).await;
+        assert_eq!(status,StatusCode::SERVICE_UNAVAILABLE,"D52 {op:?}: {body}");
+        assert_eq!(body["detail"]["code"],"loop_config_invalid");
+        assert!(fake.queued.lock().unwrap().is_empty());
+        assert!(fake.pushed.lock().unwrap().is_empty());
+        assert!(fake.store.get("s").is_none());
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn guest_loop_http_reuses_the_pass_while_rename_waits() {
+    use crate::runtime::gateway::RuntimeRegistry;
+    use std::time::Duration;
+    let home = tempfile::tempdir().unwrap();
+    let st = super::super::tests::invalid_config_state(home.path());
+    let runtime = Arc::new(RuntimeRegistry::new("127.0.0.1:1".parse().unwrap(), "fixture".into(), "fixture".into()));
+    let program = home.path().join("mux");
+    std::fs::write(&program, "#!/bin/sh\nexit 0\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+    runtime.bind_watcher(Arc::new(crate::runtime::codex_terminal::Watcher::new(crate::runtime::codex_terminal::WatchConfig {
+        home: home.path().to_owned(), queue_dir: home.path().join("queue"),
+        mux: crate::list::mux::Mux::with_program(&program, Duration::from_secs(1)), mux_program: program.into_os_string(),
+    }).with_scope_probe(Vec::new)));
+    let gates = runtime.ingress().clone();
+    assert!(st.state.runtime.set(runtime).is_ok());
+    let pass = gates.enter("s", Duration::ZERO).await.unwrap();
+    let live = Live { st, pass: Some(&pass) };
+    let close_gates = gates.clone();
+    let closing = tokio::spawn(async move { close_gates.close("s", Duration::from_secs(3)).await });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if gates.enter("s", Duration::ZERO).await.is_err() { break; }
+            tokio::task::yield_now().await;
+        }
+    }).await.unwrap();
+    assert!(!closing.is_finished());
+    let result = tokio::time::timeout(Duration::from_secs(1), live.append("s", "objetivo")).await;
+    assert!(result.is_ok(), "D59: envio HTTP não pode adquirir novamente o ingresso enquanto o rename espera");
+    assert_eq!(result.unwrap().unwrap_err().0, "runtime_binding");
+    tokio::time::timeout(Duration::from_secs(1), live.drain("s")).await.unwrap();
+    drop(live);
+    drop(pass);
+    closing.await.unwrap().unwrap();
+    gates.open("s");
 }
