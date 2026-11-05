@@ -250,18 +250,20 @@ fn close_target(alvo: &str, own_server: &str) -> Result<(Option<String>, String)
     })
 }
 
+/// O `user-agent` que o diário grava como `cliente`.
+fn mcp_agent(caller: &str) -> String { format!("hangar-mcp (de {caller})") }
+
 /// `close_session` com `servidor::sessao`: fecha lá, pela rota de lá (`peers.json`), como
 /// `hangar-send --close servidor::sessao`. Par externo não está no `peers.json`: sessão de outra pessoa não fecha.
 async fn remote_close(peers: &PeerClient, server: &str, name: &str, caller: &str) -> Outcome {
     // O DELETE responde ok para nome que não existe: nome errado não pode virar "fechada".
     let rows = peers.call(server, reqwest::Method::GET, "/api/sessions", None).await.map_err(|e| e.text(server))?;
     if !rows.as_ref().and_then(Value::as_array).is_some_and(|rows| rows.iter().any(|s| s["name"] == name)) {
-        return Err(format!("sessão '{name}' não existe em '{server}' (tool `sessions`)"));
+        return Err(format!("sessão '{name}' não existe em '{server}' (`hangar-send --list`)"));
     }
-    let agent = format!("hangar-mcp (de {caller})");
-    let resp = peers.call_as(&agent, server, reqwest::Method::DELETE, &format!("/api/sessions/{}", segment(name)), None).await.map_err(|e| {
+    let resp = peers.call_as(&mcp_agent(caller), server, reqwest::Method::DELETE, &format!("/api/sessions/{}", segment(name)), None).await.map_err(|e| {
         // Sem resposta legível o fechamento pode ter acontecido: quem repete ouviria "não existe" sem entender.
-        if e.is_transport() { format!("{} — a sessão pode ter fechado lá: confira com `sessions`", e.text(server)) } else { e.text(server) }
+        if e.is_transport() { format!("{} — a sessão pode ter fechado lá: confira com `hangar-send --list`", e.text(server)) } else { e.text(server) }
     })?;
     let mut out = Map::from_iter([("server".to_owned(), json!(server))]);
     if let Some(Value::Object(fields)) = resp { out.extend(fields); }
@@ -391,7 +393,7 @@ impl Tools {
     /// `caller`: a sessão que chamou a tool. Vai no `user-agent`, que o diário grava como `cliente`:
     /// sem ele, fechar ou mandar pelo MCP fica igual a um clique do dono.
     async fn route_from(&self, caller: Option<&str>, method: Method, path: &str, body: Option<Value>) -> (u16, Value) {
-        let agent = caller.map_or_else(|| "hangar-mcp".to_owned(), |c| format!("hangar-mcp (de {c})"));
+        let agent = caller.map_or_else(|| "hangar-mcp".to_owned(), mcp_agent);
         let mut request = Request::builder().method(method).uri(path).header("user-agent", agent)
             .header("authorization", format!("Bearer {}", self.st.cfg.auth_token));
         if body.is_some() { request = request.header("content-type", "application/json"); }
@@ -543,8 +545,13 @@ impl Tools {
     async fn close_session(&self, headers: &HeaderMap, alvo: &str) -> Outcome {
         let (me, voice) = self.caller(headers).await?;
         if voice { return Err(VOICE_CLOSE_REFUSED.into()); }
-        let (server, alvo) = close_target(alvo, &self.server_id)?;
-        if let Some(server) = server { return remote_close(&self.st.peers, &server, &alvo, &format!("{}::{me}", self.server_id)).await; }
+        // A identidade muda em execução pelo painel: `self.server_id` é a da subida.
+        let own = self.st.current_server_id();
+        let (server, alvo) = close_target(alvo, &own)?;
+        if let Some(server) = server {
+            let caller = if own.is_empty() { me } else { format!("{own}::{me}") };
+            return remote_close(&self.st.peers, &server, &alvo, &caller).await;
+        }
         let alvo = alvo.as_str();
         if alvo == me { return Err(format!("recusado: '{alvo}' é esta sessão — peça pra outra fechar")); }
         // O DELETE responde ok para nome que não existe: nome errado não pode virar "fechada".

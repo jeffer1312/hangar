@@ -58,7 +58,7 @@ class H(http.server.BaseHTTPRequestHandler):
             self.wfile.write('{"peers":["lab::s2"],"path":"","content":"decisão A\\n","owner":"lab","mtime":"111"}'.encode())
             return
         if self.path == "/api/sessions":
-            self.wfile.write(b'[{"name":"viva"}]')
+            self.wfile.write(b'[{"name":"viva"},{"name":"a#b"}]')
             return
         self.wfile.write(b'{"claude":{"disponivel":true,"default":true},"codex":{"disponivel":true,"default":false}}')
     def do_POST(self):
@@ -75,6 +75,9 @@ class H(http.server.BaseHTTPRequestHandler):
     def do_DELETE(self):
         open(destino + ".delete", "w").write(self.path)
         open(destino + ".auth", "w").write(self.headers.get("Authorization", ""))
+        if self.headers.get("Authorization") == "Bearer tok-cai":
+            self.close_connection = True
+            return
         falhou = self.headers.get("Authorization") == "Bearer tok-falha"
         self.send_response(500 if falhou else 200); self.send_header("Content-Type", "application/json"); self.end_headers()
         self.wfile.write(b'{"detail":"falhou"}' if falhou else b'{"ok":true}')
@@ -194,7 +197,7 @@ bash "$REPO/scripts/hangar-send" --help 2>/dev/null | grep -- '--contrato' >/dev
 checa "--help menciona --contrato" '0' "$?"
 
 # 10. --close servidor::sessao: confere a lista de lá e fecha lá, com o token de lá.
-printf '{"la":{"base_url":"http://127.0.0.1:%s","token":"tok-la"},"falha":{"base_url":"http://127.0.0.1:%s","token":"tok-falha"}}' "$PORTA" "$PORTA" > "$TMP/backend/peers.json"
+printf '{"la":{"base_url":"http://127.0.0.1:%s","token":"tok-la"},"falha":{"base_url":"http://127.0.0.1:%s","token":"tok-falha"},"cai":{"base_url":"http://127.0.0.1:%s","token":"tok-cai"}}' "$PORTA" "$PORTA" "$PORTA" > "$TMP/backend/peers.json"
 printf 'CP_AUTH_TOKEN=teste\nCP_PORT=1\nCP_SERVER_ID=aqui\n' > "$TMP/backend/.env"
 saida=$(bash "$TMP/scripts/hangar-send" --close la::viva 2>&1)
 checa "--close remoto: código" '0' "$?"
@@ -208,9 +211,15 @@ checa "--close remoto sem a sessão: código" '1' "$?"
 checa "--close remoto sem a sessão: nomeia o alvo" '0' "$?"
 checa "--close remoto sem a sessão: nada fechado" 'ausente' "$([[ -e "$TMP/corpo.json.delete" ]] && echo fechado || echo ausente)"
 saida=$(bash "$TMP/scripts/hangar-send" --close falha::viva 2>&1)
-checa "--close remoto com falha no DELETE: código" '1' "$?"
+checa "--close remoto recusado lá: código" '1' "$?"
+[[ "$saida" != *"pode ter fechado"* && "$saida" != *"fechada:"* ]]
+checa "--close remoto recusado lá: nem fechada nem incerto" '0' "$?"
+saida=$(bash "$TMP/scripts/hangar-send" --close cai::viva 2>&1)
+checa "--close remoto sem resposta: código" '1' "$?"
 [[ "$saida" == *"pode ter fechado mesmo assim"* && "$saida" != *"fechada:"* ]]
-checa "--close remoto com falha no DELETE: avisa, sem dizer fechada" '0' "$?"
+checa "--close remoto sem resposta: avisa, sem dizer fechada" '0' "$?"
+bash "$TMP/scripts/hangar-send" --close 'la::a#b' >/dev/null 2>&1
+checa "--close com # no nome: rota inteira" '/api/sessions/a%23b' "$(cat "$TMP/corpo.json.delete" 2>/dev/null)"
 rm -f "$TMP/corpo.json.delete"
 bash "$TMP/scripts/hangar-send" --close vps::viva >/dev/null 2>&1
 checa "--close servidor desconhecido: código" '1' "$?"

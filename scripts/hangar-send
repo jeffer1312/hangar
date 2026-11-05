@@ -185,7 +185,8 @@ api() {
         # fazia o cartão do app dizer "o backend do hangar não respondeu" com a lista inteira na tela.
         if [[ -n "${API_PEER:-}" ]]; then echo "⚠ servidor '$API_PEER' fora do ar ($BASE)" >&2
         else echo "erro: backend inacessível em $BASE (hangar rodando?)" >&2; fi
-        return 1; }
+        # 2 = sem resposta: o pedido pode ter chegado. Recusa do servidor é 1.
+        return 2; }
     code=${out##*$'\n'}
     out=${out%$'\n'*}
     if [[ $code == 2* ]]; then printf '%s' "$out"; return 0; fi
@@ -791,11 +792,11 @@ fi
 
 if [[ "$1" == "--close" ]]; then
     alvo="${2:?uso: hangar-send --close <sessao|servidor::sessao>}"
-    rotulo="$alvo"; remoto=""
+    label="$alvo"; remoto=""
     if [[ "$alvo" == *::* ]]; then
         remoto="${alvo%%::*}"; alvo="${alvo#*::}"
         if [[ -z "$remoto" || -z "$alvo" || "$alvo" == *::* ]]; then
-            echo "erro: nome inválido '$rotulo': use servidor::sessao (um '::' só)" >&2; exit 2
+            echo "erro: nome inválido '$label': use servidor::sessao (um '::' só)" >&2; exit 2
         fi
         # O id desta máquina fica aqui, senão <id>::eu escapava da recusa de fechar a si mesma.
         [[ "$remoto" == "$SERVER_ID" ]] && remoto=""
@@ -816,13 +817,16 @@ if [[ "$1" == "--close" ]]; then
     # O DELETE responde ok pra nome que não existe: nome errado não pode virar "fechada".
     vivas=$(api GET /api/sessions) || exit 1
     printf '%s' "$vivas" | "$PY" -c 'import json,sys; sys.exit(0 if any(s.get("name") == sys.argv[1] for s in json.load(sys.stdin)) else 1)' "$alvo" \
-        || { echo "erro: sessão '$rotulo' não existe (hangar-send --list)" >&2; exit 1; }
-    resp=$(api DELETE "/api/sessions/$alvo") || {
+        || { echo "erro: sessão '$label' não existe (hangar-send --list)" >&2; exit 1; }
+    # Cru, um `#` no nome cortaria a URL e o DELETE iria para outra sessão.
+    segment=$("$PY" -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$alvo")
+    resp=$(api DELETE "/api/sessions/$segment") || {
+        code=$?
         # Sem resposta, o fechamento pode ter acontecido lá: repetir só diria "não existe".
-        [[ -n "$remoto" ]] && echo "aviso: '$rotulo' pode ter fechado mesmo assim — confira com hangar-send --list" >&2
+        [[ -n "$remoto" && "$code" == 2 ]] && echo "aviso: '$label' pode ter fechado mesmo assim — confira com hangar-send --list" >&2
         exit 1
     }
-    echo "fechada: $rotulo"
+    echo "fechada: $label"
     # Fechou, mas desfazer o par remoto dela pode ter falhado: isso não some calado.
     printf '%s' "$resp" | "$PY" -c 'import json,sys; w=(json.load(sys.stdin) or {}).get("warning"); w and print("aviso: " + (w.get("msg") or json.dumps(w, ensure_ascii=False)), file=sys.stderr)' || true
     exit 0
