@@ -143,6 +143,15 @@ pub(crate) fn message_tail(req: &HistoryRequest, n: usize) -> io::Result<Vec<Cha
 }
 
 fn merged_history_impl(req: &HistoryRequest, max_window: u64, truncate: bool, notices: bool) -> io::Result<Vec<ChatEvent>> {
+    Ok(merged_dated(req, max_window, truncate, notices)?.into_iter().map(|(_, ev)| ev).collect())
+}
+
+/// Os eventos com a hora da linha ao lado: pedido digitado e rollout do Codex só têm essa hora.
+pub(crate) fn dated_history_capped(req: &HistoryRequest, max_window: u64) -> io::Result<Vec<(f64, ChatEvent)>> {
+    merged_dated(req, max_window, true, false)
+}
+
+fn merged_dated(req: &HistoryRequest, max_window: u64, truncate: bool, notices: bool) -> io::Result<Vec<(f64, ChatEvent)>> {
     let mut parsed = match req.limit {
         Some(limit) => {
             let mut window = req.tail_window.max(1).min(max_window);
@@ -172,7 +181,7 @@ fn merged_history_impl(req: &HistoryRequest, max_window: u64, truncate: bool, no
     let mut items = parsed.items;
     // Estável como o sort do Python: empate em (ts, i) mantém a ordem de chegada.
     items.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal).then(a.1.cmp(&b.1)));
-    let mut evs: Vec<ChatEvent> = items.into_iter().map(|(_, _, ev)| ev).collect();
+    let mut evs: Vec<(f64, ChatEvent)> = items.into_iter().map(|(ts, _, ev)| (ts, ev)).collect();
     if let Some(limit) = req.limit.filter(|_| truncate) {
         if evs.len() > limit {
             evs.drain(..evs.len() - limit);

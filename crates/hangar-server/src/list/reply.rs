@@ -13,7 +13,7 @@ use regex::Regex;
 
 use super::capped::Capped;
 use crate::transcript::py::{is_space, py_re};
-use crate::transcript::history::merged_history_capped;
+use crate::transcript::history::dated_history_capped;
 use crate::transcript::{HistoryRequest, Provider, TAIL_WINDOW};
 
 const HISTORY_LIMIT: usize = 8;
@@ -34,18 +34,26 @@ pub fn plain_text(text: &str) -> String {
     text.split(is_space).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ")
 }
 
-fn last_event_at(events: &[ChatEvent]) -> Option<f64> {
-    events.iter().rev()
-        .filter(|ev| matches!(ev.kind, ChatKind::UserMsg | ChatKind::AssistantMsg | ChatKind::ToolUse | ChatKind::ToolResult | ChatKind::Thinking))
-        .find_map(|ev| ev.ts.filter(|&ts| ts != 0.0))
+fn tail_events(provider: Provider, jsonl: &Path, queue: Option<PathBuf>) -> io::Result<Vec<(f64, ChatEvent)>> {
+    let req = HistoryRequest { provider, jsonl: jsonl.to_owned(), queue, limit: Some(HISTORY_LIMIT), tail_window: TAIL_WINDOW };
+    dated_history_capped(&req, MAX_TAIL)
 }
 
-/// Há quanto a conversa do Claude parou. O mtime só vale sem evento datado na cauda: ele anda sem conversa
-/// nenhuma. O rollout do Codex não data evento, por isso ele fica fora daqui.
-pub fn conversation_idle(transcript: &Path) -> Option<Duration> {
-    let req = HistoryRequest { provider: Provider::Claude, jsonl: transcript.to_owned(), queue: None, limit: Some(HISTORY_LIMIT), tail_window: TAIL_WINDOW };
-    let event = merged_history_capped(&req, MAX_TAIL).ok().and_then(|events| last_event_at(&events))
-        .and_then(|ts| SystemTime::UNIX_EPOCH.checked_add(Duration::try_from_secs_f64(ts).ok()?));
+fn last_event_at(events: &[(f64, ChatEvent)]) -> Option<f64> {
+    events.iter().rev().find(|(ts, ev)| *ts != 0.0 && ev.kind != ChatKind::Notice).map(|(ts, _)| *ts)
+}
+
+/// Há quanto a conversa parou. O mtime só vale sem evento datado na cauda: ele anda sem conversa nenhuma.
+/// Falha de leitura é `None`: quem pergunta desiste de adormecer.
+pub fn conversation_idle(provider: Provider, transcript: &Path) -> Option<Duration> {
+    let events = match tail_events(provider, transcript, None) {
+        Ok(events) => events,
+        Err(error) => {
+            tracing::warn!(kind = ?error.kind(), "adormecer: conversa ilegível, sessão fica acordada");
+            return None;
+        }
+    };
+    let event = last_event_at(&events).and_then(|ts| SystemTime::UNIX_EPOCH.checked_add(Duration::try_from_secs_f64(ts).ok()?));
     event.or_else(|| std::fs::metadata(transcript).and_then(|m| m.modified()).ok())?.elapsed().ok()
 }
 
@@ -86,14 +94,7 @@ impl ReplyCache {
                 c.jsonl == jsonl && c.mtime == row.last_activity && c.provider == row.provider
             });
             if !hit {
-                let req = HistoryRequest {
-                    provider,
-                    jsonl: PathBuf::from(&jsonl),
-                    queue: queue_of(&row.name),
-                    limit: Some(HISTORY_LIMIT),
-                    tail_window: TAIL_WINDOW,
-                };
-                let events = match merged_history_capped(&req, MAX_TAIL) {
+                let events = match tail_events(provider, Path::new(&jsonl), queue_of(&row.name)) {
                     Ok(events) => events,
                     Err(error) => {
                         failures.push((row.name.clone(), error));
@@ -104,6 +105,7 @@ impl ReplyCache {
                 let event = events
                     .into_iter()
                     .rev()
+                    .map(|(_, ev)| ev)
                     .find(|ev| ev.kind == ChatKind::AssistantMsg && ev.text.as_deref().is_some_and(|t| !t.is_empty()));
                 let (text, at) = match event {
                     Some(ev) => (
