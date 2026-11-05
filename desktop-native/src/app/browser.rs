@@ -1834,7 +1834,7 @@ impl BrowserPanel {
                 #[cfg(target_os = "linux")]
                 this.probe_cursor(event.position, _cx);
             }))
-            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, _| {
+            .on_scroll(cx.listener(|this, event: &ScrollEvent, _, _| {
                 // A caixa medida ficou para trás; a próxima medida vem com o mouse.
                 #[cfg(target_os = "linux")]
                 { this.pick.hover = None; }
@@ -1945,9 +1945,9 @@ impl Render for BrowserPanel {
                 match k.key.as_str() {
                     #[cfg(not(target_os = "macos"))]
                     "escape" if this.pick.on && !m.modified() => this.stop_pick(cx),
-                    "l" if m.secondary() && !m.alt && !m.shift => this.focus_address(window, cx),
+                    "l" if m.secondary(cx) && !m.alt && !m.shift => this.focus_address(window, cx),
                     "f5" if !m.modified() => this.retry(window, cx),
-                    "r" if m.secondary() && !m.alt && !m.shift => this.retry(window, cx),
+                    "r" if m.secondary(cx) && !m.alt && !m.shift => this.retry(window, cx),
                     "left" if page && only(true) => { if let Some(engine) = this.engine() { engine.back() } }
                     "right" if page && only(true) => { if let Some(engine) = this.engine() { engine.forward() } }
                     _ => return,

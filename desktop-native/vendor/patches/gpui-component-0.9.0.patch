@@ -1,0 +1,828 @@
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.9.0/MODIFICADO.md gpui-component-0.9.0/MODIFICADO.md
+--- gpui-component-0.9.0/MODIFICADO.md
++++ gpui-component-0.9.0/MODIFICADO.md
+@@ -0,0 +1,43 @@
++# Cópia modificada do gpui-component 0.9.0
++
++Origem: crate `gpui-component` 0.9.0 do crates.io (repositório `longbridge/gpui-kit`), checksum `45bbfdba0efa392190f2fd446ec311325302eb047d5ce45dc1bcf189cb18f5eb`, licença Apache-2.0 (`LICENSE-APACHE`). Entra pelo `[patch.crates-io]` de `desktop-native/Cargo.toml`.
++
++- `src/menu/popup_menu.rs`: `PopupMenuAppearance` oferece refinamentos da superfície, lista, linhas e separadores, altura de linha e renderizadores de título e tecla. Só se aplica por `PopupMenu::appearance`; sem opt-in, permanece o desenho original. Foco, teclado, seleção, submenu, dispensa e acessibilidade permanecem no kit.
++- `PopupMenu::replace_item`: substitui uma linha sem reconstruir irmãos ou zerar a seleção; índice inexistente retorna `false`. Permite atualizar silenciamento sem fechar o submenu de branches.
++- `src/menu/mod.rs`: exporta `PopupMenuAppearance`.
++- A verificação de teclado e atualização com submenu aberto é feita na prova real do app. Os testes originais do crate foram preservados; o crate copiado não faz parte do workspace de testes do app.
++- Na 0.7.0 o `popup_menu.rs` do kit não mudou; as correções de vazamento (#3224, #3267, #3279) ficaram em
++  `context_menu.rs`, `dropdown_menu.rs` e no `Popover` do gpui-base. Os acréscimos acima não guardam entidade nem
++  inscrição: os renderizadores ficam dentro do próprio `PopupMenu`.
++
++- `src/text/style.rs` e `src/text/compat.rs`: `inline_code_font_family` opcional no estilo,
++  repassada ao gpui-base (`resolve_component_style`, junto do `with_heading` que a 0.7.0 passou a usar) e incluída
++  no `PartialEq`. Sem escolha local, preserva o tema.
++  Motivo: as prévias de Nova sessão mantêm a fonte antiga ao mudar a fonte global de código.
++
++- `src/dialog/dialog.rs`: `background_painter` opcional pinta o fundo após o layout e antes
++  do conteúdo, cobrindo todo o cartão. Na 0.7.0 o cartão fica dentro do `Positioner::corner` do gpui-base e o
++  pintor continua como primeiro filho do cartão. Sem opt-in, o fundo original permanece. Motivo:
++  permitir vidro desfocado no diálogo do app sem alterar o comportamento do kit.
++
++- `src/popover.rs` e `src/menu/popup_menu.rs`: global opcional `PopupSurface` com um pintor do app. Com ele,
++  `dropdown_popup` (Select, Combobox, DatePicker) e o `PopupMenu` tiram o próprio fundo e a sombra, e o pintor roda
++  sob o conteúdo, na camada da superfície. Sem o global, o desenho original permanece. Motivo: vidro desfocado e a
++  superfície dos popovers do app nos menus e listas do kit, sem mexer em cada tela que os usa.
++
++- `src/popover.rs` (`dropdown_popup`), `src/menu/context_menu.rs` e `src/dialog/dialog.rs`: entradas com os tempos do
++  catálogo de movimento do Zeron que o app usa (`desktop-native/src/motion.rs`): listas suspensas e menus de contexto no
++  `menu-in` (140 ms `ease`, 2 px acima e opacidade de 30%), diálogos no `dialog-in` (180 ms `ease`, subindo 2 px enquanto
++  aparecem, no lugar da descida desde o topo). Motivo: um só movimento em todos os popovers e diálogos do app.
++  Na 0.7.0: o menu de contexto passou a ser montado no `DeferredMenu::build_menu` (só quando é desenhado) e a entrada
++  foi para lá; no diálogo, a subida de 2 px vai na animação `slide-down` do `Positioner`, que substituiu o `top` do
++  cartão.
++
++Ao atualizar gpui-kit, reaplicar na nova versão com `vendor/rebase.sh` (ver `vendor/PATCHES.md`) ou remover esta cópia
++quando a API equivalente existir no kit.
++
++Os testes que montam `KeyDownEvent` passam `physical_digit: None`, o campo novo da cópia de gpui-pre.
++
++Acessibilidade do `Button`: sem rótulo nem `accessibility_label`, o nome acessível é o texto da dica (botão só de
++ícone); `Button::aria_selected` marca a escolha (abas, modo) sem o visual de `selected`. Botão com `selected` anuncia selecionado. O
++invólucro do diálogo (`dialog/dialog.rs`) tem o papel de diálogo.
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.9.0/src/attachment.rs gpui-component-0.9.0/src/attachment.rs
+--- gpui-component-0.9.0/src/attachment.rs
++++ gpui-component-0.9.0/src/attachment.rs
+@@ -1817,6 +1817,7 @@
+                 keystroke: keystroke.clone(),
+                 is_held: false,
+                 prefer_character_input: false,
++                physical_digit: None,
+             });
+             cx.simulate_event(KeyUpEvent { keystroke });
+             assert_eq!(retries.get(), 2);
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.9.0/src/button/button_group.rs gpui-component-0.9.0/src/button/button_group.rs
+--- gpui-component-0.9.0/src/button/button_group.rs
++++ gpui-component-0.9.0/src/button/button_group.rs
+@@ -335,6 +335,7 @@
+             keystroke: keystroke.clone(),
+             is_held: false,
+             prefer_character_input: false,
++            physical_digit: None,
+         });
+         cx.simulate_event(KeyUpEvent { keystroke });
+     }
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.9.0/src/button/button.rs gpui-component-0.9.0/src/button/button.rs
+--- gpui-component-0.9.0/src/button/button.rs
++++ gpui-component-0.9.0/src/button/button.rs
+@@ -617,6 +617,14 @@
+     }
+ }
+ 
++impl Button {
++    /// Accessibility-only selected state (tabs, list rows); unlike [`Selectable::selected`] it leaves the look alone.
++    pub fn aria_selected(mut self, selected: bool) -> Self {
++        self.base = self.base.aria_selected(selected);
++        self
++    }
++}
++
+ impl RenderOnce for Button {
+     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+         let style: ButtonVariant = self.variant;
+@@ -624,6 +632,8 @@
+         let hoverable = self.hoverable();
+         let disabled = self.disabled;
+         let selected = self.shows_selected_style();
++        // Escolhido de verdade (não o gatilho com menu aberto): o leitor precisa saber qual opção está marcada.
++        let chosen = self.selected;
+         let loading = self.loading;
+         let tooltip_placement = self.tooltip_placement;
+         let tooltip_show_delay = self.tooltip_show_delay;
+@@ -768,7 +778,9 @@
+         let accessibility_label = self
+             .accessibility_label
+             .clone()
+-            .or_else(|| self.label.clone());
++            .or_else(|| self.label.clone())
++            // Botão só de ícone: a dica é o único nome que ele tem.
++            .or_else(|| self.tooltip.as_ref().filter(|_| children.is_empty()).map(|(text, _)| text.clone()));
+         // Like an HTML `title`, the tooltip describes the button.
+         let description = self.tooltip.as_ref().map(|(tooltip, _)| tooltip.clone());
+         let content = h_flex()
+@@ -815,6 +827,7 @@
+             }
+         }))
+         .selected(selected)
++        .when(chosen, |this| this.aria_selected(true))
+         .disabled(disabled)
+         // Base layers semantic states over the builder chain, so the caller's
+         // own style is replayed inside each state to keep it the closest layer.
+@@ -1526,6 +1539,7 @@
+                 keystroke: keystroke.clone(),
+                 is_held: false,
+                 prefer_character_input: false,
++                physical_digit: None,
+             });
+             cx.simulate_event(KeyUpEvent { keystroke });
+         }
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.9.0/src/button/toggle.rs gpui-component-0.9.0/src/button/toggle.rs
+--- gpui-component-0.9.0/src/button/toggle.rs
++++ gpui-component-0.9.0/src/button/toggle.rs
+@@ -473,6 +473,7 @@
+             keystroke: keystroke.clone(),
+             is_held: false,
+             prefer_character_input: false,
++            physical_digit: None,
+         });
+         cx.simulate_event(KeyUpEvent { keystroke });
+     }
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.9.0/src/carousel/carousel.rs gpui-component-0.9.0/src/carousel/carousel.rs
+--- gpui-component-0.9.0/src/carousel/carousel.rs
++++ gpui-component-0.9.0/src/carousel/carousel.rs
+@@ -1282,6 +1282,7 @@
+             keystroke: keystroke.clone(),
+             is_held: false,
+             prefer_character_input: false,
++            physical_digit: None,
+         });
+         cx.simulate_event(gpui::KeyUpEvent { keystroke });
+         assert_eq!(selected(cx), Some(2));
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.9.0/src/checkbox.rs gpui-component-0.9.0/src/checkbox.rs
+--- gpui-component-0.9.0/src/checkbox.rs
++++ gpui-component-0.9.0/src/checkbox.rs
+@@ -447,6 +447,7 @@
+             keystroke: keystroke.clone(),
+             is_held: false,
+             prefer_character_input: false,
++            physical_digit: None,
+         });
+         cx.simulate_event(KeyUpEvent { keystroke });
+     }
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.9.0/src/dialog/dialog.rs gpui-component-0.9.0/src/dialog/dialog.rs
+--- gpui-component-0.9.0/src/dialog/dialog.rs
++++ gpui-component-0.9.0/src/dialog/dialog.rs
+@@ -4,10 +4,10 @@
+ use std::{rc::Rc, sync::LazyLock, time::Duration};
+ 
+ use gpui::{
+-    Action, Anchor, AnyElement, App, BoxShadow, ClickEvent, Edges, FocusHandle, Hsla,
++    Action, Anchor, AnyElement, App, Bounds, BoxShadow, ClickEvent, Edges, FocusHandle, Hsla,
+     InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce, SharedString,
+-    StyleRefinement, Styled, Window, WindowControlArea, anchored, div, hsla, point,
+-    prelude::FluentBuilder, px,
++    StatefulInteractiveElement as _, StyleRefinement, Styled, Window, WindowControlArea, anchored,
++    canvas, div, hsla, point, prelude::FluentBuilder, px,
+ };
+ use gpui_base::{ElementExt as _, TextSelectionScopeId, motion::Transition};
+ use rust_i18n::t;
+@@ -21,7 +21,8 @@
+     v_flex,
+ };
+ 
+-pub static ANIMATION_DURATION: LazyLock<Duration> = LazyLock::new(|| Duration::from_secs_f64(0.25));
++// Modified for Hangar: Zeron's `dialog-in`, 180 ms `ease`, fading in while settling 2px up.
++pub static ANIMATION_DURATION: LazyLock<Duration> = LazyLock::new(|| Duration::from_millis(180));
+ pub use gpui_base::actions::{Cancel, Confirm};
+ 
+ type OkHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool + 'static>;
+@@ -199,6 +200,7 @@
+ }
+ 
+ type ContentBuilderFn = Rc<dyn Fn(DialogContent, &mut Window, &mut App) -> DialogContent + 'static>;
++type BackgroundPainterFn = Rc<dyn Fn(Bounds<Pixels>, &mut Window, &mut App) + 'static>;
+ 
+ #[derive(Clone)]
+ pub(crate) struct DialogProps {
+@@ -320,6 +322,7 @@
+     pub(crate) header: Option<AnyElement>,
+     pub(crate) footer: Option<AnyElement>,
+     pub(crate) content_builder: Option<ContentBuilderFn>,
++    background_painter: Option<BackgroundPainterFn>,
+     pub(crate) props: DialogProps,
+ 
+     pub(super) button_props: DialogButtonProps,
+@@ -371,6 +374,7 @@
+             header: None,
+             footer: None,
+             content_builder: None,
++            background_painter: None,
+             props: DialogProps::default(),
+             children: Vec::new(),
+             layer_ix: 0,
+@@ -398,6 +402,15 @@
+         self
+     }
+ 
++    /// Pinta o fundo do diálogo após o layout e antes do conteúdo.
++    pub fn background_painter(
++        mut self,
++        painter: impl Fn(Bounds<Pixels>, &mut Window, &mut App) + 'static,
++    ) -> Self {
++        self.background_painter = Some(Rc::new(painter));
++        self
++    }
++
+     /// Sets the title of the dialog.
+     pub fn title(mut self, title: impl IntoElement) -> Self {
+         self.title = Some(title.into_any_element());
+@@ -572,7 +585,8 @@
+         // Use the same curve in both directions: changing the curve at the
+         // reversal would resample the entrance at a different position.
+         if self.props.entrance == DialogEntrance::SlideDown {
+-            transition.ease(cubic_bezier(1. / 3., 0.72, 2. / 3., 1.))
++            // Modified for Hangar: Zeron's `dialog-in` uses CSS `ease`.
++            transition.ease(cubic_bezier(0.25, 0.1, 0.25, 1.))
+         } else {
+             let easing = cx.theme().motion_tokens().easing_enter.clone();
+             transition.ease(move |delta| easing.sample(delta).clamp(0., 1.))
+@@ -613,6 +627,7 @@
+         let style = self.style.clone();
+         let props = self.props.clone();
+         let button_props = self.button_props.clone();
++        let background_painter = self.background_painter.clone();
+ 
+         gpui_base::DialogTrigger::new(trigger)
+             .on_open(move |window, cx| {
+@@ -620,8 +635,9 @@
+                 let style = style.clone();
+                 let props = props.clone();
+                 let button_props = button_props.clone();
++                let background_painter = background_painter.clone();
+                 window.open_dialog(cx, move |dialog, _, _| {
+-                    dialog
++                    let mut dialog = dialog
+                         .refine_style(&style)
+                         .button_props(button_props.clone())
+                         .with_props(props.clone())
+@@ -634,7 +650,9 @@
+                                     content
+                                 }
+                             }
+-                        })
++                        });
++                    dialog.background_painter = background_painter.clone();
++                    dialog
+                 });
+             })
+             .into_any_element()
+@@ -719,6 +737,7 @@
+             .child(
+                 div()
+                     .id("dialog")
++                    .role(gpui::Role::Dialog)
+                     .test_support()
+                     // A closing dialog is leaving: it must not swallow input
+                     // aimed at what is already usable again beneath it.
+@@ -790,6 +809,19 @@
+                                         .w(width)
+                                         .when_some(self.props.max_width, |this, w| this.max_w(w))
+                                         .max_h(max_height)
++                                        // Modified for Hangar: optional painter under the content.
++                                        .when_some(self.background_painter, |this, painter| {
++                                            this.child(
++                                                canvas(
++                                                    |_, _, _| (),
++                                                    move |bounds, _, window, cx| {
++                                                        painter(bounds, window, cx)
++                                                    },
++                                                )
++                                                .absolute()
++                                                .inset_0(),
++                                            )
++                                        })
+                                         .child(
+                                             v_flex()
+                                                 .flex_1()
+@@ -912,7 +944,8 @@
+                                     |positioner| {
+                                         positioner.position(point(
+                                             window_paddings.left + x,
+-                                            window_paddings.top + y * visibility,
++                                            // Modified for Hangar: Zeron's `dialog-in` rises 2px.
++                                            window_paddings.top + y + px(2.) * (1. - visibility),
+                                         ))
+                                     },
+                                 ),
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.9.0/src/menu/context_menu.rs gpui-component-0.9.0/src/menu/context_menu.rs
+--- gpui-component-0.9.0/src/menu/context_menu.rs
++++ gpui-component-0.9.0/src/menu/context_menu.rs
+@@ -4,7 +4,7 @@
+ };
+ 
+ use gpui::{
+-    Anchor, AnyElement, App, Bounds, Context, DismissEvent, Element, ElementId, Entity,
++    Anchor, Animation, AnimationExt as _, AnyElement, App, Bounds, Context, DismissEvent, Element, ElementId, Entity,
+     FocusHandle, Focusable, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId,
+     InteractiveElement, IntoElement, LayoutId, LongPressEvent, MouseButton, MouseDownEvent,
+     ParentElement, Pixels, Point, Position, Style, StyleRefinement, Styled, Subscription,
+@@ -191,7 +191,13 @@
+                             .position(self.position)
+                             .snap_to_window_with_margin(px(8.))
+                             .anchor(self.anchor)
+-                            .child(self.menu_view.clone()),
++                            // Modified for Hangar: Zeron's `menu-in`, as the dropdowns.
++                            .child(div().child(self.menu_view.clone()).with_animation(
++                                "context-menu-in",
++                                Animation::new(std::time::Duration::from_millis(140))
++                                    .with_easing(crate::animation::cubic_bezier(0.25, 0.1, 0.25, 1.)),
++                                |el, t| el.relative().top(px(-2. * (1. - t))).opacity(0.3 + 0.7 * t),
++                            )),
+                     ),
+             ),
+         )
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.9.0/src/menu/mod.rs gpui-component-0.9.0/src/menu/mod.rs
+--- gpui-component-0.9.0/src/menu/mod.rs
++++ gpui-component-0.9.0/src/menu/mod.rs
+@@ -10,7 +10,7 @@
+ pub use context_menu::{ContextMenu, ContextMenuExt, ContextMenuState};
+ pub use dropdown_menu::DropdownMenu;
+ pub(crate) use menu_item::MenuItemElement;
+-pub use popup_menu::{PopupMenu, PopupMenuItem};
++pub use popup_menu::{PopupMenu, PopupMenuAppearance, PopupMenuItem};
+ 
+ pub(crate) fn init(cx: &mut App) {
+     app_menu_bar::init(cx);
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.9.0/src/menu/popup_menu.rs gpui-component-0.9.0/src/menu/popup_menu.rs
+--- gpui-component-0.9.0/src/menu/popup_menu.rs
++++ gpui-component-0.9.0/src/menu/popup_menu.rs
+@@ -1,4 +1,4 @@
+-use crate::ThemeStyled as _;
++use crate::{StyledExt as _, ThemeStyled as _};
+ use crate::actions::{Cancel, Confirm, SelectDown, SelectUp};
+ use crate::actions::{SelectLeft, SelectRight};
+ use crate::menu::menu_item::MenuItemElement;
+@@ -9,7 +9,7 @@
+     Action, Anchor, AnyElement, App, AppContext, Bounds, Context, DismissEvent, Edges, Entity,
+     EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding,
+     ParentElement, Pixels, Render, Role, ScrollHandle, SharedString, StatefulInteractiveElement,
+-    Styled, WeakEntity, Window, anchored, deferred, div, prelude::FluentBuilder, px, rems,
++    StyleRefinement, Styled, WeakEntity, Window, anchored, deferred, div, prelude::FluentBuilder, px, rems,
+ };
+ use gpui::{ClickEvent, Half, MouseDownEvent, OwnedMenuItem, Point, Subscription};
+ use gpui_base::TestSupportExt as _;
+@@ -280,7 +280,44 @@
+     }
+ }
+ 
++// Modified for Hangar: presentation is opt-in; interaction remains owned by the menu.
++/// Optional presentation for a popup menu's explicit parts.
++#[derive(Default)]
++pub struct PopupMenuAppearance {
++    surface: StyleRefinement,
++    list: StyleRefinement,
++    item: StyleRefinement,
++    separator: StyleRefinement,
++    item_height: Option<Pixels>,
++    label: Option<Box<dyn Fn(SharedString, &mut Window, &mut App) -> AnyElement>>,
++    key: Option<Box<dyn Fn(Kbd, &mut Window, &mut App) -> AnyElement>>,
++}
++
++impl PopupMenuAppearance {
++    /// Refine the outer surface, after the theme defaults.
++    pub fn surface_style(mut self, style: StyleRefinement) -> Self { self.surface = style; self }
++    /// Refine the items container, including its padding and gap.
++    pub fn list_style(mut self, style: StyleRefinement) -> Self { self.list = style; self }
++    /// Refine actionable rows, preserving their state styling.
++    pub fn item_style(mut self, style: StyleRefinement) -> Self { self.item = style; self }
++    /// Refine separators, after the theme defaults.
++    pub fn separator_style(mut self, style: StyleRefinement) -> Self { self.separator = style; self }
++    /// Set the standard row height and custom/submenu minimum height.
++    pub fn item_height(mut self, height: Pixels) -> Self { self.item_height = Some(height); self }
++    /// Render section labels with the renderer owning all internal padding.
++    pub fn label_renderer<E: IntoElement>(mut self, render: impl Fn(SharedString, &mut Window, &mut App) -> E + 'static) -> Self {
++        self.label = Some(Box::new(move |label, window, cx| render(label, window, cx).into_any_element()));
++        self
++    }
++    /// Render the shortcut resolved through the menu's existing action context.
++    pub fn key_renderer<E: IntoElement>(mut self, render: impl Fn(Kbd, &mut Window, &mut App) -> E + 'static) -> Self {
++        self.key = Some(Box::new(move |key, window, cx| render(key, window, cx).into_any_element()));
++        self
++    }
++}
++
+ pub struct PopupMenu {
++    appearance: Option<PopupMenuAppearance>,
+     pub(crate) focus_handle: FocusHandle,
+     pub(crate) menu_items: Vec<PopupMenuItem>,
+     /// The focus handle of Entity to handle actions.
+@@ -337,6 +374,7 @@
+ impl PopupMenu {
+     pub(crate) fn new(cx: &mut App) -> Self {
+         Self {
++            appearance: None,
+             focus_handle: cx.focus_handle(),
+             action_context: None,
+             previous_focus_handle: None,
+@@ -368,6 +406,21 @@
+         cx.new(|cx| f(Self::new(cx), window, cx))
+     }
+ 
++    /// Opt into presentation overrides without replacing menu interaction.
++    pub fn appearance(mut self, appearance: PopupMenuAppearance) -> Self {
++        self.appearance = Some(appearance);
++        self
++    }
++
++    /// Replace one item without resetting selection or rebuilding sibling submenus.
++    /// Returns false when the index is out of bounds.
++    pub fn replace_item(&mut self, index: usize, item: PopupMenuItem, cx: &mut Context<Self>) -> bool {
++        let Some(current) = self.menu_items.get_mut(index) else { return false; };
++        *current = item;
++        cx.notify();
++        true
++    }
++
+     /// Set the focus handle of Entity to handle actions.
+     ///
+     /// When the menu is dismissed or before an action is triggered, the focus will be returned to this handle.
+@@ -1171,7 +1224,7 @@
+         action: Option<Box<dyn Action>>,
+         window: &mut Window,
+         cx: &mut Context<Self>,
+-    ) -> Option<Kbd> {
++    ) -> Option<AnyElement> {
+         let action = action?;
+ 
+         // Each handle names a dispatch path GPUI can resolve in the previously
+@@ -1194,10 +1247,14 @@
+         .find_map(|handle| Kbd::binding_for_action_in(action.as_ref(), handle, window))
+         .or_else(|| Kbd::global_binding_for_action(action.as_ref(), window))
+         .map(|this| {
++            if let Some(render) = self.appearance.as_ref().and_then(|appearance| appearance.key.as_ref()) {
++                return render(this, window, cx);
++            }
+             this.p_0()
+                 .flex_nowrap()
+                 .border_0()
+                 .bg(gpui::transparent_white())
++                .into_any_element()
+         })
+     }
+ 
+@@ -1282,6 +1339,7 @@
+             Size::Small => (px(20.), options.radius.half()),
+             _ => (px(26.), options.radius),
+         };
++        let item_height = self.appearance.as_ref().and_then(|appearance| appearance.item_height).unwrap_or(item_height);
+ 
+         let this = MenuItemElement::new(ix)
+             .relative()
+@@ -1320,7 +1378,7 @@
+                 (item.is_checked() || self.checkable.contains(&ix)).then(|| item.is_checked()),
+             );
+ 
+-        match item {
++        let this = match item {
+             PopupMenuItem::Separator => this
+                 .h_auto()
+                 .p_0()
+@@ -1329,14 +1387,21 @@
+                 .border_b(px(2.))
+                 .border_color(cx.theme().border)
+                 .disabled(true),
+-            PopupMenuItem::Label(label) => this.disabled(true).cursor_default().child(
+-                h_flex()
+-                    .cursor_default()
+-                    .items_center()
+-                    .gap_x_1()
+-                    .children(Self::render_icon(has_left_icon, false, None, window, cx))
+-                    .child(div().flex_1().child(label.clone())),
+-            ),
++            PopupMenuItem::Label(label) => {
++                let this = this.disabled(true).cursor_default();
++                if let Some(render) = self.appearance.as_ref().and_then(|appearance| appearance.label.as_ref()) {
++                    this.p_0().child(render(label.clone(), window, cx))
++                } else {
++                    this.child(
++                        h_flex()
++                            .cursor_default()
++                            .items_center()
++                            .gap_x_1()
++                            .children(Self::render_icon(has_left_icon, false, None, window, cx))
++                            .child(div().flex_1().child(label.clone())),
++                    )
++                }
++            }
+             PopupMenuItem::ElementItem {
+                 render,
+                 icon,
+@@ -1481,6 +1546,12 @@
+                         .with_priority(self.priority + 1)
+                     })
+                 }),
++        };
++        match (self.appearance.as_ref(), item) {
++            (Some(appearance), PopupMenuItem::Separator) => this.refine_style(&appearance.separator),
++            (_, PopupMenuItem::Label(_)) => this,
++            (Some(appearance), _) => this.refine_style(&appearance.item),
++            _ => this,
+         }
+     }
+ }
+@@ -1542,7 +1613,9 @@
+             radius: cx.theme().radius.min(px(8.)),
+         };
+ 
+-        v_flex()
++        // Modified for Hangar: the application's `PopupSurface`, when set, paints the surface.
++        let painted = crate::popover::PopupSurface::active(cx);
++        crate::popover::PaintedSurface::new(v_flex()
+             .id("popup-menu")
+             .test_support()
+             .role(Role::Menu)
+@@ -1557,6 +1630,8 @@
+             .on_mouse_down_out(cx.listener(Self::on_mouse_down_out))
+             .popover_style(cx)
+             .text_color(cx.theme().popover_foreground)
++            .when_some(self.appearance.as_ref(), |this, appearance| this.refine_style(&appearance.surface))
++            .when(painted, |this| this.bg(gpui::transparent_black()).border_color(gpui::transparent_black()).shadow(Vec::new()))
+             .relative()
+             .occlude()
+             .child(
+@@ -1564,6 +1639,7 @@
+                     .id("items")
+                     .p_1()
+                     .gap_y_0p5()
++                    .when_some(self.appearance.as_ref(), |this, appearance| this.refine_style(&appearance.list))
+                     .min_w(rems(8.))
+                     .when_some(self.min_width, |this, min_width| this.min_w(min_width))
+                     .max_w(max_width)
+@@ -1598,7 +1674,7 @@
+             )
+             .when(self.scrollable, |this| {
+                 this.vertical_scrollbar(&self.scroll_handle)
+-            })
++            }), cx)
+     }
+ }
+ 
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.9.0/src/popover.rs gpui-component-0.9.0/src/popover.rs
+--- gpui-component-0.9.0/src/popover.rs
++++ gpui-component-0.9.0/src/popover.rs
+@@ -1,15 +1,16 @@
+ use gpui::{
+-    Anchor, Animation, AnimationExt as _, AnyElement, App, Bounds, Context, Div, ElementId,
+-    FocusHandle, InteractiveElement as _, IntoElement, MouseButton, ParentElement, PathBuilder,
+-    Pixels, Point, RenderOnce, Stateful, StyleRefinement, Styled, Window, canvas, point,
+-    prelude::FluentBuilder as _, px,
++    Anchor, Animation, AnimationExt as _, AnyElement, App, Bounds, Context, Div, Element,
++    ElementId, FocusHandle, Global, GlobalElementId, InspectorElementId, InteractiveElement as _,
++    IntoElement, LayoutId, MouseButton, ParentElement, PathBuilder, Pixels, Point, RenderOnce,
++    Stateful, StyleRefinement, Styled, Window, canvas, point, prelude::FluentBuilder as _, px,
++    transparent_black,
+ };
+ use std::{cell::Cell, rc::Rc, time::Duration};
+ 
+ use crate::{ActiveTheme as _, ThemeStyled as _};
+ use crate::{
+     Selectable, StyledExt as _,
+-    animation::ease_out_cubic,
++    animation::cubic_bezier,
+     styled::{popover_ring, popover_shadow},
+     v_flex,
+ };
+@@ -19,18 +20,115 @@
+ 
+ pub(crate) fn init(_: &mut App) {}
+ 
++// Modified for Hangar: the application may paint the dropdown and menu surfaces itself.
++/// Painter for the surface of every dropdown (Select, Combobox, DatePicker) and PopupMenu. While it
++/// is set, those surfaces drop their own fill and shadow and it paints under their content, inside
++/// the surface bounds, in a layer of its own so a backdrop blur there only sees what is behind.
++#[derive(Clone)]
++pub struct PopupSurface(Rc<dyn Fn(Bounds<Pixels>, &mut Window, &mut App)>);
++
++impl PopupSurface {
++    pub fn new(painter: impl Fn(Bounds<Pixels>, &mut Window, &mut App) + 'static) -> Self {
++        Self(Rc::new(painter))
++    }
++
++    pub(crate) fn active(cx: &App) -> bool {
++        cx.has_global::<Self>()
++    }
++}
++
++impl Global for PopupSurface {}
++
++/// Runs the application's [`PopupSurface`] painter, when there is one, under `child`.
++pub(crate) struct PaintedSurface {
++    child: AnyElement,
++    painter: Option<PopupSurface>,
++}
++
++impl PaintedSurface {
++    pub(crate) fn new(child: impl IntoElement, cx: &App) -> Self {
++        Self {
++            child: child.into_any_element(),
++            painter: cx.try_global::<PopupSurface>().cloned(),
++        }
++    }
++}
++
++impl IntoElement for PaintedSurface {
++    type Element = Self;
++
++    fn into_element(self) -> Self {
++        self
++    }
++}
++
++impl Element for PaintedSurface {
++    type RequestLayoutState = ();
++    type PrepaintState = ();
++
++    fn id(&self) -> Option<ElementId> {
++        None
++    }
++
++    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
++        None
++    }
++
++    fn request_layout(
++        &mut self,
++        _: Option<&GlobalElementId>,
++        _: Option<&InspectorElementId>,
++        window: &mut Window,
++        cx: &mut App,
++    ) -> (LayoutId, ()) {
++        (self.child.request_layout(window, cx), ())
++    }
++
++    fn prepaint(
++        &mut self,
++        _: Option<&GlobalElementId>,
++        _: Option<&InspectorElementId>,
++        _: Bounds<Pixels>,
++        _: &mut (),
++        window: &mut Window,
++        cx: &mut App,
++    ) {
++        self.child.prepaint(window, cx);
++    }
++
++    fn paint(
++        &mut self,
++        _: Option<&GlobalElementId>,
++        _: Option<&InspectorElementId>,
++        bounds: Bounds<Pixels>,
++        _: &mut (),
++        _: &mut (),
++        window: &mut Window,
++        cx: &mut App,
++    ) {
++        let Some(painter) = self.painter.clone() else {
++            return self.child.paint(window, cx);
++        };
++        window.paint_layer(bounds, |window| {
++            (painter.0)(bounds, window, cx);
++            self.child.paint(window, cx);
++        });
++    }
++}
++
+ /// How long a dropdown takes to settle into place after it opens.
+ ///
+ /// This is shadcn/ui's figure: its popup surfaces carry `animate-in`, whose
+ /// duration is 150ms.
+-const DROPDOWN_ENTER_DURATION: Duration = Duration::from_millis(150);
++// Modified for Hangar: Zeron's `menu-in`, 140 ms `ease`, from 2px above and 30% opacity.
++const DROPDOWN_ENTER_DURATION: Duration = Duration::from_millis(140);
+ 
+ /// Where a dropdown starts out, relative to where it comes to rest.
+ ///
+ /// Negative is above, so the surface slides *down* out of the trigger's edge —
+ /// what shadcn/ui expresses as `data-[side=bottom]:slide-in-from-top-2`. Its
+ /// `2` is `0.5rem`, which is 8px at the default root size.
+-const DROPDOWN_ENTER_OFFSET: Pixels = px(-8.);
++const DROPDOWN_ENTER_OFFSET: Pixels = px(-2.);
+ 
+ fn dropdown_positioner(bounds: Bounds<Pixels>) -> gpui_base::Positioner {
+     gpui_base::Positioner::side(bounds)
+@@ -90,17 +188,21 @@
+     let travel: f32 = DROPDOWN_ENTER_OFFSET.into();
+     // Read out here: the animation runs long after `cx` is gone.
+     let ring = popover_ring(cx);
++    let painted = PopupSurface::active(cx);
+ 
+-    dropdown_positioner(bounds).child(surface.with_animation(
++    let surface = surface.with_animation(
+         id,
+-        Animation::new(DROPDOWN_ENTER_DURATION).with_easing(ease_out_cubic),
++        Animation::new(DROPDOWN_ENTER_DURATION).with_easing(cubic_bezier(0.25, 0.1, 0.25, 1.)),
+         move |surface, delta| {
+-            surface
+-                .top(px(travel * (1. - delta)))
+-                .opacity(delta)
+-                .shadow(popover_shadow(ring, delta * delta * delta))
++            let surface = surface.top(px(travel * (1. - delta))).opacity(0.3 + 0.7 * delta);
++            if painted {
++                surface.bg(transparent_black()).shadow(Vec::new())
++            } else {
++                surface.shadow(popover_shadow(ring, delta * delta * delta))
++            }
+         },
+-    ))
++    );
++    dropdown_positioner(bounds).child(PaintedSurface::new(surface, cx))
+ }
+ 
+ /// A popover element that can be triggered by a button or any other element.
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.9.0/src/questionnaire/components.rs gpui-component-0.9.0/src/questionnaire/components.rs
+--- gpui-component-0.9.0/src/questionnaire/components.rs
++++ gpui-component-0.9.0/src/questionnaire/components.rs
+@@ -1580,6 +1580,7 @@
+             keystroke,
+             is_held,
+             prefer_character_input: false,
++            physical_digit: None,
+         });
+     }
+ 
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.9.0/src/switch.rs gpui-component-0.9.0/src/switch.rs
+--- gpui-component-0.9.0/src/switch.rs
++++ gpui-component-0.9.0/src/switch.rs
+@@ -398,6 +398,7 @@
+             keystroke: keystroke.clone(),
+             is_held: false,
+             prefer_character_input: false,
++            physical_digit: None,
+         });
+         cx.simulate_event(KeyUpEvent { keystroke });
+     }
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.9.0/src/text/compat.rs gpui-component-0.9.0/src/text/compat.rs
+--- gpui-component-0.9.0/src/text/compat.rs
++++ gpui-component-0.9.0/src/text/compat.rs
+@@ -376,6 +376,8 @@
+     let pins_heading_size = heading_font_size.is_some()
+         || heading_base_font_size != TextViewStyle::default().heading_base_font_size;
+     let style = themed
++        // Modified for Hangar: carries the opt-in inline code font to gpui-base.
++        .with_inline_code_font_family(legacy.inline_code_font_family.clone())
+         .with_paragraph_gap(legacy.paragraph_gap)
+         .with_heading(move |level| {
+             if !pins_heading_size {
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.9.0/src/text/style.rs gpui-component-0.9.0/src/text/style.rs
+--- gpui-component-0.9.0/src/text/style.rs
++++ gpui-component-0.9.0/src/text/style.rs
+@@ -1,6 +1,6 @@
+ use std::sync::Arc;
+ 
+-use gpui::{HighlightStyle, Pixels, Rems, StyleRefinement, px, rems};
++use gpui::{HighlightStyle, Pixels, Rems, SharedString, StyleRefinement, px, rems};
+ 
+ use crate::highlighter::HighlightTheme;
+ 
+@@ -54,6 +54,8 @@
+     /// Default is [`HighlightStyle::default()`], the `background_color` will
+     /// fallback to `cx.theme().accent`, if it is `None`.
+     pub inline_code: HighlightStyle,
++    // Modified for Hangar: opt-in font override; unset keeps the theme's font.
++    pub inline_code_font_family: Option<SharedString>,
+     /// Whether content-specific rendering should use dark-mode assets.
+     pub is_dark: bool,
+ }
+@@ -70,6 +72,7 @@
+             table_head: StyleRefinement::default(),
+             table_cell: StyleRefinement::default(),
+             inline_code: HighlightStyle::default(),
++            inline_code_font_family: None,
+             is_dark: false,
+         }
+     }
+@@ -93,6 +96,7 @@
+             && self.table_head == other.table_head
+             && self.table_cell == other.table_cell
+             && self.inline_code == other.inline_code
++            && self.inline_code_font_family == other.inline_code_font_family
+             && self.is_dark == other.is_dark
+     }
+ }
+@@ -125,6 +129,12 @@
+         self.inline_code = style;
+         self
+     }
++
++    pub fn inline_code_font_family(mut self, family: impl Into<SharedString>) -> Self {
++        self.inline_code_font_family = Some(family.into());
++        self
++    }
++
+     /// Set extra style for the table container.
+     ///
+     /// Set `overflow_x: scroll` on the refinement for adaptive layout: cells
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-component-0.9.0/tests/integration/controlled_change_callbacks.rs gpui-component-0.9.0/tests/integration/controlled_change_callbacks.rs
+--- gpui-component-0.9.0/tests/integration/controlled_change_callbacks.rs
++++ gpui-component-0.9.0/tests/integration/controlled_change_callbacks.rs
+@@ -139,6 +139,7 @@
+                         keystroke: keystroke.clone(),
+                         is_held: false,
+                         prefer_character_input: false,
++                        physical_digit: None,
+                     });
+                     visual.simulate_event(KeyUpEvent { keystroke });
+                 }
+@@ -198,6 +199,7 @@
+         keystroke: keystroke.clone(),
+         is_held: false,
+         prefer_character_input: false,
++        physical_digit: None,
+     });
+     visual.simulate_event(KeyUpEvent { keystroke });
+     visual.update(|_, cx| {

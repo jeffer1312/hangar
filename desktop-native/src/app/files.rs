@@ -219,7 +219,7 @@ impl Hangar {
             .child(div().id("file-picture").max_w_full().max_h_full().flex().cursor_pointer()
                 .tooltip(|window, cx| gpui_kit::component::tooltip::Tooltip::new(tr("file_zoom")).build(window, cx))
                 .on_click(cx.listener(|this, _, window, cx| this.zoom_picture(window, cx)))
-                .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, window, cx| {
+                .on_scroll(cx.listener(|this, event: &ScrollEvent, window, cx| {
                     if event.modifiers.control { cx.stop_propagation(); this.zoom_picture(window, cx); }
                 }))
                 .child(img(image).max_w_full().max_h_full().object_fit(ObjectFit::Contain)))

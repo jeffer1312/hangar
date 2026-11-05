@@ -213,7 +213,7 @@ impl RemoteBrowser {
                 this.last_move = Some(Instant::now());
                 this.mouse("move", MouseButton::Left, e.position, &e.modifiers);
             }))
-            .on_scroll_wheel(cx.listener(|this, e: &ScrollWheelEvent, _, _| {
+            .on_scroll(cx.listener(|this, e: &ScrollEvent, _, _| {
                 let Some((x, y)) = this.at(e.position, false) else { return };
                 // Mesma conta do navegador local: 17,78 px por linha, e o sinal oposto ao da página.
                 let d = e.delta.pixel_delta(px(17.78));

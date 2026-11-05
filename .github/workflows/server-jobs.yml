@@ -78,7 +78,7 @@ jobs:
       - name: Conferir tmux nos testes Unix
         if: runner.os != 'Windows'
         run: tmux -V
-      # O rustup do runner lê o crates/rust-toolchain.toml (1.98.1) no primeiro cargo.
+      # O rustup do runner lê o crates/rust-toolchain.toml no primeiro cargo.
       # Só a main grava; as outras branches leem o dela. Cada branch gravando a própria cópia estourava o limite
       # de cache do repositório e o GitHub despejava a da main. Dois caches: o dos testes (debug, deste job) e o
       # do release (do job `build`), com o perfil na chave, porque com LTO as dependências saem em bitcode e não

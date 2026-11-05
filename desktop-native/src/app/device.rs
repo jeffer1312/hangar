@@ -946,7 +946,7 @@ impl Hangar {
             // A rolagem da GPUI não para a roda: sem o stop, a página rolava junto e a lista fugia do cursor.
             // O ouvinte roda depois da rolagem da própria lista e antes da página.
             (Some(Ok(d)), _) if !d.lines.is_empty() => div().id("diary-lines").max_h(px(DIARY_LINES_MAX)).overflow_y_scroll().track_scroll(&self.device.diary_scroll)
-                .on_scroll_wheel({
+                .on_scroll({
                     let handle = self.device.diary_scroll.clone();
                     move |event, window, cx| {
                         // A lista já somou a roda ao deslocamento (sem limite); a página só fica parada quando a

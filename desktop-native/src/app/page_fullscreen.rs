@@ -422,7 +422,7 @@ impl Render for PageFullscreen {
             #[cfg(any(target_os = "linux", target_os = "windows"))]
             let engine = shown.clone();
             let me = me.clone();
-            window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+            window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
                 if phase != DispatchPhase::Capture || !hitbox.should_handle_scroll(window) { return; }
                 let delta = event.delta.pixel_delta(px(16.));
                 if event.modifiers.control || event.modifiers.platform {

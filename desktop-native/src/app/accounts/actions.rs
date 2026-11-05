@@ -854,7 +854,7 @@ impl Hangar {
             }))
             // Ao soltar: com o botão físico ainda apertado, o clique na mesma máquina não vale.
             .on_mouse_up(MouseButton::Left, cx.listener(|this, e: &MouseUpEvent, _, _| this.view_click(e.position)))
-            .on_scroll_wheel(cx.listener(|this, e: &ScrollWheelEvent, _, cx| {
+            .on_scroll(cx.listener(|this, e: &ScrollEvent, _, cx| {
                 // Rola a página da outra máquina, não a de configurações em volta.
                 cx.stop_propagation();
                 let Some((x, y)) = this.view_point(e.position, false) else { return };

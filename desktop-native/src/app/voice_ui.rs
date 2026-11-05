@@ -1784,7 +1784,7 @@ mod tests {
         }
     }
 
-    #[gpui::test]
+    #[::gpui::test]
     fn voice_dock_sits_right_under_the_actions_and_shows_its_last_line_whole(cx: &mut gpui::TestAppContext) {
         let (_, cx) = cx.add_window_view(|_, _| Panel { actions: 300. });
         cx.simulate_resize(gpui::size(px(360.), px(800.)));

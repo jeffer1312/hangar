@@ -870,7 +870,7 @@ impl Hangar {
             .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| {
                 if let Some(slot) = this.terminal.as_mut().and_then(|panel| panel.tabs.get_mut(panel.active)) { slot.selecting = false; slot.view.mouse_up(); }
             }))
-            .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
+            .on_scroll(cx.listener(|this, event: &ScrollEvent, _, cx| {
                 if let Some(slot) = this.terminal.as_mut().and_then(|panel| panel.tabs.get_mut(panel.active)) {
                     let at = event.position - slot.bounds.get().origin;
                     Self::flush_terminal(slot);

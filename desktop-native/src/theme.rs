@@ -517,7 +517,7 @@ fn build_conversation_markdown(kit: &Theme, radius: Pixels) -> gpui_kit::base::T
         .with_table_head(StyleRefinement::default().bg(transparent_black()).font_weight(FontWeight::BOLD))
         .with_table_cell(StyleRefinement::default().border_r_0().px_3().py_1p5())
         .with_list_marker_width(Some(px(26.)))
-        .with_list_marker_color(Some(accent_text()))
+        .with_list_style(StyleRefinement::default().w(px(26.)).pr(px(6.)).text_color(accent_text()))
         .with_code_language_band(Some(crate::i18n::tr_web("comum_codigo", &Default::default()).unwrap_or_default().into()))
 }
 

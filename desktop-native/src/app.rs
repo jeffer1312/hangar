@@ -6108,7 +6108,7 @@ impl Hangar {
                             this.tab_pointer(target, window, cx);
                         });
                     });
-                    window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+                    window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
                         if phase != DispatchPhase::Bubble { return; }
                         let _ = wheeled.update(cx, |this, cx| {
                             if this.tabs_scroll.bounds().contains(&event.position) { this.cancel_tab_hover(window, cx); }
