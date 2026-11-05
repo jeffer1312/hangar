@@ -212,6 +212,7 @@ vi.mock('../../paraglide/messages', () => ({
   native_dictation_cancel: () => 'native_dictation_cancel',
   nova_conversa_placeholder: () => 'nova_conversa_placeholder', nova_conversa_enviar: () => 'nova_conversa_enviar',
   native_new_chat_folder: () => 'native_new_chat_folder', native_empty_chat_hint: () => 'native_empty_chat_hint',
+  native_new_chat_no_project: () => 'native_new_chat_no_project', native_new_chat_no_project_hint: () => 'native_new_chat_no_project_hint',
   nova_conversa_opcoes: () => 'nova_conversa_opcoes', nova_conversa_sem_destino: () => 'nova_conversa_sem_destino',
   nova_conversa_destino_hint: () => 'nova_conversa_destino_hint', nova_conversa_config_hint: () => 'nova_conversa_config_hint',
   nova_conversa_guardada: () => 'nova_conversa_guardada', nova_conversa_abrir: () => 'nova_conversa_abrir',

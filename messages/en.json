@@ -7675,6 +7675,8 @@
   "native_create_no_roots": "No roots configured. Set CP_SCAN_ROOTS on the backend.",
   "native_new_chat_title": "New conversation",
   "native_new_chat_folder": "Folder",
+  "native_new_chat_no_project": "No project",
+  "native_new_chat_no_project_hint": "Open in the user's home folder, without picking a project",
   "native_new_chat_no_roots": "No folders configured on this server.",
   "native_new_chat_no_accounts": "No accounts available.",
   "native_new_chat_machine": "Machine",
@@ -10072,5 +10074,8 @@
   "news_rename_sample_name": "fix-app-login",
   "news_auto_report_sample_machine": "office",
   "news_auto_report_sample_step": "Restarting",
-  "news_auto_report_sample_error": "the new version did not respond"
+  "news_auto_report_sample_error": "the new version did not respond",
+  "news_branch_sample_main": "main",
+  "news_branch_sample_work": "new-screen",
+  "news_branch_sample_upstream": "origin/main"
 }

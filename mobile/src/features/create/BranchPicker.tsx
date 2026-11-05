@@ -1,18 +1,27 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
-  basename, defaultBase, getFolderBranchesForServer, getWorktreesForServer, pickFolderRoot, sanitizeSessionName, worktreeAgeDays,
-  worktreeIsAgent, worktreeTitle, WORKTREE_STALE_DAYS, type FolderBranches, type Server, type WorktreeChoice, type WorktreeRepo, type WorktreeStatus,
+  basename, defaultBase, folderGitActionForServer, getFolderBranchesForServer, getFolderGitForServer, getWorktreesForServer, pickFolderRoot,
+  sanitizeSessionName, worktreeAgeDays, worktreeIsAgent, worktreeTitle, WORKTREE_STALE_DAYS,
+  type FolderBranches, type FolderGit, type Server, type WorktreeChoice, type WorktreeRepo, type WorktreeStatus,
 } from '@hangar/core';
 import { Icon } from '../../ui/Icon';
+import { haptic } from '../../ui/haptics';
 import { superficie } from '../../theme/superficie';
+import { FolderBranchMenu } from './FolderBranchMenu';
+import { FolderGitCard } from './FolderGitCard';
 import * as m from '../../paraglide/messages';
 
-type Props = { server: Server; cwd: string; sessionName: string; value: WorktreeChoice | null;
+type Props = { server: Server;
+               /** A pasta cujo git se lê: com uma worktree escolhida, o repositório principal, porque ela fica fora das raízes liberadas. */
+               cwd: string;
+               /** A worktree escolhida, onde a sessão vai abrir. */
+               worktreePath?: string;
+               sessionName: string; value: WorktreeChoice | null;
                onChange: (v: WorktreeChoice | null) => void;
                /** Abrir a sessão noutra pasta (uma worktree que já existe, ou de volta à principal); `keepOpen` mantém o painel para o aviso. */
-               onPickFolder: (path: string, keepOpen: boolean) => void;
+               onPickFolder: (path: string, keepOpen: boolean, repo?: string) => void;
                /** Branch nova com o nome de uma já aberta: o servidor recusaria, a criação fica travada. */
                onTakenChange?: (taken: boolean) => void };
 type Worktrees = { repo: string; list: WorktreeStatus[] } | null;
@@ -22,7 +31,8 @@ const isNotRepo = (e: unknown) => {
   const status = (e as { status?: number } | null)?.status;
   return status === 404 || (status === 409 && e instanceof Error && e.message.includes('not a git repository'));
 };
-const reason = (e: unknown) => (e instanceof Error ? e.message : String(e));
+// A API prefixa o status HTTP ("409: ..."); na tela vale só o texto da recusa.
+const reason = (e: unknown) => (e instanceof Error ? e.message.replace(/^\d{3}: /, '') : String(e));
 const inside = (root: string, path: string) => pickFolderRoot([{ path: root }], path) !== null;
 // Mesma pasta com outra grafia (barra final, `\`, letra da unidade): uma contém a outra.
 export const samePath = (a: string, b: string) => inside(a, b) && inside(b, a);
@@ -34,7 +44,7 @@ function worktreeHint(w: WorktreeStatus, now: number): string {
   return days ? m.worktree_dias_atras({ n: days }) : '';
 }
 
-export function BranchPicker({ server, cwd, sessionName, value, onChange, onPickFolder, onTakenChange }: Props) {
+export function BranchPicker({ server, cwd, worktreePath, sessionName, value, onChange, onPickFolder, onTakenChange }: Props) {
   const { theme } = useUnistyles();
   const [info, setInfo] = useState<FolderBranches | null>(null);
   const [loading, setLoading] = useState(true);
@@ -50,6 +60,66 @@ export function BranchPicker({ server, cwd, sessionName, value, onChange, onPick
   const [wtsLoading, setWtsLoading] = useState(true);
   const [wtsFailed, setWtsFailed] = useState('');
   const [wtsTry, setWtsTry] = useState(0);
+  const [branchesTry, setBranchesTry] = useState(0);
+  const [git, setGit] = useState<FolderGit | null>(null);
+  const [gitFailed, setGitFailed] = useState('');
+  const [gitTry, setGitTry] = useState(0);
+  const [gitBusy, setGitBusy] = useState<'fetch' | 'pull' | null>(null);
+  const [gitNote, setGitNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const [branching, setBranching] = useState(false);
+  const [wtQuery, setWtQuery] = useState('');
+  // Resposta de outra pasta, ou de antes de o painel fechar, não entra nesta.
+  const gitTurn = useRef(0);
+
+  const runGit = useCallback(async (action: 'fetch' | 'pull', quiet = false) => {
+    const turn = gitTurn.current;
+    setGitBusy(action);
+    setGitNote(null);
+    try {
+      const status = await folderGitActionForServer(server, cwd, action);
+      if (turn !== gitTurn.current) return;
+      setGit(status);
+      // Fetch traz branches remotas novas; a lista de bases precisa delas.
+      setBranchesTry((n) => n + 1);
+      if (!quiet) {
+        setGitNote({ ok: true, text: action === 'fetch' ? m.native_folder_git_fetch_done() : m.native_folder_git_pull_done({ upstream: status.upstream ?? '' }) });
+        haptic.success();
+      }
+    } catch (e) {
+      if (turn !== gitTurn.current) return;
+      if (!quiet) { setGitNote({ ok: false, text: reason(e) }); haptic.error(); }
+      // A recusa pode vir de um estado mais novo que o da tela.
+      setGitTry((n) => n + 1);
+    } finally {
+      if (turn === gitTurn.current) setGitBusy(null);
+    }
+  }, [server, cwd]);
+
+  // Abrir o menu busca as remotas uma vez: sem isso "atualizada" só diz respeito ao último fetch.
+  useEffect(() => {
+    const turn = ++gitTurn.current;
+    setGit(null);
+    setGitNote(null);
+    setGitBusy(null);
+    setGitFailed('');
+    getFolderGitForServer(server, cwd)
+      .then((status) => {
+        if (turn !== gitTurn.current) return;
+        setGit(status);
+        if (status.repo) void runGit('fetch', true);
+      })
+      .catch((e: unknown) => { if (turn === gitTurn.current) setGitFailed(reason(e)); });
+    return () => { gitTurn.current++; };
+  }, [server, cwd, runGit]);
+
+  useEffect(() => {
+    if (!gitTry) return;
+    const turn = gitTurn.current;
+    setGitFailed('');
+    getFolderGitForServer(server, cwd)
+      .then((status) => { if (turn === gitTurn.current) setGit(status); })
+      .catch((e: unknown) => { if (turn === gitTurn.current) setGitFailed(reason(e)); });
+  }, [server, cwd, gitTry]);
 
   useEffect(() => {
     let vivo = true;
@@ -65,7 +135,7 @@ export function BranchPicker({ server, cwd, sessionName, value, onChange, onPick
       })
       .finally(() => { if (vivo) setLoading(false); });
     return () => { vivo = false; };
-  }, [server, cwd]);
+  }, [server, cwd, branchesTry]);
 
   // Só o repositório da pasta e sem medir o disco: o menu não mostra espaço. A lista anterior fica
   // na tela enquanto relê, para o aviso de ocupada não piscar ao escolher uma worktree.
@@ -113,13 +183,14 @@ export function BranchPicker({ server, cwd, sessionName, value, onChange, onPick
   if (!info) return null;   // pasta sem git: nada a escolher
 
   // A pasta escolhida já é uma worktree: é ela a "que já existe".
-  const chosen = wts?.list.find((w) => samePath(w.path, cwd)) ?? null;
+  const chosen = wts?.list.find((w) => samePath(w.path, worktreePath ?? cwd)) ?? null;
   const busy = !fresh && chosen?.sessions[0];
   const notice = busy ? <Text style={styles.warn} accessibilityRole="alert">{m.worktree_menu_ocupada({ nome: busy })}</Text> : null;
 
-  const option = (key: string, title: string, hint: string, on: boolean, onPress: () => void, trailing?: 'chevron') => (
+  const option = (key: string, title: string, hint: string, on: boolean, onPress: () => void, trailing?: 'chevron', dot?: string) => (
     <Pressable key={key} onPress={onPress} accessibilityRole="button" accessibilityLabel={title} accessibilityHint={hint || undefined}
       accessibilityState={{ selected: on }} style={[styles.option, on && styles.on]}>
+      {dot ? <View style={[styles.dot, { backgroundColor: dot }]} /> : null}
       <View style={styles.optionText}>
         <Text style={styles.optionTitle} numberOfLines={1}>{title}</Text>
         {hint ? <Text style={styles.help} numberOfLines={2}>{hint}</Text> : null}
@@ -129,22 +200,40 @@ export function BranchPicker({ server, cwd, sessionName, value, onChange, onPick
     </Pressable>
   );
 
+  if (branching && git?.repo) {
+    return <FolderBranchMenu server={server} cwd={cwd} info={info} git={git} onBack={() => setBranching(false)}
+      onDone={(status, note) => {
+        setGit(status);
+        setGitNote({ ok: true, text: note });
+        setBranching(false);
+        // A branch mudou de lugar: as listas de branches e de worktrees releem.
+        setBranchesTry((n) => n + 1);
+        setWtsTry((n) => n + 1);
+      }}
+      onRefused={() => { setGitTry((n) => n + 1); setBranchesTry((n) => n + 1); setWtsTry((n) => n + 1); }}
+      onOpenFolder={(path) => { setBranching(false); setFresh(false); setName(''); onPickFolder(path, false, wts?.repo); }} />;
+  }
+
   if (picking) {
     const now = Date.now() / 1000;
     const row = (w: WorktreeStatus) => {
       const hint = worktreeHint(w, now);
+      const days = worktreeAgeDays(w, now);
+      const dot = w.sessions.length ? theme.tokens.accent.base : days != null && days > WORKTREE_STALE_DAYS ? theme.tokens.status.warning : theme.tokens.text.muted;
       return option(`wt:${w.path}`, worktreeTitle(w), hint, !fresh && !!chosen && samePath(chosen.path, w.path), () => {
         const occupied = !!w.sessions.length;
         setFresh(false);
         setName('');
         // Ocupada, o painel fica aberto para o aviso de que outra sessão já trabalha nela.
         if (!occupied) setPicking(false);
-        onPickFolder(w.path, occupied);
-      });
+        onPickFolder(w.path, occupied, wts?.repo);
+      }, undefined, dot);
     };
     const list = wts?.list ?? [];
-    const agents = list.filter(worktreeIsAgent);
-    const mine = list.filter((w) => !worktreeIsAgent(w)).sort((a, b) => Number(!!b.sessions.length) - Number(!!a.sessions.length));
+    const search = wtQuery.trim().toLowerCase();
+    const found = list.filter((w) => worktreeTitle(w).toLowerCase().includes(search) || (w.branch ?? '').toLowerCase().includes(search));
+    const agents = found.filter(worktreeIsAgent);
+    const mine = found.filter((w) => !worktreeIsAgent(w)).sort((a, b) => Number(!!b.sessions.length) - Number(!!a.sessions.length));
     // A falha da releitura aparece mesmo com a lista anterior na tela: ela pode estar velha.
     const failure = wtsFailed ? (
       <View style={styles.box}>
@@ -159,7 +248,7 @@ export function BranchPicker({ server, cwd, sessionName, value, onChange, onPick
       : (
         <>
           {mine.map(row)}
-          {agents.length ? (
+          {agents.length && !search ? (
             <Pressable onPress={() => setAgentsOpen((o) => !o)} accessibilityRole="button" accessibilityLabel={m.worktree_subagentes()}
               accessibilityState={{ expanded: agentsOpen }} style={styles.option}>
               <Text style={[styles.help, styles.grow]} numberOfLines={1}>{m.worktree_subagentes()}</Text>
@@ -167,7 +256,7 @@ export function BranchPicker({ server, cwd, sessionName, value, onChange, onPick
               <Icon name={agentsOpen ? 'ChevronDown' : 'ChevronRight'} size={14} color={theme.tokens.text.muted} />
             </Pressable>
           ) : null}
-          {agentsOpen ? agents.map(row) : null}
+          {agentsOpen || search ? agents.map(row) : null}
         </>
       );
     return (
@@ -176,6 +265,8 @@ export function BranchPicker({ server, cwd, sessionName, value, onChange, onPick
           <Icon name="ChevronLeft" size={14} color={theme.tokens.text.muted} />
           <Text style={[styles.optionTitle, styles.grow]} numberOfLines={1}>{m.worktree_menu_existentes()}</Text>
         </Pressable>
+        {list.length ? <TextInput accessibilityLabel={m.worktree_menu_buscar()} placeholder={m.worktree_menu_buscar()} value={wtQuery} onChangeText={setWtQuery}
+          autoCapitalize="none" autoCorrect={false} style={styles.input} placeholderTextColor={theme.tokens.text.muted} /> : null}
         {failure}
         {body}
         {notice}
@@ -200,8 +291,19 @@ export function BranchPicker({ server, cwd, sessionName, value, onChange, onPick
   // O nome da pasta é o da branch pela mesma regra do servidor.
   const stem = typed ? sanitizeSessionName(typed) || 'worktree' : m.worktree_menu_nome_sessao();
 
+  const gitHead = gitFailed ? (
+    <View style={styles.box}>
+      <Text selectable style={styles.error} accessibilityRole="alert">{gitFailed}</Text>
+      <Pressable onPress={() => setGitTry((n) => n + 1)} accessibilityRole="button" accessibilityLabel={m.native_retry()} style={styles.option}>
+        <Text style={styles.link}>{m.native_retry()}</Text>
+      </Pressable>
+    </View>
+  ) : !git ? <Text style={styles.help} accessibilityLiveRegion="polite">{m.native_create_checkout_loading()}</Text>
+    : !git.repo ? null : <FolderGitCard git={git} busy={gitBusy} note={gitNote} onAction={(action) => { void runGit(action); }} />;
+
   return (
     <ScrollView contentContainerStyle={styles.box} keyboardShouldPersistTaps="handled">
+      {gitHead}
       <Text style={styles.title} accessibilityRole="header">{m.worktree_menu_titulo()}</Text>
       {option('here', m.worktree_menu_pasta(), m.worktree_menu_pasta_dica({ pasta: basename(home), branch: homeBranch }), !fresh && !chosen, () => {
         setFresh(false);
@@ -240,10 +342,17 @@ export function BranchPicker({ server, cwd, sessionName, value, onChange, onPick
               <Text style={[styles.path, styles.grow]}>{`${parent}${sep}${stem}`}</Text>
             </View>
           ) : null}
+          {info.dirty ? <Text style={styles.help}>{m.native_create_checkout_dirty()}</Text> : null}
         </View>
       ) : null}
       {option('existing', m.worktree_menu_existente(), summary, !fresh && !!chosen, () => setPicking(true), 'chevron')}
       {notice}
+      {git?.repo ? (
+        <>
+          <View style={styles.separator} />
+          {option('branches', m.native_folder_git_branch_entry(), '', false, () => setBranching(true), 'chevron')}
+        </>
+      ) : null}
     </ScrollView>
   );
 }
@@ -270,6 +379,8 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: theme.base.radius.md, borderWidth: 1, borderColor: theme.tokens.border.default,
   },
   dim: { opacity: 0.5 },
+  dot: { width: 7, height: 7, borderRadius: theme.base.radius.full },
+  separator: { height: 1, backgroundColor: theme.tokens.border.subtle, marginHorizontal: theme.base.space[3] },
   input: {
     minHeight: 44, paddingHorizontal: theme.base.space[3], borderRadius: theme.base.radius.md, fontSize: theme.base.text.sm,
     color: theme.tokens.text.primary, backgroundColor: superficie(theme), borderWidth: 1, borderColor: theme.tokens.border.default,

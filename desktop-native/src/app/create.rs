@@ -323,6 +323,9 @@ pub(super) fn unique_name(base: &str, taken: &HashSet<String>) -> String {
     (2..).map(|n| format!("{clean}-{n}")).find(|name| !taken.contains(name)).unwrap_or(clean)
 }
 
+/// O servidor expande na abertura: a pasta do usuário costuma estar fora das raízes, e ali não há repositório para ler.
+const NO_PROJECT_CWD: &str = "~";
+
 // A pasta pode ser de um servidor Windows: `\` também separa.
 fn basename(path: &str) -> &str { crate::composer::basename(path) }
 
@@ -1100,6 +1103,14 @@ impl NewSession {
 
     fn read_branches(&mut self, fresh: bool, cx: &mut Context<Self>) {
         if self.creating { return; }
+        if self.no_project() {
+            let seq = self.checkout.start();
+            self.checkout.finish(seq, Ok(None));
+            (self.branch, self.new_branch, self.base, self.existing, self.base_open) = (String::new(), false, String::new(), None, false);
+            (self.picking, self.agents_open) = (false, false);
+            cx.notify();
+            return;
+        }
         let (Some(root), Some(path)) = (self.root.as_ref(), self.picked.clone()) else { return };
         let root = root.path.clone();
         let seq = self.checkout.start();
@@ -2111,14 +2122,21 @@ pub(super) fn wanted(query: &str, label: &str, hint: &str) -> bool {
 }
 
 /// Pílula quieta acima e abaixo do compositor: texto apagado com ícone, a seta do menu e o realce enquanto aberto.
-fn quiet_pill(menu: Menu, open: bool, icon: IconName, text: String, aria: String, disabled: bool, cx: &mut Context<NewSession>) -> Div {
-    popup::anchor(div(), menu.anchor()).child(Button::new(menu.anchor())
+/// A pílula quieta sem ação: a seta só aparece em quem abre menu.
+pub(crate) fn quiet_button(id: &'static str, icon: IconName, text: String, chevron: bool, cx: &App) -> Button {
+    Button::new(id)
         .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::muted()).hover(theme::hover()).active(theme::hover()))
-        .h(px(26.)).px(px(8.)).rounded(px(6.)).selected(open).disabled(disabled).accessibility_label(format!("{aria}: {text}"))
+        .h(px(26.)).px(px(8.)).rounded(px(6.))
         .child(div().flex().items_center().gap(px(6.)).text_size(px(12.5))
             .child(chrome::small_icon(icon, 14., theme::faint()))
             .child(div().max_w(px(220.)).truncate().child(text))
-            .child(chrome::small_icon(IconName::ChevronDown, 12., theme::faint())))
+            .when(chevron, |el| el.child(chrome::small_icon(IconName::ChevronDown, 12., theme::faint()))))
+}
+
+fn quiet_pill(menu: Menu, open: bool, icon: IconName, text: String, aria: String, disabled: bool, cx: &mut Context<NewSession>) -> Div {
+    let label = format!("{aria}: {text}");
+    popup::anchor(div(), menu.anchor()).child(quiet_button(menu.anchor(), icon, text, true, cx)
+        .selected(open).disabled(disabled).accessibility_label(label)
         .on_click(cx.listener(move |this, _, window, cx| this.toggle_menu(menu, window, cx))))
 }
 
@@ -2169,12 +2187,20 @@ impl NewSession {
     pub(super) fn render_top_pills(&self, cx: &mut Context<Self>) -> Div {
         let open = self.menu.get();
         let machine = self.server_label();
-        let folder = self.picked.as_deref().map(basename).filter(|s| !s.is_empty()).map(str::to_owned).unwrap_or_else(|| tr("new_chat_folder"));
+        let no_project = self.no_project();
+        let folder = if no_project { tr("new_chat_no_project") } else {
+            self.picked.as_deref().map(basename).filter(|s| !s.is_empty()).map(str::to_owned).unwrap_or_else(|| tr("new_chat_folder"))
+        };
         let folders_ready = !self.roots.loading && self.roots.ok().is_some_and(|roots| !roots.is_empty());
         div().flex().justify_end().items_center().gap(px(2.)).pb(px(6.))
             .child(quiet_pill(Menu::Machine, open == Some(Menu::Machine), IconName::Monitor, machine, tr("new_chat_machine"), false, cx))
             .child(quiet_pill(Menu::Folder, open == Some(Menu::Folder), IconName::Folder, folder, tr("new_chat_folder"), !folders_ready, cx))
+            .children((!no_project).then(|| quiet_button("new-chat-no-project", IconName::House, tr("new_chat_no_project"), false, cx)
+                .disabled(self.creating).accessibility_label(tr("new_chat_no_project_hint"))
+                .on_click(cx.listener(|this, _, window, cx| this.pick(NO_PROJECT_CWD.to_owned(), window, cx)))))
     }
+
+    fn no_project(&self) -> bool { self.picked.as_deref() == Some(NO_PROJECT_CWD) }
 
     /// Conta e branch, abaixo do compositor e à esquerda; cada uma só quando existe para o provider e a pasta.
     pub(super) fn render_bottom_pills(&self, cx: &mut Context<Self>) -> Div {
@@ -2281,6 +2307,7 @@ impl NewSession {
     /// O que impede ou explica o envio, abaixo das pílulas: a criação em voo, a falha dela, ou a leitura que faltou.
     /// O nome que a sessão da tela sem sessão vai ter (a pasta; o desempate do servidor pode somar um número) e o agente.
     pub(super) fn opening_name(&self) -> String {
+        if self.no_project() { return "sessao".to_owned(); }
         self.existing.as_deref().filter(|_| !self.new_branch).or(self.picked.as_deref()).map(basename).unwrap_or_default().to_owned()
     }
     pub(super) fn provider(&self) -> &'static str { self.provider }

@@ -533,6 +533,7 @@ const styles = StyleSheet.create((theme) => ({
   emptyHint: { flexGrow: 1, minHeight: 140, alignItems: 'center', justifyContent: 'center', paddingHorizontal: theme.base.space[5] },
   topPills: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'flex-end',
     alignItems: 'center',
     gap: theme.base.space[0.5],

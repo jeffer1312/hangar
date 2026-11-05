@@ -5,6 +5,7 @@ mod auto_report;
 mod codex_activity;
 mod composer_history;
 mod login_browser;
+mod no_project;
 mod password_vault;
 mod hide_from_list;
 mod image_reveal;
@@ -34,6 +35,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "busca-conversas" => Some(search_conversations::render),
         "revelacao-imagem" => Some(image_reveal::render),
         "adormecer-ocultas" => Some(sleep_hidden::render),
+        "sem-projeto" => Some(no_project::render),
         _ => None,
     }
 }
