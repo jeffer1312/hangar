@@ -848,6 +848,10 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   caches), sem chamar o Rust de volta. Responsabilidade migrada nunca volta ao Python em
   `rust`/`pending`: Rust indisponível é erro visível. Modo de permissão gravado desconhecido é
   recusado; ausente é o padrão da abertura.
+- **Tempo da sessão parada vem da conversa, não do mtime do transcript.** Com `idle`, `last_activity`
+  sai do `ReplyCache` (último evento da conversa); o mtime anda sozinho e impediria ocultar e
+  adormecer. O mtime segue como chave dos caches. Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#tempo-da-sessão-parada-vem-da-conversa-não-do-mtime-05112026).
 - **A lista do dono é do Rust; o Python só fornece fatos.** `GET /api/sessions` e
   `/api/sessions/events` do dono saem do `ListHub` (`list/hub.rs`): um produtor por servidor,
   ligado enquanto houver lista aberta, tique de 1,5 s, JSON só quando a assinatura muda; cada

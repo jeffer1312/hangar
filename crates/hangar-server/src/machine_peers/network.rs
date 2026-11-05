@@ -314,7 +314,7 @@ pub async fn pairing(s: &Service, kind: &str) -> Result<Value, Error> {
         });
     }
     let url = match row["url"].as_str().filter(|value|!value.is_empty()) {
-        Some(base)=>format!("{}/?token={}",base.trim_end_matches('/'),s.token),
+        Some(base)=>format!("{}/?token={}",base.trim_end_matches('/'),super::pairing::token_query(&s.token)),
         None=>super::doctor::pairing_url(s),
     };
     Ok(json!({"url":url,"qr_svg":qr_svg(&url)?}))

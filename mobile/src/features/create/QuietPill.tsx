@@ -24,12 +24,14 @@ type Props = {
   onPress?: () => void;
   // Estado que a pessoa precisa ver sem abrir o menu (conta sem cota, troca automática).
   tone?: 'warning' | 'accent';
+  // Ação direta: sem a seta, porque não abre menu.
+  plain?: boolean;
 };
 
 // A pílula quieta do app de PC (quiet_pill): 26 de altura, texto 12.5 apagado, ícone 14 e a seta do
 // menu. O hitSlop leva o toque aos 44 pt sem engordar o desenho.
 export const QuietPill = forwardRef<View, Props>(function QuietPill(
-  { icon, label, aria, disabled, actions, menuTitle, onAction, onPress, tone }, ref,
+  { icon, label, aria, disabled, actions, menuTitle, onAction, onPress, tone, plain }, ref,
 ) {
   const anchor = useRef<View>(null);
   useImperativeHandle(ref, () => anchor.current!, []);
@@ -52,7 +54,7 @@ export const QuietPill = forwardRef<View, Props>(function QuietPill(
     >
       {icon ? <Icon name={icon} size={14} color={ink} /> : null}
       <Text style={[styles.text, tone && { color: ink }]} numberOfLines={1}>{label}</Text>
-      <Icon name="ChevronDown" size={12} color={theme.tokens.text.muted} />
+      {plain ? null : <Icon name="ChevronDown" size={12} color={theme.tokens.text.muted} />}
     </AnimatedPressable>
   );
   return (

@@ -1,6 +1,7 @@
 import { comTeto, getSessions, probeServerResponse } from './api';
 import { SERVIDOR_CANDIDATO } from './esfriamento';
 import type { LanInfo, Server } from './servers';
+import { tailscaleHost } from './share';
 
 const MAX_MACHINES = 100;
 const MAX_PAYLOAD = 262_144;
@@ -184,11 +185,8 @@ export function mergeImportedMachines(state: { servers: Server[]; activeId: stri
     if (seen.has(baseUrl)) continue;
     if (identity && identities.has(identity)) {
       const existing = [...state.servers, ...added].find((s) => isOwnMachine(s) && s.lan?.id === identity);
-      const host = new URL(baseUrl).hostname;
-      const tailnetIp = /^100\.(\d+)\.\d+\.\d+$/.exec(host);
-      const remoteAddress = host.endsWith('.ts.net') || !!tailnetIp && Number(tailnetIp[1]) >= 64 && Number(tailnetIp[1]) <= 127;
       if (existing && existing.token === server.token && !existing.remote
-        && remoteAddress) {
+        && tailscaleHost(baseUrl)) {
         const replacement = { ...existing, remote: { url: baseUrl, id: identity } };
         const index = added.findIndex((s) => s.id === existing.id);
         if (index >= 0) added[index] = replacement;

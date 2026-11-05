@@ -3,16 +3,17 @@
 //! lida pelo histórico Rust com o mesmo corte de 8 eventos do Python.
 
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
+use std::time::{Duration, SystemTime};
 
-use hangar_api::chat::ChatKind;
+use hangar_api::chat::{ChatEvent, ChatKind};
 use hangar_api::session::SessionRow;
 use regex::Regex;
 
 use super::capped::Capped;
 use crate::transcript::py::{is_space, py_re};
-use crate::transcript::history::merged_history_capped;
+use crate::transcript::history::dated_history_capped;
 use crate::transcript::{HistoryRequest, Provider, TAIL_WINDOW};
 
 const HISTORY_LIMIT: usize = 8;
@@ -33,12 +34,36 @@ pub fn plain_text(text: &str) -> String {
     text.split(is_space).filter(|w| !w.is_empty()).collect::<Vec<_>>().join(" ")
 }
 
+fn tail_events(provider: Provider, jsonl: &Path, queue: Option<PathBuf>) -> io::Result<Vec<(f64, ChatEvent)>> {
+    let req = HistoryRequest { provider, jsonl: jsonl.to_owned(), queue, limit: Some(HISTORY_LIMIT), tail_window: TAIL_WINDOW };
+    dated_history_capped(&req, MAX_TAIL)
+}
+
+fn last_event_at(events: &[(f64, ChatEvent)]) -> Option<f64> {
+    events.iter().rev().find(|(ts, ev)| *ts != 0.0 && ev.kind != ChatKind::Notice).map(|(ts, _)| *ts)
+}
+
+/// Há quanto a conversa parou. O mtime só vale sem evento datado na cauda: ele anda sem conversa nenhuma.
+/// Falha de leitura é `None`: quem pergunta desiste de adormecer.
+pub fn conversation_idle(provider: Provider, transcript: &Path) -> Option<Duration> {
+    let events = match tail_events(provider, transcript, None) {
+        Ok(events) => events,
+        Err(error) => {
+            tracing::warn!(kind = ?error.kind(), "adormecer: conversa ilegível, sessão fica acordada");
+            return None;
+        }
+    };
+    let event = last_event_at(&events).and_then(|ts| SystemTime::UNIX_EPOCH.checked_add(Duration::try_from_secs_f64(ts).ok()?));
+    event.or_else(|| std::fs::metadata(transcript).and_then(|m| m.modified()).ok())?.elapsed().ok()
+}
+
 struct Cached {
     jsonl: String,
     mtime: Option<f64>,
     provider: String,
     text: Option<String>,
     at: Option<f64>,
+    activity: Option<f64>,
 }
 
 /// Por sessão, a resposta lida para (transcript, mtime, provider): a lista roda a cada 2 s e o
@@ -49,7 +74,8 @@ pub struct ReplyCache(Capped<String, Cached>);
 impl ReplyCache {
     /// Preenche `last_reply`/`last_reply_at` das linhas Claude e Codex: só a parada com transcript
     /// tem resposta. Linha de provedor que o Rust não lê fica como veio. Falha de leitura deixa a
-    /// linha sem resposta, sem cache, e volta para quem chamou registrar.
+    /// linha sem resposta, sem cache, e volta para quem chamou registrar. Na parada, `last_activity`
+    /// entra com o mtime (a chave do cache) e sai com a hora do último evento da conversa.
     #[must_use = "sem registrar a falha, a linha parece só não ter resposta"]
     pub fn decorate(
         &mut self,
@@ -68,23 +94,18 @@ impl ReplyCache {
                 c.jsonl == jsonl && c.mtime == row.last_activity && c.provider == row.provider
             });
             if !hit {
-                let req = HistoryRequest {
-                    provider,
-                    jsonl: PathBuf::from(&jsonl),
-                    queue: queue_of(&row.name),
-                    limit: Some(HISTORY_LIMIT),
-                    tail_window: TAIL_WINDOW,
-                };
-                let events = match merged_history_capped(&req, MAX_TAIL) {
+                let events = match tail_events(provider, Path::new(&jsonl), queue_of(&row.name)) {
                     Ok(events) => events,
                     Err(error) => {
                         failures.push((row.name.clone(), error));
                         continue;
                     }
                 };
+                let activity = last_event_at(&events);
                 let event = events
                     .into_iter()
                     .rev()
+                    .map(|(_, ev)| ev)
                     .find(|ev| ev.kind == ChatKind::AssistantMsg && ev.text.as_deref().is_some_and(|t| !t.is_empty()));
                 let (text, at) = match event {
                     Some(ev) => (
@@ -94,12 +115,14 @@ impl ReplyCache {
                     None => (None, None),
                 };
                 let entry =
-                    Cached { jsonl, mtime: row.last_activity, provider: row.provider.clone(), text, at };
+                    Cached { jsonl, mtime: row.last_activity, provider: row.provider.clone(), text, at, activity };
                 self.0.insert(row.name.clone(), entry);
             }
             let Some(cached) = self.0.get(&row.name) else { continue };
             row.last_reply = cached.text.clone();
             row.last_reply_at = cached.at;
+            // O mtime do transcript anda sem conversa nenhuma (o Claude toca o arquivo parado), e o prazo de ocultar e adormecer nunca venceria.
+            if let Some(at) = cached.activity { row.last_activity = Some(at); }
         }
         failures
     }

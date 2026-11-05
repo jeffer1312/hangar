@@ -15,7 +15,7 @@ import { semEsforco } from '../pills/pills';
 import { SettingsList } from '../../ui/SettingsList';
 import { useServers } from '../../stores/servers';
 import { readProject, rememberProject } from '../../stores/createPreferences';
-import { autoSessionName, type NewConversationInput } from '../../stores/newConversation';
+import { autoSessionName, NO_PROJECT_CWD, type NewConversationInput } from '../../stores/newConversation';
 import { CwdPicker } from './CwdPicker';
 import { loadErrorText } from './loadError';
 import { useCanceledLoadRetry } from './useCanceledLoadRetry';
@@ -106,6 +106,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const remember = (patch: NewChatChoices) => rememberChoices(active.id, patch);
 
   const [picked, setPicked] = useState<string | null>(null);
+  // Worktree escolhida no menu de branch: o repositório dela vem junto, antes de a lista geral carregar.
+  const [folderRepo, setFolderRepo] = useState<{ path: string; repo: string } | null>(null);
   const [name, setName] = useState('');
   const [worktree, setWorktree] = useState<WorktreeChoice | null>(null);
   const onWorktree = useCallback((v: WorktreeChoice | null) => setWorktree(v), []);
@@ -670,12 +672,15 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const modelLabel = displayModel?.id === 'default' ? m.criar_padrao() : displayModel?.name ?? (modelo || displayModel?.id || m.config_motores_modelo_padrao());
   const modelContext = displayModel?.context ?? (displayModel?.context_length ? ctxWindow(displayModel.context_length).toUpperCase() : '');
   const chipLabel = retomavel ? m.criar_retomar() : [modelLabel, modelContext].filter(Boolean).join(' · ');
-  const folderLabel = picked ? basename(picked) : m.native_new_chat_folder();
+  const noProject = picked === NO_PROJECT_CWD;
+  const folderLabel = noProject ? m.native_new_chat_no_project() : picked ? basename(picked) : m.native_new_chat_folder();
   const folderRef = useRef<View>(null);
   const branchRef = useRef<View>(null);
   // Branch nova sem nome digitado leva o nome final da sessão, que só existe ao criar.
   // A pasta escolhida pode já ser uma worktree que existe: a pílula diz isso, não "atual".
   const pickedWorktree = !worktree && picked ? repos.flatMap((r) => r.worktrees).find((w) => samePath(w.path, picked)) : undefined;
+  const pickedRepo = (picked && folderRepo?.path === picked ? folderRepo.repo : undefined)
+    ?? (picked ? repos.flatMap((r) => r.worktrees).find((w) => samePath(w.path, picked))?.repo : undefined);
   const branchLabel = pickedWorktree ? m.worktree_menu_pill_existente({ nome: basename(pickedWorktree.path) })
     : !worktree ? m.native_create_checkout_current()
     : !worktree.new_branch ? m.worktree_menu_pill_nova({ branch: worktree.branch })
@@ -890,16 +895,18 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   // Mesmo painel preso à linha/pílula de branch nas duas apresentações.
   const branchPanel = (
     <AnchoredPanel
-      open={branchOpen && !!picked}
+      open={branchOpen && !!picked && !noProject}
       anchor={branchRef.current}
+      maxHeightRatio={0.75}
       onClose={() => setBranchOpen(false)}
       onDismissed={() => { if (branchRef.current) AccessibilityInfo.sendAccessibilityEvent(branchRef.current, 'focus'); }}
       label={m.native_create_checkout_branch()}
       closeLabel={m.native_close()}
     >
-      {picked ? <BranchPicker server={active} cwd={picked} sessionName={name.trim() || basename(picked)}
+      {picked && !noProject ? <BranchPicker server={active} cwd={pickedRepo ?? picked} worktreePath={pickedRepo && pickedRepo !== picked ? picked : undefined}
+                              sessionName={name.trim() || basename(picked)}
                               value={worktree} onChange={onWorktree}
-                              onPickFolder={(path, keepOpen) => { void handlePick(path); if (!keepOpen) setBranchOpen(false); }}
+                              onPickFolder={(path, keepOpen, repo) => { setFolderRepo(repo ? { path, repo } : null); void handlePick(path); if (!keepOpen) setBranchOpen(false); }}
                               onTakenChange={setBranchTaken} /> : null}
     </AnchoredPanel>
   );
@@ -1010,8 +1017,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
                 actions={machines.map((sv) => ({ id: sv.id, title: sv.label, state: on(sv.id === active.id) }))}
                 onAction={(id) => { if (id !== active.id) onPickMachine(id); }} />
               <SettingRow ref={folderRef} icon="Folder" label={m.native_new_chat_folder()} detail={picked ?? undefined}
-                value={picked ? basename(picked) : m.criar_escolher_pasta()} onPress={() => setFolderOpen(true)} />
-              {picked ? <SettingRow ref={branchRef} icon="GitBranch" label={m.native_create_checkout_branch()} value={branchLabel}
+                value={picked ? folderLabel : m.criar_escolher_pasta()} onPress={() => setFolderOpen(true)} />
+              {picked && !noProject ? <SettingRow ref={branchRef} icon="GitBranch" label={m.native_create_checkout_branch()} value={branchLabel}
                 onPress={() => setBranchOpen(true)} /> : null}
             </RowGroup>
             <RowGroup>
@@ -1080,9 +1087,13 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
           />
           <QuietPill ref={folderRef} icon="Folder" label={folderLabel} aria={m.native_new_chat_folder()}
                      onPress={() => openFolder(folderRef.current)} />
-          {picked ? (
+          {picked && !noProject ? (
             <QuietPill ref={branchRef} icon="GitBranch" label={branchLabel}
                        aria={m.native_create_checkout_branch()} onPress={() => setBranchOpen(true)} />
+          ) : null}
+          {!noProject && !active.invite ? (
+            <QuietPill plain icon="House" label={m.native_new_chat_no_project()} aria={m.native_new_chat_no_project_hint()}
+                       onPress={() => { void handlePick(NO_PROJECT_CWD); }} />
           ) : null}
         </>
       )}

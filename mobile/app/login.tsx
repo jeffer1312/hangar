@@ -13,6 +13,7 @@ import { syncLogin } from '../src/features/login/syncLogin';
 import { useServers } from '../src/stores/servers';
 import { DEMO_BASE_URL, DEMO_TOKEN } from '../src/net/demo';
 import { parseInviteLink } from '@hangar/core';
+import { tailscaleFailure } from '../src/features/machines/api';
 import { verifyLoginMachine } from '../src/features/machines/loginMachine';
 import { InvitePanel } from '../src/features/share/InvitePanel';
 import * as m from '../src/paraglide/messages';
@@ -90,19 +91,28 @@ export default function Login() {
     setError('');
 
     // add é síncrono em memória, mas persist é async (emenda 2) — o probe só roda depois
-    const existing = useServers.getState().servers.some((s) => s.baseUrl === p.base && !s.invite);
-    const added = useServers.getState().add({ baseUrl: p.base, token: p.token, label: m.native_settings_group_server() });
+    const before = useServers.getState();
+    const existing = before.servers.find((s) => s.baseUrl === p.base && !s.invite);
+    const added = before.add({ baseUrl: p.base, token: p.token, label: m.native_settings_group_server() });
 
     try {
       await verifyLoginMachine(added, !existing);
       router.replace('/');
     } catch (e) {
 
-      // rollback: remove o servidor que acabamos de adicionar (mesmo que persist falhe, remove da memória)
-      useServers.getState().remove(added.id);
+      // rollback: máquina já salva volta como estava; só o cadastro novo sai (mesmo que persist falhe, remove da memória)
+      if (existing) {
+        useServers.getState().add({ baseUrl: existing.baseUrl, token: existing.token });
+        if (before.activeId) useServers.getState().setActive(before.activeId);
+      } else {
+        useServers.getState().remove(added.id);
+      }
       const status = (e as any)?.status;
+      const tailscale = tailscaleFailure(e, added.baseUrl);
       if (status === 401) {
         setError(m.login_url_token_invalidos());
+      } else if (tailscale) {
+        setError(tailscale);
       } else {
         const msg = e instanceof Error && e.message ? e.message : m.login_falha();
         setError(msg ? `${m.login_falha()}: ${msg}` : m.login_url_token_invalidos());

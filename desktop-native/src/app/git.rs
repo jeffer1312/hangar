@@ -272,6 +272,8 @@ pub(in crate::app) fn elsewhere_refusal(error: &Failure, folder: &str) -> String
     let detail = error.detail.as_str();
     if let Some(names) = detail.strip_prefix("sessão aberta dentro: ") {
         tr("git_elsewhere_busy").replace("{pasta}", folder).replace("{nomes}", names)
+    } else if detail.starts_with("sessão aberta dentro") {
+        tr("git_elsewhere_busy_unnamed").replace("{pasta}", folder)
     } else if detail.starts_with("há arquivos que serão perdidos") {
         tr("git_elsewhere_dirty").replace("{pasta}", folder)
     } else {

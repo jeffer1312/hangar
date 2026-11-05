@@ -464,7 +464,7 @@ impl Watcher {
         let (quiet,permission,turn_at) = tokio::task::spawn_blocking(move || {
             let modified = rollout.as_deref().and_then(|path|std::fs::metadata(path).and_then(|m|m.modified()).ok());
             // Parada também pela conversa: o motor readotado depois de um reinício conta do zero.
-            let still = modified.and_then(|at|at.elapsed().ok()).is_some_and(|idle|idle >= after);
+            let still = rollout.as_deref().and_then(|path|crate::list::reply::conversation_idle(crate::transcript::Provider::Codex,path)).is_some_and(|idle|idle >= after);
             let procs = SystemProcs::default();
             // Filhos ilegíveis não dizem que nenhum comando roda.
             let quiet = still && procs.children(Duration::ZERO).is_ok() && app.is_some_and(|pid|crate::state::shells::shells_of(pid,&procs).is_empty());

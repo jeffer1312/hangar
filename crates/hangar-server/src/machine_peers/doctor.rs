@@ -360,7 +360,7 @@ pub fn pairing_url(service: &Service) -> String {
     } else {
         public.trim_end_matches('/').into()
     };
-    format!("{base}/?token={}", service.token)
+    format!("{base}/?token={}", super::pairing::token_query(&service.token))
 }
 pub fn print_url_qr(url: &str, tty: bool) -> u8 {
     if !tty {

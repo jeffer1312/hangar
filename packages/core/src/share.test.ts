@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   parseInviteLink, parsePairLink, inviteAllows, redeemInvite, InviteRedeemError, SharePrerequisiteError, ShareReachError,
+  tailscaleHost,
 } from './share';
 import * as m from './paraglide/messages';
 import { configureApi, type ApiEnv } from './apiEnv';
@@ -11,6 +12,19 @@ import {
 import type { Server } from './servers';
 
 const CONVITE: Server = { id: 'srv-i', label: 'Convite · J', baseUrl: 'https://dono.ts.net:8443', token: 'tg', invite: true };
+
+describe('tailscaleHost', () => {
+  it('reconhece o nome da tailnet e a faixa 100.64.0.0/10', () => {
+    expect(tailscaleHost('https://hangar.tail0000.ts.net')).toBe('hangar.tail0000.ts.net');
+    expect(tailscaleHost('http://100.64.0.2:8765')).toBe('100.64.0.2');
+  });
+
+  it('não confunde outros endereços', () => {
+    for (const outro of ['http://100.128.0.1:8765', 'http://100.63.0.1:8765', 'http://192.168.0.5:8765', 'https://exemplo.com', 'https://ts.net.exemplo.com', 'nao-e-url']) {
+      expect(tailscaleHost(outro)).toBeNull();
+    }
+  });
+});
 
 function ambiente(over: Partial<ApiEnv> = {}) {
   configureApi({

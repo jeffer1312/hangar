@@ -558,8 +558,8 @@ impl RuntimeRegistry {
         // Só leitura não roda sem terminal, e o sidecar dela seria o da estacionada à espera do terminal protegido.
         if current.spec.read_only {return Ok(false);}
         let (transcript,agent,mux)=(target.transcript.clone(),i64::from(target.metadata.agent_pid),target.binding.mux_argv.first().cloned());
-        // Parada pelo transcript: a linha da lista não acompanha a última atividade.
-        let idle=tokio::task::spawn_blocking(move||std::fs::metadata(&transcript).and_then(|m|m.modified()).ok().and_then(|at|at.elapsed().ok())).await.ok().flatten();
+        // Parada pela conversa: a linha da lista não acompanha a última atividade.
+        let idle=tokio::task::spawn_blocking(move||crate::list::reply::conversation_idle(crate::transcript::Provider::Claude,&transcript)).await.ok().flatten();
         let Some(idle)=idle.filter(|idle|*idle>=after) else {return Ok(false)};
         // Filhos ilegíveis não dizem que nenhum comando roda.
         let quiet=tokio::task::spawn_blocking(move||{

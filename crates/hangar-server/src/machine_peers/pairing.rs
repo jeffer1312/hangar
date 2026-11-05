@@ -31,10 +31,16 @@ impl Settings {
         let api = format!("http://{host}:{}",self.port);
         let front_port = if self.front_port == "0" {&self.port} else {&self.front_port};
         let front = if self.public_url.is_empty() {format!("http://{host}:{front_port}")} else {self.public_url.trim_end_matches('/').into()};
-        let pwa = format!("{front}/?token={}",self.token);
-        let native = if self.public_url.is_empty() {format!("{api}/?token={}",self.token)} else {format!("{pwa}&api={api}")};
+        let pwa = format!("{front}/?token={}",token_query(&self.token));
+        let native = if self.public_url.is_empty() {format!("{api}/?token={}",token_query(&self.token))} else {format!("{pwa}&api={api}")};
         (pwa,native)
     }
+}
+
+/// A senha no QR vai codificada: `+`, `&`, `%` ou `#` crus quebram a leitura no celular.
+pub(crate) fn token_query(token: &str) -> String {
+    const SET: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC.remove(b'_').remove(b'.').remove(b'-').remove(b'~');
+    percent_encoding::utf8_percent_encode(token, SET).to_string()
 }
 pub(crate) fn qr_text(url:&str)->Result<String,String> {
     let qr=qrcode::QrCode::new(url.as_bytes()).map_err(|_|"pairing_qr_invalid".to_owned())?;
@@ -72,4 +78,17 @@ pub fn cli(args:&[String])->std::process::ExitCode {
         .and_then(|snapshot|Settings::from_snapshot(&snapshot))
         .and_then(|settings|print(&settings,&super::network::lan_ip(),std::io::stdout().is_terminal(),&mut std::io::stdout().lock()));
     match result {Ok(())=>0.into(),Err(error)=>{eprintln!("{error}");1.into()}}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Settings;
+
+    #[test]
+    fn pairing_urls_encode_the_password() {
+        let local = Settings { public_url: String::new(), bind: "10.0.0.5".into(), token: "a+b&c%d#".into(), port: "8765".into(), front_port: "5173".into() };
+        assert_eq!(local.urls("ignored"), ("http://10.0.0.5:5173/?token=a%2Bb%26c%25d%23".into(), "http://10.0.0.5:8765/?token=a%2Bb%26c%25d%23".into()));
+        let public = Settings { public_url: "https://casa.ts.net/".into(), ..local };
+        assert_eq!(public.urls("ignored").1, "https://casa.ts.net/?token=a%2Bb%26c%25d%23&api=http://10.0.0.5:8765");
+    }
 }

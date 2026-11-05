@@ -81,6 +81,7 @@ pub(crate) use session_tabs::{PlateMark, PlateSegment, plate, tab_frame, tab_tit
 pub(crate) use tags::{account_icon, machine_icon};
 pub(crate) use rename_suggest::{Strip as RenameStrip, rename_strip};
 pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command, request_pair};
+pub(crate) use create::quiet_button;
 pub(crate) use settings::{setting_row, settings_box};
 pub(crate) use accounts::{login_heading, target_row};
 pub(crate) use search::{ScopeFound, highlighted as search_highlighted, search_agent_label, search_chat_header, search_chat_sub, search_field, search_filter_chip, search_found_frame,

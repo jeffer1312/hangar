@@ -323,6 +323,9 @@ pub(super) fn unique_name(base: &str, taken: &HashSet<String>) -> String {
     (2..).map(|n| format!("{clean}-{n}")).find(|name| !taken.contains(name)).unwrap_or(clean)
 }
 
+/// O servidor expande na abertura: a pasta do usuário costuma estar fora das raízes, e ali não há repositório para ler.
+const NO_PROJECT_CWD: &str = "~";
+
 // A pasta pode ser de um servidor Windows: `\` também separa.
 fn basename(path: &str) -> &str { crate::composer::basename(path) }
 
@@ -951,12 +954,14 @@ impl NewSession {
         self.request(cx, move |api, send| Box::pin(async move { send(CreateReply::Codex(seq, api.server_read(&["codex-contas"], &[], 30).await)).await }));
     }
 
-    fn select_root(&mut self, root: Root, window: &mut Window, cx: &mut Context<Self>) {
+    fn select_root(&mut self, root: Root, window: &mut Window, cx: &mut Context<Self>) { self.open_root(root, true, window, cx); }
+
+    fn open_root(&mut self, root: Root, pick: bool, window: &mut Window, cx: &mut Context<Self>) {
         let path = root.path.clone();
         // A pasta da criação em voo não muda: a coluna da esquerda fica parada até a resposta.
         if self.creating { return; }
         self.root = Some(root);
-        if self.compact { self.picked = Some(path.clone()); self.reset_git(); self.load_branches(window, cx); }
+        if self.compact && pick { self.picked = Some(path.clone()); self.reset_git(); self.load_branches(window, cx); }
         let remember = path.clone();
         self.link.runtime.spawn_blocking(move || crate::appearance::remember_root(&remember));
         self.scan_dir(path, cx);
@@ -1100,6 +1105,17 @@ impl NewSession {
 
     fn read_branches(&mut self, fresh: bool, cx: &mut Context<Self>) {
         if self.creating { return; }
+        if self.no_project() {
+            let seq = self.checkout.start();
+            self.checkout.finish(seq, Ok(None));
+            self.clear_git();
+            let seq = self.worktrees.start();
+            self.worktrees.finish(seq, Ok(Vec::new()));
+            (self.branch, self.new_branch, self.base, self.existing, self.base_open) = (String::new(), false, String::new(), None, false);
+            (self.picking, self.agents_open) = (false, false);
+            cx.notify();
+            return;
+        }
         let (Some(root), Some(path)) = (self.root.as_ref(), self.picked.clone()) else { return };
         let root = root.path.clone();
         let seq = self.checkout.start();
@@ -1118,6 +1134,7 @@ impl NewSession {
     }
 
     fn load_folder_worktrees(&mut self, cx: &mut Context<Self>) {
+        if self.no_project() { return; }
         let Some(folder) = self.picked.clone() else { return };
         let seq = self.worktrees.start();
         // Só o repositório da pasta e sem medir o disco: o menu não mostra espaço.
@@ -1355,7 +1372,8 @@ impl NewSession {
                 }
                 let list = self.roots.ok().cloned().unwrap_or_default();
                 self.root_scans = list.iter().cloned().map(|root| RootScan { root, scan: Remote::default() }).collect();
-                if let Some(root) = list.iter().find(|r| Some(&r.path) == last.as_ref()).or(list.first()).cloned() { self.select_root(root, window, cx); }
+                // As raízes podem chegar depois do clique em "Sem projeto": a escolha da pessoa fica.
+                if let Some(root) = list.iter().find(|r| Some(&r.path) == last.as_ref()).or(list.first()).cloned() { self.open_root(root, !self.no_project(), window, cx); }
                 self.apply_preset(window, cx);
                 self.refilter(cx);
             }
@@ -1558,7 +1576,8 @@ fn worktree_body(branch: &str, new_branch: bool, base: &str) -> Value {
 fn created_here(session: &SessionInfo, name: &str, cwd: &str, branch: Option<&str>) -> bool {
     if session.name != name { return false; }
     match branch {
-        None => session.cwd.as_deref() == Some(cwd),
+        // A sessão volta com o caminho já expandido, e o nome foi escolhido livre logo antes do pedido.
+        None => cwd == NO_PROJECT_CWD || session.cwd.as_deref() == Some(cwd),
         Some(branch) => session.branch.as_deref() == Some(branch) && session.cwd.as_deref().is_some_and(|path| {
             if path == cwd { return true; }
             let path = path.replace('\\', "/");
@@ -2111,14 +2130,21 @@ pub(super) fn wanted(query: &str, label: &str, hint: &str) -> bool {
 }
 
 /// Pílula quieta acima e abaixo do compositor: texto apagado com ícone, a seta do menu e o realce enquanto aberto.
-fn quiet_pill(menu: Menu, open: bool, icon: IconName, text: String, aria: String, disabled: bool, cx: &mut Context<NewSession>) -> Div {
-    popup::anchor(div(), menu.anchor()).child(Button::new(menu.anchor())
+/// A pílula quieta sem ação: a seta só aparece em quem abre menu.
+pub(crate) fn quiet_button(id: &'static str, icon: IconName, text: String, chevron: bool, cx: &App) -> Button {
+    Button::new(id)
         .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::muted()).hover(theme::hover()).active(theme::hover()))
-        .h(px(26.)).px(px(8.)).rounded(px(6.)).selected(open).disabled(disabled).accessibility_label(format!("{aria}: {text}"))
+        .h(px(26.)).px(px(8.)).rounded(px(6.))
         .child(div().flex().items_center().gap(px(6.)).text_size(px(12.5))
             .child(chrome::small_icon(icon, 14., theme::faint()))
             .child(div().max_w(px(220.)).truncate().child(text))
-            .child(chrome::small_icon(IconName::ChevronDown, 12., theme::faint())))
+            .when(chevron, |el| el.child(chrome::small_icon(IconName::ChevronDown, 12., theme::faint()))))
+}
+
+fn quiet_pill(menu: Menu, open: bool, icon: IconName, text: String, aria: String, disabled: bool, cx: &mut Context<NewSession>) -> Div {
+    let label = format!("{aria}: {text}");
+    popup::anchor(div(), menu.anchor()).child(quiet_button(menu.anchor(), icon, text, true, cx)
+        .selected(open).disabled(disabled).accessibility_label(label)
         .on_click(cx.listener(move |this, _, window, cx| this.toggle_menu(menu, window, cx))))
 }
 
@@ -2169,12 +2195,20 @@ impl NewSession {
     pub(super) fn render_top_pills(&self, cx: &mut Context<Self>) -> Div {
         let open = self.menu.get();
         let machine = self.server_label();
-        let folder = self.picked.as_deref().map(basename).filter(|s| !s.is_empty()).map(str::to_owned).unwrap_or_else(|| tr("new_chat_folder"));
+        let no_project = self.no_project();
+        let folder = if no_project { tr("new_chat_no_project") } else {
+            self.picked.as_deref().map(basename).filter(|s| !s.is_empty()).map(str::to_owned).unwrap_or_else(|| tr("new_chat_folder"))
+        };
         let folders_ready = !self.roots.loading && self.roots.ok().is_some_and(|roots| !roots.is_empty());
         div().flex().justify_end().items_center().gap(px(2.)).pb(px(6.))
             .child(quiet_pill(Menu::Machine, open == Some(Menu::Machine), IconName::Monitor, machine, tr("new_chat_machine"), false, cx))
             .child(quiet_pill(Menu::Folder, open == Some(Menu::Folder), IconName::Folder, folder, tr("new_chat_folder"), !folders_ready, cx))
+            .children((!no_project).then(|| quiet_button("new-chat-no-project", IconName::House, tr("new_chat_no_project"), false, cx)
+                .disabled(self.creating).accessibility_label(tr("new_chat_no_project_hint"))
+                .on_click(cx.listener(|this, _, window, cx| this.pick(NO_PROJECT_CWD.to_owned(), window, cx)))))
     }
+
+    fn no_project(&self) -> bool { self.picked.as_deref() == Some(NO_PROJECT_CWD) }
 
     /// Conta e branch, abaixo do compositor e à esquerda; cada uma só quando existe para o provider e a pasta.
     pub(super) fn render_bottom_pills(&self, cx: &mut Context<Self>) -> Div {
@@ -2281,6 +2315,7 @@ impl NewSession {
     /// O que impede ou explica o envio, abaixo das pílulas: a criação em voo, a falha dela, ou a leitura que faltou.
     /// O nome que a sessão da tela sem sessão vai ter (a pasta; o desempate do servidor pode somar um número) e o agente.
     pub(super) fn opening_name(&self) -> String {
+        if self.no_project() { return "sessao".to_owned(); }
         self.existing.as_deref().filter(|_| !self.new_branch).or(self.picked.as_deref()).map(basename).unwrap_or_default().to_owned()
     }
     pub(super) fn provider(&self) -> &'static str { self.provider }
@@ -3239,6 +3274,8 @@ mod tests {
             branch: Some("feature".into()), ..Default::default() };
         assert!(super::created_here(&created, "api", "/projects/repo/src", Some("feature")));
         assert!(!super::created_here(&created, "api", "/projects/repo/src", None));
+        assert!(super::created_here(&created, "api", super::NO_PROJECT_CWD, None));
+        assert!(!super::created_here(&created, "outra", super::NO_PROJECT_CWD, None));
         assert!(!super::created_here(&created, "api", "/other/repo", Some("feature")));
         assert!(!super::created_here(&created, "api", "/projects/other-repo", Some("feature")));
         assert!(!super::created_here(&created, "api", "/projects/repo", Some("main")));
