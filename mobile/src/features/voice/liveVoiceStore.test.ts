@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { LiveVoiceRequestError } from '@hangar/core';
 import type { LiveVoiceHandlers, LiveVoiceSettingsReply, LiveVoiceState, Server, VoiceMemory } from '@hangar/core';
 import * as m from '../../paraglide/messages';
+import { toast } from '../../ui/Toast';
 
 const api = vi.hoisted(() => ({ settings: vi.fn(), save: vi.fn(), memory: vi.fn(), forget: vi.fn(), accounts: vi.fn(), models: vi.fn(), peers: vi.fn(), diag: vi.fn() }));
 vi.mock('@hangar/core', async importOriginal => ({
@@ -44,6 +45,7 @@ vi.mock('react-native', () => ({ Platform: native.platform,
 }));
 const stalledHaptic = vi.hoisted(() => vi.fn());
 vi.mock('../../ui/haptics', () => ({ haptic: { connected: vi.fn(), stalled: stalledHaptic } }));
+vi.mock('../../ui/Toast', () => ({ toast: { erro: vi.fn() } }));
 vi.mock('react-native-webrtc', () => ({ RTCPeerConnection: native.Peer, mediaDevices: { getUserMedia: native.media },
   permissions: { request: native.microphonePermission } }));
 vi.mock('../../../modules/live-voice-audio', () => ({ default: {
@@ -122,6 +124,8 @@ beforeEach(async () => {
       setScreen = vi.fn();
       setMuted = vi.fn();
       setMode = vi.fn();
+      canPauseSpeech = vi.fn(() => true);
+      setSpeechPaused = vi.fn();
       constructor(handlers: LiveVoiceHandlers) { this.handlers = handlers; calls.push(this); }
     } };
   });
@@ -696,6 +700,29 @@ describe('configuração e memória do servidor capturado', () => {
     stale.resolve([memory]); await reading;
     expect(api.forget).toHaveBeenCalledWith(a, memory.id);
     expect(useLiveVoice.getState().view.memory).toMatchObject({ loading: false, entries: [], forgetError: null });
+  });
+
+  test('pausa da fala alterna na chamada e a chamada seguinte começa sem pausa', async () => {
+    const instance = await startA() as Instance & { setSpeechPaused: ReturnType<typeof vi.fn> };
+    expect(useLiveVoice.getState().view.speechPauseAvailable).toBe(true);
+    useLiveVoice.getState().toggleSpeechPause();
+    expect(instance.setSpeechPaused).toHaveBeenLastCalledWith(true);
+    expect(useLiveVoice.getState().view.speechPaused).toBe(true);
+    useLiveVoice.getState().toggleSpeechPause();
+    expect(instance.setSpeechPaused).toHaveBeenLastCalledWith(false);
+    useLiveVoice.getState().toggleSpeechPause();
+    await useLiveVoice.getState().stop();
+    await startA();
+    expect(useLiveVoice.getState().view.speechPaused).toBe(false);
+  });
+
+  test('retomar avisa quando parte da fala guardada se perdeu', async () => {
+    const instance = await startA() as Instance & { setSpeechPaused: ReturnType<typeof vi.fn> };
+    useLiveVoice.getState().toggleSpeechPause();
+    expect(toast.erro).not.toHaveBeenCalled();
+    instance.setSpeechPaused.mockReturnValueOnce(true);
+    useLiveVoice.getState().toggleSpeechPause();
+    expect(toast.erro).toHaveBeenCalledOnce();
   });
 
   test('vibra uma vez por travamento, não a cada retrato igual', async () => {

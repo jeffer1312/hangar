@@ -366,6 +366,22 @@ describe('LiveVoiceCall público', () => {
     expect(socket.messages.some(message => message.type === 'stop')).toBe(false);
   });
 
+  it('pausar a fala fecha o microfone e retomar reabre, sem mexer no silenciar', async () => {
+    const media = new rtc.Stream();
+    rtc.getUserMedia.mockResolvedValueOnce(media);
+    const { call, pc } = await openCall(); pc.connect();
+    const open = () => media.track.enabled;
+    expect(open()).toBe(true);
+    call.setSpeechPaused(true);
+    expect(open()).toBe(false);
+    call.setSpeechPaused(false);
+    expect(open()).toBe(true);
+    call.setMuted(true);
+    call.setSpeechPaused(true);
+    call.setSpeechPaused(false);
+    expect(open()).toBe(false);
+  });
+
   it('contador reoffer que sobe refaz o áudio; o primeiro retrato é só a base', async () => {
     const { pc, socket, handlers } = await openCall(); pc.connect();
     const state = (reoffer: number) => ({ type: 'state', state: { phase: 'live', mode: 'direct', activity: 'idle', draft: null, error: null, plan: null,
@@ -785,6 +801,17 @@ describe('LiveVoiceCall público', () => {
     pc.connect(); call.setMuted(true);
     await vi.advanceTimersByTimeAsync(10000);
     expect(socket.messages).toContainEqual({ type: 'level', input: 0 });
+    expect(handlers.failed).not.toHaveBeenCalled();
+  });
+
+  it('pausa longa da fala não derruba a chamada pelo medidor, nem durante nem ao retomar', async () => {
+    const { call, pc, handlers } = await openCall();
+    pc.getStats.mockRejectedValue(new Error('unavailable-while-paused'));
+    pc.connect(); call.setSpeechPaused(true);
+    await vi.advanceTimersByTimeAsync(11000);
+    pc.getStats.mockResolvedValue(new Map());
+    call.setSpeechPaused(false);
+    await vi.advanceTimersByTimeAsync(500);
     expect(handlers.failed).not.toHaveBeenCalled();
   });
 

@@ -101,6 +101,7 @@ export const SF_SYMBOLS: Partial<Record<IconName, SFSymbol>> = {
   Paperclip: 'paperclip',
   PanelLeft: 'sidebar.left',
   PanelRight: 'sidebar.right',
+  Pause: 'pause',
   Pencil: 'pencil',
   PenLine: 'pencil.line',
   PhoneOff: 'phone.down',

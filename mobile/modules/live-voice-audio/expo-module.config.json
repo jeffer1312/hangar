@@ -1,7 +1,8 @@
 {
   "platforms": ["apple", "android"],
   "apple": {
-    "modules": ["LiveVoiceAudioModule"]
+    "modules": ["LiveVoiceAudioModule"],
+    "appDelegateSubscribers": ["LiveVoiceAudioAppDelegate"]
   },
   "android": {
     "modules": ["expo.modules.livevoiceaudio.LiveVoiceAudioModule"]

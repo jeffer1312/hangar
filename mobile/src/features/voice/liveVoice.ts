@@ -76,6 +76,7 @@ function releaseMedia(media: MediaStream): void {
 export class LiveVoiceCall {
   private attempt: Attempt | null = null;
   private muted = false;
+  private speechPaused = false;
   private screen: LiveVoiceScreen = null;
 
   constructor(private handlers: LiveVoiceHandlers) {}
@@ -355,8 +356,22 @@ export class LiveVoiceCall {
     } else this.updateTracks(call);
   }
 
+  canPauseSpeech(): boolean { return LiveVoiceAudio.speechPauseAvailable?.() === true; }
+
+  /** Fecha o microfone junto: outra pessoa falando perto interromperia a resposta no servidor. */
+  setSpeechPaused(paused: boolean): boolean {
+    this.speechPaused = paused;
+    const lost = LiveVoiceAudio.setSpeechPaused?.(paused) === true;
+    const call = this.attempt;
+    if (call && this.current(call)) {
+      if (!paused) call.lastInput = Date.now();
+      this.updateTracks(call);
+    }
+    return lost;
+  }
+
   private updateTracks(call: Attempt): void {
-    const enabled = this.current(call) && !this.muted && !call.restoring
+    const enabled = this.current(call) && !this.muted && !this.speechPaused && !call.restoring
       && (call.pc?.connectionState === 'connected' || call.live && call.pc?.connectionState === 'disconnected');
     for (const track of call.media?.getAudioTracks() ?? []) track.enabled = enabled;
   }
@@ -432,7 +447,7 @@ export class LiveVoiceCall {
     call.reading = true;
     void this.readLevels(call).catch(() => {
       if (!this.current(call)) return;
-      if (this.muted || call.restoring) this.handlers.levels({ input: 0, output: 0 });
+      if (this.muted || this.speechPaused || call.restoring) this.handlers.levels({ input: 0, output: 0 });
       else this.fail(call, 'audio_levels_unavailable', 'getStats_failed', true);
     }).finally(() => { call.reading = false; });
   }

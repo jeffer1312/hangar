@@ -7,6 +7,7 @@ import type { LiveVoiceAction, LiveVoiceHandlers, LiveVoiceScreen, LiveVoiceSett
 import { useServers } from '../../stores/servers';
 import * as m from '../../paraglide/messages';
 import { haptic } from '../../ui/haptics';
+import { toast } from '../../ui/Toast';
 import { setLiveVoiceAudioActive, useVoiceAudioState } from './audioSession';
 import type { LiveVoiceCall } from './liveVoice';
 import type { LiveVoiceView } from './LiveVoiceSheet';
@@ -37,6 +38,7 @@ interface LiveVoiceStore {
   stop(): Promise<void>;
   retry(): Promise<void>;
   toggleMute(): void;
+  toggleSpeechPause(): void;
   setMode(mode: 'direto' | 'planejar'): void;
   loadSettings(server: Server, force?: boolean): Promise<void>;
   saveSettings(next: LiveVoiceSettings): Promise<void>;
@@ -344,7 +346,7 @@ export const useLiveVoice = create<LiveVoiceStore>((set, get) => {
       opening = { token, deadline, cancel, timer: setTimeout(valid, Math.max(0, deadline - Date.now())) };
       userMuted = false;
       // A trava vem antes de qualquer import, permissão ou leitura de rede.
-      updateView({ phase: 'connecting', error: null, state: null, liveSince: null, muted: false, dictating: false });
+      updateView({ phase: 'connecting', error: null, state: null, liveSince: null, muted: false, dictating: false, speechPaused: false });
       setLiveVoiceAudioActive(true);
       void loadPeers(server);
       const start = async () => {
@@ -356,6 +358,7 @@ export const useLiveVoice = create<LiveVoiceStore>((set, get) => {
           if (!currentServer()) { void end({ code: 'server_removed', detail: m.chat_servidor_removido() }); return; }
           const instance = new LiveVoiceCall(handlers(token));
           call = instance;
+          updateView({ speechPauseAvailable: instance.canPauseSpeech() });
           instance.setMuted(userMuted || useVoiceAudioState.getState().dictations > 0);
           // O transporte assume a preparação e arma outro prazo após os diálogos de permissão.
           if (opening?.token === token) {
@@ -387,6 +390,12 @@ export const useLiveVoice = create<LiveVoiceStore>((set, get) => {
       userMuted = !userMuted;
       updateView({ muted: userMuted });
       call?.setMuted(userMuted);
+    },
+    toggleSpeechPause() {
+      if (!inCall(get().view)) return;
+      const speechPaused = !get().view.speechPaused;
+      updateView({ speechPaused });
+      if (call?.setSpeechPaused(speechPaused)) toast.erro(m.codex_voice_speech_lost());
     },
     setMode(mode) { if (inCall(get().view)) call?.setMode(mode); },
     loadSettings(server, force = false) {
