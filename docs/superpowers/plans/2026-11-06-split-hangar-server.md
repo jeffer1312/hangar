@@ -135,17 +135,20 @@ E a conferência da invariante acima (nenhuma aresta para `hangar-server`).
 Cada Task move arquivos que outras sessões podem estar editando. O re-export do item 1 do contrato
 mantém o código delas compilando; o risco é conflito de merge no arquivo movido e no `lib.rs`.
 
-Status: needs-info — o Jefferson escolhe uma das opções antes da Task 1.
+**Decidido (Jefferson, 06/11/2026): janela por Task.** As outras opções eram esperar nenhuma branch
+mexer em `crates/hangar-server/` (dias de espera, a migração é contínua) e seguir sem aviso (o
+conflito cairia em quem não planejou a divisão).
 
-- **A. Janela por Task.** Antes de cada Task, um aviso às sessões ativas listando os módulos que vão
-  mover; elas não editam esses arquivos até o merge e depois fazem rebase (o git segue o
-  `git mv`). Para só quem mexe nos módulos movidos. ➡️ Recomendada: as Tasks são pequenas, a
-  ordem começa por módulos pouco tocados pela migração (core, custos, voz) e o re-export evita
-  mexer no código delas.
-- **B. Task espera as outras fecharem.** A Task só começa sem nenhuma branch aberta que mexa em
-  `crates/hangar-server/`. Zero conflito, mas a migração é contínua e a Task pode esperar dias.
-- **C. Sem pausa.** A Task corre em paralelo e quem mescla depois resolve o conflito. Rápido; o
-  conflito de arquivo movido e editado cai em quem não planejou a divisão.
+Em toda Task que move arquivo:
+
+1. **Antes de mover**, listar as sessões vivas do repositório (`hangar-send --list`, as de `cwd` num
+   checkout do hangar) e mandar a cada uma, por `hangar-send <sessao> "…"`, a lista exata de
+   arquivos e módulos que vão mudar de lugar e o pedido de não editá-los até o aviso de merge.
+   Sessão que já tem mudança neles responde, e a Task espera ela mesclar ou guardar a mudança.
+2. **Depois do merge na `main`**, avisar as mesmas sessões que os arquivos estão livres, com o
+   caminho novo de cada um e o lembrete de atualizar a branch sobre o `origin/main`.
+3. O caminho antigo (`crate::modulo::…`) continua compilando pelo re-export; quem só usa o módulo
+   não precisa parar.
 
 ## Estimativa de memória
 
@@ -181,7 +184,7 @@ fase; `plugin_listener` fica no servidor. Depois do core, a ordem segue o que fa
 
 ### Task 1: Criar o `hangar-core` com os módulos que não dependem de ninguém
 
-Status: needs-info (aguarda a escolha da coordenação)
+Status: ready-for-agent
 Revisão: base — define o manifesto e o re-export que todas as Tasks repetem.
 
 Arquivos: `crates/hangar-core/{Cargo.toml,src/lib.rs}` (novos); `git mv` de
