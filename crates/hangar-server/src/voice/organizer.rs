@@ -345,7 +345,6 @@ pub fn tools_for(caps: &[String]) -> Value {
 pub const DEFAULT_EFFORT: &str = "low";
 
 /// O organizador só ganha turno quando a voz delega uma fala: o convite da primeira conversa sai da própria voz ao conectar.
-pub const GREETING: &str = "Conectado. Pode falar.";
 pub const ONBOARDING_GREETING: &str = "Conectado. É a nossa primeira conversa nesta máquina, então deixa eu me apresentar rapidinho. \
     Eu sou sua assistente no Hangar: posso abrir sessões novas, acompanhar o que elas estão fazendo e te contar quando responderem, \
     mandar pedidos pra elas e explicar o que fizeram. Também planejo com você antes de mandar um trabalho, mexo em arquivos e \
@@ -361,7 +360,10 @@ Primeira conversa
   respostas. A resposta dele a isso, mesmo um 'sim' ou 'não' curto, vai ao organizador: é ele quem lê e guarda. A confirmação
   ou a correção dele ao que o organizador propôs guardar também vai ao organizador.";
 
-pub fn greeting(onboarding: bool) -> &'static str { if onboarding { ONBOARDING_GREETING } else { GREETING } }
+/// Reforço só: quem garante que nada pede fala ao conectar é a chamada não enviar saudação.
+const VOICE_SILENT_START: &str = "
+
+Ao conectar, espere ele; não se apresente.";
 
 /// Cada linha do que o organizador consegue, com as ferramentas do catálogo que a dão: a linha sai quando ao menos uma
 /// delas está no catálogo entregue. Ferramenta nova sem linha aqui reprova o teste.
@@ -404,7 +406,7 @@ pub fn voice_prompt(onboarding: bool, tools: &Value, mcp: bool, prefs: &str, sty
     let prefs = if prefs.trim().is_empty() { String::new() } else {
         format!("\n\nPreferências que o usuário pediu para guardar, sobre como você fala; valem sobre o padrão acima e o estilo:\n{prefs}")
     };
-    format!("{VOICE_PROMPT}\n\n{}{}{prefs}\n\n{}", voice_style(style), if onboarding { VOICE_ONBOARDING } else { "" }, capability_list(tools, mcp))
+    format!("{VOICE_PROMPT}\n\n{}{}{prefs}\n\n{}", voice_style(style), if onboarding { VOICE_ONBOARDING } else { VOICE_SILENT_START }, capability_list(tools, mcp))
 }
 
 fn voice_style(style: Style) -> &'static str {
@@ -1562,7 +1564,7 @@ impl WaitAck {
     pub fn delegated(&mut self, turn: &str, now: Instant) { self.pending = Some((turn.to_owned(), now)); }
     /// A voz já falou algo depois do pedido: ele sabe que foi ouvido.
     pub fn voice_spoke(&mut self) { self.pending = None; }
-    /// A resposta do organizador a este turno começou (ou o turno acabou).
+    /// A resposta do organizador a este turno chegou inteira (ou o turno acabou): começar não basta, ela pode ser cancelada.
     pub fn answered(&mut self, turn: &str) {
         if self.pending.as_ref().is_some_and(|(t, _)| t == turn) { self.pending = None; }
     }
@@ -1579,6 +1581,88 @@ impl WaitAck {
         self.said += 1;
         // ponytail: rodízio fixo; frase com o assunto do pedido só se estas soarem genéricas demais.
         Some(ACKS[(self.said - 1) % ACKS.len()])
+    }
+}
+
+/// Fala sem resposta por este tempo: a voz diz que continua respondendo.
+pub const SLOW_AFTER: Duration = Duration::from_secs(20);
+/// Respostas recomeçadas sem nenhuma terminar: daqui em diante ela não termina sozinha.
+pub const STALL_RESTARTS: u32 = 3;
+/// Organizador sem nenhuma saída, nem texto nem raciocínio.
+pub const STALL_SILENT: Duration = Duration::from_secs(45);
+/// O mesmo com ferramenta em curso, que pode demorar sem dizer nada.
+pub const STALL_TOOL: Duration = Duration::from_secs(180);
+/// Turnos refeitos antes de trocar o organizador.
+pub const STALL_RETRIES: u32 = 1;
+
+#[derive(Debug, PartialEq)]
+pub enum TurnAlarm { Slow, Stalled { reason: &'static str, restarts: u32, waited: Duration } }
+
+/// Vigia a fala que ainda não teve resposta. A voz só fala o que o organizador conclui: sem isto, turno preso é silêncio
+/// sem fim enquanto a transcrição segue, e a pessoa não tem como saber.
+#[derive(Default)]
+pub struct TurnWatch { turn: Option<String>, since: Option<Instant>, output: Option<Instant>, open: bool, heard_again: bool, restarts: u32,
+    tools: HashSet<String>, slow_said: bool, alarmed: bool }
+
+impl TurnWatch {
+    pub fn heard(&mut self, turn: &str, now: Instant) {
+        if self.turn.as_deref() != Some(turn) { *self = Self { turn: Some(turn.to_owned()), ..Self::default() }; }
+        self.since.get_or_insert(now);
+        // Fala nova não conta como saída: quem fala sem parar não pode adiar o alarme.
+        self.output.get_or_insert(now);
+        if self.open { self.heard_again = true; }
+    }
+
+    fn watching(&self, turn: &str) -> bool { self.since.is_some() && self.turn.as_deref() == Some(turn) }
+
+    pub fn output(&mut self, now: Instant) { if self.since.is_some() { self.output = Some(now); } }
+
+    pub fn message_started(&mut self, turn: &str, now: Instant) {
+        if !self.watching(turn) { return; }
+        if self.open { self.restarts += 1; }
+        (self.open, self.output) = (true, Some(now));
+    }
+
+    pub fn message_done(&mut self, turn: &str, now: Instant) {
+        if !self.watching(turn) { return; }
+        (self.open, self.restarts, self.alarmed, self.slow_said) = (false, 0, false, false);
+        // Fala que chegou durante a resposta ainda espera a dela.
+        (self.since, self.output) = if std::mem::take(&mut self.heard_again) { (Some(now), Some(now)) } else { (None, None) };
+    }
+
+    pub fn tool(&mut self, id: &str, running: bool, now: Instant) {
+        if running { self.tools.insert(id.to_owned()); } else { self.tools.remove(id); }
+        self.output(now);
+    }
+
+    pub fn turn_done(&mut self, turn: &str) { if self.turn.as_deref() == Some(turn) { *self = Self::default(); } }
+
+    pub fn turn(&self) -> Option<&str> { self.turn.as_deref() }
+
+    /// A interrupção foi recusada: conta de novo para tentar outra vez.
+    pub fn rearm(&mut self, now: Instant) { (self.alarmed, self.restarts, self.output) = (false, 0, Some(now)); }
+
+    /// Reinícios e espera da fala ainda sem resposta, para o diário.
+    pub fn unanswered(&self, now: Instant) -> Option<(u32, Duration)> {
+        self.since.map(|since| (self.restarts, now.saturating_duration_since(since)))
+    }
+
+    pub fn check(&mut self, now: Instant) -> Option<TurnAlarm> {
+        let since = self.since?;
+        if self.alarmed { return None; }
+        let silent = self.output.map_or(Duration::ZERO, |at| now.saturating_duration_since(at));
+        let limit = if self.tools.is_empty() { STALL_SILENT } else { STALL_TOOL };
+        let reason = if self.restarts >= STALL_RESTARTS { Some("restarted") }
+            else if silent >= limit { Some(if self.tools.is_empty() { "silent" } else { "tool_silent" }) } else { None };
+        if let Some(reason) = reason {
+            (self.alarmed, self.slow_said) = (true, true);
+            return Some(TurnAlarm::Stalled { reason, restarts: self.restarts, waited: now.saturating_duration_since(since) });
+        }
+        if !self.slow_said && self.tools.is_empty() && now.saturating_duration_since(since) >= SLOW_AFTER {
+            self.slow_said = true;
+            return Some(TurnAlarm::Slow);
+        }
+        None
     }
 }
 
@@ -1941,14 +2025,94 @@ mod tests {
 
     #[test]
     fn onboarding_rides_the_voice_only_when_asked() {
-        assert!(greeting(true).contains("primeira conversa") && greeting(true).contains("AGENTS.md")
-            && greeting(true).contains("como prefere as respostas") && greeting(true).contains("pra você conferir"));
-        assert!(greeting(true).contains("deixa eu me apresentar") && greeting(true).contains("perguntar o que eu consigo fazer"),
+        assert!(ONBOARDING_GREETING.contains("primeira conversa") && ONBOARDING_GREETING.contains("AGENTS.md")
+            && ONBOARDING_GREETING.contains("como prefere as respostas") && ONBOARDING_GREETING.contains("pra você conferir"));
+        assert!(ONBOARDING_GREETING.contains("deixa eu me apresentar") && ONBOARDING_GREETING.contains("perguntar o que eu consigo fazer"),
             "a primeira conversa apresenta o que a voz faz antes das perguntas");
-        assert_eq!(greeting(false), "Conectado. Pode falar.");
         let with = voice_prompt(true, &tools(), false, "", Style::default());
         assert!(with.starts_with(VOICE_PROMPT) && with.contains("Primeira conversa"));
-        assert!(!voice_prompt(false, &tools(), false, "", Style::default()).contains("Primeira conversa"));
+        assert!(!with.contains("Ao conectar, espere ele"), "o convite da primeira conversa sai ao conectar");
+        let normal = voice_prompt(false, &tools(), false, "", Style::default());
+        assert!(!normal.contains("Primeira conversa") && normal.contains("Ao conectar, espere ele"));
+    }
+
+    /// A chamada travada de 06/11: cada fala recomeçava a resposta, e nenhuma terminava.
+    #[test]
+    fn answers_that_keep_restarting_stall_the_turn() {
+        let (mut watch, t0) = (TurnWatch::default(), Instant::now());
+        watch.heard("t", t0);
+        watch.message_started("t", t0);
+        for n in 1..=STALL_RESTARTS {
+            assert_eq!(watch.check(t0), None, "ainda em {n}");
+            watch.heard("t", t0);
+            watch.message_started("t", t0);
+        }
+        assert_eq!(watch.check(t0), Some(TurnAlarm::Stalled { reason: "restarted", restarts: STALL_RESTARTS, waited: Duration::ZERO }));
+        assert_eq!(watch.check(t0), None, "um alarme por travamento");
+    }
+
+    #[test]
+    fn a_long_answer_that_keeps_writing_only_gets_the_slow_notice() {
+        let (mut watch, t0) = (TurnWatch::default(), Instant::now());
+        watch.heard("t", t0);
+        watch.message_started("t", t0);
+        assert_eq!(watch.check(t0 + SLOW_AFTER), Some(TurnAlarm::Slow));
+        for s in (21..120).step_by(10) {
+            let now = t0 + Duration::from_secs(s);
+            watch.output(now);
+            assert_eq!(watch.check(now), None, "escrevendo aos {s} s");
+        }
+        watch.message_done("t", t0 + Duration::from_secs(120));
+        assert_eq!(watch.unanswered(t0 + Duration::from_secs(120)), None);
+    }
+
+    #[test]
+    fn speech_does_not_hold_back_the_silence_alarm() {
+        let (mut watch, t0) = (TurnWatch::default(), Instant::now());
+        watch.heard("t", t0);
+        let _ = watch.check(t0 + SLOW_AFTER);
+        watch.heard("t", t0 + STALL_SILENT - Duration::from_secs(1));
+        assert!(matches!(watch.check(t0 + STALL_SILENT), Some(TurnAlarm::Stalled { reason: "silent", .. })));
+    }
+
+    #[test]
+    fn a_running_tool_gets_more_time_and_no_slow_notice() {
+        let (mut watch, t0) = (TurnWatch::default(), Instant::now());
+        watch.heard("t", t0);
+        watch.tool("c1", true, t0);
+        assert_eq!(watch.check(t0 + STALL_SILENT), None);
+        assert!(matches!(watch.check(t0 + STALL_TOOL), Some(TurnAlarm::Stalled { reason: "tool_silent", .. })));
+    }
+
+    #[test]
+    fn speech_during_an_answer_keeps_waiting_for_its_own_answer() {
+        let (mut watch, t0) = (TurnWatch::default(), Instant::now());
+        watch.heard("t", t0);
+        watch.message_started("t", t0);
+        watch.heard("t", t0);
+        watch.message_done("t", t0);
+        assert!(watch.unanswered(t0).is_some(), "a segunda fala ainda não teve resposta");
+        watch.message_started("t", t0);
+        watch.message_done("t", t0);
+        assert!(watch.unanswered(t0).is_none());
+    }
+
+    #[test]
+    fn turns_nobody_spoke_are_not_watched() {
+        let (mut watch, t0) = (TurnWatch::default(), Instant::now());
+        watch.message_started("resumo", t0);
+        watch.message_started("resumo", t0);
+        assert_eq!(watch.check(t0 + STALL_TOOL), None);
+    }
+
+    #[test]
+    fn a_refused_interrupt_can_alarm_again() {
+        let (mut watch, t0) = (TurnWatch::default(), Instant::now());
+        watch.heard("t", t0);
+        assert!(matches!(watch.check(t0 + STALL_SILENT), Some(TurnAlarm::Stalled { .. })));
+        watch.rearm(t0 + STALL_SILENT);
+        assert_eq!(watch.check(t0 + STALL_SILENT + Duration::from_secs(1)), None);
+        assert!(matches!(watch.check(t0 + STALL_SILENT * 2), Some(TurnAlarm::Stalled { .. })));
     }
 
     #[test]

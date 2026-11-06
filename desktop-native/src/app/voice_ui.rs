@@ -268,6 +268,10 @@ pub(super) struct VoiceUi {
     /// Falha que o servidor publica no retrato da chamada.
     pub(super) call_error: Option<String>,
     pub(super) muted: bool,
+    /// Fala da assistente pausada: o que chega fica guardado para tocar na retomada.
+    pub(super) speech_paused: bool,
+    /// O organizador travou numa resposta e o servidor está recuperando.
+    pub(super) stalled: bool,
     pub(super) open: bool,
     /// Sessão na tela que a chamada conhece: (chave da máquina, nome).
     pub(super) target: Option<(String, String)>,
@@ -529,7 +533,13 @@ pub(super) fn dock_line(action: Option<&OrganizerAction>, progress: Option<&str>
 
 /// O cartão da voz no painel. Altura e entrelinha fixas por linha: borda 1 + 12 + 16 + 8 + 20 + 8 + 16 + 12 = 93 cabe em
 /// `VOICE_DOCK_H`; com a entrelinha padrão, a última linha passava da altura e era cortada.
-pub(super) fn dock_card(equalizer: Div, status: String, color: Hsla, time: Option<String>, line: Option<String>) -> Stateful<Div> {
+/// Botão que pausa e retoma a fala da assistente, separado do que silencia o microfone.
+pub(crate) fn speech_pause_button(paused: bool) -> Button {
+    let label = if paused { "codex_voice_resume_short" } else { "codex_voice_pause_short" };
+    Button::new("voice-pause").ghost().small().label(tr_shared(label, &[]))
+}
+
+pub(crate) fn dock_card(equalizer: Div, status: String, color: Hsla, time: Option<String>, line: Option<String>) -> Stateful<Div> {
     div().id("side-voice").debug_selector(|| "voice-dock".into()).h(px(VOICE_DOCK_H)).flex_shrink_0().overflow_hidden().px_4().py(px(12.))
         .border_t_1().border_color(theme::border()).flex().flex_col().gap(px(8.))
         .child(chrome::section_label(tr("side_voice")).h(px(16.)).line_height(px(16.)))
@@ -554,7 +564,7 @@ pub(super) fn call_clock(elapsed: Duration) -> String {
 const PROFILE: [f32; 5] = [0.55, 0.9, 1.0, 0.8, 0.6];
 
 /// Alturas (px inteiros) das cinco barras; o tremor sai do contador de repinturas, então é determinístico.
-pub(super) fn equalizer(level: f32, frame: u64, min: f32, max: f32) -> [f32; 5] {
+pub(crate) fn equalizer(level: f32, frame: u64, min: f32, max: f32) -> [f32; 5] {
     std::array::from_fn(|i| {
         let jitter = 0.85 + 0.05 * ((frame as usize + i * 3) % 4) as f32;
         min + ((max - min) * (level * PROFILE[i] * jitter).clamp(0., 1.)).round()
@@ -727,7 +737,7 @@ impl Hangar {
         self.voice.mode = Mode::Direct;
         (self.voice.plan, self.voice.plan_open) = (None, None);
         (self.voice.context, self.voice.five_hour, self.voice.seven_day) = (None, None, None);
-        self.voice.muted = false;
+        (self.voice.muted, self.voice.speech_paused, self.voice.stalled) = (false, false, false);
         self.voice.draft = None;
         self.voice.levels = (0., 0.);
         (self.voice.live_since, self.voice.ticker) = (None, None);
@@ -1022,6 +1032,9 @@ impl Hangar {
             Some("working") => CallActivity::Working,
             _ => CallActivity::Idle,
         };
+        let stalled = state["stalled"].as_bool().unwrap_or(false);
+        if stalled && !self.voice.stalled && let Some(call) = &self.voice.call { call.alert_stalled(); }
+        self.voice.stalled = stalled;
         self.voice.draft = text(&state["draft"]);
         self.voice.call_error = state["error"]["code"].as_str().map(|code| failure_message(code, state["error"]["text"].as_str()));
         // O arquivo mora no servidor da voz: se ele está neste disco é lido uma vez por caminho, nunca a cada quadro.
@@ -1279,6 +1292,8 @@ impl Hangar {
 
     fn voice_status(&self) -> String {
         let Some(Phase::Live) = &self.voice.phase else { return tr_shared("codex_voice_connecting", &[]) };
+        if self.voice.stalled { return tr_shared("codex_voice_stalled", &[]); }
+        if self.voice.speech_paused { return tr_shared("codex_voice_paused", &[]); }
         match self.shown_speaker() {
             Speaker::Voice => tr("voice_assistant_speaking"),
             _ if self.voice.muted => tr_shared("codex_voice_muted", &[]),
@@ -1298,7 +1313,8 @@ impl Hangar {
 
     /// Cor do estado da chamada: a mesma no equalizador e no rótulo.
     fn voice_state_color(&self) -> Hsla {
-        if !matches!(self.voice.phase, Some(Phase::Live)) { return theme::muted(); }
+        if !matches!(self.voice.phase, Some(Phase::Live)) || self.voice.speech_paused { return theme::muted(); }
+        if self.voice.stalled { return theme::warning(); }
         match self.shown_speaker() {
             Speaker::Voice => theme::success(),
             _ if self.voice.muted => theme::muted(),
@@ -1317,7 +1333,7 @@ impl Hangar {
         let (input, output) = self.voice.levels;
         let who = self.shown_speaker();
         let row = div().h(px(max)).flex().gap(px(2.));
-        if who == Speaker::Idle && !self.voice.muted && matches!(self.voice.phase, Some(Phase::Live)) {
+        if who == Speaker::Idle && !self.voice.muted && !self.voice.speech_paused && matches!(self.voice.phase, Some(Phase::Live)) {
             let elapsed = self.voice.live_since.map_or(Duration::ZERO, |since| since.elapsed());
             let bars = if self.voice.activity == CallActivity::Idle { wave_bars(elapsed, min, max, ANIM_STEP * 2, 0.2) }
                 else { wave_bars(elapsed, min, max, ANIM_STEP, 0.6) };
@@ -1565,6 +1581,13 @@ impl Hangar {
         let actions = if live {
             let mute = if self.voice.muted { "codex_voice_unmute_short" } else { "codex_voice_mute_short" };
             div().flex().justify_end().gap(px(8.))
+                .child(speech_pause_button(self.voice.speech_paused)
+                    .disabled(!matches!(self.voice.phase, Some(Phase::Live)))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.voice.speech_paused = !this.voice.speech_paused;
+                        if let Some(call) = &this.voice.call { call.set_speech_paused(this.voice.speech_paused); }
+                        cx.notify();
+                    })))
                 .child(Button::new("voice-mute").ghost().small().label(tr_shared(mute, &[]))
                     .disabled(!matches!(self.voice.phase, Some(Phase::Live)))
                     .on_click(cx.listener(|this, _, _, cx| {

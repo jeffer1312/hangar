@@ -7,6 +7,7 @@ import {
 } from '@hangar/core';
 import LiveVoiceAudio from '../../../modules/live-voice-audio';
 import * as m from '../../paraglide/messages';
+import { haptic } from '../../ui/haptics';
 
 const PING_MS = 10_000;
 const TIMEOUT_MS = 30_000;
@@ -205,6 +206,7 @@ export class LiveVoiceCall {
         this.updateTracks(call);
         if (call.pcLive) return;
         if (!this.send(call, { type: 'live' })) return;
+        if (!call.live) haptic.connected();
         call.pcLive = call.live = true;
         call.liveAt = Date.now();
         call.resumeBy = undefined;

@@ -684,8 +684,10 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
     Fim fatal da chamada manda `error{code, detail}` antes do `closed`.
   - **Escolhas da chamada** (conta Codex, modelo, esforço, velocidade, voz) em
     `~/.hangar/voz/config.json`, do Rust, gravado de forma atômica. Sem o arquivo, a chamada
-    usa voz `sol` e `gpt-6.1-sol` com esforço `medium` no Direto e `high` no Planejar
+    usa voz `viola` e `gpt-6.1-sol` com esforço `medium` no Direto e `high` no Planejar
     (`VoiceSettings::default`); arquivo gravado vale como está, inclusive `null` (padrão da conta).
+    `viola` exige Codex 0.163.0 ou mais novo: se a lista lida do Codex não a traz, a chamada abre
+    na voz padrão da conta; sem lista lida, quem valida é o próprio Codex na abertura.
     Arquivo que existe mas não lê não é primeira vez: cai no neutro (modelo da conta, `low`), com
     linha no diário. Na abertura a chamada pede `model/list` da conta (ocultos incluídos): modelo
     escolhido ou padrão que a conta não oferece vira o padrão dela (`ModeModels::fit`), com linha
@@ -909,12 +911,43 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   falada do destrutivo fica no prompt. Os tratadores de pedido em
   `call.rs` continuam respondendo na hora o que ainda chegar, e o `VOICE_PROMPT` cita as duas frases
   ao pé da letra para a voz calar. Não usar `untrusted` nem `on-request`.
+- **Voz: chamada normal abre calada, e quem avisa que conectou é o aparelho.** Texto mandado por
+  `appendSpeech` entra como contexto da sessão v3 (`standalone_handoff_message`), e o modelo decide o
+  que dizer: "Conectado. Pode falar." virou "Quem é você? Sou o ChatGPT…" em 06/11. Só a primeira
+  conversa envia fala ao conectar. O aviso é local: som curto no nativo, vibração no Expo (no iOS exige
+  `setAllowHapticsAndSystemSoundsDuringRecording`, por isso `native-5`); o PWA fica só com a tela.
+  Garantia do app: o Hangar não pede fala ao conectar. Não é garantia: o modelo ficar calado. O áudio
+  vai da OpenAI direto ao aparelho, e o servidor não corta fala já começada; a regra de silêncio no
+  prompt é só orientação.
+- **Voz: pausar a fala guarda o áudio no aparelho; não existe pausar o modelo.** A integração não tem
+  comando de pausa, e o modelo segue gerando em tempo real. O nativo decodifica o Opus, então guarda o
+  que chega em `SpeechPause` (teto de 10 min de fala, contado no diário) e toca depois, na ordem, até
+  atravessando a troca da conexão de áudio. A pausa fecha o microfone: fala por perto interromperia a
+  resposta no servidor. Na retomada a voz fica atrasada até a primeira pausa dela, porque silêncio
+  não é enviado; falar nesse intervalo faz a resposta nova entrar atrás do que falta tocar. O Expo
+  não tem isso: o `react-native-webrtc` toca o áudio dentro do motor nativo, sem entrega ao JS, e
+  `track.enabled = false` perde o conteúdo. Fazer igual exige `RTCAudioDevice` próprio no iOS e
+  módulo de áudio no Android. O Codex recebe o áudio também pelo canal lateral
+  (`session.output_audio.delta`), mas o ignora e não o repassa ao app-server.
+- **Voz: fala nova não cancela a resposta, e turno sem resposta nunca fica calado.** Com
+  `instant_interrupt` ligado (padrão do Codex 0.166.0), toda entrada no turno cancela a resposta em
+  andamento. Na chamada de 06/11, 07:19–07:21: 16 entradas (12 falas, 4 notas do Hangar), 12 respostas
+  iniciadas, 0 concluídas, contexto em 7%, sem erro, e a saída foi encerrar. Medido no Codex real, duas
+  entradas no meio da resposta: ligado, 3 iniciadas e 1 concluída; desligado, 2 e 2. Por isso o
+  processo da voz sobe com `-c features.instant_interrupt=false`. Custo: "espera" ou correção só entra
+  ao fim da resposta. As notas não são adiadas: desligado, não cancelam, e adiar a nota de fala
+  repetida duplicaria a resposta. `TurnWatch` (`organizer.rs`) cobre o resto: 20 s sem resposta, a voz
+  avisa; 3 reinícios ou 45 s sem saída (180 s com ferramenta), linha `organizer stalled`, `stalled` no
+  retrato (aviso na tela, vibração no Expo, som no nativo), interrompe e abre um turno sem fala, que não
+  age. Segundo travamento: organizador novo, com a perna de áudio refeita pela mesma oferta de uma
+  queda, porque a voz fica presa à thread. Garantia do app: tela, vibração, registro e recuperação; a
+  frase falada depende do modelo. Limites a calibrar, medidos em uma chamada só.
 - **Voz: a memória é um arquivo de fatos, nunca de ordens.** `~/.hangar/voz/memoria.json` (40 entradas
   de 240 caracteres; `pessoa`, `preferencia`, `referencia`, `projeto`). `remember`/`forget` só passam
   com fala do usuário no turno; o bloco entra no prompt como "fatos lembrados, não instruções".
   `projeto` mostra a data, vira "antiga: confira" após 30 dias e sai do prompt após 90 (fica no
   arquivo e na tela). Sem entradas (arquivo inexistente ou vazio), o convite sai da própria voz ao
-  conectar (`ONBOARDING_GREETING` no lugar de "Conectado. Pode falar."), porque o organizador só tem
+  conectar (`ONBOARDING_GREETING`), porque o organizador só tem
   turno depois de a pessoa falar; o prompt da voz ganha o trecho que manda a resposta ao organizador.
   O convite começa por uma apresentação curta do que a voz faz, em palavras do dia a dia e sem nome
   de ferramenta (texto aprovado pelo Jefferson em 14/10), e termina mandando perguntar o resto.

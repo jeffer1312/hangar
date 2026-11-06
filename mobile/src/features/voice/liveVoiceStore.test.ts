@@ -42,6 +42,8 @@ vi.mock('react-native', () => ({ Platform: native.platform,
   PermissionsAndroid: { PERMISSIONS: { POST_NOTIFICATIONS: 'android.permission.POST_NOTIFICATIONS', BLUETOOTH_CONNECT: 'android.permission.BLUETOOTH_CONNECT' },
     RESULTS: { GRANTED: 'granted' }, request: native.androidPermission },
 }));
+const stalledHaptic = vi.hoisted(() => vi.fn());
+vi.mock('../../ui/haptics', () => ({ haptic: { connected: vi.fn(), stalled: stalledHaptic } }));
 vi.mock('react-native-webrtc', () => ({ RTCPeerConnection: native.Peer, mediaDevices: { getUserMedia: native.media },
   permissions: { request: native.microphonePermission } }));
 vi.mock('../../../modules/live-voice-audio', () => ({ default: {
@@ -694,6 +696,19 @@ describe('configuração e memória do servidor capturado', () => {
     stale.resolve([memory]); await reading;
     expect(api.forget).toHaveBeenCalledWith(a, memory.id);
     expect(useLiveVoice.getState().view.memory).toMatchObject({ loading: false, entries: [], forgetError: null });
+  });
+
+  test('vibra uma vez por travamento, não a cada retrato igual', async () => {
+    stalledHaptic.mockClear();
+    const instance = await startA();
+    instance.handlers.state(state(1));
+    expect(stalledHaptic).not.toHaveBeenCalled();
+    instance.handlers.state({ ...state(1), stalled: true });
+    instance.handlers.state({ ...state(1), stalled: true });
+    expect(stalledHaptic).toHaveBeenCalledOnce();
+    instance.handlers.state({ ...state(1), stalled: false });
+    instance.handlers.state({ ...state(1), stalled: true });
+    expect(stalledHaptic).toHaveBeenCalledTimes(2);
   });
 
   test('state.memory atualiza ajustes abertos; fechamento da folha encerra refresh por estado', async () => {

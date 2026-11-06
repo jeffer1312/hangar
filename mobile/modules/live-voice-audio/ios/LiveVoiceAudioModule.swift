@@ -89,6 +89,8 @@ public class LiveVoiceAudioModule: Module {
         mode: AVAudioSession.Mode(rawValue: configuration.mode),
         options: configuration.categoryOptions
       )
+      // Gravando, o iOS cala a vibração, e ela é o aviso de que a chamada conectou.
+      try? rtc.session.setAllowHapticsAndSystemSoundsDuringRecording(true)
       if !ownsActivation {
         try rtc.setActive(true)
         ownsActivation = true
@@ -162,6 +164,7 @@ public class LiveVoiceAudioModule: Module {
     observers.forEach { NotificationCenter.default.removeObserver($0) }
     observers.removeAll()
     RTCAudioSessionConfiguration.setWebRTC(previous.rtcConfiguration)
+    try? rtc.session.setAllowHapticsAndSystemSoundsDuringRecording(false)
     var errors: [String] = []
     if ownsActivation {
       ownsActivation = false

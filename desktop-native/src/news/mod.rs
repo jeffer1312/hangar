@@ -13,6 +13,7 @@ mod image_reveal;
 mod rename_suggestion;
 mod search_conversations;
 mod sleep_hidden;
+mod speech_pause;
 mod tour;
 
 use std::time::Instant;
@@ -38,6 +39,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "adormecer-ocultas" => Some(sleep_hidden::render),
         "sem-projeto" => Some(no_project::render),
         "pilula-do-ditado" => Some(dictation_pill::render),
+        "pausar-fala" => Some(speech_pause::render),
         _ => None,
     }
 }
