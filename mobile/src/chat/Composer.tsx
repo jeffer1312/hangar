@@ -8,7 +8,7 @@ import type { CommandInfo, MotivoFim, Provider, QueueEdit, QueuePanel as QueuePa
 import { ComposerActions, ComposerBox, ComposerInput } from './ComposerField';
 import { Icon } from '../ui/Icon';
 import * as m from '../paraglide/messages';
-import { chatStore, filaCount as filaCountOf, submitConversationDraft, isSubmitting } from '../stores/chat';
+import { chatStore, filaCount as filaCountOf, submitConversationDraft, isSubmitting, settleDelivered } from '../stores/chat';
 import { abandonUnknownAttempt, attachInsert, confirmFirstInput, firstInputMessage, readFirstInput, sendFirstInput, useNewConversation, withAttach } from '../stores/newConversation';
 import { useSessions } from '../stores/sessions';
 import { clearDraft, clearRecoverableDraft, readDraft, readRecoverableDraft, resolveDraftTranscript, removeDraftRecording, reusableUploadPath, withoutUpload, writeDraft, writeRecoverableDraft, clearDictation, readDictation, writeDictation, recoverDictation, applyReadyDictation, associateDictationTranscript, type ConversationDraft, type DraftAttachment, type DictationDraft, type UploadTarget } from '../stores/drafts';
@@ -347,9 +347,22 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     try {
       setDictation(readDictation(origin.serverId, origin.name));
       const latest = readDraft(origin.serverId, origin.name);
+      const prior = draftRef.current;
+      // Envio incerto dado por entregue: o erro da queda sai da tela.
+      const delivered = prior?.submission?.status === 'unknown' && !latest?.submission;
+      if (delivered) setError((current) => (current === m.chat_envio_incerto() ? '' : current));
       if (!latest) {
         setPendingAttachments([]);
         setRecordings([]);
+        // A entrega deixou o rascunho vazio e o apagou: o aviso sai, e o texto devolvido também se ninguém o mexeu.
+        if (delivered && prior) {
+          if (textRef.current === prior.text) {
+            textRef.current = '';
+            setText('');
+          }
+          draftRef.current = null;
+          setSubmission(null);
+        }
         return;
       }
       if (latest.transcript && transcriptRef.current && latest.transcript !== transcriptRef.current) return;
@@ -394,6 +407,18 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
       setDraftIssue(e instanceof Error ? e.message : m.draft_write_error());
     }
   }, [submission, origin, pendingAttachments]);
+
+  // A pessoa viu a mensagem na conversa: mesma limpeza da confirmação automática.
+  const handleSubmissionArrived = useCallback(() => {
+    if (isSubmitting(origin.serverId, origin.name)) return;
+    try {
+      const latest = readDraft(origin.serverId, origin.name);
+      if (latest?.submission?.status !== 'unknown') return;
+      settleDelivered(origin.serverId, origin.name, latest);
+    } catch (e) {
+      setDraftIssue(e instanceof Error ? e.message : m.draft_write_error());
+    }
+  }, [origin]);
 
   // null → caminho é a primeira confirmação (Codex iniciando); caminho → outro é sessão recriada.
   useEffect(() => {
@@ -1879,6 +1904,11 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
             {submission.status === 'unknown' ? (
               <Pressable onPress={chat.retry} style={[styles.undoBtn, { borderColor: theme.tokens.border.subtle }]} accessibilityRole="button">
                 <Text style={[styles.undoText, { color: theme.tokens.accent.base }]}>{m.composer_submission_check()}</Text>
+              </Pressable>
+            ) : null}
+            {submission.status === 'unknown' ? (
+              <Pressable onPress={handleSubmissionArrived} style={[styles.undoBtn, { borderColor: theme.tokens.border.subtle }]} accessibilityRole="button">
+                <Text style={[styles.undoText, { color: theme.tokens.text.secondary }]}>{m.composer_submission_arrived()}</Text>
               </Pressable>
             ) : null}
           </View>

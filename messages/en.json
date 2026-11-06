@@ -8180,6 +8180,7 @@
   "composer_submission_rejected": "The message was rejected. You can recover it without removing your new edits.",
   "composer_submission_recover_first": "Recover the rejected message before sending different text.",
   "composer_submission_check": "Check conversation",
+  "composer_submission_arrived": "It arrived",
   "arq_pdf_sem_leitor": "No PDF reader is installed. Install one and try again.",
   "native_pdf_open": "Open in reader",
   "native_pdf_download_failed": "Could not download the PDF: {reason}",
