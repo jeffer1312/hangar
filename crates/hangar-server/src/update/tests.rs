@@ -370,6 +370,46 @@ async fn update_machine_step_failing_changes_nothing() {
     assert!(machine.applied().is_empty(), "passo que falhou não entra no registro");
 }
 
+/// O passo sobe a versão nova (como o `install.ps1 -Update` faz) e depois falha.
+#[derive(Default)]
+struct RestartsThenFails {
+    restarted: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl StepRunner for RestartsThenFails {
+    fn run(&self, _command: &str, _cwd: &Path) -> StepRun {
+        self.restarted.store(true, Ordering::SeqCst);
+        StepRun { code: Some(1), output: "##HANGAR-FALHA## a porta 8765 nao abriu depois do reinicio".into() }
+    }
+}
+
+#[tokio::test]
+async fn update_machine_step_that_restarted_the_server_restarts_on_the_way_back() {
+    let fake = FakeRelease::new().await;
+    let machine = Machine::new();
+    let old = machine.current();
+    let (bytes, _) = new_package(&machine, "fail");
+    fake.publish(NEW, &bytes, None);
+    let release = fake.release();
+    let restart = FakeRestart::default();
+    let steps = Arc::new(RestartsThenFails::default());
+    let by_step = steps.restarted.clone();
+    // Antes: o de antes; depois do passo: a versão nova; depois da volta: o de antes, com outro pid.
+    let health = FakeHealth { restarts: restart.count.clone(), reading: Box::new(move |n| match (n, by_step.load(Ordering::SeqCst)) {
+        (0, false) => rust(7, OLD),
+        (0, true) => rust(8, NEW),
+        _ => rust(9, OLD),
+    }) };
+
+    let outcome = run(&machine.job(&release), steps, &restart, &health, Arc::new(NeverInUse)).await;
+
+    let Outcome::Failed { voltou, no_ar, erro } = outcome else { panic!("{outcome:?}") };
+    assert!(voltou && no_ar, "a versão anterior voltou a rodar");
+    assert!(erro.contains("8765"), "{erro}");
+    assert_eq!(machine.current(), old, "o current volta");
+    assert_eq!(restart.count.load(Ordering::SeqCst), 1, "a volta reinicia: a versão nova não pode seguir rodando");
+}
+
 #[tokio::test]
 async fn update_health_failing_after_swap_swaps_back() {
     let fake = FakeRelease::new().await;
