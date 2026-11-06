@@ -11,8 +11,11 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 HANGAR_BUILD_LOCK="$tmp/lock"
 repo="$tmp/repo" comum="$tmp/comum"
-mkdir -p "$repo/crates" "$tmp/bin" "$comum/debug"
+mkdir -p "$repo/crates" "$repo/scripts" "$tmp/bin" "$comum/debug"
 git -C "$repo" init -q
+# O cargo-pinned chama os dois pela raiz do checkout: a cópia é a real, a conferência de frescor não entra aqui.
+cp "$(dirname "$P")/pin-auth-pair.py" "$repo/scripts/"
+printf '#!/usr/bin/env bash\n' > "$repo/scripts/cargo-freshness.sh"
 
 # cargo falso: metadata devolve o target; build grava o executável e emite a mensagem do artefato.
 cat > "$tmp/bin/cargo" <<'EOF'
@@ -21,9 +24,10 @@ alvo="${CARGO_TARGET_DIR:-$FAKE_TARGET}"
 if [[ "$1" == metadata ]]; then printf '{"target_directory":"%s"}\n' "$alvo"; exit 0; fi
 [[ -n "${FAKE_ARGS:-}" ]] && echo "$*" > "$FAKE_ARGS"
 [[ -n "${FAKE_FALHA:-}" ]] && { echo "error: falhou" >&2; exit 101; }
+mkdir -p "$alvo/debug"
 echo "$FAKE_CONTEUDO" > "$alvo/debug/hangar-server"; chmod +x "$alvo/debug/hangar-server"
-printf '{"reason":"compiler-artifact","executable":"%s/debug/hangar-server"}\n' "$alvo"
-printf '{"reason":"compiler-artifact","executable":null}\n'
+printf '{"reason":"compiler-artifact","profile":{"test":false},"executable":"%s/debug/hangar-server"}\n' "$alvo"
+printf '{"reason":"compiler-artifact","profile":{"test":false},"executable":null}\n'
 printf '{"reason":"compiler-artifact","profile":{"test":true},"executable":"%s/debug/deps/it-abc"}\n' "$alvo"
 echo "running 1 test"
 printf '{"reason":"build-finished","success":true}\n'
@@ -46,7 +50,7 @@ echo v2 > "$comum/debug/hangar-server"
 FAKE_FALHA=1 FAKE_CONTEUDO=v3 roda >/dev/null 2>&1 && { echo "FALHOU erro do cargo saiu 0"; falhou=1; }
 [[ "$(cat "$repo/crates/target/debug/hangar-server")" == v1 ]] || { echo "FALHOU build com erro trocou a cópia"; falhou=1; }
 
-# Target já é o do checkout: nada a copiar, e o arquivo não é apagado.
+# Target já é o do checkout: compila à parte e fixa a cópia nele no fim.
 mkdir -p "$repo/crates/target/debug"
 (cd "$repo" && PATH="$tmp/bin:$PATH" CARGO_TARGET_DIR="$repo/crates/target" FAKE_CONTEUDO=v4 "$P" build) >/dev/null 2>&1 || \
     { echo "FALHOU build com target próprio saiu com erro"; falhou=1; }
