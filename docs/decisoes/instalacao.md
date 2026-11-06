@@ -266,8 +266,9 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   troca do `current` → só os passos `tipo: maquina` → reinício → prova de vida → poda. Os passos
   rodam depois da troca porque os scripts que criam links (`install-hangar-send.sh`,
   `instalar-agentes.py`) só apontam para o `current` quando ele já é a pasta deles. Falha antes da
-  troca não muda nada; passo que falha devolve o `current` sem reiniciar; falha no reinício
-  devolve o `current` e reinicia. O servidor em execução serve a tela web da `dist_key` com que
+  troca não muda nada; passo que falha devolve o `current` sem reiniciar, menos quando o
+  servidor no ar já não é o de antes (o `install.ps1 -Update` reinicia): aí devolve e reinicia,
+  como a falha no reinício. O servidor em execução serve a tela web da `dist_key` com que
   subiu, nunca a do `current`. A prova
   é o `/__hangar_server/health` com o `protocol` e o `commit` do manifesto novo e pid diferente:
   o Python sozinho na porta reprova. Ficam a versão em uso e a anterior; a poda pula pasta com

@@ -842,8 +842,8 @@ impl Service for SystemService {
     fn stop(&self) -> Result<(), String> {
         if !self.windows { return self.run("systemctl --user stop hangar-backend.service"); }
         let helper = self.checkout.join("scripts").join("windows-tasks.ps1");
-        self.run(&format!("powershell -NoProfile -ExecutionPolicy Bypass -Command \". '{}'; Restart-HangarTask 'hangar-backend' {} '{}' -NoStart\"",
-            ps_quote(&helper), self.port, ps_quote(&self.checkout.join("backend"))))
+        self.run(&format!("powershell -NoProfile -ExecutionPolicy Bypass -Command \"{}\"", super::restart::guarded_ps(&format!(
+            ". '{}'; Restart-HangarTask 'hangar-backend' {} '{}' -NoStart", ps_quote(&helper), self.port, ps_quote(&self.checkout.join("backend"))))))
     }
 
     fn start(&self) -> Result<(), String> {
@@ -872,7 +872,8 @@ pub fn front_command(windows: bool, on: bool, checkout: &Path) -> String {
                 Unregister-ScheduledTask -TaskName hangar-frontend -Confirm:$false }}", ps_quote(checkout))
         };
         // `Stop`: falha em qualquer comando sai com erro, não só no último.
-        return format!("powershell -NoProfile -ExecutionPolicy Bypass -Command \"$ErrorActionPreference = 'Stop'; {action}\"");
+        return format!("powershell -NoProfile -ExecutionPolicy Bypass -Command \"{}\"",
+            super::restart::guarded_ps(&format!("$ErrorActionPreference = 'Stop'; {action}")));
     }
     let unit = "\"${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/hangar-frontend.service\"";
     let bak = "\"$HOME/.hangar/hangar-frontend.service.pre-pacote\"";

@@ -850,6 +850,16 @@ async fn terminal_runtime_first_prompt_missing_transcript_confirms_without_redel
 }
 
 #[tokio::test]
+async fn terminal_runtime_moved_transcript_confirms_from_the_new_file() {
+    let f=Fixture::new().await; let h=f.start(); h.command(f.command("first","Olá")).await.unwrap();
+    let moved=f.target.transcript.parent().unwrap().with_file_name("worktree").join("sid.jsonl");
+    std::fs::create_dir_all(moved.parent().unwrap()).unwrap(); std::fs::rename(&f.target.transcript,&moved).unwrap();
+    h.follow_transcript(moved.clone()).await.unwrap();
+    std::fs::write(&moved,"{\"type\":\"user\",\"uuid\":\"first\",\"message\":{\"content\":\"Olá\"}}\n").unwrap();
+    h.confirm().await.unwrap(); assert_eq!(f.state()["rows"][0]["confirmed"],true); h.stop().await.unwrap();
+}
+
+#[tokio::test]
 async fn terminal_runtime_explicit_steer_uses_driver_and_no_prompt_row() {
     let f=Fixture::new().await; let h=f.start();
     let result=h.control("steer-now".into(),"steer".into(),json!({})).await.unwrap();
