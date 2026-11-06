@@ -979,8 +979,8 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
     let stepping = Instant::now();
     let steps_mark = job.startup_output.map(|_| startup_output::Mark::take(false));
     let applied_now = {
-        let (dir, home, state_dir, log) = (dir.clone(), job.home.to_path_buf(), job.state_dir.to_path_buf(), state.clone());
-        match blocking(move || apply_machine_steps(&dir, &home, &state_dir, &*steps, &log)).await {
+        let (root, home, state_dir, log) = (dir.clone(), job.home.to_path_buf(), job.state_dir.to_path_buf(), state.clone());
+        match blocking(move || apply_machine_steps(&root, &home, &state_dir, &*steps, &log)).await {
             Ok(ids) => ids,
             Err(e) => {
                 if let Some(port) = job.startup_output {
