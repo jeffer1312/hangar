@@ -1993,6 +1993,7 @@ describe('envio incerto que a conversa confirma', () => {
     chat.retain();
     await tick();
     await expect(chat.send('sim')).rejects.toThrow(m.chat_envio_incerto());
+    registrarSucesso('srv1');
     created[0].trigger('reset', '{}');
     await tick();
     expect(chat.use.getState().events.map((e) => e.id)).toContain('outra:sim');
@@ -2006,6 +2007,7 @@ describe('envio incerto que a conversa confirma', () => {
     chat.retain();
     await tick();
     await expect(chat.send('sim')).rejects.toThrow(m.chat_envio_incerto());
+    registrarSucesso('srv1');
     await expect(chat.send('sim')).rejects.toThrow(m.chat_envio_incerto());
     created[0].trigger('message', JSON.stringify(ev({ id: 'u:sim', text: 'sim', ts: null })));
     expect(readDraft('srv1', 'sess')).toBeNull();

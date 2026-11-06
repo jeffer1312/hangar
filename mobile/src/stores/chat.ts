@@ -1094,7 +1094,7 @@ export async function submitConversationDraft(serverId: string, name: string, te
     const fromField = draftRevision === undefined ? current.text.trim() === text.trim() : current.revision === draftRevision;
     const store = chatStore(serverId, name);
     const live = store.use.getState();
-    const same = (t: string | undefined) => !!t && sameMessage(text, t);
+    const same = (t: string | null | undefined) => !!t && sameMessage(text, t);
     // Um envio igual ainda a caminho ecoaria sem horário como se fosse este: aí só o horário confirma.
     // No reenvio do incerto, o igual a caminho é a mesma mensagem, e o eco dele vale.
     const ambiguous = current.submission?.status !== 'unknown' && (live.pending.some((p) => same(p.text))
