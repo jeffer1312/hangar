@@ -1,6 +1,7 @@
 //! Chamada, configurações e memória de voz do dono, atendidas inteiramente no Rust.
 use crate::routes::AppState;
 use crate::session_write::json_response;
+use crate::share::gate::Watcher;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::{extract::{ConnectInfo, FromRequestParts, Request, State}, http::{Method, StatusCode}, response::{IntoResponse, Response}};
 use serde_json::json;
@@ -24,12 +25,13 @@ pub async fn ws(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<
         return refusal(req.headers(), decision);
     }
     if req.method() != Method::GET { return refuse(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed"); }
+    let watcher = req.extensions().get::<Watcher>().cloned();
     let (mut parts, _) = req.into_parts();
     let ws = match WebSocketUpgrade::from_request_parts(&mut parts, &()).await {
         Ok(ws) => ws,
         Err(_) => return refuse(StatusCode::BAD_REQUEST, "voice_websocket_required"),
     };
-    ws.on_upgrade(move |socket| serve_socket(st, socket))
+    ws.on_upgrade(move |socket| serve_socket(st, socket, watcher))
 }
 
 /// Aparelho que dormiu deixa o socket meio aberto: sem nada dele por este tempo (o cliente pinga a cada 10 s), a conexão
@@ -59,7 +61,7 @@ async fn first_text(socket: &mut WebSocket) -> Option<ClientMsg> {
     }
 }
 
-async fn serve_socket(st: Arc<AppState>, mut socket: WebSocket) {
+async fn serve_socket(st: Arc<AppState>, mut socket: WebSocket, watcher: Option<Watcher>) {
     let hello = match tokio::time::timeout(HELLO_WITHIN, first_text(&mut socket)).await {
         Ok(Some(ClientMsg::Hello { client, screen, caps, actions })) => Hello { client, screen, caps, actions },
         _ => return refuse_socket(socket, "bad_hello").await,
@@ -69,8 +71,12 @@ async fn serve_socket(st: Arc<AppState>, mut socket: WebSocket) {
         Err(code) => return refuse_socket(socket, code).await,
     };
     let mut heard = tokio::time::Instant::now();
+    // Fora do laço: recriado a cada mensagem, o relógio do vigia nunca chegaria ao fim.
+    let ended = Watcher::ended(watcher.as_ref());
+    tokio::pin!(ended);
     loop {
         tokio::select! {
+            _ = &mut ended => { super::log("voice device revoked: closing"); break; }
             _ = tokio::time::sleep_until(heard + SILENT_FOR) => { super::log("voice device silent: closing"); break; }
             incoming = socket.recv() => match { heard = tokio::time::Instant::now(); incoming } {
                 Some(Ok(Message::Text(text))) => match serde_json::from_str::<ClientMsg>(text.as_str()) {

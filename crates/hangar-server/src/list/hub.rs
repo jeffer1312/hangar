@@ -724,8 +724,9 @@ pub async fn events(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         tokio::spawn(login_loop(st.hub.subscribe(&st.list, &st.devices, &st.diag, false), st.login_guests.clone(), login.token.clone(), tx));
     } else { match (grant, st.share.clone()) {
         (None, _) => {
-            // Só o dono e nunca pela porta do Connect; aparelho ilegível é ignorado sem afetar a lista.
-            if fwd.client_ip != crate::devices::CONNECT_PEER && let Some((kind, id)) = crate::devices::parse(req.uri().query())
+            // Só o dono; pelo Connect, só com credencial de aparelho. Aparelho ilegível é ignorado sem afetar a lista.
+            let trusted = fwd.client_ip != crate::devices::CONNECT_PEER || req.extensions().get::<crate::connect::gate::DeviceCaller>().is_some();
+            if trusted && let Some((kind, id)) = crate::devices::parse(req.uri().query())
                 && !st.devices.is_known(&id) {
                 let (devices, diag) = (st.devices.clone(), st.diag.clone());
                 // Antes de assinar: a primeira lista desta conexão já traz o aparelho.

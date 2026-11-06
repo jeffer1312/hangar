@@ -6,6 +6,38 @@ use serde_json::{Value, json};
 use std::time::Duration;
 use tokio_tungstenite::tungstenite::Message as ClientMessage;
 
+/// O nome leva `connect_devices` para sair no mesmo filtro dos outros testes da Task: `Desktop` só existe neste módulo.
+#[tokio::test]
+async fn connect_devices_revocation_closes_the_remote_browser() {
+    if support::isolated(
+        "remote_browser::guest::connect_devices_revocation_closes_the_remote_browser",
+        |root| assert!(!root.join("git.calls").exists()),
+    ).await { return; }
+    let scene = Scene::new().await;
+    seed_session(&scene);
+    let desktop = Desktop::new(&json!({})).await;
+    desktop.publish(&scene, KEY);
+    let (id, token) = scene.state.connect_devices.enroll("celular").unwrap();
+    let (mut socket, _) = tokio_tungstenite::connect_async(format!(
+        "ws://{}/api/sessions/nav-contract/nav-remoto?token={token}",
+        scene.owner.address
+    )).await.expect("aparelho aprovado chega ao navegador");
+    let mut events = vec![];
+    until(&mut socket, &mut events, |v| v["url"] == "http://contract.test/ready").await;
+    scene.state.connect_devices.remove(&id).unwrap();
+    let frame = tokio::time::timeout(Duration::from_secs(12), async {
+        loop {
+            let message = socket.next().await.expect("WS encerrou sem Close").unwrap();
+            if let ClientMessage::Close(frame) = message { break frame; }
+        }
+    }).await.expect("o vigia fecha em até 5 s").unwrap();
+    assert_eq!(u16::from(frame.code), 4410);
+    let _ = socket.close(None).await;
+    while socket.next().await.is_some() {}
+    desktop.server.close().await;
+    scene.close().await;
+}
+
 #[tokio::test]
 async fn private_url_bridge_never_promotes_login_guest_to_owner() {
     if support::isolated(

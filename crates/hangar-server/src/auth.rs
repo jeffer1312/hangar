@@ -10,8 +10,8 @@ use subtle::ConstantTimeEq;
 pub use hangar_auth::{AuthAttempt, AuthDecision, AuthError, Profile, ReceiptContext};
 #[cfg(test)]
 const MAX_FAILS: usize = 8;
-const COOKIE: &str = "cp_token";
-const COOKIE_HOST: &str = "__Host-cp_token";
+pub(crate) const COOKIE: &str = "cp_token";
+pub(crate) const COOKIE_HOST: &str = "__Host-cp_token";
 
 pub fn is_loopback(ip: &str) -> bool {
     matches!(ip, "127.0.0.1" | "::1" | "localhost")
@@ -105,6 +105,11 @@ impl Auth {
         })?).await.map_err(|_| AuthError::Panic)??;
         if decision.became_blocked != 0 { tracing::warn!(ip=%origin, "token errado 8 vezes em 30 s; origem bloqueada"); }
         Ok(())
+    }
+    pub async fn clear_origin(&self, ip: &str) -> Result<(), AuthError> {
+        let auth = self.clone(); let ip = ip.to_owned();
+        tokio::task::spawn_blocking(move || auth.transaction(|origins| origins.clear_origin(&ip)))
+            .await.map_err(|_| AuthError::Panic)?
     }
     pub async fn mark_blocked_async(&self, ip: &str) -> Result<(), AuthError> {
         let auth = self.clone(); let ip = ip.to_owned();

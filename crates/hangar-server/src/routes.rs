@@ -65,6 +65,8 @@ pub struct AppState {
     pub front: Option<SocketAddr>,
     /// A entrada do Connect (`config::connect_listen`), decidida só na subida real (`main.rs`).
     pub connect: Option<SocketAddr>,
+    /// Credenciais de dono por aparelho (`~/.hangar/connect`); o teste troca por uma pasta temporária.
+    pub connect_devices: Arc<crate::connect::devices::Store>,
     pub workspace_slots: Arc<tokio::sync::Semaphore>,
     pub workspace_read_slots: Arc<tokio::sync::Semaphore>,
     pub workspace_meta_slots: Arc<tokio::sync::Semaphore>,
@@ -253,6 +255,7 @@ impl AppState {
             origins_home: std::path::PathBuf::from(std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).unwrap_or_default()),
             prewarm: Arc::new(crate::prewarm::Store::server(&hangar_dir)),
             devices: Arc::new(crate::devices::Registry::new(hangar_dir.join("devices.json"))),
+            connect_devices: Arc::new(crate::connect::devices::Store::new(hangar_dir.join("connect"), None)),
             update_release_base: crate::update::RELEASE_BASE.to_owned(),
             diag_report_base: crate::diag_report::WORKER_BASE.to_owned(),
             vault: Arc::new(crate::vault::Vault::system()),
@@ -698,6 +701,7 @@ fn router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
         .layer(axum::middleware::from_fn_with_state(state.clone(), crate::login_guests::body_limit))
         .layer(axum::middleware::from_fn(crate::login_guests::public_contract))
         .layer(axum::middleware::from_fn(crate::config_sync::runtime_http::cors_layer))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), crate::connect::gate::device_token_layer))
         .layer(axum::middleware::from_fn_with_state(state, crate::startup::guard))
 }
 
@@ -810,6 +814,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/voice/memory/{id}", axum::routing::delete(crate::voice::routes::memory_route).options(crate::voice::routes::preflight))
         // Grupos (`/pair`, `/group-message`, `/pair/contract`, `/pair-remote`, `/unpair-remote`).
         .merge(crate::groups::routes::router())
+        .merge(crate::connect::routes::router())
         // Planos e catálogo de plugins e skills: o dono no Rust; o resto segue ao Python.
         .merge(crate::plans::routes::router())
         .route("/api/claude/customizations", get(crate::claude_customizations::catalog_route).fallback(pass_any))

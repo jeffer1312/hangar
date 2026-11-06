@@ -37,6 +37,7 @@ type Push = Arc<Mutex<Option<UnboundedSender<Value>>>>;
 pub struct TestVoice {
     pub addr: SocketAddr,
     pub python: Arc<Fake>,
+    pub devices: Arc<hangar_server::connect::devices::Store>,
     seen: Seen,
     push: Push,
     _home: tempfile::TempDir,
@@ -129,8 +130,10 @@ async fn build_with(account: Option<&str>, own_api: bool, failing: bool) -> Test
     state.peers = Arc::new(PeerClient::new(PeerBook::new(None)));
     // O `set_self` do servidor não sobrescreve este (é gravado uma vez só).
     if !own_api { state.voice.set_self(fake_api().await, "t"); }
+    let devices = Arc::new(hangar_server::connect::devices::Store::new(home.path().join("connect"), None));
+    state.connect_devices = devices.clone();
     let addr = fake::spawn_state(state).await;
-    TestVoice { addr, python, seen, push, _home: home }
+    TestVoice { addr, python, devices, seen, push, _home: home }
 }
 
 pub async fn voice_server() -> TestVoice { build(None, false).await }

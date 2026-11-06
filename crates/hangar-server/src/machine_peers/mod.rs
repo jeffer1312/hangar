@@ -395,6 +395,12 @@ async fn handle_inner(
         Err(e) => return e.response(),
     };
     service.request_id=crate::routes::diag_req(&request);
+    if path=="/api/peers/prova" && let Some(device)=query.get("device") {
+        match st.connect_devices.proof_key(device) {
+            Some(key)=>service.token=key,
+            None=>return json_response(StatusCode::NOT_FOUND,json!({"detail":"Not Found"})),
+        }
+    }
     let result = dispatch(service, &method, &path, &query, std::mem::take(&mut body.0)).await;
     match result {
         Ok(value) => {

@@ -11,13 +11,13 @@ use hangar_server::config::connect_listen;
 use hangar_server::login_guests::{Service, Settings};
 use hangar_server::routes::{AppState, front_address, serve_connect};
 
-const GUEST: &str = "convidado-token";
+pub(crate) const GUEST: &str = "convidado-token";
 
-fn free_port() -> SocketAddr {
+pub(crate) fn free_port() -> SocketAddr {
     std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap()
 }
 
-async fn wait_up(addr: SocketAddr) {
+pub(crate) async fn wait_up(addr: SocketAddr) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while client().get(format!("http://{addr}/__hangar_server/health")).send().await.is_err() {
         assert!(tokio::time::Instant::now() < deadline, "a entrada {addr} não abriu");
@@ -25,36 +25,46 @@ async fn wait_up(addr: SocketAddr) {
     }
 }
 
-async fn start(addr: SocketAddr, trusted: &str) -> (Arc<Fake>, SocketAddr) {
+/// Pela entrada só passa aparelho: a pasta fica de pé até o fim do processo, junto com a loja.
+fn device(state: &mut AppState) -> String {
+    let dir: &'static tempfile::TempDir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    let store = hangar_server::connect::devices::Store::new(dir.path().to_path_buf(), None);
+    let token = store.enroll("teste").unwrap().1;
+    state.connect_devices = Arc::new(store);
+    token
+}
+
+async fn start(addr: SocketAddr, trusted: &str) -> (Arc<Fake>, SocketAddr, String) {
     let (python, upstream) = spawn_fake().await;
     let mut state = AppState::new(config(upstream, trusted));
     state.connect = Some(addr);
-    (python, spawn_state(state).await)
+    let token = device(&mut state);
+    (python, spawn_state(state).await, token)
 }
 
-/// Python falso, porta principal e entrada do Connect já aberta, servidas pelo `select!` do `serve`.
-async fn server(trusted: &str) -> (Arc<Fake>, SocketAddr, SocketAddr) {
+/// Python falso, porta principal, entrada do Connect já aberta, servidas pelo `select!` do `serve`, e uma credencial de aparelho.
+async fn server(trusted: &str) -> (Arc<Fake>, SocketAddr, SocketAddr, String) {
     let connect = free_port();
-    let (python, main) = start(connect, trusted).await;
+    let (python, main, token) = start(connect, trusted).await;
     wait_up(connect).await;
-    (python, main, connect)
+    (python, main, connect, token)
 }
 
-fn get(addr: SocketAddr, path: &str) -> reqwest::RequestBuilder {
+pub(crate) fn get(addr: SocketAddr, path: &str) -> reqwest::RequestBuilder {
     client().get(format!("http://{addr}{path}"))
 }
 
-fn mcp(addr: SocketAddr) -> reqwest::RequestBuilder {
-    client().post(format!("http://{addr}/mcp")).bearer_auth(OWNER).header("content-type", "application/json")
+fn mcp(addr: SocketAddr, token: &str) -> reqwest::RequestBuilder {
+    client().post(format!("http://{addr}/mcp")).bearer_auth(token).header("content-type", "application/json")
         .header("accept", "application/json, text/event-stream").body("{}")
 }
 
 #[tokio::test]
 async fn local_only_route_is_refused_through_connect() {
-    let (_python, main, connect) = server("127.0.0.1").await;
+    let (_python, main, connect, device) = server("127.0.0.1").await;
     let path = "/api/desktop/palette";
     assert_eq!(get(main, path).bearer_auth(OWNER).send().await.unwrap().status(), 200, "na máquina a rota responde");
-    let refused = get(connect, path).bearer_auth(OWNER).send().await.unwrap();
+    let refused = get(connect, path).bearer_auth(&device).send().await.unwrap();
     assert_eq!(refused.status(), 403);
     assert!(refused.text().await.unwrap().contains("erro_so_loopback"));
 }
@@ -63,20 +73,20 @@ async fn local_only_route_is_refused_through_connect() {
 async fn forged_forwarded_for_does_not_become_local() {
     // `*` é o pior caso: com ele o vizinho de qualquer endereço reescreve o cliente.
     for trusted in ["127.0.0.1", "*"] {
-        let (python, _main, connect) = server(trusted).await;
-        let forged = get(connect, "/api/desktop/palette").bearer_auth(OWNER).header("x-forwarded-for", "127.0.0.1");
+        let (python, _main, connect, device) = server(trusted).await;
+        let forged = get(connect, "/api/desktop/palette").bearer_auth(&device).header("x-forwarded-for", "127.0.0.1");
         assert_eq!(forged.send().await.unwrap().status(), 403, "{trusted}");
         assert_eq!(python.last_hit().1["x-forwarded-for"], hangar_server::devices::CONNECT_PEER, "{trusted}");
-        assert_eq!(mcp(connect).header("x-forwarded-for", "127.0.0.1").send().await.unwrap().status(), 403, "{trusted}");
+        assert_eq!(mcp(connect, &device).header("x-forwarded-for", "127.0.0.1").send().await.unwrap().status(), 403, "{trusted}");
     }
 }
 
 #[tokio::test]
 async fn connect_requests_count_as_https() {
-    let (_python, main, connect) = server("127.0.0.1").await;
+    let (_python, main, connect, device) = server("127.0.0.1").await;
     let with_cookie = |addr, cookie: &str| get(addr, "/api/client-api").header("cookie", cookie.to_owned());
-    let host = format!("__Host-cp_token={OWNER}");
-    let plain = format!("cp_token={OWNER}");
+    let host = format!("__Host-cp_token={device}");
+    let plain = format!("cp_token={device}");
     assert_eq!(with_cookie(connect, &host).send().await.unwrap().status(), 200);
     // O esquema sai da porta: forjar `http` não devolve o cookie sem prefixo.
     let forged = with_cookie(connect, &plain).header("x-forwarded-proto", "http");
@@ -86,8 +96,8 @@ async fn connect_requests_count_as_https() {
 
 #[tokio::test]
 async fn python_receives_connect_peer_on_pass() {
-    let (python, main, connect) = server("127.0.0.1").await;
-    let forged = get(connect, "/api/qualquer").header("x-forwarded-for", "198.51.100.7")
+    let (python, main, connect, device) = server("127.0.0.1").await;
+    let forged = get(connect, "/api/qualquer").bearer_auth(&device).header("x-forwarded-for", "198.51.100.7")
         .header("x-forwarded-proto", "http").header("x-forwarded-host", "evil.example");
     assert_eq!(forged.send().await.unwrap().status(), 200);
     let (_, headers) = python.last_hit();
@@ -103,9 +113,9 @@ async fn python_receives_connect_peer_on_pass() {
 
 #[tokio::test]
 async fn mcp_is_refused_through_connect() {
-    let (_python, main, connect) = server("127.0.0.1").await;
-    assert_ne!(mcp(main).send().await.unwrap().status(), 403, "na máquina o MCP atende");
-    let refused = mcp(connect).send().await.unwrap();
+    let (_python, main, connect, device) = server("127.0.0.1").await;
+    assert_ne!(mcp(main, OWNER).send().await.unwrap().status(), 403, "na máquina o MCP atende");
+    let refused = mcp(connect, &device).send().await.unwrap();
     assert_eq!(refused.status(), 403);
     assert!(refused.text().await.unwrap().contains("so na maquina do backend"));
 }
@@ -113,27 +123,27 @@ async fn mcp_is_refused_through_connect() {
 /// A camada apaga o `X-Forwarded-For` que esta guarda lê; quem recusa aqui é a entrada, não o cabeçalho.
 #[tokio::test]
 async fn device_install_is_refused_through_connect() {
-    let (python, main, connect) = server("127.0.0.1").await;
+    let (python, main, connect, device) = server("127.0.0.1").await;
     let path = "/api/device-install/progress";
     assert_eq!(get(main, path).bearer_auth(OWNER).send().await.unwrap().status(), 404, "na porta principal passa da guarda");
-    let plain = format!("cp_token={OWNER}");
-    let host = format!("__Host-cp_token={OWNER}");
+    let plain = format!("cp_token={device}");
+    let host = format!("__Host-cp_token={device}");
     for request in [
-        get(connect, path).bearer_auth(OWNER),
-        get(connect, path).header("cookie", plain),
+        get(connect, path).bearer_auth(&device),
         get(connect, path).header("cookie", host),
-        client().post(format!("http://{connect}/api/device-install/start")).bearer_auth(OWNER).body(r#"{"password":"segredo"}"#),
+        client().post(format!("http://{connect}/api/device-install/start")).bearer_auth(&device).body(r#"{"password":"segredo"}"#),
     ] {
         let refused = request.send().await.unwrap();
         assert_eq!(refused.status(), 403);
         let body = refused.text().await.unwrap();
         assert!(body.contains("device_install_forbidden") && !body.contains("segredo"), "{body}");
     }
+    assert_eq!(get(connect, path).header("cookie", plain).send().await.unwrap().status(), 401, "em https o cookie sem prefixo não vale");
     assert_eq!(python.hits_to(path), 0);
 }
 
 /// Entrada do Connect com um convidado de login (`GUEST`) que vê as sessões sem dono.
-async fn guest_server() -> (tempfile::TempDir, Arc<Fake>, SocketAddr) {
+pub(crate) async fn guest_server() -> (tempfile::TempDir, Arc<Fake>, SocketAddr) {
     let home = crate::physical_tempdir();
     let (python, upstream) = spawn_fake().await;
     let mut state = AppState::new(config(upstream, "127.0.0.1"));
@@ -210,7 +220,7 @@ async fn busy_connect_port_keeps_the_owner_listeners_up() {
     let _log = tracing::subscriber::set_default(tracing_subscriber::fmt().with_writer(move || writer.clone()).finish());
     let busy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let connect = busy.local_addr().unwrap();
-    let (_python, main) = start(connect, "127.0.0.1").await;
+    let (_python, main, device) = start(connect, "127.0.0.1").await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     while !String::from_utf8_lossy(&log.0.lock().unwrap()).contains("connect_port_failed") {
         assert!(tokio::time::Instant::now() < deadline, "a falha da porta não foi registrada");
@@ -219,7 +229,7 @@ async fn busy_connect_port_keeps_the_owner_listeners_up() {
     assert_eq!(get(main, "/api/client-api").bearer_auth(OWNER).send().await.unwrap().status(), 200);
     drop(busy);
     wait_up(connect).await;
-    assert_eq!(get(connect, "/api/desktop/palette").bearer_auth(OWNER).send().await.unwrap().status(), 403, "a porta solta abre já como Connect");
+    assert_eq!(get(connect, "/api/desktop/palette").bearer_auth(&device).send().await.unwrap().status(), 403, "a porta solta abre já como Connect");
     assert_eq!(get(main, "/api/client-api").bearer_auth(OWNER).send().await.unwrap().status(), 200);
 }
 

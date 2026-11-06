@@ -13,8 +13,8 @@ use crate::diag::DiagClient;
 /// chega sempre entra, mesmo com o relógio voltado; cortado na chegada, ele regravaria o arquivo a cada conexão.
 const MAX: usize = 20;
 
-/// O cliente que o `ConnectPortGate` do Python (8768, `connect_port.py`) põe no lugar do real:
-/// nada que chega por ela é local, nem conta como aparelho do dono.
+/// O cliente que a entrada do Connect (8768) põe no lugar do real: nada que chega por ela é local, e
+/// só conta como aparelho do dono com credencial de aparelho.
 pub const CONNECT_PEER: &str = "192.0.2.1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
