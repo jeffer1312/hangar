@@ -539,7 +539,39 @@ pub(crate) fn speech_pause_button(paused: bool) -> Button {
     Button::new("voice-pause").ghost().small().label(tr_shared(label, &[]))
 }
 
-pub(crate) fn dock_card(equalizer: Div, status: String, color: Hsla, time: Option<String>, line: Option<String>) -> Stateful<Div> {
+pub(crate) fn mute_button(muted: bool) -> Button {
+    let label = if muted { "codex_voice_unmute_short" } else { "codex_voice_mute_short" };
+    Button::new("voice-mute").ghost().small().label(tr_shared(label, &[]))
+}
+
+pub(crate) fn stop_button() -> Button { Button::new("voice-stop").danger().small().label(tr_shared("codex_voice_stop_short", &[])) }
+
+/// Topo do painel da chamada: o título, com o bloco de estado logo abaixo.
+pub(crate) fn call_header() -> Div {
+    div().flex_none().flex().flex_col().gap(px(12.)).p(px(16.)).pb(px(12.))
+        .child(div().flex().items_center().gap(px(8.))
+            .child(div().text_sm().font_weight(FontWeight::MEDIUM).text_color(theme::text()).child(tr_shared("codex_voice_title", &[])))
+            .child(beta_badge()))
+}
+
+/// O estado em destaque no painel da chamada.
+pub(crate) fn call_status(equalizer: Div, status: String, color: Hsla, target: Option<String>, time: Option<String>) -> Div {
+    div().flex().flex_col().gap(px(8.)).p(px(12.)).rounded(px(10.)).border_1().border_color(theme::border())
+        .child(div().flex().items_center().gap(px(12.))
+            .child(equalizer)
+            .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
+                .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(color).child(status))
+                .children(target.map(|name| div().text_xs().text_color(theme::faint()).truncate().child(name))))
+            .children(time.map(|time| div().flex_shrink_0().text_lg().text_color(theme::text()).child(time))))
+}
+
+pub(crate) fn call_footer() -> Div {
+    div().flex_none().flex().flex_col().gap(px(8.)).p(px(16.)).pt(px(12.)).border_t_1().border_color(theme::border())
+}
+
+pub(crate) fn call_actions() -> Div { div().flex().justify_end().gap(px(8.)) }
+
+pub(super) fn dock_card(equalizer: Div, status: String, color: Hsla, time: Option<String>, line: Option<String>) -> Stateful<Div> {
     div().id("side-voice").debug_selector(|| "voice-dock".into()).h(px(VOICE_DOCK_H)).flex_shrink_0().overflow_hidden().px_4().py(px(12.))
         .border_t_1().border_color(theme::border()).flex().flex_col().gap(px(8.))
         .child(chrome::section_label(tr("side_voice")).h(px(16.)).line_height(px(16.)))
@@ -1482,10 +1514,7 @@ impl Hangar {
         let live = self.voice.call.is_some();
         let top = popup::anchor_bounds("topbar-voice").map_or(px(0.), |t| t.bottom());
         let height = (window.viewport_size().height - top - px(32.)).max(px(240.));
-        let mut header = div().flex_none().flex().flex_col().gap(px(12.)).p(px(16.)).pb(px(12.))
-            .child(div().flex().items_center().gap(px(8.))
-                .child(div().text_sm().font_weight(FontWeight::MEDIUM).text_color(theme::text()).child(tr_shared("codex_voice_title", &[])))
-                .child(beta_badge()));
+        let mut header = call_header();
         let mut body = div().flex().flex_col().gap(px(12.)).px(px(16.)).pb(px(4.));
         let target = self.voice.target.as_ref().map(|(_, name)| name.clone());
         if live {
@@ -1496,13 +1525,8 @@ impl Hangar {
             let progress = self.voice.progress.clone();
             let spoken = [Some(self.voice_status().to_string()), target.clone(), action.clone(), progress.clone()]
                 .into_iter().flatten().collect::<Vec<_>>().join(" · ");
-            header = header.child(div().id("voice-status").role(Role::Status).aria_label(spoken).flex().flex_col().gap(px(8.)).p(px(12.)).rounded(px(10.)).border_1().border_color(theme::border())
-                .child(div().flex().items_center().gap(px(12.))
-                    .child(self.render_equalizer(4., 28., 4.).gap(px(3.)))
-                    .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
-                        .child(div().text_base().font_weight(FontWeight::SEMIBOLD).text_color(self.voice_state_color()).child(self.voice_status()))
-                        .children(target.map(|name| div().text_xs().text_color(theme::faint()).truncate().child(name))))
-                    .children(self.call_time().map(|time| div().flex_shrink_0().text_lg().text_color(theme::text()).child(time))))
+            header = header.child(call_status(self.render_equalizer(4., 28., 4.).gap(px(3.)), self.voice_status(), self.voice_state_color(), target, self.call_time())
+                .id("voice-status").role(Role::Status).aria_label(spoken)
                 .children(action.map(|text| div().text_sm().text_color(theme::text()).truncate().child(text)))
                 .children(progress.map(|step| div().text_xs().text_color(theme::warning()).truncate().child(step)))
                 .when(!thought.is_empty(), |el| el.child(div().flex().flex_col().gap(px(2.))
@@ -1573,14 +1597,13 @@ impl Hangar {
                 .child(div().text_xs().text_color(theme::warning()).child(tr("voice_draft_held")))
                 .child(div().text_sm().text_color(theme::text()).whitespace_normal().child(draft.clone())));
         }
-        let mut footer = div().flex_none().flex().flex_col().gap(px(8.)).p(px(16.)).pt(px(12.)).border_t_1().border_color(theme::border());
+        let mut footer = call_footer();
         for (id, error) in [("voice-error", &self.voice.error), ("voice-call-error", &self.voice.call_error)] {
             let Some(error) = error else { continue };
             footer = footer.child(div().id(id).role(Role::Alert).aria_label(error.clone()).text_xs().text_color(theme::danger()).whitespace_normal().child(error.clone()));
         }
         let actions = if live {
-            let mute = if self.voice.muted { "codex_voice_unmute_short" } else { "codex_voice_mute_short" };
-            div().flex().justify_end().gap(px(8.))
+            call_actions()
                 .child(speech_pause_button(self.voice.speech_paused)
                     .disabled(!matches!(self.voice.phase, Some(Phase::Live)))
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -1588,7 +1611,7 @@ impl Hangar {
                         if let Some(call) = &this.voice.call { call.set_speech_paused(this.voice.speech_paused); }
                         cx.notify();
                     })))
-                .child(Button::new("voice-mute").ghost().small().label(tr_shared(mute, &[]))
+                .child(mute_button(self.voice.muted)
                     .disabled(!matches!(self.voice.phase, Some(Phase::Live)))
                     .on_click(cx.listener(|this, _, _, cx| {
                         // Ditando, a chamada fica surda e o painel mostra isso; o clique troca a escolha que vale no fim.
@@ -1597,7 +1620,7 @@ impl Hangar {
                         if let Some(call) = &this.voice.call { call.set_muted(this.voice.muted); }
                         cx.notify();
                     })))
-                .child(Button::new("voice-stop").danger().small().label(tr_shared("codex_voice_stop_short", &[]))
+                .child(stop_button()
                     .on_click(cx.listener(|this, _, _, cx| this.stop_voice(cx))))
         } else {
             div().flex().justify_end().child(Button::new("voice-connect").primary().small().label(tr_shared("codex_voice_connect_short", &[]))

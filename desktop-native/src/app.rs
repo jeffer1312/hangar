@@ -80,7 +80,7 @@ pub(crate) use servers::{ServerEntry, new_id as new_server_id};
 pub(crate) use rows::{agent_card, agent_clock};
 pub(crate) use session_tabs::{PlateMark, PlateSegment, plate, tab_frame, tab_title, with_context_ring};
 pub(crate) use tags::{account_icon, machine_icon};
-pub(crate) use voice_ui::{dock_card as voice_dock_card, equalizer as voice_equalizer, speech_pause_button};
+pub(crate) use voice_ui::{call_actions, call_footer, call_header, call_status, equalizer as voice_equalizer, mute_button, speech_pause_button, stop_button};
 pub(crate) use rename_suggest::{Strip as RenameStrip, rename_strip};
 pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command, request_pair};
 pub(crate) use create::quiet_button;

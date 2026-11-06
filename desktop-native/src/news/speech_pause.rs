@@ -1,7 +1,7 @@
 //! `pausar-fala`: o botão para a fala da assistente, e a retomada continua do ponto em que ela parou.
 
 use std::{cell::Cell, time::{Duration, Instant}};
-use gpui_kit::{component::ActiveTheme, *};
+use gpui_kit::*;
 use crate::{app, i18n::{tr, tr_shared}, theme};
 
 const CYCLE: f32 = 7.;
@@ -11,6 +11,8 @@ const RESUME: f32 = 5.;
 const BAR_STEP: f32 = 0.08;
 /// Quadro do movimento reduzido: a fala pausada, que é o que explica o recurso.
 const STILL: f32 = 3.5;
+/// Abaixo desta largura (o cartão deitado do "Atualizar?") o painel inteiro não cabe legível.
+const COMPACT_BELOW: f32 = 240.;
 
 fn paused(t: f32) -> bool { (PAUSE..RESUME).contains(&t) }
 
@@ -52,12 +54,19 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
     let stopped = paused(t);
     let color = if stopped { theme::muted() } else { theme::success() };
     let status = if stopped { tr_shared("codex_voice_paused", &[]) } else { tr("voice_assistant_speaking") };
-    let bars = app::voice_equalizer(if stopped { 0. } else { level(t) }, (t / BAR_STEP) as u64, 3., 18.)
-        .map(|height| div().w(px(3.)).h(px(height)).rounded_full().bg(if stopped { theme::faint() } else { color }));
-    let equalizer = div().h(px(18.)).flex().gap(px(2.)).items_center().children(bars);
-    div().id("news-speech-pause").w(width).rounded(px(9.)).border_1().border_color(theme::border().alpha(0.06)).bg(theme::inset()).overflow_hidden()
-        .child(app::voice_dock_card(equalizer, status, color, Some("00:42".to_owned()), None))
-        .child(div().flex().justify_end().px(px(12.)).pb(px(10.)).child(app::speech_pause_button(stopped).tab_stop(false)))
+    let bars = app::voice_equalizer(if stopped { 0. } else { level(t) }, (t / BAR_STEP) as u64, 4., 28.)
+        .map(|height| div().w(px(4.)).h(px(height)).rounded_full().bg(if stopped { theme::faint() } else { color }));
+    let equalizer = div().h(px(28.)).flex().gap(px(3.)).items_center().children(bars);
+    let state = app::call_status(equalizer, status, color, Some("hangar".to_owned()), Some("00:42".to_owned()));
+    let panel = div().id("news-speech-pause").w(width).rounded(px(9.)).border_1().border_color(theme::border()).bg(theme::raised()).overflow_hidden();
+    // No cartão deitado do "Atualizar?" só cabe o estado e o botão que a novidade traz.
+    if width < px(COMPACT_BELOW) {
+        return panel.child(div().p(px(8.)).flex().flex_col().gap(px(6.)).child(state)
+            .child(app::call_actions().child(app::speech_pause_button(stopped).tab_stop(false)))).into_any_element();
+    }
+    panel.child(app::call_header().child(state))
+        .child(app::call_footer().child(app::call_actions().child(app::speech_pause_button(stopped).tab_stop(false))
+            .child(app::mute_button(false).tab_stop(false)).child(app::stop_button().tab_stop(false))))
         .into_any_element()
 }
 
