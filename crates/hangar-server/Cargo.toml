@@ -28,6 +28,7 @@ serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unboun
 indexmap.workspace = true
 hangar-api.workspace = true
 hangar-codex.workspace = true
+hangar-core.workspace = true
 toml = { version = "=1.1.7", default-features = false, features = ["parse", "std", "serde", "preserve_order"] }
 hangar-workspace = { path = "../hangar-workspace" }
 # Pacote por versão: índice, manifesto e extração conferida (`update/`).

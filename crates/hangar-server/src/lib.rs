@@ -22,7 +22,7 @@ pub mod presence;
 pub mod watchdog;
 pub mod costs;
 pub mod costs_routes;
-pub mod costs_failure;
+pub use hangar_core::costs_failure;
 pub mod device_install;
 pub mod devices;
 pub mod diag;
@@ -30,7 +30,7 @@ pub(crate) mod diag_report;
 pub mod display_env;
 pub mod groups;
 pub mod interactions;
-pub(crate) mod json_envelope;
+pub(crate) use hangar_core::json_envelope;
 pub mod list;
 pub mod locate;
 pub mod loops;
@@ -72,9 +72,9 @@ pub mod stats;
 pub mod subagents;
 pub mod tail;
 pub mod term;
-pub mod terminal_state;
+pub use hangar_core::terminal_state;
 pub mod terminal_control;
-pub mod terminal_lock;
+pub use hangar_core::terminal_lock;
 pub mod provider_accounts;
 pub mod provider_info;
 pub mod provider_models;
@@ -106,26 +106,14 @@ pub mod worktree_routes;
 mod worktree_context;
 mod worktree_fetch;
 pub mod worktree_policy;
-mod warn_limit;
+use hangar_core::warn_limit;
 
 /// Versão do contrato com o Python (rotas `/internal`, canal privado do estado, ambiente). O
 /// Python (`RUST_SERVER_PROTOCOL`) recusa um binário de outra versão e atende sozinho.
 pub const INTERNAL_PROTOCOL: u32 = 101;
 
-/// Todo cliente HTTP do servidor nasce aqui. Uma dependência liga `gzip`, `http2` e (no Windows)
-/// `native-tls` no reqwest, e o Cargo estende isso a todo cliente: sem estes desligamentos ele
-/// passaria a descomprimir sozinho, negociar HTTP/2 e usar o TLS do sistema.
-pub fn http_client() -> reqwest::ClientBuilder {
-    reqwest::Client::builder().no_gzip().http1_only().tls_backend_rustls()
-}
-
-/// Todo socket TCP do servidor, aceito ou aberto. Sem isso o Nagle segura o último pedaço de uma
-/// resposta em pedaços até o ACK atrasado do outro lado; o asyncio do Python já liga sozinho.
-pub(crate) fn nodelay(tcp: &mut tokio::net::TcpStream) {
-    if let Err(e) = tcp.set_nodelay(true) {
-        tracing::warn!("TCP_NODELAY não ligou: {e}");
-    }
-}
+pub use hangar_core::net::http_client;
+pub(crate) use hangar_core::net::{AbortOnDrop, nodelay};
 
 /// Lê o cano até o fim ou erro. O Python segura a outra ponta; fechou = pai morreu.
 pub async fn parent_gone<R: tokio::io::AsyncRead + Unpin>(mut pipe: R) {
@@ -309,12 +297,6 @@ pub async fn serve_until_with_guest(
     result
 }
 
-pub(crate) struct AbortOnDrop(pub(crate) tokio::task::JoinHandle<()>);
-
-impl Drop for AbortOnDrop {
-    fn drop(&mut self) { self.0.abort(); }
-}
-
 /// Linha do log de um pânico: só local e thread. A mensagem do pânico pode citar texto de conversa.
 fn panic_line(loc: Option<&std::panic::Location<'_>>, thread: Option<&str>) -> String {
     let at = loc.map_or_else(|| "?".to_string(), |l| format!("{}:{}", l.file(), l.line()));
@@ -446,13 +428,13 @@ pub mod codex_setup;
 pub mod harness_setup;
 
 pub mod cliproxy_config;
-pub mod value_coercion;
+pub use hangar_core::value_coercion;
 pub mod provider_discovery;
-pub mod http_contract;
+pub use hangar_core::http_contract;
 pub mod http_cors;
 
-pub mod http_body_limit;
-pub mod http_route_response;
+pub use hangar_core::http_body_limit;
+pub use hangar_core::http_route_response;
 pub mod boot_version;
 pub mod migration_branch;
 pub mod login_guests;

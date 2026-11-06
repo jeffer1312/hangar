@@ -1573,6 +1573,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-core"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "futures-util",
+ "http-body-util",
+ "percent-encoding",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha1_smol",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "hangar-package"
 version = "0.1.0"
 dependencies = [
@@ -1600,6 +1618,7 @@ dependencies = [
  "hangar-api",
  "hangar-auth",
  "hangar-codex",
+ "hangar-core",
  "hangar-package",
  "hangar-workspace",
  "http-body-util",
