@@ -985,15 +985,15 @@ describe('recusas e recuperação da lista', () => {
     rel();
   });
 
-  function offlineSecondServer(check: { estado: string }) {
+  function offlineSecondServer(check: { estado: string }, firstAnswers = true) {
     const first = useServers.getState().servers[0];
     useServers.setState({ servers: [first, second], activeId: first.id });
     fetchMock.mockImplementation(async (url: string) => {
-      if (url.includes('8766')) throw new TypeError('offline');
+      if (url.startsWith(second.baseUrl) || !firstAnswers) throw new TypeError('offline');
       if (url.includes('/api/peers/check')) return response({ identificador: '', motivo: '', tempo_ms: 1, ...check });
       return response([]);
     });
-    return () => fetchMock.mock.calls.filter(([url]) => String(url).includes('8766')).length;
+    return () => fetchMock.mock.calls.filter(([url]) => String(url).startsWith(second.baseUrl)).length;
   }
 
   async function failSecondServerThreeTimes() {
@@ -1041,7 +1041,7 @@ describe('recusas e recuperação da lista', () => {
   });
 
   test('sem nenhum servidor respondendo é o túnel do aparelho: ninguém para', async () => {
-    offlineSecondServer({ estado: 'falhou' });
+    offlineSecondServer({ estado: 'falhou' }, false);
     const rel = useSessions.getState().retain();
     await settle();
     await failSecondServerThreeTimes();

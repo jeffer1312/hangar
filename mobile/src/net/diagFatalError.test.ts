@@ -15,6 +15,7 @@ vi.mock('../stores/servers', () => ({ useServers: {
 vi.mock('react-native', () => ({ Platform: { OS: 'ios' }, AppState: {
   addEventListener: (_: string, fn: (value: string) => void) => { state.foreground = fn; },
 } }));
+vi.mock('expo-updates', () => ({ updateId: null }));
 const report = { timestamp: '2026-10-18T10:26:00.000Z', name: 'TypeError', message: 'Cannot read property of undefined',
   route: '/s/[server]/[name]/activity', stack: 'Activity@main.jsbundle:1:99', componentStack: '',
   metadata: { platform: 'ios', runtime: 'native-2', updateId: 'ota-one' } };
