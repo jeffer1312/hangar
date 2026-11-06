@@ -502,9 +502,11 @@ describe('LiveVoiceSheet', () => {
     const pause = container.querySelector(`[aria-label="${m.codex_voice_pause_short()}"]`) as HTMLElement;
     await act(async () => { pause.click(); });
     expect(onToggleSpeechPause).toHaveBeenCalledOnce();
-    view = { ...view, speechPaused: true };
+    // O áudio segue chegando na pausa: nível alto não pode virar "falando" na tela.
+    view = { ...view, speechPaused: true, levels: { input: 0, output: 0.8 } };
     await render();
     expect(container.textContent).toContain(m.codex_voice_paused());
+    expect(container.textContent).not.toContain(m.live_voice_status_voice());
     expect(container.querySelector(`[aria-label="${m.codex_voice_resume_short()}"]`)).not.toBeNull();
   });
 

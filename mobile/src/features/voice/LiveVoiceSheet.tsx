@@ -121,20 +121,21 @@ function barsMode(status: Status, levels: LiveVoiceView['levels']): VoiceBarsMod
 }
 
 // Único ponto que assina os níveis: quem fala vira cor, barras e rótulo aqui, sem redesenhar a folha.
-function CallOrb({ levels, live, muted, activity }: {
-  levels: LiveVoiceLevels; live: boolean; muted: boolean; activity: LiveVoiceState['activity'] | undefined;
+function CallOrb({ levels, live, muted, paused, activity }: {
+  levels: LiveVoiceLevels; live: boolean; muted: boolean; paused: boolean; activity: LiveVoiceState['activity'] | undefined;
 }) {
   const { theme } = useUnistyles();
   const current = useSyncExternalStore(levels.subscribe, levels.get);
   const status = liveVoiceStatus(live, liveVoiceSpeaker(current.input, current.output, muted), muted, activity);
-  const tone = statusColor(theme, status);
+  // Na pausa o áudio segue chegando e o nível acusa fala, mas ninguém está ouvindo.
+  const tone = paused ? theme.tokens.text.muted : statusColor(theme, status);
   return <>
     <View style={styles.orb}>
       <View style={[styles.orbRing, { backgroundColor: tone }]} />
       <View style={[styles.orbCore, { backgroundColor: tone }]} />
-      <VoiceBars mode={barsMode(status, current)} color={tone} count={7} height={64} width={7} gap={theme.base.space[1.5]} />
+      <VoiceBars mode={paused ? { kind: 'rest' } : barsMode(status, current)} color={tone} count={7} height={64} width={7} gap={theme.base.space[1.5]} />
     </View>
-    <Text style={[styles.status, { color: tone }]} numberOfLines={1}>{STATUS[status]()}</Text>
+    <Text style={[styles.status, { color: tone }]} numberOfLines={paused ? 2 : 1}>{paused ? m.codex_voice_paused() : STATUS[status]()}</Text>
   </>;
 }
 
@@ -335,7 +336,7 @@ export function LiveVoiceSheet({ open, view, levels, servers, serverId, onSelect
       {errors}
       <View style={styles.stage}>
         <View style={styles.stage} accessible accessibilityLiveRegion="polite" accessibilityLabel={announcement}>
-          {inCall ? <CallOrb levels={levels} live={view.phase === 'live'} muted={muted} activity={state?.activity} /> : <View style={styles.orb}>
+          {inCall ? <CallOrb levels={levels} live={view.phase === 'live'} muted={muted} paused={speechPaused} activity={state?.activity} /> : <View style={styles.orb}>
             <View style={[styles.orbRing, { backgroundColor: theme.tokens.text.muted }]} />
             <View style={[styles.orbCore, { backgroundColor: theme.tokens.text.muted }]} />
             <VoiceBars mode={{ kind: 'rest' }} color={theme.tokens.text.muted} count={7} height={64} width={7} gap={theme.base.space[1.5]} />
@@ -346,7 +347,6 @@ export function LiveVoiceSheet({ open, view, levels, servers, serverId, onSelect
           {view.phase === 'live' ? <Text style={styles.time}>{elapsed}</Text>
             : view.phase === 'connecting' || settings.loading && !reply ? <ActivityIndicator size="small" color={theme.tokens.accent.base} /> : null}
           {stalled ? <Text style={[styles.status, { color: theme.tokens.status.error }]} accessibilityRole="alert">{m.codex_voice_stalled()}</Text> : null}
-          {speechPaused ? <Text style={styles.status}>{m.codex_voice_paused()}</Text> : null}
           {doing ? <Text selectable style={styles.doing} numberOfLines={2}>{doing}</Text> : null}
         </View>
         {state?.action && state.progress && busy ? <Text selectable style={styles.doing}>{state.progress}</Text> : null}
