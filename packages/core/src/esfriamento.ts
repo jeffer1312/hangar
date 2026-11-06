@@ -6,6 +6,7 @@ const CHAVE_RESPOSTAS = 'hangar_servidores_responderam';
 // Início da queda, fora do prazo de tentativas: resposta sem lista, proteção e "buscar agora"
 // mexem no prazo e não podem reabrir o aviso de offline.
 const CHAVE_QUEDAS = 'hangar_quedas';
+const PARKED_KEY = 'hangar_servidores_parados';
 
 type Estado = { failures: number; retryAt: number };
 // As duas primeiras esperas são curtas: queda isolada (backend reiniciando) volta em segundos,
@@ -22,6 +23,7 @@ export const SERVIDOR_CANDIDATO = 'candidato';
 const estados = new Map<string, Estado>();
 const respostas = new Map<string, number>();
 const quedas = new Map<string, number>();
+const parked = new Map<string, number>();
 let carregado = false;
 let avisouArmazem = false;
 const recoveredListeners = new Set<(id: string) => void>();
@@ -64,11 +66,12 @@ export function definirArmazem(a: ArmazemEsfriamento | null): void {
   carregado = false;   // armazém novo, estado gravado novo
   // Marca feita ANTES da injeção (só em memória) não pode se perder: funde com o que está
   // gravado e persiste — `registrarFalha` só grava na transição, não gravaria de novo.
-  if (estados.size > 0 || respostas.size > 0 || quedas.size > 0) {
+  if (estados.size > 0 || respostas.size > 0 || quedas.size > 0 || parked.size > 0) {
     carregar();
     gravar();
     gravarMapa(CHAVE_RESPOSTAS, respostas);
     gravarMapa(CHAVE_QUEDAS, quedas);
+    gravarMapa(PARKED_KEY, parked);
   }
 }
 
@@ -113,6 +116,7 @@ function carregar(): void {
   carregarMapa(CHAVE_RESPOSTAS, respostas, 'responderam', (gravado, atual) => gravado > (atual ?? 0));
   // Vale o início mais antigo: a queda começou na primeira falha, gravada ou desta página.
   carregarMapa(CHAVE_QUEDAS, quedas, 'quedas', (gravado, atual) => atual === undefined || gravado < atual);
+  carregarMapa(PARKED_KEY, parked, 'parados', (_gravado, atual) => atual === undefined);
   let bruto: string | null | undefined;
   try {
     bruto = armazem()?.getItem(CHAVE);
@@ -177,6 +181,24 @@ export function retryAfterMs(id: string): number {
   return Math.max(0, (estados.get(id)?.retryAt ?? 0) - Date.now());
 }
 
+/** Máquina fora do ar com outra respondendo: nada automático sai para ela até voltar ou a pessoa pedir. */
+export function parkServer(id: string): void {
+  carregar();
+  parked.set(id, Date.now());
+  gravarMapa(PARKED_KEY, parked);
+}
+
+export function isServerParked(id: string): boolean {
+  carregar();
+  return parked.has(id);
+}
+
+function unpark(id?: string): void {
+  if (id === undefined) parked.clear();
+  else if (!parked.delete(id)) return;
+  gravarMapa(PARKED_KEY, parked);
+}
+
 /** Respondeu nas últimas 24 h: a falha é do aparelho, não da máquina. */
 export function respondeuRecentemente(id: string): boolean {
   carregar();
@@ -225,6 +247,7 @@ export function registrarSucesso(id: string): void {
     respostas.set(id, agora);
     gravarMapa(CHAVE_RESPOSTAS, respostas);
   }
+  unpark(id);
   if (!estados.delete(id)) return;
   gravar();
   for (const listener of [...recoveredListeners]) {
@@ -241,6 +264,7 @@ export function retentarAgora(id?: string): void {
   if (id === undefined) estados.clear();
   else estados.delete(id);
   gravar();
+  unpark(id);
 }
 
 /** Servidor saiu da lista: some com o estado dele. */
@@ -248,6 +272,7 @@ export function esquecerServidor(id: string): void {
   carregar();
   if (estados.delete(id)) gravar();
   if (respostas.delete(id)) gravarMapa(CHAVE_RESPOSTAS, respostas);
+  unpark(id);
   endOutage(id);
 }
 
@@ -255,6 +280,7 @@ export function _limparEsfriamentoParaTestes(): void {
   estados.clear();
   respostas.clear();
   quedas.clear();
+  parked.clear();
   carregado = false;
   try {
     armazem()?.removeItem(CHAVE);

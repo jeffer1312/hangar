@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
-  definirArmazem, definirProtegido, estaDesligado, esquecerServidor, registrarFalha, registrarSucesso, retentarAgora,
+  definirArmazem, definirProtegido, estaDesligado, esquecerServidor, isServerParked, parkServer, registrarFalha,
+  registrarSucesso, retentarAgora,
   _limparEsfriamentoParaTestes,
   onServerRecovered, respondeuRecentemente, retryAfterMs, SERVIDOR_CANDIDATO, startOutage,
 } from './esfriamento';
@@ -171,8 +172,25 @@ describe('servidor desligado', () => {
   });
 });
 
+describe('servidor parado', () => {
+  it('sobrevive à recarga e só sai por resposta, pedido da pessoa ou remoção', () => {
+    const dados = new Map<string, string>();
+    definirArmazem({ getItem: (k) => dados.get(k) ?? null, setItem: (k, v) => { dados.set(k, v); }, removeItem: (k) => { dados.delete(k); } });
+    parkServer('a');
+    parkServer('b');
+    parkServer('c');
+    definirArmazem({ getItem: (k) => dados.get(k) ?? null, setItem: (k, v) => { dados.set(k, v); }, removeItem: (k) => { dados.delete(k); } });
+    expect(isServerParked('a')).toBe(true);
+    registrarSucesso('a');
+    retentarAgora('b');
+    esquecerServidor('c');
+    expect(['a', 'b', 'c'].some(isServerParked)).toBe(false);
+    definirArmazem(null);
+  });
+});
+
 describe('início da queda', () => {
-  const armazemDe = (dados: Map<string, string>) => ({ getItem: (k: string) => dados.get(k) ?? null,
+  const armazemDe =(dados: Map<string, string>) => ({ getItem: (k: string) => dados.get(k) ?? null,
     setItem: (k: string, v: string) => { dados.set(k, v); }, removeItem: (k: string) => { dados.delete(k); } });
 
   it('atualização com só o registro de tentativas: a queda conta da primeira leitura e fica gravada', () => {

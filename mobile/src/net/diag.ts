@@ -1,5 +1,6 @@
 import { AppState, Platform } from 'react-native';
-import { baseOf, configureDiag, criarTransporteDiag, isOwnMachine, registrarDiag, type EventoDiag } from '@hangar/core';
+import { updateId } from 'expo-updates';
+import { baseOf, configureDiag, criarTransporteDiag, isOwnMachine, isServerParked, registrarDiag, type EventoDiag } from '@hangar/core';
 import { useServers } from '../stores/servers';
 import { replayFatalError } from './fatalErrors';
 
@@ -41,8 +42,11 @@ export function iniciarDiag(): void {
   const cli = Math.random().toString(36).slice(2, 8);
   let seq = 0;
   const destinos = new Set<string>();
-  const transporte = criarTransporteDiag((destino) => useServers.getState().servers
-    .find((s) => s.baseUrl.replace(/\/+$/, '') === destino || baseOf(s) === destino)?.token);
+  const transporte = criarTransporteDiag((destino) => {
+    const server = useServers.getState().servers
+      .find((s) => s.baseUrl.replace(/\/+$/, '') === destino || baseOf(s) === destino);
+    return server && !isServerParked(server.id) ? server.token : null;
+  });
   // O diário fica nas máquinas desta pessoa, nunca na entrada do par de outra pessoa.
   const ativaPropria = () => { const a = useServers.getState().active(); return a && !a.invite ? a.baseUrl : undefined; };
   const registrar = (evento: EventoDiag, destino = ativaPropria()) => {
@@ -51,7 +55,8 @@ export function iniciarDiag(): void {
     if (!destinos.has(base)) {
       destinos.add(base);
       transporte.registrar(base, { evento: 'app.abriu', cli, seq: ++seq,
-        ts: new Date().toISOString(), so: Platform.OS, navegador: 'Expo', vista: 'celular' });
+        ts: new Date().toISOString(), so: Platform.OS, navegador: 'Expo', vista: 'celular',
+        detalhe: updateId ?? 'embutido' });
     }
     transporte.registrar(base, { ...evento, cli, seq: ++seq, ts: new Date().toISOString() });
   };

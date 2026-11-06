@@ -709,6 +709,15 @@ três falhas seguidas, servidor inativo não abre SSE depois de erro de rede nem
 voltar ao app. As duas primeiras falhas mantêm a liberação de 23/09, para não voltar o erro falso
 da suspensão.
 
+Na mesma noite a queda das 21:13 mostrou que só recuar não bastava: o diário do iPhone teve 135
+falhas em 8 minutos, até 31 por minuto, e o log do Tailscale repetiu o caminho direto a cada 100 s,
+como na #21773. O usuário pediu que máquina desligada simplesmente parasse de ser procurada. É a
+regra de 16/09, que ele trocou em 22/09 porque a máquina religada não reaparecia. Por isso o Expo
+agora para o servidor (`parkServer`) e, a cada 5 min, pergunta a uma máquina ligada por
+`/api/peers/check`: `falhou` e `nao_configurado` mantêm parado, e qualquer outra resposta prova que
+ela está de pé. Parar exige outro servidor respondendo, porque na queda do túnel todas falham
+juntas. O ativo nunca para. O PWA não recebe essa regra: a web não ganha recurso novo.
+
 ## Compartilhado por sessão, não por conexão
 
 (`app/difusor.py`, `stats.Accumulator.

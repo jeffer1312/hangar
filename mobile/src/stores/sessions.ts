@@ -1,9 +1,10 @@
 import { create } from 'zustand';
 import { openSessionsStream, deviceIdentityReady, aggregateSessions, jsonlDaSessao, sweepHidden, registrarDiag, decidirRota, discoverRemoteRoute, esquecerRota, rotaDecidida, baseOf, UNCONFIRMED_BASE, probeServerResponse, comTeto, parseTagsEvent, patchSlot, placeExternalRows, listExternalPairs, attachGuest, createExternalPairSync } from '@hangar/core';
 import type { SessionInfo, Server, AggSession, ExternalPair, VaultEvent, VaultRequest } from '@hangar/core';
-import { sortSessions, definirArmazem, definirProtegido, definirSemPrazo, registrarFalha, registrarSucesso, retryAfterMs, estaDesligado, startOutage, endOutage, respondeuRecentemente, retentarAgora, esquecerServidor, onServerRecovered, _limparEsfriamentoParaTestes } from '@hangar/core';
+import { sortSessions, definirArmazem, definirProtegido, definirSemPrazo, isServerParked, parkServer, registrarFalha, registrarSucesso, retryAfterMs, estaDesligado, startOutage, endOutage, respondeuRecentemente, retentarAgora, esquecerServidor, onServerRecovered, _limparEsfriamentoParaTestes } from '@hangar/core';
 import type { Slot, ServerBucket, Aggregate } from '@hangar/core';
 import { useServers } from './servers';
+import { checkPeer } from '../features/machines/api';
 import * as m from '../paraglide/messages';
 
 // Store vivo da lista de sessões — porte de frontend/src/lib/sessionsStore.svelte.ts
@@ -69,6 +70,10 @@ const lastFailureHttp = new Map<string, boolean>();
 const HTTP_RETRY_DELAYS_MS = [2000, 5000, 30000, 60000, 120000, 240000, 300000, 600000, 1800000];
 const MACHINE_OFF_FAILURES = 3;
 const machineLooksOff = (id: string) => (httpFailures.get(id) ?? 0) >= MACHINE_OFF_FAILURES;
+const PARKED_CHECK_FIRST_MS = 10_000;
+const PARKED_CHECK_MS = 300_000;
+const PARKED_CHECK_TIMEOUT_MS = 15_000;
+let parkedCheckTimer: ReturnType<typeof setTimeout> | undefined;
 const refused = new Map<string, number>();
 const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 let hidden = new Map<string, string | null>();
@@ -131,11 +136,60 @@ function disconnect(id: string, abortPending = true) {
 
 function pause() {
   generation++;
+  clearTimeout(parkedCheckTimer);
+  parkedCheckTimer = undefined;
   for (const id of new Set([...streams.keys(), ...retryTimers.keys(), ...connecting.keys()])) disconnect(id, false);
+}
+
+const listAnswering = (id: string) => {
+  const slot = slots.get(id);
+  return !!slot?.sessions && !slot.error;
+};
+
+// Todas falhando é o túnel do aparelho; só outra máquina respondendo prova que esta está fora.
+function shouldPark(id: string) {
+  const server = serversCache.find((s) => s.id === id);
+  return !!server && !server.invite && !lastFailureHttp.get(id) && machineLooksOff(id)
+    && useServers.getState().activeId !== id
+    && serversCache.some((other) => other.id !== id && listAnswering(other.id));
+}
+
+function scheduleParkedCheck(delay: number, get: () => SessionsState, set: (p: Partial<SessionsState>) => void) {
+  if (parkedCheckTimer !== undefined || !foreground || refs === 0) return;
+  if (!serversCache.some((s) => isServerParked(s.id))) return;
+  parkedCheckTimer = setTimeout(() => {
+    parkedCheckTimer = undefined;
+    void checkParkedServers(get, set);
+  }, delay);
+}
+
+// A pergunta vai a uma máquina ligada: nenhum pacote sai do aparelho para a máquina parada.
+async function checkParkedServers(get: () => SessionsState, set: (p: Partial<SessionsState>) => void) {
+  const witness = serversCache.find((s) => !s.invite && listAnswering(s.id));
+  if (witness) {
+    await Promise.allSettled(serversCache.filter((s) => isServerParked(s.id)).map(async (s) => {
+      const id = s.lan?.id || s.remote?.id || s.id;
+      const { estado } = await checkPeer(witness, s.baseUrl, id, AbortSignal.timeout(PARKED_CHECK_TIMEOUT_MS));
+      if (estado === 'falhou' || estado === 'nao_configurado' || !isServerParked(s.id)) return;
+      registrarDiag({ evento: 'servidor.voltou', tela: 'lista', operacao: s.id });
+      httpFailures.delete(s.id);
+      httpRetryAt.delete(s.id);
+      retryAt.delete(s.id);
+      retentarAgora(s.id);
+      connect(serversCache, get, set, s.id);
+    }));
+  }
+  scheduleParkedCheck(PARKED_CHECK_MS, get, set);
 }
 
 function scheduleRetry(id: string, get: () => SessionsState, set: (p: Partial<SessionsState>) => void) {
   if (!foreground || refs === 0 || retryTimers.has(id)) return;
+  if (shouldPark(id)) {
+    parkServer(id);
+    registrarDiag({ evento: 'servidor.parado', nivel: 'aviso', tela: 'lista', operacao: id });
+    scheduleParkedCheck(PARKED_CHECK_MS, get, set);
+    return;
+  }
   const delay = retryDelay(id);
   const servidor = serversCache.find((s) => s.id === id);
   if (servidor) registrarDiag({ evento: 'lista.retentativa', tela: 'lista', espera_ms: delay }, servidor.baseUrl);
@@ -257,6 +311,10 @@ function connect(list: Server[], get: () => SessionsState, set: (p: Partial<Sess
       continue;
     }
     if (s.inviteEnded) continue;
+    if (isServerParked(s.id)) {
+      slots.set(s.id, failedSlot(s.id, 'offline'));
+      continue;
+    }
     if (streams.has(s.id) || retryTimers.has(s.id) || connecting.has(s.id)) continue;
     if (retryDelay(s.id) > 0) {
       slots.set(s.id, failedSlot(s.id, lastFailureHttp.get(s.id) ? m.sessao_erro_servidor() : 'offline'));
@@ -536,7 +594,7 @@ function refresh(get: () => SessionsState, set: (p: Partial<SessionsState>) => v
   serversCache = state.servers.slice();
   if (initialKickPending && state.ready && foreground && refs > 0) {
     initialKickPending = false;
-    for (const s of serversCache) if (respondeuRecentemente(s.id)) {
+    for (const s of serversCache) if (respondeuRecentemente(s.id) && !isServerParked(s.id)) {
       retentarAgora(s.id);
       refused.delete(s.id);
     }
@@ -567,9 +625,15 @@ function refresh(get: () => SessionsState, set: (p: Partial<SessionsState>) => v
       clearTimeout(retryTimers.get(activeId));
       retryTimers.delete(activeId);
       retryAt.delete(activeId);
+      if (isServerParked(activeId)) {
+        httpFailures.delete(activeId);
+        httpRetryAt.delete(activeId);
+        retentarAgora(activeId);
+      }
     }
   }
   connect(serversCache, get, set);
+  scheduleParkedCheck(PARKED_CHECK_FIRST_MS, get, set);
 }
 
 function start(get: () => SessionsState, set: (p: Partial<SessionsState>) => void) {
@@ -650,7 +714,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
         const wasRefused = refused.delete(s.id);
         const isActive = s.id === useServers.getState().activeId;
         // O erro falso da suspensão é uma falha só; quem já falhou seguido segue no prazo.
-        if (!wasRefused && !isActive && machineLooksOff(s.id)) continue;
+        if (!wasRefused && !isActive && (machineLooksOff(s.id) || isServerParked(s.id))) continue;
         httpRetryAt.delete(s.id);
         if (wasRefused || isActive || respondeuRecentemente(s.id)) {
           retentarAgora(s.id);
@@ -658,6 +722,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
         }
       }
       connect(serversCache, get, set);
+      scheduleParkedCheck(PARKED_CHECK_FIRST_MS, get, set);
     }
   },
   refreshServers() {

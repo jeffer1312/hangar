@@ -8,6 +8,7 @@ const estado = vi.hoisted(() => ({
   appState: vi.fn(),
 }));
 vi.mock('react-native', () => ({ Platform: { OS: 'android' }, AppState: { addEventListener: estado.appState } }));
+vi.mock('expo-updates', () => ({ updateId: 'update-fixture' }));
 vi.mock('../stores/prefs', () => ({ prefs: { getString: () => undefined } }));
 vi.mock('../stores/servers', () => ({ useServers: {
   getState: () => ({ servers: estado.servidores, active: () => ({ baseUrl: estado.base }) }),

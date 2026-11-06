@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
-import { configureApi, configureDiag, definirArmazem, _resetRotasForTests, estaDesligado, registrarFalha, registrarSucesso, retryAfterMs, retentarAgora } from '@hangar/core';
+import { configureApi, configureDiag, definirArmazem, _resetRotasForTests, estaDesligado, isServerParked, registrarFalha, registrarSucesso, retryAfterMs, retentarAgora } from '@hangar/core';
 import { prefs } from './prefs';
 import * as m from '../paraglide/messages';
 
@@ -982,6 +982,70 @@ describe('recusas e recuperação da lista', () => {
     await advance(30000);
     expect(retryAfterMs('srv1')).toBe(30000);
     expect(created).toHaveLength(3);
+    rel();
+  });
+
+  function offlineSecondServer(check: { estado: string }) {
+    const first = useServers.getState().servers[0];
+    useServers.setState({ servers: [first, second], activeId: first.id });
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes('8766')) throw new TypeError('offline');
+      if (url.includes('/api/peers/check')) return response({ identificador: '', motivo: '', tempo_ms: 1, ...check });
+      return response([]);
+    });
+    return () => fetchMock.mock.calls.filter(([url]) => String(url).includes('8766')).length;
+  }
+
+  async function failSecondServerThreeTimes() {
+    for (const delay of [2000, 5000, 30000]) {
+      created.filter((es) => es.url.includes('8766')).at(-1)!.onerror?.({});
+      await advance(delay);
+    }
+  }
+
+  test('inativo desligado com outro respondendo para de tentar e volta pela máquina ligada', async () => {
+    const check = { estado: 'falhou' };
+    const attempts = offlineSecondServer(check);
+    const rel = useSessions.getState().retain();
+    await settle();
+    created.find((es) => !es.url.includes('8766'))!.trigger('sessions', '[]');
+    await failSecondServerThreeTimes();
+    expect(isServerParked('srv2')).toBe(true);
+    const parkedAttempts = attempts();
+    await advance(1_800_000);
+    expect(attempts()).toBe(parkedAttempts);
+    useSessions.getState().setForeground(false);
+    useSessions.getState().setForeground(true);
+    await settle();
+    expect(attempts()).toBe(parkedAttempts);
+    check.estado = 'ok';
+    await advance(10_000);
+    await settle();
+    expect(isServerParked('srv2')).toBe(false);
+    expect(attempts()).toBeGreaterThan(parkedAttempts);
+    rel();
+  });
+
+  test('reconectar tira o servidor parado da espera', async () => {
+    const attempts = offlineSecondServer({ estado: 'falhou' });
+    const rel = useSessions.getState().retain();
+    await settle();
+    created.find((es) => !es.url.includes('8766'))!.trigger('sessions', '[]');
+    await failSecondServerThreeTimes();
+    const parkedAttempts = attempts();
+    useSessions.getState().reconnect();
+    await settle();
+    expect(isServerParked('srv2')).toBe(false);
+    expect(attempts()).toBeGreaterThan(parkedAttempts);
+    rel();
+  });
+
+  test('sem nenhum servidor respondendo é o túnel do aparelho: ninguém para', async () => {
+    offlineSecondServer({ estado: 'falhou' });
+    const rel = useSessions.getState().retain();
+    await settle();
+    await failSecondServerThreeTimes();
+    expect(isServerParked('srv2')).toBe(false);
     rel();
   });
 

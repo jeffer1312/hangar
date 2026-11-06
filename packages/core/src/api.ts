@@ -9,7 +9,7 @@ import { basename } from './format';
 import { mensagemDeErro, formataErro, type EnvelopeErro } from './errosApi';
 // diag NÃO importa api (ele usa `fetch` direto) — é o que mantém esta dependência de mão única.
 import { registrar as registrarDiag, novoReq, recordFailure, recentFailures, type RecentFailure } from './diag';
-import { dispensaPrazo, retryAfterMs, registrarFalha, registrarSucesso } from './esfriamento';
+import { dispensaPrazo, isServerParked, retryAfterMs, registrarFalha, registrarSucesso } from './esfriamento';
 import {
   inviteAllows, parsePairLink, SharePrerequisiteError, ShareReachError, tailscaleEnableUrl, type ShareCreated, type ShareInfo, type SharePrereqs,
 } from './share';
@@ -275,6 +275,13 @@ function ensureConfirmedRoute(base: string): void {
 }
 
 async function apiFetchRes(path: string, init?: RequestInit, server?: Server, probe = false, countsOutage = true, fetcher: typeof fetch = fetch): Promise<Response> {
+  // Durante a espera, só uma verificação explícita pode antecipar a nova tentativa. O ativo e a
+  // máquina de um chat aberto não esperam: o prazo pode ter sido gravado antes de o chat abrir.
+  // Vem antes da rota: decidir a rota já sonda todos os endereços da máquina.
+  if (server && (retryAfterMs(server.id) > 0 || isServerParked(server.id)) && !probe && !dispensaPrazo(server.id)) {
+    throw new Error(m.esfriamento_servidor_desligado({ servidor: server.label },
+                                                     { locale: localeAtual() }));
+  }
   if (server && baseOf(server) === UNCONFIRMED_BASE && (!rotaDecidida(server.id, server) || probe)) {
     const signal = init?.signal;
     if (signal?.aborted) throw signal.reason;
@@ -304,12 +311,6 @@ async function apiFetchRes(path: string, init?: RequestInit, server?: Server, pr
   // Id do pedido: vai no cabeçalho e na linha do diário dos DOIS lados, pra quem analisa seguir a
   // cadeia (o toque na tela -> o que o servidor fez) sem depender de comparar horário.
   const req = novoReq();
-  // Durante a espera, só uma verificação explícita pode antecipar a nova tentativa. O ativo e a
-  // máquina de um chat aberto não esperam: o prazo pode ter sido gravado antes de o chat abrir.
-  if (server && retryAfterMs(server.id) > 0 && !probe && !dispensaPrazo(server.id)) {
-    throw new Error(m.esfriamento_servidor_desligado({ servidor: server.label },
-                                                     { locale: localeAtual() }));
-  }
   let res: Response;
   try {
     res = await fetcher(url, {

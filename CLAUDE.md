@@ -514,7 +514,10 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   Quem respondeu nas últimas 24 h para em 30 s (2 s, 5 s, 30 s…) e é tentado na hora quando o app
   abre ou volta a ficar visível: a queda dele é a suspensão do aparelho, não a máquina. No Expo,
   com três falhas seguidas, servidor inativo segue no prazo ao voltar e não abre SSE após erro de
-  rede. O diário também recua por destino sem rede, até 30 min.
+  rede. O diário também recua por destino sem rede, até 30 min. Com outro servidor respondendo, esse
+  inativo fica parado (`parkServer`): nada automático sai do aparelho para ele. Só uma resposta, abrir
+  o servidor, Reconectar ou uma máquina ligada dizer por `/api/peers/check` que ele voltou o liberam.
+  Todos falhando é o túnel do aparelho, e ninguém para.
   Falha com o app em segundo plano não conta (nem marca nem grava prazo): tenta a cada 30 s
   fixos e reconecta todos na volta.
   O aviso vermelho "offline" no topo da lista só aparece nos 30 s após a primeira falha da queda
