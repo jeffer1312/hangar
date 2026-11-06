@@ -6,6 +6,7 @@
 
 mod common;
 mod remote_browser;
+mod connect_port;
 mod cli_probe;
 mod provider_discovery;
 mod json_body;

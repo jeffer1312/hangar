@@ -63,6 +63,8 @@ pub struct AppState {
     pub public_v6: Option<TcpListener>,
     /// A porta do front (`front_address`), decidida só na subida real (`main.rs`).
     pub front: Option<SocketAddr>,
+    /// A entrada do Connect (`config::connect_listen`), decidida só na subida real (`main.rs`).
+    pub connect: Option<SocketAddr>,
     pub workspace_slots: Arc<tokio::sync::Semaphore>,
     pub workspace_read_slots: Arc<tokio::sync::Semaphore>,
     pub workspace_meta_slots: Arc<tokio::sync::Semaphore>,
@@ -230,7 +232,7 @@ impl AppState {
         let vault_requests = Arc::new(crate::vault::requests::Requests::default());
         let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture());
         let search = crate::search::Index::server(accounts.clone());
-        AppState { startup: Default::default(), startup_producers: Arc::default(), settings_snapshot: std::sync::OnceLock::new(), login_guests: Arc::new(crate::login_guests::Service::uninitialized(&accounts.env.home,&accounts.env.claude_base)), accounts, search, claude_p: None, command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
+        AppState { startup: Default::default(), startup_producers: Arc::default(), settings_snapshot: std::sync::OnceLock::new(), login_guests: Arc::new(crate::login_guests::Service::uninitialized(&accounts.env.home,&accounts.env.claude_base)), accounts, search, claude_p: None, command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, connect: None, diag,
             migration_branch: Arc::default(),
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             login_browser: Arc::default(),
@@ -385,11 +387,27 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let plugin_state = state.clone();
     let guest_state = state.clone();
     let (front_state, front) = (state.clone(), state.front);
+    let (connect_state, connect) = (state.clone(), state.connect);
     // Uma só para as portas: convite e par veem as mesmas lojas e a mesma conferência.
     let pair = pair_state(&state);
     let guest_pair = pair.clone();
     let front_pair = pair.clone();
+    let connect_pair = pair.clone();
     let result = tokio::select! {
+        // Nunca termina, como a do front: sem a porta, a 8765 e o Tailscale seguem de pé.
+        () = async {
+            let Some(addr) = connect else { return std::future::pending().await };
+            let mut wait = Duration::from_millis(250);
+            let mut failing = false;
+            loop {
+                if let Err(e) = serve_connect(addr, connect_state.clone(), connect_pair.clone()).await && !failing {
+                    tracing::warn!(code = "connect_port_failed", listen = %addr, "porta do Connect indisponível, tentando de novo: {e}");
+                    failing = true;
+                }
+                tokio::time::sleep(wait).await;
+                wait = (wait * 2).min(Duration::from_secs(5));
+            }
+        } => Ok(()),
         // Nunca termina: a porta do front é extra, e cair nela não derruba o servidor.
         () = async {
             let Some(addr) = front else { return std::future::pending().await };
@@ -460,6 +478,18 @@ async fn ipv4_peer(mut req: axum::extract::Request) -> axum::extract::Request {
     req
 }
 
+/// O roteador do dono atrás de `rewrite_peer`. Só em loopback: quem fala com ela é o Caddy desta máquina.
+pub async fn serve_connect(addr: SocketAddr, state: Arc<AppState>, pair: Option<Arc<PairState>>) -> std::io::Result<()> {
+    if !addr.ip().is_loopback() {
+        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "entrada do Connect fora do loopback"));
+    }
+    let listener = guest_socket(addr)?;
+    tracing::info!(listen = %addr, "entrada do Connect de pé");
+    axum::serve(listener, router_with(state, pair.as_ref())
+        .layer(axum::middleware::map_request(crate::connect::gate::rewrite_peer))
+        .into_make_service_with_connect_info::<crate::connect::gate::ConnectConn>()).await
+}
+
 async fn serve_guest(addr: SocketAddr, state: Arc<AppState>, pair: Option<Arc<PairState>>) -> std::io::Result<()> {
     let listener = bind_guest(addr).await;
     state.guest_bound.store(true, Ordering::Relaxed);
@@ -492,7 +522,7 @@ fn guest_socket(addr: SocketAddr) -> std::io::Result<TcpListener> {
     let socket = if addr.is_ipv4() { tokio::net::TcpSocket::new_v4()? } else { tokio::net::TcpSocket::new_v6()? };
     #[cfg(unix)]
     socket.set_reuseaddr(true)?;
-    // ponytail: o `GuestConn` só casa com `TcpListener` puro (sem `tap_io`); a conexão aceita herda
+    // ponytail: `GuestConn` e `ConnectConn` só casam com `TcpListener` puro (sem `tap_io`); a conexão aceita herda
     // o TCP_NODELAY do listener. Sistema que não herdar precisa de laço de accept próprio.
     socket.set_nodelay(true)?;
     socket.bind(addr)?;

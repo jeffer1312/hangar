@@ -8,6 +8,7 @@ pub mod auth;
 pub mod remote_browser;
 pub mod config;
 pub mod config_sync;
+pub mod connect;
 pub mod command_capture;
 pub mod cli_probe;
 pub mod commands;

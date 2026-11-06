@@ -277,6 +277,10 @@ impl TrustedHosts {
     /// TCP: nunca vira um endereço presumido (127.0.0.1 escaparia do bloqueio por origem).
     pub fn resolve(&self, peer: IpAddr, headers: &HeaderMap) -> (String, bool) {
         let peer = peer.to_canonical().to_string();
+        // O esquema sai da porta: o Caddy só fala https com a internet.
+        if peer == crate::devices::CONNECT_PEER {
+            return (peer, true);
+        }
         if !self.contains(&peer) {
             return (peer, false);
         }

@@ -1,0 +1,153 @@
+//! Entrada do Connect pelo listener de verdade, contra o Python falso.
+use crate::fake;
+
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use fake::*;
+use hangar_server::config::connect_listen;
+use hangar_server::routes::{AppState, serve_connect};
+
+fn free_port() -> SocketAddr {
+    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap()
+}
+
+async fn wait_up(addr: SocketAddr) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while client().get(format!("http://{addr}/__hangar_server/health")).send().await.is_err() {
+        assert!(tokio::time::Instant::now() < deadline, "a entrada {addr} não abriu");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+async fn start(addr: SocketAddr, trusted: &str) -> (Arc<Fake>, SocketAddr) {
+    let (python, upstream) = spawn_fake().await;
+    let mut state = AppState::new(config(upstream, trusted));
+    state.connect = Some(addr);
+    (python, spawn_state(state).await)
+}
+
+/// Python falso, porta principal e entrada do Connect já aberta, servidas pelo `select!` do `serve`.
+async fn server(trusted: &str) -> (Arc<Fake>, SocketAddr, SocketAddr) {
+    let connect = free_port();
+    let (python, main) = start(connect, trusted).await;
+    wait_up(connect).await;
+    (python, main, connect)
+}
+
+fn get(addr: SocketAddr, path: &str) -> reqwest::RequestBuilder {
+    client().get(format!("http://{addr}{path}"))
+}
+
+fn mcp(addr: SocketAddr) -> reqwest::RequestBuilder {
+    client().post(format!("http://{addr}/mcp")).bearer_auth(OWNER).header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream").body("{}")
+}
+
+#[tokio::test]
+async fn local_only_route_is_refused_through_connect() {
+    let (_python, main, connect) = server("127.0.0.1").await;
+    let path = "/api/desktop/palette";
+    assert_eq!(get(main, path).bearer_auth(OWNER).send().await.unwrap().status(), 200, "na máquina a rota responde");
+    let refused = get(connect, path).bearer_auth(OWNER).send().await.unwrap();
+    assert_eq!(refused.status(), 403);
+    assert!(refused.text().await.unwrap().contains("erro_so_loopback"));
+}
+
+#[tokio::test]
+async fn forged_forwarded_for_does_not_become_local() {
+    // `*` é o pior caso: com ele o vizinho de qualquer endereço reescreve o cliente.
+    for trusted in ["127.0.0.1", "*"] {
+        let (python, _main, connect) = server(trusted).await;
+        let forged = get(connect, "/api/desktop/palette").bearer_auth(OWNER).header("x-forwarded-for", "127.0.0.1");
+        assert_eq!(forged.send().await.unwrap().status(), 403, "{trusted}");
+        assert_eq!(python.last_hit().1["x-forwarded-for"], hangar_server::devices::CONNECT_PEER, "{trusted}");
+        assert_eq!(mcp(connect).header("x-forwarded-for", "127.0.0.1").send().await.unwrap().status(), 403, "{trusted}");
+    }
+}
+
+#[tokio::test]
+async fn connect_requests_count_as_https() {
+    let (_python, main, connect) = server("127.0.0.1").await;
+    let with_cookie = |addr, cookie: &str| get(addr, "/api/client-api").header("cookie", cookie.to_owned());
+    let host = format!("__Host-cp_token={OWNER}");
+    let plain = format!("cp_token={OWNER}");
+    assert_eq!(with_cookie(connect, &host).send().await.unwrap().status(), 200);
+    // O esquema sai da porta: forjar `http` não devolve o cookie sem prefixo.
+    let forged = with_cookie(connect, &plain).header("x-forwarded-proto", "http");
+    assert_eq!(forged.send().await.unwrap().status(), 401, "em https o cookie sem prefixo não vale");
+    assert_eq!(with_cookie(main, &plain).send().await.unwrap().status(), 200, "na porta principal é http");
+}
+
+#[tokio::test]
+async fn python_receives_connect_peer_on_pass() {
+    let (python, main, connect) = server("127.0.0.1").await;
+    let forged = get(connect, "/api/qualquer").header("x-forwarded-for", "198.51.100.7")
+        .header("x-forwarded-proto", "http").header("x-forwarded-host", "evil.example");
+    assert_eq!(forged.send().await.unwrap().status(), 200);
+    let (_, headers) = python.last_hit();
+    assert_eq!(headers["x-forwarded-for"], "192.0.2.1");
+    assert_eq!(headers["x-forwarded-proto"], "https");
+    assert!(!headers.contains_key("x-forwarded-host"));
+    // A porta principal mantém o cliente real.
+    assert_eq!(get(main, "/api/qualquer").send().await.unwrap().status(), 200);
+    let (_, headers) = python.last_hit();
+    assert_eq!(headers["x-forwarded-for"], "127.0.0.1");
+    assert_eq!(headers["x-forwarded-proto"], "http");
+}
+
+#[tokio::test]
+async fn mcp_is_refused_through_connect() {
+    let (_python, main, connect) = server("127.0.0.1").await;
+    assert_ne!(mcp(main).send().await.unwrap().status(), 403, "na máquina o MCP atende");
+    let refused = mcp(connect).send().await.unwrap();
+    assert_eq!(refused.status(), 403);
+    assert!(refused.text().await.unwrap().contains("so na maquina do backend"));
+}
+
+#[derive(Clone, Default)]
+struct Log(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for Log {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+}
+
+#[tokio::test]
+async fn busy_connect_port_keeps_the_owner_listeners_up() {
+    let log = Log::default();
+    let writer = log.clone();
+    // O teste roda numa thread só: as tarefas do servidor veem este assinante.
+    let _log = tracing::subscriber::set_default(tracing_subscriber::fmt().with_writer(move || writer.clone()).finish());
+    let busy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let connect = busy.local_addr().unwrap();
+    let (_python, main) = start(connect, "127.0.0.1").await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while !String::from_utf8_lossy(&log.0.lock().unwrap()).contains("connect_port_failed") {
+        assert!(tokio::time::Instant::now() < deadline, "a falha da porta não foi registrada");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(get(main, "/api/client-api").bearer_auth(OWNER).send().await.unwrap().status(), 200);
+    drop(busy);
+    wait_up(connect).await;
+    assert_eq!(get(connect, "/api/desktop/palette").bearer_auth(OWNER).send().await.unwrap().status(), 403, "a porta solta abre já como Connect");
+    assert_eq!(get(main, "/api/client-api").bearer_auth(OWNER).send().await.unwrap().status(), 200);
+}
+
+#[tokio::test]
+async fn connect_entrance_opens_only_on_loopback() {
+    let (_python, upstream) = spawn_fake().await;
+    let state = Arc::new(AppState::new(config(upstream, "127.0.0.1")));
+    let refused = serve_connect("0.0.0.0:0".parse().unwrap(), state, None).await.unwrap_err();
+    assert_eq!(refused.kind(), std::io::ErrorKind::PermissionDenied);
+    assert_eq!(connect_listen("0.0.0.0:8765".parse().unwrap()), Some("127.0.0.1:8768".parse().unwrap()));
+}
+
+#[test]
+fn main_port_on_8768_leaves_connect_off() {
+    assert_eq!(connect_listen("0.0.0.0:8768".parse().unwrap()), None);
+}

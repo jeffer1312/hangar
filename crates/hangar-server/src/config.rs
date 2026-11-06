@@ -71,6 +71,13 @@ impl Config {
     }
 }
 
+/// Entrada do Connect, sempre no loopback. Com a porta principal na 8768, ela fica com o cliente
+/// real e o Connect não liga.
+pub fn connect_listen(listen: SocketAddr) -> Option<SocketAddr> {
+    (listen.port() != crate::connect::CONNECT_PORT)
+        .then(|| SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, crate::connect::CONNECT_PORT)))
+}
+
 /// Porta do convidado e convites. Fora do `Config` porque nenhum teste do dono precisa delas.
 #[derive(Clone, Debug, Default)]
 pub struct GuestEnv {
