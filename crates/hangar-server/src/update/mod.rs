@@ -977,12 +977,27 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
     // a versão dele; antes, os prenderia à pasta da versão, que a poda apaga.
     state.step("passos");
     let stepping = Instant::now();
+    let steps_mark = job.startup_output.map(|_| startup_output::Mark::take(false));
     let applied_now = {
         let (dir, home, state_dir, log) = (dir.clone(), job.home.to_path_buf(), job.state_dir.to_path_buf(), state.clone());
         match blocking(move || apply_machine_steps(&dir, &home, &state_dir, &*steps, &log)).await {
             Ok(ids) => ids,
-            // Sem reinício ainda: basta o `current` voltar.
             Err(e) => {
+                if let Some(port) = job.startup_output {
+                    let mut lines = vec![format!("etapas: baixar {} · trocar {} · passos {}; pid antes {}",
+                        secs(swapping - downloading), secs(stepping - swapping), secs(stepping.elapsed()),
+                        pid_before.map_or("?".into(), |p| p.to_string())), format!("passo: {e}")];
+                    // shortcut: só a cauda do registro da rodada; o instalador escreve centenas de linhas e o fim é o que explica.
+                    let log = state.read().get("log").and_then(Value::as_array).map(|l| l.iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>()).unwrap_or_default();
+                    lines.extend(log[log.len().saturating_sub(80)..].iter().map(|l| format!("saída do passo: {l}")));
+                    log_failure_detail(lines, steps_mark, job.home, port, Some(dir.clone()), previous.clone()).await;
+                }
+                // Passo que reiniciou o servidor (o `install.ps1 -Update` reinicia) deixou a versão nova de pé:
+                // só devolver o `current` deixaria a nova rodando com o `current` na anterior.
+                let restarted = !matches!(health.read().await, Reading::Rust { pid, .. } if pid == pid_before);
+                if restarted && !restarter.manual() {
+                    return roll_back(job, &state, previous, before.as_ref(), &[], e.to_string(), restarter, health).await;
+                }
                 let e = match put_back(job.layout, previous).await {
                     Ok(()) => e,
                     Err(back) => UpdateError::Step(format!("{e}; e o current não voltou para a versão anterior: {back}")),

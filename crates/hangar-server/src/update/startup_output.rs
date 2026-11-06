@@ -240,6 +240,12 @@ pub fn snapshot(home: &Path, port: u16, new: Option<&Path>, old: Option<&Path>) 
     }
     out.extend(processes(new, old));
     out.extend(service(home, port));
+    // A lista de portas do sistema já disse "ninguém escutando" com o servidor atendendo: a conexão desempata.
+    let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    out.push(match std::net::TcpStream::connect_timeout(&address, Duration::from_secs(2)) {
+        Ok(_) => format!("porta {port} por conexão em 127.0.0.1: aceita"),
+        Err(e) => format!("porta {port} por conexão em 127.0.0.1: recusa ({e})"),
+    });
     out
 }
 

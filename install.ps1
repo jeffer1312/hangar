@@ -199,6 +199,12 @@ function Test-Internet {
     $c = New-Object Net.Sockets.TcpClient
     try { return $c.ConnectAsync('github.com', 443).Wait(10000) } catch { return $false } finally { $c.Dispose() }
 }
+# A lista de portas do Windows ja respondeu vazia com o servidor atendendo; a conexao local desempata.
+function Test-PortaAberta([int]$porta) {
+    if (Get-NetTCPConnection -State Listen -LocalPort $porta -ErrorAction SilentlyContinue) { return $true }
+    $c = New-Object Net.Sockets.TcpClient
+    try { return $c.ConnectAsync('127.0.0.1', $porta).Wait(1000) } catch { return $false } finally { $c.Dispose() }
+}
 function Policy-Locked {
     # Regra imposta pela TI vence o Set-ExecutionPolicy do usuario e o -ExecutionPolicy da linha de comando.
     foreach ($escopo in @('MachinePolicy', 'UserPolicy')) {
@@ -2255,7 +2261,7 @@ if ($registrou) {
         # (exit 1, bloco vermelho do hook dizendo "A ATUALIZACAO NAO RODOU") quando o backend so
         # estava alguns segundos atrasado.
         foreach ($i in 1..40) {
-            if (Get-NetTCPConnection -State Listen -LocalPort $portaBack -ErrorAction SilentlyContinue) { $subiu = $true; break }
+            if (Test-PortaAberta $portaBack) { $subiu = $true; break }
             Start-Sleep -Seconds 1
         }
         # Passados os 40s, "nao subiu" e "esta demorando" nao sao a mesma coisa, e o instalador
@@ -2275,7 +2281,7 @@ if ($registrou) {
             $ocioso = 0
             $avisou = $false
             foreach ($i in 1..$extraMax) {
-                if (Get-NetTCPConnection -State Listen -LocalPort $portaBack -ErrorAction SilentlyContinue) { $subiu = $true; break }
+                if (Test-PortaAberta $portaBack) { $subiu = $true; break }
                 $tam = (Get-LogBackend).LastWriteTimeUtc
                 if ($tam -gt $tamAnt) {
                     if (-not $avisou) { Nota 'o backend ainda esta subindo (primeira subida faz uv sync e passos de atualizacao)'; $avisou = $true }
