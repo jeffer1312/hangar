@@ -8,8 +8,10 @@ B=$(./wda.sh bundle) || exit 1
 pkill -f '^\./ios(-amd64)? (tunnel start|runwda|forward 8100)'
 sleep 1
 setsid nohup ./ios tunnel start --userspace > /tmp/ios-tunnel.log 2>&1 &
-until ./ios tunnel ls 2>/dev/null | grep -q address; do sleep 1; done
-SSL_CERT_FILE="$PWD/ca-com-apple.pem" ./ios image auto > /tmp/ios-image.log 2>&1
+for i in $(seq 1 60); do ./ios tunnel ls 2>/dev/null | grep -q address && break; sleep 1; done
+./ios tunnel ls 2>/dev/null | grep -q address || { tail -3 /tmp/ios-tunnel.log; echo "túnel do iPhone não subiu em 60 s (iPhone no cabo e desbloqueado?)"; exit 1; }
+SSL_CERT_FILE="$PWD/ca-com-apple.pem" ./ios image auto > /tmp/ios-image.log 2>&1 \
+	|| echo "aviso: ios image auto falhou, veja /tmp/ios-image.log" >&2
 setsid nohup ./ios runwda --bundleid=$B --testrunnerbundleid=$B --xctestconfig=WebDriverAgentRunner.xctest > /tmp/ios-wda.log 2>&1 &
 setsid nohup ./ios forward 8100 8100 > /tmp/ios-forward.log 2>&1 &
 # A ativação da automação no iPhone passa de 1 min às vezes; espera até 3.

@@ -14,22 +14,39 @@ trap 'rm -rf "$TMP"' EXIT
 die() { echo "erro: $*" >&2; exit 1; }
 
 conta() { # campo da conta selecionada no accounts.json do Impactor/plumesign
-	python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["accounts"][d["selected_account"]][sys.argv[2]])' "$CFG/accounts.json" "$1" 2>/dev/null \
-		|| die "sem conta salva em $CFG/accounts.json; rode: wda.sh login"
+	[ -f "$CFG/accounts.json" ] || die "sem conta salva em $CFG/accounts.json; rode: wda.sh login"
+	python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["accounts"][d["selected_account"]][sys.argv[2]])' "$CFG/accounts.json" "$1" \
+		|| die "não consegui ler '$1' de $CFG/accounts.json (erro acima)"
+}
+
+# pymobiledevice3 com o erro dele visível: falha de usbmuxd, aparelho bloqueado ou sem confiança não pode
+# virar "não instalado" nem JSON vazio.
+pmd() {
+	pymobiledevice3 "$@" 2>"$TMP/pmd.err" || { tail -3 "$TMP/pmd.err" >&2; die "pymobiledevice3 $1 $2 falhou (iPhone desbloqueado e confiando neste computador?)"; }
 }
 
 aparelho() {
 	if [ -n "${UDID:-}" ]; then echo "$UDID"; return; fi
-	local lista n
-	lista=$(pymobiledevice3 usbmux list 2>/dev/null | python3 -I -c 'import json,sys; [print(d["Identifier"]) for d in json.load(sys.stdin) if d.get("ConnectionType")=="USB"]')
+	local json lista n
+	json=$(pmd usbmux list)
+	lista=$(printf '%s' "$json" | python3 -I -c 'import json,sys; [print(d["Identifier"]) for d in json.load(sys.stdin) if d.get("ConnectionType")=="USB"]')
 	n=$(printf '%s' "$lista" | grep -c . || true)
 	[ "$n" = 1 ] || die "preciso de exatamente 1 iPhone no cabo (achei $n); ou defina UDID=<udid>"
 	echo "$lista"
 }
 
+wda_instalado() {
+	local out
+	# `exit` explícito: dentro de `if` o set -e não vale, e a falha viraria "não instalado".
+	out=$(pmd apps query "$BUNDLE" --udid "$1") || exit 1
+	printf '%s' "$out" | grep -q CFBundleIdentifier
+}
+
 # Validade (em dias, com fração) do perfil mais novo do WDA instalado no aparelho; vazio se não houver.
 dias_perfil() {
-	pymobiledevice3 provision list --udid "$1" 2>/dev/null | python3 -I -c '
+	local json
+	json=$(pmd provision list --udid "$1")
+	printf '%s' "$json" | python3 -I -c '
 import json,sys,datetime
 app=sys.argv[1]
 fim=[datetime.datetime.fromisoformat(str(p["ExpirationDate"])) for p in json.load(sys.stdin)
@@ -102,6 +119,8 @@ certificado() {
 }
 
 cmd="${1:-status}"
+case "$cmd" in bundle|login|status|instalar|renovar) ;; *) die "uso: wda.sh status | login [apple-id] | instalar | renovar [--forcar] | bundle" ;; esac
+[[ $DIAS_ANTES =~ ^[0-9]+([.][0-9]+)?$ ]] || die "WDA_RENOVAR_DIAS precisa ser um número de dias (está '$DIAS_ANTES')"
 [ "$cmd" = login ] || { TEAM=$(conta team_id); BUNDLE="com.facebook.WebDriverAgentRunner.xctrunner.$TEAM"; }
 
 case "$cmd" in
@@ -115,18 +134,19 @@ login)
 status)
 	UDID_=$(aparelho)
 	echo "aparelho: $UDID_  time: $TEAM"
-	if pymobiledevice3 apps query "$BUNDLE" --udid "$UDID_" 2>/dev/null | grep -q CFBundleIdentifier; then
+	if wda_instalado "$UDID_"; then
 		d=$(dias_perfil "$UDID_"); echo "WDA instalado; perfil vence em ${d:-?} dias"
 	else
 		echo "WDA não instalado: rode 'wda.sh instalar'"
 	fi
-	if "$PLUME" account certificates -t "$TEAM" >/dev/null 2>"$TMP/s.log"; then echo "sessão da Apple: ok"
-	else echo "sessão da Apple: vencida (rode 'wda.sh login')"; fi
+	if "$PLUME" account certificates -t "$TEAM" >"$TMP/s.log" 2>&1; then echo "sessão da Apple: ok"
+	elif grep -qiE 'session has expired|error 1100|no account|not logged' "$TMP/s.log"; then echo "sessão da Apple: vencida (rode 'wda.sh login')"
+	else echo "sessão da Apple: erro ao consultar:"; grep -v DEBUG "$TMP/s.log" | tail -2; fi
 	;;
 instalar)
 	UDID_=$(aparelho)
 	# A Apple devolve o aparelho já registrado sem erro, então registrar sempre é seguro.
-	nome=$(pymobiledevice3 lockdown info --udid "$UDID_" 2>/dev/null | python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("DeviceName","iPhone"))')
+	nome=$(pmd lockdown info --udid "$UDID_" | python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("DeviceName","iPhone"))')
 	"$PLUME" account register-device -t "$TEAM" -u "$UDID_" -n "$nome" >"$TMP/registro.log" 2>&1 \
 		|| { tail -5 "$TMP/registro.log" >&2; die "não consegui registrar o aparelho na conta"; }
 	perfil_novo
@@ -139,7 +159,8 @@ instalar)
 	    for i in a.infolist():
 	        if ".dSYM/" not in i.filename and not i.filename.endswith(".dSYM"): b.writestr(i,a.read(i))
 	EOF
-	# zsign e não o plumesign/Impactor: eles trocam o ID do WebDriverAgentRunner.xctest e o WDA cai com erro 103.
+	# zsign e não o Impactor: ele troca o ID do WebDriverAgentRunner.xctest e o WDA cai com erro 103;
+	# o plumesign nem assina esse pacote, só serve para buscar o perfil.
 	"$KIT/zsign" -k "$CFG/keys/$TEAM/key.pem" -c "$cert" -m "$TMP/wda.mobileprovision" -b "$BUNDLE" -o "$TMP/wda.ipa" "$TMP/base.ipa" >"$TMP/zsign.log" 2>&1 \
 		|| { tail -5 "$TMP/zsign.log" >&2; die "zsign falhou"; }
 	pymobiledevice3 apps install "$TMP/wda.ipa" --udid "$UDID_"
@@ -147,10 +168,9 @@ instalar)
 	;;
 renovar)
 	UDID_=$(aparelho)
-	pymobiledevice3 apps query "$BUNDLE" --udid "$UDID_" 2>/dev/null | grep -q CFBundleIdentifier \
-		|| die "WDA não instalado: rode 'wda.sh instalar'"
+	wda_instalado "$UDID_" || die "WDA não instalado: rode 'wda.sh instalar'"
 	d=$(dias_perfil "$UDID_")
-	if [ "${2:-}" != --forcar ] && [ -n "$d" ] && python3 -I -c "import sys; sys.exit(0 if float('$d') > $DIAS_ANTES else 1)"; then
+	if [ "${2:-}" != --forcar ] && [ -n "$d" ] && python3 -I -c 'import sys; sys.exit(0 if float(sys.argv[1]) > float(sys.argv[2]) else 1)' "$d" "$DIAS_ANTES"; then
 		echo "perfil do WDA ok: vence em $d dias"; exit 0
 	fi
 	perfil_novo
