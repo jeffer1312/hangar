@@ -538,7 +538,8 @@ mod tests {
         assert_eq!(pause.held.lock().unwrap().iter().copied().collect::<Vec<_>>(), ramp(1, 6), "o da fila vai na frente");
         pause.set(false);
         shared.refill();
-        shared.play(&ramp(7, 1));
+        // Fala longa desce em partes: ainda há guardado atrás do que já foi para a fila.
+        pause.held.lock().unwrap().push_back(7.0);
         assert_eq!(shared.playback.lock().unwrap().len(), 6);
         shared.keep_unplayed();
         assert_eq!(pause.held.lock().unwrap().iter().copied().collect::<Vec<_>>(), ramp(1, 7), "na retomada a fila também volta");
