@@ -817,7 +817,9 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   `--resume` explícito, subcomando e flag desconhecida seguem com o CLI cru. Depois de reboot ou
   queda do tmux o Rust restaura as sessões com terminal pelo spec (`~/.hangar/session-restore.json`,
   comando no `new-session`, nunca digitado no shell); o tmux-resurrect pula as sessões do Hangar.
-  Sessão que bate o limite de uso troca de conta sozinha pela reabertura (só Claude). No modo
+  Sessão que bate o limite de uso troca de conta sozinha pela reabertura (só Claude). Login recusado
+  segue o mesmo vigia: com login no disco reabre uma vez na mesma conta; recusou de novo ou o login
+  sumiu, vai à conta logada de mais folga; sem nenhuma, avisa `limit_switch_login_lost`. No modo
   `python`, abrir e reabrir respondem 503 com código, sem lançador Python. Exceções que ainda passam
   pelo Python: texto que nasce nele (broadcast) acorda Claude/Codex sem terminal pedindo
   ao Rust, e a transferência Claude→Codex. Decisões e medições em

@@ -22,11 +22,20 @@ const SLACK: f64 = 2.0;
 impl LimitWatch {
     /// O aviso novo da sessão parada, para o vigia. `agent_started`: quando o agente desta vida nasceu.
     pub fn seen(&mut self, row: &SessionRow, agent_started: Option<f64>, now: f64) -> Option<UsageLimit> {
+        self.fresh(row, agent_started, |path| crate::session_write::limit_switch::file_limit_at(path, now))
+    }
+
+    /// A recusa do login nova, com o código dela. Cada aviso tem o seu `LimitWatch`: a hora entregue é por tipo.
+    pub fn seen_auth(&mut self, row: &SessionRow, agent_started: Option<f64>) -> Option<String> {
+        self.fresh(row, agent_started, crate::session_write::limit_switch::file_auth_error_at)
+    }
+
+    fn fresh<T>(&mut self, row: &SessionRow, agent_started: Option<f64>, read: impl Fn(&Path) -> Option<(T, Option<f64>)>) -> Option<T> {
         // Aguardando também: o menu do limite deixa a sessão assim, e só a troca o fecha.
         if row.provider != "claude" || row.headless || !matches!(row.state.as_str(), "idle" | "awaiting_input") { return None; }
         let jsonl = row.jsonl.as_deref().filter(|j| !j.is_empty())?;
         if self.0.get(&row.name).is_some_and(|s| s.jsonl == jsonl && s.mtime == row.last_activity) { return None; }
-        let found = crate::session_write::limit_switch::file_limit_at(Path::new(jsonl), now);
+        let found = read(Path::new(jsonl));
         // Pela sessão, não pelo arquivo: a troca move a conversa para a pasta da conta nova, com o aviso dentro.
         let sent = self.0.get(&row.name).and_then(|s| s.sent);
         let mut seen = Seen { jsonl: jsonl.to_owned(), mtime: row.last_activity, sent };
@@ -96,5 +105,19 @@ mod tests {
         menu.state = "awaiting_input".into();
         assert_eq!(LimitWatch::default().seen(&menu, Some(LINE_AT - 600.0), NOW),
             Some(UsageLimit { window: "seven_day".into(), resets_at: Some(1792270800.0) }));
+    }
+
+    /// A recusa do login vai ao vigia uma vez, e a vida reaberta não herda a recusa da anterior.
+    #[test]
+    fn a_refused_login_reaches_the_switcher_once_and_only_from_this_life() {
+        let dir = tempfile::tempdir().unwrap();
+        let jsonl = dir.path().join("c.jsonl");
+        let line = serde_json::json!({"type":"assistant","isSidechain":false,"isApiErrorMessage":true,"error":"authentication_failed",
+            "timestamp":"2026-10-17T13:43:48.273Z","message":{"content":[]}});
+        std::fs::write(&jsonl, format!("{line}\n")).unwrap();
+        let mut watch = LimitWatch::default();
+        assert_eq!(watch.seen_auth(&row(&jsonl, 1.0), Some(LINE_AT - 600.0)).as_deref(), Some("authentication_failed"));
+        assert_eq!(watch.seen_auth(&row(&jsonl, 2.0), Some(LINE_AT - 600.0)), None, "a mesma linha não conta como segunda recusa");
+        assert_eq!(LimitWatch::default().seen_auth(&row(&jsonl, 2.0), Some(LINE_AT + 60.0)), None, "a vida nova ainda não falhou");
     }
 }

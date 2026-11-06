@@ -488,7 +488,8 @@ pub(crate) fn access_line(route: &str, status: u16, ms: u64, req: &str) -> Value
 }
 
 fn access_diary(route: &str, response: &Response, started: Instant, req: &str) {
-    let line = access_line(route, response.status().as_u16(), started.elapsed().as_millis() as u64, req);
+    let mut line = access_line(route, response.status().as_u16(), started.elapsed().as_millis() as u64, req);
+    if let Some(failure) = response.extensions().get::<crate::diag::FailureCode>() { line["motivo"] = json!(failure.0); }
     crate::diag::record(crate::diag::diary_dir(), vec![line], "acesso");
 }
 
@@ -500,7 +501,11 @@ pub(crate) fn exit_warnings(errs: &[Value]) -> Vec<String> {
 
 pub(crate) fn reply(error: &OpenError) -> Response {
     let status = StatusCode::from_u16(error.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    crate::session_write::json_response(status, error.body())
+    let response = crate::session_write::json_response(status, error.body());
+    match error.code {
+        Some(code) => crate::diag::coded(response, code),
+        None => response,
+    }
 }
 
 /// `POST /api/sessions`: o dono e o convidado com login abrem Claude com terminal no Rust (o do

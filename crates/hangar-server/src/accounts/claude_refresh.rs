@@ -131,13 +131,102 @@ pub fn renewed(before: &Value, after: &Value) -> bool {
     before != after && before["expiresAt"].as_f64().is_none_or(|old| expiry > old)
 }
 
-/// A falha com a conta e a etapa no log: `renovacao-falhou` sozinho não diz o que caiu nem em qual conta.
-fn failed(account: &Account, stage: &'static str, cause: impl std::fmt::Display) -> &'static str {
-    tracing::warn!(code = "claude_refresh_failed", account = %account.id, stage, reason = %cause, "renovação do login do Claude falhou");
-    "renovacao-falhou"
+/// O login como o CLI o deixou, sem nenhum token. Quando o servidor recusa a renovação, o CLI apaga
+/// `refreshToken`, `accessToken` e `expiresAt` do arquivo: a hora da gravação é a hora da recusa.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoginFacts {
+    pub stored: &'static str,
+    pub has_access: bool,
+    pub has_refresh: bool,
+    pub cleared: bool,
+    pub expires_at: Option<f64>,
+    pub refresh_expires_at: Option<f64>,
+    pub ended: Option<String>,
+    pub written_at: Option<f64>,
+}
+
+pub fn login_facts(home: &Path) -> LoginFacts {
+    let path = home.join(".credentials.json");
+    let written_at = fs::metadata(&path).and_then(|meta| meta.modified()).ok()
+        .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok()).map(|at| at.as_secs_f64());
+    let raw = fs::read(&path);
+    let parsed = raw.as_ref().ok().and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok());
+    let stored = match (&raw, &parsed) {
+        (Err(error), _) if error.kind() == std::io::ErrorKind::NotFound => if cfg!(target_os = "macos") { "chaveiro" } else { "sem_arquivo" },
+        (Ok(_), Some(_)) => "arquivo",
+        _ => "ilegivel",
+    };
+    let auth = parsed.map_or(Value::Null, |value| value["claudeAiOauth"].clone());
+    let filled = |field: &str| auth[field].as_str().is_some_and(|text| !text.is_empty());
+    let seconds = |field: &str| auth[field].as_f64().filter(|ms| *ms > 0.0).map(|ms| ms / 1000.0);
+    LoginFacts {
+        stored,
+        has_access: filled("accessToken"),
+        has_refresh: filled("refreshToken"),
+        cleared: auth["refreshToken"].as_str() == Some(""),
+        expires_at: seconds("expiresAt"),
+        refresh_expires_at: seconds("refreshTokenExpiresAt"),
+        ended: auth["loginEnded"].as_str().filter(|end| end.len() <= 40 && end.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')).map(str::to_owned),
+        written_at,
+    }
+}
+
+fn local_time(at: f64) -> String {
+    chrono::DateTime::from_timestamp(at as i64, 0)
+        .map_or("?".to_owned(), |time| time.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string())
+}
+
+impl LoginFacts {
+    pub fn dead(&self) -> bool { self.cleared || (self.stored == "arquivo" && !self.has_access && !self.has_refresh) }
+
+    /// Só texto e número: o diário descarta booleano e texto vazio.
+    pub fn fields(&self) -> Value {
+        let yes = |value: bool| if value { "sim" } else { "nao" };
+        let when = |at: Option<f64>| at.map_or(String::new(), local_time);
+        serde_json::json!({"credencial": self.stored, "tem_acesso": yes(self.has_access), "tem_renovacao": yes(self.has_refresh),
+            "apagada_pelo_cli": if self.cleared { "sim" } else { "" }, "acesso_vence": when(self.expires_at),
+            "login_vence": when(self.refresh_expires_at), "gravada_em": when(self.written_at),
+            "login_fim": self.ended.clone().unwrap_or_default()})
+    }
+
+    pub fn summary(&self) -> String {
+        let when = |at: Option<f64>| at.map_or("?".to_owned(), local_time);
+        let mut out = if self.dead() { "morto, o CLI apagou o token".to_owned() }
+            else if self.stored == "arquivo" {
+                format!("acesso vence {} · renovação {}", when(self.expires_at), if self.has_refresh { "presente" } else { "ausente" })
+            } else { format!("credencial {}", self.stored) };
+        if let Some(end) = &self.ended { out += &format!(" · fim {end}"); }
+        if self.written_at.is_some() { out += &format!(" · gravado {}", when(self.written_at)); }
+        out
+    }
 }
 
 impl AccountService {
+    /// A linha do diário de uma etapa da renovação, com o login como ficou depois dela.
+    fn renewal_event(&self, account: &Account, step: &str, level: &str, code: &str, extra: Value) {
+        let mut line = login_facts(&account.home).fields();
+        line["evento"] = "conta.renovacao".into();
+        line["nivel"] = level.into();
+        line["provider"] = "claude".into();
+        line["conta_id"] = super::claude_config::account_id(&account.home).into();
+        line["etapa"] = step.into();
+        line["codigo"] = code.into();
+        if let (Some(line), Value::Object(extra)) = (line.as_object_mut(), extra) {
+            line.extend(extra);
+        }
+        crate::diag::record(crate::diag::diary_dir_in(&self.env), vec![line], "renovacao");
+    }
+
+    /// A falha com a conta e a etapa no log e no diário: `renovacao-falhou` sozinho não diz o que caiu
+    /// nem em qual conta. A espera da renovação rápida se repete a cada leitura da lista e não é tentativa.
+    fn failed(&self, account: &Account, stage: &'static str, cause: impl std::fmt::Display) -> &'static str {
+        tracing::warn!(code = "claude_refresh_failed", account = %account.id, stage, reason = %cause, "renovação do login do Claude falhou");
+        if !matches!(stage, "quick_backoff" | "quick_cli") {
+            self.renewal_event(account, stage, "erro", "renovacao-falhou", serde_json::json!({"detalhe": cause.to_string()}));
+        }
+        "renovacao-falhou"
+    }
+
     pub async fn refresh_claude(
         &self,
         account: &Account,
@@ -177,9 +266,9 @@ impl AccountService {
             return Err("sessao-viva");
         }
         let key =
-            AccountKey::new(Provider::Claude, &account.home).map_err(|e| failed(&account, "account_key", format!("{e:?}")))?;
+            AccountKey::new(Provider::Claude, &account.home).map_err(|e| self.failed(&account,"account_key", format!("{e:?}")))?;
         if quick && self.quick_renewals.pending(&key, &before, now()) {
-            return Err(failed(&account, "quick_backoff", "renovação rápida ainda na espera da falha anterior"));
+            return Err(self.failed(&account,"quick_backoff", "renovação rápida ainda na espera da falha anterior"));
         }
         // Limpeza incerta conserva a guarda; a próxima tentativa só prossegue após o ACK.
         {
@@ -188,7 +277,7 @@ impl AccountService {
                 client
                     .call(&key, operation, "close", None)
                     .await
-                    .map_err(|e| failed(&account, "previous_window_close", format!("{e:?}")))?;
+                    .map_err(|e| self.failed(&account,"previous_window_close", format!("{e:?}")))?;
                 pending.remove(&key);
                 if let Ok(record) = self.login_record(&key) {
                     let _ = fs::remove_file(record);
@@ -242,14 +331,19 @@ impl AccountService {
         window: Arc<std::sync::Mutex<Option<String>>>,
     ) -> Result<(), &'static str> {
         self.validate_claude(&account, &key)
-            .map_err(|e| failed(&account, "validate", format!("{e:?}")))?;
+            .map_err(|e| self.failed(&account,"validate", format!("{e:?}")))?;
         self.usage(runtime.as_deref(), &key)
             .await
             .ensure_unused()
             .map_err(|_| "sessao-viva")?;
         let before = oauth(&account.home);
+        let started = std::time::Instant::now();
         let cli = self.claude_cli(&account, &["mcp", "list"]).await;
-        if renewed(&before, &oauth(&account.home)) {
+        let cli_renewed = renewed(&before, &oauth(&account.home));
+        let cli_code = match &cli { Ok((true, _)) => "saiu_ok", Ok((false, _)) => "saiu_erro", Err(code) => *code };
+        self.renewal_event(&account, "cli", if cli_renewed { "ok" } else { "aviso" }, cli_code,
+            serde_json::json!({"ms": started.elapsed().as_millis() as u64, "renovou": if cli_renewed { "sim" } else { "nao" }}));
+        if cli_renewed {
             self.quick_renewals.clear(&key);
             self.claude_auth.invalidate(&key);
             return Ok(());
@@ -267,17 +361,17 @@ impl AccountService {
                 );
             }
             let ran = match &cli { Ok((ok, out)) => format!("CLI saiu com sucesso={ok}, {} bytes", out.len()), Err(code) => (*code).to_owned() };
-            return Err(failed(&account, "quick_cli", format!("o token não mudou: {ran}")));
+            return Err(self.failed(&account,"quick_cli", format!("o token não mudou: {ran}")));
         }
-        let operation = super::claude_login::nonce().map_err(|e| failed(&account, "nonce", format!("{e:?}")))?;
-        let record = self.login_record(&key).map_err(|e| failed(&account, "login_record", format!("{e:?}")))?;
+        let operation = super::claude_login::nonce().map_err(|e| self.failed(&account,"nonce", format!("{e:?}")))?;
+        let record = self.login_record(&key).map_err(|e| self.failed(&account,"login_record", format!("{e:?}")))?;
         crate::runtime::queue::atomic_write(
             &record,
             serde_json::json!({"key":key,"operation":operation})
                 .to_string()
                 .as_bytes(),
         )
-        .map_err(|e| failed(&account, "login_record_write", e))?;
+        .map_err(|e| self.failed(&account,"login_record_write", e))?;
         *window.lock().unwrap_or_else(|p| p.into_inner()) = Some(operation.clone());
         if let Err(error) = client.call(&key, &operation, "refresh", None).await {
             let cause = format!("{error:?}");
@@ -287,9 +381,10 @@ impl AccountService {
             } else {
                 let _ = fs::remove_file(record);
             }
-            return Err(failed(&account, "window_refresh", cause));
+            return Err(self.failed(&account,"window_refresh", cause));
         }
         let mut timer = tokio::time::interval(Duration::from_millis(250));
+        let waited = std::time::Instant::now();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
         let success = loop {
             if renewed(&before, &oauth(&account.home)) {
@@ -300,10 +395,12 @@ impl AccountService {
             }
             timer.tick().await;
         };
+        self.renewal_event(&account, "janela", if success { "ok" } else { "erro" }, if success { "renovada" } else { "timeout" },
+            serde_json::json!({"ms": waited.elapsed().as_millis() as u64}));
         if let Err(error) = client.call(&key, &operation, "close", None).await {
             self.park_cleanup(client, key, operation, Some(_guard), record)
                 .await;
-            return Err(failed(&account, "window_close", format!("{error:?}; token renovado: {success}")));
+            return Err(self.failed(&account,"window_close", format!("{error:?}; token renovado: {success}")));
         }
         let _ = fs::remove_file(record);
         self.claude_auth.invalidate(&key);
@@ -415,10 +512,12 @@ pub fn start(
                 {
                     continue;
                 }
-                if let Err(reason) = service
+                let result = service
                     .refresh_claude(&account, service.claude_windows.clone(), Some(runtime.clone()), false)
-                    .await
-                {
+                    .await;
+                service.renewal_event(&account, "laco", if result.is_ok() { "ok" } else { "aviso" },
+                    result.err().unwrap_or("renovada"), Value::Null);
+                if let Err(reason) = result {
                     tracing::info!(code = reason, "renovação de conta não concluída");
                 }
             }
@@ -431,6 +530,24 @@ pub fn start(
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn the_login_left_by_a_refused_renewal_reads_as_dead_without_any_token() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(login_facts(dir.path()).stored, if cfg!(target_os = "macos") { "chaveiro" } else { "sem_arquivo" });
+        let write = |auth: Value| fs::write(dir.path().join(".credentials.json"), json!({"claudeAiOauth": auth}).to_string()).unwrap();
+        write(json!({"accessToken": "SEGREDO_A", "refreshToken": "SEGREDO_R", "expiresAt": 1_900_000_000_000.0_f64}));
+        let live = login_facts(dir.path());
+        assert!(!live.dead() && live.has_refresh && live.expires_at == Some(1_900_000_000.0));
+        write(json!({"accessToken": "", "refreshToken": "", "expiresAt": 0, "loginEnded": "time_limit"}));
+        let dead = login_facts(dir.path());
+        assert!(dead.dead() && dead.cleared && dead.expires_at.is_none() && dead.written_at.is_some());
+        assert_eq!(dead.ended.as_deref(), Some("time_limit"));
+        assert_eq!(dead.fields()["apagada_pelo_cli"], "sim");
+        for shown in [live.fields().to_string(), live.summary()] {
+            assert!(!shown.contains("SEGREDO"), "{shown}");
+        }
+    }
+
     #[test]
     fn changing_file_without_extending_expiry_is_not_renewal() {
         let old = json!({"accessToken":"old","expiresAt":1000});

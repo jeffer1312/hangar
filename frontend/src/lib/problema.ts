@@ -14,6 +14,7 @@ export function textoProblema(codigo: string | null | undefined): string | null 
     case 'limit_switch_no_room': return m.problema_limit_switch_no_room();
     case 'limit_switch_failed': return m.problema_limit_switch_failed();
     case 'limit_switch_no_target': return m.problema_limit_switch_no_target();
+    case 'limit_switch_login_lost': return m.problema_limit_switch_login_lost();
     case 'codex_sem_login': return m.problema_codex_sem_login();
     case 'codex_turno_cortado': return m.problema_codex_turno_cortado();
     case 'codex_esforco_nao_aplicado': return m.problema_codex_esforco_nao_aplicado();

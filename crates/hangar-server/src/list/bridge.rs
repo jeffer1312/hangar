@@ -173,7 +173,7 @@ impl<T> Guarded<T> {
 
 /// O que a decoração das linhas Claude e de todas guarda entre rodadas.
 #[derive(Default)]
-struct Decor { context: ContextCache, replies: ReplyCache, limits: super::limit::LimitWatch }
+struct Decor { context: ContextCache, replies: ReplyCache, limits: super::limit::LimitWatch, refusals: super::limit::LimitWatch }
 
 /// Marcadores junto da classificação: duas produções seguidas não releem tudo do zero.
 #[derive(Default)]
@@ -194,6 +194,7 @@ struct Caches {
     config_dirs: Mutex<Option<(Instant, Arc<Vec<PathBuf>>)>>,
     /// Avisos de limite que a rodada viu, à espera do vigia da troca de conta.
     limits: Mutex<Vec<crate::runtime::gateway::LimitHit>>,
+    refusals: Mutex<Vec<crate::runtime::gateway::AuthHit>>,
 }
 
 struct GitGate { at: Instant, activity: u64, fingerprint: Option<Vec<u128>> }
@@ -832,6 +833,13 @@ impl ListBridge {
                 None => self.facts.diag.report("rust.list_limit_seen", &hit.name, "limit_no_runtime", "a lista viu o aviso de limite sem o runtime para entregá-lo"),
             }
         }
+        let refusals = std::mem::take(&mut *self.caches.refusals.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        for hit in refusals {
+            match self.plugin_runtime.get() {
+                Some(runtime) => runtime.auth_failed(&hit.name, hit.account.map(PathBuf::from), &hit.code),
+                None => self.facts.diag.report("rust.list_limit_seen", &hit.name, "auth_no_runtime", "a lista viu a recusa do login sem o runtime para entregá-la"),
+            }
+        }
     }
 
     /// Sessão fora da lista há `FORGET_AFTER` sai dos caches por nome, como o `_forget` do fechamento:
@@ -1120,6 +1128,11 @@ fn decorate(env: &ListEnv, caches: &Caches, dirs: &Dirs, config_dirs: &[PathBuf]
                 let account = super::context::config_dir_of(row.conta.as_deref()).unwrap_or_else(|| dirs.claude.clone());
                 caches.limits.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(crate::runtime::gateway::LimitHit {
                     name: row.name.clone(), provider: "claude".into(), account: Some(account.to_string_lossy().into_owned()), limit });
+            }
+            if let Some(code) = d.refusals.seen_auth(row, started) {
+                let account = super::context::config_dir_of(row.conta.as_deref()).unwrap_or_else(|| dirs.claude.clone());
+                caches.refusals.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(crate::runtime::gateway::AuthHit {
+                    name: row.name.clone(), account: Some(account.to_string_lossy().into_owned()), code });
             }
         }
         for (name, error) in d.replies.decorate(rows, |_| None) {

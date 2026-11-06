@@ -1324,6 +1324,11 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                             account:target.metadata["config_dir"].as_str().filter(|dir|!dir.is_empty()).map(str::to_owned),limit });
                     }
                 },
+                Effect::AuthFailed { code } => {
+                    if let Some(registry) = engine.lifecycle.as_ref().and_then(std::sync::Weak::upgrade) {
+                        registry.auth_failed(&target.name,target.metadata["config_dir"].as_str().map(std::path::PathBuf::from),&code);
+                    }
+                },
                 Effect::ReserveAsyncAnswer { operation_id,reservation,command } => {
                     let queue = queue.clone(); let generation = target.generation; let sample = clock(start);
                     jobs.spawn(async move {

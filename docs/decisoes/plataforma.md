@@ -3544,7 +3544,8 @@ diário vai inteiro, com os eventos `ok` em volta da falha.
 do `hangar-server.log` saem só hora, nível, a mensagem fixa e os campos `code`, `session`,
 `reason`, `stage`, `kind`, `window`, `outcome`, `status`, `attempt`, `wait_s` (o `detail` fica de
 fora); do log do Python, só a contagem por logger. Sessões sem `last_reply`, pergunta, opções,
-linha de status nem texto de fila; contas sem `id`, caminho, assinatura de credencial nem token.
+linha de status nem texto de fila; contas sem `id`, caminho, assinatura de credencial nem token (vai o
+`conta_id`, hash do caminho).
 O `scrub` roda em cada parte do texto, antes de qualquer corte, e em cada linha do diário anexo: home e `C:\Users\<nome>`,
 `sk-…`, `Bearer …`, `token=` em URL, hex/base64 longos, e-mail, `*.ts.net` e IPv4.
 
@@ -3560,6 +3561,29 @@ acento some do assunto (só o texto mantém o nome inteiro) e nome sem ASCII sai
 avisos de envio manual e automático dizem que o nome vai junto.
 
 **Envio automático:** feito para a falha de atualização, na entrada seguinte.
+
+**Login do Claude no relatório (05/11/2026).** Um `Failed to authenticate: OAuth session expired and
+could not be refreshed` numa máquina Windows sem acesso remoto não se explicou pelo diário: nenhuma
+linha dizia a conta, a renovação ou o motivo dos 409 da retomada, e o `hangar-server.log` só entra
+com 24 h. No CLI 2.1.318, essa frase sai do `OAuthRefreshDeadError`: o servidor respondeu
+`invalid_grant`, e o CLI grava `refreshToken: ""`, `accessToken: ""` e `expiresAt: 0` no
+`.credentials.json` (quando o tempo do login acabou, grava `loginEnded: "time_limit"` e a frase é
+outra). Por isso reabrir com `--resume` não conserta: o processo novo lê o token apagado. Agora o
+diário tem `conta.renovacao` (etapas `cli`, `janela`, `laco` e a que falhou, com tempo e código) e
+`rust.claude_auth_failed`, os dois com o `conta_id` e o login como ficou no disco, sem token. O
+`api.servidor` leva o `motivo` do erro. A seção Contas mostra o login e o `conta_id`, hash do caminho
+que liga a conta às linhas do diário; a hora de gravação do arquivo é a hora da recusa.
+
+**Login recusado muda a sessão de conta (05/11/2026).** A recusa chega ao vigia da troca por limite
+(`session_write/limit_switch.rs`), com a fila segurada: sem terminal pelo `result` do turno, com
+terminal pela lista, porque o aviso do plugin chega antes de o Claude gravar a linha. Reabrir só
+resolve token velho na memória com um bom no disco, então a primeira recusa com login no disco reabre
+na mesma conta e manda o recado para continuar. A segunda em 10 min, ou o login já apagado, leva a
+sessão à conta logada de mais folga; a conta recusada fica fora dos destinos por 1 h, para duas contas
+recusadas não revezarem sem fim. A escolha também lê o login no disco: o cache da cota mostra "lida"
+a conta que acabou de perdê-lo. Sem destino, a linha mostra `limit_switch_login_lost`. Vale a escolha
+de conta da pessoa: como no limite, ela é trocada e o diário registra `explicit_account`. Sessão em
+motor não muda de conta.
 
 ## Relatório automático quando a atualização falha (30/10/2026)
 

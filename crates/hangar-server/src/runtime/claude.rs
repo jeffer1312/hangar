@@ -52,6 +52,8 @@ pub struct ClaudeEngine {
     rate_limit_info: Value,
     /// Limite do plano visto na mensagem sintética do turno; sai como efeito quando o turno termina.
     turn_limit: Option<UsageLimit>,
+    /// O `error` da mensagem sintética do turno; o `result` não traz esse código.
+    turn_error: Option<String>,
     commands: Option<Value>,
     terminal_commands: Value,
     preview: LiveBuffer,
@@ -155,7 +157,7 @@ impl ClaudeEngine {
             init_warning:None,in_progress:false,state,model:string(&metadata["model"]),effort:string(&metadata["effort"]),
             permission_mode,previous_non_plan,restore_plan:None,pending:Vec::new(),question:None,
             waiters:BTreeMap::new(),wires:BTreeMap::new(),retired_writes:BTreeSet::new(),policies:BTreeMap::new(),last_format_request:None,format_gate:FormatGate::default(),reload_deadline:clock.monotonic_s+10.0,
-            rate_limit_info:Value::Null,turn_limit:None,commands:metadata.get("commands").filter(|commands|!commands.is_null()).cloned(),terminal_commands:metadata.get("terminal_commands").cloned().unwrap_or_else(||json!([])),
+            rate_limit_info:Value::Null,turn_limit:None,turn_error:None,commands:metadata.get("commands").filter(|commands|!commands.is_null()).cloned(),terminal_commands:metadata.get("terminal_commands").cloned().unwrap_or_else(||json!([])),
             preview:LiveBuffer::default(),thinking:LiveBuffer::default(),tool_input:LiveBuffer::default(),tool_name:None,tool_visible:false,
             label:None,retry_label:None,hooks_running:BTreeMap::new(),hook_streaks:BTreeMap::new(),diary_counts:BTreeMap::new(),compacting:false,turn_start:None,label_deadline:None,tokens_closed:0,tokens_message:None,gen_start:None,
             token_chars:0,thinking_start:None,thought_s:0.0,tasks:Vec::new(),usage:metadata.get("usage").cloned().unwrap_or(Value::Null),
@@ -901,6 +903,7 @@ impl ClaudeEngine {
             "command_lifecycle" if event["state"] == "started" => { if !self.in_progress { self.start_turn(); self.changed(effects,true); } }
             "assistant" => {
                 if let Some(limit) = usage_limit(&event,&self.rate_limit_info,self.clock.epoch_s) { self.turn_limit = Some(limit); }
+                if let Some(error) = event["error"].as_str() { self.turn_error = Some(error.to_owned()); }
                 if !event["local_command_source"].is_null() {
                     let text = text_blocks(&event["message"]["content"]);
                     // A CLI de hoje põe a saída no `local_command_source`, sem o comando: a resposta do `/effort` é
@@ -1013,6 +1016,10 @@ impl ClaudeEngine {
                     effects.push(Effect::Reply { operation_id:id,disposition:Disposition::Accepted,payload:json!({"consumed":true}) });
                 }
                 let subtype = event["subtype"].as_str().unwrap_or("");
+                let turn_error = self.turn_error.take();
+                if let Some(code) = crate::session_write::limit_switch::auth_error(turn_error.as_deref(),event["api_error_status"].as_u64()) {
+                    effects.push(Effect::AuthFailed { code });
+                }
                 let mut stop_reason = event["terminal_reason"].as_str().and_then(|reason|terminal_reason_text(reason,&event));
                 if stop_reason.is_none() && event["terminal_reason"].as_str().is_some_and(|reason|!NORMAL_TERMINAL.contains(&reason)) {
                     self.diary("claude_terminal_reason",||json!({"terminal_reason":event["terminal_reason"]}),effects);

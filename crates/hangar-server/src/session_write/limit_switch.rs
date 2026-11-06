@@ -1,5 +1,6 @@
 //! A sessão Claude que para no limite de uso da conta reabre sozinha na conta de mais folga, pela
-//! mesma reabertura do `/conta`, e recebe pela fila um recado para continuar de onde parou.
+//! mesma reabertura do `/conta`, e recebe pela fila um recado para continuar de onde parou. O login recusado
+//! pela API passa pelo mesmo vigia: reabre uma vez na mesma conta e, se recusar de novo, muda de conta.
 use std::collections::BTreeMap;
 use std::sync::{Arc,Mutex};
 
@@ -7,9 +8,9 @@ use futures_util::future::BoxFuture;
 use serde_json::Value;
 
 use crate::routes::AppState;
-use crate::runtime::gateway::{LimitHit,RuntimeRegistry};
+use crate::runtime::gateway::{AuthHit,LimitHit,RuntimeRegistry};
 use crate::runtime::protocol::UsageLimit;
-use crate::session_open::{Account,AccountSource,AgentProvider,ChangeReason,SessionSpec};
+use crate::session_open::{Account,AccountSource,AgentProvider,ChangeReason,SessionChange,SessionSpec};
 
 /// O que fazer com a sessão que bateu o limite.
 #[derive(Debug,PartialEq)]
@@ -42,22 +43,44 @@ impl Spent {
     }
 }
 
+/// A última mensagem da conversa principal, se for um erro da API.
+fn last_api_error(tail:&str) -> Option<Value> {
+    let last = tail.lines().rev().filter_map(|line|serde_json::from_str::<Value>(line).ok())
+        .find(|line|matches!(line["type"].as_str(),Some("user" | "assistant")) && line["isSidechain"] != true)?;
+    (last["type"] == "assistant" && last["isApiErrorMessage"] == true).then_some(last)
+}
+
+/// Erros do CLI que dizem que a conta não pode usar a API; limite e sobrecarga têm tratamento próprio.
+const AUTH_ERRORS:[&str;4] = ["authentication_failed","oauth_org_not_allowed","account_on_hold","verification_required"];
+
+pub fn auth_error(error:Option<&str>,status:Option<u64>) -> Option<String> {
+    error.filter(|error|AUTH_ERRORS.contains(error)).map(str::to_owned)
+        .or_else(||(status == Some(401)).then(||"api_401".to_owned()))
+}
+
+/// A recusa no fim do transcript e a hora em que a linha foi gravada (segundos), quando ela diz.
+pub fn transcript_auth_error(tail:&str) -> Option<(String,Option<f64>)> {
+    let last = last_api_error(tail)?;
+    Some((auth_error(last["error"].as_str(),None)?,line_at(&last)))
+}
+
+fn line_at(line:&Value) -> Option<f64> {
+    line["timestamp"].as_str().and_then(|ts|chrono::DateTime::parse_from_rfc3339(ts).ok()).map(|ts|ts.timestamp_millis() as f64 / 1000.0)
+}
+
 /// A última mensagem da conversa principal no fim do transcript, se for o aviso de limite do plano ainda valendo.
 /// `apiErrorParams` é do CLI de hoje; `quotaLimits` recusado, do antigo. O aperto temporário não traz nenhum.
 pub fn transcript_limit(tail:&str,now:f64) -> Option<UsageLimit> { transcript_limit_at(tail,now).map(|(limit,_)|limit) }
 
 /// O aviso e a hora em que a linha foi gravada (segundos), quando ela diz.
 pub fn transcript_limit_at(tail:&str,now:f64) -> Option<(UsageLimit,Option<f64>)> {
-    let last = tail.lines().rev().filter_map(|line|serde_json::from_str::<Value>(line).ok())
-        .find(|line|matches!(line["type"].as_str(),Some("user" | "assistant")) && line["isSidechain"] != true)?;
-    if last["type"] != "assistant" || last["isApiErrorMessage"] != true { return None; }
+    let last = last_api_error(tail)?;
     let params = &last["apiErrorParams"]["rate_limit_info"];
     let info = if last["apiError"] == "usage_limit_reached" && params.is_object() { params }
         else if last["apiError"].is_null() && last["error"] == "rate_limit" && last["quotaLimits"]["status"] == "rejected" { &last["quotaLimits"] }
         else { return None };
     let limit = UsageLimit::from_info(info);
-    let at = last["timestamp"].as_str().and_then(|ts|chrono::DateTime::parse_from_rfc3339(ts).ok()).map(|ts|ts.timestamp_millis() as f64 / 1000.0);
-    limit.resets_at.is_none_or(|reset|reset > now).then_some((limit,at))
+    limit.resets_at.is_none_or(|reset|reset > now).then_some((limit,line_at(&last)))
 }
 
 /// O fim do arquivo basta: depois do aviso só vêm linhas de controle curtas.
@@ -66,13 +89,19 @@ const TAIL_BYTES:u64 = 64 * 1024;
 pub fn file_limit(path:&std::path::Path,now:f64) -> Option<UsageLimit> { file_limit_at(path,now).map(|(limit,_)|limit) }
 
 pub fn file_limit_at(path:&std::path::Path,now:f64) -> Option<(UsageLimit,Option<f64>)> {
+    transcript_limit_at(&file_tail(path)?,now)
+}
+
+pub fn file_auth_error_at(path:&std::path::Path) -> Option<(String,Option<f64>)> { transcript_auth_error(&file_tail(path)?) }
+
+fn file_tail(path:&std::path::Path) -> Option<String> {
     use std::io::{Read,Seek,SeekFrom};
     let mut file = std::fs::File::open(path).ok()?;
     let size = file.metadata().ok()?.len();
     file.seek(SeekFrom::Start(size.saturating_sub(TAIL_BYTES))).ok()?;
     let mut tail = Vec::new();
     file.read_to_end(&mut tail).ok()?;
-    transcript_limit_at(&String::from_utf8_lossy(&tail),now)
+    Some(String::from_utf8_lossy(&tail).into_owned())
 }
 
 /// A mesma escolha da abertura (`quotas::suggestion`): a conta Claude lida de mais folga, fora a atual e as
@@ -99,6 +128,12 @@ pub const CONTINUE:&str = "Continue de onde parou.";
 /// Janela sem reset conhecido fica gasta por cinco horas, a menor das janelas.
 const UNKNOWN_RESET_S:f64 = 5.0 * 3600.0;
 
+/// Conta recusada não volta a ser destino por este prazo: sem isso, duas contas recusadas revezariam sem fim.
+const LOGIN_SPENT_S:f64 = 3600.0;
+
+/// Recusa nova depois deste prazo vale outra reabertura: a anterior funcionou.
+const LOGIN_RETRY_WINDOW_S:f64 = 600.0;
+
 /// Resultado da reabertura pedida ao servidor.
 #[derive(Debug,PartialEq)]
 pub enum Reopen { Done, NotRust, Busy(String), Failed(String) }
@@ -114,6 +149,10 @@ pub trait Host: Send + Sync {
     fn catalog(&self) -> Result<Value,String>;
     fn quotas(&self) -> BoxFuture<'_,Result<Vec<Value>,String>>;
     fn reopen<'a>(&'a self,name:&'a str,spec:&'a SessionSpec,path:&'a str) -> BoxFuture<'a,Reopen>;
+    /// A reabertura na mesma conta, como o Recarregar: o processo novo relê o login do disco.
+    fn reload<'a>(&'a self,name:&'a str) -> BoxFuture<'a,Reopen>;
+    /// A conta tem login gravado; a recusa da API apaga o dela.
+    fn logged_in(&self,path:&str) -> bool;
     /// A fila da sessão, segurada desde o aviso de limite, volta a entregar.
     fn release<'a>(&'a self,name:&'a str) -> BoxFuture<'a,()>;
     /// A espera entre duas tentativas com a sessão ocupada.
@@ -137,13 +176,15 @@ pub fn limit_menu_open(screen:&str) -> bool {
 }
 
 #[derive(Debug,PartialEq)]
-pub enum LimitProblem { NoRoom { resets_at:Option<f64> }, Failed { code:String }, Clear }
+pub enum LimitProblem { NoRoom { resets_at:Option<f64> }, Failed { code:String }, LoginLost { code:String }, Clear }
 
 #[derive(Default)]
 struct Switcher {
     spent:Spent,
     /// O último limite tratado por sessão: o mesmo aviso relido não troca de conta duas vezes.
     handled:Mutex<BTreeMap<String,UsageLimit>>,
+    /// A última reabertura por login recusado, por sessão: conta e hora.
+    retried:Mutex<BTreeMap<String,(String,f64)>>,
 }
 
 enum Outcome { Switched { label:String, explicit:bool }, Stayed(&'static str), Failed(String), Busy(String) }
@@ -151,6 +192,14 @@ enum Outcome { Switched { label:String, explicit:bool }, Stayed(&'static str), F
 impl Switcher {
     fn first_time(&self,name:&str,limit:&UsageLimit) -> bool {
         self.handled.lock().is_ok_and(|mut handled|handled.insert(name.to_owned(),limit.clone()).as_ref() != Some(limit))
+    }
+
+    fn first_retry(&self,name:&str,account:&str,now:f64) -> bool {
+        let account = crate::list::discover::real(account);
+        let Ok(mut retried) = self.retried.lock() else { return false };
+        if retried.get(name).is_some_and(|(last,at)|*last == account && now - *at < LOGIN_RETRY_WINDOW_S) { return false; }
+        retried.insert(name.to_owned(),(account,now));
+        true
     }
 
     async fn switch(&self,host:&dyn Host,hit:&LimitHit) -> Outcome {
@@ -166,41 +215,125 @@ impl Switcher {
         // Aviso de uma vida que já trocou de conta (o `/conta` passou na frente): a conta de agora não bateu nada.
         if crate::list::discover::real(&host.account_dir(hit.account.as_deref())) != crate::list::discover::real(&current) { return Outcome::Stayed("limit_switch_stale"); }
         self.spent.mark(&current,hit.limit.resets_at.filter(|reset|*reset > now).unwrap_or(now + UNKNOWN_RESET_S));
+        self.move_away(host,&hit.name,&spec,&current,now).await
+    }
+
+    /// Leva a sessão à conta logada de mais folga.
+    async fn move_away(&self,host:&dyn Host,name:&str,spec:&SessionSpec,current:&str,now:f64) -> Outcome {
         let catalog = match host.catalog() { Ok(catalog)=>catalog, Err(code)=>return Outcome::Failed(code) };
         let quotas = match host.quotas().await { Ok(quotas)=>quotas, Err(code)=>return Outcome::Failed(code) };
-        let (path,label) = match decide(&spec,&current,&catalog,&quotas,&self.spent,now) {
+        // O cache da cota ainda mostra "lida" a conta que perdeu o login.
+        let quotas:Vec<Value> = quotas.into_iter().filter(|row|row["id"].as_str().and_then(|id|id.strip_prefix("claude:")).is_some_and(|path|host.logged_in(path))).collect();
+        let (path,label) = match decide(spec,current,&catalog,&quotas,&self.spent,now) {
             Decision::Switch { path,label }=>(path,label),
             Decision::Stay(code)=>return Outcome::Stayed(code),
         };
-        // A fila está segurada, mas a sessão pode estar terminando o turno ou com uma pergunta aberta.
+        match Self::reopen_when_free(host,name,current,||host.reopen(name,spec,&path)).await {
+            Ok(())=>Outcome::Switched { label,explicit:spec.account_source == AccountSource::Explicit },
+            Err(outcome)=>outcome,
+        }
+    }
+
+    /// A fila está segurada, mas a sessão pode estar terminando o turno ou com uma pergunta aberta.
+    async fn reopen_when_free<'a>(host:&dyn Host,name:&str,current:&str,reopen:impl Fn()->BoxFuture<'a,Reopen>) -> Result<(),Outcome> {
         let mut tries = 0;
-        let refused = loop {
+        loop {
             tries += 1;
-            match host.reopen(&hit.name,&spec,&path).await {
-                Reopen::NotRust=>break Outcome::Stayed("limit_switch_not_rust"),
-                Reopen::Failed(code)=>break Outcome::Failed(code),
+            match reopen().await {
+                Reopen::NotRust=>return Err(Outcome::Stayed("limit_switch_not_rust")),
+                Reopen::Failed(code)=>return Err(Outcome::Failed(code)),
                 Reopen::Busy(code)=>{
-                    host.diary(&hit.name,&super::input::diary_code(&format!("limit_switch_busy:{code}")),"limite de uso: a sessão recusou a reabertura por estar ocupada; a troca tenta de novo");
-                    if tries >= BUSY_TRIES { break Outcome::Busy(code); }
+                    host.diary(name,&super::input::diary_code(&format!("limit_switch_busy:{code}")),"troca de conta: a sessão recusou a reabertura por estar ocupada; a troca tenta de novo");
+                    if tries >= BUSY_TRIES { return Err(Outcome::Busy(code)); }
                     // Parada no menu do limite, a sessão recusaria até a pessoa responder: o Esc é o Cancelar dele.
-                    match host.dismiss_limit_menu(&hit.name).await {
-                        Ok(true)=>host.diary(&hit.name,"limit_switch_menu_dismissed","limite de uso: a troca fechou o menu do limite do Claude Code com Esc"),
+                    match host.dismiss_limit_menu(name).await {
+                        Ok(true)=>host.diary(name,"limit_switch_menu_dismissed","limite de uso: a troca fechou o menu do limite do Claude Code com Esc"),
                         Ok(false)=>{},
-                        Err(code)=>host.diary(&hit.name,&super::input::diary_code(&format!("limit_switch_menu_failed:{code}")),"limite de uso: o menu do limite não fechou"),
+                        Err(code)=>host.diary(name,&super::input::diary_code(&format!("limit_switch_menu_failed:{code}")),"limite de uso: o menu do limite não fechou"),
                     }
                     host.pause().await;
                     // A pessoa pode ter trocado de conta pelo `/conta` na espera: a escolha dela vence.
-                    match host.spec(&hit.name).await {
-                        None=>break Outcome::Stayed("limit_switch_not_rust"),
-                        Some(Err(code))=>break Outcome::Failed(code),
-                        Some(Ok(now)) if crate::list::discover::real(&host.account_dir(now.account.config_dir())) != crate::list::discover::real(&current)=>break Outcome::Stayed("limit_switch_stale"),
+                    match host.spec(name).await {
+                        None=>return Err(Outcome::Stayed("limit_switch_not_rust")),
+                        Some(Err(code))=>return Err(Outcome::Failed(code)),
+                        Some(Ok(now)) if crate::list::discover::real(&host.account_dir(now.account.config_dir())) != crate::list::discover::real(current)=>return Err(Outcome::Stayed("limit_switch_stale")),
                         Some(Ok(_))=>{},
                     }
                 },
-                Reopen::Done=>return Outcome::Switched { label,explicit:spec.account_source == AccountSource::Explicit },
+                Reopen::Done=>return Ok(()),
+            }
+        }
+    }
+
+    /// `None`: reabriu na mesma conta. Reabrir só resolve token velho na memória com um bom no disco: login
+    /// apagado vai direto para outra conta.
+    async fn recover_login(&self,host:&dyn Host,hit:&AuthHit) -> Option<Outcome> {
+        let spec = match host.spec(&hit.name).await {
+            None=>return Some(Outcome::Stayed("limit_switch_not_rust")),
+            Some(Err(code))=>return Some(Outcome::Failed(code)),
+            Some(Ok(spec))=>spec,
+        };
+        if matches!(spec.account,Account::Engine{..}) { return Some(Outcome::Stayed("limit_switch_engine")); }
+        let now = host.now();
+        let current = host.account_dir(spec.account.config_dir());
+        if crate::list::discover::real(&host.account_dir(hit.account.as_deref())) != crate::list::discover::real(&current) { return Some(Outcome::Stayed("limit_switch_stale")); }
+        if host.logged_in(&current) && self.first_retry(&hit.name,&current,now) {
+            match Self::reopen_when_free(host,&hit.name,&current,||host.reload(&hit.name)).await {
+                Ok(())=>return None,
+                Err(Outcome::Failed(code))=>host.diary(&hit.name,&super::input::diary_code(&format!("login_reload_failed:{code}")),"login recusado: a reabertura na mesma conta falhou; a sessão muda de conta"),
+                Err(outcome)=>return Some(outcome),
+            }
+        }
+        self.spent.mark(&current,now + LOGIN_SPENT_S);
+        Some(self.move_away(host,&hit.name,&spec,&current,now).await)
+    }
+
+    /// O recado para continuar; `Some` com o código quando ele não saiu.
+    async fn tell_to_continue(host:&dyn Host,name:&str) -> Option<String> {
+        let report = |code:&str,reason:&'static str|host.diary(name,&super::input::diary_code(code),reason);
+        // Depois da fila solta: retida, a vida nova não entregaria nada.
+        match host.send_continue(name).await {
+            Ok(true) => report("limit_switch_continue_delivered","troca de conta: a vida nova recebeu o recado para continuar"),
+            Ok(false) => report("limit_switch_continue_pending","troca de conta: o recado para continuar está na fila da vida nova, esperando a vez"),
+            Err(code) => {
+                tracing::warn!(session=%name,%code,"troca de conta: o recado para continuar não foi enviado");
+                let code = format!("limit_switch_continue_failed:{code}");
+                report(&code,"troca de conta: o recado para continuar não foi enviado à vida nova");
+                return Some(code);
+            }
+        }
+        None
+    }
+
+    async fn handle_auth(&self,host:&dyn Host,hit:AuthHit) {
+        let outcome = self.recover_login(host,&hit).await;
+        host.release(&hit.name).await;
+        let report = |code:&str,reason:&'static str|host.diary(&hit.name,&super::input::diary_code(code),reason);
+        let continued = match &outcome {
+            None=>{
+                report("login_reopened","login recusado: a sessão reabriu na mesma conta para reler o login");
+                Some(Self::tell_to_continue(host,&hit.name).await)
+            }
+            Some(Outcome::Switched { label,explicit })=>{
+                tracing::info!(session=%hit.name,code=%hit.code,to=%label,explicit,"login recusado: sessão reaberta em outra conta");
+                report("login_switched","login recusado: a sessão reabriu na conta logada de mais folga");
+                if *explicit { report("explicit_account","login recusado: a conta escolhida pela pessoa foi trocada"); }
+                Some(Self::tell_to_continue(host,&hit.name).await)
+            }
+            Some(Outcome::Stayed(code))=>{ report(code,"login recusado: a sessão não mudou de conta"); None }
+            Some(Outcome::Failed(code) | Outcome::Busy(code))=>{
+                tracing::warn!(session=%hit.name,%code,"login recusado: a troca de conta falhou");
+                report(code,"login recusado: a troca de conta falhou; a sessão fica parada");
+                None
             }
         };
-        refused
+        let problem = match (continued,&outcome) {
+            (Some(failed),_)=>Some(failed.map_or(LimitProblem::Clear,|code|LimitProblem::LoginLost { code })),
+            (None,Some(Outcome::Stayed(code @ "limit_switch_no_room")))=>Some(LimitProblem::LoginLost { code:(*code).to_owned() }),
+            (None,Some(Outcome::Failed(code) | Outcome::Busy(code)))=>Some(LimitProblem::LoginLost { code:code.clone() }),
+            (None,_)=>None,
+        };
+        if let Some(problem) = problem { host.show_problem(&hit.name,problem).await; }
     }
 
     async fn handle(&self,host:&dyn Host,hit:LimitHit) {
@@ -213,7 +346,7 @@ impl Switcher {
         };
         let report = |code:&str,reason:&'static str|host.diary(&hit.name,&super::input::diary_code(code),reason);
         // O recado que não saiu: a sessão segue parada no aviso, e a linha mostra isso em vez de limpar.
-        let mut continue_failed = None;
+        let mut continue_failed:Option<String> = None;
         // Só o aviso que não pede troca fica guardado. Na conta nova o limite é outro (mesmo com o mesmo reset
         // arredondado); a troca que falhou, sem folga ou ocupada tenta de novo no próximo turno parado, e o aviso
         // velho relido é barrado pela conta gasta e pelo `limit_switch_stale`.
@@ -228,17 +361,7 @@ impl Switcher {
                 report("switched","limite de uso: a sessão reabriu na conta de mais folga");
                 // O limite vence a conta escolhida pela pessoa, e isso fica registrado.
                 if *explicit { report("explicit_account","limite de uso: a conta escolhida pela pessoa foi trocada"); }
-                // Depois da fila solta (acima): retida, a vida nova não entregaria nada.
-                match host.send_continue(&hit.name).await {
-                    Ok(true) => report("limit_switch_continue_delivered","limite de uso: a vida nova recebeu o recado para continuar"),
-                    Ok(false) => report("limit_switch_continue_pending","limite de uso: o recado para continuar está na fila da vida nova, esperando a vez"),
-                    Err(code) => {
-                        tracing::warn!(session=%hit.name,%code,"limite de uso: o recado para continuar não foi enviado");
-                        let code = format!("limit_switch_continue_failed:{code}");
-                        report(&code,"limite de uso: o recado para continuar não foi enviado à vida nova");
-                        continue_failed = Some(code);
-                    }
-                }
+                continue_failed = Self::tell_to_continue(host,&hit.name).await;
             }
             Outcome::Stayed("limit_switch_no_room") => {
                 tracing::warn!(session=%hit.name,window=%hit.limit.window,"limite de uso: nenhuma conta com folga; a sessão fica parada");
@@ -277,14 +400,31 @@ pub fn spawn(st:Arc<AppState>) -> Option<tokio::task::JoinHandle<()>> {
     let runtime = st.state.runtime.get()?.clone();
     let (sink,mut hits) = tokio::sync::mpsc::unbounded_channel();
     runtime.set_limit_sink(sink);
+    let (sink,mut refusals) = tokio::sync::mpsc::unbounded_channel();
+    runtime.set_auth_sink(sink);
     let switcher = Switcher { spent:Spent::at(st.accounts.quota_path().with_file_name("limit-spent.json")),..Switcher::default() };
     let host = Native { st,runtime };
     Some(tokio::spawn(async move {
-        while let Some(hit) = hits.recv().await { switcher.handle(&host,hit).await; }
+        loop {
+            tokio::select! {
+                Some(hit) = hits.recv() => switcher.handle(&host,hit).await,
+                Some(hit) = refusals.recv() => switcher.handle_auth(&host,hit).await,
+                else => break,
+            }
+        }
     }))
 }
 
 struct Native { st:Arc<AppState>, runtime:Arc<RuntimeRegistry> }
+
+fn reopen_result(outcome:Option<Result<crate::runtime::claude_reopen::Reopened,crate::runtime::claude_reopen::ReopenFailure>>) -> Reopen {
+    match outcome {
+        None=>Reopen::NotRust,
+        Some(Err(failure)) if !failure.stopped && (super::busy_refusal(&failure.error).is_some() || failure.error.code=="lifecycle_busy") => Reopen::Busy(failure.error.code),
+        Some(Err(failure))=>Reopen::Failed(failure.error.code),
+        Some(Ok(_))=>Reopen::Done,
+    }
+}
 
 impl Host for Native {
     fn dismiss_limit_menu<'a>(&'a self,name:&'a str) -> BoxFuture<'a,Result<bool,String>> {
@@ -304,15 +444,16 @@ impl Host for Native {
         })
     }
     fn reopen<'a>(&'a self,name:&'a str,spec:&'a SessionSpec,path:&'a str) -> BoxFuture<'a,Reopen> {
+        Box::pin(async move { reopen_result(super::account::reopen_in(&self.st,&self.runtime,name,spec,path,false,ChangeReason::LimitSwitch).await) })
+    }
+    fn reload<'a>(&'a self,name:&'a str) -> BoxFuture<'a,Reopen> {
         Box::pin(async move {
-            match super::account::reopen_in(&self.st,&self.runtime,name,spec,path,false,ChangeReason::LimitSwitch).await {
-                None=>Reopen::NotRust,
-                Some(Err(failure)) if !failure.stopped && (super::busy_refusal(&failure.error).is_some() || failure.error.code=="lifecycle_busy") => Reopen::Busy(failure.error.code),
-                Some(Err(failure))=>Reopen::Failed(failure.error.code),
-                Some(Ok(_))=>Reopen::Done,
-            }
+            let change = SessionChange { reason:ChangeReason::Reload,surface:None,account:None,permission_mode:None,model:None,effort:None,service_tier:None };
+            let (runtime,owned) = (self.runtime.clone(),name.to_owned());
+            reopen_result(super::relaunch::reopen_detached(&self.st,name,async move { runtime.reopen_claude_session(&owned,change,None).await }).await)
         })
     }
+    fn logged_in(&self,path:&str) -> bool { crate::accounts::claude_refresh::has_login(std::path::Path::new(path)) }
     fn release<'a>(&'a self,name:&'a str) -> BoxFuture<'a,()> { self.runtime.release_limit(name); Box::pin(async {}) }
     fn pause(&self) -> BoxFuture<'_,()> { Box::pin(tokio::time::sleep(std::time::Duration::from_secs(3))) }
     fn show_problem<'a>(&'a self,name:&'a str,problem:LimitProblem) -> BoxFuture<'a,()> {
@@ -320,6 +461,7 @@ impl Host for Native {
             LimitProblem::NoRoom { resets_at }=>Some(("limit_switch_no_room".to_owned(),
                 resets_at.and_then(|at|crate::runtime::local_policy::local_hhmm(at.floor() as i64)).unwrap_or_default())),
             LimitProblem::Failed { code }=>Some(("limit_switch_failed".to_owned(),code)),
+            LimitProblem::LoginLost { code }=>Some(("limit_switch_login_lost".to_owned(),code)),
             LimitProblem::Clear=>None,
         };
         Box::pin(self.runtime.show_limit_problem(name,shown))
@@ -362,6 +504,19 @@ mod tests {
             json!({"type":"assistant","isSidechain":true,"message":{"content":[]}}),
             json!({"type":"queue-operation","operation":"enqueue"}));
         assert!(transcript_limit(&tail,1791570000.0).is_some());
+    }
+
+    #[test]
+    fn a_login_refusal_is_told_apart_from_a_limit_and_from_a_later_message() {
+        let refused = json!({"type":"assistant","isSidechain":false,"isApiErrorMessage":true,"error":"authentication_failed",
+            "message":{"content":[{"type":"text","text":"Failed to authenticate: OAuth session expired and could not be refreshed"}]}}).to_string();
+        assert_eq!(transcript_auth_error(&refused),Some(("authentication_failed".to_owned(),None)));
+        assert_eq!(transcript_limit(&refused,1791570000.0),None);
+        assert_eq!(transcript_auth_error(FIVE_HOUR),None,"limite não é recusa de login");
+        let later = format!("{refused}\n{}\n",json!({"type":"user","isSidechain":false,"message":{"content":"segue"}}));
+        assert_eq!(transcript_auth_error(&later),None,"a conversa seguiu depois do erro");
+        assert_eq!(auth_error(None,Some(401)).as_deref(),Some("api_401"));
+        assert_eq!(auth_error(Some("rate_limit"),Some(429)),None);
     }
 
     #[test]
@@ -472,13 +627,15 @@ mod tests {
         continue_fails:std::sync::atomic::AtomicBool,
         /// A tela do pane: com o menu do limite aberto, a reabertura recusa até ele fechar.
         screen:Mutex<String>,
+        /// Contas cujo login foi apagado.
+        no_login:Mutex<Vec<String>>,
     }
 
     impl Fake {
         fn new(dir:&str,quotas:Vec<Value>) -> Self {
             Fake { spec:Mutex::new(spec(claude(dir))),catalog:catalog(&["/a","/b","/c"]),quotas:Mutex::new(Ok(quotas)),
                 reopens:Mutex::new(Vec::new()),log:Mutex::new(Vec::new()),diary:Mutex::new(Vec::new()),problems:Mutex::new(Vec::new()),gone:Default::default(),
-                on_pause:Mutex::new(None),undelivered:Default::default(),continue_fails:Default::default(),screen:Mutex::new(String::new()) }
+                on_pause:Mutex::new(None),undelivered:Default::default(),continue_fails:Default::default(),screen:Mutex::new(String::new()),no_login:Mutex::new(Vec::new()) }
         }
         fn log(&self) -> Vec<String> { self.log.lock().unwrap().clone() }
         fn diary(&self) -> Vec<String> { self.diary.lock().unwrap().clone() }
@@ -500,6 +657,14 @@ mod tests {
                 outcome
             })
         }
+        fn reload<'a>(&'a self,_:&'a str) -> BoxFuture<'a,Reopen> {
+            Box::pin(async move {
+                self.log.lock().unwrap().push("reload".into());
+                let mut reopens = self.reopens.lock().unwrap();
+                if reopens.is_empty() { Reopen::Done } else { reopens.remove(0) }
+            })
+        }
+        fn logged_in(&self,path:&str) -> bool { !self.no_login.lock().unwrap().iter().any(|dead|dead == path) }
         fn release<'a>(&'a self,_:&'a str) -> BoxFuture<'a,()> { Box::pin(async move { self.log.lock().unwrap().push("release".into()); }) }
         fn pause(&self) -> BoxFuture<'_,()> {
             Box::pin(async move {
@@ -534,6 +699,65 @@ mod tests {
 
     fn hit(account:&str,reset:f64) -> LimitHit {
         LimitHit { name:"s".into(),provider:"claude".into(),account:Some(account.into()),limit:UsageLimit { window:"five_hour".into(),resets_at:Some(reset) } }
+    }
+
+    fn refused(account:&str) -> AuthHit { AuthHit { name:"s".into(),account:Some(account.into()),code:"authentication_failed".into() } }
+
+    /// Com login no disco, reabrir resolve o token velho da memória; a segunda recusa leva a outra conta.
+    #[tokio::test]
+    async fn a_refused_login_reopens_once_and_the_second_refusal_moves_the_session() {
+        let fake = Fake::new("/a",vec![quota("/a",10.0),quota("/b",60.0),quota("/c",20.0)]);
+        let switcher = Switcher::default();
+        switcher.handle_auth(&fake,refused("/a")).await;
+        assert_eq!(fake.log(),vec!["reload","release","continue"]);
+        assert_eq!(fake.diary(),vec!["login_reopened","limit_switch_continue_delivered"]);
+        assert_eq!(*fake.problems.lock().unwrap(),vec![LimitProblem::Clear]);
+        switcher.handle_auth(&fake,refused("/a")).await;
+        assert_eq!(fake.log()[3..],["reopen /c","release","continue"]);
+        assert!(switcher.spent.is_spent("/a",1000.0 + LOGIN_SPENT_S - 1.0),"a conta recusada não volta a ser destino");
+        assert!(!switcher.spent.is_spent("/a",1000.0 + LOGIN_SPENT_S + 1.0));
+    }
+
+    /// O CLI apagou o token: reabrir na mesma conta só repetiria a recusa.
+    #[tokio::test]
+    async fn an_erased_login_skips_the_reopen_and_never_picks_an_account_without_login() {
+        let fake = Fake::new("/a",vec![quota("/a",10.0),quota("/b",60.0),quota("/c",20.0)]);
+        fake.no_login.lock().unwrap().extend(["/a".to_owned(),"/c".to_owned()]);
+        Switcher::default().handle_auth(&fake,refused("/a")).await;
+        assert_eq!(fake.log(),vec!["reopen /b","release","continue"],"/c tem mais folga, mas está sem login");
+        assert_eq!(fake.diary(),vec!["login_switched","limit_switch_continue_delivered"]);
+    }
+
+    #[tokio::test]
+    async fn no_account_left_shows_the_lost_login_and_lets_the_queue_go() {
+        let fake = Fake::new("/a",vec![quota("/a",10.0),quota("/b",60.0)]);
+        fake.no_login.lock().unwrap().extend(["/a".to_owned(),"/b".to_owned()]);
+        Switcher::default().handle_auth(&fake,refused("/a")).await;
+        assert_eq!(fake.log(),vec!["release"]);
+        assert_eq!(*fake.problems.lock().unwrap(),vec![LimitProblem::LoginLost { code:"limit_switch_no_room".into() }]);
+    }
+
+    /// Contas que recusam todas (organização bloqueada, por exemplo) não revezam sem fim.
+    #[tokio::test]
+    async fn accounts_that_all_refuse_end_in_the_lost_login() {
+        let fake = Fake::new("/a",vec![quota("/a",10.0),quota("/b",20.0)]);
+        let switcher = Switcher::default();
+        for account in ["/a","/a","/b","/b"] { switcher.handle_auth(&fake,refused(account)).await; }
+        let moves:Vec<String> = fake.log().into_iter().filter(|line|line.starts_with("reopen") || line == "reload").collect();
+        assert_eq!(moves,vec!["reload","reopen /b","reload"]);
+        assert_eq!(fake.problems.lock().unwrap().last(),Some(&LimitProblem::LoginLost { code:"limit_switch_no_room".into() }));
+    }
+
+    #[tokio::test]
+    async fn a_reopen_that_fails_moves_the_session_and_a_late_refusal_is_dropped() {
+        let fake = Fake::new("/a",vec![quota("/a",10.0),quota("/c",20.0)]);
+        fake.reopens.lock().unwrap().push(Reopen::Failed("erro_reabertura".into()));
+        Switcher::default().handle_auth(&fake,refused("/a")).await;
+        assert_eq!(fake.log(),vec!["reload","reopen /c","release","continue"]);
+        let fake = Fake::new("/b",vec![quota("/c",20.0)]);
+        Switcher::default().handle_auth(&fake,refused("/a")).await;
+        assert_eq!(fake.log(),vec!["release"],"a pessoa já trocou de conta");
+        assert!(fake.problems.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

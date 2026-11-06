@@ -143,6 +143,8 @@ pub enum Effect {
     ReserveAsyncAnswer { operation_id: String, reservation: ReservedAsyncAnswer, command: RuntimeCommand },
     /// O turno parou no limite de uso da conta (não no aviso temporário): quem troca de conta decide.
     UsageLimit { limit: UsageLimit },
+    /// A API recusou o login da conta no turno; vai ao diário com o estado da credencial.
+    AuthFailed { code: String },
 }
 
 /// Janela esgotada (`five_hour`, `seven_day`, …) e quando ela volta (epoch em segundos).

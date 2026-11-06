@@ -190,7 +190,7 @@ fn head_text(facts: &Facts, input: &ClientInput, scrubber: &Scrubber) -> String 
     let troubled: Vec<_> = facts.sessions.facts.iter().filter(|s| s.troubled()).collect();
     t += &format!("Sessões com problema: {}\n", troubled.len());
     for s in troubled.iter().take(SUMMARY_SESSIONS) { t += &format!("- {}\n", s.line()); }
-    let flagged: Vec<_> = accounts.iter().filter(|a| a.near_limit() || a.login_expiring(now_s) || a.spent_until.is_some_and(|u| u > now_s)).collect();
+    let flagged: Vec<_> = accounts.iter().filter(|a| a.near_limit() || a.login_expiring(now_s) || a.login_dead() || a.spent_until.is_some_and(|u| u > now_s)).collect();
     t += &format!("\nContas perto do limite ou com login vencendo: {}\n", flagged.len());
     for a in flagged.iter().take(SUMMARY_ACCOUNTS) { t += &format!("- {}\n", a.line(now_s)); }
     t += &format!("\nFalhas recentes do cliente: {}\n", failures.len());

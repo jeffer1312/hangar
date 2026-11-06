@@ -24,6 +24,7 @@ describe('SessionProblem', () => {
     expect(await texto('limit_switch_no_room')).toBe(m.problema_limit_switch_no_room());
     expect(await texto('limit_switch_failed')).toBe(m.problema_limit_switch_failed());
     expect(await texto('limit_switch_no_target')).toBe(m.problema_limit_switch_no_target());
+    expect(await texto('limit_switch_login_lost')).toBe(m.problema_limit_switch_login_lost());
   });
 
   it('mensagem presa sem entrega tem frase própria, não a de código desconhecido', async () => {

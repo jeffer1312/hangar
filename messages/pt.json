@@ -1134,6 +1134,7 @@
   "problema_limit_switch_no_room": "O limite de uso desta conta acabou e nenhuma outra conta Claude tem folga; a sessão fica parada até a cota voltar",
   "problema_limit_switch_failed": "O limite de uso desta conta acabou e a troca automática de conta falhou; troque a conta da sessão",
   "problema_limit_switch_no_target": "O fim do turno não pôde conferir o limite de uso: o Hangar não está ligado ao terminal desta sessão",
+  "problema_limit_switch_login_lost": "O login desta conta Claude caiu e a sessão não conseguiu passar para outra conta; faça login de novo ou troque a conta da sessão",
   "problema_codex_sem_login": "O Codex recusou o login desta conta — entre de novo na conta (`codex login`) e reenvie a mensagem",
   "problema_codex_turno_cortado": "O processo do Codex caiu no meio do turno e o turno foi cortado; pedidos de aprovação abertos se perderam — reenvie a mensagem para continuar",
   "problema_codex_esforco_nao_aplicado": "O Codex não aceitou o nível de esforço escolhido; a sessão segue no padrão do modelo",

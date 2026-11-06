@@ -410,3 +410,17 @@ fn private_fields_never_reach_the_report() {
     assert!(text.contains("f***@exemplo.com · claude · ativa · lida · 5h 95%"));
     assert!(text.contains("gasta até"));
 }
+
+#[test]
+fn a_login_the_cli_erased_heads_the_report_with_its_account() {
+    let mut account = collect::account_fact(&json!({"id": "claude:/home/fulano/.claude-x", "label": "fulano@exemplo.com",
+        "provedor": "claude", "ativa": true, "estado": "lida"}), &Default::default(), &scrubber());
+    account.account_id = Some("9aac3174e59ffcd3".into());
+    account.login = Some(crate::accounts::claude_refresh::LoginFacts { stored: "arquivo", has_access: false, has_refresh: false,
+        cleared: true, expires_at: None, refresh_expires_at: None, ended: None, written_at: Some(1_793_150_000.0) });
+    let body = assemble(&facts(Vec::new(), Vec::new(), vec![account]), &input(), &scrubber(), BODY_MAX);
+    let (_, text) = report(&body);
+    assert!(text.contains("Contas perto do limite ou com login vencendo: 1"), "{text}");
+    assert!(text.contains("login: morto, o CLI apagou o token · gravado "), "{text}");
+    assert!(text.contains("conta_id 9aac3174e59ffcd3"), "{text}");
+}

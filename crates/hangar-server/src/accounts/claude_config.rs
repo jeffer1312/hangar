@@ -537,7 +537,7 @@ fn event(event_name: &str, level: &str, op: &str) -> Value {
     json!({"evento": event_name, "nivel": level, "provider": "claude", "operacao": op})
 }
 
-fn account_id(dir: &Path) -> String { sha256_hex(&dir.to_string_lossy(), 8) }
+pub(crate) fn account_id(dir: &Path) -> String { sha256_hex(&dir.to_string_lossy(), 8) }
 
 /// Os primeiros `bytes` bytes do SHA-256 de `text`, em hexadecimal.
 fn sha256_hex(text: &str, bytes: usize) -> String {

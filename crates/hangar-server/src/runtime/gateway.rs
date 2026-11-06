@@ -112,6 +112,8 @@ pub struct RuntimeRegistry {
     native:super::native_message::Inbox,
     /// Quem troca de conta quando a sessão para no limite de uso (`session_write::limit_switch`).
     limits:std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<LimitHit>>,
+    /// O mesmo vigia, para a sessão cuja conta teve o login recusado.
+    auth_refusals:std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<AuthHit>>,
     /// Sessões Claude paradas no limite à espera da troca: a fila não entrega nada até ela terminar.
     limit_holds:std::sync::Mutex<std::collections::BTreeSet<String>>,
     /// Acordar em curso por nome, com a chave da fila: um por sessão, e o texto que chega no meio vai a ela.
@@ -164,6 +166,11 @@ pub struct LimitHit {
     pub account:Option<String>,
     pub limit:UsageLimit,
 }
+
+/// Sessão Claude cuja conta teve o login recusado pela API.
+#[derive(Debug)]
+pub struct AuthHit { pub name:String, pub account:Option<String>, pub code:String }
+
 /// Intervalo mínimo entre duas reaberturas por entrega sem prova da mesma sessão: a que não resolveu
 /// não vira laço de processos mortos.
 pub(super) const HEAL_BACKOFF:Duration=Duration::from_secs(15*60);
@@ -399,13 +406,14 @@ impl RuntimeRegistry {
         Self { startup: Default::default(), diag:crate::diag::DiagClient::new(upstream,secret.clone()),reopening:Default::default(),terminal_problems:Default::default(),terminal_status:Default::default(),heal_attempts:Default::default(),interactions:None,entries:Arc::new(Mutex::new(BTreeMap::new())),terminal_states:None,terms:None,events:broadcast::channel(1024).0,
             policy:PolicyClient::new(upstream,secret).with_preparation(preparation),instance,lifecycle:Mutex::new(BTreeMap::new()),revisions:Mutex::new(BTreeMap::new()),mods:None,plugin:None,ingress:Default::default(),
             respawn_base:Duration::from_secs(5),reconnect_waits:Default::default(),permissions:None,processes:Arc::new(crate::list::procs::SystemProcs::default()),live:Default::default(),codex_owned:Default::default(),hubs:std::sync::OnceLock::new(),self_ref:std::sync::OnceLock::new(),
-            watcher:std::sync::OnceLock::new(),codex_wake:Arc::new(tokio::sync::Notify::new()),native:Default::default(),limits:std::sync::OnceLock::new(),limit_holds:Default::default(),waking:Default::default(),rewake:Default::default() }
+            watcher:std::sync::OnceLock::new(),codex_wake:Arc::new(tokio::sync::Notify::new()),native:Default::default(),limits:std::sync::OnceLock::new(),auth_refusals:std::sync::OnceLock::new(),limit_holds:Default::default(),waking:Default::default(),rewake:Default::default() }
     }
     /// Escrita para sessão doente, ou a conversa aberta: a sessão em erro é reaberta aqui, em segundo plano
     /// e uma por vez; a saudável só refaz a projeção da fila. Responde na hora; quem escreveu recebe o 503
     /// e tenta de novo. Falha vai ao diário.
     /// Liga a troca de conta no limite; sem ela o aviso de limite só fica no estado da sessão.
     pub fn set_limit_sink(&self,sink:tokio::sync::mpsc::UnboundedSender<LimitHit>) { let _ = self.limits.set(sink); }
+    pub fn set_auth_sink(&self,sink:tokio::sync::mpsc::UnboundedSender<AuthHit>) { let _ = self.auth_refusals.set(sink); }
     /// A fila do Claude para já, no mesmo passo do aviso: o que estiver nela iria para a conta esgotada.
     /// `true`: o vigia recebeu. Sem vigia vai ao diário.
     pub fn usage_limit(&self,hit:LimitHit) -> bool {
@@ -1539,6 +1547,24 @@ impl RuntimeRegistry {
         let sent=limit.clone().is_some_and(|limit|self.usage_limit(LimitHit { name:name.to_owned(),provider:"claude".into(),
             account:Some(target.metadata.config_dir.to_string_lossy().into_owned()),limit }));
         Ok(TurnLimit::Checked { transcript,limit,sent })
+    }
+    /// A API recusou a conta: a linha leva o login como ficou no disco naquela hora, e a sessão vai ao vigia
+    /// com a fila parada, porque o que estiver nela seria recusado também.
+    pub fn auth_failed(&self,name:&str,config_dir:Option<std::path::PathBuf>,code:&str) {
+        let dir=config_dir.filter(|dir|!dir.as_os_str().is_empty()).unwrap_or_else(||self.codex_environment().claude_base.clone());
+        let mut fields=crate::accounts::claude_refresh::login_facts(&dir).fields();
+        fields["conta_id"]=crate::accounts::claude_config::account_id(&dir).into();
+        self.diag.report_with("rust.claude_auth_failed",name,code,"a API recusou o login da conta",fields);
+        let Some(sink)=self.auth_refusals.get() else {
+            self.diag.report("runtime.limit_sink_closed",name,"auth_sink_absent","o vigia da troca de conta não existe; a recusa do login se perdeu");
+            return;
+        };
+        self.limit_holds.lock().unwrap_or_else(|e|e.into_inner()).insert(name.to_owned());
+        let hit=AuthHit { name:name.to_owned(),account:Some(dir.to_string_lossy().into_owned()),code:code.to_owned() };
+        if sink.send(hit).is_err() {
+            self.limit_holds.lock().unwrap_or_else(|e|e.into_inner()).remove(name);
+            self.diag.report("runtime.limit_sink_closed",name,"auth_sink_closed","o vigia da troca de conta não recebeu a recusa do login");
+        }
     }
     pub async fn drain(&self,name:&str)->Result<Value,RuntimeError> {
         self.adopt_claude_terminal(name).await?;
