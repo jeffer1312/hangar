@@ -30,6 +30,10 @@
 # só repete o que falta.
 set -uo pipefail
 
+# Sem memória, o systemd-oomd mata a verificação, não a sessão do agente que a chamou.
+[[ -n "${HANGAR_VERIFICAR_NO_ESCOPO:-}" ]] ||
+    HANGAR_VERIFICAR_NO_ESCOPO=1 exec bash "$(dirname "$0")/escopo-memoria" bash "$0" "$@"
+
 ESTADO="${XDG_STATE_HOME:-$HOME/.local/state}/hangar-verificacao"
 FIXO="${HANGAR_VERIFICAR_ARVORE:-${XDG_CACHE_HOME:-$HOME/.cache}/hangar-verificacao/arvore}"
 # Não é o /tmp/hangar-verificacao.lock: os scripts npm pegam aquele por dentro, e o mesmo arquivo

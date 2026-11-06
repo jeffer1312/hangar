@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Roda o comando num escopo próprio do systemd, com teto de memória. Quando a máquina fica sem
+# memória, o systemd-oomd mata o grupo que mais usa swap: com o build no grupo de quem o chamou, ia
+# a sessão do agente inteira (o Claude, os subagentes e o build juntos); assim vai só o build.
+# Sem o systemd do usuário (CI, Windows, macOS), roda o comando direto.
+#
+# Uso:  scripts/escopo-memoria <comando> [args...]
+# Tetos: HANGAR_BUILD_MEMORY_HIGH (padrão 50%, freia), HANGAR_BUILD_MEMORY_MAX (70%, mata o
+# build) e HANGAR_BUILD_SWAP_MAX (8G).
+set -euo pipefail
+
+if [[ -z "${HANGAR_SEM_ESCOPO:-}" ]] && command -v systemd-run >/dev/null 2>&1 &&
+    systemd-run --user --scope --quiet --collect true >/dev/null 2>&1; then
+    exec systemd-run --user --scope --quiet --collect \
+        -p MemoryHigh="${HANGAR_BUILD_MEMORY_HIGH:-50%}" \
+        -p MemoryMax="${HANGAR_BUILD_MEMORY_MAX:-70%}" \
+        -p MemorySwapMax="${HANGAR_BUILD_SWAP_MAX:-8G}" \
+        -- "$@"
+fi
+exec "$@"
