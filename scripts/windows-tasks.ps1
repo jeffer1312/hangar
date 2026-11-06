@@ -124,6 +124,23 @@ function Start-HangarTask([string]$name, [int]$port) {
 }
 
 # -NoStart: so para (a migracao para o pacote troca o lancador entre parar e subir).
+# Confere a identidade e para o processo. O que saiu sozinho entre a leitura e a parada (o
+# hangar-server sai com o Python dele) conta como parado: o erro dele nao pode cancelar o inicio.
+function Stop-HangarCandidate($candidate, $process) {
+    try {
+        # WMI e GetProcessTimes devolvem o nascimento com precisoes diferentes.
+        if (-not $candidate.CreationDate -or
+            [Math]::Abs(($process.StartTime.ToUniversalTime() - $candidate.CreationDate.ToUniversalTime()).Ticks) -ge [TimeSpan]::TicksPerMillisecond) {
+            throw "Identidade do processo $($candidate.ProcessId) mudou; parada cancelada"
+        }
+        Stop-Process -InputObject $process -Force -ErrorAction Stop
+    } catch {
+        $failure = $_
+        $gone = try { $process.HasExited } catch { $false }
+        if (-not $gone) { throw $failure }
+    }
+}
+
 function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [switch]$NoStart) {
     $mutex = New-Object Threading.Mutex($false, "Local\HangarRestart-$name")
     $locked = $false
@@ -166,17 +183,8 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [swit
         foreach ($candidate in $candidates) {
             $process = Get-Process -Id $candidate.ProcessId -ErrorAction SilentlyContinue
             if (-not $process) { continue }
-            # O hangar-server sai sozinho quando o Python dele morre: pode sumir entre a leitura e a parada,
-            # e o erro do processo que ja saiu nao pode cancelar o inicio.
-            try {
-                # WMI e GetProcessTimes devolvem o nascimento com precisoes diferentes.
-                if (-not $candidate.CreationDate -or
-                    [Math]::Abs(($process.StartTime.ToUniversalTime() - $candidate.CreationDate.ToUniversalTime()).Ticks) -ge [TimeSpan]::TicksPerMillisecond) {
-                    throw "Identidade do processo $($candidate.ProcessId) mudou; parada cancelada"
-                }
-                # Nao encerra a arvore: psmux e o atualizador precisam sobreviver ao backend.
-                Stop-Process -InputObject $process -Force -ErrorAction Stop
-            } catch { if (-not $process.HasExited) { throw } }
+            # Nao encerra a arvore: psmux e o atualizador precisam sobreviver ao backend.
+            Stop-HangarCandidate $candidate $process
             if (-not $process.WaitForExit(5000)) { throw "Processo $($candidate.ProcessId) nao encerrou" }
         }
         foreach ($attempt in 1..50) {
@@ -223,12 +231,7 @@ function Stop-HangarFrontend([string]$raiz) {
         foreach ($candidate in @(Get-HangarTaskProcesses $rows 'hangar-frontend' (Join-Path $raiz 'frontend'))) {
             $process = Get-Process -Id $candidate.ProcessId -ErrorAction SilentlyContinue
             if (-not $process) { continue }
-            # Mesma conferencia de identidade do Restart-HangarTask.
-            if (-not $candidate.CreationDate -or
-                [Math]::Abs(($process.StartTime.ToUniversalTime() - $candidate.CreationDate.ToUniversalTime()).Ticks) -ge [TimeSpan]::TicksPerMillisecond) {
-                throw "Identidade do processo $($candidate.ProcessId) mudou; parada cancelada"
-            }
-            Stop-Process -InputObject $process -Force -ErrorAction Stop
+            Stop-HangarCandidate $candidate $process
             if (-not $process.WaitForExit(5000)) { throw "Processo $($candidate.ProcessId) nao encerrou" }
         }
     } finally {
