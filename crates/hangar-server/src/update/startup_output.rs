@@ -244,7 +244,8 @@ pub fn snapshot(home: &Path, port: u16, new: Option<&Path>, old: Option<&Path>) 
     let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     out.push(match std::net::TcpStream::connect_timeout(&address, Duration::from_secs(2)) {
         Ok(_) => format!("porta {port} por conexão em 127.0.0.1: aceita"),
-        Err(e) => format!("porta {port} por conexão em 127.0.0.1: recusa ({e})"),
+        Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => format!("porta {port} por conexão em 127.0.0.1: recusa ({e})"),
+        Err(e) => format!("porta {port} por conexão em 127.0.0.1: sem resposta ({e})"),
     });
     out
 }
