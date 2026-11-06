@@ -19,6 +19,7 @@ use hangar_server::auth::Auth;
 use hangar_server::connect::devices::{MAX_TICKET_AHEAD, PENDING_TTL, Poll, Refusal, ServiceIdentity, Store};
 use hangar_server::devices::{CONNECT_PEER, Registry};
 use hangar_server::login_guests::store::hash;
+use hangar_server::login_guests::{Service, Settings};
 use hangar_server::routes::AppState;
 use hangar_server::term::{TermConfig, Terms};
 use serde_json::{Value, json};
@@ -454,6 +455,36 @@ async fn login_guest_works_through_connect() {
     // A senha ao lado do convidado some antes das rotas: acertar não muda nada.
     let probing = get(connect, &format!("/api/me?token={OWNER}")).bearer_auth(GUEST).send().await.unwrap();
     assert_eq!(body_of(probing).await["role"], "guest");
+}
+
+/// O `syncLogin` do app, pela entrada: `prelogin` e `login` abertos, `vault` e `logout` só com a sessão.
+#[tokio::test]
+async fn sync_vault_and_logout_need_a_valid_session_through_connect() {
+    let e = entrance(|state, dir| {
+        state.login_guests = Arc::new(Service::new(Settings { guests: dir.join("guests.json"), vault: dir.join("vault.json"),
+            runtime_config: dir.join("config.json"), sync_enabled: true, bootstrap: "bootstrap".into(),
+            secret: b"fixture".to_vec(), secure: false, rate_max: 10.into(), rate_window: 300.into() }));
+    }).await;
+    let registered = post(e.main, "/api/sync/register", json!({"user": "ana", "salt": "sal", "auth_hash": "hash", "bootstrap": "bootstrap"}));
+    assert_eq!(registered.send().await.unwrap().status(), 200);
+    let vault = |cookie: &str| get(e.connect, "/api/sync/vault").header("cookie", cookie.to_owned());
+    let logout = |cookie: &str| post(e.connect, "/api/sync/logout", json!({})).header("cookie", cookie.to_owned());
+    for cookie in ["outro=1", "cp_sync=", "cp_sync=ana.9999999999.assinatura-falsa"] {
+        assert_eq!(vault(cookie).send().await.unwrap().status(), 401, "{cookie}");
+        assert_eq!(logout(cookie).send().await.unwrap().status(), 401, "{cookie}");
+    }
+    assert_eq!(get(e.connect, "/api/sync/vault").bearer_auth(OWNER).send().await.unwrap().status(), 401, "a senha do dono não abre o cofre");
+    let login = post(e.connect, "/api/sync/login", json!({"user": "ana", "auth_hash": "hash"})).send().await.unwrap();
+    assert_eq!(login.status(), 200);
+    let cookie = login.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_owned();
+    let read = vault(&cookie).send().await.unwrap();
+    assert_eq!(read.status(), 200);
+    assert!(body_of(read).await["enc_blob"].is_null());
+    let write = client().put(format!("http://{}/api/sync/vault", e.connect)).header("cookie", cookie.clone())
+        .header("content-type", "application/json").body(r#"{"enc_blob":{},"base_rev":0}"#);
+    assert_eq!(write.send().await.unwrap().status(), 401, "pela entrada o cofre só se lê");
+    assert_eq!(logout(&cookie).send().await.unwrap().status(), 200);
+    assert_eq!(e.python.hits_to("/api/sync/vault"), 0);
 }
 
 #[tokio::test]

@@ -75,6 +75,13 @@ pub async fn device_token_layer(State(st): State<Arc<AppState>>, mut req: Reques
         rewrite_credentials(&mut req, |_| None);
         return next.run(req).await;
     }
+    if is_sync_session_route(req.method(), req.uri().path()) {
+        let (service, headers) = (st.login_guests.clone(), req.headers().clone());
+        if tokio::task::spawn_blocking(move || service.sync_session_valid(&headers)).await.unwrap_or(false) {
+            rewrite_credentials(&mut req, |_| None);
+            return next.run(req).await;
+        }
+    }
     if let Some(response) = preflight(&req) {
         return response;
     }
@@ -134,6 +141,11 @@ fn is_public(method: &Method, path: &str, query: Option<&str>) -> bool {
         "/api/connect/redeem" | "/api/connect/redeem/status" | "/api/sync/login" => method == Method::POST,
         _ => false,
     }
+}
+
+/// O que `syncLogin` usa logo depois do login. Passa só com `cp_sync` válido, conferido aqui.
+fn is_sync_session_route(method: &Method, path: &str) -> bool {
+    (method == Method::GET && path == "/api/sync/vault") || (method == Method::POST && path == "/api/sync/logout")
 }
 
 /// Decodificado como `machine_peers::handle` decodifica. Revogar o aparelho não desfaz a senha entregue,
