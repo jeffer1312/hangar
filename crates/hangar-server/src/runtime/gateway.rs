@@ -3055,11 +3055,16 @@ fn refuse(status:StatusCode,key:Option<&str>,check:&'static str) -> Response {
     status.into_response()
 }
 
-/// `EnterWorktree` e `ExitWorktree` movem o transcript sem trocar a conversa; o marcador do hook diz para onde.
+/// `EnterWorktree` e `ExitWorktree` movem o transcript sem trocar a conversa. A pasta sai do registro nativo;
+/// o marcador do hook é a reserva sem ele e só vale antes de um `/clear`, porque a chave é o id da abertura.
 fn moved_transcript(target:&super::terminal::TerminalTarget)->Option<PathBuf> {
     if target.transcript.exists() {return None;}
-    let marker=crate::list::discover::active_marker(&target.metadata.config_dir,&target.binding.conversation,&Default::default())?;
-    Some(PathBuf::from(marker)).filter(|path|path.file_stem()==target.transcript.file_stem())
+    let (config,sid)=(&target.metadata.config_dir,&target.binding.conversation);
+    let native=super::lifecycle::read_native_cwd(config,i64::from(target.metadata.agent_pid))
+        .map(|cwd|config.join("projects").join(hangar_workspace::worktrees::sanitize_cwd(&cwd)).join(format!("{sid}.jsonl")))
+        .filter(|path|path.exists());
+    native.or_else(||crate::list::discover::active_marker(config,sid,&Default::default()).map(PathBuf::from)
+        .filter(|path|path.file_stem()==target.transcript.file_stem()))
 }
 fn same_terminal_life(old:&super::terminal::TerminalTarget,new:&super::terminal::TerminalTarget) -> bool {
     old.key==new.key && old.name==new.name && old.binding.pane==new.binding.pane && old.binding.created==new.binding.created
@@ -3788,6 +3793,25 @@ pub(crate) mod tests {
         let target=registry.terminal_target("same").await.unwrap().unwrap();
         assert_eq!((target.transcript,target.generation,target.binding.conversation.as_str()),(moved,7,"new-sid"));
         handle.snapshot().await.expect("o ator da vida segue de pé");
+        registry.close("B",7).await.unwrap();
+    }
+
+    /// Depois de um `/clear` não há marcador com o id da conversa: a pasta sai do registro nativo.
+    #[tokio::test]
+    async fn the_native_record_finds_a_moved_transcript_without_a_marker() {
+        let dir=tempfile::tempdir().unwrap();
+        let registry=Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into()));
+        let hubs=crate::side::Hubs::default();registry.bind_hubs(hubs.downgrade());
+        claude_terminal_entry(&registry,dir.path(),77).await;
+        let project=dir.path().join("projects").join(hangar_workspace::worktrees::sanitize_cwd("/worktree"));
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(dir.path().join("sessions")).unwrap();
+        std::fs::write(dir.path().join("sessions/77.json"),json!({"pid":77,"sessionId":"new-sid","cwd":"/worktree"}).to_string()).unwrap();
+        assert_eq!(registry.reconcile_claude("same","B","new-sid",7).await.unwrap(),json!({"changed":false}),"o arquivo ainda não está na pasta nova");
+        let moved=project.join("new-sid.jsonl");
+        std::fs::write(&moved,b"").unwrap();
+        assert_eq!(registry.reconcile_claude("same","B","new-sid",7).await.unwrap(),json!({"changed":true,"moved":true}));
+        assert_eq!(registry.terminal_target("same").await.unwrap().unwrap().transcript,moved);
         registry.close("B",7).await.unwrap();
     }
 
