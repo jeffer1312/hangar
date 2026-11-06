@@ -237,14 +237,15 @@ mod linux {
         Ok(alias.as_str().to_owned())
     }
 
+    /// Lê em qualquer coleção guardada em disco, não só na de gravar: a chave criada na padrão
+    /// continua achada quando o `login` aparece depois. A `session` vive só na memória.
     async fn read_secret(conn: &zbus::Connection, session: &OwnedObjectPath, kind: &'static str) -> Result<Option<Zeroizing<Vec<u8>>>, Fail> {
-        let base = collection(conn).await?;
         let service = proxy(conn, SERVICE, "org.freedesktop.Secret.Service").await?;
         let flags = zbus::proxy::MethodFlags::NoAutoStart.into();
         let (unlocked, locked) = service.call_with_flags::<_, _, (Vec<OwnedObjectPath>, Vec<OwnedObjectPath>)>(
             "SearchItems", flags, &(attributes(kind),)).await.map_err(fail)?.ok_or(KeyError::Bus)?;
         let inside = |items: Vec<OwnedObjectPath>| -> Vec<OwnedObjectPath> {
-            let mut items: Vec<_> = items.into_iter().filter(|p| p.as_str().starts_with(&format!("{base}/"))).collect();
+            let mut items: Vec<_> = items.into_iter().filter(|p| !p.as_str().starts_with(&format!("{SERVICE}/collection/session/"))).collect();
             items.sort_by(|a, b| a.as_str().cmp(b.as_str()));
             items
         };

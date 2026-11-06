@@ -195,10 +195,14 @@ pub async fn config(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         let is_self = |id: &str| id == "self" || (!st.server_id.is_empty() && id == st.server_id);
         if let Some(Some(id)) = &change.owner && !is_self(id) {
             if let Err(resp) = known_peer(&st, id) { break 'r resp; }
-            // Dona que responde sem cofre (no Windows nem pode ter um) deixaria esta máquina sem senhas e sem saída.
-            // Dona fora do ar passa: o estado mostra `offline` até ela voltar.
-            if let Ok(Status { role, .. }) = (Remote { peers: &st.peers, owner: id }).status().await && role != Role::Owner {
-                break 'r fail(StatusCode::CONFLICT, "erro_cofre_dona_sem_cofre", "a máquina escolhida não guarda cofre");
+            // Dona que responde sem cofre (no Windows nem pode ter um) deixaria esta máquina sem senhas.
+            match (Remote { peers: &st.peers, owner: id }).status().await {
+                Ok(Status { role: Role::Owner, .. }) => {}
+                Ok(_) => break 'r fail(StatusCode::CONFLICT, "erro_cofre_dona_sem_cofre", "a máquina escolhida não guarda cofre"),
+                // Fora do ar (ou mal configurada no peers.json) passa: o estado mostra `offline` com o motivo.
+                Err(RemoteError::OwnerDown(reason)) =>
+                    tracing::warn!(code = "vault_owner_unchecked", reason = %reason, "dona gravada sem conferir o cofre dela"),
+                Err(error) => break 'r remote_failure(id, error),
             }
         }
         // Ler, mudar e gravar o `vault.json` um pedido por vez.
