@@ -198,7 +198,7 @@ impl Hangar {
         let config = self.new_chat.as_ref().and_then(|view| view.read(cx).reopen_config.clone()).unwrap_or_else(|| entry.config_dir.clone());
         let mut body = json!({"config_dir": if claude { json!(config) } else { Value::Null }, "provider": entry.provider});
         if entry.provider == "codex" && let Some(account) = &entry.codex_account { body["codex_account"] = json!(account); }
-        if let Some(cwd) = self.recents.cwd.take() { body["cwd"] = json!(cwd); }
+        if let Some(cwd) = &self.recents.cwd { body["cwd"] = json!(cwd); }
         (self.recents.sending, self.recents.note, self.recents.folder) = (true, None, None);
         let identity = api.identity();
         let message = text.clone();

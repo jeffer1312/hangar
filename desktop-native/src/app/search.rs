@@ -307,6 +307,8 @@ pub(super) struct Search {
     resume_error: Option<String>,
     /// A pasta da conversa sumiu: o seletor por cima da paleta.
     resume_folder: Option<(Entity<ResumeFolder>, Subscription)>,
+    /// Sobe ao fechar a paleta: a resposta de uma retomada abandonada não abre seletor na abertura seguinte.
+    resume_turn: u64,
     previous_focus: Option<FocusHandle>,
     ask_scroll: ScrollHandle,
     _events: Option<Subscription>,
@@ -475,6 +477,7 @@ impl Hangar {
         self.search.ask.reset();
         self.search.chat = None;
         self.search.resume_folder = None;
+        self.search.resume_turn += 1;
         match self.search.previous_focus.take() { Some(focus) => focus.focus(window, cx), None => self.root_focus.focus(window, cx) }
         cx.notify();
     }
@@ -758,7 +761,7 @@ impl Hangar {
         let server = hit.server.clone();
         self.search.resuming = Some(hit.conversation());
         self.search.resume_error = None;
-        let (gone_hit, gone_api) = (hit.clone(), api.clone());
+        let (gone_hit, gone_api, turn) = (hit.clone(), api.clone(), self.search.resume_turn);
         let body = cwd.map_or_else(|| json!({}), |cwd| json!({"cwd": cwd}));
         let task = self.runtime.spawn(async move {
             api.server_send(reqwest::Method::POST, &["archive", &hit.project, &hit.session_id, "resume"], Some(body), 120).await
@@ -770,8 +773,7 @@ impl Hangar {
                 // descarta: a sessão já nasceu na máquina do trecho, e é nela que abre.
                 this.search.resuming = None;
                 let Ok(result) = joined else { this.search.resume_error = Some(tr("search_interrupted")); cx.notify(); return };
-                // Com a paleta fechada o seletor reapareceria sozinho na próxima abertura, para um trecho já abandonado.
-                if this.search.open && let Err(failure) = &result && failure.code.as_deref() == Some(FOLDER_GONE) {
+                if this.search.resume_turn == turn && let Err(failure) = &result && failure.code.as_deref() == Some(FOLDER_GONE) {
                     this.search_choose_folder(gone_hit, gone_api, Self::fetch_failure(failure), window, cx);
                     cx.notify();
                     return;
@@ -803,9 +805,13 @@ impl Hangar {
         let picker = cx.new(|cx| ResumeFolder::new(api, runtime, message, cx));
         let events = cx.subscribe_in(&picker, window, move |this: &mut Self, _, event: &ResumeFolderEvent, window, cx| {
             this.search.resume_folder = None;
+            if let Some(input) = this.search.input.clone() { input.update(cx, |input, cx| input.focus(window, cx)); }
             if let ResumeFolderEvent::Chosen(cwd) = event { this.search_resume(hit.clone(), Some(cwd.clone()), window, cx); }
             cx.notify();
         });
+        // Com o foco no campo, Enter retomaria de novo sem a pasta.
+        let focus = picker.read(cx).focus.clone();
+        focus.focus(window, cx);
         self.search.resume_folder = Some((picker, events));
     }
 

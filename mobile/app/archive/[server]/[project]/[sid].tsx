@@ -83,8 +83,11 @@ export default function ArchivedConversation() {
   const [resuming, setResuming] = useState(false);
   const [resumeError, setResumeError] = useState('');
   // A pasta da conversa sumiu: a folha pergunta onde retomar. Ref: a escolha e o fim dela vêm no mesmo toque.
-  const [folderGone, setFolderGone] = useState(false);
+  // A folha só desmonta depois de fechada: desmontada aberta, no iOS ela pode ficar sobre a tela.
+  const [folderSheet, setFolderSheet] = useState<'none' | 'open' | 'closing'>('none');
   const chosenFolder = useRef('');
+  const resumeFolder = useRef<{ sid: string; path: string } | null>(null);
+  const resumeAfterSheet = useRef(false);
   // O pane original morreu: o app não sabe qual motor rodava a conversa. '' = conta Anthropic.
   const [engine, setEngine] = useState('');
   const [motores, setMotores] = useState<Record<string, Motor>>({});
@@ -111,7 +114,8 @@ export default function ArchivedConversation() {
     setError('');
     setEvents([]);
     setResumeError('');
-    setFolderGone(false);
+    resumeAfterSheet.current = false;
+    setFolderSheet((sheet) => (sheet === 'none' ? 'none' : 'closing'));
     setEngine('');
     setMotores({});
     setPickedConfig(null);
@@ -206,12 +210,13 @@ export default function ArchivedConversation() {
   const blockedNow = janela ? m.cota_conta_no_limite({ janela }) : null;
   const canSend = !!entry && !!draft.trim() && !resuming && !accountsLoading && !blockedNow;
 
-  const sendAndResume = async (cwd?: string) => {
+  const sendAndResume = async () => {
     const text = draft.trim();
     if (!entry || !server || !canSend) return;
     const e = entry;
     const srv = server;
     const g = gen.current;
+    const cwd = resumeFolder.current?.sid === e.session_id ? resumeFolder.current.path : undefined;
     setResuming(true);
     setResumeError('');
     let name = '';
@@ -234,7 +239,7 @@ export default function ArchivedConversation() {
           return;
         }
         setResumeError(viva ? m.conversa_ja_aberta_sem_nome() : err instanceof Error ? err.message : m.arquivo_retomar_erro());
-        if (x.code === 'erro_cwd_inexistente') setFolderGone(true);
+        if (x.code === 'erro_cwd_inexistente') setFolderSheet('open');
         return;
       }
       console.error('archive: resume ok, send failed', name, err);
@@ -374,8 +379,18 @@ export default function ArchivedConversation() {
           </View>
         ) : null}
       </KeyboardAvoidingView>
-      {folderGone && server ? (
-        <Sheet open sizes={['large']} scrollable onDismiss={() => setFolderGone(false)}>
+      {folderSheet !== 'none' && server ? (
+        <Sheet
+          open={folderSheet === 'open'}
+          sizes={['large']}
+          scrollable
+          onDismiss={() => {
+            setFolderSheet('none');
+            if (!resumeAfterSheet.current) return;
+            resumeAfterSheet.current = false;
+            void sendAndResume();
+          }}
+        >
           <KeyboardAvoidingView behavior="padding" automaticOffset style={styles.folderSheet}>
             <Text style={[styles.folderTitle, { color: textColor }]} accessibilityRole="header">{m.retomar_escolher_pasta()}</Text>
             <Text style={[styles.folderNote, { color: theme.tokens.status.warning }]} accessibilityRole="alert">{resumeError}</Text>
@@ -384,8 +399,10 @@ export default function ArchivedConversation() {
               autoSelect={false}
               onPick={(path) => { chosenFolder.current = path; }}
               onDone={() => {
-                setFolderGone(false);
-                void sendAndResume(chosenFolder.current);
+                if (!entry) return;
+                resumeFolder.current = { sid: entry.session_id, path: chosenFolder.current };
+                resumeAfterSheet.current = true;
+                setFolderSheet('closing');
               }}
             />
           </KeyboardAvoidingView>

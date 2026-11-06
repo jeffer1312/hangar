@@ -272,11 +272,29 @@ fn redirect(home: &Path, cwd: String) -> String {
     removed.into_iter().find(|(path, _)| Path::new(&cwd).starts_with(path)).map_or(cwd, |(_, main)| main)
 }
 
+/// O cabeçalho do transcript segue com a pasta antiga: sem este registro, a próxima retomada voltaria a ela.
+fn chosen_folders(home: &Path) -> PathBuf { home.join(".hangar").join("resume-folders.json") }
+
+fn chosen_folder(file: &Path, sid: &str) -> Option<String> {
+    let folders: Value = serde_json::from_slice(&std::fs::read(file).ok()?).ok()?;
+    folders[sid].as_str().map(str::to_owned)
+}
+
+fn remember_folder(file: &Path, sid: &str, cwd: &str) {
+    let mut folders = std::fs::read(file).ok().and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
+        .filter(Value::is_object).unwrap_or_else(|| json!({}));
+    folders[sid] = json!(cwd);
+    // A sessão já abriu: sem o registro, a próxima retomada só pergunta a pasta de novo.
+    if hangar_workspace::worktree_settings::write_json(file, &folders).is_err() {
+        tracing::warn!(file = %file.display(), "nao consegui guardar a pasta escolhida");
+    }
+}
+
 /// A conversa achada: o transcript, a pasta dela e, no Claude, a conta dona; no Codex, a conta.
 pub struct Found { pub transcript: PathBuf, pub cwd: String, pub owner: Option<String>, pub codex_account: Option<String> }
 
 /// O pedido de abertura da retomada e o que a rota faz em volta dele.
-pub struct Plan { pub request: SessionOpenRequest, pub found: Found, pub provider: AgentProvider, pub project: String, pub relocated: bool }
+pub struct Plan { pub request: SessionOpenRequest, pub found: Found, pub provider: AgentProvider, pub project: String, pub relocated: bool, pub remember: Option<PathBuf> }
 
 /// `-` no lugar do projeto: a pasta que guarda a conversa Claude, em qualquer conta (o id é único).
 fn claude_project(w: &Where, project: &str, sid: &str) -> Result<String, Miss> {
@@ -333,7 +351,10 @@ pub fn plan(w: &Where, facts: &dyn OpenFacts, project: &str, sid: &str, body: Ar
         }
     };
     if found.cwd.is_empty() { return Err(OpenError::new(422, "erro_cwd_ausente", "cwd not found in transcript")); }
-    let cwd = body.cwd.clone().filter(|cwd| !cwd.is_empty()).unwrap_or_else(|| redirect(w.home, found.cwd.clone()));
+    let chosen = body.cwd.clone().filter(|cwd| !cwd.is_empty());
+    let folders = chosen_folders(w.home);
+    let remember = chosen.is_some().then(|| folders.clone());
+    let cwd = chosen.or_else(|| chosen_folder(&folders, sid)).unwrap_or_else(|| redirect(w.home, found.cwd.clone()));
     let relocated = cwd != found.cwd;
     let found = Found { cwd, ..found };
     // Um segundo processo no mesmo arquivo corromperia a conversa.
@@ -355,7 +376,18 @@ pub fn plan(w: &Where, facts: &dyn OpenFacts, project: &str, sid: &str, body: Ar
         codex_account: found.codex_account.clone(), account_bound: provider == AgentProvider::Codex,
         engine: body.engine, engine_account: body.engine_account, model: body.model,
         headless: body.headless, ..Default::default() };
-    Ok(Plan { request, found, provider, project: project.to_owned(), relocated })
+    Ok(Plan { request, found, provider, project: project.to_owned(), relocated, remember })
+}
+
+/// O que já existe no destino fica: é da retomada que o criou. O resto chega à pasta que a sessão lê.
+fn move_missing(rename: &dyn Fn(&Path, &Path) -> std::io::Result<()>, from: &Path, to: &Path) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(from)? {
+        let path = entry?.path();
+        let Some(name) = path.file_name() else { continue };
+        let dst = to.join(name);
+        if !dst.exists() { rename(&path, &dst)?; } else if path.is_dir() && dst.is_dir() { move_missing(rename, &path, &dst)?; }
+    }
+    Ok(())
 }
 
 /// `move_conversation`: a conversa vai inteira para a conta `to` e a pasta de projeto `target` (o
@@ -382,7 +414,6 @@ fn move_with(rename: &dyn Fn(&Path, &Path) -> std::io::Result<()>, server_projec
         .with_params(json!({"erro": e.to_string()}));
     std::fs::create_dir_all(&dst).map_err(failed)?;
     rename(&src.join(&file), &dst.join(&file)).map_err(failed)?;
-    // Retomada anterior em outra pasta já criou a irmã no destino: a da origem fica, e os caminhos gravados seguem valendo.
     if src.join(sid).is_dir() && !dst.join(sid).exists() && let Err(error) = rename(&src.join(sid), &dst.join(sid)) {
         // Sem a pasta irmã a conversa perde tool-results e subagentes: melhor inteira na origem.
         if let Err(back) = rename(&dst.join(&file), &src.join(&file)) {
@@ -396,6 +427,10 @@ fn move_with(rename: &dyn Fn(&Path, &Path) -> std::io::Result<()>, server_projec
             return Err(OpenError::new(500, "erro_mover_conversa", message).with_params(json!({"erro": error.to_string()})));
         }
         return Err(failed(error));
+    }
+    // Retomada anterior em outra pasta já criou a irmã no destino. O que não passar segue inteiro na origem.
+    if src.join(sid).is_dir() && let Err(error) = move_missing(rename, &src.join(sid), &dst.join(sid)) {
+        tracing::warn!(error = %error, "parte da pasta irma ficou na origem");
     }
     Ok(true)
 }
@@ -416,6 +451,7 @@ pub async fn open(host: &dyn super::open::OpenHost, plan: Plan, mut resolved: su
             let mut body = opened.body;
             // A resposta é a `SessionInfo` do Python; o aviso de conta trocada vai em `avisos`.
             if let Some(map) = body.as_object_mut() { map.remove("config_dir"); map.remove("account_source"); }
+            if let Some(file) = &plan.remember { remember_folder(file, sid, &plan.found.cwd); }
             Ok(body)
         }
         Err(error) => {
@@ -464,10 +500,28 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let projects = root.path().join("projects");
         std::fs::create_dir_all(projects.join("velha/s1/subagents")).unwrap();
+        std::fs::create_dir_all(projects.join("velha/s1/tool-results")).unwrap();
         std::fs::create_dir_all(projects.join("nova/s1/tool-results")).unwrap();
+        std::fs::write(projects.join("velha/s1/tool-results/igual.txt"), "antigo").unwrap();
+        std::fs::write(projects.join("nova/s1/tool-results/igual.txt"), "novo").unwrap();
+        std::fs::write(projects.join("velha/s1/tool-results/so-antigo.txt"), "antigo").unwrap();
         std::fs::write(projects.join("velha/s1.jsonl"), "{}").unwrap();
         assert!(super::move_conversation(&projects, "velha", "nova", "s1", None, None).unwrap());
         assert!(projects.join("nova/s1.jsonl").is_file());
-        assert!(projects.join("velha/s1/subagents").is_dir(), "a irmã antiga fica");
+        assert!(projects.join("nova/s1/subagents").is_dir(), "a sessão só lê a irmã do destino");
+        assert!(projects.join("nova/s1/tool-results/so-antigo.txt").is_file());
+        assert_eq!(std::fs::read_to_string(projects.join("nova/s1/tool-results/igual.txt")).unwrap(), "novo");
+    }
+
+    #[test]
+    fn the_chosen_folder_stays_for_the_next_resume() {
+        let root = tempfile::tempdir().unwrap();
+        let file = super::chosen_folders(root.path());
+        assert_eq!(super::chosen_folder(&file, "s1"), None);
+        super::remember_folder(&file, "s1", "/primeira");
+        super::remember_folder(&file, "s2", "/segunda");
+        super::remember_folder(&file, "s1", "/outra");
+        assert_eq!(super::chosen_folder(&file, "s1").as_deref(), Some("/outra"));
+        assert_eq!(super::chosen_folder(&file, "s2").as_deref(), Some("/segunda"));
     }
 }

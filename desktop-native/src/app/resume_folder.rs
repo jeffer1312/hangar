@@ -9,6 +9,7 @@ pub(super) const FOLDER_GONE: &str = "erro_cwd_inexistente";
 pub(super) enum ResumeFolderEvent { Chosen(String), Closed }
 
 pub(super) struct ResumeFolder {
+    pub(super) focus: FocusHandle,
     api: Api,
     runtime: Arc<Runtime>,
     message: String,
@@ -22,7 +23,7 @@ impl EventEmitter<ResumeFolderEvent> for ResumeFolder {}
 
 impl ResumeFolder {
     pub(super) fn new(api: Api, runtime: Arc<Runtime>, message: String, cx: &mut Context<Self>) -> Self {
-        let mut this = Self { api, runtime, message, roots: Remote::default(), root: None, dir: String::new(), scan: Remote::default() };
+        let mut this = Self { focus: cx.focus_handle(), api, runtime, message, roots: Remote::default(), root: None, dir: String::new(), scan: Remote::default() };
         this.load_roots(cx);
         this
     }
@@ -76,7 +77,7 @@ impl Render for ResumeFolder {
         let alert = |id: &'static str, text: String| div().id(id).role(Role::Alert).text_sm().text_color(theme::danger()).whitespace_normal().child(text);
         let retry = |id: &'static str| Button::new(id).outline().small().label(tr_shared("lista_tentar_novamente", &[]));
         let title = tr_shared("retomar_escolher_pasta", &[]);
-        let frame = div().id("resume-folder").role(Role::Group).aria_label(title.clone()).w_full().flex().flex_col().gap_2().p_3().rounded(px(12.))
+        let frame = div().id("resume-folder").track_focus(&self.focus).role(Role::Group).aria_label(title.clone()).w_full().flex().flex_col().gap_2().p_3().rounded(px(12.))
             .border_1().border_color(theme::border()).bg(theme::popup_fill(theme::raised())).shadow(theme::popover_shadow())
             .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(title))
             .child(alert("resume-folder-gone", self.message.clone()));
