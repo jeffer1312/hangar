@@ -45,6 +45,7 @@ vi.mock('react-native', () => ({ Platform: native.platform,
 }));
 const stalledHaptic = vi.hoisted(() => vi.fn());
 vi.mock('../../ui/haptics', () => ({ haptic: { connected: vi.fn(), stalled: stalledHaptic } }));
+vi.mock('../../ui/Toast', () => ({ toast: { erro: vi.fn() } }));
 vi.mock('react-native-webrtc', () => ({ RTCPeerConnection: native.Peer, mediaDevices: { getUserMedia: native.media },
   permissions: { request: native.microphonePermission } }));
 vi.mock('../../../modules/live-voice-audio', () => ({ default: {
@@ -716,13 +717,12 @@ describe('configuração e memória do servidor capturado', () => {
   });
 
   test('retomar avisa quando parte da fala guardada se perdeu', async () => {
-    const erro = vi.spyOn(toast, 'erro');
     const instance = await startA() as Instance & { setSpeechPaused: ReturnType<typeof vi.fn> };
     useLiveVoice.getState().toggleSpeechPause();
-    expect(erro).not.toHaveBeenCalled();
+    expect(toast.erro).not.toHaveBeenCalled();
     instance.setSpeechPaused.mockReturnValueOnce(true);
     useLiveVoice.getState().toggleSpeechPause();
-    expect(erro).toHaveBeenCalledOnce();
+    expect(toast.erro).toHaveBeenCalledOnce();
   });
 
   test('vibra uma vez por travamento, não a cada retrato igual', async () => {
