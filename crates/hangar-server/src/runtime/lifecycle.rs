@@ -139,7 +139,12 @@ pub async fn kill_terminal(io:&dyn TerminalIo,procs:&dyn ProcessView,binding:&Te
     let target=if binding.windows {binding.name.clone()} else {format!("={}",binding.name)};
     let output=mux(io,binding,vec!["kill-session".into(),"-t".into(),target]).await?;
     if !output.success {return Err(failure("lifecycle_kill"));}
-    wait_absent(procs,agent_pid,birth,"lifecycle_still_alive").await
+    // Com o `kill-session` aceito a sessão acabou, mesmo que o agente demore a sair: tratar a demora como falha
+    // desviava o fechamento do caminho que entrega o transcript, e a conversa ia ao Arquivo sem o nome.
+    if let Err(error)=wait_absent(procs,agent_pid,birth,"lifecycle_still_alive").await {
+        tracing::warn!(session=%binding.name,pid=agent_pid,code=%error.code,"sessão encerrada; o agente ainda não saiu");
+    }
+    Ok(())
 }
 
 /// Encerrar só avisa o processo (SIGHUP, SIGTERM): ele leva um instante para sair, e no meio da saída a leitura dele
@@ -359,6 +364,23 @@ mod tests {
         let io=Io {lines:std::sync::Mutex::new([line(),line(),CommandOutput {success:true,stdout:vec![]}].into())};
         let procs=Procs {calls:Default::default()};
         assert_eq!(kill_terminal(&io,&procs,&binding(),11,7.0).await.map_err(|e|e.code),Ok(()));
+    }
+    /// Conversa grande: o agente passa do prazo para sair, e a sessão continua fechada.
+    #[tokio::test]
+    async fn an_agent_still_exiting_after_the_deadline_is_closed() {
+        struct Procs;
+        impl ProcessView for Procs {
+            fn children(&self,_:Duration)->std::io::Result<std::sync::Arc<crate::list::procs::ChildrenMap>> {Ok(std::sync::Arc::new([(10,vec![11])].into()))}
+            fn cwd(&self,_:i64)->Option<std::path::PathBuf> {None}
+            fn env_var(&self,_:i64,_:&str)->std::io::Result<Option<std::ffi::OsString>> {Ok(None)}
+            fn start_time(&self,_:i64)->Option<f64> {None}
+            fn recipe(&self,pid:i64)->std::io::Result<crate::list::procs::ProcessRecipe> {
+                Ok(crate::list::procs::ProcessRecipe {pid,birth:7.0,executable:"claude".into(),cwd:"/".into(),argv:vec![],environ:vec![],cgroup:None})
+            }
+        }
+        let line=|| CommandOutput {success:true,stdout:b"session\t%2\t1000\t10\t0\t0\t0".to_vec()};
+        let io=Io {lines:std::sync::Mutex::new([line(),line(),CommandOutput {success:true,stdout:vec![]}].into())};
+        assert_eq!(kill_terminal(&io,&Procs,&binding(),11,7.0).await.map_err(|e|e.code),Ok(()));
     }
     #[test]
     fn the_python_birth_of_the_same_agent_is_not_another_process() {
