@@ -205,10 +205,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   pytest e `CP_RUST_SERVER_BIN` rodam essa cópia, nunca o executável do target comum. Jobs e teto de
   memória saem da memória livre ao pegar a trava: um job por 9 GB livres além de 2 GB de folga
   (`HANGAR_BUILD_GB_POR_JOB`), entre 1 e o número de núcleos, e `MemoryHigh` num escopo do systemd do
-  usuário igual ao livre menos a folga (mínimo 4 GB). Um `rustc` do `hangar_server` passou de 9 GB no pico
-  (06/11/2026, 2,1 GB em RAM e 7,2 GB em swap) e o `-j 2` fixo compilava dois juntos numa máquina de 23 GB:
-  o swap passou de 35 GB e a máquina inteira parou. `CARGO_BUILD_JOBS` explícito vence; sem
-  `systemd-run --user` o build roda sem teto. A troca em
+  usuário igual ao livre menos a folga (mínimo 4 GB), preso à unidade de quem chamou (`BindsTo`) para
+  não sobreviver a ela segurando a trava. Escopo que não abre compila de novo sem teto.
+  `CARGO_BUILD_JOBS` explícito vence; sem `systemd-run --user` o build roda sem teto. A troca em
   `~/.hangar/bin` usa o release do target aquecido; o perfil dev não é mais rápido na mudança
   incremental. O `i18n:compile` de front, core e app passa por `scripts/i18n-compile.mjs` e pula
   quando entrada e saída batem com o carimbo da última compilação. Evidência em
@@ -1034,6 +1033,12 @@ maior RSS de um processo da medição.
   o que se misturava era o executável final, que todos gravam no mesmo lugar. O `cargo-pinned`
   copia o executável na mesma trava do build (`scripts/test-cargo-pinned.sh` prova que o build de
   outro checkout não muda a cópia).
+- **Jobs e teto pela memória livre (06/11/2026).** `cargo test -p hangar-server --lib` com o `-j 2` fixo:
+  os dois `rustc` do `hangar_server` (normal e de teste) juntos, um deles medido em 9,3 GB (2,1 GB em
+  RAM e 7,2 GB em swap), com ~18 GB já ocupados pelas sessões abertas; o swap passou de 35 GB e a
+  máquina parou. Daí os 9 GB por job: é o pior caso medido (o build de teste); o release incremental
+  ficava em ~3,2 GB em 23/10, então o `-j` sai conservador para `build`. O `MemoryHigh` faz o kernel
+  recolher primeiro a memória do build, mas não limita o swap, que segue comum.
 - **Mensagens com carimbo.** `npm run i18n:compile` do front (core junto): 18–22 s e 670–830 MB
   antes; 0,7 s e 72 MB sem mudança em `messages/`. Saída igual à do `paraglide-js compile` direto
   (hash da árvore em `scripts/test-i18n-compile.mjs`).

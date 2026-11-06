@@ -49,47 +49,67 @@ if [[ "$alvo" == "$proprio" ]]; then
     fi
 fi
 bash "$raiz/scripts/cargo-freshness.sh" "$metadata" "$alvo"
-set +e
-# Um rustc do hangar_server passa de 8 GB no pico: cada job paralelo precisa caber na memória livre.
+# Cada job paralelo precisa caber na memória livre: o rustc do hangar_server é o maior do workspace.
 gib=$((1024 * 1024))
 folga=$((2 * gib))
+por_job="${HANGAR_BUILD_GB_POR_JOB:-9}"
+if [[ ! "$por_job" =~ ^[1-9][0-9]*$ ]]; then
+    echo "cargo-pinned: HANGAR_BUILD_GB_POR_JOB=$por_job não é um inteiro positivo; usando 9" >&2
+    por_job=9
+fi
 livre="$(awk '/^MemAvailable:/ {print $2}' "${HANGAR_MEMINFO:-/proc/meminfo}" 2>/dev/null || true)"
 if [[ -n "${CARGO_BUILD_JOBS:-}" ]]; then
     jobs="$CARGO_BUILD_JOBS"
 elif [[ -n "$livre" ]]; then
-    jobs=$(( (livre - folga) / (${HANGAR_BUILD_GB_POR_JOB:-9} * gib) ))
+    jobs=$(( (livre - folga) / (por_job * gib) ))
     nucleos="$(nproc 2>/dev/null || echo 2)"
     (( jobs < 1 )) && jobs=1
     (( jobs > nucleos )) && jobs=$nucleos
 else
     jobs=2
 fi
-# Passando do teto, o kernel recolhe a memória do próprio build: ele fica lento, o resto da máquina não.
+# Passando do teto, o kernel recolhe primeiro a memória do próprio build, que fica lento no lugar das
+# sessões. O swap continua comum a todos.
 teto=()
 alto=$(( ${livre:-0} - folga ))
 (( alto < 4 * gib )) && alto=$((4 * gib))
-# A sonda leva o mesmo teto e tem prazo: um systemd do usuário travado não pode segurar a trava.
-if [[ -n "$livre" ]] && timeout 5 systemd-run --user --scope --quiet -p "MemoryHigh=${alto}K" true >/dev/null 2>&1; then
-    teto=(systemd-run --user --scope --quiet -p "MemoryHigh=${alto}K" --)
+escopo=(systemd-run --user --scope --quiet --collect -p "MemoryHigh=${alto}K")
+# Escopo próprio sobrevive ao fim de quem chamou e seguraria a trava: ele morre junto com a unidade dela.
+dono="$(sed -n 's#^0::.*/user@[0-9]*\.service/.*/\([^/]*\.\(scope\|service\)\)$#\1#p' /proc/self/cgroup 2>/dev/null || true)"
+[[ -n "$dono" ]] && escopo+=(-p "BindsTo=$dono")
+marca="$(mktemp -u)"
+trap 'rm -f "$metadata" "$artifacts" "$marca"' EXIT
+# A sonda leva os mesmos parâmetros e tem prazo: um systemd do usuário travado não pode segurar a trava.
+if [[ -n "$livre" ]] && timeout 5 "${escopo[@]}" true >/dev/null 2>&1; then
+    teto=("${escopo[@]}" -- bash -c 'touch "$0" && exec "$@"' "$marca")
     echo "cargo-pinned: -j $jobs, teto $((alto / gib)) GB de memória ($((livre / gib)) GB livres)" >&2
 else
     echo "cargo-pinned: -j $jobs, sem teto de memória" >&2
 fi
-"${teto[@]}" nice -n 19 ionice -c 3 cargo "${args[@]}" -j "$jobs" --message-format=json-render-diagnostics |
-    # No `cargo test` a saída dos testes vem misturada às mensagens do cargo: ela passa adiante.
-    jq -rR --unbuffered '. as $l | (try fromjson catch null) as $j
-        | if ($j | type) != "object" then "L\t" + $l
-          elif $j.reason == "compiler-artifact" and $j.executable != null and ($j.profile.test | not)
-          then "A\t" + ($j | tojson)
-          elif $j.reason == "compiler-artifact" and $j.target.name == "hangar_auth" and ($j.target.crate_types | index("cdylib")) != null
-          then "A\t" + ($j | tojson)
-          else empty end' |
-    while IFS= read -r l; do
-        if [[ "$l" == L$'\t'* ]]; then printf '%s\n' "${l#L$'\t'}"; continue; fi
-        printf '%s\n' "${l#A$'\t'}" >> "$artifacts"
-    done
-statuses=("${PIPESTATUS[@]}")
-set -e
+compila() {   # $@ = prefixo antes do nice: vazio ou o escopo com teto
+    set +e
+    "$@" nice -n 19 ionice -c 3 cargo "${args[@]}" -j "$jobs" --message-format=json-render-diagnostics |
+        # No `cargo test` a saída dos testes vem misturada às mensagens do cargo: ela passa adiante.
+        jq -rR --unbuffered '. as $l | (try fromjson catch null) as $j
+            | if ($j | type) != "object" then "L\t" + $l
+              elif $j.reason == "compiler-artifact" and $j.executable != null and ($j.profile.test | not)
+              then "A\t" + ($j | tojson)
+              elif $j.reason == "compiler-artifact" and $j.target.name == "hangar_auth" and ($j.target.crate_types | index("cdylib")) != null
+              then "A\t" + ($j | tojson)
+              else empty end' |
+        while IFS= read -r l; do
+            if [[ "$l" == L$'\t'* ]]; then printf '%s\n' "${l#L$'\t'}"; continue; fi
+            printf '%s\n' "${l#A$'\t'}" >> "$artifacts"
+        done
+    statuses=("${PIPESTATUS[@]}")
+    set -e
+}
+compila "${teto[@]}"
+# A sonda passou mas o escopo não abriu (o cargo nem começou): compila de novo sem teto.
+if (( ${#teto[@]} && statuses[0] != 0 )) && [[ ! -e "$marca" ]]; then
+    echo "cargo-pinned: o escopo de memória não abriu; compilando sem teto" >&2
+    compila
+fi
 (( statuses[0] == 0 )) || exit "${statuses[0]}"
 for status in "${statuses[@]:1}"; do (( status == 0 )) || exit "$status"; done
 python3 "$raiz/scripts/pin-auth-pair.py" --artifacts "$artifacts" --source-target "$alvo" --target-dir "$proprio" --workspace "$raiz/crates"
