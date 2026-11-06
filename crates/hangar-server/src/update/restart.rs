@@ -73,12 +73,18 @@ impl SystemRestarter {
                 // O PowerShell fecha a string em qualquer aspa simples tipográfica também.
                 let quote = |p: &Path| p.display().to_string().chars()
                     .flat_map(|c| if matches!(c, '\'' | '‘' | '’' | '‚' | '‛') { vec![c, c] } else { vec![c] }).collect::<String>();
-                // `-Command` sai 0 mesmo com erro terminal no script: sem o `exit 1`, reinício abortado vira sucesso.
-                format!("powershell -NoProfile -ExecutionPolicy Bypass -Command \"try {{ . '{}'; Restart-HangarTasks '{}' {} {} }} catch {{ Write-Output $_.Exception.Message; exit 1 }}\"",
-                    quote(&root.join("scripts").join("windows-tasks.ps1")), quote(&root), self.port, front_port(&self.home, &root)?)
+                format!("powershell -NoProfile -ExecutionPolicy Bypass -Command \"{}\"", guarded_ps(&format!(". '{}'; Restart-HangarTasks '{}' {} {}",
+                    quote(&root.join("scripts").join("windows-tasks.ps1")), quote(&root), self.port, front_port(&self.home, &root)?)))
             }
         }))
     }
+}
+
+/// O script de um `powershell -Command` que lê o código de saída. Erro de cmdlet dentro de um
+/// `try`/`finally` do `windows-tasks.ps1` só encerra o comando e o `-Command` sai 0: sem o `exit 1`,
+/// o aborto vira sucesso. A saída leva o erro com a linha que o lançou.
+pub(crate) fn guarded_ps(script: &str) -> String {
+    format!("try {{ {script} }} catch {{ Write-Output ($_ | Out-String); exit 1 }}")
 }
 
 /// `CP_FRONT_PORT` do `.env` dos dados do usuário; 0 sem a tarefa do front.
@@ -189,7 +195,7 @@ mod tests {
         restarter(Topology::Windows, runner.clone(), dir.path()).restart().await.unwrap();
         let helper = root.join("scripts").join("windows-tasks.ps1");
         assert_eq!(runner.ran.lock().unwrap().as_slice(), [format!(
-            "powershell -NoProfile -ExecutionPolicy Bypass -Command \"try {{ . '{}'; Restart-HangarTasks '{}' 8765 5173 }} catch {{ Write-Output $_.Exception.Message; exit 1 }}\"",
+            "powershell -NoProfile -ExecutionPolicy Bypass -Command \"try {{ . '{}'; Restart-HangarTasks '{}' 8765 5173 }} catch {{ Write-Output ($_ | Out-String); exit 1 }}\"",
             helper.display(), root.display())]);
     }
 

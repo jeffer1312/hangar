@@ -146,6 +146,18 @@ try {
     $script:exitsBeforeStop = 11
     Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' | Out-Null
     Assert ('start' -in $script:events) "Processo que saiu antes da parada cancelou o inicio: $($script:events -join ',')"
+    # Saiu antes da conferencia de identidade: o StartTime ilegivel tambem conta como parado.
+    Reset-State
+    $gone = [pscustomobject]@{ Id = 11; HasExited = $true }
+    $gone | Add-Member ScriptProperty StartTime {
+        $script:live.Remove(11); $script:owner = $null
+        if (-not $script:live.Count) { $script:task.State = 'Ready' }
+        throw [InvalidOperationException]'Process has exited, so the requested information is not available.'
+    }
+    $gone | Add-Member ScriptMethod WaitForExit { param($timeout) return $true }
+    $script:live[11] = $gone
+    Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' | Out-Null
+    Assert ('start' -in $script:events) "Processo que saiu antes da conferencia cancelou o inicio: $($script:events -join ',')"
     # Lista de portas vazia com o servidor de pe: a saude do hangar-server prova a subida.
     Reset-State
     $script:phantomStarts = 99

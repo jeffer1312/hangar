@@ -94,8 +94,7 @@ impl Service {
                 let helper = quote(&self.root.join("scripts/windows-tasks.ps1"));
                 let root = quote(&self.root);
                 let front = self.frontend_port();
-                // `-Command` sai 0 mesmo com erro terminal no script: o `exit 1` torna o aborto visível.
-                let command = format!("try {{ . '{helper}'; Restart-HangarTasks '{root}' {port} {front} }} catch {{ Write-Output $_.Exception.Message; exit 1 }}");
+                let command = crate::update::restart::guarded_ps(&format!(". '{helper}'; Restart-HangarTasks '{root}' {port} {front}"));
                 let output = self.command(
                     &[
                         "powershell",

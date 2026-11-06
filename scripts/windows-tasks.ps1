@@ -149,7 +149,6 @@ function Stop-HangarCandidate($candidate, $process) {
 function Test-HangarExited($process) { try { return [bool]$process.HasExited } catch { return $false } }
 
 # -NoStart: so para (a migracao para o pacote troca o lancador entre parar e subir).
-
 function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [switch]$NoStart) {
     $mutex = New-Object Threading.Mutex($false, "Local\HangarRestart-$name")
     $locked = $false
