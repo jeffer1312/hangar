@@ -660,6 +660,8 @@ impl Hangar {
         let remote = target.server != self.active_key();
         let host = self.server_label(cx);
         let machine = self.server_entry(&target.server).map(|s| s.label.as_str()).unwrap_or(&host);
+        // Aba solta de sessão pareada (o par está numa máquina fora da barra) ainda mostra a tarefa do grupo.
+        let group_label = group_label.or_else(|| slot.is_none().then(|| session.pair_task.as_deref().map(str::trim).filter(|s| !s.is_empty())).flatten());
         let compact = slot.is_some() && group_label.is_none();
         let grouped = slot.is_some();
         let state = if session.limited == Some(true) { "limited" } else { session.state.as_str() };
