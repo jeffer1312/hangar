@@ -29,6 +29,9 @@ final class HeldSpeech {
     flags[1] = 1
   }
 
+  /// A taxa do áudio mudou: o que está guardado tocaria na velocidade errada.
+  func discard() { flags[1] = 1 }
+
   func process(_ out: UnsafeMutablePointer<Int16>, _ frames: Int) {
     if flags[1] != 0 {
       flags[1] = 0
@@ -76,6 +79,7 @@ final class HangarAudioDevice: NSObject {
   private var audioUnit: AUAudioUnit?
   private var delegate: RTCAudioDeviceDelegate?
   private var routeObserver: NSObjectProtocol?
+  private var resetObserver: NSObjectProtocol?
   private var shouldPlay = false
   private var shouldRecord = false
 
@@ -88,6 +92,22 @@ final class HangarAudioDevice: NSObject {
     }
     options.setValue(self, forKey: "audioDevice")
     installed = true
+  }
+
+  private func makeUnit() -> AUAudioUnit? {
+    // VoiceProcessingIO: o mesmo cancelamento de eco do áudio padrão do WebRTC no iPhone.
+    let description = AudioComponentDescription(componentType: kAudioUnitType_Output, componentSubType: kAudioUnitSubType_VoiceProcessingIO,
+      componentManufacturer: kAudioUnitManufacturer_Apple, componentFlags: 0, componentFlagsMask: 0)
+    do {
+      let unit = try AUAudioUnit(componentDescription: description)
+      unit.isInputEnabled = false
+      unit.isOutputEnabled = false
+      unit.maximumFramesToRender = 1024
+      return unit
+    } catch {
+      NSLog("LiveVoiceAudio: falha ao criar o áudio: %@", error.localizedDescription)
+      return nil
+    }
   }
 
   private func format() -> AVAudioFormat? {
@@ -122,6 +142,8 @@ final class HangarAudioDevice: NSObject {
         if bus.format != wanted {
           stopUnit(unit)
           try bus.setFormat(wanted)
+          // Sem o aviso o WebRTC segue com a taxa antiga, e com fone Bluetooth o microfone sairia acelerado.
+          delegate.notifyAudioInputParametersChange()
         }
         let deliver = delegate.deliverRecordedData
         let render = unit.renderBlock
@@ -136,7 +158,12 @@ final class HangarAudioDevice: NSObject {
         let bus = unit.inputBusses[0]
         if bus.format != wanted {
           stopUnit(unit)
+          if bus.format.sampleRate != wanted.sampleRate {
+            NSLog("LiveVoiceAudio: taxa de áudio mudou; a fala guardada foi descartada")
+            held.discard()
+          }
           try bus.setFormat(wanted)
+          delegate.notifyAudioOutputParametersChange()
         }
         if unit.outputProvider == nil {
           let playout = delegate.getPlayoutData
@@ -172,30 +199,28 @@ extension HangarAudioDevice: RTCAudioDevice {
   var isInitialized: Bool { delegate != nil && audioUnit != nil }
 
   func initialize(with delegate: RTCAudioDeviceDelegate) -> Bool {
-    guard self.delegate == nil else { return false }
-    // VoiceProcessingIO: o mesmo cancelamento de eco do áudio padrão do WebRTC no iPhone.
-    let description = AudioComponentDescription(componentType: kAudioUnitType_Output, componentSubType: kAudioUnitSubType_VoiceProcessingIO,
-      componentManufacturer: kAudioUnitManufacturer_Apple, componentFlags: 0, componentFlagsMask: 0)
-    do {
-      let unit = try AUAudioUnit(componentDescription: description)
-      unit.isInputEnabled = false
-      unit.isOutputEnabled = false
-      unit.maximumFramesToRender = 1024
-      audioUnit = unit
-    } catch {
-      NSLog("LiveVoiceAudio: falha ao criar o áudio: %@", error.localizedDescription)
-      return false
-    }
+    guard self.delegate == nil, let unit = makeUnit() else { return false }
+    audioUnit = unit
     self.delegate = delegate
-    routeObserver = NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: nil) { [weak self] _ in
+    let center = NotificationCenter.default
+    routeObserver = center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: nil) { [weak self] _ in
       self?.delegate?.dispatchAsync { self?.updateUnit() }
+    }
+    // A unidade nasce uma vez por processo: morta pelo reset do áudio, as chamadas seguintes ficariam mudas.
+    resetObserver = center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: nil) { [weak self] _ in
+      self?.delegate?.dispatchAsync {
+        guard let self else { return }
+        if let old = self.audioUnit { self.stopUnit(old) }
+        self.audioUnit = self.makeUnit()
+        self.updateUnit()
+      }
     }
     return true
   }
 
   func terminateDevice() -> Bool {
-    if let routeObserver { NotificationCenter.default.removeObserver(routeObserver) }
-    routeObserver = nil
+    for observer in [routeObserver, resetObserver].compactMap({ $0 }) { NotificationCenter.default.removeObserver(observer) }
+    (routeObserver, resetObserver) = (nil, nil)
     (shouldPlay, shouldRecord) = (false, false)
     updateUnit()
     audioUnit = nil
