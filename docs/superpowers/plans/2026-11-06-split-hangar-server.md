@@ -119,7 +119,11 @@ Vale para toda Task que move código para o core ou para outro crate.
    `queue.rs:1321`, usado por `omp_sync/mechanism_tests.rs:251` e `provider_models/tests_extra.rs`)
    fica atrás de uma feature `test-support` do crate novo, ligada só em `[dev-dependencies]` do
    servidor. Teste inline que usa só o código movido vai junto; teste que usa o servidor vai para
-   `crates/hangar-server/tests/it/` ou para um módulo `#[cfg(test)]` do servidor.
+   `crates/hangar-server/tests/it/` ou para um módulo `#[cfg(test)]` do servidor. Crate novo tem os
+   testes em `src/` ou num `tests/it/` único, nunca um executável por arquivo de `tests/`: cada
+   executável linka o crate e as dependências dele inteiros (no servidor eram 94, de 180 a 430 MB,
+   até o PR #144). Só fica à parte, num `[[test]]` próprio, o teste que mexe em estado do processo
+   inteiro, como no #144.
 6. **Manifesto.** `version.workspace = true`, `edition.workspace = true`, `publish = false`;
    entrada em `members` e em `[workspace.dependencies]` de `crates/Cargo.toml`; dependências pelo
    workspace, com as mesmas features que o `crates/hangar-server/Cargo.toml` declara para cada uma
