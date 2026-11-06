@@ -8,6 +8,7 @@ import { LoginPasswordAnimation } from './LoginPasswordAnimation';
 import { NoProjectAnimation } from './NoProjectAnimation';
 import { RenameSuggestionAnimation } from './RenameSuggestionAnimation';
 import { SleepHiddenAnimation } from './SleepHiddenAnimation';
+import { SessionVaultAnimation } from './SessionVaultAnimation';
 import { TagsPlateAnimation } from './TagsPlateAnimation';
 import { VaultAnimation } from './VaultAnimation';
 
@@ -22,6 +23,7 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'ocultar-da-lista': HideFromListAnimation,
   'relatorio-automatico': AutoReportAnimation,
   'revelacao-imagem': ImageRevealAnimation,
+  'pedido-na-sessao': SessionVaultAnimation,
   'sem-projeto': NoProjectAnimation,
   'sugestao-de-nome': RenameSuggestionAnimation,
 };

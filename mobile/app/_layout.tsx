@@ -19,6 +19,7 @@ import { TabletShell } from '../src/features/tablet/TabletShell';
 import { aplicarMaterial } from '../src/theme/aplicarMaterial';
 import { Toaster, toast } from '../src/ui/Toast';
 import { LiveVoiceRoot } from '../src/features/voice/LiveVoiceRoot';
+import { VaultRequestSheet } from '../src/features/vault/VaultRequests';
 import { applyOrientationLock } from '../src/features/tablet/orientationLock';
 import { setFatalErrorRoute, takeFatalErrorNotice } from '../src/net/fatalErrors';
 import * as m from '../src/paraglide/messages';
@@ -230,6 +231,7 @@ export default function Layout() {
         </ThemeProvider>
         </TabletShell>
         <LiveVoiceRoot />
+        <VaultRequestSheet />
         <Toaster position="top-center" />
       </GestureHandlerRootView>
     </KeyboardProvider>

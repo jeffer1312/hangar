@@ -89,7 +89,7 @@ export function pushRegistrationKey(servers: Server[], locale: string): string {
 export function openFromNotification(data: unknown, servers: Server[]): void {
   const d = (data ?? {}) as { server?: unknown; session?: unknown; server_id?: unknown; request_id?: unknown };
   const known = typeof d.server === 'string' && servers.some((s) => s.id === d.server);
-  // Pedido do cofre: a folha dele mora na lista, não no chat da sessão que pediu.
+  // Pedido do cofre: a folha mora na raiz do app; a lista mantém o stream que a carrega.
   if (typeof d.request_id === 'string' && d.request_id && typeof d.server_id === 'string' && servers.some((s) => s.id === d.server_id)) {
     openVaultRequest({ serverId: d.server_id, requestId: d.request_id });
     router.push('/');

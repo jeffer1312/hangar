@@ -3,7 +3,7 @@ import { act, createElement, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { ServerBucket, VaultEvent } from '@hangar/core';
-import { VaultRequests } from './VaultRequests';
+import { SessionVaultRequests, VaultRequestSheet, VaultRequests } from './VaultRequests';
 import { openVaultRequest, useVaultTarget } from './target';
 import { useSessions } from '../../stores/sessions';
 import * as m from '../../paraglide/messages';
@@ -17,6 +17,7 @@ vi.mock('expo-secure-store', () => ({ getItemAsync: async () => null, setItemAsy
 vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({ getString: () => undefined, set: () => {}, remove: () => {} }) }));
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../../ui/Toast', () => ({ toast: { ok: vi.fn(), erro: vi.fn() } }));
+vi.mock('../pair/identities', () => ({ useIdentities: () => ({ identities: new Map([['a', 'a']]), loading: new Set() }) }));
 
 const event: VaultEvent = { state: 'open', requests: [{ id: 'r1', interaction_id: 'i1', kind: 'approve', origin: 'a::sessao',
   entry_name: 'github', reason: 'login', use: 'exec', target: 'gh auth status', expires_at: 1 }] };
@@ -26,7 +27,10 @@ const bucket = (id: string, extra: Partial<ServerBucket> = {}) => ({
 
 let container: HTMLElement;
 let root: Root;
-const render = (byServer: ServerBucket[]) => act(async () => { root.render(<VaultRequests byServer={byServer} />); });
+const render = (byServer: ServerBucket[]) => act(async () => {
+  useSessions.setState({ byServer });
+  root.render(<><VaultRequests byServer={byServer} /><VaultRequestSheet /></>);
+});
 const title = (label: string) => m.vault_app_requests_title({ label, count: 1 });
 
 beforeEach(() => {
@@ -39,7 +43,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await act(async () => { root.unmount(); });
-  useSessions.setState({ vault: {} });
+  useSessions.setState({ vault: {}, byServer: [] });
   openVaultRequest(null);
 });
 
@@ -62,4 +66,17 @@ it('máquina com erro ou ainda carregando não mostra o aviso', async () => {
   expect(container.querySelector(`button[aria-label="${title('a')}"]`)).toBeNull();
   await render([bucket('a', { loaded: false })]);
   expect(container.querySelector(`button[aria-label="${title('a')}"]`)).toBeNull();
+});
+
+it('no chat da sessão que pediu, a faixa abre aquele pedido; em outra sessão, nada', async () => {
+  useSessions.setState({ byServer: [bucket('a')] });
+  const banner = m.vault_app_session_approve({ entry: 'github' });
+  await act(async () => { root.render(<SessionVaultRequests serverId="a" name="outra" />); });
+  expect(container.querySelector(`button[aria-label="${banner}"]`)).toBeNull();
+
+  await act(async () => { root.render(<><SessionVaultRequests serverId="a" name="sessao" /><VaultRequestSheet /></>); });
+  await act(async () => { container.querySelector<HTMLElement>(`button[aria-label="${banner}"]`)!.click(); });
+
+  expect(useVaultTarget.getState().target).toEqual({ serverId: 'a', requestId: 'r1' });
+  expect(container.textContent).toContain('gh auth status');
 });

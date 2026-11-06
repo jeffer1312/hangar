@@ -13,6 +13,7 @@ mod image_reveal;
 mod rename_suggestion;
 mod search_conversations;
 mod sleep_hidden;
+mod session_vault;
 mod tour;
 
 use std::time::Instant;
@@ -31,6 +32,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "tour-nativo" => Some(tour::render),
         "cofre-de-senhas" => Some(password_vault::render),
         "relatorio-automatico" => Some(auto_report::render),
+        "pedido-na-sessao" => Some(session_vault::render),
         "login-navegador" => Some(login_browser::render),
         "ocultar-da-lista" => Some(hide_from_list::render),
         "busca-conversas" => Some(search_conversations::render),
