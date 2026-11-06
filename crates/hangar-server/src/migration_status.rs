@@ -431,6 +431,10 @@ pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         Err(code) => (Value::Null, json!(code)),
     };
     if python.is_object() {
+        let env = st.accounts.env.clone();
+        let pid = python["processes"]["python"]["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok());
+        let version = tokio::task::spawn_blocking(move || pid.and_then(|pid| crate::boot_version::python_version(&env, pid))).await.ok().flatten();
+        python["version"] = json!(version.map(|version| version.describe).unwrap_or_else(|| "indisponivel".into()));
         let (branch, update_branch) = match owned_branch_fields(st.clone()).await {
             Ok(fields) => fields,
             Err(_) => {

@@ -1185,6 +1185,9 @@ pub(crate) async fn pass_any(
     if crate::workspace_routes::matches(req.method(), req.uri().path()) {
         return crate::workspace_routes::public(st, peer, req).await;
     }
+    if crate::diag::version_matches(req.method(), req.uri().path()) {
+        return crate::diag::version_route(st, peer, req).await;
+    }
     let fwd = forward_for(&st, peer, &req);
     pass(&st, req, &fwd).await
 }
