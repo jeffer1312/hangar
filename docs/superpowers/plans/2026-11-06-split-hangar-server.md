@@ -261,13 +261,29 @@ dela, para o módulo do core indicado; o lugar antigo fica com `pub use`.
 | `codec`, `truthy` (definido em `common.rs:126`, exposto como `orchestration::truthy` por `pub use common::*`), `body::parse` com `body_encoding` e `body_numbers` | `orchestration/` | `pycompat` / `http::body` |
 | módulos inteiros `auth`, `config`, `query`, `http_cors`, `http_body_input` | topo | mesmos nomes |
 
-- [ ] **Step 1: Listar as dependências de cada item** e confirmar que, depois da tabela inteira,
+Executado no commit `4ef8e2fcd`, com três ajustes à tabela:
+
+- Arquivos inteiros, sem recortar funções: `orq_conductor/mod.rs` (752 linhas) só dependia de
+  `transcript::{py, pyjson}` e desceu todo como `hangar_core::orq_codec::conductor`; a rota
+  (`orq_conductor/http.rs`) fica no servidor, num `orq_conductor/mod.rs` que re-exporta o feed.
+  `codec`, `body`, `body_encoding` e `body_numbers` desceram inteiros para `orq_codec/`;
+  `py`, `pyjson`, `json_tree` e `json_writer` para `pycompat/`, com `decode_line` e `truthy`.
+- Nos arquivos de compatibilidade com o Python, todo `pub(crate)` virou `pub`: eles serviam o
+  servidor inteiro. `body_encoding` ficou público porque `update/git_engine/system.rs:342` o usa.
+- `auth.rs` e `config.rs` ficam no servidor até a branch `connect-rust` entrar na `main`: ela
+  acrescenta neles código que usa `crate::devices` e `crate::connect` (janela por Task).
+
+- [x] **Step 1: Listar as dependências de cada item** e confirmar que, depois da tabela inteira,
   nenhum aponta para o servidor (`codec` usa `orq_conductor::{load,py_str}` e `transcript::pyjson`,
   que descem juntos; `auth` usa `session_write::json_response`; `config` usa `auth`; `too_large`
   usa `cors`). Varrer `cfg!(test)`/`#[cfg(test)]` (item 5 do contrato).
-- [ ] **Step 2: Commit de corte** com as funções movidas para o core e `pub use` nos lugares antigos.
-- [ ] **Step 3: Commit de movimento** dos cinco módulos inteiros, com re-export no `lib.rs`.
-- [ ] **Step 4: Provas comuns** (quando autorizadas).
+- [x] **Step 2: Commit de corte** com as funções movidas para o core e `pub use` nos lugares antigos.
+- [x] **Step 3: Commit de movimento** dos módulos inteiros (sem `auth` e `config`), com re-export no `lib.rs`.
+- [x] **Step 4: Provas comuns** (quando autorizadas). Feito: `check` do core e do servidor sem
+  aviso nos arquivos tocados; `test -p hangar-core` 7/7; testes internos do servidor 2801 ok e 1
+  falha de tempo sob carga (`session_open::tests::the_terminal_command_stops_a_stuck_reconciliation_at_the_limit`,
+  sozinho 20/20); `it` 3259/3259.
+- [ ] **Step 6: Mover `auth` e `config`** depois do merge da `connect-rust`, com as mesmas provas.
 - [ ] **Step 5: Uso real — verificação manual** login do dono e de convidado (porta 8766) e uma
   chamada que responde erro JSON (ex.: sessão inexistente devolve o `detail` com `code`).
 
