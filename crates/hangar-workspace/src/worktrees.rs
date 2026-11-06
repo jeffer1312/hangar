@@ -1077,6 +1077,15 @@ pub fn allowed_repo(path: &str, roots: &[String]) -> Result<String> {
     })
 }
 
+pub fn allowed_fetch_repo(path: &str, roots: &[String]) -> Result<String> {
+    if worktree_residual::missing_git(Path::new(path))
+        && let Err(error) = allowed_scan_root(path, roots)
+    {
+        return Err(error);
+    }
+    allowed_repo(path, roots)
+}
+
 pub fn allowed_worktree(path: &str, roots: &[String]) -> Result<String> {
     let path = allowed_repo(path, roots)?;
     // Pasta que existe mas não é raiz de repo/worktree daria uma situação inventada.

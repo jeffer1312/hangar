@@ -2664,6 +2664,53 @@ Claude preserva a autenticação original da conta, inclusive assinatura OAuth; 
 O SDK acrescenta contexto interno de ambiente e identificação da conta, descrito na prova dos
 harnesses; não confundir esse overhead com histórico ou instruções do projeto.
 
+## Contexto e fetch de worktrees sem Python (05/11/2026)
+
+O contexto que a lista, o detalhe, a criação e as guardas de exclusão usam é produzido em
+`crates/hangar-server/src/worktree_context.rs`, sem a chamada `/internal/worktrees/context`.
+A ponte antiga fazia o Rust pedir ao Python as sessões, e o `registry.list()` perguntava ao
+Rust novamente. A descoberta local mantém as linhas de orquestração; as raízes vêm da
+configuração efetiva, e contas e conversas são lidas das mesmas fontes. O contexto não usa
+somente a última lista SSE para autorizar remoção.
+
+A projeção de atividade conserva o contrato antigo, separado da política do Arquivo público:
+sem deduplicar SID entre pastas nem excluir conversas internas. Considera `CP_PROJECTS_DIR`,
+aliases de contas aceitos pelo leitor anterior, o perfil omp do servidor, cabeçalhos com bytes
+inválidos substituídos e a data do destino de links de transcript. Não desce por links de
+diretórios Codex. O corte de 30 dias só filtra as pastas candidatas; a atividade continua
+completa. Reserva recente sem usuário não é conversa. As guardas existentes reconferem
+sessões e terminais; a limpeza automática também reconfere atividade antes de excluir.
+
+`POST /api/worktrees/fetch` é atendido por `worktree_fetch.rs`, com o mesmo corpo tipado,
+validação de raízes, `fetch --all --prune`, prazo de 120 s, sanitização e erros anteriores.
+O lote não espera no semáforo das quatro escritas Git: o desktop dispara repositórios em
+paralelo e espera até 150 s por pedido. O tamanho declarado excessivo é recusado antes da
+autenticação, sem consumir tentativas do dono.
+Uma diferença foi aceita explicitamente: usa o executor Rust sem pergunta de login no
+terminal, conservando as credenciais e auxiliares já configurados. Não utiliza o cano de
+supervisão como entrada do Git. Método incorreto, redirecionamento e CORS são resolvidos
+no Rust antes de depender de um handler que já não existe no Python.
+
+Nas portas Python fica somente o repasse autenticado já instalado. O fetch não cai no motor
+legado: sem Rust responde `worktrees_need_rust_server`. Sua resposta não tem o corte de 8 MiB
+da ponte de contas, e a ponte não declara JSON quando o cliente omite `Content-Type`,
+conservando a validação 422. Essa opção é usada somente no fetch; as demais rotas mantêm o
+padrão anterior. Os dois handlers antigos e os testes exclusivos do contexto Python saíram.
+O protocolo interno passa a 101 nos dois lados.
+
+Os helpers `list_folders` e `_worktree_inputs` continuam somente para a lista legada no modo
+`python`; `_contas`, `_head_info` e o redirecionamento também têm consumidores no bastão e nas
+conversas. Não se remove um helper compartilhado para simular que uma responsabilidade saiu.
+`/internal/workspace/context` não pertence a este recorte.
+
+A referência anterior foi executada sobre fontes reais de todos os provedores, em Linux e
+Windows, com seis contextos e casos de fetch em repositórios Git locais descartáveis. Cada
+comparação restaura o estado inicial. Os esperados permanentes e as proteções estão em
+`worktree_context_tests.rs`, `worktree_fetch_tests.rs`, `tests/it/worktree_routes.rs` e
+`tests/worktree_fetch_process.rs`. A primeira prova sem Python e os casos da revisão foram
+observados falhando antes das correções. Resultados de uso real e medições ficam registrados
+com a execução; não se presume ganho de tempo ou memória pela linguagem.
+
 ## Migrar é migrar o caminho inteiro
 
 Medido em 11/10/2026. Contas e cotas passaram ao Rust em 08/10 (`279b303db`), mas a linha de status

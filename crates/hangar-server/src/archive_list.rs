@@ -357,21 +357,60 @@ impl Unread {
 /// As conversas de Pi, omp e Kimi (o índice da busca lê as mesmas) e o que não pôde ser lido.
 pub(crate) fn agent_conversations(env: &crate::accounts::environment::AccountEnvironment, known: KnownCwd) -> (Vec<Other>, Vec<Unread>) {
     let w = Where { home: &env.home, env: &env.base, server_projects: Path::new(""), config_dirs: &[], live: &[] };
+    let sessions = archive::agent_root(&w, AgentProvider::Omp);
+    agent_conversations_with(env, known, Ok((sessions,None)), false)
+}
+
+fn agent_conversations_with(env: &crate::accounts::environment::AccountEnvironment, known: KnownCwd,
+    omp: Result<(PathBuf,Option<String>),String>, replace_bytes: bool) -> (Vec<Other>, Vec<Unread>) {
+    let w = Where { home: &env.home, env: &env.base, server_projects: Path::new(""), config_dirs: &[], live: &[] };
+    let lossy = |path: &Path| Some(worktree_cwd(path));
+    let reader: KnownCwd = if replace_bytes { &lossy } else { known };
     let mut unread = Vec::new();
-    let mut out = pi_conversations(&archive::agent_root(&w, AgentProvider::Pi), "pi", known, &mut unread);
-    out.extend(pi_conversations(&archive::agent_root(&w, AgentProvider::Omp), "omp", known, &mut unread));
-    out.extend(kimi_conversations(&crate::session_open::agents::kimi_home(&env.home, &env.base), &mut unread));
+    let mut out = pi_conversations(&archive::agent_root(&w, AgentProvider::Pi), "pi", reader, &mut unread);
+    match omp {
+        Ok((sessions,warning)) => {
+            if let Some(warning) = warning { unread.push(Unread::new("omp",None,warning)); }
+            out.extend(pi_conversations(&sessions,"omp",reader,&mut unread));
+        }
+        Err(error) => unread.push(Unread::new("omp",None,error)),
+    }
+    out.extend(kimi_conversations(&crate::session_open::agents::kimi_home(&env.home, &env.base), &mut unread, replace_bytes));
     (out, unread)
+}
+
+fn worktree_cwd(path: &Path) -> Option<String> {
+    let file = std::fs::File::open(path).inspect_err(|error| {
+        tracing::warn!(path = %path.display(), kind = ?error.kind(), "worktrees: cabeçalho de conversa ilegível");
+    }).ok()?;
+    std::io::BufReader::new(file).split(b'\n').take(5).map_while(|result| {
+        result.inspect_err(|error| tracing::warn!(path = %path.display(), kind = ?error.kind(), "worktrees: leitura de cabeçalho interrompida")).ok()
+    }).filter_map(|line| crate::transcript::decode_line(&line)).find_map(|value| {
+            let object = crate::orchestration::codec::ValueGuard(value);
+            let value = match object["type"].as_str() {
+                Some("session") => &object["cwd"],
+                Some("session_meta") => &object["payload"]["cwd"],
+                _ => return None,
+            };
+            value.as_str().filter(|cwd| !cwd.is_empty()).map(str::to_owned)
+        })
 }
 
 /// `_codex_conversas`: rollouts de cada conta só na conta dona, sem transferência em andamento.
 /// Erro = catálogo de contas ilegível; rollout ambíguo ou com transferência ilegível sai sozinho.
 pub(crate) fn codex_conversations(env: &crate::accounts::environment::AccountEnvironment, known: KnownCwd) -> Result<(Vec<Other>, Vec<Unread>), String> {
+    codex_conversations_with(env, known, true)
+}
+
+fn codex_conversations_with(env: &crate::accounts::environment::AccountEnvironment, known: KnownCwd,
+    follow_directory_links: bool) -> Result<(Vec<Other>, Vec<Unread>), String> {
     let service = crate::accounts::AccountService::new(env.clone());
     let accounts = service.snapshot(AccountProvider::Codex).map_err(|e| e.code.to_string())?;
     let (mut out, mut unread) = (Vec::new(), Vec::new());
     for account in &accounts {
-        for path in codex_rollouts(&account.home, &mut unread) {
+        let paths = if follow_directory_links { codex_rollouts_with(&account.home, &mut unread, true) }
+            else { codex_rollouts(&account.home, &mut unread) };
+        for path in paths {
             let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
             let sid: String = stem.chars().skip(stem.chars().count().saturating_sub(36)).collect();
             if !UUID.is_match(&sid) { continue; }
@@ -419,7 +458,7 @@ fn pi_conversations(root: &Path, provider: &'static str, known: KnownCwd, unread
 }
 
 /// `_kimi_conversas`: o índice de trás para frente, a entrada mais recente por sessão, só com o wire.
-fn kimi_conversations(kimi_home: &Path, unread: &mut Vec<Unread>) -> Vec<Other> {
+fn kimi_conversations(kimi_home: &Path, unread: &mut Vec<Unread>, replace_bytes: bool) -> Vec<Other> {
     let index = kimi_home.join("session_index.jsonl");
     let raw = match std::fs::read(&index) {
         Ok(raw) => raw,
@@ -428,7 +467,10 @@ fn kimi_conversations(kimi_home: &Path, unread: &mut Vec<Unread>) -> Vec<Other> 
     };
     let mut seen = HashSet::new();
     let mut out = Vec::new();
-    for o in raw.split(|b| *b == b'\n').rev().filter_map(|line| serde_json::from_slice::<Value>(line).ok()) {
+    for value in raw.split(|b| *b == b'\n').rev().filter_map(|line| {
+        if replace_bytes { crate::transcript::decode_line(line) } else { serde_json::from_slice::<Value>(line).ok() }
+    }) {
+        let o = crate::orchestration::codec::ValueGuard(value);
         let (Some(sid), Some(dir)) = (o["sessionId"].as_str().filter(|s| !s.is_empty()), o["sessionDir"].as_str().filter(|s| !s.is_empty())) else { continue };
         if !seen.insert(sid.to_owned()) { continue; }
         let wire = Path::new(dir).join("agents").join("main").join("wire.jsonl");
@@ -441,21 +483,30 @@ fn kimi_conversations(kimi_home: &Path, unread: &mut Vec<Unread>) -> Vec<Other> 
 /// `_codex_rollouts`: `rollout-*.jsonl` em qualquer profundidade de `sessions` e `archived_sessions`,
 /// sem repetir pelo caminho real.
 fn codex_rollouts(home: &Path, unread: &mut Vec<Unread>) -> Vec<PathBuf> {
-    fn walk(dir: &Path, seen: &mut HashSet<PathBuf>, out: &mut Vec<PathBuf>, unread: &mut Vec<Unread>) {
+    codex_rollouts_with(home, unread, false)
+}
+
+fn codex_rollouts_with(home: &Path, unread: &mut Vec<Unread>, follow_directory_links: bool) -> Vec<PathBuf> {
+    fn walk(dir: &Path, seen: &mut HashSet<PathBuf>, out: &mut Vec<PathBuf>, unread: &mut Vec<Unread>, follow_directory_links: bool) {
         let entries = match std::fs::read_dir(dir) {
             Ok(entries) => entries,
             Err(e) => return Unread::io("codex", Some(dir), dir, &e, unread),
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() { walk(&path, seen, out, unread); continue; }
+            if path.is_dir() {
+                if follow_directory_links || entry.file_type().is_ok_and(|kind| !kind.is_symlink()) {
+                    walk(&path, seen, out, unread, follow_directory_links);
+                }
+                continue;
+            }
             let name = entry.file_name().to_string_lossy().into_owned();
             if !(name.starts_with("rollout-") && name.ends_with(".jsonl")) { continue; }
             if let Ok(canonical) = path.canonicalize() && seen.insert(canonical) { out.push(path); }
         }
     }
     let (mut seen, mut out) = (HashSet::new(), Vec::new());
-    for root in [home.join("sessions"), home.join("archived_sessions")] { walk(&root, &mut seen, &mut out, unread); }
+    for root in [home.join("sessions"), home.join("archived_sessions")] { walk(&root, &mut seen, &mut out, unread, follow_directory_links); }
     out
 }
 
@@ -472,6 +523,50 @@ pub(crate) fn closed_names(claude_base: &Path) -> HashMap<String, String> {
         return HashMap::new();
     };
     map.into_iter().filter_map(|(k, v)| Some((k, v.get("name")?.as_str()?.to_owned()))).collect()
+}
+
+pub(crate) fn worktree_activities(st: &AppState, bases: &[PathBuf], now: f64) -> Vec<(String, f64)> {
+    let mut folders: Vec<(String, Option<String>, f64)> = Vec::new();
+    let mut merge = |project: String, cwd: Option<String>, mtime: f64| {
+        match folders.iter_mut().find(|folder| folder.0 == project) {
+            Some(folder) if mtime > folder.2 => { folder.2 = mtime; folder.1 = cwd.or_else(|| folder.1.take()); }
+            Some(_) => {}
+            None => folders.push((project, cwd, mtime)),
+        }
+    };
+    for base in bases {
+        let Ok(projects) = std::fs::read_dir(base) else { continue };
+        for project in projects.flatten().filter(|entry| entry.path().is_dir()) {
+            let Ok(files) = std::fs::read_dir(project.path()) else { continue };
+            let mut files = files.flatten().filter_map(|entry| {
+                let name = entry.file_name();
+                if !hangar_workspace::worktrees::is_conversation_file(&name.to_string_lossy()) { return None; }
+                let md = std::fs::metadata(entry.path()).ok()?;
+                let mtime = py_mtime(&md);
+                if now - mtime <= RESERVE_WINDOW && !has_user_line(&entry.path()) { return None; }
+                Some((mtime, entry.path()))
+            }).collect::<Vec<_>>();
+            files.sort_by(|a, b| b.0.total_cmp(&a.0));
+            if let Some((mtime, path)) = files.first() {
+                merge(project.file_name().to_string_lossy().into_owned(), read_head(path).cwd, *mtime);
+            }
+        }
+    }
+    let env = &st.accounts.env;
+    let omp = crate::omp_sync::agent_directory(&env.home,&env.base,false)
+        .map(|(agent,warning)|(agent.join("sessions"),warning));
+    let (mut others, mut unread) = agent_conversations_with(env, &|_| None, omp, true);
+    let known = |path: &Path| Some(worktree_cwd(path));
+    match codex_conversations_with(env, &known, false) {
+        Ok((codex, failures)) => { others.extend(codex); unread.extend(failures); }
+        Err(error) => unread.push(Unread::new("codex", None, error)),
+    }
+    st.search.failing("arquivo.conversa_ilegivel", unread.into_iter().map(|failure| (failure.key(), failure.error)).collect());
+    for other in others {
+        if let Some(project) = project_of(other.cwd.as_deref()) { merge(project, other.cwd, other.mtime); }
+    }
+    folders.sort_by(|a, b| b.2.total_cmp(&a.2));
+    folders.into_iter().filter_map(|(_, cwd, mtime)| cwd.filter(|cwd| !cwd.is_empty()).map(|cwd| (cwd, mtime))).collect()
 }
 
 /// `_head_info`: as primeiras linhas pelo mesmo leitor do índice, até achar prévia e cwd.
@@ -681,6 +776,24 @@ mod tests {
         ] {
             assert_eq!(crate::search::cut(&text), want, "{text:?}");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worktree_rollouts_do_not_recurse_through_directory_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = dir.path().join("sessions");
+        let archived = dir.path().join("archived_sessions");
+        std::fs::create_dir(&sessions).unwrap();
+        std::fs::create_dir(&archived).unwrap();
+        let name = "rollout-2026-08-30T20-47-12-01a05511-e980-71b3-93a9-befda5704b20.jsonl";
+        let target = archived.join(name);
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/search/home/.codex/sessions/2026/08/30").join(name);
+        std::fs::copy(source,&target).unwrap();
+        std::os::unix::fs::symlink(&archived,sessions.join("linked")).unwrap();
+        let mut unread = Vec::new();
+        assert_eq!(codex_rollouts(dir.path(),&mut unread),vec![target]);
+        assert!(unread.is_empty());
     }
 
     #[test]

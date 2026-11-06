@@ -624,7 +624,7 @@ impl AccountService {
 
 /// A varredura só ordena a lista por recência: um minuto de atraso na ordem não aparece, a
 /// varredura inteira a cada busca de conta sim. O Python guarda o mesmo minuto.
-fn projects_mtime(path: &Path) -> std::time::SystemTime {
+pub(crate) fn projects_mtime(path: &Path) -> std::time::SystemTime {
     use std::{
         collections::HashMap,
         sync::{LazyLock, Mutex},

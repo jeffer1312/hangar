@@ -318,7 +318,8 @@ NEED_RUST = erro("accounts_need_rust_server", "contas e cotas precisam do servid
 
 
 async def forward_public(request, target: str = "/__hangar_server/accounts/public", *,
-                         keep: tuple[str, ...] = (), limit: int = 8 * 1024 * 1024):
+                         keep: tuple[str, ...] = (), limit: int = 8 * 1024 * 1024,
+                         default_json_content_type: bool = True):
     """Leva ao Rust o pedido de conta que entrou pelas portas do Python, já autenticado, e devolve
     a resposta dele como veio. Em pending, sem transporte, recusa: nunca abre um segundo
     escritor. Quem chama já respondeu NEED_RUST no modo python. `keep` são os cabeçalhos da
@@ -330,11 +331,12 @@ async def forward_public(request, target: str = "/__hangar_server/accounts/publi
         return JSONResponse({"detail": {"code": "account_bridge_unavailable"}}, status_code=503)
     body = await request.body()
     query = request.url.query
+    headers = {"x-hangar-internal": config[1], "x-hangar-path": request.url.path}
+    if default_json_content_type or "content-type" in request.headers:
+        headers["content-type"] = request.headers.get("content-type", "application/json")
     forwarded = urllib.request.Request(
         f"http://{config[0]}{target}" + (f"?{query}" if query else ""),
-        data=body or None, method=request.method,
-        headers={"content-type": request.headers.get("content-type", "application/json"),
-                 "x-hangar-internal": config[1], "x-hangar-path": request.url.path})
+        data=body or None, method=request.method, headers=headers)
 
     def send():
         try:

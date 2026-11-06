@@ -103,12 +103,14 @@ pub mod voice;
 pub mod plans;
 mod forwarded;
 pub mod worktree_routes;
+mod worktree_context;
+mod worktree_fetch;
 pub mod worktree_policy;
 mod warn_limit;
 
 /// Versão do contrato com o Python (rotas `/internal`, canal privado do estado, ambiente). O
 /// Python (`RUST_SERVER_PROTOCOL`) recusa um binário de outra versão e atende sozinho.
-pub const INTERNAL_PROTOCOL: u32 = 100;
+pub const INTERNAL_PROTOCOL: u32 = 101;
 
 /// Todo cliente HTTP do servidor nasce aqui. Uma dependência liga `gzip`, `http2` e (no Windows)
 /// `native-tls` no reqwest, e o Cargo estende isso a todo cliente: sem estes desligamentos ele

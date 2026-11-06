@@ -253,7 +253,7 @@ const PROBES: &[(&str, &str)] = &[
     ("GET", "/api/sessions/x/term"), ("POST", "/api/sessions/x/keys"),
     ("GET", "/api/sessions/x/git/log"), ("GET", "/api/sessions/x/files/list"), ("POST", "/api/sessions/x/git/commit"),
     ("POST", "/api/sessions/x/files/write"), ("GET", "/api/fs/roots"),
-    ("GET", "/api/worktrees"), ("GET", "/api/worktrees/detail"), ("GET", "/api/worktrees/settings"), ("PUT", "/api/worktrees/settings"), ("POST", "/api/worktrees/delete-merged"), ("POST", "/api/worktrees/create"), ("POST", "/api/worktrees/delete"),
+    ("GET", "/api/worktrees"), ("GET", "/api/worktrees/detail"), ("GET", "/api/worktrees/settings"), ("PUT", "/api/worktrees/settings"), ("POST", "/api/worktrees/delete-merged"), ("POST", "/api/worktrees/create"), ("POST", "/api/worktrees/delete"), ("POST", "/api/worktrees/fetch"),
     ("GET", "/api/costs"), ("GET", "/api/uso"), ("GET", "/api/cotacao"), ("GET", "/api/sessions/x/cost"),
     ("GET", "/api/cotas"), ("GET", "/api/sessions/x/limits"),
     ("GET", "/api/codex-contas"), ("POST", "/api/sessions/x/codex-permissions"),

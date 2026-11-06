@@ -21,6 +21,7 @@ pub struct Fixture {
     pub hits: Arc<AtomicUsize>,
     /// Corpos recebidos em `/internal/diag`.
     pub diags: Diags,
+    pub workspace_slots: Arc<tokio::sync::Semaphore>,
     _home: Option<tempfile::TempDir>,
 }
 
@@ -53,7 +54,6 @@ pub async fn fixture_with_mux(root: &std::path::Path, context_ok: bool, home: Op
     let hits = Arc::new(AtomicUsize::new(0));
     let diags: Diags = Arc::default();
     let context = json!({"roots":[root],"sessions":[{"name":"fixture","cwd":root}],"session":{"name":"fixture","cwd":root,"jsonl":root.join("fixture.jsonl"),"git_cwd":root}});
-    let worktrees = json!({"roots":[root],"cwds":[root.join("repo")],"sessions":[{"name":"fixture","cwd":root.join("repo-wt")}],"project_bases":[]});
     let app = Router::new()
         .route(
             "/internal/workspace/context",
@@ -72,20 +72,6 @@ pub async fn fixture_with_mux(root: &std::path::Path, context_ok: bool, home: Op
                     }
                 },
             ),
-        )
-        .route(
-            "/internal/worktrees/context",
-            get(move || {
-                let worktrees = worktrees.clone();
-                async move {
-                    let status = if context_ok { 200 } else { 500 };
-                    (
-                        axum::http::StatusCode::from_u16(status).unwrap(),
-                        [(axum::http::header::CONTENT_TYPE, "application/json")],
-                        worktrees.to_string(),
-                    )
-                }
-            }),
         )
         .route(
             "/internal/diag",
@@ -115,26 +101,39 @@ pub async fn fixture_with_mux(root: &std::path::Path, context_ok: bool, home: Op
     let home=home.unwrap_or_else(||isolated_home.as_ref().unwrap().path());
     let mut state=hangar_server::routes::AppState::new(config(upstream,"127.0.0.1"));
     state.origins_home=home.into();
+    state.accounts=hangar_server::accounts::AccountService::new(
+        hangar_server::accounts::environment::AccountEnvironment::from_map([
+            ("HOME".into(),home.to_string_lossy().into_owned()),
+            ("USERPROFILE".into(),home.to_string_lossy().into_owned()),
+            ("CLAUDE_CONFIG_DIR".into(),home.join(".claude").to_string_lossy().into_owned()),
+            ("CP_SCAN_ROOTS".into(),root.to_string_lossy().into_owned()),
+        ].into()));
     let mut env=hangar_server::list::bridge::ListEnv::from_env();
+    env.dirs=hangar_server::list::bridge::parse_dirs(&json!({
+        "home":home,"claude":home.join(".claude"),"codex_home":home.join(".codex"),
+        "pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),
+        "omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")
+    }).to_string());
     // Inventário vazio conhecido; a prova não depende do multiplexador instalado na máquina.
     #[cfg(unix)]
     let default_mux={
         let script=home.join("fixture-mux");
         use std::os::unix::fs::PermissionsExt;
-        std::fs::write(&script,b"#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::write(&script,format!("#!/bin/sh\n[ \"$1\" = list-panes ] || exit 0\nprintf 'fixture\\t1\\t\\t{}\\t%%1\\t\\t\\t\\t0\\t0\\n'\n",root.join("repo-wt").display())).unwrap();
         std::fs::set_permissions(&script,std::fs::Permissions::from_mode(0o755)).unwrap();
         script
     };
     #[cfg(windows)]
     let default_mux={
         let script=home.join("fixture-mux.cmd");
-        std::fs::write(&script,b"@echo off\r\nexit /b 0\r\n").unwrap();
+        std::fs::write(&script,format!("@echo off\r\nif not \"%~1\"==\"list-panes\" exit /b 0\r\necho fixture\t1\t\t{}\t%%1\t\t\t\t0\t0\r\n",root.join("repo-wt").display())).unwrap();
         script
     };
     env.mux=hangar_server::list::mux::Mux::with_program(mux.unwrap_or(&default_mux),std::time::Duration::from_secs(5));
     state.list=Arc::new(hangar_server::list::bridge::ListBridge::new(env,hangar_server::list::facts::FactsClient::new(upstream,SECRET.into())));
+    let workspace_slots=state.workspace_slots.clone();
     let addr=crate::fake::spawn_state(state).await;
-    Fixture { addr, hits, diags,_home:isolated_home }
+    Fixture { addr, hits, diags,workspace_slots,_home:isolated_home }
 }
 
 /// Corpo do 503 de Git/arquivos: mesmo formato das outras rotas do Rust, com o motivo em `params`.
