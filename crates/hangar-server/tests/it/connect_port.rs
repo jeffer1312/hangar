@@ -106,6 +106,28 @@ async fn mcp_is_refused_through_connect() {
     assert!(refused.text().await.unwrap().contains("so na maquina do backend"));
 }
 
+/// A camada apaga o `X-Forwarded-For` que esta guarda lê; quem recusa aqui é a entrada, não o cabeçalho.
+#[tokio::test]
+async fn device_install_is_refused_through_connect() {
+    let (python, main, connect) = server("127.0.0.1").await;
+    let path = "/api/device-install/progress";
+    assert_eq!(get(main, path).bearer_auth(OWNER).send().await.unwrap().status(), 404, "na porta principal passa da guarda");
+    let plain = format!("cp_token={OWNER}");
+    let host = format!("__Host-cp_token={OWNER}");
+    for request in [
+        get(connect, path).bearer_auth(OWNER),
+        get(connect, path).header("cookie", plain),
+        get(connect, path).header("cookie", host),
+        client().post(format!("http://{connect}/api/device-install/start")).bearer_auth(OWNER).body(r#"{"password":"segredo"}"#),
+    ] {
+        let refused = request.send().await.unwrap();
+        assert_eq!(refused.status(), 403);
+        let body = refused.text().await.unwrap();
+        assert!(body.contains("device_install_forbidden") && !body.contains("segredo"), "{body}");
+    }
+    assert_eq!(python.hits_to(path), 0);
+}
+
 #[derive(Clone, Default)]
 struct Log(Arc<Mutex<Vec<u8>>>);
 

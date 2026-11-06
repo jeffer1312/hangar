@@ -1016,6 +1016,11 @@ pub(crate) fn on_guest_port(req: &Request) -> bool {
 
 pub(crate) use hangar_core::http::{cors, gzip_with_minimum, maybe_gzip, not_found};
 
+/// Chegou pela entrada do Connect: o `ConnectConn` só existe nesse listener.
+pub(crate) fn on_connect_port(req: &Request) -> bool {
+    req.extensions().get::<ConnectInfo<crate::connect::gate::ConnectConn>>().is_some()
+}
+
 
 pub(crate) async fn pass(st: &AppState, mut req: Request, fwd: &Forward) -> Response {
     // Pedido da ponte do Codex com terminal nunca volta ao Python: ele trata o que o Rust não atende.
