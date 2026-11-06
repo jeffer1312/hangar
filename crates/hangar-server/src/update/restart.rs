@@ -73,7 +73,8 @@ impl SystemRestarter {
                 // O PowerShell fecha a string em qualquer aspa simples tipográfica também.
                 let quote = |p: &Path| p.display().to_string().chars()
                     .flat_map(|c| if matches!(c, '\'' | '‘' | '’' | '‚' | '‛') { vec![c, c] } else { vec![c] }).collect::<String>();
-                format!("powershell -NoProfile -ExecutionPolicy Bypass -Command \". '{}'; Restart-HangarTasks '{}' {} {}\"",
+                // `-Command` sai 0 mesmo com erro terminal no script: sem o `exit 1`, reinício abortado vira sucesso.
+                format!("powershell -NoProfile -ExecutionPolicy Bypass -Command \"try {{ . '{}'; Restart-HangarTasks '{}' {} {} }} catch {{ Write-Output $_.Exception.Message; exit 1 }}\"",
                     quote(&root.join("scripts").join("windows-tasks.ps1")), quote(&root), self.port, front_port(&self.home, &root)?)
             }
         }))
@@ -188,7 +189,7 @@ mod tests {
         restarter(Topology::Windows, runner.clone(), dir.path()).restart().await.unwrap();
         let helper = root.join("scripts").join("windows-tasks.ps1");
         assert_eq!(runner.ran.lock().unwrap().as_slice(), [format!(
-            "powershell -NoProfile -ExecutionPolicy Bypass -Command \". '{}'; Restart-HangarTasks '{}' 8765 5173\"",
+            "powershell -NoProfile -ExecutionPolicy Bypass -Command \"try {{ . '{}'; Restart-HangarTasks '{}' 8765 5173 }} catch {{ Write-Output $_.Exception.Message; exit 1 }}\"",
             helper.display(), root.display())]);
     }
 

@@ -166,13 +166,17 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [swit
         foreach ($candidate in $candidates) {
             $process = Get-Process -Id $candidate.ProcessId -ErrorAction SilentlyContinue
             if (-not $process) { continue }
-            # WMI e GetProcessTimes devolvem o nascimento com precisoes diferentes.
-            if (-not $candidate.CreationDate -or
-                [Math]::Abs(($process.StartTime.ToUniversalTime() - $candidate.CreationDate.ToUniversalTime()).Ticks) -ge [TimeSpan]::TicksPerMillisecond) {
-                throw "Identidade do processo $($candidate.ProcessId) mudou; parada cancelada"
-            }
-            # Nao encerra a arvore: psmux e o atualizador precisam sobreviver ao backend.
-            Stop-Process -InputObject $process -Force -ErrorAction Stop
+            # O hangar-server sai sozinho quando o Python dele morre: pode sumir entre a leitura e a parada,
+            # e o erro do processo que ja saiu nao pode cancelar o inicio.
+            try {
+                # WMI e GetProcessTimes devolvem o nascimento com precisoes diferentes.
+                if (-not $candidate.CreationDate -or
+                    [Math]::Abs(($process.StartTime.ToUniversalTime() - $candidate.CreationDate.ToUniversalTime()).Ticks) -ge [TimeSpan]::TicksPerMillisecond) {
+                    throw "Identidade do processo $($candidate.ProcessId) mudou; parada cancelada"
+                }
+                # Nao encerra a arvore: psmux e o atualizador precisam sobreviver ao backend.
+                Stop-Process -InputObject $process -Force -ErrorAction Stop
+            } catch { if (-not $process.HasExited) { throw } }
             if (-not $process.WaitForExit(5000)) { throw "Processo $($candidate.ProcessId) nao encerrou" }
         }
         foreach ($attempt in 1..50) {

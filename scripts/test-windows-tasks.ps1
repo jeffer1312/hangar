@@ -52,6 +52,7 @@ function Reset-State {
     $script:migrated = $true
     $script:tableReads = 0
     $script:stopFails = $false
+    $script:exitsBeforeStop = $null
     $script:tableFails = $false
     $script:processRows = $rows
     $script:lastRun = $old
@@ -82,6 +83,13 @@ function Test-HangarHealth { param($port) return $script:healthy }
 function Get-Process { param($Id, $ErrorAction) return $script:live[[int]$Id] }
 function Stop-Process { param($InputObject, [switch]$Force, $ErrorAction)
     if ($script:stopFails) { throw 'Acesso negado' }
+    if ($script:exitsBeforeStop -eq $InputObject.Id) {
+        $script:live.Remove([int]$InputObject.Id)
+        if ($script:owner -eq $InputObject.Id) { $script:owner = $null }
+        if (-not $script:live.Count -and -not $script:stuckLauncher) { $script:task.State = 'Ready' }
+        $InputObject | Add-Member -NotePropertyName HasExited -NotePropertyValue $true -Force
+        throw [InvalidOperationException]'Process has exited, so the requested information is not available.'
+    }
     $script:events += "stop:$($InputObject.Id)"
     $script:live.Remove([int]$InputObject.Id)
     if ($script:owner -eq $InputObject.Id) { $script:owner = $null }
@@ -133,6 +141,11 @@ try {
     $failed = $null
     try { Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' } catch { $failed = "$_" }
     Assert ($failed -match 'nao iniciou') "Inicio que nunca deixou processo passou por reiniciado: $failed"
+    # O hangar-server sai sozinho com o Python dele: sumir antes da parada nao pode cancelar o inicio.
+    Reset-State
+    $script:exitsBeforeStop = 11
+    Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' | Out-Null
+    Assert ('start' -in $script:events) "Processo que saiu antes da parada cancelou o inicio: $($script:events -join ',')"
     # Lista de portas vazia com o servidor de pe: a saude do hangar-server prova a subida.
     Reset-State
     $script:phantomStarts = 99
