@@ -8,8 +8,8 @@ const fn pcm_limit(seconds: u64) -> usize { 16_000 * 2 * seconds as usize }
 const SILENCE: Duration = Duration::from_secs(2);
 const COUNTDOWN: Duration = Duration::from_secs(3);
 const PILL_BARS: usize = 12;
-const PILL_WIDTH: f32 = 72.;
-const PILL_HEIGHT: f32 = 28.;
+pub(crate) const PILL_WIDTH: f32 = 72.;
+pub(crate) const PILL_HEIGHT: f32 = 28.;
 const PILL_GAP: f32 = 8.;
 const PILL_BAR_MIN: f32 = 4.;
 const PILL_BAR_MAX: f32 = 16.;
@@ -21,6 +21,26 @@ fn pill_heights(bars: &std::collections::VecDeque<f32>) -> [f32; PILL_BARS] {
         let level = bars.iter().rev().nth(from_center).copied().unwrap_or(0.);
         PILL_BAR_MIN + level.clamp(0., 1.) * (PILL_BAR_MAX - PILL_BAR_MIN)
     })
+}
+
+/// A pílula da gravação por dado simples: a janela e a miniatura da novidade (`crate::news`) desenham a mesma.
+pub(crate) fn recording_pill(level: f32, bars: &std::collections::VecDeque<f32>) -> AnyElement {
+    let radius = px(PILL_HEIGHT / 2.);
+    let pill = div().id("dictation-status").role(Role::Status).aria_label(tr("dictation_active")).size_full()
+        .flex().items_center().justify_center().rounded(radius).border_1().border_color(theme::glass_border())
+        .bg(theme::popup_fill(theme::raised())).shadow(theme::popover_shadow())
+        .child(div().id("dictation-level").role(Role::Meter).aria_label(tr("dictation_level"))
+            .aria_min_numeric_value(0.).aria_max_numeric_value(100.).aria_numeric_value((level * 100.) as f64)
+            .flex().items_center().gap(px(2.))
+            .children(pill_heights(bars).map(|height| div().flex_shrink_0().w(px(2.)).h(px(height))
+                .rounded(px(1.)).bg(theme::accent()))));
+    if appearance::get().surface_material == appearance::SurfaceMaterial::Glass { chrome::Glass::new(pill, radius).into_any_element() }
+    else { pill.into_any_element() }
+}
+
+/// O microfone gravando vira parar.
+pub(crate) fn stop_button() -> Button {
+    Button::new("dictation-toggle").ghost().size_7().rounded_md().child(div().size_3().rounded_sm().bg(theme::danger()))
 }
 
 fn organization_warning(value:&Value)->Option<String> {
@@ -1213,19 +1233,7 @@ impl Hangar {
         Some(place.flex().justify_center().child(pill).into_any_element())
     }
 
-    pub(super) fn render_dictation_pill(&self) -> AnyElement {
-        let radius = px(PILL_HEIGHT / 2.);
-        let pill = div().id("dictation-status").role(Role::Status).aria_label(tr("dictation_active")).size_full()
-            .flex().items_center().justify_center().rounded(radius).border_1().border_color(theme::glass_border())
-            .bg(theme::popup_fill(theme::raised())).shadow(theme::popover_shadow())
-            .child(div().id("dictation-level").role(Role::Meter).aria_label(tr("dictation_level"))
-                .aria_min_numeric_value(0.).aria_max_numeric_value(100.).aria_numeric_value((self.dictation.level * 100.) as f64)
-                .flex().items_center().gap(px(2.))
-                .children(pill_heights(&self.dictation.bars).map(|height| div().flex_shrink_0().w(px(2.)).h(px(height))
-                    .rounded(px(1.)).bg(theme::accent()))));
-        if appearance::get().surface_material == appearance::SurfaceMaterial::Glass { chrome::Glass::new(pill, radius).into_any_element() }
-        else { pill.into_any_element() }
-    }
+    pub(super) fn render_dictation_pill(&self) -> AnyElement { recording_pill(self.dictation.level, &self.dictation.bars) }
 
     /// O microfone, a pílula do estilo (ao lado dele, como no web) e a faixa de estado do ditado, só quando há o que mostrar.
     pub(super) fn render_dictation(&self, readable: bool, cx: &mut Context<Self>) -> (Button, Option<AnyElement>, Option<AnyElement>) {
@@ -1237,10 +1245,7 @@ impl Hangar {
         let elsewhere = in_flight && !here;
         let label = tr(if recording { "dictation_stop" } else if transcribing { "dictation_working" }
             else if elsewhere { "dictation_busy_elsewhere" } else { "dictation_start" });
-        let mic = if recording {
-            Button::new("dictation-toggle").ghost().size_7().rounded_md()
-                .child(div().size_3().rounded_sm().bg(theme::danger()))
-        } else { super::composer_mic(label.clone(), cx) };
+        let mic = if recording { stop_button() } else { super::composer_mic(label.clone(), cx) };
         let mic = mic.accessibility_label(label.clone())
             .disabled(in_flight || (!recording && (!readable || !self.dictation_ready(cx))))
             .loading(transcribing)

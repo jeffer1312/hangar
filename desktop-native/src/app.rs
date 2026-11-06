@@ -98,7 +98,7 @@ mod terminal;
 mod sidebar;
 mod machines_tray;
 mod subagent;
-mod dictation;
+pub(crate) mod dictation;
 mod sync;
 mod connect;
 mod devices;

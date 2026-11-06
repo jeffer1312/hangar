@@ -4,6 +4,7 @@ mod account_tags;
 mod auto_report;
 mod codex_activity;
 mod composer_history;
+mod dictation_pill;
 mod login_browser;
 mod no_project;
 mod password_vault;
@@ -36,6 +37,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "revelacao-imagem" => Some(image_reveal::render),
         "adormecer-ocultas" => Some(sleep_hidden::render),
         "sem-projeto" => Some(no_project::render),
+        "pilula-do-ditado" => Some(dictation_pill::render),
         _ => None,
     }
 }
