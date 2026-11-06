@@ -136,7 +136,10 @@ describe('nome de máquina no login', () => {
     const saved = { id: 'saved', baseUrl: 'https://hangar.tail0000.ts.net', token: 'old-token', label: 'casa' };
     boundary.vault.set('cp_servers_v1', JSON.stringify({ servers: [other, saved], activeId: other.id }));
     await useServers.getState().load();
-    boundary.sessions.mockRejectedValue(new TypeError('Network request failed'));
+    // O erro de rede só vale como "sem resposta" passando pelo caminho real até o `fetch`.
+    const { getSessions } = await vi.importActual<typeof import('@hangar/core')>('@hangar/core');
+    boundary.sessions.mockImplementation(getSessions);
+    boundary.fetch.mockRejectedValue(new TypeError('Network request failed'));
     const el = await mount(Login);
     await click(el, m.login_qr());
     await act(async () => { boundary.scan?.({ data: `${saved.baseUrl}/?token=new-token` }); });
