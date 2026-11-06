@@ -1040,6 +1040,20 @@ describe('recusas e recuperação da lista', () => {
     rel();
   });
 
+  test('outra tela que pede o servidor parado reabre a lista dele', async () => {
+    const attempts = offlineSecondServer({ estado: 'falhou' });
+    const rel = useSessions.getState().retain();
+    await settle();
+    created.find((es) => !es.url.includes('8766'))!.trigger('sessions', '[]');
+    await failSecondServerThreeTimes();
+    const parkedAttempts = attempts();
+    retentarAgora('srv2');
+    await settle();
+    expect(isServerParked('srv2')).toBe(false);
+    expect(attempts()).toBeGreaterThan(parkedAttempts);
+    rel();
+  });
+
   test('sem nenhum servidor respondendo é o túnel do aparelho: ninguém para', async () => {
     offlineSecondServer({ estado: 'falhou' }, false);
     const rel = useSessions.getState().retain();

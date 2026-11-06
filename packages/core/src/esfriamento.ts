@@ -250,6 +250,10 @@ export function registrarSucesso(id: string): void {
   unpark(id);
   if (!estados.delete(id)) return;
   gravar();
+  notifyRecovered(id);
+}
+
+function notifyRecovered(id: string): void {
   for (const listener of [...recoveredListeners]) {
     try { listener(id); } catch (error) {
       registrarDiag({ evento: 'esfriamento.reconexao_falhou', nivel: 'erro',
@@ -261,10 +265,12 @@ export function registrarSucesso(id: string): void {
 /** "Buscar agora": permite tentar de novo por ação da pessoa, sem aguardar uma resposta. */
 export function retentarAgora(id?: string): void {
   carregar();
+  const wasParked = id !== undefined && parked.has(id);
   if (id === undefined) estados.clear();
   else estados.delete(id);
   gravar();
   unpark(id);
+  if (wasParked) notifyRecovered(id);
 }
 
 /** Servidor saiu da lista: some com o estado dele. */

@@ -163,21 +163,30 @@ function scheduleParkedCheck(delay: number, get: () => SessionsState, set: (p: P
   }, delay);
 }
 
-// A pergunta vai a uma máquina ligada: nenhum pacote sai do aparelho para a máquina parada.
+async function witnessSees(witness: Server, parked: Server) {
+  try {
+    const id = parked.lan?.id || parked.remote?.id || parked.id;
+    const { estado } = await checkPeer(witness, parked.baseUrl, id, AbortSignal.timeout(PARKED_CHECK_TIMEOUT_MS));
+    return estado !== 'falhou' && estado !== 'nao_configurado';
+  } catch (error) {
+    registrarDiag({ evento: 'servidor.checagem_falhou', nivel: 'aviso', tela: 'lista', operacao: parked.id,
+      codigo: error instanceof Error ? error.name : 'erro' });
+    return false;
+  }
+}
+
+// A pergunta vai às máquinas ligadas: nenhum pacote sai do aparelho para a máquina parada.
 async function checkParkedServers(get: () => SessionsState, set: (p: Partial<SessionsState>) => void) {
-  const witness = serversCache.find((s) => !s.invite && listAnswering(s.id));
-  if (witness) {
-    await Promise.allSettled(serversCache.filter((s) => isServerParked(s.id)).map(async (s) => {
-      const id = s.lan?.id || s.remote?.id || s.id;
-      const { estado } = await checkPeer(witness, s.baseUrl, id, AbortSignal.timeout(PARKED_CHECK_TIMEOUT_MS));
-      if (estado === 'falhou' || estado === 'nao_configurado' || !isServerParked(s.id)) return;
-      registrarDiag({ evento: 'servidor.voltou', tela: 'lista', operacao: s.id });
-      httpFailures.delete(s.id);
-      httpRetryAt.delete(s.id);
-      retryAt.delete(s.id);
-      retentarAgora(s.id);
-      connect(serversCache, get, set, s.id);
-    }));
+  const witnesses = serversCache.filter((s) => !s.invite && listAnswering(s.id));
+  for (const s of serversCache.filter((server) => isServerParked(server.id))) {
+    for (const witness of witnesses) {
+      if (!await witnessSees(witness, s)) continue;
+      if (isServerParked(s.id)) {
+        registrarDiag({ evento: 'servidor.voltou', tela: 'lista', operacao: s.id });
+        retentarAgora(s.id);
+      }
+      break;
+    }
   }
   scheduleParkedCheck(PARKED_CHECK_MS, get, set);
 }
@@ -643,6 +652,10 @@ function start(get: () => SessionsState, set: (p: Partial<SessionsState>) => voi
     refused.delete(id);
     failures.delete(id);
     retryAt.delete(id);
+    if (machineLooksOff(id)) {
+      httpFailures.delete(id);
+      httpRetryAt.delete(id);
+    }
     clearTimeout(retryTimers.get(id));
     retryTimers.delete(id);
     if (!streams.has(id) && !connecting.has(id)) connect(serversCache, get, set, id);
