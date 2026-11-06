@@ -196,10 +196,11 @@ pub(super) fn groups(entries: Vec<(Target, &SessionInfo)>, ids: &HashMap<String,
         } else { group.members.push(target); }
     }
     for (group, hint) in out.iter_mut().zip(hints) {
+        // Parceiro em máquina que esta barra não mostra: sobra um membro, que é aba solta, sem a pilha estreita do grupo.
+        if group.members.len() < 2 { group.mother = false; group.label = None; continue; }
         if group.label.as_ref().is_some_and(|s| s.is_empty()) {
             group.label = Some(group.members.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", "));
         }
-        if group.members.len() < 2 { group.mother = false; continue; }
         let openers = &hint.openers;
         let at = |t: &Target| group.members.iter().position(|m| m == t);
         // Numa cadeia (A abriu B, B abriu C) a mãe é a do topo: quem abriu e não foi aberta por ninguém do grupo.
@@ -762,6 +763,7 @@ mod tests {
         assert_eq!(grouped[0].members, vec![Target::new("a", "principal"), Target::new("a", "executor")]);
         assert_eq!(grouped[0].label.as_deref(), Some("Plano"));
         assert_eq!(grouped[1].members, vec![Target::new("b", "executor")]);
+        assert_eq!(grouped[1].label, None, "grupo com um membro à vista vira aba solta, na largura padrão");
     }
 
     #[test]

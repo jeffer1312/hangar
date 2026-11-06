@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Pressable, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { answerVaultRequest, type Server, type ServerBucket, type VaultAnswer, type VaultEvent, type VaultPolicy, type VaultRequest } from '@hangar/core';
 import { MachineField, MachineGroup, MachineRow } from '../machines/MachineRows';
@@ -10,6 +10,7 @@ import { VaultApprovalRows } from './VaultApprovalRows';
 import { openVaultRequest, useVaultTarget } from './target';
 import { vaultErrorText } from './errors';
 import { useSessions } from '../../stores/sessions';
+import { useIdentities } from '../pair/identities';
 import { Icon } from '../../ui/Icon';
 import { toast } from '../../ui/Toast';
 import { haptic } from '../../ui/haptics';
@@ -22,33 +23,78 @@ const pending = (requests: VaultRequest[]) => requests.filter((r) => !answered.h
 // Estado de teste montado sem o campo `vault` não derruba a lista.
 const NONE: Record<string, VaultEvent> = {};
 
-/** Aviso por máquina com pedido do cofre aberto, e a folha que responde (a máquina do aviso é a dona). */
-export function VaultRequests({ byServer }: { byServer: ServerBucket[] }) {
+export function RequestNotice({ title, onPress }: { title: string; onPress: () => void }) {
   const { theme } = useUnistyles();
+  return <Pressable accessibilityRole="button" accessibilityLabel={title} accessibilityHint={m.vault_app_requests_open()}
+    onPress={() => { haptic.selection(); onPress(); }}
+    style={({ pressed }) => [styles.notice, { backgroundColor: superficie(theme, 0.6) }, pressed && { opacity: 0.7 }]}>
+    <Icon name="KeyRound" size={18} color={theme.tokens.status.warning} />
+    <View style={styles.noticeText}>
+      <Text style={[styles.title, { color: theme.tokens.text.primary }]}>{title}</Text>
+      <Text style={[styles.hint, { color: theme.tokens.text.muted }]}>{m.vault_app_requests_open()}</Text>
+    </View>
+    <Icon name="ChevronRight" size={17} color={theme.tokens.text.muted} />
+  </Pressable>;
+}
+
+/** Aviso por máquina com pedido do cofre aberto (a máquina do aviso é a dona). */
+export function VaultRequests({ byServer }: { byServer: ServerBucket[] }) {
   const vault = useSessions((s) => s.vault) ?? NONE;
-  const target = useVaultTarget((s) => s.target);
   const live = byServer.filter((b) => !b.error && b.loaded);
   const notices = live.flatMap((b) => {
     const open = pending(vault[b.server.id]?.requests ?? []);
     return open.length ? [{ server: b.server, label: b.label ?? b.server.label, count: open.length }] : [];
   });
-  const sheetBucket = target ? byServer.find((b) => b.server.id === target.serverId) : undefined;
-
   return <>
-    {notices.map(({ server, label, count }) => <Pressable key={server.id} accessibilityRole="button"
-      accessibilityLabel={m.vault_app_requests_title({ label, count })} accessibilityHint={m.vault_app_requests_open()}
-      onPress={() => { haptic.selection(); openVaultRequest({ serverId: server.id, requestId: null }); }}
-      style={({ pressed }) => [styles.notice, { backgroundColor: superficie(theme, 0.6) }, pressed && { opacity: 0.7 }]}>
-      <Icon name="KeyRound" size={18} color={theme.tokens.status.warning} />
-      <View style={styles.noticeText}>
-        <Text style={[styles.title, { color: theme.tokens.text.primary }]}>{m.vault_app_requests_title({ label, count })}</Text>
-        <Text style={[styles.hint, { color: theme.tokens.text.muted }]}>{m.vault_app_requests_open()}</Text>
-      </View>
-      <Icon name="ChevronRight" size={17} color={theme.tokens.text.muted} />
-    </Pressable>)}
-    {target ? <RequestSheet server={sheetBucket?.server ?? null} ready={!!sheetBucket?.loaded && !sheetBucket.error && !!vault[target.serverId]}
-      requests={pending(vault[target.serverId]?.requests ?? [])} requestId={target.requestId} /> : null}
+    {notices.map(({ server, label, count }) => <RequestNotice key={server.id} title={m.vault_app_requests_title({ label, count })}
+      onPress={() => openVaultRequest({ serverId: server.id, requestId: null })} />)}
   </>;
+}
+
+/** Botão de chave com a contagem, para barras sem espaço para o aviso (as três formas da barra do tablet). */
+export function VaultRequestsButton({ style }: { style?: StyleProp<ViewStyle> }) {
+  const { theme } = useUnistyles();
+  const vault = useSessions((s) => s.vault) ?? NONE;
+  const byServer = useSessions((s) => s.byServer) ?? [];
+  const open = byServer.filter((b) => !b.error && b.loaded)
+    .map((b) => ({ server: b.server, label: b.label ?? b.server.label, count: pending(vault[b.server.id]?.requests ?? []).length }))
+    .filter((b) => b.count > 0);
+  if (!open.length) return null;
+  // A folha mostra uma máquina por vez: abre a que mais espera, e o rótulo fala dela.
+  const first = open.reduce((a, b) => (b.count > a.count ? b : a));
+  const count = open.reduce((n, b) => n + b.count, 0);
+  return <Pressable accessibilityRole="button" accessibilityLabel={m.vault_app_requests_title({ label: first.label, count: first.count })}
+    accessibilityHint={m.vault_app_requests_open()} style={[style, styles.button]}
+    onPress={() => { haptic.selection(); openVaultRequest({ serverId: first.server.id, requestId: null }); }}>
+    <Icon name="KeyRound" size={20} color={theme.tokens.status.warning} />
+    <Text style={[styles.hint, { color: theme.tokens.status.warning }]}>{count}</Text>
+  </Pressable>;
+}
+
+/** Pedido feito pela sessão aberta: aparece no chat dela, pela origem `servidor::sessao`. */
+export function SessionVaultRequests({ serverId, name }: { serverId: string; name: string }) {
+  const vault = useSessions((s) => s.vault) ?? NONE;
+  const servers = useSessions((s) => s.servers) ?? [];
+  const id = useIdentities(servers).identities.get(serverId);
+  // Sem o identificador da máquina (ainda lendo ou falhou), vale o nome da sessão: o pedido não pode sumir do chat.
+  const fromHere = (origin: string) => id ? origin === `${id}::${name}` : origin.endsWith(`::${name}`);
+  const mine = Object.entries(vault).flatMap(([owner, event]) => pending(event.requests).filter((r) => fromHere(r.origin)).map((r) => ({ owner, r })));
+  return <>
+    {mine.map(({ owner, r }) => <RequestNotice key={r.id}
+      title={r.kind === 'entry' ? m.vault_app_session_entry({ label: r.label ?? '' }) : m.vault_app_session_approve({ entry: r.entry_name ?? '' })}
+      onPress={() => openVaultRequest({ serverId: owner, requestId: r.id })} />)}
+  </>;
+}
+
+/** A folha que responde, na raiz do app: abre da lista, do chat e do push. */
+export function VaultRequestSheet() {
+  const vault = useSessions((s) => s.vault) ?? NONE;
+  const byServer = useSessions((s) => s.byServer) ?? [];
+  const target = useVaultTarget((s) => s.target);
+  if (!target) return null;
+  const bucket = byServer.find((b) => b.server.id === target.serverId);
+  return <RequestSheet server={bucket?.server ?? null} ready={!!bucket?.loaded && !bucket.error && !!vault[target.serverId]}
+    requests={pending(vault[target.serverId]?.requests ?? [])} requestId={target.requestId} />;
 }
 
 function RequestSheet({ server, ready, requests, requestId }: {
@@ -146,4 +192,5 @@ const styles = StyleSheet.create((theme) => ({
   noticeText: { flex: 1, gap: theme.base.space[0.5] },
   title: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.semibold },
   hint: { fontSize: theme.base.text.xs },
+  button: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[0.5] },
 }));

@@ -1,5 +1,5 @@
 //! Pedidos do cofre de uma máquina dona (evento `vault` da lista dela): aprovar o uso de uma senha por um agente, ou
-//! cadastrar a senha que ele pediu. Um cartão por pedido, ao lado do aviso do chaveiro; a resposta vai à própria dona,
+//! cadastrar a senha que ele pediu. Um cartão por pedido, na conversa da sessão que pediu ou flutuando; a resposta vai à própria dona,
 //! com o `interaction_id` do cartão em que a pessoa agiu. A senha digitada só sai daqui no corpo da resposta.
 use super::*;
 use super::vault::{Policy, vault_failure};
@@ -80,6 +80,11 @@ impl VaultRequests {
     }
 
     pub(super) fn count(&self) -> usize { self.cards.len() }
+
+    /// Os cartões cujo `servidor::sessao` de origem passa em `keep`.
+    fn render_where(&self, keep: &dyn Fn(&str) -> bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        self.cards.iter().filter(|c| keep(&c.request.origin)).map(|card| self.render_card(card, cx)).collect()
+    }
 
     fn answer(&mut self, id: String, decision: Decision, window: &mut Window, cx: &mut Context<Self>) {
         let Some(card) = self.cards.iter_mut().find(|c| c.request.id == id).filter(|c| !c.sending) else { return };
@@ -251,6 +256,8 @@ impl Hangar {
             .or_insert_with(|| cx.new(|_| VaultRequests { api: None, runtime, machine: String::new(), cards: Vec::new() }))
             .clone();
         entity.update(cx, |requests, cx| requests.apply(api, machine, list, window, cx));
+        // Sem o identificador das máquinas, o cartão não acha a sessão que pediu.
+        self.ensure_identities();
         true
     }
 
@@ -262,9 +269,39 @@ impl Hangar {
         }
     }
 
-    /// Os cartões de uma máquina na barra lateral, se houver pedido esperando.
-    pub(super) fn render_vault_requests(&self, key: &str, cx: &App) -> Option<AnyElement> {
-        self.vault.get(key).filter(|e| e.read(cx).count() > 0).map(|e| e.clone().into_any_element())
+    /// `servidor::sessao` da conversa aberta, como o pedido do cofre o escreve; sem o identificador da máquina, nenhum.
+    /// Com o visor de arquivo cobrindo a conversa, nenhum: o pedido dela flutua com os outros.
+    fn vault_origin_here(&self) -> Option<String> {
+        if self.files_expanded() { return None; }
+        let name = &self.selected.as_ref()?.name;
+        match self.identity_slot(&self.open_server())? {
+            super::grouping::IdSlot::Known(id) => Some(format!("{id}::{name}")),
+            _ => None,
+        }
+    }
+
+    /// Cartões que passam em `keep`, de todas as máquinas, a ativa primeiro.
+    fn vault_cards(&self, keep: &dyn Fn(&str) -> bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let active = self.active_key();
+        let mut keys: Vec<&String> = self.vault.keys().collect();
+        keys.sort_by_key(|key| (**key != active, (*key).clone()));
+        keys.into_iter().flat_map(|key| self.vault[key].update(cx, |requests, cx| requests.render_where(keep, cx))).collect()
+    }
+
+    /// Pedido da sessão aberta: dentro da conversa dela, acima da caixa de mensagem.
+    pub(super) fn render_vault_session(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let here = self.vault_origin_here()?;
+        let cards = self.vault_cards(&|origin: &str| origin == here, cx);
+        (!cards.is_empty()).then(|| div().flex_shrink_0().w_full().max_w(px(760.)).mx_auto().flex().flex_col().children(cards).into_any_element())
+    }
+
+    /// Pedido de outra sessão: flutua sobre a conversa, igual em toda forma de navegação.
+    pub(super) fn render_vault_float(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let here = self.vault_origin_here();
+        let cards = self.vault_cards(&|origin: &str| here.as_deref() != Some(origin), cx);
+        if cards.is_empty() { return None; }
+        let cards = div().id("vault-float").max_h(px(520.)).overflow_y_scroll().py_1().flex().flex_col().children(cards);
+        Some(div().absolute().top(px(52.)).right(px(16.)).occlude().child(chrome::popover(cards.into_any_element(), true)).into_any_element())
     }
 
     /// Na barra das abas e no trilho não cabe o cartão: um botão por máquina que abre os cartões num diálogo.
