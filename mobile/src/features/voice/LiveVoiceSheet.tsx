@@ -312,7 +312,7 @@ export function LiveVoiceSheet({ open, view, levels, servers, serverId, onSelect
   // Anuncia o que muda de fato: nem o cronômetro (todo segundo) nem quem fala (a cada sílaba).
   const stalled = inCall && state?.stalled === true;
   const speechPaused = inCall && view.speechPaused === true;
-  const announcement = [stalled ? m.codex_voice_stalled() : '', speechPaused ? m.codex_voice_paused() : '', inCall ? STATUS[liveVoiceStatus(view.phase === 'live', 'idle', muted, state?.activity)]() : idleStatus ??m.live_voice_error_failed(),
+  const announcement = [stalled ? m.codex_voice_stalled() : '', speechPaused ? m.codex_voice_paused() : inCall ? STATUS[liveVoiceStatus(view.phase === 'live', 'idle', muted, state?.activity)]() : idleStatus ??m.live_voice_error_failed(),
     doing ?? '', busy && state.progress !== doing ? state.progress ?? '' : ''].filter(Boolean).join(', ');
   const announced = useRef(announcement);
   useEffect(() => {

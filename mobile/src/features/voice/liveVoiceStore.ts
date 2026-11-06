@@ -7,6 +7,7 @@ import type { LiveVoiceAction, LiveVoiceHandlers, LiveVoiceScreen, LiveVoiceSett
 import { useServers } from '../../stores/servers';
 import * as m from '../../paraglide/messages';
 import { haptic } from '../../ui/haptics';
+import { toast } from '../../ui/Toast';
 import { setLiveVoiceAudioActive, useVoiceAudioState } from './audioSession';
 import type { LiveVoiceCall } from './liveVoice';
 import type { LiveVoiceView } from './LiveVoiceSheet';
@@ -394,7 +395,7 @@ export const useLiveVoice = create<LiveVoiceStore>((set, get) => {
       if (!inCall(get().view)) return;
       const speechPaused = !get().view.speechPaused;
       updateView({ speechPaused });
-      call?.setSpeechPaused(speechPaused);
+      if (call?.setSpeechPaused(speechPaused)) toast.erro(m.codex_voice_speech_lost());
     },
     setMode(mode) { if (inCall(get().view)) call?.setMode(mode); },
     loadSettings(server, force = false) {

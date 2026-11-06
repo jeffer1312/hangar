@@ -16,7 +16,8 @@ declare class LiveVoiceAudioModule extends NativeModule<LiveVoiceAudioEvents> {
   stop(): Promise<void>;
   /** Só no iPhone, e só em binário que traz o dispositivo de áudio próprio. */
   speechPauseAvailable?(): boolean;
-  setSpeechPaused?(paused: boolean): void;
+  /** Ao retomar, `true` diz que parte da fala guardada se perdeu. */
+  setSpeechPaused?(paused: boolean): boolean | void;
 }
 
 export default requireNativeModule<LiveVoiceAudioModule>('LiveVoiceAudio');

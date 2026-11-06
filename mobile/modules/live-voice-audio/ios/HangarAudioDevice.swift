@@ -9,13 +9,16 @@ final class HeldSpeech {
   private static let capacity = 48_000 * 600
   // Abaixo disto é silêncio: guardá-lo deixaria a voz atrasada para sempre, porque o WebRTC entrega silêncio sem parar.
   private static let silence: Int16 = 8
+  // Silêncio logo depois da fala é o respiro entre as frases, e fica guardado até este limite.
+  private static let breath = 19_200
 
   private let samples = UnsafeMutablePointer<Int16>.allocate(capacity: HeldSpeech.capacity)
-  private let flags = UnsafeMutablePointer<Int32>.allocate(capacity: 2)
+  private let flags = UnsafeMutablePointer<Int32>.allocate(capacity: 3)
   private var start = 0
   private var count = 0
+  private var quiet = HeldSpeech.breath
 
-  init() { flags.initialize(repeating: 0, count: 2) }
+  init() { flags.initialize(repeating: 0, count: 3) }
 
   deinit {
     samples.deallocate()
@@ -27,19 +30,28 @@ final class HeldSpeech {
   func reset() {
     flags[0] = 0
     flags[1] = 1
+    flags[2] = 0
   }
 
   /// A taxa do áudio mudou: o que está guardado tocaria na velocidade errada.
-  func discard() { flags[1] = 1 }
+  func discard() { flags[1] = 2 }
+
+  /// Diz uma vez só se parte da fala guardada se perdeu.
+  func takeLost() -> Bool {
+    defer { flags[2] = 0 }
+    return flags[2] != 0
+  }
 
   func process(_ out: UnsafeMutablePointer<Int16>, _ frames: Int) {
     if flags[1] != 0 {
+      if flags[1] == 2 && count > 0 { flags[2] = 1 }
       flags[1] = 0
-      (start, count) = (0, 0)
+      (start, count, quiet) = (0, 0, HeldSpeech.breath)
     }
     let paused = flags[0] != 0
     if !paused && count == 0 { return }
-    if !isSilent(out, frames) { write(out, frames) }
+    quiet = isSilent(out, frames) ? quiet + frames : 0
+    if quiet < HeldSpeech.breath { write(out, frames) }
     if paused {
       out.update(repeating: 0, count: frames)
       return
@@ -54,6 +66,7 @@ final class HeldSpeech {
 
   private func write(_ out: UnsafeMutablePointer<Int16>, _ frames: Int) {
     let room = min(frames, HeldSpeech.capacity - count)
+    if room < frames { flags[2] = 1 }
     for index in 0..<room { samples[(start + count + index) % HeldSpeech.capacity] = out[index] }
     count += room
   }
@@ -64,6 +77,8 @@ final class HeldSpeech {
     if taken < frames { (out + taken).update(repeating: 0, count: frames - taken) }
     start = (start + taken) % HeldSpeech.capacity
     count -= taken
+    // Volta ao começo para o anel não passear pelo buffer e deixar páginas ocupadas.
+    if count == 0 { start = 0 }
   }
 }
 
@@ -74,6 +89,7 @@ final class HangarAudioDevice: NSObject {
 
   let held = HeldSpeech()
   private(set) var installed = false
+  var onAudioLost: (() -> Void)?
 
   private let session = AVAudioSession.sharedInstance()
   private var audioUnit: AUAudioUnit?
@@ -102,7 +118,8 @@ final class HangarAudioDevice: NSObject {
       let unit = try AUAudioUnit(componentDescription: description)
       unit.isInputEnabled = false
       unit.isOutputEnabled = false
-      unit.maximumFramesToRender = 1024
+      // Com a tela bloqueada o iOS pede fatias de até 4096 quadros; menos que isso falha a renderização.
+      unit.maximumFramesToRender = 4096
       return unit
     } catch {
       NSLog("LiveVoiceAudio: falha ao criar o áudio: %@", error.localizedDescription)
@@ -185,6 +202,11 @@ final class HangarAudioDevice: NSObject {
       return false
     }
   }
+
+  /// Sem ninguém esperando o retorno: unidade que não volta deixaria a chamada viva e muda.
+  private func restartUnit() {
+    if !updateUnit() { onAudioLost?() }
+  }
 }
 
 extension HangarAudioDevice: RTCAudioDevice {
@@ -204,7 +226,7 @@ extension HangarAudioDevice: RTCAudioDevice {
     self.delegate = delegate
     let center = NotificationCenter.default
     routeObserver = center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: nil) { [weak self] _ in
-      self?.delegate?.dispatchAsync { self?.updateUnit() }
+      self?.delegate?.dispatchAsync { self?.restartUnit() }
     }
     // A unidade nasce uma vez por processo: morta pelo reset do áudio, as chamadas seguintes ficariam mudas.
     resetObserver = center.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: nil) { [weak self] _ in
@@ -212,7 +234,7 @@ extension HangarAudioDevice: RTCAudioDevice {
         guard let self else { return }
         if let old = self.audioUnit { self.stopUnit(old) }
         self.audioUnit = self.makeUnit()
-        self.updateUnit()
+        self.restartUnit()
       }
     }
     return true

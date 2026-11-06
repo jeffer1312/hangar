@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { LiveVoiceRequestError } from '@hangar/core';
 import type { LiveVoiceHandlers, LiveVoiceSettingsReply, LiveVoiceState, Server, VoiceMemory } from '@hangar/core';
 import * as m from '../../paraglide/messages';
+import { toast } from '../../ui/Toast';
 
 const api = vi.hoisted(() => ({ settings: vi.fn(), save: vi.fn(), memory: vi.fn(), forget: vi.fn(), accounts: vi.fn(), models: vi.fn(), peers: vi.fn(), diag: vi.fn() }));
 vi.mock('@hangar/core', async importOriginal => ({
@@ -712,6 +713,16 @@ describe('configuração e memória do servidor capturado', () => {
     await useLiveVoice.getState().stop();
     await startA();
     expect(useLiveVoice.getState().view.speechPaused).toBe(false);
+  });
+
+  test('retomar avisa quando parte da fala guardada se perdeu', async () => {
+    const erro = vi.spyOn(toast, 'erro');
+    const instance = await startA() as Instance & { setSpeechPaused: ReturnType<typeof vi.fn> };
+    useLiveVoice.getState().toggleSpeechPause();
+    expect(erro).not.toHaveBeenCalled();
+    instance.setSpeechPaused.mockReturnValueOnce(true);
+    useLiveVoice.getState().toggleSpeechPause();
+    expect(erro).toHaveBeenCalledOnce();
   });
 
   test('vibra uma vez por travamento, não a cada retrato igual', async () => {

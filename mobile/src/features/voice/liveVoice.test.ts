@@ -804,6 +804,17 @@ describe('LiveVoiceCall público', () => {
     expect(handlers.failed).not.toHaveBeenCalled();
   });
 
+  it('pausa longa da fala não derruba a chamada pelo medidor, nem durante nem ao retomar', async () => {
+    const { call, pc, handlers } = await openCall();
+    pc.getStats.mockRejectedValue(new Error('unavailable-while-paused'));
+    pc.connect(); call.setSpeechPaused(true);
+    await vi.advanceTimersByTimeAsync(11000);
+    pc.getStats.mockResolvedValue(new Map());
+    call.setSpeechPaused(false);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(handlers.failed).not.toHaveBeenCalled();
+  });
+
   it('getStats rejeitado mostra causa estável sem vazar IDs do diagnóstico nativo', async () => {
     const { pc, handlers } = await openCall();
     pc.getStats.mockRejectedValue(new Error('track-secret-native-id'));

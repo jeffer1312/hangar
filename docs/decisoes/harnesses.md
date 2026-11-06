@@ -938,7 +938,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   `react-native-webrtc` toca o áudio dentro do motor nativo, sem entrega ao JS, e `track.enabled =
   false` perde o conteúdo. No iPhone, `HangarAudioDevice` substitui o áudio do WebRTC
   (`RTCAudioDevice`, com VoiceProcessingIO) e guarda a fala em `HeldSpeech`; o WebRTC entrega silêncio
-  sem parar, então só o que passa do limiar é guardado. O botão só aparece com
+  sem parar, então só o que passa do limiar é guardado, mais o respiro curto depois da fala. Troca de
+  taxa com a pausa aberta (fone Bluetooth) e estouro do teto perdem fala: o Retomar avisa na tela. Unidade de áudio
+  que não volta numa troca de rota vira `audio_interrupted`, nunca chamada muda. O botão só aparece com
   `speechPauseAvailable`. O Android continua sem pausa: precisa de módulo de áudio próprio. O Codex recebe o áudio também pelo canal lateral
   (`session.output_audio.delta`), mas o ignora e não o repassa ao app-server.
 - **Voz: fala nova não cancela a resposta, e turno sem resposta nunca fica calado.** Com

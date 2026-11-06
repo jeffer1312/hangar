@@ -184,6 +184,7 @@
   "codex_voice_pause_short": "Pause speech",
   "codex_voice_resume_short": "Resume speech",
   "codex_voice_paused": "Speech paused, microphone closed",
+  "codex_voice_speech_lost": "Part of the held speech was lost",
   "codex_voice_stalled": "The answer got stuck. Wait without speaking, recovering.",
   "codex_voice_stop_short": "End call",
   "codex_voice_default": "Codex default",

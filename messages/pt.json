@@ -184,6 +184,7 @@
   "codex_voice_pause_short": "Pausar fala",
   "codex_voice_resume_short": "Retomar fala",
   "codex_voice_paused": "Fala pausada, microfone fechado",
+  "codex_voice_speech_lost": "Parte da fala guardada se perdeu",
   "codex_voice_stalled": "A resposta travou. Espere sem falar, estou recuperando.",
   "codex_voice_stop_short": "Encerrar",
   "codex_voice_default": "Padrão do Codex",

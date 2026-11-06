@@ -359,11 +359,15 @@ export class LiveVoiceCall {
   canPauseSpeech(): boolean { return LiveVoiceAudio.speechPauseAvailable?.() === true; }
 
   /** Fecha o microfone junto: outra pessoa falando perto interromperia a resposta no servidor. */
-  setSpeechPaused(paused: boolean): void {
+  setSpeechPaused(paused: boolean): boolean {
     this.speechPaused = paused;
-    LiveVoiceAudio.setSpeechPaused?.(paused);
+    const lost = LiveVoiceAudio.setSpeechPaused?.(paused) === true;
     const call = this.attempt;
-    if (call && this.current(call)) this.updateTracks(call);
+    if (call && this.current(call)) {
+      if (!paused) call.lastInput = Date.now();
+      this.updateTracks(call);
+    }
+    return lost;
   }
 
   private updateTracks(call: Attempt): void {
@@ -443,7 +447,7 @@ export class LiveVoiceCall {
     call.reading = true;
     void this.readLevels(call).catch(() => {
       if (!this.current(call)) return;
-      if (this.muted || call.restoring) this.handlers.levels({ input: 0, output: 0 });
+      if (this.muted || this.speechPaused || call.restoring) this.handlers.levels({ input: 0, output: 0 });
       else this.fail(call, 'audio_levels_unavailable', 'getStats_failed', true);
     }).finally(() => { call.reading = false; });
   }
