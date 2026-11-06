@@ -395,6 +395,7 @@ async fn handle_inner(
         Err(e) => return e.response(),
     };
     service.request_id=crate::routes::diag_req(&request);
+    let device_caller=request.extensions().get::<crate::connect::gate::DeviceCaller>().is_some();
     if path=="/api/peers/prova" && let Some(device)=query.get("device") {
         match st.connect_devices.proof_key(device) {
             Some(key)=>service.token=key,
@@ -403,8 +404,9 @@ async fn handle_inner(
     }
     let result = dispatch(service, &method, &path, &query, std::mem::take(&mut body.0)).await;
     match result {
-        Ok(value) => {
+        Ok(mut value) => {
             use crate::orchestration::codec;
+            if device_caller && path=="/api/peers/app-list" {store::mask_app_tokens(&mut value);}
             if codec::contains_surrogate(&value){codec::discard(value);crate::http_cors::internal_error()}
             else{codec::response(StatusCode::OK,codec::normalize_response(value))}
         },

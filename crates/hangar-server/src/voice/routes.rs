@@ -76,7 +76,12 @@ async fn serve_socket(st: Arc<AppState>, mut socket: WebSocket, watcher: Option<
     tokio::pin!(ended);
     loop {
         tokio::select! {
-            _ = &mut ended => { super::log("voice device revoked: closing"); break; }
+            _ = &mut ended => {
+                super::log("voice device revoked: closing");
+                // Só soltar o aparelho deixaria a chamada viva pelo prazo de quem assume.
+                st.voice.forward(epoch, ClientMsg::Stop);
+                break;
+            }
             _ = tokio::time::sleep_until(heard + SILENT_FOR) => { super::log("voice device silent: closing"); break; }
             incoming = socket.recv() => match { heard = tokio::time::Instant::now(); incoming } {
                 Some(Ok(Message::Text(text))) => match serde_json::from_str::<ClientMsg>(text.as_str()) {

@@ -10,9 +10,10 @@ use std::{net::SocketAddr, path::{Path, PathBuf}, sync::{Arc, Mutex}, time::Dura
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc::UnboundedSender;
 
-fn hub(home: &Path, claude_dir: PathBuf, spawn: Option<SpawnFactory>, accounts: Vec<String>) -> Arc<VoiceHub> {
-    Arc::new(VoiceHub::with_parts(TestParts { home: home.to_path_buf(), claude_dir, grace: Duration::from_millis(400),
-        spawn, accounts: Some(accounts) }))
+const GRACE: Duration = Duration::from_millis(400);
+
+fn hub(home: &Path, claude_dir: PathBuf, spawn: Option<SpawnFactory>, accounts: Vec<String>, grace: Duration) -> Arc<VoiceHub> {
+    Arc::new(VoiceHub::with_parts(TestParts { home: home.to_path_buf(), claude_dir, grace, spawn, accounts: Some(accounts) }))
 }
 
 /// Só a configuração (Task 3): nenhuma chamada sobe.
@@ -27,7 +28,7 @@ pub async fn server_with_accounts(home: &Path, accounts: Vec<String>) -> SocketA
 pub async fn server_with_accounts_and_python(home: &Path, accounts: Vec<String>) -> (SocketAddr, Arc<Fake>) {
     let (python, upstream) = fake::spawn_fake().await;
     let mut state = hangar_server::routes::AppState::new(fake::config(upstream, ""));
-    state.voice = hub(home, home.join(".claude"), None, accounts);
+    state.voice = hub(home, home.join(".claude"), None, accounts, GRACE);
     (fake::spawn_state(state).await, python)
 }
 
@@ -109,9 +110,9 @@ fn failing_app_server() -> SpawnFactory {
 }
 
 /// `own_api`: `false` = API falsa; `true` = o próprio servidor de teste (o caminho real até o Python falso).
-async fn build(account: Option<&str>, own_api: bool) -> TestVoice { build_with(account, own_api, false).await }
+async fn build(account: Option<&str>, own_api: bool) -> TestVoice { build_with(account, own_api, false, GRACE).await }
 
-async fn build_with(account: Option<&str>, own_api: bool, failing: bool) -> TestVoice {
+async fn build_with(account: Option<&str>, own_api: bool, failing: bool, grace: Duration) -> TestVoice {
     let home = tempfile::tempdir().unwrap();
     let claude_dir = home.path().join(".claude");
     std::fs::create_dir_all(&claude_dir).unwrap();
@@ -125,7 +126,7 @@ async fn build_with(account: Option<&str>, own_api: bool, failing: bool) -> Test
     let (python, upstream) = fake::spawn_fake().await;
     let mut state = hangar_server::routes::AppState::new(fake::config(upstream, ""));
     let spawn = if failing { failing_app_server() } else { fake_app_servers(seen.clone(), push.clone()) };
-    state.voice = hub(home.path(), claude_dir, Some(spawn), vec!["default".into()]);
+    state.voice = hub(home.path(), claude_dir, Some(spawn), vec!["default".into()], grace);
     // Nunca os peers reais da máquina.
     state.peers = Arc::new(PeerClient::new(PeerBook::new(None)));
     // O `set_self` do servidor não sobrescreve este (é gravado uma vez só).
@@ -142,7 +143,10 @@ pub async fn voice_server_with_account(account: &str) -> TestVoice { build(Some(
 
 pub async fn voice_server_self_api() -> TestVoice { build(None, true).await }
 
-pub async fn voice_server_failing_spawn() -> TestVoice { build_with(None, false, true).await }
+pub async fn voice_server_failing_spawn() -> TestVoice { build_with(None, false, true, GRACE).await }
+
+/// Prazo sem dono longo: a chamada só acaba no prazo do teste se alguém a encerrar de propósito.
+pub async fn voice_server_with_long_grace() -> TestVoice { build_with(None, false, false, Duration::from_secs(120)).await }
 
 impl TestVoice {
     pub fn app_server_saw(&self, method: &str) -> bool { self.count(method) > 0 }

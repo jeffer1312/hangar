@@ -2,10 +2,10 @@
 //!
 //! Só hashes vão ao disco; o token cru existe só na resposta que o entrega, uma vez. Este processo
 //! é o único escritor, então o estado em memória é a verdade e o disco é a cópia.
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,8 @@ use crate::login_guests::store as credentials;
 
 pub const MAX_PENDING: usize = 5;
 pub const PENDING_TTL: u64 = 10 * 60;
+/// O serviço assina bilhetes de um minuto: validade longa é chave vazada ou relógio errado.
+pub const MAX_TICKET_AHEAD: u64 = 5 * 60;
 
 pub type DeviceId = String;
 pub type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
@@ -47,6 +49,11 @@ struct Device {
     token_hash: Option<String>,
     #[serde(default)]
     last_seen: Option<u64>,
+    /// Aparelho que aprovou este; `None` é o dono. Revogar um leva junto tudo que ele aprovou.
+    #[serde(default)]
+    approved_by: Option<DeviceId>,
+    #[serde(default)]
+    approved_at: Option<u64>,
 }
 
 #[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -99,7 +106,7 @@ pub struct Row {
 
 pub struct Store {
     path: PathBuf,
-    identity: Option<ServiceIdentity>,
+    identity: RwLock<Option<ServiceIdentity>>,
     clock: Clock,
     state: Mutex<State>,
 }
@@ -111,12 +118,17 @@ impl Store {
         });
         let path = dir.join("devices.json");
         let state = load(&path, clock());
-        Self { path, identity, clock, state: Mutex::new(state) }
+        Self { path, identity: RwLock::new(identity), clock, state: Mutex::new(state) }
     }
 
     pub fn with_clock(mut self, clock: Clock) -> Self {
         self.clock = clock;
         self
+    }
+
+    /// A ligação chega com o servidor de pé, na resposta de `POST /v1/machines`.
+    pub fn set_identity(&self, identity: Option<ServiceIdentity>) {
+        *self.identity.write().unwrap_or_else(|e| e.into_inner()) = identity;
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -139,7 +151,7 @@ impl Store {
 
     /// `signature` confere os bytes de `ticket` como vieram: o bilhete nunca é serializado de novo.
     pub fn redeem(&self, ticket: &str, signature: &str, secret: &str) -> Result<DeviceId, Refusal> {
-        let identity = self.identity.as_ref().ok_or(Refusal::NotLinked)?;
+        let identity = self.identity.read().unwrap_or_else(|e| e.into_inner()).clone().ok_or(Refusal::NotLinked)?;
         let signature = base64::engine::general_purpose::STANDARD.decode(signature).map_err(|_| Refusal::Ticket)?;
         ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, identity.public_key)
             .verify(ticket.as_bytes(), &signature).map_err(|_| Refusal::Ticket)?;
@@ -148,7 +160,7 @@ impl Store {
             return Err(Refusal::Ticket);
         }
         self.update(|state, now| {
-            if ticket.expires_at <= now || state.nonces.contains_key(&ticket.nonce) {
+            if ticket.expires_at <= now || ticket.expires_at > now + MAX_TICKET_AHEAD || state.nonces.contains_key(&ticket.nonce) {
                 return Err(Refusal::Ticket);
             }
             let verifier = credentials::hash(secret.as_bytes());
@@ -162,7 +174,8 @@ impl Store {
             state.nonces.insert(ticket.nonce.clone(), ticket.expires_at);
             let id = credentials::id();
             state.devices.push(Device { id: id.clone(), name: display_name(&ticket.device_name), status: Status::Pending,
-                created_at: now, denied_at: None, verifier: Some(verifier), token_hash: None, last_seen: None });
+                created_at: now, denied_at: None, verifier: Some(verifier), token_hash: None, last_seen: None,
+                approved_by: None, approved_at: None });
             Ok(id)
         })
     }
@@ -187,23 +200,47 @@ impl Store {
         })
     }
 
-    pub fn approve(&self, id: &str) -> Result<(), Refusal> {
-        self.update(|state, _| {
+    /// `by`: o aparelho que aprova; `None` é o dono. Quem já foi aprovado não muda: reaprovar trocaria
+    /// `approved_by` e tiraria o aparelho da cascata de quem o aprovou.
+    pub fn approve(&self, id: &str, by: Option<&str>) -> Result<(), Refusal> {
+        self.update(|state, now| {
+            // Revogado entre a camada e aqui não aprova: o aprovado nasceria fora da cascata.
+            if by.is_some_and(|by| !state.devices.iter().any(|d| d.id == by && d.status == Status::Approved)) {
+                return Err(Refusal::Credential);
+            }
             let device = state.devices.iter_mut().find(|d| d.id == id && d.status != Status::Denied).ok_or(Refusal::Unknown)?;
-            device.status = Status::Approved;
+            if device.status == Status::Pending {
+                device.status = Status::Approved;
+                device.approved_by = by.map(str::to_owned);
+                device.approved_at = Some(now);
+            }
             Ok(())
         })
     }
 
-    /// Recusa quem ainda não recebeu token; quem já recebeu perde a credencial na hora.
+    /// Recusa quem ainda não recebeu token; quem já recebeu perde a credencial na hora. Vale também
+    /// para tudo que este aparelho aprovou, senão um aparelho roubado sairia com outra credencial.
     pub fn remove(&self, id: &str) -> Result<(), Refusal> {
         self.update(|state, now| {
-            let index = state.devices.iter().position(|d| d.id == id).ok_or(Refusal::Unknown)?;
-            if state.devices[index].token_hash.is_some() {
-                state.devices.remove(index);
-            } else {
-                deny(&mut state.devices[index], now);
+            if !state.devices.iter().any(|d| d.id == id) {
+                return Err(Refusal::Unknown);
             }
+            let mut revoked = HashSet::from([id.to_owned()]);
+            loop {
+                let before = revoked.len();
+                for device in &state.devices {
+                    if device.approved_by.as_ref().is_some_and(|by| revoked.contains(by)) {
+                        revoked.insert(device.id.clone());
+                    }
+                }
+                if revoked.len() == before { break; }
+            }
+            state.devices.retain_mut(|device| {
+                if !revoked.contains(&device.id) { return true; }
+                if device.token_hash.is_some() { return false; }
+                deny(device, now);
+                true
+            });
             Ok(())
         })
     }
@@ -213,7 +250,8 @@ impl Store {
         self.update(|state, now| {
             let (id, token) = (credentials::id(), credentials::token());
             state.devices.push(Device { id: id.clone(), name: display_name(name), status: Status::Approved, created_at: now,
-                denied_at: None, verifier: None, token_hash: Some(credentials::hash(token.as_bytes())), last_seen: None });
+                denied_at: None, verifier: None, token_hash: Some(credentials::hash(token.as_bytes())), last_seen: None,
+                approved_by: None, approved_at: Some(now) });
             Ok((id, token))
         })
     }
@@ -261,8 +299,16 @@ fn deny(device: &mut Device, now: u64) {
 
 fn prune(state: &mut State, now: u64) {
     state.nonces.retain(|_, expires_at| *expires_at > now);
-    for device in state.devices.iter_mut().filter(|d| d.status == Status::Pending && now >= d.created_at + PENDING_TTL) {
-        deny(device, now);
+    for device in &mut state.devices {
+        // Token não buscado no prazo vence: segredo vazado meses depois não recolhe nada.
+        let waiting_since = match device.status {
+            Status::Pending => Some(device.created_at),
+            Status::Approved if device.token_hash.is_none() => device.approved_at,
+            _ => None,
+        };
+        if waiting_since.is_some_and(|since| now >= since + PENDING_TTL) {
+            deny(device, now);
+        }
     }
     state.devices.retain(|d| d.denied_at.is_none_or(|at| now < at + PENDING_TTL));
 }

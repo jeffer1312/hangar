@@ -9,14 +9,14 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use futures_util::{SinkExt, StreamExt};
 use hangar_server::accounts::{AccountService, environment::AccountEnvironment};
 use hangar_server::auth::Auth;
-use hangar_server::connect::devices::{PENDING_TTL, Poll, Refusal, ServiceIdentity, Store};
+use hangar_server::connect::devices::{MAX_TICKET_AHEAD, PENDING_TTL, Poll, Refusal, ServiceIdentity, Store};
 use hangar_server::devices::{CONNECT_PEER, Registry};
 use hangar_server::login_guests::store::hash;
 use hangar_server::routes::AppState;
@@ -44,12 +44,20 @@ fn sign(text: &str) -> String {
     STANDARD.encode(ring::signature::Ed25519KeyPair::from_seed_unchecked(&seed).unwrap().sign(text.as_bytes()))
 }
 
+fn real_now() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+}
+
 /// Bilhete assinado com a chave de teste do vetor.
-fn ticket(machine: &str, account: &str, nonce: &str, secret: &str) -> (String, String) {
+fn ticket_until(machine: &str, account: &str, nonce: &str, secret: &str, expires_at: u64) -> (String, String) {
     let text = json!({"machine_id": machine, "account": account, "device_name": "celular",
-        "verifier": hash(secret.as_bytes()), "nonce": nonce, "expires_at": 4102444800u64}).to_string();
+        "verifier": hash(secret.as_bytes()), "nonce": nonce, "expires_at": expires_at}).to_string();
     let signature = sign(&text);
     (text, signature)
+}
+
+fn ticket(machine: &str, account: &str, nonce: &str, secret: &str) -> (String, String) {
+    ticket_until(machine, account, nonce, secret, real_now() + 120)
 }
 
 struct Entrance {
@@ -103,16 +111,44 @@ async fn approve(main: SocketAddr, id: &str) -> reqwest::StatusCode {
     client().post(format!("http://{main}/api/connect/devices/{id}/approve")).bearer_auth(OWNER).send().await.unwrap().status()
 }
 
-/// O caminho inteiro de um aparelho novo: bilhete pela entrada, aprovação na máquina e token.
-async fn paired(e: &Entrance, nonce: &str) -> (String, String) {
+/// Bilhete pela entrada: o aparelho fica esperando aprovação.
+async fn requested(e: &Entrance, nonce: &str) -> String {
     let secret = format!("segredo-{nonce}");
     let (text, signature) = ticket("pc1", "acme", nonce, &secret);
     let accepted = redeem(e.connect, &text, &signature, &secret).await;
     assert_eq!(accepted.status(), 202);
-    let id = body_of(accepted).await["device_id"].as_str().unwrap().to_owned();
+    body_of(accepted).await["device_id"].as_str().unwrap().to_owned()
+}
+
+async fn collected(e: &Entrance, id: &str, nonce: &str) -> String {
+    status(e.connect, id, &format!("segredo-{nonce}")).await["token"].as_str().unwrap().to_owned()
+}
+
+/// O caminho inteiro de um aparelho novo: bilhete pela entrada, aprovação na máquina e token.
+async fn paired(e: &Entrance, nonce: &str) -> (String, String) {
+    let id = requested(e, nonce).await;
     assert_eq!(approve(e.main, &id).await, 200);
-    let token = status(e.connect, &id, &secret).await["token"].as_str().unwrap().to_owned();
+    let token = collected(e, &id, nonce).await;
     (id, token)
+}
+
+/// O mesmo caminho, com a aprovação vinda de outro aparelho pela internet.
+async fn paired_by(e: &Entrance, approver: &str, nonce: &str) -> (String, String) {
+    let id = requested(e, nonce).await;
+    let approved = client().post(format!("http://{}/api/connect/devices/{id}/approve", e.connect)).bearer_auth(approver).send().await.unwrap();
+    assert_eq!(approved.status(), 200);
+    let token = collected(e, &id, nonce).await;
+    (id, token)
+}
+
+/// `Service::from_state` lê `.hangar/config` do `HOME` da conta.
+fn with_home(state: &mut AppState, dir: &Path, peers: &str) {
+    let config = dir.join(".hangar/config");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(config.join("peers.json"), peers).unwrap();
+    std::fs::write(config.join(".env"), "").unwrap();
+    let root = dir.to_str().unwrap();
+    state.accounts = AccountService::new(AccountEnvironment::from_pairs([("HOME", root), ("USERPROFILE", root)]));
 }
 
 async fn api_status(addr: SocketAddr, token: &str) -> reqwest::StatusCode {
@@ -175,10 +211,9 @@ async fn closed(ws: &mut Ws) -> Option<u16> {
 #[tokio::test]
 async fn redeem_requires_the_secret_behind_the_verifier() {
     let e = plain().await;
-    let v = vector();
-    let (text, signature, secret) = (v["ticket"].as_str().unwrap(), v["signature"].as_str().unwrap(), v["secret"].as_str().unwrap());
-    assert_eq!(redeem(e.connect, text, signature, "outro").await.status(), 401);
-    let accepted = redeem(e.connect, text, signature, secret).await;
+    let (text, signature) = ticket("pc1", "acme", "n1", "segredo");
+    assert_eq!(redeem(e.connect, &text, &signature, "outro").await.status(), 401);
+    let accepted = redeem(e.connect, &text, &signature, "segredo").await;
     assert_eq!(accepted.status(), 202, "errar o segredo não gasta o nonce");
     assert_eq!(body_of(accepted).await["status"], "pending");
 }
@@ -192,18 +227,27 @@ async fn redeem_refuses_bad_or_replayed_ticket() {
     assert_eq!(redeem(e.connect, &text, "nao-e-base64!", "segredo").await.status(), 401);
     assert_eq!(redeem(e.connect, &text, &signature, "segredo").await.status(), 202);
     assert_eq!(redeem(e.connect, &text, &signature, "segredo").await.status(), 401, "nonce usado");
-    let late = Store::new(e.dir.path().join("depois"), Some(identity())).with_clock(Arc::new(|| 4102444800u64));
     let (text, signature) = ticket("pc1", "acme", "n2", "segredo");
+    let later = real_now() + 121;
+    let late = Store::new(e.dir.path().join("depois"), Some(identity())).with_clock(Arc::new(move || later));
     assert!(matches!(late.redeem(&text, &signature, "segredo"), Err(Refusal::Ticket)), "bilhete vencido");
+    let (text, signature) = ticket_until("pc1", "acme", "n3", "segredo", real_now() + MAX_TICKET_AHEAD + 60);
+    assert_eq!(redeem(e.connect, &text, &signature, "segredo").await.status(), 401, "validade longa demais");
 }
 
 #[tokio::test]
 async fn redeem_without_a_link_answers_not_linked() {
-    let e = entrance(|state, dir| state.connect_devices = Arc::new(Store::new(dir.join("sem-ligacao"), None))).await;
+    let dir = crate::physical_tempdir();
+    let store = Arc::new(Store::new(dir.path().to_path_buf(), None));
+    let linked = store.clone();
+    let e = entrance(move |state, _| state.connect_devices = linked).await;
     let (text, signature) = ticket("pc1", "acme", "n1", "segredo");
     let refused = redeem(e.connect, &text, &signature, "segredo").await;
     assert_eq!(refused.status(), 409);
     assert!(refused.text().await.unwrap().contains("connect_not_linked"));
+    // A ligação chega com o servidor de pé.
+    store.set_identity(Some(identity()));
+    assert_eq!(redeem(e.connect, &text, &signature, "segredo").await.status(), 202);
 }
 
 #[tokio::test]
@@ -230,7 +274,8 @@ fn ticket_signature_matches_the_shared_vector() {
     let ticket: Value = serde_json::from_str(text).unwrap();
     assert_eq!(ticket["verifier"], hash(secret.as_bytes()));
     let dir = crate::physical_tempdir();
-    let store = Store::new(dir.path().to_path_buf(), Some(identity()));
+    // O vetor vale até 2100: o relógio fica um minuto antes, dentro do que a máquina aceita.
+    let store = Store::new(dir.path().to_path_buf(), Some(identity())).with_clock(Arc::new(|| 4102444800u64 - 60));
     store.redeem(text, signature, secret).unwrap();
     assert_eq!(store.list()[0].name, "celular");
 }
@@ -266,18 +311,36 @@ fn at_most_five_pending_requests_and_they_expire() {
     let now = Arc::new(AtomicU64::new(1000));
     let clock = now.clone();
     let store = Store::new(dir.path().to_path_buf(), Some(identity())).with_clock(Arc::new(move || clock.load(Ordering::SeqCst)));
-    let mut first = String::new();
-    for i in 0..5 {
-        let (text, signature) = ticket("pc1", "acme", &format!("n{i}"), "segredo");
-        let id = store.redeem(&text, &signature, "segredo").unwrap();
-        if i == 0 { first = id; }
-    }
-    let (text, signature) = ticket("pc1", "acme", "sexto", "segredo");
+    let ids: Vec<String> = (0..5).map(|i| {
+        let (text, signature) = ticket_until("pc1", "acme", &format!("n{i}"), "segredo", 1060);
+        store.redeem(&text, &signature, "segredo").unwrap()
+    }).collect();
+    let (text, signature) = ticket_until("pc1", "acme", "sexto", "segredo", 1060);
     assert!(matches!(store.redeem(&text, &signature, "segredo"), Err(Refusal::TooManyPending)));
-    now.store(1000 + PENDING_TTL, Ordering::SeqCst);
+    store.remove(&ids[0]).unwrap();
     store.redeem(&text, &signature, "segredo").expect("o pedido acima não gastou o nonce");
-    assert_eq!(store.status(&first, "segredo").unwrap(), Poll::Denied, "pedido vencido não vira aprovação");
-    assert!(matches!(store.approve(&first), Err(Refusal::Unknown)));
+    now.store(1000 + PENDING_TTL, Ordering::SeqCst);
+    assert_eq!(store.status(&ids[1], "segredo").unwrap(), Poll::Denied, "pedido vencido não vira aprovação");
+    assert!(matches!(store.approve(&ids[1], None), Err(Refusal::Unknown)));
+}
+
+#[test]
+fn approved_token_not_picked_up_in_time_expires() {
+    let dir = crate::physical_tempdir();
+    let now = Arc::new(AtomicU64::new(1000));
+    let clock = now.clone();
+    let store = Store::new(dir.path().to_path_buf(), Some(identity())).with_clock(Arc::new(move || clock.load(Ordering::SeqCst)));
+    let ids: Vec<String> = ["n1", "n2"].into_iter().map(|nonce| {
+        let (text, signature) = ticket_until("pc1", "acme", nonce, "segredo", 1060);
+        let id = store.redeem(&text, &signature, "segredo").unwrap();
+        store.approve(&id, None).unwrap();
+        id
+    }).collect();
+    now.store(1000 + PENDING_TTL - 1, Ordering::SeqCst);
+    assert!(matches!(store.status(&ids[0], "segredo").unwrap(), Poll::Approved(Some(_))));
+    now.store(1000 + PENDING_TTL, Ordering::SeqCst);
+    assert_eq!(store.status(&ids[1], "segredo").unwrap(), Poll::Denied, "segredo vazado depois do prazo não recolhe token");
+    assert_eq!(store.status(&ids[0], "segredo").unwrap(), Poll::Approved(None), "quem buscou a tempo não vence");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -365,11 +428,16 @@ async fn owner_password_is_refused_through_connect() {
 async fn everything_else_is_denied_by_default() {
     let e = plain().await;
     for path in ["/", "/assets/app.js", "/__hangar_server/health", "/api/sessions", "/api/peers", "/api/connect/devices",
-        "/api/sync/setup", "/api/peers/pin%67", "/api/peers/ping/", "/docs", "/internal/diag"] {
+        "/api/sync/setup", "/api/sync/status", "/api/sync/vault", "/api/sync/guests", "/api/peers/pin%67", "/api/peers/ping/", "/docs", "/internal/diag"] {
         assert_eq!(get(e.connect, path).send().await.unwrap().status(), 401, "{path}");
+    }
+    for path in ["/api/sync/register", "/api/sync/logout", "/api/sync/guests/ana/delete"] {
+        assert_eq!(post(e.connect, path, json!({})).send().await.unwrap().status(), 401, "{path}");
     }
     assert_eq!(e.python.hits_to("/docs"), 0);
     assert_eq!(get(e.connect, "/api/peers/ping").send().await.unwrap().status(), 200);
+    assert_ne!(get(e.connect, "/api/sync/prelogin?user=ana").send().await.unwrap().status(), 401, "o login precisa do sal");
+    assert_ne!(post(e.connect, "/api/sync/login", json!({})).send().await.unwrap().status(), 401);
     let preflight = client().request(reqwest::Method::OPTIONS, format!("http://{}/api/sessions", e.connect))
         .header("origin", "https://app.example").header("access-control-request-method", "GET");
     assert_eq!(preflight.send().await.unwrap().status(), 200);
@@ -426,7 +494,7 @@ async fn revoking_a_device_closes_open_streams() {
         head.push(byte[0]);
     }
     assert!(head.starts_with(b"HTTP/1.1 101"), "{}", String::from_utf8_lossy(&head));
-    let call = voice_support::voice_server().await;
+    let call = voice_support::voice_server_with_long_grace().await;
     let (call_id, call_token) = call.devices.enroll("celular").unwrap();
     let mut voice = open_call(call.addr, &call_token).await;
 
@@ -443,13 +511,59 @@ async fn revoking_a_device_closes_open_streams() {
     tokio::time::timeout(Duration::from_secs(12), piped.read_to_end(&mut rest)).await.expect("o vigia fecha em até 5 s").unwrap();
     assert_eq!(rest, [0x88, 0x02, 0x11, 0x3A]);
     closed(&mut voice).await;
+    // Com prazo sem dono de dois minutos, só o `Stop` derruba o app-server aqui.
+    assert!(call.app_server_sees("<eof>").await, "a chamada acaba junto com o aparelho");
     assert_eq!(api_status(e.connect, &token).await, 401);
     assert_eq!(api_status(e.main, &token).await, 401);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn revoking_a_device_takes_everything_it_approved() {
+    let e = plain().await;
+    let (first, first_token) = paired(&e, "a").await;
+    let (second, second_token) = paired_by(&e, &first_token, "b").await;
+    let (_, third_token) = paired_by(&e, &second_token, "c").await;
+    let (_, owners_token) = paired(&e, "d").await;
+    // Reaprovar-se não troca quem aprovou: a cascata alcança do mesmo jeito.
+    let again = client().post(format!("http://{}/api/connect/devices/{second}/approve", e.connect)).bearer_auth(&second_token).send().await.unwrap();
+    assert_eq!(again.status(), 200);
+    let sse = get(e.connect, "/api/sessions/events").bearer_auth(&third_token).send().await.unwrap();
+    assert_eq!(sse.status(), 200);
+    let mut sse = Box::pin(sse.bytes_stream());
+
+    let removed = client().delete(format!("http://{}/api/connect/devices/{first}", e.main)).bearer_auth(OWNER).send().await.unwrap();
+    assert_eq!(removed.status(), 200);
+
+    for token in [&first_token, &second_token, &third_token] {
+        assert_eq!(api_status(e.connect, token).await, 401);
+    }
+    assert_eq!(api_status(e.connect, &owners_token).await, 200, "o aprovado pelo dono fica");
+    assert_eq!(e.store.list().len(), 1);
+    tokio::time::timeout(Duration::from_secs(12), async {
+        while let Some(chunk) = sse.next().await {
+            if chunk.is_err() { break; }
+        }
+    }).await.expect("o SSE de quem foi junto também cai");
+    assert!(matches!(e.store.approve("qualquer", Some(first.as_str())), Err(Refusal::Credential)), "revogado não aprova mais");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn nav_link_carries_the_device_token_not_the_password() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = crate::list_support::server(dir.path(), 1).await;
+    let (_, token) = srv.devices.enroll("celular").unwrap();
+    let mut list = crate::list_support::open(srv.addr).await;
+    let sent = post(srv.addr, "/api/sessions/s0/nav", json!({"url": "/api/sessions/s0/pages/abc"})).bearer_auth(&token).send().await.unwrap();
+    assert_eq!(sent.status(), 200);
+    let nav = crate::fake::next_named(&mut list, "nav").await;
+    assert!(nav.data.contains(&token) && !nav.data.contains(OWNER), "{}", nav.data);
+}
+
 #[tokio::test]
 async fn owner_secret_routes_are_refused_to_a_device() {
-    let e = plain().await;
+    const PEER_TOKEN: &str = "token-secreto-da-outra-maquina";
+    let peers = json!({"outra": {"app": {"id": "outra", "label": "Outra", "address": "https://outra.test", "token": PEER_TOKEN}}}).to_string();
+    let e = entrance(move |state, dir| with_home(state, dir, &peers)).await;
     let (_, token) = paired(&e, "senha").await;
     for addr in [e.main, e.connect] {
         for path in ["/api/alcance/pareamento?endereco=lan", "/api/peers/abc/token", "/api/peers/abc/%74oken", "/api/peers/abc/token/"] {
@@ -457,8 +571,39 @@ async fn owner_secret_routes_are_refused_to_a_device() {
             assert_eq!(refused.status(), 403, "{addr} {path}");
             assert!(!refused.text().await.unwrap().contains(OWNER));
         }
+        // Redirecionamento do Rust e do Python: a query trocada não sai no `Location`.
+        for path in ["/api/peers/", "/api/me/", "/api/redirect-query"] {
+            let redirected = get(addr, &format!("{path}?token={token}&x=1")).send().await.unwrap();
+            assert_eq!(redirected.status(), 307, "{addr} {path}");
+            let location = redirected.headers()["location"].to_str().unwrap();
+            assert!(location.contains(&token) && !location.contains(OWNER), "{location}");
+        }
+        let listed = body_of(get(addr, "/api/peers/app-list").bearer_auth(&token).send().await.unwrap()).await;
+        assert_eq!(listed["servers"][0]["id"], "outra");
+        assert!(!listed.to_string().contains(PEER_TOKEN), "{listed}");
+        let write = client().put(format!("http://{addr}/api/peers/app-list")).bearer_auth(&token)
+            .header("content-type", "application/json").body(json!({"rev": listed["rev"], "servers": listed["servers"]}).to_string());
+        assert_eq!(write.send().await.unwrap().status(), 403, "gravar a lista mascarada apagaria os tokens");
     }
     assert_ne!(get(e.main, "/api/peers/abc/token").bearer_auth(OWNER).send().await.unwrap().status(), 403, "o dono segue passando");
+    let owners = body_of(get(e.main, "/api/peers/app-list").bearer_auth(OWNER).send().await.unwrap()).await;
+    assert_eq!(owners["servers"][0]["token"], PEER_TOKEN);
+}
+
+#[tokio::test]
+async fn owner_password_with_reserved_characters_stays_in_the_process() {
+    const PASSWORD: &str = "dono+senha/com=sinais";
+    let e = entrance(|state, _| {
+        state.cfg.auth_token = PASSWORD.into();
+        state.auth = Auth::new(PASSWORD);
+    }).await;
+    let (_, token) = e.store.enroll("celular").unwrap();
+    for path in ["/api/peers/", "/api/redirect-query"] {
+        let redirected = get(e.connect, &format!("{path}?token={token}")).send().await.unwrap();
+        assert_eq!(redirected.status(), 307, "{path}");
+        let location = redirected.headers()["location"].to_str().unwrap();
+        assert!(location.contains(&token) && !location.contains("dono"), "{location}");
+    }
 }
 
 #[tokio::test]
@@ -473,14 +618,7 @@ async fn connect_device_is_recorded_in_the_device_list() {
 
 #[tokio::test]
 async fn proof_answers_with_device_hash() {
-    let e = entrance(|state, dir| {
-        let config = dir.join(".hangar/config");
-        std::fs::create_dir_all(&config).unwrap();
-        std::fs::write(config.join("peers.json"), "{}").unwrap();
-        std::fs::write(config.join(".env"), "").unwrap();
-        let root = dir.to_str().unwrap();
-        state.accounts = AccountService::new(AccountEnvironment::from_pairs([("HOME", root), ("USERPROFILE", root)]));
-    }).await;
+    let e = entrance(|state, dir| with_home(state, dir, "{}")).await;
     let (id, token) = paired(&e, "prova").await;
     let challenge = "desafio-com-tamanho-certo";
     let expected = |key: &[u8], identifier: &str| -> String {
@@ -491,8 +629,22 @@ async fn proof_answers_with_device_hash() {
     let proof = body_of(get(e.connect, &format!("/api/peers/prova?desafio={challenge}&device={id}")).send().await.unwrap()).await;
     let identifier = proof["identificador"].as_str().unwrap();
     assert_eq!(proof["prova"], expected(hash(token.as_bytes()).as_bytes(), identifier));
-    let owner = body_of(get(e.connect, &format!("/api/peers/prova?desafio={challenge}")).send().await.unwrap()).await;
-    assert_eq!(owner["prova"], expected(OWNER.as_bytes(), identifier), "sem `device` a prova segue com a senha do dono");
+    let owner = body_of(get(e.main, &format!("/api/peers/prova?desafio={challenge}")).send().await.unwrap()).await;
+    assert_eq!(owner["prova"], expected(OWNER.as_bytes(), identifier), "nas outras portas a prova segue como era");
     let unknown = get(e.connect, &format!("/api/peers/prova?desafio={challenge}&device=outro")).send().await.unwrap();
     assert_eq!(unknown.status(), 404);
+}
+
+/// Pela internet, prova assinada com a senha deixaria testar palpites fora da máquina.
+#[tokio::test]
+async fn owner_proof_is_not_public_through_connect() {
+    let e = entrance(|state, dir| with_home(state, dir, "{}")).await;
+    let challenge = "desafio-com-tamanho-certo";
+    for query in [format!("desafio={challenge}"), format!("desafio={challenge}&device="), format!("device=&desafio={challenge}")] {
+        let refused = get(e.connect, &format!("/api/peers/prova?{query}")).send().await.unwrap();
+        assert_eq!(refused.status(), 401, "{query}");
+    }
+    // `device` repetido vazio não cai na senha: o valor que vale é o último, e ele não é aparelho.
+    let tricked = get(e.connect, &format!("/api/peers/prova?desafio={challenge}&device=x&device=")).send().await.unwrap();
+    assert_eq!(tricked.status(), 404);
 }

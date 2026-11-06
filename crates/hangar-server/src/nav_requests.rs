@@ -209,6 +209,8 @@ pub(crate) async fn serve(st: &Arc<AppState>, req: Request) -> Response {
         st.list.nav.confirm(&name);
         return json_response(StatusCode::OK, json!({"ok": true}));
     }
+    // O link sai no SSE do chat: pedido de aparelho leva o token dele, nunca a senha do dono.
+    let token = req.extensions().get::<crate::connect::gate::DeviceCaller>().map_or_else(|| st.cfg.auth_token.clone(), |device| device.token.clone());
     let Ok(bytes) = to_bytes(req.into_body(), BODY_LIMIT).await else { return crate::plans::routes::unprocessable_body("corpo grande demais") };
     let body = match serde_json::from_slice::<OpenBody>(&bytes) {
         Ok(b) if !b.url.is_empty() => b,
@@ -220,7 +222,7 @@ pub(crate) async fn serve(st: &Arc<AppState>, req: Request) -> Response {
     if !crate::mcp::identity::exists(&local, &name).await {
         return detail(StatusCode::NOT_FOUND, "sessão não encontrada");
     }
-    let url = match resolve_url(&name, &body.url, st.cfg.listen, &st.cfg.auth_token) {
+    let url = match resolve_url(&name, &body.url, st.cfg.listen, &token) {
         Ok(u) => u,
         Err((status, msg)) => return detail(status, msg),
     };

@@ -123,7 +123,8 @@ async fn approve(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo
         cors(&headers, response.headers_mut());
         return response;
     }
-    match blocking(&st, move |store| store.approve(&id)).await {
+    let by = req.extensions().get::<DeviceCaller>().map(|device| device.id.clone());
+    match blocking(&st, move |store| store.approve(&id, by.as_deref())).await {
         Ok(()) => reply(&headers, StatusCode::OK, json!({"ok": true})),
         Err(refusal) => refused(&headers, refusal),
     }

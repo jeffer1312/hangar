@@ -304,6 +304,14 @@ fn app_entry(raw: &Value) -> Result<Value, Error> {
     }
     Ok(out)
 }
+/// O aparelho lê a lista como lê `GET /api/peers`: o token dela é a senha de outra máquina.
+pub(super) fn mask_app_tokens(value: &mut Value) {
+    for server in value["servers"].as_array_mut().into_iter().flatten() {
+        if let Some(token) = server.get_mut("token") {
+            *token = Value::String(crate::engines::store::mask(&codec::python_string(token)));
+        }
+    }
+}
 fn app_response(data: &Map<String, Value>) -> Result<Value,Error> {
     let mut list=crate::orchestration::codec::ValueGuard(Value::Array(data.values().filter_map(|value|value.get("app").filter(|app|app.is_object())).map(codec::clone_value).collect()));
     let apps=list.0.as_array_mut().unwrap();

@@ -42,7 +42,8 @@ pub fn calls(root: &Path, sub: &str) -> usize {
 }
 
 /// `private`: a porta privada do mesmo estado, a das pontes que o Python chama.
-pub struct Server { pub addr: SocketAddr, pub private: SocketAddr, pub python: Arc<fake::Fake>, pub list: Arc<ListBridge> }
+pub struct Server { pub addr: SocketAddr, pub private: SocketAddr, pub python: Arc<fake::Fake>, pub list: Arc<ListBridge>,
+    pub devices: Arc<hangar_server::connect::devices::Store> }
 
 pub async fn server(root: &Path, n: usize) -> Server { server_trusting(root, n, "").await }
 
@@ -57,6 +58,8 @@ pub async fn server_trusting(root: &Path, n: usize, trusted: &str) -> Server {
     let mut state = AppState::new(config(upstream, trusted));
     // Nunca o `~/.hangar` de quem roda os testes.
     state.devices = Arc::new(hangar_server::devices::Registry::new(home.join(".hangar/devices.json")));
+    let devices = Arc::new(hangar_server::connect::devices::Store::new(home.join(".hangar/connect"), None));
+    state.connect_devices = devices.clone();
     let list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
         FactsClient::new(upstream, SECRET.into())));
@@ -76,7 +79,7 @@ pub async fn server_trusting(root: &Path, n: usize, trusted: &str) -> Server {
     let private = listener.local_addr().unwrap();
     let app = terminal_router(state).into_make_service_with_connect_info::<SocketAddr>();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    Server { addr, private, python, list }
+    Server { addr, private, python, list, devices }
 }
 
 pub async fn get(addr: SocketAddr, token: &str) -> (u16, Value) {

@@ -42,8 +42,12 @@ pub async fn rewrite_peer(mut req: Request) -> Request {
 }
 
 /// Pedido de aparelho, depois da troca: as rotas que distinguem do dono de verdade leem esta extensão.
-#[derive(Clone, Debug)]
-pub struct DeviceCaller(pub DeviceId);
+#[derive(Clone)]
+pub struct DeviceCaller {
+    pub id: DeviceId,
+    /// O token apresentado: link que sai de volta ao aparelho leva este, nunca a senha.
+    pub token: String,
+}
 
 /// Em todo listener do dono, troca a credencial de aparelho pela senha dentro do processo. Na entrada
 /// do Connect nega por padrão, antes de qualquer corpo e sem tocar no contador de `hangar_auth`.
@@ -67,7 +71,7 @@ pub async fn device_token_layer(State(st): State<Arc<AppState>>, mut req: Reques
             return next.run(req).await;
         }
     }
-    if is_public(req.method(), req.uri().path()) {
+    if is_public(req.method(), req.uri().path(), req.uri().query()) {
         rewrite_credentials(&mut req, |_| None);
         return next.run(req).await;
     }
@@ -78,7 +82,7 @@ pub async fn device_token_layer(State(st): State<Arc<AppState>>, mut req: Reques
 }
 
 async fn serve_device(st: &AppState, mut req: Request, next: Next, id: DeviceId, token: &[u8], connect: bool) -> Response {
-    if hands_out_owner_password(req.uri().path()) {
+    if refused_to_device(req.method(), req.uri().path()) {
         return refusal(&req, StatusCode::FORBIDDEN, "connect_owner_secret_refused", "rota só do dono");
     }
     // A origem do Connect é de todos que entram por ela; quem encheu o contador não foi este aparelho.
@@ -91,8 +95,9 @@ async fn serve_device(st: &AppState, mut req: Request, next: Next, id: DeviceId,
     });
     let watcher = Watcher::device(st.connect_devices.clone(), id.clone());
     req.extensions_mut().insert(watcher.clone());
-    req.extensions_mut().insert(DeviceCaller(id));
-    let response = next.run(req).await;
+    req.extensions_mut().insert(DeviceCaller { id, token: String::from_utf8_lossy(token).into_owned() });
+    let mut response = next.run(req).await;
+    restore_location(&mut response, &st.cfg.auth_token, token);
     let sse = response.headers().get(header::CONTENT_TYPE).is_some_and(|v| v.as_bytes().starts_with(b"text/event-stream"));
     if !sse {
         return response;
@@ -102,24 +107,42 @@ async fn serve_device(st: &AppState, mut req: Request, next: Next, id: DeviceId,
     Response::from_parts(parts, Body::from_stream(stream))
 }
 
-/// Caminho cru e exato: a variante codificada cai na recusa, nunca numa rota que decodifica diferente.
-fn is_public(method: &Method, path: &str) -> bool {
-    match path {
-        "/api/peers/ping" | "/api/peers/prova" => method == Method::GET,
-        "/api/connect/redeem" | "/api/connect/redeem/status" => method == Method::POST,
-        // As rotas do sync que não exigem o dono: login próprio, e o resto vale pelo cookie `cp_sync`.
-        _ => path.strip_prefix("/api/sync/").is_some_and(|rest| {
-            matches!(rest, "status" | "register" | "prelogin" | "login" | "logout" | "vault" | "guests")
-                || rest.strip_prefix("guests/").is_some_and(|tail| tail.ends_with("/delete"))
-        }),
+/// A rota reescrita devolve a query no `Location` (barra a mais, `redirect_slashes` do Python): a senha
+/// volta a ser o token do aparelho antes de sair do processo.
+fn restore_location(response: &mut Response, owner: &str, token: &[u8]) {
+    let Some(location) = response.headers().get(header::LOCATION) else { return };
+    let raw = String::from_utf8_lossy(location.as_bytes()).into_owned();
+    let encoded: String = form_urlencoded::byte_serialize(owner.as_bytes()).collect();
+    if owner.is_empty() || !(raw.contains(owner) || raw.contains(&encoded)) {
+        return;
+    }
+    let device = String::from_utf8_lossy(token);
+    let restored = raw.replace(&encoded, &device).replace(owner, &device);
+    match HeaderValue::from_str(&restored) {
+        Ok(value) => { response.headers_mut().insert(header::LOCATION, value); }
+        Err(_) => { response.headers_mut().remove(header::LOCATION); }
     }
 }
 
-/// Decodificado como `machine_peers::handle` decodifica; revogar o aparelho não desfaz a senha entregue.
-fn hands_out_owner_password(path: &str) -> bool {
+/// Caminho cru e exato: a variante codificada cai na recusa, nunca numa rota que decodifica diferente.
+fn is_public(method: &Method, path: &str, query: Option<&str>) -> bool {
+    match path {
+        "/api/peers/ping" | "/api/sync/prelogin" => method == Method::GET,
+        // Sem `device` a prova é assinada com a senha do dono: quem pedisse poderia testá-la fora daqui.
+        "/api/peers/prova" => method == Method::GET
+            && form_urlencoded::parse(query.unwrap_or_default().as_bytes()).any(|(key, value)| key == "device" && !value.is_empty()),
+        "/api/connect/redeem" | "/api/connect/redeem/status" | "/api/sync/login" => method == Method::POST,
+        _ => false,
+    }
+}
+
+/// Decodificado como `machine_peers::handle` decodifica. Revogar o aparelho não desfaz a senha entregue,
+/// e a lista dos apps que ele lê vem mascarada: escrevê-la de volta apagaria os tokens de verdade.
+fn refused_to_device(method: &Method, path: &str) -> bool {
     let path = percent_encoding::percent_decode_str(path).decode_utf8_lossy();
     let path = path.trim_end_matches('/');
     path == "/api/alcance/pareamento" || path.strip_prefix("/api/peers/").is_some_and(|rest| rest.ends_with("/token"))
+        || (method == Method::PUT && path == "/api/peers/app-list")
 }
 
 fn refusal(req: &Request, status: StatusCode, code: &str, msg: &str) -> Response {
