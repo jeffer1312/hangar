@@ -1180,18 +1180,7 @@ pub(crate) async fn pass_any(
         return response;
     }
     if crate::worktree_routes::matches(req.method(), req.uri().path()) {
-        let (_forward, who) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-        // Convidado segue ao Python, que o recusa como antes.
-        if matches!(who, Some(Caller::Owner)) {
-            let headers = req.headers().clone();
-            let mut response = crate::worktree_routes::public(st, req).await;
-            cors(&headers, response.headers_mut());
-            return response;
-        }
-        if matches!(&who,Some(Caller::Guest(_)))
-            && !matches!(req.uri().path(),"/api/worktrees"|"/api/worktrees/detail") {
-            return crate::session_write::json_response(StatusCode::FORBIDDEN,serde_json::json!({"detail":"worktrees pertencem ao dono"}));
-        }
+        return crate::worktree_routes::route(st, peer, req).await;
     }
     if crate::workspace_routes::matches(req.method(), req.uri().path()) {
         return crate::workspace_routes::public(st, peer, req).await;
