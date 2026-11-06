@@ -139,7 +139,9 @@ pub async fn kill_terminal(io:&dyn TerminalIo,procs:&dyn ProcessView,binding:&Te
     let target=if binding.windows {binding.name.clone()} else {format!("={}",binding.name)};
     let output=mux(io,binding,vec!["kill-session".into(),"-t".into(),target]).await?;
     if !output.success {return Err(failure("lifecycle_kill"));}
-    wait_absent(procs,agent_pid,birth,"lifecycle_still_alive").await
+    // Agente que passa do prazo não reprova o fechamento: sai à força, como na reabertura.
+    if wait_absent(procs,agent_pid,birth,"lifecycle_still_alive").await.is_ok() {return Ok(());}
+    super::claude_reopen::stop_tree(vec![(agent_pid,birth)]).await
 }
 
 /// Encerrar só avisa o processo (SIGHUP, SIGTERM): ele leva um instante para sair, e no meio da saída a leitura dele

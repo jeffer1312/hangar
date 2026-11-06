@@ -101,6 +101,20 @@ impl Fixture {
             mux:Mux::with_program(&self.tmux,Duration::from_secs(5)),mux_program:self.tmux.clone().into_os_string() }).with_scope_probe(Vec::new)));
         registry
     }
+    /// O spec gravado de `s1` em terminal e o registro que o reabre.
+    async fn reopening_registry(&self,key:&str) -> Arc<RuntimeRegistry> {
+        let spec = json!({"version":1,"key":key,"name":"s1","cwd":self.cwd,"provider":"claude","surface":"terminal","account":{"kind":"default"},
+            "account_source":"default","model":null,"effort":null,"service_tier":null,"permission_mode":"acceptEdits","subagent_model":null,
+            "customizations":null,"jev":false,"read_only":false,"worktree":null,"creator":null,"created_at":1.0});
+        std::fs::create_dir_all(self.home.join(".hangar/session-specs")).unwrap();
+        std::fs::write(self.home.join(format!(".hangar/session-specs/{key}.json")),spec.to_string()).unwrap();
+        let registry = crate::runtime_open::registry_with(|registry|registry
+            .with_codex_environment(AccountEnvironment::from_map([("HOME".to_owned(),self.home.to_string_lossy().into_owned()),("PATH".to_owned(),std::env::var("PATH").unwrap())].into()))
+            .with_terms(Arc::new(hangar_server::term::Terms::default()))).await;
+        registry.bind_watcher(Arc::new(Watcher::new(WatchConfig { home:self.home.clone(),queue_dir:self.queue.clone(),
+            mux:Mux::with_program(&self.tmux,Duration::from_secs(5)),mux_program:self.tmux.clone().into_os_string() }).with_scope_probe(Vec::new)));
+        registry
+    }
     fn sidecar_path(&self,name:&str) -> PathBuf { self.home.join(format!(".hangar/claude-headless/{name}.json")) }
     fn put_sidecar(&self,meta:Value) {
         std::fs::create_dir_all(self.home.join(".hangar/claude-headless")).unwrap();
@@ -616,16 +630,7 @@ async fn an_old_claude_that_ignores_the_stop_is_killed_and_the_reopen_goes_on() 
     std::fs::write(fx.state.with_extension("stubborn"),"").unwrap();
     std::process::Command::new(&fx.tmux).args(["new-session","-d","-s","s1","-c"]).arg(&fx.cwd).arg("-e").arg(format!("CP_SESSION_KEY={key}")).status().unwrap();
     let old_agent = fx.agent().unwrap();
-    let spec = json!({"version":1,"key":key,"name":"s1","cwd":fx.cwd,"provider":"claude","surface":"terminal","account":{"kind":"default"},
-        "account_source":"default","model":null,"effort":null,"service_tier":null,"permission_mode":"acceptEdits","subagent_model":null,
-        "customizations":null,"jev":false,"read_only":false,"worktree":null,"creator":null,"created_at":1.0});
-    std::fs::create_dir_all(fx.home.join(".hangar/session-specs")).unwrap();
-    std::fs::write(fx.home.join(format!(".hangar/session-specs/{key}.json")),spec.to_string()).unwrap();
-    let registry = crate::runtime_open::registry_with(|registry|registry
-        .with_codex_environment(AccountEnvironment::from_map([("HOME".to_owned(),fx.home.to_string_lossy().into_owned()),("PATH".to_owned(),std::env::var("PATH").unwrap())].into()))
-        .with_terms(Arc::new(hangar_server::term::Terms::default()))).await;
-    registry.bind_watcher(Arc::new(Watcher::new(WatchConfig { home:fx.home.clone(),queue_dir:fx.queue.clone(),
-        mux:Mux::with_program(&fx.tmux,Duration::from_secs(5)),mux_program:fx.tmux.clone().into_os_string() }).with_scope_probe(Vec::new)));
+    let registry = fx.reopening_registry(&key).await;
     let change = SessionChange { reason:ChangeReason::Reload,surface:None,account:None,permission_mode:None,model:None,effort:None,service_tier:None };
     let reopened = registry.reopen_claude_session("s1",change,None).await.expect("é sessão Claude daqui");
     let outcome = reopened.map(|_|()).map_err(|f|(f.error.code,f.stopped));
@@ -638,6 +643,27 @@ async fn an_old_claude_that_ignores_the_stop_is_killed_and_the_reopen_goes_on() 
     let (found,_) = registry.terminal_view("s1").await.unwrap();
     registry.close(&found,2).await.unwrap();
     fx.finish();
+}
+
+/// O `claude` que ignora o `kill-session` sai à força e o fechamento segue normal: o transcript vai junto, e é
+/// ele que guarda o nome da sessão no Arquivo.
+#[tokio::test]
+async fn a_claude_that_ignores_the_close_is_killed_and_keeps_its_transcript() {
+    let fx = fixture();
+    fx.transcript();
+    let key = "57".repeat(16);
+    std::process::Command::new(&fx.tmux).args(["new-session","-d","-s","s1","-c"]).arg(&fx.cwd).arg("-e").arg(format!("CP_SESSION_KEY={key}")).status().unwrap();
+    let registry = fx.reopening_registry(&key).await;
+    // A vida nova ignora o SIGTERM do `kill-session` falso.
+    std::fs::write(fx.state.with_extension("stubborn"),"").unwrap();
+    let change = SessionChange { reason:ChangeReason::Reload,surface:None,account:None,permission_mode:None,model:None,effort:None,service_tier:None };
+    let reopened = registry.reopen_claude_session("s1",change,None).await.expect("é sessão Claude daqui");
+    assert_eq!(reopened.map(|_|()).map_err(|f|(f.error.code,f.stopped)),Ok(()));
+    let agent = fx.agent().unwrap();
+    let closed = registry.kill_claude("s1").await.expect("é sessão Claude daqui").map_err(|error|error.code).unwrap();
+    assert!(std::fs::read_to_string(format!("/proc/{agent}/cmdline")).unwrap_or_default().is_empty(),"saiu à força");
+    assert_eq!(closed["killed"],json!(true),"{closed}");
+    assert!(closed["transcript"].as_str().unwrap().ends_with(&format!("{SID}.jsonl")),"{closed}");
 }
 
 /// A sessão só leitura estacionada cuja troca de conta não traz o terminal protegido fica parada

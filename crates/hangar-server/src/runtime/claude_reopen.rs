@@ -161,7 +161,7 @@ const FORCED_WAIT:Duration = Duration::from_secs(3);
 
 /// Espera a árvore sair; quem passa do prazo e ainda é o mesmo processo é morto à força (SIGKILL; no
 /// Windows um `taskkill /F` só, sem `/T`: pid reaproveitado levaria árvore alheia) e ganha mais 3 s.
-async fn stop_tree(lives:Vec<(i64,f64)>) -> Result<(),RuntimeError> {
+pub(super) async fn stop_tree(lives:Vec<(i64,f64)>) -> Result<(),RuntimeError> {
     // No Windows o `claude` não trata o pedido de saída: esperar o prazo inteiro só atrasa.
     let wait=if cfg!(windows) {Duration::from_millis(1500)} else {EXIT_WAIT};
     if wait_gone(lives.clone(),wait).await.is_ok() {return Ok(());}
