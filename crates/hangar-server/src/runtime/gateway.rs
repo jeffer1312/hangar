@@ -2312,7 +2312,9 @@ impl RuntimeRegistry {
             Some(EntryHandle::Terminal {target,..}) if target.binding.conversation==conversation=>target,
             _=>return Ok(json!({"in_transfer":true})),
         };
-        if let Some(moved)=moved_transcript(&target) {return self.follow_transcript(&target,moved).await;}
+        let search=target.clone();
+        let moved=tokio::task::spawn_blocking(move||moved_transcript(&search)).await.map_err(|_|failure("lifecycle_worker"))?;
+        if let Some(moved)=moved {return self.follow_transcript(&target,moved).await;}
         // A troca vem do próprio Claude Code: o plugin passa a informar a conversa nova no `/pull` (o `/clear`
         // encerra a antiga com `session.end`). Sem ele, vale o registro nativo do processo.
         let binding=crate::terminal_facts::LocalTerminalFacts::binding(&target);
@@ -3059,8 +3061,10 @@ fn refuse(status:StatusCode,key:Option<&str>,check:&'static str) -> Response {
 /// o marcador do hook é a reserva sem ele e só vale antes de um `/clear`, porque a chave é o id da abertura.
 fn moved_transcript(target:&super::terminal::TerminalTarget)->Option<PathBuf> {
     if target.transcript.exists() {return None;}
-    let (config,sid)=(&target.metadata.config_dir,&target.binding.conversation);
-    let native=super::lifecycle::read_native_cwd(config,i64::from(target.metadata.agent_pid))
+    let (config,sid,pid)=(&target.metadata.config_dir,&target.binding.conversation,i64::from(target.metadata.agent_pid));
+    // Com `/clear` e mudança de pasta juntos, o `/clear` vai primeiro: seguir o arquivo antigo recarregaria o chat à toa.
+    if super::lifecycle::read_native_conversation(config,pid).is_ok_and(|current|current!=sid.as_str()) {return None;}
+    let native=super::lifecycle::read_native_cwd(config,pid)
         .map(|cwd|config.join("projects").join(hangar_workspace::worktrees::sanitize_cwd(&cwd)).join(format!("{sid}.jsonl")))
         .filter(|path|path.exists());
     native.or_else(||crate::list::discover::active_marker(config,sid,&Default::default()).map(PathBuf::from)
@@ -3776,8 +3780,9 @@ pub(crate) mod tests {
     async fn a_moved_transcript_is_followed_in_the_same_life() {
         let dir=tempfile::tempdir().unwrap();
         let registry=Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into()));
-        let hubs=crate::side::Hubs::default();registry.bind_hubs(hubs.downgrade());
-        let (_,handle)=claude_terminal_entry(&registry,dir.path(),77).await;
+        let ctx=crate::side::test_ctx();registry.bind_hubs(ctx.hubs.downgrade());
+        let (start,handle)=claude_terminal_entry(&registry,dir.path(),77).await;
+        let _lease=ctx.hubs.acquire("same",crate::side::Binding {provider:crate::transcript::Provider::Claude,jsonl:start.transcript,key:"new-sid".into(),headless:false,life:None},&ctx);
         let project=dir.path().join("projects/worktree");
         std::fs::create_dir_all(&project).unwrap();
         std::fs::create_dir_all(dir.path().join(".hangar-active")).unwrap();
@@ -3791,6 +3796,7 @@ pub(crate) mod tests {
         mark(&moved);
         assert_eq!(registry.reconcile_claude("same","B","new-sid",7).await.unwrap(),json!({"changed":true,"moved":true}));
         let target=registry.terminal_target("same").await.unwrap().unwrap();
+        assert_eq!(ctx.hubs.bound("same").unwrap().jsonl,moved,"o chat ao vivo segue o arquivo novo");
         assert_eq!((target.transcript,target.generation,target.binding.conversation.as_str()),(moved,7,"new-sid"));
         handle.snapshot().await.expect("o ator da vida segue de pé");
         registry.close("B",7).await.unwrap();
@@ -3813,6 +3819,24 @@ pub(crate) mod tests {
         assert_eq!(registry.reconcile_claude("same","B","new-sid",7).await.unwrap(),json!({"changed":true,"moved":true}));
         assert_eq!(registry.terminal_target("same").await.unwrap().unwrap().transcript,moved);
         registry.close("B",7).await.unwrap();
+    }
+
+    /// `/clear` logo depois da mudança de pasta: o arquivo antigo está lá, mas a conversa já é outra.
+    #[tokio::test]
+    async fn a_conversation_change_is_not_followed_as_a_move() {
+        let dir=tempfile::tempdir().unwrap();
+        let registry=RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into());
+        let (target,handle)=claude_terminal_entry(&registry,dir.path(),77).await;
+        let project=dir.path().join("projects").join(hangar_workspace::worktrees::sanitize_cwd("/worktree"));
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("new-sid.jsonl"),b"").unwrap();
+        std::fs::create_dir_all(dir.path().join("sessions")).unwrap();
+        let record=|sid:&str|std::fs::write(dir.path().join("sessions/77.json"),json!({"pid":77,"sessionId":sid,"cwd":"/worktree"}).to_string()).unwrap();
+        record("later-sid");
+        assert_eq!(super::moved_transcript(&target),None);
+        record("new-sid");
+        assert_eq!(super::moved_transcript(&target),Some(project.join("new-sid.jsonl")));
+        handle.stop().await.unwrap();
     }
 
     /// Parity M5: a primeira leitura já em `plan` não inventa `manual` como base dos recados; sem a base
