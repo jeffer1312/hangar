@@ -40,6 +40,8 @@ const draftSchema = z.preprocess(legacyAttachment, z.object({
     seenIds: z.array(z.string()).optional(),
     // Áudios que saíram do campo com este envio: a falha os devolve, a confirmação os tira de novo.
     recordingIds: z.array(z.string()).optional(),
+    // Texto que saiu do campo: sem citações nem anexos, é ele que a falha devolve ao campo.
+    typed: z.string().optional(),
   }).nullable(),
 }));
 
@@ -101,6 +103,19 @@ export function removeDraftRecording(serverId: string, name: string, id: string)
   writeDraft(serverId, name, next);
   return next;
 }
+// Envio incerto que chegou: o aviso sai junto com o que a falha devolveu ao campo e ninguém mexeu.
+export function deliveredDraft(draft: ConversationDraft): ConversationDraft {
+  const sent = draft.submission;
+  if (!sent) return draft;
+  const restored = draft.text.trim() === (sent.typed ?? sent.text).trim();
+  const recordings = draft.recordings?.filter((r) => !sent.recordingIds?.includes(r.id));
+  return { ...draft, submission: null,
+    // O caminho do upload está no texto enviado; anexo colado depois não tem e fica.
+    attachments: draft.attachments.filter((a) => !a.uploadedPath || !sent.text.includes(a.uploadedPath)),
+    ...(recordings ? { recordings } : {}),
+    ...(restored ? { text: '', revision: draft.revision + 1 } : {}) };
+}
+
 export const readRecoverableDraft = (serverId: string, name: string) => readAt(recoverableKeyOf(serverId, name));
 export const writeRecoverableDraft = (serverId: string, name: string, value: ConversationDraft) =>
   writeAt(recoverableKeyOf(serverId, name), value);

@@ -88,6 +88,8 @@ beforeEach(() => {
     { id: 'srv1', label: 'um', baseUrl: 'http://10.0.0.1:8765', token: 'tok' },
     { id: 'srv2', label: 'dois', baseUrl: 'http://10.0.0.2:8765', token: 'tok2' },
   ];
+  // Queda simulada grava prazo no módulo: sem zerar, o teste seguinte nem chega ao POST.
+  for (const s of servidores.lista) registrarSucesso(s.id);
   created = [];
   historyCalls = 0;
   historyResponses = [];
@@ -1679,6 +1681,10 @@ describe('primeiro plano', () => {
   });
 
   test('fundo fecha stream e timers sem perder conversa; volta sincroniza uma vez sem duplicar', async () => {
+    // Relógio falso: a espera real do backoff estourava o limite do teste com a máquina carregada.
+    vi.useFakeTimers();
+    try {
+    const tick = () => vi.advanceTimersByTimeAsync(0);
     const pedidos = fetchManual();
     const chat = chatStore('srv1', 'sess');
     chat.retain();
@@ -1691,7 +1697,7 @@ describe('primeiro plano', () => {
 
     chat.setForeground(false);
     expect(created[0].close).toHaveBeenCalled();
-    await new Promise((r) => setTimeout(r, 3_100));
+    await vi.advanceTimersByTimeAsync(3_100);
     expect(created).toHaveLength(1);
     expect(pedidos).toHaveLength(1);
     const s = chat.use.getState();
@@ -1720,6 +1726,9 @@ describe('primeiro plano', () => {
     expect(chat.use.getState().events.map((e) => e.id)).toEqual(['a:1', 'a:2', 'a:3', 'a:4']);
     expect(created).toHaveLength(3);
     chat.release();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test('consulta antiga não sobrescreve a geração atual', async () => {
@@ -1891,9 +1900,6 @@ describe('envio Direto e Jev pelo mesmo rascunho', () => {
 });
 
 describe('envio incerto que a conversa confirma', () => {
-  // A queda simulada grava prazo para o servidor, e o teste seguinte nem chegaria ao POST.
-  beforeEach(() => registrarSucesso('srv1'));
-
   function stubInput(input: () => Promise<Response>) {
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (String(url).endsWith('/input')) return input();
@@ -1914,6 +1920,28 @@ describe('envio incerto que a conversa confirma', () => {
     expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'como está?', submission: { status: 'unknown' } });
     created[0].trigger('message', JSON.stringify(ev({ id: 'u:1', text: 'como está?', ts: agora() })));
     expect(readDraft('srv1', 'sess')).toMatchObject({ text: '', submission: null });
+  });
+
+  test('fala do Claude sem horário, que chega na volta do fundo, confirma o envio', async () => {
+    historyResponses = [[]];
+    stubInput(async () => { throw new TypeError('Network request failed'); });
+    const chat = chatStore('srv1', 'sess');
+    chat.retain();
+    await tick();
+    await expect(chat.send('Chegou sim, tem um monte  de e-mail aqui')).rejects.toThrow(m.chat_envio_incerto());
+    created[0].trigger('message', JSON.stringify(ev({ id: 'b9a55066', text: 'Chegou sim, tem um monte  de e-mail aqui', ts: null })));
+    expect(readDraft('srv1', 'sess')).toMatchObject({ text: '', submission: null });
+  });
+
+  test('fala sem horário igual que já estava na conversa não confirma', async () => {
+    historyResponses = [[ev({ id: 'u:antes', text: 'sim', ts: null })]];
+    stubInput(async () => { throw new TypeError('Network request failed'); });
+    const chat = chatStore('srv1', 'sess');
+    chat.retain();
+    await tick();
+    await expect(chat.send('sim')).rejects.toThrow(m.chat_envio_incerto());
+    created[0].trigger('message', JSON.stringify(ev({ id: 'u:antes', text: 'sim', ts: null })));
+    expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'sim', submission: { status: 'unknown' } });
   });
 
   test('mensagem igual de antes do envio não confirma', async () => {

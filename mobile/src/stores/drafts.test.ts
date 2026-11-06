@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { prefs } from './prefs';
 import {
-  clearDraft, clearRecoverableDraft, readDraft, readRecoverableDraft, resolveDraftTranscript, reusableUploadPath, withoutUpload,
+  clearDraft, clearRecoverableDraft, deliveredDraft, readDraft, readRecoverableDraft, resolveDraftTranscript, reusableUploadPath, withoutUpload,
   writeDraft, writeRecoverableDraft,
   readDictation, writeDictation, clearDictation, finishDictation, recoverDictation, associateDictationTranscript,
   setDictationInFlight, applyReadyDictation, removeDraftRecording,
@@ -257,6 +257,18 @@ describe('upload do anexo', () => {
     const bare = withoutUpload(attachment);
     expect(bare).toEqual({ uri: attachment.uri, name: 'foto.png', mime: 'image/png', kind: 'image' });
     expect(reusableUploadPath(bare, target)).toBeNull();
+  });
+
+  it('envio incerto que chegou tira o aviso, o texto devolvido e o anexo enviado, e deixa o colado depois', () => {
+    const later: DraftAttachment = { uri: 'file:///doc/draft-attachments/2-2.png', name: 'nova.png', mime: 'image/png', kind: 'image' };
+    const sent = draft({ text: 'olha isso', revision: 5, attachments: [attachment, later],
+      submission: { text: 'olha isso — 📎 imagem: /uploads/foto.png', typed: 'olha isso', draftRevision: 3, status: 'unknown' } });
+    expect(deliveredDraft(sent)).toMatchObject({ text: '', revision: 6, attachments: [later], submission: null });
+  });
+
+  it('envio incerto que chegou não apaga o que a pessoa digitou depois', () => {
+    const sent = draft({ text: 'outra coisa', submission: { text: 'olha isso', typed: 'olha isso', draftRevision: 3, status: 'unknown' } });
+    expect(deliveredDraft(sent)).toMatchObject({ text: 'outra coisa', submission: null });
   });
 });
 

@@ -11,7 +11,7 @@ import * as m from '../paraglide/messages';
 import { chatStore, filaCount as filaCountOf, submitConversationDraft, isSubmitting } from '../stores/chat';
 import { abandonUnknownAttempt, attachInsert, confirmFirstInput, firstInputMessage, readFirstInput, sendFirstInput, useNewConversation, withAttach } from '../stores/newConversation';
 import { useSessions } from '../stores/sessions';
-import { clearDraft, clearRecoverableDraft, readDraft, readRecoverableDraft, resolveDraftTranscript, removeDraftRecording, reusableUploadPath, withoutUpload, writeDraft, writeRecoverableDraft, clearDictation, readDictation, writeDictation, recoverDictation, applyReadyDictation, associateDictationTranscript, type ConversationDraft, type DraftAttachment, type DictationDraft, type UploadTarget } from '../stores/drafts';
+import { clearDraft, clearRecoverableDraft, deliveredDraft, readDraft, readRecoverableDraft, resolveDraftTranscript, removeDraftRecording, reusableUploadPath, withoutUpload, writeDraft, writeRecoverableDraft, clearDictation, readDictation, writeDictation, recoverDictation, applyReadyDictation, associateDictationTranscript, type ConversationDraft, type DraftAttachment, type DictationDraft, type UploadTarget } from '../stores/drafts';
 import { useServers } from '../stores/servers';
 import { revealOnSend } from '../features/sessions/revealOnSend';
 import { removeDraftAttachment, retainDraftAttachment } from './draftAttachments';
@@ -354,6 +354,12 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
       }
       if (latest.transcript && transcriptRef.current && latest.transcript !== transcriptRef.current) return;
       const unchanged = textRef.current === (draftRef.current?.text ?? '');
+      const prior = draftRef.current;
+      // Envio incerto que a conversa confirmou: os anexos dele saíram do rascunho, e o erro da queda sai da tela.
+      if (prior?.submission?.status === 'unknown' && !latest.submission) {
+        for (const a of prior.attachments) if (!latest.attachments.some((x) => x.uri === a.uri)) dropCopy(a.uri);
+        setError((current) => (current === m.chat_envio_incerto() ? '' : current));
+      }
       draftRef.current = latest;
       setRecordings(latest.recordings ?? []);
       setSubmission(latest.submission);
@@ -394,6 +400,19 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
       setDraftIssue(e instanceof Error ? e.message : m.draft_write_error());
     }
   }, [submission, origin, pendingAttachments]);
+
+  // A pessoa viu a mensagem na conversa: mesma limpeza da confirmação automática.
+  const handleSubmissionArrived = useCallback(() => {
+    if (isSubmitting(origin.serverId, origin.name)) return;
+    try {
+      const latest = readDraft(origin.serverId, origin.name);
+      if (latest?.submission?.status !== 'unknown') return;
+      writeDraft(origin.serverId, origin.name, deliveredDraft(latest));
+      chat.use.setState((s) => ({ draftUpdate: s.draftUpdate + 1 }));
+    } catch (e) {
+      setDraftIssue(e instanceof Error ? e.message : m.draft_write_error());
+    }
+  }, [origin, chat]);
 
   // null → caminho é a primeira confirmação (Codex iniciando); caminho → outro é sessão recriada.
   useEffect(() => {
@@ -1879,6 +1898,11 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
             {submission.status === 'unknown' ? (
               <Pressable onPress={chat.retry} style={[styles.undoBtn, { borderColor: theme.tokens.border.subtle }]} accessibilityRole="button">
                 <Text style={[styles.undoText, { color: theme.tokens.accent.base }]}>{m.composer_submission_check()}</Text>
+              </Pressable>
+            ) : null}
+            {submission.status === 'unknown' ? (
+              <Pressable onPress={handleSubmissionArrived} style={[styles.undoBtn, { borderColor: theme.tokens.border.subtle }]} accessibilityRole="button">
+                <Text style={[styles.undoText, { color: theme.tokens.text.secondary }]}>{m.composer_submission_arrived()}</Text>
               </Pressable>
             ) : null}
           </View>

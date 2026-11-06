@@ -43,7 +43,7 @@ import type { ChatEvent, StateEvent, PreviewEvent, AskQuestionPayload, StatsEven
 import * as m from '../paraglide/messages';
 import { reconcilePending, sameMessage, type PendingMsg } from '../chat/pending';
 import { useServers } from './servers';
-import { readDraft, writeDraft, type ConversationDraft } from './drafts';
+import { deliveredDraft, readDraft, writeDraft, type ConversationDraft } from './drafts';
 import { sendWithDelivery, type DeliveryFeedback, type QueueSendMode } from '../chat/queueDelivery';
 
 // Store vivo do chat de UMA sessão — porte do núcleo de frontend/src/screens/Chat.svelte
@@ -309,11 +309,11 @@ function criarChatStore(serverId: string, name: string): ChatApi {
       eventsRevision: current.eventsRevision + (changed && change !== 'append' ? 1 : 0) });
   }
 
-  function aplicarEvents(events: ChatEvent[]) {
+  function aplicarEvents(events: ChatEvent[], confirm = true) {
     if (retiredQueuedIds.size) events = events.filter((e) => !retiredQueuedIds.has(e.id));
     const pending = events.reduce(reconcilePending, useChatStore.getState().pending);
     publishEvents(events, 'rebuild', { pending });
-    confirmSubmission(events);
+    if (confirm) confirmSubmission(events);
   }
 
   // A conversa pode confirmar com o POST em voo; sem isto, a queda seguinte viraria erro de mensagem entregue.
@@ -327,16 +327,13 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     if (!draft || !sent || sent.status !== 'unknown' || sent.startedAt === undefined) return false;
     // Folga para o relógio do celular adiantado em relação ao servidor.
     const since = sent.startedAt / 1000 - 30;
+    // A fala do Claude vem sem horário (só a entrega pela fila tem): aí a igual de antes já está em seenIds,
+    // e o histórico mais antigo, que não está, nunca passa por aqui.
     const arrived = events.some((e) => e.kind === 'user_msg' && !e.id.startsWith('queued-') && !sent.seenIds?.includes(e.id)
-      && e.ts != null && e.ts >= since && !!e.text && sameMessage(sent.text, e.text));
+      && (e.ts == null || e.ts >= since) && !!e.text && sameMessage(sent.text, e.text));
     if (!arrived) return false;
-    const restored = draft.text.trim() === sent.text.trim();
-    const recordings = draft.recordings?.filter((r) => !sent.recordingIds?.includes(r.id));
     // Sem gravar, o aviso fica: é o lado seguro.
-    try {
-      writeDraft(serverId, name, { ...draft, submission: null, ...(recordings ? { recordings } : {}),
-        ...(restored ? { text: '', revision: draft.revision + 1 } : {}) });
-    } catch { return false; }
+    try { writeDraft(serverId, name, deliveredDraft(draft)); } catch { return false; }
     confirmedSend = sent.text;
     useChatStore.setState((s) => ({ draftUpdate: s.draftUpdate + 1 }));
     return true;
@@ -446,7 +443,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
           });
           return;
         }
-        aplicarEvents(merged);
+        aplicarEvents(merged, false);
         useChatStore.setState({ olderFailed: '' });
       })
       .catch((err) => {
@@ -1077,6 +1074,7 @@ export async function submitConversationDraft(serverId: string, name: string, te
     const seenIds = chatStore(serverId, name).use.getState().events
       .filter((e) => e.kind === 'user_msg' && !!e.text && sameMessage(text, e.text)).map((e) => e.id);
     const submission = { text, draftRevision: draftRevision ?? current.revision, status: 'sending' as const, startedAt: Date.now(), seenIds,
+      ...(fromField ? { typed: current.text } : {}),
       ...(fromField && current.recordings?.length ? { recordingIds: current.recordings.map((r) => r.id) } : {}) };
     // A fila já mostra a mensagem: texto e áudios enviados saem do campo antes da resposta.
     writeDraft(serverId, name, { ...current, submission,
