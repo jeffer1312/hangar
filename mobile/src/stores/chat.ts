@@ -1074,8 +1074,13 @@ export async function submitConversationDraft(serverId: string, name: string, te
     // O campo pode já ter outra edição (primeiro input, pedido de plano): essa fica onde está.
     const fromField = draftRevision === undefined ? current.text.trim() === text.trim() : current.revision === draftRevision;
     const store = chatStore(serverId, name);
-    const seenIds = store.historyLoaded() ? store.use.getState().events
-      .filter((e) => e.kind === 'user_msg' && !!e.text && sameMessage(text, e.text)).map((e) => e.id) : undefined;
+    const live = store.use.getState();
+    const same = (t: string | undefined) => !!t && sameMessage(text, t);
+    // Um envio igual ainda a caminho ecoaria sem horário como se fosse este: sem seenIds, só o horário confirma.
+    const ambiguous = live.pending.some((p) => same(p.text))
+      || currentQueuePanel(live.queuePanel, live.events).entries.some((q) => same(q.text));
+    const seenIds = store.historyLoaded() && !ambiguous ? live.events
+      .filter((e) => e.kind === 'user_msg' && same(e.text)).map((e) => e.id) : undefined;
     const submission = { text, draftRevision: draftRevision ?? current.revision, status: 'sending' as const, startedAt: Date.now(), seenIds,
       ...(fromField ? { typed: current.text } : {}),
       ...(fromField && current.recordings?.length ? { recordingIds: current.recordings.map((r) => r.id) } : {}) };
