@@ -978,6 +978,7 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
     state.step("passos");
     let stepping = Instant::now();
     let steps_mark = job.startup_output.map(|_| startup_output::Mark::take(false));
+    let applied_before = self::steps::applied(job.state_dir).unwrap_or_default();
     let applied_now = {
         let (root, home, state_dir, log) = (dir.clone(), job.home.to_path_buf(), job.state_dir.to_path_buf(), state.clone());
         match blocking(move || apply_machine_steps(&root, &home, &state_dir, &*steps, &log)).await {
@@ -1002,7 +1003,8 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
                     Reading::NotRust(_) => false,
                 };
                 if restarted && !restarter.manual() {
-                    return roll_back(job, &state, previous, before.as_ref(), &[], e.to_string(), restarter, health).await;
+                    let applied_now: Vec<String> = self::steps::applied(job.state_dir).unwrap_or_default().difference(&applied_before).cloned().collect();
+                    return roll_back(job, &state, previous, before.as_ref(), &applied_now, e.to_string(), restarter, health).await;
                 }
                 let e = match put_back(job.layout, previous).await {
                     Ok(()) => e,
