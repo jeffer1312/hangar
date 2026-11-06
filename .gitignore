@@ -78,6 +78,7 @@ docs/handoffs/
 !.claude/skills/
 .claude/skills/*
 !.claude/skills/rust-*
+.claude/skills/rust-*/
 
 # Cache de build criado por engano na raiz (o vite/vitest do projeto roda em frontend/, e o
 # frontend/.gitignore ja cobre o de la). Sem esta regra, um `npm`/`vite` rodado da raiz deixa um
