@@ -122,6 +122,8 @@ beforeEach(async () => {
       setScreen = vi.fn();
       setMuted = vi.fn();
       setMode = vi.fn();
+      canPauseSpeech = vi.fn(() => true);
+      setSpeechPaused = vi.fn();
       constructor(handlers: LiveVoiceHandlers) { this.handlers = handlers; calls.push(this); }
     } };
   });
@@ -696,6 +698,20 @@ describe('configuração e memória do servidor capturado', () => {
     stale.resolve([memory]); await reading;
     expect(api.forget).toHaveBeenCalledWith(a, memory.id);
     expect(useLiveVoice.getState().view.memory).toMatchObject({ loading: false, entries: [], forgetError: null });
+  });
+
+  test('pausa da fala alterna na chamada e a chamada seguinte começa sem pausa', async () => {
+    const instance = await startA() as Instance & { setSpeechPaused: ReturnType<typeof vi.fn> };
+    expect(useLiveVoice.getState().view.speechPauseAvailable).toBe(true);
+    useLiveVoice.getState().toggleSpeechPause();
+    expect(instance.setSpeechPaused).toHaveBeenLastCalledWith(true);
+    expect(useLiveVoice.getState().view.speechPaused).toBe(true);
+    useLiveVoice.getState().toggleSpeechPause();
+    expect(instance.setSpeechPaused).toHaveBeenLastCalledWith(false);
+    useLiveVoice.getState().toggleSpeechPause();
+    await useLiveVoice.getState().stop();
+    await startA();
+    expect(useLiveVoice.getState().view.speechPaused).toBe(false);
   });
 
   test('vibra uma vez por travamento, não a cada retrato igual', async () => {

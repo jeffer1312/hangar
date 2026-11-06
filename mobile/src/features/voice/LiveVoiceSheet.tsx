@@ -21,6 +21,9 @@ export interface LiveVoiceView {
   state: LiveVoiceState | null;
   error: { code: string; detail?: string } | null;
   muted: boolean;
+  /** Só o aparelho que guarda a fala oferece a pausa. */
+  speechPauseAvailable?: boolean;
+  speechPaused?: boolean;
   dictating?: boolean;
   levels: { input: number; output: number };
   liveSince: number | null;
@@ -54,6 +57,7 @@ export interface LiveVoiceSheetProps {
   onStart: () => void;
   onStop: () => void;
   onToggleMute: () => void;
+  onToggleSpeechPause?: () => void;
   onMode: (mode: 'direto' | 'planejar') => void;
   onRetry: () => void;
   onSaveSettings: (next: LiveVoiceSettings) => void;
@@ -229,7 +233,7 @@ function Meter({ title, used }: { title: string; used: number }) {
   );
 }
 
-export function LiveVoiceSheet({ open, view, levels, servers, serverId, onSelectServer, onDismiss, onStart, onStop, onToggleMute, onMode, onRetry,
+export function LiveVoiceSheet({ open, view, levels, servers, serverId, onSelectServer, onDismiss, onStart, onStop, onToggleMute, onToggleSpeechPause, onMode, onRetry,
   onSaveSettings, onSettingsOpen, onForgetMemory }: LiveVoiceSheetProps) {
   const { theme } = useUnistyles();
   const { height } = useWindowDimensions();
@@ -306,7 +310,8 @@ export function LiveVoiceSheet({ open, view, levels, servers, serverId, onSelect
   const canStart = !inCall && !!reply && reply.codex && reply.enabled;
   // Anuncia o que muda de fato: nem o cronômetro (todo segundo) nem quem fala (a cada sílaba).
   const stalled = inCall && state?.stalled === true;
-  const announcement = [stalled ? m.codex_voice_stalled() : '', inCall ? STATUS[liveVoiceStatus(view.phase === 'live', 'idle', muted, state?.activity)]() : idleStatus ??m.live_voice_error_failed(),
+  const speechPaused = inCall && view.speechPaused === true;
+  const announcement = [stalled ? m.codex_voice_stalled() : '', speechPaused ? m.codex_voice_paused() : '', inCall ? STATUS[liveVoiceStatus(view.phase === 'live', 'idle', muted, state?.activity)]() : idleStatus ??m.live_voice_error_failed(),
     doing ?? '', busy && state.progress !== doing ? state.progress ?? '' : ''].filter(Boolean).join(', ');
   const announced = useRef(announcement);
   useEffect(() => {
@@ -341,6 +346,7 @@ export function LiveVoiceSheet({ open, view, levels, servers, serverId, onSelect
           {view.phase === 'live' ? <Text style={styles.time}>{elapsed}</Text>
             : view.phase === 'connecting' || settings.loading && !reply ? <ActivityIndicator size="small" color={theme.tokens.accent.base} /> : null}
           {stalled ? <Text style={[styles.status, { color: theme.tokens.status.error }]} accessibilityRole="alert">{m.codex_voice_stalled()}</Text> : null}
+          {speechPaused ? <Text style={styles.status}>{m.codex_voice_paused()}</Text> : null}
           {doing ? <Text selectable style={styles.doing} numberOfLines={2}>{doing}</Text> : null}
         </View>
         {state?.action && state.progress && busy ? <Text selectable style={styles.doing}>{state.progress}</Text> : null}
@@ -364,6 +370,9 @@ export function LiveVoiceSheet({ open, view, levels, servers, serverId, onSelect
           options={MODES.map(mode => ({ v: mode, label: modeLabel(mode) }))}
           onChange={mode => onMode(mode === 'direct' ? 'direto' : 'planejar')} /></View> : null}
         <View style={styles.controls}>
+          {view.speechPauseAvailable && onToggleSpeechPause ? <RoundAction title={speechPaused ? m.codex_voice_resume_short() : m.codex_voice_pause_short()}
+            label={speechPaused ? m.codex_voice_resume_short() : m.codex_voice_pause_short()} icon={speechPaused ? 'Play' : 'Pause'}
+            onPress={onToggleSpeechPause} selected={speechPaused} disabled={view.phase !== 'live'} /> : null}
           <RoundAction title={muteTitle} label={muteTitle} icon={muted ? 'MicOff' : 'Mic'} onPress={onToggleMute} selected={muted} disabled={!!view.dictating} />
           <RoundAction title={m.native_live_voice_settings_memory()} label={m.native_live_voice_details()} icon="SlidersHorizontal"
             onPress={toggleDetails} expanded={false} />

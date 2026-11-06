@@ -366,6 +366,22 @@ describe('LiveVoiceCall público', () => {
     expect(socket.messages.some(message => message.type === 'stop')).toBe(false);
   });
 
+  it('pausar a fala fecha o microfone e retomar reabre, sem mexer no silenciar', async () => {
+    const media = new rtc.Stream();
+    rtc.getUserMedia.mockResolvedValueOnce(media);
+    const { call, pc } = await openCall(); pc.connect();
+    const open = () => media.track.enabled;
+    expect(open()).toBe(true);
+    call.setSpeechPaused(true);
+    expect(open()).toBe(false);
+    call.setSpeechPaused(false);
+    expect(open()).toBe(true);
+    call.setMuted(true);
+    call.setSpeechPaused(true);
+    call.setSpeechPaused(false);
+    expect(open()).toBe(false);
+  });
+
   it('contador reoffer que sobe refaz o áudio; o primeiro retrato é só a base', async () => {
     const { pc, socket, handlers } = await openCall(); pc.connect();
     const state = (reoffer: number) => ({ type: 'state', state: { phase: 'live', mode: 'direct', activity: 'idle', draft: null, error: null, plan: null,

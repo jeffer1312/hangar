@@ -76,6 +76,7 @@ function releaseMedia(media: MediaStream): void {
 export class LiveVoiceCall {
   private attempt: Attempt | null = null;
   private muted = false;
+  private speechPaused = false;
   private screen: LiveVoiceScreen = null;
 
   constructor(private handlers: LiveVoiceHandlers) {}
@@ -355,8 +356,18 @@ export class LiveVoiceCall {
     } else this.updateTracks(call);
   }
 
+  canPauseSpeech(): boolean { return LiveVoiceAudio.speechPauseAvailable?.() === true; }
+
+  /** Fecha o microfone junto: outra pessoa falando perto interromperia a resposta no servidor. */
+  setSpeechPaused(paused: boolean): void {
+    this.speechPaused = paused;
+    LiveVoiceAudio.setSpeechPaused?.(paused);
+    const call = this.attempt;
+    if (call && this.current(call)) this.updateTracks(call);
+  }
+
   private updateTracks(call: Attempt): void {
-    const enabled = this.current(call) && !this.muted && !call.restoring
+    const enabled = this.current(call) && !this.muted && !this.speechPaused && !call.restoring
       && (call.pc?.connectionState === 'connected' || call.live && call.pc?.connectionState === 'disconnected');
     for (const track of call.media?.getAudioTracks() ?? []) track.enabled = enabled;
   }

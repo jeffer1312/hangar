@@ -39,8 +39,15 @@ public class LiveVoiceAudioModule: Module {
     }.runOnQueue(.main)
 
     AsyncFunction("stop") {
+      HangarAudioDevice.shared.held.reset()
       try self.stopAudio()
     }.runOnQueue(.main)
+
+    Function("speechPauseAvailable") { HangarAudioDevice.shared.installed }
+
+    Function("setSpeechPaused") { (paused: Bool) in
+      HangarAudioDevice.shared.held.setPaused(paused)
+    }
 
     OnDestroy {
       DispatchQueue.main.async {
