@@ -34,7 +34,9 @@ import { HeaderBack, useGlassHeader } from '../../../../src/ui/glassHeader';
 import { MultilineInput } from '../../../../src/ui/MultilineInput';
 import { ProviderGlyph } from '../../../../src/ui/ProviderGlyph';
 import { toast } from '../../../../src/ui/Toast';
+import { Sheet } from '../../../../src/ui/Sheet';
 import { MessageList } from '../../../../src/chat/MessageList';
+import { CwdPicker } from '../../../../src/features/create/CwdPicker';
 import { QuietPill } from '../../../../src/features/create/QuietPill';
 import { superficie } from '../../../../src/theme/superficie';
 import * as m from '../../../../src/paraglide/messages';
@@ -80,6 +82,12 @@ export default function ArchivedConversation() {
   const [draft, setDraft] = useState('');
   const [resuming, setResuming] = useState(false);
   const [resumeError, setResumeError] = useState('');
+  // A pasta da conversa sumiu: a folha pergunta onde retomar. Ref: a escolha e o fim dela vêm no mesmo toque.
+  // A folha só desmonta depois de fechada: desmontada aberta, no iOS ela pode ficar sobre a tela.
+  const [folderSheet, setFolderSheet] = useState<'none' | 'open' | 'closing'>('none');
+  const chosenFolder = useRef('');
+  const resumeFolder = useRef<{ sid: string; path: string } | null>(null);
+  const resumeAfterSheet = useRef(false);
   // O pane original morreu: o app não sabe qual motor rodava a conversa. '' = conta Anthropic.
   const [engine, setEngine] = useState('');
   const [motores, setMotores] = useState<Record<string, Motor>>({});
@@ -106,6 +114,8 @@ export default function ArchivedConversation() {
     setError('');
     setEvents([]);
     setResumeError('');
+    resumeAfterSheet.current = false;
+    setFolderSheet((sheet) => (sheet === 'none' ? 'none' : 'closing'));
     setEngine('');
     setMotores({});
     setPickedConfig(null);
@@ -206,12 +216,13 @@ export default function ArchivedConversation() {
     const e = entry;
     const srv = server;
     const g = gen.current;
+    const cwd = resumeFolder.current?.sid === e.session_id ? resumeFolder.current.path : undefined;
     setResuming(true);
     setResumeError('');
     let name = '';
     try {
       const info = await resumeArchivedConversation(e.project, e.session_id, engine || null,
-        pickedConfig ?? e.config_dir, e.provider, e.codex_account, srv);
+        pickedConfig ?? e.config_dir, e.provider, e.codex_account, srv, cwd);
       name = info.name;
       await sendInputForServer(srv, name, text);
       setDraft('');
@@ -228,6 +239,7 @@ export default function ArchivedConversation() {
           return;
         }
         setResumeError(viva ? m.conversa_ja_aberta_sem_nome() : err instanceof Error ? err.message : m.arquivo_retomar_erro());
+        if (x.code === 'erro_cwd_inexistente' && (e.provider === 'claude' || e.provider === 'codex')) setFolderSheet('open');
         return;
       }
       console.error('archive: resume ok, send failed', name, err);
@@ -367,6 +379,35 @@ export default function ArchivedConversation() {
           </View>
         ) : null}
       </KeyboardAvoidingView>
+      {folderSheet !== 'none' && server ? (
+        <Sheet
+          open={folderSheet === 'open'}
+          sizes={['large']}
+          scrollable
+          onDismiss={() => {
+            setFolderSheet('none');
+            if (!resumeAfterSheet.current) return;
+            resumeAfterSheet.current = false;
+            void sendAndResume();
+          }}
+        >
+          <KeyboardAvoidingView behavior="padding" automaticOffset style={styles.folderSheet}>
+            <Text style={[styles.folderTitle, { color: textColor }]} accessibilityRole="header">{m.retomar_escolher_pasta()}</Text>
+            <Text style={[styles.folderNote, { color: theme.tokens.status.warning }]} accessibilityRole="alert">{resumeError}</Text>
+            <CwdPicker
+              server={server}
+              autoSelect={false}
+              onPick={(path) => { chosenFolder.current = path; }}
+              onDone={() => {
+                if (!entry) return;
+                resumeFolder.current = { sid: entry.session_id, path: chosenFolder.current };
+                resumeAfterSheet.current = true;
+                setFolderSheet('closing');
+              }}
+            />
+          </KeyboardAvoidingView>
+        </Sheet>
+      ) : null}
     </Screen>
   );
 }
@@ -391,6 +432,9 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: theme.base.radius.full,
     overflow: 'hidden',
   },
+  folderSheet: { flex: 1, minHeight: 480, paddingHorizontal: theme.base.space[4], gap: theme.base.space[2] },
+  folderTitle: { fontSize: theme.base.text.base, fontWeight: theme.base.weight.semibold },
+  folderNote: { fontSize: theme.base.text.sm },
   dock: { paddingTop: theme.base.space[2], gap: theme.base.space[1] },
   note: { fontSize: theme.base.text.sm, paddingHorizontal: theme.base.space[4] },
   box: {

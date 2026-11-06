@@ -2835,6 +2835,21 @@ fn a_conversation_resumes_by_id_alone_with_the_surface_asked() {
     assert!(created["argv"].as_array().unwrap().last().unwrap().as_str().unwrap().contains(&format!("--resume {SID}")), "{created}");
 }
 
+/// A pasta escolhida vence a gravada; a que também não existe é recusada com o código que abre o seletor.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_chosen_folder_replaces_the_recorded_one() {
+    let chosen = |s: &mut Value| s["steps"][0]["json"] = json!({"cwd": "<ROOT>/escolhida"});
+    let (_, raw, _dir, root) = run_resume_patched("archive_resume_claude", chosen, |root| std::fs::create_dir(root.join("escolhida")).unwrap());
+    assert_eq!(raw["steps"][0]["status"], 200, "{}", raw["steps"][0]["body"]);
+    assert_eq!(raw["steps"][0]["body"]["cwd"], json!(root.join("escolhida")));
+    let jsonl = raw["steps"][0]["body"]["jsonl"].as_str().unwrap();
+    assert!(jsonl.contains(&hangar_workspace::worktrees::sanitize_cwd(&root.join("escolhida").to_string_lossy())) && std::path::Path::new(jsonl).is_file(),
+        "a conversa foi junto para a pasta nova: {jsonl}");
+    let (_, raw, _dir, _root) = run_resume_patched("archive_resume_claude", chosen, |_| {});
+    assert_eq!((&raw["steps"][0]["status"], &raw["steps"][0]["body"]["detail"]["code"]), (&json!(400), &json!("erro_cwd_inexistente")));
+}
+
 /// Com o padrão do servidor sem terminal, a conversa do Arquivo volta sem terminal (matriz, item 21): o
 /// sidecar leva a conversa retomada, nenhum pane nasce e a sessão é acordada.
 #[cfg(target_os = "linux")]

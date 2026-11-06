@@ -9,6 +9,7 @@
 //! na ativa, como no web.
 use super::*;
 use super::device::Remote;
+use super::resume_folder::{FOLDER_GONE, ResumeFolder, ResumeFolderEvent};
 use super::costs::web_with;
 use super::sidebar::Target;
 use super::tab_preview::ConversationSlot;
@@ -304,6 +305,10 @@ pub(super) struct Search {
     /// Retomada em curso (a conversa) e o erro da última.
     resuming: Option<String>,
     resume_error: Option<String>,
+    /// A pasta da conversa sumiu: o seletor por cima da paleta.
+    resume_folder: Option<(Entity<ResumeFolder>, Subscription)>,
+    /// Sobe ao fechar a paleta: a resposta de uma retomada abandonada não abre seletor na abertura seguinte.
+    resume_turn: u64,
     previous_focus: Option<FocusHandle>,
     ask_scroll: ScrollHandle,
     _events: Option<Subscription>,
@@ -471,6 +476,8 @@ impl Hangar {
         // A resposta da pergunta interrompida não entra em nada: nem nesta paleta, nem na próxima.
         self.search.ask.reset();
         self.search.chat = None;
+        self.search.resume_folder = None;
+        self.search.resume_turn += 1;
         match self.search.previous_focus.take() { Some(focus) => focus.focus(window, cx), None => self.root_focus.focus(window, cx) }
         cx.notify();
     }
@@ -723,7 +730,7 @@ impl Hangar {
     fn search_open_hit(&mut self, hit: Hit, window: &mut Window, cx: &mut Context<Self>) {
         match hit.live_name() {
             Some(name) => { let target = Target::new(&hit.server, name); self.search_open_session(&target, window, cx) }
-            None => self.search_resume(hit, window, cx),
+            None => self.search_resume(hit, None, window, cx),
         }
     }
 
@@ -743,8 +750,8 @@ impl Hangar {
     }
 
     /// Conversa arquivada: sobe uma sessão nova com `--resume` na conta dona dela, pela rota do Arquivo do web, na máquina
-    /// de onde o trecho veio.
-    fn search_resume(&mut self, hit: Hit, window: &mut Window, cx: &mut Context<Self>) {
+    /// de onde o trecho veio. `cwd`: a pasta escolhida depois que a da conversa sumiu.
+    fn search_resume(&mut self, hit: Hit, cwd: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         let Some(api) = self.machine_api(&hit.server) else {
             self.search.resume_error = Some(self.machine_error(&hit.server));
             cx.notify();
@@ -754,8 +761,10 @@ impl Hangar {
         let server = hit.server.clone();
         self.search.resuming = Some(hit.conversation());
         self.search.resume_error = None;
+        let (gone_hit, gone_api, turn) = (hit.clone(), api.clone(), self.search.resume_turn);
+        let body = cwd.map_or_else(|| json!({}), |cwd| json!({"cwd": cwd}));
         let task = self.runtime.spawn(async move {
-            api.server_send(reqwest::Method::POST, &["archive", &hit.project, &hit.session_id, "resume"], Some(json!({})), 120).await
+            api.server_send(reqwest::Method::POST, &["archive", &hit.project, &hit.session_id, "resume"], Some(body), 120).await
         });
         cx.spawn_in(window, async move |this, cx| {
             let joined = task.await;
@@ -764,6 +773,11 @@ impl Hangar {
                 // descarta: a sessão já nasceu na máquina do trecho, e é nela que abre.
                 this.search.resuming = None;
                 let Ok(result) = joined else { this.search.resume_error = Some(tr("search_interrupted")); cx.notify(); return };
+                if this.search.resume_turn == turn && let Err(failure) = &result && failure.code.as_deref() == Some(FOLDER_GONE) {
+                    this.search_choose_folder(gone_hit, gone_api, Self::fetch_failure(failure), window, cx);
+                    cx.notify();
+                    return;
+                }
                 match result.map_err(|e| Self::fetch_failure(&e)).and_then(|v| serde_json::from_value::<SessionInfo>(v).map_err(|_| tr("invalid_response"))) {
                     Ok(session) => {
                         this.search.previous_focus = None;
@@ -784,6 +798,21 @@ impl Hangar {
             });
         }).detach();
         cx.notify();
+    }
+
+    fn search_choose_folder(&mut self, hit: Hit, api: Api, message: String, window: &mut Window, cx: &mut Context<Self>) {
+        let runtime = self.runtime.clone();
+        let picker = cx.new(|cx| ResumeFolder::new(api, runtime, message, cx));
+        let events = cx.subscribe_in(&picker, window, move |this: &mut Self, _, event: &ResumeFolderEvent, window, cx| {
+            this.search.resume_folder = None;
+            if let Some(input) = this.search.input.clone() { input.update(cx, |input, cx| input.focus(window, cx)); }
+            if let ResumeFolderEvent::Chosen(cwd) = event { this.search_resume(hit.clone(), Some(cwd.clone()), window, cx); }
+            cx.notify();
+        });
+        // Com o foco no campo, Enter retomaria de novo sem a pasta.
+        let focus = picker.read(cx).focus.clone();
+        focus.focus(window, cx);
+        self.search.resume_folder = Some((picker, events));
     }
 
     /// "Perguntar": o backend acha os trechos e um modelo responde onde o assunto apareceu (só neste servidor, como o web).
@@ -1031,13 +1060,16 @@ impl Hangar {
         };
         let footer = div().h(px(34.)).flex_shrink_0().px(px(16.)).flex().items_center().border_t_1().border_color(theme::border())
             .text_size(px(11.5)).text_color(theme::faint()).child(tr("search_shortcuts"));
-        let card = div().id("search-palette").w(frame.size.width).h(frame.size.height).flex().flex_col().rounded(px(16.)).border_1()
+        let folder = self.search.resume_folder.as_ref().map(|(picker, _)| div().absolute().inset_0().p_4().flex().items_center().justify_center()
+            .bg(cx.theme().overlay).occlude().child(div().w_full().max_w(px(520.)).child(picker.clone())));
+        let card = div().id("search-palette").relative().w(frame.size.width).h(frame.size.height).flex().flex_col().rounded(px(16.)).border_1()
             .border_color(theme::glass_border()).bg(theme::popup_fill(theme::raised())).shadow(theme::popover_shadow()).overflow_hidden().occlude()
             .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
             .child(header)
             .child(self.render_search_scope(cx))
             .child(div().flex_1().min_h_0().flex().border_t_1().border_color(theme::border()).child(body))
-            .child(footer);
+            .child(footer)
+            .children(folder);
         let card = if appearance::get().surface_material == appearance::SurfaceMaterial::Glass { chrome::Glass::new(card, px(16.)).into_any_element() }
             else { card.into_any_element() };
         // Sem tecla, o agente fecha pela acessibilidade: um "Fechar" sem tamanho, fora do desenho.

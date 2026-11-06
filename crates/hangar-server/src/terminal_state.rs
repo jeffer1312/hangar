@@ -129,9 +129,10 @@ static P: LazyLock<Patterns> = LazyLock::new(|| {
         limit: insensitive(r"(?:usage limit reached|hit your \w+ limit|limit reached)[^\n]{0,80}?(?:resets?|continuing automatically|try again)\s*(?:at\s*)?([0-9]{1,2}(?::[0-9]{2})?\s*(?:am|pm)?)"),
         codex_option: r(r"^\s*[›>]?\s*(\d+)\.\s+(.*\S)\s*$"),
         unnumbered: r(r"^(\s*❯\s+)\S"),
-        user: r(r"^\s*❯"),
+        // Texto da resposta vem recuado em duas colunas: uma citação dessa linha não fecha a resposta.
+        user: r(r"^(?:\s*❯| ?› Prompt from the .+ plugin\s*$)"),
         banner: r(r"^[\s▐▛█▝▜▀]*Claude Code v\d"),
-        warning: r(r"^[a-z][\w.-]*: hooks\.json: [a-z]"),
+        warning: r(r"^[a-z][\w.-]*: (?:hooks\.json: [a-z]|reloaded \(\d+ hooks?\b)"),
         // Aviso temporário do nível de esforço, à direita acima da caixa de digitar; o ícone de `high` é ●.
         effort: r(r"^[○◐●◉◈◎] \S+(?: · ultracode)? · /effort\s*$"),
         tool: r(r"^([A-Z][\w-]*\(|(Running|Reading|Writing|Editing|Searching|Listing|Fetching|Updating|Creating|Deleting|Crawling|Downloading|Globbing|Grepping|Waiting|Loading|Compiling|Building|Installing|Ran|Making))"),
@@ -381,7 +382,11 @@ fn preview(lines: &[&str], anchor: Option<&str>) -> String {
         let s = left(line);
         let body = left(s.chars().next().map_or("", |c| &s[c.len_utf8()..]));
         if !s.starts_with('●') { continue; }
-        if P.warning.is_match(body) { start = None; continue; }
+        if P.warning.is_match(body) {
+            // A recarga pedida no meio do turno não desfaz a resposta que veio antes dela.
+            if body.contains(": hooks.json: ") { start = None; }
+            continue;
+        }
         if P.effort.is_match(s) { continue; }
         let subagent = P.subagent.is_match(body) && lines[i + 1..].iter().find(|l| !trim(l).is_empty())
             .is_some_and(|l| P.subagent_body.is_match(l));
@@ -529,4 +534,26 @@ pub fn reduce_analysis(mut analysis: PaneAnalysis, mut memory: ReducerMemory, fa
     // Sem emissão, estado e rótulo já são os mesmos que o monitor guardou.
     memory.held_state = analysis.state.clone(); memory.held_label = analysis.label.clone();
     (ReducedState { analysis, memory }, diagnostic)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pane_preview;
+
+    const RELOAD: &str = "● hangar: reloaded (22 hooks: session.start, turn.start)";
+
+    #[test]
+    fn the_plugin_reload_notice_is_not_assistant_text() {
+        assert_eq!(pane_preview(&format!("{RELOAD}\n\n"), None).0, "");
+        assert_eq!(pane_preview(&format!("{RELOAD}\n\n› Prompt from the hangar plugin\n"), None).0, "");
+    }
+
+    #[test]
+    fn a_prompt_from_the_plugin_ends_the_previous_reply() {
+        assert_eq!(pane_preview("● resposta antiga\n\n› Prompt from the hangar plugin\n", None).0, "");
+        assert_eq!(pane_preview("› Prompt from the hangar plugin\n\n● resposta nova\n", None).0, "resposta nova");
+        assert_eq!(pane_preview("● citou:\n  › Prompt from the hangar plugin\n", None).0, "citou:\n  › Prompt from the hangar plugin");
+        assert_eq!(pane_preview(&format!("● resposta\n\n{RELOAD}\n"), None).0, "resposta");
+        assert_eq!(pane_preview("● nginx: reloaded (pid 42), tudo certo\n", None).0, "nginx: reloaded (pid 42), tudo certo");
+    }
 }

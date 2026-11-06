@@ -53,6 +53,7 @@ mod orq_panel;
 mod orq_history;
 mod home_usage;
 mod recent;
+mod resume_folder;
 mod orq_timeline;
 mod panes;
 mod page_card;
