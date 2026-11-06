@@ -2,10 +2,10 @@
 
 **Objetivo.** Tirar o `hangar-server` de um crate só de ~251 mil linhas, cujo `rustc` chega a
 ~9,3 GB, para um workspace em que nenhum crate depende do `hangar-server` e cada recurso compila
-sozinho. Este plano cobre a primeira fase: o `hangar-core`, o fim das ligações que prendem tudo ao
-`AppState` e ao par `runtime` ↔ `accounts`, e os primeiros crates de recurso. A segunda fase (o nó
-`runtime`/`accounts`/`list`/`session_open`/`session_write`/`state`) é planejada na Task 11, com o
-grafo daquele momento.
+sozinho. Este plano cobre a primeira fase: o `hangar-core`, o fim da dependência dos recursos no
+`AppState`, a descida dos ajudantes que prendem `accounts` ao `runtime`, e os primeiros crates de
+recurso. A segunda fase (o nó `runtime`/`accounts`/`list`/`session_open`/`session_write`/`state`)
+é planejada na Task 10, com o grafo daquele momento.
 
 **Revisão.** O plano passou por uma crítica adversarial (agente arquiteto) e por uma conferência
 de cada símbolo citado, em 06/11/2026; as correções já estão no texto (ordem das Tasks 3 e 4,
@@ -17,6 +17,8 @@ de cada símbolo citado, em 06/11/2026; as correções já estão no texto (orde
   ninguém; (b) desfazer o `AppState` e o ciclo `runtime` ↔ `accounts` com trait no core; (c) tirar
   um crate por vez, começando pelos módulos soltos. Cada etapa é um PR que compila, passa nos
   testes e deixa o servidor funcionando.
+- Decisão do Jefferson, 06/11/2026, depois da revisão: a troca do `RuntimeRegistry` por trait em
+  `accounts` (parte da etapa b) fica para a segunda fase; a janela por Task coordena as sessões.
 - Regra "Módulo Rust novo nasce como crate próprio quando não precisa do `hangar-server`"
   (`CLAUDE.md`, seção Plataforma) e a entrada
   [Módulo novo nasce como crate próprio](../../decisoes/plataforma.md#módulo-novo-nasce-como-crate-próprio-06112026).
@@ -58,11 +60,11 @@ Fatos novos que mudam o plano:
   `workspace_routes::private_ok` 19, `state::monitor::wall_now` 14.
 - **Mesmo com esses ajudantes no core, sobra um nó de 84 módulos (~220 mil linhas).** `runtime`,
   `accounts`, `list`, `session_open`, `session_write` e `state` dependem de verdade um do outro. A
-  primeira fase não o desfaz: é o objeto da Task 11.
+  primeira fase não o desfaz: é o objeto da Task 10.
 - **Os primeiros crates de recurso, pelo que falta cortar** (módulos de topo fora do core, contados
   pela simulação): `costs` 1 (`transcript`: `py`, `pyjson`, `decode_line`, que descem na Task 2);
   `transcript` 2 módulos/3 referências; `voice` 3/4 no grafo de módulos (`groups`, `accounts`,
-  `share`), mais campos do `AppState` (Task 8); `omp_sync` 4/7; `mods` 5/12; `remote_browser` 4/12;
+  `share`), mais campos do `AppState` (Task 7); `omp_sync` 4/7; `mods` 5/12; `remote_browser` 4/12;
   `speech` 6/21; `orchestration` 7/22. A contagem é por módulo de topo: cada um ainda arrasta os
   campos do `AppState` que lê, conferidos na Task.
 
@@ -176,7 +178,7 @@ O pico de memória é o par biblioteca + biblioteca de teste do mesmo crate comp
 | Momento | Maior crate | Pico estimado por `rustc` | Biblioteca + teste em paralelo |
 |---|---|---|---|
 | Hoje (medido) | `hangar-server`, ~251 mil | 9,3 GB | ~18 GB |
-| Depois desta fase (Tasks 1–10; saem ~35 mil linhas) | `hangar-server`, ~216 mil | ~8,5 GB | ~17 GB |
+| Depois desta fase (Tasks 1–9; saem ~35 mil linhas) | `hangar-server`, ~216 mil | ~8,5 GB | ~17 GB |
 | Crates de recurso desta fase | `hangar-voice`, ~12,7 mil | ~1 GB | ~2 GB |
 | Meta da segunda fase (servidor só como topo, < 60 mil) | — | ~2,7 GB | ~5,5 GB |
 
@@ -192,8 +194,9 @@ fase.
 
 As Tasks são uma cadeia: cada uma usa o que a anterior desceu e move arquivos que a próxima toca.
 Nenhuma roda em paralelo com outra. Tasks de base ou risco, com revisão: 1 (contrato de manifesto
-que todas seguem), 3 (efeitos que só os testes desligavam), 4 (autorização do dono), 5 (padrão de
-estado que todas seguem), 6 (inversão entre `runtime` e `accounts`).
+que todas seguem), 3 (efeitos que só os testes desligavam), 4 (autorização do dono) e 5 (padrão de
+estado que todas seguem). A inversão `accounts` → `RuntimeRegistry` ficou para a segunda fase
+(seção "Adiado").
 
 Os módulos soltos do pedido: dos 11 medidos, 9 entram no core na Task 1. `plugin_listener` (114
 linhas, usado só por `routes`) e `orq_storage` (627, usado só por `main.rs`) não ganham crate
@@ -383,38 +386,9 @@ o que `costs_routes` usa do resultado; `InternalInfo` não desce.
 - [ ] **Step 5: Uso real — verificação manual** abrir Custos no app e conferir que os números
   batem com os de antes da troca.
 
-### Task 6: Inverter `accounts` → `RuntimeRegistry` com trait (Fix B)
+### Task 6: Extrair `hangar-costs`
 
-Status: needs-info — o Jefferson decide se fica nesta fase ou vai para o começo da segunda.
-Revisão: risco — contrato entre os dois maiores módulos.
-
-Depois da Task 3, o que sobra de `accounts` → `runtime` é o `RuntimeRegistry`: guardado como campo
-em `accounts/quotas/mod.rs:119` e `accounts/claude_refresh.rs:479`, recebido como parâmetro no resto
-(`claude_refresh`, `codex_login`, `codex_device_login`, `usage`). Os métodos chamados são
-`account_usage` (`accounts/usage.rs:379`, definido em `runtime/gateway.rs:2900`), os de
-`device_guard` (`accounts/codex_device_login.rs:283`) e `refresh_hooks` (`accounts/http.rs:554`).
-
-- `account_usage` e `refresh_hooks` recebem `accounts::AccountKey` e devolvem
-  `accounts::UsageFacts` (`gateway.rs:2900,2907`): o trait `AccountRuntime` no core só existe se
-  esses dois tipos descerem junto (Fix A).
-- Os testes de `claude_refresh` montam um `RuntimeRegistry::new` real (`claude_refresh.rs:639,696`):
-  continuam valendo, porque o `RuntimeRegistry` implementa o trait.
-- Por que adiar é uma opção: `accounts` ainda tem ~165 `crate::` em 25 arquivos e não sai do
-  servidor nesta fase, então o trait não destrava crate nenhum agora. Por que fazer agora: é o
-  primeiro corte do nó da segunda fase e o pedido original o pôs na etapa (b).
-
-- [ ] **Step 1: Inventariar os métodos do `RuntimeRegistry` que `accounts` chama** e os tipos deles.
-- [ ] **Step 2: Commit Fix A** de `AccountKey` e `UsageFacts` (e do que eles arrastarem) para o core.
-- [ ] **Step 3: Commit Fix B** com o trait, a implementação no `runtime` e a troca dos campos e parâmetros em `accounts`.
-- [ ] **Step 4: Conferir o corte:** `grep -rn 'crate::runtime' crates/hangar-server/src/accounts`
-  fora de teste → vazio.
-- [ ] **Step 5: Provas comuns** (quando autorizadas).
-- [ ] **Step 6: Uso real — verificação manual** cota das contas Claude e Codex aparece; login
-  Codex por aparelho conclui; sessão que bate limite troca de conta.
-
-### Task 7: Extrair `hangar-costs`
-
-Status: ready-for-agent (depois da Task 5; não depende da 6)
+Status: ready-for-agent (depois da Task 5)
 
 `costs` (5.121 linhas) usa do servidor `transcript::{py, pyjson, decode_line}` (core pela Task 2),
 `proxy::client` (core pela Task 4), `warn_limit` e `http_client` (core pela Task 1); `costs_routes`
@@ -427,9 +401,9 @@ já usa `CostsState` (Task 5).
   `hangar_server::costs`) e `tests/it/contract_costs_*.rs` (26).
 - [ ] **Step 4: Uso real — verificação manual** Custos e Uso no app.
 
-### Task 8: Extrair `hangar-voice`
+### Task 7: Extrair `hangar-voice`
 
-Status: ready-for-agent (depois da Task 7)
+Status: ready-for-agent (depois da Task 6)
 
 `voice` (12.717 linhas) usa do servidor: `groups::peers` (`PeerClient`, `PeerBook`, `PeerError`,
 `TOO_LARGE`), `st.groups.server_id()` (`voice/hub.rs:178`), `st.peers`, `accounts` em
@@ -454,9 +428,9 @@ Status: ready-for-agent (depois da Task 7)
 - [ ] **Step 5: Uso real — verificação manual** chamada de voz no nativo: falar, ouvir a resposta,
   trocar de sessão por voz, consultar outra máquina.
 
-### Task 9: Extrair `hangar-transcript`
+### Task 8: Extrair `hangar-transcript`
 
-Status: ready-for-agent (depois da Task 8)
+Status: ready-for-agent (depois da Task 7)
 
 `transcript` (3.665 linhas) é lido por 45 módulos. Depois das Tasks 2 e 3 restam duas ligações para
 cima: `orchestration::timeline::parse_obj` (`transcript/history.rs:399`, `transcript/mod.rs:131`,
@@ -475,7 +449,7 @@ para `Provider::Orq`) e `runtime::queue::row_waits` (`history.rs:584`, core pela
 - [ ] **Step 5: Uso real — verificação manual** abrir conversas Claude, Codex e uma sessão `orq`;
   histórico, painel da orquestração e eventos ao vivo aparecem.
 
-### Task 10: Extrair `hangar-omp-sync`
+### Task 9: Extrair `hangar-omp-sync`
 
 Status: needs-info (dependências de `loops`, `nav_requests` e `push` ainda não conferidas)
 
@@ -492,9 +466,9 @@ Task 3), `session_write::json_response` e `transcript::pyjson` (core pela Task 2
 - [ ] **Step 4: Provas comuns** (quando autorizadas).
 - [ ] **Step 5: Uso real — verificação manual** sincronização omp: plugins e contexto reconciliados numa sessão omp.
 
-### Task 11: Refazer o grafo e planejar a segunda fase
+### Task 10: Refazer o grafo e planejar a segunda fase
 
-Status: ready-for-agent (depois da Task 10)
+Status: ready-for-agent (depois da Task 9)
 
 - [ ] **Step 1: Refazer o grafo de módulos** do que sobrou no `hangar-server`, com o mesmo método
   da seção "Números conferidos", e a lista de alvos restantes por módulo.
@@ -502,9 +476,40 @@ Status: ready-for-agent (depois da Task 10)
   Jefferson autorizar o build) e trocar a tabela de estimativa pelo medido.
 - [ ] **Step 3: Escrever o plano da segunda fase** em `docs/superpowers/plans/`: `speech`,
   `orchestration` (com `orq_storage`), `remote_browser`, `mods`, e o nó `runtime`/`accounts`/`list`/
-  `session_open`/`session_write`/`state` (com a Task 6, se tiver sido adiada); incluir o PR que
+  `session_open`/`session_write`/`state` (com a inversão da seção "Adiado"); incluir o PR que
   retira os re-exports do item 1 do contrato.
 - [ ] **Step 4: Atualizar a entrada de plataforma.md** com os números medidos.
+
+## Adiado para a segunda fase
+
+### Adiado: inverter `accounts` → `RuntimeRegistry` com trait (Fix B)
+
+Decidido (Jefferson, 06/11/2026): fica para quando `accounts` ou `runtime` for sair do servidor,
+na segunda fase; nesta fase o trait não libera crate nenhum.
+Revisão: risco — contrato entre os dois maiores módulos.
+
+Depois da Task 3, o que sobra de `accounts` → `runtime` é o `RuntimeRegistry`: guardado como campo
+em `accounts/quotas/mod.rs:119` e `accounts/claude_refresh.rs:479`, recebido como parâmetro no resto
+(`claude_refresh`, `codex_login`, `codex_device_login`, `usage`). Os métodos chamados são
+`account_usage` (`accounts/usage.rs:379`, definido em `runtime/gateway.rs:2900`), os de
+`device_guard` (`accounts/codex_device_login.rs:283`) e `refresh_hooks` (`accounts/http.rs:554`).
+
+- `account_usage` e `refresh_hooks` recebem `accounts::AccountKey` e devolvem
+  `accounts::UsageFacts` (`gateway.rs:2900,2907`): o trait `AccountRuntime` no core só existe se
+  esses dois tipos descerem junto (Fix A).
+- Os testes de `claude_refresh` montam um `RuntimeRegistry::new` real (`claude_refresh.rs:639,696`):
+  continuam valendo, porque o `RuntimeRegistry` implementa o trait.
+- Por que foi adiado: `accounts` ainda tem ~165 `crate::` em 25 arquivos e não sai do
+  servidor nesta fase, então o trait não destrava crate nenhum agora.
+
+- Inventariar os métodos do `RuntimeRegistry` que `accounts` chama e os tipos deles.
+- Commit Fix A de `AccountKey` e `UsageFacts` (e do que eles arrastarem) para o core.
+- Commit Fix B com o trait, a implementação no `runtime` e a troca dos campos e parâmetros em `accounts`.
+- Conferir o corte: `grep -rn 'crate::runtime' crates/hangar-server/src/accounts`
+  fora de teste → vazio.
+- Provas comuns (quando autorizadas).
+- Uso real — verificação manual cota das contas Claude e Codex aparece; login
+  Codex por aparelho conclui; sessão que bate limite troca de conta.
 
 ## Aceitação desta fase
 
@@ -512,7 +517,5 @@ Status: ready-for-agent (depois da Task 10)
   nenhum depende do `hangar-server` (conferência por `cargo metadata`).
 - `costs_routes` e os crates extraídos não citam `AppState`.
 - Os testes do servidor não gravam no diário real.
-- Se a Task 6 ficou nesta fase: `grep -rn 'crate::runtime' crates/hangar-server/src/accounts` sem
-  código de teste → vazio.
 - Cada Task foi um PR com as provas comuns verdes, o passo Windows e o uso real conferido.
-- A memória medida nas Tasks 1 e 11 substitui a estimativa.
+- A memória medida nas Tasks 1 e 10 substitui a estimativa.
