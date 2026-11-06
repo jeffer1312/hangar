@@ -2057,11 +2057,7 @@ impl RuntimeRegistry {
                 let killed=super::lifecycle::kill_terminal(&crate::terminal_input::ProcessIo::default(),&procs,&target.binding,
                     i64::from(target.metadata.agent_pid),target.metadata.agent_birth).await;
                 if let Err(error)=&killed {super::actor::mark_live_error(&self.live_sender(&name),&error.code,&error.message);}
-                if let Ok(Some(code))=&killed {
-                    tracing::warn!(key,session=%name,code=%code,"sessão encerrada; saída do agente não confirmada");
-                    self.diag.report("runtime.close_exit_unconfirmed",&name,code,"sessão encerrada; saída do agente não confirmada");
-                }
-                killed.map(|_|())
+                killed
             },
             // Encerrar o Codex com terminal é da vigia (`close_with_kill`).
             (EntryHandle::CodexTerminal {..},true)=>return Err(failure("close_kill")),

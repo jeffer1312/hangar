@@ -5,6 +5,10 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 
 ## Regras vigentes
 
+- **Fechar o Claude com terminal termina com o processo morto.** Quem passa do prazo depois do
+  `kill-session` aceito sai à força, conferido pela identidade, como na reabertura, e o fechamento
+  segue normal. Tratar a demora como falha desviava para o fechamento pelo nome, que já não acha o
+  transcript: em 05/11/2026, uma conversa de 242 MB foi ao Arquivo sem o nome.
 - **Evento da CLI do Claude sem terminal escolhe um canal que já existe; nenhum cai calado.** Rótulo
   passageiro para o que some sozinho (nova tentativa da API, hook rodando há mais de 3 s); nota na
   conversa para falha ou mudança que a pessoa precisa saber; faixa só para o erro do turno; diário para
