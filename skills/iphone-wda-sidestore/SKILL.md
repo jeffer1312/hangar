@@ -68,15 +68,15 @@ O `wda.sh` pede perfil novo pelo `plumesign`, que reaproveita a sessão salva em
 - **Agente com o cofre do Hangar:** a senha nunca passa pelo chat. Peça com `request_secret`, se ela não estiver no cofre (`vault_list`). Depois rode o login lendo de um FIFO e mande a senha por `vault_exec`:
 
   ```bash
-  # no Bash: prepara a entrada
-  mkfifo $SCRATCH/login.in
-  # no vault_exec (env APPLE_PW = entrada do cofre com a senha do Apple ID):
-  setsid nohup sleep 900 > $SCRATCH/login.in & echo $! > $SCRATCH/login.espera; \
-  setsid nohup ~/Applications/ios-ctl/plumesign account login -u <apple-id> < $SCRATCH/login.in > $SCRATCH/login.log 2>&1 & \
-  printf '%s\n' "$APPLE_PW" > $SCRATCH/login.in; sleep 20; cat $SCRATCH/login.log
+  # no Bash: pasta privada e entrada só do usuário; para aqui se algo falhar. Anote o caminho impresso.
+  P=$(mktemp -d) && mkfifo -m 600 "$P/login.in" && echo "$P"
+  # no vault_exec (env APPLE_PW = entrada do cofre com a senha do Apple ID), com P=<caminho anotado>:
+  setsid nohup sleep 900 > $P/login.in & echo $! > $P/login.espera; \
+  setsid nohup ~/Applications/ios-ctl/plumesign account login -u <apple-id> < $P/login.in > $P/login.log 2>&1 & \
+  printf '%s\n' "$APPLE_PW" > $P/login.in; sleep 20; cat $P/login.log
   ```
 
-  Se o log pedir código, pergunte à pessoa e mande com `printf '<código>\n' > $SCRATCH/login.in`. Se ela não recebeu, mande `sms` antes. Confira "Successfully logged in" no log e encerre a espera com `kill $(cat $SCRATCH/login.espera)`. Não use `pkill -f "sleep 900"`, que mata também o shell que roda o pkill.
+  Se o log pedir código, pergunte à pessoa e mande com `printf '<código>\n' > $P/login.in`. Se ela não recebeu, mande `sms` antes. Confira "Successfully logged in" no log e encerre a espera com `kill $(cat $P/login.espera)`. Não use `pkill -f "sleep 900"`, que mata também o shell que roda o pkill.
 
 ## 4. WebDriverAgent
 

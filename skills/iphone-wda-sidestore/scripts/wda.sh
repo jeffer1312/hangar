@@ -56,6 +56,13 @@ if fim:
     print(round((m-datetime.datetime.now(datetime.timezone.utc)).total_seconds()/86400,1))' "$TEAM.$BUNDLE"
 }
 
+sessao_vencida() { grep -qiE 'session has expired|error 1100|no account|not logged' "$1"; }
+
+pedir_login() {
+	echo "a sessão da Apple venceu: rode 'wda.sh login' (senha do Apple ID e, se pedir, o código)" >&2
+	exit 3
+}
+
 # Pede à Apple um perfil novo para o App ID do WDA e o grava em $TMP/wda.mobileprovision.
 perfil_novo() {
 	[ -f "$BASE_IPA" ] || die "IPA base do WDA não achado em $BASE_IPA (defina WDA_IPA)"
@@ -82,10 +89,7 @@ perfil_novo() {
 	                os.write(fd,b"\x1b[B"*ids.index(team)+b"\r"); escolhido=True
 	os.waitpid(pid,0)
 	EOF
-	if grep -qiE 'session has expired|error 1100|no account|not logged' "$TMP/plume.log"; then
-		echo "a sessão da Apple venceu: rode 'wda.sh login' (senha do Apple ID e, se pedir, o código)" >&2
-		exit 3
-	fi
+	sessao_vencida "$TMP/plume.log" && pedir_login
 	[ -f "$TMP/assinado.ipa" ] || { tail -5 "$TMP/plume.log" >&2; die "o plumesign não gerou o perfil"; }
 	python3 -I - "$TMP/assinado.ipa" "$TMP/wda.mobileprovision" "$TEAM.$BUNDLE" "$UDID_" <<-'EOF'
 	import zipfile,sys,plistlib
@@ -140,7 +144,7 @@ status)
 		echo "WDA não instalado: rode 'wda.sh instalar'"
 	fi
 	if "$PLUME" account certificates -t "$TEAM" >"$TMP/s.log" 2>&1; then echo "sessão da Apple: ok"
-	elif grep -qiE 'session has expired|error 1100|no account|not logged' "$TMP/s.log"; then echo "sessão da Apple: vencida (rode 'wda.sh login')"
+	elif sessao_vencida "$TMP/s.log"; then echo "sessão da Apple: vencida (rode 'wda.sh login')"
 	else echo "sessão da Apple: erro ao consultar:"; grep -v DEBUG "$TMP/s.log" | tail -2; fi
 	;;
 instalar)
@@ -148,7 +152,7 @@ instalar)
 	# A Apple devolve o aparelho já registrado sem erro, então registrar sempre é seguro.
 	nome=$(pmd lockdown info --udid "$UDID_" | python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("DeviceName","iPhone"))')
 	"$PLUME" account register-device -t "$TEAM" -u "$UDID_" -n "$nome" >"$TMP/registro.log" 2>&1 \
-		|| { tail -5 "$TMP/registro.log" >&2; die "não consegui registrar o aparelho na conta"; }
+		|| { sessao_vencida "$TMP/registro.log" && pedir_login; tail -5 "$TMP/registro.log" >&2; die "não consegui registrar o aparelho na conta"; }
 	perfil_novo
 	cert=$(certificado)
 	# O .dSYM dentro de PlugIns quebra a instalação; sai antes de assinar.
