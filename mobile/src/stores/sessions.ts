@@ -652,7 +652,7 @@ function start(get: () => SessionsState, set: (p: Partial<SessionsState>) => voi
     refused.delete(id);
     failures.delete(id);
     retryAt.delete(id);
-    if (machineLooksOff(id)) {
+    if (machineLooksOff(id) && !lastFailureHttp.get(id)) {
       httpFailures.delete(id);
       httpRetryAt.delete(id);
     }
