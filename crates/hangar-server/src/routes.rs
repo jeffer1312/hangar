@@ -451,6 +451,11 @@ pub fn front_address(home: &std::path::Path, listen: SocketAddr) -> Option<Socke
     if std::fs::symlink_metadata(crate::install_root::current(home)).is_err() { return None; }
     let port = crate::user_data::env_port(home, None, "CP_FRONT_PORT")
         .inspect_err(|e| tracing::warn!("porta do front ilegível: {e}")).ok().flatten()?;
+    // Se o front ganhasse a porta, o Caddy entregaria a internet com o par real, que é local.
+    if port == crate::connect::CONNECT_PORT {
+        tracing::warn!(code = "front_port_is_connect", port, "CP_FRONT_PORT é a porta do Connect: a porta do front fica fechada");
+        return None;
+    }
     (port != 0 && port != listen.port()).then(|| SocketAddr::new(listen.ip(), port))
 }
 
@@ -1003,7 +1008,8 @@ pub(crate) fn forward_for(st: &AppState, peer: SocketAddr, req: &Request) -> For
     if on_guest_port(req) || req.extensions().get::<crate::login_guests::gate::Login>().is_some() {
         let guest = caller(req).and_then(Caller::grant).cloned();
         let client_ip = if guest.is_some() { "127.0.0.1".into() } else { peer.ip().to_string() };
-        return Forward { client_ip, https: false, guest, auth_receipt: None };
+        let https = !on_guest_port(req) && st.cfg.trusted.resolve(peer.ip(), req.headers()).1;
+        return Forward { client_ip, https, guest, auth_receipt: None };
     }
     let (client_ip, https) = st.cfg.trusted.resolve(peer.ip(), req.headers());
     Forward { client_ip, https, guest: None, auth_receipt: None }

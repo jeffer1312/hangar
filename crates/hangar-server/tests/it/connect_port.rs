@@ -6,8 +6,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use fake::*;
+use hangar_server::accounts::{AccountService, environment::AccountEnvironment};
 use hangar_server::config::connect_listen;
-use hangar_server::routes::{AppState, serve_connect};
+use hangar_server::login_guests::{Service, Settings};
+use hangar_server::routes::{AppState, front_address, serve_connect};
+
+const GUEST: &str = "convidado-token";
 
 fn free_port() -> SocketAddr {
     std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap()
@@ -126,6 +130,65 @@ async fn device_install_is_refused_through_connect() {
         assert!(body.contains("device_install_forbidden") && !body.contains("segredo"), "{body}");
     }
     assert_eq!(python.hits_to(path), 0);
+}
+
+/// Entrada do Connect com um convidado de login (`GUEST`) que vê as sessões sem dono.
+async fn guest_server() -> (tempfile::TempDir, Arc<Fake>, SocketAddr) {
+    let home = crate::physical_tempdir();
+    let (python, upstream) = spawn_fake().await;
+    let mut state = AppState::new(config(upstream, "127.0.0.1"));
+    let root = home.path().to_str().unwrap();
+    state.accounts = AccountService::new(AccountEnvironment::from_pairs([("HOME", root), ("USERPROFILE", root)]));
+    let service = Service::new(Settings { guests: home.path().join("guests.json"), vault: home.path().join("vault.json"),
+        runtime_config: home.path().join("config.json"), sync_enabled: false, bootstrap: String::new(),
+        secret: b"fixture".to_vec(), secure: false, rate_max: 10.into(), rate_window: 300.into() });
+    service.store.create("Ana", root, true, true, "ana".into(), GUEST.into()).unwrap();
+    state.share = None;
+    state.login_guests = Arc::new(service);
+    let connect = free_port();
+    state.connect = Some(connect);
+    spawn_state(state).await;
+    wait_up(connect).await;
+    (home, python, connect)
+}
+
+/// O convidado vai como loopback, que não conta tentativa: acertar a senha do dono não pode mudar a resposta.
+#[tokio::test]
+async fn login_guest_cannot_probe_the_owner_password_through_the_terminal() {
+    let (_home, _python, connect) = guest_server().await;
+    let attempt = |token: &str| get(connect, &format!("/api/sessions/conexao-teste/term?token={token}")).bearer_auth(GUEST)
+        .header("origin", "https://evil.example").header("connection", "upgrade").header("upgrade", "websocket")
+        .header("sec-websocket-version", "13").header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==");
+    let wrong = attempt("errado").send().await.unwrap();
+    let right = attempt(OWNER).send().await.unwrap();
+    assert_eq!(wrong.status(), 403);
+    assert_eq!(right.status(), 403);
+    let (wrong, right) = (wrong.text().await.unwrap(), right.text().await.unwrap());
+    assert_eq!(wrong, "origem não autorizada");
+    assert_eq!(right, wrong);
+}
+
+#[tokio::test]
+async fn login_guest_reaches_python_as_https() {
+    let (_home, python, connect) = guest_server().await;
+    let passed = get(connect, "/api/sessions/conexao-teste/term").bearer_auth(GUEST);
+    assert_eq!(passed.send().await.unwrap().status(), 200);
+    let (path, headers) = python.last_hit();
+    assert!(path.ends_with("/term"), "{path}");
+    assert_eq!(headers["x-forwarded-proto"], "https");
+}
+
+#[test]
+fn front_port_never_takes_the_connect_port() {
+    let home = tempfile::tempdir().unwrap();
+    let hangar = home.path().join(".hangar");
+    std::fs::create_dir_all(hangar.join("config")).unwrap();
+    std::fs::create_dir(hangar.join("current")).unwrap();
+    let listen = "127.0.0.1:8765".parse().unwrap();
+    std::fs::write(hangar.join("config/.env"), "CP_FRONT_PORT=5173\n").unwrap();
+    assert_eq!(front_address(home.path(), listen), Some("127.0.0.1:5173".parse().unwrap()));
+    std::fs::write(hangar.join("config/.env"), "CP_FRONT_PORT=8768\n").unwrap();
+    assert_eq!(front_address(home.path(), listen), None);
 }
 
 #[derive(Clone, Default)]
