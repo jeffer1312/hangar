@@ -204,8 +204,9 @@ impl Hangar {
         let message = text.clone();
         let (project, id) = (entry.project.clone(), entry.session_id.clone());
         let gone_api = api.clone();
+        let moves = matches!(entry.provider.as_str(), "" | "claude" | "codex");
         let task = self.runtime.spawn(async move {
-            match api.resume_archive(&project, &id, body).await.map_err(|e| (Self::fetch_failure(&e), e.code.as_deref() == Some(FOLDER_GONE)))? {
+            match api.resume_archive(&project, &id, body).await.map_err(|e| (Self::fetch_failure(&e), moves && e.code.as_deref() == Some(FOLDER_GONE)))? {
                 Resumed::Live(name) => Ok::<_, (String, bool)>(Err(name)),
                 Resumed::New(session) => {
                     let sent = api.send(&session.name, &message).await;

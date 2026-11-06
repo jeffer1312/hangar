@@ -284,8 +284,14 @@ fn remember_folder(file: &Path, sid: &str, cwd: &str) {
     // Duas retomadas ao mesmo tempo: sem a fila, a segunda gravação apagaria a primeira.
     static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _turn = WRITE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let mut folders = std::fs::read(file).ok().and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
-        .filter(Value::is_object).unwrap_or_else(|| json!({}));
+    let mut folders = match std::fs::read(file) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({}),
+        read => match read.ok().and_then(|raw| serde_json::from_slice::<Value>(&raw).ok()).filter(Value::is_object) {
+            Some(folders) => folders,
+            // Regravar por cima apagaria as pastas das outras conversas.
+            None => return tracing::warn!(file = %file.display(), "registro de pastas ilegivel; a pasta escolhida nao foi guardada"),
+        },
+    };
     folders[sid] = json!(cwd);
     // A sessão já abriu: sem o registro, a próxima retomada só pergunta a pasta de novo.
     if hangar_workspace::worktree_settings::write_json(file, &folders).is_err() {
@@ -355,10 +361,15 @@ pub fn plan(w: &Where, facts: &dyn OpenFacts, project: &str, sid: &str, body: Ar
     };
     if found.cwd.is_empty() { return Err(OpenError::new(422, "erro_cwd_ausente", "cwd not found in transcript")); }
     let chosen = body.cwd.clone().filter(|cwd| !cwd.is_empty());
+    // O Pi cria uma sessão vazia quando não acha o id na pasta nova; omp e Kimi também guardam a conversa pela pasta.
+    if chosen.is_some() && !matches!(provider, AgentProvider::Claude | AgentProvider::Codex) {
+        return Err(OpenError::new(422, "erro_outra_pasta_sem_suporte", "este agente nao retoma em outra pasta"));
+    }
     let folders = chosen_folders(w.home);
     let remember = chosen.is_some().then(|| folders.clone());
     let cwd = chosen.or_else(|| chosen_folder(&folders, sid)).unwrap_or_else(|| redirect(w.home, found.cwd.clone()));
-    let relocated = cwd != found.cwd;
+    // Pasta escolhida igual ao cabeçalho: a conversa pode estar noutro projeto, de uma retomada anterior.
+    let relocated = remember.is_some() || cwd != found.cwd;
     let found = Found { cwd, ..found };
     // Um segundo processo no mesmo arquivo corromperia a conversa.
     let real = |p: &str| std::fs::canonicalize(p).unwrap_or_else(|_| PathBuf::from(p));
@@ -431,7 +442,7 @@ fn move_with(rename: &dyn Fn(&Path, &Path) -> std::io::Result<()>, server_projec
         }
         return Err(failed(error));
     }
-    // Retomada anterior em outra pasta já criou a irmã no destino. O que não passar segue inteiro na origem.
+    // Retomada anterior em outra pasta já criou a irmã no destino. O que não passar fica na origem, sem barrar a abertura.
     if src.join(sid).is_dir() && let Err(error) = move_missing(rename, &src.join(sid), &dst.join(sid)) {
         tracing::warn!(error = %error, "parte da pasta irma ficou na origem");
     }

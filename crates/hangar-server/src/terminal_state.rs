@@ -132,7 +132,7 @@ static P: LazyLock<Patterns> = LazyLock::new(|| {
         // Texto da resposta vem recuado em duas colunas: uma citação dessa linha não fecha a resposta.
         user: r(r"^(?:\s*❯| ?› Prompt from the .+ plugin\s*$)"),
         banner: r(r"^[\s▐▛█▝▜▀]*Claude Code v\d"),
-        warning: r(r"^[a-z][\w.-]*: (?:hooks\.json: [a-z]|reloaded \()"),
+        warning: r(r"^[a-z][\w.-]*: (?:hooks\.json: [a-z]|reloaded \(\d+ hooks?\b)"),
         // Aviso temporário do nível de esforço, à direita acima da caixa de digitar; o ícone de `high` é ●.
         effort: r(r"^[○◐●◉◈◎] \S+(?: · ultracode)? · /effort\s*$"),
         tool: r(r"^([A-Z][\w-]*\(|(Running|Reading|Writing|Editing|Searching|Listing|Fetching|Updating|Creating|Deleting|Crawling|Downloading|Globbing|Grepping|Waiting|Loading|Compiling|Building|Installing|Ran|Making))"),
@@ -554,5 +554,6 @@ mod tests {
         assert_eq!(pane_preview("› Prompt from the hangar plugin\n\n● resposta nova\n", None).0, "resposta nova");
         assert_eq!(pane_preview("● citou:\n  › Prompt from the hangar plugin\n", None).0, "citou:\n  › Prompt from the hangar plugin");
         assert_eq!(pane_preview(&format!("● resposta\n\n{RELOAD}\n"), None).0, "resposta");
+        assert_eq!(pane_preview("● nginx: reloaded (pid 42), tudo certo\n", None).0, "nginx: reloaded (pid 42), tudo certo");
     }
 }

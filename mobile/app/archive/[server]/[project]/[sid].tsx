@@ -239,7 +239,7 @@ export default function ArchivedConversation() {
           return;
         }
         setResumeError(viva ? m.conversa_ja_aberta_sem_nome() : err instanceof Error ? err.message : m.arquivo_retomar_erro());
-        if (x.code === 'erro_cwd_inexistente') setFolderSheet('open');
+        if (x.code === 'erro_cwd_inexistente' && (e.provider === 'claude' || e.provider === 'codex')) setFolderSheet('open');
         return;
       }
       console.error('archive: resume ok, send failed', name, err);

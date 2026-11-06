@@ -1061,7 +1061,7 @@ impl Hangar {
         let footer = div().h(px(34.)).flex_shrink_0().px(px(16.)).flex().items_center().border_t_1().border_color(theme::border())
             .text_size(px(11.5)).text_color(theme::faint()).child(tr("search_shortcuts"));
         let folder = self.search.resume_folder.as_ref().map(|(picker, _)| div().absolute().inset_0().p_4().flex().items_center().justify_center()
-            .bg(cx.theme().overlay).child(div().w_full().max_w(px(520.)).child(picker.clone())));
+            .bg(cx.theme().overlay).occlude().child(div().w_full().max_w(px(520.)).child(picker.clone())));
         let card = div().id("search-palette").relative().w(frame.size.width).h(frame.size.height).flex().flex_col().rounded(px(16.)).border_1()
             .border_color(theme::glass_border()).bg(theme::popup_fill(theme::raised())).shadow(theme::popover_shadow()).overflow_hidden().occlude()
             .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
