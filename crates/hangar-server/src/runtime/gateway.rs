@@ -2293,12 +2293,13 @@ impl RuntimeRegistry {
     async fn follow_transcript(&self,target:&super::terminal::TerminalTarget,moved:PathBuf)->Result<Value,RuntimeError> {
         let (key,generation)=(target.key.as_str(),target.generation);
         let barrier=self.barrier(key).await;let _guard=barrier.lock().await;
-        let handle=match self.entries.lock().await.get(key).filter(|entry|entry.generation==generation).map(|entry|entry.handle.clone()) {
-            Some(EntryHandle::Terminal {target:current,handle}) if current.binding.conversation==target.binding.conversation=>handle,
+        // O alvo sai da entrada, sob a barreira: trocar o nome da sessão mantém a geração.
+        let (mut next,handle)=match self.entries.lock().await.get(key).filter(|entry|entry.generation==generation).map(|entry|entry.handle.clone()) {
+            Some(EntryHandle::Terminal {target:current,handle}) if current.binding.conversation==target.binding.conversation=>(current,handle),
             _=>return Ok(json!({"in_transfer":true})),
         };
         handle.follow_transcript(moved.clone()).await?;
-        let mut next=target.clone();next.transcript=moved;
+        next.transcript=moved;
         if let Some(entry)=self.entries.lock().await.get_mut(key).filter(|entry|entry.generation==generation) {
             entry.mode_source.transcript=next.transcript.clone();
             entry.handle=EntryHandle::Terminal {target:next.clone(),handle};
@@ -3058,23 +3059,23 @@ fn refuse(status:StatusCode,key:Option<&str>,check:&'static str) -> Response {
 }
 
 /// `EnterWorktree` e `ExitWorktree` movem o transcript sem trocar a conversa. A pasta sai do registro nativo;
-/// o marcador do hook é a reserva sem ele e só vale antes de um `/clear`, porque a chave é o id da abertura.
+/// só sem ele a busca varre `projects/`, porque transcript ainda não nascido passa por aqui a cada tique.
 fn moved_transcript(target:&super::terminal::TerminalTarget)->Option<PathBuf> {
     if target.transcript.exists() {return None;}
     let (config,sid,pid)=(&target.metadata.config_dir,&target.binding.conversation,i64::from(target.metadata.agent_pid));
     // Com `/clear` e mudança de pasta juntos, o `/clear` vai primeiro: seguir o arquivo antigo recarregaria o chat à toa.
     if super::lifecycle::read_native_conversation(config,pid).is_ok_and(|current|current!=sid.as_str()) {return None;}
-    let native=super::lifecycle::read_native_cwd(config,pid)
-        .map(|cwd|config.join("projects").join(hangar_workspace::worktrees::sanitize_cwd(&cwd)).join(format!("{sid}.jsonl")))
-        .filter(|path|path.exists());
-    native.or_else(||crate::list::discover::active_marker(config,sid,&Default::default()).map(PathBuf::from)
-        .filter(|path|path.file_stem()==target.transcript.file_stem()))
+    let (projects,file)=(config.join("projects"),format!("{sid}.jsonl"));
+    match super::lifecycle::read_native_cwd(config,pid) {
+        Some(cwd)=>Some(projects.join(hangar_workspace::worktrees::sanitize_cwd(&cwd)).join(file)).filter(|path|path.exists()),
+        None=>std::fs::read_dir(projects).into_iter().flatten().flatten().map(|dir|dir.path().join(&file)).find(|path|path.is_file()),
+    }
 }
 fn same_terminal_life(old:&super::terminal::TerminalTarget,new:&super::terminal::TerminalTarget) -> bool {
     old.key==new.key && old.name==new.name && old.binding.pane==new.binding.pane && old.binding.created==new.binding.created
         && old.binding.conversation==new.binding.conversation && old.binding.generation==new.binding.generation
         && old.metadata.agent_pid==new.metadata.agent_pid && crate::terminal_facts::same_birth(old.metadata.agent_birth,new.metadata.agent_birth)
-        && old.transcript==new.transcript && old.state_path==new.state_path && old.projection_dir==new.projection_dir && old.lease_path==new.lease_path
+        && old.state_path==new.state_path && old.projection_dir==new.projection_dir && old.lease_path==new.lease_path
 }
 
 fn json_response(status:StatusCode,value:Value) -> Response {
@@ -3782,19 +3783,15 @@ pub(crate) mod tests {
         let registry=Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into()));
         let ctx=crate::side::test_ctx();registry.bind_hubs(ctx.hubs.downgrade());
         let (start,handle)=claude_terminal_entry(&registry,dir.path(),77).await;
-        let _lease=ctx.hubs.acquire("same",crate::side::Binding {provider:crate::transcript::Provider::Claude,jsonl:start.transcript,key:"new-sid".into(),headless:false,life:None},&ctx);
+        let _lease=ctx.hubs.acquire("same",crate::side::Binding {provider:crate::transcript::Provider::Claude,jsonl:start.transcript.clone(),key:"new-sid".into(),headless:false,life:None},&ctx);
         let project=dir.path().join("projects/worktree");
         std::fs::create_dir_all(&project).unwrap();
-        std::fs::create_dir_all(dir.path().join(".hangar-active")).unwrap();
-        let mark=|jsonl:&std::path::Path|std::fs::write(dir.path().join(".hangar-active/new-sid.json"),json!({"jsonl":jsonl}).to_string()).unwrap();
-        let other=project.join("other-sid.jsonl");
-        std::fs::write(&other,b"").unwrap();
-        mark(&other);
-        assert_eq!(registry.reconcile_claude("same","B","new-sid",7).await.unwrap(),json!({"changed":false}),"marcador de outra conversa");
+        std::fs::write(project.join("other-sid.jsonl"),b"").unwrap();
+        assert_eq!(registry.reconcile_claude("same","B","new-sid",7).await.unwrap(),json!({"changed":false}),"arquivo de outra conversa");
         let moved=project.join("new-sid.jsonl");
         std::fs::write(&moved,b"").unwrap();
-        mark(&moved);
         assert_eq!(registry.reconcile_claude("same","B","new-sid",7).await.unwrap(),json!({"changed":true,"moved":true}));
+        registry.open_terminal(start).await.expect("a vida descrita com o caminho antigo continua a mesma");
         let target=registry.terminal_target("same").await.unwrap().unwrap();
         assert_eq!(ctx.hubs.bound("same").unwrap().jsonl,moved,"o chat ao vivo segue o arquivo novo");
         assert_eq!((target.transcript,target.generation,target.binding.conversation.as_str()),(moved,7,"new-sid"));
@@ -3802,9 +3799,9 @@ pub(crate) mod tests {
         registry.close("B",7).await.unwrap();
     }
 
-    /// Depois de um `/clear` não há marcador com o id da conversa: a pasta sai do registro nativo.
+    /// Com o registro nativo, a pasta sai dele: arquivo noutra pasta não conta.
     #[tokio::test]
-    async fn the_native_record_finds_a_moved_transcript_without_a_marker() {
+    async fn the_native_record_names_the_folder_of_a_moved_transcript() {
         let dir=tempfile::tempdir().unwrap();
         let registry=Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into()));
         let hubs=crate::side::Hubs::default();registry.bind_hubs(hubs.downgrade());
