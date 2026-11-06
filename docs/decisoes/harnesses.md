@@ -11,9 +11,10 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   transcript: em 05/11/2026, uma conversa de 242 MB foi ao Arquivo sem o nome.
 - **Claude com terminal segue o transcript que mudou de pasta.** `EnterWorktree` e `ExitWorktree`
   movem o `.jsonl` sem trocar a conversa. Com o arquivo do alvo ausente, a reconciliação do ator
-  acha o novo pelo marcador `.hangar-active` da conversa, sem varrer `projects/`, e reabre o ator na
-  mesma geração, sem limpar a fila. Sem isso, em 06/11/2026 a lista, o chat e o recibo de entrega
-  ficaram lendo um arquivo que não existia: `/history` vazio, sem aviso na tela, com o terminal normal.
+  acha o novo pelo marcador `.hangar-active` da conversa, sem varrer `projects/`, e avisa o ator vivo;
+  fechá-lo apagaria subagentes e perguntas do plugin, e o processo continua o mesmo. Sem isso, em
+  06/11/2026 a lista, o chat e o recibo de entrega ficaram lendo um arquivo que não existia:
+  `/history` vazio, sem aviso na tela, com o terminal normal.
 - **Evento da CLI do Claude sem terminal escolhe um canal que já existe; nenhum cai calado.** Rótulo
   passageiro para o que some sozinho (nova tentativa da API, hook rodando há mais de 3 s); nota na
   conversa para falha ou mudança que a pessoa precisa saber; faixa só para o erro do turno; diário para
