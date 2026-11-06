@@ -443,9 +443,10 @@ async fn caddy_stops_when_the_port_is_lost_and_comes_back_with_it() {
     let caddy = pid_of(dir, "caddy");
 
     supervisor.port_failed("porta perdida".to_owned());
-    until("o Caddy ficou de pé sem a porta", || !alive(caddy)).await;
+    until("o Caddy ficou de pé sem a porta", || !supervisor.status().enabled).await;
+    assert!(!alive(caddy));
     let lost = supervisor.status();
-    assert!(!lost.enabled && lost.running);
+    assert!(lost.running);
     assert_eq!(lost.error.as_deref(), Some("porta perdida"));
 
     supervisor.port_opened();
