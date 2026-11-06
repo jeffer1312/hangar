@@ -183,8 +183,13 @@ O pico de memória é o par biblioteca + biblioteca de teste do mesmo crate comp
 | Meta da segunda fase (servidor só como topo, < 60 mil) | — | ~2,7 GB | ~5,5 GB |
 
 O release publicado (perfil `dist`, `lto = "fat"`, `codegen-units = 1`, `crates/Cargo.toml`)
-otimiza o programa inteiro na ligação: o pico dele não cai com a divisão. A Task 1 mede um `rustc`
-do core e do servidor logo depois de criado o core, para trocar a premissa por um número.
+otimiza o programa inteiro na ligação: o pico dele não cai com a divisão.
+
+**Medido na Task 1 (06/11/2026, perfil dev, commit `1ed33e29b`).** Pico de RAM + swap de cada
+`rustc`, amostrado a cada 2 s em `/proc/<pid>/status` (`VmRSS` + `VmSwap`): biblioteca do
+`hangar-server` 8,54 GB; executável `it` dos testes 4,66 GB; maior dependência externa (`rmcp`)
+0,69 GB. O `hangar-core` compila em ~7 s e não chegou a aparecer na amostragem. Os 8,54 GB
+confirmam a base da estimativa (9,3 GB medidos antes por outra sessão, com outra carga).
 
 Leitura honesta: esta fase prova o caminho e para o crescimento do servidor (regra no
 `CLAUDE.md`), mas reduz pouco o pico. O ganho real vem de desfazer o nó de 84 módulos na segunda
@@ -224,15 +229,18 @@ campo `.0` público), usados por 24 módulos como `crate::http_client`, `crate::
 `crate::AbortOnDrop`; o `lib.rs` os re-exporta com a mesma visibilidade. `write_test_executable`
 fica: nenhum dos nove módulos o usa, e ele desce com quem o usar.
 
-- [ ] **Step 1: Conferir que os nove módulos e os três itens do `lib.rs` não usam nada do servidor**
+- [x] **Step 1: Conferir que os nove módulos e os três itens do `lib.rs` não usam nada do servidor**
   `grep -nE 'crate::|super::|cfg!\(test\)|cfg\(test\)' <arquivos>` → só `http_route_response` →
   `http_contract` (que desce junto) e os testes inline deles. Qualquer outra referência: parar e
   trazer para o Jefferson.
-- [ ] **Step 2: Criar o crate e mover os arquivos** conforme os itens 2 e 6 do contrato
+- [x] **Step 2: Criar o crate e mover os arquivos** conforme os itens 2 e 6 do contrato
   (`json_envelope::float` vira `pub`, item 3).
-- [ ] **Step 3: Ajustar visibilidade e re-exports** (itens 1 e 3 do contrato).
-- [ ] **Step 4: Provas comuns** (quando autorizadas) e a invariante sem aresta para o servidor.
-- [ ] **Step 5: Medir a memória** de um `rustc` do `hangar-core` e do `hangar-server` (quando
+- [x] **Step 3: Ajustar visibilidade e re-exports** (itens 1 e 3 do contrato).
+- [x] **Step 4: Provas comuns** (quando autorizadas) e a invariante sem aresta para o servidor.
+  Feito: `build -p hangar-server` ok; `test -p hangar-core` 6/6; `test -p hangar-server --test it`
+  3258 ok, 1 falha de tempo sob carga (`session_write_routes::gate_held_by_a_transfer_answers_409_without_waiting`,
+  exige < 1 s; sozinho passou 20/20; não toca no que foi movido). `verificar-local` fica para o PR.
+- [x] **Step 5: Medir a memória** de um `rustc` do `hangar-core` e do `hangar-server` (quando
   autorizado; RAM + swap do processo) e anotar na seção de estimativa.
 - [ ] **Step 6: Uso real — verificação manual** `systemctl --user restart hangar-backend.service`
   com o binário novo; abrir o app, ver a lista de sessões e mandar uma mensagem numa sessão.
