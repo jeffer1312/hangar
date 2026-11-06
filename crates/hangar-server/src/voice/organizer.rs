@@ -1590,8 +1590,8 @@ pub const SLOW_AFTER: Duration = Duration::from_secs(20);
 pub const STALL_RESTARTS: u32 = 3;
 /// Organizador sem nenhuma saída, nem texto nem raciocínio.
 pub const STALL_SILENT: Duration = Duration::from_secs(45);
-/// O mesmo com ferramenta em curso, que pode demorar sem dizer nada.
-pub const STALL_TOOL: Duration = Duration::from_secs(180);
+/// O mesmo com ferramenta em curso: passa do prazo mais longo dela, o objetivo do `computer`, que não dá notícia no caminho.
+pub const STALL_TOOL: Duration = Duration::from_secs(330);
 /// Turnos refeitos antes de trocar o organizador.
 pub const STALL_RETRIES: u32 = 1;
 
@@ -1621,6 +1621,10 @@ impl TurnWatch {
         if !self.watching(turn) { return; }
         if self.open { self.restarts += 1; }
         (self.open, self.output) = (true, Some(now));
+    }
+
+    pub fn message_noted(&mut self, turn: &str, now: Instant) {
+        if self.watching(turn) { (self.open, self.output) = (false, Some(now)); }
     }
 
     pub fn message_done(&mut self, turn: &str, now: Instant) {
@@ -2095,6 +2099,17 @@ mod tests {
         watch.message_started("t", t0);
         watch.message_done("t", t0);
         assert!(watch.unanswered(t0).is_none());
+    }
+
+    #[test]
+    fn a_commentary_keeps_waiting_for_the_real_answer() {
+        let (mut watch, t0) = (TurnWatch::default(), Instant::now());
+        watch.heard("t", t0);
+        watch.message_started("t", t0);
+        watch.message_noted("t", t0);
+        assert!(watch.unanswered(t0).is_some(), "'vou olhar' não responde");
+        watch.message_started("t", t0);
+        assert_eq!(watch.unanswered(t0), Some((0, Duration::ZERO)), "mensagem seguinte não é reinício");
     }
 
     #[test]

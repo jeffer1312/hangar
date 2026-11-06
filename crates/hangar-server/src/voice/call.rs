@@ -59,6 +59,8 @@ pub enum VoiceEvent {
     OrganizerContext { used: u64, window: Option<u64> },
     /// O organizador travou numa resposta e a recuperação está em curso: a tela avisa para a pessoa não falar sem saber.
     Stalled(bool),
+    /// A voz mudou de thread: o aparelho precisa refazer o áudio com uma oferta nova, porque o WebRTC velho pode seguir de pé.
+    Reoffer,
     AccountLimits { five_hour: usage::RateWindow, seven_day: usage::RateWindow },
     /// Só para a tela: pedaço do resumo do raciocínio, a ação em curso e o fim do turno, que limpa os dois.
     Thought(String), Action(Option<organizer::OrganizerAction>), TurnDone,
@@ -314,7 +316,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
             Err(_) => log("rateLimits/read timed out"),
         }
     };
-    let (started, ()) = tokio::join!(rpc.request("thread/start", start.clone()), limits);
+    let (started, ()) = tokio::join!(rpc.request("thread/start", start), limits);
     let started = started.map_err(rpc_failure).map_err(failed("thread/start"))?;
     let mut thread = started["thread"]["id"].as_str().unwrap_or_default().to_owned();
     // Voltar ao modelo do config pede o nome dele: o do config, senão o que a thread abriu sem escolha.
@@ -539,13 +541,21 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                     log(format!("stalled turn interrupted ok={cut}"));
                     if cut { stalled_turn = Some(turn); } else { watch.rearm(Instant::now()); }
                 } else {
-                    // A voz fica presa à thread: organizador novo exige refazer a perna de áudio, pela mesma oferta de uma queda.
-                    match rpc.request("thread/start", start.clone()).await {
+                    // A voz fica presa à thread: organizador novo exige refazer a perna de áudio, por uma oferta nova do aparelho.
+                    // O retrato é o de agora: a chamada pode ter trocado de sessão ou de modelo desde a abertura.
+                    let context = if target.is_empty() { "Nenhuma sessão aberta na tela.".to_owned() } else { format!("A sessão na tela agora é {target}.") };
+                    let start = organizer_start(&config, &own, target_cwd.as_deref(), &context, &applied, options.tools.clone(), &note, options.hangar_mcp.as_ref());
+                    match rpc.request("thread/start", start).await {
                         Ok(fresh) => {
+                            // Antes de soltar a thread velha: turno dela vivo ainda agiria depois de a voz pedir para repetir.
+                            let turn = watch.turn().unwrap_or_default().to_owned();
+                            let cut = tokio::time::timeout(INTERRUPT_WAIT,
+                                rpc.request("turn/interrupt", json!({"threadId": thread, "turnId": turn}))).await.is_ok_and(|r| r.is_ok());
+                            spoken.revoke(&turn);
                             let old = std::mem::replace(&mut thread, fresh["thread"]["id"].as_str().unwrap_or_default().to_owned());
                             realtime_start["threadId"] = json!(thread);
                             let _ = rpc.request("thread/realtime/stop", json!({"threadId": old})).await;
-                            log("organizer replaced: waiting for the device offer");
+                            log(format!("organizer replaced: waiting for the device offer old_turn_cut={cut}"));
                             for ((id, ..), _) in gate.user_spoke() { let _ = rpc.respond(id, tool_reply("O turno foi interrompido; nada foi enviado.", false)).await; }
                             for ((id, _), _) in plan_gate.user_spoke() {
                                 let _ = rpc.respond(id, tool_reply("O turno foi interrompido; o plano não foi enviado e continua guardado.", false)).await;
@@ -558,9 +568,10 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                             close_live(events, &mut live_you, &mut live_voice).await;
                             (detached, out.away, audio_lost) = (true, true, Some(Instant::now() + audio_grace));
                             speak(&rpc, &thread, &mut out, ORGANIZER_RENEWED_SPEECH.to_owned(), "organizer renewed").await;
-                            for event in [VoiceEvent::Stalled(false), VoiceEvent::Activity(Activity::Idle), VoiceEvent::TurnDone, VoiceEvent::Phase(Phase::Connecting)] {
+                            for event in [VoiceEvent::Stalled(false), VoiceEvent::Activity(Activity::Idle), VoiceEvent::TurnDone, VoiceEvent::Reoffer, VoiceEvent::Phase(Phase::Connecting)] {
                                 let _ = events.send(event).await;
                             }
+                            if let Some(input) = results.turn_completed() { start_summary(&rpc, &thread, input, &mut results, &mut out, organizer_busy).await; }
                         }
                         Err(error) => {
                             log(format!("organizer replacement failed kind={}", rpc_error_kind(&error)));
@@ -724,6 +735,10 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                 None => break Ok(()),
             },
             item = incoming.recv() => match item {
+                Ok(Incoming::Request { id, method, params }) if method == "item/tool/call" && params["threadId"].as_str().is_some_and(|t| t != thread) => {
+                    log("tool call refused: organizer replaced");
+                    let _ = rpc.respond(id, tool_reply("Este organizador foi substituído; nada foi feito.", false)).await;
+                }
                 Ok(Incoming::Request { id, method, params }) if method == "item/tool/call" => {
                     let tool = params["tool"].as_str().unwrap_or("?").to_owned();
                     let _ = events.send(VoiceEvent::Action(Some(organizer::OrganizerAction::Tool(tool.clone())))).await;
@@ -1201,9 +1216,11 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                     match (method.as_str(), kind) {
                         ("item/agentMessage/delta", _) => watch.output(Instant::now()),
                         ("item/started", "agentMessage") => watch.message_started(item_turn, Instant::now()),
+                        // Comentário no meio do turno ("vou olhar") é sinal de vida, não a resposta que ele espera.
+                        ("item/completed", "agentMessage") if params["item"]["phase"] == "commentary" => watch.message_noted(item_turn, Instant::now()),
                         ("item/completed", "agentMessage") => watch.message_done(item_turn, Instant::now()),
-                        ("item/started", "webSearch" | "dynamicToolCall" | "commandExecution") => watch.tool(item_id, true, Instant::now()),
-                        ("item/completed", "webSearch" | "dynamicToolCall" | "commandExecution") => watch.tool(item_id, false, Instant::now()),
+                        ("item/started", "webSearch" | "dynamicToolCall" | "mcpToolCall" | "commandExecution") => watch.tool(item_id, true, Instant::now()),
+                        ("item/completed", "webSearch" | "dynamicToolCall" | "mcpToolCall" | "commandExecution") => watch.tool(item_id, false, Instant::now()),
                         _ => {}
                     }
                     match method.as_str() {
@@ -1343,6 +1360,7 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                                 let _ = events.send(VoiceEvent::Failed(VoiceFailure::Organizer)).await;
                             }
                             let ended = params["turn"]["id"].as_str();
+                            let mut recovering = false;
                             if stalled_turn.is_some() && stalled_turn.as_deref() == ended {
                                 stalled_turn = None;
                                 // Turno sem fala: nada que age sai dele, e o histórico da thread já traz o que ele disse.
@@ -1351,32 +1369,33 @@ async fn run_call(options: CallOptions, spawn: Spawn, events: &async_channel::Se
                                     Ok(result) => {
                                         recovery_turn = result["turn"]["id"].as_str().map(str::to_owned);
                                         if let Some(turn) = &recovery_turn { watch.heard(turn, Instant::now()); }
+                                        recovering = true;
                                         log("stall recovery turn started");
                                     }
                                     Err(error) => {
                                         log(format!("stall recovery turn/start failed kind={}", rpc_error_kind(&error)));
-                                        stalled = false;
-                                        let _ = events.send(VoiceEvent::Stalled(false)).await;
                                         let _ = events.send(VoiceEvent::Failed(VoiceFailure::Organizer)).await;
                                     }
                                 }
-                            } else if let Some(input) = results.turn_completed() { start_summary(&rpc, &thread, input, &mut results, &mut out, organizer_busy).await; }
-                            if stalled && recovery_turn.is_some() && recovery_turn.as_deref() == ended {
-                                log("organizer recovery ended without an answer");
-                                (stalled, recovery_turn) = (false, None);
+                            }
+                            // Sem turno de recuperação em curso, nada mais limparia o aviso: a tela mandaria esperar para sempre.
+                            if stalled && !recovering && stalled_turn.is_none() && (recovery_turn.is_none() || recovery_turn.as_deref() == ended) {
+                                log("organizer stall ended without an answer");
+                                (stalled, stall_attempts, recovery_turn) = (false, 0, None);
                                 let _ = events.send(VoiceEvent::Stalled(false)).await;
                             }
+                            if !recovering && let Some(input) = results.turn_completed() { start_summary(&rpc, &thread, input, &mut results, &mut out, organizer_busy).await; }
                         }
                         // Toda mensagem do organizador vira fala, inclusive as do meio do turno; quem a solta é o `SpeechHold`.
                         "item/completed" if params["item"]["type"] == "agentMessage" => {
                             let text = params["item"]["text"].as_str().unwrap_or_default();
                             let turn = params["turnId"].as_str().unwrap_or_default();
-                            if stalled {
+                            let commentary = params["item"]["phase"] == "commentary";
+                            if stalled && !commentary {
                                 log("organizer recovered");
                                 (stalled, stall_attempts, recovery_turn) = (false, 0, None);
                                 let _ = events.send(VoiceEvent::Stalled(false)).await;
                             }
-                            let commentary = params["item"]["phase"] == "commentary";
                             if !commentary { transcript.line(super::transcript::Who::Organizer, text, chrono::Local::now()); }
                             // O turno do sim ao aviso é o da fala dele e já é o resumo; sem aparelho, a fala fica guardada.
                             let yes_turn = delegated.as_ref().is_some_and(|(d, _)| d == turn);
@@ -1870,11 +1889,36 @@ mod tests {
         until(&mut seen, "turno novo", |m| m["method"] == "turn/start").await;
         restarted_answers(&push, "turn-s1", "b");
         until(&mut seen, "organizador novo", |m| m["method"] == "thread/start").await;
-        until(&mut seen, "voz da thread velha parada", |m| m["method"] == "thread/realtime/stop").await;
-        stalled_event(&events, false).await;
+        let cut = until(&mut seen, "turno velho cortado", |m| m["method"] == "turn/interrupt").await;
+        assert_eq!(cut["params"], json!({"threadId": "t1", "turnId": "turn-s1"}));
+        let stop = until(&mut seen, "voz da thread velha parada", |m| m["method"] == "thread/realtime/stop").await;
+        assert_eq!(stop["params"]["threadId"], "t1");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop { if matches!(events.recv().await.unwrap(), VoiceEvent::Reoffer) { return; } }
+        }).await.expect("pedido de oferta nova");
+        // O que a thread velha ainda pedir não age: a voz já mandou repetir.
+        crate::voice::test_support::push_tool(&push, "9", "send_to_session", json!({"request": "x"}), "turn-s1");
+        let refused = until(&mut seen, "ferramenta da thread velha", |m| m["id"] == "9").await;
+        assert_eq!(refused["result"]["success"], false);
         voice.offer(2, "v=0 offer B".into(), "ctx".into());
         let again = until(&mut seen, "voz na thread nova", |m| m["method"] == "thread/realtime/start").await;
-        assert_eq!(again["params"]["transport"]["sdp"], "v=0 offer B");
+        assert_eq!((&again["params"]["transport"]["sdp"], &again["params"]["threadId"]), (&json!("v=0 offer B"), &json!("t2")));
+    }
+
+    /// Interrupção recusada e turno que acaba sem mensagem: sem isto a tela mandaria esperar para sempre.
+    #[tokio::test]
+    async fn a_stall_that_ends_with_no_answer_clears_the_warning() {
+        let (spawn, mut seen, push) = fake_app_server();
+        let (tx, events) = async_channel::unbounded();
+        let voice = Voice::start(options(json!([])), spawn, tx);
+        voice.offer(1, "v=0 offer A".into(), "ctx".into());
+        next_answer(&events).await;
+        voice.live();
+        restarted_answers(&push, "turn-gone", "a");
+        stalled_event(&events, true).await;
+        until(&mut seen, "interrupção recusada", |m| m["method"] == "turn/interrupt").await;
+        push.send(json!({"method": "turn/completed", "params": {"threadId": "t1", "turn": {"id": "turn-gone", "status": "completed"}}})).unwrap();
+        stalled_event(&events, false).await;
     }
 
     /// `gh pr checks --watch` prendia o turno: passado o limite, o turno cai, a voz avisa e a próxima fala leva a nota.

@@ -40,6 +40,8 @@ type Attempt = {
   lastPing: number;
   lastMeter: number;
   lastInput: number;
+  /** Último `reoffer` visto; o primeiro retrato é a base, para quem assume a chamada no meio não refazer o áudio à toa. */
+  reoffer?: number;
   reading: boolean;
   restoring: boolean;
   audioRevision: number;
@@ -231,9 +233,9 @@ export class LiveVoiceCall {
   }
 
   /** A OpenAI encerra a sessão de áudio por tempo; o servidor guarda a conversa e espera outra oferta pelo mesmo socket. */
-  private dropped(call: Attempt, pc: RTCPeerConnection): void {
+  private dropped(call: Attempt, pc: RTCPeerConnection, requested = false): void {
     if (!this.current(call) || call.pc !== pc) return;
-    if (!call.pcLive || !call.media || Date.now() - (call.liveAt ?? 0) < STABLE_LIVE_MS) { this.fail(call, 'connection_lost'); return; }
+    if (!call.pcLive || !call.media || !requested && Date.now() - (call.liveAt ?? 0) < STABLE_LIVE_MS) { this.fail(call, 'connection_lost'); return; }
     pc.onconnectionstatechange = null;
     if (call.channel) call.channel.onclose = null;
     call.resumeBy = Date.now() + RESUME_WITHIN_MS;
@@ -277,7 +279,15 @@ export class LiveVoiceCall {
         try { await call.pc.setRemoteDescription({ type: 'answer', sdp: message.sdp }); }
         catch (error) { if (this.current(call)) this.fail(call, 'failed', detail(error), true); }
         break;
-      case 'state': this.handlers.state(message.state); break;
+      case 'state': {
+        const seen = message.state.reoffer ?? 0;
+        const asked = call.reoffer !== undefined && seen > call.reoffer;
+        call.reoffer = seen;
+        this.handlers.state(message.state);
+        // O WebRTC velho pode seguir de pé depois de a voz mudar de thread: sem isto o aparelho nunca oferece de novo.
+        if (asked && call.pc) this.dropped(call, call.pc, true);
+        break;
+      }
       case 'tool': this.tool(call, message.call, message.name, message.args); break;
       case 'pong': call.lastPong = Date.now(); break;
       case 'taken':

@@ -139,7 +139,7 @@ fn drive(offer: Offer, answer: String, muted: Arc<AtomicBool>, pause: Arc<Speech
     rtc.sdp_api().accept_answer(pending, answer).map_err(|_| RtcError::Answer)?;
     log("rtc answer accepted");
     // Abrir o som aqui: o fluxo do cpal fica na thread que o usa, e a tela não espera o WASAPI.
-    let mut audio = Audio::start(muted, pause).map_err(audio_error)?;
+    let mut audio = Audio::start(muted, pause.clone()).map_err(audio_error)?;
     let (mut window, mut last_summary) = (Window::default(), Instant::now());
     let (mut last_type, mut repeats, mut usage_logged) = (String::new(), 0u32, 0u32);
     let (mut heard_user, mut delegated) = (false, false);
@@ -160,6 +160,7 @@ fn drive(offer: Offer, answer: String, muted: Arc<AtomicBool>, pause: Arc<Speech
         window.loop_max_ms = window.loop_max_ms.max(now.duration_since(loop_top).as_millis() as u32);
         loop_top = now;
         if stop.load(Ordering::Relaxed) { break Ok(()); }
+        if pause.take_reconnect() { log("rtc reconnect requested"); break Err(RtcError::Media); }
         // Ninguém ouve mais: sem isto o microfone ficaria aberto.
         if events.is_closed() { break Err(RtcError::Network); }
         if !connected && started.elapsed() > CONNECT_DEADLINE { break Err(RtcError::Network); }

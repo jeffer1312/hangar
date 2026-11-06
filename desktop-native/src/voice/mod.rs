@@ -106,6 +106,9 @@ fn resumes(error: rtc::RtcError, live_for: Option<Duration>) -> bool {
     live_for.is_some_and(|live| live >= STABLE_LIVE) && matches!(error, rtc::RtcError::Media | rtc::RtcError::Network)
 }
 
+/// O contador subiu: o servidor pede oferta nova. O primeiro retrato é a base, para quem assume a chamada no meio.
+fn reoffer_asked(known: &mut Option<u64>, seen: u64) -> bool { known.replace(seen).is_some_and(|old| seen > old) }
+
 fn send(socket: &TextSocket, msg: Value) -> Result<(), String> {
     socket.send(&msg.to_string()).map_err(|error| { log(format!("socket send failed error={error:?}")); socket_code(&error).to_owned() })
 }
@@ -164,6 +167,7 @@ async fn run_call(setup: Setup, events: &async_channel::Sender<VoiceEvent>, inbo
     let mut resume_by: Option<tokio::time::Instant> = None;
     // Só a primeira conexão da chamada toca o aviso: as ofertas seguintes são a mesma conversa.
     let mut announce = true;
+    let mut reoffer = None;
     loop {
         tokio::select! {
             message = incoming.recv() => match message {
@@ -178,7 +182,10 @@ async fn run_call(setup: Setup, events: &async_channel::Sender<VoiceEvent>, inbo
                             }
                             None => log("answer repeated ignored"),
                         },
-                        "state" => { let _ = events.send(VoiceEvent::State(message["state"].clone())).await; }
+                        "state" => {
+                            if reoffer_asked(&mut reoffer, message["state"]["reoffer"].as_u64().unwrap_or(0)) { pause.request_reconnect(); }
+                            let _ = events.send(VoiceEvent::State(message["state"].clone())).await;
+                        }
                         "tool" => {
                             let (Some(call), Some(name)) = (message["call"].as_u64(), message["name"].as_str()) else { log("tool unreadable"); continue };
                             log(format!("tool {name} call={call}"));
@@ -264,6 +271,15 @@ mod tests {
         assert_eq!(screen_json(None, own, &peers), Value::Null);
         assert_eq!(screen_json(Some(&("https://vps.example.com".into(), "x".into())), own, &peers), Value::Null);
         assert_eq!(screen_json(Some(&("http://127.0.0.1:8765".into(), "hangar".into())), own, &peers), json!({"server": "", "name": "hangar"}));
+    }
+
+    #[test]
+    fn only_a_rising_counter_asks_for_a_new_offer() {
+        let mut known = None;
+        assert!(!reoffer_asked(&mut known, 2), "primeiro retrato é a base");
+        assert!(!reoffer_asked(&mut known, 2));
+        assert!(reoffer_asked(&mut known, 3));
+        assert!(!reoffer_asked(&mut known, 3));
     }
 
     #[test]

@@ -33,12 +33,15 @@ pub(crate) fn apply_mute(frame: &mut [f32], muted: bool) { if muted { frame.fill
 /// Pausa da fala da assistente. O modelo segue gerando em tempo real e não há como pará-lo, então o que chega fica guardado
 /// aqui e toca depois, atrás do que faltava: a demora só some quando a voz fica calada, porque silêncio não é enviado.
 #[derive(Default)]
-pub struct SpeechPause { paused: AtomicBool, held: Mutex<VecDeque<f32>>, dropped: AtomicU32, alert: AtomicBool }
+pub struct SpeechPause { paused: AtomicBool, held: Mutex<VecDeque<f32>>, dropped: AtomicU32, alert: AtomicBool, reconnect: AtomicBool }
 
 impl SpeechPause {
     pub fn set(&self, paused: bool) { self.paused.store(paused, Ordering::Relaxed); }
     /// Pede o som de travamento; quem toca é o laço da chamada, dono do áudio.
     pub fn request_alert(&self) { self.alert.store(true, Ordering::Relaxed); }
+    /// Pede para refazer o áudio com oferta nova; quem larga a conexão é o laço da chamada, e a fala guardada fica.
+    pub fn request_reconnect(&self) { self.reconnect.store(true, Ordering::Relaxed); }
+    pub fn take_reconnect(&self) -> bool { self.reconnect.swap(false, Ordering::Relaxed) }
     fn is_paused(&self) -> bool { self.paused.load(Ordering::Relaxed) }
 
     /// `true` se ficou guardado: com fala guardada, a nova não pode passar na frente da antiga.
@@ -176,7 +179,8 @@ impl Shared {
     }
 
     fn keep_unplayed(&self) {
-        if self.pause.is_paused() { self.pause.keep_front(std::mem::take(&mut *self.playback.lock().unwrap())); }
+        // Ainda descendo a fala guardada conta: o que está na fila vem antes dela.
+        if self.pause.is_paused() || self.pause.held_len() > 0 { self.pause.keep_front(std::mem::take(&mut *self.playback.lock().unwrap())); }
     }
 }
 
@@ -532,6 +536,12 @@ mod tests {
         shared.keep_unplayed();
         assert!(shared.playback.lock().unwrap().is_empty());
         assert_eq!(pause.held.lock().unwrap().iter().copied().collect::<Vec<_>>(), ramp(1, 6), "o da fila vai na frente");
+        pause.set(false);
+        shared.refill();
+        shared.play(&ramp(7, 1));
+        assert_eq!(shared.playback.lock().unwrap().len(), 6);
+        shared.keep_unplayed();
+        assert_eq!(pause.held.lock().unwrap().iter().copied().collect::<Vec<_>>(), ramp(1, 7), "na retomada a fila também volta");
     }
 
     #[test]

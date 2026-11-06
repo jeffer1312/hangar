@@ -16,7 +16,7 @@ pub fn fake_app_server() -> (Spawn, tokio::sync::mpsc::UnboundedReceiver<Value>,
         let w = write.clone();
         tokio::spawn(async move { while let Some(v) = pushed.recv().await { let _ = w.lock().await.write_all(format!("{v}\n").as_bytes()).await; } });
         let mut lines = BufReader::new(read).lines();
-        let (mut starts, mut turns) = (0, 0);
+        let (mut starts, mut turns, mut threads) = (0, 0, 0);
         while let Ok(Some(line)) = lines.next_line().await {
             let msg: Value = serde_json::from_str(&line).unwrap();
             let _ = seen_tx.send(msg.clone());
@@ -25,7 +25,8 @@ pub fn fake_app_server() -> (Spawn, tokio::sync::mpsc::UnboundedReceiver<Value>,
                 Some("config/read") => json!({"config": {"model": "gpt-test"}}),
                 Some("thread/realtime/listVoices") => json!({"voices": {"v1": ["cove", "sol"], "v2": ["marin"], "v3": ["cove", "sol", "aube", "viola"],
                     "defaultV1": "cove", "defaultV2": "marin"}}),
-                Some("thread/start") => json!({"thread": {"id": "t1"}, "model": "gpt-test"}),
+                // A primeira é a da chamada; a seguinte é o organizador trocado no travamento.
+                Some("thread/start") => { threads += 1; json!({"thread": {"id": format!("t{threads}")}, "model": "gpt-test"}) }
                 Some("thread/realtime/start") => {
                     starts += 1;
                     if msg["params"]["transport"]["sdp"].as_str().is_some_and(|s| s.contains("no-answer")) {

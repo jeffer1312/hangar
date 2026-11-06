@@ -366,6 +366,22 @@ describe('LiveVoiceCall público', () => {
     expect(socket.messages.some(message => message.type === 'stop')).toBe(false);
   });
 
+  it('contador reoffer que sobe refaz o áudio; o primeiro retrato é só a base', async () => {
+    const { pc, socket, handlers } = await openCall(); pc.connect();
+    const state = (reoffer: number) => ({ type: 'state', state: { phase: 'live', mode: 'direct', activity: 'idle', draft: null, error: null, plan: null,
+      effective: null, context: null, limits: { five_hour: null, seven_day: null }, backstage: [], thought: '', action: null, followed: [],
+      server: 'machine-a', client: 'mobile', memory: 0, reoffer } });
+    socket.receive(state(4));
+    socket.receive(state(4));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pc.close).not.toHaveBeenCalled();
+    socket.receive(state(5));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pc.close).toHaveBeenCalledOnce();
+    expect(socket.messages.filter(message => message.type === 'offer')).toHaveLength(2);
+    expect(handlers.failed).not.toHaveBeenCalled();
+  });
+
   it('vibra uma vez ao conectar, nunca a cada reconexão da mesma chamada', async () => {
     connectedHaptic.mockClear();
     const { pc } = await openCall();

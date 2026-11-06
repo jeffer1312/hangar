@@ -127,7 +127,7 @@ impl Ctx {
 
 #[derive(Default)]
 struct Snapshot {
-    phase: &'static str, mode: Mode, activity: Activity, stalled: bool, draft: Option<String>, error: Option<(String, String)>,
+    phase: &'static str, mode: Mode, activity: Activity, stalled: bool, reoffer: u64, draft: Option<String>, error: Option<(String, String)>,
     plan: Option<(PathBuf, String)>, effective: Option<Effective>, context: Option<(u64, Option<u64>)>,
     five_hour: RateWindow, seven_day: RateWindow, backstage: VecDeque<BackstageLine>, thought: String, action: Option<OrganizerAction>,
     /// Sobe a cada gravação da memória na chamada; o aparelho relê a lista quando ele muda.
@@ -323,6 +323,7 @@ impl Controller {
             VoiceEvent::Draft(draft) => self.snap.draft = draft,
             VoiceEvent::Activity(activity) => self.snap.activity = activity,
             VoiceEvent::Stalled(stalled) => self.snap.stalled = stalled,
+            VoiceEvent::Reoffer => self.snap.reoffer += 1,
             VoiceEvent::Thought(delta) => push_thought(&mut self.snap.thought, &delta),
             VoiceEvent::Action(action) => self.snap.action = action,
             VoiceEvent::TurnDone => (self.snap.thought, self.snap.action) = (String::new(), None),
@@ -620,6 +621,8 @@ impl Controller {
             // Enquanto o computador opera, a voz está trabalhando, seja qual for o turno do organizador.
             "activity": if s.computer.is_some() { "working" } else { match s.activity { Activity::Idle => "idle", Activity::Thinking => "thinking", Activity::Searching => "searching", Activity::Working => "working" } },
             "stalled": s.stalled,
+            // Contador no retrato, não mensagem nova: cliente antigo recusaria o tipo desconhecido e derrubaria a chamada.
+            "reoffer": s.reoffer,
             "progress": s.computer.as_deref().filter(|step| !step.is_empty()),
             "draft": s.draft,
             "error": s.error.as_ref().map(|(code, text)| json!({"code": code, "text": text})),

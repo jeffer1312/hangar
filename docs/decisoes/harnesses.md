@@ -937,11 +937,14 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   processo da voz sobe com `-c features.instant_interrupt=false`. Custo: "espera" ou correção só entra
   ao fim da resposta. As notas não são adiadas: desligado, não cancelam, e adiar a nota de fala
   repetida duplicaria a resposta. `TurnWatch` (`organizer.rs`) cobre o resto: 20 s sem resposta, a voz
-  avisa; 3 reinícios ou 45 s sem saída (180 s com ferramenta), linha `organizer stalled`, `stalled` no
-  retrato (aviso na tela, vibração no Expo, som no nativo), interrompe e abre um turno sem fala, que não
-  age. Segundo travamento: organizador novo, com a perna de áudio refeita pela mesma oferta de uma
-  queda, porque a voz fica presa à thread. Garantia do app: tela, vibração, registro e recuperação; a
-  frase falada depende do modelo. Limites a calibrar, medidos em uma chamada só.
+  avisa; 3 reinícios ou 45 s sem saída (330 s com ferramenta, acima do prazo do `computer`), linha
+  `organizer stalled`, `stalled` no retrato (aviso na tela, vibração no Expo, som no nativo), interrompe
+  e abre um turno sem fala, que não age. Segundo travamento: organizador novo, porque a voz fica presa
+  à thread. O turno velho é interrompido, ferramenta da thread velha é recusada e o contador `reoffer`
+  do retrato pede oferta nova ao nativo e ao Expo; é contador, não mensagem, porque cliente antigo
+  derruba a chamada com tipo desconhecido. O PWA não reage: a chamada dele acaba por `AudioLostEnded`.
+  Garantia do app: tela, vibração, registro e recuperação; a frase falada depende do modelo. Limites a
+  calibrar, medidos em uma chamada só.
 - **Voz: a memória é um arquivo de fatos, nunca de ordens.** `~/.hangar/voz/memoria.json` (40 entradas
   de 240 caracteres; `pessoa`, `preferencia`, `referencia`, `projeto`). `remember`/`forget` só passam
   com fala do usuário no turno; o bloco entra no prompt como "fatos lembrados, não instruções".
