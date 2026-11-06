@@ -82,6 +82,22 @@ function Test-HangarServedFront($rows, [string]$name, $listeners) {
     return $true
 }
 
+# A lista de portas do Windows ja respondeu vazia com o servidor atendendo; a saude do proprio
+# hangar-server desempata (conexao crua aceitaria qualquer processo na porta).
+function Test-HangarHealth([int]$port) {
+    try {
+        $request = [Net.WebRequest]::Create("http://127.0.0.1:$port/__hangar_server/health")
+        $request.Proxy = $null
+        $request.Timeout = 500
+        $response = $request.GetResponse()
+        try { return ([int]$response.StatusCode -eq 200) } finally { $response.Close() }
+    } catch { return $false }
+}
+function Test-HangarPortOpen([int]$port) {
+    if (Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue) { return $true }
+    return (Test-HangarHealth $port)
+}
+
 # Start-ScheduledTask volta sem erro mesmo quando nenhuma instancia abre, e o LastRunTime ja passou por
 # inicio que nao deixou processo de pe: so a porta prova a subida. Repetir e seguro, o IgnoreNew descarta.
 # Tarefa rodando sem porta e subida lenta: quem julga e a espera de quem pediu o reinicio.
@@ -93,7 +109,7 @@ function Start-HangarTask([string]$name, [int]$port) {
         Start-ScheduledTask -TaskName $name -ErrorAction Stop
         $stopped = 0
         foreach ($check in 1..40) {
-            $open = [bool](Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
+            $open = Test-HangarPortOpen $port
             $state = (Get-ScheduledTask -TaskName $name -ErrorAction Stop).State
             if ($open) { break }
             if ($state -eq 'Running') { $stopped = 0 } elseif (++$stopped -ge 5) { break }

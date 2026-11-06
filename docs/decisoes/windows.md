@@ -225,8 +225,10 @@ mais o de antes, e a falha de passo grava o mesmo retrato da falha de reinício 
 passo, saída do backend, processos, tarefa e porta). **Por que a porta não foi vista segue sem
 prova:** às 07:56 de 05/11 o retrato disse `porta 8765: ninguem escutando` com o servidor de pé há
 33 min, e o instalador esperou os 180 s extras, que só correm com o log do backend crescendo. Por
-isso o retrato confere também por conexão em `127.0.0.1`, e a espera do `install.ps1` aceita a
-conexão quando o `Get-NetTCPConnection` volta vazio.
+isso o retrato confere também por conexão em `127.0.0.1`, e a espera do `install.ps1` e o
+`Start-HangarTask` (`Test-HangarPortOpen`, em `windows-tasks.ps1`) aceitam um 200 de
+`/__hangar_server/health` quando o `Get-NetTCPConnection` volta vazio; conexão crua aceitaria
+qualquer processo na porta.
 
 ## Pacote por versão no Windows (24/10/2026)
 

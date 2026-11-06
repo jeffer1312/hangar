@@ -199,18 +199,6 @@ function Test-Internet {
     $c = New-Object Net.Sockets.TcpClient
     try { return $c.ConnectAsync('github.com', 443).Wait(10000) } catch { return $false } finally { $c.Dispose() }
 }
-# A lista de portas do Windows ja respondeu vazia com o servidor atendendo; a saude do proprio
-# hangar-server desempata (conexao crua aceitaria qualquer processo na porta).
-function Test-PortaAberta([int]$porta) {
-    if (Get-NetTCPConnection -State Listen -LocalPort $porta -ErrorAction SilentlyContinue) { return $true }
-    try {
-        $req = [Net.WebRequest]::Create("http://127.0.0.1:$porta/__hangar_server/health")
-        $req.Proxy = $null
-        $req.Timeout = 500
-        $resp = $req.GetResponse()
-        try { return ([int]$resp.StatusCode -eq 200) } finally { $resp.Close() }
-    } catch { return $false }
-}
 function Policy-Locked {
     # Regra imposta pela TI vence o Set-ExecutionPolicy do usuario e o -ExecutionPolicy da linha de comando.
     foreach ($escopo in @('MachinePolicy', 'UserPolicy')) {
@@ -2267,7 +2255,7 @@ if ($registrou) {
         # (exit 1, bloco vermelho do hook dizendo "A ATUALIZACAO NAO RODOU") quando o backend so
         # estava alguns segundos atrasado.
         foreach ($i in 1..40) {
-            if (Test-PortaAberta $portaBack) { $subiu = $true; break }
+            if (Test-HangarPortOpen $portaBack) { $subiu = $true; break }
             Start-Sleep -Seconds 1
         }
         # Passados os 40s, "nao subiu" e "esta demorando" nao sao a mesma coisa, e o instalador
@@ -2287,7 +2275,7 @@ if ($registrou) {
             $ocioso = 0
             $avisou = $false
             foreach ($i in 1..$extraMax) {
-                if (Test-PortaAberta $portaBack) { $subiu = $true; break }
+                if (Test-HangarPortOpen $portaBack) { $subiu = $true; break }
                 $tam = (Get-LogBackend).LastWriteTimeUtc
                 if ($tam -gt $tamAnt) {
                     if (-not $avisou) { Nota 'o backend ainda esta subindo (primeira subida faz uv sync e passos de atualizacao)'; $avisou = $true }
@@ -2910,7 +2898,7 @@ if ($pacote -and -not $Update -and -not $pacoteNovo) {
 # -- Confere e entrega o acesso -----------------------------------------------
 # CONFERE, nao anuncia — mesma regra do `Pronto` condicional. So quando ha tarefa registrada: quem
 # recusou o passo 7 nao deve esperar 20s por algo que ninguem pediu pra subir.
-# Nao repete o poll: $subiu ja e o resultado do mesmo `Test-PortaAberta $portaBack` la em cima
+# Nao repete o poll: $subiu ja e o resultado do mesmo `Test-HangarPortOpen $portaBack` la em cima
 # (lista de portas, com a saude do hangar-server quando ela vem vazia), so mesmo $registrou/$jaAgendado - um
 # segundo loop pagaria os mesmos ate ~40s de novo e imprimiria uma segunda mensagem (Ok/Erro) sobre o
 # MESMO fato que o Ok/Falta de la em cima ja anunciou. $subiu so alimentava a tela; aqui ele passa

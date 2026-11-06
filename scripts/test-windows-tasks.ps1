@@ -47,6 +47,7 @@ function Reset-State {
     $script:frozenLastRun = $false
     $script:listening = $false
     $script:noPort = $false
+    $script:healthy = $false
     $script:phantomStarts = 0
     $script:migrated = $true
     $script:tableReads = 0
@@ -77,6 +78,7 @@ function Get-NetTCPConnection { param($State, $LocalPort, $ErrorAction)
     if ($script:events.Count -and $script:slowRelease -gt 0) { $script:slowRelease--; return @{ OwningProcess = 777 } }
     if ($script:owner) { return @{ OwningProcess = $script:owner } }
 }
+function Test-HangarHealth { param($port) return $script:healthy }
 function Get-Process { param($Id, $ErrorAction) return $script:live[[int]$Id] }
 function Stop-Process { param($InputObject, [switch]$Force, $ErrorAction)
     if ($script:stopFails) { throw 'Acesso negado' }
@@ -131,6 +133,12 @@ try {
     $failed = $null
     try { Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' } catch { $failed = "$_" }
     Assert ($failed -match 'nao iniciou') "Inicio que nunca deixou processo passou por reiniciado: $failed"
+    # Lista de portas vazia com o servidor de pe: a saude do hangar-server prova a subida.
+    Reset-State
+    $script:phantomStarts = 99
+    $script:healthy = $true
+    $trail = @(Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend')
+    Assert (@($script:events | Where-Object { $_ -eq 'start' }).Count -eq 1 -and $trail[0] -match 'porta=sim') "Servidor de pe com a lista de portas vazia virou falha: $($trail -join ' | ')"
     Reset-State
     $script:noPort = $true
     Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' | Out-Null
