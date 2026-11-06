@@ -23,6 +23,7 @@ cat > "$tmp/bin/cargo" <<'EOF'
 alvo="${CARGO_TARGET_DIR:-$FAKE_TARGET}"
 if [[ "$1" == metadata ]]; then printf '{"target_directory":"%s"}\n' "$alvo"; exit 0; fi
 [[ -n "${FAKE_ARGS:-}" ]] && echo "$*" > "$FAKE_ARGS"
+[[ -n "${FAKE_RUNS:-}" ]] && echo run >> "$FAKE_RUNS"
 [[ -n "${FAKE_FALHA:-}" ]] && { echo "error: falhou" >&2; exit 101; }
 mkdir -p "$alvo/debug"
 echo "$FAKE_CONTEUDO" > "$alvo/debug/hangar-server"; chmod +x "$alvo/debug/hangar-server"
@@ -73,9 +74,10 @@ mkdir -p "$repo/crates/target/debug"
 roda_com() {   # $1 = MemAvailable em GiB; o resto vai como ambiente. Deixa args, escopo e erro em $tmp.
     local livre="$1"; shift
     printf 'MemAvailable: %d kB\n' $((livre * 1024 * 1024)) > "$tmp/meminfo"
-    rm -f "$tmp/args" "$tmp/escopo"
+    rm -f "$tmp/args" "$tmp/escopo" "$tmp/runs"
     (cd "$repo" && env -u CARGO_BUILD_JOBS -u HANGAR_BUILD_GB_POR_JOB "$@" PATH="$tmp/bin:$PATH" \
         FAKE_TARGET="$comum" FAKE_CONTEUDO=v5 FAKE_ARGS="$tmp/args" FAKE_ESCOPO_LOG="$tmp/escopo" \
+        FAKE_RUNS="$tmp/runs" \
         HANGAR_MEMINFO="$tmp/meminfo" "$P" build) >/dev/null 2>"$tmp/err"
 }
 jobs_de() { sed -n 's/.* -j \([0-9]*\) .*/\1/p' "$tmp/args" 2>/dev/null; }
@@ -92,7 +94,7 @@ roda_com 40 HANGAR_BUILD_GB_POR_JOB=0; [[ "$(jobs_de)" == "$esperado" ]] && grep
 # Sem escopo, compila sem teto; escopo que falha depois da sonda compila de novo, sem teto.
 roda_com 40 FAKE_ESCOPO=falha && [[ -n "$(jobs_de)" ]] && grep -q "sem teto" "$tmp/err" || \
     { echo "FALHOU sem systemd-run o build não rodou sem teto"; falhou=1; }
-roda_com 40 FAKE_ESCOPO=so-sonda && [[ -n "$(jobs_de)" ]] && grep -q "não abriu" "$tmp/err" || \
+roda_com 40 FAKE_ESCOPO=so-sonda && [[ "$(wc -l < "$tmp/runs")" == 1 ]] && grep -q "não abriu" "$tmp/err" || \
     { echo "FALHOU escopo que não abriu não recompilou sem teto"; falhou=1; }
 FAKE_FALHA=1 roda_com 40 && { echo "FALHOU erro do cargo no escopo saiu 0"; falhou=1; }
 grep -q "não abriu" "$tmp/err" && { echo "FALHOU erro do cargo no escopo foi tratado como escopo que não abriu"; falhou=1; }

@@ -76,7 +76,8 @@ alto=$(( ${livre:-0} - folga ))
 escopo=(systemd-run --user --scope --quiet --collect -p "MemoryHigh=${alto}K")
 # Escopo próprio sobrevive ao fim de quem chamou e seguraria a trava: ele morre junto com a unidade dela.
 dono="$(sed -n 's#^0::.*/user@[0-9]*\.service/.*/\([^/]*\.\(scope\|service\)\)$#\1#p' /proc/self/cgroup 2>/dev/null || true)"
-[[ -n "$dono" ]] && escopo+=(-p "BindsTo=$dono")
+# O systemd-run come barra invertida: o `\x2d` dos nomes de unidade vai dobrado.
+[[ -n "$dono" ]] && escopo+=(-p "BindsTo=${dono//\\/\\\\}")
 marca="$(mktemp -u)"
 trap 'rm -f "$metadata" "$artifacts" "$marca"' EXIT
 # A sonda leva os mesmos parâmetros e tem prazo: um systemd do usuário travado não pode segurar a trava.
@@ -105,8 +106,9 @@ compila() {   # $@ = prefixo antes do nice: vazio ou o escopo com teto
     set -e
 }
 compila "${teto[@]}"
-# A sonda passou mas o escopo não abriu (o cargo nem começou): compila de novo sem teto.
-if (( ${#teto[@]} && statuses[0] != 0 )) && [[ ! -e "$marca" ]]; then
+# A sonda passou mas o escopo não abriu (o cargo nem começou): compila de novo sem teto. Saída por
+# sinal (Ctrl-C, término) é interrupção, não escopo.
+if (( ${#teto[@]} && statuses[0] != 0 && statuses[0] <= 128 )) && [[ ! -e "$marca" ]]; then
     echo "cargo-pinned: o escopo de memória não abriu; compilando sem teto" >&2
     compila
 fi
