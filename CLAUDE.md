@@ -721,13 +721,18 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   - Outras perguntas do Rust ao Python (`/internal/*`): `accounts/prepare` (só contas Codex; a
     reconciliação das contas Claude é do Rust, `accounts/claude_config.rs`),
     `accounts/codex-invalidate`, `workspace/context`,
-    `worktrees/context`,
     `transcription/config`, `costs/scopes`, `migration/status`, `diag` e `ping`.
   - Partes ainda no Python: transcript, estado e entrada geral de Pi, omp e Kimi;
     transferência Claude→Codex; workflows e runners. O Connect (8768) está inativo.
-  - Arquivo e busca são do Rust. O `archive.py` guarda só o que o Python ainda usa:
-    `list_folders`/`_head_info` para `/internal/worktrees/context` (`_worktree_inputs`) e
-    `archive_jsonl`/`archive_cwd` para o bastão (`_bastao_alvo`, `api.py`).
+  - Contexto e fetch das worktrees são do Rust (`worktree_context.rs`, `worktree_fetch.rs`),
+    inclusive a fonte usada pelas guardas de exclusão e pela limpeza automática. O fetch conserva
+    validação, raízes e erros anteriores; usa credenciais configuradas, mas não pergunta login no
+    terminal. A porta Python só repassa o fetch e responde `worktrees_need_rust_server` sem Rust.
+    Não existe `/internal/worktrees/context`. Evidência em
+    [plataforma.md](docs/decisoes/plataforma.md#contexto-e-fetch-de-worktrees-sem-python-05112026).
+  - Arquivo e busca são do Rust. O `archive.py` guarda os leitores da lista legada de worktrees
+    no modo `python` (`list_folders`, `_worktree_inputs`) e os leitores compartilhados com o bastão
+    e o redirecionamento de conversas (`_contas`, `_head_info`, `archive_jsonl`, `archive_cwd`).
   - Atualização: rotas, passos iniciais, fetch e atualização automática são do Rust.
     O pacote usa `update/http.rs` e `update/periodic.rs`; o checkout usa `update/git_engine/`.
     O `rust_bins.py` lança o Rust pelo caminho real da versão.

@@ -123,6 +123,10 @@ name = "workspace_unavailable"   # esvazia o PATH
 path = "tests/workspace_unavailable.rs"
 
 [[test]]
+name = "worktree_fetch_process"
+path = "tests/worktree_fetch_process.rs"
+
+[[test]]
 name = "runtime_diagnostics"   # logger global do tracing e contagem exata de avisos
 path = "tests/runtime_diagnostics.rs"
 

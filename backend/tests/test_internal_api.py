@@ -45,30 +45,6 @@ def test_workspace_context_contains_only_registry_metadata(tmp_path):
                                "session":{"name":"s1","cwd":"/p","jsonl":"/p/abc-123.jsonl","git_cwd":"/p"}}
 
 
-def test_worktrees_context_has_folders_inside_roots_and_account_projects(tmp_path):
-    inside = tmp_path / "repo"
-    inputs = AsyncMock(return_value=([_info(cwd=str(inside), worktree_path=str(inside))], [str(inside)], [tmp_path]))
-    with patch("app.api._worktree_inputs", inputs), \
-            patch("app.archive._contas", return_value=[(None, "", tmp_path / "projects")]), \
-            patch("app.api.list_folders", return_value=[SimpleNamespace(cwd=str(inside / "sub"), mtime=1.0)]):
-        response = _client().get("/internal/worktrees/context", headers={"X-Hangar-Internal": SECRET})
-    assert response.status_code == 200
-    assert response.json() == {
-        "roots": [str(tmp_path)], "cwds": [str(inside)],
-        "sessions": [{"name": "s1", "cwd": str(inside), "git_cwd": str(inside), "worktree_path": str(inside), "jsonl": "/p/abc-123.jsonl"}],
-        "project_bases": [str(tmp_path / "projects")],
-        "activities": [{"cwd": str(inside / "sub"), "mtime": 1.0}],
-    }
-
-
-def test_worktrees_context_refuses_before_reading_anything():
-    with patch("app.api._worktree_inputs") as inputs:
-        response = _client("203.0.113.7").get("/internal/worktrees/context", headers={"X-Hangar-Internal": SECRET})
-        assert _client().get("/internal/worktrees/context", headers={"X-Hangar-Internal": "errado"}).status_code == 404
-    assert response.status_code == 404
-    inputs.assert_not_called()
-
-
 def test_worktree_inputs_keep_recent_folders_inside_the_roots(tmp_path):
     (tmp_path / "repo").mkdir()
     sessions = [_info(cwd=str(tmp_path / "repo")), _info(name="s2", cwd="/fora")]

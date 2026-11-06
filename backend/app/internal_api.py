@@ -183,26 +183,6 @@ async def workspace_context(name: str | None = None) -> dict:
     }
 
 
-@router.get("/worktrees/context")
-async def worktrees_context() -> dict:
-    """O que a lista de worktrees do hangar-server não acha sozinho: sessões, pastas e contas."""
-    from app import api
-    from app.archive import _contas
-
-    sessions, cwds, roots = await api._worktree_inputs()
-    bases = await asyncio.to_thread(lambda: [str(base) for _cfg, _rot, base in _contas()])
-    folders = await asyncio.to_thread(api.list_folders)
-    return {
-        "roots": [str(r) for r in roots],
-        "cwds": cwds,
-        "sessions": [{"name": s.name, "cwd": s.cwd, "git_cwd": s.git_dir, "worktree_path": s.worktree_path, "jsonl": s.jsonl}
-                     for s in sessions],
-        "project_bases": bases,
-        "activities": [{"cwd": f.cwd, "mtime": f.mtime} for f in folders if f.cwd],
-    }
-
-
-
 @router.get("/migration/status")
 async def migration_status() -> dict:
     from app import migration_status

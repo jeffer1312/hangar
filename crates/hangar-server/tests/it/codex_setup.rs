@@ -75,6 +75,31 @@ async fn codex_file_lock_cancel_releases() {
 }
 
 #[tokio::test]
+#[cfg(target_os = "linux")]
+async fn codex_file_lock_drop_releases_while_pre_exec_child_is_alive() {
+    let root = crate::physical_tempdir();
+    let path = root.path().canonicalize().unwrap().join("lock");
+    let guard = files::exclusive(&path).await.unwrap();
+    let child = crate::accounts_catalog::PreExecGuardChild::spawn(&path, false);
+    let contender = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
+    assert!(
+        matches!(contender.try_lock(), Err(std::fs::TryLockError::WouldBlock)),
+        "guarda viva deixou outra abertura adquirir a trava"
+    );
+    drop(guard);
+    assert!(
+        contender.try_lock().is_ok(),
+        "descarte da guarda deixou a trava ocupada pelo descritor herdado pré-exec"
+    );
+    drop(contender);
+    drop(child);
+}
+
+#[tokio::test]
 #[cfg(unix)]
 async fn codex_native_edit_uses_isolated_copy_and_retries_races() {
     use hangar_server::accounts::environment::AccountEnvironment;

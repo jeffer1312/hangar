@@ -1,19 +1,16 @@
-//! Worktrees e suas preferências: o Python fornece somente fatos das sessões e conversas.
+//! Worktrees e suas preferências, com fontes locais de sessões e conversas.
 use crate::routes::AppState;
 use axum::{
-    body::Body,
     extract::Request,
     http::{Method, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use hangar_workspace::worktrees::{self, Session};
-use http_body_util::BodyExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
 
 const CONTEXT: &str = "worktrees_context";
-const MAX_CONTEXT: usize = 16 * 1024 * 1024;
 
 #[derive(Deserialize, Clone)]
 pub(crate) struct Context {
@@ -40,7 +37,7 @@ pub fn matches(method: &Method, path: &str) -> bool {
         Method::PUT => path == "/api/worktrees/settings",
         Method::POST => matches!(
             path,
-            "/api/worktrees/create" | "/api/worktrees/delete" | "/api/worktrees/delete-merged"
+            "/api/worktrees/create" | "/api/worktrees/delete" | "/api/worktrees/delete-merged" | "/api/worktrees/fetch"
         ),
         _ => false,
     }
@@ -65,38 +62,8 @@ fn flag(value: Option<&String>) -> Option<bool> {
     }
 }
 
-pub(crate) async fn context(st: &AppState) -> Result<Context, &'static str> {
-    let req = axum::http::Request::get(format!(
-        "http://{}/internal/worktrees/context",
-        st.cfg.upstream
-    ))
-    .header("x-hangar-internal", &st.cfg.internal_secret)
-    .body(Body::empty())
-    .map_err(|_| "pedido")?;
-    // A lista de pastas do Arquivo pode levar dezenas de segundos na primeira leitura.
-    let resp = tokio::time::timeout(Duration::from_secs(60), st.http.request(req))
-        .await
-        .map_err(|_| "prazo")?
-        .map_err(|e| {
-            tracing::warn!(error = %e, "worktrees: contexto sem conexão com o Python");
-            "conexao"
-        })?;
-    if !resp.status().is_success() {
-        tracing::warn!(status = %resp.status(), "worktrees: contexto recusado pelo Python");
-        return Err("status");
-    }
-    // O teto vale durante a leitura: corpo grande não chega a ser guardado inteiro.
-    let body = http_body_util::Limited::new(resp.into_body(), MAX_CONTEXT);
-    let bytes = tokio::time::timeout(Duration::from_secs(60), body.collect())
-        .await
-        .map_err(|_| "prazo")?
-        .map_err(|_| "tamanho")?
-        .to_bytes();
-    // O erro do serde diz linha e coluna, nunca o conteúdo.
-    serde_json::from_slice(&bytes).map_err(|e| {
-        tracing::warn!(error = %e, "worktrees: contexto do Python fora do formato");
-        "json"
-    })
+pub(crate) async fn context(st: &Arc<AppState>) -> Result<Context, &'static str> {
+    crate::worktree_context::load(st.clone()).await
 }
 
 /// Não rodou: 503 com código e motivo, como as outras rotas do Rust; o Python nunca atende.
@@ -111,10 +78,10 @@ fn refuse(st: &AppState, route: &str, code: &'static str, motivo: &str) -> Respo
     }
     // O diário só leva frase fixa; o motivo separa as causas.
     let reason = match motivo {
-        "prazo" => "contexto do Python sem resposta no prazo",
-        "conexao" => "sem conexão com o Python",
-        "status" => "Python recusou o contexto",
-        "json" | "tamanho" => "contexto do Python fora do formato",
+        "configuracao" => "configuração das fontes de worktrees indisponível",
+        "sessoes" => "descoberta local de sessões indisponível",
+        "leitura" => "leitura das fontes de worktrees interrompida",
+        "relogio" => "relógio indisponível para ler a atividade",
         "vagas cheias" => "vagas cheias",
         "pânico na leitura" => "pânico na leitura",
         _ => "lista de worktrees indisponível",
@@ -133,6 +100,9 @@ fn refuse(st: &AppState, route: &str, code: &'static str, motivo: &str) -> Respo
 }
 
 pub async fn public(st: Arc<AppState>, req: Request) -> Response {
+    if req.method() == Method::POST && req.uri().path() == "/api/worktrees/fetch" {
+        return crate::worktree_fetch::public(st, req).await;
+    }
     if req.uri().path() == "/api/worktrees/settings" {
         return settings(st, req).await;
     }
@@ -286,7 +256,7 @@ struct DeleteMerged {
     ready_only: bool,
 }
 
-pub(crate) async fn fresh_context(st: &AppState) -> hangar_workspace::Result<Context> {
+pub(crate) async fn fresh_context(st: &Arc<AppState>) -> hangar_workspace::Result<Context> {
     let mut ctx = context(st)
         .await
         .map_err(|_| hangar_workspace::error(503, "fatos de worktrees indisponíveis"))?;

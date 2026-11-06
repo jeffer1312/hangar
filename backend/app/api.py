@@ -506,14 +506,15 @@ async def _worktrees_pelo_rust(request: Request, call_next):
     path, method = request.url.path, request.method
     owned = (method == "GET" and path in {"/api/worktrees", "/api/worktrees/detail", "/api/worktrees/settings"}
              or method == "PUT" and path == "/api/worktrees/settings"
-             or method == "POST" and path in {"/api/worktrees/create", "/api/worktrees/delete", "/api/worktrees/delete-merged"})
+             or method == "POST" and path in {"/api/worktrees/create", "/api/worktrees/delete", "/api/worktrees/delete-merged", "/api/worktrees/fetch"})
     if not owned:
         return await call_next(request)
     if guest_of(request) is not None:
         return JSONResponse({"detail": "convidado não acessa worktrees"}, status_code=403)
-    if account_bridge.owner_mode() == "python" and path != "/api/worktrees/settings":
+    if account_bridge.owner_mode() == "python" and path not in {"/api/worktrees/settings", "/api/worktrees/fetch"}:
         return await call_next(request)
-    return await _repasse_ao_rust(request, {"code": "worktrees_need_rust_server"}, "/__hangar_server/forwarded")
+    options = {"limit": None, "default_json_content_type": False} if path == "/api/worktrees/fetch" else {}
+    return await _repasse_ao_rust(request, {"code": "worktrees_need_rust_server"}, "/__hangar_server/forwarded", **options)
 
 
 @app.middleware("http")
@@ -6201,8 +6202,6 @@ def _registered_in_allowed_repo(path: str) -> bool:
 
 
 async def _worktree_inputs():
-    """Sessões, pastas dentro das raízes (vivas + com conversa nos últimos 30 dias) e raízes: o que
-    a lista de worktrees lê aqui e o hangar-server recebe por `/internal/worktrees/context`."""
     sessions = await asyncio.to_thread(registry.list)
     corte = time.time() - 30 * 86400
     folders = await asyncio.to_thread(list_folders)
@@ -6235,19 +6234,6 @@ async def worktrees_detail(path: str):
     path = await asyncio.to_thread(_allowed_worktree, path)
     sessions = await asyncio.to_thread(registry.list)
     return await asyncio.to_thread(worktrees.status, path, sessions)
-
-
-class WorktreeRepoBody(_StrictBody):
-    repo: str = Field(min_length=1)
-
-
-@app.post("/api/worktrees/fetch", dependencies=[Depends(require_auth)])
-async def worktrees_fetch(body: WorktreeRepoBody):
-    try:
-        await asyncio.to_thread(lambda: worktrees.fetch(_allowed_repo(body.repo)))
-    except GitError as exc:
-        raise HTTPException(exc.status, detail=exc.detail) from None
-    return {"ok": True}
 
 
 class WorktreeDeleteBody(_StrictBody):

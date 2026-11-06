@@ -173,7 +173,22 @@ pub fn transform(
         path.file_name().unwrap_or_default().to_string_lossy()
     )))
 }
-pub async fn exclusive(path: &Path) -> Result<fs::File, Error> {
+pub struct ExclusiveGuard {
+    file: fs::File,
+}
+impl Drop for ExclusiveGuard {
+    fn drop(&mut self) {
+        // Fechar só o descritor mantém a trava quando um filho herdou a referência.
+        if let Err(error) = self.file.unlock() {
+            tracing::warn!(
+                code = "codex_integration_unlock_failed",
+                io_kind = ?error.kind(),
+                "não foi possível liberar a trava da integração; o descritor será fechado"
+            );
+        }
+    }
+}
+pub async fn exclusive(path: &Path) -> Result<ExclusiveGuard, Error> {
     restricted_directory(
         path.parent()
             .ok_or_else(|| Error::Invalid("lock sem diretório".into()))?,
@@ -188,7 +203,7 @@ pub async fn exclusive(path: &Path) -> Result<fs::File, Error> {
     let file = options.open(path)?;
     loop {
         match file.try_lock() {
-            Ok(()) => return Ok(file),
+            Ok(()) => return Ok(ExclusiveGuard { file }),
             Err(fs::TryLockError::WouldBlock) => {
                 tokio::time::sleep(Duration::from_millis(100)).await
             }

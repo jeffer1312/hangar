@@ -1052,6 +1052,9 @@ pub(crate) async fn pass_any(
         return crate::speech::http::public(st, peer, req).await;
     }
     let decoded_path=percent_encoding::percent_decode_str(req.uri().path()).decode_utf8_lossy();
+    if crate::worktree_fetch::owns(&decoded_path) {
+        return crate::worktree_fetch::route(st,peer,req).await;
+    }
     if crate::harness_setup::http::matches(&decoded_path) {
         return crate::harness_setup::routing::handle(st, peer, req).await;
     }
@@ -1449,6 +1452,10 @@ pub(crate) fn cors(req: &HeaderMap, resp: &mut HeaderMap) {
 
 /// Gzip só quando o cliente pede e o corpo passa de 1 KB. SSE nunca: o gzip seguraria os quadros.
 pub(crate) fn maybe_gzip(req: &HeaderMap, resp: &mut HeaderMap, body: Vec<u8>) -> Vec<u8> {
+    gzip_with_minimum(req, resp, body, 1024)
+}
+
+pub(crate) fn gzip_with_minimum(req: &HeaderMap, resp: &mut HeaderMap, body: Vec<u8>, minimum: usize) -> Vec<u8> {
     let wants = req
         .get(header::ACCEPT_ENCODING)
         .and_then(|v| v.to_str().ok())
@@ -1457,7 +1464,7 @@ pub(crate) fn maybe_gzip(req: &HeaderMap, resp: &mut HeaderMap, body: Vec<u8>) -
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.starts_with("text/event-stream"));
-    if !wants || sse || body.len() < 1024 {
+    if !wants || sse || body.len() < minimum {
         return body;
     }
     let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(5));
