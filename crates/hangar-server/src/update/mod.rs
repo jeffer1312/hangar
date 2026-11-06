@@ -994,7 +994,12 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
                 }
                 // Passo que reiniciou o servidor (o `install.ps1 -Update` reinicia) deixou a versão nova de pé:
                 // só devolver o `current` deixaria a nova rodando com o `current` na anterior.
-                let restarted = !matches!(health.read().await, Reading::Rust { pid, .. } if pid == pid_before);
+                let restarted = match health.read().await {
+                    Reading::Rust { pid, commit, .. } =>
+                        commit.as_deref() == Some(manifest.commit.as_str()) || (pid_before.is_some() && pid != pid_before),
+                    Reading::Down(_) => pid_before.is_some(),
+                    Reading::NotRust(_) => false,
+                };
                 if restarted && !restarter.manual() {
                     return roll_back(job, &state, previous, before.as_ref(), &[], e.to_string(), restarter, health).await;
                 }
