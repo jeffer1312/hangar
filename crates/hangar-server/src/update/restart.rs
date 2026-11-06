@@ -214,7 +214,7 @@ mod tests {
         std::fs::write(&env, "CP_FRONT_PORT='5174'  # o front\n").unwrap();
         let runner = script(|_| code(0, ""));
         restarter(Topology::Windows, runner.clone(), dir.path()).restart().await.unwrap();
-        assert!(runner.ran.lock().unwrap()[0].ends_with(" 8765 5174\""), "{:?}", runner.ran.lock().unwrap());
+        assert!(runner.ran.lock().unwrap()[0].contains(" 8765 5174 } catch "), "{:?}", runner.ran.lock().unwrap());
 
         std::fs::write(&env, "CP_FRONT_PORT=cinco\n").unwrap();
         let runner = script(|_| code(0, ""));
