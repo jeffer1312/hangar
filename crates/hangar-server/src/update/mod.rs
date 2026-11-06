@@ -997,7 +997,8 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
                 let restarted = match health.read().await {
                     Reading::Rust { pid, commit, .. } =>
                         commit.as_deref() == Some(manifest.commit.as_str()) || (pid_before.is_some() && pid != pid_before),
-                    Reading::Down(_) => pid_before.is_some(),
+                    // Saúde fora com o processo de antes vivo é tropeço da leitura, não reinício.
+                    Reading::Down(_) => pid_before.is_some_and(|pid| !pid_alive(pid)),
                     Reading::NotRust(_) => false,
                 };
                 if restarted && !restarter.manual() {
