@@ -206,7 +206,8 @@ impl VaultPage {
         });
     }
 
-    fn set_owner(&mut self, owner: String, window: &mut Window, cx: &mut Context<Self>) {
+    /// `None` tira a dona: a máquina volta a não guardar nem usar cofre.
+    fn set_owner(&mut self, owner: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         if self.config_busy { return; }
         (self.config_busy, self.error) = (true, None);
         let api = self.api.clone();
@@ -547,19 +548,23 @@ impl VaultPage {
             _ => tr("vault_where_none"),
         };
         let busy = self.config_busy;
-        let make_here = (status.role == "none").then(|| Button::new("vault-make-here").outline().small().label(tr("vault_make_here"))
-            .loading(busy).disabled(busy).on_click(cx.listener(|this, _, window, cx| this.set_owner("self".into(), window, cx))));
+        // Dona que não guarda cofre não tem senhas a perder: criar aqui é a saída.
+        let make_here = (status.role == "none" || (status.role == "remote" && status.state == "absent")).then(|| Button::new("vault-make-here").outline().small().label(tr("vault_make_here"))
+            .loading(busy).disabled(busy).on_click(cx.listener(|this, _, window, cx| this.set_owner(Some("self".into()), window, cx))));
         let peers: Vec<Button> = if status.role == "owner" { Vec::new() } else {
             self.peers.iter().filter(|p| p.id != owner).map(|p| {
                 let id = p.id.clone();
                 Button::new(SharedString::from(format!("vault-owner-{id}"))).outline().small().label(tr("vault_use_peer").replace("{peer}", &id))
-                    .disabled(busy).on_click(cx.listener(move |this, _, window, cx| this.set_owner(id.clone(), window, cx)))
+                    .disabled(busy).on_click(cx.listener(move |this, _, window, cx| this.set_owner(Some(id.clone()), window, cx)))
             }).collect()
         };
-        let choices = make_here.is_some() || !peers.is_empty();
+        let leave = (status.role == "remote").then(|| Button::new("vault-owner-clear").outline().small()
+            .label(tr("vault_owner_clear").replace("{owner}", &owner))
+            .disabled(busy).on_click(cx.listener(|this, _, window, cx| this.set_owner(None, window, cx))));
+        let choices = make_here.is_some() || !peers.is_empty() || leave.is_some();
         settings_box()
             .child(section_head(IconName::Server, tr("vault_where"), Some(text), None, px(16.)))
-            .when(choices, |el| el.child(div().px_4().pb(px(14.)).flex().flex_wrap().gap_2().children(make_here).children(peers)))
+            .when(choices, |el| el.child(div().px_4().pb(px(14.)).flex().flex_wrap().gap_2().children(make_here).children(peers).children(leave)))
             // Na dona e sem dona, a falha já aparece na lista da cópia ou da restauração.
             .when_some(self.peers_error.clone().filter(|_| status.role == "remote"), |el, error| el.child(div().px_4().pb(px(14.))
                 .child(alert("vault-peers-error", tr("vault_peers_failed").replace("{error}", &error)))))

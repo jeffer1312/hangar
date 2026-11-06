@@ -118,6 +118,7 @@ export type VaultErrorCode =
   | 'erro_cofre_chaveiro_indisponivel'
   | 'erro_cofre_so_dono'
   | 'erro_cofre_ja_e_dona'
+  | 'erro_cofre_dona_sem_cofre'
   | 'erro_cofre_peer_desconhecido'
   | 'erro_cofre_config_ilegivel'
   | 'erro_cofre_pedido_respondido'
@@ -142,6 +143,7 @@ const ERROR_TEXT: Partial<Record<VaultErrorCode, () => string>> = {
   erro_cofre_nome_repetido: m.vault_err_nome_repetido,
   erro_cofre_sem_chaveiro: m.vault_err_sem_chaveiro,
   erro_cofre_ja_e_dona: m.vault_err_ja_e_dona,
+  erro_cofre_dona_sem_cofre: m.vault_err_dona_sem_cofre,
   erro_interacao_desatualizada: m.vault_err_interacao_desatualizada,
   erro_cofre_pedido_respondido: m.vault_err_interacao_desatualizada,
   erro_cofre_pedido_perdido: m.vault_err_pedido_perdido,

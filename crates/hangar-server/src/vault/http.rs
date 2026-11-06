@@ -193,6 +193,14 @@ pub async fn config(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         let Some(change) = body::<ConfigChange>(req).await else { break 'r invalid() };
         if change.owner.is_none() && change.backup_peer.is_none() { break 'r invalid(); }
         let is_self = |id: &str| id == "self" || (!st.server_id.is_empty() && id == st.server_id);
+        if let Some(Some(id)) = &change.owner && !is_self(id) {
+            if let Err(resp) = known_peer(&st, id) { break 'r resp; }
+            // Dona que responde sem cofre (no Windows nem pode ter um) deixaria esta máquina sem senhas e sem saída.
+            // Dona fora do ar passa: o estado mostra `offline` até ela voltar.
+            if let Ok(Status { role, .. }) = (Remote { peers: &st.peers, owner: id }).status().await && role != Role::Owner {
+                break 'r fail(StatusCode::CONFLICT, "erro_cofre_dona_sem_cofre", "a máquina escolhida não guarda cofre");
+            }
+        }
         // Ler, mudar e gravar o `vault.json` um pedido por vez.
         let config_guard = st.vault.config_lock.lock().await;
         // `vault.json` torto só não impede virar dona nem tirar a dona: os dois reescrevem o arquivo.
@@ -218,7 +226,6 @@ pub async fn config(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
                 if store::exists(&store::path(&st.hangar_dir)) {
                     break 'r fail(StatusCode::CONFLICT, "erro_cofre_ja_e_dona", "esta máquina já guarda um cofre; outra não pode ser a dona");
                 }
-                if let Err(resp) = known_peer(&st, &id) { break 'r resp; }
                 cfg.owner = Some(id);
             }
             Some(None) => cfg.owner = None,
