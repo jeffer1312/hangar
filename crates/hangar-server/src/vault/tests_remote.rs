@@ -271,6 +271,12 @@ async fn a_peer_without_a_vault_cannot_become_the_owner() {
     let (status, body) = srv.call(Method::PUT, "/api/vault/config", Some(json!({"owner": "lab"}))).await;
     assert_eq!((status, body["detail"]["code"].clone()), (409, json!("erro_cofre_dona_sem_cofre")));
     assert!(!config::path(&srv.hangar()).exists(), "a recusa gravou o vault.json");
+
+    // Fora do ar também não vira dona: não dá para saber se ela guarda um cofre.
+    std::fs::write(srv.dir.path().join("peers.json"), json!({"lab": {"base_url": format!("http://{}", closed_port()), "token": TOKEN}}).to_string()).unwrap();
+    let (status, body) = srv.call(Method::PUT, "/api/vault/config", Some(json!({"owner": "lab"}))).await;
+    assert_eq!((status, body["detail"]["code"].clone()), (502, json!("erro_cofre_dona_fora")));
+    assert!(!config::path(&srv.hangar()).exists(), "a recusa gravou o vault.json");
 }
 
 #[tokio::test(flavor = "multi_thread")]

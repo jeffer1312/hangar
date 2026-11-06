@@ -193,18 +193,6 @@ pub async fn config(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         let Some(change) = body::<ConfigChange>(req).await else { break 'r invalid() };
         if change.owner.is_none() && change.backup_peer.is_none() { break 'r invalid(); }
         let is_self = |id: &str| id == "self" || (!st.server_id.is_empty() && id == st.server_id);
-        if let Some(Some(id)) = &change.owner && !is_self(id) {
-            if let Err(resp) = known_peer(&st, id) { break 'r resp; }
-            // Dona que responde sem cofre (no Windows nem pode ter um) deixaria esta máquina sem senhas.
-            match (Remote { peers: &st.peers, owner: id }).status().await {
-                Ok(Status { role: Role::Owner, .. }) => {}
-                Ok(_) => break 'r fail(StatusCode::CONFLICT, "erro_cofre_dona_sem_cofre", "a máquina escolhida não guarda cofre"),
-                // Fora do ar (ou mal configurada no peers.json) passa: o estado mostra `offline` com o motivo.
-                Err(RemoteError::OwnerDown(reason)) =>
-                    tracing::warn!(code = "vault_owner_unchecked", reason = %reason, "dona gravada sem conferir o cofre dela"),
-                Err(error) => break 'r remote_failure(id, error),
-            }
-        }
         // Ler, mudar e gravar o `vault.json` um pedido por vez.
         let config_guard = st.vault.config_lock.lock().await;
         // `vault.json` torto só não impede virar dona nem tirar a dona: os dois reescrevem o arquivo.
@@ -229,6 +217,14 @@ pub async fn config(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
                 // Apontar para outra dona deixaria as senhas daqui inalcançáveis pelas tools.
                 if store::exists(&store::path(&st.hangar_dir)) {
                     break 'r fail(StatusCode::CONFLICT, "erro_cofre_ja_e_dona", "esta máquina já guarda um cofre; outra não pode ser a dona");
+                }
+                if let Err(resp) = known_peer(&st, &id) { break 'r resp; }
+                // Só vira dona quem responde agora com um cofre: no Windows nem pode haver um, e
+                // peers.json torto ou máquina fora do ar deixariam esta sem senhas do mesmo jeito.
+                match (Remote { peers: &st.peers, owner: &id }).status().await {
+                    Ok(Status { role: Role::Owner, .. }) => {}
+                    Ok(_) => break 'r fail(StatusCode::CONFLICT, "erro_cofre_dona_sem_cofre", "a máquina escolhida não guarda cofre"),
+                    Err(error) => break 'r remote_failure(&id, error),
                 }
                 cfg.owner = Some(id);
             }

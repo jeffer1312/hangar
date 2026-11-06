@@ -558,7 +558,8 @@ impl VaultPage {
                     .disabled(busy).on_click(cx.listener(move |this, _, window, cx| this.set_owner(Some(id.clone()), window, cx)))
             }).collect()
         };
-        let leave = (status.role == "remote").then(|| Button::new("vault-owner-clear").outline().small()
+        // Com o cofre da dona abrindo, sair dela num clique tiraria as senhas das sessões por engano.
+        let leave = (status.role == "remote" && status.state != "open").then(|| Button::new("vault-owner-clear").outline().small()
             .label(tr("vault_owner_clear").replace("{owner}", &owner))
             .disabled(busy).on_click(cx.listener(|this, _, window, cx| this.set_owner(None, window, cx))));
         let choices = make_here.is_some() || !peers.is_empty() || leave.is_some();
