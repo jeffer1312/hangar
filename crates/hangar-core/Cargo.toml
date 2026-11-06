@@ -8,10 +8,15 @@ publish = false
 # dependência no target (ver o comentário do serde_json em hangar-server/Cargo.toml).
 [dependencies]
 axum = { workspace = true }
+chrono = { workspace = true }
+flate2 = { workspace = true }
 futures-util = { workspace = true }
 http-body-util = { workspace = true }
+md-5.workspace = true
+num-bigint = "=0.5.1"
 percent-encoding = { workspace = true }
 regex.workspace = true
+ring = "=0.17.14"
 reqwest = { workspace = true, features = ["rustls", "multipart"] }
 serde = { workspace = true, features = ["alloc"] }
 serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }

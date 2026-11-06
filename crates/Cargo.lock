@@ -1577,11 +1577,16 @@ name = "hangar-core"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "chrono",
+ "flate2",
  "futures-util",
  "http-body-util",
+ "md-5",
+ "num-bigint 0.5.1",
  "percent-encoding",
  "regex",
  "reqwest",
+ "ring",
  "serde",
  "serde_json",
  "sha1_smol",

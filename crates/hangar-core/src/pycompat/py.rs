@@ -18,20 +18,20 @@ use super::pyjson;
 // tipo de texto próprio se aparecer.
 const MARK_BASE: u32 = 0x10F800;
 
-pub(crate) fn is_marker(c: char) -> bool {
+pub fn is_marker(c: char) -> bool {
     c as u32 >= MARK_BASE
 }
 
-pub(crate) fn mark(surrogate: u32) -> char {
+pub fn mark(surrogate: u32) -> char {
     char::from_u32(MARK_BASE + (surrogate - 0xD800)).expect("surrogate entre D800 e DFFF")
 }
 
-pub(crate) fn surrogate_of(c: char) -> u32 {
+pub fn surrogate_of(c: char) -> u32 {
     c as u32 - MARK_BASE + 0xD800
 }
 
 /// Ponto de código como o Python o vê (o marcador volta para U+D800..U+DFFF): ordem do `sort_keys`.
-pub(crate) fn py_code(c: char) -> u32 {
+pub fn py_code(c: char) -> u32 {
     if is_marker(c) { surrogate_of(c) } else { c as u32 }
 }
 
@@ -40,13 +40,13 @@ fn has_marker(s: &str) -> bool {
     s.as_bytes().contains(&0xF4) && s.chars().any(is_marker)
 }
 
-pub(crate) fn scrub_str(s: &mut String) {
+pub fn scrub_str(s: &mut String) {
     if has_marker(s) {
         *s = s.chars().map(|c| if is_marker(c) { '\u{FFFD}' } else { c }).collect();
     }
 }
 
-pub(crate) fn scrub_map(m: &mut Map<String, Value>) {
+pub fn scrub_map(m: &mut Map<String, Value>) {
     if m.keys().any(|k| has_marker(k)) {
         // Chaves que colidem depois da troca: fica a última, na posição da primeira, como no dict.
         for (mut k, mut v) in std::mem::take(m) {
@@ -59,7 +59,7 @@ pub(crate) fn scrub_map(m: &mut Map<String, Value>) {
     }
 }
 
-pub(crate) fn scrub_value(v: &mut Value) {
+pub fn scrub_value(v: &mut Value) {
     match v {
         Value::String(s) => scrub_str(s),
         Value::Array(items) => items.iter_mut().for_each(scrub_value),
@@ -69,11 +69,11 @@ pub(crate) fn scrub_value(v: &mut Value) {
 }
 
 /// `str.isspace()`: o White_Space do Unicode mais os separadores \x1c-\x1f.
-pub(crate) fn is_space(c: char) -> bool {
+pub fn is_space(c: char) -> bool {
     c.is_whitespace() || ('\x1c'..='\x1f').contains(&c)
 }
 
-pub(crate) fn strip(s: &str) -> &str {
+pub fn strip(s: &str) -> &str {
     s.trim_matches(is_space)
 }
 
@@ -87,7 +87,7 @@ pub fn ts_of_iso(raw: &str) -> Option<f64> {
 
 /// `datetime.fromisoformat(s).timestamp()`. Sem fuso lê como UTC: o Python lê como hora local no
 /// RewriteFilter e no merged_history, mas os transcripts trazem sempre o fuso.
-pub(crate) fn iso_timestamp(s: &str) -> Option<f64> {
+pub fn iso_timestamp(s: &str) -> Option<f64> {
     let (naive, offset) = fromisoformat(s)?;
     // Mesma conta do Python: microssegundos inteiros divididos por 10**6.
     Some((naive - offset.unwrap_or(0)) as f64 / 1e6)
@@ -96,7 +96,7 @@ pub(crate) fn iso_timestamp(s: &str) -> Option<f64> {
 /// (microssegundos desde a época lendo a hora como UTC, deslocamento do fuso em microssegundos).
 /// Porte do `_pydatetime.fromisoformat` (o C aceita fração vazia, e este segue o C). Datas por
 /// semana ISO (`2026-W40-5`) ficam de fora.
-pub(crate) fn fromisoformat(s: &str) -> Option<(i64, Option<i64>)> {
+pub fn fromisoformat(s: &str) -> Option<(i64, Option<i64>)> {
     let cs: Vec<char> = s.chars().collect();
     // Data sozinha de 7 caracteres só existe na forma por semana.
     if cs.len() < 8 {
@@ -258,7 +258,7 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 }
 
 /// `s.encode("utf-8", "replace")`: o surrogate solto vira "?".
-pub(crate) fn utf8_replace(s: &str) -> Cow<'_, [u8]> {
+pub fn utf8_replace(s: &str) -> Cow<'_, [u8]> {
     if !has_marker(s) {
         return Cow::Borrowed(s.as_bytes());
     }
@@ -269,21 +269,21 @@ pub(crate) fn utf8_replace(s: &str) -> Cow<'_, [u8]> {
     Cow::Owned(out.into_bytes())
 }
 
-pub(crate) fn md5_hex(s: &str) -> String {
+pub fn md5_hex(s: &str) -> String {
     format!("{:x}", Md5::digest(&*utf8_replace(s)))
 }
 
-pub(crate) fn lstrip(s: &str) -> &str {
+pub fn lstrip(s: &str) -> &str {
     s.trim_start_matches(is_space)
 }
 
 /// Regex com o `\s` do Python, que também casa \x1c-\x1f.
-pub(crate) fn py_re(pattern: &str) -> Regex {
+pub fn py_re(pattern: &str) -> Regex {
     Regex::new(&pattern.replace(r"\s", r"[\s\x1c-\x1f]")).expect("regex do porte")
 }
 
 /// Verdade do Python (`bool(x)`); chave ausente é falso.
-pub(crate) fn truthy(v: Option<&Value>) -> bool {
+pub fn truthy(v: Option<&Value>) -> bool {
     match v {
         None | Some(Value::Null) => false,
         Some(Value::Bool(b)) => *b,
@@ -295,7 +295,7 @@ pub(crate) fn truthy(v: Option<&Value>) -> bool {
 }
 
 /// `isinstance(v, int)`, com `bool` dentro.
-pub(crate) fn int_of(v: &Value) -> Option<i128> {
+pub fn int_of(v: &Value) -> Option<i128> {
     match v {
         Value::Bool(b) => Some(i128::from(*b)),
         Value::Number(n) => n.as_i64().map(i128::from).or_else(|| n.as_u64().map(i128::from)),
@@ -304,7 +304,7 @@ pub(crate) fn int_of(v: &Value) -> Option<i128> {
 }
 
 /// `int(v)` de um int ou float: o float é truncado em direção a zero.
-pub(crate) fn int_trunc(v: &Value) -> Option<i128> {
+pub fn int_trunc(v: &Value) -> Option<i128> {
     int_of(v).or_else(|| match v {
         Value::Number(n) => n.as_f64().filter(|f| f.is_finite()).map(|f| f.trunc() as i128),
         _ => None,
@@ -312,14 +312,14 @@ pub(crate) fn int_trunc(v: &Value) -> Option<i128> {
 }
 
 /// `str(v)` de um valor vindo do `json.loads`.
-pub(crate) fn py_str(v: &Value) -> String {
+pub fn py_str(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
         other => py_repr(other),
     }
 }
 
-pub(crate) fn py_repr(v: &Value) -> String {
+pub fn py_repr(v: &Value) -> String {
     match v {
         Value::Null => "None".into(),
         Value::Bool(true) => "True".into(),
@@ -377,7 +377,7 @@ fn repr_str(s: &str) -> String {
 }
 
 /// `isinstance(v, (int, float))`, que no Python inclui `bool`.
-pub(crate) fn number(v: &Value) -> Option<f64> {
+pub fn number(v: &Value) -> Option<f64> {
     match v {
         Value::Bool(b) => Some(f64::from(u8::from(*b))),
         Value::Number(n) => n.as_f64(),
@@ -386,7 +386,7 @@ pub(crate) fn number(v: &Value) -> Option<f64> {
 }
 
 /// `str.splitlines()`: além de \n e \r, quebra em \v, \f, \x1c-\x1e, \x85, U+2028 e U+2029.
-pub(crate) fn splitlines(s: &str) -> Vec<&str> {
+pub fn splitlines(s: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut start = 0;
     let mut chars = s.char_indices().peekable();

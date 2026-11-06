@@ -38,12 +38,12 @@ pub fn internal_error()->Response{
 
 /// JSON compacto em UTF-8 do `JSONResponse`; surrogate solto ou não finito não serializa e vira 500.
 pub fn json_guarded(status:StatusCode,value:serde_json::Value)->Response{
-    use crate::orchestration::codec;
+    use crate::orq_codec::codec;
     if codec::contains_surrogate(&value)||codec::contains_nonfinite(&value){
         codec::discard(value);
         return internal_error();
     }
-    let text=crate::transcript::pyjson::dumps_compact_unicode(&value);
+    let text=crate::pycompat::pyjson::dumps_compact_unicode(&value);
     codec::discard(value);
     use axum::response::IntoResponse;
     (status,[(axum::http::header::CONTENT_TYPE,"application/json")],text).into_response()
@@ -51,7 +51,7 @@ pub fn json_guarded(status:StatusCode,value:serde_json::Value)->Response{
 
 /// O mesmo contrato com o JSON ASCII de `codec::response`.
 pub fn json_guarded_ascii(status:StatusCode,value:serde_json::Value)->Response{
-    use crate::orchestration::codec;
+    use crate::orq_codec::codec;
     if codec::contains_surrogate(&value)||codec::contains_nonfinite(&value){
         codec::discard(value);
         return internal_error();

@@ -45,7 +45,7 @@ pub(crate) mod queue_feed;
 pub mod plugin;
 pub mod problem_gate;
 pub mod proxy;
-pub mod query;
+pub use hangar_core::query;
 pub mod queue_panel;
 mod plugin_listener;
 pub mod routes;
@@ -431,7 +431,7 @@ pub mod cliproxy_config;
 pub use hangar_core::value_coercion;
 pub mod provider_discovery;
 pub use hangar_core::http_contract;
-pub mod http_cors;
+pub use hangar_core::http_cors;
 
 pub use hangar_core::http_body_limit;
 pub use hangar_core::http_route_response;
@@ -442,4 +442,4 @@ pub mod login_guests;
 pub mod shortcuts;
 
 pub mod engines;
-pub mod http_body_input;
+pub use hangar_core::http_body_input;

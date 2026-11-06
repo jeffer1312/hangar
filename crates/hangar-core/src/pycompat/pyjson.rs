@@ -45,7 +45,7 @@ pub fn loads_lossless(s: &str) -> Option<Value> {
     decode_raw(s).or_else(|| s.contains("\\u").then(||decode_raw(&mark_lone_surrogates(s))).flatten())
 }
 
-pub(crate) fn decode_raw(raw: &str) -> Option<Value> {
+pub fn decode_raw(raw: &str) -> Option<Value> {
     super::json_tree::decode(raw)
 }
 
@@ -55,7 +55,7 @@ fn mark_lone_surrogates(s: &str) -> String {
 }
 
 /// Permite que outro leitor preserve a identidade dos surrogates sem colidir com texto legítimo.
-pub(crate) fn mark_lone_surrogates_using(s: &str, mark: impl Fn(u32) -> String) -> String {
+pub fn mark_lone_surrogates_using(s: &str, mark: impl Fn(u32) -> String) -> String {
     let b = s.as_bytes();
     let mut out = String::with_capacity(s.len());
     let (mut i, mut copied, mut in_str) = (0, 0, false);
@@ -103,20 +103,20 @@ fn write_value(out: &mut String, v: &Value, sort_keys: bool, ascii: bool) {
 }
 
 /// O codec do cofre usa marcadores próprios e fornece a ordem dos pontos de código.
-pub(crate) fn dumps_ordered(v: &Value, compare: &dyn Fn(&str, &str) -> std::cmp::Ordering) -> String {
+pub fn dumps_ordered(v: &Value, compare: &dyn Fn(&str, &str) -> std::cmp::Ordering) -> String {
     let mut out = String::new();
     super::json_writer::write(&mut out, v, true, None, Some(compare), false, false);
     out
 }
 
 /// O livro de configuração usa UTF-8 literal e ordenação por pontos de código válidos.
-pub(crate) fn dumps_compact_sorted_unicode(value:&Value,sort_keys:bool)->String {
+pub fn dumps_compact_sorted_unicode(value:&Value,sort_keys:bool)->String {
     let mut out=String::new();let compare=|left:&str,right:&str|left.cmp(right);
     super::json_writer::write(&mut out,value,false,None,if sort_keys{Some(&compare)}else{None},true,false);out
 }
 
 /// O codec com marcadores próprios precisa conservar os caracteres Unicode legítimos.
-pub(crate) fn dumps_literal(v: &Value) -> String {
+pub fn dumps_literal(v: &Value) -> String {
     let mut out = String::new();
     super::json_writer::write(&mut out, v, true, None, None, false, false);
     out
@@ -153,7 +153,7 @@ pub(super) fn write_str(out: &mut String, s: &str, ascii: bool, legacy_surrogate
 }
 
 /// `repr` de um número do `json.loads`: inteiro em dígitos, float como o Python.
-pub(crate) fn number_repr(n: &Number) -> String {
+pub fn number_repr(n: &Number) -> String {
     let raw = n.to_string();
     if !raw.contains(['.', 'e', 'E']) {
         raw

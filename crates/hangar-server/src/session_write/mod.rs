@@ -30,8 +30,8 @@ use std::time::Duration;
 use axum::body::{Body, Bytes, to_bytes};
 use axum::extract::Request;
 use axum::http::request::Parts;
-use axum::http::{StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::http::StatusCode;
+use axum::response::Response;
 use percent_encoding::percent_decode_str;
 use serde_json::{Value, json};
 
@@ -41,9 +41,8 @@ use crate::runtime::gateway::{RuntimeRegistry, WriteTarget};
 use crate::runtime::ingress::{GateClosed, IngressPass};
 pub use table::{Owner, Provider, WriteRoute, decide};
 
-/// Mesmo teto do middleware de corpo do Python (`uploads.MAX_BYTES`), que recusa antes da rota.
-pub(crate) const BODY_LIMIT: usize = 100 * 1024 * 1024;
-const BUSY_MSG: &str = "A sessão está trocando de agente; tente novamente quando terminar.";
+pub use hangar_core::http::detail_body;
+pub(crate) use hangar_core::http::{BODY_LIMIT, busy_body, detail, json_response, too_large};
 const INVALID_BODY_MSG: &str = "Pedido em formato inválido para esta rota; nada foi enviado.";
 const UNHEALTHY_MSG: &str = "A sessão está com problema no Rust; tente de novo em instantes.";
 
@@ -61,18 +60,6 @@ impl Ctx {
     pub(crate) fn headers(&self) -> &axum::http::HeaderMap { &self.parts.headers }
 }
 
-/// Envelope do `HTTPException(detail=erro(...))` do Python (`mensagens.py`).
-pub(crate) fn detail(status: StatusCode, code: &str, msg: &str, params: Value) -> Response {
-    json_response(status, detail_body(code, msg, params))
-}
-
-pub fn detail_body(code: &str, msg: &str, params: Value) -> Value {
-    json!({"detail": {"code": code, "params": params, "msg": msg}})
-}
-
-pub(crate) fn json_response(status: StatusCode, body: Value) -> Response {
-    (status, [(header::CONTENT_TYPE, "application/json")], body.to_string()).into_response()
-}
 
 /// Entra na porta e SÓ ENTÃO procura a entrada; sem entrada o passe volta a sair (solto aqui).
 pub async fn enter_then_find(runtime: &RuntimeRegistry, name: &str, wait: Duration) -> Result<Option<(IngressPass, WriteTarget)>, GateClosed> {
@@ -145,12 +132,6 @@ pub(crate) fn failed_status(error: &crate::runtime::protocol::RuntimeError) -> S
     if error.code == crate::runtime::codex_relaunch::STARTING || error.code == crate::runtime::gateway::ASLEEP_WAKING { StatusCode::CONFLICT } else { StatusCode::SERVICE_UNAVAILABLE }
 }
 
-/// Igual ao `_BodySizeLimitMiddleware`: texto puro, e o CORS por fora dele.
-pub(crate) fn too_large(headers: &axum::http::HeaderMap) -> Response {
-    let mut response = (StatusCode::PAYLOAD_TOO_LARGE, [(header::CONTENT_TYPE, "text/plain; charset=utf-8")], "request body too large").into_response();
-    cors(headers, response.headers_mut());
-    response
-}
 
 /// Quem atende uma escrita. `Failed`: a sessão é do Rust e não pôde ser atendida (entrada doente,
 /// Codex com terminal que não deu para adotar); a escrita nunca cai no Python.
@@ -215,7 +196,6 @@ async fn dead_headless_codex(target: &WriteTarget) -> bool {
     target.provider == "codex" && !target.terminal && target.handle.view().await.is_ok_and(|view| view["alive"] == false)
 }
 
-pub(crate) fn busy_body() -> Value { detail_body("session_transfer_busy", BUSY_MSG, json!({})) }
 
 /// Recusa por sessão ocupada (trocando de agente ou nas frases do `_OCUPADA`); `None` = outra recusa.
 pub(crate) fn busy_refusal(error: &crate::runtime::protocol::RuntimeError) -> Option<(StatusCode, Value)> {
