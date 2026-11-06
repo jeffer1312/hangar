@@ -120,8 +120,9 @@ pub fn agent_gone(name:&str,pid:i64,birth:f64)->bool {
         false
     })
 }
-/// Não mata por pid solto: reconfere pane e identidade imediatamente antes da execução.
-pub async fn kill_terminal(io:&dyn TerminalIo,procs:&dyn ProcessView,binding:&TerminalBinding,agent_pid:i64,birth:f64)->Result<(),RuntimeError> {
+/// Não mata por pid solto: reconfere pane e identidade imediatamente antes da execução. O `Ok` traz o código
+/// da demora quando o agente não saiu dentro do prazo.
+pub async fn kill_terminal(io:&dyn TerminalIo,procs:&dyn ProcessView,binding:&TerminalBinding,agent_pid:i64,birth:f64)->Result<Option<String>,RuntimeError> {
     let before=pane(io,binding).await?;
     if before.copy {return Err(failure("lifecycle_panel"));}
     let recipe=procs.recipe(agent_pid).map_err(|_|failure("lifecycle_process_read"))?;
@@ -141,10 +142,7 @@ pub async fn kill_terminal(io:&dyn TerminalIo,procs:&dyn ProcessView,binding:&Te
     if !output.success {return Err(failure("lifecycle_kill"));}
     // Com o `kill-session` aceito a sessão acabou, mesmo que o agente demore a sair: tratar a demora como falha
     // desviava o fechamento do caminho que entrega o transcript, e a conversa ia ao Arquivo sem o nome.
-    if let Err(error)=wait_absent(procs,agent_pid,birth,"lifecycle_still_alive").await {
-        tracing::warn!(session=%binding.name,pid=agent_pid,code=%error.code,"sessão encerrada; o agente ainda não saiu");
-    }
-    Ok(())
+    Ok(wait_absent(procs,agent_pid,birth,"lifecycle_still_alive").await.err().map(|error|error.code))
 }
 
 /// Encerrar só avisa o processo (SIGHUP, SIGTERM): ele leva um instante para sair, e no meio da saída a leitura dele
@@ -363,7 +361,7 @@ mod tests {
         let line=|| CommandOutput {success:true,stdout:b"session\t%2\t1000\t10\t0\t0\t0".to_vec()};
         let io=Io {lines:std::sync::Mutex::new([line(),line(),CommandOutput {success:true,stdout:vec![]}].into())};
         let procs=Procs {calls:Default::default()};
-        assert_eq!(kill_terminal(&io,&procs,&binding(),11,7.0).await.map_err(|e|e.code),Ok(()));
+        assert_eq!(kill_terminal(&io,&procs,&binding(),11,7.0).await.map_err(|e|e.code),Ok(None));
     }
     /// Conversa grande: o agente passa do prazo para sair, e a sessão continua fechada.
     #[tokio::test]
@@ -380,7 +378,7 @@ mod tests {
         }
         let line=|| CommandOutput {success:true,stdout:b"session\t%2\t1000\t10\t0\t0\t0".to_vec()};
         let io=Io {lines:std::sync::Mutex::new([line(),line(),CommandOutput {success:true,stdout:vec![]}].into())};
-        assert_eq!(kill_terminal(&io,&Procs,&binding(),11,7.0).await.map_err(|e|e.code),Ok(()));
+        assert_eq!(kill_terminal(&io,&Procs,&binding(),11,7.0).await.map_err(|e|e.code),Ok(Some("lifecycle_still_alive".to_string())));
     }
     #[test]
     fn the_python_birth_of_the_same_agent_is_not_another_process() {
