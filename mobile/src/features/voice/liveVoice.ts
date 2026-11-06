@@ -285,7 +285,7 @@ export class LiveVoiceCall {
         call.reoffer = seen;
         this.handlers.state(message.state);
         // O WebRTC velho pode seguir de pé depois de a voz mudar de thread: sem isto o aparelho nunca oferece de novo.
-        if (asked && call.pc) this.dropped(call, call.pc, true);
+        if (asked && call.pc && call.pcLive) this.dropped(call, call.pc, true);
         break;
       }
       case 'tool': this.tool(call, message.call, message.name, message.args); break;

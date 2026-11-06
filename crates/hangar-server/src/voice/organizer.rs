@@ -1588,8 +1588,8 @@ impl WaitAck {
 pub const SLOW_AFTER: Duration = Duration::from_secs(20);
 /// Respostas recomeçadas sem nenhuma terminar: daqui em diante ela não termina sozinha.
 pub const STALL_RESTARTS: u32 = 3;
-/// Organizador sem nenhuma saída, nem texto nem raciocínio.
-pub const STALL_SILENT: Duration = Duration::from_secs(45);
+/// Organizador sem nenhuma saída: folga para o raciocínio longo, que pode não dar notícia no caminho.
+pub const STALL_SILENT: Duration = Duration::from_secs(90);
 /// O mesmo com ferramenta em curso: passa do prazo mais longo dela, o objetivo do `computer`, que não dá notícia no caminho.
 pub const STALL_TOOL: Duration = Duration::from_secs(330);
 /// Turnos refeitos antes de trocar o organizador.

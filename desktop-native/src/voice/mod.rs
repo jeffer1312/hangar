@@ -103,7 +103,8 @@ fn rtc_code(error: rtc::RtcError) -> &'static str {
 
 /// Áudio que cai depois de ao vivo ganha uma oferta nova; a que nem chegou ao vivo, ou microfone e alto-falante, encerra.
 fn resumes(error: rtc::RtcError, live_for: Option<Duration>) -> bool {
-    live_for.is_some_and(|live| live >= STABLE_LIVE) && matches!(error, rtc::RtcError::Media | rtc::RtcError::Network)
+    matches!(error, rtc::RtcError::Reconnect)
+        || live_for.is_some_and(|live| live >= STABLE_LIVE) && matches!(error, rtc::RtcError::Media | rtc::RtcError::Network)
 }
 
 /// O contador subiu: o servidor pede oferta nova. O primeiro retrato é a base, para quem assume a chamada no meio.
@@ -183,7 +184,10 @@ async fn run_call(setup: Setup, events: &async_channel::Sender<VoiceEvent>, inbo
                             None => log("answer repeated ignored"),
                         },
                         "state" => {
-                            if reoffer_asked(&mut reoffer, message["state"]["reoffer"].as_u64().unwrap_or(0)) { pause.request_reconnect(); }
+                            // Sem áudio ligado a oferta nova já está a caminho: o pedido derrubaria a conexão que ainda vai nascer.
+                            if reoffer_asked(&mut reoffer, message["state"]["reoffer"].as_u64().unwrap_or(0)) && peer.is_some() && live_since.is_some() {
+                                pause.request_reconnect();
+                            }
                             let _ = events.send(VoiceEvent::State(message["state"].clone())).await;
                         }
                         "tool" => {
@@ -292,5 +296,6 @@ mod tests {
         assert!(!resumes(rtc::RtcError::Microphone, long), "microfone sumiu não se resolve com oferta nova");
         assert!(!resumes(rtc::RtcError::Speaker, long));
         assert!(!resumes(rtc::RtcError::Answer, long));
+        assert!(resumes(rtc::RtcError::Reconnect, Some(Duration::from_secs(2))), "o servidor pediu: não depende do tempo ao vivo");
     }
 }
