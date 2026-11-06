@@ -302,7 +302,7 @@ fn claude_cwd(procs: &dyn ProcessView, pid: i64, projects_dir: &Path) -> Option<
 
 /// Marcador do hook pelo `--session-id` do cmdline (`_active_marker_jsonl`): no resume o arquivo
 /// do sid nunca nasce, e o marcador diz o transcript ativo.
-fn active_marker(config_base: &Path, sid: &str, exclude: &HashSet<String>) -> Option<String> {
+pub(crate) fn active_marker(config_base: &Path, sid: &str, exclude: &HashSet<String>) -> Option<String> {
     let raw = std::fs::read(config_base.join(".hangar-active").join(format!("{sid}.json"))).ok()?;
     let value: serde_json::Value = serde_json::from_slice(&raw).ok()?;
     let j = value.get("jsonl")?.as_str().filter(|j| !j.is_empty())?;

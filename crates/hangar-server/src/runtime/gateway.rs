@@ -7,6 +7,7 @@ use serde_json::{Value,json};
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::{Duration,SystemTime,UNIX_EPOCH};
@@ -2288,12 +2289,28 @@ impl RuntimeRegistry {
         self.forget_claude_rate(&crate::interactions::InteractionBinding {key:target.key.clone(),conversation:previous.into(),generation:target.generation})?;
         Ok(next)
     }
+    /// A mesma conversa em outro arquivo: reabre o ator na mesma geração, porque a fila e as perguntas abertas seguem valendo.
+    async fn follow_transcript(&self,target:&super::terminal::TerminalTarget,moved:PathBuf)->Result<Value,RuntimeError> {
+        let (key,name,generation)=(target.key.as_str(),target.name.as_str(),target.generation);
+        let _ingress=super::lifecycle::ClosedIngress::acquire(&self.ingress,name).await?;
+        let barrier=self.barrier(key).await;let _guard=barrier.lock().await;
+        let current=self.interaction_binding_readonly(name).await?;
+        if !super::lifecycle::matches_life(&current,key,&target.binding.conversation,generation) {return Ok(json!({"in_transfer":true}));}
+        let retained=self.entries.lock().await.get(key).and_then(|entry|entry.relaunch.clone());
+        self.close_locked(key,generation,false).await?;
+        let mut next=target.clone();next.transcript=moved;
+        self.open_terminal_locked(next.clone()).await?;
+        if let Some(entry)=self.entries.lock().await.get_mut(key) {entry.relaunch=retained;}
+        self.rebind_claude_hub(&next)?;
+        Ok(json!({"changed":true,"moved":true}))
+    }
     /// Native SID novo, incluindo `/clear` digitado diretamente na TUI; sem tecla nem política Python.
     pub async fn reconcile_claude(&self,name:&str,key:&str,conversation:&str,generation:u64)->Result<Value,RuntimeError> {
         let target=match self.entries.lock().await.get(key).filter(|entry|entry.name==name && entry.generation==generation).map(|entry|entry.handle.clone()) {
             Some(EntryHandle::Terminal {target,..}) if target.binding.conversation==conversation=>target,
             _=>return Ok(json!({"in_transfer":true})),
         };
+        if let Some(moved)=moved_transcript(&target) {return self.follow_transcript(&target,moved).await;}
         // A troca vem do próprio Claude Code: o plugin passa a informar a conversa nova no `/pull` (o `/clear`
         // encerra a antiga com `session.end`). Sem ele, vale o registro nativo do processo.
         let binding=crate::terminal_facts::LocalTerminalFacts::binding(&target);
@@ -3036,6 +3053,12 @@ fn refuse(status:StatusCode,key:Option<&str>,check:&'static str) -> Response {
     status.into_response()
 }
 
+/// `EnterWorktree` e `ExitWorktree` movem o transcript sem trocar a conversa; o marcador do hook diz para onde.
+fn moved_transcript(target:&super::terminal::TerminalTarget)->Option<PathBuf> {
+    if target.transcript.exists() {return None;}
+    let marker=crate::list::discover::active_marker(&target.metadata.config_dir,&target.binding.conversation,&Default::default())?;
+    Some(PathBuf::from(marker)).filter(|path|path.file_stem()==target.transcript.file_stem())
+}
 fn same_terminal_life(old:&super::terminal::TerminalTarget,new:&super::terminal::TerminalTarget) -> bool {
     old.key==new.key && old.name==new.name && old.binding.pane==new.binding.pane && old.binding.created==new.binding.created
         && old.binding.conversation==new.binding.conversation && old.binding.generation==new.binding.generation
@@ -3739,6 +3762,30 @@ pub(crate) mod tests {
         std::fs::write(dir.path().join("sessions/77.json"),br#"{"pid":77,"sessio"#).unwrap();
         assert_eq!(registry.reconcile_claude("same","B","new-sid",7).await.unwrap(),json!({"changed":false}),"lido no meio da escrita");
         handle.stop().await.unwrap();
+    }
+
+    /// O `EnterWorktree` move o transcript sem trocar a conversa: a vida segue a mesma, no arquivo novo.
+    #[tokio::test]
+    async fn a_moved_transcript_is_followed_in_the_same_life() {
+        let dir=tempfile::tempdir().unwrap();
+        let registry=Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test".into(),"instance".into()));
+        let hubs=crate::side::Hubs::default();registry.bind_hubs(hubs.downgrade());
+        let (_,_handle)=claude_terminal_entry(&registry,dir.path(),77).await;
+        let project=dir.path().join("projects/worktree");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(dir.path().join(".hangar-active")).unwrap();
+        let mark=|jsonl:&std::path::Path|std::fs::write(dir.path().join(".hangar-active/new-sid.json"),json!({"jsonl":jsonl}).to_string()).unwrap();
+        let other=project.join("other-sid.jsonl");
+        std::fs::write(&other,b"").unwrap();
+        mark(&other);
+        assert_eq!(registry.reconcile_claude("same","B","new-sid",7).await.unwrap(),json!({"changed":false}),"marcador de outra conversa");
+        let moved=project.join("new-sid.jsonl");
+        std::fs::write(&moved,b"").unwrap();
+        mark(&moved);
+        assert_eq!(registry.reconcile_claude("same","B","new-sid",7).await.unwrap(),json!({"changed":true,"moved":true}));
+        let target=registry.terminal_target("same").await.unwrap().unwrap();
+        assert_eq!((target.transcript,target.generation,target.binding.conversation.as_str()),(moved,7,"new-sid"));
+        registry.close("B",7).await.unwrap();
     }
 
     /// Parity M5: a primeira leitura já em `plan` não inventa `manual` como base dos recados; sem a base
