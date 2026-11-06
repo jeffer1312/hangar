@@ -66,9 +66,10 @@ else
 fi
 # Passando do teto, o kernel recolhe a memória do próprio build: ele fica lento, o resto da máquina não.
 teto=()
-if [[ -n "$livre" ]] && systemd-run --user --scope --quiet true >/dev/null 2>&1; then
-    alto=$(( livre - folga ))
-    (( alto < 4 * gib )) && alto=$((4 * gib))
+alto=$(( ${livre:-0} - folga ))
+(( alto < 4 * gib )) && alto=$((4 * gib))
+# A sonda leva o mesmo teto e tem prazo: um systemd do usuário travado não pode segurar a trava.
+if [[ -n "$livre" ]] && timeout 5 systemd-run --user --scope --quiet -p "MemoryHigh=${alto}K" true >/dev/null 2>&1; then
     teto=(systemd-run --user --scope --quiet -p "MemoryHigh=${alto}K" --)
     echo "cargo-pinned: -j $jobs, teto $((alto / gib)) GB de memória ($((livre / gib)) GB livres)" >&2
 else
