@@ -995,12 +995,15 @@ pub async fn run<R: Restarter, H: HealthProbe>(job: &Job<'_>, steps: std::sync::
                 }
                 // Passo que reiniciou o servidor (o `install.ps1 -Update` reinicia) deixou a versão nova de pé:
                 // só devolver o `current` deixaria a nova rodando com o `current` na anterior.
+                // Mesmo commit antes e depois (troca de canal) não distingue versão: aí só o pid diz.
+                let new_commit = before.as_ref().is_none_or(|b| b.commit != manifest.commit);
                 let restarted = match health.read().await {
                     Reading::Rust { pid, commit, .. } =>
-                        commit.as_deref() == Some(manifest.commit.as_str()) || (pid_before.is_some() && pid != pid_before),
+                        (new_commit && commit.as_deref() == Some(manifest.commit.as_str())) || (pid_before.is_some() && pid != pid_before),
                     // Saúde fora com o processo de antes vivo é tropeço da leitura, não reinício.
                     Reading::Down(_) => pid_before.is_some_and(|pid| !pid_alive(pid)),
-                    Reading::NotRust(_) => false,
+                    // O Python só fica sozinho na porta depois que o Rust de antes caiu.
+                    Reading::NotRust(_) => pid_before.is_some(),
                 };
                 if restarted && !restarter.manual() {
                     let applied_now: Vec<String> = self::steps::applied(job.state_dir).unwrap_or_default().difference(&applied_before).cloned().collect();
