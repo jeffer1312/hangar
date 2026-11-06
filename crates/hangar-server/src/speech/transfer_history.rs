@@ -246,15 +246,7 @@ fn active_events(
     limit: usize,
     queue_keys: &HashSet<String>,
 ) -> io::Result<(Vec<super::Item>, HashMap<String, f64>, f64)> {
-    let imported: HashSet<_> = boundary["imported_item_ids"]
-        .as_array()
-        .ok_or_else(|| invalid("A fronteira perdeu os identificadores importados."))?
-        .iter()
-        .map(|v| {
-            v.as_str()
-                .ok_or_else(|| invalid("A fronteira possui um identificador inválido."))
-        })
-        .collect::<Result<_, _>>()?;
+    let imported = imported_ids(boundary)?;
     stable_read(path, |reader, length| {
         let offset = check_prefix(reader, length, boundary)?;
         let mut items = Vec::new();
@@ -577,6 +569,10 @@ fn destination(record: &Value) -> Option<(&str, &str)> {
 /// `archive_transfer`: o registro mais novo desta conta e thread, pelo índice; registro achado que não
 /// está concluído é erro.
 pub(crate) fn archive_record(home: &Path, codex_home: &Path, thread: &str) -> io::Result<Option<Value>> {
+    indexed_record(home, codex_home, thread, false)
+}
+
+fn indexed_record(home: &Path, codex_home: &Path, thread: &str, require_records: bool) -> io::Result<Option<Value>> {
     let key = thread_key(codex_home, thread);
     let name = format!(
         "thread-{}.json",
@@ -589,7 +585,10 @@ pub(crate) fn archive_record(home: &Path, codex_home: &Path, thread: &str) -> io
     let ids: Vec<String> = serde_json::from_slice(&raw)
         .map_err(|_| invalid("O índice de transferência está inválido."))?;
     for id in ids.iter().rev() {
-        let Some(record) = load_record(home, id)? else { continue };
+        let Some(record) = load_record(home, id)? else {
+            if require_records { return Err(invalid("O índice aponta para um registro de transferência indisponível.")); }
+            continue;
+        };
         if destination(&record).is_some_and(|(h, t)| thread_key(Path::new(h), t) == key) {
             if record["phase"] != "complete" {
                 return Err(invalid("A preparação da thread não é uma conversa concluída."));
@@ -617,13 +616,75 @@ fn check_record(record: &Value, path: &Path, owner_home: &Path) -> io::Result<()
     if record["source"]["provider"] != "claude" {
         return Err(invalid("A fonte da transferência não é uma conversa Claude."));
     }
-    let matches = boundary["rollout_path"].as_str().is_some_and(|r| same(path, Path::new(r)))
-        || (record["destination_meta"]["codex_home"].as_str().is_some_and(|h| same(owner_home, Path::new(h)))
-            && boundary["thread_id"].as_str() == Some(crate::locate::session_key(&path.to_string_lossy()).as_str()));
-    if !matches {
+    if !matches_rollout(record, path, owner_home) {
         return Err(invalid("O rollout não pertence à transferência."));
     }
     Ok(())
+}
+
+fn matches_rollout(record: &Value, path: &Path, owner_home: &Path) -> bool {
+    let boundary = &record["boundary"];
+    boundary["rollout_path"].as_str().is_some_and(|r| same(path, Path::new(r)))
+        || (record["destination_meta"]["codex_home"].as_str().is_some_and(|h| same(owner_home, Path::new(h)))
+            && boundary["thread_id"].as_str() == Some(crate::locate::session_key(&path.to_string_lossy()).as_str()))
+}
+
+fn imported_ids(boundary: &Value) -> io::Result<HashSet<&str>> {
+    boundary["imported_item_ids"].as_array()
+        .ok_or_else(|| invalid("A fronteira perdeu os identificadores importados."))?
+        .iter().map(|v| v.as_str().ok_or_else(|| invalid("A fronteira possui um identificador inválido.")))
+        .collect()
+}
+
+/// Citações precisam das linhas originais do ramo, inclusive campos que não viram `ChatEvent`.
+pub(crate) fn citation_rows(row: &SessionRow, home: &Path) -> io::Result<Option<Vec<String>>> {
+    if row.provider != "codex" { return Ok(None); }
+    let Some(path) = row.jsonl.as_deref().map(Path::new) else { return Ok(None) };
+    let owner = row.codex_home.as_deref().map(Path::new)
+        .ok_or_else(|| invalid("A conta da conversa está indisponível."))?;
+    let record = match row.transfer_id.as_deref() {
+        Some(id) => Some(load_record(home, id)?.ok_or_else(|| invalid("O registro da transferência desapareceu."))?),
+        None => indexed_record(home, owner, &crate::locate::session_key(&path.to_string_lossy()), true)?,
+    };
+    let Some(record) = record else { return Ok(None) };
+    if record["phase"] != "complete" || !record["source"].is_object() || !record["boundary"].is_object() {
+        return Err(invalid("A transferência não possui história concluída."));
+    }
+    // /clear inicia outra conversa; só a thread da transferência herda a origem congelada.
+    if !matches_rollout(&record, path, owner) { return Ok(None); }
+    check_record(&record, path, owner)?;
+    let source = &record["source"];
+    let mut rows = stable_read(Path::new(required(source, "path")?), |reader, length| {
+        let (_, offsets, selected) = selected_chain(reader, length, source)?;
+        let mut rows = Vec::with_capacity(selected.len());
+        for index in selected {
+            reader.seek(SeekFrom::Start(offsets[index]))?;
+            let end = offsets.get(index + 1).copied().unwrap_or(length);
+            let mut line = String::new();
+            (&mut *reader).take(end - offsets[index]).read_to_string(&mut line)?;
+            rows.push(line);
+        }
+        Ok(rows)
+    })?;
+    let boundary = &record["boundary"];
+    let imported = imported_ids(boundary)?;
+    rows.extend(stable_read(path, |reader, length| {
+        let offset = check_prefix(reader, length, boundary)?;
+        let mut active = reader.take(length - offset);
+        let mut rows = Vec::new();
+        let mut line = Vec::new();
+        loop {
+            line.clear();
+            if active.read_until(b'\n', &mut line)? == 0 || !line.ends_with(b"\n") { break; }
+            let row = object(&line, "O rollout ativo contém uma linha inválida.")?;
+            if [&row["id"], &row["payload"]["id"]].into_iter().filter_map(Value::as_str).any(|id| imported.contains(id)) {
+                continue;
+            }
+            rows.push(String::from_utf8(line.clone()).map_err(|_| invalid("O rollout ativo contém uma linha inválida."))?);
+        }
+        Ok(rows)
+    })?);
+    Ok(Some(rows))
 }
 
 /// `verify_boundary`: o rollout ainda tem o prefixo importado e a thread da transferência.
@@ -669,3 +730,22 @@ pub(crate) fn historical_image(record: &Value, event_id: &str, index: i64) -> io
 #[cfg(test)]
 #[path = "transfer_history_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod citation_index_contract {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn missing_indexed_record_is_strict_only_for_citation_authorization() {
+        let dir=tempfile::tempdir().unwrap(); let home=dir.path(); let owner=home.join("codex"); std::fs::create_dir(&owner).unwrap();
+        let thread="019f99de-9572-7221-89c0-80c62f883d44";
+        let key=format!("[{}, {}]",json!(crate::accounts::catalog::resolved(&owner)),json!(thread));
+        let indexes=home.join(".hangar/conversation-transfers/indexes"); std::fs::create_dir_all(&indexes).unwrap();
+        std::fs::write(indexes.join(format!("thread-{}.json",hex_digest(ring::digest::digest(&ring::digest::SHA256,key.as_bytes())))),json!(["a563a017-af37-42e8-a8e5-2bd837584f8e"]).to_string()).unwrap();
+        assert!(archive_record(home,&owner,thread).unwrap().is_none(),"Arquivo mantém a seleção anterior que pula ausência");
+        let row:SessionRow=serde_json::from_value(json!({"name":"resumed","provider":"codex","codex_home":owner,
+            "jsonl":home.join(format!("rollout-fixture-{thread}.jsonl"))})).unwrap();
+        assert_eq!(citation_rows(&row,home).unwrap_err().kind(),io::ErrorKind::InvalidData);
+    }
+}

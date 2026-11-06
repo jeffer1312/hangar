@@ -259,6 +259,10 @@ fn for_session(reader: &mut Reader, home: &Path, row: &SessionRow) -> Result<Opt
     Ok(None)
 }
 
+pub(crate) fn session_transfer_id(home: &Path, row: &SessionRow) -> Result<Option<String>, String> {
+    Ok(for_session(&mut Reader::new(home), home, row)?.map(|record| record.id))
+}
+
 /// `transfer_for_thread`.
 fn for_thread(reader: &mut Reader, codex_home: &str, thread: &str) -> Result<Option<Record>, String> {
     let key = thread_key(codex_home, thread);

@@ -151,10 +151,12 @@ async fn context(st: &Arc<AppState>, name: Option<&str>) -> Result<Value, Option
             return Err(Some("orquestracoes"));
         }
         let rows: Vec<_> = found.iter().chain(orq.iter()).collect();
+        let mut citation_session = Value::Null;
         let session = match name {
             Some(name) => {
                 let row = rows.iter().find(|row| row.name == name
                     && row.cwd.as_deref().is_some_and(|cwd| !cwd.is_empty())).ok_or(None)?;
+                citation_session = json!(row);
                 json!({"name":row.name,"cwd":row.cwd,"jsonl":row.jsonl,"lifecycle_id":row.lifecycle_id,
                     "git_cwd":row.git_cwd.as_deref().filter(|cwd| !cwd.is_empty()).or(row.cwd.as_deref())})
             }
@@ -164,9 +166,28 @@ async fn context(st: &Arc<AppState>, name: Option<&str>) -> Result<Value, Option
         let sessions: Vec<Value> = rows.iter()
             .filter(|row| row.cwd.as_deref().is_some_and(|cwd| !cwd.is_empty()))
             .map(|row| json!({"name":row.name,"cwd":row.cwd})).collect();
-        Ok(json!({"roots":roots,"sessions":sessions,"session":session}))
+        Ok(json!({"roots":roots,"sessions":sessions,"session":session,"citation_session":citation_session}))
     }).await.map_err(|_| Some("leitura"))?
 }
+async fn citation_rows(st: &Arc<AppState>, ctx: &Value, ingress: Option<&Ingress>) -> hangar_workspace::Result<Option<Vec<String>>> {
+    let row: hangar_api::session::SessionRow = serde_json::from_value(ctx["citation_session"].clone())
+        .map_err(|_| hangar_workspace::unavailable("sessão indisponível"))?;
+    if row.provider != "codex" { return Ok(None); }
+    let dirs = st.list.env().dirs.clone().ok_or_else(|| hangar_workspace::unavailable("sessão indisponível"))?;
+    let permit = st.workspace_read_slots.clone().try_acquire_owned().map_err(|_| hangar_workspace::busy())?;
+    let ingress = ingress.cloned();
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let _ingress = ingress;
+        let invalid = || WorkspaceError { status:409, code:None, detail:json!({
+            "code":"session_transfer_history_invalid","params":{},"msg":"histórico da transferência indisponível"}) };
+        let id = crate::list::local_transfers::session_transfer_id(&dirs.home, &row).map_err(|_| invalid())?;
+        let mut row = row;
+        row.transfer_id = id;
+        crate::speech::history::transfer_history::citation_rows(&row, &dirs.home).map_err(|_| invalid())
+    }).await.map_err(|_| hangar_workspace::unavailable("pânico na leitura"))?
+}
+
 async fn transfer_blocked(st: &Arc<AppState>, name: &str) -> Result<bool, &'static str> {
     let rows = st.list.discover(None).await.map_err(|_| "sessoes")?;
     let dirs = st.list.env().dirs.clone().ok_or("sessoes")?;
@@ -397,9 +418,13 @@ async fn run(
         return Ok(crate::thumbnail::serve(tokio::fs::File::from_std(opened.file), &opened.path, &parts.headers,
             bool_param(params.get("download"), false).unwrap_or(false), None, width).await);
     }
-    let Some(op) = map_operation(tail, &method, &params, &payload, &ctx) else {
+    let mut rows = if matches!(tail, "file" | "file/text" | "files/resolver") {
+        citation_rows(st, &ctx, ingress).await?
+    } else { None };
+    let Some(mut op) = map_operation(tail, &method, &params, &payload, &ctx) else {
         return Err(hangar_workspace::error(422, "operação de workspace inválida"));
     };
+    if let Operation::ResolveCited { rows: selected, .. } = &mut op { *selected = rows.take(); }
     if tail == "file" {
         let width = match crate::thumbnail::parse_width(params.get("w")) {
             Ok(w) => w,
@@ -433,7 +458,7 @@ async fn run(
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             let _ingress = ingress;
-            resolve_many(&cwd, jsonl.as_deref(), &paths)
+            resolve_many(&cwd, jsonl.as_deref(), rows.as_deref(), &paths)
         })
         .await
         .unwrap_or_else(|_| Err(hangar_workspace::unavailable("pânico na leitura")))?
@@ -727,11 +752,12 @@ async fn folder_operation(
 fn resolve_many(
     cwd: &str,
     jsonl: Option<&str>,
+    rows: Option<&[String]>,
     paths: &[String],
 ) -> hangar_workspace::Result<Value> {
-    let cited = jsonl
-        .map(|p| hangar_workspace::citations::cwds(hangar_workspace::citations::Transcript::File(Path::new(p)), paths))
-        .unwrap_or(json!({}));
+    use hangar_workspace::citations::Transcript;
+    let source = rows.map(Transcript::Rows).or_else(|| jsonl.map(|p| Transcript::File(Path::new(p))));
+    let cited = source.map(|source| hangar_workspace::citations::cwds(source, paths)).unwrap_or(json!({}));
     let mut found = serde_json::Map::new();
     let mut outside = 0;
     for path in paths {
@@ -768,9 +794,9 @@ fn resolve_many(
         }
         if !found.contains_key(path) && cited.get(path).is_some() && outside < 30 {
             outside += 1;
-            if let Some(jsonl) = jsonl
+            if let Some(source) = source
                 && let Some(p) = hangar_workspace::citations::find_elsewhere(
-                    hangar_workspace::citations::Transcript::File(Path::new(jsonl)),
+                    source,
                     Path::new(cwd),
                     path,
                     &bases,
