@@ -19,6 +19,7 @@ cat > "$tmp/bin/cargo" <<'EOF'
 #!/usr/bin/env bash
 alvo="${CARGO_TARGET_DIR:-$FAKE_TARGET}"
 if [[ "$1" == metadata ]]; then printf '{"target_directory":"%s"}\n' "$alvo"; exit 0; fi
+[[ -n "${FAKE_ARGS:-}" ]] && echo "$*" > "$FAKE_ARGS"
 [[ -n "${FAKE_FALHA:-}" ]] && { echo "error: falhou" >&2; exit 101; }
 echo "$FAKE_CONTEUDO" > "$alvo/debug/hangar-server"; chmod +x "$alvo/debug/hangar-server"
 printf '{"reason":"compiler-artifact","executable":"%s/debug/hangar-server"}\n' "$alvo"
@@ -50,6 +51,20 @@ mkdir -p "$repo/crates/target/debug"
 (cd "$repo" && PATH="$tmp/bin:$PATH" CARGO_TARGET_DIR="$repo/crates/target" FAKE_CONTEUDO=v4 "$P" build) >/dev/null 2>&1 || \
     { echo "FALHOU build com target próprio saiu com erro"; falhou=1; }
 [[ "$(cat "$repo/crates/target/debug/hangar-server")" == v4 ]] || { echo "FALHOU target próprio perdeu o executável"; falhou=1; }
+
+# Jobs saem da memória livre: um por 9 GB além de 2 GB de folga, entre 1 e o número de núcleos.
+jobs_com() {   # $1 = MemAvailable em GiB; o resto vai como ambiente
+    local livre="$1"; shift
+    printf 'MemAvailable: %d kB\n' $((livre * 1024 * 1024)) > "$tmp/meminfo"
+    (cd "$repo" && env -u CARGO_BUILD_JOBS "$@" PATH="$tmp/bin:$PATH" FAKE_TARGET="$comum" FAKE_CONTEUDO=v5 \
+        FAKE_ARGS="$tmp/args" HANGAR_MEMINFO="$tmp/meminfo" "$P" build) >/dev/null 2>&1
+    sed -n 's/.* -j \([0-9]*\) .*/\1/p' "$tmp/args"
+}
+nucleos="$(nproc)"
+esperado=$(( nucleos < 4 ? nucleos : 4 ))
+[[ "$(jobs_com 40)" == "$esperado" ]] || { echo "FALHOU 40 GB livres não deram -j $esperado"; falhou=1; }
+[[ "$(jobs_com 3)" == 1 ]] || { echo "FALHOU 3 GB livres não deram -j 1"; falhou=1; }
+[[ "$(jobs_com 3 CARGO_BUILD_JOBS=5)" == 5 ]] || { echo "FALHOU CARGO_BUILD_JOBS explícito não venceu"; falhou=1; }
 
 (( falhou )) && exit 1
 echo "ok: cargo-pinned"

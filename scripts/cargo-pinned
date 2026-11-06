@@ -7,7 +7,8 @@
 # Uso:  scripts/cargo-pinned build -p hangar-server [--release]
 #       scripts/cargo-pinned test -p hangar-server --test it <filtro>
 # Pega a trava da máquina (HANGAR_BUILD_LOCK, padrão /tmp/hangar-build.lock) sozinho: não envolva
-# com outro flock nela, ou espera para sempre. Prioridade baixa e CARGO_BUILD_JOBS (padrão 2).
+# com outro flock nela, ou espera para sempre. Prioridade baixa; jobs e teto de memória saem da memória
+# livre ao pegar a vez (CARGO_BUILD_JOBS explícito vence; HANGAR_BUILD_GB_POR_JOB, padrão 9).
 # Argumentos do executável de teste (depois de `--`) não passam: o script acrescenta flags no fim.
 set -euo pipefail
 
@@ -49,7 +50,31 @@ if [[ "$alvo" == "$proprio" ]]; then
 fi
 bash "$raiz/scripts/cargo-freshness.sh" "$metadata" "$alvo"
 set +e
-nice -n 19 ionice -c 3 cargo "${args[@]}" -j "${CARGO_BUILD_JOBS:-2}" --message-format=json-render-diagnostics |
+# Um rustc do hangar_server passa de 8 GB no pico: cada job paralelo precisa caber na memória livre.
+gib=$((1024 * 1024))
+folga=$((2 * gib))
+livre="$(awk '/^MemAvailable:/ {print $2}' "${HANGAR_MEMINFO:-/proc/meminfo}" 2>/dev/null || true)"
+if [[ -n "${CARGO_BUILD_JOBS:-}" ]]; then
+    jobs="$CARGO_BUILD_JOBS"
+elif [[ -n "$livre" ]]; then
+    jobs=$(( (livre - folga) / (${HANGAR_BUILD_GB_POR_JOB:-9} * gib) ))
+    nucleos="$(nproc 2>/dev/null || echo 2)"
+    (( jobs < 1 )) && jobs=1
+    (( jobs > nucleos )) && jobs=$nucleos
+else
+    jobs=2
+fi
+# Passando do teto, o kernel recolhe a memória do próprio build: ele fica lento, o resto da máquina não.
+teto=()
+if [[ -n "$livre" ]] && systemd-run --user --scope --quiet true >/dev/null 2>&1; then
+    alto=$(( livre - folga ))
+    (( alto < 4 * gib )) && alto=$((4 * gib))
+    teto=(systemd-run --user --scope --quiet -p "MemoryHigh=${alto}K" --)
+    echo "cargo-pinned: -j $jobs, teto $((alto / gib)) GB de memória ($((livre / gib)) GB livres)" >&2
+else
+    echo "cargo-pinned: -j $jobs, sem teto de memória" >&2
+fi
+"${teto[@]}" nice -n 19 ionice -c 3 cargo "${args[@]}" -j "$jobs" --message-format=json-render-diagnostics |
     # No `cargo test` a saída dos testes vem misturada às mensagens do cargo: ela passa adiante.
     jq -rR --unbuffered '. as $l | (try fromjson catch null) as $j
         | if ($j | type) != "object" then "L\t" + $l

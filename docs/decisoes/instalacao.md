@@ -202,7 +202,13 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **Build e teste locais: target comum, binário fixado na worktree, mensagens com carimbo.** Toda
   worktree compila no target comum da máquina pelo `scripts/cargo-pinned`, que pega a trava
   `/tmp/hangar-build.lock` e copia os executáveis para o `crates/target` do checkout na mesma trava:
-  pytest e `CP_RUST_SERVER_BIN` rodam essa cópia, nunca o executável do target comum. A troca em
+  pytest e `CP_RUST_SERVER_BIN` rodam essa cópia, nunca o executável do target comum. Jobs e teto de
+  memória saem da memória livre ao pegar a trava: um job por 9 GB livres além de 2 GB de folga
+  (`HANGAR_BUILD_GB_POR_JOB`), entre 1 e o número de núcleos, e `MemoryHigh` num escopo do systemd do
+  usuário igual ao livre menos a folga (mínimo 4 GB). Um `rustc` do `hangar_server` passou de 9 GB no pico
+  (06/11/2026, 2,1 GB em RAM e 7,2 GB em swap) e o `-j 2` fixo compilava dois juntos numa máquina de 23 GB:
+  o swap passou de 35 GB e a máquina inteira parou. `CARGO_BUILD_JOBS` explícito vence; sem
+  `systemd-run --user` o build roda sem teto. A troca em
   `~/.hangar/bin` usa o release do target aquecido; o perfil dev não é mais rápido na mudança
   incremental. O `i18n:compile` de front, core e app passa por `scripts/i18n-compile.mjs` e pula
   quando entrada e saída batem com o carimbo da última compilação. Evidência em
