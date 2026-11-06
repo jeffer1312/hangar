@@ -281,6 +281,9 @@ fn chosen_folder(file: &Path, sid: &str) -> Option<String> {
 }
 
 fn remember_folder(file: &Path, sid: &str, cwd: &str) {
+    // Duas retomadas ao mesmo tempo: sem a fila, a segunda gravação apagaria a primeira.
+    static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _turn = WRITE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut folders = std::fs::read(file).ok().and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
         .filter(Value::is_object).unwrap_or_else(|| json!({}));
     folders[sid] = json!(cwd);
