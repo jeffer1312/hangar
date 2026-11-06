@@ -1974,6 +1974,18 @@ describe('envio incerto que a conversa confirma', () => {
     expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'sim', submission: { status: 'unknown' } });
   });
 
+  test('reenvio do incerto se confirma pela fala sem horário', async () => {
+    historyResponses = [[]];
+    stubInput(async () => { throw new TypeError('Network request failed'); });
+    const chat = chatStore('srv1', 'sess');
+    chat.retain();
+    await tick();
+    await expect(chat.send('sim')).rejects.toThrow(m.chat_envio_incerto());
+    await expect(chat.send('sim')).rejects.toThrow(m.chat_envio_incerto());
+    created[0].trigger('message', JSON.stringify(ev({ id: 'u:sim', text: 'sim', ts: null })));
+    expect(readDraft('srv1', 'sess')).toMatchObject({ text: '', submission: null });
+  });
+
   test('mensagem igual de antes do envio não confirma', async () => {
     historyResponses = [[]];
     stubInput(async () => { throw new TypeError('Network request failed'); });

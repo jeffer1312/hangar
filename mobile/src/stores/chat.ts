@@ -1077,8 +1077,9 @@ export async function submitConversationDraft(serverId: string, name: string, te
     const live = store.use.getState();
     const same = (t: string | undefined) => !!t && sameMessage(text, t);
     // Um envio igual ainda a caminho ecoaria sem horário como se fosse este: sem seenIds, só o horário confirma.
-    const ambiguous = live.pending.some((p) => same(p.text))
-      || currentQueuePanel(live.queuePanel, live.events).entries.some((q) => same(q.text));
+    // No reenvio do incerto, o igual a caminho é a mesma mensagem, e o eco dele vale.
+    const ambiguous = current.submission?.status !== 'unknown' && (live.pending.some((p) => same(p.text))
+      || currentQueuePanel(live.queuePanel, live.events).entries.some((q) => same(q.text)));
     const seenIds = store.historyLoaded() && !ambiguous ? live.events
       .filter((e) => e.kind === 'user_msg' && same(e.text)).map((e) => e.id) : undefined;
     const submission = { text, draftRevision: draftRevision ?? current.revision, status: 'sending' as const, startedAt: Date.now(), seenIds,
