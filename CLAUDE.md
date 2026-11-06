@@ -170,7 +170,9 @@ na skill.
 Skills de terceiros para quem trabalha no código moram em `.agents/skills/` (Codex e outros
 agentes), com atalho em `.claude/skills/` (Claude Code), e o installer não as leva às máquinas.
 Entram e se atualizam por `npx skills add <origem>@<skill>` sem `-g`, que fixa origem e hash no
-`skills-lock.json`. No Windows os atalhos só viram pasta com `core.symlinks` ligado. Rust:
+`skills-lock.json`; o atalho de skill nova só entra no git com uma linha `!.claude/skills/<nome>`
+no `.gitignore` (lá fica só o que foi escolhido para o repo). No Windows os atalhos só viram pasta
+com `core.symlinks` ligado. Rust:
 `rust-crate-architecture` decide crates, camadas e ciclos, com os crates em `crates/`;
 `rust-code-style`, visibilidade e módulos; `rust-workspace` é leitura de apoio e, quando
 diverge, vale a `rust-crate-architecture`.

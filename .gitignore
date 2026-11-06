@@ -72,6 +72,7 @@ docs/handoffs/
 # mostrar resultado no celular. Nao sao artefato do projeto e enchiam o `git status` de ruido — com
 # duas sessoes commitando na mesma arvore, ruido no status e o que faz um `git add` errado passar.
 # `settings.json` e os atalhos das skills `rust-*` ficam de fora: sao config do projeto e continuam versionados.
+# Skill nova em `.agents/skills/` ganha a propria linha `!.claude/skills/<nome>` abaixo.
 .claude/*
 !.claude/settings.json
 !.claude/skills/
