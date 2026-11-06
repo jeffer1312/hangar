@@ -305,7 +305,8 @@ export function LiveVoiceSheet({ open, view, levels, servers, serverId, onSelect
     : !reply ? null : !reply.codex ? m.live_voice_error_codex_missing() : !reply.enabled ? m.live_voice_error_no_account() : m.native_live_voice_ready();
   const canStart = !inCall && !!reply && reply.codex && reply.enabled;
   // Anuncia o que muda de fato: nem o cronômetro (todo segundo) nem quem fala (a cada sílaba).
-  const announcement = [inCall ? STATUS[liveVoiceStatus(view.phase === 'live', 'idle', muted, state?.activity)]() : idleStatus ?? m.live_voice_error_failed(),
+  const stalled = inCall && state?.stalled === true;
+  const announcement = [stalled ? m.codex_voice_stalled() : '', inCall ? STATUS[liveVoiceStatus(view.phase === 'live', 'idle', muted, state?.activity)]() : idleStatus ??m.live_voice_error_failed(),
     doing ?? '', busy && state.progress !== doing ? state.progress ?? '' : ''].filter(Boolean).join(', ');
   const announced = useRef(announcement);
   useEffect(() => {
@@ -339,6 +340,7 @@ export function LiveVoiceSheet({ open, view, levels, servers, serverId, onSelect
               : <Text style={[styles.status, { color: theme.tokens.status.error }]} accessibilityRole="alert">{m.live_voice_error_failed()}</Text>}
           {view.phase === 'live' ? <Text style={styles.time}>{elapsed}</Text>
             : view.phase === 'connecting' || settings.loading && !reply ? <ActivityIndicator size="small" color={theme.tokens.accent.base} /> : null}
+          {stalled ? <Text style={[styles.status, { color: theme.tokens.status.error }]} accessibilityRole="alert">{m.codex_voice_stalled()}</Text> : null}
           {doing ? <Text selectable style={styles.doing} numberOfLines={2}>{doing}</Text> : null}
         </View>
         {state?.action && state.progress && busy ? <Text selectable style={styles.doing}>{state.progress}</Text> : null}

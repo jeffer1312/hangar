@@ -489,6 +489,22 @@ describe('LiveVoiceSheet', () => {
     expect(native.announce).toHaveBeenCalledExactlyOnceWith(`${m.live_voice_status_working()}, tool-action`);
   });
 
+  it('resposta travada aparece como alerta e sai quando o servidor recupera', async () => {
+    native.os = 'ios';
+    view.phase = 'live';
+    view.liveSince = Date.now();
+    view.state = { ...liveState(), activity: 'thinking' };
+    await render();
+    expect(container.textContent).not.toContain(m.codex_voice_stalled());
+    view = { ...view, state: { ...liveState(), activity: 'thinking', stalled: true } };
+    await render();
+    expect(container.textContent).toContain(m.codex_voice_stalled());
+    expect(native.announce).toHaveBeenCalledWith(expect.stringContaining(m.codex_voice_stalled()));
+    view = { ...view, state: { ...liveState(), activity: 'thinking', stalled: false } };
+    await render();
+    expect(container.textContent).not.toContain(m.codex_voice_stalled());
+  });
+
   it('estilo do plano é o mesmo objeto entre renders com o tema inalterado', async () => {
     view.phase = 'live';
     view.state = { ...liveState(), plan: { path: '/plan-fixture.md', markdown: '# plan-fixture' } };

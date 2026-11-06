@@ -27,7 +27,7 @@ pub enum VoiceEvent {
 
 enum Command { Screen(Option<(String, String)>), Reply(u64, bool, String), Mode(Mode) }
 
-pub struct Voice { commands: mpsc::UnboundedSender<Command>, muted: Arc<AtomicBool>, stop: Arc<Notify> }
+pub struct Voice { commands: mpsc::UnboundedSender<Command>, muted: Arc<AtomicBool>, pause: Arc<audio::SpeechPause>, stop: Arc<Notify> }
 
 /// O servidor derruba o aparelho calado por 30 s.
 const PING_EVERY: Duration = Duration::from_secs(10);
@@ -48,11 +48,14 @@ impl Voice {
         events: async_channel::Sender<VoiceEvent>) -> Voice {
         let (commands, inbox) = mpsc::unbounded_channel();
         let (muted, stop) = (Arc::new(AtomicBool::new(false)), Arc::new(Notify::new()));
+        let pause = Arc::new(audio::SpeechPause::default());
         let setup = Setup { api: api.clone(), token, screen, actions };
-        runtime.spawn(call(setup, events, inbox, muted.clone(), stop.clone()));
-        Voice { commands, muted, stop }
+        runtime.spawn(call(setup, events, inbox, muted.clone(), pause.clone(), stop.clone()));
+        Voice { commands, muted, pause, stop }
     }
     pub fn set_muted(&self, muted: bool) { self.muted.store(muted, Ordering::Relaxed); }
+    pub fn set_speech_paused(&self, paused: bool) { self.pause.set(paused); }
+    pub fn alert_stalled(&self) { self.pause.request_alert(); }
     pub fn screen(&self, screen: Option<(String, String)>) { let _ = self.commands.send(Command::Screen(screen)); }
     pub fn reply(&self, call: u64, ok: bool, text: String) { let _ = self.commands.send(Command::Reply(call, ok, text)); }
     pub fn set_mode(&self, mode: Mode) { let _ = self.commands.send(Command::Mode(mode)); }
@@ -100,21 +103,25 @@ fn rtc_code(error: rtc::RtcError) -> &'static str {
 
 /// Áudio que cai depois de ao vivo ganha uma oferta nova; a que nem chegou ao vivo, ou microfone e alto-falante, encerra.
 fn resumes(error: rtc::RtcError, live_for: Option<Duration>) -> bool {
-    live_for.is_some_and(|live| live >= STABLE_LIVE) && matches!(error, rtc::RtcError::Media | rtc::RtcError::Network)
+    matches!(error, rtc::RtcError::Reconnect)
+        || live_for.is_some_and(|live| live >= STABLE_LIVE) && matches!(error, rtc::RtcError::Media | rtc::RtcError::Network)
 }
+
+/// O contador subiu: o servidor pede oferta nova. O primeiro retrato é a base, para quem assume a chamada no meio.
+fn reoffer_asked(known: &mut Option<u64>, seen: u64) -> bool { known.replace(seen).is_some_and(|old| seen > old) }
 
 fn send(socket: &TextSocket, msg: Value) -> Result<(), String> {
     socket.send(&msg.to_string()).map_err(|error| { log(format!("socket send failed error={error:?}")); socket_code(&error).to_owned() })
 }
 
 async fn call(setup: Setup, events: async_channel::Sender<VoiceEvent>, mut inbox: mpsc::UnboundedReceiver<Command>, muted: Arc<AtomicBool>,
-    stop: Arc<Notify>) {
+    pause: Arc<audio::SpeechPause>, stop: Arc<Notify>) {
     log("call start");
     let _ = events.send(VoiceEvent::Phase(Phase::Connecting)).await;
     let stopped = Arc::new(AtomicBool::new(false));
     let (mut socket, mut server_done, mut peer, mut detail) = (None, false, None, None);
     let outcome = tokio::select! {
-        outcome = run_call(setup, &events, &mut inbox, &muted, &stopped, &mut socket, &mut server_done, &mut peer, &mut detail) => outcome,
+        outcome = run_call(setup, &events, &mut inbox, &muted, &pause, &stopped, &mut socket, &mut server_done, &mut peer, &mut detail) => outcome,
         _ = stop.notified() => { log("stop requested"); Ok(()) },
     };
     // Fim do lado de cá: o servidor encerra já, em vez de esperar o prazo do aparelho sumido.
@@ -136,7 +143,7 @@ async fn call(setup: Setup, events: async_channel::Sender<VoiceEvent>, mut inbox
 
 #[allow(clippy::too_many_arguments)]
 async fn run_call(setup: Setup, events: &async_channel::Sender<VoiceEvent>, inbox: &mut mpsc::UnboundedReceiver<Command>, muted: &Arc<AtomicBool>,
-    stopped: &Arc<AtomicBool>, slot: &mut Option<TextSocket>, server_done: &mut bool, peer: &mut Option<std::thread::JoinHandle<()>>,
+    pause: &Arc<audio::SpeechPause>, stopped: &Arc<AtomicBool>, slot: &mut Option<TextSocket>, server_done: &mut bool, peer: &mut Option<std::thread::JoinHandle<()>>,
     detail: &mut Option<String>) -> Result<(), String> {
     let Setup { api, token, screen, actions } = setup;
     let own = api.identity();
@@ -159,6 +166,9 @@ async fn run_call(setup: Setup, events: &async_channel::Sender<VoiceEvent>, inbo
     let mut last_level: Option<Instant> = None;
     let mut live_since: Option<Instant> = None;
     let mut resume_by: Option<tokio::time::Instant> = None;
+    // Só a primeira conexão da chamada toca o aviso: as ofertas seguintes são a mesma conversa.
+    let mut announce = true;
+    let mut reoffer = None;
     loop {
         tokio::select! {
             message = incoming.recv() => match message {
@@ -169,11 +179,17 @@ async fn run_call(setup: Setup, events: &async_channel::Sender<VoiceEvent>, inbo
                             Some(offer) => {
                                 let answer = message["sdp"].as_str().unwrap_or_default().to_owned();
                                 log(format!("answer received bytes={}", answer.len()));
-                                *peer = Some(rtc::run(offer, answer, muted.clone(), rtc_tx.clone(), stopped.clone()));
+                                *peer = Some(rtc::run(offer, answer, muted.clone(), pause.clone(), std::mem::take(&mut announce), rtc_tx.clone(), stopped.clone()));
                             }
                             None => log("answer repeated ignored"),
                         },
-                        "state" => { let _ = events.send(VoiceEvent::State(message["state"].clone())).await; }
+                        "state" => {
+                            // Sem áudio ligado a oferta nova já está a caminho: o pedido derrubaria a conexão que ainda vai nascer.
+                            if reoffer_asked(&mut reoffer, message["state"]["reoffer"].as_u64().unwrap_or(0)) && peer.is_some() && live_since.is_some() {
+                                pause.request_reconnect();
+                            }
+                            let _ = events.send(VoiceEvent::State(message["state"].clone())).await;
+                        }
                         "tool" => {
                             let (Some(call), Some(name)) = (message["call"].as_u64(), message["name"].as_str()) else { log("tool unreadable"); continue };
                             log(format!("tool {name} call={call}"));
@@ -262,6 +278,15 @@ mod tests {
     }
 
     #[test]
+    fn only_a_rising_counter_asks_for_a_new_offer() {
+        let mut known = None;
+        assert!(!reoffer_asked(&mut known, 2), "primeiro retrato é a base");
+        assert!(!reoffer_asked(&mut known, 2));
+        assert!(reoffer_asked(&mut known, 3));
+        assert!(!reoffer_asked(&mut known, 3));
+    }
+
+    #[test]
     fn audio_that_drops_after_live_reconnects_the_same_call() {
         let long = Some(Duration::from_secs(7200));
         assert!(resumes(rtc::RtcError::Media, long), "sessão de áudio vencida (2 h) derruba o writer");
@@ -271,5 +296,6 @@ mod tests {
         assert!(!resumes(rtc::RtcError::Microphone, long), "microfone sumiu não se resolve com oferta nova");
         assert!(!resumes(rtc::RtcError::Speaker, long));
         assert!(!resumes(rtc::RtcError::Answer, long));
+        assert!(resumes(rtc::RtcError::Reconnect, Some(Duration::from_secs(2))), "o servidor pediu: não depende do tempo ao vivo");
     }
 }

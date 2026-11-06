@@ -10,4 +10,8 @@ export const haptic = {
   selection: () => ios(() => Haptics.selectionAsync()),
   success: () => ios(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)),
   error: () => ios(() => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error)),
+  // A chamada de voz abre calada: sem isto só a tela diz que conectou, por isso vale também no Android.
+  connected: () => void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {}),
+  // Quem está falando olha para outro lado: a tela sozinha não avisa que a resposta travou.
+  stalled: () => void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {}),
 };

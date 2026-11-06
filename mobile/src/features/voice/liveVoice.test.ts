@@ -50,6 +50,8 @@ const rtc = vi.hoisted(() => {
     listeners: new Set<(event: { reason: string }) => void>(), removes: [] as ReturnType<typeof vi.fn>[],
   };
 });
+const connectedHaptic = vi.hoisted(() => vi.fn());
+vi.mock('../../ui/haptics', () => ({ haptic: { connected: connectedHaptic } }));
 vi.mock('react-native-webrtc', () => ({ RTCPeerConnection: rtc.Peer, mediaDevices: { getUserMedia: rtc.getUserMedia },
   permissions: { request: rtc.microphonePermission } }));
 vi.mock('react-native', () => ({
@@ -362,6 +364,33 @@ describe('LiveVoiceCall público', () => {
       expect(handlers.failed).not.toHaveBeenCalled();
     } else expect(handlers.failed).toHaveBeenCalledExactlyOnceWith('account_missing', 'chosen-account');
     expect(socket.messages.some(message => message.type === 'stop')).toBe(false);
+  });
+
+  it('contador reoffer que sobe refaz o áudio; o primeiro retrato é só a base', async () => {
+    const { pc, socket, handlers } = await openCall(); pc.connect();
+    const state = (reoffer: number) => ({ type: 'state', state: { phase: 'live', mode: 'direct', activity: 'idle', draft: null, error: null, plan: null,
+      effective: null, context: null, limits: { five_hour: null, seven_day: null }, backstage: [], thought: '', action: null, followed: [],
+      server: 'machine-a', client: 'mobile', memory: 0, reoffer } });
+    socket.receive(state(4));
+    socket.receive(state(4));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pc.close).not.toHaveBeenCalled();
+    socket.receive(state(5));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pc.close).toHaveBeenCalledOnce();
+    expect(socket.messages.filter(message => message.type === 'offer')).toHaveLength(2);
+    expect(handlers.failed).not.toHaveBeenCalled();
+  });
+
+  it('vibra uma vez ao conectar, nunca a cada reconexão da mesma chamada', async () => {
+    connectedHaptic.mockClear();
+    const { pc } = await openCall();
+    expect(connectedHaptic).not.toHaveBeenCalled();
+    pc.connect();
+    expect(connectedHaptic).toHaveBeenCalledOnce();
+    pc.connectionState = 'disconnected'; pc.onconnectionstatechange?.();
+    pc.connect();
+    expect(connectedHaptic).toHaveBeenCalledOnce();
   });
 
   it('disconnected tolera 5s, mede microfone e reconecta sem repetir live', async () => {

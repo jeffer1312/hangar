@@ -6,6 +6,7 @@ import {
 import type { LiveVoiceAction, LiveVoiceHandlers, LiveVoiceScreen, LiveVoiceSettings, Server } from '@hangar/core';
 import { useServers } from '../../stores/servers';
 import * as m from '../../paraglide/messages';
+import { haptic } from '../../ui/haptics';
 import { setLiveVoiceAudioActive, useVoiceAudioState } from './audioSession';
 import type { LiveVoiceCall } from './liveVoice';
 import type { LiveVoiceView } from './LiveVoiceSheet';
@@ -223,7 +224,9 @@ export const useLiveVoice = create<LiveVoiceStore>((set, get) => {
       },
       state(state) {
         if (!valid()) return;
-        const previousMemory = get().view.state?.memory;
+        const previous = get().view.state;
+        const previousMemory = previous?.memory;
+        if (state.stalled === true && previous?.stalled !== true) haptic.stalled();
         updateView({ state });
         if (settingsOpen && state.memory !== previousMemory) void get().refreshMemory();
       },

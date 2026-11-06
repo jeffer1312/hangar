@@ -39,6 +39,10 @@ export interface LiveVoiceState {
   phase: string;
   mode: 'direct' | 'plan' | null;
   activity: LiveVoiceActivity | null;
+  /** O organizador travou numa resposta. Servidor antigo não manda. */
+  stalled?: boolean;
+  /** Sobe quando o áudio precisa de oferta nova. Servidor antigo não manda. */
+  reoffer?: number;
   draft: string | null;
   error: { code: string; text: string } | null;
   plan: { path: string; markdown: string } | null;

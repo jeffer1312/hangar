@@ -41,7 +41,7 @@ pub struct SettingsDto { #[serde(default)] pub voice: Option<String>, #[serde(de
 pub struct VoiceSettings { pub voice: Option<String>, pub codex_account: String, pub organizer: ModeModels, pub style: Style }
 
 /// Escolhas de quem nunca gravou o `config.json`; quem já gravou fica com as suas.
-pub const FIRST_VOICE: &str = "sol";
+pub const FIRST_VOICE: &str = "viola";
 pub const FIRST_MODEL: &str = "gpt-6.1-sol";
 
 impl Default for VoiceSettings {
@@ -135,12 +135,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn first_call_without_config_uses_sol_and_gpt_6_1() {
+    fn first_call_without_config_uses_viola_and_gpt_6_1() {
         let home = tempfile::tempdir().unwrap();
         let s = read_settings(home.path());
-        assert_eq!(s.voice.as_deref(), Some("sol"));
+        assert_eq!(s.voice.as_deref(), Some("viola"));
         assert_eq!((s.organizer.direct.model.as_deref(), s.organizer.direct.effort.as_str()), (Some("gpt-6.1-sol"), "medium"));
         assert_eq!((s.organizer.plan.model.as_deref(), s.organizer.plan.effort.as_str()), (Some("gpt-6.1-sol"), "high"));
+    }
+
+    #[test]
+    fn the_default_voice_goes_to_the_call_only_if_the_codex_lists_it() {
+        let old_codex = vec!["sol".to_owned()];
+        assert!(!crate::voice::rpc::voice_allowed(Some(&old_codex), FIRST_VOICE), "Codex sem ela fica com a voz padrão da conta");
+        assert!(!voice_refused(None, FIRST_VOICE), "o padrão é uma voz v3 conhecida");
     }
 
     #[test]
