@@ -294,10 +294,7 @@ fn config_base_of(procs: &dyn ProcessView, pid: i64, default: &Path) -> PathBuf 
 /// A pasta que o Claude grava no registro dele: o projeto do transcript sai dela. No psmux a do pane é a
 /// do Bash que o agente deixou vivo.
 fn claude_cwd(procs: &dyn ProcessView, pid: i64, projects_dir: &Path) -> Option<String> {
-    let raw = std::fs::read(config_base_of(procs, pid, projects_dir).join("sessions").join(format!("{pid}.json"))).ok()?;
-    let value: serde_json::Value = serde_json::from_slice(&raw).ok()?;
-    if value.get("pid")?.as_i64()? != pid { return None; }
-    value.get("cwd")?.as_str().filter(|c| !c.is_empty()).map(str::to_owned)
+    crate::runtime::lifecycle::read_native_cwd(&config_base_of(procs, pid, projects_dir), pid)
 }
 
 /// Marcador do hook pelo `--session-id` do cmdline (`_active_marker_jsonl`): no resume o arquivo
