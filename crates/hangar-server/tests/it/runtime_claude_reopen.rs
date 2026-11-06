@@ -640,6 +640,37 @@ async fn an_old_claude_that_ignores_the_stop_is_killed_and_the_reopen_goes_on() 
     fx.finish();
 }
 
+/// O `claude` que passa do prazo depois do `kill-session` não desvia o fechamento: o transcript sai junto, e é
+/// ele que guarda o nome da sessão no Arquivo.
+#[tokio::test]
+async fn a_claude_slow_to_exit_closes_with_its_transcript() {
+    let fx = fixture();
+    fx.transcript();
+    let key = "57".repeat(16);
+    std::process::Command::new(&fx.tmux).args(["new-session","-d","-s","s1","-c"]).arg(&fx.cwd).arg("-e").arg(format!("CP_SESSION_KEY={key}")).status().unwrap();
+    let spec = json!({"version":1,"key":key,"name":"s1","cwd":fx.cwd,"provider":"claude","surface":"terminal","account":{"kind":"default"},
+        "account_source":"default","model":null,"effort":null,"service_tier":null,"permission_mode":"acceptEdits","subagent_model":null,
+        "customizations":null,"jev":false,"read_only":false,"worktree":null,"creator":null,"created_at":1.0});
+    std::fs::create_dir_all(fx.home.join(".hangar/session-specs")).unwrap();
+    std::fs::write(fx.home.join(format!(".hangar/session-specs/{key}.json")),spec.to_string()).unwrap();
+    let registry = crate::runtime_open::registry_with(|registry|registry
+        .with_codex_environment(AccountEnvironment::from_map([("HOME".to_owned(),fx.home.to_string_lossy().into_owned()),("PATH".to_owned(),std::env::var("PATH").unwrap())].into()))
+        .with_terms(Arc::new(hangar_server::term::Terms::default()))).await;
+    registry.bind_watcher(Arc::new(Watcher::new(WatchConfig { home:fx.home.clone(),queue_dir:fx.queue.clone(),
+        mux:Mux::with_program(&fx.tmux,Duration::from_secs(5)),mux_program:fx.tmux.clone().into_os_string() }).with_scope_probe(Vec::new)));
+    // A vida nova ignora o SIGTERM do `kill-session` falso.
+    std::fs::write(fx.state.with_extension("stubborn"),"").unwrap();
+    let change = SessionChange { reason:ChangeReason::Reload,surface:None,account:None,permission_mode:None,model:None,effort:None,service_tier:None };
+    let reopened = registry.reopen_claude_session("s1",change,None).await.expect("é sessão Claude daqui");
+    assert_eq!(reopened.map(|_|()).map_err(|f|(f.error.code,f.stopped)),Ok(()));
+    let agent = fx.agent().unwrap();
+    let closed = registry.kill_claude("s1").await;
+    let _ = std::process::Command::new("kill").args(["-9",&agent.to_string()]).status();
+    let closed = closed.expect("é sessão Claude daqui").map_err(|error|error.code).unwrap();
+    assert_eq!(closed["killed"],json!(true),"{closed}");
+    assert!(closed["transcript"].as_str().unwrap().ends_with(&format!("{SID}.jsonl")),"{closed}");
+}
+
 /// A sessão só leitura estacionada cuja troca de conta não traz o terminal protegido fica parada
 /// (o arquivo dela continua lá), com `erro_troca_conta_parada`; nunca sem nada nem sem terminal.
 #[tokio::test]

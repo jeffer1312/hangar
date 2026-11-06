@@ -2058,8 +2058,8 @@ impl RuntimeRegistry {
                     i64::from(target.metadata.agent_pid),target.metadata.agent_birth).await;
                 if let Err(error)=&killed {super::actor::mark_live_error(&self.live_sender(&name),&error.code,&error.message);}
                 if let Ok(Some(code))=&killed {
-                    tracing::warn!(key,session=%name,code=%code,"sessão encerrada; o agente ainda não saiu");
-                    self.diag.report("runtime.close_slow_exit",&name,code,"sessão encerrada; o agente ainda não saiu");
+                    tracing::warn!(key,session=%name,code=%code,"sessão encerrada; saída do agente não confirmada");
+                    self.diag.report("runtime.close_exit_unconfirmed",&name,code,"sessão encerrada; saída do agente não confirmada");
                 }
                 killed.map(|_|())
             },
