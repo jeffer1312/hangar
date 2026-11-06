@@ -34,6 +34,9 @@ pub struct ArchiveBody {
     /// Com ou sem terminal acima do padrão do servidor (`None`: o padrão).
     #[serde(default)]
     pub headless: Option<bool>,
+    /// A pasta que a pessoa escolheu quando a da conversa sumiu; vence a gravada.
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 fn claude() -> String { "claude".into() }
@@ -273,7 +276,7 @@ fn redirect(home: &Path, cwd: String) -> String {
 pub struct Found { pub transcript: PathBuf, pub cwd: String, pub owner: Option<String>, pub codex_account: Option<String> }
 
 /// O pedido de abertura da retomada e o que a rota faz em volta dele.
-pub struct Plan { pub request: SessionOpenRequest, pub found: Found, pub provider: AgentProvider, pub project: String }
+pub struct Plan { pub request: SessionOpenRequest, pub found: Found, pub provider: AgentProvider, pub project: String, pub relocated: bool }
 
 /// `-` no lugar do projeto: a pasta que guarda a conversa Claude, em qualquer conta (o id é único).
 fn claude_project(w: &Where, project: &str, sid: &str) -> Result<String, Miss> {
@@ -330,7 +333,9 @@ pub fn plan(w: &Where, facts: &dyn OpenFacts, project: &str, sid: &str, body: Ar
         }
     };
     if found.cwd.is_empty() { return Err(OpenError::new(422, "erro_cwd_ausente", "cwd not found in transcript")); }
-    let found = Found { cwd: redirect(w.home, found.cwd.clone()), ..found };
+    let cwd = body.cwd.clone().filter(|cwd| !cwd.is_empty()).unwrap_or_else(|| redirect(w.home, found.cwd.clone()));
+    let relocated = cwd != found.cwd;
+    let found = Found { cwd, ..found };
     // Um segundo processo no mesmo arquivo corromperia a conversa.
     let real = |p: &str| std::fs::canonicalize(p).unwrap_or_else(|_| PathBuf::from(p));
     let target = real(&found.transcript.to_string_lossy());
@@ -350,31 +355,35 @@ pub fn plan(w: &Where, facts: &dyn OpenFacts, project: &str, sid: &str, body: Ar
         codex_account: found.codex_account.clone(), account_bound: provider == AgentProvider::Codex,
         engine: body.engine, engine_account: body.engine_account, model: body.model,
         headless: body.headless, ..Default::default() };
-    Ok(Plan { request, found, provider, project: project.to_owned() })
+    Ok(Plan { request, found, provider, project: project.to_owned(), relocated })
 }
 
-/// `move_conversation`: a conversa vai inteira para a conta `to` (o `<id>.jsonl` e a pasta irmã), sem
-/// cópia na origem. Já estava lá: `false`.
-pub fn move_conversation(server_projects: &Path, project: &str, sid: &str, from: Option<&str>, to: Option<&str>) -> Result<bool, OpenError> {
-    move_with(&|a, b| std::fs::rename(a, b), server_projects, project, sid, from, to)
+/// `move_conversation`: a conversa vai inteira para a conta `to` e a pasta de projeto `target` (o
+/// `<id>.jsonl` e a pasta irmã), sem cópia na origem. Já estava lá: `false`.
+pub fn move_conversation(server_projects: &Path, project: &str, target: &str, sid: &str, from: Option<&str>, to: Option<&str>) -> Result<bool, OpenError> {
+    move_with(&|a, b| std::fs::rename(a, b), server_projects, project, target, sid, from, to)
 }
 
-fn move_with(rename: &dyn Fn(&Path, &Path) -> std::io::Result<()>, server_projects: &Path, project: &str, sid: &str, from: Option<&str>, to: Option<&str>)
+fn move_with(rename: &dyn Fn(&Path, &Path) -> std::io::Result<()>, server_projects: &Path, project: &str, target: &str, sid: &str, from: Option<&str>, to: Option<&str>)
     -> Result<bool, OpenError> {
     let projects = |dir: Option<&str>| dir.map_or_else(|| server_projects.to_owned(), |d| Path::new(d).join("projects"));
-    let (src, dst) = (projects(from).join(project), projects(to).join(project));
+    let (src, dst) = (projects(from).join(project), projects(to).join(target));
     // A conta padrão pode vir pelo nome da pasta e pela ausência: a mesma pasta não é mudança.
     let real = |p: &Path| p.parent().and_then(|p| p.canonicalize().ok());
-    if from == to || real(&src).is_some_and(|s| real(&dst) == Some(s)) { return Ok(false); }
+    let same_account = from == to || real(&src).is_some_and(|s| real(&dst) == Some(s));
+    if same_account && project == target { return Ok(false); }
     let file = format!("{sid}.jsonl");
-    if dst.join(&file).exists() || dst.join(sid).exists() {
+    // Link deixado no destino: o arquivo já é o mesmo.
+    if dst.join(&file).canonicalize().is_ok_and(|d| src.join(&file).canonicalize().is_ok_and(|s| s == d)) { return Ok(false); }
+    if dst.join(&file).exists() || (project == target && dst.join(sid).exists()) {
         return Err(OpenError::new(409, "erro_conversa_ja_na_conta", "a conta destino ja tem esta conversa"));
     }
     let failed = |e: std::io::Error| OpenError::new(500, "erro_mover_conversa", format!("nao consegui mover a conversa de conta: {e}"))
         .with_params(json!({"erro": e.to_string()}));
     std::fs::create_dir_all(&dst).map_err(failed)?;
     rename(&src.join(&file), &dst.join(&file)).map_err(failed)?;
-    if src.join(sid).is_dir() && let Err(error) = rename(&src.join(sid), &dst.join(sid)) {
+    // Retomada anterior em outra pasta já criou a irmã no destino: a da origem fica, e os caminhos gravados seguem valendo.
+    if src.join(sid).is_dir() && !dst.join(sid).exists() && let Err(error) = rename(&src.join(sid), &dst.join(sid)) {
         // Sem a pasta irmã a conversa perde tool-results e subagentes: melhor inteira na origem.
         if let Err(back) = rename(&dst.join(&file), &src.join(&file)) {
             let message = format!("nao consegui mover a conversa de conta: {error}; a conversa ficou partida entre as contas: {} e {}",
@@ -392,14 +401,16 @@ fn move_with(rename: &dyn Fn(&Path, &Path) -> std::io::Result<()>, server_projec
 }
 
 /// Abre a retomada resolvida: a conversa muda para a conta em que a sessão vai nascer (a pedida, ou a de
-/// mais folga pela regra dos 95%) e volta para a de antes se a abertura falhar.
+/// mais folga pela regra dos 95%) e para a pasta de projeto dela quando a pasta mudou, senão o Hangar não
+/// a acha; volta para onde estava se a abertura falhar.
 pub async fn open(host: &dyn super::open::OpenHost, plan: Plan, mut resolved: super::Resolved, project: &str, sid: &str)
     -> Result<Value, OpenError> {
     resolved.resume = Some(sid.to_owned());
     let server_projects = host.server_projects();
     let to = resolved.spec.account.config_dir().map(str::to_owned);
     let from = plan.found.owner.clone();
-    let moved = plan.provider == AgentProvider::Claude && move_conversation(&server_projects, project, sid, from.as_deref(), to.as_deref())?;
+    let target = if plan.relocated { hangar_workspace::worktrees::sanitize_cwd(&resolved.spec.cwd) } else { project.to_owned() };
+    let moved = plan.provider == AgentProvider::Claude && move_conversation(&server_projects, project, &target, sid, from.as_deref(), to.as_deref())?;
     match super::open::open_session(host, resolved, &super::OpenCaller::Owner).await {
         Ok(opened) => {
             let mut body = opened.body;
@@ -409,7 +420,7 @@ pub async fn open(host: &dyn super::open::OpenHost, plan: Plan, mut resolved: su
         }
         Err(error) => {
             // Incerta, a sessão pode estar de pé na conta nova: devolver partiria o transcript em dois.
-            if moved && error.code != Some("session_open_uncertain") && let Err(undo) = move_conversation(&server_projects, project, sid, to.as_deref(), from.as_deref()) {
+            if moved && error.code != Some("session_open_uncertain") && let Err(undo) = move_conversation(&server_projects, &target, project, sid, to.as_deref(), from.as_deref()) {
                 tracing::error!(code = undo.code.unwrap_or("-"), "a conversa da retomada que falhou ficou na conta nova");
             }
             Err(error)
@@ -432,8 +443,31 @@ mod tests {
             calls.set(calls.get() + 1);
             if calls.get() == 1 { Ok(()) } else { Err(std::io::Error::other("ocupado")) }
         };
-        let error = super::move_with(&rename, root.path(), "p", "s1", a.to_str(), b.to_str()).unwrap_err();
+        let error = super::move_with(&rename, root.path(), "p", "p", "s1", a.to_str(), b.to_str()).unwrap_err();
         assert_eq!(calls.get(), 3, "a volta foi tentada");
         assert!(error.msg.contains("partida"), "{}", error.msg);
+    }
+
+    #[test]
+    fn a_conversation_follows_its_new_folder_in_the_same_account() {
+        let root = tempfile::tempdir().unwrap();
+        let projects = root.path().join("projects");
+        std::fs::create_dir_all(projects.join("velha/s1/subagents")).unwrap();
+        std::fs::write(projects.join("velha/s1.jsonl"), "{}").unwrap();
+        assert!(super::move_conversation(&projects, "velha", "nova", "s1", None, None).unwrap());
+        assert!(projects.join("nova/s1.jsonl").is_file() && projects.join("nova/s1/subagents").is_dir());
+        assert!(!projects.join("velha/s1.jsonl").exists());
+    }
+
+    #[test]
+    fn a_sibling_left_by_an_earlier_resume_does_not_block_the_move() {
+        let root = tempfile::tempdir().unwrap();
+        let projects = root.path().join("projects");
+        std::fs::create_dir_all(projects.join("velha/s1/subagents")).unwrap();
+        std::fs::create_dir_all(projects.join("nova/s1/tool-results")).unwrap();
+        std::fs::write(projects.join("velha/s1.jsonl"), "{}").unwrap();
+        assert!(super::move_conversation(&projects, "velha", "nova", "s1", None, None).unwrap());
+        assert!(projects.join("nova/s1.jsonl").is_file());
+        assert!(projects.join("velha/s1/subagents").is_dir(), "a irmã antiga fica");
     }
 }

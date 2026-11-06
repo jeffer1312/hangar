@@ -34,7 +34,9 @@ import { HeaderBack, useGlassHeader } from '../../../../src/ui/glassHeader';
 import { MultilineInput } from '../../../../src/ui/MultilineInput';
 import { ProviderGlyph } from '../../../../src/ui/ProviderGlyph';
 import { toast } from '../../../../src/ui/Toast';
+import { Sheet } from '../../../../src/ui/Sheet';
 import { MessageList } from '../../../../src/chat/MessageList';
+import { CwdPicker } from '../../../../src/features/create/CwdPicker';
 import { QuietPill } from '../../../../src/features/create/QuietPill';
 import { superficie } from '../../../../src/theme/superficie';
 import * as m from '../../../../src/paraglide/messages';
@@ -80,6 +82,9 @@ export default function ArchivedConversation() {
   const [draft, setDraft] = useState('');
   const [resuming, setResuming] = useState(false);
   const [resumeError, setResumeError] = useState('');
+  // A pasta da conversa sumiu: a folha pergunta onde retomar. Ref: a escolha e o fim dela vêm no mesmo toque.
+  const [folderGone, setFolderGone] = useState(false);
+  const chosenFolder = useRef('');
   // O pane original morreu: o app não sabe qual motor rodava a conversa. '' = conta Anthropic.
   const [engine, setEngine] = useState('');
   const [motores, setMotores] = useState<Record<string, Motor>>({});
@@ -106,6 +111,7 @@ export default function ArchivedConversation() {
     setError('');
     setEvents([]);
     setResumeError('');
+    setFolderGone(false);
     setEngine('');
     setMotores({});
     setPickedConfig(null);
@@ -200,7 +206,7 @@ export default function ArchivedConversation() {
   const blockedNow = janela ? m.cota_conta_no_limite({ janela }) : null;
   const canSend = !!entry && !!draft.trim() && !resuming && !accountsLoading && !blockedNow;
 
-  const sendAndResume = async () => {
+  const sendAndResume = async (cwd?: string) => {
     const text = draft.trim();
     if (!entry || !server || !canSend) return;
     const e = entry;
@@ -211,7 +217,7 @@ export default function ArchivedConversation() {
     let name = '';
     try {
       const info = await resumeArchivedConversation(e.project, e.session_id, engine || null,
-        pickedConfig ?? e.config_dir, e.provider, e.codex_account, srv);
+        pickedConfig ?? e.config_dir, e.provider, e.codex_account, srv, cwd);
       name = info.name;
       await sendInputForServer(srv, name, text);
       setDraft('');
@@ -228,6 +234,7 @@ export default function ArchivedConversation() {
           return;
         }
         setResumeError(viva ? m.conversa_ja_aberta_sem_nome() : err instanceof Error ? err.message : m.arquivo_retomar_erro());
+        if (x.code === 'erro_cwd_inexistente') setFolderGone(true);
         return;
       }
       console.error('archive: resume ok, send failed', name, err);
@@ -367,6 +374,23 @@ export default function ArchivedConversation() {
           </View>
         ) : null}
       </KeyboardAvoidingView>
+      {folderGone && server ? (
+        <Sheet open sizes={['large']} scrollable onDismiss={() => setFolderGone(false)}>
+          <KeyboardAvoidingView behavior="padding" automaticOffset style={styles.folderSheet}>
+            <Text style={[styles.folderTitle, { color: textColor }]} accessibilityRole="header">{m.retomar_escolher_pasta()}</Text>
+            <Text style={[styles.folderNote, { color: theme.tokens.status.warning }]} accessibilityRole="alert">{resumeError}</Text>
+            <CwdPicker
+              server={server}
+              autoSelect={false}
+              onPick={(path) => { chosenFolder.current = path; }}
+              onDone={() => {
+                setFolderGone(false);
+                void sendAndResume(chosenFolder.current);
+              }}
+            />
+          </KeyboardAvoidingView>
+        </Sheet>
+      ) : null}
     </Screen>
   );
 }
@@ -391,6 +415,9 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: theme.base.radius.full,
     overflow: 'hidden',
   },
+  folderSheet: { flex: 1, minHeight: 480, paddingHorizontal: theme.base.space[4], gap: theme.base.space[2] },
+  folderTitle: { fontSize: theme.base.text.base, fontWeight: theme.base.weight.semibold },
+  folderNote: { fontSize: theme.base.text.sm },
   dock: { paddingTop: theme.base.space[2], gap: theme.base.space[1] },
   note: { fontSize: theme.base.text.sm, paddingHorizontal: theme.base.space[4] },
   box: {

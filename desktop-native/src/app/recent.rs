@@ -4,6 +4,7 @@ use super::*;
 use super::costs::{web, web_with};
 use crate::api::Resumed;
 use super::device::Remote;
+use super::resume_folder::{FOLDER_GONE, ResumeFolder, ResumeFolderEvent};
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -83,6 +84,9 @@ pub(super) struct Recents {
     scroll: ScrollHandle,
     sending: bool,
     note: Option<String>,
+    /// A pasta da conversa sumiu: o seletor, e a escolha que vai no próximo envio.
+    folder: Option<(Entity<ResumeFolder>, Subscription)>,
+    cwd: Option<String>,
 }
 
 const HISTORY_TAIL: usize = 100;
@@ -143,7 +147,7 @@ impl Hangar {
         let Some(api) = self.api.clone() else { return };
         self.stash_view_draft(cx);
         self.close_open_session(window, cx);
-        self.recents.note = None;
+        (self.recents.note, self.recents.folder, self.recents.cwd) = (None, None, None);
         // A conta vem pré-escolhida na dona da conversa; a pílula usa as contas e cotas que a tela sem sessão já lê, e a
         // cota é relida: a leitura da conexão pode ser de antes da renovação.
         let claude = entry.provider == "claude" || entry.provider.is_empty();
@@ -194,13 +198,15 @@ impl Hangar {
         let config = self.new_chat.as_ref().and_then(|view| view.read(cx).reopen_config.clone()).unwrap_or_else(|| entry.config_dir.clone());
         let mut body = json!({"config_dir": if claude { json!(config) } else { Value::Null }, "provider": entry.provider});
         if entry.provider == "codex" && let Some(account) = &entry.codex_account { body["codex_account"] = json!(account); }
-        (self.recents.sending, self.recents.note) = (true, None);
+        if let Some(cwd) = self.recents.cwd.take() { body["cwd"] = json!(cwd); }
+        (self.recents.sending, self.recents.note, self.recents.folder) = (true, None, None);
         let identity = api.identity();
         let message = text.clone();
         let (project, id) = (entry.project.clone(), entry.session_id.clone());
+        let gone_api = api.clone();
         let task = self.runtime.spawn(async move {
-            match api.resume_archive(&project, &id, body).await.map_err(|e| Self::fetch_failure(&e))? {
-                Resumed::Live(name) => Ok::<_, String>(Err(name)),
+            match api.resume_archive(&project, &id, body).await.map_err(|e| (Self::fetch_failure(&e), e.code.as_deref() == Some(FOLDER_GONE)))? {
+                Resumed::Live(name) => Ok::<_, (String, bool)>(Err(name)),
                 Resumed::New(session) => {
                     let sent = api.send(&session.name, &message).await;
                     Ok(Ok((session, sent)))
@@ -213,9 +219,10 @@ impl Hangar {
                 let current = this.reopen.as_ref().is_some_and(|r| r.session_id == entry.session_id);
                 let back = reopen_key(&identity, &entry.session_id);
                 // `sending` só cai depois: a seleção abaixo não pode guardar o texto em voo como rascunho desta tela.
-                match joined.unwrap_or_else(|_| Err(tr("search_interrupted"))) {
-                    Err(error) if current => this.recents.note = Some(error),
-                    Err(error) => {
+                match joined.unwrap_or_else(|_| Err((tr("search_interrupted"), false))) {
+                    Err((error, true)) if current => this.reopen_choose_folder(gone_api, error, window, cx),
+                    Err((error, _)) if current => this.recents.note = Some(error),
+                    Err((error, _)) => {
                         // Fora da tela, o texto volta ao rascunho da conversa fechada: reabri-la o devolve ao campo.
                         this.append_draft(back, &text);
                         window.push_notification(Notification::warning(error), cx);
@@ -232,6 +239,21 @@ impl Hangar {
             });
         }).detach();
         cx.notify();
+    }
+
+    /// O texto continua no campo: a pasta escolhida reenvia sozinha.
+    fn reopen_choose_folder(&mut self, api: Api, message: String, window: &mut Window, cx: &mut Context<Self>) {
+        let runtime = self.runtime.clone();
+        let picker = cx.new(|cx| ResumeFolder::new(api, runtime, message, cx));
+        let events = cx.subscribe_in(&picker, window, |this: &mut Self, _, event: &ResumeFolderEvent, window, cx| {
+            this.recents.folder = None;
+            if let ResumeFolderEvent::Chosen(cwd) = event {
+                this.recents.cwd = Some(cwd.clone());
+                this.send_reopen(window, cx);
+            }
+            cx.notify();
+        });
+        self.recents.folder = Some((picker, events));
     }
 
     /// A conversa já estava aberta numa sessão viva: abre essa, sem enviar, com o texto digitado somado ao rascunho dela.
@@ -425,6 +447,7 @@ impl Hangar {
                         .child(div().text_base().font_weight(FontWeight::SEMIBOLD).whitespace_normal().child(entry.heading()))
                         .child(div().text_xs().text_color(theme::faint()).child(entry.meta())))
                     .child(body))))
+            .children(self.recents.folder.as_ref().map(|(picker, _)| landing_column(div().px(px(14.)).pb(px(10.)).child(picker.clone()))))
             .child(composer)
             .children(account.map(landing_column))
             .child(landing_column(div().id("reopen-note").role(if warning { Role::Alert } else { Role::Status }).px(px(14.)).pb(px(10.))

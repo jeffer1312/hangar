@@ -2181,13 +2181,16 @@ export function resumeArchivedConversation(
   provider?: string,
   codexAccount?: string | null,
   server?: Server | null,
+  // A pasta escolhida quando a da conversa sumiu.
+  cwd?: string,
 ): Promise<SessionInfo> {
   const request = server ? <T>(path: string, init?: RequestInit) => apiFetchForServer<T>(server, path, init, SESSION_BIRTH_MS) : apiFetch;
   return request<SessionInfo>(
     `/api/archive/${encodeURIComponent(project)}/${encodeURIComponent(sessionId)}/resume`,
     { method: 'POST', body: JSON.stringify({
       engine: engine ?? null, config_dir: configDir ?? null, provider: provider ?? 'claude',
-      ...(provider === 'codex' && codexAccount ? { codex_account: codexAccount } : {}) }) },
+      ...(provider === 'codex' && codexAccount ? { codex_account: codexAccount } : {}),
+      ...(cwd ? { cwd } : {}) }) },
   );
 }
 
