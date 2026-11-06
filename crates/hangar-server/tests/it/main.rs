@@ -300,6 +300,7 @@ mod voice_settings;
 mod voice_ws;
 mod speech_public;
 mod workspace_routes;
+mod workspace_contract;
 mod worktree_routes;
 
 mod codex_setup;

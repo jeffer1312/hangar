@@ -19,10 +19,20 @@ pub struct Fixture {
     pub addr: std::net::SocketAddr,
     /// Pedidos de `/api/` que chegaram ao Python.
     pub hits: Arc<AtomicUsize>,
+    pub context_hits: Arc<AtomicUsize>,
+    pub list: Arc<hangar_server::list::bridge::ListBridge>,
+    pub runtime: Arc<hangar_server::runtime::gateway::RuntimeRegistry>,
+    pub policy: Option<Policy>,
     /// Corpos recebidos em `/internal/diag`.
     pub diags: Diags,
     pub workspace_slots: Arc<tokio::sync::Semaphore>,
     _home: Option<tempfile::TempDir>,
+}
+
+pub struct Policy {
+    pub guest: std::net::SocketAddr,
+    pub login: Arc<hangar_server::login_guests::Service>,
+    pub share: Arc<hangar_server::share::ShareState>,
 }
 
 impl Fixture {
@@ -50,8 +60,28 @@ pub async fn fixture_with_home(root: &std::path::Path, context_ok: bool, home: O
     fixture_with_mux(root,context_ok,home,None).await
 }
 
+pub async fn session_fixture(root: &std::path::Path, context_ok: bool) -> Fixture {
+    let fixture = fixture_with_cwd(root, context_ok, None, None, root).await;
+    fixture.list.seed("fixture", root.join("fixture.jsonl").to_str().unwrap());
+    fixture
+}
+
 pub async fn fixture_with_mux(root: &std::path::Path, context_ok: bool, home: Option<&std::path::Path>, mux: Option<&std::path::Path>) -> Fixture {
+    fixture_with_cwd(root, context_ok, home, mux, &root.join("repo-wt")).await
+}
+
+pub async fn policy_fixture(root: &std::path::Path, home: &std::path::Path, mux: &std::path::Path) -> Fixture {
+    build(root, false, Some(home), Some(mux), root, true).await
+}
+
+async fn fixture_with_cwd(root: &std::path::Path, context_ok: bool, home: Option<&std::path::Path>, mux: Option<&std::path::Path>, session_cwd: &std::path::Path) -> Fixture {
+    build(root, context_ok, home, mux, session_cwd, false).await
+}
+
+async fn build(root: &std::path::Path, context_ok: bool, home: Option<&std::path::Path>, mux: Option<&std::path::Path>, session_cwd: &std::path::Path, policy: bool) -> Fixture {
     let hits = Arc::new(AtomicUsize::new(0));
+    let context_hits = Arc::new(AtomicUsize::new(0));
+    let seen_context = context_hits.clone();
     let diags: Diags = Arc::default();
     let context = json!({"roots":[root],"sessions":[{"name":"fixture","cwd":root}],"session":{"name":"fixture","cwd":root,"jsonl":root.join("fixture.jsonl"),"git_cwd":root}});
     let app = Router::new()
@@ -61,7 +91,9 @@ pub async fn fixture_with_mux(root: &std::path::Path, context_ok: bool, home: Op
                 move |headers: axum::http::HeaderMap,
                       Query(_): Query<std::collections::HashMap<String, String>>| {
                     let context = context.clone();
+                    let seen_context = seen_context.clone();
                     async move {
+                        seen_context.fetch_add(1, Ordering::Relaxed);
                         assert_eq!(headers["x-hangar-internal"], SECRET);
                         let status = if context_ok { 200 } else { 500 };
                         (
@@ -119,21 +151,53 @@ pub async fn fixture_with_mux(root: &std::path::Path, context_ok: bool, home: Op
     let default_mux={
         let script=home.join("fixture-mux");
         use std::os::unix::fs::PermissionsExt;
-        std::fs::write(&script,format!("#!/bin/sh\n[ \"$1\" = list-panes ] || exit 0\nprintf 'fixture\\t1\\t\\t{}\\t%%1\\t\\t\\t\\t0\\t0\\n'\n",root.join("repo-wt").display())).unwrap();
+        std::fs::write(&script,format!("#!/bin/sh\n[ \"$1\" = list-panes ] || exit 0\nprintf 'fixture\\t1\\t\\t{}\\t%%1\\t\\t\\t\\t0\\t0\\n'\n",session_cwd.display())).unwrap();
         std::fs::set_permissions(&script,std::fs::Permissions::from_mode(0o755)).unwrap();
         script
     };
     #[cfg(windows)]
     let default_mux={
         let script=home.join("fixture-mux.cmd");
-        std::fs::write(&script,format!("@echo off\r\nif not \"%~1\"==\"list-panes\" exit /b 0\r\necho fixture\t1\t\t{}\t%%1\t\t\t\t0\t0\r\n",root.join("repo-wt").display())).unwrap();
+        std::fs::write(&script,format!("@echo off\r\nif not \"%~1\"==\"list-panes\" exit /b 0\r\necho fixture\t1\t\t{}\t%%1\t\t\t\t0\t0\r\n",session_cwd.display())).unwrap();
         script
     };
     env.mux=hangar_server::list::mux::Mux::with_program(mux.unwrap_or(&default_mux),std::time::Duration::from_secs(5));
     state.list=Arc::new(hangar_server::list::bridge::ListBridge::new(env,hangar_server::list::facts::FactsClient::new(upstream,SECRET.into())));
     let workspace_slots=state.workspace_slots.clone();
-    let addr=crate::fake::spawn_state(state).await;
-    Fixture { addr, hits, diags,workspace_slots,_home:isolated_home }
+    let list=state.list.clone();
+    let runtime=Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(upstream, SECRET.into(), "workspace-fixture".into())
+        .with_codex_environment(state.accounts.env.clone()));
+    assert!(state.state.runtime.set(runtime.clone()).is_ok());
+    let (addr, policy) = if policy {
+        let (addr, policy) = serve_policy(state, home, mux.unwrap_or(&default_mux)).await;
+        (addr, Some(policy))
+    } else { (crate::fake::spawn_state(state).await, None) };
+    Fixture { addr, hits, context_hits, list, runtime, policy, diags,workspace_slots,_home:isolated_home }
+}
+
+async fn serve_policy(mut state: hangar_server::routes::AppState, home: &std::path::Path, mux: &std::path::Path) -> (std::net::SocketAddr, Policy) {
+    hangar_server::accounts::quotas::disable_open_network_read();
+    hangar_server::diag::disable_diary();
+    let login = Arc::new(hangar_server::login_guests::Service::new(hangar_server::login_guests::Settings {
+        guests:home.join(".claude/guests.json"), vault:home.join("vault.json"),
+        runtime_config:home.join(".claude/runtime-config.json"), sync_enabled:false,
+        bootstrap:String::new(), secret:b"fixture".to_vec(), secure:false, rate_max:100.into(), rate_window:300.into(),
+    }));
+    let share = hangar_server::share::from_env(Some(home.join(".claude/shares.json")),
+        state.list.env().dirs.as_ref(), mux.as_os_str().to_owned()).unwrap();
+    state.login_guests = login.clone();
+    state.share = Some(share.clone());
+    state.side.locate = Arc::new(hangar_server::locate::ListLocate { list:state.list.clone() });
+    let state = Arc::new(state);
+    let owner = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let guest = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let owner_addr = owner.local_addr().unwrap();
+    let guest_addr = guest.local_addr().unwrap();
+    let owner_app = hangar_server::routes::router(state.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>();
+    let guest_app = hangar_server::routes::guest_router(state).into_make_service_with_connect_info::<hangar_server::share::gate::GuestConn>();
+    tokio::spawn(async move { axum::serve(owner, owner_app).await.unwrap(); });
+    tokio::spawn(async move { axum::serve(guest, guest_app).await.unwrap(); });
+    (owner_addr, Policy { guest:guest_addr, login, share })
 }
 
 /// Corpo do 503 de Git/arquivos: mesmo formato das outras rotas do Rust, com o motivo em `params`.
