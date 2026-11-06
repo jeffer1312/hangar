@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "skills": {
+    "rust-code-style": {
+      "source": "po4yka/rust-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-code-style/SKILL.md",
+      "computedHash": "910ec30ad32154a1f2cc1183c1f6f7c692a3aeeb7e2907b6f389c43e870c9838"
+    },
+    "rust-crate-architecture": {
+      "source": "po4yka/rust-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-crate-architecture/SKILL.md",
+      "computedHash": "da18d08aa3c6871cfd5de3073267ef4aa452a1971522781b5de1e25e036d2314"
+    },
+    "rust-workspace": {
+      "source": "full-stack-skills/rust-skills",
+      "sourceType": "github",
+      "skillPath": "skills/rust-workspace/SKILL.md",
+      "computedHash": "43e3aedc175bc3f716cf6326b87ff3441b59248486c1dbf932aba5036d148109"
+    }
+  }
+}

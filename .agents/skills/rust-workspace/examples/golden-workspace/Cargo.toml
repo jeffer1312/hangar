@@ -1,0 +1,21 @@
+# Small root-flat virtual workspace (the default for a few cohesive packages).
+
+[workspace]
+resolver = "3"
+members = ["my-core", "my-net", "my-cli"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+
+[workspace.dependencies]
+my-core = { path = "my-core" }
+my-net = { path = "my-net" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = "warn"
