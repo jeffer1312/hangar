@@ -2,7 +2,7 @@
 """Religa Correção Automática e Texto Preditivo pela tela de Ajustes do iPhone, via WebDriverAgent.
 
 O WebDriverAgent desliga as duas ao subir, e o ajuste dele (`appium/settings`) responde "ligado"
-sem mudar nada no iOS 26 — só o toque na chave pega. Rótulos em pt-BR, como o aparelho está.
+sem mudar nada no iOS: só o toque na chave pega. Rótulos em pt-BR, como o aparelho está.
 """
 import json
 import sys
@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 
 WDA = "http://127.0.0.1:8100"
-CHAVES = ("Correção Automática", "Texto Preditivo")
+SWITCHES = ("Correção Automática", "Texto Preditivo")
 
 
 def call(method, path, body=None):
@@ -28,12 +28,12 @@ def call(method, path, body=None):
 
 def main():
     # Logo depois do "ready" a primeira sessão às vezes cai sem resposta.
-    for tentativa in range(5):
+    for attempt in range(5):
         try:
             s = call("POST", "/session", {"capabilities": {"alwaysMatch": {}}})["sessionId"]
             break
         except OSError:
-            if tentativa == 4:
+            if attempt == 4:
                 raise
             time.sleep(3)
     # Fechar antes de abrir: os Ajustes reabrem na última tela, e o caminho parte da raiz. A sessão
@@ -41,7 +41,7 @@ def main():
     call("POST", f"/session/{s}/wda/apps/terminate", {"bundleId": "com.apple.Preferences"})
     s = call("POST", "/session", {"capabilities": {"alwaysMatch": {"bundleId": "com.apple.Preferences"}}})["sessionId"]
 
-    def achar(pred):
+    def find(pred):
         try:
             v = call("POST", f"/session/{s}/element", {"using": "predicate string", "value": pred})["value"]
         except urllib.error.HTTPError as e:
@@ -50,53 +50,60 @@ def main():
             raise
         return v.get("ELEMENT") if isinstance(v, dict) else None
 
-    def rolar(e):
+    def scroll_to(e):
         try:
             call("POST", f"/session/{s}/wda/element/{e}/scrollTo", {})
         except urllib.error.HTTPError as err:
             if err.code != 404:  # item já visível às vezes responde 404; o toque segue
                 raise
 
-    def abrir(rotulo):
+    def open_item(label):
         e = None
         for _ in range(10):  # a tela ainda pode estar abrindo
-            e = achar(f"label == '{rotulo}' AND type != 'XCUIElementTypeNavigationBar'")
+            e = find(f"label == '{label}' AND type != 'XCUIElementTypeNavigationBar'")
             if e:
                 break
             time.sleep(1)
         if not e:
-            raise SystemExit(f"aviso: não achei '{rotulo}' nos Ajustes; religue à mão em Ajustes > Geral > Teclado")
-        rolar(e)
+            raise SystemExit(f"aviso: não achei '{label}' nos Ajustes; religue à mão em Ajustes > Geral > Teclado")
+        scroll_to(e)
         call("POST", f"/session/{s}/element/{e}/click", {})
         time.sleep(1.5)
 
-    abrir("Geral")
-    abrir("Teclado")
-    falhou = []
-    def chave(rotulo):
-        return achar(f"type == 'XCUIElementTypeSwitch' AND label == '{rotulo}'")
+    def switch(label):
+        return find(f"type == 'XCUIElementTypeSwitch' AND label == '{label}'")
 
-    def ligada(rotulo):
+    def is_on(label):
         # Busca de novo a cada leitura: ao virar a chave a tela redesenha e a referência antiga dá 404.
-        e = chave(rotulo)
+        e = switch(label)
         return e is not None and str(call("GET", f"/session/{s}/element/{e}/attribute/value")["value"]) == "1"
 
-    for rotulo in CHAVES:
-        e = chave(rotulo)
-        if not e:
-            falhou.append(rotulo)
-            continue
-        if not ligada(rotulo):
-            rolar(e)
-            r = call("GET", f"/session/{s}/element/{chave(rotulo)}/rect")["value"]
-            # O clique no elemento cai no meio da linha e não vira a chave; o toque tem de ser nela.
-            call("POST", f"/session/{s}/wda/tap", {"x": r["x"] + r["width"] - 30, "y": r["y"] + r["height"] / 2})
-            time.sleep(1)
-        if not ligada(rotulo):
-            falhou.append(rotulo)
-    call("POST", "/wda/homescreen")
-    if falhou:
-        raise SystemExit("aviso: não religou " + ", ".join(falhou) + "; religue à mão em Ajustes > Geral > Teclado")
+    failed = []
+    try:
+        open_item("Geral")
+        open_item("Teclado")
+        for label in SWITCHES:
+            e = switch(label)
+            if not e:
+                failed.append(label)
+                continue
+            if not is_on(label):
+                scroll_to(e)
+                e = switch(label)  # a rolagem redesenha a tela
+                if not e:
+                    failed.append(label)
+                    continue
+                r = call("GET", f"/session/{s}/element/{e}/rect")["value"]
+                # O clique no elemento cai no meio da linha e não vira a chave; o toque tem de ser nela.
+                call("POST", f"/session/{s}/wda/tap", {"x": r["x"] + r["width"] - 30, "y": r["y"] + r["height"] / 2})
+                time.sleep(1)
+            if not is_on(label):
+                failed.append(label)
+    finally:
+        # Sai dos Ajustes mesmo na falha: a próxima automação espera a tela inicial.
+        call("POST", "/wda/homescreen")
+    if failed:
+        raise SystemExit("aviso: não religou " + ", ".join(failed) + "; religue à mão em Ajustes > Geral > Teclado")
 
 
 if __name__ == "__main__":
