@@ -6,6 +6,10 @@ use axum::http::StatusCode;
 use super::state::Linked;
 use super::{CONNECT_PORT, ConnectError};
 
+// Fixas: porta sorteada pode ser tomada antes de o Caddy subir, e `kill_leftover` solta justamente estas.
+pub const CADDY_HTTP_PORT: u16 = 18080;
+pub const CADDY_HTTPS_PORT: u16 = 18443;
+
 pub fn valid_label(value: &str) -> bool {
     let bytes = value.as_bytes();
     (1..=63).contains(&bytes.len())
@@ -30,7 +34,7 @@ pub fn frps_endpoint(addr: &str) -> Option<(&str, u16)> {
     valid_host(host).then_some((host, port))
 }
 
-pub fn render_frpc(linked: &Linked, https_port: u16) -> Result<String, ConnectError> {
+pub fn render_frpc(linked: &Linked) -> Result<String, ConnectError> {
     linked.validate()?;
     let (server, server_port) = frps_endpoint(&linked.frps_addr).ok_or_else(Linked::invalid)?;
     let (token, key, host) = (&linked.frps_token, &linked.machine_key, &linked.host);
@@ -48,13 +52,13 @@ transport.heartbeatInterval = 30
 name = "{host}"
 type = "https"
 localIP = "127.0.0.1"
-localPort = {https_port}
+localPort = {CADDY_HTTPS_PORT}
 customDomains = ["{host}"]
 "#))
 }
 
 /// `disable_http_challenge`: a porta 80 da VPS nunca chega aqui, e cada HTTP-01 sorteado gasta o limite de falhas.
-pub fn render_caddyfile(linked: &Linked, dir: &Path, http_port: u16, https_port: u16) -> Result<String, ConnectError> {
+pub fn render_caddyfile(linked: &Linked, dir: &Path) -> Result<String, ConnectError> {
     linked.validate()?;
     let storage = dir.join("caddy").to_string_lossy().replace('\\', "/");
     // `{` abre placeholder do Caddyfile mesmo entre aspas.
@@ -65,8 +69,8 @@ pub fn render_caddyfile(linked: &Linked, dir: &Path, http_port: u16, https_port:
     let host = &linked.host;
     Ok(format!("{{
 \tadmin off
-\thttp_port {http_port}
-\thttps_port {https_port}
+\thttp_port {CADDY_HTTP_PORT}
+\thttps_port {CADDY_HTTPS_PORT}
 \tauto_https disable_redirects
 \tstorage file_system \"{storage}\"
 \tlog {{

@@ -93,16 +93,23 @@ fn supervisor(dir: &Path, devices: Arc<Store>, main_port: u16) -> Supervisor {
     Supervisor::new(dir.to_path_buf(), dir.join("logs"), devices, main_port).with_programs(frpc, caddy)
 }
 
+/// Sem servidor na frente: a porta conta como aberta por ele.
 fn alone(dir: &Path) -> Supervisor {
-    supervisor(dir, Arc::new(Store::new(dir.to_path_buf(), None)), 8765)
+    let supervisor = supervisor(dir, Arc::new(Store::new(dir.to_path_buf(), None)), 8765);
+    supervisor.port_opened();
+    supervisor
+}
+
+fn read_pid(dir: &Path, name: &str) -> Option<u32> {
+    std::fs::read_to_string(dir.join(format!("{name}.pid"))).ok()?.trim().parse().ok()
 }
 
 fn has_pid(dir: &Path, name: &str) -> bool {
-    std::fs::read_to_string(dir.join(format!("{name}.pid"))).is_ok_and(|text| text.trim().parse::<u32>().is_ok())
+    read_pid(dir, name).is_some()
 }
 
 fn pid_of(dir: &Path, name: &str) -> u32 {
-    std::fs::read_to_string(dir.join(format!("{name}.pid"))).unwrap().trim().parse().unwrap()
+    read_pid(dir, name).unwrap()
 }
 
 fn alive(pid: u32) -> bool {
@@ -163,6 +170,9 @@ async fn machine_on(main_port: u16, connect: Option<SocketAddr>) -> Machine {
     let mut state = AppState::new(config(upstream, "127.0.0.1"));
     let devices = Arc::new(Store::new(dir.path().to_path_buf(), None));
     let supervisor = Arc::new(supervisor(dir.path(), devices.clone(), main_port));
+    if connect.is_none() && main_port != CONNECT_PORT {
+        supervisor.port_opened();
+    }
     state.connect_devices = devices.clone();
     state.connect_supervisor = supervisor.clone();
     state.connect = connect;
@@ -239,9 +249,15 @@ fn package(url: String, data: &[u8], member: &str) -> Package {
     Package { version: "teste", url, member: member.to_owned(), file: "frpc".to_owned(), digest: sha256(data) }
 }
 
-#[test]
-fn frpc_config_matches_the_proven_file() {
-    assert_eq!(render_frpc(&linked(), 18443).unwrap(), format!(r#"serverAddr = "connect.hangar.dev.br"
+#[tokio::test]
+async fn frpc_config_matches_the_proven_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.path();
+    let supervisor = alone(dir);
+    supervisor.start(&linked()).await.unwrap();
+    let caddyfile = std::fs::read_to_string(dir.join("Caddyfile")).unwrap();
+    assert!(caddyfile.contains("\thttp_port 18080\n\thttps_port 18443\n"), "{caddyfile}");
+    assert_eq!(std::fs::read_to_string(dir.join("frpc.toml")).unwrap(), format!(r#"serverAddr = "connect.hangar.dev.br"
 serverPort = 443
 transport.protocol = "wss"
 auth.method = "token"
@@ -257,6 +273,7 @@ localIP = "127.0.0.1"
 localPort = 18443
 customDomains = ["pc1.acme.hangar.dev.br"]
 "#));
+    supervisor.stop().await;
 }
 
 #[test]
@@ -271,18 +288,18 @@ fn frpc_config_rejects_injection() {
         let mut addr = linked();
         addr.frps_addr = bad.into();
         for value in [token, key, host, addr] {
-            assert_eq!(render_frpc(&value, 18443).unwrap_err().code, "connect_service_invalid", "{bad:?}");
-            assert_eq!(render_caddyfile(&value, Path::new("/casa"), 18080, 18443).unwrap_err().code, "connect_service_invalid", "{bad:?}");
+            assert_eq!(render_frpc(&value).unwrap_err().code, "connect_service_invalid", "{bad:?}");
+            assert_eq!(render_caddyfile(&value, Path::new("/casa")).unwrap_err().code, "connect_service_invalid", "{bad:?}");
         }
     }
     let mut short = linked();
     short.host = "acme.hangar".into();
-    assert!(render_frpc(&short, 18443).is_err(), "host precisa de dois pontos");
+    assert!(render_frpc(&short).is_err(), "host precisa de dois pontos");
 }
 
 #[test]
 fn caddyfile_binds_loopback_and_disables_http_challenge() {
-    let text = render_caddyfile(&linked(), Path::new("/casa/.hangar/connect"), 18080, 18443).unwrap();
+    let text = render_caddyfile(&linked(), Path::new("/casa/.hangar/connect")).unwrap();
     assert_eq!(text, "{
 \tadmin off
 \thttp_port 18080
@@ -304,7 +321,7 @@ pc1.acme.hangar.dev.br {
 \treverse_proxy 127.0.0.1:8768
 }
 ");
-    assert_eq!(render_caddyfile(&linked(), Path::new("/casa/a\"b"), 18080, 18443).unwrap_err().code, "connect_path_invalid");
+    assert_eq!(render_caddyfile(&linked(), Path::new("/casa/a\"b")).unwrap_err().code, "connect_path_invalid");
 }
 
 #[tokio::test]
@@ -345,6 +362,21 @@ async fn package_is_installed_once_per_version() {
     assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&installed).unwrap().permissions()) & 0o777, 0o755);
     fetch(&package, dir.path()).await.unwrap();
     assert_eq!(hits.load(Ordering::SeqCst), 1);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn existing_binary_gets_the_execute_permission() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("bin/teste/frpc");
+    std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+    std::fs::write(&dest, "programa").unwrap();
+    std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let (url, hits) = serve_bytes(Vec::new()).await;
+    fetch(&package(url, b"", "frpc"), dir.path()).await.unwrap();
+    assert_eq!(std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777, 0o755);
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -398,6 +430,89 @@ async fn enabled_true_only_when_both_children_run() {
     let stopped = supervisor.status();
     assert!(!stopped.enabled && !stopped.running);
     until("o frpc ficou de pé depois do stop", || !alive(frpc)).await;
+}
+
+#[tokio::test]
+async fn caddy_stops_when_the_port_is_lost_and_comes_back_with_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.path();
+    std::fs::write(gate(dir), "").unwrap();
+    let supervisor = alone(dir);
+    supervisor.start(&linked()).await.unwrap();
+    until("os dois não subiram", || supervisor.status().enabled).await;
+    let caddy = pid_of(dir, "caddy");
+
+    supervisor.port_failed("porta perdida".to_owned());
+    until("o Caddy ficou de pé sem a porta", || !alive(caddy)).await;
+    let lost = supervisor.status();
+    assert!(!lost.enabled && lost.running);
+    assert_eq!(lost.error.as_deref(), Some("porta perdida"));
+
+    supervisor.port_opened();
+    until("o Caddy não voltou com a porta", || supervisor.status().enabled).await;
+    assert_ne!(pid_of(dir, "caddy"), caddy);
+    supervisor.stop().await;
+}
+
+#[tokio::test]
+async fn caddy_waits_for_a_new_login_after_frpc_falls() {
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.path();
+    std::fs::write(gate(dir), "").unwrap();
+    let supervisor = alone(dir);
+    supervisor.start(&linked()).await.unwrap();
+    until("os dois não subiram", || supervisor.status().enabled).await;
+    let (frpc, caddy) = (pid_of(dir, "frpc"), pid_of(dir, "caddy"));
+
+    std::fs::remove_file(gate(dir)).unwrap();
+    kill_pid(frpc);
+    until("o frpc não voltou", || read_pid(dir, "frpc").is_some_and(|pid| pid != frpc)).await;
+    kill_pid(caddy);
+    // Passa da espera do Caddy depois da primeira queda.
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    assert_eq!(pid_of(dir, "caddy"), caddy, "sem login novo o Caddy não nasce");
+    assert!(!supervisor.status().enabled);
+
+    std::fs::write(gate(dir), "").unwrap();
+    until("o Caddy não voltou com o login", || supervisor.status().enabled).await;
+    assert_ne!(pid_of(dir, "caddy"), caddy);
+    supervisor.stop().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn simultaneous_start_leaves_one_of_each() {
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.path();
+    std::fs::write(gate(dir), "").unwrap();
+    let births = dir.join("births");
+    let frpc = script(dir, "counted-frpc", &format!("echo $$ >> '{}'\n{}", births.display(), frpc_body(&gate(dir))));
+    let caddy = script(dir, "fake-caddy", LONG_RUN);
+    let supervisor = Supervisor::new(dir.to_path_buf(), dir.join("logs"), Arc::new(Store::new(dir.to_path_buf(), None)), 8765)
+        .with_programs(frpc, caddy);
+    supervisor.port_opened();
+    let machine = linked();
+    let (first, second) = tokio::join!(supervisor.start(&machine), supervisor.start(&machine));
+    first.unwrap();
+    second.unwrap();
+    until("os dois não subiram", || supervisor.status().enabled).await;
+    let text = std::fs::read_to_string(&births).unwrap();
+    let living: Vec<u32> = text.lines().map(|line| line.parse().unwrap()).filter(|pid| alive(*pid)).collect();
+    assert_eq!(living, vec![pid_of(dir, "frpc")], "{text}");
+    supervisor.stop().await;
+}
+
+#[tokio::test]
+async fn child_log_is_rotated_when_it_starts() {
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.path();
+    std::fs::create_dir_all(dir.join("logs")).unwrap();
+    std::fs::write(dir.join("logs/connect-frpc.log"), vec![b'x'; (4 << 20) + 1]).unwrap();
+    let supervisor = alone(dir);
+    supervisor.start(&linked()).await.unwrap();
+    until("o frpc não nasceu", || has_pid(dir, "frpc")).await;
+    assert!(dir.join("logs/connect-frpc.log.1").exists());
+    supervisor.stop().await;
 }
 
 #[tokio::test]
@@ -457,10 +572,30 @@ async fn link_comes_back_after_a_restart() {
     let dir = machine.dir.path();
     let devices = Arc::new(Store::new(dir.to_path_buf(), None));
     let next = supervisor(dir, devices.clone(), 8765);
+    next.port_opened();
     next.resume().await;
     assert!(matches!(devices.redeem("{}", "", "x"), Err(Refusal::Ticket)));
     until("os dois não voltaram", || next.status().enabled).await;
     next.stop().await;
+}
+
+#[tokio::test]
+async fn link_with_supervision_stopped_starts_again_without_registering() {
+    let (service, address) = spawn_service(false).await;
+    let machine = machine().await;
+    assert_eq!(link(&machine, address).await.status(), 200);
+    machine.supervisor.stop().await;
+
+    let other = client().post(format!("http://{}/api/connect/link", machine.addr)).bearer_auth(OWNER)
+        .json(&json!({"service_url": format!("http://{address}"), "account": "acme", "password": PASSWORD, "machine_name": "pc2"}))
+        .send().await.unwrap();
+    assert_eq!(error_code(other).await, (409, "connect_already_linked".to_owned()));
+
+    assert_eq!(link(&machine, address).await.status(), 200);
+    assert_eq!(service.machines.lock().unwrap().len(), 1, "registrar de novo trocaria a chave");
+    let supervisor = machine.supervisor.clone();
+    until("os dois não voltaram", || supervisor.status().enabled).await;
+    machine.supervisor.stop().await;
 }
 
 #[tokio::test]
@@ -490,7 +625,8 @@ async fn link_is_refused_when_the_main_port_is_the_connect_port() {
 }
 
 #[tokio::test]
-async fn busy_connect_port_shows_up_in_error() {
+async fn caddy_is_never_born_while_another_process_holds_the_port() {
+    let (_service, address) = spawn_service(false).await;
     let busy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let machine = machine_on(8765, Some(busy.local_addr().unwrap())).await;
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -498,12 +634,23 @@ async fn busy_connect_port_shows_up_in_error() {
         assert!(Instant::now() < deadline, "o motivo do bind não apareceu");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+
+    assert_eq!(link(&machine, address).await.status(), 200);
+    let dir = machine.dir.path();
+    let log = dir.join("logs/connect-frpc.log");
+    until("o frpc não entrou", || std::fs::read_to_string(&log).is_ok_and(|text| text.contains("login to server success"))).await;
+    // Passa do tique que leria o login.
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    assert!(!has_pid(dir, "caddy"), "com a porta de outro, o Caddy publicaria esse processo na internet");
+    let waiting = connect_status(&machine).await;
+    assert_eq!((&waiting["enabled"], &waiting["running"]), (&json!(false), &json!(true)));
+    assert!(waiting["error"].as_str().unwrap().contains("indisponível"));
+
     drop(busy);
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while !connect_status(&machine).await["error"].is_null() {
-        assert!(Instant::now() < deadline, "o motivo ficou depois da porta soltar");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    let supervisor = machine.supervisor.clone();
+    until("o Caddy não subiu com a porta", || supervisor.status().enabled).await;
+    assert!(connect_status(&machine).await["error"].is_null(), "o motivo ficou depois da porta soltar");
+    machine.supervisor.stop().await;
 }
 
 #[tokio::test]

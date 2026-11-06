@@ -133,27 +133,37 @@ fn extract(data: &[u8], member: &str) -> Result<Vec<u8>, ConnectError> {
     Err(missing())
 }
 
+fn write_failed(dest: &Path, cause: &std::io::Error) -> ConnectError {
+    ConnectError::new(StatusCode::INTERNAL_SERVER_ERROR, "connect_binary_write_failed", format!("não consegui gravar {}: {cause}", dest.display()))
+}
+
+fn make_executable(dest: &Path) -> Result<(), ConnectError> {
+    #[cfg(unix)]
+    std::fs::set_permissions(dest, std::os::unix::fs::PermissionsExt::from_mode(0o755)).map_err(|cause| write_failed(dest, &cause))?;
+    #[cfg(not(unix))]
+    let _ = dest;
+    Ok(())
+}
+
 fn install(data: &[u8], package: &Package, dest: &Path) -> Result<(), ConnectError> {
     // No pacote inteiro, antes de extrair: o que não bate nem chega ao disco.
     if !package.digest.matches(data) {
         return Err(ConnectError::new(StatusCode::BAD_GATEWAY, "connect_binary_hash", format!("{} não bate com o hash esperado", package.url)));
     }
     let content = extract(data, &package.member)?;
-    let failed = |cause: std::io::Error| ConnectError::new(StatusCode::INTERNAL_SERVER_ERROR, "connect_binary_write_failed",
-        format!("não consegui gravar {}: {cause}", dest.display()));
     if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent).map_err(failed)?;
+        std::fs::create_dir_all(parent).map_err(|cause| write_failed(dest, &cause))?;
     }
-    crate::runtime::queue::atomic_write(dest, &content).map_err(failed)?;
-    #[cfg(unix)]
-    std::fs::set_permissions(dest, std::os::unix::fs::PermissionsExt::from_mode(0o755)).map_err(failed)?;
-    Ok(())
+    crate::runtime::queue::atomic_write(dest, &content).map_err(|cause| write_failed(dest, &cause))?;
+    make_executable(dest)
 }
 
 /// Baixa uma vez por versão. Devolve o caminho do programa.
 pub async fn fetch(package: &Package, dir: &Path) -> Result<PathBuf, ConnectError> {
     let dest = dir.join("bin").join(package.version).join(&package.file);
     if dest.exists() {
+        // Instalação interrompida entre gravar e dar permissão não pode travar a subida para sempre.
+        make_executable(&dest)?;
         return Ok(dest);
     }
     let data = download(&package.url).await?;

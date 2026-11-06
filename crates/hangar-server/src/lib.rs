@@ -332,7 +332,7 @@ pub fn install_panic_hook() {
     }));
 }
 
-const LOG_MAX_BYTES: u64 = 4 * 1024 * 1024;
+pub(crate) const LOG_MAX_BYTES: u64 = 4 * 1024 * 1024;
 const LOG_BACKUPS: u32 = 3;
 
 /// Log em arquivo (HANGAR_SERVER_LOG) ou no stderr. Nunca recebe texto de conversa.
@@ -361,7 +361,7 @@ pub fn init_log(path: Option<&std::path::Path>) {
 /// Mesmo teto dos logs privados do Python (4 MB, três cópias `.1`..`.3`), conferido ao subir.
 // ponytail: só na subida; um processo que viva muito pode passar do teto até o próximo início.
 // Girar em execução pede um writer próprio, se o arquivo crescer assim na prática.
-fn rotate_log(path: &std::path::Path, max: u64) {
+pub(crate) fn rotate_log(path: &std::path::Path, max: u64) {
     if std::fs::metadata(path).map_or(true, |m| m.len() < max) {
         return;
     }

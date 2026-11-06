@@ -410,7 +410,7 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
             let mut failing = false;
             loop {
                 if let Err(e) = serve_connect(addr, connect_state.clone(), connect_pair.clone()).await {
-                    connect_state.connect_supervisor.set_port_error(Some(format!("porta do Connect {} indisponível ({e})", addr.port())));
+                    connect_state.connect_supervisor.port_failed(format!("porta do Connect {} indisponível ({e})", addr.port()));
                     if !failing {
                         tracing::warn!(code = "connect_port_failed", listen = %addr, "porta do Connect indisponível, tentando de novo: {e}");
                         failing = true;
@@ -501,7 +501,7 @@ pub async fn serve_connect(addr: SocketAddr, state: Arc<AppState>, pair: Option<
         return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "entrada do Connect fora do loopback"));
     }
     let listener = guest_socket(addr)?;
-    state.connect_supervisor.set_port_error(None);
+    state.connect_supervisor.port_opened();
     tracing::info!(listen = %addr, "entrada do Connect de pé");
     axum::serve(listener, router_with(state, pair.as_ref())
         .layer(axum::middleware::map_request(crate::connect::gate::rewrite_peer))
