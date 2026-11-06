@@ -153,6 +153,7 @@ export interface ChatApi {
   steerQueued: (id: string) => Promise<void>;
   moveQueued: (id: string, delta: -1 | 1) => Promise<void>;
   showDeliveryFeedback: (feedback: DeliveryFeedback | null) => void;
+  historyLoaded: () => boolean;
 }
 
 // Estado do app visto pelos stores que ainda vão nascer: o layout liga antes da primeira tela.
@@ -327,10 +328,10 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     if (!draft || !sent || sent.status !== 'unknown' || sent.startedAt === undefined) return false;
     // Folga para o relógio do celular adiantado em relação ao servidor.
     const since = sent.startedAt / 1000 - 30;
-    // A fala do Claude vem sem horário (só a entrega pela fila tem): aí a igual de antes já está em seenIds,
-    // e o histórico mais antigo, que não está, nunca passa por aqui.
+    // A fala do Claude vem sem horário (só a entrega pela fila tem): só vale com o histórico já carregado no envio,
+    // quando a igual de antes está em seenIds; o histórico mais antigo nunca passa por aqui.
     const arrived = events.some((e) => e.kind === 'user_msg' && !e.id.startsWith('queued-') && !sent.seenIds?.includes(e.id)
-      && (e.ts == null || e.ts >= since) && !!e.text && sameMessage(sent.text, e.text));
+      && (e.ts == null ? !!sent.seenIds : e.ts >= since) && !!e.text && sameMessage(sent.text, e.text));
     if (!arrived) return false;
     // Sem gravar, o aviso fica: é o lado seguro.
     try { writeDraft(serverId, name, deliveredDraft(draft)); } catch { return false; }
@@ -874,6 +875,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
 
   return {
     use: useChatStore,
+    historyLoaded: () => baseLoaded,
     startQueueEdit(id: string, draft: string): string {
       const entry = queueEntries().find((e) => e.id === id);
       if (!entry) return draft;
@@ -1071,8 +1073,9 @@ export async function submitConversationDraft(serverId: string, name: string, te
     if (current.submission && current.submission.text.trim() !== text.trim()) throw new Error(m.composer_submission_recover_first());
     // O campo pode já ter outra edição (primeiro input, pedido de plano): essa fica onde está.
     const fromField = draftRevision === undefined ? current.text.trim() === text.trim() : current.revision === draftRevision;
-    const seenIds = chatStore(serverId, name).use.getState().events
-      .filter((e) => e.kind === 'user_msg' && !!e.text && sameMessage(text, e.text)).map((e) => e.id);
+    const store = chatStore(serverId, name);
+    const seenIds = store.historyLoaded() ? store.use.getState().events
+      .filter((e) => e.kind === 'user_msg' && !!e.text && sameMessage(text, e.text)).map((e) => e.id) : undefined;
     const submission = { text, draftRevision: draftRevision ?? current.revision, status: 'sending' as const, startedAt: Date.now(), seenIds,
       ...(fromField ? { typed: current.text } : {}),
       ...(fromField && current.recordings?.length ? { recordingIds: current.recordings.map((r) => r.id) } : {}) };

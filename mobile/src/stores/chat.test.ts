@@ -1944,6 +1944,24 @@ describe('envio incerto que a conversa confirma', () => {
     expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'sim', submission: { status: 'unknown' } });
   });
 
+  test('envio antes de o histórico carregar não se confirma por fala antiga sem horário', async () => {
+    let releaseHistory!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseHistory = resolve; });
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).endsWith('/input')) throw new TypeError('Network request failed');
+      await gate;
+      return new Response(JSON.stringify([ev({ id: 'u:antes', text: 'sim', ts: null })]), { status: 200 });
+    }));
+    const chat = chatStore('srv1', 'sess');
+    chat.retain();
+    await tick();
+    await expect(chat.send('sim')).rejects.toThrow(m.chat_envio_incerto());
+    releaseHistory();
+    await tick();
+    expect(chat.use.getState().events.map((e) => e.id)).toContain('u:antes');
+    expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'sim', submission: { status: 'unknown' } });
+  });
+
   test('mensagem igual de antes do envio não confirma', async () => {
     historyResponses = [[]];
     stubInput(async () => { throw new TypeError('Network request failed'); });

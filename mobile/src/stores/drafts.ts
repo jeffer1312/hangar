@@ -36,7 +36,7 @@ const draftSchema = z.preprocess(legacyAttachment, z.object({
     status: z.enum(['sending', 'unknown', 'rejected']),
     // Relógio do envio (ms): só mensagem da conversa posterior a ele confirma um envio incerto.
     startedAt: z.number().optional(),
-    // Mensagens iguais que a conversa já tinha: nunca confirmam este envio.
+    // Mensagens iguais que a conversa já tinha: nunca confirmam este envio. Ausente: o histórico não tinha carregado.
     seenIds: z.array(z.string()).optional(),
     // Áudios que saíram do campo com este envio: a falha os devolve, a confirmação os tira de novo.
     recordingIds: z.array(z.string()).optional(),
