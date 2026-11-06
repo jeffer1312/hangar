@@ -122,7 +122,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if crate::session_media::is_media(method, path) { return true; }
     if crate::archive_history::matches(method, path) || crate::archive_list::matches(method, path) { return true; }
     if crate::accounts::http::matches(method, path) { return true; }
-    // Credenciais de aparelho do Connect (`connect::routes`): nunca repassadas.
+    // Ligação e credenciais de aparelho do Connect (`connect::routes`): nunca repassadas.
     if crate::connect::routes::matches(method, path) { return true; }
     // Senha do chaveiro (`keyring::unlock_route`): nunca repassada.
     if *method == Method::POST && path == "/api/keyring/unlock" { return true; }
@@ -546,10 +546,11 @@ mod tests {
         assert!(api >= 10, "o leitor do roteador não achou as rotas ({api})");
         // Montadas por `connect::routes` e `share::pair_routes`, fora do texto lido acima.
         for (method, path) in [(Method::POST, "/api/connect/redeem"), (Method::POST, "/api/connect/redeem/status"), (Method::GET, "/api/connect/devices"),
-            (Method::POST, "/api/connect/devices/self"), (Method::POST, "/api/connect/devices/x/approve"), (Method::DELETE, "/api/connect/devices/x")] {
+            (Method::POST, "/api/connect/devices/self"), (Method::POST, "/api/connect/devices/x/approve"), (Method::DELETE, "/api/connect/devices/x"),
+            (Method::GET, "/api/connect"), (Method::DELETE, "/api/connect"), (Method::POST, "/api/connect/link")] {
             assert!(rust_route(&method, path), "{method} {path}");
         }
-        assert!(!rust_route(&Method::GET, "/api/connect"), "o estado da ligação segue no Python");
+        assert!(!rust_route(&Method::PUT, "/api/connect"), "o código de ligação colado saiu");
         assert!(rust_route(&Method::POST, "/api/sessions/a/pair-access"));
         assert!(rust_route(&Method::DELETE, "/api/external-pairs/ana"));
         assert!(!rust_route(&Method::DELETE, "/api/external-pairs/a/b"));

@@ -67,6 +67,8 @@ pub struct AppState {
     pub connect: Option<SocketAddr>,
     /// Credenciais de dono por aparelho (`~/.hangar/connect`); o teste troca por uma pasta temporária.
     pub connect_devices: Arc<crate::connect::devices::Store>,
+    /// `frpc` e Caddy da ligação desta máquina; liga só na subida real (`main.rs`) ou pela rota.
+    pub connect_supervisor: Arc<crate::connect::supervisor::Supervisor>,
     pub workspace_slots: Arc<tokio::sync::Semaphore>,
     pub workspace_read_slots: Arc<tokio::sync::Semaphore>,
     pub workspace_meta_slots: Arc<tokio::sync::Semaphore>,
@@ -234,6 +236,9 @@ impl AppState {
         let vault_requests = Arc::new(crate::vault::requests::Requests::default());
         let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture());
         let search = crate::search::Index::server(accounts.clone());
+        let connect_devices = Arc::new(crate::connect::devices::Store::new(hangar_dir.join("connect"), None));
+        let connect_supervisor = Arc::new(crate::connect::supervisor::Supervisor::new(hangar_dir.join("connect"),
+            crate::runtime::local_policy::log_base().unwrap_or_else(|| hangar_dir.join("logs")), connect_devices.clone(), cfg.listen.port()));
         AppState { startup: Default::default(), startup_producers: Arc::default(), settings_snapshot: std::sync::OnceLock::new(), login_guests: Arc::new(crate::login_guests::Service::uninitialized(&accounts.env.home,&accounts.env.claude_base)), accounts, search, claude_p: None, command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, connect: None, diag,
             migration_branch: Arc::default(),
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
@@ -255,7 +260,8 @@ impl AppState {
             origins_home: std::path::PathBuf::from(std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).unwrap_or_default()),
             prewarm: Arc::new(crate::prewarm::Store::server(&hangar_dir)),
             devices: Arc::new(crate::devices::Registry::new(hangar_dir.join("devices.json"))),
-            connect_devices: Arc::new(crate::connect::devices::Store::new(hangar_dir.join("connect"), None)),
+            connect_devices,
+            connect_supervisor,
             update_release_base: crate::update::RELEASE_BASE.to_owned(),
             diag_report_base: crate::diag_report::WORKER_BASE.to_owned(),
             vault: Arc::new(crate::vault::Vault::system()),
@@ -403,9 +409,12 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
             let mut wait = Duration::from_millis(250);
             let mut failing = false;
             loop {
-                if let Err(e) = serve_connect(addr, connect_state.clone(), connect_pair.clone()).await && !failing {
-                    tracing::warn!(code = "connect_port_failed", listen = %addr, "porta do Connect indisponível, tentando de novo: {e}");
-                    failing = true;
+                if let Err(e) = serve_connect(addr, connect_state.clone(), connect_pair.clone()).await {
+                    connect_state.connect_supervisor.set_port_error(Some(format!("porta do Connect {} indisponível ({e})", addr.port())));
+                    if !failing {
+                        tracing::warn!(code = "connect_port_failed", listen = %addr, "porta do Connect indisponível, tentando de novo: {e}");
+                        failing = true;
+                    }
                 }
                 tokio::time::sleep(wait).await;
                 wait = (wait * 2).min(Duration::from_secs(5));
@@ -492,6 +501,7 @@ pub async fn serve_connect(addr: SocketAddr, state: Arc<AppState>, pair: Option<
         return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "entrada do Connect fora do loopback"));
     }
     let listener = guest_socket(addr)?;
+    state.connect_supervisor.set_port_error(None);
     tracing::info!(listen = %addr, "entrada do Connect de pé");
     axum::serve(listener, router_with(state, pair.as_ref())
         .layer(axum::middleware::map_request(crate::connect::gate::rewrite_peer))

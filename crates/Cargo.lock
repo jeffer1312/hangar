@@ -1679,6 +1679,7 @@ dependencies = [
  "windows-sys 0.61.2",
  "zbus",
  "zeroize",
+ "zip",
 ]
 
 [[package]]

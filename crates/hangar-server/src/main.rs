@@ -208,8 +208,13 @@ async fn run() {
         startup.finish();
     });
     let prewarm = state.prewarm.clone();
+    let connect = state.connect_supervisor.clone();
+    // Fora do caminho da subida: baixar `frpc` e Caddy não segura a porta.
+    let resuming = connect.clone();
+    tokio::spawn(async move { resuming.resume().await });
     // A porta do convidado não entra no bind fatal acima: o filho anterior pode ainda segurá-la.
     let served = hangar_server::serve_until_with_guest(listener, state, guest.listen, stop).await;
+    connect.stop().await;
     prewarm.discard_all("saida_do_servidor").await;
     match served {
         Ok(()) => {

@@ -13,8 +13,10 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+use super::ConnectError;
 use super::devices::{Poll, Refusal, Store};
 use super::gate::DeviceCaller;
+use super::state::LinkRequest;
 use crate::routes::{AppState, cors, on_connect_port, owner_gate};
 use crate::session_write::json_response;
 use crate::voice::routes::preflight;
@@ -23,6 +25,8 @@ const BODY_LIMIT: usize = 16 * 1024;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
+        .route("/api/connect", get(connect_state).delete(forget).options(preflight))
+        .route("/api/connect/link", post(link).options(preflight))
         .route("/api/connect/redeem", post(redeem).options(preflight))
         .route("/api/connect/redeem/status", post(status).options(preflight))
         .route("/api/connect/devices", get(list).options(preflight))
@@ -34,10 +38,10 @@ pub fn router() -> Router<Arc<AppState>> {
 pub fn matches(method: &Method, path: &str) -> bool {
     let id = path.strip_prefix("/api/connect/devices/");
     match method.as_str() {
-        "GET" => path == "/api/connect/devices",
-        "POST" => matches!(path, "/api/connect/redeem" | "/api/connect/redeem/status" | "/api/connect/devices/self")
+        "GET" => matches!(path, "/api/connect" | "/api/connect/devices"),
+        "POST" => matches!(path, "/api/connect/link" | "/api/connect/redeem" | "/api/connect/redeem/status" | "/api/connect/devices/self")
             || id.and_then(|rest| rest.strip_suffix("/approve")).is_some_and(|id| !id.is_empty() && !id.contains('/')),
-        "DELETE" => id.is_some_and(|id| !id.is_empty() && !id.contains('/')),
+        "DELETE" => path == "/api/connect" || id.is_some_and(|id| !id.is_empty() && !id.contains('/')),
         _ => false,
     }
 }
@@ -145,15 +149,21 @@ async fn remove(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<
 #[derive(Deserialize)]
 struct EnrollBody { device_name: String }
 
-/// Sem aprovação porque quem pede apresentou a senha. Aparelho não entra aqui: quem for revogado
-/// sairia com outra credencial guardada.
+/// Só a senha do dono, de fora da entrada do Connect. Aparelho não passa: quem for revogado sairia
+/// com outra credencial, ou com a máquina ligada a outro serviço.
+fn owner_secret_refusal(req: &Request) -> Option<Response> {
+    if on_connect_port(req) {
+        return Some(error(req.headers(), StatusCode::UNAUTHORIZED, "erro_nao_autorizado", "unauthorized"));
+    }
+    req.extensions().get::<DeviceCaller>()
+        .map(|_| error(req.headers(), StatusCode::FORBIDDEN, "connect_owner_secret_refused", "rota só do dono"))
+}
+
+/// Sem aprovação porque quem pede apresentou a senha.
 async fn enroll(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let headers = req.headers().clone();
-    if on_connect_port(&req) {
-        return error(&headers, StatusCode::UNAUTHORIZED, "erro_nao_autorizado", "unauthorized");
-    }
-    if req.extensions().get::<DeviceCaller>().is_some() {
-        return error(&headers, StatusCode::FORBIDDEN, "connect_owner_secret_refused", "rota só do dono");
+    if let Some(response) = owner_secret_refusal(&req) {
+        return response;
     }
     if let Err(mut response) = owner_gate(&st, peer, &req).await {
         cors(&headers, response.headers_mut());
@@ -164,4 +174,51 @@ async fn enroll(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<
         Ok((device_id, token)) => reply(&headers, StatusCode::OK, json!({"device_id": device_id, "token": token})),
         Err(refusal) => refused(&headers, refusal),
     }
+}
+
+async fn connect_state(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    let headers = req.headers().clone();
+    if let Err(mut response) = owner_gate(&st, peer, &req).await {
+        cors(&headers, response.headers_mut());
+        return response;
+    }
+    reply(&headers, StatusCode::OK, json!(st.connect_supervisor.status()))
+}
+
+fn finished(st: &AppState, headers: &HeaderMap, outcome: Result<Result<(), ConnectError>, tokio::task::JoinError>) -> Response {
+    match outcome {
+        Ok(Ok(())) => reply(headers, StatusCode::OK, json!(st.connect_supervisor.status())),
+        Ok(Err(failure)) => error(headers, failure.status, failure.code, &failure.msg),
+        Err(_) => error(headers, StatusCode::INTERNAL_SERVER_ERROR, "connect_start_failed", "a operação do Connect foi interrompida"),
+    }
+}
+
+/// Em tarefa própria: o serviço troca a chave ao registrar, e cliente que desiste no meio a perderia.
+async fn link(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    let headers = req.headers().clone();
+    if let Some(response) = owner_secret_refusal(&req) {
+        return response;
+    }
+    if let Err(mut response) = owner_gate(&st, peer, &req).await {
+        cors(&headers, response.headers_mut());
+        return response;
+    }
+    let body: LinkRequest = match parse(req).await { Ok(body) => body, Err(response) => return response };
+    let supervisor = st.connect_supervisor.clone();
+    let outcome = tokio::spawn(async move { supervisor.link(body).await }).await;
+    finished(&st, &headers, outcome)
+}
+
+async fn forget(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    let headers = req.headers().clone();
+    if let Some(response) = owner_secret_refusal(&req) {
+        return response;
+    }
+    if let Err(mut response) = owner_gate(&st, peer, &req).await {
+        cors(&headers, response.headers_mut());
+        return response;
+    }
+    let supervisor = st.connect_supervisor.clone();
+    let outcome = tokio::spawn(async move { supervisor.forget().await }).await;
+    finished(&st, &headers, outcome)
 }

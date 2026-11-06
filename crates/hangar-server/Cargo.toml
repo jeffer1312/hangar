@@ -97,6 +97,8 @@ rootcause = "=0.12.1"
 isideload-vfs = "=0.0.1"
 # A senha da Apple ID só em memória, zerada ao sair.
 zeroize = { version = "=1.9.0", features = ["serde"] }
+# Pacotes do frp e do Caddy no Windows (`connect/binaries.rs`); versão e features do isideload.
+zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
