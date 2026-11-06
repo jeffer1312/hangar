@@ -43,7 +43,7 @@ import type { ChatEvent, StateEvent, PreviewEvent, AskQuestionPayload, StatsEven
 import * as m from '../paraglide/messages';
 import { reconcilePending, sameMessage, type PendingMsg } from '../chat/pending';
 import { useServers } from './servers';
-import { deliveredDraft, readDraft, writeDraft, type ConversationDraft } from './drafts';
+import { clearDraft, deliveredDraft, readDraft, writeDraft, type ConversationDraft } from './drafts';
 import { sendWithDelivery, type DeliveryFeedback, type QueueSendMode } from '../chat/queueDelivery';
 
 // Store vivo do chat de UMA sessão — porte do núcleo de frontend/src/screens/Chat.svelte
@@ -202,6 +202,8 @@ function criarChatStore(serverId: string, name: string): ChatApi {
   let foreground = foregroundAtual;
   // Com base carregada a volta pede só a cauda; sem ela (primeira carga falhou, reset) recarrega tudo.
   let baseLoaded = false;
+  // Conversa trocada: os ids guardados por envio anterior a isto eram da outra.
+  let resetAt = 0;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   // Conexão aberta sem o evento `queue` no retrato (a sessão voltou ao Python): a lista antiga do servidor sai.
   let queueAbsentTimer: ReturnType<typeof setTimeout> | undefined;
@@ -328,15 +330,14 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     if (!draft || !sent || sent.status !== 'unknown' || sent.startedAt === undefined) return false;
     // Folga para o relógio do celular adiantado em relação ao servidor.
     const since = sent.startedAt / 1000 - 30;
-    // A fala do Claude vem sem horário (só a entrega pela fila tem): só vale com o histórico já carregado no envio,
-    // quando a igual de antes está em seenIds; o histórico mais antigo nunca passa por aqui.
+    // A fala do Claude vem sem horário (só a entrega pela fila tem): vale quando o envio marcou `untimed`, com a igual
+    // de antes em seenIds, e na mesma conversa; o histórico mais antigo nunca passa por aqui.
     const arrived = events.some((e) => e.kind === 'user_msg' && !e.id.startsWith('queued-') && !sent.seenIds?.includes(e.id)
-      && (e.ts == null ? !!sent.seenIds : e.ts >= since) && !!e.text && sameMessage(sent.text, e.text));
+      && (e.ts == null ? !!sent.untimed && sent.startedAt! > resetAt : e.ts >= since) && !!e.text && sameMessage(sent.text, e.text));
     if (!arrived) return false;
     // Sem gravar, o aviso fica: é o lado seguro.
-    try { writeDraft(serverId, name, deliveredDraft(draft)); } catch { return false; }
+    try { settleDelivered(serverId, name, draft); } catch { return false; }
     confirmedSend = sent.text;
-    useChatStore.setState((s) => ({ draftUpdate: s.draftUpdate + 1 }));
     return true;
   }
 
@@ -747,6 +748,7 @@ function criarChatStore(serverId: string, name: string): ChatApi {
       lastEventId = null;
       etag = null;
       baseLoaded = false;
+      resetAt = Date.now();
       retiredQueuedIds.clear();
       prevState = null;
       previewMd = false;
@@ -1052,6 +1054,23 @@ function criarChatStore(serverId: string, name: string): ChatApi {
   };
 }
 
+// Envio incerto dado por entregue (pela conversa ou pela pessoa). Falha ao gravar sobe, e o aviso fica.
+export function settleDelivered(serverId: string, name: string, draft: ConversationDraft): void {
+  const next = deliveredDraft(draft);
+  if (!next.text && !next.attachments.length && !next.recordings?.length) clearDraft(serverId, name);
+  else writeDraft(serverId, name, next);
+  const dropped = draft.attachments.filter((a) => !next.attachments.some((x) => x.uri === a.uri)).map((a) => a.uri);
+  // Import tardio: o sistema de arquivos só entra quando há cópia a soltar, com ou sem o Composer montado.
+  if (dropped.length) {
+    void import('../chat/draftAttachments').then(({ removeDraftAttachment }) => {
+      for (const uri of dropped) {
+        try { removeDraftAttachment(uri); } catch { /* sobra só um arquivo órfão */ }
+      }
+    }).catch(() => {});
+  }
+  chatStore(serverId, name).use.setState((s) => ({ draftUpdate: s.draftUpdate + 1 }));
+}
+
 function isInputRejected(error: unknown): boolean {
   const status = (error as { status?: number } | null)?.status;
   return typeof status === 'number' && status >= 400 && status < 500 && status !== 408;
@@ -1076,13 +1095,13 @@ export async function submitConversationDraft(serverId: string, name: string, te
     const store = chatStore(serverId, name);
     const live = store.use.getState();
     const same = (t: string | undefined) => !!t && sameMessage(text, t);
-    // Um envio igual ainda a caminho ecoaria sem horário como se fosse este: sem seenIds, só o horário confirma.
+    // Um envio igual ainda a caminho ecoaria sem horário como se fosse este: aí só o horário confirma.
     // No reenvio do incerto, o igual a caminho é a mesma mensagem, e o eco dele vale.
     const ambiguous = current.submission?.status !== 'unknown' && (live.pending.some((p) => same(p.text))
       || currentQueuePanel(live.queuePanel, live.events).entries.some((q) => same(q.text)));
-    const seenIds = store.historyLoaded() && !ambiguous ? live.events
-      .filter((e) => e.kind === 'user_msg' && same(e.text)).map((e) => e.id) : undefined;
+    const seenIds = live.events.filter((e) => e.kind === 'user_msg' && same(e.text)).map((e) => e.id);
     const submission = { text, draftRevision: draftRevision ?? current.revision, status: 'sending' as const, startedAt: Date.now(), seenIds,
+      ...(store.historyLoaded() && !ambiguous ? { untimed: true } : {}),
       ...(fromField ? { typed: current.text } : {}),
       ...(fromField && current.recordings?.length ? { recordingIds: current.recordings.map((r) => r.id) } : {}) };
     // A fila já mostra a mensagem: texto e áudios enviados saem do campo antes da resposta.

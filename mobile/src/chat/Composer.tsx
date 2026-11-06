@@ -8,10 +8,10 @@ import type { CommandInfo, MotivoFim, Provider, QueueEdit, QueuePanel as QueuePa
 import { ComposerActions, ComposerBox, ComposerInput } from './ComposerField';
 import { Icon } from '../ui/Icon';
 import * as m from '../paraglide/messages';
-import { chatStore, filaCount as filaCountOf, submitConversationDraft, isSubmitting } from '../stores/chat';
+import { chatStore, filaCount as filaCountOf, submitConversationDraft, isSubmitting, settleDelivered } from '../stores/chat';
 import { abandonUnknownAttempt, attachInsert, confirmFirstInput, firstInputMessage, readFirstInput, sendFirstInput, useNewConversation, withAttach } from '../stores/newConversation';
 import { useSessions } from '../stores/sessions';
-import { clearDraft, clearRecoverableDraft, deliveredDraft, readDraft, readRecoverableDraft, resolveDraftTranscript, removeDraftRecording, reusableUploadPath, withoutUpload, writeDraft, writeRecoverableDraft, clearDictation, readDictation, writeDictation, recoverDictation, applyReadyDictation, associateDictationTranscript, type ConversationDraft, type DraftAttachment, type DictationDraft, type UploadTarget } from '../stores/drafts';
+import { clearDraft, clearRecoverableDraft, readDraft, readRecoverableDraft, resolveDraftTranscript, removeDraftRecording, reusableUploadPath, withoutUpload, writeDraft, writeRecoverableDraft, clearDictation, readDictation, writeDictation, recoverDictation, applyReadyDictation, associateDictationTranscript, type ConversationDraft, type DraftAttachment, type DictationDraft, type UploadTarget } from '../stores/drafts';
 import { useServers } from '../stores/servers';
 import { revealOnSend } from '../features/sessions/revealOnSend';
 import { removeDraftAttachment, retainDraftAttachment } from './draftAttachments';
@@ -347,19 +347,26 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     try {
       setDictation(readDictation(origin.serverId, origin.name));
       const latest = readDraft(origin.serverId, origin.name);
+      const prior = draftRef.current;
+      // Envio incerto dado por entregue: o erro da queda sai da tela.
+      const delivered = prior?.submission?.status === 'unknown' && !latest?.submission;
+      if (delivered) setError((current) => (current === m.chat_envio_incerto() ? '' : current));
       if (!latest) {
         setPendingAttachments([]);
         setRecordings([]);
+        // A entrega deixou o rascunho vazio e o apagou: o aviso sai, e o texto devolvido também se ninguém o mexeu.
+        if (delivered && prior) {
+          if (textRef.current === prior.text) {
+            textRef.current = '';
+            setText('');
+          }
+          draftRef.current = null;
+          setSubmission(null);
+        }
         return;
       }
       if (latest.transcript && transcriptRef.current && latest.transcript !== transcriptRef.current) return;
       const unchanged = textRef.current === (draftRef.current?.text ?? '');
-      const prior = draftRef.current;
-      // Envio incerto que a conversa confirmou: os anexos dele saíram do rascunho, e o erro da queda sai da tela.
-      if (prior?.submission?.status === 'unknown' && !latest.submission) {
-        for (const a of prior.attachments) if (!latest.attachments.some((x) => x.uri === a.uri)) dropCopy(a.uri);
-        setError((current) => (current === m.chat_envio_incerto() ? '' : current));
-      }
       draftRef.current = latest;
       setRecordings(latest.recordings ?? []);
       setSubmission(latest.submission);
@@ -407,12 +414,11 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     try {
       const latest = readDraft(origin.serverId, origin.name);
       if (latest?.submission?.status !== 'unknown') return;
-      writeDraft(origin.serverId, origin.name, deliveredDraft(latest));
-      chat.use.setState((s) => ({ draftUpdate: s.draftUpdate + 1 }));
+      settleDelivered(origin.serverId, origin.name, latest);
     } catch (e) {
       setDraftIssue(e instanceof Error ? e.message : m.draft_write_error());
     }
-  }, [origin, chat]);
+  }, [origin]);
 
   // null → caminho é a primeira confirmação (Codex iniciando); caminho → outro é sessão recriada.
   useEffect(() => {

@@ -1919,7 +1919,7 @@ describe('envio incerto que a conversa confirma', () => {
     await expect(chat.send('como está?')).rejects.toThrow(m.chat_envio_incerto());
     expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'como está?', submission: { status: 'unknown' } });
     created[0].trigger('message', JSON.stringify(ev({ id: 'u:1', text: 'como está?', ts: agora() })));
-    expect(readDraft('srv1', 'sess')).toMatchObject({ text: '', submission: null });
+    expect(readDraft('srv1', 'sess')).toBeNull();
   });
 
   test('fala do Claude sem horário, que chega na volta do fundo, confirma o envio', async () => {
@@ -1930,7 +1930,7 @@ describe('envio incerto que a conversa confirma', () => {
     await tick();
     await expect(chat.send('Chegou sim, tem um monte  de e-mail aqui')).rejects.toThrow(m.chat_envio_incerto());
     created[0].trigger('message', JSON.stringify(ev({ id: 'b9a55066', text: 'Chegou sim, tem um monte  de e-mail aqui', ts: null })));
-    expect(readDraft('srv1', 'sess')).toMatchObject({ text: '', submission: null });
+    expect(readDraft('srv1', 'sess')).toBeNull();
   });
 
   test('fala sem horário igual que já estava na conversa não confirma', async () => {
@@ -1974,6 +1974,31 @@ describe('envio incerto que a conversa confirma', () => {
     expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'sim', submission: { status: 'unknown' } });
   });
 
+  test('envio igual a caminho: a mensagem com horário que já estava na conversa segue sem confirmar', async () => {
+    historyResponses = [[ev({ id: 'u:ok', text: 'ok', ts: agora() })]];
+    stubInput(async () => { throw new TypeError('Network request failed'); });
+    const chat = chatStore('srv1', 'sess');
+    chat.retain();
+    await tick();
+    chat.use.setState({ pending: [{ id: 'pending-anterior', text: 'ok' }] });
+    await expect(chat.send('ok')).rejects.toThrow(m.chat_envio_incerto());
+    created[0].trigger('message', JSON.stringify(ev({ id: 'u:ok', text: 'ok', ts: agora() })));
+    expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'ok', submission: { status: 'unknown' } });
+  });
+
+  test('conversa trocada depois do envio: fala sem horário da outra não confirma', async () => {
+    historyResponses = [[], [ev({ id: 'outra:sim', text: 'sim', ts: null })]];
+    stubInput(async () => { throw new TypeError('Network request failed'); });
+    const chat = chatStore('srv1', 'sess');
+    chat.retain();
+    await tick();
+    await expect(chat.send('sim')).rejects.toThrow(m.chat_envio_incerto());
+    created[0].trigger('reset', '{}');
+    await tick();
+    expect(chat.use.getState().events.map((e) => e.id)).toContain('outra:sim');
+    expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'sim', submission: { status: 'unknown' } });
+  });
+
   test('reenvio do incerto se confirma pela fala sem horário', async () => {
     historyResponses = [[]];
     stubInput(async () => { throw new TypeError('Network request failed'); });
@@ -1983,7 +2008,7 @@ describe('envio incerto que a conversa confirma', () => {
     await expect(chat.send('sim')).rejects.toThrow(m.chat_envio_incerto());
     await expect(chat.send('sim')).rejects.toThrow(m.chat_envio_incerto());
     created[0].trigger('message', JSON.stringify(ev({ id: 'u:sim', text: 'sim', ts: null })));
-    expect(readDraft('srv1', 'sess')).toMatchObject({ text: '', submission: null });
+    expect(readDraft('srv1', 'sess')).toBeNull();
   });
 
   test('mensagem igual de antes do envio não confirma', async () => {
@@ -2041,6 +2066,6 @@ describe('envio incerto que a conversa confirma', () => {
     created[0].trigger('message', JSON.stringify(ev({ id: 'u:1', text: 'como está?', ts: agora() })));
     fail!(new TypeError('Network request failed'));
     await expect(sending).resolves.toBeUndefined();
-    expect(readDraft('srv1', 'sess')).toMatchObject({ text: '', submission: null });
+    expect(readDraft('srv1', 'sess')).toBeNull();
   });
 });
