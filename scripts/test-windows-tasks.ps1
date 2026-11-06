@@ -47,10 +47,12 @@ function Reset-State {
     $script:frozenLastRun = $false
     $script:listening = $false
     $script:noPort = $false
+    $script:healthy = $false
     $script:phantomStarts = 0
     $script:migrated = $true
     $script:tableReads = 0
     $script:stopFails = $false
+    $script:exitsBeforeStop = $null
     $script:tableFails = $false
     $script:processRows = $rows
     $script:lastRun = $old
@@ -77,9 +79,17 @@ function Get-NetTCPConnection { param($State, $LocalPort, $ErrorAction)
     if ($script:events.Count -and $script:slowRelease -gt 0) { $script:slowRelease--; return @{ OwningProcess = 777 } }
     if ($script:owner) { return @{ OwningProcess = $script:owner } }
 }
+function Test-HangarHealth { param($port) return $script:healthy }
 function Get-Process { param($Id, $ErrorAction) return $script:live[[int]$Id] }
 function Stop-Process { param($InputObject, [switch]$Force, $ErrorAction)
     if ($script:stopFails) { throw 'Acesso negado' }
+    if ($script:exitsBeforeStop -eq $InputObject.Id) {
+        $script:live.Remove([int]$InputObject.Id)
+        if ($script:owner -eq $InputObject.Id) { $script:owner = $null }
+        if (-not $script:live.Count -and -not $script:stuckLauncher) { $script:task.State = 'Ready' }
+        $InputObject | Add-Member -NotePropertyName HasExited -NotePropertyValue $true -Force
+        throw [InvalidOperationException]'Process has exited, so the requested information is not available.'
+    }
     $script:events += "stop:$($InputObject.Id)"
     $script:live.Remove([int]$InputObject.Id)
     if ($script:owner -eq $InputObject.Id) { $script:owner = $null }
@@ -131,6 +141,29 @@ try {
     $failed = $null
     try { Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' } catch { $failed = "$_" }
     Assert ($failed -match 'nao iniciou') "Inicio que nunca deixou processo passou por reiniciado: $failed"
+    # O hangar-server sai sozinho com o Python dele: sumir antes da parada nao pode cancelar o inicio.
+    Reset-State
+    $script:exitsBeforeStop = 11
+    Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' | Out-Null
+    Assert ('start' -in $script:events) "Processo que saiu antes da parada cancelou o inicio: $($script:events -join ',')"
+    # Saiu antes da conferencia de identidade: o StartTime ilegivel tambem conta como parado.
+    Reset-State
+    $gone = [pscustomobject]@{ Id = 11; HasExited = $true }
+    $gone | Add-Member ScriptProperty StartTime {
+        $script:live.Remove(11); $script:owner = $null
+        if (-not $script:live.Count) { $script:task.State = 'Ready' }
+        throw [InvalidOperationException]'Process has exited, so the requested information is not available.'
+    }
+    $gone | Add-Member ScriptMethod WaitForExit { param($timeout) return $true }
+    $script:live[11] = $gone
+    Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' | Out-Null
+    Assert ('start' -in $script:events) "Processo que saiu antes da conferencia cancelou o inicio: $($script:events -join ',')"
+    # Lista de portas vazia com o servidor de pe: a saude do hangar-server prova a subida.
+    Reset-State
+    $script:phantomStarts = 99
+    $script:healthy = $true
+    $trail = @(Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend')
+    Assert (@($script:events | Where-Object { $_ -eq 'start' }).Count -eq 1 -and $trail[0] -match 'porta=sim') "Servidor de pe com a lista de portas vazia virou falha: $($trail -join ' | ')"
     Reset-State
     $script:noPort = $true
     Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' | Out-Null

@@ -78,6 +78,7 @@ enum Message {
     Pane {op:PaneOp,start_by:std::time::Instant,response:oneshot::Sender<Result<PaneReply,RuntimeError>>},
     Snapshot(oneshot::Sender<Result<Value,RuntimeError>>),Drain(oneshot::Sender<Result<Value,RuntimeError>>),
     Confirm(oneshot::Sender<Result<Value,RuntimeError>>),Stop(oneshot::Sender<Result<(),RuntimeError>>),
+    Transcript(PathBuf,oneshot::Sender<()>),
 }
 type ActorTask=Arc<Mutex<Option<tokio::task::JoinHandle<Result<(),RuntimeError>>>>>;
 #[derive(Clone)]
@@ -120,6 +121,11 @@ impl TerminalHandle {
     pub async fn snapshot(&self)->Result<Value,RuntimeError> {self.query("snapshot").await}
     pub async fn drain(&self)->Result<Value,RuntimeError> {self.query("drain").await}
     pub async fn confirm(&self)->Result<Value,RuntimeError> {self.query("confirm").await}
+    pub async fn follow_transcript(&self,path:PathBuf)->Result<(),RuntimeError> {
+        let (send,receive)=oneshot::channel();
+        self.sender.send(Message::Transcript(path,send)).await.map_err(|_|error("runtime_closed"))?;
+        receive.await.map_err(|_|error("runtime_closed"))
+    }
     pub async fn ensure_projection(&self)->Result<Value,RuntimeError> {self.queue(format!("terminal-projection:{}",sample().epoch_s),Action::EnsureProjection).await}
     pub async fn stop(&self)->Result<(),RuntimeError> {
         let mut stopped=self.stopped.lock().await; if let Some(result)=&*stopped {return result.clone();}
@@ -666,6 +672,7 @@ impl Executor {
                 Some(Message::Confirm(response))=>{let result=self.confirm_rows().await;
                     if let Err(failure)=&result {self.enter_error(failure.clone()).await?;}else{self.clear_maintenance_error("receipt_scan").await?;}
                     let _=response.send(result);},
+                Some(Message::Transcript(path,response))=>{self.target.transcript=path; let _=response.send(());},
                 Some(Message::Stop(response))=>{
                     closed.store(true,Ordering::Release);
                     self.refuse_parked();

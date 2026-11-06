@@ -625,7 +625,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   completo, compactado, num segundo envio que o worker grava sem abrir. Motivo e invariante em
   [plataforma.md](docs/decisoes/plataforma.md#reportar-problema-o-pacote-de-diagnóstico-vai-ao-dono-27102026).
   Exceção única ao "só contagem": quando um reinício não volta (atualização, a volta dela ou
-  reinício avulso), o executor grava como `update: saída`, com `scrub`, tudo o que explica a falha:
+  reinício avulso) ou um passo de máquina da atualização falha, o executor grava como `update: saída`, com `scrub`, tudo o que explica a falha:
   tempo de cada etapa, cada mudança na resposta da saúde, a saída da versão nova reduzida
   (`startup_output::lines`: traceback, lançador, uvicorn e aviso/erro inteiros; INFO só nível e
   logger) e o retrato do fim do prazo (lançador, pacote, processos do Hangar, tarefa ou unit, porta).

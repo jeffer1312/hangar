@@ -196,11 +196,11 @@ pub(super) fn groups(entries: Vec<(Target, &SessionInfo)>, ids: &HashMap<String,
         } else { group.members.push(target); }
     }
     for (group, hint) in out.iter_mut().zip(hints) {
+        // Parceiro em máquina que esta barra não mostra: sobra um membro, que é aba solta, sem a pilha estreita do grupo.
+        if group.members.len() < 2 { group.mother = false; group.label = None; continue; }
         if group.label.as_ref().is_some_and(|s| s.is_empty()) {
             group.label = Some(group.members.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", "));
         }
-        // Parceiro em máquina que esta barra não mostra: sobra um membro, que é aba solta, sem a pilha estreita do grupo.
-        if group.members.len() < 2 { group.mother = false; group.label = None; continue; }
         let openers = &hint.openers;
         let at = |t: &Target| group.members.iter().position(|m| m == t);
         // Numa cadeia (A abriu B, B abriu C) a mãe é a do topo: quem abriu e não foi aberta por ninguém do grupo.
@@ -660,8 +660,6 @@ impl Hangar {
         let remote = target.server != self.active_key();
         let host = self.server_label(cx);
         let machine = self.server_entry(&target.server).map(|s| s.label.as_str()).unwrap_or(&host);
-        // Aba solta de sessão pareada (o par está numa máquina fora da barra) ainda mostra a tarefa do grupo.
-        let group_label = group_label.or_else(|| slot.is_none().then(|| session.pair_task.as_deref().map(str::trim).filter(|s| !s.is_empty())).flatten());
         let compact = slot.is_some() && group_label.is_none();
         let grouped = slot.is_some();
         let state = if session.limited == Some(true) { "limited" } else { session.state.as_str() };

@@ -264,6 +264,22 @@ async fn a_machine_that_holds_a_vault_cannot_point_to_another_owner() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_peer_without_a_vault_cannot_become_the_owner() {
+    use reqwest::Method;
+    let windows = Router::new().route("/api/vault/status", get(|| async { js(200, json!({"role": "none", "state": "absent"})) }));
+    let srv = machine(serve_app(windows).await).await;
+    let (status, body) = srv.call(Method::PUT, "/api/vault/config", Some(json!({"owner": "lab"}))).await;
+    assert_eq!((status, body["detail"]["code"].clone()), (409, json!("erro_cofre_dona_sem_cofre")));
+    assert!(!config::path(&srv.hangar()).exists(), "a recusa gravou o vault.json");
+
+    // Fora do ar também não vira dona: não dá para saber se ela guarda um cofre.
+    std::fs::write(srv.dir.path().join("peers.json"), json!({"lab": {"base_url": format!("http://{}", closed_port()), "token": TOKEN}}).to_string()).unwrap();
+    let (status, body) = srv.call(Method::PUT, "/api/vault/config", Some(json!({"owner": "lab"}))).await;
+    assert_eq!((status, body["detail"]["code"].clone()), (502, json!("erro_cofre_dona_fora")));
+    assert!(!config::path(&srv.hangar()).exists(), "a recusa gravou o vault.json");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn config_checks_the_peer_and_keeps_the_backup_peer() {
     use reqwest::Method;
     let srv = machine(serve_app(fake_owner_app(Arc::default())).await).await;
