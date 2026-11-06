@@ -2255,7 +2255,7 @@ if ($registrou) {
         # (exit 1, bloco vermelho do hook dizendo "A ATUALIZACAO NAO RODOU") quando o backend so
         # estava alguns segundos atrasado.
         foreach ($i in 1..40) {
-            if (Get-NetTCPConnection -State Listen -LocalPort $portaBack -ErrorAction SilentlyContinue) { $subiu = $true; break }
+            if (Test-HangarPortOpen $portaBack) { $subiu = $true; break }
             Start-Sleep -Seconds 1
         }
         # Passados os 40s, "nao subiu" e "esta demorando" nao sao a mesma coisa, e o instalador
@@ -2275,7 +2275,7 @@ if ($registrou) {
             $ocioso = 0
             $avisou = $false
             foreach ($i in 1..$extraMax) {
-                if (Get-NetTCPConnection -State Listen -LocalPort $portaBack -ErrorAction SilentlyContinue) { $subiu = $true; break }
+                if (Test-HangarPortOpen $portaBack) { $subiu = $true; break }
                 $tam = (Get-LogBackend).LastWriteTimeUtc
                 if ($tam -gt $tamAnt) {
                     if (-not $avisou) { Nota 'o backend ainda esta subindo (primeira subida faz uv sync e passos de atualizacao)'; $avisou = $true }
@@ -2898,8 +2898,8 @@ if ($pacote -and -not $Update -and -not $pacoteNovo) {
 # -- Confere e entrega o acesso -----------------------------------------------
 # CONFERE, nao anuncia — mesma regra do `Pronto` condicional. So quando ha tarefa registrada: quem
 # recusou o passo 7 nao deve esperar 20s por algo que ninguem pediu pra subir.
-# Nao repete o poll: $subiu ja e o resultado do mesmo `Get-NetTCPConnection -State Listen
-# -LocalPort $portaBack` la em cima (install.ps1:906-911), so mesmo $registrou/$jaAgendado - um
+# Nao repete o poll: $subiu ja e o resultado do mesmo `Test-HangarPortOpen $portaBack` la em cima
+# (lista de portas, com a saude do hangar-server quando ela vem vazia), so mesmo $registrou/$jaAgendado - um
 # segundo loop pagaria os mesmos ate ~40s de novo e imprimiria uma segunda mensagem (Ok/Erro) sobre o
 # MESMO fato que o Ok/Falta de la em cima ja anunciou. $subiu so alimentava a tela; aqui ele passa
 # a alimentar $pendencias tambem, que e o que falta pro gate do fim do script barrar de verdade.

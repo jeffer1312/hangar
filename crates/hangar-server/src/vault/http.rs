@@ -219,6 +219,13 @@ pub async fn config(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
                     break 'r fail(StatusCode::CONFLICT, "erro_cofre_ja_e_dona", "esta máquina já guarda um cofre; outra não pode ser a dona");
                 }
                 if let Err(resp) = known_peer(&st, &id) { break 'r resp; }
+                // Só vira dona quem responde agora com um cofre: no Windows nem pode haver um, e
+                // peers.json torto ou máquina fora do ar deixariam esta sem senhas do mesmo jeito.
+                match (Remote { peers: &st.peers, owner: &id }).status().await {
+                    Ok(Status { role: Role::Owner, .. }) => {}
+                    Ok(_) => break 'r fail(StatusCode::CONFLICT, "erro_cofre_dona_sem_cofre", "a máquina escolhida não guarda cofre"),
+                    Err(error) => break 'r remote_failure(&id, error),
+                }
                 cfg.owner = Some(id);
             }
             Some(None) => cfg.owner = None,

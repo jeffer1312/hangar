@@ -94,7 +94,7 @@ impl Service {
                 let helper = quote(&self.root.join("scripts/windows-tasks.ps1"));
                 let root = quote(&self.root);
                 let front = self.frontend_port();
-                let command = format!(". '{helper}'; Restart-HangarTasks '{root}' {port} {front}");
+                let command = crate::update::restart::guarded_ps(&format!(". '{helper}'; Restart-HangarTasks '{root}' {port} {front}"));
                 let output = self.command(
                     &[
                         "powershell",

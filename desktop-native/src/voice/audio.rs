@@ -80,11 +80,11 @@ pub(crate) fn connected_tone() -> Vec<f32> { two_notes(660.0, 880.0) }
 /// Sinal de que a resposta travou: as mesmas notas descendo.
 pub(crate) fn stalled_tone() -> Vec<f32> { two_notes(880.0, 660.0) }
 
-/// Passa da reserva inicial, que só toca o que a alcança, e termina em silêncio.
+/// Passa da maior reserva, que só toca o que a alcança, e termina em silêncio.
 fn two_notes(first: f32, second: f32) -> Vec<f32> {
     const NOTE: usize = RATE as usize * 110 / 1000;
     const GAP: usize = RATE as usize * 40 / 1000;
-    const TOTAL: usize = RATE as usize * 320 / 1000;
+    const TOTAL: usize = RATE as usize * 460 / 1000;
     const FADE: usize = RATE as usize * 8 / 1000;
     let note = |hz: f32| (0..NOTE).map(move |i| {
         let fade = (i.min(NOTE - 1 - i) as f32 / FADE as f32).min(1.0);
@@ -172,7 +172,8 @@ impl Shared {
     fn play(&self, samples: &[f32]) { if !self.pause.hold(samples) { self.enqueue(samples); } }
 
     fn refill(&self) {
-        if self.pause.alert.swap(false, Ordering::Relaxed) { self.enqueue(&stalled_tone()); }
+        // Pausada, o som sairia só na retomada, com o travamento já resolvido: a tela é quem avisa.
+        if self.pause.alert.swap(false, Ordering::Relaxed) && !self.pause.is_paused() { self.enqueue(&stalled_tone()); }
         let queued = self.playback.lock().unwrap().len();
         let samples = self.pause.release(queued);
         if !samples.is_empty() { self.enqueue(&samples); }
@@ -564,12 +565,17 @@ mod tests {
         assert_eq!(shared.playback.lock().unwrap().len(), stalled_tone().len());
         shared.refill();
         assert_eq!(shared.playback.lock().unwrap().len(), stalled_tone().len(), "um pedido, um som");
+        pause.set(true);
+        shared.playback.lock().unwrap().clear();
+        pause.request_alert();
+        shared.refill();
+        assert!(shared.playback.lock().unwrap().is_empty(), "pausada, o som não fica para a retomada");
     }
 
     #[test]
     fn the_connected_tone_passes_the_reserve_and_ends_in_silence() {
         let tone = connected_tone();
-        assert!(tone.len() > PRIME_SAMPLES, "abaixo da reserva o som nunca tocaria");
+        assert!(tone.len() > PRIME_MAX, "abaixo da reserva o som nunca tocaria");
         assert!(tone.iter().all(|s| s.abs() <= 0.18));
         assert!(tone[tone.len() - FRAME..].iter().all(|s| *s == 0.0), "fim sem voz não conta como corte");
     }

@@ -5,11 +5,11 @@ use std::{cell::Cell, time::{Duration, Instant}};
 use gpui_kit::{component::button::*, prelude::FluentBuilder, *};
 use crate::{app, i18n::tr, theme};
 
-const CYCLE: f32 = 6.;
+pub(super) const CYCLE: f32 = 6.;
 /// O cartão entra deslizando em `SLIDE_STEPS` degraus de `SLIDE_STEP`.
 const CARD: f32 = 0.6;
 const SLIDE_STEP: f32 = 0.05;
-const SLIDE_STEPS: u8 = 3;
+pub(super) const SLIDE_STEPS: u8 = 3;
 /// O Permitir é apertado e fica em destaque.
 const PRESS: f32 = 2.8;
 /// O cartão some e o resultado aparece.
@@ -17,7 +17,7 @@ const RESOLVED: f32 = 3.6;
 
 /// Quadro do roteiro no instante `t` do ciclo: o degrau do cartão (0 entrando, `SLIDE_STEPS` parado), o Permitir em
 /// destaque e se o resultado já apareceu.
-fn frame(t: f32) -> (Option<u8>, bool, bool) {
+pub(super) fn frame(t: f32) -> (Option<u8>, bool, bool) {
     let card = (t >= CARD && t < RESOLVED).then(|| (((t - CARD) / SLIDE_STEP).floor() as u8).min(SLIDE_STEPS));
     (card, t >= PRESS && t < RESOLVED, t >= RESOLVED)
 }
@@ -34,7 +34,7 @@ thread_local! {
 }
 
 /// Redesenha a janela no próximo degrau. Só é marcado enquanto a animação é desenhada: fechou o modal, para.
-fn schedule_repaint(t: f32, window: &mut Window, cx: &mut App) {
+pub(super) fn schedule_repaint(t: f32, window: &mut Window, cx: &mut App) {
     // Margem para o timer não acordar um pouco antes do degrau e desenhar o quadro velho.
     let at = Instant::now() + Duration::from_secs_f32(until_next_step(t)) + Duration::from_millis(5);
     if NEXT_REPAINT.get().is_some_and(|next| next > Instant::now() && next <= at) { return; }

@@ -140,6 +140,9 @@ export default function Cofre() {
                 <MachineRow title={m.vault_app_owner_is({ owner: status.owner ?? '?' })} value={state ? STATE[state]() : undefined}
                   valueTone={state === 'open' ? 'success' : 'error'} />
                 <MachineRow title={m.vault_app_owner_change()} disabled={busy} onPress={() => setSheet('owner')} />
+                {/* Dona que não guarda cofre não tem senhas a perder: criar aqui é a saída. */}
+                {state === 'absent' ? <MachineRow title={m.vault_app_owner_self()} description={m.vault_app_owner_self_help()}
+                  action disabled={busy} onPress={becomeOwner} /> : null}
               </>
               : <>
                 <MachineRow title={m.vault_app_owner_self()} description={m.vault_app_owner_self_help()} action disabled={busy} onPress={becomeOwner} />
@@ -191,7 +194,8 @@ export default function Cofre() {
         onClose={() => setEditing(null)} onChanged={load} /> : null}
       {server && sheet === 'owner' ? <VaultPeerSheet server={server} title={m.vault_app_owner_choose()}
         help={m.vault_app_owner_choose_help({ server: server.label })} current={status?.owner}
-        onPick={async (id) => { if (id) { await putVaultConfig(server, { owner: id }); toast.ok(m.vault_app_owner_saved()); load(); } }}
+        noneLabel={status?.role === 'remote' ? m.vault_app_owner_none() : undefined}
+        onPick={async (id) => { await putVaultConfig(server, { owner: id }); toast.ok(m.vault_app_owner_saved()); load(); }}
         onClose={() => setSheet(null)} /> : null}
       {server && sheet === 'backup' ? <VaultPeerSheet server={server} title={m.vault_app_backup_peer()}
         help={m.vault_app_backup_peer_help()} current={backup?.peer ?? null} noneLabel={m.vault_app_backup_none()}

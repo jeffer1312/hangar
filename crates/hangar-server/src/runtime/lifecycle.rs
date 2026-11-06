@@ -195,6 +195,12 @@ pub fn read_native_conversation(config:&std::path::Path,pid:i64)->Result<String,
     if value["pid"].as_i64()!=Some(pid) {return Err(failure("lifecycle_native_binding"));}
     Ok(sid.into())
 }
+pub fn read_native_cwd(config:&std::path::Path,pid:i64)->Option<String> {
+    let raw=std::fs::read(config.join("sessions").join(format!("{pid}.json"))).ok()?;
+    let value:serde_json::Value=serde_json::from_slice(&raw).ok()?;
+    if value["pid"].as_i64()!=Some(pid) {return None;}
+    value["cwd"].as_str().filter(|cwd|!cwd.is_empty()).map(str::to_owned)
+}
 pub fn native_conversation(config:&std::path::Path,pid:i64,birth:f64,procs:&dyn ProcessView)->Result<String,RuntimeError> {
     let before=procs.recipe(pid).map_err(|_|failure("lifecycle_process_read"))?;
     if !crate::terminal_facts::same_birth(before.birth,birth) {return Err(failure("lifecycle_process_changed"));}

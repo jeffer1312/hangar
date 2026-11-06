@@ -8,7 +8,7 @@ use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc, RtcConfig,
 const CONNECT_DEADLINE: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy)]
-pub enum RtcError { Network, Answer, Media, Microphone, Speaker }
+pub enum RtcError { Network, Answer, Media, Microphone, Speaker, Reconnect }
 
 pub enum RtcEvent { Connected, Closed, Levels(f32, f32), Failed(RtcError) }
 
@@ -160,7 +160,7 @@ fn drive(offer: Offer, answer: String, muted: Arc<AtomicBool>, pause: Arc<Speech
         window.loop_max_ms = window.loop_max_ms.max(now.duration_since(loop_top).as_millis() as u32);
         loop_top = now;
         if stop.load(Ordering::Relaxed) { break Ok(()); }
-        if pause.take_reconnect() { log("rtc reconnect requested"); break Err(RtcError::Media); }
+        if pause.take_reconnect() { log("rtc reconnect requested"); break Err(RtcError::Reconnect); }
         // Ninguém ouve mais: sem isto o microfone ficaria aberto.
         if events.is_closed() { break Err(RtcError::Network); }
         if !connected && started.elapsed() > CONNECT_DEADLINE { break Err(RtcError::Network); }

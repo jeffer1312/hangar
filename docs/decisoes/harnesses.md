@@ -9,6 +9,16 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   `kill-session` aceito sai à força, conferido pela identidade, como na reabertura, e o fechamento
   segue normal. Tratar a demora como falha desviava para o fechamento pelo nome, que já não acha o
   transcript: em 05/11/2026, uma conversa de 242 MB foi ao Arquivo sem o nome.
+- **Claude com terminal segue o transcript que mudou de pasta.** `EnterWorktree` e `ExitWorktree`
+  movem o `.jsonl` sem trocar a conversa. Com o arquivo do alvo ausente, a reconciliação do ator
+  acha o novo pela pasta de `sessions/<pid>.json` e avisa o ator vivo; só sem esse registro a busca
+  varre `projects/`, porque transcript ainda não nascido passa por ali a cada tique. O marcador
+  `.hangar-active` não serve: a chave dele é o id da abertura, que o `/clear` não atualiza. Com o
+  registro já em outra conversa, o `/clear` vai primeiro. O transcript não identifica a vida
+  (`same_terminal_life`): quem descreve a sessão por fora pode ter o caminho antigo. Fechar o ator
+  apagaria subagentes e perguntas do plugin. Sem isso, em
+  06/11/2026 a lista, o chat e o recibo de entrega ficaram lendo um arquivo que não existia:
+  `/history` vazio, sem aviso na tela, com o terminal normal.
 - **Evento da CLI do Claude sem terminal escolhe um canal que já existe; nenhum cai calado.** Rótulo
   passageiro para o que some sozinho (nova tentativa da API, hook rodando há mais de 3 s); nota na
   conversa para falha ou mudança que a pessoa precisa saber; faixa só para o erro do turno; diário para
@@ -939,10 +949,11 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   processo da voz sobe com `-c features.instant_interrupt=false`. Custo: "espera" ou correção só entra
   ao fim da resposta. As notas não são adiadas: desligado, não cancelam, e adiar a nota de fala
   repetida duplicaria a resposta. `TurnWatch` (`organizer.rs`) cobre o resto: 20 s sem resposta, a voz
-  avisa; 3 reinícios ou 45 s sem saída (330 s com ferramenta, acima do prazo do `computer`), linha
+  avisa; 3 reinícios ou 90 s sem nenhum item do organizador (330 s com ferramenta, acima do prazo do `computer`), linha
   `organizer stalled`, `stalled` no retrato (aviso na tela, vibração no Expo, som no nativo), interrompe
   e abre um turno sem fala, que não age. Segundo travamento: organizador novo, porque a voz fica presa
-  à thread. O turno velho é interrompido, ferramenta da thread velha é recusada e o contador `reoffer`
+  à thread, com a memória e o modo de agora. Só troca com o turno velho interrompido e sem oferta de
+  áudio pendente; recusa mantém o aviso na tela e tenta de novo. Ferramenta da thread velha é recusada e o contador `reoffer`
   do retrato pede oferta nova ao nativo e ao Expo; é contador, não mensagem, porque cliente antigo
   derruba a chamada com tipo desconhecido. O PWA não reage: a chamada dele acaba por `AudioLostEnded`.
   Garantia do app: tela, vibração, registro e recuperação; a frase falada depende do modelo. Limites a

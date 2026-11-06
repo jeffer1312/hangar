@@ -7,12 +7,12 @@ const PCM_LIMIT: usize = pcm_limit(30 * 60);
 const fn pcm_limit(seconds: u64) -> usize { 16_000 * 2 * seconds as usize }
 const SILENCE: Duration = Duration::from_secs(2);
 const COUNTDOWN: Duration = Duration::from_secs(3);
-const PILL_BARS: usize = 12;
-pub(crate) const PILL_WIDTH: f32 = 72.;
-pub(crate) const PILL_HEIGHT: f32 = 28.;
+pub(crate) const PILL_BARS: usize = 24;
+pub(crate) const PILL_WIDTH: f32 = 180.;
+pub(crate) const PILL_HEIGHT: f32 = 40.;
 const PILL_GAP: f32 = 8.;
 const PILL_BAR_MIN: f32 = 4.;
-const PILL_BAR_MAX: f32 = 16.;
+const PILL_BAR_MAX: f32 = 28.;
 
 /// Altura das barras da pílula: a amostra mais nova no centro, e as velhas saem para as duas pontas.
 fn pill_heights(bars: &std::collections::VecDeque<f32>) -> [f32; PILL_BARS] {
@@ -23,17 +23,19 @@ fn pill_heights(bars: &std::collections::VecDeque<f32>) -> [f32; PILL_BARS] {
     })
 }
 
-/// A pílula da gravação por dado simples: a janela e a miniatura da novidade (`crate::news`) desenham a mesma.
-pub(crate) fn recording_pill(level: f32, bars: &std::collections::VecDeque<f32>) -> AnyElement {
+/// A pílula da gravação por dado simples: a janela e a miniatura da novidade (`crate::news`) desenham a mesma. `shown` são
+/// as barras do centro que cabem na largura dada.
+pub(crate) fn recording_pill(level: f32, bars: &std::collections::VecDeque<f32>, shown: usize) -> AnyElement {
     let radius = px(PILL_HEIGHT / 2.);
+    let heights = pill_heights(bars);
     let pill = div().id("dictation-status").role(Role::Status).aria_label(tr("dictation_active")).size_full()
-        .flex().items_center().justify_center().rounded(radius).border_1().border_color(theme::glass_border())
-        .bg(theme::popup_fill(theme::raised())).shadow(theme::popover_shadow())
+        .flex().items_center().justify_center().rounded(radius).border_1().border_color(theme::accent_focus())
+        .bg(theme::popup_fill(theme::raised()).blend(theme::accent_dim())).shadow(theme::popover_shadow())
         .child(div().id("dictation-level").role(Role::Meter).aria_label(tr("dictation_level"))
             .aria_min_numeric_value(0.).aria_max_numeric_value(100.).aria_numeric_value((level * 100.) as f64)
-            .flex().items_center().gap(px(2.))
-            .children(pill_heights(bars).map(|height| div().flex_shrink_0().w(px(2.)).h(px(height))
-                .rounded(px(1.)).bg(theme::accent()))));
+            .flex().items_center().gap(px(3.))
+            .children(heights[(PILL_BARS - shown) / 2..][..shown].iter().map(|height| div().flex_shrink_0().w(px(3.)).h(px(*height))
+                .rounded(px(1.5)).bg(theme::accent()))));
     if appearance::get().surface_material == appearance::SurfaceMaterial::Glass { chrome::Glass::new(pill, radius).into_any_element() }
     else { pill.into_any_element() }
 }
@@ -1233,7 +1235,7 @@ impl Hangar {
         Some(place.flex().justify_center().child(pill).into_any_element())
     }
 
-    pub(super) fn render_dictation_pill(&self) -> AnyElement { recording_pill(self.dictation.level, &self.dictation.bars) }
+    pub(super) fn render_dictation_pill(&self) -> AnyElement { recording_pill(self.dictation.level, &self.dictation.bars, PILL_BARS) }
 
     /// O microfone, a pílula do estilo (ao lado dele, como no web) e a faixa de estado do ditado, só quando há o que mostrar.
     pub(super) fn render_dictation(&self, readable: bool, cx: &mut Context<Self>) -> (Button, Option<AnyElement>, Option<AnyElement>) {
@@ -1382,10 +1384,11 @@ mod tests {
         let silent = super::pill_heights(&Default::default());
         assert!(silent.iter().all(|height| *height == super::PILL_BAR_MIN), "sem áudio, só os pontos");
         let heights = super::pill_heights(&[0., 0.5, 1.].into_iter().collect());
-        assert_eq!(heights[5], super::PILL_BAR_MAX, "a mais nova no centro");
-        assert_eq!(heights[5], heights[6], "espelhada");
-        assert_eq!(heights[4], heights[7]);
-        assert!(heights[4] < heights[5] && heights[3] < heights[4]);
+        let center = super::PILL_BARS / 2;
+        assert_eq!(heights[center - 1], super::PILL_BAR_MAX, "a mais nova no centro");
+        assert_eq!(heights[center - 1], heights[center], "espelhada");
+        assert_eq!(heights[center - 2], heights[center + 1]);
+        assert!(heights[center - 2] < heights[center - 1] && heights[center - 3] < heights[center - 2]);
         assert_eq!(heights[0], super::PILL_BAR_MIN, "a ponta ainda sem amostra");
     }
 
