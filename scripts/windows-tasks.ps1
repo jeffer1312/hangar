@@ -123,23 +123,32 @@ function Start-HangarTask([string]$name, [int]$port) {
     throw "Tarefa $name nao iniciou depois de 3 tentativas"
 }
 
-# -NoStart: so para (a migracao para o pacote troca o lancador entre parar e subir).
 # Confere a identidade e para o processo. O que saiu sozinho entre a leitura e a parada (o
 # hangar-server sai com o Python dele) conta como parado: o erro dele nao pode cancelar o inicio.
+# Identidade divergente aborta sempre.
 function Stop-HangarCandidate($candidate, $process) {
-    try {
-        # WMI e GetProcessTimes devolvem o nascimento com precisoes diferentes.
-        if (-not $candidate.CreationDate -or
-            [Math]::Abs(($process.StartTime.ToUniversalTime() - $candidate.CreationDate.ToUniversalTime()).Ticks) -ge [TimeSpan]::TicksPerMillisecond) {
-            throw "Identidade do processo $($candidate.ProcessId) mudou; parada cancelada"
-        }
-        Stop-Process -InputObject $process -Force -ErrorAction Stop
-    } catch {
+    try { $started = $process.StartTime }
+    catch {
         $failure = $_
-        $gone = try { $process.HasExited } catch { $false }
-        if (-not $gone) { throw $failure }
+        if (Test-HangarExited $process) { return }
+        throw $failure
+    }
+    # WMI e GetProcessTimes devolvem o nascimento com precisoes diferentes.
+    if (-not $candidate.CreationDate -or
+        [Math]::Abs(($started.ToUniversalTime() - $candidate.CreationDate.ToUniversalTime()).Ticks) -ge [TimeSpan]::TicksPerMillisecond) {
+        throw "Identidade do processo $($candidate.ProcessId) mudou; parada cancelada"
+    }
+    try { Stop-Process -InputObject $process -Force -ErrorAction Stop }
+    catch {
+        $failure = $_
+        if (-not (Test-HangarExited $process)) { throw $failure }
     }
 }
+
+# HasExited ilegivel (processo sem direito de consulta) nao prova que saiu.
+function Test-HangarExited($process) { try { return [bool]$process.HasExited } catch { return $false } }
+
+# -NoStart: so para (a migracao para o pacote troca o lancador entre parar e subir).
 
 function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [switch]$NoStart) {
     $mutex = New-Object Threading.Mutex($false, "Local\HangarRestart-$name")
