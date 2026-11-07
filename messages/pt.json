@@ -5985,7 +5985,6 @@
   "native_settings_page_servers": "Servidores",
   "native_settings_page_sync": "Sincronização",
   "native_settings_page_connect": "Connect",
-  "native_connect_draft": "Rascunho: o Hangar Connect ainda está em construção e não está aberto ao público. Não use por enquanto.",
   "native_connect_intro": "Endereço público deste servidor, sem Tailscale. O tráfego passa pelo servidor do Connect sem ser aberto: a criptografia termina neste computador.",
   "native_connect_link_help": "Entre com a conta do Hangar Connect. Ainda não tem uma? Crie no app do celular.",
   "native_connect_password": "Senha da conta",

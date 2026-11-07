@@ -562,8 +562,6 @@ impl Hangar {
             .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).child(Page::Connect.title()))
             .child(chip(tr("server_scope"), theme::muted(), theme::raised()));
         let mut page = div().flex().flex_col().gap_4().child(title)
-            .child(div().id("connect-draft").role(Role::Alert).text_sm().font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme::danger()).whitespace_normal().child(tr("connect_draft")))
             .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(tr("connect_intro")));
         if self.api.is_none() {
             return page.child(div().text_sm().text_color(theme::muted()).child(tr("settings_offline"))).into_any_element();
