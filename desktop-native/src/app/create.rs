@@ -88,10 +88,15 @@ pub(super) struct Checkout { current: Option<String>, branches: Vec<String>, rem
     /// Branch aberta em outra worktree: o git recusa trocar a pasta para ela.
     #[serde(default)] elsewhere: HashMap<String, Elsewhere>,
     /// Onde a worktree nova desta pasta nasce (sem o nome dela); servidor antigo não manda.
-    #[serde(default)] worktree_parent: Option<String> }
+    #[serde(default)] worktree_parent: Option<String>,
+    /// Só as branches atrás da própria remota; servidor antigo não manda.
+    #[serde(default)] upstreams: HashMap<String, Upstream> }
 
 #[derive(Clone, Debug, Deserialize)]
 pub(super) struct Elsewhere { path: String, #[serde(default)] main: bool }
+
+#[derive(Clone, Debug, Deserialize)]
+pub(super) struct Upstream { upstream: String, ahead: u64, behind: u64 }
 
 /// "em <pasta>" ao lado da branch aberta em outra worktree.
 fn elsewhere_hint(checkout: &Checkout, branch: &str) -> Option<String> {
@@ -107,7 +112,48 @@ fn checkout_of(result: Result<Value, Failure>) -> Result<Option<Checkout>, Strin
     }
 }
 
-fn default_base(c: &Checkout) -> Option<String> { c.current.clone().or_else(|| c.branches.first().cloned()) }
+/// A base padrão da branch nova: a atual ou, com HEAD solto, a primeira local; atrás da remota, parte dela.
+fn default_base(c: &Checkout) -> Option<String> {
+    let base = c.current.clone().or_else(|| c.branches.first().cloned())?;
+    Some(c.upstreams.get(&base).map(|up| up.upstream.clone()).unwrap_or(base))
+}
+
+fn local_branches(c: &Checkout) -> impl Iterator<Item = &String> {
+    c.current.iter().chain(c.branches.iter().filter(|b| c.current.as_ref() != Some(*b)))
+}
+
+/// As bases da lista e quanto cada uma está atrás: a remota vem antes da local atrasada; duas locais podem seguir a mesma.
+fn base_choices(c: &Checkout) -> Vec<(String, u64)> {
+    let mut seen = HashSet::new();
+    local_branches(c).flat_map(|b| {
+        let up = c.upstreams.get(b);
+        up.map(|u| (u.upstream.clone(), 0)).into_iter().chain([(b.clone(), up.map_or(0, |u| u.behind))])
+    }).filter(|(name, _)| seen.insert(name.clone())).collect()
+}
+
+/// O botão "Parte de": a tela e a novidade desenham o mesmo.
+pub(crate) fn base_button(id: &'static str, base: String) -> Button {
+    Button::new(id).outline().small().w_full().label(base).dropdown_caret(true)
+}
+
+/// Uma base da lista, com quanto ela está atrás da remota.
+pub(crate) fn base_row(id: impl Into<ElementId>, on: bool, name: String, behind: u64) -> Button {
+    let hint = if behind > 0 { tr("folder_git_behind").replace("{n}", &behind.to_string()) } else { String::new() };
+    menu_row(id, on, name, hint)
+}
+
+pub(crate) fn worktree_field_label(key: &str) -> Div {
+    div().w(px(52.)).flex_shrink_0().text_xs().text_color(theme::muted()).child(tr_shared(key, &[]))
+}
+
+pub(crate) fn worktree_warning(text: String) -> Div {
+    div().text_xs().text_color(theme::warning_text()).whitespace_normal().child(text)
+}
+
+/// A branch local e os commits só dela que a worktree não leva ao partir da remota.
+fn commits_left_out<'a>(c: &'a Checkout, base: &str) -> Option<(&'a str, u64)> {
+    local_branches(c).find_map(|b| c.upstreams.get(b).filter(|u| u.upstream == base && u.ahead > 0).map(|u| (b.as_str(), u.ahead)))
+}
 
 #[derive(Clone, Debug, Deserialize)]
 struct ConfigDir { path: String, label: String, #[serde(default)] active: bool }
@@ -1189,13 +1235,19 @@ impl NewSession {
                 && !self.models.loading && self.models.ok().is_some()))
     }
 
+    /// A base marcada: `base` vazia segue o padrão, para o fetch da abertura poder levá-la à remota.
+    fn chosen_base(&self) -> String {
+        if !self.base.is_empty() { return self.base.clone(); }
+        self.checkout.ok().and_then(Option::as_ref).and_then(default_base).unwrap_or_default()
+    }
+
     /// O corpo do `POST /api/sessions` sem bastão. A reserva manda o mesmo, sem o nome.
     fn open_body(&self, name: &str, cwd: &str, wanted: &str, cx: &App) -> Value {
         let provider = self.provider;
         let text = |s: &str| if s.is_empty() { Value::Null } else { json!(s) };
         let mut body = json!({"name": name, "cwd": cwd, "provider": provider, "model": text(&self.model), "effort": text(&self.effort)});
         if !wanted.is_empty() {
-            if let (Some(obj), Value::Object(extra)) = (body.as_object_mut(), worktree_body(wanted, self.new_branch, &self.base)) {
+            if let (Some(obj), Value::Object(extra)) = (body.as_object_mut(), worktree_body(wanted, self.new_branch, &self.chosen_base())) {
                 obj.extend(extra);
             }
         }
@@ -1396,10 +1448,6 @@ impl NewSession {
                 if self.new_branch || !self.branch.is_empty() {
                     let typed = self.new_branch_name.read(cx).value().trim().to_owned();
                     self.apply_typed_branch(typed);
-                }
-                // A base padrão da branch nova é a branch atual da pasta; com HEAD solto, a primeira local.
-                if self.base.is_empty() {
-                    self.base = self.checkout.ok().and_then(Option::as_ref).and_then(default_base).unwrap_or_default();
                 }
             }
             CreateReply::Sessions(seq, result) => {
@@ -2236,7 +2284,11 @@ impl NewSession {
 
     /// A pílula única de branch: onde o agente trabalha e, depois, a situação do Git da pasta.
     fn branch_pill_label(&self, cx: &App) -> Option<String> {
+        // O resumo do Git é da pasta: a worktree que parte da remota não está atrás dela.
+        let from_upstream = self.new_branch && self.checkout.ok().and_then(Option::as_ref)
+            .is_some_and(|c| !c.branches.contains(&self.chosen_base()));
         match (self.branch_label(cx), self.git_label()) {
+            (Some(branch), Some((_, false))) if from_upstream => Some(branch),
             (Some(branch), Some((git, false))) => Some(format!("{branch} · {git}")),
             (Some(branch), _) => Some(branch),
             (None, git) => git.map(|(git, _)| git),
@@ -2532,16 +2584,19 @@ impl NewSession {
 
     /// De onde a worktree nova parte, a branch dela e a pasta onde vai nascer.
     fn render_new_worktree_fields(&self, checkout: &Checkout, cx: &mut Context<Self>) -> AnyElement {
-        let label = |key: &str| div().w(px(52.)).flex_shrink_0().text_xs().text_color(theme::muted()).child(tr_shared(key, &[]));
+        let label = worktree_field_label;
         let line = || div().flex().items_center().gap_3();
+        let chosen = self.chosen_base();
         let bases: Vec<AnyElement> = if !(self.new_branch && self.base_open) { Vec::new() } else {
-            checkout.current.iter().chain(checkout.branches.iter().filter(|b| checkout.current.as_ref() != Some(*b))).map(|b| {
+            base_choices(checkout).into_iter().map(|(b, behind)| {
                 let base = b.clone();
-                menu_row(SharedString::from(format!("new-chat-base-{b}")), self.base == *b, b.clone(), String::new())
+                base_row(SharedString::from(format!("new-chat-base-{b}")), chosen == b, b, behind)
                     .on_click(cx.listener(move |this, _, _, cx| { this.base = base.clone(); this.base_open = false; cx.notify(); }))
                     .into_any_element()
             }).collect()
         };
+        let left_out = commits_left_out(checkout, &chosen).filter(|_| self.new_branch)
+            .map(|(branch, ahead)| tr_shared("worktree_menu_commits_fora", &[("branch", branch), ("n", &ahead.to_string())]));
         let typed = self.new_branch_name.read(cx).value().trim().to_string();
         // Branch que já existe (escrita no nome): a worktree abre nela; a base não vale para ela.
         let notice = if !self.branch.is_empty() {
@@ -2566,14 +2621,14 @@ impl NewSession {
         // Recuo igual ao texto das opções (o da linha do popover), para o quadro ficar sob a opção que o abriu.
         div().mx(px(8.)).mt(px(2.)).mb(px(6.)).p(px(12.)).rounded(px(8.)).border_1().border_color(theme::border())
             .flex().flex_col().gap(px(10.))
-            .child(line().child(label("worktree_menu_parte_de")).child(div().flex_1().min_w_0().child(Button::new("new-chat-branch-base")
-                .outline().small().w_full()
-                .disabled(!self.new_branch || self.creating).label(self.base.clone()).dropdown_caret(true)
+            .child(line().child(label("worktree_menu_parte_de")).child(div().flex_1().min_w_0().child(base_button("new-chat-branch-base", chosen)
+                .disabled(!self.new_branch || self.creating)
                 .on_click(cx.listener(|this, _, _, cx| { this.base_open = !this.base_open; cx.notify(); })))))
             .when(!bases.is_empty(), |el| el.child(Self::menu_list("new-chat-base-list", bases)))
+            .children(left_out.map(worktree_warning))
             .child(line().child(label("worktree_menu_branch"))
                 .child(div().flex_1().min_w_0().child(Input::new(&self.new_branch_name).small().aria_label(tr_shared("worktree_nome_branch", &[])))))
-            .children(notice.map(|text| div().text_xs().text_color(theme::warning_text()).whitespace_normal().child(text)))
+            .children(notice.map(worktree_warning))
             .children(folder.map(|path| line().child(label("worktree_menu_pasta_destino"))
                 .child(div().flex_1().min_w_0().text_xs().text_color(theme::muted()).whitespace_normal().child(path))))
             .when(checkout.dirty, |el| el.child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(tr("create_checkout_dirty"))))
@@ -3279,6 +3334,18 @@ mod tests {
         assert!(!super::created_here(&created, "api", "/other/repo", Some("feature")));
         assert!(!super::created_here(&created, "api", "/projects/other-repo", Some("feature")));
         assert!(!super::created_here(&created, "api", "/projects/repo", Some("main")));
+    }
+
+    #[test]
+    fn stale_branch_defaults_to_its_upstream_and_says_what_stays_out() {
+        let checkout = super::checkout_of(Ok(json!({"current": "main", "branches": ["dev", "main", "copia"], "remotes": [], "dirty": true,
+            "upstreams": {"main": {"upstream": "origin/main", "ahead": 1, "behind": 112}, "copia": {"upstream": "origin/main", "ahead": 2, "behind": 5}}}))).unwrap().unwrap();
+        assert_eq!(super::default_base(&checkout).as_deref(), Some("origin/main"));
+        assert_eq!(super::base_choices(&checkout), [("origin/main".to_string(), 0), ("main".to_string(), 112), ("dev".to_string(), 0), ("copia".to_string(), 5)]);
+        assert_eq!(super::commits_left_out(&checkout, "origin/main"), Some(("main", 1)));
+        assert_eq!(super::commits_left_out(&checkout, "main"), None);
+        let old_server = super::checkout_of(Ok(json!({"current": "main", "branches": ["main"], "remotes": [], "dirty": false}))).unwrap().unwrap();
+        assert_eq!(super::default_base(&old_server).as_deref(), Some("main"));
     }
 
     #[test]

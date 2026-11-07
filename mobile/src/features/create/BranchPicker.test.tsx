@@ -31,7 +31,8 @@ vi.mock('../../paraglide/messages', () => ({
   native_folder_git_fetch: () => 'fetch', native_folder_git_pull: () => 'pull', native_folder_git_fetch_done: () => 'fetch-ok',
   native_folder_git_pull_done: ({ upstream }: { upstream: string }) => `pull-ok:${upstream}`, native_folder_git_dirty: ({ n }: { n: number }) => `suja:${n}`,
   native_folder_git_no_upstream_pull: () => 'sem-de-onde', native_folder_git_diverged: ({ upstream }: { upstream: string }) => `divergiu:${upstream}`,
-  native_folder_git_branch_entry: () => 'trocar-ou-criar', worktree_menu_buscar: () => 'buscar', native_create_checkout_dirty: () => 'fica-na-pasta', worktree_menu_no_match: () => 'sem-resultado' }));
+  native_folder_git_branch_entry: () => 'trocar-ou-criar', worktree_menu_buscar: () => 'buscar', native_create_checkout_dirty: () => 'fica-na-pasta', worktree_menu_no_match: () => 'sem-resultado',
+  worktree_menu_commits_fora: ({ branch, n }: { branch: string; n: number }) => `fora:${branch}:${n}` }));
 vi.mock('../../ui/haptics', () => ({ haptic: { success: vi.fn(), error: vi.fn(), selection: vi.fn() } }));
 vi.mock('./FolderBranchMenu', () => ({ FolderBranchMenu: () => createElement('div', { 'data-menu': 'branches' }) }));
 const MAIN = { current: 'main' as string | null, branches: ['main', 'x'], remotes: [] as string[], dirty: false, worktree_parent: null as string | null };
@@ -49,12 +50,12 @@ import { BranchPicker } from './BranchPicker';
 
 const wt = (name: string, sessions: string[] = []) => ({ path: `/r/.worktrees/${name}`, repo: '/r', exists: true, branch: name, sessions });
 
-async function mount(props: Partial<{ cwd: string; worktreePath: string; value: unknown }> = {}) {
+async function mount(props: Partial<{ cwd: string; worktreePath: string; value: unknown; basePicked: boolean }> = {}) {
   const onChange = vi.fn();
   const onPickFolder = vi.fn();
   const el = document.createElement('div');
   await act(async () => { createRoot(el).render(createElement(BranchPicker, {
-    server: { id: 's' } as never, cwd: props.cwd ?? '/r', worktreePath: props.worktreePath, sessionName: 'rust-parte3', value: (props.value ?? null) as never, onChange, onPickFolder })); });
+    server: { id: 's' } as never, cwd: props.cwd ?? '/r', worktreePath: props.worktreePath, sessionName: 'rust-parte3', value: (props.value ?? null) as never, onChange, basePicked: { current: props.basePicked ?? false }, onPickFolder })); });
   return { el, onChange, onPickFolder };
 }
 const press = (el: HTMLElement, label: string) => act(async () => { (el.querySelector(`[aria-label="${label}"]`) as HTMLElement).click(); });
@@ -71,6 +72,37 @@ describe('BranchPicker', () => {
     expect(onChange).toHaveBeenLastCalledWith(null);
     await press(el, 'nova');
     expect(onChange).toHaveBeenLastCalledWith({ branch: '', new_branch: true, base: 'main' });
+  });
+
+  it('branch local atrás: a worktree nova parte da remota e avisa o commit que fica de fora', async () => {
+    folder.value = { ...MAIN, upstreams: { main: { upstream: 'origin/main', ahead: 1, behind: 112 } } };
+    try {
+      const { el, onChange } = await mount();
+      await press(el, 'nova');
+      expect(onChange).toHaveBeenLastCalledWith({ branch: '', new_branch: true, base: 'origin/main' });
+      expect(el.textContent).toContain('fora:main:1');
+      await press(el, 'parte origin/main');
+      expect(el.textContent).toContain('112 atras');
+      await press(el, 'main');
+      expect(onChange).toHaveBeenLastCalledWith({ branch: '', new_branch: true, base: 'main' });
+      expect(el.textContent).not.toContain('fora:main');
+    } finally { folder.value = { ...MAIN }; }
+  });
+
+  it('o fetch da abertura leva para a remota a base padrão, mas não a escolhida', async () => {
+    const behind = { ...MAIN, upstreams: { main: { upstream: 'origin/main', ahead: 0, behind: 3 } } };
+    folder.action = () => { folder.value = behind; return Promise.resolve(folder.git); };
+    try {
+      const { el, onChange } = await mount();
+      await press(el, 'nova');
+      expect(onChange).toHaveBeenLastCalledWith({ branch: '', new_branch: true, base: 'origin/main' });
+      folder.value = { ...MAIN };
+      const reopened = await mount({ value: { branch: '', new_branch: true, base: 'main' } });
+      expect(reopened.onChange).toHaveBeenLastCalledWith({ branch: '', new_branch: true, base: 'origin/main' });
+      folder.value = { ...MAIN };
+      const chosen = await mount({ value: { branch: '', new_branch: true, base: 'main' }, basePicked: true });
+      expect(chosen.onChange).toHaveBeenLastCalledWith({ branch: '', new_branch: true, base: 'main' });
+    } finally { folder.value = { ...MAIN }; folder.action = () => Promise.resolve(folder.git); }
   });
 
   it('a única lista de branches é a das bases, escondida até tocar em "Parte de"', async () => {

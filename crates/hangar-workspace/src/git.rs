@@ -296,8 +296,26 @@ pub fn branches(cwd: &Path) -> Result<Value> {
     let cur = command(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     let st = command(cwd, &["status", "--porcelain"])?;
     Ok(
-        json!({"current":if cur.code==0 {Some(cur.stdout.trim())} else {None},"branches":local,"remotes":remote,"dirty":st.code==0&&!st.stdout.trim().is_empty(),"elsewhere":elsewhere(cwd)?}),
+        json!({"current":if cur.code==0 {Some(cur.stdout.trim())} else {None},"branches":local,"remotes":remote,"dirty":st.code==0&&!st.stdout.trim().is_empty(),"elsewhere":elsewhere(cwd)?,"upstreams":behind_upstreams(cwd)?}),
     )
+}
+/// Branches locais atrás da própria remota: a worktree nova pode partir da remota sem pull na pasta.
+fn behind_upstreams(cwd: &Path) -> Result<serde_json::Map<String, Value>> {
+    let out = checked(
+        cwd,
+        &["for-each-ref", "--format=%(refname:short)%00%(upstream)%00%(upstream:track,nobracket)", "refs/heads"],
+        409,
+    )?;
+    let count = |track: &str, label: &str| {
+        track.split(", ").find_map(|part| part.strip_prefix(label)?.parse::<u64>().ok()).unwrap_or(0)
+    };
+    Ok(out.stdout.lines().filter_map(|line| {
+        let mut fields = line.split('\0');
+        let (branch, upstream, track) = (fields.next()?, fields.next()?, fields.next()?);
+        let upstream = upstream.strip_prefix("refs/remotes/")?;
+        let behind = count(track, "behind ");
+        (behind > 0).then(|| (branch.to_owned(), json!({"upstream":upstream,"ahead":count(track, "ahead "),"behind":behind})))
+    }).collect())
 }
 /// Branches abertas em outra worktree do repositório (`main`: a pasta principal): o `switch` para elas é recusado pelo git.
 fn elsewhere(cwd: &Path) -> Result<serde_json::Map<String, Value>> {
@@ -436,7 +454,8 @@ fn create_worktree_in(
             .or(info["current"].as_str())
             .unwrap_or_default()
             .to_owned();
-        if start.is_empty() || !known(&start) {
+        let tracking = format!("refs/remotes/{start}");
+        if start.is_empty() || !(known(&start) || command(cwd, &["show-ref", "--verify", "--quiet", &tracking])?.code == 0) {
             return Err(error(400, "branch base inexistente"));
         }
     } else {
@@ -461,10 +480,10 @@ fn create_worktree_in(
     // A branch só remota vira local (`--track -b`); desfazer apaga as duas que nasceram aqui.
     let branch_created = new_branch || !local.iter().any(|b| b == branch);
     let created = if new_branch {
-        let from = if local.iter().any(|b| b == start.as_str()) {
-            start.clone()
-        } else {
+        let from = if info["remotes"].as_array().unwrap().iter().any(|b| b == start.as_str()) {
             remote_ref(cwd, &start)?
+        } else {
+            start.clone()
         };
         // Sem --no-track a branch nova herdaria o upstream da base: o pull puxaria a base.
         command(

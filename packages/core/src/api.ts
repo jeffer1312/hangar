@@ -1548,11 +1548,40 @@ export interface FolderBranches {
   dirty: boolean;
   worktree_parent?: string | null;   // onde a worktree nova desta pasta nasce, sem o nome dela; servidor antigo não manda
   elsewhere?: Record<string, { path: string; main?: boolean }>;   // branch aberta em outra pasta do mesmo repositório
+  upstreams?: Record<string, { upstream: string; ahead: number; behind: number }>;   // só as atrás da própria remota; servidor antigo não manda
 }
 
 // Base padrão da branch nova: a atual, ou com HEAD solto a primeira branch local (o backend recusa base vazia).
 export function defaultBase(info: FolderBranches): string {
   return info.current ?? info.branches[0] ?? '';
+}
+
+// A mesma base, pela remota quando a local está atrás: a worktree nova nasce atualizada sem pull na pasta.
+export function freshBase(info: FolderBranches): string {
+  const base = defaultBase(info);
+  return info.upstreams?.[base]?.upstream ?? base;
+}
+
+function localBranches(info: FolderBranches): string[] {
+  return info.current ? [info.current, ...info.branches.filter((b) => b !== info.current)] : info.branches;
+}
+
+// As bases da lista: cada branch local, antecedida pela remota quando está atrás dela; duas locais podem seguir a mesma remota.
+export function baseChoices(info: FolderBranches): { name: string; behind: number }[] {
+  const seen = new Set<string>();
+  return localBranches(info).flatMap((name) => {
+    const up = info.upstreams?.[name];
+    return [...(up ? [{ name: up.upstream, behind: 0 }] : []), { name, behind: up?.behind ?? 0 }];
+  }).filter(({ name }) => !seen.has(name) && !!seen.add(name));
+}
+
+// O que a worktree não leva ao partir da remota: os commits que só a branch local tem.
+export function commitsLeftOut(info: FolderBranches, base: string): { branch: string; ahead: number } | null {
+  for (const branch of localBranches(info)) {
+    const up = info.upstreams?.[branch];
+    if (up?.upstream === base && up.ahead > 0) return { branch, ahead: up.ahead };
+  }
+  return null;
 }
 
 export interface FolderGit {

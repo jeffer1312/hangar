@@ -111,6 +111,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const [name, setName] = useState('');
   const [worktree, setWorktree] = useState<WorktreeChoice | null>(null);
   const onWorktree = useCallback((v: WorktreeChoice | null) => setWorktree(v), []);
+  // Fora do painel, que desmonta ao fechar: `worktree.base` sozinho não diz se a base foi escolhida ou é o padrão.
+  const basePicked = useRef(false);
   const [branchTaken, setBranchTaken] = useState(false);
   const [branchOpen, setBranchOpen] = useState(false);
   const [folderOpen, setFolderOpen] = useState(false);
@@ -492,6 +494,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     const generation = ++pickGeneration.current;
     setPicked(p);
     setWorktree(null);
+    basePicked.current = false;
     setBranchTaken(false);
     setError('');
     setProjectWarning('');
@@ -905,7 +908,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     >
       {picked && !noProject ? <BranchPicker server={active} cwd={pickedRepo ?? picked} worktreePath={pickedRepo && pickedRepo !== picked ? picked : undefined}
                               sessionName={name.trim() || basename(picked)}
-                              value={worktree} onChange={onWorktree}
+                              value={worktree} onChange={onWorktree} basePicked={basePicked}
                               onPickFolder={(path, keepOpen, repo) => { setFolderRepo(repo ? { path, repo } : null); void handlePick(path); if (!keepOpen) setBranchOpen(false); }}
                               onTakenChange={setBranchTaken} /> : null}
     </AnchoredPanel>

@@ -11,6 +11,7 @@ import { SleepHiddenAnimation } from './SleepHiddenAnimation';
 import { SessionVaultAnimation } from './SessionVaultAnimation';
 import { TagsPlateAnimation } from './TagsPlateAnimation';
 import { VaultAnimation } from './VaultAnimation';
+import { WorktreeFreshAnimation } from './WorktreeFreshAnimation';
 
 // Miniaturas feitas dos componentes reais (ex.: src/chat/ComposerField.tsx) entram aqui pelo nome da novidade.
 const animations: Record<string, ComponentType<{ width: number }>> = {
@@ -26,6 +27,7 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'pedido-na-sessao': SessionVaultAnimation,
   'sem-projeto': NoProjectAnimation,
   'sugestao-de-nome': RenameSuggestionAnimation,
+  'worktree-atualizada': WorktreeFreshAnimation,
 };
 
 export const animationFor = (name: string | null): ComponentType<{ width: number }> | null =>
