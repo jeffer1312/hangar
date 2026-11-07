@@ -250,8 +250,9 @@ fica: nenhum dos nove módulos o usa, e ele desce com quem o usar.
   com o binário novo; abrir o app, ver a lista de sessões e mandar uma mensagem numa sessão.
   Feito junto com a Task 2 (06/11/2026, 21:22–21:31): release da branch no ar por um drop-in
   `CP_RUST_SERVER_BIN` (scripts em `~/.hangar/teste-split/`, com volta automática por timer do
-  systemd); saúde com os quatro donos e a porta de convidado; o Jefferson usou pelo celular
-  ("parece normal"). O binário precisa ir com o par `hangar-server.auth.json` + `auth/`, senão o
+  systemd); saúde com os quatro donos e a porta de convidado; o Jefferson mandou mensagem numa
+  sessão pelo celular ("parece normal"). Não exercitados em uso real: Custos, painel da
+  orquestração e convidado. O binário precisa ir com o par `hangar-server.auth.json` + `auth/`, senão o
   Python recusa ("sem par válido da biblioteca de autenticação").
 
 ### Task 2: Descer `auth`, `config` e os ajudantes de resposta HTTP e JSON (Fix A)
