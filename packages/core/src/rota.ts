@@ -167,7 +167,10 @@ export async function verifyServerIdentity(s: Server, target: LanInfo | null | u
   const key = device ? sha256Hex(new TextEncoder().encode(s.token)) : s.token;
   const query = device ? `&device=${encodeURIComponent(device)}` : '';
   let r: { identificador?: string; prova?: string } | null = null;
+  let bound = '';
   try {
+    // A prova de aparelho é pública: sem o host, uma rede hostil a repassaria do endereço do Connect.
+    if (device) bound = `|${new URL(target.url).host}`;
     const res = await fetch(`${target.url}/api/peers/prova?desafio=${d}${query}`, {
       signal: signal ?? AbortSignal.timeout(PRAZO_LAN_MS), credentials: 'omit',
     });
@@ -175,7 +178,7 @@ export async function verifyServerIdentity(s: Server, target: LanInfo | null | u
   } catch {
     return false;
   }
-  return r?.identificador === target.id && r.prova === hmacSha256Hex(key, `${d}|${target.id}`);
+  return r?.identificador === target.id && r.prova === hmacSha256Hex(key, `${d}|${target.id}${bound}`);
 }
 
 // O endereço local ganha só se provar a identidade ANTES de o principal responder: o mesmo IP

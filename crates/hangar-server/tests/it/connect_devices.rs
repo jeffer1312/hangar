@@ -579,7 +579,7 @@ async fn revoking_a_device_takes_everything_it_approved() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn nav_link_carries_the_device_token_not_the_password() {
+async fn nav_link_carries_no_device_token_and_no_password() {
     let dir = tempfile::tempdir().unwrap();
     let srv = crate::list_support::server(dir.path(), 1).await;
     let (_, token) = srv.devices.enroll("celular").unwrap();
@@ -587,7 +587,11 @@ async fn nav_link_carries_the_device_token_not_the_password() {
     let sent = post(srv.addr, "/api/sessions/s0/nav", json!({"url": "/api/sessions/s0/pages/abc"})).bearer_auth(&token).send().await.unwrap();
     assert_eq!(sent.status(), 200);
     let nav = crate::fake::next_named(&mut list, "nav").await;
-    assert!(nav.data.contains(&token) && !nav.data.contains(OWNER), "{}", nav.data);
+    assert!(nav.data.contains("page_ticket=") && !nav.data.contains(&token) && !nav.data.contains(OWNER), "{}", nav.data);
+    let sent = post(srv.addr, "/api/sessions/s0/nav", json!({"url": "/api/sessions/s0/pages/abc"})).bearer_auth(OWNER).send().await.unwrap();
+    assert_eq!(sent.status(), 200);
+    let nav = crate::fake::next_named(&mut list, "nav").await;
+    assert!(nav.data.contains("page_ticket=") && !nav.data.contains(OWNER), "pedido do dono também: {}", nav.data);
 }
 
 #[tokio::test]
@@ -652,16 +656,20 @@ async fn proof_answers_with_device_hash() {
     let e = entrance(|state, dir| with_home(state, dir, "{}")).await;
     let (id, token) = paired(&e, "prova").await;
     let challenge = "desafio-com-tamanho-certo";
-    let expected = |key: &[u8], identifier: &str| -> String {
+    let expected = |key: &[u8], signed: String| -> String {
         let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, key);
-        let digest = ring::hmac::sign(&key, format!("{challenge}|{identifier}").as_bytes());
+        let digest = ring::hmac::sign(&key, signed.as_bytes());
         digest.as_ref().iter().map(|b| format!("{b:02x}")).collect()
     };
-    let proof = body_of(get(e.connect, &format!("/api/peers/prova?desafio={challenge}&device={id}")).send().await.unwrap()).await;
+    let public = "pc1.acme.hangar.dev.br";
+    let proof = body_of(get(e.connect, &format!("/api/peers/prova?desafio={challenge}&device={id}")).header("host", public).send().await.unwrap()).await;
     let identifier = proof["identificador"].as_str().unwrap();
-    assert_eq!(proof["prova"], expected(hash(token.as_bytes()).as_bytes(), identifier));
-    let owner = body_of(get(e.main, &format!("/api/peers/prova?desafio={challenge}")).send().await.unwrap()).await;
-    assert_eq!(owner["prova"], expected(OWNER.as_bytes(), identifier), "nas outras portas a prova segue como era");
+    let device_key = hash(token.as_bytes());
+    assert_eq!(proof["prova"], expected(device_key.as_bytes(), format!("{challenge}|{identifier}|{public}")));
+    // Rede com o mesmo IP local repassa a pergunta ao Connect: o celular confere com o host que ele chamou.
+    assert_ne!(proof["prova"], expected(device_key.as_bytes(), format!("{challenge}|{identifier}|192.168.1.5:8765")), "prova repassada não vale");
+    let owner = body_of(get(e.main, &format!("/api/peers/prova?desafio={challenge}")).header("host", public).send().await.unwrap()).await;
+    assert_eq!(owner["prova"], expected(OWNER.as_bytes(), format!("{challenge}|{identifier}")), "sem `device` a prova segue como era");
     let unknown = get(e.connect, &format!("/api/peers/prova?desafio={challenge}&device=outro")).send().await.unwrap();
     assert_eq!(unknown.status(), 404);
 }

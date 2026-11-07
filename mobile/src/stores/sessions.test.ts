@@ -203,8 +203,10 @@ describe('credencial de aparelho e rota do Connect', () => {
       if (parsed.pathname === '/api/connect/devices/self') return response({ device_id: 'dev1', token: 'device-token' });
       if (parsed.pathname === '/api/peers/identificador') return response({ identificador: 'home', lan_url: '' });
       if (parsed.pathname === '/api/peers/prova') {
-        const key = parsed.searchParams.get('device') === 'dev1' ? createHash('sha256').update('device-token').digest('hex') : 'owner-password';
-        return response({ identificador: 'home', prova: createHmac('sha256', key).update(`${parsed.searchParams.get('desafio')}|home`).digest('hex') });
+        const device = parsed.searchParams.get('device') === 'dev1';
+        const key = device ? createHash('sha256').update('device-token').digest('hex') : 'owner-password';
+        const bound = device ? `|${parsed.host}` : '';
+        return response({ identificador: 'home', prova: createHmac('sha256', key).update(`${parsed.searchParams.get('desafio')}|home${bound}`).digest('hex') });
       }
       return response([]);
     });

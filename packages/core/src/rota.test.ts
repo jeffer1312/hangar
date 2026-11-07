@@ -19,7 +19,7 @@ function env(origin: string | null, lembrados: Record<string, LanInfo> = {}) {
 }
 
 // Cada endereço é uma máquina com nome, token e atraso em ms (ou nada no ar, com `null`).
-type Maquina = { identificador: string; token: string; lan_url?: string; atraso?: number; proofKey?: string; connect?: string } | null;
+type Maquina = { identificador: string; token: string; lan_url?: string; atraso?: number; proofKey?: string; connect?: string; receivedHost?: string } | null;
 function rede(maquinas: Record<string, Maquina>) {
   const chamadas: { url: string; auth: string | null }[] = [];
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
@@ -31,7 +31,8 @@ function rede(maquinas: Record<string, Maquina>) {
     await new Promise((r) => setTimeout(r, m.atraso ?? 0));
     if (u.pathname === '/api/peers/prova') {
       const d = u.searchParams.get('desafio')!;
-      const prova = createHmac('sha256', m.proofKey ?? m.token).update(`${d}|${m.identificador}`).digest('hex');
+      const bound = u.searchParams.has('device') ? `|${m.receivedHost ?? u.host}` : '';
+      const prova = createHmac('sha256', m.proofKey ?? m.token).update(`${d}|${m.identificador}${bound}`).digest('hex');
       return new Response(JSON.stringify({ identificador: m.identificador, prova }));
     }
     if (auth !== `Bearer ${m.token}`) return new Response('{}', { status: 401 });
@@ -401,6 +402,14 @@ describe('rota do Connect', () => {
     expect(chamadas[0].auth).toBeNull();
     rede({ [CONNECT]: { ...maqDevice, proofKey: 'device-token' } });
     expect(await verifyServerIdentity(device(), { url: CONNECT, id: 'maq' })).toBe(false);
+  });
+
+  it('refuses a device proof relayed from the Connect address to the same LAN IP', async () => {
+    env(null);
+    rede({ [LAN]: { ...maqDevice, receivedHost: new URL(CONNECT).host } });
+    expect(await verifyServerIdentity(device(), { url: LAN, id: 'maq' })).toBe(false);
+    rede({ [LAN]: maqDevice });
+    expect(await verifyServerIdentity(device(), { url: LAN, id: 'maq' })).toBe(true);
   });
 
   it('learns a connect route from /api/alcance', async () => {

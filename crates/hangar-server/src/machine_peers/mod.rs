@@ -138,6 +138,8 @@ pub struct Service {
     pub connect_devices: Option<Arc<crate::connect::devices::Store>>,
     /// O aparelho de quem pediu; `None` é a senha do dono.
     pub device_caller: Option<String>,
+    /// `Host` recebido na prova de aparelho: ela só vale para o endereço que a pessoa chamou.
+    pub proof_host: Option<String>,
 }
 impl Service {
     pub fn new(
@@ -173,6 +175,7 @@ impl Service {
             connect_dir: None,
             connect_devices: None,
             device_caller: None,
+            proof_host: None,
         })
     }
     pub fn from_state(st: &Arc<AppState>) -> Result<Self, Error> {
@@ -284,7 +287,12 @@ impl Service {
         }
         let id = self.identity();
         let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, self.token.as_bytes());
-        let digest = ring::hmac::sign(&key, format!("{challenge}|{id}").as_bytes());
+        // A prova de aparelho é pública: sem o host, uma rede hostil a repassaria do endereço do Connect.
+        let signed = match &self.proof_host {
+            Some(host) => format!("{challenge}|{id}|{host}"),
+            None => format!("{challenge}|{id}"),
+        };
+        let digest = ring::hmac::sign(&key, signed.as_bytes());
         Ok(
             json!({"identificador":id,"prova":digest.as_ref().iter().map(|b|format!("{b:02x}")).collect::<String>()}),
         )
@@ -430,7 +438,7 @@ async fn handle_inner(
     let device_caller=service.device_caller.is_some();
     if path=="/api/peers/prova" && let Some(device)=query.get("device") {
         match st.connect_devices.proof_key(device) {
-            Some(key)=>service.token=key,
+            Some(key)=>{service.token=key;service.proof_host=Some(received_host(&request));}
             None=>return json_response(StatusCode::NOT_FOUND,json!({"detail":"Not Found"})),
         }
     }
@@ -452,6 +460,11 @@ async fn handle_inner(
         ),
         Err(e) => e.response(),
     }
+}
+/// Em HTTP/2 o host vem na `:authority`, não no cabeçalho.
+fn received_host(request:&Request)->String{
+    let header=request.headers().get(axum::http::header::HOST).and_then(|value|value.to_str().ok());
+    header.map(str::to_owned).or_else(||request.uri().authority().map(ToString::to_string)).unwrap_or_default().to_ascii_lowercase()
 }
 fn body_validation_error(kind:&str,input:Value)->Response {
     let msg=if kind=="missing"{"Field required"}else{"Input should be a valid dictionary"};
