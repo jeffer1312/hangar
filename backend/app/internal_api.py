@@ -162,27 +162,6 @@ async def list_facts(request: Request) -> dict:
         raise HTTPException(400) from None
 
 
-@router.get("/workspace/context")
-async def workspace_context(name: str | None = None) -> dict:
-    """Só metadados; o consumidor privado não consulta novamente este registro."""
-    from app import api
-    from app.fs import allowed_roots
-
-    infos = await asyncio.to_thread(api._guardar_snap)
-    info = next((s for s in infos if s.name == name), None) if name else None
-    if name and (info is None or not info.cwd):
-        info = await api._cached_info(name)
-        if info is None or not info.cwd:
-            raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessão não encontrada"))
-    return {
-        "roots": [str(root) for root in allowed_roots()],
-        "sessions": [{"name": s.name, "cwd": s.cwd} for s in infos if s.cwd],
-        # `git_cwd`: onde o git da sessão roda (a worktree em que o agente trabalha, ou o cwd).
-        "session": {"name": info.name, "cwd": info.cwd, "jsonl": info.jsonl,
-                    "git_cwd": info.git_dir} if info else None,
-    }
-
-
 @router.get("/migration/status")
 async def migration_status() -> dict:
     from app import migration_status

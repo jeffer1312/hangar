@@ -27,8 +27,8 @@ Only terminal sessions use the tmux pane for live **state** and input. Backend p
   como filho do mesmo cano do Claude sem terminal, e o backend abre a thread e responde as
   aprovações por cartão. Decisões e armadilhas:
   [`docs/decisoes/harnesses.md`](docs/decisoes/harnesses.md).
-- `difusor.py` — **uma fonte por chave, não uma por conexão**: monitor de estado,
-  acumulador de estatísticas e git da listagem são compartilhados entre os SSE abertos.
+- `difusor.py` — **uma fonte por chave, não uma por conexão**: monitor de estado e
+  acumulador de estatísticas são compartilhados entre os SSE abertos.
   Por quê e o que quebrou antes: [`docs/decisoes/plataforma.md`](docs/decisoes/plataforma.md).
 - Voz ao vivo — roda no `hangar-server` (`crates/hangar-server/src/voice/`), **disponível em todo
   servidor com Codex instalado e ao menos uma conta Codex**, sem interruptor; o microfone só abre
@@ -44,8 +44,8 @@ Only terminal sessions use the tmux pane for live **state** and input. Backend p
   ticket (`~/.claude/.hangar-kimi/<pane>.json`) — the CLI has no caller-chosen session-id.
 - `sse.py` — merges the above into the SSE stream. `api.py` — FastAPI routes. `auth.py` — bearer token / `cp_token` cookie.
 - Also: `pqueue.py` (durable input queue), `preview.py` (live in-flight block), `askquestion.py`
-  (native AskUserQuestion stepper), `uploads.py`, `git_ops.py`, `workflows.py`,
-  `model_picker.py`, `config.py`, `fs.py`, `hook_installer.py`.
+  (native AskUserQuestion stepper), `uploads.py`, `workflows.py`,
+  `model_picker.py`, `config.py`, `hook_installer.py`.
 - `crates/hangar-server/src/commands/` — catálogo de comandos do Claude, sonda compartilhada e
   filtro em processo; o Python só autentica e repassa nas portas que atende.
 - `site/` — landing page de `hangar.dev.br` (HTML estático em PT/EN gerado por `site/build.py`,
@@ -468,9 +468,9 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   Descoberta global incompleta avisa sobre repositórios ainda não encontrados; não bloqueia a
   limpeza de worktrees conhecidas, cuja identidade, arquivos, locks e uso são reconferidos.
 - **Plan progress lê o `.md` do plano**, sem arquivo de estado: blocos cercados são removidos
-  preservando offsets, e a decoração do Python roda dentro do `to_thread` do git. As rotas de
-  plano e a prévia do plano nativo são do Rust e usam o mesmo rastreador da lista, para o
-  painel e a linha elegerem o mesmo plano. Evidência em
+  preservando offsets. A lista, as rotas, o bastão e a prévia do plano nativo usam os leitores
+  Rust e o mesmo rastreador da lista, para o painel e a linha elegerem o mesmo plano.
+  A decoração e o parser Python foram retirados. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#plan-progress).
 - **Ditado: a transcrição não é o problema, o que vem depois é.** Vocabulário vai para a Whisper
   (consertar depois é impossível por construção); regra de prompt só funciona com exemplo de
@@ -548,10 +548,11 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   no `cwd`.
   Evidência em [plataforma.md](docs/decisoes/plataforma.md#git-da-sessão-segue-a-worktree-onde-o-agente-trabalha).
 - **Arquivo citado na conversa é LEGÍVEL e EDITÁVEL; a citação é o consentimento.** Fora da raiz
-  da sessão a política de caminho é `_resolver_citado()` (aparece no transcript), não a raiz — e
-  é a mesma para o `GET` e para o `POST` de `/file/text`. A mecânica de ler e gravar é a do
-  `filetree` (`read_at`/`write_at`): digest da leitura, tmp+rename, `.git` fora por componente
-  do realpath. Escrita nova fora da raiz entra por aqui, nunca afrouxando o `/files/write`.
+  da sessão a política de caminho é a citação no transcript verificado, não a raiz — e é a mesma
+  para o `GET` e para o `POST` de `/file/text`. Leitura e escrita usam o núcleo Rust:
+  digest da leitura, tmp+rename, `.git` fora por componente do realpath. Citação transferida
+  exige snapshot, digest e fronteira verificados. Escrita nova fora da raiz entra por aqui,
+  nunca afrouxando o `/files/write`.
 - **HTML servido como arquivo executa isolado e sem o token na URL do documento interno.**
   Arquivos citados e uploads usam `file_response`; SVG/XML mantêm o MIME com scripts bloqueados.
 - **Citação e elemento escolhido vão no texto da mensagem, como blocos `<hangar-ref>`.** O transcript
@@ -720,19 +721,27 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
     e última resposta delas. A associação da credencial Pi/omp/Kimi à cota é do Rust.
   - Outras perguntas do Rust ao Python (`/internal/*`): `accounts/prepare` (só contas Codex; a
     reconciliação das contas Claude é do Rust, `accounts/claude_config.rs`),
-    `accounts/codex-invalidate`, `workspace/context`,
-    `transcription/config`, `costs/scopes`, `migration/status`, `diag` e `ping`.
+    `accounts/codex-invalidate`, `transcription/config`, `costs/scopes`,
+    `migration/status`, `diag` e `ping`.
   - Partes ainda no Python: transcript, estado e entrada geral de Pi, omp e Kimi;
     transferência Claude→Codex; workflows e runners. O Connect (8768) está inativo.
-  - Contexto e fetch das worktrees são do Rust (`worktree_context.rs`, `worktree_fetch.rs`),
-    inclusive a fonte usada pelas guardas de exclusão e pela limpeza automática. O fetch conserva
-    validação, raízes e erros anteriores; usa credenciais configuradas, mas não pergunta login no
-    terminal. A porta Python só repassa o fetch e responde `worktrees_need_rust_server` sem Rust.
-    Não existe `/internal/worktrees/context`. Evidência em
+  - Atalhos de projeto: identidade, GET/PUT, `shortcut-shell`, `run-code` e reinício são do Rust.
+    Lista, fechamento, foco, respostas e WebSocket dos terminais ainda usam os consumidores
+    genéricos Python existentes; não consultam Git. O bastão é montado, opcionalmente reescrito,
+    gravado e entregue ao lançador pelo Rust, sem montador Python.
+  - Git, arquivos e administração de worktrees são do Rust, inclusive contexto, validação,
+    autorização, criação, exclusão e limpeza automática. O fetch usa credenciais configuradas,
+    mas não pergunta login no terminal. Os handlers Python foram retirados, sem motor de reserva:
+    sem Rust, o transporte autenticado preexistente conserva seu 503; onde ele não existe,
+    a rota retirada recebe o 404/405 padrão dessa porta. Não existem
+    `/internal/worktrees/context`, `/internal/workspace/context` ou a porta privada genérica
+    `/__hangar_server/workspace`. Evidência em
     [plataforma.md](docs/decisoes/plataforma.md#contexto-e-fetch-de-worktrees-sem-python-05112026).
-  - Arquivo e busca são do Rust. O `archive.py` guarda os leitores da lista legada de worktrees
-    no modo `python` (`list_folders`, `_worktree_inputs`) e os leitores compartilhados com o bastão
-    e o redirecionamento de conversas (`_contas`, `_head_info`, `archive_jsonl`, `archive_cwd`).
+  - Arquivo e busca são do Rust. O `archive.py` conserva os leitores genéricos de conversas
+    (`list_folders`, `_contas`, `_head_info`, `archive_jsonl`, `archive_cwd`). O localizador e o motor
+    Python de worktrees foram retirados; `worktrees.py` conserva leitores genéricos, o mapa de
+    redirecionamento e os auxiliares de arquivos ainda usados, sem consultar Git ou interpretar `.git`.
+    Não existe `/internal/workspace/context`.
   - Atualização: rotas, passos iniciais, fetch e atualização automática são do Rust.
     O pacote usa `update/http.rs` e `update/periodic.rs`; o checkout usa `update/git_engine/`.
     O `rust_bins.py` lança o Rust pelo caminho real da versão.
@@ -958,8 +967,8 @@ Preserve `COLORTERM=truecolor` e `CLAUDE_CODE_TMUX_TRUECOLOR=1` antes de iniciar
 ### Issue tracker
 
 Markdown versionado, não GitHub Issues: spec em `docs/superpowers/specs/`, tickets como Tasks de um
-plano em `docs/superpowers/plans/` — que é de onde `backend/app/planprog.py` lê a barra de progresso
-e de onde `skills/orquestrar` recorta a Task do executor. O formato de `### Task N:`
+plano em `docs/superpowers/plans/` — que é de onde `crates/hangar-server/src/list/plan.rs` lê a barra
+de progresso e de onde `skills/orquestrar` recorta a Task do executor. O formato de `### Task N:`
 e `- [ ] **Step N: …**` é casado por regex e não é livre. Ver
 [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md).
 

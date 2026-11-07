@@ -621,7 +621,6 @@ pub fn terminal_router(state: Arc<AppState>) -> Router {
 fn terminal_router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
     let router = Router::new()
         .route("/__hangar_server/terminal", axum::routing::post(crate::terminal_routes::terminal))
-        .route("/__hangar_server/workspace", axum::routing::post(crate::workspace_routes::private))
         .route("/__hangar_server/dictation/{operation}", axum::routing::post(crate::dictation::routes::private))
         .route("/__hangar_server/claude/customizations", axum::routing::post(crate::claude_customizations::private))
         .route("/__hangar_server/forwarded", axum::routing::any(crate::forwarded::private))
@@ -700,8 +699,8 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/sessions/{name}/loop", axum::routing::any(crate::loops::http::route))
         .route("/api/sessions/{name}/loop/refine", axum::routing::any(crate::loops::http::route))
         .route("/api/sessions/{name}/loop/resolve", axum::routing::any(crate::loops::http::route))
-        // Bastão do dono: o Python prepara o dossiê e a sucessora Claude com terminal nasce aqui.
-        .route("/api/sessions/{name}/bastao", axum::routing::post(crate::session_open::server::bastao).fallback(pass_any))
+        .route("/api/sessions/{name}/bastao", axum::routing::any(crate::session_open::baton::serve))
+        .route("/api/sessions/{name}/bastao/dossie", axum::routing::any(crate::session_open::baton::serve))
         // Retomar do Arquivo e o `/resume` ao vivo: a abertura e a reabertura do Rust, com a conversa que já existe.
         .route("/api/archive/{project}/{session_id}/resume", axum::routing::post(crate::session_open::server::archive_resume).fallback(pass_any))
         // Ler a conversa do Arquivo e a imagem dela: só o dono; o resto segue ao Python, que recusa.
@@ -1179,11 +1178,20 @@ pub(crate) async fn pass_any(
         cors(&headers, response.headers_mut());
         return response;
     }
+    if crate::session_open::baton::matches(req.uri().path()) {
+        return crate::session_open::baton::serve(State(st), ConnectInfo(peer), req).await;
+    }
     if crate::worktree_routes::matches(req.method(), req.uri().path()) {
         return crate::worktree_routes::route(st, peer, req).await;
     }
     if crate::workspace_routes::matches(req.method(), req.uri().path()) {
         return crate::workspace_routes::public(st, peer, req).await;
+    }
+    if crate::shortcuts::http::matches(req.uri().path()) {
+        return crate::shortcuts::http::public(st, peer, req).await;
+    }
+    if crate::costs_routes::usage_path(req.uri().path()) {
+        return crate::costs_routes::usage(State(st), ConnectInfo(peer), req).await;
     }
     if crate::diag::version_matches(req.method(), req.uri().path()) {
         return crate::diag::version_route(st, peer, req).await;

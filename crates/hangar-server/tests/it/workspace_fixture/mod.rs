@@ -70,15 +70,19 @@ pub async fn fixture_with_mux(root: &std::path::Path, context_ok: bool, home: Op
     fixture_with_cwd(root, context_ok, home, mux, &root.join("repo-wt")).await
 }
 
+pub async fn fixture_with_account_env(root: &std::path::Path, context_ok: bool, home: &std::path::Path, mux: &std::path::Path, accounts: hangar_server::accounts::environment::AccountEnvironment, router_only: bool) -> Fixture {
+    build(root, context_ok, Some(home), Some(mux), root, router_only, Some(accounts)).await
+}
+
 pub async fn policy_fixture(root: &std::path::Path, home: &std::path::Path, mux: &std::path::Path) -> Fixture {
-    build(root, false, Some(home), Some(mux), root, true).await
+    build(root, false, Some(home), Some(mux), root, true, None).await
 }
 
 async fn fixture_with_cwd(root: &std::path::Path, context_ok: bool, home: Option<&std::path::Path>, mux: Option<&std::path::Path>, session_cwd: &std::path::Path) -> Fixture {
-    build(root, context_ok, home, mux, session_cwd, false).await
+    build(root, context_ok, home, mux, session_cwd, false, None).await
 }
 
-async fn build(root: &std::path::Path, context_ok: bool, home: Option<&std::path::Path>, mux: Option<&std::path::Path>, session_cwd: &std::path::Path, policy: bool) -> Fixture {
+async fn build(root: &std::path::Path, context_ok: bool, home: Option<&std::path::Path>, mux: Option<&std::path::Path>, session_cwd: &std::path::Path, policy: bool, account_env: Option<hangar_server::accounts::environment::AccountEnvironment>) -> Fixture {
     let hits = Arc::new(AtomicUsize::new(0));
     let context_hits = Arc::new(AtomicUsize::new(0));
     let seen_context = context_hits.clone();
@@ -134,12 +138,12 @@ async fn build(root: &std::path::Path, context_ok: bool, home: Option<&std::path
     let mut state=hangar_server::routes::AppState::new(config(upstream,"127.0.0.1"));
     state.origins_home=home.into();
     state.accounts=hangar_server::accounts::AccountService::new(
-        hangar_server::accounts::environment::AccountEnvironment::from_map([
+        account_env.unwrap_or_else(||hangar_server::accounts::environment::AccountEnvironment::from_map([
             ("HOME".into(),home.to_string_lossy().into_owned()),
             ("USERPROFILE".into(),home.to_string_lossy().into_owned()),
             ("CLAUDE_CONFIG_DIR".into(),home.join(".claude").to_string_lossy().into_owned()),
             ("CP_SCAN_ROOTS".into(),root.to_string_lossy().into_owned()),
-        ].into()));
+        ].into())));
     let mut env=hangar_server::list::bridge::ListEnv::from_env();
     env.dirs=hangar_server::list::bridge::parse_dirs(&json!({
         "home":home,"claude":home.join(".claude"),"codex_home":home.join(".codex"),
@@ -198,6 +202,46 @@ async fn serve_policy(mut state: hangar_server::routes::AppState, home: &std::pa
     tokio::spawn(async move { axum::serve(owner, owner_app).await.unwrap(); });
     tokio::spawn(async move { axum::serve(guest, guest_app).await.unwrap(); });
     (owner_addr, Policy { guest:guest_addr, login, share })
+}
+
+// A costura com o Python real não sobe o upstream falso nem o servidor de convidados.
+#[cfg(target_os = "linux")]
+pub async fn real_python_fixture(
+    home: &std::path::Path,
+    metadata_mux: &std::path::Path,
+    terminal_mux: &std::path::Path,
+    upstream: std::net::SocketAddr,
+    environment: std::collections::BTreeMap<String, String>,
+) -> (Fixture, Arc<hangar_server::routes::AppState>, tokio::task::JoinHandle<()>) {
+    let mut state = hangar_server::routes::AppState::new(config(upstream, "127.0.0.1"));
+    state.accounts = hangar_server::accounts::AccountService::new(
+        hangar_server::accounts::environment::AccountEnvironment::from_map(environment));
+    state.origins_home = home.into();
+    let mut env = hangar_server::list::bridge::ListEnv::from_env();
+    env.dirs = hangar_server::list::bridge::parse_dirs(&json!({
+        "home":home,"claude":home.join(".claude"),"codex_home":home.join(".codex"),
+        "pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),
+        "omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")
+    }).to_string());
+    env.mux = hangar_server::list::mux::Mux::with_program(metadata_mux, std::time::Duration::from_secs(5));
+    env.capture_program = terminal_mux.as_os_str().into();
+    state.list = Arc::new(hangar_server::list::bridge::ListBridge::new(env,
+        hangar_server::list::facts::FactsClient::new(upstream, SECRET.into())));
+    let runtime = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(
+        upstream, SECRET.into(), "s01-real-python".into()).with_codex_environment(state.accounts.env.clone()));
+    assert!(state.state.runtime.set(runtime.clone()).is_ok());
+    state.side.locate = Arc::new(hangar_server::locate::ListLocate { list:state.list.clone() });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let fixture = Fixture {
+        addr, hits:Arc::default(), context_hits:Arc::default(), list:state.list.clone(),
+        runtime, policy:None, diags:Arc::default(), workspace_slots:state.workspace_slots.clone(), _home:None,
+    };
+    let state = Arc::new(state);
+    let app = hangar_server::routes::router(state.clone())
+        .into_make_service_with_connect_info::<std::net::SocketAddr>();
+    let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+    (fixture, state, task)
 }
 
 /// Corpo do 503 de Git/arquivos: mesmo formato das outras rotas do Rust, com o motivo em `params`.

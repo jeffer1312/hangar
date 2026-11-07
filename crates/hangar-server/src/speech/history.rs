@@ -253,6 +253,10 @@ struct PiStream {
 
 impl PiStream {
     fn feed(&mut self, value: &Value) -> Vec<ChatEvent> {
+        self.feed_with(value, pi)
+    }
+
+    fn feed_with(&mut self, value: &Value, parser: impl FnOnce(&Value) -> Vec<ChatEvent>) -> Vec<ChatEvent> {
         if value["type"] == "custom_message"
             && value["customType"] == "claude-hook-context"
             && !self.held.is_empty()
@@ -275,7 +279,7 @@ impl PiStream {
             return std::mem::take(&mut self.held);
         }
         let mut events = std::mem::take(&mut self.held);
-        let parsed = pi(value);
+        let parsed = parser(value);
         self.id = value["id"].as_str().unwrap_or("").to_owned();
         if !self.id.is_empty()
             && !parsed.is_empty()

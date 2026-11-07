@@ -255,7 +255,6 @@ passo_preparo() {
         (cd crates && cargo build --locked -p hangar-server -p hangar-auth && \
             pin_auth_pair && \
             cargo build --locked -p hangar-server --example orq_contract && \
-            cargo build --locked -p hangar-workspace --example workspace_contract && \
             cargo test --locked -p hangar-server --no-run --test it) || falhou=1
     fi
     if [[ "$plano" == *" backend_rapido "* ]]; then

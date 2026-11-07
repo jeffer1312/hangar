@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Protocol
 
 from app import uso_areas
-from app.uso_claude import UsoLinha, linhas_de_area
+from app.uso_claude import UsoLinha
 
 _log = logging.getLogger(__name__)
 
@@ -323,26 +323,7 @@ def _gravar_arquivo(conn: sqlite3.Connection, p: Path, st: os.stat_result, scope
     conn.execute("DELETE FROM custo WHERE file_id=?", (file_id,))
     conn.execute("DELETE FROM uso WHERE file_id=?", (file_id,))
     conn.executemany(_INS_CUSTO, [(file_id, *_linha_custo(r)) for r in custos])
-    area = linhas_de_area(entradas) if entradas is not None else []
-    conn.executemany(_INS_USO, [(file_id, *_linha_uso(l)) for l in (*usos, *area)])
-
-
-def _refazer_areas(conn: sqlite3.Connection, where: str, args: tuple) -> None:
-    """Mapa de áreas mudou: refaz as linhas `area` das entradas guardadas, sem reler arquivo."""
-    sig = uso_areas.assinatura()
-    for file_id, blob in conn.execute(
-            f"SELECT id, areas FROM files WHERE {where} AND areas IS NOT NULL AND areas_sig IS NOT ?",
-            (*args, sig)).fetchall():
-        try:
-            area = linhas_de_area(pickle.loads(zlib.decompress(blob)))
-        except Exception:
-            _log.warning("entradas de área ilegíveis (file_id=%s); relidas na próxima mudança", file_id,
-                         exc_info=True)
-            conn.execute("UPDATE files SET versao='' WHERE id=?", (file_id,))
-            continue
-        conn.execute("DELETE FROM uso WHERE file_id=? AND tipo='area'", (file_id,))
-        conn.executemany(_INS_USO, [(file_id, *_linha_uso(l)) for l in area])
-        conn.execute("UPDATE files SET areas_sig=? WHERE id=?", (sig, file_id))
+    conn.executemany(_INS_USO, [(file_id, *_linha_uso(l)) for l in usos])
 
 
 _SEL_FILE = "SELECT id, scope, versao, dev, ino, size, mtime_ns, offset, cauda, estado FROM files"
@@ -434,7 +415,6 @@ def sincronizar(scope: str, arquivos: Iterable[Path], nova_dobra: Callable[[Path
             conn.executemany("DELETE FROM custo WHERE file_id=?", sumidos)
             conn.executemany("DELETE FROM uso WHERE file_id=?", sumidos)
             conn.executemany("DELETE FROM files WHERE id=?", sumidos)
-            _refazer_areas(conn, "scope=?", (scope,))
             conn.execute("COMMIT")
             em_transacao = False
         finally:

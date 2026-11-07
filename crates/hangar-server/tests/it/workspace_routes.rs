@@ -187,7 +187,7 @@ async fn g02_invalid_external_write_body_is_rejected_before_any_mutation() {
 }
 
 #[tokio::test]
-async fn private_gate_rejects_forwarded_clients_and_wrong_secrets() {
+async fn retired_private_workspace_route_stays_absent() {
     let dir = tempfile::tempdir().unwrap();
     let (addr, _, _fixture) = fixture(dir.path()).await;
     let c = client();
@@ -200,7 +200,7 @@ async fn private_gate_rejects_forwarded_clients_and_wrong_secrets() {
     }
     let r = c.post(format!("http://{private}/__hangar_server/workspace")).header("x-hangar-internal", SECRET)
         .body(json!({"op":"head_info","args":{"cwd":dir.path()}}).to_string()).send().await.unwrap();
-    assert_eq!(r.status(), 200);
+    assert_eq!(r.status(), 404);
 }
 
 #[tokio::test]
@@ -600,20 +600,20 @@ fn sha(bytes: &[u8]) -> String {
 }
 fn json_line(value: Value) -> String { format!("{value}\n") }
 
-struct TransferredFiles {
-    f: workspace_fixture::Fixture,
-    home: std::path::PathBuf,
-    born: std::path::PathBuf,
-    old: std::path::PathBuf,
-    rollout: std::path::PathBuf,
-    record_path: std::path::PathBuf,
-    sidecar: std::path::PathBuf,
-    snapshot: std::path::PathBuf,
-    record: Value,
+pub(super) struct TransferredFiles {
+    pub(super) f: workspace_fixture::Fixture,
+    pub(super) home: std::path::PathBuf,
+    pub(super) born: std::path::PathBuf,
+    pub(super) old: std::path::PathBuf,
+    pub(super) rollout: std::path::PathBuf,
+    pub(super) record_path: std::path::PathBuf,
+    pub(super) sidecar: std::path::PathBuf,
+    pub(super) snapshot: std::path::PathBuf,
+    pub(super) record: Value,
 }
 
 impl TransferredFiles {
-    async fn new(root: &std::path::Path) -> Self {
+    pub(super) async fn new(root: &std::path::Path) -> Self {
         let home = root.join("home");
         let born = root.join("born");
         let old = root.join("original");
@@ -680,7 +680,7 @@ impl TransferredFiles {
     fn url(&self, route: &str, path: &str) -> reqwest::Url {
         reader_asset_url(&format!("http://{}/api/sessions/fixture/{route}", self.f.addr), path, false)
     }
-    fn no_python(&self) {
+    pub(super) fn no_python(&self) {
         assert_eq!(self.f.hits(), 0);
         assert_eq!(self.f.context_hits.load(Ordering::Relaxed), 0);
     }
@@ -1002,11 +1002,8 @@ async fn task3_x01_busy_mutation_does_not_take_read_or_metadata_slots() {
     let (addr,hits,f)=fixture(root).await;
     let all=f.workspace_slots.clone().try_acquire_many_owned(4).unwrap();
     let c=client();
-    let health=c.get(format!("http://{addr}/__hangar_server/health")).send().await.unwrap().json::<Value>().await.unwrap();
-    let private=health["terminal_address"].as_str().unwrap();
-    let metadata=c.post(format!("http://{private}/__hangar_server/workspace")).header("x-hangar-internal",SECRET)
-        .json(&json!({"op":"head_info","args":{"cwd":root}})).send().await.unwrap();
-    assert_eq!(metadata.status(),200); assert_eq!(metadata.json::<Value>().await.unwrap(),json!({"ok":true,"result":["main",false]}));
+    let metadata=hangar_workspace::execute(hangar_workspace::Operation::HeadInfo {cwd:Some(root.to_string_lossy().into_owned())}).unwrap();
+    assert_eq!(metadata,json!(["main",false]));
     let read=c.get(format!("http://{addr}/api/sessions/fixture/files/read?path=read.txt")).bearer_auth(OWNER).send().await.unwrap();
     assert_eq!(read.status(),200); assert_eq!(read.json::<Value>().await.unwrap()["text"],"available");
     let busy=c.post(format!("http://{addr}/api/sessions/fixture/files/write")).bearer_auth(OWNER)

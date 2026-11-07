@@ -140,7 +140,7 @@ fn pi_jsonl(root: &Path, sid: &str) -> Result<PathBuf, Miss> {
 }
 
 /// `_kimi_conversas`: a entrada mais recente do índice com o wire gravado (o wire e a pasta da sessão).
-fn kimi_jsonl(kimi_home: &Path, sid: &str) -> Result<(PathBuf, Option<String>), Miss> {
+pub(crate) fn kimi_jsonl(kimi_home: &Path, sid: &str) -> Result<(PathBuf, Option<String>), Miss> {
     if !KIMI_ID.is_match(sid) { return Err(Miss::Invalid); }
     let index = std::fs::read(kimi_home.join("session_index.jsonl")).map_err(|_| Miss::Absent)?;
     index.split(|b| *b == b'\n').rev().filter_map(|line| serde_json::from_slice::<Value>(line).ok())
@@ -266,7 +266,7 @@ pub(crate) fn locate(w: &Where, project: &str, sid: &str, config_dir: Option<&st
 }
 
 /// `worktrees.redirect`: a worktree apagada pelo Hangar retoma na pasta principal.
-fn redirect(home: &Path, cwd: String) -> String {
+pub(crate) fn redirect(home: &Path, cwd: String) -> String {
     if Path::new(&cwd).is_dir() { return cwd; }
     let removed = hangar_workspace::worktrees::removed_at(&home.join(".hangar").join("worktrees-removidas.json"));
     removed.into_iter().find(|(path, _)| Path::new(&cwd).starts_with(path)).map_or(cwd, |(_, main)| main)

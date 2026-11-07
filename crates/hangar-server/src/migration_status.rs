@@ -325,7 +325,6 @@ pub async fn count_public(req: Request, next: Next) -> Response {
 pub async fn count_bridge(req: Request, next: Next) -> Response {
     let key = match req.uri().path() {
         "/__hangar_server/terminal" => "terminal_observe",
-        "/__hangar_server/workspace" => "workspace_bridge",
         "/__hangar_server/list" => "list_bridge",
         path if path.starts_with("/__hangar_server/dictation/") => "dictation_bridge",
         _ => "",

@@ -243,24 +243,41 @@ fn belongs(r: &Record, life: Option<&str>, meta: Option<&Map<String, Value>>, so
 }
 
 /// `transfer_for_session` com a vida dada (a da linha).
-fn for_session(reader: &mut Reader, home: &Path, row: &SessionRow) -> Result<Option<Record>, String> {
+fn for_session(reader: &mut Reader, home: &Path, row: &SessionRow, parked: bool) -> Result<Option<Record>, String> {
     let meta = session_meta(home, &row.name);
     let life = row.lifecycle_id.as_deref();
+    let parked = parked && life.is_none() && meta.is_none();
     let source = row.jsonl.as_deref();
     if let Some(id) = meta.as_ref().and_then(|m| m.get("transfer_id")).and_then(text) {
         let r = reader.load(id)?.ok_or("transfer_record_missing")?;
         if r.name == row.name && belongs(&r, life, meta.as_ref(), source) { return Ok(Some(r)); }
     }
     for id in reader.index_ids("session", &row.name)?.iter().rev() {
-        if let Some(r) = reader.load(id)? && r.name == row.name && belongs(&r, life, meta.as_ref(), source) {
+        if let Some(r) = reader.load(id)? && r.name == row.name
+            && belongs(&r, if parked && !r.terminal() {Some(&r.source_life)} else {life}, meta.as_ref(), source) {
             return Ok(Some(r));
         }
     }
     Ok(None)
 }
 
+/// Fase do alvo, pela vida conferida; sem linha, só ausência de vida E de sidecar admite a origem parada.
+pub(crate) fn session_phase(home: &Path, name: &str, row: Option<&SessionRow>, resolved_life: Option<&str>) -> Result<Option<String>, String> {
+    let mut reader = Reader::new(home);
+    let record = match row {
+        Some(row) if row.name != name => return Err("transfer_record_identity".into()),
+        Some(row) => for_session(&mut reader, home, row, false)?,
+        None => {
+            let mut absent = super::links::blank_row(name);
+            absent.lifecycle_id = resolved_life.map(str::to_owned);
+            for_session(&mut reader, home, &absent, true)?
+        }
+    };
+    Ok(record.map(|record| record.phase))
+}
+
 pub(crate) fn session_transfer_id(home: &Path, row: &SessionRow) -> Result<Option<String>, String> {
-    Ok(for_session(&mut Reader::new(home), home, row)?.map(|record| record.id))
+    Ok(for_session(&mut Reader::new(home), home, row, false)?.map(|record| record.id))
 }
 
 /// `transfer_for_thread`.
@@ -285,7 +302,7 @@ pub fn transfers(rows: &[SessionRow], dirs: &Dirs) -> Result<(Vec<SessionRow>, H
     let mut reader = Reader::new(&dirs.home);
     let mut out: Vec<SessionRow> = rows.to_vec();
     for row in out.iter_mut() {
-        let mut record = for_session(&mut reader, &dirs.home, row)?;
+        let mut record = for_session(&mut reader, &dirs.home, row, false)?;
         if record.is_none() && row.provider == "codex" && let Some(home) = row.codex_home.clone().filter(|h| !h.is_empty())
             && let Some(thread) = session_meta(&dirs.home, &row.name).and_then(|m| m.get("thread_id").and_then(text).map(str::to_owned))
         {

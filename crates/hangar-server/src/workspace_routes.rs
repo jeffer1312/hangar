@@ -2,7 +2,7 @@
 use crate::routes::AppState;
 use axum::{
     body::{Body, Bytes, to_bytes},
-    extract::{ConnectInfo, Request, State},
+    extract::Request,
     http::{HeaderMap, Method, StatusCode, header},
     response::{IntoResponse, Response},
 };
@@ -13,7 +13,6 @@ use std::{
     net::SocketAddr,
     path::Path,
     sync::Arc,
-    time::Duration,
 };
 use subtle::ConstantTimeEq;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
@@ -109,29 +108,6 @@ async fn resolve_root_file(st: &AppState, cwd: &str, path: &str) -> hangar_works
     }).await.map_err(|_| hangar_workspace::unavailable("pânico na leitura"))?
 }
 
-pub async fn private(
-    State(st): State<Arc<AppState>>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    req: Request,
-) -> Response {
-    if !private_ok(&st, peer, req.headers()) {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    let bytes =
-        match tokio::time::timeout(Duration::from_secs(6), to_bytes(req.into_body(), MAX_BODY))
-            .await
-        {
-            Ok(Ok(b)) => b,
-            _ => return StatusCode::BAD_REQUEST.into_response(),
-        };
-    let Ok(op) = serde_json::from_slice::<Operation>(&bytes) else {
-        return StatusCode::BAD_REQUEST.into_response();
-    };
-    match execute(&st, op, None).await {
-        Ok(result) => response(json!({"ok":true,"result":result}), 200),
-        Err(error) => response(json!({"ok":false,"error":error}), 200),
-    }
-}
 pub fn matches(_method: &Method, path: &str) -> bool {
     crate::workspace_http::owns(path)
 }

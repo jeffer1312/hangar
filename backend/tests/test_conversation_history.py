@@ -226,29 +226,10 @@ def test_historical_image_and_file_get_write_keep_authorization_and_digest(joine
                             digest=hashlib.sha256(joined.snapshot.read_bytes()).hexdigest()))
     monkeypatch.setattr(history, "transfer_for_session", lambda *args, **kwargs: joined.record)
     client, headers = client_for(joined, monkeypatch)
-    # O núcleo Rust lê só o transcript atual: o arquivo citado antes da troca ele recusaria.
-    from app import workspace_bridge
-    monkeypatch.setattr(workspace_bridge, "request", lambda op, args, **kw: {"ok": False, "error": {
-        "status": 403, "code": "erro_arquivo_nao_citado", "detail": "x"}} if op == "resolve_cited" else None)
     event_id = compose(joined)[0].id
     picture = client.get(f"/api/sessions/s/transcript-image/{event_id}/0", headers=headers)
     assert picture.status_code == 200
     assert picture.content == image and picture.headers["content-type"] == "image/png"
-    read = client.get("/api/sessions/s/file/text", headers=headers, params={"path": str(target)})
-    assert read.status_code == 200
-    changed = client.post("/api/sessions/s/file/text", headers=headers,
-                          json={"path": str(target), "text": "alterado", "digest": read.json()["digest"]})
-    assert changed.status_code == 200 and target.read_text() == "alterado"
-    stale = client.post("/api/sessions/s/file/text", headers=headers,
-                        json={"path": str(target), "text": "stale", "digest": read.json()["digest"]})
-    assert stale.status_code == 409
-    uncited = target.with_name("uncited.md")
-    uncited.write_text("private", encoding="utf-8")
-    assert client.get("/api/sessions/s/file/text", headers=headers, params={"path": str(uncited)}).status_code == 403
-    # Uma citação que só apareceu fora do snapshot não concede acesso.
-    with joined.original.open("ab") as fh:
-        fh.write(encoded({"message": {"content": str(uncited)}}))
-    assert client.get("/api/sessions/s/file/text", headers=headers, params={"path": str(uncited)}).status_code == 403
     joined.snapshot.unlink()
     assert client.get(f"/api/sessions/s/transcript-image/{event_id}/0", headers=headers).status_code == 409
 
@@ -309,34 +290,6 @@ def test_prefix_verification_cache_is_invalidated_even_when_mtime_is_restored(jo
     os.utime(joined.path, ns=(old.st_atime_ns, old.st_mtime_ns))
     with pytest.raises(history.HistoryError):
         history.verify_boundary(joined.record, joined.path)
-
-
-def test_snapshot_citations_do_not_authorize_git_or_imported_account_file(joined, monkeypatch):
-    account = joined.snapshot.parent / "account"
-    account.mkdir()
-    secret = account / "auth.json"
-    secret.write_text("fixture-only", encoding="utf-8")
-    git = joined.snapshot.parent / ".git"
-    git.mkdir(exist_ok=True)
-    internal = git / "config"
-    internal.write_text("fixture-only", encoding="utf-8")
-    alias = joined.snapshot.parent / "git-config"
-    alias.symlink_to(internal)
-    joined.rows[0]["message"]["content"] = str(alias)
-    joined.snapshot.write_bytes(b"".join(map(encoded, joined.rows)))
-    prefix = joined.prefix + encoded(codex_message(str(secret), item_id="imported-private", day=1))
-    joined.path.write_bytes(prefix + encoded(codex_message("novo")))
-    joined.record = replace(joined.record,
-        source=replace(joined.record.source, digest=hashlib.sha256(joined.snapshot.read_bytes()).hexdigest()),
-        boundary=replace(joined.record.boundary, min_offset=len(prefix),
-                         prefix_digest=hashlib.sha256(prefix).hexdigest(),
-                         imported_item_ids=("imported", "imported-private")))
-    monkeypatch.setattr(history, "transfer_for_session", lambda *args, **kwargs: joined.record)
-    client, headers = client_for(joined, monkeypatch)
-    assert client.get("/api/sessions/s/file/text", headers=headers, params={"path": str(alias)}).status_code == 403
-    assert client.post("/api/sessions/s/file/text", headers=headers,
-                       json={"path": str(alias), "text": "write", "digest": "digest"}).status_code == 403
-    assert client.get("/api/sessions/s/file/text", headers=headers, params={"path": str(secret)}).status_code == 403
 
 
 @pytest.mark.asyncio
@@ -452,8 +405,6 @@ def test_literal_unicode_separators_survive_history_citations_and_archive(joined
     client, headers = client_for(joined, monkeypatch)
     response = client.get("/api/sessions/s/history", headers=headers)
     assert response.status_code == 200 and response.json()[0]["text"] == text
-    cited = client.get("/api/sessions/s/file/text", headers=headers, params={"path": str(target)})
-    assert cited.status_code == 200 and cited.json()["text"] == "arquivo citado"
     joined.snapshot.write_bytes(raw[:-1])
     incomplete = replace(joined.record.source, digest=hashlib.sha256(raw[:-1]).hexdigest())
     with pytest.raises(history.HistoryError, match="linha incompleta"):

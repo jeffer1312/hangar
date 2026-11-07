@@ -523,8 +523,17 @@ do Python: um byte por marcação sob trava global (duas marcações quase junta
 desktop, se desfaziam), só UTF-8, arquivar tudo ou nada sem sobrescrever `feitos/` e soltando o
 pin do plano arquivado. As escritas entram na porta de entrada da sessão, como o `_transfer_guard`.
 Convidado e Connect chegam pela ponte privada `/__hangar_server/forwarded`; no modo `python` as
-rotas de plano respondem `erro_planos_precisa_rust`. Ficam no Python só a leitura que a decoração
-da lista do Python e o bastão usam (`plan_progress`, `plano_escondido`, `parse_plan`).
+rotas de plano respondem `erro_planos_precisa_rust`. Naquele corte, permaneciam no Python os
+leitores usados pela decoração da lista e pelo bastão.
+
+**Retirada dos leitores legados (07/11/2026).** `planprog.py`, seus testes exclusivos e a decoração
+Git/plano do registry foram retirados junto com o montador Python do bastão. O bastão Rust usa
+`list/plan.rs`; a lista e as rotas mantêm o rastreador compartilhado. Os JSON canônicos de
+`contract_list` e seus consumidores Rust permanecem; somente o gerador/verificador dinâmico do
+produtor Python retirado saiu. A prova Linux do bastão tem 59 testes aprovados no módulo e uma
+função adicional de contrato local/remoto; o mapa de 71 funções discrimina execução, equivalência
+pública e variantes privadas sem consumidor. Isso não comprova Windows real, clientes ou release
+final. Evidências locais em `.superpowers/sdd/2026-11-06-git-without-python/conferencia.md`.
 
 ## Cota: cache em disco e espera após 429
 
@@ -799,6 +808,32 @@ verbos; `.git/config` citado voltou 403 `erro_arq_area_do_git`. Na tela, pelo na
 embutido: o arquivo de fora da raiz abriu com o botão **Editar**, e o Salvar mudou o conteúdo no
 disco. Um primeiro teste com `/etc/hosts` deu 200 e parecia furo — era o transcript, que já o
 citava 5 vezes; a trava estava certa e o teste, errado.
+
+**Git, worktrees e arquivos sem motor Python (07/11/2026).** A implementação candidata reúne
+contexto, autorização, validação HTTP, operações Git, scanner, árvore, leitura, escrita e entrega
+no Rust. Os handlers Python, a pergunta `/internal/workspace/context` e a operação privada
+genérica `/__hangar_server/workspace` foram retirados. `git_cwd` continua sendo a pasta de Git;
+arquivos e execução usam `cwd`. Citações transferidas usam linhas originais de um ramo verificado,
+com snapshot, digest e fronteira conferidos; não são reconstruídas dos eventos visuais.
+
+A decisão aprovada bloqueia mutações durante transferência e mantém o redirecionamento nativo
+de worktrees na retomada. Sem Rust não há reserva Python: o transporte autenticado preexistente
+conserva seu 503; a rota retirada sem esse transporte recebe o 404/405 padrão daquela porta.
+`/api/uso` também foi retirado inteiro do Python, incluindo dimensões não
+Git; o relatório Rust completo permanece. A versão do processo Python é publicada pelo Rust a
+partir da raiz do mesmo comando lançador, vinculada ao PID e nascimento; sem vínculo confirmado,
+essa identidade fica indisponível, nunca é substituída pela versão do filho Rust.
+
+Os auxiliares genéricos existentes continuam onde já estavam: o opener da lista, o leitor reverso
+de permissão e o mapa de redirecionamento não executam Git. Os consumidores de terminais que
+permanecem no Python foram conferidos no Linux com criação Rust e tmux/Python reais privados:
+listagem e donos, fechamento, foco por substituto local, recusa de WebSocket alheio, perguntas,
+sete respostas literais e encerramento de descendente. Uma função passou em 13,26 s, zero falhas
+ou ignorados, fonte intacta e nenhum processo/listener restante. As provas Python diretas de
+WebSocket válido, configuração global, Windows/mux e `close_all` permanecem. Não houve prova
+Windows real, de tela, diferencial release ou desempenho neste teste; os portões finais seguem
+abertos no registro da migração. O protocolo privado candidato é 102, sujeito à conferência do
+próximo valor livre antes da integração final.
 
 ## Chave do Jev: no runtime_config, e na sessão só por escolha da abertura
 

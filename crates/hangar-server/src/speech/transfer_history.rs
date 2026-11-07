@@ -636,8 +636,19 @@ fn imported_ids(boundary: &Value) -> io::Result<HashSet<&str>> {
         .collect()
 }
 
+/// As linhas da origem conferida precedem as do rollout ativo; o bastão conserva o parser de cada trecho.
+pub(crate) struct SelectedRows {
+    pub rows: Vec<String>,
+    pub source_len: usize,
+    pub transfer_id: String,
+}
+
 /// Citações precisam das linhas originais do ramo, inclusive campos que não viram `ChatEvent`.
 pub(crate) fn citation_rows(row: &SessionRow, home: &Path) -> io::Result<Option<Vec<String>>> {
+    selected_rows(row, home).map(|selected| selected.map(|selected| selected.rows))
+}
+
+fn selected_rows(row: &SessionRow, home: &Path) -> io::Result<Option<SelectedRows>> {
     if row.provider != "codex" { return Ok(None); }
     let Some(path) = row.jsonl.as_deref().map(Path::new) else { return Ok(None) };
     let owner = row.codex_home.as_deref().map(Path::new)
@@ -666,6 +677,7 @@ pub(crate) fn citation_rows(row: &SessionRow, home: &Path) -> io::Result<Option<
         }
         Ok(rows)
     })?;
+    let source_len = rows.len();
     let boundary = &record["boundary"];
     let imported = imported_ids(boundary)?;
     rows.extend(stable_read(path, |reader, length| {
@@ -684,7 +696,82 @@ pub(crate) fn citation_rows(row: &SessionRow, home: &Path) -> io::Result<Option<
         }
         Ok(rows)
     })?);
-    Ok(Some(rows))
+    Ok(Some(SelectedRows { rows, source_len, transfer_id: required(&record, "id")?.to_owned() }))
+}
+
+/// A mesma seleção alimenta os eventos e os campos crus do bastão, sem reler por seção.
+pub(crate) struct BatonWindow {
+    pub rows: Vec<String>,
+    pub events: Vec<ChatEvent>,
+    pub since: Option<f64>,
+}
+
+pub(crate) struct BatonReadError {
+    pub verification: bool,
+    pub cause: io::Error,
+}
+
+pub(crate) fn baton_window(row: &SessionRow, home: &Path, claude: &Path) -> Result<BatonWindow, BatonReadError> {
+    let info = crate::locate::info_of(row, claude);
+    let mut verification = false;
+    with_stable_queue(&info, || {
+        verification = false;
+        let selected = if row.provider == "codex" && row.codex_home.is_none() && row.transfer_id.is_none() {None} else {
+            selected_rows(row, home).map_err(|cause| { verification = true; cause })?
+        };
+        let transferred = selected.is_some();
+        let (rows, source_len, id) = match selected {
+            Some(selected) => (selected.rows, selected.source_len, selected.transfer_id),
+            None => {
+                let Some(path) = row.jsonl.as_deref() else { return Ok(BatonWindow { rows:Vec::new(), events:Vec::new(), since:None }); };
+                let rows = match stable_read(Path::new(path), |reader, length| {
+                    let mut raw = Vec::new();
+                    reader.take(length).read_to_end(&mut raw)?;
+                    Ok(String::from_utf8_lossy(&raw).split_inclusive('\n').map(str::to_owned).collect::<Vec<_>>())
+                }) {
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
+                    other => other?,
+                };
+                (rows, 0, String::new())
+            }
+        };
+        let mut parser = LineParser::new(if row.provider == "codex" {Provider::Codex} else {Provider::Claude});
+        let mut pi = super::PiStream::default();
+        let (mut parsed, mut position, mut previous, mut start, mut seen) = (Vec::new(), 0u64, 0., 0., HashSet::new());
+        for (index, raw) in rows.iter().enumerate() {
+            let offset = position;
+            position += raw.len() as u64;
+            let Some(value) = pyjson::loads_lossless(raw).filter(Value::is_object) else { continue; };
+            let clock = super::timestamp(&value);
+            if clock > 0. { previous = clock; if start == 0. { start = clock; } }
+            let source = transferred && index < source_len;
+            let mut events = if source { crate::transcript::parse_claude_object(value.as_object().unwrap()) }
+                else if row.provider == "pi" || row.provider == "omp" { pi.feed_with(&value, |_| crate::archive_history::agent_line(crate::session_open::AgentProvider::Pi, raw.as_bytes())) }
+                else if row.provider == "kimi" { crate::archive_history::agent_line(crate::session_open::AgentProvider::Kimi, raw.as_bytes()) }
+                else { parser.feed(raw.as_bytes(), offset) };
+            events.retain(|event| !(event.id.starts_with("held:") || event.id.starts_with("delivery:")) || seen.insert(event.id.clone()));
+            if transferred { for event in &mut events { prefix_event(event, &id, if source {"claude"} else {"codex"}); } }
+            for event in events { parsed.push((event.ts.filter(|t| *t != 0.).unwrap_or(previous), offset, event)); }
+        }
+        for event in pi.held { parsed.push((event.ts.unwrap_or(previous), position, event)); }
+        // `merged_history(limit=600)` conserva a janela inteira, não só seiscentos eventos.
+        let mut span = crate::transcript::TAIL_WINDOW;
+        let offset = if transferred { 0 } else { loop {
+            let lower = position.saturating_sub(span);
+            let mut cursor = 0;
+            let offset = if lower == 0 {0} else { rows.iter().find_map(|raw| { let old=cursor; cursor+=raw.len() as u64; (old>=lower).then_some(old) }).unwrap_or(position) };
+            if offset == 0 || parsed.iter().filter(|(_,pos,_)| *pos >= offset).count() >= 600 { break offset; }
+            span = span.saturating_mul(4);
+        }};
+        let mut items = Vec::new(); let mut committed = HashMap::new();
+        for (ts,pos,event) in parsed.into_iter().filter(|(_,pos,_)| *pos >= offset) {
+            super::absorb(vec![event], ts, pos, &mut items, &mut committed);
+        }
+        super::merge_queue(&info, &mut items, &committed, previous, start)?;
+        items.sort_by(|a,b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        if transferred { retain_latest(&mut items, 600); }
+        Ok(BatonWindow { rows, events:items.into_iter().map(|(_,_,event)|event).collect(), since:(start>0.).then_some(start) })
+    }).map_err(|cause| BatonReadError {verification,cause})
 }
 
 /// `verify_boundary`: o rollout ainda tem o prefixo importado e a thread da transferência.

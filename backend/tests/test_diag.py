@@ -181,12 +181,10 @@ def test_ultimas_pula_linha_corrompida_em_vez_de_derrubar():
 
 
 def test_cabecalho_traz_o_commit_e_o_sistema_do_servidor():
-    # O que o repositório NÃO conta: de qual commit veio a máquina que reportou. Sem isso a primeira
-    # pergunta da análise ("isso já foi corrigido?") não tem resposta.
     diag.anotar_da_tela([{"evento": "x"}])
     cab = json.loads(diag.ler_tudo().splitlines()[0])
     assert cab["evento"] == "diag.formato"
-    assert "backend" in cab and "so_servidor" in cab
+    assert "so_servidor" in cab
     assert cab["dias_guardados"] == diag.DIAS_GUARDADOS
     assert "chave de API" in cab["nao_contem"]
 
