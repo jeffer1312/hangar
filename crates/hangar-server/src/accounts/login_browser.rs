@@ -42,16 +42,6 @@ pub fn parse_authorize_url(raw: &str) -> Option<AuthorizeLink> {
     Some(AuthorizeLink { port, state })
 }
 
-/// O desvio por `claude.com/cai` cai no login do claude.ai mesmo com o perfil logado; o endereço
-/// final do redirecionamento abre direto na autorização.
-pub fn browser_url(raw: &str) -> String {
-    let Ok(mut url) = reqwest::Url::parse(raw) else { return raw.to_owned() };
-    if url.host_str() == Some("claude.com") && url.path() == "/cai/oauth/authorize" && url.set_host(Some("claude.ai")).is_ok() {
-        url.set_path("/oauth/authorize");
-    }
-    url.into()
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChromeProfile {
     pub dir: String,
@@ -486,7 +476,27 @@ struct View {
     window: Option<String>,
     /// Quem a janela era quando foi vista: o endereço de uma janela fechada pode já ser de outra.
     capture_id: Option<String>,
+    /// Link ainda por digitar na barra: recebido pela linha de comando, o claude.ai manda ao login
+    /// mesmo com o perfil logado, e digitado na mesma janela ele abre a autorização.
+    pending: Option<String>,
 }
+
+/// Toma o link antes de digitar, para a transmissão e a espera da abertura nunca digitarem as duas;
+/// a entrada que não chegou devolve o link para a próxima tentativa. Verdadeiro = nada mais a digitar.
+fn type_pending_link(views: &Views, operation: &str, desk: &dyn Desk, window: &DeskWindow) -> bool {
+    let Some(url) = locked_views(views).get_mut(operation).and_then(|view| view.pending.take()) else { return true };
+    if desk.navigate(window, &url) {
+        return true;
+    }
+    tracing::warn!(code = "login_link_type_failed", "o link do login não chegou à barra de endereço; tento de novo");
+    if let Some(view) = locked_views(views).get_mut(operation) {
+        view.pending.get_or_insert(url);
+    }
+    false
+}
+
+const FOLLOW_TRIES: u32 = 20;
+const FOLLOW_EVERY: std::time::Duration = std::time::Duration::from_secs(1);
 
 type Views = Arc<Mutex<HashMap<String, View>>>;
 
@@ -637,7 +647,7 @@ impl LoginBrowser {
             };
             // Sem saber o que já estava na tela, qualquer janela poderia virar a do login.
             let baseline = list_windows(desk.as_ref())?.into_iter().map(|window| window.id).collect();
-            Some(View { desk, baseline, window: None, capture_id: None })
+            Some(View { desk, baseline, window: None, capture_id: None, pending: None })
         })
         .await;
         if let Ok(Some(view)) = prepared {
@@ -656,6 +666,7 @@ impl LoginBrowser {
             return json!({"available": false});
         };
         let looked = known.is_some();
+        let (views, typing) = (self.views.clone(), operation.to_owned());
         let found = tokio::time::timeout(VIEW_CAP, tokio::task::spawn_blocking(move || {
             let Some(windows) = desk.windows() else { return None };
             let (window, first) = match &known {
@@ -669,8 +680,12 @@ impl LoginBrowser {
                     window = moved;
                 }
             }
-            let jpeg = desk.capture(&window);
             let can_input = desk.can_input();
+            // A sessão desconectada só recebe o link depois de reativada, e é por aqui que ele chega.
+            if can_input {
+                type_pending_link(&views, &typing, desk.as_ref(), &window);
+            }
+            let jpeg = desk.capture(&window);
             Some((Some(window), jpeg, can_input))
         }))
         .await;
@@ -745,7 +760,7 @@ impl LoginBrowser {
             .ok_or_else(|| refused(422, "erro_login_link_refused", "link de autorização recusado"))?;
         let probe = self.probe.clone();
         let host = tokio::task::spawn_blocking(move || probe()).await.map_err(|_| AccountError::io())?;
-        let command = browser_command(&host, &request.target, &browser_url(&request.url))
+        let command = browser_command(&host, &request.target, &request.url)
             .ok_or_else(|| refused(409, "erro_login_target_missing", "esse navegador não está mais disponível nesta máquina"))?;
         self.stop(&request.operation);
         if request.remote {
@@ -762,7 +777,51 @@ impl LoginBrowser {
             self.stop(&request.operation);
             return Err(refused(502, "erro_login_browser_failed", "não consegui abrir o navegador"));
         }
+        // Só quando a conta é de outra máquina: no próprio computador a pessoa usa o Chrome dela.
+        let follow = request.remote
+            && locked_views(&self.views).get_mut(&request.operation).map(|view| view.pending = Some(request.url.clone())).is_some();
+        if follow {
+            self.follow_link(&request.operation);
+        }
         Ok(())
+    }
+
+    /// A janela aparece quando o Chrome termina de abrir a página: espera por ela por um prazo curto.
+    fn follow_link(&self, operation: &str) {
+        let (views, operation) = (self.views.clone(), operation.to_owned());
+        tokio::spawn(async move {
+            for _ in 0..FOLLOW_TRIES {
+                tokio::time::sleep(FOLLOW_EVERY).await;
+                let Some((desk, baseline)) = locked_views(&views)
+                    .get(&operation)
+                    .filter(|view| view.pending.is_some())
+                    .map(|view| (view.desk.clone(), view.baseline.clone()))
+                else {
+                    return;
+                };
+                let (views, operation) = (views.clone(), operation.clone());
+                let settled = tokio::task::spawn_blocking(move || {
+                    // Sessão desconectada não recebe teclado: a transmissão digita depois de reativada.
+                    if !desk.can_input() {
+                        tracing::info!(code = "login_link_waits_input", "sessão desconectada: o link do login espera a reativação");
+                        return true;
+                    }
+                    let Some(window) = desk.windows().and_then(|windows| new_login_window(windows, &baseline)) else {
+                        return false;
+                    };
+                    type_pending_link(&views, &operation, desk.as_ref(), &window)
+                })
+                .await
+                .unwrap_or_else(|error| {
+                    tracing::warn!(code = "login_link_task_failed", %error, "a tentativa de digitar o link do login caiu");
+                    false
+                });
+                if settled {
+                    return;
+                }
+            }
+            tracing::warn!(code = "login_link_not_typed", "o link do login não foi digitado na janela do navegador");
+        });
     }
 
     /// Fica guardada até o login fechar: se a resposta se perde na rede, a consulta seguinte ainda a recebe.
@@ -1099,6 +1158,10 @@ mod tests {
             self.log.lock().unwrap().push("activate".to_owned());
             true
         }
+        fn navigate(&self, window: &crate::accounts::login_view::DeskWindow, url: &str) -> bool {
+            self.log.lock().unwrap().push(format!("navigate {} {url}", window.id));
+            !self.input_fails.load(Ordering::Relaxed)
+        }
         fn close(&self, window: &crate::accounts::login_view::DeskWindow) {
             self.log.lock().unwrap().push(format!("close {}", window.id));
         }
@@ -1151,6 +1214,64 @@ mod tests {
         browser.close_view("op").await;
         assert_eq!(desk.log.lock().unwrap().last().unwrap(), "close new");
         assert_eq!(browser.view("op").await["available"], false);
+    }
+
+    fn typed_links(desk: &FakeDesk) -> Vec<String> {
+        desk.log.lock().unwrap().iter().filter(|line| line.starts_with("navigate")).cloned().collect()
+    }
+
+    async fn until_typed(desk: &FakeDesk) {
+        for _ in 0..100 {
+            if !typed_links(desk).is_empty() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    fn remote_request(port: u16) -> OpenRequest {
+        OpenRequest { url: LINK.replace("34047", &port.to_string()), remote: true, ..view_request(TargetKind::ChromeProfile) }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_remote_login_types_the_link_once_into_the_new_window() {
+        let desk = Arc::new(FakeDesk::default());
+        desk.windows.lock().unwrap().push(desk_window("old"));
+        let browser = viewing(desk.clone());
+        let request = remote_request(34061);
+        browser.open(request.clone()).await.unwrap();
+        desk.windows.lock().unwrap().push(desk_window("new"));
+        until_typed(&desk).await;
+        browser.view("op").await;
+        assert_eq!(typed_links(&desk), [format!("navigate new {}", request.url)]);
+        browser.close_view("op").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_disconnected_session_gets_the_link_once_the_view_can_type() {
+        let desk = Arc::new(FakeDesk::default());
+        desk.no_input.store(true, Ordering::Relaxed);
+        let browser = viewing(desk.clone());
+        let request = remote_request(34062);
+        browser.open(request.clone()).await.unwrap();
+        desk.windows.lock().unwrap().push(desk_window("login"));
+        browser.view("op").await;
+        assert!(typed_links(&desk).is_empty(), "sem teclado nada é digitado");
+        desk.no_input.store(false, Ordering::Relaxed);
+        browser.view("op").await;
+        browser.view("op").await;
+        assert_eq!(typed_links(&desk), [format!("navigate login {}", request.url)]);
+        browser.close_view("op").await;
+    }
+
+    #[tokio::test]
+    async fn a_local_login_types_nothing() {
+        let desk = Arc::new(FakeDesk::default());
+        let browser = viewing(desk.clone());
+        browser.open(view_request(TargetKind::ChromeProfile)).await.unwrap();
+        desk.windows.lock().unwrap().push(desk_window("login"));
+        browser.view("op").await;
+        assert!(typed_links(&desk).is_empty());
     }
 
     #[tokio::test]
@@ -1373,15 +1494,6 @@ mod tests {
             parse_authorize_url(LINK),
             Some(AuthorizeLink { port: 34047, state: "st4te".into() })
         );
-    }
-
-    #[test]
-    fn opens_the_claude_ai_authorize_page() {
-        let opened = browser_url(LINK);
-        assert!(opened.starts_with("https://claude.ai/oauth/authorize?"), "{opened}");
-        assert_eq!(opened.split_once('?').map(|(_, q)| q), LINK.split_once('?').map(|(_, q)| q));
-        let other = LINK.replacen("claude.com", "claude.ai", 1);
-        assert_eq!(browser_url(&other), other);
     }
 
     #[test]
