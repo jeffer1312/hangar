@@ -6,6 +6,7 @@ use std::io;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -33,7 +34,7 @@ const LOGIN_LINE: &[u8] = b"login to server success";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Status {
-    /// Os dois filhos de pé.
+    /// Os dois filhos de pé, sem endereço recusado pelo serviço.
     pub enabled: bool,
     /// A supervisão ligada, mesmo com um filho subindo ou esperando para voltar.
     pub running: bool,
@@ -57,6 +58,10 @@ struct Live {
     port_error: Option<String>,
     start_error: Option<String>,
     login_error: Option<String>,
+    /// O serviço aceitou o login e recusou um endereço: no log do `frpc`, `start error:`.
+    proxy_error: Option<String>,
+    /// `connect.json` existe e não se leu; sai na próxima leitura que der certo.
+    state_error: Option<String>,
 }
 
 type Shared = Arc<Mutex<Live>>;
@@ -101,6 +106,8 @@ pub struct Supervisor {
     run: tokio::sync::Mutex<Option<Run>>,
     linking: tokio::sync::Mutex<()>,
     peer_links: Links,
+    /// O site da prévia já respondeu de fora: antes disso, publicado não quer dizer alcançável.
+    preview_reached: AtomicBool,
 }
 
 fn main_port_message() -> String {
@@ -119,7 +126,8 @@ impl Supervisor {
     pub fn new(dir: PathBuf, log_dir: PathBuf, devices: Arc<Store>, main_port: u16) -> Self {
         let live = Live { port_error: (main_port == CONNECT_PORT).then(main_port_message), ..Live::default() };
         Self { dir, log_dir, main_port, devices, programs: None, live: Arc::new(Mutex::new(live)), bound: watch::channel(false).0,
-            guest_port: watch::channel(false).0, preview_port: watch::channel(false).0, run: tokio::sync::Mutex::new(None), linking: tokio::sync::Mutex::new(()), peer_links: Links::default() }
+            guest_port: watch::channel(false).0, preview_port: watch::channel(false).0, run: tokio::sync::Mutex::new(None), linking: tokio::sync::Mutex::new(()), peer_links: Links::default(),
+            preview_reached: AtomicBool::new(false) }
     }
 
     pub fn dir(&self) -> &Path {
@@ -160,9 +168,16 @@ impl Supervisor {
         self.preview_port.send_replace(true);
     }
 
-    pub async fn linked(&self) -> Option<Linked> {
+    /// Ilegível é erro, nunca "não ligado": a causa também fica em `status().error`.
+    pub async fn read_linked(&self) -> Result<Option<Linked>, ConnectError> {
         let dir = self.dir.clone();
-        tokio::task::spawn_blocking(move || state::read(&dir)).await.ok().flatten()
+        let read = off_thread(move || state::read(&dir)).await;
+        lock(&self.live).state_error = read.as_ref().err().map(|error| error.msg.clone());
+        read
+    }
+
+    pub async fn linked(&self) -> Option<Linked> {
+        self.read_linked().await.ok().flatten()
     }
 
     pub fn status(&self) -> Status {
@@ -174,9 +189,10 @@ impl Supervisor {
                 format!("{name} caiu {} vezes (saída {exit})", child.restarts)
             })
             .collect();
-        let error = live.port_error.clone().or_else(|| live.start_error.clone()).or_else(|| live.login_error.clone())
+        let error = live.port_error.clone().or_else(|| live.state_error.clone()).or_else(|| self.devices.fault().map(str::to_owned))
+            .or_else(|| live.start_error.clone()).or_else(|| live.proxy_error.clone()).or_else(|| live.login_error.clone())
             .or_else(|| (!falling.is_empty()).then(|| format!("{}; veja connect-<nome>.log na pasta de logs do Hangar", falling.join("; "))));
-        Status { enabled: live.frpc.running && live.caddy.running, running: live.active, host: live.host.clone(), error }
+        Status { enabled: live.frpc.running && live.caddy.running && live.proxy_error.is_none(), running: live.active, host: live.host.clone(), error }
     }
 
     async fn halt(&self, run: &mut Option<Run>) {
@@ -187,6 +203,7 @@ impl Supervisor {
         let mut live = lock(&self.live);
         live.active = false;
         live.login_error = None;
+        live.proxy_error = None;
         live.frpc = ChildState::default();
         live.caddy = ChildState::default();
     }
@@ -275,8 +292,7 @@ impl Supervisor {
     pub async fn resume(&self) {
         // Desligar entre a leitura e a subida religaria o que acabou de ser apagado.
         let _linking = self.linking.lock().await;
-        let dir = self.dir.clone();
-        let Ok(Some(linked)) = tokio::task::spawn_blocking(move || state::read(&dir)).await else { return };
+        let Ok(Some(linked)) = self.read_linked().await else { return };
         match linked.identity() {
             Ok(identity) => self.devices.set_identity(Some(identity)),
             Err(error) => tracing::warn!(code = error.code, "identidade do Connect ilegível"),
@@ -292,18 +308,25 @@ impl Supervisor {
         if let Some(refusal) = self.port_refusal() {
             return Err(refusal);
         }
-        let dir = self.dir.clone();
-        if let Some(saved) = off_thread(move || Ok(state::read(&dir))).await? {
+        let read = self.read_linked().await;
+        if let Ok(Some(saved)) = &read {
             let same = saved.account == request.account && saved.machine_id == request.machine_name;
             if !same || lock(&self.live).active {
                 return Err(ConnectError::new(StatusCode::CONFLICT, "connect_already_linked", "esta máquina já está ligada ao Connect"));
             }
             self.devices.set_identity(Some(saved.identity()?));
-            return self.start(&saved).await;
+            return self.start(saved).await;
         }
         let linked = state::register(&request).await?;
-        let (dir, saved) = (self.dir.clone(), linked.clone());
-        off_thread(move || state::write(&dir, &saved)).await?;
+        let (dir, saved, unreadable) = (self.dir.clone(), linked.clone(), read.is_err());
+        off_thread(move || {
+            // Só depois do registro: senha errada não tira do lugar um arquivo bom que falhou por um instante.
+            if unreadable {
+                state::set_aside(&dir)?;
+            }
+            state::write(&dir, &saved)
+        }).await?;
+        lock(&self.live).state_error = None;
         self.devices.set_identity(Some(linked.identity()?));
         self.start(&linked).await
     }
@@ -316,8 +339,7 @@ impl Supervisor {
         if !*port.borrow() {
             return Err(closed);
         }
-        let dir = self.dir.clone();
-        let Some(mut linked) = off_thread(move || Ok(state::read(&dir))).await? else {
+        let Some(mut linked) = self.read_linked().await? else {
             return Err(ConnectError::new(StatusCode::CONFLICT, "connect_not_linked", "esta máquina não está ligada ao Connect"));
         };
         if *published(&mut linked) {
@@ -339,7 +361,8 @@ impl Supervisor {
         self.publish(&self.guest_port, closed, |linked| &mut linked.guest_published).await.map(|_| ())
     }
 
-    /// Devolve o host da prévia e se é a primeira: nela, quem chama espera o site abrir de fora.
+    /// Devolve o host da prévia e se quem chama ainda precisa esperar o site abrir de fora. Vale até a primeira
+    /// resposta (`preview_answered`), não só na publicação: o segundo pedido não solta link de site que nunca abriu.
     pub async fn publish_preview(&self) -> Result<(String, bool), ConnectError> {
         let closed = ConnectError::new(StatusCode::CONFLICT, "connect_preview_port_closed", format!("a porta da prévia ({PREVIEW_PORT}) não abriu neste servidor"));
         let (linked, first) = self.publish(&self.preview_port, closed, |linked| &mut linked.preview_published).await?;
@@ -347,7 +370,11 @@ impl Supervisor {
         if !first && !self.status().enabled {
             return Err(ConnectError::new(StatusCode::CONFLICT, "connect_not_running", "o Connect não está de pé nesta máquina"));
         }
-        Ok((linked.preview_host, first))
+        Ok((linked.preview_host, !self.preview_reached.load(Ordering::Relaxed)))
+    }
+
+    pub fn preview_answered(&self) {
+        self.preview_reached.store(true, Ordering::Relaxed);
     }
 
     /// Credencial de aparelho fica: ela vale também no Tailscale.
@@ -357,6 +384,7 @@ impl Supervisor {
         // Desligado primeiro no disco: se parar os filhos falhar, a próxima subida não religa.
         let dir = self.dir.clone();
         off_thread(move || state::remove(&dir)).await?;
+        self.preview_reached.store(false, Ordering::Relaxed);
         self.devices.set_identity(None);
         self.halt(&mut run).await;
         // Subida que falhou antes da supervisão deixa de pé o filho de uma vida anterior.

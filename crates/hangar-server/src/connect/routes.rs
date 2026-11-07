@@ -19,7 +19,7 @@ use super::devices::{Poll, Refusal, Store};
 use super::gate::DeviceCaller;
 use super::peers::{self, PeerLinker};
 use super::preview::LINK_PARAM;
-use super::state::{self, LinkRequest};
+use super::state::LinkRequest;
 use crate::machine_peers::store::valid_id;
 use crate::routes::{AppState, cors, on_connect_port, owner_gate};
 use crate::session_write::json_response;
@@ -239,16 +239,19 @@ async fn open_preview(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connec
     }
     // Tarefa própria: quem vem pelo Connect perde a conexão na troca dos filhos, e o pedido cancelado os deixaria parados.
     let supervisor = st.connect_supervisor.clone();
-    let (host, first) = match tokio::spawn(async move { supervisor.publish_preview().await }).await {
+    let (host, unconfirmed) = match tokio::spawn(async move { supervisor.publish_preview().await }).await {
         Ok(Ok(published)) => published,
         Ok(Err(failure)) => return error(&headers, failure.status, failure.code, &failure.msg),
         Err(_) => return error(&headers, StatusCode::INTERNAL_SERVER_ERROR, "connect_start_failed", "a operação do Connect foi interrompida"),
     };
     // O site recém-nascido ainda espera DNS e certificado. O 401 é a resposta do listener a quem não tem o link.
-    let reach = &st.connect_preview_reach;
-    if first && let Err(failure) = check_answer_until(&reach.probe, &host, 401, reach.every, reach.deadline).await {
-        let (Failure::Dns { detail } | Failure::Funnel { detail }) = failure;
-        return error(&headers, StatusCode::CONFLICT, "connect_preview_reach_failed", &format!("o site da prévia não abriu de fora: {detail}"));
+    if unconfirmed {
+        let reach = &st.connect_preview_reach;
+        if let Err(failure) = check_answer_until(&reach.probe, &host, 401, reach.every, reach.deadline).await {
+            let (Failure::Dns { detail } | Failure::Funnel { detail }) = failure;
+            return error(&headers, StatusCode::CONFLICT, "connect_preview_reach_failed", &format!("o site da prévia não abriu de fora: {detail}"));
+        }
+        st.connect_supervisor.preview_answered();
     }
     match st.connect_previews.open(body.port, &host) {
         Some(link) => reply(&headers, StatusCode::OK, json!({"url": format!("https://{host}/?{LINK_PARAM}={link}")})),
@@ -297,9 +300,10 @@ async fn link_peer(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
         cors(&headers, response.headers_mut());
         return response;
     }
-    let dir = st.connect_supervisor.dir().to_path_buf();
-    let Some(linked) = tokio::task::spawn_blocking(move || state::read(&dir)).await.ok().flatten() else {
-        return error(&headers, StatusCode::CONFLICT, "connect_not_linked", "esta máquina não está ligada ao Connect");
+    let linked = match st.connect_supervisor.read_linked().await {
+        Ok(Some(linked)) => linked,
+        Ok(None) => return error(&headers, StatusCode::CONFLICT, "connect_not_linked", "esta máquina não está ligada ao Connect"),
+        Err(failure) => return error(&headers, failure.status, failure.code, &failure.msg),
     };
     let server_id = st.current_server_id();
     if server_id.is_empty() {

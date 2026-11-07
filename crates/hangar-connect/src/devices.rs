@@ -113,6 +113,8 @@ pub struct Store {
     identity: RwLock<Option<ServiceIdentity>>,
     clock: Clock,
     state: Mutex<State>,
+    /// `devices.json` ficou no lugar sem ser lido: gravar por cima perderia os aparelhos que ele guarda.
+    fault: Option<String>,
 }
 
 impl Store {
@@ -121,8 +123,13 @@ impl Store {
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
         });
         let path = dir.join("devices.json");
-        let state = load(&path, clock());
-        Self { path, identity: RwLock::new(identity), clock, state: Mutex::new(state) }
+        let (state, fault) = load(&path, clock());
+        Self { path, identity: RwLock::new(identity), clock, state: Mutex::new(state), fault }
+    }
+
+    /// Vai para `status().error`. shortcut: lido só na subida, a recusa fica até reiniciar o servidor; reler a cada pedido custaria disco no porteiro.
+    pub fn fault(&self) -> Option<&str> {
+        self.fault.as_deref()
     }
 
     pub fn with_clock(mut self, clock: Clock) -> Self {
@@ -147,6 +154,9 @@ impl Store {
         prune(&mut next, now);
         let value = change(&mut next, now)?;
         if next != *state {
+            if let Some(fault) = &self.fault {
+                return Err(Refusal::Io(io::Error::other(fault.clone())));
+            }
             write(&self.path, &next)?;
             *state = next;
         }
@@ -358,20 +368,27 @@ fn write(path: &Path, state: &State) -> io::Result<()> {
     hangar_core::fs::atomic_write(path, &serde_json::to_vec_pretty(state).map_err(io::Error::other)?)
 }
 
-fn load(path: &Path, now: u64) -> State {
-    let parsed = std::fs::read(path).map_err(|e| e.to_string())
-        .and_then(|bytes| serde_json::from_slice::<State>(&bytes).map_err(|e| e.to_string()));
-    match parsed {
-        Ok(state) => state,
-        Err(_) if !path.exists() => State::default(),
+/// Falha de leitura não diz nada do conteúdo: o arquivo fica. Só o que abriu e não é JSON de aparelhos vai para o lado.
+fn load(path: &Path, now: u64) -> (State, Option<String>) {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return (State::default(), None),
+        Err(error) => {
+            tracing::warn!(code = "connect_devices_unreadable", "{} não foi lido: {error}", path.display());
+            return (State::default(), Some(format!("os aparelhos do Connect não foram lidos ({}): reinicie o Hangar depois de resolver", error.kind())));
+        }
+    };
+    match serde_json::from_slice::<State>(&bytes) {
+        Ok(state) => (state, None),
         Err(error) => {
             // Ilegível vira "nenhum aparelho": perde acessos, e vai pro lado para a próxima gravação não apagá-lo.
             tracing::warn!(code = "connect_devices_unreadable", "{} ilegível, começando vazio: {error}", path.display());
             let bad = path.with_extension(format!("bad-{now}"));
-            if let Err(e) = std::fs::rename(path, &bad) {
+            let fault = std::fs::rename(path, &bad).err().map(|e| {
                 tracing::warn!(code = "connect_devices_unreadable", "não consegui guardar {} ilegível: {e}", path.display());
-            }
-            State::default()
+                format!("os aparelhos do Connect estão ilegíveis e o arquivo não saiu do lugar ({}): reinicie o Hangar depois de resolver", e.kind())
+            });
+            (State::default(), fault)
         }
     }
 }

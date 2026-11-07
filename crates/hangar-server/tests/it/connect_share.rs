@@ -144,7 +144,7 @@ impl Env {
         format!("http://{}", serve(owner_router(state)).await)
     }
 
-    fn published(&self) -> bool { state::read(&self.dir).unwrap().guest_published }
+    fn published(&self) -> bool { state::read(&self.dir).unwrap().unwrap().guest_published }
 
     fn caddyfile(&self) -> String { std::fs::read_to_string(self.dir.join("Caddyfile")).unwrap() }
 

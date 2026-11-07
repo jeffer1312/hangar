@@ -480,7 +480,7 @@ async fn preview_never_reaches_hangar_ports() {
     }
     let (status, body) = replied(open_request(s.connect, &s.device, 8765)).await;
     assert_eq!(status, 422, "aparelho vale como dono e cai na mesma recusa: {body}");
-    assert!(!state::read(&s.dir).unwrap().preview_published, "recusa não gasta certificado");
+    assert!(!state::read(&s.dir).unwrap().unwrap().preview_published, "recusa não gasta certificado");
 
     // A porta é conferida a cada pedido, e o destino nunca sai do pedido.
     let (site, project) = (site().await, project().await);
@@ -502,14 +502,14 @@ async fn preview_site_is_born_on_first_use_and_stays() {
     let s = server().await;
     let (status, _) = replied(client().post(format!("http://{}/api/connect/preview", s.main)).body(r#"{"port":3000}"#)).await;
     assert_eq!(status, 401);
-    assert!(!state::read(&s.dir).unwrap().preview_published);
+    assert!(!state::read(&s.dir).unwrap().unwrap().preview_published);
 
     let (status, body) = replied(open_request(s.main, OWNER, 3000)).await;
     assert_eq!(status, 200, "{body}");
     let url = body["url"].as_str().unwrap();
     assert!(url.starts_with(&format!("https://{HOST}/?{LINK_PARAM}=")), "{url}");
-    assert!(state::read(&s.dir).unwrap().preview_published);
-    let frpc = std::fs::read_to_string(s.dir.join("frpc.toml")).unwrap();
+    assert!(state::read(&s.dir).unwrap().unwrap().preview_published);
+    let frpc =std::fs::read_to_string(s.dir.join("frpc.toml")).unwrap();
     assert!(frpc.contains(&format!(r#"customDomains = ["{HOST}"]"#)), "{frpc}");
     until("Caddy de pé", || read_pid(&s.dir, "caddy").is_some()).await;
     assert!(std::fs::read_to_string(s.dir.join("Caddyfile")).unwrap().contains(SITE));
@@ -547,11 +547,18 @@ async fn preview_link_waits_for_the_first_site_to_open_from_outside() {
     let (status, body) = replied(open_request(s.main, OWNER, 3000)).await;
     assert_eq!(status, 409, "{body}");
     assert_eq!(body["detail"]["code"], "connect_preview_reach_failed");
-    assert!(state::read(&s.dir).unwrap().preview_published, "o site fica: refazer gastaria outro certificado");
+    assert!(state::read(&s.dir).unwrap().unwrap().preview_published, "o site fica: refazer gastaria outro certificado");
 
+    // Publicado não quer dizer alcançável: a segunda tentativa confere de novo.
     until("Connect de pé", || s.supervisor.status().enabled).await;
     let (status, body) = replied(open_request(s.main, OWNER, 3000)).await;
-    assert_eq!(status, 200, "só a primeira publicação espera: {body}");
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["detail"]["code"], "connect_preview_reach_failed");
+
+    // O DNS segue sem o nome: depois de responder uma vez, nada confere de novo.
+    s.supervisor.preview_answered();
+    let (status, body) = replied(open_request(s.main, OWNER, 3000)).await;
+    assert_eq!(status, 200, "só espera até a primeira resposta: {body}");
     s.supervisor.stop().await;
 }
 
@@ -565,7 +572,7 @@ async fn preview_site_waits_for_this_server_to_open_the_port() {
 
     let refused = supervisor.publish_preview().await.unwrap_err();
     assert_eq!((refused.status.as_u16(), refused.code), (409, "connect_preview_port_closed"));
-    assert!(!state::read(&dir).unwrap().preview_published);
+    assert!(!state::read(&dir).unwrap().unwrap().preview_published);
 
     // Volta do servidor com o site publicado e a 8769 na mão de outro: a entrada do dono sobe sozinha.
     state::write(&dir, &Linked { preview_published: true, ..linked() }).unwrap();

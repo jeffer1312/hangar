@@ -19,7 +19,7 @@ use hangar_server::connect::CONNECT_PORT;
 use hangar_server::connect::binaries::{Digest, Package, fetch, packages};
 use hangar_server::connect::config::{render_caddyfile, render_frpc};
 use hangar_server::connect::devices::{Refusal, Store};
-use hangar_server::connect::state::{self, Linked};
+use hangar_server::connect::state::{self, LinkRequest, Linked};
 use hangar_server::connect::supervisor::{Supervisor, kill_leftover};
 use hangar_server::routes::AppState;
 use serde_json::{Value, json};
@@ -393,15 +393,56 @@ async fn zip_package_is_read_and_missing_member_is_refused() {
 }
 
 #[test]
-fn unreadable_state_counts_as_not_linked() {
+fn unreadable_state_is_an_error_not_unlinked() {
     let dir = tempfile::tempdir().unwrap();
-    assert!(state::read(dir.path()).is_none());
+    assert!(state::read(dir.path()).unwrap().is_none(), "só arquivo ausente é não ligado");
+    let unreadable = |dir: &Path| state::read(dir).err().map(|error| error.code);
     std::fs::write(dir.path().join("connect.json"), r#"{"code":"antigo","enabled":true}"#).unwrap();
-    assert!(state::read(dir.path()).is_none());
+    assert_eq!(unreadable(dir.path()), Some("connect_state_unreadable"));
     let mut tampered = serde_json::to_value(linked()).unwrap();
     tampered["host"] = json!("x\"\ny.z.w");
     std::fs::write(dir.path().join("connect.json"), tampered.to_string()).unwrap();
-    assert!(state::read(dir.path()).is_none(), "o que vai cru ao TOML é conferido também na volta do disco");
+    assert_eq!(unreadable(dir.path()), Some("connect_state_unreadable"), "o que vai cru ao TOML é conferido também na volta do disco");
+    std::fs::remove_file(dir.path().join("connect.json")).unwrap();
+    std::fs::create_dir(dir.path().join("connect.json")).unwrap();
+    assert_eq!(unreadable(dir.path()), Some("connect_state_unreadable"), "falha de leitura também");
+}
+
+#[test]
+fn unreadable_devices_reach_status() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir(dir.path().join("devices.json")).unwrap();
+    let error = alone(dir.path()).status().error.unwrap();
+    assert!(error.contains("aparelhos"), "{error}");
+}
+
+#[tokio::test]
+async fn unreadable_state_reaches_status_and_a_new_link_keeps_the_old_file() {
+    let (_, refusing) = spawn_service(true).await;
+    let (_, accepting) = spawn_service(false).await;
+    let request = |service: SocketAddr| LinkRequest { service_url: format!("http://{service}"), account: "acme".into(),
+        password: PASSWORD.into(), machine_name: "pc1".into() };
+    let dir = tempfile::tempdir().unwrap();
+    let dir = dir.path();
+    let supervisor = alone(dir);
+    std::fs::write(gate(dir), "").unwrap();
+    std::fs::write(dir.join("connect.json"), "{quebrado").unwrap();
+
+    supervisor.resume().await;
+    let status = supervisor.status();
+    assert!(status.error.as_deref().is_some_and(|error| error.contains("não foi lida")), "{status:?}");
+    assert!(!status.running);
+    assert!(supervisor.read_linked().await.is_err());
+
+    // Registro recusado não tira o arquivo do lugar: pode ser um bom que falhou por um instante.
+    assert!(supervisor.link(request(refusing)).await.is_err());
+    assert_eq!(std::fs::read_to_string(dir.join("connect.json")).unwrap(), "{quebrado");
+
+    supervisor.link(request(accepting)).await.unwrap();
+    assert_eq!(std::fs::read_to_string(dir.join("connect.json.bad")).unwrap(), "{quebrado");
+    assert!(state::read(dir).unwrap().is_some());
+    assert_eq!(supervisor.status().error, None);
+    supervisor.stop().await;
 }
 
 #[tokio::test]

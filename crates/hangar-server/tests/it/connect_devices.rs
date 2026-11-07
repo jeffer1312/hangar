@@ -578,6 +578,62 @@ async fn revoking_a_device_takes_everything_it_approved() {
     assert!(matches!(e.store.approve("qualquer", Some(first.as_str())), Err(Refusal::Credential)), "revogado não aprova mais");
 }
 
+fn set_mode(path: &Path, mode: u32) {
+    std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(mode)).unwrap();
+}
+
+fn set_aside_files(dir: &Path) -> usize {
+    std::fs::read_dir(dir).unwrap().filter(|entry| entry.as_ref().unwrap().file_name().to_string_lossy().contains(".bad-")).count()
+}
+
+/// Falha de leitura não diz nada do conteúdo: o arquivo bom fica no lugar, e nada grava por cima dele.
+#[test]
+fn unreadable_devices_file_stays_and_refuses_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let (id, token) = Store::new(dir.path().to_path_buf(), None).enroll("celular").unwrap();
+    let file = dir.path().join("devices.json");
+    let saved = std::fs::read(&file).unwrap();
+    set_mode(&file, 0o000);
+    if std::fs::read(&file).is_ok() { return; } // root lê tudo
+
+    let store = Store::new(dir.path().to_path_buf(), None);
+    assert!(store.fault().is_some());
+    assert!(store.list().is_empty());
+    assert!(matches!(store.enroll("outro"), Err(Refusal::Io(_))), "gravar agora apagaria quem ficou no arquivo");
+    set_mode(&file, 0o600);
+    assert_eq!(std::fs::read(&file).unwrap(), saved);
+    assert_eq!(set_aside_files(dir.path()), 0);
+
+    let back = Store::new(dir.path().to_path_buf(), None);
+    assert!(back.fault().is_none());
+    assert_eq!(back.verify(token.as_bytes()), Some(id));
+}
+
+#[test]
+fn corrupt_devices_file_goes_aside_and_the_store_keeps_working() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("devices.json"), "{quebrado").unwrap();
+    let store = Store::new(dir.path().to_path_buf(), None);
+    assert!(store.fault().is_none());
+    assert_eq!(set_aside_files(dir.path()), 1);
+    store.enroll("celular").unwrap();
+}
+
+#[test]
+fn corrupt_devices_file_that_cannot_move_is_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("devices.json");
+    std::fs::write(&file, "{quebrado").unwrap();
+    set_mode(dir.path(), 0o500);
+    if std::fs::write(dir.path().join("root"), "").is_ok() { set_mode(dir.path(), 0o700); return; } // root grava em tudo
+
+    let store = Store::new(dir.path().to_path_buf(), None);
+    assert!(store.fault().is_some());
+    assert!(matches!(store.enroll("celular"), Err(Refusal::Io(_))));
+    set_mode(dir.path(), 0o700);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "{quebrado");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn nav_link_carries_no_device_token_and_no_password() {
     let dir = tempfile::tempdir().unwrap();

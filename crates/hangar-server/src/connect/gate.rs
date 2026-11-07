@@ -45,8 +45,6 @@ pub async fn rewrite_peer(mut req: Request) -> Request {
 #[derive(Clone)]
 pub struct DeviceCaller {
     pub id: DeviceId,
-    /// O token apresentado: link que sai de volta ao aparelho leva este, nunca a senha.
-    pub token: String,
 }
 
 /// Em todo listener do dono, troca a credencial de aparelho pela senha dentro do processo. Na entrada
@@ -102,7 +100,7 @@ async fn serve_device(st: &AppState, mut req: Request, next: Next, id: DeviceId,
     });
     let watcher = Watcher::device(st.connect_devices.clone(), id.clone());
     req.extensions_mut().insert(watcher.clone());
-    req.extensions_mut().insert(DeviceCaller { id, token: String::from_utf8_lossy(token).into_owned() });
+    req.extensions_mut().insert(DeviceCaller { id });
     let mut response = next.run(req).await;
     restore_location(&mut response, &st.cfg.auth_token, token);
     let sse = response.headers().get(header::CONTENT_TYPE).is_some_and(|v| v.as_bytes().starts_with(b"text/event-stream"));

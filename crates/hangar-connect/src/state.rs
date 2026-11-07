@@ -100,22 +100,35 @@ pub fn write_private(path: &Path, bytes: &[u8]) -> Result<(), ConnectError> {
         .map_err(|cause| io_failed("connect_private_failed", "não consegui gravar o arquivo do Connect", &cause))
 }
 
-/// Estado ilegível vale como não ligado. A causa fica fora do log: o erro do serde cita trechos do arquivo.
-pub fn read(dir: &Path) -> Option<Linked> {
+fn unreadable(cause: &str) -> ConnectError {
+    ConnectError::new(StatusCode::INTERNAL_SERVER_ERROR, "connect_state_unreadable", format!("a ligação do Connect não foi lida ({cause})"))
+}
+
+/// `None` é só arquivo ausente: ilegível não vale como "não ligado". A causa do serde fica fora do log e do
+/// erro, porque cita trechos do arquivo.
+pub fn read(dir: &Path) -> Result<Option<Linked>, ConnectError> {
     let path = dir.join(STATE_FILE);
     let bytes = match std::fs::read(&path) {
         Ok(bytes) => bytes,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return None,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             tracing::warn!(code = "connect_state_unreadable", kind = ?error.kind(), "estado do Connect ilegível");
-            return None;
+            return Err(unreadable(&error.kind().to_string()));
         }
     };
-    let linked = serde_json::from_slice::<Linked>(&bytes).ok().filter(|linked| linked.validate().is_ok());
-    if linked.is_none() {
-        tracing::warn!(code = "connect_state_unreadable", "estado do Connect ilegível");
+    match serde_json::from_slice::<Linked>(&bytes).ok().filter(|linked| linked.validate().is_ok()) {
+        Some(linked) => Ok(Some(linked)),
+        None => {
+            tracing::warn!(code = "connect_state_unreadable", "estado do Connect ilegível");
+            Err(unreadable("conteúdo inválido"))
+        }
     }
-    linked
+}
+
+/// Ligação nova por cima de uma ilegível: a antiga fica ao lado, para quem quiser recuperar.
+pub fn set_aside(dir: &Path) -> Result<(), ConnectError> {
+    std::fs::rename(dir.join(STATE_FILE), dir.join(format!("{STATE_FILE}.bad")))
+        .map_err(|cause| io_failed("connect_state_unreadable", "não consegui guardar a ligação ilegível do Connect", &cause))
 }
 
 pub fn write(dir: &Path, linked: &Linked) -> Result<(), ConnectError> {

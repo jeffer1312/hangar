@@ -154,9 +154,11 @@ pub async fn discover(s: &Service) -> Result<Value, Error> {
     discover_with(s, tailscale().await).await
 }
 /// `status` é o `tailscale status --json`: vazio, sobra a conta do Connect. Máquina vista pelas duas
-/// fontes fica com o endereço do Tailscale. Serviço fora só é erro quando não há Tailscale.
+/// fontes fica com o endereço do Tailscale. Conta que falha é erro quando não sobra nenhuma linha; com
+/// linhas do Tailscale, cada uma leva `connect_error`, senão a lista pareceria completa.
 pub async fn discover_with(s: &Service, status: Value) -> Result<Value, Error> {
     let (rows, account) = tokio::join!(tailscale_rows(s, &status), account_machines(s));
+    let mut connect_error = None;
     let machines = match account {
         None if !truthy(&status) => {
             return Err(Error {
@@ -167,23 +169,29 @@ pub async fn discover_with(s: &Service, status: Value) -> Result<Value, Error> {
         }
         None => Vec::new(),
         Some(Ok(machines)) => machines,
-        Some(Err(error)) if !truthy(&status) => {
+        Some(Err(error)) if !truthy(&status) || rows.is_empty() => {
             return Err(Error { status: error.status.as_u16(), code: error.code, msg: error.msg });
         }
         Some(Err(error)) => {
             tracing::warn!(code = error.code, "descoberta só pelo Tailscale: {}", error.msg);
+            connect_error = Some(json!({"code": error.code, "msg": error.msg}));
             Vec::new()
         }
     };
     let mut rows = crate::connect::peers::join_discovery(rows, machines);
     rows.sort_by(|a, b| a["nome"].as_str().cmp(&b["nome"].as_str()));
+    if let Some(error) = connect_error {
+        rows.iter_mut().for_each(|row| row["connect_error"] = error.clone());
+    }
     Ok(json!(rows))
 }
 /// `None`: esta máquina não está ligada ao Connect.
 async fn account_machines(s: &Service) -> Option<Result<Vec<crate::connect::peers::AccountMachine>, crate::connect::ConnectError>> {
     let dir = s.connect_dir.clone()?;
-    let linked = tokio::task::spawn_blocking(move || crate::connect::state::read(&dir)).await.ok().flatten()?;
-    Some(crate::connect::peers::account_machines(&linked).await)
+    match tokio::task::spawn_blocking(move || crate::connect::state::read(&dir)).await.ok()? {
+        Ok(linked) => Some(crate::connect::peers::account_machines(&linked?).await),
+        Err(error) => Some(Err(error)),
+    }
 }
 async fn tailscale_rows(s: &Service, status: &Value) -> Vec<Value> {
     let peers = status["Peer"]
