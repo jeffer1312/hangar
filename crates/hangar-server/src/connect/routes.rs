@@ -56,10 +56,13 @@ pub fn matches(method: &Method, path: &str) -> bool {
     }
 }
 
-fn reply(headers: &HeaderMap, status: StatusCode, body: Value) -> Response {
-    let mut response = json_response(status, body);
+fn with_cors(headers: &HeaderMap, mut response: Response) -> Response {
     cors(headers, response.headers_mut());
     response
+}
+
+fn reply(headers: &HeaderMap, status: StatusCode, body: Value) -> Response {
+    with_cors(headers, json_response(status, body))
 }
 
 fn error(headers: &HeaderMap, status: StatusCode, code: &str, msg: &str) -> Response {
@@ -125,18 +128,16 @@ async fn status(State(st): State<Arc<AppState>>, req: Request) -> Response {
 
 async fn list(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let headers = req.headers().clone();
-    if let Err(mut response) = owner_gate(&st, peer, &req).await {
-        cors(&headers, response.headers_mut());
-        return response;
+    if let Err(response) = owner_gate(&st, peer, &req).await {
+        return with_cors(&headers, response);
     }
     reply(&headers, StatusCode::OK, json!(st.connect_devices.list()))
 }
 
 async fn approve(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, Path(id): Path<String>, req: Request) -> Response {
     let headers = req.headers().clone();
-    if let Err(mut response) = owner_gate(&st, peer, &req).await {
-        cors(&headers, response.headers_mut());
-        return response;
+    if let Err(response) = owner_gate(&st, peer, &req).await {
+        return with_cors(&headers, response);
     }
     let by = req.extensions().get::<DeviceCaller>().map(|device| device.id.clone());
     match blocking(&st, move |store| store.approve(&id, by.as_deref())).await {
@@ -147,9 +148,8 @@ async fn approve(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo
 
 async fn remove(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, Path(id): Path<String>, req: Request) -> Response {
     let headers = req.headers().clone();
-    if let Err(mut response) = owner_gate(&st, peer, &req).await {
-        cors(&headers, response.headers_mut());
-        return response;
+    if let Err(response) = owner_gate(&st, peer, &req).await {
+        return with_cors(&headers, response);
     }
     let by = req.extensions().get::<DeviceCaller>().map(|device| device.id.clone());
     match blocking(&st, move |store| by.map_or_else(|| store.remove(&id), |by| store.remove_by(&id, &by))).await {
@@ -177,9 +177,8 @@ async fn enroll(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<
     if let Some(response) = owner_secret_refusal(&req) {
         return response;
     }
-    if let Err(mut response) = owner_gate(&st, peer, &req).await {
-        cors(&headers, response.headers_mut());
-        return response;
+    if let Err(response) = owner_gate(&st, peer, &req).await {
+        return with_cors(&headers, response);
     }
     let body: EnrollBody = match parse(req).await { Ok(body) => body, Err(response) => return response };
     match blocking(&st, move |store| store.enroll(&body.device_name)).await {
@@ -190,9 +189,8 @@ async fn enroll(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<
 
 async fn connect_state(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let headers = req.headers().clone();
-    if let Err(mut response) = owner_gate(&st, peer, &req).await {
-        cors(&headers, response.headers_mut());
-        return response;
+    if let Err(response) = owner_gate(&st, peer, &req).await {
+        return with_cors(&headers, response);
     }
     reply(&headers, StatusCode::OK, json!(st.connect_supervisor.status()))
 }
@@ -211,9 +209,8 @@ async fn link(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<So
     if let Some(response) = owner_secret_refusal(&req) {
         return response;
     }
-    if let Err(mut response) = owner_gate(&st, peer, &req).await {
-        cors(&headers, response.headers_mut());
-        return response;
+    if let Err(response) = owner_gate(&st, peer, &req).await {
+        return with_cors(&headers, response);
     }
     let body: LinkRequest = match parse(req).await { Ok(body) => body, Err(response) => return response };
     let supervisor = st.connect_supervisor.clone();
@@ -231,9 +228,8 @@ fn preview_port_refused(headers: &HeaderMap) -> Response {
 /// Aparelho vale como dono: a prévia não dá acesso a mais nada e acaba com um `DELETE`.
 async fn open_preview(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let headers = req.headers().clone();
-    if let Err(mut response) = owner_gate(&st, peer, &req).await {
-        cors(&headers, response.headers_mut());
-        return response;
+    if let Err(response) = owner_gate(&st, peer, &req).await {
+        return with_cors(&headers, response);
     }
     let body: PreviewBody = match parse(req).await { Ok(body) => body, Err(response) => return response };
     if st.connect_previews.refused(body.port) {
@@ -264,18 +260,16 @@ async fn open_preview(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connec
 /// Prévia esquecida precisa aparecer: o link some da tela, e ela segue aberta até o prazo.
 async fn preview_state(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let headers = req.headers().clone();
-    if let Err(mut response) = owner_gate(&st, peer, &req).await {
-        cors(&headers, response.headers_mut());
-        return response;
+    if let Err(response) = owner_gate(&st, peer, &req).await {
+        return with_cors(&headers, response);
     }
     reply(&headers, StatusCode::OK, json!({"preview": st.connect_previews.state()}))
 }
 
 async fn close_preview(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let headers = req.headers().clone();
-    if let Err(mut response) = owner_gate(&st, peer, &req).await {
-        cors(&headers, response.headers_mut());
-        return response;
+    if let Err(response) = owner_gate(&st, peer, &req).await {
+        return with_cors(&headers, response);
     }
     st.connect_previews.close();
     reply(&headers, StatusCode::OK, json!({"ok": true}))
@@ -284,9 +278,8 @@ async fn close_preview(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conne
 /// O andamento de cada ligação com outra máquina da conta: é o que a tela acompanha enquanto o cartão espera.
 async fn peer_links(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let headers = req.headers().clone();
-    if let Err(mut response) = owner_gate(&st, peer, &req).await {
-        cors(&headers, response.headers_mut());
-        return response;
+    if let Err(response) = owner_gate(&st, peer, &req).await {
+        return with_cors(&headers, response);
     }
     reply(&headers, StatusCode::OK, json!(st.connect_supervisor.peer_links().list()))
 }
@@ -298,9 +291,8 @@ async fn link_peer(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     if let Some(response) = owner_secret_refusal(&req) {
         return response;
     }
-    if let Err(mut response) = owner_gate(&st, peer, &req).await {
-        cors(&headers, response.headers_mut());
-        return response;
+    if let Err(response) = owner_gate(&st, peer, &req).await {
+        return with_cors(&headers, response);
     }
     let linked = match st.connect_supervisor.read_linked().await {
         Ok(Some(linked)) => linked,
@@ -340,9 +332,8 @@ async fn forget(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<
     if let Some(response) = owner_secret_refusal(&req) {
         return response;
     }
-    if let Err(mut response) = owner_gate(&st, peer, &req).await {
-        cors(&headers, response.headers_mut());
-        return response;
+    if let Err(response) = owner_gate(&st, peer, &req).await {
+        return with_cors(&headers, response);
     }
     st.connect_previews.close();
     let supervisor = st.connect_supervisor.clone();

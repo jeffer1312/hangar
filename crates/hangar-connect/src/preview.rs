@@ -20,7 +20,7 @@ use tokio::net::TcpStream;
 use tokio::sync::watch;
 
 use super::config::{CADDY_HTTP_PORT, CADDY_HTTPS_PORT};
-use super::devices::Clock;
+use super::devices::{Clock, system_clock};
 use super::{CONNECT_PORT, GUEST_PORT};
 
 pub const PREVIEW_PORT: u16 = 8769;
@@ -137,9 +137,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl Previews {
     pub fn new() -> Self {
-        let clock: Clock = Arc::new(|| {
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
-        });
+        let clock = system_clock();
         let reserved = [DEFAULT_MAIN_PORT, GUEST_PORT, CONNECT_PORT, PREVIEW_PORT, CADDY_HTTP_PORT, CADDY_HTTPS_PORT, CLIPROXY_PORT].into_iter().collect();
         Self { clock, reserved: Mutex::new(reserved), current: Mutex::new(None), generation: watch::channel(0).0 }
     }

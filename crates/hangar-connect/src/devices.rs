@@ -21,6 +21,10 @@ pub const MAX_TICKET_AHEAD: u64 = 5 * 60;
 pub type DeviceId = String;
 pub type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
 
+pub fn system_clock() -> Clock {
+    Arc::new(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()))
+}
+
 /// O que o serviço do Connect informou ao ligar esta máquina.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServiceIdentity {
@@ -121,9 +125,7 @@ pub struct Store {
 
 impl Store {
     pub fn new(dir: PathBuf, identity: Option<ServiceIdentity>) -> Self {
-        let clock: Clock = Arc::new(|| {
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
-        });
+        let clock = system_clock();
         let path = dir.join("devices.json");
         let (state, fault) = load(&path, clock());
         Self { path, identity: RwLock::new(identity), clock, state: Mutex::new(state), fault }
