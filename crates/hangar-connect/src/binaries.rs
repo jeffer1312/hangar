@@ -100,7 +100,7 @@ pub fn local() -> Result<[Package; 2], ConnectError> {
 
 async fn download(url: &str) -> Result<Vec<u8>, ConnectError> {
     let failed = |cause: String| ConnectError::new(StatusCode::BAD_GATEWAY, "connect_download_failed", format!("não consegui baixar {url}: {cause}"));
-    let client = crate::http_client().timeout(DOWNLOAD_TIMEOUT).build().map_err(|error| failed(error.to_string()))?;
+    let client = hangar_core::net::http_client().timeout(DOWNLOAD_TIMEOUT).build().map_err(|error| failed(error.to_string()))?;
     let mut response = client.get(url).send().await.and_then(reqwest::Response::error_for_status)
         .map_err(|error| failed(error.to_string()))?;
     let mut data = Vec::new();
@@ -154,7 +154,7 @@ fn install(data: &[u8], package: &Package, dest: &Path) -> Result<(), ConnectErr
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent).map_err(|cause| write_failed(dest, &cause))?;
     }
-    crate::runtime::queue::atomic_write(dest, &content).map_err(|cause| write_failed(dest, &cause))?;
+    hangar_core::fs::atomic_write(dest, &content).map_err(|cause| write_failed(dest, &cause))?;
     make_executable(dest)
 }
 

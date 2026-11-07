@@ -1573,10 +1573,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-connect"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.23.1",
+ "flate2",
+ "hangar-core",
+ "libc",
+ "memchr",
+ "reqwest",
+ "ring",
+ "serde",
+ "serde_json",
+ "subtle",
+ "sysinfo",
+ "tar",
+ "tokio",
+ "tracing",
+ "zip",
+]
+
+[[package]]
 name = "hangar-core"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64 0.23.1",
  "chrono",
  "flate2",
  "futures-util",
@@ -1627,6 +1650,7 @@ dependencies = [
  "hangar-api",
  "hangar-auth",
  "hangar-codex",
+ "hangar-connect",
  "hangar-core",
  "hangar-package",
  "hangar-transcript",

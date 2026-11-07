@@ -11,7 +11,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 
-use crate::login_guests::store as credentials;
+use hangar_core::credentials;
 
 pub const MAX_PENDING: usize = 5;
 pub const PENDING_TTL: u64 = 10 * 60;
@@ -317,7 +317,7 @@ fn write(path: &Path, state: &State) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    crate::runtime::queue::atomic_write(path, &serde_json::to_vec_pretty(state).map_err(io::Error::other)?)
+    hangar_core::fs::atomic_write(path, &serde_json::to_vec_pretty(state).map_err(io::Error::other)?)
 }
 
 fn load(path: &Path, now: u64) -> State {

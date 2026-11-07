@@ -80,7 +80,7 @@ fn private_dir(dir: &Path) -> io::Result<()> {
     std::fs::set_permissions(dir, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
     // `0600` não protege no Windows: a pasta só abre para o usuário e o que nasce dentro herda.
     #[cfg(windows)]
-    crate::runtime::claude_relaunch::restrict_path(dir, "OICI")?;
+    hangar_core::private_acl::restrict_path(dir, "OICI")?;
     Ok(())
 }
 
@@ -90,7 +90,7 @@ pub fn protect(dir: &Path) -> Result<(), ConnectError> {
 }
 
 pub fn write_private(path: &Path, bytes: &[u8]) -> Result<(), ConnectError> {
-    crate::runtime::queue::atomic_write(path, bytes)
+    hangar_core::fs::atomic_write(path, bytes)
         .map_err(|cause| io_failed("connect_private_failed", "não consegui gravar o arquivo do Connect", &cause))
 }
 
@@ -199,7 +199,7 @@ pub async fn register(request: &LinkRequest) -> Result<Linked, ConnectError> {
     }
     let endpoint = |path: &str| base.join(path).map_err(|_| Linked::invalid());
     // Sem seguir redirecionamento: a senha iria junto para outro endereço.
-    let client = crate::http_client().redirect(reqwest::redirect::Policy::none()).timeout(SERVICE_TIMEOUT).build()
+    let client = hangar_core::net::http_client().redirect(reqwest::redirect::Policy::none()).timeout(SERVICE_TIMEOUT).build()
         .map_err(|_| ConnectError::new(StatusCode::INTERNAL_SERVER_ERROR, "connect_service_unreachable", "cliente HTTP indisponível"))?;
     let session: Session = call(client.post(endpoint("/v1/sessions")?)
         .json(&json!({"name": request.account, "password": request.password}))).await?;

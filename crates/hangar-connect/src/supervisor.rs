@@ -18,7 +18,7 @@ use tokio::sync::{oneshot, watch};
 use super::devices::Store;
 use super::state::{self, LinkRequest, Linked};
 use super::{CONNECT_PORT, ConnectError, binaries, config};
-use crate::terminal_process::{CommandTree, OwnedTree, PRIVATE_ENV_KEYS};
+use hangar_core::terminal_process::{CommandTree, OwnedTree, PRIVATE_ENV_KEYS};
 
 const FRPC_WAITS: [u64; 5] = [1, 2, 5, 10, 30];
 /// Cada subida do Caddy sem certificado pode gastar uma validação do limite semanal, que é de todas as máquinas.
@@ -458,7 +458,7 @@ fn open_log(path: &Path) -> io::Result<std::fs::File> {
         std::fs::create_dir_all(parent)?;
     }
     // shortcut: gira só na subida do filho; quem fica meses de pé passa do teto até a próxima.
-    crate::rotate_log(path, crate::LOG_MAX_BYTES);
+    hangar_core::log_rotate::rotate_log(path, hangar_core::log_rotate::LOG_MAX_BYTES);
     // Acréscimo: num laço de quedas, a causa da anterior continua no arquivo.
     std::fs::OpenOptions::new().create(true).append(true).open(path)
 }
