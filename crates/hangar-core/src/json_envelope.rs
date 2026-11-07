@@ -4,17 +4,17 @@ use serde_json::value::RawValue;
 
 /// Float que atravessa o buffer do serde (enum com tag, `flatten`): com `arbitrary_precision` o
 /// número chega como mapa, que `f64` recusa e `Number` aceita.
-pub(crate) fn float<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+pub fn float<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
     serde_json::Number::deserialize(deserializer)?
         .as_f64()
         .ok_or_else(|| de::Error::custom("número fora do alcance de f64"))
 }
 
-pub(crate) fn float32<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f32, D::Error> {
+pub fn float32<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f32, D::Error> {
     float(deserializer).map(|value| value as f32)
 }
 
-pub(crate) struct Fields(Vec<(String, Box<RawValue>)>);
+pub struct Fields(Vec<(String, Box<RawValue>)>);
 
 impl<'de> Deserialize<'de> for Fields {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -35,7 +35,7 @@ impl<'de> Deserialize<'de> for Fields {
 }
 
 impl Fields {
-    pub(crate) fn take<T: DeserializeOwned>(&mut self, name: &str) -> Result<T, String> {
+    pub fn take<T: DeserializeOwned>(&mut self, name: &str) -> Result<T, String> {
         let mut positions = self.0.iter().enumerate().filter(|(_, (key, _))| key == name);
         let index = positions.next().map(|(index, _)| index).ok_or_else(|| format!("campo ausente: {name}"))?;
         if positions.next().is_some() { return Err(format!("campo duplicado: {name}")); }
@@ -43,7 +43,7 @@ impl Fields {
         serde_json::from_str(raw.get()).map_err(|error| error.to_string())
     }
 
-    pub(crate) fn decode<T: DeserializeOwned>(&self) -> Result<T, serde_json::Error> {
+    pub fn decode<T: DeserializeOwned>(&self) -> Result<T, serde_json::Error> {
         // O Content do serde transforma floats em mapas com arbitrary_precision. Os pares brutos
         // conservam também duplicatas para o desserializador do corpo recusá-las como antes.
         let fields = self.0.iter().map(|(key, raw)| {
@@ -53,10 +53,10 @@ impl Fields {
     }
 }
 
-pub(crate) struct Envelope<T> {
-    pub(crate) sessao: String,
-    pub(crate) token: String,
-    pub(crate) body: T,
+pub struct Envelope<T> {
+    pub sessao: String,
+    pub token: String,
+    pub body: T,
 }
 
 impl<'de, T: DeserializeOwned> Deserialize<'de> for Envelope<T> {

@@ -15,7 +15,7 @@ static MARK: LazyLock<String> = LazyLock::new(|| {
     )
 });
 pub fn loads(text: &str) -> Option<Value> {
-    crate::orq_conductor::load(text, &MARK)
+    super::conductor::load(text, &MARK)
 }
 pub(super) fn surrogate_marker(code: u32) -> String {
     format!("{}surrogate:{code:04x};", *MARK)
@@ -26,7 +26,7 @@ pub fn infinite(value: &Value) -> bool {
         .is_some_and(|s| s == format!("{}Infinity", *MARK) || s == format!("{}-Infinity", *MARK))
 }
 pub fn python_string(value: &Value) -> String {
-    crate::orq_conductor::py_str(value, &MARK)
+    super::conductor::py_str(value, &MARK)
 }
 pub fn dumps(value: &Value, sort_keys: bool) -> String {
     fn codepoints(key: &str) -> Vec<u32> {
@@ -50,11 +50,11 @@ pub fn dumps(value: &Value, sort_keys: bool) -> String {
         out
     }
     let raw = if sort_keys {
-        crate::transcript::pyjson::dumps_ordered(value, &|left, right| {
+        crate::pycompat::pyjson::dumps_ordered(value, &|left, right| {
             codepoints(left).cmp(&codepoints(right))
         })
     } else {
-        crate::transcript::pyjson::dumps_literal(value)
+        crate::pycompat::pyjson::dumps_literal(value)
     };
     restore_markers(raw, true)
 }
@@ -62,23 +62,23 @@ pub fn dumps(value: &Value, sort_keys: bool) -> String {
 /// Escrita UTF-8 do Python: não finitos permanecem números, surrogate isolado recusa o arquivo.
 pub fn dumps_indented_utf8(value: &Value, indent: usize) -> Result<String, &'static str> {
     if contains_surrogate(value) { return Err("surrogate Unicode isolado"); }
-    Ok(restore_markers(crate::transcript::pyjson::dumps_indent(value, indent, false), false))
+    Ok(restore_markers(crate::pycompat::pyjson::dumps_indent(value, indent, false), false))
 }
 
 /// JSON UTF-8 com os separadores padrão do Python, sem copiar a árvore.
 pub fn dumps_utf8(value:&Value)->Result<String,&'static str>{
     if contains_surrogate(value){return Err("surrogate Unicode isolado");}
-    Ok(restore_markers(crate::transcript::pyjson::dumps_unicode(value,false),false))
+    Ok(restore_markers(crate::pycompat::pyjson::dumps_unicode(value,false),false))
 }
 
 /// JSON compacto UTF-8 para revisões; Unicode inválido não pode atravessar a codificação.
 pub fn dumps_compact_utf8(value:&Value,sort_keys:bool)->Result<String,&'static str>{
     if contains_surrogate(value){return Err("surrogate Unicode isolado");}
-    Ok(restore_markers(crate::transcript::pyjson::dumps_compact_sorted_unicode(value,sort_keys),false))
+    Ok(restore_markers(crate::pycompat::pyjson::dumps_compact_sorted_unicode(value,sort_keys),false))
 }
 
 fn restore_markers(mut raw: String, ascii: bool) -> String {
-    let quote = |value: &Value| if ascii { crate::transcript::pyjson::dumps_literal(value) } else { crate::transcript::pyjson::dumps_unicode(value, false) };
+    let quote = |value: &Value| if ascii { crate::pycompat::pyjson::dumps_literal(value) } else { crate::pycompat::pyjson::dumps_unicode(value, false) };
     for token in ["NaN", "Infinity", "-Infinity"] {
         raw = raw.replace(
             &quote(&json!(format!("{}{token}", *MARK))),
@@ -108,7 +108,7 @@ fn restore_markers(mut raw: String, ascii: bool) -> String {
     out
 }
 /// Árvore externa pode exceder a pilha: descarta sem recursão ao sair de escopo.
-pub(crate) struct ValueGuard(pub Value);
+pub struct ValueGuard(pub Value);
 impl std::ops::Deref for ValueGuard {
     type Target = Value;
     fn deref(&self) -> &Value { &self.0 }
@@ -177,7 +177,7 @@ pub fn contains_nonfinite(value: &Value) -> bool {
 
 /// Resposta tipada do FastAPI converte números não finitos em null, mas não corrige Unicode inválido.
 pub fn normalize_response(value: Value) -> Value {
-    let result = crate::transcript::json_tree::map_leaves(&value, |leaf| {
+    let result = crate::pycompat::json_tree::map_leaves(&value, |leaf| {
         if contains_nonfinite(leaf) { Value::Null } else { leaf.clone() }
     });
     discard(value);
@@ -185,11 +185,11 @@ pub fn normalize_response(value: Value) -> Value {
 }
 
 pub fn clone_value(value: &Value) -> Value {
-    crate::transcript::json_tree::map_leaves(value, Value::clone)
+    crate::pycompat::json_tree::map_leaves(value, Value::clone)
 }
 
 pub fn discard(value: Value) {
-    crate::transcript::json_tree::discard(value);
+    crate::pycompat::json_tree::discard(value);
 }
 
 /// Fatia texto por codepoints Python sem partir um surrogate representado internamente.

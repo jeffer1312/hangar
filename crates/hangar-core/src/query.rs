@@ -23,7 +23,7 @@ pub fn bool_param_or(query: &HashMap<String, String>, name: &str, default: bool)
         return Ok(default);
     };
     fastapi_bool(value).ok_or_else(|| {
-        Box::new(crate::session_write::json_response(
+        Box::new(crate::http::json_response(
             StatusCode::UNPROCESSABLE_ENTITY,
             json!({"detail":[{"type":"bool_parsing","loc":["query",name],
                 "msg":"Input should be a valid boolean, unable to interpret input","input":value}]}),

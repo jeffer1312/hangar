@@ -151,10 +151,10 @@ static P: LazyLock<Patterns> = LazyLock::new(|| {
     }
 });
 
-pub(crate) fn whitespace(c: char) -> bool { c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c) }
-pub(crate) fn trim(s: &str) -> &str { s.trim_matches(whitespace) }
+pub fn whitespace(c: char) -> bool { c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c) }
+pub fn trim(s: &str) -> &str { s.trim_matches(whitespace) }
 fn left(s: &str) -> &str { s.trim_start_matches(whitespace) }
-pub(crate) fn right(s: &str) -> &str { s.trim_end_matches(whitespace) }
+pub fn right(s: &str) -> &str { s.trim_end_matches(whitespace) }
 fn word(c: char) -> bool {
     let mut encoded = [0; 4];
     P.word.is_match(c.encode_utf8(&mut encoded))
@@ -184,7 +184,7 @@ fn decimal_number(s: &str) -> Option<usize> {
     })
 }
 /// `str.splitlines()` do Python.
-pub(crate) fn lines(pane: &str) -> Vec<&str> {
+pub fn lines(pane: &str) -> Vec<&str> {
     if pane.is_empty() { return Vec::new(); }
     let mut out: Vec<_> = P.lines.split(pane).collect();
     if out.last() == Some(&"") { out.pop(); }

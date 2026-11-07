@@ -1,9 +1,8 @@
 //! Orquestração: contratos, histórico e linha do tempo lidos no próprio servidor.
-pub mod body;
-pub(crate) mod body_encoding;
-mod body_numbers;
+pub use hangar_core::orq_codec::body;
+pub(crate) use hangar_core::orq_codec::body_encoding;
 mod common;
-pub mod codec;
+pub use hangar_core::orq_codec::codec;
 pub mod markdown;
 pub use common::*;
 pub mod consumption;

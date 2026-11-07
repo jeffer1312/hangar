@@ -123,16 +123,7 @@ pub fn kind(v: &Value) -> &str {
 pub fn array(v: &Value) -> &[Value] {
     v.as_array().map(Vec::as_slice).unwrap_or(&[])
 }
-pub fn truthy(v: &Value) -> bool {
-    match v {
-        Value::Null => false,
-        Value::Bool(b) => *b,
-        Value::String(s) => !s.is_empty(),
-        Value::Number(n) => n.as_f64() != Some(0.),
-        Value::Array(a) => !a.is_empty(),
-        Value::Object(o) => !o.is_empty(),
-    }
-}
+pub use hangar_core::pycompat::truthy;
 /// Identidade numérica da Task sem limitar o inteiro que o Python gravou.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Integer(pub num_bigint::BigInt);

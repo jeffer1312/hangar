@@ -7,10 +7,11 @@ mod claude;
 mod codex;
 pub(crate) mod history;
 mod peer;
-pub(crate) mod py;
-pub mod pyjson;
-pub(crate) mod json_tree;
-mod json_writer;
+pub(crate) use hangar_core::pycompat::py;
+pub use hangar_core::pycompat::pyjson;
+// Re-export de compatibilidade: nenhum módulo deste crate o usa mais.
+#[allow(unused_imports)]
+pub(crate) use hangar_core::pycompat::json_tree;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -60,14 +61,7 @@ impl Provider {
     }
 }
 
-/// Linha crua do transcript como JSON, com surrogate solto trocado por U+FFFD (`scrub_surrogates`,
-/// models.py:22). None em linha em branco ou que não é JSON.
-pub fn decode_line(raw: &[u8]) -> Option<Value> {
-    let text = String::from_utf8_lossy(raw);
-    let mut v = pyjson::loads_lossless(py::strip(&text))?;
-    py::scrub_value(&mut v);
-    Some(v)
-}
+pub use hangar_core::pycompat::decode_line;
 
 /// Um leitor por arquivo: guarda o estado do `RewriteFilter` entre as linhas, como o
 /// `TranscriptTailer` (transcript.py:777).

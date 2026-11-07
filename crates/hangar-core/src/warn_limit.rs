@@ -21,7 +21,7 @@ impl WarningLimiter {
 }
 
 /// true = pode avisar agora.
-pub(crate) fn allow(session: Option<&str>, code: &str) -> bool {
+pub fn allow(session: Option<&str>, code: &str) -> bool {
     static WARNINGS: LazyLock<Mutex<WarningLimiter>> = LazyLock::new(|| Mutex::new(WarningLimiter::default()));
     WARNINGS.lock().unwrap_or_else(|e| e.into_inner()).allow(session, code, Instant::now())
 }
