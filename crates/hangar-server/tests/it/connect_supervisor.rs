@@ -556,6 +556,10 @@ async fn link_saves_the_identity_and_never_the_password() {
     until("os dois não subiram", || supervisor.status().enabled).await;
     let status = connect_status(&machine).await;
     assert_eq!(status, json!({"enabled": true, "running": true, "host": "pc1.acme.hangar.dev.br", "error": null}));
+    let reach = client().get(format!("http://{}/api/alcance", machine.addr)).bearer_auth(OWNER).send().await.unwrap();
+    let reach: Value = serde_json::from_str(&reach.text().await.unwrap()).unwrap();
+    assert_eq!(reach["connect"], json!("https://pc1.acme.hangar.dev.br"));
+    assert!(reach["enderecos"].as_array().unwrap().iter().all(|row| row["tipo"] != "connect"), "tipo novo derruba o parse_reach do nativo");
 
     let again = link(&machine, address).await;
     assert_eq!(error_code(again).await, (409, "connect_already_linked".to_owned()));

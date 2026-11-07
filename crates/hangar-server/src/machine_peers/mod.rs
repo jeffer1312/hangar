@@ -130,6 +130,8 @@ pub struct Service {
     pub environment: std::collections::BTreeMap<String, String>,
     settings: Option<Arc<dotenv::SettingsSnapshot>>,
     pub on_identity: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    /// Endereço do Connect desta máquina, fora de `enderecos`: `tipo` novo ali derruba o `parse_reach` do nativo.
+    pub connect: Option<String>,
 }
 impl Service {
     pub fn new(
@@ -161,6 +163,7 @@ impl Service {
             environment,
             settings: None,
             on_identity: None,
+            connect: None,
         })
     }
     pub fn from_state(st: &Arc<AppState>) -> Result<Self, Error> {
@@ -174,6 +177,7 @@ impl Service {
             st.accounts.env.base.clone(),
         )?;
         service.settings=Some(st.settings_snapshot().map_err(|_|Error::unavailable())?);
+        service.connect=st.connect_supervisor.status().host.map(|host|format!("https://{host}"));
         let state = Arc::downgrade(st);
         service.on_identity = Some(Arc::new(move |id| {
             if let Some(state) = state.upgrade() {

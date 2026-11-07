@@ -2,7 +2,7 @@
 // o `baseUrl` (Tailscale). `baseUrl` continua sendo a identidade da entrada; só a rede muda.
 import { apiEnv } from './apiEnv';
 import { registrar as registrarDiag } from './diag';
-import { hmacSha256Hex } from './hmac';
+import { hmacSha256Hex, sha256Hex } from './hmac';
 import type { LanInfo, Server } from './servers';
 
 // Rede local responde em poucos ms; fora dela o IP não existe ou é outra máquina.
@@ -13,6 +13,7 @@ const rotas = new Map<string, { base: string; connection: string }>();
 const emCurso = new Map<string, { promise: Promise<void>; connection: string }>();
 const generations = new Map<string, object>();
 const remoteReads = new Map<string, { promise: Promise<LanInfo | null>; expires: number }>();
+const reachReads = new Map<string, { promise: Promise<unknown>; expires: number }>();
 const connectionKey = (server: Server) => JSON.stringify([server.baseUrl, server.token]);
 const isLoopbackUrl = (url: string) => /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/.test(url);
 
@@ -45,6 +46,22 @@ export function esquecerRota(id: string): void {
   generations.delete(id);
 }
 
+// A resposta testa todos os endereços da máquina: quem pergunta junto divide a mesma leitura.
+function readReach(server: Server, base: string): Promise<unknown> {
+  const key = JSON.stringify([server.id, base, server.token]);
+  const existing = reachReads.get(key);
+  if (existing && existing.expires > Date.now()) return existing.promise;
+  const promise = (async () => {
+    const response = await fetch(`${base}/api/alcance`, {
+      headers: { Authorization: `Bearer ${server.token}` }, signal: AbortSignal.timeout(8000), redirect: 'error',
+    });
+    if (!response.ok) throw new Error(`remote_discovery_http_${response.status}`);
+    return await response.json() as unknown;
+  })();
+  reachReads.set(key, { promise, expires: Date.now() + 30_000 });
+  return promise;
+}
+
 /** Descobre uma alternativa remota depois de uma conexão autenticada. */
 export function discoverRemoteRoute(server: Server): Promise<LanInfo | null> {
   if (server.invite || server.removed || server.ephemeral || !server.lan?.id) return Promise.resolve(null);
@@ -55,11 +72,7 @@ export function discoverRemoteRoute(server: Server): Promise<LanInfo | null> {
   const read = (async () => {
     const base = baseOf(server);
     if (base === UNCONFIRMED_BASE) return null;
-    const response = await fetch(`${base}/api/alcance`, {
-      headers: { Authorization: `Bearer ${server.token}` }, signal: AbortSignal.timeout(8000), redirect: 'error',
-    });
-    if (!response.ok) throw new Error(`remote_discovery_http_${response.status}`);
-    const value: unknown = await response.json();
+    const value = await readReach(server, base);
     const addresses = (value as { enderecos?: unknown } | null)?.enderecos;
     if (!Array.isArray(addresses)) throw new Error('remote_discovery_invalid_response');
     for (const item of addresses) {
@@ -80,6 +93,37 @@ export function discoverRemoteRoute(server: Server): Promise<LanInfo | null> {
   });
   remoteReads.set(key, { promise: read, expires: Infinity });
   return read;
+}
+
+/** Endereço que a máquina anuncia para o Connect; `null` sem Connect, em máquina antiga ou em falha. */
+export async function readConnectUrl(server: Server): Promise<string | null> {
+  const base = baseOf(server);
+  if (base === UNCONFIRMED_BASE || base === REMOVED_BASE) return null;
+  try {
+    const raw = ((await readReach(server, base)) as { connect?: unknown } | null)?.connect;
+    if (typeof raw !== 'string' || !raw) return null;
+    const url = new URL(raw);
+    if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) return null;
+    return url.toString().replace(/\/+$/, '');
+  } catch (error) {
+    registrarDiag({ evento: 'connect.leitura_falhou', nivel: 'aviso', codigo: error instanceof Error ? error.name : 'erro' }, server.baseUrl);
+    return null;
+  }
+}
+
+// Só com credencial de aparelho: pelo Connect a senha do dono volta 401, e 401 tira o servidor da lista.
+export async function discoverConnectRoute(server: Server): Promise<LanInfo | null> {
+  const id = server.lan?.id;
+  if (server.credential !== 'device' || !server.deviceId || server.invite || !id) return null;
+  const url = await readConnectUrl(server);
+  if (!url) return null;
+  if (server.connect?.url === url && server.connect.id === id) return server.connect;
+  const target = { url, id };
+  return await verifyServerIdentity(server, target, AbortSignal.timeout(PRAZO_PRINCIPAL_MS)) ? target : null;
+}
+
+function connectCandidate(s: Server): LanInfo | null {
+  return s.credential === 'device' && s.deviceId && s.connect?.url && s.connect.url !== s.baseUrl ? s.connect : null;
 }
 
 async function perguntar(base: string, token: string, ms: number): Promise<{ identificador?: string; lan_url?: string } | null> {
@@ -118,16 +162,20 @@ function desafio(): string {
 export async function verifyServerIdentity(s: Server, target: LanInfo | null | undefined, signal?: AbortSignal): Promise<boolean> {
   if (!target?.url || !target.id || !lanPermitida(target.url)) return false;
   const d = desafio();
+  // A máquina guarda só o hash do token do aparelho, e ele é a chave da prova.
+  const device = s.credential === 'device' ? s.deviceId : undefined;
+  const key = device ? sha256Hex(new TextEncoder().encode(s.token)) : s.token;
+  const query = device ? `&device=${encodeURIComponent(device)}` : '';
   let r: { identificador?: string; prova?: string } | null = null;
   try {
-    const res = await fetch(`${target.url}/api/peers/prova?desafio=${d}`, {
+    const res = await fetch(`${target.url}/api/peers/prova?desafio=${d}${query}`, {
       signal: signal ?? AbortSignal.timeout(PRAZO_LAN_MS), credentials: 'omit',
     });
     r = res.ok ? (await res.json()) as { identificador?: string; prova?: string } : null;
   } catch {
     return false;
   }
-  return r?.identificador === target.id && r.prova === hmacSha256Hex(s.token, `${d}|${target.id}`);
+  return r?.identificador === target.id && r.prova === hmacSha256Hex(key, `${d}|${target.id}`);
 }
 
 // O endereço local ganha só se provar a identidade ANTES de o principal responder: o mesmo IP
@@ -173,17 +221,20 @@ async function decidir(s: Server, current: () => boolean): Promise<void> {
     if (remaining <= 0 || !current()) return base;
     return inspect(base, remaining).catch(() => base);
   })());
-  const chosen = await new Promise<string>((resolve) => {
+  // Prova em paralelo para não somar ao prazo, mas o Connect só vale depois de as outras falharem.
+  const connect = connectCandidate(s);
+  const connectProof = connect && verifyServerIdentity(s, connect, AbortSignal.timeout(PRAZO_PRINCIPAL_MS));
+  const chosen = await new Promise<string | null>((resolve) => {
     let remaining = candidates.length;
     for (const candidate of candidates) void candidate.then(resolve, () => {
-      if (--remaining === 0) resolve(primaryConfirmed ? s.baseUrl : UNCONFIRMED_BASE);
+      if (--remaining === 0) resolve(null);
     });
   });
+  const agora = chosen ?? (connect && await connectProof ? connect.url : primaryConfirmed ? s.baseUrl : UNCONFIRMED_BASE);
   if (!current()) return;
-  rotas.set(s.id, { base: chosen, connection: connectionKey(s) });
-  const agora = chosen;
+  rotas.set(s.id, { base: agora, connection: connectionKey(s) });
   if (agora !== anterior) {
-    const detalhe = agora === s.baseUrl ? 'principal' : agora === s.remote?.url ? 'tailscale' : 'rede_local';
+    const detalhe = agora === s.baseUrl ? 'principal' : agora === s.remote?.url ? 'tailscale' : agora === connect?.url ? 'connect' : 'rede_local';
     registrarDiag({ evento: 'rota.escolhida', detalhe, ms: Date.now() - inicio }, s.baseUrl);
   }
 }
@@ -214,5 +265,6 @@ export function _resetRotasForTests(): void {
   rotas.clear();
   emCurso.clear();
   remoteReads.clear();
+  reachReads.clear();
   generations.clear();
 }

@@ -19,7 +19,9 @@ function isPersisted(value: unknown): value is Persisted {
       const server = s as Record<string, unknown>;
       if (!['id', 'label', 'baseUrl', 'token'].every((key) => typeof server[key] === 'string')) return false;
       if (!['disabled', 'invite', 'inviteEnded', 'removed', 'ephemeral'].every((key) => server[key] === undefined || typeof server[key] === 'boolean')) return false;
-      return ['lan', 'remote'].every((key) => {
+      if (![undefined, 'owner', 'device'].includes(server.credential as string | undefined)) return false;
+      if (server.deviceId !== undefined && typeof server.deviceId !== 'string') return false;
+      return ['lan', 'remote', 'connect'].every((key) => {
         if (server[key] === undefined) return true;
         if (!server[key] || typeof server[key] !== 'object') return false;
         const route = server[key] as Record<string, unknown>;
@@ -58,6 +60,8 @@ export interface ServersState {
   limparAviso(): void;
   rememberLan(id: string, lan: LanInfo, source?: Server): void;
   rememberRemote(id: string, remote: LanInfo, source: Server): void;
+  rememberConnect(id: string, connect: LanInfo, source: Server): void;
+  rememberDevice(id: string, upgraded: Server, source: Server): void;
   applyPairs(pairs: ExternalPair[]): PairAttach[];
   markEnded(id: string): void;
   ensureOwnActive(): void;
@@ -329,6 +333,7 @@ export const useServers = create<ServersState>((set, get) => {
       if (s.id !== resolveId(id)) return s;
       const server = { ...s, lan };
       if (server.remote?.id !== lan.id) delete server.remote;
+      if (server.connect?.id !== lan.id) delete server.connect;
       return server;
     }) }), false);
   },
@@ -337,6 +342,19 @@ export const useServers = create<ServersState>((set, get) => {
     if (!current || current.invite || current.baseUrl !== source.baseUrl || current.token !== source.token
       || remote.id !== current.lan?.id || current.remote?.url === remote.url && current.remote.id === remote.id) return;
     change((p) => ({ ...p, servers: p.servers.map((s) => s.id === resolveId(id) ? { ...s, remote } : s) }), false);
+  },
+  rememberConnect(id, connect, source) {
+    const current = get().servers.find((s) => s.id === resolveId(id));
+    if (!current || current.invite || current.credential !== 'device' || current.baseUrl !== source.baseUrl
+      || current.token !== source.token || connect.id !== current.lan?.id
+      || current.connect?.url === connect.url && current.connect.id === connect.id) return;
+    change((p) => ({ ...p, servers: p.servers.map((s) => s.id === resolveId(id) ? { ...s, connect } : s) }), false);
+  },
+  rememberDevice(id, upgraded, source) {
+    const current = get().servers.find((s) => s.id === resolveId(id));
+    if (!current || current.invite || current.baseUrl !== source.baseUrl || current.token !== source.token) return;
+    const { token, credential, deviceId } = upgraded;
+    change((p) => ({ ...p, servers: p.servers.map((s) => s.id === resolveId(id) ? { ...s, token, credential, deviceId } : s) }), false);
   },
   });
 });

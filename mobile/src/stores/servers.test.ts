@@ -69,6 +69,28 @@ test('guarda a alternativa remota confirmada e ignora a resposta de uma credenci
   expect(useServers.getState().servers[0].remote).toEqual(remote);
 });
 
+test('guarda a credencial de aparelho e a rota do Connect, e só a credencial atual decide', async () => {
+  vault.set(VAULT_KEY, JSON.stringify(SAVED));
+  await useServers.getState().load();
+  const connect = { id: 'saved-machine', url: 'https://pc1.acme.hangar.dev.br' };
+  const upgraded = { ...SAVED_SERVER, token: 'device-token', credential: 'device' as const, deviceId: 'dev1' };
+
+  useServers.getState().rememberConnect(SAVED_SERVER.id, connect, SAVED_SERVER);
+  useServers.getState().rememberDevice(SAVED_SERVER.id, upgraded, { ...SAVED_SERVER, token: 'stale-token' });
+  expect(useServers.getState().servers[0].connect).toBeUndefined();
+  expect(useServers.getState().servers[0].token).toBe(SAVED_SERVER.token);
+
+  useServers.getState().rememberDevice(SAVED_SERVER.id, upgraded, SAVED_SERVER);
+  useServers.getState().rememberConnect(SAVED_SERVER.id, connect, upgraded);
+  await settle();
+  await useServers.getState().load();
+
+  expect(useServers.getState().vaultReadable).toBe(true);
+  expect(useServers.getState().servers[0]).toMatchObject({ token: 'device-token', credential: 'device', deviceId: 'dev1', connect });
+  useServers.getState().rememberLan(SAVED_SERVER.id, { id: 'renamed-machine', url: '' });
+  expect(useServers.getState().servers[0].connect).toBeUndefined();
+});
+
 const mutations = [
   () => useServers.getState().add({ baseUrl: 'http://10.0.0.3:8765', token: 'new-token' }),
   () => useServers.getState().remove(SAVED_SERVER.id),

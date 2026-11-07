@@ -7,6 +7,7 @@ export * from './machineImport';
 export * from './rota';
 export * from './share';
 export * from './accountLogin';
+export * from './connectAccount';
 export { configureApi, deviceIdentityReady } from './apiEnv';
 export { configureDiag, registrar as registrarDiag, novoReq as novoReqDiag } from './diag';
 export type { DiagSink, Evento as EventoDiag, Nivel as NivelDiag } from './diag';

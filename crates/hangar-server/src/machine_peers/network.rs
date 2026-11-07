@@ -218,7 +218,7 @@ pub async fn reach(s: &Service) -> Value {
         row
     }))
     .await;
-    json!({"loopback":local,"bind":bind,"enderecos":output})
+    json!({"loopback":local,"bind":bind,"enderecos":output,"connect":s.connect})
 }
 pub async fn announce(s: &Service, old: &str) -> Value {
     let entries = s.store.tolerant();

@@ -141,7 +141,8 @@ export async function discoverMachineCandidates(sources: Server[], current: () =
               if (!text(peer.id, 128) || /\s/.test(peer.id) || typeof peer.base_url !== 'string'
                 || (peer.enabled !== undefined && typeof peer.enabled !== 'boolean')) throw invalid();
               const baseUrl = normalizeMachineUrl(peer.base_url);
-              if (!isLocalMachineUrl(baseUrl)) peerJobs.push({ source, id: peer.id, baseUrl });
+              // Aparelho não lê o token de peer: a máquina recusa, e cada um viraria um aviso falso.
+              if (!isLocalMachineUrl(baseUrl) && source.credential !== 'device') peerJobs.push({ source, id: peer.id, baseUrl });
             } catch { issues.push(machineImportIssue('invalid_item', undefined, source.baseUrl)); }
           }
         } catch (error) { issues.push(machineImportIssue('source_peers', error, source.baseUrl)); }
@@ -153,6 +154,8 @@ export async function discoverMachineCandidates(sources: Server[], current: () =
           for (const item of list.servers) {
             try {
               if (!object(item)) throw invalid();
+              // Aparelho recebe a lista com o token mascarado: guardar isso daria 401 e removeria a máquina.
+              if (typeof item.token === 'string' && item.token.includes('•')) continue;
               const server = candidate({ ...item, baseUrl: item.address });
               include(server);
             } catch { issues.push(machineImportIssue('invalid_item', undefined, source.baseUrl)); }

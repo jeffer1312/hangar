@@ -72,6 +72,23 @@ describe('confirmação e redirecionamentos', () => {
     for (const [, init] of fetchMock.mock.calls) expect(init).not.toHaveProperty('redirect');
   });
 
+  test('com credencial de aparelho pula o token mascarado e não pede token de peer', async () => {
+    const device: Server = { ...machine, credential: 'device', deviceId: 'dev1' };
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith('/api/peers')) return json([{ id: 'remote', base_url: 'https://remote.test', token: '••••mask' }]);
+      if (url.endsWith('/app-list')) return json({ rev: 'r1', servers: [
+        { id: 'masked', label: 'masked', address: 'https://masked.test', token: 'abcd••••••••wxyz' },
+        { id: 'short', label: 'short', address: 'https://short.test', token: '••••' },
+        { id: 'kept', label: 'kept', address: 'https://kept.test', token: 'fixture-token' },
+      ] });
+      throw new Error('unexpected_request');
+    });
+    expect(await discoverMachineCandidates([device], () => [device])).toEqual({
+      candidates: [{ id: 'kept', label: 'kept', baseUrl: 'https://kept.test', token: 'fixture-token' }], issues: [],
+    });
+  });
+
   test('identificador de agrupamento: lido da rota; vazio é falha `vazio`, como erro de rede', async () => {
     expect(await readGroupIdentity(machine)).toBe('confirmed-home');
     fetchMock.mockImplementation(async () => json({ identificador: '', lan_url: '' }));
