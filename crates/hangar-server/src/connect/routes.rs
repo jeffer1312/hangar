@@ -17,8 +17,9 @@ use super::ConnectError;
 use super::config::valid_label;
 use super::devices::{Poll, Refusal, Store};
 use super::gate::DeviceCaller;
-use super::peers::PeerLinker;
+use super::peers::{self, PeerLinker};
 use super::state::{self, LinkRequest};
+use crate::machine_peers::store::valid_id;
 use crate::routes::{AppState, cors, on_connect_port, owner_gate};
 use crate::session_write::json_response;
 use crate::voice::routes::preflight;
@@ -240,20 +241,28 @@ async fn link_peer(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     let Some(linked) = tokio::task::spawn_blocking(move || state::read(&dir)).await.ok().flatten() else {
         return error(&headers, StatusCode::CONFLICT, "connect_not_linked", "esta máquina não está ligada ao Connect");
     };
-    if !valid_label(&id) || id == linked.machine_id {
-        return error(&headers, StatusCode::BAD_REQUEST, "connect_peer_invalid", "máquina inválida");
-    }
     let server_id = st.current_server_id();
     if server_id.is_empty() {
         return error(&headers, StatusCode::CONFLICT, "connect_peer_no_identity", "esta máquina não tem identificador");
+    }
+    // Antes do bilhete: recusa depois do cartão gastaria a aprovação do dono à toa.
+    if !valid_label(&id) || valid_id(&json!(id)).is_err() || id == linked.machine_id || id == server_id {
+        return error(&headers, StatusCode::BAD_REQUEST, "connect_peer_invalid", "máquina inválida");
     }
     let store = match crate::machine_peers::Service::from_state(&st) {
         Ok(service) => service.store,
         Err(failure) => return error(&headers, StatusCode::SERVICE_UNAVAILABLE, failure.code, &failure.msg),
     };
+    let expected = peers::expected_host(&linked, &id).map(|host| format!("https://{host}"));
+    let book = store.tolerant();
+    if book.get(&id).and_then(|entry| entry["base_url"].as_str()).is_some_and(|known| Some(known) != expected.as_deref()) {
+        return error(&headers, StatusCode::CONFLICT, "peers_other_address", "essa máquina já está em outro endereço");
+    }
+    drop(book);
     let linker = PeerLinker { linked, devices: st.connect_devices.clone(), server_id, links: st.connect_supervisor.peer_links().clone(),
-        save: Arc::new(move |entry| store.put_from(entry, true).map(|_| ())
-            .map_err(|failure| ConnectError::new(StatusCode::SERVICE_UNAVAILABLE, "connect_peer_not_saved", failure.msg))) };
+        save: Arc::new(move |entry: &Value| store.put_from(entry, entry["connect_return_device"].as_str()).map(|_| ()).map_err(|failure| {
+            ConnectError::new(StatusCode::from_u16(failure.status).unwrap_or(StatusCode::SERVICE_UNAVAILABLE), failure.code, failure.msg)
+        })) };
     if !linker.start(id.clone()) {
         return error(&headers, StatusCode::CONFLICT, "connect_peer_linking", "esta ligação já está em curso");
     }

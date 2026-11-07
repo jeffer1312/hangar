@@ -118,6 +118,10 @@ async fn get(url: &str, path: &str, token: Option<&str>) -> Result<(u16, Value),
         serde_json::from_str(&String::from_utf8_lossy(&bytes)).unwrap_or(Value::Null),
     ))
 }
+fn same_host(url: &str, base: &Value) -> bool {
+    let host = super::store::host(url);
+    !host.is_empty() && base.as_str().is_some_and(|base| super::store::host(base) == host)
+}
 pub async fn check(s: &Service, url: &str, id: &str) -> Value {
     if url.is_empty() {
         return json!({"estado":"nao_configurado","identificador":"","motivo":"","tempo_ms":null});
@@ -127,6 +131,8 @@ pub async fn check(s: &Service, url: &str, id: &str) -> Value {
     let token = data
         .get(id)
         .filter(|v| truthy(&v["base_url"]) && truthy(&v["token"]))
+        // Aparelho não escolhe para onde vai o token de outra máquina: `/api/peers/{id}/token` já o recusa.
+        .filter(|v| s.device_caller.is_none() || same_host(url, &v["base_url"]))
         .and_then(|v| v["token"].as_str());
     let result = get(url, "/api/peers/identificador", token).await.map_err(|e| reason(&e));
     let ms = (start.elapsed().as_secs_f64() * 1000.0).round_ties_even() as u128;
@@ -245,23 +251,34 @@ pub async fn reach(s: &Service) -> Value {
     .await;
     json!({"loopback":local,"bind":bind,"enderecos":output,"connect":s.connect})
 }
-fn through_connect(entry: &Value) -> bool {
+/// Pela marca ou pelo endereço: o dono também grava par do Connect, e aí a marca não existe.
+fn through_connect(s: &Service, entry: &Value) -> bool {
     entry["connect"] == true
+        || entry["base_url"].as_str().is_some_and(|url| crate::connect::peers::on_connect_host(s.connect.as_deref(), url))
 }
-/// O corpo de `POST /api/peers` para `entry`, ou o motivo de não mandar nada. Pelo Connect vai a
-/// credencial emitida para esse par: a senha do dono é recusada lá e não sai desta máquina.
-fn announcement(s: &Service, id: &str, base: &str, entry: &Value) -> Result<Value, &'static str> {
-    if through_connect(entry) {
-        let token = entry["connect_return_token"].as_str().filter(|token| !token.is_empty());
-        return match (s.connect.as_deref(), token) {
-            (Some(base), Some(token)) => Ok(json!({"id":id,"base_url":base,"token":token,"connect_return_token":entry["token"]})),
-            _ => Err("sem_credencial_connect"),
+/// O corpo de `POST /api/peers` para `entry` e o aparelho renovado nele, ou o motivo de não mandar
+/// nada. Pelo Connect vai um token novo do aparelho desse par: a senha do dono é recusada lá e não
+/// sai desta máquina.
+async fn announcement(s: &Service, id: &str, base: &str, entry: &Value) -> Result<(Value, Option<String>), &'static str> {
+    if through_connect(s, entry) {
+        let (Some(link), Some(device), Some(devices)) = (s.connect.as_deref(), entry["connect_return_device"].as_str(), s.connect_devices.clone()) else {
+            return Err("sem_credencial_connect");
         };
+        let rotated = device.to_owned();
+        let token = tokio::task::spawn_blocking(move || devices.rotate(&rotated)).await.ok().and_then(Result::ok).ok_or("sem_credencial_connect")?;
+        return Ok((json!({"id":id,"base_url":link,"token":token,"connect":true}), Some(device.to_owned())));
     }
     if base.is_empty() {
         return Err("sem_endereco");
     }
-    Ok(json!({"id":id,"base_url":base,"token":s.token}))
+    Ok((json!({"id":id,"base_url":base,"token":s.token}), None))
+}
+/// Só depois da entrega: quem ficou com o token antigo segue entrando até a próxima.
+async fn settle(s: &Service, device: String) {
+    let Some(devices) = s.connect_devices.clone() else { return };
+    if !matches!(tokio::task::spawn_blocking(move || devices.settle(&device)).await, Ok(Ok(()))) {
+        tracing::warn!(code = "connect_store_failed", "o token antigo do par segue valendo: a troca não foi gravada");
+    }
 }
 pub async fn announce(s: &Service, old: &str) -> Value {
     let entries = s.store.tolerant();
@@ -279,7 +296,7 @@ pub async fn announce(s: &Service, old: &str) -> Value {
     } else {
         format!("https://{name}")
     };
-    if base.is_empty() && !entries.values().any(through_connect) {
+    if base.is_empty() && !entries.values().any(|entry| through_connect(s, entry)) {
         return json!([{"id":"","estado":"falhou","motivo":"sem_endereco"}]);
     }
     let id = s.identity();
@@ -292,8 +309,8 @@ pub async fn announce(s: &Service, old: &str) -> Value {
     let mut rows = Vec::new();
     for peer in ids {
         let Some(entry) = entries.get(&peer) else { continue };
-        let body = match announcement(s, &id, &base, entry) {
-            Ok(body) => body,
+        let (body, rotated) = match announcement(s, &id, &base, entry).await {
+            Ok(announced) => announced,
             Err(motivo) => {
                 rows.push(json!({"id":peer,"estado":"falhou","motivo":motivo}));
                 continue;
@@ -303,6 +320,9 @@ pub async fn announce(s: &Service, old: &str) -> Value {
             .call(&peer, reqwest::Method::POST, "/api/peers", Some(&body))
             .await
             .map(|_| ());
+        if result.is_ok() && let Some(device) = rotated {
+            settle(s, device).await;
+        }
         if result.is_ok() && !old.is_empty() && old != id {
             result = match client
                 .call(

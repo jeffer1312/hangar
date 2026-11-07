@@ -134,8 +134,10 @@ pub struct Service {
     pub connect: Option<String>,
     /// Pasta da ligação com o Connect (`connect.json`): de lá sai a chave da descoberta pela conta.
     pub connect_dir: Option<PathBuf>,
-    /// O pedido chegou com credencial de aparelho, não com a senha.
-    pub device_caller: bool,
+    /// Aparelhos do Connect: o anúncio renova o que esta máquina emitiu, e apagar um par o revoga.
+    pub connect_devices: Option<Arc<crate::connect::devices::Store>>,
+    /// O aparelho de quem pediu; `None` é a senha do dono.
+    pub device_caller: Option<String>,
 }
 impl Service {
     pub fn new(
@@ -169,7 +171,8 @@ impl Service {
             on_identity: None,
             connect: None,
             connect_dir: None,
-            device_caller: false,
+            connect_devices: None,
+            device_caller: None,
         })
     }
     pub fn from_state(st: &Arc<AppState>) -> Result<Self, Error> {
@@ -185,6 +188,7 @@ impl Service {
         service.settings=Some(st.settings_snapshot().map_err(|_|Error::unavailable())?);
         service.connect=st.connect_supervisor.status().host.map(|host|format!("https://{host}"));
         service.connect_dir=Some(st.connect_supervisor.dir().to_path_buf());
+        service.connect_devices=Some(st.connect_devices.clone());
         let state = Arc::downgrade(st);
         service.on_identity = Some(Arc::new(move |id| {
             if let Some(state) = state.upgrade() {
@@ -253,6 +257,20 @@ impl Service {
             changed(value.into());
         }
         Ok(value.into())
+    }
+    /// Apagar o par revoga o aparelho emitido para ele. Quem renomeia grava a entrada nova antes de
+    /// apagar a velha: aparelho que outra entrada ainda usa fica.
+    fn remove_peer(&self, id: &str) -> Result<Value, Error> {
+        let data = self.store.tolerant();
+        let device = data.get(id).and_then(|entry| entry["connect_return_device"].as_str())
+            .filter(|device| !data.iter().any(|(key, entry)| key != id && entry["connect_return_device"].as_str() == Some(*device)));
+        if let (Some(device), Some(devices)) = (device, &self.connect_devices) {
+            match devices.remove(device) {
+                Ok(()) | Err(crate::connect::devices::Refusal::Unknown) => {}
+                Err(_) => return Err(Error::unavailable()),
+            }
+        }
+        self.store.remove(id)
     }
     pub fn proof(&self, challenge: &str) -> Result<Value, Error> {
         if !(16..=128).contains(&challenge.chars().count()) {
@@ -406,8 +424,8 @@ async fn handle_inner(
         Err(e) => return e.response(),
     };
     service.request_id=crate::routes::diag_req(&request);
-    let device_caller=request.extensions().get::<crate::connect::gate::DeviceCaller>().is_some();
-    service.device_caller=device_caller;
+    service.device_caller=request.extensions().get::<crate::connect::gate::DeviceCaller>().map(|device|device.id.clone());
+    let device_caller=service.device_caller.is_some();
     if path=="/api/peers/prova" && let Some(device)=query.get("device") {
         match st.connect_devices.proof_key(device) {
             Some(key)=>service.token=key,
@@ -506,7 +524,7 @@ pub async fn dispatch(
             let path = path.to_owned();
             tokio::task::spawn_blocking(move || match (method.as_str(), path.as_str()) {
                 ("GET", "/api/peers") => Ok(service.store.list()),
-                ("POST", "/api/peers") => service.store.put_from(&body,service.device_caller),
+                ("POST", "/api/peers") => service.store.put_from(&body,service.device_caller.as_deref()),
                 ("GET", "/api/peers/app-list") => service.store.app_list(),
                 ("PUT", "/api/peers/app-list") => service.store.app_write(&body),
                 _ => {
@@ -525,7 +543,7 @@ pub async fn dispatch(
                     {
                         service.store.token(id)
                     } else if method == Method::DELETE {
-                        service.store.remove(&decoded)
+                        service.remove_peer(&decoded)
                     } else {
                         Err(Error {
                             status: 405,

@@ -25,6 +25,8 @@ const LINK_TIMEOUT: Duration = Duration::from_secs(15);
 const POLL_EVERY: Duration = Duration::from_secs(1);
 /// Passa do prazo do cartão em B, que responde `denied`; quem vence aqui é B fora do ar até o fim.
 const APPROVAL_PATIENCE: Duration = Duration::from_secs(PENDING_TTL + 60);
+/// Domínio das máquinas do serviço padrão: máquina sem ligação não tem de onde tirar outro.
+const DEFAULT_DOMAIN: &str = "hangar.dev.br";
 
 /// Uma linha de `GET /v1/machines`.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -82,6 +84,23 @@ pub async fn account_machines(linked: &Linked) -> Result<Vec<AccountMachine>, Co
     let request = client(LIST_TIMEOUT)?.get(service_url(linked, "/v1/machines")?).bearer_auth(&linked.machine_key);
     let machines: Vec<AccountMachine> = fetch(request).await.map_err(|failure| failure.error(SERVICE))?;
     Ok(machines.into_iter().filter(|m| m.machine_id != linked.machine_id && valid_label(&m.machine_id) && valid_host(&m.host)).collect())
+}
+
+/// `<id>.<conta>.<domínio>`: o host é fixo pelo nome da máquina.
+pub fn expected_host(linked: &Linked, id: &str) -> Option<String> {
+    linked.host.split_once('.').map(|(_, rest)| format!("{id}.{rest}"))
+}
+
+fn domain_of(host: &str) -> Option<&str> {
+    host.split_once('.')?.1.split_once('.').map(|(_, domain)| domain)
+}
+
+/// `url` é endereço de máquina do Connect? `link` é o endereço desta máquina, se ela estiver ligada.
+pub fn on_connect_host(link: Option<&str>, url: &str) -> bool {
+    let host_of = |raw: &str| reqwest::Url::parse(raw).ok().and_then(|url| url.host_str().map(str::to_lowercase));
+    let Some(host) = host_of(url) else { return false };
+    let under = |domain: &str| host.strip_suffix(domain).is_some_and(|rest| rest.ends_with('.'));
+    under(DEFAULT_DOMAIN) || link.and_then(host_of).is_some_and(|own| domain_of(&own).is_some_and(under))
 }
 
 fn label(text: &str) -> String {
@@ -187,17 +206,17 @@ struct Polled { status: String, token: Option<String> }
 #[derive(Deserialize)]
 struct Identity { #[serde(default)] identificador: String }
 
-/// O host da outra máquina é fixo pelo nome (`<id>.<conta>.<domínio>`): endereço de outro lugar levaria
-/// o segredo e, depois, a credencial desta máquina. `http` só com o próprio serviço em loopback.
-fn machine_base(linked: &Linked, id: &str, raw: &str) -> Result<String, ConnectError> {
+/// Por onde falar com a outra máquina durante a ligação. Endereço de outro lugar levaria o segredo e,
+/// depois, a credencial desta máquina. `http` só com o próprio serviço em loopback.
+fn machine_base(linked: &Linked, machine: &AccountMachine, raw: &str) -> Result<String, ConnectError> {
     let url = service_base(raw).map_err(|_| Linked::invalid())?;
-    let expected = linked.host.split_once('.').map(|(_, rest)| format!("{id}.{rest}"));
+    let named = expected_host(linked, &machine.machine_id).as_deref() == Some(machine.host.as_str());
     let allowed = if url.scheme() == "https" {
-        url.host_str() == expected.as_deref() && url.port().is_none()
+        url.host_str() == Some(machine.host.as_str()) && url.port().is_none()
     } else {
         linked.service_url.starts_with("http://")
     };
-    if !allowed || url.path() != "/" || url.query().is_some() {
+    if !named || !allowed || url.path() != "/" || url.query().is_some() {
         return Err(Linked::invalid());
     }
     Ok(url.as_str().trim_end_matches('/').to_owned())
@@ -234,19 +253,22 @@ impl PeerLinker {
 
     /// Devolve a entrada gravada, com a forma do `peers.json` mais o `id` que é a chave dela.
     pub async fn link_account_machine(&self, id: &str) -> Result<Value, ConnectError> {
+        let machines = account_machines(&self.linked).await?;
+        let machine = machines.iter().find(|machine| machine.machine_id == id)
+            .ok_or_else(|| ConnectError::new(StatusCode::NOT_FOUND, "connect_peer_unknown", "essa máquina não está nesta conta"))?;
         let http = client(LINK_TIMEOUT)?;
         let secret = credentials::token();
         let asked = json!({"device_name": self.linked.machine_id, "verifier": credentials::hash(secret.as_bytes())});
         let endpoint = service_url(&self.linked, &format!("/v1/machines/{id}/devices"))?;
         let issued: Issued = fetch(post(&http, endpoint, &asked).bearer_auth(&self.linked.machine_key)).await
             .map_err(|failure| failure.error(SERVICE))?;
-        let base = machine_base(&self.linked, id, &issued.url)?;
+        let reach = machine_base(&self.linked, machine, &issued.url)?;
         let ticket = json!({"ticket": issued.ticket, "signature": issued.signature, "secret": secret});
-        let redeemed: Redeemed = fetch(post(&http, format!("{base}/api/connect/redeem"), &ticket)).await
+        let redeemed: Redeemed = fetch(post(&http, format!("{reach}/api/connect/redeem"), &ticket)).await
             .map_err(|failure| failure.error(MACHINE))?;
         self.links.waiting(id);
-        let token = approved_token(&http, &base, &redeemed.device_id, &secret).await?;
-        let identity: Identity = fetch(http.get(format!("{base}/api/peers/identificador")).bearer_auth(&token)).await
+        let token = approved_token(&http, &reach, &redeemed.device_id, &secret).await?;
+        let identity: Identity = fetch(http.get(format!("{reach}/api/peers/identificador")).bearer_auth(&token)).await
             .map_err(|failure| failure.error(MACHINE))?;
         let peer = if identity.identificador.is_empty() { id.to_owned() } else { identity.identificador };
         // Outra máquina com o mesmo nome apagaria a própria entrada no `peers.json` de lá.
@@ -255,7 +277,7 @@ impl PeerLinker {
         }
         let (devices, name) = (self.devices.clone(), format!("máquina {id}"));
         let (device, back) = off_thread(move || devices.issue_local(&name).map_err(store_failed)).await?;
-        let entry = json!({"id": peer, "base_url": base, "token": token, "connect": true, "connect_return_token": back});
+        let entry = json!({"id": peer, "base_url": format!("https://{}", machine.host), "token": token, "connect": true, "connect_return_device": device});
         // Antes de entregar: o token de B só sai uma vez, e o anúncio refaz a entrega que falhar.
         let (save, saved) = (self.save.clone(), entry.clone());
         if let Err(error) = off_thread(move || save(&saved)).await {
@@ -265,8 +287,8 @@ impl PeerLinker {
             }
             return Err(error);
         }
-        let handed = json!({"id": self.server_id, "base_url": format!("https://{}", self.linked.host), "token": back, "connect_return_token": token});
-        fetch::<Value>(post(&http, format!("{base}/api/peers"), &handed).bearer_auth(&token)).await.map_err(|_| {
+        let handed = json!({"id": self.server_id, "base_url": format!("https://{}", self.linked.host), "token": back, "connect": true});
+        fetch::<Value>(post(&http, format!("{reach}/api/peers"), &handed).bearer_auth(&token)).await.map_err(|_| {
             ConnectError::new(StatusCode::BAD_GATEWAY, "connect_peer_handover_failed", "a outra máquina não recebeu a credencial de volta; anuncie de novo para repetir")
         })?;
         Ok(entry)
@@ -309,12 +331,26 @@ mod tests {
     #[test]
     fn machine_address_is_fixed_by_its_name() {
         let real = linked("https://connect.hangar.dev.br");
-        assert_eq!(machine_base(&real, "pc-b", "https://pc-b.acme.hangar.dev.br").unwrap(), "https://pc-b.acme.hangar.dev.br");
+        let b = machine("pc-b", true);
+        assert_eq!(machine_base(&real, &b, "https://pc-b.acme.hangar.dev.br").unwrap(), "https://pc-b.acme.hangar.dev.br");
         for wrong in ["https://evil.test", "https://pc-c.acme.hangar.dev.br", "https://pc-b.outra.hangar.dev.br", "https://pc-b.acme.hangar.dev.br:8443",
             "https://pc-b.acme.hangar.dev.br/x", "http://127.0.0.1:9", "http://pc-b.acme.hangar.dev.br"] {
-            assert!(machine_base(&real, "pc-b", wrong).is_err(), "{wrong}");
+            assert!(machine_base(&real, &b, wrong).is_err(), "{wrong}");
         }
-        assert_eq!(machine_base(&linked("http://127.0.0.1:1"), "pc-b", "http://127.0.0.1:9").unwrap(), "http://127.0.0.1:9");
+        let lying = AccountMachine { host: "evil.test".into(), ..machine("pc-b", true) };
+        assert!(machine_base(&real, &lying, "https://evil.test").is_err(), "a lista do serviço não muda o host");
+        assert_eq!(machine_base(&linked("http://127.0.0.1:1"), &b, "http://127.0.0.1:9").unwrap(), "http://127.0.0.1:9");
+    }
+
+    #[test]
+    fn connect_hosts_are_told_by_their_domain() {
+        let own = Some("https://pc-a.acme.conn.example.com");
+        assert!(on_connect_host(own, "https://pc-b.acme.conn.example.com/"));
+        assert!(on_connect_host(own, "https://pc-b.outra.conn.example.com"), "outra conta também é Connect");
+        assert!(on_connect_host(None, "https://pc-b.acme.hangar.dev.br"), "máquina sem ligação conhece o domínio padrão");
+        for other in ["https://pc-b.tail.ts.net", "http://100.64.0.1:8765", "https://nothangar.dev.br", "sem-endereco"] {
+            assert!(!on_connect_host(own, other), "{other}");
+        }
     }
 
     fn machine(id: &str, online: bool) -> AccountMachine {

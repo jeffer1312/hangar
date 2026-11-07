@@ -47,6 +47,10 @@ struct Device {
     verifier: Option<String>,
     #[serde(default)]
     token_hash: Option<String>,
+    /// Hash do token novo em entrega: vale junto com o antigo até a entrega se confirmar, senão quem
+    /// está fora do ar perderia o acesso sem saber.
+    #[serde(default)]
+    next_token_hash: Option<String>,
     #[serde(default)]
     last_seen: Option<u64>,
     /// Aparelho que aprovou este; `None` é o dono. Revogar um leva junto tudo que ele aprovou.
@@ -174,7 +178,7 @@ impl Store {
             state.nonces.insert(ticket.nonce.clone(), ticket.expires_at);
             let id = credentials::id();
             state.devices.push(Device { id: id.clone(), name: display_name(&ticket.device_name), status: Status::Pending,
-                created_at: now, denied_at: None, verifier: Some(verifier), token_hash: None, last_seen: None,
+                created_at: now, denied_at: None, verifier: Some(verifier), token_hash: None, next_token_hash: None, last_seen: None,
                 approved_by: None, approved_at: None });
             Ok(id)
         })
@@ -250,7 +254,7 @@ impl Store {
         self.update(|state, now| {
             let (id, token) = (credentials::id(), credentials::token());
             state.devices.push(Device { id: id.clone(), name: display_name(name), status: Status::Approved, created_at: now,
-                denied_at: None, verifier: None, token_hash: Some(credentials::hash(token.as_bytes())), last_seen: None,
+                denied_at: None, verifier: None, token_hash: Some(credentials::hash(token.as_bytes())), next_token_hash: None, last_seen: None,
                 approved_by: None, approved_at: Some(now) });
             Ok((id, token))
         })
@@ -260,6 +264,27 @@ impl Store {
     /// pedida pelo dono desta máquina, e o cartão aprovado é o da outra.
     pub fn issue_local(&self, name: &str) -> Result<(DeviceId, String), Refusal> {
         self.enroll(name)
+    }
+
+    /// Token novo para o mesmo aparelho, a entregar de novo a quem o guarda: o cru nunca vai ao disco.
+    pub fn rotate(&self, id: &str) -> Result<String, Refusal> {
+        self.update(|state, _| {
+            let device = state.devices.iter_mut().find(|d| d.id == id && d.status == Status::Approved && d.token_hash.is_some())
+                .ok_or(Refusal::Unknown)?;
+            let token = credentials::token();
+            device.next_token_hash = Some(credentials::hash(token.as_bytes()));
+            Ok(token)
+        })
+    }
+
+    /// A entrega do `rotate` se confirmou: o token antigo deixa de valer.
+    pub fn settle(&self, id: &str) -> Result<(), Refusal> {
+        self.update(|state, _| {
+            if let Some(device) = state.devices.iter_mut().find(|d| d.id == id) && device.next_token_hash.is_some() {
+                device.token_hash = device.next_token_hash.take();
+            }
+            Ok(())
+        })
     }
 
     pub fn list(&self) -> Vec<Row> {
@@ -275,7 +300,11 @@ impl Store {
         let now = (self.clock)();
         let mut state = self.lock();
         let device = state.devices.iter_mut().find(|d| d.status == Status::Approved
-            && d.token_hash.as_deref().is_some_and(|hash| same(hash, &presented)))?;
+            && [&d.token_hash, &d.next_token_hash].into_iter().flatten().any(|hash| same(hash, &presented)))?;
+        // Usar o token novo prova a entrega, mesmo com a resposta dela perdida no caminho.
+        if device.next_token_hash.as_deref().is_some_and(|next| same(next, &presented)) {
+            device.token_hash = device.next_token_hash.take();
+        }
         device.last_seen = Some(now);
         Some(device.id.clone())
     }
