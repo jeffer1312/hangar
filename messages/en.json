@@ -10154,6 +10154,8 @@
   "connect_device_approve": "Approve",
   "connect_device_deny": "Deny",
   "connect_news_result": "Approved: the {device} opens {machine} from any network.",
+  "news_connect_sample_device": "iPhone",
+  "news_connect_sample_machine": "home-pc",
   "connect_device_approve_title": "Approve {name}?",
   "connect_device_approve_body": "It gets owner access to {machine}.",
   "connect_device_revoke": "Revoke",

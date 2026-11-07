@@ -15,22 +15,21 @@ const STEPS = [WAITING, DONE];
 // Movimento reduzido: o resultado, que é o que a novidade promete.
 const STILL = 4;
 const FADE = { duration: 240 };
-const DEVICE = 'iPhone';
-const MACHINE = 'pc-casa';
 
 export function ConnectAnimation({ width }: { width: number }) {
   const reduced = useReducedMotion();
+  const machine = m.news_connect_sample_machine();
   const t = useScriptStep(STEPS, CYCLE, STILL, reduced);
   const done = t >= DONE;
   const value = done ? m.connect_machine_added() : t >= WAITING ? m.connect_waiting() : m.login_entrar();
   const result = useAnimatedStyle(() => ({ opacity: reduced ? (done ? 1 : 0) : withTiming(done ? 1 : 0, FADE) }), [done, reduced]);
   return <View style={[styles.stage, { width }]} pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
     <MachineGroup>
-      <MachineRow title={MACHINE} value={value} valueTone={done ? 'success' : undefined} />
+      <MachineRow title={machine} value={value} valueTone={done ? 'success' : undefined} />
     </MachineGroup>
     {/* A frase fica no layout mesmo invisível: a altura não muda de um quadro para outro. */}
     <Animated.View style={result}>
-      <Text style={styles.result}>{m.connect_news_result({ device: DEVICE, machine: MACHINE })}</Text>
+      <Text style={styles.result}>{m.connect_news_result({ device: m.news_connect_sample_device(), machine })}</Text>
     </Animated.View>
   </View>;
 }

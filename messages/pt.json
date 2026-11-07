@@ -10154,6 +10154,8 @@
   "connect_device_approve": "Aprovar",
   "connect_device_deny": "Recusar",
   "connect_news_result": "Aprovado: o {device} abre {machine} de qualquer rede.",
+  "news_connect_sample_device": "iPhone",
+  "news_connect_sample_machine": "pc-casa",
   "connect_device_approve_title": "Aprovar {name}?",
   "connect_device_approve_body": "Ele passa a entrar em {machine} com acesso de dono.",
   "connect_device_revoke": "Revogar",
