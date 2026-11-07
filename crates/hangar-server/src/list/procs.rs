@@ -65,11 +65,7 @@ impl std::fmt::Display for ProcessExited {fn fmt(&self,f:&mut std::fmt::Formatte
 impl std::error::Error for ProcessExited {}
 pub fn exited(error:&io::Error)->bool {error.get_ref().is_some_and(|cause|cause.is::<ProcessExited>())}
 
-/// Processo que morreu entre a varredura e a leitura: não é falha, é corrida.
-pub fn vanished(error: &io::Error) -> bool {
-    // ESRCH: o `/proc/<pid>` ainda existe, o processo já não.
-    error.kind() == io::ErrorKind::NotFound || error.raw_os_error() == Some(3)
-}
+pub use hangar_core::process::vanished;
 
 #[cfg(target_os = "linux")]
 pub use linux::ProcFs;

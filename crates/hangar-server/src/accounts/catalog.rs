@@ -9,12 +9,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Clone, Debug)]
-pub struct Account {
-    pub id: String,
-    pub home: PathBuf,
-    pub is_default: bool,
-}
+pub use hangar_core::account_env::Account;
 
 #[derive(Debug)]
 pub struct AccountError {

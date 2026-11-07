@@ -3,15 +3,15 @@ use std::{io,time::Duration};
 use tokio::process::{Child,Command};
 
 /// Autoridade do servidor que nenhum programa auxiliar (CLI de conta, ffmpeg) deve herdar.
-pub(crate) const PRIVATE_ENV_KEYS: [&str; 7] = ["HANGAR_INTERNAL_SECRET", "CP_AUTH_TOKEN", "HANGAR_RUNTIME_INSTANCE", "HANGAR_AUTH_CONTEXT", "HANGAR_PLUGIN_TOKEN",
+pub const PRIVATE_ENV_KEYS: [&str; 7] = ["HANGAR_INTERNAL_SECRET", "CP_AUTH_TOKEN", "HANGAR_RUNTIME_INSTANCE", "HANGAR_AUTH_CONTEXT", "HANGAR_PLUGIN_TOKEN",
     "HANGAR_SERVER_LISTEN", "HANGAR_SERVER_UPSTREAM"];
 
-pub(crate) trait OwnedTree: Send {
+pub trait OwnedTree: Send {
     fn terminate(&mut self)->io::Result<()>;
     fn active(&mut self)->io::Result<bool>;
 }
 
-pub(crate) async fn finish(tree:&mut impl OwnedTree) {finish_after(tree,Duration::from_secs(5)).await}
+pub async fn finish(tree:&mut impl OwnedTree) {finish_after(tree,Duration::from_secs(5)).await}
 // Sinal aceito sem a árvore acabar (estado D) não libera a posse; só passa a ficar visível.
 async fn finish_after(tree:&mut impl OwnedTree,stuck_after:Duration) {
     let started=tokio::time::Instant::now();let mut warned=false;
@@ -36,7 +36,7 @@ async fn finish_after(tree:&mut impl OwnedTree,stuck_after:Duration) {
 
 /// Espera o líder sair sem recolhê-lo: o zumbi segura o número do grupo até o `finish`.
 #[cfg(any(target_os="linux",target_os="macos"))]
-pub(crate) async fn leader_exited(child:&mut Child)->io::Result<()> {
+pub async fn leader_exited(child:&mut Child)->io::Result<()> {
     unsafe extern "C" {fn waitid(idtype:i32,id:u32,info:*mut u64,options:i32)->i32;}
     const P_PID:i32=1;const WEXITED:i32=4;
     #[cfg(target_os="linux")] const WNOWAIT:i32=0x0100_0000;
@@ -53,7 +53,7 @@ pub(crate) async fn leader_exited(child:&mut Child)->io::Result<()> {
 }
 // Windows: o Job não depende do número do processo; demais Unix ficam com a espera comum.
 #[cfg(not(any(target_os="linux",target_os="macos")))]
-pub(crate) async fn leader_exited(child:&mut Child)->io::Result<()> {child.wait().await.map(|_|())}
+pub async fn leader_exited(child:&mut Child)->io::Result<()> {child.wait().await.map(|_|())}
 fn report(error:&io::Error) {
     if crate::warn_limit::allow(None,"command_tree_cleanup") {
         tracing::warn!(code="command_tree_cleanup",io_kind=?error.kind(),os_error=?error.raw_os_error(),reason="fim dos auxiliares ainda sem prova; posse conservada");
@@ -61,12 +61,12 @@ fn report(error:&io::Error) {
 }
 
 #[cfg(unix)]
-pub(crate) struct CommandTree {group:i32}
+pub struct CommandTree {group:i32}
 #[cfg(unix)]
 impl CommandTree {
-    pub(crate) fn configure(command:&mut Command)->io::Result<Self> {command.process_group(0);Ok(Self {group:0})}
-    pub(crate) fn configure_detached(command:&mut Command)->io::Result<Self> {Self::configure(command)}
-    pub(crate) fn attach(&mut self,child:&Child)->io::Result<()> {
+    pub fn configure(command:&mut Command)->io::Result<Self> {command.process_group(0);Ok(Self {group:0})}
+    pub fn configure_detached(command:&mut Command)->io::Result<Self> {Self::configure(command)}
+    pub fn attach(&mut self,child:&Child)->io::Result<()> {
         self.group=child.id().ok_or_else(||io::Error::other("auxiliar sem identidade"))? as i32;Ok(())
     }
 }
@@ -85,7 +85,7 @@ fn group_active(group:i32)->io::Result<bool> {
     for entry in std::fs::read_dir("/proc")? {
         let entry=entry?;if entry.file_name().to_string_lossy().parse::<u32>().is_err(){continue;}
         let value=match std::fs::read(entry.path().join("stat")) {
-            Ok(value)=>value,Err(error) if crate::list::procs::vanished(&error)=>continue,Err(error)=>return Err(error),
+            Ok(value)=>value,Err(error) if crate::process::vanished(&error)=>continue,Err(error)=>return Err(error),
         };
         let end=value.iter().rposition(|byte|*byte==b')').ok_or_else(||io::Error::other("identidade do auxiliar ilegível"))?;
         let tail=std::str::from_utf8(&value[end+1..]).map_err(|_|io::Error::other("grupo auxiliar ilegível"))?;
@@ -136,19 +136,19 @@ mod windows {
     fn check(value:i32)->io::Result<()> {if value==0{Err(io::Error::last_os_error())}else{Ok(())}}
     struct Resource(Handle);
     impl Drop for Resource {fn drop(&mut self){if let Err(error)=check(unsafe {CloseHandle(self.0)}){report(&error);}}}
-    pub(crate) struct CommandTree {job:Resource,process:Handle,assigned:bool}
+    pub struct CommandTree {job:Resource,process:Handle,assigned:bool}
     unsafe impl Send for CommandTree {}
     impl CommandTree {
-        pub(crate) fn configure(command:&mut Command)->io::Result<Self> {
+        pub fn configure(command:&mut Command)->io::Result<Self> {
             command.creation_flags(0x00000004 | 0x08000000);
             Self::create(true)
         }
         /// A conclusão normal conserva auxiliares; prazo e cancelamento terminam o Job explicitamente.
-        pub(crate) fn configure_detached(command: &mut Command) -> io::Result<Self> {
+        pub fn configure_detached(command: &mut Command) -> io::Result<Self> {
             command.creation_flags(0x00000004 | 0x08000000);
             Self::create(false)
         }
-        pub(crate) fn configure_std(command: &mut std::process::Command) -> io::Result<Self> {
+        pub fn configure_std(command: &mut std::process::Command) -> io::Result<Self> {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x00000004 | 0x08000000);
             Self::create(false)
@@ -160,10 +160,10 @@ mod windows {
             check(unsafe {SetInformationJobObject(handle,9,&limits as *const _ as _,std::mem::size_of::<Extended>() as u32)})?;
             Ok(Self {job,process:std::ptr::null_mut(),assigned:false})
         }
-        pub(crate) fn attach(&mut self,child:&Child)->io::Result<()> {
+        pub fn attach(&mut self,child:&Child)->io::Result<()> {
             self.attach_handle(child.raw_handle().ok_or_else(||io::Error::other("auxiliar sem handle"))? as Handle, child.id())
         }
-        pub(crate) fn attach_std(&mut self, child: &std::process::Child) -> io::Result<()> {
+        pub fn attach_std(&mut self, child: &std::process::Child) -> io::Result<()> {
             use std::os::windows::io::AsRawHandle;
             self.attach_handle(child.as_raw_handle(), Some(child.id()))
         }
@@ -203,7 +203,7 @@ mod windows {
         }
     }
 }
-#[cfg(windows)]pub(crate) use windows::CommandTree;
+#[cfg(windows)]pub use windows::CommandTree;
 
 #[cfg(test)]
 mod tests {
@@ -216,7 +216,7 @@ mod tests {
             self.attempts.fetch_add(1,Ordering::Release);Err(io::Error::new(io::ErrorKind::PermissionDenied,"termination failed"))
         }
     }
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn termination_failure_and_delayed_job_end_keep_cleanup_pending() {
         let active=Arc::new(AtomicBool::new(true));let attempts=Arc::new(AtomicUsize::new(0));
         let mut tree=DelayedTree {active:active.clone(),attempts:attempts.clone()};
@@ -235,7 +235,7 @@ mod tests {
         fn active(&mut self)->io::Result<bool>{Ok(self.active.load(Ordering::Acquire))}
         fn terminate(&mut self)->io::Result<()>{Ok(())}
     }
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn killed_tree_that_never_ends_warns_and_keeps_ownership() {
         let output=Arc::new(std::sync::Mutex::new(Vec::new()));let capture=Capture(output.clone());
         let subscriber=tracing_subscriber::fmt().without_time().with_ansi(false).with_writer(move||capture.clone()).finish();
@@ -250,7 +250,7 @@ mod tests {
     }
 }
 
-pub(crate) fn pid_alive(pid:u32)->io::Result<bool>{
+pub fn pid_alive(pid:u32)->io::Result<bool>{
     pid_alive_with(i64::from(pid),||{
         #[cfg(unix)] {
             let pid=i32::try_from(pid).map_err(|_|io::Error::new(io::ErrorKind::InvalidInput,"PID fora da faixa do sistema"))?;

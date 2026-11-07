@@ -11,7 +11,7 @@ pub mod login_view;
 pub mod claude_window;
 pub mod codex_login;
 pub mod codex_device_login;
-pub mod environment;
+pub use hangar_core::account_env as environment;
 pub mod secondary_auth;
 pub mod storage;
 pub mod transcripts;

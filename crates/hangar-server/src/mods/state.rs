@@ -290,12 +290,7 @@ pub struct Mods {
     notify: Arc<Notify>,
 }
 
-pub(crate) fn random_hex(bytes: usize) -> String {
-    use ring::rand::SecureRandom;
-    let mut buffer = vec![0u8; bytes];
-    ring::rand::SystemRandom::new().fill(&mut buffer).expect("fonte de aleatoriedade do sistema");
-    buffer.iter().map(|byte| format!("{byte:02x}")).collect()
-}
+pub(crate) use hangar_core::ids::random_hex;
 
 /// O número dos avisos recomeça a cada subida: o prefixo impede o app de tomar um aviso novo por um
 /// já mostrado, como o `_TOAST_BOOT` do Python.
