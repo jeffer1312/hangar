@@ -83,3 +83,54 @@ fn atomic_write_inner(path:&Path,bytes:&[u8],before:impl FnOnce(&File)->io::Resu
     }
     result
 }
+
+#[cfg(all(test, windows))]
+mod replaced_read_tests {
+    use super::*;
+    #[test]
+    fn a_file_being_replaced_never_reads_as_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("key.queue-state.json");
+        atomic_write(&path, b"{}").unwrap();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let writer = { let (path, stop) = (path.clone(), stop.clone()); std::thread::spawn(move || {
+            // A troca de produção sem o fsync do `atomic_write`: o que está à prova é o leitor, e mais trocas por segundo.
+            let mut n = 0u64;
+            while !stop.load(Ordering::Relaxed) {
+                n += 1;
+                let temp = path.with_extension(format!("{n}.tmp"));
+                std::fs::write(&temp, format!("{{\"n\":{n}}}")).unwrap();
+                replace(&temp, &path).unwrap();
+            }
+        }) };
+        let (mut reads, mut missing) = (0u32, 0u32);
+        let started = std::time::Instant::now();
+        while started.elapsed() < std::time::Duration::from_secs(3) {
+            match read_replaced(&path) {
+                Ok(_) => reads += 1,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => missing += 1,
+                Err(error) => panic!("leitura recusada: {error}"),
+            }
+        }
+        stop.store(true, Ordering::Relaxed);
+        writer.join().unwrap();
+        assert!(reads > 100, "poucas leituras para provar algo: {reads}");
+        assert_eq!(missing, 0, "o arquivo trocado sumiu em {missing} de {} leituras", reads + missing);
+    }
+
+    /// Leitor aberto que compartilha a exclusão (o `atomico.read` do Python, o `std::fs::read`) não faz a
+    /// troca falhar: a outra metade da #145, agora que o Rust grava o sidecar do Claude.
+    #[test]
+    fn a_reader_that_shares_deletion_does_not_block_the_replace() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, temp) = (dir.path().join("cl.json"), dir.path().join("cl.tmp"));
+        std::fs::write(&path, b"velho").unwrap();
+        std::fs::write(&temp, b"novo").unwrap();
+        let mut reader = std::fs::File::open(&path).unwrap();
+        replace(&temp, &path).unwrap();
+        let mut old = Vec::new();
+        std::io::Read::read_to_end(&mut reader, &mut old).unwrap();
+        assert_eq!(old, b"velho");
+        assert_eq!(std::fs::read(&path).unwrap(), b"novo");
+    }
+}
