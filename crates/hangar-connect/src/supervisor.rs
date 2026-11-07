@@ -320,6 +320,10 @@ impl Supervisor {
             return Err(ConnectError::new(StatusCode::CONFLICT, "connect_not_linked", "esta máquina não está ligada ao Connect"));
         };
         if *published(&mut linked) {
+            // Troca anterior que falhou depois de parar os filhos: o pedido do dono é o que religa.
+            if !lock(&self.live).active {
+                self.start(&linked).await?;
+            }
             return Ok(linked);
         }
         *published(&mut linked) = true;

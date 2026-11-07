@@ -21,8 +21,9 @@ pub(super) fn parse_pair_link(raw: &str) -> Option<String> {
     }
     let host = url.host_str()?;
     let funnel = host.ends_with(".ts.net") && host.len() > ".ts.net".len() && url.port() == Some(8443);
-    // `Url` apaga a `:443`: só o texto mostra que o link veio com porta.
-    let connect = connect_guest_host(host) && !raw.trim().split('/').nth(2).is_some_and(|authority| authority.contains(':'));
+    // `Url` apaga a `:443` e aceita `\` no lugar de `/`: só o texto mostra que o link veio com porta.
+    let authority = raw.trim().get("https:".len()..)?.trim_start_matches(['/', '\\']).split(['/', '\\']).next()?;
+    let connect = connect_guest_host(host) && url.port().is_none() && !authority.contains(':');
     if !funnel && !connect { return None; }
     let mut parts: Vec<&str> = url.path_segments()?.collect();
     if parts.last() == Some(&"") { parts.pop(); }
@@ -225,7 +226,8 @@ mod tests {
         for raw in ["https://pc1.acme.hangar.dev.br/par/ABC12", "https://pc1--preview.acme.hangar.dev.br/par/ABC12",
             "https://--guest.acme.hangar.dev.br/par/ABC12", "https://pc1--guest.hangar.dev.br/par/ABC12",
             "https://pc1--guest.acme.hangar.dev.br:443/par/ABC12", "https://pc1--guest.acme.hangar.dev.br:8443/par/ABC12",
-            "https://pc1--guest.acme.hangar.dev.br.evil.com/par/ABC12", "http://pc1--guest.acme.hangar.dev.br/par/ABC12"] {
+            "https://pc1--guest.acme.hangar.dev.br.evil.com/par/ABC12", "http://pc1--guest.acme.hangar.dev.br/par/ABC12",
+            r"https:\\pc1--guest.acme.hangar.dev.br:9000/par/ABC12", r"https:\\pc1--guest.acme.hangar.dev.br:443/par/ABC12"] {
             assert_eq!(parse_pair_link(raw), None, "{raw}");
         }
     }

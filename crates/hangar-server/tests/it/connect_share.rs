@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use axum::Router;
@@ -17,6 +18,7 @@ use hangar_server::connect::state::{self, Linked};
 use hangar_server::connect::supervisor::Supervisor;
 use hangar_server::routes::AppState;
 use hangar_server::share::ShareState;
+use hangar_server::share::guest_routes::guest_router;
 use hangar_server::share::life::{LifeFacts, LifeProbe, Lives};
 use hangar_server::share::owner_routes::{LocalNet, OwnerShareState, Reach, owner_router};
 use hangar_server::share::pairs::{PairStore, normalize_address, parse_pair_link};
@@ -28,11 +30,15 @@ use serde_json::{Value, json};
 const GUEST_BASE: &str = "https://pc1--guest.acme.hangar.dev.br";
 const GUEST_SITE: &str = "reverse_proxy 127.0.0.1:8766";
 
-struct FakeTs { works: bool }
+#[derive(Clone, Copy, PartialEq)]
+enum Ts { Works, Missing, Glitch }
+
+struct FakeTs { mode: Ts, calls: AtomicUsize }
 
 impl Tailscale for FakeTs {
     fn run<'a>(&'a self, args: &'a [&'a str]) -> BoxFuture<'a, Result<Output, String>> {
-        let reply = if self.works {
+        self.calls.fetch_add(1, Ordering::Relaxed);
+        let reply = if self.mode == Ts::Works {
             let stdout = if args.starts_with(&["status", "--json"]) {
                 json!({"Self": {"ID": "n1", "DNSName": "nb.ts.net.", "CapMap": {"funnel": null}}}).to_string()
             } else if args.starts_with(&["funnel", "status", "--json"]) {
@@ -41,8 +47,10 @@ impl Tailscale for FakeTs {
                 String::new()
             };
             Ok(Output { success: true, stdout, stderr: String::new() })
-        } else {
+        } else if self.mode == Ts::Missing {
             Err("tailscale nao encontrado".to_owned())
+        } else {
+            Err("tailscale timeout".to_owned())
         };
         Box::pin(async move { reply })
     }
@@ -70,10 +78,13 @@ struct Env {
     dir: PathBuf,
     supervisor: Arc<Supervisor>,
     share: Arc<ShareState>,
+    ts: Arc<FakeTs>,
 }
 
 /// Máquina ligada ao Connect, com o `frpc` falso entrando na hora; a 8766 fica por conta do teste.
-fn env(tailscale: bool) -> Env {
+fn env(tailscale: bool) -> Env { env_with(if tailscale { Ts::Works } else { Ts::Missing }) }
+
+fn env_with(mode: Ts) -> Env {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().to_path_buf();
     let supervisor = Arc::new(alone(&dir));
@@ -81,15 +92,16 @@ fn env(tailscale: bool) -> Env {
     std::fs::write(gate(&dir), "").unwrap();
     let facts = Arc::new(LifeFacts::default());
     facts.apply_snapshot(HashMap::new(), HashSet::new());
+    let ts = Arc::new(FakeTs { mode, calls: AtomicUsize::new(0) });
     let share = Arc::new(ShareState {
         store: ShareStore::open(dir.join("shares.json"), Arc::new(|| 1_000.0)),
         pairs: PairStore::open(dir.join("external_pairs.json")),
         lives: Lives::new(Arc::new(FakeLife), facts),
-        tailscale: Arc::new(FakeTs { works: tailscale }),
+        tailscale: ts.clone(),
         tunnel: Default::default(),
         connect: Some(supervisor.clone()),
     });
-    Env { _tmp: tmp, dir, supervisor, share }
+    Env { _tmp: tmp, dir, supervisor, share, ts }
 }
 
 async fn serve(router: Router) -> SocketAddr {
@@ -295,6 +307,78 @@ async fn guest_site_waits_for_this_server_to_open_the_guest_port() {
     assert!(e.caddyfile().contains(GUEST_SITE));
     assert_eq!(pid_of(&e.dir, "frpc"), frpc_pid, "o `frpc` já tinha o proxy");
     e.supervisor.stop().await;
+}
+
+async fn redeem(base: &str, code: &str) -> u16 {
+    client().post(format!("{base}/api/guest/redeem")).json(&json!({"code": code})).send().await.unwrap().status().as_u16()
+}
+
+#[tokio::test]
+async fn redeem_from_the_internet_does_not_open_tailscale_per_request() {
+    let e = env(false);
+    let base = format!("http://{}", serve(guest_router(e.share.clone(), "dono".into())).await);
+
+    for _ in 0..5 {
+        assert_eq!(redeem(&base, "x").await, 404);
+    }
+    assert_eq!(e.ts.calls.load(Ordering::Relaxed), 0, "código errado não chega ao `tailscale`");
+
+    // Código certo, site ainda não publicado: a falha fica lembrada e o código não é gasto.
+    let life = e.share.lives.life("proj", true).await;
+    let (_, code) = e.share.store.create("proj", life, Kind::Share, false).unwrap();
+    for _ in 0..5 {
+        assert_eq!(redeem(&base, &code).await, 503);
+    }
+    assert_eq!(e.ts.calls.load(Ordering::Relaxed), 1);
+    assert!(e.share.store.peek(&code, Kind::Share).is_ok());
+}
+
+#[tokio::test]
+async fn tailscale_glitch_spends_no_certificate() {
+    let e = env_with(Ts::Glitch);
+    e.supervisor.guest_port_opened();
+    let base = e.owner(reach_ok(true).await).await;
+
+    let (status, body) = invite(&base).await;
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["detail"]["code"], "erro_compartilhar_pre_requisito");
+    assert!(!e.published());
+    let (status, body) = call(reqwest::Method::GET, format!("{base}/api/share/prereqs")).await;
+    assert_eq!(status, 409, "{body}");
+
+    // Com o site já de pé não há certificado a gastar: quem tem convite segue entrando.
+    state::write(&e.dir, &Linked { guest_published: true, ..linked() }).unwrap();
+    assert_eq!(e.share.public_guest_url().await.unwrap(), GUEST_BASE);
+}
+
+#[tokio::test]
+async fn invite_revives_a_published_site_left_stopped() {
+    let e = env(false);
+    e.supervisor.guest_port_opened();
+    state::write(&e.dir, &Linked { guest_published: true, ..linked() }).unwrap();
+    let base = e.owner(reach_ok(true).await).await;
+
+    let (status, body) = invite(&base).await;
+    assert_eq!(status, 200, "{body}");
+    e.caddy_up().await;
+    assert!(e.caddyfile().contains(GUEST_SITE));
+    e.supervisor.stop().await;
+}
+
+#[test]
+fn texts_name_the_connect_entrance_too() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    for locale in ["pt", "en"] {
+        let messages: Value = serde_json::from_str(&std::fs::read_to_string(format!("{root}/messages/{locale}.json")).unwrap()).unwrap();
+        for key in ["share_reach_failed_funnel", "erro_par_endereco_invalido", "native_par_placeholder"] {
+            assert!(!messages[key].as_str().unwrap().contains("Funnel"), "{locale} {key}");
+        }
+        assert!(messages["erro_par_endereco_invalido"].as_str().unwrap().contains("hangar.dev.br"), "{locale}");
+        assert!(!messages["native_par_placeholder"].as_str().unwrap().contains("ts.net"), "{locale}");
+    }
+    for script in ["scripts/hangar-send", "scripts/install-hangar-send.sh"] {
+        assert!(std::fs::read_to_string(format!("{root}/{script}")).unwrap().contains("--guest.….hangar.dev.br/par/"), "{script}");
+    }
 }
 
 #[test]

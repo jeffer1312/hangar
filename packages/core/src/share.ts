@@ -139,8 +139,8 @@ export function parsePairLink(text: string): string | null {
   try { u = new URL(text.trim()); } catch { return null; }
   if (u.protocol !== 'https:' || u.username || u.password || u.search || u.hash || text.includes('?') || text.includes('#')) return null;
   const funnel = u.hostname.endsWith('.ts.net') && u.hostname.length > '.ts.net'.length && u.port === '8443';
-  // `URL` apaga a `:443`: só o texto mostra que o link veio com porta.
-  const connect = CONNECT_GUEST_HOST.test(u.hostname) && !/^https:\/\/[^/]*:/i.test(text.trim());
+  // `URL` apaga a `:443` e aceita `\` no lugar de `/`: só o texto mostra que o link veio com porta.
+  const connect = CONNECT_GUEST_HOST.test(u.hostname) && u.port === '' && !/^https:[/\\]*[^/\\]*:/i.test(text.trim());
   if (!funnel && !connect) return null;
   const m = /^\/par\/([A-Za-z0-9]{1,64})\/?$/.exec(u.pathname);
   return m ? `https://${u.host}/par/${m[1]}` : null;

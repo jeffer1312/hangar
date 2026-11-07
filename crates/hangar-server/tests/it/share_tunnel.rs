@@ -87,10 +87,15 @@ async fn cached_host_asks_tailscale_once() {
 }
 
 #[tokio::test]
-async fn cached_host_does_not_keep_a_failure() {
-    let memo = tunnel::Memo::default();
-    assert!(tunnel::cached_host(&Missing, &memo).await.is_err());
-    assert_eq!(tunnel::cached_host(&Fake::new(), &memo).await.unwrap(), "nb.tail1.ts.net");
+async fn cached_host_remembers_a_failure_for_a_moment() {
+    let (memo, fake) = (tunnel::Memo::default(), Fake::new());
+    let fix = tunnel::cached_host(&Missing, &memo).await.unwrap_err();
+    assert!(tunnel::confirmed_absent(&fix));
+    assert!(!tunnel::confirmed_absent("tailscale timeout"));
+    assert_eq!(tunnel::cached_host(&fake, &memo).await.unwrap_err(), fix);
+    assert!(fake.calls().is_empty(), "falha lembrada não abre processo");
+    memo.forget_failure();
+    assert_eq!(tunnel::cached_host(&fake, &memo).await.unwrap(), "nb.tail1.ts.net");
 }
 
 #[tokio::test]

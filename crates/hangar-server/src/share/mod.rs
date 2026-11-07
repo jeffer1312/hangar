@@ -33,13 +33,16 @@ impl ShareState {
     pub async fn ensure_on(&self) -> Result<String, tunnel::TunnelError> {
         let done = tunnel::ensure_on(&*self.tailscale).await;
         self.tunnel.set_applied(done.is_ok().then_some(true));
+        if done.is_ok() { self.tunnel.forget_failure(); }
         done
     }
 
-    /// A ligação, quando é o Connect que publica o convite: com Tailscale, o Funnel segue como era.
+    /// A ligação, quando é o Connect que publica o convite: com Tailscale, o Funnel segue como era. Falha de um
+    /// instante não conta, ou gastaria certificado em máquina com Tailscale; com o site já de pé não há o que gastar.
     pub async fn connect_entrance(&self) -> Option<crate::connect::state::Linked> {
         let linked = self.connect.as_ref()?.linked().await?;
-        self.host().await.is_err().then_some(linked)
+        let fix = self.host().await.err()?;
+        (tunnel::confirmed_absent(&fix) || linked.guest_published).then_some(linked)
     }
 
     /// Endereço público do convite, sem ligar nada: a página e os resgates são abertos a quem não tem token.

@@ -11,6 +11,9 @@ pub const FIX_OPERATOR: &str = "sudo tailscale set --operator=$USER";
 pub const FIX_FUNNEL: &str = "libere o Funnel na política da tailnet (nodeAttrs \"funnel\"): https://login.tailscale.com/admin/acls/file";
 const TIMEOUT: Duration = Duration::from_secs(20);
 const HOST_TTL: Duration = Duration::from_secs(300);
+const FAILURE_TTL: Duration = Duration::from_secs(15);
+const NOT_INSTALLED: &str = "tailscale nao encontrado";
+const NOT_LOGGED_IN: &str = "tailscale sem DNSName (logado?)";
 static LOGIN_URL: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"https://login\.tailscale\.com/\S+").expect("regex do link"));
 
@@ -38,7 +41,7 @@ impl Tailscale for Real {
             #[cfg(windows)] { command.creation_flags(0x08000000); } // CREATE_NO_WINDOW: sem console piscando.
             let out = match tokio::time::timeout(TIMEOUT, command.output()).await {
                 Err(_) => return Err("tailscale timeout".into()),
-                Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => return Err("tailscale nao encontrado".into()),
+                Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => return Err(NOT_INSTALLED.into()),
                 Ok(Err(e)) => return Err(format!("tailscale falhou: {e}")),
                 Ok(Ok(out)) => out,
             };
@@ -55,6 +58,7 @@ impl Tailscale for Real {
 #[derive(Default)]
 pub struct Memo {
     host: Mutex<Option<(Instant, String)>>,
+    failure: Mutex<Option<(Instant, String)>>,
     /// Último estado do Funnel confirmado ou aplicado; `None` = não se sabe.
     applied: Mutex<Option<bool>>,
 }
@@ -62,16 +66,32 @@ pub struct Memo {
 impl Memo {
     pub fn applied(&self) -> Option<bool> { *self.applied.lock().unwrap_or_else(|e| e.into_inner()) }
     pub fn set_applied(&self, on: Option<bool>) { *self.applied.lock().unwrap_or_else(|e| e.into_inner()) = on; }
+    pub fn forget_failure(&self) { *self.failure.lock().unwrap_or_else(|e| e.into_inner()) = None; }
 }
 
-/// `host` lembrado por `HOST_TTL`: a página e o resgate não abrem um processo por pedido. Falha não fica guardada.
+/// Só a resposta do `tailscale` confirma: timeout ou daemon reiniciando não dizem que ele não existe aqui.
+pub fn confirmed_absent(fix: &str) -> bool { fix == NOT_INSTALLED || fix == NOT_LOGGED_IN }
+
+/// `host` lembrado por `HOST_TTL` e a falha por `FAILURE_TTL`: a página e o resgate vêm da internet e não abrem
+/// um processo por pedido.
 pub async fn cached_host(ts: &dyn Tailscale, memo: &Memo) -> Result<String, String> {
     if let Some((at, h)) = &*memo.host.lock().unwrap_or_else(|e| e.into_inner()) && at.elapsed() < HOST_TTL {
         return Ok(h.clone());
     }
-    let h = host(ts).await?;
-    *memo.host.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), h.clone()));
-    Ok(h)
+    if let Some((at, fix)) = &*memo.failure.lock().unwrap_or_else(|e| e.into_inner()) && at.elapsed() < FAILURE_TTL {
+        return Err(fix.clone());
+    }
+    match host(ts).await {
+        Ok(h) => {
+            memo.forget_failure();
+            *memo.host.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), h.clone()));
+            Ok(h)
+        }
+        Err(fix) => {
+            *memo.failure.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), fix.clone()));
+            Err(fix)
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -106,7 +126,7 @@ fn dns_name(s: &Value) -> String {
 
 pub async fn host(ts: &dyn Tailscale) -> Result<String, String> {
     let name = dns_name(&status(ts).await.map_err(|e| e.fix)?);
-    if name.is_empty() { return Err("tailscale sem DNSName (logado?)".into()); }
+    if name.is_empty() { return Err(NOT_LOGGED_IN.into()); }
     Ok(name)
 }
 

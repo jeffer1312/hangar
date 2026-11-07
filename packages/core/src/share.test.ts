@@ -307,6 +307,7 @@ describe('parsePairLink', () => {
       'https://pc1--guest.acme.hangar.dev.br:8443/par/AB12', 'http://pc1--guest.acme.hangar.dev.br/par/AB12',
       'https://u@pc1--guest.acme.hangar.dev.br/par/AB12', 'https://pc1--guest.acme.hangar.dev.br/par/AB12?x=1',
       'https://pc1--guest.acme.hangar.dev.br/par/AB12#x', 'https://pc1--guest.acme.hangar.dev.br/convite/AB12',
+      'https:\\\\pc1--guest.acme.hangar.dev.br:9000/par/AB12', 'https:\\\\pc1--guest.acme.hangar.dev.br:443/par/AB12',
     ]) expect(parsePairLink(bad), bad).toBeNull();
   });
 });

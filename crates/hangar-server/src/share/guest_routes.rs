@@ -86,6 +86,8 @@ async fn redeem(State(st): St, local: Option<Extension<LocalAddr>>, body: Bytes)
         Ok((v, _)) => <[String; 3]>::try_from(v).expect("três campos"),
         Err(r) => return r,
     };
+    // Rota aberta à internet: código errado para aqui, antes de qualquer `tailscale`.
+    if let Err(e) = st.share.store.peek(&code, Kind::Share) { return respond(code_error(&e)); }
     // O endereço sai ANTES do resgate: túnel fora do ar não pode queimar um código já gasto.
     let address = match lan_ip(local) {
         Some(ip) => format!("http://{}", lan_host(ip)),

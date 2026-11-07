@@ -595,7 +595,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   token do dono.** Convites, chaves, porteiro e Funnel moram em `crates/hangar-server/src/share/`;
   Rust fora = 8766 fechada, sem reserva Python. `ShareState::public_guest_url` escolhe o endereço e
   não liga nada (a página e o resgate não têm token); `open_guest_url` abre a entrada e é só de rota
-  do dono. Connect vale ligado e sem Tailscale; com os dois fica o Funnel. O proxy do `frpc` e o site
+  do dono. Connect vale ligado e sem Tailscale confirmado (`tailscale` não instalado ou sem login), nunca por falha de um instante; com os dois fica o Funnel. O proxy do `frpc` e o site
   do Caddy nascem no primeiro convite (`guest_published` em `connect.json`) e ficam: cada host gasta
   um certificado do limite semanal de todo o `hangar.dev.br`. O `frpc` e o Caddy voltam uma vez, em
   tarefa própria, porque quem pediu pelo Connect perde a conexão ali. O site só entra no Caddyfile
