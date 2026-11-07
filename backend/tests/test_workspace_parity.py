@@ -57,7 +57,15 @@ def repo(tmp_path, monkeypatch):
 ])
 def test_git_read_contract(repo, operation, args):
     expected = getattr(git_ops, operation)(str(repo), **args)
-    assert rust(operation, cwd=repo, **args) == {"ok":True, "result":json.loads(json.dumps(expected))}
+    answer = rust_branches(repo) if operation == "list_branches" else rust(operation, cwd=repo, **args)
+    assert answer == {"ok":True, "result":json.loads(json.dumps(expected))}
+
+
+def rust_branches(cwd):
+    # `upstreams` só existe no Rust: o modo Python responde como servidor antigo, e estes repositórios não têm remota.
+    answer = rust("list_branches", cwd=cwd)
+    assert answer["result"].pop("upstreams") == {}
+    return answer
 
 
 def test_list_branches_contract_with_sibling_worktree(repo):
@@ -70,7 +78,7 @@ def test_list_branches_contract_with_sibling_worktree(repo):
     ):
         expected = git_ops.list_branches(str(cwd))
         assert expected["elsewhere"] == occupied
-        assert rust("list_branches", cwd=cwd) == {"ok": True, "result": expected}
+        assert rust_branches(cwd) == {"ok": True, "result": expected}
 
 
 @pytest.mark.parametrize("operation,args", [

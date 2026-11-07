@@ -12,7 +12,7 @@ function overwriteGetLocale(fn: () => 'en' | 'pt') {
 import { configureApi } from './apiEnv';
 // `getHistoryDesde` veio da main junto com o histórico condicional (304 + ETag).
 import { getConfig, getConfigForServer, patchConfig, patchConfigForServer, createSession, getHistory, getHistoryDesde, isAbortError, transcribeFile, transcribeFileForServer, transcribeUploaded, transcribeUploadedForServer, uploadFile, uploadFileForServer, getModelOptions, setEngineModel, rotaGenerica, pairSession } from './api';
-import { createSessionForServer, getSessionDefaultsForServer, getFolderGitForServer, folderGitActionForServer, defaultBase, resumeArchivedConversation } from './api';
+import { createSessionForServer, getSessionDefaultsForServer, getFolderGitForServer, folderGitActionForServer, defaultBase, freshBase, baseChoices, commitsLeftOut, resumeArchivedConversation } from './api';
 import { mensagemDeErro, formataErro } from './errosApi';
 import { passarBastao, getSyncSetupForServer, setupSyncForServer, disableSyncForServer } from './api';
 import { fetchSessionsForServer, getSessions, openSessionsStream, probeServerResponse } from './api';
@@ -1306,6 +1306,42 @@ describe('defaultBase', () => {
     expect(defaultBase({ current: 'main', branches: ['dev', 'main'], remotes: [], dirty: false })).toBe('main');
     expect(defaultBase({ current: null, branches: ['dev', 'main'], remotes: ['r'], dirty: false })).toBe('dev');
     expect(defaultBase({ current: null, branches: [], remotes: ['r'], dirty: false })).toBe('');
+  });
+});
+
+describe('base da worktree nova com a branch local atrás da remota', () => {
+  const info = { current: 'main', branches: ['dev', 'main', 'copia'], remotes: [], dirty: true, upstreams: {
+    main: { upstream: 'origin/main', ahead: 1, behind: 112 },
+    copia: { upstream: 'origin/main', ahead: 2, behind: 5 },
+  } };
+
+  it('freshBase parte da remota só quando a branch padrão está atrás', () => {
+    expect(freshBase(info)).toBe('origin/main');
+    expect(freshBase({ ...info, current: 'dev' })).toBe('dev');
+    expect(freshBase({ current: 'main', branches: ['main'], remotes: [], dirty: false })).toBe('main');
+  });
+
+  it('freshBase mantém a branch que segue uma remota de outro nome', () => {
+    expect(freshBase({ ...info, current: 'copia' })).toBe('copia');
+  });
+
+  it('baseChoices põe a remota antes da local atrasada, sem repetir', () => {
+    expect(baseChoices(info)).toEqual([
+      { name: 'origin/main', behind: 0 }, { name: 'main', behind: 112 }, { name: 'dev', behind: 0 }, { name: 'copia', behind: 5 },
+    ]);
+  });
+
+  it('branch chamada constructor não vira remota', () => {
+    const named = { current: 'constructor', branches: ['constructor'], remotes: [], dirty: false, upstreams: {} };
+    expect(freshBase(named)).toBe('constructor');
+    expect(baseChoices(named)).toEqual([{ name: 'constructor', behind: 0 }]);
+  });
+
+  it('commitsLeftOut fala da branch atual e só quando a base é a remota dela', () => {
+    expect(commitsLeftOut(info, 'origin/main')).toEqual({ branch: 'main', ahead: 1 });
+    expect(commitsLeftOut(info, 'main')).toBeNull();
+    expect(commitsLeftOut({ ...info, upstreams: { main: { upstream: 'origin/main', ahead: 0, behind: 3 } } }, 'origin/main')).toBeNull();
+    expect(commitsLeftOut({ ...info, upstreams: { main: { upstream: 'origin/main', ahead: 0, behind: 3 }, copia: info.upstreams.copia } }, 'origin/main')).toBeNull();
   });
 });
 

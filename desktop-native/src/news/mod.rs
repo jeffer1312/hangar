@@ -16,6 +16,7 @@ mod sleep_hidden;
 mod speech_pause;
 mod session_vault;
 mod tour;
+mod worktree_fresh;
 
 use std::time::Instant;
 use gpui_kit::*;
@@ -42,6 +43,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "sem-projeto" => Some(no_project::render),
         "pilula-do-ditado" => Some(dictation_pill::render),
         "pausar-fala" => Some(speech_pause::render),
+        "worktree-atualizada" => Some(worktree_fresh::render),
         _ => None,
     }
 }

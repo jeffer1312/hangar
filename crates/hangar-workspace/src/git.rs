@@ -299,6 +299,30 @@ pub fn branches(cwd: &Path) -> Result<Value> {
         json!({"current":if cur.code==0 {Some(cur.stdout.trim())} else {None},"branches":local,"remotes":remote,"dirty":st.code==0&&!st.stdout.trim().is_empty(),"elsewhere":elsewhere(cwd)?}),
     )
 }
+/// A lista da tela: contar atrás e à frente de cada branch pesa em repositório grande, e só a tela usa.
+pub fn branches_with_upstreams(cwd: &Path) -> Result<Value> {
+    let mut info = branches(cwd)?;
+    info["upstreams"] = Value::Object(behind_upstreams(cwd)?);
+    Ok(info)
+}
+/// Branches locais atrás da própria remota: a worktree nova pode partir da remota sem pull na pasta.
+fn behind_upstreams(cwd: &Path) -> Result<serde_json::Map<String, Value>> {
+    let out = checked(
+        cwd,
+        &["for-each-ref", "--format=%(refname:short)%00%(upstream)%00%(upstream:track,nobracket)", "refs/heads"],
+        409,
+    )?;
+    let count = |track: &str, label: &str| {
+        track.split(", ").find_map(|part| part.strip_prefix(label)?.parse::<u64>().ok()).unwrap_or(0)
+    };
+    Ok(out.stdout.lines().filter_map(|line| {
+        let mut fields = line.split('\0');
+        let (branch, upstream, track) = (fields.next()?, fields.next()?, fields.next()?);
+        let upstream = upstream.strip_prefix("refs/remotes/")?;
+        let behind = count(track, "behind ");
+        (behind > 0).then(|| (branch.to_owned(), json!({"upstream":upstream,"ahead":count(track, "ahead "),"behind":behind})))
+    }).collect())
+}
 /// Branches abertas em outra worktree do repositório (`main`: a pasta principal): o `switch` para elas é recusado pelo git.
 fn elsewhere(cwd: &Path) -> Result<serde_json::Map<String, Value>> {
     let top = command(cwd, &["rev-parse", "--show-toplevel"])?;
@@ -354,6 +378,11 @@ fn remote_ref(cwd: &Path, branch: &str) -> Result<String> {
         return Err(error(409, "branch remota ambígua"));
     }
     Ok(refs[0].into())
+}
+/// A base escrita como `origin/main`, pelo nome completo: uma tag igual ou o sufixo de outra remota não a trocam.
+fn tracking_ref(cwd: &Path, base: &str) -> Result<Option<String>> {
+    let full = format!("refs/remotes/{base}");
+    Ok((command(cwd, &["show-ref", "--verify", "--quiet", &full])?.code == 0).then_some(full))
 }
 fn branch_name_ok(cwd: &Path, name: &str) -> Result<bool> {
     // Nome começando com "-" viraria flag do `worktree add -b`.
@@ -436,7 +465,7 @@ fn create_worktree_in(
             .or(info["current"].as_str())
             .unwrap_or_default()
             .to_owned();
-        if start.is_empty() || !known(&start) {
+        if start.is_empty() || !(known(&start) || tracking_ref(cwd, &start)?.is_some()) {
             return Err(error(400, "branch base inexistente"));
         }
     } else {
@@ -463,6 +492,8 @@ fn create_worktree_in(
     let created = if new_branch {
         let from = if local.iter().any(|b| b == start.as_str()) {
             start.clone()
+        } else if let Some(full) = tracking_ref(cwd, &start)? {
+            full
         } else {
             remote_ref(cwd, &start)?
         };
