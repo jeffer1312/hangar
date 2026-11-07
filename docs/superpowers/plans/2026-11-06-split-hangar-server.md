@@ -526,11 +526,19 @@ montam o estado). Sem registro, a leitura de `orq` loga erro uma vez (código
 subida, uma linha de `orq` gera eventos. Os testes de `transcript/orq_cases.rs` usam a orquestração:
 ficam no servidor.
 
-- [ ] **Step 1: Conferir as dependências** de `transcript/` fora do core (esperado: só
+- [x] **Step 1: Conferir as dependências** de `transcript/` fora do core (esperado: só
   `orchestration::timeline::parse_obj`) e listar todo ponto de entrada que lê transcript sem passar
   pela subida do servidor (`main.rs`, exemplos, testes).
-- [ ] **Step 2: Commit de corte** com o registro (`set_orq_parser`/`orq_parser`) ainda dentro do
+  Feito: só `parse_obj` (o `row_waits` já é re-export do core). Nenhum subcomando do `main.rs` lê
+  conversa de `orq`. Pontos de entrada: `AppState::with_parts` (todo construtor do estado passa
+  por ele: subida e testes que montam estado), o exemplo `orq_contract` (`timeline.history`) e o
+  teste `transcript::orq_contract`, que não monta estado. `bench_history` só lê Claude.
+- [x] **Step 2: Commit de corte** com o registro (`set_orq_parser`/`orq_parser`) ainda dentro do
   servidor, as duas chamadas trocadas e o registro feito em cada ponto de entrada do Step 1.
+  Feito: `transcript::{OrqParser, set_orq_parser}` e `parse_orq` (sem registro: `tracing::error!`
+  uma vez com `transcript_orq_parser_missing`, devolve vazio). RED: os testes
+  `routes::tests::orchestration_history_uses_the_same_parser_on_public_and_forwarded_ports` e
+  `transcript::orq_contract::…` falharam antes do registro; GREEN depois.
 - [ ] **Step 3: Mover `transcript/`** para `crates/hangar-transcript/` pelo contrato.
 - [ ] **Step 4: Provas comuns** (quando autorizadas).
 - [ ] **Step 5: Uso real — verificação manual** abrir conversas Claude, Codex e uma sessão `orq`;

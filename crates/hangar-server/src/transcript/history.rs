@@ -396,7 +396,7 @@ fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64, notices: bool) -
                 let mut evs = match req.provider {
                     Provider::Claude | Provider::ClaudeHeadless => claude::parse_obj(obj, peer::name_of_pid),
                     Provider::Codex => codex::parse_rollout_obj(&value),
-                    Provider::Orq => crate::orchestration::timeline::parse_obj(&value, req.jsonl.parent()),
+                    Provider::Orq => super::parse_orq(&value, req.jsonl.parent()),
                 };
                 if let Some(fold) = notices.as_mut() { fold.feed(obj, &mut evs); }
                 let ts = if req.provider == Provider::Orq {

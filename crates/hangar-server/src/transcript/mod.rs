@@ -14,6 +14,7 @@ pub use hangar_core::pycompat::pyjson;
 pub(crate) use hangar_core::pycompat::json_tree;
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Once, OnceLock};
 
 use hangar_api::chat::{ChatEvent, ChatKind};
 use serde_json::Value;
@@ -62,6 +63,27 @@ impl Provider {
 }
 
 pub use hangar_core::pycompat::decode_line;
+
+/// Leitor da linha de `orq`: mora na orquestração, que depende deste módulo, e entra pela subida.
+pub type OrqParser = fn(&Value, Option<&std::path::Path>) -> Vec<ChatEvent>;
+
+static ORQ_PARSER: OnceLock<OrqParser> = OnceLock::new();
+
+/// A primeira chamada vale; as seguintes não trocam o leitor.
+pub fn set_orq_parser(parser: OrqParser) {
+    let _ = ORQ_PARSER.set(parser);
+}
+
+pub(crate) fn parse_orq(value: &Value, dir: Option<&std::path::Path>) -> Vec<ChatEvent> {
+    if let Some(parser) = ORQ_PARSER.get() {
+        return parser(value, dir);
+    }
+    static MISSING: Once = Once::new();
+    MISSING.call_once(|| {
+        tracing::error!(code = "transcript_orq_parser_missing", "linha de orq sem leitor registrado; a conversa sai vazia");
+    });
+    Vec::new()
+}
 
 /// Um leitor por arquivo: guarda o estado do `RewriteFilter` entre as linhas, como o
 /// `TranscriptTailer` (transcript.py:777).
@@ -122,7 +144,7 @@ impl LineParser {
         let Some(value) = line_value(line) else { return Vec::new() };
         let mut evs = match (self.provider, &value) {
             (Provider::Codex, _) => codex::parse_rollout_obj(&value),
-            (Provider::Orq, _) => crate::orchestration::timeline::parse_obj(&value, self.run_dir.as_deref()),
+            (Provider::Orq, _) => parse_orq(&value, self.run_dir.as_deref()),
             (Provider::Claude | Provider::ClaudeHeadless, Value::Object(obj)) if self.rewrite.keep(obj) => {
                 let mut evs = claude::parse_obj(obj, self.peer_resolver);
                 if let Some(fold) = self.notices.as_mut() { fold.feed(obj, &mut evs); }
@@ -183,6 +205,7 @@ mod orq_contract {
 
     #[test]
     fn orq_history_and_live_parser_keep_the_notice_contract() {
+        set_orq_parser(crate::orchestration::timeline::parse_obj);
         let provider = Provider::parse("orq");
         assert!(provider.is_some(), "o histórico do orq precisa ser lido pelo Rust");
         assert_eq!(orq_cases::CASES.len(), 13);

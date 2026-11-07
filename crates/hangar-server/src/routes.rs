@@ -185,6 +185,7 @@ impl AppState {
 
     pub fn with_parts(cfg: Config, terminal: crate::terminal_control::TerminalPool,
                       costs: Arc<crate::costs::collect::Collector>, fx: Arc<crate::costs::fx::Fx>, server_id: String) -> AppState {
+        crate::transcript::set_orq_parser(crate::orchestration::timeline::parse_obj);
         let http = proxy::client();
         let mods = crate::mods::state::Mods::default();
         let interactions = Arc::new(crate::interactions::InteractionStore::default());
