@@ -155,6 +155,47 @@ describe('conta do Connect', () => {
     expect(vault.has(ACCOUNT_KEY)).toBe(false);
   });
 
+  it('a lista mais nova vence uma resposta atrasada, e máquina igual mantém o mesmo objeto', async () => {
+    network();
+    await connect().signIn('acme', 'long-password');
+    await settle();
+    const kept = connect().machines![0];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let reads = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: string) => {
+      if (new URL(input).pathname !== '/v1/machines') return json({});
+      if (++reads === 1) { await gate; return json([offline]); }
+      return json([online]);
+    }));
+
+    const late = connect().refreshMachines();
+    await connect().refreshMachines();
+    expect(connect().loadingMachines).toBe(false);
+    expect(connect().machines![0]).toBe(kept);
+    release();
+    await late;
+
+    expect(connect().machines).toEqual([online]);
+    expect(connect().loadingMachines).toBe(false);
+  });
+
+  it('troca de senha sem conta é erro, não sucesso', async () => {
+    await expect(connect().changePassword('long-password', 'new-long-password')).rejects.toThrow(m.connect_session_ended());
+  });
+
+  it('sair da conta leva junto os pedidos e aparelhos que ela mostrava', async () => {
+    network();
+    await connect().signIn('acme', 'long-password');
+    await settle();
+    useConnect.setState({ entries: { pc1: { phase: 'failed', error: 'x' } }, devices: { pc1: { rows: [], error: '' } } });
+
+    await connect().signOut();
+
+    expect(connect().entries).toEqual({});
+    expect(connect().devices).toEqual({});
+  });
+
   it('senha atual errada não derruba a conta', async () => {
     network({ route: ({ url }) => (url.pathname === '/v1/accounts/password' ? json({}, 401) : undefined) });
     await connect().signIn('acme', 'long-password');
@@ -301,6 +342,34 @@ describe('máquinas da conta', () => {
     expect(servers()[0]).toMatchObject({ id: 'pc1', token: 'device-token', deviceId: 'dev1', disabled: false });
   });
 
+  it('entra de novo numa entrada que voltou à senha e perdeu a rota do Connect', async () => {
+    await seed([{ id: 's1', label: 'pc1', baseUrl: 'https://pc1.tail.ts.net', token: 'owner-password', connectOff: true, disabled: true,
+      connectHost: 'pc1.acme.hangar.dev.br' }]);
+    network({ statuses: [{ status: 'approved', token: 'device-token' }] });
+
+    const entering = connect().reenter(servers()[0]);
+    await elapse(6000);
+    await entering;
+
+    expect(connect().notice).toBe('');
+    expect(servers().some((s) => s.token === 'device-token')).toBe(true);
+  });
+
+  it('a resposta de outra conta não marca a entrada da conta nova', async () => {
+    network({ statuses: [{ status: 'denied' }], route: ({ url, method, body }) => (url.origin === CONNECT_SERVICE_URL
+      && url.pathname === '/v1/sessions' && method === 'POST' && body?.name === 'other' ? json({ token: 'other-token' }) : undefined) });
+    const entering = connect().enter(online);
+    await elapse(500);
+    await connect().signOut();
+    await connect().signIn('other', 'long-password');
+
+    await elapse(6000);
+    await entering;
+
+    expect(connect().account?.token).toBe('other-token');
+    expect(connect().entries.pc1).toBeUndefined();
+  });
+
   it('avisa quando a máquina recusada não é desta conta', async () => {
     await seed([{ ...entry, baseUrl: 'https://pc9.other.hangar.dev.br', disabled: true }]);
     await connect().reenter(servers()[0]);
@@ -331,6 +400,33 @@ describe('aparelhos da máquina', () => {
     expect(approve).toMatchObject({ method: 'POST', auth: 'Bearer device-token' });
     expect(approve?.url.origin).toBe(MACHINE_URL);
     expect(connect().devices.pc1.rows?.every((row) => row.status === 'approved')).toBe(true);
+  });
+
+  it('a resposta à aprovação relê a lista mesmo com uma leitura antiga em curso', async () => {
+    await seed([entry]);
+    let rows = [{ device_id: 'dev2', name: 'fixture-signed', status: 'pending', last_seen: null }];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let first = true;
+    vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
+      const { pathname } = new URL(input);
+      if (pathname === '/api/connect/devices' && (init?.method ?? 'GET') === 'GET') {
+        const snapshot = rows;
+        if (first) { first = false; await gate; }
+        return json(snapshot);
+      }
+      if (pathname.endsWith('/approve')) { rows = rows.map((row) => ({ ...row, status: 'approved' })); return json({ ok: true }); }
+      return json({});
+    }));
+
+    const polling = connect().refreshDevices();
+    const answering = connect().answerDevice(servers()[0], 'dev2', true, signal());
+    await settle();
+    release();
+    await polling;
+    await answering;
+
+    expect(connect().devices.pc1.rows?.map((row) => row.status)).toEqual(['approved']);
   });
 
   it('recusa um pedido pendente com DELETE', async () => {

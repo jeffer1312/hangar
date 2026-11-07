@@ -19,6 +19,8 @@ export interface Server {
   ownerToken?: string;
   /** O aparelho foi recusado aqui: não promove sozinho de novo, e a revogação continua valendo. */
   connectOff?: boolean;
+  /** Host do Connect que esta entrada usava antes de voltar à senha: é por ele que a conta reconhece a máquina. */
+  connectHost?: string;
   // Saiu da lista com um chat dele aberto: toda chamada é recusada, nunca vai ao ativo.
   removed?: boolean;
   // Entrada montada só para um par externo (`reconcilePairEntries`): não é guardada nem vira seção.

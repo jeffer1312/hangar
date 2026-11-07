@@ -389,6 +389,8 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       }
       const route = await discoverConnectRoute(server);
       if (route && isCurrent(attempt)) useServers.getState().rememberConnect(server.id, route, server);
+    }).catch(() => {
+      registrarDiag({ evento: 'connect.rota_nao_gravada', nivel: 'aviso', tela: 'lista', operacao: s.id, codigo: 'connect_route_store_failed' });
     });
   };
   const receivedList = () => {

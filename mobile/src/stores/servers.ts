@@ -34,6 +34,8 @@ function isPersisted(value: unknown): value is Persisted {
 // O que vem junto da credencial de aparelho não vale para outro token.
 function withPlainToken(server: Server, token: string): Server {
   const next = { ...server, token };
+  // Endereço torto só perde o reconhecimento pela conta; a volta à senha não pode falhar por ele.
+  try { if (server.connect) next.connectHost = new URL(server.connect.url).hostname; } catch { /* sem host */ }
   if (server.credential === 'device' || server.connectOff) delete next.disabled;
   delete next.credential;
   delete next.deviceId;

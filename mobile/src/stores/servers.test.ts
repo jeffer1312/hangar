@@ -107,7 +107,7 @@ describe('401 com credencial de aparelho', () => {
     await settle();
 
     const [server] = useServers.getState().servers;
-    expect(server).toMatchObject({ token: 'owner-password', connectOff: true });
+    expect(server).toMatchObject({ token: 'owner-password', connectOff: true, connectHost: 'pc1.acme.hangar.dev.br' });
     expect(plain(server)).toEqual([]);
     expect(useServers.getState().aviso).toBeNull();
     expect(JSON.parse(vault.get(VAULT_KEY)!).servers[0]).toMatchObject({ token: 'owner-password', connectOff: true });
