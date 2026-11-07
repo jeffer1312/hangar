@@ -42,6 +42,16 @@ pub fn parse_authorize_url(raw: &str) -> Option<AuthorizeLink> {
     Some(AuthorizeLink { port, state })
 }
 
+/// O desvio por `claude.com/cai` cai no login do claude.ai mesmo com o perfil logado; o endereço
+/// final do redirecionamento abre direto na autorização.
+pub fn browser_url(raw: &str) -> String {
+    let Ok(mut url) = reqwest::Url::parse(raw) else { return raw.to_owned() };
+    if url.host_str() == Some("claude.com") && url.path() == "/cai/oauth/authorize" && url.set_host(Some("claude.ai")).is_ok() {
+        url.set_path("/oauth/authorize");
+    }
+    url.into()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChromeProfile {
     pub dir: String,
@@ -735,7 +745,7 @@ impl LoginBrowser {
             .ok_or_else(|| refused(422, "erro_login_link_refused", "link de autorização recusado"))?;
         let probe = self.probe.clone();
         let host = tokio::task::spawn_blocking(move || probe()).await.map_err(|_| AccountError::io())?;
-        let command = browser_command(&host, &request.target, &request.url)
+        let command = browser_command(&host, &request.target, &browser_url(&request.url))
             .ok_or_else(|| refused(409, "erro_login_target_missing", "esse navegador não está mais disponível nesta máquina"))?;
         self.stop(&request.operation);
         if request.remote {
@@ -1363,6 +1373,15 @@ mod tests {
             parse_authorize_url(LINK),
             Some(AuthorizeLink { port: 34047, state: "st4te".into() })
         );
+    }
+
+    #[test]
+    fn opens_the_claude_ai_authorize_page() {
+        let opened = browser_url(LINK);
+        assert!(opened.starts_with("https://claude.ai/oauth/authorize?"), "{opened}");
+        assert_eq!(opened.split_once('?').map(|(_, q)| q), LINK.split_once('?').map(|(_, q)| q));
+        let other = LINK.replacen("claude.com", "claude.ai", 1);
+        assert_eq!(browser_url(&other), other);
     }
 
     #[test]
