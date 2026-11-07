@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureApi, _resetApiEnvForTests } from './apiEnv';
-import { addMachine, listMachines, signIn, signUp, upgradeToDevice, type AccountSession, type ConnectMachine } from './connectAccount';
+import { addMachine, changeAccountPassword, endAccountSessions, listMachines, signIn, signUp, upgradeToDevice, type AccountSession, type ConnectMachine } from './connectAccount';
 import { _resetRotasForTests } from './rota';
 import type { Server } from './servers';
 
@@ -81,6 +81,15 @@ describe('conta do Connect', () => {
     const calls = network(() => json([machine]));
     expect(await listMachines(session)).toEqual([machine]);
     expect(calls[0].auth).toBe('Bearer account-token');
+  });
+
+  it('encerra as sessões e troca a senha, que respondem sem corpo', async () => {
+    const calls = network(() => new Response(null, { status: 204 }));
+    await endAccountSessions(session);
+    await changeAccountPassword(session, 'senha-velha', 'senha-nova');
+    expect(calls.map((call) => `${call.method} ${call.url.pathname} ${call.auth}`)).toEqual([
+      'DELETE /v1/sessions Bearer account-token', 'POST /v1/accounts/password Bearer account-token']);
+    expect(calls[1].body).toEqual({ old_password: 'senha-velha', new_password: 'senha-nova' });
   });
 });
 

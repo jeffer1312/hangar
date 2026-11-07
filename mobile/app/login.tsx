@@ -193,6 +193,9 @@ export default function Login() {
             >
               <Text style={styles.scanText}>{withPassword ? m.mobile_sync_login_token() : m.mobile_sync_login_open()}</Text>
             </Pressable>
+            <Pressable style={styles.scanBtn} onPress={() => router.push('/connect' as never)} disabled={loading} accessibilityRole="button" accessibilityLabel={m.connect_open()}>
+              <Text style={styles.scanText}>{m.connect_open()}</Text>
+            </Pressable>
             <Pressable style={styles.scanBtn} onPress={() => setScanning(true)} disabled={loading} accessibilityLabel={m.login_qr()}>
               <Text style={styles.scanText}>{m.login_qr()}</Text>
             </Pressable>

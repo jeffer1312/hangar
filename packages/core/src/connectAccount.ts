@@ -33,7 +33,7 @@ async function request(base: string, path: string, init: RequestInit): Promise<u
   });
   // Não incorpora o corpo do erro: ele pode ecoar o que recebeu.
   if (!response.ok) throw fail('connect_request_failed', response.status);
-  return await response.json() as unknown;
+  return response.status === 204 ? null : await response.json() as unknown;
 }
 
 const post = (base: string, path: string, body: unknown, headers?: Record<string, string>) =>
@@ -57,6 +57,17 @@ export async function listMachines(session: AccountSession): Promise<ConnectMach
   const machines = await request(session.serviceUrl, '/v1/machines', { headers: { Authorization: `Bearer ${session.token}` } });
   if (!Array.isArray(machines)) throw fail('connect_response_invalid');
   return machines as ConnectMachine[];
+}
+
+/** Encerra todas as sessões da conta, inclusive a deste aparelho. */
+export async function endAccountSessions(session: AccountSession): Promise<void> {
+  await request(session.serviceUrl, '/v1/sessions', { method: 'DELETE', headers: { Authorization: `Bearer ${session.token}` } });
+}
+
+/** Troca a senha. As outras sessões acabam, e a deste aparelho continua valendo. */
+export async function changeAccountPassword(session: AccountSession, oldPassword: string, newPassword: string): Promise<void> {
+  await post(session.serviceUrl, '/v1/accounts/password', { old_password: oldPassword, new_password: newPassword },
+    { Authorization: `Bearer ${session.token}` });
 }
 
 // Sem gerador seguro falha: com `Math.random` o serviço, que tem o hash, conseguiria achar o segredo.

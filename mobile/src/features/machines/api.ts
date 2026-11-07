@@ -4,6 +4,7 @@ import * as m from '../../paraglide/messages';
 export type MachineId = { identificador: string; lan_url: string };
 export type Warning = { id: string; estado: string; motivo: string };
 export type Peer = { id: string; base_url: string; enabled: boolean };
+export type ConnectDevice = { device_id: string; name: string; status: 'pending' | 'approved' | 'denied' };
 export type Check = { estado: 'ok' | 'estranho' | 'falhou' | 'recusou' | 'nao_configurado'; identificador: string; motivo: string; tempo_ms: number | null };
 export type Reach = { loopback: boolean; bind: string; enderecos: { tipo: 'nesta_maquina' | 'rede_local' | 'tailscale' | 'publico'; url: string; estado: string; tempo_ms: number | null; motivo: string }[] };
 export type Discovered = { nome: string; base_url: string; hosts?: string[] };
@@ -119,6 +120,19 @@ function peers(value: unknown): Peer[] {
     && typeof p.base_url === 'string' && (p.enabled === undefined || typeof p.enabled === 'boolean'))) throw invalid();
   // O token da listagem é uma máscara, nunca uma credencial utilizável.
   return value.map((p) => ({ id: p.id, base_url: normalizeUrl(p.base_url), enabled: p.enabled !== false }));
+}
+export async function readDevices(s: Server, signal: AbortSignal): Promise<ConnectDevice[]> {
+  const value = await request(s, '/api/connect/devices', signal);
+  if (!Array.isArray(value) || !value.every((d) => object(d) && typeof d.device_id === 'string' && typeof d.name === 'string'
+    && ['pending', 'approved', 'denied'].includes(String(d.status)))) throw invalid();
+  return value as ConnectDevice[];
+}
+export async function approveDevice(s: Server, id: string, signal: AbortSignal): Promise<void> {
+  await request(s, `/api/connect/devices/${encodeURIComponent(id)}/approve`, signal, 'POST');
+}
+/** Recusa quem espera aprovação e revoga quem já entrou, com tudo o que ele aprovou. */
+export async function removeDevice(s: Server, id: string, signal: AbortSignal): Promise<void> {
+  await request(s, `/api/connect/devices/${encodeURIComponent(id)}`, signal, 'DELETE');
 }
 export async function readPeers(s: Server, signal: AbortSignal): Promise<Peer[]> { return peers(await request(s, '/api/peers', signal)); }
 export async function enablePeer(s: Server, id: string, enabled: boolean, signal: AbortSignal): Promise<Peer[]> {

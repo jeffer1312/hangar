@@ -68,6 +68,8 @@ export interface ServersState {
   add(s: Omit<Server, 'id' | 'label'> & { label?: string }): Server;
   addInvite(result: InviteRedeemResult, activate?: boolean): Server;
   appendImported(servers: Server[]): Server[];
+  /** Entrada aprovada pelo Connect: cria a máquina ou renova a que já existe, sem trocar o endereço dela. */
+  addConnected(server: Server): Server;
   remove(id: string): void;
   update(id: string, patch: Partial<Pick<Server, 'label' | 'baseUrl'>>): void;
   setActive(id: string): void;
@@ -75,6 +77,7 @@ export interface ServersState {
   /** `rejectedToken`: o token que levou o 401, quando quem chama sabe. */
   markInvalid(id: string, rejectedToken?: string): void;
   reactivateDevice(id: string): void;
+  enableConnect(id: string): void;
   ensureActive(id: string): boolean;
   limparAviso(): void;
   rememberLan(id: string, lan: LanInfo, source?: Server): void;
@@ -276,6 +279,33 @@ export const useServers = create<ServersState>((set, get) => {
     }, false);
     return added;
   },
+  addConnected(server) {
+    let saved!: Server;
+    change((p) => {
+      const existing = p.servers.find((s) => !s.invite
+        && (s.baseUrl === server.baseUrl || (!!server.lan?.id && s.lan?.id === server.lan.id)));
+      if (existing) {
+        saved = {
+          ...existing, token: server.token, credential: 'device', deviceId: server.deviceId, disabled: false,
+          lan: server.lan ?? existing.lan, connect: server.connect ?? existing.connect,
+          // A senha que esta entrada usava vira a volta para um 401 do aparelho, como em `upgradeToDevice`.
+          ownerToken: existing.credential === 'device' ? existing.ownerToken : existing.token,
+        };
+        delete saved.connectOff;
+      } else {
+        // O id vem do nome da máquina, que só é único dentro da conta.
+        let id = server.id;
+        for (let suffix = 2; p.servers.some((s) => s.id === id); suffix++) id = `${server.id}_${suffix}`;
+        saved = { ...server, id };
+      }
+      return {
+        servers: existing ? p.servers.map((s) => s.id === existing.id ? saved : s) : [...p.servers, saved],
+        activeId: p.servers.some((s) => s.id === p.activeId && !s.disabled) ? p.activeId : saved.id,
+      };
+    });
+    esquecerRota(saved.id);
+    return saved;
+  },
   addInvite(result, activate = true) {
     const base = result.address.replace(/\/+$/, '');
     const matches = (server: Server) => {
@@ -356,6 +386,14 @@ export const useServers = create<ServersState>((set, get) => {
     const current = get().servers.find((s) => s.id === resolveId(id));
     if (!current?.disabled || (current.credential !== 'device' && !current.connectOff)) return;
     change((p) => ({ ...p, servers: p.servers.map((s) => s.id === current.id ? { ...s, disabled: false } : s) }), false);
+  },
+  enableConnect(id) {
+    change((p) => ({ ...p, servers: p.servers.map((s) => {
+      if (s.id !== resolveId(id)) return s;
+      const server = { ...s };
+      delete server.connectOff;
+      return server;
+    }) }));
   },
   ensureActive(id) {
     if (!get().servers.some((s) => s.id === id)) return false;

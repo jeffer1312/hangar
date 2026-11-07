@@ -24,6 +24,7 @@ const DEVICE: Page[] = [
       m.config_fundo_transparencia, m.config_fundo_solidez, m.config_aparencia_pensamento_tools] },
   // Vale para todas as máquinas próprias de uma vez: por isso fica fora do grupo do servidor escolhido.
   { route: '/config/sessions', icon: 'EyeOff', title: m.settings_sessions_title, rows: [m.session_auto_hide_label] },
+  { route: '/connect', icon: 'Cloud', title: m.connect_title, rows: [m.connect_password_title, m.connect_end_sessions] },
   { route: '/config/sobre', icon: 'Info', title: m.native_settings_page_about,
     rows: [m.atualizar_versao, m.config_sobre_servidor, m.atualizar_versao_servidor] },
 ];
