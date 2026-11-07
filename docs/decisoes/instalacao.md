@@ -17,6 +17,10 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   [plataforma.md](plataforma.md#rede-local-antes-do-tailscale-baseurl-é-identidade-a-rota-é-baseof)).
   Nunca `auto`: tira o loopback de que o `tailscale serve` depende. Firewall do Windows no
   `-Update` só sem UAC (já admin); senão vira pendência com o comando.
+- **Firewall do Windows: regra de liberação por porta (8765 e 8766), perfis Private e Public,
+  só por `scripts/open-firewall.ps1`.** O `hangar-server` muda de pasta a cada versão, e o "Allow"
+  do aviso vale para um caminho só. Regra de bloqueio não cala o aviso. O passo de máquina pede o
+  UAC uma vez e nunca falha. Ver [a entrada](#firewall-do-windows-por-porta-07112026).
 - **Instalador guiado: duas perguntas, o resto é padrão.** Sem terminal, tudo é NÃO — exceto no
   `--app`/`-App` (assistente do app nativo), que responde pelas telas: `ask` e `ask_senha` sim,
   `ask_extra` não, Tailscale pela opção, nada espera teclado. O log nunca carrega o token, e no
@@ -1305,3 +1309,26 @@ dia:
 - **Entrada presa no registro do Rust** (fechamento que falhava depois de parar o ator) vinha em laço
   desde 17/10 (`hangar` 1032×, `cx-herda4` 597×) e derrubava a troca de conta no limite com
   `relaunch_initialize`; corrigida no mesmo trabalho.
+
+## Firewall do Windows por porta (07/11/2026)
+
+No Windows 11 de um usuário, cada atualização abria o aviso do firewall para o
+`hangar-server.exe`, mesmo depois do "Allow" da versão anterior. O "Allow" cria regra para o
+caminho do executável, e o pacote roda cada versão de `~\.hangar\versions\<versão>\bin\`. A
+DELPHI-02 (Windows Server 2025) nunca mostrou o aviso porque lá `NotifyOnListen` é `False` nos três
+perfis.
+
+Medido na DELPHI-02 com `NotifyOnListen` ligado no Private e um `listener.exe` em pastas novas:
+regra de liberação por porta (qualquer programa) cala o aviso; porta sem regra avisa; regra de
+**bloqueio** por porta avisa igual. O próprio `hangar-server` 0.1.0.9615 avisou com a regra
+`hangar 8765` de pé, porque escuta também a 8766 (convite pela rede local) em `0.0.0.0`, que não
+tinha regra. Cancel no aviso cria regra de bloqueio para o caminho da versão, que vence a regra da
+porta.
+
+Decisão: `scripts/open-firewall.ps1` cria `hangar 8765` e `hangar 8766` com `-Profile
+Private,Public`. Public entra porque só regra de liberação cala o aviso, e o acesso continua exigindo
+o token. O instalador usa o mesmo script (e a 5173 quando há tarefa de front). Máquinas já
+instaladas recebem pelo passo `2026-11-07-firewall-portas-windows`: sem admin ele pede o UAC uma
+vez e espera até 2 min. Passo de máquina que falha derruba a atualização inteira, então ele sempre
+sai com 0 e grava o resultado em `~/.hangar/firewall-ports`; UAC recusado fica lá e na saída, e o
+`-Update` como admin completa depois.
