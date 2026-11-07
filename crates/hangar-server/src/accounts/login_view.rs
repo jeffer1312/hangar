@@ -19,6 +19,9 @@ pub struct DeskWindow {
 /// não faz nada, sem aviso.
 #[cfg(any(target_os = "linux", windows))]
 const FOCUS_SETTLE: std::time::Duration = std::time::Duration::from_millis(1500);
+/// A barra de endereço pega o foco depois do atalho; o texto antes disso iria para a página.
+#[cfg(any(target_os = "linux", windows))]
+const ADDRESS_SETTLE: std::time::Duration = std::time::Duration::from_millis(300);
 
 /// Só as teclas de navegar e editar: atalho do sistema alcançaria o resto da máquina.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -88,6 +91,9 @@ pub trait Desk: Send + Sync {
     /// Falso quando a entrada não chegou: sem foco, nunca vai para a janela que está na frente.
     fn input(&self, window: &DeskWindow, input: &DeskInput) -> bool;
     fn close(&self, window: &DeskWindow);
+    /// Digita o endereço na barra da janela e abre. Fora da lista de teclas dos clientes: só o
+    /// servidor pede, com o link do login.
+    fn navigate(&self, window: &DeskWindow, url: &str) -> bool;
     /// Reativa a sessão desconectada. Deixa o desktop aberto na tela física, por isso só a pedido.
     fn activate(&self) -> bool {
         false
@@ -295,6 +301,14 @@ mod hyprland {
                 tracing::warn!(code = "login_view_close_failed", "a janela do login não fechou");
             }
         }
+
+        fn navigate(&self, window: &DeskWindow, url: &str) -> bool {
+            if !self.ensure_focus(window) || self.run("wtype", &["-M", "ctrl", "-k", "l", "-m", "ctrl"]).is_none() {
+                return false;
+            }
+            std::thread::sleep(ADDRESS_SETTLE);
+            run_with_input(&self.env, "5", "wtype", &["-"], url) && self.run("wtype", &["-k", "Return"]).is_some()
+        }
     }
 }
 
@@ -319,7 +333,7 @@ mod windows_desk {
             Input::KeyboardAndMouse::{
                 INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE,
                 MOUSE_EVENT_FLAGS, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_WHEEL, MOUSEINPUT, SendInput, VIRTUAL_KEY,
-                VK_BACK, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_MENU, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP,
+                VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_MENU, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP,
                 mouse_event,
             },
             WindowsAndMessaging::{
@@ -453,6 +467,18 @@ mod windows_desk {
         unsafe { mouse_event(flags, 0, 0, data, 0) };
     }
 
+    /// O Windows pode recusar o primeiro plano: aí nada é enviado, ou iria para o app da frente.
+    fn to_front(window: &DeskWindow) -> bool {
+        // SAFETY: sem ponteiro; handle morto só faz a chamada falhar.
+        unsafe {
+            if GetForegroundWindow() == handle(window) { return true; }
+            if IsIconic(handle(window)) != 0 { ShowWindow(handle(window), SW_RESTORE); }
+            bring_to_front(handle(window));
+            std::thread::sleep(FOCUS_SETTLE);
+            GetForegroundWindow() == handle(window)
+        }
+    }
+
     fn own_session() -> Option<u32> {
         let mut session = 0u32;
         // SAFETY: a saída é uma variável local.
@@ -539,17 +565,7 @@ mod windows_desk {
                 // SAFETY: sem ponteiro.
                 unsafe { SetCursorPos(x, y) != 0 }
             };
-            // O Windows pode recusar o primeiro plano: aí nada é enviado, ou iria para o app da frente.
-            let front = || {
-                // SAFETY: sem ponteiro; handle morto só faz a chamada falhar.
-                unsafe {
-                    if GetForegroundWindow() == handle(window) { return true; }
-                    if IsIconic(handle(window)) != 0 { ShowWindow(handle(window), SW_RESTORE); }
-                    bring_to_front(handle(window));
-                    std::thread::sleep(FOCUS_SETTLE);
-                    GetForegroundWindow() == handle(window)
-                }
-            };
+            let front = || to_front(window);
             match input {
                 DeskInput::Click { x, y } => {
                     if !front() || !pointer(*x, *y) { return false; }
@@ -599,6 +615,22 @@ mod windows_desk {
                     ])
                 }
             }
+        }
+
+        fn navigate(&self, window: &DeskWindow, url: &str) -> bool {
+            const KEY_L: VIRTUAL_KEY = 0x4C;
+            let focus_address = [
+                keyboard(VK_CONTROL, 0, 0),
+                keyboard(KEY_L, 0, 0),
+                keyboard(KEY_L, 0, KEYEVENTF_KEYUP),
+                keyboard(VK_CONTROL, 0, KEYEVENTF_KEYUP),
+            ];
+            aware();
+            if !to_front(window) || !send(&focus_address) {
+                return false;
+            }
+            std::thread::sleep(ADDRESS_SETTLE);
+            self.input(window, &DeskInput::Text { text: url.to_owned() }) && self.input(window, &DeskInput::Key { key: DeskKey::Enter })
         }
 
         fn close(&self, window: &DeskWindow) {

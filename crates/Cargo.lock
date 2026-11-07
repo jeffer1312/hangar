@@ -1627,6 +1627,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-omp-sync"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.23.1",
+ "futures-util",
+ "hangar-core",
+ "libc",
+ "proptest",
+ "regex",
+ "reqwest",
+ "ring",
+ "serde",
+ "serde-saphyr",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "hangar-package"
 version = "0.1.0"
 dependencies = [
@@ -1656,6 +1678,7 @@ dependencies = [
  "hangar-codex",
  "hangar-connect",
  "hangar-core",
+ "hangar-omp-sync",
  "hangar-package",
  "hangar-transcript",
  "hangar-workspace",

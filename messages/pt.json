@@ -8873,6 +8873,7 @@
   "worktree_menu_nova": "Numa cópia nova (worktree)",
   "worktree_menu_nova_dica": "Sua pasta não muda. As mudanças voltam pelo merge.",
   "worktree_menu_parte_de": "Parte de",
+  "worktree_menu_commits_left_out":"Ficam de fora os commits que só a {branch} local tem: {n}.",
   "worktree_menu_branch": "Branch",
   "worktree_menu_pasta_destino": "Pasta",
   "worktree_menu_nome_sessao": "nome da sessão",

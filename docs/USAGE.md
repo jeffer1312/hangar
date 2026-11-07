@@ -282,7 +282,9 @@ válido (Let's Encrypt) → escaneie o QR / preencha o token → **Adicionar à 
   - Login e confiança na pasta precisam estar preparados para a conta escolhida; sem isso a sessão
     mostra no chat por que não conseguiu subir.
 - **Numa worktree:** na Nova sessão, marque **Trabalhar numa cópia separada (worktree)** e escolha
-  **+ Branch nova a partir de** uma base. O agente trabalha numa cópia da pasta, numa branch
+  **+ Branch nova a partir de** uma base. Com a branch atrás da remota, a base já vem pela remota
+  (`origin/main`), sem Pull na sua pasta; os commits que só a local tem ficam de fora, com aviso, e
+  dá para voltar para a local em **Parte de**. O agente trabalha numa cópia da pasta, numa branch
   própria, e a sua pasta principal só muda quando você mesclar. A tela **Worktrees** lista cada
   uma (mesclada ou quantos commits à frente, o que não foi commitado) e apaga as mescladas e
   limpas; as conversas dela continuam e podem ser retomadas na pasta principal.

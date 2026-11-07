@@ -1,10 +1,5 @@
 use super::*;
-use crate::routes::AppState;
-use axum::{
-    extract::Request,
-    http::{Method, StatusCode},
-    response::Response,
-};
+use axum::http::Method;
 use std::sync::{
     Mutex,
     atomic::{AtomicBool, Ordering},
@@ -36,9 +31,9 @@ pub fn validate_environment(env: &BTreeMap<String, String>) -> Result<(), String
     interval(env)?;
     Ok(())
 }
-pub(crate) fn context_template(home: &Path) -> PathBuf {
-    crate::install_root::root(home)
-        .unwrap_or_default()
+/// A regra de contexto que o omp carrega, dentro da pasta de instalação do Hangar.
+pub fn context_template(install_root: &Path) -> PathBuf {
+    install_root
         .join("scripts")
         .join("omp")
         .join("carregar-claude-md-do-projeto.md")
@@ -80,32 +75,20 @@ pub struct Service {
     ready: tokio::sync::watch::Sender<bool>,
 }
 impl Service {
-    pub fn start(st: Arc<AppState>) -> Arc<Self> {
-        let env = crate::push::server_env();
-        let home = st.accounts.env.home.clone();
-        let claude = st.accounts.env.claude_base.clone();
+    /// `allowed` é a chave mestra das automações, lida a cada passada; `template` é a regra de
+    /// contexto ([`context_template`]).
+    pub fn launch(
+        env: BTreeMap<String, String>,
+        home: PathBuf,
+        claude: PathBuf,
+        template: PathBuf,
+        allowed: Arc<dyn Fn() -> Result<bool, &'static str> + Send + Sync>,
+    ) -> Arc<Self> {
         let validation = validate_environment(&env);
         let enabled = flag(&env, "CP_OMP_PLUGIN_SYNC_ENABLED").unwrap_or(false);
         let context = flag(&env, "CP_OMP_CLAUDE_CONTEXT_ENABLED").unwrap_or(false);
         let duration = interval(&env);
-        let sync = Synchronizer::new(home.clone(), claude, env, Arc::new(NativeRunner));
-        let weak = Arc::downgrade(&st);
-        let allowed: Arc<dyn Fn() -> Result<bool, &'static str> + Send + Sync> =
-            Arc::new(move || {
-                let Some(st) = weak.upgrade() else {
-                    return Ok(false);
-                };
-                let result = crate::loops::automations(&st);
-                if let Err(code) = result {
-                    st.diag.report(
-                        "omp.sync_config_failed",
-                        "omp",
-                        code,
-                        "configuração inválida interrompeu a sincronização automática",
-                    );
-                }
-                result
-            });
+        let sync = Synchronizer::new(home, claude, env, Arc::new(NativeRunner));
         let service = Self::new(
             sync,
             enabled,
@@ -123,7 +106,6 @@ impl Service {
                 return;
             }
             if context {
-                let template = context_template(&home);
                 let result = super::context::configure(&clone.sync, &template, true).await;
                 if !result["errors"].as_array().is_some_and(Vec::is_empty) {
                     tracing::warn!(
@@ -218,7 +200,7 @@ impl Service {
                     {
                         let mut s = self.status.lock().unwrap();
                         s["state"] = json!("running");
-                        s["started_at"] = json!(crate::nav_requests::now());
+                        s["started_at"] = json!(hangar_core::clock::wall_now());
                     }
                     let interrupted = AtomicBool::new(false);
                     let config_error = Mutex::new(None);
@@ -295,7 +277,7 @@ impl Service {
                     };
                     let mut s = self.status.lock().unwrap();
                     s["state"] = json!(state);
-                    s["completed_at"] = json!(crate::nav_requests::now());
+                    s["completed_at"] = json!(hangar_core::clock::wall_now());
                     s["last_report"] = json!(reports);
                 }
             }
@@ -312,8 +294,4 @@ impl Service {
 }
 pub fn matches(method: &Method, path: &str) -> bool {
     method == Method::GET && path == "/api/omp/plugin-sync"
-}
-/// A borda já conferiu o dono, inclusive nas portas repassadas.
-pub async fn serve(_st: &Arc<AppState>, service: &Arc<Service>, _req: Request) -> Response {
-    crate::session_write::json_response(StatusCode::OK, service.status())
 }

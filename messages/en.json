@@ -8873,6 +8873,7 @@
   "worktree_menu_nova": "In a new copy (worktree)",
   "worktree_menu_nova_dica": "Your folder stays as it is. Changes come back through a merge.",
   "worktree_menu_parte_de": "Starts from",
+  "worktree_menu_commits_left_out":"Commits only your local {branch} has stay out: {n}.",
   "worktree_menu_branch": "Branch",
   "worktree_menu_pasta_destino": "Folder",
   "worktree_menu_nome_sessao": "session name",

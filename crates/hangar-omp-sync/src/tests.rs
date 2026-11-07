@@ -100,7 +100,7 @@ fn install(home: &Path, entries: &Value) {
             #[cfg(windows)]
             if fs::read_link(&p)
                 .ok()
-                .map(crate::list::links::without_verbatim)
+                .map(hangar_core::fs::without_verbatim)
                 .as_deref()
                 != Some(Path::new(s))
             {
@@ -137,7 +137,7 @@ fn tree(home: &Path) -> Value {
             if m.file_type().is_symlink() {
                 let target = fs::read_link(&p).unwrap();
                 #[cfg(windows)]
-                let target = crate::list::links::without_verbatim(target)
+                let target = hangar_core::fs::without_verbatim(target)
                     .components()
                     .collect::<PathBuf>();
                 map.insert(rel, json!({"link":target.to_string_lossy()}));
@@ -315,7 +315,7 @@ async fn contract_case(selected: &str) {
             for entry in expected.as_object_mut().unwrap().values_mut() {
                 if let Some(target) = entry["link"].as_str() {
                     entry["link"] = json!(
-                        crate::list::links::without_verbatim(PathBuf::from(target))
+                        hangar_core::fs::without_verbatim(PathBuf::from(target))
                             .components()
                             .collect::<PathBuf>()
                             .to_string_lossy()
@@ -755,6 +755,7 @@ async fn native_omp_context_and_marketplaces_in_isolated_home() {
         fs::write(file, "FORBIDDEN_AGENTS_SENTINEL\n").unwrap();
     }
     #[cfg(unix)]
+    // estavel: só lê os binários nativos do omp instalado, ligados por link no home temporário do teste.
     if let Some(real) = std::env::home_dir()
         .map(|h| h.join(".omp/natives"))
         .filter(|p| p.is_dir())
@@ -1436,7 +1437,7 @@ async fn op042_http_status_responds_while_native_worker_is_waiting() {
         "/api/omp/plugin-sync",
         get(move || {
             let service = published.clone();
-            async move { crate::session_write::json_response(StatusCode::OK, service.status()) }
+            async move { hangar_core::http::json_response(StatusCode::OK, service.status()) }
         }),
     );
     let (stop, finish) = tokio::sync::oneshot::channel::<()>();
@@ -1541,19 +1542,13 @@ async fn op080_context_rule_targets_current_without_resolving_version() {
         .map(|(k, v)| (k.clone(), v.as_str().unwrap().into()))
         .collect();
     let sync = Synchronizer::new(home.clone(), home.join(".claude"), env, runner.clone());
-    let template = service::context_template(&home);
-    assert_eq!(
-        template,
-        current
-            .join("scripts")
-            .join("omp")
-            .join("carregar-claude-md-do-projeto.md")
-    );
+    // A pasta `current` vem do `install_root` do servidor, conferido lá.
+    let template = service::context_template(&current);
     let report = configure_claude_context(&sync, &template, true).await;
     assert_eq!(report["errors"], json!([]));
     let stored =
         fs::read_link(home.join(".omp/agent/rules/carregar-claude-md-do-projeto.md")).unwrap();
-    assert_eq!(crate::list::links::without_verbatim(stored), template);
+    assert_eq!(hangar_core::fs::without_verbatim(stored), template);
     assert!(runner.calls.lock().unwrap().is_empty());
 }
 

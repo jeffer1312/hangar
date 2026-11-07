@@ -1,0 +1,33 @@
+[package]
+name = "hangar-omp-sync"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Mesmas features do hangar-server: sem elas, compilar este crate sozinho guarda outra cópia de cada
+# dependência no target (ver o comentário do serde_json em hangar-server/Cargo.toml).
+[dependencies]
+axum = { workspace = true }
+futures-util = { workspace = true }
+hangar-core.workspace = true
+regex.workspace = true
+ring.workspace = true
+serde = { workspace = true, features = ["alloc"] }
+serde-saphyr.workspace = true
+serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "time", "fs", "signal"] }
+tracing = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+base64.workspace = true
+hangar-core = { workspace = true, features = ["test-support"] }
+proptest.workspace = true
+reqwest = { workspace = true, features = ["rustls", "multipart", "json"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { workspace = true, features = ["Wdk_System_SystemInformation", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_Xps", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_RemoteDesktop", "Win32_System_StationsAndDesktops", "Win32_System_Threading", "Win32_Storage_FileSystem", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }

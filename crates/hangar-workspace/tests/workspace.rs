@@ -269,3 +269,38 @@ fn undoing_a_worktree_deletes_only_the_branch_it_created() {
     undo_worktree(&repo, &made, "nova").unwrap();
     assert!(!local("nova"));
 }
+
+/// Branch local atrás da remota: a lista diz quanto, e a worktree nova parte da remota sem herdar o upstream dela.
+#[test]
+fn new_worktree_starts_from_the_upstream_of_a_stale_branch() {
+    use hangar_workspace::git::create_branch_worktree;
+    let base = tempfile::tempdir().unwrap();
+    let root = hangar_workspace::simplify(base.path().canonicalize().unwrap());
+    let origin = root.join("origin");
+    fs::create_dir_all(&origin).unwrap();
+    let commit = |dir: &std::path::Path, message: &str| git(dir, &["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "--allow-empty", "-m", message]);
+    git(&origin, &["init", "-q", "-b", "main"]);
+    commit(&origin, "a");
+    git(&root, &["clone", "-q", "origin", "repo"]);
+    let repo = root.join("repo");
+    commit(&origin, "remoto");
+    commit(&repo, "local");
+    git(&repo, &["branch", "sem-remota"]);
+    git(&repo, &["fetch", "-q"]);
+
+    let info = op(&repo, "list_branches", json!({}));
+    assert_eq!(info["upstreams"], json!({"main": {"upstream": "origin/main", "ahead": 1, "behind": 1}}));
+
+    // A outra remota termina no mesmo nome: a base escolhida continua sendo a de `origin`.
+    git(&repo, &["update-ref", "refs/remotes/other/origin/main", "HEAD"]);
+    let worktrees = root.join("worktrees");
+    let made = create_branch_worktree(&repo, "nova", "nova", &root, true, Some("origin/main"), &worktrees).unwrap();
+    let read = |args: &[&str]| Command::new("git").arg("-C").arg(&made.path).args(args).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&read(&["log", "-1", "--format=%s"]).stdout).trim(), "remoto");
+    assert!(!read(&["rev-parse", "--abbrev-ref", "@{upstream}"]).status.success(), "o pull não pode puxar a base");
+
+    for base in ["origin/nada", "origin/main~1"] {
+        let refused = create_branch_worktree(&repo, "outra", "outra", &root, true, Some(base), &worktrees).unwrap_err();
+        assert_eq!(refused.detail, "branch base inexistente");
+    }
+}

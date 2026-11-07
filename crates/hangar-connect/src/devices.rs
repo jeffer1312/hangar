@@ -22,7 +22,7 @@ pub type DeviceId = String;
 pub type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
 
 pub fn system_clock() -> Clock {
-    Arc::new(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()))
+    Arc::new(|| hangar_core::clock::wall_now() as u64)
 }
 
 /// O que o serviço do Connect informou ao ligar esta máquina.

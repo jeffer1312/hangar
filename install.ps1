@@ -1920,15 +1920,18 @@ Mark-Item 'rede-local' 'ok' 'rede de casa'
 if ($Update) {
     Ok 'Tailscale pulado no -Update (pede elevacao; nada aqui muda com git pull)'
     # Sem terminal nao ha quem aceite UAC: so cria a regra se ja estiver como admin.
-    if (Get-NetFirewallRule -DisplayName 'hangar 8765' -ErrorAction SilentlyContinue) {
-        Ok 'porta 8765 ja liberada no firewall'
+    $fwScript = Join-Path $raiz 'scripts\open-firewall.ps1'
+    & $fwScript -Check
+    if ($LASTEXITCODE -eq 0) {
+        Ok 'portas 8765 e 8766 ja liberadas no firewall'
     } elseif (EhAdmin) {
-        New-NetFirewallRule -DisplayName 'hangar 8765' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8765 -Profile Private -ErrorAction SilentlyContinue | Out-Null
-        if (Get-NetFirewallRule -DisplayName 'hangar 8765' -ErrorAction SilentlyContinue) { Ok 'porta 8765 liberada (perfil Private)' }
-        else { Falta 'nao consegui liberar a porta 8765 no firewall' }
+        & $fwScript
+        & $fwScript -Check
+        if ($LASTEXITCODE -eq 0) { Ok 'portas 8765 e 8766 liberadas (perfis Private e Public)' }
+        else { Falta 'nao consegui liberar as portas 8765 e 8766 no firewall' }
     } else {
-        Falta 'porta 8765 fechada no firewall - a rede local nao alcanca esta maquina. Num PowerShell como admin:'
-        Nota 'New-NetFirewallRule -DisplayName "hangar 8765" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8765 -Profile Private'
+        Falta 'portas 8765 e 8766 sem regra no firewall - o Windows pergunta a cada versao. Num PowerShell como admin:'
+        Nota "powershell -ExecutionPolicy Bypass -File `"$fwScript`""
     }
 } else {
 Write-Host '  Duas formas, e elas nao competem:'
@@ -1942,33 +1945,27 @@ Nota 'claude como VOCE, entao um host exposto e execucao remota na sua maquina.'
 # deve pegar so o que falta, nao repetir pergunta do que ja esta de pe.
 # A 5173 so entra quando ha servico de front nesta maquina: sem ele, quem serve a interface e o
 # backend na 8765, e abrir porta que ninguem escuta e furo aberto de graca.
-$portasFw = if ($temTarefaFront) { @(8765, 5173) } else { @(8765) }
+# Private e Public: o hangar-server muda de pasta a cada versao, e sem regra de liberacao no perfil
+# da rede o Windows pergunta de novo a cada atualizacao. O acesso continua exigindo o token.
+$portasFw = if ($temTarefaFront) { @(8765, 8766, 5173) } else { @(8765, 8766) }
 $listaFw = $portasFw -join ' e '
-$regras = @($portasFw | ForEach-Object {
-    Get-NetFirewallRule -DisplayName "hangar $_" -ErrorAction SilentlyContinue
-})
-if ($regras.Count -eq $portasFw.Count) {
+$fwScript = Join-Path $raiz 'scripts\open-firewall.ps1'
+& $fwScript -Ports $portasFw -Check
+if ($LASTEXITCODE -eq 0) {
     Ok "porta(s) $listaFw ja liberada(s) no firewall"
     Mark-Item 'firewall' 'ok' 'porta do Wi-Fi liberada'
 } elseif (Pergunte "  Liberar a(s) porta(s) $listaFw no firewall pra rede LOCAL?") {
-    # Profile Private: rede de casa. Em rede Publica (cafe, aeroporto) segue fechado,
-    # que e o comportamento que se quer sem precisar lembrar de desligar nada.
-    $cmdFw = ($portasFw | ForEach-Object {
-        "Get-NetFirewallRule -DisplayName 'hangar $_' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue; " +
-        "New-NetFirewallRule -DisplayName 'hangar $_' -Direction Inbound -Action Allow -Protocol TCP -LocalPort $_ -Profile Private | Out-Null"
-    }) -join '; '
-    $liberou = Eleva-E-Roda "liberar a(s) porta(s) $listaFw no firewall" $cmdFw
-    $regras = @($portasFw | ForEach-Object { Get-NetFirewallRule -DisplayName "hangar $_" -ErrorAction SilentlyContinue })
-    if ($liberou -and $regras.Count -eq $portasFw.Count) {
-        Ok 'portas liberadas (perfil Private apenas)'
+    if (-not (EhAdmin)) { Nota "vai pedir a senha de administrador (UAC) so pra: liberar a(s) porta(s) $listaFw no firewall" }
+    & $fwScript -Ports $portasFw
+    & $fwScript -Ports $portasFw -Check
+    if ($LASTEXITCODE -eq 0) {
+        Ok 'portas liberadas (perfis Private e Public)'
         Mark-Item 'firewall' 'ok' 'porta do Wi-Fi liberada'
     } else {
         Falta 'firewall nao liberado (UAC recusado?) - num PowerShell como admin rode:'
         Mark-Item 'firewall' 'pendente' 'porta do Wi-Fi liberada'
         if ($App) { Add-AppPending 'firewall' 'outro' }
-        foreach ($p in $portasFw) {
-            Nota "New-NetFirewallRule -DisplayName `"hangar $p`" -Direction Inbound -Action Allow -Protocol TCP -LocalPort $p -Profile Private"
-        }
+        Nota "powershell -ExecutionPolicy Bypass -File `"$fwScript`" -Ports $($portasFw -join ',')"
     }
 }
 

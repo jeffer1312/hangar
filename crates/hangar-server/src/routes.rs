@@ -367,7 +367,7 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     // Ligado com o estado final: o evento lê as mesmas contas que a rota `/api/tags`.
     state.list.tags.bind(state.accounts.clone(), state.server_id.clone());
     if crate::config::Config::runtime_instance().ok().flatten().is_some() {
-        let omp_sync = crate::omp_sync::Service::start(state.clone());
+        let omp_sync = crate::omp_sync::start(state.clone());
         let _ = state.omp_sync.set(omp_sync.clone());
         omp_sync.ready().await;
         crate::provider_models::inbox::install_endpoint(state.clone()).await;
