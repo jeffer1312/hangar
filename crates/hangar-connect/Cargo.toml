@@ -17,7 +17,7 @@ futures-util = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
 memchr = "=2.8.3"
-reqwest = { workspace = true, features = ["rustls", "multipart"] }
+reqwest = { workspace = true, features = ["rustls", "multipart", "json"] }
 ring.workspace = true
 serde = { workspace = true, features = ["alloc"] }
 serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
