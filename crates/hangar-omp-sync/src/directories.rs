@@ -5,7 +5,7 @@ pub fn agent_directory(
     env: &BTreeMap<String, String>,
     strict: bool,
 ) -> Result<(PathBuf, Option<String>), String> {
-    match crate::accounts::secondary_auth::omp_directories(home, env) {
+    match hangar_core::account_env::omp_directories(home, env) {
         Ok(d) => Ok((d.agent_dir, None)),
         Err(code) => {
             let message = directory_error(code);

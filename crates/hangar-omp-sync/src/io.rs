@@ -135,7 +135,7 @@ pub fn write(p: &Path, v: &Value) -> Result<(), String> {
     text.push('\n');
     #[cfg(windows)]
     let text = text.replace('\n', "\r\n");
-    crate::runtime::queue::atomic_write(p, text.as_bytes()).map_err(os_error)
+    hangar_core::fs::atomic_write(p, text.as_bytes()).map_err(os_error)
 }
 pub struct Guard(File);
 impl Drop for Guard {
@@ -202,7 +202,7 @@ impl Runner for NativeRunner {
         timeout: Duration,
     ) -> BoxFuture<'a, Result<Output, String>> {
         Box::pin(async move {
-            let found = crate::runtime::process::resolve_program(&args[0], env);
+            let found = hangar_core::process::resolve_program(&args[0], env);
             let mut program = found.clone().unwrap_or_else(|| PathBuf::from(&args[0]));
             if args[0] == "omp" && args.get(1).is_some_and(|a| a == "config") {
                 if found.is_none() {

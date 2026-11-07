@@ -2,6 +2,7 @@
 #![deny(unsafe_code)]
 
 pub mod account_env;
+pub mod clock;
 pub mod costs_failure;
 pub mod display_env;
 pub mod fs;
