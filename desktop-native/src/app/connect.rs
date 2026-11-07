@@ -9,6 +9,9 @@ use super::settings::{settings_box, Page};
 const SERVICE_URL: &str = "https://connect.hangar.dev.br";
 /// A lista do dono não avisa de aparelho novo: quem pede entrada espera até isto pelo cartão.
 pub(super) const POLL_EVERY: Duration = Duration::from_secs(10);
+/// Sem o login do dono, repetir a cada rodada só enche as falhas recentes; a recusa pode ser de um instante, e
+/// quem pede entrada não pode esperar a próxima conexão.
+const REFUSED_PAUSE: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Status { enabled: bool, running: bool, host: Option<String>, error: Option<String> }
@@ -150,11 +153,15 @@ fn merge(old: &[Request], devices: &[Device]) -> Vec<Request> {
 
 /// Por máquina, chave `servers::norm`: sobrevive à troca do ativo, ao contrário de `Connect`.
 #[derive(Default)]
-pub(in crate::app) struct Notices { pending: HashMap<String, Vec<Request>>, refused: HashSet<String> }
+pub(in crate::app) struct Notices { pending: HashMap<String, Vec<Request>>, refused: HashMap<String, Instant> }
 
 impl Notices {
     fn card(&mut self, machine: &str, device: &str) -> Option<&mut Request> {
         self.pending.get_mut(machine)?.iter_mut().find(|card| card.device.device_id == device)
+    }
+
+    fn paused(&self, machine: &str, now: Instant) -> bool {
+        self.refused.get(machine).is_some_and(|since| now.saturating_duration_since(*since) < REFUSED_PAUSE)
     }
 }
 
@@ -387,7 +394,8 @@ impl Hangar {
         let mut machines: Vec<(String, Api)> = self.remote.iter().filter(|(_, list)| list.online)
             .filter_map(|(key, list)| Some((key.clone(), list.api.clone()?))).collect();
         machines.extend(self.api.clone().map(|api| (self.active_key(), api)));
-        machines.retain(|(key, _)| !self.connect_notices.refused.contains(key) && !self.server_entry(key).is_some_and(|entry| entry.invite));
+        let now = Instant::now();
+        machines.retain(|(key, _)| !self.connect_notices.paused(key, now) && !self.server_entry(key).is_some_and(|entry| entry.invite));
         machines
     }
 
@@ -444,10 +452,9 @@ impl Hangar {
             NoticeReply::Listed(machine, result) => match result.map(parse_devices) {
                 Ok(Ok(devices)) => if self.set_pending(&machine, &devices) { cx.notify(); },
                 Ok(Err(_)) => crate::log_line("connect: lista de aparelhos ilegível; os cartões anteriores ficam"),
-                // Sem a rota ou sem o login do dono, repetir a cada rodada só encheria as falhas recentes.
-                Err(error) if matches!(error.status, Some(401 | 403 | 404)) => {
-                    crate::log_line(&format!("connect: máquina sem a lista de aparelhos ({:?}); sem cartão nesta conexão", error.status));
-                    self.connect_notices.refused.insert(machine.clone());
+                Err(error) if matches!(error.status, Some(401 | 403)) => {
+                    crate::log_line(&format!("connect: máquina recusou a lista de aparelhos ({:?}); nova tentativa em {} s", error.status, REFUSED_PAUSE.as_secs()));
+                    self.connect_notices.refused.insert(machine.clone(), Instant::now());
                     if self.connect_notices.pending.remove(&machine).is_some() { cx.notify(); }
                 }
                 // Acompanhamento: a falha fica nas recentes do servidor, sem aviso na tela.
@@ -616,7 +623,7 @@ impl Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{device_card, device_view, merge, open_preview_port, parse_devices, parse_port, parse_preview, parse_status, phase, take_password, Device, DeviceStatus, DeviceView, InputState, Phase, Remote, Request};
+    use super::{device_card, device_view, merge, open_preview_port, parse_devices, parse_port, parse_preview, parse_status, phase, take_password, Device, DeviceStatus, DeviceView, InputState, Notices, Phase, Remote, Request, REFUSED_PAUSE};
     use crate::i18n::tr_shared;
     // O nome explícito vence qualquer `test` trazido por glob.
     use core::prelude::v1::test;
@@ -625,6 +632,16 @@ mod tests {
 
     fn device(id: &str, status: DeviceStatus) -> Device {
         Device { device_id: id.to_owned(), name: format!("Pixel {id}"), status, last_seen: None }
+    }
+
+    #[test]
+    fn refused_machine_is_read_again_after_the_pause() {
+        let start = std::time::Instant::now();
+        let mut notices = Notices::default();
+        notices.refused.insert("m".to_owned(), start);
+        assert!(notices.paused("m", start + REFUSED_PAUSE / 2));
+        assert!(!notices.paused("m", start + REFUSED_PAUSE));
+        assert!(!notices.paused("outra", start));
     }
 
     struct Field { input: Entity<InputState> }

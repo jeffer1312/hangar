@@ -85,6 +85,8 @@ pub enum Refusal {
     TooManyPending,
     Credential,
     Unknown,
+    /// Aparelho pedindo para revogar outro que não aprovou.
+    NotYours,
     Io(io::Error),
 }
 
@@ -235,20 +237,22 @@ impl Store {
     /// Recusa quem ainda não recebeu token; quem já recebeu perde a credencial na hora. Vale também
     /// para tudo que este aparelho aprovou, senão um aparelho roubado sairia com outra credencial.
     pub fn remove(&self, id: &str) -> Result<(), Refusal> {
+        self.revoke(id, None)
+    }
+
+    /// `remove` pedido por um aparelho: só ele mesmo, o que ele aprovou e pedido que ainda espera aprovação,
+    /// que ele poderia aprovar. Sem isso, um aparelho roubado derrubaria os outros e o dono junto.
+    pub fn remove_by(&self, id: &str, by: &str) -> Result<(), Refusal> {
+        self.revoke(id, Some(by))
+    }
+
+    fn revoke(&self, id: &str, by: Option<&str>) -> Result<(), Refusal> {
         self.update(|state, now| {
-            if !state.devices.iter().any(|d| d.id == id) {
-                return Err(Refusal::Unknown);
+            let Some(target) = state.devices.iter().find(|d| d.id == id) else { return Err(Refusal::Unknown) };
+            if by.is_some_and(|by| target.status != Status::Pending && !cascade(state, by).contains(id)) {
+                return Err(Refusal::NotYours);
             }
-            let mut revoked = HashSet::from([id.to_owned()]);
-            loop {
-                let before = revoked.len();
-                for device in &state.devices {
-                    if device.approved_by.as_ref().is_some_and(|by| revoked.contains(by)) {
-                        revoked.insert(device.id.clone());
-                    }
-                }
-                if revoked.len() == before { break; }
-            }
+            let revoked = cascade(state, id);
             state.devices.retain_mut(|device| {
                 if !revoked.contains(&device.id) { return true; }
                 if device.token_hash.is_some() { return false; }
@@ -329,6 +333,20 @@ impl Store {
     /// O hash guardado é a chave da prova: a máquina mostra que conhece o token sem guardá-lo.
     pub fn proof_key(&self, id: &str) -> Option<String> {
         self.lock().devices.iter().find(|d| d.id == id && d.status == Status::Approved).and_then(|d| d.token_hash.clone())
+    }
+}
+
+/// O aparelho e tudo que nasceu da aprovação dele, direta ou por outro.
+fn cascade(state: &State, id: &str) -> HashSet<DeviceId> {
+    let mut found = HashSet::from([id.to_owned()]);
+    loop {
+        let before = found.len();
+        for device in &state.devices {
+            if device.approved_by.as_ref().is_some_and(|by| found.contains(by)) {
+                found.insert(device.id.clone());
+            }
+        }
+        if found.len() == before { return found; }
     }
 }
 

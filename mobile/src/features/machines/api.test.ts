@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureApi } from '@hangar/core';
-import { readIdentifier, readPeers, reason, registerBoth } from './api';
+import { discover, readIdentifier, readPeers, reason, registerBoth } from './api';
 import * as m from '../../paraglide/messages';
 
 const server = { id: 'api-owner', label: 'fixture-owner', baseUrl: 'https://owner.test', token: 'owner-secret' };
@@ -23,6 +23,11 @@ describe('respostas públicas de máquinas', () => {
     vi.spyOn(response, 'json').mockImplementation(async () => { controller.abort(); throw new DOMException('fixture-cancelled', 'AbortError'); });
     fetchMock.mockResolvedValue(response);
     await expect(readIdentifier(server, controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('guarda a causa de a conta do Connect não ter entrado na busca', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify([{ nome: 'fixture-found', base_url: 'https://found.test', connect_error: { code: 'fixture-code', msg: 'fixture-cause' } }]), { status: 200 }));
+    expect((await discover(server, new AbortController().signal))[0].connect_error).toBe('fixture-cause');
   });
 
   it('traduz a recusa pública de endereço duplicado do aparelho', () => {

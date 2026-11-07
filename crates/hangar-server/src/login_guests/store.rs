@@ -211,6 +211,18 @@ impl Store {
             Err(_) => None,
         }
     }
+    /// `true`: com certeza não é token de convidado, sem ler o arquivo nem ocupar o pool. Os hashes vêm da última
+    /// leitura, que vale enquanto o carimbo do arquivo for o mesmo; leitura velha volta `false`, e o `lookup` a refaz.
+    pub fn rules_out(&self, token: &[u8]) -> bool {
+        let Some(stamp) = file_stamp(&self.path) else {
+            return std::fs::metadata(&self.path).is_err_and(|error| error.kind() == io::ErrorKind::NotFound);
+        };
+        let presented = hash(token);
+        let loaded = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
+        let Some((_, doc)) = loaded.as_ref().filter(|(previous, _)| *previous == stamp) else { return false };
+        let known = |guest: &Value| guest["token_hash"].as_str().is_some_and(|stored| bool::from(stored.as_bytes().ct_eq(presented.as_bytes())));
+        !doc["guests"].as_array().is_some_and(|guests| guests.iter().any(known))
+    }
     pub fn lookup(&self, token: &[u8]) -> Option<Guest> {
         if token.is_empty() {
             return None;

@@ -308,6 +308,12 @@ fn caddyfile_binds_loopback_and_disables_http_challenge() {
 \thttps_port 18443
 \tauto_https disable_redirects
 \tstorage file_system \"/casa/.hangar/connect/caddy\"
+\tservers {
+\t\ttimeouts {
+\t\t\tread_header 10s
+\t\t\tread_body 1h
+\t\t}
+\t}
 \tlog {
 \t\tlevel WARN
 \t}
@@ -442,6 +448,66 @@ async fn unreadable_state_reaches_status_and_a_new_link_keeps_the_old_file() {
     assert_eq!(std::fs::read_to_string(dir.join("connect.json.bad")).unwrap(), "{quebrado");
     assert!(state::read(dir).unwrap().is_some());
     assert_eq!(supervisor.status().error, None);
+    supervisor.stop().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn refused_address_reaches_status_until_the_next_login() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let frpc = script(dir, "fake-frpc", &format!("echo '[I] login to server success, get run id [teste]'
+printf '\\033[1;33m[W] [pc1.acme.hangar.dev.br] start error: dominio recusado\\033[0m\\n'
+until [ -e '{}' ]; do sleep 0.05; done
+echo '[I] login to server success, get run id [outra]'
+{LONG_RUN}", gate(dir).display()));
+    let caddy = script(dir, "fake-caddy", LONG_RUN);
+    let supervisor = Supervisor::new(dir.to_path_buf(), dir.join("logs"), Arc::new(Store::new(dir.to_path_buf(), None)), 8765).with_programs(frpc, caddy);
+    supervisor.port_opened();
+    supervisor.start(&linked()).await.unwrap();
+
+    until("a recusa no status", || supervisor.status().error.is_some()).await;
+    let error = supervisor.status().error.unwrap();
+    assert!(error.ends_with("dominio recusado"), "{error}");
+    until("Caddy de pé", || has_pid(dir, "caddy")).await;
+    assert!(!supervisor.status().enabled, "login sem endereço não é ligado");
+
+    std::fs::write(gate(dir), "").unwrap();
+    until("Connect de pé", || supervisor.status().enabled).await;
+    assert_eq!(supervisor.status().error, None);
+    supervisor.stop().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unreadable_frpc_log_reaches_status() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let supervisor = alone(dir);
+    supervisor.start(&linked()).await.unwrap();
+    until("o frpc não nasceu", || has_pid(dir, "frpc")).await;
+    std::fs::remove_file(dir.join("logs/connect-frpc.log")).unwrap();
+    until("a falha de leitura no status", || supervisor.status().error.is_some_and(|error| error.contains("não consegui ler"))).await;
+    supervisor.stop().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn child_logs_are_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    let supervisor = alone(dir);
+    std::fs::create_dir_all(dir.join("logs")).unwrap();
+    let old = dir.join("logs/connect-frpc.log");
+    std::fs::write(&old, "de antes\n").unwrap();
+    std::fs::set_permissions(&old, std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::fs::write(gate(dir), "").unwrap();
+    supervisor.start(&linked()).await.unwrap();
+    until("Caddy de pé", || has_pid(dir, "caddy")).await;
+    for name in ["connect-frpc.log", "connect-caddy.log"] {
+        assert_eq!(std::fs::metadata(dir.join("logs").join(name)).unwrap().permissions().mode() & 0o777, 0o600, "{name}");
+    }
     supervisor.stop().await;
 }
 

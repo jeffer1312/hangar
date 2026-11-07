@@ -7,7 +7,7 @@ export type Peer = { id: string; base_url: string; enabled: boolean };
 export type ConnectDevice = { device_id: string; name: string; status: 'pending' | 'approved' | 'denied' };
 export type Check = { estado: 'ok' | 'estranho' | 'falhou' | 'recusou' | 'nao_configurado'; identificador: string; motivo: string; tempo_ms: number | null };
 export type Reach = { loopback: boolean; bind: string; enderecos: { tipo: 'nesta_maquina' | 'rede_local' | 'tailscale' | 'publico'; url: string; estado: string; tempo_ms: number | null; motivo: string }[] };
-export type Discovered = { nome: string; base_url: string; hosts?: string[] };
+export type Discovered = { nome: string; base_url: string; hosts?: string[]; connect_error?: string };
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const duration = (value: unknown) => value === null || (typeof value === 'number' && Number.isFinite(value) && value >= 0);
 export const validIdentifier = (value: string) => value === '' || /^[a-z0-9][a-z0-9_-]{0,31}$/.test(value);
@@ -167,7 +167,10 @@ export async function discover(s: Server, signal: AbortSignal): Promise<Discover
   const value = await request(s, '/api/peers/descobrir', signal, 'GET', undefined, 30_000);
   if (!Array.isArray(value) || !value.every((d) => object(d) && typeof d.nome === 'string' && typeof d.base_url === 'string'
     && (d.hosts === undefined || Array.isArray(d.hosts) && d.hosts.every((host: unknown) => typeof host === 'string')))) throw invalid();
-  return value.map((d) => ({ nome: d.nome, base_url: normalizeUrl(d.base_url), ...(d.hosts ? { hosts: d.hosts } : {}) }));
+  return value.map((d) => {
+    const failure = object(d.connect_error) && typeof d.connect_error.msg === 'string' ? d.connect_error.msg : undefined;
+    return { nome: d.nome, base_url: normalizeUrl(d.base_url), ...(d.hosts ? { hosts: d.hosts } : {}), ...(failure ? { connect_error: failure } : {}) };
+  });
 }
 export async function ownerAddress(s: Server, signal: AbortSignal): Promise<string> {
   const base = normalizeUrl(s.baseUrl);

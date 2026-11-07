@@ -549,6 +549,34 @@ async fn revoking_a_device_closes_open_streams() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_device_revokes_only_itself_and_what_it_approved() {
+    let e = plain().await;
+    let (first, first_token) = paired(&e, "a").await;
+    let (second, second_token) = paired_by(&e, &first_token, "b").await;
+    let (third, third_token) = paired_by(&e, &second_token, "c").await;
+    let (other, other_token) = paired(&e, "d").await;
+    let revoke = |id: &str, token: &str| client().delete(format!("http://{}/api/connect/devices/{id}", e.connect)).bearer_auth(token).send();
+
+    let refused = revoke(&other, &second_token).await.unwrap();
+    assert_eq!(refused.status(), 403);
+    assert_eq!(body_of(refused).await["detail"]["code"], "connect_device_not_yours");
+    assert_eq!(revoke(&first, &second_token).await.unwrap().status(), 403, "nem quem o aprovou");
+    assert_eq!(api_status(e.connect, &other_token).await, 200);
+
+    // Quem pode aprovar o pedido pode recusá-lo: o cartão do celular continua servindo.
+    let pending = requested(&e, "e").await;
+    assert_eq!(revoke(&pending, &other_token).await.unwrap().status(), 200);
+
+    assert_eq!(revoke(&third, &first_token).await.unwrap().status(), 200, "aprovado por quem ele aprovou");
+    assert_eq!(api_status(e.connect, &third_token).await, 401);
+    assert_eq!(revoke(&other, &other_token).await.unwrap().status(), 200, "a si mesmo");
+    assert_eq!(api_status(e.connect, &other_token).await, 401);
+
+    let by_owner = client().delete(format!("http://{}/api/connect/devices/{second}", e.main)).bearer_auth(OWNER).send().await.unwrap();
+    assert_eq!(by_owner.status(), 200, "a senha do dono segue sem limite");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn revoking_a_device_takes_everything_it_approved() {
     let e = plain().await;
     let (first, first_token) = paired(&e, "a").await;

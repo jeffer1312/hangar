@@ -31,6 +31,8 @@ const STOP_GRACE: Duration = Duration::from_secs(5);
 const LOGIN_PATIENCE: Duration = Duration::from_secs(60);
 const TICK: Duration = Duration::from_millis(250);
 const LOGIN_LINE: &[u8] = b"login to server success";
+/// O serviço aceita o login e recusa o endereço: o `frpc` segue de pé, com o motivo nesta linha.
+const PROXY_REFUSED: &[u8] = b"start error: ";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Status {
@@ -590,6 +592,7 @@ async fn run_once(spec: &Spec, live: &Shared, logged: Option<&watch::Sender<bool
     child_state(&mut lock(live), spec.name).running = true;
     let started = Instant::now();
     let mut waiting = logged.is_some();
+    let mut unread = false;
     let mut healthy = false;
     let mut tick = tokio::time::interval(TICK);
     let lost = until_port_lost(bound);
@@ -620,13 +623,31 @@ async fn run_once(spec: &Spec, live: &Shared, logged: Option<&watch::Sender<bool
                 return Ended::SiteOpened;
             }
             _ = tick.tick() => {
-                if waiting && let Some(logged) = logged {
-                    if scan_login(&spec.log, &mut offset).unwrap_or(false) {
-                        waiting = false;
-                        logged.send_replace(true);
-                        lock(live).login_error = None;
-                    } else if started.elapsed() >= LOGIN_PATIENCE {
-                        lock(live).login_error = Some("o frpc não entrou no serviço do Connect; veja connect-frpc.log na pasta de logs do Hangar".to_owned());
+                // Depois do login também: o endereço é recusado depois dele, e o `frpc` volta a entrar sozinho.
+                if let Some(logged) = logged {
+                    match scan_log(&spec.log, &mut offset) {
+                        Ok(seen) => {
+                            let mut live = lock(live);
+                            if std::mem::take(&mut unread) {
+                                live.login_error = None;
+                            }
+                            if seen.login {
+                                waiting = false;
+                                logged.send_replace(true);
+                                live.login_error = None;
+                                live.proxy_error = None;
+                            }
+                            if let Some(reason) = seen.refused {
+                                live.proxy_error = Some(format!("o serviço do Connect recusou um endereço desta máquina: {reason}"));
+                            }
+                            if waiting && started.elapsed() >= LOGIN_PATIENCE {
+                                live.login_error = Some("o frpc não entrou no serviço do Connect; veja connect-frpc.log na pasta de logs do Hangar".to_owned());
+                            }
+                        }
+                        Err(cause) => {
+                            unread = true;
+                            lock(live).login_error = Some(format!("não consegui ler connect-frpc.log: {cause}"));
+                        }
                     }
                 }
                 if !healthy && started.elapsed() >= HEALTHY {
@@ -645,7 +666,15 @@ fn open_log(path: &Path) -> io::Result<std::fs::File> {
     // shortcut: gira só na subida do filho; quem fica meses de pé passa do teto até a próxima.
     hangar_core::log_rotate::rotate_log(path, hangar_core::log_rotate::LOG_MAX_BYTES);
     // Acréscimo: num laço de quedas, a causa da anterior continua no arquivo.
-    std::fs::OpenOptions::new().create(true).append(true).open(path)
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let file = options.open(path)?;
+    // O modo só vale ao criar: log de antes segue aberto para os outros usuários da máquina.
+    #[cfg(unix)]
+    file.set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+    Ok(file)
 }
 
 fn spawn_child(spec: &Spec) -> io::Result<(Child, CommandTree, u64)> {
@@ -692,8 +721,14 @@ fn die_with_parent(command: &mut Command) {
 #[cfg(not(target_os = "linux"))]
 fn die_with_parent(_command: &mut Command) {}
 
-/// Linha pela metade fica para a próxima leitura.
-fn scan_login(path: &Path, offset: &mut u64) -> io::Result<bool> {
+#[derive(Default)]
+struct Seen {
+    login: bool,
+    refused: Option<String>,
+}
+
+/// Linha pela metade fica para a próxima leitura. Vale a ordem das linhas: login novo apaga a recusa anterior.
+fn scan_log(path: &Path, offset: &mut u64) -> io::Result<Seen> {
     use std::io::{Read, Seek, SeekFrom};
     let mut file = std::fs::File::open(path)?;
     file.seek(SeekFrom::Start(*offset))?;
@@ -701,7 +736,18 @@ fn scan_login(path: &Path, offset: &mut u64) -> io::Result<bool> {
     file.read_to_end(&mut text)?;
     let whole = text.iter().rposition(|byte| *byte == b'\n').map_or(0, |at| at + 1);
     *offset += whole as u64;
-    Ok(memchr::memmem::find(&text[..whole], LOGIN_LINE).is_some())
+    let mut seen = Seen::default();
+    for line in text[..whole].split(|byte| *byte == b'\n') {
+        if memchr::memmem::find(line, LOGIN_LINE).is_some() {
+            seen.login = true;
+            seen.refused = None;
+        } else if let Some(at) = memchr::memmem::find(line, PROXY_REFUSED) {
+            let reason = String::from_utf8_lossy(&line[at + PROXY_REFUSED.len()..]);
+            // O `frp` pinta a linha mesmo fora de um terminal.
+            seen.refused = Some(reason.split('\u{1b}').next().unwrap_or_default().trim().chars().take(200).collect());
+        }
+    }
+    Ok(seen)
 }
 
 async fn stop_child(name: &'static str, child: &mut Child, tree: &mut CommandTree) {

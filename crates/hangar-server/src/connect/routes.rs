@@ -73,6 +73,7 @@ fn refused(headers: &HeaderMap, refusal: Refusal) -> Response {
         Refusal::TooManyPending => error(headers, StatusCode::TOO_MANY_REQUESTS, "connect_too_many_pending", "muitos aparelhos esperando aprovação"),
         Refusal::Credential => error(headers, StatusCode::UNAUTHORIZED, "connect_device_refused", "aparelho ou segredo recusado"),
         Refusal::Unknown => error(headers, StatusCode::NOT_FOUND, "connect_device_unknown", "aparelho desconhecido"),
+        Refusal::NotYours => error(headers, StatusCode::FORBIDDEN, "connect_device_not_yours", "só a senha do dono revoga um aparelho que este não aprovou"),
         Refusal::Io(cause) => {
             tracing::warn!(code = "connect_store_failed", "os aparelhos do Connect não foram gravados: {cause}");
             error(headers, StatusCode::SERVICE_UNAVAILABLE, "connect_store_failed", "os aparelhos do Connect não foram gravados")
@@ -150,7 +151,8 @@ async fn remove(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<
         cors(&headers, response.headers_mut());
         return response;
     }
-    match blocking(&st, move |store| store.remove(&id)).await {
+    let by = req.extensions().get::<DeviceCaller>().map(|device| device.id.clone());
+    match blocking(&st, move |store| by.map_or_else(|| store.remove(&id), |by| store.remove_by(&id, &by))).await {
         Ok(()) => reply(&headers, StatusCode::OK, json!({"ok": true})),
         Err(refusal) => refused(&headers, refusal),
     }

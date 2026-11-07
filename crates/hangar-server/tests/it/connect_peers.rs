@@ -566,6 +566,28 @@ async fn tailscale_discovery_is_unchanged() {
 }
 
 #[tokio::test]
+async fn account_failure_is_never_a_quiet_empty_discovery() {
+    let w = world().await;
+    let mut service = service_of(&w.a);
+    service.port = w.b.main.port();
+    let connect_dir = w.a.dir.path().join("connect");
+    state::write(&connect_dir, &linked_as("pc-a", free_port())).unwrap();
+
+    let one = json!({"Peer": {"n1": {"Online": true, "HostName": "pc-b", "DNSName": "", "TailscaleIPs": ["127.0.0.1"]}}});
+    let rows = network::discover_with(&service, one).await.unwrap();
+    assert_eq!(rows[0]["nome"], "pc-b", "o Tailscale segue valendo");
+    assert_eq!(rows[0]["connect_error"]["code"], "connect_peer_unreachable", "{rows}");
+
+    let none = json!({"Peer": {"n1": {"Online": false}}});
+    let refused = network::discover_with(&service, none.clone()).await.unwrap_err();
+    assert_eq!(refused.code, "connect_peer_unreachable", "sem linha nenhuma, a lista vazia mentiria");
+
+    std::fs::write(connect_dir.join("connect.json"), "{quebrado").unwrap();
+    let refused = network::discover_with(&service, none).await.unwrap_err();
+    assert_eq!(refused.code, "connect_state_unreadable");
+}
+
+#[tokio::test]
 async fn denied_card_leaves_nothing_behind() {
     let w = world().await;
     assert_eq!(start_link(&w.a, "pc-b").await.status(), 202);

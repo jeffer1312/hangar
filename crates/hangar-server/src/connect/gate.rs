@@ -60,7 +60,8 @@ pub async fn device_token_layer(State(st): State<Arc<AppState>>, mut req: Reques
     if !connect {
         return next.run(req).await;
     }
-    if let Some(token) = &token {
+    // Robô na porta da internet manda credencial à vontade: o que a memória já descarta não ocupa o pool.
+    if let Some(token) = token.as_ref().filter(|token| !st.login_guests.store.rules_out(token)) {
         let (service, lookup) = (st.login_guests.clone(), token.clone());
         let guest = tokio::task::spawn_blocking(move || service.store.lookup(&lookup)).await.ok().flatten();
         if guest.is_some() {

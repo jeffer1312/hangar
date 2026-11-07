@@ -104,12 +104,20 @@ pub fn render_caddyfile(linked: &Linked, dir: &Path) -> Result<String, ConnectEr
             format!("a pasta do Connect não cabe no Caddyfile: {storage}")));
     }
     let site = caddy_site(&linked.host, CONNECT_PORT);
+    // Conexão presa no cabeçalho ou no corpo não pode ficar para sempre: a 18443 é da internet. `read_body` conta
+    // o envio inteiro, por isso folga para o maior anexo em rede ruim. `write` e `idle` cortariam SSE e WebSocket.
     Ok(format!("{{
 \tadmin off
 \thttp_port {CADDY_HTTP_PORT}
 \thttps_port {CADDY_HTTPS_PORT}
 \tauto_https disable_redirects
 \tstorage file_system \"{storage}\"
+\tservers {{
+\t\ttimeouts {{
+\t\t\tread_header 10s
+\t\t\tread_body 1h
+\t\t}}
+\t}}
 \tlog {{
 \t\tlevel WARN
 \t}}

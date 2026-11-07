@@ -40,6 +40,8 @@ pub struct AccountMachine {
 enum Failure {
     Unreachable,
     Refused(u16),
+    /// A outra máquina respondeu `connect_store_failed`: esperar não conserta o disco dela.
+    Store,
     Invalid,
 }
 
@@ -48,6 +50,7 @@ impl Failure {
         match self {
             Failure::Unreachable => ConnectError::new(StatusCode::BAD_GATEWAY, "connect_peer_unreachable", format!("{who} não respondeu")),
             Failure::Refused(status) => ConnectError::new(StatusCode::BAD_GATEWAY, "connect_peer_refused", format!("{who} recusou o pedido (HTTP {status})")),
+            Failure::Store => ConnectError::new(StatusCode::BAD_GATEWAY, "connect_peer_store_failed", format!("{who} não conseguiu gravar os aparelhos dela")),
             Failure::Invalid => ConnectError::new(StatusCode::BAD_GATEWAY, "connect_peer_invalid", format!("{who} devolveu uma resposta inválida")),
         }
     }
@@ -68,8 +71,11 @@ fn post(http: &reqwest::Client, url: impl reqwest::IntoUrl, body: &Value) -> req
 
 async fn fetch<T: DeserializeOwned>(request: reqwest::RequestBuilder) -> Result<T, Failure> {
     let response = request.send().await.map_err(|_| Failure::Unreachable)?;
-    if !response.status().is_success() {
-        return Err(Failure::Refused(response.status().as_u16()));
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.bytes().await.ok().and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+        let store = body.is_some_and(|body| body["detail"]["code"] == "connect_store_failed");
+        return Err(if store { Failure::Store } else { Failure::Refused(status.as_u16()) });
     }
     let bytes = response.bytes().await.map_err(|_| Failure::Unreachable)?;
     serde_json::from_slice(&bytes).map_err(|_| Failure::Invalid)
@@ -245,10 +251,11 @@ impl PeerLinker {
         if !self.links.begin(&id) {
             return false;
         }
-        tokio::spawn(async move {
+        let (links, watched) = (self.links.clone(), id.clone());
+        watch_link(links, watched, tokio::spawn(async move {
             let outcome = self.link_account_machine(&id).await;
             self.links.finish(&id, &outcome);
-        });
+        }));
         true
     }
 
@@ -296,6 +303,15 @@ impl PeerLinker {
     }
 }
 
+/// Tarefa que entra em pânico não chega ao `finish`: a linha ficaria em `Requesting`, e `begin` recusaria ligar de novo.
+fn watch_link(links: Links, id: String, link: tokio::task::JoinHandle<()>) {
+    tokio::spawn(async move {
+        if link.await.is_err() {
+            links.finish(&id, &Err(ConnectError::new(StatusCode::INTERNAL_SERVER_ERROR, "connect_peer_interrupted", "a ligação com a outra máquina parou no meio; ligue de novo")));
+        }
+    });
+}
+
 async fn approved_token(http: &reqwest::Client, base: &str, device_id: &str, secret: &str) -> Result<String, ConnectError> {
     let deadline = Instant::now() + APPROVAL_PATIENCE;
     let asked = json!({"device_id": device_id, "secret": secret});
@@ -307,6 +323,10 @@ async fn approved_token(http: &reqwest::Client, base: &str, device_id: &str, sec
                 return Err(ConnectError::new(StatusCode::FORBIDDEN, "connect_peer_denied", "o pedido foi recusado ou venceu na outra máquina"));
             }
             Ok(Polled { status, .. }) if status == "pending" => {}
+            // O token sai uma vez só: quem o recebeu perdeu a resposta no caminho.
+            Ok(Polled { status, .. }) if status == "approved" => {
+                return Err(ConnectError::new(StatusCode::BAD_GATEWAY, "connect_peer_token_lost", "a outra máquina já entregou o token desta ligação e a resposta se perdeu; ligue de novo"));
+            }
             Ok(_) => return Err(Failure::Invalid.error(MACHINE)),
             // Máquina reiniciando ou túnel caído não decidem nada: quem decide é o prazo.
             Err(Failure::Unreachable) => {}
@@ -358,6 +378,59 @@ mod tests {
 
     fn machine(id: &str, online: bool) -> AccountMachine {
         AccountMachine { machine_id: id.into(), name: id.into(), host: format!("{id}.acme.hangar.dev.br"), online }
+    }
+
+    /// Outra máquina que responde sempre a mesma coisa à consulta do cartão.
+    async fn answering(status: &'static str, body: &'static str) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let _ = stream.read(&mut [0u8; 4096]).await;
+                let reply = format!("HTTP/1.1 {status}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len());
+                let _ = stream.write_all(reply.as_bytes()).await;
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    async fn polled(status: &'static str, body: &'static str) -> Result<String, ConnectError> {
+        let base = answering(status, body).await;
+        approved_token(&client(LINK_TIMEOUT).unwrap(), &base, "aparelho", "segredo").await
+    }
+
+    #[tokio::test]
+    async fn a_store_failure_on_the_other_machine_ends_the_wait() {
+        let refused = polled("503 Service Unavailable", r#"{"detail":{"code":"connect_store_failed"}}"#).await.unwrap_err();
+        assert_eq!(refused.code, "connect_peer_store_failed");
+    }
+
+    #[tokio::test]
+    async fn an_ordinary_503_keeps_waiting() {
+        let waiting = polled("503 Service Unavailable", r#"{"detail":"reiniciando"}"#);
+        assert!(tokio::time::timeout(POLL_EVERY * 3, waiting).await.is_err(), "máquina reiniciando não decide nada");
+    }
+
+    #[tokio::test]
+    async fn approved_without_a_token_is_a_lost_token() {
+        let lost = polled("200 OK", r#"{"status":"approved"}"#).await.unwrap_err();
+        assert_eq!(lost.code, "connect_peer_token_lost");
+    }
+
+    #[tokio::test]
+    async fn a_panic_in_the_link_ends_it_as_failed() {
+        let links = Links::default();
+        assert!(links.begin("pc-b"));
+        watch_link(links.clone(), "pc-b".into(), tokio::spawn(async { panic!("ligação caiu") }));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while links.list()[0].stage != Stage::Failed {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await.expect("a linha sai de `Requesting`");
+        assert_eq!(links.list()[0].code, Some("connect_peer_interrupted"));
+        assert!(links.begin("pc-b"), "dá para ligar de novo");
     }
 
     #[test]
