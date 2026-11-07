@@ -230,7 +230,7 @@ describe('credencial de aparelho e rota do Connect', () => {
   function deviceRefused(saved: typeof server & { credential: 'device'; deviceId: string; ownerToken?: string }) {
     machine(connectUrl);
     useServers.setState({ servers: [saved], activeId: saved.id });
-    const answer = fetchMock.getMockImplementation()!;
+    const answer = fetchMock.getMockImplementation() as (url: string, init?: RequestInit) => Promise<Response>;
     const state = { refusing: true };
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       const auth = new Headers(init?.headers).get('Authorization');
