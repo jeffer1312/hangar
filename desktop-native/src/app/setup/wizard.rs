@@ -1337,9 +1337,9 @@ impl SetupWizard {
             let loaded = result.await.unwrap_or_else(|_| Err(tr("connection_failed")));
             let _ = this.update(cx, |w, cx| {
                 w.qr = match loaded {
-                    Ok(Some(pairing)) => Qr::Shown { url: pairing.url, tailscale: pairing.tailscale,
-                        image: Arc::new(Image::from_bytes(ImageFormat::Svg, pairing.svg)) },
-                    Ok(None) => Qr::NoAddress,
+                    Ok(phone::Offer { pairing: Some(pairing), connect }) => Qr::Shown { url: pairing.url, tailscale: pairing.tailscale,
+                        image: Arc::new(Image::from_bytes(ImageFormat::Svg, pairing.svg)), connect },
+                    Ok(phone::Offer { pairing: None, connect }) => Qr::NoAddress { connect },
                     Err(why) => Qr::Failed(why),
                 };
                 cx.notify();

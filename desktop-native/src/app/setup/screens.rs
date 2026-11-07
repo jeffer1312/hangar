@@ -167,6 +167,8 @@ fn tips(tailscale: bool) -> Div {
             .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(text))))
 }
 
+fn connect_offer() -> Div { div().text_sm().text_color(theme::muted()).whitespace_normal().child(tr("setup_phone_connect")) }
+
 fn recheck_button(id: &'static str, cx: &mut Context<SetupWizard>) -> AnyElement {
     Button::new(id).outline().small().label(tr("setup_recheck")).on_click(cx.listener(|w, _, window, cx| w.retry(window, cx))).into_any_element()
 }
@@ -504,7 +506,7 @@ impl SetupWizard {
         let retry = || Button::new("setup-phone-retry").outline().small().label(tr("setup_phone_retry"))
             .on_click(cx.listener(|w, _, _, cx| { w.qr = Qr::Idle; w.load_qr(cx); }));
         match &self.qr {
-            Qr::Shown { url, tailscale, image } => {
+            Qr::Shown { url, tailscale, image, connect } => {
                 let copy = url.clone();
                 div().flex().items_center().gap_8()
                     // Fundo branco é o do QR, não decoração: câmera nenhuma lê o código sobre o tema escuro.
@@ -516,13 +518,15 @@ impl SetupWizard {
                             .child(div().flex_1().min_w_0().font_family(theme::MONO).text_sm().text_color(theme::accent_text()).whitespace_normal().child(url.clone()))
                             .child(Button::new("setup-phone-copy").ghost().small().icon(IconName::Copy).label(tr("setup_phone_copy"))
                                 .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy.clone())))))
-                        .child(tips(*tailscale)))
+                        .child(tips(*tailscale))
+                        .when(*connect, |el| el.child(connect_offer())))
             }
             Qr::Loading => div().child(muted_line("setup-phone-loading", true, tr("setup_phone_loading"))),
             // Idle na tela do celular é o código que ninguém pediu (retomada): sempre há como pedir.
             Qr::Idle => div().child(retry()),
-            Qr::NoAddress => div().flex().flex_col().gap_2()
+            Qr::NoAddress { connect } => div().flex().flex_col().gap_2()
                 .child(div().id("setup-phone-none").role(Role::Alert).text_sm().text_color(theme::warning_text()).whitespace_normal().child(tr("setup_phone_none")))
+                .when(*connect, |el| el.child(connect_offer()))
                 .child(div().child(retry())),
             Qr::Failed(why) => div().flex().flex_col().gap_2()
                 .child(div().id("setup-phone-error").role(Role::Alert).text_sm().text_color(theme::danger()).whitespace_normal().child(why.clone()))
