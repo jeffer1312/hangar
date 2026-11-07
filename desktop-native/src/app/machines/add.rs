@@ -172,10 +172,20 @@ pub(super) async fn check(api: &Api, url: &str, id: &str) -> Going {
     }
 }
 
+/// Máquina do Connect: o serviço mora no mesmo domínio e não é máquina. Comparado inteiro, porque `connect` é nome válido de máquina.
+fn connect_host(base: &str) -> bool {
+    Url::parse(base).ok().and_then(|url| url.host_str().map(|host| host.trim_end_matches('.').to_owned()))
+        .is_some_and(|host| host.ends_with(".hangar.dev.br") && host != "connect.hangar.dev.br")
+}
+
+/// A volta que não se tenta: o `peers.json` da outra máquina guardaria a senha do dono desta.
+fn back_refused(base: &str) -> Option<Going> { connect_host(base).then(|| Going::failed(tr("machines_add_connect_back"))) }
+
 /// Grava aqui (falha aqui é o resultado: nada mudou), grava este servidor lá e testa as duas pontas.
 pub(super) async fn register(here: Api, found: Found, own_id: String, own_token: String) -> Result<(Going, Going), String> {
     let body = json!({"id": found.id, "base_url": found.base, "token": found.token});
     here.server_send(reqwest::Method::POST, &["peers"], Some(body), 15).await.map_err(|e| Hangar::fetch_failure(&e))?;
+    if let Some(back) = back_refused(&found.base) { return Ok((check(&here, &found.base, &found.id).await, back)); }
     let own_base = own_address(&here).await;
     let there = Api::new(&found.base, &found.token);
     let saved = match &there {
@@ -635,7 +645,20 @@ impl Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{Discovered, EntityId, Remote, ServerEntry, Target, normalize, owns, place_machine, short_host, tailscale_host};
+    use super::{Discovered, EntityId, Remote, ServerEntry, Target, Way, back_refused, normalize, owns, place_machine, short_host, tailscale_host};
+
+    #[test]
+    fn owner_password_never_goes_to_a_connect_host() {
+        for base in ["https://pc-b.acme.hangar.dev.br", "https://PC-B.acme.hangar.dev.br/", "https://pc-b.acme.hangar.dev.br.", "https://connect.acme.hangar.dev.br"] {
+            let back = back_refused(base).unwrap_or_else(|| panic!("{base}"));
+            assert_eq!(back.way, Way::Failed, "{base}");
+            assert_eq!(back.error, Some(crate::i18n::tr("machines_add_connect_back")), "{base}");
+        }
+        for base in ["https://casa.tail0000.ts.net", "http://100.64.0.2:8765", "http://192.168.0.10:8765", "http://casa:8765",
+            "https://connect.hangar.dev.br", "https://hangar.dev.br", "https://nothangar.dev.br", "https://hangar.dev.br.exemplo.com"] {
+            assert!(back_refused(base).is_none(), "{base}");
+        }
+    }
 
     #[test]
     fn tailscale_addresses_are_the_tailnet_name_and_the_cgnat_range() {
