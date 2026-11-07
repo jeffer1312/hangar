@@ -49,7 +49,21 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
-    use crate::omp_sync::{NativeRunner, Synchronizer};
+    use crate::omp_sync::{Output, Runner, Synchronizer};
+    use futures_util::future::BoxFuture;
+
+    struct ForbiddenRunner;
+    impl Runner for ForbiddenRunner {
+        fn run<'a>(
+            &'a self,
+            _: Vec<String>,
+            _: &'a Path,
+            _: &'a BTreeMap<String, String>,
+            _: Duration,
+        ) -> BoxFuture<'a, Result<Output, String>> {
+            Box::pin(async { panic!("serviço desligado não pode iniciar CLI") })
+        }
+    }
 
     #[test]
     fn op080_context_rule_targets_current_without_resolving_version() {
@@ -78,8 +92,7 @@ mod tests {
         })
         .unwrap();
         let st = Arc::new(crate::routes::AppState::new(config));
-        // Desligado: o executor nunca roda.
-        let sync = Synchronizer::new(home.into(), home.join(".claude"), BTreeMap::new(), Arc::new(NativeRunner));
+        let sync = Synchronizer::new(home.into(), home.join(".claude"), BTreeMap::new(), Arc::new(ForbiddenRunner));
         let service = Service::new(sync, false, 300., Arc::new(|| Ok(true))).unwrap();
         let expected = service.status();
         assert!(st.omp_sync.set(service).is_ok());
