@@ -23,6 +23,7 @@ export function AddMachineSheet({ owner, onClose, onQr }: { owner: Server | null
   const [added, setAdded] = useState<Added | null>(null);
   const action = useMachineAction();
   const off = action.busy || !!added;
+  const searchGap = discovered?.[0]?.connect_error;
   const save = () => action.run(async (signal) => {
     const baseUrl = normalizeUrl(address);
     const credential = token.trim();
@@ -90,7 +91,7 @@ export function AddMachineSheet({ owner, onClose, onQr }: { owner: Server | null
         {!owner ? <InfoNotice text={m.native_settings_offline()} /> : null}
         {action.busy ? <InfoNotice text={m.native_server_loading()} /> : null}
         {discovered?.length === 0 ? <InfoNotice text={m.mobile_machines_discover_empty()} /> : null}
-        {discovered?.[0]?.connect_error ? <InfoNotice text={m.mobile_machines_search_partial({ reason: discovered[0].connect_error })} /> : null}
+        {searchGap ? <InfoNotice text={m.mobile_machines_search_partial({ reason: searchGap })} /> : null}
         {discovered?.map((found) => <Pill key={found.base_url} label={`${found.nome} · ${found.base_url}`} disabled={off}
           onPress={() => setAddress(found.base_url)} />)}
       </View>
