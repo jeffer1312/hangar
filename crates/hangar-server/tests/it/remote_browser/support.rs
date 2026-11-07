@@ -298,7 +298,7 @@ exec '{discovery}' "$@"
         state.hangar_dir = home.join(".hangar");
         std::fs::create_dir_all(state.hangar_dir.join("nav")).unwrap();
         Self::write_headless(&home, "headless", "headless-key", root.path());
-        state.share = hangar_server::share::from_env(Some(home.join("shares.json")), list.env().dirs.as_ref(), script.into_os_string());
+        state.share = hangar_server::share::from_env(Some(home.join("shares.json")), list.env().dirs.as_ref(), script.into_os_string(), None);
         list.set_shares(state.share.as_ref().unwrap().clone());
         state.list = list.clone();
         state.side.locate = Arc::new(ListLocate { list: list.clone() });

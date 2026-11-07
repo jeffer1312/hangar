@@ -74,7 +74,8 @@ pub(super) fn io_failed(e: impl std::fmt::Display) -> Response {
 
 /// O link só sai depois de abrir pela internet; falhou, o convite `id` é revogado e a recusa volta.
 pub(super) async fn reach_or_revoke(st: &OwnerShareState, base: &str, path: String, id: &str) -> Option<Response> {
-    let host = base.strip_prefix("https://").and_then(|r| r.rsplit_once(':')).map_or("", |(h, _)| h);
+    let authority = base.strip_prefix("https://").unwrap_or("");
+    let host = authority.rsplit_once(':').map_or(authority, |(h, _)| h);
     let target = InviteLink { host: host.into(), path };
     let failure = check_until(&st.reach.probe, &target, st.reach.every, st.reach.deadline).await.err()?;
     if let Err(e) = st.share.store.revoke(id) { return Some(io_failed(e)) }
@@ -97,6 +98,10 @@ pub(super) fn prereq_error(e: TunnelError) -> Response {
 pub async fn sync_tunnel(share: &ShareState) {
     let store = &share.store;
     if !store.has_any(true) {
+        return;
+    }
+    // O site do Connect fica de pé, e o `tailscale` ausente viraria um aviso por minuto.
+    if share.connect_entrance().await.is_some() {
         return;
     }
     let active = store.has_active(true) || store.recently_ended(ENDED_GRACE.as_secs_f64(), true);
@@ -152,7 +157,7 @@ async fn create(State(st): St, Path(name): Path<String>, RawQuery(query): RawQue
         let link = format!("http://{ip}:{GUEST_PORT}/convite/{code}");
         return json_response(StatusCode::OK, json!({"id": s.id, "link": link, "expires_at": s.code_expires_at}));
     }
-    let base = match share.ensure_on().await { Ok(b) => b, Err(e) => return prereq_error(e) };
+    let base = match share.open_guest_url().await { Ok(b) => b, Err(e) => return prereq_error(e) };
     let (s, code) = match share.store.create(&name, Some(life), Kind::Share, false) { Ok(v) => v, Err(e) => return io_failed(e) };
     if let Some(refusal) = reach_or_revoke(&st, &base, format!("/convite/{code}"), &s.id).await { return refusal }
     json_response(StatusCode::OK, json!({"id": s.id, "link": format!("{base}/convite/{code}"), "expires_at": s.code_expires_at}))
@@ -186,6 +191,9 @@ async fn revoke_all(State(st): St, Path(name): Path<String>) -> Response {
 }
 
 async fn prereqs(State(st): St) -> Response {
+    if st.share.connect_entrance().await.is_some() {
+        return json_response(StatusCode::OK, json!({"missing": [], "fix": "", "enable_url": null}));
+    }
     match tunnel::prereqs(&*st.share.tailscale).await {
         Ok(p) => json_response(StatusCode::OK, json!({"missing": p.missing, "fix": p.fix, "enable_url": p.enable_url})),
         // Sem tailscale ou deslogado: mesma resposta do gerar, e quem confere segue esperando.

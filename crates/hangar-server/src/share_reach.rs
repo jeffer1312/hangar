@@ -1,5 +1,5 @@
-//! Conferência de que um link de convite abre pela internet: o nome público existe e o Funnel
-//! entrega a página desta máquina. O DNS da máquina não serve: na tailnet ele sempre responde.
+//! Conferência de que um link de convite abre pela internet: o nome público existe e o Funnel ou o
+//! Connect entrega a página desta máquina. O DNS da máquina não serve: na tailnet ele sempre responde.
 use crate::routes::AppState;
 use axum::{body::to_bytes, extract::Request, http::{Method, StatusCode, header}, response::{IntoResponse, Response}};
 use serde::{Deserialize, Serialize};
@@ -23,6 +23,8 @@ pub struct Probe {
     pub doh: Vec<String>,
     pub funnel_scheme: &'static str,
     pub funnel_port: u16,
+    /// O link do Connect não leva porta: é a 443 do `frps`.
+    pub connect_port: u16,
     pub local_base: String,
 }
 
@@ -32,6 +34,7 @@ impl Probe {
             doh: vec!["https://cloudflare-dns.com/dns-query".into(), "https://dns.google/resolve".into()],
             funnel_scheme: "https",
             funnel_port: FUNNEL_PORT,
+            connect_port: 443,
             local_base: format!("http://127.0.0.1:{}", crate::share::tunnel::GUEST_PORT),
         }
     }
@@ -111,15 +114,16 @@ async fn attempt(probe: &Probe, link: &InviteLink, end: Option<Instant>) -> Resu
     let ips = public_ips(probe, &link.host, end).await?;
     let local = page(client().get(format!("{}{}", probe.local_base, link.path)).timeout(call_timeout(end))).await
         .map_err(|e| Failure::Funnel { detail: format!("página local: {e}") })?;
-    let url = format!("{}://{}:{}{}", probe.funnel_scheme, link.host, probe.funnel_port, link.path);
+    let port = if crate::connect::config::is_guest_host(&link.host) { probe.connect_port } else { probe.funnel_port };
+    let url = format!("{}://{}:{}{}", probe.funnel_scheme, link.host, port, link.path);
     let mut last = String::new();
     // O DNS público pode trazer mais de um endereço; basta um entregar a página desta máquina.
     for ip in ips {
         let outside = crate::http_client().no_proxy().redirect(reqwest::redirect::Policy::none())
-            .resolve(&link.host, SocketAddr::new(ip, probe.funnel_port))
+            .resolve(&link.host, SocketAddr::new(ip, port))
             .build().map_err(|e| Failure::Funnel { detail: e.to_string() })?;
         match page(outside.get(&url).timeout(call_timeout(end))).await {
-            // O Funnel chega por loopback como o pedido local: a página só sai igual se for desta máquina.
+            // Funnel e Caddy chegam por loopback como o pedido local: a página só sai igual se for desta máquina.
             Ok(remote) if remote == local => return Ok(()),
             Ok(_) => last = format!("{ip}: outra máquina respondeu no endereço do link"),
             Err(e) => last = format!("{ip}: {e}"),

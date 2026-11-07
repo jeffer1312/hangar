@@ -143,7 +143,7 @@ async fn reach_ok() -> Reach {
     }))).await;
     let page = serve(Router::new().fallback(|| async { "<h1>convite</h1>" })).await;
     Reach {
-        probe: Probe { doh: vec![format!("http://{doh}/resolve")], funnel_scheme: "http", funnel_port: page.port(), local_base: format!("http://{page}") },
+        probe: Probe { doh: vec![format!("http://{doh}/resolve")], funnel_scheme: "http", funnel_port: page.port(), connect_port: 1, local_base: format!("http://{page}") },
         every: Duration::from_millis(20),
         deadline: Duration::from_secs(5),
     }
@@ -154,7 +154,7 @@ async fn reach_dns_fails() -> Reach {
         ([(header::CONTENT_TYPE, "application/dns-json")], r#"{"Status":3}"#)
     }))).await;
     Reach {
-        probe: Probe { doh: vec![format!("http://{doh}/resolve")], funnel_scheme: "http", funnel_port: 1, local_base: "http://127.0.0.1:1".into() },
+        probe: Probe { doh: vec![format!("http://{doh}/resolve")], funnel_scheme: "http", funnel_port: 1, connect_port: 1, local_base: "http://127.0.0.1:1".into() },
         every: Duration::from_millis(20),
         deadline: Duration::from_millis(200),
     }
@@ -170,6 +170,7 @@ pub(crate) fn share_state(shares: &Path, pair_dir: &Path, clock: Arc<Mutex<f64>>
         lives: Lives::new(Arc::new(FakeLife), facts),
         tailscale: Arc::new(FakeTs),
         tunnel: Default::default(),
+        connect: None,
     })
 }
 

@@ -590,19 +590,29 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   Caminho vira marcador `⟦HOME⟧`/`⟦CLAUDE⟧`/`⟦CODEX⟧`/`⟦HANGAR⟧` (nunca `{HOME}`); quem envia vence;
   hooks e skills do Hangar, MCP `hangar`, credenciais e o login do `.claude.json` são sempre do
   destino. Regras e motivo em [plataforma.md](docs/decisoes/plataforma.md#configuração-compartilhada-leva-o-conteúdo-o-destino-resolve-caminho-e-programa).
-- **Compartilhar sessão: só a porta do convidado (8766, Funnel 8443) vai à internet, ela é do
-  Rust e recusa o token do dono.** Convites, chaves, porteiro e Funnel moram em
-  `crates/hangar-server/src/share/`; Rust fora = 8766 fechada, sem reserva Python. O que o Python
+- **Compartilhar sessão: só a porta do convidado (8766, por Funnel 8443 ou pelo site
+  `<máquina>--guest.<conta>.hangar.dev.br` do Connect) vai à internet, ela é do Rust e recusa o
+  token do dono.** Convites, chaves, porteiro e Funnel moram em `crates/hangar-server/src/share/`;
+  Rust fora = 8766 fechada, sem reserva Python. `ShareState::public_guest_url` escolhe o endereço e
+  não liga nada (a página e o resgate não têm token); `open_guest_url` abre a entrada e é só de rota
+  do dono. Connect vale ligado e sem Tailscale; com os dois fica o Funnel. O proxy do `frpc` e o site
+  do Caddy nascem no primeiro convite (`guest_published` em `connect.json`) e ficam: cada host gasta
+  um certificado do limite semanal de todo o `hangar.dev.br`. O `frpc` e o Caddy voltam uma vez, em
+  tarefa própria, porque quem pediu pelo Connect perde a conexão ali. O site só entra no Caddyfile
+  com a 8766 aberta por este servidor, senão o Caddy entregaria a internet a quem segura a porta;
+  a porta abrindo depois volta só o Caddy. O que o Python
   ainda atende recebe o convidado já decidido em `x-hangar-guest` assinado. Confiança = usuário
   do sistema do dono. No servidor de convite, 410 e 401 são "encerrado" (nunca apagar o servidor
   nem abrir login); 502, 503 e conexão recusada são tentar de novo. Motivo em
   [plataforma.md](docs/decisoes/plataforma.md#compartilhar-sessão-a-porta-do-convidado-é-a-única-na-internet).
-- **Link de convite pelo Funnel só aparece conferido de fora.** A criação (Rust) espera o nome no
-  DNS público e a página do Funnel igual à de `127.0.0.1:8766`; não abriu, revoga e responde 409
+- **Link de convite pela internet só aparece conferido de fora.** A criação (Rust) espera o nome no
+  DNS público e a página do Funnel ou do Connect igual à de `127.0.0.1:8766`; não abriu, revoga e responde 409
   `share_reach_failed` com a etapa. Nativo e PWA não chamam mais `/api/share/reachability`. Evidência em [plataforma.md](docs/decisoes/plataforma.md#link-de-convite-só-aparece-conferido-de-fora).
 - **Par externo: o token de entrada é a raiz `Share` de `kind: "pair"`, o de saída mora
   em `external_pairs.json`; os dois arquivos são só do Rust.** O Python pede por
-  `/__hangar_server/share` (fechar, renomear, trocar de modo). Só endereço `https://*.ts.net:8443`; quem assina o recado é o token
+  `/__hangar_server/share` (fechar, renomear, trocar de modo). Só endereço `https://*.ts.net:8443` ou
+  `https://<máquina>--guest.<conta>.hangar.dev.br`, sem porta (`<máquina>.<conta>` é a porta do dono e
+  recebe recusa, porque o link de par leva o token desta máquina); quem assina o recado é o token
   (`[de fora: alias::sessao]`), nunca o texto; só 410 desfaz o par; nome de sessão de fora é
   `[A-Za-z0-9._-]{1,64}`; chamada à outra máquina nunca segue redirect. Um token de convidado cobre
   várias sessões da mesma máquina. Cada lado escolhe o nível que DÁ (`full`/`view`), guardado como

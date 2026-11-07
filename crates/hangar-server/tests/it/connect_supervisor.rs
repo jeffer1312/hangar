@@ -29,7 +29,7 @@ const FRPS_TOKEN: &str = "token-do-frps-de-teste";
 const PASSWORD: &str = "senha-da-conta-de-teste";
 const SERVER_ENV: &str = "HANGAR_CONNECT_TEST_SERVER_DIR";
 
-fn linked() -> Linked {
+pub(crate) fn linked() -> Linked {
     Linked {
         service_url: "https://connect.hangar.dev.br".into(),
         account: "acme".into(),
@@ -41,10 +41,11 @@ fn linked() -> Linked {
         frps_addr: "connect.hangar.dev.br:443".into(),
         frps_token: FRPS_TOKEN.into(),
         service_public_key: STANDARD.encode([7u8; 32]),
+        guest_published: false,
     }
 }
 
-async fn until(what: &str, mut done: impl FnMut() -> bool) {
+pub(crate) async fn until(what: &str, mut done: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(20);
     while !done() {
         assert!(Instant::now() < deadline, "{what}");
@@ -83,7 +84,7 @@ fn frpc_body(gate: &Path) -> String {
     format!(":wait\r\nif exist \"{}\" goto logged\r\nping -n 2 127.0.0.1 >nul\r\ngoto wait\r\n:logged\r\necho login to server success\r\n{LONG_RUN}", gate.display())
 }
 
-fn gate(dir: &Path) -> PathBuf {
+pub(crate) fn gate(dir: &Path) -> PathBuf {
     dir.join("login-gate")
 }
 
@@ -94,13 +95,13 @@ fn supervisor(dir: &Path, devices: Arc<Store>, main_port: u16) -> Supervisor {
 }
 
 /// Sem servidor na frente: a porta conta como aberta por ele.
-fn alone(dir: &Path) -> Supervisor {
+pub(crate) fn alone(dir: &Path) -> Supervisor {
     let supervisor = supervisor(dir, Arc::new(Store::new(dir.to_path_buf(), None)), 8765);
     supervisor.port_opened();
     supervisor
 }
 
-fn read_pid(dir: &Path, name: &str) -> Option<u32> {
+pub(crate) fn read_pid(dir: &Path, name: &str) -> Option<u32> {
     std::fs::read_to_string(dir.join(format!("{name}.pid"))).ok()?.trim().parse().ok()
 }
 
@@ -108,7 +109,7 @@ fn has_pid(dir: &Path, name: &str) -> bool {
     read_pid(dir, name).is_some()
 }
 
-fn pid_of(dir: &Path, name: &str) -> u32 {
+pub(crate) fn pid_of(dir: &Path, name: &str) -> u32 {
     read_pid(dir, name).unwrap()
 }
 

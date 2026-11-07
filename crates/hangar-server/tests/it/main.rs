@@ -10,6 +10,7 @@ mod connect_port;
 mod connect_devices;
 mod connect_peers;
 mod connect_supervisor;
+mod connect_share;
 mod cli_probe;
 mod provider_discovery;
 mod json_body;

@@ -295,6 +295,20 @@ describe('parsePairLink', () => {
       'https://casa.ts.net:8443/par/AB12/mais', 'lixo',
     ]) expect(parsePairLink(bad), bad).toBeNull();
   });
+  it('aceita a entrada de convidado do Connect, sem porta', () => {
+    expect(parsePairLink(' https://PC1--guest.acme.hangar.dev.br/par/AB12cd/ \n')).toBe('https://pc1--guest.acme.hangar.dev.br/par/AB12cd');
+  });
+  it('recusa do Connect tudo que não é a entrada de convidado', () => {
+    for (const bad of [
+      'https://pc1.acme.hangar.dev.br/par/AB12', 'https://pc1--preview.acme.hangar.dev.br/par/AB12',
+      'https://--guest.acme.hangar.dev.br/par/AB12', 'https://pc1---guest.acme.hangar.dev.br/par/AB12',
+      'https://pc1--guest.hangar.dev.br/par/AB12', 'https://a.pc1--guest.acme.hangar.dev.br/par/AB12',
+      'https://pc1--guest.acme.hangar.dev.br.evil.com/par/AB12', 'https://pc1--guest.acme.hangar.dev.br:443/par/AB12',
+      'https://pc1--guest.acme.hangar.dev.br:8443/par/AB12', 'http://pc1--guest.acme.hangar.dev.br/par/AB12',
+      'https://u@pc1--guest.acme.hangar.dev.br/par/AB12', 'https://pc1--guest.acme.hangar.dev.br/par/AB12?x=1',
+      'https://pc1--guest.acme.hangar.dev.br/par/AB12#x', 'https://pc1--guest.acme.hangar.dev.br/convite/AB12',
+    ]) expect(parsePairLink(bad), bad).toBeNull();
+  });
 });
 
 const DONO: Server = { id: 'srv-1', label: 'note', baseUrl: 'https://note.ts.net', token: 'td' };

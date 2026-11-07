@@ -215,13 +215,16 @@ impl AppState {
         let state = Arc::new(crate::state::live::StateEnv::new(terminal.clone(), list.clone(), diag.clone()));
         list.set_permissions(state.permissions.clone());
         side.monitors = Some(crate::state::live::spawner(state.clone()));
+        // O mesmo `~` do app nativo e do Python (USERPROFILE no Windows), que gravam `~/.hangar/nav`.
+        let hangar_dir = std::env::home_dir().unwrap_or_default().join(".hangar");
+        let connect_devices = Arc::new(crate::connect::devices::Store::new(hangar_dir.join("connect"), None));
+        let connect_supervisor = Arc::new(crate::connect::supervisor::Supervisor::new(hangar_dir.join("connect"),
+            crate::runtime::local_policy::log_base().unwrap_or_else(|| hangar_dir.join("logs")), connect_devices.clone(), cfg.listen.port()));
         let share = match crate::config::GuestEnv::from_env() {
-            Ok(guest) => crate::share::from_env(guest.shares_file, list.env().dirs.as_ref(), list.env().capture_program.clone()),
+            Ok(guest) => crate::share::from_env(guest.shares_file, list.env().dirs.as_ref(), list.env().capture_program.clone(), Some(connect_supervisor.clone())),
             Err(e) => { tracing::error!("{e}"); None }
         };
         if let Some(share) = &share { list.set_shares(share.clone()); }
-        // O mesmo `~` do app nativo e do Python (USERPROFILE no Windows), que gravam `~/.hangar/nav`.
-        let hangar_dir = std::env::home_dir().unwrap_or_default().join(".hangar");
         let device_install = {
             let env = crate::accounts::environment::AccountEnvironment::capture();
             Arc::new(crate::device_install::job::DeviceInstall::new(
@@ -236,9 +239,6 @@ impl AppState {
         let vault_requests = Arc::new(crate::vault::requests::Requests::default());
         let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture());
         let search = crate::search::Index::server(accounts.clone());
-        let connect_devices = Arc::new(crate::connect::devices::Store::new(hangar_dir.join("connect"), None));
-        let connect_supervisor = Arc::new(crate::connect::supervisor::Supervisor::new(hangar_dir.join("connect"),
-            crate::runtime::local_policy::log_base().unwrap_or_else(|| hangar_dir.join("logs")), connect_devices.clone(), cfg.listen.port()));
         AppState { startup: Default::default(), startup_producers: Arc::default(), settings_snapshot: std::sync::OnceLock::new(), login_guests: Arc::new(crate::login_guests::Service::uninitialized(&accounts.env.home,&accounts.env.claude_base)), accounts, search, claude_p: None, command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, connect: None, diag,
             migration_branch: Arc::default(),
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
@@ -511,6 +511,7 @@ pub async fn serve_connect(addr: SocketAddr, state: Arc<AppState>, pair: Option<
 async fn serve_guest(addr: SocketAddr, state: Arc<AppState>, pair: Option<Arc<PairState>>) -> std::io::Result<()> {
     let listener = bind_guest(addr).await;
     state.guest_bound.store(true, Ordering::Relaxed);
+    state.connect_supervisor.guest_port_opened();
     axum::serve(listener, guest_router_with(state, pair).into_make_service_with_connect_info::<crate::share::gate::GuestConn>()).await
 }
 

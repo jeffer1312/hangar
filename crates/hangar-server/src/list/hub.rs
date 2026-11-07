@@ -875,7 +875,7 @@ mod tests {
         let dirs = crate::list::discover_other::Dirs { home: tmp.path().into(), claude: tmp.path().join(".claude"),
             codex_home: tmp.path().join(".codex"), pi_sessions: tmp.path().join("pi"), omp_config: tmp.path().join("omp"),
             omp_agent: tmp.path().join("omp/agent"), kimi_home: tmp.path().join("kimi") };
-        let share = crate::share::from_env(Some(tmp.path().join("shares.json")), Some(&dirs), "missing-test-mux".into()).unwrap();
+        let share = crate::share::from_env(Some(tmp.path().join("shares.json")), Some(&dirs), "missing-test-mux".into(), None).unwrap();
         let requests = crate::vault::requests::Requests::default();
         let hub = Arc::new(ListHub::with_vault(requests.feed()));
         requests.note_state(crate::vault::State::Open);

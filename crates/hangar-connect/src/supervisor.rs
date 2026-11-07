@@ -18,7 +18,7 @@ use tokio::sync::{oneshot, watch};
 use super::devices::Store;
 use super::peers::Links;
 use super::state::{self, LinkRequest, Linked};
-use super::{CONNECT_PORT, ConnectError, binaries, config};
+use super::{CONNECT_PORT, ConnectError, GUEST_PORT, binaries, config};
 use hangar_core::terminal_process::{CommandTree, OwnedTree, PRIVATE_ENV_KEYS};
 
 const FRPC_WAITS: [u64; 5] = [1, 2, 5, 10, 30];
@@ -92,6 +92,8 @@ pub struct Supervisor {
     live: Shared,
     /// A entrada do Connect aberta por este servidor.
     bound: watch::Sender<bool>,
+    /// A porta do convidado aberta por este servidor.
+    guest_port: watch::Sender<bool>,
     /// A subida do servidor e um pedido da tela podem chegar juntos: sem fila, nasceriam dois de cada.
     run: tokio::sync::Mutex<Option<Run>>,
     linking: tokio::sync::Mutex<()>,
@@ -114,7 +116,7 @@ impl Supervisor {
     pub fn new(dir: PathBuf, log_dir: PathBuf, devices: Arc<Store>, main_port: u16) -> Self {
         let live = Live { port_error: (main_port == CONNECT_PORT).then(main_port_message), ..Live::default() };
         Self { dir, log_dir, main_port, devices, programs: None, live: Arc::new(Mutex::new(live)), bound: watch::channel(false).0,
-            run: tokio::sync::Mutex::new(None), linking: tokio::sync::Mutex::new(()), peer_links: Links::default() }
+            guest_port: watch::channel(false).0, run: tokio::sync::Mutex::new(None), linking: tokio::sync::Mutex::new(()), peer_links: Links::default() }
     }
 
     pub fn dir(&self) -> &Path {
@@ -145,6 +147,15 @@ impl Supervisor {
     pub fn port_failed(&self, error: String) {
         lock(&self.live).port_error = Some(error);
         self.bound.send_replace(false);
+    }
+
+    pub fn guest_port_opened(&self) {
+        self.guest_port.send_replace(true);
+    }
+
+    pub async fn linked(&self) -> Option<Linked> {
+        let dir = self.dir.clone();
+        tokio::task::spawn_blocking(move || state::read(&dir)).await.ok().flatten()
     }
 
     pub fn status(&self) -> Status {
@@ -199,6 +210,8 @@ impl Supervisor {
         let (frpc_config, caddyfile) = (self.dir.join("frpc.toml"), self.dir.join("Caddyfile"));
         let frpc_text = config::render_frpc(linked)?;
         let caddy_text = config::render_caddyfile(linked, &self.dir)?;
+        let site = linked.guest_published.then(|| GuestSite { open: self.guest_port.subscribe(), served: false, file: caddyfile.clone(),
+            both: format!("{caddy_text}\n{}", config::render_guest_site(linked)), owner_only: caddy_text.clone() });
         let (toml_path, caddy_path) = (frpc_config.clone(), caddyfile.clone());
         off_thread(move || {
             state::write_private(&toml_path, frpc_text.as_bytes())?;
@@ -214,7 +227,7 @@ impl Supervisor {
         // O sinal de morte do Linux segue a thread que criou o filho, e um worker do tokio pode sair antes
         // (`block_in_place`): esta thread vive tanto quanto os filhos.
         std::thread::Builder::new().name("connect-supervisor".to_owned()).spawn(move || {
-            supervise_on_thread(frpc, caddy, live, stop_rx, bound);
+            supervise_on_thread(frpc, caddy, site, live, stop_rx, bound);
             let _ = done_tx.send(());
         }).map_err(|cause| {
             lock(&self.live).active = false;
@@ -287,6 +300,27 @@ impl Supervisor {
         self.start(&linked).await
     }
 
+    /// Primeiro convite pelo Connect: o `frpc` e o Caddy só leem a configuração ao subir, então os dois voltam uma vez.
+    /// Gravado antes da troca, nada repete isso. Cancelada no meio deixaria o Connect parado: quem chama usa tarefa própria.
+    pub async fn publish_guest(&self) -> Result<(), ConnectError> {
+        let _linking = self.linking.lock().await;
+        if !*self.guest_port.borrow() {
+            return Err(ConnectError::new(StatusCode::CONFLICT, "connect_guest_port_closed",
+                format!("a porta do convite ({GUEST_PORT}) não abriu neste servidor")));
+        }
+        let dir = self.dir.clone();
+        let Some(mut linked) = off_thread(move || Ok(state::read(&dir))).await? else {
+            return Err(ConnectError::new(StatusCode::CONFLICT, "connect_not_linked", "esta máquina não está ligada ao Connect"));
+        };
+        if linked.guest_published {
+            return Ok(());
+        }
+        linked.guest_published = true;
+        let (dir, saved) = (self.dir.clone(), linked.clone());
+        off_thread(move || state::write(&dir, &saved)).await?;
+        self.start(&linked).await
+    }
+
     /// Credencial de aparelho fica: ela vale também no Tailscale.
     pub async fn forget(&self) -> Result<(), ConnectError> {
         let _linking = self.linking.lock().await;
@@ -314,9 +348,9 @@ fn pid_file(dir: &Path, name: &str) -> PathBuf {
     dir.join(format!("{name}.pid"))
 }
 
-fn supervise_on_thread(frpc: Spec, caddy: Spec, live: Shared, stop: watch::Receiver<bool>, bound: watch::Receiver<bool>) {
+fn supervise_on_thread(frpc: Spec, caddy: Spec, site: Option<GuestSite>, live: Shared, stop: watch::Receiver<bool>, bound: watch::Receiver<bool>) {
     let panicked = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-        Ok(runtime) => std::panic::catch_unwind(AssertUnwindSafe(|| runtime.block_on(supervise(frpc, caddy, live.clone(), stop, bound)))).is_err(),
+        Ok(runtime) => std::panic::catch_unwind(AssertUnwindSafe(|| runtime.block_on(supervise(frpc, caddy, site, live.clone(), stop, bound)))).is_err(),
         Err(_) => true,
     };
     let mut live = lock(&live);
@@ -328,12 +362,12 @@ fn supervise_on_thread(frpc: Spec, caddy: Spec, live: Shared, stop: watch::Recei
     }
 }
 
-async fn supervise(frpc: Spec, caddy: Spec, live: Shared, stop: watch::Receiver<bool>, bound: watch::Receiver<bool>) {
+async fn supervise(frpc: Spec, caddy: Spec, site: Option<GuestSite>, live: Shared, stop: watch::Receiver<bool>, bound: watch::Receiver<bool>) {
     let (logged, logged_rx) = watch::channel(false);
     let (site_stop, site_live) = (stop.clone(), live.clone());
     tokio::join!(
         keep(frpc, live, Some(logged), None, stop),
-        keep(caddy, site_live, None, Some(Gate { logged: logged_rx, bound }), site_stop),
+        keep(caddy, site_live, None, Some(Gate { logged: logged_rx, bound, site }), site_stop),
     );
 }
 
@@ -342,6 +376,31 @@ async fn supervise(frpc: Spec, caddy: Spec, live: Shared, stop: watch::Receiver<
 struct Gate {
     logged: watch::Receiver<bool>,
     bound: watch::Receiver<bool>,
+    site: Option<GuestSite>,
+}
+
+/// Site já publicado: o Caddyfile sai a cada subida, e sem a 8766 aberta por este servidor vai só o do dono.
+/// O Caddy não espera por ela: a entrada do dono não fica presa a uma porta que outro processo segura.
+struct GuestSite {
+    open: watch::Receiver<bool>,
+    served: bool,
+    file: PathBuf,
+    owner_only: String,
+    both: String,
+}
+
+impl GuestSite {
+    fn write(&mut self) -> Result<(), ConnectError> {
+        self.served = *self.open.borrow();
+        state::write_private(&self.file, if self.served { self.both.as_bytes() } else { self.owner_only.as_bytes() })
+    }
+
+    /// Resolve uma vez só: com o servidor de pé a 8766 não fecha, e o Caddy seguinte já sobe com o site.
+    async fn until_missing(&mut self) {
+        if self.served || self.open.wait_for(|on| *on).await.is_err() {
+            std::future::pending().await
+        }
+    }
 }
 
 impl Gate {
@@ -370,9 +429,17 @@ async fn until_port_lost(bound: Option<&mut watch::Receiver<bool>>) {
     }
 }
 
+async fn until_site_missing(site: Option<&mut GuestSite>) {
+    match site {
+        Some(site) => site.until_missing().await,
+        None => std::future::pending().await,
+    }
+}
+
 enum Ended {
     Stopped,
     PortLost,
+    SiteOpened,
     Exited(Option<i32>),
     Failed,
 }
@@ -382,7 +449,17 @@ async fn keep(spec: Spec, live: Shared, logged: Option<watch::Sender<bool>>, mut
         if let Some(gate) = &mut gate && !gate.opened(&mut stop).await {
             return;
         }
-        let ended = run_once(&spec, &live, logged.as_ref(), gate.as_mut().map(|gate| &mut gate.bound), &mut stop).await;
+        let (bound, mut site) = match gate.as_mut() {
+            Some(Gate { bound, site, .. }) => (Some(bound), site.as_mut()),
+            None => (None, None),
+        };
+        let ended = match site.as_mut().map_or(Ok(()), |site| site.write()) {
+            Ok(()) => run_once(&spec, &live, logged.as_ref(), bound, site, &mut stop).await,
+            Err(error) => {
+                tracing::warn!(code = error.code, child = spec.name, "filho do Connect sem configuração: {}", error.msg);
+                Ended::Failed
+            }
+        };
         // O próximo Caddy espera um login novo; o que está de pé fica, porque cada subida custa validação.
         if let Some(logged) = &logged {
             logged.send_replace(false);
@@ -393,7 +470,7 @@ async fn keep(spec: Spec, live: Shared, logged: Option<watch::Sender<bool>>, mut
             child.running = false;
             let exit = match ended {
                 Ended::Stopped => return,
-                Ended::PortLost => continue,
+                Ended::PortLost | Ended::SiteOpened => continue,
                 Ended::Exited(code) => code,
                 Ended::Failed => None,
             };
@@ -411,7 +488,7 @@ async fn keep(spec: Spec, live: Shared, logged: Option<watch::Sender<bool>>, mut
 }
 
 async fn run_once(spec: &Spec, live: &Shared, logged: Option<&watch::Sender<bool>>, bound: Option<&mut watch::Receiver<bool>>,
-    stop: &mut watch::Receiver<bool>) -> Ended {
+    site: Option<&mut GuestSite>, stop: &mut watch::Receiver<bool>) -> Ended {
     let (mut child, mut tree, mut offset) = match spawn_child(spec) {
         Ok(started) => started,
         Err(cause) => {
@@ -426,6 +503,8 @@ async fn run_once(spec: &Spec, live: &Shared, logged: Option<&watch::Sender<bool
     let mut tick = tokio::time::interval(TICK);
     let lost = until_port_lost(bound);
     tokio::pin!(lost);
+    let missing = until_site_missing(site);
+    tokio::pin!(missing);
     loop {
         tokio::select! {
             status = child.wait() => return match status {
@@ -443,6 +522,11 @@ async fn run_once(spec: &Spec, live: &Shared, logged: Option<&watch::Sender<bool
                 tracing::warn!(code = "connect_port_lost", child = spec.name, "a entrada do Connect saiu deste servidor; filho parado");
                 stop_child(spec.name, &mut child, &mut tree).await;
                 return Ended::PortLost;
+            }
+            () = &mut missing => {
+                tracing::info!(code = "connect_guest_site_opened", child = spec.name, "a porta do convidado abriu; filho volta com o site");
+                stop_child(spec.name, &mut child, &mut tree).await;
+                return Ended::SiteOpened;
             }
             _ = tick.tick() => {
                 if waiting && let Some(logged) = logged {

@@ -40,6 +40,9 @@ pub struct Linked {
     pub frps_token: String,
     /// Base64, como veio do serviço.
     pub service_public_key: String,
+    /// O primeiro convite já pediu o site do convidado. Fica: cada host gasta um certificado do limite semanal.
+    #[serde(default)]
+    pub guest_published: bool,
 }
 
 impl Linked {
@@ -216,6 +219,7 @@ pub async fn register(request: &LinkRequest) -> Result<Linked, ConnectError> {
         frps_addr: machine.frps_addr,
         frps_token: machine.frps_token,
         service_public_key: machine.service_public_key,
+        guest_published: false,
     };
     linked.validate()?;
     Ok(linked)

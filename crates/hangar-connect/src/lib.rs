@@ -14,6 +14,7 @@ pub mod state;
 pub mod supervisor;
 
 pub const CONNECT_PORT: u16 = 8768;
+pub const GUEST_PORT: u16 = 8766;
 
 /// Falha com código: vira resposta HTTP, e o `msg` aparece em `error` de `GET /api/connect`.
 #[derive(Clone, Debug)]

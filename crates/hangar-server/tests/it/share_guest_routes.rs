@@ -67,6 +67,7 @@ fn env() -> Env {
         lives: Lives::new(Arc::new(FakeLife), facts),
         tailscale: ts.clone(),
         tunnel: Default::default(),
+        connect: None,
     });
     Env { _dir: dir, ts, clock, share }
 }

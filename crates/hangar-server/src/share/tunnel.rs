@@ -6,7 +6,7 @@ use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 pub const FUNNEL_PORT: u16 = 8443;
-pub const GUEST_PORT: u16 = 8766;
+pub use crate::connect::GUEST_PORT;
 pub const FIX_OPERATOR: &str = "sudo tailscale set --operator=$USER";
 pub const FIX_FUNNEL: &str = "libere o Funnel na política da tailnet (nodeAttrs \"funnel\"): https://login.tailscale.com/admin/acls/file";
 const TIMEOUT: Duration = Duration::from_secs(20);
@@ -81,7 +81,7 @@ pub struct Prereqs { pub missing: Vec<String>, pub fix: String, pub enable_url: 
 pub struct TunnelError { pub missing: Vec<String>, pub fix: String, pub enable_url: Option<String> }
 
 impl TunnelError {
-    fn plain(fix: impl Into<String>) -> Self { Self { missing: vec![], fix: fix.into(), enable_url: None } }
+    pub(super) fn plain(fix: impl Into<String>) -> Self { Self { missing: vec![], fix: fix.into(), enable_url: None } }
 }
 
 fn or_default(text: &str, default: &str) -> String {

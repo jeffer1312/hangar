@@ -30,6 +30,7 @@ async fn probe(doh: Vec<std::net::SocketAddr>, funnel: std::net::SocketAddr, loc
         doh: doh.into_iter().map(|a| format!("http://{a}/resolve")).collect(),
         funnel_scheme: "http",
         funnel_port: funnel.port(),
+        connect_port: 1,
         local_base: format!("http://{local}"),
     }
 }
@@ -148,7 +149,7 @@ use hangar_server::share_reach::answer;
 #[tokio::test]
 async fn route_refuses_foreign_link_without_network() {
     // Probe apontando para portas fechadas: se a rota tentasse rede, o teste veria Dns/Funnel, não 400.
-    let p = Probe { doh: vec!["http://127.0.0.1:9/resolve".into()], funnel_scheme: "http", funnel_port: 9, local_base: "http://127.0.0.1:9".into() };
+    let p = Probe { doh: vec!["http://127.0.0.1:9/resolve".into()], funnel_scheme: "http", funnel_port: 9, connect_port: 9, local_base: "http://127.0.0.1:9".into() };
     let (status, body) = answer(br#"{"link":"https://outra.tail1.ts.net:8443/par/abc"}"#, Some("maq.tail1.ts.net".into()), &p,
         Duration::from_millis(10), Duration::from_millis(20)).await;
     assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
