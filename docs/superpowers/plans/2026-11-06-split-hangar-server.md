@@ -251,8 +251,13 @@ fica: nenhum dos nove módulos o usa, e ele desce com quem o usar.
   Feito junto com a Task 2 (06/11/2026, 21:22–21:31): release da branch no ar por um drop-in
   `CP_RUST_SERVER_BIN` (scripts em `~/.hangar/teste-split/`, com volta automática por timer do
   systemd); saúde com os quatro donos e a porta de convidado; o Jefferson mandou mensagem numa
-  sessão pelo celular ("parece normal"). Não exercitados em uso real: Custos, painel da
-  orquestração e convidado. O binário precisa ir com o par `hangar-server.auth.json` + `auth/`, senão o
+  sessão pelo celular ("parece normal"). Depois, as mesmas chamadas HTTP no binário do pacote e no
+  da branch (`~/.hangar/teste-split/sondar.sh`, 21:33–21:34), todas iguais: `/api/costs` (200,
+  gzip, CORS, mesmas chaves, 5.342 sessões, 97 dias, 22 modelos; o custo andou US$ 1,12 entre as
+  leituras, uso das sessões abertas), condutor da orquestração `2026-11-04-pr309` (corpo idêntico),
+  sessão inexistente (404 com o mesmo corpo e CORS), `/api/cotas?forcar=talvez` (422
+  `bool_parsing` idêntico), porta de convidado e porta do dono sem token (401 idêntico). Logo
+  depois de subir, Custos responde 202 "aquecendo" até o índice ficar pronto, como no pacote. O binário precisa ir com o par `hangar-server.auth.json` + `auth/`, senão o
   Python recusa ("sem par válido da biblioteca de autenticação").
 
 ### Task 2: Descer `auth`, `config` e os ajudantes de resposta HTTP e JSON (Fix A)
