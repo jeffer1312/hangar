@@ -557,7 +557,7 @@ ficam no servidor.
 
 ### Task 9: Extrair `hangar-omp-sync`
 
-Status: needs-info (dependências de `loops`, `nav_requests` e `push` ainda não conferidas)
+Status: ready-for-agent (corte decidido no Step 1; não espera as Tasks 4 a 7)
 
 `omp_sync` (5.003 linhas) usa: `accounts::secondary_auth::{omp_directories, OmpDirectories}` (core
 pela Task 3), `install_root::root`, `runtime::process::resolve_program` e `atomic_write` (core pela
@@ -565,9 +565,25 @@ Task 3), `session_write::json_response` e `transcript::pyjson` (core pela Task 2
 `loops::automations` (recebe `&AppState`, `loops/mod.rs:36`), `nav_requests::now`,
 `push::server_env` e `routes::AppState` (padrão da Task 5).
 
-- [ ] **Step 1: Decidir o corte de `automations`, `now` e `server_env`**: Fix A se for função pura
+- [x] **Step 1: Decidir o corte de `automations`, `now` e `server_env`**: Fix A se for função pura
   ou leitura de caminho; Fix B (trait ou função no estado) se ler o `AppState`.
-- [ ] **Step 2: Commit de corte.**
+  Decidido (07/11/2026, conferido no código): o `AppState` só entra em `Service::start` e no
+  `serve` (que não o usa). `start` fica no servidor e chama `Service::launch(env, home,
+  claude_base, template, allowed)` do crate: `push::server_env()`, os dois caminhos da conta, o
+  modelo de contexto (`install_root::root`, saindo de `context_template`) e o fecho `allowed`
+  (`loops::automations` + `diag.report`) são montados pelo servidor (Fix B). `serve` perde o
+  parâmetro do estado. Fix A: `nav_requests::now` → core (cópia de `state::monitor::wall_now`,
+  `queue_feed::wall_now` e `list/bridge.rs:287`, que ficam), `runtime::process::resolve_program`
+  → `core::process`, `list::links::without_verbatim` (só testes) → `core::fs`. `mechanism_tests.rs`
+  monta `AppState` e roteador: fica no servidor. Com isso a Task 9 não depende da Task 5 nem do
+  `install_root`.
+- [x] **Step 2: Commit de corte.**
+  Feito: `fs::without_verbatim`, `process::resolve_program` e `clock::wall_now` (novo) no core;
+  `nav_requests.rs` intocado (a `connect-rust` o reescreve), então `nav_requests::now` segue como
+  cópia. `omp_sync/host.rs` guarda `start` (monta env, caminhos, modelo e o fecho `allowed`) e
+  `serve`, mais os testes `op099` (monta `AppState`) e o de `install_root` do `op080`; o
+  `routes.rs` muda uma linha. Provas: `check -p hangar-server --all-targets` limpo;
+  `test -p hangar-core` 17/17; servidor `omp_sync`/`list::links`/`runtime::process` 167 ok.
 - [ ] **Step 3: Mover `omp_sync/`** para `crates/hangar-omp-sync/`.
 - [ ] **Step 4: Provas comuns** (quando autorizadas).
 - [ ] **Step 5: Uso real — verificação manual** sincronização omp: plugins e contexto reconciliados numa sessão omp.

@@ -248,7 +248,7 @@ fn op082_atomic_json_preserves_unicode_newline_old_file_and_cleans_failed_tempor
     );
     let before = fs::read(&target).unwrap();
     let seen = std::cell::Cell::new(false);
-    let failure = crate::runtime::queue::atomic_write_inspected(&target, b"new", |file| {
+    let failure = hangar_core::fs::atomic_write_inspected(&target, b"new", |file| {
         seen.set(true);
         assert_eq!(file.metadata()?.len(), 0);
         assert_eq!(
@@ -437,66 +437,6 @@ async fn op087_replay_rejects_subprocesses_with_host_git_environment() {
         result.is_err(),
         "o replay ignorou o ambiente Git hostil e produziu um falso GREEN"
     );
-}
-
-#[tokio::test]
-async fn op099_public_status_requires_owner_token_and_returns_the_published_snapshot() {
-    let tmp = tempfile::tempdir().unwrap();
-    let home = tmp.path();
-    let config = crate::config::Config::from_lookup(|key| match key {
-        "HANGAR_SERVER_LISTEN" => Some("127.0.0.1:18765".into()),
-        "HANGAR_SERVER_UPSTREAM" => Some("127.0.0.1:1".into()),
-        "HANGAR_INTERNAL_SECRET" => Some("fixture-internal".into()),
-        "CP_AUTH_TOKEN" => Some("fixture-owner".into()),
-        _ => None,
-    })
-    .unwrap();
-    let st = Arc::new(crate::routes::AppState::new(config));
-    let sync = Synchronizer::new(
-        home.into(),
-        home.join(".claude"),
-        BTreeMap::new(),
-        Arc::new(ForbiddenRunner),
-    );
-    let service = Service::new(sync, false, 300., Arc::new(|| Ok(true))).unwrap();
-    let expected = service.status();
-    assert!(st.omp_sync.set(service).is_ok());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let (stop, done) = tokio::sync::oneshot::channel::<()>();
-    let task = tokio::spawn(async move {
-        axum::serve(
-            listener,
-            crate::routes::router(st).into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .with_graceful_shutdown(async {
-            let _ = done.await;
-        })
-        .await
-        .unwrap();
-    });
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(Duration::from_secs(3))
-        .build()
-        .unwrap();
-    for token in [None, Some("invalid"), Some("fixture-owner")] {
-        let mut request = client
-            .get(format!("http://{address}/api/omp/plugin-sync"))
-            .header("x-forwarded-for", "198.51.100.96");
-        if let Some(token) = token {
-            request = request.bearer_auth(token)
-        }
-        let response = request.send().await.unwrap();
-        if token == Some("fixture-owner") {
-            assert_eq!(response.status(), 200);
-            assert_eq!(response.json::<Value>().await.unwrap(), expected)
-        } else {
-            assert_eq!(response.status(), 401);
-        }
-    }
-    let _ = stop.send(());
-    task.await.unwrap();
 }
 
 #[test]

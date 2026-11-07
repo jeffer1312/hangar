@@ -48,17 +48,7 @@ pub fn resolve_lenient(path: &Path) -> PathBuf {
     normpath(&abs)
 }
 
-/// O `canonicalize` do Windows devolve `\\?\C:\...`; o Python escreve `C:\...`, e a conta da sessão
-/// (`claude:<pasta>`) precisa bater letra a letra com o id da credencial que ele monta.
-pub(crate) fn without_verbatim(path: PathBuf) -> PathBuf {
-    if !cfg!(windows) { return path; }
-    path.to_str().and_then(verbatim_stripped).map_or(path, PathBuf::from)
-}
-
-fn verbatim_stripped(text: &str) -> Option<String> {
-    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") { return Some(format!(r"\\{rest}")); }
-    text.strip_prefix(r"\\?\").filter(|rest| rest.as_bytes().get(1) == Some(&b':')).map(str::to_owned)
-}
+pub(crate) use hangar_core::fs::without_verbatim;
 
 /// Nome do sidecar de vínculo (mantém o ponto, ao contrário do da sessão).
 fn link_file(dir: &Path, name: &str) -> PathBuf {
@@ -817,15 +807,6 @@ mod tests {
         // Aspa sem par não casa, como o `\1` do Python.
         assert_eq!(paths("cd \"/x y\""), Vec::<String>::new());
         assert_eq!(paths("echo cd /nao"), Vec::<String>::new());
-    }
-
-    #[test]
-    fn verbatim_prefix_is_written_like_python() {
-        assert_eq!(verbatim_stripped(r"\\?\C:\Users\u\.claude-x").as_deref(), Some(r"C:\Users\u\.claude-x"));
-        assert_eq!(verbatim_stripped(r"\\?\UNC\srv\share\d").as_deref(), Some(r"\\srv\share\d"));
-        // Volume sem letra não tem forma curta: fica como veio.
-        assert_eq!(verbatim_stripped(r"\\?\Volume{abc}\d"), None);
-        assert_eq!(verbatim_stripped(r"C:\Users\u"), None);
     }
 
     #[cfg(windows)]
