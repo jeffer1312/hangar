@@ -121,12 +121,24 @@ describe('401 com credencial de aparelho', () => {
     expect(useServers.getState().servers).toHaveLength(1);
   });
 
-  test('depois da volta, 401 da própria senha segue removendo como hoje', async () => {
+  test('senha guardada também recusada desliga com aviso, sem apagar, e uma lista boa religa', async () => {
     await loadWith(upgraded);
     useServers.getState().markInvalid(device.id, 'device-token');
     useServers.getState().markInvalid(device.id, 'owner-password');
-    expect(useServers.getState().servers).toHaveLength(0);
+
+    expect(useServers.getState().servers).toHaveLength(1);
+    expect(useServers.getState().servers[0]).toMatchObject({ disabled: true, connectOff: true, token: 'owner-password' });
     expect(useServers.getState().aviso).toEqual({ tipo: 'token', label: device.label });
+
+    useServers.getState().reactivateDevice(device.id);
+    expect(useServers.getState().servers[0].disabled).toBe(false);
+  });
+
+  test('401 de senha sem connectOff segue removendo como hoje', async () => {
+    vault.set(VAULT_KEY, JSON.stringify(SAVED));
+    await useServers.getState().load();
+    useServers.getState().markInvalid(SAVED_SERVER.id, SAVED_SERVER.token);
+    expect(useServers.getState().servers).toHaveLength(0);
   });
 
   test('sem senha guardada fica desligada com aviso, nunca some, e uma lista boa a religa', async () => {
@@ -149,6 +161,29 @@ describe('401 com credencial de aparelho', () => {
     expect(useServers.getState().activeId).toBe('other');
   });
 
+  test('401 atrasado sem token depois de passar o foco não apaga a máquina que o recebeu', async () => {
+    const other = { ...SAVED_SERVER, id: 'other', baseUrl: 'http://10.0.0.3:8765' };
+    vault.set(VAULT_KEY, JSON.stringify({ servers: [device, other], activeId: device.id }));
+    await useServers.getState().load();
+
+    useServers.getState().markInvalid(device.id, 'device-token');
+    useServers.getState().markInvalid(useServers.getState().activeId!);
+
+    expect(useServers.getState().servers.map((s) => s.id)).toEqual([device.id, 'other']);
+    expect(useServers.getState().activeId).toBe('other');
+  });
+
+  test('o foco que recebeu a máquina ainda responde por um 401 com o próprio token', async () => {
+    const other = { ...SAVED_SERVER, id: 'other', baseUrl: 'http://10.0.0.3:8765' };
+    vault.set(VAULT_KEY, JSON.stringify({ servers: [device, other], activeId: device.id }));
+    await useServers.getState().load();
+
+    useServers.getState().markInvalid(device.id, 'device-token');
+    useServers.getState().markInvalid('other', other.token);
+
+    expect(useServers.getState().servers.map((s) => s.id)).toEqual([device.id]);
+  });
+
   test('reativar não mexe em máquina desligada por outro motivo', async () => {
     vault.set(VAULT_KEY, JSON.stringify({ servers: [{ ...SAVED_SERVER, disabled: true }], activeId: SAVED_SERVER.id }));
     await useServers.getState().load();
@@ -160,6 +195,7 @@ describe('401 com credencial de aparelho', () => {
     { name: 'de aparelho', saved: upgraded },
     { name: 'desligada', saved: { ...device, disabled: true } },
     { name: 'com connectOff', saved: { ...SAVED_SERVER, connectOff: true } },
+    { name: 'desligada com connectOff', saved: { ...SAVED_SERVER, connectOff: true, disabled: true } },
   ])('salvar outra senha no mesmo endereço limpa o que era do token anterior: $name', async ({ saved }) => {
     vault.set(VAULT_KEY, JSON.stringify({ servers: [saved], activeId: saved.id }));
     await useServers.getState().load();

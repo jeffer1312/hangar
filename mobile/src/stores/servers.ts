@@ -34,7 +34,7 @@ function isPersisted(value: unknown): value is Persisted {
 // O que vem junto da credencial de aparelho não vale para outro token.
 function withPlainToken(server: Server, token: string): Server {
   const next = { ...server, token };
-  if (server.credential === 'device') delete next.disabled;
+  if (server.credential === 'device' || server.connectOff) delete next.disabled;
   delete next.credential;
   delete next.deviceId;
   delete next.connect;
@@ -43,8 +43,8 @@ function withPlainToken(server: Server, token: string): Server {
   return next;
 }
 
-// Depois de voltar à senha, ainda chegam 401 de pedidos feitos com o token antigo, e `onUnauthorized`
-// não diz qual token foi recusado.
+// Depois de voltar à senha ou de passar o foco, ainda chegam 401 de pedidos feitos com o token
+// antigo, e `onUnauthorized` não diz qual token foi recusado.
 const REVERTED_GRACE_MS = 30_000;
 
 // Por que estes dois avisos existem: as duas formas de perder um servidor eram mudas. A gravação
@@ -105,7 +105,8 @@ export const useServers = create<ServersState>((set, get) => {
   const resolveId = (id: string) => ids.get(id) ?? id;
 
   // Nunca apaga: o 401 pode ser o Python atendendo a porta, `devices.json` ilegível ou um backup
-  // restaurado. Aparelho sem senha guardada fica desligado até uma conexão responder.
+  // restaurado. Sem senha guardada, ou com a guardada também recusada, fica desligada até uma
+  // conexão responder.
   function refuseDevice(server: Server) {
     const { ownerToken } = server;
     if (ownerToken) {
@@ -116,11 +117,14 @@ export const useServers = create<ServersState>((set, get) => {
       return;
     }
     if (server.disabled) return;
-    change((p) => {
-      const servers = p.servers.map((s) => s.id === server.id ? { ...s, disabled: true } : s);
-      const next = ownServers(servers).find((s) => !s.disabled);
-      return { ...p, servers, activeId: p.activeId === server.id && next ? next.id : p.activeId };
-    }, false);
+    const next = ownServers(get().servers).find((s) => s.id !== server.id && !s.disabled);
+    // Pedido atrasado com o token desta entrada leria a máquina que recebeu o foco como a recusada.
+    if (next && get().activeId === server.id) revertedUntil.set(next.id, Date.now() + REVERTED_GRACE_MS);
+    change((p) => ({
+      ...p,
+      servers: p.servers.map((s) => s.id === server.id ? { ...s, disabled: true } : s),
+      activeId: p.activeId === server.id && next ? next.id : p.activeId,
+    }), false);
     warn({ tipo: 'token', label: server.label });
   }
 
@@ -343,14 +347,14 @@ export const useServers = create<ServersState>((set, get) => {
     if (target?.invite) { get().markEnded(id); return; }
     const stale = rejectedToken === undefined ? Date.now() < (revertedUntil.get(id) ?? 0) : !!target && rejectedToken !== target.token;
     if (stale) return;
-    if (target?.credential === 'device') { refuseDevice(target); return; }
+    if (target?.credential === 'device' || target?.connectOff) { refuseDevice(target); return; }
     const label = target?.label ?? '';
     get().remove(id);
     warn({ tipo: 'token', label });
   },
   reactivateDevice(id) {
     const current = get().servers.find((s) => s.id === resolveId(id));
-    if (!current?.disabled || current.credential !== 'device') return;
+    if (!current?.disabled || (current.credential !== 'device' && !current.connectOff)) return;
     change((p) => ({ ...p, servers: p.servers.map((s) => s.id === current.id ? { ...s, disabled: false } : s) }), false);
   },
   ensureActive(id) {
