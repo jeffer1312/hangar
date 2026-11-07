@@ -15,6 +15,10 @@ export interface Server {
   connect?: LanInfo;
   credential?: 'owner' | 'device';
   deviceId?: string;
+  /** Senha do dono trocada pelo token de aparelho: é a volta quando o aparelho recebe 401. */
+  ownerToken?: string;
+  /** O aparelho foi recusado aqui: não promove sozinho de novo, e a revogação continua valendo. */
+  connectOff?: boolean;
   // Saiu da lista com um chat dele aberto: toda chamada é recusada, nunca vai ao ativo.
   removed?: boolean;
   // Entrada montada só para um par externo (`reconcilePairEntries`): não é guardada nem vira seção.

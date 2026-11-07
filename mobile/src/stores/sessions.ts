@@ -398,6 +398,7 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
     httpRetryAt.delete(s.id);
     lastFailureHttp.delete(s.id);
     answered();
+    useServers.getState().reactivateDevice(s.id);
     if (!discovered) {
       discovered = true;
       machineDiscovery(s);
@@ -416,7 +417,13 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       return true;
     }
     if (!s.invite && status === 401) {
-      useServers.getState().markInvalid(s.id);
+      useServers.getState().markInvalid(s.id, s.token);
+      // Mesmo token depois do 401 é aparelho desligado: espera Reconectar ou a volta ao app, sem insistir.
+      if (useServers.getState().servers.some((server) => server.id === s.id && server.token === s.token)) {
+        refused.set(s.id, status);
+        slots.set(s.id, { sessions: null, error: refusedError(status) });
+        recompute(set);
+      }
       return true;
     }
     if (status === 403) {

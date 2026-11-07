@@ -220,9 +220,60 @@ describe('credencial de aparelho e rota do Connect', () => {
     created[1].trigger('sessions', '[]');
     await vi.waitFor(() => expect(useServers.getState().servers[0].connect).toEqual({ url: connectUrl, id: 'home' }));
 
-    expect(useServers.getState().servers[0]).toMatchObject({ token: 'device-token', deviceId: 'dev1', remote });
+    expect(useServers.getState().servers[0]).toMatchObject({ token: 'device-token', deviceId: 'dev1', ownerToken: 'owner-password', remote });
     expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/api/connect/devices/self'))).toHaveLength(1);
     expect(created).toHaveLength(2);
+    release();
+  });
+
+  // Python atendendo a 8765, `devices.json` ilegível ou revogação: a lista responde 401 ao aparelho.
+  function deviceRefused(saved: typeof server & { credential: 'device'; deviceId: string; ownerToken?: string }) {
+    machine(connectUrl);
+    useServers.setState({ servers: [saved], activeId: saved.id });
+    const answer = fetchMock.getMockImplementation()!;
+    const state = { refusing: true };
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const auth = new Headers(init?.headers).get('Authorization');
+      return state.refusing && new URL(url).pathname === '/api/sessions' && auth === 'Bearer device-token' ? response({}, 401) : answer(url, init);
+    });
+    return state;
+  }
+  const device = { ...server, token: 'device-token', credential: 'device' as const, deviceId: 'dev1' };
+
+  test('401 do aparelho volta à senha, reconecta e não promove de novo', async () => {
+    deviceRefused({ ...device, ownerToken: 'owner-password' });
+    const release = useSessions.getState().retain();
+    await vi.waitFor(() => expect(useServers.getState().servers[0]?.token).toBe('owner-password'));
+    await vi.waitFor(() => expect(created).toHaveLength(1));
+    created[0].trigger('sessions', '[]');
+    await settle();
+    await settle();
+
+    expect(useServers.getState().servers).toHaveLength(1);
+    expect(useServers.getState().servers[0]).toMatchObject({ connectOff: true, remote });
+    expect(useServers.getState().servers[0].credential).toBeUndefined();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/api/connect/devices/self'))).toBe(false);
+    release();
+  });
+
+  test('aparelho sem senha guardada fica desligado, não insiste, e Reconectar o religa', async () => {
+    const state = deviceRefused(device);
+    const release = useSessions.getState().retain();
+    await vi.waitFor(() => expect(useServers.getState().servers[0]?.disabled).toBe(true));
+    await settle();
+
+    expect(useServers.getState().servers).toHaveLength(1);
+    expect(useServers.getState().aviso).toEqual({ tipo: 'token', label: server.label });
+    expect(created).toHaveLength(0);
+    useSessions.getState().refreshServers();
+    await settle();
+    expect(created).toHaveLength(0);
+
+    state.refusing = false;
+    useSessions.getState().reconnect();
+    await vi.waitFor(() => expect(created).toHaveLength(1));
+    created[0].trigger('sessions', '[]');
+    expect(useServers.getState().servers[0].disabled).toBe(false);
     release();
   });
 

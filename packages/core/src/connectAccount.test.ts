@@ -40,11 +40,12 @@ async function elapse(ms: number, step = 500) {
 }
 
 const onUnauthorized = vi.fn();
+const env = (secureRandom?: () => string | null) => configureApi({ getBaseUrl: () => '', getToken: () => null, onUnauthorized, origin: null,
+  createEventSource: () => { throw new Error('sem SSE'); }, secureRandom });
 beforeEach(() => {
   _resetRotasForTests();
   onUnauthorized.mockReset();
-  configureApi({ getBaseUrl: () => '', getToken: () => null, onUnauthorized, origin: null,
-    createEventSource: () => { throw new Error('sem SSE'); } });
+  env();
 });
 afterEach(() => {
   _resetApiEnvForTests();
@@ -66,6 +67,14 @@ describe('conta do Connect', () => {
     const error: unknown = await signIn(SERVICE, 'acme', 'senha').catch((e: unknown) => e);
     expect(error).toMatchObject({ status: 401 });
     expect(String(error)).not.toContain('senha');
+  });
+
+  it('não manda a senha da conta a serviço em http, exceto loopback', async () => {
+    const calls = network(() => json({ token: 'account-token' }));
+    await expect(signIn('http://connect.hangar.dev.br', 'acme', 'senha')).rejects.toMatchObject({ code: 'connect_service_insecure' });
+    expect(calls).toHaveLength(0);
+    await signIn('http://127.0.0.1:9000', 'acme', 'senha');
+    expect(calls).toHaveLength(1);
   });
 
   it('lista as máquinas com o token da conta', async () => {
@@ -161,10 +170,28 @@ describe('addMachine', () => {
     expect(await adding).toEqual({ id: 'm1', label: 'pc1', baseUrl: MACHINE_URL, token: 'device-token', credential: 'device', deviceId: 'dev1' });
   });
 
-  it('recusa endereço de máquina fora de https antes de mandar o segredo', async () => {
-    const calls = network(() => json({ url: 'http://pc1.acme.hangar.dev.br', ticket: 't', signature: 's' }));
+  it.each(['http://pc1.acme.hangar.dev.br', 'https://outra.acme.hangar.dev.br'])('recusa %s antes de mandar o segredo', async (url) => {
+    const calls = network(() => json({ url, ticket: 't', signature: 's' }));
     await expect(addMachine(session, machine, 'Pixel', () => {})).rejects.toMatchObject({ code: 'connect_response_invalid' });
     expect(calls).toHaveLength(1);
+  });
+
+  it('sem crypto usa o gerador do ApiEnv', async () => {
+    vi.stubGlobal('crypto', undefined);
+    env(() => 'f'.repeat(64));
+    const calls = enrollment([{ status: 'approved', token: 'device-token' }]);
+    const adding = addMachine(session, machine, 'Pixel', () => {});
+    await elapse(6000);
+    await adding;
+    expect(calls.find((call) => call.url.pathname === '/api/connect/redeem')?.body?.secret).toBe('f'.repeat(64));
+  });
+
+  it.each([{ name: 'sem gerador', generator: undefined }, { name: 'gerador vazio', generator: () => null }])('sem crypto e $name falha antes de qualquer pedido', async ({ generator }) => {
+    vi.stubGlobal('crypto', undefined);
+    env(generator);
+    const calls = enrollment([]);
+    await expect(addMachine(session, machine, 'Pixel', () => {})).rejects.toMatchObject({ code: 'connect_secure_random_unavailable' });
+    expect(calls).toHaveLength(0);
   });
 });
 
@@ -178,7 +205,7 @@ describe('upgradeToDevice', () => {
   it('upgrades to a device credential while another route works', async () => {
     const calls = machineWith(MACHINE_URL);
 
-    expect(await upgradeToDevice(owner)).toEqual({ ...owner, token: 'device-token', credential: 'device', deviceId: 'dev1' });
+    expect(await upgradeToDevice(owner)).toEqual({ ...owner, token: 'device-token', ownerToken: 'owner-password', credential: 'device', deviceId: 'dev1' });
 
     expect(enrolls(calls)).toHaveLength(1);
     expect(enrolls(calls)[0]).toMatchObject({ method: 'POST', auth: 'Bearer owner-password' });
@@ -212,7 +239,7 @@ describe('upgradeToDevice', () => {
   });
 
   it.each([
-    { credential: 'device' as const, deviceId: 'dev1' }, { invite: true }, { ephemeral: true }, { removed: true },
+    { credential: 'device' as const, deviceId: 'dev1' }, { connectOff: true }, { invite: true }, { ephemeral: true }, { removed: true },
   ])('não toca a rede em %j', async (flags) => {
     const calls = machineWith(MACHINE_URL);
     const server = { ...owner, ...flags };

@@ -1,5 +1,6 @@
 import { comTeto, getSessions, probeServerResponse } from './api';
 import { SERVIDOR_CANDIDATO } from './esfriamento';
+import { baseOf, UNCONFIRMED_BASE } from './rota';
 import type { LanInfo, Server } from './servers';
 import { tailscaleHost } from './share';
 
@@ -64,7 +65,7 @@ export function createMachineImportLink(servers: Server[]): string {
 }
 
 export type MachineImportIssue = {
-  stage: 'source_peers' | 'source_app_list' | 'peer_token' | 'saved_identity' | 'candidate' | 'invalid_item';
+  stage: 'source_peers' | 'source_app_list' | 'peer_token' | 'saved_identity' | 'candidate' | 'invalid_item' | 'device_source';
   status?: number; machine?: string; source?: string;
 };
 export type MachineImportResult = { added: Server[]; issues: MachineImportIssue[] };
@@ -117,6 +118,15 @@ export async function confirmImportedMachine(server: Server): Promise<Server> {
   return { ...server, label: lan.id || server.label, lan };
 }
 
+// Aparelho recebe tokens mascarados e não lê o de peer. A leitura vai com a senha do dono pela rota
+// já provada, com id próprio para não mexer na rota da entrada; pelo Connect a senha é recusada.
+function importReader(source: Server): Server | null {
+  if (source.credential !== 'device') return source;
+  const base = baseOf(source);
+  if (!source.ownerToken || base === UNCONFIRMED_BASE || base === source.connect?.url) return null;
+  return { id: SERVIDOR_CANDIDATO, label: source.label, baseUrl: base, token: source.ownerToken };
+}
+
 export async function discoverMachineCandidates(sources: Server[], current: () => Server[]): Promise<{ candidates: Server[]; issues: MachineImportIssue[] }> {
   const candidates: Server[] = [];
   const issues: MachineImportIssue[] = [];
@@ -129,10 +139,15 @@ export async function discoverMachineCandidates(sources: Server[], current: () =
   const peerJobs: { source: Server; id: string; baseUrl: string }[] = [];
   // Só estas fontes participam: candidatas novas nunca entram nesta rodada.
   await Promise.all(sources.filter(isOwnMachine).map(async (source) => {
+    const reader = importReader(source);
+    if (!reader) {
+      issues.push(machineImportIssue('device_source', undefined, source.baseUrl));
+      return;
+    }
     await Promise.all([
       (async () => {
         try {
-          const peers = await readImportJson(source, '/api/peers');
+          const peers = await readImportJson(reader, '/api/peers');
           if (!Array.isArray(peers) || peers.length > MAX_MACHINES) throw invalid();
           for (const peer of peers) {
             try {
@@ -141,25 +156,26 @@ export async function discoverMachineCandidates(sources: Server[], current: () =
               if (!text(peer.id, 128) || /\s/.test(peer.id) || typeof peer.base_url !== 'string'
                 || (peer.enabled !== undefined && typeof peer.enabled !== 'boolean')) throw invalid();
               const baseUrl = normalizeMachineUrl(peer.base_url);
-              // Aparelho não lê o token de peer: a máquina recusa, e cada um viraria um aviso falso.
-              if (!isLocalMachineUrl(baseUrl) && source.credential !== 'device') peerJobs.push({ source, id: peer.id, baseUrl });
+              if (!isLocalMachineUrl(baseUrl)) peerJobs.push({ source: reader, id: peer.id, baseUrl });
             } catch { issues.push(machineImportIssue('invalid_item', undefined, source.baseUrl)); }
           }
         } catch (error) { issues.push(machineImportIssue('source_peers', error, source.baseUrl)); }
       })(),
       (async () => {
         try {
-          const list = await readImportJson(source, '/api/peers/app-list');
+          const list = await readImportJson(reader, '/api/peers/app-list');
           if (!object(list) || typeof list.rev !== 'string' || !Array.isArray(list.servers) || list.servers.length > MAX_MACHINES) throw invalid();
+          let masked = false;
           for (const item of list.servers) {
             try {
               if (!object(item)) throw invalid();
-              // Aparelho recebe a lista com o token mascarado: guardar isso daria 401 e removeria a máquina.
-              if (typeof item.token === 'string' && item.token.includes('•')) continue;
+              // Token mascarado é credencial de aparelho sem marca: guardá-lo daria uma máquina que só responde 401.
+              if (typeof item.token === 'string' && item.token.includes('•')) { masked = true; continue; }
               const server = candidate({ ...item, baseUrl: item.address });
               include(server);
             } catch { issues.push(machineImportIssue('invalid_item', undefined, source.baseUrl)); }
           }
+          if (masked) issues.push(machineImportIssue('device_source', undefined, source.baseUrl));
         } catch (error) { issues.push(machineImportIssue('source_app_list', error, source.baseUrl)); }
       })(),
     ]);

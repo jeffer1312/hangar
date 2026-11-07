@@ -169,6 +169,9 @@ export async function ownerAddress(s: Server, signal: AbortSignal): Promise<stri
   return normalizeUrl(address.url);
 }
 
+// Token de aparelho é deste celular: gravado no `peers.json` de outra máquina, viraria credencial dela.
+const peerSecret = (server: Server) => (server.credential === 'device' ? server.ownerToken : server.token);
+
 export async function registerBoth(owner: Server, remote: Server, remoteId: string, signal: AbortSignal): Promise<{ directions: Directions; partial: string }> {
   const identity = await readIdentifier(owner, signal);
   if (!identity.identificador || !remoteId) throw new Error(m.mobile_machines_identifier_required());
@@ -178,10 +181,14 @@ export async function registerBoth(owner: Server, remote: Server, remoteId: stri
     throw new Error(m.mobile_machines_other_machine({ expected: remoteId, actual: confirmed.identificador || '—' }));
   }
   const url = await ownerAddress(owner, signal);
-  await registerPeer(owner, remoteId, remote.baseUrl, remote.token, signal);
-  let partial = '';
-  try { await registerPeer(remote, identity.identificador, url, owner.token, signal); }
-  catch (error) { ensureActive(signal); partial = reason(error); }
+  const remoteSecret = peerSecret(remote);
+  const ownerSecret = peerSecret(owner);
+  if (remoteSecret) await registerPeer(owner, remoteId, remote.baseUrl, remoteSecret, signal);
+  let partial = remoteSecret && ownerSecret ? '' : m.mobile_machines_peer_no_owner_password();
+  if (ownerSecret) {
+    try { await registerPeer(remote, identity.identificador, url, ownerSecret, signal); }
+    catch (error) { ensureActive(signal); partial = reason(error); }
+  }
   const directions = await measureDirections(owner, { id: remoteId, base_url: remote.baseUrl }, remote, signal, { id: identity.identificador, url });
   if (!partial && (directions.forward?.estado !== 'ok' || directions.back?.estado !== 'ok')) {
     partial = directions.forwardError || directions.backError || [directions.forward?.estado, directions.back?.estado].filter(Boolean).join(' · ');

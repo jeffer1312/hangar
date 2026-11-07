@@ -1,11 +1,12 @@
-// Conta do Connect e entrada de aparelho. O serviço só apresenta aparelho e máquina: o `secret` vai
-// direto à máquina, e ao serviço só o hash dele.
+// Conta do Connect e entrada de aparelho. O `secret` vai direto à máquina e ao serviço só o hash
+// dele: isso protege de um serviço honesto que vaze. Contra um desonesto, a barreira é a aprovação
+// do dono na máquina.
 import { probeServerResponse } from './api';
 import { apiEnv } from './apiEnv';
 import { registrar as registrarDiag } from './diag';
 import { SERVIDOR_CANDIDATO } from './esfriamento';
 import { sha256Hex } from './hmac';
-import { isOwnMachine, normalizeMachineUrl, readMachineIdentity } from './machineImport';
+import { isLocalMachineUrl, isOwnMachine, normalizeMachineUrl, readMachineIdentity } from './machineImport';
 import { baseOf, readConnectUrl } from './rota';
 import type { Server } from './servers';
 
@@ -23,6 +24,8 @@ const record = (value: unknown): Record<string, unknown> => (value && typeof val
 const filled = (value: unknown): value is string => typeof value === 'string' && !!value;
 
 async function request(base: string, path: string, init: RequestInit): Promise<unknown> {
+  // A senha da conta passa por aqui: http só em loopback, que é o caso dos testes.
+  if (new URL(base).protocol !== 'https:' && !isLocalMachineUrl(base)) throw fail('connect_service_insecure');
   const response = await fetch(`${base.replace(/\/+$/, '')}${path}`, {
     ...init,
     headers: { 'Content-Type': 'application/json', ...init.headers },
@@ -58,14 +61,18 @@ export async function listMachines(session: AccountSession): Promise<ConnectMach
 
 // Sem gerador seguro falha: com `Math.random` o serviço, que tem o hash, conseguiria achar o segredo.
 function newSecret(): string {
-  if (!globalThis.crypto?.getRandomValues) throw fail('connect_secure_random_unavailable');
-  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(32));
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  if (globalThis.crypto?.getRandomValues) {
+    const bytes = globalThis.crypto.getRandomValues(new Uint8Array(32));
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  const secret = apiEnv().secureRandom?.();
+  if (!secret) throw fail('connect_secure_random_unavailable');
+  return secret;
 }
 
-function machineUrl(raw: unknown): string {
+function machineUrl(raw: unknown, host: string): string {
   const url = filled(raw) ? normalizeMachineUrl(raw) : '';
-  if (!url.startsWith('https:')) throw fail('connect_response_invalid');
+  if (!url.startsWith('https:') || new URL(url).hostname !== host) throw fail('connect_response_invalid');
   return url;
 }
 
@@ -98,7 +105,7 @@ export async function addMachine(session: AccountSession, machine: ConnectMachin
   const verifier = sha256Hex(new TextEncoder().encode(secret));
   const ticket = record(await post(session.serviceUrl, `/v1/machines/${encodeURIComponent(machine.machine_id)}/devices`,
     { device_name: deviceName, verifier }, { Authorization: `Bearer ${session.token}` }));
-  const url = machineUrl(ticket.url);
+  const url = machineUrl(ticket.url, machine.host);
   const base = baseOf({ id: SERVIDOR_CANDIDATO, label: machine.name, baseUrl: url, token: '' });
   const { device_id: deviceId } = record(await post(base, '/api/connect/redeem',
     { ticket: ticket.ticket, signature: ticket.signature, secret, device_name: deviceName }));
@@ -125,7 +132,8 @@ async function enroll(server: Server): Promise<Server> {
   if (!response.ok) throw fail('connect_enroll_failed', response.status);
   const { device_id: deviceId, token } = record(await response.json());
   if (!filled(deviceId) || !filled(token)) throw fail('connect_response_invalid');
-  return { ...server, token, credential: 'device', deviceId };
+  // A senha fica guardada: 401 temporário do aparelho volta a ela em vez de perder a máquina.
+  return { ...server, ownerToken: server.token, token, credential: 'device', deviceId };
 }
 
 const upgrades = new Map<string, Promise<Server>>();
@@ -135,7 +143,7 @@ const upgrades = new Map<string, Promise<Server>>();
  * também na rede local e no Tailscale. Nunca rejeita: falha mantém a senha, e sem Connect nada muda.
  */
 export function upgradeToDevice(server: Server): Promise<Server> {
-  if (server.credential === 'device' || !isOwnMachine(server)) return Promise.resolve(server);
+  if (server.credential === 'device' || server.connectOff || !isOwnMachine(server)) return Promise.resolve(server);
   const pending = upgrades.get(server.id);
   if (pending) return pending;
   const upgrade = enroll(server).catch((error: unknown) => {
