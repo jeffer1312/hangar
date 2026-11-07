@@ -703,7 +703,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     return () => { vivo = false; };
   }, [branchOpen, newWorktree, gitFolder, active.id]);
 
-  const on =(yes: boolean) => (yes ? 'on' : 'off') as 'on' | 'off';
+  const on = (yes: boolean) => (yes ? 'on' : 'off') as 'on' | 'off';
 
   const terminalOnly = m.nova_conversa_so_terminal({ provider: providerName(provider) });
   // A mesma escolha vira pílula na conversa nova e linha no formulário completo.
