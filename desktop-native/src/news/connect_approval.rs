@@ -6,8 +6,6 @@ use gpui_kit::*;
 use super::password_vault::{CYCLE, SLIDE_STEPS, frame, schedule_repaint};
 use crate::{app, i18n::tr_shared, theme};
 
-const DEVICE: &str = "iPhone";
-const MACHINE: &str = "pc-casa";
 /// Abaixo desta largura (o cartão deitado do "Atualizar?") fica só a frase do pedido.
 const COMPACT_BELOW: f32 = 240.;
 /// Alturas fixas do palco: nada pula quando o cartão troca pelo resultado.
@@ -22,17 +20,18 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
         frame(t)
     };
     let compact = width < px(COMPACT_BELOW);
+    let (device, machine) = (tr_shared("news_connect_sample_device", &[]), tr_shared("news_connect_sample_machine", &[]));
     let line = |text: String| div().text_xs().text_color(theme::text()).whitespace_normal().child(text);
     let shown = card.map(|step| {
         let content = if compact {
-            line(tr_shared("connect_device_pending", &[("machine", MACHINE)])).into_any_element()
+            line(tr_shared("connect_device_pending", &[("machine", &machine)])).into_any_element()
         } else {
             // Aprovar apertado = o cartão real enviando a resposta.
-            app::device_card("news", DEVICE, MACHINE, pressed, None, false, |_, _, _| {}, |_, _, _| {}).mx_0().my_0().into_any_element()
+            app::device_card("news", &device, &machine, pressed, None, false, |_, _, _| {}, |_, _, _| {}).mx_0().my_0().into_any_element()
         };
         div().relative().top(px(((SLIDE_STEPS - step) * 4) as f32)).opacity(0.25 + 0.25 * step as f32).child(content)
     });
-    let result = resolved.then(|| line(tr_shared("connect_news_result", &[("device", DEVICE), ("machine", MACHINE)])));
+    let result = resolved.then(|| line(tr_shared("connect_news_result", &[("device", &device), ("machine", &machine)])));
     let stage = div().h(px(if compact { COMPACT_HEIGHT } else { STAGE_HEIGHT })).flex().flex_col().justify_center()
         .children(shown).children(result);
     div().id("news-connect-approval").w(width).p(px(if compact { 8. } else { 14. })).rounded(px(9.)).border_1().border_color(theme::border().alpha(0.06))
