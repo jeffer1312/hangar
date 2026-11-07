@@ -258,12 +258,14 @@ impl Service {
         }
         Ok(value.into())
     }
-    /// Apagar o par revoga o aparelho emitido para ele. Quem renomeia grava a entrada nova antes de
-    /// apagar a velha: aparelho que outra entrada ainda usa fica.
+    /// Apagar o par revoga o aparelho emitido para ele. Quem renomeia grava a entrada nova e apaga a
+    /// velha com o próprio aparelho: só esse caso poupa, senão uma entrada de sombra salvaria quem o
+    /// dono removeu.
     fn remove_peer(&self, id: &str) -> Result<Value, Error> {
         let data = self.store.tolerant();
-        let device = data.get(id).and_then(|entry| entry["connect_return_device"].as_str())
-            .filter(|device| !data.iter().any(|(key, entry)| key != id && entry["connect_return_device"].as_str() == Some(*device)));
+        let renaming = |device: &str| self.device_caller.as_deref() == Some(device)
+            && data.iter().any(|(key, entry)| key != id && entry["connect_return_device"].as_str() == Some(device));
+        let device = data.get(id).and_then(|entry| entry["connect_return_device"].as_str()).filter(|device| !renaming(*device));
         if let (Some(device), Some(devices)) = (device, &self.connect_devices) {
             match devices.remove(device) {
                 Ok(()) | Err(crate::connect::devices::Refusal::Unknown) => {}

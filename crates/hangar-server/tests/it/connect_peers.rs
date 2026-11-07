@@ -382,6 +382,36 @@ async fn renaming_keeps_the_credential_and_removing_a_peer_revokes_it() {
     assert!(w.a.store.verify(to_a.as_bytes()).is_none(), "par apagado perde o que recebeu");
 }
 
+/// Quem guarda o token grava uma entrada de sombra com o próprio aparelho: o dono apaga e ele cai igual.
+#[tokio::test]
+async fn a_shadow_entry_does_not_save_a_device_from_removal() {
+    let w = linked_pair().await;
+    let held = peers_of(&w.b)["pc-a"]["token"].as_str().unwrap().to_owned();
+    let shadow = client().post(format!("http://{}/api/peers", w.a.connect)).bearer_auth(&held).header("content-type", "application/json")
+        .body(json!({"id": "sombra", "base_url": "https://x.test", "token": "t", "connect": true}).to_string()).send().await.unwrap();
+    assert_eq!(shadow.status(), 200);
+    assert_eq!(peers_of(&w.a)["sombra"]["connect_return_device"], peers_of(&w.a)["pc-b"]["connect_return_device"]);
+    let removed = client().delete(format!("http://{}/api/peers/pc-b", w.a.main)).bearer_auth(OWNER).send().await.unwrap();
+    assert_eq!(removed.status(), 200);
+    assert!(w.a.store.verify(held.as_bytes()).is_none());
+}
+
+/// Dois anúncios juntos: a confirmação do primeiro não promove o token do segundo.
+#[test]
+fn settling_an_older_rotation_changes_nothing() {
+    let dir = crate::physical_tempdir();
+    let store = Store::new(dir.path().to_path_buf(), None);
+    let (id, old) = store.issue_local("pc-b").unwrap();
+    let first = store.rotate(&id).unwrap();
+    let second = store.rotate(&id).unwrap();
+    store.settle(&id, &first).unwrap();
+    assert!(store.verify(old.as_bytes()).is_some());
+    assert!(store.verify(first.as_bytes()).is_none());
+    store.settle(&id, &second).unwrap();
+    assert!(store.verify(old.as_bytes()).is_none());
+    assert!(store.verify(second.as_bytes()).is_some());
+}
+
 #[tokio::test]
 async fn link_refuses_a_key_already_on_another_address_before_the_card() {
     let w = world().await;
@@ -428,16 +458,19 @@ async fn names_that_cannot_work_are_refused_before_the_ticket() {
 }
 
 #[tokio::test]
-async fn a_device_only_checks_a_peer_on_its_own_host() {
+async fn a_device_only_checks_a_peer_on_its_own_origin() {
     let w = world().await;
     let (seen, url) = recorder().await;
     let (_, device) = w.a.store.issue_local("aparelho").unwrap();
-    write_peers(&w.a, &json!({"longe": {"base_url": "https://longe.tail.ts.net", "token": "token-de-longe"}, "perto": {"base_url": url, "token": "token-de-perto"}}));
+    write_peers(&w.a, &json!({"longe": {"base_url": "https://longe.tail.ts.net", "token": "token-de-longe"}, "perto": {"base_url": url, "token": "token-de-perto"},
+        "cifrado": {"base_url": url.replace("http://", "https://"), "token": "token-em-https"}, "porta": {"base_url": "http://127.0.0.1:1", "token": "token-de-outra-porta"}}));
     let check = |id: &str, token: &str| client().get(format!("http://{}/api/peers/check?url={url}&id={id}", w.a.main)).bearer_auth(token.to_owned());
-    assert_eq!(check("longe", &device).send().await.unwrap().status(), 200);
-    assert_eq!(check("perto", &device).send().await.unwrap().status(), 200);
+    for id in ["longe", "cifrado", "porta", "perto"] {
+        assert_eq!(check(id, &device).send().await.unwrap().status(), 200, "{id}");
+    }
     assert_eq!(check("longe", OWNER).send().await.unwrap().status(), 200);
-    assert_eq!(seen.lock().unwrap().clone(), vec![json!(""), json!("Bearer token-de-perto"), json!("Bearer token-de-longe")]);
+    assert_eq!(seen.lock().unwrap().clone(), vec![json!(""), json!(""), json!(""), json!("Bearer token-de-perto"), json!("Bearer token-de-longe")],
+        "outro host, esquema ou porta: aparelho não leva o token");
 }
 
 /// Aparelho grava um "par" e pede o anúncio: a senha do dono iria ao endereço que ele escolheu.

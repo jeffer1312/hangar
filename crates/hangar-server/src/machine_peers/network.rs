@@ -118,9 +118,11 @@ async fn get(url: &str, path: &str, token: Option<&str>) -> Result<(u16, Value),
         serde_json::from_str(&String::from_utf8_lossy(&bytes)).unwrap_or(Value::Null),
     ))
 }
-fn same_host(url: &str, base: &Value) -> bool {
-    let host = super::store::host(url);
-    !host.is_empty() && base.as_str().is_some_and(|base| super::store::host(base) == host)
+/// Esquema, host e porta: `http://` no host certo levaria o token em claro.
+fn same_origin(url: &str, base: &Value) -> bool {
+    let origin = |raw: &str| reqwest::Url::parse(raw).ok().map(|url| url.origin());
+    let (Some(url), Some(base)) = (origin(url), base.as_str().and_then(origin)) else { return false };
+    url == base
 }
 pub async fn check(s: &Service, url: &str, id: &str) -> Value {
     if url.is_empty() {
@@ -132,7 +134,7 @@ pub async fn check(s: &Service, url: &str, id: &str) -> Value {
         .get(id)
         .filter(|v| truthy(&v["base_url"]) && truthy(&v["token"]))
         // Aparelho não escolhe para onde vai o token de outra máquina: `/api/peers/{id}/token` já o recusa.
-        .filter(|v| s.device_caller.is_none() || same_host(url, &v["base_url"]))
+        .filter(|v| s.device_caller.is_none() || same_origin(url, &v["base_url"]))
         .and_then(|v| v["token"].as_str());
     let result = get(url, "/api/peers/identificador", token).await.map_err(|e| reason(&e));
     let ms = (start.elapsed().as_secs_f64() * 1000.0).round_ties_even() as u128;
@@ -256,17 +258,17 @@ fn through_connect(s: &Service, entry: &Value) -> bool {
     entry["connect"] == true
         || entry["base_url"].as_str().is_some_and(|url| crate::connect::peers::on_connect_host(s.connect.as_deref(), url))
 }
-/// O corpo de `POST /api/peers` para `entry` e o aparelho renovado nele, ou o motivo de não mandar
-/// nada. Pelo Connect vai um token novo do aparelho desse par: a senha do dono é recusada lá e não
-/// sai desta máquina.
-async fn announcement(s: &Service, id: &str, base: &str, entry: &Value) -> Result<(Value, Option<String>), &'static str> {
+/// O corpo de `POST /api/peers` para `entry` e o aparelho renovado nele com o token novo, ou o motivo
+/// de não mandar nada. Pelo Connect vai um token novo do aparelho desse par: a senha do dono é
+/// recusada lá e não sai desta máquina.
+async fn announcement(s: &Service, id: &str, base: &str, entry: &Value) -> Result<(Value, Option<(String, String)>), &'static str> {
     if through_connect(s, entry) {
         let (Some(link), Some(device), Some(devices)) = (s.connect.as_deref(), entry["connect_return_device"].as_str(), s.connect_devices.clone()) else {
             return Err("sem_credencial_connect");
         };
         let rotated = device.to_owned();
         let token = tokio::task::spawn_blocking(move || devices.rotate(&rotated)).await.ok().and_then(Result::ok).ok_or("sem_credencial_connect")?;
-        return Ok((json!({"id":id,"base_url":link,"token":token,"connect":true}), Some(device.to_owned())));
+        return Ok((json!({"id":id,"base_url":link,"token":token,"connect":true}), Some((device.to_owned(), token))));
     }
     if base.is_empty() {
         return Err("sem_endereco");
@@ -274,9 +276,9 @@ async fn announcement(s: &Service, id: &str, base: &str, entry: &Value) -> Resul
     Ok((json!({"id":id,"base_url":base,"token":s.token}), None))
 }
 /// Só depois da entrega: quem ficou com o token antigo segue entrando até a próxima.
-async fn settle(s: &Service, device: String) {
+async fn settle(s: &Service, device: String, token: String) {
     let Some(devices) = s.connect_devices.clone() else { return };
-    if !matches!(tokio::task::spawn_blocking(move || devices.settle(&device)).await, Ok(Ok(()))) {
+    if !matches!(tokio::task::spawn_blocking(move || devices.settle(&device, &token)).await, Ok(Ok(()))) {
         tracing::warn!(code = "connect_store_failed", "o token antigo do par segue valendo: a troca não foi gravada");
     }
 }
@@ -320,8 +322,8 @@ pub async fn announce(s: &Service, old: &str) -> Value {
             .call(&peer, reqwest::Method::POST, "/api/peers", Some(&body))
             .await
             .map(|_| ());
-        if result.is_ok() && let Some(device) = rotated {
-            settle(s, device).await;
+        if result.is_ok() && let Some((device, token)) = rotated {
+            settle(s, device, token).await;
         }
         if result.is_ok() && !old.is_empty() && old != id {
             result = match client

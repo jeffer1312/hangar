@@ -342,7 +342,7 @@ fn app_response(data: &Map<String, Value>) -> Result<Value,Error> {
     let mut result=json!({"rev":rev});result["servers"]=std::mem::take(&mut list.0);Ok(result)
 }
 
-pub(super) fn host(s: &str) -> String {
+fn host(s: &str) -> String {
     reqwest::Url::parse(s)
         .ok()
         .and_then(|u| u.host_str().map(str::to_lowercase))

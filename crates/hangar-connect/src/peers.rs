@@ -97,7 +97,8 @@ fn domain_of(host: &str) -> Option<&str> {
 
 /// `url` é endereço de máquina do Connect? `link` é o endereço desta máquina, se ela estiver ligada.
 pub fn on_connect_host(link: Option<&str>, url: &str) -> bool {
-    let host_of = |raw: &str| reqwest::Url::parse(raw).ok().and_then(|url| url.host_str().map(str::to_lowercase));
+    // Host com ponto final é o mesmo host para o DNS.
+    let host_of = |raw: &str| reqwest::Url::parse(raw).ok().and_then(|url| url.host_str().map(|host| host.trim_end_matches('.').to_lowercase()));
     let Some(host) = host_of(url) else { return false };
     let under = |domain: &str| host.strip_suffix(domain).is_some_and(|rest| rest.ends_with('.'));
     under(DEFAULT_DOMAIN) || link.and_then(host_of).is_some_and(|own| domain_of(&own).is_some_and(under))
@@ -348,6 +349,8 @@ mod tests {
         assert!(on_connect_host(own, "https://pc-b.acme.conn.example.com/"));
         assert!(on_connect_host(own, "https://pc-b.outra.conn.example.com"), "outra conta também é Connect");
         assert!(on_connect_host(None, "https://pc-b.acme.hangar.dev.br"), "máquina sem ligação conhece o domínio padrão");
+        assert!(on_connect_host(None, "https://pc-b.acme.hangar.dev.br."), "ponto final não tira do Connect");
+        assert!(on_connect_host(own, "https://pc-b.acme.conn.example.com."));
         for other in ["https://pc-b.tail.ts.net", "http://100.64.0.1:8765", "https://nothangar.dev.br", "sem-endereco"] {
             assert!(!on_connect_host(own, other), "{other}");
         }

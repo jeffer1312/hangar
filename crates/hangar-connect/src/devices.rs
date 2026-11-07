@@ -277,10 +277,13 @@ impl Store {
         })
     }
 
-    /// A entrega do `rotate` se confirmou: o token antigo deixa de valer.
-    pub fn settle(&self, id: &str) -> Result<(), Refusal> {
+    /// A entrega de `token` se confirmou: o antigo deixa de valer. Só o token em entrega muda alguma
+    /// coisa: dois anúncios juntos não promovem o que a outra ponta não recebeu.
+    pub fn settle(&self, id: &str, token: &str) -> Result<(), Refusal> {
+        let delivered = credentials::hash(token.as_bytes());
         self.update(|state, _| {
-            if let Some(device) = state.devices.iter_mut().find(|d| d.id == id) && device.next_token_hash.is_some() {
+            if let Some(device) = state.devices.iter_mut().find(|d| d.id == id)
+                && device.next_token_hash.as_deref().is_some_and(|next| same(next, &delivered)) {
                 device.token_hash = device.next_token_hash.take();
             }
             Ok(())
