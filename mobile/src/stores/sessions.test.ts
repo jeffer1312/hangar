@@ -1123,7 +1123,7 @@ describe('recusas e recuperação da lista', () => {
       if (parsed.origin === connectUrl && !connectAnswers) throw new TypeError('offline');
       if (parsed.origin === connectUrl && parsed.pathname === '/api/peers/prova') {
         const key = createHash('sha256').update('device-token').digest('hex');
-        return response({ identificador: 'maq2', prova: createHmac('sha256', key).update(`${parsed.searchParams.get('desafio')}|maq2`).digest('hex') });
+        return response({ identificador: 'maq2', prova: createHmac('sha256', key).update(`${parsed.searchParams.get('desafio')}|maq2|${parsed.host}`).digest('hex') });
       }
       if (url.includes('/api/peers/check')) return response({ identificador: '', motivo: '', tempo_ms: 1, estado: 'falhou' });
       return response([]);
