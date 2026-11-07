@@ -584,8 +584,15 @@ Task 3), `session_write::json_response` e `transcript::pyjson` (core pela Task 2
   `serve`, mais os testes `op099` (monta `AppState`) e o de `install_root` do `op080`; o
   `routes.rs` muda uma linha. Provas: `check -p hangar-server --all-targets` limpo;
   `test -p hangar-core` 17/17; servidor `omp_sync`/`list::links`/`runtime::process` 167 ok.
-- [ ] **Step 3: Mover `omp_sync/`** para `crates/hangar-omp-sync/`.
-- [ ] **Step 4: Provas comuns** (quando autorizadas).
+- [x] **Step 3: Mover `omp_sync/`** para `crates/hangar-omp-sync/`.
+  Feito: tudo do `omp_sync/` foi (código, contratos `.json`, geradores `.py`), menos o `host.rs`, que
+  virou `src/omp_sync.rs` do servidor com `pub use hangar_omp_sync::*` (os caminhos antigos seguem).
+  `serde-saphyr`, `base64` e `proptest` passaram a dependências do workspace. Os `sleep` em laço de
+  `/proc` e o `home_dir` que só lê os binários nativos do omp ganharam `estavel:` (portão de testes).
+- [x] **Step 4: Provas comuns** (quando autorizadas).
+  Feito: `check` do crate e do servidor (`--all-targets`) limpos; `test -p hangar-omp-sync` 154 ok
+  (4 ignorados); testes internos do servidor 2615 ok (os 2769 de antes menos os 154 que saíram);
+  `it` 3259 ok; `cargo metadata` sem aresta para o servidor.
 - [ ] **Step 5: Uso real — verificação manual** sincronização omp: plugins e contexto reconciliados numa sessão omp.
 
 ### Task 10: Refazer o grafo e planejar a segunda fase

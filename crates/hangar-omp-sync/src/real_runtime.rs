@@ -195,6 +195,7 @@ async fn native_plugin_install_adopt_update_disable_and_remove() {
             "GIT_CONFIG_GLOBAL".into(),
             if cfg!(windows) { "nul" } else { "/dev/null" }.into(),
         );
+        // estavel: só lê os binários nativos do omp instalado, ligados por link no home temporário do teste.
         if let Some(real) = std::env::home_dir()
             .map(|h| h.join(".omp/natives"))
             .filter(|p| p.is_dir())

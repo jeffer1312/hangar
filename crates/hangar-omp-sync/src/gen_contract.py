@@ -1,6 +1,6 @@
 """Gera a referência pelo Python original isolado; execute antes de removê-lo.
 
-Comando: cd backend && uv run python ../crates/hangar-server/src/omp_sync/gen_contract.py
+Comando: cd backend && uv run python ../crates/hangar-omp-sync/src/gen_contract.py
 """
 import base64,json,os,sys,tempfile,subprocess,threading
 from pathlib import Path
@@ -109,7 +109,7 @@ def case(kind):
   normalized=lambda v:normalize(v,s.home)
   return {'name':kind,'env':{k:v.replace(str(s.home),'<HOME>') for k,v in sync.env.items() if k in ['HOME','USERPROFILE','CLAUDE_CONFIG_DIR','PI_CODING_AGENT_DIR','XDG_CONFIG_HOME','XDG_DATA_HOME','XDG_CACHE_HOME']},'initial':initial,'calls':normalized(calls),'report':normalized(result),'final':snapshot(s.home)}
 cases=[case(k) for k in ['fresh','unchanged','adopt','update','disable','remove','manual','corrupt-ledger','ambiguous','scope','inactive','inactive-manual','missing-sha','invalid-registry','manifest','dry-run','update-fails','equivalent','subdir','dry-run-absent','manual-enabled','manual-features','manual-removed'] + ['features-'+f for f in ['null','empty','extra']] + ['native-disabled','native-no-proof'] + ['collision-'+f for f in ['scheme','host','port','path','case']] + ['bad-native-'+f for f in ['package.json','omp-plugins.lock.json','installed_plugins.json']] + ['bad-ledger-'+f for f in ['source.id','source.name','source.origin','source.url','source.revision','source.enabled','status','native','native.proof','native.enabled','native.features','native.settings','native.digest','native.path','native.spec']] + ['fail-'+f for f in ['list:error','list:timeout','install:error','install:timeout','install:no-effect']]]
-OUT.write_text(json.dumps({'origin':ORIGIN,'platform':sys.platform,'command':'cd backend && uv run python ../crates/hangar-server/src/omp_sync/gen_contract.py','cases':cases},ensure_ascii=False,indent=2)+'\n')
+OUT.write_text(json.dumps({'origin':ORIGIN,'platform':sys.platform,'command':'cd backend && uv run python ../crates/hangar-omp-sync/src/gen_contract.py','cases':cases},ensure_ascii=False,indent=2)+'\n')
 print(OUT,len(cases))
 
 from tests.test_omp_context import context_home,ConfigCLI
@@ -172,5 +172,5 @@ def marketplace_case(kind):
 
 cases.extend(context_case(k) for k in ['normal','disabled','append-file','append-link','equivalent','canonical-custom','global-missing','restricted-enabled','restricted-agents','restricted-condition','restricted-always','typed-bool','typed-key','duplicate-key','nested','mdc','block-id','block-provider','block-ttsr','swap-append','swap-dir','rules-symlink'])
 cases.extend(marketplace_case(k) for k in ['fresh','unchanged','conflict','dry-run','no-effect','secret'])
-OUT.write_text(json.dumps({'origin':ORIGIN,'platform':sys.platform,'command':'cd backend && uv run python ../crates/hangar-server/src/omp_sync/gen_contract.py','cases':cases},ensure_ascii=False,indent=2)+'\n')
+OUT.write_text(json.dumps({'origin':ORIGIN,'platform':sys.platform,'command':'cd backend && uv run python ../crates/hangar-omp-sync/src/gen_contract.py','cases':cases},ensure_ascii=False,indent=2)+'\n')
 print('Total',len(cases))

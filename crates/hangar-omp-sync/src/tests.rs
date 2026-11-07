@@ -755,6 +755,7 @@ async fn native_omp_context_and_marketplaces_in_isolated_home() {
         fs::write(file, "FORBIDDEN_AGENTS_SENTINEL\n").unwrap();
     }
     #[cfg(unix)]
+    // estavel: só lê os binários nativos do omp instalado, ligados por link no home temporário do teste.
     if let Some(real) = std::env::home_dir()
         .map(|h| h.join(".omp/natives"))
         .filter(|p| p.is_dir())

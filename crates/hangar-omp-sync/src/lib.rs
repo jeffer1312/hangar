@@ -1,7 +1,6 @@
 //! Reconciliação conservadora de catálogos, plugins e contexto do omp, sem passar pelo Python.
 mod context;
 mod directories;
-mod host;
 mod io;
 mod model;
 mod service;
@@ -9,7 +8,6 @@ mod sync;
 
 pub use context::{DISABLED_CONTEXT_IDS, configure as configure_claude_context};
 pub use directories::agent_directory;
-pub use host::{serve, start};
 use futures_util::future::BoxFuture;
 pub use io::NativeRunner;
 use serde_json::{Map, Value, json};

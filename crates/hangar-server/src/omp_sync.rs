@@ -1,17 +1,18 @@
-//! O que o serviço do omp lê do servidor: ambiente, conta, pasta de instalação e a chave das automações.
+//! A sincronização do omp mora no `hangar-omp-sync`; aqui fica o que ela lê do servidor: ambiente,
+//! conta, pasta de instalação e a chave das automações.
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::{extract::Request, http::StatusCode, response::Response};
 
-use super::Service;
+pub use hangar_omp_sync::*;
 use crate::routes::AppState;
 
 pub fn start(st: Arc<AppState>) -> Arc<Service> {
     let env = crate::push::server_env();
     let home = st.accounts.env.home.clone();
     let claude = st.accounts.env.claude_base.clone();
-    let template = context_template(&home);
+    let template = installed_template(&home);
     let weak = Arc::downgrade(&st);
     let allowed: Arc<dyn Fn() -> Result<bool, &'static str> + Send + Sync> = Arc::new(move || {
         let Some(st) = weak.upgrade() else {
@@ -31,8 +32,8 @@ pub fn start(st: Arc<AppState>) -> Arc<Service> {
     Service::launch(env, home, claude, template, allowed)
 }
 
-fn context_template(home: &Path) -> PathBuf {
-    super::context_template(&crate::install_root::root(home).unwrap_or_default())
+fn installed_template(home: &Path) -> PathBuf {
+    hangar_omp_sync::context_template(&crate::install_root::root(home).unwrap_or_default())
 }
 
 /// A borda já conferiu o dono, inclusive nas portas repassadas.
@@ -61,7 +62,7 @@ mod tests {
         std::os::unix::fs::symlink(&real, &current).unwrap();
         #[cfg(windows)]
         std::os::windows::fs::symlink_dir(&real, &current).unwrap();
-        assert_eq!(context_template(home), current.join("scripts").join("omp").join("carregar-claude-md-do-projeto.md"));
+        assert_eq!(installed_template(home), current.join("scripts").join("omp").join("carregar-claude-md-do-projeto.md"));
     }
 
     #[tokio::test]

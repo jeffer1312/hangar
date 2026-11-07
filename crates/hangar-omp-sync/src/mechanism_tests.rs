@@ -359,6 +359,7 @@ async fn op091_cancel_before_deadline_reaps_the_created_process_group() {
                     break (pid, leader);
                 }
             }
+            // estavel: consulta a arquivo que o processo filho grava, sob teto de 5 s; não há evento para esperar.
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })
@@ -386,6 +387,7 @@ async fn op091_cancel_before_deadline_reaps_the_created_process_group() {
             if !active {
                 break;
             }
+            // estavel: consulta ao /proc de outro processo, sob teto de 2 s; o kernel não avisa a morte dele.
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
@@ -393,6 +395,7 @@ async fn op091_cancel_before_deadline_reaps_the_created_process_group() {
     .is_ok();
     let reaped = tokio::time::timeout(Duration::from_secs(2), async {
         while Path::new(&format!("/proc/{leader}")).exists() {
+            // estavel: consulta ao /proc de outro processo, sob teto de 2 s; o kernel não avisa a coleta dele.
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
