@@ -4140,10 +4140,11 @@ Quem chama não foi identificado (sem strace na máquina): a correção não dep
 ## Módulo novo nasce como crate próprio (06/11/2026)
 
 **Regra.** Módulo Rust novo, inclusive o que vem migrado do Python, nasce em `crates/<nome>/` quando
-não usa nada de dentro do `hangar-server`; o servidor só o liga (rota, estado). Se precisar de algo
-de lá, entra no `hangar-server` e o plano do trabalho registra que ele sai depois. Quando o
-`hangar-core` existir, todo módulo novo nasce como crate próprio sobre ele, e o que precisar do
-`hangar-server` desce antes para o `hangar-core`. Nenhum crate depende do `hangar-server`: ele é
+não usa nada de dentro do `hangar-server`; o servidor só o liga (rota, estado). Antes do
+`hangar-core`, o que precisava de algo de lá entrava no `hangar-server` com a saída registrada no
+plano. Com o `hangar-core` criado (PR #330), todo módulo novo nasce como crate próprio sobre ele, e
+o que precisar do `hangar-server` desce antes para o `hangar-core` ou vira trait no core que o
+servidor implementa. Nenhum crate depende do `hangar-server`: ele é
 o topo, que monta o `AppState`, as rotas e o `main.rs`. Crate novo entra em `members` e em
 `[workspace.dependencies]` de `crates/Cargo.toml`, herda `version`/`edition` do workspace e repete
 as features de `serde`, `serde_json` e `tokio` que o `hangar-server` declara (sem isso, compilar
@@ -4175,6 +4176,7 @@ um crate sozinho guarda outra cópia das dependências no `target`). A divisão 
   do outro. Cada módulo que entra no `hangar-server` aumenta esse nó; um crate próprio não pesa no
   `rustc` do servidor e recompila sozinho.
 
-**Limite.** Na primeira fase, módulo que precisa do `AppState`, do `RuntimeRegistry` ou de outro
-recurso do servidor ainda entra no `hangar-server`. A estimativa de memória depois da divisão está
-no plano e não foi medida.
+**Limite.** Módulo que precisa do `AppState`, do `RuntimeRegistry` ou de outro recurso preso ao nó
+`runtime`/`accounts`/`list` pode exigir descer bastante coisa antes, ou uma trait no core; o plano
+da divisão mostra como cada caso foi resolvido. A estimativa de memória depois da divisão está no
+plano; o pico medido do `hangar-server` é de 8,54 GB.

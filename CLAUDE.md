@@ -698,12 +698,11 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   ANTES de escrever, dizendo o que é, por que o Rust sozinho não basta e o que se perde sem ela.
   Vale para migração, correção e subagente (que para e pergunta pela sessão). Linha nova no Python
   sem essa autorização é defeito na revisão, mesmo que "só repasse".
-- **Módulo Rust novo nasce como crate próprio quando não precisa do `hangar-server`.** Vale também
-  para migração do Python. Hoje: o que não usa nada de dentro do `hangar-server` nasce em
-  `crates/<nome>/`, e o servidor só o liga (rota, estado); o que precisa entra no `hangar-server`,
-  e o plano do trabalho registra que ele sai depois. Com o `hangar-core` criado: todo módulo novo
-  nasce como crate próprio sobre o `hangar-core`, e o que ele precisar do `hangar-server` desce
-  antes para o `hangar-core`. Nenhum crate depende do `hangar-server`. Motivo e plano da divisão em
+- **Módulo Rust novo nasce como crate próprio sobre o `hangar-core`.** Vale também
+  para migração do Python. O `hangar-core` existe (`crates/hangar-core`): todo módulo novo nasce
+  como crate próprio sobre ele, e o servidor só o liga (rota, estado). O que o módulo precisar do
+  `hangar-server` desce antes para o `hangar-core`, ou vira trait no core que o servidor
+  implementa. Nenhum crate depende do `hangar-server`. Motivo e plano da divisão em
   [plataforma.md](docs/decisoes/plataforma.md#módulo-novo-nasce-como-crate-próprio-06112026).
 - **Motores, login de convidados e peers são do Rust.** Catálogo, CLIProxy, espelhos e instalação
   ficam em `engines/`, `harness_setup/` e `codex_setup/`; identidade, permissões, raízes e lista do

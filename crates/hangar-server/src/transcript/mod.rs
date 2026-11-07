@@ -9,6 +9,9 @@ pub(crate) mod history;
 mod peer;
 pub(crate) use hangar_core::pycompat::py;
 pub use hangar_core::pycompat::pyjson;
+// Caminho antigo mantido para as branches em andamento; sai junto com os demais re-exports.
+#[allow(unused_imports)]
+pub(crate) use hangar_core::pycompat::json_tree;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
