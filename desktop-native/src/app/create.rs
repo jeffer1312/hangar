@@ -112,10 +112,12 @@ fn checkout_of(result: Result<Value, Failure>) -> Result<Option<Checkout>, Strin
     }
 }
 
-/// A base padrão da branch nova: a atual ou, com HEAD solto, a primeira local; atrás da remota, parte dela.
+/// A base padrão da branch nova: a atual ou, com HEAD solto, a primeira local; atrás da remota de mesmo nome, parte dela.
+/// `feat` criada de `origin/main` tem nela o ponto de partida, não a própria versão publicada.
 fn default_base(c: &Checkout) -> Option<String> {
     let base = c.current.clone().or_else(|| c.branches.first().cloned())?;
-    Some(c.upstreams.get(&base).map(|up| up.upstream.clone()).unwrap_or(base))
+    let same_name = c.upstreams.get(&base).filter(|up| up.upstream.ends_with(&format!("/{base}")));
+    Some(same_name.map(|up| up.upstream.clone()).unwrap_or(base))
 }
 
 fn local_branches(c: &Checkout) -> impl Iterator<Item = &String> {
@@ -152,7 +154,9 @@ pub(crate) fn worktree_warning(text: String) -> Div {
 
 /// A branch local e os commits só dela que a worktree não leva ao partir da remota.
 fn commits_left_out<'a>(c: &'a Checkout, base: &str) -> Option<(&'a str, u64)> {
-    local_branches(c).find_map(|b| c.upstreams.get(b).filter(|u| u.upstream == base && u.ahead > 0).map(|u| (b.as_str(), u.ahead)))
+    // A primeira que segue essa remota responde: outra local com a mesma remota nunca entraria nessa base.
+    local_branches(c).find_map(|b| c.upstreams.get(b).filter(|u| u.upstream == base).map(|u| (b.as_str(), u.ahead)))
+        .filter(|(_, ahead)| *ahead > 0)
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -2596,7 +2600,7 @@ impl NewSession {
             }).collect()
         };
         let left_out = commits_left_out(checkout, &chosen).filter(|_| self.new_branch)
-            .map(|(branch, ahead)| tr_shared("worktree_menu_commits_fora", &[("branch", branch), ("n", &ahead.to_string())]));
+            .map(|(branch, ahead)| tr_shared("worktree_menu_commits_left_out",&[("branch", branch), ("n", &ahead.to_string())]));
         let typed = self.new_branch_name.read(cx).value().trim().to_string();
         // Branch que já existe (escrita no nome): a worktree abre nela; a base não vale para ela.
         let notice = if !self.branch.is_empty() {
@@ -3344,6 +3348,12 @@ mod tests {
         assert_eq!(super::base_choices(&checkout), [("origin/main".to_string(), 0), ("main".to_string(), 112), ("dev".to_string(), 0), ("copia".to_string(), 5)]);
         assert_eq!(super::commits_left_out(&checkout, "origin/main"), Some(("main", 1)));
         assert_eq!(super::commits_left_out(&checkout, "main"), None);
+        let other_name = super::checkout_of(Ok(json!({"current": "feat", "branches": ["feat"], "remotes": [], "dirty": false,
+            "upstreams": {"feat": {"upstream": "origin/main", "ahead": 5, "behind": 3}}}))).unwrap().unwrap();
+        assert_eq!(super::default_base(&other_name).as_deref(), Some("feat"));
+        let shared = super::checkout_of(Ok(json!({"current": "main", "branches": ["main", "copia"], "remotes": [], "dirty": false,
+            "upstreams": {"main": {"upstream": "origin/main", "ahead": 0, "behind": 3}, "copia": {"upstream": "origin/main", "ahead": 2, "behind": 3}}}))).unwrap().unwrap();
+        assert_eq!(super::commits_left_out(&shared, "origin/main"), None);
         let old_server = super::checkout_of(Ok(json!({"current": "main", "branches": ["main"], "remotes": [], "dirty": false}))).unwrap().unwrap();
         assert_eq!(super::default_base(&old_server).as_deref(), Some("main"));
     }

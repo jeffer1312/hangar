@@ -6,7 +6,7 @@ import { useRouter } from 'expo-router';
 import { getArchivePorCwd, getCodexAccountsForServer, defaultCodexAccount,
   getEnginesForServer, getSessionDefaultsForServer, fetchSessionsForServer, listClaudeConfigsForServer, probeServerResponse,
   modelOptionsForServer, resumeArchivedConversation, getProvidersForServer, createSessionForServer, sanitizeSessionName, getWorktreesForServer,
-  folderGitActionForServer, freshBase, getFolderBranchesForServer,
+  commitsLeftOut, folderGitActionForServer, freshBase, getFolderBranchesForServer,
   PrewarmReserve, prewarmSessionForServer, releasePrewarmForServer } from '@hangar/core';
 import { basename, ctxWindow, providerName, contaComFolga, cotaDaConta, cotaParada, janelaEsgotada, motivoCotaAntiga, resumoCota, CLAUDE_PERMISSION_MODES, EFFORT_LEVELS,
   SESSION_PROVIDERS, hasExecutionMode, effortLevels, contextRefsPlainText } from '@hangar/core';
@@ -694,13 +694,17 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const gitFolder = pickedRepo ?? picked;
   useEffect(() => {
     if (branchOpen || !newWorktree || !gitFolder || basePicked.current) return;
-    let vivo = true;
+    let live = true;
     const reread = () => getFolderBranchesForServer(active, gitFolder);
     folderGitActionForServer(active, gitFolder, 'fetch').then(reread, reread)
-      .then((r) => { if (vivo && !basePicked.current) setWorktree((v) => (v?.new_branch ? { ...v, base: freshBase(r) } : v)); })
+      .then((r) => {
+        const base = freshBase(r);
+        // O aviso dos commits de fora mora no painel: fechado, a base só muda se nada ficar de fora.
+        if (live && !basePicked.current && !commitsLeftOut(r, base)) setWorktree((v) => (v?.new_branch ? { ...v, base } : v));
+      })
       // Sem leitura, fica a base que a tela já mostrou.
       .catch(() => {});
-    return () => { vivo = false; };
+    return () => { live = false; };
   }, [branchOpen, newWorktree, gitFolder, active.id]);
 
   const on = (yes: boolean) => (yes ? 'on' : 'off') as 'on' | 'off';

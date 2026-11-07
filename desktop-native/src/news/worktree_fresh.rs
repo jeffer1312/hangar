@@ -48,13 +48,14 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
     };
     let (main, upstream) = (tr_shared("news_branch_sample_main", &[]), tr_shared("news_branch_sample_upstream", &[]));
     let base = if fresh { upstream.clone() } else { main.clone() };
-    let warning = fresh.then(|| app::worktree_warning(tr_shared("worktree_menu_commits_fora", &[("branch", &main), ("n", "1")])));
+    let warning = fresh.then(|| app::worktree_warning(tr_shared("worktree_menu_commits_left_out",&[("branch", &main), ("n", "1")])));
     let field = div().flex().items_center().gap_3().child(app::worktree_field_label("worktree_menu_parte_de"))
         .child(div().flex_1().min_w_0().child(app::base_button("news-worktree-base", base).tab_stop(false)));
     let rows = div().flex().flex_col()
         .child(app::base_row("news-worktree-upstream", fresh, upstream, 0).tab_stop(false))
         .child(app::base_row("news-worktree-local", !fresh, main, 112).tab_stop(false));
-    div().id("news-worktree-fresh").w(width).p(px(14.)).rounded(px(9.)).border_1().border_color(theme::border().alpha(0.06))
+    // Altura do quadro mais alto (a lista): o cartão não pula entre os passos.
+    div().id("news-worktree-fresh").w(width).min_h(px(190.)).p(px(14.)).rounded(px(9.)).border_1().border_color(theme::border().alpha(0.06))
         .bg(linear_gradient(180., linear_color_stop(theme::chrome(), 0.), linear_color_stop(theme::background(), 1.)))
         .flex().flex_col().gap(px(10.))
         .child(field).when(list, |el| el.child(rows)).children(warning).into_any_element()

@@ -1321,6 +1321,10 @@ describe('base da worktree nova com a branch local atrás da remota', () => {
     expect(freshBase({ current: 'main', branches: ['main'], remotes: [], dirty: false })).toBe('main');
   });
 
+  it('freshBase mantém a branch que segue uma remota de outro nome', () => {
+    expect(freshBase({ ...info, current: 'copia' })).toBe('copia');
+  });
+
   it('baseChoices põe a remota antes da local atrasada, sem repetir', () => {
     expect(baseChoices(info)).toEqual([
       { name: 'origin/main', behind: 0 }, { name: 'main', behind: 112 }, { name: 'dev', behind: 0 }, { name: 'copia', behind: 5 },
@@ -1337,6 +1341,7 @@ describe('base da worktree nova com a branch local atrás da remota', () => {
     expect(commitsLeftOut(info, 'origin/main')).toEqual({ branch: 'main', ahead: 1 });
     expect(commitsLeftOut(info, 'main')).toBeNull();
     expect(commitsLeftOut({ ...info, upstreams: { main: { upstream: 'origin/main', ahead: 0, behind: 3 } } }, 'origin/main')).toBeNull();
+    expect(commitsLeftOut({ ...info, upstreams: { main: { upstream: 'origin/main', ahead: 0, behind: 3 }, copia: info.upstreams.copia } }, 'origin/main')).toBeNull();
   });
 });
 

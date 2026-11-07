@@ -80,7 +80,7 @@ export function BaseField({ info, base, open, disabled, onToggle, onPick }: { in
       {open && !disabled ? baseChoices(info).map(({ name, behind }) => (
         <OptionRow key={`base:${name}`} title={name} hint={behind ? m.native_folder_git_behind({ n: behind }) : ''} on={base === name} onPress={() => onPick(name)} />
       )) : null}
-      {leftOut ? <Text style={styles.warn}>{m.worktree_menu_commits_fora({ branch: leftOut.branch, n: leftOut.ahead })}</Text> : null}
+      {leftOut ? <Text style={styles.warn}>{m.worktree_menu_commits_left_out({ branch: leftOut.branch, n: leftOut.ahead })}</Text> : null}
     </>
   );
 }

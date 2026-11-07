@@ -32,7 +32,7 @@ vi.mock('../../paraglide/messages', () => ({
   native_folder_git_pull_done: ({ upstream }: { upstream: string }) => `pull-ok:${upstream}`, native_folder_git_dirty: ({ n }: { n: number }) => `suja:${n}`,
   native_folder_git_no_upstream_pull: () => 'sem-de-onde', native_folder_git_diverged: ({ upstream }: { upstream: string }) => `divergiu:${upstream}`,
   native_folder_git_branch_entry: () => 'trocar-ou-criar', worktree_menu_buscar: () => 'buscar', native_create_checkout_dirty: () => 'fica-na-pasta', worktree_menu_no_match: () => 'sem-resultado',
-  worktree_menu_commits_fora: ({ branch, n }: { branch: string; n: number }) => `fora:${branch}:${n}` }));
+  worktree_menu_commits_left_out: ({ branch, n }: { branch: string; n: number }) => `fora:${branch}:${n}` }));
 vi.mock('../../ui/haptics', () => ({ haptic: { success: vi.fn(), error: vi.fn(), selection: vi.fn() } }));
 vi.mock('./FolderBranchMenu', () => ({ FolderBranchMenu: () => createElement('div', { 'data-menu': 'branches' }) }));
 const MAIN = { current: 'main' as string | null, branches: ['main', 'x'], remotes: [] as string[], dirty: false, worktree_parent: null as string | null };

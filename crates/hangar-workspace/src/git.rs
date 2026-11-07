@@ -296,8 +296,14 @@ pub fn branches(cwd: &Path) -> Result<Value> {
     let cur = command(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     let st = command(cwd, &["status", "--porcelain"])?;
     Ok(
-        json!({"current":if cur.code==0 {Some(cur.stdout.trim())} else {None},"branches":local,"remotes":remote,"dirty":st.code==0&&!st.stdout.trim().is_empty(),"elsewhere":elsewhere(cwd)?,"upstreams":behind_upstreams(cwd)?}),
+        json!({"current":if cur.code==0 {Some(cur.stdout.trim())} else {None},"branches":local,"remotes":remote,"dirty":st.code==0&&!st.stdout.trim().is_empty(),"elsewhere":elsewhere(cwd)?}),
     )
+}
+/// A lista da tela: contar atrás e à frente de cada branch pesa em repositório grande, e só a tela usa.
+pub fn branches_with_upstreams(cwd: &Path) -> Result<Value> {
+    let mut info = branches(cwd)?;
+    info["upstreams"] = Value::Object(behind_upstreams(cwd)?);
+    Ok(info)
 }
 /// Branches locais atrás da própria remota: a worktree nova pode partir da remota sem pull na pasta.
 fn behind_upstreams(cwd: &Path) -> Result<serde_json::Map<String, Value>> {

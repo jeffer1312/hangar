@@ -1557,9 +1557,11 @@ export function defaultBase(info: FolderBranches): string {
 }
 
 // A mesma base, pela remota quando a local está atrás: a worktree nova nasce atualizada sem pull na pasta.
+// Só a remota de mesmo nome: `feat` criada de `origin/main` tem nela o ponto de partida, não a própria versão publicada.
 export function freshBase(info: FolderBranches): string {
   const base = defaultBase(info);
-  return upstreamOf(info, base)?.upstream ?? base;
+  const upstream = upstreamOf(info, base)?.upstream;
+  return upstream?.endsWith(`/${base}`) ? upstream : base;
 }
 
 // Só a entrada própria: uma branch pode se chamar `constructor`.
@@ -1582,11 +1584,10 @@ export function baseChoices(info: FolderBranches): { name: string; behind: numbe
 
 // O que a worktree não leva ao partir da remota: os commits que só a branch local tem.
 export function commitsLeftOut(info: FolderBranches, base: string): { branch: string; ahead: number } | null {
-  for (const branch of localBranches(info)) {
-    const up = upstreamOf(info, branch);
-    if (up?.upstream === base && up.ahead > 0) return { branch, ahead: up.ahead };
-  }
-  return null;
+  // A primeira que segue essa remota responde: outra local com a mesma remota nunca entraria nessa base.
+  const branch = localBranches(info).find((b) => upstreamOf(info, b)?.upstream === base);
+  const ahead = branch ? upstreamOf(info, branch)?.ahead ?? 0 : 0;
+  return branch && ahead > 0 ? { branch, ahead } : null;
 }
 
 export interface FolderGit {
