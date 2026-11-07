@@ -100,6 +100,8 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     // Essas famílias resolvem também os métodos recusados dentro do Rust.
     if crate::login_guests::owns_path(path) || crate::loops::http::owns_path(path)
         || crate::push::http::owns_path(path) || crate::machine_peers::owns_http_path(path)
+        || crate::session_open::baton::matches(path) || crate::shortcuts::http::matches(path)
+        || crate::costs_routes::usage_path(path) || crate::diag::version_matches(method, path)
         || matches!(path, "/api/config-sync/apply" | "/api/update-channel") { return true; }
     if *method == Method::GET && matches!(path, "/api/config-sync/manifest" | "/api/config-sync/bundle") { return true; }
     if crate::ui::matches(method, path) || crate::dictation::http::matches(method, path)
@@ -181,7 +183,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     // Rotas só do Codex, modos de permissão do Claude e as reaberturas (troca de modo, recarregar, conta,
     // conta ChatGPT fixa): o Rust atende as sessões dele.
     if *method == Method::POST && matches!(tail, Some("model" | "service-tier" | "codex/mode" | "codex/plan/implement" | "codex/terminate" | "question/skip" | "codex-permissions"
-        | "permission-mode" | "modo-execucao" | "recarregar" | "conta" | "engine/model" | "model-effort" | "bastao" | "resume" | "rename")) {
+        | "permission-mode" | "modo-execucao" | "recarregar" | "conta" | "engine/model" | "model-effort" | "resume" | "rename")) {
         return true;
     }
     // Sugestão de nome da sessão genérica (`dictation::rename_suggestion`): só o dono, nunca repassada.

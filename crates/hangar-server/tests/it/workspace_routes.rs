@@ -309,7 +309,7 @@ async fn workspace_uses_distinct_native_cwds_without_python_context_g01() {
     }
     assert_eq!(statuses, [200, 200], "{bodies:?}; consultas ao contexto Python: {}", f.context_hits.load(Ordering::Relaxed));
     assert_eq!(bodies[0], json!({"current":"feature","branches":["feature","main"],
-        "remotes":[],"dirty":false,"elsewhere":{"main":{"path":repo,"main":true}}}));
+        "remotes":[],"dirty":false,"elsewhere":{"main":{"path":repo,"main":true}},"upstreams":{}}));
     assert_eq!(bodies[1], json!({"path":"sub/ação.txt","text":"primeira\nlinha mudada\n",
         "size":22,"truncated":false,"digest":"0fe20587a6b919286e72d57b501eec339f1afdeeef022141171485dbac529e26"}));
     assert_eq!(f.context_hits.load(Ordering::Relaxed), 0);
@@ -362,6 +362,38 @@ fn active_orq(home: &std::path::Path, cwd: &std::path::Path) -> std::path::PathB
     std::fs::write(run.join("timeline-review-run.jsonl"), "").unwrap();
     std::fs::write(run.join("vigia.json"), json!({"pid":std::process::id(),"interval_s":3600,"ts":stamp,"arbiter":"a"}).to_string()).unwrap();
     run
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn workspace_orq_panel_cited_external_report_is_served_without_python() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = hangar_workspace::real(dir.path());
+    let home = root.join("home");
+    let repo = root.join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let run = active_orq(&home, &repo);
+    let report = root.join("parecer.md");
+    assert!(!report.starts_with(&repo));
+    std::fs::write(&report, "# parecer\n").unwrap();
+    std::fs::write(run.join("timeline-review-run.jsonl"), format!("{}\n", json!({
+        "ts":"2026-09-28T10:05:00-03:00", "kind":"woke", "task":null,
+        "text":format!("acordou o árbitro: [decisao] T4: incluir a tela? Parecer: {}", report.display())
+    }))).unwrap();
+    let f = workspace_fixture::fixture_with_home(&repo, false, Some(&home)).await;
+    let c = client();
+    let base = format!("http://{}/api/sessions/review-group-orq", f.addr);
+    let response = c.get(format!("{base}/orq/panel")).bearer_auth(OWNER).send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    let panel: Value = response.json().await.unwrap();
+    let reports: Vec<_> = panel["decisions"].as_array().unwrap().iter().map(|row| row["parecer"].clone()).collect();
+    assert_eq!(reports, vec![json!(report)]);
+    let response = c.get(reader_asset_url(&format!("{base}/file"), report.to_str().unwrap(), false))
+        .bearer_auth(OWNER).send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.text().await.unwrap(), "# parecer\n");
+    assert_eq!(f.context_hits.load(Ordering::Relaxed), 0);
+    assert_eq!(f.hits(), 0);
 }
 
 async fn check_unreadable_orq_source(warm: bool) {
@@ -1258,7 +1290,7 @@ async fn task3_g03_public_read_bodies_match_frozen_original_capture() {
     let (addr,hits,_fixture)=fixture(&repo).await; let c=client();
     let revision=format!("git/commit/{HASH}");
     let cases=[
-        ("branches".to_owned(),json!({"current":"main","branches":["main"],"remotes":[],"dirty":true,"elsewhere":{}})),
+        ("branches".to_owned(),json!({"current":"main","branches":["main"],"remotes":[],"dirty":true,"elsewhere":{},"upstreams":{}})),
         ("git/files".to_owned(),json!({"files":[{"path":"sub/ação.txt","code":" M","staged":false,"added":1,"removed":1},
             {"path":"bin.dat","code":"??","staged":false,"added":null,"removed":null},{"path":"escaping-link","code":"??","staged":false,"added":null,"removed":null},
             {"path":"novo.txt","code":"??","staged":false,"added":null,"removed":null}],"sequencer":null})),
@@ -1336,6 +1368,93 @@ async fn task3_g05_cancelled_push_is_completed_once_without_python_retry() {
     let pushed=std::process::Command::new("git").arg("-C").arg(&remote).args(["rev-parse","refs/heads/main"]).output().unwrap();
     assert!(head.status.success()&&pushed.status.success()); assert_eq!(pushed.stdout,head.stdout);
     assert_eq!(f.hits(),0); assert_eq!(f.context_hits.load(Ordering::Relaxed),0); drop(all);
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor="multi_thread",worker_threads=2)]
+async fn workspace_slow_diff_keeps_session_operation_input_and_interrupt_available() {
+    use std::{io::Write,os::fd::AsRawFd,time::Duration};
+    const TEST: &str = "workspace_routes::workspace_slow_diff_keeps_session_operation_input_and_interrupt_available";
+    if let Some(root) = std::env::var_os("HANGAR_WORKSPACE_SLOW_DIFF_ROOT") {
+        let root = std::path::PathBuf::from(root);
+        let repo = root.join("repo");
+        let ready = std::fs::OpenOptions::new().read(true).write(true).open(root.join("ready")).unwrap();
+        let mut release = std::fs::OpenOptions::new().read(true).write(true).open(root.join("release")).unwrap();
+        let f = workspace_fixture::session_fixture(&repo, false).await;
+        let home = &f.list.env().dirs.as_ref().unwrap().home;
+        let mut state = hangar_server::routes::AppState::new(fake::config("127.0.0.1:9".parse().unwrap(), "127.0.0.1"));
+        state.list = f.list.clone(); state.origins_home = home.clone(); state.workspace_slots = f.workspace_slots.clone();
+        state.accounts = hangar_server::accounts::AccountService::new(hangar_server::accounts::environment::AccountEnvironment::from_map([
+            ("HOME".into(),home.to_string_lossy().into_owned()),("USERPROFILE".into(),home.to_string_lossy().into_owned()),
+            ("CLAUDE_CONFIG_DIR".into(),home.join(".claude").to_string_lossy().into_owned()),("CP_SCAN_ROOTS".into(),repo.to_string_lossy().into_owned())].into()));
+        let runtime = crate::runtime_open::with_hubs(hangar_server::runtime::gateway::RuntimeRegistry::new(
+            "127.0.0.1:9".parse().unwrap(), "secret-test".into(), "slow-diff-test".into())
+            .with_codex_environment(state.accounts.env.clone())
+            .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))));
+        crate::session_write_routes::open_entry_with(&runtime, &root, "slow-diff", "fixture", 1,
+            crate::session_write_routes::cano_with(None).await).await;
+        assert!(state.state.runtime.set(runtime.clone()).is_ok());
+        let addr = fake::spawn_state(state).await;
+        let c = hangar_server::http_client().timeout(Duration::from_secs(40)).build().unwrap();
+        let base = format!("http://{addr}/api/sessions/fixture");
+        let diff = c.post(format!("{base}/git/diff")).bearer_auth(OWNER).json(&json!({"path":"tracked.txt"}));
+        let mut request = tokio::spawn(async move { diff.send().await });
+        let checking = runtime.clone();
+        // A tarefa captura pânico para liberar o Git e fechar o runtime antes de falhar o teste.
+        let checks = tokio::spawn(async move {
+            let started = tokio::task::spawn_blocking(move || {
+                let mut event = libc::pollfd {fd:ready.as_raw_fd(),events:libc::POLLIN,revents:0};
+                (unsafe {libc::poll(&mut event,1,15_000)}) == 1 && event.revents & libc::POLLIN != 0
+            }).await.unwrap();
+            assert!(started, "o Git não sinalizou a consulta bloqueada");
+            checking.ingress().close_exclusive("fixture", Duration::from_secs(15)).await.unwrap();
+            checking.ingress().open_exclusive("fixture");
+            let input = c.post(format!("{base}/input")).bearer_auth(OWNER)
+                .json(&json!({"text":"continue"})).send().await.unwrap();
+            assert_eq!(input.status(), 200);
+            let interrupt = c.post(format!("{base}/interrupt")).bearer_auth(OWNER).json(&json!({})).send().await.unwrap();
+            assert_eq!(interrupt.status(), 200);
+        }).await;
+        runtime.ingress().open_exclusive("fixture");
+        let pending = !request.is_finished();
+        let released = release.write_all(b"finish\n");
+        let result = tokio::time::timeout(Duration::from_secs(40), &mut request).await;
+        if result.is_err() { request.abort(); let _ = request.await; }
+        let closed = runtime.close("slow-diff", 1).await;
+        checks.unwrap(); released.unwrap(); closed.unwrap();
+        assert!(pending, "a consulta terminou antes de liberar o Git");
+        let response = result.unwrap().unwrap().unwrap();
+        assert_eq!(response.status(), 200);
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body["path"], "tracked.txt");
+        assert!(body["diff"].as_str().unwrap().contains("+changed\n"));
+        assert_eq!(f.context_hits.load(Ordering::Relaxed), 0);
+        assert_eq!(f.hits(), 0);
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path(); let repo = root.join("repo"); let bin = root.join("bin");
+    std::fs::create_dir(&repo).unwrap(); std::fs::create_dir(&bin).unwrap();
+    let fixed = |args: &[&str]| {
+        let out = std::process::Command::new("git").arg("-C").arg(&repo).args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    };
+    for args in [&["init","-q","-b","main"][..], &["config","user.name","Teste"], &["config","user.email","teste@example.invalid"],
+        &["config","commit.gpgSign","false"], &["config","core.hooksPath","/dev/null"]] { fixed(args); }
+    std::fs::write(repo.join("tracked.txt"), "one\n").unwrap();
+    fixed(&["add","tracked.txt"]); fixed(&["commit","-qm","initial"]);
+    std::fs::write(repo.join("tracked.txt"), "changed\n").unwrap();
+    for name in ["ready", "release"] {
+        assert!(std::process::Command::new("mkfifo").arg(root.join(name)).status().unwrap().success());
+    }
+    crate::write_executable(&bin.join("git"), format!("#!/bin/sh\ncase \" $* \" in\n*' diff HEAD -- tracked.txt '*) printf R > '{}'\nIFS= read -r value < '{}' ;;\nesac\nexec /usr/bin/git \"$@\"\n",
+        root.join("ready").display(), root.join("release").display()));
+    let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap()))).unwrap();
+    let child = std::process::Command::new(std::env::current_exe().unwrap()).args(["--exact", TEST, "--nocapture"])
+        .env("PATH", path).env("HANGAR_WORKSPACE_SLOW_DIFF_ROOT", root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").output().unwrap();
+    assert!(child.status.success(), "{}\n{}", String::from_utf8_lossy(&child.stdout), String::from_utf8_lossy(&child.stderr));
 }
 
 #[test]

@@ -320,7 +320,9 @@ async fn public_inner(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Resp
         Err(None) => return response(json!({"detail":{"code":"erro_sessao_inexistente","params":{},"msg":"sessao nao encontrada"}}), 404),
         Err(Some(reason)) => return refuse(&st, &session, &tail, CONTEXT, reason),
     };
-    let ingress = if parts.method == Method::POST && name.is_some() {
+    let mutation = parts.method == Method::POST && (tail == "file/text"
+        || map_operation(&tail, &parts.method, &HashMap::new(), &raw, &ctx).is_none_or(|op| op.is_mutation()));
+    let ingress = if mutation && name.is_some() {
         let name = name.as_deref().unwrap();
         match transfer_blocked(&st, name).await {
             Ok(true) => return busy(), Ok(false) => {}, Err(reason) => return refuse(&st, &session, &tail, CONTEXT, reason),

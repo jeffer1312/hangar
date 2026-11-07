@@ -255,16 +255,6 @@ def test_invalid_import_changes_nothing(client, data):
     assert rc.get("shortcuts") == before
 
 
-def test_shell_shortcut_with_placeholder_is_refused(client, monkeypatch, tmp_path):
-    from app import api
-    monkeypatch.setattr(api, "_session_cwd", lambda n: str(tmp_path))
-    r = client.post("/api/sessions/s/shortcut-shell", headers=AUTH,
-                    json={"command": "xfreerdp /p:⟦SEGREDO:senha⟧"})
-    assert r.status_code == 422
-    assert r.json()["detail"]["code"] == "erro_shortcut_segredo"
-    assert "senha" in r.json()["detail"]["msg"]
-
-
 def test_transfer_routes_require_auth(client):
     assert client.get("/api/shortcuts/export").status_code == 401
     assert client.post("/api/shortcuts/import", json={"data": []}).status_code == 401
