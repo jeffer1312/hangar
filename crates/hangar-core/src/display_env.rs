@@ -73,7 +73,7 @@ fn systemd_environment() -> Option<String> {
 /// A saída é lida enquanto o filho roda (pipe cheio o prenderia); estourado o prazo, ele é morto e colhido.
 fn read_with_limit(command: &mut std::process::Command, limit: std::time::Duration) -> Option<String> {
     let mut child = command.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn()
-        .map_err(|e| crate::voice::log(format!("display env: spawn failed kind={:?}", e.kind()))).ok()?;
+        .map_err(|e| tracing::info!(target: "voice", "display env: spawn failed kind={:?}", e.kind())).ok()?;
     let mut stdout = child.stdout.take()?;
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || { let mut out = String::new(); let _ = tx.send(std::io::Read::read_to_string(&mut stdout, &mut out).map(|_| out)); });
@@ -82,7 +82,7 @@ fn read_with_limit(command: &mut std::process::Command, limit: std::time::Durati
     let _ = child.wait();
     match read {
         Ok(Ok(out)) => Some(out),
-        _ => { crate::voice::log("display env: user manager environment unreadable in time"); None }
+        _ => { tracing::info!(target: "voice", "display env: user manager environment unreadable in time"); None }
     }
 }
 
@@ -111,6 +111,7 @@ mod tests {
         std::fs::write(run.path().join("wayland-1"), "").unwrap();
         let hypr = run.path().join("hypr");
         std::fs::create_dir_all(hypr.join("old_1")).unwrap();
+        // estavel: o que se testa é a escolha da pasta de mtime mais novo; 20 ms passa da resolução de mtime dos sistemas suportados.
         std::thread::sleep(std::time::Duration::from_millis(20));
         std::fs::create_dir_all(hypr.join("new_2")).unwrap();
         let got = missing(env(&[("XDG_RUNTIME_DIR", "x")]), "", Some(run.path()));

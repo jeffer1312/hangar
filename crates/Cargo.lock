@@ -1581,6 +1581,8 @@ dependencies = [
  "flate2",
  "futures-util",
  "http-body-util",
+ "hyper-util",
+ "libc",
  "md-5",
  "num-bigint 0.5.1",
  "percent-encoding",
@@ -1593,6 +1595,8 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "tracing-subscriber",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

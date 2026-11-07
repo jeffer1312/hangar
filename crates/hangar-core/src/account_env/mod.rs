@@ -1,10 +1,19 @@
 //! Contexto capturado uma vez; conta adicional não herda identidade da principal.
-use super::catalog::Account;
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
     sync::Arc,
 };
+
+mod omp;
+pub use omp::{OmpDirectories, omp_directories, valid_omp_profile};
+
+#[derive(Clone, Debug)]
+pub struct Account {
+    pub id: String,
+    pub home: PathBuf,
+    pub is_default: bool,
+}
 
 /// Só para teste: chamado com o caminho logo antes da leitura real de um destino Pi/omp.
 #[doc(hidden)]
@@ -76,8 +85,8 @@ impl AccountEnvironment {
     }
 
     /// Raízes do omp resolvidas só pelo home e pelo ambiente capturados, sem criar nada.
-    pub fn omp_directories(&self) -> Result<super::secondary_auth::OmpDirectories, &'static str> {
-        super::secondary_auth::omp_directories(&self.home, &self.base)
+    pub fn omp_directories(&self) -> Result<OmpDirectories, &'static str> {
+        omp_directories(&self.home, &self.base)
     }
 
     pub fn codex(&self, account: &Account) -> BTreeMap<String, String> {
