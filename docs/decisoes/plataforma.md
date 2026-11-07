@@ -4243,6 +4243,16 @@ e Caddy 2.11.6 pelo caminho real (wss até `connect.hangar.dev.br`, traefik 3.6.
   que se repete a quem abre o chat. `?page_ticket=` abre só aquela página por 10 minutos e não vale
   na 8766 nem na 8768. A chave nasce com o processo: tirada da senha, deixaria testar palpites fora da
   máquina. Por isso marcador de página gravado não volta depois de reiniciar.
+- **VPS invadida é limite aceito.** O certificado sai por TLS-ALPN-01 pelo traefik, então quem
+  controla a VPS consegue um certificado válido para `<máquina>.<conta>.hangar.dev.br`, se põe no
+  meio e lê o token de um aparelho já aprovado. A promessa é "a VPS honesta não lê o tráfego".
+  Código digitado na aprovação foi recusado: com 4 máquinas daria até 6 códigos. Pendente: cada lado
+  memoriza a chave do outro na primeira ligação, sem passo do dono. Primeiro entre máquinas (Rust),
+  depois no celular, que pede módulo nativo e app novo. Requer o Caddy manter a chave ao renovar.
+- **Prévia vai para domínio próprio (pendente).** Em `*.hangar.dev.br` o site testado imita a tela
+  do Hangar e grava cookie `Domain=hangar.dev.br`, que enche o `Cookie` de todas as contas (431).
+- **Tela web fechada pelo Connect.** `/` e `/assets/*` não abrem pela 8768; convidado com login
+  próprio entra pelo app, pela LAN ou pelo Tailscale.
 
 Não testado: renovação, a CA de produção e um nome que dependa só do curinga novo
 `*.hangar.dev.br`. Cargas e logs completos em
