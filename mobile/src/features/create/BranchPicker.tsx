@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
-  basename, defaultBase, folderGitActionForServer, getFolderBranchesForServer, getFolderGitForServer, getWorktreesForServer, pickFolderRoot,
+  baseChoices, basename, commitsLeftOut, folderGitActionForServer, freshBase, getFolderBranchesForServer, getFolderGitForServer, getWorktreesForServer, pickFolderRoot,
   sanitizeSessionName, worktreeAgeDays, worktreeIsAgent, worktreeTitle, WORKTREE_STALE_DAYS,
   type FolderBranches, type FolderGit, type Server, type WorktreeChoice, type WorktreeRepo, type WorktreeStatus,
 } from '@hangar/core';
@@ -20,6 +20,8 @@ type Props = { server: Server;
                worktreePath?: string;
                sessionName: string; value: WorktreeChoice | null;
                onChange: (v: WorktreeChoice | null) => void;
+               /** A base que a pessoa escolheu: o fetch só leva à remota a base que ninguém escolheu. */
+               basePicked: { current: string | null };
                /** Abrir a sessão noutra pasta (uma worktree que já existe, ou de volta à principal); `keepOpen` mantém o painel para o aviso. */
                onPickFolder: (path: string, keepOpen: boolean, repo?: string) => void;
                /** Branch nova com o nome de uma já aberta: o servidor recusaria, a criação fica travada. */
@@ -44,7 +46,46 @@ function worktreeHint(w: WorktreeStatus, now: number): string {
   return days ? m.worktree_dias_atras({ n: days }) : '';
 }
 
-export function BranchPicker({ server, cwd, worktreePath, sessionName, value, onChange, onPickFolder, onTakenChange }: Props) {
+function OptionRow({ title, hint, on, onPress, trailing, dot }: { title: string; hint: string; on: boolean; onPress: () => void; trailing?: 'chevron' | undefined; dot?: string | undefined }) {
+  const { theme } = useUnistyles();
+  return (
+    <Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={title} accessibilityHint={hint || undefined}
+      accessibilityState={{ selected: on }} style={[styles.option, on && styles.on]}>
+      {dot ? <View style={[styles.dot, { backgroundColor: dot }]} /> : null}
+      <View style={styles.optionText}>
+        <Text style={styles.optionTitle} numberOfLines={1}>{title}</Text>
+        {hint ? <Text style={styles.help} numberOfLines={2}>{hint}</Text> : null}
+      </View>
+      {on ? <Icon name="Check" size={16} color={theme.tokens.accent.base} /> : null}
+      {trailing ? <Icon name="ChevronRight" size={14} color={theme.tokens.text.muted} /> : null}
+    </Pressable>
+  );
+}
+
+// "Parte de": o botão, a lista aberta e o aviso do que fica de fora; a tela e a novidade desenham o mesmo.
+export function BaseField({ info, base, open, disabled, onToggle, onPick }: { info: FolderBranches; base: string; open: boolean; disabled: boolean; onToggle: () => void; onPick: (base: string) => void }) {
+  const { theme } = useUnistyles();
+  const leftOut = disabled ? null : commitsLeftOut(info, base);
+  return (
+    <>
+      <View style={styles.line}>
+        <Text style={styles.fieldLabel}>{m.worktree_menu_parte_de()}</Text>
+        <Pressable onPress={onToggle} disabled={disabled} accessibilityRole="button"
+          accessibilityLabel={`${m.worktree_menu_parte_de()} ${base}`} accessibilityState={{ disabled, expanded: open }}
+          style={[styles.baseBtn, disabled && styles.dim]}>
+          <Text style={[styles.optionTitle, styles.grow]} numberOfLines={1}>{base}</Text>
+          <Icon name={open && !disabled ? 'ChevronUp' : 'ChevronDown'} size={14} color={theme.tokens.text.muted} />
+        </Pressable>
+      </View>
+      {open && !disabled ? baseChoices(info).map(({ name, behind }) => (
+        <OptionRow key={`base:${name}`} title={name} hint={behind ? m.native_folder_git_behind({ n: behind }) : ''} on={base === name} onPress={() => onPick(name)} />
+      )) : null}
+      {leftOut ? <Text style={styles.warn}>{m.worktree_menu_commits_left_out({ branch: leftOut.branch, n: leftOut.ahead })}</Text> : null}
+    </>
+  );
+}
+
+export function BranchPicker({ server, cwd, worktreePath, sessionName, value, onChange, basePicked, onPickFolder, onTakenChange }: Props) {
   const { theme } = useUnistyles();
   const [info, setInfo] = useState<FolderBranches | null>(null);
   const [loading, setLoading] = useState(true);
@@ -52,7 +93,7 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
   // O painel desmonta ao fechar: a escolha volta de `value` para não zerar a cada abertura.
   const [fresh, setFresh] = useState(!!value);
   const [name, setName] = useState(value?.branch ?? '');
-  const [base, setBase] = useState(value?.base ?? '');
+  const [base, setBase] = useState(basePicked.current ?? value?.base ?? '');
   const [baseOpen, setBaseOpen] = useState(false);
   const [picking, setPicking] = useState(false);
   const [agentsOpen, setAgentsOpen] = useState(false);
@@ -136,7 +177,7 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
     setFailed('');
     setLoading(true);
     getFolderBranchesForServer(server, cwd)
-      .then((r) => { if (vivo) { infoFolder.current = cwd; setInfo(r); setBase((b) => b || defaultBase(r)); } })
+      .then((r) => { if (vivo) { infoFolder.current = cwd; setInfo(r); setBase(basePicked.current ?? freshBase(r)); } })
       .catch((e: unknown) => {
         // Releitura da mesma pasta que falhou: a lista anterior fica, com o aviso da ação que veio antes.
         if (!vivo || infoFolder.current === cwd) return;
@@ -199,16 +240,7 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
   const notice = busy ? <Text style={styles.warn} accessibilityRole="alert">{m.worktree_menu_ocupada({ nome: busy })}</Text> : null;
 
   const option = (key: string, title: string, hint: string, on: boolean, onPress: () => void, trailing?: 'chevron', dot?: string) => (
-    <Pressable key={key} onPress={onPress} accessibilityRole="button" accessibilityLabel={title} accessibilityHint={hint || undefined}
-      accessibilityState={{ selected: on }} style={[styles.option, on && styles.on]}>
-      {dot ? <View style={[styles.dot, { backgroundColor: dot }]} /> : null}
-      <View style={styles.optionText}>
-        <Text style={styles.optionTitle} numberOfLines={1}>{title}</Text>
-        {hint ? <Text style={styles.help} numberOfLines={2}>{hint}</Text> : null}
-      </View>
-      {on ? <Icon name="Check" size={16} color={theme.tokens.accent.base} /> : null}
-      {trailing ? <Icon name="ChevronRight" size={14} color={theme.tokens.text.muted} /> : null}
-    </Pressable>
+    <OptionRow key={key} title={title} hint={hint} on={on} onPress={onPress} trailing={trailing} dot={dot} />
   );
 
   if (branching && git?.repo) {
@@ -301,7 +333,6 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
   // Dentro de uma worktree, "sua pasta" é a principal do repositório.
   const home = chosen && wts ? wts.repo : cwd;
   const homeBranch = (chosen ? chosen.main_branch : info.current) ?? m.native_create_checkout_current();
-  const bases = [info.current, ...info.branches.filter((b) => b !== info.current)].filter((b): b is string => !!b);
   const remoteOnly = known && info.remotes.includes(typed);
   const parent = info.worktree_parent?.replace(/[\\/]+$/, '');
   const sep = parent && parent.includes('\\') && !parent.includes('/') ? '\\' : '/';
@@ -330,16 +361,8 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
       {option('new', m.worktree_menu_nova(), m.worktree_menu_nova_dica(), fresh, () => setFresh(true))}
       {fresh ? (
         <View style={styles.fields}>
-          <View style={styles.line}>
-            <Text style={styles.fieldLabel}>{m.worktree_menu_parte_de()}</Text>
-            <Pressable onPress={() => setBaseOpen((o) => !o)} disabled={known} accessibilityRole="button"
-              accessibilityLabel={`${m.worktree_menu_parte_de()} ${base}`} accessibilityState={{ disabled: known, expanded: baseOpen }}
-              style={[styles.baseBtn, known && styles.dim]}>
-              <Text style={[styles.optionTitle, styles.grow]} numberOfLines={1}>{base}</Text>
-              <Icon name={baseOpen && !known ? 'ChevronUp' : 'ChevronDown'} size={14} color={theme.tokens.text.muted} />
-            </Pressable>
-          </View>
-          {baseOpen && !known ? bases.map((b) => option(`base:${b}`, b, '', base === b, () => { setBase(b); setBaseOpen(false); })) : null}
+          <BaseField info={info} base={base} open={baseOpen} disabled={known} onToggle={() => setBaseOpen((o) => !o)}
+            onPick={(b) => { basePicked.current = b; setBase(b); setBaseOpen(false); }} />
           <View style={styles.line}>
             <Text style={styles.fieldLabel}>{m.worktree_menu_branch()}</Text>
             <TextInput accessibilityLabel={m.worktree_menu_branch()} placeholder={sessionName} value={name}

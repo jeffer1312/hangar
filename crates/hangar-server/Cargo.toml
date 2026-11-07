@@ -28,6 +28,9 @@ serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unboun
 indexmap.workspace = true
 hangar-api.workspace = true
 hangar-codex.workspace = true
+hangar-core.workspace = true
+hangar-transcript.workspace = true
+hangar-omp-sync.workspace = true
 toml = { version = "=1.1.7", default-features = false, features = ["parse", "std", "serde", "preserve_order"] }
 hangar-workspace = { path = "../hangar-workspace" }
 # Pacote por versão: índice, manifesto e extração conferida (`update/`).
@@ -35,15 +38,14 @@ hangar-package = { path = "../hangar-package" }
 regex.workspace = true
 # Largura em células para cortar o pane na coluna da conversa (`plugin_screen.cell_width`).
 unicode-width = "=0.2.2"
-# Busca de bytes nos transcripts da lista; já vem pelo regex, sem crate novo.
-memchr = "=2.8.3"
+memchr.workspace = true
 md-5.workspace = true
 sha1_smol.workspace = true
 # sha256 do workdir_key do Kimi; já vem pelo rustls, sem crate novo.
-ring = "=0.17.14"
+ring.workspace = true
 qrcode = { version = "=0.14.1", default-features = false }
 serde = { workspace = true, features = ["alloc"] }
-serde-saphyr = "=1.3.0"
+serde-saphyr.workspace = true
 axum = { workspace = true }
 bytes = { workspace = true }
 flate2 = { workspace = true }
@@ -64,7 +66,7 @@ http-body-util = { workspace = true }
 notify = { workspace = true }
 percent-encoding = { workspace = true }
 mime_guess = "=2.0.5"
-base64 = "=0.23.1"
+base64.workspace = true
 # Servidor MCP `hangar` (`mcp/`): o SDK oficial e o transporte HTTP streamable; o `tower-service` chama o
 # roteador público por dentro.
 rmcp = { version = "=3.5.0", default-features = false, features = ["server", "transport-streamable-http-server"] }
@@ -85,7 +87,7 @@ sysinfo = { version = "=0.39.6", default-features = false, features = ["system"]
 async-channel = "=2.5.0"
 # Miniatura de imagem (`thumbnail.rs`); mesma versão e features do nativo.
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
-num-bigint = "=0.5.1"
+num-bigint.workspace = true
 idevice.workspace = true
 plist.workspace = true
 # Login Apple e assinatura do SideStore (`device_install::apple`): a versão provada no iPad, sem o
@@ -107,8 +109,9 @@ windows-sys = { workspace = true, features = ["Wdk_System_SystemInformation", "W
 zbus = { version = "=5.19.0", default-features = false, features = ["tokio"] }
 
 [dev-dependencies]
+hangar-core = { workspace = true, features = ["test-support"] }
 rqrr = { version = "=0.11.0", default-features = false }
-proptest = "=1.12.0"
+proptest.workspace = true
 tower = { version = "=0.5.3", default-features = false, features = ["util"] }
 # Relógio pausado: as rodadas do `state::Monitor` contadas sem esperar o tempo real.
 tokio = { workspace = true, features = ["test-util"] }

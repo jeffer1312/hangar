@@ -489,6 +489,43 @@ describe('LiveVoiceSheet', () => {
     expect(native.announce).toHaveBeenCalledExactlyOnceWith(`${m.live_voice_status_working()}, tool-action`);
   });
 
+  it('pausar a fala só aparece no aparelho que guarda o áudio, e mostra que o microfone fechou', async () => {
+    const onToggleSpeechPause = vi.fn();
+    Object.assign(callbacks, { onToggleSpeechPause });
+    view.phase = 'live';
+    view.liveSince = Date.now();
+    view.state = liveState();
+    await render();
+    expect(container.querySelector(`[aria-label="${m.codex_voice_pause_short()}"]`)).toBeNull();
+    view = { ...view, speechPauseAvailable: true };
+    await render();
+    const pause = container.querySelector(`[aria-label="${m.codex_voice_pause_short()}"]`) as HTMLElement;
+    await act(async () => { pause.click(); });
+    expect(onToggleSpeechPause).toHaveBeenCalledOnce();
+    // O áudio segue chegando na pausa: nível alto não pode virar "falando" na tela.
+    view = { ...view, speechPaused: true, levels: { input: 0, output: 0.8 } };
+    await render();
+    expect(container.textContent).toContain(m.codex_voice_paused());
+    expect(container.textContent).not.toContain(m.live_voice_status_voice());
+    expect(container.querySelector(`[aria-label="${m.codex_voice_resume_short()}"]`)).not.toBeNull();
+  });
+
+  it('resposta travada aparece como alerta e sai quando o servidor recupera', async () => {
+    native.os = 'ios';
+    view.phase = 'live';
+    view.liveSince = Date.now();
+    view.state = { ...liveState(), activity: 'thinking' };
+    await render();
+    expect(container.textContent).not.toContain(m.codex_voice_stalled());
+    view = { ...view, state: { ...liveState(), activity: 'thinking', stalled: true } };
+    await render();
+    expect(container.textContent).toContain(m.codex_voice_stalled());
+    expect(native.announce).toHaveBeenCalledWith(expect.stringContaining(m.codex_voice_stalled()));
+    view = { ...view, state: { ...liveState(), activity: 'thinking', stalled: false } };
+    await render();
+    expect(container.textContent).not.toContain(m.codex_voice_stalled());
+  });
+
   it('estilo do plano é o mesmo objeto entre renders com o tema inalterado', async () => {
     view.phase = 'live';
     view.state = { ...liveState(), plan: { path: '/plan-fixture.md', markdown: '# plan-fixture' } };

@@ -4171,3 +4171,47 @@ sessões paradas: foram tocadas de hora em hora (05:08:21 → 06:08:21, 05:11:36
 e não escrita. Elas rodavam Claude Code 2.1.312 e 2.1.317; outra, em 2.1.318, ficou 14 h sem toque.
 Quem chama não foi identificado (sem strace na máquina): a correção não depende disso. Os avisos
 `hooks.json changed — reloaded` também entram no arquivo sem ninguém conversar.
+
+## Módulo novo nasce como crate próprio (06/11/2026)
+
+**Regra.** Módulo Rust novo, inclusive o que vem migrado do Python, nasce em `crates/<nome>/` quando
+não usa nada de dentro do `hangar-server`; o servidor só o liga (rota, estado). Antes do
+`hangar-core`, o que precisava de algo de lá entrava no `hangar-server` com a saída registrada no
+plano. Com o `hangar-core` criado (PR #330), todo módulo novo nasce como crate próprio sobre ele, e
+o que precisar do `hangar-server` desce antes para o `hangar-core` ou vira trait no core que o
+servidor implementa. Nenhum crate depende do `hangar-server`: ele é
+o topo, que monta o `AppState`, as rotas e o `main.rs`. Crate novo entra em `members` e em
+`[workspace.dependencies]` de `crates/Cargo.toml`, herda `version`/`edition` do workspace e repete
+as features de `serde`, `serde_json` e `tokio` que o `hangar-server` declara (sem isso, compilar
+um crate sozinho guarda outra cópia das dependências no `target`). A divisão do que já existe segue
+[o plano](../superpowers/plans/2026-11-06-split-hangar-server.md).
+
+**Por quê.** O `hangar-server` é um crate só, e o `rustc` dele não cabe na máquina de trabalho:
+
+- Tamanho (06/11/2026, `0452a7f55`): 123 módulos de topo com 250.410 linhas, mais 686 de `lib.rs`
+  e `main.rs`. Os outros crates do workspace têm no máximo 8,6 mil linhas.
+- Memória (medida por outra sessão no mesmo dia): um `rustc` do `hangar_server` chega a ~9,3 GB
+  (2,1 GB RSS + 7,2 GB de swap). Compilar a biblioteca e o executável `it` dos testes leva duas
+  cópias do crate em paralelo (o `cargo-pinned` usa `-j 2`): ~18 GB de pico. A máquina tem 23 GB,
+  e as ~23 sessões abertas já ocupam ~18 GB; o swap passa de 35 GB e tudo trava.
+- Grafo de módulos (cada `crate::X`, `crate::{X, …}`, `super::X` que sai do módulo e o uso de
+  `X::` no corpo do `lib.rs`, contados como aresta Y→X): 111 módulos e o corpo do `lib.rs` formam
+  um ciclo só, com 248.681 linhas. Fora dele ficam 11 módulos, 1.729 linhas (`orq_storage`,
+  `terminal_state`, `plugin_listener`, `value_coercion`, `json_envelope`, `terminal_lock`,
+  `warn_limit`, `costs_failure`, `http_contract`, `http_route_response`, `http_body_limit`).
+  Tirando o código de teste, o ciclo é o mesmo.
+- Quem segura o ciclo: ajudantes pequenos que moram dentro de módulos grandes
+  (`session_write::json_response`, 53 usos de fora; `runtime::queue::atomic_write`, 75;
+  `orchestration::truthy`, 58; `list::procs`; `transcript::pyjson`), o `routes::AppState`
+  (citado em 72 módulos) com os portões de `routes` (`gate` em 36 módulos, `cors` em 36, `pass` em
+  29), o `auth` (448 linhas, usado por 58 módulos) e a dependência mútua `runtime` ↔ `accounts`
+  (52 referências num sentido, 33 no outro; do lado de `accounts`, 17 são o `RuntimeRegistry`).
+- Simulando a descida desses ajudantes, ainda sobram 84 módulos (~220 mil linhas) num ciclo: o nó
+  de `runtime`, `accounts`, `list`, `session_open`, `session_write` e `state` depende de verdade um
+  do outro. Cada módulo que entra no `hangar-server` aumenta esse nó; um crate próprio não pesa no
+  `rustc` do servidor e recompila sozinho.
+
+**Limite.** Módulo que precisa do `AppState`, do `RuntimeRegistry` ou de outro recurso preso ao nó
+`runtime`/`accounts`/`list` pode exigir descer bastante coisa antes, ou uma trait no core; o plano
+da divisão mostra como cada caso foi resolvido. A estimativa de memória depois da divisão está no
+plano; o pico medido do `hangar-server` é de 8,54 GB.

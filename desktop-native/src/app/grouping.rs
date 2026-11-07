@@ -489,8 +489,9 @@ impl Hangar {
     /// Com mais de uma máquina (ou grupo citando outra), lê o identificador de cada uma que ainda não tem; falha tenta de novo depois de `ID_RETRY`,
     /// na próxima lista que chegar. Uma leitura por máquina, nunca por linha nem por quadro.
     pub(super) fn ensure_identities(&mut self) {
-        // Com uma máquina só, o identificador só importa se algum grupo cita outra (membro `máquina::nome`).
-        if !self.multi_server() && !self.sessions.iter().any(|s| s.peers().iter().any(|p| p.contains("::"))) { return; }
+        // Com uma máquina só, o identificador só importa se algum grupo cita outra (membro `máquina::nome`) ou se um pedido
+        // do cofre precisa achar a sessão que o fez.
+        if !self.multi_server() && self.vault.is_empty() && !self.sessions.iter().any(|s| s.peers().iter().any(|p| p.contains("::"))) { return; }
         for key in self.group_machines() {
             let due = match self.sidebar.grouping.ids.get(&key) { None => true, Some(IdSlot::Failed(at)) => at.elapsed() >= ID_RETRY, _ => false };
             let Some(api) = due.then(|| self.machine_api(&key)).flatten() else { continue };

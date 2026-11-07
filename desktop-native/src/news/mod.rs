@@ -13,7 +13,10 @@ mod image_reveal;
 mod rename_suggestion;
 mod search_conversations;
 mod sleep_hidden;
+mod speech_pause;
+mod session_vault;
 mod tour;
+mod worktree_fresh;
 
 use std::time::Instant;
 use gpui_kit::*;
@@ -31,6 +34,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "tour-nativo" => Some(tour::render),
         "cofre-de-senhas" => Some(password_vault::render),
         "relatorio-automatico" => Some(auto_report::render),
+        "pedido-na-sessao" => Some(session_vault::render),
         "login-navegador" => Some(login_browser::render),
         "ocultar-da-lista" => Some(hide_from_list::render),
         "busca-conversas" => Some(search_conversations::render),
@@ -38,6 +42,8 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "adormecer-ocultas" => Some(sleep_hidden::render),
         "sem-projeto" => Some(no_project::render),
         "pilula-do-ditado" => Some(dictation_pill::render),
+        "pausar-fala" => Some(speech_pause::render),
+        "worktree-atualizada" => Some(worktree_fresh::render),
         _ => None,
     }
 }

@@ -185,6 +185,7 @@ impl AppState {
 
     pub fn with_parts(cfg: Config, terminal: crate::terminal_control::TerminalPool,
                       costs: Arc<crate::costs::collect::Collector>, fx: Arc<crate::costs::fx::Fx>, server_id: String) -> AppState {
+        crate::transcript::set_orq_parser(crate::orchestration::timeline::parse_obj);
         let http = proxy::client();
         let mods = crate::mods::state::Mods::default();
         let interactions = Arc::new(crate::interactions::InteractionStore::default());
@@ -346,7 +347,7 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     // Ligado com o estado final: o evento lê as mesmas contas que a rota `/api/tags`.
     state.list.tags.bind(state.accounts.clone(), state.server_id.clone());
     if crate::config::Config::runtime_instance().ok().flatten().is_some() {
-        let omp_sync = crate::omp_sync::Service::start(state.clone());
+        let omp_sync = crate::omp_sync::start(state.clone());
         let _ = state.omp_sync.set(omp_sync.clone());
         omp_sync.ready().await;
         crate::provider_models::inbox::install_endpoint(state.clone()).await;
@@ -982,12 +983,7 @@ pub(crate) fn on_guest_port(req: &Request) -> bool {
     req.extensions().get::<ConnectInfo<crate::share::gate::GuestConn>>().is_some()
 }
 
-/// O 404 do FastAPI, que os clientes já tratam.
-pub(crate) fn not_found(headers: &HeaderMap) -> Response {
-    let mut resp = (StatusCode::NOT_FOUND, [(header::CONTENT_TYPE, "application/json")], r#"{"detail":"Not Found"}"#).into_response();
-    cors(headers, resp.headers_mut());
-    resp
-}
+pub(crate) use hangar_core::http::{cors, gzip_with_minimum, maybe_gzip, not_found};
 
 
 pub(crate) async fn pass(st: &AppState, mut req: Request, fwd: &Forward) -> Response {
@@ -1430,38 +1426,6 @@ async fn push(out: &mpsc::Sender<Queued>, item: impl Into<Queued>) -> bool {
     matches!(tokio::time::timeout(SEND_TIMEOUT, out.send(item.into())).await, Ok(Ok(())))
 }
 
-/// CORS das respostas do próprio Rust, como o CORSMiddleware do Python: `*`, sem credenciais,
-/// ETag legível pelo JS. Preflight não chega aqui: vai sem token e é repassado.
-pub(crate) fn cors(req: &HeaderMap, resp: &mut HeaderMap) {
-    if req.contains_key(header::ORIGIN) {
-        resp.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
-        resp.insert(header::ACCESS_CONTROL_EXPOSE_HEADERS, HeaderValue::from_static("ETag"));
-    }
-}
-
-/// Gzip só quando o cliente pede e o corpo passa de 1 KB. SSE nunca: o gzip seguraria os quadros.
-pub(crate) fn maybe_gzip(req: &HeaderMap, resp: &mut HeaderMap, body: Vec<u8>) -> Vec<u8> {
-    gzip_with_minimum(req, resp, body, 1024)
-}
-
-pub(crate) fn gzip_with_minimum(req: &HeaderMap, resp: &mut HeaderMap, body: Vec<u8>, minimum: usize) -> Vec<u8> {
-    let wants = req
-        .get(header::ACCEPT_ENCODING)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.contains("gzip"));
-    let sse = resp
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.starts_with("text/event-stream"));
-    if !wants || sse || body.len() < minimum {
-        return body;
-    }
-    let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(5));
-    std::io::Write::write_all(&mut enc, &body).expect("escrita em memória");
-    resp.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
-    resp.insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
-    enc.finish().expect("escrita em memória")
-}
 
 #[cfg(test)]
 mod tests {
@@ -1516,9 +1480,18 @@ mod tests {
 
     #[tokio::test]
     async fn orchestration_history_uses_the_same_parser_on_public_and_forwarded_ports() {
+        const NAME: &str = "routes::tests::orchestration_history_uses_the_same_parser_on_public_and_forwarded_ports";
+        if std::env::var_os("ORQ_REGISTRY_PROBE").is_none() {
+            // O leitor do orq é global ao processo: num filho, só o AppState pode tê-lo registrado.
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", NAME, "--test-threads=1"]).env("ORQ_REGISTRY_PROBE", "1").output().unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(out.status.success() && stdout.contains("1 passed"), "{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let timeline = dir.path().join("timeline.jsonl");
-        let lines = crate::transcript::orq_cases::CASES.iter().map(|(input, _)| format!("{input}\n")).collect::<String>();
+        let lines = crate::orchestration::orq_cases::CASES.iter().map(|(input, _)| format!("{input}\n")).collect::<String>();
         std::fs::write(&timeline, lines).unwrap();
         let mut state = Arc::try_unwrap(state_with_upstream().await).ok().unwrap();
         state.side.locate = Arc::new(crate::locate::Fixed(Some(InternalInfo {

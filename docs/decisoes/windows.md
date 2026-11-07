@@ -75,6 +75,11 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   rodando sem porta é subida lenta: segue para a espera de quem pediu o reinício. Cada tentativa
   sai numa linha `hangar-tarefa:`, que o atualizador grava no diário (`rust.update_task_start`,
   `aviso` sem porta), porque o início repetido que deu certo não gera relatório.
+  Quem chama o `windows-tasks.ps1` por `powershell -Command` e lê o código de saída monta o script
+  com `update::restart::guarded_ps` (`try`/`catch` com `exit 1` e o erro com a linha): erro de cmdlet
+  dentro de `try`/`finally` aborta o script e sai 0. A parada (`Stop-HangarCandidate`) tolera o
+  processo que saiu sozinho entre a leitura e o `Stop-Process` (o `hangar-server` sai com o Python);
+  identidade divergente aborta sempre.
   O front não passa por ele, e erro dele em `Restart-HangarTasks` vira aviso: front parado
   não desfaz uma versão boa, e a vigia o sobe. Na
   máquina migrada, porta do front com o `hangar-server` é tela servida, nunca conflito:
@@ -212,6 +217,34 @@ conferência do front e antes da última. Provável, não observado direto: o re
 dono da porta, e o log não tem a tentativa repetida do `bind_when_free`, então o servidor ligou de
 primeira. Matar um `node` não explica: na DELPHI-02 a porta saiu da lista logo depois do processo,
 em 12 de 12. Por isso a mensagem agora traz processo e PID de quem segura a porta.
+
+**Passo que reinicia e volta pela metade (06/11/2026).** Relatórios `n7bgpkfw` a `25sdpxmj`
+(Windows 11 Pro, `0.1.0.9201` para `0.1.0.9492`): o passo `2026-10-30-checkout-update-windows`
+rodou o `install.ps1 -Update`, que reiniciou a tarefa; a `0.1.0.9492` ficou de pé às 09:34:46, mas o
+instalador acusou "a porta 8765 nao abriu depois do reinicio" e o passo falhou. A volta só
+devolveu o `current` para a `0.1.0.9201`, sem reiniciar: a versão nova seguiu rodando da pasta dela,
+e cada atualização automática seguinte tentou refazer essa pasta e levou "Acesso negado (os error
+5)". Mesmo desenho em 05/11 (a `0.1.0.9467` subiu às 14:57 e o `current` ficou na `0.1.0.9201`), o
+que reforça a suposição do `dyqv7oi7` acima. Agora a volta reinicia quando o servidor no ar não é
+mais o de antes, e a falha de passo grava o mesmo retrato da falha de reinício (cauda da saída do
+passo, saída do backend, processos, tarefa e porta). **Por que a porta não foi vista segue sem
+prova:** às 07:56 de 05/11 o retrato disse `porta 8765: ninguem escutando` com o servidor de pé há
+33 min, e o instalador esperou os 180 s extras, que só correm com o log do backend crescendo. Por
+isso o retrato confere também por conexão em `127.0.0.1`, e a espera do `install.ps1` e o
+`Start-HangarTask` (`Test-HangarPortOpen`, em `windows-tasks.ps1`) aceitam um 200 de
+`/__hangar_server/health` quando o `Get-NetTCPConnection` volta vazio; conexão crua aceitaria
+qualquer processo na porta.
+
+**Causa do "reinício sem início" (06/11/2026).** Reproduzida na DELPHI-02 com `Start-Transcript` no
+`windows-tasks.ps1`: 1 em 10 reinícios avulsos seguidos. O `Restart-HangarTask` para o Python e, em
+seguida, o `hangar-server` filho dele, que já saiu sozinho quando o Python morreu; o `Stop-Process`
+lança `Process has exited, so the requested information is not available.` (`InvalidOperationException`).
+É erro de cmdlet, que só encerra o comando: dentro do `try`/`finally` da função, o resto do script
+não roda, e o `powershell -Command` sai 0 (`$global:? True`). O atualizador lia sucesso, esperava 90 s
+pela porta e voltava a versão. Medido na VM: o mesmo tipo de erro dentro de `try`/`finally` sai 0;
+com `try`/`catch` + `exit 1` em volta, sai 1 com a mensagem. Era o caso dos relatórios
+`umhb7h5y`, `dyqv7oi7`, `p352q2xj` (DELPHI-08), `l7pyo6l5` (DELPHI-02) e os de `de` e DELPHI-06: tarefa
+`Ready` com o `LastRunTime` anterior, reinício "ok" em 2 a 6 s e o `0xffffffff` do Python parado.
 
 ## Pacote por versão no Windows (24/10/2026)
 

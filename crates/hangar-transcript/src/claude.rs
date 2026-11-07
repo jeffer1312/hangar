@@ -1,0 +1,1230 @@
+// crates/hangar-server/src/transcript/claude.rs
+//! Porte de `parse_obj`, `RewriteFilter` e `silent_attachment_timestamp` (backend/app/transcript.py).
+//! Campo com tipo errado, que no Python levanta exceção e derruba a leitura, aqui conta como ausente.
+
+use std::collections::HashMap;
+use std::sync::LazyLock;
+
+use hangar_api::chat::{ChatEvent, ChatKind, PatchHunk};
+use regex::Regex;
+use serde_json::{Map, Value};
+
+use super::py::{self, lstrip, py_re, strip};
+use super::{event, finish, pyjson};
+
+// transcript.py:40-45
+static IMAGE_SOURCE: LazyLock<Regex> = LazyLock::new(|| py_re(r"\A\[Image(?:\]|: [^\]]*\])\z"));
+static IMAGE_MARKER: LazyLock<Regex> = LazyLock::new(|| py_re(r"\[Image #\d+\]\s*"));
+static INTERRUPTED: LazyLock<Regex> = LazyLock::new(|| py_re(r"\A\[Request interrupted by user[^\]]*\]\z"));
+// transcript.py:76, 89, 95, 102-103
+static META_BLOCK: LazyLock<Regex> = LazyLock::new(|| py_re(r"(?s)<system-reminder>.*?</system-reminder>"));
+static TASK_NOTIF: LazyLock<Regex> = LazyLock::new(|| py_re(r"<task-id>([^<]+)</task-id>"));
+// Parada pelo usuário: o Claude Code avisa só com as descrições dos agentes, sem task-id.
+static STOPPED_ONE: LazyLock<Regex> = LazyLock::new(|| py_re(r#"(?s)\ABackground agent "(.*)" was stopped by the user\.\z"#));
+static STOPPED_MANY: LazyLock<Regex> = LazyLock::new(|| py_re(r#"(?s)\A\d+ background agents were stopped by the user: "(.*)"\.\z"#));
+
+/// `_stopped_agents` (transcript.py): um fim de tarefa por descrição parada.
+fn stopped_agents(text: &str, id: &str, at: Option<f64>) -> Option<Vec<ChatEvent>> {
+    let text = strip(text);
+    let names: Vec<&str> = if let Some(m) = STOPPED_ONE.captures(text) {
+        vec![m.get(1)?.as_str()]
+    } else {
+        STOPPED_MANY.captures(text)?.get(1)?.as_str().split("\", \"").collect()
+    };
+    Some(names.into_iter().enumerate().map(|(k, name)| ChatEvent {
+        tool_use_id: Some(format!("task:stopped:{name}")),
+        result: Some("task-notification".into()),
+        ts: at,
+        ..event(ChatKind::ToolResult, format!("{id}:{k}"))
+    }).collect())
+}
+static AGENT_MSG: LazyLock<Regex> =
+    LazyLock::new(|| py_re(r#"(?s)\A<agent-message from="([^"]+)"[^>]*>(.*)</agent-message>\z"#));
+static TEAMMATE_START: LazyLock<Regex> =
+    LazyLock::new(|| py_re(r"\A(?:Another Claude session sent a message:\s*)?<teammate-message\b"));
+static TEAMMATE_BLOCK: LazyLock<Regex> =
+    LazyLock::new(|| py_re(r"(?s)<teammate-message\b([^>]*)>\n?(.*?)\n?</teammate-message>"));
+// transcript.py:163-166
+static PEER_WRAP: LazyLock<Regex> = LazyLock::new(|| {
+    py_re(r"(?s)\A<cross-session-message\b([^>]*)>\n?(.*?)\n?</cross-session-message>\z")
+});
+static PEER_ATTR: LazyLock<Regex> = LazyLock::new(|| py_re(r#"([\w-]+)="([^"]*)""#));
+static SOCK_PID: LazyLock<Regex> = LazyLock::new(|| py_re(r"/(\d+)\.sock"));
+static PEER_PREFIX: LazyLock<Regex> = LazyLock::new(|| py_re(r"\A\[(de|grupo|painel):\s*[^\]]+\]"));
+// transcript.py:263
+static ORIGINAL_PROMPT: LazyLock<Regex> = LazyLock::new(|| {
+    py_re(r"(?s)UserPromptSubmit operation blocked by hook:\s*(.*?)\s*Original prompt: (.+)$")
+});
+// transcript.py:375-378
+static ATTACHMENT_HEAD: LazyLock<Regex> = LazyLock::new(|| {
+    py_re(r#"\A\{"parentUuid":(?:null|"[^"\\]*"),"isSidechain":(?:true|false),"attachment":\{"type":"([^"\\]*)""#)
+});
+const ATTACHMENT_TAIL: &str = r#"},"type":"attachment","uuid":""#;
+static ATTACHMENT_TAIL_RE: LazyLock<Regex> =
+    LazyLock::new(|| py_re(r#"\A\},"type":"attachment","uuid":"[^"\\]*","timestamp":"([^"\\]*)""#));
+// transcript.py:57-72
+const COMMAND_META_PREFIXES: [&str; 12] = [
+    "<command-name>", "<command-message>", "<command-args>", "<local-command-caveat>",
+    "<local-command-stdout>", "<local-command-stderr>", "<bash-input>", "<bash-stdout>", "<bash-stderr>",
+    "Base directory for this skill:", "<task-notification>", "<system-reminder>",
+];
+
+const WINDOW_S: f64 = 60.0;
+
+/// `RewriteFilter` (transcript.py:315): descarta o que o `claude --resume` regravou.
+#[derive(Default)]
+pub struct RewriteFilter {
+    max: f64,
+    recent: HashMap<(String, String), f64>,
+}
+
+impl RewriteFilter {
+    pub fn keep(&mut self, obj: &Map<String, Value>) -> bool {
+        if !matches!(obj.get("type").and_then(Value::as_str), Some("user" | "assistant")) {
+            return true;
+        }
+        let Some(t) = obj.get("timestamp").and_then(Value::as_str) else { return true };
+        let Some(ts) = py::iso_timestamp(&t.replace('Z', "+00:00")) else { return true };
+        if ts < self.max - WINDOW_S {
+            return false;
+        }
+        let content = obj.get("message").and_then(Value::as_object).and_then(|m| m.get("content"));
+        // ensure_ascii=True no lugar do False do Python: a igualdade entre duas linhas é a mesma, e o
+        // surrogate solto que derruba o md5 do Python aqui passa.
+        let fp = (t.to_string(), py::md5_hex(&pyjson::dumps(content.unwrap_or(&Value::Null), true)));
+        if self.recent.contains_key(&fp) {
+            return false;
+        }
+        self.recent.insert(fp, ts);
+        if ts > self.max {
+            self.max = ts;
+            if self.recent.len() > 256 {
+                self.recent.retain(|_, v| *v >= ts - WINDOW_S);
+            }
+        }
+        true
+    }
+
+    /// Estado para continuar o filtro noutra leitura do mesmo arquivo (o índice lê aos pedaços).
+    pub fn to_state(&self) -> String {
+        let recent: Vec<(&str, &str, f64)> = self.recent.iter().map(|((t, h), ts)| (t.as_str(), h.as_str(), *ts)).collect();
+        serde_json::json!({"max": self.max, "recent": recent}).to_string()
+    }
+
+    pub fn from_state(state: &str) -> Option<Self> {
+        #[derive(serde::Deserialize)]
+        struct Saved { max: f64, recent: Vec<(String, String, f64)> }
+        let saved: Saved = serde_json::from_str(state).ok()?;
+        Some(Self { max: saved.max, recent: saved.recent.into_iter().map(|(t, h, ts)| ((t, h), ts)).collect() })
+    }
+}
+
+/// `silent_attachment_timestamp` (transcript.py:381): relógio de um anexo que nunca vira bolha,
+/// lido sem json. A falha de hook só vira nota quem pediu as notas (`notices`).
+pub(crate) fn silent_attachment_timestamp(line: &str, notices: bool) -> Option<&str> {
+    if !line.ends_with("}\n") {
+        return None;
+    }
+    let head = ATTACHMENT_HEAD.captures(line)?;
+    if matches!(&head[1], "queued_command" | "hook_additional_context") || (notices && &head[1] == "hook_non_blocking_error") {
+        return None;
+    }
+    let i = line.rfind(ATTACHMENT_TAIL)?;
+    Some(ATTACHMENT_TAIL_RE.captures(&line[i..])?.get(1)?.as_str())
+}
+
+/// `parse_obj` (transcript.py:397), já com o `scrub_surrogates` do `ChatEvent`.
+pub(crate) fn parse_obj(obj: &Map<String, Value>, resolve: PeerResolver) -> Vec<ChatEvent> {
+    let mut out = parse_raw(obj, resolve);
+    out.iter_mut().for_each(finish);
+    out
+}
+
+fn parse_raw(obj: &Map<String, Value>, resolve: PeerResolver) -> Vec<ChatEvent> {
+    let etype = obj.get("type").and_then(Value::as_str);
+    let uid = obj.get("uuid").and_then(Value::as_str).unwrap_or("");
+    match etype {
+        Some("system") => return system(obj, resolve),
+        Some("queue-operation") => return queue_operation(obj, resolve),
+        Some("attachment") => return attachment(obj, uid),
+        _ => {}
+    }
+    let Some(msg) = obj.get("message").and_then(Value::as_object) else { return Vec::new() };
+    let content = msg.get("content");
+    match (etype, content) {
+        (Some("user"), _) => user(obj, uid, content, resolve),
+        (Some("assistant"), Some(Value::Array(items))) => assistant(obj, msg, uid, items),
+        // O snapshot transferido conserva respostas em texto puro, aceitas pelo parser original.
+        (Some("assistant"), Some(Value::String(text))) if !strip(text).is_empty() =>
+            assistant(obj, msg, uid, &[serde_json::json!({"type":"text", "text":text})]),
+        _ => Vec::new(),
+    }
+}
+
+/// Avisos da CLI que o terminal mostra e o transcript grava, somados por turno como no Claude sem terminal.
+/// Só linhas `"entrypoint":"cli"`: as do sem terminal (`sdk-cli`) já viram nota pelo ator.
+#[derive(Default)]
+pub(crate) struct NoticeFold {
+    /// Já viu um começo ou fim de turno, ou leu do começo do arquivo: lido a partir do meio, a 2ª falha viraria
+    /// uma "primeira" com outro id. Não volta a falso.
+    synced: bool,
+    /// Turno em curso: a mensagem da fila (`queued_command`) no meio dele é injetada no turno, não abre outro.
+    turn_open: bool,
+    /// Falhas do turno por `hookName` → (detalhe da primeira, total). Por nome: o `stderr` muda a cada chamada.
+    hooks: std::collections::BTreeMap<String, (String, u32)>,
+    /// Maior tentativa do grupo aberto pela `retryAttempt == 1`.
+    retries: Option<u64>,
+}
+
+const HOOK_STDERR_PREFIX: &str = "Failed with non-blocking status code: ";
+
+impl NoticeFold {
+    /// Leitura que começa no byte 0 sabe onde está: a falha do `SessionStart`, antes do primeiro prompt, também conta.
+    pub(crate) fn new(from_file_start: bool) -> Self {
+        Self { synced: from_file_start, ..Self::default() }
+    }
+
+    pub(crate) fn file_start(&mut self) {
+        self.synced = true;
+    }
+
+    /// Notas da linha: o fecho do turno anterior entra antes dos eventos dela (o prompt novo vem depois), o resto depois.
+    pub(crate) fn feed(&mut self, obj: &Map<String, Value>, events: &mut Vec<ChatEvent>) {
+        if obj.get("entrypoint").and_then(Value::as_str) != Some("cli") {
+            return;
+        }
+        let uid = obj.get("uuid").and_then(Value::as_str).unwrap_or("");
+        let at = ts(obj);
+        match obj.get("type").and_then(Value::as_str) {
+            // Turno interrompido não grava `turn_duration`: o prompt seguinte também fecha, e a marca da CLI
+            // ("[Request interrupted by user]") conta como prompt.
+            Some("user") if is_prompt(obj) => self.open_turn(uid, at, events),
+            // Recado de outra sessão: `isMeta`, sem prompt; com a sessão parada é ele que abre o turno.
+            Some("user") if !self.turn_open && obj.get("origin").and_then(|o| o.get("kind")).and_then(Value::as_str) == Some("peer") => {
+                self.wake(uid, at, events)
+            }
+            Some("user") => self.retries = None,
+            Some("system") => match obj.get("subtype").and_then(Value::as_str) {
+                Some("turn_duration") => {
+                    let closed = self.close_turn(uid, at);
+                    events.extend(closed);
+                    self.synced = true;
+                    self.turn_open = false;
+                    self.retries = None;
+                }
+                Some("api_error") => {
+                    let attempt = obj.get("retryAttempt").and_then(Value::as_u64).unwrap_or(0);
+                    if attempt == 1 && self.synced {
+                        let why = obj.get("error").and_then(|e| e.get("formatted")).and_then(Value::as_str).unwrap_or("erro");
+                        let max = obj.get("maxRetries").and_then(Value::as_u64).unwrap_or(1);
+                        events.push(note(format!("retry:{uid}"), format!("⚙️ A API falhou ({why}); nova tentativa 1 de {max}"), at));
+                        self.retries = Some(1);
+                    } else if let Some(seen) = self.retries.as_mut() {
+                        *seen = (*seen).max(attempt);
+                    }
+                }
+                _ => {}
+            },
+            Some("attachment") => self.on_attachment(obj, uid, at, events),
+            Some("assistant") => {
+                // Só a resposta fecha o grupo: um anexo no meio (mensagem digitada na espera) não.
+                if let Some(failed) = self.retries.take() {
+                    if failed > 1 && obj.get("isApiErrorMessage") != Some(&Value::Bool(true)) {
+                        events.push(note(format!("retry-ok:{uid}"), format!("⚙️ A API voltou na {}ª tentativa", failed + 1), at));
+                    }
+                }
+                let stop = obj.get("message").and_then(|m| m.get("stop_reason")).and_then(Value::as_str);
+                if stop == Some("refusal") {
+                    events.push(note(format!("refusal:{uid}"), "⚙️ O modelo recusou responder".into(), at));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Fila ou recado com a sessão parada. Antes da sincronia não se sabe se ela estava parada (a leitura pode ter
+    /// começado no meio de um turno, onde a fila é injetada): só marca o turno, sem soma nem nota.
+    fn wake(&mut self, uid: &str, at: Option<f64>, events: &mut Vec<ChatEvent>) {
+        if self.synced {
+            self.open_turn(uid, at, events);
+        } else {
+            self.turn_open = true;
+        }
+    }
+
+    /// Prompt novo: fecha as somas do turno anterior antes dele (turno interrompido não grava `turn_duration`).
+    fn open_turn(&mut self, uid: &str, at: Option<f64>, events: &mut Vec<ChatEvent>) {
+        let closed = self.close_turn(uid, at);
+        events.splice(0..0, closed);
+        self.synced = true;
+        self.turn_open = true;
+        self.retries = None;
+    }
+
+    /// Prompt que vem da fila com a sessão parada abre turno; falha de hook (não bloqueio) vira nota, as seguintes somam.
+    fn on_attachment(&mut self, obj: &Map<String, Value>, uid: &str, at: Option<f64>, events: &mut Vec<ChatEvent>) {
+        let Some(att) = obj.get("attachment").and_then(Value::as_object) else { return };
+        match att.get("type").and_then(Value::as_str) {
+            Some("queued_command") if !self.turn_open => return self.wake(uid, at, events),
+            Some("hook_non_blocking_error") if self.synced => {}
+            _ => return,
+        }
+        let name = att.get("hookName").or_else(|| att.get("hookEvent")).and_then(Value::as_str).unwrap_or("hook").to_owned();
+        if let Some(streak) = self.hooks.get_mut(&name) {
+            streak.1 += 1;
+            return;
+        }
+        let reason = hook_failure_reason(att.get("stderr").and_then(Value::as_str), att.get("exitCode").and_then(Value::as_i64));
+        let detail = format!("{name}: {reason}");
+        events.push(hook_note(format!("hookfail:{uid}"), detail.clone(), at));
+        self.hooks.insert(name, (detail, 1));
+    }
+
+    fn close_turn(&mut self, uid: &str, at: Option<f64>) -> Vec<ChatEvent> {
+        std::mem::take(&mut self.hooks).into_iter().filter(|(_, (_, count))| *count > 1)
+            .map(|(name, (detail, count))| hook_note(format!("hookfail-sum:{uid}:{}", md5_8(&name)), format!("{detail} ({count}× neste turno)"), at))
+            .collect()
+    }
+}
+
+/// Prompt da pessoa (ou de quem fala por ela): abre um turno. Resultado de ferramenta, resumo da compactação
+/// (cai no meio do turno) e `/comando` local (não grava `turn_duration`) não.
+fn is_prompt(obj: &Map<String, Value>) -> bool {
+    if py::truthy(obj.get("isMeta")) || py::truthy(obj.get("isCompactSummary")) {
+        return false;
+    }
+    match obj.get("message").and_then(|m| m.get("content")) {
+        Some(Value::String(text)) => !strip(text).is_empty() && !is_command_meta(text),
+        Some(Value::Array(blocks)) => !blocks.iter().any(|b| b.get("type").and_then(Value::as_str) == Some("tool_result"))
+            && blocks.iter().find(|b| b.get("type").and_then(Value::as_str) == Some("text"))
+                .is_some_and(|b| !is_command_meta(b.get("text").and_then(Value::as_str).unwrap_or(""))),
+        _ => false,
+    }
+}
+
+/// Motivo da falha de hook, o mesmo com e sem terminal: primeira linha com texto, cortada; senão o código de saída.
+pub fn hook_failure_reason<'a>(texts: impl IntoIterator<Item = &'a str>, exit: Option<i64>) -> String {
+    texts.into_iter().map(|text| text.strip_prefix(HOOK_STDERR_PREFIX).unwrap_or(text)).flat_map(str::lines).map(str::trim)
+        .find(|row| !row.is_empty())
+        .map(|row| match row.char_indices().nth(300) { Some((at, _)) => format!("{}…", &row[..at]), None => row.to_owned() })
+        .or_else(|| exit.map(|code| format!("exit {code}")))
+        .unwrap_or_else(|| "sem mensagem de erro".into())
+}
+
+/// Nota de aviso da CLI no formato de resposta: não é a resposta do modelo (prévia, última resposta).
+pub fn is_cli_note(id: &str) -> bool {
+    ["retry:", "retry-ok:", "refusal:"].iter().any(|prefix| id.starts_with(prefix))
+}
+
+fn note(id: String, text: String, at: Option<f64>) -> ChatEvent {
+    let mut ev = ChatEvent { ts: at, ..text_event(ChatKind::AssistantMsg, id, text) };
+    finish(&mut ev);
+    ev
+}
+
+fn hook_note(id: String, detail: String, at: Option<f64>) -> ChatEvent {
+    let mut ev = ChatEvent { ts: at, hook_error: Some(detail), ..text_event(ChatKind::Notice, id, "hook_failed".into()) };
+    finish(&mut ev);
+    ev
+}
+
+fn ts(obj: &Map<String, Value>) -> Option<f64> {
+    py::ts_of_iso(obj.get("timestamp")?.as_str()?)
+}
+
+fn md5_8(s: &str) -> String {
+    let mut h = py::md5_hex(s);
+    h.truncate(8);
+    h
+}
+
+fn sub_id(uid: &str, k: usize) -> String {
+    if k == 0 { uid.to_string() } else { format!("{uid}:{k}") }
+}
+
+fn text_event(kind: ChatKind, id: String, text: String) -> ChatEvent {
+    ChatEvent { text: Some(text), ..event(kind, id) }
+}
+
+/// Aviso de um subagente que só parou para esperar o próprio trabalho de fundo: vem com status
+/// `completed`, mas ele segue vivo e o fim de verdade chega noutro aviso com o mesmo task-id.
+/// Vira `task:waiting:<id>`: o cliente mostra a espera sem fechar o agente.
+/// Só o `<summary>`: o `<result>` do fim de verdade pode citar a frase.
+fn interim_notification(text: &str) -> bool {
+    text.split_once("<summary>").and_then(|(_, rest)| rest.split_once("</summary>"))
+        .is_some_and(|(summary, _)| summary.contains("is waiting on its own background work"))
+}
+
+fn task_result(id: String, task: &str) -> ChatEvent {
+    ChatEvent {
+        tool_use_id: Some(format!("task:{task}")),
+        result: Some("task-notification".into()),
+        ..event(ChatKind::ToolResult, id)
+    }
+}
+
+fn first<'a>(items: &'a [Value], type_name: &str) -> Option<&'a Map<String, Value>> {
+    items
+        .iter()
+        .filter_map(Value::as_object)
+        .find(|it| it.get("type").and_then(Value::as_str) == Some(type_name))
+}
+
+pub fn is_command_meta(text: &str) -> bool {
+    let t = lstrip(text);
+    COMMAND_META_PREFIXES.iter().any(|p| t.starts_with(p))
+}
+
+/// `_strip_meta_blocks` (transcript.py:300).
+pub fn strip_meta_blocks(text: &str) -> String {
+    strip(&strip_pasted(&META_BLOCK.replace_all(text, ""))).to_string()
+}
+
+/// `_PASTED_RE.sub(r"\2", …)` (transcript.py:83). O `regex` não tem retrorreferência, então o
+/// fechamento com o mesmo id é procurado à mão: o primeiro depois da abertura, sem um "\n" de cada
+/// lado do conteúdo.
+fn strip_pasted(text: &str) -> String {
+    const OPEN: &str = "<pasted_content id=\"";
+    let mut out = String::with_capacity(text.len());
+    let (mut copied, mut search) = (0, 0);
+    while let Some(rel) = text[search..].find(OPEN) {
+        let at = search + rel;
+        let id_start = at + OPEN.len();
+        let Some(id_len) = text[id_start..].find('"') else { break };
+        let after = id_start + id_len + 1;
+        if !text[after..].starts_with('>') {
+            search = at + 1;
+            continue;
+        }
+        let id = &text[id_start..id_start + id_len];
+        let mut body = after + 1;
+        if text[body..].starts_with('\n') {
+            body += 1;
+        }
+        let close = format!("</pasted_content id=\"{id}\">");
+        let Some(rel_close) = text[body..].find(&close) else {
+            search = at + 1;
+            continue;
+        };
+        let end = body + rel_close + close.len();
+        let mut body_end = body + rel_close;
+        if body_end > body && text[..body_end].ends_with('\n') {
+            body_end -= 1;
+        }
+        out.push_str(&text[copied..at]);
+        out.push_str(&text[body..body_end]);
+        copied = end;
+        search = end;
+    }
+    out.push_str(&text[copied..]);
+    out
+}
+
+fn attrs(raw: &str) -> HashMap<&str, &str> {
+    PEER_ATTR.captures_iter(raw).map(|c| (c.get(1).unwrap().as_str(), c.get(2).unwrap().as_str())).collect()
+}
+
+/// `_teammate_textos` (transcript.py:106): (recados a mostrar, colegas que ficaram ociosos).
+fn teammate_texts(text: Option<&Value>) -> Option<(Vec<String>, Vec<(String, Option<f64>)>)> {
+    let t = lstrip(text?.as_str()?);
+    if !TEAMMATE_START.is_match(t) {
+        return None;
+    }
+    let blocks: Vec<_> = TEAMMATE_BLOCK.captures_iter(t).collect();
+    if blocks.is_empty() {
+        return None;
+    }
+    let (mut out, mut idle) = (Vec::new(), Vec::new());
+    for b in blocks {
+        let body = strip(&b[2]);
+        let name = attrs(&b[1]).get("teammate_id").copied().filter(|n| !n.is_empty()).unwrap_or("colega");
+        if body.starts_with('{') {
+            if let Some(Value::Object(aviso)) = pyjson::loads_lossless(body) {
+                if aviso.get("type").and_then(Value::as_str) == Some("idle_notification") {
+                    idle.push((name.to_string(), ts(&aviso)));
+                }
+                continue;
+            }
+        }
+        if !body.is_empty() {
+            out.push(format!("[de: {name}] {body}"));
+        }
+    }
+    Some((out, idle))
+}
+
+/// `_teammate_eventos` (transcript.py).
+fn teammate_events(text: Option<&Value>, id: &str) -> Option<Vec<ChatEvent>> {
+    let (texts, idle) = teammate_texts(text)?;
+    let mut events: Vec<_> =
+        texts.into_iter().enumerate().map(|(k, t)| text_event(ChatKind::UserMsg, sub_id(id, k), t)).collect();
+    // O ts e o do aviso, nao o da entrega: ele chega ao lider depois do SendMessage que ja reacordou
+    // o colega, e o fold so fecha com aviso posterior a esse SendMessage.
+    let n = events.len();
+    events.extend(idle.into_iter().enumerate().map(|(j, (name, at))| ChatEvent {
+        ts: at,
+        ..task_result(sub_id(id, n + j), &format!("teammate:{name}"))
+    }));
+    Some(events)
+}
+
+/// `_agent_msg` (transcript.py:138).
+fn agent_msg(text: Option<&Value>, id: &str) -> Option<Vec<ChatEvent>> {
+    let m = AGENT_MSG.captures(strip(text?.as_str()?))?;
+    let body = &m[2];
+    if body.contains("<agent-message") || body.contains("</agent-message>") {
+        return None;
+    }
+    if !body.contains("[Subagent hand-back]") {
+        return Some(Vec::new());
+    }
+    Some(vec![task_result(id.to_string(), &m[1])])
+}
+
+/// Resolve o pid do remetente no nome da sessão tmux (`peer::name_of_pid`; nos testes, um fake).
+pub(crate) type PeerResolver = fn(i64) -> Option<String>;
+
+/// `_peer_nome` (transcript.py:170): o nome tmux do pid; sem ele, o título que veio no recado.
+fn peer_name(pid: Option<i64>, fallback: Option<&str>, resolve: PeerResolver) -> String {
+    if let Some(name) = pid.and_then(resolve) {
+        return name;
+    }
+    match fallback.map(strip) {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => "sessão".to_string(),
+    }
+}
+
+/// `_peer_msg` (transcript.py:194).
+fn peer_msg(obj: &Map<String, Value>, resolve: PeerResolver) -> Option<String> {
+    let origin = obj.get("origin")?.as_object()?;
+    if origin.get("kind").and_then(Value::as_str) != Some("peer") {
+        return None;
+    }
+    let body = origin.get("body")?.as_str()?;
+    if strip(body).is_empty() {
+        return None;
+    }
+    if PEER_PREFIX.is_match(lstrip(body)) {
+        return Some(strip(body).to_string());
+    }
+    let pid = origin.get("verifiedPeerPid").and_then(py::int_of).and_then(|p| i64::try_from(p).ok());
+    let name = peer_name(pid, origin.get("name").and_then(Value::as_str), resolve);
+    Some(format!("[de: {name}] {}", strip(body)))
+}
+
+/// `_peer_msg_embrulhado` (transcript.py:218).
+fn wrapped_peer_msg(text: &str, resolve: PeerResolver) -> Option<String> {
+    let t = strip(text);
+    if !t.starts_with("<cross-session-message") || !t.ends_with("</cross-session-message>") {
+        return None;
+    }
+    let m = PEER_WRAP.captures(t)?;
+    let body = strip(&m[2]);
+    if body.is_empty() || body.contains("<cross-session-message") || body.contains("</cross-session-message>") {
+        return None;
+    }
+    if PEER_PREFIX.is_match(body) {
+        return Some(body.to_string());
+    }
+    let attrs = attrs(&m[1]);
+    let pid = SOCK_PID.captures(attrs.get("from").copied().unwrap_or("")).and_then(|c| c[1].parse().ok());
+    Some(format!("[de: {}] {body}", peer_name(pid, attrs.get("from-name").copied(), resolve)))
+}
+
+/// `_blocked_prompt` (transcript.py:267). O aviso de "parece recado" do Python fica de fora: ele
+/// levaria texto da conversa ao log.
+fn blocked_prompt(content: Option<&Value>, resolve: PeerResolver) -> Option<(String, String)> {
+    let m = ORIGINAL_PROMPT.captures(content?.as_str()?)?;
+    let text = strip(&m[2]);
+    if text.is_empty() {
+        return None;
+    }
+    Some((wrapped_peer_msg(text, resolve).unwrap_or_else(|| text.to_string()), m[1].to_string()))
+}
+
+fn system(obj: &Map<String, Value>, resolve: PeerResolver) -> Vec<ChatEvent> {
+    let Some((text, error)) = blocked_prompt(obj.get("content"), resolve) else { return Vec::new() };
+    vec![ChatEvent {
+        ts: ts(obj),
+        desistiu: Some(true),
+        hook_error: (!error.is_empty()).then_some(error),
+        ..text_event(ChatKind::UserMsg, format!("held:{}", md5_8(&text)), text)
+    }]
+}
+
+fn queue_operation(obj: &Map<String, Value>, resolve: PeerResolver) -> Vec<ChatEvent> {
+    let Some(q) = obj.get("content").and_then(Value::as_str) else { return Vec::new() };
+    let queued = obj.get("content");
+    let h = md5_8(q);
+    if let Some(a) = agent_msg(queued, &format!("queued-agent:{h}")) {
+        return a;
+    }
+    if let Some(c) = teammate_events(queued, &format!("queued-teammate:{h}")) {
+        return c;
+    }
+    if let Some(stopped) = stopped_agents(q, &format!("queued-stopped:{h}"), None) {
+        return stopped;
+    }
+    if lstrip(q).starts_with("<task-notification>") {
+        return match TASK_NOTIF.captures(q) {
+            Some(m) => {
+                let tid = strip(&m[1]);
+                // O hash separa os fins de um subagente retomado; as linhas do mesmo aviso continuam iguais.
+                if interim_notification(q) {
+                    return vec![task_result(format!("queued-task-waiting:{tid}:{h}"), &format!("waiting:{tid}"))];
+                }
+                vec![task_result(format!("queued-task:{tid}:{h}"), tid)]
+            }
+            None => Vec::new(),
+        };
+    }
+    if obj.get("operation").and_then(Value::as_str) != Some("remove") {
+        return Vec::new();
+    }
+    let delivery = delivery_id(obj.get("deliveryId"));
+    // Com entrega, este evento pode substituir o do anexo no SSE: leva o próprio horário.
+    let delivery_ts = if delivery.is_some() { ts(obj) } else { None };
+    let id = delivery
+        .unwrap_or_else(|| format!("queued:{}:{h}", obj.get("timestamp").map_or_else(String::new, py::py_str)));
+    if let Some(peer) = wrapped_peer_msg(q, resolve) {
+        return vec![ChatEvent { ts: delivery_ts, ..text_event(ChatKind::UserMsg, id, peer) }];
+    }
+    if is_command_meta(q) {
+        return Vec::new();
+    }
+    let cleaned = strip_meta_blocks(q);
+    if cleaned.is_empty() || IMAGE_SOURCE.is_match(&cleaned) {
+        return Vec::new();
+    }
+    let cleaned = strip(&IMAGE_MARKER.replace_all(&cleaned, "")).to_string();
+    if cleaned.is_empty() {
+        return Vec::new();
+    }
+    vec![ChatEvent { ts: delivery_ts, ..text_event(ChatKind::UserMsg, id, cleaned) }]
+}
+
+/// Sem terminal, a mesma entrega grava o anexo `queued_command` e o `remove`: o id comum vira uma bolha só.
+fn delivery_id(value: Option<&Value>) -> Option<String> {
+    value.and_then(Value::as_str).filter(|v| !v.is_empty()).map(|v| format!("delivery:{v}"))
+}
+
+fn attachment(obj: &Map<String, Value>, uid: &str) -> Vec<ChatEvent> {
+    let Some(att) = obj.get("attachment").and_then(Value::as_object) else { return Vec::new() };
+    let atype = att.get("type").and_then(Value::as_str);
+    if atype == Some("queued_command") {
+        let parts: Vec<&str> = match att.get("prompt") {
+            Some(Value::Array(blocks)) => blocks
+                .iter()
+                .filter_map(Value::as_object)
+                .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
+                .map(|b| b.get("text").and_then(Value::as_str).unwrap_or(""))
+                .collect(),
+            _ => Vec::new(),
+        };
+        let joined = parts.join("\n");
+        let prompt = att.get("prompt").and_then(Value::as_str).unwrap_or(&joined);
+        if let Some(stopped) = stopped_agents(prompt, uid, ts(obj)) {
+            return stopped;
+        }
+        let text = strip(&joined);
+        if text.is_empty() || is_command_meta(text) {
+            return Vec::new();
+        }
+        let text = strip_meta_blocks(text);
+        if !text.is_empty() {
+            let id = delivery_id(att.get("delivery_id")).unwrap_or_else(|| uid.into());
+            return vec![ChatEvent { ts: ts(obj), ..text_event(ChatKind::UserMsg, id, text) }];
+        }
+    }
+    if atype == Some("hook_additional_context") && att.get("hookEvent").and_then(Value::as_str) == Some("Stop") {
+        let content = att.get("content");
+        let text = match content {
+            Some(Value::Array(items)) => items.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("\n"),
+            Some(v) if py::truthy(content) => py::py_str(v),
+            _ => String::new(),
+        };
+        let t = strip(&text);
+        if !t.is_empty() {
+            return vec![ChatEvent {
+                hook_error: Some(t.to_string()),
+                ts: ts(obj),
+                ..text_event(ChatKind::Notice, uid.into(), "hook_prompt".into())
+            }];
+        }
+    }
+    Vec::new()
+}
+
+fn user(obj: &Map<String, Value>, uid: &str, content: Option<&Value>, resolve: PeerResolver) -> Vec<ChatEvent> {
+    if let Some(origin) = obj.get("origin").and_then(Value::as_object) {
+        if let Some(c) = teammate_events(origin.get("body"), uid) {
+            return c;
+        }
+    }
+    if let Some(peer) = peer_msg(obj, resolve) {
+        return vec![text_event(ChatKind::UserMsg, uid.into(), peer)];
+    }
+    if obj.get("isCompactSummary") == Some(&Value::Bool(true)) {
+        return vec![text_event(ChatKind::Notice, uid.into(), "compacted".into())];
+    }
+    if obj.get("isMeta") == Some(&Value::Bool(true)) {
+        return Vec::new();
+    }
+    let first_text = match content {
+        Some(Value::String(_)) => content,
+        Some(Value::Array(items)) => first(items, "text").and_then(|b| b.get("text")),
+        _ => None,
+    };
+    if let Some(a) = agent_msg(first_text, uid) {
+        return a;
+    }
+    if let Some(c) = teammate_events(first_text, uid) {
+        return c;
+    }
+    match content {
+        Some(Value::String(s)) => user_text(uid, s),
+        Some(Value::Array(items)) => user_blocks(obj, uid, items),
+        _ => Vec::new(),
+    }
+}
+
+fn user_text(uid: &str, s: &str) -> Vec<ChatEvent> {
+    if lstrip(s).starts_with("<task-notification>") {
+        return match TASK_NOTIF.captures(s) {
+            Some(m) if interim_notification(s) => vec![task_result(uid.into(), &format!("waiting:{}", strip(&m[1])))],
+            Some(m) => vec![task_result(uid.into(), strip(&m[1]))],
+            None => Vec::new(),
+        };
+    }
+    if is_command_meta(s) {
+        // O `/clear` abre a conversa nova; mostrá-lo seria a primeira bolha dela.
+        return super::history::typed_command(s)
+            .filter(|c| c.split_whitespace().next() != Some("/clear"))
+            .map(|c| vec![text_event(ChatKind::UserMsg, uid.into(), c)])
+            .unwrap_or_default();
+    }
+    if INTERRUPTED.is_match(strip(s)) {
+        return vec![text_event(ChatKind::Notice, uid.into(), "interrupted".into())];
+    }
+    let cleaned = strip_meta_blocks(s);
+    if cleaned.is_empty() || IMAGE_SOURCE.is_match(&cleaned) {
+        return Vec::new();
+    }
+    vec![text_event(ChatKind::UserMsg, uid.into(), cleaned)]
+}
+
+/// `_PATCH_MAX_LINES` (transcript.py).
+const PATCH_MAX_LINES: usize = 2000;
+
+/// `_patch_hunks` (transcript.py): os trechos do `structuredPatch`, sem o arquivo inteiro. Qualquer
+/// trecho fora do formato derruba o patch todo. Posição só aceita inteiro JSON (`6.0` é float no
+/// Python e cai) e até `u32::MAX`, o teto do tipo compartilhado, igual ao lado Python.
+fn patch_hunks(obj: &Map<String, Value>) -> Option<Vec<PatchHunk>> {
+    let raw = obj.get("toolUseResult")?.as_object()?.get("structuredPatch")?.as_array()?;
+    if raw.is_empty() {
+        return None;
+    }
+    let start = |h: &Map<String, Value>, key: &str| -> Option<u32> {
+        // ponytail: `-0` diverge do Python. Lá é o inteiro 0 e o patch fica com início 0; aqui o
+        // serde_json o lê como float (`-0.0`) e o patch cai. O Claude Code nunca grava `-0` como
+        // posição de linha, então a divergência não aparece na prática.
+        h.get(key)?.as_u64().and_then(|u| u32::try_from(u).ok())
+    };
+    let mut total = 0;
+    let mut hunks = Vec::with_capacity(raw.len());
+    for h in raw {
+        let h = h.as_object()?;
+        let (old_start, new_start) = (start(h, "oldStart")?, start(h, "newStart")?);
+        let lines = h
+            .get("lines")?
+            .as_array()?
+            .iter()
+            .map(|l| l.as_str().map(str::to_string))
+            .collect::<Option<Vec<_>>>()?;
+        total += lines.len();
+        if total > PATCH_MAX_LINES {
+            return None;
+        }
+        hunks.push(PatchHunk { old_start, new_start, lines });
+    }
+    Some(hunks)
+}
+
+/// `_bg_agent_id` (transcript.py): o id do subagente só quando o resultado é o lançamento em segundo plano.
+fn bg_agent_id(obj: &Map<String, Value>) -> Option<String> {
+    let tur = obj.get("toolUseResult")?.as_object()?;
+    if tur.get("status").and_then(Value::as_str) == Some("teammate_spawned") {
+        return tur.get("name").and_then(Value::as_str).filter(|s| !s.is_empty()).map(|n| format!("teammate:{n}"));
+    }
+    if tur.get("status").and_then(Value::as_str) != Some("async_launched") {
+        return None;
+    }
+    tur.get("agentId").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string)
+}
+
+/// `_parado_por_taskstop` (transcript.py): o trabalho que o `TaskStop` parou, que não manda mais notificação.
+fn stopped_by_taskstop(obj: &Map<String, Value>) -> Option<String> {
+    let tur = obj.get("toolUseResult")?.as_object()?;
+    tur.get("task_type").and_then(Value::as_str)?;
+    tur.get("task_id").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string)
+}
+
+fn user_blocks(obj: &Map<String, Value>, uid: &str, items: &[Value]) -> Vec<ChatEvent> {
+    let is_type = |it: &&Map<String, Value>, t: &str| it.get("type").and_then(Value::as_str) == Some(t);
+    let trs: Vec<_> = items.iter().filter_map(Value::as_object).filter(|it| is_type(it, "tool_result")).collect();
+    if !trs.is_empty() {
+        let ts = ts(obj);
+        // O `toolUseResult` é um por linha: com dois resultados não dá para saber de quem é.
+        let single = trs.len() == 1;
+        let mut out: Vec<ChatEvent> = trs
+            .into_iter()
+            .enumerate()
+            .map(|(k, tr)| {
+                let result = match tr.get("content") {
+                    Some(Value::Array(blocks)) => Some(
+                        blocks
+                            .iter()
+                            .filter_map(Value::as_object)
+                            .map(|b| b.get("text").map_or_else(String::new, py::py_str))
+                            .collect::<Vec<_>>()
+                            .join(" "),
+                    ),
+                    None | Some(Value::Null) => None,
+                    Some(other) => Some(py::py_str(other)),
+                };
+                let failed = py::truthy(tr.get("is_error"));
+                ChatEvent {
+                    tool_use_id: tr.get("tool_use_id").and_then(Value::as_str).map(str::to_string),
+                    result,
+                    is_error: Some(failed),
+                    patch: if single && !failed { patch_hunks(obj) } else { None },
+                    bg_agent_id: if single { bg_agent_id(obj) } else { None },
+                    ts,
+                    ..event(ChatKind::ToolResult, sub_id(uid, k))
+                }
+            })
+            .collect();
+        if single && out[0].is_error != Some(true) {
+            if let Some(stopped) = stopped_by_taskstop(obj) {
+                out.push(ChatEvent {
+                    tool_use_id: Some(format!("task:{stopped}")),
+                    result: Some("task-notification".into()),
+                    ts,
+                    ..event(ChatKind::ToolResult, sub_id(uid, 1))
+                });
+            }
+        }
+        return out;
+    }
+    let img_count = items.iter().filter_map(Value::as_object).filter(|it| is_type(it, "image")).count();
+    let texts: Vec<&str> = items
+        .iter()
+        .filter_map(Value::as_object)
+        .filter(|it| is_type(it, "text"))
+        .map(|b| b.get("text").and_then(Value::as_str).unwrap_or(""))
+        .collect();
+    let t = texts.first().copied().unwrap_or("");
+    if is_command_meta(t) {
+        return Vec::new();
+    }
+    if INTERRUPTED.is_match(strip(t)) {
+        return vec![text_event(ChatKind::Notice, uid.into(), "interrupted".into())];
+    }
+    // Entradas que chegaram durante o turno: a CLI as junta num `user` só, um bloco de texto por entrada.
+    // Todas aparecem, uma por linha: só a primeira sumia da conversa com as outras, que o modelo recebeu.
+    let mut parts = Vec::with_capacity(texts.len());
+    for (k, text) in texts.iter().enumerate() {
+        let cleaned = strip_meta_blocks(text);
+        // Bloco seguinte que, sem os `<system-reminder>`, é marcação do harness (comando, notificação,
+        // skill) não é texto digitado; o que sobra de texto depois do lembrete fica.
+        if k > 0 && is_command_meta(&cleaned) {
+            continue;
+        }
+        if IMAGE_SOURCE.is_match(&cleaned) {
+            if k == 0 {
+                return Vec::new();
+            }
+            continue;
+        }
+        let cleaned = strip(&IMAGE_MARKER.replace_all(&cleaned, "")).to_string();
+        if !cleaned.is_empty() {
+            parts.push(cleaned);
+        }
+    }
+    let cleaned = parts.join("\n");
+    if cleaned.is_empty() && img_count == 0 {
+        return Vec::new();
+    }
+    vec![ChatEvent {
+        image_count: (img_count > 0).then(|| img_count.try_into().ok()).flatten(),
+        // Entrada de várias linhas juntada a outra não é linha da mensagem: o `/history` casa pelo bloco.
+        commit_blocks: (parts.len() > 1).then_some(parts),
+        ..text_event(ChatKind::UserMsg, uid.into(), cleaned)
+    }]
+}
+
+/// `_cache_info` (transcript.py:633).
+fn cache_info(msg: &Map<String, Value>) -> (Option<u64>, Option<u64>) {
+    let Some(usage) = msg.get("usage").and_then(Value::as_object) else { return (None, None) };
+    let read = usage.get("cache_read_input_tokens").and_then(py::int_trunc).and_then(|n| u64::try_from(n).ok());
+    let creation = usage.get("cache_creation").and_then(Value::as_object);
+    // `_tok`: bool não conta como número aqui.
+    let tok = |k: &str| creation.and_then(|c| c.get(k)).filter(|v| !v.is_boolean()).and_then(py::int_trunc).unwrap_or(0);
+    let ttl = if tok("ephemeral_1h_input_tokens") > 0 {
+        Some(3600)
+    } else if tok("ephemeral_5m_input_tokens") > 0 {
+        Some(300)
+    } else {
+        None
+    };
+    (read, ttl)
+}
+
+fn assistant(obj: &Map<String, Value>, msg: &Map<String, Value>, uid: &str, items: &[Value]) -> Vec<ChatEvent> {
+    let (cache_read, cache_ttl_s) = cache_info(msg);
+    let ts = ts(obj);
+    let mut out = Vec::new();
+    for it in items.iter().filter_map(Value::as_object) {
+        let id = sub_id(uid, out.len());
+        match it.get("type").and_then(Value::as_str) {
+            Some("tool_use") => out.push(ChatEvent {
+                tool_name: it.get("name").and_then(Value::as_str).map(str::to_string),
+                tool_use_id: it.get("id").and_then(Value::as_str).map(str::to_string),
+                tool_input: Some(match it.get("input") {
+                    Some(Value::Object(m)) => m.clone(),
+                    _ => Map::new(),
+                }),
+                ts,
+                ..event(ChatKind::ToolUse, id)
+            }),
+            Some("text") => out.push(ChatEvent {
+                // `it.get("text", "")`: ausente vira "", null fica null.
+                text: match it.get("text") {
+                    None => Some(String::new()),
+                    Some(v) => v.as_str().map(str::to_string),
+                },
+                ts,
+                cache_read,
+                cache_ttl_s,
+                ..event(ChatKind::AssistantMsg, id)
+            }),
+            Some("thinking") => {
+                if let Some(p) = it.get("thinking").and_then(Value::as_str).filter(|p| !strip(p).is_empty()) {
+                    out.push(ChatEvent { ts, ..text_event(ChatKind::Thinking, id, p.to_string()) });
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use hangar_api::chat::{ChatEvent, ChatKind, PatchHunk};
+    use serde_json::{json, Value};
+
+    use super::super::{LineParser, Provider};
+
+    fn hunk() -> Value {
+        json!({"oldStart": 6, "oldLines": 3, "newStart": 6, "newLines": 3, "lines": [" a", "-b", "+B", " c"]})
+    }
+
+    fn parse(tool_use_result: Value, extra: Vec<Value>, is_error: Value) -> Vec<ChatEvent> {
+        let mut content = vec![json!({
+            "type": "tool_result", "tool_use_id": "toolu_1", "is_error": is_error,
+            "content": "The file /a.ts has been updated successfully."})];
+        content.extend(extra);
+        let line = json!({
+            "type": "user", "uuid": "u1", "timestamp": "2026-10-04T19:11:00.000Z",
+            "message": {"role": "user", "content": content}, "toolUseResult": tool_use_result});
+        LineParser::new(Provider::Claude).feed(line.to_string().as_bytes(), 0)
+    }
+
+    fn patch_of(tool_use_result: Value) -> Option<Vec<PatchHunk>> {
+        let [ev] = <[ChatEvent; 1]>::try_from(parse(tool_use_result, vec![], Value::Null)).expect("um evento");
+        assert_eq!(ev.kind, ChatKind::ToolResult);
+        ev.patch
+    }
+
+    #[test]
+    fn headless_delivery_attachment_and_remove_share_one_id() {
+        let att = json!({"type": "attachment", "uuid": "u-att", "timestamp": "2026-10-09T23:06:03.448Z",
+            "attachment": {"type": "queued_command", "delivery_id": "d-1",
+                "prompt": [{"type": "text", "text": "A DESCULPA ERA B"}]}});
+        let rem = json!({"type": "queue-operation", "operation": "remove", "deliveryId": "d-1",
+            "reason": "absorbed_mid_turn", "timestamp": "2026-10-09T23:06:10.249Z", "content": "A DESCULPA ERA B"});
+        let ids = |line: Value| LineParser::new(Provider::Claude).feed(line.to_string().as_bytes(), 0)
+            .into_iter().map(|e| e.id).collect::<Vec<_>>();
+        assert_eq!(ids(att), vec!["delivery:d-1".to_string()]);
+        assert_eq!(ids(rem), vec!["delivery:d-1".to_string()]);
+    }
+
+    #[test]
+    fn stop_by_the_user_ends_each_agent_by_its_description() {
+        let feed = |line: Value| LineParser::new(Provider::Claude).feed(line.to_string().as_bytes(), 0);
+        let many = feed(json!({"type": "attachment", "uuid": "u-stop", "timestamp": "2026-10-16T10:31:21.479Z",
+            "attachment": {"type": "queued_command", "commandMode": "task-notification",
+                "prompt": "2 background agents were stopped by the user: \"Revisar a Task 4\", \"Validar a tela\"."}}));
+        let got: Vec<_> = many.iter().map(|e| (e.id.as_str(), e.tool_use_id.as_deref(), e.result.as_deref(), e.ts.is_some())).collect();
+        assert_eq!(got, vec![("u-stop:0", Some("task:stopped:Revisar a Task 4"), Some("task-notification"), true),
+            ("u-stop:1", Some("task:stopped:Validar a tela"), Some("task-notification"), true)]);
+        let one = feed(json!({"type": "queue-operation", "operation": "enqueue",
+            "content": "Background agent \"Validar a tela\" was stopped by the user."}));
+        assert_eq!(one.iter().map(|e| e.tool_use_id.as_deref()).collect::<Vec<_>>(), vec![Some("task:stopped:Validar a tela")]);
+        assert!(one[0].id.starts_with("queued-stopped:") && one[0].id.ends_with(":0"));
+        let blocks = feed(json!({"type": "attachment", "uuid": "u-b", "timestamp": "2026-10-16T10:31:21.479Z",
+            "attachment": {"type": "queued_command", "commandMode": "task-notification",
+                "prompt": [{"type": "text", "text": "Background agent \"Validar a tela\" was stopped by the user."}]}}));
+        assert_eq!(blocks.iter().map(|e| (e.id.as_str(), e.tool_use_id.as_deref())).collect::<Vec<_>>(),
+            vec![("u-b:0", Some("task:stopped:Validar a tela"))]);
+    }
+
+    #[test]
+    fn each_queued_end_of_a_resumed_subagent_keeps_its_own_id() {
+        let notice = |status: &str| json!({"type": "queue-operation", "operation": "enqueue",
+            "content": format!("<task-notification>\n<task-id>a45</task-id>\n<status>{status}</status>\n</task-notification>")});
+        let ids = |line: Value| LineParser::new(Provider::Claude).feed(line.to_string().as_bytes(), 0)
+            .into_iter().map(|e| (e.id, e.tool_use_id)).collect::<Vec<_>>();
+        let (first, again, resumed) = (ids(notice("completed")), ids(notice("completed")), ids(notice("killed")));
+        assert_eq!(first, again);
+        assert_eq!(resumed[0].1.as_deref(), Some("task:a45"));
+        assert_ne!(first[0].0, resumed[0].0);
+    }
+
+    #[test]
+    fn interim_notice_of_a_waiting_subagent_is_marked_waiting() {
+        let notice = |summary: &str| format!("<task-notification>\n<task-id>a45</task-id>\n<status>completed</status>\n\
+            <summary>Agent \"R1\" {summary}</summary>\n<result>x</result>\n</task-notification>");
+        let parse = |line: Value| LineParser::new(Provider::Claude).feed(line.to_string().as_bytes(), 0)
+            .into_iter().map(|e| e.tool_use_id).collect::<Vec<_>>();
+        let waiting = notice("is waiting on its own background work");
+        let marked = vec![Some("task:waiting:a45".to_string())];
+        assert_eq!(parse(json!({"type": "queue-operation", "operation": "enqueue", "content": waiting.clone()})), marked);
+        assert_eq!(parse(json!({"type": "user", "uuid": "u-w", "message": {"role": "user", "content": waiting}})), marked);
+        let done = notice("completed").replace("<result>x</result>", "<result>is waiting on its own background work</result>");
+        assert_eq!(parse(json!({"type": "user", "uuid": "u-d", "message": {"role": "user", "content": done}})),
+            vec![Some("task:a45".to_string())], "o fim que cita a frase no resultado continua sendo fim");
+    }
+
+    #[test]
+    fn merged_queued_inputs_show_every_text_block() {
+        // Duas entradas que chegaram durante o turno: a CLI grava um `user` só, um bloco por entrada.
+        let line = json!({"type": "user", "uuid": "u-merged", "timestamp": "2026-10-14T12:00:00.000Z",
+            "message": {"role": "user", "content": [
+                {"type": "text", "text": "fila A editada\n"},
+                {"type": "text", "text": "<system-reminder>lembrete</system-reminder>"},
+                {"type": "text", "text": "fila C terceira"}]}});
+        let [ev] = <[ChatEvent; 1]>::try_from(LineParser::new(Provider::Claude).feed(line.to_string().as_bytes(), 0))
+            .expect("um evento");
+        assert_eq!((&ev.kind, ev.text.as_deref()), (&ChatKind::UserMsg, Some("fila A editada\nfila C terceira")));
+        assert_eq!(ev.commit_blocks.as_deref(), Some(["fila A editada".to_string(), "fila C terceira".to_string()].as_slice()));
+        assert!(!serde_json::to_string(&ev).unwrap().contains("commit_blocks"));
+        // Bloco seguinte que é marcação do harness não entra na bolha.
+        let meta = json!({"type": "user", "uuid": "u-meta", "message": {"content": [
+            {"type": "text", "text": "pedido"},
+            {"type": "text", "text": "<task-notification><task-id>t-1</task-id></task-notification>"},
+            {"type": "text", "text": "Base directory for this skill: /s"},
+            {"type": "text", "text": "<system-reminder>x</system-reminder>\n<command-name>/y</command-name>"},
+            {"type": "text", "text": "<system-reminder>lembrete</system-reminder>\ndepois do lembrete"}]}});
+        let [ev] = <[ChatEvent; 1]>::try_from(LineParser::new(Provider::Claude).feed(meta.to_string().as_bytes(), 0))
+            .expect("um evento");
+        assert_eq!(ev.text.as_deref(), Some("pedido\ndepois do lembrete"));
+        // A fonte da imagem num bloco seguinte não vira texto; a primeira continua tirando a linha da conversa.
+        let with_source = json!({"type": "user", "uuid": "u-img", "message": {"content": [
+            {"type": "text", "text": "[Image #1] veja"}, {"type": "image"}, {"type": "text", "text": "[Image: source: /tmp/a.png]"}]}});
+        let [ev] = <[ChatEvent; 1]>::try_from(LineParser::new(Provider::Claude).feed(with_source.to_string().as_bytes(), 0))
+            .expect("um evento");
+        assert_eq!((ev.text.as_deref(), ev.image_count), (Some("veja"), Some(1)));
+        let source_first = json!({"type": "user", "uuid": "u-src", "message": {"content": [
+            {"type": "text", "text": "[Image: source: /tmp/a.png]"}, {"type": "text", "text": "outra"}]}});
+        assert!(LineParser::new(Provider::Claude).feed(source_first.to_string().as_bytes(), 0).is_empty());
+    }
+
+    #[test]
+    fn typed_command_shows_as_the_text_the_user_typed() {
+        let feed = |content: &str| LineParser::new(Provider::Claude)
+            .feed(json!({"type": "user", "uuid": "u-cmd", "message": {"role": "user", "content": content}}).to_string().as_bytes(), 0)
+            .into_iter().map(|e| (e.kind, e.text)).collect::<Vec<_>>();
+        let user = |t: &str| vec![(ChatKind::UserMsg, Some(t.to_string()))];
+        assert_eq!(feed("<command-message>pr-review-auto</command-message>\n<command-name>/pr-review-auto</command-name>\n<command-args>225</command-args>"), user("/pr-review-auto 225"));
+        assert_eq!(feed("<command-name>/effort</command-name>\n            <command-message>effort</command-message>\n            <command-args>xhigh</command-args>"), user("/effort xhigh"));
+        // A fronteira da conversa nova e o que o comando local imprime seguem fora.
+        assert!(feed("<command-name>/clear</command-name>\n            <command-message>clear</command-message>\n            <command-args></command-args>").is_empty());
+        assert!(feed("<local-command-stdout>Set model to opus</local-command-stdout>").is_empty());
+        assert!(feed("Base directory for this skill: /s\n\n# Skill").is_empty());
+        // Só o que a pessoa digita começa com `/`.
+        assert!(feed("<command-name>skill</command-name>").is_empty());
+    }
+
+    #[test]
+    fn headless_peer_delivery_keeps_the_remove_timestamp() {
+        let rem = json!({"type": "queue-operation", "operation": "remove", "deliveryId": "d-1",
+            "timestamp": "2026-10-09T23:06:10.249Z",
+            "content": "<cross-session-message from=\"uds:/x\" from-name=\"x\">\n[de: x] oi\n</cross-session-message>"});
+        let [ev] = <[ChatEvent; 1]>::try_from(LineParser::new(Provider::Claude).feed(rem.to_string().as_bytes(), 0))
+            .expect("um evento");
+        assert_eq!((ev.id.as_str(), ev.text.as_deref()), ("delivery:d-1", Some("[de: x] oi")));
+        assert!((ev.ts.expect("ts") - 1_791_587_170.249).abs() < 1e-3);
+    }
+
+    #[test]
+    fn edit_result_carries_patch_hunks_without_the_original_file() {
+        let patch = patch_of(json!({"filePath": "/a.ts", "originalFile": "x".repeat(5000), "structuredPatch": [hunk()]}));
+        let want = PatchHunk {
+            old_start: 6,
+            new_start: 6,
+            lines: [" a", "-b", "+B", " c"].map(String::from).to_vec(),
+        };
+        assert_eq!(patch, Some(vec![want]));
+    }
+
+    #[test]
+    fn serialized_event_has_no_original_file_and_no_line_counts() {
+        let [ev] = <[ChatEvent; 1]>::try_from(parse(
+            json!({"originalFile": "xxxxx", "structuredPatch": [hunk()]}), vec![], Value::Null))
+        .unwrap();
+        let out = serde_json::to_string(&ev).unwrap();
+        assert!(!out.contains("xxxxx") && !out.contains("oldLines") && !out.contains("newLines"), "{out}");
+        assert!(out.contains(r#""patch":[{"old_start":6,"new_start":6,"#), "{out}");
+    }
+
+    #[test]
+    fn created_file_and_text_result_have_no_patch() {
+        assert_eq!(patch_of(json!({"type": "create", "structuredPatch": []})), None);
+        assert_eq!(patch_of(json!("Error: String to replace not found in file.")), None);
+    }
+
+    #[test]
+    fn malformed_patch_is_dropped_and_the_result_still_parses() {
+        let bad = |k: &str, v: Value| {
+            let mut h = hunk();
+            h[k] = v;
+            h
+        };
+        for h in [
+            bad("oldStart", json!("6")),
+            bad("newStart", json!(true)),
+            bad("oldStart", json!(6.0)),
+            bad("oldStart", json!(6.5)),
+            bad("lines", json!("ab")),
+            bad("lines", json!([" a", 3])),
+            bad("oldStart", json!(-1)),
+            bad("oldStart", json!(4_294_967_296_u64)),
+            bad("newStart", json!(u64::MAX)),
+            json!("hunk"),
+        ] {
+            assert_eq!(patch_of(json!({"structuredPatch": [h.clone()]})), None, "{h}");
+        }
+        // Um trecho ruim derruba o patch inteiro, mesmo com o outro válido.
+        assert_eq!(patch_of(json!({"structuredPatch": [hunk(), "hunk"]})), None);
+        assert_eq!(patch_of(json!({"structuredPatch": "x"})), None);
+    }
+
+    #[test]
+    fn negative_zero_position_drops_the_patch_and_the_event_still_comes_out() {
+        // O serde_json lê `-0` como float; o Python o lê como int 0. Divergência conhecida (ver patch_hunks).
+        let line = r#"{"type":"user","uuid":"u1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"ok"}]},"toolUseResult":{"structuredPatch":[{"oldStart":-0,"newStart":1,"lines":["+x"]}]}}"#;
+        let [ev] = <[ChatEvent; 1]>::try_from(LineParser::new(Provider::Claude).feed(line.as_bytes(), 0)).unwrap();
+        assert_eq!((ev.kind, ev.patch), (ChatKind::ToolResult, None));
+    }
+
+    #[test]
+    fn u32_max_is_the_last_accepted_position() {
+        let mut h = hunk();
+        h["oldStart"] = json!(u32::MAX);
+        let patch = patch_of(json!({"structuredPatch": [h]})).expect("patch");
+        assert_eq!(patch[0].old_start, u32::MAX);
+    }
+
+    #[test]
+    fn patch_ceiling_is_two_thousand_lines_summed_over_hunks() {
+        let with = |n: usize| {
+            let mut h = hunk();
+            h["lines"] = json!(vec!["+x"; n]);
+            h
+        };
+        assert!(patch_of(json!({"structuredPatch": [with(2000)]})).is_some());
+        assert_eq!(patch_of(json!({"structuredPatch": [with(2001)]})), None);
+        assert_eq!(patch_of(json!({"structuredPatch": [with(1000), with(1001)]})), None);
+        assert!(patch_of(json!({"structuredPatch": [with(1000), with(1000)]})).is_some());
+    }
+
+    #[test]
+    fn line_with_two_results_carries_no_patch() {
+        let other = json!({"type": "tool_result", "tool_use_id": "toolu_2", "content": "ok"});
+        let events = parse(json!({"structuredPatch": [hunk()]}), vec![other], Value::Null);
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|e| e.patch.is_none()));
+    }
+
+    #[test]
+    fn lone_surrogate_in_a_patch_line_becomes_the_replacement_char() {
+        let line = r#"{"type":"user","uuid":"u1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"ok"}]},"toolUseResult":{"structuredPatch":[{"oldStart":1,"newStart":1,"lines":["+meio \ud83d emoji"]}]}}"#;
+        let [ev] = <[ChatEvent; 1]>::try_from(LineParser::new(Provider::Claude).feed(line.as_bytes(), 0)).unwrap();
+        assert_eq!(ev.patch.unwrap()[0].lines, vec!["+meio \u{FFFD} emoji".to_string()]);
+    }
+
+    #[test]
+    fn background_agent_launch_carries_the_agent_id() {
+        let [ev] = <[ChatEvent; 1]>::try_from(parse(json!({"status": "async_launched", "agentId": "ag1"}), vec![], Value::Null)).unwrap();
+        let [fin] = <[ChatEvent; 1]>::try_from(parse(json!({"agentId": "ag1"}), vec![], Value::Null)).unwrap();
+        assert_eq!(ev.bg_agent_id.as_deref(), Some("ag1"));
+        assert_eq!(fin.bg_agent_id, None);
+    }
+
+    #[test]
+    fn taskstop_closes_the_stopped_task() {
+        let stop = json!({"message": "Successfully stopped task: ag1 (Animar)", "task_id": "ag1", "task_type": "local_agent", "command": "Animar"});
+        let evs = parse(stop, vec![], Value::Null);
+        assert_eq!(evs.iter().map(|e| e.tool_use_id.as_deref()).collect::<Vec<_>>(), vec![Some("toolu_1"), Some("task:ag1")]);
+        assert_ne!(evs[0].id, evs[1].id);
+        let plain = parse(json!({"task_id": "ag1"}), vec![], Value::Null);
+        assert_eq!(plain.iter().map(|e| e.tool_use_id.as_deref()).collect::<Vec<_>>(), vec![Some("toolu_1")]);
+    }
+
+    #[test]
+    fn teammate_spawn_runs_until_its_idle_notification() {
+        let spawn = json!({"status": "teammate_spawned", "agentId": "areconf-c-b72", "name": "reconf-c"});
+        let [ev] = <[ChatEvent; 1]>::try_from(parse(spawn, vec![], Value::Null)).unwrap();
+        assert_eq!(ev.bg_agent_id.as_deref(), Some("teammate:reconf-c"));
+
+        let user = |body: &str| {
+            let text = format!("Another Claude session sent a message:\n<teammate-message teammate_id=\"frente-c\"{body}</teammate-message>\n\nThis came from another Claude session.");
+            let line = json!({"type": "user", "uuid": "u2", "message": {"role": "user", "content": text}});
+            LineParser::new(Provider::Claude).feed(line.to_string().as_bytes(), 0)
+        };
+        let idle = user(" color=\"blue\">\n{\"type\":\"idle_notification\",\"from\":\"frente-c\"}\n");
+        let [fim] = <[ChatEvent; 1]>::try_from(idle).unwrap();
+        assert_eq!((fim.kind, fim.tool_use_id.as_deref()), (ChatKind::ToolResult, Some("task:teammate:frente-c")));
+        let idle = user(" color=\"blue\">
+{\"type\":\"idle_notification\",\"from\":\"frente-c\",\"timestamp\":\"2026-10-01T13:59:53.812Z\"}
+");
+        assert!(idle[0].ts.is_some_and(|t| (t - 1_790_863_193.812).abs() < 1e-3));
+
+        let recado = user(" summary=\"x\">\nfecho a frente agora.\n");
+        assert!(recado.iter().all(|e| e.kind == ChatKind::UserMsg));
+        assert_eq!(recado.len(), 1);
+    }
+
+    #[test]
+    fn failed_result_carries_no_patch() {
+        for failed in [json!(true), json!(1), json!("sim")] {
+            let [ev] = <[ChatEvent; 1]>::try_from(parse(json!({"structuredPatch": [hunk()]}), vec![], failed))
+                .unwrap();
+            assert_eq!(ev.is_error, Some(true));
+            assert_eq!(ev.patch, None);
+        }
+    }
+}
+    #[test]
+    fn imported_plain_text_assistant_is_the_same_event_as_a_text_block() {
+        let line = |content: Value| serde_json::json!({"type":"assistant", "uuid":"transferred", "timestamp":"2026-01-01T00:03:00Z",
+            "message":{"role":"assistant","content":content}});
+        let string = line(serde_json::json!("antigo"));
+        let blocks = line(serde_json::json!([{"type":"text","text":"antigo"}]));
+        let events = |value: Value| crate::parse_claude_object(value.as_object().unwrap());
+        assert_eq!(serde_json::to_value(events(string)).unwrap(), serde_json::to_value(events(blocks)).unwrap());
+        assert!(events(line(serde_json::json!(" \n\t"))).is_empty());
+    }

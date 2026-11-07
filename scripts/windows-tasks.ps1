@@ -82,6 +82,22 @@ function Test-HangarServedFront($rows, [string]$name, $listeners) {
     return $true
 }
 
+# A lista de portas do Windows ja respondeu vazia com o servidor atendendo; a saude do proprio
+# hangar-server desempata (conexao crua aceitaria qualquer processo na porta).
+function Test-HangarHealth([int]$port) {
+    try {
+        $request = [Net.WebRequest]::Create("http://127.0.0.1:$port/__hangar_server/health")
+        $request.Proxy = $null
+        $request.Timeout = 500
+        $response = $request.GetResponse()
+        try { return ([int]$response.StatusCode -eq 200) } finally { $response.Close() }
+    } catch { return $false }
+}
+function Test-HangarPortOpen([int]$port) {
+    if (Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue) { return $true }
+    return (Test-HangarHealth $port)
+}
+
 # Start-ScheduledTask volta sem erro mesmo quando nenhuma instancia abre, e o LastRunTime ja passou por
 # inicio que nao deixou processo de pe: so a porta prova a subida. Repetir e seguro, o IgnoreNew descarta.
 # Tarefa rodando sem porta e subida lenta: quem julga e a espera de quem pediu o reinicio.
@@ -93,7 +109,7 @@ function Start-HangarTask([string]$name, [int]$port) {
         Start-ScheduledTask -TaskName $name -ErrorAction Stop
         $stopped = 0
         foreach ($check in 1..40) {
-            $open = [bool](Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
+            $open = Test-HangarPortOpen $port
             $state = (Get-ScheduledTask -TaskName $name -ErrorAction Stop).State
             if ($open) { break }
             if ($state -eq 'Running') { $stopped = 0 } elseif (++$stopped -ge 5) { break }
@@ -106,6 +122,40 @@ function Start-HangarTask([string]$name, [int]$port) {
     }
     throw "Tarefa $name nao iniciou depois de 3 tentativas"
 }
+
+# Confere a identidade e para o processo. O que saiu sozinho entre a leitura e a parada (o
+# hangar-server sai com o Python dele) conta como parado: o erro dele nao pode cancelar o inicio.
+# Identidade divergente aborta sempre.
+function Stop-HangarCandidate($candidate, $process) {
+    try { $started = $process.StartTime }
+    catch {
+        $failure = $_
+        if (Test-HangarExited $process) { return }
+        throw $failure
+    }
+    # O PowerShell engole o erro da leitura e devolve nulo do processo que esta saindo (o hangar-server
+    # morre logo depois do Python dele): espera a saida antes de chamar de identidade ilegivel.
+    if ($null -eq $started) {
+        foreach ($wait in 0..30) {
+            if ((Test-HangarExited $process) -or -not (Get-Process -Id $candidate.ProcessId -ErrorAction SilentlyContinue)) { return }
+            if ($wait -lt 30) { Start-Sleep -Milliseconds 100 }
+        }
+        throw "Identidade do processo $($candidate.ProcessId) ilegivel; parada cancelada"
+    }
+    # WMI e GetProcessTimes devolvem o nascimento com precisoes diferentes.
+    if (-not $candidate.CreationDate -or
+        [Math]::Abs(($started.ToUniversalTime() - $candidate.CreationDate.ToUniversalTime()).Ticks) -ge [TimeSpan]::TicksPerMillisecond) {
+        throw "Identidade do processo $($candidate.ProcessId) mudou; parada cancelada"
+    }
+    try { Stop-Process -InputObject $process -Force -ErrorAction Stop }
+    catch {
+        $failure = $_
+        if (-not (Test-HangarExited $process)) { throw $failure }
+    }
+}
+
+# HasExited ilegivel (processo sem direito de consulta) nao prova que saiu.
+function Test-HangarExited($process) { try { return [bool]$process.HasExited } catch { return $false } }
 
 # -NoStart: so para (a migracao para o pacote troca o lancador entre parar e subir).
 function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [switch]$NoStart) {
@@ -150,13 +200,8 @@ function Restart-HangarTask([string]$name, [int]$port, [string]$directory, [swit
         foreach ($candidate in $candidates) {
             $process = Get-Process -Id $candidate.ProcessId -ErrorAction SilentlyContinue
             if (-not $process) { continue }
-            # WMI e GetProcessTimes devolvem o nascimento com precisoes diferentes.
-            if (-not $candidate.CreationDate -or
-                [Math]::Abs(($process.StartTime.ToUniversalTime() - $candidate.CreationDate.ToUniversalTime()).Ticks) -ge [TimeSpan]::TicksPerMillisecond) {
-                throw "Identidade do processo $($candidate.ProcessId) mudou; parada cancelada"
-            }
             # Nao encerra a arvore: psmux e o atualizador precisam sobreviver ao backend.
-            Stop-Process -InputObject $process -Force -ErrorAction Stop
+            Stop-HangarCandidate $candidate $process
             if (-not $process.WaitForExit(5000)) { throw "Processo $($candidate.ProcessId) nao encerrou" }
         }
         foreach ($attempt in 1..50) {
@@ -203,12 +248,7 @@ function Stop-HangarFrontend([string]$raiz) {
         foreach ($candidate in @(Get-HangarTaskProcesses $rows 'hangar-frontend' (Join-Path $raiz 'frontend'))) {
             $process = Get-Process -Id $candidate.ProcessId -ErrorAction SilentlyContinue
             if (-not $process) { continue }
-            # Mesma conferencia de identidade do Restart-HangarTask.
-            if (-not $candidate.CreationDate -or
-                [Math]::Abs(($process.StartTime.ToUniversalTime() - $candidate.CreationDate.ToUniversalTime()).Ticks) -ge [TimeSpan]::TicksPerMillisecond) {
-                throw "Identidade do processo $($candidate.ProcessId) mudou; parada cancelada"
-            }
-            Stop-Process -InputObject $process -Force -ErrorAction Stop
+            Stop-HangarCandidate $candidate $process
             if (-not $process.WaitForExit(5000)) { throw "Processo $($candidate.ProcessId) nao encerrou" }
         }
     } finally {

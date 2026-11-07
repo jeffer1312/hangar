@@ -180,19 +180,20 @@ Kimi Code. Setup details, Tailscale, the phone and every feature are in the
             └──── HTTPS / SSE / WebSocket ────┐
                                                ▼
                          hangar-server (Rust, :8765)
-                          lists, live state, history, costs, groups,
-                          accounts, session attachments, sharing
+                          Claude and Codex sessions, lists, live state,
+                          history, costs, groups, accounts, attachments,
+                          MCP, guest logins, transcription, sharing
                           (guest port :8766 via Funnel, invites,
                           external pairs)
                                                │
-                         Python backend (loopback, behind it)
-                          sessions, adapters, MCP
-                                               │
-        ┌──────────────┬──────────────┬────────┴─────┬──────────────┐
-   Claude Code       Codex          Pi / omp       Kimi Code     your browser
-   JSONL + tmux     app-server     JSONL + ext.    wire.jsonl    per session
-   or headless      + TUI or       sidecars        + hooks
-                    headless
+        ┌──────────────┬──────────────┬────────┴─────┐
+   Claude Code       Codex      your browser  Python backend
+   JSONL + tmux     app-server   per session  (loopback, behind it)
+   or headless      + TUI or                         │
+                    headless                   ┌─────┴────────┐
+                                           Pi / omp       Kimi Code
+                                         JSONL + ext.    wire.jsonl
+                                           sidecars        + hooks
 ```
 
 Chat content comes from each agent's structured transcript, never from scraping the terminal. The
@@ -200,13 +201,13 @@ tmux pane is used only for live state and input of sessions that have a terminal
 and Codex run as managed processes with durable sidecars. The CLIs and providers you configure may
 still send data according to their own policies.
 
-The backend moves to Rust part by part. With the Rust server up, Claude and Codex accounts
-(catalog, preparation, login, state, logout, quotas, Claude renewal and the guarded Codex reset)
-the session attachment vault, and session sharing (the guest port 8766, invites and external
-pairs) are served by it; Python keeps guest-user logins, session and configuration facts,
-transcription and the fallback when the supervisor turns Rust off. Without the Rust server the
-guest port stays closed. Contracts
-and limits: [accounts and attachments](docs/decisoes/accounts-uploads-rust.md).
+The backend moves to Rust part by part. With the Rust server up, it handles Claude and Codex
+sessions, the session list, accounts and quotas, attachments, MCP, guest logins, transcription and
+session sharing (the guest port 8766, invites and external pairs). Python still handles the
+transcript, state and input of Pi, omp and Kimi Code sessions, the transfer from Claude to Codex,
+workflows, and a reduced fallback when the supervisor turns Rust off. Without the Rust server the
+guest port stays closed. Contracts and limits:
+[accounts and attachments](docs/decisoes/accounts-uploads-rust.md).
 
 Repository map: `crates/` (Rust server), `backend/` (Python, FastAPI), `desktop-native/` (Rust
 desktop app), `frontend/` (Svelte PWA), `mobile/` (Expo app, in development), `packages/core`
@@ -221,8 +222,10 @@ A consulta é passiva e não publica conteúdo.
 Treat Hangar like a remote shell: whoever holds the token drives your agents with your user's
 permissions.
 
-- The server binds to loopback by default. Point `CP_LAN_BIND_IP` only at a trusted LAN or VPN
-  address (Tailscale is the easy path). It refuses to bind beyond loopback with the default token.
+- The installer sets `CP_LAN_BIND_IP=0.0.0.0`, so your whole local network can reach the server and
+  the token is the only lock. Use it on networks you trust; away from home, Tailscale is the easy
+  path. A specific address you set yourself is kept. Started by hand, the server binds to loopback
+  by default, and it refuses to bind beyond loopback with the default token.
 - Never expose the main port (8765) through a router port-forward or a public tunnel.
 - Sharing a session uses a separate guest port (8766, served by the Rust server and published
   through Tailscale Funnel) that refuses the owner's token and only reaches the shared session.

@@ -1,0 +1,297 @@
+use super::*;
+use axum::http::Method;
+use std::sync::{
+    Mutex,
+    atomic::{AtomicBool, Ordering},
+};
+use tokio::sync::Notify;
+
+fn variable<'a>(env: &'a BTreeMap<String, String>, key: &str) -> Option<&'a str> {
+    if cfg!(windows) {
+        env.iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(key))
+            .map(|(_, value)| value.as_str())
+    } else {
+        env.get(key).map(String::as_str)
+    }
+}
+pub(crate) fn flag(env: &BTreeMap<String, String>, key: &str) -> Result<bool, String> {
+    let Some(value) = variable(env, key) else {
+        return Ok(false);
+    };
+    match value.to_ascii_lowercase().as_str() {
+        "1" | "true" | "t" | "yes" | "y" | "on" => Ok(true),
+        "0" | "false" | "f" | "no" | "n" | "off" => Ok(false),
+        _ => Err(format!("Valor booleano inválido em {key}")),
+    }
+}
+pub fn validate_environment(env: &BTreeMap<String, String>) -> Result<(), String> {
+    flag(env, "CP_OMP_PLUGIN_SYNC_ENABLED")?;
+    flag(env, "CP_OMP_CLAUDE_CONTEXT_ENABLED")?;
+    interval(env)?;
+    Ok(())
+}
+/// A regra de contexto que o omp carrega, dentro da pasta de instalação do Hangar.
+pub fn context_template(install_root: &Path) -> PathBuf {
+    install_root
+        .join("scripts")
+        .join("omp")
+        .join("carregar-claude-md-do-projeto.md")
+}
+pub fn interval(env: &BTreeMap<String, String>) -> Result<f64, String> {
+    let raw = variable(env, "CP_OMP_PLUGIN_SYNC_INTERVAL").unwrap_or("");
+    let s = raw.trim();
+    let n = if raw
+        .chars()
+        .all(|c| c.is_whitespace() || matches!(c, '\u{001c}'..='\u{001f}'))
+    {
+        300.0
+    } else {
+        s.parse::<f64>()
+            .or_else(|failure| {
+                if !raw.starts_with('_') && !raw.ends_with('_') && !raw.contains("__") {
+                    raw.replace('_', "").parse::<f64>()
+                } else {
+                    Err(failure)
+                }
+            })
+            .map_err(|_| err("O intervalo deve ser positivo e finito"))?
+    };
+    if !n.is_finite() || n <= 0.0 {
+        return Err(err("O intervalo deve ser positivo e finito"));
+    }
+    Ok(n)
+}
+/// Um produtor periódico por servidor; fechar aguarda a passagem em voo antes de devolver.
+pub struct Service {
+    sync: Synchronizer,
+    enabled: bool,
+    interval: f64,
+    permitted: Arc<dyn Fn() -> Result<bool, &'static str> + Send + Sync>,
+    stopping: Arc<AtomicBool>,
+    wake: Notify,
+    status: Mutex<Value>,
+    task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    ready: tokio::sync::watch::Sender<bool>,
+}
+impl Service {
+    /// `allowed` é a chave mestra das automações, lida a cada passada; `template` é a regra de
+    /// contexto ([`context_template`]).
+    pub fn launch(
+        env: BTreeMap<String, String>,
+        home: PathBuf,
+        claude: PathBuf,
+        template: PathBuf,
+        allowed: Arc<dyn Fn() -> Result<bool, &'static str> + Send + Sync>,
+    ) -> Arc<Self> {
+        let validation = validate_environment(&env);
+        let enabled = flag(&env, "CP_OMP_PLUGIN_SYNC_ENABLED").unwrap_or(false);
+        let context = flag(&env, "CP_OMP_CLAUDE_CONTEXT_ENABLED").unwrap_or(false);
+        let duration = interval(&env);
+        let sync = Synchronizer::new(home, claude, env, Arc::new(NativeRunner));
+        let service = Self::new(
+            sync,
+            enabled,
+            duration.as_ref().copied().unwrap_or(300.0),
+            allowed,
+        )
+        .expect("intervalo padrão válido");
+        let clone = service.clone();
+        let handle = tokio::spawn(async move {
+            if let Err(error) = validation {
+                let mut status = clone.status.lock().unwrap();
+                status["state"] = json!("error");
+                status["last_report"] = json!({"errors":[error]});
+                clone.ready.send_replace(true);
+                return;
+            }
+            if context {
+                let result = super::context::configure(&clone.sync, &template, true).await;
+                if !result["errors"].as_array().is_some_and(Vec::is_empty) {
+                    tracing::warn!(
+                        code = "omp_context_configuration_failed",
+                        "contexto OMP não configurado; preferências preservadas"
+                    );
+                }
+            }
+            clone.ready.send_replace(true);
+            if enabled {
+                clone.run().await
+            }
+        });
+        *service.task.try_lock().expect("serviço novo sem disputa") = Some(handle);
+        service
+    }
+    pub fn new(
+        sync: Synchronizer,
+        enabled: bool,
+        interval: f64,
+        permitted: Arc<dyn Fn() -> Result<bool, &'static str> + Send + Sync>,
+    ) -> Result<Arc<Self>, String> {
+        if !interval.is_finite() || interval <= 0.0 {
+            return Err(err("O intervalo deve ser positivo e finito"));
+        }
+        Ok(Arc::new(Self {
+            sync,
+            enabled,
+            interval,
+            permitted,
+            stopping: Arc::new(AtomicBool::new(false)),
+            wake: Notify::new(),
+            status: Mutex::new(
+                json!({"enabled":enabled,"state":if enabled{"idle"}else{"disabled"},"interval":interval,"started_at":null,"completed_at":null,"last_report":null}),
+            ),
+            task: tokio::sync::Mutex::new(None),
+            ready: tokio::sync::watch::channel(false).0,
+        }))
+    }
+    pub async fn ready(&self) {
+        let mut receiver = self.ready.subscribe();
+        while !*receiver.borrow_and_update() {
+            if receiver.changed().await.is_err() {
+                break;
+            }
+        }
+    }
+    pub fn status(&self) -> Value {
+        self.status.lock().unwrap().clone()
+    }
+    pub async fn start_loop(self: &Arc<Self>) {
+        self.ready.send_replace(true);
+        let mut task = self.task.lock().await;
+        if self.enabled && task.is_none() && !self.stopping.load(Ordering::SeqCst) {
+            let service = self.clone();
+            *task = Some(tokio::spawn(async move { service.run().await }))
+        }
+    }
+    pub async fn close(&self) {
+        self.ready.send_replace(true);
+        self.stopping.store(true, Ordering::SeqCst);
+        self.wake.notify_one();
+        if let Some(task) = self.task.lock().await.take() {
+            if let Err(e) = task.await {
+                tracing::warn!(
+                    code = "omp_sync_join_failed",
+                    cancelled = e.is_cancelled(),
+                    "sincronização OMP terminou sem confirmação de parada"
+                );
+                self.status.lock().unwrap()["state"] = json!("error");
+                return;
+            }
+            if self.enabled {
+                self.status.lock().unwrap()["state"] = json!("stopped");
+            }
+        }
+    }
+    async fn run(&self) {
+        while !self.stopping.load(Ordering::SeqCst) {
+            match (self.permitted)() {
+                Err(code) => {
+                    tracing::warn!(
+                        code,
+                        "configuração inválida; ciclo automático OMP não executado"
+                    );
+                    let mut status = self.status.lock().unwrap();
+                    status["state"] = json!("error");
+                    status["last_report"] = json!({"errors":[code]});
+                }
+                Ok(false) => self.status.lock().unwrap()["state"] = json!("paused"),
+                Ok(true) => {
+                    {
+                        let mut s = self.status.lock().unwrap();
+                        s["state"] = json!("running");
+                        s["started_at"] = json!(hangar_core::clock::wall_now());
+                    }
+                    let interrupted = AtomicBool::new(false);
+                    let config_error = Mutex::new(None);
+                    let stop = || {
+                        if self.stopping.load(Ordering::SeqCst) {
+                            interrupted.store(true, Ordering::SeqCst);
+                        } else {
+                            match (self.permitted)() {
+                                Ok(true) => {}
+                                Ok(false) => interrupted.store(true, Ordering::SeqCst),
+                                Err(code) => {
+                                    *config_error.lock().unwrap() = Some(code);
+                                    interrupted.store(true, Ordering::SeqCst);
+                                }
+                            }
+                        }
+                        interrupted.load(Ordering::SeqCst)
+                    };
+                    let mut reports = Map::new();
+                    if !stop() {
+                        reports.insert(
+                            "marketplaces".into(),
+                            self.sync.import_marketplaces(false, &stop).await,
+                        );
+                    }
+                    if !stop() {
+                        reports.insert("plugins".into(), self.sync.reconcile(false, &stop).await);
+                    }
+                    if !self.stopping.load(Ordering::SeqCst) && !interrupted.load(Ordering::SeqCst)
+                    {
+                        stop();
+                    }
+                    let error = *config_error.lock().unwrap();
+                    let state = if let Some(code) = error {
+                        tracing::warn!(
+                            code,
+                            "configuração inválida interrompeu a sincronização OMP; relatórios preservados"
+                        );
+                        reports.insert("configuration".into(), json!({"errors":[code]}));
+                        "error"
+                    } else if self.stopping.load(Ordering::SeqCst) {
+                        "stopped"
+                    } else if interrupted.load(Ordering::SeqCst) {
+                        "paused"
+                    } else if reports.values().any(|r| {
+                        r["errors"].as_array().is_some_and(|a| !a.is_empty())
+                            || r["complete_inventory"] != true
+                    }) {
+                        "error"
+                    } else {
+                        let actions = reports
+                            .values()
+                            .filter_map(|r| r["items"].as_array())
+                            .flatten()
+                            .filter_map(|i| i["action"].as_str())
+                            .collect::<BTreeSet<_>>();
+                        if actions.contains("suspended") || actions.contains("conflict") {
+                            "suspended"
+                        } else if [
+                            "install",
+                            "uninstall",
+                            "enable",
+                            "disable",
+                            "adopt",
+                            "import",
+                        ]
+                        .iter()
+                        .any(|a| actions.contains(a))
+                        {
+                            "updated"
+                        } else {
+                            "unchanged"
+                        }
+                    };
+                    let mut s = self.status.lock().unwrap();
+                    s["state"] = json!(state);
+                    s["completed_at"] = json!(hangar_core::clock::wall_now());
+                    s["last_report"] = json!(reports);
+                }
+            }
+            if !self.stopping.load(Ordering::SeqCst) {
+                let mut remaining = self.interval;
+                while remaining > 0.0 && !self.stopping.load(Ordering::SeqCst) {
+                    // O Python aceita qualquer float finito; um prazo enorme não cabe no Instant.
+                    let step = remaining.min(86400.0);
+                    tokio::select! { _ = self.wake.notified() => break, _ = tokio::time::sleep(Duration::from_secs_f64(step)) => remaining -= step }
+                }
+            }
+        }
+    }
+}
+pub fn matches(method: &Method, path: &str) -> bool {
+    method == Method::GET && path == "/api/omp/plugin-sync"
+}

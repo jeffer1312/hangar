@@ -17,6 +17,10 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   [plataforma.md](plataforma.md#rede-local-antes-do-tailscale-baseurl-é-identidade-a-rota-é-baseof)).
   Nunca `auto`: tira o loopback de que o `tailscale serve` depende. Firewall do Windows no
   `-Update` só sem UAC (já admin); senão vira pendência com o comando.
+- **Firewall do Windows: regra de liberação por porta (8765 e 8766), perfis Private e Public,
+  só por `scripts/open-firewall.ps1`.** O `hangar-server` muda de pasta a cada versão, e o "Allow"
+  do aviso vale para um caminho só. Regra de bloqueio não cala o aviso. O passo de máquina pede o
+  UAC uma vez e nunca falha. Ver [a entrada](#firewall-do-windows-por-porta-07112026).
 - **Instalador guiado: duas perguntas, o resto é padrão.** Sem terminal, tudo é NÃO — exceto no
   `--app`/`-App` (assistente do app nativo), que responde pelas telas: `ask` e `ask_senha` sim,
   `ask_extra` não, Tailscale pela opção, nada espera teclado. O log nunca carrega o token, e no
@@ -202,7 +206,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **Build e teste locais: target comum, binário fixado na worktree, mensagens com carimbo.** Toda
   worktree compila no target comum da máquina pelo `scripts/cargo-pinned`, que pega a trava
   `/tmp/hangar-build.lock` e copia os executáveis para o `crates/target` do checkout na mesma trava:
-  pytest e `CP_RUST_SERVER_BIN` rodam essa cópia, nunca o executável do target comum. A troca em
+  pytest e `CP_RUST_SERVER_BIN` rodam essa cópia, nunca o executável do target comum. Jobs e teto de
+  memória saem da memória livre ao pegar a trava: um job por 9 GB livres além de 2 GB de folga
+  (`HANGAR_BUILD_GB_POR_JOB`), entre 1 e o número de núcleos, e `MemoryHigh` num escopo do systemd do
+  usuário igual ao livre menos a folga (mínimo 4 GB), preso à unidade de quem chamou (`BindsTo`) para
+  não sobreviver a ela segurando a trava. Escopo que não abre compila de novo sem teto.
+  `CARGO_BUILD_JOBS` explícito vence; sem `systemd-run --user` o build roda sem teto. A troca em
   `~/.hangar/bin` usa o release do target aquecido; o perfil dev não é mais rápido na mudança
   incremental. O `i18n:compile` de front, core e app passa por `scripts/i18n-compile.mjs` e pula
   quando entrada e saída batem com o carimbo da última compilação. Evidência em
@@ -266,8 +275,9 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   troca do `current` → só os passos `tipo: maquina` → reinício → prova de vida → poda. Os passos
   rodam depois da troca porque os scripts que criam links (`install-hangar-send.sh`,
   `instalar-agentes.py`) só apontam para o `current` quando ele já é a pasta deles. Falha antes da
-  troca não muda nada; passo que falha devolve o `current` sem reiniciar; falha no reinício
-  devolve o `current` e reinicia. O servidor em execução serve a tela web da `dist_key` com que
+  troca não muda nada; passo que falha devolve o `current` sem reiniciar, menos quando o
+  servidor no ar já não é o de antes (o `install.ps1 -Update` reinicia): aí devolve e reinicia,
+  como a falha no reinício. O servidor em execução serve a tela web da `dist_key` com que
   subiu, nunca a do `current`. A prova
   é o `/__hangar_server/health` com o `protocol` e o `commit` do manifesto novo e pid diferente:
   o Python sozinho na porta reprova. Ficam a versão em uso e a anterior; a poda pula pasta com
@@ -1027,6 +1037,12 @@ maior RSS de um processo da medição.
   o que se misturava era o executável final, que todos gravam no mesmo lugar. O `cargo-pinned`
   copia o executável na mesma trava do build (`scripts/test-cargo-pinned.sh` prova que o build de
   outro checkout não muda a cópia).
+- **Jobs e teto pela memória livre (06/11/2026).** `cargo test -p hangar-server --lib` com o `-j 2` fixo:
+  os dois `rustc` do `hangar_server` (normal e de teste) juntos, um deles medido em 9,3 GB (2,1 GB em
+  RAM e 7,2 GB em swap), com ~18 GB já ocupados pelas sessões abertas; o swap passou de 35 GB e a
+  máquina parou. Daí os 9 GB por job: é o pior caso medido (o build de teste); o release incremental
+  ficava em ~3,2 GB em 23/10, então o `-j` sai conservador para `build`. O `MemoryHigh` faz o kernel
+  recolher primeiro a memória do build, mas não limita o swap, que segue comum.
 - **Mensagens com carimbo.** `npm run i18n:compile` do front (core junto): 18–22 s e 670–830 MB
   antes; 0,7 s e 72 MB sem mudança em `messages/`. Saída igual à do `paraglide-js compile` direto
   (hash da árvore em `scripts/test-i18n-compile.mjs`).
@@ -1293,3 +1309,26 @@ dia:
 - **Entrada presa no registro do Rust** (fechamento que falhava depois de parar o ator) vinha em laço
   desde 17/10 (`hangar` 1032×, `cx-herda4` 597×) e derrubava a troca de conta no limite com
   `relaunch_initialize`; corrigida no mesmo trabalho.
+
+## Firewall do Windows por porta (07/11/2026)
+
+No Windows 11 de um usuário, cada atualização abria o aviso do firewall para o
+`hangar-server.exe`, mesmo depois do "Allow" da versão anterior. O "Allow" cria regra para o
+caminho do executável, e o pacote roda cada versão de `~\.hangar\versions\<versão>\bin\`. A
+DELPHI-02 (Windows Server 2025) nunca mostrou o aviso porque lá `NotifyOnListen` é `False` nos três
+perfis.
+
+Medido na DELPHI-02 com `NotifyOnListen` ligado no Private e um `listener.exe` em pastas novas:
+regra de liberação por porta (qualquer programa) cala o aviso; porta sem regra avisa; regra de
+**bloqueio** por porta avisa igual. O próprio `hangar-server` 0.1.0.9615 avisou com a regra
+`hangar 8765` de pé, porque escuta também a 8766 (convite pela rede local) em `0.0.0.0`, que não
+tinha regra. Cancel no aviso cria regra de bloqueio para o caminho da versão, que vence a regra da
+porta.
+
+Decisão: `scripts/open-firewall.ps1` cria `hangar 8765` e `hangar 8766` com `-Profile
+Private,Public`. Public entra porque só regra de liberação cala o aviso, e o acesso continua exigindo
+o token. O instalador usa o mesmo script (e a 5173 quando há tarefa de front). Máquinas já
+instaladas recebem pelo passo `2026-11-07-firewall-portas-windows`: sem admin ele pede o UAC uma
+vez e espera até 2 min. Passo de máquina que falha derruba a atualização inteira, então ele sempre
+sai com 0 e grava o resultado em `~/.hangar/firewall-ports`; UAC recusado fica lá e na saída, e o
+`-Update` como admin completa depois.

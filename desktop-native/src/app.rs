@@ -80,9 +80,10 @@ pub(crate) use servers::{ServerEntry, new_id as new_server_id};
 pub(crate) use rows::{agent_card, agent_clock};
 pub(crate) use session_tabs::{PlateMark, PlateSegment, plate, tab_frame, tab_title, with_context_ring};
 pub(crate) use tags::{account_icon, machine_icon};
+pub(crate) use voice_ui::{call_actions, call_footer, call_header, call_status, equalizer as voice_equalizer, mute_button, speech_pause_button, stop_button};
 pub(crate) use rename_suggest::{Strip as RenameStrip, rename_strip};
 pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command, request_pair};
-pub(crate) use create::quiet_button;
+pub(crate) use create::{base_button, base_row, quiet_button, worktree_field_label, worktree_warning};
 pub(crate) use settings::{setting_row, settings_box};
 pub(crate) use accounts::{login_heading, target_row};
 pub(crate) use search::{ScopeFound, highlighted as search_highlighted, search_agent_label, search_chat_header, search_chat_sub, search_field, search_filter_chip, search_found_frame,
@@ -5939,7 +5940,6 @@ impl Hangar {
                     children.push((key, at, self.render_server_header(&id, &m.key, &label, count, invite, error, cx)));
                     // Num servidor só, o aviso do chaveiro aparece embaixo da lista, junto da falha dela.
                     if multi && let Some(notice) = self.render_keyring_notice(&m.key, false, cx) { children.push((String::new(), at, notice)); }
-                    if multi && let Some(cards) = self.render_vault_requests(&m.key, cx) { children.push((String::new(), at, cards)); }
                     hidden = self.sidebar.is_collapsed(&format!("server:{}", m.key));
                     if !hidden { rows(list, m.remote.as_deref(), at, &mut children, window, cx); }
                 }
@@ -6048,7 +6048,6 @@ impl Hangar {
                 .child(div().flex_1().min_w_0().child(text))
                 .child(Button::new("reconnect").xsmall().ghost().label(tr("retry")).on_click(cx.listener(|this, _, window, cx| this.connect(window, cx))))))
             .children((!multi).then(|| self.render_keyring_notice(&self.active_key(), false, cx)).flatten())
-            .children((!multi).then(|| self.render_vault_requests(&self.active_key(), cx)).flatten())
             // O CTA do rodapé da barra do web, com o recolher ao lado.
             .child(div().flex_shrink_0().px(px(8.)).pt(px(8.)).pb(px(8.)).flex().items_center().gap_2()
                 // Na troca de forma, só enquanto esta camada está à vista (o par do trilho em `render_nav_rail`).
@@ -7788,12 +7787,14 @@ impl Render for Hangar {
             // Entre a conversa e a faixa de baixo: o que a faixa abre por cima (comandos, sugestões) cobre a marca. Sem a
             // conversa na tela, os lugares dela são do último desenho, de outra sessão.
             .when(page.is_none() && !self.new_chat_screen(), |el| el.child(self.working_mark_float(panes::Area::Conversation, WORKING_FADE, cx.reduce_motion())))
+            .children(self.render_vault_session(cx))
             .child(self.pane_element(panes::Area::Bottom, if self.new_chat_screen() { StyleRefinement::default().w_full().flex_1().min_h_0() }
                 else { StyleRefinement::default().w_full().flex_shrink_0().h(px(self.panes.bottom_height.get())).top(px(-drop)) }))
             // Os avatares animados da faixa de baixo (subagentes e pai da filha), pintados fora da cópia guardada dela.
             .when(page.is_none() && !self.new_chat_screen(), |el| el.child(self.working_mark_float(panes::Area::Bottom, WORKING_FADE, cx.reduce_motion())))
             .children(self.render_terminal(window, cx))
-            .children(self.render_file_view(window, cx));
+            .children(self.render_file_view(window, cx))
+            .children(self.render_vault_float(cx));
         // Visor de arquivos expandido: sem a lista de sessões e sem o painel direito.
         let files_expanded = self.files_expanded();
         let list_hidden = page.is_some() || costs_page || worktrees_page || files_expanded;

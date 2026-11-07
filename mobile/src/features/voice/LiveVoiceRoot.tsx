@@ -79,6 +79,7 @@ export function LiveVoiceRoot() {
       servers={servers.filter(s => !s.invite && !s.inviteEnded && !s.removed && !s.disabled && !!s.token)}
       onSelectServer={store.selectServer} onDismiss={store.dismiss}
       onStart={() => { void store.start(); }} onStop={() => { void store.stop(); }} onToggleMute={store.toggleMute}
+      onToggleSpeechPause={store.toggleSpeechPause}
       onMode={store.setMode} onRetry={() => { void store.retry(); }}
       onSaveSettings={next => { void store.saveSettings(next); }} onSettingsOpen={store.openSettings}
       onForgetMemory={id => { void store.forgetMemory(id); }} />

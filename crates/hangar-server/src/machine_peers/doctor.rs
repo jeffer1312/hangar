@@ -177,7 +177,7 @@ pub fn diagnose(service: &Service, f: &Value, platform: &str) -> Vec<Line> {
             String::new(),
         )
     } else {
-        add("aviso","endereço da rede local não responde".into(),"firewall? Linux: sudo ./scripts/lan-setup.sh 8765 — Windows: regra 'hangar 8765' no perfil Private".into())
+        add("aviso","endereço da rede local não responde".into(),"firewall? Linux: sudo ./scripts/lan-setup.sh 8765 — Windows: scripts\\open-firewall.ps1 num PowerShell como admin".into())
     }
     out
 }

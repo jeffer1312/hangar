@@ -1,6 +1,6 @@
 //! Chave do cofre: 32 bytes num item da coleção `login` do Secret Service, a mesma que
-//! `keyring.rs` vigia e destranca. Chave nova só quando o `vault.bin` não existe: com o arquivo de
-//! pé e o item sumido, a chave está perdida, e uma nova esconderia isso cifrando outro cofre vazio.
+//! `keyring.rs` vigia e destranca; sem `login`, na coleção padrão do sistema, que ele não destranca.
+//! Chave nova só quando o `vault.bin` não existe: com o arquivo de pé e o item sumido, a chave está perdida, e uma nova esconderia isso cifrando outro cofre vazio.
 use futures_util::future::BoxFuture;
 use zeroize::Zeroizing;
 
@@ -173,7 +173,8 @@ mod linux {
         let error = match &error {
             zbus::Error::MethodError(name, ..) if name.to_string() == "org.freedesktop.Secret.Error.IsLocked" => KeyError::Locked,
             zbus::Error::MethodError(name, ..) => {
-                tracing::warn!(code = "vault_key_dbus", name = %name, "o Secret Service recusou");
+                // `error`: o relatório de diagnóstico só leva campos conhecidos, e o nome do erro D-Bus é o que explica a recusa.
+                tracing::warn!(code = "vault_key_dbus", error = %name, "o Secret Service recusou");
                 KeyError::Bus
             }
             zbus::Error::InputOutput(cause) => {
@@ -221,17 +222,39 @@ mod linux {
         HashMap::from([("application", "hangar"), ("kind", kind)])
     }
 
+    /// Onde a chave mora, em ordem: `login` (os cofres já criados estão nela) e a padrão do sistema,
+    /// que no gnome-keyring criado por um app, sem login com senha, se chama "Chaveiro padrão".
+    /// Grava na primeira; lê nas duas, na mesma ordem, para a chave criada na padrão continuar
+    /// achada quando o `login` aparece depois. A `session` vive só na memória e nunca entra.
+    async fn collections(conn: &zbus::Connection) -> Result<Vec<String>, Fail> {
+        let service = proxy(conn, SERVICE, "org.freedesktop.Secret.Service").await?;
+        let all: Vec<OwnedObjectPath> = service.get_property("Collections").await.map_err(fail)?;
+        let mut found = Vec::new();
+        if all.iter().any(|path| path.as_str() == LOGIN) { found.push(LOGIN.to_owned()); }
+        let alias = service.call_with_flags::<_, _, OwnedObjectPath>("ReadAlias",
+            zbus::proxy::MethodFlags::NoAutoStart.into(), &("default",)).await.map_err(fail)?.ok_or(KeyError::Bus)?;
+        let session = format!("{SERVICE}/collection/session");
+        if !["/", LOGIN, session.as_str()].contains(&alias.as_str()) { found.push(alias.as_str().to_owned()); }
+        if found.is_empty() {
+            tracing::warn!(code = "vault_key_no_collection", "o chaveiro não tem a coleção login nem uma padrão em disco");
+            return Err(KeyError::Bus.into());
+        }
+        Ok(found)
+    }
+
     async fn read_secret(conn: &zbus::Connection, session: &OwnedObjectPath, kind: &'static str) -> Result<Option<Zeroizing<Vec<u8>>>, Fail> {
+        let places = collections(conn).await?;
         let service = proxy(conn, SERVICE, "org.freedesktop.Secret.Service").await?;
         let flags = zbus::proxy::MethodFlags::NoAutoStart.into();
         let (unlocked, locked) = service.call_with_flags::<_, _, (Vec<OwnedObjectPath>, Vec<OwnedObjectPath>)>(
             "SearchItems", flags, &(attributes(kind),)).await.map_err(fail)?.ok_or(KeyError::Bus)?;
-        let in_login = |items: Vec<OwnedObjectPath>| -> Vec<OwnedObjectPath> {
-            let mut items: Vec<_> = items.into_iter().filter(|p| p.as_str().starts_with(&format!("{LOGIN}/"))).collect();
-            items.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-            items
+        let inside = |items: Vec<OwnedObjectPath>| -> Vec<OwnedObjectPath> {
+            let place = |p: &OwnedObjectPath| places.iter().position(|c| p.as_str().starts_with(&format!("{c}/")));
+            let mut items: Vec<_> = items.into_iter().filter_map(|p| Some((place(&p)?, p))).collect();
+            items.sort_by(|a, b| (a.0, a.1.as_str()).cmp(&(b.0, b.1.as_str())));
+            items.into_iter().map(|(_, p)| p).collect()
         };
-        let (unlocked, locked) = (in_login(unlocked), in_login(locked));
+        let (unlocked, locked) = (inside(unlocked), inside(locked));
         let Some(item) = unlocked.into_iter().next() else {
             return if locked.is_empty() { Ok(None) } else { Err(KeyError::Locked.into()) };
         };
@@ -248,7 +271,8 @@ mod linux {
     /// `replace`: um item que sobrou com os mesmos atributos (sem 32 bytes) dá lugar à chave nova.
     async fn write_secret(conn: &zbus::Connection, session: &OwnedObjectPath, kind: &'static str, label: &'static str, value: &[u8])
         -> Result<(), Fail> {
-        let collection = proxy(conn, LOGIN, "org.freedesktop.Secret.Collection").await?;
+        let target = collections(conn).await?.swap_remove(0);
+        let collection = proxy(conn, &target, "org.freedesktop.Secret.Collection").await?;
         let properties: HashMap<&str, Value> = HashMap::from([
             ("org.freedesktop.Secret.Item.Label", Value::from(label)),
             ("org.freedesktop.Secret.Item.Attributes", Value::from(attributes(kind))),

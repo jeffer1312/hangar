@@ -15,6 +15,8 @@ const LIT: f32 = 0.2;
 const BAR_STEP: f32 = 0.08;
 /// Abaixo desta largura (o cartão deitado do "Atualizar?") a barra do compositor não cabe legível: fica só o campo.
 const COMPACT_BELOW: f32 = 240.;
+/// A pílula inteira não cabe no cartão deitado: nele vai mais estreita e baixa, só com as barras do centro.
+const COMPACT_PILL: (f32, f32, usize) = (128., 32., 16);
 /// Quadro do movimento reduzido: a pílula aberta, que é o que explica o recurso.
 const STILL: f32 = 2.;
 
@@ -78,9 +80,10 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
         });
     let bars = voice_bars(t);
     // Em 160 px a tecla e a pílula não cabem lado a lado: a tecla acende e dá a vez a ela.
-    let pill = (phase == Phase::Recording && !(compact && lit)).then(|| div().w(px(dictation::PILL_WIDTH)).h(px(dictation::PILL_HEIGHT))
-        .child(dictation::recording_pill(bars.back().copied().unwrap_or(0.), &bars)));
-    let pill = pill.map(|pill| div().absolute().top(px(if compact { 6. } else { 11. })).left_0().right_0().flex().justify_center().child(pill));
+    let (pill_width, pill_height, pill_bars) = if compact { COMPACT_PILL } else { (dictation::PILL_WIDTH, dictation::PILL_HEIGHT, dictation::PILL_BARS) };
+    let pill = (phase == Phase::Recording && !(compact && lit)).then(|| div().w(px(pill_width)).h(px(pill_height))
+        .child(dictation::recording_pill(bars.back().copied().unwrap_or(0.), &bars, pill_bars)));
+    let pill = pill.map(|pill| div().absolute().top(px(if compact { 2. } else { 11. })).left_0().right_0().flex().justify_center().child(pill));
     let key = div().absolute().font_family(theme::MONO).py(px(1.)).border_1().child(tr("dictation_shortcut"))
         .map(|el| if lit { el.border_color(theme::accent()).bg(theme::accent()).text_color(theme::on_accent()) }
             else { el.border_color(theme::text().alpha(0.22)).bg(theme::raised()).text_color(theme::body_text()) });
@@ -108,7 +111,7 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
         app::menu_pill("ctl-mode", tr("mode_bypassPermissions"), false, cx)].map(|button| button.tab_stop(false).into_any_element());
     let send = app::send_button("send", phase == Phase::Text, tr("send"), cx).tab_stop(false);
     let composer = app::composer_card(false).w_full().child(field).child(app::composer_control_row(left, right, send));
-    div().id("news-dictation-pill").relative().w_full().p(px(14.)).pt(px(48.)).rounded(px(9.)).border_1().border_color(theme::border().alpha(0.06))
+    div().id("news-dictation-pill").relative().w_full().p(px(14.)).pt(px(60.)).rounded(px(9.)).border_1().border_color(theme::border().alpha(0.06))
         .bg(linear_gradient(180., linear_color_stop(theme::chrome(), 0.), linear_color_stop(theme::background(), 1.)))
         .child(key.top(px(13.)).right(px(16.)).text_size(px(11.)).px(px(7.)).rounded(px(6.)))
         .children(pill).child(composer).into_any_element()

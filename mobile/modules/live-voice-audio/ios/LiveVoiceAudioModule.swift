@@ -39,8 +39,23 @@ public class LiveVoiceAudioModule: Module {
     }.runOnQueue(.main)
 
     AsyncFunction("stop") {
+      HangarAudioDevice.shared.held.reset()
       try self.stopAudio()
     }.runOnQueue(.main)
+
+    Function("speechPauseAvailable") { HangarAudioDevice.shared.installed }
+
+    Function("setSpeechPaused") { (paused: Bool) -> Bool in
+      let held = HangarAudioDevice.shared.held
+      held.setPaused(paused)
+      return !paused && held.takeLost()
+    }
+
+    OnCreate {
+      HangarAudioDevice.shared.onAudioLost = { [weak self] in
+        DispatchQueue.main.async { self?.emitInterruption() }
+      }
+    }
 
     OnDestroy {
       DispatchQueue.main.async {
@@ -76,19 +91,25 @@ public class LiveVoiceAudioModule: Module {
         rtcConfiguration: RTCAudioSessionConfiguration.webRTC()
       )
       interrupted = false
+      // Recarregar o JS no meio da pausa não passa pelo `stop`, e a próxima chamada nasceria muda.
+      HangarAudioDevice.shared.held.reset()
     }
     do {
       let configuration = RTCAudioSessionConfiguration()
       configuration.category = AVAudioSession.Category.playAndRecord.rawValue
       configuration.mode = AVAudioSession.Mode.voiceChat.rawValue
       configuration.categoryOptions = [.allowBluetooth, .defaultToSpeaker]
-      // O WebRTC reaplica sua configuração quando a faixa de áudio começa.
+      // Só o áudio padrão do WebRTC relê esta configuração; com o nosso, as preferências vão direto abaixo.
       RTCAudioSessionConfiguration.setWebRTC(configuration)
       try rtc.setCategory(
         AVAudioSession.Category(rawValue: configuration.category),
         mode: AVAudioSession.Mode(rawValue: configuration.mode),
         options: configuration.categoryOptions
       )
+      try? rtc.session.setPreferredSampleRate(configuration.sampleRate)
+      try? rtc.session.setPreferredIOBufferDuration(configuration.ioBufferDuration)
+      // Gravando, o iOS cala a vibração, e ela é o aviso de que a chamada conectou.
+      try? rtc.session.setAllowHapticsAndSystemSoundsDuringRecording(true)
       if !ownsActivation {
         try rtc.setActive(true)
         ownsActivation = true
@@ -162,6 +183,7 @@ public class LiveVoiceAudioModule: Module {
     observers.forEach { NotificationCenter.default.removeObserver($0) }
     observers.removeAll()
     RTCAudioSessionConfiguration.setWebRTC(previous.rtcConfiguration)
+    try? rtc.session.setAllowHapticsAndSystemSoundsDuringRecording(false)
     var errors: [String] = []
     if ownsActivation {
       ownsActivation = false

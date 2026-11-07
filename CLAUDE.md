@@ -99,7 +99,7 @@ npm --prefix frontend run dev              # Vite dev server
 npm --prefix frontend run build            # production build — does NOT typecheck
 npm --prefix frontend run check            # svelte-check + tsc — THIS is the type gate
 
-scripts/cargo-pinned build -p hangar-server   # target comum da máquina, trava e -j 2; fixa o binário em crates/target da worktree
+scripts/cargo-pinned build -p hangar-server   # target comum da máquina, trava, jobs e teto pela memória livre; fixa o binário em crates/target da worktree
 scripts/verificar-local                    # só o ligado aos arquivos mudados (o que a trava pre-push exige)
 scripts/verificar-local --completo         # o que o CI rodaria para o commit (Linux + VM Windows)
 scripts/verificar-local --passos rust      # repete só um passo (o que já passou nesta árvore fica gravado)
@@ -166,6 +166,16 @@ no passo. Cada página é escrita como
 regra imperativa, sem motivo nem caso, com teto de tamanho conferido por
 `scripts/checar-orquestrar.sh`. Contrato visual, exceções de paralelismo e demais etapas ficam
 na skill.
+
+Skills de terceiros para quem trabalha no código moram em `.agents/skills/` (Codex e outros
+agentes), com atalho em `.claude/skills/` (Claude Code), e o installer não as leva às máquinas.
+Entram e se atualizam por `npx skills add <origem>@<skill>` sem `-g`, que fixa origem e hash no
+`skills-lock.json`; o atalho de skill nova só entra no git com uma linha `!.claude/skills/<nome>`
+no `.gitignore` (lá fica só o que foi escolhido para o repo). No Windows os atalhos só viram pasta
+com `core.symlinks` ligado. Rust:
+`rust-crate-architecture` decide crates, camadas e ciclos, com os crates em `crates/`;
+`rust-code-style`, visibilidade e módulos; `rust-workspace` é leitura de apoio e, quando
+diverge, vale a `rust-crate-architecture`.
 
 **Instalar/atualizar numa máquina** (após `git pull`):
 
@@ -626,7 +636,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   completo, compactado, num segundo envio que o worker grava sem abrir. Motivo e invariante em
   [plataforma.md](docs/decisoes/plataforma.md#reportar-problema-o-pacote-de-diagnóstico-vai-ao-dono-27102026).
   Exceção única ao "só contagem": quando um reinício não volta (atualização, a volta dela ou
-  reinício avulso), o executor grava como `update: saída`, com `scrub`, tudo o que explica a falha:
+  reinício avulso) ou um passo de máquina da atualização falha, o executor grava como `update: saída`, com `scrub`, tudo o que explica a falha:
   tempo de cada etapa, cada mudança na resposta da saúde, a saída da versão nova reduzida
   (`startup_output::lines`: traceback, lançador, uvicorn e aviso/erro inteiros; INFO só nível e
   logger) e o retrato do fim do prazo (lançador, pacote, processos do Hangar, tarefa ou unit, porta).
@@ -683,12 +693,18 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   `__Host-cp_token`: máquinas do Connect dividem o mesmo site. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#connect-a-porta-dele-nunca-é-local).
 - **Nada nasce no Python: o objetivo é tirá-lo do projeto.** Rota, ponte, poller, integração e
-  qualquer recurso novo vão para o `hangar-server` (`crates/`). Sem pedido explícito do usuário, no
+  qualquer recurso novo vão para o Rust (`crates/`). Sem pedido explícito do usuário, no
   `backend/app/` só se apaga código. Toda linha que ACRESCENTA no Python — lógica, releitura,
   cache, ponte, rota, repasse ao Rust, condição de modo, compatibilidade — é perguntada ao usuário
   ANTES de escrever, dizendo o que é, por que o Rust sozinho não basta e o que se perde sem ela.
   Vale para migração, correção e subagente (que para e pergunta pela sessão). Linha nova no Python
   sem essa autorização é defeito na revisão, mesmo que "só repasse".
+- **Módulo Rust novo nasce como crate próprio sobre o `hangar-core`.** Vale também
+  para migração do Python. O `hangar-core` existe (`crates/hangar-core`): todo módulo novo nasce
+  como crate próprio sobre ele, e o servidor só o liga (rota, estado). O que o módulo precisar do
+  `hangar-server` desce antes para o `hangar-core`, ou vira trait no core que o servidor
+  implementa. Nenhum crate depende do `hangar-server`. Motivo e plano da divisão em
+  [plataforma.md](docs/decisoes/plataforma.md#módulo-novo-nasce-como-crate-próprio-06112026).
 - **Motores, login de convidados e peers são do Rust.** Catálogo, CLIProxy, espelhos e instalação
   ficam em `engines/`, `harness_setup/` e `codex_setup/`; identidade, permissões, raízes e lista do
   convidado em `login_guests/`; configuração, descoberta e canal dos peers em `machine_peers/`.

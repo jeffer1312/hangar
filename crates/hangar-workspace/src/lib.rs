@@ -384,7 +384,7 @@ pub fn execute(op: Operation) -> Result<Value> {
         BranchOf { cwd } => Ok(json!(git::head_info(cwd.as_deref()).0)),
         GitSummary { cwd } => Ok(git::summary(cwd.as_deref(), false)),
         GitDiffstat { cwd } => Ok(git::summary(cwd.as_deref(), true)),
-        ListBranches { cwd } => git::branches(Path::new(&cwd)),
+        ListBranches { cwd } => git::branches_with_upstreams(Path::new(&cwd)),
         SwitchBranch { cwd, branch } => git::switch(Path::new(&cwd), &branch),
         CreateWorktree {
             cwd,

@@ -1,5 +1,5 @@
 //! Chamada WebRTC direto com a OpenAI: o app-server só troca o SDP; o áudio não passa por ele.
-use crate::voice::{log, audio::{Audio, AudioError, FRAME}};
+use crate::voice::{log, audio::{Audio, AudioError, FRAME, SpeechPause}};
 use std::{net::{IpAddr, SocketAddr, UdpSocket}, sync::{Arc, Once, atomic::{AtomicBool, Ordering}}, time::{Duration, Instant}};
 use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc, RtcConfig,
     change::{SdpAnswer, SdpPendingOffer}, format::Codec, media::{Direction, Frequency, MediaKind, MediaTime, Mid}, net::{Protocol, Receive}};
@@ -8,7 +8,7 @@ use str0m::{Candidate, Event, IceConnectionState, Input, Output, Rtc, RtcConfig,
 const CONNECT_DEADLINE: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy)]
-pub enum RtcError { Network, Answer, Media, Microphone, Speaker }
+pub enum RtcError { Network, Answer, Media, Microphone, Speaker, Reconnect }
 
 pub enum RtcEvent { Connected, Closed, Levels(f32, f32), Failed(RtcError) }
 
@@ -39,9 +39,11 @@ pub fn offer() -> Result<Offer, RtcError> {
 }
 
 // O canal de eventos precisa ser ilimitado: com send_blocking num canal cheio o laço de mídia travaria.
-pub fn run(offer: Offer, answer: String, muted: Arc<AtomicBool>, events: async_channel::Sender<RtcEvent>, stop: Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
+#[allow(clippy::too_many_arguments)]
+pub fn run(offer: Offer, answer: String, muted: Arc<AtomicBool>, pause: Arc<SpeechPause>, announce: bool, events: async_channel::Sender<RtcEvent>,
+    stop: Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
-        let outcome = drive(offer, answer, muted, &events, &stop);
+        let outcome = drive(offer, answer, muted, pause, announce, &events, &stop);
         log(format!("rtc thread end outcome={outcome:?}"));
         let _ = events.send_blocking(match outcome { Ok(()) => RtcEvent::Closed, Err(error) => RtcEvent::Failed(error) });
     })
@@ -129,13 +131,15 @@ fn event_type(data: &[u8]) -> String {
         .and_then(|v| v["type"].as_str().map(str::to_owned)).unwrap_or_else(|| "?".into())
 }
 
-fn drive(offer: Offer, answer: String, muted: Arc<AtomicBool>, events: &async_channel::Sender<RtcEvent>, stop: &AtomicBool) -> Result<(), RtcError> {
+#[allow(clippy::too_many_arguments)]
+fn drive(offer: Offer, answer: String, muted: Arc<AtomicBool>, pause: Arc<SpeechPause>, announce: bool, events: &async_channel::Sender<RtcEvent>,
+    stop: &AtomicBool) -> Result<(), RtcError> {
     let Offer { mut rtc, socket, local, mid, pending, .. } = offer;
     let answer = SdpAnswer::from_sdp_string(&answer).map_err(|_| RtcError::Answer)?;
     rtc.sdp_api().accept_answer(pending, answer).map_err(|_| RtcError::Answer)?;
     log("rtc answer accepted");
     // Abrir o som aqui: o fluxo do cpal fica na thread que o usa, e a tela não espera o WASAPI.
-    let mut audio = Audio::start(muted).map_err(audio_error)?;
+    let mut audio = Audio::start(muted, pause.clone()).map_err(audio_error)?;
     let (mut window, mut last_summary) = (Window::default(), Instant::now());
     let (mut last_type, mut repeats, mut usage_logged) = (String::new(), 0u32, 0u32);
     let (mut heard_user, mut delegated) = (false, false);
@@ -156,6 +160,7 @@ fn drive(offer: Offer, answer: String, muted: Arc<AtomicBool>, events: &async_ch
         window.loop_max_ms = window.loop_max_ms.max(now.duration_since(loop_top).as_millis() as u32);
         loop_top = now;
         if stop.load(Ordering::Relaxed) { break Ok(()); }
+        if pause.take_reconnect() { log("rtc reconnect requested"); break Err(RtcError::Reconnect); }
         // Ninguém ouve mais: sem isto o microfone ficaria aberto.
         if events.is_closed() { break Err(RtcError::Network); }
         if !connected && started.elapsed() > CONNECT_DEADLINE { break Err(RtcError::Network); }
@@ -165,7 +170,8 @@ fn drive(offer: Offer, answer: String, muted: Arc<AtomicBool>, events: &async_ch
         if last_summary.elapsed() >= SUMMARY_EVERY {
             let w = std::mem::take(&mut window);
             let flow = audio.take_flow();
-            log(format!("rtc summary connected={connected} written={} write_errors={} encode_errors={} no_writer={} no_opus={} received={} rtp_raw={} decode_errors={} max_in={:.4} raw_in_peak={:.4} max_out={:.4} capture_queue={} playback_queue={} underruns={} speech_underruns={} prime_ms={} flow_in={} flow_played={} flow_dropped={} out_frames={} gap_raw_ms={} gap_media_ms={} loop_max_ms={} lost={} late_max_ms={} skipped_max_ms={}",
+            let (held_ms, hold_dropped) = audio.take_hold();
+            log(format!("rtc summary connected={connected} written={} write_errors={} encode_errors={} no_writer={} no_opus={} received={} rtp_raw={} decode_errors={} max_in={:.4} raw_in_peak={:.4} max_out={:.4} capture_queue={} playback_queue={} underruns={} speech_underruns={} prime_ms={} flow_in={} flow_played={} flow_dropped={} out_frames={} gap_raw_ms={} gap_media_ms={} loop_max_ms={} lost={} late_max_ms={} skipped_max_ms={} held_ms={held_ms} hold_dropped={hold_dropped}",
                 w.written, w.write_errors, w.encode_errors, w.no_writer, w.no_opus, w.received, w.rtp_raw, w.decode_errors,
                 w.max_in, audio.take_raw_peak(), w.max_out, audio.capture_len(), audio.playback_len(), audio.take_underruns(), audio.take_speech_underruns(),
                 audio.prime_ms(), flow[0], flow[1], flow[2], flow[3], w.gap_raw_ms, w.gap_media_ms, w.loop_max_ms, w.lost, w.late_max_ms, w.skipped_max_ms));
@@ -176,7 +182,14 @@ fn drive(offer: Offer, answer: String, muted: Arc<AtomicBool>, events: &async_ch
             Ok(Output::Transmit(t)) => { let _ = socket.send_to(&t.contents, t.destination); continue; }
             Ok(Output::Event(event)) => {
                 match event {
-                    Event::Connected => { log("rtc connected"); connected = true; last_written = Instant::now(); audio.reset(); let _ = events.send_blocking(RtcEvent::Connected); }
+                    Event::Connected => {
+                        log("rtc connected");
+                        connected = true;
+                        last_written = Instant::now();
+                        audio.reset();
+                        if announce { audio.announce_connected(); }
+                        let _ = events.send_blocking(RtcEvent::Connected);
+                    }
                     Event::IceConnectionStateChange(state) => {
                         log(format!("rtc ice {state:?}"));
                         if state == IceConnectionState::Disconnected { break Err(RtcError::Network); }
@@ -242,6 +255,7 @@ fn drive(offer: Offer, answer: String, muted: Arc<AtomicBool>, events: &async_ch
         };
         // Mídia escrita antes do Connected é descartada pelo str0m.
         if connected {
+            audio.refill();
             let mut return_media_failure = false;
             while let Some(frame) = audio.next_frame() {
                 let Ok(len) = encoder.encode(&frame, FRAME, &mut packet) else { window.encode_errors += 1; continue };
@@ -295,6 +309,7 @@ fn drive(offer: Offer, answer: String, muted: Arc<AtomicBool>, events: &async_ch
             Err(_) => { if rtc.handle_input(Input::Timeout(Instant::now())).is_err() { break Err(RtcError::Network); } }
         }
     };
+    audio.keep_unplayed();
     rtc.disconnect();
     result
 }
