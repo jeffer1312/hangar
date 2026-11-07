@@ -310,7 +310,8 @@ impl Supervisor {
 
     /// Primeiro uso de um site: o `frpc` e o Caddy só leem a configuração ao subir, então os dois voltam uma vez.
     /// Gravado antes da troca, nada repete isso. Cancelada no meio deixaria o Connect parado: quem chama usa tarefa própria.
-    async fn publish(&self, port: &watch::Sender<bool>, closed: ConnectError, published: fn(&mut Linked) -> &mut bool) -> Result<Linked, ConnectError> {
+    /// Devolve a ligação e se esta foi a primeira publicação do site.
+    async fn publish(&self, port: &watch::Sender<bool>, closed: ConnectError, published: fn(&mut Linked) -> &mut bool) -> Result<(Linked, bool), ConnectError> {
         let _linking = self.linking.lock().await;
         if !*port.borrow() {
             return Err(closed);
@@ -324,13 +325,13 @@ impl Supervisor {
             if !lock(&self.live).active {
                 self.start(&linked).await?;
             }
-            return Ok(linked);
+            return Ok((linked, false));
         }
         *published(&mut linked) = true;
         let (dir, saved) = (self.dir.clone(), linked.clone());
         off_thread(move || state::write(&dir, &saved)).await?;
         self.start(&linked).await?;
-        Ok(linked)
+        Ok((linked, true))
     }
 
     pub async fn publish_guest(&self) -> Result<(), ConnectError> {
@@ -338,10 +339,15 @@ impl Supervisor {
         self.publish(&self.guest_port, closed, |linked| &mut linked.guest_published).await.map(|_| ())
     }
 
-    /// Devolve o host da prévia.
-    pub async fn publish_preview(&self) -> Result<String, ConnectError> {
+    /// Devolve o host da prévia e se é a primeira: nela, quem chama espera o site abrir de fora.
+    pub async fn publish_preview(&self) -> Result<(String, bool), ConnectError> {
         let closed = ConnectError::new(StatusCode::CONFLICT, "connect_preview_port_closed", format!("a porta da prévia ({PREVIEW_PORT}) não abriu neste servidor"));
-        Ok(self.publish(&self.preview_port, closed, |linked| &mut linked.preview_published).await?.preview_host)
+        let (linked, first) = self.publish(&self.preview_port, closed, |linked| &mut linked.preview_published).await?;
+        // Sem os filhos de pé o link sairia sem abrir para ninguém.
+        if !first && !self.status().enabled {
+            return Err(ConnectError::new(StatusCode::CONFLICT, "connect_not_running", "o Connect não está de pé nesta máquina"));
+        }
+        Ok((linked.preview_host, first))
     }
 
     /// Credencial de aparelho fica: ela vale também no Tailscale.

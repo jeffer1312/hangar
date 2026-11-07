@@ -10,12 +10,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use axum::Router;
+use axum::http::header;
+use axum::routing::get;
 use hangar_server::connect::config::{render_frpc, render_preview_site};
-use hangar_server::connect::preview::{COOKIE, LINK_LIFE, LINK_PARAM, Previews, router};
+use hangar_server::connect::preview::{COOKIE, LINK_LIFE, LINK_PARAM, Previews, SESSION_LIFE, router};
 use hangar_server::connect::state::{self, Linked};
 use hangar_server::connect::supervisor::Supervisor;
 use hangar_server::routes::AppState;
-use reqwest::header::{CACHE_CONTROL, LOCATION, SET_COOKIE};
+use hangar_server::share::owner_routes::Reach;
+use hangar_server::share_reach::Probe;
+use reqwest::header::{CACHE_CONTROL, CONTENT_TYPE, LOCATION, SET_COOKIE};
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -74,6 +79,11 @@ async fn answer(mut stream: TcpStream, port: u16, seen: Arc<Mutex<Vec<String>>>)
         stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n").await.unwrap();
         std::future::pending::<()>().await;
         return;
+    } else if head.starts_with("GET /hang ") {
+        std::future::pending::<()>().await;
+        return;
+    } else if head.starts_with("GET /cookies ") {
+        "HTTP/1.1 200 OK\r\nClear-Site-Data: \"cookies\"\r\nSet-Cookie: __Host-hangar_preview=; Max-Age=0\r\nSet-Cookie: cp_token=x\r\nSet-Cookie: app=1; Path=/\r\nSet-Cookie: shared=1; Domain=hangar.dev.br; Path=/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned()
     } else {
         "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_owned()
     };
@@ -125,9 +135,19 @@ impl Site {
         self.previews.open(project.port, HOST).unwrap()
     }
 
-    /// Gasta o link e devolve o cookie como o navegador o manda de volta.
+    /// O botão da página, que manda a `Origin` do próprio site.
+    fn press_at(&self, path: &str) -> reqwest::RequestBuilder {
+        client().post(format!("http://{}{path}", self.addr)).header("host", HOST).header("origin", format!("https://{HOST}"))
+    }
+
+    fn press(&self, link: &str) -> reqwest::RequestBuilder {
+        self.press_at(&format!("/?{LINK_PARAM}={link}"))
+    }
+
+    /// Abre a página, aperta o botão e devolve o cookie como o navegador o manda de volta.
     async fn enter(&self, link: &str) -> String {
-        let response = self.with_link(link).send().await.unwrap();
+        assert_eq!(self.with_link(link).send().await.unwrap().status(), 200);
+        let response = self.press(link).send().await.unwrap();
         assert_eq!(response.status(), 303);
         response.headers()[SET_COOKIE].to_str().unwrap().split(';').next().unwrap().to_owned()
     }
@@ -161,7 +181,12 @@ async fn preview_refuses_a_visitor_without_the_link() {
     assert_eq!(site.get("/").header("cookie", format!("{COOKIE}={link}")).send().await.unwrap().status(), 401, "o link não vale como sessão");
     assert_eq!(client().get(format!("http://{}/?{LINK_PARAM}={link}", site.addr)).send().await.unwrap().status(), 421, "outro host não gasta o link");
     let head = client().head(format!("http://{}/?{LINK_PARAM}={link}", site.addr)).header("host", HOST);
-    assert_eq!(head.send().await.unwrap().status(), 401, "só GET gasta o link");
+    assert_eq!(head.send().await.unwrap().status(), 401);
+    let bare = client().post(format!("http://{}/?{LINK_PARAM}={link}", site.addr)).header("host", HOST);
+    assert_eq!(bare.send().await.unwrap().status(), 401, "sem a `Origin` do site o link não é gasto");
+    let neighbour = client().post(format!("http://{}/?{LINK_PARAM}={link}", site.addr)).header("host", HOST)
+        .header("origin", "https://outra--preview.acme.hangar.dev.br");
+    assert_eq!(neighbour.send().await.unwrap().status(), 401);
 
     let cookie = site.enter(&link).await;
     let other_site = client().get(format!("http://{}/", site.addr)).header("cookie", &cookie).header("host", "pc1.acme.hangar.dev.br");
@@ -176,19 +201,103 @@ async fn preview_refuses_a_visitor_without_the_link() {
 async fn preview_link_sets_a_host_cookie_and_drops_the_query() {
     let (site, project) = (site().await, project().await);
     let link = site.open(&project);
-    let response = site.get(&format!("/app/page?x=1&{LINK_PARAM}={link}&y=2")).send().await.unwrap();
+    let response = site.press_at(&format!("/app/page?x=1&{LINK_PARAM}={link}&y=2")).send().await.unwrap();
     assert_eq!(response.status(), 303);
     assert_eq!(response.headers()[LOCATION], "/app/page?x=1&y=2");
     assert_eq!(response.headers()[CACHE_CONTROL], "no-store");
     let cookie = response.headers()[SET_COOKIE].to_str().unwrap();
     assert!(cookie.starts_with(&format!("{COOKIE}=")), "{cookie}");
-    assert!(cookie.ends_with("; Secure; HttpOnly; SameSite=Lax; Path=/"), "{cookie}");
+    assert!(cookie.ends_with(&format!("; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age={SESSION_LIFE}")), "{cookie}");
     assert!(!cookie.contains(&link), "o cookie não é o link");
     assert_eq!(project.hits(), 0, "o link nunca chega ao projeto");
 
     let link = site.open(&project);
-    let response = site.get(&format!("//evil.example/?{LINK_PARAM}={link}")).send().await.unwrap();
+    let response = site.press_at(&format!("//evil.example/?{LINK_PARAM}={link}")).send().await.unwrap();
     assert_eq!(response.headers()[LOCATION], "/evil.example/", "a 303 não sai do site");
+}
+
+#[tokio::test]
+async fn preview_page_shows_a_button_and_spends_nothing() {
+    let (site, project) = (site().await, project().await);
+    let link = site.open(&project);
+    for _ in 0..2 {
+        let response = site.with_link(&link).send().await.unwrap();
+        assert_eq!(response.status(), 200, "buscar o link para a miniatura não o queima");
+        let headers = response.headers().clone();
+        assert_eq!(headers[CONTENT_TYPE], "text/html; charset=utf-8");
+        assert_eq!(headers[CACHE_CONTROL], "no-store");
+        // `no-referrer` faria o botão sair com `Origin: null`.
+        assert_eq!(headers["referrer-policy"], "same-origin");
+        assert!(!headers.contains_key(SET_COOKIE));
+        let page = response.text().await.unwrap();
+        assert!(page.contains(r#"<form method="post">"#) && !page.contains("<script"), "{page}");
+        assert!(!page.contains(&link), "a página não repete o link");
+    }
+    assert_eq!(site.press(&link).send().await.unwrap().status(), 303);
+    assert_eq!(project.hits(), 0);
+}
+
+#[tokio::test]
+async fn preview_keeps_the_project_away_from_the_site_cookies() {
+    let (site, project) = (site().await, project().await);
+    let cookie = site.inside(&project).await;
+    let response = site.get("/cookies").header("cookie", &cookie).send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert!(!response.headers().contains_key("clear-site-data"));
+    let cookies: Vec<&str> = response.headers().get_all(SET_COOKIE).iter().map(|value| value.to_str().unwrap()).collect();
+    assert_eq!(cookies, ["app=1; Path=/", "shared=1; Path=/"], "o projeto guarda os dele, só neste host");
+}
+
+#[tokio::test]
+async fn preview_refuses_a_service_worker_script() {
+    let (site, project) = (site().await, project().await);
+    let cookie = site.inside(&project).await;
+    let script = site.get("/sw.js").header("cookie", &cookie).header("service-worker", "script");
+    assert_eq!(script.send().await.unwrap().status(), 403);
+    assert_eq!(project.hits(), 0);
+}
+
+#[tokio::test]
+async fn preview_refuses_a_neighbour_without_origin() {
+    let (site, project) = (site().await, project().await);
+    let cookie = site.inside(&project).await;
+    let fetched = |fetch_site: &str, mode: &str, dest: &str| site.get("/").header("cookie", &cookie)
+        .header("sec-fetch-site", fetch_site).header("sec-fetch-mode", mode).header("sec-fetch-dest", dest);
+    assert_eq!(fetched("same-site", "no-cors", "image").send().await.unwrap().status(), 403, "`<img>` de uma vizinha");
+    assert_eq!(fetched("cross-site", "navigate", "iframe").send().await.unwrap().status(), 403, "moldura não é abrir o site");
+    assert_eq!(project.hits(), 0);
+    for (fetch_site, mode, dest) in [("same-site", "navigate", "document"), ("cross-site", "navigate", "document"),
+        ("same-origin", "cors", "empty"), ("none", "navigate", "document")] {
+        assert_eq!(fetched(fetch_site, mode, dest).send().await.unwrap().status(), 200, "{fetch_site} {mode} {dest}");
+    }
+}
+
+#[tokio::test]
+async fn preview_session_ends_at_its_deadline() {
+    let (site, project) = (site().await, project().await);
+    let cookie = site.inside(&project).await;
+    site.now.fetch_add(SESSION_LIFE - 1, Ordering::SeqCst);
+    assert!(site.previews.state().is_some_and(|open| open.entered));
+    let (mut stream, head) = raw(site.addr, &upgrade("/hmr", &format!("Cookie: {cookie}\r\n"))).await;
+    assert!(head.starts_with("HTTP/1.1 101"), "{head}");
+    let mut rest = [0u8; 1];
+    let ended = timeout(PATIENCE, stream.read(&mut rest)).await.unwrap();
+    assert!(matches!(ended, Ok(0) | Err(_)), "{ended:?}");
+
+    site.now.fetch_add(1, Ordering::SeqCst);
+    assert_eq!(site.get("/").header("cookie", &cookie).send().await.unwrap().status(), 401);
+    assert_eq!(site.previews.state(), None, "vencida não aparece como aberta");
+}
+
+#[tokio::test]
+async fn preview_does_not_wait_for_a_project_that_never_answers() {
+    let (site, project) = (site().await, project().await);
+    let cookie = site.inside(&project).await;
+    let waiting = tokio::spawn(site.get("/hang").header("cookie", &cookie).send());
+    until("o pedido chegar ao projeto", || project.hits() == 1).await;
+    site.previews.close();
+    let response = timeout(PATIENCE, waiting).await.unwrap().unwrap().unwrap();
+    assert_eq!(response.status(), 401);
 }
 
 #[tokio::test]
@@ -197,7 +306,8 @@ async fn preview_proxies_http_and_websocket() {
     let cookie = site.inside(&project).await;
 
     let response = site.get("/page?token=vite").header("cookie", format!("{cookie}; app=1; cp_token=senha"))
-        .bearer_auth("credencial").header("origin", format!("https://{HOST}")).send().await.unwrap();
+        .bearer_auth("credencial").header("origin", format!("https://{HOST}"))
+        .header("referer", format!("https://{HOST}/?{LINK_PARAM}=gasto")).send().await.unwrap();
     assert_eq!(response.status(), 200);
     assert_eq!(response.text().await.unwrap(), "ok");
     let seen = project.last();
@@ -248,6 +358,7 @@ async fn preview_link_is_single_use_and_expires() {
     let link = site.open(&project);
     let cookie = site.enter(&link).await;
     assert_eq!(site.with_link(&link).send().await.unwrap().status(), 401, "segundo uso");
+    assert_eq!(site.press(&link).send().await.unwrap().status(), 401, "segundo uso");
     assert_eq!(site.get("/").header("cookie", &cookie).send().await.unwrap().status(), 200);
     let again = site.with_link(&link).header("cookie", &cookie).send().await.unwrap();
     assert_eq!(again.status(), 303, "com a sessão, o link velho só sai da URL");
@@ -257,6 +368,7 @@ async fn preview_link_is_single_use_and_expires() {
     let late = site.open(&project);
     site.now.fetch_add(LINK_LIFE, Ordering::SeqCst);
     assert_eq!(site.with_link(&late).send().await.unwrap().status(), 401, "vencido");
+    assert_eq!(site.press(&late).send().await.unwrap().status(), 401, "vencido");
 
     assert_eq!(site.get("/").header("cookie", &cookie).send().await.unwrap().status(), 401, "prévia nova derruba a sessão da velha");
     let cookie = site.inside(&project).await;
@@ -308,8 +420,26 @@ async fn wait_open(addr: SocketAddr) {
     }).await.unwrap();
 }
 
-/// Servidor de verdade ligado ao Connect, com o `frpc` falso entrando na hora.
+/// O DNS público responde 127.0.0.1 e a "internet" é a própria porta da prévia, ou o nome ainda não existe.
+async fn reach(port: u16, found: bool) -> Reach {
+    let answer = if found { r#"{"Status":0,"Answer":[{"name":"x.","type":1,"TTL":60,"data":"127.0.0.1"}]}"# } else { r#"{"Status":3}"# };
+    let app = Router::new().route("/resolve", get(move || async move { ([(header::CONTENT_TYPE, "application/dns-json")], answer) }));
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let doh = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    Reach {
+        probe: Probe { doh: vec![format!("http://{doh}/resolve")], funnel_scheme: "http", funnel_port: 1, connect_port: port, local_base: String::new() },
+        every: Duration::from_millis(20),
+        deadline: Duration::from_millis(if found { 5_000 } else { 200 }),
+    }
+}
+
 async fn server() -> Server {
+    server_with(true).await
+}
+
+/// Servidor de verdade ligado ao Connect, com o `frpc` falso entrando na hora.
+async fn server_with(found: bool) -> Server {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().to_path_buf();
     let supervisor = Arc::new(alone(&dir));
@@ -321,6 +451,7 @@ async fn server() -> Server {
     app.connect = Some(connect);
     app.preview = Some(preview);
     app.connect_supervisor = supervisor.clone();
+    app.connect_preview_reach = Arc::new(reach(preview.port(), found).await);
     let device = device(&mut app);
     let main = spawn_state(app).await;
     wait_open(connect).await;
@@ -342,7 +473,7 @@ async fn replied(request: reqwest::RequestBuilder) -> (u16, Value) {
 #[tokio::test]
 async fn preview_never_reaches_hangar_ports() {
     let s = server().await;
-    for port in [8765, 8766, 8768, 8769, 18080, 18443, 0, s.main.port(), s.connect.port(), s.preview.port(), s.upstream.port()] {
+    for port in [8765, 8766, 8768, 8769, 18080, 18443, 8317, 0, s.main.port(), s.connect.port(), s.preview.port(), s.upstream.port()] {
         let (status, body) = replied(open_request(s.main, OWNER, port)).await;
         assert_eq!(status, 422, "{port}: {body}");
         assert_eq!(body["detail"]["code"], "connect_preview_port_refused");
@@ -382,6 +513,13 @@ async fn preview_site_is_born_on_first_use_and_stays() {
     assert!(frpc.contains(&format!(r#"customDomains = ["{HOST}"]"#)), "{frpc}");
     until("Caddy de pé", || read_pid(&s.dir, "caddy").is_some()).await;
     assert!(std::fs::read_to_string(s.dir.join("Caddyfile")).unwrap().contains(SITE));
+    until("Connect de pé", || s.supervisor.status().enabled).await;
+
+    let state = || client().get(format!("http://{}/api/connect/preview", s.main)).bearer_auth(OWNER);
+    let (status, body) = replied(state()).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["preview"]["port"], 3000);
+    assert_eq!(body["preview"]["entered"], false);
 
     // Trocar a porta do projeto não toca nos filhos: o site aponta sempre para a 8769.
     let (frpc_pid, caddy_pid) = (pid_of(&s.dir, "frpc"), pid_of(&s.dir, "caddy"));
@@ -392,6 +530,28 @@ async fn preview_site_is_born_on_first_use_and_stays() {
     let close = |addr: SocketAddr, token: &str| client().delete(format!("http://{addr}/api/connect/preview")).bearer_auth(token.to_owned());
     assert_eq!(replied(close(s.connect, &s.device)).await.0, 200);
     assert_eq!(replied(close(s.main, "errado")).await.0, 401);
+    assert_eq!(replied(state()).await.1["preview"], Value::Null);
+
+    // Publicado, mas com os filhos parados: o link não abriria para ninguém.
+    s.supervisor.stop().await;
+    let (status, body) = replied(open_request(s.main, OWNER, 3000)).await;
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["detail"]["code"], "connect_not_running");
+    assert_eq!(replied(state()).await.1["preview"], Value::Null);
+    s.supervisor.stop().await;
+}
+
+#[tokio::test]
+async fn preview_link_waits_for_the_first_site_to_open_from_outside() {
+    let s = server_with(false).await;
+    let (status, body) = replied(open_request(s.main, OWNER, 3000)).await;
+    assert_eq!(status, 409, "{body}");
+    assert_eq!(body["detail"]["code"], "connect_preview_reach_failed");
+    assert!(state::read(&s.dir).unwrap().preview_published, "o site fica: refazer gastaria outro certificado");
+
+    until("Connect de pé", || s.supervisor.status().enabled).await;
+    let (status, body) = replied(open_request(s.main, OWNER, 3000)).await;
+    assert_eq!(status, 200, "só a primeira publicação espera: {body}");
     s.supervisor.stop().await;
 }
 

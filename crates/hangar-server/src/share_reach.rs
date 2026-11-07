@@ -136,12 +136,38 @@ pub async fn check_once(probe: &Probe, link: &InviteLink) -> Result<(), Failure>
     attempt(probe, link, None).await
 }
 
+/// A prévia não tem página para comparar: basta o site responder pela internet com o `status` dele.
+async fn answers(probe: &Probe, host: &str, status: u16, end: Instant) -> Result<(), Failure> {
+    let ips = public_ips(probe, host, Some(end)).await?;
+    let url = format!("{}://{host}:{}/", probe.funnel_scheme, probe.connect_port);
+    let mut last = String::new();
+    for ip in ips {
+        let outside = crate::http_client().no_proxy().redirect(reqwest::redirect::Policy::none())
+            .resolve(host, SocketAddr::new(ip, probe.connect_port))
+            .build().map_err(|e| Failure::Funnel { detail: e.to_string() })?;
+        match outside.get(&url).timeout(call_timeout(Some(end))).send().await {
+            Ok(reply) if reply.status().as_u16() == status => return Ok(()),
+            Ok(reply) => last = format!("{ip}: HTTP {}", reply.status().as_u16()),
+            Err(e) => last = format!("{ip}: {e}"),
+        }
+    }
+    Err(Failure::Funnel { detail: last })
+}
+
+pub async fn check_answer_until(probe: &Probe, host: &str, status: u16, every: Duration, deadline: Duration) -> Result<(), Failure> {
+    repeat(every, deadline, move |end| answers(probe, host, status, end)).await
+}
+
 pub async fn check_until(probe: &Probe, link: &InviteLink, every: Duration, deadline: Duration) -> Result<(), Failure> {
+    repeat(every, deadline, move |end| attempt(probe, link, Some(end))).await
+}
+
+async fn repeat<F: Future<Output = Result<(), Failure>>>(every: Duration, deadline: Duration, step: impl Fn(Instant) -> F) -> Result<(), Failure> {
     let end = Instant::now() + deadline;
     let mut last = None;
     let looped = tokio::time::timeout(deadline, async {
         loop {
-            match attempt(probe, link, Some(end)).await {
+            match step(end).await {
                 Ok(()) => return,
                 Err(failure) => last = Some(failure),
             }

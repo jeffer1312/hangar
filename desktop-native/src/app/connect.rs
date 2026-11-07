@@ -81,6 +81,10 @@ fn parse_preview(value: Value) -> Result<String, String> {
     value.get("url").and_then(Value::as_str).map(str::to_owned).ok_or_else(|| tr("invalid_response"))
 }
 
+fn open_preview_port(value: &Value) -> Option<u64> {
+    value.get("preview")?.get("port")?.as_u64()
+}
+
 /// Devolve a senha e já esvazia o campo. `set_value` limpa também o desfazer: o Ctrl+Z não a traz de volta.
 fn take_password(input: &Entity<InputState>, window: &mut Window, cx: &mut App) -> String {
     let password = input.read(cx).value().to_string();
@@ -117,6 +121,8 @@ pub(in crate::app) struct Connect {
     device_error: Option<String>,
     form: Option<LinkForm>,
     preview_url: Option<String>,
+    /// A porta da prévia aberta no servidor: o link pode ter saído da tela, a prévia não.
+    preview_open: Option<u64>,
     preview_busy: bool,
     preview_error: Option<String>,
 }
@@ -128,6 +134,7 @@ pub(super) enum ConnectReply {
     Revoked(Result<Value, Failure>),
     PreviewOpened(Result<Value, Failure>),
     PreviewClosed(Result<Value, Failure>),
+    PreviewState(Result<Value, Failure>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -195,6 +202,13 @@ impl Hangar {
         (self.connect.error, self.connect.device_error) = (None, None);
         self.load_connect(cx);
         self.load_connect_devices(cx);
+        self.load_connect_preview();
+    }
+
+    fn load_connect_preview(&self) {
+        let Some(api) = self.api.clone() else { return };
+        let done = self.connect_send_later();
+        self.runtime.spawn(async move { done(ConnectReply::PreviewState(api.server_read(&["connect", "preview"], &[], 10).await)).await });
     }
 
     fn load_connect(&mut self, cx: &mut Context<Self>) {
@@ -264,8 +278,15 @@ impl Hangar {
         (self.connect.preview_busy, self.connect.preview_error) = (true, None);
         let done = self.connect_send_later();
         self.runtime.spawn(async move {
-            // A primeira prévia reinicia o `frpc` e o Caddy: prazo longo.
-            done(ConnectReply::PreviewOpened(api.server_send(reqwest::Method::POST, &["connect", "preview"], Some(json!({"port": port})), 60).await)).await
+            // A primeira prévia reinicia o `frpc` e o Caddy e espera o site abrir de fora: prazo longo.
+            let body = json!({"port": port});
+            let mut result = api.server_send(reqwest::Method::POST, &["connect", "preview"], Some(body.clone()), 90).await;
+            // Quem pede pelo próprio Connect perde a conexão na troca dos filhos.
+            if result.as_ref().is_err_and(|error| error.status.is_none()) {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                result = api.server_send(reqwest::Method::POST, &["connect", "preview"], Some(body), 90).await;
+            }
+            done(ConnectReply::PreviewOpened(result)).await
         });
         cx.notify();
     }
@@ -333,6 +354,7 @@ impl Hangar {
                     Ok(url) => self.connect.preview_url = Some(url),
                     Err(error) => self.connect.preview_error = Some(error),
                 }
+                self.load_connect_preview();
             }
             ConnectReply::PreviewClosed(result) => {
                 self.connect.preview_busy = false;
@@ -340,7 +362,10 @@ impl Hangar {
                     Ok(_) => self.connect.preview_url = None,
                     Err(error) => self.connect.preview_error = Some(failure_text(&error)),
                 }
+                self.load_connect_preview();
             }
+            // Acompanhamento: falha de leitura só deixa de mostrar a linha.
+            ConnectReply::PreviewState(result) => self.connect.preview_open = result.ok().as_ref().and_then(open_preview_port),
         }
         if self.connect.form.is_none() && self.settings == Some(Page::Connect) {
             self.connect.form = Some(LinkForm::new(window, cx));
@@ -382,6 +407,7 @@ impl Hangar {
         if self.settings == Some(Page::Connect) && !self.connect.saving {
             self.load_connect(cx);
             self.load_connect_devices(cx);
+            self.load_connect_preview();
         }
     }
 
@@ -496,7 +522,7 @@ impl Hangar {
         }
     }
 
-    /// Parar fica sempre à mão: a prévia mora no servidor, e o app reaberto não sabe se há uma.
+    /// Parar fica sempre à mão: se a leitura do estado falhar, a prévia aberta continua alcançável.
     fn render_connect_preview(&self, cx: &mut Context<Self>) -> Option<Div> {
         let form = self.connect.form.as_ref()?;
         let busy = self.connect.preview_busy;
@@ -510,6 +536,8 @@ impl Hangar {
         Some(div().flex().flex_col().gap_2()
             .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(tr("connect_preview_title")))
             .child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(tr("connect_preview_help")))
+            .children(self.connect.preview_open.map(|port| div().id("connect-preview-open").text_sm().font_weight(FontWeight::MEDIUM)
+                .whitespace_normal().child(tr("connect_preview_open").replace("{port}", &port.to_string()))))
             .child(super::sync::sync_field(tr("connect_preview_port"), &form.preview_port, busy))
             .children(self.connect.preview_error.clone().map(|error| div().id("connect-preview-error").role(Role::Alert)
                 .text_sm().text_color(theme::danger()).whitespace_normal().child(error)))
@@ -588,7 +616,7 @@ impl Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{device_card, device_view, merge, parse_devices, parse_port, parse_preview, parse_status, phase, take_password, Device, DeviceStatus, DeviceView, InputState, Phase, Remote, Request};
+    use super::{device_card, device_view, merge, open_preview_port, parse_devices, parse_port, parse_preview, parse_status, phase, take_password, Device, DeviceStatus, DeviceView, InputState, Phase, Remote, Request};
     use crate::i18n::tr_shared;
     // O nome explícito vence qualquer `test` trazido por glob.
     use core::prelude::v1::test;
@@ -675,6 +703,8 @@ mod tests {
         }
         assert_eq!(parse_preview(json!({"url": "https://a/?hangar_preview=b"})).as_deref(), Ok("https://a/?hangar_preview=b"));
         assert!(parse_preview(json!({})).is_err());
+        assert_eq!(open_preview_port(&json!({"preview": {"port": 3000}})), Some(3000));
+        assert_eq!(open_preview_port(&json!({"preview": null})), None);
     }
 
     #[test]

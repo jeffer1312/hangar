@@ -4,6 +4,7 @@
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 use axum::Router;
 use axum::body::Body;
@@ -13,6 +14,7 @@ use axum::response::{IntoResponse, Response};
 use futures_util::StreamExt;
 use hangar_core::credentials;
 use hyper_util::rt::TokioIo;
+use serde::Serialize;
 use subtle::ConstantTimeEq;
 use tokio::net::TcpStream;
 use tokio::sync::watch;
@@ -24,13 +26,19 @@ use super::{CONNECT_PORT, GUEST_PORT};
 pub const PREVIEW_PORT: u16 = 8769;
 /// O link vai por mensagem para outro aparelho: dá tempo de copiar e abrir, e não fica valendo depois.
 pub const LINK_LIFE: u64 = 10 * 60;
+/// Contada da entrada: prévia esquecida não fica aberta para sempre.
+pub const SESSION_LIFE: u64 = 8 * 60 * 60;
 /// Nome próprio: `token` é do Vite, que o usa no WebSocket do projeto.
 pub const LINK_PARAM: &str = "hangar_preview";
 pub const COOKIE: &str = "__Host-hangar_preview";
 
 /// Porta padrão do dono, recusada mesmo quando este servidor roda em outra.
 const DEFAULT_MAIN_PORT: u16 = 8765;
+/// O CLIProxy local que a `jev_aux` usa.
+const CLIPROXY_PORT: u16 = 8317;
 const HANGAR_COOKIES: [&str; 4] = [COOKIE, "cp_token", "__Host-cp_token", "cp_sync"];
+/// Sem script e sem envio automático: quem só busca o link para montar miniatura não o gasta.
+const CONFIRM_PAGE: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Hangar</title></head><body><form method=\"post\"><button type=\"submit\">Abrir prévia / Open preview</button></form></body></html>";
 const HOP: [&str; 7] = ["connection", "keep-alive", "proxy-connection", "transfer-encoding", "te", "trailer", "upgrade"];
 /// Credencial não passa ao projeto; o `Host` que ele vê é local, e o endereço público junto o confundiria.
 const DROPPED: [&str; 4] = ["authorization", "proxy-authorization", "x-forwarded-host", "forwarded"];
@@ -40,20 +48,33 @@ struct Preview {
     host: String,
     /// Hash e prazo do link, até o primeiro uso.
     link: Option<(String, u64)>,
-    session: Option<String>,
+    /// Hash e prazo da sessão de quem entrou.
+    session: Option<(String, u64)>,
 }
 
 impl Preview {
+    fn link_valid(&self, link: &str, now: u64) -> bool {
+        self.link.as_ref().is_some_and(|(hash, expires)| now < *expires && same(hash, link))
+    }
+
     fn redeem(&mut self, link: &str, now: u64) -> Option<String> {
-        let (hash, expires) = self.link.as_ref()?;
-        if now >= *expires || !same(hash, link) {
+        if !self.link_valid(link, now) {
             return None;
         }
         self.link = None;
         let id = credentials::token();
-        self.session = Some(credentials::hash(id.as_bytes()));
+        self.session = Some((credentials::hash(id.as_bytes()), now + SESSION_LIFE));
         Some(id)
     }
+}
+
+/// O que `GET /api/connect/preview` mostra: prévia esquecida precisa aparecer para o dono.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Open {
+    pub port: u16,
+    pub host: String,
+    pub entered: bool,
+    pub expires_at: u64,
 }
 
 fn same(hash: &str, presented: &str) -> bool {
@@ -80,6 +101,8 @@ impl Default for Previews {
 enum Admission {
     Refused,
     OtherHost,
+    /// Link válido num `GET`: a página pede o clique, sem gastá-lo.
+    Confirm,
     /// Link gasto agora: a sessão nova, crua, sai só neste cookie.
     Entered(String),
     /// Sessão válida com um link na URL, gasto ou não: ele só precisa sair da barra de endereço.
@@ -92,12 +115,19 @@ struct Visit {
     host: String,
     generation: watch::Receiver<u64>,
     seen: u64,
+    left: Duration,
 }
 
 impl Visit {
-    async fn ended(mut self) {
-        let seen = self.seen;
-        let _ = self.generation.wait_for(|now| *now != seen).await;
+    /// A prévia fechou, outra abriu ou a sessão venceu.
+    fn ended(&self) -> impl Future<Output = ()> + Send + use<> {
+        let (mut generation, seen, left) = (self.generation.clone(), self.seen, self.left);
+        async move {
+            tokio::select! {
+                () = async { let _ = generation.wait_for(|now| *now != seen).await; } => {}
+                () = tokio::time::sleep(left) => {}
+            }
+        }
     }
 }
 
@@ -110,7 +140,7 @@ impl Previews {
         let clock: Clock = Arc::new(|| {
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
         });
-        let reserved = [DEFAULT_MAIN_PORT, GUEST_PORT, CONNECT_PORT, PREVIEW_PORT, CADDY_HTTP_PORT, CADDY_HTTPS_PORT].into_iter().collect();
+        let reserved = [DEFAULT_MAIN_PORT, GUEST_PORT, CONNECT_PORT, PREVIEW_PORT, CADDY_HTTP_PORT, CADDY_HTTPS_PORT, CLIPROXY_PORT].into_iter().collect();
         Self { clock, reserved: Mutex::new(reserved), current: Mutex::new(None), generation: watch::channel(0).0 }
     }
 
@@ -147,26 +177,45 @@ impl Previews {
         self.generation.send_modify(|generation| *generation += 1);
     }
 
-    fn admit(&self, host: Option<&str>, link: Option<&str>, session: Option<&str>, redeem: bool) -> Admission {
+    /// A prévia aberta e ainda valendo.
+    pub fn state(&self) -> Option<Open> {
+        let now = (self.clock)();
+        let current = lock(&self.current);
+        let preview = current.as_ref()?;
+        let (entered, expires_at) = match (&preview.session, &preview.link) {
+            (Some((_, expires)), _) => (true, *expires),
+            (None, Some((_, expires))) => (false, *expires),
+            (None, None) => return None,
+        };
+        (now < expires_at).then(|| Open { port: preview.port, host: preview.host.clone(), entered, expires_at })
+    }
+
+    fn admit(&self, host: Option<&str>, link: Option<&str>, session: Option<&str>, method: &Method, origin: Option<&HeaderValue>) -> Admission {
+        let now = (self.clock)();
         let mut current = lock(&self.current);
         let Some(preview) = current.as_mut() else { return Admission::Refused };
         if !host.is_some_and(|host| same_host(host, &preview.host)) {
             return Admission::OtherHost;
         }
-        if redeem && let Some(id) = link.and_then(|link| preview.redeem(link, (self.clock)())) {
+        // Só o botão da página do próprio site gasta o link.
+        let from_site = origin.is_some_and(|origin| origin.as_bytes() == format!("https://{}", preview.host).as_bytes());
+        if *method == Method::POST && from_site && let Some(id) = link.and_then(|link| preview.redeem(link, now)) {
             return Admission::Entered(id);
         }
-        let known = preview.session.as_deref().zip(session).is_some_and(|(hash, session)| same(hash, session));
-        if !known {
-            return Admission::Refused;
-        }
+        let known = preview.session.as_ref()
+            .filter(|(hash, expires)| now < *expires && session.is_some_and(|session| same(hash, session)))
+            .map(|(_, expires)| *expires);
+        let Some(expires) = known else {
+            let valid = *method == Method::GET && link.is_some_and(|link| preview.link_valid(link, now));
+            return if valid { Admission::Confirm } else { Admission::Refused };
+        };
         if link.is_some() {
             return Admission::Clean;
         }
         // Lido com a prévia na mão: fechar depois daqui já conta como mudança para esta visita.
         let generation = self.generation.subscribe();
         let seen = *generation.borrow();
-        Admission::Pass(Visit { port: preview.port, host: preview.host.clone(), generation, seen })
+        Admission::Pass(Visit { port: preview.port, host: preview.host.clone(), generation, seen, left: Duration::from_secs(expires - now) })
     }
 }
 
@@ -209,10 +258,36 @@ fn see_other(target: &str, session: Option<&str>) -> Response {
     let mut response = refusal(StatusCode::SEE_OTHER);
     let headers = response.headers_mut();
     headers.insert(header::LOCATION, HeaderValue::from_str(target).unwrap_or(HeaderValue::from_static("/")));
-    if let Some(id) = session && let Ok(cookie) = HeaderValue::from_str(&format!("{COOKIE}={id}; Secure; HttpOnly; SameSite=Lax; Path=/")) {
+    if let Some(id) = session && let Ok(cookie) = HeaderValue::from_str(&format!("{COOKIE}={id}; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age={SESSION_LIFE}")) {
         headers.insert(header::SET_COOKIE, cookie);
     }
     response
+}
+
+fn confirm_page() -> Response {
+    ([
+        (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+        (header::CACHE_CONTROL, "no-store"),
+        // `no-referrer` faria o navegador mandar `Origin: null` no botão, e o link não seria gasto.
+        (header::REFERRER_POLICY, "same-origin"),
+        (header::CONTENT_SECURITY_POLICY, "default-src 'none'; form-action 'self'; frame-ancestors 'none'"),
+    ], CONFIRM_PAGE).into_response()
+}
+
+fn header_bytes<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a [u8]> {
+    headers.get(name).map(HeaderValue::as_bytes)
+}
+
+/// As máquinas do Connect dividem o mesmo site: `SameSite` deixa o cookie ir junto no pedido de uma vizinha.
+/// Abrir o site numa aba, vindo de qualquer lugar, é a única entrada de fora.
+fn from_outside(headers: &HeaderMap, host: &str) -> bool {
+    if headers.get(header::ORIGIN).is_some_and(|origin| origin.as_bytes() != format!("https://{host}").as_bytes()) {
+        return true;
+    }
+    let inside = matches!(header_bytes(headers, "sec-fetch-site"), None | Some(b"same-origin" | b"none"));
+    let opened = header_bytes(headers, "sec-fetch-mode") == Some(b"navigate".as_slice())
+        && header_bytes(headers, "sec-fetch-dest") == Some(b"document".as_slice());
+    !inside && !opened
 }
 
 fn is_websocket(req: &Request) -> bool {
@@ -225,14 +300,18 @@ async fn enter(State(previews): State<Arc<Previews>>, req: Request) -> Response 
     if req.uri().authority().is_some() || req.method() == Method::CONNECT {
         return refusal(StatusCode::BAD_REQUEST);
     }
+    // O host é fixo por máquina: um service worker de prévia velha leria o link e o cookie da seguinte.
+    if header_bytes(req.headers(), "service-worker") == Some(b"script".as_slice()) {
+        return refusal(StatusCode::FORBIDDEN);
+    }
     let mut hosts = req.headers().get_all(header::HOST).iter();
     let host = hosts.next().and_then(|value| value.to_str().ok()).filter(|_| hosts.next().is_none());
     let link = link_in(req.uri().query());
-    // Só GET gasta o link: o HEAD de quem monta miniatura em chat não pode queimá-lo.
-    let admission = previews.admit(host, link.as_deref(), session_in(req.headers()), req.method() == Method::GET);
+    let admission = previews.admit(host, link.as_deref(), session_in(req.headers()), req.method(), req.headers().get(header::ORIGIN));
     let visit = match admission {
         Admission::Refused => return refusal(StatusCode::UNAUTHORIZED),
         Admission::OtherHost => return refusal(StatusCode::MISDIRECTED_REQUEST),
+        Admission::Confirm => return confirm_page(),
         Admission::Entered(id) => return see_other(&without_link(req.uri()), Some(&id)),
         Admission::Clean => return see_other(&without_link(req.uri()), None),
         Admission::Pass(visit) => visit,
@@ -240,21 +319,30 @@ async fn enter(State(previews): State<Arc<Previews>>, req: Request) -> Response 
     if previews.refused(visit.port) {
         return refusal(StatusCode::UNPROCESSABLE_ENTITY);
     }
-    // As máquinas do Connect dividem o mesmo site: `SameSite` deixa o cookie ir junto no pedido de uma vizinha.
-    if req.headers().get(header::ORIGIN).is_some_and(|origin| origin.as_bytes() != format!("https://{}", visit.host).as_bytes()) {
+    if from_outside(req.headers(), &visit.host) {
         return refusal(StatusCode::FORBIDDEN);
     }
     let websocket = is_websocket(&req);
-    forward(req, visit, websocket).await
+    // Projeto que nunca responde não segura o pedido depois do fim da prévia.
+    let ended = visit.ended();
+    tokio::select! {
+        response = forward(req, visit, websocket) => response,
+        () = ended => refusal(StatusCode::UNAUTHORIZED),
+    }
+}
+
+fn is_hangar_cookie(name: &str) -> bool {
+    HANGAR_COOKIES.iter().any(|known| known.eq_ignore_ascii_case(name))
+}
+
+fn cookie_name(chunk: &str) -> &str {
+    chunk.split_once('=').map_or(chunk, |(name, _)| name).trim()
 }
 
 fn project_cookies(headers: &mut HeaderMap) {
     let kept: Vec<String> = headers.get_all(header::COOKIE).iter().filter_map(|value| value.to_str().ok())
         .flat_map(|raw| raw.split(';')).map(str::trim)
-        .filter(|chunk| {
-            let name = chunk.split_once('=').map_or(*chunk, |(name, _)| name).trim();
-            !chunk.is_empty() && !HANGAR_COOKIES.contains(&name)
-        })
+        .filter(|chunk| !chunk.is_empty() && !is_hangar_cookie(cookie_name(chunk)))
         .map(str::to_owned).collect();
     headers.remove(header::COOKIE);
     if !kept.is_empty() && let Ok(value) = HeaderValue::from_str(&kept.join("; ")) {
@@ -267,6 +355,10 @@ fn prepare(headers: &mut HeaderMap, visit: &Visit, websocket: bool) {
         headers.remove(*name);
     }
     project_cookies(headers);
+    // A página do botão manda o próprio endereço, com o link já gasto, no pedido depois da 303.
+    if header_bytes(headers, "referer").is_some_and(|referer| String::from_utf8_lossy(referer).contains(LINK_PARAM)) {
+        headers.remove(header::REFERER);
+    }
     let local = format!("127.0.0.1:{}", visit.port);
     let public_origin = format!("https://{}", visit.host);
     // O `vite` e o `next` recusam o host público; para eles o pedido é da própria máquina.
@@ -280,6 +372,27 @@ fn prepare(headers: &mut HeaderMap, visit: &Visit, websocket: bool) {
     if websocket {
         headers.insert(header::CONNECTION, HeaderValue::from_static("upgrade"));
         headers.insert(header::UPGRADE, HeaderValue::from_static("websocket"));
+    }
+}
+
+/// Sem `Domain` o cookie fica neste host: com ele, o projeto encheria o `Cookie` de todas as máquinas do site.
+fn project_set_cookie(value: &HeaderValue) -> Option<HeaderValue> {
+    let mut parts = value.to_str().ok()?.split(';');
+    let pair = parts.next()?;
+    if is_hangar_cookie(cookie_name(pair)) {
+        return None;
+    }
+    let kept: Vec<&str> = std::iter::once(pair).chain(parts.filter(|part| !cookie_name(part).eq_ignore_ascii_case("domain"))).collect();
+    HeaderValue::from_str(&kept.join(";")).ok()
+}
+
+/// O navegador cumpre estes cabeçalhos para o site inteiro, não só para o projeto.
+fn project_response(headers: &mut HeaderMap) {
+    headers.remove("clear-site-data");
+    let cookies: Vec<HeaderValue> = headers.get_all(header::SET_COOKIE).iter().filter_map(project_set_cookie).collect();
+    headers.remove(header::SET_COOKIE);
+    for cookie in cookies {
+        headers.append(header::SET_COOKIE, cookie);
     }
 }
 
@@ -313,14 +426,16 @@ async fn forward(mut req: Request, visit: Visit, websocket: bool) -> Response {
     let Ok(mut response) = sender.send_request(req).await else {
         return refusal(StatusCode::BAD_GATEWAY);
     };
+    project_response(response.headers_mut());
     if let Some(client_side) = client_side && response.status() == StatusCode::SWITCHING_PROTOCOLS {
         let project_side = hyper::upgrade::on(&mut response);
+        let ended = visit.ended();
         tokio::spawn(async move {
             let (Ok(client), Ok(project)) = tokio::join!(client_side, project_side) else { return };
             let (mut client, mut project) = (TokioIo::new(client), TokioIo::new(project));
             tokio::select! {
                 _ = tokio::io::copy_bidirectional(&mut client, &mut project) => {}
-                () = visit.ended() => {}
+                () = ended => {}
             }
         });
         let (parts, _) = response.into_parts();

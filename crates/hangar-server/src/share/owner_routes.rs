@@ -52,6 +52,11 @@ impl Reach {
     pub fn production() -> Self {
         Self { probe: Probe::production(), every: Duration::from_secs(5), deadline: Duration::from_secs(180) }
     }
+
+    /// Só a primeira prévia espera, e quem pediu está olhando a tela.
+    pub fn preview() -> Self {
+        Self { probe: Probe::production(), every: Duration::from_secs(2), deadline: Duration::from_secs(45) }
+    }
 }
 
 pub struct OwnerShareState {

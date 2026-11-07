@@ -23,6 +23,7 @@ use super::state::{self, LinkRequest};
 use crate::machine_peers::store::valid_id;
 use crate::routes::{AppState, cors, on_connect_port, owner_gate};
 use crate::session_write::json_response;
+use crate::share_reach::{Failure, check_answer_until};
 use crate::voice::routes::preflight;
 
 const BODY_LIMIT: usize = 16 * 1024;
@@ -37,7 +38,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/connect/devices/self", post(enroll).options(preflight))
         .route("/api/connect/devices/{id}", delete(remove).options(preflight))
         .route("/api/connect/devices/{id}/approve", post(approve).options(preflight))
-        .route("/api/connect/preview", post(open_preview).delete(close_preview).options(preflight))
+        .route("/api/connect/preview", get(preview_state).post(open_preview).delete(close_preview).options(preflight))
         .route("/api/connect/peers", get(peer_links).options(preflight))
         .route("/api/connect/peers/{id}/link", post(link_peer).options(preflight))
 }
@@ -46,7 +47,7 @@ pub fn matches(method: &Method, path: &str) -> bool {
     let id = path.strip_prefix("/api/connect/devices/");
     let peer = path.strip_prefix("/api/connect/peers/").and_then(|rest| rest.strip_suffix("/link"));
     match method.as_str() {
-        "GET" => matches!(path, "/api/connect" | "/api/connect/devices" | "/api/connect/peers"),
+        "GET" => matches!(path, "/api/connect" | "/api/connect/devices" | "/api/connect/peers" | "/api/connect/preview"),
         "POST" => matches!(path, "/api/connect/link" | "/api/connect/redeem" | "/api/connect/redeem/status" | "/api/connect/devices/self" | "/api/connect/preview")
             || id.and_then(|rest| rest.strip_suffix("/approve")).is_some_and(|id| !id.is_empty() && !id.contains('/'))
             || peer.is_some_and(|id| !id.is_empty() && !id.contains('/')),
@@ -238,15 +239,31 @@ async fn open_preview(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connec
     }
     // Tarefa própria: quem vem pelo Connect perde a conexão na troca dos filhos, e o pedido cancelado os deixaria parados.
     let supervisor = st.connect_supervisor.clone();
-    let host = match tokio::spawn(async move { supervisor.publish_preview().await }).await {
-        Ok(Ok(host)) => host,
+    let (host, first) = match tokio::spawn(async move { supervisor.publish_preview().await }).await {
+        Ok(Ok(published)) => published,
         Ok(Err(failure)) => return error(&headers, failure.status, failure.code, &failure.msg),
         Err(_) => return error(&headers, StatusCode::INTERNAL_SERVER_ERROR, "connect_start_failed", "a operação do Connect foi interrompida"),
     };
+    // O site recém-nascido ainda espera DNS e certificado. O 401 é a resposta do listener a quem não tem o link.
+    let reach = &st.connect_preview_reach;
+    if first && let Err(failure) = check_answer_until(&reach.probe, &host, 401, reach.every, reach.deadline).await {
+        let (Failure::Dns { detail } | Failure::Funnel { detail }) = failure;
+        return error(&headers, StatusCode::CONFLICT, "connect_preview_reach_failed", &format!("o site da prévia não abriu de fora: {detail}"));
+    }
     match st.connect_previews.open(body.port, &host) {
         Some(link) => reply(&headers, StatusCode::OK, json!({"url": format!("https://{host}/?{LINK_PARAM}={link}")})),
         None => preview_port_refused(&headers),
     }
+}
+
+/// Prévia esquecida precisa aparecer: o link some da tela, e ela segue aberta até o prazo.
+async fn preview_state(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    let headers = req.headers().clone();
+    if let Err(mut response) = owner_gate(&st, peer, &req).await {
+        cors(&headers, response.headers_mut());
+        return response;
+    }
+    reply(&headers, StatusCode::OK, json!({"preview": st.connect_previews.state()}))
 }
 
 async fn close_preview(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {

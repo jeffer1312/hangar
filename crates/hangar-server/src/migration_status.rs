@@ -549,7 +549,7 @@ mod tests {
             (Method::POST, "/api/connect/devices/self"), (Method::POST, "/api/connect/devices/x/approve"), (Method::DELETE, "/api/connect/devices/x"),
             (Method::GET, "/api/connect"), (Method::DELETE, "/api/connect"), (Method::POST, "/api/connect/link"),
             (Method::GET, "/api/connect/peers"), (Method::POST, "/api/connect/peers/x/link"),
-            (Method::POST, "/api/connect/preview"), (Method::DELETE, "/api/connect/preview")] {
+            (Method::GET, "/api/connect/preview"), (Method::POST, "/api/connect/preview"), (Method::DELETE, "/api/connect/preview")] {
             assert!(rust_route(&method, path), "{method} {path}");
         }
         assert!(!rust_route(&Method::PUT, "/api/connect"), "o código de ligação colado saiu");

@@ -1601,8 +1601,10 @@ app, compilação e fechamento real ainda não conferidos; mudanças estão na w
 
 Todas as máquinas do Connect e o `app.hangar.dev.br` são o mesmo site para o navegador: a página
 servida por uma máquina dispara pedidos a outra levando o cookie dela (`SameSite=Lax` não
-separa subdomínios) e consegue gravar cookie com `Domain=hangar.dev.br`. Um segundo domínio não
-resolveria — as máquinas seguiriam no mesmo site entre si. Por isso o `cp_token` só autoriza
+separa subdomínios) e consegue gravar cookie com `Domain=hangar.dev.br`. Enquanto as máquinas servem
+só o Hangar, um segundo domínio não resolveria: elas seguiriam no mesmo site entre si. A prévia de
+porta muda essa conta, porque serve código de projeto nesse site (ver "Prévia de porta pelo
+Connect"). Por isso o `cp_token` só autoriza
 `GET`/`HEAD` (ação exige a senha no cabeçalho ou na query, que outra página não tem), e em https
 só vale o `__Host-cp_token`, que outra máquina não consegue gravar; o PWA grava o prefixado e
 apaga o antigo. O sync recusa ação com `Sec-Fetch-Site: same-site`/`cross-site`. O `cp_sync`
@@ -4162,6 +4164,44 @@ um crate sozinho guarda outra cópia das dependências no `target`). A divisão 
 `runtime`/`accounts`/`list` pode exigir descer bastante coisa antes, ou uma trait no core; o plano
 da divisão mostra como cada caso foi resolvido. A estimativa de memória depois da divisão está no
 plano; o pico medido do `hangar-server` é de 8,54 GB.
+
+## Prévia de porta pelo Connect: a 8769 é um listener próprio, fora de `hangar_auth` (07/11/2026)
+
+No Tailscale a prévia de um projeto só é vista na tailnet. Na internet ela precisa de porta própria,
+senão um servidor de desenvolvimento fica público. `127.0.0.1:8769` (`hangar-connect/src/preview.rs`)
+fica entre o Caddy e o projeto, sem `AppState`: erro de visitante não enche o contador do dono.
+
+- **Link.** Uso único, 10 minutos. O `GET` só mostra uma página sem script, com um botão, porque app
+  de chat busca o link para montar miniatura e o queimaria. O `POST` com `Origin` do site gasta o link,
+  grava o cookie `__Host-` e responde 303 sem o link na URL. A página usa `Referrer-Policy: same-origin`
+  e não `no-referrer`: com `no-referrer` o navegador manda `Origin: null` no envio do formulário, e o
+  botão nunca funcionaria. Por isso o `Referer` com o link, que vem no pedido depois da 303, é apagado
+  antes de chegar ao projeto.
+- **Sessão.** Um visitante por prévia, 8 horas desde a entrada, só o hash no servidor e só em memória.
+  `DELETE`, prévia nova ou o prazo cortam também WebSocket e resposta longa em curso.
+  `GET /api/connect/preview` mostra a prévia aberta, para ela não ficar esquecida.
+- **O que o projeto vê.** `Host` e `Origin` locais, porque Vite e Next recusam o host público. Saem
+  `Authorization` e os cookies do Hangar. **Os cookies do próprio projeto ficam**: isto muda a decisão
+  do plano, que tirava todos, e tirá-los quebraria o login de qualquer app.
+- **O que o projeto não faz.** `Clear-Site-Data` apagaria os cookies do visitante em todo o
+  `*.hangar.dev.br`; `Set-Cookie` com nome do Hangar derrubaria a sessão; `Domain=hangar.dev.br`
+  repetido encheria o cabeçalho `Cookie` de todas as máquinas. O primeiro e o segundo saem, e o
+  atributo `Domain` é removido. Script de service worker é recusado: o host é fixo por máquina, e o
+  worker de uma prévia velha leria o link e o cookie da seguinte.
+- **Vizinhas.** As máquinas do Connect são o mesmo site, e `SameSite` deixa o cookie ir junto.
+  `Origin` diferente da do site é 403. `Sec-Fetch-Site` diferente de `same-origin` e `none` também é
+  403, salvo `Sec-Fetch-Mode: navigate` com `Sec-Fetch-Dest: document`, que é abrir o site numa aba.
+- **Destino.** Só `127.0.0.1:<port>`, gravado na criação e nunca vindo do visitante. As portas do
+  próprio Hangar dão 422 na rota e a cada pedido. Forma absoluta e `CONNECT` dão 400, e redirecionamento
+  do projeto nunca é seguido.
+- **Publicação.** Como o site do convidado, cada host gasta um certificado do limite semanal. O site
+  nasce na primeira prévia, e só ela espera até 45 s o `GET https://<host>/` responder 401 de fora; o
+  cliente tenta mais uma vez, porque quem pede pelo Connect perde a conexão na troca dos filhos. Depois
+  disso, Connect parado é 409 `connect_not_running`, nunca um link que não abre.
+
+**Em aberto, decisão do dono:** mudar as prévias para um domínio registrável próprio. Código de projeto
+roda no mesmo site da entrada do dono, e um host `--preview` serve para phishing com o nome do Hangar.
+Nada disso foi iniciado.
 
 ## Hangar Connect: a entrada é do Rust e cada aparelho tem credencial própria (07/11/2026)
 

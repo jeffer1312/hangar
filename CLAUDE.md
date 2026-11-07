@@ -705,12 +705,16 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#hangar-connect-a-entrada-é-do-rust-e-cada-aparelho-tem-credencial-própria-07112026).
 - **Prévia de porta pelo Connect: `127.0.0.1:8769` é um listener próprio (`hangar-connect/src/preview.rs`),
-  fora de `hangar_auth`.** Link de uso único vira cookie `__Host-` por 303; o projeto nunca vê credencial
-  do Hangar. O destino é o `127.0.0.1:<port>` gravado na criação, conferido a cada pedido contra as
-  portas do próprio Hangar, e redirecionamento do projeto nunca é seguido. O site nasce na primeira
-  prévia (`preview_published`) e aponta sempre para a 8769; como o do convidado, só entra no Caddyfile
-  com a porta aberta por este servidor. `Origin` de fora é recusada: `SameSite` não separa as máquinas
-  do Connect. `backend/app/tunnel.py` segue atendendo o Tailscale.
+  fora de `hangar_auth`.** O link de uso único abre uma página com botão, e só o `POST` dela o gasta
+  e vira cookie `__Host-` por 303, com sessão de 8 h. O projeto nunca vê credencial do Hangar e guarda
+  os cookies dele, mas não grava cookie do Hangar, `Domain` nem `Clear-Site-Data`. O destino é o
+  `127.0.0.1:<port>` gravado na criação, conferido a cada pedido contra as portas do próprio Hangar, e
+  redirecionamento do projeto nunca é seguido. O site nasce na primeira prévia (`preview_published`),
+  conferido de fora, e aponta sempre para a 8769; como o do convidado, só entra no Caddyfile com a
+  porta aberta por este servidor. `SameSite` não separa as máquinas do Connect: `Origin` de fora é
+  recusada, e `Sec-Fetch-Site` de fora também, salvo abrir o site numa aba. Script de service worker é
+  recusado. `backend/app/tunnel.py` segue atendendo o Tailscale. Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#prévia-de-porta-pelo-connect-a-8769-é-um-listener-próprio-fora-de-hangar_auth-07112026).
 - **Nada nasce no Python: o objetivo é tirá-lo do projeto.** Rota, ponte, poller, integração e
   qualquer recurso novo vão para o Rust (`crates/`). Sem pedido explícito do usuário, no
   `backend/app/` só se apaga código. Toda linha que ACRESCENTA no Python — lógica, releitura,
