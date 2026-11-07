@@ -497,21 +497,21 @@ def test_rota_404_sem_transcript(api_client_bastao):
 # POST: dossiê gravado -> sessão criada -> kick-off na fila
 # ---------------------------------------------------------------------------
 
-def _abertura_fingida(criadas: list):
-    """A criação da sucessora vai ao Rust por `_open_in_rust`; aqui ela só é registrada."""
-    from types import SimpleNamespace
-    from app.models import CreatedSessionInfo
+# Pela 8765 o Rust marca o pedido e abre a sucessora com o `open` que volta daqui.
+RUST = {"Authorization": "Bearer secret", "x-hangar-open": "rust"}
 
-    async def abrir(raw, request=None):
-        corpo = SimpleNamespace(**json.loads(raw))
-        criadas.append(corpo)
-        return CreatedSessionInfo(name=corpo.name, cwd=corpo.cwd)
-    return abrir
+
+def _aberturas(r, criadas: list):
+    """Registra o pedido de abertura devolvido ao Rust; é ele que cria a sessão."""
+    from types import SimpleNamespace
+    if r.status_code == 200 and r.headers.get("x-hangar-open") == "rust":
+        criadas.append(SimpleNamespace(**r.json()["open"]))
+    return r
 
 
 @pytest.fixture
 def bastao_post(api_client_bastao, monkeypatch, tmp_path):
-    """Cliente + origem viva + criação de sessão fingida. Devolve (post, criadas)."""
+    """Cliente + origem viva, pedindo pela marca do Rust. Devolve (post, criadas)."""
     from unittest.mock import patch
     from app.models import SessionInfo
     import app.api as api_mod
@@ -519,15 +519,13 @@ def bastao_post(api_client_bastao, monkeypatch, tmp_path):
     origem = SessionInfo(name="cc", cwd=str(tmp_path), jsonl=str(FIX / "jsonl_samples.jsonl"))
     criadas: list = []
 
-    monkeypatch.setattr(api_mod, "_open_in_rust", _abertura_fingida(criadas))
     monkeypatch.setattr(api_mod, "_drain_session", lambda name: None)
     # Sem nome ocupado por padrão (e sem consultar o tmux da máquina que roda os testes).
     monkeypatch.setattr(api_mod, "_nome_ocupado", lambda nome: False)
 
-    def post(headers=None, **corpo):
+    def post(_headers=RUST, **corpo):
         with patch("app.api.registry.list", return_value=[origem]):
-            return api_client_bastao.post("/api/sessions/cc/bastao",
-                                          headers={"Authorization": "Bearer secret", **(headers or {})}, json=corpo)
+            return _aberturas(api_client_bastao.post("/api/sessions/cc/bastao", headers=_headers, json=corpo), criadas)
 
     return post, criadas
 
@@ -540,7 +538,7 @@ def test_post_grava_o_dossie_cria_a_sessao_e_enfileira_o_kickoff(bastao_post, tm
     r = post(name="cc2", model="opus", headless=True)
     assert r.status_code == 200, r.text
     d = r.json()
-    assert d["name"] == "cc2"
+    assert d["open"]["name"] == "cc2"
     p = Path(d["dossie"])
     assert p.name == "cc2.md" and p.read_text(encoding="utf-8") == d["texto"]
     # cwd e provider herdados da origem quando o corpo não manda outros.
@@ -556,14 +554,14 @@ def test_claude_com_terminal_recebe_o_kickoff_como_primeira_mensagem(bastao_post
     from app.pqueue import PromptQueue
 
     post, criadas = bastao_post
-    r = post(name="cc2", provider="claude", headless=False)
-    assert r.status_code == 200, r.text
-    assert criadas[0].initial_prompt == r.json()["kickoff"] and PromptQueue("cc2").load() == []
-    r = post(headers={"x-hangar-open": "rust"}, name="cc3", provider="claude", headless=False)
+    r = post(name="cc3", provider="claude", headless=False)
     assert r.status_code == 200 and r.headers["x-hangar-open"] == "rust"
     assert r.json()["open"]["initial_prompt"] == r.json()["kickoff"] and r.json()["open"]["name"] == "cc3"
     assert "config_dir" not in r.json()["open"], "o que não foi escolhido fica de fora, como omitido"
-    assert len(criadas) == 1, "com a marca do Rust o Python não cria"
+    assert PromptQueue("cc3").load() == []
+    r = post(_headers={"Authorization": "Bearer secret"}, name="cc4", provider="claude", headless=False)
+    assert r.status_code == 503, "sem a marca do Rust o Python recusa: nunca cria a sessão"
+    assert r.json()["detail"]["code"] == "session_open_needs_rust_server"
 
 
 @pytest.mark.parametrize("provider", ["pi", "omp", "kimi"])
@@ -572,11 +570,11 @@ def test_pi_omp_e_kimi_com_terminal_tambem_voltam_ao_rust_com_o_kickoff(bastao_p
     (o Rust o põe na fila durável), e o Python não cria nem enfileira nada."""
     from app.pqueue import PromptQueue
 
-    post, criadas = bastao_post
-    r = post(headers={"x-hangar-open": "rust"}, name="cc3", provider=provider, headless=False)
+    post, _ = bastao_post
+    r = post(name="cc3", provider=provider, headless=False)
     assert r.status_code == 200 and r.headers.get("x-hangar-open") == "rust", r.text
     assert r.json()["open"]["provider"] == provider and r.json()["open"]["initial_prompt"] == r.json()["kickoff"]
-    assert criadas == [] and PromptQueue("cc3").load() == []
+    assert PromptQueue("cc3").load() == []
 
 
 def test_post_nao_cria_sessao_quando_a_gravacao_do_dossie_falha(bastao_post, monkeypatch):
@@ -609,7 +607,7 @@ def test_post_usa_o_mesmo_nome_no_arquivo_e_na_sessao(bastao_post):
     post, criadas = bastao_post
     r = post(name="api.v2")
     assert r.status_code == 200, r.text
-    assert criadas[0].name == r.json()["name"] == "api-v2"
+    assert criadas[0].name == "api-v2"
     assert Path(r.json()["dossie"]).name == "api-v2.md"
 
 
@@ -706,9 +704,6 @@ def test_post_bastao_de_sessao_morta_usa_o_cwd_do_transcript(api_client_bastao, 
     import app.api as api_mod
     cfg, proj, sid = _arquivo_morto(tmp_path)
     _conta_conhecida(monkeypatch, cfg)
-    criadas = []
-
-    monkeypatch.setattr(api_mod, "_open_in_rust", _abertura_fingida(criadas))
     monkeypatch.setattr(api_mod, "_drain_session", lambda name: None)
     monkeypatch.setattr(api_mod, "_nome_ocupado", lambda nome: False)
     # Pasta que EXISTE: sessão nunca nasce em pasta sumida, e o bastão recusa antes de criar.
@@ -716,11 +711,11 @@ def test_post_bastao_de_sessao_morta_usa_o_cwd_do_transcript(api_client_bastao, 
     origem.mkdir()
     monkeypatch.setattr(api_mod, "archive_cwd", lambda *a, **k: str(origem))
     with patch("app.api.registry.list", return_value=[]):
-        r = api_client_bastao.post("/api/sessions/morta/bastao", headers={"Authorization": "Bearer secret"},
+        r = api_client_bastao.post("/api/sessions/morta/bastao", headers=RUST,
                                    json={"name": "morta-cont", "project": proj, "session_id": sid,
                                          "origem_config_dir": cfg})
     assert r.status_code == 200, r.text
-    assert criadas[0].cwd == str(origem)
+    assert r.json()["open"]["cwd"] == str(origem)
 
 
 def test_post_bastao_origem_morta_usa_origem_provider_pra_achar_o_transcript(api_client_bastao, monkeypatch, tmp_path):
@@ -730,14 +725,12 @@ def test_post_bastao_origem_morta_usa_origem_provider_pra_achar_o_transcript(api
     import app.api as api_mod
     cfg, proj, sid = _arquivo_morto(tmp_path)
     _conta_conhecida(monkeypatch, cfg)
-    criadas = []
     vistos = []
 
     def fake_jsonl(project, session_id, config_dir, provider):
         vistos.append(provider)
         return FIX / "jsonl_samples.jsonl"
 
-    monkeypatch.setattr(api_mod, "_open_in_rust", _abertura_fingida(criadas))
     monkeypatch.setattr(api_mod, "_drain_session", lambda name: None)
     monkeypatch.setattr(api_mod, "_nome_ocupado", lambda nome: False)
     monkeypatch.setattr(api_mod, "archive_jsonl", fake_jsonl)
@@ -745,13 +738,13 @@ def test_post_bastao_origem_morta_usa_origem_provider_pra_achar_o_transcript(api
     origem.mkdir()
     monkeypatch.setattr(api_mod, "archive_cwd", lambda *a, **k: str(origem))
     with patch("app.api.registry.list", return_value=[]):
-        r = api_client_bastao.post("/api/sessions/morta/bastao", headers={"Authorization": "Bearer secret"},
+        r = api_client_bastao.post("/api/sessions/morta/bastao", headers=RUST,
                                    json={"name": "morta-cont", "project": proj, "session_id": sid,
                                          "origem_config_dir": cfg, "origem_provider": "pi",
                                          "provider": "claude"})
     assert r.status_code == 200, r.text
-    assert vistos == ["pi"]                      # archive_jsonl recebeu o provider da ORIGEM
-    assert criadas[0].provider == "claude"       # a sucessora fica no provider PEDIDO, não no da origem
+    assert vistos == ["pi"]                         # archive_jsonl recebeu o provider da ORIGEM
+    assert r.json()["open"]["provider"] == "claude"  # a sucessora fica no provider PEDIDO, não no da origem
 
 
 def test_post_bastao_codex_herda_conta_da_origem(api_client_bastao, monkeypatch, tmp_path):
@@ -771,18 +764,15 @@ def test_post_bastao_codex_herda_conta_da_origem(api_client_bastao, monkeypatch,
     }) + "\n", encoding="utf-8")
     origem = SessionInfo(name="cx", cwd=str(tmp_path), jsonl=str(rollout), provider="codex",
                          codex_home=str(work.home))
-    criadas = []
-
-    monkeypatch.setattr(api_mod, "_open_in_rust", _abertura_fingida(criadas))
     monkeypatch.setattr(api_mod, "_drain_session", lambda name: None)
     monkeypatch.setattr(api_mod, "_nome_ocupado", lambda nome: False)
     with __import__("unittest.mock").mock.patch("app.api.registry.list", return_value=[origem]):
         response = api_client_bastao.post(
-            "/api/sessions/cx/bastao", headers={"Authorization": "Bearer secret"},
+            "/api/sessions/cx/bastao", headers=RUST,
             json={"name": "cx2", "provider": "codex"},
         )
     assert response.status_code == 200, response.text
-    assert criadas[0].codex_account == "work"
+    assert response.json()["open"]["codex_account"] == "work"
 
 
 def test_post_bastao_codex_recusa_conta_sucessora_diferente(api_client_bastao, monkeypatch, tmp_path):
@@ -801,11 +791,10 @@ def test_post_bastao_codex_recusa_conta_sucessora_diferente(api_client_bastao, m
     rollout.write_text(json.dumps({"type": "session_meta", "payload": {"cwd": str(tmp_path)}}) + "\n")
     origem = SessionInfo(name="cx", cwd=str(tmp_path), jsonl=str(rollout), provider="codex",
                          codex_home=str(work.home))
-    monkeypatch.setattr(api_mod, "_open_in_rust", lambda raw, request=None: pytest.fail("nao cria"))
     monkeypatch.setattr(api_mod, "_nome_ocupado", lambda nome: False)
     with __import__("unittest.mock").mock.patch("app.api.registry.list", return_value=[origem]):
         response = api_client_bastao.post(
-            "/api/sessions/cx/bastao", headers={"Authorization": "Bearer secret"},
+            "/api/sessions/cx/bastao", headers=RUST,
             json={"name": "cx2", "provider": "codex", "codex_account": other.id},
         )
     assert response.status_code == 409
