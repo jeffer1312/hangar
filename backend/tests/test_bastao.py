@@ -588,15 +588,15 @@ def test_post_nao_cria_sessao_quando_a_gravacao_do_dossie_falha(bastao_post, mon
     r = post(name="cc2")
     assert r.status_code == 500
     assert "disco cheio" in r.text          # a falha APARECE
-    assert criadas == []                    # e a sessão nova NÃO nasceu órfã
+    assert '"open"' not in r.text           # e a sessão nova NÃO nasce órfã: o Rust não recebe o que abrir
 
 
 def test_post_recusa_passar_o_bastao_pra_si_mesma(bastao_post):
-    post, criadas = bastao_post
-    assert post(name="cc").status_code == 400
+    post, _ = bastao_post
     # Com espaço no fim é a MESMA sessão depois de sanitizar — a guarda tem de pegar.
-    assert post(name="cc ").status_code == 400
-    assert criadas == []
+    for r in (post(name="cc"), post(name="cc ")):
+        assert r.status_code == 400
+        assert '"open"' not in r.text
 
 
 def test_post_usa_o_mesmo_nome_no_arquivo_e_na_sessao(bastao_post):
@@ -612,10 +612,10 @@ def test_post_usa_o_mesmo_nome_no_arquivo_e_na_sessao(bastao_post):
 
 
 def test_post_400_com_nome_que_sanitiza_pra_vazio(bastao_post, tmp_path):
-    post, criadas = bastao_post
+    post, _ = bastao_post
     r = post(name="   ")
     assert r.status_code == 400
-    assert criadas == []
+    assert '"open"' not in r.text
     # E nada foi gravado antes da recusa (o dossiê é caro: roda git e parseia transcript).
     assert not (tmp_path / ".hangar-bastao").exists()
 
@@ -628,11 +628,11 @@ def test_post_recusa_nome_ja_em_uso_sem_tocar_no_dossie_dela(bastao_post, monkey
 
     ja = bastao.gravar("cc2", "# dossiê da sessão viva\n")
     monkeypatch.setattr(api_mod, "_nome_ocupado", lambda nome: nome == "cc2")
-    post, criadas = bastao_post
+    post, _ = bastao_post
     r = post(name="cc2")
     assert r.status_code == 409
     assert r.json()["detail"]["code"] == "erro_nome_em_uso"
-    assert criadas == []
+    assert "open" not in r.json()
     assert ja.read_text(encoding="utf-8") == "# dossiê da sessão viva\n"
 
 
