@@ -4234,6 +4234,15 @@ e Caddy 2.11.6 pelo caminho real (wss até `connect.hangar.dev.br`, traefik 3.6.
   pedido e leva semanas. Não confirmado: se a renovação fica fora da conta dos 50.
 - **Subida:** o Caddy só sobe depois do `frpc` logado; pedido sem túnel é falha de validação gasta
   (5 por nome por hora).
+- **Prova de aparelho leva o host.** `/api/peers/prova?device=` é pública pelo Connect: assinando só
+  `desafio|id`, uma rede com o mesmo IP local repassava a pergunta a `<máquina>.<conta>.hangar.dev.br`
+  e o celular entregava o token a ela. Com `device` o HMAC cobre `desafio|id|host`, com o `Host` que
+  a máquina recebeu. Forjar o `Host` no repasse não passa: o Caddy só atende o site pelo nome dele.
+  Sem `device` a prova segue como era, para LAN e Tailscale.
+- **Link do `nav` leva um bilhete, nunca credencial.** Ele sai no SSE da conversa e fica no marcador,
+  que se repete a quem abre o chat. `?page_ticket=` abre só aquela página por 10 minutos e não vale
+  na 8766 nem na 8768. A chave nasce com o processo: tirada da senha, deixaria testar palpites fora da
+  máquina. Por isso marcador de página gravado não volta depois de reiniciar.
 
 Não testado: renovação, a CA de produção e um nome que dependa só do curinga novo
 `*.hangar.dev.br`. Cargas e logs completos em
