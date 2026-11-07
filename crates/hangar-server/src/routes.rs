@@ -1491,6 +1491,15 @@ mod tests {
 
     #[tokio::test]
     async fn orchestration_history_uses_the_same_parser_on_public_and_forwarded_ports() {
+        const NAME: &str = "routes::tests::orchestration_history_uses_the_same_parser_on_public_and_forwarded_ports";
+        if std::env::var_os("ORQ_REGISTRY_PROBE").is_none() {
+            // O leitor do orq é global ao processo: num filho, só o AppState pode tê-lo registrado.
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", NAME, "--test-threads=1"]).env("ORQ_REGISTRY_PROBE", "1").output().unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(out.status.success() && stdout.contains("1 passed"), "{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let timeline = dir.path().join("timeline.jsonl");
         let lines = crate::orchestration::orq_cases::CASES.iter().map(|(input, _)| format!("{input}\n")).collect::<String>();
