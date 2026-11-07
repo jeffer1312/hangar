@@ -13,10 +13,9 @@ from websockets.exceptions import ConnectionClosed
 
 from app import diag, list_bridge, runtime_coordinator, termsock, tmux
 from app.config import settings
-from app.connect_port import CONNECT_PORT, ConnectPortGate
 
 # Convidado de convite não passa mais por aqui: a 8766 e o terminal dele são do Rust.
-OWNER_WS = f"ws://127.0.0.1:{CONNECT_PORT}"
+OWNER_WS = "ws://127.0.0.1:8765"
 
 
 class FakeRust:
@@ -114,12 +113,11 @@ def _app():
     async def term(ws: WebSocket, name: str):
         await termsock.term_ws(ws, name)
 
-    a.add_middleware(ConnectPortGate)
     return a
 
 
 def _owner():
-    return TestClient(_app(), base_url=f"http://127.0.0.1:{CONNECT_PORT}", client=("127.0.0.1", 5))
+    return TestClient(_app(), base_url="http://127.0.0.1:8765", client=("127.0.0.1", 5))
 
 
 def test_terminal_pipes_to_rust_no_pty(rust, no_pty):
@@ -135,21 +133,6 @@ def test_terminal_pipes_to_rust_no_pty(rust, no_pty):
     assert headers["x-hangar-internal"] == "sek"
     _until(rust.closed.is_set)
     assert no_pty == []
-
-
-def test_connect_owner_terminal_pipes_to_rust(rust, no_pty):
-    c = TestClient(_app(), base_url=f"http://127.0.0.1:{CONNECT_PORT}", client=("127.0.0.1", 5))
-    with c.websocket_connect(f"ws://127.0.0.1:{CONNECT_PORT}/api/sessions/dono/term?token=secret") as ws:
-        assert ws.receive_bytes() == b"hello-from-rust"
-        ws.send_bytes(b"k")
-        assert ws.receive_bytes() == b"echo:k"
-    assert rust.requests[0][0] == "/__hangar_server/term?target=dono&cols=80&rows=24"
-    assert no_pty == []
-    # Sem o token, a porta de entrada recusa antes de ligar ao Rust.
-    with pytest.raises(WebSocketDisconnect):
-        with c.websocket_connect(f"ws://127.0.0.1:{CONNECT_PORT}/api/sessions/dono/term?token=x") as ws:
-            ws.receive_bytes()
-    assert len(rust.requests) == 1
 
 
 class _SlowCleanup:
@@ -168,8 +151,7 @@ def test_cancel_during_cleanup_still_closes_upstream(rust, monkeypatch):
     # O TestClient cancela o app logo após o desconectar, como um convidado revogado no meio da
     # limpeza: o repasse ao Rust fecha mesmo assim (o `stop` da fixture confere).
     monkeypatch.setattr(termsock, "asyncio", _SlowCleanup())
-    c = TestClient(_app(), base_url=f"http://127.0.0.1:{CONNECT_PORT}", client=("127.0.0.1", 5))
-    with c.websocket_connect(f"ws://127.0.0.1:{CONNECT_PORT}/api/sessions/dono/term?token=secret") as ws:
+    with _owner().websocket_connect(f"{OWNER_WS}/api/sessions/dono/term?token=secret") as ws:
         assert ws.receive_bytes() == b"hello-from-rust"
     _until(rust.closed.is_set)
 

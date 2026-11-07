@@ -1,13 +1,9 @@
 """A abertura de Claude com terminal é do Rust: só o que entrou direto no Python (Connect, MCP) vai à
 ponte dele, e as rotas internas guardam aqui só o que é daqui (registro em espera, `then`); o dono da sessão do convidado o Rust grava."""
-import asyncio
 import json
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
-from fastapi import HTTPException
-from fastapi.testclient import TestClient
 
 import app.api as api_mod
 from app import internal_api, pqueue
@@ -41,52 +37,3 @@ def test_the_guest_claim_is_written_by_the_rust_not_here():
     assert _python_routes("/internal/guests/claim") == []
 
 
-def _body(**kw):
-    return json.dumps({"name": "s1", "cwd": "/p", **kw}).encode()
-
-
-def test_only_what_entered_python_directly_goes_to_the_rust_open(monkeypatch):
-    from app import runtime_coordinator
-    from app.connect_port import CONNECT_PORT
-    sent = []
-
-    def bridge(name, route, method, body, timeout):
-        sent.append((name, route, method, json.loads(body)))
-        payload = json.loads(body)
-        return (200, json.dumps({"info": INFO, "undo": None}).encode()) if payload["request"].get("provider") == "claude" else None
-    monkeypatch.setattr(runtime_coordinator, "rust_claude", bridge)
-    connect = SimpleNamespace(scope={"server": ("127.0.0.1", CONNECT_PORT)})
-    info = asyncio.run(api_mod._open_in_rust(_body(provider="claude", headless=False), connect))
-    assert (info.name, info.provider, info.owner) == ("s1", "claude", None)
-    # Ausente continua ausente: o Rust decide o provedor padrão.
-    assert sent[0] == ("_", "open", "POST", {"request": {"name": "s1", "cwd": "/p", "provider": "claude", "headless": False}})
-    assert asyncio.run(api_mod._open_in_rust(_body(provider="codex"), connect)) is None
-    upstream = SimpleNamespace(scope={"server": ("127.0.0.1", 49152)})
-    assert asyncio.run(api_mod._open_in_rust(_body(provider="claude"), upstream)) is None
-    # Sem pedido HTTP ninguém cria por dentro do Python: o MCP abre no Rust.
-    assert asyncio.run(api_mod._open_in_rust(_body(provider="claude"), None)) is None
-    assert len(sent) == 2, "o que entrou pela 8765 o Rust já decidiu: não volta a ele"
-    monkeypatch.setattr(runtime_coordinator, "rust_claude", lambda *args: (
-        409, json.dumps({"detail": {"code": "erro_nome_em_uso", "params": {}, "msg": "ja existe uma sessao com esse nome"}}).encode()))
-    with pytest.raises(HTTPException) as refused:
-        asyncio.run(api_mod._open_in_rust(_body(provider="claude"), connect))
-    assert (refused.value.status_code, refused.value.detail["code"]) == (409, "erro_nome_em_uso")
-
-
-
-
-def test_the_connect_request_reaches_the_rust_as_sent_inherit_included(monkeypatch):
-    """O Python não valida o pedido (D-012/D-016): o que o Connect mandou chega ao Rust tal e qual."""
-    from app import runtime_coordinator
-    from app.config import settings
-    from app.connect_port import CONNECT_PORT
-    sent = []
-    monkeypatch.setattr(runtime_coordinator, "rust_claude", lambda *args: (
-        sent.append(json.loads(args[3])), (200, json.dumps({"info": INFO}).encode()))[1])
-    monkeypatch.setattr(settings, "auth_token", "secret")
-    request = {"name": "s1", "cwd": "/p", "inherit": False, "creator": "mae", "campo_novo": 1}
-    answer = TestClient(api_mod.app, base_url=f"http://127.0.0.1:{CONNECT_PORT}").post(
-        "/api/sessions", json=request, headers={"Authorization": "Bearer secret"})
-    assert answer.status_code == 200, answer.text
-    assert answer.json()["name"] == "s1"
-    assert sent == [{"request": request}]

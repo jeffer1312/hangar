@@ -1597,24 +1597,6 @@ seleção readonly de candidatos reais. Regressões foram escritas, não executa
 app, compilação e fechamento real ainda não conferidos; mudanças estão na worktree
 `/home/jefferson/Projetos/hangar-orq-team-context`, não instaladas no serviço ativo.
 
-## Connect: a porta dele nunca é local
-
-O Hangar Connect publica a máquina em `<maquina>.<conta>.hangar.dev.br`: o traefik da VPS repassa
-por SNI sem abrir o TLS, o `frpc` traz os bytes até o Caddy local, que abre o TLS e encaminha para
-o backend. Medido em 2026-10-02, antes da porta própria: o Caddy fala de `127.0.0.1`, então
-`/api/desktop/palette` (só-local) respondia **200** pela internet, inclusive com
-`X-Forwarded-For` forjado — todo acesso de fora valia como o dono na máquina, sem limite de
-tentativas. Com a porta `127.0.0.1:8768` e o `ConnectPortGate` trocando o cliente por
-`192.0.2.1` (RFC 5737) por fora de todos os middlewares, a mesma chamada passou a **403**.
-
-A decisão é pela porta do socket, como a do convidado (8766): o `proxy_headers` do uvicorn vale
-para todos os sockets do processo, então cabeçalho nunca serve para decidir. O limite de
-tentativas pelo Connect é o bloqueio de sempre (8 erros / 30 s) num contador próprio; atraso por
-tentativa não serve (o atacante abre conexões em paralelo, ver `auth.py`). O acerto do dono pelo
-Connect não zera esse contador: o app dele acerta a cada poucos segundos e daria ao atacante 7
-palpites novos a cada acerto. Custo aceito: quem martelar a senha trava o acesso pelo Connect por
-30 s; LAN e Tailscale seguem livres.
-
 ## Cookie de login só lê
 
 Todas as máquinas do Connect e o `app.hangar.dev.br` são o mesmo site para o navegador: a página
@@ -4180,3 +4162,39 @@ um crate sozinho guarda outra cópia das dependências no `target`). A divisão 
 `runtime`/`accounts`/`list` pode exigir descer bastante coisa antes, ou uma trait no core; o plano
 da divisão mostra como cada caso foi resolvido. A estimativa de memória depois da divisão está no
 plano; o pico medido do `hangar-server` é de 8,54 GB.
+
+## Hangar Connect: a entrada é do Rust e cada aparelho tem credencial própria (07/11/2026)
+
+A entrada do Connect é `127.0.0.1:8768`, atendida pelo `hangar-server` (`connect/` — porteiro e
+rotas; o resto em `crates/hangar-connect`: configuração, binários, `frpc` e Caddy, aparelhos). O
+Python não tem rota nem porta do Connect. Nada que chega por ela é local, embora o socket diga
+loopback (o Caddy é local): o porteiro nega por padrão, recusa a senha do dono ali e só deixa
+passar o aparelho com credencial própria, aprovada na máquina. Cabeçalho nunca decide "local".
+
+Por que o `frpc` e o Caddy ficaram do jeito que estão, medido em 2026-11-06 com `frps`/`frpc` 0.71.0
+e Caddy 2.11.6 pelo caminho real (wss até `connect.hangar.dev.br`, traefik 3.6.15, `frps`):
+
+- **O `frps` falha fechado.** Com o receptor do plugin fora, o `Login` novo, o `NewProxy` e o
+  `NewUserConn` são recusados e o `Ping` derruba a sessão existente. Plugin recusando só o `Ping`
+  derruba a sessão na hora e o `frpc` reloga sem parar; por isso o plugin recusa também o `Login`
+  de conta inativa. O plugin roda antes da conferência do token, então só a chave de máquina vale.
+- **TLS-ALPN-01 passa pelo traefik sem resolver `tlschallenge`.** Na `v3.6.15`,
+  `allowACMEByPass[name] = ep.AllowACMEByPass || !handlesTLSChallenge`: sem resolver com
+  `TLSChallenge` o repasse de `acme-tls/1` já vale em toda entrada. Duas emissões no Let's Encrypt
+  staging, com 7 validações cada, chegaram ao Caddy do PC; o certificado do disco, o do
+  `s_client` daqui e o de dentro da VPS tinham a mesma impressão. HTTP-01 não serve: o traefik
+  fica com `/.well-known/acme-challenge/` (prioridade máxima) e o plugin recusa proxy que não seja
+  `https`. Por isso o Caddyfile leva `issuer acme { disable_http_challenge }` (sem queda para o
+  ZeroSSL). Se alguém ligar `tlschallenge` no `coolify-proxy`, emissão e renovação de todas as
+  máquinas param; a saída é `--entrypoints.https.allowACMEByPass=true`.
+- **Limite de 50 certificados novos por semana para `hangar.dev.br`.** `dev.br` é sufixo público,
+  então o domínio registrado é `hangar.dev.br` e soma todas as máquinas de todos os usuários: no
+  máximo 50 máquinas novas por semana (reposição de 1 a cada 202 min), e 5 certificados para o
+  mesmo conjunto de nomes por semana, o que limita reinstalar a mesma máquina. Aumento é por
+  pedido e leva semanas. Não confirmado: se a renovação fica fora da conta dos 50.
+- **Subida:** o Caddy só sobe depois do `frpc` logado; pedido sem túnel é falha de validação gasta
+  (5 por nome por hora).
+
+Não testado: renovação, a CA de produção e um nome que dependa só do curinga novo
+`*.hangar.dev.br`. Cargas e logs completos em
+`.superpowers/sdd/2026-11-06-hangar-connect-rust/prova-tunel.md` da árvore principal.

@@ -71,7 +71,6 @@ from app.config import (list_config_dirs, _backend_config_base, settings,
                         resolve_scan_roots,
                         automations_enabled, resolve_bind_ip)
 from app import runtime_config
-from app.connect_port import CONNECT_PORT, ConnectPortGate
 from app.guest_header import guest_of, guest_safe
 from app.share_life import session_life
 from app import contas, default_model, procinfo
@@ -305,7 +304,7 @@ async def _codex_rust_port(name: str, request: Request):
     from app import runtime_coordinator
     from app.config import GUEST_PORT
     port = (request.scope.get("server") or (None, None))[1]
-    if port in (GUEST_PORT, CONNECT_PORT) and port != settings.port:
+    if port == GUEST_PORT and port != settings.port:
         route, body = request.url.path.split("/", 4)[4] + (f"?{request.url.query}" if request.url.query else ""), await request.body()
         # Só Codex consulta a ponte dele: com a ponte ainda sem endereço, Pi/omp/Kimi levariam o 503 dela.
         reply = None
@@ -775,9 +774,6 @@ app.add_middleware(
 )
 # JSON e assets grandes cruzam LAN/VPN; o Starlette exclui `text/event-stream`, sem segurar o SSE.
 app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
-# Por fora de tudo (o último registrado é o mais externo): os porteiros e o CORS já veem o cliente
-# trocado de quem chegou pela porta do Connect.
-app.add_middleware(ConnectPortGate)
 app.include_router(deploy_router)
 # Roteadores por assunto (Task 1 do plano descoberta-e-configuracao): cada Task do lote escreve
 # só no módulo dela. Última edição de api.py deste plano.
@@ -1624,33 +1620,8 @@ def _codex_as_claude_mode(name: str) -> str | None:
 
 
 
-async def _open_in_rust(raw: bytes, request: Request | None) -> CreatedSessionInfo | None:
-    """Claude com terminal abre no Rust. O que entra pela 8765 ele decide antes de repassar; à ponte,
-    num sentido, só vai o que entrou direto aqui: o Connect (8768), inclusive o bastão por ela. O
-    pedido vai cru: quem valida é o Rust. `None`: o pedido não é do Rust e segue aqui."""
-    from app import runtime_coordinator
-    port = (request.scope.get("server") or (None, None))[1] if request is not None else None
-    if port != CONNECT_PORT or port == settings.port:
-        return None
-    payload = b'{"request":' + raw + b"}"
-    # O prazo da criação, que prepara conta e worktree. O nome na rota é só rótulo: a ponte lê o pedido.
-    answer = await asyncio.to_thread(runtime_coordinator.rust_claude, "_", "open", "POST", payload, 180)
-    if answer is None:
-        return None
-    status, raw = answer
-    data = json.loads(raw)
-    if status >= 400:
-        raise HTTPException(status, detail=data["detail"])
-    return CreatedSessionInfo(**data["info"])
-
-
-
 @app.post("/api/sessions", dependencies=[Depends(require_auth)], response_model=CreatedSessionInfo)
 async def create_session(request: Request) -> CreatedSessionInfo:
-    opened = await _open_in_rust(await request.body(), request)
-    if opened is not None:
-        return opened
-    # Toda abertura é do Rust (`_open_in_rust` para o que entrou aqui pelo Connect): sem ele, recusa.
     raise registry_mod.SessionOpenNeedsRust()
 
 
@@ -1751,24 +1722,6 @@ async def kill_session(name: str, by: str | None = None, request: Request = None
     marked = lambda h: bool(request and internal_api._secret) and secrets.compare_digest(request.headers.get(h, "").encode(), internal_api._secret.encode())
     closed = marked("x-hangar-rust-closed")
     bridged = None
-    # Entrou pelo Connect: o Claude aberto no Rust fecha lá, como o da 8765; 421 (`None`) segue aqui.
-    # Só Claude: com o Rust em `pending`, a ponte responderia 503 ao Pi/omp/Kimi, que fecham aqui.
-    port = (request.scope.get("server") or (None, None))[1] if request is not None else None
-    provider = None
-    if not closed and port == CONNECT_PORT and port != settings.port:
-        # Sem a lista o provedor fica desconhecido e fecha-se aqui: falhar o DELETE não fecharia nada.
-        try:
-            provider = getattr(await _cached_info(name), "provider", None)
-        except (list_bridge.ListBridgeError, tmux.MuxIndisponivel) as e:
-            _log.warning("kill(%s): provedor desconhecido sem a lista, fecha pelo Python: %s", name, e)
-            diag.registrar("sessao.fechar_sem_provedor", "erro", sessao=name, codigo=type(e).__name__)
-    if provider == "claude":
-        from app import runtime_coordinator
-        reply = await asyncio.to_thread(runtime_coordinator.rust_claude, name, "close", "POST", b"", headers=_who_asked(request))
-        if reply is not None:
-            if reply[0] >= 300:
-                raise _RustReply(*reply)
-            closed, bridged = True, json.loads(reply[1]).get("transcript") or ""
     # Fechamento que não passou pelo Rust (Connect, convidado) e o do Claude pelo Connect, que o Rust
     # encerrou sem sair do grupo: a saída vai pela ponte, com a fase do `orq` lida aqui antes, para o
     # Rust não perguntar de volta.
@@ -2428,13 +2381,7 @@ async def _passar_bastao(name: str, body: BastaoBody, request: Request):
     if request.headers.get("x-hangar-open") == "rust":
         return JSONResponse({"open": creation, "dossie": str(alvo),
                              "texto": texto, "kickoff": kick, "aviso": aviso_resumo}, headers={"x-hangar-open": "rust"})
-    novo = await _open_in_rust(json.dumps(creation).encode(), request)
-    if novo is None:
-        raise registry_mod.SessionOpenNeedsRust()
-    # `aviso`: a reescrita pelo modelo foi pedida e não deu (cota, tempo, CLI ausente). A sessão
-    # nasceu e o resumo de código está lá — quem pediu precisa saber que recebeu o outro.
-    return {"name": novo.name, "dossie": str(alvo), "texto": texto, "kickoff": kick,
-            "aviso": aviso_resumo, "avisos": novo.avisos}
+    raise registry_mod.SessionOpenNeedsRust()
 
 
 @app.get("/api/sessions/{name}/workflows", dependencies=[Depends(require_auth)])
@@ -5170,33 +5117,6 @@ def computer_control_install():
 def computer_control_new_target(body: ComputerControlTargetBody):
     from app import computer_control as cc
     return _computer_control_call(cc.create_target, body.model_dump())
-
-
-class ConnectBody(_StrictBody):
-    code: str = Field(min_length=1, max_length=4096)
-
-
-@app.get("/api/connect", dependencies=[Depends(require_auth)])
-def connect_get():
-    from app import connect
-    return connect.status()
-
-
-@app.put("/api/connect", dependencies=[Depends(require_auth)])
-async def connect_put(body: ConnectBody):
-    from app import connect
-    try:
-        connect.save(body.code)
-    except connect.ConnectError as e:
-        raise HTTPException(e.status, detail=erro(e.code, e.msg)) from None
-    return connect.status()
-
-
-@app.delete("/api/connect", dependencies=[Depends(require_auth)])
-async def connect_delete():
-    from app import connect
-    await connect.forget()
-    return connect.status()
 
 
 # Anexo citado na conversa: 60s sem perguntar + ETag pro resto. A miniatura de 96px do

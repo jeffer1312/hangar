@@ -302,8 +302,8 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
   área que a desenhou não redesenhou sem ela, e é lida no render da raiz. O balão avança pela ação
   real no ponto do código onde ela acontece, nunca por polling. O que foi visto fica em `tour.json`
   e em `/api/tour-progress` de cada servidor (junção que nunca desfaz). O primeiro acesso de um
-  celular chega pelo parâmetro `device` da lista ao vivo do dono, lido só no ramo do dono e nunca
-  pela porta do Connect. Evidência em [frontend.md](docs/decisoes/frontend.md#tour-de-primeiro-uso-do-nativo-30102026).
+  celular chega pelo parâmetro `device` da lista ao vivo do dono, lido só no ramo do dono; o aparelho
+  que entra pelo Connect com credencial própria também é registrado. Evidência em [frontend.md](docs/decisoes/frontend.md#tour-de-primeiro-uso-do-nativo-30102026).
 - **Mensagem esperando na fila do Hangar aparece no painel "Na fila", não como bolha.** A lista e a
   ordem vêm do evento `queue`; o modelo é `packages/core/src/queuePanel.ts` (o nativo repete em
   `desktop-native/src/queue_panel.rs`).
@@ -319,7 +319,7 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
   Um painel por sessão em todas as portas; xterm com fundo `rgba(0,0,0,0)`, nunca `'transparent'`.
   Com o painel aberto, quem conta linha de pane responde 409 — e o app tem que MOSTRAR esse texto.
   Com o Rust de pé, o PTY é só dele (Windows incluído): o `termsock` faz a porta de entrada de quem
-  chega ao Python (convidado, Connect) e liga os bytes a `/__hangar_server/term`; o 409 pergunta
+  chega ao Python (convidado) e liga os bytes a `/__hangar_server/term`; o 409 pergunta
   `term.active` e erro da ponte é 503 (fechamento 1013 no socket), nunca PTY no Python.
 - **WebSocket do dono com `?token=` não confere Origin** (terminal, voz e navegador, Rust e
   Python). A Origin (`_origem_aceita`, `CP_TERM_ORIGINS`) só barra credencial que o navegador manda
@@ -416,8 +416,8 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
 
 - **TTS, narração, tradução de pensamento/descrições e sugestão de tarefa do grupo são do Rust.**
   `speech/` lê a configuração viva diretamente, preserva o cache de áudio e atende as rotas sem
-  bridge ou motor Python. A voz ao vivo também não conserva transporte privado para o Connect
-  desativado. A configuração geral mantém seus campos e escritor compartilhado; a capacidade
+  bridge ou motor Python. A voz ao vivo também não conserva transporte privado para o Connect do
+  Python. A configuração geral mantém seus campos e escritor compartilhado; a capacidade
   de tradução é calculada no Rust. Contrato e capturas em
   [plataforma.md](docs/decisoes/plataforma.md#leitura-narração-e-traduções-no-rust-29102026).
 
@@ -686,11 +686,14 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   do destino. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#uma-configuração-do-jev-para-os-quatro-usos) e
   [plataforma.md](docs/decisoes/plataforma.md#jev-vê-o-print-21102026).
-- **Hangar Connect entra por `127.0.0.1:8768`, e nada que chega por ela é local.** O
-  `ConnectPortGate` troca o cliente por `192.0.2.1` antes de qualquer checagem; nunca decidir
-  "local" por cabeçalho. Cookie de login só autoriza `GET`/`HEAD` e, em https, só o
-  `__Host-cp_token`: máquinas do Connect dividem o mesmo site. Evidência em
-  [plataforma.md](docs/decisoes/plataforma.md#connect-a-porta-dele-nunca-é-local).
+- **Hangar Connect entra por `127.0.0.1:8768`, que é do Rust, e nada que chega por ela é local.**
+  O porteiro (`crates/hangar-server/src/connect/`) nega por padrão, recusa a senha do dono ali e só
+  deixa passar o aparelho com credencial própria, aprovada na máquina; nunca decidir "local" por
+  cabeçalho. A supervisão do `frpc` e do Caddy, a configuração e os aparelhos moram em
+  `crates/hangar-connect`. O Python não tem porta nem rota do Connect. Cookie de login só autoriza
+  `GET`/`HEAD` e, em https, só o `__Host-cp_token`: máquinas do Connect dividem o mesmo site.
+  Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#hangar-connect-a-entrada-é-do-rust-e-cada-aparelho-tem-credencial-própria-07112026).
 - **Nada nasce no Python: o objetivo é tirá-lo do projeto.** Rota, ponte, poller, integração e
   qualquer recurso novo vão para o Rust (`crates/`). Sem pedido explícito do usuário, no
   `backend/app/` só se apaga código. Toda linha que ACRESCENTA no Python — lógica, releitura,
@@ -739,7 +742,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
     `accounts/codex-invalidate`, `workspace/context`,
     `transcription/config`, `costs/scopes`, `migration/status`, `diag` e `ping`.
   - Partes ainda no Python: transcript, estado e entrada geral de Pi, omp e Kimi;
-    transferência Claude→Codex; workflows e runners. O Connect (8768) está inativo.
+    transferência Claude→Codex; workflows e runners.
   - Contexto e fetch das worktrees são do Rust (`worktree_context.rs`, `worktree_fetch.rs`),
     inclusive a fonte usada pelas guardas de exclusão e pela limpeza automática. O fetch conserva
     validação, raízes e erros anteriores; usa credenciais configuradas, mas não pergunta login no
@@ -776,7 +779,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   `python` respondem 503 `erro_midia_precisa_rust`. Só a imagem de conversa transferida
   (`transfer:`) segue no Python. Evidência em
   [accounts-uploads-rust.md](docs/decisoes/accounts-uploads-rust.md#anexos). O resto, convidado
-  incluído, é repassado com `X-Forwarded-For`. A 8766 é do Rust e a 8768 fica no Python. Sem binário
+  incluído, é repassado com `X-Forwarded-For`. A 8766 e a 8768 são do Rust. Sem binário
   (`CP_RUST_SERVER_BIN`, `bin/` da versão do pacote, `crates/target/release`, `~/.hangar/bin`), com `CP_RUST_SERVER=0`, com
   `protocol` da saúde diferente de `RUST_SERVER_PROTOCOL`, sem endereço privado válido ou com 3
   quedas em 60 s, um segundo `uvicorn.Server` com `lifespan="off"` assume a porta: nunca um segundo
@@ -805,14 +808,12 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   tem uma porta de entrada no Rust: o Python a fecha antes de congelar ou transferir a sessão
   (renomear, trocar de conta) e a reabre depois; fechada pela troca de conversa, recusa na hora
   (409), fechada por congelamento curto, a escrita espera. A saúde diz o que o Rust atende em
-  `owns` (`table::owned_modes`). No convidado e no Connect (8766/8768) o Python autentica e repassa
+  `owns` (`table::owned_modes`). No convidado (8766) o Python autentica e repassa
   num sentido, corpo, método e query intactos: `input`/`answer`/`select`/`select/submit` e as rotas
   `queue/*` do Claude a `/__hangar_server/claude/<nome>/<rota>`, tudo do Codex do Rust (`queue/*`
   incluídas) a
   `/__hangar_server/codex/<nome>/<rota>` (a mesma ponte recebe o texto de broadcast para Codex
-  com terminal); no Connect, o `DELETE` e o `recarregar` de Claude vão a
-  `POST /__hangar_server/claude/<nome>/close` e `/recarregar` (a saída do grupo do fechamento fica no
-  Python), e Pi/omp/Kimi seguem fechando no Python; 421 = o Rust não atende e o Python segue, transporte que falha =
+  com terminal); Pi/omp/Kimi seguem fechando no Python; 421 = o Rust não atende e o Python segue, transporte que falha =
   5xx `<provedor>_bridge_failed`. Texto que nasce no Python para o Claude segue em `_send_one`, coberto
   só pelo `freeze`. Contrato e motivo em
   [plataforma.md](docs/decisoes/plataforma.md#escritas-do-claude-no-hangar-server) e
@@ -848,7 +849,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
 - **Trocar o nome da sessão é do Rust (`session_rename/`), com desfazer.** Tudo que recusa vem antes
   do primeiro efeito; a troca segura a reserva do nome novo e as portas dos dois nomes; a sessão viva
   fecha sem matar e reabre no nome novo na mesma geração; falha no meio desfaz e diz o que não voltou.
-  O Python só repassa (Connect, convidado com conta). Evidência em
+  O Python só repassa (convidado com conta). Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#trocar-o-nome-da-sessão-é-do-rust-23102026).
 - **Nova conversa do Claude sem terminal usa uma reserva pré-aquecida** (`crates/hangar-server/src/prewarm/`):
   com a tela aberta o cliente pede `PUT /api/sessions/prewarm` e o create leva `prewarm`. A reserva
@@ -872,7 +873,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   terminal↔sem terminal, `/recarregar`, `/conta` com a conta ChatGPT fixa, o modelo e o Fast dela, e
   o bypass; o modo vem do spec e do observado, nunca do rodapé lido na hora. A transferência
   Claude→Codex (`/conta` com `credential_id`) segue no Python. Python: autorização das portas dele com o repasse acima e, depois do `DELETE` de Codex com terminal
-  (e de Claude pelo Connect) concluído no Rust, só a limpeza externa (`share_store`/`sync_tunnel`, `ThenLink`, atalhos,
+  concluído no Rust, só a limpeza externa (`share_store`/`sync_tunnel`, `ThenLink`, atalhos,
   caches), sem chamar o Rust de volta. Responsabilidade migrada nunca volta ao Python em
   `rust`/`pending`: Rust indisponível é erro visível. Modo de permissão gravado desconhecido é
   recusado; ausente é o padrão da abertura.
@@ -896,8 +897,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   Medidas em [plataforma.md](docs/decisoes/plataforma.md#lista-do-dono-no-hangar-server).
 - **Os grupos são só do Rust; o Python não tem lógica de grupo.** Sidecars, fusão, contrato,
   texto do protocolo e a varredura de membro morto (ausência por tempo, lista sem fatos não varre)
-  moram em `groups/`. O Python só lê o arquivo de grupo e, nas portas dele (8768, fechar e
-  renomear pelo Connect, `orq`), repassa num sentido pela ponte `groups_bridge`
+  moram em `groups/`. O Python só lê o arquivo de grupo e, nas portas dele (`orq`), repassa num sentido pela ponte `groups_bridge`
   (`/__hangar_server/groups`). No modo `python` toda operação de grupo responde 503
   `groups_need_rust_server`; fechar sessão em grupo ainda fecha, com esse aviso. Motivo em
   [plataforma.md](docs/decisoes/plataforma.md#grupos-o-rust-grava).
@@ -931,7 +931,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
 - **Estado ao vivo de Claude com terminal é do `Monitor` do Rust no modo `rust`/`pending`, em
   qualquer porta.** Um por hub (`side.rs`), nascido com o primeiro assinante: o `/events` do dono
   ou o canal privado `/__hangar_server/state/{name}/events`, que o Python lê para quem entrou por
-  ele (8768). Ele publica `state`, `preview`, `ask_question` e `suggest` pelo retrato do hub, com o
+  ele (login de convidado). Ele publica `state`, `preview`, `ask_question` e `suggest` pelo retrato do hub, com o
   `interaction_id` da pergunta ou permissão em aberto, e drena a fila direto no `RuntimeRegistry`
   (`LiveSources::deliverable`); o Python não sobe `StateMonitor` nem `PreviewBroker` dessas
   sessões. Captura em processo
