@@ -158,6 +158,24 @@ try {
     $script:live[11] = $gone
     Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' | Out-Null
     Assert ('start' -in $script:events) "Processo que saiu antes da conferencia cancelou o inicio: $($script:events -join ',')"
+    # O PowerShell devolve StartTime nulo, sem erro, de processo que nao consegue abrir: saiu = parado.
+    Reset-State
+    $null11 = [pscustomobject]@{ Id = 11 }
+    $null11 | Add-Member ScriptProperty StartTime {
+        $script:live.Remove(11); $script:owner = $null
+        if (-not $script:live.Count) { $script:task.State = 'Ready' }
+        return $null
+    }
+    $null11 | Add-Member ScriptMethod WaitForExit { param($timeout) return $true }
+    $script:live[11] = $null11
+    Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' | Out-Null
+    Assert ('start' -in $script:events) "StartTime nulo de processo que saiu cancelou o inicio: $($script:events -join ',')"
+    # Nulo com o processo ainda vivo nao prova identidade: aborta.
+    Reset-State
+    $script:live[11] | Add-Member ScriptProperty StartTime { return $null } -Force
+    $failed = $false
+    try { Restart-HangarTask 'hangar-backend' 8765 'C:\repo\backend' | Out-Null } catch { $failed = "$_" }
+    Assert ($failed -match 'ilegivel' -and 'start' -notin $script:events) "StartTime nulo com o processo vivo nao abortou: $failed"
     # Lista de portas vazia com o servidor de pe: a saude do hangar-server prova a subida.
     Reset-State
     $script:phantomStarts = 99
