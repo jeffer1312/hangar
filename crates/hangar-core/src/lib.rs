@@ -1,4 +1,5 @@
 //! Tipos e ajudantes comuns do servidor. Nada aqui depende do `hangar-server`.
+#![deny(unsafe_code)]
 
 pub mod account_env;
 pub mod costs_failure;
@@ -19,6 +20,8 @@ pub mod pycompat;
 pub mod query;
 pub mod queue_row;
 pub mod terminal_lock;
+// Grupo de processos e job object do Windows: chamadas de `libc` e `windows-sys`.
+#[allow(unsafe_code)]
 pub mod terminal_process;
 pub mod terminal_state;
 pub mod value_coercion;
