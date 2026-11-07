@@ -22,11 +22,11 @@ pub fn is_marker(c: char) -> bool {
     c as u32 >= MARK_BASE
 }
 
-pub fn mark(surrogate: u32) -> char {
+pub(crate) fn mark(surrogate: u32) -> char {
     char::from_u32(MARK_BASE + (surrogate - 0xD800)).expect("surrogate entre D800 e DFFF")
 }
 
-pub fn surrogate_of(c: char) -> u32 {
+pub(crate) fn surrogate_of(c: char) -> u32 {
     c as u32 - MARK_BASE + 0xD800
 }
 
@@ -59,7 +59,7 @@ pub fn scrub_map(m: &mut Map<String, Value>) {
     }
 }
 
-pub fn scrub_value(v: &mut Value) {
+pub(crate) fn scrub_value(v: &mut Value) {
     match v {
         Value::String(s) => scrub_str(s),
         Value::Array(items) => items.iter_mut().for_each(scrub_value),
@@ -258,7 +258,7 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 }
 
 /// `s.encode("utf-8", "replace")`: o surrogate solto vira "?".
-pub fn utf8_replace(s: &str) -> Cow<'_, [u8]> {
+pub(crate) fn utf8_replace(s: &str) -> Cow<'_, [u8]> {
     if !has_marker(s) {
         return Cow::Borrowed(s.as_bytes());
     }

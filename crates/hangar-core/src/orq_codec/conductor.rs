@@ -143,7 +143,6 @@ fn py_repr(v: &Value, marker: &str) -> String {
     }
     output
 }
-pub fn python_string(value:&Value)->String { py_str(value,MARK) }
 pub fn py_str(v: &Value, marker: &str) -> String {
     match v {
         Value::String(s)

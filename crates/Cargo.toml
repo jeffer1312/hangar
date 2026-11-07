@@ -40,6 +40,8 @@ rusqlite = { version = "=0.40.2", features = ["bundled"] }
 rayon = "=1.12.0"
 hangar-codex = { path = "hangar-codex" }
 hangar-core = { path = "hangar-core" }
+num-bigint = "=0.5.1"
+ring = "=0.17.14"
 tokio-tungstenite = "=0.29.0"
 # Aparelho iOS pelo cabo (`device_install`): versão provada no iPad, a mesma que o isideload usa, e com o
 # mesmo backend de cripto dele (ring).

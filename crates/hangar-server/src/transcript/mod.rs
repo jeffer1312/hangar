@@ -9,7 +9,7 @@ pub(crate) mod history;
 mod peer;
 pub(crate) use hangar_core::pycompat::py;
 pub use hangar_core::pycompat::pyjson;
-// Caminho antigo mantido para as branches em andamento; sai junto com os demais re-exports.
+// Re-export de compatibilidade: nenhum módulo deste crate o usa mais.
 #[allow(unused_imports)]
 pub(crate) use hangar_core::pycompat::json_tree;
 
