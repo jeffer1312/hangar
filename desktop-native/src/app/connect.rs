@@ -171,19 +171,20 @@ pub(super) enum NoticeReply {
     Answered { machine: String, device: String, result: Result<Value, Failure> },
 }
 
-fn device_card(card: &Request, machine: &str, approve: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    deny: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Stateful<Div> {
-    let id = &card.device.device_id;
+/// Dados simples porque a animação da novidade (`news::connect_approval`) desenha o mesmo cartão; lá, `focusable`
+/// é falso: a miniatura não entra no Tab.
+pub(crate) fn device_card(id: &str, name: &str, machine: &str, sending: bool, error: Option<String>, focusable: bool,
+    approve: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static, deny: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Stateful<Div> {
     let button = |action: &str, key: &str| Button::new(SharedString::from(format!("connect-{action}-{id}"))).xsmall().w_full()
-        .label(tr_shared(key, &[])).disabled(card.sending);
+        .label(tr_shared(key, &[])).disabled(sending).tab_stop(focusable);
     div().id(SharedString::from(format!("connect-request-{id}"))).flex_shrink_0().mx(px(8.)).my(px(4.)).p_2().rounded(px(8.)).bg(theme::inset())
-        .flex().flex_col().gap_1().role(Role::Group).aria_label(card.device.name.clone())
+        .flex().flex_col().gap_1().role(Role::Group).aria_label(name.to_owned())
         .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::warning()).whitespace_normal()
             .child(tr_shared("connect_device_pending", &[("machine", machine)])))
-        .child(div().text_sm().text_color(theme::text()).whitespace_normal().child(card.device.name.clone()))
+        .child(div().text_sm().text_color(theme::text()).whitespace_normal().child(name.to_owned()))
         .child(request_pair(button("approve", "connect_device_approve").primary().on_click(approve),
             button("deny", "connect_device_deny").outline().on_click(deny)))
-        .children(card.error.clone().map(|error| div().id(SharedString::from(format!("connect-request-error-{id}"))).role(Role::Alert)
+        .children(error.map(|error| div().id(SharedString::from(format!("connect-request-error-{id}"))).role(Role::Alert)
             .text_xs().text_color(theme::danger()).whitespace_normal().child(error)))
 }
 
@@ -485,7 +486,7 @@ impl Hangar {
                 let approve = cx.listener(move |this, _: &ClickEvent, window, cx| this.confirm_approve(machine.clone(), device.clone(), name.clone(), window, cx));
                 let (machine, device) = (key.clone(), card.device.device_id.clone());
                 let deny = cx.listener(move |this, _: &ClickEvent, _, cx| this.answer_device(machine.clone(), device.clone(), false, cx));
-                cards.push(device_card(card, &label, approve, deny).into_any_element());
+                cards.push(device_card(&card.device.device_id, &card.device.name, &label, card.sending, card.error.clone(), true, approve, deny).into_any_element());
             }
         }
         cards
@@ -685,7 +686,10 @@ mod tests {
     struct Card { card: Request }
 
     impl Render for Card {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement { device_card(&self.card, "mesa", |_, _, _| {}, |_, _, _| {}) }
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let card = &self.card;
+            device_card(&card.device.device_id, &card.device.name, "mesa", card.sending, card.error.clone(), true, |_, _, _| {}, |_, _, _| {})
+        }
     }
 
     #[gpui::test]
