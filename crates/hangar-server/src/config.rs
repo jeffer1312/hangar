@@ -81,6 +81,12 @@ pub fn connect_listen(listen: SocketAddr) -> Option<SocketAddr> {
     Some(SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, crate::connect::CONNECT_PORT)))
 }
 
+/// Porta da prévia do Connect, sempre no loopback. Com a porta principal nela, a prévia não liga.
+pub fn preview_listen(listen: SocketAddr) -> Option<SocketAddr> {
+    let port = crate::connect::preview::PREVIEW_PORT;
+    (listen.port() != port).then(|| SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port)))
+}
+
 /// Porta do convidado e convites. Fora do `Config` porque nenhum teste do dono precisa delas.
 #[derive(Clone, Debug, Default)]
 pub struct GuestEnv {

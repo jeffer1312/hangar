@@ -42,6 +42,7 @@ pub(crate) fn linked() -> Linked {
         frps_token: FRPS_TOKEN.into(),
         service_public_key: STANDARD.encode([7u8; 32]),
         guest_published: false,
+        preview_published: false,
     }
 }
 

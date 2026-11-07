@@ -17,6 +17,7 @@ use tokio::sync::{oneshot, watch};
 
 use super::devices::Store;
 use super::peers::Links;
+use super::preview::PREVIEW_PORT;
 use super::state::{self, LinkRequest, Linked};
 use super::{CONNECT_PORT, ConnectError, GUEST_PORT, binaries, config};
 use hangar_core::terminal_process::{CommandTree, OwnedTree, PRIVATE_ENV_KEYS};
@@ -94,6 +95,8 @@ pub struct Supervisor {
     bound: watch::Sender<bool>,
     /// A porta do convidado aberta por este servidor.
     guest_port: watch::Sender<bool>,
+    /// A porta da prévia aberta por este servidor.
+    preview_port: watch::Sender<bool>,
     /// A subida do servidor e um pedido da tela podem chegar juntos: sem fila, nasceriam dois de cada.
     run: tokio::sync::Mutex<Option<Run>>,
     linking: tokio::sync::Mutex<()>,
@@ -116,7 +119,7 @@ impl Supervisor {
     pub fn new(dir: PathBuf, log_dir: PathBuf, devices: Arc<Store>, main_port: u16) -> Self {
         let live = Live { port_error: (main_port == CONNECT_PORT).then(main_port_message), ..Live::default() };
         Self { dir, log_dir, main_port, devices, programs: None, live: Arc::new(Mutex::new(live)), bound: watch::channel(false).0,
-            guest_port: watch::channel(false).0, run: tokio::sync::Mutex::new(None), linking: tokio::sync::Mutex::new(()), peer_links: Links::default() }
+            guest_port: watch::channel(false).0, preview_port: watch::channel(false).0, run: tokio::sync::Mutex::new(None), linking: tokio::sync::Mutex::new(()), peer_links: Links::default() }
     }
 
     pub fn dir(&self) -> &Path {
@@ -151,6 +154,10 @@ impl Supervisor {
 
     pub fn guest_port_opened(&self) {
         self.guest_port.send_replace(true);
+    }
+
+    pub fn preview_port_opened(&self) {
+        self.preview_port.send_replace(true);
     }
 
     pub async fn linked(&self) -> Option<Linked> {
@@ -210,8 +217,9 @@ impl Supervisor {
         let (frpc_config, caddyfile) = (self.dir.join("frpc.toml"), self.dir.join("Caddyfile"));
         let frpc_text = config::render_frpc(linked)?;
         let caddy_text = config::render_caddyfile(linked, &self.dir)?;
-        let site = linked.guest_published.then(|| GuestSite { open: self.guest_port.subscribe(), served: false, file: caddyfile.clone(),
-            both: format!("{caddy_text}\n{}", config::render_guest_site(linked)), owner_only: caddy_text.clone() });
+        let sites = Sites { file: caddyfile.clone(), owner: caddy_text.clone(),
+            guest: linked.guest_published.then(|| Site::new(self.guest_port.subscribe(), config::render_guest_site(linked))),
+            preview: linked.preview_published.then(|| Site::new(self.preview_port.subscribe(), config::render_preview_site(linked))) };
         let (toml_path, caddy_path) = (frpc_config.clone(), caddyfile.clone());
         off_thread(move || {
             state::write_private(&toml_path, frpc_text.as_bytes())?;
@@ -227,7 +235,7 @@ impl Supervisor {
         // O sinal de morte do Linux segue a thread que criou o filho, e um worker do tokio pode sair antes
         // (`block_in_place`): esta thread vive tanto quanto os filhos.
         std::thread::Builder::new().name("connect-supervisor".to_owned()).spawn(move || {
-            supervise_on_thread(frpc, caddy, site, live, stop_rx, bound);
+            supervise_on_thread(frpc, caddy, sites, live, stop_rx, bound);
             let _ = done_tx.send(());
         }).map_err(|cause| {
             lock(&self.live).active = false;
@@ -300,25 +308,36 @@ impl Supervisor {
         self.start(&linked).await
     }
 
-    /// Primeiro convite pelo Connect: o `frpc` e o Caddy só leem a configuração ao subir, então os dois voltam uma vez.
+    /// Primeiro uso de um site: o `frpc` e o Caddy só leem a configuração ao subir, então os dois voltam uma vez.
     /// Gravado antes da troca, nada repete isso. Cancelada no meio deixaria o Connect parado: quem chama usa tarefa própria.
-    pub async fn publish_guest(&self) -> Result<(), ConnectError> {
+    async fn publish(&self, port: &watch::Sender<bool>, closed: ConnectError, published: fn(&mut Linked) -> &mut bool) -> Result<Linked, ConnectError> {
         let _linking = self.linking.lock().await;
-        if !*self.guest_port.borrow() {
-            return Err(ConnectError::new(StatusCode::CONFLICT, "connect_guest_port_closed",
-                format!("a porta do convite ({GUEST_PORT}) não abriu neste servidor")));
+        if !*port.borrow() {
+            return Err(closed);
         }
         let dir = self.dir.clone();
         let Some(mut linked) = off_thread(move || Ok(state::read(&dir))).await? else {
             return Err(ConnectError::new(StatusCode::CONFLICT, "connect_not_linked", "esta máquina não está ligada ao Connect"));
         };
-        if linked.guest_published {
-            return Ok(());
+        if *published(&mut linked) {
+            return Ok(linked);
         }
-        linked.guest_published = true;
+        *published(&mut linked) = true;
         let (dir, saved) = (self.dir.clone(), linked.clone());
         off_thread(move || state::write(&dir, &saved)).await?;
-        self.start(&linked).await
+        self.start(&linked).await?;
+        Ok(linked)
+    }
+
+    pub async fn publish_guest(&self) -> Result<(), ConnectError> {
+        let closed = ConnectError::new(StatusCode::CONFLICT, "connect_guest_port_closed", format!("a porta do convite ({GUEST_PORT}) não abriu neste servidor"));
+        self.publish(&self.guest_port, closed, |linked| &mut linked.guest_published).await.map(|_| ())
+    }
+
+    /// Devolve o host da prévia.
+    pub async fn publish_preview(&self) -> Result<String, ConnectError> {
+        let closed = ConnectError::new(StatusCode::CONFLICT, "connect_preview_port_closed", format!("a porta da prévia ({PREVIEW_PORT}) não abriu neste servidor"));
+        Ok(self.publish(&self.preview_port, closed, |linked| &mut linked.preview_published).await?.preview_host)
     }
 
     /// Credencial de aparelho fica: ela vale também no Tailscale.
@@ -348,9 +367,9 @@ fn pid_file(dir: &Path, name: &str) -> PathBuf {
     dir.join(format!("{name}.pid"))
 }
 
-fn supervise_on_thread(frpc: Spec, caddy: Spec, site: Option<GuestSite>, live: Shared, stop: watch::Receiver<bool>, bound: watch::Receiver<bool>) {
+fn supervise_on_thread(frpc: Spec, caddy: Spec, sites: Sites, live: Shared, stop: watch::Receiver<bool>, bound: watch::Receiver<bool>) {
     let panicked = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
-        Ok(runtime) => std::panic::catch_unwind(AssertUnwindSafe(|| runtime.block_on(supervise(frpc, caddy, site, live.clone(), stop, bound)))).is_err(),
+        Ok(runtime) => std::panic::catch_unwind(AssertUnwindSafe(|| runtime.block_on(supervise(frpc, caddy, sites, live.clone(), stop, bound)))).is_err(),
         Err(_) => true,
     };
     let mut live = lock(&live);
@@ -362,12 +381,12 @@ fn supervise_on_thread(frpc: Spec, caddy: Spec, site: Option<GuestSite>, live: S
     }
 }
 
-async fn supervise(frpc: Spec, caddy: Spec, site: Option<GuestSite>, live: Shared, stop: watch::Receiver<bool>, bound: watch::Receiver<bool>) {
+async fn supervise(frpc: Spec, caddy: Spec, sites: Sites, live: Shared, stop: watch::Receiver<bool>, bound: watch::Receiver<bool>) {
     let (logged, logged_rx) = watch::channel(false);
     let (site_stop, site_live) = (stop.clone(), live.clone());
     tokio::join!(
         keep(frpc, live, Some(logged), None, stop),
-        keep(caddy, site_live, None, Some(Gate { logged: logged_rx, bound, site }), site_stop),
+        keep(caddy, site_live, None, Some(Gate { logged: logged_rx, bound, sites }), site_stop),
     );
 }
 
@@ -376,29 +395,63 @@ async fn supervise(frpc: Spec, caddy: Spec, site: Option<GuestSite>, live: Share
 struct Gate {
     logged: watch::Receiver<bool>,
     bound: watch::Receiver<bool>,
-    site: Option<GuestSite>,
+    sites: Sites,
 }
 
-/// Site já publicado: o Caddyfile sai a cada subida, e sem a 8766 aberta por este servidor vai só o do dono.
-/// O Caddy não espera por ela: a entrada do dono não fica presa a uma porta que outro processo segura.
-struct GuestSite {
+/// Site já publicado, que só entra no Caddyfile com a porta dele aberta por este servidor: com ela na
+/// mão de outro processo, o Caddy entregaria a internet a ele.
+struct Site {
     open: watch::Receiver<bool>,
     served: bool,
-    file: PathBuf,
-    owner_only: String,
-    both: String,
+    text: String,
 }
 
-impl GuestSite {
-    fn write(&mut self) -> Result<(), ConnectError> {
-        self.served = *self.open.borrow();
-        state::write_private(&self.file, if self.served { self.both.as_bytes() } else { self.owner_only.as_bytes() })
+impl Site {
+    fn new(open: watch::Receiver<bool>, text: String) -> Self {
+        Self { open, served: false, text }
     }
 
-    /// Resolve uma vez só: com o servidor de pé a 8766 não fecha, e o Caddy seguinte já sobe com o site.
+    /// Resolve uma vez só: com o servidor de pé a porta não fecha, e o Caddy seguinte já sobe com o site.
     async fn until_missing(&mut self) {
         if self.served || self.open.wait_for(|on| *on).await.is_err() {
             std::future::pending().await
+        }
+    }
+}
+
+async fn until_opened(site: Option<&mut Site>) {
+    match site {
+        Some(site) => site.until_missing().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// O Caddyfile sai a cada subida com o site do dono e os publicados de porta aberta.
+/// O Caddy não espera por elas: a entrada do dono não fica presa a uma porta que outro processo segura.
+struct Sites {
+    file: PathBuf,
+    owner: String,
+    guest: Option<Site>,
+    preview: Option<Site>,
+}
+
+impl Sites {
+    fn write(&mut self) -> Result<(), ConnectError> {
+        let mut text = self.owner.clone();
+        for site in [self.guest.as_mut(), self.preview.as_mut()].into_iter().flatten() {
+            site.served = *site.open.borrow();
+            if site.served {
+                text.push('\n');
+                text.push_str(&site.text);
+            }
+        }
+        state::write_private(&self.file, text.as_bytes())
+    }
+
+    async fn until_missing(&mut self) {
+        tokio::select! {
+            () = until_opened(self.guest.as_mut()) => {}
+            () = until_opened(self.preview.as_mut()) => {}
         }
     }
 }
@@ -429,7 +482,7 @@ async fn until_port_lost(bound: Option<&mut watch::Receiver<bool>>) {
     }
 }
 
-async fn until_site_missing(site: Option<&mut GuestSite>) {
+async fn until_site_missing(site: Option<&mut Sites>) {
     match site {
         Some(site) => site.until_missing().await,
         None => std::future::pending().await,
@@ -450,7 +503,7 @@ async fn keep(spec: Spec, live: Shared, logged: Option<watch::Sender<bool>>, mut
             return;
         }
         let (bound, mut site) = match gate.as_mut() {
-            Some(Gate { bound, site, .. }) => (Some(bound), site.as_mut()),
+            Some(Gate { bound, sites, .. }) => (Some(bound), Some(sites)),
             None => (None, None),
         };
         let ended = match site.as_mut().map_or(Ok(()), |site| site.write()) {
@@ -488,7 +541,7 @@ async fn keep(spec: Spec, live: Shared, logged: Option<watch::Sender<bool>>, mut
 }
 
 async fn run_once(spec: &Spec, live: &Shared, logged: Option<&watch::Sender<bool>>, bound: Option<&mut watch::Receiver<bool>>,
-    site: Option<&mut GuestSite>, stop: &mut watch::Receiver<bool>) -> Ended {
+    site: Option<&mut Sites>, stop: &mut watch::Receiver<bool>) -> Ended {
     let (mut child, mut tree, mut offset) = match spawn_child(spec) {
         Ok(started) => started,
         Err(cause) => {
@@ -524,7 +577,7 @@ async fn run_once(spec: &Spec, live: &Shared, logged: Option<&watch::Sender<bool
                 return Ended::PortLost;
             }
             () = &mut missing => {
-                tracing::info!(code = "connect_guest_site_opened", child = spec.name, "a porta do convidado abriu; filho volta com o site");
+                tracing::info!(code = "connect_site_opened", child = spec.name, "a porta de um site abriu; filho volta com ele");
                 stop_child(spec.name, &mut child, &mut tree).await;
                 return Ended::SiteOpened;
             }

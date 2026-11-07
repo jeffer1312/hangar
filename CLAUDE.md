@@ -704,6 +704,13 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   `GET`/`HEAD` e, em https, só o `__Host-cp_token`: máquinas do Connect dividem o mesmo site.
   Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#hangar-connect-a-entrada-é-do-rust-e-cada-aparelho-tem-credencial-própria-07112026).
+- **Prévia de porta pelo Connect: `127.0.0.1:8769` é um listener próprio (`hangar-connect/src/preview.rs`),
+  fora de `hangar_auth`.** Link de uso único vira cookie `__Host-` por 303; o projeto nunca vê credencial
+  do Hangar. O destino é o `127.0.0.1:<port>` gravado na criação, conferido a cada pedido contra as
+  portas do próprio Hangar, e redirecionamento do projeto nunca é seguido. O site nasce na primeira
+  prévia (`preview_published`) e aponta sempre para a 8769; como o do convidado, só entra no Caddyfile
+  com a porta aberta por este servidor. `Origin` de fora é recusada: `SameSite` não separa as máquinas
+  do Connect. `backend/app/tunnel.py` segue atendendo o Tailscale.
 - **Nada nasce no Python: o objetivo é tirá-lo do projeto.** Rota, ponte, poller, integração e
   qualquer recurso novo vão para o Rust (`crates/`). Sem pedido explícito do usuário, no
   `backend/app/` só se apaga código. Toda linha que ACRESCENTA no Python — lógica, releitura,

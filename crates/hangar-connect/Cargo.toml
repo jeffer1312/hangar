@@ -11,6 +11,11 @@ hangar-core.workspace = true
 axum = { workspace = true }
 base64 = "=0.23.1"
 flate2 = { workspace = true }
+form_urlencoded = { workspace = true }
+futures-util = { workspace = true }
+# Repasse da prévia ao projeto: HTTP e WebSocket pelo mesmo caminho (`preview.rs`).
+hyper = { workspace = true }
+hyper-util = { workspace = true }
 memchr = "=2.8.3"
 reqwest = { workspace = true, features = ["rustls", "multipart"] }
 ring.workspace = true

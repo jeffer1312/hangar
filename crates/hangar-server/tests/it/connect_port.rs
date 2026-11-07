@@ -26,7 +26,7 @@ pub(crate) async fn wait_up(addr: SocketAddr) {
 }
 
 /// Pela entrada só passa aparelho: a pasta fica de pé até o fim do processo, junto com a loja.
-fn device(state: &mut AppState) -> String {
+pub(crate) fn device(state: &mut AppState) -> String {
     let dir: &'static tempfile::TempDir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let store = hangar_server::connect::devices::Store::new(dir.path().to_path_buf(), None);
     let token = store.enroll("teste").unwrap().1;

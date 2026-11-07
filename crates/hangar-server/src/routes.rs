@@ -65,6 +65,10 @@ pub struct AppState {
     pub front: Option<SocketAddr>,
     /// A entrada do Connect (`config::connect_listen`), decidida só na subida real (`main.rs`).
     pub connect: Option<SocketAddr>,
+    /// A porta da prévia (`config::preview_listen`), decidida só na subida real (`main.rs`).
+    pub preview: Option<SocketAddr>,
+    /// A prévia de porta aberta e quem entrou nela.
+    pub connect_previews: Arc<crate::connect::preview::Previews>,
     /// Credenciais de dono por aparelho (`~/.hangar/connect`); o teste troca por uma pasta temporária.
     pub connect_devices: Arc<crate::connect::devices::Store>,
     /// `frpc` e Caddy da ligação desta máquina; liga só na subida real (`main.rs`) ou pela rota.
@@ -239,7 +243,7 @@ impl AppState {
         let vault_requests = Arc::new(crate::vault::requests::Requests::default());
         let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture());
         let search = crate::search::Index::server(accounts.clone());
-        AppState { startup: Default::default(), startup_producers: Arc::default(), settings_snapshot: std::sync::OnceLock::new(), login_guests: Arc::new(crate::login_guests::Service::uninitialized(&accounts.env.home,&accounts.env.claude_base)), accounts, search, claude_p: None, command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, connect: None, diag,
+        AppState { startup: Default::default(), startup_producers: Arc::default(), settings_snapshot: std::sync::OnceLock::new(), login_guests: Arc::new(crate::login_guests::Service::uninitialized(&accounts.env.home,&accounts.env.claude_base)), accounts, search, claude_p: None, command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, connect: None, preview: None, connect_previews: Arc::default(), diag,
             migration_branch: Arc::default(),
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             login_browser: Arc::default(),
@@ -346,6 +350,9 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let private = TcpListener::bind("127.0.0.1:0").await?;
     state.terminal_address = Some(private.local_addr()?);
     state.voice.set_self(listener.local_addr()?, &state.cfg.auth_token);
+    state.connect_previews.reserve([listener.local_addr()?.port(), private.local_addr()?.port(), state.cfg.upstream.port()].into_iter()
+        .chain(plugin.as_ref().and_then(|plugin| plugin.local_addr().ok()).map(|addr| addr.port()))
+        .chain([guest, state.front, state.connect, state.preview].into_iter().flatten().map(|addr| addr.port())));
     let public_v6 = state.public_v6.take();
     let state = Arc::new(state);
     let main_startup = state.startup.prepares();
@@ -397,6 +404,7 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let guest_state = state.clone();
     let (front_state, front) = (state.clone(), state.front);
     let (connect_state, connect) = (state.clone(), state.connect);
+    let (preview_state, preview) = (state.clone(), state.preview);
     // Uma só para as portas: convite e par veem as mesmas lojas e a mesma conferência.
     let pair = pair_state(&state);
     let guest_pair = pair.clone();
@@ -415,6 +423,20 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
                         tracing::warn!(code = "connect_port_failed", listen = %addr, "porta do Connect indisponível, tentando de novo: {e}");
                         failing = true;
                     }
+                }
+                tokio::time::sleep(wait).await;
+                wait = (wait * 2).min(Duration::from_secs(5));
+            }
+        } => Ok(()),
+        // Nunca termina, como a do Connect: sem a prévia, o resto do servidor segue de pé.
+        () = async {
+            let Some(addr) = preview else { return std::future::pending().await };
+            let mut wait = Duration::from_millis(250);
+            let mut failing = false;
+            loop {
+                if let Err(e) = serve_preview(addr, preview_state.clone()).await && !failing {
+                    tracing::warn!(code = "connect_preview_port_failed", listen = %addr, "porta da prévia indisponível, tentando de novo: {e}");
+                    failing = true;
                 }
                 tokio::time::sleep(wait).await;
                 wait = (wait * 2).min(Duration::from_secs(5));
@@ -506,6 +528,17 @@ pub async fn serve_connect(addr: SocketAddr, state: Arc<AppState>, pair: Option<
     axum::serve(listener, router_with(state, pair.as_ref())
         .layer(axum::middleware::map_request(crate::connect::gate::rewrite_peer))
         .into_make_service_with_connect_info::<crate::connect::gate::ConnectConn>()).await
+}
+
+/// A prévia não usa nada do servidor. O site do Caddy só entra depois que esta porta abriu aqui.
+pub async fn serve_preview(addr: SocketAddr, state: Arc<AppState>) -> std::io::Result<()> {
+    if !addr.ip().is_loopback() {
+        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "prévia do Connect fora do loopback"));
+    }
+    let listener = guest_socket(addr)?;
+    state.connect_supervisor.preview_port_opened();
+    tracing::info!(listen = %addr, "porta da prévia de pé");
+    axum::serve(listener, crate::connect::preview::router(state.connect_previews.clone()).into_make_service()).await
 }
 
 async fn serve_guest(addr: SocketAddr, state: Arc<AppState>, pair: Option<Arc<PairState>>) -> std::io::Result<()> {

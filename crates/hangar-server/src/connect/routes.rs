@@ -18,6 +18,7 @@ use super::config::valid_label;
 use super::devices::{Poll, Refusal, Store};
 use super::gate::DeviceCaller;
 use super::peers::{self, PeerLinker};
+use super::preview::LINK_PARAM;
 use super::state::{self, LinkRequest};
 use crate::machine_peers::store::valid_id;
 use crate::routes::{AppState, cors, on_connect_port, owner_gate};
@@ -36,6 +37,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/connect/devices/self", post(enroll).options(preflight))
         .route("/api/connect/devices/{id}", delete(remove).options(preflight))
         .route("/api/connect/devices/{id}/approve", post(approve).options(preflight))
+        .route("/api/connect/preview", post(open_preview).delete(close_preview).options(preflight))
         .route("/api/connect/peers", get(peer_links).options(preflight))
         .route("/api/connect/peers/{id}/link", post(link_peer).options(preflight))
 }
@@ -45,10 +47,10 @@ pub fn matches(method: &Method, path: &str) -> bool {
     let peer = path.strip_prefix("/api/connect/peers/").and_then(|rest| rest.strip_suffix("/link"));
     match method.as_str() {
         "GET" => matches!(path, "/api/connect" | "/api/connect/devices" | "/api/connect/peers"),
-        "POST" => matches!(path, "/api/connect/link" | "/api/connect/redeem" | "/api/connect/redeem/status" | "/api/connect/devices/self")
+        "POST" => matches!(path, "/api/connect/link" | "/api/connect/redeem" | "/api/connect/redeem/status" | "/api/connect/devices/self" | "/api/connect/preview")
             || id.and_then(|rest| rest.strip_suffix("/approve")).is_some_and(|id| !id.is_empty() && !id.contains('/'))
             || peer.is_some_and(|id| !id.is_empty() && !id.contains('/')),
-        "DELETE" => path == "/api/connect" || id.is_some_and(|id| !id.is_empty() && !id.contains('/')),
+        "DELETE" => matches!(path, "/api/connect" | "/api/connect/preview") || id.is_some_and(|id| !id.is_empty() && !id.contains('/')),
         _ => false,
     }
 }
@@ -216,6 +218,47 @@ async fn link(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<So
     finished(&st, &headers, outcome)
 }
 
+#[derive(Deserialize)]
+struct PreviewBody { port: u16 }
+
+fn preview_port_refused(headers: &HeaderMap) -> Response {
+    error(headers, StatusCode::UNPROCESSABLE_ENTITY, "connect_preview_port_refused", "essa porta é do próprio Hangar")
+}
+
+/// Aparelho vale como dono: a prévia não dá acesso a mais nada e acaba com um `DELETE`.
+async fn open_preview(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    let headers = req.headers().clone();
+    if let Err(mut response) = owner_gate(&st, peer, &req).await {
+        cors(&headers, response.headers_mut());
+        return response;
+    }
+    let body: PreviewBody = match parse(req).await { Ok(body) => body, Err(response) => return response };
+    if st.connect_previews.refused(body.port) {
+        return preview_port_refused(&headers);
+    }
+    // Tarefa própria: quem vem pelo Connect perde a conexão na troca dos filhos, e o pedido cancelado os deixaria parados.
+    let supervisor = st.connect_supervisor.clone();
+    let host = match tokio::spawn(async move { supervisor.publish_preview().await }).await {
+        Ok(Ok(host)) => host,
+        Ok(Err(failure)) => return error(&headers, failure.status, failure.code, &failure.msg),
+        Err(_) => return error(&headers, StatusCode::INTERNAL_SERVER_ERROR, "connect_start_failed", "a operação do Connect foi interrompida"),
+    };
+    match st.connect_previews.open(body.port, &host) {
+        Some(link) => reply(&headers, StatusCode::OK, json!({"url": format!("https://{host}/?{LINK_PARAM}={link}")})),
+        None => preview_port_refused(&headers),
+    }
+}
+
+async fn close_preview(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    let headers = req.headers().clone();
+    if let Err(mut response) = owner_gate(&st, peer, &req).await {
+        cors(&headers, response.headers_mut());
+        return response;
+    }
+    st.connect_previews.close();
+    reply(&headers, StatusCode::OK, json!({"ok": true}))
+}
+
 /// O andamento de cada ligação com outra máquina da conta: é o que a tela acompanha enquanto o cartão espera.
 async fn peer_links(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let headers = req.headers().clone();
@@ -278,6 +321,7 @@ async fn forget(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<
         cors(&headers, response.headers_mut());
         return response;
     }
+    st.connect_previews.close();
     let supervisor = st.connect_supervisor.clone();
     let outcome = tokio::spawn(async move { supervisor.forget().await }).await;
     finished(&st, &headers, outcome)

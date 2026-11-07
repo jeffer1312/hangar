@@ -3,6 +3,7 @@ use std::path::Path;
 
 use axum::http::StatusCode;
 
+use super::preview::PREVIEW_PORT;
 use super::state::Linked;
 use super::{CONNECT_PORT, ConnectError, GUEST_PORT};
 
@@ -55,7 +56,8 @@ pub fn render_frpc(linked: &Linked) -> Result<String, ConnectError> {
     linked.validate()?;
     let (server, server_port) = frps_endpoint(&linked.frps_addr).ok_or_else(Linked::invalid)?;
     let (token, key, proxy) = (&linked.frps_token, &linked.machine_key, frpc_proxy(&linked.host));
-    let guest = if linked.guest_published { format!("\n{}", frpc_proxy(&linked.guest_host)) } else { String::new() };
+    let extra = |published: bool, host: &str| if published { format!("\n{}", frpc_proxy(host)) } else { String::new() };
+    let (guest, preview) = (extra(linked.guest_published, &linked.guest_host), extra(linked.preview_published, &linked.preview_host));
     // heartbeatInterval: com multiplexação o frpc não manda Ping, e conta vencida seguiria no ar.
     Ok(format!(r#"serverAddr = "{server}"
 serverPort = {server_port}
@@ -66,7 +68,7 @@ loginFailExit = false
 metadatas.key = "{key}"
 transport.heartbeatInterval = 30
 
-{proxy}{guest}"#))
+{proxy}{guest}{preview}"#))
 }
 
 fn caddy_site(host: &str, port: u16) -> String {
@@ -85,6 +87,11 @@ fn caddy_site(host: &str, port: u16) -> String {
 /// Fora do `render_caddyfile`: só entra com a 8766 aberta por este servidor, quem decide é o supervisor.
 pub fn render_guest_site(linked: &Linked) -> String {
     caddy_site(&linked.guest_host, GUEST_PORT)
+}
+
+/// Sempre a 8769: trocar a porta do projeto não reinicia o Caddy. Como no do convidado, quem decide se entra é o supervisor.
+pub fn render_preview_site(linked: &Linked) -> String {
+    caddy_site(&linked.preview_host, PREVIEW_PORT)
 }
 
 /// `disable_http_challenge`: a porta 80 da VPS nunca chega aqui, e cada HTTP-01 sorteado gasta o limite de falhas.

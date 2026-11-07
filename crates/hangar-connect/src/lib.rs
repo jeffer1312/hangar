@@ -8,6 +8,7 @@ pub mod binaries;
 pub mod config;
 pub mod devices;
 pub mod peers;
+pub mod preview;
 pub mod state;
 // `prctl` no filho (Linux) e `kill` do grupo (Unix).
 #[allow(unsafe_code)]

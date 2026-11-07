@@ -98,7 +98,7 @@ fn linked_as(id: &str, service: SocketAddr) -> Linked {
     Linked { service_url: format!("http://{service}"), account: "acme".into(), machine_id: id.into(), machine_key: MACHINE_KEY.into(),
         host: host_of(id), guest_host: format!("{id}-guest.acme.hangar.dev.br"), preview_host: format!("{id}-preview.acme.hangar.dev.br"),
         frps_addr: "frps.hangar.dev.br:443".into(), frps_token: "token-do-frps-de-teste".into(),
-        service_public_key: vector()["public_key"].as_str().unwrap().to_owned(), guest_published: false }
+        service_public_key: vector()["public_key"].as_str().unwrap().to_owned(), guest_published: false, preview_published: false }
 }
 
 async fn machine(id: &'static str, server_id: &str, service: SocketAddr) -> Machine {

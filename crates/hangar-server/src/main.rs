@@ -191,6 +191,7 @@ async fn run() {
     state.startup = hangar_server::startup::Readiness::pending();
     state.front = hangar_server::routes::front_address(&state.accounts.env.home, state.cfg.listen);
     state.connect = hangar_server::config::connect_listen(state.cfg.listen);
+    state.preview = hangar_server::config::preview_listen(state.cfg.listen);
     let startup = state.startup.clone();
     let service = hangar_server::update::git_engine::Service::from_state(&state);
     let startup_environment = state.accounts.env.clone();

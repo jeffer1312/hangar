@@ -68,8 +68,17 @@ fn failure_text(error: &Failure) -> String {
         Some("connect_not_linked") => tr_shared("connect_error_not_linked", &[]),
         Some("connect_already_linked") => tr("connect_error_already_linked"),
         Some("connect_machine_limit") => tr("connect_error_machine_limit"),
+        Some("connect_preview_port_refused") => tr("connect_preview_port_refused"),
         _ => Hangar::fetch_failure(error),
     }
+}
+
+fn parse_port(text: &str) -> Option<u16> {
+    text.trim().parse::<u16>().ok().filter(|port| *port != 0)
+}
+
+fn parse_preview(value: Value) -> Result<String, String> {
+    value.get("url").and_then(Value::as_str).map(str::to_owned).ok_or_else(|| tr("invalid_response"))
 }
 
 /// Devolve a senha e já esvazia o campo. `set_value` limpa também o desfazer: o Ctrl+Z não a traz de volta.
@@ -85,15 +94,16 @@ fn submit_on_enter(input: &Entity<InputState>, window: &mut Window, cx: &mut Con
     })
 }
 
-struct LinkForm { account: Entity<InputState>, password: Entity<InputState>, machine: Entity<InputState>, _enter: [Subscription; 2] }
+struct LinkForm { account: Entity<InputState>, password: Entity<InputState>, machine: Entity<InputState>, preview_port: Entity<InputState>, _enter: [Subscription; 2] }
 
 impl LinkForm {
     fn new(window: &mut Window, cx: &mut Context<Hangar>) -> Self {
         let account = cx.new(|cx| InputState::new(window, cx));
         let password = cx.new(|cx| InputState::new(window, cx).masked(true));
         let machine = cx.new(|cx| InputState::new(window, cx));
+        let preview_port = cx.new(|cx| InputState::new(window, cx));
         let _enter = [submit_on_enter(&password, window, cx), submit_on_enter(&machine, window, cx)];
-        Self { account, password, machine, _enter }
+        Self { account, password, machine, preview_port, _enter }
     }
 }
 
@@ -106,6 +116,9 @@ pub(in crate::app) struct Connect {
     revoking: Option<String>,
     device_error: Option<String>,
     form: Option<LinkForm>,
+    preview_url: Option<String>,
+    preview_busy: bool,
+    preview_error: Option<String>,
 }
 
 pub(super) enum ConnectReply {
@@ -113,6 +126,8 @@ pub(super) enum ConnectReply {
     Saved(Result<Value, Failure>),
     Devices(u64, Result<Value, Failure>),
     Revoked(Result<Value, Failure>),
+    PreviewOpened(Result<Value, Failure>),
+    PreviewClosed(Result<Value, Failure>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -237,6 +252,35 @@ impl Hangar {
         cx.notify();
     }
 
+    fn start_preview(&mut self, cx: &mut Context<Self>) {
+        if self.connect.preview_busy { return; }
+        let Some(form) = &self.connect.form else { return };
+        let Some(port) = parse_port(&form.preview_port.read(cx).value().to_string()) else {
+            self.connect.preview_error = Some(tr("connect_preview_port_invalid"));
+            cx.notify();
+            return;
+        };
+        let Some(api) = self.api.clone() else { return };
+        (self.connect.preview_busy, self.connect.preview_error) = (true, None);
+        let done = self.connect_send_later();
+        self.runtime.spawn(async move {
+            // A primeira prévia reinicia o `frpc` e o Caddy: prazo longo.
+            done(ConnectReply::PreviewOpened(api.server_send(reqwest::Method::POST, &["connect", "preview"], Some(json!({"port": port})), 60).await)).await
+        });
+        cx.notify();
+    }
+
+    fn stop_preview(&mut self, cx: &mut Context<Self>) {
+        if self.connect.preview_busy { return; }
+        let Some(api) = self.api.clone() else { return };
+        (self.connect.preview_busy, self.connect.preview_error) = (true, None);
+        let done = self.connect_send_later();
+        self.runtime.spawn(async move {
+            done(ConnectReply::PreviewClosed(api.server_send(reqwest::Method::DELETE, &["connect", "preview"], None, 15).await)).await
+        });
+        cx.notify();
+    }
+
     fn confirm_revoke(&mut self, device: String, name: String, window: &mut Window, cx: &mut Context<Self>) {
         let machine = self.vault_machine_label(&self.active_key(), cx);
         let this = cx.entity().downgrade();
@@ -282,6 +326,20 @@ impl Hangar {
                 self.connect.revoking = None;
                 self.connect.device_error = result.err().map(|error| failure_text(&error));
                 self.load_connect_devices(cx);
+            }
+            ConnectReply::PreviewOpened(result) => {
+                self.connect.preview_busy = false;
+                match result.map_err(|error| failure_text(&error)).and_then(parse_preview) {
+                    Ok(url) => self.connect.preview_url = Some(url),
+                    Err(error) => self.connect.preview_error = Some(error),
+                }
+            }
+            ConnectReply::PreviewClosed(result) => {
+                self.connect.preview_busy = false;
+                match result {
+                    Ok(_) => self.connect.preview_url = None,
+                    Err(error) => self.connect.preview_error = Some(failure_text(&error)),
+                }
             }
         }
         if self.connect.form.is_none() && self.settings == Some(Page::Connect) {
@@ -438,6 +496,31 @@ impl Hangar {
         }
     }
 
+    /// Parar fica sempre à mão: a prévia mora no servidor, e o app reaberto não sabe se há uma.
+    fn render_connect_preview(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let form = self.connect.form.as_ref()?;
+        let busy = self.connect.preview_busy;
+        let link = self.connect.preview_url.clone().map(|url| {
+            let copied = url.clone();
+            div().flex().items_center().gap_2()
+                .child(div().flex_1().min_w_0().font_family(theme::MONO).text_sm().truncate().child(url))
+                .child(Button::new("connect-preview-copy").outline().small().flex_shrink_0().label(tr("connect_preview_copy"))
+                    .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copied.clone()))))
+        });
+        Some(div().flex().flex_col().gap_2()
+            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(tr("connect_preview_title")))
+            .child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(tr("connect_preview_help")))
+            .child(super::sync::sync_field(tr("connect_preview_port"), &form.preview_port, busy))
+            .children(self.connect.preview_error.clone().map(|error| div().id("connect-preview-error").role(Role::Alert)
+                .text_sm().text_color(theme::danger()).whitespace_normal().child(error)))
+            .child(div().flex().items_center().gap_2()
+                .child(Button::new("connect-preview-start").primary().small().label(tr("connect_preview_start")).loading(busy).disabled(busy)
+                    .on_click(cx.listener(|this, _, _, cx| this.start_preview(cx))))
+                .child(Button::new("connect-preview-stop").outline().small().label(tr("connect_preview_stop")).disabled(busy)
+                    .on_click(cx.listener(|this, _, _, cx| this.stop_preview(cx)))))
+            .children(link))
+    }
+
     pub(super) fn render_connect(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let title = div().flex().items_center().gap_2()
             .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).child(Page::Connect.title()))
@@ -492,6 +575,9 @@ impl Hangar {
                 .child(Button::new("connect-off").outline().small().label(tr("connect_off")).disabled(saving)
                     .on_click(cx.listener(|this, _, window, cx| this.confirm_unlink(window, cx)))));
         }
+        if state == Phase::Ready {
+            page = page.children(self.render_connect_preview(cx));
+        }
         // Desligar guarda as credenciais dos aparelhos: quem ficou com uma ainda pode ser revogado.
         if linked || self.connect.devices.ok().is_some_and(|devices| !devices.is_empty()) {
             page = page.child(self.render_connect_devices(cx));
@@ -502,7 +588,7 @@ impl Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{device_card, device_view, merge, parse_devices, parse_status, phase, take_password, Device, DeviceStatus, DeviceView, InputState, Phase, Remote, Request};
+    use super::{device_card, device_view, merge, parse_devices, parse_port, parse_preview, parse_status, phase, take_password, Device, DeviceStatus, DeviceView, InputState, Phase, Remote, Request};
     use crate::i18n::tr_shared;
     // O nome explícito vence qualquer `test` trazido por glob.
     use core::prelude::v1::test;
@@ -579,6 +665,16 @@ mod tests {
         let failed = [Request { error: Some("recusado".to_owned()), ..cards[0].clone() }];
         assert_eq!(merge(&failed, &devices)[0].error.as_deref(), Some("recusado"));
         assert!(merge(&failed, &[]).is_empty(), "aparelho decidido em outro lugar sai da tela");
+    }
+
+    #[test]
+    fn preview_form_reads_the_port_and_the_link() {
+        assert_eq!(parse_port(" 3000 "), Some(3000));
+        for bad in ["", "0", "65536", "porta"] {
+            assert_eq!(parse_port(bad), None, "{bad}");
+        }
+        assert_eq!(parse_preview(json!({"url": "https://a/?hangar_preview=b"})).as_deref(), Ok("https://a/?hangar_preview=b"));
+        assert!(parse_preview(json!({})).is_err());
     }
 
     #[test]

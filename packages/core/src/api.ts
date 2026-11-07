@@ -4496,6 +4496,16 @@ export function revokeAllShares(name: string, server?: Server | null): Promise<{
   return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/share`, { method: 'DELETE' });
 }
 
+/** Prévia de porta pelo Connect: `url` abre uma vez só. A primeira da máquina reinicia o `frpc` e o Caddy,
+ * e quem pede pelo próprio Connect pode perder esta resposta: pedir de novo já volta na hora. */
+export function openConnectPreview(server: Server, port: number): Promise<{ url: string }> {
+  return apiFetchForServer(server, '/api/connect/preview', { method: 'POST', body: JSON.stringify({ port }) }, 60_000);
+}
+
+export function closeConnectPreview(server: Server): Promise<{ ok: boolean }> {
+  return apiFetchForServer(server, '/api/connect/preview', { method: 'DELETE' });
+}
+
 // Stream da lista de um convite caiu: 410 aqui é o dono ter encerrado, e o gancho do `apiFetchRes`
 // já avisou (401 vale o mesmo que 410). 503 devolve false (indisponível por instantes, não encerrado). `probe`: a queda acabou
 // de esfriar o servidor, e esta pergunta não pode esperar o prazo.

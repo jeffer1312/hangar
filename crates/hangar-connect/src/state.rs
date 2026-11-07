@@ -43,6 +43,9 @@ pub struct Linked {
     /// O primeiro convite já pediu o site do convidado. Fica: cada host gasta um certificado do limite semanal.
     #[serde(default)]
     pub guest_published: bool,
+    /// Como `guest_published`, para o site da prévia de porta.
+    #[serde(default)]
+    pub preview_published: bool,
 }
 
 impl Linked {
@@ -220,6 +223,7 @@ pub async fn register(request: &LinkRequest) -> Result<Linked, ConnectError> {
         frps_token: machine.frps_token,
         service_public_key: machine.service_public_key,
         guest_published: false,
+        preview_published: false,
     };
     linked.validate()?;
     Ok(linked)

@@ -326,7 +326,7 @@ mod tests {
     fn linked(service_url: &str) -> Linked {
         Linked { service_url: service_url.into(), account: "acme".into(), machine_id: "pc-a".into(), machine_key: String::new(),
             host: "pc-a.acme.hangar.dev.br".into(), guest_host: String::new(), preview_host: String::new(), frps_addr: String::new(),
-            frps_token: String::new(), service_public_key: String::new(), guest_published: false }
+            frps_token: String::new(), service_public_key: String::new(), guest_published: false, preview_published: false }
     }
 
     #[test]
