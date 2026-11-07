@@ -136,9 +136,9 @@ function Stop-HangarCandidate($candidate, $process) {
     # O PowerShell engole o erro da leitura e devolve nulo do processo que esta saindo (o hangar-server
     # morre logo depois do Python dele): espera a saida antes de chamar de identidade ilegivel.
     if ($null -eq $started) {
-        foreach ($wait in 1..30) {
+        foreach ($wait in 0..30) {
             if ((Test-HangarExited $process) -or -not (Get-Process -Id $candidate.ProcessId -ErrorAction SilentlyContinue)) { return }
-            Start-Sleep -Milliseconds 100
+            if ($wait -lt 30) { Start-Sleep -Milliseconds 100 }
         }
         throw "Identidade do processo $($candidate.ProcessId) ilegivel; parada cancelada"
     }
