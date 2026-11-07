@@ -140,18 +140,36 @@ Vale para toda Task que move código para o core ou para outro crate.
    crate mudado quando ele é o `hangar-server` e passa a `--workspace` quando muda outro crate, o
    que já cobre os crates novos. Código só de Windows (`#[cfg(windows)]`, `scope_prefix` só no
    Unix) só falha na matriz do CI ou na VM: a prova final da Task inclui o passo Windows.
+9. **Na prática (aprendido nas Tasks 1 e 2).**
+   - O que o servidor usa de um item que desce: procurar `modulo::nome` e `modulo::{…nome…}` em
+     `src/`, `tests/` e `examples/` do servidor (o CI compila o exemplo `orq_contract`) e confirmar
+     com `cargo-pinned check -p hangar-server --all-targets`. Só esses itens viram `pub`; os outros
+     ficam `pub(crate)`. Aviso de "never used" no core depois da mudança aponta código morto: apagar.
+   - Import com `*` não aparece na busca por nome: procurar `modulo::\*` antes de estreitar.
+   - Re-export sem uso no servidor leva `#[allow(unused_imports)]` e um comentário curto dizendo
+     que é de compatibilidade; o re-export não sai só porque o compilador avisou.
+   - O `cargo-pinned` acrescenta `-j` no fim, então filtro de teste depois de `--` quebra. Para
+     rodar só alguns testes, compilar com `--no-run` e chamar o executável de `target/debug/deps`
+     direto com os filtros, gravando a saída num arquivo.
+   - Teste que falha só com a suíte inteira e passa 20 de 20 sozinho é tempo sob carga: registrar
+     o nome no relato e seguir; não é causado pela mudança de lugar.
+   - Uso real: binário de release da branch no servidor do notebook pelo drop-in
+     `CP_RUST_SERVER_BIN`, sempre com o par `hangar-server.auth.json` + `auth/` ao lado e com volta
+     automática por timer do systemd; comparar as mesmas chamadas HTTP no pacote e na branch
+     (`~/.hangar/teste-split/`). Cada troca derruba o servidor por alguns segundos: avisar antes.
 
 Provas comuns, rodadas quando o Jefferson pedir, nesta ordem e uma por vez (`cargo-pinned` segura a
 trava da máquina):
 
 ```bash
-scripts/cargo-pinned build -p hangar-server                       # compila; servidor e crate novo
+scripts/cargo-pinned check -p hangar-server --all-targets          # rápido: tipos, testes e exemplos
 scripts/cargo-pinned test -p <crate-novo>                          # testes do crate novo
-scripts/cargo-pinned test -p hangar-server --test it               # integração do servidor
-scripts/verificar-local                                            # antes do PR
+scripts/cargo-pinned test -p hangar-server --test it --no-run      # compila a integração; roda o executável direto
 ```
 
-E a conferência da invariante acima (nenhuma aresta para `hangar-server`).
+E a conferência da invariante acima (nenhuma aresta para `hangar-server`). O `scripts/verificar-local`
+não roda no notebook (já derrubou sessões por falta de memória): o PR sobe com
+`HANGAR_SEM_VERIFICACAO=1` e o CI do GitHub é a bateria completa, Windows incluído.
 
 ## Coordenação com as sessões que migram Python → `hangar-server`
 
