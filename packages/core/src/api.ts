@@ -1559,7 +1559,12 @@ export function defaultBase(info: FolderBranches): string {
 // A mesma base, pela remota quando a local está atrás: a worktree nova nasce atualizada sem pull na pasta.
 export function freshBase(info: FolderBranches): string {
   const base = defaultBase(info);
-  return info.upstreams?.[base]?.upstream ?? base;
+  return upstreamOf(info, base)?.upstream ?? base;
+}
+
+// Só a entrada própria: uma branch pode se chamar `constructor`.
+function upstreamOf(info: FolderBranches, branch: string) {
+  return info.upstreams && Object.prototype.hasOwnProperty.call(info.upstreams, branch) ? info.upstreams[branch] : undefined;
 }
 
 function localBranches(info: FolderBranches): string[] {
@@ -1570,7 +1575,7 @@ function localBranches(info: FolderBranches): string[] {
 export function baseChoices(info: FolderBranches): { name: string; behind: number }[] {
   const seen = new Set<string>();
   return localBranches(info).flatMap((name) => {
-    const up = info.upstreams?.[name];
+    const up = upstreamOf(info, name);
     return [...(up ? [{ name: up.upstream, behind: 0 }] : []), { name, behind: up?.behind ?? 0 }];
   }).filter(({ name }) => !seen.has(name) && !!seen.add(name));
 }
@@ -1578,7 +1583,7 @@ export function baseChoices(info: FolderBranches): { name: string; behind: numbe
 // O que a worktree não leva ao partir da remota: os commits que só a branch local tem.
 export function commitsLeftOut(info: FolderBranches, base: string): { branch: string; ahead: number } | null {
   for (const branch of localBranches(info)) {
-    const up = info.upstreams?.[branch];
+    const up = upstreamOf(info, branch);
     if (up?.upstream === base && up.ahead > 0) return { branch, ahead: up.ahead };
   }
   return null;

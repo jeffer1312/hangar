@@ -6,6 +6,7 @@ import { useRouter } from 'expo-router';
 import { getArchivePorCwd, getCodexAccountsForServer, defaultCodexAccount,
   getEnginesForServer, getSessionDefaultsForServer, fetchSessionsForServer, listClaudeConfigsForServer, probeServerResponse,
   modelOptionsForServer, resumeArchivedConversation, getProvidersForServer, createSessionForServer, sanitizeSessionName, getWorktreesForServer,
+  folderGitActionForServer, freshBase, getFolderBranchesForServer,
   PrewarmReserve, prewarmSessionForServer, releasePrewarmForServer } from '@hangar/core';
 import { basename, ctxWindow, providerName, contaComFolga, cotaDaConta, cotaParada, janelaEsgotada, motivoCotaAntiga, resumoCota, CLAUDE_PERMISSION_MODES, EFFORT_LEVELS,
   SESSION_PROVIDERS, hasExecutionMode, effortLevels, contextRefsPlainText } from '@hangar/core';
@@ -112,7 +113,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const [worktree, setWorktree] = useState<WorktreeChoice | null>(null);
   const onWorktree = useCallback((v: WorktreeChoice | null) => setWorktree(v), []);
   // Fora do painel, que desmonta ao fechar: `worktree.base` sozinho não diz se a base foi escolhida ou é o padrão.
-  const basePicked = useRef(false);
+  const basePicked = useRef<string | null>(null);
   const [branchTaken, setBranchTaken] = useState(false);
   const [branchOpen, setBranchOpen] = useState(false);
   const [folderOpen, setFolderOpen] = useState(false);
@@ -494,7 +495,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     const generation = ++pickGeneration.current;
     setPicked(p);
     setWorktree(null);
-    basePicked.current = false;
+    basePicked.current = null;
     setBranchTaken(false);
     setError('');
     setProjectWarning('');
@@ -688,8 +689,21 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     : !worktree ? m.native_create_checkout_current()
     : !worktree.new_branch ? m.worktree_menu_pill_nova({ branch: worktree.branch })
     : m.worktree_menu_pill_nova({ branch: worktree.branch || m.worktree_menu_nome_sessao() });
+  // O painel desmonta ao fechar e leva junto a releitura depois do fetch; a base padrão ainda precisa acompanhar a remota.
+  const newWorktree = !!worktree?.new_branch;
+  const gitFolder = pickedRepo ?? picked;
+  useEffect(() => {
+    if (branchOpen || !newWorktree || !gitFolder || basePicked.current) return;
+    let vivo = true;
+    const reread = () => getFolderBranchesForServer(active, gitFolder);
+    folderGitActionForServer(active, gitFolder, 'fetch').then(reread, reread)
+      .then((r) => { if (vivo && !basePicked.current) setWorktree((v) => (v?.new_branch ? { ...v, base: freshBase(r) } : v)); })
+      // Sem leitura, fica a base que a tela já mostrou.
+      .catch(() => {});
+    return () => { vivo = false; };
+  }, [branchOpen, newWorktree, gitFolder, active.id]);
 
-  const on = (yes: boolean) => (yes ? 'on' : 'off') as 'on' | 'off';
+  const on =(yes: boolean) => (yes ? 'on' : 'off') as 'on' | 'off';
 
   const terminalOnly = m.nova_conversa_so_terminal({ provider: providerName(provider) });
   // A mesma escolha vira pílula na conversa nova e linha no formulário completo.

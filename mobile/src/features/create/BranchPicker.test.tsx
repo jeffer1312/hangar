@@ -36,13 +36,13 @@ vi.mock('../../paraglide/messages', () => ({
 vi.mock('../../ui/haptics', () => ({ haptic: { success: vi.fn(), error: vi.fn(), selection: vi.fn() } }));
 vi.mock('./FolderBranchMenu', () => ({ FolderBranchMenu: () => createElement('div', { 'data-menu': 'branches' }) }));
 const MAIN = { current: 'main' as string | null, branches: ['main', 'x'], remotes: [] as string[], dirty: false, worktree_parent: null as string | null };
-const folder = vi.hoisted(() => ({ value: null as unknown, worktrees: [] as unknown[], git: null as unknown, gitFails: false, action: null as unknown as (action: string) => Promise<unknown> }));
+const folder = vi.hoisted(() => ({ value: null as unknown, held: null as Promise<unknown> | null, worktrees: [] as unknown[], git: null as unknown, gitFails: false, action: null as unknown as (action: string) => Promise<unknown> }));
 folder.value = { ...MAIN };
 const GIT = { repo: true, current: 'main', upstream: 'origin/main', dirty: 0, ahead: 0, behind: 2, last_fetch: null };
 folder.git = GIT;
 folder.action = () => Promise.resolve(folder.git);
 vi.mock('@hangar/core', async (original) => ({ ...await original<typeof import('@hangar/core')>(),
-  getFolderBranchesForServer: () => Promise.resolve(folder.value),
+  getFolderBranchesForServer: () => folder.held ?? Promise.resolve(folder.value),
   getFolderGitForServer: () => folder.gitFails ? Promise.reject(new Error('sem rede')) : Promise.resolve(folder.git),
   folderGitActionForServer: (_server: unknown, _cwd: string, action: string) => folder.action(action),
   getWorktreesForServer: () => Promise.resolve([{ repo: '/r', worktrees: folder.worktrees }]) }));
@@ -50,12 +50,12 @@ import { BranchPicker } from './BranchPicker';
 
 const wt = (name: string, sessions: string[] = []) => ({ path: `/r/.worktrees/${name}`, repo: '/r', exists: true, branch: name, sessions });
 
-async function mount(props: Partial<{ cwd: string; worktreePath: string; value: unknown; basePicked: boolean }> = {}) {
+async function mount(props: Partial<{ cwd: string; worktreePath: string; value: unknown; basePicked: string }> = {}) {
   const onChange = vi.fn();
   const onPickFolder = vi.fn();
   const el = document.createElement('div');
   await act(async () => { createRoot(el).render(createElement(BranchPicker, {
-    server: { id: 's' } as never, cwd: props.cwd ?? '/r', worktreePath: props.worktreePath, sessionName: 'rust-parte3', value: (props.value ?? null) as never, onChange, basePicked: { current: props.basePicked ?? false }, onPickFolder })); });
+    server: { id: 's' } as never, cwd: props.cwd ?? '/r', worktreePath: props.worktreePath, sessionName: 'rust-parte3', value: (props.value ?? null) as never, onChange, basePicked: { current: props.basePicked ?? null }, onPickFolder })); });
   return { el, onChange, onPickFolder };
 }
 const press = (el: HTMLElement, label: string) => act(async () => { (el.querySelector(`[aria-label="${label}"]`) as HTMLElement).click(); });
@@ -100,9 +100,23 @@ describe('BranchPicker', () => {
       const reopened = await mount({ value: { branch: '', new_branch: true, base: 'main' } });
       expect(reopened.onChange).toHaveBeenLastCalledWith({ branch: '', new_branch: true, base: 'origin/main' });
       folder.value = { ...MAIN };
-      const chosen = await mount({ value: { branch: '', new_branch: true, base: 'main' }, basePicked: true });
+      // Reabrir depois de digitar uma branch que já existe: o valor do pai vem sem base, e a escolha continua.
+      const chosen = await mount({ value: { branch: '', new_branch: true }, basePicked: 'main' });
       expect(chosen.onChange).toHaveBeenLastCalledWith({ branch: '', new_branch: true, base: 'main' });
     } finally { folder.value = { ...MAIN }; folder.action = () => Promise.resolve(folder.git); }
+  });
+
+  it('a escolha feita durante a releitura vence a remota que ela traz', async () => {
+    let release = (_: unknown) => {};
+    folder.action = () => { folder.held = new Promise((done) => { release = done; }); return Promise.resolve(folder.git); };
+    try {
+      const { el, onChange } = await mount();
+      await press(el, 'nova');
+      await press(el, 'parte main');
+      await press(el, 'x');
+      await act(async () => { release({ ...MAIN, upstreams: { main: { upstream: 'origin/main', ahead: 0, behind: 3 } } }); });
+      expect(onChange).toHaveBeenLastCalledWith({ branch: '', new_branch: true, base: 'x' });
+    } finally { folder.held = null; folder.action = () => Promise.resolve(folder.git); }
   });
 
   it('a única lista de branches é a das bases, escondida até tocar em "Parte de"', async () => {

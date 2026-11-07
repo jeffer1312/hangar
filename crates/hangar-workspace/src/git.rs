@@ -373,6 +373,11 @@ fn remote_ref(cwd: &Path, branch: &str) -> Result<String> {
     }
     Ok(refs[0].into())
 }
+/// A base escrita como `origin/main`, pelo nome completo: uma tag igual ou o sufixo de outra remota não a trocam.
+fn tracking_ref(cwd: &Path, base: &str) -> Result<Option<String>> {
+    let full = format!("refs/remotes/{base}");
+    Ok((command(cwd, &["show-ref", "--verify", "--quiet", &full])?.code == 0).then_some(full))
+}
 fn branch_name_ok(cwd: &Path, name: &str) -> Result<bool> {
     // Nome começando com "-" viraria flag do `worktree add -b`.
     if name.is_empty() || name.starts_with('-') || name != name.trim() {
@@ -454,8 +459,7 @@ fn create_worktree_in(
             .or(info["current"].as_str())
             .unwrap_or_default()
             .to_owned();
-        let tracking = format!("refs/remotes/{start}");
-        if start.is_empty() || !(known(&start) || command(cwd, &["show-ref", "--verify", "--quiet", &tracking])?.code == 0) {
+        if start.is_empty() || !(known(&start) || tracking_ref(cwd, &start)?.is_some()) {
             return Err(error(400, "branch base inexistente"));
         }
     } else {
@@ -480,10 +484,12 @@ fn create_worktree_in(
     // A branch só remota vira local (`--track -b`); desfazer apaga as duas que nasceram aqui.
     let branch_created = new_branch || !local.iter().any(|b| b == branch);
     let created = if new_branch {
-        let from = if info["remotes"].as_array().unwrap().iter().any(|b| b == start.as_str()) {
-            remote_ref(cwd, &start)?
-        } else {
+        let from = if local.iter().any(|b| b == start.as_str()) {
             start.clone()
+        } else if let Some(full) = tracking_ref(cwd, &start)? {
+            full
+        } else {
+            remote_ref(cwd, &start)?
         };
         // Sem --no-track a branch nova herdaria o upstream da base: o pull puxaria a base.
         command(

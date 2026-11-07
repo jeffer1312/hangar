@@ -291,6 +291,8 @@ fn new_worktree_starts_from_the_upstream_of_a_stale_branch() {
     let info = op(&repo, "list_branches", json!({}));
     assert_eq!(info["upstreams"], json!({"main": {"upstream": "origin/main", "ahead": 1, "behind": 1}}));
 
+    // A outra remota termina no mesmo nome: a base escolhida continua sendo a de `origin`.
+    git(&repo, &["update-ref", "refs/remotes/other/origin/main", "HEAD"]);
     let worktrees = root.join("worktrees");
     let made = create_branch_worktree(&repo, "nova", "nova", &root, true, Some("origin/main"), &worktrees).unwrap();
     let read = |args: &[&str]| Command::new("git").arg("-C").arg(&made.path).args(args).output().unwrap();

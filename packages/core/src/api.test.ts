@@ -1327,6 +1327,12 @@ describe('base da worktree nova com a branch local atrás da remota', () => {
     ]);
   });
 
+  it('branch chamada constructor não vira remota', () => {
+    const named = { current: 'constructor', branches: ['constructor'], remotes: [], dirty: false, upstreams: {} };
+    expect(freshBase(named)).toBe('constructor');
+    expect(baseChoices(named)).toEqual([{ name: 'constructor', behind: 0 }]);
+  });
+
   it('commitsLeftOut fala da branch atual e só quando a base é a remota dela', () => {
     expect(commitsLeftOut(info, 'origin/main')).toEqual({ branch: 'main', ahead: 1 });
     expect(commitsLeftOut(info, 'main')).toBeNull();

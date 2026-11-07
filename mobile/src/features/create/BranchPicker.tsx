@@ -20,8 +20,8 @@ type Props = { server: Server;
                worktreePath?: string;
                sessionName: string; value: WorktreeChoice | null;
                onChange: (v: WorktreeChoice | null) => void;
-               /** A pessoa escolheu a base: o fetch da abertura só leva à remota a base que ninguém escolheu. */
-               basePicked: { current: boolean };
+               /** A base que a pessoa escolheu: o fetch só leva à remota a base que ninguém escolheu. */
+               basePicked: { current: string | null };
                /** Abrir a sessão noutra pasta (uma worktree que já existe, ou de volta à principal); `keepOpen` mantém o painel para o aviso. */
                onPickFolder: (path: string, keepOpen: boolean, repo?: string) => void;
                /** Branch nova com o nome de uma já aberta: o servidor recusaria, a criação fica travada. */
@@ -93,7 +93,7 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
   // O painel desmonta ao fechar: a escolha volta de `value` para não zerar a cada abertura.
   const [fresh, setFresh] = useState(!!value);
   const [name, setName] = useState(value?.branch ?? '');
-  const [base, setBase] = useState(value?.base ?? '');
+  const [base, setBase] = useState(basePicked.current ?? value?.base ?? '');
   const [baseOpen, setBaseOpen] = useState(false);
   const [picking, setPicking] = useState(false);
   const [agentsOpen, setAgentsOpen] = useState(false);
@@ -177,7 +177,7 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
     setFailed('');
     setLoading(true);
     getFolderBranchesForServer(server, cwd)
-      .then((r) => { if (vivo) { infoFolder.current = cwd; setInfo(r); setBase((b) => (basePicked.current && b) || freshBase(r)); } })
+      .then((r) => { if (vivo) { infoFolder.current = cwd; setInfo(r); setBase(basePicked.current ?? freshBase(r)); } })
       .catch((e: unknown) => {
         // Releitura da mesma pasta que falhou: a lista anterior fica, com o aviso da ação que veio antes.
         if (!vivo || infoFolder.current === cwd) return;
@@ -362,7 +362,7 @@ export function BranchPicker({ server, cwd, worktreePath, sessionName, value, on
       {fresh ? (
         <View style={styles.fields}>
           <BaseField info={info} base={base} open={baseOpen} disabled={known} onToggle={() => setBaseOpen((o) => !o)}
-            onPick={(b) => { basePicked.current = true; setBase(b); setBaseOpen(false); }} />
+            onPick={(b) => { basePicked.current = b; setBase(b); setBaseOpen(false); }} />
           <View style={styles.line}>
             <Text style={styles.fieldLabel}>{m.worktree_menu_branch()}</Text>
             <TextInput accessibilityLabel={m.worktree_menu_branch()} placeholder={sessionName} value={name}
