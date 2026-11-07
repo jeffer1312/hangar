@@ -51,6 +51,7 @@ function readReach(server: Server, base: string): Promise<unknown> {
   const key = JSON.stringify([server.id, base, server.token]);
   const existing = reachReads.get(key);
   if (existing && existing.expires > Date.now()) return existing.promise;
+  for (const [old, read] of reachReads) if (read.expires <= Date.now()) reachReads.delete(old);
   const promise = (async () => {
     const response = await fetch(`${base}/api/alcance`, {
       headers: { Authorization: `Bearer ${server.token}` }, signal: AbortSignal.timeout(8000), redirect: 'error',
@@ -58,7 +59,10 @@ function readReach(server: Server, base: string): Promise<unknown> {
     if (!response.ok) throw new Error(`remote_discovery_http_${response.status}`);
     return await response.json() as unknown;
   })();
-  reachReads.set(key, { promise, expires: Date.now() + 30_000 });
+  const entry = { promise, expires: Date.now() + 30_000 };
+  reachReads.set(key, entry);
+  // Falha não fica no cache: a rede que voltou é lida na hora.
+  promise.catch(() => { if (reachReads.get(key) === entry) reachReads.delete(key); });
   return promise;
 }
 

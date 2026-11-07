@@ -436,6 +436,14 @@ describe('rota do Connect', () => {
     expect(await readConnectUrl(srv())).toBeNull();
   });
 
+  it('lê o alcance de novo depois de uma falha, sem esperar o cache', async () => {
+    env(null);
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    expect(await readConnectUrl(srv())).toBeNull();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ enderecos: [], connect: CONNECT }))));
+    expect(await readConnectUrl(srv())).toBe(CONNECT);
+  });
+
   it('never tries connect with the owner password', async () => {
     env(null);
     const saved = { ...srv({ url: '', id: 'maq' }), connect: { url: CONNECT, id: 'maq' } };

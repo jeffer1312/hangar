@@ -123,7 +123,9 @@ export async function confirmImportedMachine(server: Server): Promise<Server> {
 function importReader(source: Server): Server | null {
   if (source.credential !== 'device') return source;
   const base = baseOf(source);
-  if (!source.ownerToken || base === UNCONFIRMED_BASE || base === source.connect?.url) return null;
+  // O Connect recusa a senha do dono: ela não vai a esse endereço nem quando a rota dele não foi gravada.
+  const connectHost = new URL(base).hostname.endsWith('.hangar.dev.br');
+  if (!source.ownerToken || base === UNCONFIRMED_BASE || base === source.connect?.url || connectHost) return null;
   return { id: SERVIDOR_CANDIDATO, label: source.label, baseUrl: base, token: source.ownerToken };
 }
 

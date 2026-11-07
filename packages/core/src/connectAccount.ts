@@ -55,8 +55,12 @@ export function signIn(serviceUrl: string, name: string, password: string): Prom
 
 export async function listMachines(session: AccountSession): Promise<ConnectMachine[]> {
   const machines = await request(session.serviceUrl, '/v1/machines', { headers: { Authorization: `Bearer ${session.token}` } });
-  if (!Array.isArray(machines)) throw fail('connect_response_invalid');
-  return machines as ConnectMachine[];
+  const valid = (item: unknown): item is ConnectMachine => {
+    const { machine_id: id, name, host, online } = record(item);
+    return filled(id) && filled(name) && filled(host) && typeof online === 'boolean';
+  };
+  if (!Array.isArray(machines) || !machines.every(valid)) throw fail('connect_response_invalid');
+  return machines;
 }
 
 /** Encerra todas as sessões da conta, inclusive a deste aparelho. */
@@ -106,6 +110,7 @@ async function waitForApproval(base: string, deviceId: string, secret: string): 
       if (!filled(answer.token)) throw fail('connect_token_lost');
       return answer.token;
     }
+    if (answer.status !== 'pending') throw fail('connect_response_invalid');
   }
   throw fail('connect_approval_expired');
 }

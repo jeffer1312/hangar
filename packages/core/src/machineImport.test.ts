@@ -95,9 +95,9 @@ describe('confirmação e redirecionamentos', () => {
   test.each([
     { name: 'sem senha guardada', source: device },
     { name: 'pelo Connect', source: { ...device, ownerToken: 'owner-password', connect: { url: machine.baseUrl, id: 'home' } } },
-  ])('aparelho $name registra o motivo e não lê nada', async ({ source }) => {
+    { name: 'no endereço do Connect sem a rota gravada', source: { ...device, baseUrl: 'https://home.acme.hangar.dev.br', ownerToken: 'owner-password' } },  ])('aparelho $name registra o motivo e não lê nada', async ({ source }) => {
     expect(await discoverMachineCandidates([source], () => [source])).toEqual({
-      candidates: [], issues: [{ stage: 'device_source', machine: 'home.test' }],
+      candidates: [], issues: [{ stage: 'device_source', machine: new URL(source.baseUrl).hostname }],
     });
     expect(fetchMock).not.toHaveBeenCalled();
   });

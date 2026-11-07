@@ -83,6 +83,16 @@ describe('conta do Connect', () => {
     expect(calls[0].auth).toBe('Bearer account-token');
   });
 
+  it.each([
+    { machine_id: 7, name: 'pc1', host: 'pc1.acme.hangar.dev.br', online: true },
+    { name: 'pc1', host: 'pc1.acme.hangar.dev.br', online: true },
+    { machine_id: 'm1', name: 'pc1', host: 'pc1.acme.hangar.dev.br', online: 'yes' },
+    null,
+  ])('recusa item da lista fora do contrato: %j', async (item) => {
+    network(() => json([machine, item]));
+    await expect(listMachines(session)).rejects.toMatchObject({ code: 'connect_response_invalid' });
+  });
+
   it('encerra as sessões e troca a senha, que respondem sem corpo', async () => {
     const calls = network(() => new Response(null, { status: 204 }));
     await endAccountSessions(session);
@@ -139,6 +149,13 @@ describe('addMachine', () => {
     const outcome = addMachine(session, machine, 'Pixel', () => {}).catch((error: unknown) => error);
     await elapse(6000);
     expect(await outcome).toMatchObject({ code: 'connect_device_denied' });
+  });
+
+  it('para num status que não conhece em vez de esperar o prazo', async () => {
+    enrollment([{ status: 'revoked' }]);
+    const outcome = addMachine(session, machine, 'Pixel', () => {}).catch((error: unknown) => error);
+    await elapse(6000);
+    expect(await outcome).toMatchObject({ code: 'connect_response_invalid' });
   });
 
   it('para no fim do prazo da aprovação', async () => {
