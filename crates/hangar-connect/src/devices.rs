@@ -256,6 +256,12 @@ impl Store {
         })
     }
 
+    /// Credencial que esta máquina entrega a outra da mesma conta. Sem cartão aqui: a ligação foi
+    /// pedida pelo dono desta máquina, e o cartão aprovado é o da outra.
+    pub fn issue_local(&self, name: &str) -> Result<(DeviceId, String), Refusal> {
+        self.enroll(name)
+    }
+
     pub fn list(&self) -> Vec<Row> {
         let now = (self.clock)();
         let mut state = self.lock();

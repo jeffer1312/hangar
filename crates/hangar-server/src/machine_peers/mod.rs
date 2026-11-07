@@ -132,6 +132,10 @@ pub struct Service {
     pub on_identity: Option<Arc<dyn Fn(String) + Send + Sync>>,
     /// Endereço do Connect desta máquina, fora de `enderecos`: `tipo` novo ali derruba o `parse_reach` do nativo.
     pub connect: Option<String>,
+    /// Pasta da ligação com o Connect (`connect.json`): de lá sai a chave da descoberta pela conta.
+    pub connect_dir: Option<PathBuf>,
+    /// O pedido chegou com credencial de aparelho, não com a senha.
+    pub device_caller: bool,
 }
 impl Service {
     pub fn new(
@@ -164,6 +168,8 @@ impl Service {
             settings: None,
             on_identity: None,
             connect: None,
+            connect_dir: None,
+            device_caller: false,
         })
     }
     pub fn from_state(st: &Arc<AppState>) -> Result<Self, Error> {
@@ -178,6 +184,7 @@ impl Service {
         )?;
         service.settings=Some(st.settings_snapshot().map_err(|_|Error::unavailable())?);
         service.connect=st.connect_supervisor.status().host.map(|host|format!("https://{host}"));
+        service.connect_dir=Some(st.connect_supervisor.dir().to_path_buf());
         let state = Arc::downgrade(st);
         service.on_identity = Some(Arc::new(move |id| {
             if let Some(state) = state.upgrade() {
@@ -400,6 +407,7 @@ async fn handle_inner(
     };
     service.request_id=crate::routes::diag_req(&request);
     let device_caller=request.extensions().get::<crate::connect::gate::DeviceCaller>().is_some();
+    service.device_caller=device_caller;
     if path=="/api/peers/prova" && let Some(device)=query.get("device") {
         match st.connect_devices.proof_key(device) {
             Some(key)=>service.token=key,
@@ -498,7 +506,7 @@ pub async fn dispatch(
             let path = path.to_owned();
             tokio::task::spawn_blocking(move || match (method.as_str(), path.as_str()) {
                 ("GET", "/api/peers") => Ok(service.store.list()),
-                ("POST", "/api/peers") => service.store.put(&body),
+                ("POST", "/api/peers") => service.store.put_from(&body,service.device_caller),
                 ("GET", "/api/peers/app-list") => service.store.app_list(),
                 ("PUT", "/api/peers/app-list") => service.store.app_write(&body),
                 _ => {

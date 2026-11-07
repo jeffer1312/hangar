@@ -16,6 +16,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::{oneshot, watch};
 
 use super::devices::Store;
+use super::peers::Links;
 use super::state::{self, LinkRequest, Linked};
 use super::{CONNECT_PORT, ConnectError, binaries, config};
 use hangar_core::terminal_process::{CommandTree, OwnedTree, PRIVATE_ENV_KEYS};
@@ -94,6 +95,7 @@ pub struct Supervisor {
     /// A subida do servidor e um pedido da tela podem chegar juntos: sem fila, nasceriam dois de cada.
     run: tokio::sync::Mutex<Option<Run>>,
     linking: tokio::sync::Mutex<()>,
+    peer_links: Links,
 }
 
 fn main_port_message() -> String {
@@ -104,7 +106,7 @@ fn start_failed(cause: String) -> ConnectError {
     ConnectError::new(StatusCode::INTERNAL_SERVER_ERROR, "connect_start_failed", format!("o Connect não subiu: {cause}"))
 }
 
-async fn off_thread<T: Send + 'static>(op: impl FnOnce() -> Result<T, ConnectError> + Send + 'static) -> Result<T, ConnectError> {
+pub(super) async fn off_thread<T: Send + 'static>(op: impl FnOnce() -> Result<T, ConnectError> + Send + 'static) -> Result<T, ConnectError> {
     tokio::task::spawn_blocking(op).await.unwrap_or_else(|cause| Err(start_failed(cause.to_string())))
 }
 
@@ -112,7 +114,15 @@ impl Supervisor {
     pub fn new(dir: PathBuf, log_dir: PathBuf, devices: Arc<Store>, main_port: u16) -> Self {
         let live = Live { port_error: (main_port == CONNECT_PORT).then(main_port_message), ..Live::default() };
         Self { dir, log_dir, main_port, devices, programs: None, live: Arc::new(Mutex::new(live)), bound: watch::channel(false).0,
-            run: tokio::sync::Mutex::new(None), linking: tokio::sync::Mutex::new(()) }
+            run: tokio::sync::Mutex::new(None), linking: tokio::sync::Mutex::new(()), peer_links: Links::default() }
+    }
+
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    pub fn peer_links(&self) -> &Links {
+        &self.peer_links
     }
 
     /// Teste: programas falsos no lugar dos baixados.

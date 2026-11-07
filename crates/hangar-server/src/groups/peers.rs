@@ -42,7 +42,8 @@ impl PeerBook {
 
     /// Todos os tokens do `peers.json`, para tirá-los do que volta ao modelo.
     pub fn tokens(&self) -> Vec<String> {
-        self.load().values().filter_map(|v| v["token"].as_str()).filter(|t| !t.is_empty()).map(str::to_owned).collect()
+        self.load().values().flat_map(|v| [&v["token"], &v["connect_return_token"]]).filter_map(Value::as_str)
+            .filter(|t| !t.is_empty()).map(str::to_owned).collect()
     }
 
     /// Peers da varredura: com endereço e token, sem `enabled: false`.

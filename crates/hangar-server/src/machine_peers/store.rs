@@ -76,6 +76,12 @@ impl Store {
         list(&self.tolerant())
     }
     pub fn put(&self, body: &Value) -> Result<Value, Error> {
+        self.put_from(body,false)
+    }
+    /// `device`: quem grava veio com credencial de aparelho. A entrada fica marcada `connect`, e o
+    /// anúncio nunca manda a senha do dono a um endereço que um aparelho escreveu. Gravação do dono
+    /// desfaz a marca: ele acabou de escolher esse endereço.
+    pub fn put_from(&self, body: &Value, device: bool) -> Result<Value, Error> {
         let empty=Value::String(String::new());
         let id = body.get("id").filter(|v|truthy(v)).unwrap_or(&empty);
         valid_id(&id)?;
@@ -89,13 +95,17 @@ impl Store {
         if web.is_some_and(|v| text(v).is_none()) {
             return Err(Error::invalid("web_url precisa ser texto"));
         }
+        let back = body.get("connect_return_token").filter(|v|device&&truthy(v));
+        if back.is_some_and(|v| text(v).is_none()) {
+            return Err(Error::invalid("connect_return_token precisa ser texto"));
+        }
         let (base, token) = (base.trim(), token.trim());
         if !(base.starts_with("http://") || base.starts_with("https://")) || token.is_empty() {
             return Err(Error::invalid(
                 "endereço precisa ser http(s):// e o token não pode ficar vazio",
             ));
         }
-        if ["base_url","token","web_url"].iter().any(|key|body.get(key).is_some_and(crate::orchestration::codec::contains_surrogate)){
+        if ["base_url","token","web_url","connect_return_token"].iter().any(|key|body.get(key).is_some_and(crate::orchestration::codec::contains_surrogate)){
             return Err(Error::invalid("texto contém Unicode inválido"));
         }
         self.change(|data| {
@@ -112,6 +122,12 @@ impl Store {
                 .filter(|s| !s.is_empty())
             {
                 replace(&mut entry,"web_url",json!(web));
+            }
+            if device {
+                replace(&mut entry,"connect",json!(true));
+                if let Some(back)=back.and_then(Value::as_str){replace(&mut entry,"connect_return_token",json!(back));}
+            } else {
+                for key in ["connect","connect_return_token"] {if let Some(previous)=entry.remove(key){codec::discard(previous);}}
             }
             if let Some(previous)=data.insert(id.into(), Value::Object(entry)){codec::discard(previous);}
             Ok(list(data))

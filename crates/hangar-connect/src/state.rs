@@ -141,7 +141,7 @@ pub fn remove_files(dir: &Path) -> Result<(), ConnectError> {
     already_gone(std::fs::remove_dir_all(dir.join("caddy"))).map_err(|cause| forget_failed(&cause))
 }
 
-fn service_base(raw: &str) -> Result<reqwest::Url, ConnectError> {
+pub(super) fn service_base(raw: &str) -> Result<reqwest::Url, ConnectError> {
     let refused = || ConnectError::new(StatusCode::BAD_REQUEST, "connect_service_url_invalid", "endereço do serviço inválido");
     let url = reqwest::Url::parse(raw.trim()).map_err(|_| refused())?;
     // A senha da conta vai neste pedido: em claro, só sem sair da máquina.

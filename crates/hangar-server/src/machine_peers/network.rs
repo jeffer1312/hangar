@@ -143,14 +143,41 @@ pub async fn check(s: &Service, url: &str, id: &str) -> Value {
     }
 }
 pub async fn discover(s: &Service) -> Result<Value, Error> {
-    let status = tailscale().await;
-    if !truthy(&status) {
-        return Err(Error {
-            status: 503,
-            code: "descoberta_sem_tailscale",
-            msg: "tailscale não respondeu".into(),
-        });
-    }
+    discover_with(s, tailscale().await).await
+}
+/// `status` é o `tailscale status --json`: vazio, sobra a conta do Connect. Máquina vista pelas duas
+/// fontes fica com o endereço do Tailscale. Serviço fora só é erro quando não há Tailscale.
+pub async fn discover_with(s: &Service, status: Value) -> Result<Value, Error> {
+    let (rows, account) = tokio::join!(tailscale_rows(s, &status), account_machines(s));
+    let machines = match account {
+        None if !truthy(&status) => {
+            return Err(Error {
+                status: 503,
+                code: "descoberta_sem_tailscale",
+                msg: "tailscale não respondeu".into(),
+            });
+        }
+        None => Vec::new(),
+        Some(Ok(machines)) => machines,
+        Some(Err(error)) if !truthy(&status) => {
+            return Err(Error { status: error.status.as_u16(), code: error.code, msg: error.msg });
+        }
+        Some(Err(error)) => {
+            tracing::warn!(code = error.code, "descoberta só pelo Tailscale: {}", error.msg);
+            Vec::new()
+        }
+    };
+    let mut rows = crate::connect::peers::join_discovery(rows, machines);
+    rows.sort_by(|a, b| a["nome"].as_str().cmp(&b["nome"].as_str()));
+    Ok(json!(rows))
+}
+/// `None`: esta máquina não está ligada ao Connect.
+async fn account_machines(s: &Service) -> Option<Result<Vec<crate::connect::peers::AccountMachine>, crate::connect::ConnectError>> {
+    let dir = s.connect_dir.clone()?;
+    let linked = tokio::task::spawn_blocking(move || crate::connect::state::read(&dir)).await.ok().flatten()?;
+    Some(crate::connect::peers::account_machines(&linked).await)
+}
+async fn tailscale_rows(s: &Service, status: &Value) -> Vec<Value> {
     let peers = status["Peer"]
         .as_object()
         .map(|m| {
@@ -162,9 +189,7 @@ pub async fn discover(s: &Service) -> Result<Value, Error> {
         .unwrap_or_default();
     let port = s.port;
     let results=stream::iter(peers).map(|peer|async move{let ips:Vec<String>=peer["TailscaleIPs"].as_array().into_iter().flatten().filter_map(Value::as_str).filter(|s|!s.contains(':')).map(str::to_owned).collect();let dns=peer["DNSName"].as_str().unwrap_or("").trim_end_matches('.');let mut urls:Vec<_>=ips.iter().map(|ip|format!("http://{ip}:{port}")).collect();let mut hosts=ips;if !dns.is_empty(){urls.push(format!("https://{dns}"));hosts.push(dns.into());}for url in urls{let recognized=match get(&url,"/api/peers/ping",None).await{Ok((200,b))=>b["hangar"]==true,Ok((404,_))=>matches!(get(&url,"/api/peers/identificador",None).await,Ok((401,ref b)) if b["detail"]["code"]=="erro_nao_autorizado"),_=>false};if recognized{return Some(json!({"nome":peer["HostName"].as_str().unwrap_or(""),"base_url":url,"hosts":hosts}))}}None}).buffer_unordered(8).collect::<Vec<_>>().await;
-    let mut rows: Vec<Value> = results.into_iter().flatten().collect();
-    rows.sort_by(|a, b| a["nome"].as_str().cmp(&b["nome"].as_str()));
-    Ok(json!(rows))
+    results.into_iter().flatten().collect()
 }
 pub async fn reach(s: &Service) -> Value {
     let configured = s.value("CP_LAN_BIND_IP");
@@ -220,6 +245,24 @@ pub async fn reach(s: &Service) -> Value {
     .await;
     json!({"loopback":local,"bind":bind,"enderecos":output,"connect":s.connect})
 }
+fn through_connect(entry: &Value) -> bool {
+    entry["connect"] == true
+}
+/// O corpo de `POST /api/peers` para `entry`, ou o motivo de não mandar nada. Pelo Connect vai a
+/// credencial emitida para esse par: a senha do dono é recusada lá e não sai desta máquina.
+fn announcement(s: &Service, id: &str, base: &str, entry: &Value) -> Result<Value, &'static str> {
+    if through_connect(entry) {
+        let token = entry["connect_return_token"].as_str().filter(|token| !token.is_empty());
+        return match (s.connect.as_deref(), token) {
+            (Some(base), Some(token)) => Ok(json!({"id":id,"base_url":base,"token":token,"connect_return_token":entry["token"]})),
+            _ => Err("sem_credencial_connect"),
+        };
+    }
+    if base.is_empty() {
+        return Err("sem_endereco");
+    }
+    Ok(json!({"id":id,"base_url":base,"token":s.token}))
+}
 pub async fn announce(s: &Service, old: &str) -> Value {
     let entries = s.store.tolerant();
     let ids: Vec<_> = entries
@@ -236,11 +279,10 @@ pub async fn announce(s: &Service, old: &str) -> Value {
     } else {
         format!("https://{name}")
     };
-    if base.is_empty() {
+    if base.is_empty() && !entries.values().any(through_connect) {
         return json!([{"id":"","estado":"falhou","motivo":"sem_endereco"}]);
     }
     let id = s.identity();
-    let body = json!({"id":id,"base_url":base,"token":s.token});
     let mut client = crate::groups::peers::PeerClient::new(crate::groups::peers::PeerBook::new(Some(
         s.store.path.clone(),
     )));
@@ -249,6 +291,14 @@ pub async fn announce(s: &Service, old: &str) -> Value {
     if let Some(directory)=crate::diag::diary_dir_in(&environment){client=client.with_diagnostics(directory,s.request_id.clone());}
     let mut rows = Vec::new();
     for peer in ids {
+        let Some(entry) = entries.get(&peer) else { continue };
+        let body = match announcement(s, &id, &base, entry) {
+            Ok(body) => body,
+            Err(motivo) => {
+                rows.push(json!({"id":peer,"estado":"falhou","motivo":motivo}));
+                continue;
+            }
+        };
         let mut result = client
             .call(&peer, reqwest::Method::POST, "/api/peers", Some(&body))
             .await

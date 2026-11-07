@@ -14,9 +14,11 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use super::ConnectError;
+use super::config::valid_label;
 use super::devices::{Poll, Refusal, Store};
 use super::gate::DeviceCaller;
-use super::state::LinkRequest;
+use super::peers::PeerLinker;
+use super::state::{self, LinkRequest};
 use crate::routes::{AppState, cors, on_connect_port, owner_gate};
 use crate::session_write::json_response;
 use crate::voice::routes::preflight;
@@ -33,14 +35,18 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/connect/devices/self", post(enroll).options(preflight))
         .route("/api/connect/devices/{id}", delete(remove).options(preflight))
         .route("/api/connect/devices/{id}/approve", post(approve).options(preflight))
+        .route("/api/connect/peers", get(peer_links).options(preflight))
+        .route("/api/connect/peers/{id}/link", post(link_peer).options(preflight))
 }
 
 pub fn matches(method: &Method, path: &str) -> bool {
     let id = path.strip_prefix("/api/connect/devices/");
+    let peer = path.strip_prefix("/api/connect/peers/").and_then(|rest| rest.strip_suffix("/link"));
     match method.as_str() {
-        "GET" => matches!(path, "/api/connect" | "/api/connect/devices"),
+        "GET" => matches!(path, "/api/connect" | "/api/connect/devices" | "/api/connect/peers"),
         "POST" => matches!(path, "/api/connect/link" | "/api/connect/redeem" | "/api/connect/redeem/status" | "/api/connect/devices/self")
-            || id.and_then(|rest| rest.strip_suffix("/approve")).is_some_and(|id| !id.is_empty() && !id.contains('/')),
+            || id.and_then(|rest| rest.strip_suffix("/approve")).is_some_and(|id| !id.is_empty() && !id.contains('/'))
+            || peer.is_some_and(|id| !id.is_empty() && !id.contains('/')),
         "DELETE" => path == "/api/connect" || id.is_some_and(|id| !id.is_empty() && !id.contains('/')),
         _ => false,
     }
@@ -207,6 +213,51 @@ async fn link(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<So
     let supervisor = st.connect_supervisor.clone();
     let outcome = tokio::spawn(async move { supervisor.link(body).await }).await;
     finished(&st, &headers, outcome)
+}
+
+/// O andamento de cada ligação com outra máquina da conta: é o que a tela acompanha enquanto o cartão espera.
+async fn peer_links(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    let headers = req.headers().clone();
+    if let Err(mut response) = owner_gate(&st, peer, &req).await {
+        cors(&headers, response.headers_mut());
+        return response;
+    }
+    reply(&headers, StatusCode::OK, json!(st.connect_supervisor.peer_links().list()))
+}
+
+/// Volta na hora com 202. Só a senha, como `link`: esta máquina emite uma credencial sem cartão dela, e
+/// aparelho que pedisse isso deixaria credencial fora da cascata de quem o aprovou.
+async fn link_peer(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, Path(id): Path<String>, req: Request) -> Response {
+    let headers = req.headers().clone();
+    if let Some(response) = owner_secret_refusal(&req) {
+        return response;
+    }
+    if let Err(mut response) = owner_gate(&st, peer, &req).await {
+        cors(&headers, response.headers_mut());
+        return response;
+    }
+    let dir = st.connect_supervisor.dir().to_path_buf();
+    let Some(linked) = tokio::task::spawn_blocking(move || state::read(&dir)).await.ok().flatten() else {
+        return error(&headers, StatusCode::CONFLICT, "connect_not_linked", "esta máquina não está ligada ao Connect");
+    };
+    if !valid_label(&id) || id == linked.machine_id {
+        return error(&headers, StatusCode::BAD_REQUEST, "connect_peer_invalid", "máquina inválida");
+    }
+    let server_id = st.current_server_id();
+    if server_id.is_empty() {
+        return error(&headers, StatusCode::CONFLICT, "connect_peer_no_identity", "esta máquina não tem identificador");
+    }
+    let store = match crate::machine_peers::Service::from_state(&st) {
+        Ok(service) => service.store,
+        Err(failure) => return error(&headers, StatusCode::SERVICE_UNAVAILABLE, failure.code, &failure.msg),
+    };
+    let linker = PeerLinker { linked, devices: st.connect_devices.clone(), server_id, links: st.connect_supervisor.peer_links().clone(),
+        save: Arc::new(move |entry| store.put_from(entry, true).map(|_| ())
+            .map_err(|failure| ConnectError::new(StatusCode::SERVICE_UNAVAILABLE, "connect_peer_not_saved", failure.msg))) };
+    if !linker.start(id.clone()) {
+        return error(&headers, StatusCode::CONFLICT, "connect_peer_linking", "esta ligação já está em curso");
+    }
+    reply(&headers, StatusCode::ACCEPTED, json!({"machine_id": id, "stage": "requesting"}))
 }
 
 async fn forget(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {

@@ -547,7 +547,8 @@ mod tests {
         // Montadas por `connect::routes` e `share::pair_routes`, fora do texto lido acima.
         for (method, path) in [(Method::POST, "/api/connect/redeem"), (Method::POST, "/api/connect/redeem/status"), (Method::GET, "/api/connect/devices"),
             (Method::POST, "/api/connect/devices/self"), (Method::POST, "/api/connect/devices/x/approve"), (Method::DELETE, "/api/connect/devices/x"),
-            (Method::GET, "/api/connect"), (Method::DELETE, "/api/connect"), (Method::POST, "/api/connect/link")] {
+            (Method::GET, "/api/connect"), (Method::DELETE, "/api/connect"), (Method::POST, "/api/connect/link"),
+            (Method::GET, "/api/connect/peers"), (Method::POST, "/api/connect/peers/x/link")] {
             assert!(rust_route(&method, path), "{method} {path}");
         }
         assert!(!rust_route(&Method::PUT, "/api/connect"), "o código de ligação colado saiu");
