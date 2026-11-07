@@ -246,8 +246,13 @@ fica: nenhum dos nove módulos o usa, e ele desce com quem o usar.
   exige < 1 s; sozinho passou 20/20; não toca no que foi movido). `verificar-local` fica para o PR.
 - [x] **Step 5: Medir a memória** de um `rustc` do `hangar-core` e do `hangar-server` (quando
   autorizado; RAM + swap do processo) e anotar na seção de estimativa.
-- [ ] **Step 6: Uso real — verificação manual** `systemctl --user restart hangar-backend.service`
+- [x] **Step 6: Uso real — verificação manual** `systemctl --user restart hangar-backend.service`
   com o binário novo; abrir o app, ver a lista de sessões e mandar uma mensagem numa sessão.
+  Feito junto com a Task 2 (06/11/2026, 21:22–21:31): release da branch no ar por um drop-in
+  `CP_RUST_SERVER_BIN` (scripts em `~/.hangar/teste-split/`, com volta automática por timer do
+  systemd); saúde com os quatro donos e a porta de convidado; o Jefferson usou pelo celular
+  ("parece normal"). O binário precisa ir com o par `hangar-server.auth.json` + `auth/`, senão o
+  Python recusa ("sem par válido da biblioteca de autenticação").
 
 ### Task 2: Descer `auth`, `config` e os ajudantes de resposta HTTP e JSON (Fix A)
 
@@ -288,8 +293,9 @@ Executado no commit `4ef8e2fcd`, com três ajustes à tabela:
   falha de tempo sob carga (`session_open::tests::the_terminal_command_stops_a_stuck_reconciliation_at_the_limit`,
   sozinho 20/20); `it` 3259/3259.
 - [ ] **Step 6: Mover `auth` e `config`** depois do merge da `connect-rust`, com as mesmas provas.
-- [ ] **Step 5: Uso real — verificação manual** login do dono e de convidado (porta 8766) e uma
+- [x] **Step 5: Uso real — verificação manual** login do dono e de convidado (porta 8766) e uma
   chamada que responde erro JSON (ex.: sessão inexistente devolve o `detail` com `code`).
+  Feito junto com a Task 1 (ver o Step 6 dela): uso do dono pelo celular; convidado não exercitado.
 
 ### Task 3: Descer os ajudantes de arquivo, processo e caminho (Fix A)
 
