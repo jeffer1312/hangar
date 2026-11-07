@@ -29,6 +29,7 @@ indexmap.workspace = true
 hangar-api.workspace = true
 hangar-codex.workspace = true
 hangar-core.workspace = true
+hangar-transcript.workspace = true
 toml = { version = "=1.1.7", default-features = false, features = ["parse", "std", "serde", "preserve_order"] }
 hangar-workspace = { path = "../hangar-workspace" }
 # Pacote por versão: índice, manifesto e extração conferida (`update/`).
@@ -36,8 +37,7 @@ hangar-package = { path = "../hangar-package" }
 regex.workspace = true
 # Largura em células para cortar o pane na coluna da conversa (`plugin_screen.cell_width`).
 unicode-width = "=0.2.2"
-# Busca de bytes nos transcripts da lista; já vem pelo regex, sem crate novo.
-memchr = "=2.8.3"
+memchr.workspace = true
 md-5.workspace = true
 sha1_smol.workspace = true
 # sha256 do workdir_key do Kimi; já vem pelo rustls, sem crate novo.

@@ -53,3 +53,22 @@ pub(crate) const CASES: &[(&str, &str)] = &[
         r#"[{"kind":"notice","id":"orq:84cc21ab244ffe79","text":"T5: abriu hangar-mobile-t5 (claude, opus[1m]) e hangar-mobile-review5 (claude, opus[1m]) e entregou o kick-off","ts":1790731152.0,"orq":{"kind":"advance","task":5,"line":{"code":"opened","sessions":[{"name":"hangar-mobile-t5","provider":"claude","model":"opus[1m]"},{"name":"hangar-mobile-review5","provider":"claude","model":"opus[1m]"}]},"origin":null,"sender":null,"mark":null,"alarm":false,"rejected_round":null,"body":"T5: abriu hangar-mobile-t5 (claude, opus[1m]) e hangar-mobile-review5 (claude, opus[1m]) e entregou o kick-off","question":null,"parecer":null,"error":null,"decided_by":null}}]"#,
     ),
 ];
+
+#[test]
+fn orq_history_and_live_parser_keep_the_notice_contract() {
+    use crate::transcript::{LineParser, Provider};
+    use serde_json::Value;
+    crate::transcript::set_orq_parser(super::timeline::parse_obj);
+    let provider = Provider::parse("orq");
+    assert!(provider.is_some(), "o histórico do orq precisa ser lido pelo Rust");
+    assert_eq!(CASES.len(), 13);
+    for (input, expected) in CASES {
+        let input: Value = serde_json::from_str(input).unwrap();
+        let expected: Value = serde_json::from_str(expected).unwrap();
+        let events = LineParser::new(provider.unwrap()).feed(input.to_string().as_bytes(), 0);
+        let actual: Vec<Value> = events.iter().map(|event| {
+            serde_json::json!({"kind": event.kind, "id": event.id, "text": event.text, "ts": event.ts, "orq": event.orq})
+        }).collect();
+        assert_eq!(serde_json::to_value(actual).unwrap(), expected, "{input}");
+    }
+}

@@ -539,8 +539,19 @@ ficam no servidor.
   uma vez com `transcript_orq_parser_missing`, devolve vazio). RED: os testes
   `routes::tests::orchestration_history_uses_the_same_parser_on_public_and_forwarded_ports` e
   `transcript::orq_contract::…` falharam antes do registro; GREEN depois.
-- [ ] **Step 3: Mover `transcript/`** para `crates/hangar-transcript/` pelo contrato.
-- [ ] **Step 4: Provas comuns** (quando autorizadas).
+- [x] **Step 3: Mover `transcript/`** para `crates/hangar-transcript/` pelo contrato.
+  Feito: `mod.rs` virou `lib.rs`; `claude`, `codex`, `history` e `peer` foram junto; o servidor
+  re-exporta com `pub use hangar_transcript as transcript`. `orq_cases.rs` e o teste de contrato do
+  `orq` foram para `orchestration/orq_cases.rs` (usam a orquestração); no crate ficou um teste de
+  que, sem registro, a linha de `orq` não gera evento. Viraram `pub` só os itens que o servidor usa
+  (`history` e 16 itens dele, `RewriteFilter` com `keep`/`to_state`/`from_state`, os ajudantes de
+  `claude`/`codex`, `event`, `finish`, `parse_claude_object`, `py`, `json_tree`). `memchr` passou a
+  dependência do workspace, usada pelos dois crates.
+- [x] **Step 4: Provas comuns** (quando autorizadas).
+  Feito: `check -p hangar-server --all-targets` sem aviso nos arquivos tocados; `test -p
+  hangar-transcript` 37/37; testes internos do servidor 2769 ok (20 ignorados); `it` 3259 ok (21
+  ignorados); `cargo metadata` sem aresta para o servidor. Código só de outra plataforma: o ramo
+  `not(target_os = "linux")` de `peer.rs` não importa nada; o passo Windows fica com o CI.
 - [ ] **Step 5: Uso real — verificação manual** abrir conversas Claude, Codex e uma sessão `orq`;
   histórico, painel da orquestração e eventos ao vivo aparecem.
 

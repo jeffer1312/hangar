@@ -1493,7 +1493,7 @@ mod tests {
     async fn orchestration_history_uses_the_same_parser_on_public_and_forwarded_ports() {
         let dir = tempfile::tempdir().unwrap();
         let timeline = dir.path().join("timeline.jsonl");
-        let lines = crate::transcript::orq_cases::CASES.iter().map(|(input, _)| format!("{input}\n")).collect::<String>();
+        let lines = crate::orchestration::orq_cases::CASES.iter().map(|(input, _)| format!("{input}\n")).collect::<String>();
         std::fs::write(&timeline, lines).unwrap();
         let mut state = Arc::try_unwrap(state_with_upstream().await).ok().unwrap();
         state.side.locate = Arc::new(crate::locate::Fixed(Some(InternalInfo {

@@ -87,7 +87,7 @@ pub mod terminal_facts;
 use hangar_core::terminal_process;
 mod thumbnail;
 pub mod terminal_routes;
-pub mod transcript;
+pub use hangar_transcript as transcript;
 pub mod transcription;
 pub mod update_notes;
 pub mod dictation;
