@@ -73,13 +73,13 @@ const WINDOW_S: f64 = 60.0;
 
 /// `RewriteFilter` (transcript.py:315): descarta o que o `claude --resume` regravou.
 #[derive(Default)]
-pub(crate) struct RewriteFilter {
+pub struct RewriteFilter {
     max: f64,
     recent: HashMap<(String, String), f64>,
 }
 
 impl RewriteFilter {
-    pub(crate) fn keep(&mut self, obj: &Map<String, Value>) -> bool {
+    pub fn keep(&mut self, obj: &Map<String, Value>) -> bool {
         if !matches!(obj.get("type").and_then(Value::as_str), Some("user" | "assistant")) {
             return true;
         }
@@ -106,12 +106,12 @@ impl RewriteFilter {
     }
 
     /// Estado para continuar o filtro noutra leitura do mesmo arquivo (o índice lê aos pedaços).
-    pub(crate) fn to_state(&self) -> String {
+    pub fn to_state(&self) -> String {
         let recent: Vec<(&str, &str, f64)> = self.recent.iter().map(|((t, h), ts)| (t.as_str(), h.as_str(), *ts)).collect();
         serde_json::json!({"max": self.max, "recent": recent}).to_string()
     }
 
-    pub(crate) fn from_state(state: &str) -> Option<Self> {
+    pub fn from_state(state: &str) -> Option<Self> {
         #[derive(serde::Deserialize)]
         struct Saved { max: f64, recent: Vec<(String, String, f64)> }
         let saved: Saved = serde_json::from_str(state).ok()?;
@@ -303,7 +303,7 @@ fn is_prompt(obj: &Map<String, Value>) -> bool {
 }
 
 /// Motivo da falha de hook, o mesmo com e sem terminal: primeira linha com texto, cortada; senão o código de saída.
-pub(crate) fn hook_failure_reason<'a>(texts: impl IntoIterator<Item = &'a str>, exit: Option<i64>) -> String {
+pub fn hook_failure_reason<'a>(texts: impl IntoIterator<Item = &'a str>, exit: Option<i64>) -> String {
     texts.into_iter().map(|text| text.strip_prefix(HOOK_STDERR_PREFIX).unwrap_or(text)).flat_map(str::lines).map(str::trim)
         .find(|row| !row.is_empty())
         .map(|row| match row.char_indices().nth(300) { Some((at, _)) => format!("{}…", &row[..at]), None => row.to_owned() })
@@ -312,7 +312,7 @@ pub(crate) fn hook_failure_reason<'a>(texts: impl IntoIterator<Item = &'a str>, 
 }
 
 /// Nota de aviso da CLI no formato de resposta: não é a resposta do modelo (prévia, última resposta).
-pub(crate) fn is_cli_note(id: &str) -> bool {
+pub fn is_cli_note(id: &str) -> bool {
     ["retry:", "retry-ok:", "refusal:"].iter().any(|prefix| id.starts_with(prefix))
 }
 
@@ -370,13 +370,13 @@ fn first<'a>(items: &'a [Value], type_name: &str) -> Option<&'a Map<String, Valu
         .find(|it| it.get("type").and_then(Value::as_str) == Some(type_name))
 }
 
-pub(crate) fn is_command_meta(text: &str) -> bool {
+pub fn is_command_meta(text: &str) -> bool {
     let t = lstrip(text);
     COMMAND_META_PREFIXES.iter().any(|p| t.starts_with(p))
 }
 
 /// `_strip_meta_blocks` (transcript.py:300).
-pub(crate) fn strip_meta_blocks(text: &str) -> String {
+pub fn strip_meta_blocks(text: &str) -> String {
     strip(&strip_pasted(&META_BLOCK.replace_all(text, ""))).to_string()
 }
 
@@ -1224,7 +1224,7 @@ mod tests {
             "message":{"role":"assistant","content":content}});
         let string = line(serde_json::json!("antigo"));
         let blocks = line(serde_json::json!([{"type":"text","text":"antigo"}]));
-        let events = |value: Value| crate::transcript::parse_claude_object(value.as_object().unwrap());
+        let events = |value: Value| crate::parse_claude_object(value.as_object().unwrap());
         assert_eq!(serde_json::to_value(events(string)).unwrap(), serde_json::to_value(events(blocks)).unwrap());
         assert!(events(line(serde_json::json!(" \n\t"))).is_empty());
     }

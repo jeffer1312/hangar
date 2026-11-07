@@ -36,7 +36,7 @@ static PEER_BODY: LazyLock<Regex> = LazyLock::new(|| py_re(r"(?s)<cross-session-
 const PEER_STARTS: [&str; 2] = ["<cross-session-message", "Another Claude session sent a message:"];
 
 /// Corpo de cada recado de um registro que É recado; vazio para qualquer outro texto.
-pub(crate) fn peer_bodies(text: &str) -> Vec<&str> {
+pub fn peer_bodies(text: &str) -> Vec<&str> {
     let t = strip(text);
     if !PEER_STARTS.iter().any(|p| t.starts_with(p)) { return Vec::new(); }
     PEER_BODY.captures_iter(t).filter_map(|c| c.get(1)).map(|m| strip(m.as_str())).filter(|b| !b.is_empty()).collect()
@@ -109,19 +109,19 @@ pub fn merged_history_with_notices(req: &HistoryRequest) -> io::Result<Vec<ChatE
 /// Como `merged_history`, mas a janela com `limit` para em `max_window` bytes mesmo sem `limit`
 /// eventos: quem só quer o fim (a última resposta da lista) não relê o transcript inteiro quando
 /// a cauda é só anexo e tool_result.
-pub(crate) fn merged_history_capped(req: &HistoryRequest, max_window: u64) -> io::Result<Vec<ChatEvent>> {
+pub fn merged_history_capped(req: &HistoryRequest, max_window: u64) -> io::Result<Vec<ChatEvent>> {
     merged_history_impl(req, max_window, true, false)
 }
 
 /// A sugestão de tarefa conserva a janela lida inteira, como o consumidor original do histórico.
-pub(crate) fn merged_history_window(req: &HistoryRequest) -> io::Result<Vec<ChatEvent>> {
+pub fn merged_history_window(req: &HistoryRequest) -> io::Result<Vec<ChatEvent>> {
     merged_history_impl(req, u64::MAX, false, false)
 }
 
 /// As últimas `n` mensagens com texto (pedido e resposta), lidas pelo fim com a janela crescendo ×8 e
 /// pelo mesmo filtro do histórico inteiro: a prévia não mostra o que o `--resume` regravou nem repete
 /// um `held:`. A janela cresce porque a cauda de um transcript longo é quase só ferramenta e anexo.
-pub(crate) fn message_tail(req: &HistoryRequest, n: usize) -> io::Result<Vec<ChatEvent>> {
+pub fn message_tail(req: &HistoryRequest, n: usize) -> io::Result<Vec<ChatEvent>> {
     let mut window = req.tail_window.max(1);
     loop {
         let off = tail_offset(&req.jsonl, window);
@@ -147,7 +147,7 @@ fn merged_history_impl(req: &HistoryRequest, max_window: u64, truncate: bool, no
 }
 
 /// Os eventos com a hora da linha ao lado: pedido digitado e rollout do Codex só têm essa hora.
-pub(crate) fn dated_history_capped(req: &HistoryRequest, max_window: u64) -> io::Result<Vec<(f64, ChatEvent)>> {
+pub fn dated_history_capped(req: &HistoryRequest, max_window: u64) -> io::Result<Vec<(f64, ChatEvent)>> {
     merged_dated(req, max_window, true, false)
 }
 
@@ -192,7 +192,7 @@ fn merged_dated(req: &HistoryRequest, max_window: u64, truncate: bool, notices: 
 
 /// Cada evento do transcript em ordem, até `visit` devolver `false`: quem só quer o início da conversa
 /// não relê o arquivo inteiro. Transcript ausente = nenhum evento.
-pub(crate) fn each_event(provider: Provider, jsonl: &Path, mut visit: impl FnMut(ChatEvent) -> bool) -> io::Result<()> {
+pub fn each_event(provider: Provider, jsonl: &Path, mut visit: impl FnMut(ChatEvent) -> bool) -> io::Result<()> {
     let file = match File::open(jsonl) {
         Ok(f) => f,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -221,9 +221,9 @@ const TURN_SEED_MAX: u64 = 4 * 1024 * 1024;
 /// Começo da linha do último `turn_duration` antes de `before`; sem ele, o começo do arquivo (se coube) ou o
 /// próprio `before`. As notas só contam a partir de um começo de turno, e a janela da cauda não cobre um turno longo.
 /// Lê de trás para frente em blocos que crescem; achar o texto num resultado de ferramenta só faz semear mais.
-pub(crate) fn turn_seed_start(path: &Path, before: u64) -> u64 {
+pub fn turn_seed_start(path: &Path, before: u64) -> u64 {
     let failed = |e: io::Error| {
-        if crate::warn_limit::allow(None, "transcript_notice_seed") {
+        if hangar_core::warn_limit::allow(None, "transcript_notice_seed") {
             tracing::warn!(code = "transcript_notice_seed", path = %path.display(), "notas: começo do turno ilegível; somas podem sair incompletas: {e}");
         }
         before
@@ -266,7 +266,7 @@ fn seed_notices(path: &Path, fold: &mut claude::NoticeFold, from: u64, to: u64) 
         return;
     }
     let failed = |e: io::Error| {
-        if crate::warn_limit::allow(None, "transcript_notice_seed") {
+        if hangar_core::warn_limit::allow(None, "transcript_notice_seed") {
             tracing::warn!(code = "transcript_notice_seed", path = %path.display(), "notas: semeadura do turno parou; somas podem sair incompletas: {e}");
         }
     };
@@ -319,7 +319,7 @@ fn ts_of_obj(obj: &Map<String, Value>) -> f64 {
 }
 
 /// `_transcript_start_ts` (pqueue.py:258) com o `or 0.0` de quem só poda.
-pub(crate) fn transcript_start_ts(path: &Path) -> f64 {
+pub fn transcript_start_ts(path: &Path) -> f64 {
     let Ok(f) = File::open(path) else { return 0.0 };
     let mut rd = BufReader::new(f);
     let mut raw = Vec::new();
@@ -396,7 +396,7 @@ fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64, notices: bool) -
                 let mut evs = match req.provider {
                     Provider::Claude | Provider::ClaudeHeadless => claude::parse_obj(obj, peer::name_of_pid),
                     Provider::Codex => codex::parse_rollout_obj(&value),
-                    Provider::Orq => crate::orchestration::timeline::parse_obj(&value, req.jsonl.parent()),
+                    Provider::Orq => super::parse_orq(&value, req.jsonl.parent()),
                 };
                 if let Some(fold) = notices.as_mut() { fold.feed(obj, &mut evs); }
                 let ts = if req.provider == Provider::Orq {
@@ -444,12 +444,12 @@ fn absorb(p: &mut Parsed, ts: f64, i: u64, evs: Vec<ChatEvent>, held_ids: &mut H
     }
 }
 
-pub(crate) fn strip_attach(text: &str) -> String {
+pub fn strip_attach(text: &str) -> String {
     ATTACH.replace(text, "").into_owned()
 }
 
 /// `_chaves_de_commit` (pqueue.py:301). Repetição não importa: quem usa só compara o relógio.
-pub(crate) fn chaves_de_commit(text: &str) -> Vec<String> {
+pub fn chaves_de_commit(text: &str) -> Vec<String> {
     let t = strip(text);
     let base = IMG_PREFIX.replace(t, "").into_owned();
     let fonte = IMG_SOURCE.replace_all(t, |c: &regex::Captures| format!("📎 imagem: {}", &c[1])).into_owned();
@@ -496,18 +496,18 @@ fn load_queue(path: &Path) -> io::Result<Vec<Map<String, Value>>> {
         .collect())
 }
 
-pub(crate) fn is_local_output(entry: &Map<String, Value>) -> bool {
+pub fn is_local_output(entry: &Map<String, Value>) -> bool {
     entry.get("papel").and_then(Value::as_str) == Some("assistant")
 }
 
 /// `_da_sessao_atual` (pqueue.py:171) com o relógio já resolvido.
-pub(crate) fn from_current_session(entry: &Map<String, Value>, min_ts: f64, ts: f64) -> bool {
+pub fn from_current_session(entry: &Map<String, Value>, min_ts: f64, ts: f64) -> bool {
     let grace = if py::truthy(entry.get("pre_transcript")) { HANDOFF_GRACE_S } else { 0.0 };
     ts >= min_ts - grace
 }
 
 /// `_entry_event` (pqueue.py:210).
-pub(crate) fn entry_event(entry: &Map<String, Value>) -> ChatEvent {
+pub fn entry_event(entry: &Map<String, Value>) -> ChatEvent {
     let id = entry.get("id").map_or_else(|| "None".to_string(), py::py_str);
     let text = entry.get("text").and_then(Value::as_str).map(str::to_string);
     let hook_error = entry.get("hook_error").and_then(Value::as_str).filter(|_| is_local_output(entry));
@@ -570,7 +570,7 @@ fn merge_queue(path: &Path, p: &mut Parsed) -> io::Result<()> {
 /// O painel da fila: as entradas que esperam a vez no Hangar, na ordem da fila. A regra de esperar é a da fila
 /// (`row_waits`); o recorte de conversa é o do `/history` (texto vazio fora, de antes da conversa atual fora).
 /// `start_ts` é o `transcript_start_ts` da conversa.
-pub(crate) fn queue_panel_entries(queue: &Path, start_ts: f64) -> io::Result<QueuePanel> {
+pub fn queue_panel_entries(queue: &Path, start_ts: f64) -> io::Result<QueuePanel> {
     let rows = load_queue(queue)?;
     let present = rows.iter().map(|entry| entry.get("id").map_or_else(|| "None".to_string(), py::py_str)).collect();
     let entries = rows
@@ -581,7 +581,7 @@ pub(crate) fn queue_panel_entries(queue: &Path, start_ts: f64) -> io::Result<Que
                 && (start_ts == 0.0 || from_current_session(entry, start_ts, ts))
         })
         .map(Value::Object)
-        .filter(crate::runtime::queue::row_waits)
+        .filter(hangar_core::queue_row::row_waits)
         .map(|entry| {
             serde_json::json!({
                 "id": entry.get("id").map_or_else(|| "None".to_string(), py::py_str),
@@ -595,13 +595,13 @@ pub(crate) fn queue_panel_entries(queue: &Path, start_ts: f64) -> io::Result<Que
 
 /// As entradas do painel e os ids que a projeção ainda tem, em qualquer estado: a que esperava e sumiu
 /// daqui foi apagada (a entregue continua como linha entregue), e os aparelhos retiram a bolha dela.
-pub(crate) struct QueuePanel {
+pub struct QueuePanel {
     pub entries: Vec<Value>,
     pub present: std::collections::HashSet<String>,
 }
 
 /// Tamanho e mtime: muda a cada escrita do arquivo.
-pub(crate) fn stamp(path: &Path) -> Option<String> {
+pub fn stamp(path: &Path) -> Option<String> {
     let meta = std::fs::metadata(path).ok()?;
     let mtime = meta.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_nanos();
     Some(format!("{}.{mtime}", meta.len()))

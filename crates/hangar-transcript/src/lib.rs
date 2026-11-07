@@ -1,31 +1,30 @@
-// crates/hangar-server/src/transcript/mod.rs
 //! Leitura das conversas do Claude e do Codex, portada de backend/app/transcript.py,
 //! adapters/codex/rollout.py e pqueue.py. A saída tem que sair igual à do Python: os aparelhos
 //! deduplicam por id, e um id diferente na troca vira mensagem repetida na tela.
 
 mod claude;
 mod codex;
-pub(crate) mod history;
+pub mod history;
 mod peer;
-pub(crate) use hangar_core::pycompat::py;
+pub use hangar_core::pycompat::py;
 pub use hangar_core::pycompat::pyjson;
-// Re-export de compatibilidade: nenhum módulo deste crate o usa mais.
-#[allow(unused_imports)]
-pub(crate) use hangar_core::pycompat::json_tree;
+// Re-export de compatibilidade: ninguém o usa mais pelo caminho `transcript::`.
+pub use hangar_core::pycompat::json_tree;
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Once, OnceLock};
 
 use hangar_api::chat::{ChatEvent, ChatKind};
 use serde_json::Value;
 
 pub use history::{history_etag, merged_history, merged_history_with_notices, HistoryRequest, InternalInfo, TAIL_WINDOW};
 pub use py::ts_of_iso;
-pub(crate) use claude::{hook_failure_reason, is_cli_note, is_command_meta, strip_meta_blocks, RewriteFilter};
-pub(crate) use history::turn_seed_start;
-pub(crate) use codex::is_context_wrapper;
+pub use claude::{hook_failure_reason, is_cli_note, is_command_meta, strip_meta_blocks, RewriteFilter};
+pub use history::turn_seed_start;
+pub use codex::is_context_wrapper;
 
 /// O histórico transferido já validou ramo e fronteira; não passa pelo filtro temporal do stream.
-pub(crate) fn parse_claude_object(object: &serde_json::Map<String, Value>) -> Vec<ChatEvent> {
+pub fn parse_claude_object(object: &serde_json::Map<String, Value>) -> Vec<ChatEvent> {
     claude::parse_obj(object, peer::name_of_pid)
 }
 
@@ -62,6 +61,27 @@ impl Provider {
 }
 
 pub use hangar_core::pycompat::decode_line;
+
+/// Leitor da linha de `orq`: mora na orquestração, que depende deste módulo, e entra pela subida.
+pub type OrqParser = fn(&Value, Option<&std::path::Path>) -> Vec<ChatEvent>;
+
+static ORQ_PARSER: OnceLock<OrqParser> = OnceLock::new();
+
+/// A primeira chamada vale; as seguintes não trocam o leitor.
+pub fn set_orq_parser(parser: OrqParser) {
+    let _ = ORQ_PARSER.set(parser);
+}
+
+pub(crate) fn parse_orq(value: &Value, dir: Option<&std::path::Path>) -> Vec<ChatEvent> {
+    if let Some(parser) = ORQ_PARSER.get() {
+        return parser(value, dir);
+    }
+    static MISSING: Once = Once::new();
+    MISSING.call_once(|| {
+        tracing::error!(code = "transcript_orq_parser_missing", "linha de orq sem leitor registrado; a conversa sai vazia");
+    });
+    Vec::new()
+}
 
 /// Um leitor por arquivo: guarda o estado do `RewriteFilter` entre as linhas, como o
 /// `TranscriptTailer` (transcript.py:777).
@@ -122,7 +142,7 @@ impl LineParser {
         let Some(value) = line_value(line) else { return Vec::new() };
         let mut evs = match (self.provider, &value) {
             (Provider::Codex, _) => codex::parse_rollout_obj(&value),
-            (Provider::Orq, _) => crate::orchestration::timeline::parse_obj(&value, self.run_dir.as_deref()),
+            (Provider::Orq, _) => parse_orq(&value, self.run_dir.as_deref()),
             (Provider::Claude | Provider::ClaudeHeadless, Value::Object(obj)) if self.rewrite.keep(obj) => {
                 let mut evs = claude::parse_obj(obj, self.peer_resolver);
                 if let Some(fold) = self.notices.as_mut() { fold.feed(obj, &mut evs); }
@@ -153,12 +173,12 @@ fn line_value(raw: &[u8]) -> Option<Value> {
     }
 }
 
-pub(crate) fn event(kind: ChatKind, id: String) -> ChatEvent {
+pub fn event(kind: ChatKind, id: String) -> ChatEvent {
     ChatEvent { kind, id, ..ChatEvent::default() }
 }
 
 /// O `scrub_surrogates` que o validador do `ChatEvent` aplica em todo campo (models.py:241).
-pub(crate) fn finish(ev: &mut ChatEvent) {
+pub fn finish(ev: &mut ChatEvent) {
     py::scrub_str(&mut ev.id);
     for s in [&mut ev.text, &mut ev.tool_name, &mut ev.tool_use_id, &mut ev.result, &mut ev.hook_error]
         .into_iter()
@@ -175,25 +195,13 @@ pub(crate) fn finish(ev: &mut ChatEvent) {
 }
 
 #[cfg(test)]
-pub(crate) mod orq_cases;
-
-#[cfg(test)]
-mod orq_contract {
+mod orq_registry {
     use super::*;
 
+    // Nenhum teste deste crate registra o leitor: o registro é do servidor.
     #[test]
-    fn orq_history_and_live_parser_keep_the_notice_contract() {
-        let provider = Provider::parse("orq");
-        assert!(provider.is_some(), "o histórico do orq precisa ser lido pelo Rust");
-        assert_eq!(orq_cases::CASES.len(), 13);
-        for (input, expected) in orq_cases::CASES {
-            let input: Value = serde_json::from_str(input).unwrap();
-            let expected: Value = serde_json::from_str(expected).unwrap();
-            let events = LineParser::new(provider.unwrap()).feed(input.to_string().as_bytes(), 0);
-            let actual: Vec<Value> = events.iter().map(|event| {
-                serde_json::json!({"kind": event.kind, "id": event.id, "text": event.text, "ts": event.ts, "orq": event.orq})
-            }).collect();
-            assert_eq!(serde_json::to_value(actual).unwrap(), expected, "{input}");
-        }
+    fn an_orq_line_without_a_registered_parser_yields_no_event() {
+        let line = br#"{"ts":"2026-09-29T21:53:40-03:00","kind":"advance","text":"T1: abriu","task":1}"#;
+        assert!(LineParser::new(Provider::Orq).feed(line, 0).is_empty());
     }
 }

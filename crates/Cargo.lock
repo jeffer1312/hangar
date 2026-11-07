@@ -1629,6 +1629,7 @@ dependencies = [
  "hangar-codex",
  "hangar-core",
  "hangar-package",
+ "hangar-transcript",
  "hangar-workspace",
  "http-body-util",
  "hyper",
@@ -1678,6 +1679,21 @@ dependencies = [
  "windows-sys 0.61.2",
  "zbus",
  "zeroize",
+]
+
+[[package]]
+name = "hangar-transcript"
+version = "0.1.0"
+dependencies = [
+ "hangar-api",
+ "hangar-core",
+ "memchr",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha1_smol",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]

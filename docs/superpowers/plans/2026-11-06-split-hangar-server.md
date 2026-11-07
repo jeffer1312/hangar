@@ -509,16 +509,49 @@ Status: ready-for-agent (depois da Task 7)
 cima: `orchestration::timeline::parse_obj` (`transcript/history.rs:399`, `transcript/mod.rs:131`,
 para `Provider::Orq`) e `runtime::queue::row_waits` (`history.rs:584`, core pela Task 3).
 
-`timeline` só depende de `orchestration::{runs, text, kind, array, truthy}` e `transcript::py`
-(`timeline.rs:2,71,388`; `runs.rs:2,64,106`). Fix A: esses módulos vão para dentro do
-`hangar-transcript`, com `pub use` em `orchestration`. Um trait no lugar obrigaria a editar os 38
-`LineParser::new` de 14 arquivos.
+**Revisto em 07/11/2026 (conferido no código).** O Fix A não se paga: `timeline` usa também
+`panel::panel` e `triage::decide`, e `runs` usa vários ajudantes de `orchestration/common.rs`; o
+`panel` puxa `costs::collect::Collector`, `consumption`, `plan` e `snapshot` (metade da orquestração
+e os custos). Fora do core, o `transcript/` só depende de `warn_limit` e `row_waits` (já no core) e
+de `orchestration::timeline::parse_obj`, chamado em dois lugares: `LineParser::feed`
+(`transcript/mod.rs:125`) e o histórico (`transcript/history.rs:399`).
 
-- [ ] **Step 1: Conferir as dependências** de `timeline`, `runs`, `text`, `kind`, `array` e de
-  `transcript/` fora deles e do core.
-- [ ] **Step 2: Commit de corte** levando os módulos de `orchestration` para junto do transcript.
-- [ ] **Step 3: Mover `transcript/`** para `crates/hangar-transcript/` pelo contrato.
-- [ ] **Step 4: Provas comuns** (quando autorizadas).
+**Decidido (Jefferson, 07/11/2026): a função de leitura do `orq` entra por registro na subida.** O
+`hangar-transcript` guarda `OnceLock<fn(&Value, Option<&Path>) -> Vec<ChatEvent>>` com um
+`set_orq_parser` público; os dois pontos chamam pelo registro. O servidor registra
+`orchestration::timeline::parse_obj` antes de servir e em todo ponto de entrada que lê transcript
+(subida em `lib.rs`, comandos do `main.rs` que leem conversa, e o ajudante comum dos testes que
+montam o estado). Sem registro, a leitura de `orq` loga erro uma vez (código
+`transcript_orq_parser_missing`) e devolve vazio; um teste do servidor confere que, depois da
+subida, uma linha de `orq` gera eventos. Os testes de `transcript/orq_cases.rs` usam a orquestração:
+ficam no servidor.
+
+- [x] **Step 1: Conferir as dependências** de `transcript/` fora do core (esperado: só
+  `orchestration::timeline::parse_obj`) e listar todo ponto de entrada que lê transcript sem passar
+  pela subida do servidor (`main.rs`, exemplos, testes).
+  Feito: só `parse_obj` (o `row_waits` já é re-export do core). Nenhum subcomando do `main.rs` lê
+  conversa de `orq`. Pontos de entrada: `AppState::with_parts` (todo construtor do estado passa
+  por ele: subida e testes que montam estado), o exemplo `orq_contract` (`timeline.history`) e o
+  teste `transcript::orq_contract`, que não monta estado. `bench_history` só lê Claude.
+- [x] **Step 2: Commit de corte** com o registro (`set_orq_parser`/`orq_parser`) ainda dentro do
+  servidor, as duas chamadas trocadas e o registro feito em cada ponto de entrada do Step 1.
+  Feito: `transcript::{OrqParser, set_orq_parser}` e `parse_orq` (sem registro: `tracing::error!`
+  uma vez com `transcript_orq_parser_missing`, devolve vazio). RED: os testes
+  `routes::tests::orchestration_history_uses_the_same_parser_on_public_and_forwarded_ports` e
+  `transcript::orq_contract::…` falharam antes do registro; GREEN depois.
+- [x] **Step 3: Mover `transcript/`** para `crates/hangar-transcript/` pelo contrato.
+  Feito: `mod.rs` virou `lib.rs`; `claude`, `codex`, `history` e `peer` foram junto; o servidor
+  re-exporta com `pub use hangar_transcript as transcript`. `orq_cases.rs` e o teste de contrato do
+  `orq` foram para `orchestration/orq_cases.rs` (usam a orquestração); no crate ficou um teste de
+  que, sem registro, a linha de `orq` não gera evento. Viraram `pub` só os itens que o servidor usa
+  (`history` e 16 itens dele, `RewriteFilter` com `keep`/`to_state`/`from_state`, os ajudantes de
+  `claude`/`codex`, `event`, `finish`, `parse_claude_object`, `py`, `json_tree`). `memchr` passou a
+  dependência do workspace, usada pelos dois crates.
+- [x] **Step 4: Provas comuns** (quando autorizadas).
+  Feito: `check -p hangar-server --all-targets` sem aviso nos arquivos tocados; `test -p
+  hangar-transcript` 37/37; testes internos do servidor 2769 ok (20 ignorados); `it` 3259 ok (21
+  ignorados); `cargo metadata` sem aresta para o servidor. Código só de outra plataforma: o ramo
+  `not(target_os = "linux")` de `peer.rs` não importa nada; o passo Windows fica com o CI.
 - [ ] **Step 5: Uso real — verificação manual** abrir conversas Claude, Codex e uma sessão `orq`;
   histórico, painel da orquestração e eventos ao vivo aparecem.
 

@@ -343,6 +343,7 @@ fn main() {
         .with_ansi(false)
         .without_time()
         .try_init();
+    hangar_server::transcript::set_orq_parser(orq::timeline::parse_obj);
     let mut input = String::new();
     io::stdin().read_to_string(&mut input).unwrap();
     let value: Value = orq::codec::loads(&input).unwrap();
