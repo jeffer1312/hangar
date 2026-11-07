@@ -329,6 +329,21 @@ Revisão: risco — efeitos que hoje só os testes desligam (diário, escrita de
 Vem antes do portão (Task 4), porque o portão precisa do `share::store`, que usa `atomic_write` e
 `random_hex` (`share/store.rs:127,194`), e do `diag` (`route_failed`, `routes.rs:303`).
 
+**Executado (07/11/2026) com escopo reduzido.** Desceram: `fs` (`QueueRefusal`, `invalid`,
+`read_replaced*`, `replace`, `atomic_write`, `atomic_write_inspected` atrás de `test-support`),
+`queue_row::row_waits`, `ids::random_hex`, `process::vanished`, `net::{HttpClient, POOL_IDLE,
+client}`, `account_env` (o antigo `accounts/environment.rs` inteiro, com `Account` e os caminhos do
+omp em `account_env/omp.rs`, mais `valid_omp_profile`), e os módulos inteiros `terminal_process` e
+`display_env` (o log dele passou a `tracing::info!(target: "voice", …)`, igual ao `voice::log`).
+O core perdeu o `#![forbid(unsafe_code)]`: `terminal_process` tem `unsafe` de `libc` e `windows-sys`.
+Ficaram para depois:
+- `diag`, `install_root` e `user_data` (este depende do `install_root`), com `log_base*`,
+  `pointer`, `is_backend` e `without_verbatim`, que só eles usam: a sessão `migrar-rust-2` tem
+  commit local mexendo em `diag.rs` e `install_root.rs` (janela por Task). Movem depois do merge dela.
+- `terminate`, `scope_prefix` e `resolve_program`: só cortariam `accounts` → `runtime`, cuja inversão
+  foi adiada para a fase 2; `scope_prefix` arrasta as constantes e a sondagem do systemd.
+  `resolve_program` desce na Task 9, que precisa dela.
+
 | O quê | De | Para (`hangar-core`) |
 |---|---|---|
 | `atomic_write`, `replace`, `read_replaced`, `read_replaced_to_string`, `row_waits` (`queue.rs:566`); `atomic_write_inspected` atrás de `test-support` | `runtime/queue.rs` | `fs` |
