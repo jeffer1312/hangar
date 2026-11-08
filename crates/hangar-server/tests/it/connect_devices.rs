@@ -240,7 +240,7 @@ async fn redeem_refuses_bad_or_replayed_ticket() {
 fn a_second_rotation_keeps_the_token_whose_delivery_was_never_confirmed() {
     let dir = crate::physical_tempdir();
     let store = Store::new(dir.path().to_path_buf(), None);
-    let (id, first) = store.issue_local("máquina pc-b").unwrap();
+    let (id, first) = store.enroll("máquina pc-b").unwrap();
     let delivered = store.rotate(&id).unwrap();
     // A outra ponta gravou `delivered`, mas a resposta se perdeu: o anúncio seguinte gira de novo.
     let next = store.rotate(&id).unwrap();
@@ -249,6 +249,18 @@ fn a_second_rotation_keeps_the_token_whose_delivery_was_never_confirmed() {
     assert!(store.verify(next.as_bytes()).is_some());
     assert!(store.verify(first.as_bytes()).is_none(), "usar o token mais novo encerra os outros");
     assert!(store.verify(delivered.as_bytes()).is_none());
+}
+
+#[test]
+fn using_the_new_token_survives_a_restart() {
+    let dir = crate::physical_tempdir();
+    let store = Store::new(dir.path().to_path_buf(), None);
+    let (id, first) = store.enroll("máquina pc-b").unwrap();
+    let delivered = store.rotate(&id).unwrap();
+    assert!(store.verify(delivered.as_bytes()).is_some());
+    let reopened = Store::new(dir.path().to_path_buf(), None);
+    assert!(reopened.verify(first.as_bytes()).is_none(), "o antigo não volta a valer depois de reiniciar");
+    assert_eq!(reopened.proof_key(&id), Some(hangar_core::credentials::hash(delivered.as_bytes())), "a prova usa o token em uso");
 }
 
 #[tokio::test]

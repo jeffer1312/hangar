@@ -285,7 +285,7 @@ async fn recorder() -> (Arc<Mutex<Vec<Value>>>, String) {
 async fn announce_never_sends_the_owner_password_through_connect() {
     let w = world().await;
     let (seen, url) = recorder().await;
-    let (device, _) = w.a.store.issue_local("pc-b").unwrap();
+    let (device, _) = w.a.store.enroll("pc-b").unwrap();
     write_peers(&w.a, &json!({"pc-b": {"base_url": url, "token": "emitido-por-b", "connect": true, "connect_return_device": device}}));
     let service = linked_service(&w.a);
     let rows = network::announce(&service, "").await;
@@ -336,7 +336,7 @@ async fn a_device_cannot_redirect_the_return_credential() {
     let (seen, url) = recorder().await;
     let held = peers_of(&w.b)["pc-a"]["token"].as_str().unwrap().to_owned();
     let return_device = peers_of(&w.a)["pc-b"]["connect_return_device"].clone();
-    let (device, token) = w.a.store.issue_local("aparelho").unwrap();
+    let (device, token) = w.a.store.enroll("aparelho").unwrap();
     let plant = |id: &str| client().post(format!("http://{}/api/peers", w.a.main)).bearer_auth(&token).header("content-type", "application/json")
         .body(json!({"id": id, "base_url": url, "token": "x", "connect": true, "connect_return_device": return_device}).to_string());
     assert_eq!(plant("pc-b").send().await.unwrap().status(), 409, "aparelho não muda o endereço de um par");
@@ -401,7 +401,7 @@ async fn a_shadow_entry_does_not_save_a_device_from_removal() {
 fn settling_an_older_rotation_changes_nothing() {
     let dir = crate::physical_tempdir();
     let store = Store::new(dir.path().to_path_buf(), None);
-    let (id, old) = store.issue_local("pc-b").unwrap();
+    let (id, old) = store.enroll("pc-b").unwrap();
     let first = store.rotate(&id).unwrap();
     let second = store.rotate(&id).unwrap();
     store.settle(&id, &first).unwrap();
@@ -462,7 +462,7 @@ async fn names_that_cannot_work_are_refused_before_the_ticket() {
 async fn a_device_only_checks_a_peer_on_its_own_origin() {
     let w = world().await;
     let (seen, url) = recorder().await;
-    let (_, device) = w.a.store.issue_local("aparelho").unwrap();
+    let (_, device) = w.a.store.enroll("aparelho").unwrap();
     write_peers(&w.a, &json!({"longe": {"base_url": "https://longe.tail.ts.net", "token": "token-de-longe"}, "perto": {"base_url": url, "token": "token-de-perto"},
         "cifrado": {"base_url": url.replace("http://", "https://"), "token": "token-em-https"}, "porta": {"base_url": "http://127.0.0.1:1", "token": "token-de-outra-porta"}}));
     let check = |id: &str, token: &str| client().get(format!("http://{}/api/peers/check?url={url}&id={id}", w.a.main)).bearer_auth(token.to_owned());
@@ -479,7 +479,7 @@ async fn a_device_only_checks_a_peer_on_its_own_origin() {
 async fn peer_written_by_a_device_never_receives_the_owner_password() {
     let w = world().await;
     let (seen, url) = recorder().await;
-    let (_, device) = w.a.store.issue_local("aparelho").unwrap();
+    let (_, device) = w.a.store.enroll("aparelho").unwrap();
     let planted = client().post(format!("http://{}/api/peers", w.a.main)).bearer_auth(&device).header("content-type", "application/json")
         .body(json!({"id": "armadilha", "base_url": url, "token": "qualquer"}).to_string()).send().await.unwrap();
     assert_eq!(planted.status(), 200);
@@ -638,7 +638,7 @@ async fn a_machine_key_alone_never_gets_past_the_card() {
 #[tokio::test]
 async fn only_the_owner_outside_connect_starts_a_link() {
     let w = world().await;
-    let (_, device) = w.a.store.issue_local("aparelho").unwrap();
+    let (_, device) = w.a.store.enroll("aparelho").unwrap();
     let link = |addr: SocketAddr| client().post(format!("http://{addr}/api/connect/peers/pc-b/link"));
     assert_eq!(link(w.a.main).send().await.unwrap().status(), 401);
     assert_eq!(link(w.a.main).bearer_auth(&device).send().await.unwrap().status(), 403);

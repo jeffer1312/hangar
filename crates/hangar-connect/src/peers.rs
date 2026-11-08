@@ -300,8 +300,9 @@ impl PeerLinker {
         if peer == self.server_id {
             return Err(ConnectError::new(StatusCode::CONFLICT, "connect_peer_same_identity", format!("a outra máquina também se chama '{peer}'")));
         }
+        // Sem cartão aqui: a ligação foi pedida pelo dono desta máquina, e o cartão aprovado é o da outra.
         let (devices, name) = (self.devices.clone(), format!("máquina {id}"));
-        let (device, back) = off_thread(move || devices.issue_local(&name).map_err(store_failed)).await?;
+        let (device, back) = off_thread(move || devices.enroll(&name).map_err(store_failed)).await?;
         let entry = json!({"id": peer, "base_url": format!("https://{}", machine.host), "token": token, "connect": true, "connect_return_device": device});
         // Antes de entregar: o token de B só sai uma vez, e o anúncio refaz a entrega que falhar.
         let (save, saved) = (self.save.clone(), entry.clone());

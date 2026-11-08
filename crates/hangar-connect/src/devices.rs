@@ -297,12 +297,6 @@ impl Store {
         })
     }
 
-    /// Credencial que esta máquina entrega a outra da mesma conta. Sem cartão aqui: a ligação foi
-    /// pedida pelo dono desta máquina, e o cartão aprovado é o da outra.
-    pub fn issue_local(&self, name: &str) -> Result<(DeviceId, String), Refusal> {
-        self.enroll(name)
-    }
-
     /// Token novo para o mesmo aparelho, a entregar de novo a quem o guarda: o cru nunca vai ao disco.
     pub fn rotate(&self, id: &str) -> Result<String, Refusal> {
         self.update(|state, _| {
@@ -342,9 +336,17 @@ impl Store {
         let presented = credentials::hash(token);
         let now = (self.clock)();
         let mut state = self.lock();
-        let device = state.devices.iter_mut().find(|d| d.status == Status::Approved && d.accepts(&presented))?;
-        // Usar o token novo prova a entrega, mesmo com a resposta dela perdida no caminho.
-        device.promote_if_next(&presented);
+        let index = state.devices.iter().position(|d| d.status == Status::Approved && d.accepts(&presented))?;
+        // Usar o token novo prova a entrega, mesmo com a resposta dela perdida no caminho. Vai ao disco: depois
+        // de reiniciar, o antigo voltaria a valer e a prova sairia com ele.
+        if state.devices[index].next_token_hash.as_deref().is_some_and(|next| same(next, &presented)) {
+            state.devices[index].promote_if_next(&presented);
+            let written = match &self.fault { Some(fault) => Err(io::Error::other(fault.clone())), None => write(&self.path, &state) };
+            if let Err(error) = written {
+                tracing::warn!(code = "connect_device_promote_failed", "token novo aceito sem ir ao disco: {error}");
+            }
+        }
+        let device = &mut state.devices[index];
         device.last_seen = Some(now);
         Some(device.id.clone())
     }
