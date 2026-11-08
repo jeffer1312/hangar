@@ -677,7 +677,8 @@ mod task3_contract {
     #[test]
     fn network_remote_dwim_push_pull_and_divergence_keep_the_working_copy() {
         let dir=tempfile::tempdir().unwrap(); let base=dir.path(); let origin=base.join("origin"); repo(&origin);
-        g(&origin,&["config","receive.denyCurrentBranch","ignore"]); g(base,&["clone","-q","origin","copy"]);
+        // O clone não herda o autocrlf da origem; sem isto o Git for Windows faz checkout em CRLF.
+        g(&origin,&["config","receive.denyCurrentBranch","ignore"]); g(base,&["clone","-q","-c","core.autocrlf=false","origin","copy"]);
         let root=base.join("copy"); g(&root,&["config","user.name","Teste"]); g(&root,&["config","user.email","teste@example.invalid"]); g(&root,&["config","commit.gpgSign","false"]);
         assert_eq!(op(&root,"list_branches",json!({}))["remotes"],json!(["feature"]));
         op(&root,"switch_branch",json!({"branch":"feature"})); assert_eq!(op(&root,"branch_of",json!({})),"feature");

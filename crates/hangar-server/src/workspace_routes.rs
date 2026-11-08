@@ -146,6 +146,14 @@ async fn context(st: &Arc<AppState>, name: Option<&str>) -> Result<Value, Option
         Ok(json!({"roots":roots,"sessions":sessions,"session":session,"citation_session":citation_session}))
     }).await.map_err(|_| Some("leitura"))?
 }
+/// Pasta sem Git só pede as raízes: sem descoberta de sessões nem orquestrações.
+async fn roots_context(st: &Arc<AppState>) -> Result<Value, Option<&'static str>> {
+    let source = st.clone();
+    tokio::task::spawn_blocking(move || {
+        let roots = crate::worktree_context::roots(&source).map_err(Some)?;
+        Ok(json!({"roots":roots,"sessions":[],"session":null,"citation_session":null}))
+    }).await.map_err(|_| Some("leitura"))?
+}
 async fn citation_rows(st: &Arc<AppState>, ctx: &Value, ingress: Option<&Ingress>) -> hangar_workspace::Result<Option<Vec<String>>> {
     let row: hangar_api::session::SessionRow = serde_json::from_value(ctx["citation_session"].clone())
         .map_err(|_| hangar_workspace::unavailable("sessão indisponível"))?;
@@ -315,6 +323,8 @@ async fn public_inner(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Resp
         .filter(|_| name.is_none()).map(|login| login.guest.root.clone());
     let resolved = if let Some(root) = guest_root {
         Ok(json!({"roots":[root],"sessions":[]}))
+    } else if name.is_none() && matches!(tail.as_str(), "/api/fs/roots" | "/api/fs/scan" | "/api/fs/mkdir") {
+        roots_context(&st).await
     } else { context(&st, name.as_deref()).await };
     let mut ctx = match resolved {
         Ok(ctx) => ctx,

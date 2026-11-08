@@ -524,6 +524,30 @@ async fn session_routes_do_not_read_scan_roots_configuration() {
 }
 
 #[tokio::test]
+async fn folder_routes_without_sessions_skip_session_discovery() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = hangar_workspace::real(dir.path());
+    let home = root.join("home");
+    for path in [&home, &root.join("pasta")] { std::fs::create_dir_all(path).unwrap(); }
+    let missing = root.join("missing-mux");
+    let f = workspace_fixture::fixture_with_mux(&root, false, Some(&home), Some(&missing)).await;
+    let c = client();
+    let roots = c.get(format!("http://{}/api/fs/roots", f.addr)).bearer_auth(OWNER).send().await.unwrap();
+    assert_eq!(roots.status(), 200);
+    let url = |route: &str| {
+        let mut url = reqwest::Url::parse(&format!("http://{}{route}", f.addr)).unwrap();
+        url.query_pairs_mut().append_pair("root", root.to_str().unwrap());
+        url
+    };
+    let scan = c.get(url("/api/fs/scan")).bearer_auth(OWNER).send().await.unwrap();
+    assert_eq!(scan.status(), 200);
+    // Pasta com Git lista as sessões dentro dela: sem multiplexador, recusa como antes.
+    let git = c.get(url("/api/fs/git")).bearer_auth(OWNER).send().await.unwrap();
+    assert_eq!(refusal(git, "workspace_context").await["detail"]["params"]["motivo"], "sessoes");
+    assert_eq!(f.hits(), 0);
+}
+
+#[tokio::test]
 async fn unavailable_native_context_answers_503_with_reason() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("missing-mux");
