@@ -937,11 +937,15 @@ impl RuntimeRegistry {
         let Some(min_tokens)=crate::config_sync::runtime::idle_compaction(&settings) else {return};
         // Uma tarefa por sessão: o ator lento de uma não atrasa as outras nem o estacionamento. A porta e a barreira
         // dela ficam presas até o ator responder, como no estacionamento.
+        // Ator travado não acumula tarefas: a sessão com uma em curso fica de fora da rodada.
+        static RUNNING:std::sync::LazyLock<std::sync::Mutex<std::collections::BTreeSet<String>>> = std::sync::LazyLock::new(Default::default);
         for (key,generation,name) in candidates {
+            if !RUNNING.lock().unwrap_or_else(|e|e.into_inner()).insert(key.clone()) {continue;}
             let registry=self.clone();
             tokio::spawn(async move {
                 let asked=std::time::Instant::now();
                 let result=registry.compact_claude(&key,generation,&name,after,min_tokens).await;
+                RUNNING.lock().unwrap_or_else(|e|e.into_inner()).remove(&key);
                 let waited=asked.elapsed().as_secs();
                 let diary=crate::diag::diary_dir_in(&registry.policy.codex_environment());
                 match result {
