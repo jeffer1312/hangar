@@ -10185,6 +10185,7 @@
   "connect_group_unavailable": "o pedido não está mais na lista dessa máquina (sem acesso agora ou já respondido)",
   "connect_error_install_id": "Não deu para ler o identificador deste celular no cofre. Tente de novo.",
   "connect_notice_dismiss": "Dispensar",
+  "connect_group_code_clash": "Dois pedidos com o mesmo código. Recuse os dois e peça de novo no celular.",
   "connect_install_code_unavailable": "Código deste celular indisponível: o cofre não respondeu. Confira pelo nome do aparelho.",
   "connect_install_code_no_random": "Este celular não gera um identificador seguro, então não há código. Confira pelo nome do aparelho.",
   "connect_refused_help": "A entrada deste aparelho foi recusada ou revogada. Peça de novo e aprove na máquina.",

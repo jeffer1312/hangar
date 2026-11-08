@@ -10185,6 +10185,7 @@
   "connect_group_unavailable": "the request is no longer listed on that machine (no access right now, or already answered)",
   "connect_error_install_id": "Could not read this phone's identifier from the secure store. Try again.",
   "connect_notice_dismiss": "Dismiss",
+  "connect_group_code_clash": "Two requests show the same code. Deny both and ask again from the phone.",
   "connect_install_code_unavailable": "This phone's code is unavailable: the secure store did not answer. Check the device name instead.",
   "connect_install_code_no_random": "This phone cannot generate a secure identifier, so there is no code. Check the device name instead.",
   "connect_refused_help": "This device's access was refused or revoked. Ask again and approve it on the machine.",

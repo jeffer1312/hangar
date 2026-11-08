@@ -360,17 +360,22 @@ async fn install_id_groups_one_phone_across_machines() {
 #[tokio::test]
 async fn a_retry_from_the_same_phone_replaces_its_pending_request() {
     let e = plain().await;
-    let mut last = String::new();
+    let (mut last, mut last_secret) = (String::new(), String::new());
     for i in 0..=MAX_PENDING {
-        let (text, signature) = ticket("pc1", "acme", &format!("retry{i}"), "s1");
-        let accepted = post(e.connect, "/api/connect/redeem", json!({"ticket": text, "signature": signature, "secret": "s1", "install_id": "ph1"}))
+        // Cada tentativa tem o seu segredo: o pedido novo consulta o próprio estado, não o da tentativa anterior.
+        let secret = format!("s{i}");
+        let (text, signature) = ticket("pc1", "acme", &format!("retry{i}"), &secret);
+        let accepted = post(e.connect, "/api/connect/redeem", json!({"ticket": text, "signature": signature, "secret": secret, "install_id": "ph1"}))
             .send().await.unwrap();
         assert_eq!(accepted.status(), 202, "tentativa {i}");
-        last = body_of(accepted).await["device_id"].as_str().unwrap().to_owned();
+        (last, last_secret) = (body_of(accepted).await["device_id"].as_str().unwrap().to_owned(), secret);
     }
     let rows = body_of(get(e.main, "/api/connect/devices").bearer_auth(OWNER).send().await.unwrap()).await;
     let ids: Vec<&str> = rows.as_array().unwrap().iter().map(|row| row["device_id"].as_str().unwrap()).collect();
     assert_eq!(ids, [last.as_str()]);
+    assert_eq!(status(e.connect, &last, &last_secret).await, json!({"status": "pending"}));
+    assert_eq!(post(e.connect, "/api/connect/redeem/status", json!({"device_id": last, "secret": "s0"})).send().await.unwrap().status(), 401,
+        "o segredo da primeira tentativa não abre a última");
     let (text, signature) = ticket("pc1", "acme", "outro", "s1");
     let other = post(e.connect, "/api/connect/redeem", json!({"ticket": text, "signature": signature, "secret": "s1", "install_id": "ph2"}))
         .send().await.unwrap();
