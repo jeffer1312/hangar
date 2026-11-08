@@ -43,10 +43,11 @@ function notify(serverId: string, name: string): void {
 }
 
 // O diário do servidor só aceita campos conhecidos (`_CAMPOS` do Python): os tempos vão no `detalhe`.
-function recordTiming(server: Server, stoppedAt: number, fileAt: number, uploadMs: number, transcribeMs: number, code?: string): void {
+function recordTiming(server: Server, stoppedAt: number, fileAt: number, uploadMs: number, transcribeMs: number,
+  code?: string, warned = false): void {
   const total = Date.now() - stoppedAt;
   registrarDiag({
-    evento: 'dictation.client_timing', nivel: code ? 'erro' : 'ok', ...(code ? { codigo: code } : {}), ms: total,
+    evento: 'dictation.client_timing', nivel: code ? 'erro' : warned ? 'aviso' : 'ok', ...(code ? { codigo: code } : {}), ms: total,
     detalhe: `stop_to_file_ms=${fileAt - stoppedAt} upload_ms=${uploadMs} transcribe_ms=${transcribeMs} total_ms=${total}`,
   }, server.invite ? undefined : server.baseUrl);
 }
@@ -90,7 +91,7 @@ export async function runDictation(server: Server, serverId: string, name: strin
     const applied = res.estilo_aplicado ?? voice.estilo;
     const completed = finishDictation(serverId, name, voice.id,
       { text, raw, issue: aviso, serverPath: path, applied }, opts.isActive());
-    if (opts.stoppedAt !== undefined) recordTiming(server, opts.stoppedAt, fileAt, uploadMs, transcribeMs);
+    if (opts.stoppedAt !== undefined) recordTiming(server, opts.stoppedAt, fileAt, uploadMs, transcribeMs, undefined, !!aviso);
     return { completed, text, raw, aviso, path, applied };
   } catch (e) {
     const detail = e instanceof Error ? e.message : m.composer_falha_transcricao();

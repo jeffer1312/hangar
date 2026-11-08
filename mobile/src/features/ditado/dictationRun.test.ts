@@ -83,6 +83,14 @@ describe('dictation.client_timing', () => {
       detalhe: 'stop_to_file_ms=300 upload_ms=200 transcribe_ms=1000 total_ms=1500' }, 'https://a.test');
   });
 
+  it('texto que voltou cru com aviso sai como aviso, igual ao servidor', async () => {
+    core.upload.mockResolvedValueOnce({ path: '/up/sess/d.m4a' });
+    core.transcribe.mockResolvedValueOnce({ path: '/up/sess/d.m4a', text: 'cru', raw: 'cru', aviso: 'organização falhou' });
+    writeDictation('s1', 'sess', voice());
+    await runDictation(server, 's1', 'sess', voice(), { file: new File(['a'], 'd.m4a') }, { isActive: () => false, stoppedAt: 10_000 });
+    expect(core.diag).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ evento: 'dictation.client_timing', nivel: 'aviso' }), 'https://a.test');
+  });
+
   it('a falha leva o status como código; o "de novo", sem parada, não mede', async () => {
     core.upload.mockResolvedValueOnce({ path: '/up/sess/d.m4a' });
     core.transcribe.mockImplementationOnce(async () => { vi.setSystemTime(10_400); throw new Error('502: groq'); });
