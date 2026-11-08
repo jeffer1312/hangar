@@ -221,7 +221,7 @@ export function MessageList({
             // ponytail: só a linha; abrir o SKILL.md no app nativo fica pra quando pedirem.
             : ev.text === 'skill_loaded' && ev.skill ? m.notice_skill_loaded({ name: ev.skill.name })
             : ev.text;
-          return <Text style={styles.notice}>{frase}</Text>;
+          return <NoticeLine text={frase ?? ''} />;
         }
         return null;
       }
@@ -401,6 +401,11 @@ export function MessageList({
     <ToolDetailSheet ref={detail} resultOf={resultDe} sessionName={sessionName} serverId={serverId} />
     </View>
   );
+}
+
+/** Aviso do harness no meio da conversa (interrompida, compactada); a miniatura das novidades usa o mesmo. */
+export function NoticeLine({ text }: { text: string }) {
+  return <Text style={styles.notice}>{text}</Text>;
 }
 
 const styles = StyleSheet.create((theme) => ({

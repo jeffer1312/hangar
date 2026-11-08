@@ -21,6 +21,7 @@ vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('./TagsPlateAnimation', () => ({ TagsPlateAnimation: () => null }));
 vi.mock('./RenameSuggestionAnimation', () => ({ RenameSuggestionAnimation: () => null }));
 vi.mock('./CodexActivityAnimation', () => ({ CodexActivityAnimation: () => null }));
+vi.mock('./CompactIdleAnimation', () => ({ CompactIdleAnimation: () => null }));
 vi.mock('./AutoReportAnimation', () => ({ AutoReportAnimation: () => null }));
 vi.mock('./HideFromListAnimation', () => ({ HideFromListAnimation: () => null }));
 vi.mock('./SleepHiddenAnimation', () => ({ SleepHiddenAnimation: () => null }));

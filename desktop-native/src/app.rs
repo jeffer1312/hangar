@@ -4017,11 +4017,9 @@ impl Hangar {
     /// animam fora da conversa guardada (`working_mark_float`); aqui ficam só os lugares deles.
     fn render_working(&self, cx: &mut Context<Self>) -> AnyElement {
         let sending = self.sending_shown();
-        // Mesma caixa nos dois estados: trocar de um para o outro não muda a altura da linha.
-        let line = || div().relative().h(px(38.)).flex().items_center().gap(px(8.));
         // Turno acabado: a mesma linha, parada, com quanto durou e quando terminou, como o "Worked for" do Claude Code.
         if let Some(text) = self.chat.turn_done.clone().filter(|_| !sending) {
-            return line()
+            return working_line_box()
                 .child(div().w(px(14.)).flex_none().flex().justify_center().text_size(px(13.)).text_color(theme::faint()).child("✻"))
                 .child(div().min_w_0().truncate().text_size(px(12.)).text_color(theme::faint()).child(text))
                 .into_any_element();
@@ -4032,11 +4030,10 @@ impl Hangar {
         // Sem recuo: a marca começa na borda da coluna, alinhada com o texto das mensagens.
         // As marcas animadas são pintadas pela área da conversa, por baixo da prévia da aba: lá a marca fica parada.
         let preview = self.in_tab_preview;
-        let row = line()
-            .child(if preview { div().size(px(14.)).flex_shrink_0().flex().items_center().justify_center()
-                    .child(div().size(px(7.)).rounded_full().bg(theme::accent())).into_any_element() }
-                else { self.working_mark_slot(panes::Area::Conversation, "working-line", 14., theme::accent()) })
-            .child(div().min_w_0().truncate().text_size(px(12.)).text_color(theme::muted()).child(verb))
+        let mark = if preview { div().size(px(14.)).flex_shrink_0().flex().items_center().justify_center()
+                .child(div().size(px(7.)).rounded_full().bg(theme::accent())).into_any_element() }
+            else { self.working_mark_slot(panes::Area::Conversation, "working-line", 14., theme::accent()) };
+        let row = working_line(mark, verb)
             .map(|el| match since.filter(|_| !preview) {
                 Some(since) => el.child(self.elapsed_slot(panes::Area::Conversation, "working-elapsed", since, tokens)),
                 // Sem começo conhecido não há segundos, mas os tokens do terminal valem sozinhos.
@@ -5439,7 +5436,7 @@ impl Hangar {
                 })
         });
         let content = conversation_text(div().flex().flex_col().gap_2(), user)
-            .when(!user && !plain, |el| el.child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(if error { theme::warning() } else { theme::muted() }).child(label)))
+            .when(!user && !plain, |el| el.child(message_label(label, error)))
             .when_some(peer_head, |el, head| el.child(head))
             .when_some(thumbs, |el, thumbs| el.child(thumbs))
             .children(text)
@@ -6683,6 +6680,11 @@ fn message_card(event: &ChatEvent) -> Option<cards::Card> {
 /// ao expirar. Não é botão: não há o que fazer com ele além de saber.
 fn cache_chip(cache: crate::chat::LastCache) -> impl IntoElement {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.);
+    cache_chip_at(cache, now)
+}
+
+/// O chip num instante dado: a miniatura das novidades (`crate::news`) conta o prazo sem relógio de verdade.
+pub(crate) fn cache_chip_at(cache: crate::chat::LastCache, now: f64) -> Stateful<Div> {
     let (_, ending, label) = crate::chat::cache_left(cache, now);
     let web = |key: &str, params: &[(&str, String)]| crate::i18n::tr_web(key, &params.iter().map(|(k, v)| (k.to_string(), v.clone())).collect())
         .unwrap_or_else(|| key.to_owned());
@@ -6800,6 +6802,19 @@ fn signature(item: &Item, events: &[ChatEvent]) -> String {
         Item::Thinking { parts, .. } => parts.iter().map(|&i| format!("{}:{}", events[i].id, events[i].text.as_deref().map(str::len).unwrap_or(0))).collect::<Vec<_>>().join(","),
         Item::Tasks { tasks, .. } => format!("{tasks:?}"),
     }
+}
+
+/// Caixa da linha de trabalho. Mesma altura rodando ou parada: trocar de uma para a outra não remede a lista.
+pub(crate) fn working_line_box() -> Div { div().relative().h(px(38.)).flex().items_center().gap(px(8.)) }
+
+/// Marca e verbo da linha de trabalho; os segundos, quando há, entram depois. A miniatura das novidades usa a mesma.
+pub(crate) fn working_line(mark: AnyElement, verb: String) -> Div {
+    working_line_box().child(mark).child(div().min_w_0().truncate().text_size(px(12.)).text_color(theme::muted()).child(verb))
+}
+
+/// Rótulo de cima da linha que não é bolha nem resposta (aviso, erro), onde ele é informação.
+pub(crate) fn message_label(label: String, error: bool) -> Div {
+    div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(if error { theme::warning() } else { theme::muted() }).child(label)
 }
 
 /// O verbo do spinner do terminal ("Sketching… (6s · esc to interrupt)" → "Sketching…"); rótulo sem ele, "Trabalhando…".

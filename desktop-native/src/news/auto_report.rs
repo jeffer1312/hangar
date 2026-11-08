@@ -1,7 +1,7 @@
 //! `relatorio-automatico`: com o interruptor ligado, a máquina cuja atualização falha manda o relatório sozinha e a
 //! linha dela mostra o código.
 
-use std::{cell::Cell, time::{Duration, Instant}};
+use std::time::Instant;
 use gpui_kit::{assets::IconName, component::switch::Switch, *};
 use crate::{app, i18n::tr_shared, theme, update::status_line};
 
@@ -31,22 +31,7 @@ fn until_next_step(t: f32) -> f32 {
     [ON, FAILED, SENDING, SENT, CYCLE].into_iter().filter(|b| *b > t).fold(CYCLE, f32::min) - t
 }
 
-thread_local! {
-    /// O redesenho já marcado: cada render só marca outro se o dele cair antes.
-    static NEXT_REPAINT: Cell<Option<Instant>> = const { Cell::new(None) };
-}
-
-/// Redesenha a janela no próximo degrau. Só é marcado enquanto a animação é desenhada: fechou o modal, para.
-fn schedule_repaint(t: f32, window: &mut Window, cx: &mut App) {
-    // Margem para o timer não acordar um pouco antes do degrau e desenhar o quadro velho.
-    let at = Instant::now() + Duration::from_secs_f32(until_next_step(t)) + Duration::from_millis(5);
-    if NEXT_REPAINT.get().is_some_and(|next| next > Instant::now() && next <= at) { return; }
-    NEXT_REPAINT.set(Some(at));
-    window.spawn(cx, async move |cx| {
-        cx.background_executor().timer(at.saturating_duration_since(Instant::now())).await;
-        let _ = cx.update(|window, _| window.refresh());
-    }).detach();
-}
+fn schedule_repaint(t: f32, window: &mut Window, cx: &mut App) { super::repaint_in(until_next_step(t), window, cx) }
 
 /// O texto da linha da máquina. No cartão estreito o relatório substitui a falha, que não caberia junto.
 fn line_text(line: Line, compact: bool) -> String {

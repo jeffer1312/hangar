@@ -108,6 +108,24 @@ pub struct ClaudeEngine {
     active_at: f64,
     /// O cano parou de repassar a saída da CLI (`headless_cano_surdo`): entrega desligada até trocar o processo.
     deaf: bool,
+    idle_compact: IdleCompact,
+}
+
+/// O que a compactação da sessão parada precisa saber do último turno visto nesta vida do processo.
+#[derive(Default)]
+struct IdleCompact {
+    /// O `usage` veio de uma resposta desta vida, não do transcript relido: só aí o cache ainda pode estar quente.
+    live: bool,
+    /// Cache de 1 h no último turno que gravou cache; turno só de leitura não diz.
+    one_hour: Option<bool>,
+    /// Compactou desde o último uso: não há o que compactar.
+    done: bool,
+    /// Quando chegou o último `usage`: o prazo do cache conta da última chamada à API, não de qualquer evento.
+    cache_at: f64,
+    /// A compactação em curso ou feita foi a da sessão parada, não um pedido da pessoa.
+    auto: bool,
+    /// Já se pediu o `/compact` da parada desde o último uso: sem `compact_boundary`, não se pede de novo.
+    tried: bool,
 }
 
 const ECHO_LIMIT: usize = 64;
@@ -161,7 +179,7 @@ impl ClaudeEngine {
             preview:LiveBuffer::default(),thinking:LiveBuffer::default(),tool_input:LiveBuffer::default(),tool_name:None,tool_visible:false,
             label:None,retry_label:None,hooks_running:BTreeMap::new(),hook_streaks:BTreeMap::new(),diary_counts:BTreeMap::new(),compacting:false,turn_start:None,label_deadline:None,tokens_closed:0,tokens_message:None,gen_start:None,
             token_chars:0,thinking_start:None,thought_s:0.0,tasks:Vec::new(),usage:metadata.get("usage").cloned().unwrap_or(Value::Null),
-            context_window:metadata["context_window"].as_u64(),cost:metadata["cost"].as_f64(),effort_intent,effort_deadline:None,active_input:None,slash_input:None,unknown:BTreeSet::new(),replaying:false,surface:None,stderr_tail:Vec::new(),problem_persisted,subagents:BTreeMap::new(),echoes:std::collections::VecDeque::new(),background:BTreeSet::new(),active_at:clock.monotonic_s,deaf:false,metadata };
+            context_window:metadata["context_window"].as_u64(),cost:metadata["cost"].as_f64(),effort_intent,effort_deadline:None,active_input:None,slash_input:None,unknown:BTreeSet::new(),replaying:false,surface:None,stderr_tail:Vec::new(),problem_persisted,subagents:BTreeMap::new(),echoes:std::collections::VecDeque::new(),background:BTreeSet::new(),active_at:clock.monotonic_s,deaf:false,idle_compact:IdleCompact::default(),metadata };
         if let Some(controls) = engine.metadata["control_carry"].as_array() {
             for control in controls {
                 let Ok(request_id) = serde_json::from_value::<RequestId>(control["request_id"].clone()) else { continue };
@@ -256,7 +274,8 @@ impl ClaudeEngine {
             "previous_non_plan":self.previous_non_plan,"commands":self.commands,"terminal_commands":self.terminal_commands,
             "usage":self.usage,"context_window":self.context_window,"cost":self.cost,"effort_intent":self.effort_intent,
             "runtime_counter":self.counter,"conversation":self.metadata["session_id"],"deliverable":self.deliverable(),
-            "subagents":self.subagents})
+            "subagents":self.subagents,"idle_compact_tokens":self.idle_compact_tokens(),
+            "idle_compacted":self.idle_compact.auto && self.idle_compact.done})
     }
 
     pub(super) fn input_frame(operation_id:&str,payload:&Value) -> Value {
@@ -612,6 +631,13 @@ impl ClaudeEngine {
     }
 
     pub fn command(&mut self,command:RuntimeCommand,clock:ClockSample) -> Result<Vec<Effect>,RuntimeError> {
+        // O `/compact` da sessão parada reconfere aqui, na mesma vez do ator: o que chegou depois da vista cancela.
+        if command.kind == OperationKind::Compact && let Some(after) = command.payload.get("idle_after_s") {
+            let after = after.as_f64().ok_or_else(||error("idle_after_s precisa ser número"))?;
+            if self.idle_compact_age(clock.monotonic_s).is_none_or(|age|age < after) {
+                return Err(RuntimeError::new("idle_compact_stale","a sessão saiu da parada antes do /compact"));
+            }
+        }
         self.clock = clock;
         self.active_at = clock.monotonic_s;
         if !self.alive {
@@ -705,6 +731,8 @@ impl ClaudeEngine {
             OperationKind::ListModels => self.control(operation_id,"list_models",json!({}),&mut effects),
             OperationKind::Compact => {
                 if !self.deliverable() { return Err(error("aguarde a sessão ficar ociosa")); }
+                self.idle_compact.auto = payload.get("idle_after_s").is_some();
+                self.idle_compact.tried |= self.idle_compact.auto;
                 self.local_command(operation_id,"/compact",&mut effects);
             }
             OperationKind::Cwd => effects.push(Effect::Reply { operation_id,disposition:Disposition::Accepted,payload:self.metadata["cwd"].clone() }),
@@ -942,7 +970,17 @@ impl ClaudeEngine {
                 } else {
                     self.slash_input = None;
                     let usage = &event["message"]["usage"];
-                    if ["input_tokens","cache_read_input_tokens","cache_creation_input_tokens"].iter().any(|k|usage[*k].as_u64().unwrap_or(0) > 0) { self.usage = usage.clone(); }
+                    if ["input_tokens","cache_read_input_tokens","cache_creation_input_tokens"].iter().any(|k|usage[*k].as_u64().unwrap_or(0) > 0) {
+                        self.usage = usage.clone();
+                        let creation = &usage["cache_creation"];
+                        if creation["ephemeral_1h_input_tokens"].as_u64().unwrap_or(0) > 0 { self.idle_compact.one_hour = Some(true); }
+                        else if creation["ephemeral_5m_input_tokens"].as_u64().unwrap_or(0) > 0 { self.idle_compact.one_hour = Some(false); }
+                        self.idle_compact.live = true;
+                        self.idle_compact.done = false;
+                        self.idle_compact.cache_at = self.clock.monotonic_s;
+                        // A chamada do próprio resumo não é uso novo: a compactação da parada segue a dela.
+                        if !self.compacting { self.idle_compact.auto = false; self.idle_compact.tried = false; }
+                    }
                     if let Some(blocks) = event["message"]["content"].as_array() {
                         for block in blocks {
                             match block["type"].as_str() {
@@ -1214,7 +1252,10 @@ impl ClaudeEngine {
                 else if event["status"] == "requesting" && self.in_progress && !self.compacting { self.label = Some("Pensando…".into()); }
             }
             "thinking_tokens" if self.in_progress && !self.compacting => self.label = Some("Pensando…".into()),
-            "compact_boundary" => if std::mem::take(&mut self.compacting) { self.label = None; },
+            "compact_boundary" => {
+                self.idle_compact.done = true;
+                if std::mem::take(&mut self.compacting) { self.label = None; }
+            }
             // O conjunto vivo inteiro do trabalho de fundo: substitui o que se sabia dele (o que saiu terminou).
             "background_tasks_changed" => {
                 let live:BTreeSet<String> = event["tasks"].as_array().into_iter().flatten().filter_map(|task|task["task_id"].as_str().map(str::to_owned)).collect();
@@ -1526,6 +1567,20 @@ impl ClaudeEngine {
             || self.effort_intent.as_ref().is_some_and(|intent|intent["status"] == "prepared" || intent["status"] == "dispatching")
             || !self.background.is_empty();
         (!open).then(||now - self.active_at)
+    }
+
+    /// Contexto do último turno quando compactar parada ainda aproveita o cache de 1 h; `None` = nada a fazer.
+    fn idle_compact_tokens(&self) -> Option<u64> {
+        let state = &self.idle_compact;
+        if !state.live || state.done || state.tried || state.one_hour != Some(true) { return None; }
+        Some(["input_tokens","cache_read_input_tokens","cache_creation_input_tokens"].iter().map(|k|self.usage[*k].as_u64().unwrap_or(0)).sum())
+    }
+
+    /// Segundos desde a última chamada à API, com a sessão parada e algo a compactar; `None` = não compacta.
+    pub fn idle_compact_age(&self,now:f64) -> Option<f64> {
+        self.idle_compact_tokens()?;
+        self.park_idle(now)?;
+        Some(now - self.idle_compact.cache_at)
     }
 
     pub fn next_deadline(&self) -> Option<f64> {
