@@ -506,13 +506,21 @@ impl Store {
     }
 }
 
+fn other_terminal_policy(state: &State) -> bool {
+    matches!(state.runtime_state["other_terminal_life"]["provider"].as_str(), Some("pi" | "omp" | "kimi"))
+}
+
 fn append_row(state: &mut State, row: Value) -> io::Result<Value> {
     if state.rows.iter().any(|r| row_id(r) == row_id(&row)) { return Err(invalid("entrada da fila já existe")); }
     let overflow = state.rows.len().saturating_add(1).saturating_sub(CAP);
-    let candidates: Vec<_> = state.rows.iter().filter(|r| (r["confirmed"] == true || r["papel"] == "assistant")
-        && !state.protected(row_id(r))).take(overflow).map(|r| row_id(r).to_owned()).collect();
-    if candidates.len() < overflow { return Err(invalid("fila cheia de entradas pendentes")); }
-    state.rows.retain(|r| !candidates.iter().any(|id| id == row_id(r)));
+    if other_terminal_policy(state) {
+        state.rows.drain(..overflow);
+    } else {
+        let candidates: Vec<_> = state.rows.iter().filter(|r| (r["confirmed"] == true || r["papel"] == "assistant")
+            && !state.protected(row_id(r))).take(overflow).map(|r| row_id(r).to_owned()).collect();
+        if candidates.len() < overflow { return Err(invalid("fila cheia de entradas pendentes")); }
+        state.rows.retain(|r| !candidates.iter().any(|id| id == row_id(r)));
+    }
     state.rows.push(row.clone());
     mark_materialized(state,row_id(&row));
     Ok(row)
@@ -1051,10 +1059,13 @@ fn apply(state: &mut State, action: Action, clock: ClockSample, call_id: &str) -
             if operation.status == Status::Confirmed { return Ok(json!(false)); }
             let cursor: super::receipt::DispatchCursor = serde_json::from_value(operation.dispatch_cursor.clone())
                 .map_err(|_|invalid("operação sem cursor de despacho"))?;
-            let row = state.rows.iter_mut().find(|r|Some(row_id(r)) == operation.entry_id.as_deref())
+            let row = state.rows.iter().find(|r|Some(row_id(r)) == operation.entry_id.as_deref())
                 .ok_or_else(||invalid("entrada da operação não existe"))?;
             if row["confirmed"] == true { return Ok(json!(false)); }
-            if !proof.validates(&cursor,row) { return Err(invalid("prova de entrega não corresponde ao despacho")); }
+            let proven = if other_terminal_policy(state) {proof.validates_other(&cursor,row,&state.rows)} else {proof.validates(&cursor,row)};
+            if !proven { return Err(invalid("prova de entrega não corresponde ao despacho")); }
+            let entry_id = row_id(row).to_owned();
+            let row = state.rows.iter_mut().find(|row| row_id(row) == entry_id).unwrap();
             row["delivered"] = json!(true); row["confirmed"] = json!(true);
             row.as_object_mut().unwrap().remove("desistiu");
             let entry=row_id(row).to_owned();
@@ -1070,11 +1081,17 @@ fn apply(state: &mut State, action: Action, clock: ClockSample, call_id: &str) -
             if state.used_occurrences.contains_key(&occurrence.id) || !legacy_rows(state).iter().any(|r|row_id(r) == entry_id) {
                 return Ok(json!(false));
             }
-            let row = state.rows.iter_mut().find(|r|row_id(r) == entry_id).ok_or_else(||invalid("entrada legada não existe"))?;
+            let row = state.rows.iter().find(|r|row_id(r) == entry_id).ok_or_else(||invalid("entrada legada não existe"))?;
+            let matches = if other_terminal_policy(state) {
+                super::receipt::other_matching_text(row,&occurrence.text,&state.rows).as_deref() == Some(normalized_text.as_str())
+            } else {
+                entry_lines(row).contains(&normalized_text)
+                    && crate::transcript::history::chaves_de_commit(&occurrence.text).contains(&normalized_text)
+            };
             let proven = row["ts"].as_f64().is_some_and(|sent|super::receipt::legacy_accepts(&occurrence,sent))
-                && entry_lines(row).contains(&normalized_text)
-                && crate::transcript::history::chaves_de_commit(&occurrence.text).contains(&normalized_text);
+                && matches;
             if !proven { return Err(invalid("prova da entrada legada não corresponde")); }
+            let row = state.rows.iter_mut().find(|row|row_id(row) == entry_id).unwrap();
             row["confirmed"] = json!(true);
             row.as_object_mut().unwrap().remove("desistiu");
             // Texto, não objeto: a compactação só descarta recibo de operação, e este não tem.

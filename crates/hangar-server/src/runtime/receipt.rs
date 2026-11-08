@@ -56,6 +56,7 @@ pub struct ReceiptIndex {
     meta_conversation: Option<String>,
     /// Claude: início e carimbo da última linha de fim de turno (`assistant` com `end_turn`, `stop_hook_summary`).
     turn_end: Option<(u64,Option<f64>)>,
+    other_rows: Option<std::sync::Arc<super::queue::State>>,
 }
 
 fn anchor(data: &[u8]) -> String {
@@ -100,7 +101,21 @@ fn identity(file: &File) -> io::Result<String> {
 
 impl ReceiptIndex {
     pub fn new(provider: &str, conversation: &str) -> Self {
-        Self { provider:provider.into(),conversation:conversation.into(),identity:None,tail:Vec::new(),occurrences:Vec::new(),scan_offset:0,meta_conversation:None,turn_end:None }
+        Self { provider:provider.into(),conversation:conversation.into(),identity:None,tail:Vec::new(),occurrences:Vec::new(),scan_offset:0,meta_conversation:None,turn_end:None,other_rows:None }
+    }
+
+    pub(super) fn set_other_rows(&mut self, state: std::sync::Arc<super::queue::State>) {
+        if matches!(self.provider.as_str(), "pi" | "omp" | "kimi") {
+            self.other_rows = Some(state);
+        }
+    }
+
+    fn matching_text(&self, row: &Value, text: &str) -> Option<String> {
+        if let Some(state) = &self.other_rows {
+            return other_matching_text(row, text, &state.rows);
+        }
+        let committed = crate::transcript::history::chaves_de_commit(text);
+        super::queue::entry_lines(row).into_iter().find(|candidate| committed.contains(candidate))
     }
 
     /// O transcript lido termina num fim de turno (nenhuma mensagem da pessoa depois da última linha de fim):
@@ -265,13 +280,11 @@ impl ReceiptIndex {
         let Some(before) = bytes_before(&mut file,cursor.offset)? else { return Ok(None) };
         let observed = anchor(&before);
         if observed != cursor.anchor { return Ok(None); }
-        let candidates = super::queue::entry_lines(row);
         for occurrence in &self.occurrences {
             if used.contains_key(&occurrence.id) || occurrence.offset < cursor.offset { continue; }
             if !cursor_accepts(cursor,occurrence) { continue; }
-            let committed = crate::transcript::history::chaves_de_commit(&occurrence.text);
-            if let Some(normalized_text) = candidates.iter().find(|c|committed.contains(*c)) {
-                return Ok(Some(ReceiptProof { cursor:cursor.clone(),occurrence:occurrence.clone(),normalized_text:normalized_text.clone(),observed_anchor:observed }));
+            if let Some(normalized_text) = self.matching_text(row, &occurrence.text) {
+                return Ok(Some(ReceiptProof { cursor:cursor.clone(),occurrence:occurrence.clone(),normalized_text,observed_anchor:observed }));
             }
         }
         Ok(None)
@@ -282,10 +295,8 @@ impl ReceiptIndex {
     pub fn match_legacy(&self, row: &Value, used: &BTreeMap<String,Value>) -> Option<(Occurrence,String)> {
         self.identity.as_ref()?;
         let sent = row["ts"].as_f64()?;
-        let candidates = super::queue::entry_lines(row);
         self.occurrences.iter().filter(|o|!used.contains_key(&o.id) && legacy_accepts(o,sent)).find_map(|occurrence| {
-            let committed = crate::transcript::history::chaves_de_commit(&occurrence.text);
-            candidates.iter().find(|c|committed.contains(*c)).map(|text|(occurrence.clone(),text.clone()))
+            self.matching_text(row, &occurrence.text).map(|text|(occurrence.clone(),text))
         })
     }
 }
@@ -311,14 +322,41 @@ fn content_text(content: &Value) -> String {
 }
 
 impl ReceiptProof {
-    pub fn validates(&self, cursor: &DispatchCursor, row: &Value) -> bool {
+    fn validates_cursor(&self, cursor: &DispatchCursor) -> bool {
         self.cursor == *cursor && cursor_accepts(cursor,&self.occurrence)
             && self.occurrence.conversation == cursor.conversation && self.occurrence.offset >= cursor.offset
             && self.occurrence.end_offset > self.occurrence.offset && self.observed_anchor == cursor.anchor
             && matches!(self.occurrence.kind.as_str(),"user" | "dequeue" | "steer")
+    }
+
+    pub fn validates(&self, cursor: &DispatchCursor, row: &Value) -> bool {
+        self.validates_cursor(cursor)
             && super::queue::entry_lines(row).contains(&self.normalized_text)
             && crate::transcript::history::chaves_de_commit(&self.occurrence.text).contains(&self.normalized_text)
     }
+
+    pub(super) fn validates_other(&self, cursor: &DispatchCursor, row: &Value, rows: &[Value]) -> bool {
+        self.validates_cursor(cursor)
+            && other_matching_text(row, &self.occurrence.text, rows).as_deref() == Some(self.normalized_text.as_str())
+    }
+}
+
+/// Um eco com sufixo pertence ao texto exato ou ao maior prefixo, nunca à entrada mais genérica.
+pub(super) fn other_matching_text(row: &Value, text: &str, rows: &[Value]) -> Option<String> {
+    if row["delivered"] != true || row["confirmed"] == true { return None; }
+    let candidates = super::queue::entry_lines(row);
+    let committed = crate::transcript::history::chaves_de_commit(text);
+    if let Some(exact) = candidates.iter().find(|candidate| committed.contains(candidate)) {
+        return Some(exact.clone());
+    }
+    let eligible = rows.iter().filter(|row| row["delivered"] == true && row["confirmed"] != true)
+        .flat_map(super::queue::entry_lines).collect::<std::collections::BTreeSet<_>>();
+    candidates.into_iter().filter(|candidate| candidate.chars().count() >= 8).find(|candidate| {
+        committed.iter().any(|echo| echo.starts_with(candidate.as_str())
+            && !eligible.contains(echo)
+            && eligible.iter().filter(|other| echo.starts_with(other.as_str()))
+                .all(|other| other.chars().count() <= candidate.chars().count()))
+    })
 }
 
 fn cursor_accepts(cursor:&DispatchCursor,occurrence:&Occurrence)->bool {

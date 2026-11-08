@@ -896,6 +896,8 @@ async fn confirm(
     receipt: &Arc<std::sync::Mutex<super::receipt::ReceiptIndex>>,
     snapshot: &tokio::sync::watch::Sender<Value>,
 ) -> Result<Value, RuntimeError> {
+    let state = queue.snapshot().await.map_err(|_| failed("queue_io"))?;
+    receipt.lock().map_err(|_| failed("receipt_panic"))?.set_other_rows(state);
     let (confirmed, legacy) = super::actor::prove_inputs(
         queue.clone(),
         receipt.clone(),

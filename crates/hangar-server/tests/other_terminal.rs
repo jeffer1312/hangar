@@ -91,6 +91,95 @@ fn directories(root:&std::path::Path)->hangar_server::list::discover_other::Dirs
     hangar_server::list::discover_other::Dirs {home:root.into(),claude:root.join(".claude"),codex_home:root.join(".codex"),pi_sessions:root.join(".pi/agent/sessions"),omp_config:root.join(".omp"),omp_agent:root.join(".omp/agent"),kimi_home:root.join(".kimi-code")}
 }
 
+#[tokio::test]
+async fn other_queue_contract_append_keeps_the_last_thousand_even_when_all_are_waiting() {
+    use hangar_server::runtime::{other_terminal::open_queue, protocol::ClockSample, queue::Action};
+    for provider in ["pi", "omp", "kimi"] {
+        let root = tempfile::tempdir().unwrap();
+        let mut target = adoption_target(root.path());
+        target.provider = hangar_transcript::Provider::parse(provider).unwrap();
+        std::fs::create_dir_all(&target.projection_dir).unwrap();
+        let rows = (0..1000).map(|id| format!("{}\n", json!({"id":id.to_string(),"text":format!("pending-{id}"),"ts":200.0,"delivered":false}))).collect::<String>();
+        std::fs::write(target.projection_dir.join("pi-a.jsonl"), rows).unwrap();
+        let queue = open_queue(&target).await.unwrap();
+        let appended = queue.exec(1, "overflow-append", ClockSample {monotonic_s:0.0,epoch_s:201.0},
+            Action::Append {text:"nova".into(),delivered:false,ts:Some(201.0),pre_transcript:false,entry_id:Some("new".into())}).await;
+        let state = queue.snapshot().await.unwrap();
+        queue.shutdown().await.unwrap();
+        assert!(appended.is_ok(), "{provider}: a entrada nova continua sendo aceita: {appended:?}");
+        assert_eq!(state.rows.len(), 1000, "{provider}");
+        assert_eq!(state.rows[0]["id"], "1", "{provider}");
+        assert_eq!(state.rows.last().unwrap()["text"], "nova", "{provider}");
+        assert!(state.rows.iter().all(|row| row["id"] != "0"), "{provider}");
+    }
+}
+
+async fn contract_receipts(provider: &str, initial: Vec<serde_json::Value>, committed: &str, dispatched: bool) -> serde_json::Value {
+    use hangar_server::runtime::{other_terminal::*, protocol::ClockSample, queue::{Action,Status}};
+    let root = tempfile::tempdir().unwrap();
+    let mut target = adoption_target(root.path());
+    target.provider = hangar_transcript::Provider::parse(provider).unwrap();
+    std::fs::create_dir_all(&target.projection_dir).unwrap();
+    std::fs::write(target.projection_dir.join("pi-a.jsonl"), initial.iter().map(|row|format!("{row}\n")).collect::<String>()).unwrap();
+    std::fs::write(&target.transcript, "").unwrap();
+    let queue = open_queue(&target).await.unwrap();
+    let clock = ClockSample {monotonic_s:0.0,epoch_s:400.0};
+    if dispatched {
+        let cursor = ReceiptIndex::new(provider, &target.binding.conversation).capture(&target.transcript).unwrap();
+        for row in &initial {
+            let id = row["id"].as_str().unwrap();
+            let op = format!("other-send:{id}");
+            for (suffix, action) in [
+                ("prepare", Action::Prepare {id:op.clone(),entry_id:Some(id.into()),payload:json!({"kind":"input","payload":{"text":row["text"],"conversation":target.binding.conversation,"_terminal_generation":1}})}),
+                ("bind", Action::BindDispatch {id:op.clone(),cursor:serde_json::to_value(&cursor).unwrap()}),
+                ("begin", Action::BeginDispatch {id:op.clone(),wire_id:format!("terminal:1:{id}"),staged:false}),
+                ("finish", Action::Finish {id:op,status:Status::Unknown,result:json!({})}),
+            ] {
+                queue.exec(1, &format!("{id}-{suffix}"), clock, action).await.unwrap();
+            }
+        }
+    }
+    std::fs::write(&target.transcript, line(provider, "echo", committed)).unwrap();
+    let io = std::sync::Arc::new(RecordingIo::default());
+    let mut options = OtherOptions::new(hangar_server::terminal_control::TerminalPool::new(),
+        hangar_server::provider_models::inbox::Store::new(), std::sync::Arc::new(hangar_server::list::procs::SystemProcs::default()),
+        std::sync::Arc::new(hangar_server::interactions::InteractionStore::default()));
+    options.io_override = Some(io.clone());
+    options.tick = std::time::Duration::from_secs(3600);
+    let handle = OtherHandle::spawn(target, queue, options, tokio::sync::watch::channel(None).0);
+    handle.confirm().await.unwrap();
+    handle.confirm().await.unwrap();
+    let snapshot = handle.snapshot().await.unwrap();
+    handle.stop().await.unwrap();
+    assert!(io.writes.lock().unwrap().is_empty(), "confirmar nunca redigita");
+    snapshot
+}
+
+#[tokio::test]
+async fn other_queue_contract_suffix_confirms_only_the_exact_or_longest_owner_once() {
+    let long = "Vamos fazer ate as 23 com o Deepseek dps agnt para e volta amanha";
+    for provider in ["pi", "omp", "kimi"] {
+        for dispatched in [false, true] {
+            let cases = [
+                (vec![json!({"id":"Y","text":long,"ts":200.0,"delivered":true})], format!("{long}… eu tinha mandado isso"), vec!["Y"]),
+                (vec![json!({"id":"X","text":"pode seguir","ts":200.0,"delivered":true,"attempts":2,"desistiu":true}),
+                    json!({"id":"Y","text":"pode seguir com a Task 4 agora","ts":300.0,"delivered":true,"attempts":2})], "pode seguir com a Task 4 agora".into(), vec!["Y"]),
+                (vec![json!({"id":"X","text":"Vamos fazer","ts":200.0,"delivered":true,"attempts":2,"desistiu":true}),
+                    json!({"id":"Y","text":"Vamos fazer ate as 23 com o Deepseek","ts":300.0,"delivered":true,"attempts":2})], "Vamos fazer ate as 23 com o Deepseek — eu tinha mandado isso".into(), vec!["Y"]),
+                (vec![json!({"id":"X","text":"seguir com a tarefa","ts":200.0,"delivered":true}),
+                    json!({"id":"Y","text":"seguir com a tarefa","ts":200.0,"delivered":true})], "seguir com a tarefa".into(), vec!["X"]),
+                (vec![json!({"id":"X","text":"ok","ts":200.0,"delivered":true,"attempts":2,"desistiu":true})], "ok, vamos fazer".into(), vec![]),
+            ];
+            for (initial, echo, expected) in cases {
+                let snapshot = contract_receipts(provider, initial, &echo, dispatched).await;
+                let confirmed = snapshot["queue"].as_array().unwrap().iter().filter(|row| row["confirmed"] == true)
+                    .map(|row| row["id"].as_str().unwrap()).collect::<Vec<_>>();
+                assert_eq!(confirmed, expected, "{provider} dispatched={dispatched} echo={echo}");
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 struct RecordingIo {writes:std::sync::Mutex<Vec<(String,bool)>>,captures:std::sync::atomic::AtomicUsize,captured:tokio::sync::Notify,before_prove:std::sync::Mutex<Option<Box<dyn FnOnce()+Send>>>}
 impl hangar_server::runtime::other_terminal::OtherIo for RecordingIo {
