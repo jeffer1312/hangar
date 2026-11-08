@@ -52,8 +52,11 @@ if ($faltam.Count -gt 0) {
     $faltam = Missing
 }
 
+# A pasta da versao some na poda; no pacote o caminho estavel e o current.
+$fw = $PSCommandPath
+if ($fw -like (Join-Path $HOME '.hangar\versions\*')) { $fw = Join-Path $HOME '.hangar\current\scripts\open-firewall.ps1' }
 $texto = if ($faltam.Count -eq 0) { "liberadas: $($Ports -join ', ')" } else {
-    "sem regra: $($faltam -join ', ') - num PowerShell como admin: powershell -ExecutionPolicy Bypass -File scripts\open-firewall.ps1"
+    "sem regra: $($faltam -join ', ') - num PowerShell como admin: powershell -ExecutionPolicy Bypass -File `"$fw`""
 }
 Write-Host "firewall: $texto"
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $marca) | Out-Null
