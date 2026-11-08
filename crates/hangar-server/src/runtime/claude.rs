@@ -108,6 +108,18 @@ pub struct ClaudeEngine {
     active_at: f64,
     /// O cano parou de repassar a saída da CLI (`headless_cano_surdo`): entrega desligada até trocar o processo.
     deaf: bool,
+    idle_compact: IdleCompact,
+}
+
+/// O que a compactação da sessão parada precisa saber do último turno visto nesta vida do processo.
+#[derive(Default)]
+struct IdleCompact {
+    /// O `usage` veio de uma resposta desta vida, não do transcript relido: só aí o cache ainda pode estar quente.
+    live: bool,
+    /// Cache de 1 h no último turno que gravou cache; turno só de leitura não diz.
+    one_hour: Option<bool>,
+    /// Compactou (ou pediu `/compact`) desde o último uso: não há o que compactar.
+    done: bool,
 }
 
 const ECHO_LIMIT: usize = 64;
@@ -161,7 +173,7 @@ impl ClaudeEngine {
             preview:LiveBuffer::default(),thinking:LiveBuffer::default(),tool_input:LiveBuffer::default(),tool_name:None,tool_visible:false,
             label:None,retry_label:None,hooks_running:BTreeMap::new(),hook_streaks:BTreeMap::new(),diary_counts:BTreeMap::new(),compacting:false,turn_start:None,label_deadline:None,tokens_closed:0,tokens_message:None,gen_start:None,
             token_chars:0,thinking_start:None,thought_s:0.0,tasks:Vec::new(),usage:metadata.get("usage").cloned().unwrap_or(Value::Null),
-            context_window:metadata["context_window"].as_u64(),cost:metadata["cost"].as_f64(),effort_intent,effort_deadline:None,active_input:None,slash_input:None,unknown:BTreeSet::new(),replaying:false,surface:None,stderr_tail:Vec::new(),problem_persisted,subagents:BTreeMap::new(),echoes:std::collections::VecDeque::new(),background:BTreeSet::new(),active_at:clock.monotonic_s,deaf:false,metadata };
+            context_window:metadata["context_window"].as_u64(),cost:metadata["cost"].as_f64(),effort_intent,effort_deadline:None,active_input:None,slash_input:None,unknown:BTreeSet::new(),replaying:false,surface:None,stderr_tail:Vec::new(),problem_persisted,subagents:BTreeMap::new(),echoes:std::collections::VecDeque::new(),background:BTreeSet::new(),active_at:clock.monotonic_s,deaf:false,idle_compact:IdleCompact::default(),metadata };
         if let Some(controls) = engine.metadata["control_carry"].as_array() {
             for control in controls {
                 let Ok(request_id) = serde_json::from_value::<RequestId>(control["request_id"].clone()) else { continue };
@@ -256,7 +268,7 @@ impl ClaudeEngine {
             "previous_non_plan":self.previous_non_plan,"commands":self.commands,"terminal_commands":self.terminal_commands,
             "usage":self.usage,"context_window":self.context_window,"cost":self.cost,"effort_intent":self.effort_intent,
             "runtime_counter":self.counter,"conversation":self.metadata["session_id"],"deliverable":self.deliverable(),
-            "subagents":self.subagents})
+            "subagents":self.subagents,"idle_compact_tokens":self.idle_compact_tokens()})
     }
 
     pub(super) fn input_frame(operation_id:&str,payload:&Value) -> Value {
@@ -705,6 +717,7 @@ impl ClaudeEngine {
             OperationKind::ListModels => self.control(operation_id,"list_models",json!({}),&mut effects),
             OperationKind::Compact => {
                 if !self.deliverable() { return Err(error("aguarde a sessão ficar ociosa")); }
+                self.idle_compact.done = true;
                 self.local_command(operation_id,"/compact",&mut effects);
             }
             OperationKind::Cwd => effects.push(Effect::Reply { operation_id,disposition:Disposition::Accepted,payload:self.metadata["cwd"].clone() }),
@@ -942,7 +955,14 @@ impl ClaudeEngine {
                 } else {
                     self.slash_input = None;
                     let usage = &event["message"]["usage"];
-                    if ["input_tokens","cache_read_input_tokens","cache_creation_input_tokens"].iter().any(|k|usage[*k].as_u64().unwrap_or(0) > 0) { self.usage = usage.clone(); }
+                    if ["input_tokens","cache_read_input_tokens","cache_creation_input_tokens"].iter().any(|k|usage[*k].as_u64().unwrap_or(0) > 0) {
+                        self.usage = usage.clone();
+                        let creation = &usage["cache_creation"];
+                        if creation["ephemeral_1h_input_tokens"].as_u64().unwrap_or(0) > 0 { self.idle_compact.one_hour = Some(true); }
+                        else if creation["ephemeral_5m_input_tokens"].as_u64().unwrap_or(0) > 0 { self.idle_compact.one_hour = Some(false); }
+                        self.idle_compact.live = true;
+                        self.idle_compact.done = false;
+                    }
                     if let Some(blocks) = event["message"]["content"].as_array() {
                         for block in blocks {
                             match block["type"].as_str() {
@@ -1214,7 +1234,10 @@ impl ClaudeEngine {
                 else if event["status"] == "requesting" && self.in_progress && !self.compacting { self.label = Some("Pensando…".into()); }
             }
             "thinking_tokens" if self.in_progress && !self.compacting => self.label = Some("Pensando…".into()),
-            "compact_boundary" => if std::mem::take(&mut self.compacting) { self.label = None; },
+            "compact_boundary" => {
+                self.idle_compact.done = true;
+                if std::mem::take(&mut self.compacting) { self.label = None; }
+            }
             // O conjunto vivo inteiro do trabalho de fundo: substitui o que se sabia dele (o que saiu terminou).
             "background_tasks_changed" => {
                 let live:BTreeSet<String> = event["tasks"].as_array().into_iter().flatten().filter_map(|task|task["task_id"].as_str().map(str::to_owned)).collect();
@@ -1526,6 +1549,13 @@ impl ClaudeEngine {
             || self.effort_intent.as_ref().is_some_and(|intent|intent["status"] == "prepared" || intent["status"] == "dispatching")
             || !self.background.is_empty();
         (!open).then(||now - self.active_at)
+    }
+
+    /// Contexto do último turno quando compactar parada ainda aproveita o cache de 1 h; `None` = nada a fazer.
+    fn idle_compact_tokens(&self) -> Option<u64> {
+        let state = &self.idle_compact;
+        if !state.live || state.done || state.one_hour != Some(true) { return None; }
+        Some(["input_tokens","cache_read_input_tokens","cache_creation_input_tokens"].iter().map(|k|self.usage[*k].as_u64().unwrap_or(0)).sum())
     }
 
     pub fn next_deadline(&self) -> Option<f64> {

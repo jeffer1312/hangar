@@ -9,7 +9,7 @@ import { useSettingsColors } from '../../src/features/config/colors';
 import { Icon } from '../../src/ui/Icon';
 import * as m from '../../src/paraglide/messages';
 
-const KEYS = ['automations', 'mostrar_pensamento', 'traduzir_pensamento', 'editor'];
+const KEYS = ['automations', 'mostrar_pensamento', 'traduzir_pensamento', 'compactar_parada', 'compactar_parada_min_mil', 'editor'];
 // Do bloco só leitura, o que Servidores já mostra não se repete aqui.
 const READ_IN_MACHINES = ['port', 'lan_bind_ip', 'server_id', 'public_url', 'terminal_origem_ok'];
 const READ_LABELS: Record<string, () => string> = {

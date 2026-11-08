@@ -3,6 +3,7 @@
 mod account_tags;
 mod auto_report;
 mod codex_activity;
+mod compact_idle;
 mod composer_history;
 mod connect_approval;
 mod dictation_pill;
@@ -46,6 +47,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "pausar-fala" => Some(speech_pause::render),
         "hangar-connect" => Some(connect_approval::render),
         "worktree-atualizada" => Some(worktree_fresh::render),
+        "compactar-parada" => Some(compact_idle::render),
         _ => None,
     }
 }

@@ -250,6 +250,8 @@ fn cano_is_ours(procs:&dyn crate::list::procs::ProcessView,target:&RuntimeTarget
 /// `_OCIOSA_S` do Python: acima da janela de 1 h do cache do prompt, religar não custa cota a mais.
 const PARK_AFTER:Duration = Duration::from_secs(65 * 60);
 const PARK_ROUND:Duration = Duration::from_secs(60);
+/// Depois dos ~54 min em que o próprio Claude compactaria e antes de o cache de 1 h vencer.
+const IDLE_COMPACT_AFTER:Duration = Duration::from_secs(56 * 60);
 
 /// Regra 1 do módulo de processo: cano gravado `Ours` conecta (mesmo sem `versao`); morto, de outro
 /// programa (pid reaproveitado) ou ausente, sobe outro com o ambiente calculado agora (nunca
@@ -913,6 +915,44 @@ impl RuntimeRegistry {
             }
         }
     }
+    /// A compactação da sessão parada do Claude Code não dispara no modo sem terminal: o Hangar manda o `/compact`
+    /// com o mesmo ajuste e o mesmo mínimo, enquanto o cache de 1 h ainda vale. Não espera o resumo terminar.
+    pub async fn compact_idle_claude(&self,after:Duration) {
+        static CALLS:AtomicU64 = AtomicU64::new(0);
+        let candidates:Vec<(String,EntryHandle)> = self.entries.lock().await.values()
+            .filter(|entry|entry.provider=="claude" && matches!(entry.handle,EntryHandle::Headless(_)) && !entry.respawn_inflight)
+            .map(|entry|(entry.name.clone(),entry.handle.clone())).collect();
+        if candidates.is_empty() {return;}
+        let home=self.policy.codex_environment().home;
+        let Ok(Some(settings))=tokio::task::spawn_blocking(move||crate::config_sync::runtime::main_claude_settings(&home)).await else {return};
+        let Some(min_tokens)=crate::config_sync::runtime::idle_compaction(&settings) else {return};
+        for (name,handle) in candidates {
+            let Ok(view)=handle.view().await else {continue};
+            let idle=view["park_idle_s"].as_f64().unwrap_or(0.0);
+            let Some(tokens)=view["idle_compact_tokens"].as_u64() else {continue};
+            if idle<after.as_secs_f64() || idle>=PARK_AFTER.as_secs_f64() || view["deliverable"]!=true || view["lifecycle_pending"]==true || tokens<min_tokens {continue;}
+            let command=RuntimeCommand { operation_id:format!("idle-compact:{}:{}",std::process::id(),CALLS.fetch_add(1,std::sync::atomic::Ordering::Relaxed)),
+                kind:OperationKind::Compact,payload:json!({}) };
+            let diary=crate::diag::diary_dir_in(&self.policy.codex_environment());
+            let diag=self.diag.clone();
+            tokio::spawn(async move {
+                let result=handle.command(command).await.and_then(|reply|match reply.disposition {
+                    Disposition::Accepted | Disposition::Deferred=>Ok(()),
+                    _=>Err(RuntimeError::new("idle_compact_rejected","o Claude recusou o /compact")),
+                });
+                match result {
+                    Ok(())=>{
+                        tracing::info!(session=%name,tokens,idle_s=idle as u64,"sessão sem terminal parada compactada antes do cache vencer");
+                        crate::diag::record(diary,vec![json!({"evento":"sessao.compactada_parada","nivel":"ok","sessao":name,"provider":"claude","tokens":tokens,"parada_s":idle as u64})],"compactacao_parada");
+                    }
+                    Err(error)=>{
+                        tracing::warn!(session=%name,code=%error.code,"a sessão parada não foi compactada");
+                        diag.report("runtime.idle_compact_failed",&name,&error.code,"a sessão sem terminal parada não foi compactada antes do cache vencer");
+                    }
+                }
+            });
+        }
+    }
     /// `_pode_estacionar`: o motor sem nada em aberto há `after`, nenhuma escrita nem operação de ciclo em curso e
     /// a fila toda entregue, conferido de novo com a porta fechada. `Some(segundos parada)` = estacionou.
     async fn park_claude(&self,key:&str,generation:u64,name:&str,after:Duration) -> Result<Option<f64>,RuntimeError> {
@@ -984,6 +1024,7 @@ impl RuntimeRegistry {
         loop {
             tokio::time::sleep(PARK_ROUND).await;
             let Some(registry)=registry.upgrade() else {break};
+            registry.compact_idle_claude(IDLE_COMPACT_AFTER).await;
             registry.park_idle_claude(PARK_AFTER).await;
         }
     }

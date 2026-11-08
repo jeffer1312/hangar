@@ -54,13 +54,7 @@ impl RuntimeConfig {
         self.environment(key)
     }
     fn thinking(&self)->Option<Values> {
-        let path=self.env.home.join(".claude/settings.json");
-        match std::fs::read_to_string(path) {
-            Ok(raw) if crate::transcript::py::strip(&raw).is_empty()=>Some(Values(Map::new())),
-            Ok(raw)=>Values::read(crate::transcript::py::strip(&raw).as_bytes()),
-            Err(error) if error.kind()==std::io::ErrorKind::NotFound=>Some(Values(Map::new())),
-            Err(_)=>None,
-        }
+        main_claude_settings(&self.env.home).map(Values)
     }
     pub fn state(&self)->Result<Value,String> {
         let current=Values(self.read());
@@ -89,6 +83,12 @@ impl RuntimeConfig {
         let thinking=self.thinking();
         let value=thinking.as_ref().and_then(|m|m.get("showThinkingSummaries"));
         result.insert("mostrar_pensamento".into(),json!({"valor":value.is_some_and(truthy),"definido":true,"origem":if value.is_some(){"app"}else{"env"}}));
+        if let Some(settings)=thinking.as_ref() {
+            let idle=settings.get("idleCompaction");
+            result.insert("compactar_parada".into(),json!({"valor":idle.is_none_or(truthy),"definido":true,"origem":if idle.is_some(){"app"}else{"env"}}));
+            let min=settings.get("env").and_then(|env|env.get(IDLE_COMPACT_MIN_ENV));
+            result.insert("compactar_parada_min_mil".into(),json!({"valor":idle_compact_min_tokens(settings)/1000,"definido":true,"origem":if min.is_some(){"app"}else{"env"}}));
+        }
         Ok(Value::Object(result.into_map()))
     }
     pub fn apply(&self, changes:&Map<String,Value>, remove:&BTreeSet<String>)->Result<Map<String,Value>,String> {
@@ -117,9 +117,23 @@ impl RuntimeConfig {
         }
         for key in remove {if preferences::editable(key) && let Some(value)=current.shift_remove(key){codec::discard(value);}}
         let mut thinking=None;
+        let mut idle=None;
+        let mut idle_min=None;
         for (key,value) in changes.iter() {
             if key=="mostrar_pensamento" {
                 thinking=Some(ValueGuard(codec::clone_value(value)));
+                continue;
+            }
+            if key=="compactar_parada" {
+                idle=Some(value.as_bool().ok_or("compactar_parada: esperado true/false")?);
+                continue;
+            }
+            if key=="compactar_parada_min_mil" {
+                let thousands=value.as_u64().ok_or("compactar_parada_min_mil: esperado um número inteiro")?;
+                if thousands < IDLE_COMPACT_FLOOR/1000 {
+                    return Err(format!("compactar_parada_min_mil: o Claude não compacta abaixo de {} mil tokens",IDLE_COMPACT_FLOOR/1000).into());
+                }
+                idle_min=Some(thousands.saturating_mul(1000));
                 continue;
             }
             if !preferences::editable(key) {continue;}
@@ -160,6 +174,9 @@ impl RuntimeConfig {
         if let Some(value)=thinking {
             self.write_thinking(value.as_bool().ok_or("mostrar_pensamento: esperado true/false")?)?;
         }
+        if idle.is_some() || idle_min.is_some() {
+            self.write_idle_compaction(idle,idle_min)?;
+        }
         write_values(&self.path, &current)?;
         if touches_aux||["jev_api_key","jev_endpoint","jev_model"].iter().any(|key|changes.contains_key(*key)||remove.contains(*key)) {
             self.sync_jev().map_err(|error|format!("jev: salvo, mas o Computer Use não recebeu a configuração: {error}"))?;
@@ -170,6 +187,20 @@ impl RuntimeConfig {
         let mut data=self.thinking().ok_or("mostrar_pensamento: settings.json ilegível — não mexi nele")?;
         if data.get("showThinkingSummaries").is_some_and(|v|truthy(v)==value) {return Ok(());}
         data.insert("showThinkingSummaries".into(),json!(value));
+        self.write_claude_settings(data,"mostrar_pensamento")
+    }
+    /// O ajuste é o do próprio Claude Code: o Hangar só o escreve e o segue ao compactar a sessão sem terminal.
+    fn write_idle_compaction(&self,enabled:Option<bool>,min_tokens:Option<u64>)->Result<(),RuntimeError> {
+        let mut data=self.thinking().ok_or("compactar_parada: settings.json ilegível — não mexi nele")?;
+        if let Some(enabled)=enabled { data.insert("idleCompaction".into(),json!(enabled)); }
+        if let Some(min)=min_tokens {
+            let mut env=match data.get("env") { Some(Value::Object(env))=>env.clone(), Some(_)=>return Err("compactar_parada_min_mil: o `env` do settings.json não é um objeto — não mexi nele".into()), None=>Map::new() };
+            if min==IDLE_COMPACT_DEFAULT { env.shift_remove(IDLE_COMPACT_MIN_ENV); } else { env.insert(IDLE_COMPACT_MIN_ENV.into(),json!(min.to_string())); }
+            if env.is_empty() { data.shift_remove("env"); } else { data.insert("env".into(),Value::Object(env)); }
+        }
+        self.write_claude_settings(data,"compactar_parada")
+    }
+    fn write_claude_settings(&self,data:Values,field:&str)->Result<(),RuntimeError> {
         let document=ValueGuard(Value::Object(data.into_map()));
         let text=codec::dumps_indented_utf8(&document,2).map_err(|_|RuntimeError::new(
             "UnicodeEncodeError","settings.json contém surrogate Unicode isolado; arquivo preservado"))?;
@@ -177,7 +208,36 @@ impl RuntimeConfig {
         let mode=super::files::mode(&path).unwrap_or(0o600);
         super::files::write_file(&path,&super::bundle::Blob {
             data:format!("{text}\n").into_bytes(),mode,
-        }).map_err(|e|RuntimeError::from(format!("mostrar_pensamento: {e}")))
+        }).map_err(|e|RuntimeError::from(format!("{field}: {e}")))
+    }
+}
+
+pub const IDLE_COMPACT_MIN_ENV:&str = "CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS";
+/// Mínimo e piso do próprio Claude Code para a compactação da sessão parada.
+pub const IDLE_COMPACT_DEFAULT:u64 = 200_000;
+pub const IDLE_COMPACT_FLOOR:u64 = 100_000;
+
+pub fn idle_compact_min_tokens(settings:&Map<String,Value>) -> u64 {
+    settings.get("env").and_then(|env|env.get(IDLE_COMPACT_MIN_ENV))
+        .and_then(|v|v.as_u64().or_else(||v.as_str().and_then(|s|s.trim().parse().ok())))
+        .unwrap_or(IDLE_COMPACT_DEFAULT).max(IDLE_COMPACT_FLOOR)
+}
+
+/// Mínimo de tokens para compactar a sessão parada; `None` = o Claude não compactaria (desligado ou sem autocompact).
+pub fn idle_compaction(settings:&Map<String,Value>) -> Option<u64> {
+    let off=|key:&str|settings.get(key).is_some_and(|v|!truthy(v));
+    let env_on=|key:&str|settings.get("env").and_then(|env|env.get(key)).is_some_and(truthy);
+    if off("idleCompaction") || off("autoCompact") || env_on("DISABLE_AUTO_COMPACT") || env_on("DISABLE_COMPACT") { return None; }
+    Some(idle_compact_min_tokens(settings))
+}
+
+/// O `settings.json` principal, de onde o espelho das contas copia: ilegível = `None`.
+pub fn main_claude_settings(home:&std::path::Path) -> Option<Map<String,Value>> {
+    match std::fs::read_to_string(home.join(".claude/settings.json")) {
+        Ok(raw) if crate::transcript::py::strip(&raw).is_empty()=>Some(Map::new()),
+        Ok(raw)=>Values::read(crate::transcript::py::strip(&raw).as_bytes()).map(Values::into_map),
+        Err(error) if error.kind()==std::io::ErrorKind::NotFound=>Some(Map::new()),
+        Err(_)=>None,
     }
 }
 fn read_at(path: &std::path::Path) -> Map<String, Value> {
@@ -245,5 +305,22 @@ fn mask_value(value:&Value)->Result<String,RuntimeError> {
             };
             Err(RuntimeError::new("TypeError",format!("object of type '{kind}' has no len()")))
         }
+    }
+}
+
+#[cfg(test)]
+mod idle_compaction_tests {
+    use super::*;
+
+    fn settings(value:Value) -> Map<String,Value> { value.as_object().unwrap().clone() }
+
+    #[test]
+    fn follows_the_claude_setting_and_floor() {
+        assert_eq!(idle_compaction(&settings(json!({}))),Some(IDLE_COMPACT_DEFAULT));
+        assert_eq!(idle_compaction(&settings(json!({"idleCompaction":false}))),None);
+        assert_eq!(idle_compaction(&settings(json!({"autoCompact":false}))),None);
+        assert_eq!(idle_compaction(&settings(json!({"env":{"DISABLE_AUTO_COMPACT":"1"}}))),None);
+        assert_eq!(idle_compaction(&settings(json!({"env":{"CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS":"150000"}}))),Some(150_000));
+        assert_eq!(idle_compaction(&settings(json!({"env":{"CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS":"5000"}}))),Some(IDLE_COMPACT_FLOOR));
     }
 }
