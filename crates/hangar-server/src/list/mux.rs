@@ -714,12 +714,16 @@ mod tests {
         assert_eq!(cli.calls(), 1, "{} servidor {}", mux.why(), a.errors());
         let b = FakeServer::start("kb", LINE_B.into());
         b.register(&cli.data, "b", "kb");
-        cli.lists(&format!("{LINE_A}{LINE_B}"));
+        // O psmux lista na ordem da pasta, que o tmpfs devolve ao contrário da criação.
+        let listed: String = std::fs::read_dir(&cli.data).unwrap()
+            .filter_map(|e| e.unwrap().file_name().into_string().ok()?.strip_suffix(".port").map(str::to_owned))
+            .map(|base| if base == "a" { LINE_A } else { LINE_B }).collect();
+        cli.lists(&listed);
         let both = mux.list_panes().await.unwrap();
         assert_eq!(both.len(), 2);
         assert_eq!(cli.calls(), 2, "servidor novo não herda a conferência antiga");
         mux.list_panes().await.unwrap();
-        assert_eq!(cli.calls(), 2);
+        assert_eq!(cli.calls(), 2, "{} servidores {} {}", mux.why(), a.errors(), b.errors());
         // Mesmo nome, outra porta e outra chave: outra vida.
         let b2 = FakeServer::start("kb2", LINE_B.into());
         b2.register(&cli.data, "b", "kb2");
