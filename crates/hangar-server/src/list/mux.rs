@@ -97,7 +97,17 @@ pub struct Mux { program: OsString, timeout: Duration, direct: Option<Direct> }
 
 /// Leitura direta do psmux (Windows): vale só para os servidores que uma comparação com o CLI
 /// conferiu; servidor novo, recriado ou falha voltam ao CLI.
-struct Direct { dir: std::path::PathBuf, gate: std::sync::Mutex<Gate> }
+struct Direct { dir: std::path::PathBuf, gate: std::sync::Arc<std::sync::Mutex<Gate>> }
+
+type GateKey = (OsString, std::path::PathBuf);
+
+/// A conferência é do programa e da pasta de dados, não do `Mux`: quem cria um por pedido a reaproveita.
+fn shared_gate(program: &OsString, dir: &std::path::Path) -> std::sync::Arc<std::sync::Mutex<Gate>> {
+    static GATES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<GateKey, std::sync::Arc<std::sync::Mutex<Gate>>>>> =
+        std::sync::LazyLock::new(Default::default);
+    GATES.lock().unwrap_or_else(|e| e.into_inner()).entry((program.clone(), dir.to_path_buf()))
+        .or_insert_with(|| std::sync::Arc::new(std::sync::Mutex::new(Gate::Unchecked))).clone()
+}
 
 #[derive(Clone)]
 enum Gate {
@@ -110,7 +120,8 @@ enum Gate {
 }
 
 /// Parte do prazo do `list-panes` que a leitura direta pode gastar; o resto fica para o CLI.
-const DIRECT_BUDGET: Duration = Duration::from_secs(1);
+/// Curto: um servidor ocupado não pode somar muito à espera do CLI que vem depois.
+const DIRECT_BUDGET: Duration = Duration::from_millis(250);
 const DIRECT_TRIES: u8 = 3;
 
 enum DirectRead { Served(String), Compare(hangar_psmux::Listing), Skip }
@@ -142,7 +153,9 @@ impl Mux {
 
     /// Como `with_program`, lendo os servidores do psmux em `dir` direto quando o portão aceitar.
     pub fn with_direct(program: impl Into<OsString>, timeout: Duration, dir: std::path::PathBuf) -> Self {
-        Self { program: program.into(), timeout, direct: Some(Direct { dir, gate: std::sync::Mutex::new(Gate::Unchecked) }) }
+        let program = program.into();
+        let gate = shared_gate(&program, &dir);
+        Self { program, timeout, direct: Some(Direct { dir, gate }) }
     }
 
     /// Valor de uma variável no ambiente da sessão (`show-environment`); ausente ou erro = `None`.
@@ -465,6 +478,20 @@ mod tests {
         assert_eq!((cli.calls(), a.conns()), (1, 2), "conferido, o CLI não é aberto");
         assert_eq!(first, second);
         assert_eq!(second[0].session, "a");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_short_lived_mux_reuses_the_confirmation_of_the_same_program_and_folder() {
+        let cli = FakeCli::new(hangar_psmux::VERSIONS[1]);
+        let a = FakeServer::start("ka", LINE_A.into());
+        a.register(&cli.data, "a", "ka");
+        cli.lists(LINE_A);
+        cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
+        assert_eq!(cli.calls(), 1);
+        // Quem cria um Mux por pedido (retomar sessão) não paga a conferência de novo.
+        cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
+        assert_eq!((cli.calls(), a.conns()), (1, 2));
     }
 
     #[cfg(unix)]
