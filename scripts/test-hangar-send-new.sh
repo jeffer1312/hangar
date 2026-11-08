@@ -156,6 +156,10 @@ checa "--conta sem default, sem pasta: código" '0' "$?"
 checa "--conta sem default, sem pasta: home de lá" '"/home/la"' "$(campo cwd 2>/dev/null)"
 checa "--conta sem default: rótulo vence a pasta" '"/dados/fora"' "$(campo config_dir 2>/dev/null)"
 rm -f "$TMP/corpo.json"
+bash "$TMP/scripts/hangar-send" --new semdef::s4 >/dev/null 2>&1
+checa "sem default, sem conta e sem pasta: código" '0' "$?"
+checa "sem default, sem conta e sem pasta: home de lá" '"/home/la"' "$(campo cwd 2>/dev/null)"
+rm -f "$TMP/corpo.json"
 bash "$TMP/scripts/hangar-send" --new semdef::s3 /tmp/x --conta outra >/dev/null 2>&1
 checa "--conta pelo nome da pasta" '"/home/la/.claude-outra"' "$(campo config_dir 2>/dev/null)"
 rm -f "$TMP/backend/peers.json"
