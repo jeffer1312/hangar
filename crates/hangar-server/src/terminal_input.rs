@@ -172,7 +172,17 @@ pub(crate) fn child_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     let mut command = Command::new(program);
     // O multiplexador e o clipboard não recebem a autoridade privada do servidor.
     for name in ["HANGAR_INTERNAL_SECRET", "HANGAR_RUNTIME_INSTANCE", "HANGAR_AUTH_CONTEXT", "CP_AUTH_TOKEN"] { command.env_remove(name); }
+    #[cfg(unix)]
+    if let Some(home) = home_cwd() { command.current_dir(home).env("PWD", home); }
     command
+}
+/// O servidor tmux herda a pasta de quem o sobe e nunca sai dela: pasta de worktree apagada faz
+/// todo pane novo nascer nela, ignorando o `-c`. No psmux o pane herda essa pasta, então fica.
+#[cfg(unix)]
+pub(crate) fn home_cwd() -> Option<&'static std::path::Path> {
+    static HOME: std::sync::LazyLock<Option<std::path::PathBuf>> =
+        std::sync::LazyLock::new(|| std::env::home_dir().filter(|home| home.is_dir()));
+    HOME.as_deref()
 }
 /// Observador tmux somente de leitura herdado pelo `send-keys`: a recusa vem antes de qualquer tecla,
 /// e o mesmo pane com cliente vazio a contorna. Cliente explícito, outra falha e psmux ficam fora.
