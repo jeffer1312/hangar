@@ -128,7 +128,7 @@ pub async fn fill_rows(home: &Path, mux: &Mux, rows: &mut [SessionRow]) {
     for row in rows.iter_mut() {
         (row.rename_suggestion, row.rename_weak) = (None, false);
         if open.is_empty() { continue; }
-        let key = match row.lifecycle_id.as_deref().and_then(|l| l.strip_prefix("k:")) {
+        let key = match crate::list::links::runtime_key(row.lifecycle_id.as_deref()) {
             Some(key) => Some(key.to_owned()),
             // shortcut: a pasta é a da linha (a atual do pane); quem saiu da pasta de abertura fica sem a faixa.
             None if !row.headless && folder_pattern(&row.name, row.cwd.as_deref().unwrap_or_default()) => pane_key(mux, row).await,
@@ -173,7 +173,7 @@ fn read_spec(home: &Path, key: &str) -> io::Result<Option<SessionSpec>> {
 
 /// A chave da sessão: a da vida na lista (`k:`), senão a `CP_SESSION_KEY` do pane.
 pub async fn key_of(st: &AppState, name: &str, life: Option<&str>) -> Option<String> {
-    match life.and_then(|l| l.strip_prefix("k:")) {
+    match crate::list::links::runtime_key(life) {
         Some(key) => Some(key.to_owned()),
         None => st.list.env().mux.session_env(name, "CP_SESSION_KEY").await,
     }

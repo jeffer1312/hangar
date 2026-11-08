@@ -143,7 +143,7 @@ pub fn close(dir: &Path, name: &str, key: Option<&str>) {
 
 /// Linha com chave na vida só guarda o arquivo daquela chave: nome reaproveitado não prende senha de quem saiu.
 pub(super) fn row_keeps(name: &str, lifecycle: Option<&str>, m: &Meta) -> bool {
-    match lifecycle.and_then(|l| l.strip_prefix("k:")) {
+    match crate::list::links::runtime_key(lifecycle) {
         Some(key) => key == m.session_key,
         None => name == m.session,
     }

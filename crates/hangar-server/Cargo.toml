@@ -187,3 +187,7 @@ path = "tests/stats_agents.rs"
 [[test]]
 name = "tail_agents"
 path = "tests/tail_agents.rs"
+
+[[test]]
+name = "lifecycle_agents"
+path = "tests/lifecycle_agents.rs"

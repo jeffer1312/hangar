@@ -63,7 +63,7 @@ impl Binding {
     pub fn state_events(&self) -> Option<&'static [&'static str]> {
         match (self.provider, self.headless) {
             (Provider::Claude, _) => Some(&STATE_EVENTS),
-            (Provider::ClaudeHeadless, _) | (Provider::Codex, true) => Some(&FEED_EVENTS),
+            (Provider::ClaudeHeadless | Provider::Pi | Provider::Omp | Provider::Kimi, _) | (Provider::Codex, true) => Some(&FEED_EVENTS),
             (Provider::Orq, _) => Some(&["state"]),
             _ => None,
         }
@@ -71,14 +71,22 @@ impl Binding {
 
     /// O estado desta ligação sai do feed do runtime (o ator escreve no canal em processo).
     pub fn runtime_feed(&self) -> bool {
-        matches!((self.provider, self.headless), (Provider::ClaudeHeadless, _) | (Provider::Codex, true))
+        matches!((self.provider, self.headless), (Provider::ClaudeHeadless | Provider::Pi | Provider::Omp | Provider::Kimi, _) | (Provider::Codex, true))
     }
+
+    pub fn has_transcript_path(&self) -> bool { !self.jsonl.as_os_str().is_empty() }
 
     /// Mesmo critério de `InternalInfo::history_request`: provider lido pelo Rust e com jsonl.
     pub fn from_info(info: &InternalInfo) -> Option<Binding> {
+        let provider = Provider::parse(&info.provider)?;
+        let jsonl = match info.jsonl.clone() {
+            Some(path) => path,
+            None if matches!(provider, Provider::Pi | Provider::Omp | Provider::Kimi) && info.session_key.is_empty() => PathBuf::new(),
+            None => return None,
+        };
         Some(Binding {
-            provider: Provider::parse(&info.provider)?,
-            jsonl: info.jsonl.clone()?,
+            provider,
+            jsonl,
             key: info.session_key.clone(),
             headless: info.headless,
             life: info.lifecycle_id.clone(),
@@ -692,6 +700,10 @@ impl Hub {
 
     /// Produtor do `stats` da geração dada, chamado junto com o da fila e sob a mesma trava.
     fn start_stats_feed(self: &Arc<Self>, generation: u64, binding: &Binding) {
+        if !binding.has_transcript_path() {
+            if let Some(old) = self.stats_feed.lock().unwrap().take() { old.abort(); }
+            return;
+        }
         if binding.provider == Provider::Orq { return; }
         let feed = tokio::spawn(crate::stats::run(Arc::downgrade(self), generation, binding.clone(), self.ctx.watchers.clone()));
         if let Some(old) = self.stats_feed.lock().unwrap().replace(feed.abort_handle()) {
@@ -1146,6 +1158,7 @@ const SEED_TIMEOUT: Duration = Duration::from_secs(5);
 /// prévia logo depois de abrir o chat. Só preenche o vazio; a resposta ao vivo vence.
 async fn seed_committed(hub: &Weak<Hub>, only_if_empty: bool) {
     let Some((binding, generation)) = hub.upgrade().and_then(|h| h.bound.lock().unwrap().as_ref().map(|b| (b.binding.clone(), b.generation))) else { return };
+    if !binding.has_transcript_path() { return; }
     let mut read = tokio::task::spawn_blocking(move || match tail::last_committed(&binding.jsonl, binding.provider) {
         Ok(text) => text,
         Err(e) => {

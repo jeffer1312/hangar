@@ -1345,6 +1345,11 @@ pub(crate) async fn history(
     let Some(info) = info else { return pass(&st, req, &fwd).await };
     // Antes de qualquer repasse: sessão em erro ainda sem transcript também é reaberta.
     st.request_reopen(&name);
+    if matches!(info.provider.as_str(), "pi" | "omp" | "kimi") && info.jsonl.is_none() {
+        let mut response = crate::session_write::json_response(StatusCode::OK, serde_json::json!([]));
+        cors(req.headers(), response.headers_mut());
+        return response;
+    }
     let Some(mut hreq) = info.history_request(limit) else {
         return pass(&st, req, &fwd).await;
     };

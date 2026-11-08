@@ -216,6 +216,7 @@ impl RuntimeFeed {
         let Some(hub) = self.hub.upgrade() else { return false };
         let Some(source) = hub.source_binding() else { return false };
         let generation = source.0;
+        let other = matches!(source.1.provider, crate::transcript::Provider::Pi | crate::transcript::Provider::Omp | crate::transcript::Provider::Kimi);
         if self.source_binding.is_none() && self.facts.is_none() { self.source_binding = Some(source.clone()); }
         if self.source_binding.as_ref() != Some(&source) {
             self.plugin_reading = None;
@@ -273,6 +274,7 @@ impl RuntimeFeed {
             // Sessão parada (não aberta no Rust, encerrada, ou abrindo): `idle`, como o Python. Abertura
             // que falhou e vida que acabou com erro chegam como `Some` com o erro.
             // Claude parado leva o que o sidecar diz dele; sem sidecar (ou Codex) fica o `idle` puro.
+            Some(None) if other => return unproven("other_terminal_observation_pending", "a sessão ainda não tem observação comprovada"),
             Some(None) => match &self.parked {
                 Parked::State(state) => (state.clone(), Default::default()),
                 Parked::Hold => return true,
@@ -289,6 +291,9 @@ impl RuntimeFeed {
                 (state, Default::default())
             }
             Some(Some(live)) => {
+                if other && live.public_state.is_null() {
+                    return unproven("other_terminal_observation_pending", "a sessão ainda não tem observação comprovada");
+                }
                 let mut state = if live.public_state.is_null() { idle(&self.name, self.headless) } else {
                     match serde_json::from_value(live.public_state.clone()) {
                         Ok(state) => state,

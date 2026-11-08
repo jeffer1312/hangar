@@ -554,6 +554,7 @@ async fn run(
     watchers: Watchers,
     on_dead: OnDead,
 ) {
+    if path.as_os_str().is_empty() { return; }
     let mut sub = Subscription::new(watchers, path, Arc::new(Notify::new()));
     let mut misses = 0u32;
     loop {
