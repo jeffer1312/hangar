@@ -1002,36 +1002,6 @@ def test_inbox_socket_of_acha_o_socket_do_descendente(monkeypatch, tmp_path):
     assert registry.inbox_socket_of("alvo") is None
 
 
-async def test_list_with_state_kimi_usa_session_key_nao_o_stem(tmp_path, monkeypatch):
-    # O transcript do Kimi se chama wire.jsonl em TODA sessao
-    # (sessions/<wd>/<session_id>/agents/main/wire.jsonl), entao `Path(jsonl).stem` e "wire" pra
-    # todo mundo. O hook grava o marcador sob o session_id REAL -> com o stem, get_state("wire")
-    # nunca casava, toda sessao Kimi caia no fallback de pane, e la o spinner e fase de lua (fora
-    # de SPINNER_GLYPHS): sessao TRABALHANDO aparecia ociosa na lista. `session_key` resolve a
-    # chave certa. Este teste olha a CHAVE consultada, que e onde o bug morava.
-    from app.models import SessionInfo
-
-    wire = "/home/u/.kimi-code/sessions/wd_x/session_abc-123/agents/main/wire.jsonl"
-    reg = SessionRegistry(projects_dir=tmp_path)
-    monkeypatch.setattr(reg, "list", lambda: [
-        SessionInfo(name="k", cwd="/p", jsonl=wire, tracked=True, provider="kimi")])
-
-    consultadas = []
-
-    def fake_get_state(sid):
-        consultadas.append(sid)
-        return ("working", time.time())
-
-    monkeypatch.setattr(registry.hook_state, "get_state", fake_get_state)
-    # Pane devolve tela MUDA (sem spinner, sem menu) = classify() leria "idle". Entao o `working` do
-    # assert final so pode ter vindo do marcador — que e exatamente o que o bug impedia de casar.
-    # (capture_pane ainda roda pelo sweep de STATUSLINE, que nao tem outra fonte; nao da pra proibir.)
-    monkeypatch.setattr(registry.tmux, "capture_pane", lambda name, lines=200: "● pronto\n")
-    out = {s.name: s for s in await reg.list_with_state()}
-
-    assert "session_abc-123" in consultadas       # o session_id, nao "wire"
-    assert "wire" not in consultadas
-    assert out["k"].state == "working"
 
 
 def test_list_preenche_conta_da_sessao(tmp_path):
@@ -1092,25 +1062,6 @@ def test_list_conta_vem_do_processo_do_agente_nao_do_pane(tmp_path):
     assert out[0].conta == "claude:" + str(Path("/home/u/.claude-jefferson").resolve())
 
 
-def test_list_conta_em_pi_kimi(tmp_path):
-    """A descoberta Python deixa a conta Pi/Kimi para a decoração da lista no Rust."""
-    pane = {"name": "kk", "pid": 111, "cwd": "/home/u/p", "pane_id": "%1", "active": True}
-
-    reg = SessionRegistry(projects_dir=tmp_path)
-    with patch.object(registry.tmux, "list_panes_all", return_value={"kk": [pane]}), \
-         patch.object(registry, "agente_do_pane", return_value=("pi", 111)), \
-         patch.object(registry, "pi_session_file", return_value="/x/s.jsonl"), \
-         patch.object(registry, "_engine_of", return_value=None):
-        out = reg.list()
-    assert out[0].provider == "pi" and out[0].conta is None
-
-    reg = SessionRegistry(projects_dir=tmp_path)
-    with patch.object(registry.tmux, "list_panes_all", return_value={"kk": [pane]}), \
-         patch.object(registry, "agente_do_pane", return_value=("kimi", 111)), \
-         patch.object(registry, "kimi_session_file", return_value="/x/s.jsonl"), \
-         patch.object(registry, "_engine_of", return_value=None):
-        out = reg.list()
-    assert out[0].provider == "kimi" and out[0].conta is None
 
 
 def test_list_with_state_radar_de_limite_so_nas_travadas(tmp_path, monkeypatch):

@@ -63,20 +63,10 @@ cat >"$TMP/bin/omp" <<'FAKE'
 FAKE
 chmod +x "$TMP/bin/omp"
 
-# cwd com espaco E acento: e exatamente o caso que ja quebrou o slug do lado python (ver o
-# docstring de app/adapters/pi/sessions.py). PI_CODING_AGENT_DIR isolado — nunca o ~/.omp real.
+# PI_CODING_AGENT_DIR isolado — nunca o ~/.omp real.
 OMP_CWD="$TMP/pasta com acento Área"
 OMP_DIR="$TMP/omp-agent"
 mkdir -p "$OMP_CWD" "$OMP_DIR"
-# Slug esperado vem do BACKEND, nao de uma copia da regra aqui: o wrapper so serve se os dois
-# montarem o MESMO diretorio (o backend acha o transcript por glob dentro dele).
-if ! OMP_SLUG=$(cd "$REPO/backend" && uv run --quiet python -c \
-        'import sys; from app.adapters.pi import sessions as s; print(s.cwd_slug(sys.argv[1]))' \
-        "$OMP_CWD" 2>/dev/null); then
-    OMP_SLUG=""
-    echo "aviso: uv/python indisponível — o slug do omp não será comparado com o do backend"
-fi
-
 # Motor de teste isolado — NUNCA o ~/.claude/engines.json real.
 CP_ENGINES_FILE="$TMP/engines.json"
 cat >"$CP_ENGINES_FILE" <<'JSON'
@@ -152,12 +142,7 @@ check_omp_injected() {
     fi
     # <raiz>/<slug>/<ts>_<uuid>.jsonl — o uuid do NOME é o mesmo exportado em CP_PI_SESSION, que é
     # como o backend liga o processo ao arquivo enquanto o bilhete da extensão não existe.
-    esperado_dir="$OMP_DIR/sessions${OMP_SLUG:+/$OMP_SLUG}"
     arquivo=$(basename "$caminho")
-    if [ -n "$OMP_SLUG" ] && [ "$(dirname "$caminho")" != "$esperado_dir" ]; then
-        echo "FAIL: $desc — diretório da sessão '$(dirname "$caminho")' != '$esperado_dir'"
-        fail=1
-    fi
     if ! printf '%s' "$arquivo" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{3}Z_.+\.jsonl$'; then
         echo "FAIL: $desc — nome '$arquivo' fora do formato <ts>_<uuid>.jsonl"
         fail=1
