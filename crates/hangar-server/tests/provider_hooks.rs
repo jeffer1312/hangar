@@ -486,7 +486,7 @@ fn provider_hooks_installer_creates_missing_config_with_nine_native_entries() {
     );
     for partial in [
         "",
-        "[[hooks]]\nevent = 'Stop'\ncommand = '\"/old/bin/hangar-server\" kimi-state-hook'\n",
+        "[[hooks]]\nevent = 'Stop'\ncommand = 'python /antigo/backend/hooks/kimi_state_hook.py'\ntimeout = 5\n",
     ] {
         if !partial.is_empty() {
             std::fs::write(&path, partial).unwrap();
