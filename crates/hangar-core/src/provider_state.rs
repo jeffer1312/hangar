@@ -5,8 +5,19 @@ use std::io::{Read, Seek, SeekFrom};
 const WIRE_CHUNK: u64 = 64 << 10;
 const WIRE_LIMIT: u64 = 4 << 20;
 
-/// A última fronteira do main vence escrita de configuração e atividade dos subagentes.
+#[derive(Clone, Debug, PartialEq)]
+pub struct KimiTurnBoundary {
+    pub open: bool,
+    /// Instante original do evento em milissegundos; ausência não comprova a vida do processo.
+    pub timestamp_ms: Option<f64>,
+}
+
 pub fn kimi_turn_open(path: &Path) -> std::io::Result<Option<bool>> {
+    Ok(kimi_turn_boundary(path)?.map(|boundary| boundary.open))
+}
+
+/// A última fronteira do main vence escrita de configuração e atividade dos subagentes.
+pub fn kimi_turn_boundary(path: &Path) -> std::io::Result<Option<KimiTurnBoundary>> {
     let mut file = std::fs::File::open(path)?;
     let end = file.seek(SeekFrom::End(0))?;
     let mut position = end;
@@ -28,11 +39,13 @@ pub fn kimi_turn_open(path: &Path) -> std::io::Result<Option<bool>> {
             if !line.windows(5).any(|part| part == b"turn.") { continue; }
             let Ok(text) = std::str::from_utf8(line) else { continue; };
             let Some(value) = crate::pycompat::pyjson::loads_lossless(text) else { continue; };
-            match value.get("type").and_then(serde_json::Value::as_str) {
-                Some("turn.prompt" | "turn.steer") => return Ok(Some(true)),
-                Some("turn.ended" | "turn.cancel") => return Ok(Some(false)),
-                _ => {}
-            }
+            let open = match value.get("type").and_then(serde_json::Value::as_str) {
+                Some("turn.prompt" | "turn.steer") => true,
+                Some("turn.ended" | "turn.cancel") => false,
+                _ => continue,
+            };
+            let timestamp_ms = value.get("time").and_then(serde_json::Value::as_f64).filter(|time| time.is_finite());
+            return Ok(Some(KimiTurnBoundary { open, timestamp_ms }));
         }
     }
     Ok(None)
@@ -41,6 +54,16 @@ pub fn kimi_turn_open(path: &Path) -> std::io::Result<Option<bool>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kimi_turn_boundary_exposes_the_event_time_for_process_life_validation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wire.jsonl");
+        std::fs::write(&path, "{\"type\":\"turn.prompt\",\"time\":1700000000123}\n").unwrap();
+        let boundary = kimi_turn_boundary(&path).unwrap().unwrap();
+        assert!(boundary.open);
+        assert_eq!(boundary.timestamp_ms, Some(1700000000123.0));
+    }
 
 
     #[test]
