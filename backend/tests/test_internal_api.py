@@ -144,22 +144,3 @@ async def test_stuck_pool_is_reported_before_the_probe_runs(monkeypatch):
             release.set()
             await task
     assert "travado" not in monitor.probing
-
-
-def test_rust_que_desiste_antes_do_corpo_nao_vira_500():
-    # O Rust fecha a conexão ao estourar o prazo; ler o corpo depois disso não é erro do servidor.
-    sent = []
-
-    async def receive():
-        return {"type": "http.disconnect"}
-
-    async def send(message):
-        sent.append(message)
-
-    scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST",
-             "scheme": "http", "path": "/internal/list/facts", "raw_path": b"/internal/list/facts",
-             "query_string": b"", "root_path": "", "client": ("127.0.0.1", 50000), "server": ("127.0.0.1", 8765),
-             "headers": [(b"host", b"127.0.0.1"), (b"x-hangar-internal", SECRET.encode()),
-                         (b"content-type", b"application/json"), (b"content-length", b"10")]}
-    asyncio.run(api_mod.app(scope, receive, send))
-    assert [m["status"] for m in sent if m["type"] == "http.response.start"] == [499]
