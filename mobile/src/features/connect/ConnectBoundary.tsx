@@ -25,7 +25,7 @@ export class ConnectBoundary extends Component<Props, State> {
     const message = String((error as Error)?.message ?? error).slice(0, 200);
     const where = (info.componentStack ?? '').trim().split('\n').slice(0, 6).map((line) => line.trim()).join(' < ');
     // O diário não pode derrubar o aviso que existe justamente para o app não cair.
-    try { registrarDiag({ evento: 'connect.tela_falhou', nivel: 'erro', codigo: 'connect_screen_failed', detalhe: `${message} @ ${where}`.slice(0, 600) }); }
+    try { registrarDiag({ evento: 'connect.screen_failed', nivel: 'erro', codigo: 'connect_screen_failed', detalhe: `${message} @ ${where}`.slice(0, 600) }); }
     catch { /* sem diário, o aviso continua na tela */ }
   }
 

@@ -72,6 +72,10 @@ export function ConnectMachines({ onDone }: { onDone: () => void }) {
       {machines?.map((machine) => <MachineItem key={machine.machine_id} machine={machine} onEntered={entered} onOpen={onDone} />)}
     </SectionCard>
     <Notice text={error} error />
+    {/* Puxar para atualizar não se vê: o erro traz o caminho à mostra. */}
+    {error ? <MachineGroup>
+      <MachineRow title={m.mobile_machines_retry()} action disabled={loading} onPress={() => { void useConnect.getState().refreshMachines(); }} />
+    </MachineGroup> : null}
     <ConnectRecovery servers={enabled} />
     <AllDevices servers={withDevices} />
     <AccountRows />
@@ -133,7 +137,8 @@ function AllDevices({ servers }: { servers: Server[] }) {
   const rows = servers.flatMap((server) => (devices[server.id]?.rows ?? []).map((row) => ({ server, row })));
   const pending = rows.filter(({ row }) => row.status === 'pending');
   const approved = rows.filter(({ row }) => row.status === 'approved');
-  const loading = servers.every((server) => !devices[server.id]);
+  // "Nenhum aparelho" só com todas as listas na mão: uma ainda a caminho pode trazer algum.
+  const loading = servers.some((server) => !devices[server.id]);
   // Uma linha por máquina que falhou: com lista antiga na tela, avisa que ela pode estar velha.
   const failures = servers.filter((server) => devices[server.id]?.error)
     .map((server) => `${server.label}: ${devices[server.id]?.error ?? ''}`);

@@ -35,7 +35,7 @@ it('um erro ao desenhar a área do Connect vira aviso com nova tentativa, e não
   const container = document.createElement('div');
   await show(createRoot(container), 'conta-a');
   expect(container.textContent).toContain(m.connect_screen_failed());
-  expect(diag.events).toEqual([expect.objectContaining({ evento: 'connect.tela_falhou', codigo: 'connect_screen_failed' })]);
+  expect(diag.events).toEqual([expect.objectContaining({ evento: 'connect.screen_failed', codigo: 'connect_screen_failed' })]);
   expect(String(diag.events[0].detalhe)).toContain('Area');
   broken = false;
   const retry = container.querySelector('[role="button"]') as HTMLElement;
