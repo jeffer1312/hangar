@@ -143,25 +143,33 @@ bash "$TMP/scripts/hangar-send" --new la::retoma --resume abc123 >/dev/null 2>&1
 checa "--resume noutra máquina: código" '0' "$?"
 checa "--resume noutra máquina: sem cwd no corpo" 'null' "$(campo cwd 2>/dev/null)"
 
-# 2d. Máquina sem conta `default`: a home vem da primeira pasta .claude*; o rótulo exato vence o
-# nome da pasta, e vale a primeira conta que bate.
+# 2d. Máquina sem conta `default`: a conta segue a regra do `remote_account` do MCP (caminho,
+# rótulo, pasta ou `.claude-<conta>`, a primeira que bate), e sem pasta vai `~`, que lá vira a home.
 printf '{"semdef":{"base_url":"http://127.0.0.1:%s","token":"tok-semdef"}}' "$PORTA" > "$TMP/backend/peers.json"
 rm -f "$TMP/corpo.json"
 bash "$TMP/scripts/hangar-send" --new semdef::s1 /tmp/x --conta "Rafael e viana" >/dev/null 2>&1
-checa "--conta sem default, com pasta: código" '0' "$?"
-checa "--conta sem default, com pasta: conta" '"/home/la/.claude-work"' "$(campo config_dir 2>/dev/null)"
+checa "--conta pelo rótulo: código" '0' "$?"
+checa "--conta pelo rótulo: a primeira que bate" '"/home/la/.claude-work"' "$(campo config_dir 2>/dev/null)"
+checa "--conta pelo rótulo: a pasta pedida" '"/tmp/x"' "$(campo cwd 2>/dev/null)"
 rm -f "$TMP/corpo.json"
 bash "$TMP/scripts/hangar-send" --new semdef::s2 --conta work >/dev/null 2>&1
-checa "--conta sem default, sem pasta: código" '0' "$?"
-checa "--conta sem default, sem pasta: home de lá" '"/home/la"' "$(campo cwd 2>/dev/null)"
-checa "--conta sem default: rótulo vence a pasta" '"/dados/fora"' "$(campo config_dir 2>/dev/null)"
-rm -f "$TMP/corpo.json"
-bash "$TMP/scripts/hangar-send" --new semdef::s4 >/dev/null 2>&1
-checa "sem default, sem conta e sem pasta: código" '0' "$?"
-checa "sem default, sem conta e sem pasta: home de lá" '"/home/la"' "$(campo cwd 2>/dev/null)"
+checa "--conta sem pasta: código" '0' "$?"
+checa "--conta sem pasta: a home de lá" '"~"' "$(campo cwd 2>/dev/null)"
+checa "--conta: a primeira linha que bate" '"/dados/fora"' "$(campo config_dir 2>/dev/null)"
 rm -f "$TMP/corpo.json"
 bash "$TMP/scripts/hangar-send" --new semdef::s3 /tmp/x --conta outra >/dev/null 2>&1
 checa "--conta pelo nome da pasta" '"/home/la/.claude-outra"' "$(campo config_dir 2>/dev/null)"
+rm -f "$TMP/corpo.json"
+bash "$TMP/scripts/hangar-send" --new semdef::s4 /tmp/x --conta /home/la/.claude-outra >/dev/null 2>&1
+checa "--conta pelo caminho" '"/home/la/.claude-outra"' "$(campo config_dir 2>/dev/null)"
+rm -f "$TMP/corpo.json"
+bash "$TMP/scripts/hangar-send" --new semdef::s5 >/dev/null 2>&1
+checa "sem conta e sem pasta: código" '0' "$?"
+checa "sem conta e sem pasta: a home de lá" '"~"' "$(campo cwd 2>/dev/null)"
+rm -f "$TMP/corpo.json"
+bash "$TMP/scripts/hangar-send" --new semdef::s6 /tmp/x --conta nenhuma >/dev/null 2>&1
+checa "--conta inexistente lá: código" '2' "$?"
+checa "--conta inexistente lá: nada criado" 'ausente' "$([[ -e "$TMP/corpo.json" ]] && echo enviado || echo ausente)"
 rm -f "$TMP/backend/peers.json"
 
 # 3. Codex também aceita o modo sem terminal.
