@@ -368,10 +368,14 @@ fn request_groups<'a>(machines: &[(&'a str, &'a [Request])]) -> Vec<Vec<(&'a str
 #[derive(Default)]
 pub(in crate::app) struct Notices {
     pending: HashMap<String, Vec<Request>>, refused: HashMap<String, Instant>,
-    /// Máquinas desmarcadas no cartão agrupado, por (máquina, aparelho): o padrão é todas marcadas.
+    /// Máquinas desmarcadas no cartão agrupado, por (`group_key`, máquina): nova tentativa do celular troca o pedido, não
+    /// a escolha. O padrão é todas marcadas.
     unchecked: HashSet<(String, String)>,
-    /// Por cartão (`group_key`): as máquinas escolhidas que não foram aprovadas porque o pedido sumiu da lista.
+    /// Por cartão (`group_key`): as máquinas escolhidas que não foram aprovadas porque o pedido sumiu da lista. Fica fora
+    /// do cartão até a pessoa dispensar: o cartão pode sumir junto com o pedido.
     skipped: HashMap<String, String>,
+    /// Por (máquina, pedido) em resposta: as tentativas anteriores a recusar quando a resposta der certo.
+    then_deny: HashMap<(String, String), Vec<String>>,
 }
 
 fn group_key(device: &Device) -> Option<String> {
@@ -383,24 +387,31 @@ impl Notices {
     /// mesmo fora do ar ou recusando, para a escolha valer quando a lista voltar.
     fn forget_answered(&mut self, machine: &str) {
         let cards = self.pending.get(machine).map(Vec::as_slice).unwrap_or_default();
-        self.unchecked.retain(|(at, device)| at != machine || cards.iter().any(|card| card.device.device_id == *device));
+        self.unchecked.retain(|(key, at)| at != machine || cards.iter().any(|card| group_key(&card.device).as_deref() == Some(key.as_str())));
     }
 
-    /// Os rótulos das máquinas escolhidas cujo pedido saiu da lista desde que o cartão foi desenhado (recusou a
-    /// lista, saiu do ar ou alguém respondeu em outro lugar): o diálogo de confirmar não vê essa mudança.
+    /// As tentativas anteriores a recusar agora: só se a resposta do pedido deu certo.
+    fn after_answer(&mut self, machine: &str, device: &str, ok: bool) -> Vec<String> {
+        let twins = self.then_deny.remove(&(machine.to_owned(), device.to_owned())).unwrap_or_default();
+        if ok { twins } else { Vec::new() }
+    }
+
+    /// As máquinas escolhidas cujo pedido saiu da lista desde que o cartão foi desenhado (recusou a lista, saiu do ar
+    /// ou alguém respondeu em outro lugar): o diálogo de confirmar não vê essa mudança.
     fn gone<'a>(&self, chosen: &'a [(String, String, String)]) -> Vec<&'a (String, String, String)> {
         chosen.iter().filter(|(machine, device, _)| !self.pending.get(machine).is_some_and(|cards| cards.iter().any(|card| card.device.device_id == *device)))
             .collect()
     }
 
-    /// Os outros pedidos do mesmo celular (mesmo `install_id` e nome) nesta máquina, fora do cartão: saem junto com a
-    /// resposta, senão voltariam como cartão novo logo depois.
+    /// Os pedidos anteriores do mesmo celular (mesmo `install_id` e nome) nesta máquina, fora do cartão: saem junto com
+    /// a resposta, senão voltariam como cartão novo logo depois. Um mais novo que chegou com o diálogo aberto fica:
+    /// ninguém o viu.
     fn older_twins(&self, machine: &str, device: &str) -> Vec<String> {
         let cards = self.pending.get(machine).map(Vec::as_slice).unwrap_or_default();
         let Some(this) = cards.iter().find(|card| card.device.device_id == device) else { return Vec::new() };
-        let Some(install) = this.device.install_id.as_deref() else { return Vec::new() };
-        cards.iter().filter(|card| card.device.device_id != device && card.device.install_id.as_deref() == Some(install)
-            && card.device.name == this.device.name).map(|card| card.device.device_id.clone()).collect()
+        let Some(key) = group_key(&this.device) else { return Vec::new() };
+        cards.iter().filter(|card| card.device.device_id != device && group_key(&card.device).as_deref() == Some(key.as_str())
+            && card.device.created_at <= this.device.created_at).map(|card| card.device.device_id.clone()).collect()
     }
 
     fn card(&mut self, machine: &str, device: &str) -> Option<&mut Request> {
@@ -676,9 +687,6 @@ impl Hangar {
         let changed = cards != old;
         if !cards.is_empty() { self.connect_notices.pending.insert(machine.to_owned(), cards); }
         self.connect_notices.forget_answered(machine);
-        let notices = &mut self.connect_notices;
-        let live: HashSet<String> = notices.pending.values().flatten().filter_map(|card| group_key(&card.device)).collect();
-        notices.skipped.retain(|key, _| live.contains(key));
         changed
     }
 
@@ -757,10 +765,12 @@ impl Hangar {
                 Err(_) => {}
             },
             NoticeReply::Answered { machine, device, result } => {
+                let twins = self.connect_notices.after_answer(&machine, &device, result.is_ok());
                 match result {
                     Ok(_) => if let Some(cards) = self.connect_notices.pending.get_mut(&machine) { cards.retain(|card| card.device.device_id != device); },
                     Err(error) => if let Some(card) = self.connect_notices.card(&machine, &device) { (card.sending, card.error) = (false, Some(failure_text(&error))); },
                 }
+                for twin in twins { self.answer_device(machine.clone(), twin, false, cx); }
                 if let Some(api) = self.machine_api(&machine) { self.read_pending(machine.clone(), api); }
                 if self.is_active_key(&machine) && self.settings == Some(Page::Connect) { self.load_connect_devices(cx); }
                 cx.notify();
@@ -789,6 +799,22 @@ impl Hangar {
             let deny = cx.listener(move |this, _: &ClickEvent, _, cx| this.answer_device(machine.clone(), device.clone(), false, cx));
             cards.push(device_card(&card.device.device_id, &card.device.name, &label, card.sending, card.error.clone(), true, approve, deny).into_any_element());
         }
+        // Só na lista geral: o aviso vale para o cartão inteiro, não para uma máquina.
+        let mut skipped: Vec<(&String, &String)> = self.connect_notices.skipped.iter().filter(|_| only.is_none()).collect();
+        skipped.sort();
+        for (i, (key, text)) in skipped.into_iter().enumerate() {
+            let key = key.clone();
+            cards.push(div().id(SharedString::from(format!("connect-skipped-{i}"))).flex_shrink_0().mx(px(8.)).my(px(4.)).p_2().rounded(px(8.))
+                .bg(theme::inset()).flex().flex_col().gap_1().role(Role::Alert)
+                .child(div().text_xs().text_color(theme::danger()).whitespace_normal().child(text.clone()))
+                .child(Button::new(SharedString::from(format!("connect-skipped-dismiss-{i}"))).xsmall().outline()
+                    .label(tr_shared("connect_notice_dismiss", &[]))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        this.connect_notices.skipped.remove(&key);
+                        cx.notify();
+                    })))
+                .into_any_element());
+        }
         cards
     }
 
@@ -802,8 +828,9 @@ impl Hangar {
         let sending = group.iter().any(|(_, card)| card.sending);
         let targets: Vec<(String, String, String)> = group.iter()
             .map(|(machine, card)| ((*machine).to_owned(), card.device.device_id.clone(), self.vault_machine_label(machine, cx))).collect();
-        let marked = |machine: &str, device: &str| !self.connect_notices.unchecked.contains(&(machine.to_owned(), device.to_owned()));
-        let chosen: Vec<(String, String, String)> = targets.iter().filter(|(machine, device, _)| marked(machine, device)).cloned().collect();
+        let key = group_key(first).unwrap_or_default();
+        let marked = |machine: &str| !self.connect_notices.unchecked.contains(&(key.clone(), machine.to_owned()));
+        let chosen: Vec<(String, String, String)> = targets.iter().filter(|(machine, _, _)| marked(machine)).cloned().collect();
         let machines: HashSet<&str> = group.iter().map(|(machine, _)| *machine).collect();
         let title = if machines.len() == 1 { tr_shared("connect_group_title_one", &[("name", &name), ("machine", &targets[0].2)]) }
             else { tr_shared("connect_group_title", &[("name", &name), ("count", &machines.len().to_string())]) };
@@ -816,19 +843,17 @@ impl Hangar {
             .child(div().text_xs().text_color(theme::text()).whitespace_normal()
                 .child([code, asked].into_iter().flatten().collect::<Vec<_>>().join(" · ")))
             .child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(tr_shared("connect_group_help", &[])));
-        for (machine, device, label) in targets.iter().filter(|_| targets.len() > 1) {
-            let (machine, device) = (machine.clone(), device.clone());
-            body = body.child(Checkbox::new(SharedString::from(format!("connect-group-{id}-{device}"))).label(label.clone())
-                .checked(marked(&machine, &device)).disabled(sending)
+        for (i, (machine, _, label)) in targets.iter().enumerate().filter(|_| targets.len() > 1) {
+            let mark = (key.clone(), machine.clone());
+            body = body.child(Checkbox::new(SharedString::from(format!("connect-group-{id}-{i}"))).label(label.clone())
+                .checked(marked(machine)).disabled(sending)
                 .on_click(cx.listener(move |this, _: &bool, _, cx| {
-                    let key = (machine.clone(), device.clone());
-                    if !this.connect_notices.unchecked.remove(&key) { this.connect_notices.unchecked.insert(key); }
+                    if !this.connect_notices.unchecked.remove(&mark) { this.connect_notices.unchecked.insert(mark.clone()); }
                     cx.notify();
                 })));
         }
         let button = |action: &str, key: &str| Button::new(SharedString::from(format!("connect-group-{action}-{id}"))).xsmall().w_full()
             .label(tr_shared(key, &[])).disabled(sending);
-        let key = group_key(first).unwrap_or_default();
         let approve = {
             let (chosen, name, key) = (chosen.clone(), name.clone(), key.clone());
             cx.listener(move |this, _: &ClickEvent, window, cx| this.confirm_group_approve(key.clone(), chosen.clone(), name.clone(), window, cx))
@@ -838,11 +863,8 @@ impl Hangar {
         });
         let failed = group.iter()
             .filter_map(|(machine, card)| Some((card.device.device_id.clone(), self.vault_machine_label(machine, cx), card.error.clone()?))).collect::<Vec<_>>();
-        let skipped = self.connect_notices.skipped.get(&key).cloned();
         body.child(request_pair(button("approve", "connect_group_approve").primary().disabled(sending || chosen.is_empty()).on_click(approve),
                 button("deny", "connect_group_deny").outline().on_click(deny)))
-            .children(skipped.map(|text| div().id(SharedString::from(format!("connect-group-skipped-{id}"))).role(Role::Alert)
-                .text_xs().text_color(theme::danger()).whitespace_normal().child(text)))
             .children(failed.into_iter().map(|(device, label, error)| div().id(SharedString::from(format!("connect-request-error-{device}")))
                 .role(Role::Alert).text_xs().text_color(theme::danger()).whitespace_normal()
                 .child(tr_shared("connect_group_failed", &[("machines", &label), ("error", &error)]))))
@@ -856,7 +878,7 @@ impl Hangar {
             tr_shared("connect_group_approve", &[]), ButtonVariant::Primary, move |_, cx| {
                 let _ = this.update(cx, |this, cx| {
                     let gone: Vec<(String, String, String)> = this.connect_notices.gone(&chosen).into_iter().cloned().collect();
-                    if gone.is_empty() { this.connect_notices.skipped.remove(&key); } else {
+                    if !gone.is_empty() {
                         let labels = gone.iter().map(|(_, _, label)| label.as_str()).collect::<Vec<_>>().join(", ");
                         let text = tr_shared("connect_group_failed", &[("machines", &labels), ("error", &tr_shared("connect_group_unavailable", &[]))]);
                         this.connect_notices.skipped.insert(key.clone(), text);
@@ -870,11 +892,12 @@ impl Hangar {
             });
     }
 
-    /// Responde o pedido e recusa as tentativas anteriores do mesmo celular na mesma máquina.
+    /// Responde o pedido; as tentativas anteriores do mesmo celular na mesma máquina são recusadas quando a resposta dele
+    /// der certo (`receive_connect_notice`).
     fn answer_with_twins(&mut self, machine: &str, device: &str, approve: bool, cx: &mut Context<Self>) {
         let twins = self.connect_notices.older_twins(machine, device);
+        if !twins.is_empty() { self.connect_notices.then_deny.insert((machine.to_owned(), device.to_owned()), twins); }
         self.answer_device(machine.to_owned(), device.to_owned(), approve, cx);
-        for twin in twins { self.answer_device(machine.to_owned(), twin, false, cx); }
     }
 
     fn render_device_row(&self, device: &Device, first: bool, cx: &mut Context<Self>) -> AnyElement {
@@ -1118,7 +1141,7 @@ impl Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{address_preview, device_card, device_view, identity_of, machine_label, merge, open_preview_port, parse_account, parse_devices, parse_links, parse_port, parse_preview, parse_status, phase, install_code, request_groups, take_password, Device, DeviceStatus, DeviceView, InputState, Notices, Phase, Remote, Request, REFUSED_PAUSE};
+    use super::{address_preview, device_card, device_view, group_key, identity_of, machine_label, merge, open_preview_port, parse_account, parse_devices, parse_links, parse_port, parse_preview, parse_status, phase, install_code, request_groups, take_password, Device, DeviceStatus, DeviceView, InputState, Notices, Phase, Remote, Request, REFUSED_PAUSE};
     use crate::i18n::tr_shared;
     // O nome explícito vence qualquer `test` trazido por glob.
     use core::prelude::v1::test;
@@ -1246,9 +1269,22 @@ mod tests {
         let shape: Vec<Vec<&str>> = groups.iter().map(|group| group.iter().map(|(_, card)| card.device.device_id.as_str()).collect()).collect();
         assert_eq!(shape, vec![vec!["new"], vec!["l1"], vec!["l2"]]);
         let mut notices = Notices::default();
-        notices.pending.insert("casa".to_owned(), casa.to_vec());
+        // `newer` chegou com o diálogo aberto: quem aprovou não o viu, ele não sai junto.
+        notices.pending.insert("casa".to_owned(), [&casa[..], &[phone("newer", Some("x1"), 300)]].concat());
         assert_eq!(notices.older_twins("casa", "new"), ["old"]);
         assert!(notices.older_twins("casa", "l1").is_empty());
+    }
+
+    /// As tentativas anteriores só são recusadas depois que a resposta do pedido atual deu certo.
+    #[test]
+    fn older_requests_are_denied_only_after_the_answer_succeeds() {
+        let mut notices = Notices::default();
+        let pair = ("casa".to_owned(), "new".to_owned());
+        notices.then_deny.insert(pair.clone(), vec!["old".to_owned()]);
+        assert!(notices.after_answer("casa", "new", false).is_empty());
+        assert!(notices.then_deny.is_empty(), "falhou: as anteriores ficam e não são lembradas");
+        notices.then_deny.insert(pair, vec!["old".to_owned()]);
+        assert_eq!(notices.after_answer("casa", "new", true), ["old"]);
     }
 
     /// O nome é de quem pede: com o mesmo id e nome diferente, o dono veria um nome só aprovando dois aparelhos.
@@ -1260,7 +1296,6 @@ mod tests {
         assert_eq!(request_groups(&[("casa", &casa[..]), ("mesa", &mesa[..])]).len(), 2);
     }
 
-    /// Só a lista lida apaga marca: máquina fora do ar ou recusando (401/403) guarda a escolha para quando voltar.
     #[test]
     fn a_machine_that_dropped_the_request_while_confirming_is_reported_not_skipped_silently() {
         let mut notices = Notices::default();
@@ -1270,15 +1305,20 @@ mod tests {
             "a mesa recusou a lista (401/403) com o diálogo aberto");
     }
 
+    /// A marca é da máquina dentro do cartão do celular: nova tentativa troca o pedido, não a escolha. Só a lista lida
+    /// apaga marca; máquina fora do ar ou recusando (401/403) guarda a escolha para quando voltar.
     #[test]
-    fn unchecked_marks_go_only_when_a_read_list_no_longer_has_the_request() {
+    fn an_unchecked_machine_stays_unchecked_when_the_phone_retries_there() {
+        let phone = |id: &str| Request { device: Device { install_id: Some("x1".to_owned()), name: "iPhone".to_owned(),
+            ..device(id, DeviceStatus::Pending) }, sending: false, error: None };
+        let key = group_key(&phone("a").device).unwrap();
         let mut notices = Notices::default();
-        notices.unchecked.extend([("casa", "a"), ("casa", "x"), ("mesa", "b")].map(|(m, d)| (m.to_owned(), d.to_owned())));
-        notices.pending.insert("casa".to_owned(), merge(&[], &[device("a", DeviceStatus::Pending)]));
+        notices.unchecked.extend([(key.clone(), "casa".to_owned()), (key.clone(), "mesa".to_owned()), ("outro\nPixel".to_owned(), "casa".to_owned())]);
+        notices.pending.insert("casa".to_owned(), vec![phone("retry")]);
         notices.forget_answered("casa");
         let mut kept: Vec<_> = notices.unchecked.into_iter().collect();
         kept.sort();
-        assert_eq!(kept, [("casa", "a"), ("mesa", "b")].map(|(m, d)| (m.to_owned(), d.to_owned())));
+        assert_eq!(kept, [(key.clone(), "casa".to_owned()), (key, "mesa".to_owned())]);
     }
 
     #[test]
