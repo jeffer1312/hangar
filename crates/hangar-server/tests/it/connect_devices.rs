@@ -236,6 +236,19 @@ async fn redeem_refuses_bad_or_replayed_ticket() {
     assert_eq!(redeem(e.connect, &text, &signature, "segredo").await.status(), 401, "validade longa demais");
 }
 
+#[test]
+fn a_second_rotation_keeps_the_token_whose_delivery_was_never_confirmed() {
+    let dir = crate::physical_tempdir();
+    let store = Store::new(dir.path().to_path_buf(), None);
+    let (id, first) = store.issue_local("máquina pc-b").unwrap();
+    let delivered = store.rotate(&id).unwrap();
+    // A outra ponta gravou `delivered`, mas a resposta se perdeu: o anúncio seguinte gira de novo.
+    let next = store.rotate(&id).unwrap();
+    assert!(store.verify(first.as_bytes()).is_some(), "o token antigo segue valendo até uma entrega se confirmar");
+    assert!(store.verify(delivered.as_bytes()).is_some(), "quem recebeu a entrega sem confirmação não perde o acesso");
+    assert!(store.verify(next.as_bytes()).is_none(), "usar um token entregue encerra os outros");
+}
+
 #[tokio::test]
 async fn redeem_without_a_link_answers_not_linked() {
     let dir = crate::physical_tempdir();
