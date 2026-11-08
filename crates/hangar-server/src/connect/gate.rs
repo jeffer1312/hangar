@@ -93,7 +93,11 @@ async fn serve_device(st: &AppState, mut req: Request, next: Next, id: DeviceId,
     }
     // A origem do Connect é de todos que entram por ela; quem encheu o contador não foi este aparelho.
     if connect && let Err(error) = st.auth.clear_if_blocked(CONNECT_PEER).await {
-        tracing::warn!(code = "connect_counter_unavailable", "contador de tentativas indisponível para o aparelho: {error:?}");
+        // Um aviso só: fora do ar, o contador falharia a cada pedido do aparelho.
+        static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            tracing::warn!(code = "connect_counter_unavailable", "contador de tentativas indisponível para o aparelho: {error:?}");
+        }
     }
     let owner = st.cfg.auth_token.as_bytes();
     rewrite_credentials(&mut req, |value| {

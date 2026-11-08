@@ -318,9 +318,12 @@ impl PeerLinker {
 
 async fn revoke_on_peer(http: &reqwest::Client, reach: &str, device_id: &str, token: &str) {
     let outcome = http.delete(format!("{reach}/api/connect/devices/{device_id}")).bearer_auth(token).send().await;
-    if !outcome.as_ref().is_ok_and(|response| response.status().is_success()) {
-        tracing::warn!(code = "connect_peer_revoke_failed", device = device_id, "credencial aprovada na outra máquina ficou sem uso: {outcome:?}");
-    }
+    let failure = match &outcome {
+        Ok(response) if response.status().is_success() => return,
+        Ok(response) => response.status().to_string(),
+        Err(error) => error.to_string(),
+    };
+    tracing::warn!(code = "connect_peer_revoke_failed", device = device_id, "credencial aprovada na outra máquina ficou sem uso: {failure}");
 }
 
 /// Tarefa que entra em pânico não chega ao `finish`: a linha ficaria em `Requesting`, e `begin` recusaria ligar de novo.
