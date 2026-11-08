@@ -121,8 +121,8 @@ function peers(value: unknown): Peer[] {
   // O token da listagem é uma máscara, nunca uma credencial utilizável.
   return value.map((p) => ({ id: p.id, base_url: normalizeUrl(p.base_url), enabled: p.enabled !== false }));
 }
-// Mesma regra do `install_id` no servidor; o grupo (64 hex) e o código ("ABC-DEF") cabem nela.
-const INSTALL_FIELD = /^[A-Za-z0-9_-]{1,64}$/;
+/** A regra do `install_id` no servidor (`redeem_from` em `hangar-connect`); o grupo (64 hex) e o código ("ABC-DEF") cabem nela. */
+export const validInstallField = (value: string) => /^[A-Za-z0-9_-]{1,64}$/.test(value);
 export async function readDevices(s: Server, signal: AbortSignal): Promise<ConnectDevice[]> {
   const value = await request(s, '/api/connect/devices', signal);
   if (!Array.isArray(value) || !value.every((d) => object(d) && typeof d.device_id === 'string' && typeof d.name === 'string'
@@ -130,9 +130,9 @@ export async function readDevices(s: Server, signal: AbortSignal): Promise<Conne
   // Código e chave de grupo fora do formato não juntam nem rotulam nada: o pedido fica no seu cartão, sem código.
   return (value as Record<string, unknown>[]).map((row) => {
     const { install_group: group, install_code: code, ...rest } = row;
-    const malformed = (field: unknown) => field !== undefined && !(typeof field === 'string' && INSTALL_FIELD.test(field));
+    const malformed = (field: unknown) => field !== undefined && !(typeof field === 'string' && validInstallField(field));
     if (malformed(group) || malformed(code)) {
-      registrarDiag({ evento: 'connect.aparelho_campo_invalido', nivel: 'aviso', codigo: 'connect_device_install_invalid' });
+      registrarDiag({ evento: 'connect.device_install_invalid', nivel: 'aviso', codigo: 'connect_device_install_invalid' });
       return rest;
     }
     return row;

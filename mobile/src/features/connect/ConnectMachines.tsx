@@ -13,7 +13,7 @@ import { Field, MachineSheet, Notice, styles as machineStyles, useMachineAction 
 import { ownServers, useServers } from '../../stores/servers';
 import { connectServers, missingMachines, needsEntry, sameMachine, useConnect } from './connectStore';
 import { ConnectMark } from './ConnectHero';
-import { chosenTargets, pendingGroups, type PendingGroup } from './pendingGroups';
+import { chosenTargets, pendingGroups, type GroupTarget, type PendingGroup } from './pendingGroups';
 import { reason } from '../machines/api';
 import { haptic } from '../../ui/haptics';
 import * as m from '../../paraglide/messages';
@@ -49,7 +49,10 @@ export function ConnectMachines({ onDone }: { onDone: () => void }) {
   // O pedido de outro aparelho chega enquanto a pessoa olha esta tela: fora dela, ou com o app no fundo, não consulta.
   useFocusEffect(useCallback(() => {
     const timer = setInterval(() => {
-      if (AppState.currentState === 'active') void useConnect.getState().refreshDevices();
+      if (AppState.currentState !== 'active') return;
+      void useConnect.getState().refreshDevices();
+      // Cofre que falhou na abertura pode voltar: o código aparece sem a pessoa precisar entrar numa máquina.
+      if (useConnect.getState().installCodeError) void useConnect.getState().loadInstallCode();
     }, DEVICES_REFRESH_MS);
     return () => clearInterval(timer);
   }, []));
@@ -64,7 +67,8 @@ export function ConnectMachines({ onDone }: { onDone: () => void }) {
   const codeError = useConnect((s) => s.installCodeError);
   const offerAll = missing.length > 1;
   // Também no pedido de uma máquina só: quem aprova vê o mesmo código no cartão.
-  useEffect(() => { if (missing.length) void useConnect.getState().loadInstallCode(); }, [missing.length > 0]);
+  const asking = missing.length > 0;
+  useEffect(() => { if (asking) void useConnect.getState().loadInstallCode(); }, [asking]);
   const codeText = code ? m.connect_enter_all_code({ code }) : codeError;
   const allHelp = [codeText,
     later.length ? m.connect_enter_all_offline({ machines: later.map((machine) => machine.name).join(', ') }) : ''].filter(Boolean).join('\n');
@@ -205,8 +209,8 @@ const PendingGroupCard = memo(function PendingGroupCard({ group, lists, onAnswer
   group: PendingGroup; lists: { read: number; total: number; failed: string[] }; onAnswered: (group: string, failed: Failed[]) => void;
 }) {
   // O alerta de confirmação fica aberto enquanto as listas chegam: o "sim" confere o cartão de agora, não o do toque.
-  const latest = useRef({ group, lists });
-  latest.current = { group, lists };
+  const latest = useRef({ group });
+  latest.current = { group };
   const [off, setOff] = useState<ReadonlySet<string>>(new Set());
   const [busy, setBusy] = useState(false);
   // Em memo o cartão só redesenha quando o grupo muda: "pediu há" anda sozinho.
@@ -217,16 +221,31 @@ const PendingGroupCard = memo(function PendingGroupCard({ group, lists, onAnswer
   }, []);
   const chosen = chosenTargets(group, off);
   const reading = lists.read < lists.total;
-  const answer = (approve: boolean) => {
+  const answer = (targets: GroupTarget[], approve: boolean, skipped: Failed[] = []) => {
     setBusy(true);
-    void useConnect.getState().answerGroup(approve ? chosen : group.targets, approve).then((failed) => {
-      if (failed.length) haptic.error();
+    void useConnect.getState().answerGroup(targets, approve).then((failed) => {
+      const all = [...skipped, ...failed];
+      if (all.length) haptic.error();
       else haptic.success();
-      onAnswered(group.key, failed);
+      onAnswered(group.key, all);
     }).catch((error: unknown) => {
       haptic.error();
-      onAnswered(group.key, [{ label: group.name, error: reason(error) }]);
+      onAnswered(group.key, [...skipped, { label: group.name, error: reason(error) }]);
     }).finally(() => setBusy(false));
+  };
+  // Só aprova o que a pessoa viu no alerta e ainda está na lista; o resto vira aviso, nunca silêncio.
+  const confirmed = (asked: GroupTarget[]) => {
+    const now = latest.current.group;
+    if (now.clash) {
+      haptic.error();
+      onAnswered(group.key, [{ label: group.name, error: m.connect_group_code_clash() }]);
+      return;
+    }
+    const still = asked.filter((target) => now.targets.some((t) => t.serverId === target.serverId && t.deviceId === target.deviceId));
+    const gone = asked.filter((target) => !still.includes(target));
+    const skipped = gone.length ? [{ label: gone.map((target) => target.label).join(', '), error: m.connect_group_unavailable() }] : [];
+    if (still.length) answer(still, true, skipped);
+    else { haptic.error(); onAnswered(group.key, skipped); }
   };
   const machines = new Set(group.targets.map((target) => target.serverId)).size;
   const title = machines === 1
@@ -251,11 +270,8 @@ const PendingGroupCard = memo(function PendingGroupCard({ group, lists, onAnswer
     {reading ? <MachineRow title={m.connect_group_reading({ read: String(lists.read), total: String(lists.total) })} /> : null}
     <MachineRow title={m.connect_group_approve()} action disabled={busy || group.clash || reading || !chosen.length}
       onPress={() => confirm(m.connect_device_approve_title({ name: group.name }),
-        m.connect_device_approve_body({ machine: chosen.map((target) => target.label).join(', ') }), m.connect_device_approve(), () => {
-          const now = latest.current;
-          if (!now.group.clash && now.lists.read === now.lists.total) answer(true);
-        })} />
-    <MachineRow title={m.connect_group_deny()} danger action disabled={busy} onPress={() => answer(false)} />
+        m.connect_device_approve_body({ machine: chosen.map((target) => target.label).join(', ') }), m.connect_device_approve(), () => confirmed(chosen))} />
+    <MachineRow title={m.connect_group_deny()} danger action disabled={busy} onPress={() => answer(group.targets, false)} />
     {lists.failed.map((machine) => <Notice key={machine} text={m.connect_group_list_failed({ machine })} error />)}
   </SectionCard>;
 });

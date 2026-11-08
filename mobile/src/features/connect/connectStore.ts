@@ -4,7 +4,7 @@ import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
 import { addMachine, changeAccountPassword, endAccountSessions, installCode, listMachines, registrarDiag, signIn, signUp, upgradeToDevice } from '@hangar/core';
 import type { AccountSession, ConnectMachine, Server } from '@hangar/core';
-import { approveDevice, readDevices, reason, removeDevice, type ConnectDevice } from '../machines/api';
+import { approveDevice, readDevices, reason, removeDevice, validInstallField, type ConnectDevice } from '../machines/api';
 import { ownServers, useServers } from '../../stores/servers';
 import type { GroupTarget } from './pendingGroups';
 import * as m from '../../paraglide/messages';
@@ -100,29 +100,27 @@ async function withinVaultTime<T>(work: Promise<T>): Promise<T> {
     return await Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), INSTALL_VAULT_MS); })]);
   } finally { clearTimeout(timer); }
 }
-// A mesma regra do servidor (`redeem_from` em `hangar-connect`).
-const validInstallId = (id: string) => /^[A-Za-z0-9_-]{1,64}$/.test(id);
 async function readInstallId(): Promise<InstallId> {
   let saved: string | null;
   try { saved = await withinVaultTime(SecureStore.getItemAsync(INSTALL_KEY)); }
   catch {
     // Gerar outro aqui trocaria o código que a pessoa já conferiu e separaria este celular em dois cartões: o pedido para
     // com erro e "tentar de novo" relê o mesmo cofre.
-    registrarDiag({ evento: 'connect.instalacao_ilegivel', nivel: 'aviso', codigo: 'connect_install_id_unreadable' });
+    registrarDiag({ evento: 'connect.install_id_unreadable', nivel: 'aviso', codigo: 'connect_install_id_unreadable' });
     throw Object.assign(new Error(m.connect_error_install_id()), { code: 'connect_install_id_unreadable' });
   }
-  if (saved && validInstallId(saved)) return { id: saved };
+  if (saved && validInstallField(saved)) return { id: saved };
   // Só aqui gerar outro é certo: o servidor recusaria este em todo pedido.
-  if (saved) registrarDiag({ evento: 'connect.instalacao_invalida', nivel: 'aviso', codigo: 'connect_install_id_invalid' });
+  if (saved) registrarDiag({ evento: 'connect.install_id_invalid', nivel: 'aviso', codigo: 'connect_install_id_invalid' });
   if (!globalThis.crypto?.getRandomValues) {
-    registrarDiag({ evento: 'connect.instalacao_sem_aleatorio', nivel: 'aviso', codigo: 'connect_install_id_no_random' });
+    registrarDiag({ evento: 'connect.install_id_no_random', nivel: 'aviso', codigo: 'connect_install_id_no_random' });
     return { missing: m.connect_install_code_no_random() };
   }
   const id = Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
   // Sem cofre, os pedidos saem sem o id: cada máquina mostra o seu cartão, como antes.
   try { await withinVaultTime(SecureStore.setItemAsync(INSTALL_KEY, id)); }
   catch {
-    registrarDiag({ evento: 'connect.instalacao_nao_gravada', nivel: 'aviso', codigo: 'connect_install_id_unsaved' });
+    registrarDiag({ evento: 'connect.install_id_unsaved', nivel: 'aviso', codigo: 'connect_install_id_unsaved' });
     return { missing: m.connect_install_code_unavailable() };
   }
   return { id };

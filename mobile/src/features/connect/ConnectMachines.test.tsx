@@ -130,6 +130,26 @@ it('cada máquina do cartão anuncia se está marcada, e o toque troca', async (
   expect(buttons('pc1')[0].getAttribute('aria-checked')).toBe('false');
 });
 
+it('o celular pede de novo com o alerta aberto: o "sim" não aprova o pedido antigo e avisa', async () => {
+  releasePc2();
+  deviceRows = { pc1: [pending('a', 'g1', 'ABC-DEF')] };
+  let yes: (() => void) | undefined;
+  const { Alert } = await import('react-native');
+  const alert = vi.spyOn(Alert, 'alert').mockImplementation((_t, _b, buttons) => {
+    yes = (buttons as { onPress?: () => void }[] | undefined)?.[1]?.onPress;
+  });
+  await render();
+  await vi.waitFor(() => expect(buttons(m.connect_group_approve())).toHaveLength(1));
+  await act(async () => buttons(m.connect_group_approve())[0].click());
+  deviceRows = { pc1: [pending('a2', 'g1', 'ABC-DEF')] };
+  await act(async () => { await useConnect.getState().refreshDevices(); });
+  await act(async () => yes!());
+  const approvals = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/approve'));
+  expect(approvals).toHaveLength(0);
+  expect(el.textContent).toContain(m.connect_group_unavailable());
+  alert.mockRestore();
+});
+
 it('o erro da resposta fica fora do cartão, mesmo depois de o cartão sumir, até dispensar', async () => {
   releasePc2();
   denyFails = true;

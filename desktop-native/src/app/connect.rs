@@ -916,7 +916,10 @@ impl Hangar {
                         return;
                     }
                     let gone: Vec<(String, String, String)> = this.connect_notices.gone(&chosen).into_iter().cloned().collect();
-                    if !gone.is_empty() {
+                    // Cada confirmação troca o aviso do cartão: a que achou tudo na lista apaga o da tentativa anterior.
+                    if gone.is_empty() {
+                        this.connect_notices.skipped.remove(&key);
+                    } else {
                         let labels = gone.iter().map(|(_, _, label)| label.as_str()).collect::<Vec<_>>().join(", ");
                         let text = tr_shared("connect_group_failed", &[("machines", &labels), ("error", &tr_shared("connect_group_unavailable", &[]))]);
                         this.connect_notices.skipped.insert(key.clone(), text);
