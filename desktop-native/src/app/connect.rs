@@ -71,9 +71,71 @@ fn failure_text(error: &Failure) -> String {
         Some("connect_not_linked") => tr_shared("connect_error_not_linked", &[]),
         Some("connect_already_linked") => tr("connect_error_already_linked"),
         Some("connect_machine_limit") => tr("connect_error_machine_limit"),
+        Some("connect_account_taken") => tr_shared("connect_error_name_taken", &[]),
         Some("connect_preview_port_refused") => tr("connect_preview_port_refused"),
         _ => Hangar::fetch_failure(error),
     }
+}
+
+/// O serviço dá a cada máquina `<máquina>.<conta>.<domínio>`.
+const ACCOUNT_DOMAIN: &str = "hangar.dev.br";
+/// Primeira ligação: os arcos acendem um depois do outro.
+const MARK_IN: Duration = Duration::from_millis(900);
+const MARK_PULSE: Duration = Duration::from_millis(2400);
+
+/// O endereço que a conta vai dar, mostrado enquanto a pessoa digita; campo vazio mostra o exemplo.
+fn address_preview(machine: &str, account: &str) -> String {
+    let part = |value: &str, fallback: &str| { let value = value.trim().to_lowercase(); if value.is_empty() { fallback.to_owned() } else { value } };
+    format!("{}.{}.{ACCOUNT_DOMAIN}", part(machine, "notebook"), part(account, "sua-conta"))
+}
+
+/// `(máquina, conta)` do host que o serviço deu a esta máquina.
+fn identity_of(host: &str) -> Option<(&str, &str)> {
+    let mut labels = host.split('.');
+    Some((labels.next().filter(|l| !l.is_empty())?, labels.next().filter(|l| !l.is_empty())?))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Entry { Create, Login }
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+pub(super) struct AccountMachine { machine_id: String, name: String, host: String, online: bool, added: bool }
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+struct ThisMachine { machine_id: String }
+
+/// `GET /api/connect/machines`: as outras máquinas da conta; `added` diz se já estão no `peers.json` deste servidor.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+pub(super) struct AccountList { this: ThisMachine, machines: Vec<AccountMachine> }
+
+fn parse_account(value: Value) -> Result<AccountList, String> {
+    serde_json::from_value(value).map_err(|_| tr("invalid_response"))
+}
+
+/// Uma linha de `GET /api/connect/peers`: o pedido de ligar esta máquina a outra.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize)]
+pub(super) struct PeerLink { machine_id: String, stage: String, #[serde(default)] message: Option<String> }
+
+fn parse_links(value: Value) -> Result<Vec<PeerLink>, String> {
+    serde_json::from_value(value).map_err(|_| tr("invalid_response"))
+}
+
+/// A marca do Hangar acendendo arco por arco; `pulse` repete um respiro enquanto o Connect liga.
+fn connect_mark(id: &str, size: f32, pulse: bool, reduce: bool) -> AnyElement {
+    let arc = |path: &'static str| svg().path(path).absolute().top_0().left_0().size(px(size)).text_color(theme::accent());
+    let (outer, inner) = (arc(crate::HANGAR_MARK_OUTER), arc(crate::HANGAR_MARK_INNER));
+    let mark = div().relative().size(px(size)).flex_shrink_0();
+    if reduce { return mark.child(outer).child(inner).into_any_element(); }
+    // O de dentro começa depois: uma animação só, com a janela de cada arco.
+    let lit = |t: f32, from: f32| ((t - from) / 0.6).clamp(0., 1.);
+    let mark = mark
+        .child(outer.with_animation(SharedString::from(format!("{id}-outer")), Animation::new(MARK_IN).with_easing(crate::motion::ease_out),
+            move |el, t| el.opacity(lit(t, 0.)).top(px(3. * (1. - lit(t, 0.))))))
+        .child(inner.with_animation(SharedString::from(format!("{id}-inner")), Animation::new(MARK_IN).with_easing(crate::motion::ease_out),
+            move |el, t| el.opacity(lit(t, 0.35)).top(px(3. * (1. - lit(t, 0.35))))));
+    if !pulse { return mark.into_any_element(); }
+    mark.with_animation(SharedString::from(format!("{id}-pulse")), Animation::new(MARK_PULSE).repeat(),
+        |el, t| el.opacity(0.55 + 0.45 * (0.5 + 0.5 * (t * std::f32::consts::TAU).cos()))).into_any_element()
 }
 
 fn parse_port(text: &str) -> Option<u16> {
@@ -101,7 +163,12 @@ fn submit_on_enter(input: &Entity<InputState>, window: &mut Window, cx: &mut Con
     })
 }
 
-struct LinkForm { account: Entity<InputState>, password: Entity<InputState>, machine: Entity<InputState>, preview_port: Entity<InputState>, _enter: [Subscription; 2] }
+/// O endereço de exemplo acompanha o que se digita na conta e no nome.
+fn redraw_on_change(input: &Entity<InputState>, cx: &mut Context<Hangar>) -> Subscription {
+    cx.subscribe(input, |_: &mut Hangar, _, event: &InputEvent, cx| if matches!(event, InputEvent::Change) { cx.notify(); })
+}
+
+struct LinkForm { account: Entity<InputState>, password: Entity<InputState>, machine: Entity<InputState>, preview_port: Entity<InputState>, _subscriptions: [Subscription; 4] }
 
 impl LinkForm {
     fn new(window: &mut Window, cx: &mut Context<Hangar>) -> Self {
@@ -109,8 +176,9 @@ impl LinkForm {
         let password = cx.new(|cx| InputState::new(window, cx).masked(true));
         let machine = cx.new(|cx| InputState::new(window, cx));
         let preview_port = cx.new(|cx| InputState::new(window, cx));
-        let _enter = [submit_on_enter(&password, window, cx), submit_on_enter(&machine, window, cx)];
-        Self { account, password, machine, preview_port, _enter }
+        let _subscriptions = [submit_on_enter(&password, window, cx), submit_on_enter(&machine, window, cx),
+            redraw_on_change(&account, cx), redraw_on_change(&machine, cx)];
+        Self { account, password, machine, preview_port, _subscriptions }
     }
 }
 
@@ -128,10 +196,20 @@ pub(in crate::app) struct Connect {
     preview_open: Option<u64>,
     preview_busy: bool,
     preview_error: Option<String>,
+    /// Sem ligação: `None` mostra a abertura; escolhido, o formulário de criar conta ou de entrar.
+    entry: Option<Entry>,
+    machines: Remote<AccountList>,
+    /// Acompanhamento dos pedidos de ligar a outra máquina: falha de leitura só deixa a linha como estava.
+    links: Vec<PeerLink>,
+    linking: Option<String>,
+    link_error: Option<String>,
 }
 
 pub(super) enum ConnectReply {
     Loaded(u64, Result<Value, Failure>),
+    Machines(u64, Result<Value, Failure>),
+    Links(Result<Value, Failure>),
+    LinkStarted(Result<Value, Failure>),
     Saved(Result<Value, Failure>),
     Devices(u64, Result<Value, Failure>),
     Revoked(Result<Value, Failure>),
@@ -211,6 +289,34 @@ impl Hangar {
         self.load_connect(cx);
         self.load_connect_devices(cx);
         self.load_connect_preview();
+        self.load_account_machines(cx);
+        self.load_peer_links();
+    }
+
+    fn load_account_machines(&mut self, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
+        let seq = self.connect.machines.start();
+        let done = self.connect_send_later();
+        self.runtime.spawn(async move { done(ConnectReply::Machines(seq, api.server_read(&["connect", "machines"], &[], 15).await)).await });
+        cx.notify();
+    }
+
+    fn load_peer_links(&self) {
+        let Some(api) = self.api.clone() else { return };
+        let done = self.connect_send_later();
+        self.runtime.spawn(async move { done(ConnectReply::Links(api.server_read(&["connect", "peers"], &[], 10).await)).await });
+    }
+
+    /// Pede a entrada nesta outra máquina pela conta: o cartão de aprovação aparece lá.
+    fn add_account_machine(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.connect.linking.is_some() { return; }
+        let Some(api) = self.api.clone() else { return };
+        (self.connect.linking, self.connect.link_error) = (Some(id.clone()), None);
+        let done = self.connect_send_later();
+        self.runtime.spawn(async move {
+            done(ConnectReply::LinkStarted(api.server_send(reqwest::Method::POST, &["connect", "peers", &id, "link"], None, 15).await)).await
+        });
+        cx.notify();
     }
 
     fn load_connect_preview(&self) {
@@ -248,9 +354,11 @@ impl Hangar {
         }
         let Some(api) = self.api.clone() else { return };
         (self.connect.saving, self.connect.error) = (true, None);
+        let create_account = self.connect.entry == Some(Entry::Create);
         let done = self.connect_send_later();
         self.runtime.spawn(async move {
-            let body = json!({"service_url": SERVICE_URL, "account": account, "password": password, "machine_name": machine_name});
+            let body = json!({"service_url": SERVICE_URL, "account": account, "password": password, "machine_name": machine_name,
+                "create_account": create_account});
             // Ligar pode baixar o frpc e o Caddy na primeira vez: prazo longo.
             done(ConnectReply::Saved(api.server_send(reqwest::Method::POST, &["connect", "link"], Some(body), 180).await)).await
         });
@@ -340,11 +448,22 @@ impl Hangar {
             ConnectReply::Saved(result) => {
                 self.connect.saving = false;
                 match result.map_err(|error| failure_text(&error)).and_then(parse_status) {
-                    Ok(status) => self.connect.status.set(Ok(status)),
+                    Ok(status) => { self.connect.entry = None; self.connect.status.set(Ok(status)); }
                     // O envio pode ter estourado o prazo com o servidor já ligado: relê em vez de supor.
                     Err(error) => { self.connect.error = Some(error); self.load_connect(cx); }
                 }
                 self.load_connect_devices(cx);
+                self.load_account_machines(cx);
+            }
+            ConnectReply::Machines(seq, result) => {
+                let result = result.map_err(|error| failure_text(&error)).and_then(parse_account);
+                if !self.connect.machines.finish(seq, result) { return; }
+            }
+            ConnectReply::Links(result) => if let Ok(links) = result.map_err(|_| String::new()).and_then(parse_links) { self.connect.links = links; },
+            ConnectReply::LinkStarted(result) => {
+                self.connect.linking = None;
+                self.connect.link_error = result.err().map(|error| failure_text(&error));
+                self.load_peer_links();
             }
             ConnectReply::Devices(seq, result) => {
                 let result = result.map_err(|error| failure_text(&error)).and_then(parse_devices);
@@ -417,6 +536,9 @@ impl Hangar {
             self.load_connect(cx);
             self.load_connect_devices(cx);
             self.load_connect_preview();
+            // A lista da conta pergunta ao serviço: a cada rodada só quando um pedido de ligar está andando.
+            if self.connect.links.iter().any(|link| link.stage != "failed") { self.load_account_machines(cx); }
+            self.load_peer_links();
         }
     }
 
@@ -506,12 +628,11 @@ impl Hangar {
             .into_any_element()
     }
 
-    fn render_connect_devices(&self, cx: &mut Context<Self>) -> Div {
+    fn render_connect_devices(&self, this_machine: &str, cx: &mut Context<Self>) -> Div {
         let key = self.active_key();
-        let machine = self.vault_machine_label(&key, cx);
         let section = div().flex().flex_col().gap_2()
-            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(tr_shared("connect_devices_title", &[("machine", &machine)])))
-            .child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(tr_shared("connect_devices_help", &[])))
+            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(tr("connect_devices_title")))
+            .child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(tr("connect_devices_add").replace("{machine}", this_machine)))
             .children(self.connect.device_error.clone().map(|error| div().id("connect-device-error").role(Role::Alert)
                 .text_sm().text_color(theme::danger()).whitespace_normal().child(error)))
             .children(self.connect_request_cards(Some(&key), cx));
@@ -526,8 +647,116 @@ impl Hangar {
                 let rows: Vec<AnyElement> = devices.iter().filter(|device| device.status == DeviceStatus::Approved).enumerate()
                     .map(|(at, device)| self.render_device_row(device, at == 0, cx)).collect();
                 section.when(!rows.is_empty(), |el| el.child(settings_box().children(rows)))
+                    .child(div().text_xs().text_color(theme::faint()).whitespace_normal().child(tr_shared("connect_devices_help", &[])))
             }
         }
+    }
+
+    /// A abertura de quem nunca ligou: o que o Connect dá e os dois caminhos.
+    fn render_connect_hero(&self, cx: &mut Context<Self>) -> Div {
+        let perk = |key: &str| div().flex().items_start().gap_2()
+            .child(div().pt(px(2.)).child(chrome::small_icon(IconName::Check, 14., theme::success())))
+            .child(div().flex_1().min_w_0().text_sm().whitespace_normal().child(tr_shared(key, &[])));
+        let width = px(400.);
+        settings_box().p_6().items_center().gap_3()
+            .child(connect_mark("connect-hero-mark", 72., false, cx.reduce_motion()))
+            .child(div().text_2xl().font_weight(FontWeight::BOLD).child(tr_shared("connect_title", &[])))
+            .child(div().max_w(width).text_sm().text_color(theme::muted()).text_center().whitespace_normal().child(tr_shared("connect_hero_subtitle", &[])))
+            .child(chip(tr_shared("connect_free", &[]), theme::accent_text(), theme::accent_dim()))
+            .child(div().w_full().max_w(width).flex().flex_col().gap_2()
+                .child(perk("connect_perk_networks")).child(perk("connect_perk_approve")).child(perk("connect_perk_one_account")))
+            .child(div().w_full().max_w(px(320.)).pt_2().flex().flex_col().gap_2()
+                .child(Button::new("connect-create").primary().w_full().label(tr_shared("connect_create_free", &[]))
+                    .on_click(cx.listener(|this, _, _, cx| { (this.connect.entry, this.connect.error) = (Some(Entry::Create), None); cx.notify(); })))
+                .child(Button::new("connect-have-account").outline().w_full().label(tr_shared("connect_have_account", &[]))
+                    .on_click(cx.listener(|this, _, _, cx| { (this.connect.entry, this.connect.error) = (Some(Entry::Login), None); cx.notify(); }))))
+    }
+
+    /// Criar conta ou entrar nela, e já ligar este computador. `relink` é a ligação gravada que parou.
+    fn render_connect_form(&self, entry: Entry, relink: bool, cx: &mut Context<Self>) -> Option<Div> {
+        let form = self.connect.form.as_ref()?;
+        let saving = self.connect.saving;
+        let create = entry == Entry::Create;
+        let (title, help) = if relink { (tr("connect_stopped"), tr("connect_stopped_help")) }
+            else if create { (tr_shared("connect_sign_up", &[]), tr("connect_create_help")) }
+            else { (tr("connect_login_title"), tr("connect_link_help")) };
+        let hint = |text: String| div().text_xs().text_color(theme::muted()).whitespace_normal().child(text);
+        let preview = address_preview(&form.machine.read(cx).value().to_string(), &form.account.read(cx).value().to_string());
+        let label = if saving { tr("connect_turning_on") } else if relink { tr("connect_turn_on_again") }
+            else if create { tr("connect_create_and_link") } else { tr("connect_login_and_link") };
+        Some(settings_box().p_5().gap_3()
+            .child(div().flex().items_center().gap_2()
+                .child(chrome::hangar_mark(22., theme::accent()))
+                .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(title)))
+            .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(help))
+            .child(div().flex().flex_col().gap_1().child(super::sync::sync_field(tr_shared("connect_account_name", &[]), &form.account, saving))
+                .child(hint(tr("connect_address_preview").replace("{address}", &preview))))
+            .child(div().flex().flex_col().gap_1().child(super::sync::sync_field(tr("connect_password"), &form.password, saving))
+                .when(create, |el| el.child(hint(tr("connect_password_hint")))))
+            .child(div().flex().flex_col().gap_1().child(super::sync::sync_field(tr("connect_machine_name"), &form.machine, saving))
+                .child(hint(tr("connect_machine_hint"))))
+            .children(self.connect.error.clone().map(|error| div().id("connect-write-error").role(Role::Alert)
+                .text_sm().text_color(theme::danger()).whitespace_normal().child(error)))
+            .child(div().flex().items_center().gap_2().pt_1()
+                .child(Button::new("connect-on").primary().label(label).loading(saving).disabled(saving)
+                    .on_click(cx.listener(|this, _, window, cx| this.submit_link(window, cx))))
+                .when(!relink, |el| el.child(Button::new("connect-back").ghost().label(tr_shared("comum_voltar", &[])).disabled(saving)
+                    .on_click(cx.listener(|this, _, _, cx| { (this.connect.entry, this.connect.error) = (None, None); cx.notify(); }))))))
+    }
+
+    /// O mesmo nome de máquina num servidor desta lista: pelo endereço do Connect.
+    fn in_app_list(&self, host: &str) -> bool {
+        let address = super::servers::norm(&format!("https://{host}"));
+        self.servers.iter().any(|entry| super::servers::norm(&entry.address) == address) || self.remote.contains_key(&address)
+    }
+
+    fn render_account_machines(&self, this_host: &str, cx: &mut Context<Self>) -> Div {
+        let section = div().flex().flex_col().gap_2()
+            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(tr("connect_machines_title")))
+            .child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(tr("connect_machines_help")))
+            .children(self.connect.link_error.clone().map(|error| div().id("connect-link-error").role(Role::Alert)
+                .text_sm().text_color(theme::danger()).whitespace_normal().child(error)));
+        let list = match &self.connect.machines.value {
+            None => return section.child(div().text_sm().text_color(theme::muted()).child(tr("loading"))),
+            Some(Err(error)) => return section
+                .child(div().id("connect-machines-error").role(Role::Alert).text_sm().text_color(theme::danger()).whitespace_normal().child(error.clone()))
+                .child(div().child(Button::new("connect-machines-retry").outline().small().label(tr("server_retry"))
+                    .on_click(cx.listener(|this, _, _, cx| this.load_account_machines(cx))))),
+            Some(Ok(list)) => list,
+        };
+        let row = |name: String, host: String, online: bool, right: AnyElement, first: bool| div().flex().items_center().gap_3().px_3().py_2()
+            .when(!first, |el| el.border_t_1().border_color(theme::border()))
+            .child(div().size(px(8.)).rounded_full().flex_shrink_0().bg(if online { theme::success() } else { theme::faint() }))
+            .child(div().flex_1().min_w_0().flex().flex_col()
+                .child(div().text_sm().font_weight(FontWeight::MEDIUM).truncate().child(name))
+                .child(div().text_xs().text_color(theme::muted()).font_family(theme::MONO).truncate().child(host)))
+            .child(div().flex_shrink_0().child(right));
+        let tag = |text: String| div().text_xs().text_color(theme::muted()).child(text).into_any_element();
+        let this_name = identity_of(this_host).map_or_else(|| list.this.machine_id.clone(), |(machine, _)| machine.to_owned());
+        let mut rows = vec![row(this_name, this_host.to_owned(), true, chip(tr("connect_machine_this"), theme::accent_text(), theme::accent_dim()).into_any_element(), true).into_any_element()];
+        for machine in &list.machines {
+            let link = self.connect.links.iter().find(|link| link.machine_id == machine.machine_id);
+            let right = if machine.added || self.in_app_list(&machine.host) || link.is_some_and(|link| link.stage == "linked") {
+                tag(tr("connect_machine_added"))
+            } else if link.is_some_and(|link| matches!(link.stage.as_str(), "requesting" | "waiting_approval")) {
+                tag(tr("connect_machine_asking").replace("{name}", &machine.name))
+            } else if !machine.online {
+                tag(tr("connect_machine_offline"))
+            } else {
+                let id = machine.machine_id.clone();
+                let failed = link.filter(|link| link.stage == "failed").and_then(|link| link.message.clone());
+                div().flex().flex_col().items_end().gap_1()
+                    .children(failed.map(|message| div().max_w(px(260.)).text_xs().text_color(theme::danger()).whitespace_normal().child(message)))
+                    .child(Button::new(SharedString::from(format!("connect-add-{id}"))).outline().small().label(tr("connect_machine_add"))
+                        .loading(self.connect.linking.as_deref() == Some(id.as_str())).disabled(self.connect.linking.is_some())
+                        .on_click(cx.listener(move |this, _, _, cx| this.add_account_machine(id.clone(), cx))))
+                    .into_any_element()
+            };
+            rows.push(row(machine.name.clone(), machine.host.clone(), machine.online, right, false).into_any_element());
+        }
+        let alone = list.machines.is_empty();
+        section.child(settings_box().children(rows))
+            .when(alone, |el| el.child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(tr("connect_machines_alone"))))
     }
 
     /// Parar fica sempre à mão: se a leitura do estado falhar, a prévia aberta continua alcançável.
@@ -541,7 +770,7 @@ impl Hangar {
                 .child(Button::new("connect-preview-copy").outline().small().flex_shrink_0().label(tr("connect_preview_copy"))
                     .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copied.clone()))))
         });
-        Some(div().flex().flex_col().gap_2()
+        Some(settings_box().p_4().gap_2()
             .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(tr("connect_preview_title")))
             .child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(tr("connect_preview_help")))
             .children(self.connect.preview_open.map(|port| div().id("connect-preview-open").text_sm().font_weight(FontWeight::MEDIUM)
@@ -561,13 +790,9 @@ impl Hangar {
         let title = div().flex().items_center().gap_2()
             .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).child(Page::Connect.title()))
             .child(chip(tr("server_scope"), theme::muted(), theme::raised()));
-        let mut page = div().flex().flex_col().gap_4().child(title)
-            .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(tr("connect_intro")));
+        let mut page = div().flex().flex_col().gap_4().child(title);
         if self.api.is_none() {
             return page.child(div().text_sm().text_color(theme::muted()).child(tr("settings_offline"))).into_any_element();
-        }
-        if let Some(error) = &self.connect.error {
-            page = page.child(div().id("connect-write-error").role(Role::Alert).text_sm().text_color(theme::danger()).whitespace_normal().child(error.clone()));
         }
         let status = match &self.connect.status.value {
             Some(Ok(status)) => status.clone(),
@@ -581,40 +806,43 @@ impl Hangar {
             page = page.child(div().id("connect-run-error").role(Role::Alert).text_sm().text_color(theme::danger()).whitespace_normal().child(error.clone()));
         }
         let (state, saving) = (phase(&status), self.connect.saving);
-        let linked = state != Phase::Unlinked;
-        if linked {
-            let label = match state { Phase::Ready => "connect_on", Phase::Starting => "connect_starting", _ => "connect_stopped" };
-            page = page.child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(tr(label)))
-                .children(status.host.clone().map(|host| div().font_family(theme::MONO).text_sm().truncate().child(format!("https://{host}"))));
-        }
-        if matches!(state, Phase::Unlinked | Phase::Stopped) && let Some(form) = &self.connect.form {
-            let help = if linked { tr("connect_stopped_help") } else { format!("{} {}", tr("connect_link_help"), tr_shared("connect_account_rules", &[])) };
-            let label = if saving { "connect_turning_on" } else if linked { "connect_turn_on_again" } else { "connect_turn_on" };
-            page = page.child(super::sync::sync_field(tr_shared("connect_account_name", &[]), &form.account, saving))
-                .child(super::sync::sync_field(tr("connect_password"), &form.password, saving))
-                .child(super::sync::sync_field(tr("connect_machine_name"), &form.machine, saving))
-                .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(help))
-                .child(div().child(Button::new("connect-on").primary().small().label(tr(label)).loading(saving).disabled(saving)
-                    .on_click(cx.listener(|this, _, window, cx| this.submit_link(window, cx)))));
-        }
-        if linked {
-            let open = (state == Phase::Ready).then(|| status.host.clone()).flatten().map(|host| {
+        let host = status.host.clone().unwrap_or_default();
+        let this_machine = identity_of(&host).map_or_else(|| self.vault_machine_label(&self.active_key(), cx), |(machine, _)| machine.to_owned());
+        match state {
+            Phase::Unlinked => page = match self.connect.entry {
+                None => page.child(self.render_connect_hero(cx)),
+                Some(entry) => page.children(self.render_connect_form(entry, false, cx)),
+            },
+            Phase::Stopped => page = page.children(self.render_connect_form(Entry::Login, true, cx)),
+            Phase::Starting => page = page.child(settings_box().p_6().items_center().gap_2()
+                .child(connect_mark("connect-starting-mark", 56., true, cx.reduce_motion()))
+                .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(tr("connect_linking_title")))
+                .child(div().max_w(px(400.)).text_sm().text_color(theme::muted()).text_center().whitespace_normal().child(tr("connect_linking_help")))),
+            Phase::Ready => {
+                let (machine, account) = identity_of(&host).unwrap_or(("", ""));
                 let address = format!("https://{host}");
-                Button::new("connect-open").outline().small().label(tr("connect_open")).on_click(move |_, _, cx| cx.open_url(&address))
-            });
-            page = page.child(div().flex().items_center().gap_2()
-                .children(open)
-                .child(Button::new("connect-refresh").outline().small().label(tr("connect_refresh"))
-                    .on_click(cx.listener(|this, _, _, cx| { this.load_connect(cx); this.load_connect_devices(cx); })))
-                .child(Button::new("connect-off").outline().small().label(tr("connect_off")).disabled(saving)
-                    .on_click(cx.listener(|this, _, window, cx| this.confirm_unlink(window, cx)))));
-        }
-        if state == Phase::Ready {
-            page = page.children(self.render_connect_preview(cx));
+                page = page.child(settings_box().p_4().gap_2()
+                    .child(div().flex().items_center().gap_2()
+                        .child(div().size(px(10.)).rounded_full().flex_shrink_0().bg(theme::success()))
+                        .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(tr("connect_on"))))
+                    .child(div().text_sm().text_color(theme::muted()).whitespace_normal()
+                        .child(tr("connect_identity").replace("{account}", account).replace("{machine}", machine)))
+                    .child(div().font_family(theme::MONO).text_sm().truncate().child(address.clone()))
+                    .children(self.connect.error.clone().map(|error| div().id("connect-write-error").role(Role::Alert)
+                        .text_sm().text_color(theme::danger()).whitespace_normal().child(error)))
+                    .child(div().flex().items_center().gap_2().pt_1()
+                        .child(Button::new("connect-copy").outline().small().label(tr("connect_copy_address"))
+                            .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(address.clone()))))
+                        .child(Button::new("connect-off").outline().small().label(tr("connect_off")).disabled(saving)
+                            .on_click(cx.listener(|this, _, window, cx| this.confirm_unlink(window, cx))))));
+            }
         }
         // Desligar guarda as credenciais dos aparelhos: quem ficou com uma ainda pode ser revogado.
-        if linked || self.connect.devices.ok().is_some_and(|devices| !devices.is_empty()) {
-            page = page.child(self.render_connect_devices(cx));
+        if state != Phase::Unlinked || self.connect.devices.ok().is_some_and(|devices| !devices.is_empty()) {
+            page = page.child(self.render_connect_devices(&this_machine, cx));
+        }
+        if state == Phase::Ready {
+            page = page.child(self.render_account_machines(&host, cx)).children(self.render_connect_preview(cx));
         }
         page.into_any_element()
     }
@@ -622,7 +850,7 @@ impl Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{device_card, device_view, merge, open_preview_port, parse_devices, parse_port, parse_preview, parse_status, phase, take_password, Device, DeviceStatus, DeviceView, InputState, Notices, Phase, Remote, Request, REFUSED_PAUSE};
+    use super::{address_preview, device_card, device_view, identity_of, merge, open_preview_port, parse_account, parse_devices, parse_links, parse_port, parse_preview, parse_status, phase, take_password, Device, DeviceStatus, DeviceView, InputState, Notices, Phase, Remote, Request, REFUSED_PAUSE};
     use crate::i18n::tr_shared;
     // O nome explícito vence qualquer `test` trazido por glob.
     use core::prelude::v1::test;
@@ -724,6 +952,25 @@ mod tests {
         assert!(parse_preview(json!({})).is_err());
         assert_eq!(open_preview_port(&json!({"preview": {"port": 3000}})), Some(3000));
         assert_eq!(open_preview_port(&json!({"preview": null})), None);
+    }
+
+    #[test]
+    fn address_preview_follows_the_typed_names_and_identity_reads_the_host() {
+        assert_eq!(address_preview(" Casa ", "jefferson"), "casa.jefferson.hangar.dev.br");
+        assert_eq!(address_preview("", ""), "notebook.sua-conta.hangar.dev.br");
+        assert_eq!(identity_of("notebook.jeffersonfelizardo.hangar.dev.br"), Some(("notebook", "jeffersonfelizardo")));
+        assert_eq!(identity_of(""), None);
+    }
+
+    #[test]
+    fn account_list_reads_this_machine_and_the_others() {
+        let list = parse_account(json!({"this": {"machine_id": "notebook", "host": "notebook.j.hangar.dev.br"},
+            "machines": [{"machine_id": "casa", "name": "casa", "host": "casa.j.hangar.dev.br", "online": false, "added": false}]})).unwrap();
+        assert_eq!(list.this.machine_id, "notebook");
+        assert_eq!(list.machines[0].name, "casa");
+        assert!(!list.machines[0].online && !list.machines[0].added);
+        assert!(parse_account(json!({"machines": []})).is_err(), "sem a máquina atual não passa por lista");
+        assert_eq!(parse_links(json!([{"machine_id": "casa", "stage": "waiting_approval", "peer": null, "code": null, "message": null}])).unwrap()[0].stage, "waiting_approval");
     }
 
     #[test]
