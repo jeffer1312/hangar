@@ -10,6 +10,9 @@ use subtle::ConstantTimeEq;
 pub use hangar_auth::{AuthAttempt, AuthDecision, AuthError, Profile, ReceiptContext};
 #[cfg(test)]
 const MAX_FAILS: usize = 8;
+/// O cliente que a entrada do Connect (8768) põe no lugar do real: nada que chega por ela é local, e
+/// só conta como aparelho do dono com credencial de aparelho.
+pub const CONNECT_PEER: &str = "192.0.2.1";
 pub(crate) const COOKIE: &str = "cp_token";
 pub(crate) const COOKIE_HOST: &str = "__Host-cp_token";
 
@@ -170,7 +173,7 @@ impl Auth {
 }
 
 pub fn unavailable(error: AuthError) -> axum::response::Response {
-    crate::session_write::json_response(axum::http::StatusCode::SERVICE_UNAVAILABLE,
+    hangar_core::http::json_response(axum::http::StatusCode::SERVICE_UNAVAILABLE,
         serde_json::json!({"detail": {"error_code": error.to_string(), "message": "autenticação indisponível"}}))
 }
 
@@ -286,7 +289,7 @@ impl TrustedHosts {
     pub fn resolve(&self, peer: IpAddr, headers: &HeaderMap) -> (String, bool) {
         let peer = peer.to_canonical().to_string();
         // O esquema sai da porta: o Caddy só fala https com a internet.
-        if peer == crate::devices::CONNECT_PEER {
+        if peer == CONNECT_PEER {
             return (peer, true);
         }
         if !self.contains(&peer) {

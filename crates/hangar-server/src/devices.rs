@@ -13,9 +13,7 @@ use crate::diag::DiagClient;
 /// chega sempre entra, mesmo com o relógio voltado; cortado na chegada, ele regravaria o arquivo a cada conexão.
 const MAX: usize = 20;
 
-/// O cliente que a entrada do Connect (8768) põe no lugar do real: nada que chega por ela é local, e
-/// só conta como aparelho do dono com credencial de aparelho.
-pub const CONNECT_PEER: &str = "192.0.2.1";
+pub use crate::auth::CONNECT_PEER;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
