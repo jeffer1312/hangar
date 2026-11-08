@@ -53,7 +53,9 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_response(200); self.send_header("Content-Type", "application/json"); self.end_headers()
         if self.path.startswith("/api/claude-configs"):
             if self.headers.get("Authorization") == "Bearer tok-semdef":
-                self.wfile.write(b'[{"path":"/home/la/.claude-work","label":"Rafael e viana"}]')
+                self.wfile.write(b'[{"path":"/dados/fora","label":"work"},'
+                                 b'{"path":"/home/la/.claude-work","label":"Rafael e viana"},'
+                                 b'{"path":"/home/la/.claude-outra","label":"Rafael e viana"}]')
                 return
             self.wfile.write(b'[{"path":"/home/la/.claude","label":"default"}]')
             return
@@ -141,7 +143,8 @@ bash "$TMP/scripts/hangar-send" --new la::retoma --resume abc123 >/dev/null 2>&1
 checa "--resume noutra máquina: código" '0' "$?"
 checa "--resume noutra máquina: sem cwd no corpo" 'null' "$(campo cwd 2>/dev/null)"
 
-# 2d. Máquina sem conta `default`: --conta acha a conta pelo rótulo, e a home vem dela.
+# 2d. Máquina sem conta `default`: a home vem da primeira pasta .claude*; o rótulo exato vence o
+# nome da pasta, e vale a primeira conta que bate.
 printf '{"semdef":{"base_url":"http://127.0.0.1:%s","token":"tok-semdef"}}' "$PORTA" > "$TMP/backend/peers.json"
 rm -f "$TMP/corpo.json"
 bash "$TMP/scripts/hangar-send" --new semdef::s1 /tmp/x --conta "Rafael e viana" >/dev/null 2>&1
@@ -151,7 +154,10 @@ rm -f "$TMP/corpo.json"
 bash "$TMP/scripts/hangar-send" --new semdef::s2 --conta work >/dev/null 2>&1
 checa "--conta sem default, sem pasta: código" '0' "$?"
 checa "--conta sem default, sem pasta: home de lá" '"/home/la"' "$(campo cwd 2>/dev/null)"
-checa "--conta sem default, sem pasta: conta" '"/home/la/.claude-work"' "$(campo config_dir 2>/dev/null)"
+checa "--conta sem default: rótulo vence a pasta" '"/dados/fora"' "$(campo config_dir 2>/dev/null)"
+rm -f "$TMP/corpo.json"
+bash "$TMP/scripts/hangar-send" --new semdef::s3 /tmp/x --conta outra >/dev/null 2>&1
+checa "--conta pelo nome da pasta" '"/home/la/.claude-outra"' "$(campo config_dir 2>/dev/null)"
 rm -f "$TMP/backend/peers.json"
 
 # 3. Codex também aceita o modo sem terminal.

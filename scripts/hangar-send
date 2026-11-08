@@ -586,15 +586,16 @@ print(next((p for p, probe in json.load(sys.stdin).items() if probe.get("default
             # Separados por NUL, que nenhum caminho contém: campo vazio não some nem desloca o outro.
             { IFS= read -r -d '' home_remota; IFS= read -r -d '' config_dir; } < <("$PY" -c 'import json,sys
 cs = json.loads(sys.argv[1]); conta = sys.argv[2]
-base = next((c["path"] for c in cs if c.get("label") == "default"), cs[0]["path"] if cs else "")
+nome = lambda c: c["path"].replace("\\", "/").rsplit("/", 1)[-1]
+# Só pasta .claude* fica direto na home; conta em outro lugar não diz onde ela está.
+base = next((c["path"] for c in cs if c.get("label") == "default"),
+            next((c["path"] for c in cs if nome(c).startswith(".claude")), ""))
 sep = "\\" if "\\" in base else "/"
 home = base.rsplit(sep, 1)[0] if base else ""
 achada = ""
 if conta and conta != "auto":
-    for c in cs:
-        nome = c["path"].replace("\\", "/").rsplit("/", 1)[-1]
-        if conta == c.get("label") or nome in (conta, ".claude-" + conta):
-            achada = c["path"]
+    achada = next((c["path"] for c in cs if c.get("label") == conta),
+                  next((c["path"] for c in cs if nome(c) in (conta, ".claude-" + conta)), ""))
 sys.stdout.write(home + "\0" + achada + "\0")' "$configs" "$conta")
             if [[ -n "$conta" && "$conta" != "auto" && -z "$config_dir" ]]; then
                 echo "erro: conta '$conta' não existe em '$remoto' — lá há: $("$PY" -c 'import json,sys; print(", ".join(c["label"] for c in json.loads(sys.argv[1])))' "$configs")" >&2
