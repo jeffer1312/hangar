@@ -65,6 +65,12 @@ pub struct ListEnv {
     pub dirs: Option<Dirs>,
 }
 
+/// Contexto da mesma descoberta fresca, sem produzir fatos nem estado decorado.
+pub struct RuntimeContext {
+    pub row:Option<SessionRow>,pub agent_pid:Option<u32>,pub panes:Vec<Pane>,pub children:Arc<ChildrenMap>,
+    pub dirs:Dirs,pub config_dirs:Arc<Vec<PathBuf>>,
+}
+
 impl ListEnv {
     pub fn from_env() -> Self {
         let dirs = match super::dirs::system() {
@@ -485,6 +491,13 @@ impl ListBridge {
     pub async fn fresh_session(&self, name: &str) -> Result<Option<(SessionRow, Option<u32>)>, ListError> {
         let (rows, pids, _, _) = self.discovery(Some(wall_now())).await?;
         Ok(rows.iter().find(|row| row.name == name).cloned().map(|row| (row, pids.get(name).copied())))
+    }
+
+    pub async fn runtime_context(&self,name:&str)->Result<RuntimeContext,ListError> {
+        let (rows,pids,panes,children)=self.discovery(Some(wall_now())).await?;
+        let dirs=self.dirs()?;let caches=self.caches.clone();let owned=dirs.clone();
+        let config_dirs=tokio::task::spawn_blocking(move||caches.config_dirs(&owned)).await.map_err(|error|joined(error,"pastas da descoberta interrompidas"))?;
+        Ok(RuntimeContext {row:rows.iter().find(|row|row.name==name).cloned(),agent_pid:pids.get(name).copied(),panes:panes.iter().filter(|pane|name.is_empty() || pane.session==name).cloned().collect(),children,dirs,config_dirs})
     }
 
     async fn discovery(&self, newer_than: Option<f64>)

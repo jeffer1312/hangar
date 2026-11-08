@@ -30,6 +30,10 @@ path = "tests/diag_client.rs"
 name = "other_terminal_drive"
 path = "tests/other_terminal_drive.rs"
 
+[[test]]
+name = "other_terminal_lifecycle"
+path = "tests/other_terminal_lifecycle.rs"
+
 [dependencies]
 hangar-auth = { path = "../hangar-auth" }
 # float_roundtrip: o float lido sai com o mesmo valor que o float() do Python, e o repr bate.

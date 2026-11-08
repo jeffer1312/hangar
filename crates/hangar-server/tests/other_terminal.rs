@@ -292,7 +292,7 @@ async fn other_terminal_boundary_ready_adoption_reuses_one_entry_and_exposes_the
     let environment=hangar_server::accounts::environment::AccountEnvironment::from_map(std::collections::BTreeMap::from([
         ("HOME".into(),root.path().to_string_lossy().into_owned()),("USERPROFILE".into(),root.path().to_string_lossy().into_owned())]));
     let registry=Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test-only".into(),"registry-test".into()).with_interactions(options.interactions.clone()).with_codex_environment(environment));
-    let found=target.clone();registry.bind_other(options,Arc::new(move |_| {let found=found.clone();Box::pin(async move {Some(Ok(OtherDiscoveryState::Ready(found)))})})).unwrap();
+    let found=target.clone();registry.bind_other(options,hangar_server::runtime::other_terminal::OtherDiscovery {find:Arc::new(move |_| {let found=found.clone();Box::pin(async move {Some(Ok(OtherDiscoveryState::Ready(found)))})}),names:Arc::new(||Box::pin(async{Ok(vec![])}))}).unwrap();
     let first=registry.open_other_terminal(target.clone()).await;let second=registry.open_other_terminal(target.clone()).await;
     let writable=registry.writable("pi-a").await.map(|target|(target.key,target.generation,target.provider,target.terminal));
     let info=registry.other_info("pi-a").await.map(|info|(info.provider,info.session_key,info.jsonl,info.lifecycle_id));

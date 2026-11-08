@@ -2689,7 +2689,7 @@ fn give_up_now(target:&RuntimeTarget,view:&Value) -> Option<bool> {
 /// Prazo do Claude sem terminal para a linha da entrada aparecer no transcript (hooks lentos incluídos).
 const HEADLESS_PROOF_GRACE_S:f64 = 60.0;
 
-async fn prove_inputs(queue:Arc<QueueActor>,receipt:Arc<std::sync::Mutex<ReceiptIndex>>,path:std::path::PathBuf,conversation:Option<String>,
+pub(super) async fn prove_inputs(queue:Arc<QueueActor>,receipt:Arc<std::sync::Mutex<ReceiptIndex>>,path:std::path::PathBuf,conversation:Option<String>,
     generation:u64,sample:ClockSample) -> Result<(Vec<String>,usize),RuntimeError> {
     // Conversa trocada pela TUI: cursores e leitura da anterior não provam entrega na nova.
     if let Some(conversation) = conversation { receipt.lock().map_err(|_|failure("receipt_panic"))?.rebind(&conversation); }

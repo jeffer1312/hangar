@@ -16,7 +16,7 @@ use tokio::sync::{broadcast,Mutex};
 
 mod rename;
 mod other;
-pub(crate) use rename::Detached;
+pub use rename::Detached;
 
 /// `Headless`: ator sem terminal (cano). `Terminal`: entrada terminal do Claude. `CodexTerminal`: o mesmo
 /// ator do Codex, sobre o WebSocket do app-server adotado, com a TUI no pane.
@@ -527,6 +527,7 @@ impl RuntimeRegistry {
     /// `ensure_running` do Python antes de toda operação) e, com a vigia ligada, o Codex é adotado agora.
     /// `None` = não é sessão sem ator do Rust.
     pub async fn adopt_now(&self,name:&str) -> Option<Result<(),RuntimeError>> {
+        if let Some(opened)=self.adopt_other(name).await {return Some(opened);}
         if let Err(error) = self.retire_other_life(name).await { return Some(Err(error)); }
         // Antes da porta: o acordar a fecha, e quem chega no meio dele espera o mesmo acordar.
         if let Some(mark) = self.asleep(name).await { self.wake(name,&mark.key); return Some(Err(asleep_waking())); }
@@ -537,7 +538,6 @@ impl RuntimeRegistry {
             Err(_) if self.waking_key(name).is_some()=>return Some(Err(asleep_waking())),
             Err(_)=>return Some(Err(RuntimeError::new("session_transfer_busy","a sessão está trocando de agente"))),
         };
-        if let Some(opened) = self.adopt_other(name).await {return Some(opened);}
         if let Some(opened) = self.open_claude_headless(name,true).await { return Some(opened); }
         let watcher = self.watcher.get()?.clone();
         if let Some(adopted) = watcher.adopt_now(self,name).await { return Some(adopted); }
@@ -2055,6 +2055,8 @@ impl RuntimeRegistry {
     /// `refuse_transfer`: a porta retida pela troca de conversa recusa na hora (o `DELETE` do dono), em vez
     /// de esperar a troca terminar e encerrar a sessão que acabou de mudar.
     async fn close_with_kill_as(&self,key:&str,generation:u64,refuse_transfer:bool) -> Result<Value,RuntimeError> {
+        let other=self.entries.lock().await.get(key).filter(|entry|entry.generation==generation).and_then(|entry|match &entry.handle {EntryHandle::OtherTerminal {target,..}=>Some((**target).clone()),_=>None});
+        if let Some(target)=other{return self.close_other_life(super::other_terminal::OtherDiscoveryState::Ready(target)).await;}
         let codex = match self.entries.lock().await.get(key) {
             Some(Entry { generation:open,handle:EntryHandle::CodexTerminal { target,.. },.. }) if *open == generation=>Some((**target).clone()),
             _=>None,
@@ -3090,6 +3092,7 @@ impl RuntimeRegistry {
         }).collect()
     }
     pub async fn shutdown(&self) -> Result<(),RuntimeError> {
+        self.stop_other_watch();
         let entries:Vec<_> = self.entries.lock().await.iter().map(|(key,entry)|(key.clone(),entry.generation)).collect();
         for (key,generation) in entries { self.close(&key,generation).await?; }
         Ok(())

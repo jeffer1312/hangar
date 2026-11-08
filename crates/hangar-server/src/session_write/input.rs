@@ -354,6 +354,9 @@ fn received_line(name: &str, headers: &HeaderMap, peer: SocketAddr, text: &str, 
 /// Texto para o Codex com terminal que ainda abre a conversa: fica na fila da chave dela e a resposta é a
 /// do envio enfileirado, na hora. Sem turno, orientar vira só fila; `/clear` e `/compact` esperam a conversa.
 async fn queue_opening(st: &AppState, name: &str, key: &str, text: &str, steer: bool) -> (StatusCode, Value) {
+    if let Some(runtime)=st.state.runtime.get() && runtime.other_opening_key(name).await.is_some() {
+        return match runtime.queue_other_opening(name,key,text,&random_hex(16)).await {Ok(body)=>(StatusCode::OK,body),Err(error)=>(super::failed_status(&error),detail_body(&error.code,&error.message,json!({})))};
+    }
     if is_codex_clear("codex", text) || is_codex_compact("codex", text) {
         let error = crate::runtime::codex_relaunch::starting();
         return (StatusCode::CONFLICT, detail_body(&error.code, &error.message, json!({})));

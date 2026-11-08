@@ -101,6 +101,8 @@ function publishState(state: "working" | "idle", ctx: any): void {
 // `PSMUX_SESSION` traz o nome da sessao, que e unico por construcao. No tmux ela nao existe e a
 // chave continua sendo o pane, byte-identica a de sempre.
 function paneKey(): string | null {
+  const sessionKey = process.env.CP_SESSION_KEY;
+  if (sessionKey && /^[a-fA-F0-9]{32}$/.test(sessionKey)) return sessionKey;
   const psmux = process.env.PSMUX_SESSION;
   if (psmux) return psmux.replace(/[^A-Za-z0-9._-]/g, "-");   // vira nome de arquivo
   const pane = process.env.TMUX_PANE;
@@ -118,7 +120,7 @@ function paneKey(): string | null {
 // discordarem justamente num nome com acento. E no tmux devolve o `TMUX_PANE` INTEIRO (com o `%`),
 // que e o que o backend sempre usou: o Linux nao muda em nada.
 function chaveDaLinha(): string | null {
-  return process.env.PSMUX_SESSION || process.env.TMUX_PANE || null;
+  return process.env.CP_SESSION_KEY || process.env.PSMUX_SESSION || process.env.TMUX_PANE || null;
 }
 
 function publishPane(ctx: any): void {

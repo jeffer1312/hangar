@@ -160,7 +160,9 @@ const TICKET_SLACK: f64 = 2.0;
 fn pi_transcript(pane_id: &str, pid: Option<i64>, cwd: &str, provider: &str, procs: &dyn ProcessView, dirs: &Dirs,
                  problems: &mut Problems) -> Option<String> {
     let base = pid.and_then(|p| config_dir_of(procs, p)).unwrap_or_else(|| dirs.default_claude());
-    let ticket = base.join(".hangar-pi").join(format!("{}.json", ticket_key(pane_id, pid, procs)));
+    let stable=pid.and_then(|pid|env(procs,pid,"CP_SESSION_KEY")).filter(|key|key.len()==32&&key.bytes().all(|byte|byte.is_ascii_hexdigit()));
+    let stable=stable.map(|key|base.join(".hangar-pi").join(format!("{key}.json"))).filter(|path|path.exists());
+    let ticket = stable.unwrap_or_else(||base.join(".hangar-pi").join(format!("{}.json", ticket_key(pane_id,pid,procs))));
     let sid = pid.and_then(|p| env(procs, p, "CP_PI_SESSION"));
     let profile = || if provider == "omp" { pid.and_then(|p| env(procs, p, "OMP_PROFILE")) } else { None };
     // O Python: bilhete que não é objeto encerra; ilegível ou torto cai no `CP_PI_SESSION`.

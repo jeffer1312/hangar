@@ -425,3 +425,21 @@ impl Service {
         }
     }
 }
+
+impl Service {
+    pub async fn close_for_session<F>(&self,owner:&str,guard:F)->Vec<serde_json::Value>
+    where F:Fn()->futures_util::future::BoxFuture<'static,bool> {
+        let mut warnings=Vec::new();let rows=match self.rows().await {Ok(rows)=>rows,Err(_)=>return vec![serde_json::json!({"code":"other_shortcuts_unavailable"})]};
+        for row in rows.into_iter().filter(|row|!row.owner.is_empty()&&row.owner==owner) {
+            if !guard().await {warnings.push(serde_json::json!({"code":"other_cleanup_replaced"}));break;}
+            let fresh=self.rows().await.ok().is_some_and(|rows|rows.iter().any(|now|now.owner==row.owner&&now.tmux==row.tmux&&now.id==row.id&&now.seq==row.seq&&now.created==row.created&&now.pid==row.pid));
+            if !fresh {warnings.push(serde_json::json!({"code":"other_shortcut_changed"}));continue;}
+            if let Some(pid)=row.pid.filter(|pid|*pid!=0) && (row.alive||self.windows) {self.kill_group(pid).await;}
+            if !guard().await {warnings.push(serde_json::json!({"code":"other_cleanup_replaced"}));break;}
+            let output=self.run(["kill-session".into(),"-t".into(),if self.windows {row.tmux.clone()}else{format!("={}",row.tmux)}]).await;
+            let check=self.run(["has-session".into(),"-t".into(),format!("={}",row.tmux)]).await;
+            if output.code!=Some(0)||check.code.is_none_or(|code|code==0)||!crate::list::mux::is_absence(check.stderr.trim()) {warnings.push(serde_json::json!({"code":"other_shortcut_close_unconfirmed"}));continue;}
+            if self.windows && guard().await && super::terminal_windows::forget(&self.windows_dir(),&row.id).is_err(){warnings.push(serde_json::json!({"code":"other_shortcut_files_failed"}));}
+        }warnings
+    }
+}

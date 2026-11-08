@@ -104,7 +104,7 @@ async fn hangar_started(st:&AppState,service:&Service,terminal:Terminal,reused:b
     Ok(crate::http_cors::json_guarded(StatusCode::ACCEPTED,result))
 }
 fn shell_error()->Response { error(500,"erro_shortcut_shell","o multiplexador recusou criar o terminal",json!({})) }
-async fn service(st:&AppState)->Arc<Service> {
+pub(super) async fn service(st:&AppState)->Arc<Service> {
     Arc::new(Service {
         mux:Arc::new(crate::session_open::terminal::ProcessMux::default()),home:st.accounts.env.home.clone(),env:display_environment(&st.accounts.env).await,
         program:vec![st.list.env().capture_program.to_string_lossy().into_owned()],windows:cfg!(windows),encode:super::terminal_windows::encode,
