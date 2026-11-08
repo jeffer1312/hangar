@@ -558,16 +558,19 @@ mod tests {
         /// Leituras diretas concluídas nesta pasta. Conexões não servem: o cliente tenta de novo após
         /// um reset, e no Windows os testes em paralelo provocam resets.
         fn reads(&self) -> usize { DIRECT_READS.lock().unwrap().iter().filter(|d| **d == self.data).count() }
-        /// Orçamento folgado: a primeira execução no Windows, com vários `cmd.exe` em paralelo, passa
-        /// dos 250 ms do produto e o teste veria uma falha que não é a dele.
+        /// Orçamento folgado: com a máquina carregada (vários `cmd.exe` no Windows, a suíte inteira em
+        /// paralelo no Linux) a leitura passa dos 250 ms do produto e cairia no CLI, falha que não é do
+        /// teste. Só estoura se o código travar; quem testa o prazo passa um `timeout` curto.
         fn mux(&self, timeout: Duration) -> Mux {
-            Mux::with_direct(&self.path, timeout, self.data.clone()).direct_budget(Duration::from_secs(1))
+            Mux::with_direct(&self.path, timeout, self.data.clone()).direct_budget(ROOMY / 2)
         }
         /// O mesmo programa e pasta, conferindo de novo a cada leitura.
         fn eager(&self, timeout: Duration) -> Mux { self.mux(timeout).revalidating(Duration::ZERO) }
     }
 
     const UNKNOWN: &str = "tmux 9.9\npsmux 9.9.9 (0000000 2099-01-01)";
+    /// Prazo dos testes que contam leitura direta × CLI: a leitura direta recebe metade dele.
+    const ROOMY: Duration = Duration::from_secs(20);
 
     #[tokio::test]
     async fn the_cli_runs_again_at_each_revalidation_and_keeps_the_direct_confirmed() {
@@ -575,11 +578,11 @@ mod tests {
         let a = FakeServer::start("ka", LINE_A.into());
         a.register(&cli.data, "a", "ka");
         cli.lists(LINE_A);
-        cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
+        cli.mux(ROOMY).list_panes().await.unwrap();
         // Vencido o intervalo, o CLI roda (e com ele a faxina do psmux) e a leitura direta é conferida de novo.
-        cli.eager(Duration::from_secs(2)).list_panes().await.unwrap();
+        cli.eager(ROOMY).list_panes().await.unwrap();
         assert_eq!((cli.calls(), cli.reads()), (2, 2));
-        cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
+        cli.mux(ROOMY).list_panes().await.unwrap();
         assert_eq!((cli.calls(), cli.reads()), (2, 3), "reconferido, segue direto");
     }
 
@@ -589,10 +592,10 @@ mod tests {
         let a = FakeServer::start("ka", LINE_A.into());
         a.register(&cli.data, "a", "ka");
         cli.lists(LINE_A);
-        cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
+        cli.mux(ROOMY).list_panes().await.unwrap();
         cli.reports(UNKNOWN);
-        cli.eager(Duration::from_secs(2)).list_panes().await.unwrap();
-        cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
+        cli.eager(ROOMY).list_panes().await.unwrap();
+        cli.mux(ROOMY).list_panes().await.unwrap();
         assert_eq!((cli.calls(), cli.reads()), (3, 1), "versão não conferida não herda a conferência");
     }
 
@@ -602,11 +605,11 @@ mod tests {
         let a = FakeServer::start("ka", LINE_A.into());
         a.register(&cli.data, "a", "ka");
         cli.lists(LINE_A);
-        cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
+        cli.mux(ROOMY).list_panes().await.unwrap();
         assert_eq!(a.conns(), 0);
         cli.reports(hangar_psmux::VERSIONS[0]);
-        cli.eager(Duration::from_secs(2)).list_panes().await.unwrap();
-        cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
+        cli.eager(ROOMY).list_panes().await.unwrap();
+        cli.mux(ROOMY).list_panes().await.unwrap();
         assert_eq!((cli.calls(), cli.reads()), (2, 2));
     }
 
@@ -617,10 +620,10 @@ mod tests {
         a.register(&cli.data, "a", "ka");
         cli.lists(LINE_A);
         cli.fails_version(true);
-        cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
+        cli.mux(ROOMY).list_panes().await.unwrap();
         cli.fails_version(false);
-        cli.eager(Duration::from_secs(2)).list_panes().await.unwrap();
-        cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
+        cli.eager(ROOMY).list_panes().await.unwrap();
+        cli.mux(ROOMY).list_panes().await.unwrap();
         assert_eq!((cli.calls(), cli.reads()), (2, 2));
     }
 
@@ -630,7 +633,7 @@ mod tests {
         let a = FakeServer::start("ka", LINE_A.into());
         a.register(&cli.data, "a", "ka");
         cli.lists(LINE_A);
-        let mux = cli.mux(Duration::from_secs(2));
+        let mux = cli.mux(ROOMY);
         mux.list_panes().await.unwrap();
         a.replies("lixo\n");
         let panes = mux.list_panes().await.unwrap();
@@ -654,7 +657,7 @@ mod tests {
         let a = FakeServer::start("ka", LINE_A.into());
         a.register(&cli.data, "a", "ka");
         cli.lists(LINE_A);
-        let mux = cli.mux(Duration::from_secs(2));
+        let mux = cli.mux(ROOMY);
         let first = mux.list_panes().await.unwrap();
         assert_eq!((cli.calls(), cli.reads()), (1, 1), "a primeira leitura confere o direto contra o CLI; {} servidor {}", mux.why(), a.errors());
         let second = mux.list_panes().await.unwrap();
@@ -669,10 +672,10 @@ mod tests {
         let a = FakeServer::start("ka", LINE_A.into());
         a.register(&cli.data, "a", "ka");
         cli.lists(LINE_A);
-        cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
+        cli.mux(ROOMY).list_panes().await.unwrap();
         assert_eq!(cli.calls(), 1);
         // Quem cria um Mux por pedido (retomar sessão) não paga a conferência de novo.
-        cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
+        cli.mux(ROOMY).list_panes().await.unwrap();
         assert_eq!((cli.calls(), cli.reads()), (1, 2));
     }
 
@@ -683,7 +686,7 @@ mod tests {
         let a = FakeServer::start("ka", LINE_A.into());
         a.register(&cli.data, "a", "ka");
         cli.lists(LINE_A);
-        let mux = cli.mux(Duration::from_secs(2));
+        let mux = cli.mux(ROOMY);
         for _ in 0..2 { mux.list_panes().await.unwrap(); }
         assert_eq!((cli.calls(), cli.reads()), (1, 2));
     }
@@ -694,7 +697,7 @@ mod tests {
         let a = FakeServer::start("ka", LINE_A.into());
         a.register(&cli.data, "a", "ka");
         cli.lists(LINE_A);
-        let mux = cli.mux(Duration::from_secs(2));
+        let mux = cli.mux(ROOMY);
         for _ in 0..2 { mux.list_panes().await.unwrap(); }
         assert_eq!((cli.calls(), a.conns()), (2, 0));
     }
@@ -705,7 +708,7 @@ mod tests {
         let a = FakeServer::start("ka", LINE_A.into());
         a.register(&cli.data, "a", "ka");
         cli.lists(LINE_A);
-        let mux = cli.mux(Duration::from_secs(2));
+        let mux = cli.mux(ROOMY);
         mux.list_panes().await.unwrap();
         mux.list_panes().await.unwrap();
         assert_eq!(cli.calls(), 1, "{} servidor {}", mux.why(), a.errors());
@@ -730,7 +733,7 @@ mod tests {
         let a = FakeServer::start("ka", LINE_B.into());
         a.register(&cli.data, "a", "ka");
         cli.lists(LINE_A);
-        let mux = cli.mux(Duration::from_secs(2));
+        let mux = cli.mux(ROOMY);
         for _ in 0..4 { assert_eq!(mux.list_panes().await.unwrap()[0].session, "a"); }
         assert_eq!((cli.calls(), cli.reads()), (4, 3));
     }
@@ -738,7 +741,7 @@ mod tests {
     #[tokio::test]
     async fn no_sessions_is_the_cli_answer_and_does_not_disable_direct_reading() {
         let cli = FakeCli::new(hangar_psmux::VERSIONS[1]);
-        let mux = cli.mux(Duration::from_secs(2));
+        let mux = cli.mux(ROOMY);
         for _ in 0..4 { assert_eq!(mux.list_panes().await.unwrap(), Vec::new()); }
         let a = FakeServer::start("ka", LINE_A.into());
         a.register(&cli.data, "a", "ka");
