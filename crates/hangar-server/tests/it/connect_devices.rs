@@ -318,7 +318,9 @@ async fn pending_device_has_no_access_until_approved() {
     let wrong = post(e.connect, "/api/connect/redeem/status", json!({"device_id": id, "secret": "s2"})).send().await.unwrap();
     assert_eq!(wrong.status(), 401);
     let rows = body_of(get(e.main, "/api/connect/devices").bearer_auth(OWNER).send().await.unwrap()).await;
-    assert_eq!(rows, json!([{"device_id": id, "name": "celular", "status": "pending", "last_seen": null}]), "o nome é o assinado, não o do corpo");
+    let created_at = rows[0]["created_at"].clone();
+    assert_eq!(rows, json!([{"device_id": id, "name": "celular", "status": "pending", "last_seen": null, "created_at": created_at}]),
+        "o nome é o assinado, não o do corpo");
     assert_eq!(get(e.connect, "/api/connect/devices").send().await.unwrap().status(), 401);
     // Recusado não recebe token, nem aprovado depois.
     let removed = client().delete(format!("http://{}/api/connect/devices/{id}", e.main)).bearer_auth(OWNER).send().await.unwrap();
@@ -348,6 +350,7 @@ async fn install_id_groups_one_phone_across_machines() {
     assert_eq!(accepted.status(), 202);
     let rows = body_of(get(e.main, "/api/connect/devices").bearer_auth(OWNER).send().await.unwrap()).await;
     assert_eq!(rows[0]["install_id"], "a1B2-c3_d4");
+    assert!(rows[0]["created_at"].is_u64(), "o cartão mostra há quanto tempo o pedido chegou: {rows}");
 }
 
 #[test]

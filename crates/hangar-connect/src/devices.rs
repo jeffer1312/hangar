@@ -137,6 +137,7 @@ pub struct Row {
     pub name: String,
     pub status: Status,
     pub last_seen: Option<u64>,
+    pub created_at: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub install_id: Option<String>,
 }
@@ -342,7 +343,7 @@ impl Store {
         let now = (self.clock)();
         let mut state = self.lock();
         prune(&mut state, now);
-        state.devices.iter().map(|d| Row { device_id: d.id.clone(), name: d.name.clone(), status: d.status, last_seen: d.last_seen, install_id: d.install_id.clone() }).collect()
+        state.devices.iter().map(|d| Row { device_id: d.id.clone(), name: d.name.clone(), status: d.status, last_seen: d.last_seen, created_at: d.created_at, install_id: d.install_id.clone() }).collect()
     }
 
     /// shortcut: `last_seen` só vai ao disco com a próxima gravação; gravar por pedido custaria um fsync a cada um.
