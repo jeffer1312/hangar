@@ -54,6 +54,8 @@ fn quote(text: &str) -> String {
 fn io_code(error: &std::io::Error) -> &'static str {
     match error.kind() {
         ErrorKind::TimedOut | ErrorKind::WouldBlock => "psmux_direct_timeout",
+        ErrorKind::ConnectionReset => "psmux_direct_reset",
+        ErrorKind::ConnectionAborted => "psmux_direct_aborted",
         _ => "psmux_direct_io",
     }
 }
@@ -114,7 +116,12 @@ pub fn list_panes(dir: &Path, format: &str, deadline: Instant) -> Result<Listing
         let Some(base) = name.to_str().and_then(|n| n.strip_suffix(".port")) else { continue };
         // A sessão pré-aberta e as de outro `-L` levam `__` no nome.
         if base.contains("__") { continue; }
-        let (text, server) = session(dir, base, &query, deadline)?;
+        // O servidor que abre um processo enquanto aceita a conexão deixa uma cópia dela no filho, e
+        // o fechamento chega como reset: uma segunda tentativa, no mesmo prazo, encontra a conexão limpa.
+        let (text, server) = match session(dir, base, &query, deadline) {
+            Err(Failure { code: "psmux_direct_reset" | "psmux_direct_aborted" }) => session(dir, base, &query, deadline)?,
+            other => other?,
+        };
         listing.text.push_str(&text);
         listing.servers.push(server);
     }

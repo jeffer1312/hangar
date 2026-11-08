@@ -101,6 +101,13 @@ struct Direct { dir: std::path::PathBuf, gate: std::sync::Arc<std::sync::Mutex<G
 
 type GateKey = (OsString, std::path::PathBuf);
 
+/// Motivo de cada tentativa sem conferência, por pasta de dados: diagnóstico dos testes.
+#[cfg(test)]
+static MISSES: std::sync::Mutex<Vec<(std::path::PathBuf, &'static str)>> = std::sync::Mutex::new(Vec::new());
+/// Uma entrada por leitura direta concluída, por pasta de dados: o que os testes contam.
+#[cfg(test)]
+static DIRECT_READS: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
+
 /// A conferência é do programa e da pasta de dados, não do `Mux`: quem cria um por pedido a reaproveita.
 fn shared_gate(program: &OsString, dir: &std::path::Path) -> std::sync::Arc<std::sync::Mutex<Gate>> {
     static GATES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<GateKey, std::sync::Arc<std::sync::Mutex<Gate>>>>> =
@@ -109,7 +116,7 @@ fn shared_gate(program: &OsString, dir: &std::path::Path) -> std::sync::Arc<std:
         .or_insert_with(|| std::sync::Arc::new(std::sync::Mutex::new(Gate::Unchecked))).clone()
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum Gate {
     /// Versão do programa ainda não lida.
     Unchecked,
@@ -137,6 +144,8 @@ impl Direct {
     fn set(&self, gate: Gate) { *self.gate.lock().unwrap_or_else(|e| e.into_inner()) = gate; }
     /// Uma tentativa sem conferência; a terceira seguida desliga o direto nesta vida do servidor.
     fn missed(&self, code: &'static str) {
+        #[cfg(test)]
+        MISSES.lock().unwrap().push((self.dir.clone(), code));
         let tries = match self.gate() { Gate::Trying(n) => n + 1, _ => 1 };
         if tries < DIRECT_TRIES { self.set(Gate::Trying(tries)); return; }
         self.set(Gate::Off { at: std::time::Instant::now() });
@@ -228,6 +237,9 @@ impl Mux {
             if out.status.success() && !listing.servers.is_empty() && listing.text.as_bytes() == out.stdout.as_slice() {
                 direct.set(Gate::Verified { servers: listing.servers, at: std::time::Instant::now() });
             } else {
+                #[cfg(test)]
+                MISSES.lock().unwrap().push((direct.dir.clone(), Box::leak(format!("cli {:?} {:?} x direto {:?}",
+                    out.status.code(), String::from_utf8_lossy(&out.stdout), listing.text).into_boxed_str())));
                 direct.missed("psmux_direct_mismatch");
             }
         }
@@ -247,6 +259,14 @@ impl Mux {
 
     #[cfg(test)]
     fn direct_budget(mut self, budget: Duration) -> Self { self.direct_budget = budget; self }
+
+    /// Estado do portão e motivos das falhas desta pasta, para a mensagem de um teste que falhou.
+    #[cfg(test)]
+    fn why(&self) -> String {
+        let Some(direct) = &self.direct else { return "sem leitura direta".into() };
+        let misses: Vec<_> = MISSES.lock().unwrap().iter().filter(|(d, _)| *d == direct.dir).map(|(_, c)| *c).collect();
+        format!("portão {:?}, falhas {misses:?}", direct.gate())
+    }
 
     async fn read_direct(&self, direct: &Direct, deadline: tokio::time::Instant) -> DirectRead {
         let mut gate = direct.gate();
@@ -279,10 +299,14 @@ impl Mux {
         let code = match read {
             // Sem servidor no registro, a ausência (ou o registro sujo) é resposta do CLI.
             Ok(Ok(Ok(listing))) if listing.servers.is_empty() => return DirectRead::Skip,
-            Ok(Ok(Ok(listing))) => return match gate {
-                Gate::Verified { servers, .. } if servers == listing.servers => DirectRead::Served(listing.text),
-                _ => DirectRead::Compare(listing),
-            },
+            Ok(Ok(Ok(listing))) => {
+                #[cfg(test)]
+                DIRECT_READS.lock().unwrap().push(direct.dir.clone());
+                return match gate {
+                    Gate::Verified { servers, .. } if servers == listing.servers => DirectRead::Served(listing.text),
+                    _ => DirectRead::Compare(listing),
+                };
+            }
             Ok(Ok(Err(failure))) => failure.code,
             Ok(Err(_)) => "psmux_direct_panicked",
             Err(_) => "psmux_direct_timeout",
@@ -441,7 +465,8 @@ mod tests {
     /// Servidor de sessão do psmux falso: conta conexões e responde como o real, ou se cala.
     struct FakeServer { port: u16, conns: std::sync::Arc<std::sync::atomic::AtomicUsize>,
         silent: std::sync::Arc<std::sync::atomic::AtomicBool>, stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
-        reply: std::sync::Arc<std::sync::Mutex<String>>, handle: Option<std::thread::JoinHandle<()>> }
+        reply: std::sync::Arc<std::sync::Mutex<String>>, errors: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        handle: Option<std::thread::JoinHandle<()>> }
     impl FakeServer {
         fn start(key: &'static str, reply: String) -> Self {
             use std::io::{BufRead, Write};
@@ -454,25 +479,32 @@ mod tests {
             let (c, s, st): (std::sync::Arc<std::sync::atomic::AtomicUsize>, std::sync::Arc<std::sync::atomic::AtomicBool>, std::sync::Arc<std::sync::atomic::AtomicBool>) =
                 (std::sync::Arc::clone(&conns), std::sync::Arc::clone(&silent), std::sync::Arc::clone(&stop));
             let answer = std::sync::Arc::clone(&reply);
+            let errors: std::sync::Arc<std::sync::atomic::AtomicUsize> = std::sync::Arc::default();
+            let e = std::sync::Arc::clone(&errors);
             let handle = std::thread::spawn(move || while !st.load(SeqCst) {
                 let Ok((stream, _)) = listener.accept() else { std::thread::sleep(Duration::from_millis(2)); continue };
                 c.fetch_add(1, SeqCst);
                 stream.set_nonblocking(false).unwrap();
                 if s.load(SeqCst) { std::thread::sleep(Duration::from_millis(700)); continue; }
-                let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
-                let (mut auth, mut cmd) = (String::new(), String::new());
-                reader.read_line(&mut auth).unwrap();
-                let mut out = stream;
-                if auth.trim() != format!("AUTH {key}") { out.write_all(b"ERROR: Invalid session key\n").unwrap(); continue; }
-                out.write_all(b"OK\n").unwrap();
-                reader.read_line(&mut cmd).unwrap();
-                let text = answer.lock().unwrap().clone();
-                out.write_all(text.as_bytes()).unwrap();
+                // Cliente que desistiu no meio não derruba o servidor: a falha fica contada.
+                let served = (|| -> std::io::Result<()> {
+                    let mut reader = std::io::BufReader::new(stream.try_clone()?);
+                    let (mut auth, mut cmd) = (String::new(), String::new());
+                    reader.read_line(&mut auth)?;
+                    let mut out = stream;
+                    if auth.trim() != format!("AUTH {key}") { return out.write_all(b"ERROR: Invalid session key\n"); }
+                    out.write_all(b"OK\n")?;
+                    reader.read_line(&mut cmd)?;
+                    let text = answer.lock().unwrap().clone();
+                    out.write_all(text.as_bytes())
+                })();
+                if served.is_err() { e.fetch_add(1, SeqCst); }
             });
-            Self { port, conns, silent, stop, reply, handle: Some(handle) }
+            Self { port, conns, silent, stop, reply, errors, handle: Some(handle) }
         }
         fn replies(&self, text: &str) { *self.reply.lock().unwrap() = text.into(); }
         fn conns(&self) -> usize { self.conns.load(std::sync::atomic::Ordering::SeqCst) }
+        fn errors(&self) -> usize { self.errors.load(std::sync::atomic::Ordering::SeqCst) }
         fn go_silent(&self) { self.silent.store(true, std::sync::atomic::Ordering::SeqCst); }
         fn register(&self, dir: &std::path::Path, base: &str, key: &str) {
             std::fs::write(dir.join(format!("{base}.port")), format!("{}\n", self.port)).unwrap();
@@ -523,6 +555,9 @@ mod tests {
             if fail { std::fs::write(flag, "").unwrap(); } else { let _ = std::fs::remove_file(flag); }
         }
         fn calls(&self) -> usize { std::fs::read_to_string(&self.count).map_or(0, |t| t.lines().count()) }
+        /// Leituras diretas concluídas nesta pasta. Conexões não servem: o cliente tenta de novo após
+        /// um reset, e no Windows os testes em paralelo provocam resets.
+        fn reads(&self) -> usize { DIRECT_READS.lock().unwrap().iter().filter(|d| **d == self.data).count() }
         /// Orçamento folgado: a primeira execução no Windows, com vários `cmd.exe` em paralelo, passa
         /// dos 250 ms do produto e o teste veria uma falha que não é a dele.
         fn mux(&self, timeout: Duration) -> Mux {
@@ -543,9 +578,9 @@ mod tests {
         cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
         // Vencido o intervalo, o CLI roda (e com ele a faxina do psmux) e a leitura direta é conferida de novo.
         cli.eager(Duration::from_secs(2)).list_panes().await.unwrap();
-        assert_eq!((cli.calls(), a.conns()), (2, 2));
+        assert_eq!((cli.calls(), cli.reads()), (2, 2));
         cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
-        assert_eq!((cli.calls(), a.conns()), (2, 3), "reconferido, segue direto");
+        assert_eq!((cli.calls(), cli.reads()), (2, 3), "reconferido, segue direto");
     }
 
     #[tokio::test]
@@ -558,7 +593,7 @@ mod tests {
         cli.reports(UNKNOWN);
         cli.eager(Duration::from_secs(2)).list_panes().await.unwrap();
         cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
-        assert_eq!((cli.calls(), a.conns()), (3, 1), "versão não conferida não herda a conferência");
+        assert_eq!((cli.calls(), cli.reads()), (3, 1), "versão não conferida não herda a conferência");
     }
 
     #[tokio::test]
@@ -572,7 +607,7 @@ mod tests {
         cli.reports(hangar_psmux::VERSIONS[0]);
         cli.eager(Duration::from_secs(2)).list_panes().await.unwrap();
         cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
-        assert_eq!((cli.calls(), a.conns()), (2, 2));
+        assert_eq!((cli.calls(), cli.reads()), (2, 2));
     }
 
     #[tokio::test]
@@ -586,7 +621,7 @@ mod tests {
         cli.fails_version(false);
         cli.eager(Duration::from_secs(2)).list_panes().await.unwrap();
         cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
-        assert_eq!((cli.calls(), a.conns()), (2, 2));
+        assert_eq!((cli.calls(), cli.reads()), (2, 2));
     }
 
     #[tokio::test]
@@ -621,9 +656,9 @@ mod tests {
         cli.lists(LINE_A);
         let mux = cli.mux(Duration::from_secs(2));
         let first = mux.list_panes().await.unwrap();
-        assert_eq!((cli.calls(), a.conns()), (1, 1), "a primeira leitura confere o direto contra o CLI");
+        assert_eq!((cli.calls(), cli.reads()), (1, 1), "a primeira leitura confere o direto contra o CLI; {} servidor {}", mux.why(), a.errors());
         let second = mux.list_panes().await.unwrap();
-        assert_eq!((cli.calls(), a.conns()), (1, 2), "conferido, o CLI não é aberto");
+        assert_eq!((cli.calls(), cli.reads()), (1, 2), "conferido, o CLI não é aberto; {} servidor {}", mux.why(), a.errors());
         assert_eq!(first, second);
         assert_eq!(second[0].session, "a");
     }
@@ -638,7 +673,7 @@ mod tests {
         assert_eq!(cli.calls(), 1);
         // Quem cria um Mux por pedido (retomar sessão) não paga a conferência de novo.
         cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
-        assert_eq!((cli.calls(), a.conns()), (1, 2));
+        assert_eq!((cli.calls(), cli.reads()), (1, 2));
     }
 
     #[tokio::test]
@@ -650,7 +685,7 @@ mod tests {
         cli.lists(LINE_A);
         let mux = cli.mux(Duration::from_secs(2));
         for _ in 0..2 { mux.list_panes().await.unwrap(); }
-        assert_eq!((cli.calls(), a.conns()), (1, 2));
+        assert_eq!((cli.calls(), cli.reads()), (1, 2));
     }
 
     #[tokio::test]
@@ -673,7 +708,7 @@ mod tests {
         let mux = cli.mux(Duration::from_secs(2));
         mux.list_panes().await.unwrap();
         mux.list_panes().await.unwrap();
-        assert_eq!(cli.calls(), 1);
+        assert_eq!(cli.calls(), 1, "{} servidor {}", mux.why(), a.errors());
         let b = FakeServer::start("kb", LINE_B.into());
         b.register(&cli.data, "b", "kb");
         cli.lists(&format!("{LINE_A}{LINE_B}"));
@@ -697,7 +732,7 @@ mod tests {
         cli.lists(LINE_A);
         let mux = cli.mux(Duration::from_secs(2));
         for _ in 0..4 { assert_eq!(mux.list_panes().await.unwrap()[0].session, "a"); }
-        assert_eq!((cli.calls(), a.conns()), (4, 3));
+        assert_eq!((cli.calls(), cli.reads()), (4, 3));
     }
 
     #[tokio::test]
@@ -710,8 +745,8 @@ mod tests {
         cli.lists(LINE_A);
         mux.list_panes().await.unwrap();
         mux.list_panes().await.unwrap();
-        assert_eq!(a.conns(), 2, "sem sessão não é falha da leitura direta");
-        assert_eq!(cli.calls(), 5);
+        assert_eq!(cli.reads(), 2, "sem sessão não é falha da leitura direta; {} servidor {}", mux.why(), a.errors());
+        assert_eq!(cli.calls(), 5, "{} servidor {}", mux.why(), a.errors());
     }
 
     #[tokio::test]

@@ -108,6 +108,32 @@ fn a_dripping_reply_cannot_outlive_the_deadline() {
     seen.join().unwrap();
 }
 
+/// No Windows, o servidor que aceita a conexão enquanto abre um processo filho deixa o filho com uma
+/// cópia dela, e o fechamento chega como reset. A segunda tentativa encontra a conexão limpa.
+#[test]
+fn a_reset_connection_is_tried_once_more() {
+    let dir = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = std::thread::spawn(move || {
+        // Fechar sem ler o pedido que já chegou faz o sistema mandar reset ao cliente.
+        let (first, _) = listener.accept().unwrap();
+        // Espera o pedido chegar sem consumi-lo: fechar com ele pendente é o que provoca o reset.
+        first.peek(&mut [0u8; 1]).unwrap();
+        drop(first);
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let (mut auth, mut cmd) = (String::new(), String::new());
+        reader.read_line(&mut auth).unwrap();
+        reader.read_line(&mut cmd).unwrap();
+        let mut out = stream;
+        out.write_all(b"OK\nmain\n").unwrap();
+    });
+    register(dir.path(), "main", port, "k");
+    assert_eq!(list_panes(dir.path(), "#{session_name}", soon(2000)).map(|l| l.text), Ok("main\n".to_owned()));
+    handle.join().unwrap();
+}
+
 #[test]
 fn data_dir_follows_the_cli_resolution() {
     let base = std::env::temp_dir();
