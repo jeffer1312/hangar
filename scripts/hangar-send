@@ -579,13 +579,14 @@ print(next((p for p, probe in json.load(sys.stdin).items() if probe.get("default
     fi
     if [[ -n "$remoto" ]]; then
         # O $HOME e o hangar-conta são DESTA máquina: pasta padrão e conta vêm das contas de LÁ.
-        # A home é a mãe da conta `default` (~/.claude); `--conta auto` segue abaixo, já contra lá.
+        # A home é a mãe da conta `default` (~/.claude), ou de outra quando lá não há `default`;
+        # `--conta auto` segue abaixo, já contra lá.
         if [[ -z "$cwd" || ( -n "$conta" && "$conta" != "auto" ) ]]; then
             configs=$(api GET /api/claude-configs) || exit 1
-            # Separador fora do espaço em branco: com tab, home vazia faz a conta cair em home_remota.
-            IFS=$'\x1f' read -r home_remota config_dir < <("$PY" -c 'import json,sys
+            # Separados por NUL, que nenhum caminho contém: campo vazio não some nem desloca o outro.
+            { IFS= read -r -d '' home_remota; IFS= read -r -d '' config_dir; } < <("$PY" -c 'import json,sys
 cs = json.loads(sys.argv[1]); conta = sys.argv[2]
-base = next((c["path"] for c in cs if c.get("label") == "default"), "")
+base = next((c["path"] for c in cs if c.get("label") == "default"), cs[0]["path"] if cs else "")
 sep = "\\" if "\\" in base else "/"
 home = base.rsplit(sep, 1)[0] if base else ""
 achada = ""
@@ -594,7 +595,7 @@ if conta and conta != "auto":
         nome = c["path"].replace("\\", "/").rsplit("/", 1)[-1]
         if conta in (c.get("label"), nome, ".claude-" + conta):
             achada = c["path"]
-print(home + "\x1f" + achada)' "$configs" "$conta")
+sys.stdout.write(home + "\0" + achada + "\0")' "$configs" "$conta")
             if [[ -n "$conta" && "$conta" != "auto" && -z "$config_dir" ]]; then
                 echo "erro: conta '$conta' não existe em '$remoto' — lá há: $("$PY" -c 'import json,sys; print(", ".join(c["label"] for c in json.loads(sys.argv[1])))' "$configs")" >&2
                 exit 2
