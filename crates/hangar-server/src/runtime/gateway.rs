@@ -15,6 +15,7 @@ use subtle::ConstantTimeEq;
 use tokio::sync::{broadcast,Mutex};
 
 mod rename;
+mod other;
 pub(crate) use rename::Detached;
 
 /// `Headless`: ator sem terminal (cano). `Terminal`: entrada terminal do Claude. `CodexTerminal`: o mesmo
@@ -22,19 +23,20 @@ pub(crate) use rename::Detached;
 #[derive(Clone)]
 pub(crate) enum EntryHandle {
     Headless(RuntimeHandle),
+    OtherTerminal {target:Box<super::other_terminal::OtherTarget>,handle:super::other_terminal::OtherHandle},
     Terminal {target:super::terminal::TerminalTarget,handle:super::terminal::TerminalHandle},
     CodexTerminal {target:Box<CodexTerminalTarget>,handle:RuntimeHandle,cell:AdoptionCell},
 }
 impl EntryHandle {
-    pub(crate) async fn snapshot(&self)->Result<Value,RuntimeError> {match self {Self::Headless(h) | Self::CodexTerminal {handle:h,..}=>h.snapshot().await,Self::Terminal {handle,..}=>handle.snapshot().await}}
+    pub(crate) async fn snapshot(&self)->Result<Value,RuntimeError> {match self {Self::Headless(h) | Self::CodexTerminal {handle:h,..}=>h.snapshot().await,Self::Terminal {handle,..}=>handle.snapshot().await,Self::OtherTerminal {handle,..}=>handle.snapshot().await}}
     /// Só o ator do Codex/sem terminal tem motor próprio; o de terminal do Claude não é sessão Codex.
-    pub(crate) async fn view(&self)->Result<Value,RuntimeError> {match self {Self::Headless(h) | Self::CodexTerminal {handle:h,..}=>h.view().await,Self::Terminal {..}=>Err(failure("runtime_terminal"))}}
-    pub(crate) async fn stop(&self)->Result<(),RuntimeError> {match self {Self::Headless(h) | Self::CodexTerminal {handle:h,..}=>h.stop().await,Self::Terminal {handle,..}=>handle.stop().await}}
-    pub(crate) async fn command(&self,command:RuntimeCommand)->Result<RuntimeReply,RuntimeError> {match self {Self::Headless(h) | Self::CodexTerminal {handle:h,..}=>h.command(command).await,Self::Terminal {handle,..}=>handle.command(command).await}}
-    pub(crate) async fn queue(&self,id:String,action:Action)->Result<Value,RuntimeError> {match self {Self::Headless(h) | Self::CodexTerminal {handle:h,..}=>h.queue(id,action).await,Self::Terminal {handle,..}=>handle.queue(id,action).await}}
-    pub(crate) async fn drain(&self)->Result<Value,RuntimeError> {match self {Self::Headless(h) | Self::CodexTerminal {handle:h,..}=>h.drain().await,Self::Terminal {handle,..}=>handle.drain().await}}
-    pub(crate) async fn confirm(&self)->Result<Value,RuntimeError> {match self {Self::Headless(h) | Self::CodexTerminal {handle:h,..}=>h.confirm().await,Self::Terminal {handle,..}=>handle.confirm().await}}
-    pub(crate) async fn ensure_projection(&self)->Result<Value,RuntimeError> {match self {Self::Headless(h) | Self::CodexTerminal {handle:h,..}=>h.ensure_projection().await,Self::Terminal {handle,..}=>handle.ensure_projection().await}}
+    pub(crate) async fn view(&self)->Result<Value,RuntimeError> {match self {Self::Headless(h) | Self::CodexTerminal {handle:h,..}=>h.view().await,Self::Terminal {..}=>Err(failure("runtime_terminal")),Self::OtherTerminal {handle,..}=>handle.snapshot().await.map(|snapshot|snapshot["view"].clone())}}
+    pub(crate) async fn stop(&self)->Result<(),RuntimeError> {match self {Self::Headless(h) | Self::CodexTerminal {handle:h,..}=>h.stop().await,Self::Terminal {handle,..}=>handle.stop().await,Self::OtherTerminal {handle,..}=>handle.stop().await}}
+    pub(crate) async fn command(&self,command:RuntimeCommand)->Result<RuntimeReply,RuntimeError> {match self {Self::Headless(h) | Self::CodexTerminal {handle:h,..}=>h.command(command).await,Self::Terminal {handle,..}=>handle.command(command).await,Self::OtherTerminal {handle,..}=>handle.command(command).await}}
+    pub(crate) async fn queue(&self,id:String,action:Action)->Result<Value,RuntimeError> {match self {Self::Headless(h) | Self::CodexTerminal {handle:h,..}=>h.queue(id,action).await,Self::Terminal {handle,..}=>handle.queue(id,action).await,Self::OtherTerminal {handle,..}=>handle.queue(id,action).await}}
+    pub(crate) async fn drain(&self)->Result<Value,RuntimeError> {match self {Self::Headless(h) | Self::CodexTerminal {handle:h,..}=>h.drain().await,Self::Terminal {handle,..}=>handle.drain().await,Self::OtherTerminal {handle,..}=>handle.drain().await}}
+    pub(crate) async fn confirm(&self)->Result<Value,RuntimeError> {match self {Self::Headless(h) | Self::CodexTerminal {handle:h,..}=>h.confirm().await,Self::Terminal {handle,..}=>handle.confirm().await,Self::OtherTerminal {handle,..}=>handle.confirm().await}}
+    pub(crate) async fn ensure_projection(&self)->Result<Value,RuntimeError> {match self {Self::Headless(h) | Self::CodexTerminal {handle:h,..}=>h.ensure_projection().await,Self::Terminal {handle,..}=>handle.ensure_projection().await,Self::OtherTerminal {handle,..}=>handle.ensure_projection().await}}
     /// Pane presente: entrada terminal do Claude ou Codex com TUI.
     pub(crate) fn has_terminal(&self) -> bool { !matches!(self,Self::Headless(_)) }
 }
@@ -71,6 +73,7 @@ pub struct WriteTarget { pub key:String,pub generation:u64,pub provider:String,p
 const INGRESS_CLOSE_WAIT:Duration = Duration::from_secs(60);
 pub struct RuntimeRegistry {
     startup: crate::startup::Readiness,
+    other:std::sync::OnceLock<other::OtherConfiguration>,
     interactions:Option<Arc<crate::interactions::InteractionStore>>,
     entries:Arc<Mutex<BTreeMap<String,Entry>>>,
     terminal_states:Option<Arc<crate::state::published::Published>>,
@@ -409,7 +412,7 @@ async fn attach_terminal_mods(mods:&crate::mods::state::Mods,target:&super::term
 impl RuntimeRegistry {
     pub fn new(upstream:SocketAddr,secret:String,instance:String) -> Self {
         let preparation = crate::accounts::bridge::AccountsBridge::new(upstream,secret.clone(),instance.clone()).ok();
-        Self { startup: Default::default(), diag:crate::diag::DiagClient::new(upstream,secret.clone()),reopening:Default::default(),terminal_problems:Default::default(),terminal_status:Default::default(),heal_attempts:Default::default(),interactions:None,entries:Arc::new(Mutex::new(BTreeMap::new())),terminal_states:None,terms:None,events:broadcast::channel(1024).0,
+        Self { startup: Default::default(), other:std::sync::OnceLock::new(), diag:crate::diag::DiagClient::new(upstream,secret.clone()),reopening:Default::default(),terminal_problems:Default::default(),terminal_status:Default::default(),heal_attempts:Default::default(),interactions:None,entries:Arc::new(Mutex::new(BTreeMap::new())),terminal_states:None,terms:None,events:broadcast::channel(1024).0,
             policy:PolicyClient::new(upstream,secret).with_preparation(preparation),instance,lifecycle:Mutex::new(BTreeMap::new()),revisions:Mutex::new(BTreeMap::new()),mods:None,plugin:None,ingress:Default::default(),
             respawn_base:Duration::from_secs(5),reconnect_waits:Default::default(),permissions:None,processes:Arc::new(crate::list::procs::SystemProcs::default()),live:Default::default(),codex_owned:Default::default(),hubs:std::sync::OnceLock::new(),self_ref:std::sync::OnceLock::new(),
             watcher:std::sync::OnceLock::new(),codex_wake:Arc::new(tokio::sync::Notify::new()),native:Default::default(),limits:std::sync::OnceLock::new(),auth_refusals:std::sync::OnceLock::new(),limit_holds:Default::default(),waking:Default::default(),rewake:Default::default() }
@@ -510,6 +513,7 @@ impl RuntimeRegistry {
             },
             EntryHandle::Terminal {target,..}=>Some(self.open_terminal(target).await.map(|_|())),
             EntryHandle::CodexTerminal {..}=>watcher()?.adopt_now(self,name).await,
+            EntryHandle::OtherTerminal {..}=>self.adopt_other(name).await,
             EntryHandle::Headless(_) if provider == "codex"=>watcher()?.open_parked(self,name).await,
             EntryHandle::Headless(_)=>self.open_claude_headless(name,true).await,
         };
@@ -533,6 +537,7 @@ impl RuntimeRegistry {
             Err(_) if self.waking_key(name).is_some()=>return Some(Err(asleep_waking())),
             Err(_)=>return Some(Err(RuntimeError::new("session_transfer_busy","a sessão está trocando de agente"))),
         };
+        if let Some(opened) = self.adopt_other(name).await {return Some(opened);}
         if let Some(opened) = self.open_claude_headless(name,true).await { return Some(opened); }
         let watcher = self.watcher.get()?.clone();
         if let Some(adopted) = watcher.adopt_now(self,name).await { return Some(adopted); }
@@ -1513,7 +1518,7 @@ impl RuntimeRegistry {
             EntryHandle::Terminal {target,..}=>Some((Some(target.metadata.agent_pid),target.metadata.config_dir.clone())),
             EntryHandle::Headless(_)=>entry.runtime_target.as_ref().and_then(|target|target.metadata["config_dir"].as_str().map(std::path::PathBuf::from))
                 .or_else(||std::env::home_dir().map(|home|home.join(".claude"))).map(|config|(None,config)),
-            EntryHandle::CodexTerminal {..}=>None,
+            EntryHandle::CodexTerminal {..}|EntryHandle::OtherTerminal {..}=>None,
         }
     }
     /// Vínculo e metadados do terminal, sem enviar um pedido ao ator ocupado.
@@ -1556,7 +1561,7 @@ impl RuntimeRegistry {
                 let transcript=entry.mode_source.transcript.with_file_name(format!("{}.jsonl",binding.conversation));
                 Ok((binding,transcript))
             },
-            EntryHandle::CodexTerminal {..}=>Err(failure("runtime_provider")),
+            EntryHandle::CodexTerminal {..}|EntryHandle::OtherTerminal {..}=>Err(failure("runtime_provider")),
         }
     }
     /// Por que a sessão Claude ficou parada no limite, no estado ao vivo dela. Sem terminal o ator o leva até
@@ -1571,7 +1576,7 @@ impl RuntimeRegistry {
                 tracing::warn!(session=%name,code=%error.code,"o problema do limite não chegou ao estado da sessão");
             },
             EntryHandle::Terminal {..}=>super::terminal_status::publish_limit(&self.terminal_status_sender(name),problem),
-            EntryHandle::CodexTerminal {..}=>{},
+            EntryHandle::CodexTerminal {..}|EntryHandle::OtherTerminal {..}=>{},
         }
     }
     /// Uma ação na fila durável da sessão viva `name`, pelo ator dela.
@@ -2155,6 +2160,7 @@ impl RuntimeRegistry {
             },
             // Encerrar o Codex com terminal é da vigia (`close_with_kill`).
             (EntryHandle::CodexTerminal {..},true)=>return Err(failure("close_kill")),
+            (EntryHandle::OtherTerminal {..},true)=>return Err(failure("other_terminal_close_unavailable")),
             (EntryHandle::CodexTerminal { cell,handle,.. },false)=>{
                 // A reconexão em voo para antes de a posse sair daqui.
                 cell.revoke();
@@ -3042,6 +3048,7 @@ impl RuntimeRegistry {
         self.entries.lock().await.iter().map(|(key,entry)| {
             let (path,created) = match (&entry.handle,&entry.runtime_target) {
                 (EntryHandle::Terminal {target,..},_) => (target.state_path.clone(),target.created),
+                (EntryHandle::OtherTerminal {target,..},_) => (target.state_path.clone(),target.created),
                 (EntryHandle::CodexTerminal {target,..},_) => { let t = target.runtime_target(); (t.state_path,t.created) },
                 (_,Some(target)) => (target.state_path.clone(),target.created),
                 _ => (entry.lease_path.with_extension("json"),0.0),

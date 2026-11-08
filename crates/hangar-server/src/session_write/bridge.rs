@@ -169,6 +169,12 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         && let Some(response) = super::orchestration_guard(&st, name, req.headers()).await {
         return response;
     }
+    if let (Some(runtime),Some(name))=(st.state.runtime.get(),name.as_deref())
+        && runtime.other_info(name).await.is_some() {
+        let (_,caller)=match crate::routes::who(&st,peer,&req).await {Ok(value)=>value,Err(error)=>return crate::auth::unavailable(error)};
+        if !caller.as_ref().is_some_and(|caller|caller.can(name,req.method())) {return StatusCode::FORBIDDEN.into_response();}
+        return super::detail(StatusCode::SERVICE_UNAVAILABLE,"other_terminal_close_unavailable","o fechamento desta vida do terminal ainda não está disponível",json!({}));
+    }
     // Sem vigia (sem as pastas da lista), `kill_codex_terminal` é `None`.
     // Fechada de propósito não volta no próximo reboot, de qualquer agente.
     if let (true, Some(name), Some(dirs)) = (owner, name.as_deref(), st.list.env().dirs.as_ref()) {

@@ -197,16 +197,23 @@ fn read_only_retry(request: &CommandRequest, output: &CommandOutput, stderr: &[u
 }
 impl TerminalIo for ProcessIo {
     fn command<'a>(&'a self, request: CommandRequest) -> IoFuture<'a, CommandOutput> {
-        Box::pin(async move {
-            let (output, stderr) = self.run(request.clone()).await?;
-            let Some(retry) = read_only_retry(&request, &output, &stderr) else { return Ok(output) };
-            tracing::warn!(code = "mux_readonly_client", "send-keys recusado pelo cliente somente de leitura; repete com cliente vazio");
-            Ok(self.run(retry).await?.0)
-        })
+        self.command_guarded(request, || Box::pin(async { Ok(()) }))
     }
     fn socket<'a>(&'a self, descriptor: &'a NativeMessage, envelope: Vec<u8>) -> IoFuture<'a, WriteOutcome> { self.socket_inner(descriptor, envelope) }
 }
 impl ProcessIo {
+    /// Cada tentativa reconfere a guarda, inclusive a reserva do observador somente de leitura.
+    pub fn command_guarded<'a, F>(&'a self, request: CommandRequest, mut check: F) -> IoFuture<'a, CommandOutput>
+    where F: FnMut() -> IoFuture<'a, ()> + Send + 'a {
+        Box::pin(async move {
+            check().await?;
+            let (output, stderr) = self.run(request.clone()).await?;
+            let Some(retry) = read_only_retry(&request, &output, &stderr) else { return Ok(output) };
+            tracing::warn!(code = "mux_readonly_client", "send-keys recusado pelo cliente somente de leitura; repete com cliente vazio");
+            check().await?;
+            Ok(self.run(retry).await?.0)
+        })
+    }
     async fn run(&self, request: CommandRequest) -> Result<(CommandOutput, Vec<u8>), IoFailure> {
         {
             use std::process::Stdio;

@@ -53,7 +53,7 @@ async fn other_terminal_empty_transport_keeps_input_durably_in_the_common_queue(
     impl hangar_server::runtime::other_terminal::OtherIo for UnavailableCapture {
         fn prove<'a>(&'a self,_:&'a OtherTarget)->futures_util::future::BoxFuture<'a,Result<bool,hangar_server::runtime::protocol::RuntimeError>> {Box::pin(async {Ok(true)})}
         fn capture<'a>(&'a self)->futures_util::future::BoxFuture<'a,Result<hangar_server::runtime::other_terminal::OtherFrame,hangar_server::runtime::protocol::RuntimeError>> {Box::pin(async {Err(hangar_server::runtime::protocol::RuntimeError::new("capture_failed","captura indisponível"))})}
-        fn write<'a>(&'a self,_:&'a OtherTarget,_:&'a str,_:bool)->futures_util::future::BoxFuture<'a,Result<(),hangar_server::runtime::protocol::RuntimeError>> {Box::pin(async {panic!("captura incerta não autoriza escrever")})}
+        fn write<'a>(&'a self,_:&'a OtherTarget,_:&'a str,_:bool,_:Option<&'a hangar_server::runtime::other_terminal::OtherWriteGuard>)->futures_util::future::BoxFuture<'a,Result<(),hangar_server::runtime::protocol::RuntimeError>> {Box::pin(async {panic!("captura incerta não autoriza escrever")})}
         fn release<'a>(&'a self)->futures_util::future::BoxFuture<'a,()> {Box::pin(async {})}
     }
     let mut options=OtherOptions::new(TerminalPool::new(),inbox::Store::new(),Arc::new(SystemProcs::default()),Arc::new(InteractionStore::default()));
@@ -96,7 +96,7 @@ struct RecordingIo {writes:std::sync::Mutex<Vec<(String,bool)>>,captures:std::sy
 impl hangar_server::runtime::other_terminal::OtherIo for RecordingIo {
     fn prove<'a>(&'a self,_:&'a hangar_server::runtime::other_terminal::OtherTarget)->futures_util::future::BoxFuture<'a,Result<bool,hangar_server::runtime::protocol::RuntimeError>> {Box::pin(async move {if let Some(action)=self.before_prove.lock().unwrap().take() {action();}Ok(true)})}
     fn capture<'a>(&'a self)->futures_util::future::BoxFuture<'a,Result<hangar_server::runtime::other_terminal::OtherFrame,hangar_server::runtime::protocol::RuntimeError>> {Box::pin(async move {self.captures.fetch_add(1,std::sync::atomic::Ordering::SeqCst);self.captured.notify_one();Ok(hangar_server::runtime::other_terminal::OtherFrame::from_styled("────────────────────────────────\n\n────────────────────────────────\n".into()))})}
-    fn write<'a>(&'a self,_:&'a hangar_server::runtime::other_terminal::OtherTarget,text:&'a str,literal:bool)->futures_util::future::BoxFuture<'a,Result<(),hangar_server::runtime::protocol::RuntimeError>> {Box::pin(async move {self.writes.lock().unwrap().push((text.into(),literal));Ok(())})}
+    fn write<'a>(&'a self,_:&'a hangar_server::runtime::other_terminal::OtherTarget,text:&'a str,literal:bool,_:Option<&'a hangar_server::runtime::other_terminal::OtherWriteGuard>)->futures_util::future::BoxFuture<'a,Result<(),hangar_server::runtime::protocol::RuntimeError>> {Box::pin(async move {self.writes.lock().unwrap().push((text.into(),literal));Ok(())})}
     fn release<'a>(&'a self)->futures_util::future::BoxFuture<'a,()> {Box::pin(async {})}
 }
 fn start_recording(root:&std::path::Path,provider:&str,inbox:std::sync::Arc<hangar_server::provider_models::inbox::Store>,io:std::sync::Arc<RecordingIo>)->hangar_server::runtime::other_terminal::OtherHandle {
@@ -280,4 +280,112 @@ async fn other_terminal_legacy_import_never_overwrites_runtime_and_never_treats_
     let rejected=open_queue(&target).await.is_err();
     assert!(rejected);assert!(!target.state_path.exists());
     assert_eq!(std::fs::read(projection).unwrap(),b"{invalid\n");
+}
+
+#[tokio::test]
+async fn other_terminal_boundary_ready_adoption_reuses_one_entry_and_exposes_the_same_binding() {
+    use hangar_server::runtime::{gateway::RuntimeRegistry,other_terminal::{OtherOptions,OtherDiscoveryState}};
+    use std::sync::Arc;
+    let root=tempfile::tempdir().unwrap();let target=adoption_target(root.path());std::fs::write(&target.transcript,b"").unwrap();
+    let mut options=OtherOptions::new(hangar_server::terminal_control::TerminalPool::new(),hangar_server::provider_models::inbox::Store::new(),Arc::new(hangar_server::list::procs::SystemProcs::default()),Arc::new(hangar_server::interactions::InteractionStore::default()));
+    options.io_override=Some(Arc::new(RecordingIo::default()));
+    let environment=hangar_server::accounts::environment::AccountEnvironment::from_map(std::collections::BTreeMap::from([
+        ("HOME".into(),root.path().to_string_lossy().into_owned()),("USERPROFILE".into(),root.path().to_string_lossy().into_owned())]));
+    let registry=Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"test-only".into(),"registry-test".into()).with_interactions(options.interactions.clone()).with_codex_environment(environment));
+    let found=target.clone();registry.bind_other(options,Arc::new(move |_| {let found=found.clone();Box::pin(async move {Some(Ok(OtherDiscoveryState::Ready(found)))})})).unwrap();
+    let first=registry.open_other_terminal(target.clone()).await;let second=registry.open_other_terminal(target.clone()).await;
+    let writable=registry.writable("pi-a").await.map(|target|(target.key,target.generation,target.provider,target.terminal));
+    let info=registry.other_info("pi-a").await.map(|info|(info.provider,info.session_key,info.jsonl,info.lifecycle_id));
+    let entries=registry.list_snapshots().await;
+    registry.shutdown().await.unwrap();
+    assert!(first.is_ok() && second.is_ok());
+    for provider in ["pi","omp","kimi"] {
+        let owner=hangar_server::session_write::Provider::from_str(provider).map(|provider|hangar_server::session_write::decide(hangar_server::session_write::WriteRoute::Input,provider,true));
+        assert_eq!(owner,Some(hangar_server::session_write::Owner::Rust),"a entrada reconhecida não pode voltar ao Python");
+    }
+    assert_eq!(writable,Some(("life-a".into(),1,"pi".into(),true)));
+    assert_eq!(info,Some(("pi".into(),"conversation-a".into(),Some(target.transcript),Some("k:life-a:g:1".into()))));
+    assert_eq!(entries.keys().cloned().collect::<Vec<_>>(),vec!["life-a".to_owned()]);
+}
+
+#[cfg(unix)]
+struct TerminalProcessView { cwd:std::path::PathBuf }
+#[cfg(unix)]
+impl hangar_server::list::procs::ProcessView for TerminalProcessView {
+    fn children(&self,_:std::time::Duration)->std::io::Result<std::sync::Arc<hangar_server::list::procs::ChildrenMap>> {Ok(std::sync::Arc::new(Default::default()))}
+    fn argv(&self,_:i64)->Vec<String> {vec!["pi".into()]}
+    fn cwd(&self,_:i64)->Option<std::path::PathBuf> {Some(self.cwd.clone())}
+    fn env_var(&self,_:i64,_:&str)->std::io::Result<Option<std::ffi::OsString>> {Ok(None)}
+    fn start_time(&self,_:i64)->Option<f64> {Some(100.0)}
+}
+#[cfg(unix)]
+fn native_question(id:&str)->String {
+    format!("{}\n",json!({"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","id":id,"name":"question","arguments":{"question":"Prosseguir?","options":[{"label":"Sim"},{"label":"Não"}]}}]}}))
+}
+#[cfg(unix)]
+fn process_terminal(root:&std::path::Path,source:bool,swap:bool)->(hangar_server::runtime::other_terminal::OtherTarget,hangar_server::runtime::other_terminal::ProcessOtherIo,std::path::PathBuf) {
+    use hangar_server::runtime::other_terminal::{OtherOptions,ProcessOtherIo};
+    use std::{os::unix::fs::PermissionsExt,sync::Arc};
+    let mut target=adoption_target(root);
+    std::fs::write(&target.transcript,native_question("question-a")).unwrap();
+    if source {
+        let tickets=target.dirs.claude.join(".hangar-pi");std::fs::create_dir_all(&tickets).unwrap();
+        std::fs::write(tickets.join("1.json"),json!({"file":target.transcript,"ts":101.0}).to_string()).unwrap();
+    }
+    let replacement=root.join("next-question.jsonl");std::fs::write(&replacement,native_question("question-b")).unwrap();
+    let marker=root.join("written");let program=root.join("fake-mux");
+    let quote=|path:&std::path::Path|format!("'{}'",path.to_string_lossy().replace('\'',"'\\''"));
+    let changing=if swap {format!("cp {} {}\n",quote(&replacement),quote(&target.transcript))}else{String::new()};
+    let script=format!("#!/bin/sh\ncase \"$1\" in\ndisplay-message)\n{changing}printf '%s\\n' 'pi-a\t%1\t100\t123';;\nsend-keys) printf '%s\\n' effect >> {};;\n*) exit 1;;\nesac\n",quote(&marker));
+    std::fs::write(&program,script).unwrap();std::fs::set_permissions(&program,std::fs::Permissions::from_mode(0o700)).unwrap();
+    target.binding.mux_argv=vec![program.to_string_lossy().into_owned()];
+    let options=OtherOptions::new(hangar_server::terminal_control::TerminalPool::new(),hangar_server::provider_models::inbox::Store::new(),Arc::new(TerminalProcessView {cwd:root.into()}),Arc::new(hangar_server::interactions::InteractionStore::default()));
+    let io=ProcessOtherIo::new(&target,&options);(target,io,marker)
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn other_terminal_boundary_io_refuses_effect_when_the_native_conversation_proof_disappears() {
+    use hangar_server::runtime::other_terminal::OtherIo;
+    let root=tempfile::tempdir().unwrap();let (target,io,marker)=process_terminal(root.path(),true,false);
+    assert!(io.prove(&target).await.unwrap());
+    std::fs::remove_file(target.dirs.claude.join(".hangar-pi/1.json")).unwrap();
+    let result=io.write(&target,"C-s",false,None).await;
+    assert!(result.is_err(),"PID vivo sem conversa comprovada não autoriza tecla");
+    assert!(!marker.exists(),"a recusa precisa acontecer antes de qualquer efeito");
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn other_terminal_boundary_io_refuses_the_first_key_when_the_question_changes_during_prove() {
+    use hangar_server::runtime::other_terminal::{OtherIo,OtherWriteGuard,read_pending_interaction};
+    let root=tempfile::tempdir().unwrap();let (target,io,marker)=process_terminal(root.path(),true,true);
+    let pending=read_pending_interaction(&target).unwrap().unwrap();
+    let guard=OtherWriteGuard {target:pending.target,semantic:pending.semantic};
+    let result=io.write(&target,"C-s",false,Some(&guard)).await;
+    assert!(result.is_err(),"a pergunta trocada durante o await de prova não recebe a primeira tecla");
+    assert!(!marker.exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn other_terminal_boundary_io_readonly_retry_rechecks_the_guard_and_keeps_the_unguarded_transport() {
+    use hangar_server::terminal_input::{ProcessIo,TerminalIo,CommandRequest,IoFailure};
+    use std::os::unix::fs::PermissionsExt;
+    for guarded in [true,false] {
+        let root=tempfile::tempdir().unwrap();let changed=root.path().join("changed");let written=root.path().join("written");let program=root.path().join("readonly-mux");
+        let quote=|path:&std::path::Path|format!("'{}'",path.to_string_lossy().replace('\'',"'\\''"));
+        let script=format!("#!/bin/sh\nif [ \"$2\" = '-c' ]; then printf effect > {}; exit 0; fi\nprintf changed > {}\nprintf '%s\\n' 'client is read-only' >&2\nexit 1\n",quote(&written),quote(&changed));
+        std::fs::write(&program,script).unwrap();std::fs::set_permissions(&program,std::fs::Permissions::from_mode(0o700)).unwrap();
+        let request=CommandRequest {program:program.to_string_lossy().into_owned(),args:vec!["send-keys".into(),"-t".into(),"%1".into(),"Enter".into()],stdin:vec![]};
+        let io=ProcessIo::default();
+        let result=if guarded {io.command_guarded(request,move|| {let changed=changed.clone();Box::pin(async move {
+            if changed.exists(){Err(IoFailure {code:"erro_interacao_desatualizada",may_have_written:false})}else{Ok(())}
+        })}).await}else{io.command(request).await};
+        if guarded {
+            assert!(matches!(result,Err(IoFailure {code:"erro_interacao_desatualizada",may_have_written:false})));
+            assert!(!written.exists(),"a reserva do cliente somente de leitura não contorna o cartão trocado");
+        }else{
+            assert!(result.unwrap().success,"Claude/Codex conservam a reserva já existente");
+            assert_eq!(std::fs::read(written).unwrap(),b"effect");
+        }
+    }
 }

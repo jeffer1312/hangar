@@ -6,10 +6,10 @@ use crate::session_open::AgentProvider;
 
 /// O recorte do `AgentProvider` que o Rust escreve.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Provider { Claude, Codex }
+pub enum Provider { Claude, Codex, Pi, Omp, Kimi }
 
 impl Provider {
-    /// `None` para provedor que o Rust não escreve (Pi, omp, Kimi): a rota segue ao Python.
+    /// Nome conhecido de um provedor; modo e rota são decididos pela tabela.
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(name: &str) -> Option<Provider> {
         AgentProvider::parse(name)?.try_into().ok()
@@ -18,7 +18,7 @@ impl Provider {
 
 impl From<Provider> for AgentProvider {
     fn from(provider: Provider) -> Self {
-        match provider { Provider::Claude => AgentProvider::Claude, Provider::Codex => AgentProvider::Codex }
+        match provider { Provider::Claude => AgentProvider::Claude, Provider::Codex => AgentProvider::Codex, Provider::Pi=>AgentProvider::Pi, Provider::Omp=>AgentProvider::Omp, Provider::Kimi=>AgentProvider::Kimi }
     }
 }
 
@@ -29,7 +29,9 @@ impl TryFrom<AgentProvider> for Provider {
         match provider {
             AgentProvider::Claude => Ok(Provider::Claude),
             AgentProvider::Codex => Ok(Provider::Codex),
-            other => Err(other),
+            AgentProvider::Pi=>Ok(Provider::Pi),
+            AgentProvider::Omp=>Ok(Provider::Omp),
+            AgentProvider::Kimi=>Ok(Provider::Kimi),
         }
     }
 }
@@ -51,8 +53,9 @@ pub enum Owner { Rust, Python }
 /// Claude e Codex, com e sem terminal, são do Rust. Entrada doente não muda o dono: `route_write`
 /// recusa com código, e o Python nunca relança nem responde por ela.
 pub fn decide(route: WriteRoute, provider: Provider, terminal: bool) -> Owner {
+    if !terminal && matches!(provider,Provider::Pi|Provider::Omp|Provider::Kimi) {return Owner::Python;}
     match route {
-        WriteRoute::CodexControl | WriteRoute::CodexPermission if provider != Provider::Codex => Owner::Python,
+        WriteRoute::CodexControl | WriteRoute::CodexPermission if provider == Provider::Claude => Owner::Python,
         // Teclas cruas e a aba Submit só existem num pane: sem terminal quem responde é o Python, como hoje.
         WriteRoute::Keys | WriteRoute::TermInput | WriteRoute::SelectSubmit if !terminal => Owner::Python,
         _ => Owner::Rust,
@@ -67,7 +70,7 @@ impl Provider {
 /// saúde anuncia, para o Python não guardar a mesma lista.
 pub fn owned_modes() -> Vec<(Provider, bool)> {
     let mut owned = Vec::new();
-    for provider in [Provider::Claude, Provider::Codex] {
+    for provider in [Provider::Claude, Provider::Codex, Provider::Pi, Provider::Omp, Provider::Kimi] {
         for headless in [true, false] {
             if decide(WriteRoute::Input, provider, !headless) == Owner::Rust { owned.push((provider, headless)); }
         }
@@ -121,22 +124,20 @@ mod tests {
 
     #[test]
     fn owned_modes_come_from_the_table() {
-        assert_eq!(owned_modes(), vec![(Provider::Claude, true), (Provider::Claude, false), (Provider::Codex, true), (Provider::Codex, false)]);
+        assert_eq!(owned_modes(), vec![(Provider::Claude, true), (Provider::Claude, false), (Provider::Codex, true), (Provider::Codex, false), (Provider::Pi,false), (Provider::Omp,false), (Provider::Kimi,false)]);
     }
 
     #[test]
     fn provider_names() {
         assert_eq!(Provider::from_str("claude"), Some(Provider::Claude));
         assert_eq!(Provider::from_str("codex"), Some(Provider::Codex));
-        assert_eq!(Provider::from_str("pi"), None);
+        assert_eq!(Provider::from_str("pi"), Some(Provider::Pi));
         assert_eq!(Provider::from_str("Claude"), None);
-        for provider in [Provider::Claude, Provider::Codex] {
+        for provider in [Provider::Claude, Provider::Codex, Provider::Pi, Provider::Omp, Provider::Kimi] {
             assert_eq!(Provider::try_from(AgentProvider::from(provider)), Ok(provider));
             assert_eq!(Provider::from_str(provider.name()), Some(provider));
         }
-        for other in [AgentProvider::Pi, AgentProvider::Omp, AgentProvider::Kimi] {
-            assert_eq!(Provider::try_from(other), Err(other));
-        }
+
     }
 
     #[test]

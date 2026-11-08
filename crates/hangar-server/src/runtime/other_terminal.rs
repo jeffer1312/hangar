@@ -1,6 +1,7 @@
 //! Um proprietário por vida para entrada, observação e fila de Pi, omp e Kimi.
 use std::path::PathBuf;
 mod io;
+pub use io::ProcessOtherIo;
 mod native;
 mod observe;
 mod storage;
@@ -30,7 +31,12 @@ pub struct OtherTarget {
     pub config_dirs: Vec<PathBuf>,
     pub created: f64,
 }
+/// Identidade pública opaca, distinta para cada geração da mesma chave.
+pub fn lifecycle_id(key:&str,generation:u64)->String {
+    format!("{}:g:{generation}",crate::list::links::session_life(Some(key),None).unwrap_or_default())
+}
 impl OtherTarget {
+    pub fn lifecycle_id(&self)->String {lifecycle_id(&self.key,self.generation)}
     pub fn same_life(&self, other: &Self) -> bool {
         self.key == other.key && self.generation == other.generation && self.name == other.name
             && self.provider == other.provider && self.binding == other.binding
@@ -75,6 +81,9 @@ pub struct OtherOpening {
     pub pane_address: String,
     pub projection_dir: PathBuf,
 }
+impl OtherOpening {
+    pub fn lifecycle_id(&self)->String {lifecycle_id(&self.spec.key,self.binding.generation)}
+}
 #[derive(Clone, Debug)]
 pub enum OtherDiscoveryState { Ready(OtherTarget), Opening(OtherOpening) }
 pub type OtherDiscovery = Arc<dyn Fn(String) -> BoxFuture<'static, Option<Result<OtherDiscoveryState, RuntimeError>>> + Send + Sync>;
@@ -87,6 +96,7 @@ pub struct OtherPreviewContext<'a> {
     pub now: f64,
 }
 pub trait OtherPreviewSource: Send + Sync {
+    fn interested(&self, target: &OtherTarget) -> bool;
     fn update(&self, context: OtherPreviewContext<'_>) -> Result<Option<hangar_api::preview::PreviewEvent>, RuntimeError>;
     fn forget(&self, target: &OtherTarget);
 }
@@ -101,11 +111,16 @@ impl OtherFrame {
         Self {text:crate::terminal_input::unstyle(&styled,true),typed:Some(crate::terminal_input::unstyle(&styled,false)),styled:Some(styled)}
     }
 }
+#[derive(Clone, Debug)]
+pub struct OtherWriteGuard {
+    pub target: crate::interactions::InteractionTarget,
+    pub semantic: Value,
+}
 /// Fronteira de E/S: testes não substituem fila, interações nem regras do próprio runtime.
 pub trait OtherIo: Send + Sync {
     fn prove<'a>(&'a self, target: &'a OtherTarget) -> BoxFuture<'a, Result<bool, RuntimeError>>;
     fn capture<'a>(&'a self) -> BoxFuture<'a, Result<OtherFrame, RuntimeError>>;
-    fn write<'a>(&'a self, target: &'a OtherTarget, value: &'a str, literal: bool) -> BoxFuture<'a, Result<(), RuntimeError>>;
+    fn write<'a>(&'a self, target: &'a OtherTarget, value: &'a str, literal: bool, guard: Option<&'a OtherWriteGuard>) -> BoxFuture<'a, Result<(), RuntimeError>>;
     fn release<'a>(&'a self) -> BoxFuture<'a, ()>;
 }
 #[derive(Clone)]

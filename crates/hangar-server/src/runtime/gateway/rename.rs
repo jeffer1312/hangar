@@ -35,6 +35,7 @@ impl RuntimeRegistry {
         let (kind,state_path,projection_dir)=match &handle {
             EntryHandle::Terminal {target,..}=>(Kind::Terminal(Box::new(target.clone())),target.state_path.clone(),target.projection_dir.clone()),
             EntryHandle::CodexTerminal {..}=>return Ok(None),
+            EntryHandle::OtherTerminal {..}=>return Err(failure("other_terminal_rename_unavailable")),
             EntryHandle::Headless(_)=>{
                 let kind=if provider=="codex" {Kind::CodexHeadless} else {Kind::ClaudeHeadless};
                 (kind,super::super::codex_terminal::queue_files(&queue_dir,&key).0,queue_dir)
