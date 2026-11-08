@@ -128,8 +128,20 @@ fn kill_pid(pid: u32) {
 #[derive(Default)]
 struct Service {
     refuse_login: bool,
+    name_taken: bool,
+    /// Resposta do registro da máquina; `None` é sucesso.
+    machine_refusal: Option<StatusCode>,
     sessions: Mutex<Vec<Value>>,
+    accounts: Mutex<Vec<Value>>,
     machines: Mutex<Vec<(String, Value)>>,
+}
+
+async fn signup(State(service): State<Arc<Service>>, body: Bytes) -> (StatusCode, String) {
+    service.accounts.lock().unwrap().push(serde_json::from_slice(&body).unwrap());
+    if service.name_taken {
+        return (StatusCode::CONFLICT, json!({"detail": "conta já existe"}).to_string());
+    }
+    (StatusCode::CREATED, json!({"token": "conta-nova"}).to_string())
 }
 
 async fn session(State(service): State<Arc<Service>>, body: Bytes) -> (StatusCode, String) {
@@ -140,18 +152,26 @@ async fn session(State(service): State<Arc<Service>>, body: Bytes) -> (StatusCod
     (StatusCode::OK, json!({"token": "sessao-de-teste"}).to_string())
 }
 
-async fn register(State(service): State<Arc<Service>>, headers: HeaderMap, body: Bytes) -> String {
+async fn register(State(service): State<Arc<Service>>, headers: HeaderMap, body: Bytes) -> (StatusCode, String) {
     let bearer = headers[header::AUTHORIZATION].to_str().unwrap().to_owned();
     service.machines.lock().unwrap().push((bearer, serde_json::from_slice(&body).unwrap()));
+    if let Some(refusal) = service.machine_refusal {
+        return (refusal, json!({"detail": "recusado"}).to_string());
+    }
     let machine = linked();
-    json!({"machine_id": machine.machine_id, "machine_key": machine.machine_key, "host": machine.host,
+    (StatusCode::OK, json!({"machine_id": machine.machine_id, "machine_key": machine.machine_key, "host": machine.host,
         "guest_host": machine.guest_host, "preview_host": machine.preview_host, "frps_addr": machine.frps_addr,
-        "frps_token": machine.frps_token, "service_public_key": machine.service_public_key}).to_string()
+        "frps_token": machine.frps_token, "service_public_key": machine.service_public_key}).to_string())
 }
 
 async fn spawn_service(refuse_login: bool) -> (Arc<Service>, SocketAddr) {
-    let service = Arc::new(Service { refuse_login, ..Service::default() });
-    let app = axum::Router::new().route("/v1/sessions", post(session)).route("/v1/machines", post(register)).with_state(service.clone());
+    spawn_service_with(Service { refuse_login, ..Service::default() }).await
+}
+
+async fn spawn_service_with(service: Service) -> (Arc<Service>, SocketAddr) {
+    let service = Arc::new(service);
+    let app = axum::Router::new().route("/v1/sessions", post(session)).route("/v1/accounts", post(signup))
+        .route("/v1/machines", post(register)).with_state(service.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -427,7 +447,7 @@ async fn unreadable_state_reaches_status_and_a_new_link_keeps_the_old_file() {
     let (_, refusing) = spawn_service(true).await;
     let (_, accepting) = spawn_service(false).await;
     let request = |service: SocketAddr| LinkRequest { service_url: format!("http://{service}"), account: "acme".into(),
-        password: PASSWORD.into(), machine_name: "pc1".into() };
+        password: PASSWORD.into(), machine_name: "pc1".into(), create_account: false };
     let dir = tempfile::tempdir().unwrap();
     let dir = dir.path();
     let supervisor = alone(dir);
@@ -636,6 +656,59 @@ async fn repeated_crash_shows_up_in_error() {
     until("as quedas não apareceram", || supervisor.status().error.is_some_and(|error| error.contains("frpc caiu"))).await;
     assert!(!supervisor.status().enabled);
     supervisor.stop().await;
+}
+
+async fn link_creating(machine: &Machine, service: SocketAddr) -> reqwest::Response {
+    client().post(format!("http://{}/api/connect/link", machine.addr)).bearer_auth(OWNER)
+        .json(&json!({"service_url": format!("http://{service}"), "account": "acme", "password": PASSWORD,
+            "machine_name": "pc1", "create_account": true}))
+        .send().await.unwrap()
+}
+
+#[tokio::test]
+async fn link_can_create_the_account_first() {
+    let (service, address) = spawn_service(false).await;
+    let machine = machine().await;
+    let response = link_creating(&machine, address).await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(*service.accounts.lock().unwrap(), vec![json!({"name": "acme", "password": PASSWORD})]);
+    assert!(service.sessions.lock().unwrap().is_empty(), "conta nova não passa pelo login");
+    assert_eq!(*service.machines.lock().unwrap(), vec![("Bearer conta-nova".to_owned(), json!({"name": "pc1"}))]);
+    machine.supervisor.stop().await;
+}
+
+#[tokio::test]
+async fn link_creating_a_taken_name_says_so() {
+    let (service, address) = spawn_service_with(Service { name_taken: true, ..Service::default() }).await;
+    let machine = machine().await;
+    let response = link_creating(&machine, address).await;
+    assert_eq!(response.status(), 409);
+    let body: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap();
+    assert_eq!(body["detail"]["code"], "connect_account_taken", "{body}");
+    assert!(service.machines.lock().unwrap().is_empty());
+    assert!(!machine.dir.path().join("connect.json").exists());
+}
+
+async fn link_code(response: reqwest::Response) -> (u16, String) {
+    let status = response.status().as_u16();
+    let body: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap();
+    (status, body["detail"]["code"].as_str().unwrap_or_default().to_owned())
+}
+
+#[tokio::test]
+async fn a_machine_conflict_is_not_a_taken_account_name() {
+    let (_, address) = spawn_service_with(Service { machine_refusal: Some(StatusCode::CONFLICT), ..Service::default() }).await;
+    let machine = machine().await;
+    assert_eq!(link_code(link(&machine, address).await).await, (409, "connect_machine_conflict".to_owned()));
+}
+
+#[tokio::test]
+async fn account_created_but_machine_refused_says_to_sign_in() {
+    let (service, address) = spawn_service_with(Service { machine_refusal: Some(StatusCode::BAD_GATEWAY), ..Service::default() }).await;
+    let machine = machine().await;
+    let (_, code) = link_code(link_creating(&machine, address).await).await;
+    assert_eq!(code, "connect_account_created_link_failed", "a conta existe: tentar criar de novo daria nome já usado");
+    assert_eq!(service.accounts.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]

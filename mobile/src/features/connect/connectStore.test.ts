@@ -180,6 +180,31 @@ describe('conta do Connect', () => {
     expect(connect().loadingMachines).toBe(false);
   });
 
+  it('quem pediu a lista só ouve o fim quando a leitura mais nova acaba', async () => {
+    network();
+    await connect().signIn('acme', 'long-password');
+    await settle();
+    const gates: (() => void)[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (input: string) => {
+      if (new URL(input).pathname !== '/v1/machines') return json({});
+      await new Promise<void>((resolve) => gates.push(resolve));
+      return json([offline]);
+    }));
+
+    let pullDone = false;
+    const pull = connect().refreshMachines().then(() => { pullDone = true; });
+    await settle();
+    void connect().refreshMachines();
+    await settle();
+    gates[0]();
+    await settle();
+    expect(pullDone).toBe(false);
+    expect(connect().loadingMachines).toBe(true);
+    gates[1]();
+    await pull;
+    expect(connect().loadingMachines).toBe(false);
+  });
+
   it('troca de senha sem conta é erro, não sucesso', async () => {
     await expect(connect().changePassword('long-password', 'new-long-password')).rejects.toThrow(m.connect_session_ended());
   });

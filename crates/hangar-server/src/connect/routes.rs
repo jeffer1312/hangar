@@ -40,6 +40,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/api/connect/devices/{id}/approve", post(approve).options(preflight))
         .route("/api/connect/preview", get(preview_state).post(open_preview).delete(close_preview).options(preflight))
         .route("/api/connect/peers", get(peer_links).options(preflight))
+        .route("/api/connect/machines", get(account_list).options(preflight))
         .route("/api/connect/peers/{id}/link", post(link_peer).options(preflight))
 }
 
@@ -47,7 +48,7 @@ pub fn matches(method: &Method, path: &str) -> bool {
     let id = path.strip_prefix("/api/connect/devices/");
     let peer = path.strip_prefix("/api/connect/peers/").and_then(|rest| rest.strip_suffix("/link"));
     match method.as_str() {
-        "GET" => matches!(path, "/api/connect" | "/api/connect/devices" | "/api/connect/peers" | "/api/connect/preview"),
+        "GET" => matches!(path, "/api/connect" | "/api/connect/devices" | "/api/connect/peers" | "/api/connect/machines" | "/api/connect/preview"),
         "POST" => matches!(path, "/api/connect/link" | "/api/connect/redeem" | "/api/connect/redeem/status" | "/api/connect/devices/self" | "/api/connect/preview")
             || id.and_then(|rest| rest.strip_suffix("/approve")).is_some_and(|id| !id.is_empty() && !id.contains('/'))
             || peer.is_some_and(|id| !id.is_empty() && !id.contains('/')),
@@ -282,6 +283,39 @@ async fn peer_links(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         return with_cors(&headers, response);
     }
     reply(&headers, StatusCode::OK, json!(st.connect_supervisor.peer_links().list()))
+}
+
+/// As outras máquinas da conta, marcando as que já estão no `peers.json` desta (pelo endereço ou pelo nome).
+async fn account_list(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    let headers = req.headers().clone();
+    if let Err(response) = owner_gate(&st, peer, &req).await {
+        return with_cors(&headers, response);
+    }
+    let linked = match st.connect_supervisor.read_linked().await {
+        Ok(Some(linked)) => linked,
+        Ok(None) => return error(&headers, StatusCode::CONFLICT, "connect_not_linked", "esta máquina não está ligada ao Connect"),
+        Err(failure) => return error(&headers, failure.status, failure.code, &failure.msg),
+    };
+    let machines = match peers::account_machines(&linked).await {
+        Ok(machines) => machines,
+        Err(failure) => return error(&headers, failure.status, failure.code, &failure.msg),
+    };
+    let store = match crate::machine_peers::Service::from_state(&st) {
+        Ok(service) => service.store,
+        Err(failure) => return error(&headers, StatusCode::SERVICE_UNAVAILABLE, failure.code, &failure.msg),
+    };
+    // Ilegível não é "nenhuma adicionada": a tela mostra o erro e oferece tentar de novo.
+    let book = match store.read() {
+        Ok(book) => book,
+        Err(failure) => return error(&headers, StatusCode::INTERNAL_SERVER_ERROR, "peers_unreadable", &failure.msg),
+    };
+    let rows: Vec<Value> = machines.into_iter().map(|machine| {
+        let address = format!("https://{}", machine.host);
+        let added = (&book).into_iter().any(|(key, entry)| *key == machine.machine_id
+            || entry["base_url"].as_str().is_some_and(|url| url.trim_end_matches('/') == address));
+        json!({"machine_id": machine.machine_id, "name": machine.name, "host": machine.host, "online": machine.online, "added": added})
+    }).collect();
+    reply(&headers, StatusCode::OK, json!({"this": {"machine_id": linked.machine_id, "host": linked.host}, "machines": rows}))
 }
 
 /// Volta na hora com 202. Só a senha, como `link`: esta máquina emite uma credencial sem cartão dela, e

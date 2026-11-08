@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, AppState, View } from 'react-native';
+import { ActivityIndicator, Alert, AppState, Text, View } from 'react-native';
 import Constants from 'expo-constants';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { StyleSheet } from 'react-native-unistyles';
@@ -12,6 +12,7 @@ import { MachineGroup, MachineHelp, MachineRow } from '../machines/MachineRows';
 import { Field, MachineSheet, Notice, styles as machineStyles, useMachineAction } from '../machines/parts';
 import { ownServers, useServers } from '../../stores/servers';
 import { connectServers, needsEntry, sameMachine, useConnect } from './connectStore';
+import { ConnectMark } from './ConnectHero';
 import { haptic } from '../../ui/haptics';
 import * as m from '../../paraglide/messages';
 
@@ -52,22 +53,31 @@ export function ConnectMachines({ onDone }: { onDone: () => void }) {
   }, []));
   const entered = () => { if (mounted.current) onDone(); };
   const waiting = machines?.filter((machine) => entries[machine.machine_id]?.phase === 'waiting') ?? [];
+  const account = useConnect((s) => s.account?.name ?? '');
   return <>
+    <View style={[styles.header, { borderColor: c.border }]}>
+      <ConnectMark size={40} />
+      <View style={styles.headerText}>
+        <Text accessibilityRole="header" style={[styles.headerTitle, { color: c.text }]}>{m.connect_title()}</Text>
+        <Text style={[styles.headerSub, { color: c.muted }]}>{m.connect_signed_in_as({ name: account })}</Text>
+      </View>
+    </View>
     {waiting.map((machine) => <View key={machine.machine_id} style={styles.waiting}>
       <ActivityIndicator color={c.accent} />
       <View style={styles.waitingText}><Notice text={m.connect_waiting_notice({ name: machine.name })} /></View>
     </View>)}
-    {machines === null && !error ? <Notice text={m.comum_carregando()} /> : null}
+    <SectionCard icon="Laptop" title={m.connect_your_machines()} subtitle={m.connect_machines_pull()}>
+      {machines === null && !error ? <MachineRow title={loading ? m.mobile_machines_busy() : m.comum_carregando()} /> : null}
+      {machines?.length === 0 ? <MachineRow title={m.connect_machines_empty()} /> : null}
+      {machines?.map((machine) => <MachineItem key={machine.machine_id} machine={machine} onEntered={entered} onOpen={onDone} />)}
+    </SectionCard>
     <Notice text={error} error />
-    {machines?.length === 0 ? <InfoNotice text={m.connect_machines_empty()} /> : null}
-    {machines?.length ? <MachineGroup>
-      {machines.map((machine) => <MachineItem key={machine.machine_id} machine={machine} onEntered={entered} onOpen={onDone} />)}
+    {/* Puxar para atualizar não se vê: o erro traz o caminho à mostra. */}
+    {error ? <MachineGroup>
+      <MachineRow title={m.mobile_machines_retry()} action disabled={loading} onPress={() => { void useConnect.getState().refreshMachines(); }} />
     </MachineGroup> : null}
-    <MachineGroup>
-      <MachineRow title={loading ? m.mobile_machines_busy() : m.connect_refresh()} action disabled={loading} onPress={refresh} />
-    </MachineGroup>
     <ConnectRecovery servers={enabled} />
-    {withDevices.map((server) => <MachineDevices key={server.id} server={server} />)}
+    <AllDevices servers={withDevices} />
     <AccountRows />
   </>;
 }
@@ -88,7 +98,7 @@ function MachineItem({ machine, onEntered, onOpen }: { machine: ConnectMachine; 
   if (!machine.online) return <MachineRow title={title} value={m.mobile_machines_offline()} valueTone="error" description={entry?.error ?? refused} disabled />;
   if (entry?.phase === 'failed') return <MachineRow title={title} description={entry.error} value={m.mobile_machines_retry()} onPress={enter} />;
   if (refused) return <MachineRow title={title} description={refused} value={m.connect_reenter()} onPress={enter} />;
-  if (server) return <MachineRow title={title} value={m.connect_machine_added()} onPress={onOpen} />;
+  if (server) return <MachineRow title={title} value={m.connect_machine_added()} valueTone="success" onPress={onOpen} />;
   return <MachineRow title={title} value={m.login_entrar()} onPress={enter} />;
 }
 
@@ -116,35 +126,43 @@ export function ConnectRecovery({ servers }: { servers: Server[] }) {
   </>;
 }
 
-function MachineDevices({ server }: { server: Server }) {
-  const list = useConnect((s) => s.devices[server.id]);
+/** Os aparelhos de todas as máquinas num lugar só: pedidos esperando em cima, quem já entrou embaixo. */
+function AllDevices({ servers }: { servers: Server[] }) {
+  const devices = useConnect((s) => s.devices);
   const action = useMachineAction();
-  const answer = (id: string, approve: boolean) => {
+  if (!servers.length) return null;
+  const answer = (server: Server, id: string, approve: boolean) => {
     void action.run((signal) => useConnect.getState().answerDevice(server, id, approve, signal), () => {});
   };
-  const rows = list?.rows ?? [];
-  const pending = rows.filter((row) => row.status === 'pending');
-  const approved = rows.filter((row) => row.status === 'approved');
+  const rows = servers.flatMap((server) => (devices[server.id]?.rows ?? []).map((row) => ({ server, row })));
+  const pending = rows.filter(({ row }) => row.status === 'pending');
+  const approved = rows.filter(({ row }) => row.status === 'approved');
+  // "Nenhum aparelho" só com todas as listas na mão: uma ainda a caminho pode trazer algum.
+  const loading = servers.some((server) => !devices[server.id]);
+  // Uma linha por máquina que falhou: com lista antiga na tela, avisa que ela pode estar velha.
+  const failures = servers.filter((server) => devices[server.id]?.error)
+    .map((server) => `${server.label}: ${devices[server.id]?.error ?? ''}`);
   return <>
-    {pending.map((row) => <SectionCard key={row.device_id} icon="Smartphone" title={row.name}
+    {pending.map(({ server, row }) => <SectionCard key={`${server.id}:${row.device_id}`} icon="Smartphone" title={row.name}
       subtitle={m.connect_device_pending({ machine: server.label })}>
       <MachineRow title={m.connect_device_approve()} action disabled={action.busy}
         onPress={() => confirm(m.connect_device_approve_title({ name: row.name }), m.connect_device_approve_body({ machine: server.label }),
-          m.connect_device_approve(), () => answer(row.device_id, true))} />
-      <MachineRow title={m.connect_device_deny()} danger action disabled={action.busy} onPress={() => answer(row.device_id, false)} />
+          m.connect_device_approve(), () => answer(server, row.device_id, true))} />
+      <MachineRow title={m.connect_device_deny()} danger action disabled={action.busy} onPress={() => answer(server, row.device_id, false)} />
     </SectionCard>)}
-    <SectionCard icon="Smartphone" title={m.connect_devices_title({ machine: server.label })}>
-      {!list ? <MachineRow title={m.comum_carregando()} /> : null}
-      {list && !list.rows ? <Notice text={list.error} error /> : null}
-      {list?.rows && !approved.length ? <MachineRow title={m.connect_devices_empty()} /> : null}
-      {approved.map((row) => (row.device_id === server.deviceId
-        ? <MachineRow key={row.device_id} title={Constants.deviceName || row.name} value={m.connect_device_this()} />
-        : <MachineRow key={row.device_id} title={row.name} value={m.connect_device_revoke()} disabled={action.busy}
+    <SectionCard icon="Smartphone" title={m.connect_devices_all()}>
+      {loading ? <MachineRow title={m.comum_carregando()} /> : null}
+      {!loading && !approved.length && !failures.length ? <MachineRow title={m.connect_devices_empty()} /> : null}
+      {approved.map(({ server, row }) => (row.device_id === server.deviceId
+        ? <MachineRow key={`${server.id}:${row.device_id}`} title={Constants.deviceName || row.name}
+          description={m.connect_device_on({ machine: server.label })} value={m.connect_device_this()} />
+        : <MachineRow key={`${server.id}:${row.device_id}`} title={row.name} description={m.connect_device_on({ machine: server.label })}
+          value={m.connect_device_revoke()} disabled={action.busy}
           onPress={() => confirm(m.connect_device_revoke_title({ name: row.name }), m.connect_device_revoke_body({ machine: server.label }),
-            m.connect_device_revoke(), () => answer(row.device_id, false), true)} />))}
+            m.connect_device_revoke(), () => answer(server, row.device_id, false), true)} />))}
     </SectionCard>
-    {/* Sem lista o erro já está no cartão; com lista antiga na tela, ele avisa que ela pode estar velha. */}
-    <Notice text={list?.rows ? list.error : ''} error /><Notice text={action.error} error />
+    {failures.map((text) => <Notice key={text} text={text} error />)}
+    <Notice text={action.error} error />
     <MachineHelp>{m.connect_devices_help()}</MachineHelp>
   </>;
 }
@@ -198,6 +216,10 @@ function PasswordSheet({ onClose }: { onClose: () => void }) {
 }
 
 const styles = StyleSheet.create((theme) => ({
+  header: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[3], padding: theme.base.space[4], borderRadius: theme.base.radius.md, borderWidth: 1 },
+  headerText: { flex: 1, minWidth: 0, gap: theme.base.space[0.5] },
+  headerTitle: { fontSize: theme.base.text.lg, fontWeight: theme.base.weight.semibold },
+  headerSub: { fontSize: theme.base.text.sm },
   waiting: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[3], paddingHorizontal: theme.base.space[4] },
   waitingText: { flex: 1, minWidth: 0 },
 }));
