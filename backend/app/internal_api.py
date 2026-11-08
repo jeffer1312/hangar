@@ -4,7 +4,6 @@ import asyncio
 import secrets
 import json
 import logging
-import re
 import time
 from pathlib import Path
 
@@ -110,30 +109,6 @@ async def account_prepare(request: Request):
 
 _LIST_FACTS_MAX = 8 << 20
 _list_facts_invalid_at = 0.0
-# Os do envio e os da opção levam o nome que o Python já usava, para o diário não ter dois nomes por falha.
-_DIAG_EVENT = re.compile(r"rust\.[a-z_]{1,48}|runtime\.(?:send_failed|send_uncertain|command_deferred)|opcao\.(?:nao_convergiu|envio_falhou)")
-_DIAG_WARNING = {"runtime.send_uncertain", "runtime.command_deferred", "rust.groups_sweep_failed", "rust.groups_sweep_recovered"}
-# `:` e maiúscula: o Rust anexa o detalhe ao código (`list_facts_status:500`, `…:sessions:Eof`).
-_DIAG_CODE = re.compile(r"[A-Za-z0-9_:]{1,64}")
-
-
-@router.post("/diag")
-async def rust_diag(request: Request) -> dict:
-    """Falha que o Rust atendeu sozinho (histórico, eventos, Git): o log dele não entra no diário."""
-    raw = await request.body()
-    try:
-        body = json.loads(raw) if len(raw) <= 8192 else None
-        if (not isinstance(body, dict) or set(body) != {"evento", "sessao", "codigo", "motivo"}
-                or not all(isinstance(v, str) for v in body.values())
-                or not _DIAG_EVENT.fullmatch(body["evento"]) or not _DIAG_CODE.fullmatch(body["codigo"])
-                or len(body["sessao"]) > 128 or len(body["motivo"]) > 300):
-            raise ValueError("diário inválido")
-    except (ValueError, RecursionError):
-        raise HTTPException(400) from None
-    diag.registrar(body["evento"], "aviso" if body["evento"] in _DIAG_WARNING else "erro", sessao=body["sessao"], codigo=body["codigo"], detalhe=body["motivo"])
-    return {"ok": True}
-
-
 @router.post("/list/facts")
 async def list_facts(request: Request) -> dict:
     """Estado das linhas Pi/omp/Kimi para o Rust (`list/facts.rs`), com o pid do pane das Pi/omp."""

@@ -132,7 +132,7 @@ pub enum Effect {
     StateChanged,
     /// Interface dos mods (superfície remota): quadro fora do diário, publicação, aviso e resposta aos apps.
     Surface { effect: crate::mods::model::SurfaceEffect },
-    /// Linha no diário exportável (`/internal/diag`), uma por minuto por código.
+    /// Linha no diário local exportável, uma por minuto por código.
     Diag { event: DiagEvent, code: String },
     Stop { reason: String },
     /// O processo da sessão sobe de novo na mesma conversa (reiniciar, trocar o sandbox). Quem sobe é
