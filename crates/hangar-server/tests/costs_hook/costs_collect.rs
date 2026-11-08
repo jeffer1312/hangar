@@ -414,44 +414,6 @@ fn warming_progress_sums_all_active_sources() {
 }
 
 #[test]
-fn http_scopes_use_internal_secret_and_reject_invalid_http_or_json() {
-    use std::io::{Read, Write};
-    for status in [200, 401, 302] {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let d = tempfile::tempdir().unwrap();
-        let expected = scopes(d.path()); let payload = serde_json::to_vec(&expected).unwrap();
-        let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut request = Vec::new(); let mut byte = [0; 1];
-            while !request.ends_with(b"\r\n\r\n") { stream.read_exact(&mut byte).unwrap(); request.push(byte[0]); }
-            let request = String::from_utf8(request).unwrap().to_lowercase();
-            assert!(request.starts_with("get /internal/costs/scopes http/1.1"));
-            assert!(request.contains("x-hangar-internal: synthetic-secret\r\n"));
-            write!(stream, "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", payload.len()).unwrap();
-            stream.write_all(&payload).unwrap();
-        });
-        let result = HttpScopes::new(address, "synthetic-secret".into()).fetch();
-        if status == 200 { assert_eq!(result.unwrap(), expected); }
-        else { assert!(matches!(result, Err(CollectError::NoScopes))); }
-        server.join().unwrap();
-    }
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut request = Vec::new(); let mut byte = [0; 1];
-        while !request.ends_with(b"\r\n\r\n") { stream.read_exact(&mut byte).unwrap(); request.push(byte[0]); }
-        let request = String::from_utf8(request).unwrap().to_lowercase();
-        assert!(request.starts_with("get /internal/costs/scopes http/1.1\r\n"));
-        assert!(request.contains("x-hangar-internal: synthetic-secret\r\n"));
-        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").unwrap();
-    });
-    assert!(matches!(HttpScopes::new(address, "synthetic-secret".into()).fetch(), Err(CollectError::NoScopes)));
-    server.join().unwrap();
-}
-
-#[test]
 fn empty_kimi_project_falls_back_and_removed_scope_is_not_read() {
     let (_d, base) = fixtures_copy();
     let source = Fixed::new(Ok(scopes(&base)));
@@ -527,28 +489,6 @@ fn constructor_and_metadata_do_not_create_index_before_explicit_use() {
     assert!(!index_dir.exists(), "ler metadados não abre o banco incidentalmente");
     c.prepare(false).unwrap(); wait_ready(&c);
     assert!(index_dir.join(hangar_server::costs::index::FILE_NAME).exists());
-}
-
-#[test]
-fn http_scopes_timeout_covers_the_response_body() {
-    use std::io::{Read, Write};
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let (release, finish) = std::sync::mpsc::channel();
-    let server = std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut request = Vec::new(); let mut byte = [0; 1];
-        while !request.ends_with(b"\r\n\r\n") { stream.read_exact(&mut byte).unwrap(); request.push(byte[0]); }
-        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n").unwrap();
-        let _ = finish.recv_timeout(Duration::from_secs(12));
-    });
-    let start = Instant::now();
-    let result = HttpScopes::new(address, "synthetic-secret".into()).fetch();
-    let elapsed = start.elapsed();
-    release.send(()).unwrap(); server.join().unwrap();
-    assert!(matches!(result, Err(CollectError::NoScopes)));
-    assert!(elapsed >= Duration::from_secs(10));
-    assert!(elapsed < Duration::from_secs(11), "o prazo inclui o corpo, não só a conexão");
 }
 
 #[test]

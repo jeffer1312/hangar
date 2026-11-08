@@ -114,14 +114,28 @@ fn last_reply_cache_by_transcript_and_mtime() {
     assert!(cache.decorate(std::slice::from_mut(&mut row), |_| None).is_empty());
     assert_eq!(row.last_reply.as_deref(), Some("nova"));
 
-    // Trabalhando: sem resposta, e a linha de provedor que o Rust não lê fica como veio.
+    // Trabalhando: sem resposta.
     row.state = "working".into();
-    let mut pi: SessionRow = serde_json::from_value(serde_json::json!({
-        "name": "p", "provider": "pi", "jsonl": "/x", "last_reply": "do python"})).unwrap();
     assert!(cache.decorate(std::slice::from_mut(&mut row), |_| None).is_empty());
-    assert!(cache.decorate(std::slice::from_mut(&mut pi), |_| None).is_empty());
     assert_eq!((row.last_reply, row.last_reply_at), (None, None));
-    assert_eq!(pi.last_reply.as_deref(), Some("do python"));
+
+    let pi_jsonl = dir.path().join("pi.jsonl");
+    let pi_line = |text: &str| serde_json::json!({"type":"message","id":"reply-pi",
+        "message":{"role":"assistant","timestamp":1_794_175_452_544u64,
+            "content":[{"type":"text","text":text}]}}).to_string() + "\n";
+    std::fs::write(&pi_jsonl, pi_line("Resposta do Pi")).unwrap();
+    let mut pi: SessionRow = serde_json::from_value(serde_json::json!({
+        "name":"p","provider":"pi","jsonl":pi_jsonl,"last_activity":20.0})).unwrap();
+    assert!(cache.decorate(std::slice::from_mut(&mut pi), |_| None).is_empty());
+    assert_eq!(pi.last_reply.as_deref(), Some("Resposta do Pi"));
+    assert_eq!(pi.last_reply_at, Some(1_794_175_452.544));
+    std::fs::write(&pi_jsonl, pi_line("Nova resposta do Pi")).unwrap();
+    pi.last_activity = Some(20.0);
+    assert!(cache.decorate(std::slice::from_mut(&mut pi), |_| None).is_empty());
+    assert_eq!(pi.last_reply.as_deref(), Some("Resposta do Pi"));
+    pi.last_activity = Some(21.0);
+    assert!(cache.decorate(std::slice::from_mut(&mut pi), |_| None).is_empty());
+    assert_eq!(pi.last_reply.as_deref(), Some("Nova resposta do Pi"));
 }
 
 /// O transcript tocado sem conversa nova, com aviso de sistema no fim: o tempo da sessão parada não anda.

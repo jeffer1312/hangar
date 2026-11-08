@@ -90,6 +90,7 @@ struct Io {
     captures: AtomicUsize,
     times: Mutex<Vec<tokio::time::Instant>>,
     captured: tokio::sync::Notify,
+    pane: Mutex<Option<String>>,
 }
 impl Io {
     fn live() -> Arc<Self> {
@@ -109,7 +110,8 @@ impl OtherIo for Io {
             self.times.lock().unwrap().push(tokio::time::Instant::now());
             self.captured.notify_one();
             Ok(OtherFrame::from_styled(
-                "────────────────────────────────\n\n────────────────────────────────\n".into(),
+                self.pane.lock().unwrap().clone().unwrap_or_else(||
+                    "────────────────────────────────\n\n────────────────────────────────\n".into()),
             ))
         })
     }
@@ -127,6 +129,62 @@ impl OtherIo for Io {
     }
     fn release<'a>(&'a self) -> BoxFuture<'a, ()> {
         Box::pin(async {})
+    }
+}
+
+#[tokio::test]
+async fn other_lifecycle_kimi_approval_requires_both_wire_and_visible_panel() {
+    let panel = "  ▶ Ready to build with this plan?\n\n  ▶ 1. Approve\n    2. Reject\n    3. Revise\n\n  ↑/↓ select · 1/2/3 choose · ↵ confirm\n";
+    for (tool, display, visible, resolved, missing, expected_state, question, choices) in [
+        ("ExitPlanMode", json!({"kind":"plan_review","plan":"# plano"}), true, false, false,
+            "awaiting_input", Some("Ready to build with this plan?"), json!(["Approve","Reject","Revise"])),
+        ("Bash", json!({"kind":"command","command":"ls"}), true, false, false,
+            "awaiting_input", Some("Run this command?\n`ls`"), json!(["Approve once","Approve for this session","Reject","Reject with feedback"])),
+        ("ExitPlanMode", json!({"kind":"plan_review","plan":"# plano"}), false, false, false,
+            "working", None, Value::Null),
+        ("ExitPlanMode", json!({"kind":"plan_review","plan":"# plano"}), true, true, false,
+            "working", None, Value::Null),
+        ("ExitPlanMode", json!({"kind":"plan_review","plan":"# plano"}), true, false, true,
+            "idle", None, Value::Null),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let mut target = target(root.path());
+        target.provider = hangar_transcript::Provider::Kimi;
+        let mut lines = vec![json!({"type":"turn.prompt","time":1_786_454_000_000u64}),
+            json!({"type":"interaction.request","agentId":"main","id":"approval_1","kind":"approval",
+                "toolCallId":"tool_x","request":{"turnId":8,"toolCallId":"tool_x","toolName":tool,
+                    "action":"","display":display},"time":1_786_454_000_000u64})];
+        if resolved { lines.push(json!({"type":"interaction.resolved","id":"approval_1",
+            "response":{"decision":"approved","selectedLabel":"Approve"},"time":1_786_454_010_000u64})); }
+        if !missing {
+            std::fs::write(&target.transcript, lines.into_iter().map(|line|line.to_string()+"\n").collect::<String>()).unwrap();
+        }
+        let io = Io::live();
+        *io.pane.lock().unwrap() = Some(if visible { panel.into() } else { "composer vazio, sem painel\n".into() });
+        let interactions = Arc::new(hangar_server::interactions::InteractionStore::default());
+        let mut options = OtherOptions::new(hangar_server::terminal_control::TerminalPool::new(),
+            hangar_server::provider_models::inbox::Store::new(),
+            Arc::new(hangar_server::list::procs::SystemProcs::default()), interactions.clone());
+        options.io_override = Some(io.clone());
+        let (live, mut seen) = tokio::sync::watch::channel(None);
+        let handle = OtherHandle::spawn(target.clone(), open_queue(&target).await.unwrap(), options, live);
+        let published = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Some(value) = seen.borrow().clone() { break value; }
+                seen.changed().await.unwrap();
+            }
+        }).await.unwrap();
+        let state = &published.public_state;
+        assert_eq!(state["state"], expected_state, "{tool}, visible={visible}, resolved={resolved}");
+        assert_eq!(state["question"], question.map(Value::from).unwrap_or(Value::Null));
+        assert_eq!(state["options"], choices);
+        if question.is_some() {
+            let id = state["interaction_id"].as_str().unwrap();
+            assert!(interactions.expected(&hangar_server::interactions::InteractionBinding {
+                key:target.key.clone(),generation:target.generation,conversation:target.binding.conversation.clone()},Some(id)).is_ok());
+        }
+        assert!(io.writes.lock().unwrap().is_empty());
+        handle.stop().await.unwrap();
     }
 }
 fn registry(
