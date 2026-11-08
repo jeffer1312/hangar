@@ -624,6 +624,11 @@ impl ClaudeEngine {
     }
 
     pub fn command(&mut self,command:RuntimeCommand,clock:ClockSample) -> Result<Vec<Effect>,RuntimeError> {
+        // O `/compact` da sessão parada reconfere aqui, na mesma vez do ator: o que chegou depois da vista cancela.
+        if command.kind == OperationKind::Compact && let Some(after) = command.payload["idle_after_s"].as_f64()
+            && (self.park_idle(clock.monotonic_s).is_none_or(|idle|idle < after) || self.idle_compact_tokens().is_none()) {
+            return Err(RuntimeError::new("idle_compact_stale","a sessão saiu da parada antes do /compact"));
+        }
         self.clock = clock;
         self.active_at = clock.monotonic_s;
         if !self.alive {

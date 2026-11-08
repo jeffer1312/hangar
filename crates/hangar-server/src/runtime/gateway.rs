@@ -924,27 +924,42 @@ impl RuntimeRegistry {
             .map(|entry|(entry.name.clone(),entry.handle.clone())).collect();
         if candidates.is_empty() {return;}
         let home=self.policy.codex_environment().home;
-        let Ok(Some(settings))=tokio::task::spawn_blocking(move||crate::config_sync::runtime::main_claude_settings(&home)).await else {return};
+        static SETTINGS_UNREADABLE:std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        let Ok(Some(settings))=tokio::task::spawn_blocking(move||crate::config_sync::runtime::main_claude_settings(&home)).await else {
+            if !SETTINGS_UNREADABLE.swap(true,std::sync::atomic::Ordering::Relaxed) {
+                tracing::warn!("~/.claude/settings.json ilegível: a compactação da sessão parada espera ele voltar");
+            }
+            return;
+        };
+        SETTINGS_UNREADABLE.store(false,std::sync::atomic::Ordering::Relaxed);
         let Some(min_tokens)=crate::config_sync::runtime::idle_compaction(&settings) else {return};
         for (name,handle) in candidates {
-            let Ok(view)=handle.view().await else {continue};
+            let Ok(view)=handle.view().await else {
+                tracing::debug!(session=%name,"sem a vista do motor: a compactação da sessão parada fica para a próxima rodada");
+                continue;
+            };
             let idle=view["park_idle_s"].as_f64().unwrap_or(0.0);
             let Some(tokens)=view["idle_compact_tokens"].as_u64() else {continue};
             if idle<after.as_secs_f64() || idle>=PARK_AFTER.as_secs_f64() || view["deliverable"]!=true || view["lifecycle_pending"]==true || tokens<min_tokens {continue;}
             let command=RuntimeCommand { operation_id:format!("idle-compact:{}:{}",std::process::id(),CALLS.fetch_add(1,std::sync::atomic::Ordering::Relaxed)),
-                kind:OperationKind::Compact,payload:json!({}) };
+                kind:OperationKind::Compact,payload:json!({"idle_after_s":after.as_secs_f64()}) };
             let diary=crate::diag::diary_dir_in(&self.policy.codex_environment());
             let diag=self.diag.clone();
             tokio::spawn(async move {
                 let result=handle.command(command).await.and_then(|reply|match reply.disposition {
-                    Disposition::Accepted | Disposition::Deferred=>Ok(()),
+                    Disposition::Accepted=>Ok(true),
+                    // Não escrito: a sessão segue parada e a próxima rodada tenta de novo.
+                    Disposition::Deferred=>Ok(false),
                     _=>Err(RuntimeError::new("idle_compact_rejected","o Claude recusou o /compact")),
                 });
                 match result {
-                    Ok(())=>{
-                        tracing::info!(session=%name,tokens,idle_s=idle as u64,"sessão sem terminal parada compactada antes do cache vencer");
+                    Ok(true)=>{
+                        tracing::info!(session=%name,tokens,idle_s=idle as u64,"/compact enviado à sessão sem terminal parada antes do cache vencer");
                         crate::diag::record(diary,vec![json!({"evento":"sessao.compactada_parada","nivel":"ok","sessao":name,"provider":"claude","tokens":tokens,"parada_s":idle as u64})],"compactacao_parada");
                     }
+                    Ok(false)=>tracing::debug!(session=%name,"/compact da sessão parada adiado"),
+                    // A pessoa voltou à conversa entre a vista e o comando: não há o que compactar.
+                    Err(error) if error.code=="idle_compact_stale"=>tracing::debug!(session=%name,"a sessão saiu da parada antes do /compact"),
                     Err(error)=>{
                         tracing::warn!(session=%name,code=%error.code,"a sessão parada não foi compactada");
                         diag.report("runtime.idle_compact_failed",&name,&error.code,"a sessão sem terminal parada não foi compactada antes do cache vencer");
