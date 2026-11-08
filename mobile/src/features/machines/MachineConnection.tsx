@@ -88,6 +88,8 @@ function MachineDiscovery({ server }: { server: Server }) {
       if (result.status === 'rejected') failures.push(`${searches[index].name}: ${reason(result.reason)}`);
       else {
         names.add(searches[index].name);
+        const gap = result.value[0]?.connect_error;
+        if (gap) failures.push(`${searches[index].name}: ${gap}`);
         result.value.forEach((machine) => {
           const hosts = new Set([new URL(machine.base_url).hostname, ...machine.hosts ?? []].map((host) => host.toLowerCase().replace(/\.$/, '')));
           const exists = [...machines.values()].some((saved) => [new URL(saved.base_url).hostname, ...saved.hosts ?? []]

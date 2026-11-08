@@ -2,8 +2,11 @@
 #![deny(unsafe_code)]
 
 pub mod account_env;
+pub mod auth;
 pub mod clock;
+pub mod config;
 pub mod costs_failure;
+pub mod credentials;
 pub mod display_env;
 pub mod fs;
 pub mod http;
@@ -14,8 +17,13 @@ pub mod http_cors;
 pub mod http_route_response;
 pub mod ids;
 pub mod json_envelope;
+pub mod log_rotate;
 pub mod net;
 pub mod orq_codec;
+// Descritor de segurança do Windows: chamadas de `windows-sys`.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+pub mod private_acl;
 pub mod process;
 pub mod pycompat;
 pub mod query;

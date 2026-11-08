@@ -277,7 +277,15 @@ async fn fake_python(State(f): State<Arc<Fake>>, mut req: Request) -> Response {
         return Response::builder().status(code).header("content-type", "application/json").body(Body::from(body.to_string())).unwrap();
     }
     match path.as_str() {
+        // O `require_loopback` do Python: só o cliente da própria máquina.
+        "/api/desktop/palette" if req.headers().get("x-forwarded-for").is_none_or(|ip| ip != "127.0.0.1") =>
+            Response::builder().status(403).body(Body::from(r#"{"detail":{"code":"erro_so_loopback"}}"#)).unwrap(),
         "/api/redirect" => Response::builder().status(302).header("location", "/api/outro").body(Body::empty()).unwrap(),
+        // O `redirect_slashes` do Starlette: a query volta como veio.
+        "/api/redirect-query" => {
+            let location = format!("/api/outro?{}", req.uri().query().unwrap_or_default());
+            Response::builder().status(307).header("location", location).body(Body::empty()).unwrap()
+        }
         "/api/probe" => status(StatusCode::UNAUTHORIZED),
         "/api/limited" => status(StatusCode::TOO_MANY_REQUESTS),
         "/api/stream" => {

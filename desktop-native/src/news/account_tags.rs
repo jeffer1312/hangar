@@ -1,7 +1,7 @@
 //! `etiquetas-maquina-conta`: a aba mostra na borda de cima a máquina (quando é outra) e a conta, e o anel de contexto
 //! em volta do agente.
 
-use std::{cell::Cell, time::{Duration, Instant}};
+use std::time::Instant;
 use gpui_kit::{prelude::FluentBuilder, *};
 use crate::{app::{self, chrome, PlateMark, PlateSegment}, i18n::tr_shared, theme};
 
@@ -30,22 +30,7 @@ fn until_next_step(t: f32) -> f32 {
     ring.chain([PLATE_LOCAL, PLATE_REMOTE, HIDE, CYCLE]).filter(|b| *b > t).fold(CYCLE, f32::min) - t
 }
 
-thread_local! {
-    /// O redesenho já marcado: cada render só marca outro se o dele cair antes.
-    static NEXT_REPAINT: Cell<Option<Instant>> = const { Cell::new(None) };
-}
-
-/// Redesenha a janela no próximo degrau. Só é marcado enquanto a animação é desenhada: fechou o modal, para.
-fn schedule_repaint(t: f32, window: &mut Window, cx: &mut App) {
-    // Margem para o timer não acordar um pouco antes do degrau e desenhar o quadro velho.
-    let at = Instant::now() + Duration::from_secs_f32(until_next_step(t)) + Duration::from_millis(5);
-    if NEXT_REPAINT.get().is_some_and(|next| next > Instant::now() && next <= at) { return; }
-    NEXT_REPAINT.set(Some(at));
-    window.spawn(cx, async move |cx| {
-        cx.background_executor().timer(at.saturating_duration_since(Instant::now())).await;
-        let _ = cx.update(|window, _| window.refresh());
-    }).detach();
-}
+fn schedule_repaint(t: f32, window: &mut Window, cx: &mut App) { super::repaint_in(until_next_step(t), window, cx) }
 
 /// Abaixo desta largura (o cartão deitado do "Atualizar?") as duas abas não cabem lado a lado: vão uma sobre a outra.
 const COMPACT_BELOW: f32 = 240.;

@@ -54,20 +54,31 @@ impl Gate {
 /// O que o handler de WebSocket precisa para o vigia; o porteiro põe nas extensões.
 #[derive(Clone)]
 pub struct Watcher {
-    share: Arc<ShareState>,
-    token: String,
-    session: Option<String>,
+    source: Source,
     every: Duration,
 }
 
+#[derive(Clone)]
+enum Source {
+    Guest { share: Arc<ShareState>, token: String, session: Option<String> },
+    Device { store: Arc<crate::connect::devices::Store>, id: String },
+}
+
 impl Watcher {
+    pub fn device(store: Arc<crate::connect::devices::Store>, id: String) -> Self {
+        Self { source: Source::Device { store, id }, every: WATCH_EVERY }
+    }
+
     /// Resolve só num fim de verdade: "não sei" (troca de modo, tmux mudo) mantém aberto.
     pub async fn until_ended(&self) {
         loop {
             tokio::time::sleep(self.every).await;
-            let ended = match self.share.store.lookup_token(&self.token) {
-                None => true,
-                Some(guest) => verdict(&guest, self.session.as_deref(), &self.share.lives).await == Verdict::Ended,
+            let ended = match &self.source {
+                Source::Guest { share, token, session } => match share.store.lookup_token(token) {
+                    None => true,
+                    Some(guest) => verdict(&guest, session.as_deref(), &share.lives).await == Verdict::Ended,
+                },
+                Source::Device { store, id } => !store.is_active(id),
             };
             if ended {
                 return;
@@ -193,7 +204,7 @@ pub async fn guard(State(gate): State<Arc<Gate>>, ConnectInfo(conn): ConnectInfo
     }
     // Stream e WebSocket passam pelo porteiro uma vez só: sem o vigia, revogar não derrubaria
     // um terminal ou uma lista já abertos.
-    let watcher = Watcher { share: gate.share.clone(), token, session, every: gate.watch_every };
+    let watcher = Watcher { source: Source::Guest { share: gate.share.clone(), token, session }, every: gate.watch_every };
     if websocket {
         req.extensions_mut().insert(watcher);
         return next.run(req).await;

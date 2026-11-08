@@ -9,6 +9,7 @@ import { createEventSource } from './sse';
 import { installDemoFetch, isDemoUrl, openDemoEventSource } from './demo';
 import { iniciarDiag } from './diag';
 import { deviceIdentity, deviceReady, loadDeviceId } from './deviceIdentity';
+import { secureRandom } from './secureRandom';
 import { toast } from '../ui/Toast';
 
 export function configureCore() {
@@ -45,6 +46,7 @@ export function configureCore() {
     createEventSource: (url, opts) => (isDemoUrl(url) ? openDemoEventSource(url) : createEventSource(url, opts)),
     deviceIdentity,
     deviceReady,
+    secureRandom,
   });
   void loadDeviceId();
   setPairNotice((text) => toast.aviso(text));

@@ -1573,13 +1573,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-connect"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.23.1",
+ "flate2",
+ "form_urlencoded",
+ "futures-util",
+ "hangar-core",
+ "hyper",
+ "hyper-util",
+ "libc",
+ "memchr",
+ "reqwest",
+ "ring",
+ "serde",
+ "serde_json",
+ "subtle",
+ "sysinfo",
+ "tar",
+ "tokio",
+ "tracing",
+ "zip",
+]
+
+[[package]]
 name = "hangar-core"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64 0.23.1",
  "chrono",
  "flate2",
+ "form_urlencoded",
  "futures-util",
+ "hangar-auth",
  "http-body-util",
  "hyper-util",
  "libc",
@@ -1592,6 +1621,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1_smol",
+ "subtle",
  "tempfile",
  "tokio",
  "tracing",
@@ -1656,6 +1686,7 @@ dependencies = [
  "hangar-api",
  "hangar-auth",
  "hangar-codex",
+ "hangar-connect",
  "hangar-core",
  "hangar-omp-sync",
  "hangar-package",
@@ -1710,6 +1741,7 @@ dependencies = [
  "windows-sys 0.61.2",
  "zbus",
  "zeroize",
+ "zip",
 ]
 
 [[package]]

@@ -1,0 +1,33 @@
+[package]
+name = "hangar-connect"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Mesmas features do hangar-core e do hangar-server nas dependências compartilhadas: com features
+# diferentes cada compilação guarda a sua cópia da dependência no target.
+[dependencies]
+hangar-core.workspace = true
+axum = { workspace = true }
+base64 = "=0.23.1"
+flate2 = { workspace = true }
+form_urlencoded = { workspace = true }
+futures-util = { workspace = true }
+# Repasse da prévia ao projeto: HTTP e WebSocket pelo mesmo caminho (`preview.rs`).
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+memchr = "=2.8.3"
+reqwest = { workspace = true, features = ["rustls", "multipart", "json"] }
+ring.workspace = true
+serde = { workspace = true, features = ["alloc"] }
+serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
+subtle = { workspace = true }
+sysinfo = { version = "=0.39.6", default-features = false, features = ["system"] }
+tar = { version = "=0.4.46", default-features = false }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "time", "fs", "signal"] }
+tracing = { workspace = true }
+# Pacotes do frp e do Caddy no Windows (`binaries.rs`); versão e features do isideload.
+zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true

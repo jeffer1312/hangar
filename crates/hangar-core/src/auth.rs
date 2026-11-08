@@ -10,8 +10,11 @@ use subtle::ConstantTimeEq;
 pub use hangar_auth::{AuthAttempt, AuthDecision, AuthError, Profile, ReceiptContext};
 #[cfg(test)]
 const MAX_FAILS: usize = 8;
-const COOKIE: &str = "cp_token";
-const COOKIE_HOST: &str = "__Host-cp_token";
+/// O cliente que a entrada do Connect (8768) põe no lugar do real: nada que chega por ela é local, e
+/// só conta como aparelho do dono com credencial de aparelho.
+pub const CONNECT_PEER: &str = "192.0.2.1";
+pub const COOKIE: &str = "cp_token";
+pub const COOKIE_HOST: &str = "__Host-cp_token";
 
 pub fn is_loopback(ip: &str) -> bool {
     matches!(ip, "127.0.0.1" | "::1" | "localhost")
@@ -33,6 +36,7 @@ enum Backend {
 impl Auth {
     pub fn new(token: &str) -> Auth {
         Auth { token: token.as_bytes().to_vec(), backend: Backend::Local(Arc::default()),
+            // estavel: código de produção; o bloqueio por tentativas conta no relógio real, os testes passam instantes explícitos.
             clock: (Instant::now(), SystemTime::now().duration_since(UNIX_EPOCH).expect("relógio Unix").as_secs_f64()) }
     }
 
@@ -64,6 +68,7 @@ impl Auth {
     }
     fn operation_time(&self) -> Result<f64, AuthError> {
         if self.shared() {
+            // estavel: código de produção; o limitador compartilhado entre processos só tem o relógio de parede em comum.
             SystemTime::now().duration_since(UNIX_EPOCH).map(|t| t.as_secs_f64()).map_err(|_| AuthError::StoreUnavailable)
         } else { Ok(self.wall(Instant::now())) }
     }
@@ -105,6 +110,14 @@ impl Auth {
         })?).await.map_err(|_| AuthError::Panic)??;
         if decision.became_blocked != 0 { tracing::warn!(ip=%origin, "token errado 8 vezes em 30 s; origem bloqueada"); }
         Ok(())
+    }
+    /// Só escreve no contador quando a origem está bloqueada.
+    pub async fn clear_if_blocked(&self, ip: &str) -> Result<(), AuthError> {
+        let auth = self.clone(); let ip = ip.to_owned();
+        tokio::task::spawn_blocking(move || auth.transaction(|origins| {
+            if origins.is_blocked(&ip, auth.operation_time()?) { origins.clear_origin(&ip); }
+            Ok::<_, AuthError>(())
+        })?).await.map_err(|_| AuthError::Panic)?
     }
     pub async fn mark_blocked_async(&self, ip: &str) -> Result<(), AuthError> {
         let auth = self.clone(); let ip = ip.to_owned();
@@ -162,7 +175,7 @@ impl Auth {
 }
 
 pub fn unavailable(error: AuthError) -> axum::response::Response {
-    crate::session_write::json_response(axum::http::StatusCode::SERVICE_UNAVAILABLE,
+    crate::http::json_response(axum::http::StatusCode::SERVICE_UNAVAILABLE,
         serde_json::json!({"detail": {"error_code": error.to_string(), "message": "autenticação indisponível"}}))
 }
 
@@ -277,6 +290,10 @@ impl TrustedHosts {
     /// TCP: nunca vira um endereço presumido (127.0.0.1 escaparia do bloqueio por origem).
     pub fn resolve(&self, peer: IpAddr, headers: &HeaderMap) -> (String, bool) {
         let peer = peer.to_canonical().to_string();
+        // O esquema sai da porta: o Caddy só fala https com a internet.
+        if peer == CONNECT_PEER {
+            return (peer, true);
+        }
         if !self.contains(&peer) {
             return (peer, false);
         }

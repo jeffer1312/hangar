@@ -1,8 +1,3 @@
-use base64::Engine;
-use ring::{
-    digest,
-    rand::{SecureRandom, SystemRandom},
-};
 use serde_json::{Value, json};
 use std::{
     io,
@@ -38,26 +33,7 @@ impl Failure {
     }
 }
 pub type Result<T> = std::result::Result<T, Failure>;
-pub fn hash(token: &[u8]) -> String {
-    digest::digest(&digest::SHA256, token)
-        .as_ref()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
-pub fn random(n: usize) -> Vec<u8> {
-    let mut bytes = vec![0; n];
-    SystemRandom::new()
-        .fill(&mut bytes)
-        .expect("gerador aleatório do sistema");
-    bytes
-}
-pub fn token() -> String {
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random(32))
-}
-pub fn id() -> String {
-    random(8).iter().map(|b| format!("{b:02x}")).collect()
-}
+pub use hangar_core::credentials::{hash, id, random, token};
 
 pub fn read(path: &Path) -> io::Result<Option<Value>> {
     match crate::runtime::queue::read_replaced(path) {
@@ -234,6 +210,18 @@ impl Store {
             }
             Err(_) => None,
         }
+    }
+    /// `true`: com certeza não é token de convidado, sem ler o arquivo nem ocupar o pool. Os hashes vêm da última
+    /// leitura, que vale enquanto o carimbo do arquivo for o mesmo; leitura velha volta `false`, e o `lookup` a refaz.
+    pub fn rules_out(&self, token: &[u8]) -> bool {
+        let Some(stamp) = file_stamp(&self.path) else {
+            return std::fs::metadata(&self.path).is_err_and(|error| error.kind() == io::ErrorKind::NotFound);
+        };
+        let presented = hash(token);
+        let loaded = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
+        let Some((_, doc)) = loaded.as_ref().filter(|(previous, _)| *previous == stamp) else { return false };
+        let known = |guest: &Value| guest["token_hash"].as_str().is_some_and(|stored| bool::from(stored.as_bytes().ct_eq(presented.as_bytes())));
+        !doc["guests"].as_array().is_some_and(|guests| guests.iter().any(known))
     }
     pub fn lookup(&self, token: &[u8]) -> Option<Guest> {
         if token.is_empty() {

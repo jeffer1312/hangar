@@ -225,6 +225,9 @@ impl RuntimeEngine {
     fn park_idle(&self,now:f64) -> Option<f64> {
         match &self.core { Core::Claude(core)=>core.park_idle(now),Core::Codex(core)=>core.park_idle(now) }
     }
+    fn idle_compact_age(&self,now:f64) -> Option<f64> {
+        match &self.core { Core::Claude(core)=>core.idle_compact_age(now),Core::Codex(_)=>None }
+    }
     fn view(&self) -> Value {
         match &self.core { Core::Claude(core)=>core.view(),Core::Codex(core)=> {
             let mut view = core.control_view(); view["public_state"] = core.view(); view["conversation"] = view["thread_id"].clone(); view
@@ -1557,6 +1560,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                     Message::View(response) => {
                         let mut view=engine.view();
                         view["park_idle_s"]=json!(engine.park_idle(clock(start).monotonic_s));
+                        view["idle_compact_age_s"]=json!(engine.idle_compact_age(clock(start).monotonic_s));
                         if sid_transition || target.metadata["lifecycle_pending"]==true {view["deliverable"]=json!(false);view["lifecycle_pending"]=json!(true);}
                         let _=response.send(view);
                     }

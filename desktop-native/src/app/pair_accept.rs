@@ -4,19 +4,32 @@ use super::machines::enter_to_focused;
 use crate::api::{PairAccepted, PairLevel, ShareFailure, SharePrereqs};
 use super::share::prerequisite_notice;
 
-/// Só o link `https://host.ts.net:8443/par/CÓDIGO` do Funnel: outro host ou porta nunca recebe o resgate.
+/// Só `<máquina>--guest.<conta>.hangar.dev.br`, a regra do `is_guest_host` do `hangar-connect`: `<máquina>.<conta>` é a porta do dono.
+fn connect_guest_host(host: &str) -> bool {
+    let label = |l: &str| (1..=63).contains(&l.len()) && !l.starts_with('-') && !l.ends_with('-')
+        && l.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    let Some((machine, account)) = host.strip_suffix(".hangar.dev.br").and_then(|rest| rest.split_once('.')) else { return false };
+    label(machine) && label(account) && machine.strip_suffix("--guest").is_some_and(label)
+}
+
+/// Só `https://host.ts.net:8443/par/CÓDIGO` do Funnel ou `https://<máquina>--guest.<conta>.hangar.dev.br/par/CÓDIGO` do Connect,
+/// sem porta: outro host ou porta nunca recebe o resgate.
 pub(super) fn parse_pair_link(raw: &str) -> Option<String> {
     let url = url::Url::parse(raw.trim()).ok()?;
     if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() || url.query().is_some() || url.fragment().is_some() {
         return None;
     }
-    let host = url.host_str().filter(|h| h.ends_with(".ts.net") && h.len() > ".ts.net".len())?;
-    if url.port() != Some(8443) { return None; }
+    let host = url.host_str()?;
+    let funnel = host.ends_with(".ts.net") && host.len() > ".ts.net".len() && url.port() == Some(8443);
+    // `Url` apaga a `:443` e aceita `\` no lugar de `/`: só o texto mostra que o link veio com porta.
+    let authority = raw.trim().get("https:".len()..)?.trim_start_matches(['/', '\\']).split(['/', '\\']).next()?;
+    let connect = connect_guest_host(host) && url.port().is_none() && !authority.contains(':');
+    if !funnel && !connect { return None; }
     let mut parts: Vec<&str> = url.path_segments()?.collect();
     if parts.last() == Some(&"") { parts.pop(); }
     let &["par", code] = parts.as_slice() else { return None };
     let code_ok = (1..=64).contains(&code.len()) && code.chars().all(|c| c.is_ascii_alphanumeric());
-    code_ok.then(|| format!("https://{host}:8443/par/{code}"))
+    code_ok.then(|| if funnel { format!("https://{host}:8443/par/{code}") } else { format!("https://{host}/par/{code}") })
 }
 
 /// Código do convite (usado, vencido, revogado…) tem frase própria; `Hangar::failure` leria todo 410 como "encerrado".
@@ -26,7 +39,7 @@ pub(super) fn unreachable_text(stage: &str) -> String {
 
 /// Antes do aceite só se conhece a máquina do link: ela faz as vezes do dono na pergunta.
 pub(super) fn accept_level_title(raw: &str) -> String {
-    match parse_pair_link(raw).and_then(|link| url::Url::parse(&link).ok()?.host_str()?.split('.').next().map(str::to_owned)) {
+    match parse_pair_link(raw).and_then(|link| url::Url::parse(&link).ok()?.host_str()?.split('.').next().map(|machine| machine.trim_end_matches("--guest").to_owned())) {
         Some(machine) => tr_shared("pair_accept_level_title", &[("dono", &machine)]),
         None => tr_shared("pair_level_title", &[]),
     }
@@ -205,5 +218,17 @@ mod tests {
             assert_eq!(parse_pair_link(raw), None, "{raw}");
         }
         assert_eq!(parse_pair_link(&format!("https://a.tail.ts.net:8443/par/{}", "A".repeat(65))), None);
+    }
+
+    #[test]
+    fn pair_link_accepts_the_connect_guest_host_only() {
+        assert_eq!(parse_pair_link(" https://pc1--guest.acme.hangar.dev.br/par/ABC12/ ").as_deref(), Some("https://pc1--guest.acme.hangar.dev.br/par/ABC12"));
+        for raw in ["https://pc1.acme.hangar.dev.br/par/ABC12", "https://pc1--preview.acme.hangar.dev.br/par/ABC12",
+            "https://--guest.acme.hangar.dev.br/par/ABC12", "https://pc1--guest.hangar.dev.br/par/ABC12",
+            "https://pc1--guest.acme.hangar.dev.br:443/par/ABC12", "https://pc1--guest.acme.hangar.dev.br:8443/par/ABC12",
+            "https://pc1--guest.acme.hangar.dev.br.evil.com/par/ABC12", "http://pc1--guest.acme.hangar.dev.br/par/ABC12",
+            r"https:\\pc1--guest.acme.hangar.dev.br:9000/par/ABC12", r"https:\\pc1--guest.acme.hangar.dev.br:443/par/ABC12"] {
+            assert_eq!(parse_pair_link(raw), None, "{raw}");
+        }
     }
 }

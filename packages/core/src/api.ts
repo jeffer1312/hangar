@@ -4531,6 +4531,30 @@ export function revokeAllShares(name: string, server?: Server | null): Promise<{
   return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/share`, { method: 'DELETE' });
 }
 
+export interface ConnectPreviewState { port: number; host: string; entered: boolean; expires_at: number }
+
+/** Prévia de porta pelo Connect: `url` abre uma vez só. A primeira da máquina reinicia o `frpc` e o Caddy e
+ * espera o site abrir de fora; quem pede pelo próprio Connect perde a conexão ali, e por isso tenta mais uma vez. */
+export async function openConnectPreview(server: Server, port: number): Promise<{ url: string }> {
+  const open = () => apiFetchForServer<{ url: string }>(server, '/api/connect/preview',
+    { method: 'POST', body: JSON.stringify({ port }) }, 90_000);
+  try {
+    return await open();
+  } catch (e) {
+    if ((e as { status?: number }).status !== undefined) throw e;
+    await new Promise((resolve) => setTimeout(resolve, 10_000));
+    return open();
+  }
+}
+
+export function closeConnectPreview(server: Server): Promise<{ ok: boolean }> {
+  return apiFetchForServer(server, '/api/connect/preview', { method: 'DELETE' });
+}
+
+export function connectPreviewState(server: Server): Promise<{ preview: ConnectPreviewState | null }> {
+  return apiFetchForServer(server, '/api/connect/preview');
+}
+
 // Stream da lista de um convite caiu: 410 aqui é o dono ter encerrado, e o gancho do `apiFetchRes`
 // já avisou (401 vale o mesmo que 410). 503 devolve false (indisponível por instantes, não encerrado). `probe`: a queda acabou
 // de esfriar o servidor, e esta pergunta não pode esperar o prazo.

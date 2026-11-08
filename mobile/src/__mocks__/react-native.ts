@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 function domProps(props: any) {
-  const { style, accessibilityRole, accessibilityLabel, numberOfLines, onPress, ...rest } = props;
+  const { style, accessibilityRole, accessibilityLabel, accessibilityState, numberOfLines, onPress, ...rest } = props;
   // O `Pressable` aceita estilo em função do estado: o teste vê o de repouso.
   const raw = typeof style === 'function' ? style({ pressed: false }) : style;
   const normalizedStyle = Array.isArray(raw) ? Object.assign({}, ...raw.flat(Infinity).filter(Boolean)) : raw;
@@ -10,6 +10,8 @@ function domProps(props: any) {
     ...(normalizedStyle ? { style: normalizedStyle } : {}),
     ...(accessibilityRole ? { role: accessibilityRole } : {}),
     ...(accessibilityLabel ? { 'aria-label': accessibilityLabel } : {}),
+    // Como o leitor de tela recebe o `checked` do `accessibilityState` no aparelho.
+    ...(accessibilityState?.checked !== undefined ? { 'aria-checked': String(accessibilityState.checked) } : {}),
     ...(onPress ? { onClick: onPress } : {}),
   };
 }

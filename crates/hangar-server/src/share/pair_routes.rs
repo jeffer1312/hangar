@@ -17,7 +17,7 @@ use serde_json::{Map, Value, json};
 
 use super::caller::Caller;
 use super::owner_routes::{OwnerShareState, io_failed, prereq_error, reach_or_revoke};
-use super::pairs::{self, ExternalPair, FUNNEL_PORT};
+use super::pairs::{self, ExternalPair};
 use super::store::{Kind, PeekError, Share};
 use super::tunnel::GUEST_PORT;
 use super::ShareState;
@@ -416,7 +416,7 @@ async fn pair_invite(State(st): St, Path(name): Path<String>, bytes: Bytes) -> R
         let msg = format!("o app roda na porta do convite ({GUEST_PORT}): troque CP_PORT no backend/.env e reinicie");
         return detail(StatusCode::CONFLICT, "erro_compartilhar_porta_do_convite", &msg, json!({"port": GUEST_PORT}));
     }
-    let base = match share.ensure_on().await { Ok(b) => b, Err(e) => return prereq_error(e) };
+    let base = match share.open_guest_url().await { Ok(b) => b, Err(e) => return prereq_error(e) };
     let (s, code) = match share.store.create_pair_invite(&name, Some(life), level) { Ok(v) => v, Err(e) => return io_failed(e) };
     // Mesma regra do convite comum: o link só sai depois de abrir pela internet.
     if let Some(refusal) = reach_or_revoke(&st.owner, &base, format!("/par/{code}"), &s.id).await { return refusal }
@@ -451,7 +451,7 @@ async fn pair_accept(State(st): St, Path(name): Path<String>, bytes: Bytes) -> R
     if st.owner.owner_port == GUEST_PORT {
         return detail(StatusCode::CONFLICT, "erro_compartilhar_porta_do_convite", "porta do convite", json!({"port": GUEST_PORT}));
     }
-    let my_base = match share.ensure_on().await { Ok(b) => b, Err(e) => return prereq_error(e) };
+    let my_base = match share.open_guest_url().await { Ok(b) => b, Err(e) => return prereq_error(e) };
     // Vale antes do resgate: recado do outro lado pode chegar antes de este lado terminar.
     let (mine, my_token) = match share.store.create_redeemed(&name, Some(life), Kind::Pair) { Ok(v) => v, Err(e) => return io_failed(e) };
     let ask = json!({"code": code, "session": name, "address": my_base, "token": my_token, "owner": my_owner(app),
@@ -725,10 +725,10 @@ async fn pair_redeem(State(st): St, bytes: Bytes) -> Response {
         return detail(StatusCode::BAD_REQUEST, "erro_par_nome_invalido", "nome da máquina do par inválido", json!({}));
     }
     let invite = match share.store.peek(code, Kind::Pair) { Ok(s) => s, Err(e) => return respond(code_error(&e)) };
-    let my_host = match share.host().await {
-        Ok(h) => h,
+    let my_base = match share.public_guest_url().await {
+        Ok(base) => base,
         Err(e) => {
-            tracing::warn!(code = "external_pair_tunnel_unavailable", error = %e, "par externo: túnel indisponível ao resgatar convite");
+            tracing::warn!(code = "external_pair_tunnel_unavailable", error = %e.fix, "par externo: túnel indisponível ao resgatar convite");
             return detail(StatusCode::SERVICE_UNAVAILABLE, "erro_sessao_indisponivel", "indisponível por instantes", json!({}));
         }
     };
@@ -773,7 +773,7 @@ async fn pair_redeem(State(st): St, bytes: Bytes) -> Response {
         return respond((StatusCode::BAD_GATEWAY, undone().1));
     }
     json_response(StatusCode::OK, json!({"session": name, "owner": my_owner(app),
-        "address": format!("https://{my_host}:{FUNNEL_PORT}"), "token": my_token, "level": level_name(given)}))
+        "address": my_base, "token": my_token, "level": level_name(given)}))
 }
 
 /// O registro de par do token que fala. Com várias raízes, `session` escolhe (a ponta ou um membro

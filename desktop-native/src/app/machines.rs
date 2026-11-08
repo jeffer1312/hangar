@@ -47,7 +47,7 @@ pub(super) struct Address { pub(super) kind: Kind, pub(super) url: String, pub(s
 
 /// `/api/alcance`: por onde o servidor responde, medido por ele mesmo.
 #[derive(Clone, Debug, Default)]
-pub(super) struct Reach { pub(super) loopback: bool, pub(super) bind: String, pub(super) addresses: Vec<Address> }
+pub(super) struct Reach { pub(super) loopback: bool, pub(super) bind: String, pub(super) addresses: Vec<Address>, pub(super) connect: Option<String> }
 
 /// Farol de uma linha ou do cartão: a frase ao lado diz o mesmo, a cor nunca vai sozinha.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,7 +107,8 @@ pub(super) fn parse_reach(value: &Value) -> Option<Reach> {
         ms: e.get("tempo_ms").and_then(Value::as_f64).map(|ms| ms.round() as i64),
     })).collect::<Option<Vec<_>>>()?;
     Some(Reach { loopback: value.get("loopback").and_then(Value::as_bool).unwrap_or(false),
-        bind: value.get("bind").and_then(Value::as_str).unwrap_or_default().to_owned(), addresses })
+        bind: value.get("bind").and_then(Value::as_str).unwrap_or_default().to_owned(), addresses,
+        connect: value.get("connect").and_then(Value::as_str).map(str::to_owned) })
 }
 
 impl Reach {

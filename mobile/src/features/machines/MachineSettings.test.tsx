@@ -16,6 +16,7 @@ vi.mock('expo-router', () => ({
   </> },
 }));
 vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({ getString: () => undefined, set: vi.fn() }) }));
+vi.mock('expo-constants', () => ({ default: { deviceName: 'fixture-phone' } }));
 vi.mock('expo-secure-store', () => ({
   getItemAsync: async (key: string) => mocks.vault.get(key) ?? null,
   setItemAsync: async (key: string, value: string) => { mocks.vault.set(key, value); },

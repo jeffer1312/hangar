@@ -258,3 +258,22 @@ pergunta segurada (`_perguntas`), a sugestão e as publicações do terminal. De
 O diário excluía o sucesso de `POST /api/plugin/pull` (fechava vazio a cada 25 s e enchia o dia).
 O Rust nunca repassava essas rotas: com ele de pé tudo isso ficava sem escritor, e saiu.
 O stub que respondia 503 `mcp_needs_rust_server` no `/mcp` do modo `python` saiu junto.
+
+## Connect: a porta dele nunca é local (porta 8768 no Python)
+
+(Até 07/11/2026 → [entrada do Connect no Rust](plataforma.md#hangar-connect-a-entrada-é-do-rust-e-cada-aparelho-tem-credencial-própria-07112026).)
+O Hangar Connect publica a máquina em `<maquina>.<conta>.hangar.dev.br`: o traefik da VPS repassa
+por SNI sem abrir o TLS, o `frpc` traz os bytes até o Caddy local, que abre o TLS e encaminha para
+o backend. Medido em 2026-10-02, antes da porta própria: o Caddy fala de `127.0.0.1`, então
+`/api/desktop/palette` (só-local) respondia **200** pela internet, inclusive com
+`X-Forwarded-For` forjado — todo acesso de fora valia como o dono na máquina, sem limite de
+tentativas. Com a porta `127.0.0.1:8768` do Python e o `ConnectPortGate` trocando o cliente por
+`192.0.2.1` (RFC 5737) por fora de todos os middlewares, a mesma chamada passou a **403**.
+
+A decisão era pela porta do socket, como a do convidado (8766): o `proxy_headers` do uvicorn vale
+para todos os sockets do processo, então cabeçalho nunca serve para decidir. O limite de
+tentativas pelo Connect era o bloqueio de sempre (8 erros / 30 s) num contador próprio. O acerto do
+dono pelo Connect não zerava esse contador: o app dele acerta a cada poucos segundos e daria ao
+atacante 7 palpites novos a cada acerto. Esse Connect do Python (`connect.py`, `connect_port.py`)
+nunca foi posto em uso e foi apagado; a regra de nunca decidir "local" por cabeçalho vale
+igual na entrada do Rust.

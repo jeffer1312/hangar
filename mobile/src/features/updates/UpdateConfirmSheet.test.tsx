@@ -21,12 +21,14 @@ vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('./TagsPlateAnimation', () => ({ TagsPlateAnimation: () => null }));
 vi.mock('./RenameSuggestionAnimation', () => ({ RenameSuggestionAnimation: () => null }));
 vi.mock('./CodexActivityAnimation', () => ({ CodexActivityAnimation: () => null }));
+vi.mock('./CompactIdleAnimation', () => ({ CompactIdleAnimation: () => null }));
 vi.mock('./AutoReportAnimation', () => ({ AutoReportAnimation: () => null }));
 vi.mock('./HideFromListAnimation', () => ({ HideFromListAnimation: () => null }));
 vi.mock('./SleepHiddenAnimation', () => ({ SleepHiddenAnimation: () => null }));
 vi.mock('./FolderBranchAnimation', () => ({ FolderBranchAnimation: () => null }));
 vi.mock('./NoProjectAnimation', () => ({ NoProjectAnimation: () => null }));
 vi.mock('./SessionVaultAnimation', () => ({ SessionVaultAnimation: () => null }));
+vi.mock('./ConnectAnimation', () => ({ ConnectAnimation: () => null }));
 vi.mock('./WorktreeFreshAnimation', () => ({ WorktreeFreshAnimation: () => null }));
 // O `Notice` vem de machines/parts, que importa a folha e o teclado nativos.
 vi.mock('react-native-keyboard-controller', () => ({ KeyboardAvoidingView: ({ children }: { children: React.ReactNode }) => children }));

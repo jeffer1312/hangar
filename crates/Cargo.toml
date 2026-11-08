@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux"]
+members = ["hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux", "hangar-connect"]
 
 [workspace.package]
 version = "0.1.0"
@@ -43,8 +43,10 @@ rayon = "=1.12.0"
 hangar-codex = { path = "hangar-codex" }
 hangar-psmux = { path = "hangar-psmux" }
 hangar-core = { path = "hangar-core" }
+hangar-auth = { path = "hangar-auth" }
 hangar-transcript = { path = "hangar-transcript" }
 hangar-omp-sync = { path = "hangar-omp-sync" }
+hangar-connect = { path = "hangar-connect" }
 serde-saphyr = "=1.3.0"
 base64 = "=0.23.1"
 proptest = "=1.12.0"

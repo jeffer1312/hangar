@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { openSessionsStream, deviceIdentityReady, aggregateSessions, jsonlDaSessao, sweepHidden, registrarDiag, decidirRota, discoverRemoteRoute, esquecerRota, rotaDecidida, baseOf, UNCONFIRMED_BASE, probeServerResponse, comTeto, parseTagsEvent, patchSlot, placeExternalRows, listExternalPairs, attachGuest, createExternalPairSync } from '@hangar/core';
+import { openSessionsStream, deviceIdentityReady, aggregateSessions, jsonlDaSessao, sweepHidden, registrarDiag, decidirRota, discoverConnectRoute, discoverRemoteRoute, upgradeToDevice, esquecerRota, rotaDecidida, baseOf, UNCONFIRMED_BASE, probeServerResponse, comTeto, parseTagsEvent, patchSlot, placeExternalRows, listExternalPairs, attachGuest, createExternalPairSync } from '@hangar/core';
 import type { SessionInfo, Server, AggSession, ExternalPair, VaultEvent, VaultRequest } from '@hangar/core';
 import { sortSessions, definirArmazem, definirProtegido, definirSemPrazo, isServerParked, parkServer, registrarFalha, registrarSucesso, retryAfterMs, estaDesligado, startOutage, endOutage, respondeuRecentemente, retentarAgora, esquecerServidor, onServerRecovered, _limparEsfriamentoParaTestes } from '@hangar/core';
 import type { Slot, ServerBucket, Aggregate } from '@hangar/core';
@@ -343,6 +343,7 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
   let countedFailure = false;
   let countedHttpFailure = false;
   let discovered = false;
+  let connectChecked = false;
   const failed = (alreadyCounted = false) => {
     if (countedFailure) return;
     countedFailure = true;
@@ -377,6 +378,21 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       });
     }
   };
+  // Trocar o token reconecta o servidor; a rota do Connect é aprendida na conexão seguinte.
+  const refreshConnect = () => {
+    const current = useServers.getState().servers.find((server) => server.id === s.id);
+    if (!current?.lan?.id) return;
+    void upgradeToDevice(current).then(async (server) => {
+      if (server.credential !== current.credential) {
+        useServers.getState().rememberDevice(current.id, server, current);
+        return;
+      }
+      const route = await discoverConnectRoute(server);
+      if (route && isCurrent(attempt)) useServers.getState().rememberConnect(server.id, route, server);
+    }).catch(() => {
+      registrarDiag({ evento: 'connect.rota_nao_gravada', nivel: 'aviso', tela: 'lista', operacao: s.id, codigo: 'connect_route_store_failed' });
+    });
+  };
   const receivedList = () => {
     endOutage(s.id);
     countedHttpFailure = false;
@@ -384,11 +400,16 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
     httpRetryAt.delete(s.id);
     lastFailureHttp.delete(s.id);
     answered();
+    useServers.getState().reactivateDevice(s.id);
     if (!discovered) {
       discovered = true;
       machineDiscovery(s);
     }
     refreshRemote();
+    if (!connectChecked) {
+      connectChecked = true;
+      refreshConnect();
+    }
   };
   const rejected = (status: number) => {
     if (s.invite && (status === 401 || status === 410)) {
@@ -398,7 +419,13 @@ async function synchronize(attempt: ConnectionAttempt, get: () => SessionsState,
       return true;
     }
     if (!s.invite && status === 401) {
-      useServers.getState().markInvalid(s.id);
+      useServers.getState().markInvalid(s.id, s.token);
+      // Mesmo token depois do 401 é aparelho desligado: espera Reconectar ou a volta ao app, sem insistir.
+      if (useServers.getState().servers.some((server) => server.id === s.id && server.token === s.token)) {
+        refused.set(s.id, status);
+        slots.set(s.id, { sessions: null, error: refusedError(status) });
+        recompute(set);
+      }
       return true;
     }
     if (status === 403) {

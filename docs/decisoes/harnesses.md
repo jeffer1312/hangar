@@ -422,6 +422,13 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **Claude sem terminal estaciona depois de `_OCIOSA_S` (65 min) parado** e sem nada em aberto: o
   processo sai, o sidecar fica, o próximo prompt sobe com `--resume`. Quem encerra por dentro tira
   a sessão da memória (`_encerrar`) — saída nossa não marca `returncode`.
+- **Claude sem terminal parado é compactado pelo Hangar antes do cache de 1 h vencer.** Entre 56 e
+  59 min desde a última chamada à API (não desde o último evento), com cache de 1 h, `usage` desta
+  vida do processo e contexto acima do mínimo do Claude (`idleCompaction`,
+  `CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS`, lidos do `settings.json` principal), o vigia manda o
+  `/compact` com a porta fechada e a fila entregue, e o motor reconfere a parada. Compactada, a
+  sessão estaciona após 1 min parada. Ver
+  [compactação da sessão parada](#compactação-da-sessão-parada-sem-terminal-08112026).
 - **A recarga completa de configuração do Claude sem terminal relança o processo.**
   Recarregar = `_encerrar` + `acordar` (sobe com `--resume`), só ociosa. O
   motivo vai no `state` (`recarregar_motivo`: a marca do `mcpServers` + `settings.json` gravada
@@ -1040,6 +1047,22 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   uma vez por aparição (`rust.trust_dialog_shown`, código `trust_flag_present` ou
   `trust_flag_absent`) e o log guarda a entrada, a idade do arquivo e a trava. Ver
   [diálogo de confiança com a pasta confiada](#diálogo-de-confiança-com-a-pasta-já-confiada-23102026).
+
+## Compactação da sessão parada sem terminal (08/11/2026)
+
+O Claude Code tem a compactação da conversa parada (`idleCompaction`, ligada por padrão): com
+cache de 1 h e contexto de pelo menos `max(100000, CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS ?? 200000)`,
+ele resume a conversa a ~0,9 h parada (~54 min), antes de o cache vencer. Medido nos transcripts
+deste notebook: as sessões com terminal seguiam compactando até a 2.1.319, e as sem terminal
+(`sdk-cli`) pararam depois de 22/10/2026 (última que compactou: 2.1.306). A causa no CLI não foi
+investigada.
+
+O Hangar manda o `/compact` só nas sem terminal, aos 56 min, depois de quando o próprio Claude
+compactaria. Se ele voltar a compactar, o `compact_boundary` marca a sessão como feita e o Hangar
+não repete. O prazo conta da última chamada à API, porque o cache só se renova nela. Evento de
+trabalho de fundo, hook ou status não renovam o cache e deixavam a conta atrasada. O teto de
+59 min deixa a chamada do resumo cair com o cache ainda válido. Depois do backend reiniciar, o
+`usage` relido do transcript não prova cache quente: a sessão espera a próxima resposta.
 
 ## Avisos do Claude sem terminal (02/11/2026)
 

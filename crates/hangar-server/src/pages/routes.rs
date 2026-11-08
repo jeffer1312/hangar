@@ -16,7 +16,8 @@ use serde_json::{Value, json};
 use super::chrome::{self, Job, Shot};
 use super::store::{NewPage, Store};
 use super::{HEIGHT_MAX, HEIGHT_MIN, HTML_MAX_CHARS, TITLE_MAX_CHARS, Theme, WIDTHS, images, theme};
-use crate::routes::{AppState, INFO_REASON, cors, gate, pass, route_failed};
+use crate::nav_requests::TICKET_PARAM;
+use crate::routes::{AppState, INFO_REASON, cors, gate, on_connect_port, on_guest_port, pass, route_failed};
 
 const MESSAGE: &str = "Mostrada ao leitor acima da resposta. Não mencione nem descreva a página; responda só o que ela não diz.";
 const SHOT_WIDTH: u32 = 728;
@@ -183,7 +184,7 @@ async fn publish(st: &AppState, b: PublishBody) -> Value {
         }
     }
     if draft {
-        // Caminho relativo e sem token: quem abre (o `browser_open`) completa endereço e credencial.
+        // Caminho relativo e sem credencial: quem abre (o `browser_open`) completa endereço e bilhete.
         let url = format!("/api/sessions/{}/pages/{id}", utf8_percent_encode(&b.session, NON_ALPHANUMERIC));
         let mut out = json!({"ok": true, "result": {"draft": {"id": id, "url": url,
             "shot": rendered.is_ok().then(|| shot.map(|p| p.display().to_string())).flatten(),
@@ -273,10 +274,17 @@ async fn session_key(st: &AppState, headers: &HeaderMap, name: &str) -> Result<S
     }
 }
 
+/// O link do `nav` aponta para o endereço local: nas entradas da internet o bilhete não vale.
+fn ticket_opens(st: &AppState, req: &Request, name: &str, id: &str) -> bool {
+    !on_guest_port(req) && !on_connect_port(req) && crate::auth::query_param(req.uri().query(), TICKET_PARAM)
+        .is_some_and(|ticket| st.list.nav.tickets.opens(&ticket, name, id, crate::nav_requests::now() as u64))
+}
+
 pub async fn page(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>,
     path: Result<Path<(String, String)>, axum::extract::rejection::PathRejection>, req: Request) -> Response {
     let (fwd, owner) = match gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-    let (name, id) = match path { Ok(Path(p)) if owner => p, _ => return pass(&st, req, &fwd).await };
+    let ticketed = path.as_ref().is_ok_and(|Path((name, id))| ticket_opens(&st, &req, name, id));
+    let (name, id) = match path { Ok(Path(p)) if owner || ticketed => p, _ => return pass(&st, req, &fwd).await };
     let query = req.uri().query();
     let (raw, source) = (crate::auth::query_param(query, "raw").is_some(), crate::auth::query_param(query, "source").is_some());
     let headers = req.headers().clone();
@@ -313,7 +321,7 @@ pub async fn page(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInf
 
 /// O iframe é opaco e sem `allow-top-navigation`: o link da página só abre se a casca abrir por ele.
 const OPEN_LINK: &str = "var f=document.querySelector(\"iframe\");addEventListener(\"message\",function(e){var d=e.data;if(e.source===f.contentWindow&&d&&d.method===\"ui/open-link\"&&d.params&&typeof d.params.url===\"string\"&&/^https?:/i.test(d.params.url))window.open(d.params.url,\"_blank\",\"noopener\")});";
-const STRIP_TOKEN: &str = "var q=new URLSearchParams(location.search);if(q.has(\"token\")){q.delete(\"token\");q=q.toString();history.replaceState(null,\"\",location.pathname+(q?\"?\"+q:\"\")+location.hash)}";
+const STRIP_TOKEN: &str = "var q=new URLSearchParams(location.search);if(q.has(\"token\")||q.has(\"page_ticket\")){q.delete(\"token\");q.delete(\"page_ticket\");q=q.toString();history.replaceState(null,\"\",location.pathname+(q?\"?\"+q:\"\")+location.hash)}";
 
 /// Casca da página: o HTML vai num JSON embutido e vira URL `blob:` no iframe isolado. Nem `data:`
 /// (o Chromium corta URL grande) nem `srcdoc` (o documento herdaria o endereço da casca, com o token).

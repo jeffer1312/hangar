@@ -40,7 +40,7 @@ BACKEND = REPO / "backend"
 CONTA = Path.home() / ".claude-02-200"
 CONTAS_PROIBIDAS = {".claude-claude-200-1", ".claude-claude-200-3"}
 MODELO = "claude-haiku-4-5"
-PORTAS_REAIS = {8765, 8766, 8768}
+PORTAS_REAIS = {8765, 8766}
 ENTREGA_S = 150
 # Diário de sessão que troca de dono ou cuja abertura/fechamento no Rust falhou. Fica de fora
 # `runtime.reopen_interrupted`: é a queda do Rust no meio da reabertura, e o resumo já a mostra.
@@ -209,7 +209,7 @@ class Prova:
         self.work = self.raiz / "work"
         self.log = self.raiz / "backend.log"
         self.token = uuid.uuid4().hex + uuid.uuid4().hex[:16]
-        self.porta, self.porta_convite, self.porta_connect = porta_livre(), porta_livre(), porta_livre()
+        self.porta, self.porta_convite = porta_livre(), porta_livre()
         self.tmux = "hangar-prova-" + self.raiz.name.rsplit("-", 1)[-1].lower()
         self.unit = self.tmux
         self.pids_backend = []
@@ -273,8 +273,8 @@ class Prova:
         lancador = (
             f"import sys; sys.path.insert(0, {str(BACKEND)!r})\n"
             # Antes de importar o api: a porta do convite vai ao Rust pelo `rust_server`.
-            "from app import config, connect_port, contas\n"
-            f"config.GUEST_PORT = {self.porta_convite}; connect_port.CONNECT_PORT = {self.porta_connect}\n"
+            "from app import config, contas\n"
+            f"config.GUEST_PORT = {self.porta_convite}\n"
             # A conta real não é reconciliada por este backend.
             "contas.e_conta = lambda p: False\n"
             "from app.adapters.claude_headless import adapter\n"
@@ -892,7 +892,7 @@ def main():
     for sinal in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sinal, lambda *_: sys.exit(1))
     p = Prova(args)
-    print(f"prova em {p.raiz}: porta {p.porta}, convite {p.porta_convite}, Connect {p.porta_connect}, "
+    print(f"prova em {p.raiz}: porta {p.porta}, convite {p.porta_convite}, "
           f"tmux -L {p.tmux}, unit {p.unit}", flush=True)
     try:
         p.preparar()

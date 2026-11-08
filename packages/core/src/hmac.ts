@@ -43,6 +43,12 @@ function sha256(data: Uint8Array): Uint8Array {
   return out;
 }
 
+const hex = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+
+export function sha256Hex(data: Uint8Array): string {
+  return hex(sha256(data));
+}
+
 export function hmacSha256Hex(key: string, message: string): string {
   const enc = new TextEncoder();
   const k = enc.encode(key);
@@ -57,5 +63,5 @@ export function hmacSha256Hex(key: string, message: string): string {
   const outer = new Uint8Array(96);
   outer.set(opad);
   outer.set(sha256(inner), 64);
-  return Array.from(sha256(outer), (b) => b.toString(16).padStart(2, '0')).join('');
+  return hex(sha256(outer));
 }

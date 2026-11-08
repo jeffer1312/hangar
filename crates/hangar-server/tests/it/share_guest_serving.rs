@@ -60,6 +60,7 @@ impl Guests {
             lives: Lives::new(probe.clone(), facts),
             tailscale: Arc::new(Real),
             tunnel: Default::default(),
+            connect: None,
         });
         Self { share, probe }
     }

@@ -1,12 +1,13 @@
-import { comTeto, errorDetail, getConfigForServer, isLocalMachineUrl, isNoResponse, normalizeMachineUrl, probeServerResponse, tailscaleHost, verifyServerIdentity, type LanInfo, type Server } from '@hangar/core';
+import { comTeto, errorDetail, getConfigForServer, isLocalMachineUrl, isNoResponse, normalizeMachineUrl, probeServerResponse, registrarDiag, tailscaleHost, verifyServerIdentity, type LanInfo, type Server } from '@hangar/core';
 import * as m from '../../paraglide/messages';
 
 export type MachineId = { identificador: string; lan_url: string };
 export type Warning = { id: string; estado: string; motivo: string };
 export type Peer = { id: string; base_url: string; enabled: boolean };
+export type ConnectDevice = { device_id: string; name: string; status: 'pending' | 'approved' | 'denied'; install_code?: string; install_group?: string; created_at?: number };
 export type Check = { estado: 'ok' | 'estranho' | 'falhou' | 'recusou' | 'nao_configurado'; identificador: string; motivo: string; tempo_ms: number | null };
 export type Reach = { loopback: boolean; bind: string; enderecos: { tipo: 'nesta_maquina' | 'rede_local' | 'tailscale' | 'publico'; url: string; estado: string; tempo_ms: number | null; motivo: string }[] };
-export type Discovered = { nome: string; base_url: string; hosts?: string[] };
+export type Discovered = { nome: string; base_url: string; hosts?: string[]; connect_error?: string };
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const duration = (value: unknown) => value === null || (typeof value === 'number' && Number.isFinite(value) && value >= 0);
 export const validIdentifier = (value: string) => value === '' || /^[a-z0-9][a-z0-9_-]{0,31}$/.test(value);
@@ -120,6 +121,30 @@ function peers(value: unknown): Peer[] {
   // O token da listagem é uma máscara, nunca uma credencial utilizável.
   return value.map((p) => ({ id: p.id, base_url: normalizeUrl(p.base_url), enabled: p.enabled !== false }));
 }
+/** A regra do `install_id` no servidor (`redeem_from` em `hangar-connect`); o grupo (64 hex) e o código ("ABC-DEF") cabem nela. */
+export const validInstallField = (value: string) => /^[A-Za-z0-9_-]{1,64}$/.test(value);
+export async function readDevices(s: Server, signal: AbortSignal): Promise<ConnectDevice[]> {
+  const value = await request(s, '/api/connect/devices', signal);
+  if (!Array.isArray(value) || !value.every((d) => object(d) && typeof d.device_id === 'string' && typeof d.name === 'string'
+    && ['pending', 'approved', 'denied'].includes(String(d.status)))) throw invalid();
+  // Código e chave de grupo fora do formato não juntam nem rotulam nada: o pedido fica no seu cartão, sem código.
+  return (value as Record<string, unknown>[]).map((row) => {
+    const { install_group: group, install_code: code, ...rest } = row;
+    const malformed = (field: unknown) => field !== undefined && !(typeof field === 'string' && validInstallField(field));
+    if (malformed(group) || malformed(code)) {
+      registrarDiag({ evento: 'connect.device_install_invalid', nivel: 'aviso', codigo: 'connect_device_install_invalid' });
+      return rest;
+    }
+    return row;
+  }) as ConnectDevice[];
+}
+export async function approveDevice(s: Server, id: string, signal: AbortSignal): Promise<void> {
+  await request(s, `/api/connect/devices/${encodeURIComponent(id)}/approve`, signal, 'POST');
+}
+/** Recusa quem espera aprovação e revoga quem já entrou, com tudo o que ele aprovou. */
+export async function removeDevice(s: Server, id: string, signal: AbortSignal): Promise<void> {
+  await request(s, `/api/connect/devices/${encodeURIComponent(id)}`, signal, 'DELETE');
+}
 export async function readPeers(s: Server, signal: AbortSignal): Promise<Peer[]> { return peers(await request(s, '/api/peers', signal)); }
 export async function enablePeer(s: Server, id: string, enabled: boolean, signal: AbortSignal): Promise<Peer[]> {
   return peers(await request(s, `/api/peers/${encodeURIComponent(id)}/enabled`, signal, 'PUT', { enabled }));
@@ -153,7 +178,10 @@ export async function discover(s: Server, signal: AbortSignal): Promise<Discover
   const value = await request(s, '/api/peers/descobrir', signal, 'GET', undefined, 30_000);
   if (!Array.isArray(value) || !value.every((d) => object(d) && typeof d.nome === 'string' && typeof d.base_url === 'string'
     && (d.hosts === undefined || Array.isArray(d.hosts) && d.hosts.every((host: unknown) => typeof host === 'string')))) throw invalid();
-  return value.map((d) => ({ nome: d.nome, base_url: normalizeUrl(d.base_url), ...(d.hosts ? { hosts: d.hosts } : {}) }));
+  return value.map((d) => {
+    const failure = object(d.connect_error) && typeof d.connect_error.msg === 'string' ? d.connect_error.msg : undefined;
+    return { nome: d.nome, base_url: normalizeUrl(d.base_url), ...(d.hosts ? { hosts: d.hosts } : {}), ...(failure ? { connect_error: failure } : {}) };
+  });
 }
 export async function ownerAddress(s: Server, signal: AbortSignal): Promise<string> {
   const base = normalizeUrl(s.baseUrl);
@@ -169,6 +197,9 @@ export async function ownerAddress(s: Server, signal: AbortSignal): Promise<stri
   return normalizeUrl(address.url);
 }
 
+// Token de aparelho é deste celular: gravado no `peers.json` de outra máquina, viraria credencial dela.
+const peerSecret = (server: Server) => (server.credential === 'device' ? server.ownerToken : server.token);
+
 export async function registerBoth(owner: Server, remote: Server, remoteId: string, signal: AbortSignal): Promise<{ directions: Directions; partial: string }> {
   const identity = await readIdentifier(owner, signal);
   if (!identity.identificador || !remoteId) throw new Error(m.mobile_machines_identifier_required());
@@ -178,10 +209,14 @@ export async function registerBoth(owner: Server, remote: Server, remoteId: stri
     throw new Error(m.mobile_machines_other_machine({ expected: remoteId, actual: confirmed.identificador || '—' }));
   }
   const url = await ownerAddress(owner, signal);
-  await registerPeer(owner, remoteId, remote.baseUrl, remote.token, signal);
-  let partial = '';
-  try { await registerPeer(remote, identity.identificador, url, owner.token, signal); }
-  catch (error) { ensureActive(signal); partial = reason(error); }
+  const remoteSecret = peerSecret(remote);
+  const ownerSecret = peerSecret(owner);
+  if (remoteSecret) await registerPeer(owner, remoteId, remote.baseUrl, remoteSecret, signal);
+  let partial = remoteSecret && ownerSecret ? '' : m.mobile_machines_peer_no_owner_password();
+  if (ownerSecret) {
+    try { await registerPeer(remote, identity.identificador, url, ownerSecret, signal); }
+    catch (error) { ensureActive(signal); partial = reason(error); }
+  }
   const directions = await measureDirections(owner, { id: remoteId, base_url: remote.baseUrl }, remote, signal, { id: identity.identificador, url });
   if (!partial && (directions.forward?.estado !== 'ok' || directions.back?.estado !== 'ok')) {
     partial = directions.forwardError || directions.backError || [directions.forward?.estado, directions.back?.estado].filter(Boolean).join(' · ');

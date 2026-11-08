@@ -150,89 +150,6 @@ def test_delete_answers_the_rust_code_when_the_close_fails(monkeypatch):
     assert failed.value.status_code == 500 and failed.value.detail["code"] == "codex_bridge_failed"
 
 
-def test_delete_entering_the_connect_port_is_closed_by_the_rust(monkeypatch):
-    killed, recorded, cleaned, bridged = [], [], [], []
-    monkeypatch.setattr(api_mod.registry, "kill", lambda name, closed_by_rust=False: killed.append(closed_by_rust) or [])
-    monkeypatch.setattr(api_mod, "_jsonl_of_session", lambda name: None)
-    monkeypatch.setattr(api_mod, "_invalidate_lists", lambda: cleaned.append("invalidate"))
-    monkeypatch.setattr(api_mod.share_bridge, "revoke_session", lambda name: cleaned.append("revoke"))
-    monkeypatch.setattr(api_mod.closed_names, "record", lambda jsonl, name: recorded.append((jsonl, name)))
-    replies = iter([(200, b'{"closed": true, "killed": true, "transcript": "/t/a.jsonl"}'), None,
-                    (409, b'{"detail": {"code": "session_transfer_busy", "params": {}}}')])
-    monkeypatch.setattr(runtime_coordinator, "rust_claude", lambda *args, **kw: bridged.append((args, kw)) or next(replies))
-    _provider(monkeypatch, ct="claude", pi="pi")
-
-    def delete(port, name="ct"):
-        request = _request(port, f"/api/sessions/{name}", body=b"", method="DELETE")
-        request.scope["headers"] = [(b"user-agent", b"Hangar/iPad"), (b"x-hangar-req", b"r-1"), (b"x-forwarded-for", b"100.64.0.7")]
-        return asyncio.run(api_mod.kill_session(name, request=request))
-    assert delete(api_mod.CONNECT_PORT)["ok"] is True
-    assert (killed, recorded, cleaned) == ([True], [("/t/a.jsonl", "ct")], []), "fechada pelo Rust: aqui só as lojas daqui"
-    delete(api_mod.CONNECT_PORT)
-    assert killed[1:] == [False] and cleaned == ["invalidate", "revoke"], "421: o Python fecha pelo nome, como antes"
-    with pytest.raises(api_mod._RustReply) as refused:
-        delete(api_mod.CONNECT_PORT)
-    assert refused.value.args[0] == 409 and len(killed) == 2, "recusa do Rust volta como veio, sem fechar aqui"
-    # Quem pediu chega ao diário do Rust: cliente, pedido e origem.
-    who = {"user-agent": "Hangar/iPad", "x-hangar-req": "r-1", "x-forwarded-for": "100.64.0.7"}
-    assert bridged == [(("ct", "close", "POST", b""), {"headers": who})] * 3
-    delete(GUEST_PORT)
-    assert len(bridged) == 3, "só o que entrou pelo Connect vai à ponte"
-    # Pi/omp/Kimi não são do Rust: com ele em `pending` a ponte responderia 503 em vez de fechar.
-    delete(api_mod.CONNECT_PORT, "pi")
-    assert len(bridged) == 3 and killed[3:] == [False], "Pi fecha pelo nome, sem passar pela ponte"
-
-
-@pytest.mark.parametrize("failure", [api_mod.list_bridge.ListBridgeError("list_bridge_unavailable"),
-                                     api_mod.tmux.MuxIndisponivel("mux")])
-def test_connect_delete_without_the_list_closes_here(monkeypatch, failure):
-    """Lista indisponível não descobre o provedor: o DELETE pelo Connect fecha pelo nome, sem 503."""
-    killed, bridged = [], []
-    monkeypatch.setattr(api_mod.registry, "kill", lambda name, closed_by_rust=False: killed.append(closed_by_rust) or [])
-    monkeypatch.setattr(api_mod, "_jsonl_of_session", lambda name: None)
-    monkeypatch.setattr(api_mod, "_invalidate_lists", lambda: None)
-    monkeypatch.setattr(api_mod, "_sidecar_state", lambda name: "absent")
-
-    def cached(name):
-        raise failure
-    monkeypatch.setattr(api_mod, "_cached_info_sync", cached)
-    monkeypatch.setattr(runtime_coordinator, "rust_claude", lambda *args, **kw: bridged.append(args))
-    request = _request(api_mod.CONNECT_PORT, "/api/sessions/ct", body=b"", method="DELETE")
-    assert asyncio.run(api_mod.kill_session("ct", request=request))["ok"] is True
-    assert (killed, bridged) == ([False], [])
-
-
-def test_connect_close_of_a_grouped_claude_leaves_the_group_from_here(monkeypatch):
-    """O Rust fecha o Claude do Connect; a saída do grupo vai pela ponte e lê a fase no Rust."""
-    left = []
-    monkeypatch.setattr(api_mod.registry, "kill", lambda name, closed_by_rust=False: [])
-    monkeypatch.setattr(api_mod.closed_names, "record", lambda jsonl, name: None)
-    monkeypatch.setattr(api_mod, "_sidecar_state", lambda name: "present")
-    monkeypatch.setattr(api_mod.groups_bridge, "rust_owns_groups", lambda: True)
-    monkeypatch.setattr(api_mod.groups_bridge, "call", lambda op, **kw: left.append((op, kw)) or {"warnings": []})
-    monkeypatch.setattr(runtime_coordinator, "rust_claude", lambda *args, **kw: (200, b'{"closed": true, "transcript": ""}'))
-    _provider(monkeypatch, ct="claude")
-    request = _request(api_mod.CONNECT_PORT, "/api/sessions/ct", body=b"", method="DELETE")
-    assert asyncio.run(api_mod.kill_session("ct", request=request)) == {"ok": True, "warning": None}
-    assert left == [("group.leave", {"name": "ct", "phases": {}})]
-
-
-def test_claude_reopen_entering_the_connect_port_goes_to_the_rust(monkeypatch):
-    calls = []
-    _provider(monkeypatch, ct="claude")
-    monkeypatch.setattr(runtime_coordinator, "rust_codex_terminal", lambda *args: None)
-    monkeypatch.setattr(runtime_coordinator, "rust_claude", lambda *args, **kw: calls.append((args, kw)) or (200, b'{"ok": true}'))
-    request = _request(api_mod.CONNECT_PORT, "/api/sessions/ct/recarregar", body=b"")
-    request.scope["headers"] = [(b"user-agent", b"Hangar/iPad"), (b"x-hangar-req", b"r-2"), (b"x-forwarded-for", b"100.64.0.7")]
-    with pytest.raises(api_mod._RustReply) as reply:
-        asyncio.run(api_mod._codex_rust_port("ct", request))
-    assert reply.value.args == (200, b'{"ok": true}')
-    # A reabertura espera o Claude subir por até 5 min: o prazo da ponte passa disso.
-    (args, kw), = calls
-    assert args[:4] == ("ct", "recarregar", "POST", b"") and args[4] > 300, args
-    assert kw == {"headers": {"user-agent": "Hangar/iPad", "x-hangar-req": "r-2", "x-forwarded-for": "100.64.0.7"}}
-
-
 def test_the_claude_bridge_carries_who_asked(monkeypatch):
     seen = []
 
@@ -290,12 +207,9 @@ def test_writes_entering_the_guest_or_connect_port_are_forwarded_whole(monkeypat
         asyncio.run(api_mod._codex_rust_port("cx", _request(GUEST_PORT)))
     assert reply.value.args == (202, b"{}")
     assert calls == [("cx", "keys", "POST", b'{"key":"Up"}')]
-    with pytest.raises(api_mod._RustReply):
-        asyncio.run(api_mod._codex_rust_port("cx", _request(api_mod.CONNECT_PORT, "/api/sessions/cx/limits", b"a=1", b"")))
-    assert calls[-1] == ("cx", "limits?a=1", "POST", b"")
     # O que chegou pela porta de trás do Rust é dele já: nunca volta para lá.
     asyncio.run(api_mod._codex_rust_port("cx", _request(1)))
-    assert len(calls) == 2
+    assert len(calls) == 1
     # Não é Codex com terminal do Rust: a rota do Python segue.
     monkeypatch.setattr(runtime_coordinator, "rust_codex_terminal", lambda *args: None)
     asyncio.run(api_mod._codex_rust_port("cx", _request(GUEST_PORT)))
@@ -422,13 +336,13 @@ def test_claude_question_from_guest_or_connect_goes_to_the_rust(monkeypatch, rou
     monkeypatch.setattr(runtime_coordinator, "rust_codex_terminal", lambda *args: None)
     monkeypatch.setattr(runtime_coordinator, "rust_claude", lambda *args: calls.append(args) or (200, b'{"ok": true}'))
     body = b'{"text":"oi","jev_task":"t","jev_message":"m"}' if route == "input" else b'{"option": 1, "interaction_id": "perm:t1"}'
-    for port in (GUEST_PORT, api_mod.CONNECT_PORT):
+    for port in (GUEST_PORT,):
         with pytest.raises(api_mod._RustReply) as reply:
             asyncio.run(api_mod._codex_rust_port("ct", _request(port, f"/api/sessions/ct/{route}", body=body)))
         assert reply.value.args == (200, b'{"ok": true}')
-    assert calls == [("ct", route, "POST", body)] * 2
+    assert calls == [("ct", route, "POST", body)]
     asyncio.run(api_mod._codex_rust_port("ct", _request(GUEST_PORT, "/api/sessions/ct/keys")))
-    assert len(calls) == 2, "fora das rotas migradas o Claude não vai a esta ponte"
+    assert len(calls) == 1, "fora das rotas migradas o Claude não vai a esta ponte"
 
 
 @pytest.mark.parametrize(("method", "route", "query", "body"), [
@@ -444,14 +358,13 @@ def test_queue_panel_from_guest_or_connect_goes_to_the_rust_whole(monkeypatch, m
     monkeypatch.setattr(runtime_coordinator, "rust_claude", lambda *args: claude.append(args) or (200, b'{"ok": true}'))
     monkeypatch.setattr(runtime_coordinator, "rust_codex_terminal", lambda *args: codex.append(args) or (200, b'{"ok": true}'))
     full = route + (f"?{query.decode()}" if query else "")
-    for port in (GUEST_PORT, api_mod.CONNECT_PORT):
-        for name in ("ct", "cx"):
-            with pytest.raises(api_mod._RustReply) as reply:
-                asyncio.run(api_mod._codex_rust_port(name, _request(port, f"/api/sessions/{name}/{route}", query=query, body=body, method=method)))
-            assert reply.value.args == (200, b'{"ok": true}')
+    for name in ("ct", "cx"):
+        with pytest.raises(api_mod._RustReply) as reply:
+            asyncio.run(api_mod._codex_rust_port(name, _request(GUEST_PORT, f"/api/sessions/{name}/{route}", query=query, body=body, method=method)))
+        assert reply.value.args == (200, b'{"ok": true}')
     # Método, query e corpo chegam como vieram, por uma ponte só para cada provedor.
-    assert claude == [("ct", full, method, body)] * 2
-    assert codex == [("cx", full, method, body)] * 2
+    assert claude == [("ct", full, method, body)]
+    assert codex == [("cx", full, method, body)]
 
 
 def test_claude_bridge_down_is_a_visible_503_without_local_answer(monkeypatch):

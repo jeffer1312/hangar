@@ -361,6 +361,10 @@ impl Service {
         };
         Ok((value, None))
     }
+    /// O logout não confere sessão nenhuma: quem decide pela entrada do Connect é esta conferência.
+    pub fn sync_session_valid(&self, headers: &HeaderMap) -> bool {
+        self.sync.enabled() && self.sync.authenticate(&cookie(headers, "cp_sync").unwrap_or_default(), (self.now)()).is_ok()
+    }
     fn cookie_header(&self, cookie: &str, https: bool) -> super::store::Result<String> {
         let cookie=quote_cookie(cookie)?;
         Ok(format!(

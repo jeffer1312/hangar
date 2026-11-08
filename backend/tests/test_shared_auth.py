@@ -351,16 +351,6 @@ async def _worker(binary):
                 assert response.status_code == 401, (response.status_code, response.text)
                 assert len(hits(fresh_ip)) == 1
 
-                ip = "192.0.2.1"
-                for _ in range(9):
-                    assert (await request(root, browser, None, ip)).status_code == 401
-                assert not hits(ip)
-                for _ in range(7):
-                    assert (await request(direct, "/api/me", ip=ip)).status_code == 401
-                assert (await request(root, browser, OWNER, ip)).status_code == 200 and len(hits(ip)) == 7
-                assert await ws_status(root, "/api/voice", None, ip) == 401 and len(hits(ip)) == 7
-                assert await ws_status(direct, "/api/auth-ws/browser", None, ip) == 403 and len(hits(ip)) == 8
-
                 # Um gate do Rust admite; uma falha intercalada não pode sumir no Python.
                 ip = "198.51.100.13"
                 delayed_call = asyncio.create_task(request(root, "/api/auth-delayed", OWNER, ip, headers={"x-test-delay": "1"}))

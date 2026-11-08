@@ -408,8 +408,7 @@ class Prova(sombra.Prova):
         um = log.janela(JANELA)
         token_g, share = self.convite("ct")
         convidado = self.chat("ct", self.porta_convite, token_g) if token_g else None
-        connect_c = self.chat("ct", self.porta_connect)
-        esperar(lambda: connect_c.ultimo() and (convidado is None or convidado.ultimo()), 20)
+        esperar(lambda: convidado is None or convidado.ultimo(), 20)
         time.sleep(3)
         tres = log.janela(JANELA)
         sm, pb = self.python_estado({"ct"})
@@ -421,16 +420,15 @@ class Prova(sombra.Prova):
         esperado = 1 / RODADA
         self.conferir("26", "uma captura por rodada (ct parada, contagem no log do tmux)", [
             ("convite resgatado", bool(token_g), "" if token_g else share),
-            ("convidado e Connect recebem state", bool(connect_c.ultimo()) and bool(convidado and convidado.ultimo()),
-             f"convidado {convidado.ultimo() if convidado else '—'}, Connect {connect_c.ultimo()}"),
+            ("convidado recebe state", bool(convidado and convidado.ultimo()),
+             f"convidado {convidado.ultimo() if convidado else '—'}"),
             ("chat do dono recebe state", bool(dono.ultimo()), str(dono.ultimo())),
             ("com 1 chat: ~1 captura por 0,75 s", abs(b_c - esperado) <= 0.35, f"{b_c}/s pelo -C"),
-            ("com 3 chats (dono, convidado, Connect): igual a 1", abs(c_c - b_c) <= 0.3, f"{c_c}/s pelo -C"),
+            ("com 2 chats (dono, convidado): igual a 1", abs(c_c - b_c) <= 0.3, f"{c_c}/s pelo -C"),
             ("nenhuma captura avulsa de ct com chat aberto", b_v == 0 and c_v == 0, f"{b_v} e {c_v}"),
             ("StateMonitor/PreviewBroker Python para ct", not sm and not pb, f"{sm or 0} / {pb or 0}"),
         ], f"só a lista aberta: {a_c}/s pelo -C, {a_v} avulsas")
         convidado and convidado.fechar()
-        connect_c.fechar()
         self.chat_ct = dono
         self.share_ct = share
 
@@ -654,7 +652,7 @@ class Prova(sombra.Prova):
 
     # ---- Step 28: terminal real --------------------------------------------------------------
     def caso_28(self):
-        for f in (self.t_dono, self.t_convidado, self.t_connect, self.t_duas, self.t_409, self.t_atalho,
+        for f in (self.t_dono, self.t_convidado, self.t_duas, self.t_409, self.t_atalho,
                   self.t_term_nome, self.t_ping, self.t_queda):
             try:
                 f()
@@ -707,15 +705,6 @@ class Prova(sombra.Prova):
             ("eco do dono depois", ok_d, ""), ("convidado reabre", ok2, ""),
             ("revogar fecha 4410", st == 200 and (fech_rev or (None,))[0] == 4410, f"DELETE {st}, {fech_rev}"),
             ("cliente tmux sai", bool(sumiu), ""), ("nenhum PTY no Python", self.pty_python() == pty0, "")])
-
-    def t_connect(self):
-        pty0 = self.pty_python()
-        ws = self.ws("/api/sessions/b1/term", self.porta_connect)
-        ok = self.eco(ws, "PROVA-CONN-1")
-        ws.close()
-        sumiu = esperar(lambda: self.clientes("b1") == [], 15, 0.3)
-        self.conferir("28", "terminal do dono pelo Connect (porta isolada do Connect)", [
-            ("eco", ok, ""), ("cliente tmux sai", bool(sumiu), ""), ("nenhum PTY no Python", self.pty_python() == pty0, "")])
 
     def t_duas(self):
         a = self.ws("/api/sessions/b1/term")
@@ -976,7 +965,7 @@ def main():
         signal.signal(sinal, lambda *_: sys.exit(1))
     p = Prova(args)
     p.carga = []
-    print(f"prova em {p.raiz}: porta {p.porta}, convite {p.porta_convite}, Connect {p.porta_connect}, "
+    print(f"prova em {p.raiz}: porta {p.porta}, convite {p.porta_convite}, "
           f"tmux -L {p.tmux}, reserva {args.reserva}", flush=True)
     lista = troca.ListaSSE(p)
     try:

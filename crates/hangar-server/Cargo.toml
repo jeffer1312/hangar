@@ -31,6 +31,7 @@ hangar-codex.workspace = true
 hangar-core.workspace = true
 hangar-transcript.workspace = true
 hangar-omp-sync.workspace = true
+hangar-connect.workspace = true
 toml = { version = "=1.1.7", default-features = false, features = ["parse", "std", "serde", "preserve_order"] }
 hangar-workspace = { path = "../hangar-workspace" }
 hangar-psmux.workspace = true
@@ -111,6 +112,8 @@ zbus = { version = "=5.19.0", default-features = false, features = ["tokio"] }
 
 [dev-dependencies]
 hangar-core = { workspace = true, features = ["test-support"] }
+# Pacote .zip do frp que o teste do supervisor monta (`tests/it/connect_supervisor.rs`).
+zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
 rqrr = { version = "=0.11.0", default-features = false }
 proptest.workspace = true
 tower = { version = "=0.5.3", default-features = false, features = ["util"] }

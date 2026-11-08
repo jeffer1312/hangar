@@ -768,6 +768,8 @@ pub(crate) mod tests {
         for var in ["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_SUBAGENT_MODEL", "HANGAR_PLUGIN_TOKEN", "TYPESAFE_API_KEY", "CP_AUTH_TOKEN"] {
             assert!(removed.iter().any(|r| r == var), "{var} fica no cliente: {removed:?}");
         }
+        #[cfg(unix)]
+        assert_eq!(client.as_std().get_current_dir(), crate::terminal_input::home_cwd(), "o servidor tmux nasceria na pasta do backend");
     }
 
     /// O que o `hangar-engine` exporta é da sessão de motor que o pôs; o pane novo

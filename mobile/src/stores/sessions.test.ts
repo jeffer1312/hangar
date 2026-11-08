@@ -1,6 +1,6 @@
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
-import { configureApi, configureDiag, definirArmazem, _resetRotasForTests, estaDesligado, isServerParked, registrarFalha, registrarSucesso, retryAfterMs, retentarAgora } from '@hangar/core';
+import { baseOf, configureApi, configureDiag, definirArmazem, _resetRotasForTests, estaDesligado, isServerParked, registrarFalha, registrarSucesso, retryAfterMs, retentarAgora } from '@hangar/core';
 import { prefs } from './prefs';
 import * as m from '../paraglide/messages';
 
@@ -188,6 +188,111 @@ test('descobre Tailscale que ficou disponível depois da primeira lista sem reco
   expect(useServers.getState().servers[0].remote).toEqual({ url: 'http://100.64.0.2:8765', id: 'owner' });
   expect(created).toHaveLength(1);
   release();
+});
+
+describe('credencial de aparelho e rota do Connect', () => {
+  const connectUrl = 'https://pc1.acme.hangar.dev.br';
+  const remote = { url: 'https://home2.tail.ts.net', id: 'home' };
+  const server = { id: 'srv1', label: 'srv1', baseUrl: 'https://home.tail.ts.net', token: 'owner-password', lan: { url: '', id: 'home' }, remote };
+
+  function machine(connect: string | null) {
+    useServers.setState({ servers: [server], activeId: server.id });
+    fetchMock.mockImplementation(async (url: string) => {
+      const parsed = new URL(url);
+      if (parsed.pathname === '/api/alcance') return response({ enderecos: [], connect });
+      if (parsed.pathname === '/api/connect/devices/self') return response({ device_id: 'dev1', token: 'device-token' });
+      if (parsed.pathname === '/api/peers/identificador') return response({ identificador: 'home', lan_url: '' });
+      if (parsed.pathname === '/api/peers/prova') {
+        const device = parsed.searchParams.get('device') === 'dev1';
+        const key = device ? createHash('sha256').update('device-token').digest('hex') : 'owner-password';
+        const bound = device ? `|${parsed.host}` : '';
+        return response({ identificador: 'home', prova: createHmac('sha256', key).update(`${parsed.searchParams.get('desafio')}|home${bound}`).digest('hex') });
+      }
+      return response([]);
+    });
+  }
+
+  test('troca a senha na máquina com Connect e aprende a rota na conexão seguinte, sem tocar no Tailscale', async () => {
+    machine(connectUrl);
+    const release = useSessions.getState().retain();
+    await vi.waitFor(() => expect(created).toHaveLength(1));
+    created[0].trigger('sessions', '[]');
+    await vi.waitFor(() => expect(useServers.getState().servers[0].credential).toBe('device'));
+    await vi.waitFor(() => expect(created).toHaveLength(2));
+    created[1].trigger('sessions', '[]');
+    await vi.waitFor(() => expect(useServers.getState().servers[0].connect).toEqual({ url: connectUrl, id: 'home' }));
+
+    expect(useServers.getState().servers[0]).toMatchObject({ token: 'device-token', deviceId: 'dev1', ownerToken: 'owner-password', remote });
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/api/connect/devices/self'))).toHaveLength(1);
+    expect(created).toHaveLength(2);
+    release();
+  });
+
+  // Python atendendo a 8765, `devices.json` ilegível ou revogação: a lista responde 401 ao aparelho.
+  function deviceRefused(saved: typeof server & { credential: 'device'; deviceId: string; ownerToken?: string }) {
+    machine(connectUrl);
+    useServers.setState({ servers: [saved], activeId: saved.id });
+    const answer = fetchMock.getMockImplementation() as (url: string, init?: RequestInit) => Promise<Response>;
+    const state = { refusing: true };
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const auth = new Headers(init?.headers).get('Authorization');
+      return state.refusing && new URL(url).pathname === '/api/sessions' && auth === 'Bearer device-token' ? response({}, 401) : answer(url, init);
+    });
+    return state;
+  }
+  const device = { ...server, token: 'device-token', credential: 'device' as const, deviceId: 'dev1' };
+
+  test('401 do aparelho volta à senha, reconecta e não promove de novo', async () => {
+    deviceRefused({ ...device, ownerToken: 'owner-password' });
+    const release = useSessions.getState().retain();
+    await vi.waitFor(() => expect(useServers.getState().servers[0]?.token).toBe('owner-password'));
+    await vi.waitFor(() => expect(created).toHaveLength(1));
+    created[0].trigger('sessions', '[]');
+    await settle();
+    await settle();
+
+    expect(useServers.getState().servers).toHaveLength(1);
+    expect(useServers.getState().servers[0]).toMatchObject({ connectOff: true, remote });
+    expect(useServers.getState().servers[0].credential).toBeUndefined();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/api/connect/devices/self'))).toBe(false);
+    release();
+  });
+
+  test('aparelho sem senha guardada fica desligado, não insiste, e Reconectar o religa', async () => {
+    const state = deviceRefused(device);
+    const release = useSessions.getState().retain();
+    await vi.waitFor(() => expect(useServers.getState().servers[0]?.disabled).toBe(true));
+    await settle();
+
+    expect(useServers.getState().servers).toHaveLength(1);
+    expect(useServers.getState().aviso).toEqual({ tipo: 'token', label: server.label });
+    expect(created).toHaveLength(0);
+    useSessions.getState().refreshServers();
+    await settle();
+    expect(created).toHaveLength(0);
+
+    state.refusing = false;
+    useSessions.getState().reconnect();
+    await vi.waitFor(() => expect(created).toHaveLength(1));
+    created[0].trigger('sessions', '[]');
+    expect(useServers.getState().servers[0].disabled).toBe(false);
+    release();
+  });
+
+  test('máquina sem Connect fica como está', async () => {
+    machine(null);
+    const release = useSessions.getState().retain();
+    await vi.waitFor(() => expect(created).toHaveLength(1));
+    created[0].trigger('sessions', '[]');
+    await vi.waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/api/alcance'))).toBe(true));
+    await settle();
+    await settle();
+
+    expect(useServers.getState().servers[0]).toEqual(server);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/api/connect/devices/self'))).toBe(false);
+    expect(created).toHaveLength(1);
+    release();
+  });
 });
 
 test('dois retain() = um createEventSource; release dos dois = close() uma vez', async () => {
@@ -1002,6 +1107,59 @@ describe('recusas e recuperação da lista', () => {
       await advance(delay);
     }
   }
+
+  const connectUrl = 'https://pc2.acme.hangar.dev.br';
+  const deviceServer = {
+    ...second, baseUrl: 'https://maq2.tail.ts.net:8766', token: 'device-token', credential: 'device' as const, deviceId: 'dev2',
+    lan: { url: '', id: 'maq2' }, connect: { url: connectUrl, id: 'maq2' },
+  };
+
+  function serverBehindConnect(connectAnswers: boolean) {
+    const first = useServers.getState().servers[0];
+    useServers.setState({ servers: [first, deviceServer], activeId: first.id });
+    fetchMock.mockImplementation(async (url: string) => {
+      const parsed = new URL(url);
+      if (url.startsWith(deviceServer.baseUrl)) throw new TypeError('offline');
+      if (parsed.origin === connectUrl && !connectAnswers) throw new TypeError('offline');
+      if (parsed.origin === connectUrl && parsed.pathname === '/api/peers/prova') {
+        const key = createHash('sha256').update('device-token').digest('hex');
+        return response({ identificador: 'maq2', prova: createHmac('sha256', key).update(`${parsed.searchParams.get('desafio')}|maq2|${parsed.host}`).digest('hex') });
+      }
+      if (url.includes('/api/peers/check')) return response({ identificador: '', motivo: '', tempo_ms: 1, estado: 'falhou' });
+      return response([]);
+    });
+    return () => fetchMock.mock.calls.map(([url]) => String(url)).filter((url) => url.startsWith(`${connectUrl}/api/peers/prova`));
+  }
+
+  test('tries the connect route before parking a server', async () => {
+    const proofs = serverBehindConnect(true);
+    const rel = useSessions.getState().retain();
+    for (let i = 0; i < 4; i++) await settle();
+    created.find((es) => es.url.includes('8765'))!.trigger('sessions', '[]');
+
+    expect(proofs()[0]).toContain('device=dev2');
+    expect(baseOf(deviceServer)).toBe(connectUrl);
+    expect(created.some((es) => es.url.startsWith(connectUrl))).toBe(true);
+    expect(isServerParked('srv2')).toBe(false);
+    rel();
+  });
+
+  test('só para o servidor depois de o Connect também falhar', async () => {
+    const proofs = serverBehindConnect(false);
+    const rel = useSessions.getState().retain();
+    for (let i = 0; i < 4; i++) await settle();
+    created.find((es) => es.url.includes('8765'))!.trigger('sessions', '[]');
+    for (const delay of [2000, 5000, 30000]) {
+      expect(isServerParked('srv2')).toBe(false);
+      created.filter((es) => es.url.includes('8766')).at(-1)!.onerror?.({});
+      await advance(delay);
+      for (let i = 0; i < 4; i++) await settle();
+    }
+
+    expect(isServerParked('srv2')).toBe(true);
+    expect(proofs().length).toBeGreaterThanOrEqual(3);
+    rel();
+  });
 
   test('inativo desligado com outro respondendo para de tentar e volta pela máquina ligada', async () => {
     const check = { estado: 'falhou' };

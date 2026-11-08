@@ -724,8 +724,9 @@ pub async fn events(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         tokio::spawn(login_loop(st.hub.subscribe(&st.list, &st.devices, &st.diag, false), st.login_guests.clone(), login.token.clone(), tx));
     } else { match (grant, st.share.clone()) {
         (None, _) => {
-            // Só o dono e nunca pela porta do Connect; aparelho ilegível é ignorado sem afetar a lista.
-            if fwd.client_ip != crate::devices::CONNECT_PEER && let Some((kind, id)) = crate::devices::parse(req.uri().query())
+            // Só o dono; pelo Connect, só com credencial de aparelho. Aparelho ilegível é ignorado sem afetar a lista.
+            let trusted = fwd.client_ip != crate::devices::CONNECT_PEER || req.extensions().get::<crate::connect::gate::DeviceCaller>().is_some();
+            if trusted && let Some((kind, id)) = crate::devices::parse(req.uri().query())
                 && !st.devices.is_known(&id) {
                 let (devices, diag) = (st.devices.clone(), st.diag.clone());
                 // Antes de assinar: a primeira lista desta conexão já traz o aparelho.
@@ -874,7 +875,7 @@ mod tests {
         let dirs = crate::list::discover_other::Dirs { home: tmp.path().into(), claude: tmp.path().join(".claude"),
             codex_home: tmp.path().join(".codex"), pi_sessions: tmp.path().join("pi"), omp_config: tmp.path().join("omp"),
             omp_agent: tmp.path().join("omp/agent"), kimi_home: tmp.path().join("kimi") };
-        let share = crate::share::from_env(Some(tmp.path().join("shares.json")), Some(&dirs), "missing-test-mux".into()).unwrap();
+        let share = crate::share::from_env(Some(tmp.path().join("shares.json")), Some(&dirs), "missing-test-mux".into(), None).unwrap();
         let requests = crate::vault::requests::Requests::default();
         let hub = Arc::new(ListHub::with_vault(requests.feed()));
         requests.note_state(crate::vault::State::Open);
