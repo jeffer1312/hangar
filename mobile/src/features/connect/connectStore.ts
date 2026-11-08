@@ -100,6 +100,8 @@ async function withinVaultTime<T>(work: Promise<T>): Promise<T> {
     return await Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), INSTALL_VAULT_MS); })]);
   } finally { clearTimeout(timer); }
 }
+// A mesma regra do servidor (`redeem_from` em `hangar-connect`).
+const validInstallId = (id: string) => /^[A-Za-z0-9_-]{1,64}$/.test(id);
 async function readInstallId(): Promise<InstallId> {
   let saved: string | null;
   try { saved = await withinVaultTime(SecureStore.getItemAsync(INSTALL_KEY)); }
@@ -109,7 +111,9 @@ async function readInstallId(): Promise<InstallId> {
     registrarDiag({ evento: 'connect.instalacao_ilegivel', nivel: 'aviso', codigo: 'connect_install_id_unreadable' });
     throw Object.assign(new Error(m.connect_error_install_id()), { code: 'connect_install_id_unreadable' });
   }
-  if (saved) return { id: saved };
+  if (saved && validInstallId(saved)) return { id: saved };
+  // Só aqui gerar outro é certo: o servidor recusaria este em todo pedido.
+  if (saved) registrarDiag({ evento: 'connect.instalacao_invalida', nivel: 'aviso', codigo: 'connect_install_id_invalid' });
   if (!globalThis.crypto?.getRandomValues) {
     registrarDiag({ evento: 'connect.instalacao_sem_aleatorio', nivel: 'aviso', codigo: 'connect_install_id_no_random' });
     return { missing: m.connect_install_code_no_random() };
@@ -265,8 +269,11 @@ export const useConnect = create<ConnectState>((set, get) => {
       // A entrada é da conta que pediu: trocada no meio da espera, o resultado não marca a conta nova.
       const sameAccount = () => get().account?.token === account.token;
       try {
+        const install = await installId();
+        // Leitura boa depois de uma que falhou: o código volta à tela, o aviso sai.
+        if (install.id) set({ installCode: installCode(install.id), installCodeError: '' });
         const server = await addMachine(account, machine, deviceName(), () => { if (sameAccount()) setEntry(machine.machine_id, { phase: 'waiting' }); },
-          (await installId()).id);
+          install.id);
         // O token sai uma vez só e a máquina é desta pessoa: guarda mesmo se a conta mudou.
         const saved = useServers.getState().addConnected(server);
         if (sameAccount()) setEntry(machine.machine_id, null);

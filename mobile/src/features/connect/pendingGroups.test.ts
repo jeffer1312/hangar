@@ -50,6 +50,18 @@ describe('pendingGroups', () => {
     expect(chosenTargets(group, new Set(['casa'])).map((target) => target.serverId)).toEqual(['casa']);
   });
 
+  it('marks both cards when two different phones show the same code', () => {
+    const same = (device_id: string, install_group: string, name = 'iPhone') =>
+      ({ device_id, name, status: 'pending' as const, install_group, install_code: 'ABC-DEF' });
+    const groups = pendingGroups([
+      { serverId: 'casa', label: 'casa', rows: [same('a', 'g1'), same('b', 'g2'), row('c', 'pending', 'g3', 'Pixel')] },
+      { serverId: 'notebook', label: 'notebook', rows: [same('d', 'g1'), same('e', 'g1', 'iPhone da Ana')] },
+    ]);
+    expect(groups.map((group) => [group.name, group.clash])).toEqual([
+      ['iPhone', true], ['iPhone', true], ['Pixel', false], ['iPhone da Ana', true],
+    ]);
+  });
+
   it('keeps the same object for a card that did not change', () => {
     const lists = [{ serverId: 'casa', label: 'casa', rows: [row('d1', 'pending', 'g1'), row('d3', 'pending')] }];
     const before = pendingGroups(lists);

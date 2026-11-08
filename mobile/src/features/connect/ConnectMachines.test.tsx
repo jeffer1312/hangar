@@ -34,6 +34,14 @@ let el: HTMLDivElement;
 let machinesFail = true;
 let pc2: Promise<void>;
 let releasePc2: () => void;
+// Pedidos esperando por máquina (primeiro pedaço do host); a recusa falha quando `denyFails`.
+let deviceRows: Record<string, unknown[]> = {};
+let denyFails = false;
+// Relógio fixo: o cartão calcula "pediu há" a partir dele; o pedido chegou dois minutos antes.
+const CREATED_AT = 1_794_000_000;
+const NOW = new Date((CREATED_AT + 120) * 1000);
+const pending = (device_id: string, install_group: string, install_code: string, name = 'iPhone') =>
+  ({ device_id, name, status: 'pending', install_group, install_code, created_at: CREATED_AT });
 
 const button = (label: string) => [...el.querySelectorAll('[role="button"]')].find((b) => b.getAttribute('aria-label') === label) as HTMLElement | undefined;
 
@@ -43,17 +51,28 @@ beforeEach(async () => {
   await useServers.getState().load();
   configureApi({ getBaseUrl: () => '', getToken: () => null, onUnauthorized: vi.fn(), origin: null, createEventSource: () => { throw new Error('sem SSE'); } });
   useConnect.setState({ ...useConnect.getInitialState(), ready: true, account: { name: 'acme', token: 'account-token', serviceUrl: CONNECT_SERVICE_URL } });
+  // Só o Date: as esperas e os pedidos do teste seguem no relógio de verdade.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(NOW);
   machinesFail = true;
+  deviceRows = {};
+  denyFails = false;
   pc2 = new Promise<void>((resolve) => { releasePc2 = resolve; });
-  vi.stubGlobal('fetch', vi.fn(async (input: string) => {
+  vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
     const url = new URL(input);
     if (url.origin === CONNECT_SERVICE_URL && url.pathname === '/v1/machines') {
       if (machinesFail) throw new TypeError('network');
       return json([]);
     }
+    const host = url.hostname.split('.')[0];
+    if (init?.method === 'DELETE' && url.pathname.startsWith('/api/connect/devices/')) {
+      // O pedido some da lista de qualquer jeito (expirou ou foi respondido em outro lugar).
+      deviceRows[host] = [];
+      return denyFails ? new Response(JSON.stringify({ detail: 'fora do ar' }), { status: 503 }) : json({ ok: true });
+    }
     // pc2 só responde no fim do teste: até lá a lista dele segue a caminho.
-    if (url.hostname.startsWith('pc2')) return pc2.then(() => json([]));
-    if (url.pathname === '/api/connect/devices') return json([]);
+    if (host === 'pc2') return pc2.then(() => json(deviceRows.pc2 ?? []));
+    if (url.pathname === '/api/connect/devices') return json(deviceRows[host] ?? []);
     return json({});
   }));
   el = document.createElement('div');
@@ -67,6 +86,7 @@ afterEach(async () => {
   await act(async () => root.unmount());
   el.remove();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 const render = () => act(async () => root.render(<ConnectMachines onDone={() => {}} />));
@@ -87,4 +107,40 @@ it('com a lista de aparelhos de uma máquina a caminho, mostra carregando e não
   await act(async () => {});
   expect(el.textContent).toContain(m.comum_carregando());
   expect(el.textContent).not.toContain(m.connect_devices_empty());
+});
+
+const buttons = (label: string) => [...el.querySelectorAll('[role="button"], [role="switch"]')].filter((b) => b.getAttribute('aria-label') === label) as HTMLElement[];
+
+it('dois celulares com o mesmo código travam os dois cartões', async () => {
+  releasePc2();
+  deviceRows = { pc1: [pending('a', 'g1', 'ABC-DEF'), pending('b', 'g2', 'ABC-DEF', 'Pixel')] };
+  await render();
+  await vi.waitFor(() => expect(buttons(m.connect_group_approve())).toHaveLength(2));
+  expect(el.textContent?.split(m.connect_group_code_clash()).length).toBe(3);
+  expect(buttons(m.connect_group_approve()).map((b) => (b as HTMLButtonElement).disabled)).toEqual([true, true]);
+});
+
+it('cada máquina do cartão anuncia se está marcada, e o toque troca', async () => {
+  releasePc2();
+  deviceRows = { pc1: [pending('a', 'g1', 'ABC-DEF')], pc2: [pending('b', 'g1', 'ABC-DEF')] };
+  await render();
+  await vi.waitFor(() => expect(buttons('pc1')).toHaveLength(1));
+  expect(buttons('pc1')[0].getAttribute('aria-checked')).toBe('true');
+  await act(async () => buttons('pc1')[0].click());
+  expect(buttons('pc1')[0].getAttribute('aria-checked')).toBe('false');
+});
+
+it('o erro da resposta fica fora do cartão, mesmo depois de o cartão sumir, até dispensar', async () => {
+  releasePc2();
+  denyFails = true;
+  deviceRows = { pc1: [pending('a', 'g1', 'ABC-DEF')] };
+  await render();
+  await vi.waitFor(() => expect(buttons(m.connect_group_deny())).toHaveLength(1));
+  await act(async () => buttons(m.connect_group_deny())[0].click());
+  await vi.waitFor(() => expect(buttons(m.connect_group_deny())).toHaveLength(0));
+  expect(el.textContent).toContain('pc1');
+  const dismiss = buttons(m.connect_notice_dismiss());
+  expect(dismiss).toHaveLength(1);
+  await act(async () => dismiss[0].click());
+  expect(buttons(m.connect_notice_dismiss())).toHaveLength(0);
 });

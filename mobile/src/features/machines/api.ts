@@ -1,4 +1,4 @@
-import { comTeto, errorDetail, getConfigForServer, isLocalMachineUrl, isNoResponse, normalizeMachineUrl, probeServerResponse, tailscaleHost, verifyServerIdentity, type LanInfo, type Server } from '@hangar/core';
+import { comTeto, errorDetail, getConfigForServer, isLocalMachineUrl, isNoResponse, normalizeMachineUrl, probeServerResponse, registrarDiag, tailscaleHost, verifyServerIdentity, type LanInfo, type Server } from '@hangar/core';
 import * as m from '../../paraglide/messages';
 
 export type MachineId = { identificador: string; lan_url: string };
@@ -125,7 +125,15 @@ export async function readDevices(s: Server, signal: AbortSignal): Promise<Conne
   const value = await request(s, '/api/connect/devices', signal);
   if (!Array.isArray(value) || !value.every((d) => object(d) && typeof d.device_id === 'string' && typeof d.name === 'string'
     && ['pending', 'approved', 'denied'].includes(String(d.status)))) throw invalid();
-  return value as ConnectDevice[];
+  // Código e chave de grupo fora do formato não juntam nem rotulam nada: o pedido fica no seu cartão, sem código.
+  return (value as Record<string, unknown>[]).map((row) => {
+    const { install_group: group, install_code: code, ...rest } = row;
+    if ((group !== undefined && typeof group !== 'string') || (code !== undefined && typeof code !== 'string')) {
+      registrarDiag({ evento: 'connect.aparelho_campo_invalido', nivel: 'aviso', codigo: 'connect_device_install_invalid' });
+      return rest;
+    }
+    return row;
+  }) as ConnectDevice[];
 }
 export async function approveDevice(s: Server, id: string, signal: AbortSignal): Promise<void> {
   await request(s, `/api/connect/devices/${encodeURIComponent(id)}/approve`, signal, 'POST');

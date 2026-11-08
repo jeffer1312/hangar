@@ -352,6 +352,31 @@ describe('máquinas da conta', () => {
       'connect_install_id_unreadable', 'connect_install_id_unsaved', 'connect_install_id_unsaved', 'connect_install_id_no_random']);
   });
 
+  it('id guardado fora da regra do servidor é trocado por um novo, gravado e registrado', async () => {
+    const events: { codigo?: string }[] = [];
+    configureDiag({ registrar: (event) => { events.push(event); }, novoReq: () => '' });
+    vault.set('cp_connect_install_id_v1', 'não vale');
+    await connect().loadInstallCode();
+    const saved = vault.get('cp_connect_install_id_v1');
+    expect(saved).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+    expect(connect().installCode).toMatch(/^[2-9A-HJ-NP-Z]{3}-[2-9A-HJ-NP-Z]{3}$/);
+    expect(connect().installCodeError).toBe('');
+    expect(events.map((event) => event.codigo)).toEqual(['connect_install_id_invalid']);
+  });
+
+  it('a leitura do cofre que volta a dar certo na entrada limpa o aviso de código indisponível', async () => {
+    vault.set('cp_connect_install_id_v1', codes[0].install_id);
+    broken.read.add('cp_connect_install_id_v1');
+    await connect().loadInstallCode();
+    expect(connect().installCodeError).toBe(m.connect_install_code_unavailable());
+    broken.read.clear();
+    network({ statuses: [{ status: 'approved', token: 'device-token' }] });
+    const entering = connect().enter(online);
+    await elapse(6000);
+    await entering;
+    expect([connect().installCode, connect().installCodeError]).toEqual([codes[0].code, '']);
+  });
+
   it('adds a machine as a normal server', async () => {
     const calls = network({ statuses: [{ status: 'approved', token: 'device-token' }] });
 

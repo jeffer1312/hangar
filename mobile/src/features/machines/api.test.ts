@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { configureApi } from '@hangar/core';
-import { discover, readIdentifier, readPeers, reason, registerBoth } from './api';
+import { configureApi, configureDiag } from '@hangar/core';
+import { discover, readDevices, readIdentifier, readPeers, reason, registerBoth } from './api';
 import * as m from '../../paraglide/messages';
 
 const server = { id: 'api-owner', label: 'fixture-owner', baseUrl: 'https://owner.test', token: 'owner-secret' };
@@ -28,6 +28,19 @@ describe('respostas públicas de máquinas', () => {
   it('guarda a causa de a conta do Connect não ter entrado na busca', async () => {
     fetchMock.mockResolvedValue(new Response(JSON.stringify([{ nome: 'fixture-found', base_url: 'https://found.test', connect_error: { code: 'fixture-code', msg: 'fixture-cause' } }]), { status: 200 }));
     expect((await discover(server, new AbortController().signal))[0].connect_error).toBe('fixture-cause');
+  });
+
+  it('ignora código e chave de grupo que não são texto: o pedido fica sozinho, sem juntar', async () => {
+    const events: { codigo?: string }[] = [];
+    configureDiag({ registrar: (event) => { events.push(event); }, novoReq: () => '' });
+    fetchMock.mockResolvedValue(new Response(JSON.stringify([
+      { device_id: 'a', name: 'iPhone', status: 'pending', install_group: 42, install_code: ['ABC-DEF'] },
+      { device_id: 'b', name: 'Pixel', status: 'pending', install_group: 'g1', install_code: 'XYZ-234' },
+    ]), { status: 200 }));
+    const rows = await readDevices(server, new AbortController().signal);
+    expect(rows[0]).toEqual({ device_id: 'a', name: 'iPhone', status: 'pending' });
+    expect(rows[1]).toMatchObject({ install_group: 'g1', install_code: 'XYZ-234' });
+    expect(events.map((event) => event.codigo)).toEqual(['connect_device_install_invalid']);
   });
 
   it('traduz a recusa pública de endereço duplicado do aparelho', () => {
