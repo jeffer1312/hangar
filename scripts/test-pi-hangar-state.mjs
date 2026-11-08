@@ -175,4 +175,5 @@ delete process.env.PSMUX_SESSION;
 
 fs.rmSync(cfg, { recursive: true, force: true });
 console.log("ok: subagente nao publica nada; sessao do usuario publica; psmux chaveia pelo nome (hangar-state.ts)");
+await import("./test-pi-guard-adapter.mjs");
 process.exit(0);   // conectar() agendou retry do WebSocket; nada a esperar aqui

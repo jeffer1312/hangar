@@ -218,58 +218,20 @@ pub fn plugins(env: &AccountEnvironment) -> Result<Value, String> {
         )
     })
 }
-pub fn kimi_hooks(env: &AccountEnvironment, repo: &Path) -> Result<Value, String> {
+pub fn kimi_hooks(env: &AccountEnvironment, _repo: &Path) -> Result<Value, String> {
     let data = read_toml(&super::files::directory(env, "kimi").join("config.toml"))?;
     let hooks = data.get("hooks").and_then(toml::Value::as_array);
-    let mut missing = 0;
-    for (event, matcher, script) in [
-        ("SessionStart", None, "kimi_state_hook.py"),
-        ("UserPromptSubmit", None, "kimi_state_hook.py"),
-        ("TurnStarted", None, "kimi_state_hook.py"),
-        ("Stop", None, "kimi_state_hook.py"),
-        ("Interrupt", None, "kimi_state_hook.py"),
-        ("PermissionRequest", None, "kimi_state_hook.py"),
-        ("PreToolUse", Some("AskUserQuestion"), "kimi_state_hook.py"),
-        ("PostToolUse", Some("AskUserQuestion"), "kimi_state_hook.py"),
-    ] {
-        let script = repo.join("backend/hooks").join(script);
-        let found = hooks.into_iter().flatten().any(|entry| {
+    let missing = super::kimi_hooks::ENTRIES.iter().filter(|&&(event, matcher, mode)| {
+        !hooks.into_iter().flatten().any(|entry| {
             entry.get("event").and_then(toml::Value::as_str) == Some(event)
                 && entry.get("matcher").and_then(toml::Value::as_str) == matcher
-                && super::hooks::refers_platform(
-                    &json!(
-                        entry
-                            .get("command")
-                            .and_then(toml::Value::as_str)
-                            .unwrap_or("")
-                    ),
-                    &script.to_string_lossy(),
-                    false,
-                    false,
-                )
-        });
-        if !found {
-            missing += 1;
-        }
-    }
+                && entry.get("command").and_then(toml::Value::as_str).is_some_and(|c| super::kimi_hooks::installed(c, mode))
+        })
+    }).count();
     Ok(if missing == 0 {
-        item(
-            "hooks",
-            Some(true),
-            "hooks_ok",
-            None,
-            false,
-            &[("n", "8".into())],
-        )
+        item("hooks", Some(true), "hooks_ok", None, false, &[("n", "9".into())])
     } else {
-        item(
-            "hooks",
-            Some(false),
-            "faltam_n",
-            Some("hooks-kimi"),
-            false,
-            &[("n", missing.to_string())],
-        )
+        item("hooks", Some(false), "faltam_n", Some("hooks-kimi"), false, &[("n", missing.to_string())])
     })
 }
 pub fn skills(env: &AccountEnvironment, repo: &Path, cli: &str) -> Result<Value, String> {

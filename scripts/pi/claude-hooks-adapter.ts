@@ -82,7 +82,9 @@ function loadClaudeHooks(): Record<string, ClaudeHookGroup[]> {
 function shouldRunCommand(command: string, config: Required<AdapterConfig>): boolean {
 	// The Hangar writes Windows hooks with backslashes; the patterns are written with slashes.
 	const cmd = command.replaceAll("\\", "/");
-	if (config.allowPatterns.length > 0 && !config.allowPatterns.some((p) => cmd.includes(p))) {
+	// A guarda do Hangar migrou para um subcomando autônomo, fora da pasta de hooks.
+	const nativeGuard = config.allowPatterns.includes("/.claude/hooks/") && /^(?:"[^"\n$`]*[/]hangar-server(?:\.exe|-command)?"|[^\s"';&|`$()]*[/]hangar-server(?:\.exe|-command)?) guard-tmux$/.test(cmd);
+	if (config.allowPatterns.length > 0 && !nativeGuard && !config.allowPatterns.some((p) => cmd.includes(p))) {
 		return false;
 	}
 	if (config.skipPatterns.some((p) => cmd.includes(p))) return false;
