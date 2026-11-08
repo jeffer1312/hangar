@@ -113,17 +113,15 @@ pub fn forget_live(home: &Path, live: &HashSet<String>) {
 /// As caídas sem sessão viva com o nome, como linhas `dead` da lista que o dono vê. Só na publicação: a foto
 /// da lista (`Produced`) segue só com as vivas, que é o que push, grupos e as rotas leem. O registro na
 /// memória é o que o laço do restore carregou na subida.
-pub fn rows(live: &[&SessionRow]) -> Vec<SessionRow> {
-    let guard = MAP.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let Some((_, map)) = guard.as_ref().filter(|(_, map)| !map.is_empty()) else { return Vec::new() };
+pub fn rows(home: &Path, live: &[&SessionRow]) -> Vec<SessionRow> {
     let names: HashSet<&str> = live.iter().map(|r| r.name.as_str()).collect();
-    map.iter().filter(|(name, _)| !names.contains(name.as_str())).filter_map(|(name, fallen)| {
+    with(home, |map| (map.iter().filter(|(name, _)| !names.contains(name.as_str())).filter_map(|(name, fallen)| {
         let row = json!({"name": name, "provider": fallen.provider.name(), "state": "dead", "problema": fallen.problem(),
             "cwd": fallen.cwd, "last_activity": fallen.died_at});
         serde_json::from_value::<SessionRow>(row)
             .inspect_err(|error| tracing::warn!(code = "fallen_row_invalid", %error, session = %name, "linha da sessão caída não montada"))
             .ok()
-    }).collect()
+    }).collect(), false))
 }
 
 fn answer(headers: &HeaderMap, status: StatusCode, body: Value) -> Response {
@@ -259,10 +257,10 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         insert(home.path(), "connect", oom("k1"));
         let other = row("outra");
-        let dead = rows(&[&other]);
+        let dead = rows(home.path(), &[&other]);
         assert_eq!(dead.iter().map(|r| (r.name.as_str(), r.state.as_str(), r.problema.as_deref(), r.cwd.as_deref())).collect::<Vec<_>>(),
             vec![("connect", "dead", Some(OOM), Some("/home/x"))]);
-        assert!(rows(&[&row("connect")]).is_empty(), "a viva com o nome esconde a caída");
+        assert!(rows(home.path(), &[&row("connect")]).is_empty(), "a viva com o nome esconde a caída");
     }
 
     /// O registro sobrevive ao restart (arquivo) e sai quando a sessão volta viva ou é dispensada.

@@ -55,7 +55,7 @@ pub fn area_of(path: &str) -> usize {
             "cost" => "costs",
             "limits" => "quotas",
             "input" | "steer" | "interrupt" | "answer" | "select" | "queue" | "question" | "then" | "btw"
-            | "recarregar" | "resume" => "send",
+            | "recarregar" | "resume" | "reabrir" => "send",
             "term" | "term-input" | "keys" | "shell" | "shortcut-shell" | "shortcut-terminals" | "pane"
             | "open-terminal" | "bash-output" => "terminal",
             "codex" | "codex-permissions" => "codex",
@@ -185,7 +185,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     // Rotas só do Codex, modos de permissão do Claude e as reaberturas (troca de modo, recarregar, conta,
     // conta ChatGPT fixa): o Rust atende as sessões dele.
     if *method == Method::POST && matches!(tail, Some("model" | "service-tier" | "codex/mode" | "codex/plan/implement" | "codex/terminate" | "question/skip" | "codex-permissions"
-        | "permission-mode" | "modo-execucao" | "recarregar" | "conta" | "engine/model" | "model-effort" | "resume" | "rename")) {
+        | "permission-mode" | "modo-execucao" | "recarregar" | "conta" | "engine/model" | "model-effort" | "resume" | "reabrir" | "rename")) {
         return true;
     }
     // Sugestão de nome da sessão genérica (`dictation::rename_suggestion`): só o dono, nunca repassada.
