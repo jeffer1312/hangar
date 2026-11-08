@@ -1,5 +1,5 @@
-import type { ReactNode, RefObject } from 'react';
-import { Platform, ScrollView } from 'react-native';
+import type { ReactElement, ReactNode, RefObject } from 'react';
+import { Platform, ScrollView, type RefreshControlProps } from 'react-native';
 import { useHeaderHeight } from 'expo-router/react-navigation';
 import { StyleSheet } from 'react-native-unistyles';
 import type { Edge } from 'react-native-safe-area-context';
@@ -20,10 +20,12 @@ export function Pagina({
   children,
   scrollRef,
   stickyHeaderIndices,
+  refreshControl,
 }: {
   children: ReactNode;
   scrollRef?: RefObject<ScrollView | null>;
   stickyHeaderIndices?: number[];
+  refreshControl?: ReactElement<RefreshControlProps>;
 }) {
   const cabecalho = useHeaderHeight();
   return (
@@ -31,6 +33,7 @@ export function Pagina({
       <ScrollView
         ref={scrollRef}
         stickyHeaderIndices={stickyHeaderIndices}
+        refreshControl={refreshControl}
         style={IOS ? undefined : { marginTop: cabecalho }}
         contentInsetAdjustmentBehavior={IOS ? 'automatic' : undefined}
         contentContainerStyle={styles.conteudo}
