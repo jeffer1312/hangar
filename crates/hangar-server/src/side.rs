@@ -113,7 +113,7 @@ enum Verdict {
 /// `Binding::changes_at_once` vale na hora.
 fn judge(current: &Binding, seen: Option<Option<Binding>>, pending: &mut Option<Option<Option<Binding>>>) -> Verdict {
     let immediate = match &seen {
-        Some(Some(b)) if b.same_conversation(current) => {
+        Some(Some(b)) if b.same_conversation(current) && !current.changes_at_once(b) => {
             *pending = None;
             return Verdict::Keep;
         }
@@ -732,13 +732,13 @@ impl Hub {
             None => return,
             Some(b) => b.binding.clone(),
         };
-        if current.same_conversation(binding) {
-            // Sessão que voltou com a mesma conversa (resume): o `Monitor` que viu a morte renasce.
-            self.ensure_monitor();
-        } else if current.changes_at_once(binding) {
+        if current.changes_at_once(binding) {
             tracing::info!(session = %self.name, "provider trocou ou a sessão é outra; reset nos aparelhos");
             self.rebind(binding.clone());
             self.restart_side();
+        } else if current.same_conversation(binding) {
+            // Sessão que voltou com a mesma conversa (resume): o `Monitor` que viu a morte renasce.
+            self.ensure_monitor();
         } else {
             tracing::info!(session = %self.name, ligado = %file_name(&current.jsonl), lido = %file_name(&binding.jsonl),
                 "aparelho leu outro transcript; a vigia confirma antes de trocar");
@@ -1368,7 +1368,7 @@ impl Hubs {
             hub.learn_queue(&info);
             // A mesma conversa (reabertura em bypass): nada a religar; o `reset` faria o chat sumir e voltar
             // em todos os aparelhos. Como o Python, só o transcript novo reseta.
-            if hub.bound.lock().unwrap().as_ref().is_some_and(|bound|bound.binding.same_conversation(&binding)) {return Ok(());}
+            if hub.bound.lock().unwrap().as_ref().is_some_and(|bound|bound.binding.same_conversation(&binding) && !bound.binding.changes_at_once(&binding)) {return Ok(());}
             hub.rebind(binding);
             // A vigia renasce sobre a conversa nova, como na troca que ela mesma detecta.
             hub.restart_side();

@@ -1314,6 +1314,35 @@ pub(crate) fn diag_req(req: &Request) -> String {
         .unwrap_or_default()
 }
 
+fn native_history_limit(raw: &str) -> Result<Option<usize>, ()> {
+    let raw = raw.trim();
+    let (negative, unsigned) = if let Some(rest) = raw.strip_prefix('-') { (true, rest) }
+        else { (false, raw.strip_prefix('+').unwrap_or(raw)) };
+    let integer = match unsigned.split_once('.') {
+        Some((integer, fraction)) if !fraction.is_empty() && fraction.bytes().all(|byte| byte == b'0') => integer,
+        Some(_) => return Err(()),
+        None => unsigned,
+    };
+    let mut digit = false;
+    for byte in integer.bytes() {
+        if byte.is_ascii_digit() { digit = true; }
+        else if byte == b'_' && digit { digit = false; }
+        else { return Err(()); }
+    }
+    if !digit { return Err(()); }
+    if negative { return Ok(None); }
+    // Limite maior que o arquivo equivale ao histórico inteiro, inclusive além do usize.
+    Ok(integer.replace('_', "").parse::<usize>().ok().filter(|limit| *limit > 0))
+}
+
+fn invalid_history_limit(raw: String, headers: &axum::http::HeaderMap) -> Response {
+    let mut response = crate::session_write::json_response(StatusCode::UNPROCESSABLE_ENTITY, serde_json::json!({"detail":[{
+        "type":"int_parsing","loc":["query","limit"],"msg":"Input should be a valid integer, unable to parse string as an integer","input":raw
+    }]}));
+    cors(headers, response.headers_mut());
+    response
+}
+
 pub(crate) async fn history(
     State(st): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -1325,6 +1354,7 @@ pub(crate) async fn history(
         Ok(Path(n)) if req.method() == Method::GET && who.as_ref().is_some_and(|c| c.can(&n, req.method())) => n,
         _ => return pass(&st, req, &fwd).await,
     };
+    let mut selected_info = None;
     let limit = match auth::query_param(req.uri().query(), "limit") {
         None => None,
         Some(v) => match v.parse::<i64>() {
@@ -1332,13 +1362,25 @@ pub(crate) async fn history(
             Ok(n) if n > 0 => usize::try_from(n).ok(),
             Ok(_) => None,
             // Texto ou vazio fica com o FastAPI e o 422 dele.
-            Err(_) if req.extensions().get::<crate::forwarded::ReadGuest>().is_some() => return crate::session_write::json_response(
-                StatusCode::UNPROCESSABLE_ENTITY, serde_json::json!({"detail":[{"type":"int_parsing","loc":["query","limit"],
-                "msg":"Input should be a valid integer, unable to parse string as an integer","input":v}]})),
-            Err(_) => return pass(&st, req, &fwd).await,
+            Err(_) => {
+                let info = match st.info(&name).await {
+                    Ok(info) => info,
+                    Err(_) => return route_failed(&st, req.headers(), "rust.history_failed", &name, "internal_info", INFO_REASON),
+                };
+                if info.as_ref().is_some_and(|info| matches!(info.provider.as_str(), "pi" | "omp" | "kimi")) {
+                    let parsed = match native_history_limit(&v) { Ok(limit) => limit, Err(()) => return invalid_history_limit(v, req.headers()) };
+                    selected_info = info;
+                    parsed
+                } else if req.extensions().get::<crate::forwarded::ReadGuest>().is_some() {
+                    return invalid_history_limit(v, req.headers());
+                } else {
+                    return pass(&st, req, &fwd).await;
+                }
+            }
         },
     };
-    let Ok(info) = st.info(&name).await else {
+    let found = match selected_info { Some(info) => Ok(Some(info)), None => st.info(&name).await };
+    let Ok(info) = found else {
         return route_failed(&st, req.headers(), "rust.history_failed", &name, "internal_info", INFO_REASON);
     };
     // Sessão inexistente ou provedor fora do Rust: o Python é o dono.
