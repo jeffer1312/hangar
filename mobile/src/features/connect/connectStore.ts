@@ -2,11 +2,11 @@ import { create } from 'zustand';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
-import { addMachine, changeAccountPassword, endAccountSessions, listMachines, registrarDiag, signIn, signUp, upgradeToDevice } from '@hangar/core';
+import { addMachine, changeAccountPassword, endAccountSessions, installCode, listMachines, registrarDiag, signIn, signUp, upgradeToDevice } from '@hangar/core';
 import type { AccountSession, ConnectMachine, Server } from '@hangar/core';
 import { approveDevice, readDevices, reason, removeDevice, type ConnectDevice } from '../machines/api';
 import { ownServers, useServers } from '../../stores/servers';
-import { installCode, type GroupTarget } from './pendingGroups';
+import type { GroupTarget } from './pendingGroups';
 import * as m from '../../paraglide/messages';
 
 export const CONNECT_SERVICE_URL = 'https://connect.hangar.dev.br';
@@ -55,6 +55,7 @@ const CODES: Record<string, () => string> = {
   connect_token_lost: m.connect_error_token_lost,
   connect_secure_random_unavailable: m.connect_error_secure_random,
   connect_response_invalid: m.mobile_machines_invalid_response,
+  connect_install_id_unreadable: m.connect_error_install_id,
 };
 
 const statusOf = (error: unknown) => (error as { status?: number }).status;
@@ -87,14 +88,20 @@ const INSTALL_KEY = 'cp_connect_install_id_v1';
 let reading: Promise<string | undefined> | null = null;
 // "Entrar em todas" pede o id várias vezes de uma vez: uma leitura só, senão cada pedido nasceria com o seu.
 const installId = () => (reading ??= readInstallId().finally(() => { reading = null; }));
+// Cofre que não responde deixaria a máquina em "pedindo" para sempre.
+const INSTALL_READ_MS = 5_000;
 async function readInstallId(): Promise<string | undefined> {
   let saved: string | null;
-  try { saved = await SecureStore.getItemAsync(INSTALL_KEY); }
-  catch {
-    // Gerar outro aqui trocaria o código que a pessoa já conferiu e separaria este celular em dois cartões.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    saved = await Promise.race([SecureStore.getItemAsync(INSTALL_KEY),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), INSTALL_READ_MS); })]);
+  } catch {
+    // Gerar outro aqui trocaria o código que a pessoa já conferiu e separaria este celular em dois cartões: o pedido para
+    // com erro e "tentar de novo" relê o mesmo cofre.
     registrarDiag({ evento: 'connect.instalacao_ilegivel', nivel: 'aviso', codigo: 'connect_install_id_unreadable' });
-    return undefined;
-  }
+    throw Object.assign(new Error(m.connect_error_install_id()), { code: 'connect_install_id_unreadable' });
+  } finally { clearTimeout(timer); }
   if (saved) return saved;
   if (!globalThis.crypto?.getRandomValues) return undefined;
   const id = Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
@@ -186,7 +193,7 @@ export const useConnect = create<ConnectState>((set, get) => {
     notice: '',
     installCode: '',
     async loadInstallCode() {
-      const id = await installId();
+      const id = await installId().catch(() => undefined);
       set({ installCode: id ? installCode(id) : '' });
     },
     async load() {
@@ -305,10 +312,12 @@ export const useConnect = create<ConnectState>((set, get) => {
     },
     async answerGroup(targets, approve) {
       const all = useServers.getState().servers;
-      const answered = await Promise.allSettled(targets.map(async ({ serverId, deviceId }) => {
+      const answered = await Promise.allSettled(targets.map(async ({ serverId, deviceId, stale }) => {
         const server = all.find((candidate) => candidate.id === serverId);
         if (!server) throw new Error(m.connect_group_machine_gone());
         await (approve ? approveDevice : removeDevice)(server, deviceId, AbortSignal.timeout(DEVICES_TIMEOUT_MS));
+        // A tentativa anterior do mesmo celular voltaria como cartão novo logo depois de respondida a atual.
+        await Promise.all(stale.map((old) => removeDevice(server, old, AbortSignal.timeout(DEVICES_TIMEOUT_MS))));
       }));
       await get().refreshDevices();
       return answered.flatMap((result, i) => result.status === 'rejected'

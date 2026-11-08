@@ -10182,6 +10182,8 @@
   "connect_group_asked": "Pediu {when}",
   "connect_group_reading": "Lendo os pedidos: {read} de {total} máquinas",
   "connect_group_list_failed": "Não deu para ler os pedidos de {machine}: se ele pediu lá, aprove nessa máquina.",
+  "connect_group_unavailable": "o pedido não está mais na lista dessa máquina (sem acesso agora ou já respondido)",
+  "connect_error_install_id": "Não deu para ler o identificador deste celular no cofre. Tente de novo.",
   "connect_refused_help": "A entrada deste aparelho foi recusada ou revogada. Peça de novo e aprove na máquina.",
   "connect_reenter": "Entrar de novo",
   "connect_reenter_unknown": "A máquina {name} não está nesta conta. Entre na conta dela para pedir de novo.",
