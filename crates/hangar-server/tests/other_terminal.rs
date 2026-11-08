@@ -180,6 +180,25 @@ async fn other_queue_contract_suffix_confirms_only_the_exact_or_longest_owner_on
     }
 }
 
+#[tokio::test]
+async fn other_queue_contract_late_echo_rescues_abandoned_legacy_without_an_operation() {
+    let text = "Vamos fazer ate as 23 com o Deepseek dps agnt para e volta amanha";
+    for provider in ["pi", "omp", "kimi"] {
+        for echo in [text.to_owned(), format!("{text}… eu tinha mandado isso")] {
+            let snapshot = contract_receipts(provider, vec![json!({
+                "id":"late", "text":text, "ts":200.0, "delivered":true,
+                "attempts":2, "desistiu":true, "desistiu_ts":300.0,
+            })], &echo, false).await;
+            let rows = snapshot["queue"].as_array().unwrap();
+            assert_eq!(rows.len(), 1, "{provider}: a entrada conserva sua identidade");
+            assert_eq!(rows[0]["id"], "late");
+            assert_eq!(rows[0]["confirmed"], true, "{provider}: {echo}");
+            assert!(rows[0].get("desistiu").is_none(), "{provider}: o eco tardio remove o aviso falso");
+            assert_eq!(rows[0]["attempts"], 2, "{provider}: confirmar não inicia outra tentativa");
+        }
+    }
+}
+
 #[derive(Default)]
 struct RecordingIo {writes:std::sync::Mutex<Vec<(String,bool)>>,captures:std::sync::atomic::AtomicUsize,captured:tokio::sync::Notify,before_prove:std::sync::Mutex<Option<Box<dyn FnOnce()+Send>>>}
 impl hangar_server::runtime::other_terminal::OtherIo for RecordingIo {
