@@ -1182,13 +1182,15 @@ fn apply(state: &mut State, action: Action, clock: ClockSample, call_id: &str) -
 }
 
 /// Entregue antes de o Rust assumir a sessão: nenhuma operação a liga a um cursor de despacho.
-/// A reivindicada pelo próprio drain ainda não foi escrita, e a desistida não chegou: nenhuma entra.
+/// A reivindicada pelo próprio drain ainda não foi escrita. Nos agentes nativos, um eco tardio
+/// também pode resgatar a desistida; Claude/Codex conservam a exclusão anterior.
 /// A mais recente vem primeiro, para a perdida mais antiga não levar a linha da que chegou.
 pub(crate) fn legacy_rows(state: &State) -> Vec<Value> {
+    let rescue_abandoned = other_terminal_policy(state);
     let dispatched: BTreeSet<&str> = state.operations.values().filter_map(|op|op.entry_id.as_deref()).collect();
     let claimed: BTreeSet<&str> = state.operations.iter().filter(|(key,op)|key.starts_with(CALL_PREFIX) && matches!(op.payload["kind"].as_str(),Some("claim"|"claim_batch")))
         .flat_map(|(_,op)|op.result.as_array().into_iter().flatten()).filter_map(|row|row["id"].as_str()).collect();
-    let mut rows: Vec<Value> = state.rows.iter().filter(|r|r["delivered"] == true && r["confirmed"] != true && r["desistiu"] != true
+    let mut rows: Vec<Value> = state.rows.iter().filter(|r|r["delivered"] == true && r["confirmed"] != true && (r["desistiu"] != true || rescue_abandoned)
         && r["papel"] != "assistant" && !r["batch_entries"].is_array() && !dispatched.contains(row_id(r)) && !claimed.contains(row_id(r))).cloned().collect();
     rows.sort_by(|a,b|b["ts"].as_f64().unwrap_or(0.0).total_cmp(&a["ts"].as_f64().unwrap_or(0.0)));
     rows
