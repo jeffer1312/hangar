@@ -22,6 +22,10 @@ bench = false
 name = "diag_client"
 path = "tests/diag_client.rs"
 
+[[test]]
+name = "other_terminal_drive"
+path = "tests/other_terminal_drive.rs"
+
 [dependencies]
 hangar-auth = { path = "../hangar-auth" }
 # float_roundtrip: o float lido sai com o mesmo valor que o float() do Python, e o repr bate.
