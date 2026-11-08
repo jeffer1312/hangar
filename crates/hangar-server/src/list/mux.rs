@@ -93,7 +93,7 @@ pub(crate) fn is_absence(stderr: &str) -> bool {
         || (stderr.starts_with("error connecting to ") && stderr.trim_end().ends_with("(No such file or directory)"))
 }
 
-pub struct Mux { program: OsString, timeout: Duration, direct: Option<Direct>, revalidate: Duration }
+pub struct Mux { program: OsString, timeout: Duration, direct: Option<Direct>, revalidate: Duration, direct_budget: Duration }
 
 /// Leitura direta do psmux (Windows): vale só para os servidores que uma comparação com o CLI
 /// conferiu; servidor novo, recriado ou falha voltam ao CLI.
@@ -153,7 +153,7 @@ impl Mux {
         let dir = if cfg!(windows) { hangar_psmux::data_dir(|name| std::env::var_os(name)) } else { None };
         match dir {
             Some(dir) => Self::with_direct(program, timeout, dir),
-            None => Self { program: program.into(), timeout, direct: None, revalidate: REVALIDATE },
+            None => Self { program: program.into(), timeout, direct: None, revalidate: REVALIDATE, direct_budget: DIRECT_BUDGET },
         }
     }
 
@@ -161,7 +161,7 @@ impl Mux {
     pub fn with_direct(program: impl Into<OsString>, timeout: Duration, dir: std::path::PathBuf) -> Self {
         let program = program.into();
         let gate = shared_gate(&program, &dir);
-        Self { program, timeout, direct: Some(Direct { dir, gate }), revalidate: REVALIDATE }
+        Self { program, timeout, direct: Some(Direct { dir, gate }), revalidate: REVALIDATE, direct_budget: DIRECT_BUDGET }
     }
 
     /// Valor de uma variável no ambiente da sessão (`show-environment`); ausente ou erro = `None`.
@@ -245,6 +245,9 @@ impl Mux {
     /// Intervalo entre conferências completas (versão do programa e CLI contra a leitura direta).
     pub fn revalidating(mut self, every: Duration) -> Self { self.revalidate = every; self }
 
+    #[cfg(test)]
+    fn direct_budget(mut self, budget: Duration) -> Self { self.direct_budget = budget; self }
+
     async fn read_direct(&self, direct: &Direct, deadline: tokio::time::Instant) -> DirectRead {
         let mut gate = direct.gate();
         match &gate {
@@ -269,7 +272,7 @@ impl Mux {
                 return DirectRead::Skip;
             }
         }
-        let (until, wait) = direct_window(tokio::time::Instant::now(), deadline);
+        let (until, wait) = direct_window(tokio::time::Instant::now(), deadline, self.direct_budget);
         let dir = direct.dir.clone();
         let read = tokio::time::timeout_at(wait,
             tokio::task::spawn_blocking(move || hangar_psmux::list_panes(&dir, LIST_PANES_FORMAT, until))).await;
@@ -292,10 +295,10 @@ impl Mux {
     }
 }
 
-/// Até quando a leitura direta pode ir (metade do que falta, no máximo `DIRECT_BUDGET`) e até quando
+/// Até quando a leitura direta pode ir (metade do que falta, no máximo `budget`) e até quando
 /// esperar por ela: um pouco depois, para o erro do próprio cliente chegar, nunca além do prazo geral.
-fn direct_window(now: tokio::time::Instant, deadline: tokio::time::Instant) -> (std::time::Instant, tokio::time::Instant) {
-    let until = now + DIRECT_BUDGET.min(deadline.saturating_duration_since(now) / 2);
+fn direct_window(now: tokio::time::Instant, deadline: tokio::time::Instant, budget: Duration) -> (std::time::Instant, tokio::time::Instant) {
+    let until = now + budget.min(deadline.saturating_duration_since(now) / 2);
     (until.into_std(), (until + Duration::from_millis(50)).min(deadline))
 }
 
@@ -520,7 +523,11 @@ mod tests {
             if fail { std::fs::write(flag, "").unwrap(); } else { let _ = std::fs::remove_file(flag); }
         }
         fn calls(&self) -> usize { std::fs::read_to_string(&self.count).map_or(0, |t| t.lines().count()) }
-        fn mux(&self, timeout: Duration) -> Mux { Mux::with_direct(&self.path, timeout, self.data.clone()) }
+        /// Orçamento folgado: a primeira execução no Windows, com vários `cmd.exe` em paralelo, passa
+        /// dos 250 ms do produto e o teste veria uma falha que não é a dele.
+        fn mux(&self, timeout: Duration) -> Mux {
+            Mux::with_direct(&self.path, timeout, self.data.clone()).direct_budget(Duration::from_secs(1))
+        }
         /// O mesmo programa e pasta, conferindo de novo a cada leitura.
         fn eager(&self, timeout: Duration) -> Mux { self.mux(timeout).revalidating(Duration::ZERO) }
     }
@@ -600,7 +607,7 @@ mod tests {
         let now = tokio::time::Instant::now();
         for left in [0u64, 1, 10, 80, 120, 600, 5000] {
             let deadline = now + Duration::from_millis(left);
-            let (until, wait) = direct_window(now, deadline);
+            let (until, wait) = direct_window(now, deadline, DIRECT_BUDGET);
             assert!(wait <= deadline, "{left} ms");
             assert!(until <= deadline.into_std(), "{left} ms");
         }
