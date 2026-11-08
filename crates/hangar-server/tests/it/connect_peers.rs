@@ -248,6 +248,15 @@ async fn account_machines_mark_this_one_and_the_ones_already_added() {
     assert_eq!(anonymous.status().as_u16(), 401);
 }
 
+#[tokio::test]
+async fn account_machines_refuse_an_unreadable_peer_list() {
+    let w = world().await;
+    std::fs::write(peers_path(&w.a), "{quebrado").unwrap();
+    let (status, body) = account_list(&w.a).await;
+    assert_eq!(status, 500, "{body}");
+    assert_eq!(body["detail"]["code"], "peers_unreadable", "lista ilegível não vira \"nenhuma adicionada\"");
+}
+
 async fn approve_after_link(w: &World) {
     assert_eq!(start_link(&w.a, w.b.id).await.status(), 202);
     wait_stage(&w.a, w.b.id, "waiting_approval").await;

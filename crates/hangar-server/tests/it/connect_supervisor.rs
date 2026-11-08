@@ -129,6 +129,8 @@ fn kill_pid(pid: u32) {
 struct Service {
     refuse_login: bool,
     name_taken: bool,
+    /// Resposta do registro da máquina; `None` é sucesso.
+    machine_refusal: Option<StatusCode>,
     sessions: Mutex<Vec<Value>>,
     accounts: Mutex<Vec<Value>>,
     machines: Mutex<Vec<(String, Value)>>,
@@ -150,13 +152,16 @@ async fn session(State(service): State<Arc<Service>>, body: Bytes) -> (StatusCod
     (StatusCode::OK, json!({"token": "sessao-de-teste"}).to_string())
 }
 
-async fn register(State(service): State<Arc<Service>>, headers: HeaderMap, body: Bytes) -> String {
+async fn register(State(service): State<Arc<Service>>, headers: HeaderMap, body: Bytes) -> (StatusCode, String) {
     let bearer = headers[header::AUTHORIZATION].to_str().unwrap().to_owned();
     service.machines.lock().unwrap().push((bearer, serde_json::from_slice(&body).unwrap()));
+    if let Some(refusal) = service.machine_refusal {
+        return (refusal, json!({"detail": "recusado"}).to_string());
+    }
     let machine = linked();
-    json!({"machine_id": machine.machine_id, "machine_key": machine.machine_key, "host": machine.host,
+    (StatusCode::OK, json!({"machine_id": machine.machine_id, "machine_key": machine.machine_key, "host": machine.host,
         "guest_host": machine.guest_host, "preview_host": machine.preview_host, "frps_addr": machine.frps_addr,
-        "frps_token": machine.frps_token, "service_public_key": machine.service_public_key}).to_string()
+        "frps_token": machine.frps_token, "service_public_key": machine.service_public_key}).to_string())
 }
 
 async fn spawn_service(refuse_login: bool) -> (Arc<Service>, SocketAddr) {
@@ -682,6 +687,28 @@ async fn link_creating_a_taken_name_says_so() {
     assert_eq!(body["detail"]["code"], "connect_account_taken", "{body}");
     assert!(service.machines.lock().unwrap().is_empty());
     assert!(!machine.dir.path().join("connect.json").exists());
+}
+
+async fn link_code(response: reqwest::Response) -> (u16, String) {
+    let status = response.status().as_u16();
+    let body: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap();
+    (status, body["detail"]["code"].as_str().unwrap_or_default().to_owned())
+}
+
+#[tokio::test]
+async fn a_machine_conflict_is_not_a_taken_account_name() {
+    let (_, address) = spawn_service_with(Service { machine_refusal: Some(StatusCode::CONFLICT), ..Service::default() }).await;
+    let machine = machine().await;
+    assert_eq!(link_code(link(&machine, address).await).await, (409, "connect_machine_conflict".to_owned()));
+}
+
+#[tokio::test]
+async fn account_created_but_machine_refused_says_to_sign_in() {
+    let (service, address) = spawn_service_with(Service { machine_refusal: Some(StatusCode::BAD_GATEWAY), ..Service::default() }).await;
+    let machine = machine().await;
+    let (_, code) = link_code(link_creating(&machine, address).await).await;
+    assert_eq!(code, "connect_account_created_link_failed", "a conta existe: tentar criar de novo daria nome já usado");
+    assert_eq!(service.accounts.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]

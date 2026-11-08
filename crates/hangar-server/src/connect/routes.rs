@@ -300,9 +300,14 @@ async fn account_list(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connec
         Ok(machines) => machines,
         Err(failure) => return error(&headers, failure.status, failure.code, &failure.msg),
     };
-    let book = match crate::machine_peers::Service::from_state(&st) {
-        Ok(service) => service.store.tolerant(),
+    let store = match crate::machine_peers::Service::from_state(&st) {
+        Ok(service) => service.store,
         Err(failure) => return error(&headers, StatusCode::SERVICE_UNAVAILABLE, failure.code, &failure.msg),
+    };
+    // Ilegível não é "nenhuma adicionada": a tela mostra o erro e oferece tentar de novo.
+    let book = match store.read() {
+        Ok(book) => book,
+        Err(failure) => return error(&headers, StatusCode::INTERNAL_SERVER_ERROR, "peers_unreadable", &failure.msg),
     };
     let rows: Vec<Value> = machines.into_iter().map(|machine| {
         let address = format!("https://{}", machine.host);
