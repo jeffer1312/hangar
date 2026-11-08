@@ -1,6 +1,6 @@
 //! Sinais de estado próprios dos agentes com terminal, sem dependência do servidor.
-use std::path::Path;
 use std::io::{Read, Seek, SeekFrom};
+use std::path::Path;
 
 const WIRE_CHUNK: u64 = 64 << 10;
 const WIRE_LIMIT: u64 = 4 << 20;
@@ -36,15 +36,24 @@ pub fn kimi_turn_boundary(path: &Path) -> std::io::Result<Option<KimiTurnBoundar
             Vec::new()
         };
         for line in lines.rev() {
-            if !line.windows(5).any(|part| part == b"turn.") { continue; }
-            let Ok(text) = std::str::from_utf8(line) else { continue; };
-            let Some(value) = crate::pycompat::pyjson::loads_lossless(text) else { continue; };
+            if !line.windows(5).any(|part| part == b"turn.") {
+                continue;
+            }
+            let Ok(text) = std::str::from_utf8(line) else {
+                continue;
+            };
+            let Some(value) = crate::pycompat::pyjson::loads_lossless(text) else {
+                continue;
+            };
             let open = match value.get("type").and_then(serde_json::Value::as_str) {
                 Some("turn.prompt" | "turn.steer") => true,
                 Some("turn.ended" | "turn.cancel") => false,
                 _ => continue,
             };
-            let timestamp_ms = value.get("time").and_then(serde_json::Value::as_f64).filter(|time| time.is_finite());
+            let timestamp_ms = value
+                .get("time")
+                .and_then(serde_json::Value::as_f64)
+                .filter(|time| time.is_finite());
             return Ok(Some(KimiTurnBoundary { open, timestamp_ms }));
         }
     }
@@ -64,7 +73,6 @@ mod tests {
         assert!(boundary.open);
         assert_eq!(boundary.timestamp_ms, Some(1700000000123.0));
     }
-
 
     #[test]
     fn kimi_turn_boundary_survives_a_large_configuration_write() {

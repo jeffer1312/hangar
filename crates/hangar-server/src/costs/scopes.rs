@@ -24,6 +24,12 @@ pub struct NativeScopes {
     repo: PathBuf,
 }
 
+impl ScopeSource for Option<NativeScopes> {
+    fn fetch(&self) -> Result<Scopes, CollectError> {
+        self.as_ref().ok_or(CollectError::NoScopes)?.fetch()
+    }
+}
+
 impl NativeScopes {
     pub fn new(mut env: AccountEnvironment, dirs: Dirs, repo: PathBuf) -> Self {
         env.claude_base = dirs.claude.clone();

@@ -187,23 +187,33 @@ impl AppState {
     }
 
     fn build(cfg: Config, terminal: crate::terminal_control::TerminalPool, server_id: String) -> AppState {
+        let env = crate::accounts::environment::AccountEnvironment::capture();
+        let list_env = crate::list::bridge::ListEnv::from_env();
+        let scopes = list_env.dirs.clone().zip(crate::install_root::root(&env.home))
+            .map(|(dirs, repo)| crate::costs::scopes::NativeScopes::new(env, dirs, crate::list::links::resolve_lenient(&repo)));
         let costs = Arc::new(crate::costs::collect::Collector::new(
             crate::costs::index::default_dir(), crate::costs::pricing::default_dir(),
             crate::costs::areas::default_map_file(),
-            Arc::new(crate::costs::collect::HttpScopes::new(cfg.upstream, cfg.internal_secret.clone())),
+            Arc::new(scopes),
         ));
-        Self::with_parts(cfg, terminal, costs, Arc::new(crate::costs::fx::Fx::new()), server_id)
+        Self::with_parts_env(cfg, terminal, costs, Arc::new(crate::costs::fx::Fx::new()), server_id, list_env)
     }
 
     pub fn with_parts(cfg: Config, terminal: crate::terminal_control::TerminalPool,
                       costs: Arc<crate::costs::collect::Collector>, fx: Arc<crate::costs::fx::Fx>, server_id: String) -> AppState {
+        Self::with_parts_env(cfg, terminal, costs, fx, server_id, crate::list::bridge::ListEnv::from_env())
+    }
+
+    fn with_parts_env(cfg: Config, terminal: crate::terminal_control::TerminalPool,
+                      costs: Arc<crate::costs::collect::Collector>, fx: Arc<crate::costs::fx::Fx>, server_id: String,
+                      list_env: crate::list::bridge::ListEnv) -> AppState {
         crate::transcript::set_orq_parser(crate::orchestration::timeline::parse_obj);
         let http = proxy::client();
         let mods = crate::mods::state::Mods::default();
         let interactions = Arc::new(crate::interactions::InteractionStore::default());
         let plugin = Arc::new(crate::plugin::Store::new(interactions.clone()));
         let facts = crate::list::facts::FactsClient::new(cfg.upstream, cfg.internal_secret.clone());
-        let list = Arc::new(crate::list::bridge::ListBridge::new(crate::list::bridge::ListEnv::from_env(), facts));
+        let list = Arc::new(crate::list::bridge::ListBridge::new(list_env, facts));
         let mut side = SideCtx {
             watchers: Watchers::default(),
             hubs: Hubs::default(),
