@@ -51,3 +51,5 @@ impl ReportCache {
         while entries.len() > 8 { entries.shift_remove_index(0); }
     }
 }
+
+pub mod scopes;
