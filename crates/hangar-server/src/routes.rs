@@ -413,45 +413,13 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let front_pair = pair.clone();
     let connect_pair = pair.clone();
     let result = tokio::select! {
-        // Nunca termina, como a do front: sem a porta, a 8765 e o Tailscale seguem de pé.
-        () = async {
-            let Some(addr) = connect else { return std::future::pending().await };
-            let mut wait = Duration::from_millis(250);
-            let mut failing = false;
-            loop {
-                let tried = Instant::now();
-                if let Err(e) = serve_connect(addr, connect_state.clone(), connect_pair.clone()).await {
-                    connect_state.connect_supervisor.port_failed(format!("porta do Connect {} indisponível ({e})", addr.port()));
-                    if !failing {
-                        tracing::warn!(code = "connect_port_failed", listen = %addr, "porta do Connect indisponível, tentando de novo: {e}");
-                        failing = true;
-                    }
-                }
-                // Porta que chegou a servir volta a tentar logo: a espera longa é só para quem nem abriu.
-                if tried.elapsed() > Duration::from_secs(5) { wait = Duration::from_millis(250); }
-                tokio::time::sleep(wait).await;
-                wait = (wait * 2).min(Duration::from_secs(5));
-            }
-        } => Ok(()),
-        // Nunca termina, como a do Connect: sem a prévia, o resto do servidor segue de pé.
-        () = async {
-            let Some(addr) = preview else { return std::future::pending().await };
-            let mut wait = Duration::from_millis(250);
-            let mut failing = false;
-            loop {
-                let tried = Instant::now();
-                if let Err(e) = serve_preview(addr, preview_state.clone()).await {
-                    preview_state.connect_supervisor.preview_port_failed(format!("porta {} indisponível ({e})", addr.port()));
-                    if !failing {
-                        tracing::warn!(code = "connect_preview_port_failed", listen = %addr, "porta da prévia indisponível, tentando de novo: {e}");
-                        failing = true;
-                    }
-                }
-                if tried.elapsed() > Duration::from_secs(5) { wait = Duration::from_millis(250); }
-                tokio::time::sleep(wait).await;
-                wait = (wait * 2).min(Duration::from_secs(5));
-            }
-        } => Ok(()),
+        // Nunca terminam, como a do front: sem elas, a 8765 e o Tailscale seguem de pé.
+        () = keep_listening(connect, "connect_port_failed",
+            |addr| serve_connect(addr, connect_state.clone(), connect_pair.clone()),
+            |addr, e| connect_state.connect_supervisor.port_failed(format!("porta do Connect {} indisponível ({e})", addr.port()))) => Ok(()),
+        () = keep_listening(preview, "connect_preview_port_failed",
+            |addr| serve_preview(addr, preview_state.clone()),
+            |addr, e| preview_state.connect_supervisor.preview_port_failed(format!("porta {} indisponível ({e})", addr.port()))) => Ok(()),
         // Nunca termina: a porta do front é extra, e cair nela não derruba o servidor.
         () = async {
             let Some(addr) = front else { return std::future::pending().await };
@@ -501,6 +469,28 @@ pub fn front_address(home: &std::path::Path, listen: SocketAddr) -> Option<Socke
         return None;
     }
     (port != 0 && port != listen.port()).then(|| SocketAddr::new(listen.ip(), port))
+}
+
+/// Serve a porta para sempre: cai, avisa quem precisa saber e tenta de novo. Porta que chegou a servir
+/// volta a tentar logo; a espera longa é só para quem nem abriu.
+async fn keep_listening<F, Fut>(addr: Option<SocketAddr>, code: &'static str, mut serve: F, failed: impl Fn(SocketAddr, &std::io::Error))
+where F: FnMut(SocketAddr) -> Fut, Fut: std::future::Future<Output = std::io::Result<()>> {
+    let Some(addr) = addr else { return std::future::pending().await };
+    let mut wait = Duration::from_millis(250);
+    let mut failing = false;
+    loop {
+        let tried = Instant::now();
+        if let Err(e) = serve(addr).await {
+            failed(addr, &e);
+            if !failing {
+                tracing::warn!(code, listen = %addr, "porta indisponível, tentando de novo: {e}");
+                failing = true;
+            }
+        }
+        if tried.elapsed() > Duration::from_secs(5) { wait = Duration::from_millis(250); }
+        tokio::time::sleep(wait).await;
+        wait = (wait * 2).min(Duration::from_secs(5));
+    }
 }
 
 /// Liga quando a porta solta: o `vite` que a migração desligou pode ainda segurá-la por instantes.
