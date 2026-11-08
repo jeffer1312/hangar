@@ -276,6 +276,56 @@ _REGUA = "─" * 60
 # 22/08/2026: `getEditorText()` devolveu "" com o aviso na faixa e o texto exato com um rascunho).
 
 
+def _pane_pi(composer_lines):
+    corpo = ["pi v0.83.0", "conversa...", ""]
+    return "\n".join(corpo + [_REGUA] + composer_lines + [_REGUA, "🤖 k3 status"])
+
+
+def test_composer_pi_no_alto_da_tela_ainda_ve_o_rascunho():
+    # Sessao recem-aberta (composer no alto, fundo em branco) e exatamente quando este caminho de
+    # raspagem roda: antes de a extensao publicar a linha do Pi. Sem a poda das brancas do fim ele
+    # respondia "nao ha rascunho" sem ler, e a checagem ficava inerte na janela em que mais importa.
+    pane = _pane_pi(["texto parado no composer"]) + "\n" * 16
+    with patch.object(terminal_input, "_capture", return_value=pane):
+        assert terminal_input._composer_ocupado_pi("pi-x") is True
+
+
+class _LinhaFalsa:
+    """A linha da extensão respondendo o que o teste mandar. `None` = "não sei".
+
+    `registradas` são as chaves que TÊM linha — o mesmo que o `pi_inbox` guarda. Importa porque a
+    chave é o nome da sessão no psmux e o pane no tmux (ver `pi_inbox.linha_de`), e um duplo "sim"
+    esconderia justamente o erro de endereçamento que o 11909b31 consertou.
+    """
+
+    def __init__(self, resposta, registradas):
+        self.resposta, self.registradas, self.perguntas = resposta, set(registradas), []
+
+    def tem_linha(self, chave):
+        return chave in self.registradas
+
+    def perguntar_sync(self, chave, o_que):
+        self.perguntas.append((chave, o_que))
+        return self.resposta
+
+
+def _com_linha(monkeypatch, resposta, registradas=("pi-x",)):
+    linha = _LinhaFalsa(resposta, registradas)
+    monkeypatch.setattr(terminal_input.providers_bridge, "inbox_call", lambda op, **args: (
+        {"line": next((k for k in (args.get("name"), args.get("pane")) if k in linha.registradas), None)}
+        if op == "line" else {"value": linha.perguntar_sync(args["key"], args["what"])}))
+    return linha
+
+
+def test_no_tmux_a_pergunta_vai_pelo_pane(monkeypatch):
+    """Linux: a extensão não declara nome, a linha fica registrada pelo pane — e é por ele que a
+    pergunta tem que sair."""
+    linha = _com_linha(monkeypatch, "", registradas=("%33",))
+    with patch.object(terminal_input, "_capture", return_value=_pane_pi(["aviso qualquer"])):
+        assert terminal_input._composer_ocupado_pi("pi-x", "%33") is False
+    assert linha.perguntas == [("%33", "editor")]
+
+
 def test_drain_poda_entradas_de_vida_anterior_da_sessao(tmp_queue, tmp_path, monkeypatch):
     # Sessao morreu devendo (entrada pendente), tmux recriado com o MESMO nome (mesma pasta),
     # transcript RETOMADO (`pi -c` -> start_ts velho). A entrada da vida anterior NAO entrega.
