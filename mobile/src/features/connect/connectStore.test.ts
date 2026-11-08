@@ -1,10 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { _resetRotasForTests, configureApi, definirArmazem, type ConnectMachine, type Server } from '@hangar/core';
+import { _resetRotasForTests, configureApi, configureDiag, definirArmazem, type ConnectMachine, type Server } from '@hangar/core';
 
 const vault = vi.hoisted(() => new Map<string, string>());
+// Chave aqui: o cofre falha ao ler ou gravar só ela.
+const broken = vi.hoisted(() => ({ read: new Set<string>(), write: new Set<string>(), hang: new Set<string>(), hangWrite: new Set<string>() }));
 vi.mock('expo-secure-store', () => ({
-  getItemAsync: async (key: string) => vault.get(key) ?? null,
-  setItemAsync: async (key: string, value: string) => { vault.set(key, value); },
+  getItemAsync: async (key: string) => {
+    if (broken.hang.has(key)) return new Promise<never>(() => {});
+    if (broken.read.has(key)) throw new Error('cofre');
+    return vault.get(key) ?? null;
+  },
+  setItemAsync: async (key: string, value: string) => {
+    if (broken.hangWrite.has(key)) return new Promise<never>(() => {});
+    if (broken.write.has(key)) throw new Error('cofre');
+    vault.set(key, value);
+  },
   deleteItemAsync: async (key: string) => { vault.delete(key); },
 }));
 vi.mock('expo-constants', () => ({ default: { deviceName: 'fixture-phone' } }));
@@ -12,6 +22,7 @@ vi.mock('expo-constants', () => ({ default: { deviceName: 'fixture-phone' } }));
 import { useServers } from '../../stores/servers';
 import { CONNECT_SERVICE_URL, useConnect } from './connectStore';
 import * as m from '../../paraglide/messages';
+import codes from '../../../../packages/core/src/installCode.fixtures.json';
 
 const ACCOUNT_KEY = 'cp_connect_account_v1';
 const MACHINE_URL = 'https://pc1.acme.hangar.dev.br';
@@ -66,6 +77,10 @@ async function seed(list: Server[]) {
 
 beforeEach(async () => {
   vault.clear();
+  broken.read.clear();
+  broken.write.clear();
+  broken.hang.clear();
+  broken.hangWrite.clear();
   _resetRotasForTests();
   configureApi({ getBaseUrl: () => '', getToken: () => null, onUnauthorized: vi.fn(), origin: null,
     createEventSource: () => { throw new Error('sem SSE'); } });
@@ -266,6 +281,102 @@ describe('máquinas da conta', () => {
     expect(servers()).toHaveLength(1);
   });
 
+  it('entra em todas com o mesmo id de instalação, guardado no cofre', async () => {
+    const other: ConnectMachine = { machine_id: 'pc2', name: 'pc2', host: 'pc2.acme.hangar.dev.br', online: true };
+    const calls = network({ machines: [online, other, { ...offline, machine_id: 'pc3', name: 'pc3', host: 'pc3.acme.hangar.dev.br' }],
+      statuses: [{ status: 'approved', token: 'device-a' }, { status: 'approved', token: 'device-b' }],
+      route: (call) => {
+        const id = /^\/v1\/machines\/(\w+)\/devices$/.exec(call.url.pathname)?.[1];
+        if (id) return json({ url: `https://${id}.acme.hangar.dev.br`, ticket: '{"nonce":"n"}', signature: 'c2ln' });
+        const isPc2 = call.url.host === 'pc2.acme.hangar.dev.br' && !call.url.pathname.startsWith('/api/connect');
+        return isPc2 ? json({ identificador: 'pc2', lan_url: '' }) : undefined;
+      } });
+    await connect().refreshMachines();
+
+    const entering = connect().enterAll();
+    await elapse(6000);
+    await entering;
+
+    const redeems = calls.filter((call) => call.url.pathname === '/api/connect/redeem');
+    expect(redeems.map((call) => call.url.host).sort()).toEqual(['pc1.acme.hangar.dev.br', 'pc2.acme.hangar.dev.br']);
+    const ids = [...new Set(redeems.map((call) => call.body?.install_id))];
+    expect(ids).toHaveLength(1);
+    expect(ids[0]).toMatch(/^[A-Za-z0-9_-]{16,64}$/);
+    expect(vault.get('cp_connect_install_id_v1')).toBe(ids[0]);
+    expect(servers().map((s) => s.id).sort()).toEqual(['pc1', 'pc2']);
+  });
+
+  it('mostra o código do celular e, com o cofre falhando ou mudo, para com erro e não inventa outro id', async () => {
+    const events: { evento: string; codigo?: string }[] = [];
+    configureDiag({ registrar: (event) => { events.push(event); }, novoReq: () => '' });
+    vault.set('cp_connect_install_id_v1', codes[0].install_id);
+    await connect().loadInstallCode();
+    expect(connect().installCode).toBe(codes[0].code);
+
+    useConnect.setState({ installCode: '' });
+    const calls = network({ statuses: [{ status: 'approved', token: 'device-token' }] });
+    for (const fault of [broken.read, broken.hang]) {
+      fault.add('cp_connect_install_id_v1');
+      const entering = connect().enter(online);
+      await elapse(6000);
+      expect(await entering).toBeNull();
+      expect(connect().entries.pc1).toEqual({ phase: 'failed', error: m.connect_error_install_id() });
+      fault.clear();
+      useConnect.setState({ entries: {} });
+    }
+    expect(vault.get('cp_connect_install_id_v1')).toBe(codes[0].install_id);
+    expect(calls.some((call) => call.url.pathname === '/api/connect/redeem')).toBe(false);
+
+    // A tela diz por que o código não está disponível, em vez de só não mostrar nada.
+    broken.read.add('cp_connect_install_id_v1');
+    await connect().loadInstallCode();
+    expect([connect().installCode, connect().installCodeError]).toEqual(['', m.connect_install_code_unavailable()]);
+    broken.read.clear();
+    await connect().loadInstallCode();
+    expect([connect().installCode, connect().installCodeError]).toEqual([codes[0].code, '']);
+
+    vault.delete('cp_connect_install_id_v1');
+    for (const fault of [broken.write, broken.hangWrite]) {
+      fault.add('cp_connect_install_id_v1');
+      const loading = connect().loadInstallCode();
+      await elapse(6000);
+      await loading;
+      expect([connect().installCode, connect().installCodeError]).toEqual(['', m.connect_install_code_unavailable()]);
+      fault.clear();
+    }
+    // Sem gerador seguro o cofre não tem culpa: a causa dita é outra.
+    vi.stubGlobal('crypto', {});
+    await connect().loadInstallCode();
+    expect([connect().installCode, connect().installCodeError]).toEqual(['', m.connect_install_code_no_random()]);
+    expect(events.map((event) => event.codigo)).toEqual(['connect_install_id_unreadable', 'connect_install_id_unreadable',
+      'connect_install_id_unreadable', 'connect_install_id_unsaved', 'connect_install_id_unsaved', 'connect_install_id_no_random']);
+  });
+
+  it('id guardado fora da regra do servidor é trocado por um novo, gravado e registrado', async () => {
+    const events: { codigo?: string }[] = [];
+    configureDiag({ registrar: (event) => { events.push(event); }, novoReq: () => '' });
+    vault.set('cp_connect_install_id_v1', 'não vale');
+    await connect().loadInstallCode();
+    const saved = vault.get('cp_connect_install_id_v1');
+    expect(saved).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+    expect(connect().installCode).toMatch(/^[2-9A-HJ-NP-Z]{3}-[2-9A-HJ-NP-Z]{3}$/);
+    expect(connect().installCodeError).toBe('');
+    expect(events.map((event) => event.codigo)).toEqual(['connect_install_id_invalid']);
+  });
+
+  it('a leitura do cofre que volta a dar certo na entrada limpa o aviso de código indisponível', async () => {
+    vault.set('cp_connect_install_id_v1', codes[0].install_id);
+    broken.read.add('cp_connect_install_id_v1');
+    await connect().loadInstallCode();
+    expect(connect().installCodeError).toBe(m.connect_install_code_unavailable());
+    broken.read.clear();
+    network({ statuses: [{ status: 'approved', token: 'device-token' }] });
+    const entering = connect().enter(online);
+    await elapse(6000);
+    await entering;
+    expect([connect().installCode, connect().installCodeError]).toEqual([codes[0].code, '']);
+  });
+
   it('adds a machine as a normal server', async () => {
     const calls = network({ statuses: [{ status: 'approved', token: 'device-token' }] });
 
@@ -425,6 +536,22 @@ describe('aparelhos da máquina', () => {
     expect(approve).toMatchObject({ method: 'POST', auth: 'Bearer device-token' });
     expect(approve?.url.origin).toBe(MACHINE_URL);
     expect(connect().devices.pc1.rows?.every((row) => row.status === 'approved')).toBe(true);
+  });
+
+  it('aprova o mesmo celular só nas máquinas marcadas, cada uma com a credencial dela', async () => {
+    const pc2: Server = { ...entry, id: 'pc2', label: 'pc2', baseUrl: 'https://pc2.acme.hangar.dev.br', token: 'device-token-2' };
+    await seed([entry, pc2, { ...pc2, id: 'pc3', label: 'pc3', baseUrl: 'https://pc3.acme.hangar.dev.br' }]);
+    const calls = network();
+
+    const failed = await connect().answerGroup([{ serverId: 'pc1', label: 'pc1', deviceId: 'a1' }, { serverId: 'pc2', label: 'pc2', deviceId: 'a2' }], true);
+
+    const answers = calls.filter((call) => call.method === 'DELETE' || (call.method === 'POST' && call.url.pathname.endsWith('/approve')))
+      .map((call) => `${call.method} ${call.url.host}${call.url.pathname} ${call.auth}`).sort();
+    expect(answers).toEqual([
+      'POST pc1.acme.hangar.dev.br/api/connect/devices/a1/approve Bearer device-token',
+      'POST pc2.acme.hangar.dev.br/api/connect/devices/a2/approve Bearer device-token-2',
+    ]);
+    expect(failed).toEqual([]);
   });
 
   it('a resposta à aprovação relê a lista mesmo com uma leitura antiga em curso', async () => {

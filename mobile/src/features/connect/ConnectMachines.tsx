@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, AppState, Text, View } from 'react-native';
 import Constants from 'expo-constants';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { StyleSheet } from 'react-native-unistyles';
-import type { ConnectMachine, Server } from '@hangar/core';
+import { relativeTime, type ConnectMachine, type Server } from '@hangar/core';
 import { InfoNotice } from '../config/InfoNotice';
 import { Pill } from '../config/PageHeader';
 import { SectionCard } from '../config/SectionCard';
@@ -11,8 +11,10 @@ import { useSettingsColors } from '../config/colors';
 import { MachineGroup, MachineHelp, MachineRow } from '../machines/MachineRows';
 import { Field, MachineSheet, Notice, styles as machineStyles, useMachineAction } from '../machines/parts';
 import { ownServers, useServers } from '../../stores/servers';
-import { connectServers, needsEntry, sameMachine, useConnect } from './connectStore';
+import { connectServers, missingMachines, needsEntry, sameMachine, useConnect } from './connectStore';
 import { ConnectMark } from './ConnectHero';
+import { chosenTargets, pendingGroups, type GroupTarget, type PendingGroup } from './pendingGroups';
+import { reason } from '../machines/api';
 import { haptic } from '../../ui/haptics';
 import * as m from '../../paraglide/messages';
 
@@ -47,12 +49,33 @@ export function ConnectMachines({ onDone }: { onDone: () => void }) {
   // O pedido de outro aparelho chega enquanto a pessoa olha esta tela: fora dela, ou com o app no fundo, não consulta.
   useFocusEffect(useCallback(() => {
     const timer = setInterval(() => {
-      if (AppState.currentState === 'active') void useConnect.getState().refreshDevices();
+      if (AppState.currentState !== 'active') return;
+      void useConnect.getState().refreshDevices();
+      // Cofre que falhou na abertura pode voltar: o código aparece sem a pessoa precisar entrar numa máquina.
+      if (useConnect.getState().installCodeError) void useConnect.getState().loadInstallCode();
     }, DEVICES_REFRESH_MS);
     return () => clearInterval(timer);
   }, []));
   const entered = () => { if (mounted.current) onDone(); };
   const waiting = machines?.filter((machine) => entries[machine.machine_id]?.phase === 'waiting') ?? [];
+  const own = ownServers(servers);
+  const missing = missingMachines(machines, servers);
+  // Uma máquina esperando aprovação não trava as outras: "Entrar em todas" pula quem já está pedindo.
+  const idle = missing.filter((machine) => !['asking', 'waiting'].includes(entries[machine.machine_id]?.phase ?? ''));
+  const later = machines?.filter((machine) => !machine.online && !own.some((server) => sameMachine(server, machine))) ?? [];
+  const code = useConnect((s) => s.installCode);
+  const codeError = useConnect((s) => s.installCodeError);
+  const offerAll = missing.length > 1;
+  // Também no pedido de uma máquina só: quem aprova vê o mesmo código no cartão.
+  const asking = missing.length > 0;
+  useEffect(() => { if (asking) void useConnect.getState().loadInstallCode(); }, [asking]);
+  const codeText = code ? m.connect_enter_all_code({ code }) : codeError;
+  const allHelp = [codeText,
+    later.length ? m.connect_enter_all_offline({ machines: later.map((machine) => machine.name).join(', ') }) : ''].filter(Boolean).join('\n');
+  const enterAll = () => {
+    haptic.selection();
+    void useConnect.getState().enterAll().then(() => { if (mounted.current) refresh(); });
+  };
   const account = useConnect((s) => s.account?.name ?? '');
   return <>
     <View style={[styles.header, { borderColor: c.border }]}>
@@ -66,10 +89,12 @@ export function ConnectMachines({ onDone }: { onDone: () => void }) {
       <ActivityIndicator color={c.accent} />
       <View style={styles.waitingText}><Notice text={m.connect_waiting_notice({ name: machine.name })} /></View>
     </View>)}
+    {waiting.length && codeText ? <Notice text={codeText} error={!code} /> : null}
     <SectionCard icon="Laptop" title={m.connect_your_machines()} subtitle={m.connect_machines_pull()}>
       {machines === null && !error ? <MachineRow title={loading ? m.mobile_machines_busy() : m.comum_carregando()} /> : null}
       {machines?.length === 0 ? <MachineRow title={m.connect_machines_empty()} /> : null}
       {machines?.map((machine) => <MachineItem key={machine.machine_id} machine={machine} onEntered={entered} onOpen={onDone} />)}
+      {offerAll ? <MachineRow title={m.connect_enter_all()} description={allHelp || undefined} action disabled={!idle.length} onPress={enterAll} /> : null}
     </SectionCard>
     <Notice text={error} error />
     {/* Puxar para atualizar não se vê: o erro traz o caminho à mostra. */}
@@ -130,12 +155,23 @@ export function ConnectRecovery({ servers }: { servers: Server[] }) {
 function AllDevices({ servers }: { servers: Server[] }) {
   const devices = useConnect((s) => s.devices);
   const action = useMachineAction();
+  const previous = useRef<PendingGroup[]>([]);
+  // O cartão de um celular pode estar incompleto enquanto uma lista não chegou ou falhou: aprovar ali deixaria máquina de fora.
+  const lists = useMemo(() => ({ read: servers.filter((server) => devices[server.id]).length, total: servers.length,
+    failed: servers.filter((server) => devices[server.id]?.error).map((server) => server.label) }), [servers, devices]);
+  // Fora do cartão: o pedido pode sumir da lista (expirou, respondido em outro lugar) e levar o cartão junto.
+  const [answerErrors, setAnswerErrors] = useState<(Failed & { group: string })[]>([]);
+  // Cada resposta troca os avisos do seu cartão: nova tentativa que deu certo apaga a falha anterior.
+  const onAnswered = useCallback((group: string, failed: Failed[]) => setAnswerErrors((current) =>
+    [...current.filter((e) => e.group !== group), ...failed.map((f) => ({ ...f, group }))]), []);
   if (!servers.length) return null;
   const answer = (server: Server, id: string, approve: boolean) => {
     void action.run((signal) => useConnect.getState().answerDevice(server, id, approve, signal), () => {});
   };
   const rows = servers.flatMap((server) => (devices[server.id]?.rows ?? []).map((row) => ({ server, row })));
-  const pending = rows.filter(({ row }) => row.status === 'pending');
+  const groups = pendingGroups(servers.map((server) => ({ serverId: server.id, label: server.label, rows: devices[server.id]?.rows ?? null })),
+    previous.current);
+  previous.current = groups;
   const approved = rows.filter(({ row }) => row.status === 'approved');
   // "Nenhum aparelho" só com todas as listas na mão: uma ainda a caminho pode trazer algum.
   const loading = servers.some((server) => !devices[server.id]);
@@ -143,13 +179,11 @@ function AllDevices({ servers }: { servers: Server[] }) {
   const failures = servers.filter((server) => devices[server.id]?.error)
     .map((server) => `${server.label}: ${devices[server.id]?.error ?? ''}`);
   return <>
-    {pending.map(({ server, row }) => <SectionCard key={`${server.id}:${row.device_id}`} icon="Smartphone" title={row.name}
-      subtitle={m.connect_device_pending({ machine: server.label })}>
-      <MachineRow title={m.connect_device_approve()} action disabled={action.busy}
-        onPress={() => confirm(m.connect_device_approve_title({ name: row.name }), m.connect_device_approve_body({ machine: server.label }),
-          m.connect_device_approve(), () => answer(server, row.device_id, true))} />
-      <MachineRow title={m.connect_device_deny()} danger action disabled={action.busy} onPress={() => answer(server, row.device_id, false)} />
-    </SectionCard>)}
+    {groups.map((group) => <PendingGroupCard key={group.key} group={group} lists={lists} onAnswered={onAnswered} />)}
+    {answerErrors.length ? <MachineGroup>
+      {answerErrors.map((failed, i) => <Notice key={`${failed.label}:${i}`} text={m.connect_group_failed({ machines: failed.label, error: failed.error })} error />)}
+      <MachineRow title={m.connect_notice_dismiss()} action onPress={() => setAnswerErrors([])} />
+    </MachineGroup> : null}
     <SectionCard icon="Smartphone" title={m.connect_devices_all()}>
       {loading ? <MachineRow title={m.comum_carregando()} /> : null}
       {!loading && !approved.length && !failures.length ? <MachineRow title={m.connect_devices_empty()} /> : null}
@@ -166,6 +200,81 @@ function AllDevices({ servers }: { servers: Server[] }) {
     <MachineHelp>{m.connect_devices_help()}</MachineHelp>
   </>;
 }
+
+type Failed = { label: string; error: string };
+const AGE_REFRESH_MS = 60_000;
+
+/** Um celular pedindo entrada em várias máquinas: um cartão, todas marcadas, cada aprovação pela rota da própria máquina. */
+const PendingGroupCard = memo(function PendingGroupCard({ group, lists, onAnswered }: {
+  group: PendingGroup; lists: { read: number; total: number; failed: string[] }; onAnswered: (group: string, failed: Failed[]) => void;
+}) {
+  // O alerta de confirmação fica aberto enquanto as listas chegam: o "sim" confere o cartão de agora, não o do toque.
+  const latest = useRef({ group });
+  latest.current = { group };
+  const [off, setOff] = useState<ReadonlySet<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  // Em memo o cartão só redesenha quando o grupo muda: "pediu há" anda sozinho.
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => tick((n) => n + 1), AGE_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, []);
+  const chosen = chosenTargets(group, off);
+  const reading = lists.read < lists.total;
+  const answer = (targets: GroupTarget[], approve: boolean, skipped: Failed[] = []) => {
+    setBusy(true);
+    void useConnect.getState().answerGroup(targets, approve).then((failed) => {
+      const all = [...skipped, ...failed];
+      if (all.length) haptic.error();
+      else haptic.success();
+      onAnswered(group.key, all);
+    }).catch((error: unknown) => {
+      haptic.error();
+      onAnswered(group.key, [...skipped, { label: group.name, error: reason(error) }]);
+    }).finally(() => setBusy(false));
+  };
+  // Só aprova o que a pessoa viu no alerta e ainda está na lista; o resto vira aviso, nunca silêncio.
+  const confirmed = (asked: GroupTarget[]) => {
+    const now = latest.current.group;
+    if (now.clash) {
+      haptic.error();
+      onAnswered(group.key, [{ label: group.name, error: m.connect_group_code_clash() }]);
+      return;
+    }
+    const still = asked.filter((target) => now.targets.some((t) => t.serverId === target.serverId && t.deviceId === target.deviceId));
+    const gone = asked.filter((target) => !still.includes(target));
+    const skipped = gone.length ? [{ label: gone.map((target) => target.label).join(', '), error: m.connect_group_unavailable() }] : [];
+    if (still.length) answer(still, true, skipped);
+    else { haptic.error(); onAnswered(group.key, skipped); }
+  };
+  const machines = new Set(group.targets.map((target) => target.serverId)).size;
+  const title = machines === 1
+    ? m.connect_group_title_one({ name: group.name, machine: group.targets[0].label })
+    : m.connect_group_title({ name: group.name, count: String(machines) });
+  const asked = relativeTime(group.createdAt);
+  const toggle = (key: string) => {
+    haptic.selection();
+    setOff((current) => {
+      const next = new Set(current);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
+  };
+  return <SectionCard icon="Smartphone" title={title} subtitle={m.connect_group_help()}>
+    {group.code ? <MachineRow title={m.connect_group_code({ code: group.code })} value={asked ? m.connect_group_asked({ when: asked }) : undefined} />
+      : asked ? <MachineRow title={m.connect_group_asked({ when: asked })} /> : null}
+    {group.clash ? <Notice text={m.connect_group_code_clash()} error /> : null}
+    {/* `selected` desenha o ✓ à vista; `checked` anuncia o estado ao leitor de tela. */}
+    {group.targets.length > 1 ? group.targets.map((target) => <MachineRow key={target.serverId} title={target.label}
+      checked={!off.has(target.serverId)} selected={!off.has(target.serverId)} disabled={busy} onPress={() => toggle(target.serverId)} />) : null}
+    {reading ? <MachineRow title={m.connect_group_reading({ read: String(lists.read), total: String(lists.total) })} /> : null}
+    <MachineRow title={m.connect_group_approve()} action disabled={busy || group.clash || reading || !chosen.length}
+      onPress={() => confirm(m.connect_device_approve_title({ name: group.name }),
+        m.connect_device_approve_body({ machine: chosen.map((target) => target.label).join(', ') }), m.connect_device_approve(), () => confirmed(chosen))} />
+    <MachineRow title={m.connect_group_deny()} danger action disabled={busy} onPress={() => answer(group.targets, false)} />
+    {lists.failed.map((machine) => <Notice key={machine} text={m.connect_group_list_failed({ machine })} error />)}
+  </SectionCard>;
+});
 
 function AccountRows() {
   const name = useConnect((s) => s.account?.name);

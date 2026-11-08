@@ -1,10 +1,10 @@
-import { comTeto, errorDetail, getConfigForServer, isLocalMachineUrl, isNoResponse, normalizeMachineUrl, probeServerResponse, tailscaleHost, verifyServerIdentity, type LanInfo, type Server } from '@hangar/core';
+import { comTeto, errorDetail, getConfigForServer, isLocalMachineUrl, isNoResponse, normalizeMachineUrl, probeServerResponse, registrarDiag, tailscaleHost, verifyServerIdentity, type LanInfo, type Server } from '@hangar/core';
 import * as m from '../../paraglide/messages';
 
 export type MachineId = { identificador: string; lan_url: string };
 export type Warning = { id: string; estado: string; motivo: string };
 export type Peer = { id: string; base_url: string; enabled: boolean };
-export type ConnectDevice = { device_id: string; name: string; status: 'pending' | 'approved' | 'denied' };
+export type ConnectDevice = { device_id: string; name: string; status: 'pending' | 'approved' | 'denied'; install_code?: string; install_group?: string; created_at?: number };
 export type Check = { estado: 'ok' | 'estranho' | 'falhou' | 'recusou' | 'nao_configurado'; identificador: string; motivo: string; tempo_ms: number | null };
 export type Reach = { loopback: boolean; bind: string; enderecos: { tipo: 'nesta_maquina' | 'rede_local' | 'tailscale' | 'publico'; url: string; estado: string; tempo_ms: number | null; motivo: string }[] };
 export type Discovered = { nome: string; base_url: string; hosts?: string[]; connect_error?: string };
@@ -121,11 +121,22 @@ function peers(value: unknown): Peer[] {
   // O token da listagem é uma máscara, nunca uma credencial utilizável.
   return value.map((p) => ({ id: p.id, base_url: normalizeUrl(p.base_url), enabled: p.enabled !== false }));
 }
+/** A regra do `install_id` no servidor (`redeem_from` em `hangar-connect`); o grupo (64 hex) e o código ("ABC-DEF") cabem nela. */
+export const validInstallField = (value: string) => /^[A-Za-z0-9_-]{1,64}$/.test(value);
 export async function readDevices(s: Server, signal: AbortSignal): Promise<ConnectDevice[]> {
   const value = await request(s, '/api/connect/devices', signal);
   if (!Array.isArray(value) || !value.every((d) => object(d) && typeof d.device_id === 'string' && typeof d.name === 'string'
     && ['pending', 'approved', 'denied'].includes(String(d.status)))) throw invalid();
-  return value as ConnectDevice[];
+  // Código e chave de grupo fora do formato não juntam nem rotulam nada: o pedido fica no seu cartão, sem código.
+  return (value as Record<string, unknown>[]).map((row) => {
+    const { install_group: group, install_code: code, ...rest } = row;
+    const malformed = (field: unknown) => field !== undefined && !(typeof field === 'string' && validInstallField(field));
+    if (malformed(group) || malformed(code)) {
+      registrarDiag({ evento: 'connect.device_install_invalid', nivel: 'aviso', codigo: 'connect_device_install_invalid' });
+      return rest;
+    }
+    return row;
+  }) as ConnectDevice[];
 }
 export async function approveDevice(s: Server, id: string, signal: AbortSignal): Promise<void> {
   await request(s, `/api/connect/devices/${encodeURIComponent(id)}/approve`, signal, 'POST');

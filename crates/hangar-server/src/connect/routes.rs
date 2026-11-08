@@ -78,6 +78,7 @@ fn refused(headers: &HeaderMap, refusal: Refusal) -> Response {
         Refusal::Credential => error(headers, StatusCode::UNAUTHORIZED, "connect_device_refused", "aparelho ou segredo recusado"),
         Refusal::Unknown => error(headers, StatusCode::NOT_FOUND, "connect_device_unknown", "aparelho desconhecido"),
         Refusal::NotYours => error(headers, StatusCode::FORBIDDEN, "connect_device_not_yours", "só a senha do dono revoga um aparelho que este não aprovou"),
+        Refusal::InstallId => error(headers, StatusCode::UNPROCESSABLE_ENTITY, "connect_install_id_invalid", "identificador do aparelho inválido"),
         Refusal::Io(cause) => {
             tracing::warn!(code = "connect_store_failed", "os aparelhos do Connect não foram gravados: {cause}");
             error(headers, StatusCode::SERVICE_UNAVAILABLE, "connect_store_failed", "os aparelhos do Connect não foram gravados")
@@ -100,12 +101,12 @@ async fn blocking<T: Send + 'static>(st: &AppState, op: impl FnOnce(&Store) -> R
 
 // `device_name` do corpo fica de fora de propósito: quem aparece na aprovação é o nome assinado no bilhete.
 #[derive(Deserialize)]
-struct RedeemBody { ticket: String, signature: String, secret: String }
+struct RedeemBody { ticket: String, signature: String, secret: String, #[serde(default)] install_id: Option<String> }
 
 async fn redeem(State(st): State<Arc<AppState>>, req: Request) -> Response {
     let headers = req.headers().clone();
     let body: RedeemBody = match parse(req).await { Ok(body) => body, Err(response) => return response };
-    match blocking(&st, move |store| store.redeem(&body.ticket, &body.signature, &body.secret)).await {
+    match blocking(&st, move |store| store.redeem_from(&body.ticket, &body.signature, &body.secret, body.install_id.as_deref())).await {
         Ok(device_id) => reply(&headers, StatusCode::ACCEPTED, json!({"device_id": device_id, "status": "pending"})),
         Err(refusal) => refused(&headers, refusal),
     }

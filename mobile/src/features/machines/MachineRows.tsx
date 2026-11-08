@@ -39,7 +39,8 @@ export function MachineRow({ title, value, description, onPress, disabled, dange
     // No interruptor o estado já é lido pelo `checked`; o texto só vale enquanto ele é `mixed`.
     accessibilityValue={value && (checked === undefined || checked === 'mixed') ? { text: value } : undefined}
     accessibilityHint={description}
-    accessibilityState={{ disabled, selected, expanded, checked }} disabled={disabled} onPress={onPress}
+    // No interruptor o ✓ de `selected` é só desenho: anunciar os dois soaria "selecionado, ligado".
+    accessibilityState={{ disabled, selected: checked === undefined ? selected : undefined, expanded, checked }} disabled={disabled} onPress={onPress}
     style={({ pressed }) => [...style, pressed && { backgroundColor: c.hover }]}>{content}</Pressable>
     : <View style={style}>{content}</View>;
 }

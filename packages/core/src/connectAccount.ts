@@ -116,7 +116,8 @@ async function waitForApproval(base: string, deviceId: string, secret: string): 
 }
 
 /** Pede a entrada do aparelho e espera a aprovação na máquina. `onPending` avisa uma vez que ela foi pedida. */
-export async function addMachine(session: AccountSession, machine: ConnectMachine, deviceName: string, onPending: () => void): Promise<Server> {
+export async function addMachine(session: AccountSession, machine: ConnectMachine, deviceName: string, onPending: () => void,
+  installId?: string): Promise<Server> {
   const secret = newSecret();
   const verifier = sha256Hex(new TextEncoder().encode(secret));
   const ticket = record(await post(session.serviceUrl, `/v1/machines/${encodeURIComponent(machine.machine_id)}/devices`,
@@ -124,7 +125,7 @@ export async function addMachine(session: AccountSession, machine: ConnectMachin
   const url = machineUrl(ticket.url, machine.host);
   const base = baseOf({ id: SERVIDOR_CANDIDATO, label: machine.name, baseUrl: url, token: '' });
   const { device_id: deviceId } = record(await post(base, '/api/connect/redeem',
-    { ticket: ticket.ticket, signature: ticket.signature, secret, device_name: deviceName }));
+    { ticket: ticket.ticket, signature: ticket.signature, secret, device_name: deviceName, ...(installId ? { install_id: installId } : {}) }));
   if (!filled(deviceId)) throw fail('connect_response_invalid');
   onPending();
   const token = await waitForApproval(base, deviceId, secret);
