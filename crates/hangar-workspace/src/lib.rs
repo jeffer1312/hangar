@@ -659,7 +659,11 @@ fn existing_prefix_resolved(absolute: &Path) -> Option<PathBuf> {
             _ => lexical.push(part.as_os_str()),
         }
     }
-    let base = lexical.ancestors().skip(1).find(|base| base.exists())?;
+    // O mais fundo que existe como entrada; se for um link pendurado, o laço comum segue o link.
+    let base = lexical.ancestors().find(|base| base.symlink_metadata().is_ok())?;
+    if !base.exists() {
+        return None;
+    }
     let real = simplify(std::fs::canonicalize(base).ok()?);
     Some(real.join(lexical.strip_prefix(base).ok()?))
 }
@@ -715,5 +719,20 @@ mod short_name_tests {
         assert_ne!(short, long, "o volume da pasta temporária não gera nomes 8.3: o teste não prova nada aqui");
         assert_eq!(real(&short.join(".git").join("config")), long.join(".git").join("config"));
         assert_eq!(real(&short.join("a").join("..").join("b")), long.join("b"));
+    }
+
+    /// Link pendurado (o alvo ainda não existe) sai pelo alvo, como no `ntpath.realpath`: senão um
+    /// link dentro da raiz apontando para fora passaria como caminho dentro dela.
+    #[test]
+    fn a_dangling_link_resolves_to_its_target_outside_the_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = real(dir.path());
+        let (root, outside) = (base.join("raiz"), base.join("fora"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::windows::fs::symlink_file(outside.join("novo.txt"), root.join("evil")).unwrap();
+        assert_eq!(real(&root.join("evil")), outside.join("novo.txt"));
+        std::os::windows::fs::symlink_dir(outside.join("nova"), root.join("pasta")).unwrap();
+        assert_eq!(real(&root.join("pasta").join("x.txt")), outside.join("nova").join("x.txt"));
     }
 }
