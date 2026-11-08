@@ -92,8 +92,8 @@ async fn serve_device(st: &AppState, mut req: Request, next: Next, id: DeviceId,
         return refusal(&req, StatusCode::FORBIDDEN, "connect_owner_secret_refused", "rota só do dono");
     }
     // A origem do Connect é de todos que entram por ela; quem encheu o contador não foi este aparelho.
-    if connect && let Err(error) = st.auth.clear_origin(CONNECT_PEER).await {
-        return auth::unavailable(error);
+    if connect && let Err(error) = st.auth.clear_if_blocked(CONNECT_PEER).await {
+        tracing::warn!(code = "connect_counter_unavailable", "contador de tentativas indisponível para o aparelho: {error:?}");
     }
     let owner = st.cfg.auth_token.as_bytes();
     rewrite_credentials(&mut req, |value| {

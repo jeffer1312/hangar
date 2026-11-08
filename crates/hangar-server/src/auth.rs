@@ -106,10 +106,13 @@ impl Auth {
         if decision.became_blocked != 0 { tracing::warn!(ip=%origin, "token errado 8 vezes em 30 s; origem bloqueada"); }
         Ok(())
     }
-    pub async fn clear_origin(&self, ip: &str) -> Result<(), AuthError> {
+    /// Só escreve no contador quando a origem está bloqueada.
+    pub async fn clear_if_blocked(&self, ip: &str) -> Result<(), AuthError> {
         let auth = self.clone(); let ip = ip.to_owned();
-        tokio::task::spawn_blocking(move || auth.transaction(|origins| origins.clear_origin(&ip)))
-            .await.map_err(|_| AuthError::Panic)?
+        tokio::task::spawn_blocking(move || auth.transaction(|origins| {
+            if origins.is_blocked(&ip, auth.operation_time()?) { origins.clear_origin(&ip); }
+            Ok::<_, AuthError>(())
+        })?).await.map_err(|_| AuthError::Panic)?
     }
     pub async fn mark_blocked_async(&self, ip: &str) -> Result<(), AuthError> {
         let auth = self.clone(); let ip = ip.to_owned();
