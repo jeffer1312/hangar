@@ -22,9 +22,12 @@ def _systemd_user():
 @pytest.mark.skipif(not _systemd_user(), reason="sem o systemd do usuário")
 def test_command_runs_in_its_own_capped_scope():
     result = _run({"HANGAR_BUILD_SWAP_MAX": "1G"},
-                  'g=$(cut -d: -f3 /proc/self/cgroup); echo "$g"; cat "/sys/fs/cgroup$g/memory.swap.max"; exit 7')
+                  'g=$(cut -d: -f3 /proc/self/cgroup); echo "$g"; cat "/sys/fs/cgroup$g/memory.swap.max" '
+                  '"/sys/fs/cgroup$g/memory.high"; exit 7')
     assert result.returncode == 7, result.stderr
-    cgroup, swap_max = result.stdout.split()
+    cgroup, swap_max, high = result.stdout.split()
+    # O Node tira o heap do menor teto do grupo: um MemoryHigh o deixa curto para o svelte-check.
+    assert high == "max"
     assert cgroup != Path("/proc/self/cgroup").read_text().strip().rsplit(":", 1)[-1]
     assert cgroup.endswith(".scope") and "/run-" in cgroup
     assert swap_max == str(1 << 30)
