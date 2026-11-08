@@ -105,10 +105,11 @@ pub struct OtherFrame {
     pub text: String,
     pub typed: Option<String>,
     pub styled: Option<String>,
+    pub editor: Option<String>,
 }
 impl OtherFrame {
     pub fn from_styled(styled:String)->Self {
-        Self {text:crate::terminal_input::unstyle(&styled,true),typed:Some(crate::terminal_input::unstyle(&styled,false)),styled:Some(styled)}
+        Self {text:crate::terminal_input::unstyle(&styled,true),typed:Some(crate::terminal_input::unstyle(&styled,false)),styled:Some(styled),editor:None}
     }
 }
 #[derive(Clone, Debug)]
