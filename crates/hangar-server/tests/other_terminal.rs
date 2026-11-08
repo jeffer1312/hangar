@@ -210,6 +210,52 @@ impl hangar_server::runtime::other_terminal::OtherIo for RecordingIo {
 fn start_recording(root:&std::path::Path,provider:&str,inbox:std::sync::Arc<hangar_server::provider_models::inbox::Store>,io:std::sync::Arc<RecordingIo>)->hangar_server::runtime::other_terminal::OtherHandle {
     start_recording_with_tick(root,provider,inbox,io,std::time::Duration::from_secs(3600))
 }
+
+#[tokio::test]
+async fn other_terminal_receipt_failure_before_writing_keeps_the_entry_waiting_for_recovery() {
+    use hangar_server::runtime::queue::Action;
+    use std::sync::Arc;
+    let root = tempfile::tempdir().unwrap();
+    let inbox = hangar_server::provider_models::inbox::Store::new();
+    let io = Arc::new(RecordingIo::default());
+    let handle = start_recording(root.path(), "pi", inbox.clone(), io.clone());
+    let mut frames = handle.last_frame();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while frames.borrow().is_none() { frames.changed().await.unwrap(); }
+    }).await.unwrap();
+    handle.queue("append-recovery".into(), Action::Append {
+        text:"continuar após recuperação".into(),delivered:false,ts:None,pre_transcript:false,
+        entry_id:Some("recover-entry".into()),
+    }).await.unwrap();
+    let path = root.path().join("conversation-a.jsonl");
+    let interrupted = path.clone();
+    *io.before_prove.lock().unwrap() = Some(Box::new(move || {
+        std::fs::remove_file(&interrupted).unwrap();
+        std::fs::create_dir(&interrupted).unwrap();
+    }));
+    assert_eq!(handle.drain().await.unwrap_err().code, "receipt_scan");
+    let waiting = handle.snapshot().await.unwrap();
+    assert_eq!(waiting["queue"][0]["delivered"], false);
+    assert!(io.writes.lock().unwrap().is_empty());
+    let durable: serde_json::Value = serde_json::from_slice(&std::fs::read(root.path().join("state.json")).unwrap()).unwrap();
+    assert_eq!(durable["rows"][0]["delivered"], false);
+    std::fs::remove_dir(&path).unwrap();
+    std::fs::write(&path, b"").unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let registration = inbox.register("pi-a", tx);
+    let sending = { let handle = handle.clone(); tokio::spawn(async move { handle.drain().await }) };
+    let frame = tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv()).await.unwrap().unwrap();
+    assert_eq!(frame["id"], "recover-entry");
+    assert_eq!(frame["text"], "continuar após recuperação");
+    inbox.respond("pi-a", &json!({"id":frame["id"],"ok":true}));
+    assert_eq!(sending.await.unwrap().unwrap()["drained"], 1);
+    assert_eq!(handle.drain().await.unwrap()["drained"], 0);
+    assert_eq!(handle.snapshot().await.unwrap()["queue"][0]["delivered"], true);
+    assert!(rx.try_recv().is_err());
+    assert!(io.writes.lock().unwrap().is_empty());
+    handle.stop().await.unwrap();
+    inbox.remove("pi-a", &registration);
+}
 fn start_recording_with_tick(root:&std::path::Path,provider:&str,inbox:std::sync::Arc<hangar_server::provider_models::inbox::Store>,io:std::sync::Arc<RecordingIo>,tick:std::time::Duration)->hangar_server::runtime::other_terminal::OtherHandle {
     start_recording_with_pane(root, provider, inbox, io, tick, "%1")
 }
