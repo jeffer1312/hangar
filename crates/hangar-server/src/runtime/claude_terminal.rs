@@ -112,7 +112,7 @@ fn prove(panes: &[Pane], name: &str, claude_base: &Path, claim: Option<&PluginCl
         Err(_) => return Err(refused("terminal_native_record_unavailable", "o registro do Claude no terminal não pôde ser lido")),
     };
     let plugin_key = env("HANGAR_PLUGIN_TOKEN").and_then(|token| token.split_once('.').map(|(key, _)| key.to_owned())).filter(|k| !k.is_empty());
-    let transcript_of = |sid: &str| config_dir.join("projects").join(hangar_workspace::worktrees::sanitize_cwd(&row.cwd)).join(format!("{sid}.jsonl"));
+    let transcript_of = |sid: &str| super::claude_launch::transcript_in(&config_dir.join("projects"), &row.cwd, sid);
     // Sem o registro nativo (o Claude não o recria), o `/pull` do plugin deste processo diz a conversa: a chave
     // do token é a do ambiente do agente, o transcript dela existe e o argumento do processo não a contradiz.
     let claimed = claim.filter(|claim| native.is_none()
