@@ -65,6 +65,9 @@ struct Device {
     approved_by: Option<DeviceId>,
     #[serde(default)]
     approved_at: Option<u64>,
+    /// Mesmo valor nos pedidos de um celular a várias máquinas: só agrupa o cartão, não dá acesso.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    install_id: Option<String>,
 }
 
 /// Entregas sem confirmação que seguem valendo; a mais velha sai, senão um par fora do ar acumularia tokens.
@@ -112,6 +115,7 @@ pub enum Refusal {
     Unknown,
     /// Aparelho pedindo para revogar outro que não aprovou.
     NotYours,
+    InstallId,
     Io(io::Error),
 }
 
@@ -133,6 +137,8 @@ pub struct Row {
     pub name: String,
     pub status: Status,
     pub last_seen: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install_id: Option<String>,
 }
 
 pub struct Store {
@@ -190,6 +196,14 @@ impl Store {
 
     /// `signature` confere os bytes de `ticket` como vieram: o bilhete nunca é serializado de novo.
     pub fn redeem(&self, ticket: &str, signature: &str, secret: &str) -> Result<DeviceId, Refusal> {
+        self.redeem_from(ticket, signature, secret, None)
+    }
+
+    /// `install_id` vem do celular e só agrupa os pedidos dele no cartão de aprovação.
+    pub fn redeem_from(&self, ticket: &str, signature: &str, secret: &str, install_id: Option<&str>) -> Result<DeviceId, Refusal> {
+        if install_id.is_some_and(|id| id.is_empty() || id.len() > 64 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')) {
+            return Err(Refusal::InstallId);
+        }
         let identity = self.identity.read().unwrap_or_else(|e| e.into_inner()).clone().ok_or(Refusal::NotLinked)?;
         let signature = base64::engine::general_purpose::STANDARD.decode(signature).map_err(|_| Refusal::Ticket)?;
         ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, identity.public_key)
@@ -214,7 +228,7 @@ impl Store {
             let id = credentials::id();
             state.devices.push(Device { id: id.clone(), name: display_name(&ticket.device_name), status: Status::Pending,
                 created_at: now, denied_at: None, verifier: Some(verifier), token_hash: None, next_token_hash: None, unconfirmed_token_hashes: Vec::new(), last_seen: None,
-                approved_by: None, approved_at: None });
+                approved_by: None, approved_at: None, install_id: install_id.map(str::to_owned) });
             Ok(id)
         })
     }
@@ -292,7 +306,7 @@ impl Store {
             let (id, token) = (credentials::id(), credentials::token());
             state.devices.push(Device { id: id.clone(), name: display_name(name), status: Status::Approved, created_at: now,
                 denied_at: None, verifier: None, token_hash: Some(credentials::hash(token.as_bytes())), next_token_hash: None, unconfirmed_token_hashes: Vec::new(), last_seen: None,
-                approved_by: None, approved_at: Some(now) });
+                approved_by: None, approved_at: Some(now), install_id: None });
             Ok((id, token))
         })
     }
@@ -328,7 +342,7 @@ impl Store {
         let now = (self.clock)();
         let mut state = self.lock();
         prune(&mut state, now);
-        state.devices.iter().map(|d| Row { device_id: d.id.clone(), name: d.name.clone(), status: d.status, last_seen: d.last_seen }).collect()
+        state.devices.iter().map(|d| Row { device_id: d.id.clone(), name: d.name.clone(), status: d.status, last_seen: d.last_seen, install_id: d.install_id.clone() }).collect()
     }
 
     /// shortcut: `last_seen` só vai ao disco com a próxima gravação; gravar por pedido custaria um fsync a cada um.

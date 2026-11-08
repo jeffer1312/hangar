@@ -333,6 +333,23 @@ async fn pending_device_has_no_access_until_approved() {
     assert!(!disk.contains(&token) && disk.contains(&hash(token.as_bytes())));
 }
 
+#[tokio::test]
+async fn install_id_groups_one_phone_across_machines() {
+    let e = plain().await;
+    let (text, signature) = ticket("pc1", "acme", "n1", "s1");
+    let bad = post(e.connect, "/api/connect/redeem", json!({"ticket": text, "signature": signature, "secret": "s1", "install_id": "não vale"}))
+        .send().await.unwrap();
+    assert_eq!(bad.status(), 422);
+    assert_eq!(body_of(bad).await["detail"]["code"], "connect_install_id_invalid");
+    let rows = body_of(get(e.main, "/api/connect/devices").bearer_auth(OWNER).send().await.unwrap()).await;
+    assert_eq!(rows, json!([]), "id recusado não cria pedido nem gasta o bilhete");
+    let accepted = post(e.connect, "/api/connect/redeem", json!({"ticket": text, "signature": signature, "secret": "s1", "install_id": "a1B2-c3_d4"}))
+        .send().await.unwrap();
+    assert_eq!(accepted.status(), 202);
+    let rows = body_of(get(e.main, "/api/connect/devices").bearer_auth(OWNER).send().await.unwrap()).await;
+    assert_eq!(rows[0]["install_id"], "a1B2-c3_d4");
+}
+
 #[test]
 fn at_most_five_pending_requests_and_they_expire() {
     let dir = crate::physical_tempdir();
