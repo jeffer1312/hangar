@@ -28,7 +28,7 @@ fn other_deferred_episode_matches_python_thresholds_and_recovery() {
             },
         ]
     );
-    assert_eq!(episode.observe(DeliveryStage::Write, "submitted"), None);
+    episode.composer_checked(true);
     assert_eq!(
         episode.observe(DeliveryStage::Composer, "composer_busy"),
         Some(Notice {
@@ -115,7 +115,7 @@ async fn other_deferred_episode_diary_keeps_escalation_and_new_episode() {
             notice.report(&diag, "episode-a");
         }
     }
-    episode.observe(DeliveryStage::Write, "submitted");
+    episode.composer_checked(true);
     episode
         .observe(DeliveryStage::Composer, "composer_busy")
         .unwrap()
@@ -138,4 +138,27 @@ async fn other_deferred_episode_diary_keeps_escalation_and_new_episode() {
             .collect::<Vec<_>>(),
         vec!["aviso", "erro", "erro", "aviso"]
     );
+}
+
+#[test]
+fn other_deferred_episode_unreadable_composer_and_write_failure_keep_the_count() {
+    for (stage, code) in [
+        (DeliveryStage::Write, "write_failed"),
+        (DeliveryStage::InputProof, "input_unproved"),
+        (DeliveryStage::SubmitProof, "submit_unproved"),
+    ] {
+        let mut episode = DeferredEpisode::default();
+        for _ in 0..5 {
+            episode.observe(DeliveryStage::Composer, "composer_busy");
+        }
+        episode.composer_checked(false);
+        assert_eq!(episode.observe(stage, code), None);
+        assert_eq!(
+            episode.observe(DeliveryStage::Composer, "composer_busy"),
+            Some(Notice {
+                code: "composer_busy",
+                count: 6
+            })
+        );
+    }
 }

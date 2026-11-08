@@ -34,9 +34,6 @@ impl DeferredEpisode {
             }
             self.unavailable = 0;
             if code != "composer_busy" {
-                if stage != DeliveryStage::Composer {
-                    self.composer = 0;
-                }
                 return None;
             }
             (&mut self.composer, "composer_busy")
