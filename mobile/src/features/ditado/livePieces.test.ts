@@ -1,5 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Server } from '@hangar/core';
+
+// Erro inesperado da regra de corte, para provar que ele desiste dos pedaços em vez de quebrar o medidor.
+const cutter = vi.hoisted(() => ({ throws: false }));
+vi.mock('@hangar/core', async (original) => {
+  const core = await original<typeof import('@hangar/core')>();
+  return { ...core, feedDictationFrame: (...args: Parameters<typeof core.feedDictationFrame>) => {
+    if (cutter.throws) throw new Error('regra quebrou');
+    return core.feedDictationFrame(...args);
+  } };
+});
+
 import { PCM_BYTES_PER_MS, STALL_MS, pieceWav, startLivePieces, wavDataOffset, type GrowingFile } from './livePieces';
 
 const server: Server = { id: 's1', label: 'A', baseUrl: 'https://a.test', token: 't' };
@@ -228,6 +239,37 @@ describe('startLivePieces', () => {
     expect(pcmSpan(calls[0].wav)).toEqual({ firstMs: 0, ms: 9100 });
     calls[0].resolve({ raw: 'tudo' });
     await expect(handle.result).resolves.toMatchObject({ raw: 'tudo' });
+  });
+
+  it('a espera de um pedaço conta do momento em que ele passou a ser o primeiro da fila', () => {
+    const { calls, transcribe } = api();
+    const onFail = vi.fn();
+    const clock = { now: 0 };
+    const wav = growingWav();
+    // Teto de 12 s e gravador 9,5 s atrasado: o 1º pedaço espera ~9,3 s e sai; o 2º espera ~9,2 s a partir daí.
+    const run = startLivePieces({ server, open: () => wav.file, transcribe, onFail, now: () => clock.now, stallMs: 12_000 });
+    speak(run, wav, 0, [{ ms: 9000, voice: true }, { ms: 600, voice: false }, { ms: 8600, voice: true }, { ms: 600, voice: false },
+      { ms: 10_000, voice: true }], 9500, clock);
+    expect(onFail).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(2);
+  });
+
+  it('erro inesperado da regra de corte desiste dos pedaços sem quebrar o medidor', () => {
+    const { calls, transcribe } = api();
+    const onFail = vi.fn();
+    const wav = growingWav();
+    const run = startLivePieces({ server, open: () => wav.file, transcribe, onFail });
+    speak(run, wav, 0, [{ ms: 9000, voice: true }, { ms: 600, voice: false }, { ms: 1000, voice: true }]);
+    expect(calls).toHaveLength(1);
+    cutter.throws = true;
+    try {
+      expect(() => run.feed(10_700, 0.05)).not.toThrow();
+    } finally {
+      cutter.throws = false;
+    }
+    expect(onFail).toHaveBeenCalledExactlyOnceWith('feed_failed', 'regra quebrou');
+    expect(calls[0].signal.aborted).toBe(true);
+    expect(run.finish()).toBeNull();
   });
 
   it('dados que param de chegar viram falha, não silêncio', () => {

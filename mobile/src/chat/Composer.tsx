@@ -22,6 +22,7 @@ import { useDitado } from '../features/ditado/useDitado';
 import { dictationStyleStore } from '../features/ditado/ditadoEstiloStore';
 import { DictationError, dictationAudio, runDictation, uploadName, type DictationSource } from '../features/ditado/dictationRun';
 import type { PiecesHandle } from '../features/ditado/livePieces';
+import { toast } from '../ui/Toast';
 import { AudioChip } from './AudioChip';
 import { CommandSheet, useSessionCommands } from './CommandSheet';
 import { SessionSettingsButton } from './SessionSettings';
@@ -975,13 +976,14 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
           })) iniciarAuto(completed.draft.text);
         }
       }
-      const inserted = !!completed.draft && !completed.dictation;
+      // Ditado em pedaços: a subida do arquivo termina depois do texto, e é ela (runDictation) que decide a cópia local.
       if (saved) {
-        // A subida do arquivo inteiro termina depois do texto: a cópia local sai só quando ela acaba.
-        void saved.then(() => {}, (e: unknown) => {
-          if (mountedRef.current) setError(e instanceof Error ? e.message : m.composer_falha_transcricao());
-        }).finally(() => { if (inserted && voice.audio) dropCopy(voice.audio.uri); });
-      } else if (inserted && voice.audio) dropCopy(voice.audio.uri);
+        saved.catch((e: unknown) => {
+          const msg = e instanceof Error ? e.message : m.composer_falha_transcricao();
+          if (!mountedRef.current) { toast.erro(msg); return; }
+          setError((current) => current && current !== msg ? `${current} · ${msg}` : msg);
+        });
+      } else if (completed.draft && !completed.dictation && voice.audio) dropCopy(voice.audio.uri);
     } catch (e) {
       cancelVoiceSend();
       if (mountedRef.current) {

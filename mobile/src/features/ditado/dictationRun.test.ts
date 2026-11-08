@@ -20,7 +20,8 @@ vi.mock('../../stores/chat', () => ({ chatStore: () => ({ use: { setState: () =>
 // expo-file-system não carrega no node; a galeria só apaga a cópia local do ditado substituído.
 vi.mock('../../chat/draftAttachments', () => ({ removeDraftAttachment: vi.fn() }));
 
-import { applyReadyDictation, readDictation, readDraft, setDictationInFlight, writeDictation, writeDraft } from '../../stores/drafts';
+import { configureDiag } from '@hangar/core';
+import { applyReadyDictation, readDictation, readDraft, recoverDictation, setDictationInFlight, writeDictation, writeDraft } from '../../stores/drafts';
 import { dictateUpload, dictationAudio, runDictation } from './dictationRun';
 import { removeDraftAttachment } from '../../chat/draftAttachments';
 import { useDictationOrganizationStore } from './dictationOrganization';
@@ -83,10 +84,15 @@ describe('runDictation com pedaços', () => {
   const wav = () => new File(['RIFF'], 'ditado.wav', { type: 'audio/wav' });
   const draft = () => writeDraft('s1', 'sess', { version: 1, text: '', revision: 0, transcript: null, attachments: [], submission: null });
 
+  const diag = vi.fn();
   beforeEach(() => {
     memory.clear(); core.transcribe.mockReset(); core.upload.mockReset(); core.relimpar.mockReset();
+    vi.mocked(removeDraftAttachment).mockClear();
     useDictationOrganizationStore.setState({ byServer: {} });
+    diag.mockClear();
+    configureDiag({ registrar: diag, novoReq: () => '' });
   });
+  const localCopy = 'file:///doc/draft-attachments/1-1.m4a';
 
   it('organiza o cru juntado uma vez, sem esperar a subida; o caminho do áudio entra depois do texto', async () => {
     const upload = deferred<{ path: string }>();
@@ -107,6 +113,57 @@ describe('runDictation com pedaços', () => {
     await out.saved;
     expect(readDraft('s1', 'sess')?.recordings).toEqual([{ id: 'v1', serverPath: '/up/sess/ditado.wav' }]);
     expect(core.upload).toHaveBeenCalledExactlyOnceWith(server, 'sess', expect.any(File), { audioOnly: true });
+    // O áudio está no servidor e na gravação do rascunho: a cópia local sobra.
+    expect(removeDraftAttachment).toHaveBeenCalledExactlyOnceWith(localCopy);
+  });
+
+  it('subida que termina depois de o envio sair: o áudio não entra no rascunho vazio, a cópia sai e fica registrado', async () => {
+    const upload = deferred<{ path: string }>();
+    core.upload.mockReturnValueOnce(upload.promise);
+    core.relimpar.mockResolvedValueOnce({ text: 'ok', aviso: null, estilo_aplicado: 'prosa' });
+    draft();
+    const v = voice({ estilo: 'prosa' });
+    writeDictation('s1', 'sess', v);
+    const out = await runDictation(server, 's1', 'sess', v, { file: wav(), pieces: pieces(Promise.resolve({ raw: 'ok', aviso: '' })) },
+      { isActive: () => true });
+    // Como o envio entregue deixa o rascunho: campo vazio, sem o ditado.
+    const { dictationId: _sent, ...sent } = readDraft('s1', 'sess')!;
+    writeDraft('s1', 'sess', { ...sent, text: '', revision: sent.revision + 1, recordings: [], submission: null });
+    upload.resolve({ path: '/up/sess/ditado.wav' });
+    await out.saved;
+    expect(readDraft('s1', 'sess')?.recordings).toEqual([]);
+    expect(removeDraftAttachment).toHaveBeenCalledExactlyOnceWith(localCopy);
+    expect(diag).toHaveBeenCalledWith(expect.objectContaining({ evento: 'dictation.audio_unattached' }), undefined);
+  });
+
+  it('subida que falha com o texto já no campo: o áudio fica no aparelho, guardado com o ditado e tocável', async () => {
+    core.upload.mockRejectedValueOnce(new Error('503: cofre fora'));
+    core.relimpar.mockResolvedValueOnce({ text: 'ok', aviso: null, estilo_aplicado: 'prosa' });
+    draft();
+    const v = voice({ estilo: 'prosa' });
+    writeDictation('s1', 'sess', v);
+    const out = await runDictation(server, 's1', 'sess', v, { file: wav(), pieces: pieces(Promise.resolve({ raw: 'ok', aviso: '' })) },
+      { isActive: () => true });
+    expect(readDraft('s1', 'sess')?.text).toBe('ok');
+    await expect(out.saved).rejects.toThrow('503: cofre fora');
+    const kept = readDictation('s1', 'sess');
+    expect(kept).toMatchObject({ id: 'v1', status: 'applied', text: 'ok', audio: { uri: localCopy } });
+    expect(dictationAudio(server, 'sess', kept!.audio, kept!.serverPath)?.uri).toBe(localCopy);
+    expect(removeDraftAttachment).not.toHaveBeenCalled();
+    expect(diag).toHaveBeenCalledWith(expect.objectContaining({ evento: 'dictation.upload_failed' }), undefined);
+  });
+
+  it('subida que falha com o ditado ainda para recuperar: o áudio fica e o Recuperar ainda funciona', async () => {
+    core.upload.mockRejectedValueOnce(new Error('413: grande demais'));
+    core.relimpar.mockResolvedValueOnce({ text: 'ok', aviso: null, estilo_aplicado: 'prosa' });
+    const v = voice({ estilo: 'prosa' });
+    writeDictation('s1', 'sess', v);
+    const out = await runDictation(server, 's1', 'sess', v, { file: wav(), pieces: pieces(Promise.resolve({ raw: 'ok', aviso: '' })) },
+      { isActive: () => false });
+    await expect(out.saved).rejects.toThrow('413: grande demais');
+    expect(readDictation('s1', 'sess')).toMatchObject({ status: 'ready', text: 'ok', audio: { uri: localCopy }, issue: '413: grande demais' });
+    expect(removeDraftAttachment).not.toHaveBeenCalled();
+    expect(recoverDictation('s1', 'sess', 'v1').draft?.text).toBe('ok');
   });
 
   it('ditado que fica para recuperar recebe o caminho guardado quando a subida termina', async () => {
@@ -120,7 +177,9 @@ describe('runDictation com pedaços', () => {
     expect(readDictation('s1', 'sess')).toMatchObject({ status: 'ready', text: 'ok' });
     upload.resolve({ path: '/up/sess/ditado.wav' });
     await out.saved;
-    expect(readDictation('s1', 'sess')).toMatchObject({ status: 'ready', serverPath: '/up/sess/ditado.wav' });
+    expect(readDictation('s1', 'sess')).toMatchObject({ status: 'ready', serverPath: '/up/sess/ditado.wav', audio: { uri: localCopy } });
+    // O ditado guardado ainda toca a cópia local até ser recuperado.
+    expect(removeDraftAttachment).not.toHaveBeenCalled();
   });
 
   it.each([

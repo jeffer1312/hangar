@@ -73,11 +73,13 @@ export function startLivePieces(opts: {
   open: () => GrowingFile;
   transcribe?: Transcribe;
   now?: () => number;
+  stallMs?: number;
   /** Diário: por que os pedaços desistiram. */
   onFail?: (code: string, detail?: string) => void;
 }): LivePieces {
   const transcribe = opts.transcribe ?? transcribePiece;
   const now = opts.now ?? Date.now;
+  const stallMs = opts.stallMs ?? STALL_MS;
   const cutter = newDictationCutter();
   const run = new AbortController();
   const slots: Slot[] = [];
@@ -123,9 +125,13 @@ export function startLivePieces(opts: {
     try {
       for (const slot of slots) {
         if (slot.piece.skip || slot.reply) continue;
-        if (send(slot)) continue;
+        if (send(slot)) {
+          // A espera do próximo conta de agora, não de quando o anterior começou a esperar.
+          waitingSince = null;
+          continue;
+        }
         waitingSince ??= now();
-        if (now() - waitingSince > STALL_MS) fail('stalled');
+        if (now() - waitingSince > stallMs) fail('stalled');
         return;
       }
       waitingSince = null;
@@ -139,10 +145,16 @@ export function startLivePieces(opts: {
     feed(tsMs, level) {
       if (state !== 'live') return;
       // O medidor repete o quadro quando o gravador não andou: não é tempo novo.
-      if (tsMs > lastTs) {
-        lastTs = tsMs;
-        const piece = feedDictationFrame(cutter, { ts_ms: tsMs, level });
-        if (piece) slots.push({ piece, toEnd: false });
+      // Roda dentro do laço do medidor: erro aqui desiste dos pedaços, nunca derruba a gravação.
+      try {
+        if (tsMs > lastTs) {
+          lastTs = tsMs;
+          const piece = feedDictationFrame(cutter, { ts_ms: tsMs, level });
+          if (piece) slots.push({ piece, toEnd: false });
+        }
+      } catch (e) {
+        fail('feed_failed', e instanceof Error ? e.message : undefined);
+        return;
       }
       if (slots.length) flush();
     },

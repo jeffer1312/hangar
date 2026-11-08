@@ -250,9 +250,11 @@ export function useDitado({ onFim, onErroParada, server, pieces: piecesWanted = 
         recording.subscription = created.addListener('recordingStatusUpdate', onStatus);
         return created;
       };
-      // iPhone grava em WAV; o que não abre volta ao .m4a de hoje, sem pedaços.
+      // Convidado não alcança a rota dos pedaços. Sem pedaços, o WAV só dobraria a subida.
+      const piecesServer = piecesWanted && server && !server.invite && !server.inviteEnded && !server.removed ? { ...server } : null;
+      // iPhone com pedaços grava em WAV; o que não abre volta ao .m4a de hoje, sem pedaços.
       const prepare = async (): Promise<ManagedRecorder> => {
-        if (Platform.OS === 'ios') {
+        if (Platform.OS === 'ios' && piecesServer) {
           try {
             const wav = create(WAV_OPTIONS);
             await wav.prepareToRecordAsync();
@@ -297,12 +299,11 @@ export function useDitado({ onFim, onErroParada, server, pieces: piecesWanted = 
       inicioRef.current = Date.now();
       setGravando(true);
       rms.value = 0;
-      // Convidado não alcança a rota dos pedaços; app fora da frente segue o caminho de hoje.
+      // App fora da frente segue o caminho de hoje.
       const uri = recorder.uri;
-      if (piecesWanted && recording.wav && uri && server && !server.invite && !server.inviteEnded && !server.removed
-        && appStateRef.current === 'active') {
+      if (recording.wav && piecesServer && uri && appStateRef.current === 'active') {
         recording.pieces = startLivePieces({
-          server: { ...server }, open: () => openGrowingFile(uri),
+          server: piecesServer, open: () => openGrowingFile(uri),
           onFail: (codigo, detalhe) => registrarDiag({ evento: 'dictation.pieces_fallback', nivel: 'aviso', codigo, detalhe }),
         });
       }
@@ -354,7 +355,7 @@ export function useDitado({ onFim, onErroParada, server, pieces: piecesWanted = 
         }
       }
     }
-  }, [onFim, onErroParada, server, finishRecording, releaseRecording, rms]);
+  }, [onFim, onErroParada, server, piecesWanted, finishRecording, releaseRecording, rms]);
 
   useEffect(() => {
     mountedRef.current = true;

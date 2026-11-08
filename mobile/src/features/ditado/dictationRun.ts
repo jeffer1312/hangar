@@ -4,7 +4,8 @@ import {
 import * as m from '../../paraglide/messages';
 import { chatStore } from '../../stores/chat';
 import {
-  attachDictationPath, finishDictation, readDictation, readDraft, setDictationInFlight, writeDictation, type DictationDraft,
+  attachDictationPath, finishDictation, keepDictationAudio, readDictation, readDraft, setDictationInFlight, writeDictation,
+  type DictationDraft,
   type DraftAttachment,
 } from '../../stores/drafts';
 import { removeDraftAttachment } from '../../chat/draftAttachments';
@@ -26,6 +27,10 @@ export interface DictationOutcome {
   applied?: string;
   /** Ditado em pedaços: a subida do arquivo inteiro, que termina depois do texto. Rejeita com a falha dela. */
   saved?: Promise<void>;
+}
+
+function dropLocalCopy(uri: string): void {
+  try { removeDraftAttachment(uri); } catch { /* só um arquivo órfão na pasta do app */ }
 }
 
 const issueOf = (e: unknown) => {
@@ -116,11 +121,35 @@ export async function runDictation(server: Server, serverId: string, name: strin
           const completed = finishDictation(serverId, name, voice.id, { text, raw, issue: aviso, applied }, opts.isActive());
           const saved = upload.then(
             (path) => {
-              attachDictationPath(serverId, name, voice.id, path);
+              if (!attachDictationPath(serverId, name, voice.id, path)) {
+                registrarDiag({ evento: 'dictation.audio_unattached', nivel: 'aviso', codigo: 'dictation_already_left' });
+              }
+              // A cópia local sai quando nenhum ditado guardado a toca mais; o áudio está no servidor.
+              if (voice.audio && readDictation(serverId, name)?.id !== voice.id) dropLocalCopy(voice.audio.uri);
               notify(serverId, name);
             },
-            (e: unknown) => { throw new Error(issueOf(e)); },
+            (e: unknown) => {
+              const issue = issueOf(e);
+              registrarDiag({ evento: 'dictation.upload_failed', nivel: 'erro', codigo: 'pieces_upload_failed', detalhe: issue });
+              // Sem o arquivo no servidor, a cópia local é o único áudio: fica com o ditado enquanto ele existir.
+              let kept = true;
+              try {
+                kept = keepDictationAudio(serverId, name, { ...voice, text, raw, applied, issue: '' }, issue);
+              } catch (storageError) {
+                // Sem conseguir guardar, a cópia fica no disco: apagar seria perder o áudio.
+                registrarDiag({ evento: 'dictation.audio_unattached', nivel: 'erro', codigo: 'dictation_audio_not_stored',
+                  detalhe: storageError instanceof Error ? storageError.message : undefined });
+              }
+              if (!kept) {
+                registrarDiag({ evento: 'dictation.audio_unattached', nivel: 'aviso', codigo: 'dictation_already_left' });
+                if (voice.audio) dropLocalCopy(voice.audio.uri);
+              }
+              notify(serverId, name);
+              throw new Error(issue);
+            },
           );
+          // Quem chama escuta a mesma promessa; isto só evita a rejeição solta se ninguém escutar.
+          saved.catch(() => {});
           return { completed, text, raw, aviso, path: '', applied, saved };
         }
       }

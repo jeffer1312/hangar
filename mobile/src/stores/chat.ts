@@ -43,7 +43,7 @@ import type { ChatEvent, StateEvent, PreviewEvent, AskQuestionPayload, StatsEven
 import * as m from '../paraglide/messages';
 import { reconcilePending, sameMessage, type PendingMsg } from '../chat/pending';
 import { useServers } from './servers';
-import { clearDraft, deliveredDraft, readDraft, writeDraft, type ConversationDraft } from './drafts';
+import { clearDraft, deliveredDraft, readDictation, readDraft, writeDraft, type ConversationDraft } from './drafts';
 import { sendWithDelivery, type DeliveryFeedback, type QueueSendMode } from '../chat/queueDelivery';
 
 // Store vivo do chat de UMA sessão — porte do núcleo de frontend/src/screens/Chat.svelte
@@ -1117,7 +1117,15 @@ export async function submitConversationDraft(serverId: string, name: string, te
       // Os áudios enviados voltam sempre: o Recuperar só traz o texto.
       const restore = failed && latest.revision === current.revision + 1 && !latest.text.trim();
       const sentRecordings = failed ? current.recordings ?? [] : [];
-      writeDraft(serverId, name, { ...latest,
+      // O ditado inserido saiu com a mensagem: o áudio dele que ainda sobe não entra no rascunho vazio. Com o
+      // ditado ainda guardado (limpeza que falhou, áudio só no aparelho), a marca fica: sem ela ele voltaria a "pronto".
+      const dictationId = latest.dictationId;
+      let dictationSent = status === null && fromField && !!dictationId && dictationId === current.dictationId;
+      if (dictationSent) {
+        try { dictationSent = readDictation(serverId, name)?.id !== dictationId; } catch { dictationSent = false; }
+      }
+      const { dictationId: _sent, ...withoutDictation } = latest;
+      writeDraft(serverId, name, { ...(dictationSent ? withoutDictation : latest),
         ...(restore ? { text: current.text } : {}),
         ...(restore || sentRecordings.length ? { revision: latest.revision + 1 } : {}),
         ...(sentRecordings.length ? { recordings: [...sentRecordings,

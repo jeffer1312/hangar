@@ -999,13 +999,15 @@ describe('useDitado — iPhone em WAV e pedaços durante a fala', () => {
   it.each([
     ['servidor de convite', { server: { ...server, invite: true }, pieces: true }],
     ['quem não pediu pedaços (ditado sem conversa)', { server, pieces: false }],
-  ])('%s: grava em WAV mas não manda pedaços', async (_case, opts) => {
+  ])('%s: grava no .m4a de hoje e não manda pedaços', async (_case, opts) => {
     const { h, onFim, startedAt } = await startIos(opts);
+    expect(createRecorder).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ extension: '.m4a' }));
     speech(startedAt, [[9000, 9600]]);
     await act(async () => { vi.advanceTimersByTime(16_000); });
     await act(async () => { await h.getHook().parar('botao'); });
     expect(transcribePiece).not.toHaveBeenCalled();
     expect(onFim.mock.calls[0][3] ?? null).toBeNull();
+    expect((onFim.mock.calls[0][0] as File).name).toBe('ditado.m4a');
     await h.unmount();
   });
 

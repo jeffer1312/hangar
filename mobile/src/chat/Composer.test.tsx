@@ -89,6 +89,8 @@ import { overwriteGetLocale } from '../paraglide/runtime';
 import * as m from '../paraglide/messages';
 import { Composer } from './Composer';
 import { addContextRef, contextRefsSnapshot, useContextRefs } from '../stores/contextRefs';
+import { removeDraftAttachment } from './draftAttachments';
+import { toast } from '../ui/Toast';
 
 const roots: Root[] = [];
 const props = { serverId: 'srv', name: 'sess', queuePanel: { entries: [], revision: 0 } as any };
@@ -237,6 +239,46 @@ describe('Composer — ditado', () => {
     expect(readDraft('srv', 'sess')?.text).toBe('Texto dos pedaços');
     expect(container.textContent).toContain('413: grande demais');
     expect(pieces.abort).not.toHaveBeenCalled();
+  });
+
+  it('a falha da subida soma ao aviso já mostrado e não apaga a cópia local (o ditado guardado a usa)', async () => {
+    let failUpload!: (e: Error) => void;
+    h.transcribe.mockImplementationOnce(async (_server: Server, serverId: string, name: string, voice: DictationDraft,
+      _source: unknown, opts: { isActive: () => boolean }) => {
+      const result = { text: 'Texto dos pedaços', raw: 'texto dos pedaços', issue: 'organização parcial', applied: 'prosa' };
+      const saved = new Promise<void>((_, reject) => { failUpload = reject; });
+      saved.catch(() => {});
+      return { completed: finishDictation(serverId, name, voice.id, result, opts.isActive()), text: result.text,
+        raw: result.raw, aviso: 'organização parcial', path: '', applied: 'prosa', saved };
+    });
+    const { container } = await mount();
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="record"]')!.click());
+    await act(async () => h.onFinish!(new File(['audio'], 'ditado.wav', { type: 'audio/wav' }), 'botao', 'file:///ditado.wav',
+      { result: Promise.resolve({ raw: 'texto dos pedaços', aviso: '' }), abort: vi.fn() }));
+    expect(container.textContent).toContain('organização parcial');
+    await act(async () => { failUpload(new Error('413: grande demais')); });
+    expect(container.textContent).toContain('organização parcial');
+    expect(container.textContent).toContain('413: grande demais');
+    expect(removeDraftAttachment).not.toHaveBeenCalled();
+  });
+
+  it('a falha da subida com a conversa já fechada vai a um aviso', async () => {
+    let failUpload!: (e: Error) => void;
+    h.transcribe.mockImplementationOnce(async (_server: Server, serverId: string, name: string, voice: DictationDraft,
+      _source: unknown, opts: { isActive: () => boolean }) => {
+      const result = { text: 'Texto', raw: 'texto', issue: '', applied: 'prosa' };
+      const saved = new Promise<void>((_, reject) => { failUpload = reject; });
+      saved.catch(() => {});
+      return { completed: finishDictation(serverId, name, voice.id, result, opts.isActive()), text: result.text,
+        raw: result.raw, aviso: '', path: '', applied: 'prosa', saved };
+    });
+    const { container, root } = await mount();
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="record"]')!.click());
+    await act(async () => h.onFinish!(new File(['audio'], 'ditado.wav', { type: 'audio/wav' }), 'botao', 'file:///ditado.wav',
+      { result: Promise.resolve({ raw: 'texto', aviso: '' }), abort: vi.fn() }));
+    await act(async () => root.render(null));
+    await act(async () => { failUpload(new Error('413: grande demais')); });
+    expect(toast.erro).toHaveBeenCalledWith('413: grande demais');
   });
 
   it('mantém vários chips ao gravar novamente e remover preserva o texto, inclusive após remontar', async () => {

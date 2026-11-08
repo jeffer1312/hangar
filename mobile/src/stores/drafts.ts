@@ -204,17 +204,35 @@ export function associateDictationTranscript(serverId: string, name: string, tra
 }
 
 /** Áudio do ditado em pedaços que terminou de subir depois do texto: o caminho vai ao ditado ainda
- *  guardado ou, já inserido, às gravações do rascunho, sem mudar a revisão. Envio em curso não ganha
- *  gravação que ele não levou. */
-export function attachDictationPath(serverId: string, name: string, id: string, serverPath: string): void {
+ *  guardado ou, já inserido, às gravações do rascunho, sem mudar a revisão. Falso = o ditado já saiu
+ *  (enviado, descartado ou em envio): a gravação não pega carona na próxima mensagem. */
+export function attachDictationPath(serverId: string, name: string, id: string, serverPath: string): boolean {
   const voice = readDictation(serverId, name);
   if (voice?.id === id && voice.status === 'ready') {
     if (!voice.serverPath) writeDictation(serverId, name, { ...voice, serverPath });
-    return;
+    return true;
   }
   const latest = readDraft(serverId, name);
-  if (!latest || latest.dictationId !== id || latest.submission || latest.recordings?.some((r) => r.id === id)) return;
-  writeDraft(serverId, name, { ...latest, recordings: [...(latest.recordings ?? []), { id, serverPath }] });
+  if (!latest || latest.dictationId !== id || latest.submission) return false;
+  if (!latest.recordings?.some((r) => r.id === id)) {
+    writeDraft(serverId, name, { ...latest, recordings: [...(latest.recordings ?? []), { id, serverPath }] });
+  }
+  return true;
+}
+
+/** A subida do ditado em pedaços falhou depois do texto: o áudio só existe no aparelho. Fica com o ditado
+ *  guardado ou, já inserido, num ditado aplicado (o do "Ditado já aplicado", com player e X), com a falha.
+ *  Falso = o ditado já saiu ou outro ocupa o lugar: o áudio não é de mais ninguém. */
+export function keepDictationAudio(serverId: string, name: string, voice: DictationDraft, issue: string): boolean {
+  const stored = readDictation(serverId, name);
+  if (stored) {
+    if (stored.id !== voice.id) return false;
+    if (stored.status === 'ready') writeDictation(serverId, name, { ...stored, issue });
+    return true;
+  }
+  if (readDraft(serverId, name)?.dictationId !== voice.id) return false;
+  writeDictation(serverId, name, { ...voice, status: 'applied', issue });
+  return true;
 }
 
 export function finishDictation(serverId: string, name: string, id: string,
