@@ -593,7 +593,7 @@ achada = ""
 if conta and conta != "auto":
     for c in cs:
         nome = c["path"].replace("\\", "/").rsplit("/", 1)[-1]
-        if conta in (c.get("label"), nome, ".claude-" + conta):
+        if conta == c.get("label") or nome in (conta, ".claude-" + conta):
             achada = c["path"]
 sys.stdout.write(home + "\0" + achada + "\0")' "$configs" "$conta")
             if [[ -n "$conta" && "$conta" != "auto" && -z "$config_dir" ]]; then
