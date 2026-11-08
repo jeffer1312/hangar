@@ -72,7 +72,7 @@ impl From<&OtherOpening> for Location {
             lease,
             projection: t.projection_dir.clone(),
             life: Some(
-                json!({"pane":t.binding.pane,"created":t.binding.created,"conversation":"","provider":t.spec.provider.name()}),
+                json!({"pane":t.binding.pane,"created":t.binding.created,"agent_pid":t.agent.as_ref().map(|agent|agent.pid),"birth":t.agent.as_ref().map(|agent|agent.birth),"conversation":"","provider":t.spec.provider.name()}),
             ),
         }
     }
@@ -136,6 +136,10 @@ pub(in crate::runtime) async fn open(
         let scope = format!("other-adopt:{}:{}", std::process::id(), now.epoch_s);
         if let Some(life) = location.life {
             let old = store.state().runtime_state["other_terminal_life"].clone();
+            if old["conversation"] == "" && !old["agent_pid"].is_null() && life["conversation"].as_str().is_some_and(|sid| !sid.is_empty()) {
+                store.exec(store.state().generation, &format!("{scope}:first-conversation"), now,
+                    Action::BindOpeningConversation {life:life.clone()}).map_err(|_|failed("queue_io"))?;
+            }
             let changed = !old.is_null()
                 && old["conversation"].as_str().is_some_and(|sid| {
                     !sid.is_empty() && Some(sid) != life["conversation"].as_str()

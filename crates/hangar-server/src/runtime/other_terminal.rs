@@ -3,6 +3,7 @@ use std::path::PathBuf;
 mod io;
 pub use io::ProcessOtherIo;
 mod dispatch;
+pub(in crate::runtime) use dispatch::send_opening;
 mod deferred_episode;
 pub mod drive;
 mod native;
@@ -155,6 +156,19 @@ impl OtherOpening {
     pub fn lifecycle_id(&self) -> String {
         lifecycle_id(&self.spec.key, self.binding.generation)
     }
+    pub(in crate::runtime) fn input_target(&self) -> Option<OtherTarget> {
+        let agent = self.agent.as_ref()?;
+        let (state_path, lease_path) = super::codex_terminal::queue_files(&self.projection_dir, &self.spec.key);
+        Some(OtherTarget {
+            key:self.spec.key.clone(), generation:self.binding.generation, name:self.spec.name.clone(),
+            provider:hangar_transcript::Provider::parse(self.spec.provider.name())?, binding:self.binding.clone(),
+            pane_address:self.pane_address.clone(), dirs:self.dirs.clone(), cwd:self.spec.cwd.clone(),
+            pane_pid:self.pane_pid?, agent_pid:agent.pid, agent_birth:agent.birth,
+            transcript:PathBuf::new(), state_path, lease_path, projection_dir:self.projection_dir.clone(),
+            config_dirs:self.config_dirs.clone(), created:agent.birth.max(self.binding.created as f64),
+        })
+    }
+
 }
 #[derive(Clone, Debug)]
 pub struct OtherProcess {

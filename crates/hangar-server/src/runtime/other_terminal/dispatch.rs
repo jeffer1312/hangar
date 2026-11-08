@@ -273,3 +273,22 @@ impl OtherIo for EditorAwareOtherIo {
         Box::pin(async {})
     }
 }
+
+/// A CLI só cria o transcript depois do primeiro Enter; a fila já protege essa escrita.
+pub(in crate::runtime) async fn send_opening(
+    opening: &OtherOpening, queue: &QueueActor, options: &OtherOptions,
+) -> Result<(), RuntimeError> {
+    let Some(target) = opening.input_target() else {return Ok(());};
+    let io: Arc<dyn OtherIo> = options.io_override.clone()
+        .unwrap_or_else(|| Arc::new(ProcessOtherIo::new(&target, options)));
+    let result = async {
+        if !io.prove(&target).await? {return Err(failed("other_terminal_life_changed"));}
+        let frame = io.capture().await?;
+        let (snapshot, _) = tokio::sync::watch::channel(Value::Null);
+        let mut episode = deferred_episode::DeferredEpisode::default();
+        drain(&target, queue, options, &io, &snapshot, Some(&frame), &mut episode).await?;
+        Ok(())
+    }.await;
+    io.release().await;
+    result
+}

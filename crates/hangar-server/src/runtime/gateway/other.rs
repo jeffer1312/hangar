@@ -447,8 +447,10 @@ impl RuntimeRegistry {
                         },
                     )
                     .map_err(|_| failure("queue_io"))?;
-                drop(store);
-                drop(lease);
+                let queue = QueueActor::start(store, lease);
+                let sent = super::super::other_terminal::send_opening(&opening, &queue, &config.options).await;
+                queue.shutdown().await.map_err(|_| failure("queue_io"))?;
+                sent?;
                 config.opening.lock().await.insert(name.into(), opening);
                 config.wake.notify_one();
             }

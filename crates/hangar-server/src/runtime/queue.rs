@@ -279,6 +279,7 @@ pub enum Action {
     SetRuntimeState { state:Value },
     /// Sob a mesma lease, depois de parar o ator antigo. Não devolve entradas incertas à fila.
     AdvanceLifecycle { generation:u64, state:Value },
+    BindOpeningConversation { life:Value },
     ReplaceRows { rows:Vec<Value> },
 }
 
@@ -1139,6 +1140,24 @@ fn apply(state: &mut State, action: Action, clock: ClockSample, call_id: &str) -
             if !barrier.is_null() {state.runtime_state["terminal_write_barrier"]=barrier;}
             // A vida da adoção é da vigia, não da vista que o ator grava.
             if !life.is_null() {state.runtime_state[CODEX_LIFE]=life;}
+            Value::Null
+        }
+        Action::BindOpeningConversation { life } => {
+            let old = &state.runtime_state["other_terminal_life"];
+            let conversation = life["conversation"].as_str().filter(|sid|!sid.is_empty())
+                .ok_or_else(||invalid("primeira conversa ausente"))?;
+            if old["conversation"] != "" || ["pane","created","provider","agent_pid","birth"].iter().any(|key|old[*key]!=life[*key]) {
+                return Err(invalid("a primeira conversa pertence a outra vida"));
+            }
+            for op in state.operations.values_mut().filter(|op|op.payload["kind"]=="input"
+                && op.dispatch_cursor["conversation"]=="" && op.dispatch_cursor["file_identity"].is_null()
+                && op.dispatch_cursor["offset"]==0 && op.dispatch_cursor["absent_since"].is_number()) {
+                op.dispatch_cursor["conversation"] = json!(conversation);
+                op.payload["payload"]["conversation"] = json!(conversation);
+            }
+            if state.runtime_state["terminal_write_barrier"]["conversation"]=="" {
+                state.runtime_state["terminal_write_barrier"]["conversation"] = json!(conversation);
+            }
             Value::Null
         }
         Action::AdvanceLifecycle { generation, state:next } => {
