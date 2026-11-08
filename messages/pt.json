@@ -6019,6 +6019,7 @@
   "native_connect_off_body": "O Connect para, e a chave da máquina e a chave TLS são apagadas. As credenciais dos aparelhos ficam: eles seguem entrando pela rede local e pelo Tailscale.",
   "native_connect_error_already_linked": "Esta máquina já está ligada ao Connect. Desligue antes de ligar em outra conta ou com outro nome.",
   "native_connect_error_machine_limit": "Esta conta chegou ao limite de máquinas.",
+  "native_connect_error_account_created": "Conta criada; entre com ela para ligar este computador.",
   "native_connect_last_seen": "Visto {when}",
   "native_connect_never_seen": "Ainda não apareceu",
   "native_connect_off": "Desligar",

@@ -72,6 +72,7 @@ fn failure_text(error: &Failure) -> String {
         Some("connect_already_linked") => tr("connect_error_already_linked"),
         Some("connect_machine_limit") => tr("connect_error_machine_limit"),
         Some("connect_account_taken") => tr_shared("connect_error_name_taken", &[]),
+        Some("connect_account_created_link_failed") => tr("connect_error_account_created"),
         Some("connect_preview_port_refused") => tr("connect_preview_port_refused"),
         _ => Hangar::fetch_failure(error),
     }
@@ -211,6 +212,7 @@ pub(in crate::app) struct Connect {
     machines: Remote<AccountList>,
     /// Acompanhamento dos pedidos de ligar a outra máquina: falha de leitura só deixa a linha como estava.
     links: Vec<PeerLink>,
+    links_failing: bool,
     linking: Option<String>,
     link_error: Option<String>,
 }
@@ -221,6 +223,43 @@ impl Connect {
     pub(super) fn carry_over(mut self) -> Self {
         (self.saving, self.preview_busy, self.linking, self.revoking) = (false, false, None, None);
         self
+    }
+
+    /// Resposta de ligar ou desligar: a fase nova, ou `None` com o erro já na tela.
+    fn saved(&mut self, result: Result<Value, Failure>) -> Option<Phase> {
+        self.saving = false;
+        // A conta nasceu e só a ligação falhou: criar de novo daria nome já usado, então o formulário vira o de entrar.
+        if result.as_ref().is_err_and(|error| error.code.as_deref() == Some("connect_account_created_link_failed")) {
+            self.entry = Some(Entry::Login);
+        }
+        match result.map_err(|error| failure_text(&error)).and_then(parse_status) {
+            Ok(status) => {
+                let now = phase(&status);
+                // Desligado: as máquinas e os pedidos eram da ligação que acabou.
+                if now == Phase::Unlinked { (self.machines, self.links, self.links_failing) = (Remote::default(), Vec::new(), false); }
+                self.entry = None;
+                self.status.set(Ok(status));
+                Some(now)
+            }
+            Err(error) => { self.error = Some(error); None }
+        }
+    }
+
+    /// Acompanhamento dos pedidos de ligar: a tela fica com a última leitura boa, e o log ganha uma linha só quando
+    /// a leitura passa a falhar ou volta.
+    fn links_read(&mut self, result: Result<Value, Failure>) -> Option<String> {
+        match result.map_err(|error| failure_text(&error)).and_then(parse_links) {
+            Ok(links) => {
+                let line = self.links_failing.then(|| "connect: connect_links_recovered".to_owned());
+                (self.links, self.links_failing) = (links, false);
+                line
+            }
+            Err(error) => {
+                let line = (!self.links_failing).then(|| format!("connect: connect_links_unreadable: {error}"));
+                self.links_failing = true;
+                line
+            }
+        }
     }
 }
 
@@ -465,20 +504,19 @@ impl Hangar {
                 if !self.connect.status.finish(seq, result) { return; }
             }
             ConnectReply::Saved(result) => {
-                self.connect.saving = false;
-                match result.map_err(|error| failure_text(&error)).and_then(parse_status) {
-                    Ok(status) => { self.connect.entry = None; self.connect.status.set(Ok(status)); }
+                match self.connect.saved(result) {
+                    Some(Phase::Unlinked) => {}
+                    Some(_) => self.load_account_machines(cx),
                     // O envio pode ter estourado o prazo com o servidor já ligado: relê em vez de supor.
-                    Err(error) => { self.connect.error = Some(error); self.load_connect(cx); }
+                    None => { self.load_connect(cx); self.load_account_machines(cx); }
                 }
                 self.load_connect_devices(cx);
-                self.load_account_machines(cx);
             }
             ConnectReply::Machines(seq, result) => {
                 let result = result.map_err(|error| failure_text(&error)).and_then(parse_account);
                 if !self.connect.machines.finish(seq, result) { return; }
             }
-            ConnectReply::Links(result) => if let Ok(links) = result.map_err(|_| String::new()).and_then(parse_links) { self.connect.links = links; },
+            ConnectReply::Links(result) => if let Some(line) = self.connect.links_read(result) { crate::log_line(&line); },
             ConnectReply::LinkStarted(result) => {
                 self.connect.linking = None;
                 self.connect.link_error = result.err().map(|error| failure_text(&error));
@@ -1001,6 +1039,44 @@ mod tests {
         assert!(kept.status.ok().is_some(), "a fase continua até a nova leitura");
         assert!(!kept.saving && !kept.preview_busy && kept.linking.is_none() && kept.revoking.is_none(),
             "resposta da conexão anterior não chega: nada fica travado esperando por ela");
+    }
+
+    fn refused(code: &str) -> Result<serde_json::Value, crate::api::Failure> {
+        Err(crate::api::Failure { status: Some(502), detail: "x".into(), retry_after: None, uncertain: false, code: Some(code.into()) })
+    }
+
+    #[test]
+    fn account_created_but_not_linked_turns_the_form_into_sign_in() {
+        let mut connect = super::Connect { entry: Some(super::Entry::Create), saving: true, ..Default::default() };
+        assert_eq!(connect.saved(refused("connect_account_created_link_failed")), None);
+        assert_eq!(connect.entry, Some(super::Entry::Login), "criar de novo daria nome já usado");
+        assert!(!connect.saving && connect.error.is_some());
+
+        let mut other = super::Connect { entry: Some(super::Entry::Create), ..Default::default() };
+        other.saved(refused("connect_account_taken"));
+        assert_eq!(other.entry, Some(super::Entry::Create), "outra recusa não troca o formulário");
+    }
+
+    #[test]
+    fn unlinking_forgets_the_account_machines_and_the_link_requests() {
+        let mut connect = super::Connect::default();
+        connect.machines.set(parse_account(json!({"this": {"machine_id": "a", "host": "a.j.hangar.dev.br"}, "machines": []})));
+        connect.links_read(Ok(json!([{"machine_id": "casa", "stage": "linked", "peer": null, "code": null, "message": null}])));
+        let unlinked = json!({"enabled": false, "running": false, "host": null, "error": null});
+        assert_eq!(connect.saved(Ok(unlinked)), Some(Phase::Unlinked));
+        assert!(connect.machines.ok().is_none() && connect.links.is_empty());
+    }
+
+    #[test]
+    fn link_requests_log_only_when_reading_starts_failing_or_comes_back() {
+        let mut connect = super::Connect::default();
+        let ok = || Ok(json!([{"machine_id": "casa", "stage": "waiting_approval", "peer": null, "code": null, "message": null}]));
+        assert_eq!(connect.links_read(ok()), None);
+        let first = connect.links_read(refused("connect_service_unreachable")).expect("a primeira falha vai ao log");
+        assert!(first.contains("connect_links_unreadable"));
+        assert_eq!(connect.links_read(refused("connect_service_unreachable")), None, "falha repetida não repete a linha");
+        assert_eq!(connect.links.len(), 1, "a tela fica com a última leitura boa");
+        assert!(connect.links_read(ok()).is_some_and(|line| line.contains("connect_links_recovered")));
     }
 
     #[test]

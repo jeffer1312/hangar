@@ -6019,6 +6019,7 @@
   "native_connect_off_body": "Connect stops, and the machine key and the TLS key are deleted. Device credentials stay: those devices keep getting in over the local network and Tailscale.",
   "native_connect_error_already_linked": "This machine is already linked to Connect. Turn it off before linking another account or name.",
   "native_connect_error_machine_limit": "This account has reached its machine limit.",
+  "native_connect_error_account_created": "Account created; sign in with it to link this computer.",
   "native_connect_last_seen": "Seen {when}",
   "native_connect_never_seen": "Not seen yet",
   "native_connect_off": "Turn off",
