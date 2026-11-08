@@ -199,6 +199,8 @@ pub struct LiveState {
     pub binding: Option<crate::interactions::InteractionBinding>,
     pub public_state: Value,
     pub preview: String,
+    /// Sem valor conserva os sinalizadores dos atores anteriores; o texto permanece em `preview`.
+    pub preview_flags: Option<(bool, bool, bool)>,
     pub thinking: String,
     pub tool: String,
     /// Codex: objeto JSON `{item: rabo da saída}` dos comandos rodando.

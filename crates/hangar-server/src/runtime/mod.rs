@@ -20,6 +20,7 @@ pub mod actor;
 pub mod gateway;
 pub mod ingress;
 pub mod terminal;
+pub mod other_terminal;
 pub mod terminal_status;
 pub mod local_policy;
 pub mod process;

@@ -153,7 +153,9 @@ impl ReceiptIndex {
         if !unchanged { self.occurrences.clear(); self.scan_offset = 0; self.meta_conversation = None; self.turn_end = None; }
         file.seek(SeekFrom::Start(self.scan_offset))?;
         let mut reader = io::BufReader::with_capacity(1 << 16,&mut file);
-        let mut parser = crate::transcript::LineParser::new(crate::transcript::Provider::Codex);
+        let provider = crate::transcript::Provider::parse(&self.provider).unwrap_or(crate::transcript::Provider::Claude);
+        let other = matches!(provider, crate::transcript::Provider::Pi | crate::transcript::Provider::Omp | crate::transcript::Provider::Kimi);
+        let mut parser = crate::transcript::LineParser::new(provider);
         let mut offset = self.scan_offset;
         let mut raw = Vec::new();
         loop {
@@ -162,6 +164,10 @@ impl ReceiptIndex {
             let start = offset; offset += raw.len() as u64;
             let Some(obj) = crate::transcript::decode_line(&raw) else { continue };
             if !obj.is_object() { continue; }
+            if other {
+                self.record_other(parser.feed(&raw, start), &id, offset);
+                continue;
+            }
             if self.provider == "codex" && obj["type"] == "session_meta" {
                 self.meta_conversation = obj["payload"]["id"].as_str().map(str::to_owned);
                 continue;
@@ -217,6 +223,7 @@ impl ReceiptIndex {
                     file_identity:id.clone(),offset:start,end_offset:offset,text,kind:kind.into(),timestamp,recorded_conversation:recorded_conversation.clone(),identity_unprovable });
             }
         }
+        if other { self.record_other(parser.flush(), &id, offset); }
         drop(reader);
         let current = File::open(path)?;
         if identity(&current)? != id || current.metadata()?.len() < offset {
@@ -226,6 +233,20 @@ impl ReceiptIndex {
         self.tail = bytes_before(&mut file,offset)?.unwrap_or_default();
         self.identity = Some(id); self.scan_offset = offset;
         Ok(&self.occurrences)
+    }
+
+    fn record_other(&mut self, events: Vec<hangar_api::chat::ChatEvent>, identity: &str, end_offset: u64) {
+        for event in events {
+            if event.kind != hangar_api::chat::ChatKind::UserMsg { continue; }
+            let Some(text) = event.text.filter(|text| !text.trim().is_empty()) else { continue; };
+            let offset = event.offset.unwrap_or(self.scan_offset);
+            self.occurrences.push(Occurrence {
+                id: format!("{}|{identity}|{}", self.conversation, event.id),
+                conversation: self.conversation.clone(), file_identity: identity.into(), offset, end_offset,
+                text, kind: "user".into(), timestamp: event.ts,
+                recorded_conversation: Some(self.conversation.clone()), identity_unprovable: false,
+            });
+        }
     }
 
     /// A âncora do cursor é relida do arquivo: confere que os bytes antes do despacho não mudaram.
