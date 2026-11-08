@@ -93,7 +93,7 @@ pub(crate) fn is_absence(stderr: &str) -> bool {
         || (stderr.starts_with("error connecting to ") && stderr.trim_end().ends_with("(No such file or directory)"))
 }
 
-pub struct Mux { program: OsString, timeout: Duration, direct: Option<Direct> }
+pub struct Mux { program: OsString, timeout: Duration, direct: Option<Direct>, revalidate: Duration }
 
 /// Leitura direta do psmux (Windows): vale só para os servidores que uma comparação com o CLI
 /// conferiu; servidor novo, recriado ou falha voltam ao CLI.
@@ -115,9 +115,15 @@ enum Gate {
     Unchecked,
     /// Comparações que não bateram (ou leituras que falharam) desde a última conferência.
     Trying(u8),
-    Verified(Vec<hangar_psmux::Server>),
-    Off,
+    /// Vale para estes servidores até `REVALIDATE` depois de `at`.
+    Verified { servers: Vec<hangar_psmux::Server>, at: std::time::Instant },
+    /// Versão fora da lista, `-V` sem resposta ou tentativas esgotadas; tenta de novo após `REVALIDATE`.
+    Off { at: std::time::Instant },
 }
+
+/// A cada intervalo o CLI roda de novo: confere a versão do programa (que pode ter sido trocado no
+/// mesmo caminho) e a leitura direta, e mantém a faxina de registro que o psmux faz ao iniciar.
+const REVALIDATE: Duration = Duration::from_secs(30);
 
 /// Parte do prazo do `list-panes` que a leitura direta pode gastar; o resto fica para o CLI.
 /// Curto: um servidor ocupado não pode somar muito à espera do CLI que vem depois.
@@ -133,7 +139,7 @@ impl Direct {
     fn missed(&self, code: &'static str) {
         let tries = match self.gate() { Gate::Trying(n) => n + 1, _ => 1 };
         if tries < DIRECT_TRIES { self.set(Gate::Trying(tries)); return; }
-        self.set(Gate::Off);
+        self.set(Gate::Off { at: std::time::Instant::now() });
         tracing::warn!(code, "psmux: leitura direta desligada; a lista segue pelo CLI");
     }
 }
@@ -147,7 +153,7 @@ impl Mux {
         let dir = if cfg!(windows) { hangar_psmux::data_dir(|name| std::env::var_os(name)) } else { None };
         match dir {
             Some(dir) => Self::with_direct(program, timeout, dir),
-            None => Self { program: program.into(), timeout, direct: None },
+            None => Self { program: program.into(), timeout, direct: None, revalidate: REVALIDATE },
         }
     }
 
@@ -155,7 +161,7 @@ impl Mux {
     pub fn with_direct(program: impl Into<OsString>, timeout: Duration, dir: std::path::PathBuf) -> Self {
         let program = program.into();
         let gate = shared_gate(&program, &dir);
-        Self { program, timeout, direct: Some(Direct { dir, gate }) }
+        Self { program, timeout, direct: Some(Direct { dir, gate }), revalidate: REVALIDATE }
     }
 
     /// Valor de uma variável no ambiente da sessão (`show-environment`); ausente ou erro = `None`.
@@ -176,6 +182,8 @@ impl Mux {
     }
 
     async fn version_until(&self, deadline: tokio::time::Instant) -> Option<String> {
+        // O `timeout_at` sonda o futuro antes do prazo: vencido, o processo nem começa.
+        if tokio::time::Instant::now() >= deadline { return None; }
         let mut command = crate::terminal_input::child_command(&self.program);
         command.arg("-V").stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).kill_on_drop(true);
         let out = tokio::time::timeout_at(deadline, command.output()).await.ok()?.ok()?;
@@ -195,11 +203,16 @@ impl Mux {
         let mut unverified = None;
         if let Some(direct) = &self.direct {
             match self.read_direct(direct, deadline).await {
-                DirectRead::Served(text) => return panes_of(&text),
+                // Resposta autenticada que não vira pane inteiro volta ao CLI, nunca vira lista parcial.
+                DirectRead::Served(text) => match panes_of(&text) {
+                    Ok((panes, None)) => return Ok((panes, None)),
+                    _ => direct.missed("psmux_direct_unparsed"),
+                },
                 DirectRead::Compare(listing) => unverified = Some(listing),
                 DirectRead::Skip => {}
             }
         }
+        if tokio::time::Instant::now() >= deadline { return Err(unavailable("mux_timeout", None, None)); }
         let mut command = crate::terminal_input::child_command(&self.program);
         command.args(["list-panes", "-a", "-F", LIST_PANES_FORMAT])
             .stdin(std::process::Stdio::null()).kill_on_drop(true);
@@ -213,7 +226,7 @@ impl Mux {
         if let (Some(direct), Some(listing)) = (&self.direct, unverified) {
             // Conferido byte a byte, e só para estes servidores: outro `-L` ou outra pasta não bate.
             if out.status.success() && !listing.servers.is_empty() && listing.text.as_bytes() == out.stdout.as_slice() {
-                direct.set(Gate::Verified(listing.servers));
+                direct.set(Gate::Verified { servers: listing.servers, at: std::time::Instant::now() });
             } else {
                 direct.missed("psmux_direct_mismatch");
             }
@@ -229,26 +242,42 @@ impl Mux {
         }
     }
 
+    /// Intervalo entre conferências completas (versão do programa e CLI contra a leitura direta).
+    pub fn revalidating(mut self, every: Duration) -> Self { self.revalidate = every; self }
+
     async fn read_direct(&self, direct: &Direct, deadline: tokio::time::Instant) -> DirectRead {
         let mut gate = direct.gate();
+        match &gate {
+            Gate::Off { at } if at.elapsed() < self.revalidate => return DirectRead::Skip,
+            Gate::Off { .. } => gate = Gate::Unchecked,
+            Gate::Verified { at, .. } if at.elapsed() >= self.revalidate => gate = Gate::Unchecked,
+            _ => {}
+        }
         if matches!(gate, Gate::Unchecked) {
             // É a versão do programa chamado; a dos servidores vivos fica provada só pela comparação.
-            let known = self.version_until(deadline).await.is_some_and(|v| hangar_psmux::known_version(&v));
-            gate = if known { Gate::Trying(0) } else { Gate::Off };
+            let code = match self.version_until(deadline).await {
+                Some(v) if hangar_psmux::known_version(&v) => None,
+                Some(_) => Some("psmux_direct_version"),
+                None => Some("psmux_direct_version_unread"),
+            };
+            gate = match code { None => Gate::Trying(0), Some(_) => Gate::Off { at: std::time::Instant::now() } };
             direct.set(gate.clone());
-            if !known { tracing::warn!(code = "psmux_direct_version", "psmux: versão do programa não conferida; a lista segue pelo CLI"); }
+            if let Some(code) = code {
+                if crate::warn_limit::allow(None, code) {
+                    tracing::warn!(code, "psmux: versão do programa não conferida; a lista segue pelo CLI");
+                }
+                return DirectRead::Skip;
+            }
         }
-        if matches!(gate, Gate::Off) { return DirectRead::Skip; }
-        let budget = DIRECT_BUDGET.min(deadline.saturating_duration_since(tokio::time::Instant::now()) / 2);
-        let until = std::time::Instant::now() + budget;
+        let (until, wait) = direct_window(tokio::time::Instant::now(), deadline);
         let dir = direct.dir.clone();
-        let read = tokio::time::timeout(budget + Duration::from_millis(50),
+        let read = tokio::time::timeout_at(wait,
             tokio::task::spawn_blocking(move || hangar_psmux::list_panes(&dir, LIST_PANES_FORMAT, until))).await;
         let code = match read {
             // Sem servidor no registro, a ausência (ou o registro sujo) é resposta do CLI.
             Ok(Ok(Ok(listing))) if listing.servers.is_empty() => return DirectRead::Skip,
             Ok(Ok(Ok(listing))) => return match gate {
-                Gate::Verified(servers) if servers == listing.servers => DirectRead::Served(listing.text),
+                Gate::Verified { servers, .. } if servers == listing.servers => DirectRead::Served(listing.text),
                 _ => DirectRead::Compare(listing),
             },
             Ok(Ok(Err(failure))) => failure.code,
@@ -261,6 +290,13 @@ impl Mux {
         direct.missed(code);
         DirectRead::Skip
     }
+}
+
+/// Até quando a leitura direta pode ir (metade do que falta, no máximo `DIRECT_BUDGET`) e até quando
+/// esperar por ela: um pouco depois, para o erro do próprio cliente chegar, nunca além do prazo geral.
+fn direct_window(now: tokio::time::Instant, deadline: tokio::time::Instant) -> (std::time::Instant, tokio::time::Instant) {
+    let until = now + DIRECT_BUDGET.min(deadline.saturating_duration_since(now) / 2);
+    (until.into_std(), (until + Duration::from_millis(50)).min(deadline))
 }
 
 /// Saída do `list-panes`, do CLI ou da leitura direta, que deram os mesmos bytes ao serem conferidas.
@@ -402,7 +438,7 @@ mod tests {
     /// Servidor de sessão do psmux falso: conta conexões e responde como o real, ou se cala.
     struct FakeServer { port: u16, conns: std::sync::Arc<std::sync::atomic::AtomicUsize>,
         silent: std::sync::Arc<std::sync::atomic::AtomicBool>, stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
-        handle: Option<std::thread::JoinHandle<()>> }
+        reply: std::sync::Arc<std::sync::Mutex<String>>, handle: Option<std::thread::JoinHandle<()>> }
     impl FakeServer {
         fn start(key: &'static str, reply: String) -> Self {
             use std::io::{BufRead, Write};
@@ -411,8 +447,10 @@ mod tests {
             listener.set_nonblocking(true).unwrap();
             let port = listener.local_addr().unwrap().port();
             let (conns, silent, stop) = (std::sync::Arc::default(), std::sync::Arc::default(), std::sync::Arc::default());
+            let reply = std::sync::Arc::new(std::sync::Mutex::new(reply));
             let (c, s, st): (std::sync::Arc<std::sync::atomic::AtomicUsize>, std::sync::Arc<std::sync::atomic::AtomicBool>, std::sync::Arc<std::sync::atomic::AtomicBool>) =
                 (std::sync::Arc::clone(&conns), std::sync::Arc::clone(&silent), std::sync::Arc::clone(&stop));
+            let answer = std::sync::Arc::clone(&reply);
             let handle = std::thread::spawn(move || while !st.load(SeqCst) {
                 let Ok((stream, _)) = listener.accept() else { std::thread::sleep(Duration::from_millis(2)); continue };
                 c.fetch_add(1, SeqCst);
@@ -425,10 +463,12 @@ mod tests {
                 if auth.trim() != format!("AUTH {key}") { out.write_all(b"ERROR: Invalid session key\n").unwrap(); continue; }
                 out.write_all(b"OK\n").unwrap();
                 reader.read_line(&mut cmd).unwrap();
-                out.write_all(reply.as_bytes()).unwrap();
+                let text = answer.lock().unwrap().clone();
+                out.write_all(text.as_bytes()).unwrap();
             });
-            Self { port, conns, silent, stop, handle: Some(handle) }
+            Self { port, conns, silent, stop, reply, handle: Some(handle) }
         }
+        fn replies(&self, text: &str) { *self.reply.lock().unwrap() = text.into(); }
         fn conns(&self) -> usize { self.conns.load(std::sync::atomic::Ordering::SeqCst) }
         fn go_silent(&self) { self.silent.store(true, std::sync::atomic::Ordering::SeqCst); }
         fn register(&self, dir: &std::path::Path, base: &str, key: &str) {
@@ -446,25 +486,126 @@ mod tests {
     const LINE_A: &str = "a\t1\t7\t/w\t%0\t\tcodex\t5\t0\t0\t0\n";
     const LINE_B: &str = "b\t1\t8\t/v\t%0\t\tclaude\t6\t0\t0\t0\n";
 
-    /// `tmux` falso: `-V` responde `version`, `list-panes` conta a chamada e imprime `listing`.
-    struct FakeCli { _dir: tempfile::TempDir, path: std::path::PathBuf, data: std::path::PathBuf, count: std::path::PathBuf, listing: std::path::PathBuf }
+    /// `tmux` falso: `-V` imprime o arquivo de versão (ou falha), `list-panes` conta a chamada e
+    /// imprime o arquivo de lista. Script do sistema, para rodar também no Windows.
+    struct FakeCli { dir: tempfile::TempDir, path: std::path::PathBuf, data: std::path::PathBuf, count: std::path::PathBuf, listing: std::path::PathBuf }
     impl FakeCli {
         fn new(version: &str) -> Self {
             let dir = tempfile::tempdir().unwrap();
             let (data, count, listing) = (dir.path().join("data"), dir.path().join("count"), dir.path().join("listing"));
+            let (version_file, fail) = (dir.path().join("version"), dir.path().join("fail"));
             std::fs::create_dir(&data).unwrap();
             std::fs::write(&listing, "").unwrap();
-            let path = dir.path().join("fake-tmux");
-            crate::write_test_executable(&path, format!("#!/bin/sh\ncase \"$1\" in -V) echo '{version}' ;; list-panes) echo x >> '{}' ; cat '{}' ;; esac\n",
-                count.display(), listing.display()));
-            Self { _dir: dir, path, data, count, listing }
+            std::fs::write(&version_file, version).unwrap();
+            #[cfg(unix)]
+            let path = {
+                let path = dir.path().join("fake-tmux");
+                crate::write_test_executable(&path, format!("#!/bin/sh\ncase \"$1\" in -V) [ -e '{}' ] && exit 1 ; cat '{}' ;; list-panes) echo x >> '{}' ; cat '{}' ;; esac\n",
+                    fail.display(), version_file.display(), count.display(), listing.display()));
+                path
+            };
+            #[cfg(windows)]
+            let path = {
+                let path = dir.path().join("fake-tmux.cmd");
+                std::fs::write(&path, format!("@echo off\r\nif \"%~1\"==\"-V\" (\r\n  if exist \"{}\" exit /b 1\r\n  type \"{}\"\r\n  exit /b 0\r\n)\r\nif \"%~1\"==\"list-panes\" (\r\n  >>\"{}\" echo x\r\n  type \"{}\"\r\n)\r\n",
+                    fail.display(), version_file.display(), count.display(), listing.display())).unwrap();
+                path
+            };
+            Self { dir, path, data, count, listing }
         }
         fn lists(&self, text: &str) { std::fs::write(&self.listing, text).unwrap(); }
+        fn reports(&self, version: &str) { std::fs::write(self.dir.path().join("version"), version).unwrap(); }
+        fn fails_version(&self, fail: bool) {
+            let flag = self.dir.path().join("fail");
+            if fail { std::fs::write(flag, "").unwrap(); } else { let _ = std::fs::remove_file(flag); }
+        }
         fn calls(&self) -> usize { std::fs::read_to_string(&self.count).map_or(0, |t| t.lines().count()) }
         fn mux(&self, timeout: Duration) -> Mux { Mux::with_direct(&self.path, timeout, self.data.clone()) }
+        /// O mesmo programa e pasta, conferindo de novo a cada leitura.
+        fn eager(&self, timeout: Duration) -> Mux { self.mux(timeout).revalidating(Duration::ZERO) }
     }
 
-    #[cfg(unix)]
+    const UNKNOWN: &str = "tmux 9.9\npsmux 9.9.9 (0000000 2099-01-01)";
+
+    #[tokio::test]
+    async fn the_cli_runs_again_at_each_revalidation_and_keeps_the_direct_confirmed() {
+        let cli = FakeCli::new(hangar_psmux::VERSIONS[1]);
+        let a = FakeServer::start("ka", LINE_A.into());
+        a.register(&cli.data, "a", "ka");
+        cli.lists(LINE_A);
+        cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
+        // Vencido o intervalo, o CLI roda (e com ele a faxina do psmux) e a leitura direta é conferida de novo.
+        cli.eager(Duration::from_secs(2)).list_panes().await.unwrap();
+        assert_eq!((cli.calls(), a.conns()), (2, 2));
+        cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
+        assert_eq!((cli.calls(), a.conns()), (2, 3), "reconferido, segue direto");
+    }
+
+    #[tokio::test]
+    async fn a_program_replaced_by_an_unknown_version_turns_the_direct_off() {
+        let cli = FakeCli::new(hangar_psmux::VERSIONS[1]);
+        let a = FakeServer::start("ka", LINE_A.into());
+        a.register(&cli.data, "a", "ka");
+        cli.lists(LINE_A);
+        cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
+        cli.reports(UNKNOWN);
+        cli.eager(Duration::from_secs(2)).list_panes().await.unwrap();
+        cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
+        assert_eq!((cli.calls(), a.conns()), (3, 1), "versão não conferida não herda a conferência");
+    }
+
+    #[tokio::test]
+    async fn an_off_gate_reopens_when_the_program_is_fixed() {
+        let cli = FakeCli::new(UNKNOWN);
+        let a = FakeServer::start("ka", LINE_A.into());
+        a.register(&cli.data, "a", "ka");
+        cli.lists(LINE_A);
+        cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
+        assert_eq!(a.conns(), 0);
+        cli.reports(hangar_psmux::VERSIONS[0]);
+        cli.eager(Duration::from_secs(2)).list_panes().await.unwrap();
+        cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
+        assert_eq!((cli.calls(), a.conns()), (2, 2));
+    }
+
+    #[tokio::test]
+    async fn a_failed_version_probe_is_retried_not_kept_as_a_refusal() {
+        let cli = FakeCli::new(hangar_psmux::VERSIONS[1]);
+        let a = FakeServer::start("ka", LINE_A.into());
+        a.register(&cli.data, "a", "ka");
+        cli.lists(LINE_A);
+        cli.fails_version(true);
+        cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
+        cli.fails_version(false);
+        cli.eager(Duration::from_secs(2)).list_panes().await.unwrap();
+        cli.mux(Duration::from_secs(2)).list_panes().await.unwrap();
+        assert_eq!((cli.calls(), a.conns()), (2, 2));
+    }
+
+    #[tokio::test]
+    async fn an_unparsable_direct_reply_goes_back_to_the_cli() {
+        let cli = FakeCli::new(hangar_psmux::VERSIONS[1]);
+        let a = FakeServer::start("ka", LINE_A.into());
+        a.register(&cli.data, "a", "ka");
+        cli.lists(LINE_A);
+        let mux = cli.mux(Duration::from_secs(2));
+        mux.list_panes().await.unwrap();
+        a.replies("lixo\n");
+        let panes = mux.list_panes().await.unwrap();
+        assert_eq!((panes.len(), panes[0].session.as_str(), cli.calls()), (1, "a", 2));
+    }
+
+    #[test]
+    fn the_direct_window_never_outlasts_the_overall_deadline() {
+        let now = tokio::time::Instant::now();
+        for left in [0u64, 1, 10, 80, 120, 600, 5000] {
+            let deadline = now + Duration::from_millis(left);
+            let (until, wait) = direct_window(now, deadline);
+            assert!(wait <= deadline, "{left} ms");
+            assert!(until <= deadline.into_std(), "{left} ms");
+        }
+    }
+
     #[tokio::test]
     async fn direct_reading_starts_after_matching_the_cli_and_then_skips_it() {
         let cli = FakeCli::new(hangar_psmux::VERSIONS[1]);
@@ -480,7 +621,6 @@ mod tests {
         assert_eq!(second[0].session, "a");
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn a_short_lived_mux_reuses_the_confirmation_of_the_same_program_and_folder() {
         let cli = FakeCli::new(hangar_psmux::VERSIONS[1]);
@@ -494,7 +634,6 @@ mod tests {
         assert_eq!((cli.calls(), a.conns()), (1, 2));
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn the_two_line_version_the_real_psmux_prints_is_recognized() {
         let real = hangar_psmux::VERSIONS[0].replacen(" psmux", "\npsmux", 1);
@@ -507,7 +646,6 @@ mod tests {
         assert_eq!((cli.calls(), a.conns()), (1, 2));
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn an_unknown_version_never_connects() {
         let cli = FakeCli::new("tmux 9.9 psmux 9.9.9 (0000000 2099-01-01)");
@@ -519,7 +657,6 @@ mod tests {
         assert_eq!((cli.calls(), a.conns()), (2, 0));
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn a_new_or_recreated_server_needs_a_new_comparison() {
         let cli = FakeCli::new(hangar_psmux::VERSIONS[0]);
@@ -545,7 +682,6 @@ mod tests {
         assert_eq!(cli.calls(), 3);
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn a_mismatch_keeps_the_cli_and_gives_up_after_three_tries() {
         let cli = FakeCli::new(hangar_psmux::VERSIONS[1]);
@@ -557,7 +693,6 @@ mod tests {
         assert_eq!((cli.calls(), a.conns()), (4, 3));
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn no_sessions_is_the_cli_answer_and_does_not_disable_direct_reading() {
         let cli = FakeCli::new(hangar_psmux::VERSIONS[1]);
@@ -572,7 +707,6 @@ mod tests {
         assert_eq!(cli.calls(), 5);
     }
 
-    #[cfg(unix)]
     #[tokio::test]
     async fn a_failing_server_falls_back_to_the_cli_within_the_deadline() {
         let cli = FakeCli::new(hangar_psmux::VERSIONS[1]);

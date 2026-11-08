@@ -109,6 +109,7 @@ pub fn list_panes(dir: &Path, format: &str, deadline: Instant) -> Result<Listing
     let entries = std::fs::read_dir(dir).map_err(|_| fail("psmux_direct_registry"))?;
     let mut listing = Listing { text: String::new(), servers: Vec::new() };
     for entry in entries {
+        left(deadline)?;
         let name = entry.map_err(|_| fail("psmux_direct_registry"))?.file_name();
         let Some(base) = name.to_str().and_then(|n| n.strip_suffix(".port")) else { continue };
         // A sessão pré-aberta e as de outro `-L` levam `__` no nome.
