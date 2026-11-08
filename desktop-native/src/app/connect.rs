@@ -40,7 +40,11 @@ fn phase(status: &Status) -> Phase {
 enum DeviceStatus { Pending, Approved, Denied }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize)]
-pub(super) struct Device { device_id: String, name: String, status: DeviceStatus, last_seen: Option<u64> }
+pub(super) struct Device {
+    device_id: String, name: String, status: DeviceStatus, last_seen: Option<u64>,
+    /// Mesmo valor nos pedidos de um celular a várias máquinas; servidor antigo não manda.
+    #[serde(default)] install_id: Option<String>,
+}
 
 fn parse_devices(value: Value) -> Result<Vec<Device>, String> {
     let all: Vec<Device> = serde_json::from_value(value).map_err(|_| tr("invalid_response"))?;
@@ -322,9 +326,29 @@ fn merge(old: &[Request], devices: &[Device]) -> Vec<Request> {
     }).collect()
 }
 
+/// Um cartão por celular: pedidos com o mesmo `install_id` em várias máquinas se juntam; sem ele, cada pedido fica no seu.
+fn request_groups<'a>(machines: &[(&'a str, &'a [Request])]) -> Vec<Vec<(&'a str, &'a Request)>> {
+    let mut groups: Vec<Vec<(&str, &Request)>> = Vec::new();
+    for &(machine, cards) in machines {
+        for card in cards {
+            let same = card.device.install_id.as_deref()
+                .and_then(|id| groups.iter().position(|group| group[0].1.device.install_id.as_deref() == Some(id)));
+            match same {
+                Some(at) => groups[at].push((machine, card)),
+                None => groups.push(vec![(machine, card)]),
+            }
+        }
+    }
+    groups
+}
+
 /// Por máquina, chave `servers::norm`: sobrevive à troca do ativo, ao contrário de `Connect`.
 #[derive(Default)]
-pub(in crate::app) struct Notices { pending: HashMap<String, Vec<Request>>, refused: HashMap<String, Instant> }
+pub(in crate::app) struct Notices {
+    pending: HashMap<String, Vec<Request>>, refused: HashMap<String, Instant>,
+    /// Máquinas desmarcadas no cartão agrupado, por (máquina, aparelho): o padrão é todas marcadas.
+    unchecked: HashSet<(String, String)>,
+}
 
 impl Notices {
     fn card(&mut self, machine: &str, device: &str) -> Option<&mut Request> {
@@ -693,18 +717,75 @@ impl Hangar {
         let active = self.active_key();
         let mut keys: Vec<&String> = self.connect_notices.pending.keys().filter(|key| only.is_none_or(|only| only == key.as_str())).collect();
         keys.sort_by_key(|key| (**key != active, (*key).clone()));
+        let lists: Vec<(&str, &[Request])> = keys.iter().map(|key| (key.as_str(), self.connect_notices.pending[*key].as_slice())).collect();
         let mut cards = Vec::new();
-        for key in keys {
+        for group in request_groups(&lists) {
+            let [(key, card)] = group[..] else {
+                cards.push(self.connect_group_card(&group, cx));
+                continue;
+            };
             let label = self.vault_machine_label(key, cx);
-            for card in &self.connect_notices.pending[key] {
-                let (machine, device, name) = (key.clone(), card.device.device_id.clone(), card.device.name.clone());
-                let approve = cx.listener(move |this, _: &ClickEvent, window, cx| this.confirm_approve(machine.clone(), device.clone(), name.clone(), window, cx));
-                let (machine, device) = (key.clone(), card.device.device_id.clone());
-                let deny = cx.listener(move |this, _: &ClickEvent, _, cx| this.answer_device(machine.clone(), device.clone(), false, cx));
-                cards.push(device_card(&card.device.device_id, &card.device.name, &label, card.sending, card.error.clone(), true, approve, deny).into_any_element());
-            }
+            let (machine, device, name) = (key.to_owned(), card.device.device_id.clone(), card.device.name.clone());
+            let approve = cx.listener(move |this, _: &ClickEvent, window, cx| this.confirm_approve(machine.clone(), device.clone(), name.clone(), window, cx));
+            let (machine, device) = (key.to_owned(), card.device.device_id.clone());
+            let deny = cx.listener(move |this, _: &ClickEvent, _, cx| this.answer_device(machine.clone(), device.clone(), false, cx));
+            cards.push(device_card(&card.device.device_id, &card.device.name, &label, card.sending, card.error.clone(), true, approve, deny).into_any_element());
         }
         cards
+    }
+
+    /// O mesmo celular pedindo entrada em várias máquinas: uma marca por máquina, cada aprovação vai à rota da máquina
+    /// com a credencial que este app já tem nela. Máquina que este app não alcança não entra aqui: o pedido aparece nela.
+    fn connect_group_card(&self, group: &[(&str, &Request)], cx: &mut Context<Self>) -> AnyElement {
+        let name = group[0].1.device.name.clone();
+        let id = group[0].1.device.install_id.clone().unwrap_or_default();
+        let sending = group.iter().any(|(_, card)| card.sending);
+        let targets: Vec<(String, String, String)> = group.iter()
+            .map(|(machine, card)| ((*machine).to_owned(), card.device.device_id.clone(), self.vault_machine_label(machine, cx))).collect();
+        let marked = |machine: &str, device: &str| !self.connect_notices.unchecked.contains(&(machine.to_owned(), device.to_owned()));
+        let chosen: Vec<(String, String, String)> = targets.iter().filter(|(machine, device, _)| marked(machine, device)).cloned().collect();
+        let mut body = div().id(SharedString::from(format!("connect-group-{id}"))).flex_shrink_0().mx(px(8.)).my(px(4.)).p_2().rounded(px(8.))
+            .bg(theme::inset()).flex().flex_col().gap_1().role(Role::Group).aria_label(name.clone())
+            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).whitespace_normal()
+                .child(tr_shared("connect_group_title", &[("name", &name), ("count", &group.len().to_string())])))
+            .child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(tr_shared("connect_group_help", &[])));
+        for (machine, device, label) in &targets {
+            let (machine, device) = (machine.clone(), device.clone());
+            body = body.child(Checkbox::new(SharedString::from(format!("connect-group-{id}-{device}"))).label(label.clone())
+                .checked(marked(&machine, &device)).disabled(sending)
+                .on_click(cx.listener(move |this, _: &bool, _, cx| {
+                    let key = (machine.clone(), device.clone());
+                    if !this.connect_notices.unchecked.remove(&key) { this.connect_notices.unchecked.insert(key); }
+                    cx.notify();
+                })));
+        }
+        let button = |action: &str, key: &str| Button::new(SharedString::from(format!("connect-group-{action}-{id}"))).xsmall().w_full()
+            .label(tr_shared(key, &[])).disabled(sending);
+        let approve = {
+            let (chosen, name) = (chosen.clone(), name.clone());
+            cx.listener(move |this, _: &ClickEvent, window, cx| this.confirm_group_approve(chosen.clone(), name.clone(), window, cx))
+        };
+        let deny = cx.listener(move |this, _: &ClickEvent, _, cx| {
+            for (machine, device, _) in &targets { this.answer_device(machine.clone(), device.clone(), false, cx); }
+        });
+        let failed = group.iter()
+            .filter_map(|(machine, card)| Some((card.device.device_id.clone(), self.vault_machine_label(machine, cx), card.error.clone()?))).collect::<Vec<_>>();
+        body.child(request_pair(button("approve", "connect_group_approve").primary().disabled(sending || chosen.is_empty()).on_click(approve),
+                button("deny", "connect_group_deny").outline().on_click(deny)))
+            .children(failed.into_iter().map(|(device, label, error)| div().id(SharedString::from(format!("connect-request-error-{device}")))
+                .role(Role::Alert).text_xs().text_color(theme::danger()).whitespace_normal()
+                .child(tr_shared("connect_group_failed", &[("machines", &label), ("error", &error)]))))
+            .into_any_element()
+    }
+
+    fn confirm_group_approve(&mut self, chosen: Vec<(String, String, String)>, name: String, window: &mut Window, cx: &mut Context<Self>) {
+        let labels = chosen.iter().map(|(_, _, label)| label.as_str()).collect::<Vec<_>>().join(", ");
+        let this = cx.entity().downgrade();
+        chrome::confirm_alert(window, cx, tr_shared("connect_device_approve_title", &[("name", &name)]), tr_shared("connect_device_approve_body", &[("machine", &labels)]),
+            tr_shared("connect_group_approve", &[]), ButtonVariant::Primary, move |_, cx| {
+                let _ = this.update(cx, |this, cx| for (machine, device, _) in &chosen { this.answer_device(machine.clone(), device.clone(), true, cx); });
+                true
+            });
     }
 
     fn render_device_row(&self, device: &Device, first: bool, cx: &mut Context<Self>) -> AnyElement {
@@ -948,7 +1029,7 @@ impl Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{address_preview, device_card, device_view, identity_of, machine_label, merge, open_preview_port, parse_account, parse_devices, parse_links, parse_port, parse_preview, parse_status, phase, take_password, Device, DeviceStatus, DeviceView, InputState, Notices, Phase, Remote, Request, REFUSED_PAUSE};
+    use super::{address_preview, device_card, device_view, identity_of, machine_label, merge, open_preview_port, parse_account, parse_devices, parse_links, parse_port, parse_preview, parse_status, phase, request_groups, take_password, Device, DeviceStatus, DeviceView, InputState, Notices, Phase, Remote, Request, REFUSED_PAUSE};
     use crate::i18n::tr_shared;
     // O nome explícito vence qualquer `test` trazido por glob.
     use core::prelude::v1::test;
@@ -956,7 +1037,7 @@ mod tests {
     use serde_json::json;
 
     fn device(id: &str, status: DeviceStatus) -> Device {
-        Device { device_id: id.to_owned(), name: format!("Pixel {id}"), status, last_seen: None }
+        Device { device_id: id.to_owned(), name: format!("Pixel {id}"), status, last_seen: None, install_id: None }
     }
 
     #[test]
@@ -1038,6 +1119,20 @@ mod tests {
         let failed = [Request { error: Some("recusado".to_owned()), ..cards[0].clone() }];
         assert_eq!(merge(&failed, &devices)[0].error.as_deref(), Some("recusado"));
         assert!(merge(&failed, &[]).is_empty(), "aparelho decidido em outro lugar sai da tela");
+    }
+
+    #[test]
+    fn one_phone_on_several_machines_becomes_one_card_and_old_phones_keep_theirs() {
+        let phone = |id: &str, install: Option<&str>| Request {
+            device: Device { install_id: install.map(str::to_owned), ..device(id, DeviceStatus::Pending) }, sending: false, error: None };
+        let casa = [phone("a", Some("x1")), phone("b", None)];
+        let mesa = [phone("c", Some("x1")), phone("d", Some("y2"))];
+        let groups = request_groups(&[("casa", &casa[..]), ("mesa", &mesa[..])]);
+        let shape: Vec<Vec<(&str, &str)>> = groups.iter()
+            .map(|group| group.iter().map(|(machine, card)| (*machine, card.device.device_id.as_str())).collect()).collect();
+        assert_eq!(shape, vec![vec![("casa", "a"), ("mesa", "c")], vec![("casa", "b")], vec![("mesa", "d")]]);
+        assert_eq!(parse_devices(json!([{"device_id": "e", "name": "iPhone", "status": "pending", "last_seen": null, "install_id": "x1"}]))
+            .unwrap()[0].install_id.as_deref(), Some("x1"));
     }
 
     #[test]
