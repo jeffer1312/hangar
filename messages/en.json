@@ -10156,6 +10156,7 @@
   "connect_device_on": "on {machine}",
   "connect_signed_in_as": "Account {name}",
   "connect_screen_failed": "This screen failed to open. Tap to try again.",
+  "connect_screen_retry_hint": "Draws the Connect screen again.",
   "connect_open": "Sign in with Hangar Connect",
   "connect_login_help": "Sign in to your account to see your machines, with no address to type.",
   "connect_account_name": "Account name",

@@ -1,9 +1,10 @@
 import { useEffect } from 'react';
 import { Pressable, Text, View } from 'react-native';
-import Animated, { Easing, useAnimatedProps, useReducedMotion, useSharedValue, withDelay, withTiming, type SharedValue } from 'react-native-reanimated';
+import Animated, { cancelAnimation, Easing, useAnimatedProps, useReducedMotion, useSharedValue, withDelay, withTiming, type SharedValue } from 'react-native-reanimated';
 import Svg, { Path } from 'react-native-svg';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Icon } from '../../ui/Icon';
+import { haptic } from '../../ui/haptics';
 import { useSettingsColors } from '../config/colors';
 import * as m from '../../paraglide/messages';
 
@@ -31,10 +32,12 @@ export function ConnectMark({ size = 72 }: { size?: number }) {
   const middle = useSharedValue(reduced ? 1 : 0);
   const inner = useSharedValue(reduced ? 1 : 0);
   useEffect(() => {
-    if (reduced) return;
+    // Movimento reduzido ligado depois de montar: a marca aparece inteira, sem ficar pela metade.
+    if (reduced) { outer.value = 1; middle.value = 1; inner.value = 1; return; }
     outer.value = withTiming(1, { duration: 520, easing: ease });
     middle.value = withDelay(160, withTiming(1, { duration: 480, easing: ease }));
     inner.value = withDelay(320, withTiming(1, { duration: 440, easing: ease }));
+    return () => { cancelAnimation(outer); cancelAnimation(middle); cancelAnimation(inner); };
   }, [reduced, outer, middle, inner]);
   const [a, b, c] = CONNECT_MARK_ARCS;
   return <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
@@ -63,10 +66,10 @@ export function ConnectHero({ notice, onCreate, onLogin }: { notice?: string; on
         <Text style={[styles.perkText, { color: c.text }]}>{perk}</Text>
       </View>)}
     </View>
-    <Pressable accessibilityRole="button" onPress={onCreate} style={[styles.primary, { backgroundColor: theme.tokens.accent.base }]}>
+    <Pressable accessibilityRole="button" onPress={() => { haptic.selection(); onCreate(); }} style={[styles.primary, { backgroundColor: theme.tokens.accent.base }]}>
       <Text style={[styles.primaryText, { color: theme.ink.onAccent }]}>{m.connect_create_free()}</Text>
     </Pressable>
-    <Pressable accessibilityRole="button" onPress={onLogin} style={[styles.secondary, { borderColor: c.borderStrong }]}>
+    <Pressable accessibilityRole="button" onPress={() => { haptic.selection(); onLogin(); }} style={[styles.secondary, { borderColor: c.borderStrong }]}>
       <Text style={[styles.secondaryText, { color: c.text }]}>{m.connect_have_account()}</Text>
     </Pressable>
   </View>;

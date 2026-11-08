@@ -14,6 +14,7 @@ export default function ConnectRoute() {
   const router = useRouter();
   const ready = useConnect((s) => s.ready);
   const signedIn = useConnect((s) => !!s.account);
+  const token = useConnect((s) => s.account?.token ?? '');
   const notice = useConnect((s) => s.notice);
   const header = useGlassHeader();
   const [pulling, setPulling] = useState(false);
@@ -27,7 +28,7 @@ export default function ConnectRoute() {
     {/* A pilha da raiz nasce sem cabeçalho; esta tela abre sem servidor, fora de `/config`. */}
     <Stack.Screen options={header} />
     <MachinePage title={m.connect_title()} refreshControl={signedIn ? <RefreshControl refreshing={pulling} onRefresh={refresh} /> : undefined}>
-      <ConnectBoundary>
+      <ConnectBoundary resetKey={token}>
         {!ready ? <Notice text={m.comum_carregando()} /> : null}
         {/* Sem conta, o motivo da volta ao login aparece na abertura dele. */}
         {signedIn ? <Notice text={notice} /> : null}

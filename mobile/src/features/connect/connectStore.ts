@@ -93,6 +93,25 @@ export const useConnect = create<ConnectState>((set, get) => {
   let devicesRead: Promise<void> | null = null;
   let readAgain = false;
   let machinesRead = 0;
+  let newestMachines: Promise<void> = Promise.resolve();
+
+  async function readMachines(account: ConnectAccount) {
+    const read = ++machinesRead;
+    // Só a leitura mais nova da mesma conta escreve: uma resposta atrasada não desfaz a recente.
+    const current = () => read === machinesRead && get().account?.token === account.token;
+    set({ loadingMachines: true, machinesError: '' });
+    try {
+      const fresh = await listMachines(account);
+      if (!current()) return;
+      const before = get().machines ?? [];
+      const machines = fresh.map((row) => before.find((old) => sameRow(old, row)) ?? row);
+      set({ machines, loadingMachines: false });
+    } catch (error) {
+      if (!current()) return;
+      if (statusOf(error) === 401) await dropAccount(m.connect_session_ended());
+      else set({ loadingMachines: false, machinesError: failure(error, 'machine') });
+    }
+  }
 
   const setEntry = (id: string, entry: MachineEntry | null) => set((state) => {
     const entries = { ...state.entries };
@@ -169,21 +188,11 @@ export const useConnect = create<ConnectState>((set, get) => {
     async refreshMachines() {
       const { account } = get();
       if (!account) return;
-      const read = ++machinesRead;
-      // Só a leitura mais nova da mesma conta escreve: uma resposta atrasada não desfaz a recente.
-      const current = () => read === machinesRead && get().account?.token === account.token;
-      set({ loadingMachines: true, machinesError: '' });
-      try {
-        const fresh = await listMachines(account);
-        if (!current()) return;
-        const before = get().machines ?? [];
-        const machines = fresh.map((row) => before.find((old) => sameRow(old, row)) ?? row);
-        set({ machines, loadingMachines: false });
-      } catch (error) {
-        if (!current()) return;
-        if (statusOf(error) === 401) await dropAccount(m.connect_session_ended());
-        else set({ loadingMachines: false, machinesError: failure(error, 'machine') });
-      }
+      const own = readMachines(account);
+      newestMachines = own;
+      // Quem espera (o puxar para atualizar) só termina com a leitura mais nova, não com a sua já superada.
+      let seen: Promise<void>;
+      do { seen = newestMachines; await seen; } while (seen !== newestMachines);
     },
     async enter(machine) {
       const { account, entries } = get();

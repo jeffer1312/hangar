@@ -10156,6 +10156,7 @@
   "connect_device_on": "em {machine}",
   "connect_signed_in_as": "Conta {name}",
   "connect_screen_failed": "Esta tela falhou ao abrir. Toque para tentar de novo.",
+  "connect_screen_retry_hint": "Desenha a tela do Connect de novo.",
   "connect_open": "Entrar com o Hangar Connect",
   "connect_login_help": "Entre na sua conta para ver suas máquinas, sem digitar endereço.",
   "connect_account_name": "Nome da conta",

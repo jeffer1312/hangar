@@ -48,7 +48,8 @@ export function ConnectLogin() {
       <MachineRow title={action.busy ? m.mobile_machines_busy() : label} action disabled={!ready} onPress={submit} />
       <MachineRow title={creating ? m.connect_have_account() : m.connect_no_account()} disabled={action.busy}
         onPress={() => choose(creating ? 'login' : 'create')} />
-      <MachineRow title={m.comum_voltar()} disabled={action.busy} onPress={() => choose(null)} />
+      {/* Voltar à abertura não deixa a senha esperando no campo escondido. */}
+      <MachineRow title={m.comum_voltar()} disabled={action.busy} onPress={() => { setPassword(''); choose(null); }} />
     </MachineGroup>
   </>;
 }
