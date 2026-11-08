@@ -6,7 +6,7 @@ use std::{collections::BTreeMap, fs::OpenOptions, io::Write};
 fn line(provider: &str, id: &str, text: &str) -> String {
     // Formatos medidos preservados nas suítes anteriores de transcript Pi e Kimi.
     let value=if provider=="kimi" {json!({"type":"context.append_message","message":{"role":"user","content":[{"type":"text","text":text}],"toolCalls":[],"origin":{"kind":"user"},"id":id},"time":1786453187986u64})}
-        else {json!({"type":"message","id":id,"timestamp":"2026-01-01T00:00:00.000Z","message":{"role":"user","content":[{"type":"text","text":text}]}})};
+        else {json!({"type":"message","id":id,"timestamp":"2026-01-01T00:00:00.000Z","message":{"role":"user","timestamp":1767225600000u64,"content":[{"type":"text","text":text}]}})};
     format!("{value}\n")
 }
 #[test]
@@ -140,6 +140,11 @@ async fn contract_receipts(provider: &str, initial: Vec<serde_json::Value>, comm
         }
     }
     std::fs::write(&target.transcript, line(provider, "echo", committed)).unwrap();
+    let mut measured = ReceiptIndex::new(provider, &target.binding.conversation);
+    let occurrences = measured.scan(&target.transcript).unwrap();
+    assert_eq!(occurrences.len(), 1, "{provider}: o eco completo produz uma ocorrência");
+    assert_eq!(occurrences[0].timestamp, Some(if provider == "kimi" {1786453187.986} else {1767225600.0}),
+        "{provider}: o bilhete de entrega exige timestamp no envelope nativo");
     let io = std::sync::Arc::new(RecordingIo::default());
     let mut options = OtherOptions::new(hangar_server::terminal_control::TerminalPool::new(),
         hangar_server::provider_models::inbox::Store::new(), std::sync::Arc::new(hangar_server::list::procs::SystemProcs::default()),
