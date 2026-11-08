@@ -383,8 +383,8 @@ enum Payload {
     Terminal(terminal::Reply),
     // O caminho do áudio que este pedido guardou nos anexos, também quando a transcrição falhou.
     Dictation(u64, Option<String>, Result<Value, Failure>),
-    // Ditado em pedaços: o arquivo inteiro chegou aos anexos depois do texto.
-    DictationSaved(u64, String),
+    // Ditado em pedaços: a subida do arquivo inteiro terminou depois do texto (id da gravação).
+    DictationSaved(u64, Result<String, Failure>),
     // Aba Atividade: a conta de subagentes no disco e a lista da aba.
     Activity(activity::ActivityReply),
     TabPreview(tab_preview::TabPreviewReply),
@@ -2177,7 +2177,12 @@ impl Hangar {
                 } else { self.receive_dictation(seq, path, result, window, cx); }
                 return;
             }
-            Payload::DictationSaved(seq, path) => { self.dictation.saved(seq, path); return; }
+            Payload::DictationSaved(id, saved) => {
+                self.dictation.saved(id, saved);
+                self.redraw(panes::Area::Bottom, cx);
+                cx.notify();
+                return;
+            }
             Payload::FileView(reply) => { self.receive_file_view(reply, window, cx); return; }
             Payload::Artifacts(request, result) => { self.receive_artifacts(request, result, cx); return; }
             Payload::Dossier(key, seq, result) => { self.receive_dossier(key, seq, result, cx); return; }

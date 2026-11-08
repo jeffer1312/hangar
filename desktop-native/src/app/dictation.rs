@@ -318,6 +318,31 @@ async fn upload_and_transcribe(api: Api, uploads: disk::Uploads, name: String, b
     transcribe_uploaded(api, name, saved, style, options).await
 }
 
+type UploadResult = Option<Result<String, Failure>>;
+type UploadSender = tokio::sync::watch::Sender<UploadResult>;
+
+/// Subida do arquivo inteiro de uma gravação em pedaços. `id` não muda com versões e "de novo": o caminho que chega
+/// depois ainda vale para a mesma gravação, e o "de novo" espera esta subida em vez de mandar o áudio outra vez.
+struct Upload { id: u64, done: tokio::sync::watch::Receiver<UploadResult> }
+
+/// Com sessão os bytes vão inteiros para a subida; sem ela ficam para o corpo do `/transcribe` da volta ao caminho de
+/// sempre. Nunca os dois: seria mais uma cópia do WAV em memória até o fim.
+fn whole_file<U>(session: Option<String>, uploads: Option<U>, bytes: Vec<u8>) -> (Option<(String, U, Vec<u8>)>, Option<Vec<u8>>) {
+    match (session, uploads) {
+        (Some(name), Some(uploads)) => (Some((name, uploads, bytes)), None),
+        _ => (None, Some(bytes)),
+    }
+}
+
+/// O caminho da subida em voo, quando ela der certo; sem subida ou com ela falha, `upload` manda o áudio de novo.
+async fn uploaded_or_upload(pending: Option<tokio::sync::watch::Receiver<UploadResult>>, upload: impl Future<Output = Result<String, Failure>>)
+    -> Result<String, Failure> {
+    if let Some(mut done) = pending
+        && let Ok(result) = done.wait_for(Option::is_some).await
+        && let Some(Ok(path)) = result.clone() { return Ok(path); }
+    upload.await
+}
+
 /// O caminho do áudio nos anexos da sessão.
 async fn upload_dictation(api: Api, uploads: disk::Uploads, name: String, bytes: Vec<u8>) -> Result<String, Failure> {
     match uploads {
@@ -377,6 +402,8 @@ pub(super) struct Dictation {
     recorder: Option<Recorder>,
     /// Pedaços já mandados durante a gravação; fora do `request`, que só nasce ao parar.
     pieces: Option<super::dictation_pieces::Pieces>,
+    /// Subida em paralelo do arquivo inteiro da gravação em pedaços.
+    upload: Option<Upload>,
     request: Option<JoinHandle<()>>,
     started: Option<Instant>,
     /// Teto da gravação em curso, lido da máquina dela ao começar.
@@ -450,9 +477,20 @@ impl Dictation {
     pub(super) fn recording(&self) -> bool { self.recorder.is_some() }
     pub(super) fn processing(&self) -> bool { self.request.is_some() }
     pub(super) fn send_pending(&self) -> bool { self.pending_send.is_some() }
-    /// O arquivo inteiro do ditado em pedaços chegou aos anexos depois do texto: o "de novo" e o player passam a usá-lo.
-    pub(super) fn saved(&mut self, seq: u64, path: String) {
-        if self.seq == seq && self.owner.is_some() { self.server_path = Some(path); }
+    /// Abre a subida do arquivo inteiro de uma gravação em pedaços; o id é da gravação, não do pedido.
+    fn begin_upload(&mut self) -> (u64, UploadSender) {
+        let (tx, done) = tokio::sync::watch::channel(None);
+        self.upload = Some(Upload { id: self.seq, done });
+        (self.seq, tx)
+    }
+    /// A subida do arquivo inteiro do ditado em pedaços terminou depois do texto: o caminho serve ao "de novo" e ao
+    /// player; a falha aparece como a de hoje, sem tirar o texto.
+    pub(super) fn saved(&mut self, id: u64, result: Result<String, Failure>) {
+        if self.upload.as_ref().is_none_or(|upload| upload.id != id) || self.owner.is_none() { return; }
+        match result {
+            Ok(path) => self.server_path = Some(path),
+            Err(error) => self.result_error = Some(Hangar::dictation_failure(&error)),
+        }
     }
     pub(super) fn cancel_pending_send(&mut self) { self.pending_send = None; }
 
@@ -554,6 +592,7 @@ impl Dictation {
         self.recorder = None;
         // Soltar os pedaços aborta os que estão em voo.
         self.pieces = None;
+        self.upload = None;
         if let Some(task) = self.request.take() { task.abort(); }
         self.started = None;
         self.level = 0.;
@@ -1004,6 +1043,8 @@ impl Hangar {
         let audio = recorder.finish();
         // Gravação cortada durante a fala: só falta o fim. `None` = nenhum corte, o caminho de sempre.
         let jobs = match (&audio, pieces) { (Ok(bytes), Some(pieces)) => pieces.finish(&bytes[44..], self.runtime.handle()), _ => None };
+        // Mesma condição do `whole_file`: com sessão, a subida em paralelo é desta gravação.
+        let upload_slot = (jobs.is_some() && session.is_some() && uploads.is_some()).then(|| self.dictation.begin_upload());
         self.dictation.request = Some(self.runtime.spawn(async move {
             let reply = |payload| { let tx = tx.clone(); async move { let _ = tx.send(Envelope { connection, selection: None, payload }).await; } };
             let (path, result) = match audio {
@@ -1012,23 +1053,34 @@ impl Hangar {
                     match (jobs, session, uploads) {
                         (Some(jobs), session, uploads) => {
                             // O arquivo inteiro sobe junto com os pedaços: o texto não espera a subida, e o caminho chega depois.
-                            let upload = session.clone().zip(uploads).map(|(name, uploads)|
-                                super::dictation_pieces::Job::spawn(&tokio::runtime::Handle::current(), upload_dictation(api.clone(), uploads, name, bytes.clone())));
+                            let (upload, body) = whole_file(session.clone(), uploads, bytes);
+                            let upload = upload.zip(upload_slot).map(|((name, uploads, bytes), (id, done))| {
+                                let api = api.clone();
+                                (id, super::dictation_pieces::Job::spawn(&tokio::runtime::Handle::current(), async move {
+                                    let saved = upload_dictation(api, uploads, name, bytes).await;
+                                    // O "de novo" pedido antes do fim espera por aqui em vez de subir outra vez.
+                                    done.send_replace(Some(saved.clone()));
+                                    saved
+                                }))
+                            });
                             match organize_pieces(&api, jobs, session.as_deref(), style, &options).await {
                                 Ok(value) => {
                                     reply(Payload::Dictation(seq, None, Ok(value))).await;
-                                    if let Some(Some(Ok(path))) = match upload { Some(job) => Some(job.join().await), None => None } {
-                                        reply(Payload::DictationSaved(seq, path)).await;
+                                    if let Some((id, job)) = upload {
+                                        let saved = job.join().await.unwrap_or_else(|| Err(Failure::local("invalid_response")));
+                                        reply(Payload::DictationSaved(id, saved)).await;
                                     }
                                     return;
                                 }
                                 // Pedaço ou organização que falhou: o caminho de sempre, com o arquivo inteiro.
-                                Err(_) => match (session, upload) {
-                                    (Some(name), Some(upload)) => {
-                                        let saved = upload.join().await.unwrap_or_else(|| Err(Failure::local("invalid_response")));
+                                Err(_) => match (session, upload, body) {
+                                    (Some(name), Some((_, job)), _) => {
+                                        let saved = job.join().await.unwrap_or_else(|| Err(Failure::local("invalid_response")));
                                         transcribe_uploaded(api, name, saved, style, options).await
                                     }
-                                    (session, _) => (None, api.dictate(session.as_deref(), "ditado.wav", bytes, style, &options).await),
+                                    (session, _, Some(bytes)) => (None, api.dictate(session.as_deref(), "ditado.wav", bytes, style, &options).await),
+                                    // Subida só existe com sessão (`whole_file`): sem corpo e sem ela não há o que mandar.
+                                    _ => (None, Err(Failure::local("invalid_response"))),
                                 },
                             }
                         }
@@ -1107,6 +1159,8 @@ impl Hangar {
         let saved = self.dictation.saved_for_retry(same_transcript);
         // Upload que falhou na primeira vez: a gravação sobe de novo antes de transcrever.
         let uploads = self.dictation.target.as_ref().map(|target| self.uploads_for(&target.key));
+        // Gravação em pedaços com a subida ainda em voo: espera por ela em vez de mandar o áudio outra vez.
+        let pending = self.dictation.upload.as_ref().map(|upload| upload.done.clone());
         if (style.is_some() && raw.is_empty()) || (style.is_none() && audio.is_empty() && saved.is_none()) { return; }
         self.dictation.seq += 1;
         self.dictation.cleaning = style.is_some();
@@ -1121,7 +1175,8 @@ impl Hangar {
             } else if let (Some(file), Some(name)) = (saved, session.as_deref()) {
                 (None, if clean{api.dictate_saved(name,&file,recording_style,&options).await}else{api.transcribe_saved(name,&file,false,None).await})
             } else if let (true, Some(name), Some(uploads)) = (clean, session.clone(), uploads) {
-                upload_and_transcribe(api, uploads, name, audio, recording_style,options).await
+                let saved = uploaded_or_upload(pending, upload_dictation(api.clone(), uploads, name.clone(), audio)).await;
+                transcribe_uploaded(api, name, saved, recording_style, options).await
             } else { (None, if clean{api.dictate(session.as_deref(),&filename,audio,recording_style,&options).await}else{api.transcribe(session.as_deref(),&filename,audio,false,None).await}) };
             let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Dictation(seq, path, result) }).await;
         }));
@@ -1450,6 +1505,53 @@ fn dictation_insert(value: &str, range: std::ops::Range<usize>, text: &str) -> S
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dictation_whole_file_goes_to_the_upload_or_the_body_never_both() {
+        let (upload, body) = super::whole_file(Some("s".into()), Some(()), vec![1, 2]);
+        assert_eq!((upload.map(|(name, _, bytes)| (name, bytes)), body), (Some(("s".to_owned(), vec![1, 2])), None));
+        let (upload, body) = super::whole_file::<()>(None, None, vec![1, 2]);
+        assert_eq!((upload.is_none(), body), (true, Some(vec![1, 2])));
+    }
+
+    #[test]
+    fn dictation_upload_path_arrives_after_a_revision_but_not_after_cancel() {
+        let mut state = super::Dictation::default();
+        state.owner = Some((1, "id".into(), "s".into()));
+        let (id, _tx) = state.begin_upload();
+        // Versão ou "de novo" pedidos antes de a subida terminar trocam o `seq` do pedido.
+        state.seq += 1;
+        state.saved(id, Ok("/u/ditado-1.wav".into()));
+        assert_eq!(state.server_path.as_deref(), Some("/u/ditado-1.wav"));
+        state.cancel();
+        state.owner = Some((1, "id".into(), "s".into()));
+        state.saved(id, Ok("/u/velho.wav".into()));
+        assert_eq!(state.server_path, None, "a subida de uma gravação cancelada não vale para a seguinte");
+    }
+
+    #[tokio::test]
+    async fn dictation_retry_waits_for_the_upload_in_flight_instead_of_uploading_again() {
+        let sent = std::sync::atomic::AtomicBool::new(false);
+        let again = || async { sent.store(true, std::sync::atomic::Ordering::Relaxed); Ok::<_, super::Failure>("de novo".to_owned()) };
+        let (tx, rx) = tokio::sync::watch::channel(None);
+        let (path, _) = tokio::join!(super::uploaded_or_upload(Some(rx), again()), async { tx.send_replace(Some(Ok("/u/a.wav".into()))); });
+        assert_eq!(path.unwrap(), "/u/a.wav");
+        assert!(!sent.load(std::sync::atomic::Ordering::Relaxed), "o áudio não sobe duas vezes");
+        let (_tx, rx) = tokio::sync::watch::channel(Some(Err(super::Failure::local("connection_failed"))));
+        assert_eq!(super::uploaded_or_upload(Some(rx), again()).await.unwrap(), "de novo", "subida que falhou sobe de novo, como hoje");
+    }
+
+    #[test]
+    fn dictation_upload_failure_after_the_text_shows_like_today_and_keeps_the_text() {
+        let mut state = super::Dictation::default();
+        state.owner = Some((1, "id".into(), "s".into()));
+        state.result = Some(serde_json::json!({"text": "oi"}));
+        let (id, _tx) = state.begin_upload();
+        let error = super::Failure::local("connection_failed");
+        state.saved(id, Err(error.clone()));
+        assert_eq!(state.result_error, Some(super::Hangar::dictation_failure(&error)));
+        assert!(state.result.is_some());
+    }
+
     #[test]
     fn pill_bars_grow_from_the_center_and_mirror() {
         let silent = super::pill_heights(&Default::default());
