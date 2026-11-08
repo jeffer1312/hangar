@@ -65,6 +65,15 @@ pub(super) async fn drain(
     } else {
         initial.cloned()
     };
+    let path = target.transcript.clone();
+    let provider = target.provider.as_str();
+    let conversation = target.binding.conversation.clone();
+    let cursor = tokio::task::spawn_blocking(move || {
+        ReceiptIndex::new(provider, &conversation).capture(&path)
+    })
+    .await
+    .map_err(|_| failed("receipt_worker"))?
+    .map_err(|_| failed("receipt_scan"))?;
     let claimed = queue
         .exec(
             target.generation,
@@ -81,15 +90,6 @@ pub(super) async fn drain(
     if claimed.as_array().is_none_or(Vec::is_empty) {
         return Ok(native);
     }
-    let path = target.transcript.clone();
-    let provider = target.provider.as_str();
-    let conversation = target.binding.conversation.clone();
-    let cursor = tokio::task::spawn_blocking(move || {
-        ReceiptIndex::new(provider, &conversation).capture(&path)
-    })
-    .await
-    .map_err(|_| failed("receipt_worker"))?
-    .map_err(|_| failed("receipt_scan"))?;
     let op = format!("other-send:{id}");
     let wire = format!("terminal:{}:{id}:{}", target.generation, state.next_seq);
     for (suffix, action) in [
