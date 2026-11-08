@@ -221,6 +221,67 @@ impl RuntimeRegistry {
             json!({"opened":true,"instance":self.instance,"key":target.key,"generation":target.generation,"state":snapshot}),
         )
     }
+    async fn retire_claude_before_other(&self, target: &OtherTarget) -> Result<(), RuntimeError> {
+        let stale = self
+            .entries
+            .lock()
+            .await
+            .iter()
+            .filter_map(|(key, entry)| match &entry.handle {
+                EntryHandle::Terminal { target: old, .. }
+                    if entry.name == target.name
+                        && (key != &target.key
+                            || old.binding.created != target.binding.created) =>
+                {
+                    Some((key.clone(), entry.generation, old.binding.clone()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if stale.is_empty() {
+            return Ok(());
+        }
+        let _name = crate::session_open::open::NameClaim::take(&target.dirs.home, &target.name)
+            .map_err(|_| failure("other_terminal_adoption_busy"))?;
+        let config = self
+            .other
+            .get()
+            .ok_or_else(|| failure("other_runtime_unavailable"))?;
+        let io = config
+            .options
+            .io_override
+            .clone()
+            .unwrap_or_else(|| Arc::new(ProcessOtherIo::new(target, &config.options)));
+        if !io.prove(target).await? {
+            return Err(failure("other_terminal_life_changed"));
+        }
+        let shown = mux(
+            &target.binding,
+            vec![
+                "show-environment".into(),
+                "-t".into(),
+                super::super::claude_terminal::session_target(&target.name),
+                "CP_SESSION_KEY".into(),
+            ],
+        )
+        .await;
+        if shown.code != Some(0)
+            || super::super::claude_terminal::session_key(&shown.stdout).as_deref()
+                != Some(target.key.as_str())
+        {
+            return Err(failure("other_terminal_life_changed"));
+        }
+        for (key, generation, binding) in stale {
+            let barrier = self.barrier(&key).await;
+            let _guard = barrier.lock().await;
+            let unchanged=self.entries.lock().await.get(&key).is_some_and(|entry|entry.generation==generation && entry.name==target.name && matches!(&entry.handle,EntryHandle::Terminal {target:old,..} if old.binding==binding));
+            if unchanged {
+                self.close_locked(&key, generation, false).await?;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) async fn ensure_other(&self, name: &str) -> Option<Result<(), RuntimeError>> {
         self.adopt_other(name).await
     }
@@ -234,6 +295,9 @@ impl RuntimeRegistry {
         Some(match found {
             Err(error) => Err(error),
             Ok(OtherDiscoveryState::Ready(target)) if target.name == name => {
+                if let Err(error) = self.retire_claude_before_other(&target).await {
+                    return Some(Err(error));
+                }
                 let existing = self
                     .entries
                     .lock()

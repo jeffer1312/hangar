@@ -678,7 +678,8 @@ async fn kimi_fallback(root: &Path, child: bool) -> Value {
     target.transcript = root.join("sid-a/agents/main/wire.jsonl");
     std::fs::create_dir_all(target.transcript.parent().unwrap()).unwrap();
     std::fs::write(&target.transcript, b"").unwrap();
-    let stamp = std::time::UNIX_EPOCH + Duration::from_millis(if child {1_000_000}else{1_000_500});
+    let stamp =
+        std::time::UNIX_EPOCH + Duration::from_millis(if child { 1_000_000 } else { 1_000_500 });
     std::fs::File::options()
         .write(true)
         .open(&target.transcript)
@@ -803,5 +804,89 @@ async fn other_lifecycle_rename_preserves_queue_generation_and_inbox_without_kil
     );
     assert_eq!(snap[KEY]["queue"][0]["id"], "stable-id");
     assert_eq!(delivered, "sent");
+    assert!(io.writes.lock().unwrap().is_empty());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn other_lifecycle_reused_claude_name_registers_pi_without_killing_current_cli() {
+    use hangar_server::runtime::terminal::TerminalTarget;
+    const OLD_KEY: &str = "fedcba9876543210fedcba9876543210";
+    let root = tempfile::tempdir().unwrap();
+    let _list = raw_list(root.path(), true);
+    let mut current = target(root.path());
+    current.binding.mux_argv = vec![root.path().join("mux").to_string_lossy().into_owned()];
+    std::fs::write(&current.transcript, b"").unwrap();
+    let source = Arc::new(Mutex::new(Some(OtherDiscoveryState::Ready(
+        current.clone(),
+    ))));
+    let io = Io::live();
+    let (registry, _) = registry(root.path(), io.clone(), source, None);
+    let hubs = hangar_server::side::Hubs::default();
+    registry.bind_hubs(hubs.downgrade());
+    let mut old_binding = current.binding.clone();
+    old_binding.created = 99;
+    old_binding.conversation = "claude-old".into();
+    let old_path = root.path().join("claude-old.jsonl");
+    std::fs::write(&old_path, b"").unwrap();
+    let old = TerminalTarget {
+        key: OLD_KEY.into(),
+        generation: 1,
+        name: current.name.clone(),
+        binding: old_binding,
+        lease_path: current
+            .projection_dir
+            .join(format!("runtime/{OLD_KEY}.lock")),
+        state_path: current
+            .projection_dir
+            .join(format!("runtime/{OLD_KEY}.json")),
+        projection_dir: current.projection_dir.clone(),
+        transcript: old_path,
+        created: 99.0,
+        plugin_key: None,
+        metadata: hangar_server::terminal_facts::TerminalMetadata {
+            config_dir: root.path().join(".claude"),
+            agent_pid: u32::MAX - 7,
+            agent_birth: 99.5,
+            legacy_import_after: None,
+            fingerprint: "old-pane-life".into(),
+            origin: "uds:test-old-life".into(),
+        },
+    };
+    let program = root.path().join("mux");
+    let new_script = std::fs::read_to_string(&program).unwrap();
+    let old_script = new_script
+        .replace(
+            &format!("CP_SESSION_KEY={KEY}"),
+            &format!("CP_SESSION_KEY={OLD_KEY}"),
+        )
+        .replace("pi-a\t%1\t100", "pi-a\t%1\t99")
+        .replace("\tpi\t100\t", "\tpi\t99\t");
+    std::fs::write(&program, old_script).unwrap();
+    registry.open_terminal(old).await.unwrap();
+    let had_old = registry.list_snapshots().await.contains_key(OLD_KEY);
+    std::fs::write(program, new_script).unwrap();
+    let adopted = registry.adopt_now("pi-a").await;
+    let snapshots=registry.list_snapshots().await;
+    let old_remains = snapshots.contains_key(OLD_KEY);
+    let current_registered = snapshots.contains_key(KEY);
+    let info = registry.other_info("pi-a").await;
+    let current_alive = root.path().join("alive").exists();
+    registry.shutdown().await.unwrap();
+    assert!(
+        had_old,
+        "a reprodução começa com Claude terminal já adotado"
+    );
+    assert!(
+        matches!(adopted, Some(Ok(()))),
+        "a entrada Claude da vida anterior não pode bloquear Other: {adopted:?}"
+    );
+    assert!(!old_remains);
+    assert!(current_registered);
+    assert_eq!(info.map(|info| info.provider), Some("pi".into()));
+    assert!(
+        current_alive,
+        "retirar o registro antigo não mata o CLI da vida nova"
+    );
     assert!(io.writes.lock().unwrap().is_empty());
 }
