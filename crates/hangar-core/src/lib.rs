@@ -25,6 +25,7 @@ pub mod orq_codec;
 #[allow(unsafe_code)]
 pub mod private_acl;
 pub mod process;
+pub mod provider_state;
 pub mod pycompat;
 pub mod query;
 pub mod queue_row;
