@@ -128,9 +128,9 @@ impl OtherIo for Io {
             if let Some((target, source)) = self.first_input.lock().unwrap().as_ref() {
                 if text == "Enter" {
                     let event = if target.provider == hangar_transcript::Provider::Kimi {
-                        json!({"type":"context.append_message","message":{"role":"user","content":[{"type":"text","text":"NATIVE_PROOF_1"}],"toolCalls":[],"origin":{"kind":"user"},"id":"first-user"},"time":1794139200000u64})
+                        json!({"type":"context.append_message","message":{"role":"user","content":[{"type":"text","text":"NATIVE_PROOF_1"}],"toolCalls":[],"origin":{"kind":"user"},"id":"first-user"},"time":chrono::Utc::now().timestamp_millis()})
                     } else {
-                        json!({"type":"message","id":"first-user","timestamp":"2026-11-08T12:00:00Z","message":{"role":"user","content":[{"type":"text","text":"NATIVE_PROOF_1"}]}})
+                        json!({"type":"message","id":"first-user","timestamp":chrono::Utc::now().to_rfc3339(),"message":{"role":"user","content":[{"type":"text","text":"NATIVE_PROOF_1"}]}})
                     };
                     std::fs::write(&target.transcript, format!("{event}\n")).unwrap();
                     *source.lock().unwrap() = Some(OtherDiscoveryState::Ready(target.clone()));
