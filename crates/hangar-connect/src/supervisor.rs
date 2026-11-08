@@ -381,11 +381,22 @@ impl Supervisor {
         let cause = lock(&self.live).preview_port_error.clone().map(|error| format!(": {error}")).unwrap_or_default();
         let closed = ConnectError::new(StatusCode::CONFLICT, "connect_preview_port_closed", format!("a porta da prévia ({PREVIEW_PORT}) não abriu neste servidor{cause}"));
         let (linked, first) = self.publish(&self.preview_port, closed, |linked| &mut linked.preview_published).await?;
-        // Sem os filhos de pé o link sairia sem abrir para ninguém.
-        if !first && !self.status().enabled {
+        // Sem os filhos de pé o link sairia sem abrir para ninguém. Quem acabou de religá-los espera o login.
+        if !first && !self.until_enabled().await {
             return Err(ConnectError::new(StatusCode::CONFLICT, "connect_not_running", "o Connect não está de pé nesta máquina"));
         }
         Ok((linked.preview_host, !self.preview_reached.load(Ordering::Relaxed)))
+    }
+
+    /// Desiste antes do prazo quando a subida falhou: esperar não a muda.
+    async fn until_enabled(&self) -> bool {
+        let deadline = Instant::now() + LOGIN_PATIENCE;
+        loop {
+            let status = self.status();
+            if status.enabled { return true; }
+            if !status.running || Instant::now() >= deadline { return false; }
+            tokio::time::sleep(TICK).await;
+        }
     }
 
     pub fn preview_answered(&self) {
@@ -464,17 +475,19 @@ impl Site {
         Self { open, served: false, text }
     }
 
-    /// Resolve uma vez só: com o servidor de pé a porta não fecha, e o Caddy seguinte já sobe com o site.
-    async fn until_missing(&mut self) {
-        if self.served || self.open.wait_for(|on| *on).await.is_err() {
+    /// A porta abriu ou caiu desde a escrita do Caddyfile: o Caddy seguinte sobe com ou sem o site.
+    /// Caída, o site sai, senão outro processo que pegasse a porta receberia a internet.
+    async fn until_changed(&mut self) {
+        let served = self.served;
+        if self.open.wait_for(|on| *on != served).await.is_err() {
             std::future::pending().await
         }
     }
 }
 
-async fn until_opened(site: Option<&mut Site>) {
+async fn until_changed(site: Option<&mut Site>) {
     match site {
-        Some(site) => site.until_missing().await,
+        Some(site) => site.until_changed().await,
         None => std::future::pending().await,
     }
 }
@@ -501,10 +514,10 @@ impl Sites {
         state::write_private(&self.file, text.as_bytes())
     }
 
-    async fn until_missing(&mut self) {
+    async fn until_changed(&mut self) {
         tokio::select! {
-            () = until_opened(self.guest.as_mut()) => {}
-            () = until_opened(self.preview.as_mut()) => {}
+            () = until_changed(self.guest.as_mut()) => {}
+            () = until_changed(self.preview.as_mut()) => {}
         }
     }
 }
@@ -535,9 +548,9 @@ async fn until_port_lost(bound: Option<&mut watch::Receiver<bool>>) {
     }
 }
 
-async fn until_site_missing(site: Option<&mut Sites>) {
+async fn until_site_changed(site: Option<&mut Sites>) {
     match site {
-        Some(site) => site.until_missing().await,
+        Some(site) => site.until_changed().await,
         None => std::future::pending().await,
     }
 }
@@ -545,7 +558,7 @@ async fn until_site_missing(site: Option<&mut Sites>) {
 enum Ended {
     Stopped,
     PortLost,
-    SiteOpened,
+    SiteChanged,
     Exited(Option<i32>),
     Failed,
 }
@@ -576,7 +589,7 @@ async fn keep(spec: Spec, live: Shared, logged: Option<watch::Sender<bool>>, mut
             child.running = false;
             let exit = match ended {
                 Ended::Stopped => return,
-                Ended::PortLost | Ended::SiteOpened => continue,
+                Ended::PortLost | Ended::SiteChanged => continue,
                 Ended::Exited(code) => code,
                 Ended::Failed => None,
             };
@@ -610,7 +623,7 @@ async fn run_once(spec: &Spec, live: &Shared, logged: Option<&watch::Sender<bool
     let mut tick = tokio::time::interval(TICK);
     let lost = until_port_lost(bound);
     tokio::pin!(lost);
-    let missing = until_site_missing(site);
+    let missing = until_site_changed(site);
     tokio::pin!(missing);
     loop {
         tokio::select! {
@@ -633,7 +646,7 @@ async fn run_once(spec: &Spec, live: &Shared, logged: Option<&watch::Sender<bool
             () = &mut missing => {
                 tracing::info!(code = "connect_site_opened", child = spec.name, "a porta de um site abriu; filho volta com ele");
                 stop_child(spec.name, &mut child, &mut tree).await;
-                return Ended::SiteOpened;
+                return Ended::SiteChanged;
             }
             _ = tick.tick() => {
                 // Depois do login também: o endereço é recusado depois dele, e o `frpc` volta a entrar sozinho.

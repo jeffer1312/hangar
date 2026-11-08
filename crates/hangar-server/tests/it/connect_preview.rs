@@ -532,12 +532,11 @@ async fn preview_site_is_born_on_first_use_and_stays() {
     assert_eq!(replied(close(s.main, "errado")).await.0, 401);
     assert_eq!(replied(state()).await.1["preview"], Value::Null);
 
-    // Publicado, mas com os filhos parados: o link não abriria para ninguém.
+    // Publicado, com os filhos parados: o pedido do dono religa e espera o Connect ficar de pé.
     s.supervisor.stop().await;
     let (status, body) = replied(open_request(s.main, OWNER, 3000)).await;
-    assert_eq!(status, 409, "{body}");
-    assert_eq!(body["detail"]["code"], "connect_not_running");
-    assert_eq!(replied(state()).await.1["preview"], Value::Null);
+    assert_eq!(status, 200, "{body}");
+    assert!(s.supervisor.status().enabled);
     s.supervisor.stop().await;
 }
 
@@ -600,6 +599,12 @@ async fn preview_site_waits_for_this_server_to_open_the_port() {
     until("Caddy novo", || read_pid(&dir, "caddy").is_some_and(|pid| pid != caddy_pid)).await;
     assert!(std::fs::read_to_string(dir.join("Caddyfile")).unwrap().contains(SITE));
     assert_eq!(pid_of(&dir, "frpc"), frpc_pid, "o `frpc` já tinha o proxy");
+
+    // A porta caiu depois de servir: outro processo poderia pegá-la, então o site sai até ela voltar.
+    let caddy_pid = pid_of(&dir, "caddy");
+    supervisor.preview_port_failed("caiu".into());
+    until("Caddy sem o site", || read_pid(&dir, "caddy").is_some_and(|pid| pid != caddy_pid)
+        && !std::fs::read_to_string(dir.join("Caddyfile")).unwrap().contains(SITE)).await;
     supervisor.stop().await;
 }
 
