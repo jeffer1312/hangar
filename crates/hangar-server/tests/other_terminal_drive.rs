@@ -71,6 +71,7 @@ fn composer(text: &str) -> OtherFrame {
         text: value.clone(),
         typed: Some(value),
         styled: None,
+        editor: None,
     }
 }
 #[derive(Default)]
@@ -223,6 +224,7 @@ fn frame(text: &str) -> OtherFrame {
         text: text.into(),
         typed: Some(text.into()),
         styled: None,
+        editor: None,
     }
 }
 fn qs() -> Value {
@@ -1124,4 +1126,75 @@ async fn drive_pi_new_paste_and_image_placeholders_remain_proof_after_notice_nor
         assert_eq!(io.writes().len(), 2);
         assert_eq!(io.writes()[1], ("Enter".into(), false));
     }
+}
+
+fn with_editor(mut frame: OtherFrame, editor: &str) -> OtherFrame {
+    frame.editor = Some(editor.into());
+    frame
+}
+#[tokio::test(start_paused = true)]
+async fn drive_editor_native_draft_blocks_pi_and_omp_even_when_the_pane_is_empty() {
+    for provider in [
+        hangar_transcript::Provider::Pi,
+        hangar_transcript::Provider::Omp,
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut target = target(dir.path());
+        target.provider = provider;
+        std::fs::write(&target.transcript, "").unwrap();
+        let initial = with_editor(composer(""), "prompt que o usuário deixou pela metade");
+        let io = Io::frames(vec![initial.clone()]);
+        let result = drive::prompt(&target, &io, "nova mensagem", Some(&initial)).await;
+        assert_eq!(
+            result.disposition,
+            terminal_input::Disposition::Deferred,
+            "{provider:?}"
+        );
+        assert_eq!(result.code, "composer_busy");
+        assert!(io.writes().is_empty());
+    }
+}
+#[tokio::test(start_paused = true)]
+async fn drive_editor_native_empty_overrides_pane_residue_and_proves_pi_and_omp_submission() {
+    for provider in [
+        hangar_transcript::Provider::Pi,
+        hangar_transcript::Provider::Omp,
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut target = target(dir.path());
+        target.provider = provider;
+        std::fs::write(&target.transcript, "").unwrap();
+        let text = "mensagem lida do editor nativo da extensão";
+        let pane = composer("[hangar-state] linha do hangar conectada");
+        let initial = with_editor(pane.clone(), "");
+        let io = Io::frames(vec![with_editor(pane.clone(), text), with_editor(pane, "")]);
+        let result = drive::prompt(&target, &io, text, Some(&initial)).await;
+        assert_eq!(
+            result.disposition,
+            terminal_input::Disposition::Accepted,
+            "{provider:?}"
+        );
+        assert_eq!(
+            io.writes(),
+            vec![(text.into(), true), ("Enter".into(), false)]
+        );
+    }
+}
+#[tokio::test(start_paused = true)]
+async fn drive_editor_none_preserves_pi_draft_above_sixteen_blank_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut target = target(dir.path());
+    target.provider = hangar_transcript::Provider::Pi;
+    std::fs::write(&target.transcript, "").unwrap();
+    let rule = "─".repeat(60);
+    let pane = format!(
+        "pi v0.83.0\nconversa...\n\n{rule}\ntexto parado no composer\n{rule}\nk3 status{}",
+        "\n".repeat(16)
+    );
+    let initial = frame(&pane);
+    let io = Io::default();
+    let result = drive::prompt(&target, &io, "nova mensagem", Some(&initial)).await;
+    assert_eq!(result.disposition, terminal_input::Disposition::Deferred);
+    assert_eq!(result.code, "composer_busy");
+    assert!(io.writes().is_empty());
 }

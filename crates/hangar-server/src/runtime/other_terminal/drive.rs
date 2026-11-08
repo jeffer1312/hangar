@@ -142,6 +142,17 @@ fn ready(frame: &OtherFrame) -> bool {
         .any(|line| line.chars().any(|c| "─━═╰│".contains(c)))
 }
 fn composer(target: &OtherTarget, frame: &OtherFrame) -> Option<ComposerSnapshot> {
+    if matches!(
+        target.provider,
+        hangar_transcript::Provider::Pi | hangar_transcript::Provider::Omp
+    ) && let Some(editor) = &frame.editor
+    {
+        return Some(ComposerSnapshot {
+            content: editor.clone(),
+            placeholders: BTreeSet::new(),
+            stashed: false,
+        });
+    }
     let styled;
     let text = if let Some(typed) = &frame.typed {
         typed.as_str()
@@ -344,6 +355,7 @@ pub async fn prompt(
             text: String::new(),
             typed: None,
             styled: None,
+            editor: None,
         }),
     };
     match pending(target, io).await {
@@ -388,6 +400,7 @@ pub async fn prompt(
             text: String::new(),
             typed: None,
             styled: None,
+            editor: None,
         });
         if blocked(&frame) {
             return result(
