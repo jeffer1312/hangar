@@ -2,7 +2,9 @@
 #![deny(unsafe_code)]
 
 pub mod account_env;
+pub mod auth;
 pub mod clock;
+pub mod config;
 pub mod costs_failure;
 pub mod credentials;
 pub mod display_env;

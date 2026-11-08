@@ -316,7 +316,13 @@ Executado no commit `4ef8e2fcd`, com três ajustes à tabela:
   aviso nos arquivos tocados; `test -p hangar-core` 7/7; testes internos do servidor 2801 ok e 1
   falha de tempo sob carga (`session_open::tests::the_terminal_command_stops_a_stuck_reconciliation_at_the_limit`,
   sozinho 20/20); `it` 3259/3259.
-- [ ] **Step 6: Mover `auth` e `config`** depois do merge da `connect-rust`, com as mesmas provas.
+- [x] **Step 6: Mover `auth` e `config`** depois do merge da `connect-rust`, com as mesmas provas.
+  Feito (08/11/2026): `auth.rs` e `config.rs` no core. O Connect trouxe duas ligações novas:
+  `CONNECT_PEER` (em `devices.rs`) desceu para o `auth`, com `pub use` em `devices.rs`;
+  `connect_listen`/`preview_listen` usam as portas do `hangar-connect`, que depende do core, então
+  ficam no `config.rs` do servidor, que re-exporta `hangar_core::config::*`. O core passou a
+  depender de `hangar-auth`, `subtle` e `form_urlencoded`. Provas: `check` do core e do servidor
+  (`--all-targets`) limpos; core 29 ok; servidor 2608 ok; `it` 3392 ok.
 - [x] **Step 5: Uso real — verificação manual** login do dono e de convidado (porta 8766) e uma
   chamada que responde erro JSON (ex.: sessão inexistente devolve o `detail` com `code`).
   Feito junto com a Task 1 (ver o Step 6 dela): uso do dono pelo celular; convidado não exercitado.

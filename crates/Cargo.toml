@@ -42,6 +42,7 @@ rusqlite = { version = "=0.40.2", features = ["bundled"] }
 rayon = "=1.12.0"
 hangar-codex = { path = "hangar-codex" }
 hangar-core = { path = "hangar-core" }
+hangar-auth = { path = "hangar-auth" }
 hangar-transcript = { path = "hangar-transcript" }
 hangar-omp-sync = { path = "hangar-omp-sync" }
 hangar-connect = { path = "hangar-connect" }
