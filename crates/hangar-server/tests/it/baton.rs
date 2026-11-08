@@ -7,6 +7,12 @@ const CLAUDE_ID: &str = "2751096f-84dc-4986-b0a8-a40d641ee43d";
 const LIVE_ID: &str = "00000000-0000-4000-8000-000000000101";
 const CODEX_ID: &str = "019f0000-0000-7000-8000-000000000001";
 
+/// O caminho como fica dentro de um texto JSON: no Windows a `\` precisa de escape.
+fn in_json(path: &Path) -> String {
+    let quoted = serde_json::to_string(path.to_str().unwrap()).unwrap();
+    quoted[1..quoted.len() - 1].to_owned()
+}
+
 fn git(root: &Path, args: &[&str]) -> std::process::Output {
     let out = std::process::Command::new("git").arg("-C").arg(root)
         .args(["-c", if cfg!(windows) {"core.hooksPath=NUL"} else {"core.hooksPath=/dev/null"}, "-c", "commit.gpgSign=false"])
@@ -34,7 +40,9 @@ impl Origin {
     async fn build(codex: bool, live: bool, router_only: bool) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let isolated = std::env::var_os("HANGAR_BATON_CHILD_ROOT").map(PathBuf::from);
-        let base = isolated.as_deref().unwrap_or(dir.path());
+        // Forma longa: no Windows a pasta temporária pode vir curta (`RUNNER~1`), e o catálogo de contas,
+        // que o `config_dir` do pedido precisa igualar letra a letra, sai resolvido.
+        let base = &hangar_workspace::real(isolated.as_deref().unwrap_or(dir.path()));
         let (root, home) = (base.join("repo"), base.join("home"));
         std::fs::create_dir_all(&root).unwrap();
         std::fs::create_dir_all(home.join(".claude/projects/-mnt-case-work-repo")).unwrap();
@@ -43,8 +51,8 @@ impl Origin {
             let account = home.join(".codex-work");
             std::fs::create_dir_all(account.join("sessions/2026/09/02")).unwrap();
             std::fs::write(account.join(".hangar-codex-conta"), r#"{"version":1,"id":"work"}"#).unwrap();
-            let path = account.join(format!("sessions/2026/09/02/rollout-2026-09-02T14-00-00-{CODEX_ID}.jsonl"));
-            std::fs::write(&path, include_str!("../fixtures/baton/codex.jsonl").replace("/tmp/proj", root.to_str().unwrap())).unwrap();
+            let path = account.join("sessions").join("2026").join("09").join("02").join(format!("rollout-2026-09-02T14-00-00-{CODEX_ID}.jsonl"));
+            std::fs::write(&path, include_str!("../fixtures/baton/codex.jsonl").replace("/tmp/proj", &in_json(&root))).unwrap();
             git(&root, &["commit", "-q", "--allow-empty", "-m", "um"]);
             path
         } else {
@@ -61,8 +69,8 @@ impl Origin {
             git(&root, &["commit", "-q", "-m", "Inicial"]);
             std::fs::write(&plan, text + "\n").unwrap();
             std::fs::write(root.join("outro.txt"), "outro\n").unwrap();
-            let path = home.join(format!(".claude/projects/-mnt-case-work-repo/{}.jsonl", if live {LIVE_ID} else {CLAUDE_ID}));
-            let relocated = include_str!("../fixtures/baton/claude.jsonl").replace("/repo", root.to_str().unwrap());
+            let path = home.join(".claude").join("projects").join("-mnt-case-work-repo").join(format!("{}.jsonl", if live {LIVE_ID} else {CLAUDE_ID}));
+            let relocated = include_str!("../fixtures/baton/claude.jsonl").replace("/repo", &in_json(&root));
             let mut rows = String::new();
             for raw in relocated.lines() {
                 let mut value: Value = serde_json::from_str(raw).unwrap();
@@ -83,7 +91,10 @@ impl Origin {
         #[cfg(unix)]
         crate::write_executable(&mux, format!("#!/bin/sh\n[ \"$1\" = list-panes ] || exit 0\nprintf '%s' '{}'\n", pane.replace('\'', "'\\''")));
         #[cfg(windows)]
-        std::fs::write(&mux, format!("@echo off\r\nif not \"%~1\"==\"list-panes\" exit /b 0\r\necho {}\r\n", pane.trim_end().replace('%', "%%"))).unwrap();
+        // `echo` sem nada imprime "ECHO is off."; sem pane, o script não imprime.
+        std::fs::write(&mux, if pane.is_empty() { "@echo off\r\nexit /b 0\r\n".to_owned() } else {
+            format!("@echo off\r\nif not \"%~1\"==\"list-panes\" exit /b 0\r\necho {}\r\n", pane.trim_end().replace('%', "%%"))
+        }).unwrap();
         let opening_mux = isolated.as_ref().map(|root|root.join("bin/tmux"));
         let fixture = if let Some(opening_mux)=opening_mux.as_deref() {
             workspace_fixture::fixture_with_account_env(&root,false,&home,opening_mux,hangar_server::accounts::environment::AccountEnvironment::capture(),router_only).await
@@ -98,8 +109,9 @@ impl Origin {
         original.replace(if codex {"`morta`"} else {"`fixture-claude`"}, &format!("`{name}`"))
             .replace(if codex {"/mnt/case/home/.codex-work/sessions/2026/09/02/rollout-2026-09-02T14-00-00-019f0000-0000-7000-8000-000000000001.jsonl"} else {"/mnt/case/home/.claude/projects/-mnt-case-work-repo/00000000-0000-4000-8000-000000000101.jsonl"}, self.path.to_str().unwrap())
             .replace("`/mnt/case/work/repo`", &format!("`{}`", self.root.display()))
-            .replace("/mnt/case/work/repo/docs/superpowers/plans/2026-09-02-grupo-pareamento-fim-sessao.md", self.root.join("docs/superpowers/plans/2026-09-02-grupo-pareamento-fim-sessao.md").to_str().unwrap())
-            .replace("/mnt/case/work/repo/docs/superpowers/specs/2026-09-03-bastao-v2-design.md", self.root.join("docs/superpowers/specs/2026-09-03-bastao-v2-design.md").to_str().unwrap())
+            // Estes caminhos vêm da transcrição, onde o resto depois da raiz está escrito com `/`.
+            .replace("/mnt/case/work/repo/docs/superpowers/plans/2026-09-02-grupo-pareamento-fim-sessao.md", &format!("{}/docs/superpowers/plans/2026-09-02-grupo-pareamento-fim-sessao.md", self.root.display()))
+            .replace("/mnt/case/work/repo/docs/superpowers/specs/2026-09-03-bastao-v2-design.md", &format!("{}/docs/superpowers/specs/2026-09-03-bastao-v2-design.md", self.root.display()))
     }
     fn url(&self, tail: &str) -> String { format!("http://{}/api/sessions/{tail}", self.fixture.addr) }
     fn archived(&self, codex: bool) -> String {
@@ -864,14 +876,14 @@ async fn b01_next_pi_omp_keep_full_tools_failures_and_stream_hook_context() {
         let sid = "45ce9c2d-48d4-491e-8ff3-672bb10a69b6";
         let directory = h.home.join(if provider=="pi" {".pi/agent/sessions/wd"} else {".omp/agent/sessions/wd"});
         std::fs::create_dir_all(&directory).unwrap();
-        let mut raw = include_str!("../fixtures/baton/pi.jsonl").replace("/work/demo",h.root.to_str().unwrap());
+        let mut raw = include_str!("../fixtures/baton/pi.jsonl").replace("/work/demo",&in_json(&h.root));
         raw += &format!("{}\n{}\n",json!({"type":"message","id":"hook-user","message":{"role":"user","timestamp":1767225620000u64,"content":[{"type":"text","text":"contexto do hook\npedido sem prefixo"}]}}),
             json!({"type":"custom_message","customType":"claude-hook-context","parentId":"hook-user","content":"contexto do hook"}));
         std::fs::write(directory.join(format!("2026-01-01_{sid}.jsonl")),raw).unwrap();
         let r = client().get(format!("{}?project=-&session_id={sid}&provider={provider}",h.url("morta/bastao"))).bearer_auth(OWNER).send().await.unwrap();
         assert_eq!(r.status(),200);
         let md = r.text().await.unwrap();
-        assert!(md.contains(&format!("`{}`",h.root.join("summary.txt").display())));
+        assert!(md.contains(&format!("`{}/summary.txt`",h.root.display())), "{md}");
         assert!(md.contains("- Ferramentas que FALHARAM (as mais recentes):\n  - `write`: permission denied"),"{provider}: {md}");
         assert!(md.contains("pedido sem prefixo") && !md.contains("contexto do hook"));
         h.no_python();
@@ -1398,7 +1410,7 @@ fn b01_manual_kickoff_without_origin_account_or_model_keeps_the_fallback_line() 
         let h=Origin::new(false,false).await;let root=h.home.parent().unwrap();
         let sid="45ce9c2d-48d4-491e-8ff3-672bb10a69b6";let directory=h.home.join(".pi/agent/sessions/wd");
         std::fs::create_dir_all(&directory).unwrap();
-        std::fs::write(directory.join(format!("2026-01-01_{sid}.jsonl")),include_str!("../fixtures/baton/pi.jsonl").replace("/work/demo",h.root.to_str().unwrap())).unwrap();
+        std::fs::write(directory.join(format!("2026-01-01_{sid}.jsonl")),include_str!("../fixtures/baton/pi.jsonl").replace("/work/demo",&in_json(&h.root))).unwrap();
         let response=client().post(h.url("origem-pi/bastao")).bearer_auth(OWNER).json(&json!({"name":"cc2","provider":"claude","headless":false,
             "project":"-","session_id":sid,"origem_provider":"pi","resumo_por_modelo":false})).send().await.unwrap();
         let status=response.status();let body=response.json::<Value>().await.unwrap();
@@ -1620,7 +1632,7 @@ fn b01_rewrite_public_uses_explicit_origin_and_keeps_original_on_failure() {
         }
         let codex=h.home.join(".codex-work");std::fs::create_dir_all(codex.join("sessions")).unwrap();
         std::fs::write(codex.join(".hangar-codex-conta"),r#"{"version":1,"id":"work"}"#).unwrap();
-        std::fs::write(codex.join(format!("sessions/rollout-fixture-{CODEX_ID}.jsonl")),include_str!("../fixtures/baton/codex.jsonl").replace("/tmp/proj",h.root.to_str().unwrap())).unwrap();
+        std::fs::write(codex.join(format!("sessions/rollout-fixture-{CODEX_ID}.jsonl")),include_str!("../fixtures/baton/codex.jsonl").replace("/tmp/proj",&in_json(&h.root))).unwrap();
         let calls=std::fs::read(root.join("rewrite-calls")).unwrap();
         let response=c.post(h.url("morta/bastao")).bearer_auth(OWNER).json(&json!({"name":"no-claude","provider":"claude","config_dir":target,
             "project":"-","session_id":CODEX_ID,"origem_provider":"codex","resumo_por_modelo":true})).send().await.unwrap();

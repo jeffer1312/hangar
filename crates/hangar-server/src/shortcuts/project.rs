@@ -19,11 +19,24 @@ pub(super) async fn describe(st: &AppState, cwd: &str) -> Result<Value, Response
     let base = Path::new(cwd);
     if !base.is_dir() { return Err(project_error(&format!("pasta da sessao nao existe: {cwd}"))); }
     let env = st.accounts.env.base.clone();
+    // O comum (repositório e worktree) sai da `.git` sem abrir o git, que no Windows custa dezenas de ms.
+    let physical = hangar_workspace::real(base);
+    if !env.keys().any(|name| hangar_workspace::repo_layout::DISCOVERY_VARS.contains(&name.as_str())) {
+        let found = { let base = physical.clone(); tokio::task::spawn_blocking(move || hangar_workspace::repo_layout::layout(&base)).await };
+        match found {
+            Ok(hangar_workspace::repo_layout::Layout::Repo { common, toplevel }) => {
+                let common = hangar_workspace::real(&common);
+                let common = if common.file_name().is_some_and(|n| n == ".git") { common.parent().unwrap_or(&common).to_path_buf() } else { common };
+                return Ok(identity(hangar_workspace::real(&common), hangar_workspace::real(&toplevel)));
+            }
+            Ok(hangar_workspace::repo_layout::Layout::NotRepo) => return Ok(identity(physical.clone(), physical)),
+            _ => {}
+        }
+    }
     let directory = cwd.to_owned();
     let output = tokio::task::spawn_blocking(move || {
-        let mut command = std::process::Command::new("git");
-        command.args(["-C", &directory, "rev-parse", "--path-format=absolute", "--git-common-dir", "--show-toplevel"])
-            .env_clear().envs(env);
+        let mut command = hangar_workspace::process::git_command(Some(&env));
+        command.args(["-C", &directory, "rev-parse", "--path-format=absolute", "--git-common-dir", "--show-toplevel"]);
         hangar_workspace::process::run_program(&mut command, Duration::from_secs(3))
     }).await;
     let (paths, failure) = match output {
@@ -34,7 +47,6 @@ pub(super) async fn describe(st: &AppState, cwd: &str) -> Result<Value, Response
         Ok(Err(e)) => (None, e.detail.as_str().unwrap_or("git falhou").replace("git não encontrado", "git nao encontrado")),
         Err(_) => return Err(project_error("git falhou")),
     };
-    let physical = hangar_workspace::real(base);
     let (common, root) = if let Some(paths) = paths {
         let common = paths[0].strip_suffix("/.git").or_else(|| paths[0].strip_suffix("\\.git")).unwrap_or(&paths[0]);
         (hangar_workspace::real(Path::new(common)), hangar_workspace::real(Path::new(&paths[1])))
@@ -44,11 +56,15 @@ pub(super) async fn describe(st: &AppState, cwd: &str) -> Result<Value, Response
         }
         (physical.clone(), physical)
     };
+    Ok(identity(common, root))
+}
+
+fn identity(common: PathBuf, root: PathBuf) -> Value {
     let key = common.to_string_lossy().into_owned();
     #[cfg(windows)]
     let key = key.replace('/', "\\").to_lowercase();
     let name = common.file_name().filter(|v| !v.is_empty()).unwrap_or(common.as_os_str()).to_string_lossy();
-    Ok(json!({"key":key,"name":name,"root":root}))
+    json!({"key":key,"name":name,"root":root})
 }
 
 pub(super) async fn folder(st: &AppState, cwd: &str, requested: Option<&str>) -> Result<PathBuf, Response> {

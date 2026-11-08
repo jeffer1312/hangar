@@ -59,7 +59,7 @@ impl Scene {
         let f = workspace_fixture::policy_fixture(&root, &home, &mux).await;
         Self { _dir:dir, root, repo, wt, home, panes, f }
     }
-    fn store(&self) -> PathBuf { self.home.join(".claude/.hangar-project-shortcuts.json") }
+    fn store(&self) -> PathBuf { self.home.join(".claude").join(".hangar-project-shortcuts.json") }
     fn request(&self, method: &str, name: &str, body: Value) -> reqwest::RequestBuilder {
         client().request(method.parse::<reqwest::Method>().unwrap(), format!("http://{}/api/sessions/fixture-{name}/project-shortcuts", self.f.addr))
             .bearer_auth(OWNER).json(&body)
@@ -200,7 +200,8 @@ exit 1
             ("CLAUDE_CONFIG_DIR".into(),scene.home.join(".claude").to_string_lossy().into_owned()),("SHELL".into(),shell.into()),
             ("HYPRLAND_INSTANCE_SIGNATURE".into(),"s01-fixture".into()),
             ("PATH".into(),format!("{}:/usr/bin:/bin",bin.display())),("GIT_CONFIG_GLOBAL".into(),"/dev/null".into()),("GIT_CONFIG_NOSYSTEM".into(),"1".into()),
-        ].into()));
+        // Com git injetado, uma variável de descoberta obriga o atalho a perguntar ao git em vez de ler a `.git`.
+        ].into_iter().chain(mode.map(|_| ("GIT_CEILING_DIRECTORIES".into(),String::new()))).collect()));
         state.login_guests=scene.f.policy.as_ref().unwrap().login.clone();
         let old = scene.f.list.env();
         let mut env = hangar_server::list::bridge::ListEnv::from_env();

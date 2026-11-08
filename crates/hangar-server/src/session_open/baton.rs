@@ -144,7 +144,8 @@ fn model_effort(value: &str) -> String {
 fn cited_plan(rows: &[String]) -> Option<String> {
     let mut bytes = 0;
     rows.iter().rev().take_while(|raw| {bytes += raw.len(); bytes <= 8*1024*1024})
-        .find_map(|raw|PLAN.captures_iter(raw).last().map(|c|c[1].to_owned()))
+        // O trecho vem do JSON cru: no Windows a `\` chega escapada.
+        .find_map(|raw|PLAN.captures_iter(raw).last().map(|c|serde_json::from_str::<String>(&format!("\"{}\"",&c[1])).unwrap_or_else(|_|c[1].to_owned())))
 }
 fn source_section(o: &Origin) -> Vec<String> {
     let mut out = vec![format!("- Sessão de origem: `{}` (harness `{}`)",o.row.name,o.row.provider),
@@ -636,4 +637,16 @@ async fn matched_response(st:Arc<AppState>,peer:std::net::SocketAddr,req:Request
     if let Err(response)=crate::routes::owner_gate(&st,peer,&req).await {return response;}
     let (name,tail)=crate::workspace_http::name_tail(req.uri().path());let name=name.unwrap_or_default();
     if tail=="bastao/dossie" {received(&st,&name,req.headers()).await} else {preview(&st,&name,req.uri().query(),req.headers()).await}
+}
+
+#[cfg(test)]
+mod cited_plan_tests {
+    /// A transcrição é JSON: o caminho do Windows vem com `\` escapada e sai como caminho.
+    #[test]
+    fn the_cited_plan_path_is_decoded_from_the_json_line() {
+        let line = r#"{"type":"tool_use","input":{"file_path":"C:\\Users\\u\\repo/docs/superpowers/plans/2026-09-02-x.md"}}"#;
+        assert_eq!(super::cited_plan(&[line.to_owned()]).as_deref(), Some(r"C:\Users\u\repo/docs/superpowers/plans/2026-09-02-x.md"));
+        let plain = r#"{"input":{"file_path":"/w/docs/superpowers/plans/a.md"}}"#;
+        assert_eq!(super::cited_plan(&[plain.to_owned()]).as_deref(), Some("/w/docs/superpowers/plans/a.md"));
+    }
 }

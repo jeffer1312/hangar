@@ -648,7 +648,7 @@ async fn t4_http_encoded_detail_keeps_its_operation() {
         .json(&serde_json::json!({"repo":root.join("repo"),"branch":"encoded","name":"encoded","new_branch":true,"base":"main"})).send().await.unwrap();
     assert_eq!(response.status(), 200);
     let made = response.json::<Value>().await.unwrap();
-    let path = root.join("chosen/repo/encoded");
+    let path = root.join("chosen").join("repo").join("encoded");
     assert_eq!(made["path"], path.to_string_lossy().as_ref());
     git(&path, &["show-ref", "--verify", "refs/heads/encoded"]);
     let response = client().post(format!("http://{}/api/worktrees/%64elete", f.addr)).bearer_auth(OWNER)
@@ -999,7 +999,7 @@ async fn configured_location_is_used_by_public_creation_and_manual_delete_stays_
         .json(&serde_json::json!({"repo":root.join("repo"),"branch":"future-in-rust","name":"second","new_branch":true,"base":"main"})).send().await.unwrap();
     assert_eq!(future.status(), 200);
     let future_body = future.json::<Value>().await.unwrap();
-    let future_path = home.path().join("future/repo/second");
+    let future_path = home.path().join("future").join("repo").join("second");
     assert_eq!(future_body["path"], future_path.to_string_lossy().as_ref());
     assert!(path.join(".git").is_file());
     assert!(future_path.join(".git").is_file());
