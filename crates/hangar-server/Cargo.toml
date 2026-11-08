@@ -33,6 +33,7 @@ hangar-transcript.workspace = true
 hangar-omp-sync.workspace = true
 toml = { version = "=1.1.7", default-features = false, features = ["parse", "std", "serde", "preserve_order"] }
 hangar-workspace = { path = "../hangar-workspace" }
+hangar-psmux.workspace = true
 # Pacote por versão: índice, manifesto e extração conferida (`update/`).
 hangar-package = { path = "../hangar-package" }
 regex.workspace = true
