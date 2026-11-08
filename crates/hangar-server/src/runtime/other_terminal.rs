@@ -67,7 +67,7 @@ impl OtherTarget {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn target() -> OtherTarget {
+    pub(super) fn target() -> OtherTarget {
         OtherTarget {
             key: "life-a".into(),
             generation: 1,
@@ -917,3 +917,5 @@ async fn confirm(
     publish_snapshot(target, queue, snapshot, None).await?;
     Ok(json!({"confirmed":confirmed.len()+legacy}))
 }
+#[cfg(test)]
+mod deferred_actor_tests;
