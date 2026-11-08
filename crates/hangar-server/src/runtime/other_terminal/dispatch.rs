@@ -16,6 +16,7 @@ pub(super) async fn drain(
     io: &Arc<dyn OtherIo>,
     snapshot: &tokio::sync::watch::Sender<Value>,
     initial: Option<&OtherFrame>,
+    episode: &mut deferred_episode::DeferredEpisode,
 ) -> Result<Value, RuntimeError> {
     let native = native::drain(target, queue, options, io, snapshot).await?;
     if native["attempted"] == true {
@@ -37,6 +38,7 @@ pub(super) async fn drain(
         return Ok(native);
     };
     if read_pending_interaction(target)?.is_some() {
+        episode.record(target, options, crate::terminal_input::DeliveryStage::Ready, "question_open");
         return Ok(native);
     }
     let id = row["id"]
@@ -136,10 +138,11 @@ pub(super) async fn drain(
         target.provider,
         hangar_transcript::Provider::Pi | hangar_transcript::Provider::Omp
     ) {
-        drive::prompt(target, &aware, &text, enriched.as_ref()).await
+        drive::prompt_with_episode(target, &aware, &text, enriched.as_ref(), episode).await
     } else {
-        drive::prompt(target, &**io, &text, enriched.as_ref()).await
+        drive::prompt_with_episode(target, &**io, &text, enriched.as_ref(), episode).await
     };
+    episode.record(target, options, result.stage, &result.code);
     let outcome = status(result.disposition);
     let payload = serde_json::to_value(&result).map_err(|_| failed("runtime_reply"))?;
     let reply = super::super::protocol::RuntimeReply {
@@ -195,14 +198,16 @@ pub(super) async fn drain(
 pub(super) async fn direct_prompt(
     target: &OtherTarget, options: &OtherOptions, io: &Arc<dyn OtherIo>,
     operation_id: &str, text: &str, initial: Option<&OtherFrame>,
+    episode: &mut deferred_episode::DeferredEpisode,
 ) -> Result<RuntimeReply, RuntimeError> {
     let aware = EditorAwareOtherIo {base:io.clone(), target:target.clone(), inbox:options.inbox.clone()};
     let frame = if matches!(target.provider, hangar_transcript::Provider::Pi | hangar_transcript::Provider::Omp) {
         match initial {Some(frame) => Some(aware.enrich(frame.clone()).await?), None => None}
     } else {initial.cloned()};
     let result = if matches!(target.provider, hangar_transcript::Provider::Pi | hangar_transcript::Provider::Omp) {
-        drive::prompt(target, &aware, text, frame.as_ref()).await
-    } else { drive::prompt(target, &**io, text, frame.as_ref()).await };
+        drive::prompt_with_episode(target, &aware, text, frame.as_ref(), episode).await
+    } else { drive::prompt_with_episode(target, &**io, text, frame.as_ref(), episode).await };
+    episode.record(target, options, result.stage, &result.code);
     let disposition = match result.disposition {
         crate::terminal_input::Disposition::Accepted => Disposition::Accepted,
         crate::terminal_input::Disposition::Deferred => Disposition::Deferred,

@@ -159,7 +159,7 @@ impl DiagClient {
         reason: &'static str,
         fields: serde_json::Value,
     ) {
-        self.emit(event, session, code, reason, fields, false);
+        self.emit(event, session, code, reason, fields, false, true);
     }
 
     pub(crate) fn report_response(
@@ -179,7 +179,15 @@ impl DiagClient {
 
     /// O motivo é fixo no código; erros formatados e texto de conversa não entram por esta interface.
     pub fn report(&self, event: &'static str, session: &str, code: &str, reason: &'static str) {
-        self.emit(event, session, code, reason, json!({}), true);
+        self.emit(event, session, code, reason, json!({}), true, true);
+    }
+
+    /// O chamador limita por episódio; a escalada e a recuperação não usam a janela global.
+    pub(crate) fn report_episode(
+        &self, event: &'static str, session: &str, code: &str,
+        reason: &'static str, fields: serde_json::Value, warning: bool,
+    ) {
+        self.emit(event, session, code, reason, fields, warning, false);
     }
 
     fn emit(
@@ -190,6 +198,7 @@ impl DiagClient {
         reason: &'static str,
         fields: serde_json::Value,
         plain: bool,
+        limited: bool,
     ) {
         let settings = self
             .settings
@@ -203,7 +212,7 @@ impl DiagClient {
                 settings.directory
             };
         let scope = format!("diag:{directory:?}:{event}:{code}");
-        if !crate::warn_limit::allow(Some(session), &scope) {
+        if limited && !crate::warn_limit::allow(Some(session), &scope) {
             return;
         }
         let Some(directory) = directory else {

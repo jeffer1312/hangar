@@ -333,6 +333,20 @@ pub async fn prompt(
     text: &str,
     initial: Option<&OtherFrame>,
 ) -> DeliveryResult {
+    prompt_inner(target, io, text, initial, None).await
+}
+
+pub(super) async fn prompt_with_episode(
+    target: &OtherTarget, io: &dyn OtherIo, text: &str, initial: Option<&OtherFrame>,
+    episode: &mut super::deferred_episode::DeferredEpisode,
+) -> DeliveryResult {
+    prompt_inner(target, io, text, initial, Some(episode)).await
+}
+
+async fn prompt_inner(
+    target: &OtherTarget, io: &dyn OtherIo, text: &str, initial: Option<&OtherFrame>,
+    episode: Option<&mut super::deferred_episode::DeferredEpisode>,
+) -> DeliveryResult {
     if !valid_text(text, true) || text.trim().is_empty() {
         return result(
             Disposition::Rejected,
@@ -428,6 +442,9 @@ pub async fn prompt(
         );
     }
     let before = composer(target, &frame);
+    if let Some(episode) = episode {
+        episode.composer_checked(before.as_ref().is_some_and(ComposerSnapshot::is_empty));
+    }
     if before.as_ref().is_some_and(|before| !before.is_empty()) {
         return result(
             Disposition::Deferred,

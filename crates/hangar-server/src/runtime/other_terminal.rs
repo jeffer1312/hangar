@@ -3,6 +3,7 @@ use std::path::PathBuf;
 mod io;
 pub use io::ProcessOtherIo;
 mod dispatch;
+mod deferred_episode;
 pub mod drive;
 mod native;
 mod observe;
@@ -323,6 +324,7 @@ impl OtherHandle {
         let (frames, frame) = tokio::sync::watch::channel(None);
         let task = tokio::spawn(async move {
             let mut observer = Observer::new(&target, &options)?;
+            let mut deferred_episode = deferred_episode::DeferredEpisode::default();
             let receipt = Arc::new(std::sync::Mutex::new(super::receipt::ReceiptIndex::new(
                 target.provider.as_str(),
                 &target.binding.conversation,
@@ -344,7 +346,7 @@ impl OtherHandle {
                             }
                         }
                         let frame=frames.borrow().clone();
-                        if let Err(error)=dispatch::drain(&target,&queue,&options,&io,&snapshots,frame.as_deref()).await {tracing::warn!(code=%error.code,"drenagem espera prova; não redigita");}
+                        if let Err(error)=dispatch::drain(&target,&queue,&options,&io,&snapshots,frame.as_deref(), &mut deferred_episode).await {tracing::warn!(code=%error.code,"drenagem espera prova; não redigita");}
                         let _=confirm(&target,&queue,&receipt,&snapshots).await;
                         let cadence=if interested {Duration::from_millis(if live.borrow().as_ref().is_some_and(|state|state.public_state["state"]=="working") {150}else{750})}else{options.tick};
                         tick.as_mut().reset(tokio::time::Instant::now()+cadence);
@@ -365,7 +367,7 @@ impl OtherHandle {
                             if kind == "input" {
                                 if let Some(text) = payload["text"].as_str().filter(|text| text.trim_start().starts_with('/')) {
                                     let frame = frames.borrow().clone();
-                                    return dispatch::direct_prompt(&target, &options, &io, &id, text, frame.as_deref()).await;
+                                    return dispatch::direct_prompt(&target, &options, &io, &id, text, frame.as_deref(), &mut deferred_episode).await;
                                 }
                                 match payload["text"]
                                     .as_str()
@@ -395,6 +397,7 @@ impl OtherHandle {
                                                 &io,
                                                 &snapshots,
                                                 frame.as_deref(),
+                                                &mut deferred_episode,
                                             )
                                             .await
                                             {
@@ -474,7 +477,7 @@ impl OtherHandle {
                                                 .await
                                                 .map_err(|_| failed("queue_io"))?;
                                             let _ = dispatch::drain(
-                                                &target, &queue, &options, &io, &snapshots, None,
+                                                &target, &queue, &options, &io, &snapshots, None, &mut deferred_episode,
                                             )
                                             .await?;
                                             outcome.reply =
@@ -528,6 +531,7 @@ impl OtherHandle {
                                     &io,
                                     &snapshots,
                                     frame.as_deref(),
+                                    &mut deferred_episode,
                                 )
                                 .await
                             }
