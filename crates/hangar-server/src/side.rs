@@ -2630,18 +2630,14 @@ mod tests {
         let (sink, reports) = crate::runtime::gateway::tests::diag_sink().await;
         let dir = tempfile::tempdir().unwrap();
         let ctx = SideCtx { queue_dir: Some(dir.path().to_path_buf()), problem_hold: crate::problem_gate::HOLD,
-            diag: crate::diag::DiagClient::new(sink, "s".into()), ..test_ctx() };
+            diag: sink, ..test_ctx() };
         let lease = ctx.hubs.acquire("velho", queue_binding(dir.path(), "a"), &ctx);
         assert!(lease.hub.publish_own("state", r#"{"state":"idle","problema":"state_facts_unavailable","problema_detalhe":"runtime_binding"}"#));
         let frames = replay_text(&lease.hub);
         assert!(frames.contains("event: state"), "o estado sai");
         assert!(!frames.contains("state_facts_unavailable") && !frames.contains("runtime_binding"), "sem o aviso: {frames}");
         assert!(lease.hub.problems.lock().unwrap().timer.is_none(), "nada retido para sair depois do prazo");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !reports.lock().unwrap().iter().any(|r| r["evento"] == "rust.problem_hidden" && r["codigo"] == "state_facts_unavailable" && r["sessao"] == "velho") {
-            assert!(std::time::Instant::now() < deadline, "o aviso tirado da tela não foi ao diário: {:?}", reports.lock().unwrap());
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
+        crate::diag::test_support::wait_for(reports.path(), |r| r["evento"] == "rust.problem_hidden" && r["codigo"] == "state_facts_unavailable" && r["sessao"] == "velho").await;
     }
 
     /// Troca de conversa: o retrato perde a fila da anterior na hora, quadro da geração anterior não

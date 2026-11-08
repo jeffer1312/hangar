@@ -59,6 +59,7 @@ pub async fn machine(root: &Path, id: &str) -> Machine {
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
     let (python, upstream) = fake::spawn_fake().await;
     let mut state = AppState::new(fake::config(upstream, ""));
+    state.diag = python.bind_diary(state.diag.clone());
     state.accounts = hangar_server::accounts::AccountService::new(
         hangar_server::accounts::environment::AccountEnvironment::from_map(
             [("HOME".into(),home.to_string_lossy().into_owned()),
@@ -75,7 +76,7 @@ pub async fn machine(root: &Path, id: &str) -> Machine {
     state.peers = Arc::new(PeerClient::new(PeerBook::new(Some(root.join("peers.json")))));
     let share = crate::share_pair_routes::share_state(&root.join("shares.json"), &pair, Arc::new(Mutex::new(1_000.0)));
     state.share = Some(share.clone());
-    let runtime = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "s".into(), "i".into()));
+    let runtime = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "s".into(), "i".into()).with_diagnostics(python.diagnostics()));
     assert!(state.state.runtime.set(runtime.clone()).is_ok());
     let state = Arc::new(state);
     let addr = serve(router(state.clone())).await;

@@ -414,6 +414,11 @@ impl RuntimeRegistry {
             respawn_base:Duration::from_secs(5),reconnect_waits:Default::default(),permissions:None,processes:Arc::new(crate::list::procs::SystemProcs::default()),live:Default::default(),codex_owned:Default::default(),hubs:std::sync::OnceLock::new(),self_ref:std::sync::OnceLock::new(),
             watcher:std::sync::OnceLock::new(),codex_wake:Arc::new(tokio::sync::Notify::new()),native:Default::default(),limits:std::sync::OnceLock::new(),auth_refusals:std::sync::OnceLock::new(),limit_holds:Default::default(),waking:Default::default(),rewake:Default::default() }
     }
+    pub fn with_diagnostics(mut self, diag: crate::diag::DiagClient) -> Self {
+        self.diag = diag.clone();
+        self.policy = self.policy.with_diagnostics(diag);
+        self
+    }
     /// Escrita para sessão doente, ou a conversa aberta: a sessão em erro é reaberta aqui, em segundo plano
     /// e uma por vez; a saudável só refaz a projeção da fila. Responde na hora; quem escreveu recebe o 503
     /// e tenta de novo. Falha vai ao diário.
@@ -4519,7 +4524,7 @@ pub(crate) mod tests {
         });
         let processes=Arc::new(ParkProcesses {canos:std::sync::Mutex::new(vec![i64::from(cano.0.id())]),dir:home.path().into(),agent:Default::default()});
         let (diag,reports)=diag_sink().await;
-        let (registry,_hubs)=park_registry_at(diag,home.path(),processes,|registry|registry.with_respawn_base(Duration::from_millis(20)));
+        let (registry,_hubs)=park_registry_at("127.0.0.1:9".parse().unwrap(),home.path(),processes,|registry|registry.with_diagnostics(diag).with_respawn_base(Duration::from_millis(20)));
         registry.open_claude_headless(name,false).await.unwrap().unwrap();
 
         for file in &files { std::fs::remove_file(file).unwrap(); }
@@ -4535,40 +4540,17 @@ pub(crate) mod tests {
         let error=registry.live_sender(name).borrow().as_ref().and_then(|state|state.error.clone());
         assert!(error.is_none(),"a sessão fechada ficou com erro no canal: {error:?}");
         // A gravação que o ator deixou de fazer (o sidecar sumiu) vai ao diário, sem virar erro.
-        let absent=||reports.lock().unwrap().iter().filter(|report|report["codigo"]=="claude_sidecar_absent" && report["sessao"]==name).count();
-        while absent()==0 {
-            assert!(std::time::Instant::now()<deadline,"a gravação engolida não foi ao diário: {:?}",reports.lock().unwrap());
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        crate::diag::test_support::wait_for(reports.path(), |report| report["codigo"]=="claude_sidecar_absent" && report["sessao"]==name).await;
+        let absent=||crate::diag::test_support::rows(reports.path()).iter().filter(|report|report["codigo"]=="claude_sidecar_absent" && report["sessao"]==name).count();
         assert_eq!(absent(),1,"uma vez por sessão");
     }
 
-    /// O `/internal/diag` do Python: guarda o corpo de cada aviso e responde 200.
+    /// Diário real em pasta temporária para os testes do ciclo de vida.
     #[cfg(target_os="linux")]
-    pub(crate) async fn diag_sink() -> (SocketAddr,Arc<std::sync::Mutex<Vec<Value>>>) {
-        use tokio::io::{AsyncBufReadExt,AsyncReadExt,AsyncWriteExt,BufReader};
-        let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();let address=listener.local_addr().unwrap();
-        let reports=Arc::new(std::sync::Mutex::new(Vec::new()));
-        let seen=reports.clone();
-        tokio::spawn(async move {
-            while let Ok((socket,_))=listener.accept().await {
-                let seen=seen.clone();
-                tokio::spawn(async move {
-                    let (mut reader,mut length)=(BufReader::new(socket),0usize);
-                    loop {
-                        let mut line=String::new();
-                        if reader.read_line(&mut line).await.unwrap_or(0)==0 {return;}
-                        if line=="\r\n" {break;}
-                        if let Some(value)=line.to_ascii_lowercase().strip_prefix("content-length:") {length=value.trim().parse().unwrap_or(0);}
-                    }
-                    let mut body=vec![0;length];
-                    if reader.read_exact(&mut body).await.is_err() {return;}
-                    if let Ok(report)=serde_json::from_slice::<Value>(&body) {seen.lock().unwrap().push(report);}
-                    let _=reader.get_mut().write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n").await;
-                });
-            }
-        });
-        (address,reports)
+    pub(crate) async fn diag_sink() -> (crate::diag::DiagClient,Arc<tempfile::TempDir>) {
+        let reports = Arc::new(tempfile::tempdir().unwrap());
+        let diag = crate::diag::DiagClient::new("127.0.0.1:9".parse().unwrap(), String::new()).with_diary(Some(reports.path().to_owned()));
+        (diag,reports)
     }
 
     /// `close()` sem matar (troca de nome ou de conta pelo Python, parada do servidor) com um `claude_exit` que

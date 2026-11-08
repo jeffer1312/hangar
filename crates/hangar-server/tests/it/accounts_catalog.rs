@@ -823,20 +823,12 @@ async fn accounts_named_like_subroutes_reach_deletion() {
 
 #[tokio::test]
 async fn account_failure_reaches_the_exportable_journal() {
-    let (journal, mut entries) = tokio::sync::mpsc::unbounded_channel::<serde_json::Value>();
     let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let upstream_addr = upstream.local_addr().unwrap();
     let python = tokio::spawn(async move {
         axum::serve(
             upstream,
             Router::new()
-                .route(
-                    "/internal/diag",
-                    axum::routing::post(move |body: axum::body::Bytes| {
-                        journal.send(serde_json::from_slice(&body).unwrap()).unwrap();
-                        async { StatusCode::OK }
-                    }),
-                )
                 .fallback(|| async { (StatusCode::SERVICE_UNAVAILABLE, "sem fatos") }),
         )
         .await
@@ -853,6 +845,8 @@ async fn account_failure_reaches_the_exportable_journal() {
         log_path: None,
         trusted: TrustedHosts::parse("127.0.0.1"),
     });
+    let journal = tempfile::tempdir().unwrap();
+    state.diag = state.diag.clone().with_diary(Some(journal.path().to_owned()));
     state.accounts = isolated_service(root.path());
     state
         .accounts
@@ -866,10 +860,8 @@ async fn account_failure_reaches_the_exportable_journal() {
         .await
         .unwrap();
     assert_eq!(response.status(), 409);
-    let entry = tokio::time::timeout(std::time::Duration::from_secs(5), entries.recv())
-        .await
-        .expect("a falha da conta não chegou ao diário")
-        .unwrap();
+    let entry = crate::fake::wait_diary(journal.path(), |row| row["evento"] == "rust.accounts_failed").await
+        .into_iter().find(|row| row["evento"] == "rust.accounts_failed").unwrap();
     assert_eq!(entry["evento"], "rust.accounts_failed");
     assert_eq!(entry["sessao"], "codex:journal");
     assert_eq!(entry["codigo"], "account_usage_unknown");

@@ -171,7 +171,7 @@ async fn credentials_answer_each_case() {
         axum::serve(upstream, Router::new().fallback(move |request: axum::extract::Request| {
             let uri = request.uri().clone();
             // O diário exportável é do Python, e o `HEAD /` é a sonda de subida do servidor: fora disso, nada.
-            if uri.path() != "/internal/diag" && !(request.method() == axum::http::Method::HEAD && uri.path() == "/") {
+            if !(request.method() == axum::http::Method::HEAD && uri.path() == "/") {
                 eprintln!("pedido ao Python: {} {uri} {:?}", request.method(), request.headers());
                 recorded.fetch_add(1, Ordering::SeqCst);
             }

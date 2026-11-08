@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::http::StatusCode;
-use axum::routing::{any, post};
+use axum::routing::any;
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::{self, Message as Ws};
 
@@ -71,7 +71,6 @@ async fn python() -> (SocketAddr, Arc<Python>) {
     let py = Arc::new(Python::default());
     let p2 = py.clone();
     let app = Router::new()
-        .route("/internal/diag", post(|| async { "{}" }))
         .route("/api/sessions/{name}/term", any(move || {
             let p2 = p2.clone();
             async move {

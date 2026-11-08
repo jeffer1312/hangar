@@ -54,6 +54,7 @@ async fn policy() -> std::net::SocketAddr { policy_seen(Arc::default()).await }
 
 /// O mesmo, guardando a linha de cada pedido (método e caminho).
 async fn policy_seen(seen: Arc<std::sync::Mutex<Vec<String>>>) -> std::net::SocketAddr {
+    hangar_server::diag::disable_diary();
     use tokio::io::AsyncReadExt;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -333,7 +334,10 @@ async fn unhealthy_write_reopens_the_session_in_rust() {
     let seen: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
     let dir = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
+    let diary = dir.path().join("diário");
+    std::fs::create_dir_all(&diary).unwrap();
     let registry = crate::runtime_open::with_hubs(RuntimeRegistry::new(policy_seen(seen.clone()).await, "secret-test".into(), "instance-test".into())
+        .with_diagnostics(hangar_server::diag::DiagClient::new("127.0.0.1:9".parse().unwrap(),String::new()).with_diary(Some(diary.clone())))
         .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1")))
         .with_codex_environment(hangar_server::accounts::environment::AccountEnvironment::from_map(
             [("HOME".to_owned(), home.path().to_string_lossy().into_owned())].into())));
@@ -347,13 +351,12 @@ async fn unhealthy_write_reopens_the_session_in_rust() {
     let (_python, server) = serve_with(Some(registry.clone())).await;
     let (status, _) = post_to(server, "doente", "input", r#"{"text":"oi"}"#).await;
     assert_eq!(status, 503);
-    let diary = "POST /internal/diag HTTP/1.1";
-    for _ in 0..250 {
-        if registry.writable("doente").await.is_none() && seen.lock().unwrap().iter().any(|line| line == diary) { break; }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    let recorded = crate::fake::wait_diary(&diary, |row| row["sessao"] == "doente" && row["evento"] == "rust.runtime_reopen_failed").await;
     assert!(registry.writable("doente").await.is_none(), "a vida doente fechou para reabrir");
+    let line = recorded.iter().find(|row| row["sessao"] == "doente" && row["evento"] == "rust.runtime_reopen_failed").unwrap();
+    assert!(line["codigo"].as_str().is_some_and(|code| !code.is_empty()));
+    assert_eq!(line["nivel"], "erro");
     let seen = seen.lock().unwrap();
-    assert!(seen.iter().any(|line| line == diary), "a falha da reabertura vai ao diário: {seen:?}");
+    assert!(!seen.iter().any(|line| line == "POST /internal/diag HTTP/1.1"));
     assert!(!seen.iter().any(|line| line.contains("/reopen")), "nada vai ao coordenador do Python: {seen:?}");
 }

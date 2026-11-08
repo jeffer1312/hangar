@@ -128,6 +128,7 @@ async fn cano(outcome: &'static str) -> String {
 }
 
 async fn policy() -> std::net::SocketAddr {
+    hangar_server::diag::disable_diary();
     use tokio::io::AsyncReadExt;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -193,6 +194,7 @@ pub(crate) async fn open_sick_terminal(registry: &RuntimeRegistry, dir: &Path, n
 async fn serve(registry: Arc<RuntimeRegistry>, wait: Duration) -> (Arc<Fake>, std::net::SocketAddr) {
     let (python, upstream) = spawn_fake().await;
     let mut state = AppState::new(config(upstream, "127.0.0.1"));
+    state.diag = python.bind_diary(state.diag.clone());
     state.write_gate_wait = wait;
     assert!(state.state.runtime.set(registry).is_ok());
     (python, spawn_state(state).await)
@@ -208,12 +210,7 @@ async fn post(server: std::net::SocketAddr, name: &str, route: &str, body: &str)
 }
 
 async fn diary_of(python: &Fake, event: &str) -> Vec<Value> {
-    for _ in 0..100 {
-        let found: Vec<Value> = python.diag().into_iter().filter(|d| d["evento"] == event).collect();
-        if !found.is_empty() { return found; }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    Vec::new()
+    crate::fake::wait_diary(python.diary_dir(), |row| row["evento"] == event).await.into_iter().filter(|row| row["evento"] == event).collect()
 }
 
 #[tokio::test]

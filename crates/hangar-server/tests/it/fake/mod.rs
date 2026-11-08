@@ -1,4 +1,4 @@
-//! Python falso para os testes do hangar-server: rotas internas (info, fatos, diário) e o resto
+//! Python falso para os testes do hangar-server: rotas internas (info, fatos) e o resto
 //! respondendo "from-python", com o que chegou anotado.
 #![allow(dead_code)]
 
@@ -37,7 +37,7 @@ pub struct Fake {
     info_calls: AtomicUsize,
     hits: Mutex<Vec<(String, HeaderMap)>>,
     info_status: Mutex<Option<StatusCode>>,
-    diag: Mutex<Vec<Value>>,
+    diary: tempfile::TempDir,
     pub release: Notify,
     /// Resposta e demora de `/internal/list/facts`; quantos pedidos chegaram e o último.
     pub list_facts: Mutex<(Value, Duration)>,
@@ -75,9 +75,15 @@ impl Fake {
     pub fn fail_info(&self, s: StatusCode) {
         *self.info_status.lock().unwrap() = Some(s);
     }
-    /// Corpos recebidos em `/internal/diag`.
-    pub fn diag(&self) -> Vec<Value> {
-        self.diag.lock().unwrap().clone()
+    /// Eventos que o Rust gravou no diário isolado desta prova.
+    pub fn diag(&self) -> Vec<Value> { read_diary(self.diary.path()) }
+    pub fn diary_dir(&self) -> &Path { self.diary.path() }
+    pub fn diagnostics(&self) -> hangar_server::diag::DiagClient {
+        hangar_server::diag::DiagClient::new("127.0.0.1:0".parse().unwrap(), String::new())
+            .with_diary(Some(self.diary.path().to_owned()))
+    }
+    pub fn bind_diary(&self, client: hangar_server::diag::DiagClient) -> hangar_server::diag::DiagClient {
+        client.with_diary(Some(self.diary.path().to_owned()))
     }
     pub fn info_calls(&self) -> usize {
         self.info_calls.load(SeqCst)
@@ -135,12 +141,13 @@ impl Fake {
 }
 
 pub async fn spawn_fake() -> (Arc<Fake>, SocketAddr) {
+    hangar_server::diag::disable_diary();
     let fake = Arc::new(Fake {
         info: Mutex::new(Value::Null),
         info_calls: AtomicUsize::new(0),
         hits: Mutex::default(),
         info_status: Mutex::default(),
-        diag: Mutex::default(),
+        diary: tempfile::tempdir().unwrap(),
         release: Notify::new(),
         list_facts: Mutex::new((json!({"states": {}}), Duration::ZERO)),
         list_facts_calls: AtomicUsize::new(0),
@@ -165,7 +172,6 @@ pub async fn spawn_fake() -> (Arc<Fake>, SocketAddr) {
     });
     let app = Router::new()
         .route("/internal/sessions/{name}/info", get(fake_info))
-        .route("/internal/diag", axum::routing::post(fake_diag))
         .route("/internal/list/facts", axum::routing::post(fake_list_facts))
         .route("/internal/sessions/{name}/plugin", get(fake_plugin_get).post(fake_plugin_post))
         .route("/internal/pair/{op}", axum::routing::post(fake_internal_json))
@@ -215,13 +221,6 @@ async fn fake_list_facts(State(f): State<Arc<Fake>>, headers: HeaderMap, body: B
     Response::builder().header("content-type", "application/json").body(Body::from(reply.to_string())).unwrap()
 }
 
-async fn fake_diag(State(f): State<Arc<Fake>>, headers: HeaderMap, body: Bytes) -> Response {
-    if !internal_ok(&headers) {
-        return status(StatusCode::NOT_FOUND);
-    }
-    f.diag.lock().unwrap().push(serde_json::from_slice(&body).unwrap());
-    status(StatusCode::OK)
-}
 
 async fn fake_plugin_get(State(f): State<Arc<Fake>>, headers: HeaderMap) -> Response {
     if !internal_ok(&headers) {
@@ -369,6 +368,43 @@ pub fn fake_locate(upstream: SocketAddr) -> Arc<dyn hangar_server::locate::Locat
     Arc::new(FakeLocate { upstream, http: hangar_server::proxy::client(), secret: SECRET.into() })
 }
 
+pub fn read_diary(dir: &Path) -> Vec<Value> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(error) => panic!("leitura do diário temporário: {error}"),
+    };
+    let mut paths: Vec<_> = entries.map(|entry| entry.unwrap().path()).filter(|path| {
+        path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with("uso-") && name.ends_with(".jsonl"))
+    }).collect();
+    paths.sort();
+    paths.into_iter().flat_map(|path| {
+        let raw = std::fs::read_to_string(path).unwrap();
+        let complete = raw.rsplit_once('\n').map_or("", |(complete,_)| complete);
+        complete.lines().filter(|line| !line.is_empty()).map(|line| serde_json::from_str(line).unwrap()).collect::<Vec<_>>()
+    }).collect()
+}
+
+pub async fn wait_diary(dir: &Path, matches: impl Fn(&Value) -> bool) -> Vec<Value> {
+    use notify::Watcher;
+    let (tx, mut changes) = tokio::sync::mpsc::unbounded_channel();
+    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| { let _ = tx.send(event); }).unwrap();
+    watcher.watch(dir, notify::RecursiveMode::NonRecursive).unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let rows = read_diary(dir);
+        if rows.iter().any(&matches) { return rows; }
+        let changed = tokio::time::timeout_at(deadline, changes.recv()).await.expect("o evento não chegou ao diário temporário");
+        changed.expect("a observação do diário encerrou").expect("a observação do diário falhou");
+    }
+}
+
+pub async fn spawn_server_with_diary(cfg: Config, diary: &Fake) -> SocketAddr {
+    let mut state = hangar_server::routes::AppState::new(cfg);
+    state.diag = diary.bind_diary(state.diag.clone());
+    spawn_state(state).await
+}
+
 pub async fn spawn_server(cfg: Config) -> SocketAddr {
     spawn_state(hangar_server::routes::AppState::new(cfg)).await
 }
@@ -401,10 +437,11 @@ pub async fn serve_mods(name: &str, link: Arc<dyn hangar_server::mods::state::Su
 pub async fn serve_mods_gated(name: &str, link: Arc<dyn hangar_server::mods::state::SurfaceLink>)
     -> (Arc<Fake>, SocketAddr, hangar_server::mods::state::Mods, Arc<hangar_server::runtime::gateway::RuntimeRegistry>) {
     let (python, upstream) = spawn_fake().await;
-    let state = hangar_server::routes::AppState::new(config(upstream, "127.0.0.1"));
+    let mut state = hangar_server::routes::AppState::new(config(upstream, "127.0.0.1"));
+    state.diag = python.bind_diary(state.diag.clone());
     let mods = state.mods.clone();
     let registry = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(upstream, "secret-test".into(), "instance-test".into())
-        .with_mods(mods.clone()));
+        .with_mods(mods.clone()).with_diagnostics(python.diagnostics()));
     let _ = state.state.runtime.set(registry.clone());
     let server = spawn_state(state).await;
     mods.attach(name, 1, link);

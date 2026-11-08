@@ -56,18 +56,19 @@ pub async fn server_trusting(root: &Path, n: usize, trusted: &str) -> Server {
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
     let (python, upstream) = fake::spawn_fake().await;
     let mut state = AppState::new(config(upstream, trusted));
+    state.diag = python.bind_diary(state.diag.clone());
     // Nunca o `~/.hangar` de quem roda os testes.
     state.devices = Arc::new(hangar_server::devices::Registry::new(home.join(".hangar/devices.json")));
     let devices = Arc::new(hangar_server::connect::devices::Store::new(home.join(".hangar/connect"), None));
     state.connect_devices = devices.clone();
     let list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
-        FactsClient::new(upstream, SECRET.into())));
+        { let facts = FactsClient::new(upstream, SECRET.into()); python.bind_diary(facts.diag.clone()); facts }));
     // Estes testes provam quem produz o problema da linha; o prazo do portão tem teste próprio.
     list.set_problem_hold(Duration::ZERO);
     // Como a subida do servidor: a lista lê a pergunta segurada do plugin pelo registro.
     list.set_plugin_runtime(Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(upstream, SECRET.into(), "instance-test".into())
-        .with_plugin(state.plugin.clone())));
+        .with_plugin(state.plugin.clone()).with_diagnostics(python.diagnostics())));
     state.list = list.clone();
     state.side.locate = Arc::new(hangar_server::locate::ListLocate { list: list.clone() });
     let state = Arc::new(state);

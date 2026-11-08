@@ -17,7 +17,7 @@ async fn setup(lines: std::ops::Range<usize>, stem: &str) -> (tempfile::TempDir,
     let offs = append_lines(&jsonl, lines);
     let (fake, up) = spawn_fake().await;
     fake.set_info(info_json("claude", &jsonl));
-    let srv = spawn_server(config(up, "127.0.0.1")).await;
+    let srv = spawn_server_with_diary(config(up, "127.0.0.1"), &fake).await;
     (dir, jsonl, offs, fake, srv)
 }
 
@@ -405,8 +405,13 @@ async fn history_io_error_answers_503_with_code() {
     assert_503(r, "history_io").await;
     assert_eq!(fake.hits_to("/api/sessions/s-io/history"), 0, "o Python não recebe o pedido");
     wait_until(|| !fake.diag().is_empty()).await;
-    assert_eq!(fake.diag()[0], json!({"evento": "rust.history_failed", "sessao": "s-io", "codigo": "history_io",
-        "motivo": "a leitura do histórico falhou"}));
+    let line = fake.diag().into_iter().find(|line| line["evento"] == "rust.history_failed").unwrap();
+    assert_eq!(line["sessao"], "s-io");
+    assert_eq!(line["codigo"], "history_io");
+    assert_eq!(line["detalhe"], "a leitura do histórico falhou");
+    assert_eq!(line["nivel"], "erro");
+    assert_eq!(line["origem"], "servidor");
+    assert_eq!(fake.hits_to("/internal/diag"), 0);
 }
 
 #[tokio::test]

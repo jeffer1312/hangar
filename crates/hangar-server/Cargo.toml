@@ -18,6 +18,10 @@ path = "tests/fixtures/commands_cli.rs"
 test = false
 bench = false
 
+[[test]]
+name = "diag_client"
+path = "tests/diag_client.rs"
+
 [dependencies]
 hangar-auth = { path = "../hangar-auth" }
 # float_roundtrip: o float lido sai com o mesmo valor que o float() do Python, e o repr bate.
