@@ -480,7 +480,7 @@ fn provider_hooks_installer_creates_missing_config_with_nine_native_entries() {
     use hangar_server::{accounts::environment::AccountEnvironment, harness_setup::kimi_hooks};
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(root.path().join(".kimi-code")).unwrap();
-    let path = root.path().join(".kimi-code/config.toml");
+    let path = root.path().join(".kimi-code").join("config.toml");
     let env = AccountEnvironment::from_map(
         [("HOME".into(), root.path().to_string_lossy().into_owned())].into(),
     );
