@@ -113,6 +113,7 @@ async fn other_deferred_episode_diary_keeps_escalation_and_new_episode() {
     for _ in 0..10 {
         if let Some(notice) = episode.observe(DeliveryStage::Composer, "composer_busy") {
             notice.report(&diag, "episode-a");
+            diag.flush().await;
         }
     }
     episode.composer_checked(true);
