@@ -406,7 +406,8 @@ fn settling_an_older_rotation_changes_nothing() {
     let second = store.rotate(&id).unwrap();
     store.settle(&id, &first).unwrap();
     assert!(store.verify(old.as_bytes()).is_some());
-    assert!(store.verify(first.as_bytes()).is_none());
+    // Sem promover: a outra ponta pode ter gravado o primeiro e perdido o segundo.
+    assert!(store.verify(first.as_bytes()).is_some());
     store.settle(&id, &second).unwrap();
     assert!(store.verify(old.as_bytes()).is_none());
     assert!(store.verify(second.as_bytes()).is_some());

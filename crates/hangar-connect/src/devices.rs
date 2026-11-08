@@ -71,15 +71,17 @@ struct Device {
 const MAX_UNCONFIRMED: usize = 3;
 
 impl Device {
-    fn in_delivery(&self, hash: &str) -> bool {
-        self.next_token_hash.iter().chain(&self.unconfirmed_token_hashes).any(|delivered| same(delivered, hash))
+    fn accepts(&self, hash: &str) -> bool {
+        self.token_hash.iter().chain(&self.next_token_hash).chain(&self.unconfirmed_token_hashes).any(|known| same(known, hash))
     }
 
-    /// O token entregue passa a ser o único: os outros deixam de valer.
-    fn promote(&mut self, hash: String) {
-        self.token_hash = Some(hash);
-        self.next_token_hash = None;
-        self.unconfirmed_token_hashes.clear();
+    /// Só o token mais novo em entrega é promovido: com dois anúncios juntos, promover um anterior
+    /// tiraria o que a outra ponta gravou por último.
+    fn promote_if_next(&mut self, hash: &str) {
+        if self.next_token_hash.as_deref().is_some_and(|next| same(next, hash)) {
+            self.token_hash = self.next_token_hash.take();
+            self.unconfirmed_token_hashes.clear();
+        }
     }
 }
 
@@ -321,9 +323,8 @@ impl Store {
     pub fn settle(&self, id: &str, token: &str) -> Result<(), Refusal> {
         let delivered = credentials::hash(token.as_bytes());
         self.update(|state, _| {
-            if let Some(device) = state.devices.iter_mut().find(|d| d.id == id)
-                && device.in_delivery(&delivered) {
-                device.promote(delivered);
+            if let Some(device) = state.devices.iter_mut().find(|d| d.id == id) {
+                device.promote_if_next(&delivered);
             }
             Ok(())
         })
@@ -341,12 +342,9 @@ impl Store {
         let presented = credentials::hash(token);
         let now = (self.clock)();
         let mut state = self.lock();
-        let device = state.devices.iter_mut().find(|d| d.status == Status::Approved
-            && (d.token_hash.as_deref().is_some_and(|hash| same(hash, &presented)) || d.in_delivery(&presented)))?;
-        // Usar um token entregue prova a entrega, mesmo com a resposta dela perdida no caminho.
-        if device.in_delivery(&presented) {
-            device.promote(presented);
-        }
+        let device = state.devices.iter_mut().find(|d| d.status == Status::Approved && d.accepts(&presented))?;
+        // Usar o token novo prova a entrega, mesmo com a resposta dela perdida no caminho.
+        device.promote_if_next(&presented);
         device.last_seen = Some(now);
         Some(device.id.clone())
     }

@@ -246,7 +246,9 @@ fn a_second_rotation_keeps_the_token_whose_delivery_was_never_confirmed() {
     let next = store.rotate(&id).unwrap();
     assert!(store.verify(first.as_bytes()).is_some(), "o token antigo segue valendo até uma entrega se confirmar");
     assert!(store.verify(delivered.as_bytes()).is_some(), "quem recebeu a entrega sem confirmação não perde o acesso");
-    assert!(store.verify(next.as_bytes()).is_none(), "usar um token entregue encerra os outros");
+    assert!(store.verify(next.as_bytes()).is_some());
+    assert!(store.verify(first.as_bytes()).is_none(), "usar o token mais novo encerra os outros");
+    assert!(store.verify(delivered.as_bytes()).is_none());
 }
 
 #[tokio::test]
