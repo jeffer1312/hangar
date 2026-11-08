@@ -291,10 +291,6 @@ async fn is_this_one(mux: &dyn Mux, env: &TerminalEnv, pane: &PaneSpec) -> Prese
 pub fn client_command(program: &str) -> tokio::process::Command {
     let mut command = tokio::process::Command::from(crate::terminal_input::child_command(program));
     for var in ["CLAUDE_CONFIG_DIR"].into_iter().chain(NOT_INHERITED).chain(SERVER_SECRETS) { command.env_remove(var); }
-    // O servidor tmux herda a pasta de quem o sobe e nunca sai dela: pasta de worktree apagada
-    // faz todo pane novo nascer nela, ignorando o `-c`. No psmux o pane herda essa pasta, então fica.
-    #[cfg(unix)]
-    if let Some(home) = std::env::home_dir().filter(|home| home.is_dir()) { command.current_dir(&home).env("PWD", &home); }
     command
 }
 
@@ -772,6 +768,8 @@ pub(crate) mod tests {
         for var in ["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_SUBAGENT_MODEL", "HANGAR_PLUGIN_TOKEN", "TYPESAFE_API_KEY", "CP_AUTH_TOKEN"] {
             assert!(removed.iter().any(|r| r == var), "{var} fica no cliente: {removed:?}");
         }
+        #[cfg(unix)]
+        assert_eq!(client.as_std().get_current_dir(), crate::terminal_input::home_cwd(), "o servidor tmux nasceria na pasta do backend");
     }
 
     /// O que o `hangar-engine` exporta é da sessão de motor que o pôs; o pane novo
