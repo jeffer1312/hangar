@@ -266,6 +266,31 @@ describe('máquinas da conta', () => {
     expect(servers()).toHaveLength(1);
   });
 
+  it('entra em todas com o mesmo id de instalação, guardado no cofre', async () => {
+    const other: ConnectMachine = { machine_id: 'pc2', name: 'pc2', host: 'pc2.acme.hangar.dev.br', online: true };
+    const calls = network({ machines: [online, other, { ...offline, machine_id: 'pc3', name: 'pc3', host: 'pc3.acme.hangar.dev.br' }],
+      statuses: [{ status: 'approved', token: 'device-a' }, { status: 'approved', token: 'device-b' }],
+      route: (call) => {
+        const id = /^\/v1\/machines\/(\w+)\/devices$/.exec(call.url.pathname)?.[1];
+        if (id) return json({ url: `https://${id}.acme.hangar.dev.br`, ticket: '{"nonce":"n"}', signature: 'c2ln' });
+        const isPc2 = call.url.host === 'pc2.acme.hangar.dev.br' && !call.url.pathname.startsWith('/api/connect');
+        return isPc2 ? json({ identificador: 'pc2', lan_url: '' }) : undefined;
+      } });
+    await connect().refreshMachines();
+
+    const entering = connect().enterAll();
+    await elapse(6000);
+    await entering;
+
+    const redeems = calls.filter((call) => call.url.pathname === '/api/connect/redeem');
+    expect(redeems.map((call) => call.url.host).sort()).toEqual(['pc1.acme.hangar.dev.br', 'pc2.acme.hangar.dev.br']);
+    const ids = [...new Set(redeems.map((call) => call.body?.install_id))];
+    expect(ids).toHaveLength(1);
+    expect(ids[0]).toMatch(/^[A-Za-z0-9_-]{16,64}$/);
+    expect(vault.get('cp_connect_install_id_v1')).toBe(ids[0]);
+    expect(servers().map((s) => s.id).sort()).toEqual(['pc1', 'pc2']);
+  });
+
   it('adds a machine as a normal server', async () => {
     const calls = network({ statuses: [{ status: 'approved', token: 'device-token' }] });
 
@@ -425,6 +450,22 @@ describe('aparelhos da máquina', () => {
     expect(approve).toMatchObject({ method: 'POST', auth: 'Bearer device-token' });
     expect(approve?.url.origin).toBe(MACHINE_URL);
     expect(connect().devices.pc1.rows?.every((row) => row.status === 'approved')).toBe(true);
+  });
+
+  it('aprova o mesmo celular só nas máquinas marcadas, cada uma com a credencial dela', async () => {
+    const pc2: Server = { ...entry, id: 'pc2', label: 'pc2', baseUrl: 'https://pc2.acme.hangar.dev.br', token: 'device-token-2' };
+    await seed([entry, pc2, { ...pc2, id: 'pc3', label: 'pc3', baseUrl: 'https://pc3.acme.hangar.dev.br' }]);
+    const calls = network();
+
+    const failed = await connect().answerGroup([{ serverId: 'pc1', label: 'pc1', deviceId: 'a1' }, { serverId: 'pc2', label: 'pc2', deviceId: 'a2' }], true);
+
+    const approvals = calls.filter((call) => call.method === 'POST' && call.url.pathname.endsWith('/approve'))
+      .map((call) => `${call.url.host}${call.url.pathname} ${call.auth}`).sort();
+    expect(approvals).toEqual([
+      'pc1.acme.hangar.dev.br/api/connect/devices/a1/approve Bearer device-token',
+      'pc2.acme.hangar.dev.br/api/connect/devices/a2/approve Bearer device-token-2',
+    ]);
+    expect(failed).toEqual([]);
   });
 
   it('a resposta à aprovação relê a lista mesmo com uma leitura antiga em curso', async () => {

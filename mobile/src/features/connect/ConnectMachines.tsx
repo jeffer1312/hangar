@@ -13,6 +13,7 @@ import { Field, MachineSheet, Notice, styles as machineStyles, useMachineAction 
 import { ownServers, useServers } from '../../stores/servers';
 import { connectServers, needsEntry, sameMachine, useConnect } from './connectStore';
 import { ConnectMark } from './ConnectHero';
+import { pendingGroups, type PendingGroup } from './pendingGroups';
 import { haptic } from '../../ui/haptics';
 import * as m from '../../paraglide/messages';
 
@@ -53,6 +54,13 @@ export function ConnectMachines({ onDone }: { onDone: () => void }) {
   }, []));
   const entered = () => { if (mounted.current) onDone(); };
   const waiting = machines?.filter((machine) => entries[machine.machine_id]?.phase === 'waiting') ?? [];
+  const own = ownServers(servers);
+  const missing = machines?.filter((machine) => machine.online && !own.some((server) => sameMachine(server, machine))) ?? [];
+  const asking = missing.some((machine) => ['asking', 'waiting'].includes(entries[machine.machine_id]?.phase ?? ''));
+  const enterAll = () => {
+    haptic.selection();
+    void useConnect.getState().enterAll().then(() => { if (mounted.current) refresh(); });
+  };
   const account = useConnect((s) => s.account?.name ?? '');
   return <>
     <View style={[styles.header, { borderColor: c.border }]}>
@@ -70,6 +78,7 @@ export function ConnectMachines({ onDone }: { onDone: () => void }) {
       {machines === null && !error ? <MachineRow title={loading ? m.mobile_machines_busy() : m.comum_carregando()} /> : null}
       {machines?.length === 0 ? <MachineRow title={m.connect_machines_empty()} /> : null}
       {machines?.map((machine) => <MachineItem key={machine.machine_id} machine={machine} onEntered={entered} onOpen={onDone} />)}
+      {missing.length > 1 ? <MachineRow title={m.connect_enter_all()} action disabled={asking} onPress={enterAll} /> : null}
     </SectionCard>
     <Notice text={error} error />
     {/* Puxar para atualizar não se vê: o erro traz o caminho à mostra. */}
@@ -135,7 +144,7 @@ function AllDevices({ servers }: { servers: Server[] }) {
     void action.run((signal) => useConnect.getState().answerDevice(server, id, approve, signal), () => {});
   };
   const rows = servers.flatMap((server) => (devices[server.id]?.rows ?? []).map((row) => ({ server, row })));
-  const pending = rows.filter(({ row }) => row.status === 'pending');
+  const groups = pendingGroups(servers.map((server) => ({ serverId: server.id, label: server.label, rows: devices[server.id]?.rows ?? null })));
   const approved = rows.filter(({ row }) => row.status === 'approved');
   // "Nenhum aparelho" só com todas as listas na mão: uma ainda a caminho pode trazer algum.
   const loading = servers.some((server) => !devices[server.id]);
@@ -143,13 +152,7 @@ function AllDevices({ servers }: { servers: Server[] }) {
   const failures = servers.filter((server) => devices[server.id]?.error)
     .map((server) => `${server.label}: ${devices[server.id]?.error ?? ''}`);
   return <>
-    {pending.map(({ server, row }) => <SectionCard key={`${server.id}:${row.device_id}`} icon="Smartphone" title={row.name}
-      subtitle={m.connect_device_pending({ machine: server.label })}>
-      <MachineRow title={m.connect_device_approve()} action disabled={action.busy}
-        onPress={() => confirm(m.connect_device_approve_title({ name: row.name }), m.connect_device_approve_body({ machine: server.label }),
-          m.connect_device_approve(), () => answer(server, row.device_id, true))} />
-      <MachineRow title={m.connect_device_deny()} danger action disabled={action.busy} onPress={() => answer(server, row.device_id, false)} />
-    </SectionCard>)}
+    {groups.map((group) => <PendingGroupCard key={group.key} group={group} />)}
     <SectionCard icon="Smartphone" title={m.connect_devices_all()}>
       {loading ? <MachineRow title={m.comum_carregando()} /> : null}
       {!loading && !approved.length && !failures.length ? <MachineRow title={m.connect_devices_empty()} /> : null}
@@ -165,6 +168,44 @@ function AllDevices({ servers }: { servers: Server[] }) {
     <Notice text={action.error} error />
     <MachineHelp>{m.connect_devices_help()}</MachineHelp>
   </>;
+}
+
+/** Um celular pedindo entrada em várias máquinas: um cartão, todas marcadas, cada aprovação pela rota da própria máquina. */
+function PendingGroupCard({ group }: { group: PendingGroup }) {
+  const [off, setOff] = useState<ReadonlySet<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const chosen = group.targets.filter((target) => !off.has(target.serverId));
+  const answer = (approve: boolean) => {
+    setBusy(true);
+    setError('');
+    void useConnect.getState().answerGroup(approve ? chosen : group.targets, approve).then((failed) => {
+      setBusy(false);
+      if (!failed.length) { haptic.success(); return; }
+      haptic.error();
+      setError(m.connect_group_failed({ machines: failed.map((f) => f.label).join(', '), error: failed[0].error }));
+    });
+  };
+  const title = group.targets.length === 1
+    ? m.connect_group_title_one({ name: group.name, machine: group.targets[0].label })
+    : m.connect_group_title({ name: group.name, count: String(group.targets.length) });
+  const toggle = (serverId: string) => {
+    haptic.selection();
+    setOff((current) => {
+      const next = new Set(current);
+      if (!next.delete(serverId)) next.add(serverId);
+      return next;
+    });
+  };
+  return <SectionCard icon="Smartphone" title={title} subtitle={m.connect_group_help()}>
+    {group.targets.length > 1 ? group.targets.map((target) => <MachineRow key={target.serverId} title={target.label}
+      checked={!off.has(target.serverId)} disabled={busy} onPress={() => toggle(target.serverId)} />) : null}
+    <MachineRow title={m.connect_group_approve()} action disabled={busy || !chosen.length}
+      onPress={() => confirm(m.connect_device_approve_title({ name: group.name }),
+        m.connect_device_approve_body({ machine: chosen.map((target) => target.label).join(', ') }), m.connect_device_approve(), () => answer(true))} />
+    <MachineRow title={m.connect_group_deny()} danger action disabled={busy} onPress={() => answer(false)} />
+    <Notice text={error} error />
+  </SectionCard>;
 }
 
 function AccountRows() {

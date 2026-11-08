@@ -6,6 +6,7 @@ import { addMachine, changeAccountPassword, endAccountSessions, listMachines, re
 import type { AccountSession, ConnectMachine, Server } from '@hangar/core';
 import { approveDevice, readDevices, reason, removeDevice, type ConnectDevice } from '../machines/api';
 import { ownServers, useServers } from '../../stores/servers';
+import type { GroupTarget } from './pendingGroups';
 import * as m from '../../paraglide/messages';
 
 export const CONNECT_SERVICE_URL = 'https://connect.hangar.dev.br';
@@ -35,10 +36,14 @@ export interface ConnectState {
   changePassword(oldPassword: string, newPassword: string): Promise<void>;
   refreshMachines(): Promise<void>;
   enter(machine: ConnectMachine): Promise<Server | null>;
+  /** Pede entrada em todas as máquinas online ainda fora deste aparelho, com um cartão só em quem aprova. */
+  enterAll(): Promise<void>;
   reenter(server: Server): Promise<void>;
   turnOnConnect(server: Server): Promise<boolean>;
   refreshDevices(): Promise<void>;
   answerDevice(server: Server, deviceId: string, approve: boolean, signal: AbortSignal): Promise<void>;
+  /** Responde o mesmo celular em várias máquinas, cada uma pela própria rota; devolve as que falharam, com o motivo. */
+  answerGroup(targets: GroupTarget[], approve: boolean): Promise<{ label: string; error: string }[]>;
 }
 
 const CODES: Record<string, () => string> = {
@@ -73,6 +78,20 @@ function isAccount(value: unknown): value is ConnectAccount {
 }
 
 const deviceName = () => (Constants.deviceName || Platform.OS).slice(0, 64);
+
+const INSTALL_KEY = 'cp_connect_install_id_v1';
+// O mesmo valor em todos os pedidos deste aparelho: só junta o cartão de aprovação, nunca dá acesso.
+let reading: Promise<string | undefined> | null = null;
+// "Entrar em todas" pede o id várias vezes de uma vez: uma leitura só, senão cada pedido nasceria com o seu.
+const installId = () => (reading ??= readInstallId().finally(() => { reading = null; }));
+async function readInstallId(): Promise<string | undefined> {
+  const saved = await SecureStore.getItemAsync(INSTALL_KEY).catch(() => null);
+  if (saved) return saved;
+  if (!globalThis.crypto?.getRandomValues) return undefined;
+  const id = Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+  // Sem cofre, os pedidos saem sem o id: cada máquina mostra o seu cartão, como antes.
+  return SecureStore.setItemAsync(INSTALL_KEY, id).then(() => id, () => undefined);
+}
 
 export function sameMachine(server: Server, machine: ConnectMachine): boolean {
   if (server.connectHost === machine.host) return true;
@@ -202,7 +221,8 @@ export const useConnect = create<ConnectState>((set, get) => {
       // A entrada é da conta que pediu: trocada no meio da espera, o resultado não marca a conta nova.
       const sameAccount = () => get().account?.token === account.token;
       try {
-        const server = await addMachine(account, machine, deviceName(), () => { if (sameAccount()) setEntry(machine.machine_id, { phase: 'waiting' }); });
+        const server = await addMachine(account, machine, deviceName(), () => { if (sameAccount()) setEntry(machine.machine_id, { phase: 'waiting' }); },
+          await installId());
         // O token sai uma vez só e a máquina é desta pessoa: guarda mesmo se a conta mudou.
         const saved = useServers.getState().addConnected(server);
         if (sameAccount()) setEntry(machine.machine_id, null);
@@ -214,6 +234,11 @@ export const useConnect = create<ConnectState>((set, get) => {
         if (statusOf(error) === 401) void get().refreshMachines();
         return null;
       }
+    },
+    async enterAll() {
+      const added = ownServers(useServers.getState().servers);
+      const missing = (get().machines ?? []).filter((machine) => machine.online && !added.some((server) => sameMachine(server, machine)));
+      await Promise.all(missing.map((machine) => get().enter(machine)));
     },
     async reenter(server) {
       await get().load();
@@ -258,6 +283,17 @@ export const useConnect = create<ConnectState>((set, get) => {
     async answerDevice(server, deviceId, approve, signal) {
       await (approve ? approveDevice : removeDevice)(server, deviceId, signal);
       await get().refreshDevices();
+    },
+    async answerGroup(targets, approve) {
+      const all = useServers.getState().servers;
+      const answered = await Promise.allSettled(targets.map(async ({ serverId, deviceId }) => {
+        const server = all.find((candidate) => candidate.id === serverId);
+        if (!server) throw new Error(m.connect_group_machine_gone());
+        await (approve ? approveDevice : removeDevice)(server, deviceId, AbortSignal.timeout(DEVICES_TIMEOUT_MS));
+      }));
+      await get().refreshDevices();
+      return answered.flatMap((result, i) => result.status === 'rejected'
+        ? [{ label: targets[i].label, error: result.reason instanceof Error ? result.reason.message : reason(result.reason) }] : []);
     },
   };
 });
