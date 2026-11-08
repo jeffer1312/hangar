@@ -895,6 +895,27 @@ export async function transcribeDictationForServer(
   return res.json() as Promise<{ text: string; raw?: string; aviso?: string | null }>;
 }
 
+/** Teto de um pedaço do ditado: dezenas de segundos de fala, sem organização. */
+export const PIECE_TIMEOUT_MS = 60_000;
+
+// Pedaço do ditado em curso: só a transcrição, sem organizar nem guardar o áudio na conversa.
+// O texto juntado é organizado uma vez no fim, pelo `relimparDitado`.
+export async function transcribePiece(
+  s: Server,
+  wav: Blob,
+  signal?: AbortSignal,
+): Promise<{ raw: string; provider?: string; aviso?: string | null }> {
+  const res = await apiFetchRes('/api/dictation/transcribe?limpar=0', {
+    method: 'POST',
+    headers: { 'Content-Type': wav.type || 'audio/wav', 'X-Filename': 'piece.wav' },
+    body: wav,
+    signal: comTeto(signal, PIECE_TIMEOUT_MS),
+  }, s);
+  if (!res.ok) throw Object.assign(new Error(`${res.status}: ${await errorDetail(res)}`), { status: res.status });
+  const body = await res.json() as { text: string; provider?: string; aviso?: string | null };
+  return { raw: body.text, provider: body.provider, aviso: body.aviso ?? null };
+}
+
 // Envia prompt pra sessão de um servidor específico (input do card do quadro). 404 = sessão morta:
 // o chamador REMOVE o eco pendente e sinaliza — mensagem nunca "some" calada (mesmo contrato do
 // feedback de entrega do Chat). SEM timeout de propósito (igual ao sendInput por-servidor-ativo):
@@ -3099,17 +3120,24 @@ export async function transcribeUploaded(
  * `harness` é dela a conta que organiza, e sem ela o servidor volta o cru com aviso.
  * `aviso` não-nulo = a limpeza desistiu e voltou o cru, mesmo contrato do transcribeFile.
  */
+/** Escolhas de organização que o `/transcribe` recebe na query; o relimpar as aceita no corpo. */
+export type DictationTarget = {
+  session?: string; generation?: string;
+  organization_mode?: string; organization_model?: string; organization_account?: string;
+  include_recent_messages?: boolean;
+};
+
 export async function relimparDitado(
   texto: string,
   estilo: string,
   server?: Server | null,
-  target?: { session?: string; generation?: string },
+  target?: DictationTarget,
 ): Promise<{ text: string; aviso?: string | null; estilo_aplicado?: string }> {
   // Na máquina que transcreveu: a limpeza usa a chave e o estilo configurados nela.
   return sessionFetch<{ text: string; aviso?: string | null; estilo_aplicado?: string }>(server, '/api/ditado/relimpar', {
     method: 'POST',
     // JSON.stringify omite as chaves undefined: o corpo antigo continua igual sem `target`.
-    body: JSON.stringify({ texto, estilo, session: target?.session, generation: target?.generation }),
+    body: JSON.stringify({ texto, estilo, ...target }),
     // Mesmo motivo do teto do transcribeFile, sem a parcela da Whisper: o briefing pode gastar 120s
     // no servidor (narrar._TRAVAS_POR_ESTILO) e abortar antes disso perderia a limpeza já em curso.
     signal: AbortSignal.timeout(180_000),
