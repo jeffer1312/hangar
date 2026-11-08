@@ -36,7 +36,9 @@ pub(super) async fn drain(target:&OtherTarget,queue:&QueueActor,options:&OtherOp
             _=>Disposition::Unknown,
         };
         let status=match disposition {Disposition::Accepted=>Status::Accepted,Disposition::Deferred=>Status::Deferred,Disposition::Unknown=>Status::Unknown,Disposition::Rejected=>Status::Rejected};
-        let reply=RuntimeReply {operation_id:operation.clone(),disposition,payload:json!({"code":if disposition==Disposition::Unknown {"other_terminal_delivery_unconfirmed"}else{"other_terminal_delivery"}})};
+        let mut payload=json!({"code":if disposition==Disposition::Unknown {"other_terminal_delivery_unconfirmed"}else{"other_terminal_delivery"}});
+        if disposition==Disposition::Deferred {payload["cleanup"]=json!("not_needed");}
+        let reply=RuntimeReply {operation_id:operation.clone(),disposition,payload};
         action(queue,target,"finish",Action::Finish {id:operation,status,result:serde_json::to_value(reply).map_err(|_|failed("runtime_reply"))?}).await?;
         if disposition==Disposition::Deferred {action(queue,target,"not-written",Action::SetDelivered {entry_id:id,value:false,steered:false}).await?;}
         publish_snapshot(target,queue,snapshot,Some(true)).await?;

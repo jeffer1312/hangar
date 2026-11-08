@@ -92,9 +92,9 @@ fn directories(root:&std::path::Path)->hangar_server::list::discover_other::Dirs
 }
 
 #[derive(Default)]
-struct RecordingIo {writes:std::sync::Mutex<Vec<(String,bool)>>,captures:std::sync::atomic::AtomicUsize,captured:tokio::sync::Notify}
+struct RecordingIo {writes:std::sync::Mutex<Vec<(String,bool)>>,captures:std::sync::atomic::AtomicUsize,captured:tokio::sync::Notify,before_prove:std::sync::Mutex<Option<Box<dyn FnOnce()+Send>>>}
 impl hangar_server::runtime::other_terminal::OtherIo for RecordingIo {
-    fn prove<'a>(&'a self,_:&'a hangar_server::runtime::other_terminal::OtherTarget)->futures_util::future::BoxFuture<'a,Result<bool,hangar_server::runtime::protocol::RuntimeError>> {Box::pin(async {Ok(true)})}
+    fn prove<'a>(&'a self,_:&'a hangar_server::runtime::other_terminal::OtherTarget)->futures_util::future::BoxFuture<'a,Result<bool,hangar_server::runtime::protocol::RuntimeError>> {Box::pin(async move {if let Some(action)=self.before_prove.lock().unwrap().take() {action();}Ok(true)})}
     fn capture<'a>(&'a self)->futures_util::future::BoxFuture<'a,Result<hangar_server::runtime::other_terminal::OtherFrame,hangar_server::runtime::protocol::RuntimeError>> {Box::pin(async move {self.captures.fetch_add(1,std::sync::atomic::Ordering::SeqCst);self.captured.notify_one();Ok(hangar_server::runtime::other_terminal::OtherFrame::from_styled("────────────────────────────────\n\n────────────────────────────────\n".into()))})}
     fn write<'a>(&'a self,_:&'a hangar_server::runtime::other_terminal::OtherTarget,text:&'a str,literal:bool)->futures_util::future::BoxFuture<'a,Result<(),hangar_server::runtime::protocol::RuntimeError>> {Box::pin(async move {self.writes.lock().unwrap().push((text.into(),literal));Ok(())})}
     fn release<'a>(&'a self)->futures_util::future::BoxFuture<'a,()> {Box::pin(async {})}
@@ -195,4 +195,38 @@ async fn other_terminal_capture_gate_accepts_real_provider_names_and_still_refus
     let request=CaptureRequest {consumer:"test-unknown".into(),name:"session-a".into(),provider:"unsupported-provider".into(),binding:"life-a".into(),target:"%1".into(),started:100.0,lines:20,colors:true,join:false};
     let result=pool.acquire(request).await;
     assert!(matches!(result,Err(error) if error.0=="invalid capture request"));
+}
+
+#[tokio::test]
+async fn other_terminal_disconnect_before_write_stays_pending_and_reconnect_drains_the_same_entry() {
+    use hangar_server::runtime::protocol::{RuntimeCommand,OperationKind,Disposition};
+    use std::sync::Arc;
+    let root=tempfile::tempdir().unwrap();let inbox=hangar_server::provider_models::inbox::Store::new();
+    let (outgoing,mut incoming)=tokio::sync::mpsc::unbounded_channel();let registered=inbox.register("pi-a",outgoing);
+    let io=Arc::new(RecordingIo::default());let handle=start_recording(root.path(),"pi",inbox.clone(),io.clone());
+    let mut frames=handle.last_frame();
+    tokio::time::timeout(std::time::Duration::from_secs(30),async {
+        loop {if frames.borrow().is_some() {break;}frames.changed().await.unwrap();}
+    }).await.expect("primeira rodada deve terminar antes de armar a desconexão");
+    let (closing,line)=(inbox.clone(),registered.clone());
+    *io.before_prove.lock().unwrap()=Some(Box::new(move ||closing.remove("pi-a",&line)));
+    let first=handle.command(RuntimeCommand {operation_id:"request-a".into(),kind:OperationKind::Input,payload:json!({"text":"seguir com a tarefa"})}).await;
+    let pending=handle.snapshot().await.unwrap();let original_frame=incoming.try_recv().ok();
+    let (new_tx,mut new_rx)=tokio::sync::mpsc::unbounded_channel();let new_line=inbox.register("pi-a",new_tx);
+    let mut draining=Box::pin(handle.drain());
+    let (frame,result)=tokio::select! {
+        frame=new_rx.recv()=>{let frame=frame.unwrap();inbox.respond("pi-a",&json!({"id":frame["id"],"ok":true}));(Some(frame),draining.await)},
+        result=&mut draining=>(None,result),
+    };
+    let delivered=handle.snapshot().await.unwrap();
+    let repeated=handle.drain().await;let duplicate=new_rx.try_recv().ok();
+    handle.stop().await.unwrap();inbox.remove("pi-a",&new_line);
+    assert_eq!(first.as_ref().ok().map(|reply|reply.disposition),Some(Disposition::Deferred),"ausência comprovada antes da escrita conserva o pedido pendente");
+    assert_eq!(pending["queue"][0]["delivered"],false);
+    assert!(original_frame.is_none(),"nada pode ter sido escrito na linha removida");
+    assert_eq!(result.unwrap()["drained"],1);
+    assert_eq!(frame.unwrap()["id"],pending["queue"][0]["id"]);
+    assert_eq!(delivered["queue"][0]["delivered"],true);
+    assert_eq!(repeated.unwrap()["drained"],0);
+    assert!(duplicate.is_none());assert!(io.writes.lock().unwrap().is_empty());
 }

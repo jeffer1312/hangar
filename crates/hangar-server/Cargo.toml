@@ -171,3 +171,7 @@ path = "tests/contract_orq_conductor.rs"
 [[test]]
 name = "orq_bigint"
 path = "tests/orq_bigint.rs"
+
+[[test]]
+name = "other_terminal"
+path = "tests/other_terminal.rs"
