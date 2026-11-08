@@ -1,4 +1,4 @@
-import { agruparSessoes, sortSessions, type AggSession, type GlobalGroup, type GroupBy, type GrupoSessoes } from '@hangar/core';
+import { agruparSessoes, isFallenSession, sortSessions, type AggSession, type GlobalGroup, type GroupBy, type GrupoSessoes } from '@hangar/core';
 import { placeOutside } from './outsideRows';
 import * as m from '../../paraglide/messages';
 
@@ -54,7 +54,8 @@ function gatherGroups(sections: GrupoSessoes[], groupOf: ReadonlyMap<string, Glo
 }
 
 export function buildSessionSections(rows: AggSession[], hiddenRows: HiddenRows, mode: GroupBy, search: string, collapsedGroups: ReadonlySet<string>, preferredServerId?: string, pairGroups: GlobalGroup[] = [], keep?: string): SessionSection[] {
-  const allLive = rows.filter((r) => r.state !== 'dead');
+  // A que o sistema derrubou fica, com Reabrir e Dispensar; as outras mortas saem.
+  const allLive = rows.filter((r) => r.state !== 'dead' || isFallenSession(r));
   // A sessão de fora acompanha a do par: some e volta junto com ela. `keep` (a aberta) fica no lugar,
   // e sendo de fora leva a do par, onde ela se encaixa; as outras de fora do mesmo par ficam com ela.
   const hiddenKeys = new Set(allLive.filter((r) => r.hidden_from_list).map(rowKey));

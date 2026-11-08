@@ -175,9 +175,16 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         }
     }
     // Sem vigia (sem as pastas da lista), `kill_codex_terminal` é `None`.
-    // Fechada de propósito não volta no próximo reboot, de qualquer agente.
+    // Fechada de propósito não volta no próximo reboot, de qualquer agente; a caída sai do registro aqui.
     if let (true, Some(name), Some(dirs)) = (owner, name.as_deref(), st.list.env().dirs.as_ref()) {
+        let fell = crate::session_open::fallen::get(&dirs.home, name).is_some();
         crate::session_open::restore::forget(&dirs.home, name);
+        // Dispensar a caída: não há processo para matar nem o que o Python fechar.
+        if fell && st.list.discovered_session(name).await.is_ok_and(|found| found.is_none()) {
+            let mut response = super::json_response(StatusCode::OK, json!({"ok": true}));
+            crate::routes::cors(req.headers(), response.headers_mut());
+            return response;
+        }
     }
     // A chave antes do kill (depois dele o pane não a diz mais); os arquivos do cofre saem só no sucesso.
     let vault_files = match (owner, name.as_deref()) { (true, Some(name)) => crate::vault::files::before_close(&st, name).await, _ => None };

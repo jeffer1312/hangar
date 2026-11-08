@@ -3,7 +3,7 @@
   import type { AggSession, SessionInfo } from '@hangar/core';
 import * as m from '../paraglide/messages';
 import { textoProblema } from '../lib/problema';
-  import { cwdParts, rotuloEstado, stateColors, untrackedReason, providerName, relativeTime, fmtWhen, isOrq, worktreeLabel } from '@hangar/core';
+  import { cwdParts, rotuloEstado, stateColors, untrackedReason, providerName, relativeTime, fmtWhen, isOrq, worktreeLabel, isFallenSession } from '@hangar/core';
   import { getPushSettings, setSessionMute, getBranches, checkoutBranch, gitAction, openEditor, setThenLink, clearThenLink, canPair, canLeave } from '@hangar/core';
   import { leavePair, pairExternals, setPairAccess, type PairExternal } from '@hangar/core';
   import { groupHideTargets, hideSession, showSession } from '@hangar/core';
@@ -36,6 +36,8 @@ import { textoProblema } from '../lib/problema';
     onClick: () => void;
     onDelete: () => void;
     onResume?: () => void;
+    onReopen?: () => void;
+    onDismiss?: () => void;
     onRename?: (newName: string) => void;
     onGit?: () => void;
     // Alça de arrastar-para-agrupar (Task 6): a mecânica de arrasto (fantasma, alvo sob o dedo,
@@ -60,7 +62,7 @@ import { textoProblema } from '../lib/problema';
     onOpenArbiter?: () => void;
   }
   let {
-    session, groupBadge = null, onClick, onDelete, onResume, onRename, onGit, onGroupDrag,
+    session, groupBadge = null, onClick, onDelete, onResume, onReopen, onDismiss, onRename, onGit, onGroupDrag,
     selectMode = false, selected = false, onToggleSelect,
     showFolder = false, showMachine = false, peers, onShare, onPairAccept, onBastao, onOpenArbiter,
   }: Props = $props();
@@ -100,7 +102,9 @@ import { textoProblema } from '../lib/problema';
   // Codex entra pela MESMA razão, com uma diferença: lá o ciclo sem saída não é o 1º prompt, e sim
   // a TUI parada num seletor dela (aprovar hooks, escolher login). Sem abrir, a única saída era um
   // `tmux attach` na máquina — que no celular não existe.
-  const abreChat = $derived(!untracked || session.provider === 'kimi' || session.provider === 'codex');
+  // Terminal derrubado pelo sistema: não há conversa viva para abrir, só Reabrir ou Dispensar.
+  const caida = $derived(isFallenSession(session));
+  const abreChat = $derived(!caida && (!untracked || session.provider === 'kimi' || session.provider === 'codex'));
 
   // "Precisa de voce": aguardando input -> fundo tingido.
   const action = $derived(session.state === 'awaiting_input');
@@ -716,7 +720,20 @@ import { textoProblema } from '../lib/problema';
       <!-- Retomar e Claude-only de ponta a ponta (candidatos de ~/.claude/projects + relance com
            `claude --resume`): numa sessao Pi/Kimi/OMP o botao so poderia errar, entao mostramos a
            razao no lugar dele. O backend recusa igual, pra um cliente velho nao matar o pane. -->
-      {#if untracked && (session.provider === 'pi' || session.provider === 'kimi' || session.provider === 'omp' || session.provider === 'codex')}
+      {#if caida}
+        <span class="fallen-acts">
+          <button
+            class="resume-btn"
+            onpointerdown={(e) => e.stopPropagation()}
+            onclick={(e) => { e.stopPropagation(); onReopen?.(); }}
+          >↻ {m.sessao_reabrir()}</button>
+          <button
+            class="resume-btn dismiss-btn"
+            onpointerdown={(e) => e.stopPropagation()}
+            onclick={(e) => { e.stopPropagation(); onDismiss?.(); }}
+          >{m.sessao_dispensar()}</button>
+        </span>
+      {:else if untracked && (session.provider === 'pi' || session.provider === 'kimi' || session.provider === 'omp' || session.provider === 'codex')}
         <span class="untracked-hint">{untrackedReason(session.provider)}</span>
       {:else if untracked}
         <button
@@ -1104,6 +1121,15 @@ import { textoProblema } from '../lib/problema';
   .resume-btn:active {
     background: var(--accent);
     color: #fff;
+  }
+  .fallen-acts {
+    display: inline-flex;
+    gap: 6px;
+  }
+  .dismiss-btn {
+    color: var(--text-secondary);
+    background: transparent;
+    border-color: var(--border-strong);
   }
 
   /* Slot do indicador: largura fixa pra alinhar os nomes (anim 20px centralizada). */

@@ -23,7 +23,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   import GroupGlyph from './icons/GroupGlyph.svelte';
   import SessionSignals from './SessionSignals.svelte';
   import type { SessionInfo, AggSession, Provider, SessionOpeningExtras, WorktreeChoice } from '@hangar/core';
-  import { cwdParts, rotuloEstado, stateColors, countAwaiting, railLabel, fmtWhen, relativeTime, latestAssistantEvent, untrackedReason, providerTag, isOrq, clusterByPair } from '@hangar/core';
+  import { cwdParts, rotuloEstado, stateColors, countAwaiting, railLabel, fmtWhen, relativeTime, latestAssistantEvent, untrackedReason, providerTag, isOrq, clusterByPair, isFallenSession } from '@hangar/core';
+  import { textoProblema } from '../lib/problema';
   import { arrastarGrupo, mensagemRecusa } from '../lib/arrastarGrupo.svelte';
   import { createDragToGroup, dragChave } from '../lib/dragToGroup';
   import { updateBadge } from '../lib/badge';
@@ -222,6 +223,18 @@ import ConfirmDialog from './ConfirmDialog.svelte';
     e?.stopPropagation();
     const r = await model.resume(name, serverId, sessionId);
     if (!r.ok && !model.resumeCandidates) flash(m.sessao_flash_retomar({ n: r.erro }));   // erro do botão da linha -> toast
+  }
+
+  // Sessão que o sistema derrubou: Reabrir pelo servidor dela; Dispensar só tira a linha.
+  async function handleReopen(name: string, serverId: string, e: MouseEvent) {
+    e.stopPropagation();
+    const erro = await model.reopen(name, serverId);
+    if (erro) flash(`${m.sessao_reabrir()}: ${erro}`);
+  }
+  async function handleDismiss(name: string, serverId: string, e: MouseEvent) {
+    e.stopPropagation();
+    const r = await model.dismiss(name, serverId);
+    if (r.erro !== '') flash(m.sessao_flash_excluir({ n: r.erro }));
   }
 
   async function handleCreate(name: string, cwd?: string, configDir?: string | null, provider?: Provider,
@@ -854,7 +867,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                 ? mensagemRecusa(dropRecusa)
                 : (!expanded
                   ? `${s.name} · ${srvLabel} · ${estadoTxt}${questionLabel ? ` · ${questionLabel}` : ''}${provTag ? ` · ${m.sessao_singular()} ${provTag}` : ''}`
-                  : (s.tracked === false ? untrackedReason(s.provider) : isOrq(s) ? m.orq_row_badge() : m.sessao_toque_renomear()))}
+                  : (isFallenSession(s) ? textoProblema(s.problema) : s.tracked === false ? untrackedReason(s.provider) : isOrq(s) ? m.orq_row_badge() : m.sessao_toque_renomear()))}
               onpointerdown={() => { if (!model.selectMode && !sidebarPin.collapsed && !isOrq(s)) pressStart(rowKey); }}
               onpointerup={pressEnd}
               onpointerleave={pressEnd}
@@ -863,6 +876,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
               onclick={() => {
                 hpLeave();   // clique nao move o mouse -> sem mouseleave; fecha a espiada na mao
                 if (model.selectMode) { if (s.tracked !== false) model.toggleSelected(selKey); return; }
+                // Sem conversa viva para abrir: o clique só explica o que houve.
+                if (isFallenSession(s)) { flash(textoProblema(s.problema) ?? ''); return; }
                 onMainClick(s.name, s.serverId, s.tracked, s.provider);
               }}
             >
@@ -1038,7 +1053,30 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                    Fora do Pi/Kimi/OMP: o resume varre ~/.claude/projects e relanca `claude --resume` DEPOIS
                    de matar o pane -> num pane Pi/Kimi/OMP ofereceria a conversa do agente errado e mataria
                    a sessao viva. Ali o title da linha ja diz o que fazer (untrackedReason). -->
-              {#if s.tracked === false && s.provider !== 'pi' && s.provider !== 'kimi' && s.provider !== 'omp' && s.provider !== 'codex'}
+              {#if isFallenSession(s)}
+                <button
+                  class="sess-resume"
+                  onclick={(e) => handleReopen(s.name, s.serverId, e)}
+                  disabled={model.reopenBusy === s.name}
+                  aria-label={`${m.sessao_reabrir()} ${s.name}`}
+                  title={m.sessao_reabrir()}
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polyline points="1 4 1 10 7 10"/>
+                    <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+                  </svg>
+                </button>
+                <button
+                  class="sess-resume sess-dismiss"
+                  onclick={(e) => handleDismiss(s.name, s.serverId, e)}
+                  aria-label={`${m.sessao_dispensar()} ${s.name}`}
+                  title={m.sessao_dispensar()}
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                  </svg>
+                </button>
+              {:else if s.tracked === false && s.provider !== 'pi' && s.provider !== 'kimi' && s.provider !== 'omp' && s.provider !== 'codex'}
                 <button
                   class="sess-resume"
                   onclick={(e) => handleResume(s.name, s.serverId, undefined, e)}
@@ -2033,6 +2071,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   }
   .sess-resume:hover { background: var(--accent); color: #fff; }
   .sess-resume:disabled { opacity: 0.5; }
+  .sess-dismiss { color: var(--text-muted); background: transparent; }
+  .sess-dismiss:hover { background: var(--bg-hover); color: var(--text-primary); }
 
   /* Composer compacto do broadcast (feature #9): so texto + enviar, sem anexos/slash-UI. */
   .broadcast-bar {

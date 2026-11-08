@@ -112,7 +112,7 @@ struct MenuRead { target: Target, seq: u64, mute: Mute, branches: Option<Branche
 
 #[derive(Clone, Debug)]
 /// O renomear leva o número do pedido: resposta de um diálogo cancelado não fecha a tentativa seguinte na mesma sessão.
-pub(super) enum Write { Rename(String, u64), Mute(bool), Editor, Delete, Mode(bool), Reload, Account { path: String, label: String, engine_account: Option<String> }, DismissRename, AnotherRename, Hide, Show }
+pub(super) enum Write { Rename(String, u64), Mute(bool), Editor, Delete, Mode(bool), Reload, Account { path: String, label: String, engine_account: Option<String> }, DismissRename, AnotherRename, Hide, Show, Reopen }
 
 /// Gravações de git e o remover vínculo: o resultado é a notificação da sessão, já em texto.
 enum GitWrite { Pull, Checkout(String), StashCheckout(String), Unlink }
@@ -254,6 +254,8 @@ pub(super) struct Sidebar {
     revealed: HashMap<Target, std::time::Instant>,
     pub(super) editing: Option<Edit>,
     renaming: HashSet<Target>,
+    /// Reabrindo a sessão caída: o servidor leva minutos, e o botão não repete o pedido enquanto isso.
+    pub(super) reopening: HashSet<Target>,
     /// Aberta e renomeada: o nome novo abre assim que aparecer na lista.
     follow: Option<Target>,
     /// A aberta sumiu da lista com o renomear em voo: a resposta decide se ela reabre pelo nome novo.
@@ -299,7 +301,7 @@ impl Sidebar {
     pub(super) fn new(window: &mut Window, cx: &mut Context<Hangar>) -> Self {
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder(tr("sidebar_filter")).clean_on_escape());
         cx.subscribe(&filter, |_, _, _: &InputEvent, cx| cx.notify()).detach();
-        Self { filter, collapsed: load_json(collapsed_path()), group_leads: load_json(group_leads_path()), leads_gen: 0, deleting: HashSet::new(), revealed: HashMap::new(), editing: None, renaming: HashSet::new(), follow: None, lost: None, moving: HashMap::new(),
+        Self { filter, collapsed: load_json(collapsed_path()), group_leads: load_json(group_leads_path()), leads_gen: 0, deleting: HashSet::new(), revealed: HashMap::new(), editing: None, renaming: HashSet::new(), reopening: HashSet::new(), follow: None, lost: None, moving: HashMap::new(),
             menu: None, menu_seq: 0, rename_seq: 0, chain: None, chain_seq: 0, focus_tab: None, remote_focus: HashMap::new(), collapse_gen: 0, button_menu: None, hover: None, last_sub: Default::default(), press_seq: 0,
             long_pressed: false, rail_anim: None, resize: None, grouping: Default::default(), flip: Default::default(), tab_flip: Default::default(), tab_follow: Default::default(), still_avatar: Default::default() }
     }
@@ -308,6 +310,7 @@ impl Sidebar {
     pub(super) fn reset_server(&mut self) {
         self.deleting.clear();
         self.renaming.clear();
+        self.reopening.clear();
         (self.editing, self.follow, self.lost, self.menu, self.button_menu, self.hover) = (None, None, None, None, None, None);
         (self.focus_tab, self.chain) = (None, None);
         self.grouping.reset();
@@ -994,6 +997,12 @@ impl Hangar {
         self.write(target, Write::Delete, cx);
     }
 
+    /// Reabre a sessão que o sistema derrubou, com o mesmo nome e a mesma conversa; a linha volta viva pela lista.
+    pub(super) fn reopen_target(&mut self, target: Target, cx: &mut Context<Self>) {
+        if !self.sidebar.reopening.insert(target.clone()) { return; }
+        self.write(target, Write::Reopen, cx);
+    }
+
     fn write(&mut self, target: Target, what: Write, cx: &mut Context<Self>) {
         let api = self.machine_api(&target.server).ok_or_else(|| self.machine_error(&target.server));
         let tell = self.sidebar_tell();
@@ -1019,6 +1028,7 @@ impl Hangar {
                 Write::Show => api.server_send(reqwest::Method::DELETE, &["sessions", name.as_str(), "hidden"], None, 15).await,
                 Write::Mode(terminal) => api.act(name, &["modo-execucao"], Some(json!({"terminal": terminal})), false, crate::api::REOPEN_SECONDS).await,
                 Write::Reload => api.act(name, &["recarregar"], None, false, crate::api::REOPEN_SECONDS).await,
+                Write::Reopen => api.act(name, &["reabrir"], None, false, crate::api::REOPEN_SECONDS).await,
                 Write::Account { path, engine_account, .. } => api.act(name, &["conta"], Some(account_body(path, engine_account.as_deref())), false, crate::api::REOPEN_SECONDS).await,
             };
             tell.send(SidebarReply::Wrote(target, what, result)).await;
@@ -1496,6 +1506,10 @@ impl Hangar {
                         self.sidebar.deleting.remove(&target);
                         Some(Notification::error(failed("sidebar_close_failed", &error)))
                     }
+                    (Write::Reopen, result) => {
+                        self.sidebar.reopening.remove(&target);
+                        result.err().map(|error| Notification::error(format!("{}: {}", tr("sessao_reabrir"), Self::fetch_failure(&error))))
+                    }
                 };
                 if let Some(note) = note { window.push_notification(note, cx); }
                 if let Some(warnings) = warnings { window.push_notification(Notification::warning(warnings), cx); }
@@ -1742,12 +1756,21 @@ fn fill_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, target: &Target, sess
     }
     // No convite o item de fechar vira "Parar de acompanhar": sai só deste aparelho, nunca fecha a sessão do dono. Com o convite
     // como servidor ativo ele não sai daqui (a troca de ativo é das configurações).
-    let label = if invite { tr_shared("convite_parar", &[]) } else { tr("sidebar_close") };
+    let label = exit_label(session, invite);
+    // A caída não tem processo a fechar: Dispensar só tira a linha, sem a confirmação do Fechar.
+    let fell = !invite && fallen(session);
     let close = {
         let (hangar, target) = (hangar.clone(), target.clone());
         PopupMenuItem::element(move |_, _| div().text_color(theme::danger()).child(label.clone())).disabled(invite && access.active)
-            .on_click(move |_, window, cx| { let _ = hangar.update(cx, |this, cx| this.close_target(target.clone(), window, cx)); })
+            .on_click(move |_, window, cx| { let _ = hangar.update(cx, |this, cx| if fell { this.delete_target(target.clone(), cx) } else { this.close_target(target.clone(), window, cx) }); })
     };
+    let reopen = fell.then(|| {
+        let busy = hangar.upgrade().is_some_and(|e| e.read(cx).sidebar.reopening.contains(target));
+        let label = if busy { format!("{}…", tr("sessao_reabrir")) } else { tr("sessao_reabrir") };
+        let (hangar, target) = (hangar.clone(), target.clone());
+        PopupMenuItem::new(label).disabled(busy)
+            .on_click(move |_, _, cx| { let _ = hangar.update(cx, |this, cx| this.reopen_target(target.clone(), cx)); })
+    });
     let pairs = session.outside_pairs().into_owned();
     let (undo_weak, undo_target) = (hangar.clone(), target.clone());
     let git = has_git(session);
@@ -1829,7 +1852,18 @@ fn fill_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, target: &Target, sess
                 menu.when(shows, |menu| menu.submenu(tr("sidebar_same"), window, cx, move |menu, window, cx| accounts_menu(menu, &weak, &target, idle, window, cx)))
             }))
         .separator()
+        .when_some(reopen, |menu, reopen| menu.item(reopen))
         .item(close)
+}
+
+/// Sessão de terminal que o sistema derrubou (falta de memória ou queda): a linha fica para reabrir ou dispensar.
+pub(super) fn fallen(session: &SessionInfo) -> bool {
+    session.state == "dead" && matches!(session.problema.as_deref(), Some("terminal_sem_memoria" | "terminal_caiu"))
+}
+
+/// O item que tira a linha da lista: o convite para de acompanhar; a caída é só dispensada.
+fn exit_label(session: &SessionInfo, invite: bool) -> String {
+    if invite { tr_shared("convite_parar", &[]) } else if fallen(session) { tr("sessao_dispensar") } else { tr("sidebar_close") }
 }
 
 /// O submenu de branches se refaz sozinho quando a leitura chega: refazer o menu de cima fecharia o submenu aberto.
@@ -2205,6 +2239,25 @@ mod tests {
         assert_eq!(menu_exit(&SessionInfo { guest_kind: Some("pair".into()), ..full }), MenuExit::LeavePair(mark));
         assert_eq!(menu_exit(&SessionInfo { guest_kind: Some("pair".into()), ..Default::default() }), MenuExit::Nothing);
         assert_eq!(menu_exit(&SessionInfo::default()), MenuExit::Close);
+    }
+
+    #[test]
+    fn fallen_terminal_row_offers_reopen_and_dismiss_and_other_dead_rows_do_not() {
+        use super::{exit_label, fallen};
+        crate::i18n::english_in_this_thread(false);
+        let row = |state: &str, problema: Option<&str>| SessionInfo { name: "s".into(), state: state.into(), problema: problema.map(Into::into), ..Default::default() };
+        for code in ["terminal_sem_memoria", "terminal_caiu"] {
+            let fell = row("dead", Some(code));
+            assert!(fallen(&fell), "{code}: o menu ganha Reabrir");
+            assert_eq!(exit_label(&fell, false), "Dispensar");
+        }
+        // Processo sem terminal que caiu, morta sem motivo e problema em sessão viva: o Fechar de sempre, sem Reabrir.
+        for other in [row("dead", Some("headless_processo_caiu")), row("dead", None), row("idle", Some("terminal_caiu"))] {
+            assert!(!fallen(&other));
+            assert_eq!(exit_label(&other, false), "Fechar");
+        }
+        // No convite a sessão é do dono: segue "Parar de acompanhar".
+        assert_eq!(exit_label(&row("dead", Some("terminal_caiu")), true), crate::i18n::tr_shared("convite_parar", &[]));
     }
 
     #[test]

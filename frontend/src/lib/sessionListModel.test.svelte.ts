@@ -12,10 +12,11 @@ const store = vi.hoisted(() => ({
 vi.mock('./sessionsStore.svelte', () => ({ sessionsStore: store }));
 vi.mock('@hangar/core', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@hangar/core')>()),
-  deleteSession: vi.fn(), renameSession: vi.fn(), resumeSession: vi.fn(), broadcast: vi.fn(),
+  deleteSession: vi.fn(), renameSession: vi.fn(), resumeSession: vi.fn(), broadcast: vi.fn(), reopenFallenSession: vi.fn(),
 }));
 vi.mock('./auth', () => ({
   getActiveId: vi.fn(() => 'srv-a'), selectServer: vi.fn(), serverColor: (id: string) => `c-${id}`,
+  findServer: (id: string) => ({ id, label: id, baseUrl: 'http://x', token: 't' }),
 }));
 
 import { clusterByPair } from '@hangar/core';
@@ -310,7 +311,7 @@ describe('colapso de grupo', () => {
   });
 });
 
-import { broadcast, deleteSession, renameSession, resumeSession } from '@hangar/core';
+import { broadcast, deleteSession, renameSession, reopenFallenSession, resumeSession } from '@hangar/core';
 import { getActiveId, selectServer } from './auth';
 import * as m from '../paraglide/messages';
 
@@ -520,6 +521,29 @@ describe('retomar (divergências #11 e #12)', () => {
     expect(await d.resume('s', 'srv-b')).toEqual({ ok: false, ambiguous: false, erro: 'pane morto' });
     expect(d.resumeError).toBe('pane morto');
     expect(d.resumeBusy).toBe('');
+  });
+});
+
+describe('sessão caída: reabrir e dispensar', () => {
+  beforeEach(() => { comServidores([{ id: 'srv-b', label: 'B', sessions: [] }]); vi.mocked(getActiveId).mockReturnValue('srv-a'); });
+  it('reabrir vai ao servidor da linha sem trocar o ativo', async () => {
+    vi.mocked(reopenFallenSession).mockResolvedValue({ ok: true });
+    const d = createSessionListModel(opts('desktop'));
+    expect(await d.reopen('s', 'srv-b')).toBe('');
+    expect(vi.mocked(reopenFallenSession).mock.calls[0]).toEqual(['s', expect.objectContaining({ id: 'srv-b' })]);
+    expect(selectServer).not.toHaveBeenCalled();
+    expect(d.reopenBusy).toBe('');
+  });
+  it('reabrir com erro devolve a mensagem do servidor', async () => {
+    vi.mocked(reopenFallenSession).mockRejectedValue(new Error('nome em uso'));
+    expect(await createSessionListModel(opts('desktop')).reopen('s', 'srv-b')).toBe('nome em uso');
+  });
+  it('dispensar apaga sem pedir confirmação', async () => {
+    vi.mocked(deleteSession).mockResolvedValue({ ok: true, warning: null });
+    const d = createSessionListModel(opts('desktop'));
+    expect(await d.dismiss('s', 'srv-b')).toEqual({ ok: true, erro: '' });
+    expect(d.confirmDel).toBeNull();
+    expect(deleteSession).toHaveBeenCalledWith('s');
   });
 });
 

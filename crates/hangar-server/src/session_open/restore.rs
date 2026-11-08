@@ -40,6 +40,10 @@ pub struct Entry {
     pub permission_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub missing_since: Option<f64>,
+    /// A unidade do systemd do pane (`tmux-spawn-….scope`): depois que ele morre, o journal dela diz se o
+    /// systemd o derrubou (`fallen`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
 }
 
 /// O spec com que a sessão volta: o gravado, com o modo da hora em que caiu. No Codex o modo
@@ -72,8 +76,10 @@ pub fn conversation_of(provider: AgentProvider, jsonl: &str) -> Option<String> {
 pub fn observe(prev: &Snapshot, alive: &BTreeMap<String, Entry>, now: f64, mux_started: Option<u64>) -> Snapshot {
     let mut sessions = BTreeMap::new();
     for (key, entry) in alive {
-        let conversation = entry.conversation.clone().or_else(|| prev.sessions.get(key).and_then(|e| e.conversation.clone()));
-        sessions.insert(key.clone(), Entry { conversation, missing_since: None, ..entry.clone() });
+        let was = prev.sessions.get(key);
+        let conversation = entry.conversation.clone().or_else(|| was.and_then(|e| e.conversation.clone()));
+        let unit = entry.unit.clone().or_else(|| was.and_then(|e| e.unit.clone()));
+        sessions.insert(key.clone(), Entry { conversation, unit, missing_since: None, ..entry.clone() });
     }
     for (key, entry) in &prev.sessions {
         if alive.contains_key(key) { continue; }
@@ -205,14 +211,36 @@ pub fn forget(home: &Path, name: &str) {
     if snap.sessions.len() != before && let Err(error) = write(home, &snap) {
         tracing::warn!(code = "session_restore_unwritten", kind = ?error.kind(), "a sessão fechada ficou na fotografia até o próximo tique");
     }
+    drop(closed);
+    super::fallen::mark_forgotten(name);
+    super::fallen::remove(home, name);
 }
 
-/// As que ficaram ausentes nesta fotografia sem terem sido fechadas pelo dono: nome e conversa.
-fn vanished(prev: &Snapshot, next: &Snapshot, closed: &[String]) -> Vec<(String, Option<String>)> {
+/// As que ficaram ausentes nesta fotografia sem terem sido fechadas pelo dono: chave e entrada.
+fn vanished(prev: &Snapshot, next: &Snapshot, closed: &[String]) -> Vec<(String, Entry)> {
     next.sessions.iter()
         .filter(|(key, entry)| entry.missing_since.is_some() && prev.sessions.get(*key).is_some_and(|was| was.missing_since.is_none())
             && !closed.contains(&entry.name))
-        .map(|(_, entry)| (entry.name.clone(), entry.conversation.clone())).collect()
+        .map(|(key, entry)| (key.clone(), entry.clone())).collect()
+}
+
+/// A sessão sumida vira registro de caída só com o multiplexador confirmando que ela não existe, nenhuma
+/// linha viva com o nome (a troca para sem terminal do Python mata o pane sem `forget`), a máquina de pé e
+/// o journal da unidade com `Failed with result`.
+async fn confirm_fallen(home: PathBuf, program: std::ffi::OsString, key: String, entry: Entry) {
+    let Some(unit) = entry.unit.clone() else { return };
+    let started = std::time::Instant::now();
+    if stopping().await { return; }
+    let mux = crate::state::capture::MuxProcess::new(&program, Duration::from_secs(5));
+    if mux.has_session(&entry.name).await != Some(false) { return; }
+    let Some(cause) = super::fallen::cause(&unit).await else { return };
+    // Fechada de propósito enquanto o journal era lido (a sessão nova com o nome): não caiu. A que voltou viva
+    // sai pelo `forget_live` do próximo tique.
+    if super::fallen::forgotten_since(&entry.name, started) { return; }
+    tracing::warn!(session = %entry.name, %cause, %unit, "o systemd derrubou a sessão; ela fica na lista para reabrir");
+    let cwd = super::record::read(&home, &key).ok().flatten().map(|spec| spec.cwd);
+    super::fallen::insert(&home, &entry.name, super::fallen::Fallen { key, provider: entry.provider, conversation: entry.conversation,
+        permission_mode: entry.permission_mode, cwd, died_at: now(), cause });
 }
 
 /// Tira da fotografia os nomes fechados desde a última; chamar com `CLOSED` travada.
@@ -258,6 +286,7 @@ async fn alive(st: &crate::routes::AppState, home: &Path, program: &std::ffi::Os
                known: &mut HashMap<String, (String, AgentProvider)>) -> Option<BTreeMap<String, Entry>> {
     let rows = st.list.discover(None).await.ok()?;
     known.retain(|name, _| rows.iter().any(|r| !r.headless && r.name == *name));
+    let mut units = super::fallen::pane_units(program).await;
     let mut out = BTreeMap::new();
     for row in rows.iter().filter(|r| !r.headless) {
         let Some(provider) = AgentProvider::parse(&row.provider) else { continue };
@@ -268,12 +297,13 @@ async fn alive(st: &crate::routes::AppState, home: &Path, program: &std::ffi::Os
                 None => continue,
             },
         };
+        let unit = units.remove(&row.name);
         let conversation = row.jsonl.as_deref().filter(|_| row.tracked).and_then(|j| conversation_of(provider, j));
         let permission_mode = match (provider, &conversation, st.state.runtime.get()) {
             (AgentProvider::Claude, Some(sid), Some(runtime)) => runtime.observed_claude_mode(sid),
             _ => None,
         };
-        out.insert(key, Entry { name: row.name.clone(), provider, conversation, permission_mode, missing_since: None });
+        out.insert(key, Entry { name: row.name.clone(), provider, conversation, permission_mode, missing_since: None, unit });
     }
     Some(out)
 }
@@ -452,7 +482,7 @@ fn agent_problem(st: &crate::routes::AppState, name: &str, shown: bool) {
     else { crate::runtime::terminal_status::clear_problem(&sender, AGENT_MISSING); }
 }
 
-async fn restore_one(host: &super::server::ServerHost, st: &crate::routes::AppState, program: &std::ffi::OsStr, key: &str, entry: &Entry) -> Result<(), String> {
+pub(crate) async fn restore_one(host: &super::server::ServerHost, st: &crate::routes::AppState, program: &std::ffi::OsStr, key: &str, entry: &Entry) -> Result<(), String> {
     let mut result = reopen(host, key, entry).await;
     // Restaurada é o agente de pé: o `new-session` volta antes de o shell soltar o comando.
     if result.is_ok() && entry.provider != AgentProvider::Codex {
@@ -463,6 +493,7 @@ async fn restore_one(host: &super::server::ServerHost, st: &crate::routes::AppSt
             None => result = Err(MUX_SILENT.into()),
         }
     }
+    if result.is_ok() { super::fallen::remove(super::open::OpenHost::home(host), &entry.name); }
     let mut event = json!({"evento": "sessao.restaurada", "nivel": "ok", "sessao": entry.name, "provider": entry.provider.name()});
     if let Err(code) = &result {
         tracing::warn!(session = %entry.name, code = %code, "sessão com terminal não restaurada");
@@ -491,6 +522,7 @@ pub async fn run(st: Arc<crate::routes::AppState>, home: PathBuf, program: std::
         waiting = recheck(&st, &program, std::mem::take(&mut waiting)).await;
         let (current, count) = mux_now(&program).await;
         let live = st.list.discover(None).await.ok().map(|rows| rows.iter().map(|r| r.name.clone()).collect::<HashSet<String>>());
+        if let Some(names) = &live { super::fallen::forget_live(&home, names); }
         if cfg!(windows) && windows.is_none() { windows = windows_startup(current, &snap); }
         let same = if cfg!(windows) { windows == Some(false) } else { matches!(current, MuxStart::Started(at) if snap.mux_started == Some(at)) };
         // Restaurando no Windows: volta tudo o que não está vivo, como na subida sem servidor.
@@ -502,10 +534,14 @@ pub async fn run(st: Arc<crate::routes::AppState>, home: PathBuf, program: std::
                 if let Some(alive) = alive(&st, &home, &program, &mut known).await {
                     let mut next = observe(&snap, &alive, now(), snap.mux_started);
                     let mut closed = CLOSED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                    let gone: Vec<serde_json::Value> = vanished(&snap, &next, &closed).into_iter().map(|(name, conversation)| json!({
-                        "evento": "sessao.sumiu", "nivel": "aviso", "sessao": name, "codigo": "session_gone_without_close",
-                        "conversa": conversation, "detalhe": "a sessão saiu do multiplexador sem o fechamento pelo Hangar"})).collect();
+                    let fell = vanished(&snap, &next, &closed);
+                    let gone: Vec<serde_json::Value> = fell.iter().map(|(_, entry)| json!({
+                        "evento": "sessao.sumiu", "nivel": "aviso", "sessao": entry.name, "codigo": "session_gone_without_close",
+                        "conversa": entry.conversation, "detalhe": "a sessão saiu do multiplexador sem o fechamento pelo Hangar"})).collect();
                     if !gone.is_empty() { crate::diag::record_blocking(crate::diag::diary_dir().as_deref(), &gone, "sessão sumida"); }
+                    for (key, entry) in fell {
+                        tokio::spawn(confirm_fallen(home.clone(), program.clone(), key, entry));
+                    }
                     drop_closed(&mut next, &mut closed);
                     if next != snap {
                         if let Err(error) = write(&home, &next) {
@@ -612,7 +648,7 @@ mod tests {
     use super::*;
 
     fn entry(name: &str, conversation: Option<&str>) -> Entry {
-        Entry { name: name.into(), provider: AgentProvider::Claude, conversation: conversation.map(str::to_owned), permission_mode: None, missing_since: None }
+        Entry { name: name.into(), provider: AgentProvider::Claude, conversation: conversation.map(str::to_owned), permission_mode: None, missing_since: None, unit: None }
     }
 
     fn recorded(home: &Path, key: &str, provider: AgentProvider, mode: super::super::PermissionMode) {
@@ -713,8 +749,20 @@ mod tests {
         let prev = Snapshot { mux_started: Some(1), sessions: [("k1".into(), entry("a", Some("c1"))), ("k2".into(), entry("b", Some("c2"))),
             ("k3".into(), Entry { missing_since: Some(5.0), ..entry("c", None) })].into() };
         let next = observe(&prev, &BTreeMap::new(), 10.0, Some(1));
-        assert_eq!(vanished(&prev, &next, &["b".to_owned()]), vec![("a".to_owned(), Some("c1".to_owned()))],
-            "b foi fechada pelo dono; c já estava ausente");
+        let gone: Vec<(String, String, Option<String>)> = vanished(&prev, &next, &["b".to_owned()]).into_iter()
+            .map(|(key, e)| (key, e.name, e.conversation)).collect();
+        assert_eq!(gone, vec![("k1".to_owned(), "a".to_owned(), Some("c1".to_owned()))], "b foi fechada pelo dono; c já estava ausente");
+    }
+
+    /// A unidade do pane chega ao `vanished` da sessão que sumiu, mesmo com um tique sem leitura dela: sem
+    /// ela o journal não diz se o systemd a derrubou.
+    #[test]
+    fn the_pane_unit_outlives_the_session_until_it_vanishes() {
+        let unit = Some("tmux-spawn-x.scope".to_owned());
+        let first = observe(&Snapshot::default(), &[("k1".into(), Entry { unit: unit.clone(), ..entry("a", Some("c1")) })].into(), 1.0, Some(1));
+        let later = observe(&first, &[("k1".into(), entry("a", Some("c1")))].into(), 2.0, Some(1));
+        let gone = observe(&later, &BTreeMap::new(), 3.0, Some(1));
+        assert_eq!(vanished(&later, &gone, &[]).first().and_then(|(_, e)| e.unit.clone()), unit);
     }
 
     /// Restaurada é o pane com o agente de pé: o shell parado (o `config.fish` travado) não conta.

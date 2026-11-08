@@ -3,7 +3,7 @@ import { ActionSheetIOS, Platform, Pressable, Text, View } from 'react-native';
 import { MenuView, type NativeActionEvent } from '@react-native-menu/menu';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import * as Haptics from 'expo-haptics';
-import { cwdParts, isOrq, loopBadge, pairExternals, providerName, relativeTime, rotuloEstado, sessionContextPct, tagHex, untrackedReason, worktreeLabel, type AggSession, type PairExternal } from '@hangar/core';
+import { cwdParts, isFallenSession, isOrq, loopBadge, pairExternals, providerName, relativeTime, rotuloEstado, sessionContextPct, tagHex, untrackedReason, worktreeLabel, type AggSession, type PairExternal } from '@hangar/core';
 import { Chip, type Tone } from '../../ui/Chip';
 import { SessionAvatar } from './SessionAvatar';
 import { HeadlessSignal } from './HeadlessSignal';
@@ -15,6 +15,7 @@ import { SPACE } from '../../theme/scale';
 import { useWorktreeStatus } from '../worktrees/worktreeStatus';
 import { groupBadge } from '../pair/groupPairs';
 import { GroupGlyph } from '../pair/GroupGlyph';
+import { problemLabel } from '../../chat/SessionProblem';
 import * as m from '../../paraglide/messages';
 
 // LOOP_TONE_COLOR do core é CSS var (`var(--accent)`) — não serve em RN; o tom vira `Chip tone`.
@@ -60,6 +61,9 @@ interface Props {
   onExcluir?: (s: AggSession) => void;
   onRenomear?: (s: AggSession) => void;
   onResume?: (s: AggSession) => void;
+  // Só na linha que o sistema derrubou (`isFallenSession`).
+  onReopen?: (s: AggSession) => void;
+  onDismiss?: (s: AggSession) => void;
   // Ausente em servidor de convite: o backend recusa worktrees ao convidado, e o chip é só texto.
   onWorktree?: (s: AggSession, path: string) => void;
   // Ausente em servidor de convite: lá a pessoa é convidada, não dona do par.
@@ -81,7 +85,7 @@ const isDisabled = (a: { id: string; attributes?: { disabled?: boolean; destruct
 const vibrarAoAbrir =
   Platform.OS === 'android' ? () => void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {}) : undefined;
 
-export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor, compact = false, selected, onPress, onGit, onExcluir, onRenomear, onResume, onWorktree, onPair, onHidden, hiddenBadge, crossBadgeText, crossBadgeMachines }: Props) {
+export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor, compact = false, selected, onPress, onGit, onExcluir, onRenomear, onResume, onReopen, onDismiss, onWorktree, onPair, onHidden, hiddenBadge, crossBadgeText, crossBadgeMachines }: Props) {
   const { theme } = useUnistyles();
   // O orquestrador não se renomeia nem se fecha: o backend recusa, então a linha nem oferece.
   const orq = isOrq(s);
@@ -157,7 +161,8 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
   const loop = loopBadge(s.loop_status, s.loop_iter, s.loop_max);
   const pendingQuestions = s.pending_questions ?? 0;
   const reply = s.state === 'idle' ? s.last_reply : null;
-  const sub = s.question ?? (s.state === 'working' ? s.label : reply) ?? null;
+  const fallen = isFallenSession(s) ? problemLabel(s.problema) : null;
+  const sub = fallen ?? s.question ?? (s.state === 'working' ? s.label : reply) ?? null;
   const engineLabel = !orq && s.provider === 'claude' ? s.engine : null;
   const providerLabel = orq ? null : [providerName(s.provider), engineLabel].filter(Boolean).join(', ');
   const legacy = accountChip(s.conta);
@@ -215,7 +220,8 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
 
   return comMenu(
     <Pressable
-      onPress={() => onPress(s)}
+      // A caída não tem conversa aberta para mostrar: só Reabrir e Dispensar.
+      onPress={fallen ? undefined : () => onPress(s)}
       // no-op de propósito: soltar o dedo depois do toque longo que abriu o menu não abre a conversa
       onLongPress={acoesMenu.length === 0 ? undefined : Platform.OS === 'ios' ? abrirAcoesIOS : () => {}}
       // kimi sem id é estado NORMAL pré-1º prompt, e codex sem thread ainda está no startup:
@@ -253,11 +259,11 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
         </View>
         {sub ? (
           <Text
-            style={[styles.sub, s.question ? { color: theme.tokens.pill.input.fg }
+            style={[styles.sub, fallen ? { color: theme.tokens.pill.dead.fg } : s.question ? { color: theme.tokens.pill.input.fg }
               : s.state === 'working' ? { color: theme.tokens.text.secondary, fontStyle: 'italic' } : { color: muted }]}
             numberOfLines={1}
           >
-            {reply && !s.question ? '◆ ' : ''}
+            {reply && !s.question && !fallen ? '◆ ' : ''}
             {sub}
           </Text>
         ) : null}
@@ -332,6 +338,22 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
             {loop ? <Chip tone={TOM_DO_LOOP[loop.tone]}>{loop.label}</Chip> : null}
           </View>
         ) : null}
+        {fallen && (onReopen || onDismiss) ? (
+          <View style={styles.fallenActions}>
+            {onReopen ? (
+              <Pressable onPress={() => onReopen(s)} style={styles.resume} accessibilityRole="button" accessibilityLabel={m.sessao_reabrir()}>
+                <Icon name="RotateCw" size={12} color={theme.tokens.text.secondary} />
+                <Text style={[styles.metaTxt, { color: theme.tokens.text.primary }]}>{m.sessao_reabrir()}</Text>
+              </Pressable>
+            ) : null}
+            {onDismiss ? (
+              <Pressable onPress={() => onDismiss(s)} style={styles.resume} accessibilityRole="button" accessibilityLabel={m.sessao_dispensar()}>
+                <Icon name="X" size={12} color={theme.tokens.text.secondary} />
+                <Text style={[styles.metaTxt, { color: theme.tokens.text.primary }]}>{m.sessao_dispensar()}</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
         {onResume && untracked && s.provider !== 'kimi' && s.provider !== 'pi' && s.provider !== 'omp' ? (
           <Pressable onPress={() => onResume(s)} style={styles.resume} accessibilityRole="button" accessibilityLabel={m.sessao_retomar()}>
             <Icon name="RotateCw" size={12} color={theme.tokens.text.secondary} />
@@ -376,4 +398,5 @@ const styles = StyleSheet.create((theme) => ({
   faixa: { position: 'absolute', left: 0, top: 6, bottom: 6, width: 2, borderRadius: 1 },
   release: { minHeight: 24, justifyContent: 'center' },
   resume: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1], marginTop: theme.base.space[1], minHeight: 32, alignSelf: 'flex-start' },
+  fallenActions: { flexDirection: 'row', gap: theme.base.space[4] },
 }));

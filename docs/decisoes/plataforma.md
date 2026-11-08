@@ -3216,6 +3216,16 @@ defeitos achados nele (todos consertados no Rust, decisão do usuário) estão n
   uma sessão também não). Falha passageira tenta 3 vezes antes de o servidor novo virar o da
   fotografia. A varredura de grupos espera o restore. Motivo de não digitar no shell: com zsh e
   `CORRECT_ALL` o shell parava em "correct 'claude' to '.claude'?".
+- **Sessão derrubada pelo systemd fica na lista (06/11/2026).** O `systemd-oomd` matou o escopo
+  `tmux-spawn-*.scope` inteiro de duas sessões (118 processos, 16 GB entre RAM e swap) e elas sumiram
+  da lista e da busca: com o servidor do tmux de pé, a ausência contava como fechamento. Agora a sessão
+  que some sem `forget` e cuja unidade do pane tem `Failed with result '<r>'` no journal vira registro
+  em `~/.hangar/sessoes-caidas.json` e linha `dead` (`terminal_sem_memoria` para `oom-kill`,
+  `terminal_caiu` para o resto), com Reabrir (`POST /api/sessions/{name}/reabrir`, pelo spec, como o
+  restore) e Dispensar (o `DELETE`). `/exit` e kill pedido não deixam `Failed with result`: é a pessoa
+  saindo, sem linha (decisão do usuário). Sem journal (Windows/psmux) não há registro. A linha caída
+  fica fora do push e da varredura de grupos. O build (`cargo-pinned`, `verificar-local`) roda em
+  escopo próprio com teto (`scripts/escopo-memoria`): falta de memória mata o build, não a sessão.
 - **Limite de uso troca de conta sozinho (Claude).** Sinal pelo transcript (com terminal) ou pelo
   stream-json (sem terminal), nunca pelo pane. A fila fica segura até a troca terminar; o recado de
   continuar vai à frente na fila durável; conta gasta fica marcada até o reset (`limit-spent.json`);

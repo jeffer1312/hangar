@@ -7024,7 +7024,16 @@ impl Hangar {
         let mut content = div().size_full().flex().flex_col();
         let prethread = self.render_prethread(cx);
         if let Some(selected) = &self.selected {
-            if let Some(card) = prethread {
+            if sidebar::fallen(selected) {
+                // Sem transcript não há stream nem faixa de problema: a frase vem da linha da lista, com o Reabrir.
+                let target = sidebar::Target::new(&self.open_server(), &selected.name);
+                let busy = self.sidebar.reopening.contains(&target);
+                let label = if busy { format!("{}…", tr("sessao_reabrir")) } else { tr("sessao_reabrir") };
+                content = content.child(div().flex_1().p_6().flex().flex_col().items_start().gap_3().text_sm().text_color(theme::warning())
+                    .child(selected.problema.as_deref().and_then(problem_text).unwrap_or_default())
+                    .child(Button::new("fallen-reopen").small().label(label).disabled(busy)
+                        .on_click(cx.listener(move |this, _, _, cx| this.reopen_target(target.clone(), cx)))));
+            } else if let Some(card) = prethread {
                 content = content.child(card);
             } else if !selected.readable() {
                 content = content.child(div().flex_1().p_6().text_color(theme::muted()).child(tr(if selected.tracked == Some(false) { "untracked" } else { "starting" })));

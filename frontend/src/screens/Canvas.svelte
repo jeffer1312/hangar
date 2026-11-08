@@ -9,7 +9,7 @@ import * as m from '../paraglide/messages';
   import type { BoardRow, PendingMsg } from './Board.svelte';
   import { sessionsStore } from '../lib/sessionsStore.svelte';
   import { serverColor } from '../lib/auth';
-  import { pairColor, canPair, canLeave, type DropResult } from '@hangar/core';
+  import { pairColor, canPair, canLeave, isFallenSession, type DropResult } from '@hangar/core';
   import { arrastarGrupo, mensagemRecusa } from '../lib/arrastarGrupo.svelte';
   import {
     canvasBounds, connectBoxes, fitCanvasScale, placeNew, resizeBox, planePoint, findDropTarget,
@@ -25,7 +25,8 @@ import * as m from '../paraglide/messages';
     return () => sessionsStore.release();
   });
 
-  const rows = $derived<BoardRow[]>(sessionsStore.rows);
+  // Sessão caída não tem conversa para o card; Reabrir e Dispensar ficam na lista.
+  const rows = $derived<BoardRow[]>(sessionsStore.rows.filter((r) => !isFallenSession(r)));
   const offline = $derived(sessionsStore.byServer.filter((b) => b.error && !b.server.inviteEnded).map((b) => b.server.label));
   const endedInvites = $derived(sessionsStore.byServer.filter((b) => b.server.inviteEnded).map((b) => b.server.label));
   const rowKey = (r: BoardRow) => `${r.serverId}::${r.name}`;

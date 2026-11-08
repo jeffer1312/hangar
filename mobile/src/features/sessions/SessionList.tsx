@@ -17,6 +17,7 @@ import {
   machinesAllDown,
   renameSession,
   setPairAccess,
+  reopenFallenSession,
   resumeSession,
   showSession,
   type AggSession,
@@ -213,6 +214,34 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
             else toast.ok(s.name);
           })
           .catch((e: unknown) => toast.erro(mensagemDe(e)));
+      }),
+    [comServidor],
+  );
+
+  // Fala com o servidor da linha, sem trocar o ativo; a linha morta some quando a lista chega.
+  // O servidor responde quando o agente sobe: o segundo toque não manda outro pedido.
+  const reabrindo = useRef(new Set<string>());
+  const reabrir = useCallback((s: AggSession) => {
+    const server = useServers.getState().servers.find((x) => x.id === s.serverId);
+    if (!server) { toast.erro(m.servidor_nao_existe()); return; }
+    const chave = `${s.serverId}::${s.name}`;
+    if (reabrindo.current.has(chave)) return;
+    reabrindo.current.add(chave);
+    reopenFallenSession(s.name, server)
+      .then(() => toast.ok(s.name))
+      .catch((e: unknown) => toast.erro(mensagemDe(e)))
+      .finally(() => reabrindo.current.delete(chave));
+  }, []);
+
+  // Sem confirmação: não há processo para matar, só a linha e o registro para reabrir.
+  const dispensar = useCallback(
+    (s: AggSession) =>
+      comServidor(s, () => {
+        useSessions.getState().markDeleting(s.serverId, s.name);
+        deleteSession(s.name).catch((e: unknown) => {
+          useSessions.getState().unmarkDeleting(s.serverId, s.name);
+          toast.erro(mensagemDe(e));
+        });
       }),
     [comServidor],
   );
@@ -539,6 +568,8 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
               onExcluir={excluir}
               onRenomear={setRenomeando}
               onResume={retomar}
+              onReopen={proprios.has(item.serverId) ? reabrir : undefined}
+              onDismiss={proprios.has(item.serverId) ? dispensar : undefined}
               onWorktree={proprios.has(item.serverId) ? abrirWorktree : undefined}
               onPair={proprios.has(item.serverId) || item.outside ? fazerPar : undefined}
               onHidden={proprios.has(item.serverId) && !item.outside ? toggleHidden : undefined}

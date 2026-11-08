@@ -451,7 +451,9 @@ fn publish(tx: &watch::Sender<Arc<Published>>, last: &mut Last, outcome: Result<
     match outcome {
         Err(code) => changed |= fail(&prev, &mut next, code),
         Ok(p) => {
-            let rows = visible(&p);
+            let mut rows = visible(&p);
+            let fallen = crate::session_open::fallen::rows(&rows);
+            rows.extend(fallen.iter());
             let sig = sig::list_sig(rows.iter().copied());
             // Volta do erro reemite a mesma lista: é ela que limpa o erro na tela.
             if prev.error.is_some() || last.sig.as_deref() != Some(sig.as_str()) {
@@ -782,7 +784,12 @@ pub async fn list(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInf
             Err(()) => return unavailable(&st, req.headers(), ListError { code: "guests_worker_failed", detail: "" }),
         }
     } else { match &guest {
-        None => serde_json::to_vec(&visible(&produced)),
+        None => {
+            let mut rows = visible(&produced);
+            let fallen = crate::session_open::fallen::rows(&rows);
+            rows.extend(fallen.iter());
+            serde_json::to_vec(&rows)
+        }
         Some(guest) => serde_json::to_vec(&guest_rows(visible(&produced), guest)),
     }};
     let body = match body {

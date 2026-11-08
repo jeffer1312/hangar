@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { isFallenSession } from '@hangar/core';
 import { BackHandler, Keyboard, PanResponder, Platform, Text, View } from 'react-native';
 import { Pressable } from 'react-native-gesture-handler';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
@@ -29,7 +30,7 @@ export default function Index() {
   // "Ver sessões ocultas" da página Sessões: a lista precisa estar à vista, com a seção já aberta.
   const hidden = Array.isArray(params.hidden) ? params.hidden[0] : params.hidden;
   const activeId = useServers((s) => s.activeId);
-  const count = useSessions((s) => s.rows.filter((row) => row.state !== 'dead').length);
+  const count = useSessions((s) => s.rows.filter((row) => row.state !== 'dead' || isFallenSession(row)).length);
   // O contador lê a lista também com a gaveta fechada e a tela de nova conversa à frente.
   useEffect(() => useSessions.getState().retain(), []);
   const { theme } = useUnistyles();
