@@ -177,7 +177,7 @@ pub fn diagnose(service: &Service, f: &Value, platform: &str) -> Vec<Line> {
             String::new(),
         )
     } else {
-        add("aviso","endereço da rede local não responde".into(),"firewall? Linux: sudo ./scripts/lan-setup.sh 8765 — Windows: scripts\\open-firewall.ps1 num PowerShell como admin".into())
+        add("aviso","endereço da rede local não responde".into(),"firewall? Linux: sudo ./scripts/lan-setup.sh 8765 — Windows: num PowerShell como admin, powershell -ExecutionPolicy Bypass -File \"%USERPROFILE%\\.hangar\\current\\scripts\\open-firewall.ps1\" (instalação pelo código: scripts\\open-firewall.ps1 na pasta do clone)".into())
     }
     out
 }

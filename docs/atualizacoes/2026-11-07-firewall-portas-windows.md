@@ -11,8 +11,7 @@ No Windows, cada atualização abria o aviso "Do you want to allow public and pr
 access this app?" para o hangar-server, mesmo depois de ele ter sido permitido na versão anterior.
 As portas 8765 e 8766 agora ficam liberadas no firewall, nas redes privadas e públicas, por uma
 regra que vale para todas as versões. Onde o Hangar roda como administrador a regra entra nesta
-atualização. Nos demais, a atualização não pede a senha de administrador: a regra entra quando o
-instalador rodar, ou com o comando gravado em `%USERPROFILE%\.hangar\firewall-ports`, num
-PowerShell aberto como administrador. Na instalação por pacote ele é
+atualização. Nos demais, a atualização não pede a senha de administrador e a regra fica pendente
+até alguém rodar o script num PowerShell aberto como administrador. Na instalação por pacote:
 `powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.hangar\current\scripts\open-firewall.ps1"`;
-na instalação pelo código, o mesmo script dentro da pasta do clone.
+na instalação pelo código, `scripts\open-firewall.ps1` dentro da pasta do clone.

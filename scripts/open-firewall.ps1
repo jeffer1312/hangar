@@ -39,7 +39,7 @@ if ($faltam.Count -gt 0) {
     if ($admin) {
         try { & ([scriptblock]::Create($cmd)) } catch { Write-Host "firewall: $($_.Exception.Message)" }
     } elseif ($NoPrompt) {
-        Write-Host "firewall: sem admin e sem UAC (-NoPrompt); porta(s) $($faltam -join ', ') ficam para o instalador"
+        Write-Host "firewall: sem admin e sem UAC (-NoPrompt); porta(s) $($faltam -join ', ') ficam pendentes"
     } else {
         Write-Host "firewall: pedindo o UAC para liberar a(s) porta(s) $($faltam -join ', ')"
         try {

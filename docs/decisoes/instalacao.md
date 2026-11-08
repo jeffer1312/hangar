@@ -20,7 +20,7 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **Firewall do Windows: regra de liberação por porta (8765 e 8766), perfis Private e Public,
   só por `scripts/open-firewall.ps1`.** O `hangar-server` muda de pasta a cada versão, e o "Allow"
   do aviso vale para um caminho só. Regra de bloqueio não cala o aviso. O passo de máquina roda com
-  `-NoPrompt`: nunca pede UAC e nunca falha; sem admin, a regra fica para o instalador, e a marca
+  `-NoPrompt`: nunca pede UAC e nunca falha; sem admin, a regra fica pendente, e a marca
   `~/.hangar/firewall-ports` grava o comando de reparo com o caminho absoluto do script. Ver
   [a entrada](#firewall-do-windows-por-porta-07112026).
 - **Instalador guiado: duas perguntas, o resto é padrão.** Sem terminal, tudo é NÃO — exceto no
