@@ -224,6 +224,7 @@ fn tokens(segment: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut buf = String::new();
     let mut quote = None;
+    let mut started = false;
     let mut chars = segment.chars().peekable();
     while let Some(c) = chars.next() {
         if let Some(q) = quote {
@@ -241,22 +242,28 @@ fn tokens(segment: &str) -> Vec<String> {
             }
         } else if c == '\'' || c == '"' {
             quote = Some(c);
+            started = true;
         } else if c == '\\' {
             if let Some(next) = chars.next() {
                 buf.push(next);
+                started = true;
+            } else {
+                return segment.split_whitespace().map(str::to_owned).collect();
             }
         } else if c.is_whitespace() {
-            if !buf.is_empty() {
+            if started {
                 out.push(std::mem::take(&mut buf));
+                started = false;
             }
         } else {
             buf.push(c);
+            started = true;
         }
     }
     if quote.is_some() {
         return segment.split_whitespace().map(str::to_owned).collect();
     }
-    if !buf.is_empty() {
+    if started {
         out.push(buf);
     }
     out
@@ -340,8 +347,8 @@ fn dangerous(command: &str, depth: u8) -> Option<String> {
                 .any(|t| t.starts_with('-') && !t.starts_with("--") && t.contains('f'));
             let kills = args.iter().filter(|t| !t.starts_with('-')).any(|t| {
                 if regex {
-                    if python_regex_extensions(t) {
-                        fancy_regex::Regex::new(t)
+                    if let Some(pattern) = python_regex_pattern(t) {
+                        fancy_regex::Regex::new(&pattern)
                             .and_then(|r| Ok(r.is_match("tmux server")? || r.is_match("psmux")?))
                             .unwrap_or_else(|_| t.contains("tmux"))
                     } else {
@@ -389,37 +396,34 @@ fn dangerous(command: &str, depth: u8) -> Option<String> {
 
 // O padrão vem do argumento de pkill/killall no payload Bash, não de configuração do Hangar.
 // Extensões de outros dialetos precisam seguir o mesmo fallback do re.error anterior.
-fn python_regex_extensions(pattern: &str) -> bool {
+fn python_regex_pattern(pattern: &str) -> Option<String> {
     let chars: Vec<_> = pattern.chars().collect();
     let mut i = 0;
-    let mut class_start = None;
+    let mut replacements = Vec::new();
     let mut verbose = false;
     let mut groups = Vec::new();
     while i < chars.len() {
         let c = chars[i];
         if c == '\\' {
+            if chars.get(i + 1) == Some(&'N') {
+                let mut end = i + 2;
+                let code = named_character(&chars, &mut end)?;
+                replacements.push((i..end, format!("\\x{{{code:x}}}")));
+                i = end;
+                continue;
+            }
             if let Some(&next) = chars.get(i + 1) {
                 if "eGhHkKgGORXYy".contains(next) {
-                    return false;
-                }
-                if next == 'N' && chars.get(i + 2) != Some(&'{') {
-                    return false;
+                    return None;
                 }
             }
             i += 2;
             continue;
         }
-        if let Some(start) = class_start {
-            if c == ']' && i > start + 1 && !(i == start + 2 && chars.get(start + 1) == Some(&'^'))
-            {
-                class_start = None;
-            }
-            i += 1;
-            continue;
-        }
         if c == '[' {
-            class_start = Some(i);
-            i += 1;
+            let (end, replacement) = python_class(&chars, i)?;
+            replacements.push((i..end, replacement));
+            i = end;
             continue;
         }
         if verbose && c == '#' {
@@ -454,13 +458,13 @@ fn python_regex_extensions(pattern: &str) -> bool {
                         continue;
                     }
                     Some('<') if !chars.get(i + 3).is_some_and(|c| matches!(c, '=' | '!')) => {
-                        return false;
+                        return None;
                     }
-                    Some('\'') | Some('&') | Some('R') => return false,
+                    Some('\'') | Some('&') | Some('R') => return None,
                     Some('P') if !chars.get(i + 3).is_some_and(|c| matches!(c, '<' | '=')) => {
-                        return false;
+                        return None;
                     }
-                    Some('(') if chars.get(i + 3) == Some(&'?') => return false,
+                    Some('(') if chars.get(i + 3) == Some(&'?') => return None,
                     _ => {}
                 }
                 let mut j = i + 2;
@@ -491,5 +495,172 @@ fn python_regex_extensions(pattern: &str) -> bool {
         }
         i += 1;
     }
-    true
+    let mut out = chars;
+    for (span, replacement) in replacements.into_iter().rev() {
+        out.splice(span, replacement.chars());
+    }
+    Some(out.into_iter().collect())
+}
+
+#[derive(Clone, Copy)]
+enum ClassAtom {
+    Literal(u32),
+    Category(char),
+    Hyphen,
+}
+impl ClassAtom {
+    fn literal(self) -> Option<u32> {
+        match self {
+            Self::Literal(c) => Some(c),
+            Self::Hyphen => Some(u32::from('-')),
+            Self::Category(_) => None,
+        }
+    }
+}
+
+// Classes Python são uniões. Escapar os literais impede o motor de interpretar &&, -- ou [ como conjuntos.
+fn python_class(chars: &[char], start: usize) -> Option<(usize, String)> {
+    let mut i = start + 1;
+    let negative = chars.get(i) == Some(&'^');
+    if negative {
+        i += 1;
+    }
+    let first = i;
+    let mut atoms = Vec::new();
+    loop {
+        let &c = chars.get(i)?;
+        if c == ']' && i != first {
+            i += 1;
+            break;
+        }
+        atoms.push(if c == '\\' {
+            class_escape(chars, &mut i)?
+        } else {
+            i += 1;
+            if c == '-' {
+                ClassAtom::Hyphen
+            } else {
+                ClassAtom::Literal(u32::from(c))
+            }
+        });
+    }
+    let mut body = String::new();
+    let mut n = 0;
+    while n < atoms.len() {
+        if n + 2 < atoms.len() && matches!(atoms[n + 1], ClassAtom::Hyphen) {
+            let mut from = atoms[n].literal()?;
+            let mut to = atoms[n + 2].literal()?;
+            if from > to {
+                return None;
+            }
+            // Surrogates existem no str do Python, mas nunca nos dois alvos ASCII da guarda.
+            if (0xd800..=0xdfff).contains(&from) {
+                from = 0xe000;
+            }
+            if (0xd800..=0xdfff).contains(&to) {
+                to = 0xd7ff;
+            }
+            if from <= to {
+                body += &format!("\\x{{{from:x}}}-\\x{{{to:x}}}");
+            }
+            n += 3;
+        } else {
+            match atoms[n] {
+                ClassAtom::Category(category) => {
+                    body.push('\\');
+                    body.push(category);
+                }
+                literal => {
+                    let code = literal.literal()?;
+                    if !(0xd800..=0xdfff).contains(&code) {
+                        body += &format!("\\x{{{code:x}}}");
+                    }
+                }
+            }
+            n += 1;
+        }
+    }
+    let translated = if body.is_empty() {
+        if negative {
+            "[\\s\\S]".into()
+        } else {
+            "(?!)".into()
+        }
+    } else {
+        format!("[{}{body}]", if negative { "^" } else { "" })
+    };
+    Some((i, translated))
+}
+
+fn class_escape(chars: &[char], i: &mut usize) -> Option<ClassAtom> {
+    *i += 1;
+    let c = *chars.get(*i)?;
+    *i += 1;
+    if "dDsSwW".contains(c) {
+        return Some(ClassAtom::Category(c));
+    }
+    if ('0'..='7').contains(&c) {
+        let mut octal = c.to_digit(8)?;
+        for _ in 0..2 {
+            let Some(next) = chars.get(*i).and_then(|c| c.to_digit(8)) else {
+                break;
+            };
+            octal = octal * 8 + next;
+            *i += 1;
+        }
+        return (octal <= 0xff).then_some(ClassAtom::Literal(octal));
+    }
+    let code = match c {
+        'a' => 7,
+        'b' => 8,
+        'f' => 12,
+        'n' => 10,
+        'r' => 13,
+        't' => 9,
+        'v' => 11,
+        'x' | 'u' | 'U' => {
+            let length = match c {
+                'x' => 2,
+                'u' => 4,
+                _ => 8,
+            };
+            let mut code = 0u32;
+            for _ in 0..length {
+                code = code
+                    .checked_mul(16)?
+                    .checked_add(chars.get(*i)?.to_digit(16)?)?;
+                *i += 1;
+            }
+            if code > 0x10ffff {
+                return None;
+            }
+            code
+        }
+        'N' => named_character(chars, i)?,
+        other if other.is_ascii_alphabetic() || other.is_ascii_digit() => return None,
+        other => u32::from(other),
+    };
+    Some(ClassAtom::Literal(code))
+}
+
+fn named_character(chars: &[char], i: &mut usize) -> Option<u32> {
+    if chars.get(*i) != Some(&'{') {
+        return None;
+    }
+    let start = *i + 1;
+    let end = start + chars.get(start..)?.iter().position(|c| *c == '}')?;
+    let name: String = chars[start..end].iter().collect();
+    let character = unicode_names2::character(&name)?;
+    if let Some(canonical) = unicode_names2::name(character) {
+        let canonical = canonical.to_string();
+        // A consulta algorítmica também aceita zeros à esquerda que o nome oficial não tem.
+        if (canonical.starts_with("CJK UNIFIED IDEOGRAPH-")
+            || canonical.starts_with("HANGUL SYLLABLE "))
+            && !canonical.eq_ignore_ascii_case(&name)
+        {
+            return None;
+        }
+    }
+    *i = end + 1;
+    Some(u32::from(character))
 }

@@ -699,3 +699,112 @@ fn provider_hooks_installer_repoints_native_hooks_and_keeps_the_first_backup() {
         raw
     );
 }
+
+#[test]
+fn provider_hooks_review_empty_quoted_regex_keeps_its_argument() {
+    let root = tempfile::tempdir().unwrap();
+    for script in [
+        "pkill -f ''",
+        "pkill -f \"\"",
+        "pkill -f ''   ",
+        "pkill -f '' && echo done",
+    ] {
+        let result = run(
+            root.path(),
+            "guard-tmux",
+            &serde_json::to_vec(&json!({"tool_name":"Bash","tool_input":{"command":script}}))
+                .unwrap(),
+            &[],
+        );
+        assert_eq!(result.status.code(), Some(2), "{script}");
+        let output: Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "deny");
+    }
+}
+
+#[test]
+fn provider_hooks_review_python_character_classes_keep_literals_and_ranges() {
+    let root = tempfile::tempdir().unwrap();
+    for (pattern, expected) in [
+        ("[t&&x]mux", 2),
+        ("[t--z]mux", 0),
+        ("[t~~x]mux", 2),
+        ("[t||x]mux", 2),
+        ("[[t]mux", 2),
+        ("[]t]mux", 2),
+        ("[t-z]mux", 2),
+        ("[z-t]mux", 0),
+        (r"[t\-z]mux", 2),
+        ("[-t]mux", 2),
+        ("[--z]mux", 2),
+        ("[t-]mux", 2),
+        (r"[\x74&&x]mux", 2),
+        (r"[\u0074&&x]mux", 2),
+        (r"[\164&&x]mux", 2),
+        (r"[\w--z]mux", 0),
+        (r"[\d-t]mux", 0),
+        (r"[\]t]mux", 2),
+        ("(?x)[t&&x]mux # [z--a]", 2),
+        ("(?x: [t&&x]mux )", 2),
+        ("(?# [z--a])[t&&x]mux", 2),
+    ] {
+        let script = format!("pkill -f '{pattern}'");
+        let result = run(
+            root.path(),
+            "guard-tmux",
+            &serde_json::to_vec(&json!({"tool_name":"Bash","tool_input":{"command":script}}))
+                .unwrap(),
+            &[],
+        );
+        assert_eq!(result.status.code(), Some(expected), "{pattern}");
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(24))]
+    #[test]
+    fn provider_hooks_review_external_classes_never_panic(chars in proptest::collection::vec(proptest::prelude::any::<char>(), 0..64)) {
+        let root = tempfile::tempdir().unwrap();
+        let content: String = chars.into_iter().collect();
+        let pattern = format!("[{content}]mux");
+        let script = format!("pkill -f '{}'", pattern.replace('\'', "'\\''"));
+        let result = run(root.path(), "guard-tmux", &serde_json::to_vec(&json!({"tool_name":"Bash","tool_input":{"command":script}})).unwrap(), &[]);
+        proptest::prop_assert!(matches!(result.status.code(), Some(0 | 2)));
+    }
+}
+
+#[test]
+fn provider_hooks_review_unicode_names_keep_python_spellings_and_aliases() {
+    let root = tempfile::tempdir().unwrap();
+    for (pattern, expected) in [
+        (r"\N{LATIN SMALL LETTER T}mux", 2),
+        (r"\N{LATIN SMALL LETTER X}mux", 0),
+        (r"\N{THIS NAME DOES NOT EXIST}mux", 0),
+        (r"\\N{LATIN SMALL LETTER T}mux", 0),
+        (r"[\N{LATIN SMALL LETTER T}]mux", 2),
+        (r"\N{latin small letter t}mux", 2),
+        (r"\N{latinsmalllettert}mux", 0),
+        (r"\N{LATIN_SMALL_LETTER_T}mux", 0),
+        (r"(?x)tm.x # \N{THIS NAME DOES NOT EXIST}", 2),
+        (r"(?# \N{THIS NAME DOES NOT EXIST})tm.x", 2),
+        (r"(?x)tmux\N{SPACE}server", 2),
+        (r"[\N{BACKSPACE}t]mux", 2),
+        (r"[\N{BS}t]mux", 2),
+        (r"[^\N{B S}]mux", 0),
+        (r"\N{LEFT SQUARE BRACKET}tmux", 0),
+        (r"[^\N{CJK UNIFIED IDEOGRAPH-4E00}]mux", 2),
+        (r"[^\N{CJK UNIFIED IDEOGRAPH-04E00}]mux", 0),
+        (r"[^\N{CJK UNIFIED IDEOGRAPH-004E00}]mux", 0),
+        (r"[^\N{HANGUL SYLLABLE GA}]mux", 2),
+    ] {
+        let script = format!("pkill -f '{pattern}'");
+        let result = run(
+            root.path(),
+            "guard-tmux",
+            &serde_json::to_vec(&json!({"tool_name":"Bash","tool_input":{"command":script}}))
+                .unwrap(),
+            &[],
+        );
+        assert_eq!(result.status.code(), Some(expected), "{pattern}");
+    }
+}
