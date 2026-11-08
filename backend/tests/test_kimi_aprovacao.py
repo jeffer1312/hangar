@@ -10,7 +10,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import state, terminal_input as ti
-from app.adapters.kimi import transcript as kt
 from app.config import settings
 from app.models import SessionInfo
 
@@ -51,96 +50,6 @@ _PANE_APROVACAO = (
 
 
 # ── Leitura do wire ──────────────────────────────────────────────────────────
-
-def test_plano_vira_approve_reject_revise(tmp_path):
-    # O que o usuario ve no terminal: "Ready to build with this plan? 1. Approve 2. Reject 3. Revise".
-    pend = kt.read_pending_interaction(_write(tmp_path, [_req("approval_1")]))
-    assert pend is not None
-    assert [e["label"] for e in pend["escolhas"]] == ["Approve", "Reject", "Revise"]
-    assert [e["requires_feedback"] for e in pend["escolhas"]] == [False, False, True]
-    assert pend["titulo"] == "Ready to build with this plan?"
-    # Sem resumo: o plano inteiro ja esta no chat como tool_use do ExitPlanMode.
-    assert pend["resumo"] == ""
-
-
-def test_resolvido_deixa_de_ser_pendente(tmp_path):
-    wire = _write(tmp_path, [_req("approval_1"), _resolved("approval_1")])
-    assert kt.read_pending_interaction(wire) is None
-    assert kt.interacao_resolvida(wire, "approval_1") is True
-
-
-def test_resolucao_de_outro_pedido_nao_conta(tmp_path):
-    # Pareamento e por `id`. Sem ele, a resposta de um pedido anterior apagaria o pedido de agora.
-    wire = _write(tmp_path, [_resolved("approval_0"), _req("approval_1")])
-    assert kt.read_pending_interaction(wire) is not None
-    assert kt.interacao_resolvida(wire, "approval_1") is False
-
-
-def test_pergunta_do_askuserquestion_nao_vira_botao(tmp_path):
-    # `kind: "question"` ja chega ao app pelo tool.call (read_pending_call) e abre o stepper nativo.
-    # Emitir aqui tambem faria a mesma pergunta aparecer duas vezes, em dois desenhos.
-    wire = _write(tmp_path, [_req("question_1", kind="question", tool="",
-                                  display={"kind": "generic"})])
-    assert kt.read_pending_interaction(wire) is None
-
-
-def test_comando_usa_as_quatro_escolhas_padrao(tmp_path):
-    display = {"kind": "command", "command": "rm -rf build", "cwd": "/x", "language": "bash"}
-    pend = kt.read_pending_interaction(
-        _write(tmp_path, [_req("approval_2", tool="Bash", display=display, action="Running: rm")]))
-    assert [e["label"] for e in pend["escolhas"]] == [
-        "Approve once", "Approve for this session", "Reject", "Reject with feedback"]
-    assert pend["escolhas"][3]["requires_feedback"] is True
-    assert pend["titulo"] == "Run this command?"
-    # Crase porque o OptionButtons transforma o trecho entre crases em <code>.
-    assert pend["resumo"] == "`rm -rf build`"
-
-
-def test_plano_com_opcoes_proprias_mantem_os_rotulos_do_modelo(tmp_path):
-    display = {"kind": "plan_review", "plan": "# p",
-               "options": [{"label": "Caminho A"}, {"label": "Caminho B"}]}
-    pend = kt.read_pending_interaction(_write(tmp_path, [_req("approval_3", display=display)]))
-    assert [e["label"] for e in pend["escolhas"]] == ["Caminho A", "Caminho B", "Reject", "Revise"]
-
-
-def test_plano_com_uma_opcao_so_cai_no_approve_generico(tmp_path):
-    # O `>= 2` e do proprio TUI: com uma opcao so ele ignora a lista e desenha "Approve".
-    display = {"kind": "plan_review", "plan": "# p", "options": [{"label": "Unica"}]}
-    pend = kt.read_pending_interaction(_write(tmp_path, [_req("approval_4", display=display)]))
-    assert [e["label"] for e in pend["escolhas"]] == ["Approve", "Reject", "Revise"]
-
-
-def test_goal_start_muda_as_escolhas_conforme_o_modo(tmp_path):
-    yolo = kt.read_pending_interaction(_write(tmp_path, [
-        _req("approval_5", tool="Goal", display={"kind": "goal_start", "mode": "yolo"})]))
-    assert [e["label"] for e in yolo["escolhas"]] == [
-        "Switch to Auto and start", "Keep YOLO and start", "Do not start"]
-    manual = kt.read_pending_interaction(_write(tmp_path, [
-        _req("approval_6", tool="Goal", display={"kind": "goal_start", "mode": "manual"})]))
-    assert len(manual["escolhas"]) == 4
-
-
-def test_pedido_sem_display_nao_oferece_botao(tmp_path):
-    # Sem display nao da pra saber o que o painel desenhou; chutar as 4 do padrao mandaria a tecla
-    # `2` pra uma opcao que talvez nem exista.
-    linha = _req("approval_7")
-    del linha["request"]["display"]
-    assert kt.read_pending_interaction(_write(tmp_path, [linha])) is None
-
-
-def test_wire_ilegivel_e_ausencia_de_dado_nao_confirmacao(tmp_path):
-    ausente = str(tmp_path / "nao-existe.jsonl")
-    assert kt.read_pending_interaction(ausente) is None
-    # A prova de entrega tem que dizer NAO: "nao deu pra ler" nunca pode virar "chegou".
-    assert kt.interacao_resolvida(ausente, "approval_1") is False
-
-
-def test_linha_corrompida_nao_derruba_a_leitura(tmp_path):
-    # O tailer le enquanto o Kimi escreve: linha pela metade e rotina.
-    p = tmp_path / "wire.jsonl"
-    p.write_text('{"type":"interaction.req\n' + json.dumps(_req("approval_8")) + "\n",
-                 encoding="utf-8")
-    assert kt.read_pending_interaction(str(p)) is not None
 
 
 # ── state.aprovacao_kimi: o que vira pergunta + botoes na tela ───────────────
@@ -196,69 +105,6 @@ def pane_e_teclas(monkeypatch):
     monkeypatch.setattr(ti, "send_keys",
                         lambda name, k, literal=False: teclas.append((k, literal)))
     return estado, teclas
-
-
-def test_select_kimi_manda_o_numero_e_nada_mais(pane_e_teclas, tmp_path):
-    estado, teclas = pane_e_teclas
-    estado["pane"] = _PANE_APROVACAO
-    wire = _write(tmp_path, [_req("approval_1")])
-    ti.select_kimi("s", 3, wire, "approval_1")
-    # UMA tecla: o painel faz `Number(printable)-1` e ja submete. Nada de (n-1)xDown + Enter — o
-    # cursor do Kimi e `▶`, que o _cursor_row nao le, entao contar linha ali seria as cegas.
-    assert teclas == [("3", True)]
-
-
-def test_select_kimi_recusa_sem_o_painel_na_tela(pane_e_teclas, tmp_path):
-    estado, teclas = pane_e_teclas
-    estado["pane"] = "conversa qualquer, sem painel\n"
-    wire = _write(tmp_path, [_req("approval_1")])
-    with pytest.raises(ti.DriveError):
-        ti.select_kimi("s", 1, wire, "approval_1")
-    # Numero solto no composer viraria texto na conversa: nada pode ter sido digitado.
-    assert teclas == []
-
-
-def test_select_kimi_recusa_se_o_pedido_trocou_entre_a_leitura_e_a_tecla(pane_e_teclas, tmp_path):
-    # Corrida estreita e real: o pedido que a pessoa viu e respondido no terminal e outro abre no
-    # mesmo piscar. Sem reconferir o id, a tecla acerta o painel NOVO com os rotulos do antigo —
-    # aprovando um plano que ninguem leu. O painel na tela nao distingue os dois.
-    estado, teclas = pane_e_teclas
-    estado["pane"] = _PANE_APROVACAO
-    wire = _write(tmp_path, [_req("approval_1"), _resolved("approval_1"), _req("approval_2")])
-    with pytest.raises(ti.DriveError):
-        ti.select_kimi("s", 1, wire, "approval_1")
-    assert teclas == []
-
-
-def test_select_kimi_recusa_opcao_de_dois_digitos(pane_e_teclas, tmp_path):
-    estado, teclas = pane_e_teclas
-    estado["pane"] = _PANE_APROVACAO
-    wire = _write(tmp_path, [_req("approval_1")])
-    with pytest.raises(ValueError):
-        ti.select_kimi("s", 10, wire, "approval_1")
-    assert teclas == []
-
-
-def test_painel_e_modo_feedback_sao_reconhecidos_no_pane(pane_e_teclas):
-    estado, _ = pane_e_teclas
-    estado["pane"] = _PANE_APROVACAO
-    assert ti.aprovacao_kimi_aberta("s") is True
-    assert ti.feedback_kimi_aberto("s") is False
-    # Escolher "Revise" troca o rodape: o painel espera a justificativa em vez de resolver.
-    estado["pane"] = _PANE_APROVACAO.replace("↑/↓ select · 1/2/3 choose · ↵ confirm",
-                                             "Type feedback · ↵ submit.")
-    assert ti.aprovacao_kimi_aberta("s") is True
-    assert ti.feedback_kimi_aberto("s") is True
-
-
-def test_picker_de_pergunta_e_painel_de_aprovacao_nao_se_confundem(pane_e_teclas):
-    # Rodapes diferentes ("↵ choose" x "↵ confirm"): cada detector so enxerga o seu desenho.
-    estado, _ = pane_e_teclas
-    estado["pane"] = _PANE_APROVACAO
-    assert ti.picker_kimi_aberto("s") is False
-    estado["pane"] = "  1. Sim\n  2. Nao\n  1-2 · ↵ choose\n"
-    assert ti.aprovacao_kimi_aberta("s") is False
-    assert ti.picker_kimi_aberto("s") is True
 
 
 # ── O estado que faz os botoes aparecerem (chat e lista) ────────────────────
@@ -348,46 +194,6 @@ def _sessao_kimi(wire):
     return [info]
 
 
-def test_select_no_kimi_manda_a_tecla_e_confirma_pelo_wire(cliente, tmp_path):
-    wire = _write(tmp_path, [_req("approval_1")])
-    with patch("app.api.registry.list", return_value=_sessao_kimi(wire)), \
-         patch("app.api.terminal_input.select_kimi") as sel, \
-         patch("app.api.terminal.select") as generico, \
-         patch("app.adapters.kimi.transcript.interacao_resolvida", return_value=True):
-        r = cliente.post("/api/sessions/k1/select", json={"option": 1}, headers=_h())
-    assert r.status_code == 200
-    assert r.json() == {"ok": True, "feedback_pendente": False}
-    # O id do pedido vai junto: o drive reconfere no wire, no ultimo instante antes da tecla.
-    sel.assert_called_once_with("k1", 1, wire, "approval_1")
-    # O caminho generico (contar linha + Down/Enter) NAO pode ser usado aqui: o cursor do Kimi e
-    # `▶`, que o _cursor_row nao le, entao ele iria as cegas.
-    generico.assert_not_called()
-
-
-def test_select_no_kimi_com_revise_confirma_pelo_campo_de_texto(cliente, tmp_path):
-    # "Revise" nao resolve nada na hora: o painel abre o campo de justificativa. Sem esta segunda
-    # prova, uma tecla que PEGOU gastaria o prazo inteiro e voltaria erro.
-    wire = _write(tmp_path, [_req("approval_1")])
-    with patch("app.api.registry.list", return_value=_sessao_kimi(wire)), \
-         patch("app.api.terminal_input.select_kimi"), \
-         patch("app.adapters.kimi.transcript.interacao_resolvida", return_value=False), \
-         patch("app.api.terminal_input.feedback_kimi_aberto", return_value=True):
-        r = cliente.post("/api/sessions/k1/select", json={"option": 3}, headers=_h())
-    assert r.status_code == 200
-    assert r.json()["feedback_pendente"] is True
-
-
-def test_select_no_kimi_sem_confirmacao_com_painel_aberto_e_409(cliente, tmp_path):
-    wire = _write(tmp_path, [_req("approval_1")])
-    with patch("app.api.registry.list", return_value=_sessao_kimi(wire)), \
-         patch("app.api.terminal_input.select_kimi"), \
-         patch("app.api._espera_escolha_kimi", return_value=False), \
-         patch("app.api.terminal_input.aprovacao_kimi_aberta", return_value=True):
-        r = cliente.post("/api/sessions/k1/select", json={"option": 1}, headers=_h())
-    assert r.status_code == 409
-    assert r.json()["detail"]["code"] == "erro_opcao_nao_convergiu"
-
-
 def test_select_no_kimi_opcao_fora_da_lista_nao_digita_nada(cliente, tmp_path):
     wire = _write(tmp_path, [_req("approval_1")])   # 3 escolhas
     with patch("app.api.registry.list", return_value=_sessao_kimi(wire)), \
@@ -396,31 +202,3 @@ def test_select_no_kimi_opcao_fora_da_lista_nao_digita_nada(cliente, tmp_path):
     assert r.status_code == 409
     assert r.json()["detail"]["code"] == "erro_opcao_fora_da_lista"
     sel.assert_not_called()
-
-
-def test_select_no_kimi_sem_aprovacao_pendente_e_409_nunca_o_drive_generico(cliente, tmp_path):
-    # O generico conta a linha do cursor e, sem achar (`_cursor_row` so le `❯`, o Kimi desenha `▶`),
-    # manda Down x(n-1) + Enter as CEGAS — teclas soltas numa sessao em execucao, com {"ok": true}
-    # de resposta. Nada se perde ao recusar: `_menu_block` exige `❯`/`>`, entao o pane do Kimi nunca
-    # produziu opcao por raspagem e este endpoint so e alcancavel pelos botoes vindos do wire.
-    wire = _write(tmp_path, [_req("approval_1"), _resolved("approval_1")])
-    with patch("app.api.registry.list", return_value=_sessao_kimi(wire)), \
-         patch("app.api.terminal_input.select_kimi") as sel, \
-         patch("app.api.terminal.select") as generico:
-        r = cliente.post("/api/sessions/k1/select", json={"option": 2}, headers=_h())
-    assert r.status_code == 409
-    assert r.json()["detail"]["code"] == "erro_sem_pergunta_kimi"
-    sel.assert_not_called()
-    generico.assert_not_called()
-
-
-def test_select_no_kimi_com_wire_ilegivel_tambem_recusa(cliente, tmp_path):
-    # Wire que nao da pra ler devolve o MESMO None de "nao ha pedido" — e a diferenca entre os dois
-    # nao pode virar tecla as cegas. O caso ilegivel deixa rastro no log, nao na tela.
-    with patch("app.api.registry.list", return_value=_sessao_kimi(str(tmp_path / "sumiu.jsonl"))), \
-         patch("app.api.terminal_input.select_kimi") as sel, \
-         patch("app.api.terminal.select") as generico:
-        r = cliente.post("/api/sessions/k1/select", json={"option": 1}, headers=_h())
-    assert r.status_code == 409
-    sel.assert_not_called()
-    generico.assert_not_called()

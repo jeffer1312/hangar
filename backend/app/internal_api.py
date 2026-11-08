@@ -4,7 +4,6 @@ import asyncio
 import secrets
 import json
 import logging
-import time
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -106,35 +105,6 @@ async def account_prepare(request: Request):
         return await account_bridge.preparation_jobs.start(body)
     except (KeyError, TypeError, ValueError, OSError):
         raise HTTPException(409, detail={"code": "account_prepare_rejected"}) from None
-
-_LIST_FACTS_MAX = 8 << 20
-_list_facts_invalid_at = 0.0
-@router.post("/list/facts")
-async def list_facts(request: Request) -> dict:
-    """Estado das linhas Pi/omp/Kimi para o Rust (`list/facts.rs`), com o pid do pane das Pi/omp."""
-    global _list_facts_invalid_at
-    import pydantic
-    from app import list_facts as service
-    raw = await request.body()
-    try:
-        body = json.loads(raw) if len(raw) <= _LIST_FACTS_MAX else None
-        if (not isinstance(body, dict) or set(body) != {"rows", "pane_pids"}
-                or not isinstance(body["rows"], list) or not all(isinstance(r, dict) for r in body["rows"])
-                or not isinstance(body["pane_pids"], dict)
-                or not all(isinstance(k, str) and type(v) is int for k, v in body["pane_pids"].items())):
-            raise ValueError("fatos inválidos")
-    except (ValueError, RecursionError):
-        raise HTTPException(400) from None
-    try:
-        return await service.compute(body["rows"], body["pane_pids"])
-    except (pydantic.ValidationError, TypeError) as e:
-        # Só o campo: a mensagem do pydantic repete a linha, e ela carrega a última resposta.
-        loc = e.errors()[0]["loc"] if isinstance(e, pydantic.ValidationError) else ()
-        # A mesma entrada falha a cada tique do Rust: no diário uma vez por minuto.
-        if time.monotonic() - _list_facts_invalid_at > 60:
-            _list_facts_invalid_at = time.monotonic()
-            diag.registrar("lista.fatos_invalidos", "erro", campo=".".join(map(str, loc[-1:])))
-        raise HTTPException(400) from None
 
 
 @router.get("/migration/status")

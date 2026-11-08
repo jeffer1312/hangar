@@ -28,8 +28,6 @@ def _get(client, headers=None):
     return client.get(ROUTE, headers=headers if headers is not None else {"X-Hangar-Internal": SECRET})
 
 
-
-
 def test_workspace_context_refuses_before_reading_the_registry():
     with patch("app.api._guardar_snap") as snapshot:
         response = _client("203.0.113.7").get("/internal/workspace/context", headers={"X-Hangar-Internal":SECRET})
@@ -103,25 +101,6 @@ def test_quota_route_is_gone():
     # As fontes de cota de fora (Kimi, CommandCode, OpenCode) também são lidas no Rust: o Rust não
     # volta ao Python dentro de um pedido de cota que o Python fez.
     assert "/internal/accounts/quotas" not in {route.path for route in internal_api.router.routes}
-
-
-def test_list_facts_route_takes_only_rows_and_pane_pids():
-    """O pedido do Rust leva só linhas e pids; o contrato velho (contagem do dono, sombra) é recusado."""
-    seen = []
-
-    async def compute(rows, pane_pids):
-        seen.append(pane_pids)
-        return {"states": {}}
-
-    body = {"rows": [], "pane_pids": {"p": 1}}
-    with patch("app.list_facts.compute", compute):
-        old = _client().post("/internal/list/facts", json={**body, "owner_clients": 0, "shadow": False},
-                             headers={"X-Hangar-Internal": SECRET})
-        wrong = _client().post("/internal/list/facts", json={**body, "pane_pids": {"p": "1"}}, headers={"X-Hangar-Internal": SECRET})
-        ok = _client().post("/internal/list/facts", json=body, headers={"X-Hangar-Internal": SECRET})
-    assert (old.status_code, wrong.status_code, ok.status_code) == (400, 400, 200)
-    assert ok.json() == {"states": {}}
-    assert seen == [{"p": 1}]
 
 
 def test_busy_pool_threads_sees_uvloop_default_executor_threads():

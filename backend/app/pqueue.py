@@ -235,18 +235,6 @@ def _ts_of_obj(obj: dict) -> float:
             return datetime.fromisoformat(t.replace("Z", "+00:00")).timestamp()
         except ValueError:
             return 0.0
-    # Pi: sem `timestamp` ISO no topo, o numero (epoch ms) mora dentro de `message`.
-    msg = obj.get("message")
-    if isinstance(msg, dict):
-        raw = msg.get("timestamp")
-        if isinstance(raw, (int, float)):
-            return raw / 1000.0
-    # Kimi (wire.jsonl): epoch ms no envelope `time` da linha (`created_at` na linha metadata,
-    # a 1a do arquivo — sem ela o start_ts escorregava pro 1o turno).
-    for k in ("time", "created_at"):
-        raw = obj.get(k)
-        if isinstance(raw, (int, float)):
-            return raw / 1000.0
     return 0.0
 
 
@@ -405,15 +393,6 @@ class _CommittedIndex:
         if self.provider == "codex":
             from app.adapters.codex.rollout import parse_rollout_obj
             return parse_rollout_obj
-        if self.provider in ("pi", "omp"):
-            from app.adapters.pi.transcript import parse_obj
-            return parse_obj
-        if self.provider == "kimi":
-            # Kimi: sem o parser proprio, NENHUMA linha do wire casa o shape do Claude (o role mora em
-            # `context.append_message`) -> oraculo vazio -> reconcile lia TODA entrega como engolida e
-            # redigitava ate max_attempts (medido em producao: 3x "ola", 2026-08-11).
-            from app.adapters.kimi.transcript import parse_obj
-            return parse_obj
         return None
 
     def _alimenta_claude(self, obj: dict) -> None:
@@ -541,7 +520,7 @@ def _ler_indice(jsonl: str, provider: str, *, min_offset: int = 0,
                 imported_item_ids: tuple[str, ...] = ()) -> tuple[set[str], list[str]] | None:
     if min_offset < 0:
         raise ValueError("fronteira de confirmação inválida")
-    chave = (str(Path(jsonl)), provider if provider in ("codex", "pi", "omp", "kimi") else "claude", min_offset)
+    chave = (str(Path(jsonl)), provider if provider in ("codex",) else "claude", min_offset)
     with _indices_lock:
         index = _indices.pop(chave, None)
         if (index is None or index.prefix_digest != prefix_digest
@@ -562,27 +541,6 @@ def _ler_indice(jsonl: str, provider: str, *, min_offset: int = 0,
 def committed_user_lines(jsonl: str, provider: str = "claude", *,
                          min_offset: int = 0, prefix_digest: str | None = None,
                          imported_item_ids: tuple[str, ...] = ()) -> set[str] | None:
-    """Textos que ATERRISSARAM no transcript (inteiros + por linha), pra confirmar entregas.
-
-    None = NAO DEU PRA LER o transcript. Nunca um set vazio nesse caso, e a diferenca e o bug:
-    quem chama isto usa o resultado como oraculo de "chegou na sessao?", e um set vazio responde
-    "NADA chegou" — o `reconcile_delivered` entao re-enfileira TODA entrega pendente e o `drain`
-    REDIGITA a mensagem do usuario dentro da conversa. Ate 26/08/2026 o `except OSError` aqui
-    devolvia o set parcial montado ate o erro, ou seja: falha de leitura autorizava redigitacao.
-    No Windows isso nao e hipotetico — ler o .jsonl que o Claude Code esta escrevendo pode voltar
-    WinError 32 (arquivo em uso). Oraculo que falhou nao decide nada; ver `_confirm_and_drain`.
-    Fontes CRUAS, sem o filtro de meta do parser: (a) entradas `user` — mensagem entregue MID-TURN
-    e injetada depois vem embrulhada em meta que o parse_obj descartaria; (b) `queue-operation`
-    enqueue — a fila INTERNA do Claude Code registra o texto NO MOMENTO da digitacao, antes de
-    virar entrada user. Sem (b), mensagem enfileirada durante um turno longo parecia 'engolida'
-    e era REDIGITADA em loop (o bug das mensagens fantasma repetidas).
-
-    provider: o shape do transcript, igual ao merged_history. O Pi poe o role DENTRO de `message`
-    (`{"type":"message","message":{"role":"user",...}}`), entao as regras cruas acima nao casam
-    NADA e o oraculo devolvia set() vazio -> toda entrega era lida como engolida e o drain
-    redigitava o mesmo prompt (double-send medido: pi-e2e.jsonl com attempts: 2). Pi nao tem fila
-    interna com `queue-operation`, entao o parser proprio ja basta. Kimi: mesmo motivo, shape
-    `context.append_message` — o parser do adapter e usado do mesmo jeito."""
     # Variantes (cru, sem "[Image #N]", sem marcador de anexo, por linha): ver _chaves_de_commit.
     # Falha de leitura devolve None, nunca o set parcial: "estas 40 chegaram e as suas nao" fazia
     # a que faltava ser redigitada.
@@ -862,15 +820,6 @@ class PromptQueue:
                     continue
                 ts = float(r.get("ts") or 0.0)
                 if r.get("desistiu"):
-                    # RESGATE: a msg apareceu no transcript DEPOIS de a gente desistir dela. Sem
-                    # isto, `desistiu` era irreversivel e a bolha ficava avisando "nao chegou"
-                    # eternamente sobre uma msg que CHEGOU — mentira que so o reload escondia (o
-                    # merged_history a absorve; o SSE ao vivo, nao). Medido em 13/08/2026 numa
-                    # sessao Kimi: 6 de 7 desistidas estavam no wire.jsonl no fim do dia.
-                    #
-                    # `ts < min_ts` NAO resgata: entrada de uma sessao ANTERIOR (pre-/clear) seria
-                    # comparada contra o transcript de AGORA, e um texto curto e repetido ("Sim",
-                    # "1") casaria por coincidencia — dando por entregue o que nunca chegou.
                     if not _da_sessao_atual(r, min_ts):
                         continue
                     # REENVIO: o usuario mandou o mesmo texto DEPOIS de esta desistir. A linha do
@@ -1074,12 +1023,6 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
     por texto sozinho engolia repeticao: o 2o "ok" enfileirado sumia por causa do 1o ja commitado.
     Entradas sem timestamp herdam o ts anterior (carry-forward) pra manter a ordem do arquivo.
 
-    provider: qual parser usar pra `jsonl` -- Claude, Codex e Pi tem shapes diferentes (ver
-    app.adapters.codex.rollout e app.adapters.pi.transcript). _ts_of_obj cai pro `timestamp`
-    (epoch ms) dentro de `message` quando nao ha ISO no topo da linha -- o caso do Pi. Import
-    local dos parsers de Codex/Pi evita ciclo (app.adapters importa app.pqueue no boot, pra
-    PromptQueue).
-
     limit: quando dado, parseia so a CAUDA do arquivo (tail-read reverso, janela que cresce ate
     render >= limit eventos) em vez do jsonl inteiro -- e o que torna o burst de /history do board
     (dezenas de cards x transcripts de MB) barato. O caller ainda corta evs[-limit:]; aqui limit so
@@ -1090,19 +1033,8 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
     record = session_transfer(name, jsonl, provider)
     if record:
         return composed_history(name, jsonl, provider, record, limit)
-    _pi_stream = None
     if provider == "codex":
         from app.adapters.codex.rollout import parse_rollout_obj as _parse
-    elif provider in ("pi", "omp"):
-        # Stream (com memoria de uma linha) e nao parse_obj solto: e o que tira o contexto de hook
-        # colado no inicio da mensagem do usuario. Uma instancia por _parse_from — a janela do
-        # tail-read cresce e re-parseia, e um estado carregado da tentativa anterior soltaria
-        # mensagem retida no lugar errado.
-        from app.adapters.pi.transcript import Stream as _pi_stream
-        _parse = parse_obj      # trocado dentro do _parse_from pela instancia da vez
-    elif provider == "kimi":
-        # parse_obj solto basta: o parser do wire do Kimi nao guarda estado entre linhas.
-        from app.adapters.kimi.transcript import parse_obj as _parse
     else:
         _parse = parse_obj
     items: list[tuple[float, int, ChatEvent]] = []
@@ -1126,8 +1058,7 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
             fh = open(jsonl, encoding="utf-8", errors="replace")
         except OSError:
             return  # sessao nova: jsonl ainda nao existe -> historico vazio (limpo), nao 500
-        stream = _pi_stream() if _pi_stream else None
-        parse = stream.feed_events if stream else _parse
+        parse = _parse
         # Reescrita do `--resume` (ver transcript.RewriteFilter): so o Claude regrava o jsonl.
         reescrita = RewriteFilter() if provider == "claude" else None
 
@@ -1142,8 +1073,6 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
                     if ev.id in barrados:
                         continue
                     barrados.add(ev.id)
-                # ts do proprio evento quando ha (o parser do Pi preenche): um user_msg retido sai
-                # junto com a linha seguinte, e herdar o ts DELA o tiraria de ordem.
                 ets = ev.ts or ts
                 items.append((ets, i, ev))
                 if ev.kind == "user_msg" and ev.text:
@@ -1170,12 +1099,6 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
                     if reescrita is not None and not reescrita.keep(obj):
                         continue
                     evs = parse(obj)
-                # ts ANTES do `continue`: com o parser do Pi a 1a linha util e um user_msg que fica
-                # RETIDO (devolve [] nela), e pular o relogio aqui empurrava o start_ts pra linha
-                # seguinte que solta algo — a resposta do assistente, minutos depois. Efeito: toda
-                # entrada de fila enfileirada nesse intervalo caia na poda de "anterior ao inicio da
-                # sessao" e sumia do historico, calada. O start_ts e o INICIO da sessao, entao a 1a
-                # linha com relogio manda, tenha ela virado bolha ou nao.
                 line_ts = _ts_of_obj(obj)
                 if line_ts > 0:
                     if start_ts == 0.0:
@@ -1186,8 +1109,6 @@ def merged_history(name: str, jsonl: str, provider: str = "claude",
                 ts = line_ts or prev_ts
                 prev_ts = ts
                 _absorve(ts, i, evs)
-            if stream:
-                _absorve(prev_ts, i + 1, stream.flush_events())
 
     if limit is not None and limit > 0:
         window = _TAIL_WINDOW

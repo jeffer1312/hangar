@@ -88,8 +88,6 @@ def _h():
     return {"Authorization": "Bearer secret"}
 
 
-
-
 def test_resposta_json_grande_usa_gzip(api_client):
     async def payload():
         return {"texto": "x" * 4096}
@@ -121,7 +119,7 @@ def test_input_eager_send_marks_delivered(api_client):
 def test_steer_promove_a_fila_da_tui_no_kimi_e_no_claude(api_client):
     """A rota do steer avulso (msg JA na fila da TUI). Kimi e Claude têm a tecla, cada um a sua —
     por isso o provider segue junto. Fora deles recusa com 409 e NAO toca no terminal."""
-    for provider in ("kimi", "claude"):
+    for provider in ("claude",):
         with patch("app.api._pane_info", return_value=(provider, "%1")), \
              patch("app.api.terminal_input.steer_now") as st, \
              patch("app.api.PromptQueue") as pq:
@@ -132,31 +130,6 @@ def test_steer_promove_a_fila_da_tui_no_kimi_e_no_claude(api_client):
         # grava a msg steerada no FIM do turno, e o chip não pode ficar aceso até lá.
         pq.return_value.confirm_delivered.assert_called_once_with()
         assert r.json()["promoted"] is True
-
-    with patch("app.api._pane_info", return_value=("pi", "%1")), \
-         patch("app.api.terminal_input.steer_now") as st:
-        r = api_client.post("/api/sessions/cc/steer", headers=_h())
-    assert r.status_code == 409
-    st.assert_not_called()
-
-    # tmux RECUSOU a tecla (pane morto): 502, nunca 200. Um ok aqui apagava o chip da tela afirmando
-    # entrega de um ctrl-s que nao saiu — e a msg segue parada na fila, sem ninguem saber.
-    with patch("app.api._pane_info", return_value=("kimi", "%1")), \
-         patch("app.api.terminal_input.steer_now", return_value=False):
-        r = api_client.post("/api/sessions/cc/steer", headers=_h())
-    assert r.status_code == 502
-
-
-def test_steer_sem_fila_na_tui_nao_confirma_nada(api_client):
-    # "sem-fila" = o marcador nao estava no pane — ctrl-s seria no-op. Confirmar ali apagaria a
-    # bolha de uma msg que continua esperando (ou carimbaria entrega que nao aconteceu).
-    with patch("app.api._pane_info", return_value=("kimi", "%1")), \
-         patch("app.api.terminal_input.steer_now", return_value="sem-fila"), \
-         patch("app.api.PromptQueue") as pq:
-        r = api_client.post("/api/sessions/cc/steer", headers=_h())
-    assert r.status_code == 200
-    assert r.json()["promoted"] is False
-    pq.return_value.confirm_delivered.assert_not_called()
 
 
 def test_queue_panel_routes_answer_unavailable_when_rust_does_not_serve(api_client):
@@ -232,54 +205,6 @@ def test_input_com_surrogate_solto_e_aceito_e_vai_pro_sidecar(api_client, tmp_pa
 # _send_one / Pi: entrada da fila ANTES do envio, com id estavel (achado ALTA da revisao 02/08/2026)
 # ---------------------------------------------------------------------------
 
-def test_input_pi_cria_a_entrada_antes_do_envio_com_id_estavel(api_client, tmp_path, monkeypatch):
-    """Pra Pi COM LINHA, a entrada da fila tem que existir ANTES do 1o send_prompt, com o id passado
-    como msg_id -- e o id que a extensao usa pra reconhecer um retry como o MESMO envio (drain
-    reclama a MESMA entrada depois de um 'deferred'). So UMA entrada na fila (nunca um segundo
-    append)."""
-    from app import pqueue
-    monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
-    monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
-    monkeypatch.setattr("app.api.providers_bridge.inbox_call", lambda operation, **arguments: {"line": "pisess"})
-    with patch("app.api.terminal.send_prompt", return_value="sent") as sp:
-        r = api_client.post("/api/sessions/pisess/input", json={"text": "oi"}, headers=_h())
-    assert r.status_code == 200
-    rows = pqueue.PromptQueue("pisess").load()
-    assert len(rows) == 1, "so uma entrada -- append antes, set_delivered depois, nunca um 2o append"
-    entry = rows[0]
-    assert entry["delivered"] is True
-    sp.assert_called_once_with("pisess", "oi", "pi", pane_id="%1", msg_id=entry["id"])
-
-
-def test_input_pi_deferred_mantem_a_entrada_pendente_com_o_mesmo_id(api_client, tmp_path, monkeypatch):
-    """'deferred' (ACK perdido/timeout na linha) -- a entrada fica pendente (delivered=False) pro
-    drain reentregar, com o MESMO id que foi usado na 1a tentativa."""
-    from app import pqueue
-    monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
-    monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
-    monkeypatch.setattr("app.api.providers_bridge.inbox_call", lambda operation, **arguments: {"line": "pisess"})
-    with patch("app.api.terminal.send_prompt", return_value="deferred") as sp:
-        r = api_client.post("/api/sessions/pisess/input", json={"text": "oi"}, headers=_h())
-    assert r.status_code == 200
-    assert r.json()["delivered"] is False
-    rows = pqueue.PromptQueue("pisess").load()
-    assert len(rows) == 1 and rows[0]["delivered"] is False
-    sp.assert_called_once_with("pisess", "oi", "pi", pane_id="%1", msg_id=rows[0]["id"])
-
-
-def test_input_pi_partial_nao_deixa_entrada_orfa_pendente(api_client, tmp_path, monkeypatch):
-    """'partial' (fatiamento do Windows) tem que fechar a entrada criada ANTES do envio -- senao ela
-    fica delivered=False pra sempre e o proximo drain reentraria digitando em cima do residuo."""
-    from app import pqueue
-    monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
-    monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
-    monkeypatch.setattr("app.api.providers_bridge.inbox_call", lambda operation, **arguments: {"line": "pisess"})
-    with patch("app.api.terminal.send_prompt", return_value="partial"):
-        r = api_client.post("/api/sessions/pisess/input", json={"text": "oi"}, headers=_h())
-    assert r.status_code == 400
-    rows = pqueue.PromptQueue("pisess").load()
-    assert len(rows) == 1 and rows[0]["delivered"] is True, "fechada, nao fica pendente pro drain"
-
 
 def test_input_partial_com_composer_limpo_diz_que_pode_reenviar(api_client, tmp_path, monkeypatch):
     """A mensagem do 'partial' tem que casar com o que _partial() de fato fez no composer: limpou ->
@@ -313,49 +238,6 @@ def test_input_partial_sem_composer_limpo_manda_conferir_terminal(api_client, tm
     assert r.status_code == 400
     assert r.json()["detail"]["code"] == "erro_envio_incompleto_composer"
     assert not hasattr(terminal_input._ULTIMA_LIMPEZA, "limpou")
-
-
-def test_input_pi_slash_command_nao_cria_entrada_antecipada(api_client, tmp_path, monkeypatch):
-    """Slash-command nunca entra na fila (nem pra Pi COM linha) -- sem entrada, send_prompt e
-    chamado sem msg_id, exatamente como o caminho de sempre."""
-    from app import pqueue
-    monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
-    monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
-    monkeypatch.setattr("app.api.providers_bridge.inbox_call", lambda operation, **arguments: {"line": "pisess"})
-    with patch("app.api.terminal.send_prompt", return_value="sent") as sp:
-        r = api_client.post("/api/sessions/pisess/input", json={"text": "/clear"}, headers=_h())
-    assert r.status_code == 200
-    assert pqueue.PromptQueue("pisess").load() == []
-    sp.assert_called_once_with("pisess", "/clear", "pi", pane_id="%1")
-
-
-def test_input_pi_sem_linha_nao_cria_entrada_antes_do_envio(api_client, tmp_path, monkeypatch):
-    """Achado da re-revisao 02/08/2026 (regressao introduzida por este commit): pre-criar a entrada
-    ANTES do envio so faz sentido com linha viva -- e o UNICO caso em que o msg_id importa. Sem
-    linha, pre-criar abria uma janela de duplo envio pelo TECLADO: o _send_lock so trava DENTRO do
-    send_prompt, e o claim_undelivered do drain() usa so o _append_lock da fila (sem relacao com
-    aquele) -- um drain() concorrente podia reivindicar a MESMA entrada nessa janela e digitar o
-    texto de novo assim que o send_lock liberasse. Prova que, sem linha, a entrada NAO existe no
-    instante em que send_prompt roda (a janela nao e alcancavel)."""
-    from app import pqueue
-    monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
-    monkeypatch.setattr("app.api._pane_info", lambda name: ("pi", "%1"))
-    monkeypatch.setattr("app.api.providers_bridge.inbox_call", lambda operation, **arguments: {"line": None})   # sem linha -> fallback de tecla
-
-    visto = {}
-
-    def fake_send_prompt(name, text, provider, pane_id=None, **kwargs):
-        visto["rows_durante_o_envio"] = pqueue.PromptQueue(name).load()
-        visto["kwargs"] = kwargs
-        return "sent"
-
-    with patch("app.api.terminal.send_prompt", side_effect=fake_send_prompt):
-        r = api_client.post("/api/sessions/pisess/input", json={"text": "oi"}, headers=_h())
-    assert r.status_code == 200
-    assert visto["rows_durante_o_envio"] == [], "nenhuma entrada pre-criada sem linha viva"
-    assert "msg_id" not in visto["kwargs"], "sem linha nao ha id estavel a oferecer"
-    rows = pqueue.PromptQueue("pisess").load()
-    assert len(rows) == 1 and rows[0]["delivered"] is True   # so DEPOIS do envio, fluxo de sempre
 
 
 def test_broadcast_invokes_send_once_per_name(api_client):
@@ -853,13 +735,6 @@ def test_rust_owned_session_transitions_do_nothing_in_python(monkeypatch):
     assert feitos == []
 
 
-def test_kimi_transitions_still_run_in_python_with_rust_up(monkeypatch):
-    # Kimi segue no Python: o fim de turno dele drena e confirma por aqui.
-    feitos = _rust_owner_world(monkeypatch)
-    api_mod._on_hook_transition("kimi-sid", "idle")
-    assert ("drain", "k1") in feitos and ("confirm", "k1") in feitos
-
-
 # ---------------------------------------------------------------------------
 # Feature #12: encadeamento de sessao (_maybe_chain) + kill-switch mestre (automations_enabled)
 # ---------------------------------------------------------------------------
@@ -1170,14 +1045,6 @@ from types import SimpleNamespace
 from app.models import AskQuestion, AskQuestionItem, AskOption
 
 
-
-
-
-
-
-
-
-
 # --- POST /api/archive/{project}/{session_id}/resume: "Retomar conversa" do Arquivo ---
 
 _SID = "11111111-1111-1111-1111-111111111111"
@@ -1348,34 +1215,6 @@ def test_answer_validation_error_still_409(api_client):
 from app import loop as loop_mod
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # --- Loop goal refiner (claude -p efemero) -----------------------------------
 import subprocess as _subprocess
 
@@ -1389,26 +1228,6 @@ def _claude_resolvido(monkeypatch):
     # O refinador resolve o `claude` pelo PATH; o subprocess e mockado, entao o teste nao pode
     # depender de haver um instalado (o CI nao tem).
     monkeypatch.setattr("app.loop._exe_claude", lambda: "claude")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # --- Nucleo sagrado: caminho de envio isolado do executor default ------------
@@ -1467,9 +1286,6 @@ def test_broadcast_uses_send_thread(api_client, monkeypatch):
 from app import model_picker as mp
 
 
-
-
-
 @pytest.fixture
 def api_client_limpo(api_client):
     # O cache do catalogo e por processo e vive 5 min: sem limpar, um teste leria o do anterior.
@@ -1477,10 +1293,6 @@ def api_client_limpo(api_client):
     api_mod._claude_models_cache.clear()
     yield api_client
     api_mod._claude_models_cache.clear()
-
-
-
-
 
 
 def test_model_options_conta_anthropic_recusa_com_painel_aberto(api_client_limpo, monkeypatch):
@@ -1541,18 +1353,6 @@ def test_model_options_sessao_ocupada_propaga_409(api_client_limpo):
         r = api_client_limpo.get("/api/sessions/cc/model/options", headers=_h())
     assert r.status_code == 409
     assert "trabalhando" in r.json()["detail"]
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # 13/08/2026 — o "idle" mentiroso do Kimi no caminho de ACAO

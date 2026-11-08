@@ -34,26 +34,12 @@ _OPTION_RE = re.compile(r"^\s*[❯>]?\s*\d+\.\s+(.*\S)\s*$")
 # aparece solto ao lado da opção). Sem esse corte o label vinha "Postgres      +t como a", nenhuma
 # pergunta com preview casava e o app caía no seletor do terminal.
 _BOX_SPLIT_RE = re.compile(r"\s{2,}[│─╭╮╰╯┌┐└┘├┤┬┴┼]|[│╭╮╰╯┌┐└┘├┤┬┴┼]|\s{3,}")
-# Cursor do picker: ❯ e do Claude, ">" e do Pi (ascii), chevron de nerd font e do omp. Os dois
-# ultimos so valem com o rodape de navegacao NO FUNDO do pane (ver _menu_block) — sem essa trava,
-# um picker citado em prosa no scrollback viraria menu fantasma.
 _CURSOR_RE = re.compile(r"^\s*❯\s*\d+\.\s", re.M)
-# Glifos de nerd font do picker do omp (tool `ask`), por codigo porque a area de uso privado nao
-# desenha em fonte comum: chevron da linha selecionada e circulo que marca toda opcao. La as opcoes
-# NAO sao numeradas e vivem dentro da moldura (`│`) do box.
-_OMP_SEL = chr(0xF054)
-_OMP_OPT = chr(0xF10C)
-_OMP_CURSOR_RE = re.compile(rf"^\s*│\s*{_OMP_SEL}\s+{_OMP_OPT}\s")
-_PI_CURSOR_RE = re.compile(rf"^\s*>\s*\d+\.\s|{_OMP_CURSOR_RE.pattern}", re.M)
-_OMP_OPTION_RE = re.compile(rf"^\s*│\s*(?:{_OMP_SEL}\s+)?{_OMP_OPT}\s+(.*\S)\s*$")
-# Linha so de moldura (o `├───` que separa pergunta das opcoes no box do omp): nunca e pergunta nem
-# opcao. O _RULE_RE nao alcanca — ele exige a regua RETA do Claude, sem canto na ponta.
 _SO_MOLDURA_RE = re.compile(r"^[\s│─╭╮╰╯┌┐└┘├┤┬┴┼]*$")
 
 
 def _option(line: str) -> Optional[re.Match]:
-    """A linha como opcao de menu: numerada (Claude/Pi) ou marcada por glifo (omp). group(1) = label."""
-    return _OPTION_RE.match(line) or _OMP_OPTION_RE.match(line)
+    return _OPTION_RE.match(line)
 
 
 # SEGUNDO marcador "N. " na mesma linha do cursor: a marca de uma lista digitada CORRIDA (rascunho no
@@ -64,13 +50,6 @@ def _option(line: str) -> Optional[re.Match]:
 # recusar aqui significa uma sessao que pede resposta e nao avisa.
 _MARCADOR_EMBUTIDO_RE = re.compile(r"\s\d+\.\s")
 _RULE_RE = re.compile(r"^[\s─]*─{10,}[\s─]*$")  # a horizontal rule (the input box border)
-# Rodape da caixa ARREDONDADA do composer (`╰───╯`), que e como o Pi desenha o input — ele nunca
-# imprime a regua reta do Claude. Sem esta ancora um pane do Pi nao casava nada e o fallback
-# devolvia as 2 ultimas linhas nao-vazias, isto e, a borda da caixa (ou conversa) no lugar do chip
-# de modelo/contexto/custo. Claude/Codex ficam intactos: o banner de boas-vindas do Claude tambem
-# tem `╰───╯`, mas vem ANTES da regua do input, e a ancora e sempre a MAIS BAIXA das duas.
-# ponytail: desenho da caixa e calibration knob, igual ao _LOGIN_RE abaixo — se o Pi trocar a
-# moldura, ajustar AQUI.
 _BOX_BOTTOM_RE = re.compile(r"^\s*╰[─\s]*╯\s*$")
 
 
@@ -102,8 +81,6 @@ def _question(lines: list[str]) -> Optional[str]:
     for line in lines:
         if _option(line):
             break
-        # Tirar a moldura dos DOIS lados: no omp a pergunta vem dentro do box
-        # (`│ Qual cor...?      │`) e sem isso as bordas entrariam no texto que o app mostra.
         s = line.strip().strip("│").strip()
         if not s or _RULE_RE.match(line) or _SO_MOLDURA_RE.match(line) or s.lstrip("←").lstrip()[:1] in "☐☑":
             continue
@@ -186,20 +163,6 @@ def _is_boundary(line: str) -> bool:
     return bool(s) and s[0] in _BOUNDARY_GLYPHS
 
 
-def omp_box(lines: list[str]) -> Optional[tuple[int, int]]:
-    """Bounds [top, bot) do ULTIMO box do omp: do titulo (`╭`) mais baixo ate o rodape.
-
-    Ancora obrigatoria porque o omp deixa NA TELA um cartao-resumo do toolCall com as MESMAS marcas
-    de opcao do picker vivo. Varrendo o pane inteiro, as opcoes do resumo entravam na lista (visto ao
-    vivo: `['Azul', 'Verde', 'Azul', 'Verde (Recommended)', ...]`) e o alvo do drive saia deslocado —
-    a resposta ia pra opcao errada e caia no fallback por texto. Sem rodape ou sem titulo -> None."""
-    bot = next((i for i in range(len(lines) - 1, -1, -1) if _FOOTER_RE.search(lines[i])), None)
-    if bot is None:
-        return None
-    top = next((i for i in range(bot - 1, -1, -1) if lines[i].lstrip()[:1] == "╭"), None)
-    return None if top is None else (top + 1, bot)
-
-
 def _menu_block(lines: list[str]) -> Optional[tuple[int, int]]:
     """Bounds [top, bot) do menu de selecao contiguo que contem o cursor ❯, ou None.
 
@@ -207,48 +170,15 @@ def _menu_block(lines: list[str]) -> Optional[tuple[int, int]]:
     paramos no primeiro boundary (bullet/spinner); descendo paramos no rodape de navegacao ou
     no proximo boundary. Sem cursor ❯ N. nao ha menu (uma lista numerada solta nao e widget)."""
     cursor = None
-    pi_cursor = False
     for i, ln in enumerate(lines):
         if _CURSOR_RE.match(ln):
-            cursor, pi_cursor = i, False   # cursor mais ao fundo = o picker vivo
-        elif _PI_CURSOR_RE.match(ln):
-            cursor, pi_cursor = i, True
+            cursor = i   # cursor mais ao fundo = o picker vivo
     if cursor is None:
         return None
-    # Cursor do Pi ("> N.") so e picker VIVO se o rodape de navegacao estiver nas ultimas linhas do
-    # pane (mesma janela do is_overlay). Uma citacao do picker no scrollback tem o "> 1." mas o
-    # rodape dela subiu junto — sem a trava ela travava o app num menu fantasma.
-    if pi_cursor and not _FOOTER_RE.search(_rodape(lines)):
-        return None
-    # No omp o bloco e o proprio box, delimitado — nao ha o que adivinhar subindo linha a linha (ver
-    # omp_box: o cartao-resumo que fica na tela tem as mesmas marcas de opcao).
-    if _OMP_CURSOR_RE.match(lines[cursor]):
-        return omp_box(lines)
-    # Um menu VIVO substitui o composer de input. Se ABAIXO do cursor renderiza o composer vivo (linha
-    # de prompt "❯ " vazia ou com rascunho — comeca com ❯ mas NAO e "❯ N." de opcao), entao este "❯ N."
-    # e PROSA citada no scrollback (ex: o assistente citando o menu nativo "❯ 1. Yes, switch...") e nao
-    # um widget selecionavel. Sem essa guarda a citacao trava o app num menu fantasma (awaiting_input).
     if any(ln.lstrip()[:1] == "❯" and not _CURSOR_RE.match(ln)
            for ln in lines[cursor + 1:]):
         return None
-    # O proprio COMPOSER com um rascunho que comeca em numero. O composer desenha `❯ ` na frente do
-    # que a pessoa digita, entao "1. sim pode editar 2. mostra a data" vira `❯ 1. sim pode editar
-    # 2. ...` — identico a um cursor de opcao pras regras acima, e a guarda anterior nao alcanca (o
-    # cursor E o composer, nao ha linha `❯` ABAIXO dele). Visto ao vivo em 25/08/2026: a sessao
-    # estava ociosa, com o turno fechado, e o app anunciou "aguardando sua resposta" com UMA opcao
-    # falsa e o marcador de fim de turno no lugar da pergunta.
-    #
-    # O que separa os dois e a FORMA da lista, nao o texto: num menu cada opcao ocupa a propria
-    # linha, e num rascunho os numeros vem corridos. Exigir o rodape de navegacao (a trava do Pi,
-    # duas linhas acima) NAO serve aqui — medido: o menu nativo do Claude da fixture
-    # pane_awaiting_input.txt nao desenha rodape nenhum, e a trava mataria a deteccao dele.
-    # A busca vale so no LABEL — o pedaco antes da borda do box. A AskUserQuestion com `preview`
-    # desenha o box NA MESMA LINHA da opcao, e o que ele mostra costuma ser arquivo (README,
-    # changelog) com lista numerada dentro: olhar a linha inteira lia o "1. "/"2. " do PREVIEW como
-    # rascunho e matava um menu de verdade — o defeito INVERSO deste conserto, e o pior dos dois
-    # (sessao parada esperando resposta, e o app calado). Mesmo corte que `classify` ja faz pra
-    # montar o label.
-    marca = _CURSOR_RE.match(lines[cursor]) or _PI_CURSOR_RE.match(lines[cursor])
+    marca = _CURSOR_RE.match(lines[cursor])
     if marca:
         label = _BOX_SPLIT_RE.split(lines[cursor][marca.end():])[0]
         if _MARCADOR_EMBUTIDO_RE.search(label):
@@ -256,7 +186,7 @@ def _menu_block(lines: list[str]) -> Optional[tuple[int, int]]:
     # Rascunho numerado em várias linhas: o `❯ N.` é a própria linha de prompt, colada na régua de
     # cima do composer. Opção de menu de verdade nunca encosta na régua: vem depois do título ou da
     # pergunta. Rascunho não tem rodapé de navegação; com rodapé, segue como menu.
-    if (not pi_cursor and cursor > 0 and _RULE_RE.match(lines[cursor - 1])
+    if (cursor > 0 and _RULE_RE.match(lines[cursor - 1])
             and not any(_FOOTER_RE.search(ln) for ln in lines[cursor + 1:])):
         return None
     # Subindo do cursor, o topo do picker e o CHIP header (☐/☑ da AskUserQuestion) ou um boundary
@@ -279,7 +209,7 @@ def _menu_block(lines: list[str]) -> Optional[tuple[int, int]]:
             break
     # Menu de verdade some com o composer: rodape com regua embaixo e um menu desenhado no TEXTO do
     # composer (recado colado), e tocar nele mandaria teclas para o prompt.
-    if (not pi_cursor and bot < len(lines) and _FOOTER_RE.search(lines[bot])
+    if (bot < len(lines) and _FOOTER_RE.search(lines[bot])
             and any(_RULE_RE.match(ln) for ln in lines[bot + 1:]) and _prompt_acima(lines, cursor)):
         return None
     return (top, bot)
@@ -475,20 +405,7 @@ def classify(pane_text: str) -> tuple[str, Optional[str], Optional[str], Optiona
     return ("idle", None, None, None)
 
 
-# Folga entre a ultima escrita no transcript e o Stop do MESMO turno. Medido em 18 sessoes Kimi
-# reais (13/08/2026): numa sessao que terminou o turno a diferenca e 0.0s — o Stop chega no mesmo
-# segundo da ultima linha. A sessao travada media +1089s. 2s separa os dois casos com folga.
-KIMI_FOLGA_S = 2.0
-
-# Fronteiras de turno no wire.jsonl do Kimi (levantado em 14/08/2026 sobre todos os wire.jsonl da
-# maquina: 185 turn.prompt, 166 turn.ended, 29 turn.steer, 3 turn.cancel — nao ha outro `turn.*`).
-# `turn.steer` e o usuario falando NO MEIO do turno, entao mantem aberto; `turn.cancel` e o Esc, e
-# medido que sempre vem seguido de um `turn.ended`.
-_KIMI_ABRE = ("turn.prompt", "turn.steer")
-_KIMI_FECHA = ("turn.ended", "turn.cancel")
-_KIMI_TURNO_RE = re.compile(rb'"type"\s*:\s*"(turn\.[a-z]+)"')
 _KIMI_CHUNK = 64 << 10
-_KIMI_TETO = 4 << 20
 
 
 # Uma linha por arquivo, nao por chamada: quem chama e o poll da lista (~5s por sessao), entao um
@@ -548,23 +465,12 @@ def _turno_aberto(jsonl: str, filtro: re.Pattern, decide, teto: int, aviso: str)
     return None
 
 
-def _kimi_turno_aberto(jsonl: str, teto: int = _KIMI_TETO) -> Optional[bool]:
-    """Ha turno ABERTO no fim do wire.jsonl do Kimi? True/False; None = nao deu pra saber."""
-    def decide(obj):
-        tipo = obj.get("type")
-        return False if tipo in _KIMI_FECHA else (True if tipo in _KIMI_ABRE else None)
-
-    return _turno_aberto(jsonl, _KIMI_TURNO_RE, decide, teto, "kimi")
-
-
 # Fronteira de turno no rollout do Codex. `task_started` abre; `task_complete` e `turn_aborted`
 # fecham (medido nos rollouts reais: um turno interrompido termina em `turn_aborted`, sem
 # `task_complete`). Sao `event_msg`, entao o tipo mora no `payload`, nao no topo da linha.
 _CODEX_ABRE = ("task_started",)
 _CODEX_FECHA = ("task_complete", "turn_aborted")
 _CODEX_TURNO_RE = re.compile(rb'"type"\s*:\s*"(task_started|task_complete|turn_aborted)"')
-# Mesmo valor do teto do Kimi, com nome proprio: a razao dele e o tamanho de um turno, e o turno de
-# um provider nao e o do outro — reusar a constante alheia esconderia isso na hora de calibrar.
 _CODEX_TETO = 4 << 20
 
 
@@ -580,182 +486,6 @@ def codex_turno_aberto(jsonl: str, teto: int = _CODEX_TETO) -> Optional[bool]:
         return False if tipo in _CODEX_FECHA else (True if tipo in _CODEX_ABRE else None)
 
     return _turno_aberto(jsonl, _CODEX_TURNO_RE, decide, teto, "codex")
-
-
-def _kimi_mtime_da_sessao(jsonl: str) -> Optional[float]:
-    """mtime mais NOVO entre os wires da sessao: `<sessao>/agents/*/wire.jsonl`.
-
-    O main nao e a unica prova de vida. Quando ele delega pra subagentes (tool `Agent`), quem escreve
-    sao os wires `agents/agent-N/` — o main fica calado o turno inteiro. Olhar so pra ele fazia a
-    sessao parecer parada exatamente durante o trabalho mais longo.
-
-    Erro (dir sumiu, permissao) devolve o mtime do proprio `jsonl`, e None se nem ele der.
-
-    So varre quando a pasta avo se chama `agents` — o layout real do Kimi. Sem esse gate, um caminho
-    de outro formato (dublê de teste, transcript de outro provider) faria a varredura cair numa pasta
-    qualquer e adotar o mtime de um `wire.jsonl` que nao e desta sessao.
-    """
-    agents = os.path.dirname(os.path.dirname(jsonl))       # .../agents/main/wire.jsonl -> .../agents
-    if os.path.basename(agents) != "agents":
-        try:
-            return os.path.getmtime(jsonl)
-        except OSError:
-            return None
-    try:
-        novos = []
-        with os.scandir(agents) as it:
-            for e in it:
-                if not e.is_dir():
-                    continue
-                try:
-                    novos.append(os.path.getmtime(os.path.join(e.path, "wire.jsonl")))
-                except OSError:
-                    continue                                # subagente sem wire ainda: ignora
-        if novos:
-            return max(novos)
-    except OSError:
-        # Cair aqui devolve a sessao pro mtime do MAIN, que e exatamente o criterio cego que esta
-        # funcao existe pra corrigir — e sem log isso fica indistinguivel de "nao ha subagente".
-        # Mesma disciplina do `_kimi_turno_aberto`: uma linha por caminho, nao por poll.
-        _avisa_uma_vez(agents, "kimi: nao deu pra varrer %s — mtime da sessao cai no main", agents)
-    try:
-        return os.path.getmtime(jsonl)
-    except OSError:
-        return None
-
-
-# Painel de APROVACAO do Kimi (plano/comando/arquivo), pelo RODAPE. E outro desenho — e outro
-# rodape — que o `_FOOTER_RE` e o picker de pergunta do terminal_input nao enxergam: la o `↵` vem
-# antes de "choose", aqui antes de "confirm". Os dois textos foram lidos do binario do Kimi 0.34.0
-# (`ApprovalPanelComponent.render`), e conferidos num painel real:
-#   `↑/↓ select · 1/2/3 choose · ↵ confirm[ · ctrl+e preview]`   e   `Type feedback · ↵ submit.`
-# ponytail: CALIBRATION KNOB — se o Kimi trocar o rodape, e aqui que se ajusta, num lugar so.
-_KIMI_APROV_RE = re.compile(r"↵\s*confirm|Type feedback")
-
-
-def aprovacao_kimi_no_pane(pane: str) -> bool:
-    """O painel de aprovacao do Kimi esta desenhado NESTE quadro do pane?"""
-    return bool(_KIMI_APROV_RE.search(pane))
-
-
-def aprovacao_kimi(jsonl: Optional[str],
-                   pane_get: Callable[[], str]) -> Optional[tuple[str, list[str]]]:
-    """(pergunta, opcoes) do painel de APROVACAO do Kimi, ou None.
-
-    O painel — plano, comando, arquivo — nunca chegou ao app porque este modulo so sabe ler o cursor
-    `❯` do Claude e o `>` do Pi, e o Kimi desenha `▶`. Ensinar o glifo aos regexes era o remendo: o
-    Kimi ja publica `interaction.request` no wire, com tudo que o painel usa pra se desenhar, e
-    QUAIS sao as opcoes so o evento estruturado diz sem depender de largura de janela nem de
-    rascunho no composer (medido: a 3a opcao voltava grudada no texto do composer).
-
-    Duas fontes, cada uma respondendo o que sabe: o WIRE diz *o que* esta sendo perguntado, o PANE
-    diz que o painel esta na tela AGORA. Exigir as duas nao e cinto e suspensorio — o wire sozinho
-    nao distingue "pendente" de "ficou sem resposta numa execucao anterior": retomar uma sessao
-    (`kimi -S`) reabre o MESMO wire.jsonl, entao um `interaction.request` que morreu sem
-    `interaction.resolved` continua la, e a sessao nova nasceria mostrando botoes de um painel que
-    nao existe — e que nunca resolveriam (o `select_kimi` recusa, 409 a cada toque). O rodape ja era
-    obrigatorio pra DIGITAR; sem ele aqui, as duas pontas discordavam.
-
-    `pane_get` e CALLABLE, e a ordem (wire primeiro, tela depois) e o que deixa isso barato nos dois
-    chamadores: o `StateMonitor` ja tem o quadro na mao e devolve ele de graca, e a LISTA — que roda
-    pra toda sessao a cada poll — so paga o `capture-pane` quando ja ha pedido pendente, o que e
-    raro. Capturar antes de perguntar seria a tempestade de forks que o fast-path de marcador
-    (list_with_state) existe pra evitar. Pane ilegivel: quem passa o callable decide; aqui uma
-    excecao sobe, e na lista ela vira "sem botao" (sem prova de tela, sem botao).
-
-    Import LOCAL de proposito: `app.adapters` importa o KimiAdapter, que importa este modulo — no
-    topo isso seria ciclo. Mesma tatica do `LoopLink` no laco do StateMonitor.
-
-    Devolve None quando nao ha aprovacao pendente E quando o wire nao deu pra ler: nos dois casos o
-    estado segue pelo caminho de sempre (marcador/pane), que e o comportamento anterior a isto."""
-    if not jsonl:
-        return None
-    from app.adapters.kimi.transcript import read_pending_interaction
-    pend = read_pending_interaction(jsonl)
-    if not pend or not aprovacao_kimi_no_pane(pane_get()):
-        return None
-    pergunta = pend["titulo"]
-    if pend["resumo"]:
-        pergunta = f"{pergunta}\n{pend['resumo']}"
-    return pergunta, [e["label"] for e in pend["escolhas"]]
-
-
-def corrige_ocioso_kimi(marker, jsonl: Optional[str], folga: float = KIMI_FOLGA_S):
-    """Kimi: marcador 'idle' velho + transcript crescendo = turno ANDANDO, nao sessao parada.
-
-    No Kimi, um turno que comeca a partir de um prompt ENFILEIRADO na TUI nao dispara
-    UserPromptSubmit nem TurnStarted (medido 13/08/2026: uma sessao Kimi ficou com o
-    marcador congelado em 'idle' as 08:38:35 enquanto escrevia codigo ate 08:56 — 18 minutos
-    aparecendo "pronta" na lista e no chat). O hook nao tem como cobrir isso: o evento nao existe.
-
-    O Stop, porem, e o ULTIMO evento do turno — sempre DEPOIS da ultima escrita no transcript. Logo
-    transcript mais novo que um marcador OCIOSO indica turno em andamento. Sem raspar o pane, de
-    proposito: o spinner do Kimi e fase de lua, fora de SPINNER_GLYPHS, e nunca seria detectado la —
-    foi por isso que o fallback visual tambem nao salvou.
-
-    O MTIME NAO DECIDE NADA — quem decide e a ultima FRONTEIRA de turno do wire do main
-    (`_kimi_turno_aberto`): `turn.prompt`/`turn.steer` por ultimo = turno andando; `turn.ended`/
-    `turn.cancel` = parada. Duas medicoes de 14/08/2026 mataram o mtime como criterio, cada uma por
-    um lado:
-
-      - mtime NOVO com a sessao parada: turno fechou 08:28:44 e as 08:40:46 o Kimi gravou um
-        `config.update` (o system prompt inteiro, ~90KB). 12min a frente do marcador -> a lista
-        dizia "em execucao" com o pane no prompt.
-      - mtime PARADO com a sessao trabalhando: o main delegou pra SUBAGENTES (tool `Agent`), que
-        escrevem no wire DELES (`agents/agent-N/wire.jsonl`) e nao no do main. O main ficou calado
-        4 minutos; nesse meio tempo um subagente terminou, o Stop disparou com o session_id da
-        SESSAO (subagente roda no mesmo processo) e o marcador virou `idle` — com o marcador e o
-        mtime no MESMO segundo, o portao antigo nem chegava a olhar a fronteira e a sessao aparecia
-        "pronta" enquanto o terminal mostrava "Running 2 agents".
-
-    O mtime da SESSAO (o mais novo entre `agents/*/wire.jsonl`, main + subagentes) so e lido no
-    caminho degradado, o unico em que ele ainda decide alguma coisa.
-
-    Preserva o caso que criou esta funcao: prompt ENFILEIRADO na TUI grava `turn.prompt` sem
-    disparar hook nenhum, entao a fronteira o pega. E continua sem raspar pane.
-
-    So corrige idle -> working; 'working' ja esta certo. 'awaiting_input' segue seu caminho — mas
-    ATENCAO: quem decide isso, no Kimi, ja nao e so o pane. O painel de aprovacao (plano, comando,
-    arquivo) sai do proprio wire, por `aprovacao_kimi`, e vence esta correcao nos dois chamadores
-    (StateMonitor e a lista) — com o painel aberto o turno segue ABERTO, entao aqui a sessao seria
-    promovida a "working" e sumiria da coluna de quem espera resposta.
-
-    SEM teto de idade, por decisao. A tentacao e dizer "transcript parado ha 10min nao prova nada" e
-    voltar pro marcador — resolveria o caso do Kimi que MORRE no meio do turno (os dois numeros
-    congelam na ordem errada e a sessao fica "trabalhando" pra sempre). Mas o preco e pior que a
-    doenca: um turno legitimamente calado por mais que esse teto — um build, uma suite longa, um
-    comando que nao escreve nada no wire — voltaria a "idle" e dispararia, de uma vez, o loop
-    re-promptando texto por cima do comando em execucao, o `then` sendo CONSUMIDO e o push de
-    "terminou". Estado errado numa sessao morta o dono VE (o pane esta ali, parado); automacao
-    escrevendo numa sessao viva ele nao ve. Entre os dois, erra-se pro lado visivel.
-
-    Limitacao conhecida que isso deixa: Kimi que morre dentro de um pane que continua vivo aparece
-    "em execucao" ate o pane ser fechado. O custo por poll e UMA leitura do rabo do wire — medida em
-    0.057ms num wire de 5,4MB, porque a busca para na primeira fronteira e o fim do arquivo e onde
-    ela esta. O scandir da pasta de agentes NAO entra nesse custo: ele so roda no caminho degradado.
-    O `folga` tambem so sobrevive la, unico lugar onde o mtime ainda decide.
-
-    Recebe o CAMINHO (e nao o mtime ja lido) porque sao tres chamadores — a lista, o monitor do chat
-    aberto e o gatilho de automacoes — e a leitura com try/except tem que ser a mesma nos tres."""
-    if not marker or marker[0] != "idle":
-        return marker
-    if not jsonl:
-        return marker
-    aberto = _kimi_turno_aberto(jsonl)
-    if aberto is False:
-        return marker
-    if aberto is None:
-        # Degradado (wire ilegivel/sem fronteira): unico caminho em que o mtime ainda decide, e ai
-        # ele e o da SESSAO — o do main sozinho nao ve o subagente trabalhando. Erra pro lado de
-        # "trabalhando"; `_kimi_turno_aberto` ja avisou uma vez no log.
-        mtime = _kimi_mtime_da_sessao(jsonl)
-        if mtime is None or mtime <= marker[1] + folga:
-            return marker
-        return ("working", mtime)
-    # Turno ABERTO: nao ha o que medir — nenhum chamador le o ts deste marcador (todos usam [0], e o
-    # `last_activity` da lista sai de um stat proprio do registry). Calcular o mtime da sessao aqui
-    # seria um scandir por poll, no caminho MAIS quente, pra um valor que ninguem consome.
-    return ("working", marker[1])
 
 
 # Pool próprio pro tmux: rajada de /history ou de transcript no pool padrão não pode deixar estado e
@@ -861,34 +591,20 @@ class StateMonitor:
     def __init__(self, name: str, poll: float = 0.75,
                  sid_get: Optional[Callable[[], Optional[str]]] = None,
                  hook_grace: Optional[int] = HOOK_WORKING_GRACE,
-                 transcript_get: Optional[Callable[[], Optional[str]]] = None,
                  observe_permission: bool = False, provider: Optional[str] = None):
         self.name = name
         self.poll = poll
-        # hook_grace: apos quantos polls SEM SPINNER o marcador "working" deixa de valer. None =
-        # nunca expira. SPINNER_GLYPHS sao os do Claude; num pane cujo loader o classify nao le (o
-        # do Pi e braille, ⠋⠙⠹...), `no_spinner` sobe durante o turno inteiro e a grace derrubava o
-        # estado pra idle NO MEIO da conversa. Sem spinner legivel o marcador e a unica verdade —
-        # e a mesma politica da lista (registry.py:719, que honra o marcador sem grace nenhuma).
-        # ponytail: o preco de None e marcador "working" preso se o agente morrer mid-turn sem
-        # emitir o evento de fim; upgrade = ensinar o classify a ler o spinner desse provider.
         self.hook_grace = hook_grace
         # sid_get: session-id VIVO da sessao (muda no /clear) -> ancora o estado nos marcadores dos
         # hooks (deterministicos) em vez de depender so da leitura visual do pane. None = so pane.
         self.sid_get = sid_get
-        # transcript_get: caminho do transcript VIVO. So o Kimi passa — e a segunda fonte de
-        # `corrige_ocioso_kimi`, pro chat aberto nao mostrar "pronta" uma sessao que esta no meio de
-        # um turno vindo da fila da TUI (ver a docstring da funcao). None = comportamento de sempre.
-        self.transcript_get = transcript_get
         self.observe_permission = observe_permission
         self.provider = provider
 
     def _marcador(self):
         """Marcador do hook, ja corrigido quando ha transcript pra contradizer um idle velho."""
         m = hook_state.get_state(self.sid_get())
-        if m is None or self.transcript_get is None:
-            return m
-        return corrige_ocioso_kimi(m, self.transcript_get())
+        return m
 
     async def stream(self) -> AsyncIterator[StateEvent]:
         from app import terminal_observer
@@ -977,15 +693,6 @@ class StateMonitor:
             spinner = _live_spinner(pane)
             animating = False
 
-            # Aprovacao do Kimi: vem do WIRE, nao do pane (ver `aprovacao_kimi`). Vence o classify
-            # de proposito — enquanto o painel esta aberto o pane ainda mostra o spinner do turno,
-            # que sem isto ganharia a disputa e a sessao apareceria "trabalhando" com os botoes
-            # escondidos. So o Kimi passa `transcript_get`, entao os outros providers nem chegam
-            # aqui. Le disco -> to_thread, mesma regra do capture_pane acima.
-            if self.transcript_get is not None:
-                aprov = await asyncio.to_thread(aprovacao_kimi, self.transcript_get(), lambda: pane)
-                if aprov is not None:
-                    state, label, question, options = "awaiting_input", None, aprov[0], aprov[1]
 
             # AskUserQuestion que ROLOU PRA FORA da area visivel: a TUI imprimiu texto longo (um
             # recado de outra sessao) sem levar a viewport pro fim, o menu ficou abaixo do que o
@@ -1025,10 +732,6 @@ class StateMonitor:
             # dono de awaiting_input/overlay (menus NAO disparam hook) e de dead. Marcador
             # "working" preso (claude morto mid-turn) expira via HOOK_WORKING_GRACE.
             if self.sid_get is not None and state in ("working", "idle"):
-                # `_marcador` LE disco quando ha transcript (corrige_ocioso_kimi -> rabo do wire +
-                # scandir da pasta de agentes) e este laco e uma corrotina que roda a cada 0.75s por
-                # chat aberto: sincrono aqui, seguraria o event loop do backend inteiro. Mesma regra
-                # do `capture_pane` logo acima e do git status em registry._decorate_git.
                 m = await asyncio.to_thread(self._marcador)
                 if m is not None:
                     # Spinner mudando entre dois quadros é turno vivo: o turno aberto pela volta de um

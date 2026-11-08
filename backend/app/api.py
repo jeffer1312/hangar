@@ -57,7 +57,7 @@ from app.adapters import CLAUDE_HEADLESS, get_adapter
 from app.adapters.claude_headless import sessions as headless_sessions
 from app.adapters.codex import sessions as codex_sessions
 from app.sse import invalidate_recent_list, merged_events, nav_confirmar, nav_pendente
-from app.state import corrige_ocioso_kimi, forget_frame, menu_codex
+from app.state import forget_frame, menu_codex
 from app.uploads import MAX_BYTES
 from app.config import (list_config_dirs, _backend_config_base, settings,
                         automations_enabled, resolve_bind_ip)
@@ -292,7 +292,6 @@ async def _codex_rust_port(name: str, request: Request):
     port = (request.scope.get("server") or (None, None))[1]
     if port == GUEST_PORT and port != settings.port:
         route, body = request.url.path.split("/", 4)[4] + (f"?{request.url.query}" if request.url.query else ""), await request.body()
-        # Só Codex consulta a ponte dele: com a ponte ainda sem endereço, Pi/omp/Kimi levariam o 503 dela.
         reply = None
         if codex_sessions.exists(name):
             reply = await asyncio.to_thread(runtime_coordinator.rust_codex_terminal, name, route, request.method, body)
@@ -638,8 +637,6 @@ async def prewarm_forward(request: Request):
                                   "/__hangar_server/forwarded")
 
 
-
-
 @app.get("/api/client-api")
 async def client_api_pelo_rust(request: Request):
     """O número é do Rust (`hangar_api::CLIENT_API`). Aqui chega o dono pelo Connect, que segue pela
@@ -764,8 +761,6 @@ terminal = TerminalInput()
 
 @app.websocket("/api/sessions/{name}/term")
 async def term_ws_route(ws: WebSocket, name: str):
-    # Sem a trava de loopback do /api/pi/inbox: aquela existe porque quem liga la e uma extensao
-    # LOCAL. Aqui o celular vai precisar entrar de fora na fase 2.
     from app import termsock
     # `?shortcut=<id>`: terminal de atalho DESTA sessao. O alvo tmux sai do dono conferido no
     # servidor, nunca da query — o id sozinho nao alcanca terminal de outra conversa.
@@ -1013,16 +1008,7 @@ def _rust_conduz(info) -> bool:
     return c is not None and c.mode in {"pending", "rust"} and c.rust_owns(info.provider, bool(getattr(info, "headless", False)))
 
 
-
-
 _CONFIRM_GRACE = 8.0  # s entre o send e a checagem "o transcript gravou o prompt?"
-# Kimi: o mesmo prazo, esticado. Ali nao existe segunda tentativa (redigitar duplicaria a msg), e
-# sem segunda chance o prazo tem que ser generoso — senao ruido de timing carimba `desistiu` numa
-# msg que so estava esperando a vez na fila da propria TUI.
-_CONFIRM_GRACE_KIMI = 30.0
-# Claude sem terminal: mesma regra do Kimi (nunca redigita). O .jsonl só ganha a linha depois dos
-# hooks de UserPromptSubmit, que com plugins passam de 8s; o prazo cobre isso e ainda termina em
-# `desistiu` visível quando a entrega morreu de verdade (processo caiu logo após a escrita).
 _CONFIRM_GRACE_HEADLESS = 60.0
 # Cada checagem relê o transcript inteiro (MBs). Um prompt parado na fila interna da TUI durante um
 # turno longo reagendava a cada `grace` pelo turno todo; espaça até este teto.
@@ -1051,9 +1037,6 @@ def _agendar_confirmacao(name: str, delay: float) -> None:
         timer.daemon = True
         _confirm_pend[name] = (timer, due)
     timer.start()
-# Kimi: de quanto em quanto tempo reavaliar um "idle" que o transcript desmentiu. Nao ha evento pra
-# esperar (o fim de turno real grava idle sobre idle e nao gera transicao), entao a saida e reolhar.
-# 5s: a sessao demora isso pra aparecer parada, e enquanto o turno anda o custo e um getmtime.
 _RECHECA_KIMI = 5.0
 
 
@@ -1159,16 +1142,8 @@ def _confirm_and_drain(name: str) -> None:
         # interna do Claude Code) — decidir requeue agora arriscaria redigitar mensagem ja recebida.
         # Adia pro proximo ciclo (o turno acabando dispara transicao -> novo timer).
         m = hook_state.get_state(session_key(info.jsonl))
-        # No Kimi o marcador mente pra baixo (idle congelado do turno anterior, ver
-        # state.corrige_ocioso_kimi). Sem corrigir AQUI, o guard de mid-turn abaixo nunca segurava
-        # nada nesse provider — e ai toda entrega virava `desistiu` 8s depois do envio, mesmo a que
-        # so estava esperando a vez na fila da propria TUI.
-        if m and info.provider == "kimi":
-            m = corrige_ocioso_kimi(m, info.jsonl)
-        # Kimi espera MAIS antes de declarar perdida (30s contra 8s): ver o comentario no else.
         headless = _headless(name)
-        grace = (_CONFIRM_GRACE_KIMI if info.provider == "kimi"
-                 else _CONFIRM_GRACE_HEADLESS if headless else _CONFIRM_GRACE)
+        grace = _CONFIRM_GRACE_HEADLESS if headless else _CONFIRM_GRACE
         # UMA leitura do oraculo pros dois ramos. None = nao deu pra ler o transcript (ver
         # committed_user_lines): sai SEM decidir e SEM reagendar. Sem reagendar de proposito — um
         # Timer a cada `grace` contra um arquivo que nao abre e tempestade sem fim; o proximo fim
@@ -1209,32 +1184,7 @@ def _confirm_and_drain(name: str) -> None:
                 na_fila_tui=na_fila,
             )
         else:
-            # Estado DESCONHECIDO (marcador ausente): nao da pra provar que a sessao nao esta no meio de
-            # um turno — e redigitar e a acao destrutiva daqui (mete texto num prompt em uso). Entao
-            # confirma sem NUNCA redigitar (max_attempts=0). O caso real e sessao RESSUSCITADA: o
-            # kill-server de 2026-08-11 13:55 matou o tmux, a sessao voltou por `claude --resume` e a
-            # fila duravel (arquivo por NOME) sobreviveu ao pane — o guard acima caiu pra frente com
-            # get_state()=None e o backend redigitou dentro do turno vivo (log REQUEUE 14:01:48).
-            # Pior caso agora = comportamento antigo: envio engolido fica visivel como bolha da fila,
-            # que e falha VISIVEL. Duplicar a msg do usuario nao e.
-            # Kimi NUNCA redigita. Prompt digitado durante um turno fica na fila da TUI e so entra no
-            # wire.jsonl quando o turno chega nele — nao ha o equivalente do `queue-operation` do Claude
-            # Code, que e o registro feito NO MOMENTO da digitacao. Entao, no Kimi, "ausente do
-            # transcript" nao prova engolido, e redigitar e a acao destrutiva. Some a isso o marcador de
-            # estado dizer "ociosa" no meio do turno (o Stop do SUBAGENTE grava na chave do pai) e o
-            # guard de working acima nao segura nada: medido em 13/08/2026, a mesma mensagem entrou 3x na
-            # fila de uma sessao Kimi (REQUEUE n=3 no log das 08:29). Pior caso agora e o mesmo aceito
-            # logo acima pro estado desconhecido: envio de verdade engolido fica VISIVEL como bolha da
-            # fila (`desistiu`), que e falha visivel — duplicar a msg do usuario nao e.
-            # Sem terminal também nunca: não há tecla engolida (a escrita no stdin do processo vivo é
-            # a entrega), e "ausente do transcript" antes dos hooks terminarem virava redigitação —
-            # cada recado chegava duas vezes ao agente (REQUEUE medido em sessões headless).
-            max_attempts = 0 if (m is None or info.provider == "kimi" or headless) else 2
-            # Kimi espera MAIS antes de declarar perdida: com max_attempts=0 nao ha segunda chance — a
-            # primeira checagem depois do prazo ja carimba `desistiu`. Subir pra 1 nao serve (no
-            # reconcile, attempts < max REDIGITA, a duplicacao que este provider nao pode ter). Entao
-            # o que se estica e o PRAZO (grace=30s): cobre o tempo entre a TUI aceitar o texto e ele
-            # aparecer no wire.jsonl, sem nunca digitar duas vezes.
+            max_attempts = 0 if (m is None or headless) else 2
             requeued = q.reconcile_delivered(
                 committed, inicio_ts,
                 time.time(),
@@ -1256,11 +1206,6 @@ def _confirm_and_drain(name: str) -> None:
                               (linha_mais_parecida(txt, committed) or "")[:200])
                 _log.info("REQUEUE name=%s n=%d (TUI engoliu o send; re-drenando)", name, len(requeued))
                 _drenar(name, info.jsonl, info.provider)
-        # Sobrou entrada AINDA DENTRO do prazo (o reconcile a pulou por "recente demais")? Volta a
-        # olhar. Os agendamentos usam _CONFIRM_GRACE (8,5s) e o prazo do Kimi e 30s, entao num turno
-        # curto a unica checagem caia cedo demais e a entrada ficava sem confirmar E sem desistir —
-        # presa ate a proxima mensagem do usuario, ou pra sempre se nao houvesse proxima. O laco
-        # termina sozinho: passado o prazo, toda linha vira `confirmed` ou `desistiu`.
         working = bool(m and m[0] == "working")
         streak = _confirm_working_streak.get(name, 0) + 1 if working else 0
         _confirm_working_streak[name] = streak
@@ -1308,12 +1253,28 @@ def _maybe_chain(name: str) -> None:
 # Sessoes com uma reavaliacao de "idle mentiroso" ja agendada. UMA cadeia por sessao: sem isto, cada
 # transicao espuria abria a sua propria corrente de Timers, e duas correntes em paralelo dobram o
 # `registry.list()` (que toca tmux) a cada 5s, sem limite e sem ninguem notar.
-_recheca_armada: set[str] = set()
-_recheca_lock = threading.Lock()
 
 
 # Tentativas seguidas com FALHA antes de abandonar a cadeia de reavaliacao de uma sessao.
+
+
+            # Reagenda MESMO ASSIM quando o idle era suspeito: a falha pode ter sido pontual
+            # (registry/tmux piscando), e desistir aqui e o que deixa a sessao presa. Mas com TETO:
+            # falha PERMANENTE (jsonl corrompido, erro reproduzivel no registry) reergueria a mesma
+            # excecao a cada 5s pra sempre, pagando `registry.list()` (tmux) toda volta. Depois de
+            # _RETRY_FALHA tentativas a cadeia para e diz isso no log — sessao presa e ruim, laco
+            # eterno tocando tmux e pior.
+
+
+_recheca_armada: set[str] = set()
+
+
+_recheca_lock = threading.Lock()
+
+
 _RETRY_FALHA = 5
+
+
 _falhas_seguidas: dict[str, int] = {}
 
 
@@ -1345,10 +1306,6 @@ def _on_hook_transition(session_id: str, state: str) -> None:
                 return
             if info and info.jsonl:
                 real = state
-                if state == "idle" and getattr(info, "provider", "claude") == "kimi":
-                    m = hook_state.get_state(session_id)
-                    if m and corrige_ocioso_kimi(m, info.jsonl)[0] == "working":
-                        real = "working"
                 sent = _drenar(info.name, info.jsonl, info.provider)
                 # Confirmacao em TODO idle (nao so pos-drain): Timers pendentes morrem no restart
                 # do backend — sem isto, entrada entregue ficava sem confirmar indefinidamente.
@@ -1368,16 +1325,7 @@ def _on_hook_transition(session_id: str, state: str) -> None:
                 # UMA cadeia por sessao (_recheca_armada): cada transicao espuria abria a sua, e
                 # duas cadeias em paralelo dobram `registry.list()` (tmux) a cada 5s pra sempre.
                 _falhas_seguidas.pop(session_id, None)   # esta volta foi ate o fim: zera o teto
-                if real != state and _armar_recheca(session_id):
-                    threading.Timer(_RECHECA_KIMI, _recheca_kimi,
-                                    args=(session_id, state)).start()
         except Exception as exc:
-            # LOGA, nao `pass` mudo: e daqui que saem o drain da fila, o tick do loop, o vinculo
-            # `then` e o push de "terminou". Falha calada aqui devolve exatamente o sintoma que este
-            # bloco existe pra matar — sessao que nunca drena — sem uma linha pra investigar. E o
-            # texto diz a CONSEQUENCIA, nao so "falhou": no Kimi o fim de turno real nao gera
-            # transicao nova (idle sobre idle), entao sem reavaliacao a sessao pode ficar parada
-            # sem drenar ate a proxima msg do usuario.
             from app.runtime_coordinator import RustCacheInvalid
             # Cache inválido já vai ao diário uma vez por sequência pelo coordenador; aqui repetiria a cada volta.
             if not isinstance(exc, RustCacheInvalid):
@@ -1415,26 +1363,6 @@ class _StrictBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 class InputBody(_StrictBody):
     text: str
     # Recados 1:1 pedem orientação imediata; envios comuns conservam a fila normal.
@@ -1462,7 +1390,6 @@ class TermInputBody(_StrictBody):
     key: str | None = None
 
 
-
 @app.get("/api/whoami", dependencies=[Depends(require_auth)])
 async def whoami(request: Request):
     """Qual sessão está chamando, pelos cabeçalhos X-Hangar-* (ver quem_chama). Diagnóstico e
@@ -1472,8 +1399,6 @@ async def whoami(request: Request):
     except quem_chama.SessaoDesconhecida as e:
         raise HTTPException(404, detail=erro("erro_sessao_desconhecida", str(e)))
     return {"name": nome, "origem": origem}
-
-
 
 
 @app.post("/api/diag", dependencies=[Depends(require_auth)])
@@ -1562,8 +1487,6 @@ def _aquecendo(e: costs_sources.Aquecendo) -> JSONResponse:
     return JSONResponse({"aquecendo": True, "lidos": e.lidos, "total": e.total}, status_code=202)
 
 
-
-
 def _codex_as_claude_mode(name: str) -> str | None:
     """Modo do Claude equivalente ao da sessão Codex `name` (None se não for Codex)."""
     from app.adapters.codex import sessions as codex_sessions
@@ -1575,8 +1498,6 @@ def _codex_as_claude_mode(name: str) -> str | None:
     if approval == "never":
         return "bypassPermissions"
     return "acceptEdits" if sandbox == "workspace-write" else "manual"
-
-
 
 
 @app.post("/api/sessions", dependencies=[Depends(require_auth)], response_model=CreatedSessionInfo)
@@ -1921,8 +1842,6 @@ async def trocar_conta(name: str, body: AccountMoveBody):
         raise HTTPException(exc.status, detail=public_error(exc)) from None
 
 
-
-
 @app.post("/api/sessions/{name}/rename")
 async def rename_session(name: str, request: Request):
     """Trocar o nome é do Rust; aqui chega só quem entrou por uma porta do Python (Connect, convidado
@@ -1971,7 +1890,6 @@ async def descartar_da_fila(name: str, entry_id: str):
 
 
 async def _queue_unavailable():
-    # Só chega aqui quem o Rust não atende: Pi, omp e Kimi, ou o processo no modo `python`.
     raise HTTPException(409, erro("queue_action_unavailable", "esta sessão não permite mexer na fila agora"))
 
 
@@ -2105,16 +2023,12 @@ async def subagents_pelo_rust(request: Request, name: str, agent_id: str | None 
     return await account_bridge.forward_public(request, "/__hangar_server/subagents")
 
 
-
-
 @app.get("/api/sessions/{name}/events", dependencies=[Depends(require_auth)])
 async def events(name: str, request: Request):
     # handler async -> registry.list() (subprocess tmux) vai pro threadpool pra nao bloquear o loop.
     sessions = await asyncio.to_thread(registry.list)
     info = next((s for s in sessions if s.name == name), None)
     if not info or not info.jsonl:
-        # No diário COM o motivo: o 404 sozinho não separa sessão que sumiu da lista de sessão viva
-        # sem transcript (Pi/Kimi nos primeiros segundos, ou tmux sem responder).
         diag.registrar("sse.recusado", "aviso", sessao=name,
                        detalhe="fora-da-lista" if not info else "sem-transcript")
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
@@ -2328,62 +2242,7 @@ def _send_one_available(name: str, text: str, track_entry: bool = False) -> dict
         if _rust_mode(coordinator):
             return _no_rust_binding_error()
     stripped = text.lstrip()
-    # Pi COM LINHA: cria a entrada da fila ANTES do 1o envio, pra ter um id ESTAVEL pra oferecer
-    # como msg_id (achado ALTA da revisao 02/08/2026 — "Porta A"). A extensao chama sendUserMessage
-    # ANTES de confirmar, entao a PRIMEIRA tentativa (esta aqui) e a que mais importa: sem id nela,
-    # um retry do drain() (apos "deferred" por ACK perdido) nao tem como a extensao reconhecer como
-    # a MESMA mensagem.
-    #
-    # SO com linha (achado da re-revisao 02/08/2026): pre-criar a entrada TAMBEM pra Pi sem linha
-    # (fallback de teclado) abre uma janela de duplo envio que nao existia antes deste commit. Entre
-    # este append() e o send_prompt() abaixo nao ha trava nenhuma — o _send_lock so e adquirido
-    # DENTRO do send_prompt (terminal_input.py) — e o claim_undelivered do drain() usa so o
-    # _append_lock da fila, que nao tem relacao com aquele. Um drain() concorrente (hook, /input
-    # duplo, _maybe_chain) podia reivindicar essa entrada na janela e digitar o MESMO texto de novo
-    # assim que o send_lock liberasse. E o msg_id nao ajuda em nada nesse caminho: quem digita no
-    # tty nunca le esse valor (ver comentario em terminal_input.send_prompt). Claude/Codex-via-tty
-    # e Pi-sem-linha ficam todos no fluxo de sempre (append DEPOIS do send, delivered ja resolvido)
-    # — e ali NAO ha janela, porque a entrada so nasce depois que o unico send_prompt desta chamada
-    # ja terminou.
     entry = None
-    # ponytail: JANELA RESIDUAL CONHECIDA (nao fechada agora, registrada por decisao do usuario). A
-    # decisao "vai por linha ou por tecla" e tomada DUAS vezes — aqui, FORA de qualquer trava, e de
-    # novo dentro do _send_lock (terminal_input.py, perto de "provider == pi and pane_id and
-    # INBOX.tem_linha"). Entre as duas nao ha trava compartilhada: claim_undelivered (pqueue.py) usa
-    # so o _append_lock da fila, sem relacao com o _send_lock. Se a linha cair ENTRE esta leitura de
-    # tem_linha() e a segunda checagem dentro do lock, quem perde a corrida pelo _send_lock ve
-    # tem_linha=False, cai pro teclado — que NUNCA le msg_id (ver terminal_input.send_prompt). Sai
-    # pela linha de um lado, e redigitado do outro. Nao e regressao deste commit: e o buraco
-    # original encolhido de "qualquer sessao Pi" pra "sessao com linha viva no instante do append, e
-    # a linha caiu bem nessa janela". Medido: entregar_sync segura o _send_lock por ate PRAZO_ACK+2.0
-    # = 5s (pi_inbox.py) — janela de segundos, nao de microssegundos, tempo de sobra pra um drain de
-    # reconexao de SSE ou de transicao de hook entrar.
-    # CUIDADO no upgrade: so mover o append() pra dentro do _send_lock fecha a corrida entre as DUAS
-    # LEITURAS de tem_linha() (o TOCTOU vira leitura unica) mas NAO fecha a duplicata. A entrada
-    # nasce delivered=False aqui e so vira True quando o set_delivered(...) do fim desta funcao roda
-    # DEPOIS que send_prompt() retorna — tambem fora de qualquer trava. Nesse intervalo (que inclui
-    # a espera inteira pelo _send_lock MAIS os ate 5s do entregar_sync) a entrada continua
-    # reivindicavel por claim_undelivered. Upgrade completo precisa das DUAS coisas juntas: o
-    # append() E o set_delivered() final dentro da MESMA trava — ou claim_undelivered passar a
-    # respeitar/disputar o _send_lock. Mover so o append() e necessario, mas sozinho e insuficiente.
-    # `pi_inbox.linha_de` (nome primeiro, pane depois), nunca o pane cru: no psmux o pane e `%1`
-    # em toda sessao Pi e a busca por pane achava a linha da OUTRA — ver pi_inbox.
-    is_pi = (provider in ("pi", "omp") and providers_bridge.inbox_call("line", name=name, pane=pane_id)["line"] is not None
-             and not stripped.startswith("/"))
-    if is_pi:
-        try:
-            entry = PromptQueue(name).append(text, delivered=False, ts=t0)
-        except OSError:
-            # Fail-soft, mas NAO calado: sem log aqui, um disco ruim degrada pro uuid4-por-tentativa
-            # de sempre (vulneravel a duplicata) exatamente na hora em que este conserto deveria
-            # entrar em acao — achado da re-revisao 02/08/2026.
-            _log.exception("fila indisponivel antes do envio (Pi com linha) name=%s", name)
-            entry = None
-    # Limpa a flag ANTES de chamar send_prompt (nao so depois de ler, mais abaixo): assim a AUSENCIA
-    # dela depois so pode significar "esta chamada nao passou pelo _partial", em vez de herdar o
-    # valor de uma chamada anterior na MESMA thread do pool. `_ULTIMA_LIMPEZA` e threading.local
-    # (ver o comentario ao lado da declaracao em terminal_input.py) e o pool REUSA thread — sem isto,
-    # um "partial" que um dia devolvesse sem passar por `_partial()` leria a sobra de outro envio.
     if hasattr(terminal_input._ULTIMA_LIMPEZA, "limpou"):
         del terminal_input._ULTIMA_LIMPEZA.limpou
     # Escada de entrega, um degrau só depois que o anterior não deu: socket nativo do Claude
@@ -2393,8 +2252,7 @@ def _send_one_available(name: str, text: str, track_entry: bool = False) -> dict
         _log.info("SEND name=%s pelo socket nativo msg_id=%s text=%r", name, nativo, text[:80])
     try:
         result = "sent" if nativo else terminal.send_prompt(
-            name, text, provider, pane_id=pane_id,
-            **({"msg_id": entry["id"]} if entry is not None else {}))
+            name, text, provider, pane_id=pane_id)
         if result != "sent" and (error := _transfer_send_error(name)):
             return error
         if result != "sent" and provider == "claude" and codex_sessions.exists(name):
@@ -2434,15 +2292,6 @@ def _send_one_available(name: str, text: str, track_entry: bool = False) -> dict
         limpou = getattr(terminal_input._ULTIMA_LIMPEZA, "limpou", False)
         if hasattr(terminal_input._ULTIMA_LIMPEZA, "limpou"):
             del terminal_input._ULTIMA_LIMPEZA.limpou
-        if entry is not None:
-            # A entrada do Pi ja existe (criada acima, ANTES de saber o resultado) — sem isto ficaria
-            # delivered=False pra sempre e o proximo drain reentraria digitando em cima do residuo.
-            try:
-                PromptQueue(name).set_delivered(entry["id"], True)
-            except OSError:
-                # Achado da re-revisao 02/08/2026: falhar calado aqui e o MESMO bug que o comentario
-                # acima descreve (residuo redigitado por cima) voltando sem deixar rastro nenhum.
-                _log.exception("fechar entrada apos 'partial' falhou name=%s", name)
         if limpou:
             return {"ok": False, "error": erro("erro_envio_incompleto_limpo",
                                                "envio incompleto: o composer foi limpo e a mensagem NAO foi enviada — pode "
@@ -2460,19 +2309,6 @@ def _send_one_available(name: str, text: str, track_entry: bool = False) -> dict
                 PromptQueue(name).clear()
             except OSError:
                 pass
-            # ponytail: o sidecar do AskUserQuestion NAO e limpo aqui — /clear abre um transcript com
-            # session_id novo, entao o sidecar antigo vira lixo inofensivo (nao reabre nada).
-    elif entry is not None:
-        # Pi com id estavel: a entrada JA existe (criada antes do send) — so atualiza o delivered,
-        # nunca um segundo append (duplicaria a bubble na fila).
-        try:
-            PromptQueue(name).set_delivered(entry["id"], result == "sent")
-        except OSError:
-            _log.exception("atualizar fila apos envio falhou name=%s", name)
-        if result == "sent":
-            _agendar_confirmacao(name, _CONFIRM_GRACE + 0.5)
-        else:
-            threading.Thread(target=_drain_session, args=(name,), daemon=True).start()
     else:
         # Registra na fila duravel (sidecar) sempre — aparece como user_msg em ordem e persiste no
         # reload; o merge dedup-a contra o transcript quando o Claude Code grava o prompt. delivered =
@@ -2515,27 +2351,6 @@ def _provider_of(name: str) -> str:
 
 
 def _pane_info(name: str) -> tuple[str, str | None]:
-    """(provider, pane_id) numa leitura só — era `_pane_provider`, que pagava seu próprio
-    `tmux list-panes -t <name>` (via `tmux.pane_pid`); agora usa `list_panes_all()` (MESMA chamada
-    `list-panes -a` que o antigo `list_panes_active` já fazia — um fork só), e o `pane_id` sai de
-    carona, sem tmux novo no caminho quente. Provider do pane (claude/pi) continua lido do /proc
-    como antes: o gate de "TUI pronta" do terminal_input casa marcas do rodape do Claude, que o Pi
-    nao imprime, e sem saber o provider todo envio a uma sessao Pi queimava os 12s de timeout
-    antes de digitar.
-
-    Task 6: resolve pelo pane do AGENTE (`SessionRegistry._agent_pane`, Task 5.5), nao mais pelo
-    pane ATIVO — reusa a MESMA resolucao que `registry.list()` ja usa, nao uma terceira. Com um
-    split (o shell escondido, ou qualquer split manual), o pane ativo podia ser o do shell: uma
-    sessao Pi virava ("claude", pane_id do shell) neste caminho de ENVIO — o gate esperava as
-    marcas de rodape do Claude e queimava os 12s por mensagem, e `INBOX.tem_linha(pane_id)`
-    falhava (derrubava a linha rapida do Pi), porque o pane_id devolvido era do pane errado.
-
-    Erro/pane sumido -> ("claude", None) — comportamento de hoje, marcas do Claude, sem pane_id
-    (cai pra tecla, igual a antes desta task).
-
-    Revisao final (I1): o corpo mudou de casa pro `agentpane.pane_info` — o drain da fila duravel e
-    o adapter do Pi precisavam da MESMA resolucao e estavam no pane ativo. Esta funcao fica como o
-    nome que as rotas (e os testes) ja conhecem."""
     from app import agentpane
     return agentpane.pane_info(name)
 
@@ -2819,16 +2634,6 @@ async def input_prompt(name: str, body: InputBody):
             elif _headless(name) and not res.get("delivered"):
                 sent = await get_adapter(CLAUDE_HEADLESS).steer_queue(name, entry_id=entry_id)
                 steered = entry_id in sent
-            elif provider != "codex" and not _headless(name):
-                provider, _ = await _send_thread(_pane_info, name)
-                q = PromptQueue(name)
-                # Só Kimi: o steer dele injeta no turno em curso. O "send now" do Claude INTERROMPE o
-                # turno (mata o comando rodando), então lá a promoção é só pelo botão, nunca colada
-                # num recado.
-                if provider == "kimi" and await _send_thread(q.entry_delivered, entry_id):
-                    if await _send_thread(terminal_input.steer_now, name, provider) is True:
-                        steered = True
-                        await _send_thread(q.confirm_delivered)
         except Exception:
             # O recado já existe na fila. Falha de orientação nunca faz outro append/envio.
             _log.exception("falha apos persistir recado name=%s entry=%s steered=%s", name, entry_id, steered)
@@ -2882,8 +2687,6 @@ async def steer_session(name: str, body: InputBody | None = None):
             # Processo morreu entre a checagem e a escrita: a mensagem continua na fila.
             raise HTTPException(502, detail=erro("erro_envio_falhou", f"o processo não recebeu: {e}")) from None
     provider, _ = await _send_thread(_pane_info, name)
-    if provider not in ("kimi", "claude"):
-        raise HTTPException(409, "só sessão Kimi ou Claude tem steer pela fila do terminal")
     if provider == "claude":
         from app import runtime_coordinator
         from app.runtime_terminal import route
@@ -2911,9 +2714,6 @@ async def steer_session(name: str, body: InputBody | None = None):
         # outra via, ou o wire ainda nao flushou): NAO confirma nada — quem decide e o reconcile
         # do transcript, nunca um carimbo sobre promocao que nao aconteceu.
         return {"ok": True, "promoted": False}
-    # Promovido de verdade: baixa a fila duravel AGORA. O Kimi so grava o append_message da msg
-    # steerada no FIM do turno (medido: 34s depois do ctrl-s), entao esperar o transcript confirmar
-    # deixava o chip "N na fila" aceso o turno inteiro — e clicavel, sobre um no-op.
     n = await _send_thread(PromptQueue(name).confirm_delivered)
     return {"ok": True, "promoted": True, "confirmed": n}
 
@@ -3014,16 +2814,12 @@ def _require_rust_groups() -> None:
         raise HTTPException(503, detail=_groups_need_rust())
 
 
-
-
 async def _route_after(out: dict) -> None:
     """O que o Rust devolveu para o Python fazer depois da ponte, num sentido: entregar o recado a
     sessão que só ele atende e promover o time do `orq`. Promoção que falha desfaz o grupo novo."""
     failed = await _deliver_deferred(out.get("deliveries"))
     body = out.get("body")
     _report_failed(body, failed, "grupos.entrega_pela_ponte")
-
-
 
 
 async def _group_route(method: str, name: str, route: str, body: BaseModel | None = None):
@@ -3109,12 +2905,6 @@ async def pair_contract_put(name: str, body: PairContractBody):
     return await _group_route("PUT", name, "contract", body)
 
 
-
-
-
-
-
-
 @app.delete("/api/sessions/{name}/pair", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
 async def unpair_session(name: str):
     """`name` SAI do grupo (os demais membros continuam entre si; grupo restante de 1 dissolve).
@@ -3156,103 +2946,6 @@ def _espera_picker_fechar(name: str, timeout: float = _FECHA_PICKER_TIMEOUT) -> 
     _log.warning("picker de %s nao fechou em %.1fs apos o Escape; enviando o texto assim mesmo",
                  name, timeout)
     return False
-
-
-# Prazo pro `tool.result` do picker do Kimi aparecer no wire depois do Submit.
-_RESULT_KIMI_TIMEOUT = 5.0
-
-
-def _espera_resposta_kimi(jsonl: str | None, call_id: str,
-                          timeout: float = _RESULT_KIMI_TIMEOUT) -> bool:
-    """True quando o `tool.result` daquele toolCallId chega no wire. A escrita nao e instantanea —
-    sem a espera, a checagem rodaria antes do Kimi gravar e todo drive bem-sucedido cairia no
-    fallback por texto, entregando a resposta DUAS vezes (uma pela ferramenta, outra como msg)."""
-    if not jsonl:
-        return False
-    from app.adapters.kimi.transcript import resposta_chegou
-    limite = time.monotonic() + timeout
-    while time.monotonic() < limite:
-        if resposta_chegou(jsonl, call_id):
-            return True
-        time.sleep(0.2)
-    return False
-
-
-# Prazo pra escolha no painel de aprovacao do Kimi aterrissar (mesmo criterio do picker).
-_APROV_KIMI_TIMEOUT = 5.0
-
-
-def _espera_escolha_kimi(name: str, jsonl: str, req_id: str, pede_feedback: bool,
-                         timeout: float = _APROV_KIMI_TIMEOUT) -> bool:
-    """True quando a escolha no painel de aprovacao do Kimi esta comprovadamente entregue.
-
-    Duas provas, porque as escolhas do painel terminam de dois jeitos diferentes: a comum vira
-    `interaction.resolved` no wire, e a que pede justificativa (`Revise`, `Reject with feedback`)
-    NAO resolve nada na hora — o painel troca o rodape por um campo de texto e espera a pessoa
-    escrever. Sem a segunda prova, escolher `Revise` gastaria o prazo inteiro e voltaria erro numa
-    tecla que pegou."""
-    from app.adapters.kimi.transcript import interacao_resolvida
-    limite = time.monotonic() + timeout
-    while time.monotonic() < limite:
-        if interacao_resolvida(jsonl, req_id):
-            return True
-        if pede_feedback and terminal_input.feedback_kimi_aberto(name):
-            return True
-        time.sleep(0.2)
-    return False
-
-
-def _select_aprovacao_kimi(name: str, info, option: int) -> dict:
-    """Escolhe no painel de APROVACAO do Kimi (plano/comando/arquivo).
-
-    As opcoes vem do WIRE (`read_pending_interaction`), nao do pane — e a mesma fonte que o estado
-    usou pra desenhar os botoes, entao o numero que chega aqui casa com o que a pessoa leu.
-
-    Sem pedido pendente, 409 — NUNCA cair no `terminal.select` generico. Ele conta a linha do cursor
-    e, quando nao acha (`_cursor_row` so le `❯`, e o Kimi desenha `▶`), manda Down x(n-1) + Enter as
-    CEGAS. Numa sessao Kimi isso nao tem alvo: ou o painel ja fechou e as teclas caem na conversa em
-    execucao, ou ele esta aberto e o Enter confirma a linha errada — nos dois casos a rota devolveria
-    {"ok": true}, que e o sucesso falso que este projeto proibe. E nao ha o que perder: `_menu_block`
-    exige cursor `❯`/`>`, entao o pane do Kimi nunca produziu opcao por raspagem — este endpoint so
-    e alcancavel, nesse provider, pelos botoes que o wire desenhou."""
-    from app.adapters.kimi.transcript import read_pending_interaction
-    jsonl = info.jsonl if info else None
-    pend = read_pending_interaction(jsonl) if jsonl else None
-    if pend is None:
-        # Cobre "ja foi respondida no terminal" e "nao deu pra ler o wire agora" — pro usuario a
-        # saida e a mesma (nada foi enviado, olhe a sessao). O caso ilegivel nao some calado: o
-        # `_objetos_da_cauda` loga uma vez por arquivo.
-        raise HTTPException(409, detail=erro(
-            "erro_sem_pergunta_kimi",
-            "nenhuma pergunta do Kimi pendente (ja respondida no terminal?)"))
-    escolhas = pend["escolhas"]
-    if not 1 <= option <= len(escolhas):
-        raise HTTPException(409, detail=erro(
-            "erro_opcao_fora_da_lista",
-            f"opção {option} não existe neste pedido (são {len(escolhas)}) — opção NÃO enviada"))
-    try:
-        terminal_input.select_kimi(name, option, jsonl, pend["id"])
-    except ValueError as e:
-        raise HTTPException(409, str(e))
-    except terminal_input.DriveError as e:
-        # O wire dizia pendente e o painel ja saiu da tela: respondido no terminal entre o toque e
-        # aqui. Mesmo caso (e mesma frase) do picker do Kimi no /answer.
-        diag.registrar("aprovacao_kimi.painel_fechado", "erro", sessao=name, detalhe=str(e))
-        raise HTTPException(409, detail=erro(
-            "erro_sem_pergunta_kimi",
-            "nenhuma pergunta do Kimi pendente (ja respondida no terminal?)"))
-    if not _espera_escolha_kimi(name, jsonl, pend["id"], escolhas[option - 1]["requires_feedback"]):
-        # Prazo estourado NAO prova que nada pegou — pode ser o Kimi demorando pra gravar. Igual ao
-        # /answer do picker: so se o painel CONTINUA na tela e que a tecla comprovadamente nao pegou.
-        if terminal_input.aprovacao_kimi_aberta(name):
-            raise HTTPException(409, detail=erro(
-                "erro_opcao_nao_convergiu", "não consegui marcar essa opção no terminal — tente de novo",
-                detalhe="o painel de aprovação continua aberto e nada foi resolvido no wire"))
-        raise HTTPException(409, detail=erro(
-            "erro_sem_confirmacao_resposta",
-            "resposta enviada, mas nao deu pra confirmar a tempo — "
-            "confira na sessao antes de responder de novo"))
-    return {"ok": True, "feedback_pendente": escolhas[option - 1]["requires_feedback"]}
 
 
 def _recusa_se_so_enfileirou(name: str, res: dict) -> None:
@@ -3343,11 +3036,6 @@ def select(name: str, body: SelectBody):
     _recusa_se_painel_aberto(name)
     if not _session_exists(name):
         raise HTTPException(404, detail=erro("erro_sessao_opcao_nao_enviada", "sessão não encontrada — opção NÃO enviada"))
-    # Kimi: os botoes de aprovacao (plano/comando/arquivo) sao desenhados a partir do WIRE, entao a
-    # escolha volta pelo wire tambem — tecla numerica + `interaction.resolved` como prova. O drive
-    # generico abaixo NAO atende este provider em hipotese nenhuma (ver _select_aprovacao_kimi).
-    if getattr(info, "provider", "claude") == "kimi":
-        return _select_aprovacao_kimi(name, info, body.option)
     codex_sem_terminal = getattr(info, "provider", "claude") == "codex" and getattr(info, "headless", False)
     if _headless(name) or codex_sem_terminal:
         # Opção = resposta ao pedido de permissão em aberto (1 permite, 2 nega), pelo stdin.
@@ -3569,14 +3257,6 @@ async def limits(name: str):
     }
 
 
-
-
-
-
-
-
-
-
 class CodexModelBody(_StrictBody):
     model: str
     effort: str | None = None
@@ -3793,38 +3473,6 @@ def term_input(name: str, body: TermInputBody):
     except RuntimeError as e:
         raise _falha_do_runtime(e) from None
     return {"ok": True}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def _session_info_with_cwd(name: str):
@@ -4228,8 +3876,6 @@ def computer_control_new_target(body: ComputerControlTargetBody):
     return _computer_control_call(cc.create_target, body.model_dump())
 
 
-
-
 class AnswerItem(_StrictBody):
     kind: str
     question_id: str | None = None
@@ -4313,29 +3959,6 @@ def _askq_conversar_text(answers: list[dict], jsonl: str | None) -> str:
     linhas.append("Já respondi:")
     linhas.extend(respondidas)
     return "\n".join(linhas)
-
-
-def _pi_answer_fallback_text(a: dict) -> str:
-    """Resposta em TEXTO pro fallback da pergunta do Pi (drive do picker falhou). Mesma filosofia
-    do _askq_fallback_text do Claude: a resposta do usuario NUNCA se perde — vira mensagem normal."""
-    if a.get("kind") == "option":
-        resp = ", ".join(a.get("labels") or [])
-    elif a.get("kind") == "text":
-        resp = a.get("value") or ""
-    else:
-        resp = ""
-    if not resp:
-        return ""
-    # Texto NEUTRO. Dizia "o seletor de opções falhou" — e no Kimi isso era mentira ate hoje: la nao
-    # havia drive de teclas, o texto era o caminho NORMAL e unico. O usuario lia "falhou" na propria
-    # conversa e achava que a resposta tinha dado errado (relatado em 13/08/2026), e o agente lia a
-    # mesma frase e respondia ao fantasma.
-    #
-    # Quem soube que houve fallback foi o LOG do servidor. O `fallback: true` volta no corpo da
-    # resposta, mas o front descarta (`api.ts answerQuestions` tipa so `{ok}`) — entao nao prometa
-    # aqui que o usuario ve isso. O que ele ve e a propria resposta virando mensagem no chat, que ja
-    # diz "foi por texto" sem precisar de aviso.
-    return f"Respondendo à pergunta: {resp}"
 
 
 class SkipQuestionBody(_StrictBody):
@@ -4423,92 +4046,7 @@ def answer(name: str, body: AnswerBody):
     jsonl = info.jsonl if info else None
     fallback = False
 
-    # Pi: a pergunta nativa (tool `question`) mora no proprio transcript — o front sintetiza o
-    # payload do AskUserQuestion a partir do tool_use pendente e posta aqui igual; o drive e outro
-    # (picker ascii do Pi, sem tela de Review). A pergunta some da fila (respondida no terminal)
-    # entre o card abrir e o toque -> 409 legivel, nunca drive as cegas. O omp e o mesmo caminho
-    # com outra tool (`ask`, uma lista de perguntas que o parser normaliza) e outro cursor.
-    if getattr(info, "provider", "claude") in ("pi", "omp"):
-        from app.adapters.pi.transcript import read_pending_question
-        tool = "ask" if info.provider == "omp" else "question"
-        q = read_pending_question(jsonl, tool=tool) if jsonl else None
-        if q is None:
-            raise HTTPException(409, detail=erro("erro_sem_pergunta_pi", "nenhuma pergunta do Pi pendente (ja respondida no terminal?)"))
-        if not answers:
-            raise HTTPException(409, detail=erro("erro_sem_resposta", "sem resposta"))
-        try:
-            terminal_input.answer_question_pi(name, answers[0], q, provider=info.provider)
-        except ValueError as e:
-            raise HTTPException(409, str(e))
-        except terminal_input.DriveError as e:
-            text = _pi_answer_fallback_text(answers[0])
-            _log.warning("PI-QUESTION fallback name=%s reason=%s text=%r", name, e, text[:120])
-            if not text:
-                # Sem texto de fallback, NAO manda o Escape: picker aberto = usuario ainda responde
-                # no terminal. Fechar e devolver ok sem entregar nada seria a pior saida (silencio).
-                raise HTTPException(409, detail=erro("erro_drive_sem_fallback", f"drive falhou ({e}) e nao ha texto de fallback — responda no terminal", erro=str(e)))
-            terminal.interrupt(name)  # Escape unico: fecha o picker do Pi (sem clear — input vazio)
-            _espera_picker_fechar(name)   # sem isto o texto sai junto do Escape e a TUI o engole
-            res = _send_one(name, text)
-            if not res["ok"]:
-                raise HTTPException(409, detail=erro("erro_drive_fallback_falhou", f"drive falhou e fallback por texto tambem: {_erro_texto(res['error'])}", erro=res['error']))
-            _recusa_se_so_enfileirou(name, res)
-            fallback = True
-        return {"ok": True, "fallback": fallback}
 
-    # Kimi: a pergunta nativa (tool AskUserQuestion) mora no wire — o front sintetiza o card a
-    # partir do tool_use pendente, igual ao Pi. O drive do picker foi medido em 13/08/2026 (Kimi
-    # 0.36.0) e e mais confiavel que o dos outros dois: as opcoes sao numeradas e a tecla numerica
-    # escolhe e avanca (sem contar linha), e a CONFIRMACAO nao e visual — o `tool.result` daquele
-    # toolCallId aparecendo no wire prova que a ferramenta recebeu. Drive falhou -> Escape +
-    # fallback por texto, igual Claude/Pi: a resposta do usuario nunca se perde.
-    if getattr(info, "provider", "claude") == "kimi":
-        from app.adapters.kimi.transcript import read_pending_call, resposta_chegou
-        pend = read_pending_call(jsonl) if jsonl else None
-        if pend is None:
-            raise HTTPException(409, detail=erro("erro_sem_pergunta_kimi", "nenhuma pergunta do Kimi pendente (ja respondida no terminal?)"))
-        if not answers:
-            raise HTTPException(409, detail=erro("erro_sem_resposta", "sem resposta"))
-        call_id, args = pend
-        perguntas = args.get("questions") if isinstance(args.get("questions"), list) else []
-        try:
-            terminal_input.answer_question_kimi(name, answers, perguntas)
-            # PROVA no transcript, nao no pane: o Kimi so escreve o tool.result depois de a
-            # ferramenta receber as respostas. Sem esta checagem, um Submit que nao pegou voltaria
-            # 200 com cara de sucesso — o mesmo "sent sem chegar" que ja custou uma resposta perdida.
-            if not _espera_resposta_kimi(jsonl, call_id):
-                # Prazo estourado NAO prova que nada foi submetido — pode ser o Kimi demorando pra
-                # gravar. Os outros dois drivers so levantam DriveError com prova estrutural (o
-                # picker AINDA na tela), e aqui vale o mesmo: se o picker sumiu, alguem submeteu.
-                # Cair no fallback nesse caso mandaria Escape num turno que ja processa a resposta
-                # certa e entregaria a mesma resposta DUAS vezes — uma pela ferramenta, outra como
-                # mensagem. Entre duplicar calado e admitir a duvida, admite-se a duvida.
-                if terminal_input.picker_kimi_aberto(name):
-                    raise terminal_input.DriveError(
-                        "Submit nao pegou: o picker continua aberto e o tool.result nao apareceu")
-                raise HTTPException(409, detail=erro("erro_sem_confirmacao_resposta",
-                                             "resposta enviada, mas nao deu pra confirmar a tempo — "
-                                             "confira na sessao antes de responder de novo"))
-        except ValueError as e:
-            raise HTTPException(409, str(e))
-        except terminal_input.DriveError as e:
-            text = _pi_answer_fallback_text(answers[0])
-            _log.warning("KIMI-QUESTION fallback name=%s reason=%s text=%r", name, e, text[:120])
-            if not text:
-                # Sem texto de fallback, NAO manda o Escape: picker aberto = o usuario ainda pode
-                # responder no terminal. Fechar e devolver ok sem entregar nada seria a pior saida.
-                raise HTTPException(409, detail=erro("erro_drive_sem_fallback", f"drive falhou ({e}) e nao ha texto de fallback — responda no terminal", erro=str(e)))
-            terminal.interrupt(name)  # Escape unico: fecha o picker do Kimi (sem clear — input vazio)
-            _espera_picker_fechar(name)   # sem isto o texto sai junto do Escape e a TUI o engole
-            res = _send_one(name, text)
-            if not res["ok"]:
-                raise HTTPException(409, detail=erro("erro_drive_fallback_falhou", f"drive falhou e fallback por texto tambem: {_erro_texto(res['error'])}", erro=res['error']))
-            _recusa_se_so_enfileirou(name, res)
-            return {"ok": True, "fallback": True}
-        return {"ok": True, "fallback": False}
-    # "Conversar sobre isso" junto de perguntas já respondidas: dirigir o picker perde as respostas
-    # — a TUI cancela tudo ao chegar nessa opção. Fecha por Escape e entrega o que ele escolheu como
-    # texto, o mesmo caminho do plano B do drive.
     texto_conversar = _askq_conversar_text(answers, jsonl) if any(
         a.get("kind") == "chat" for a in answers) else ""
     if texto_conversar:
@@ -4535,10 +4073,6 @@ def answer(name: str, body: AnswerBody):
         # de "nav drift" quando o relato chega dias depois.
         diag.registrar("pergunta.fallback_texto", "erro", sessao=name, detalhe=str(e))
         if not text:
-            # Sem texto de fallback (resposta `chat`, ou rotulos vazios) nao ha o que entregar. Nao
-            # manda o Escape e nao limpa o sidecar: o picker segue aberto pra quem responder no
-            # terminal. Ate 01/09/2026 este ramo caia em `fallback = True` e apagava o sidecar como
-            # se tivesse respondido, sem uma tecla ter saido — os ramos Pi e Kimi ja barravam.
             raise HTTPException(409, detail=erro(
                 "erro_drive_sem_fallback",
                 f"drive falhou ({e}) e nao ha texto de fallback — responda no terminal", erro=str(e)))
@@ -4565,8 +4099,6 @@ class ModelEffortBody(_StrictBody):
 
 @app.post("/api/sessions/{name}/model-effort", dependencies=[Depends(require_auth), Depends(_transfer_guard), Depends(_codex_rust_port)])
 async def model_effort(name: str, body: ModelEffortBody):
-    # Do Claude é o Rust que troca (seletor no ator do terminal, controle no sem terminal); Pi, omp e Kimi,
-    # que não têm entrada lá, seguem aqui.
     info = await _cached_info(name)
     if info is not None and getattr(info, "provider", "claude") == "claude":
         raise HTTPException(503, detail=erro("model_effort_needs_rust_server", "trocar modelo e esforço precisa do servidor Rust"))
@@ -4793,7 +4325,6 @@ def _bypass_no_ciclo(name: str) -> bool:
 #     morar no codigo.
 
 
-
 # Catalogo por motor: e uma chamada de REDE ao provedor, e abrir a folha nao pode pagar isso toda
 # vez. TTL curto porque a lista muda com o plano do usuario, nao a cada minuto.
 
@@ -4876,14 +4407,6 @@ def _chave_config(p) -> str:
     return str(Path(s).expanduser().resolve())
 
 
-
-
-
-
-
-
-
-
 @app.get("/api/sessions/{name}/model/options", dependencies=[Depends(require_auth)])
 async def model_options(name: str):
     """Modelos que ESTA sessao pode escolher. `kind` diz de onde vieram e como aplicar."""
@@ -4952,16 +4475,12 @@ async def model_options_sem_sessao(provider: str = "claude", engine: str = "",
                         codex_models.listar,
                         **({"codex_home": account.home} if not account.is_default else {}))}
         except codex_models.CodexAusente as e:
-            # Codigo proprio pelo mesmo motivo do Pi: "nao achei o codex" nao e "o codex falhou".
             raise HTTPException(502, detail=erro("erro_codex_ausente", str(e), erro=str(e)))
         except (codex_models.CodexIndisponivel, codex_models.CodexRecusado,
                 codex_models.CodexRespostaInvalida, RuntimeError, OSError) as e:
-            # Sem `TimeoutExpired` aqui, ao contrario do ramo do Pi: o teto de tempo do
-            # `codex_models` mata o processo por um Timer, entao ele vira "nao respondeu" (um
-            # RuntimeError) — capturar a outra seria um ramo que o codigo nunca produz.
             raise HTTPException(502, detail=erro("erro_codex_model_list", f"codex app-server model/list falhou: {e}", erro=str(e)))
     if provider != "claude":
-        raise HTTPException(400, detail=erro("erro_provider_invalido", "provider deve ser 'claude', 'pi', 'omp', 'kimi' ou 'codex'"))
+        raise HTTPException(400, detail=erro("erro_provider_invalido", "provider deve ser 'claude' ou 'codex'"))
     chave = _chave_config(config_dir)
     cacheado = _models_cache_get(chave)
     if cacheado is not None:
@@ -4987,13 +4506,7 @@ async def model_options_sem_sessao(provider: str = "claude", engine: str = "",
             "models": [{"id": a} for a in ("opus", "fable", "sonnet", "haiku")]}
 
 
-
-
 def _session_config_dir(name: str) -> Path | None:
-    """CLAUDE_CONFIG_DIR do processo do pane (o sidecar do Pi e o settings.json moram la dentro).
-    None -> ~/.claude.
-    Usa o mesmo `_config_dir_of` do registry (privado do pacote) que ja resolve o transcript do Pi:
-    duas leituras diferentes do /proc dariam respostas diferentes pra mesma sessao."""
     from app import registry as registry_mod
     from app import tmux
     try:
@@ -5003,10 +4516,9 @@ def _session_config_dir(name: str) -> Path | None:
         # Cair no ~/.claude CALADO transformava um bug de resolucao (pane sem pid, /proc ilegivel)
         # num 409 mentiroso "extensao desatualizada": o sidecar existe, so estavamos procurando na
         # pasta errada. Nao propaga — o default ainda e o certo pra maioria das sessoes.
-        _log.warning("pi: nao consegui resolver o config dir de %s; usando ~/.claude", name,
+        _log.warning("não consegui resolver o config dir de %s; usando ~/.claude", name,
                      exc_info=True)
         return None
-
 
 
 # ── Preview: expoe um projeto local (porta) via tailscale serve, pro app ver num iframe ──

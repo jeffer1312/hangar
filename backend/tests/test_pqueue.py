@@ -809,33 +809,19 @@ def _wire_kimi(tmp_path, linhas):
     return str(j)
 
 
-def test_committed_user_lines_kimi_provider(tmp_path):
-    # Sem o branch kimi o oraculo devolvia set() vazio e o reconcile redigitava cada entrega
-    # (3x "ola" em producao, 2026-08-11). A injection NAO pode contar como texto do usuario.
-    wire = _wire_kimi(tmp_path, [
-        {"type": "context.append_message", "time": 1786453187986,
-         "message": {"role": "user", "id": "msg_1", "origin": {"kind": "user"},
-                     "content": [{"type": "text", "text": "ola"}]}},
-        {"type": "context.append_message", "time": 1786453187990,
-         "message": {"role": "user", "id": "msg_2", "origin": {"kind": "injection"},
-                     "content": [{"type": "text", "text": "<system-reminder>x</system-reminder>"}]}},
-    ])
-    lines = pqueue.committed_user_lines(wire, "kimi")
-    assert "ola" in lines
-    assert not any("system-reminder" in l for l in lines)
-
-
-def test_committed_user_lines_pi_e_omp_provider(tmp_path):
-    # omp e o fork do Pi e usa o MESMO parser (app/adapters/pi/transcript.py) — sem cobertura direta
-    # aqui, um shape novo do parser quebraria os dois calado.
-    import json
-    j = tmp_path / "t.jsonl"
-    j.write_text(json.dumps({"type": "message", "id": "m1", "message": {
-        "role": "user", "timestamp": 1, "content": [{"type": "text", "text": "oi"}]}}) + "\n",
-        encoding="utf-8")
-    assert pqueue.committed_user_lines(str(j), provider="omp") == {"oi"}
-    assert pqueue.committed_user_lines(str(j), provider="pi") == {"oi"}
-
+# --- Redigitacao as cegas: o incidente de 2026-08-11 (kill-server -> resume -> msg duplicada) ---
+# Cadeia medida: um subagente rodou `tmux kill-server` 13:55:29 (o log do backend registra
+# "no server running on /tmp/tmux-1000/default"); as sessoes morreram e a de nome `hangar` voltou
+# 13:59:09 via `claude --resume`. A fila duravel e um arquivo por NOME de sessao, entao ela
+# sobreviveu ao pane. As 14:00:48 saiu UM POST /input; as 14:01:48 o backend concluiu "a TUI
+# engoliu" e redigitou (log REQUEUE n=1, e a entrada do sidecar com attempts:1) -> a mesma
+# mensagem apareceu duas vezes no chat.
+# O guard de `_confirm_and_drain` so adia enquanto o marcador do hook diz `working`. Sessao
+# ressuscitada e exatamente o caso em que esse marcador nao e confiavel: `get_state` devolve None
+# e o codigo caia PRA FRENTE, redigitando as cegas dentro de um turno vivo.
+# Regra: redigitar e a acao destrutiva aqui (mete texto num prompt em uso). Sem PROVA de que a
+# sessao nao esta no meio de um turno, nao se redigita — confirma e desiste. O pior caso vira o
+# comportamento antigo (envio engolido fica visivel como bolha), que e falha VISIVEL, nao duplicata.
 
 def test_transcript_start_ts_kimi_envelope_time(tmp_path):
     # O ts do Kimi mora no envelope `time` (ms) — sem isto o start_ts era 0.0 e a poda de fila
@@ -863,20 +849,6 @@ def test_merged_history_kimi_provider(tmp_path):
     evs = pqueue.merged_history("s", wire, "kimi")
     assert [(e.kind, e.text) for e in evs] == [("user_msg", "ola"), ("assistant_msg", "oi!")]
 
-
-# --- Redigitacao as cegas: o incidente de 2026-08-11 (kill-server -> resume -> msg duplicada) ---
-# Cadeia medida: um subagente rodou `tmux kill-server` 13:55:29 (o log do backend registra
-# "no server running on /tmp/tmux-1000/default"); as sessoes morreram e a de nome `hangar` voltou
-# 13:59:09 via `claude --resume`. A fila duravel e um arquivo por NOME de sessao, entao ela
-# sobreviveu ao pane. As 14:00:48 saiu UM POST /input; as 14:01:48 o backend concluiu "a TUI
-# engoliu" e redigitou (log REQUEUE n=1, e a entrada do sidecar com attempts:1) -> a mesma
-# mensagem apareceu duas vezes no chat.
-# O guard de `_confirm_and_drain` so adia enquanto o marcador do hook diz `working`. Sessao
-# ressuscitada e exatamente o caso em que esse marcador nao e confiavel: `get_state` devolve None
-# e o codigo caia PRA FRENTE, redigitando as cegas dentro de um turno vivo.
-# Regra: redigitar e a acao destrutiva aqui (mete texto num prompt em uso). Sem PROVA de que a
-# sessao nao esta no meio de um turno, nao se redigita — confirma e desiste. O pior caso vira o
-# comportamento antigo (envio engolido fica visivel como bolha), que e falha VISIVEL, nao duplicata.
 
 def _sessao_fake(nome, jsonl, provider="claude"):
     from types import SimpleNamespace

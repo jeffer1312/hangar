@@ -594,8 +594,6 @@ def invalidate_recent_list() -> None:
     _list_invalidated_at = time.monotonic()
 
 
-
-
 def _confirm_codex_queue(name: str, jsonl: str) -> None:
     from app import runtime_coordinator
     from app.runtime_adapter import run_sync
@@ -732,7 +730,7 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
     # arquivo da sessao anterior.
     def _monitor_de(prov):
         adap = get_adapter(prov)
-        kw = {"transcript_get": lambda: current_jsonl} if prov in ("kimi", "orq") else {}
+        kw = {"transcript_get": lambda: current_jsonl} if prov in ("orq",) else {}
         # Um monitor por (sessao, provider, transcript), compartilhado entre as conexoes abertas
         # nesse chat (desktop + celular = um capture-pane, nao dois). O transcript entra na chave
         # porque o monitor fecha sobre o sid VIVO da conexao que o criou: apos um /clear, quem
