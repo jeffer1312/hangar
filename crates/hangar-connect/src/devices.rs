@@ -343,7 +343,7 @@ impl Store {
             state.devices[index].promote_if_next(&presented);
             let written = match &self.fault { Some(fault) => Err(io::Error::other(fault.clone())), None => write(&self.path, &state) };
             if let Err(error) = written {
-                tracing::warn!(code = "connect_device_promote_failed", "token novo aceito sem ir ao disco: {error}");
+                tracing::warn!(code = "connect_device_promote_failed", device = %state.devices[index].id, "token novo aceito sem ir ao disco: {error}");
             }
         }
         let device = &mut state.devices[index];

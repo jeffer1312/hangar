@@ -383,7 +383,8 @@ impl Supervisor {
         let (linked, first) = self.publish(&self.preview_port, closed, |linked| &mut linked.preview_published).await?;
         // Sem os filhos de pé o link sairia sem abrir para ninguém. Quem acabou de religá-los espera o login.
         if !first && !self.until_enabled().await {
-            return Err(ConnectError::new(StatusCode::CONFLICT, "connect_not_running", "o Connect não está de pé nesta máquina"));
+            let cause = self.status().error.map(|error| format!(": {error}")).unwrap_or_default();
+            return Err(ConnectError::new(StatusCode::CONFLICT, "connect_not_running", format!("o Connect não está de pé nesta máquina{cause}")));
         }
         Ok((linked.preview_host, !self.preview_reached.load(Ordering::Relaxed)))
     }
@@ -644,7 +645,7 @@ async fn run_once(spec: &Spec, live: &Shared, logged: Option<&watch::Sender<bool
                 return Ended::PortLost;
             }
             () = &mut missing => {
-                tracing::info!(code = "connect_site_opened", child = spec.name, "a porta de um site abriu; filho volta com ele");
+                tracing::info!(code = "connect_site_changed", child = spec.name, "a porta de um site abriu ou caiu; filho volta com o site entrando ou saindo");
                 stop_child(spec.name, &mut child, &mut tree).await;
                 return Ended::SiteChanged;
             }
