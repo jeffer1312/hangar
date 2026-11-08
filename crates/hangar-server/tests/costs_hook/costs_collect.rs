@@ -664,3 +664,38 @@ fn codex_folder_listed_but_not_searchable_keeps_its_rows() {
     assert_eq!(c.unread_issue().as_deref(), Some("costs_dir_permission_denied"));
     drop(restore);
 }
+
+#[test]
+fn same_session_id_in_claude_and_pi_keeps_both_sources() {
+    let (_dir, base) = fixtures_copy();
+    std::fs::copy(
+        base.join("claude/projects/-repo-b/s3.jsonl"),
+        base.join("claude/projects/same-id.jsonl"),
+    ).unwrap();
+    std::fs::copy(
+        base.join("pi/--repo--/2026-09-30_s.jsonl"),
+        base.join("pi/same-id.jsonl"),
+    ).unwrap();
+    let source = Fixed::new(Ok(scopes(&base)));
+    let collector = collector(&base, source);
+    collector.prepare(false).unwrap();
+    wait_ready(&collector);
+    let rows = collector.read_costs(None).unwrap();
+    let matching: Vec<_> = rows.iter().filter(|row| row.session_id == "same-id").collect();
+    let fields: std::collections::BTreeMap<_, _> = matching.iter()
+        .map(|row| (row.source.as_str(), (row.session_id.as_str(), row.input))).collect();
+    assert_eq!(fields, std::collections::BTreeMap::from([
+        ("claude", ("same-id", 100)), ("pi", ("same-id", 30)),
+    ]));
+    assert_eq!(matching.len(), 2, "o mesmo identificador conserva as duas fontes");
+    let parent_id = Path::new("--repo--").join("2026-09-30_s");
+    let child_id = parent_id.join("t1").join("run-1").join("session");
+    let native_rows: std::collections::BTreeMap<_, _> = rows.iter()
+        .filter(|row| row.source == "pi" && row.session_id != "same-id")
+        .map(|row| (row.session_id.as_str(), (row.input, row.output, row.cache_read, row.cache_write)))
+        .collect();
+    assert_eq!(native_rows, std::collections::BTreeMap::from([
+        (parent_id.to_str().unwrap(), (30, 10, 50, 15)),
+        (child_id.to_str().unwrap(), (50, 12, 100, 0)),
+    ]));
+}

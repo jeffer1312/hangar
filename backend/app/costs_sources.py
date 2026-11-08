@@ -1,12 +1,10 @@
-"""Os quatro formatos de uso (Claude Code, Codex, Pi, Kimi) normalizados num UsageRow só.
+"""Os formatos de uso (Claude Code, Codex) normalizados num UsageRow só.
 
 A armadilha central: cada fonte ACUMULA de um jeito diferente. Usar a regra errada não quebra
 nada — devolve um número plausível e errado.
 
   Claude  por resposta          -> dedup por identidade, separado por dia/modelo
   Codex   por resposta          -> token_usage_record; deltas de token_count no legado
-  Pi      por mensagem          -> SOMA de todos os usage
-  Kimi    por evento/turno      -> SOMA dos usage.record
 """
 from __future__ import annotations
 
@@ -21,8 +19,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app import codex_contas, costs_cache, costs_claude_transcript, pricing, uso_codex
-from app.adapters.kimi import sessions as kimi_sessions
-from app.adapters.pi import sessions as pi_sessions
 from app.config import list_config_dirs
 
 LOCAL = timezone(timedelta(hours=-3))
@@ -30,8 +26,6 @@ PROJETO_DESCONHECIDO = "desconhecido"
 # Suba ao mudar o que `uso_codex` grava por rollout.
 _USO_CODEX_VERSAO = 3
 _log = logging.getLogger("hangar.costs")
-# Raízes já avisadas: `coletar()` roda a cada abertura da tela de custos, e o aviso é um só.
-_AVISOU_RAIZ_UNICA: set[str] = set()
 
 
 @dataclass(frozen=True, slots=True)
@@ -364,92 +358,6 @@ def _linhas_rollout_codex(arq: Path, account_id: str) -> list[UsageRow]:
     return _agrupar_rollout(respostas_por_turno_codex(arq, account_id))
 
 
-def raiz_pi() -> Path:
-    return pi_sessions.sessions_root("pi")
-
-
-def raiz_omp() -> Path:
-    return pi_sessions.sessions_root("omp")
-
-
-def linhas_pi(raiz: Path | None = None, source: str = "pi") -> list[UsageRow]:
-    """~/.pi/agent/sessions/**/*.jsonl — POR MENSAGEM, soma tudo. Mesmo leitor serve o omp
-    (`raiz`/`source` recebidos): mesmo formato JSONL, só muda a raiz e o rótulo da linha.
-
-    Glob RECURSIVA de propósito: o subagente do Pi mora em
-    `<sessao>/<taskId>/run-N/session.jsonl` (é o que adapters/pi/sessions.py:41-47 já documenta,
-    acima de `is_subagent_transcript`).
-    Medido em 01/08/2026 num par pai/filho: na janela de 20:52:12–20:58:10 em que o filho
-    registrou 19 eventos de uso, o pai registrou ZERO, e nenhum totalTokens coincide. O uso do
-    subagente NÃO está no pai — somar os dois não duplica, e ignorar o filho perde 18 sessões.
-
-    O `usage.cost` que o Pi já calcula é DESCARTADO: o custo é recalculado com a mesma tabela das
-    outras fontes, senão as três não estão na mesma régua.
-    """
-    raiz = raiz if raiz is not None else raiz_pi()
-    if not raiz.is_dir():
-        return []
-    _sincronizar_pi(raiz, source)
-    return [_usage_row(t) for t in costs_cache.ler_custos(f"{source}:{raiz}")]
-
-
-def _sincronizar_pi(raiz: Path, source: str) -> None:
-    costs_cache.sincronizar(f"{source}:{raiz}", costs_cache.listar(raiz, lambda n: n.endswith(".jsonl")),
-                            lambda arq: _dobra_pi(arq, raiz, source), f"pi:{CACHE_VERSAO}")
-
-
-class DobraPi:
-    def __init__(self, sid: str, source: str) -> None:
-        self.sid, self.source = sid, source
-        self.cwd = self.modelo = self.prov = ""
-        self.ts = None
-        self.acc = {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}
-        self.viu = False
-
-    def linha(self, bruta: bytes) -> None:
-        d = _dict_da_linha(bruta)
-        if d is None:
-            return
-        t = d.get("type")
-        if t == "session":
-            self.cwd = d.get("cwd") or self.cwd
-            self.ts = _quando(d.get("timestamp")) or self.ts
-        elif t == "model_change":
-            # Pi: provider + modelId separados. omp: um campo só, "provider/id".
-            if d.get("model") and "/" in str(d["model"]):
-                self.prov, self.modelo = str(d["model"]).split("/", 1)
-            else:
-                self.prov = d.get("provider") or self.prov
-                self.modelo = d.get("modelId") or self.modelo
-        elif t == "message":
-            msg = d.get("message")
-            u = msg.get("usage") if isinstance(msg, dict) else None
-            if isinstance(u, dict):
-                self.viu = True
-                for k in self.acc:
-                    self.acc[k] += _int(u.get(k))
-
-    def fechar(self):
-        if not self.viu or self.ts is None:
-            return [], [], None
-        acc = self.acc
-        return [UsageRow(
-            ts=self.ts, source=self.source, provider=pricing.canonizar_provedor(self.prov) or "?",
-            model=self.modelo or "?",
-            project=self.cwd or PROJETO_DESCONHECIDO, session_id=self.sid,
-            input=acc["input"], output=acc["output"],
-            cache_write=acc["cacheWrite"], cache_read=acc["cacheRead"],
-        )], [], None
-
-
-def _dobra_pi(arq: Path, raiz: Path, source: str) -> DobraPi:
-    # session_id pelo caminho RELATIVO, não pelo `arq.stem`: todo subagente se chama
-    # `session.jsonl`, então o stem seria a string "session" para TODOS eles, de todas as
-    # sessões — indistinguíveis. Hoje não corrompe soma (não há dedup entre linhas do Pi),
-    # mas deixaria o campo inútil pra qualquer drill-down.
-    return DobraPi(str(arq.relative_to(raiz).with_suffix("")), source)
-
-
 def _ler_inteiro(arq: Path, dobra):
     try:
         f = arq.open("rb")
@@ -461,123 +369,11 @@ def _ler_inteiro(arq: Path, dobra):
     return dobra.fechar()
 
 
-def _linhas_arquivo_pi(arq: Path, raiz: Path, source: str) -> list[UsageRow]:
-    return _ler_inteiro(arq, _dobra_pi(arq, raiz, source))[0]
-
-
-def linhas_omp() -> list[UsageRow]:
-    return linhas_pi(raiz_omp(), "omp")
-
-
-def raiz_kimi() -> Path:
-    return kimi_sessions.kimi_home() / "sessions"
-
-
-def _kimi_index() -> dict[str, str]:
-    """sessionId -> workDir, do session_index.jsonl do Kimi (projeto da linha de uso)."""
-    out: dict[str, str] = {}
-    try:
-        with open(kimi_sessions.kimi_home() / "session_index.jsonl", encoding="utf-8") as fh:
-            for line in fh:
-                try:
-                    o = json.loads(line)
-                except ValueError:
-                    continue
-                if isinstance(o, dict) and o.get("sessionId"):
-                    out[o["sessionId"]] = o.get("workDir") or ""
-    except OSError:
-        pass
-    return out
-
-
-def linhas_kimi() -> list[UsageRow]:
-    """~/.kimi-code/sessions/*/session_*/agents/*/wire.jsonl — eventos `usage.record`, SOMA tudo.
-
-    Medido no 0.34.0: um usage.record por turno com o DELTA (inputOther/output/inputCacheRead/
-    inputCacheCreation), nao cumulativo — a regra e a mesma do Pi (somar), nao a do Claude (ultima
-    linha). Subagentes (agents/agent-N/wire.jsonl) somam junto, marcados subagente=True: o wire do
-    agente principal NAO inclui o uso dos filhos (mesmo fato medido no Pi).
-    """
-    raiz = raiz_kimi()
-    if not raiz.is_dir():
-        return []
-    _sincronizar_kimi(raiz)
-    return _linhas_kimi_do_indice(raiz)
-
-
-def _sincronizar_kimi(raiz: Path) -> None:
-    costs_cache.sincronizar(f"kimi:{raiz}", costs_cache.listar(raiz, lambda n: n == "wire.jsonl"),
-                            _dobra_kimi, f"kimi:{CACHE_VERSAO}")
-
-
-def _linhas_kimi_do_indice(raiz: Path, desde: str | None = None) -> list[UsageRow]:
-    # O projeto vem do session_index, não do wire — aplicado na LEITURA, senão uma linha
-    # gravada antes de o índice conhecer a sessão ficaria "desconhecido" até o wire mudar.
-    index = _kimi_index()
-    return [replace(r, project=index.get(r.session_id) or PROJETO_DESCONHECIDO)
-            for r in map(_usage_row, costs_cache.ler_custos(f"kimi:{raiz}", desde))]
-
-
-class DobraKimi:
-    def __init__(self, sid: str, subagente: bool) -> None:
-        self.sid, self.subagente = sid, subagente
-        self.acc = {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}
-        self.modelo = ""
-        self.ts = None
-        self.viu = False
-
-    def linha(self, bruta: bytes) -> None:
-        if b"usage.record" not in bruta:
-            return
-        d = _dict_da_linha(bruta)
-        if d is None or d.get("type") != "usage.record":
-            return
-        u = d.get("usage")
-        if not isinstance(u, dict):
-            return
-        self.viu = True
-        self.modelo = d.get("model") or self.modelo
-        t = d.get("time")
-        if isinstance(t, (int, float)):
-            self.ts = datetime.fromtimestamp(t / 1000.0, LOCAL)
-        acc = self.acc
-        acc["input"] += _int(u.get("inputOther"))
-        acc["output"] += _int(u.get("output"))
-        acc["cacheRead"] += _int(u.get("inputCacheRead"))
-        acc["cacheWrite"] += _int(u.get("inputCacheCreation"))
-
-    def fechar(self):
-        if not self.viu or self.ts is None:
-            return [], [], None
-        modelo, acc = self.modelo, self.acc
-        # Modelo vem como ALIAS ("apikey/k3"); o provedor e o prefixo. Canoniza como os demais.
-        prov = modelo.split("/", 1)[0] if "/" in modelo else ""
-        return [UsageRow(
-            ts=self.ts, source="kimi", provider=pricing.canonizar_provedor(prov) or prov or "?",
-            model=modelo or "?",
-            project=PROJETO_DESCONHECIDO, session_id=self.sid,
-            input=acc["input"], output=acc["output"],
-            cache_write=acc["cacheWrite"], cache_read=acc["cacheRead"],
-            subagente=self.subagente,
-        )], [], None
-
-
-def _dobra_kimi(arq: Path) -> DobraKimi:
-    # session_id = nome do sessionDir (session_<uuid>) — o stem seria "wire" pra TODOS
-    # (mesmo caso do session.jsonl do Pi, ver linhas_pi).
-    return DobraKimi(arq.parent.parent.parent.name, kimi_sessions.is_subagent_wire(str(arq)))
-
-
-def _linhas_wire_kimi(arq: Path) -> list[UsageRow]:
-    return _ler_inteiro(arq, _dobra_kimi(arq))[0]
-
-
 # Suba ao mudar o UsageRow ou a regra de um leitor, senão o cache velho é servido pra sempre.
 CACHE_VERSAO = 1
 # O endpoint é `def` e roda no threadpool: celular + desktop + peer batendo juntos com cache frio
 # fariam N parses simultâneos do mesmo arquivo. Precedente: engines.py:58.
-# ponytail: a trava cobre o CORPO INTEIRO de coletar() (walk de Codex/Pi + parse das três
-# fontes), não só o parse duplicado -- serializa qualquer coleta concorrente, mesmo com cache
+# ponytail: a trava cobre o CORPO INTEIRO de coletar(), não só o parse duplicado -- serializa qualquer coleta concorrente, mesmo com cache
 # quente. Aceitável num app single-user de LAN; trava por fonte se um dia isso virar gargalo medido.
 _cache_lock = threading.Lock()
 
@@ -613,7 +409,7 @@ _ultima_coleta: float | None = None
 _refrescador: threading.Thread | None = None
 # Escopos da última varredura: a leitura usa os mesmos, sem refazer o walk nem reler
 # `.claude.json` a cada pedido.
-_escopos: dict = {"claude": [], "codex": [], "pi": [], "kimi": None}
+_escopos: dict = {"claude": [], "codex": []}
 
 
 def _coletar_tudo() -> None:
@@ -749,10 +545,6 @@ def _ler_custos(desde: str | None = None) -> list[UsageRow]:
         out.extend(_linhas_claude_do_indice(raiz, account_id, desde))
     for identidade in _escopos["codex"]:
         out.extend(_codex_do_indice(identidade, desde))
-    for raiz, source in _escopos["pi"]:
-        out.extend(map(_usage_row, costs_cache.ler_custos(f"{source}:{raiz}", desde)))
-    if _escopos["kimi"] is not None:
-        out.extend(_linhas_kimi_do_indice(_escopos["kimi"], desde))
     return out
 
 
@@ -861,25 +653,9 @@ def _dobra_codex(arq: Path) -> DobraCodex:
     return DobraCodex(arq)
 
 
-def _pi_roots() -> list[tuple[Path, str]]:
-    out = []
-    for source, root in (("pi", raiz_pi()), ("omp", raiz_omp())):
-        if source == "omp" and root == raiz_pi():
-            # Contar a raiz compartilhada como omp também dobraria o gasto.
-            if not _AVISOU_RAIZ_UNICA:
-                _AVISOU_RAIZ_UNICA.add(str(root))
-                _log.warning("custos: omp e pi na mesma raiz (%s) — gasto do omp somado como pi", root)
-            continue
-        if root.is_dir():
-            out.append((root, source))
-    return out
-
-
-
-
 def _sincronizar() -> None:
     global _escopos
-    escopos: dict = {"claude": [], "codex": [], "pi": [], "kimi": None}
+    escopos: dict = {"claude": [], "codex": []}
     costs_cache.zerar_progresso()
     for caminho, account_id in _config_dirs():
         raiz = costs_claude_transcript.raiz_projetos(Path(caminho))
@@ -894,17 +670,10 @@ def _sincronizar() -> None:
                                 f"codex:{CACHE_VERSAO}:{_USO_CODEX_VERSAO}")
         escopos["codex"].append(identidade)
 
-    for raiz, nome in _pi_roots():
-        _sincronizar_pi(raiz, nome)
-        escopos["pi"].append((raiz, nome))
-    kimi = raiz_kimi()
-    if kimi.is_dir():
-        _sincronizar_kimi(kimi)
-        escopos["kimi"] = kimi
     costs_cache.esquecer_fora({
         *(costs_claude_transcript.escopo(raiz) for raiz, _a in escopos["claude"]),
-        *escopos["codex"], *(f"{nome}:{raiz}" for raiz, nome in escopos["pi"]),
-        *([f"kimi:{kimi}"] if escopos["kimi"] is not None else [])})
+        *escopos["codex"],
+        })
     if escopos != _escopos:
         costs_cache.mudou()
     _escopos = escopos

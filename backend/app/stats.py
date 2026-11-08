@@ -1,7 +1,6 @@
 """Agregador da faixa de estatísticas por sessão (evento SSE `stats`).
 
-Lê o MESMO arquivo que o transcript da sessão já usa (jsonl do Claude, wire.jsonl do
-Kimi, session.jsonl do Pi), mas incrementalmente e por conta própria: guarda o offset
+Lê o MESMO arquivo que o transcript da sessão já usa, mas incrementalmente e por conta própria: guarda o offset
 de bytes e a cada `collect()` folda só as linhas novas. Conexões compartilham o
 acumulador; os últimos usados ficam em memória para uma reabertura barata.
 
@@ -35,7 +34,7 @@ _TOOLS_PENDENTES_MAX = 200
 
 
 class _Fold:
-    """Estado comum dos três folds; subclasse implementa feed(obj)."""
+    """Estado comum dos folds; subclasse implementa feed(obj)."""
 
     def __init__(self) -> None:
         self.turns = 0
@@ -212,102 +211,6 @@ class _FoldClaude(_Fold):
         self._gap(ts)                # gap até aqui não é LLM — usuário pensando ou sessão parada
 
 
-class _FoldKimi(_Fold):
-    """wire.jsonl do Kimi: `usage.record` traz o DELTA por chamada (regra medida no
-    costs_sources.linhas_kimi); `llm.request` marca o início da chamada — o par
-    sequencial request->record é a duração de LLM. Tools e TTFT vêm dos eventos
-    embrulhados em `context.append_loop_event`. Tempo em ms no envelope `time`."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._req_ts: float | None = None      # llm.request aguardando seu usage.record
-
-    def feed(self, obj: dict) -> None:
-        t = obj.get("type")
-        ts = _ms_ts(obj.get("time"))
-        if t == "turn.prompt":
-            self.turns += 1
-            self._prompt_ts = ts
-        elif t == "llm.request":
-            self._req_ts = ts
-        elif t == "usage.record":
-            u = obj.get("usage")
-            if isinstance(u, dict):
-                self.steps += 1
-                cr = _int(u.get("inputCacheRead"))
-                self.in_tok += _int(u.get("inputOther")) + cr + _int(u.get("inputCacheCreation"))
-                self.cache_read_tok += cr
-                self.cache_write_tok += _int(u.get("inputCacheCreation"))
-                self.out_tok += _int(u.get("output"))
-            if self._req_ts is not None and ts is not None and 0 <= ts - self._req_ts <= _GAP_TETO_S:
-                self.llm_ms += (ts - self._req_ts) * 1000.0
-            self._req_ts = None
-        elif t == "context.append_loop_event":
-            ev = obj.get("event")
-            if not isinstance(ev, dict):
-                return
-            et = ev.get("type")
-            if et == "content.part":
-                self._ttft(ts)
-            elif et == "tool.call":
-                self._tool_start(ev.get("id") or ev.get("toolCallId"), ts)
-            elif et == "tool.result":
-                self._tool_end(ev.get("id") or ev.get("toolCallId"), ts)
-
-
-class _FoldPi(_Fold):
-    """session.jsonl do Pi: uma linha `message` por mensagem, usage completo na de
-    assistente (input/output/cacheRead/cacheWrite — regra de SOMA, ver
-    costs_sources.linhas_pi). toolCall no bloco do assistente; toolResult tem role
-    próprio. Timestamp em ms no `message.timestamp`."""
-
-    def feed(self, obj: dict) -> None:
-        if obj.get("type") != "message":
-            return
-        msg = obj.get("message")
-        if not isinstance(msg, dict):
-            return
-        ts = _ms_ts(msg.get("timestamp"))
-        role = msg.get("role")
-        if role == "user":
-            self.turns += 1
-            self._prompt_ts = ts
-            self._gap(ts)
-        elif role == "assistant":
-            u = msg.get("usage")
-            if isinstance(u, dict):
-                self.steps += 1
-                cr = _int(u.get("cacheRead"))
-                self.in_tok += _int(u.get("input")) + cr + _int(u.get("cacheWrite"))
-                self.cache_read_tok += cr
-                self.cache_write_tok += _int(u.get("cacheWrite"))
-                self.out_tok += _int(u.get("output"))
-            # O Pi grava a linha do assistente quando a geração COMEÇA (medido em
-            # sessão real: gap ~1ms da linha anterior mesmo com 4k tok de saída),
-            # então o gap não mede LLM — a duração vem no campo da própria mensagem.
-            # Sem o campo (Pi antigo), cai no gap, que era a conta original.
-            gap = self._gap(ts)
-            dur = msg.get("_piClaudeStyleThinkingDurationMs")
-            dur_s = (dur / 1000.0
-                     if isinstance(dur, (int, float)) and not isinstance(dur, bool)
-                     and 0 <= dur <= _GAP_TETO_S * 1000.0 else None)
-            if dur_s is not None:
-                self.llm_ms += dur_s * 1000.0
-            elif gap is not None:
-                self.llm_ms += gap * 1000.0
-            self._ttft(ts)
-            # A tool só dispara quando a geração termina — ancorar no ts da linha
-            # (início) faria o tempo de LLM entrar dobrado dentro de tool_ms.
-            ts_fim = ts + dur_s if (ts is not None and dur_s is not None) else ts
-            content = msg.get("content")
-            for b in (content if isinstance(content, list) else []):
-                if isinstance(b, dict) and b.get("type") == "toolCall":
-                    self._tool_start(b.get("id"), ts_fim)
-        elif role == "toolResult":
-            self._tool_end(msg.get("toolCallId"), ts)
-            self._gap(ts)            # espera de tool — só avança o cursor
-
-
 class _FoldCodex(_Fold):
     """rollout jsonl do Codex: envelope `{timestamp, type, payload}`. O usage vem no
     `event_msg`/`token_count`, e a conta sai do `total_token_usage` (acumulado da thread), NÃO do
@@ -391,8 +294,8 @@ class _FoldCodex(_Fold):
             self._llm(ts)
 
 
-_FOLDS = {"claude": _FoldClaude, "claude-headless": _FoldClaude, "kimi": _FoldKimi, "pi": _FoldPi,
-          "omp": _FoldPi, "codex": _FoldCodex}
+_FOLDS = {"claude": _FoldClaude, "claude-headless": _FoldClaude,
+          "codex": _FoldCodex}
 
 
 class Accumulator:
@@ -532,10 +435,6 @@ class Accumulator:
 
 def _int(v) -> int:
     return v if isinstance(v, int) and not isinstance(v, bool) else 0
-
-
-def _ms_ts(v) -> float | None:
-    return v / 1000.0 if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
 
 def _iso_ts(v) -> float | None:

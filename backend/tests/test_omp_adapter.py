@@ -38,9 +38,8 @@ def test_model_args_aceita_omp_com_thinking():
 
 
 def test_cli_probe_e_stats_conhecem_omp():
-    from app import cli_probe, stats
+    from app import cli_probe
     assert cli_probe._BIN["omp"] == "omp"
-    assert stats._FOLDS["omp"] is stats._FoldPi
 
 
 def test_argv0_omp_vira_provider_omp():

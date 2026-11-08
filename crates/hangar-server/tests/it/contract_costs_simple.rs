@@ -3,39 +3,10 @@ use common::costs::*;
 use hangar_server::costs;
 use hangar_server::costs::index::{Fold, Index};
 use hangar_server::costs::simple;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-fn sync_simple(ix: &Index, base: &Path) {
-    let pi = base.join("pi");
-    let files = costs::collect::list_files(&pi, |n| n.ends_with(".jsonl"));
-    ix.sync(&format!("pi:{}", pi.display()), &files, &simple::new_pi_fold(&pi, "pi"),
-        simple::PI_VERSION, "", &|_| vec![], &progress()).unwrap();
-    let kimi = base.join("kimi/sessions");
-    let files = costs::collect::list_files(&kimi, |n| n == "wire.jsonl");
-    ix.sync(&format!("kimi:{}", kimi.display()), &files, &simple::new_kimi_fold,
-        simple::KIMI_VERSION, "", &|_| vec![], &progress()).unwrap();
-}
-
-/// Id de sessão do Pi é caminho relativo: `str(Path)` no Python, `MAIN_SEPARATOR` no Rust; o golden
-/// foi gravado com `/`.
-fn native_separators(value: &Value) -> Value {
-    match value {
-        Value::String(text) if text.starts_with("--repo--/") => Value::String(text.replace('/', std::path::MAIN_SEPARATOR_STR)),
-        Value::Array(values) => Value::Array(values.iter().map(native_separators).collect()),
-        Value::Object(values) => Value::Object(values.iter().map(|(k, v)| (k.clone(), native_separators(v))).collect()),
-        other => other.clone(),
-    }
-}
-
-fn assert_golden(ix: &Index, base: &Path, golden: &Value) {
-    for prefix in ["pi/", "kimi/"] {
-        let want = golden.as_object().unwrap().iter().filter(|(key, _)| key.starts_with(prefix))
-            .map(|(key, value)| (key.clone(), native_separators(value))).collect::<Map<_, _>>();
-        assert_close(&dump(ix, base, prefix), &Value::Object(want), prefix);
-    }
-}
 
 fn feed(fold: &mut impl Fold, value: Value) {
     fold.line(&serde_json::to_vec(&value).unwrap());
@@ -53,24 +24,6 @@ fn kimi_usage(input: i64, time: f64, model: &str) -> Value {
         "usage":{"inputOther":input,"output":2,"inputCacheRead":3,"inputCacheCreation":4}})
 }
 
-#[test]
-fn pi_and_kimi_index_match_python() {
-    let (_dir, base) = fixtures_copy();
-    let ix = Index::open(&base.join("../idx")).unwrap();
-    sync_simple(&ix, &base);
-    assert_golden(&ix, &base, &golden_index());
-}
-
-#[test]
-fn pi_and_kimi_resumed_in_two_halves_match_python() {
-    let (_dir, base) = fixtures_copy();
-    let ix = Index::open(&base.join("../idx")).unwrap();
-    let tails = halve_all(&base);
-    sync_simple(&ix, &base);
-    for (path, tail) in tails { append(&path, &tail); }
-    sync_simple(&ix, &base);
-    assert_golden(&ix, &base, &golden_index()["__resumed__"]);
-}
 
 #[test]
 fn omp_preserves_relative_id_final_model_and_all_message_deltas() {
