@@ -64,7 +64,7 @@ _PANE_KEYED = (".hangar-pi", ".hangar-kimi")
 # conteudo `{"text":` — nove bytes, a escrita cortada no meio, que e exatamente o que o tmp+rename
 # existe pra nunca promover.
 #
-# Nao ha leitor: os quatro publicadores (preview_hook, state_hook, kimi_state_hook, os dois
+# Não há leitor: publicadores (preview_hook, state_hook, os dois
 # statusline em js/ts e o hangar-state.ts) escrevem no tmp e renomeiam; quem consome le so o `.json`
 # final. Entao a chave de sessao nao entra na conta aqui — o criterio conservador do resto do
 # arquivo existe pra nao apagar sidecar que alguem AINDA le, e nao e o caso.

@@ -207,7 +207,7 @@ def _registrar(motivo: str) -> None:
 
     Ela falha aberta de proposito (um hook que estoura nao pode travar a sessao), mas falhar
     aberta E muda deixaria o furo invisivel pra sempre: ninguem descobre que a trava parou de
-    valer olhando pra tela. Mesmo raciocinio do log em disco do kimi_state_hook. Best-effort:
+    valer olhando pra tela. Best-effort:
     se nem logar der, engole — o comando do usuario nao paga por isso."""
     try:
         root = (os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~/AppData/Local"), "hangar")
