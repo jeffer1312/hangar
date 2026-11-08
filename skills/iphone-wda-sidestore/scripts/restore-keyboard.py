@@ -67,8 +67,8 @@ def main():
                 try:
                     call("POST", f"/session/{s}/wda/dragfromtoforduration",
                          {"fromX": 200, "fromY": 600, "toX": 200, "toY": 300, "duration": 0.3})
-                except urllib.error.HTTPError:
-                    pass  # sem rolar, a busca segue e o aviso de "não achei" sai no fim
+                except urllib.error.HTTPError as err:  # sem rolar, a busca segue e o "não achei" sai no fim
+                    print(f"aviso: a rolagem dos Ajustes falhou ({err.code})", file=sys.stderr)
             time.sleep(1)
         if not e:
             raise SystemExit(f"aviso: não achei '{label}' nos Ajustes; religue à mão em Ajustes > Geral > Teclado")
