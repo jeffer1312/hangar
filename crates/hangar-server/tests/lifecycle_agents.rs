@@ -162,3 +162,24 @@ fn existing_runtime_and_untracked_terminal_identities_keep_their_meaning() {
     assert_eq!(runtime_key(Some("t:1700000000")), None);
     assert_eq!(runtime_key(None), None);
 }
+
+#[test]
+fn kimi_metadata_start_and_history_preserve_the_python_queue_contract() {
+    use hangar_server::transcript::{history::{HistoryRequest, merged_history, transcript_start_ts, TAIL_WINDOW}, Provider};
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("wire.jsonl");
+    let rows = [
+        json!({"type":"metadata","protocol_version":"1.5","created_at":1786452160239u64}),
+        json!({"type":"context.append_message","time":1786453187986u64,
+            "message":{"role":"user","id":"m1","origin":{"kind":"user"},"content":[{"type":"text","text":"ola"}]}}),
+        json!({"type":"context.append_loop_event","time":1786453190000u64,
+            "event":{"type":"content.part","uuid":"u1","part":{"type":"text","text":"oi!"}}}),
+    ];
+    std::fs::write(&path, rows.iter().map(|row| format!("{row}\n")).collect::<String>()).unwrap();
+    assert_eq!(transcript_start_ts(&path), 1786452160.239);
+    let events = merged_history(&HistoryRequest {provider:Provider::Kimi, jsonl:path, queue:None, limit:None, tail_window:TAIL_WINDOW}).unwrap();
+    assert_eq!(events.iter().map(|event| (event.kind.clone(), event.text.as_deref())).collect::<Vec<_>>(), [
+        (hangar_api::chat::ChatKind::UserMsg, Some("ola")), (hangar_api::chat::ChatKind::AssistantMsg, Some("oi!")),
+    ]);
+}

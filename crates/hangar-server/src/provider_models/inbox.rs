@@ -447,48 +447,6 @@ async fn connection(store: Arc<Store>, mut socket: WebSocket, interval: Duration
     store.remove(&key, &line);
 }
 
-/// Transporte privado para os emissores que ainda vivem no Python; o estado da linha só existe aqui.
-pub async fn private(st: &Arc<AppState>, peer: SocketAddr, request: Request) -> Response {
-    if !crate::terminal_routes::trusted_internal(st, peer, request.headers()) {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    let bytes = match axum::body::to_bytes(request.into_body(), MAX_MESSAGE).await {
-        Ok(v) => v,
-        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
-    };
-    let value: Value = match std::str::from_utf8(&bytes)
-        .ok()
-        .and_then(crate::transcript::pyjson::loads_lossless)
-    {
-        Some(v) => v,
-        None => return StatusCode::BAD_REQUEST.into_response(),
-    };
-    match call(value).await {
-        Ok(value) => crate::session_write::json_response(StatusCode::OK, value),
-        Err(error) => error.response(),
-    }
-}
-
-/// A ponte existente da lista chama este dispatcher no processo do Rust.
-pub async fn call(value: Value) -> Result<Value, super::ModelError> {
-    let s = |key: &str| value[key].as_str().unwrap_or("");
-    let result = match s("op") {
-        "line" => json!({"line":INBOX.line_for(value["name"].as_str(),value["pane"].as_str())}),
-        "has_line" => json!({"present":INBOX.has_line(s("key"))}),
-        "question" => json!({"value":INBOX.question(s("key"),s("what")).await}),
-        "deliver" => {
-            json!({"disposition":INBOX.deliver(s("key"),s("text"),value["msg_id"].as_str()).await})
-        }
-        _ => {
-            return Err(super::ModelError::text(
-                400,
-                "operação da extensão desconhecida",
-            ));
-        }
-    };
-    Ok(result)
-}
-
 pub fn write_endpoint(
     dirs: &[PathBuf],
     address: SocketAddr,

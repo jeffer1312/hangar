@@ -173,7 +173,7 @@ async fn serve_policy(mut state: hangar_server::routes::AppState, home: &std::pa
         bootstrap:String::new(), secret:b"fixture".to_vec(), secure:false, rate_max:100.into(), rate_window:300.into(),
     }));
     let share = hangar_server::share::from_env(Some(home.join(".claude/shares.json")),
-        state.list.env().dirs.as_ref(), mux.as_os_str().to_owned()).unwrap();
+        state.list.env().dirs.as_ref(), mux.as_os_str().to_owned(), None).unwrap();
     state.login_guests = login.clone();
     state.share = Some(share.clone());
     state.side.locate = Arc::new(hangar_server::locate::ListLocate { list:state.list.clone() });
@@ -220,7 +220,7 @@ pub async fn real_python_fixture(
     let addr = listener.local_addr().unwrap();
     let fixture = Fixture {
         addr, hits:Arc::default(), context_hits:Arc::default(), list:state.list.clone(),
-        runtime, policy:None, diags:Arc::default(), workspace_slots:state.workspace_slots.clone(), _home:None,
+        runtime, policy:None, diags:Arc::new(tempfile::tempdir().unwrap()), workspace_slots:state.workspace_slots.clone(), _home:None,
     };
     let state = Arc::new(state);
     let app = hangar_server::routes::router(state.clone())

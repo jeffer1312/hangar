@@ -246,8 +246,8 @@ pub fn scan(jsonl: &Path, now: f64) -> std::io::Result<Scan> {
     Ok(Scan { open, last_reply: reply })
 }
 
-/// "Aguardando" e "terminou" das sessões que o Rust conduz; Pi, omp e Kimi ainda saem do Python.
-pub(crate) fn turn_notices(provider: &str) -> bool { matches!(provider, "claude" | "codex") }
+/// Provedores cujo fim de turno e vínculo são conduzidos no Rust.
+pub(crate) fn turn_notices(provider: &str) -> bool { matches!(provider, "claude" | "codex" | "pi" | "omp" | "kimi") }
 
 /// Quem arma o auto-resume nesta varredura: o limite novo e, na primeira depois da subida, também o
 /// que a memória já sabia (o timer da execução anterior morreu com ela).

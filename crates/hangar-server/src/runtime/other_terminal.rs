@@ -363,6 +363,10 @@ impl OtherHandle {
                     } => {
                         let result = async {
                             if kind == "input" {
+                                if let Some(text) = payload["text"].as_str().filter(|text| text.trim_start().starts_with('/')) {
+                                    let frame = frames.borrow().clone();
+                                    return dispatch::direct_prompt(&target, &options, &io, &id, text, frame.as_deref()).await;
+                                }
                                 match payload["text"]
                                     .as_str()
                                     .filter(|text| super::queue::queue_text_ok(text))
@@ -879,6 +883,10 @@ impl Observer {
     }
 }
 
+fn inbox_line(target: &OtherTarget, inbox: &crate::provider_models::inbox::Store) -> Option<String> {
+    inbox.line_for(Some(&target.key), (!target.binding.windows).then_some(target.binding.pane.as_str()))
+}
+
 fn question_payload(questions: &[Value]) -> Vec<Value> {
     questions.iter().map(|question|json!({"header":question["header"].as_str().unwrap_or(""),"question":question["question"].as_str().unwrap_or(""),"multiSelect":question["multiSelect"].as_bool().unwrap_or(false),"options":question["options"].as_array().into_iter().flatten().map(|option|json!({"label":option["label"].as_str().unwrap_or(""),"description":option["description"].as_str().unwrap_or(""),"preview":option["preview"].as_str().unwrap_or("")})).collect::<Vec<_>>()})).collect()
 }
@@ -897,6 +905,13 @@ async fn confirm(
         clock(),
     )
     .await?;
+    if target.provider == hangar_transcript::Provider::Kimi
+        && snapshot.borrow()["view"]["public_state"]["state"] != "working" {
+        let state = queue.snapshot().await.map_err(|_| failed("queue_io"))?;
+        let sample = clock();
+        queue.exec(target.generation, &format!("other-unproved:{}", state.next_seq), sample,
+            Action::GiveUpUnproved {now:sample.epoch_s, grace:30.0}).await.map_err(|_| failed("queue_io"))?;
+    }
     publish_snapshot(target, queue, snapshot, None).await?;
     Ok(json!({"confirmed":confirmed.len()+legacy}))
 }

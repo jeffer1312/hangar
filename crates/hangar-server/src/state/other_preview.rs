@@ -5,6 +5,52 @@ use hangar_api::preview::PreviewEvent;
 
 use super::preview::{HookFile, Slot, hook_text};
 
+/// A captura pertence ao ator; este redutor só existe enquanto o chat daquela vida está aberto.
+pub struct RuntimePreview {
+    hubs: crate::side::WeakHubs,
+    reducers: std::sync::Mutex<std::collections::HashMap<(String, u64, String), OtherPreview>>,
+}
+
+impl RuntimePreview {
+    pub fn new(hubs: crate::side::WeakHubs) -> Self { Self { hubs, reducers: Default::default() } }
+
+    fn committed(&self, target: &crate::runtime::other_terminal::OtherTarget) -> Option<Option<Arc<str>>> {
+        self.hubs.upgrade()?.preview_committed(&target.name, &target.lifecycle_id(), &target.binding.conversation)
+    }
+}
+
+impl crate::runtime::other_terminal::OtherPreviewSource for RuntimePreview {
+    fn interested(&self, target: &crate::runtime::other_terminal::OtherTarget) -> bool {
+        let interested = self.committed(target).is_some();
+        if !interested { self.forget(target); }
+        interested
+    }
+
+    fn update(&self, context: crate::runtime::other_terminal::OtherPreviewContext<'_>) -> Result<Option<PreviewEvent>, crate::runtime::protocol::RuntimeError> {
+        let target = context.target;
+        let Some(committed) = self.committed(target) else { self.forget(target); return Ok(None); };
+        let mut reducers = self.reducers.lock().map_err(|_| crate::runtime::protocol::RuntimeError::new("other_preview_unavailable", "a prévia da sessão está indisponível"))?;
+        let key = (target.key.clone(), target.generation, target.binding.conversation.clone());
+        let preview = match reducers.entry(key) {
+            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let reducer = OtherPreview::new(target.provider.as_str()).ok_or_else(|| crate::runtime::protocol::RuntimeError::new("other_preview_provider_invalid", "o provedor não tem prévia de terminal"))?;
+                entry.insert(reducer)
+            }
+        };
+        let generation = preview.generation();
+        Ok(preview.update(OtherPreviewInput { session: &target.name, generation, pane: context.frame,
+            files: context.files, marker: context.marker, state: Some(&context.state.state), now: context.now, committed }))
+    }
+
+    fn forget(&self, target: &crate::runtime::other_terminal::OtherTarget) {
+        match self.reducers.lock() {
+            Ok(mut reducers) => { reducers.remove(&(target.key.clone(), target.generation, target.binding.conversation.clone())); }
+            Err(_) => tracing::error!(code = "other_preview_unavailable", "não foi possível encerrar o redutor da prévia"),
+        }
+    }
+}
+
 pub struct OtherPreviewInput<'a> {
     pub session: &'a str,
     /// Capturada antes da E/S: reset invalida os quadros ainda em voo.

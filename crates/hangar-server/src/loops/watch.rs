@@ -1,8 +1,8 @@
 //! O que acorda o loop e o `then`: as transições de turno do vigia de avisos. Pergunta aberta pausa
 //! o loop; fim de turno confirmado (a sessão segue parada e a fila não acabou de digitar nada) dá a
 //! volta do loop ou, sem loop ativo, dispara o vínculo `then`. Na subida, os loops ativos voltam:
-//! sessão sumida falha, sessão parada ganha a volta. Kimi, Pi e omp seguem no Python: o `then`
-//! deles sai de lá, e dois leitores do vínculo o mandariam duas vezes.
+//! sessão sumida falha, sessão parada ganha a volta. O `then` dos agentes de terminal usa o
+//! estado confirmado do ator; o Kimi pode repetir o mesmo idle no hook durante um turno.
 use super::store::{is_active, lock as loop_lock, status, Store};
 use crate::push::TurnEvent;
 use crate::routes::AppState;
@@ -21,6 +21,7 @@ const BOOT_RETRY: Duration = Duration::from_secs(2);
 pub trait Host: Send + Sync + 'static {
     fn store(&self) -> Store;
     fn guard<'a>(&'a self, row: &'a SessionRow) -> BoxFuture<'a, Result<(crate::runtime::ingress::IngressPass, SessionRow), &'static str>>;
+    fn terminal_live(&self, name: &str) -> Option<crate::runtime::protocol::LiveReceiver>;
     fn row_by_sid<'a>(&'a self, sid: &'a str) -> BoxFuture<'a, Option<SessionRow>>;
     /// A lista inteira; `None` enquanto ela não sabe quem está vivo.
     fn rows(&self) -> BoxFuture<'_, Option<Vec<SessionRow>>>;
@@ -94,12 +95,47 @@ impl<H: Host> Watcher<H> {
                 let (me, sid) = (self.clone(), ev.sid.clone());
                 let h = tokio::spawn(async move {
                     tokio::time::sleep(me.settle).await;
+                    if !me.confirmed_idle(&ev.sid).await { return; }
                     // Daqui em diante a volta não é cancelada no meio.
                     tokio::spawn(async move { me.idle(ev).await });
                 });
                 lock(&self.pending).insert(sid, h.abort_handle());
             }
             _ => {}
+        }
+    }
+
+    async fn confirmed_idle(&self, sid: &str) -> bool {
+        let Some(row) = self.host.row_by_sid(sid).await else { return false };
+        if row.provider != "kimi" { return true; }
+        let Some(mut live) = self.host.terminal_live(&row.name) else { return false };
+        let (mut observed, mut deferred) = (false, false);
+        let mut idle_since = None;
+        loop {
+            let current = live.borrow_and_update().clone();
+            let mut idle = false;
+            if let Some(current) = current {
+                if let Some(binding) = &current.binding {
+                    if binding.conversation != sid || row.lifecycle_id.as_deref() != Some(crate::runtime::other_terminal::lifecycle_id(&binding.key, binding.generation).as_str()) { return false; }
+                    if current.public_state["state"] == "dead" { return false; }
+                    idle = current.error.is_none() && current.public_state["state"] == "idle";
+                }
+            } else if observed { return false; }
+            if idle {
+                if !deferred { return true; }
+                let since = idle_since.get_or_insert_with(tokio::time::Instant::now);
+                if since.elapsed() >= self.settle { return true; }
+            } else {
+                deferred = true;
+                idle_since = None;
+            }
+            observed = true;
+            if let Some(since) = idle_since {
+                tokio::select! {
+                    _ = tokio::time::sleep_until(since + self.settle) => {},
+                    changed = live.changed() => if changed.is_err() { return false; },
+                }
+            } else if live.changed().await.is_err() { return false; }
         }
     }
 
@@ -221,6 +257,9 @@ pub struct Live { pub st: Arc<AppState> }
 fn key_of(row: &SessionRow) -> Option<String> { row.jsonl.as_deref().map(crate::locate::session_key) }
 
 impl Host for Live {
+    fn terminal_live(&self, name: &str) -> Option<crate::runtime::protocol::LiveReceiver> {
+        self.st.state.runtime.get().map(|runtime| runtime.live(name))
+    }
     fn store(&self) -> Store { super::store(&self.st) }
     fn guard<'a>(&'a self, row: &'a SessionRow) -> BoxFuture<'a, Result<(crate::runtime::ingress::IngressPass, SessionRow), &'static str>> {
         Box::pin(async move {

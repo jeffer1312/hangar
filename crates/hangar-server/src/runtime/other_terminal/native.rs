@@ -74,7 +74,7 @@ pub(super) async fn drain(
         options
             .inbox
             .bind_session(&target.name, &target.key, legacy.as_deref());
-        let Some(line) = options.inbox.line_for(Some(&target.key), None) else {
+        let Some(line) = inbox_line(target, &options.inbox) else {
             break;
         };
         let registered = options

@@ -293,15 +293,6 @@ def _reset_auth_backoff():
 
 
 @pytest.fixture(autouse=True)
-def _isolate_provider_inbox_transport():
-    from unittest.mock import patch
-    from app import providers_bridge
-    with patch.object(providers_bridge, "inbox_call", lambda operation, **arguments:
-                      {"line": None, "value": None, "disposition": "sem-linha", "present": False}):
-        yield
-
-
-@pytest.fixture(autouse=True)
 def _reset_agentpane_cache():
     # _cache do agentpane e dict de MODULO com TTL de 60s: sem reset, a resolucao de uma sessao de
     # teste vazaria pro teste seguinte que reusa o mesmo nome (padrao do _reset_list_snapshot).

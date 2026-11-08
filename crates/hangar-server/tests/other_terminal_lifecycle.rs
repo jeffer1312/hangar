@@ -890,3 +890,58 @@ async fn other_lifecycle_reused_claude_name_registers_pi_without_killing_current
     );
     assert!(io.writes.lock().unwrap().is_empty());
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn other_lifecycle_list_and_history_share_the_proven_actor_without_python() {
+    hangar_server::diag::disable_diary();
+    use hangar_server::{auth::TrustedHosts, config::Config, routes::AppState};
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+    let root = tempfile::tempdir().unwrap();
+    let list = raw_list(root.path(), true);
+    let target = target(root.path());
+    let rows = [
+        json!({"type":"message","id":"u1","timestamp":"2026-01-01T00:00:00Z","message":{"role":"user","content":[{"type":"text","text":"ola"}]}}),
+        json!({"type":"message","id":"a1","timestamp":"2026-01-01T00:00:01Z","message":{"role":"assistant","content":[{"type":"text","text":"oi!"}]}}),
+    ];
+    std::fs::write(&target.transcript, rows.iter().map(|row| format!("{row}\n")).collect::<String>()).unwrap();
+    let source = Arc::new(Mutex::new(Some(OtherDiscoveryState::Ready(target.clone()))));
+    let (registry, _) = registry(root.path(), Io::live(), source, None);
+    list.set_plugin_runtime(registry.clone());
+    registry.adopt_now("pi-a").await.unwrap().unwrap();
+    let mut live = registry.live("pi-a");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if live.borrow().as_ref().is_some_and(|state| state.public_state.is_object()) { break; }
+            live.changed().await.unwrap();
+        }
+    }).await.unwrap();
+    let snapshot = list.refresh().await.unwrap();
+    assert_eq!(snapshot.rows.len(), 1);
+    let row = &snapshot.rows[0];
+    assert_eq!(row.provider, "pi");
+    assert_eq!(row.lifecycle_id.as_deref(), Some(target.lifecycle_id().as_str()));
+    assert_eq!(row.jsonl.as_deref(), Some(target.transcript.to_str().unwrap()));
+    assert_eq!(row.last_reply.as_deref(), Some("oi!"));
+    let mut state = AppState::new(Config {
+        listen:"127.0.0.1:0".parse().unwrap(), upstream:"127.0.0.1:9".parse().unwrap(),
+        internal_secret:"test-only".into(), auth_token:"owner-test".into(), log_path:None, trusted:TrustedHosts::parse(""),
+    });
+    state.origins_home = root.path().to_owned();
+    state.list = list.clone();
+    state.side.locate = Arc::new(hangar_server::locate::ListLocate {list});
+    state.side.runtime.set(registry.clone()).ok().unwrap();
+    let app = hangar_server::routes::router(Arc::new(state));
+    let mut request = axum::http::Request::builder().uri("/api/sessions/pi-a/history")
+        .header("authorization", "Bearer owner-test").body(axum::body::Body::empty()).unwrap();
+    request.extensions_mut().insert(axum::extract::ConnectInfo("127.0.0.1:50000".parse::<std::net::SocketAddr>().unwrap()));
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let events: Vec<Value> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(events.iter().map(|event| (event["kind"].as_str(), event["text"].as_str())).collect::<Vec<_>>(), [
+        (Some("user_msg"), Some("ola")), (Some("assistant_msg"), Some("oi!")),
+    ]);
+    registry.shutdown().await.unwrap();
+}

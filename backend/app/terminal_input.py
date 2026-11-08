@@ -12,7 +12,6 @@ from app import diag as usage_diag
 from app import codex_permissions as cxperm
 from app.askquestion import pergunta_aberta
 from app import model_picker as mp
-from app import providers_bridge
 
 
 from app import tmux
@@ -461,67 +460,6 @@ def _diag_composer(pane: str, texto: str, name: str, pastes_antes: set[str] | No
                 f"{geometria} pastes(antes={sorted(pastes_antes or set())} depois={sorted(pastes_depois)})")
     except Exception as e:
         return f"diag indisponivel: {e!r}"
-
-
-_AVISO_SUBAGENT_PI_FRASE = _sem_espaco(
-    "Subagent async grouped result intercom delivery was not acknowledged for")
-
-
-_AVISO_SUBAGENT_PI_RE = re.compile(
-    re.escape(_AVISO_SUBAGENT_PI_FRASE) + r".*?/tmp/pi-subagents-[^']*'?\.?")
-
-
-def _composer_ocupado_pi(name: str, pane_id: str | None = None) -> bool:
-    """True = já ha RASCUNHO parado no composer do Pi. Digitar por cima COLARIA as mensagens num
-    submit so — caso real (ABC-1234, 31/07): aviso de grupo ficou no composer com o Enter engolido
-    (tmux extended-keys formato xterm), o prompt do cockpit foi digitado em cima, os dois viraram
-    UMA mensagem, e o reconcile — sem achar o prompt exato no transcript — reentregou (duplicata).
-
-    PERGUNTA primeiro, raspa depois. Quem sabe a resposta e o Pi, e a extensao ja esta dentro dele:
-    `ctx.ui.getEditorText()` devolve o texto do campo. A tela NAO responde isso — medido em
-    22/08/2026, com o aviso da nossa propria extensao na faixa do composer:
-
-        getEditorText() com o aviso na faixa   -> ""                        (nao e rascunho)
-        getEditorText() com rascunho parado    -> "rascunho parado do usuario"
-        ANSI da faixa nos dois casos           -> '\\x1b[0m … \\x1b[0m'      (identico)
-        cursor_flag/cursor_x do psmux          -> 0 / 199 (borda), sempre   (nao localiza nada)
-
-    Sem linha (extensao velha, socket caido, sessao Pi aberta antes deste commit) cai na raspagem
-    de sempre, que segue abaixo sem uma linha mudada.
-
-    So pro Pi porque nele a leitura e deterministica (medido): composer = linhas entre as DUAS
-    ULTIMAS reguas; vazio = nenhuma linha entre elas. No Claude Code o composer vazio desenha
-    glifo/placeholder, entao "tem texto" nao distingue rascunho de moldura — la fica o comportamento
-    de hoje. Ilegivel -> False (na duvida envia, mesma politica do resto do arquivo).
-
-    Antes de decidir "tem rascunho?", remove o aviso de subagente conhecido (ver
-    _AVISO_SUBAGENT_PI_RE) do texto da caixa, JA SEM ESPACO (sobrevive a quebra de linha do wrap de
-    tela — ver comentario ali): aviso de sistema nao e rascunho do usuario, e contá-lo como ocupado
-    travava o envio indefinidamente (o usuario so via a mensagem sair depois de mexer no terminal a
-    mao)."""
-    # `linha_de` e nao o pane cru: no psmux o pane e `%1` em toda sessao Pi, e perguntar pela chave
-    # errada leria o composer da conversa do vizinho (mesma raiz do 11909b31).
-    chave = providers_bridge.inbox_call("line", name=name, pane=pane_id)["line"]
-    if chave:
-        resposta = providers_bridge.inbox_call("question", key=chave, what="editor")["value"]
-        if resposta is not None:
-            # `.strip()`: um espaco solto no campo nao e rascunho que valha adiar envio — e o que
-            # sobra de um paste cancelado. Vazio e resposta ("nao ha rascunho"), None e ausencia.
-            return bool(resposta.strip())
-    try:
-        # Mesma poda do _composer_regiao, e pelo mesmo motivo: numa sessao Pi recem-aberta — que e
-        # justamente quando este caminho de raspagem roda, antes de haver linha do Pi — o composer
-        # fica no alto e o fundo em branco faz a checagem de rascunho responder "nao ha" sem ler.
-        linhas = _linhas_uteis(_capture(name))
-    except Exception:
-        return False
-    reguas = [i for i, l in enumerate(linhas) if l.count("─") >= 20]
-    if len(reguas) < 2 or len(linhas) - reguas[-1] > _COMPOSER_FUNDO \
-            or reguas[-1] - reguas[-2] > _COMPOSER_ALTURA:
-        return False
-    texto_composer = "\n".join(linhas[reguas[-2] + 1:reguas[-1]])
-    sem_aviso = _AVISO_SUBAGENT_PI_RE.sub("", _sem_espaco(texto_composer))
-    return bool(sem_aviso)
 
 
 def _wait_input_ready(name: str, timeout: float | None = None, provider: str = "claude") -> bool:

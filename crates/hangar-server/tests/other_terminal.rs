@@ -103,14 +103,17 @@ fn start_recording(root:&std::path::Path,provider:&str,inbox:std::sync::Arc<hang
     start_recording_with_tick(root,provider,inbox,io,std::time::Duration::from_secs(3600))
 }
 fn start_recording_with_tick(root:&std::path::Path,provider:&str,inbox:std::sync::Arc<hangar_server::provider_models::inbox::Store>,io:std::sync::Arc<RecordingIo>,tick:std::time::Duration)->hangar_server::runtime::other_terminal::OtherHandle {
+    start_recording_with_pane(root, provider, inbox, io, tick, "%1")
+}
+fn start_recording_with_pane(root:&std::path::Path,provider:&str,inbox:std::sync::Arc<hangar_server::provider_models::inbox::Store>,io:std::sync::Arc<RecordingIo>,tick:std::time::Duration,pane:&str)->hangar_server::runtime::other_terminal::OtherHandle {
     use hangar_server::runtime::{other_terminal::{OtherTarget,OtherOptions,OtherHandle},queue::{QueueActor,Store,State,acquire_lease}};
     let state_path=root.join("state.json");let lease_path=root.join("state.lock");
     let store=Store::open(&state_path,&root.join("queue"),State::new("life-a",1,"pi-a",vec![])).unwrap();
     let queue=QueueActor::start(store,acquire_lease(&lease_path).unwrap());
     let transcript=root.join("conversation-a.jsonl");std::fs::write(&transcript,b"").unwrap();
     let target=OtherTarget {key:"life-a".into(),generation:1,name:"pi-a".into(),provider:hangar_transcript::Provider::parse(provider).unwrap(),
-        binding:hangar_server::terminal_input::TerminalBinding {name:"pi-a".into(),pane:"%1".into(),conversation:"conversation-a".into(),generation:1,created:100,mux_argv:vec!["/does-not-exist".into()],windows:false,clipboard_lock_path:None},
-        pane_address:"%1".into(),dirs:directories(root),cwd:root.to_string_lossy().into_owned(),pane_pid:123,agent_pid:123,agent_birth:100.0,transcript,state_path,lease_path,projection_dir:root.join("queue"),config_dirs:vec![root.into()],created:100.0};
+        binding:hangar_server::terminal_input::TerminalBinding {name:"pi-a".into(),pane:pane.into(),conversation:"conversation-a".into(),generation:1,created:100,mux_argv:vec!["/does-not-exist".into()],windows:false,clipboard_lock_path:None},
+        pane_address:pane.into(),dirs:directories(root),cwd:root.to_string_lossy().into_owned(),pane_pid:123,agent_pid:123,agent_birth:100.0,transcript,state_path,lease_path,projection_dir:root.join("queue"),config_dirs:vec![root.into()],created:100.0};
     let mut options=OtherOptions::new(hangar_server::terminal_control::TerminalPool::new(),inbox,std::sync::Arc::new(hangar_server::list::procs::SystemProcs::default()),std::sync::Arc::new(hangar_server::interactions::InteractionStore::default()));
     options.io_override=Some(io);options.tick=tick;
     OtherHandle::spawn(target,queue,options,tokio::sync::watch::channel(None).0)
@@ -442,5 +445,135 @@ async fn other_terminal_partial_write_distinguishes_no_effect_from_a_missing_key
             assert!(!written.exists());
             assert_eq!(result.unwrap_err().code,"erro_interacao_desatualizada","recusa comprovada antes do efeito conserva o código próprio");
         }
+    }
+}
+
+#[tokio::test]
+async fn other_terminal_kimi_unproved_delivery_becomes_visible_without_redraining_even_when_idle() {
+    use hangar_server::runtime::queue::State;
+    let root = tempfile::tempdir().unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+    let state = State::new("life-a", 1, "pi-a", vec![json!({
+        "id":"e1", "text":"MENSAGEM-UNICA", "ts":now - 31.0, "delivered":true,
+    })]);
+    std::fs::write(root.path().join("state.json"), serde_json::to_vec(&state).unwrap()).unwrap();
+    let io = std::sync::Arc::new(RecordingIo::default());
+    let handle = start_recording(root.path(), "kimi", hangar_server::provider_models::inbox::Store::new(), io.clone());
+    handle.confirm().await.unwrap();
+    handle.drain().await.unwrap();
+    handle.drain().await.unwrap();
+    let snapshot = handle.snapshot().await.unwrap();
+    handle.stop().await.unwrap();
+    let row = &snapshot["queue"][0];
+    assert_eq!(row["delivered"], true);
+    assert_eq!(row["desistiu"], true);
+    assert!(row.get("confirmed").is_none());
+    assert!(row.get("attempts").is_none());
+    assert!(io.writes.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn other_terminal_editor_question_reaches_the_posix_pane_without_a_name_registration() {
+    use hangar_server::runtime::protocol::{RuntimeCommand,OperationKind};
+    let root = tempfile::tempdir().unwrap();
+    let inbox = hangar_server::provider_models::inbox::Store::new();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let line = inbox.register("%33", tx);
+    assert!(inbox.line_for(Some("pi-a"), None).is_none());
+    let io = std::sync::Arc::new(RecordingIo::default());
+    let handle = start_recording_with_pane(root.path(), "pi", inbox.clone(), io, std::time::Duration::from_secs(3600), "%33");
+    let mut frames = handle.last_frame();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while frames.borrow().is_none() { frames.changed().await.unwrap(); }
+    }).await.unwrap();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = seen.clone();
+    let replies = inbox.clone();
+    let responder = tokio::spawn(async move {
+        while let Some(frame) = rx.recv().await {
+            observed.lock().unwrap().push(frame.clone());
+            replies.respond("%33", &json!({"id":frame["id"],"resposta":""}));
+        }
+    });
+    let result = tokio::time::timeout(std::time::Duration::from_secs(8), handle.command(RuntimeCommand {
+        operation_id:"pane-editor".into(), kind:OperationKind::Input, payload:json!({"text":"/status"}),
+    })).await.unwrap().expect("comando de barra usa entrada direta, sem tentar criar linha na fila");
+    assert_eq!(result.payload["queued"], false);
+    assert!(handle.snapshot().await.unwrap()["queue"].as_array().unwrap().is_empty());
+    handle.stop().await.unwrap();
+    inbox.remove("%33", &line);
+    responder.abort();
+    let frames = seen.lock().unwrap();
+    assert!(!frames.is_empty(), "a pergunta sai pelo pane %33 sem linha por nome");
+    assert!(frames.iter().all(|frame| frame["pedir"] == "editor"));
+}
+
+#[tokio::test]
+async fn other_terminal_inbox_ack_reaches_the_posix_pane_without_a_name_registration() {
+    use hangar_server::runtime::protocol::{RuntimeCommand,OperationKind,Disposition};
+    let root=tempfile::tempdir().unwrap();
+    let inbox=hangar_server::provider_models::inbox::Store::new();
+    let (outgoing,mut incoming)=tokio::sync::mpsc::unbounded_channel();
+    let registered=inbox.register("%33",outgoing);
+    let io=std::sync::Arc::new(RecordingIo::default());
+    let handle=start_recording_with_pane(root.path(),"pi",inbox.clone(),io.clone(),std::time::Duration::from_secs(3600),"%33");
+    let cloned=handle.clone();
+    let mut sending=tokio::spawn(async move {cloned.command(RuntimeCommand {operation_id:"pane-request".into(),kind:OperationKind::Input,payload:json!({"text":"seguir com a tarefa"})}).await});
+    let (frame,result)=tokio::select! {
+        frame=incoming.recv()=>{let frame=frame.unwrap();inbox.respond("%33",&json!({"id":frame["id"],"ok":true}));(Some(frame),sending.await.unwrap())},
+        result=&mut sending=>(None,result.unwrap()),
+    };
+    let snapshot=handle.snapshot().await.unwrap();
+    handle.stop().await.unwrap();
+    inbox.remove("%33",&registered);
+    assert_eq!(result.unwrap().disposition,Disposition::Accepted);
+    assert_eq!(frame.as_ref().map(|frame|&frame["text"]),Some(&json!("seguir com a tarefa")));
+    assert_eq!(frame.unwrap()["id"],snapshot["queue"][0]["id"]);
+    assert!(io.writes.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn other_terminal_kimi_working_preserves_unproved_delivery_until_the_turn_ends() {
+    use hangar_server::runtime::queue::State;
+    let root = tempfile::tempdir().unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
+    let state = State::new("life-a", 1, "pi-a", vec![json!({"id":"e1","text":"MENSAGEM-UNICA","ts":now - 31.0,"delivered":true})]);
+    std::fs::write(root.path().join("state.json"), serde_json::to_vec(&state).unwrap()).unwrap();
+    std::fs::create_dir(root.path().join(".hangar-state")).unwrap();
+    std::fs::write(root.path().join(".hangar-state/conversation-a.json"), json!({"state":"working","ts":now}).to_string()).unwrap();
+    let io = std::sync::Arc::new(RecordingIo::default());
+    let handle = start_recording(root.path(), "kimi", hangar_server::provider_models::inbox::Store::new(), io.clone());
+    let mut frames = handle.last_frame();
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        while frames.borrow().is_none() { frames.changed().await.unwrap(); }
+    }).await.unwrap();
+    assert_eq!(handle.snapshot().await.unwrap()["view"]["public_state"]["state"], "working");
+    handle.confirm().await.unwrap();
+    handle.drain().await.unwrap();
+    let snapshot = handle.snapshot().await.unwrap();
+    handle.stop().await.unwrap();
+    assert_eq!(snapshot["queue"][0]["delivered"], true);
+    assert_ne!(snapshot["queue"][0]["desistiu"], true);
+    assert!(io.writes.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn other_terminal_slash_uses_the_driver_without_creating_a_queue_entry() {
+    use hangar_server::runtime::protocol::{RuntimeCommand,OperationKind};
+    for provider in ["pi", "omp", "kimi"] {
+        let root = tempfile::tempdir().unwrap();
+        let io = std::sync::Arc::new(RecordingIo::default());
+        let handle = start_recording(root.path(), provider, hangar_server::provider_models::inbox::Store::new(), io.clone());
+        let mut frames = handle.last_frame();
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while frames.borrow().is_none() { frames.changed().await.unwrap(); }
+        }).await.unwrap();
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(8), handle.command(RuntimeCommand {
+            operation_id:"slash-direct".into(), kind:OperationKind::Input, payload:json!({"text":"/status"}),
+        })).await.unwrap().expect("comando de barra chega ao driver");
+        assert_eq!(reply.payload["queued"], false, "{provider}");
+        assert!(handle.snapshot().await.unwrap()["queue"].as_array().unwrap().is_empty(), "{provider}");
+        handle.stop().await.unwrap();
+        assert!(io.writes.lock().unwrap().iter().any(|(text,literal)| *literal && text == "/status"), "{provider}");
     }
 }

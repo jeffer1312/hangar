@@ -380,22 +380,6 @@ def test_sidecar_de_tipo_errado_nao_derruba_nada(tmp_path, monkeypatch):
     assert read_sidecar("s1") is None and read_sidecar("s2") is None
 
 
-def test_broker_segue_o_stem_da_conexao_mais_recente():
-    # Achado da review: o broker e singleton por sessao, mas a closure do stem vem da CONEXAO. Se o
-    # 1o subscriber cai e outro segue vivo (celular + desktop), travar no primeiro deixaria o broker
-    # lendo o stem da sessao ANTERIOR depois de um /clear -> previa da sessao nova com texto da velha.
-    from app import preview as _prev
-    try:
-        b1 = _prev.PreviewBroker.get("sessao-z", "pi", lambda: "stem-velho")
-        b2 = _prev.PreviewBroker.get("sessao-z", "pi", lambda: "stem-novo")
-        assert b1 is b2                          # segue UM broker por sessao
-        assert b2.stem_get() == "stem-novo"
-        # Conexao sem stem_get (Claude/Codex) nao pode APAGAR o de quem tem.
-        assert _prev.PreviewBroker.get("sessao-z", "pi").stem_get() == "stem-novo"
-    finally:
-        _prev.PreviewBroker._brokers.pop("sessao-z", None)
-
-
 # ── Raciocinio do Kimi vazando na previa (14/08/2026) ─────────────────────────────────────────
 # O usuario viu o RASCUNHO do Kimi aparecer no chat como se fosse a mensagem. O transcript nunca
 # teve isso (o parser descarta `part.type == "think"`); quem vazava era a PREVIA, que pro Kimi le o

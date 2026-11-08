@@ -41,7 +41,6 @@ from app import codex_models
 from app import model_args
 from app import cli_probe
 from app import registry as registry_mod
-from app import providers_bridge
 from app.registry import KillFailed, SessionRegistry
 from app.names import sanitize_session_name
 from app.models import (SessionInfo, CreatedSessionInfo, ChatEvent, CostReport, RunnersResponse, RunBody,

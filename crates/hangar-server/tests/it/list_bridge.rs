@@ -242,26 +242,6 @@ async fn claude_only_round_never_asks_python_for_facts_and_demotes() {
     assert_eq!(python.hits_to("/internal/list/demote"), 0, "o Python não grava o rebaixamento");
 }
 
-/// Com linha Pi o Python é perguntado só por ela; sem resposta, só ela leva o aviso (diagnóstico,
-/// que a saída tira), e a Claude não.
-#[tokio::test(flavor = "multi_thread")]
-async fn pi_row_alone_goes_to_python() {
-    let dir = tempfile::tempdir().unwrap();
-    let (bridge, python) = bridge_with_sessions(dir.path(), 1, ("idle", 60.0)).await;
-    let pi = dir.path().join("w-pi");
-    std::fs::create_dir_all(&pi).unwrap();
-    let script = dir.path().join("tmux");
-    let panes = format!("s0\\t1\\t\\t{}\\t%%0\\t\\t\\t\\t0\\t0\\npp\\t1\\t\\t{}\\t%%9\\t\\tpi\\t\\t0\\t0\\n",
-        dir.path().join("w0").display(), pi.display());
-    crate::write_executable(&script, format!("#!/bin/sh\n[ \"$1\" = list-panes ] || {{ printf '● pronto\\n❯\\n'; exit 0; }}\nprintf '{panes}'\n"));
-    let p = bridge.produce(&Default::default()).await.unwrap();
-    let body = python.list_facts_last.lock().unwrap().clone();
-    let asked: Vec<&str> = body["rows"].as_array().unwrap().iter().map(|r| r["provider"].as_str().unwrap()).collect();
-    assert_eq!(asked, ["pi"], "só a linha Pi vai ao Python");
-    assert!(body.get("owner_clients").is_none() && body.get("shadow").is_none());
-    assert!(p.facts_ok);
-}
-
 fn peak_rss_kb() -> u64 {
     std::fs::read_to_string("/proc/self/status").unwrap().lines()
         .find_map(|l| l.strip_prefix("VmHWM:")).and_then(|v| v.trim().trim_end_matches("kB").trim().parse().ok()).unwrap_or(0)

@@ -192,6 +192,27 @@ pub(super) async fn drain(
     Ok(json!({"drained":usize::from(outcome==Status::Accepted)}))
 }
 
+pub(super) async fn direct_prompt(
+    target: &OtherTarget, options: &OtherOptions, io: &Arc<dyn OtherIo>,
+    operation_id: &str, text: &str, initial: Option<&OtherFrame>,
+) -> Result<RuntimeReply, RuntimeError> {
+    let aware = EditorAwareOtherIo {base:io.clone(), target:target.clone(), inbox:options.inbox.clone()};
+    let frame = if matches!(target.provider, hangar_transcript::Provider::Pi | hangar_transcript::Provider::Omp) {
+        match initial {Some(frame) => Some(aware.enrich(frame.clone()).await?), None => None}
+    } else {initial.cloned()};
+    let result = if matches!(target.provider, hangar_transcript::Provider::Pi | hangar_transcript::Provider::Omp) {
+        drive::prompt(target, &aware, text, frame.as_ref()).await
+    } else { drive::prompt(target, &**io, text, frame.as_ref()).await };
+    let disposition = match result.disposition {
+        crate::terminal_input::Disposition::Accepted => Disposition::Accepted,
+        crate::terminal_input::Disposition::Deferred => Disposition::Deferred,
+        crate::terminal_input::Disposition::Rejected => Disposition::Rejected,
+        crate::terminal_input::Disposition::Unknown => Disposition::Unknown,
+    };
+    Ok(RuntimeReply {operation_id:operation_id.into(), disposition,
+        payload:json!({"queued":false,"native":result.native,"code":result.code,"stage":result.stage,"cleanup":result.cleanup})})
+}
+
 /// Só a entrada física consulta editor; estado e prévia continuam com a captura compartilhada.
 struct EditorAwareOtherIo {
     base: Arc<dyn OtherIo>,
@@ -203,7 +224,7 @@ impl EditorAwareOtherIo {
         if !self.base.prove(&self.target).await? {
             return Err(failed("other_terminal_life_changed"));
         }
-        let value = match self.inbox.line_for(Some(&self.target.key), None) {
+        let value = match inbox_line(&self.target, &self.inbox) {
             Some(key) => self.inbox.question(&key, "editor").await,
             None => None,
         };

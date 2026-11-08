@@ -104,7 +104,6 @@ pub async fn claude(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         "select" => control::select(s, c, req).await,
         "permission-mode" => permissions::set_mode(s, c, req).await,
         "permission-modes" => permissions::modes(s, c, req).await,
-        "input" => super::input::input(s, c, req).await,
         "model-effort" => super::engine::effort(s, c, req).await,
         _ => control::select_submit(s, c, req).await,
     }

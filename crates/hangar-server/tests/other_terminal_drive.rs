@@ -733,6 +733,30 @@ async fn drive_steer_without_a_tui_queue_never_presses_ctrl_s() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn drive_steer_with_the_measured_queue_marker_presses_ctrl_s_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = target(dir.path());
+    let io = Io::frames(vec![composer("")]);
+    let response = drive::control(&target, &io, &InteractionStore::default(), "steer-marked", "steer_queue",
+        &json!({}), Some(&frame("↑ to edit · ctrl-s to steer immediately"))).await.unwrap();
+    assert_eq!(io.writes(), vec![("C-s".into(), false)]);
+    assert_eq!(response.reply.payload["steered"], true);
+    assert!(response.fallback_text.is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn drive_steer_keeps_the_legacy_key_on_capture_failure_without_retrying_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = target(dir.path());
+    let io = Io::default();
+    let response = drive::control(&target, &io, &InteractionStore::default(), "steer-unreadable", "steer_queue",
+        &json!({}), None).await.unwrap();
+    assert_eq!(io.writes(), vec![("C-s".into(), false)]);
+    assert_eq!(response.reply.disposition, runtime::protocol::Disposition::Unknown);
+    assert!(response.fallback_text.is_none());
+}
+
+#[tokio::test(start_paused = true)]
 async fn drive_windows_multiline_uses_the_same_complete_text_and_never_a_second_submit() {
     let dir = tempfile::tempdir().unwrap();
     let mut target = target(dir.path());

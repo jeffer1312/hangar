@@ -234,6 +234,14 @@ impl SideCtx {
     /// religou o hub), senão a descoberta. Sem isso a vigia desfaria o `/clear` que a descoberta ainda não viu.
     pub(crate) async fn info(&self, name: &str) -> Result<Option<InternalInfo>, crate::locate::InfoFailed> {
         if let Some(runtime) = self.runtime.get() && let Some(info) = runtime.claude_info(name).await { return Ok(Some(info)); }
+        if let Some(runtime) = self.runtime.get() {
+            if let Some(Err(error)) = runtime.ensure_other(name).await {
+                if error.code != "other_terminal_starting" {
+                    return Err(crate::locate::InfoFailed("other_terminal_binding_unavailable"));
+                }
+            }
+            if let Some(info) = runtime.other_info(name).await { return Ok(Some(info)); }
+        }
         self.locate.info(name).await
     }
 }
@@ -1383,6 +1391,15 @@ impl Hubs {
         bound.as_ref().map(|b| b.binding.clone())
     }
 
+    pub(crate) fn preview_committed(&self, name: &str, life: &str, conversation: &str) -> Option<Option<Arc<str>>> {
+        let hub = self.0.lock().unwrap().get(name).map(|(hub, _)| hub.clone())?;
+        let source = hub.source_binding()?;
+        if source.1.life.as_deref() != Some(life) || source.1.key != conversation
+            || !source.1.has_transcript_path() || !hub.committed_known() { return None; }
+        let committed = hub.committed();
+        (hub.source_binding().as_ref() == Some(&source)).then_some(committed)
+    }
+
     fn evict(&self, name: &str, hub: &Arc<Hub>) {
         let mut map = self.0.lock().unwrap();
         if map.get(name).is_some_and(|(h, _)| Arc::ptr_eq(h, hub)) {
@@ -1451,6 +1468,29 @@ pub(crate) fn fake_monitors(pane: &'static str) -> (SpawnMonitor, Arc<std::sync:
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn other_preview_uses_the_latest_conversation_and_proven_commit() {
+        use super::*;
+        let ctx = test_ctx();
+        let binding = |conversation: &str| Binding { provider: Provider::Pi, jsonl: format!("{conversation}.jsonl").into(), key: conversation.into(), headless: false, life: Some("life".into()) };
+        let first = ctx.hubs.acquire("pi-preview", binding("old"), &ctx);
+        assert!(ctx.hubs.preview_committed("pi-preview", "life", "old").is_none());
+        let generation = first.hub.generation().unwrap();
+        first.hub.set_committed(generation, "resposta anterior".into(), false);
+        first.hub.mark_seeded(generation);
+        assert_eq!(ctx.hubs.preview_committed("pi-preview", "life", "old").flatten().as_deref(), Some("resposta anterior"));
+        let second = ctx.hubs.acquire("pi-preview", binding("new"), &ctx);
+        assert_eq!(ctx.hubs.preview_committed("pi-preview", "life", "old").flatten().as_deref(), Some("resposta anterior"));
+        second.hub.rebind(binding("new"));
+        assert!(ctx.hubs.preview_committed("pi-preview", "life", "old").is_none());
+        assert!(ctx.hubs.preview_committed("pi-preview", "life", "new").is_none());
+        let generation = second.hub.generation().unwrap();
+        second.hub.set_committed(generation, "resposta nova".into(), false);
+        second.hub.mark_seeded(generation);
+        assert_eq!(ctx.hubs.preview_committed("pi-preview", "life", "new").flatten().as_deref(), Some("resposta nova"));
+        assert!(ctx.hubs.preview_committed("pi-preview", "outra vida", "new").is_none());
+        first.hub.close();
+    }
     #[tokio::test]
     async fn orchestration_activity_is_published_by_its_hub_and_stops_with_the_old_life() {
         use super::*;

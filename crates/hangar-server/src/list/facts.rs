@@ -1,34 +1,18 @@
-//! Fatos da lista. Do Python (`POST /internal/list/facts`) só o estado, a conta e a última resposta
-//! de Pi, omp e Kimi, e só com linha deles na lista; o resto (transferências, orquestrações, acesso,
-//! atalhos, problemas) a ponte lê do disco (`local_facts`). Pergunta só quando a entrada muda ou o
-//! último ficou velho, com prazo de 1 s; sem resposta, fica o último valor e o motivo vai ao diário.
-//! Passada a carência (`GRACE`), as linhas Pi/omp/Kimi levam `problema = list_facts_unavailable`.
+//! Projeções locais do estado da lista e diagnósticos compartilhados.
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{Duration, Instant};
 
-use axum::body::Body;
 use hangar_api::session::SessionRow;
-use http_body_util::BodyExt;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
-/// Prazo da resposta, e idade máxima da última para a mesma entrada.
-pub const FACTS_TIMEOUT: Duration = Duration::from_secs(1);
-pub const FACTS_TTL: Duration = Duration::from_secs(1);
-/// Falha isolada não marca a lista: com resposta boa recente, as linhas seguem limpas até
-/// `GRACE_FAILS` falhas seguidas ou `GRACE` sem resposta boa. Cada falha vai ao diário mesmo assim.
-const GRACE: Duration = Duration::from_secs(5);
-const GRACE_FAILS: u32 = 3;
-const MAX_BODY: usize = 8 << 20;
 pub const UNAVAILABLE: &str = "list_facts_unavailable";
-/// Provedores cujo estado o Python ainda calcula (`registry.list_with_state`).
+/// Provedores de terminal cujo ator publica os fatos da lista.
 pub const OTHERS: [&str; 3] = ["pi", "omp", "kimi"];
 
-/// Estado de uma linha não migrada, com o código de hoje do Python.
-#[derive(Debug, Deserialize)]
+/// Estado publicado pelo ator da sessão.
+#[derive(Clone, Debug, Deserialize)]
 pub struct RowState {
     pub state: String,
     pub label: Option<String>,
@@ -50,7 +34,6 @@ pub struct RowState {
     pub limit_reset: Option<String>,
     #[serde(default)]
     pub stalled: bool,
-    /// O histórico deles ainda é lido pelo Python.
     #[serde(default)]
     pub last_reply: Option<String>,
     #[serde(default)]
@@ -59,7 +42,7 @@ pub struct RowState {
 
 pub type States = Arc<HashMap<String, RowState>>;
 
-/// Os fatos de uma rodada: `states` do Python, o resto lido do disco pela ponte.
+/// Estado dos atores e fatos locais da mesma rodada.
 #[derive(Debug)]
 pub struct ListFacts {
     pub states: States,
@@ -88,116 +71,21 @@ impl Default for ListFacts {
     }
 }
 
-/// A resposta do Python; chave que falta é contrato quebrado, nunca vazio.
-#[derive(Deserialize)]
-struct Answer { states: HashMap<String, RowState> }
-
-#[derive(Serialize)]
-struct Request<'a> { rows: &'a [SessionRow], pane_pids: &'a BTreeMap<String, u32> }
-
 pub struct Fetched {
     pub states: States,
-    /// `false`: o Python não respondeu e a carência acabou; `states` é o último bom (ou vazio).
     pub ok: bool,
-    /// `true` só com resposta desta pergunta (ou do cache dela): quem decide quem morreu não usa
-    /// fatos da carência.
     pub fresh: bool,
 }
 
-/// `ok = false`: a última pergunta falhou; até `at + FACTS_TTL` o tique não espera o prazo de novo.
-struct Last { key: u64, at: Instant, ok: bool, states: States,
-    /// Falhas seguidas e a hora da última resposta boa, para a carência.
-    fails: u32, good_at: Option<Instant> }
-
-impl Last {
-    fn fetched(&self) -> Fetched {
-        let graced = !self.ok && self.fails < GRACE_FAILS && self.good_at.is_some_and(|t| t.elapsed() < GRACE);
-        Fetched { states: self.states.clone(), ok: self.ok || graced, fresh: self.ok }
-    }
-}
-
-pub struct FactsClient {
-    upstream: SocketAddr,
-    secret: String,
-    http: crate::proxy::HttpClient,
-    /// O diário que o dono exporta: falha da lista que só chegasse ao `tracing` sumiria dele.
-    pub diag: crate::diag::DiagClient,
-    /// Trava assíncrona = uma pergunta por vez; quem chega no meio reaproveita a resposta.
-    last: tokio::sync::Mutex<Option<Last>>,
-}
+/// Mantém o diagnóstico da lista; o estado vem dos atores em processo.
+pub struct FactsClient { pub diag: crate::diag::DiagClient }
 
 impl FactsClient {
     pub fn new(upstream: SocketAddr, secret: String) -> Self {
-        let diag = crate::diag::DiagClient::new(upstream, secret.clone());
-        Self { upstream, secret, http: crate::proxy::client(), diag, last: tokio::sync::Mutex::new(None) }
-    }
-
-    /// `rows`: só as linhas Pi, omp e Kimi.
-    pub async fn fetch(&self, rows: &[SessionRow], pane_pids: &BTreeMap<String, u32>) -> Fetched {
-        let mut last = self.last.lock().await;
-        let body = match serde_json::to_vec(&Request { rows, pane_pids }) {
-            Ok(b) => b,
-            Err(_) => return self.failed(&mut last, "list_facts_request".into(), rows.len(), Duration::ZERO),
-        };
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        body.hash(&mut h);
-        let key = h.finish();
-        if let Some(l) = last.as_ref().filter(|l| l.at.elapsed() < FACTS_TTL && (l.key == key || !l.ok)) {
-            return l.fetched();
-        }
-        let asked = Instant::now();
-        match self.ask(body).await {
-            Ok(states) => {
-                let now = Instant::now();
-                let l = Last { key, at: now, ok: true, states: Arc::new(states), fails: 0, good_at: Some(now) };
-                let got = l.fetched();
-                *last = Some(l);
-                got
-            }
-            Err(code) => self.failed(&mut last, code, rows.len(), asked.elapsed()),
-        }
-    }
-
-    /// `rows`: as linhas pedidas; `took`: quanto o pedido levou até falhar (zero se nem saiu).
-    fn failed(&self, last: &mut Option<Last>, code: String, rows: usize, took: Duration) -> Fetched {
-        if crate::warn_limit::allow(None, &code) {
-            tracing::warn!(code, "lista: fatos do Python indisponíveis; fica o último valor");
-        }
-        let (states, fails, good_at) = last.as_ref().map_or_else(|| (States::default(), 0, None), |l| (l.states.clone(), l.fails, l.good_at));
-        self.diag.report_with("rust.list_facts_unavailable", "", &code, "fatos do Python indisponíveis; fica o último valor", json!({
-            "rota": "POST /internal/list/facts", "linhas": rows, "ms": took.as_millis() as u64,
-            "prazo_ms": FACTS_TIMEOUT.as_millis() as u64, "falhas_seguidas": fails + 1,
-            "ultimo_bom_s": good_at.map(|at: Instant| at.elapsed().as_secs())}));
-        let l = Last { key: 0, at: Instant::now(), ok: false, states, fails: fails + 1, good_at };
-        let got = l.fetched();
-        *last = Some(l);
-        got
-    }
-
-    /// `Err` é o código que vai ao diário: motivo e status, nunca o corpo nem a mensagem do serde,
-    /// que podem ecoar valores.
-    async fn ask(&self, body: Vec<u8>) -> Result<HashMap<String, RowState>, String> {
-        let req = axum::http::Request::post(format!("http://{}/internal/list/facts", self.upstream))
-            .header("x-hangar-internal", &self.secret).header("content-type", "application/json")
-            .body(Body::from(body)).map_err(|_| "list_facts_request".to_owned())?;
-        let work = async {
-            let resp = self.http.request(req).await.map_err(|e| unreachable_code("list_facts", &e))?;
-            if !resp.status().is_success() {
-                return Err(format!("list_facts_status:{}", resp.status().as_u16()));
-            }
-            let bytes = http_body_util::Limited::new(resp.into_body(), MAX_BODY).collect().await
-                .map_err(|_| "list_facts_body".to_owned())?.to_bytes();
-            serde_json::from_slice::<Answer>(&bytes).map(|a| a.states).map_err(|e| format!("list_facts_invalid:{:?}", e.classify()))
-        };
-        tokio::time::timeout(FACTS_TIMEOUT, work).await.map_err(|_| "list_facts_timeout".to_owned())?
+        Self { diag: crate::diag::DiagClient::new(upstream, secret) }
     }
 }
 
-fn unreachable_code(prefix: &str, e: &hyper_util::client::legacy::Error) -> String {
-    format!("{prefix}_{}", if e.is_connect() { "connect" } else { "unreachable" })
-}
-
-/// Estado do Python velho: só as linhas Pi/omp/Kimi levam o aviso; transferências nunca lidas, todas.
 /// Problema mais preciso que a linha já tenha fica.
 pub fn mark_stale(rows: &mut [SessionRow], facts: &ListFacts, ok: bool) {
     for row in rows.iter_mut().filter(|r| facts.unknown || (!ok && OTHERS.contains(&r.provider.as_str()))) {
@@ -314,9 +202,7 @@ pub fn mark_shared(rows: &mut [SessionRow], active: &HashSet<String>) {
 mod tests {
     use super::*;
     use serde_json::{Value, json};
-    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
-    type Seen = Arc<Mutex<Vec<(String, Value)>>>;
 
     /// A rodada da lista esvazia a fila em paralelo aos testes: o que um teste anotou continua visível.
     #[test]
@@ -324,112 +210,6 @@ mod tests {
         note("list_test", "notes-drained", "list_test_code".into(), "teste");
         drop(take_notes());
         assert_eq!(notes_for("notes-drained"), ["list_test_code"]);
-    }
-
-    /// Python de mentira: `answer(caminho, n-ésimo pedido dos fatos)` dá (status, corpo); guarda caminho e corpo.
-    async fn python(answer: fn(&str, usize) -> (u16, String)) -> (SocketAddr, Seen) {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let seen: Seen = Arc::default();
-        let log = seen.clone();
-        tokio::spawn(async move {
-            loop {
-                let Ok((stream, _)) = listener.accept().await else { return };
-                let log = log.clone();
-                tokio::spawn(async move {
-                    let mut reader = BufReader::new(stream);
-                    loop {
-                        let (mut first, mut length) = (String::new(), 0usize);
-                        if reader.read_line(&mut first).await.unwrap_or(0) == 0 { return; }
-                        loop {
-                            let mut line = String::new();
-                            if reader.read_line(&mut line).await.unwrap_or(0) == 0 { return; }
-                            if line == "\r\n" { break; }
-                            if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") { length = v.trim().parse().unwrap(); }
-                        }
-                        let mut body = vec![0; length];
-                        reader.read_exact(&mut body).await.unwrap();
-                        let path = first.split_whitespace().nth(1).unwrap().to_owned();
-                        let n = {
-                            let mut l = log.lock().unwrap();
-                            l.push((path.clone(), serde_json::from_slice(&body).unwrap_or(Value::Null)));
-                            l.iter().filter(|(p, _)| p == &path).count()
-                        };
-                        let (status, out) = answer(&path, n);
-                        let head = format!("HTTP/1.1 {status} X\r\ncontent-length: {}\r\n\r\n", out.len());
-                        reader.get_mut().write_all(format!("{head}{out}").as_bytes()).await.unwrap();
-                    }
-                });
-            }
-        });
-        (addr, seen)
-    }
-
-    async fn diary(seen: &Seen, event: &str) -> Value {
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let hit = seen.lock().unwrap().iter().find(|(p, b)| p == "/internal/diag" && b["evento"] == event).map(|(_, b)| b.clone());
-                if let Some(b) = hit { return b; }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        }).await.expect("diário não recebeu")
-    }
-
-    fn pi(name: &str) -> SessionRow { serde_json::from_value(json!({"name": name, "provider": "pi"})).unwrap() }
-
-    /// O pedido leva só linhas e pids; a resposta é só `states`.
-    #[tokio::test]
-    async fn the_python_is_asked_only_for_rows_and_pane_pids() {
-        let (addr, seen) = python(|_, _| (200, r#"{"states":{"p":{"state":"idle","label":null,"question":null,"options":null,
-            "problema":null,"status_line":null,"last_activity":null,"limit_reset":null,"conta":"pi:x"}}}"#.into())).await;
-        let client = FactsClient::new(addr, "s".into());
-        let got = client.fetch(&[pi("p")], &BTreeMap::from([("p".into(), 7)])).await;
-        assert!(got.ok && got.fresh);
-        let mut row = pi("p");
-        row.conta = Some("kimi:known".into());
-        let facts = ListFacts { states: got.states.clone(), ..Default::default() };
-        let (rows, _) = apply(vec![row], &facts, true);
-        assert_eq!(rows[0].conta.as_deref(), Some("kimi:known"), "os fatos Python não substituem a credencial do Rust");
-        let body = seen.lock().unwrap()[0].1.clone();
-        let mut keys: Vec<_> = body.as_object().unwrap().keys().cloned().collect();
-        keys.sort();
-        assert_eq!(keys, ["pane_pids", "rows"]);
-        assert_eq!(body["pane_pids"]["p"], 7);
-    }
-
-    #[tokio::test]
-    async fn failure_reaches_the_diary_with_the_status() {
-        let (addr, seen) = python(|path, _| if path == "/internal/diag" { (200, "{}".into()) } else { (503, "x".into()) }).await;
-        let client = FactsClient::new(addr, "s".into());
-        let got = client.fetch(&[], &BTreeMap::new()).await;
-        assert!(!got.ok);
-        assert_eq!(diary(&seen, "rust.list_facts_unavailable").await["codigo"], "list_facts_status:503");
-    }
-
-    #[tokio::test]
-    async fn one_failure_after_a_good_answer_does_not_mark_the_list() {
-        let (addr, seen) = python(|path, n| match (path, n) {
-            ("/internal/diag", _) => (200, "{}".into()),
-            (_, 1) => (200, r#"{"states":{}}"#.into()),
-            _ => (503, "x".into()),
-        }).await;
-        let client = FactsClient::new(addr, "s".into());
-        let first = client.fetch(&[pi("a")], &BTreeMap::new()).await;
-        assert!(first.ok && first.fresh);
-        let second = client.fetch(&[pi("b")], &BTreeMap::new()).await;
-        assert!(second.ok && !second.fresh, "carência: lista limpa, mas não serve para decidir quem morreu");
-        assert_eq!(diary(&seen, "rust.list_facts_unavailable").await["codigo"], "list_facts_status:503");
-    }
-
-    #[test]
-    fn grace_ends_after_three_failures_or_five_seconds() {
-        let last = |fails, good_at| Last { key: 0, at: Instant::now(), ok: false, states: States::default(), fails, good_at };
-        let now = Instant::now();
-        assert!(last(1, Some(now)).fetched().ok);
-        assert!(last(2, Some(now)).fetched().ok);
-        assert!(!last(3, Some(now)).fetched().ok);
-        assert!(!last(1, now.checked_sub(GRACE)).fetched().ok);
-        assert!(!last(1, None).fetched().ok, "sem resposta boa nunca houve carência");
     }
 
     #[test]
@@ -478,11 +258,11 @@ mod tests {
 
     #[test]
     fn projected_options_keep_their_id() {
-        let answer: Answer = serde_json::from_str(r#"{"states":{"k":{"state":"awaiting_input","label":null,"question":"Rodar?",
+        let answer: Value = serde_json::from_str(r#"{"states":{"k":{"state":"awaiting_input","label":null,"question":"Rodar?",
                 "options":["Sim","Não"],"interaction_id":"shown-a","problema":null,"status_line":null,
                 "last_activity":null,"limit_reset":null}}}"#).unwrap();
         let row = serde_json::from_value::<SessionRow>(json!({"name": "k", "provider": "kimi", "interaction_id": "velho"})).unwrap();
-        let (work, _) = apply(vec![row], &ListFacts { states: Arc::new(answer.states), unknown: false, ..Default::default() }, true);
+        let (work, _) = apply(vec![row], &ListFacts { states: Arc::new(serde_json::from_value(answer["states"].clone()).unwrap()), unknown: false, ..Default::default() }, true);
         assert_eq!((work[0].options.as_ref().map(Vec::len), work[0].interaction_id.as_deref()), (Some(2), Some("shown-a")),
             "opções sem o ID delas não respondem; ID de outra pergunta também não");
     }

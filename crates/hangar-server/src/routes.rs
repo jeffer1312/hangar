@@ -367,6 +367,13 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
         .chain([guest, state.front, state.connect, state.preview].into_iter().flatten().map(|addr| addr.port())));
     let public_v6 = state.public_v6.take();
     let state = Arc::new(state);
+    if let Some(registry) = state.side.runtime.get() {
+        let mut other = crate::runtime::other_terminal::OtherOptions::new(state.terminal.clone(),
+            crate::provider_models::inbox::INBOX.clone(), state.list.env().procs.clone(), state.interactions.clone());
+        other.preview = Some(std::sync::Arc::new(crate::state::other_preview::RuntimePreview::new(state.side.hubs.downgrade())));
+        other.after_closed = Some(crate::session_write::bridge::other_cleanup(std::sync::Arc::downgrade(&state)));
+        registry.bind_other(other, crate::runtime::other_terminal::discovery(state.list.clone())).map_err(std::io::Error::other)?;
+    }
     let main_startup = state.startup.prepares();
     let producers = state.startup_producers.clone();
     let _producer_scope = producers.register(tokio::spawn({

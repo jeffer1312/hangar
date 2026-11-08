@@ -45,7 +45,6 @@ const LIVE_FRESH: Duration = Duration::from_secs(15);
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
 const CONFIG_DIRS_TTL: Duration = Duration::from_secs(30);
 const MAX_BODY: usize = 64 * 1024;
-const MAX_PROVIDER_BODY: usize = 2 * 1024 * 1024;
 /// `git status` simultâneos da lista (`_git_pool`).
 const GIT_SLOTS: usize = 4;
 
@@ -56,8 +55,8 @@ pub struct ListError { pub code: &'static str, pub detail: &'static str }
 
 fn fail(code: &'static str, detail: &'static str) -> ListError { ListError { code, detail } }
 
-/// Entradas do sistema: multiplexador, processos e as pastas que o Python resolveu
-/// (`HANGAR_LIST_DIRS`). Sem pastas, a ponte recusa em vez de adivinhar onde cada provedor grava.
+/// Entradas do sistema: multiplexador, processos e diretórios efetivos resolvidos no Rust.
+/// Sem pastas, a ponte recusa em vez de adivinhar onde cada provedor grava.
 pub struct ListEnv {
     pub mux: Mux,
     pub capture_program: OsString,
@@ -103,7 +102,7 @@ pub struct ProduceFacts {
 /// entrega junto.
 #[derive(Clone)]
 pub struct Produced { pub rows: Arc<Vec<SessionRow>>, pub facts: Arc<ListFacts>,
-    /// `false`: o Python não respondeu sobre Pi/omp/Kimi nesta rodada e o estado deles é o último bom.
+    /// `false`: o estado de uma vida Pi/omp/Kimi ainda não foi comprovado nesta rodada.
     pub facts_ok: bool }
 
 /// Últimas leituras boas do disco que podem falhar numa rodada: transferências e atalhos.
@@ -630,22 +629,62 @@ impl ListBridge {
         Ok(self.produce_round(input).await?.0)
     }
 
+    async fn other_states(&self, rows: &mut [SessionRow]) -> list_facts::Fetched {
+        let mut states = HashMap::new();
+        let mut fresh = true;
+        let Some(registry) = self.plugin_runtime.get() else {
+            for row in rows.iter_mut().filter(|row| list_facts::OTHERS.contains(&row.provider.as_str())) {
+                row.problema = Some(list_facts::UNAVAILABLE.into());
+                fresh = false;
+            }
+            return list_facts::Fetched { states: Arc::new(states), ok: true, fresh };
+        };
+        for row in rows.iter_mut().filter(|row| list_facts::OTHERS.contains(&row.provider.as_str())) {
+            if let Some(Err(error)) = registry.ensure_other(&row.name).await {
+                self.facts.diag.report("rust.list_facts_unavailable", &row.name, &error.code, "o ator ainda não comprovou a vida desta sessão");
+            }
+            if let Some(info) = registry.other_info(&row.name).await {
+                row.lifecycle_id = info.lifecycle_id;
+                row.jsonl = info.jsonl.map(|path| path.to_string_lossy().into_owned());
+                row.tracked = row.jsonl.is_some();
+            }
+        }
+        let snapshots = registry.list_snapshots_readonly().await;
+        for row in rows.iter_mut().filter(|row| list_facts::OTHERS.contains(&row.provider.as_str())) {
+            let read = (|| {
+                let key = super::links::runtime_key(row.lifecycle_id.as_deref())?;
+                let snapshot = snapshots.get(key)?;
+                let generation = snapshot["generation"].as_u64()?;
+                if row.lifecycle_id.as_deref() != Some(crate::runtime::other_terminal::lifecycle_id(key, generation).as_str()) { return None; }
+                let conversation = row.jsonl.as_deref().map(crate::locate::session_key)?;
+                if snapshot["view"]["conversation"].as_str() != Some(conversation.as_str()) { return None; }
+                let mut state: list_facts::RowState = serde_json::from_value(snapshot["view"]["public_state"].clone()).ok()?;
+                state.last_activity = row.last_activity;
+                Some(state)
+            })();
+            match read {
+                Some(state) => { states.insert(row.name.clone(), state); }
+                None => { row.problema = Some(list_facts::UNAVAILABLE.into()); fresh = false; }
+            }
+        }
+        list_facts::Fetched { states: Arc::new(states), ok: true, fresh }
+    }
+
     async fn produce_round(&self, input: &ProduceFacts) -> Result<(Produced, Option<Arc<Round>>), ListError> {
         let dirs = self.dirs()?;
         let (rows, agent_pids, panes, children) = self.discovery(None).await?;
+        let mut rows = (*rows).clone();
+        let fetched = self.other_states(&mut rows).await;
+        let rows = Arc::new(rows);
         // Um ator lento não soma o prazo dele ao dos fatos.
         let runtime = async { match self.runtime.get() { Some(r) => Some(r.snapshots().await), None => None } };
-        let pane_pids = pi_pane_pids(&rows, &panes);
-        let others: Vec<SessionRow> = rows.iter().filter(|r| list_facts::OTHERS.contains(&r.provider.as_str())).cloned().collect();
-        // Sem linha Pi/omp/Kimi o Python não é perguntado.
-        let python = async { if others.is_empty() { None } else { Some(self.facts.fetch(&others, &pane_pids).await) } };
         let (program, kids) = (self.env.capture_program.clone(), children.clone());
         let shortcuts = self.shortcuts.round(move || async move { local_shortcuts::list_all(&program, &kids).await });
-        let (fetched, runtime, plugins) = tokio::join!(python, runtime, self.plugin_facts(&rows));
-        let (facts_ok, facts_fresh) = fetched.as_ref().map_or((true, true), |f| (f.ok, f.fresh));
-        let states = fetched.map(|f| f.states).unwrap_or_default();
+        let (runtime, plugins) = tokio::join!(runtime, self.plugin_facts(&rows));
+        let (facts_ok, facts_fresh) = (fetched.ok, fetched.fresh);
+        let states = fetched.states;
         let facts = Arc::new(self.local_facts(&rows, &dirs, states, shortcuts).await?);
-        let (mut rows, mut aside) = list_facts::apply((*rows).clone(), &facts, facts_ok);
+        let (mut rows, mut aside) = list_facts::apply(Arc::unwrap_or_clone(rows), &facts, facts_ok);
         if let Some(share) = self.shares.get() {
             let active = share.store.active_sessions();
             list_facts::mark_shared(&mut rows, &active);
@@ -1062,15 +1101,6 @@ fn headless_by_name(rows: &[SessionRow], by_key: BTreeMap<String, Value>) -> BTr
     }).collect()
 }
 
-/// Pid do pane das linhas Pi e omp: o sidecar do catálogo, de onde sai a conta, mora no
-/// `CLAUDE_CONFIG_DIR` dele.
-fn pi_pane_pids(rows: &[SessionRow], panes: &[Pane]) -> BTreeMap<String, u32> {
-    rows.iter().filter(|r| r.provider == "pi" || r.provider == "omp").filter_map(|r| {
-        let pane = panes.iter().filter(|p| p.session == r.name).max_by_key(|p| p.active)?;
-        Some((r.name.clone(), pane.pid?))
-    }).collect()
-}
-
 /// Alvo da captura de cada sessão: o pane do agente; sem como saber, `=<sessão>:` (o ativo).
 fn pane_targets(panes: &[Pane], agent_pids: &HashMap<String, u32>, children: &ChildrenMap) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
@@ -1229,8 +1259,6 @@ fn headless_meta(path: &Path, session: &str) -> Value {
 #[derive(Deserialize)]
 #[serde(tag = "op", content = "args")]
 enum Operation {
-    #[serde(rename = "providers.inbox")]
-    ProviderInbox(Value),
     #[serde(rename = "list.discover")]
     Discover { #[serde(default)] newer_than: Option<f64> },
     #[serde(rename = "list.snapshot")]
@@ -1289,7 +1317,7 @@ async fn execute(bridge: &Arc<ListBridge>, op: Operation) -> Result<Value, ListE
         Operation::Seed { name, jsonl } => cache(Box::new(move |b| b.seed(&name, &jsonl))).await,
         Operation::Forget { name } => cache(Box::new(move |b| b.forget(&name))).await,
         // Respondido pelo `private`, que tem os painéis.
-        Operation::TermActive { .. } | Operation::ProviderInbox(_) => Err(fail("list_bridge_invalid_request", "operação fora do private")),
+        Operation::TermActive { .. } => Err(fail("list_bridge_invalid_request", "operação fora do private")),
         Operation::StateFacts { name, facts } => {
             use crate::state::facts::Push;
             Ok(match bridge.state_facts.push(&name, facts, Instant::now()) {
@@ -1319,21 +1347,14 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
         }
         StatusCode::BAD_REQUEST.into_response()
     };
-    let Ok(Ok(bytes)) = tokio::time::timeout(Duration::from_secs(6), to_bytes(req.into_body(), MAX_PROVIDER_BODY)).await else {
+    let Ok(Ok(bytes)) = tokio::time::timeout(Duration::from_secs(6), to_bytes(req.into_body(), MAX_BODY)).await else {
         return refused("list_bridge_body");
     };
     // Operação desconhecida aqui costuma ser Python e Rust de versões diferentes.
     let Ok(op) = serde_json::from_slice::<Operation>(&bytes) else {
         return refused("list_bridge_invalid_request");
     };
-    if bytes.len() > MAX_BODY && !matches!(&op, Operation::ProviderInbox(_)) {
-        return refused("list_bridge_body");
-    }
     let result = match op {
-        Operation::ProviderInbox(arguments) => return match crate::provider_models::inbox::call(arguments).await {
-            Ok(result) => reply(json!({"ok": true, "result": result})),
-            Err(error) => reply(json!({"ok": false, "error": {"code": "providers_inbox_failed", "detail": error.detail}})),
-        },
         Operation::TermActive { name } => term_active(&st, &name),
         op => execute(&st.list, op).await,
     };
