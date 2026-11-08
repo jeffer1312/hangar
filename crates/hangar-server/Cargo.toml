@@ -191,3 +191,7 @@ path = "tests/tail_agents.rs"
 [[test]]
 name = "lifecycle_agents"
 path = "tests/lifecycle_agents.rs"
+
+[[test]]
+name = "provider_hooks"
+path = "tests/provider_hooks.rs"

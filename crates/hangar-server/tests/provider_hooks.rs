@@ -217,6 +217,41 @@ fn provider_hooks_fail_open_with_private_diagnostics_without_payload() {
                 0o600
             );
         }
+        let mut child = Command::new(env!("CARGO_BIN_EXE_hangar-server"))
+            .arg(mode)
+            .env_clear()
+            .env("HOME", root.path())
+            .env("USERPROFILE", root.path())
+            .env("CLAUDE_CONFIG_DIR", root.path().join("config"))
+            .env("PATH", "")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"invalid secret-content")
+            .unwrap();
+        let result = child.wait_with_output().unwrap();
+        assert!(result.status.success() && result.stdout.is_empty() && result.stderr.is_empty());
+        let fallback_root = if cfg!(windows) {
+            root.path().join("AppData/Local/hangar")
+        } else {
+            root.path().join(".hangar")
+        };
+        let filename = if mode == "kimi-state-hook" {
+            "kimi_hook_error.log"
+        } else {
+            "guard_tmux-falhas.log"
+        };
+        let text =
+            std::fs::read_to_string(fallback_root.join("logs/privado").join(filename)).unwrap();
+        assert!(text.contains("invalid_json"));
+        assert!(!text.contains("secret-content"));
+        assert!(!root.path().join("config").join(filename).exists());
     }
 }
 
@@ -445,19 +480,60 @@ fn provider_hooks_installer_creates_missing_config_with_nine_native_entries() {
     use hangar_server::{accounts::environment::AccountEnvironment, harness_setup::kimi_hooks};
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(root.path().join(".kimi-code")).unwrap();
+    let path = root.path().join(".kimi-code/config.toml");
     let env = AccountEnvironment::from_map(
         [("HOME".into(), root.path().to_string_lossy().into_owned())].into(),
     );
-    assert_eq!(kimi_hooks::sync(&env, root.path()).unwrap().len(), 1);
-    let raw = std::fs::read_to_string(root.path().join(".kimi-code/config.toml")).unwrap();
-    let data: toml::Value = toml::from_str(&raw).unwrap();
-    let hooks = data["hooks"].as_array().unwrap();
-    assert_eq!(hooks.len(), 9);
-    for hook in hooks {
-        assert_eq!(hook["timeout"].as_integer(), Some(5));
-        assert!(!hook["command"].as_str().unwrap().contains(".py"));
+    for partial in [
+        "",
+        "[[hooks]]\nevent = 'Stop'\ncommand = '\"/old/bin/hangar-server\" kimi-state-hook'\n",
+    ] {
+        if !partial.is_empty() {
+            std::fs::write(&path, partial).unwrap();
+        }
+        assert_eq!(kimi_hooks::sync(&env, root.path()).unwrap().len(), 1);
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let data: toml::Value = toml::from_str(&raw).unwrap();
+        let hooks = data["hooks"].as_array().unwrap();
+        let mut got: Vec<_> = hooks
+            .iter()
+            .map(|hook| {
+                (
+                    hook["event"].as_str().unwrap(),
+                    hook.get("matcher").and_then(toml::Value::as_str),
+                    hook["command"]
+                        .as_str()
+                        .unwrap()
+                        .split_whitespace()
+                        .last()
+                        .unwrap(),
+                )
+            })
+            .collect();
+        let mut expected = vec![
+            ("SessionStart", None, "kimi-state-hook"),
+            ("UserPromptSubmit", None, "kimi-state-hook"),
+            ("TurnStarted", None, "kimi-state-hook"),
+            ("Stop", None, "kimi-state-hook"),
+            ("Interrupt", None, "kimi-state-hook"),
+            ("PermissionRequest", None, "kimi-state-hook"),
+            ("PreToolUse", Some("AskUserQuestion"), "kimi-state-hook"),
+            ("PostToolUse", Some("AskUserQuestion"), "kimi-state-hook"),
+            ("PreToolUse", Some("Bash"), "guard-tmux"),
+        ];
+        got.sort();
+        expected.sort();
+        assert_eq!(got, expected);
+        assert_eq!(
+            got.iter().filter(|(event, _, _)| *event == "Stop").count(),
+            1
+        );
+        for hook in hooks {
+            assert_eq!(hook["timeout"].as_integer(), Some(5));
+            assert!(!hook["command"].as_str().unwrap().contains(".py"));
+        }
+        assert!(kimi_hooks::sync(&env, root.path()).unwrap().is_empty());
     }
-    assert!(kimi_hooks::sync(&env, root.path()).unwrap().is_empty());
 }
 
 #[test]
