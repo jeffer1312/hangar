@@ -14,6 +14,12 @@ pub const VERSIONS: &[&str] = &[
     "tmux 3.4.0 psmux 3.4.0 (20aa1d7 2026-10-13)",
 ];
 
+/// O `-V` do psmux sai em duas linhas (`tmux X` e `psmux X (commit data)`); conta só a sequência de palavras.
+pub fn known_version(output: &str) -> bool {
+    let words = output.split_whitespace().collect::<Vec<_>>().join(" ");
+    VERSIONS.contains(&words.as_str())
+}
+
 /// Resposta de um servidor de sessão; acima disso não é `list-panes`.
 const MAX_REPLY: usize = 1 << 20;
 

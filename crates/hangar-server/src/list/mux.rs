@@ -220,9 +220,10 @@ impl Mux {
         let mut gate = direct.gate();
         if matches!(gate, Gate::Unchecked) {
             // É a versão do programa chamado; a dos servidores vivos fica provada só pela comparação.
-            let known = self.version_until(deadline).await.is_some_and(|v| hangar_psmux::VERSIONS.contains(&v.as_str()));
+            let known = self.version_until(deadline).await.is_some_and(|v| hangar_psmux::known_version(&v));
             gate = if known { Gate::Trying(0) } else { Gate::Off };
             direct.set(gate.clone());
+            if !known { tracing::warn!(code = "psmux_direct_version", "psmux: versão do programa não conferida; a lista segue pelo CLI"); }
         }
         if matches!(gate, Gate::Off) { return DirectRead::Skip; }
         let budget = DIRECT_BUDGET.min(deadline.saturating_duration_since(tokio::time::Instant::now()) / 2);
@@ -464,6 +465,19 @@ mod tests {
         assert_eq!((cli.calls(), a.conns()), (1, 2), "conferido, o CLI não é aberto");
         assert_eq!(first, second);
         assert_eq!(second[0].session, "a");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_two_line_version_the_real_psmux_prints_is_recognized() {
+        let real = hangar_psmux::VERSIONS[0].replacen(" psmux", "\npsmux", 1);
+        let cli = FakeCli::new(&real);
+        let a = FakeServer::start("ka", LINE_A.into());
+        a.register(&cli.data, "a", "ka");
+        cli.lists(LINE_A);
+        let mux = cli.mux(Duration::from_secs(2));
+        for _ in 0..2 { mux.list_panes().await.unwrap(); }
+        assert_eq!((cli.calls(), a.conns()), (1, 2));
     }
 
     #[cfg(unix)]
