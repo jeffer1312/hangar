@@ -1743,6 +1743,7 @@ dependencies = [
  "hangar-api",
  "hangar-core",
  "memchr",
+ "proptest",
  "regex",
  "serde",
  "serde_json",

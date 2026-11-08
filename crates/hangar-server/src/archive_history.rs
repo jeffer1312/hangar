@@ -5,7 +5,7 @@ use std::{
     io::{self, Read, Seek, SeekFrom},
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::{Arc, LazyLock},
+    sync::Arc,
 };
 
 use axum::{
@@ -15,15 +15,14 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use hangar_api::chat::{ChatEvent, ChatKind};
-use regex::Regex;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use crate::{
     routes::{AppState, cors, gate, pass, route_failed},
     session_open::{AgentProvider, OpenError, archive},
     speech::history::transfer_history as transfer,
     session_write::{detail_body, json_response},
-    transcript::{HistoryRequest, Provider, TAIL_WINDOW, event, history, py},
+    transcript::{HistoryRequest, Provider, TAIL_WINDOW, history, py},
 };
 
 /// O teto do `tail` (api.py: `min(tail, 200)`).
@@ -221,7 +220,7 @@ pub(crate) fn read_history(st: &AppState, path: &Path, provider: AgentProvider, 
     match tail {
         None => {
             let raw = std::fs::read(path)?;
-            Ok(raw.split(|b| *b == b'\n').flat_map(|line| agent_line(provider, line)).collect())
+            Ok(agent_lines(provider, raw.split(|b| *b == b'\n')))
         }
         Some(n) => agent_tail(path, provider, n),
     }
@@ -243,7 +242,7 @@ fn agent_tail(path: &Path, provider: AgentProvider, n: usize) -> io::Result<Vec<
         file.read_to_end(&mut raw)?;
         // O começo da janela pode cair no meio de uma linha.
         let lines = raw.split(|b| *b == b'\n').skip(usize::from(start > 0));
-        let mut msgs: Vec<ChatEvent> = lines.flat_map(|line| agent_line(provider, line)).filter(is_message).collect();
+        let mut msgs: Vec<ChatEvent> = agent_lines(provider, lines).into_iter().filter(is_message).collect();
         if start == 0 || msgs.len() >= n {
             msgs.drain(..msgs.len().saturating_sub(n));
             return Ok(msgs);
@@ -252,138 +251,35 @@ fn agent_tail(path: &Path, provider: AgentProvider, n: usize) -> io::Result<Vec<
     }
 }
 
-pub(crate) fn agent_line(provider: AgentProvider, raw: &[u8]) -> Vec<ChatEvent> {
-    if provider == AgentProvider::Codex {
-        return crate::transcript::LineParser::new(Provider::Codex).feed(raw, 0);
-    }
-    let Some(Value::Object(obj)) = crate::transcript::decode_line(raw) else { return Vec::new() };
+fn transcript_provider(provider: AgentProvider) -> Provider {
     match provider {
-        AgentProvider::Kimi => kimi_obj(&obj),
-        _ => pi_obj(&obj),
+        AgentProvider::Claude => Provider::Claude,
+        AgentProvider::Codex => Provider::Codex,
+        AgentProvider::Pi => Provider::Pi,
+        AgentProvider::Omp => Provider::Omp,
+        AgentProvider::Kimi => Provider::Kimi,
     }
 }
 
-// adapters/pi/transcript.py `_ANSI_RE`: o Pi grava o texto já colorido.
-static ANSI: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\x1b\[[0-9;:?]*[ -/]*[@-~]").unwrap());
-
-fn clean(text: &str) -> String { ANSI.replace_all(text, "").into_owned() }
-
-/// `bool(valor)` do Python.
-fn truthy(v: Option<&Value>) -> bool {
-    match v {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(b)) => *b,
-        Some(Value::Number(n)) => n.as_f64().is_some_and(|f| f != 0.0),
-        Some(Value::String(s)) => !s.is_empty(),
-        Some(Value::Array(a)) => !a.is_empty(),
-        Some(Value::Object(o)) => !o.is_empty(),
+fn agent_lines<'a>(provider: AgentProvider, lines: impl Iterator<Item = &'a [u8]>) -> Vec<ChatEvent> {
+    let mut parser = crate::transcript::LineParser::new(transcript_provider(provider));
+    let mut events = Vec::new();
+    let mut offset = 0;
+    for line in lines {
+        events.extend(parser.feed(line, offset));
+        offset += line.len() as u64 + 1;
     }
+    events.extend(parser.flush());
+    events
 }
 
-/// O texto do bloco que tem conteúdo depois do `strip()`.
-fn block_text<'a>(block: &'a Value, field: &str) -> Option<&'a str> {
-    block[field].as_str().filter(|t| !py::strip(t).is_empty())
-}
-
-fn sub_id(id: &str, k: usize) -> String { if k == 0 { id.to_owned() } else { format!("{id}:{k}") } }
-
-fn args(v: &Value) -> Option<Map<String, Value>> { Some(v.as_object().cloned().unwrap_or_default()) }
-
-/// `adapters/pi/transcript.parse_obj` (Pi e omp).
-fn pi_obj(obj: &Map<String, Value>) -> Vec<ChatEvent> {
-    if obj.get("type").and_then(Value::as_str) != Some("message") { return Vec::new(); }
-    let Some(msg) = obj.get("message").and_then(Value::as_object) else { return Vec::new() };
-    let node = obj.get("id").and_then(Value::as_str).unwrap_or("");
-    let ts = msg.get("timestamp").and_then(Value::as_f64).map(|t| t / 1000.0);
-    let Some(content) = msg.get("content").and_then(Value::as_array) else { return Vec::new() };
-    let mut out = Vec::new();
-    match msg.get("role").and_then(Value::as_str) {
-        Some("toolResult") => {
-            let parts: Vec<String> = content.iter().filter_map(|b| match b["type"].as_str() {
-                Some("text") => Some(clean(b["text"].as_str().unwrap_or(""))),
-                Some("image") => Some(format!("[imagem {}]", b["mimeType"].as_str().filter(|m| !m.is_empty()).unwrap_or("desconhecida"))),
-                _ => None,
-            }).filter(|p| !p.is_empty()).collect();
-            out.push(ChatEvent { tool_use_id: msg.get("toolCallId").and_then(Value::as_str).map(str::to_owned), result: Some(parts.join("\n")),
-                is_error: Some(truthy(msg.get("isError"))), ts, ..event(ChatKind::ToolResult, node.to_owned()) });
-        }
-        Some("user") => {
-            for (k, b) in content.iter().enumerate() {
-                if b["type"] == "text" && let Some(text) = block_text(b, "text") {
-                    out.push(ChatEvent { text: Some(clean(text)), ts, ..event(ChatKind::UserMsg, sub_id(node, k)) });
-                }
-            }
-        }
-        Some("assistant") => {
-            let cache_read = msg.get("usage").and_then(|u| u.get("cacheRead")).and_then(Value::as_u64);
-            for (k, b) in content.iter().enumerate() {
-                match b["type"].as_str() {
-                    Some("text") => if let Some(text) = block_text(b, "text") {
-                        out.push(ChatEvent { text: Some(clean(text)), cache_read, ts, ..event(ChatKind::AssistantMsg, sub_id(node, k)) });
-                    },
-                    Some("thinking") => if let Some(text) = block_text(b, "thinking") {
-                        out.push(ChatEvent { text: Some(clean(text)), ts, ..event(ChatKind::Thinking, sub_id(node, k)) });
-                    },
-                    Some("toolCall") => out.push(ChatEvent { tool_name: b["name"].as_str().map(str::to_owned), tool_input: args(&b["arguments"]),
-                        tool_use_id: b["id"].as_str().map(str::to_owned), ts, ..event(ChatKind::ToolUse, sub_id(node, k)) }),
-                    _ => {}
-                }
-            }
-        }
-        _ => {}
-    }
-    out
-}
-
-/// `adapters/kimi/transcript.parse_obj` (o `wire.jsonl`).
-fn kimi_obj(obj: &Map<String, Value>) -> Vec<ChatEvent> {
-    let ts = obj.get("time").and_then(Value::as_f64).map(|t| t / 1000.0);
-    let kind = obj.get("type").and_then(Value::as_str);
-    if kind == Some("context.append_message") {
-        let Some(msg) = obj.get("message").and_then(Value::as_object) else { return Vec::new() };
-        // O `injection` do modo de permissão é contexto do sistema, não bolha.
-        if msg.get("role").and_then(Value::as_str) != Some("user") || msg.get("origin").and_then(|o| o.get("kind")).and_then(Value::as_str) != Some("user") {
-            return Vec::new();
-        }
-        let base = msg.get("id").and_then(Value::as_str).unwrap_or("");
-        let Some(content) = msg.get("content").and_then(Value::as_array) else { return Vec::new() };
-        return content.iter().enumerate().filter(|(_, b)| b["type"] == "text").filter_map(|(k, b)| block_text(b, "text").map(|t| (k, t)))
-            .map(|(k, text)| ChatEvent { text: Some(text.to_owned()), ts, ..event(ChatKind::UserMsg, sub_id(base, k)) }).collect();
-    }
-    if kind != Some("context.append_loop_event") { return Vec::new(); }
-    let Some(ev) = obj.get("event").and_then(Value::as_object) else { return Vec::new() };
-    let id = ev.get("uuid").and_then(Value::as_str).unwrap_or("").to_owned();
-    let call = ev.get("toolCallId").and_then(Value::as_str);
-    match ev.get("type").and_then(Value::as_str) {
-        Some("content.part") => {
-            let Some(part) = ev.get("part") else { return Vec::new() };
-            if part["type"] == "text" && let Some(text) = block_text(part, "text") {
-                return vec![ChatEvent { text: Some(text.to_owned()), ts, ..event(ChatKind::AssistantMsg, id) }];
-            }
-            if part["type"] == "think" && let Some(text) = block_text(part, "think") {
-                return vec![ChatEvent { text: Some(text.to_owned()), ts, ..event(ChatKind::Thinking, id) }];
-            }
-            Vec::new()
-        }
-        Some("tool.call") => vec![ChatEvent { tool_name: ev.get("name").and_then(Value::as_str).map(str::to_owned),
-            tool_input: args(ev.get("args").unwrap_or(&Value::Null)), tool_use_id: call.map(str::to_owned), ts, ..event(ChatKind::ToolUse, id) }],
-        Some("tool.result") => {
-            let result = ev.get("result");
-            let text = match result {
-                Some(Value::Object(o)) => match o.get("output") {
-                    Some(Value::String(s)) => s.clone(),
-                    _ => crate::transcript::pyjson::dumps_unicode(result.unwrap(), false),
-                },
-                Some(Value::String(s)) => s.clone(),
-                _ => String::new(),
-            };
-            // O `tool.result` não tem `uuid`: sem o prefixo todos os resultados ocupariam o mesmo id.
-            let cid = [call, ev.get("parentUuid").and_then(Value::as_str), Some(id.as_str())].into_iter().flatten().find(|s| !s.is_empty());
-            if cid.is_none() { tracing::warn!(code = "kimi_tool_result_sem_id", "kimi: tool.result sem toolCallId/parentUuid/uuid"); }
-            vec![ChatEvent { tool_use_id: call.map(str::to_owned), result: Some(text), is_error: Some(truthy(result.and_then(|r| r.get("isError")))),
-                ts, ..event(ChatKind::ToolResult, cid.map(|c| format!("res:{c}")).unwrap_or_default()) }]
-        }
-        _ => Vec::new(),
+/// Leitura isolada para consumidores que não atravessam fronteiras de linha.
+pub(crate) fn agent_line(provider: AgentProvider, raw: &[u8]) -> Vec<ChatEvent> {
+    let Some(value) = crate::transcript::decode_line(raw) else { return Vec::new() };
+    match provider {
+        AgentProvider::Kimi => hangar_transcript::parse_kimi_object(&value),
+        AgentProvider::Pi | AgentProvider::Omp => hangar_transcript::parse_pi_object(&value),
+        _ => crate::transcript::LineParser::new(transcript_provider(provider)).feed(raw, 0),
     }
 }
 
