@@ -36,11 +36,14 @@ describe('respostas públicas de máquinas', () => {
     fetchMock.mockResolvedValue(new Response(JSON.stringify([
       { device_id: 'a', name: 'iPhone', status: 'pending', install_group: 42, install_code: ['ABC-DEF'] },
       { device_id: 'b', name: 'Pixel', status: 'pending', install_group: 'g1', install_code: 'XYZ-234' },
+      // Texto fora do formato: com quebra de linha a chave do cartão colidiria com a de outro pedido.
+      { device_id: 'c', name: 'Moto', status: 'pending', install_group: 'g1\nPixel', install_code: 'XYZ-234' },
     ]), { status: 200 }));
     const rows = await readDevices(server, new AbortController().signal);
     expect(rows[0]).toEqual({ device_id: 'a', name: 'iPhone', status: 'pending' });
     expect(rows[1]).toMatchObject({ install_group: 'g1', install_code: 'XYZ-234' });
-    expect(events.map((event) => event.codigo)).toEqual(['connect_device_install_invalid']);
+    expect(rows[2]).toEqual({ device_id: 'c', name: 'Moto', status: 'pending' });
+    expect(events.map((event) => event.codigo)).toEqual(['connect_device_install_invalid', 'connect_device_install_invalid']);
   });
 
   it('traduz a recusa pública de endereço duplicado do aparelho', () => {

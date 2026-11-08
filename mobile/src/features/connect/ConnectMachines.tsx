@@ -156,8 +156,10 @@ function AllDevices({ servers }: { servers: Server[] }) {
   const lists = useMemo(() => ({ read: servers.filter((server) => devices[server.id]).length, total: servers.length,
     failed: servers.filter((server) => devices[server.id]?.error).map((server) => server.label) }), [servers, devices]);
   // Fora do cartão: o pedido pode sumir da lista (expirou, respondido em outro lugar) e levar o cartão junto.
-  const [answerErrors, setAnswerErrors] = useState<{ label: string; error: string }[]>([]);
-  const onFailed = useCallback((failed: { label: string; error: string }[]) => setAnswerErrors((current) => [...current, ...failed]), []);
+  const [answerErrors, setAnswerErrors] = useState<(Failed & { group: string })[]>([]);
+  // Cada resposta troca os avisos do seu cartão: nova tentativa que deu certo apaga a falha anterior.
+  const onAnswered = useCallback((group: string, failed: Failed[]) => setAnswerErrors((current) =>
+    [...current.filter((e) => e.group !== group), ...failed.map((f) => ({ ...f, group }))]), []);
   if (!servers.length) return null;
   const answer = (server: Server, id: string, approve: boolean) => {
     void action.run((signal) => useConnect.getState().answerDevice(server, id, approve, signal), () => {});
@@ -173,7 +175,7 @@ function AllDevices({ servers }: { servers: Server[] }) {
   const failures = servers.filter((server) => devices[server.id]?.error)
     .map((server) => `${server.label}: ${devices[server.id]?.error ?? ''}`);
   return <>
-    {groups.map((group) => <PendingGroupCard key={group.key} group={group} lists={lists} onFailed={onFailed} />)}
+    {groups.map((group) => <PendingGroupCard key={group.key} group={group} lists={lists} onAnswered={onAnswered} />)}
     {answerErrors.length ? <MachineGroup>
       {answerErrors.map((failed, i) => <Notice key={`${failed.label}:${i}`} text={m.connect_group_failed({ machines: failed.label, error: failed.error })} error />)}
       <MachineRow title={m.connect_notice_dismiss()} action onPress={() => setAnswerErrors([])} />
@@ -199,9 +201,12 @@ type Failed = { label: string; error: string };
 const AGE_REFRESH_MS = 60_000;
 
 /** Um celular pedindo entrada em várias máquinas: um cartão, todas marcadas, cada aprovação pela rota da própria máquina. */
-const PendingGroupCard = memo(function PendingGroupCard({ group, lists, onFailed }: {
-  group: PendingGroup; lists: { read: number; total: number; failed: string[] }; onFailed: (failed: Failed[]) => void;
+const PendingGroupCard = memo(function PendingGroupCard({ group, lists, onAnswered }: {
+  group: PendingGroup; lists: { read: number; total: number; failed: string[] }; onAnswered: (group: string, failed: Failed[]) => void;
 }) {
+  // O alerta de confirmação fica aberto enquanto as listas chegam: o "sim" confere o cartão de agora, não o do toque.
+  const latest = useRef({ group, lists });
+  latest.current = { group, lists };
   const [off, setOff] = useState<ReadonlySet<string>>(new Set());
   const [busy, setBusy] = useState(false);
   // Em memo o cartão só redesenha quando o grupo muda: "pediu há" anda sozinho.
@@ -215,11 +220,12 @@ const PendingGroupCard = memo(function PendingGroupCard({ group, lists, onFailed
   const answer = (approve: boolean) => {
     setBusy(true);
     void useConnect.getState().answerGroup(approve ? chosen : group.targets, approve).then((failed) => {
-      if (failed.length) { haptic.error(); onFailed(failed); }
+      if (failed.length) haptic.error();
       else haptic.success();
+      onAnswered(group.key, failed);
     }).catch((error: unknown) => {
       haptic.error();
-      onFailed([{ label: group.name, error: reason(error) }]);
+      onAnswered(group.key, [{ label: group.name, error: reason(error) }]);
     }).finally(() => setBusy(false));
   };
   const machines = new Set(group.targets.map((target) => target.serverId)).size;
@@ -245,7 +251,10 @@ const PendingGroupCard = memo(function PendingGroupCard({ group, lists, onFailed
     {reading ? <MachineRow title={m.connect_group_reading({ read: String(lists.read), total: String(lists.total) })} /> : null}
     <MachineRow title={m.connect_group_approve()} action disabled={busy || group.clash || reading || !chosen.length}
       onPress={() => confirm(m.connect_device_approve_title({ name: group.name }),
-        m.connect_device_approve_body({ machine: chosen.map((target) => target.label).join(', ') }), m.connect_device_approve(), () => answer(true))} />
+        m.connect_device_approve_body({ machine: chosen.map((target) => target.label).join(', ') }), m.connect_device_approve(), () => {
+          const now = latest.current;
+          if (!now.group.clash && now.lists.read === now.lists.total) answer(true);
+        })} />
     <MachineRow title={m.connect_group_deny()} danger action disabled={busy} onPress={() => answer(false)} />
     {lists.failed.map((machine) => <Notice key={machine} text={m.connect_group_list_failed({ machine })} error />)}
   </SectionCard>;

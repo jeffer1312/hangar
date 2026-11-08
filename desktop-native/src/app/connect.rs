@@ -356,7 +356,7 @@ fn code_clashes(groups: &[Vec<(&str, &Request)>]) -> HashSet<String> {
             phones.entry(code).or_default().insert(phone);
         }
     }
-    groups.iter().filter(|group| group[0].1.device.install_code.as_deref().is_some_and(|code| phones[code].len() > 1))
+    groups.iter().filter(|group| group[0].1.device.install_code.as_deref().is_some_and(|code| phones.get(code).is_some_and(|ids| ids.len() > 1)))
         .filter_map(|group| group_key(&group[0].1.device)).collect()
 }
 
