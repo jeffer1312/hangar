@@ -599,6 +599,16 @@ async fn denied_card_leaves_nothing_behind() {
     assert!(w.a.store.list().is_empty(), "A não emite nada sem o cartão de B");
 }
 
+#[tokio::test]
+async fn a_link_that_fails_after_the_card_revokes_the_token_on_the_other_side() {
+    let w = world_named("pc", "pc").await;
+    assert_eq!(start_link(&w.a, "pc-b").await.status(), 202);
+    wait_stage(&w.a, "pc-b", "waiting_approval").await;
+    approve_card(&w.b).await;
+    assert_eq!(wait_stage(&w.a, "pc-b", "failed").await["code"], "connect_peer_same_identity");
+    assert!(w.b.store.list().iter().all(|device| device.status != Status::Approved), "B não fica com credencial que ninguém guarda");
+}
+
 /// Disco roubado: a chave de máquina consegue o bilhete, mas o bilhete só abre um cartão.
 #[tokio::test]
 async fn a_machine_key_alone_never_gets_past_the_card() {

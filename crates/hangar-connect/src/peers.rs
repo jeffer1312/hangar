@@ -276,7 +276,24 @@ impl PeerLinker {
             .map_err(|failure| failure.error(MACHINE))?;
         self.links.waiting(id);
         let token = approved_token(&http, &reach, &redeemed.device_id, &secret).await?;
-        let identity: Identity = fetch(http.get(format!("{reach}/api/peers/identificador")).bearer_auth(&token)).await
+        let (entry, back) = match self.keep(&http, &reach, id, machine, &token).await {
+            Ok(kept) => kept,
+            Err(error) => {
+                // O token de B não foi guardado: revogado lá, não sobra credencial aprovada sem dono.
+                revoke_on_peer(&http, &reach, &redeemed.device_id, &token).await;
+                return Err(error);
+            }
+        };
+        let handed = json!({"id": self.server_id, "base_url": format!("https://{}", self.linked.host), "token": back, "connect": true});
+        fetch::<Value>(post(&http, format!("{reach}/api/peers"), &handed).bearer_auth(&token)).await.map_err(|_| {
+            ConnectError::new(StatusCode::BAD_GATEWAY, "connect_peer_handover_failed", "a outra máquina não recebeu a credencial de volta; anuncie de novo para repetir")
+        })?;
+        Ok(entry)
+    }
+
+    /// Guarda o token de B no `peers.json` desta máquina e emite a credencial de volta.
+    async fn keep(&self, http: &reqwest::Client, reach: &str, id: &str, machine: &AccountMachine, token: &str) -> Result<(Value, String), ConnectError> {
+        let identity: Identity = fetch(http.get(format!("{reach}/api/peers/identificador")).bearer_auth(token)).await
             .map_err(|failure| failure.error(MACHINE))?;
         let peer = if identity.identificador.is_empty() { id.to_owned() } else { identity.identificador };
         // Outra máquina com o mesmo nome apagaria a própria entrada no `peers.json` de lá.
@@ -295,11 +312,14 @@ impl PeerLinker {
             }
             return Err(error);
         }
-        let handed = json!({"id": self.server_id, "base_url": format!("https://{}", self.linked.host), "token": back, "connect": true});
-        fetch::<Value>(post(&http, format!("{reach}/api/peers"), &handed).bearer_auth(&token)).await.map_err(|_| {
-            ConnectError::new(StatusCode::BAD_GATEWAY, "connect_peer_handover_failed", "a outra máquina não recebeu a credencial de volta; anuncie de novo para repetir")
-        })?;
-        Ok(entry)
+        Ok((entry, back))
+    }
+}
+
+async fn revoke_on_peer(http: &reqwest::Client, reach: &str, device_id: &str, token: &str) {
+    let outcome = http.delete(format!("{reach}/api/connect/devices/{device_id}")).bearer_auth(token).send().await;
+    if !outcome.as_ref().is_ok_and(|response| response.status().is_success()) {
+        tracing::warn!(code = "connect_peer_revoke_failed", device = device_id, "credencial aprovada na outra máquina ficou sem uso: {outcome:?}");
     }
 }
 
