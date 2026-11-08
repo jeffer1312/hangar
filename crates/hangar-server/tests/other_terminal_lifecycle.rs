@@ -91,6 +91,7 @@ struct Io {
     times: Mutex<Vec<tokio::time::Instant>>,
     captured: tokio::sync::Notify,
     pane: Mutex<Option<String>>,
+    first_input: Mutex<Option<(OtherTarget, Arc<Mutex<Option<OtherDiscoveryState>>>)>>,
 }
 impl Io {
     fn live() -> Arc<Self> {
@@ -124,6 +125,20 @@ impl OtherIo for Io {
     ) -> BoxFuture<'a, Result<(), RuntimeError>> {
         Box::pin(async move {
             self.writes.lock().unwrap().push(text.into());
+            if let Some((target, source)) = self.first_input.lock().unwrap().as_ref() {
+                if text == "Enter" {
+                    let event = if target.provider == hangar_transcript::Provider::Kimi {
+                        json!({"type":"context.append_message","message":{"role":"user","content":[{"type":"text","text":"NATIVE_PROOF_1"}],"toolCalls":[],"origin":{"kind":"user"},"id":"first-user"},"time":1794139200000u64})
+                    } else {
+                        json!({"type":"message","id":"first-user","timestamp":"2026-11-08T12:00:00Z","message":{"role":"user","content":[{"type":"text","text":"NATIVE_PROOF_1"}]}})
+                    };
+                    std::fs::write(&target.transcript, format!("{event}\n")).unwrap();
+                    *source.lock().unwrap() = Some(OtherDiscoveryState::Ready(target.clone()));
+                    *self.pane.lock().unwrap() = None;
+                } else {
+                    *self.pane.lock().unwrap() = Some(format!("────────────────────────────────\n{text}\n────────────────────────────────\n"));
+                }
+            }
             Ok(())
         })
     }
@@ -1093,5 +1108,40 @@ async fn other_lifecycle_public_select_and_answer_refuse_an_open_terminal_panel(
             assert_eq!(reply["detail"]["code"], "erro_terminal_aberto", "{provider:?}/{route}: {reply}");
             assert!(io.writes.lock().unwrap().is_empty(), "{provider:?}/{route}: painel aberto não recebe teclado");
         }
+    }
+}
+
+#[tokio::test]
+async fn other_lifecycle_first_input_creates_transcript_then_confirms_the_original_id() {
+    for provider in [hangar_transcript::Provider::Pi, hangar_transcript::Provider::Omp, hangar_transcript::Provider::Kimi] {
+        let root = tempfile::tempdir().unwrap();
+        let mut opening = opening(root.path());
+        opening.spec.provider = serde_json::from_value(json!(provider.as_str())).unwrap();
+        opening.agent = Some(OtherProcess {pid:124, birth:100.5});
+        let source = Arc::new(Mutex::new(Some(OtherDiscoveryState::Opening(opening))));
+        let io = Io::live();
+        let mut ready = target(root.path());
+        ready.provider = provider;
+        *io.first_input.lock().unwrap() = Some((ready.clone(), source.clone()));
+        let (registry, _) = registry(root.path(), io.clone(), source, None);
+        registry.adopt_now("pi-a").await;
+        assert!(!ready.transcript.exists());
+        let reply = registry.queue_other_opening("pi-a", KEY, "NATIVE_PROOF_1", "first-id").await.unwrap();
+        assert_eq!(reply["queue_id"], "first-id");
+        assert_eq!(*io.writes.lock().unwrap(), ["NATIVE_PROOF_1", "Enter"], "{provider:?}");
+        assert!(ready.transcript.exists(), "a CLI só cria o transcript após o primeiro envio");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let snapshot = registry.list_snapshots().await;
+                if snapshot[KEY]["queue"][0]["confirmed"] == true {
+                    assert_eq!(snapshot[KEY]["queue"][0]["id"], "first-id");
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }).await.unwrap();
+        assert_eq!(registry.other_info("pi-a").await.unwrap().session_key, "sid-a");
+        assert_eq!(*io.writes.lock().unwrap(), ["NATIVE_PROOF_1", "Enter"]);
+        registry.shutdown().await.unwrap();
     }
 }
