@@ -87,7 +87,6 @@ pub fn read_frames(
         if n == 0 || line.last() != Some(&b'\n') {
             break;
         }
-        let id = format!("{key}:{at}");
         // Pânico numa linha só pula a linha: sem isto o leitor compartilhado morria e os
         // aparelhos seguiam recebendo ping sem nenhuma mensagem nova.
         let evs = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parser.feed(&line, at))) {
@@ -99,6 +98,7 @@ pub fn read_frames(
             }
         };
         for ev in evs {
+            let id = format!("{key}:{}", ev.offset.unwrap_or(at));
             let data = serde_json::to_string(&ev).map_err(std::io::Error::other)?;
             frames.push(sse_frame("message", &data, Some(&id)));
         }
@@ -505,6 +505,24 @@ async fn run(
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn pi_hook_pair_keeps_the_user_line_cursor() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let user = serde_json::json!({"type":"message","id":"user-1","message":{
+            "role":"user","content":[{"type":"text","text":"contexto\n\nMensagem"}]}});
+        let hook = serde_json::json!({"type":"custom_message","customType":"claude-hook-context",
+            "parentId":"user-1","content":"contexto"});
+        std::fs::write(&path, format!("{user}\n{hook}\n")).unwrap();
+        let mut parser = LineParser::new(Provider::Pi);
+        let (frames, _) = read_frames(&path, 0, None, &mut parser, "k").unwrap();
+        let frame = std::str::from_utf8(frames.first().expect("mensagem com contexto removido")).unwrap();
+        assert!(frame.starts_with("id: k:0\r\n"), "{frame}");
+        let data = frame.split("data: ").nth(1).unwrap().trim();
+        let value: serde_json::Value = serde_json::from_str(data).unwrap();
+        assert_eq!(value["text"], "Mensagem");
+    }
 
     fn write(path: &Path, lines: std::ops::Range<usize>, tail: &str) -> Vec<u64> {
         let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path).unwrap();

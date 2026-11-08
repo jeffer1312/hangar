@@ -22,7 +22,7 @@ use crate::{
     session_open::{AgentProvider, OpenError, archive},
     speech::history::transfer_history as transfer,
     session_write::{detail_body, json_response},
-    transcript::{HistoryRequest, Provider, TAIL_WINDOW, history, py},
+    transcript::{HistoryRequest, Provider, TAIL_WINDOW, history},
 };
 
 /// O teto do `tail` (api.py: `min(tail, 200)`).
