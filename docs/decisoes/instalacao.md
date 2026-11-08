@@ -19,8 +19,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   `-Update` só sem UAC (já admin); senão vira pendência com o comando.
 - **Firewall do Windows: regra de liberação por porta (8765 e 8766), perfis Private e Public,
   só por `scripts/open-firewall.ps1`.** O `hangar-server` muda de pasta a cada versão, e o "Allow"
-  do aviso vale para um caminho só. Regra de bloqueio não cala o aviso. O passo de máquina pede o
-  UAC uma vez e nunca falha. Ver [a entrada](#firewall-do-windows-por-porta-07112026).
+  do aviso vale para um caminho só. Regra de bloqueio não cala o aviso. O passo de máquina roda com
+  `-NoPrompt`: nunca pede UAC e nunca falha; sem admin, a regra fica para o instalador. Ver
+  [a entrada](#firewall-do-windows-por-porta-07112026).
 - **Instalador guiado: duas perguntas, o resto é padrão.** Sem terminal, tudo é NÃO — exceto no
   `--app`/`-App` (assistente do app nativo), que responde pelas telas: `ask` e `ask_senha` sim,
   `ask_extra` não, Tailscale pela opção, nada espera teclado. O log nunca carrega o token, e no
@@ -1328,7 +1329,13 @@ porta.
 Decisão: `scripts/open-firewall.ps1` cria `hangar 8765` e `hangar 8766` com `-Profile
 Private,Public`. Public entra porque só regra de liberação cala o aviso, e o acesso continua exigindo
 o token. O instalador usa o mesmo script (e a 5173 quando há tarefa de front). Máquinas já
-instaladas recebem pelo passo `2026-11-07-firewall-portas-windows`: sem admin ele pede o UAC uma
-vez e espera até 2 min. Passo de máquina que falha derruba a atualização inteira, então ele sempre
-sai com 0 e grava o resultado em `~/.hangar/firewall-ports`; UAC recusado fica lá e na saída, e o
-`-Update` como admin completa depois.
+instaladas recebem pelo passo `2026-11-07-firewall-portas-windows`. Passo de máquina que falha
+derruba a atualização inteira, então ele sempre sai com 0 e grava o resultado em
+`~/.hangar/firewall-ports`, e o `-Update` como admin completa depois.
+
+O passo roda com `-NoPrompt` (08/11/2026): sem admin, não pede UAC. Antes ele pedia, e a
+Jefferson-batis falhou duas vezes (9615→9620 em 07/11, 9615→9717 em 08/11, relatórios `6nfllzka` e
+`d34f3uc2`) com a etapa de passos em 600,3 s, o `STEP_TIMEOUT`: a saída parava em "pedindo o UAC".
+O `Start-Process -Verb RunAs` fica preso até alguém responder ao UAC, então o `WaitForExit(120000)`
+nunca começava a contar; e o pedido vem de um processo escondido, que o Windows mostra só piscando
+na barra de tarefas, nem com a pessoa na frente ele aparece.
