@@ -196,8 +196,16 @@ fn registry(
     Arc<RuntimeRegistry>,
     Arc<hangar_server::provider_models::inbox::Store>,
 ) {
+    registry_with_interactions(root, io, source, after, Arc::new(hangar_server::interactions::InteractionStore::default()))
+}
+fn registry_with_interactions(
+    root: &Path,
+    io: Arc<Io>,
+    source: Arc<Mutex<Option<OtherDiscoveryState>>>,
+    after: Option<OtherAfterClosed>,
+    interactions: Arc<hangar_server::interactions::InteractionStore>,
+) -> (Arc<RuntimeRegistry>, Arc<hangar_server::provider_models::inbox::Store>) {
     let inbox = hangar_server::provider_models::inbox::Store::new();
-    let interactions = Arc::new(hangar_server::interactions::InteractionStore::default());
     let mut options = OtherOptions::new(
         hangar_server::terminal_control::TerminalPool::new(),
         inbox.clone(),
@@ -1002,4 +1010,88 @@ async fn other_lifecycle_list_and_history_share_the_proven_actor_without_python(
         (Some("user_msg"), Some("ola")), (Some("assistant_msg"), Some("oi!")),
     ]);
     registry.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn other_lifecycle_public_select_and_answer_refuse_an_open_terminal_panel() {
+    use axum::{extract::{ConnectInfo, State}, http::{Request, StatusCode}};
+    use hangar_server::{auth::TrustedHosts, config::Config, routes::AppState};
+    use hangar_transcript::Provider;
+    use http_body_util::BodyExt;
+
+    for provider in [Provider::Pi, Provider::Omp, Provider::Kimi] {
+        for route in ["select", "answer"] {
+            let root = tempfile::tempdir().unwrap();
+            let mut target = target(root.path());
+            target.provider = provider;
+            let question = json!({"question":"Qual cor?","options":[{"label":"Azul"},{"label":"Verde"}]});
+            let event = match (provider, route) {
+                (Provider::Kimi, "select") => json!({"type":"interaction.request","agentId":"main","id":"approval_1","kind":"approval",
+                    "toolCallId":"tool_x","request":{"turnId":8,"toolCallId":"tool_x","toolName":"ExitPlanMode","action":"",
+                        "display":{"kind":"plan_review","plan":"# Plano"}},"time":1_786_454_000_000u64}),
+                (Provider::Kimi, _) => json!({"type":"context.append_loop_event","event":{"type":"tool.call",
+                    "toolCallId":"q1","name":"AskUserQuestion","args":{"questions":[question]}}}),
+                _ => {
+                    let (name, arguments) = if provider == Provider::Omp {
+                        ("ask", json!({"questions":[question]}))
+                    } else { ("question", question) };
+                    json!({"type":"message","message":{"role":"assistant","content":[{"type":"toolCall",
+                        "name":name,"id":"q1","arguments":arguments}]}})
+                }
+            };
+            std::fs::write(&target.transcript, format!("{event}\n")).unwrap();
+            let io = Io::live();
+            *io.pane.lock().unwrap() = Some(match (provider, route) {
+                (Provider::Kimi, "select") => "  ▶ Ready to build with this plan?\n\n  ▶ 1. Approve\n    2. Reject\n    3. Revise\n\n  ↑/↓ select · 1/2/3 choose · ↵ confirm\n".into(),
+                (Provider::Kimi, _) => "  question\n\n   Cor    Submit\n\n  ? Qual cor?\n\n   → [1] Azul\n     [2] Verde\n     [3] Other\n\n   ↑↓ select  1-3 / ↵ choose  ←/→/tab switch  esc cancel".into(),
+                _ => format!("● Question Qual cor?\n\n> 1. Azul\n  2. Verde\n  3. Type something.\n↑↓ navigate • Enter to select • Esc to cancel\n{}\n status\n", "─".repeat(60)),
+            });
+            let interactions = Arc::new(hangar_server::interactions::InteractionStore::default());
+            let source = Arc::new(Mutex::new(Some(OtherDiscoveryState::Ready(target.clone()))));
+            let (registry, _) = registry_with_interactions(root.path(), io.clone(), source, None, interactions.clone());
+            registry.open_other_terminal(target.clone()).await.unwrap();
+            let mut live = registry.live(&target.name);
+            let published_id = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if let Some(id) = live.borrow().as_ref().and_then(|state|
+                        state.public_state["interaction_id"].as_str().map(str::to_owned)) {
+                        break id;
+                    }
+                    live.changed().await.unwrap();
+                }
+            }).await.unwrap();
+            let mut state = AppState::new(Config {
+                listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:9".parse().unwrap(),
+                internal_secret: "test-only".into(), auth_token: "owner-test".into(),
+                log_path: None, trusted: TrustedHosts::parse(""),
+            });
+            state.interactions = interactions;
+            state.state.runtime.set(registry.clone()).ok().unwrap();
+            state.term.mark_open_for_test(&target.name, &state.diag).await;
+            let body = if route == "select" {
+                json!({"option":1,"interaction_id":published_id})
+            } else {
+                json!({"interaction_id":published_id,"answers":[{"kind":"option","indices":[0],"labels":["Azul"]}]})
+            };
+            let request = Request::builder().method("POST")
+                .uri(format!("/api/sessions/{}/{route}", target.name))
+                .header("authorization", "Bearer owner-test")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(body.to_string())).unwrap();
+            let peer = ConnectInfo("127.0.0.1:50000".parse::<std::net::SocketAddr>().unwrap());
+            let state = State(Arc::new(state));
+            let response = if route == "select" {
+                hangar_server::session_write::control::select(state, peer, request).await
+            } else {
+                hangar_server::session_write::answer::answer(state, peer, request).await
+            };
+            let status = response.status();
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            let reply: Value = serde_json::from_slice(&bytes).unwrap();
+            registry.shutdown().await.unwrap();
+            assert_eq!(status, StatusCode::CONFLICT, "{provider:?}/{route}: {reply}");
+            assert_eq!(reply["detail"]["code"], "erro_terminal_aberto", "{provider:?}/{route}: {reply}");
+            assert!(io.writes.lock().unwrap().is_empty(), "{provider:?}/{route}: painel aberto não recebe teclado");
+        }
+    }
 }
