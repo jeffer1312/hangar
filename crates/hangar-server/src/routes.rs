@@ -5,7 +5,7 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::body::Body;
@@ -419,6 +419,7 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
             let mut wait = Duration::from_millis(250);
             let mut failing = false;
             loop {
+                let tried = Instant::now();
                 if let Err(e) = serve_connect(addr, connect_state.clone(), connect_pair.clone()).await {
                     connect_state.connect_supervisor.port_failed(format!("porta do Connect {} indisponível ({e})", addr.port()));
                     if !failing {
@@ -426,6 +427,8 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
                         failing = true;
                     }
                 }
+                // Porta que chegou a servir volta a tentar logo: a espera longa é só para quem nem abriu.
+                if tried.elapsed() > Duration::from_secs(5) { wait = Duration::from_millis(250); }
                 tokio::time::sleep(wait).await;
                 wait = (wait * 2).min(Duration::from_secs(5));
             }
@@ -436,10 +439,15 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
             let mut wait = Duration::from_millis(250);
             let mut failing = false;
             loop {
-                if let Err(e) = serve_preview(addr, preview_state.clone()).await && !failing {
-                    tracing::warn!(code = "connect_preview_port_failed", listen = %addr, "porta da prévia indisponível, tentando de novo: {e}");
-                    failing = true;
+                let tried = Instant::now();
+                if let Err(e) = serve_preview(addr, preview_state.clone()).await {
+                    preview_state.connect_supervisor.preview_port_failed(format!("porta {} indisponível ({e})", addr.port()));
+                    if !failing {
+                        tracing::warn!(code = "connect_preview_port_failed", listen = %addr, "porta da prévia indisponível, tentando de novo: {e}");
+                        failing = true;
+                    }
                 }
+                if tried.elapsed() > Duration::from_secs(5) { wait = Duration::from_millis(250); }
                 tokio::time::sleep(wait).await;
                 wait = (wait * 2).min(Duration::from_secs(5));
             }

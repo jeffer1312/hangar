@@ -563,6 +563,21 @@ async fn preview_link_waits_for_the_first_site_to_open_from_outside() {
 }
 
 #[tokio::test]
+async fn a_preview_port_held_elsewhere_says_why() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_path_buf();
+    let supervisor = alone(&dir);
+    state::write(&dir, &linked()).unwrap();
+    supervisor.preview_port_failed("endereço em uso".into());
+    let refused = supervisor.publish_preview().await.unwrap_err();
+    assert_eq!(refused.code, "connect_preview_port_closed");
+    assert!(refused.msg.contains("endereço em uso"), "{}", refused.msg);
+    supervisor.preview_port_opened();
+    supervisor.preview_port_failed("de novo".into());
+    assert!(supervisor.publish_preview().await.unwrap_err().msg.contains("de novo"));
+}
+
+#[tokio::test]
 async fn preview_site_waits_for_this_server_to_open_the_port() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().to_path_buf();

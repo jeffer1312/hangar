@@ -64,6 +64,7 @@ struct Live {
     proxy_error: Option<String>,
     /// `connect.json` existe e não se leu; sai na próxima leitura que der certo.
     state_error: Option<String>,
+    preview_port_error: Option<String>,
 }
 
 type Shared = Arc<Mutex<Live>>;
@@ -167,7 +168,14 @@ impl Supervisor {
     }
 
     pub fn preview_port_opened(&self) {
+        lock(&self.live).preview_port_error = None;
         self.preview_port.send_replace(true);
+    }
+
+    /// A causa vai junto da recusa ao abrir a prévia.
+    pub fn preview_port_failed(&self, error: String) {
+        lock(&self.live).preview_port_error = Some(error);
+        self.preview_port.send_replace(false);
     }
 
     /// Ilegível é erro, nunca "não ligado": a causa também fica em `status().error`.
@@ -370,7 +378,8 @@ impl Supervisor {
     /// Devolve o host da prévia e se quem chama ainda precisa esperar o site abrir de fora. Vale até a primeira
     /// resposta (`preview_answered`), não só na publicação: o segundo pedido não solta link de site que nunca abriu.
     pub async fn publish_preview(&self) -> Result<(String, bool), ConnectError> {
-        let closed = ConnectError::new(StatusCode::CONFLICT, "connect_preview_port_closed", format!("a porta da prévia ({PREVIEW_PORT}) não abriu neste servidor"));
+        let cause = lock(&self.live).preview_port_error.clone().map(|error| format!(": {error}")).unwrap_or_default();
+        let closed = ConnectError::new(StatusCode::CONFLICT, "connect_preview_port_closed", format!("a porta da prévia ({PREVIEW_PORT}) não abriu neste servidor{cause}"));
         let (linked, first) = self.publish(&self.preview_port, closed, |linked| &mut linked.preview_published).await?;
         // Sem os filhos de pé o link sairia sem abrir para ninguém.
         if !first && !self.status().enabled {
