@@ -20,8 +20,27 @@ mod session_vault;
 mod tour;
 mod worktree_fresh;
 
-use std::time::Instant;
+use std::{cell::Cell, time::{Duration, Instant}};
 use gpui_kit::*;
+
+thread_local! {
+    /// O redesenho já marcado: cada render só marca outro se o dele cair antes. Um redesenho vale para todas as
+    /// animações da janela, e cada uma marca de novo o seu próximo degrau.
+    static NEXT_REPAINT: Cell<Option<Instant>> = const { Cell::new(None) };
+}
+
+/// Redesenha a janela daqui a `secs`, no próximo degrau do roteiro. Só é marcado enquanto a animação é desenhada:
+/// fechou o modal, para.
+pub(super) fn repaint_in(secs: f32, window: &mut Window, cx: &mut App) {
+    // Margem para o timer não acordar um pouco antes do degrau e desenhar o quadro velho.
+    let at = Instant::now() + Duration::from_secs_f32(secs) + Duration::from_millis(5);
+    if NEXT_REPAINT.get().is_some_and(|next| next > Instant::now() && next <= at) { return; }
+    NEXT_REPAINT.set(Some(at));
+    window.spawn(cx, async move |cx| {
+        cx.background_executor().timer(at.saturating_duration_since(Instant::now())).await;
+        let _ = cx.update(|window, _| window.refresh());
+    }).detach();
+}
 
 /// Desenha a animação na largura do cartão. `started` é quando o cartão apareceu: o ciclo conta dele.
 pub type NewsAnimation = fn(started: Instant, width: Pixels, window: &mut Window, cx: &mut App) -> AnyElement;

@@ -118,8 +118,12 @@ struct IdleCompact {
     live: bool,
     /// Cache de 1 h no último turno que gravou cache; turno só de leitura não diz.
     one_hour: Option<bool>,
-    /// Compactou (ou pediu `/compact`) desde o último uso: não há o que compactar.
+    /// Compactou desde o último uso: não há o que compactar.
     done: bool,
+    /// Quando chegou o último `usage`: o prazo do cache conta da última chamada à API, não de qualquer evento.
+    cache_at: f64,
+    /// A compactação em curso ou feita foi a da sessão parada, não um pedido da pessoa.
+    auto: bool,
 }
 
 const ECHO_LIMIT: usize = 64;
@@ -268,7 +272,8 @@ impl ClaudeEngine {
             "previous_non_plan":self.previous_non_plan,"commands":self.commands,"terminal_commands":self.terminal_commands,
             "usage":self.usage,"context_window":self.context_window,"cost":self.cost,"effort_intent":self.effort_intent,
             "runtime_counter":self.counter,"conversation":self.metadata["session_id"],"deliverable":self.deliverable(),
-            "subagents":self.subagents,"idle_compact_tokens":self.idle_compact_tokens()})
+            "subagents":self.subagents,"idle_compact_tokens":self.idle_compact_tokens(),
+            "idle_compacted":self.idle_compact.auto && self.idle_compact.done})
     }
 
     pub(super) fn input_frame(operation_id:&str,payload:&Value) -> Value {
@@ -626,7 +631,7 @@ impl ClaudeEngine {
     pub fn command(&mut self,command:RuntimeCommand,clock:ClockSample) -> Result<Vec<Effect>,RuntimeError> {
         // O `/compact` da sessão parada reconfere aqui, na mesma vez do ator: o que chegou depois da vista cancela.
         if command.kind == OperationKind::Compact && let Some(after) = command.payload["idle_after_s"].as_f64()
-            && (self.park_idle(clock.monotonic_s).is_none_or(|idle|idle < after) || self.idle_compact_tokens().is_none()) {
+            && self.idle_compact_age(clock.monotonic_s).is_none_or(|age|age < after) {
             return Err(RuntimeError::new("idle_compact_stale","a sessão saiu da parada antes do /compact"));
         }
         self.clock = clock;
@@ -722,7 +727,7 @@ impl ClaudeEngine {
             OperationKind::ListModels => self.control(operation_id,"list_models",json!({}),&mut effects),
             OperationKind::Compact => {
                 if !self.deliverable() { return Err(error("aguarde a sessão ficar ociosa")); }
-                self.idle_compact.done = true;
+                self.idle_compact.auto = payload.get("idle_after_s").is_some();
                 self.local_command(operation_id,"/compact",&mut effects);
             }
             OperationKind::Cwd => effects.push(Effect::Reply { operation_id,disposition:Disposition::Accepted,payload:self.metadata["cwd"].clone() }),
@@ -967,6 +972,8 @@ impl ClaudeEngine {
                         else if creation["ephemeral_5m_input_tokens"].as_u64().unwrap_or(0) > 0 { self.idle_compact.one_hour = Some(false); }
                         self.idle_compact.live = true;
                         self.idle_compact.done = false;
+                        self.idle_compact.auto = false;
+                        self.idle_compact.cache_at = self.clock.monotonic_s;
                     }
                     if let Some(blocks) = event["message"]["content"].as_array() {
                         for block in blocks {
@@ -1561,6 +1568,13 @@ impl ClaudeEngine {
         let state = &self.idle_compact;
         if !state.live || state.done || state.one_hour != Some(true) { return None; }
         Some(["input_tokens","cache_read_input_tokens","cache_creation_input_tokens"].iter().map(|k|self.usage[*k].as_u64().unwrap_or(0)).sum())
+    }
+
+    /// Segundos desde a última chamada à API, com a sessão parada e algo a compactar; `None` = não compacta.
+    pub fn idle_compact_age(&self,now:f64) -> Option<f64> {
+        self.idle_compact_tokens()?;
+        self.park_idle(now)?;
+        Some(now - self.idle_compact.cache_at)
     }
 
     pub fn next_deadline(&self) -> Option<f64> {

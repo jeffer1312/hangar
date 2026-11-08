@@ -129,7 +129,9 @@ impl RuntimeConfig {
                 continue;
             }
             if key=="compactar_parada_min_mil" {
-                let thousands=value.as_u64().ok_or("compactar_parada_min_mil: esperado um número inteiro")?;
+                // Os campos numéricos dos apps chegam como texto, como nos outros inteiros de `preferences::coerce`.
+                let thousands=value.as_u64().or_else(||value.as_str().and_then(|s|s.trim().parse().ok()))
+                    .ok_or("compactar_parada_min_mil: esperado um número inteiro")?;
                 if thousands < IDLE_COMPACT_FLOOR/1000 {
                     return Err(format!("compactar_parada_min_mil: o Claude não compacta abaixo de {} mil tokens",IDLE_COMPACT_FLOOR/1000).into());
                 }
@@ -226,7 +228,11 @@ pub fn idle_compact_min_tokens(settings:&Map<String,Value>) -> u64 {
 /// Mínimo de tokens para compactar a sessão parada; `None` = o Claude não compactaria (desligado ou sem autocompact).
 pub fn idle_compaction(settings:&Map<String,Value>) -> Option<u64> {
     let off=|key:&str|settings.get(key).is_some_and(|v|!truthy(v));
-    let env_on=|key:&str|settings.get("env").and_then(|env|env.get(key)).is_some_and(truthy);
+    // Como o Claude lê a variável: só 1/true/yes/on liga; "0" e "false" não desligam o autocompact.
+    let env_on=|key:&str|settings.get("env").and_then(|env|env.get(key)).is_some_and(|v|match v {
+        Value::String(s)=>["1","true","yes","on"].contains(&s.trim().to_ascii_lowercase().as_str()),
+        other=>other.as_u64()==Some(1) || other.as_bool()==Some(true),
+    });
     if off("idleCompaction") || off("autoCompact") || env_on("DISABLE_AUTO_COMPACT") || env_on("DISABLE_COMPACT") { return None; }
     Some(idle_compact_min_tokens(settings))
 }
@@ -320,6 +326,7 @@ mod idle_compaction_tests {
         assert_eq!(idle_compaction(&settings(json!({"idleCompaction":false}))),None);
         assert_eq!(idle_compaction(&settings(json!({"autoCompact":false}))),None);
         assert_eq!(idle_compaction(&settings(json!({"env":{"DISABLE_AUTO_COMPACT":"1"}}))),None);
+        assert_eq!(idle_compaction(&settings(json!({"env":{"DISABLE_AUTO_COMPACT":"0","DISABLE_COMPACT":"false"}}))),Some(IDLE_COMPACT_DEFAULT));
         assert_eq!(idle_compaction(&settings(json!({"env":{"CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS":"150000"}}))),Some(150_000));
         assert_eq!(idle_compaction(&settings(json!({"env":{"CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS":"5000"}}))),Some(IDLE_COMPACT_FLOOR));
     }

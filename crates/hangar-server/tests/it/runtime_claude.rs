@@ -260,6 +260,21 @@ fn idle_compact_rechecks_the_idle_time_inside_the_actor() {
     assert_eq!(early.code,"idle_compact_stale");
     let effects = engine.command(command(OperationKind::Compact,json!({"idle_after_s":3360.0})),clock(3400.0)).unwrap();
     assert_eq!(writes(&effects)[0]["message"]["content"][0]["text"],"/compact");
+    assert_eq!(engine.view()["idle_compacted"],false);
+    line(&mut engine,json!({"type":"system","subtype":"compact_boundary"}),3430.0);
+    assert_eq!(engine.view()["idle_compacted"],true);
+    assert!(engine.view()["idle_compact_tokens"].is_null());
+}
+
+/// O prazo do cache conta da última chamada à API: evento sem `usage` (trabalho de fundo, hooks) não o adia.
+#[test]
+fn idle_compact_age_counts_from_the_last_api_call() {
+    let mut engine = engine(json!({"name":"session","session_id":"sid","initialized":true}));
+    line(&mut engine,json!({"type":"assistant","message":{"content":[],"usage":{"input_tokens":2,"cache_read_input_tokens":250000,
+        "cache_creation_input_tokens":10,"cache_creation":{"ephemeral_1h_input_tokens":10}}}}),20.0);
+    line(&mut engine,json!({"type":"result","subtype":"success"}),21.0);
+    line(&mut engine,json!({"type":"system","subtype":"background_tasks_changed","tasks":[]}),620.0);
+    assert_eq!(engine.idle_compact_age(3400.0),Some(3380.0));
 }
 
 #[test]
