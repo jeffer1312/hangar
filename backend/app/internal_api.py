@@ -191,23 +191,3 @@ def transcription_config():
             "user_vocabulary": runtime_config.get("ditado_vocabulario") or "",
             "dictation_max_minutes": int(runtime_config.get("dictation_max_minutes") or 0),
             "state_path": str(Path.home() / ".hangar" / "transcription-wait.json")}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-@router.get("/costs/scopes")
-async def costs_scopes() -> dict:
-    from app import costs_sources
-    return await internal_thread(costs_sources.scopes_for_rust)
-
-

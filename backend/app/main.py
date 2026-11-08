@@ -67,7 +67,6 @@ import uvicorn
 from app.config import settings, resolve_bind_ip, list_config_dirs, _backend_config_base
 from app.hook_installer import (
     ensure_askq_hook_installed,
-    ensure_guard_hooks_installed,
     ensure_nav_hook_installed,
     ensure_pair_hook_installed,
     ensure_preview_hook_installed,
@@ -191,10 +190,6 @@ def main():
     ensure_subagent_hook_installed()
     ensure_pair_hook_installed()
     ensure_nav_hook_installed()
-    ensure_guard_hooks_installed()
-    # Idem pro hook do Kimi (config.toml do ~/.kimi-code) — ver app/kimi_hook_installer.py.
-    from app.kimi_hook_installer import ensure_kimi_hooks_installed
-    ensure_kimi_hooks_installed()
     # E pro Codex (hooks.json do ~/.codex) — ver app/codex_hook_installer.py.
     from app.codex_hook_installer import ensure_codex_state_hook_installed
     ensure_codex_state_hook_installed()

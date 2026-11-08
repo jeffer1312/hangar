@@ -26,7 +26,6 @@ from app.adapters.pi import sessions as pi_sessions
 from app.config import list_config_dirs
 
 LOCAL = timezone(timedelta(hours=-3))
-_REPO = Path(__file__).resolve().parents[2]
 PROJETO_DESCONHECIDO = "desconhecido"
 # Suba ao mudar o que `uso_codex` grava por rollout.
 _USO_CODEX_VERSAO = 3
@@ -876,23 +875,6 @@ def _pi_roots() -> list[tuple[Path, str]]:
     return out
 
 
-def scopes_for_rust() -> dict:
-    """Escopos e rótulos decididos antes da leitura, no formato do contrato versão 8."""
-    claude = [{"root": str(costs_claude_transcript.raiz_projetos(Path(path))), "account": account,
-               "label": _ROTULOS.get(account) or account}
-              for path, account in _config_dirs()]
-    codex = []
-    for account in _contas_codex():
-        home = account.home.expanduser().absolute().resolve(strict=False)
-        identity = f"codex:{home}"
-        _ROTULOS[identity] = f"Codex · {account.id}"
-        codex.append({"home": str(home), "account": identity, "label": _ROTULOS[identity]})
-    kimi = raiz_kimi()
-    return {"claude": claude, "codex": codex,
-            "pi": [{"root": str(root), "source": source} for root, source in _pi_roots()],
-            "kimi": ({"root": str(kimi), "index": str(kimi_sessions.kimi_home() / "session_index.jsonl")}
-                     if kimi.is_dir() else None),
-            "repo": str(_REPO)}
 
 
 def _sincronizar() -> None:
