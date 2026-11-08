@@ -4,7 +4,7 @@ pub mod accounts;
 pub mod archive_history;
 pub mod archive_list;
 pub mod artifacts;
-pub mod auth;
+pub use hangar_core::auth;
 pub mod remote_browser;
 pub mod config;
 pub mod config_sync;

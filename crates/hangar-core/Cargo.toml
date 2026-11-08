@@ -11,7 +11,9 @@ axum = { workspace = true }
 base64 = "=0.23.1"
 chrono = { workspace = true }
 flate2 = { workspace = true }
+form_urlencoded = { workspace = true }
 futures-util = { workspace = true }
+hangar-auth.workspace = true
 http-body-util = { workspace = true }
 hyper-util = { workspace = true }
 md-5.workspace = true
@@ -23,6 +25,7 @@ reqwest = { workspace = true, features = ["rustls", "multipart"] }
 serde = { workspace = true, features = ["alloc"] }
 serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
 sha1_smol.workspace = true
+subtle = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "time", "fs", "signal"] }
 tracing = { workspace = true }
 
