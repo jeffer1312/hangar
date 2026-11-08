@@ -258,7 +258,7 @@ fn ticket_key_and_pi_paths() {
 
 /// Padrões do contrato original, escritos aqui para não depender da captura de saída.
 fn native_row_defaults() -> Value {
-    json!({
+    serde_json::from_str(r#"{
         "lifecycle_id": null, "transfer_id": null, "transfer_phase": null,
         "cwd": null, "jsonl": null, "provider": "claude", "headless": false,
         "engine": null, "engine_account": null, "codex_home": null, "codex_service_tier": null,
@@ -275,7 +275,7 @@ fn native_row_defaults() -> Value {
         "loop_max": null, "plan_name": null, "plan_task": null, "plan_task_total": null,
         "plan_done": null, "plan_total": null, "plan_complete": null,
         "plan_tasks": null, "plan_hidden": null
-    })
+    }"#).unwrap()
 }
 
 #[test]
