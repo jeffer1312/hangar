@@ -41,8 +41,8 @@ vi.mock('../../stores/servers', async () => {
   const { create } = await import('zustand');
   return {
     ownServers: (servers: Server[]) => servers.filter((s) => !s.invite),
-    useServers: create<{ servers: Server[]; ready: boolean; activeId: string; ensureActive: ReturnType<typeof vi.fn>; remove: (id: string) => void }>((set) => ({
-      servers: [], ready: true, activeId: 'srv1', ensureActive: vi.fn(() => true),
+    useServers: create<{ servers: Server[]; ready: boolean; activeId: string; ensureActive: ReturnType<typeof vi.fn>; reactivateDevice: (id: string) => void; remove: (id: string) => void }>((set) => ({
+      servers: [], ready: true, activeId: 'srv1', ensureActive: vi.fn(() => true), reactivateDevice: () => {},
       remove: (id) => set((s) => ({ servers: s.servers.filter((server) => server.id !== id) })),
     })),
   };

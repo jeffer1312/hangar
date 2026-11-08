@@ -190,6 +190,8 @@ async fn run() {
     }
     state.startup = hangar_server::startup::Readiness::pending();
     state.front = hangar_server::routes::front_address(&state.accounts.env.home, state.cfg.listen);
+    state.connect = hangar_server::config::connect_listen(state.cfg.listen);
+    state.preview = hangar_server::config::preview_listen(state.cfg.listen);
     let startup = state.startup.clone();
     let service = hangar_server::update::git_engine::Service::from_state(&state);
     let startup_environment = state.accounts.env.clone();
@@ -207,8 +209,13 @@ async fn run() {
         startup.finish();
     });
     let prewarm = state.prewarm.clone();
+    let connect = state.connect_supervisor.clone();
+    // Fora do caminho da subida: baixar `frpc` e Caddy não segura a porta.
+    let resuming = connect.clone();
+    tokio::spawn(async move { resuming.resume().await });
     // A porta do convidado não entra no bind fatal acima: o filho anterior pode ainda segurá-la.
     let served = hangar_server::serve_until_with_guest(listener, state, guest.listen, stop).await;
+    connect.stop().await;
     prewarm.discard_all("saida_do_servidor").await;
     match served {
         Ok(()) => {

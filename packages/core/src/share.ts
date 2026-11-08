@@ -128,15 +128,22 @@ export function parseInviteLink(text: string): { address: string; code: string }
   return { address: `${esquema}://${hostPorta}`, code };
 }
 
-// Só `https://host.ts.net:8443/par/CÓDIGO` do Funnel (regra do `parse_pair_link` do nativo): outro
-// host ou porta nunca recebe o resgate, que leva o token desta máquina.
+// `<máquina>--guest.<conta>.hangar.dev.br` e nada mais do domínio: `<máquina>.<conta>` é a porta do dono.
+const CONNECT_GUEST_HOST = /^[a-z0-9](?:[a-z0-9-]{0,54}[a-z0-9])?--guest\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.hangar\.dev\.br$/;
+
+// Só `https://host.ts.net:8443/par/CÓDIGO` do Funnel ou `https://<máquina>--guest.<conta>.hangar.dev.br/par/CÓDIGO`
+// do Connect, sem porta (regra do `parse_pair_link` do nativo): outro host ou porta nunca recebe o resgate, que
+// leva o token desta máquina.
 export function parsePairLink(text: string): string | null {
   let u: URL;
   try { u = new URL(text.trim()); } catch { return null; }
   if (u.protocol !== 'https:' || u.username || u.password || u.search || u.hash || text.includes('?') || text.includes('#')) return null;
-  if (!u.hostname.endsWith('.ts.net') || u.hostname.length <= '.ts.net'.length || u.port !== '8443') return null;
+  const funnel = u.hostname.endsWith('.ts.net') && u.hostname.length > '.ts.net'.length && u.port === '8443';
+  // `URL` apaga a `:443` e aceita `\` no lugar de `/`: só o texto mostra que o link veio com porta.
+  const connect = CONNECT_GUEST_HOST.test(u.hostname) && u.port === '' && !/^https:[/\\]*[^/\\]*:/i.test(text.trim());
+  if (!funnel && !connect) return null;
   const m = /^\/par\/([A-Za-z0-9]{1,64})\/?$/.exec(u.pathname);
-  return m ? `https://${u.hostname}:8443/par/${m[1]}` : null;
+  return m ? `https://${u.host}/par/${m[1]}` : null;
 }
 
 // Forma mínima do corpo de erro do resgate: envelope `{detail:{params:{reason}}}` ou `{reason}` cru.

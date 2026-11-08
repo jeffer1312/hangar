@@ -232,10 +232,10 @@ function lerSidecars() {
     .filter((s) => s && typeof s.chave === 'string');
 }
 
-// A URL da página aberta pelo app carrega `?token=` até o shell limpar: nada que vai pro
-// terminal (e daí pro transcript) mostra o valor.
+// A URL da página aberta pelo app carrega `?page_ticket=` (ou `?token=`) até o shell limpar: nada
+// que vai pro terminal (e daí pro transcript) mostra o valor.
 function semToken(texto) {
-  return String(texto).replace(/([?&]token=)[^&#\s"']*/gi, '$1…');
+  return String(texto).replace(/([?&](?:token|page_ticket)=)[^&#\s"']*/gi, '$1…');
 }
 
 function sidecarDa(nome) {

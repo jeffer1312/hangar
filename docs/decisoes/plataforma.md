@@ -1597,30 +1597,14 @@ seleção readonly de candidatos reais. Regressões foram escritas, não executa
 app, compilação e fechamento real ainda não conferidos; mudanças estão na worktree
 `/home/jefferson/Projetos/hangar-orq-team-context`, não instaladas no serviço ativo.
 
-## Connect: a porta dele nunca é local
-
-O Hangar Connect publica a máquina em `<maquina>.<conta>.hangar.dev.br`: o traefik da VPS repassa
-por SNI sem abrir o TLS, o `frpc` traz os bytes até o Caddy local, que abre o TLS e encaminha para
-o backend. Medido em 2026-10-02, antes da porta própria: o Caddy fala de `127.0.0.1`, então
-`/api/desktop/palette` (só-local) respondia **200** pela internet, inclusive com
-`X-Forwarded-For` forjado — todo acesso de fora valia como o dono na máquina, sem limite de
-tentativas. Com a porta `127.0.0.1:8768` e o `ConnectPortGate` trocando o cliente por
-`192.0.2.1` (RFC 5737) por fora de todos os middlewares, a mesma chamada passou a **403**.
-
-A decisão é pela porta do socket, como a do convidado (8766): o `proxy_headers` do uvicorn vale
-para todos os sockets do processo, então cabeçalho nunca serve para decidir. O limite de
-tentativas pelo Connect é o bloqueio de sempre (8 erros / 30 s) num contador próprio; atraso por
-tentativa não serve (o atacante abre conexões em paralelo, ver `auth.py`). O acerto do dono pelo
-Connect não zera esse contador: o app dele acerta a cada poucos segundos e daria ao atacante 7
-palpites novos a cada acerto. Custo aceito: quem martelar a senha trava o acesso pelo Connect por
-30 s; LAN e Tailscale seguem livres.
-
 ## Cookie de login só lê
 
 Todas as máquinas do Connect e o `app.hangar.dev.br` são o mesmo site para o navegador: a página
 servida por uma máquina dispara pedidos a outra levando o cookie dela (`SameSite=Lax` não
-separa subdomínios) e consegue gravar cookie com `Domain=hangar.dev.br`. Um segundo domínio não
-resolveria — as máquinas seguiriam no mesmo site entre si. Por isso o `cp_token` só autoriza
+separa subdomínios) e consegue gravar cookie com `Domain=hangar.dev.br`. Enquanto as máquinas servem
+só o Hangar, um segundo domínio não resolveria: elas seguiriam no mesmo site entre si. A prévia de
+porta muda essa conta, porque serve código de projeto nesse site (ver "Prévia de porta pelo
+Connect"). Por isso o `cp_token` só autoriza
 `GET`/`HEAD` (ação exige a senha no cabeçalho ou na query, que outra página não tem), e em https
 só vale o `__Host-cp_token`, que outra máquina não consegue gravar; o PWA grava o prefixado e
 apaga o antigo. O sync recusa ação com `Sec-Fetch-Site: same-site`/`cross-site`. O `cp_sync`
@@ -4180,3 +4164,96 @@ um crate sozinho guarda outra cópia das dependências no `target`). A divisão 
 `runtime`/`accounts`/`list` pode exigir descer bastante coisa antes, ou uma trait no core; o plano
 da divisão mostra como cada caso foi resolvido. A estimativa de memória depois da divisão está no
 plano; o pico medido do `hangar-server` é de 8,54 GB.
+
+## Prévia de porta pelo Connect: a 8769 é um listener próprio, fora de `hangar_auth` (07/11/2026)
+
+No Tailscale a prévia de um projeto só é vista na tailnet. Na internet ela precisa de porta própria,
+senão um servidor de desenvolvimento fica público. `127.0.0.1:8769` (`hangar-connect/src/preview.rs`)
+fica entre o Caddy e o projeto, sem `AppState`: erro de visitante não enche o contador do dono.
+
+- **Link.** Uso único, 10 minutos. O `GET` só mostra uma página sem script, com um botão, porque app
+  de chat busca o link para montar miniatura e o queimaria. O `POST` com `Origin` do site gasta o link,
+  grava o cookie `__Host-` e responde 303 sem o link na URL. A página usa `Referrer-Policy: same-origin`
+  e não `no-referrer`: com `no-referrer` o navegador manda `Origin: null` no envio do formulário, e o
+  botão nunca funcionaria. Por isso o `Referer` com o link, que vem no pedido depois da 303, é apagado
+  antes de chegar ao projeto.
+- **Sessão.** Um visitante por prévia, 8 horas desde a entrada, só o hash no servidor e só em memória.
+  `DELETE`, prévia nova ou o prazo cortam também WebSocket e resposta longa em curso.
+  `GET /api/connect/preview` mostra a prévia aberta, para ela não ficar esquecida.
+- **O que o projeto vê.** `Host` e `Origin` locais, porque Vite e Next recusam o host público. Saem
+  `Authorization` e os cookies do Hangar. **Os cookies do próprio projeto ficam**: isto muda a decisão
+  do plano, que tirava todos, e tirá-los quebraria o login de qualquer app.
+- **O que o projeto não faz.** `Clear-Site-Data` apagaria os cookies do visitante em todo o
+  `*.hangar.dev.br`; `Set-Cookie` com nome do Hangar derrubaria a sessão; `Domain=hangar.dev.br`
+  repetido encheria o cabeçalho `Cookie` de todas as máquinas. O primeiro e o segundo saem, e o
+  atributo `Domain` é removido. Script de service worker é recusado: o host é fixo por máquina, e o
+  worker de uma prévia velha leria o link e o cookie da seguinte.
+- **Vizinhas.** As máquinas do Connect são o mesmo site, e `SameSite` deixa o cookie ir junto.
+  `Origin` diferente da do site é 403. `Sec-Fetch-Site` diferente de `same-origin` e `none` também é
+  403, salvo `Sec-Fetch-Mode: navigate` com `Sec-Fetch-Dest: document`, que é abrir o site numa aba.
+- **Destino.** Só `127.0.0.1:<port>`, gravado na criação e nunca vindo do visitante. As portas do
+  próprio Hangar dão 422 na rota e a cada pedido. Forma absoluta e `CONNECT` dão 400, e redirecionamento
+  do projeto nunca é seguido.
+- **Publicação.** Como o site do convidado, cada host gasta um certificado do limite semanal. O site
+  nasce na primeira prévia, e só ela espera até 45 s o `GET https://<host>/` responder 401 de fora; o
+  cliente tenta mais uma vez, porque quem pede pelo Connect perde a conexão na troca dos filhos. Depois
+  disso, Connect parado é 409 `connect_not_running`, nunca um link que não abre.
+
+**Em aberto, decisão do dono:** mudar as prévias para um domínio registrável próprio. Código de projeto
+roda no mesmo site da entrada do dono, e um host `--preview` serve para phishing com o nome do Hangar.
+Nada disso foi iniciado.
+
+## Hangar Connect: a entrada é do Rust e cada aparelho tem credencial própria (07/11/2026)
+
+A entrada do Connect é `127.0.0.1:8768`, atendida pelo `hangar-server` (`connect/` — porteiro e
+rotas; o resto em `crates/hangar-connect`: configuração, binários, `frpc` e Caddy, aparelhos). O
+Python não tem rota nem porta do Connect. Nada que chega por ela é local, embora o socket diga
+loopback (o Caddy é local): o porteiro nega por padrão, recusa a senha do dono ali e só deixa
+passar o aparelho com credencial própria, aprovada na máquina. Cabeçalho nunca decide "local".
+
+Por que o `frpc` e o Caddy ficaram do jeito que estão, medido em 2026-11-06 com `frps`/`frpc` 0.71.0
+e Caddy 2.11.6 pelo caminho real (wss até `connect.hangar.dev.br`, traefik 3.6.15, `frps`):
+
+- **O `frps` falha fechado.** Com o receptor do plugin fora, o `Login` novo, o `NewProxy` e o
+  `NewUserConn` são recusados e o `Ping` derruba a sessão existente. Plugin recusando só o `Ping`
+  derruba a sessão na hora e o `frpc` reloga sem parar; por isso o plugin recusa também o `Login`
+  de conta inativa. O plugin roda antes da conferência do token, então só a chave de máquina vale.
+- **TLS-ALPN-01 passa pelo traefik sem resolver `tlschallenge`.** Na `v3.6.15`,
+  `allowACMEByPass[name] = ep.AllowACMEByPass || !handlesTLSChallenge`: sem resolver com
+  `TLSChallenge` o repasse de `acme-tls/1` já vale em toda entrada. Duas emissões no Let's Encrypt
+  staging, com 7 validações cada, chegaram ao Caddy do PC; o certificado do disco, o do
+  `s_client` daqui e o de dentro da VPS tinham a mesma impressão. HTTP-01 não serve: o traefik
+  fica com `/.well-known/acme-challenge/` (prioridade máxima) e o plugin recusa proxy que não seja
+  `https`. Por isso o Caddyfile leva `issuer acme { disable_http_challenge }` (sem queda para o
+  ZeroSSL). Se alguém ligar `tlschallenge` no `coolify-proxy`, emissão e renovação de todas as
+  máquinas param; a saída é `--entrypoints.https.allowACMEByPass=true`.
+- **Limite de 50 certificados novos por semana para `hangar.dev.br`.** `dev.br` é sufixo público,
+  então o domínio registrado é `hangar.dev.br` e soma todas as máquinas de todos os usuários: no
+  máximo 50 máquinas novas por semana (reposição de 1 a cada 202 min), e 5 certificados para o
+  mesmo conjunto de nomes por semana, o que limita reinstalar a mesma máquina. Aumento é por
+  pedido e leva semanas. Não confirmado: se a renovação fica fora da conta dos 50.
+- **Subida:** o Caddy só sobe depois do `frpc` logado; pedido sem túnel é falha de validação gasta
+  (5 por nome por hora).
+- **Prova de aparelho leva o host.** `/api/peers/prova?device=` é pública pelo Connect: assinando só
+  `desafio|id`, uma rede com o mesmo IP local repassava a pergunta a `<máquina>.<conta>.hangar.dev.br`
+  e o celular entregava o token a ela. Com `device` o HMAC cobre `desafio|id|host`, com o `Host` que
+  a máquina recebeu. Forjar o `Host` no repasse não passa: o Caddy só atende o site pelo nome dele.
+  Sem `device` a prova segue como era, para LAN e Tailscale.
+- **Link do `nav` leva um bilhete, nunca credencial.** Ele sai no SSE da conversa e fica no marcador,
+  que se repete a quem abre o chat. `?page_ticket=` abre só aquela página por 10 minutos e não vale
+  na 8766 nem na 8768. A chave nasce com o processo: tirada da senha, deixaria testar palpites fora da
+  máquina. Por isso marcador de página gravado não volta depois de reiniciar.
+- **VPS invadida é limite aceito.** O certificado sai por TLS-ALPN-01 pelo traefik, então quem
+  controla a VPS consegue um certificado válido para `<máquina>.<conta>.hangar.dev.br`, se põe no
+  meio e lê o token de um aparelho já aprovado. A promessa é "a VPS honesta não lê o tráfego".
+  Código digitado na aprovação foi recusado: com 4 máquinas daria até 6 códigos. Pendente: cada lado
+  memoriza a chave do outro na primeira ligação, sem passo do dono. Primeiro entre máquinas (Rust),
+  depois no celular, que pede módulo nativo e app novo. Requer o Caddy manter a chave ao renovar.
+- **Prévia vai para domínio próprio (pendente).** Em `*.hangar.dev.br` o site testado imita a tela
+  do Hangar e grava cookie `Domain=hangar.dev.br`, que enche o `Cookie` de todas as contas (431).
+- **Tela web fechada pelo Connect.** `/` e `/assets/*` não abrem pela 8768; convidado com login
+  próprio entra pelo app, pela LAN ou pelo Tailscale.
+
+Não testado: renovação, a CA de produção e um nome que dependa só do curinga novo
+`*.hangar.dev.br`. Cargas e logs completos em
+`.superpowers/sdd/2026-11-06-hangar-connect-rust/prova-tunel.md` da árvore principal.

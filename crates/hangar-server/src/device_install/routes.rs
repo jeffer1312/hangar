@@ -30,11 +30,11 @@ fn bad_body() -> Response {
     failure(StatusCode::UNPROCESSABLE_ENTITY, Failure::new(BAD_REQUEST))
 }
 
-/// Recusa repasse (Python, convidado), outra origem e quem não traz o token do dono.
+/// Recusa repasse (Python, convidado), o Connect, outra origem e quem não traz o token do dono.
 fn guard(st: &AppState, peer: SocketAddr, req: &Request)
     -> impl std::future::Future<Output = Result<(), Response>> + Send + use<> {
     let h = req.headers();
-    let forbidden = crate::routes::on_guest_port(req) || h.contains_key("x-forwarded-for") || h.contains_key("x-hangar-guest") || !same_origin(h);
+    let forbidden = crate::routes::on_guest_port(req) || crate::routes::on_connect_port(req) || h.contains_key("x-forwarded-for") || h.contains_key("x-hangar-guest") || !same_origin(h);
     let ip = peer.ip().to_canonical().to_string();
     let token = crate::auth::presented_token(h, req.uri().query(), req.method(), false);
     let auth = st.auth.clone();

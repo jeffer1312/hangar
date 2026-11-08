@@ -8,6 +8,7 @@ publish = false
 # dependência no target (ver o comentário do serde_json em hangar-server/Cargo.toml).
 [dependencies]
 axum = { workspace = true }
+base64 = "=0.23.1"
 chrono = { workspace = true }
 flate2 = { workspace = true }
 futures-util = { workspace = true }

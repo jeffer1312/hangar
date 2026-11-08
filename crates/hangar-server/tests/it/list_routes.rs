@@ -280,7 +280,7 @@ async fn pair_change_alone_reemits_the_list() {
 fn two_outside_pairs(srv: &Server) -> (Arc<hangar_server::share::ShareState>, String) {
     use hangar_server::share::{pairs::ExternalPair, store::Kind};
     let dirs = srv.list.env().dirs.clone().unwrap();
-    let share = hangar_server::share::from_env(Some(dirs.home.join("shares.json")), Some(&dirs), "tmux".into()).unwrap();
+    let share = hangar_server::share::from_env(Some(dirs.home.join("shares.json")), Some(&dirs), "tmux".into(), None).unwrap();
     let pair = dirs.claude.join(".hangar-pair");
     std::fs::create_dir_all(&pair).unwrap();
     let peers = ["s0", "s1", "ana::X", "bia::Y"];

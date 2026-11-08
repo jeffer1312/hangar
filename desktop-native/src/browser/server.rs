@@ -122,12 +122,13 @@ fn local_endpoint(port: u16, name: &str) -> String {
     format!("ws://127.0.0.1:{port}/cdp/browser/{encoded}")
 }
 
-/// A casca das páginas nasce com `?token=` e só o tira depois de carregar; o sidecar é lido pelo
-/// `hangar-preview`, cuja saída vai para o transcript.
+/// A casca das páginas nasce com `?page_ticket=` (servidor antigo: `?token=`) e só o tira depois de
+/// carregar; o sidecar é lido pelo `hangar-preview`, cuja saída vai para o transcript.
 fn without_token(raw: &str) -> String {
     let Ok(mut url) = url::Url::parse(raw) else { return raw.to_owned() };
-    if !url.query_pairs().any(|(k, _)| k == "token") { return raw.to_owned(); }
-    let rest: Vec<(String, String)> = url.query_pairs().filter(|(k, _)| k != "token").map(|(k, v)| (k.into(), v.into())).collect();
+    let secret = |key: &str| key == "token" || key == "page_ticket";
+    if !url.query_pairs().any(|(k, _)| secret(&k)) { return raw.to_owned(); }
+    let rest: Vec<(String, String)> = url.query_pairs().filter(|(k, _)| !secret(k)).map(|(k, v)| (k.into(), v.into())).collect();
     if rest.is_empty() { url.set_query(None) } else { url.query_pairs_mut().clear().extend_pairs(rest); }
     url.into()
 }
@@ -814,6 +815,7 @@ mod tests {
     #[test]
     fn sidecar_url_never_keeps_the_token() {
         assert_eq!(super::without_token("http://h/api/sessions/s/pages/a?token=abc"), "http://h/api/sessions/s/pages/a");
+        assert_eq!(super::without_token("http://h/api/sessions/s/pages/a?page_ticket=1.abc"), "http://h/api/sessions/s/pages/a");
         assert_eq!(super::without_token("http://h/p?raw=1&token=abc#x"), "http://h/p?raw=1#x");
         assert_eq!(super::without_token("http://h/p?q=1"), "http://h/p?q=1");
         assert_eq!(super::without_token(""), "");

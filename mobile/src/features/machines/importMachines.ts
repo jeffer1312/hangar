@@ -14,6 +14,7 @@ export function machineImportIssueMessage(issue: MachineImportIssue): string {
     source_peers: m.machine_import_source_peers, source_app_list: m.machine_import_source_app_list,
     peer_token: m.machine_import_peer_token, saved_identity: m.machine_import_saved_identity,
     candidate: m.machine_import_candidate, invalid_item: m.machine_import_invalid_item,
+    device_source: m.machine_import_device_source,
   };
   let reason = `${messages[issue.stage]()}${issue.status ? ` (HTTP ${issue.status})` : ''}`;
   if (issue.machine) reason = m.machine_import_issue_machine({ machine: issue.machine, reason });

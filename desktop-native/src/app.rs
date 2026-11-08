@@ -84,6 +84,7 @@ pub(crate) use voice_ui::{call_actions, call_footer, call_header, call_status, e
 pub(crate) use rename_suggest::{Strip as RenameStrip, rename_strip};
 pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command, request_pair};
 pub(crate) use create::{base_button, base_row, quiet_button, worktree_field_label, worktree_warning};
+pub(crate) use connect::device_card;
 pub(crate) use settings::{setting_row, settings_box};
 pub(crate) use accounts::{login_heading, target_row};
 pub(crate) use search::{ScopeFound, highlighted as search_highlighted, search_agent_label, search_chat_header, search_chat_sub, search_field, search_filter_chip, search_found_frame,
@@ -371,6 +372,8 @@ enum Payload {
     PluginInput(String, crate::plugin_ui::Control, EntityId, Result<Value, Failure>),
     // Destrancar o chaveiro de uma máquina (chave `servers::norm`): a resposta é dela, não da conexão ativa.
     Keyring(String, Result<Value, Failure>),
+    // Aparelho pedindo entrada no Connect de uma máquina: a resposta é dela, não da conexão ativa.
+    ConnectNotice(connect::NoticeReply),
     // Lista de outra máquina: a geração dos SSE de lista, a chave do servidor e o que chegou.
     Remote(u64, String, servers::RemoteUpdate),
     HeadlessPlan(SessionKey, controls::PlanOutcome),
@@ -809,6 +812,7 @@ pub struct Hangar {
     auto_hide: auto_hide::AutoHidePage,
     sync: sync::Sync,
     connect: connect::Connect,
+    connect_notices: connect::Notices,
     devices: devices::Devices,
     shared: shared_config::SharedConfig,
     machines: machines::Machines,
@@ -974,6 +978,10 @@ impl Hangar {
             });
             if alive.is_err() { break; }
         }).detach();
+        cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(connect::POLL_EVERY).await;
+            if this.update(cx, |this, cx| this.connect_tick(cx)).is_err() { break; }
+        }).detach();
         // O aviso de servidor desatualizado mora na barra desta view e vem do estado do atualizador.
         if let Some(updater) = cx.try_global::<crate::update::Handle>().map(|handle| handle.0.clone()) {
             cx.observe(&updater, |_, _, cx| cx.notify()).detach();
@@ -1138,7 +1146,7 @@ impl Hangar {
             palette_seq: 0, backdrop_seq: 0, backdrop_pending: false, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
             device: device::Device::new(window, cx), accounts: accounts::Accounts::default(), orchestration: orchestration::Orchestration::default(), orq_history: None, orq_history_serial: 0, home_usage: Default::default(), recents: Default::default(), reopen: None, shortcuts: shortcuts::Shortcuts::default(),
             worktree_settings: worktree_settings::WorktreeSettings::default(), auto_hide: Default::default(),
-            server_config: server_config::ServerConfig::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), connect: connect::Connect::default(), devices: devices::Devices::default(), shared: shared_config::SharedConfig::default(), machines: machines::Machines::default(),
+            server_config: server_config::ServerConfig::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), connect: connect::Connect::default(), connect_notices: connect::Notices::default(), devices: devices::Devices::default(), shared: shared_config::SharedConfig::default(), machines: machines::Machines::default(),
             costs: Default::default(), worktrees: Default::default(), artifacts: Default::default(), usage_stats: Default::default(), search: Default::default(), topbar: Default::default(), computer: computer::Computer::default(), new_session: None, sidebar, machines_tray,
             terminal: None, terminal_serial: 0,
             system_notifications: SystemNotifications::default(),
@@ -1514,8 +1522,7 @@ impl Hangar {
         // A lista viva da nova conexão chega pelo stream dela; o cartão da pergunta segue, com a conexão que ele guarda.
         (self.live_terms, self.hangar_open, self.hangar_error) = (Vec::new(), false, None);
         self.sync = sync::Sync::default();
-        // Sem isto, um "Ligar" em voo da conexão anterior deixava a página travada e o código dela montado.
-        self.connect = connect::Connect::default();
+        self.connect_reset();
         self.devices = devices::Devices::default();
         self.shared = shared_config::SharedConfig::default();
         self.controls = controls::Controls::default();
@@ -1817,6 +1824,7 @@ impl Hangar {
             Payload::BackdropRemoved(result) => { self.receive_removed_backdrop(result, window, cx); return; }
             Payload::Lan(address, lan) => { self.remember_lan(&address, lan); return; }
             Payload::Keyring(key, result) => { self.receive_keyring(key, result, cx); return; }
+            Payload::ConnectNotice(reply) => { self.receive_connect_notice(reply, cx); return; }
             // Cada máquina responde por si: a troca do ativo não descarta a resposta.
             Payload::Presence(key, switched, result) => { self.receive_presence(key, switched, result, window, cx); return; }
             // Cada máquina tem a própria geração: a troca do ativo não derruba as listas das outras.
@@ -2173,7 +2181,7 @@ impl Hangar {
             Payload::Sent(..) | Payload::Interrupted(..) | Payload::Acted(..) | Payload::Files(..) | Payload::UploadStep(..)
                 | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
                 | Payload::AppearanceSaved(..) | Payload::Backdrop(..) | Payload::BackdropPicked(..) | Payload::BackdropRemoved(..)
-                | Payload::Remote(..) | Payload::Lan(..) | Payload::Keyring(..) | Payload::Presence(..) | Payload::Voice(..) | Payload::VoiceGate(..) | Payload::VoiceMemory(..) | Payload::VoiceModels(..) | Payload::QueueJev(..)
+                | Payload::Remote(..) | Payload::Lan(..) | Payload::Keyring(..) | Payload::ConnectNotice(..) | Payload::Presence(..) | Payload::Voice(..) | Payload::VoiceGate(..) | Payload::VoiceMemory(..) | Payload::VoiceModels(..) | Payload::QueueJev(..)
                 | Payload::Mermaid(..) | Payload::TourProgress(..) => unreachable!(),
         }
         // Lista que trocou ou tirou a sessão aberta refaz a conversa.

@@ -28,6 +28,7 @@ fn share_with(dir: &std::path::Path, tailscale: Arc<dyn Tailscale>) -> Arc<Share
         lives: Lives::new(Arc::new(MuxProbe::new("/nonexistent/tmux", dir.to_owned())), Arc::new(LifeFacts::default())),
         tailscale,
         tunnel: Default::default(),
+        connect: None,
     })
 }
 

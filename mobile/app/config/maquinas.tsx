@@ -9,6 +9,7 @@ import { PairAcceptSheet, type PairAcceptTarget } from '../../src/features/pair/
 import { MachineGroup, MachineRow } from '../../src/features/machines/MachineRows';
 import { AddMachineSheet } from '../../src/features/machines/AddMachineSheet';
 import { UpdateAllMachines } from '../../src/features/machines/UpdateAllMachines';
+import { ConnectRecovery } from '../../src/features/connect/ConnectMachines';
 import * as m from '../../src/paraglide/messages';
 
 export default function Maquinas() {
@@ -47,6 +48,7 @@ export default function Maquinas() {
           })}
         </MachineGroup>
       ) : null}
+      <ConnectRecovery servers={servers} />
       <MachineGroup>
         <MachineRow title={m.sessao_adicionar_servidor()} action onPress={() => setAdding({ owner: active })} />
         {servers.length ? <MachineRow title={m.native_par_menu()} onPress={parear} /> : null}

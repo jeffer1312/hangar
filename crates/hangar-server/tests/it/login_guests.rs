@@ -3,6 +3,28 @@ use hangar_server::{auth::TrustedHosts, config::Config, routes::AppState};
 use serde_json::Value;
 use std::sync::Arc;
 
+#[test]
+fn memory_rules_out_tokens_while_the_file_stays_the_same() {
+    use hangar_server::login_guests::store::{Store, hash};
+    let home = crate::physical_tempdir();
+    let path = home.path().join("guests.json");
+    let store = Store::new(path.clone());
+    let save = |name: &str, token: &[u8]| std::fs::write(&path, serde_json::json!({"guests": [{"id": "ana", "name": name, "root": "/tmp",
+        "token_hash": hash(token)}], "sessions": {}}).to_string()).unwrap();
+
+    assert!(store.rules_out(b"palpite"), "sem arquivo não há convidado");
+    save("Ana", b"guest");
+    assert!(!store.rules_out(b"palpite"), "arquivo ainda não lido vai ao `lookup`");
+    assert!(store.lookup(b"palpite").is_none());
+    assert!(store.rules_out(b"palpite"), "lido, o palpite para na memória");
+    assert!(!store.rules_out(b"guest"));
+
+    save("Ana Maria", b"outro-token-de-convidado");
+    assert!(!store.rules_out(b"palpite"), "arquivo mudou: a memória não decide");
+    assert!(store.lookup(b"outro-token-de-convidado").is_some());
+    assert!(store.rules_out(b"guest"), "token trocado sai junto");
+}
+
 #[tokio::test]
 async fn login_guests_public_gate_denies_owner_routes_before_upstream() {
     use hangar_server::login_guests::{Service, Settings};

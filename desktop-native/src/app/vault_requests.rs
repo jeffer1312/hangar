@@ -261,7 +261,7 @@ impl Hangar {
         true
     }
 
-    fn vault_machine_label(&self, key: &str, cx: &App) -> String {
+    pub(super) fn vault_machine_label(&self, key: &str, cx: &App) -> String {
         match self.server_entry(key) {
             Some(entry) if !entry.label.is_empty() => entry.label.clone(),
             Some(entry) => servers::default_label(&entry.address),
@@ -298,7 +298,9 @@ impl Hangar {
     /// Pedido de outra sessão: flutua sobre a conversa, igual em toda forma de navegação.
     pub(super) fn render_vault_float(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let here = self.vault_origin_here();
-        let cards = self.vault_cards(&|origin: &str| here.as_deref() != Some(origin), cx);
+        let mut cards = self.vault_cards(&|origin: &str| here.as_deref() != Some(origin), cx);
+        // Dois flutuantes no mesmo canto se cobririam.
+        cards.extend(self.connect_request_cards(None, cx));
         if cards.is_empty() { return None; }
         let cards = div().id("vault-float").max_h(px(520.)).overflow_y_scroll().py_1().flex().flex_col().children(cards);
         Some(div().absolute().top(px(52.)).right(px(16.)).occlude().child(chrome::popover(cards.into_any_element(), true)).into_any_element())

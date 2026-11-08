@@ -11,11 +11,11 @@ use super::caller::Caller;
 use super::owner_routes::io_failed;
 use super::pair_routes::{code_error, fields, page, reason, respond};
 use super::store::{Kind, PeekError};
-use super::tunnel::{FUNNEL_PORT, GUEST_PORT};
+use super::tunnel::{GUEST_PORT, TunnelError};
 use crate::session_write::{detail, json_response};
 use crate::workspace_routes::html_escape;
 
-/// Endereço LOCAL da conexão na 8766: o Funnel entrega por loopback, a rede da casa pelo IP dela.
+/// Endereço LOCAL da conexão na 8766: Funnel e Caddy entregam por loopback, a rede da casa pelo IP dela.
 /// Quem aceita a conexão põe nas extensões do pedido.
 #[derive(Clone, Copy, Debug)]
 pub struct LocalAddr(pub SocketAddr);
@@ -35,7 +35,7 @@ pub fn owner_name() -> String {
 /// `quote(s, safe='')`: só letras, dígitos e `_.-~` passam.
 const QUOTE: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC.remove(b'_').remove(b'.').remove(b'-').remove(b'~');
 
-/// IP da rede por onde o convidado chegou; `None` quando veio pelo Funnel (que fala com loopback).
+/// IP da rede por onde o convidado chegou; `None` quando veio pela internet (loopback).
 fn lan_ip(local: Option<Extension<LocalAddr>>) -> Option<IpAddr> {
     let ip = local?.0.0.ip().to_canonical();
     (!ip.is_loopback() && !ip.is_unspecified()).then_some(ip)
@@ -44,8 +44,8 @@ fn lan_ip(local: Option<Extension<LocalAddr>>) -> Option<IpAddr> {
 /// `host:porta` com IPv6 entre colchetes.
 fn lan_host(ip: IpAddr) -> String { SocketAddr::new(ip, GUEST_PORT).to_string() }
 
-async fn funnel_host(share: &ShareState) -> Result<String, String> {
-    Ok(format!("{}:{FUNNEL_PORT}", share.host().await?))
+async fn public_host(share: &ShareState) -> Result<String, TunnelError> {
+    Ok(share.public_guest_url().await?.trim_start_matches("https://").to_owned())
 }
 
 fn html(status: StatusCode, body: String, referrer: bool) -> Response {
@@ -63,7 +63,7 @@ async fn invite_page(State(st): St, Path(code): Path<String>, local: Option<Exte
         Ok(share) => {
             let host = match lan_ip(local) {
                 Some(ip) => lan_host(ip),
-                None => match funnel_host(&st.share).await {
+                None => match public_host(&st.share).await {
                     Ok(h) => h,
                     Err(_) => return html(StatusCode::SERVICE_UNAVAILABLE, page(
                         "<h1>Convite indisponível</h1><p>O convite está indisponível por instantes. Tente de novo.</p>"), false),
@@ -86,10 +86,12 @@ async fn redeem(State(st): St, local: Option<Extension<LocalAddr>>, body: Bytes)
         Ok((v, _)) => <[String; 3]>::try_from(v).expect("três campos"),
         Err(r) => return r,
     };
+    // Rota aberta à internet: código errado para aqui, antes de qualquer `tailscale`.
+    if let Err(e) = st.share.store.peek(&code, Kind::Share) { return respond(code_error(&e)); }
     // O endereço sai ANTES do resgate: túnel fora do ar não pode queimar um código já gasto.
     let address = match lan_ip(local) {
         Some(ip) => format!("http://{}", lan_host(ip)),
-        None => match funnel_host(&st.share).await {
+        None => match public_host(&st.share).await {
             Ok(h) => format!("https://{h}"),
             Err(_) => return detail(StatusCode::SERVICE_UNAVAILABLE, "erro_sessao_indisponivel",
                 "a sessão compartilhada está indisponível por instantes", json!({})),

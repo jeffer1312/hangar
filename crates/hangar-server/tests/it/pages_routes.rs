@@ -150,6 +150,27 @@ async fn guest_is_passed_to_python() {
 }
 
 #[tokio::test]
+async fn nav_ticket_opens_only_its_page() {
+    let s = scene().await;
+    let id_of = |res: Value| res["result"]["hangar_page"]["id"].as_str().unwrap().to_owned();
+    let page = id_of(publish(&s, json!({"session": "s1", "html": "<p>a</p>", "title": "A"})).await);
+    let other = id_of(publish(&s, json!({"session": "s1", "html": "<p>b</p>", "title": "B"})).await);
+    let tickets = &s.state.list.nav.tickets;
+    let now = hangar_server::nav_requests::now() as u64;
+    let ticket = tickets.issue("s1", &page, now);
+    let open = |id: &str, ticket: &str| client().get(format!("http://{}/api/sessions/s1/pages/{id}?page_ticket={ticket}", s.public)).send();
+
+    let shell = open(&page, &ticket).await.unwrap();
+    assert_eq!(shell.status(), 200);
+    assert!(shell.text().await.unwrap().contains("<title>A</title>"));
+    assert_eq!(s.python.hits_to(&format!("/api/sessions/s1/pages/{page}")), 0, "atendida no Rust, sem senha");
+
+    assert_eq!(open(&other, &ticket).await.unwrap().text().await.unwrap(), "from-python", "outra página segue sem dono");
+    let expired = tickets.issue("s1", &page, now - hangar_server::nav_requests::TTL_SECS as u64 - 1);
+    assert_eq!(open(&page, &expired).await.unwrap().text().await.unwrap(), "from-python", "vencido");
+}
+
+#[tokio::test]
 async fn url_page_is_published_without_html() {
     let s = scene().await;
     let res = publish(&s, json!({"session": "s1", "url": "http://localhost:3000/cidades", "title": "Cidades"})).await;

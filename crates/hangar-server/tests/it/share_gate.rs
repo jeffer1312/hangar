@@ -144,6 +144,7 @@ async fn harness() -> H {
         lives: Lives::new(probe.clone(), facts),
         tailscale: Arc::new(Real),
         tunnel: Default::default(),
+        connect: None,
     });
     let gate = Arc::new(Gate { share: share.clone(), watch_every: Duration::from_millis(50) });
     let app = Router::new()

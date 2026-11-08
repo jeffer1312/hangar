@@ -182,21 +182,24 @@ fn urlsplit(raw: &str) -> SplitUrl {
     SplitUrl { scheme, netloc: netloc.into(), path: path.into(), query: query.into(), fragment: fragment.into() }
 }
 
-/// Só o Funnel de outra máquina: `https://<nó>.ts.net:8443`, sem usuário, caminho, query nem âncora.
+/// Só a entrada de convidado de outra máquina, sem usuário, caminho, query nem âncora: o Funnel
+/// (`https://<nó>.ts.net:8443`) ou o Connect (`https://<máquina>--guest.<conta>.hangar.dev.br`, sem porta).
 pub fn normalize_address(addr: &str) -> Option<String> {
     let u = urlsplit(py_strip(addr));
     // Colchete é IPv6, que nunca é `ts.net`; o Python recusa ou falha no parse.
     if u.netloc.contains(['[', ']']) { return None; }
     let (userinfo, hostinfo) = u.netloc.rsplit_once('@').map_or(("", u.netloc.as_str()), |(a, b)| (a, b));
-    let (host, port) = hostinfo.split_once(':').unwrap_or((hostinfo, ""));
+    let (host, port) = hostinfo.split_once(':').map_or((hostinfo, None), |(host, port)| (host, Some(port)));
     let host = host.to_lowercase();
-    let port_ok = !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) && port.trim_start_matches('0') == "8443";
-    let ok = u.scheme == "https" && port_ok && HOST_RE.is_match(&host) && userinfo.split(':').all(str::is_empty)
+    let bare = u.scheme == "https" && userinfo.split(':').all(str::is_empty)
         && u.query.is_empty() && u.fragment.is_empty() && matches!(u.path.as_str(), "" | "/");
-    ok.then(|| format!("https://{host}:{FUNNEL_PORT}"))
+    if !bare { return None; }
+    if port.is_none() && crate::connect::config::is_guest_host(&host) { return Some(format!("https://{host}")); }
+    let port_ok = port.is_some_and(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) && p.trim_start_matches('0') == "8443");
+    (port_ok && HOST_RE.is_match(&host)).then(|| format!("https://{host}:{FUNNEL_PORT}"))
 }
 
-/// Link de convite de par: `<funnel>/par/<código>` → (endereço, código).
+/// Link de convite de par: `<entrada>/par/<código>` → (endereço, código).
 pub fn parse_pair_link(link: &str) -> Option<(String, String)> {
     let u = urlsplit(py_strip(link));
     let parts: Vec<&str> = u.path.split('/').filter(|p| !p.is_empty()).collect();
@@ -262,7 +265,7 @@ pub fn sanitize_message(text: &str) -> String {
 
 static HTTP: OnceLock<reqwest::Client> = OnceLock::new();
 
-/// Chamada ao Funnel de outra pessoa (`peers.call_url` sem redirect): o 3xx vira recusa com o
+/// Chamada à entrada de outra pessoa (`peers.call_url` sem redirect): o 3xx vira recusa com o
 /// status, porque seguir levaria o token a um destino que ninguém conferiu. Sem token, sem
 /// `Authorization`.
 pub async fn call(address: &str, token: Option<&str>, method: reqwest::Method, path: &str, body: Option<&Value>)

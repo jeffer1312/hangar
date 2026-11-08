@@ -4,6 +4,7 @@ mod account_tags;
 mod auto_report;
 mod codex_activity;
 mod composer_history;
+mod connect_approval;
 mod dictation_pill;
 mod login_browser;
 mod no_project;
@@ -43,6 +44,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "sem-projeto" => Some(no_project::render),
         "pilula-do-ditado" => Some(dictation_pill::render),
         "pausar-fala" => Some(speech_pause::render),
+        "hangar-connect" => Some(connect_approval::render),
         "worktree-atualizada" => Some(worktree_fresh::render),
         _ => None,
     }

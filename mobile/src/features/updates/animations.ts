@@ -1,6 +1,7 @@
 import type { ComponentType } from 'react';
 import { AutoReportAnimation } from './AutoReportAnimation';
 import { CodexActivityAnimation } from './CodexActivityAnimation';
+import { ConnectAnimation } from './ConnectAnimation';
 import { FolderBranchAnimation } from './FolderBranchAnimation';
 import { HideFromListAnimation } from './HideFromListAnimation';
 import { ImageRevealAnimation } from './ImageRevealAnimation';
@@ -20,6 +21,7 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'cofre-de-senhas': VaultAnimation,
   'codex-atividade': CodexActivityAnimation,
   'etiquetas-maquina-conta': TagsPlateAnimation,
+  'hangar-connect': ConnectAnimation,
   'login-usuario-senha': LoginPasswordAnimation,
   'ocultar-da-lista': HideFromListAnimation,
   'relatorio-automatico': AutoReportAnimation,

@@ -9,22 +9,28 @@ use std::process::Command;
 
 pub(crate) struct Pairing { pub url: String, pub tailscale: bool, pub svg: Vec<u8> }
 
+/// `pairing: None`: nenhum endereço respondeu para o celular.
+pub(crate) struct Offer { pub pairing: Option<Pairing>, pub connect: bool }
+
 /// O que a tela 5 mostra. A imagem é feita na thread da janela, uma vez, e reaproveitada a cada quadro.
-pub(crate) enum Qr { Idle, Loading, Shown { url: String, tailscale: bool, image: Arc<Image> }, NoAddress, Failed(String) }
+pub(crate) enum Qr { Idle, Loading, Shown { url: String, tailscale: bool, image: Arc<Image>, connect: bool }, NoAddress { connect: bool }, Failed(String) }
 
 pub(crate) fn pick(reach: &Reach) -> Option<Kind> {
     let answered = |kind: Kind| reach.addresses.iter().any(|a| a.kind == kind && a.status == Status::Ok);
     [Kind::Tailscale, Kind::Lan].into_iter().find(|kind| answered(*kind))
 }
 
-/// `Ok(None)`: nenhum endereço respondeu para o celular.
-pub(crate) async fn load(api: Api) -> Result<Option<Pairing>, String> {
+/// Máquina ligada ao Connect: o celular entra pela conta, de qualquer rede.
+pub(crate) fn offers_connect(reach: &Reach) -> bool { reach.connect.is_some() }
+
+pub(crate) async fn load(api: Api) -> Result<Offer, String> {
     let value = api.server_read(&["alcance"], &[], 30).await.map_err(|e| Hangar::failure(&e))?;
     let reach = parse_reach(&value).ok_or_else(|| tr("invalid_response"))?;
-    let Some(kind) = pick(&reach) else { return Ok(None) };
+    let connect = offers_connect(&reach);
+    let Some(kind) = pick(&reach) else { return Ok(Offer { pairing: None, connect }) };
     let value = api.server_read(&["alcance", "pareamento"], &[("endereco", kind.raw())], 15).await.map_err(|e| Hangar::failure(&e))?;
     match (value.get("url").and_then(Value::as_str), value.get("qr_svg").and_then(Value::as_str)) {
-        (Some(url), Some(svg)) => Ok(Some(Pairing { url: url.to_owned(), tailscale: kind == Kind::Tailscale, svg: svg.as_bytes().to_vec() })),
+        (Some(url), Some(svg)) => Ok(Offer { pairing: Some(Pairing { url: url.to_owned(), tailscale: kind == Kind::Tailscale, svg: svg.as_bytes().to_vec() }), connect }),
         _ => Err(tr("invalid_response")),
     }
 }
@@ -47,7 +53,7 @@ mod tests {
     use core::prelude::v1::test;
 
     fn reach(list: &[(Kind, Status)]) -> Reach {
-        Reach { loopback: false, bind: String::new(),
+        Reach { loopback: false, bind: String::new(), connect: None,
             addresses: list.iter().map(|&(kind, status)| Address { kind, url: format!("https://{kind:?}"), status, ms: Some(10) }).collect() }
     }
 
@@ -56,6 +62,16 @@ mod tests {
         assert_eq!(pick(&reach(&[(Kind::Lan, Status::Ok), (Kind::Tailscale, Status::Ok)])), Some(Kind::Tailscale));
         assert_eq!(pick(&reach(&[(Kind::Lan, Status::Ok), (Kind::Tailscale, Status::Failed)])), Some(Kind::Lan));
         assert_eq!(pick(&reach(&[(Kind::Here, Status::Ok), (Kind::Public, Status::Ok), (Kind::Lan, Status::Unset)])), None);
+    }
+
+    #[test]
+    fn phone_setup_offers_connect_when_linked() {
+        let linked = parse_reach(&serde_json::json!({"enderecos": [{"tipo": "rede_local", "url": "http://10.0.0.2:8765", "estado": "ok"}],
+            "connect": "https://mesa.conta.connect.hangar.dev.br"})).expect("formato do /api/alcance");
+        assert!(offers_connect(&linked));
+        assert_eq!(pick(&linked), Some(Kind::Lan), "o Connect não mexe nos endereços");
+        let unlinked = parse_reach(&serde_json::json!({"enderecos": [], "connect": null})).expect("formato do /api/alcance");
+        assert!(!offers_connect(&unlinked));
     }
 
     #[test]

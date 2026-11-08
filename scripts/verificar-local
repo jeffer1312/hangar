@@ -162,31 +162,9 @@ classificar_rapido() {
 
 # ── passos (cwd = árvore fixa) ────────────────────────────────────────────────────────────────
 
-# A ordem de read_dir faz parte do contrato do navegador: capturar no filesystem da prova,
-# como no CI, sem ordenar a resposta nem trocar a implementação original pelo Rust.
-rust_com_referencia() (
-    local referencia temporario origem=ba2db1021ab7fb801eca50a50f9509dcb825ac7e
-    referencia="$(mktemp -d)" || exit 1
-    temporario="$(mktemp -d)" || { rmdir "$referencia"; exit 1; }
-    trap 'rm -rf "$referencia" "$temporario"' EXIT
-    git cat-file -e "$origem^{commit}" || git fetch --no-tags --depth=1 origin "$origem" || exit 1
-    local gerador
-    for gerador in url_commands url_gaps; do
-        TMPDIR="$temporario" PYTHONDONTWRITEBYTECODE=1 backend/.venv/bin/python \
-            "backend/tests/fixtures/contract/remote-browser/generate_${gerador}.py" \
-            --output "$referencia/${gerador//_/-}.json" || exit 1
-    done
-    export HANGAR_REMOTE_BROWSER_CONTRACT_DIR="$referencia" HANGAR_REMOTE_BROWSER_TMPDIR="$temporario"
-    cd crates && cargo test --locked --workspace --no-fail-fast
-)
-
 # No Linux, o que os passos compilam e instalam vem do passo_preparo, que roda antes deles.
 passo_rust() {
-    if [[ "$SO" == linux ]]; then
-        rust_com_referencia || return 1
-    else
-        (cd crates && cargo test --locked --workspace --no-fail-fast) || return 1
-    fi
+    (cd crates && cargo test --locked --workspace --no-fail-fast) || return 1
     if [[ "$SO" == linux ]]; then
         (cd backend && uv run pytest -q "${RUNTIME_TESTS[@]}") || return 1
         # Sem o binário a suíte pula os casos Rust e sairia verde: aqui a falta é erro, como no CI.

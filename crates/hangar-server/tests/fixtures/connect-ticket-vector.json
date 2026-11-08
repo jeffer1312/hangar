@@ -1,0 +1,8 @@
+{
+  "note": "test key only, never the production key; same file in crates/hangar-server/tests/fixtures",
+  "public_key": "Fh9+Ge88OGTWbkxf4SBgu+JugQsoD8xOeSSYkKIO+Yo=",
+  "secret": "device-secret-for-the-shared-vector",
+  "seed_hex": "68616e6761722d636f6e6e6563742d746573742d766563746f722d6b65792121",
+  "signature": "AgKpLU2uOXn2PSdOmLBs/T6bCFEeOidgps0HAuRQWeq9DCICQauJ+LNfnjeLKeSLep7NXbooYaVirVz8CR6JBg==",
+  "ticket": "{\"machine_id\":\"pc1\",\"account\":\"acme\",\"device_name\":\"celular\",\"verifier\":\"609d3fdb65c45c7927f1ec4c71ccc8c75279e686c585120aec60fcb6ba6b7e32\",\"nonce\":\"00112233445566778899aabbccddeeff\",\"expires_at\":4102444800}"
+}

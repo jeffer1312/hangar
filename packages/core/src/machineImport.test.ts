@@ -72,6 +72,51 @@ describe('confirmação e redirecionamentos', () => {
     for (const [, init] of fetchMock.mock.calls) expect(init).not.toHaveProperty('redirect');
   });
 
+  const device: Server = { ...machine, token: 'device-token', credential: 'device', deviceId: 'dev1' };
+
+  test('aparelho lê as máquinas com a senha guardada pela rota que não é o Connect', async () => {
+    const upgraded = { ...device, ownerToken: 'owner-password' };
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith('/api/peers')) return json([{ id: 'remote', base_url: 'https://remote.test', token: '••••mask' }]);
+      if (url.endsWith('/app-list')) return json({ rev: 'r1', servers: [] });
+      return json({ token: 'fixture-remote-token' });
+    });
+    expect(await discoverMachineCandidates([upgraded], () => [upgraded])).toEqual({
+      candidates: [{ id: 'remote', label: 'remote', baseUrl: 'https://remote.test', token: 'fixture-remote-token' }], issues: [],
+    });
+    expect(fetchMock.mock.calls).toHaveLength(3);
+    for (const [url, init] of fetchMock.mock.calls) {
+      expect(String(url).startsWith(machine.baseUrl)).toBe(true);
+      expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer owner-password');
+    }
+  });
+
+  test.each([
+    { name: 'sem senha guardada', source: device },
+    { name: 'pelo Connect', source: { ...device, ownerToken: 'owner-password', connect: { url: machine.baseUrl, id: 'home' } } },
+    { name: 'no endereço do Connect sem a rota gravada', source: { ...device, baseUrl: 'https://home.acme.hangar.dev.br', ownerToken: 'owner-password' } },  ])('aparelho $name registra o motivo e não lê nada', async ({ source }) => {
+    expect(await discoverMachineCandidates([source], () => [source])).toEqual({
+      candidates: [], issues: [{ stage: 'device_source', machine: new URL(source.baseUrl).hostname }],
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  test('item mascarado da lista do app não vira máquina, e o motivo fica registrado', async () => {
+    fetchMock.mockImplementation(async (input) => {
+      if (String(input).endsWith('/api/peers')) return json([]);
+      return json({ rev: 'r1', servers: [
+        { id: 'masked', label: 'masked', address: 'https://masked.test', token: 'abcd••••••••wxyz' },
+        { id: 'short', label: 'short', address: 'https://short.test', token: '••••' },
+        { id: 'kept', label: 'kept', address: 'https://kept.test', token: 'fixture-token' },
+      ] });
+    });
+    expect(await discoverMachineCandidates([machine], () => [machine])).toEqual({
+      candidates: [{ id: 'kept', label: 'kept', baseUrl: 'https://kept.test', token: 'fixture-token' }],
+      issues: [{ stage: 'device_source', machine: 'home.test' }],
+    });
+  });
+
   test('identificador de agrupamento: lido da rota; vazio é falha `vazio`, como erro de rede', async () => {
     expect(await readGroupIdentity(machine)).toBe('confirmed-home');
     fetchMock.mockImplementation(async () => json({ identificador: '', lan_url: '' }));

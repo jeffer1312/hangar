@@ -393,36 +393,7 @@ impl Consumed {
     }
 }
 #[cfg(windows)]
-struct SecurityDescriptor(windows_sys::Win32::Security::PSECURITY_DESCRIPTOR);
-#[cfg(windows)]
-impl Drop for SecurityDescriptor {
-    fn drop(&mut self) {unsafe {windows_sys::Win32::Foundation::LocalFree(self.0);}}
-}
-#[cfg(windows)]
-fn owner_security()->io::Result<SecurityDescriptor> {
-    use windows_sys::Win32::{Foundation::{CloseHandle,LocalFree},Security::{TOKEN_QUERY,TOKEN_USER,TokenUser,GetTokenInformation,Authorization::{ConvertSidToStringSidW,ConvertStringSecurityDescriptorToSecurityDescriptorW}},System::Threading::{GetCurrentProcess,OpenProcessToken}};
-    let mut token=std::ptr::null_mut();
-    // SAFETY: saída local, token só para leitura da identidade corrente.
-    if unsafe {OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY,&mut token)}==0 {return Err(io::Error::last_os_error());}
-    let mut size=0;
-    unsafe {GetTokenInformation(token,TokenUser,std::ptr::null_mut(),0,&mut size);}
-    let mut storage=vec![0usize;(size as usize).div_ceil(std::mem::size_of::<usize>())];
-    let result=unsafe {GetTokenInformation(token,TokenUser,storage.as_mut_ptr().cast(),size,&mut size)};
-    unsafe {CloseHandle(token);}
-    if result==0 {return Err(io::Error::last_os_error());}
-    let user=unsafe {&*(storage.as_ptr().cast::<TOKEN_USER>())};
-    let mut sid=std::ptr::null_mut();
-    if unsafe {ConvertSidToStringSidW(user.User.Sid,&mut sid)}==0 {return Err(io::Error::last_os_error());}
-    let mut len=0;while unsafe {*sid.add(len)}!=0 {len+=1;}
-    let sid_text=String::from_utf16(unsafe {std::slice::from_raw_parts(sid,len)}).map_err(|_|io::ErrorKind::InvalidData);
-    unsafe {LocalFree(sid.cast());}
-    let sid_text=sid_text?;
-    let sddl:Vec<u16>=format!("O:{sid_text}D:P(A;;GA;;;{sid_text})\0").encode_utf16().collect();
-    let mut descriptor=std::ptr::null_mut();
-    // SAFETY: SDDL terminado em NUL; o descritor vive até CreateNamedPipe voltar.
-    if unsafe {ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.as_ptr(),1,&mut descriptor,std::ptr::null_mut())}==0 {return Err(io::Error::last_os_error());}
-    Ok(SecurityDescriptor(descriptor))
-}
+use hangar_core::private_acl::owner_security;
 #[cfg(windows)]
 fn private_pipe(endpoint:&str)->io::Result<Server> {
     use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
@@ -431,14 +402,7 @@ fn private_pipe(endpoint:&str)->io::Result<Server> {
     unsafe {tokio::net::windows::named_pipe::ServerOptions::new().first_pipe_instance(true).reject_remote_clients(true).max_instances(1).create_with_security_attributes_raw(endpoint,&mut attrs as *mut _ as *mut _)}
 }
 #[cfg(windows)]
-fn restrict_file(path:&Path)->io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Security::{SetFileSecurityW,OWNER_SECURITY_INFORMATION,DACL_SECURITY_INFORMATION,PROTECTED_DACL_SECURITY_INFORMATION};
-    let descriptor=owner_security()?;
-    let path:Vec<_>=path.as_os_str().encode_wide().chain(Some(0)).collect();
-    if unsafe {SetFileSecurityW(path.as_ptr(),OWNER_SECURITY_INFORMATION|DACL_SECURITY_INFORMATION|PROTECTED_DACL_SECURITY_INFORMATION,descriptor.0)}==0 {return Err(io::Error::last_os_error());}
-    Ok(())
-}
+fn restrict_file(path:&Path)->io::Result<()> {hangar_core::private_acl::restrict_path(path,"")}
 
 /// Despacho do binário antes de iniciar servidor, logs ou varredura. O endpoint não carrega credencial.
 pub fn helper_args(args:&[OsString])->io::Result<Option<&OsStr>> {

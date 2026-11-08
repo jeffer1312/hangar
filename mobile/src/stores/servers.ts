@@ -19,7 +19,10 @@ function isPersisted(value: unknown): value is Persisted {
       const server = s as Record<string, unknown>;
       if (!['id', 'label', 'baseUrl', 'token'].every((key) => typeof server[key] === 'string')) return false;
       if (!['disabled', 'invite', 'inviteEnded', 'removed', 'ephemeral'].every((key) => server[key] === undefined || typeof server[key] === 'boolean')) return false;
-      return ['lan', 'remote'].every((key) => {
+      if (![undefined, 'owner', 'device'].includes(server.credential as string | undefined)) return false;
+      if (!['deviceId', 'ownerToken'].every((key) => server[key] === undefined || typeof server[key] === 'string')) return false;
+      if (server.connectOff !== undefined && typeof server.connectOff !== 'boolean') return false;
+      return ['lan', 'remote', 'connect'].every((key) => {
         if (server[key] === undefined) return true;
         if (!server[key] || typeof server[key] !== 'object') return false;
         const route = server[key] as Record<string, unknown>;
@@ -27,6 +30,24 @@ function isPersisted(value: unknown): value is Persisted {
       });
     });
 }
+
+// O que vem junto da credencial de aparelho não vale para outro token.
+function withPlainToken(server: Server, token: string): Server {
+  const next = { ...server, token };
+  // Endereço torto só perde o reconhecimento pela conta; a volta à senha não pode falhar por ele.
+  try { if (server.connect) next.connectHost = new URL(server.connect.url).hostname; } catch { /* sem host */ }
+  if (server.credential === 'device' || server.connectOff) delete next.disabled;
+  delete next.credential;
+  delete next.deviceId;
+  delete next.connect;
+  delete next.ownerToken;
+  delete next.connectOff;
+  return next;
+}
+
+// Depois de voltar à senha ou de passar o foco, ainda chegam 401 de pedidos feitos com o token
+// antigo, e `onUnauthorized` não diz qual token foi recusado.
+const REVERTED_GRACE_MS = 30_000;
 
 // Por que estes dois avisos existem: as duas formas de perder um servidor eram mudas. A gravação
 // no keystore podia falhar (keystore invalidado depois de restaurar backup, disco cheio) com a
@@ -49,15 +70,22 @@ export interface ServersState {
   add(s: Omit<Server, 'id' | 'label'> & { label?: string }): Server;
   addInvite(result: InviteRedeemResult, activate?: boolean): Server;
   appendImported(servers: Server[]): Server[];
+  /** Entrada aprovada pelo Connect: cria a máquina ou renova a que já existe, sem trocar o endereço dela. */
+  addConnected(server: Server): Server;
   remove(id: string): void;
   update(id: string, patch: Partial<Pick<Server, 'label' | 'baseUrl'>>): void;
   setActive(id: string): void;
   active(): Server | null;
-  markInvalid(id: string): void;
+  /** `rejectedToken`: o token que levou o 401, quando quem chama sabe. */
+  markInvalid(id: string, rejectedToken?: string): void;
+  reactivateDevice(id: string): void;
+  enableConnect(id: string): void;
   ensureActive(id: string): boolean;
   limparAviso(): void;
   rememberLan(id: string, lan: LanInfo, source?: Server): void;
   rememberRemote(id: string, remote: LanInfo, source: Server): void;
+  rememberConnect(id: string, connect: LanInfo, source: Server): void;
+  rememberDevice(id: string, upgraded: Server, source: Server): void;
   applyPairs(pairs: ExternalPair[]): PairAttach[];
   markEnded(id: string): void;
   ensureOwnActive(): void;
@@ -78,7 +106,32 @@ export const useServers = create<ServersState>((set, get) => {
   let warnings: AvisoServidores[] = [];
   const ids = new Map<string, string>();
   const naming = new Map<string, AbortController>();
+  const revertedUntil = new Map<string, number>();
   const resolveId = (id: string) => ids.get(id) ?? id;
+
+  // Nunca apaga: o 401 pode ser o Python atendendo a porta, `devices.json` ilegível ou um backup
+  // restaurado. Sem senha guardada, ou com a guardada também recusada, fica desligada até uma
+  // conexão responder.
+  function refuseDevice(server: Server) {
+    const { ownerToken } = server;
+    if (ownerToken) {
+      esquecerRota(server.id);
+      revertedUntil.set(server.id, Date.now() + REVERTED_GRACE_MS);
+      registrarDiag({ evento: 'connect.aparelho_recusado', nivel: 'aviso', tela: 'servidores', operacao: server.id });
+      change((p) => ({ ...p, servers: p.servers.map((s) => s.id === server.id ? { ...withPlainToken(s, ownerToken), connectOff: true } : s) }), false);
+      return;
+    }
+    if (server.disabled) return;
+    const next = ownServers(get().servers).find((s) => s.id !== server.id && !s.disabled);
+    // Pedido atrasado com o token desta entrada leria a máquina que recebeu o foco como a recusada.
+    if (next && get().activeId === server.id) revertedUntil.set(next.id, Date.now() + REVERTED_GRACE_MS);
+    change((p) => ({
+      ...p,
+      servers: p.servers.map((s) => s.id === server.id ? { ...s, disabled: true } : s),
+      activeId: p.activeId === server.id && next ? next.id : p.activeId,
+    }), false);
+    warn({ tipo: 'token', label: server.label });
+  }
 
   function warn(aviso: AvisoServidores) {
     const same = (other: AvisoServidores | null) => other?.tipo === aviso.tipo
@@ -203,12 +256,13 @@ export const useServers = create<ServersState>((set, get) => {
     const existing = get().servers.find((s) => s.baseUrl === base && !s.invite);
     if (existing) naming.get(existing.id)?.abort();
     if (existing && existing.token !== token) esquecerRota(existing.id);
+    const renewed = (server: Server) => (server.token === token ? { ...server } : withPlainToken(server, token));
     const s: Server = existing
-      ? { ...existing, token }
+      ? renewed(existing)
       : { id: `s_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, label: label ?? m.native_settings_group_server(), baseUrl: base, token };
     change((p) => {
       const saved = p.servers.find((x) => x.baseUrl === base && !x.invite);
-      const server = saved ? { ...saved, token } : s;
+      const server = saved ? renewed(saved) : s;
       if (s.id !== server.id) ids.set(s.id, server.id);
       return {
         servers: saved ? p.servers.map((x) => x.id === saved.id ? server : x) : [...p.servers, server],
@@ -226,6 +280,33 @@ export const useServers = create<ServersState>((set, get) => {
       return { servers: merged.servers, activeId: merged.activeId };
     }, false);
     return added;
+  },
+  addConnected(server) {
+    let saved!: Server;
+    change((p) => {
+      const existing = p.servers.find((s) => !s.invite
+        && (s.baseUrl === server.baseUrl || (!!server.lan?.id && s.lan?.id === server.lan.id)));
+      if (existing) {
+        saved = {
+          ...existing, token: server.token, credential: 'device', deviceId: server.deviceId, disabled: false,
+          lan: server.lan ?? existing.lan, connect: server.connect ?? existing.connect,
+          // A senha que esta entrada usava vira a volta para um 401 do aparelho, como em `upgradeToDevice`.
+          ownerToken: existing.credential === 'device' ? existing.ownerToken : existing.token,
+        };
+        delete saved.connectOff;
+      } else {
+        // O id vem do nome da máquina, que só é único dentro da conta.
+        let id = server.id;
+        for (let suffix = 2; p.servers.some((s) => s.id === id); suffix++) id = `${server.id}_${suffix}`;
+        saved = { ...server, id };
+      }
+      return {
+        servers: existing ? p.servers.map((s) => s.id === existing.id ? saved : s) : [...p.servers, saved],
+        activeId: p.servers.some((s) => s.id === p.activeId && !s.disabled) ? p.activeId : saved.id,
+      };
+    });
+    esquecerRota(saved.id);
+    return saved;
   },
   addInvite(result, activate = true) {
     const base = result.address.replace(/\/+$/, '');
@@ -292,12 +373,29 @@ export const useServers = create<ServersState>((set, get) => {
   active() {
     return get().servers.find((s) => s.id === get().activeId) ?? null;
   },
-  markInvalid(id) {
+  markInvalid(id, rejectedToken) {
+    const target = get().servers.find((s) => s.id === id);
     // Convite recusado é par/compartilhamento que acabou, não máquina a remover.
-    if (get().servers.find((s) => s.id === id)?.invite) { get().markEnded(id); return; }
-    const label = get().servers.find((s) => s.id === id)?.label ?? '';
+    if (target?.invite) { get().markEnded(id); return; }
+    const stale = rejectedToken === undefined ? Date.now() < (revertedUntil.get(id) ?? 0) : !!target && rejectedToken !== target.token;
+    if (stale) return;
+    if (target?.credential === 'device' || target?.connectOff) { refuseDevice(target); return; }
+    const label = target?.label ?? '';
     get().remove(id);
     warn({ tipo: 'token', label });
+  },
+  reactivateDevice(id) {
+    const current = get().servers.find((s) => s.id === resolveId(id));
+    if (!current?.disabled || (current.credential !== 'device' && !current.connectOff)) return;
+    change((p) => ({ ...p, servers: p.servers.map((s) => s.id === current.id ? { ...s, disabled: false } : s) }), false);
+  },
+  enableConnect(id) {
+    change((p) => ({ ...p, servers: p.servers.map((s) => {
+      if (s.id !== resolveId(id)) return s;
+      const server = { ...s };
+      delete server.connectOff;
+      return server;
+    }) }));
   },
   ensureActive(id) {
     if (!get().servers.some((s) => s.id === id)) return false;
@@ -329,6 +427,7 @@ export const useServers = create<ServersState>((set, get) => {
       if (s.id !== resolveId(id)) return s;
       const server = { ...s, lan };
       if (server.remote?.id !== lan.id) delete server.remote;
+      if (server.connect?.id !== lan.id) delete server.connect;
       return server;
     }) }), false);
   },
@@ -337,6 +436,19 @@ export const useServers = create<ServersState>((set, get) => {
     if (!current || current.invite || current.baseUrl !== source.baseUrl || current.token !== source.token
       || remote.id !== current.lan?.id || current.remote?.url === remote.url && current.remote.id === remote.id) return;
     change((p) => ({ ...p, servers: p.servers.map((s) => s.id === resolveId(id) ? { ...s, remote } : s) }), false);
+  },
+  rememberConnect(id, connect, source) {
+    const current = get().servers.find((s) => s.id === resolveId(id));
+    if (!current || current.invite || current.credential !== 'device' || current.baseUrl !== source.baseUrl
+      || current.token !== source.token || connect.id !== current.lan?.id
+      || current.connect?.url === connect.url && current.connect.id === connect.id) return;
+    change((p) => ({ ...p, servers: p.servers.map((s) => s.id === resolveId(id) ? { ...s, connect } : s) }), false);
+  },
+  rememberDevice(id, upgraded, source) {
+    const current = get().servers.find((s) => s.id === resolveId(id));
+    if (!current || current.invite || current.baseUrl !== source.baseUrl || current.token !== source.token) return;
+    const { token, credential, deviceId, ownerToken } = upgraded;
+    change((p) => ({ ...p, servers: p.servers.map((s) => s.id === resolveId(id) ? { ...s, token, credential, deviceId, ownerToken } : s) }), false);
   },
   });
 });

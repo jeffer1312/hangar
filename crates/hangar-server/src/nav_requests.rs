@@ -12,9 +12,10 @@ use axum::body::to_bytes;
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{Method, StatusCode};
 use axum::response::Response;
-use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
+use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use subtle::ConstantTimeEq;
 use tokio::sync::Notify;
 
 use crate::routes::AppState;
@@ -23,11 +24,37 @@ use crate::session_write::json_response;
 /// Prazo do pedido que ninguém confirmou: não reabre a aba esquecida depois.
 pub const TTL_SECS: f64 = 600.0;
 const BODY_LIMIT: usize = 64 * 1024;
-/// `urllib.parse.quote(token, safe='')`.
-const TOKEN_SET: &AsciiSet = &NON_ALPHANUMERIC.remove(b'_').remove(b'.').remove(b'-').remove(b'~');
+/// O parâmetro do link de `PageTickets`: fora de `token`, senão cada abertura contaria como senha errada.
+pub const TICKET_PARAM: &str = "page_ticket";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Marker { pub url: String, pub ts: f64 }
+
+/// Abre uma página só, com vida de `TTL_SECS`. O link sai no SSE da conversa e fica no marcador: nem a
+/// senha nem o token de um aparelho entram nele. A chave nasce com o processo, porque tirada da senha
+/// deixaria quem recebe o link testar palpites fora da máquina.
+pub struct PageTickets(ring::hmac::Key);
+
+impl PageTickets {
+    pub fn random() -> Self {
+        Self(ring::hmac::Key::new(ring::hmac::HMAC_SHA256, hangar_core::credentials::token().as_bytes()))
+    }
+
+    fn sign(&self, until: u64, name: &str, id: &str) -> String {
+        ring::hmac::sign(&self.0, format!("{until}|{name}|{id}").as_bytes()).as_ref().iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    pub fn issue(&self, name: &str, id: &str, at: u64) -> String {
+        let until = at + TTL_SECS as u64;
+        format!("{until}.{}", self.sign(until, name, id))
+    }
+
+    pub fn opens(&self, ticket: &str, name: &str, id: &str, at: u64) -> bool {
+        let Some((until, tag)) = ticket.split_once('.') else { return false };
+        let Ok(until) = until.parse::<u64>() else { return false };
+        until > at && bool::from(self.sign(until, name, id).as_bytes().ct_eq(tag.as_bytes()))
+    }
+}
 
 pub struct NavStore {
     /// `None`: só em memória (bridge de teste sem pastas).
@@ -37,6 +64,7 @@ pub struct NavStore {
     writing: Mutex<()>,
     /// Acorda a lista do dono para publicar já, sem esperar o tique.
     pub changed: Notify,
+    pub tickets: PageTickets,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> { m.lock().unwrap_or_else(|e| e.into_inner()) }
@@ -61,8 +89,10 @@ pub fn parse(raw: &[u8]) -> BTreeMap<String, Marker> {
 impl NavStore {
     pub fn load(home: Option<&Path>) -> Self {
         let file = home.map(file_in);
-        let map = file.as_deref().and_then(|f| std::fs::read(f).ok()).map(|raw| parse(&raw)).unwrap_or_default();
-        Self { file, map: Mutex::new(map), writing: Mutex::new(()), changed: Notify::new() }
+        let mut map = file.as_deref().and_then(|f| std::fs::read(f).ok()).map(|raw| parse(&raw)).unwrap_or_default();
+        // A chave do link morreu com o processo anterior, e versão antiga gravava a senha aqui.
+        map.retain(|_, m: &mut Marker| !SIGNED_PAGE.is_match(&m.url));
+        Self { file, map: Mutex::new(map), writing: Mutex::new(()), changed: Notify::new(), tickets: PageTickets::random() }
     }
 
     /// Dentro do prazo, por nome; vencer só filtra (a leitura não grava).
@@ -127,7 +157,7 @@ impl NavStore {
     }
 }
 
-/// Troca atômica com permissão 600: a url da página de rascunho leva o token do dono.
+/// Troca atômica com permissão 600: a url da página de rascunho leva o bilhete dela.
 fn write_private(file: &Path, body: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
     if let Some(dir) = file.parent() { std::fs::create_dir_all(dir)?; }
@@ -144,23 +174,26 @@ fn write_private(file: &Path, body: &[u8]) -> std::io::Result<()> {
 
 static PAGE: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"^/api/sessions/([^/?#]+)/pages/([A-Za-z0-9_-]{1,128})$").unwrap());
+static SIGNED_PAGE: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"^http://[^/]+/api/sessions/[^/?#]+/pages/[A-Za-z0-9_-]{1,128}\?").unwrap());
 static SCHEME: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)^https?://").unwrap());
 
 /// O `str.strip()` do Python também tira os separadores `\x1c`–`\x1f`.
 fn py_space(c: char) -> bool { c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c) }
 
 /// A url que o app abre, ou `(status, detalhe)` da recusa. Página de rascunho da própria sessão vem
-/// como caminho sem token e é completada com o endereço local do servidor e o token do dono.
-pub fn resolve_url(name: &str, raw: &str, listen: SocketAddr, token: &str) -> Result<String, (StatusCode, &'static str)> {
+/// como caminho sem token e é completada com o endereço local do servidor e o bilhete só dela.
+pub fn resolve_url(name: &str, raw: &str, listen: SocketAddr, tickets: &PageTickets, at: u64) -> Result<String, (StatusCode, &'static str)> {
     let u = raw.trim_matches(py_space);
     if u.is_empty() { return Err((StatusCode::BAD_REQUEST, "url vazia")); }
     if u.starts_with('/') {
-        let own = PAGE.captures(u).is_some_and(|c| percent_decode_str(&c[1]).decode_utf8_lossy() == name);
-        if !own { return Err((StatusCode::BAD_REQUEST, "caminho relativo só vale para página desta sessão")); }
+        let Some(page) = PAGE.captures(u).filter(|c| percent_decode_str(&c[1]).decode_utf8_lossy() == name) else {
+            return Err((StatusCode::BAD_REQUEST, "caminho relativo só vale para página desta sessão"));
+        };
         // Bind em toda interface inclui o loopback; IP de LAN só escuta nele.
         let host = if listen.ip().is_unspecified() { std::net::IpAddr::from([127, 0, 0, 1]) } else { listen.ip() };
         let addr = SocketAddr::new(host, listen.port());
-        return Ok(format!("http://{addr}{u}?token={}", utf8_percent_encode(token, TOKEN_SET)));
+        return Ok(format!("http://{addr}{u}?{TICKET_PARAM}={}", tickets.issue(name, &page[2], at)));
     }
     Ok(if SCHEME.is_match(u) { u.to_owned() } else { format!("http://{u}") })
 }
@@ -220,7 +253,7 @@ pub(crate) async fn serve(st: &Arc<AppState>, req: Request) -> Response {
     if !crate::mcp::identity::exists(&local, &name).await {
         return detail(StatusCode::NOT_FOUND, "sessão não encontrada");
     }
-    let url = match resolve_url(&name, &body.url, st.cfg.listen, &st.cfg.auth_token) {
+    let url = match resolve_url(&name, &body.url, st.cfg.listen, &st.list.nav.tickets, now() as u64) {
         Ok(u) => u,
         Err((status, msg)) => return detail(status, msg),
     };
@@ -264,8 +297,9 @@ mod tests {
     fn urls_resolve_for_every_listen_address() {
         const BINDS: [(&str, &str); 5] = [("0.0.0.0", "127.0.0.1"), ("::", "127.0.0.1"), ("192.168.1.5", "192.168.1.5"),
             ("127.0.0.1", "127.0.0.1"), ("fe80::1", "[fe80::1]")];
-        const TOKEN: &str = "tok/en+ç~_.-";
-        const QUERY: &str = "?token=tok%2Fen%2B%C3%A7~_.-";
+        const AT: u64 = 1_000;
+        let tickets = PageTickets::random();
+        let query = |name: &str, id: &str| format!("?{TICKET_PARAM}={}", tickets.issue(name, id, AT));
         const RELATIVE: Result<&str, (StatusCode, &str)> =
             Err((StatusCode::BAD_REQUEST, "caminho relativo só vale para página desta sessão"));
         let long_page = format!("/api/sessions/s/pages/{}", "a".repeat(129));
@@ -281,9 +315,9 @@ mod tests {
             ("s", "ftp://x", Ok("http://ftp://x".into())),
             ("s", "//x", RELATIVE.map(str::to_owned)),
             ("s", "   ", Err((StatusCode::BAD_REQUEST, "url vazia"))),
-            ("s", "/api/sessions/s/pages/abc_DEF-1", Ok(format!("http://{{host}}:8765/api/sessions/s/pages/abc_DEF-1{QUERY}"))),
-            ("s t", "/api/sessions/s%20t/pages/a", Ok(format!("http://{{host}}:8765/api/sessions/s%20t/pages/a{QUERY}"))),
-            ("s", "/api/sessions/s/pages/a", Ok(format!("http://{{host}}:8765/api/sessions/s/pages/a{QUERY}"))),
+            ("s", "/api/sessions/s/pages/abc_DEF-1", Ok(format!("http://{{host}}:8765/api/sessions/s/pages/abc_DEF-1{}", query("s", "abc_DEF-1")))),
+            ("s t", "/api/sessions/s%20t/pages/a", Ok(format!("http://{{host}}:8765/api/sessions/s%20t/pages/a{}", query("s t", "a")))),
+            ("s", "/api/sessions/s/pages/a", Ok(format!("http://{{host}}:8765/api/sessions/s/pages/a{}", query("s", "a")))),
             ("s", "/api/sessions/outra/pages/a", RELATIVE.map(str::to_owned)),
             ("s", &long_page, RELATIVE.map(str::to_owned)),
             ("s", "/api/sessions/s/pages/a b", RELATIVE.map(str::to_owned)),
@@ -293,7 +327,7 @@ mod tests {
         for (name, input, expected) in &cases {
             for (bind, host) in BINDS {
                 let ip: std::net::IpAddr = bind.parse().unwrap();
-                let got = resolve_url(name, input, SocketAddr::new(ip, 8765), TOKEN);
+                let got = resolve_url(name, input, SocketAddr::new(ip, 8765), &tickets, AT);
                 let expected = expected.clone().map(|out| out.replace("{host}", host));
                 assert_eq!(got, expected, "{name} {input:?} em {bind}");
             }
@@ -319,7 +353,40 @@ mod tests {
 
     #[test]
     fn blank_url_is_refused_instead_of_becoming_http() {
-        assert_eq!(resolve_url("s", "   ", listen("0.0.0.0:8765"), "t"), Err((StatusCode::BAD_REQUEST, "url vazia")));
+        assert_eq!(resolve_url("s", "   ", listen("0.0.0.0:8765"), &PageTickets::random(), 0), Err((StatusCode::BAD_REQUEST, "url vazia")));
+    }
+
+    #[test]
+    fn ticket_opens_only_its_page_until_it_expires() {
+        let tickets = PageTickets::random();
+        let ticket = tickets.issue("s", "a", 1_000);
+        let life = TTL_SECS as u64;
+        assert!(tickets.opens(&ticket, "s", "a", 1_000));
+        assert!(tickets.opens(&ticket, "s", "a", 1_000 + life - 1));
+        assert!(!tickets.opens(&ticket, "s", "a", 1_000 + life), "vencido");
+        assert!(!tickets.opens(&ticket, "s", "b", 1_000), "outra página");
+        assert!(!tickets.opens(&ticket, "t", "a", 1_000), "outra sessão");
+        assert!(!PageTickets::random().opens(&ticket, "s", "a", 1_000), "outro processo");
+        let (_, tag) = ticket.split_once('.').unwrap();
+        assert!(!tickets.opens(&format!("{}.{tag}", 1_000 + 10 * life), "s", "a", 1_000), "prazo trocado à mão");
+        for bad in ["", "abc", "1.2.3", "."] {
+            assert!(!tickets.opens(bad, "s", "a", 1_000), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn pending_page_links_do_not_survive_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = file_in(dir.path());
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let url = |tail: &str| format!("http://127.0.0.1:8765/api/sessions/s/pages/a{tail}");
+        std::fs::write(&file, json!({
+            "senha": {"url": url("?token=senha-antiga"), "ts": now()},
+            "bilhete": {"url": url("?page_ticket=1.a"), "ts": now()},
+            "site": {"url": "http://localhost:3000/pages/a?b=1", "ts": now()},
+        }).to_string()).unwrap();
+        let store = NavStore::load(Some(dir.path()));
+        assert_eq!(store.live(now()).into_iter().map(|(name, _)| name).collect::<Vec<_>>(), ["site"]);
     }
 
     #[test]
@@ -359,7 +426,7 @@ mod tests {
         #[test]
         fn parse_and_resolve_never_panic(raw in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..256), url in ".{0,64}") {
             let _ = parse(&raw);
-            let _ = resolve_url("s", &url, listen("[::1]:8765"), "tok en");
+            let _ = resolve_url("s", &url, listen("[::1]:8765"), &PageTickets::random(), 0);
         }
     }
 }

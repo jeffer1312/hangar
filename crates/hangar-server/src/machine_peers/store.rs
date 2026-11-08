@@ -76,6 +76,14 @@ impl Store {
         list(&self.tolerant())
     }
     pub fn put(&self, body: &Value) -> Result<Value, Error> {
+        self.put_from(body,None)
+    }
+    /// `device`: o aparelho de quem grava. A entrada fica marcada `connect`, e o anúncio nunca manda a
+    /// senha do dono a um endereço que um aparelho escreveu. Com `connect: true` no corpo quem grava é
+    /// a outra máquina, e `connect_return_device` vira esse aparelho, que o anúncio renova: o id nunca
+    /// vem do corpo, e o app que só registra um par não tem o token trocado. Aparelho não muda o
+    /// endereço de um par. Só o dono muda, e mudar desfaz a marca.
+    pub fn put_from(&self, body: &Value, device: Option<&str>) -> Result<Value, Error> {
         let empty=Value::String(String::new());
         let id = body.get("id").filter(|v|truthy(v)).unwrap_or(&empty);
         valid_id(&id)?;
@@ -98,13 +106,18 @@ impl Store {
         if ["base_url","token","web_url"].iter().any(|key|body.get(key).is_some_and(crate::orchestration::codec::contains_surrogate)){
             return Err(Error::invalid("texto contém Unicode inválido"));
         }
+        let address = base.trim_end_matches('/');
         self.change(|data| {
+            let same_address = data.get(id).and_then(|known|known["base_url"].as_str()).map(|known|known==address);
+            if device.is_some() && same_address==Some(false) {
+                return Err(Error{status:409,code:"peers_other_address",msg:format!("'{id}' já está em outro endereço")});
+            }
             let mut entry = match data.get(id).map(codec::clone_value){
                 Some(Value::Object(entry))=>entry,
                 Some(other)=>{codec::discard(other);Map::new()},
                 None=>Map::new(),
             };
-            replace(&mut entry,"base_url",json!(base.trim_end_matches('/')));
+            replace(&mut entry,"base_url",json!(address));
             replace(&mut entry,"token",json!(token));
             if let Some(web) = web
                 .and_then(Value::as_str)
@@ -112,6 +125,12 @@ impl Store {
                 .filter(|s| !s.is_empty())
             {
                 replace(&mut entry,"web_url",json!(web));
+            }
+            if let Some(device)=device {
+                replace(&mut entry,"connect",json!(true));
+                if body["connect"]==true {replace(&mut entry,"connect_return_device",json!(device));}
+            } else if same_address!=Some(true) {
+                for key in ["connect","connect_return_device"] {if let Some(previous)=entry.remove(key){codec::discard(previous);}}
             }
             if let Some(previous)=data.insert(id.into(), Value::Object(entry)){codec::discard(previous);}
             Ok(list(data))
@@ -303,6 +322,14 @@ fn app_entry(raw: &Value) -> Result<Value, Error> {
         out["lan"] = json!({"url":lan["url"],"id":lan["id"]});
     }
     Ok(out)
+}
+/// O aparelho lê a lista como lê `GET /api/peers`: o token dela é a senha de outra máquina.
+pub(super) fn mask_app_tokens(value: &mut Value) {
+    for server in value["servers"].as_array_mut().into_iter().flatten() {
+        if let Some(token) = server.get_mut("token") {
+            *token = Value::String(crate::engines::store::mask(&codec::python_string(token)));
+        }
+    }
 }
 fn app_response(data: &Map<String, Value>) -> Result<Value,Error> {
     let mut list=crate::orchestration::codec::ValueGuard(Value::Array(data.values().filter_map(|value|value.get("app").filter(|app|app.is_object())).map(codec::clone_value).collect()));

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureApi } from '@hangar/core';
-import { readIdentifier, readPeers, reason, registerBoth } from './api';
+import { discover, readIdentifier, readPeers, reason, registerBoth } from './api';
 import * as m from '../../paraglide/messages';
 
 const server = { id: 'api-owner', label: 'fixture-owner', baseUrl: 'https://owner.test', token: 'owner-secret' };
@@ -23,6 +23,11 @@ describe('respostas públicas de máquinas', () => {
     vi.spyOn(response, 'json').mockImplementation(async () => { controller.abort(); throw new DOMException('fixture-cancelled', 'AbortError'); });
     fetchMock.mockResolvedValue(response);
     await expect(readIdentifier(server, controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('guarda a causa de a conta do Connect não ter entrado na busca', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify([{ nome: 'fixture-found', base_url: 'https://found.test', connect_error: { code: 'fixture-code', msg: 'fixture-cause' } }]), { status: 200 }));
+    expect((await discover(server, new AbortController().signal))[0].connect_error).toBe('fixture-cause');
   });
 
   it('traduz a recusa pública de endereço duplicado do aparelho', () => {
@@ -71,5 +76,31 @@ describe('identidade antes de registrar as duas pontas', () => {
     expect(result.partial).toBe('');
     expect(result.directions.forward?.estado).toBe('ok');
     expect(result.directions.back?.estado).toBe('ok');
+  });
+
+  const posted = () => fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST')
+    .map(([url, init]) => ({ url: String(url), token: JSON.parse(String(init?.body)).token as string }));
+  const device = { ...server, token: 'device-token', credential: 'device' as const, deviceId: 'dev1' };
+
+  it('nunca grava o token de aparelho em outra máquina: vai a senha guardada', async () => {
+    respond('remote');
+    const result = await registerBoth({ ...device, ownerToken: 'owner-secret' }, remote, 'remote', new AbortController().signal);
+    expect(posted().find((call) => call.url.startsWith(remote.baseUrl))?.token).toBe('owner-secret');
+    expect(result.partial).toBe('');
+  });
+
+  it('sem senha guardada pula essa direção e diz o motivo', async () => {
+    respond('remote');
+    const result = await registerBoth(device, remote, 'remote', new AbortController().signal);
+    expect(posted().map((call) => call.url)).toEqual([`${server.baseUrl}/api/peers`]);
+    expect(JSON.stringify(posted())).not.toContain('device-token');
+    expect(result.partial).toBe(m.mobile_machines_peer_no_owner_password());
+  });
+
+  it('a outra máquina com token de aparelho também não vai parar aqui', async () => {
+    respond('remote');
+    const result = await registerBoth(server, { ...remote, token: 'remote-device', credential: 'device', deviceId: 'dev2' }, 'remote', new AbortController().signal);
+    expect(posted().map((call) => call.url)).toEqual([`${remote.baseUrl}/api/peers`]);
+    expect(result.partial).toBe(m.mobile_machines_peer_no_owner_password());
   });
 });

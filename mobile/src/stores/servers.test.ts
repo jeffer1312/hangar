@@ -69,6 +69,155 @@ test('guarda a alternativa remota confirmada e ignora a resposta de uma credenci
   expect(useServers.getState().servers[0].remote).toEqual(remote);
 });
 
+test('guarda a credencial de aparelho e a rota do Connect, e só a credencial atual decide', async () => {
+  vault.set(VAULT_KEY, JSON.stringify(SAVED));
+  await useServers.getState().load();
+  const connect = { id: 'saved-machine', url: 'https://pc1.acme.hangar.dev.br' };
+  const upgraded = { ...SAVED_SERVER, token: 'device-token', credential: 'device' as const, deviceId: 'dev1' };
+
+  useServers.getState().rememberConnect(SAVED_SERVER.id, connect, SAVED_SERVER);
+  useServers.getState().rememberDevice(SAVED_SERVER.id, upgraded, { ...SAVED_SERVER, token: 'stale-token' });
+  expect(useServers.getState().servers[0].connect).toBeUndefined();
+  expect(useServers.getState().servers[0].token).toBe(SAVED_SERVER.token);
+
+  useServers.getState().rememberDevice(SAVED_SERVER.id, upgraded, SAVED_SERVER);
+  useServers.getState().rememberConnect(SAVED_SERVER.id, connect, upgraded);
+  await settle();
+  await useServers.getState().load();
+
+  expect(useServers.getState().vaultReadable).toBe(true);
+  expect(useServers.getState().servers[0]).toMatchObject({ token: 'device-token', credential: 'device', deviceId: 'dev1', connect });
+  useServers.getState().rememberLan(SAVED_SERVER.id, { id: 'renamed-machine', url: '' });
+  expect(useServers.getState().servers[0].connect).toBeUndefined();
+});
+
+describe('401 com credencial de aparelho', () => {
+  const connect = { id: 'saved-machine', url: 'https://pc1.acme.hangar.dev.br' };
+  const device = { ...SAVED_SERVER, token: 'device-token', credential: 'device' as const, deviceId: 'dev1', connect };
+  const upgraded = { ...device, ownerToken: 'owner-password' };
+  const loadWith = async (server: typeof device) => {
+    vault.set(VAULT_KEY, JSON.stringify({ servers: [server], activeId: server.id }));
+    await useServers.getState().load();
+  };
+  const plain = (server: object) => ['credential', 'deviceId', 'connect', 'ownerToken'].filter((key) => key in server);
+
+  test('volta à senha guardada, sem aviso, e a volta fica gravada', async () => {
+    await loadWith(upgraded);
+    useServers.getState().markInvalid(device.id, 'device-token');
+    await settle();
+
+    const [server] = useServers.getState().servers;
+    expect(server).toMatchObject({ token: 'owner-password', connectOff: true, connectHost: 'pc1.acme.hangar.dev.br' });
+    expect(plain(server)).toEqual([]);
+    expect(useServers.getState().aviso).toBeNull();
+    expect(JSON.parse(vault.get(VAULT_KEY)!).servers[0]).toMatchObject({ token: 'owner-password', connectOff: true });
+  });
+
+  test('401 atrasado do token antigo não apaga a máquina que voltou à senha', async () => {
+    await loadWith(upgraded);
+    useServers.getState().markInvalid(device.id, 'device-token');
+    useServers.getState().markInvalid(device.id, 'device-token');
+    useServers.getState().markInvalid(device.id);
+    expect(useServers.getState().servers).toHaveLength(1);
+  });
+
+  test('senha guardada também recusada desliga com aviso, sem apagar, e uma lista boa religa', async () => {
+    await loadWith(upgraded);
+    useServers.getState().markInvalid(device.id, 'device-token');
+    useServers.getState().markInvalid(device.id, 'owner-password');
+
+    expect(useServers.getState().servers).toHaveLength(1);
+    expect(useServers.getState().servers[0]).toMatchObject({ disabled: true, connectOff: true, token: 'owner-password' });
+    expect(useServers.getState().aviso).toEqual({ tipo: 'token', label: device.label });
+
+    useServers.getState().reactivateDevice(device.id);
+    expect(useServers.getState().servers[0].disabled).toBe(false);
+  });
+
+  test('401 de senha sem connectOff segue removendo como hoje', async () => {
+    vault.set(VAULT_KEY, JSON.stringify(SAVED));
+    await useServers.getState().load();
+    useServers.getState().markInvalid(SAVED_SERVER.id, SAVED_SERVER.token);
+    expect(useServers.getState().servers).toHaveLength(0);
+  });
+
+  test('sem senha guardada fica desligada com aviso, nunca some, e uma lista boa a religa', async () => {
+    await loadWith(device);
+    useServers.getState().markInvalid(device.id, 'device-token');
+    useServers.getState().markInvalid(device.id);
+
+    expect(useServers.getState().servers[0]).toMatchObject({ disabled: true, token: 'device-token', credential: 'device' });
+    expect(useServers.getState().aviso).toEqual({ tipo: 'token', label: device.label });
+
+    useServers.getState().reactivateDevice(device.id);
+    expect(useServers.getState().servers[0].disabled).toBe(false);
+  });
+
+  test('máquina ativa desligada passa o foco a outra que esteja ligada', async () => {
+    const other = { ...SAVED_SERVER, id: 'other', baseUrl: 'http://10.0.0.3:8765' };
+    vault.set(VAULT_KEY, JSON.stringify({ servers: [device, other], activeId: device.id }));
+    await useServers.getState().load();
+    useServers.getState().markInvalid(device.id, 'device-token');
+    expect(useServers.getState().activeId).toBe('other');
+  });
+
+  test('401 atrasado sem token depois de passar o foco não apaga a máquina que o recebeu', async () => {
+    const other = { ...SAVED_SERVER, id: 'other', baseUrl: 'http://10.0.0.3:8765' };
+    vault.set(VAULT_KEY, JSON.stringify({ servers: [device, other], activeId: device.id }));
+    await useServers.getState().load();
+
+    useServers.getState().markInvalid(device.id, 'device-token');
+    useServers.getState().markInvalid(useServers.getState().activeId!);
+
+    expect(useServers.getState().servers.map((s) => s.id)).toEqual([device.id, 'other']);
+    expect(useServers.getState().activeId).toBe('other');
+  });
+
+  test('o foco que recebeu a máquina ainda responde por um 401 com o próprio token', async () => {
+    const other = { ...SAVED_SERVER, id: 'other', baseUrl: 'http://10.0.0.3:8765' };
+    vault.set(VAULT_KEY, JSON.stringify({ servers: [device, other], activeId: device.id }));
+    await useServers.getState().load();
+
+    useServers.getState().markInvalid(device.id, 'device-token');
+    useServers.getState().markInvalid('other', other.token);
+
+    expect(useServers.getState().servers.map((s) => s.id)).toEqual([device.id]);
+  });
+
+  test('reativar não mexe em máquina desligada por outro motivo', async () => {
+    vault.set(VAULT_KEY, JSON.stringify({ servers: [{ ...SAVED_SERVER, disabled: true }], activeId: SAVED_SERVER.id }));
+    await useServers.getState().load();
+    useServers.getState().reactivateDevice(SAVED_SERVER.id);
+    expect(useServers.getState().servers[0].disabled).toBe(true);
+  });
+
+  test.each([
+    { name: 'de aparelho', saved: upgraded },
+    { name: 'desligada', saved: { ...device, disabled: true } },
+    { name: 'com connectOff', saved: { ...SAVED_SERVER, connectOff: true } },
+    { name: 'desligada com connectOff', saved: { ...SAVED_SERVER, connectOff: true, disabled: true } },
+  ])('salvar outra senha no mesmo endereço limpa o que era do token anterior: $name', async ({ saved }) => {
+    vault.set(VAULT_KEY, JSON.stringify({ servers: [saved], activeId: saved.id }));
+    await useServers.getState().load();
+
+    const returned = useServers.getState().add({ baseUrl: saved.baseUrl, token: 'new-password' });
+    const [stored] = useServers.getState().servers;
+
+    for (const server of [returned, stored]) {
+      expect(server.token).toBe('new-password');
+      expect(plain(server)).toEqual([]);
+      expect('connectOff' in server).toBe(false);
+      expect(!!server.disabled).toBe(false);
+    }
+  });
+
+  test('salvar o mesmo token não perde a credencial de aparelho', async () => {
+    await loadWith(upgraded);
+    useServers.getState().add({ baseUrl: upgraded.baseUrl, token: 'device-token' });
+    expect(useServers.getState().servers[0]).toMatchObject({ credential: 'device', deviceId: 'dev1', ownerToken: 'owner-password' });
+  });
+});
+
 const mutations = [
   () => useServers.getState().add({ baseUrl: 'http://10.0.0.3:8765', token: 'new-token' }),
   () => useServers.getState().remove(SAVED_SERVER.id),

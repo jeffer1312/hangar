@@ -220,8 +220,9 @@ async fn serve(st: Arc<AppState>, peer: SocketAddr, req: Request, want: Want) ->
         Want::Session { .. } => session.is_some_and(|s| g.sessions.get(s) == Some(&Kind::Share)),
         Want::Hangar(_) => false,
     });
-    // O token explícito do dono dispensa Origin; o login próprio mantém essa guarda.
-    let token = auth::query_param(req.uri().query(), "token").filter(|t| !t.is_empty());
+    // O token explícito do dono dispensa Origin; o login próprio mantém essa guarda. Convidado não
+    // sonda a senha: ele vem como loopback, que não conta tentativa.
+    let token = auth::query_param(req.uri().query(), "token").filter(|t| !t.is_empty() && guest.is_none());
     let owner = if token.is_some() {
         match st.auth.owner(&fwd.client_ip, token.as_deref().map(str::as_bytes)).await {
             Ok(owner) => owner, Err(e) => return crate::auth::unavailable(e),

@@ -24,6 +24,8 @@ export interface ApiEnv {
   deviceIdentity?(): { kind: 'ios' | 'android' | 'pwa'; id: string } | null;
   /** Resolve quando a identidade guardada já foi lida (o cofre do Expo é assíncrono). Ausente = já pronta. */
   deviceReady?(): Promise<void>;
+  /** Segredo aleatório de gerador seguro, para onde não há `crypto`. Ausente ou null = sem gerador. */
+  secureRandom?(): string | null;
 }
 let _env: ApiEnv | null = null;
 /** A lista ao vivo fica aberta por horas: abrir antes de ler o id deixaria o primeiro acesso sem registro. */

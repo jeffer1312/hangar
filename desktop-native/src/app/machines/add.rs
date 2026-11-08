@@ -67,13 +67,19 @@ pub(super) fn owns(open: Option<EntityId>, dialog: EntityId) -> bool { open == S
 
 /// Uma máquina que a busca no Tailscale achou respondendo como Hangar.
 #[derive(Clone, Debug)]
-pub(in crate::app) struct Discovered { name: String, url: String, hosts: Vec<String> }
+pub(in crate::app) struct Discovered { name: String, url: String, hosts: Vec<String>, connect_error: Option<String> }
 
 pub(super) fn parse_discovered(value: &Value) -> Option<Vec<Discovered>> {
     value.as_array()?.iter().map(|d| Some(Discovered {
         name: d.get("nome")?.as_str()?.to_owned(), url: d.get("base_url")?.as_str()?.to_owned(),
         hosts: d.get("hosts").and_then(Value::as_array).map(|h| h.iter().filter_map(Value::as_str).map(str::to_lowercase).collect()).unwrap_or_default(),
+        connect_error: d.get("connect_error").and_then(|error| error.get("msg")).and_then(Value::as_str).map(str::to_owned),
     })).collect()
+}
+
+/// A conta do Connect falhou e a lista ficou só com o Tailscale: as linhas trazem a causa.
+fn discovery_gap(found: &[Discovered]) -> Option<String> {
+    found.iter().find_map(|machine| machine.connect_error.clone())
 }
 
 /// Quem respondeu no endereço testado. Sem o identificador não dá pra saber se é máquina repetida; a falha ao lê-lo aparece.
@@ -172,10 +178,20 @@ pub(super) async fn check(api: &Api, url: &str, id: &str) -> Going {
     }
 }
 
+/// Máquina do Connect: o serviço mora no mesmo domínio e não é máquina. Comparado inteiro, porque `connect` é nome válido de máquina.
+fn connect_host(base: &str) -> bool {
+    Url::parse(base).ok().and_then(|url| url.host_str().map(|host| host.trim_end_matches('.').to_owned()))
+        .is_some_and(|host| host.ends_with(".hangar.dev.br") && host != "connect.hangar.dev.br")
+}
+
+/// A volta que não se tenta: o `peers.json` da outra máquina guardaria a senha do dono desta.
+fn back_refused(base: &str) -> Option<Going> { connect_host(base).then(|| Going::failed(tr("machines_add_connect_back"))) }
+
 /// Grava aqui (falha aqui é o resultado: nada mudou), grava este servidor lá e testa as duas pontas.
 pub(super) async fn register(here: Api, found: Found, own_id: String, own_token: String) -> Result<(Going, Going), String> {
     let body = json!({"id": found.id, "base_url": found.base, "token": found.token});
     here.server_send(reqwest::Method::POST, &["peers"], Some(body), 15).await.map_err(|e| Hangar::fetch_failure(&e))?;
+    if let Some(back) = back_refused(&found.base) { return Ok((check(&here, &found.base, &found.id).await, back)); }
     let own_base = own_address(&here).await;
     let there = Api::new(&found.base, &found.token);
     let saved = match &there {
@@ -417,6 +433,7 @@ impl Render for AddMachine {
         let searching = d.loading;
         let search_error = d.value.as_ref().and_then(|v| v.as_ref().err()).filter(|_| !searching).cloned();
         let results = d.ok().filter(|_| !searching).cloned();
+        let search_gap = results.as_deref().and_then(discovery_gap);
         let next = tr("settings_next_version");
         let (busy, done) = (self.busy, self.sides.is_some());
         let locked = busy || done;
@@ -441,6 +458,8 @@ impl Render for AddMachine {
                     .on_click(cx.listener(|this, _, _, cx| this.discover(cx)))))
             .when_some(search_error, |el, error| el.child(div().id("machines-add-search-error").role(Role::Status).text_size(px(12.5))
                 .text_color(theme::danger()).whitespace_normal().child(error)))
+            .when_some(search_gap, |el, error| el.child(div().id("machines-add-search-gap").role(Role::Status).text_size(px(12.5))
+                .text_color(theme::danger()).whitespace_normal().child(tr_shared("mobile_machines_search_partial", &[("reason", &error)]))))
             .when_some(found_list, |el, list| if list.is_empty() {
                 el.child(div().id("machines-add-search-none").role(Role::Status).child(muted(tr("machines_search_none"))))
             } else {
@@ -635,7 +654,28 @@ impl Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{Discovered, EntityId, Remote, ServerEntry, Target, normalize, owns, place_machine, short_host, tailscale_host};
+    use super::{Discovered, EntityId, Remote, ServerEntry, Target, Way, back_refused, discovery_gap, normalize, owns, parse_discovered, place_machine, short_host, tailscale_host};
+
+    #[test]
+    fn discovery_keeps_the_cause_of_a_failed_account() {
+        let rows = serde_json::json!([{"nome": "pc", "base_url": "http://x", "connect_error": {"code": "c", "msg": "o serviço caiu"}}]);
+        assert_eq!(discovery_gap(&parse_discovered(&rows).unwrap()).as_deref(), Some("o serviço caiu"));
+        let clean = serde_json::json!([{"nome": "pc", "base_url": "http://x"}]);
+        assert_eq!(discovery_gap(&parse_discovered(&clean).unwrap()), None);
+    }
+
+    #[test]
+    fn owner_password_never_goes_to_a_connect_host() {
+        for base in ["https://pc-b.acme.hangar.dev.br", "https://PC-B.acme.hangar.dev.br/", "https://pc-b.acme.hangar.dev.br.", "https://connect.acme.hangar.dev.br"] {
+            let back = back_refused(base).unwrap_or_else(|| panic!("{base}"));
+            assert_eq!(back.way, Way::Failed, "{base}");
+            assert_eq!(back.error, Some(crate::i18n::tr("machines_add_connect_back")), "{base}");
+        }
+        for base in ["https://casa.tail0000.ts.net", "http://100.64.0.2:8765", "http://192.168.0.10:8765", "http://casa:8765",
+            "https://connect.hangar.dev.br", "https://hangar.dev.br", "https://nothangar.dev.br", "https://hangar.dev.br.exemplo.com"] {
+            assert!(back_refused(base).is_none(), "{base}");
+        }
+    }
 
     #[test]
     fn tailscale_addresses_are_the_tailnet_name_and_the_cgnat_range() {

@@ -1500,7 +1500,7 @@ async fn the_codex_mode_switch_carries_the_invite_to_the_new_life() {
     let facts = Arc::new(LifeFacts::default());
     let share = Arc::new(ShareState { store:ShareStore::open(fx.root.join("shares.json"),Arc::new(||100.0)),
         pairs:PairStore::open(fx.root.join("external_pairs.json")),lives:Lives::new(probe.clone(),facts),
-        tailscale:Arc::new(hangar_server::share::tunnel::Real),tunnel:Default::default() });
+        tailscale:Arc::new(hangar_server::share::tunnel::Real),tunnel:Default::default(),connect:None });
     share.store.create_redeemed("cx-h",Some("k:k-old".into()),Kind::Share).unwrap();
     let (_python, upstream) = crate::fake::spawn_fake().await;
     let mut state = hangar_server::routes::AppState::new(crate::fake::config(upstream, "127.0.0.1"));

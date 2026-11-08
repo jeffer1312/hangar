@@ -5,7 +5,7 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::body::Body;
@@ -63,6 +63,18 @@ pub struct AppState {
     pub public_v6: Option<TcpListener>,
     /// A porta do front (`front_address`), decidida só na subida real (`main.rs`).
     pub front: Option<SocketAddr>,
+    /// A entrada do Connect (`config::connect_listen`), decidida só na subida real (`main.rs`).
+    pub connect: Option<SocketAddr>,
+    /// A porta da prévia (`config::preview_listen`), decidida só na subida real (`main.rs`).
+    pub preview: Option<SocketAddr>,
+    /// A prévia de porta aberta e quem entrou nela.
+    pub connect_previews: Arc<crate::connect::preview::Previews>,
+    /// A conferência de fora da primeira prévia; o teste troca o DNS e a internet.
+    pub connect_preview_reach: Arc<crate::share::owner_routes::Reach>,
+    /// Credenciais de dono por aparelho (`~/.hangar/connect`); o teste troca por uma pasta temporária.
+    pub connect_devices: Arc<crate::connect::devices::Store>,
+    /// `frpc` e Caddy da ligação desta máquina; liga só na subida real (`main.rs`) ou pela rota.
+    pub connect_supervisor: Arc<crate::connect::supervisor::Supervisor>,
     pub workspace_slots: Arc<tokio::sync::Semaphore>,
     pub workspace_read_slots: Arc<tokio::sync::Semaphore>,
     pub workspace_meta_slots: Arc<tokio::sync::Semaphore>,
@@ -209,13 +221,16 @@ impl AppState {
         let state = Arc::new(crate::state::live::StateEnv::new(terminal.clone(), list.clone(), diag.clone()));
         list.set_permissions(state.permissions.clone());
         side.monitors = Some(crate::state::live::spawner(state.clone()));
+        // O mesmo `~` do app nativo e do Python (USERPROFILE no Windows), que gravam `~/.hangar/nav`.
+        let hangar_dir = std::env::home_dir().unwrap_or_default().join(".hangar");
+        let connect_devices = Arc::new(crate::connect::devices::Store::new(hangar_dir.join("connect"), None));
+        let connect_supervisor = Arc::new(crate::connect::supervisor::Supervisor::new(hangar_dir.join("connect"),
+            crate::runtime::local_policy::log_base().unwrap_or_else(|| hangar_dir.join("logs")), connect_devices.clone(), cfg.listen.port()));
         let share = match crate::config::GuestEnv::from_env() {
-            Ok(guest) => crate::share::from_env(guest.shares_file, list.env().dirs.as_ref(), list.env().capture_program.clone()),
+            Ok(guest) => crate::share::from_env(guest.shares_file, list.env().dirs.as_ref(), list.env().capture_program.clone(), Some(connect_supervisor.clone())),
             Err(e) => { tracing::error!("{e}"); None }
         };
         if let Some(share) = &share { list.set_shares(share.clone()); }
-        // O mesmo `~` do app nativo e do Python (USERPROFILE no Windows), que gravam `~/.hangar/nav`.
-        let hangar_dir = std::env::home_dir().unwrap_or_default().join(".hangar");
         let device_install = {
             let env = crate::accounts::environment::AccountEnvironment::capture();
             Arc::new(crate::device_install::job::DeviceInstall::new(
@@ -230,7 +245,7 @@ impl AppState {
         let vault_requests = Arc::new(crate::vault::requests::Requests::default());
         let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture());
         let search = crate::search::Index::server(accounts.clone());
-        AppState { startup: Default::default(), startup_producers: Arc::default(), settings_snapshot: std::sync::OnceLock::new(), login_guests: Arc::new(crate::login_guests::Service::uninitialized(&accounts.env.home,&accounts.env.claude_base)), accounts, search, claude_p: None, command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, diag,
+        AppState { startup: Default::default(), startup_producers: Arc::default(), settings_snapshot: std::sync::OnceLock::new(), login_guests: Arc::new(crate::login_guests::Service::uninitialized(&accounts.env.home,&accounts.env.claude_base)), accounts, search, claude_p: None, command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, connect: None, preview: None, connect_previews: Arc::default(), connect_preview_reach: Arc::new(crate::share::owner_routes::Reach::preview()), diag,
             migration_branch: Arc::default(),
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             login_browser: Arc::default(),
@@ -251,6 +266,8 @@ impl AppState {
             origins_home: std::path::PathBuf::from(std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).unwrap_or_default()),
             prewarm: Arc::new(crate::prewarm::Store::server(&hangar_dir)),
             devices: Arc::new(crate::devices::Registry::new(hangar_dir.join("devices.json"))),
+            connect_devices,
+            connect_supervisor,
             update_release_base: crate::update::RELEASE_BASE.to_owned(),
             diag_report_base: crate::diag_report::WORKER_BASE.to_owned(),
             vault: Arc::new(crate::vault::Vault::system()),
@@ -335,6 +352,9 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let private = TcpListener::bind("127.0.0.1:0").await?;
     state.terminal_address = Some(private.local_addr()?);
     state.voice.set_self(listener.local_addr()?, &state.cfg.auth_token);
+    state.connect_previews.reserve([listener.local_addr()?.port(), private.local_addr()?.port(), state.cfg.upstream.port()].into_iter()
+        .chain(plugin.as_ref().and_then(|plugin| plugin.local_addr().ok()).map(|addr| addr.port()))
+        .chain([guest, state.front, state.connect, state.preview].into_iter().flatten().map(|addr| addr.port())));
     let public_v6 = state.public_v6.take();
     let state = Arc::new(state);
     let main_startup = state.startup.prepares();
@@ -385,11 +405,21 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let plugin_state = state.clone();
     let guest_state = state.clone();
     let (front_state, front) = (state.clone(), state.front);
+    let (connect_state, connect) = (state.clone(), state.connect);
+    let (preview_state, preview) = (state.clone(), state.preview);
     // Uma só para as portas: convite e par veem as mesmas lojas e a mesma conferência.
     let pair = pair_state(&state);
     let guest_pair = pair.clone();
     let front_pair = pair.clone();
+    let connect_pair = pair.clone();
     let result = tokio::select! {
+        // Nunca terminam, como a do front: sem elas, a 8765 e o Tailscale seguem de pé.
+        () = keep_listening(connect, "connect_port_failed",
+            |addr| serve_connect(addr, connect_state.clone(), connect_pair.clone()),
+            |addr, e| connect_state.connect_supervisor.port_failed(format!("porta do Connect {} indisponível ({e})", addr.port()))) => Ok(()),
+        () = keep_listening(preview, "connect_preview_port_failed",
+            |addr| serve_preview(addr, preview_state.clone()),
+            |addr, e| preview_state.connect_supervisor.preview_port_failed(format!("porta {} indisponível ({e})", addr.port()))) => Ok(()),
         // Nunca termina: a porta do front é extra, e cair nela não derruba o servidor.
         () = async {
             let Some(addr) = front else { return std::future::pending().await };
@@ -433,7 +463,34 @@ pub fn front_address(home: &std::path::Path, listen: SocketAddr) -> Option<Socke
     if std::fs::symlink_metadata(crate::install_root::current(home)).is_err() { return None; }
     let port = crate::user_data::env_port(home, None, "CP_FRONT_PORT")
         .inspect_err(|e| tracing::warn!("porta do front ilegível: {e}")).ok().flatten()?;
+    // Se o front ganhasse a porta, o Caddy entregaria a internet com o par real, que é local.
+    if port == crate::connect::CONNECT_PORT {
+        tracing::warn!(code = "front_port_is_connect", port, "CP_FRONT_PORT é a porta do Connect: a porta do front fica fechada");
+        return None;
+    }
     (port != 0 && port != listen.port()).then(|| SocketAddr::new(listen.ip(), port))
+}
+
+/// Serve a porta para sempre: cai, avisa quem precisa saber e tenta de novo. Porta que chegou a servir
+/// volta a tentar logo; a espera longa é só para quem nem abriu.
+async fn keep_listening<F, Fut>(addr: Option<SocketAddr>, code: &'static str, mut serve: F, failed: impl Fn(SocketAddr, &std::io::Error))
+where F: FnMut(SocketAddr) -> Fut, Fut: std::future::Future<Output = std::io::Result<()>> {
+    let Some(addr) = addr else { return std::future::pending().await };
+    let mut wait = Duration::from_millis(250);
+    let mut failing = false;
+    loop {
+        let tried = Instant::now();
+        if let Err(e) = serve(addr).await {
+            failed(addr, &e);
+            if !failing {
+                tracing::warn!(code, listen = %addr, "porta indisponível, tentando de novo: {e}");
+                failing = true;
+            }
+        }
+        if tried.elapsed() > Duration::from_secs(5) { wait = Duration::from_millis(250); }
+        tokio::time::sleep(wait).await;
+        wait = (wait * 2).min(Duration::from_secs(5));
+    }
 }
 
 /// Liga quando a porta solta: o `vite` que a migração desligou pode ainda segurá-la por instantes.
@@ -460,9 +517,34 @@ async fn ipv4_peer(mut req: axum::extract::Request) -> axum::extract::Request {
     req
 }
 
+/// O roteador do dono atrás de `rewrite_peer`. Só em loopback: quem fala com ela é o Caddy desta máquina.
+pub async fn serve_connect(addr: SocketAddr, state: Arc<AppState>, pair: Option<Arc<PairState>>) -> std::io::Result<()> {
+    if !addr.ip().is_loopback() {
+        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "entrada do Connect fora do loopback"));
+    }
+    let listener = guest_socket(addr)?;
+    state.connect_supervisor.port_opened();
+    tracing::info!(listen = %addr, "entrada do Connect de pé");
+    axum::serve(listener, router_with(state, pair.as_ref())
+        .layer(axum::middleware::map_request(crate::connect::gate::rewrite_peer))
+        .into_make_service_with_connect_info::<crate::connect::gate::ConnectConn>()).await
+}
+
+/// A prévia não usa nada do servidor. O site do Caddy só entra depois que esta porta abriu aqui.
+pub async fn serve_preview(addr: SocketAddr, state: Arc<AppState>) -> std::io::Result<()> {
+    if !addr.ip().is_loopback() {
+        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "prévia do Connect fora do loopback"));
+    }
+    let listener = guest_socket(addr)?;
+    state.connect_supervisor.preview_port_opened();
+    tracing::info!(listen = %addr, "porta da prévia de pé");
+    axum::serve(listener, crate::connect::preview::router(state.connect_previews.clone()).into_make_service()).await
+}
+
 async fn serve_guest(addr: SocketAddr, state: Arc<AppState>, pair: Option<Arc<PairState>>) -> std::io::Result<()> {
     let listener = bind_guest(addr).await;
     state.guest_bound.store(true, Ordering::Relaxed);
+    state.connect_supervisor.guest_port_opened();
     axum::serve(listener, guest_router_with(state, pair).into_make_service_with_connect_info::<crate::share::gate::GuestConn>()).await
 }
 
@@ -492,7 +574,7 @@ fn guest_socket(addr: SocketAddr) -> std::io::Result<TcpListener> {
     let socket = if addr.is_ipv4() { tokio::net::TcpSocket::new_v4()? } else { tokio::net::TcpSocket::new_v6()? };
     #[cfg(unix)]
     socket.set_reuseaddr(true)?;
-    // ponytail: o `GuestConn` só casa com `TcpListener` puro (sem `tap_io`); a conexão aceita herda
+    // ponytail: `GuestConn` e `ConnectConn` só casam com `TcpListener` puro (sem `tap_io`); a conexão aceita herda
     // o TCP_NODELAY do listener. Sistema que não herdar precisa de laço de accept próprio.
     socket.set_nodelay(true)?;
     socket.bind(addr)?;
@@ -663,6 +745,7 @@ fn router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
         .layer(axum::middleware::from_fn_with_state(state.clone(), crate::login_guests::body_limit))
         .layer(axum::middleware::from_fn(crate::login_guests::public_contract))
         .layer(axum::middleware::from_fn(crate::config_sync::runtime_http::cors_layer))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), crate::connect::gate::device_token_layer))
         .layer(axum::middleware::from_fn_with_state(state, crate::startup::guard))
 }
 
@@ -775,6 +858,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/voice/memory/{id}", axum::routing::delete(crate::voice::routes::memory_route).options(crate::voice::routes::preflight))
         // Grupos (`/pair`, `/group-message`, `/pair/contract`, `/pair-remote`, `/unpair-remote`).
         .merge(crate::groups::routes::router())
+        .merge(crate::connect::routes::router())
         // Planos e catálogo de plugins e skills: o dono no Rust; o resto segue ao Python.
         .merge(crate::plans::routes::router())
         .route("/api/claude/customizations", get(crate::claude_customizations::catalog_route).fallback(pass_any))
@@ -973,7 +1057,8 @@ pub(crate) fn forward_for(st: &AppState, peer: SocketAddr, req: &Request) -> For
     if on_guest_port(req) || req.extensions().get::<crate::login_guests::gate::Login>().is_some() {
         let guest = caller(req).and_then(Caller::grant).cloned();
         let client_ip = if guest.is_some() { "127.0.0.1".into() } else { peer.ip().to_string() };
-        return Forward { client_ip, https: false, guest, auth_receipt: None };
+        let https = !on_guest_port(req) && st.cfg.trusted.resolve(peer.ip(), req.headers()).1;
+        return Forward { client_ip, https, guest, auth_receipt: None };
     }
     let (client_ip, https) = st.cfg.trusted.resolve(peer.ip(), req.headers());
     Forward { client_ip, https, guest: None, auth_receipt: None }
@@ -985,6 +1070,11 @@ pub(crate) fn on_guest_port(req: &Request) -> bool {
 }
 
 pub(crate) use hangar_core::http::{cors, gzip_with_minimum, maybe_gzip, not_found};
+
+/// Chegou pela entrada do Connect: o `ConnectConn` só existe nesse listener.
+pub(crate) fn on_connect_port(req: &Request) -> bool {
+    req.extensions().get::<ConnectInfo<crate::connect::gate::ConnectConn>>().is_some()
+}
 
 
 pub(crate) async fn pass(st: &AppState, mut req: Request, fwd: &Forward) -> Response {

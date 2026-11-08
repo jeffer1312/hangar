@@ -48,7 +48,7 @@ function TabletTextScaleSync() {
 export default function Layout() {
   const router = useRouter();
   const segments = useSegments();
-  const withoutServer = segments[0] === 'login' || segments[0] === 'convite' || segments[0] === 'importar';
+  const withoutServer = segments[0] === 'login' || segments[0] === 'connect' || segments[0] === 'convite' || segments[0] === 'importar';
   const pathname = usePathname();
   const params = useGlobalSearchParams<{ server?: string | string[]; name?: string | string[] }>();
   const tablet = useTabletLandscape();

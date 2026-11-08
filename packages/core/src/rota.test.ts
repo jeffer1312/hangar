@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { apiEnv, configureApi, _resetApiEnvForTests } from './apiEnv';
 import { fetchCostsForServer, openEventStream, openEventStreamForServer, openSessionsStream, probeServerResponse } from './api';
-import { hmacSha256Hex } from './hmac';
-import { baseOf, decidirRota, discoverRemoteRoute, esquecerRota, verifyServerIdentity, _resetRotasForTests } from './rota';
+import { hmacSha256Hex, sha256Hex } from './hmac';
+import { baseOf, decidirRota, discoverConnectRoute, discoverRemoteRoute, esquecerRota, readConnectUrl, verifyServerIdentity, _resetRotasForTests } from './rota';
 import type { LanInfo, Server } from './servers';
 
 const TS = 'https://maq.tail.ts.net';
@@ -19,7 +19,7 @@ function env(origin: string | null, lembrados: Record<string, LanInfo> = {}) {
 }
 
 // Cada endereço é uma máquina com nome, token e atraso em ms (ou nada no ar, com `null`).
-type Maquina = { identificador: string; token: string; lan_url?: string; atraso?: number } | null;
+type Maquina = { identificador: string; token: string; lan_url?: string; atraso?: number; proofKey?: string; connect?: string; receivedHost?: string } | null;
 function rede(maquinas: Record<string, Maquina>) {
   const chamadas: { url: string; auth: string | null }[] = [];
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
@@ -31,10 +31,12 @@ function rede(maquinas: Record<string, Maquina>) {
     await new Promise((r) => setTimeout(r, m.atraso ?? 0));
     if (u.pathname === '/api/peers/prova') {
       const d = u.searchParams.get('desafio')!;
-      const prova = createHmac('sha256', m.token).update(`${d}|${m.identificador}`).digest('hex');
+      const bound = u.searchParams.has('device') ? `|${m.receivedHost ?? u.host}` : '';
+      const prova = createHmac('sha256', m.proofKey ?? m.token).update(`${d}|${m.identificador}${bound}`).digest('hex');
       return new Response(JSON.stringify({ identificador: m.identificador, prova }));
     }
     if (auth !== `Bearer ${m.token}`) return new Response('{}', { status: 401 });
+    if (u.pathname === '/api/alcance') return new Response(JSON.stringify({ enderecos: [], connect: m.connect ?? null }));
     return new Response(JSON.stringify({ identificador: m.identificador, lan_url: m.lan_url ?? '' }));
   }));
   return chamadas;
@@ -374,5 +376,115 @@ describe('rota até o servidor', () => {
 
   it('HMAC confere com o do Node', () => {
     expect(hmacSha256Hex('k'.repeat(70), 'x|maq')).toBe(createHmac('sha256', 'k'.repeat(70)).update('x|maq').digest('hex'));
+  });
+
+  it('SHA-256 confere com o do Node', () => {
+    expect(sha256Hex(new TextEncoder().encode('token-ção'))).toBe(createHash('sha256').update('token-ção').digest('hex'));
+  });
+});
+
+describe('rota do Connect', () => {
+  const CONNECT = 'https://pc1.acme.hangar.dev.br';
+  const proofKey = createHash('sha256').update('device-token').digest('hex');
+  const maqDevice = { identificador: 'maq', token: 'device-token', proofKey };
+  const device = (over: Partial<Server> = {}): Server => ({
+    ...srv({ url: '', id: 'maq' }), token: 'device-token', credential: 'device', deviceId: 'dev1',
+    connect: { url: CONNECT, id: 'maq' }, ...over,
+  });
+
+  it('uses the hash of a device token as proof key', async () => {
+    env(null);
+    const chamadas = rede({ [CONNECT]: maqDevice });
+
+    expect(await verifyServerIdentity(device(), { url: CONNECT, id: 'maq' })).toBe(true);
+
+    expect(new URL(chamadas[0].url).searchParams.get('device')).toBe('dev1');
+    expect(chamadas[0].auth).toBeNull();
+    rede({ [CONNECT]: { ...maqDevice, proofKey: 'device-token' } });
+    expect(await verifyServerIdentity(device(), { url: CONNECT, id: 'maq' })).toBe(false);
+  });
+
+  it('refuses a device proof relayed from the Connect address to the same LAN IP', async () => {
+    env(null);
+    rede({ [LAN]: { ...maqDevice, receivedHost: new URL(CONNECT).host } });
+    expect(await verifyServerIdentity(device(), { url: LAN, id: 'maq' })).toBe(false);
+    rede({ [LAN]: maqDevice });
+    expect(await verifyServerIdentity(device(), { url: LAN, id: 'maq' })).toBe(true);
+  });
+
+  it('learns a connect route from /api/alcance', async () => {
+    env(null);
+    const remote = { url: 'https://outra.tail.ts.net', id: 'maq' };
+    const saved = device({ connect: undefined, remote });
+    const chamadas = rede({ [TS]: { ...maqDevice, connect: CONNECT }, [CONNECT]: maqDevice });
+
+    expect(await discoverConnectRoute(saved)).toEqual({ url: CONNECT, id: 'maq' });
+
+    expect(saved.remote).toEqual(remote);
+    expect(chamadas.filter((c) => c.url.startsWith(CONNECT)).every((c) => c.auth === null)).toBe(true);
+  });
+
+  it('não aprende um endereço que não prova ser a mesma máquina', async () => {
+    env(null);
+    rede({ [TS]: { ...maqDevice, connect: CONNECT }, [CONNECT]: { ...maqDevice, proofKey: 'outra-chave' } });
+    expect(await discoverConnectRoute(device({ connect: undefined }))).toBeNull();
+  });
+
+  it.each(['http://pc1.acme.hangar.dev.br', 'https://u:p@pc1.acme.hangar.dev.br', 'nao-e-url', 7])('ignora endereço do Connect fora do contrato: %s', async (connect) => {
+    env(null);
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ enderecos: [], connect }))));
+    expect(await readConnectUrl(srv())).toBeNull();
+  });
+
+  it('lê o alcance de novo depois de uma falha, sem esperar o cache', async () => {
+    env(null);
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
+    expect(await readConnectUrl(srv())).toBeNull();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ enderecos: [], connect: CONNECT }))));
+    expect(await readConnectUrl(srv())).toBe(CONNECT);
+  });
+
+  it('never tries connect with the owner password', async () => {
+    env(null);
+    const saved = { ...srv({ url: '', id: 'maq' }), connect: { url: CONNECT, id: 'maq' } };
+    const chamadas = rede({ [TS]: { ...maq, token: 't', connect: CONNECT }, [CONNECT]: maqDevice });
+
+    expect(await discoverConnectRoute(saved)).toBeNull();
+    rede({ [CONNECT]: maqDevice });
+    await decidirRota(saved);
+
+    expect(baseOf(saved)).toBe(TS);
+    expect(chamadas).toHaveLength(0);
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).startsWith(CONNECT))).toBe(false);
+  });
+
+  it('usa o Connect quando nenhuma outra rota responde, e só depois da prova', async () => {
+    env(null);
+    const chamadas = rede({ [CONNECT]: maqDevice });
+    await decidirRota(device());
+
+    expect(baseOf(device())).toBe(CONNECT);
+    expect(chamadas.filter((c) => c.url.startsWith(CONNECT)).map((c) => [new URL(c.url).pathname, c.auth])).toEqual([['/api/peers/prova', null]]);
+  });
+
+  it('não entra pelo Connect que não prova a identidade', async () => {
+    env(null);
+    rede({ [CONNECT]: { ...maqDevice, proofKey: 'outra-chave' } });
+    await decidirRota(device());
+    expect(baseOf(device())).toBe(TS);
+  });
+
+  it('keeps Tailscale first when both routes answer', async () => {
+    env(null);
+    rede({ [TS]: { ...maqDevice, atraso: 50 }, [CONNECT]: maqDevice });
+    await decidirRota(device());
+    expect(baseOf(device())).toBe(TS);
+  });
+
+  it('a rede local provada continua vencendo com credencial de aparelho', async () => {
+    env(null);
+    rede({ [TS]: { ...maqDevice, atraso: 100, lan_url: LAN }, [LAN]: maqDevice, [CONNECT]: maqDevice });
+    await decidirRota(device({ lan: { url: LAN, id: 'maq' } }));
+    expect(baseOf(device({ lan: { url: LAN, id: 'maq' } }))).toBe(LAN);
   });
 });

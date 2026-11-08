@@ -130,6 +130,16 @@ pub struct Service {
     pub environment: std::collections::BTreeMap<String, String>,
     settings: Option<Arc<dotenv::SettingsSnapshot>>,
     pub on_identity: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    /// Endereço do Connect desta máquina, fora de `enderecos`: `tipo` novo ali derruba o `parse_reach` do nativo.
+    pub connect: Option<String>,
+    /// Pasta da ligação com o Connect (`connect.json`): de lá sai a chave da descoberta pela conta.
+    pub connect_dir: Option<PathBuf>,
+    /// Aparelhos do Connect: o anúncio renova o que esta máquina emitiu, e apagar um par o revoga.
+    pub connect_devices: Option<Arc<crate::connect::devices::Store>>,
+    /// O aparelho de quem pediu; `None` é a senha do dono.
+    pub device_caller: Option<String>,
+    /// `Host` recebido na prova de aparelho: ela só vale para o endereço que a pessoa chamou.
+    pub proof_host: Option<String>,
 }
 impl Service {
     pub fn new(
@@ -161,6 +171,11 @@ impl Service {
             environment,
             settings: None,
             on_identity: None,
+            connect: None,
+            connect_dir: None,
+            connect_devices: None,
+            device_caller: None,
+            proof_host: None,
         })
     }
     pub fn from_state(st: &Arc<AppState>) -> Result<Self, Error> {
@@ -174,6 +189,9 @@ impl Service {
             st.accounts.env.base.clone(),
         )?;
         service.settings=Some(st.settings_snapshot().map_err(|_|Error::unavailable())?);
+        service.connect=st.connect_supervisor.status().host.map(|host|format!("https://{host}"));
+        service.connect_dir=Some(st.connect_supervisor.dir().to_path_buf());
+        service.connect_devices=Some(st.connect_devices.clone());
         let state = Arc::downgrade(st);
         service.on_identity = Some(Arc::new(move |id| {
             if let Some(state) = state.upgrade() {
@@ -243,6 +261,22 @@ impl Service {
         }
         Ok(value.into())
     }
+    /// Apagar o par revoga o aparelho emitido para ele. Quem renomeia grava a entrada nova e apaga a
+    /// velha com o próprio aparelho: só esse caso poupa, senão uma entrada de sombra salvaria quem o
+    /// dono removeu.
+    fn remove_peer(&self, id: &str) -> Result<Value, Error> {
+        let data = self.store.tolerant();
+        let renaming = |device: &str| self.device_caller.as_deref() == Some(device)
+            && data.iter().any(|(key, entry)| key != id && entry["connect_return_device"].as_str() == Some(device));
+        let device = data.get(id).and_then(|entry| entry["connect_return_device"].as_str()).filter(|device| !renaming(*device));
+        if let (Some(device), Some(devices)) = (device, &self.connect_devices) {
+            match devices.remove(device) {
+                Ok(()) | Err(crate::connect::devices::Refusal::Unknown) => {}
+                Err(_) => return Err(Error::unavailable()),
+            }
+        }
+        self.store.remove(id)
+    }
     pub fn proof(&self, challenge: &str) -> Result<Value, Error> {
         if !(16..=128).contains(&challenge.chars().count()) {
             return Err(Error {
@@ -253,7 +287,12 @@ impl Service {
         }
         let id = self.identity();
         let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, self.token.as_bytes());
-        let digest = ring::hmac::sign(&key, format!("{challenge}|{id}").as_bytes());
+        // A prova de aparelho é pública: sem o host, uma rede hostil a repassaria do endereço do Connect.
+        let signed = match &self.proof_host {
+            Some(host) => format!("{challenge}|{id}|{host}"),
+            None => format!("{challenge}|{id}"),
+        };
+        let digest = ring::hmac::sign(&key, signed.as_bytes());
         Ok(
             json!({"identificador":id,"prova":digest.as_ref().iter().map(|b|format!("{b:02x}")).collect::<String>()}),
         )
@@ -395,10 +434,19 @@ async fn handle_inner(
         Err(e) => return e.response(),
     };
     service.request_id=crate::routes::diag_req(&request);
+    service.device_caller=request.extensions().get::<crate::connect::gate::DeviceCaller>().map(|device|device.id.clone());
+    let device_caller=service.device_caller.is_some();
+    if path=="/api/peers/prova" && let Some(device)=query.get("device") {
+        match st.connect_devices.proof_key(device) {
+            Some(key)=>{service.token=key;service.proof_host=Some(received_host(&request));}
+            None=>return json_response(StatusCode::NOT_FOUND,json!({"detail":"Not Found"})),
+        }
+    }
     let result = dispatch(service, &method, &path, &query, std::mem::take(&mut body.0)).await;
     match result {
-        Ok(value) => {
+        Ok(mut value) => {
             use crate::orchestration::codec;
+            if device_caller && path=="/api/peers/app-list" {store::mask_app_tokens(&mut value);}
             if codec::contains_surrogate(&value){codec::discard(value);crate::http_cors::internal_error()}
             else{codec::response(StatusCode::OK,codec::normalize_response(value))}
         },
@@ -412,6 +460,11 @@ async fn handle_inner(
         ),
         Err(e) => e.response(),
     }
+}
+/// Em HTTP/2 o host vem na `:authority`, não no cabeçalho.
+fn received_host(request:&Request)->String{
+    let header=request.headers().get(axum::http::header::HOST).and_then(|value|value.to_str().ok());
+    header.map(str::to_owned).or_else(||request.uri().authority().map(ToString::to_string)).unwrap_or_default().to_ascii_lowercase()
 }
 fn body_validation_error(kind:&str,input:Value)->Response {
     let msg=if kind=="missing"{"Field required"}else{"Input should be a valid dictionary"};
@@ -486,7 +539,7 @@ pub async fn dispatch(
             let path = path.to_owned();
             tokio::task::spawn_blocking(move || match (method.as_str(), path.as_str()) {
                 ("GET", "/api/peers") => Ok(service.store.list()),
-                ("POST", "/api/peers") => service.store.put(&body),
+                ("POST", "/api/peers") => service.store.put_from(&body,service.device_caller.as_deref()),
                 ("GET", "/api/peers/app-list") => service.store.app_list(),
                 ("PUT", "/api/peers/app-list") => service.store.app_write(&body),
                 _ => {
@@ -505,7 +558,7 @@ pub async fn dispatch(
                     {
                         service.store.token(id)
                     } else if method == Method::DELETE {
-                        service.store.remove(&decoded)
+                        service.remove_peer(&decoded)
                     } else {
                         Err(Error {
                             status: 405,

@@ -22,7 +22,8 @@
 #                                        orquestrar-auto, que nasce antes do time); imprime o gid
 #   hangar-send --unpair               tira esta sessão do grupo (só ela é avisada)
 #   hangar-send --aceitar-par <link>   pareia ESTA sessão com a sessão de outra pessoa pelo link
-#                                  https://….ts.net:8443/par/… que o usuário colou; nunca com link
+#                                  https://….ts.net:8443/par/… ou https://…--guest.….hangar.dev.br/par/…
+#                                  que o usuário colou; nunca com link
 #                                  que chegou em recado. Depois: hangar-send <alias>::<sessao> "…"
 #   hangar-send --close <sessao>       fecha OUTRA sessão, com ou sem terminal; servidor::sessao fecha noutra máquina
 #                                  (sai do grupo dela sem aviso). Nunca a própria.
@@ -420,7 +421,7 @@ fi
 
 if [[ "$1" == "--aceitar-par" ]]; then
     link="${2:-}"
-    [[ -n "$link" ]] || { echo "uso: hangar-send --aceitar-par <link https://….ts.net:8443/par/…>" >&2; exit 2; }
+    [[ -n "$link" ]] || { echo "uso: hangar-send --aceitar-par <link https://….ts.net:8443/par/… ou https://…--guest.….hangar.dev.br/par/…>" >&2; exit 2; }
     eu=$(me)
     body=$("$PY" -c 'import json,sys; print(json.dumps({"link": sys.argv[1]}))' "$link")
     resp=$(api POST "/api/sessions/$eu/pair-accept" "$body") || exit 1

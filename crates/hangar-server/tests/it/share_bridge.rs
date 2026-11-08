@@ -55,6 +55,7 @@ async fn server(dir: &Path, with_share: bool) -> Srv {
         lives: Lives::new(probe.clone(), Arc::new(LifeFacts::default())),
         tailscale: Arc::new(Real),
         tunnel: Default::default(),
+        connect: None,
     });
     state.share = with_share.then(|| share.clone());
     let state = Arc::new(state);
