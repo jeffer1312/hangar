@@ -390,6 +390,9 @@ pub async fn select(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     let Some((option, supplied, text)) = parse_option(&bytes).filter(|_| json_content_type(ctx.headers())) else { return invalid_body(ctx.headers()) };
     let expected = match expected(&ctx, supplied.as_deref()).await { Ok(expected) => expected, Err(failed) => return answer(&ctx, failed) };
     if text.is_some() && !plan_interaction(&expected) { return invalid_body(ctx.headers()); }
+    if matches!(ctx.target.handle, EntryHandle::OtherTerminal { .. }) && st.term.is_active(&ctx.name) {
+        return answer(&ctx, panel_open_refusal());
+    }
     let operation_id = random_hex(16);
     let result = match &ctx.target.handle {
         EntryHandle::Terminal { handle, .. } => match select_plan(&expected, option, st.term.is_active(&ctx.name)) {

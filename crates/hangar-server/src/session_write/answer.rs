@@ -332,6 +332,9 @@ pub async fn answer(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     };
     let Some(body) = parse_body(&bytes).filter(|_| json_content_type(ctx.headers())) else { return invalid_body(ctx.headers()) };
     let expected = match expected(&ctx, body.interaction_id.as_deref()).await { Ok(expected) => expected, Err(failed) => return respond(&ctx, failed) };
+    if matches!(ctx.target.handle, EntryHandle::OtherTerminal { .. }) && st.term.is_active(&ctx.name) {
+        return respond(&ctx, panel_open_refusal());
+    }
     let result = match &ctx.target.handle {
         EntryHandle::Terminal { handle, .. } => terminal(&ctx, &body, &expected, handle).await,
         headless => {
