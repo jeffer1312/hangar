@@ -679,6 +679,51 @@ mod tests {
         fn fds(&self, _: i64) -> Vec<PathBuf> { Vec::new() }
     }
 
+    #[test]
+    fn native_directory_slugs_match_the_preserved_python_cases() {
+        #[cfg(not(windows))]
+        {
+            for (cwd, expected) in [
+                ("/home/jefferson", "--home-jefferson--"),
+                ("/home/jefferson/Projetos/hangar", "--home-jefferson-Projetos-hangar--"),
+                ("/home/jefferson/Área de trabalho/repos/servicos_api", "--home-jefferson-Área de trabalho-repos-servicos_api--"),
+                ("/tmp/claude-1000/-home-jefferson-Projetos/scratchpad/piprobe", "--tmp-claude-1000--home-jefferson-Projetos-scratchpad-piprobe--"),
+            ] {
+                assert_eq!(pi_cwd_slug(cwd), expected);
+            }
+            for _ in 0..2 {
+                assert_eq!(kimi_workdir_key("/w/projeto-a"), "wd_projeto-a_0922a32de8c3");
+                assert_eq!(kimi_workdir_key("/w/projeto-b"), "wd_projeto-b_731cae087c46");
+            }
+        }
+        #[cfg(windows)]
+        {
+            for (cwd, expected) in [
+                (r"C:\\cockpit", "--C--cockpit--"),
+                ("C:/cockpit", "--C--cockpit--"),
+                (r"C:\\cockpit\\backend", "--C--cockpit-backend--"),
+            ] {
+                assert_eq!(pi_cwd_slug(cwd), expected);
+            }
+        }
+        let root = Path::new(std::path::MAIN_SEPARATOR_STR).join("w");
+        let a = kimi_workdir_key(root.join("projeto-a").to_str().unwrap());
+        let b = kimi_workdir_key(root.join("projeto-b").to_str().unwrap());
+        assert!(a.starts_with("wd_projeto-a_"));
+        assert!(b.starts_with("wd_projeto-b_"));
+        assert_ne!(a, b);
+        for (cwd, expected) in [
+            ("/tmp/MinhaPasta".to_owned(), "minhapasta"),
+            ("/tmp/Área de trabalho".to_owned(), "rea-de-trabalho"),
+            ("/@@@".to_owned(), "workspace"),
+            (format!("/{}", "a".repeat(60)), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            (format!("/{}-{}", "a".repeat(39), "b".repeat(10)), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        ] {
+            let key = kimi_workdir_key(&cwd);
+            assert_eq!(key.split('_').nth(1), Some(expected));
+        }
+    }
+
     fn write(path: &Path, text: &str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
