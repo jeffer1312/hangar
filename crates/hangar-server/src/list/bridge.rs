@@ -67,12 +67,13 @@ pub struct ListEnv {
 
 impl ListEnv {
     pub fn from_env() -> Self {
-        let raw = std::env::var("HANGAR_LIST_DIRS").unwrap_or_default();
-        let dirs = parse_dirs(&raw);
-        if dirs.is_none() {
-            // Cada pergunta da ponte vai recusar com `list_dirs_missing`; a causa fica dita uma vez.
-            tracing::error!(code = "list_dirs_missing", present = !raw.is_empty(), "pastas da lista ausentes ou inválidas");
-        }
+        let dirs = match super::dirs::system() {
+            Ok(dirs) => Some(dirs),
+            Err(code) => {
+                tracing::error!(code, "pastas da lista ausentes ou inválidas");
+                None
+            }
+        };
         Self { mux: Mux::default(), capture_program: "tmux".into(), procs: Arc::new(procs::SystemProcs::default()), dirs }
     }
 }

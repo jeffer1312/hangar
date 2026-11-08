@@ -15,31 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 use std::time::SystemTime;
 
-/// Pastas que o Python tira do ambiente do backend. Em parâmetro, para o teste rodar sem tocar no
-/// `HOME` do processo.
-#[derive(Clone, Debug)]
-pub struct Dirs {
-    /// `Path.home()`: sidecars em `~/.hangar` e a conta Claude padrão (`~/.claude`).
-    pub home: PathBuf,
-    /// `settings.projects_dir.parent`: vínculos (`.hangar-pair`, `-chain`, `-loop`) e o transcript
-    /// sem terminal quando o sidecar não declara conta.
-    pub claude: PathBuf,
-    /// `codex_contas.default_home()`.
-    pub codex_home: PathBuf,
-    /// `PI_CODING_AGENT_SESSION_DIR` ou `~/.pi/agent/sessions`.
-    pub pi_sessions: PathBuf,
-    /// `~/<PI_CONFIG_DIR ou .omp>`, base dos perfis do omp.
-    pub omp_config: PathBuf,
-    /// Diretório do agente omp do próprio backend (sem perfil na sessão).
-    pub omp_agent: PathBuf,
-    /// `KIMI_CODE_HOME` ou `~/.kimi-code`.
-    pub kimi_home: PathBuf,
-}
-
-impl Dirs {
-    /// Conta Claude padrão das sessões que não declaram `CLAUDE_CONFIG_DIR`.
-    pub fn default_claude(&self) -> PathBuf { self.home.join(".claude") }
-}
+pub use hangar_core::session_dirs::SessionDirectories as Dirs;
 
 /// Variável do ambiente do processo; vazia é ausência. Ilegível também cai na ausência, como o
 /// `_env_var_of`, mas avisa: motor e conta sairiam do padrão nesta rodada.
