@@ -64,10 +64,9 @@ mod posix {
                 Duration::from_millis(if cancel { 60000 } else { 350 }),
                 options(&cwd),
             ));
-            for _ in 0..100 {
-                if cwd.join("child.pid").is_file() || task.is_finished() {
-                    break;
-                }
+            // estavel: teto generoso da espera pelo arquivo do filho; a condição encerra antes.
+            let started = Instant::now() + Duration::from_secs(20);
+            while !cwd.join("child.pid").is_file() && !task.is_finished() && Instant::now() < started {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             let pid = std::fs::read_to_string(cwd.join("child.pid"))
@@ -84,10 +83,10 @@ mod posix {
             drop(outside);
             assert!(outside_alive, "outro grupo foi alcançado");
             let pid = pid.expect("filho sintético iniciou");
-            for _ in 0..100 {
-                if !alive(pid) {
-                    break;
-                }
+            // O término roda no supervisor da captura e varre o /proc: com a máquina carregada passa
+            // de 1 s. estavel: teto generoso; só estoura se o filho não morrer.
+            let gone = Instant::now() + Duration::from_secs(20);
+            while alive(pid) && Instant::now() < gone {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             let survived = alive(pid);
@@ -97,7 +96,8 @@ mod posix {
                 }
             }
             assert!(!survived, "filho sobreviveu ao término");
-            assert!(start.elapsed() < Duration::from_secs(4));
+            // Bem abaixo dos 60 s do filho e do prazo de cancelamento: não esperou nenhum dos dois.
+            assert!(start.elapsed() < Duration::from_secs(30), "levou {:?}", start.elapsed());
         }
     }
 }
