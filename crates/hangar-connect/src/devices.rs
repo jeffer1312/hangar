@@ -21,6 +21,26 @@ pub const MAX_TICKET_AHEAD: u64 = 5 * 60;
 pub type DeviceId = String;
 pub type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
 
+/// Código de conferência do celular: o mesmo que o celular calcula (`installCode` em `packages/core`, mesmos casos de
+/// teste). Sai do SHA-256 do `install_id`, não de um pedaço dele, e a lista manda só ele, nunca o id.
+/// shortcut: são 30 bits; quem tem a senha da conta e viu o código no celular ainda acha outro id com o mesmo código
+/// por força bruta (~2^30 hashes). Por isso o cartão mostra também o nome e há quanto tempo o pedido chegou.
+pub fn install_code(install_id: &str) -> String {
+    // Sem 0/O e 1/I: a pessoa compara de olho, numa tela e na outra.
+    const ALPHABET: &[u8; 32] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+    let digest = ring::digest::digest(&ring::digest::SHA256, install_id.as_bytes());
+    let head = u32::from_be_bytes(digest.as_ref()[..4].try_into().expect("o SHA-256 tem 32 bytes")) >> 2;
+    let code: String = (0..6).map(|i| ALPHABET[((head >> (25 - 5 * i)) & 31) as usize] as char).collect();
+    format!("{}-{}", &code[..3], &code[3..])
+}
+
+/// Chave que junta os pedidos do mesmo celular no cartão de quem aprova, sem expor o id. Prefixo próprio: não coincide
+/// com o hash de onde sai o código.
+fn install_group(install_id: &str) -> String {
+    let digest = ring::digest::digest(&ring::digest::SHA256, format!("hangar-install-group\0{install_id}").as_bytes());
+    digest.as_ref().iter().map(|b| format!("{b:02x}")).collect()
+}
+
 pub fn system_clock() -> Clock {
     Arc::new(|| hangar_core::clock::wall_now() as u64)
 }
@@ -138,8 +158,11 @@ pub struct Row {
     pub status: Status,
     pub last_seen: Option<u64>,
     pub created_at: u64,
+    /// Só no pedido esperando, e só de celular que mandou o `install_id`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub install_id: Option<String>,
+    pub install_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install_group: Option<String>,
 }
 
 pub struct Store {
@@ -221,13 +244,18 @@ impl Store {
             if !same(&verifier, &ticket.verifier) {
                 return Err(Refusal::Ticket);
             }
+            // Nova tentativa do mesmo celular troca o pedido anterior: um cartão só, e tentar de novo não gasta o limite.
+            let name = display_name(&ticket.device_name);
+            if let Some(install) = install_id {
+                state.devices.retain(|d| !(d.status == Status::Pending && d.install_id.as_deref() == Some(install) && d.name == name));
+            }
             if state.devices.iter().filter(|d| d.status == Status::Pending).count() >= MAX_PENDING {
                 return Err(Refusal::TooManyPending);
             }
             // Só aqui: quem tem o bilhete sem o segredo, ou bateu no limite, não queima o nonce.
             state.nonces.insert(ticket.nonce.clone(), ticket.expires_at);
             let id = credentials::id();
-            state.devices.push(Device { id: id.clone(), name: display_name(&ticket.device_name), status: Status::Pending,
+            state.devices.push(Device { id: id.clone(), name, status: Status::Pending,
                 created_at: now, denied_at: None, verifier: Some(verifier), token_hash: None, next_token_hash: None, unconfirmed_token_hashes: Vec::new(), last_seen: None,
                 approved_by: None, approved_at: None, install_id: install_id.map(str::to_owned) });
             Ok(id)
@@ -343,7 +371,11 @@ impl Store {
         let now = (self.clock)();
         let mut state = self.lock();
         prune(&mut state, now);
-        state.devices.iter().map(|d| Row { device_id: d.id.clone(), name: d.name.clone(), status: d.status, last_seen: d.last_seen, created_at: d.created_at, install_id: d.install_id.clone() }).collect()
+        state.devices.iter().map(|d| {
+            let install = d.install_id.as_deref().filter(|_| d.status == Status::Pending);
+            Row { device_id: d.id.clone(), name: d.name.clone(), status: d.status, last_seen: d.last_seen, created_at: d.created_at,
+                install_code: install.map(install_code), install_group: install.map(install_group) }
+        }).collect()
     }
 
     /// shortcut: `last_seen` só vai ao disco com a próxima gravação; gravar por pedido custaria um fsync a cada um.

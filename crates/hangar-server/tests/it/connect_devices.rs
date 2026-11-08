@@ -16,7 +16,7 @@ use base64::engine::general_purpose::STANDARD;
 use futures_util::{SinkExt, StreamExt};
 use hangar_server::accounts::{AccountService, environment::AccountEnvironment};
 use hangar_server::auth::Auth;
-use hangar_server::connect::devices::{MAX_TICKET_AHEAD, PENDING_TTL, Poll, Refusal, ServiceIdentity, Store};
+use hangar_server::connect::devices::{MAX_PENDING, MAX_TICKET_AHEAD, PENDING_TTL, Poll, Refusal, ServiceIdentity, Store};
 use hangar_server::devices::{CONNECT_PEER, Registry};
 use hangar_server::login_guests::store::hash;
 use hangar_server::login_guests::{Service, Settings};
@@ -349,8 +349,43 @@ async fn install_id_groups_one_phone_across_machines() {
         .send().await.unwrap();
     assert_eq!(accepted.status(), 202);
     let rows = body_of(get(e.main, "/api/connect/devices").bearer_auth(OWNER).send().await.unwrap()).await;
-    assert_eq!(rows[0]["install_id"], "a1B2-c3_d4");
+    assert_eq!(rows[0]["install_code"], "Y3G-VQA", "o mesmo código que o celular calcula (installCode.fixtures.json)");
+    assert!(rows[0]["install_group"].as_str().is_some_and(|group| group.len() == 64 && !group.contains("a1B2")), "{rows}");
+    assert!(rows[0].get("install_id").is_none(), "o id cru não sai na lista: {rows}");
     assert!(rows[0]["created_at"].is_u64(), "o cartão mostra há quanto tempo o pedido chegou: {rows}");
+}
+
+/// Nova tentativa do mesmo celular (mesmo id e nome) substitui o pedido anterior: um cartão só, e o limite de pedidos
+/// esperando não se gasta com tentativas.
+#[tokio::test]
+async fn a_retry_from_the_same_phone_replaces_its_pending_request() {
+    let e = plain().await;
+    let mut last = String::new();
+    for i in 0..=MAX_PENDING {
+        let (text, signature) = ticket("pc1", "acme", &format!("retry{i}"), "s1");
+        let accepted = post(e.connect, "/api/connect/redeem", json!({"ticket": text, "signature": signature, "secret": "s1", "install_id": "ph1"}))
+            .send().await.unwrap();
+        assert_eq!(accepted.status(), 202, "tentativa {i}");
+        last = body_of(accepted).await["device_id"].as_str().unwrap().to_owned();
+    }
+    let rows = body_of(get(e.main, "/api/connect/devices").bearer_auth(OWNER).send().await.unwrap()).await;
+    let ids: Vec<&str> = rows.as_array().unwrap().iter().map(|row| row["device_id"].as_str().unwrap()).collect();
+    assert_eq!(ids, [last.as_str()]);
+    let (text, signature) = ticket("pc1", "acme", "outro", "s1");
+    let other = post(e.connect, "/api/connect/redeem", json!({"ticket": text, "signature": signature, "secret": "s1", "install_id": "ph2"}))
+        .send().await.unwrap();
+    assert_eq!(other.status(), 202, "outro celular não substitui o primeiro");
+    let rows = body_of(get(e.main, "/api/connect/devices").bearer_auth(OWNER).send().await.unwrap()).await;
+    assert_eq!(rows.as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn check_code_matches_the_phone() {
+    let cases: Vec<Value> = serde_json::from_str(include_str!("../../../../packages/core/src/installCode.fixtures.json")).unwrap();
+    assert!(!cases.is_empty());
+    for case in cases {
+        assert_eq!(hangar_server::connect::devices::install_code(case["install_id"].as_str().unwrap()), case["code"].as_str().unwrap(), "{case}");
+    }
 }
 
 #[test]
