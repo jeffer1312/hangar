@@ -230,3 +230,54 @@ async fn other_terminal_disconnect_before_write_stays_pending_and_reconnect_drai
     assert_eq!(repeated.unwrap()["drained"],0);
     assert!(duplicate.is_none());assert!(io.writes.lock().unwrap().is_empty());
 }
+
+fn adoption_target(root:&std::path::Path)->hangar_server::runtime::other_terminal::OtherTarget {
+    use hangar_server::runtime::other_terminal::OtherTarget;
+    OtherTarget {key:"life-a".into(),generation:1,name:"pi-a".into(),provider:hangar_transcript::Provider::Pi,
+        binding:hangar_server::terminal_input::TerminalBinding {name:"pi-a".into(),pane:"%1".into(),conversation:"conversation-a".into(),generation:1,created:100,mux_argv:vec!["absent-multiplexer".into()],windows:false,clipboard_lock_path:None},
+        pane_address:"%1".into(),dirs:directories(root),cwd:root.to_string_lossy().into_owned(),pane_pid:123,agent_pid:123,agent_birth:100.0,
+        transcript:root.join("conversation-a.jsonl"),state_path:root.join("runtime/life-a.json"),lease_path:root.join("runtime/life-a.lock"),projection_dir:root.join("queue"),config_dirs:vec![root.into()],created:100.0}
+}
+#[tokio::test]
+async fn other_terminal_legacy_import_preserves_identity_flags_and_the_kickoff_window() {
+    use hangar_server::runtime::other_terminal::open_queue;
+    let root=tempfile::tempdir().unwrap();let target=adoption_target(root.path());
+    std::fs::create_dir_all(&target.projection_dir).unwrap();
+    let legacy=vec![json!({"id":"old","text":"vida anterior","ts":1.0,"delivered":false}),
+        json!({"id":"waiting","text":"depois","ts":101.0,"delivered":false}),
+        json!({"id":"sent","text":"digitado","ts":102.0,"delivered":true}),
+        json!({"id":"confirmed","text":"confirmado","ts":103.0,"delivered":true,"confirmed":true}),
+        json!({"id":"lost","text":"sem prova","ts":104.0,"delivered":true,"desistiu":true}),
+        json!({"id":"kickoff","text":"continuar","ts":90.0,"delivered":false,"pre_transcript":true})];
+    let contents=legacy.iter().map(|row|format!("{row}\n")).collect::<String>();
+    std::fs::write(target.projection_dir.join("pi-a.jsonl"),contents).unwrap();
+    let loaded=match open_queue(&target).await {
+        Ok(queue)=>{let rows=queue.snapshot().await.unwrap().rows.clone();queue.shutdown().await.unwrap();Some(rows)},
+        Err(_)=>None,
+    };
+    let fields=loaded.map(|rows|rows.into_iter().map(|row|(row["id"].as_str().unwrap_or_default().to_owned(),row["text"].as_str().unwrap_or_default().to_owned(),row["ts"].as_f64().unwrap_or(0.0),row["delivered"]==true,row["confirmed"]==true,row["desistiu"]==true,row["pre_transcript"]==true)).collect::<Vec<_>>());
+    assert_eq!(fields,Some(vec![("waiting".into(),"depois".into(),101.0,false,false,false,false),
+        ("sent".into(),"digitado".into(),102.0,true,false,false,false),
+        ("confirmed".into(),"confirmado".into(),103.0,true,true,false,false),
+        ("lost".into(),"sem prova".into(),104.0,true,false,true,false),
+        ("kickoff".into(),"continuar".into(),90.0,false,false,false,true)]));
+}
+#[tokio::test]
+async fn other_terminal_legacy_import_never_overwrites_runtime_and_never_treats_corruption_as_empty() {
+    use hangar_server::runtime::{other_terminal::open_queue,queue::{Store,State}};
+    let root=tempfile::tempdir().unwrap();let target=adoption_target(root.path());
+    let row=json!({"id":"runtime","text":"fonte atual","ts":105.0,"delivered":false});
+    let _store=Store::open(&target.state_path,&target.projection_dir,State::new("life-a",1,"pi-a",vec![row.clone()])).unwrap();
+    std::fs::write(target.projection_dir.join("pi-a.jsonl"),b"invalid").unwrap();
+    let loaded=match open_queue(&target).await {
+        Ok(queue)=>{let rows=queue.snapshot().await.unwrap().rows.clone();queue.shutdown().await.unwrap();Some(rows)},
+        Err(_)=>None,
+    };
+    let fields=loaded.map(|rows|rows.into_iter().map(|row|(row["id"].as_str().unwrap_or_default().to_owned(),row["text"].as_str().unwrap_or_default().to_owned(),row["delivered"]==true)).collect::<Vec<_>>());
+    assert_eq!(fields,Some(vec![("runtime".into(),"fonte atual".into(),false)]));
+    let bad=tempfile::tempdir().unwrap();let target=adoption_target(bad.path());std::fs::create_dir(&target.projection_dir).unwrap();
+    let projection=target.projection_dir.join("pi-a.jsonl");std::fs::write(&projection,b"{invalid\n").unwrap();
+    let rejected=open_queue(&target).await.is_err();
+    assert!(rejected);assert!(!target.state_path.exists());
+    assert_eq!(std::fs::read(projection).unwrap(),b"{invalid\n");
+}

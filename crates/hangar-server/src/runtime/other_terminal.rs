@@ -3,6 +3,8 @@ use std::path::PathBuf;
 mod io;
 mod native;
 mod observe;
+mod storage;
+pub use storage::open_queue;
 pub use observe::{PendingInteraction, approval_open as kimi_approval_open, picker_open as kimi_picker_open, menu as menu_interaction};
 
 pub fn read_pending_interaction(target:&OtherTarget)->Result<Option<PendingInteraction>,RuntimeError> {observe::pending(target)}
