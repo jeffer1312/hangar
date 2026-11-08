@@ -124,6 +124,8 @@ struct IdleCompact {
     cache_at: f64,
     /// A compactação em curso ou feita foi a da sessão parada, não um pedido da pessoa.
     auto: bool,
+    /// Já se pediu o `/compact` da parada desde o último uso: sem `compact_boundary`, não se pede de novo.
+    tried: bool,
 }
 
 const ECHO_LIMIT: usize = 64;
@@ -728,6 +730,7 @@ impl ClaudeEngine {
             OperationKind::Compact => {
                 if !self.deliverable() { return Err(error("aguarde a sessão ficar ociosa")); }
                 self.idle_compact.auto = payload.get("idle_after_s").is_some();
+                self.idle_compact.tried |= self.idle_compact.auto;
                 self.local_command(operation_id,"/compact",&mut effects);
             }
             OperationKind::Cwd => effects.push(Effect::Reply { operation_id,disposition:Disposition::Accepted,payload:self.metadata["cwd"].clone() }),
@@ -972,8 +975,9 @@ impl ClaudeEngine {
                         else if creation["ephemeral_5m_input_tokens"].as_u64().unwrap_or(0) > 0 { self.idle_compact.one_hour = Some(false); }
                         self.idle_compact.live = true;
                         self.idle_compact.done = false;
-                        self.idle_compact.auto = false;
                         self.idle_compact.cache_at = self.clock.monotonic_s;
+                        // A chamada do próprio resumo não é uso novo: a compactação da parada segue a dela.
+                        if !self.compacting { self.idle_compact.auto = false; self.idle_compact.tried = false; }
                     }
                     if let Some(blocks) = event["message"]["content"].as_array() {
                         for block in blocks {
@@ -1566,7 +1570,7 @@ impl ClaudeEngine {
     /// Contexto do último turno quando compactar parada ainda aproveita o cache de 1 h; `None` = nada a fazer.
     fn idle_compact_tokens(&self) -> Option<u64> {
         let state = &self.idle_compact;
-        if !state.live || state.done || state.one_hour != Some(true) { return None; }
+        if !state.live || state.done || state.tried || state.one_hour != Some(true) { return None; }
         Some(["input_tokens","cache_read_input_tokens","cache_creation_input_tokens"].iter().map(|k|self.usage[*k].as_u64().unwrap_or(0)).sum())
     }
 

@@ -975,7 +975,10 @@ impl RuntimeRegistry {
         if tokio::task::spawn_blocking(move||pending(&state_path)).await.map_err(|_|failure("queue_job"))? {return Ok(None);}
         let command=RuntimeCommand { operation_id:format!("idle-compact:{}",crate::mods::state::random_hex(16)),
             kind:OperationKind::Compact,payload:json!({"idle_after_s":after.as_secs_f64()}) };
-        match handle.command(command).await?.disposition {
+        // A porta e a barreira ficam presas enquanto o ator não responde: cano travado não pode prendê-las.
+        let reply=tokio::time::timeout(Duration::from_secs(10),handle.command(command)).await
+            .map_err(|_|RuntimeError::new("idle_compact_timeout","o motor não respondeu ao /compact"))??;
+        match reply.disposition {
             Disposition::Accepted=>Ok(Some(found)),
             // Não escrito: a sessão segue parada e a próxima rodada tenta de novo.
             Disposition::Deferred=>Ok(None),
