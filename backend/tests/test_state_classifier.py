@@ -426,12 +426,6 @@ def test_status_line_is_the_chrome_below_the_input_box():
     assert "✻ Worked" not in sl     # spinner / completed marker excluded
 
 
-# --- Pi: a ancora e a caixa arredondada do composer, nao a regua reta do Claude ----------------
-# pane_pi_idle.txt e um `tmux capture-pane -p` REAL de uma sessao Pi ociosa (Pi 0.82.1). Sem a
-# ancora da caixa, o fallback devolvia as 2 ultimas linhas nao-vazias -> a borda `╰───╯` colada no
-# chip, ou conversa pura quando o usuario nao tem extensao de statusline.
-
-
 def test_status_line_claude_fixtures_byte_identical():
     # Trava de nao-regressao: a ancora nova NAO pode mover um byte do que o Claude ja devolvia.
     # Valores conferidos contra a implementacao anterior (so a regua reta) nestes mesmos arquivos.
@@ -535,10 +529,6 @@ def test_uma_opcao_sozinha_nao_e_menu():
     )
     state, *_ = classify(pane)
     assert state == "idle"
-
-
-# Glifos de nerd font do picker do omp, por codigo pro arquivo ficar legivel (fonte comum nao
-# desenha a area de uso privado): chevron da linha selecionada e circulo que marca toda opcao.
 
 
 def test_rate_limit_reset_le_o_banner_real_do_rodape():

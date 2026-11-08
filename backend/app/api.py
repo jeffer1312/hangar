@@ -39,7 +39,6 @@ from app import claude_models
 from app import claude_customizations
 from app import codex_models
 from app import model_args
-from app import cli_probe
 from app import registry as registry_mod
 from app.registry import KillFailed, SessionRegistry
 from app.names import sanitize_session_name

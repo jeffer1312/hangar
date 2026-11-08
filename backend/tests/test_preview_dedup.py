@@ -67,23 +67,6 @@ def test_hifen_de_prosa_continua_distinguindo_texto():
     assert not preview_is_committed(novo, _norm(commitado))
 
 
-# --- Pi: o chrome que fecha o bloco em voo e a CAIXA do composer, nao a regua do Claude ---------
-# pane_pi_working.txt e um `tmux capture-pane -p` REAL, tirado DURANTE um turno (Pi 0.82.1 +
-# kimi-for-coding): o `● Tem sim, algumas formas:` esta a meio caminho de ser escrito. Sem a parada
-# na caixa, o preview do celular vinha com a borda `╭───╮`/`╰───╯` e a statusline (🤖 modelo …)
-# coladas no fim da prosa a CADA frame.
-
-def _pane_pi_working() -> str:
-    return (Path(__file__).parent / "fixtures" / "pane_pi_working.txt").read_text(encoding="utf-8")
-
-
-def test_preview_pi_sem_provider_ainda_traz_o_chrome():
-    # Trava o motivo do parametro existir: o MESMO pane lido como "claude" (o default) devolve o
-    # texto com a caixa e a statusline grudadas — que era o bug.
-    txt = extract_assistant_text(_pane_pi_working())
-    assert "╭" in txt and "kimi-for-coding" in txt
-
-
 def test_preview_claude_byte_identico_em_todos_os_panes():
     # Nao-regressao: o provider novo NAO pode mover um byte do que o Claude/Codex ja extraiam.
     # Compara o default contra a lista VAZIA de paradas extras em todo fixture de pane do repo.
@@ -378,39 +361,6 @@ def test_sidecar_de_tipo_errado_nao_derruba_nada(tmp_path, monkeypatch):
     from app import preview as _prev
     monkeypatch.setattr(_prev, "_config_dirs", lambda: [tmp_path])
     assert read_sidecar("s1") is None and read_sidecar("s2") is None
-
-
-# ── Raciocinio do Kimi vazando na previa (14/08/2026) ─────────────────────────────────────────
-# O usuario viu o RASCUNHO do Kimi aparecer no chat como se fosse a mensagem. O transcript nunca
-# teve isso (o parser descarta `part.type == "think"`); quem vazava era a PREVIA, que pro Kimi le o
-# pane — e la o raciocinio e a resposta usam o MESMO `●`, so mudando a cor. Bytes abaixo copiados de
-# um `capture-pane -e` real (Kimi 0.36, K3 high): cinza 136 + ITALICO no rascunho, claro 224 sem
-# italico na resposta.
-# Resposta REAL com enfase de markdown no meio (`*teste*` -> italico), capturada do mesmo jeito. A
-# primeira versao do filtro cortava esta linha inteira: ela TEM `\x1b[3m`. Os dois reviewers
-# levantaram a hipotese e a captura confirmou — por isso a regra e posicao do italico + cor, nao "a
-# linha tem italico".
-
-
-# Status de ferramenta concluida do Kimi, copiado do print do usuario (19/08/2026): a TUI desenha
-# "● Used <Tool> (…)" com o MESMO ● da prosa, e o "Used" nao estava em nenhuma lista — a linha era
-# eleita como bloco em voo e a previa mostrava o status como texto, quando o ToolCard da chamada ja
-# chega pelo tool.call do wire.
-
-
-# Ferramenta EM EXECUCAO, copiada do pane real (24/08/2026, 321 amostras iguais): a TUI desenha
-# "● Using <Tool> (caminho)" e, embaixo, o conteudo do arquivo com numero de linha.
-
-
-# ── Costura do texto em voo do Kimi (_costurar) ──────────────────────────────────────────────────
-# A TUI do Kimi roda em tela alternativa (alternate_on=1, medido em 19/08/2026): o que sobe da
-# janela visivel SE PERDE do pane. O broker le a cada 150ms e cola os quadros pela sobreposicao —
-# sem isto o comeco de uma resposta longa so aparecia depois do commit.
-
-
-# Painel de Todo da TUI do Kimi, desenho medido nos quadros reais de 19/08/2026: header "Todo",
-# itens "✓"/"●", entre a regua e a caixa do composer — o item atual usa o MESMO ● da prosa e era
-# eleito bloco em voo (a previa mostrava o item no lugar do texto).
 
 
 # ── Chrome novo do Claude Code: aviso de subagente concluido + resumo de atividade ────────────────
