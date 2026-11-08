@@ -128,8 +128,18 @@ fn kill_pid(pid: u32) {
 #[derive(Default)]
 struct Service {
     refuse_login: bool,
+    name_taken: bool,
     sessions: Mutex<Vec<Value>>,
+    accounts: Mutex<Vec<Value>>,
     machines: Mutex<Vec<(String, Value)>>,
+}
+
+async fn signup(State(service): State<Arc<Service>>, body: Bytes) -> (StatusCode, String) {
+    service.accounts.lock().unwrap().push(serde_json::from_slice(&body).unwrap());
+    if service.name_taken {
+        return (StatusCode::CONFLICT, json!({"detail": "conta já existe"}).to_string());
+    }
+    (StatusCode::CREATED, json!({"token": "conta-nova"}).to_string())
 }
 
 async fn session(State(service): State<Arc<Service>>, body: Bytes) -> (StatusCode, String) {
@@ -150,8 +160,13 @@ async fn register(State(service): State<Arc<Service>>, headers: HeaderMap, body:
 }
 
 async fn spawn_service(refuse_login: bool) -> (Arc<Service>, SocketAddr) {
-    let service = Arc::new(Service { refuse_login, ..Service::default() });
-    let app = axum::Router::new().route("/v1/sessions", post(session)).route("/v1/machines", post(register)).with_state(service.clone());
+    spawn_service_with(Service { refuse_login, ..Service::default() }).await
+}
+
+async fn spawn_service_with(service: Service) -> (Arc<Service>, SocketAddr) {
+    let service = Arc::new(service);
+    let app = axum::Router::new().route("/v1/sessions", post(session)).route("/v1/accounts", post(signup))
+        .route("/v1/machines", post(register)).with_state(service.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
@@ -427,7 +442,7 @@ async fn unreadable_state_reaches_status_and_a_new_link_keeps_the_old_file() {
     let (_, refusing) = spawn_service(true).await;
     let (_, accepting) = spawn_service(false).await;
     let request = |service: SocketAddr| LinkRequest { service_url: format!("http://{service}"), account: "acme".into(),
-        password: PASSWORD.into(), machine_name: "pc1".into() };
+        password: PASSWORD.into(), machine_name: "pc1".into(), create_account: false };
     let dir = tempfile::tempdir().unwrap();
     let dir = dir.path();
     let supervisor = alone(dir);
@@ -636,6 +651,37 @@ async fn repeated_crash_shows_up_in_error() {
     until("as quedas não apareceram", || supervisor.status().error.is_some_and(|error| error.contains("frpc caiu"))).await;
     assert!(!supervisor.status().enabled);
     supervisor.stop().await;
+}
+
+async fn link_creating(machine: &Machine, service: SocketAddr) -> reqwest::Response {
+    client().post(format!("http://{}/api/connect/link", machine.addr)).bearer_auth(OWNER)
+        .json(&json!({"service_url": format!("http://{service}"), "account": "acme", "password": PASSWORD,
+            "machine_name": "pc1", "create_account": true}))
+        .send().await.unwrap()
+}
+
+#[tokio::test]
+async fn link_can_create_the_account_first() {
+    let (service, address) = spawn_service(false).await;
+    let machine = machine().await;
+    let response = link_creating(&machine, address).await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(*service.accounts.lock().unwrap(), vec![json!({"name": "acme", "password": PASSWORD})]);
+    assert!(service.sessions.lock().unwrap().is_empty(), "conta nova não passa pelo login");
+    assert_eq!(*service.machines.lock().unwrap(), vec![("Bearer conta-nova".to_owned(), json!({"name": "pc1"}))]);
+    machine.supervisor.stop().await;
+}
+
+#[tokio::test]
+async fn link_creating_a_taken_name_says_so() {
+    let (service, address) = spawn_service_with(Service { name_taken: true, ..Service::default() }).await;
+    let machine = machine().await;
+    let response = link_creating(&machine, address).await;
+    assert_eq!(response.status(), 409);
+    let body: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap();
+    assert_eq!(body["detail"]["code"], "connect_account_taken", "{body}");
+    assert!(service.machines.lock().unwrap().is_empty());
+    assert!(!machine.dir.path().join("connect.json").exists());
 }
 
 #[tokio::test]
