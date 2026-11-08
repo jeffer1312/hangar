@@ -26,32 +26,34 @@ impl Actions for ImportSourceProbe {
 
 #[tokio::test]
 async fn codex_mcp_stage_uses_selected_config_without_legacy_fallback() {
-    let temp = crate::physical_tempdir();
-    let home = temp.path();
-    let selected = home.join(".claude");
-    std::fs::create_dir(&selected).unwrap();
-    std::fs::write(selected.join("settings.json"), "{}").unwrap();
     let current = json!({"mcpServers":{"open-design":{"type":"http","url":"https://design.example/mcp"}}});
     let old = json!({"mcpServers":{"old":{"type":"http","url":"https://old.example/mcp"}}});
-    std::fs::write(home.join(".claude.json"), serde_json::to_vec(&old).unwrap()).unwrap();
-    let work = home.join("work");
-    std::fs::create_dir(&work).unwrap();
-    for configured in [None, Some(""), Some("~/.claude")] {
-        let mut pairs = vec![("HOME", home.to_string_lossy().into_owned()), ("USERPROFILE", home.to_string_lossy().into_owned())];
-        if let Some(value) = configured { pairs.push(("CLAUDE_CONFIG_DIR", value.into())); }
-        let env = AccountEnvironment::from_pairs(pairs);
-        if configured == Some("~/.claude") {
-            std::fs::write(home.join(".claude.json"), "arquivo antigo inválido").unwrap();
-        }
+    for (configured, use_selected) in [("unset", false), ("empty", false), ("tilde", true), ("absolute", true)] {
         for exists in [true, false] {
-            let source = selected.join(".claude.json");
-            if exists { std::fs::write(&source, serde_json::to_vec(&current).unwrap()).unwrap(); }
-            else { std::fs::remove_file(&source).unwrap(); }
+            let temp = crate::physical_tempdir();
+            let home = temp.path();
+            let selected = home.join(".claude");
+            std::fs::create_dir(&selected).unwrap();
+            std::fs::write(selected.join("settings.json"), "{}").unwrap();
+            std::fs::write(home.join(".claude.json"), serde_json::to_vec(&old).unwrap()).unwrap();
+            if exists { std::fs::write(selected.join(".claude.json"), serde_json::to_vec(&current).unwrap()).unwrap(); }
+            let work = home.join("work");
+            std::fs::create_dir(&work).unwrap();
+            let mut pairs = vec![("HOME", home.to_string_lossy().into_owned()), ("USERPROFILE", home.to_string_lossy().into_owned())];
+            let value = match configured {
+                "unset" => None,
+                "empty" => Some(String::new()),
+                "tilde" => Some("~/.claude".into()),
+                "absolute" => Some(selected.to_string_lossy().into_owned()),
+                _ => unreachable!(),
+            };
+            if let Some(value) = value { pairs.push(("CLAUDE_CONFIG_DIR", value)); }
+            let env = AccountEnvironment::from_pairs(pairs);
             let mut probe = ImportSourceProbe { staged: None };
             let result = stage_flow::run(&stage_flow::Paths { env: &env, home, account: &home.join(".codex"), work: &work, backups: &home.join("backups") }, &mut json!({}), &State::new(json!({"avisos":[]})), false, &mut probe).await;
             assert_eq!(result.unwrap_err().kind, "ProbeComplete");
             let staged = probe.staged.unwrap();
-            if configured == Some("~/.claude") {
+            if use_selected {
                 assert!(staged["mcpServers"].get("old").is_none());
                 if exists { assert_eq!(staged["mcpServers"]["open-design"]["url"], "https://design.example/mcp"); }
                 else { assert!(staged.get("mcpServers").is_none()); }
@@ -61,6 +63,14 @@ async fn codex_mcp_stage_uses_selected_config_without_legacy_fallback() {
             }
         }
     }
+    let temp = crate::physical_tempdir();
+    let home = temp.path();
+    let selected = home.join(".claude");
+    std::fs::create_dir(&selected).unwrap();
+    std::fs::write(selected.join("settings.json"), "{}").unwrap();
+    std::fs::write(home.join(".claude.json"), serde_json::to_vec(&old).unwrap()).unwrap();
+    let work = home.join("work");
+    std::fs::create_dir(&work).unwrap();
     let env = AccountEnvironment::from_pairs([
         ("HOME", home.to_string_lossy().into_owned()),
         ("USERPROFILE", home.to_string_lossy().into_owned()),
