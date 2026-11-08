@@ -264,7 +264,10 @@ impl Slot {
             md: text.md, full: text.full, vivo: false })
     }
 
-    /// Conserva a assinatura da fonte: voltar a trabalhar não republica o pane antigo.
+    /// A identidade do texto continua a mesma quando só a forma de apresentação mudou.
+    pub(super) fn source_text(&self) -> &str { &self.raw.text }
+
+    /// Limpa o publicado; o consumidor guarda separadamente a identidade do texto descartado.
     pub(super) fn clear_event(&mut self, session: &str) -> Option<PreviewEvent> {
         if self.sent == Text::default() { return None; }
         self.sent = Text::default();

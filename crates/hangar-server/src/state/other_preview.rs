@@ -24,13 +24,14 @@ pub struct OtherPreview {
     provider: String,
     generation: u64,
     accumulated: String,
+    discarded_text: Option<String>,
     slot: Slot,
 }
 
 impl OtherPreview {
     pub fn new(provider: &str) -> Option<Self> {
         matches!(provider, "pi" | "omp" | "kimi").then(|| Self {
-            provider: provider.into(), generation: 0, accumulated: String::new(), slot: Slot::default(),
+            provider: provider.into(), generation: 0, accumulated: String::new(), discarded_text: None, slot: Slot::default(),
         })
     }
 
@@ -40,7 +41,16 @@ impl OtherPreview {
         self.generation = self.generation.wrapping_add(1);
         self.accumulated.clear();
         self.slot = Slot::default();
+        self.discarded_text = None;
         self.generation
+    }
+
+    fn discard_source(&mut self) {
+        if self.discarded_text.is_none() {
+            let text = self.slot.source_text();
+            if !text.is_empty() { self.discarded_text = Some(text.to_owned()); }
+        }
+        self.accumulated.clear();
     }
 
     /// Emite somente mudança de texto/flags; uma captura antiga não altera o acumulado.
@@ -51,12 +61,12 @@ impl OtherPreview {
             return None;
         }
         if matches!(input.state, Some("idle" | "dead")) {
-            self.accumulated.clear();
+            self.discard_source();
             let committed = self.slot.offer_event(input.session, None, input.committed);
             return self.slot.clear_event(input.session).or(committed);
         }
         let source = if let Some(text) = hook_text(input.files, input.marker, input.now) {
-            if text.is_empty() { self.accumulated.clear(); }
+            if text.is_empty() { self.discard_source(); }
             Some((text, true, true))
         } else {
             input.pane.map(|pane| {
@@ -72,6 +82,14 @@ impl OtherPreview {
                 (text, false, joined)
             })
         };
+        if let Some((text, _, _)) = source.as_ref() {
+            if self.discarded_text.as_deref() == Some(text.as_str()) {
+                // A costura pode ter reiniciado com full diferente: isso não torna novo o texto parado.
+                self.accumulated.clear();
+                return self.slot.offer_event(input.session, None, input.committed);
+            }
+            if !text.is_empty() { self.discarded_text = None; }
+        }
         self.slot.offer_event(input.session, source, input.committed)
     }
 }
@@ -240,6 +258,91 @@ mod tests {
         other_preview_reset_discards_in_flight_old_frames();
         other_preview_idle_and_commit_do_not_revive_the_same_source();
         other_preview_empty_sidecar_clears_kimi_accumulation();
+    }
+
+    #[test]
+    fn other_preview_discarded_text_does_not_revive_after_a_flag_change() {
+        const LONG: &str = "● Primeira frase comprida pra valer. Segunda frase comprida pra valer.\n";
+        const SHORT: &str = "● Assunto totalmente diferente agora.\n";
+        const FRESH: &str = "● Fechei o wire e subi o commit; o back valida na sequência.\n";
+        for state in ["idle", "dead"] {
+            for missing in [false, true] {
+                let mut preview = OtherPreview::new("kimi").unwrap();
+                assert!(preview.update(input(LONG)).unwrap().full);
+                let event = preview.update(input(SHORT)).unwrap();
+                assert_eq!((event.text.as_str(), event.full), ("Assunto totalmente diferente agora.", false));
+                let mut stopped = input(SHORT);
+                stopped.state = Some(state);
+                assert_eq!(preview.update(stopped).unwrap().text, "");
+                if missing {
+                    let mut frame = input("");
+                    frame.pane = None;
+                    assert_eq!(preview.update(frame), None);
+                }
+                assert_eq!(preview.update(input(SHORT)), None, "{state}, missing={missing}");
+                let files = [HookFile { text: "Assunto totalmente diferente agora.".into(), ts: Some(1000.) }];
+                let mut same = input(SHORT);
+                same.files = &files;
+                assert_eq!(preview.update(same), None);
+                // O vazio explícito também não é uma resposta nova que rearme a fonte antiga.
+                let empty = [HookFile { text: String::new(), ts: Some(1000.) }];
+                let mut cleared = input(SHORT);
+                cleared.files = &empty;
+                assert_eq!(preview.update(cleared).unwrap().text, "");
+                let mut absent = input("");
+                absent.pane = None;
+                assert_eq!(preview.update(absent), None);
+                assert_eq!(preview.update(input(SHORT)), None);
+                let event = preview.update(input(FRESH)).unwrap();
+                assert_eq!(event.text, "Fechei o wire e subi o commit; o back valida na sequência.");
+                let fresh = [HookFile { text: "Fechei o wire e subi o commit; o back valida na sequência.".into(), ts: Some(1000.) }];
+                let mut changed_flags = input(FRESH);
+                changed_flags.files = &fresh;
+                let event = preview.update(changed_flags).unwrap();
+                assert_eq!((event.text.as_str(), event.md, event.full), ("Fechei o wire e subi o commit; o back valida na sequência.", true, true));
+                assert_eq!(preview.update(input(SHORT)).unwrap().text, "Assunto totalmente diferente agora.");
+                let mut stopped = input(SHORT);
+                stopped.state = Some(state);
+                assert_eq!(preview.update(stopped).unwrap().text, "");
+                let generation = preview.reset();
+                let mut reopened = input(SHORT);
+                reopened.generation = generation;
+                assert_eq!(preview.update(reopened).unwrap().text, "Assunto totalmente diferente agora.");
+            }
+        }
+        // O arquivo vazio pode chegar antes do estado parado; ausência posterior não desfaz o descarte.
+        for state in ["idle", "dead"] {
+            let mut preview = OtherPreview::new("kimi").unwrap();
+            assert!(preview.update(input(LONG)).is_some());
+            assert!(!preview.update(input(SHORT)).unwrap().full);
+            let files = [HookFile { text: String::new(), ts: Some(1000.) }];
+            let mut empty = input(SHORT);
+            empty.files = &files;
+            assert_eq!(preview.update(empty).unwrap().text, "");
+            let mut stopped = input(SHORT);
+            stopped.state = Some(state);
+            assert_eq!(preview.update(stopped).unwrap().text, "");
+            let mut absent = input("");
+            absent.pane = None;
+            assert_eq!(preview.update(absent), None);
+            assert_eq!(preview.update(input(SHORT)), None);
+            assert_eq!(preview.update(input(FRESH)).unwrap().text, "Fechei o wire e subi o commit; o back valida na sequência.");
+        }
+        // Enquanto a resposta é a atual, mudar full sem mudar texto continua sendo observável.
+        let mut preview = OtherPreview::new("kimi").unwrap();
+        assert!(preview.update(input(LONG)).unwrap().full);
+        assert!(!preview.update(input(SHORT)).unwrap().full);
+        let event = preview.update(input(SHORT)).unwrap();
+        assert_eq!((event.text.as_str(), event.md, event.full), ("Assunto totalmente diferente agora.", false, true));
+    }
+
+    #[test]
+    fn other_preview_prose_hyphen_is_not_a_committed_match() {
+        let mut preview = OtherPreview::new("pi").unwrap();
+        let mut frame = input("● O envio por email falhou porque o servidor recusou a conexão hoje.");
+        frame.committed = Some(Arc::from(super::super::preview::norm("O envio por e-mail falhou porque o servidor recusou a conexão hoje.")));
+        let event = preview.update(frame).unwrap();
+        assert_eq!(event.text, "O envio por email falhou porque o servidor recusou a conexão hoje.");
     }
 
     proptest::proptest! {
