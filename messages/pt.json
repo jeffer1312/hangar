@@ -7104,7 +7104,7 @@
   "native_server_thinking": "Mostrar o raciocínio do agente",
   "native_server_thinking_help": "Pede à API o resumo do raciocínio e mostra recolhido acima da resposta. Vale só para sessões novas.",
   "native_server_idle_compaction": "Compactar a conversa parada antes do cache vencer",
-  "native_server_idle_compaction_help": "Com o cache de 1 hora quase no fim e a sessão parada, o Claude resume a conversa enquanto o cache ainda vale, e a próxima mensagem sai mais barata. Nas sessões sem terminal o Hangar manda o /compact.",
+  "native_server_idle_compaction_help": "Com o cache de 1 hora quase no fim e a sessão parada, o Claude resume a conversa enquanto o cache ainda vale, e a próxima mensagem sai mais barata. Nas sessões sem terminal o Hangar manda o /compact. Não vale com a compactação automática do Claude desligada (autoCompact ou DISABLE_AUTO_COMPACT).",
   "native_server_idle_compaction_min": "Compactar a partir de",
   "native_server_idle_compaction_min_help": "Conversa menor que isto não é compactada. O Claude não aceita menos de 100 mil; o padrão é 200 mil.",
   "native_server_thousand_tokens": "mil tokens",

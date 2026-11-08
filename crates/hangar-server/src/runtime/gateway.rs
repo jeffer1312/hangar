@@ -920,7 +920,7 @@ impl RuntimeRegistry {
     }
     /// A compactação da sessão parada do Claude Code não dispara no modo sem terminal: o Hangar manda o `/compact`
     /// com o mesmo ajuste e o mesmo mínimo, enquanto o cache de 1 h ainda vale. Não espera o resumo terminar.
-    pub async fn compact_idle_claude(&self,after:Duration) {
+    pub async fn compact_idle_claude(self:&Arc<Self>,after:Duration) {
         let candidates:Vec<(String,u64,String)> = self.entries.lock().await.iter()
             .filter(|(_,entry)|entry.provider=="claude" && matches!(entry.handle,EntryHandle::Headless(_)) && !entry.respawn_inflight)
             .map(|(key,entry)|(key.clone(),entry.generation,entry.name.clone())).collect();
@@ -935,21 +935,32 @@ impl RuntimeRegistry {
         };
         SETTINGS_UNREADABLE.store(false,std::sync::atomic::Ordering::Relaxed);
         let Some(min_tokens)=crate::config_sync::runtime::idle_compaction(&settings) else {return};
+        // Uma tarefa por sessão: o ator lento de uma não atrasa as outras nem o estacionamento. A porta e a barreira
+        // dela ficam presas até o ator responder, como no estacionamento.
         for (key,generation,name) in candidates {
-            match self.compact_claude(&key,generation,&name,after,min_tokens).await {
-                Ok(None)=>{},
-                Ok(Some((tokens,age)))=>{
-                    tracing::info!(session=%name,tokens,age_s=age as u64,"/compact enviado à sessão sem terminal parada antes do cache vencer");
-                    let event=json!({"evento":"sessao.compactada_parada","nivel":"ok","sessao":name,"provider":"claude","tokens":tokens,"cache_s":age as u64});
-                    crate::diag::record(crate::diag::diary_dir_in(&self.policy.codex_environment()),vec![event],"compactacao_parada");
-                },
-                // A pessoa voltou à conversa entre a vista e o comando: não há o que compactar.
-                Err(error) if error.code=="idle_compact_stale"=>tracing::debug!(session=%name,"a sessão saiu da parada antes do /compact"),
-                Err(error)=>{
-                    tracing::warn!(session=%name,code=%error.code,"a sessão parada não foi compactada");
-                    self.diag.report("runtime.idle_compact_failed",&name,&error.code,"a sessão sem terminal parada não foi compactada antes do cache vencer");
-                },
-            }
+            let registry=self.clone();
+            tokio::spawn(async move {
+                let asked=std::time::Instant::now();
+                let result=registry.compact_claude(&key,generation,&name,after,min_tokens).await;
+                let waited=asked.elapsed().as_secs();
+                let diary=crate::diag::diary_dir_in(&registry.policy.codex_environment());
+                match result {
+                    Ok(None)=>{},
+                    Ok(Some((tokens,age)))=>{
+                        tracing::info!(session=%name,tokens,age_s=age as u64,waited_s=waited,"/compact enviado à sessão sem terminal parada antes do cache vencer");
+                        // Resposta demorada: o resumo pode ter começado com o cache já vencido.
+                        let level=if age+waited as f64>=IDLE_COMPACT_BEFORE.as_secs_f64() {"aviso"} else {"ok"};
+                        let event=json!({"evento":"sessao.compactada_parada","nivel":level,"sessao":name,"provider":"claude","tokens":tokens,"cache_s":age as u64,"espera_s":waited});
+                        crate::diag::record(diary,vec![event],"compactacao_parada");
+                    },
+                    // A pessoa voltou à conversa entre a vista e o comando: não há o que compactar.
+                    Err(error) if error.code=="idle_compact_stale"=>tracing::debug!(session=%name,"a sessão saiu da parada antes do /compact"),
+                    Err(error)=>{
+                        tracing::warn!(session=%name,code=%error.code,waited_s=waited,"a sessão parada não foi compactada");
+                        registry.diag.report("runtime.idle_compact_failed",&name,&error.code,"a sessão sem terminal parada não foi compactada antes do cache vencer");
+                    },
+                }
+            });
         }
     }
     /// Como `park_claude`: a porta da sessão fechada, nenhuma operação de ciclo e a fila toda entregue enquanto o
@@ -975,10 +986,7 @@ impl RuntimeRegistry {
         if tokio::task::spawn_blocking(move||pending(&state_path)).await.map_err(|_|failure("queue_job"))? {return Ok(None);}
         let command=RuntimeCommand { operation_id:format!("idle-compact:{}",crate::mods::state::random_hex(16)),
             kind:OperationKind::Compact,payload:json!({"idle_after_s":after.as_secs_f64()}) };
-        // A porta e a barreira ficam presas enquanto o ator não responde: cano travado não pode prendê-las.
-        let reply=tokio::time::timeout(Duration::from_secs(10),handle.command(command)).await
-            .map_err(|_|RuntimeError::new("idle_compact_timeout","o motor não respondeu ao /compact"))??;
-        match reply.disposition {
+        match handle.command(command).await?.disposition {
             Disposition::Accepted=>Ok(Some(found)),
             // Não escrito: a sessão segue parada e a próxima rodada tenta de novo.
             Disposition::Deferred=>Ok(None),

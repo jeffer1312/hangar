@@ -173,13 +173,16 @@ impl RuntimeConfig {
             }
             current.insert(key.clone(),preferences::coerce(key,&value)?);
         }
+        let thinking=thinking.map(|value|value.as_bool().ok_or("mostrar_pensamento: esperado true/false")).transpose()?;
+        write_values(&self.path, &current)?;
+        // O settings.json do Claude vem depois: falhou, a resposta diz que o resto ficou gravado.
+        let rest_saved=|error:RuntimeError|format!("demais ajustes salvos; {}",error.message);
         if let Some(value)=thinking {
-            self.write_thinking(value.as_bool().ok_or("mostrar_pensamento: esperado true/false")?)?;
+            self.write_thinking(value).map_err(rest_saved)?;
         }
         if idle.is_some() || idle_min.is_some() {
-            self.write_idle_compaction(idle,idle_min)?;
+            self.write_idle_compaction(idle,idle_min).map_err(rest_saved)?;
         }
-        write_values(&self.path, &current)?;
         if touches_aux||["jev_api_key","jev_endpoint","jev_model"].iter().any(|key|changes.contains_key(*key)||remove.contains(*key)) {
             self.sync_jev().map_err(|error|format!("jev: salvo, mas o Computer Use não recebeu a configuração: {error}"))?;
         }

@@ -7104,7 +7104,7 @@
   "native_server_thinking": "Show agent thinking",
   "native_server_thinking_help": "Asks the API for a summary of the reasoning and shows it collapsed above the answer. New sessions only.",
   "native_server_idle_compaction": "Compact an idle conversation before the cache expires",
-  "native_server_idle_compaction_help": "When the 1-hour cache is almost over and the session is idle, Claude summarizes the conversation while the cache still holds, so the next message costs less. In sessions without a terminal, Hangar sends the /compact.",
+  "native_server_idle_compaction_help": "When the 1-hour cache is almost over and the session is idle, Claude summarizes the conversation while the cache still holds, so the next message costs less. In sessions without a terminal, Hangar sends the /compact. Has no effect while Claude's auto-compact is off (autoCompact or DISABLE_AUTO_COMPACT).",
   "native_server_idle_compaction_min": "Compact from",
   "native_server_idle_compaction_min_help": "Smaller conversations are not compacted. Claude does not accept less than 100 thousand; the default is 200 thousand.",
   "native_server_thousand_tokens": "thousand tokens",
