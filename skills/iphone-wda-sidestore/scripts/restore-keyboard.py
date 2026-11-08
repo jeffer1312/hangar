@@ -64,8 +64,11 @@ def main():
             if e:
                 break
             if _ >= 2:  # lista longa: o item fora da tela só entra na árvore depois de rolar
-                call("POST", f"/session/{s}/wda/dragfromtoforduration",
-                     {"fromX": 200, "fromY": 700, "toX": 200, "toY": 300, "duration": 0.3})
+                try:
+                    call("POST", f"/session/{s}/wda/dragfromtoforduration",
+                         {"fromX": 200, "fromY": 600, "toX": 200, "toY": 300, "duration": 0.3})
+                except urllib.error.HTTPError:
+                    pass  # sem rolar, a busca segue e o aviso de "não achei" sai no fim
             time.sleep(1)
         if not e:
             raise SystemExit(f"aviso: não achei '{label}' nos Ajustes; religue à mão em Ajustes > Geral > Teclado")
