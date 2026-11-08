@@ -1,4 +1,4 @@
-import { fileAuthHeader, transcribeUploadedForServer, uploadFileForServer, uploadUrlNative, type Server } from '@hangar/core';
+import { fileAuthHeader, registrarDiag, transcribeUploadedForServer, uploadFileForServer, uploadUrlNative, type Server } from '@hangar/core';
 import * as m from '../../paraglide/messages';
 import { chatStore } from '../../stores/chat';
 import { finishDictation, readDictation, readDraft, setDictationInFlight, writeDictation, type DictationDraft, type DraftAttachment } from '../../stores/drafts';
@@ -42,13 +42,26 @@ function notify(serverId: string, name: string): void {
   chatStore(serverId, name).use.setState((s) => ({ draftUpdate: s.draftUpdate + 1 }));
 }
 
+// O diário do servidor só aceita campos conhecidos (`_CAMPOS` do Python): os tempos vão no `detalhe`.
+function recordTiming(server: Server, stoppedAt: number, fileAt: number, uploadMs: number, transcribeMs: number, code?: string): void {
+  const total = Date.now() - stoppedAt;
+  registrarDiag({
+    evento: 'dictation.client_timing', nivel: code ? 'erro' : 'ok', ...(code ? { codigo: code } : {}), ms: total,
+    detalhe: `stop_to_file_ms=${fileAt - stoppedAt} upload_ms=${uploadMs} transcribe_ms=${transcribeMs} total_ms=${total}`,
+  }, server.invite ? undefined : server.baseUrl);
+}
+
 /**
  * Ditado preso à conversa de origem, fora do ciclo de vida do Composer: trocar de conversa no meio
  * não descarta o resultado. Quem chama já gravou `voice`. `check` roda antes da rede; `isActive`, na
- * chegada, decide se o texto entra no campo aberto ou fica `ready` para a montagem.
+ * chegada, decide se o texto entra no campo aberto ou fica `ready` para a montagem. `stoppedAt`: o
+ * toque em parar da gravação nova, para medir cada etapa até o texto.
  */
 export async function runDictation(server: Server, serverId: string, name: string, voice: DictationDraft,
-  source: DictationSource, opts: { isActive: () => boolean; check?: () => void }): Promise<DictationOutcome> {
+  source: DictationSource, opts: { isActive: () => boolean; check?: () => void; stoppedAt?: number }): Promise<DictationOutcome> {
+  const fileAt = Date.now();
+  let uploadMs = 0;
+  let transcribeStarted: number | undefined;
   setDictationInFlight(serverId, name, voice.id, true);
   notify(serverId, name);
   try {
@@ -58,13 +71,16 @@ export async function runDictation(server: Server, serverId: string, name: strin
     if ('file' in source) {
       // Sobe e guarda o caminho antes de transcrever: transcrição que cai não custa outra cópia.
       ({ path: uploaded } = await uploadFileForServer(server, name, source.file, { audioOnly: true }));
+      uploadMs = Date.now() - fileAt;
       const pending = readDictation(serverId, name);
       if (pending?.id === voice.id) writeDictation(serverId, name, { ...pending, serverPath: uploaded });
       arquivo = uploadName(uploaded);
     } else {
       arquivo = source.arquivo;
     }
+    const started = transcribeStarted = Date.now();
     const res = await transcribeUploadedForServer(server, name, arquivo, { limpar: true, estilo: voice.estilo });
+    const transcribeMs = Date.now() - started;
     const text = res.text.trim();
     if (!text) throw new Error(m.composer_transcricao_vazia());
     const raw = res.raw?.trim() ?? '';
@@ -74,9 +90,16 @@ export async function runDictation(server: Server, serverId: string, name: strin
     const applied = res.estilo_aplicado ?? voice.estilo;
     const completed = finishDictation(serverId, name, voice.id,
       { text, raw, issue: aviso, serverPath: path, applied }, opts.isActive());
+    if (opts.stoppedAt !== undefined) recordTiming(server, opts.stoppedAt, fileAt, uploadMs, transcribeMs);
     return { completed, text, raw, aviso, path, applied };
   } catch (e) {
     const detail = e instanceof Error ? e.message : m.composer_falha_transcricao();
+    if (opts.stoppedAt !== undefined) {
+      // Falha antes da transcrição: o tempo até ela é da subida.
+      const now = Date.now();
+      const [up, tr] = transcribeStarted === undefined ? [now - fileAt, 0] : [uploadMs, now - transcribeStarted];
+      recordTiming(server, opts.stoppedAt, fileAt, up, tr, /^(\d{3}):/.exec(detail)?.[1] ?? 'failed');
+    }
     const issue = /^(501|503):/.test(detail) ? `${m.composer_ditado_indisponivel()}: ${detail}` : detail;
     let lost = false;
     let storageIssue = '';

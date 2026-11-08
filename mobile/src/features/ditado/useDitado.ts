@@ -34,7 +34,8 @@ const backgroundRecording = () => Platform.OS === 'ios'
 type ManagedRecorder = AudioRecorder & InstanceType<SharedObject<RecordingEvents>>;
 
 interface Opts {
-  onFim: (file: File, motivo: MotivoFim, uri: string) => void;
+  /** `stoppedAt`: o instante em que a parada começou (`Date.now()`), para medir até o texto. */
+  onFim: (file: File, motivo: MotivoFim, uri: string, stoppedAt: number) => void;
   onErroParada?: (e: Error) => void;
   /** Máquina da conversa: o teto da gravação é o configurado nela. */
   server?: Server | null;
@@ -116,6 +117,7 @@ export function useDitado({ onFim, onErroParada, server }: Opts) {
       // A preparação pendente termina antes de liberar o objeto nativo.
       if (recording.phase !== 'recording' || !recording.recorder) return Promise.resolve();
       const recorder = recording.recorder;
+      const stoppedAt = Date.now();
       recording.phase = 'stopping';
       limparTimers();
       recording.stopping = (async () => {
@@ -137,7 +139,7 @@ export function useDitado({ onFim, onErroParada, server }: Opts) {
           const blob = await res.blob();
           if (recording.error) throw recording.error;
           const file = new File([blob], 'ditado.m4a', { type: 'audio/m4a' });
-          recording.onFim(file, recording.reason ?? motivo, uri);
+          recording.onFim(file, recording.reason ?? motivo, uri, stoppedAt);
         } catch (e) {
           reportRecordingError(recording, e);
         } finally {

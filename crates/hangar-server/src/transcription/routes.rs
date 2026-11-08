@@ -1,5 +1,6 @@
 use axum::body::{Body, to_bytes};
 use crate::routes::AppState;
+use crate::dictation::timing::{Step, timed};
 use super::model::{ConfigSnapshot, Profile, TranscriptionError};
 
 pub(crate) async fn configuration(state: &AppState) -> Result<ConfigSnapshot, TranscriptionError> {
@@ -23,16 +24,18 @@ pub(crate) async fn transcribe_here(state: &AppState, content: bytes::Bytes, fil
     let mut providers = String::new();
     let result = match state.transcription_slots.clone().try_acquire_owned() {
         Err(_) => Err(TranscriptionError { status: 503, code: "transcription_busy".into(), detail: "As vagas de transcrição estão ocupadas. Tente novamente.".into() }),
-        Ok(_slot) => match configuration(state).await {
+        Ok(_slot) => match timed(Step::Config, configuration(state)).await {
             Ok(snapshot) => {
                 providers = snapshot.providers.iter().chain(snapshot.legacy.iter())
                     .map(|p| format!("{}:{}", p.kind, if p.model.is_empty() { "-" } else { &p.model })).collect::<Vec<_>>().join(",");
                 state.transcription.configure(snapshot).await;
-                state.transcription.transcribe(content, filename, profile).await
+                timed(Step::Stt, state.transcription.transcribe(content, filename, profile)).await
             }
             Err(error) => Err(error),
         },
     };
+    crate::dictation::timing::transcribed(result.as_ref().ok().map(|t| t.provider.as_str()), bytes,
+        result.as_ref().err().map(|e| e.code.as_str()));
     if let Err(error) = &result {
         state.diag.report_with("transcription.failed", "", &error.code, "A transcrição falhou.",
             serde_json::json!({"status": error.status, "detalhe": error.detail, "provedores": providers,

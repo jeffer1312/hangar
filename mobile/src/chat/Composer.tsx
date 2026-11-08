@@ -910,7 +910,8 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     undoTimerRef.current = setTimeout(limparUndo, 10_000);
   }, [limparUndo]);
 
-  const runTranscription = useCallback(async (voice: DictationDraft, source: DictationSource, server: Server, generation: number, allowAuto: boolean) => {
+  const runTranscription = useCallback(async (voice: DictationDraft, source: DictationSource, server: Server, generation: number, allowAuto: boolean,
+    stoppedAt?: number) => {
     if (transcribingRef.current) return;
     const intent = voiceSendRef.current;
     if (intent && !intent.dictationId) intent.dictationId = voice.id;
@@ -936,6 +937,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     if (mountedRef.current) setDictation(voice);
     try {
       const { completed, text: trimmed, raw, aviso, path, applied } = await runDictation(server, origin.serverId, origin.name, voice, source, {
+        stoppedAt,
         check: () => {
           const sessions = useSessions.getState();
           const live = sessions.byServerRecord?.[origin.serverId]?.find((s) => s.name === origin.name)
@@ -995,7 +997,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
   }, [origin, offerUndo, iniciarAuto, navigation, setBar, cancelVoiceSend]);
 
   const handleTranscribe = useCallback(
-    async (file: File, motivo: MotivoFim, uri: string, allowAuto = true) => {
+    async (file: File, motivo: MotivoFim, uri: string, stoppedAt?: number, allowAuto = true) => {
       const target = recordingTargetRef.current;
       if (!target || transcribingRef.current) return;
       const generation = activityGenerationRef.current;
@@ -1022,7 +1024,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
         before: target.snapshot.text.trim(), motivo, estilo: target.estilo,
         status: 'pending', text: '', raw: '', issue: '',
       };
-      await runTranscription(voice, { file }, target.server, generation, allowAuto && generation === target.generation);
+      await runTranscription(voice, { file }, target.server, generation, allowAuto && generation === target.generation, stoppedAt);
     },
     [runTranscription, cancelVoiceSend],
   );
@@ -1150,7 +1152,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
   const handleRetry = useCallback(async () => {
     if (transcribingRef.current) return;
     cancelVoiceSend();
-    if (failed) { await handleTranscribe(failed.file, failed.motivo, failed.uri, false); return; }
+    if (failed) { await handleTranscribe(failed.file, failed.motivo, failed.uri, undefined, false); return; }
     if (!dictation || dictation.status !== 'failed') return;
     cancelarAuto();
     const generation = activityGenerationRef.current;

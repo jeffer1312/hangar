@@ -57,8 +57,12 @@ pub async fn route(
     serve(&st, &name, req, matches!(caller, Caller::Guest(_))).await
 }
 
-/// O convidado não transcreve por caminho absoluto nem usa a conta do harness para organizar.
 pub async fn serve(st: &AppState, name: &str, req: Request, guest: bool) -> Response {
+    crate::dictation::timing::measure(st, "sessao", transcribe(st, name, req, guest)).await
+}
+
+/// O convidado não transcreve por caminho absoluto nem usa a conta do harness para organizar.
+async fn transcribe(st: &AppState, name: &str, req: Request, guest: bool) -> Response {
     let query: HashMap<String, String> = form_urlencoded::parse(req.uri().query().unwrap_or("").as_bytes()).into_owned().collect();
     // A sessão (e a trava da troca de conversa) vem antes da validação da query, como no FastAPI.
     let facts = match http::facts(st, name, "", true).await {

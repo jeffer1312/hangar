@@ -311,19 +311,33 @@ fn dictation_append(draft: &str, text: &str) -> (String, std::ops::Range<usize>)
 /// Grava o áudio nos anexos da sessão (disco desta máquina ou `POST /upload`) e transcreve o arquivo salvo
 /// (`?arquivo=`). O caminho volta mesmo quando a transcrição falha; falha ao gravar não tem caminho, e o "de novo"
 /// tenta de novo com a cópia em memória.
+/// O tempo da subida volta junto, para o `dictation.client_timing`.
 async fn upload_and_transcribe(api: Api, uploads: disk::Uploads, name: String, bytes: Vec<u8>, style: Option<&'static str>, options: api::DictationOptions)
-    -> (Option<String>, Result<Value, Failure>) {
+    -> (Option<String>, Result<Value, Failure>, Duration) {
+    let started = Instant::now();
     let saved = match uploads {
         disk::Uploads::Remote => api.upload_audio(&name, "ditado.wav", bytes).await,
         local => local.upload(&api, &name, "ditado.wav", bytes, None).await,
     };
+    let upload = started.elapsed();
     let path = match saved {
         Ok(saved) => saved.path,
-        Err(error) => return (None, Err(error)),
+        Err(error) => return (None, Err(error), upload),
     };
     let file = path.rsplit(['/', '\\']).next().unwrap_or(&path).to_owned();
     let result = api.dictate_saved(&name, &file, style, &options).await;
-    (Some(path), result)
+    (Some(path), result, upload)
+}
+
+/// `dictation.client_timing` do nativo, no mesmo formato do `detalhe` do app: o nativo não tem diário próprio, a
+/// linha vai ao `native.log`. Sem texto nem caminho.
+fn timing_line(stop_to_file: Duration, upload: Duration, transcribe: Duration, total: Duration, failure: Option<&Failure>) -> String {
+    let status = match failure {
+        None => "nivel=ok".to_owned(),
+        Some(f) => format!("nivel=erro codigo={}", f.code.clone().or_else(|| f.status.map(|s| s.to_string())).unwrap_or_else(|| "failed".into())),
+    };
+    format!("dictation.client_timing {status} stop_to_file_ms={} upload_ms={} transcribe_ms={} total_ms={}",
+        stop_to_file.as_millis(), upload.as_millis(), transcribe.as_millis(), total.as_millis())
 }
 
 #[derive(Default)]
@@ -936,6 +950,7 @@ impl Hangar {
 
     fn stop_dictation(&mut self, silence: bool, timed_out: bool, cx: &mut Context<Self>) {
         let Some(recorder) = self.dictation.recorder.take() else { return; };
+        let stopped = Instant::now();
         self.give_voice_mic_back();
         let Some((api, session)) = self.dictation_request(cx) else { self.cancel_dictation(); return; };
         self.dictation.auto_send = silence && self.dictation.hands_free;
@@ -949,17 +964,21 @@ impl Hangar {
         let (tx, connection, seq) = (self.tx.clone(), self.connection, self.dictation.seq);
         // O fluxo de áudio não troca de thread; soltá-lo e montar o WAV é rápido o bastante para a tela.
         let audio = recorder.finish();
+        let stop_to_file = stopped.elapsed();
         self.dictation.request = Some(self.runtime.spawn(async move {
-            let (path, result) = match audio {
+            let sent = Instant::now();
+            let (path, result, upload) = match audio {
                 Ok(bytes) => {
                     *audio_cache.lock().unwrap() = bytes.clone();
                     match (session, uploads) {
                         (Some(name), Some(uploads)) => upload_and_transcribe(api, uploads, name, bytes, style,options).await,
-                        (session, _) => (None, api.dictate(session.as_deref(), "ditado.wav", bytes, style,&options).await),
+                        (session, _) => (None, api.dictate(session.as_deref(), "ditado.wav", bytes, style,&options).await, Duration::ZERO),
                     }
                 }
-                Err(error) => (None, Err(error)),
+                Err(error) => (None, Err(error), Duration::ZERO),
             };
+            // ponytail: o total vai até a resposta chegar ao app, não até o texto entrar no campo (salto de canal, ~ms).
+            crate::log_line(&timing_line(stop_to_file, upload, sent.elapsed().saturating_sub(upload), stopped.elapsed(), result.as_ref().err()));
             let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Dictation(seq, path, result) }).await;
         }));
         cx.notify();
@@ -1050,7 +1069,8 @@ impl Hangar {
             } else if let (Some(file), Some(name)) = (saved, session.as_deref()) {
                 (None, if clean{api.dictate_saved(name,&file,recording_style,&options).await}else{api.transcribe_saved(name,&file,false,None).await})
             } else if let (true, Some(name), Some(uploads)) = (clean, session.clone(), uploads) {
-                upload_and_transcribe(api, uploads, name, audio, recording_style,options).await
+                let (path, result, _) = upload_and_transcribe(api, uploads, name, audio, recording_style,options).await;
+                (path, result)
             } else { (None, if clean{api.dictate(session.as_deref(),&filename,audio,recording_style,&options).await}else{api.transcribe(session.as_deref(),&filename,audio,false,None).await}) };
             let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Dictation(seq, path, result) }).await;
         }));
@@ -1471,6 +1491,17 @@ mod tests {
     use super::{dictation_append, dictation_insert, place, wav, wav_pcm, Dictation, DictationTarget, Downmix, OnLeave, Place, Recorder, Vad};
     use crate::{api::{Api, dto::SessionInfo}, delivery::SessionKey};
     use std::time::{Duration, Instant};
+    #[test]
+    fn dictation_timing_line_has_each_step_and_the_failure_code() {
+        let ms = Duration::from_millis;
+        assert_eq!(super::timing_line(ms(12), ms(300), ms(2000), ms(2312), None),
+            "dictation.client_timing nivel=ok stop_to_file_ms=12 upload_ms=300 transcribe_ms=2000 total_ms=2312");
+        let failure = crate::api::Failure { status: Some(503), detail: "texto que não entra".into(), retry_after: None, uncertain: false, code: None };
+        assert_eq!(super::timing_line(ms(5), ms(0), ms(40), ms(45), Some(&failure)),
+            "dictation.client_timing nivel=erro codigo=503 stop_to_file_ms=5 upload_ms=0 transcribe_ms=40 total_ms=45");
+        let coded = crate::api::Failure { code: Some("transcription_busy".into()), ..failure };
+        assert!(super::timing_line(ms(5), ms(0), ms(40), ms(45), Some(&coded)).contains(" codigo=transcription_busy "));
+    }
     #[test]
     fn downmix_turns_48k_stereo_into_16k_mono() {
         let mut mix = Downmix::new(2, 48_000, super::PCM_LIMIT);

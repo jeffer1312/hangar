@@ -83,6 +83,20 @@ pub async fn serve(
     guest: bool,
     grant: Option<Arc<GuestGrant>>,
 ) -> Response {
+    let route = match req.uri().path() {
+        "/api/dictation/transcribe" => "ditado",
+        "/api/ditado/relimpar" => "relimpar",
+        _ => return answer(st, req, guest, grant).await,
+    };
+    super::timing::measure(st, route, answer(st, req, guest, grant)).await
+}
+
+async fn answer(
+    st: &AppState,
+    req: Request,
+    guest: bool,
+    grant: Option<Arc<GuestGrant>>,
+) -> Response {
     if declared_too_large(&req) {
         return refuse_declared(req);
     }

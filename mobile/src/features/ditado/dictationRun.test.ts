@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DictationDraft } from '../../stores/drafts';
 
-const { memory, core } = vi.hoisted(() => ({ memory: new Map<string, string>(), core: { transcribe: vi.fn(), upload: vi.fn() } }));
+const { memory, core } = vi.hoisted(() => ({ memory: new Map<string, string>(), core: { transcribe: vi.fn(), upload: vi.fn(), diag: vi.fn() } }));
 vi.mock('react-native-mmkv', () => ({
   createMMKV: () => ({
     getString: (key: string) => memory.get(key),
@@ -13,6 +13,7 @@ vi.mock('@hangar/core', async (original) => ({
   ...await original<typeof import('@hangar/core')>(),
   transcribeUploadedForServer: core.transcribe,
   uploadFileForServer: core.upload,
+  registrarDiag: core.diag,
 }));
 vi.mock('../../stores/chat', () => ({ chatStore: () => ({ use: { setState: () => {} } }) }));
 // expo-file-system não carrega no node; a galeria só apaga a cópia local do ditado substituído.
@@ -62,6 +63,38 @@ describe('runDictation', () => {
     writeDictation('s1', 'sess', v);
     await runDictation(server, 's1', 'sess', v, { arquivo: 'd.m4a' }, { isActive: () => false });
     expect(readDictation('s1', 'sess')?.serverPath).toBe('/up/sess/d.m4a');
+  });
+});
+
+describe('dictation.client_timing', () => {
+  beforeEach(() => {
+    memory.clear(); core.transcribe.mockReset(); core.upload.mockReset(); core.diag.mockReset();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(10_000);
+  });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('mede parada → arquivo, subida, transcrição e total até o texto, sem texto nem caminho', async () => {
+    core.upload.mockImplementationOnce(async () => { vi.setSystemTime(10_200); return { path: '/up/sess/d.m4a' }; });
+    core.transcribe.mockImplementationOnce(async () => { vi.setSystemTime(11_200); return { path: '/up/sess/d.m4a', text: 'olá', raw: 'olá' }; });
+    writeDictation('s1', 'sess', voice());
+    await runDictation(server, 's1', 'sess', voice(), { file: new File(['a'], 'd.m4a') }, { isActive: () => false, stoppedAt: 9_700 });
+    expect(core.diag).toHaveBeenCalledExactlyOnceWith({ evento: 'dictation.client_timing', nivel: 'ok', ms: 1500,
+      detalhe: 'stop_to_file_ms=300 upload_ms=200 transcribe_ms=1000 total_ms=1500' }, 'https://a.test');
+  });
+
+  it('a falha leva o status como código; o "de novo", sem parada, não mede', async () => {
+    core.upload.mockResolvedValueOnce({ path: '/up/sess/d.m4a' });
+    core.transcribe.mockImplementationOnce(async () => { vi.setSystemTime(10_400); throw new Error('502: groq'); });
+    writeDictation('s1', 'sess', voice());
+    await expect(runDictation(server, 's1', 'sess', voice(), { file: new File(['a'], 'd.m4a') }, { isActive: () => false, stoppedAt: 9_900 }))
+      .rejects.toThrow();
+    expect(core.diag).toHaveBeenCalledExactlyOnceWith({ evento: 'dictation.client_timing', nivel: 'erro', codigo: '502', ms: 500,
+      detalhe: 'stop_to_file_ms=100 upload_ms=0 transcribe_ms=400 total_ms=500' }, 'https://a.test');
+    core.diag.mockReset();
+    core.transcribe.mockResolvedValueOnce({ path: '/up/sess/d.m4a', text: 'ok' });
+    await runDictation(server, 's1', 'sess', voice({ audio: null }), { arquivo: 'd.m4a' }, { isActive: () => false });
+    expect(core.diag).not.toHaveBeenCalled();
   });
 });
 
