@@ -389,3 +389,58 @@ async fn other_terminal_boundary_io_readonly_retry_rechecks_the_guard_and_keeps_
         }
     }
 }
+
+#[cfg(unix)]
+fn partial_windows_terminal(root:&std::path::Path,refuse:bool)->(hangar_server::runtime::other_terminal::OtherTarget,hangar_server::runtime::other_terminal::ProcessOtherIo,std::path::PathBuf) {
+    use hangar_server::runtime::other_terminal::{OtherOptions,ProcessOtherIo};
+    use std::sync::Arc;
+    let (mut target,_,written)=process_terminal(root,true,false);
+    target.binding.windows=true;target.pane_address="=pi-a:0.0".into();
+    let checked=root.join("first-effect-checked");let replacement=root.join("next-question.jsonl");
+    let quote=|path:&std::path::Path|format!("'{}'",path.to_string_lossy().replace('\'',"'\\''"));
+    let status=if refuse {"exit 1"}else{":"};
+    // A primeira conferência após a escrita ainda aceita a pergunta. A próxima prova já lê a nova.
+    let script=format!("#!/bin/sh\ncase \"$1\" in\ndisplay-message)\ncase \"$5\" in\n*pane_pid*)\nif [ -f {} ]; then\nif [ -f {} ]; then cp {} {}; else printf checked > {}; fi\nfi\nprintf '%s\\n' 'pi-a\t%1\t100\t123';;\n*) printf '%s\\n' 'pi-a\t%1\t100';;\nesac;;\nsend-keys)\nfor argument in \"$@\"; do last=$argument; done\nprintf '%s\\n' \"$last\" >> {}\n{status};;\n*) exit 1;;\nesac\n",quote(&written),quote(&checked),quote(&replacement),quote(&target.transcript),quote(&checked),quote(&written));
+    std::fs::write(&target.binding.mux_argv[0],script).unwrap();
+    let options=OtherOptions::new(hangar_server::terminal_control::TerminalPool::new(),hangar_server::provider_models::inbox::Store::new(),Arc::new(TerminalProcessView {cwd:root.into()}),Arc::new(hangar_server::interactions::InteractionStore::default()));
+    let io=ProcessOtherIo::new(&target,&options);(target,io,written)
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn other_terminal_partial_write_preserves_unknown_after_the_first_windows_chunk() {
+    use hangar_server::runtime::other_terminal::{OtherIo,OtherWriteGuard,read_pending_interaction};
+    let root=tempfile::tempdir().unwrap();let (target,io,written)=partial_windows_terminal(root.path(),false);
+    let pending=read_pending_interaction(&target).unwrap().unwrap();let guard=OtherWriteGuard {target:pending.target,semantic:pending.semantic};
+    let result=io.write(&target,&"x".repeat(513),true,Some(&guard)).await;
+    assert_eq!(std::fs::read_to_string(written).unwrap(),format!("{}\n","x".repeat(512)),"só o primeiro bloco foi escrito antes da troca");
+    assert_eq!(result.unwrap_err().code,"other_terminal_delivery_unconfirmed","Unknown não pode virar recusa sem efeito que autoriza repetir o bloco");
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn other_terminal_partial_write_preserves_prior_effect_between_windows_lines() {
+    use hangar_server::runtime::other_terminal::{OtherIo,OtherWriteGuard,read_pending_interaction};
+    let root=tempfile::tempdir().unwrap();let (target,io,written)=partial_windows_terminal(root.path(),false);
+    let pending=read_pending_interaction(&target).unwrap().unwrap();let guard=OtherWriteGuard {target:pending.target,semantic:pending.semantic};
+    let result=io.write(&target,"primeira\nsegunda",true,Some(&guard)).await;
+    assert_eq!(std::fs::read_to_string(written).unwrap(),"primeira\n","o separador e a segunda linha não podem alcançar a pergunta nova");
+    assert_eq!(result.unwrap_err().code,"other_terminal_delivery_unconfirmed","uma linha já aceita impede classificar a falha seguinte como ausência de efeito");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn other_terminal_partial_write_distinguishes_no_effect_from_a_missing_key_ack() {
+    use hangar_server::runtime::other_terminal::{OtherIo,OtherWriteGuard,read_pending_interaction};
+    for wrote in [false,true] {
+        let root=tempfile::tempdir().unwrap();
+        let (target,io,written)=if wrote {partial_windows_terminal(root.path(),true)}else{process_terminal(root.path(),true,true)};
+        let pending=read_pending_interaction(&target).unwrap().unwrap();let guard=OtherWriteGuard {target:pending.target,semantic:pending.semantic};
+        let result=io.write(&target,"C-s",false,Some(&guard)).await;
+        if wrote {
+            assert_eq!(std::fs::read_to_string(written).unwrap(),"C-s\n");
+            assert_eq!(result.unwrap_err().code,"other_terminal_delivery_unconfirmed","falha de ACK não comprova ausência da tecla");
+        }else{
+            assert!(!written.exists());
+            assert_eq!(result.unwrap_err().code,"erro_interacao_desatualizada","recusa comprovada antes do efeito conserva o código próprio");
+        }
+    }
+}

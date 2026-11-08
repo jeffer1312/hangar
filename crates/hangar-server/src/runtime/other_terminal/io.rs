@@ -32,8 +32,8 @@ impl ProcessOtherIo {
         let (program,prefix)=target.binding.mux_argv.split_first().ok_or_else(||failed("other_terminal_mux_missing"))?;
         let io=GuardedIo {source:self.clone(),target:target.clone(),guard:guard.cloned()};
         let request=CommandRequest {program:program.clone(),args:prefix.iter().cloned().chain(["send-keys".into(),"-t".into(),target.pane_address.clone(),key.into()]).collect(),stdin:vec![]};
-        let output=io.command(request).await.map_err(|error|RuntimeError::new(error.code,"o terminal não comprovou a escrita desta interação"))?;
-        if !output.success {return Err(failed("other_terminal_mux_refused"));}
+        let output=io.command(request).await.map_err(|error|if error.may_have_written {failed("other_terminal_delivery_unconfirmed")}else{RuntimeError::new(error.code,"o terminal não comprovou a escrita desta interação")})?;
+        if !output.success {return Err(failed("other_terminal_delivery_unconfirmed"));}
         Ok(())
     }
     async fn prove_inner(&self,target:&OtherTarget)->Result<bool,RuntimeError> {
@@ -86,11 +86,19 @@ impl OtherIo for ProcessOtherIo {
         if !self.prove_inner(target).await? {return Err(failed("other_terminal_life_changed"));}
         let driver=self.driver(target,guard);
         if literal && target.binding.windows && value.contains('\n') {
+            // Uma recusa posterior não desfaz bytes já enviados ao composer.
+            let mut effects=false;
             for (index,line) in value.split('\n').enumerate() {
-                if index>0 {self.guarded_key(target,"C-j",guard).await?;}
+                if index>0 {
+                    self.guarded_key(target,"C-j",guard).await.map_err(|error|if effects {failed("other_terminal_delivery_unconfirmed")}else{error})?;
+                    effects=true;
+                }
                 if !line.is_empty() {
                     let result=driver.text(line).await;
-                    if result.disposition!=crate::terminal_input::Disposition::Accepted {return Err(RuntimeError::new(&result.code,"o terminal não confirmou a escrita"));}
+                    if result.disposition!=crate::terminal_input::Disposition::Accepted {
+                        return Err(write_failure(&result,effects));
+                    }
+                    effects=true;
                 }
             }
             return Ok(());
@@ -100,9 +108,14 @@ impl OtherIo for ProcessOtherIo {
             return Ok(());
         }
         let result=if literal {driver.text(value).await}else{driver.key(value,true).await};
-        if result.disposition==crate::terminal_input::Disposition::Accepted {Ok(())}else{Err(RuntimeError::new(&result.code,"o terminal não confirmou a escrita"))}
+        if result.disposition==crate::terminal_input::Disposition::Accepted {Ok(())}else{Err(write_failure(&result,false))}
     })}
     fn release<'a>(&'a self)->BoxFuture<'a,()> {Box::pin(async move {let _=self.pool.release(&self.request.consumer).await;})}
+}
+
+fn write_failure(result:&crate::terminal_input::DeliveryResult,effects:bool)->RuntimeError {
+    if effects || result.disposition==crate::terminal_input::Disposition::Unknown {failed("other_terminal_delivery_unconfirmed")}
+    else {RuntimeError::new(&result.code,"o terminal não confirmou a escrita")}
 }
 
 /// A mesma fonte nativa da descoberta: bilhete fresco e reserva pelo ambiente do processo.
