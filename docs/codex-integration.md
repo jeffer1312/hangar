@@ -100,6 +100,12 @@ oficial `config/batchWrite` edita uma cópia de `config.toml`; o Hangar valida n
 conteúdo original antes de substituir o arquivo vivo. Isso mantém a escrita de TOML sob a
 responsabilidade do Codex e permite detectar alterações concorrentes.
 
+Os MCPs globais vêm de `$CLAUDE_CONFIG_DIR/.claude.json` quando a variável está preenchida,
+inclusive quando aponta para `~/.claude`. Sem a variável, ou com valor vazio, vêm de
+`~/.claude.json`. A assinatura do cache usa a mesma fonte da importação. Com uma pasta
+explícita, o arquivo antigo do HOME não é fonte alternativa: um arquivo inválido na pasta
+escolhida impede a importação e preserva os servidores existentes.
+
 O bloco global `settings.env` participa da categoria nativa `CONFIG`. A área temporária recebe
 somente `env` e `hooks` do `settings.json`, e o reconciliador mescla exclusivamente as variáveis
 convertidas em `shell_environment_policy.set`. Não transfere `inherit`, filtros de ambiente,

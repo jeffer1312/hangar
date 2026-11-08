@@ -77,7 +77,7 @@ async fn import_stage(paths:&Paths<'_>,registry:&mut Value,state:&State,memory:b
   let projects=paths.home.join(".claude/projects");if !projects.is_dir(){warning(state,"aviso_memoria_sem_fonte",json!({}));}
   let errors=stage_sources::copy_memory(&projects,&cc.join("projects"));if !errors.is_empty(){warning(state,"aviso_memoria_erro",json!({"n":errors.len(),"exemplos":errors.iter().take(3).cloned().collect::<Vec<_>>().join(", ")}));}
  }
- let mcp_path=paths.home.join(".claude.json");
+ let mcp_path=stage_sources::mcp_config_path(paths.env);
  if files::read(&mcp_path)?.is_some(){
   let data=ValueGuard(read_json(&mcp_path)?);let mcp=get(&data,"mcpServers",&empty)?;
   if !mcp.as_object().is_some_and(|m|m.values().all(Value::is_object)){return Err(error("ValueError","Configuração MCP inválida; servidores existentes preservados"));}

@@ -1,5 +1,77 @@
-use hangar_server::codex_setup::stage_sources;
-use serde_json::json;
+use hangar_server::{
+    accounts::environment::AccountEnvironment,
+    codex_setup::{phase::{Error, State}, stage_flow::{self, Actions, Configuration}, stage_sources},
+};
+use serde_json::{Value, json};
+use std::path::Path;
+
+struct ImportSourceProbe {
+    staged: Option<Value>,
+}
+
+impl Actions for ImportSourceProbe {
+    async fn history(&mut self) -> Result<Value, Error> { Ok(json!({})) }
+    fn fingerprint(&mut self) -> Result<String, Error> { Ok("source".into()) }
+    async fn open(&mut self, home: &Path, _: &Path, _: bool) -> Result<(), Error> {
+        self.staged = Some(hangar_server::codex_setup::files::object(&home.join(".claude.json"))?);
+        Err(Error { kind: "ProbeComplete", message: String::new() })
+    }
+    async fn detect(&mut self) -> Result<Vec<Value>, Error> { unreachable!() }
+    async fn import(&mut self, _: Vec<Value>) -> Result<Value, Error> { unreachable!() }
+    async fn close(&mut self) -> Result<(), Error> { unreachable!() }
+    async fn configure(&mut self, _: Configuration<'_>, _: &mut Value) -> Result<(), Error> { unreachable!() }
+    fn hooks(&mut self, _: &Value, _: &mut Value) -> Result<(), Error> { unreachable!() }
+    fn checkpoint(&mut self, _: &mut Value) -> Result<(), Error> { unreachable!() }
+}
+
+#[tokio::test]
+async fn codex_mcp_stage_uses_selected_config_without_legacy_fallback() {
+    let temp = crate::physical_tempdir();
+    let home = temp.path();
+    let selected = home.join(".claude");
+    std::fs::create_dir(&selected).unwrap();
+    std::fs::write(selected.join("settings.json"), "{}").unwrap();
+    let current = json!({"mcpServers":{"open-design":{"type":"http","url":"https://design.example/mcp"}}});
+    let old = json!({"mcpServers":{"old":{"type":"http","url":"https://old.example/mcp"}}});
+    std::fs::write(home.join(".claude.json"), serde_json::to_vec(&old).unwrap()).unwrap();
+    let work = home.join("work");
+    std::fs::create_dir(&work).unwrap();
+    for configured in [None, Some(""), Some("~/.claude")] {
+        let mut pairs = vec![("HOME", home.to_string_lossy().into_owned()), ("USERPROFILE", home.to_string_lossy().into_owned())];
+        if let Some(value) = configured { pairs.push(("CLAUDE_CONFIG_DIR", value.into())); }
+        let env = AccountEnvironment::from_pairs(pairs);
+        if configured == Some("~/.claude") {
+            std::fs::write(home.join(".claude.json"), "arquivo antigo inválido").unwrap();
+        }
+        for exists in [true, false] {
+            let source = selected.join(".claude.json");
+            if exists { std::fs::write(&source, serde_json::to_vec(&current).unwrap()).unwrap(); }
+            else { std::fs::remove_file(&source).unwrap(); }
+            let mut probe = ImportSourceProbe { staged: None };
+            let result = stage_flow::run(&stage_flow::Paths { env: &env, home, account: &home.join(".codex"), work: &work, backups: &home.join("backups") }, &mut json!({}), &State::new(json!({"avisos":[]})), false, &mut probe).await;
+            assert_eq!(result.unwrap_err().kind, "ProbeComplete");
+            let staged = probe.staged.unwrap();
+            if configured == Some("~/.claude") {
+                assert!(staged["mcpServers"].get("old").is_none());
+                if exists { assert_eq!(staged["mcpServers"]["open-design"]["url"], "https://design.example/mcp"); }
+                else { assert!(staged.get("mcpServers").is_none()); }
+            } else {
+                assert_eq!(staged["mcpServers"]["old"]["url"], "https://old.example/mcp");
+                assert!(staged["mcpServers"].get("open-design").is_none());
+            }
+        }
+    }
+    let env = AccountEnvironment::from_pairs([
+        ("HOME", home.to_string_lossy().into_owned()),
+        ("USERPROFILE", home.to_string_lossy().into_owned()),
+        ("CLAUDE_CONFIG_DIR", selected.to_string_lossy().into_owned()),
+    ]);
+    std::fs::write(selected.join(".claude.json"), "configuração viva inválida").unwrap();
+    let mut probe = ImportSourceProbe { staged: None };
+    let result = stage_flow::run(&stage_flow::Paths { env: &env, home, account: &home.join(".codex"), work: &work, backups: &home.join("backups") }, &mut json!({}), &State::new(json!({"avisos":[]})), false, &mut probe).await;
+    assert_eq!(result.unwrap_err().kind, "ValueError");
+    assert!(probe.staged.is_none(), "fonte inválida precisa impedir a conversão");
+}
 proptest::proptest! {
  #![proptest_config(proptest::test_runner::Config::with_cases(64))]
  #[test]
