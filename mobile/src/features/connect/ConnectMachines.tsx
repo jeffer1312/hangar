@@ -11,7 +11,7 @@ import { useSettingsColors } from '../config/colors';
 import { MachineGroup, MachineHelp, MachineRow } from '../machines/MachineRows';
 import { Field, MachineSheet, Notice, styles as machineStyles, useMachineAction } from '../machines/parts';
 import { ownServers, useServers } from '../../stores/servers';
-import { connectServers, needsEntry, sameMachine, useConnect } from './connectStore';
+import { connectServers, missingMachines, needsEntry, sameMachine, useConnect } from './connectStore';
 import { ConnectMark } from './ConnectHero';
 import { chosenTargets, pendingGroups, type PendingGroup } from './pendingGroups';
 import { reason } from '../machines/api';
@@ -56,15 +56,16 @@ export function ConnectMachines({ onDone }: { onDone: () => void }) {
   const entered = () => { if (mounted.current) onDone(); };
   const waiting = machines?.filter((machine) => entries[machine.machine_id]?.phase === 'waiting') ?? [];
   const own = ownServers(servers);
-  const missing = machines?.filter((machine) => machine.online && !own.some((server) => sameMachine(server, machine))) ?? [];
-  const asking = missing.some((machine) => ['asking', 'waiting'].includes(entries[machine.machine_id]?.phase ?? ''));
+  const missing = missingMachines(machines, servers);
+  // Uma máquina esperando aprovação não trava as outras: "Entrar em todas" pula quem já está pedindo.
+  const idle = missing.filter((machine) => !['asking', 'waiting'].includes(entries[machine.machine_id]?.phase ?? ''));
   const later = machines?.filter((machine) => !machine.online && !own.some((server) => sameMachine(server, machine))) ?? [];
   const code = useConnect((s) => s.installCode);
-  const codeFailed = useConnect((s) => s.installCodeFailed);
+  const codeError = useConnect((s) => s.installCodeError);
   const offerAll = missing.length > 1;
   // Também no pedido de uma máquina só: quem aprova vê o mesmo código no cartão.
   useEffect(() => { if (missing.length) void useConnect.getState().loadInstallCode(); }, [missing.length > 0]);
-  const codeText = code ? m.connect_enter_all_code({ code }) : codeFailed ? m.connect_install_code_unavailable() : '';
+  const codeText = code ? m.connect_enter_all_code({ code }) : codeError;
   const allHelp = [codeText,
     later.length ? m.connect_enter_all_offline({ machines: later.map((machine) => machine.name).join(', ') }) : ''].filter(Boolean).join('\n');
   const enterAll = () => {
@@ -89,7 +90,7 @@ export function ConnectMachines({ onDone }: { onDone: () => void }) {
       {machines === null && !error ? <MachineRow title={loading ? m.mobile_machines_busy() : m.comum_carregando()} /> : null}
       {machines?.length === 0 ? <MachineRow title={m.connect_machines_empty()} /> : null}
       {machines?.map((machine) => <MachineItem key={machine.machine_id} machine={machine} onEntered={entered} onOpen={onDone} />)}
-      {offerAll ? <MachineRow title={m.connect_enter_all()} description={allHelp || undefined} action disabled={asking} onPress={enterAll} /> : null}
+      {offerAll ? <MachineRow title={m.connect_enter_all()} description={allHelp || undefined} action disabled={!idle.length} onPress={enterAll} /> : null}
     </SectionCard>
     <Notice text={error} error />
     {/* Puxar para atualizar não se vê: o erro traz o caminho à mostra. */}
@@ -192,17 +193,14 @@ function PendingGroupCard({ group, lists }: { group: PendingGroup; lists: { read
   const [off, setOff] = useState<ReadonlySet<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [errors, setErrors] = useState<{ label: string; error: string }[]>([]);
-  const [leftovers, setLeftovers] = useState<string[]>([]);
   const chosen = chosenTargets(group, off);
   const reading = lists.read < lists.total;
   const answer = (approve: boolean) => {
     setBusy(true);
     setErrors([]);
-    setLeftovers([]);
-    void useConnect.getState().answerGroup(approve ? chosen : group.targets, approve).then((result) => {
-      setErrors(result.failed);
-      setLeftovers(result.leftovers);
-      if (result.failed.length) haptic.error();
+    void useConnect.getState().answerGroup(approve ? chosen : group.targets, approve).then((failed) => {
+      setErrors(failed);
+      if (failed.length) haptic.error();
       else haptic.success();
     }).catch((error: unknown) => {
       haptic.error();
@@ -234,7 +232,6 @@ function PendingGroupCard({ group, lists }: { group: PendingGroup; lists: { read
     <MachineRow title={m.connect_group_deny()} danger action disabled={busy} onPress={() => answer(false)} />
     {lists.failed.map((machine) => <Notice key={machine} text={m.connect_group_list_failed({ machine })} error />)}
     {errors.map((failed, i) => <Notice key={`${failed.label}:${i}`} text={m.connect_group_failed({ machines: failed.label, error: failed.error })} error />)}
-    <Notice text={leftovers.length ? m.connect_group_stale_failed({ machines: leftovers.join(', ') }) : ''} />
   </SectionCard>;
 }
 

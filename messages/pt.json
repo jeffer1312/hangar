@@ -10186,7 +10186,7 @@
   "connect_error_install_id": "Não deu para ler o identificador deste celular no cofre. Tente de novo.",
   "connect_notice_dismiss": "Dispensar",
   "connect_install_code_unavailable": "Código deste celular indisponível: o cofre não respondeu. Confira pelo nome do aparelho.",
-  "connect_group_stale_failed": "Aprovado, mas o pedido anterior deste celular ficou em {machines}; ele expira sozinho.",
+  "connect_install_code_no_random": "Este celular não gera um identificador seguro, então não há código. Confira pelo nome do aparelho.",
   "connect_refused_help": "A entrada deste aparelho foi recusada ou revogada. Peça de novo e aprove na máquina.",
   "connect_reenter": "Entrar de novo",
   "connect_reenter_unknown": "A máquina {name} não está nesta conta. Entre na conta dela para pedir de novo.",

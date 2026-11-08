@@ -327,13 +327,13 @@ describe('máquinas da conta', () => {
     expect(vault.get('cp_connect_install_id_v1')).toBe(codes[0].install_id);
     expect(calls.some((call) => call.url.pathname === '/api/connect/redeem')).toBe(false);
 
-    // A tela diz que o código não está disponível, em vez de só não mostrar nada.
+    // A tela diz por que o código não está disponível, em vez de só não mostrar nada.
     broken.read.add('cp_connect_install_id_v1');
     await connect().loadInstallCode();
-    expect([connect().installCode, connect().installCodeFailed]).toEqual(['', true]);
+    expect([connect().installCode, connect().installCodeError]).toEqual(['', m.connect_install_code_unavailable()]);
     broken.read.clear();
     await connect().loadInstallCode();
-    expect([connect().installCode, connect().installCodeFailed]).toEqual([codes[0].code, false]);
+    expect([connect().installCode, connect().installCodeError]).toEqual([codes[0].code, '']);
 
     vault.delete('cp_connect_install_id_v1');
     for (const fault of [broken.write, broken.hangWrite]) {
@@ -341,11 +341,15 @@ describe('máquinas da conta', () => {
       const loading = connect().loadInstallCode();
       await elapse(6000);
       await loading;
-      expect([connect().installCode, connect().installCodeFailed]).toEqual(['', true]);
+      expect([connect().installCode, connect().installCodeError]).toEqual(['', m.connect_install_code_unavailable()]);
       fault.clear();
     }
+    // Sem gerador seguro o cofre não tem culpa: a causa dita é outra.
+    vi.stubGlobal('crypto', {});
+    await connect().loadInstallCode();
+    expect([connect().installCode, connect().installCodeError]).toEqual(['', m.connect_install_code_no_random()]);
     expect(events.map((event) => event.codigo)).toEqual(['connect_install_id_unreadable', 'connect_install_id_unreadable',
-      'connect_install_id_unreadable', 'connect_install_id_unsaved', 'connect_install_id_unsaved']);
+      'connect_install_id_unreadable', 'connect_install_id_unsaved', 'connect_install_id_unsaved', 'connect_install_id_no_random']);
   });
 
   it('adds a machine as a normal server', async () => {
@@ -514,26 +518,15 @@ describe('aparelhos da máquina', () => {
     await seed([entry, pc2, { ...pc2, id: 'pc3', label: 'pc3', baseUrl: 'https://pc3.acme.hangar.dev.br' }]);
     const calls = network();
 
-    const failed = await connect().answerGroup([
-      { serverId: 'pc1', label: 'pc1', deviceId: 'a1', stale: ['a0'] }, { serverId: 'pc2', label: 'pc2', deviceId: 'a2', stale: [] }], true);
+    const failed = await connect().answerGroup([{ serverId: 'pc1', label: 'pc1', deviceId: 'a1' }, { serverId: 'pc2', label: 'pc2', deviceId: 'a2' }], true);
 
     const answers = calls.filter((call) => call.method === 'DELETE' || (call.method === 'POST' && call.url.pathname.endsWith('/approve')))
       .map((call) => `${call.method} ${call.url.host}${call.url.pathname} ${call.auth}`).sort();
     expect(answers).toEqual([
-      'DELETE pc1.acme.hangar.dev.br/api/connect/devices/a0 Bearer device-token',
       'POST pc1.acme.hangar.dev.br/api/connect/devices/a1/approve Bearer device-token',
       'POST pc2.acme.hangar.dev.br/api/connect/devices/a2/approve Bearer device-token-2',
     ]);
-    expect(failed).toEqual({ failed: [], leftovers: [] });
-  });
-
-  it('pedido anterior que não sai depois da aprovação vira aviso à parte, não falha da máquina', async () => {
-    await seed([entry]);
-    network({ route: (call) => (call.method === 'DELETE' ? json({ detail: 'fora' }, 503) : undefined) });
-
-    const answered = await connect().answerGroup([{ serverId: 'pc1', label: 'pc1', deviceId: 'a1', stale: ['a0'] }], true);
-
-    expect(answered).toEqual({ failed: [], leftovers: ['pc1'] });
+    expect(failed).toEqual([]);
   });
 
   it('a resposta à aprovação relê a lista mesmo com uma leitura antiga em curso', async () => {
