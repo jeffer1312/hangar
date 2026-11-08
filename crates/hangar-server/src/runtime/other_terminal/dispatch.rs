@@ -134,13 +134,14 @@ pub(super) async fn drain(
             .await
             .map_err(|_| failed("queue_io"))?;
     }
+    let mut composer_checked = |empty| episode.composer_checked(empty);
     let result = if matches!(
         target.provider,
         hangar_transcript::Provider::Pi | hangar_transcript::Provider::Omp
     ) {
-        drive::prompt_with_episode(target, &aware, &text, enriched.as_ref(), episode).await
+        drive::prompt_with_episode(target, &aware, &text, enriched.as_ref(), &mut composer_checked).await
     } else {
-        drive::prompt_with_episode(target, &**io, &text, enriched.as_ref(), episode).await
+        drive::prompt_with_episode(target, &**io, &text, enriched.as_ref(), &mut composer_checked).await
     };
     episode.record(target, options, result.stage, &result.code);
     let outcome = status(result.disposition);
@@ -204,9 +205,10 @@ pub(super) async fn direct_prompt(
     let frame = if matches!(target.provider, hangar_transcript::Provider::Pi | hangar_transcript::Provider::Omp) {
         match initial {Some(frame) => Some(aware.enrich(frame.clone()).await?), None => None}
     } else {initial.cloned()};
+    let mut composer_checked = |empty| episode.composer_checked(empty);
     let result = if matches!(target.provider, hangar_transcript::Provider::Pi | hangar_transcript::Provider::Omp) {
-        drive::prompt_with_episode(target, &aware, text, frame.as_ref(), episode).await
-    } else { drive::prompt_with_episode(target, &**io, text, frame.as_ref(), episode).await };
+        drive::prompt_with_episode(target, &aware, text, frame.as_ref(), &mut composer_checked).await
+    } else { drive::prompt_with_episode(target, &**io, text, frame.as_ref(), &mut composer_checked).await };
     episode.record(target, options, result.stage, &result.code);
     let disposition = match result.disposition {
         crate::terminal_input::Disposition::Accepted => Disposition::Accepted,

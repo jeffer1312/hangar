@@ -338,14 +338,14 @@ pub async fn prompt(
 
 pub(super) async fn prompt_with_episode(
     target: &OtherTarget, io: &dyn OtherIo, text: &str, initial: Option<&OtherFrame>,
-    episode: &mut super::deferred_episode::DeferredEpisode,
+    composer_checked: &mut (dyn FnMut(bool) + Send),
 ) -> DeliveryResult {
-    prompt_inner(target, io, text, initial, Some(episode)).await
+    prompt_inner(target, io, text, initial, Some(composer_checked)).await
 }
 
 async fn prompt_inner(
     target: &OtherTarget, io: &dyn OtherIo, text: &str, initial: Option<&OtherFrame>,
-    episode: Option<&mut super::deferred_episode::DeferredEpisode>,
+    composer_checked: Option<&mut (dyn FnMut(bool) + Send)>,
 ) -> DeliveryResult {
     if !valid_text(text, true) || text.trim().is_empty() {
         return result(
@@ -442,8 +442,8 @@ async fn prompt_inner(
         );
     }
     let before = composer(target, &frame);
-    if let Some(episode) = episode {
-        episode.composer_checked(before.as_ref().is_some_and(ComposerSnapshot::is_empty));
+    if let Some(composer_checked) = composer_checked {
+        composer_checked(before.as_ref().is_some_and(ComposerSnapshot::is_empty));
     }
     if before.as_ref().is_some_and(|before| !before.is_empty()) {
         return result(
