@@ -59,10 +59,21 @@ def main():
 
     def open_item(label):
         e = None
-        for _ in range(10):  # a tela ainda pode estar abrindo
+        attempts = 10  # a tela ainda pode estar abrindo
+        can_swipe = True
+        for attempt in range(attempts):
             e = find(f"label == '{label}' AND type != 'XCUIElementTypeNavigationBar'")
-            if e:
+            if e or attempt == attempts - 1:
                 break
+            if attempt >= 2 and can_swipe:  # lista longa: o item fora da tela só entra na árvore depois de rolar
+                try:
+                    size = call("GET", f"/session/{s}/window/size")["value"]
+                    x = size["width"] / 2
+                    call("POST", f"/session/{s}/wda/dragfromtoforduration",
+                         {"fromX": x, "fromY": size["height"] * 0.75, "toX": x, "toY": size["height"] * 0.35, "duration": 0.3})
+                except (urllib.error.URLError, KeyError, TypeError) as err:  # sem rolar, a busca segue e o "não achei" sai no fim
+                    print(f"aviso: a rolagem dos Ajustes falhou ({err})", file=sys.stderr)
+                    can_swipe = False
             time.sleep(1)
         if not e:
             raise SystemExit(f"aviso: não achei '{label}' nos Ajustes; religue à mão em Ajustes > Geral > Teclado")

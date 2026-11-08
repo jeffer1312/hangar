@@ -57,6 +57,8 @@ gpui_kit::assets::icon_assets!(ExtraIcons, [ArrowUp, GitBranch, RotateCcwClock, 
     Recycle, ChartLine, PiggyBank, Gauge, Database, Coins, Boxes, TrendingUp, TrendingDown]);
 
 pub const HANGAR_MARK: &str = "brand/hangar-mark.svg";
+/// Os três arcos da marca da página (`assets/brand/mark.svg`), um arquivo cada: a abertura do Connect acende um depois do outro.
+pub const CONNECT_MARK_ARCS: [&str; 3] = ["brand/connect-mark-outer.svg", "brand/connect-mark-middle.svg", "brand/connect-mark-inner.svg"];
 pub const GROUP_GLYPH: &str = "brand/group-glyph.svg";
 pub const MACHINES_GLYPH: &str = "brand/machines.svg";
 pub const NO_TERMINAL: &str = "signals/no-terminal.svg";
@@ -94,6 +96,9 @@ struct AppAssets;
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
         if path == HANGAR_MARK { return Ok(Some(Cow::Borrowed(include_bytes!("../assets/hangar-mark.svg")))); }
+        if path == CONNECT_MARK_ARCS[0] { return Ok(Some(Cow::Borrowed(include_bytes!("../assets/connect-mark-outer.svg")))); }
+        if path == CONNECT_MARK_ARCS[1] { return Ok(Some(Cow::Borrowed(include_bytes!("../assets/connect-mark-middle.svg")))); }
+        if path == CONNECT_MARK_ARCS[2] { return Ok(Some(Cow::Borrowed(include_bytes!("../assets/connect-mark-inner.svg")))); }
         if path == GROUP_GLYPH { return Ok(Some(Cow::Borrowed(include_bytes!("../assets/group-glyph.svg")))); }
         if path == MACHINES_GLYPH { return Ok(Some(Cow::Borrowed(include_bytes!("../assets/machines.svg")))); }
         if path == NO_TERMINAL { return Ok(Some(Cow::Borrowed(include_bytes!("../assets/signals/no-terminal.svg")))); }

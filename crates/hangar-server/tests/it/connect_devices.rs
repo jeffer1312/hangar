@@ -16,7 +16,7 @@ use base64::engine::general_purpose::STANDARD;
 use futures_util::{SinkExt, StreamExt};
 use hangar_server::accounts::{AccountService, environment::AccountEnvironment};
 use hangar_server::auth::Auth;
-use hangar_server::connect::devices::{MAX_TICKET_AHEAD, PENDING_TTL, Poll, Refusal, ServiceIdentity, Store};
+use hangar_server::connect::devices::{MAX_PENDING, MAX_TICKET_AHEAD, PENDING_TTL, Poll, Refusal, ServiceIdentity, Store};
 use hangar_server::devices::{CONNECT_PEER, Registry};
 use hangar_server::login_guests::store::hash;
 use hangar_server::login_guests::{Service, Settings};
@@ -318,7 +318,9 @@ async fn pending_device_has_no_access_until_approved() {
     let wrong = post(e.connect, "/api/connect/redeem/status", json!({"device_id": id, "secret": "s2"})).send().await.unwrap();
     assert_eq!(wrong.status(), 401);
     let rows = body_of(get(e.main, "/api/connect/devices").bearer_auth(OWNER).send().await.unwrap()).await;
-    assert_eq!(rows, json!([{"device_id": id, "name": "celular", "status": "pending", "last_seen": null}]), "o nome é o assinado, não o do corpo");
+    let created_at = rows[0]["created_at"].clone();
+    assert_eq!(rows, json!([{"device_id": id, "name": "celular", "status": "pending", "last_seen": null, "created_at": created_at}]),
+        "o nome é o assinado, não o do corpo");
     assert_eq!(get(e.connect, "/api/connect/devices").send().await.unwrap().status(), 401);
     // Recusado não recebe token, nem aprovado depois.
     let removed = client().delete(format!("http://{}/api/connect/devices/{id}", e.main)).bearer_auth(OWNER).send().await.unwrap();
@@ -331,6 +333,64 @@ async fn pending_device_has_no_access_until_approved() {
     assert_eq!(api_status(e.connect, &token).await, 200);
     let disk = std::fs::read_to_string(e.dir.path().join("connect/devices.json")).unwrap();
     assert!(!disk.contains(&token) && disk.contains(&hash(token.as_bytes())));
+}
+
+#[tokio::test]
+async fn install_id_groups_one_phone_across_machines() {
+    let e = plain().await;
+    let (text, signature) = ticket("pc1", "acme", "n1", "s1");
+    let bad = post(e.connect, "/api/connect/redeem", json!({"ticket": text, "signature": signature, "secret": "s1", "install_id": "não vale"}))
+        .send().await.unwrap();
+    assert_eq!(bad.status(), 422);
+    assert_eq!(body_of(bad).await["detail"]["code"], "connect_install_id_invalid");
+    let rows = body_of(get(e.main, "/api/connect/devices").bearer_auth(OWNER).send().await.unwrap()).await;
+    assert_eq!(rows, json!([]), "id recusado não cria pedido nem gasta o bilhete");
+    let accepted = post(e.connect, "/api/connect/redeem", json!({"ticket": text, "signature": signature, "secret": "s1", "install_id": "a1B2-c3_d4"}))
+        .send().await.unwrap();
+    assert_eq!(accepted.status(), 202);
+    let rows = body_of(get(e.main, "/api/connect/devices").bearer_auth(OWNER).send().await.unwrap()).await;
+    assert_eq!(rows[0]["install_code"], "Y3G-VQA", "o mesmo código que o celular calcula (installCode.fixtures.json)");
+    assert!(rows[0]["install_group"].as_str().is_some_and(|group| group.len() == 64 && !group.contains("a1B2")), "{rows}");
+    assert!(rows[0].get("install_id").is_none(), "o id cru não sai na lista: {rows}");
+    assert!(rows[0]["created_at"].is_u64(), "o cartão mostra há quanto tempo o pedido chegou: {rows}");
+}
+
+/// Nova tentativa do mesmo celular (mesmo id e nome) substitui o pedido anterior: um cartão só, e o limite de pedidos
+/// esperando não se gasta com tentativas.
+#[tokio::test]
+async fn a_retry_from_the_same_phone_replaces_its_pending_request() {
+    let e = plain().await;
+    let (mut last, mut last_secret) = (String::new(), String::new());
+    for i in 0..=MAX_PENDING {
+        // Cada tentativa tem o seu segredo: o pedido novo consulta o próprio estado, não o da tentativa anterior.
+        let secret = format!("s{i}");
+        let (text, signature) = ticket("pc1", "acme", &format!("retry{i}"), &secret);
+        let accepted = post(e.connect, "/api/connect/redeem", json!({"ticket": text, "signature": signature, "secret": secret, "install_id": "ph1"}))
+            .send().await.unwrap();
+        assert_eq!(accepted.status(), 202, "tentativa {i}");
+        (last, last_secret) = (body_of(accepted).await["device_id"].as_str().unwrap().to_owned(), secret);
+    }
+    let rows = body_of(get(e.main, "/api/connect/devices").bearer_auth(OWNER).send().await.unwrap()).await;
+    let ids: Vec<&str> = rows.as_array().unwrap().iter().map(|row| row["device_id"].as_str().unwrap()).collect();
+    assert_eq!(ids, [last.as_str()]);
+    assert_eq!(status(e.connect, &last, &last_secret).await, json!({"status": "pending"}));
+    assert_eq!(post(e.connect, "/api/connect/redeem/status", json!({"device_id": last, "secret": "s0"})).send().await.unwrap().status(), 401,
+        "o segredo da primeira tentativa não abre a última");
+    let (text, signature) = ticket("pc1", "acme", "outro", "s1");
+    let other = post(e.connect, "/api/connect/redeem", json!({"ticket": text, "signature": signature, "secret": "s1", "install_id": "ph2"}))
+        .send().await.unwrap();
+    assert_eq!(other.status(), 202, "outro celular não substitui o primeiro");
+    let rows = body_of(get(e.main, "/api/connect/devices").bearer_auth(OWNER).send().await.unwrap()).await;
+    assert_eq!(rows.as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn check_code_matches_the_phone() {
+    let cases: Vec<Value> = serde_json::from_str(include_str!("../../../../packages/core/src/installCode.fixtures.json")).unwrap();
+    assert!(!cases.is_empty());
+    for case in cases {
+        assert_eq!(hangar_server::connect::devices::install_code(case["install_id"].as_str().unwrap()), case["code"].as_str().unwrap(), "{case}");
+    }
 }
 
 #[test]

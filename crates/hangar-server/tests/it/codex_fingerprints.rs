@@ -5,6 +5,32 @@ use hangar_server::{
 use serde_json::json;
 
 #[test]
+fn codex_mcp_fingerprint_tracks_the_selected_claude_config() {
+    let temp = crate::physical_tempdir();
+    let home = temp.path();
+    let selected = home.join(".claude");
+    std::fs::create_dir(&selected).unwrap();
+    let path = selected.join(".claude.json");
+    std::fs::write(&path, r#"{"mcpServers":{"current":{"url":"https://current.example/mcp"}}}"#).unwrap();
+    let env = AccountEnvironment::from_pairs([
+        ("HOME", home.to_string_lossy().into_owned()),
+        ("USERPROFILE", home.to_string_lossy().into_owned()),
+        ("CLAUDE_CONFIG_DIR", "~/.claude".into()),
+    ]);
+    for sources in [true, false] {
+        std::fs::write(home.join(".claude.json"), r#"{"mcpServers":{"old":{"url":"https://old.example/mcp"}}}"#).unwrap();
+        let signature = || fingerprints::compute(&env, &home.join(".codex"), &home.join("repo"), &json!({}), false, "fragments", sources).unwrap();
+        let before = signature();
+        std::fs::write(&path, r#"{"mcpServers":{"open-design":{"url":"https://design.example/mcp"}}}"#).unwrap();
+        assert_ne!(before, signature(), "MCP da configuração viva deve invalidar o cache");
+        let before = signature();
+        std::fs::write(home.join(".claude.json"), "arquivo antigo inválido").unwrap();
+        assert_eq!(before, signature(), "arquivo fora da configuração escolhida não é fonte");
+        std::fs::write(&path, r#"{"mcpServers":{"current":{"url":"https://current.example/mcp"}}}"#).unwrap();
+    }
+}
+
+#[test]
 fn codex_service_native_wrapper_fingerprint_ignores_obsolete_python_copies() {
     let temp = crate::physical_tempdir();
     let home = temp.path().join("home");

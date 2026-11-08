@@ -35,6 +35,12 @@ FIXO="${HANGAR_VERIFICAR_ARVORE:-${XDG_CACHE_HOME:-$HOME/.cache}/hangar-verifica
 # Não é o /tmp/hangar-verificacao.lock: os scripts npm pegam aquele por dentro, e o mesmo arquivo
 # aqui fora travaria o filho até o prazo.
 TRAVA=/tmp/hangar-verificar-local.lock
+# Cada cargo daqui pega a trava do cargo-pinned: a verificação e as builds das sessões compilavam
+# juntas e levavam a máquina ao swap. O `declare -f` leva a função aos passos. No Git Bash da VM não
+# há flock.
+if command -v flock >/dev/null; then
+    cargo() { flock "${HANGAR_BUILD_LOCK:-/tmp/hangar-build.lock}" cargo "$@"; }
+fi
 VM_GIT=/c/hangar-verificacao/arvore
 VM_WIN='C:/hangar-verificacao'
 

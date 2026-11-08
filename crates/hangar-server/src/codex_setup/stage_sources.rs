@@ -1,5 +1,6 @@
-//! Prepara somente as fontes de agentes e memória reconhecidas pelo importador nativo.
+//! Prepara as fontes reconhecidas pelo importador nativo.
 use super::{fingerprints, phase::Error};
+use crate::accounts::environment::AccountEnvironment;
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
@@ -8,6 +9,17 @@ use std::{
     path::{Path, PathBuf},
     sync::OnceLock,
 };
+
+pub(super) fn mcp_config_path(env: &AccountEnvironment) -> PathBuf {
+    // Exportar até a pasta padrão muda o arquivo que o Claude lê.
+    let root = if env.base.get("CLAUDE_CONFIG_DIR").is_some_and(|value| !value.is_empty()) {
+        &env.claude_base
+    } else {
+        &env.home
+    };
+    root.join(".claude.json")
+}
+
 fn markdown(path: &Path) -> bool {
     path.extension().is_some_and(|v| {
         if cfg!(windows) {

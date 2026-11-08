@@ -229,6 +229,41 @@ async fn discovery_lists_account_machines_without_tailscale() {
     assert_eq!(refused.code, "descoberta_sem_tailscale", "sem Connect e sem Tailscale, a recusa de antes");
 }
 
+async fn account_list(m: &Machine) -> (u16, Value) {
+    let response = client().get(format!("http://{}/api/connect/machines", m.main)).bearer_auth(OWNER).send().await.unwrap();
+    (response.status().as_u16(), serde_json::from_str(&response.text().await.unwrap()).unwrap())
+}
+
+#[tokio::test]
+async fn account_machines_mark_this_one_and_the_ones_already_added() {
+    let w = world().await;
+    let (status, body) = account_list(&w.a).await;
+    assert_eq!(status, 200);
+    assert_eq!(body["this"], json!({"machine_id": "pc-a", "host": host_of("pc-a")}));
+    assert_eq!(body["machines"], json!([{"machine_id": "pc-b", "name": "pc-b", "host": host_of("pc-b"), "online": true, "added": false}]));
+
+    approve_after_link(&w).await;
+    assert_eq!(account_list(&w.a).await.1["machines"][0]["added"], true, "ligada, ela já está na lista desta máquina");
+    let anonymous = client().get(format!("http://{}/api/connect/machines", w.a.main)).send().await.unwrap();
+    assert_eq!(anonymous.status().as_u16(), 401);
+}
+
+#[tokio::test]
+async fn account_machines_refuse_an_unreadable_peer_list() {
+    let w = world().await;
+    std::fs::write(peers_path(&w.a), "{quebrado").unwrap();
+    let (status, body) = account_list(&w.a).await;
+    assert_eq!(status, 500, "{body}");
+    assert_eq!(body["detail"]["code"], "peers_unreadable", "lista ilegível não vira \"nenhuma adicionada\"");
+}
+
+async fn approve_after_link(w: &World) {
+    assert_eq!(start_link(&w.a, w.b.id).await.status(), 202);
+    wait_stage(&w.a, w.b.id, "waiting_approval").await;
+    approve_card(&w.b).await;
+    wait_stage(&w.a, w.b.id, "linked").await;
+}
+
 #[tokio::test]
 async fn peer_link_stores_a_device_token_not_the_owner_password() {
     let w = world().await;

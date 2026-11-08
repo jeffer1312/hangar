@@ -92,7 +92,7 @@ struct Field { key: &'static str, label: &'static str, help: &'static str, icon:
 const AUX_MODEL: &str = "jev_aux_modelo";
 
 /// Na ordem do `CAMPOS` do web, filtrada por página.
-const FIELDS: [Field; 34] = [
+const FIELDS: [Field; 36] = [
     Field { key: "upload_retention_days", label: "server_keep_attachments", help: "server_keep_attachments_help", icon: IconName::Paperclip,
         kind: Kind::Number("server_days"), page: Page::Attachments },
     Field { key: "notify_finished", label: "server_notify_finished", help: "server_notify_finished_help", icon: IconName::CircleCheck,
@@ -107,6 +107,10 @@ const FIELDS: [Field; 34] = [
     Field { key: "mostrar_pensamento", label: "server_thinking", help: "server_thinking_help", icon: IconName::Eye, kind: Kind::Toggle, page: Page::Advanced },
     Field { key: "traduzir_pensamento", label: "server_translate_thinking", help: "server_translate_thinking_help", icon: IconName::Languages,
         kind: Kind::Toggle, page: Page::Advanced },
+    Field { key: "compactar_parada", label: "server_idle_compaction", help: "server_idle_compaction_help", icon: IconName::Hourglass,
+        kind: Kind::Toggle, page: Page::Advanced },
+    Field { key: "compactar_parada_min_mil", label: "server_idle_compaction_min", help: "server_idle_compaction_min_help", icon: IconName::Hash,
+        kind: Kind::Number("server_thousand_tokens"), page: Page::Advanced },
     Field { key: "editor", label: "server_editor", help: "server_editor_help", icon: IconName::SquarePen, kind: Kind::Text, page: Page::Advanced },
     Field { key: "jev_api_key", label: "server_jev_key", help: "server_jev_key_help", icon: IconName::Key, kind: Kind::Secret, page: Page::Jev },
     // Logo abaixo da chave, como no web: é o único campo cujo efeito depende dela.

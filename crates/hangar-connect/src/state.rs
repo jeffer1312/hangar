@@ -25,6 +25,8 @@ pub struct LinkRequest {
     pub account: String,
     pub password: String,
     pub machine_name: String,
+    #[serde(default)]
+    pub create_account: bool,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -175,6 +177,7 @@ fn service_refused(status: u16) -> ConnectError {
     let (status, code, msg) = match status {
         401 => (StatusCode::UNAUTHORIZED, "connect_login_refused", "conta ou senha recusada pelo serviço do Connect"),
         403 => (StatusCode::FORBIDDEN, "connect_machine_limit", "a conta chegou ao limite de máquinas"),
+        409 => (StatusCode::CONFLICT, "connect_machine_conflict", "o serviço do Connect recusou: o registro mudou ao mesmo tempo; tente de novo"),
         429 => (StatusCode::TOO_MANY_REQUESTS, "connect_service_busy", "o serviço do Connect pediu para esperar; tente mais tarde"),
         400 | 422 => (StatusCode::BAD_REQUEST, "connect_service_refused", "o serviço do Connect recusou o nome da conta ou da máquina"),
         _ => (StatusCode::BAD_GATEWAY, "connect_service_failed", "o serviço do Connect falhou"),
@@ -210,7 +213,7 @@ struct Machine {
     service_public_key: String,
 }
 
-/// Entra na conta e registra a máquina. O serviço troca a chave a cada registro: quem chama precisa gravar o resultado.
+/// Entra na conta (ou a cria, com `create_account`) e registra a máquina. O serviço troca a chave a cada registro: quem chama precisa gravar o resultado.
 pub async fn register(request: &LinkRequest) -> Result<Linked, ConnectError> {
     let base = service_base(&request.service_url)?;
     if !valid_label(&request.account) || !valid_label(&request.machine_name) {
@@ -220,10 +223,19 @@ pub async fn register(request: &LinkRequest) -> Result<Linked, ConnectError> {
     // Sem seguir redirecionamento: a senha iria junto para outro endereço.
     let client = hangar_core::net::http_client().redirect(reqwest::redirect::Policy::none()).timeout(SERVICE_TIMEOUT).build()
         .map_err(|_| ConnectError::new(StatusCode::INTERNAL_SERVER_ERROR, "connect_service_unreachable", "cliente HTTP indisponível"))?;
-    let session: Session = call(client.post(endpoint("/v1/sessions")?)
-        .json(&json!({"name": request.account, "password": request.password}))).await?;
+    // Criar a conta já devolve a sessão dela, no mesmo formato do login.
+    let start = if request.create_account { "/v1/accounts" } else { "/v1/sessions" };
+    let session: Session = call(client.post(endpoint(start)?)
+        .json(&json!({"name": request.account, "password": request.password}))).await
+        .map_err(|error| if request.create_account && error.status == StatusCode::CONFLICT {
+            ConnectError::new(StatusCode::CONFLICT, "connect_account_taken", "já existe uma conta com esse nome")
+        } else { error })?;
     let machine: Machine = call(client.post(endpoint("/v1/machines")?).bearer_auth(&session.token)
-        .json(&json!({"name": request.machine_name}))).await?;
+        .json(&json!({"name": request.machine_name}))).await
+        // A conta nasceu: criar de novo daria nome já usado, então quem chama passa a entrar nela.
+        .map_err(|error| if request.create_account {
+            ConnectError::new(error.status, "connect_account_created_link_failed", format!("conta criada; entre com ela para ligar este computador ({})", error.msg))
+        } else { error })?;
     let linked = Linked {
         service_url: base.as_str().trim_end_matches('/').to_owned(),
         account: request.account.clone(),
