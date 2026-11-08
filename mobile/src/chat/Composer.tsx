@@ -21,6 +21,7 @@ import { useDictationOrganization } from '../features/ditado/dictationOrganizati
 import { useDitado } from '../features/ditado/useDitado';
 import { dictationStyleStore } from '../features/ditado/ditadoEstiloStore';
 import { DictationError, dictationAudio, runDictation, uploadName, type DictationSource } from '../features/ditado/dictationRun';
+import type { PiecesHandle } from '../features/ditado/livePieces';
 import { AudioChip } from './AudioChip';
 import { CommandSheet, useSessionCommands } from './CommandSheet';
 import { SessionSettingsButton } from './SessionSettings';
@@ -923,6 +924,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     try {
       writeDictation(origin.serverId, origin.name, voice);
     } catch (e) {
+      if ('file' in source) source.pieces?.abort();
       // Sem o áudio guardado, a repetição fica só nesta tela.
       cancelVoiceSend();
       if (mountedRef.current) {
@@ -935,7 +937,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     }
     if (mountedRef.current) setDictation(voice);
     try {
-      const { completed, text: trimmed, raw, aviso, path, applied } = await runDictation(server, origin.serverId, origin.name, voice, source, {
+      const { completed, text: trimmed, raw, aviso, path, applied, saved } = await runDictation(server, origin.serverId, origin.name, voice, source, {
         check: () => {
           const sessions = useSessions.getState();
           const live = sessions.byServerRecord?.[origin.serverId]?.find((s) => s.name === origin.name)
@@ -973,7 +975,13 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
           })) iniciarAuto(completed.draft.text);
         }
       }
-      if (completed.draft && !completed.dictation && voice.audio) dropCopy(voice.audio.uri);
+      const inserted = !!completed.draft && !completed.dictation;
+      if (saved) {
+        // A subida do arquivo inteiro termina depois do texto: a cópia local sai só quando ela acaba.
+        void saved.then(() => {}, (e: unknown) => {
+          if (mountedRef.current) setError(e instanceof Error ? e.message : m.composer_falha_transcricao());
+        }).finally(() => { if (inserted && voice.audio) dropCopy(voice.audio.uri); });
+      } else if (inserted && voice.audio) dropCopy(voice.audio.uri);
     } catch (e) {
       cancelVoiceSend();
       if (mountedRef.current) {
@@ -995,9 +1003,10 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
   }, [origin, offerUndo, iniciarAuto, navigation, setBar, cancelVoiceSend]);
 
   const handleTranscribe = useCallback(
-    async (file: File, motivo: MotivoFim, uri: string, allowAuto = true) => {
+    async (file: File, motivo: MotivoFim, uri: string, pieces?: PiecesHandle | null, allowAuto = true) => {
       const target = recordingTargetRef.current;
-      if (!target || transcribingRef.current) return;
+      // Gravação cancelada ou outra transcrição no ar: os pedaços desta não servem a ninguém.
+      if (!target || transcribingRef.current) { pieces?.abort(); return; }
       const generation = activityGenerationRef.current;
       // Bloqueia outro início enquanto a cópia sai do cache para o diretório do app.
       transcribingRef.current = true;
@@ -1006,6 +1015,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
       try {
         audio = await retainDraftAttachment({ uri, name: file.name, mime: file.type, kind: 'file' });
       } catch (e) {
+        pieces?.abort();
         cancelVoiceSend();
         if (mountedRef.current) {
           setFailed({ file, motivo, uri });
@@ -1022,13 +1032,14 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
         before: target.snapshot.text.trim(), motivo, estilo: target.estilo,
         status: 'pending', text: '', raw: '', issue: '',
       };
-      await runTranscription(voice, { file }, target.server, generation, allowAuto && generation === target.generation);
+      await runTranscription(voice, { file, pieces }, target.server, generation, allowAuto && generation === target.generation);
     },
     [runTranscription, cancelVoiceSend],
   );
 
   const { gravando, rms, iniciar, parar } = useDitado({
     server: styleServer,
+    pieces: true,
     onFim: handleTranscribe,
     onErroParada: (e) => {
       cancelVoiceSend();
@@ -1150,7 +1161,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
   const handleRetry = useCallback(async () => {
     if (transcribingRef.current) return;
     cancelVoiceSend();
-    if (failed) { await handleTranscribe(failed.file, failed.motivo, failed.uri, false); return; }
+    if (failed) { await handleTranscribe(failed.file, failed.motivo, failed.uri, null, false); return; }
     if (!dictation || dictation.status !== 'failed') return;
     cancelarAuto();
     const generation = activityGenerationRef.current;

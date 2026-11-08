@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fixtures from './dictationPieces.fixtures.json';
 import {
   FORCED_WINDOW_MS, FRAME_MS, MAX_PIECE_MS, MIN_PIECE_MS, MIN_VOICE_MS, PAUSE_MS, TAIL_MERGE_MS,
-  feedDictationFrame, newDictationCutter, stopDictationCutter, type DictationPiece, type LevelFrame,
+  feedDictationFrame, joinDictationPieces, newDictationCutter, stopDictationCutter, type DictationPiece, type LevelFrame,
 } from './dictationPieces';
 
 type Expected = { startMs: number; endMs: number; voicedMs: number[]; skip: boolean };
@@ -50,6 +50,14 @@ describe('dictationPieces: casos compartilhados', () => {
       const stop = stopDictationCutter(cutter);
       expect(stop.tail).toBe(c.stop.tail);
       expectPiece(stop.piece, c.stop.piece);
+    });
+  }
+});
+
+describe('joinDictationPieces: casos compartilhados', () => {
+  for (const c of fixtures.join) {
+    it(JSON.stringify(c.pieces), () => {
+      expect(joinDictationPieces(c.pieces)).toBe(c.expected);
     });
   }
 });

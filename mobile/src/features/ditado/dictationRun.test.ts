@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DictationDraft } from '../../stores/drafts';
 
-const { memory, core } = vi.hoisted(() => ({ memory: new Map<string, string>(), core: { transcribe: vi.fn(), upload: vi.fn() } }));
+const { memory, core } = vi.hoisted(() => ({ memory: new Map<string, string>(),
+  core: { transcribe: vi.fn(), upload: vi.fn(), relimpar: vi.fn() } }));
 vi.mock('react-native-mmkv', () => ({
   createMMKV: () => ({
     getString: (key: string) => memory.get(key),
@@ -13,6 +14,7 @@ vi.mock('@hangar/core', async (original) => ({
   ...await original<typeof import('@hangar/core')>(),
   transcribeUploadedForServer: core.transcribe,
   uploadFileForServer: core.upload,
+  relimparDitado: core.relimpar,
 }));
 vi.mock('../../stores/chat', () => ({ chatStore: () => ({ use: { setState: () => {} } }) }));
 // expo-file-system não carrega no node; a galeria só apaga a cópia local do ditado substituído.
@@ -21,6 +23,8 @@ vi.mock('../../chat/draftAttachments', () => ({ removeDraftAttachment: vi.fn() }
 import { applyReadyDictation, readDictation, readDraft, setDictationInFlight, writeDictation, writeDraft } from '../../stores/drafts';
 import { dictateUpload, dictationAudio, runDictation } from './dictationRun';
 import { removeDraftAttachment } from '../../chat/draftAttachments';
+import { useDictationOrganizationStore } from './dictationOrganization';
+import type { PiecesHandle, PiecesText } from './livePieces';
 
 const server = { id: 's1', label: 'A', baseUrl: 'https://a.test', token: 't' };
 const voice = (patch: Partial<DictationDraft> = {}): DictationDraft => ({
@@ -62,6 +66,124 @@ describe('runDictation', () => {
     writeDictation('s1', 'sess', v);
     await runDictation(server, 's1', 'sess', v, { arquivo: 'd.m4a' }, { isActive: () => false });
     expect(readDictation('s1', 'sess')?.serverPath).toBe('/up/sess/d.m4a');
+  });
+});
+
+describe('runDictation com pedaços', () => {
+  const deferred = <T,>() => {
+    let resolve!: (v: T) => void;
+    let reject!: (e: Error) => void;
+    const promise = new Promise<T>((ok, fail) => { resolve = ok; reject = fail; });
+    return { promise, resolve, reject };
+  };
+  const pieces = (result: Promise<PiecesText>) => {
+    result.catch(() => {});
+    return { result, abort: vi.fn<() => void>() } satisfies PiecesHandle;
+  };
+  const wav = () => new File(['RIFF'], 'ditado.wav', { type: 'audio/wav' });
+  const draft = () => writeDraft('s1', 'sess', { version: 1, text: '', revision: 0, transcript: null, attachments: [], submission: null });
+
+  beforeEach(() => {
+    memory.clear(); core.transcribe.mockReset(); core.upload.mockReset(); core.relimpar.mockReset();
+    useDictationOrganizationStore.setState({ byServer: {} });
+  });
+
+  it('organiza o cru juntado uma vez, sem esperar a subida; o caminho do áudio entra depois do texto', async () => {
+    const upload = deferred<{ path: string }>();
+    core.upload.mockReturnValueOnce(upload.promise);
+    core.relimpar.mockResolvedValueOnce({ text: ' Ela trava. Não sei. ', aviso: 'organização parcial', estilo_aplicado: 'prosa' });
+    draft();
+    const v = voice({ estilo: 'prosa' });
+    writeDictation('s1', 'sess', v);
+    const out = await runDictation(server, 's1', 'sess', v,
+      { file: wav(), pieces: pieces(Promise.resolve({ raw: 'ela trava. Não sei', aviso: 'reserva usada', provider: 'Groq' })) },
+      { isActive: () => true });
+    expect(core.relimpar).toHaveBeenCalledExactlyOnceWith('ela trava. Não sei', 'prosa', server, { session: 'sess' });
+    expect(core.transcribe).not.toHaveBeenCalled();
+    expect(out).toMatchObject({ text: 'Ela trava. Não sei.', raw: 'ela trava. Não sei', aviso: 'reserva usada · organização parcial', applied: 'prosa' });
+    expect(readDraft('s1', 'sess')).toMatchObject({ text: 'Ela trava. Não sei.', dictationId: 'v1' });
+    expect(readDraft('s1', 'sess')?.recordings ?? []).toEqual([]);
+    upload.resolve({ path: '/up/sess/ditado.wav' });
+    await out.saved;
+    expect(readDraft('s1', 'sess')?.recordings).toEqual([{ id: 'v1', serverPath: '/up/sess/ditado.wav' }]);
+    expect(core.upload).toHaveBeenCalledExactlyOnceWith(server, 'sess', expect.any(File), { audioOnly: true });
+  });
+
+  it('ditado que fica para recuperar recebe o caminho guardado quando a subida termina', async () => {
+    const upload = deferred<{ path: string }>();
+    core.upload.mockReturnValueOnce(upload.promise);
+    core.relimpar.mockResolvedValueOnce({ text: 'ok', aviso: null, estilo_aplicado: 'limpar' });
+    const v = voice({ estilo: 'limpar' });
+    writeDictation('s1', 'sess', v);
+    const out = await runDictation(server, 's1', 'sess', v, { file: wav(), pieces: pieces(Promise.resolve({ raw: 'ok cru', aviso: '' })) },
+      { isActive: () => false });
+    expect(readDictation('s1', 'sess')).toMatchObject({ status: 'ready', text: 'ok' });
+    upload.resolve({ path: '/up/sess/ditado.wav' });
+    await out.saved;
+    expect(readDictation('s1', 'sess')).toMatchObject({ status: 'ready', serverPath: '/up/sess/ditado.wav' });
+  });
+
+  it.each([
+    ['um pedaço falhou', () => Promise.reject(new Error('503: provedor fora')), () => {}],
+    ['a organização falhou', () => Promise.resolve({ raw: 'cru', aviso: '' }), () => { core.relimpar.mockRejectedValueOnce(new Error('502: llm')); }],
+    ['o cru juntado veio vazio', () => Promise.resolve({ raw: '  ', aviso: '' }), () => {}],
+  ])('%s: aborta os pedaços e segue o caminho de hoje com o arquivo inteiro', async (_case, result, arrange) => {
+    arrange();
+    core.upload.mockResolvedValueOnce({ path: '/up/sess/ditado.wav' });
+    core.transcribe.mockResolvedValueOnce({ path: '/up/sess/ditado.wav', text: 'pelo arquivo', raw: 'pelo arquivo cru', aviso: null });
+    const handle = pieces(result());
+    const v = voice({ estilo: 'prosa' });
+    writeDictation('s1', 'sess', v);
+    const out = await runDictation(server, 's1', 'sess', v, { file: wav(), pieces: handle }, { isActive: () => false });
+    expect(handle.abort).toHaveBeenCalled();
+    expect(core.upload).toHaveBeenCalledTimes(1);
+    expect(core.transcribe).toHaveBeenCalledExactlyOnceWith(server, 'sess', 'ditado.wav', { limpar: true, estilo: 'prosa' });
+    expect(out).toMatchObject({ text: 'pelo arquivo', path: '/up/sess/ditado.wav' });
+    expect(out.saved).toBeUndefined();
+  });
+
+  it('organização desligada no servidor: o cru juntado é o texto, sem chamar o relimpar', async () => {
+    useDictationOrganizationStore.setState({ byServer: { s1: 'off' } });
+    core.upload.mockResolvedValueOnce({ path: '/up/sess/ditado.wav' });
+    const v = voice({ estilo: 'prosa' });
+    writeDictation('s1', 'sess', v);
+    const out = await runDictation(server, 's1', 'sess', v, { file: wav(), pieces: pieces(Promise.resolve({ raw: 'ela trava. Não sei', aviso: '' })) },
+      { isActive: () => false });
+    expect(core.relimpar).not.toHaveBeenCalled();
+    expect(out).toMatchObject({ text: 'ela trava. Não sei', raw: 'ela trava. Não sei', applied: 'cru', aviso: '' });
+  });
+
+  it('pílula sem estilo carregado: o relimpar recebe o padrão prosa', async () => {
+    core.upload.mockResolvedValueOnce({ path: '/up/sess/ditado.wav' });
+    core.relimpar.mockResolvedValueOnce({ text: 'ok', aviso: null });
+    const v = voice();
+    writeDictation('s1', 'sess', v);
+    const out = await runDictation(server, 's1', 'sess', v, { file: wav(), pieces: pieces(Promise.resolve({ raw: 'ok', aviso: '' })) },
+      { isActive: () => false });
+    expect(core.relimpar).toHaveBeenCalledWith('ok', 'prosa', server, { session: 'sess' });
+    expect(out.applied).toBe('prosa');
+  });
+
+  it('subida que falha depois do texto: o texto fica e a falha aparece', async () => {
+    core.upload.mockRejectedValueOnce(new Error('413: grande demais'));
+    core.relimpar.mockResolvedValueOnce({ text: 'ok', aviso: null, estilo_aplicado: 'prosa' });
+    draft();
+    const v = voice({ estilo: 'prosa' });
+    writeDictation('s1', 'sess', v);
+    const out = await runDictation(server, 's1', 'sess', v, { file: wav(), pieces: pieces(Promise.resolve({ raw: 'ok', aviso: '' })) },
+      { isActive: () => true });
+    expect(readDraft('s1', 'sess')?.text).toBe('ok');
+    await expect(out.saved).rejects.toThrow('413: grande demais');
+  });
+
+  it('a conferência antes da rede ainda vale e aborta os pedaços', async () => {
+    const handle = pieces(Promise.resolve({ raw: 'ok', aviso: '' }));
+    const v = voice();
+    writeDictation('s1', 'sess', v);
+    await expect(runDictation(server, 's1', 'sess', v, { file: wav(), pieces: handle },
+      { isActive: () => false, check: () => { throw new Error('interrompido'); } })).rejects.toThrow('interrompido');
+    expect(handle.abort).toHaveBeenCalled();
+    expect(core.upload).not.toHaveBeenCalled();
   });
 });
 

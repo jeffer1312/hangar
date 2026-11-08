@@ -203,6 +203,20 @@ export function associateDictationTranscript(serverId: string, name: string, tra
   return associated;
 }
 
+/** Áudio do ditado em pedaços que terminou de subir depois do texto: o caminho vai ao ditado ainda
+ *  guardado ou, já inserido, às gravações do rascunho, sem mudar a revisão. Envio em curso não ganha
+ *  gravação que ele não levou. */
+export function attachDictationPath(serverId: string, name: string, id: string, serverPath: string): void {
+  const voice = readDictation(serverId, name);
+  if (voice?.id === id && voice.status === 'ready') {
+    if (!voice.serverPath) writeDictation(serverId, name, { ...voice, serverPath });
+    return;
+  }
+  const latest = readDraft(serverId, name);
+  if (!latest || latest.dictationId !== id || latest.submission || latest.recordings?.some((r) => r.id === id)) return;
+  writeDraft(serverId, name, { ...latest, recordings: [...(latest.recordings ?? []), { id, serverPath }] });
+}
+
 export function finishDictation(serverId: string, name: string, id: string,
   result: Pick<DictationDraft, 'text' | 'raw' | 'issue'> & Partial<Pick<DictationDraft, 'serverPath' | 'applied'>>, active: boolean,
 ): { draft: ConversationDraft | null; dictation: DictationDraft | null } {

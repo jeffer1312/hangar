@@ -97,3 +97,19 @@ export function stopDictationCutter(c: DictationCutter): DictationStop {
   const voicedMs = last.voicedMs + rest.voicedMs;
   return { tail: 'merge', piece: { startMs: last.startMs, endMs: rest.endMs, voicedMs, skip: voicedMs < MIN_VOICE_MS } };
 }
+
+const isUpper = (ch: string) => ch !== ch.toLowerCase() && ch === ch.toUpperCase();
+
+/** Cru dos pedaços na ordem. Sem organização a emenda sairia sem pontuação ("ela trava Não sei"): frase sem
+ *  pontuação no fim seguida de maiúscula ganha um ponto. */
+export function joinDictationPieces(texts: readonly string[]): string {
+  let out = '';
+  for (const text of texts.map((t) => t.trim()).filter(Boolean)) {
+    if (out) {
+      if (!/[.!?…:;,]$/.test(out) && isUpper(text[0])) out += '.';
+      out += ' ';
+    }
+    out += text;
+  }
+  return out;
+}

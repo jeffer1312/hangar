@@ -1075,6 +1075,16 @@ describe('transcribePiece', () => {
     expect(sent.aborted).toBe(true);
   });
 
+  it('aceita os bytes do WAV (o React Native não monta Blob de bytes) e os manda como audio/wav', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ text: 'ok' }), { status: 200 }));
+    const bytes = new Uint8Array([0x52, 0x49, 0x46, 0x46]);
+    await transcribePiece(server, bytes);
+    const init = fetchMock.mock.calls[0][1]!;
+    expect(init.body).toBe(bytes);
+    expect(init.headers).toMatchObject({ 'Content-Type': 'audio/wav' });
+  });
+
   it('falha leva o status', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
       new Response(JSON.stringify({ detail: 'provedor fora' }), { status: 503 }));

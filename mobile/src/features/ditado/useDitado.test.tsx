@@ -44,8 +44,45 @@ const { fakeRec, createRecorder, requestPermission, setAudioMode, appState, reco
   };
 });
 
+// O WAV que o gravador do iPhone escreve: dados a partir do byte 4096, 32 bytes por ms gravado.
+const wavFile = vi.hoisted(() => ({ writtenMs: 0, opened: 0, closed: 0 }));
+vi.mock('expo-file-system', () => ({
+  FileMode: { ReadOnly: 'r' },
+  File: class {
+    constructor(readonly uri: string) {}
+    open() {
+      wavFile.opened++;
+      const header = new Uint8Array(4096);
+      header.set([...'RIFF'].map((c) => c.charCodeAt(0)), 0);
+      header.set([...'WAVE'].map((c) => c.charCodeAt(0)), 8);
+      header.set([...'FLLR'].map((c) => c.charCodeAt(0)), 12);
+      header.set([4096 - 28, 0, 0, 0], 16);
+      header.set([...'data'].map((c) => c.charCodeAt(0)), 4088);
+      let offset = 0;
+      return {
+        get size() { return 4096 + wavFile.writtenMs * 32; },
+        set offset(value: number) { offset = value; },
+        get offset() { return offset; },
+        readBytes(length: number) {
+          const total = 4096 + wavFile.writtenMs * 32;
+          const out = new Uint8Array(Math.max(0, Math.min(length, total - offset)));
+          out.set(header.slice(offset, offset + out.length));
+          offset += out.length;
+          return out;
+        },
+        close() { wavFile.closed++; },
+      };
+    }
+  },
+}));
+
+const transcribePiece = vi.hoisted(() => vi.fn());
+vi.mock('@hangar/core', async (original) => ({ ...await original<typeof import('@hangar/core')>(), transcribePiece }));
+
 vi.mock('expo-audio', () => ({
   AudioModule: { AudioRecorder: createRecorder },
+  IOSOutputFormat: { LINEARPCM: 'lpcm' },
+  AudioQuality: { MAX: 127 },
   RecordingPresets: { HIGH_QUALITY: { extension: '.m4a', android: { outputFormat: 'mpeg4', audioEncoder: 'aac' } } },
   requestRecordingPermissionsAsync: requestPermission,
   requestNotificationPermissionsAsync: vi.fn(async () => ({ granted: true })),
@@ -72,11 +109,13 @@ vi.mock('react-native', async () => {
 
 import { requestNotificationPermissionsAsync } from 'expo-audio';
 import { useDitado } from './useDitado';
-import { useDitadoEstiloStore } from './ditadoEstiloStore';
+import { dictationStyleStore, useDitadoEstiloStore } from './ditadoEstiloStore';
 import { setLiveVoiceAudioActive, useVoiceAudioState } from '../voice/audioSession';
-import type { MotivoFim } from '@hangar/core';
+import type { MotivoFim, Server } from '@hangar/core';
+import type { PiecesHandle } from './livePieces';
 
-function mountHook(opts: { onFim: (f: File, m: MotivoFim, uri: string) => void; onErroParada?: (e: Error) => void }) {
+function mountHook(opts: { onFim: (f: File, m: MotivoFim, uri: string, pieces?: PiecesHandle | null) => void;
+  onErroParada?: (e: Error) => void; server?: Server | null; pieces?: boolean }) {
   let renders = 0;
   let hook: ReturnType<typeof useDitado> | null = null;
   function Comp(p: typeof opts) {
@@ -458,7 +497,7 @@ describe('useDitado — interrupção e origem da gravação', () => {
       emitRecordingStatus();
       await delivered.promise;
     });
-    expect(onFim.mock.calls[0]).toEqual([expect.any(File), 'escondeu', 'file://fake.m4a']);
+    expect(onFim.mock.calls[0]).toEqual([expect.any(File), 'escondeu', 'file://fake.m4a', null]);
     expect(fakeRec.release).toHaveBeenCalledTimes(1);
 
   });
@@ -854,5 +893,132 @@ describe('useDitado — VAD e teto', () => {
     await h.unmount();
     useDitadoEstiloStore.setState({ refreshCeiling });
     useDitadoEstiloStore.getState()._zerarParaTeste();
+  });
+});
+
+describe('useDitado — iPhone em WAV e pedaços durante a fala', () => {
+  const server: Server = { id: 'srv-pieces', label: 'A', baseUrl: 'https://a.test', token: 't' };
+  /** Fala (-24 dB) com pausas (-54 dB) nos intervalos dados, em ms desde o início da gravação. */
+  function speech(startedAt: { ms: number }, pauses: [number, number][]) {
+    fakeRec.getStatus = vi.fn(() => {
+      const ms = Date.now() - startedAt.ms;
+      wavFile.writtenMs = ms;
+      const quiet = pauses.some(([a, b]) => ms > a && ms <= b);
+      return { isRecording: true, durationMillis: ms, metering: quiet ? -54 : (Math.floor(ms / 55) % 2 ? -28 : -24) };
+    });
+  }
+  async function startIos(opts: { server?: Server | null; pieces?: boolean } = { server, pieces: true }) {
+    const onFim = vi.fn();
+    const h = mountHook({ onFim, ...opts });
+    await h.mount({ onFim, ...opts });
+    const startedAt = { ms: 0 };
+    await act(async () => { await h.getHook().iniciar(); });
+    startedAt.ms = Date.now();
+    return { h, onFim, startedAt };
+  }
+
+  beforeEach(() => {
+    environment.os = 'ios';
+    wavFile.writtenMs = 0;
+    wavFile.opened = 0;
+    wavFile.closed = 0;
+    fakeRec.uri = 'file://ditado.wav';
+    transcribePiece.mockReset().mockResolvedValue({ raw: 'pedaço', provider: 'Groq', aviso: null });
+    dictationStyleStore(server).setState({ refreshCeiling: async () => {} });
+  });
+
+  it('grava WAV PCM16 16 kHz mono com medidor e entrega ditado.wav', async () => {
+    const { h, onFim } = await startIos();
+    expect(createRecorder).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      extension: '.wav', outputFormat: 'lpcm', sampleRate: 16000, numberOfChannels: 1, linearPCMBitDepth: 16,
+      linearPCMIsBigEndian: false, linearPCMIsFloat: false, isMeteringEnabled: true,
+    }));
+    await act(async () => { await h.getHook().parar('botao'); });
+    const file = onFim.mock.calls[0][0] as File;
+    expect([file.name, file.type]).toEqual(['ditado.wav', 'audio/wav']);
+    await h.unmount();
+  });
+
+  it('gravador WAV que não prepara cai no .m4a de hoje, sem pedaços', async () => {
+    fakeRec.prepareToRecordAsync.mockRejectedValueOnce(new Error('formato recusado'));
+    const { h, onFim, startedAt } = await startIos();
+    expect(createRecorder).toHaveBeenCalledTimes(2);
+    expect(createRecorder).toHaveBeenLastCalledWith(expect.objectContaining({ extension: '.m4a' }));
+    expect(fakeRec.release).toHaveBeenCalledTimes(1);
+    speech(startedAt, [[9000, 9600]]);
+    await act(async () => { vi.advanceTimersByTime(16_000); });
+    await act(async () => { await h.getHook().parar('botao'); });
+    expect(transcribePiece).not.toHaveBeenCalled();
+    const [file, , , pieces] = onFim.mock.calls[0];
+    expect((file as File).name).toBe('ditado.m4a');
+    expect(pieces ?? null).toBeNull();
+    await h.unmount();
+  });
+
+  it('ditado de 6 s não manda pedaço e segue o caminho de hoje', async () => {
+    const { h, onFim, startedAt } = await startIos();
+    speech(startedAt, [[3000, 3150]]);
+    await act(async () => { vi.advanceTimersByTime(6_000); });
+    await act(async () => { await h.getHook().parar('botao'); });
+    expect(transcribePiece).not.toHaveBeenCalled();
+    expect(onFim.mock.calls[0][3] ?? null).toBeNull();
+    await h.unmount();
+  });
+
+  it('16 s com uma pausa: um pedaço sai durante a fala e o resto ao parar', async () => {
+    const { h, onFim, startedAt } = await startIos();
+    speech(startedAt, [[9000, 9600]]);
+    await act(async () => { vi.advanceTimersByTime(10_000); });
+    expect(transcribePiece).toHaveBeenCalledTimes(1);
+    expect(transcribePiece.mock.calls[0][0]).toEqual(server);
+    await act(async () => { vi.advanceTimersByTime(6_000); });
+    await act(async () => { await h.getHook().parar('botao'); });
+    expect(transcribePiece).toHaveBeenCalledTimes(2);
+    const pieces = onFim.mock.calls[0][3] as PiecesHandle;
+    await expect(pieces.result).resolves.toMatchObject({ raw: 'pedaço pedaço' });
+    expect(wavFile.closed).toBe(wavFile.opened);
+    await h.unmount();
+  });
+
+  it('app em segundo plano no meio da gravação desiste dos pedaços e aborta o que está em voo', async () => {
+    transcribePiece.mockImplementation(() => new Promise(() => {}));
+    const { h, onFim, startedAt } = await startIos();
+    speech(startedAt, [[9000, 9600]]);
+    await act(async () => { vi.advanceTimersByTime(10_000); });
+    const signal = transcribePiece.mock.calls[0][2] as AbortSignal;
+    await act(async () => { changeAppState('background'); });
+    expect(signal.aborted).toBe(true);
+    await act(async () => { changeAppState('active'); vi.advanceTimersByTime(6_000); });
+    await act(async () => { await h.getHook().parar('botao'); });
+    expect(transcribePiece).toHaveBeenCalledTimes(1);
+    expect(onFim.mock.calls[0][3] ?? null).toBeNull();
+    expect(recordDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ evento: 'dictation.pieces_fallback', codigo: 'background' }), undefined);
+    await h.unmount();
+  });
+
+  it.each([
+    ['servidor de convite', { server: { ...server, invite: true }, pieces: true }],
+    ['quem não pediu pedaços (ditado sem conversa)', { server, pieces: false }],
+  ])('%s: grava em WAV mas não manda pedaços', async (_case, opts) => {
+    const { h, onFim, startedAt } = await startIos(opts);
+    speech(startedAt, [[9000, 9600]]);
+    await act(async () => { vi.advanceTimersByTime(16_000); });
+    await act(async () => { await h.getHook().parar('botao'); });
+    expect(transcribePiece).not.toHaveBeenCalled();
+    expect(onFim.mock.calls[0][3] ?? null).toBeNull();
+    await h.unmount();
+  });
+
+  it('Android continua no .m4a de hoje e sem pedaços', async () => {
+    environment.os = 'android';
+    const { h, onFim, startedAt } = await startIos();
+    expect(createRecorder).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ extension: '.m4a' }));
+    speech(startedAt, [[9000, 9600]]);
+    await act(async () => { vi.advanceTimersByTime(16_000); });
+    await act(async () => { await h.getHook().parar('botao'); });
+    expect(transcribePiece).not.toHaveBeenCalled();
+    expect(onFim.mock.calls[0][3] ?? null).toBeNull();
+    expect((onFim.mock.calls[0][0] as File).name).toBe('ditado.m4a');
+    await h.unmount();
   });
 });

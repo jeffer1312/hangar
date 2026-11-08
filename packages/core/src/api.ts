@@ -899,15 +899,16 @@ export async function transcribeDictationForServer(
 export const PIECE_TIMEOUT_MS = 60_000;
 
 // Pedaço do ditado em curso: só a transcrição, sem organizar nem guardar o áudio na conversa.
-// O texto juntado é organizado uma vez no fim, pelo `relimparDitado`.
+// O texto juntado é organizado uma vez no fim, pelo `relimparDitado`. Bytes também servem: o
+// React Native não monta Blob a partir de bytes, e o fetch dele manda o Uint8Array como está.
 export async function transcribePiece(
   s: Server,
-  wav: Blob,
+  wav: Blob | Uint8Array<ArrayBuffer>,
   signal?: AbortSignal,
 ): Promise<{ raw: string; provider?: string; aviso?: string | null }> {
   const res = await apiFetchRes('/api/dictation/transcribe?limpar=0', {
     method: 'POST',
-    headers: { 'Content-Type': wav.type || 'audio/wav', 'X-Filename': 'piece.wav' },
+    headers: { 'Content-Type': (wav instanceof Uint8Array ? '' : wav.type) || 'audio/wav', 'X-Filename': 'piece.wav' },
     body: wav,
     signal: comTeto(signal, PIECE_TIMEOUT_MS),
   }, s);

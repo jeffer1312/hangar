@@ -1,12 +1,21 @@
-import { fileAuthHeader, transcribeUploadedForServer, uploadFileForServer, uploadUrlNative, type Server } from '@hangar/core';
+import {
+  fileAuthHeader, registrarDiag, relimparDitado, transcribeUploadedForServer, uploadFileForServer, uploadUrlNative, type Server,
+} from '@hangar/core';
 import * as m from '../../paraglide/messages';
 import { chatStore } from '../../stores/chat';
-import { finishDictation, readDictation, readDraft, setDictationInFlight, writeDictation, type DictationDraft, type DraftAttachment } from '../../stores/drafts';
+import {
+  attachDictationPath, finishDictation, readDictation, readDraft, setDictationInFlight, writeDictation, type DictationDraft,
+  type DraftAttachment,
+} from '../../stores/drafts';
 import { removeDraftAttachment } from '../../chat/draftAttachments';
+import { useDictationOrganizationStore } from './dictationOrganization';
+import { dictationStyleStore } from './ditadoEstiloStore';
+import type { PiecesHandle } from './livePieces';
 
-// `file`: gravação nova, sobe antes de transcrever. `arquivo`: nome solto na pasta da conversa, ou o
+// `file`: gravação nova, sobe antes de transcrever; com `pieces`, o texto vem dos pedaços transcritos
+// durante a fala e o arquivo sobe em paralelo. `arquivo`: nome solto na pasta da conversa, ou o
 // `path` absoluto guardado (alcança o áudio de antes de um /clear; o convidado não pode usá-lo).
-export type DictationSource = { file: File } | { arquivo: string };
+export type DictationSource = { file: File; pieces?: PiecesHandle | null } | { arquivo: string };
 
 export interface DictationOutcome {
   completed: ReturnType<typeof finishDictation>;
@@ -15,6 +24,31 @@ export interface DictationOutcome {
   aviso: string;
   path: string;
   applied?: string;
+  /** Ditado em pedaços: a subida do arquivo inteiro, que termina depois do texto. Rejeita com a falha dela. */
+  saved?: Promise<void>;
+}
+
+const issueOf = (e: unknown) => {
+  const detail = e instanceof Error ? e.message : m.composer_falha_transcricao();
+  return /^(501|503):/.test(detail) ? `${m.composer_ditado_indisponivel()}: ${detail}` : detail;
+};
+
+// O cru dos pedaços organizado uma vez, como o `/transcribe` faria com o arquivo inteiro. O relimpar exige
+// estilo: sem o da pílula, o salvo no servidor, e sem leitura dele o padrão do servidor.
+async function organizePieces(server: Server, name: string, voice: DictationDraft, pieces: PiecesHandle) {
+  const transcribed = await pieces.result;
+  const raw = transcribed.raw.trim();
+  if (!raw) throw new Error('pieces_empty');
+  const style = dictationStyleStore(server).getState();
+  const estilo = voice.estilo ?? (style.pronto ? style.valor : 'prosa');
+  const organized = useDictationOrganizationStore.getState().byServer[server.id] === 'off'
+    ? { text: raw, aviso: null, estilo_aplicado: 'cru' }
+    : await relimparDitado(raw, estilo, server, { session: name });
+  const text = organized.text.trim();
+  if (!text) throw new Error('pieces_organized_empty');
+  // Como o `with_provider` do servidor: o aviso da transcrição antes do da organização.
+  const aviso = [transcribed.aviso, organized.aviso].filter(Boolean).join(' · ');
+  return { text, raw, aviso, applied: organized.estilo_aplicado ?? estilo };
 }
 
 // `lost`: o ditado sumiu do armazenamento e a repetição fica só na tela; `storageIssue`: guardar a falha falhou.
@@ -51,15 +85,46 @@ export async function runDictation(server: Server, serverId: string, name: strin
   source: DictationSource, opts: { isActive: () => boolean; check?: () => void }): Promise<DictationOutcome> {
   setDictationInFlight(serverId, name, voice.id, true);
   notify(serverId, name);
+  const pieces = 'file' in source ? source.pieces : null;
   try {
-    opts.check?.();
+    try {
+      opts.check?.();
+    } catch (e) {
+      pieces?.abort();
+      throw e;
+    }
     let arquivo: string;
     let uploaded = '';
     if ('file' in source) {
       // Sobe e guarda o caminho antes de transcrever: transcrição que cai não custa outra cópia.
-      ({ path: uploaded } = await uploadFileForServer(server, name, source.file, { audioOnly: true }));
-      const pending = readDictation(serverId, name);
-      if (pending?.id === voice.id) writeDictation(serverId, name, { ...pending, serverPath: uploaded });
+      const upload = uploadFileForServer(server, name, source.file, { audioOnly: true }).then(({ path }) => {
+        const pending = readDictation(serverId, name);
+        if (pending?.id === voice.id) writeDictation(serverId, name, { ...pending, serverPath: path });
+        return path;
+      });
+      if (pieces) {
+        // A falha da subida é de quem a espera: o texto dos pedaços não espera por ela.
+        upload.catch(() => {});
+        const organized = await organizePieces(server, name, voice, pieces).catch((e: unknown) => {
+          pieces.abort();
+          registrarDiag({ evento: 'dictation.pieces_fallback', nivel: 'aviso', codigo: 'pieces_failed',
+            detalhe: e instanceof Error ? e.message : undefined });
+          return null;
+        });
+        if (organized) {
+          const { text, raw, aviso, applied } = organized;
+          const completed = finishDictation(serverId, name, voice.id, { text, raw, issue: aviso, applied }, opts.isActive());
+          const saved = upload.then(
+            (path) => {
+              attachDictationPath(serverId, name, voice.id, path);
+              notify(serverId, name);
+            },
+            (e: unknown) => { throw new Error(issueOf(e)); },
+          );
+          return { completed, text, raw, aviso, path: '', applied, saved };
+        }
+      }
+      uploaded = await upload;
       arquivo = uploadName(uploaded);
     } else {
       arquivo = source.arquivo;
@@ -76,8 +141,7 @@ export async function runDictation(server: Server, serverId: string, name: strin
       { text, raw, issue: aviso, serverPath: path, applied }, opts.isActive());
     return { completed, text, raw, aviso, path, applied };
   } catch (e) {
-    const detail = e instanceof Error ? e.message : m.composer_falha_transcricao();
-    const issue = /^(501|503):/.test(detail) ? `${m.composer_ditado_indisponivel()}: ${detail}` : detail;
+    const issue = issueOf(e);
     let lost = false;
     let storageIssue = '';
     try {
