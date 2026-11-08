@@ -86,9 +86,12 @@ const MARK_PULSE: Duration = Duration::from_millis(2400);
 
 /// O endereço que a conta vai dar, mostrado enquanto a pessoa digita; campo vazio mostra o exemplo.
 fn address_preview(machine: &str, account: &str) -> String {
-    let part = |value: &str, fallback: &str| { let value = value.trim().to_lowercase(); if value.is_empty() { fallback.to_owned() } else { value } };
+    let part = |value: &str, fallback: &str| { let value = service_name(value); if value.is_empty() { fallback.to_owned() } else { value } };
     format!("{}.{}.{ACCOUNT_DOMAIN}", part(machine, "notebook"), part(account, "sua-conta"))
 }
+
+/// Nome de conta ou de máquina como vai ao serviço: a prévia do endereço e o envio usam esta mesma forma.
+fn service_name(value: &str) -> String { value.trim().to_lowercase() }
 
 /// `(máquina, conta)` do host que o serviço deu a esta máquina.
 fn identity_of(host: &str) -> Option<(&str, &str)> {
@@ -213,6 +216,8 @@ pub(in crate::app) struct Connect {
     /// Acompanhamento dos pedidos de ligar a outra máquina: falha de leitura só deixa a linha como estava.
     links: Vec<PeerLink>,
     links_failing: bool,
+    /// Última releitura da lista da conta que falhou, mostrada junto da lista boa anterior.
+    machines_error: Option<String>,
     linking: Option<String>,
     link_error: Option<String>,
 }
@@ -236,12 +241,42 @@ impl Connect {
             Ok(status) => {
                 let now = phase(&status);
                 // Desligado: as máquinas e os pedidos eram da ligação que acabou.
-                if now == Phase::Unlinked { (self.machines, self.links, self.links_failing) = (Remote::default(), Vec::new(), false); }
+                if now == Phase::Unlinked {
+                    (self.machines, self.machines_error, self.links, self.links_failing) = (Remote::default(), None, Vec::new(), false);
+                }
                 self.entry = None;
                 self.status.set(Ok(status));
                 Some(now)
             }
             Err(error) => { self.error = Some(error); None }
+        }
+    }
+
+    /// Releitura que falha não apaga a lista boa: o erro fica ao lado dela. Sem lista, o erro ocupa o lugar.
+    fn machines_read(&mut self, seq: u64, result: Result<AccountList, String>) -> bool {
+        let failed = result.as_ref().err().cloned();
+        let previous = if matches!(self.machines.value, Some(Ok(_))) { self.machines.value.take() } else { None };
+        if !self.machines.finish(seq, result) {
+            if previous.is_some() { self.machines.value = previous; }
+            return false;
+        }
+        self.machines_error = match (failed, previous) {
+            (Some(error), Some(previous)) => { self.machines.value = Some(previous); Some(error) }
+            _ => None,
+        };
+        true
+    }
+
+    /// A lista da conta só é relida em rodada enquanto um pedido de ligar ainda espera resposta.
+    fn linking_in_progress(&self) -> bool {
+        self.links.iter().any(|link| matches!(link.stage.as_str(), "requesting" | "waiting_approval"))
+    }
+
+    /// O formulário que está na tela: com a ligação parada é sempre o de entrar ("Ligar de novo").
+    fn shown_entry(&self) -> Entry {
+        match self.status.ok().map(phase) {
+            Some(Phase::Stopped) => Entry::Login,
+            _ => self.entry.unwrap_or(Entry::Login),
         }
     }
 
@@ -403,8 +438,8 @@ impl Hangar {
         if self.connect.saving { return; }
         let Some(form) = &self.connect.form else { return };
         let password = take_password(&form.password, window, cx);
-        let account = form.account.read(cx).value().trim().to_string();
-        let machine_name = form.machine.read(cx).value().trim().to_string();
+        let account = service_name(&form.account.read(cx).value());
+        let machine_name = service_name(&form.machine.read(cx).value());
         if account.is_empty() || password.is_empty() || machine_name.is_empty() {
             self.connect.error = Some(tr("connect_fields_required"));
             cx.notify();
@@ -412,7 +447,7 @@ impl Hangar {
         }
         let Some(api) = self.api.clone() else { return };
         (self.connect.saving, self.connect.error) = (true, None);
-        let create_account = self.connect.entry == Some(Entry::Create);
+        let create_account = self.connect.shown_entry() == Entry::Create;
         let done = self.connect_send_later();
         self.runtime.spawn(async move {
             let body = json!({"service_url": SERVICE_URL, "account": account, "password": password, "machine_name": machine_name,
@@ -514,7 +549,7 @@ impl Hangar {
             }
             ConnectReply::Machines(seq, result) => {
                 let result = result.map_err(|error| failure_text(&error)).and_then(parse_account);
-                if !self.connect.machines.finish(seq, result) { return; }
+                if !self.connect.machines_read(seq, result) { return; }
             }
             ConnectReply::Links(result) => if let Some(line) = self.connect.links_read(result) { crate::log_line(&line); },
             ConnectReply::LinkStarted(result) => {
@@ -595,7 +630,7 @@ impl Hangar {
             self.load_connect_devices(cx);
             self.load_connect_preview();
             // A lista da conta pergunta ao serviço: a cada rodada só quando um pedido de ligar está andando.
-            if self.connect.links.iter().any(|link| link.stage != "failed") { self.load_account_machines(cx); }
+            if self.connect.linking_in_progress() { self.load_account_machines(cx); }
             self.load_peer_links();
         }
     }
@@ -753,8 +788,6 @@ impl Hangar {
                 .when(create, |el| el.child(hint(tr("connect_password_hint")))))
             .child(div().flex().flex_col().gap_1().child(super::sync::sync_field(tr("connect_machine_name"), &form.machine, saving))
                 .child(hint(tr("connect_machine_hint"))))
-            .children(self.connect.error.clone().map(|error| div().id("connect-write-error").role(Role::Alert)
-                .text_sm().text_color(theme::danger()).whitespace_normal().child(error)))
             .child(div().flex().items_center().gap_2().pt_1()
                 .child(Button::new("connect-on").primary().label(label).loading(saving).disabled(saving)
                     .on_click(cx.listener(|this, _, window, cx| this.submit_link(window, cx))))
@@ -773,7 +806,9 @@ impl Hangar {
             .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(tr("connect_machines_title")))
             .child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(tr("connect_machines_help")))
             .children(self.connect.link_error.clone().map(|error| div().id("connect-link-error").role(Role::Alert)
-                .text_sm().text_color(theme::danger()).whitespace_normal().child(error)));
+                .text_sm().text_color(theme::danger()).whitespace_normal().child(error)))
+            .children(self.connect.machines_error.clone().map(|error| div().id("connect-machines-stale")
+                .text_xs().text_color(theme::muted()).whitespace_normal().child(error)));
         let list = match &self.connect.machines.value {
             None => return section.child(div().text_sm().text_color(theme::muted()).child(tr("loading"))),
             Some(Err(error)) => return section
@@ -863,19 +898,27 @@ impl Hangar {
         if let Some(error) = status.error.as_ref().filter(|error| self.connect.error.as_ref() != Some(*error)) {
             page = page.child(div().id("connect-run-error").role(Role::Alert).text_sm().text_color(theme::danger()).whitespace_normal().child(error.clone()));
         }
+        // O erro do último envio aparece em toda fase, inclusive sem formulário aberto.
+        if let Some(error) = self.connect.error.clone() {
+            page = page.child(div().id("connect-write-error").role(Role::Alert).text_sm().text_color(theme::danger()).whitespace_normal().child(error));
+        }
         let (state, saving) = (phase(&status), self.connect.saving);
         let host = status.host.clone().unwrap_or_default();
         let this_machine = identity_of(&host).map_or_else(|| self.vault_machine_label(&self.active_key(), cx), |(machine, _)| machine.to_owned());
+        // Ligado em qualquer fase (parado, subindo, pronto) dá para desligar.
+        let off = |cx: &mut Context<Self>| Button::new("connect-off").outline().small().label(tr("connect_off")).disabled(saving)
+            .on_click(cx.listener(|this, _, window, cx| this.confirm_unlink(window, cx)));
         match state {
             Phase::Unlinked => page = match self.connect.entry {
                 None => page.child(self.render_connect_hero(cx)),
                 Some(entry) => page.children(self.render_connect_form(entry, false, cx)),
             },
-            Phase::Stopped => page = page.children(self.render_connect_form(Entry::Login, true, cx)),
+            Phase::Stopped => page = page.children(self.render_connect_form(Entry::Login, true, cx)).child(div().child(off(cx))),
             Phase::Starting => page = page.child(settings_box().p_6().items_center().gap_2()
                 .child(connect_mark("connect-starting-mark", 56., true, cx.reduce_motion()))
                 .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(tr("connect_linking_title")))
-                .child(div().max_w(px(400.)).text_sm().text_color(theme::muted()).text_center().whitespace_normal().child(tr("connect_linking_help")))),
+                .child(div().max_w(px(400.)).text_sm().text_color(theme::muted()).text_center().whitespace_normal().child(tr("connect_linking_help")))
+                .child(div().pt_1().child(off(cx)))),
             Phase::Ready => {
                 let (machine, account) = identity_of(&host).unwrap_or(("", ""));
                 let address = format!("https://{host}");
@@ -886,13 +929,10 @@ impl Hangar {
                     .child(div().text_sm().text_color(theme::muted()).whitespace_normal()
                         .child(tr("connect_identity").replace("{account}", account).replace("{machine}", machine)))
                     .child(div().font_family(theme::MONO).text_sm().truncate().child(address.clone()))
-                    .children(self.connect.error.clone().map(|error| div().id("connect-write-error").role(Role::Alert)
-                        .text_sm().text_color(theme::danger()).whitespace_normal().child(error)))
                     .child(div().flex().items_center().gap_2().pt_1()
                         .child(Button::new("connect-copy").outline().small().label(tr("connect_copy_address"))
                             .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(address.clone()))))
-                        .child(Button::new("connect-off").outline().small().label(tr("connect_off")).disabled(saving)
-                            .on_click(cx.listener(|this, _, window, cx| this.confirm_unlink(window, cx))))));
+                        .child(off(cx))));
             }
         }
         // Desligar guarda as credenciais dos aparelhos: quem ficou com uma ainda pode ser revogado.
@@ -1043,6 +1083,54 @@ mod tests {
 
     fn refused(code: &str) -> Result<serde_json::Value, crate::api::Failure> {
         Err(crate::api::Failure { status: Some(502), detail: "x".into(), retry_after: None, uncertain: false, code: Some(code.into()) })
+    }
+
+    fn status(enabled: bool, running: bool, host: Option<&str>) -> super::Status {
+        parse_status(json!({"enabled": enabled, "running": running, "host": host, "error": null})).unwrap()
+    }
+
+    #[test]
+    fn turning_on_again_always_signs_in_even_after_choosing_create() {
+        let mut connect = super::Connect { entry: Some(super::Entry::Create), ..Default::default() };
+        connect.status.set(Ok(status(false, false, Some("mesa.conta.hangar.dev.br"))));
+        assert_eq!(connect.shown_entry(), super::Entry::Login, "\"Ligar de novo\" é o formulário de entrar");
+        connect.status.set(Ok(status(false, false, None)));
+        assert_eq!(connect.shown_entry(), super::Entry::Create);
+    }
+
+    #[test]
+    fn what_is_sent_is_what_the_preview_shows() {
+        assert_eq!(super::service_name("  Casa-01 "), "casa-01");
+        assert_eq!(address_preview("Casa-01", "Jefferson"), "casa-01.jefferson.hangar.dev.br");
+    }
+
+    #[test]
+    fn account_machines_are_polled_only_while_a_link_waits() {
+        let mut connect = super::Connect::default();
+        let links = |stage: &str| Ok(json!([{"machine_id": "casa", "stage": stage, "peer": null, "code": null, "message": null}]));
+        for (stage, polled) in [("requesting", true), ("waiting_approval", true), ("linked", false), ("failed", false)] {
+            connect.links_read(links(stage));
+            assert_eq!(connect.linking_in_progress(), polled, "{stage}");
+        }
+    }
+
+    #[test]
+    fn a_failed_machines_read_keeps_the_last_good_list() {
+        let mut connect = super::Connect::default();
+        let good = parse_account(json!({"this": {"machine_id": "a", "host": "a.j.hangar.dev.br"},
+            "machines": [{"machine_id": "casa", "name": "casa", "host": "casa.j.hangar.dev.br", "online": true, "added": false}]}));
+        let first = connect.machines.start();
+        assert!(connect.machines_read(first, good));
+        let second = connect.machines.start();
+        assert!(connect.machines_read(second, Err("sem rede".into())));
+        assert_eq!(connect.machines.ok().map(|list| list.machines.len()), Some(1), "a lista boa fica");
+        assert_eq!(connect.machines_error.as_deref(), Some("sem rede"));
+        assert!(!connect.machines.loading);
+
+        let mut empty = super::Connect::default();
+        let seq = empty.machines.start();
+        empty.machines_read(seq, Err("sem rede".into()));
+        assert!(matches!(empty.machines.value, Some(Err(_))) && empty.machines_error.is_none(), "sem lista, o erro ocupa o lugar");
     }
 
     #[test]
