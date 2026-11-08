@@ -6,7 +6,7 @@ import { addMachine, changeAccountPassword, endAccountSessions, listMachines, re
 import type { AccountSession, ConnectMachine, Server } from '@hangar/core';
 import { approveDevice, readDevices, reason, removeDevice, type ConnectDevice } from '../machines/api';
 import { ownServers, useServers } from '../../stores/servers';
-import type { GroupTarget } from './pendingGroups';
+import { installCode, type GroupTarget } from './pendingGroups';
 import * as m from '../../paraglide/messages';
 
 export const CONNECT_SERVICE_URL = 'https://connect.hangar.dev.br';
@@ -28,7 +28,10 @@ export interface ConnectState {
   entries: Record<string, MachineEntry>;
   devices: Record<string, DeviceList>;
   notice: string;
+  /** Código curto deste celular, repetido no cartão de quem aprova; vazio sem id guardado. */
+  installCode: string;
   load(): Promise<void>;
+  loadInstallCode(): Promise<void>;
   signIn(name: string, password: string): Promise<void>;
   signUp(name: string, password: string): Promise<void>;
   signOut(): Promise<void>;
@@ -85,12 +88,23 @@ let reading: Promise<string | undefined> | null = null;
 // "Entrar em todas" pede o id várias vezes de uma vez: uma leitura só, senão cada pedido nasceria com o seu.
 const installId = () => (reading ??= readInstallId().finally(() => { reading = null; }));
 async function readInstallId(): Promise<string | undefined> {
-  const saved = await SecureStore.getItemAsync(INSTALL_KEY).catch(() => null);
+  let saved: string | null;
+  try { saved = await SecureStore.getItemAsync(INSTALL_KEY); }
+  catch {
+    // Gerar outro aqui trocaria o código que a pessoa já conferiu e separaria este celular em dois cartões.
+    registrarDiag({ evento: 'connect.instalacao_ilegivel', nivel: 'aviso', codigo: 'connect_install_id_unreadable' });
+    return undefined;
+  }
   if (saved) return saved;
   if (!globalThis.crypto?.getRandomValues) return undefined;
   const id = Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
   // Sem cofre, os pedidos saem sem o id: cada máquina mostra o seu cartão, como antes.
-  return SecureStore.setItemAsync(INSTALL_KEY, id).then(() => id, () => undefined);
+  try { await SecureStore.setItemAsync(INSTALL_KEY, id); }
+  catch {
+    registrarDiag({ evento: 'connect.instalacao_nao_gravada', nivel: 'aviso', codigo: 'connect_install_id_unsaved' });
+    return undefined;
+  }
+  return id;
 }
 
 export function sameMachine(server: Server, machine: ConnectMachine): boolean {
@@ -170,6 +184,11 @@ export const useConnect = create<ConnectState>((set, get) => {
     entries: {},
     devices: {},
     notice: '',
+    installCode: '',
+    async loadInstallCode() {
+      const id = await installId();
+      set({ installCode: id ? installCode(id) : '' });
+    },
     async load() {
       if (get().ready) return;
       try {

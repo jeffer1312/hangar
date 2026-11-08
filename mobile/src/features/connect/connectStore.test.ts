@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { _resetRotasForTests, configureApi, definirArmazem, type ConnectMachine, type Server } from '@hangar/core';
+import { _resetRotasForTests, configureApi, configureDiag, definirArmazem, type ConnectMachine, type Server } from '@hangar/core';
 
 const vault = vi.hoisted(() => new Map<string, string>());
+// Chave aqui: o cofre falha ao ler ou gravar só ela.
+const broken = vi.hoisted(() => ({ read: new Set<string>(), write: new Set<string>() }));
 vi.mock('expo-secure-store', () => ({
-  getItemAsync: async (key: string) => vault.get(key) ?? null,
-  setItemAsync: async (key: string, value: string) => { vault.set(key, value); },
+  getItemAsync: async (key: string) => { if (broken.read.has(key)) throw new Error('cofre'); return vault.get(key) ?? null; },
+  setItemAsync: async (key: string, value: string) => { if (broken.write.has(key)) throw new Error('cofre'); vault.set(key, value); },
   deleteItemAsync: async (key: string) => { vault.delete(key); },
 }));
 vi.mock('expo-constants', () => ({ default: { deviceName: 'fixture-phone' } }));
@@ -66,6 +68,8 @@ async function seed(list: Server[]) {
 
 beforeEach(async () => {
   vault.clear();
+  broken.read.clear();
+  broken.write.clear();
   _resetRotasForTests();
   configureApi({ getBaseUrl: () => '', getToken: () => null, onUnauthorized: vi.fn(), origin: null,
     createEventSource: () => { throw new Error('sem SSE'); } });
@@ -289,6 +293,31 @@ describe('máquinas da conta', () => {
     expect(ids[0]).toMatch(/^[A-Za-z0-9_-]{16,64}$/);
     expect(vault.get('cp_connect_install_id_v1')).toBe(ids[0]);
     expect(servers().map((s) => s.id).sort()).toEqual(['pc1', 'pc2']);
+  });
+
+  it('mostra o código do celular e, com o cofre falhando, não inventa outro id e registra no diário', async () => {
+    const events: { evento: string; codigo?: string }[] = [];
+    configureDiag({ registrar: (event) => { events.push(event); }, novoReq: () => '' });
+    vault.set('cp_connect_install_id_v1', '0a1b2c3d');
+    await connect().loadInstallCode();
+    expect(connect().installCode).toBe('0A1B');
+
+    useConnect.setState({ installCode: '' });
+    broken.read.add('cp_connect_install_id_v1');
+    const calls = network({ statuses: [{ status: 'approved', token: 'device-token' }] });
+    const entering = connect().enter(online);
+    await elapse(6000);
+    await entering;
+    expect(vault.get('cp_connect_install_id_v1')).toBe('0a1b2c3d');
+    expect(calls.find((call) => call.url.pathname === '/api/connect/redeem')?.body).not.toHaveProperty('install_id');
+    expect(connect().installCode).toBe('');
+
+    broken.read.clear();
+    broken.write.add('cp_connect_install_id_v1');
+    vault.delete('cp_connect_install_id_v1');
+    await connect().loadInstallCode();
+    expect(connect().installCode).toBe('');
+    expect(events.map((event) => event.codigo)).toEqual(['connect_install_id_unreadable', 'connect_install_id_unsaved']);
   });
 
   it('adds a machine as a normal server', async () => {
