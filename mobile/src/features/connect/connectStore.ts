@@ -30,6 +30,8 @@ export interface ConnectState {
   notice: string;
   /** Código curto deste celular, repetido no cartão de quem aprova; vazio sem id guardado. */
   installCode: string;
+  /** O cofre não leu nem gravou o id: a tela diz que o código não está disponível. */
+  installCodeFailed: boolean;
   load(): Promise<void>;
   loadInstallCode(): Promise<void>;
   signIn(name: string, password: string): Promise<void>;
@@ -45,8 +47,9 @@ export interface ConnectState {
   turnOnConnect(server: Server): Promise<boolean>;
   refreshDevices(): Promise<void>;
   answerDevice(server: Server, deviceId: string, approve: boolean, signal: AbortSignal): Promise<void>;
-  /** Responde o mesmo celular em várias máquinas, cada uma pela própria rota; devolve as que falharam, com o motivo. */
-  answerGroup(targets: GroupTarget[], approve: boolean): Promise<{ label: string; error: string }[]>;
+  /** Responde o mesmo celular em várias máquinas, cada uma pela própria rota. `failed`: as que não responderam, com o
+   *  motivo; `leftovers`: as respondidas onde um pedido anterior do mesmo celular não saiu. */
+  answerGroup(targets: GroupTarget[], approve: boolean): Promise<{ failed: { label: string; error: string }[]; leftovers: string[] }>;
 }
 
 const CODES: Record<string, () => string> = {
@@ -89,24 +92,30 @@ let reading: Promise<string | undefined> | null = null;
 // "Entrar em todas" pede o id várias vezes de uma vez: uma leitura só, senão cada pedido nasceria com o seu.
 const installId = () => (reading ??= readInstallId().finally(() => { reading = null; }));
 // Cofre que não responde deixaria a máquina em "pedindo" para sempre.
-const INSTALL_READ_MS = 5_000;
-async function readInstallId(): Promise<string | undefined> {
-  let saved: string | null;
+const INSTALL_VAULT_MS = 5_000;
+async function withinVaultTime<T>(work: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    saved = await Promise.race([SecureStore.getItemAsync(INSTALL_KEY),
-      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), INSTALL_READ_MS); })]);
-  } catch {
+    return await Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), INSTALL_VAULT_MS); })]);
+  } finally { clearTimeout(timer); }
+}
+async function readInstallId(): Promise<string | undefined> {
+  let saved: string | null;
+  try { saved = await withinVaultTime(SecureStore.getItemAsync(INSTALL_KEY)); }
+  catch {
     // Gerar outro aqui trocaria o código que a pessoa já conferiu e separaria este celular em dois cartões: o pedido para
     // com erro e "tentar de novo" relê o mesmo cofre.
     registrarDiag({ evento: 'connect.instalacao_ilegivel', nivel: 'aviso', codigo: 'connect_install_id_unreadable' });
     throw Object.assign(new Error(m.connect_error_install_id()), { code: 'connect_install_id_unreadable' });
-  } finally { clearTimeout(timer); }
+  }
   if (saved) return saved;
-  if (!globalThis.crypto?.getRandomValues) return undefined;
+  if (!globalThis.crypto?.getRandomValues) {
+    registrarDiag({ evento: 'connect.instalacao_sem_aleatorio', nivel: 'aviso', codigo: 'connect_install_id_no_random' });
+    return undefined;
+  }
   const id = Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
   // Sem cofre, os pedidos saem sem o id: cada máquina mostra o seu cartão, como antes.
-  try { await SecureStore.setItemAsync(INSTALL_KEY, id); }
+  try { await withinVaultTime(SecureStore.setItemAsync(INSTALL_KEY, id)); }
   catch {
     registrarDiag({ evento: 'connect.instalacao_nao_gravada', nivel: 'aviso', codigo: 'connect_install_id_unsaved' });
     return undefined;
@@ -192,9 +201,11 @@ export const useConnect = create<ConnectState>((set, get) => {
     devices: {},
     notice: '',
     installCode: '',
+    installCodeFailed: false,
     async loadInstallCode() {
+      // A causa já foi ao diário em `readInstallId`.
       const id = await installId().catch(() => undefined);
-      set({ installCode: id ? installCode(id) : '' });
+      set({ installCode: id ? installCode(id) : '', installCodeFailed: !id });
     },
     async load() {
       if (get().ready) return;
@@ -312,16 +323,20 @@ export const useConnect = create<ConnectState>((set, get) => {
     },
     async answerGroup(targets, approve) {
       const all = useServers.getState().servers;
-      const answered = await Promise.allSettled(targets.map(async ({ serverId, deviceId, stale }) => {
+      const leftovers: string[] = [];
+      const answered = await Promise.allSettled(targets.map(async ({ serverId, label, deviceId, stale }) => {
         const server = all.find((candidate) => candidate.id === serverId);
         if (!server) throw new Error(m.connect_group_machine_gone());
         await (approve ? approveDevice : removeDevice)(server, deviceId, AbortSignal.timeout(DEVICES_TIMEOUT_MS));
-        // A tentativa anterior do mesmo celular voltaria como cartão novo logo depois de respondida a atual.
-        await Promise.all(stale.map((old) => removeDevice(server, old, AbortSignal.timeout(DEVICES_TIMEOUT_MS))));
+        // Só depois da resposta dar certo. A tentativa anterior voltaria como cartão novo; se não sair, a máquina
+        // continua respondida e o pedido velho expira sozinho.
+        const old = await Promise.allSettled(stale.map((id) => removeDevice(server, id, AbortSignal.timeout(DEVICES_TIMEOUT_MS))));
+        if (old.some((result) => result.status === 'rejected')) leftovers.push(label);
       }));
       await get().refreshDevices();
-      return answered.flatMap((result, i) => result.status === 'rejected'
+      const failed = answered.flatMap((result, i) => result.status === 'rejected'
         ? [{ label: targets[i].label, error: result.reason instanceof Error ? result.reason.message : reason(result.reason) }] : []);
+      return { failed, leftovers };
     },
   };
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import cases from '../../../../packages/core/src/installCode.fixtures.json';
-import { pendingGroups } from './pendingGroups';
+import { chosenTargets, pendingGroups } from './pendingGroups';
 
 const row = (device_id: string, status: 'pending' | 'approved', install_id?: string, name = 'iPhone', created_at = 100) =>
   ({ device_id, name, status, created_at, ...(install_id ? { install_id } : {}) });
@@ -40,6 +40,16 @@ describe('pendingGroups', () => {
       [{ serverId: 'casa', label: 'casa', deviceId: 'legacy1', stale: [] }],
       [{ serverId: 'casa', label: 'casa', deviceId: 'legacy2', stale: [] }],
     ]);
+  });
+
+  it('keeps a machine unchecked when the phone retries there', () => {
+    const lists = (casa: string) => [
+      { serverId: 'casa', label: 'casa', rows: [row(casa, 'pending', phone.install_id, 'iPhone', casa === 'd1' ? 100 : 200)] },
+      { serverId: 'notebook', label: 'notebook', rows: [row('d4', 'pending', phone.install_id)] },
+    ];
+    const off = new Set(['casa']);
+    expect(chosenTargets(pendingGroups(lists('d1'))[0], off).map((target) => target.serverId)).toEqual(['notebook']);
+    expect(chosenTargets(pendingGroups(lists('retry'))[0], off).map((target) => target.serverId)).toEqual(['notebook']);
   });
 
   it('keeps the same object for a card that did not change', () => {

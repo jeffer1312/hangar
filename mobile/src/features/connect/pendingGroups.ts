@@ -6,6 +6,11 @@ export type GroupTarget = { serverId: string; label: string; deviceId: string; s
 export type PendingGroup = { key: string; name: string; code: string; createdAt: number | null; targets: GroupTarget[] };
 export type MachineDevices = { serverId: string; label: string; rows: ConnectDevice[] | null };
 
+/** `off` guarda máquinas (`serverId`), não pedidos: nova tentativa do celular troca o pedido, não a escolha. */
+export function chosenTargets(group: PendingGroup, off: ReadonlySet<string>): GroupTarget[] {
+  return group.targets.filter((target) => !off.has(target.serverId));
+}
+
 /** Um cartão por celular pendente, uma caixa por máquina. O nome é de quem pede: nome diferente nunca junta, mesmo com o
  *  mesmo id. Sem `install_id` (app antigo), cada pedido fica no seu. Cartão igual ao de `before` volta o mesmo objeto. */
 export function pendingGroups(machines: MachineDevices[], before: PendingGroup[] = []): PendingGroup[] {

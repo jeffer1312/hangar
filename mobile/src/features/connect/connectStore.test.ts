@@ -3,14 +3,18 @@ import { _resetRotasForTests, configureApi, configureDiag, definirArmazem, type 
 
 const vault = vi.hoisted(() => new Map<string, string>());
 // Chave aqui: o cofre falha ao ler ou gravar só ela.
-const broken = vi.hoisted(() => ({ read: new Set<string>(), write: new Set<string>(), hang: new Set<string>() }));
+const broken = vi.hoisted(() => ({ read: new Set<string>(), write: new Set<string>(), hang: new Set<string>(), hangWrite: new Set<string>() }));
 vi.mock('expo-secure-store', () => ({
   getItemAsync: async (key: string) => {
     if (broken.hang.has(key)) return new Promise<never>(() => {});
     if (broken.read.has(key)) throw new Error('cofre');
     return vault.get(key) ?? null;
   },
-  setItemAsync: async (key: string, value: string) => { if (broken.write.has(key)) throw new Error('cofre'); vault.set(key, value); },
+  setItemAsync: async (key: string, value: string) => {
+    if (broken.hangWrite.has(key)) return new Promise<never>(() => {});
+    if (broken.write.has(key)) throw new Error('cofre');
+    vault.set(key, value);
+  },
   deleteItemAsync: async (key: string) => { vault.delete(key); },
 }));
 vi.mock('expo-constants', () => ({ default: { deviceName: 'fixture-phone' } }));
@@ -76,6 +80,7 @@ beforeEach(async () => {
   broken.read.clear();
   broken.write.clear();
   broken.hang.clear();
+  broken.hangWrite.clear();
   _resetRotasForTests();
   configureApi({ getBaseUrl: () => '', getToken: () => null, onUnauthorized: vi.fn(), origin: null,
     createEventSource: () => { throw new Error('sem SSE'); } });
@@ -322,12 +327,25 @@ describe('máquinas da conta', () => {
     expect(vault.get('cp_connect_install_id_v1')).toBe(codes[0].install_id);
     expect(calls.some((call) => call.url.pathname === '/api/connect/redeem')).toBe(false);
 
-    broken.read.clear();
-    broken.write.add('cp_connect_install_id_v1');
-    vault.delete('cp_connect_install_id_v1');
+    // A tela diz que o código não está disponível, em vez de só não mostrar nada.
+    broken.read.add('cp_connect_install_id_v1');
     await connect().loadInstallCode();
-    expect(connect().installCode).toBe('');
-    expect(events.map((event) => event.codigo)).toEqual(['connect_install_id_unreadable', 'connect_install_id_unreadable', 'connect_install_id_unsaved']);
+    expect([connect().installCode, connect().installCodeFailed]).toEqual(['', true]);
+    broken.read.clear();
+    await connect().loadInstallCode();
+    expect([connect().installCode, connect().installCodeFailed]).toEqual([codes[0].code, false]);
+
+    vault.delete('cp_connect_install_id_v1');
+    for (const fault of [broken.write, broken.hangWrite]) {
+      fault.add('cp_connect_install_id_v1');
+      const loading = connect().loadInstallCode();
+      await elapse(6000);
+      await loading;
+      expect([connect().installCode, connect().installCodeFailed]).toEqual(['', true]);
+      fault.clear();
+    }
+    expect(events.map((event) => event.codigo)).toEqual(['connect_install_id_unreadable', 'connect_install_id_unreadable',
+      'connect_install_id_unreadable', 'connect_install_id_unsaved', 'connect_install_id_unsaved']);
   });
 
   it('adds a machine as a normal server', async () => {
@@ -506,7 +524,16 @@ describe('aparelhos da máquina', () => {
       'POST pc1.acme.hangar.dev.br/api/connect/devices/a1/approve Bearer device-token',
       'POST pc2.acme.hangar.dev.br/api/connect/devices/a2/approve Bearer device-token-2',
     ]);
-    expect(failed).toEqual([]);
+    expect(failed).toEqual({ failed: [], leftovers: [] });
+  });
+
+  it('pedido anterior que não sai depois da aprovação vira aviso à parte, não falha da máquina', async () => {
+    await seed([entry]);
+    network({ route: (call) => (call.method === 'DELETE' ? json({ detail: 'fora' }, 503) : undefined) });
+
+    const answered = await connect().answerGroup([{ serverId: 'pc1', label: 'pc1', deviceId: 'a1', stale: ['a0'] }], true);
+
+    expect(answered).toEqual({ failed: [], leftovers: ['pc1'] });
   });
 
   it('a resposta à aprovação relê a lista mesmo com uma leitura antiga em curso', async () => {
