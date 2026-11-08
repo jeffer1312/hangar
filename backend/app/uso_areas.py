@@ -22,7 +22,6 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import json
-import os
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -91,18 +90,6 @@ def assinatura() -> str:
 
 def recarregar() -> None:
     _mapa.cache_clear()
-    raiz_do_repo.cache_clear()
-    areas_do_registro.cache_clear()
-
-
-@lru_cache(maxsize=4096)
-def raiz_do_repo(pasta: str) -> str:
-    """Pasta com `.git` acima de `pasta`; "" quando não há repositório."""
-    p = Path(pasta)
-    for d in (p, *p.parents):
-        if (d / ".git").exists():
-            return str(d)
-    return ""
 
 
 def regras_de(cwd: str) -> list[tuple[str, list[str]]]:
@@ -136,28 +123,6 @@ def area_do_alvo(alvo: str, regras: list[tuple[str, list[str]]]) -> str | None:
     return None
 
 
-def _dentro(p: str, raiz: str) -> bool:
-    # O cwd chega cru (`C:/x`, caixa do transcript); no Windows barra e caixa não distinguem pasta.
-    if not raiz:
-        return False
-    p, raiz = os.path.normcase(os.path.normpath(p)), os.path.normcase(os.path.normpath(raiz))
-    return p == raiz or p.startswith(raiz.rstrip(os.sep) + os.sep)
-
-
-def area_do_caminho(caminho: str, cwd: str, regras: list[tuple[str, list[str]]]) -> str:
-    """A raiz é a do repositório do PRÓPRIO arquivo (worktree, repo vizinho), com as regras
-    dele; sem repositório, a do cwd. Fora dos dois é `outros` — um Read em /tmp não é o front."""
-    p = os.path.normpath(caminho if os.path.isabs(caminho) or not cwd else os.path.join(cwd, caminho))
-    raiz = raiz_do_repo(os.path.dirname(p))
-    if raiz and raiz != raiz_do_repo(cwd):
-        regras = regras_de(raiz)
-    elif not raiz:
-        raiz = (raiz_do_repo(cwd) or cwd) if cwd else ""
-    if not _dentro(p, raiz):
-        return OUTROS
-    return area_do_alvo(os.path.relpath(p, raiz).replace(os.sep, "/"), regras) or OUTROS
-
-
 def candidatos_do_comando(cmd: str) -> tuple[str, ...]:
     """Palavras de um comando que parecem caminho (com `/` ou extensão). Não depende do mapa:
     é o que o cache guarda do comando."""
@@ -170,34 +135,3 @@ def candidatos_do_comando(cmd: str) -> tuple[str, ...]:
             continue
         out.append(t)
     return tuple(out)
-
-
-def areas_do_comando(cmd: str, cwd: str, regras: list[tuple[str, list[str]]]) -> set[str]:
-    """Áreas dos caminhos citados num comando Bash. Palavra que não parece caminho é ignorada,
-    e o que cai em `outros` também: `2>/dev/null` não é área."""
-    return {a for t in candidatos_do_comando(cmd) if (a := area_do_caminho(t, cwd, regras)) != OUTROS}
-
-
-# Registro de uma tool num turno, guardado no cache no lugar da área já resolvida:
-#   ("P", cwd_regras, cwd, caminhos)    arquivos tocados; fora do repositório conta `outros`
-#   ("C", cwd_regras, cwd, candidatos)  comando; `outros` não conta
-#   ("S", cwd_regras, alvo)             skill (`skill:<nome>`)
-@lru_cache(maxsize=65536)
-def areas_do_registro(reg: tuple) -> frozenset[str]:
-    regras = regras_de(reg[1])
-    if reg[0] == "S":
-        a = area_do_alvo(reg[2], regras)
-        return frozenset((a,) if a else ())
-    areas = {area_do_caminho(c, reg[2], regras) for c in reg[3]}
-    if reg[0] == "C":
-        areas.discard(OUTROS)
-    return frozenset(areas)
-
-
-def contar_areas(registros) -> dict[str, int]:
-    """Cada tool conta 1 em cada área distinta que tocou."""
-    out: dict[str, int] = {}
-    for reg in registros:
-        for a in sorted(areas_do_registro(reg)):
-            out[a] = out.get(a, 0) + 1
-    return out

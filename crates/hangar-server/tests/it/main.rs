@@ -47,6 +47,7 @@ mod dictation_routes;
 mod dictation_public;
 mod dictation_public_cases;
 mod session_open_cases;
+mod baton;
 mod dictation_catalog;
 mod dictation_harness;
 mod dictation_process;
@@ -306,6 +307,8 @@ mod voice_settings;
 mod voice_ws;
 mod speech_public;
 mod workspace_routes;
+mod workspace_contract;
+mod project_shortcuts;
 mod worktree_routes;
 
 mod codex_setup;

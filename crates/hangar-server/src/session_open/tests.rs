@@ -3003,6 +3003,62 @@ fn a_snapshot_entry_comes_back_with_its_whole_spec_keeping_its_group_and_queue()
     assert!(root.join("home/.claude/.hangar-pair/proj.json").is_file() && root.join("home/.claude/.hangar-queue/proj.jsonl").is_file());
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn t4_remaining_restore_reuses_the_recorded_worktree_without_creating_it_again() {
+    const SID: &str = "11111111-1111-4111-8111-111111111111";
+    let key = "ab".repeat(16);
+    let worktree = json!({"branch": "feature", "new_branch": true, "base": "main", "path": "<ROOT>/work/repo-feature"});
+    let spec = json!({"version": 1, "key": key, "name": "proj", "cwd": "<ROOT>/work/repo-feature", "provider": "claude", "surface": "terminal",
+        "account": {"kind": "default"}, "account_source": "default", "model": "opus", "effort": "high", "service_tier": null,
+        "permission_mode": "bypassPermissions", "subagent_model": null, "customizations": null, "jev": true, "read_only": false,
+        "worktree": worktree, "creator": null, "created_at": 1.0, "conversation": SID});
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let output = std::process::Command::new("git").arg("-C").arg(dir)
+            .args(["-c", "core.hooksPath=", "-c", "commit.gpgSign=false", "-c", "user.name=Teste", "-c", "user.email=teste@example.invalid"])
+            .args(args).env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1")
+            .env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").env_remove("GIT_INDEX_FILE").output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let (_, raw, _dir, root) = run_resume_patched("archive_resume_claude", |s| {
+        s["state"]["files"][format!("<ROOT>/home/.hangar/session-specs/{key}.json")] = spec.clone();
+        s["steps"] = json!([{"call": "restore", "key": key,
+            "entry": {"name": "proj", "provider": "claude", "conversation": SID, "permission_mode": "acceptEdits"}}]);
+    }, |root| {
+        let repo = root.join("work/repo");
+        let wt = root.join("work/repo-feature");
+        std::fs::create_dir(&repo).unwrap();
+        git(&repo, &["init", "-b", "main"]);
+        git(&repo, &["commit", "--allow-empty", "-m", "Inicial"]);
+        git(&repo, &["worktree", "add", "-b", "feature", wt.to_str().unwrap()]);
+        std::fs::write(wt.join("local.txt"), "trabalho preservado\n").unwrap();
+        let projects = root.join("home/.claude/projects");
+        let from = projects.join(hangar_workspace::worktrees::sanitize_cwd(&root.join("work/proj").to_string_lossy())).join(format!("{SID}.jsonl"));
+        let to = projects.join(hangar_workspace::worktrees::sanitize_cwd(&wt.to_string_lossy())).join(format!("{SID}.jsonl"));
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        std::fs::rename(from, to).unwrap();
+        std::fs::write(root.join("home/.claude/runtime-config.json"), json!({"scan_roots": root.join("work")}).to_string()).unwrap();
+        assert_eq!(git(&repo, &["worktree", "list", "--porcelain"]).matches("branch refs/heads/feature").count(), 1);
+    });
+    let wt = root.join("work/repo-feature");
+    assert_eq!(std::fs::read_to_string(wt.join("local.txt")).unwrap(), "trabalho preservado\n");
+    assert_eq!(hangar_workspace::worktrees::worktree_paths(root.join("work/repo").to_str().unwrap()), [wt.to_string_lossy().into_owned()]);
+    let kept: Value = serde_json::from_slice(&std::fs::read(root.join(format!("home/.hangar/session-specs/{key}.json"))).unwrap()).unwrap();
+    let expected_worktree: Value = serde_json::from_str(&contract::place(&worktree.to_string(), &root)).unwrap();
+    assert_eq!(kept["worktree"], expected_worktree);
+    assert_eq!(raw["steps"][0]["status"], 200, "{}", raw["steps"][0]["body"]);
+    assert_eq!(kept["key"], key);
+    assert_eq!(kept["conversation"], SID);
+    assert_eq!(kept["cwd"], json!(wt));
+    let created = raw["subprocesses"].as_array().unwrap().iter().find(|p| p["argv"][0] == "new-session").expect("o terminal foi restaurado");
+    let argv: Vec<&str> = created["argv"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect();
+    assert!(argv.windows(2).any(|w| w == ["-c", wt.to_str().unwrap()]), "{argv:?}");
+    assert!(argv.windows(2).any(|w| w == ["-e", format!("CP_SESSION_KEY={key}").as_str()]), "{argv:?}");
+    assert!(argv.last().unwrap().contains(&format!("claude --resume {SID}")), "{argv:?}");
+    assert!(raw["cleaned"].as_array().unwrap().is_empty());
+}
+
 /// Só o nome com a forma do da pasta é marcado como genérico, venha do servidor ou da tela (que manda
 /// o nome da pasta que ela calculou); chave de PM e nome dado por alguém não são.
 #[test]

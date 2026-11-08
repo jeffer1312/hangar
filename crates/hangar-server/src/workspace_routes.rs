@@ -1,23 +1,18 @@
-//! O porteiro autoriza antes do disco; consultas ao Python trazem apenas identidade e raízes.
-use crate::{
-    proxy::Forward,
-    routes::{AppState, pass},
-};
+//! O porteiro autoriza antes do disco; identidade e raízes vêm das fontes locais.
+use crate::routes::AppState;
 use axum::{
     body::{Body, Bytes, to_bytes},
-    extract::{ConnectInfo, Request, State},
+    extract::Request,
     http::{HeaderMap, Method, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use hangar_workspace::{Operation, WorkspaceError};
-use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use std::{
     collections::{HashMap, VecDeque},
     net::SocketAddr,
     path::Path,
     sync::Arc,
-    time::Duration,
 };
 use subtle::ConstantTimeEq;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
@@ -69,7 +64,9 @@ pub(crate) fn private_ok(st: &AppState, peer: SocketAddr, headers: &HeaderMap) -
 }
 /// Vaga cheia recusa na hora em vez de enfileirar atrás de um fetch lento. Escrita só volta como
 /// `unavailable` antes de rodar; depois, nunca se repete.
-async fn execute(st: &Arc<AppState>, op: Operation) -> hangar_workspace::Result<Value> {
+type Ingress = Arc<crate::runtime::ingress::IngressPass>;
+
+async fn execute(st: &Arc<AppState>, op: Operation, ingress: Option<&Ingress>) -> hangar_workspace::Result<Value> {
     let mutation = op.is_mutation();
     let slots = if matches!(op, Operation::HeadInfo { .. } | Operation::BranchOf { .. }) {
         &st.workspace_meta_slots
@@ -82,8 +79,10 @@ async fn execute(st: &Arc<AppState>, op: Operation) -> hangar_workspace::Result<
         .clone()
         .try_acquire_owned()
         .map_err(|_| hangar_workspace::busy())?;
+    let ingress = ingress.cloned();
     match tokio::task::spawn_blocking(move || {
         let _permit = permit;
+        let _ingress = ingress;
         hangar_workspace::execute(op)
     })
     .await
@@ -109,129 +108,74 @@ async fn resolve_root_file(st: &AppState, cwd: &str, path: &str) -> hangar_works
     }).await.map_err(|_| hangar_workspace::unavailable("pânico na leitura"))?
 }
 
-pub async fn private(
-    State(st): State<Arc<AppState>>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    req: Request,
-) -> Response {
-    if !private_ok(&st, peer, req.headers()) {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    let bytes =
-        match tokio::time::timeout(Duration::from_secs(6), to_bytes(req.into_body(), MAX_BODY))
-            .await
-        {
-            Ok(Ok(b)) => b,
-            _ => return StatusCode::BAD_REQUEST.into_response(),
-        };
-    let Ok(op) = serde_json::from_slice::<Operation>(&bytes) else {
-        return StatusCode::BAD_REQUEST.into_response();
-    };
-    match execute(&st, op).await {
-        Ok(result) => response(json!({"ok":true,"result":result}), 200),
-        Err(error) => response(json!({"ok":false,"error":error}), 200),
-    }
+pub fn matches(_method: &Method, path: &str) -> bool {
+    crate::workspace_http::owns(path)
 }
-pub fn matches(method: &Method, path: &str) -> bool {
-    if path.starts_with("/api/fs/") {
-        return match *method {
-            Method::GET => matches!(
-                path,
-                "/api/fs/roots" | "/api/fs/scan" | "/api/fs/branches" | "/api/fs/git"
-            ),
-            Method::POST => matches!(
-                path,
-                "/api/fs/mkdir"
-                    | "/api/fs/git/fetch"
-                    | "/api/fs/git/pull"
-                    | "/api/fs/git/switch"
-                    | "/api/fs/git/branch"
-            ),
-            _ => false,
-        };
-    }
-    let Some(tail) = path
-        .strip_prefix("/api/sessions/")
-        .and_then(|p| p.split_once('/').map(|(_, p)| p))
-    else {
-        return false;
-    };
-    match *method {
-        Method::GET => {
-            matches!(
-                tail,
-                "branches"
-                    | "git/files"
-                    | "git/log"
-                    | "git/last-message"
-                    | "files/list"
-                    | "files/read"
-                    | "files/search"
-                    | "file"
-                    | "file/text"
-            ) || tail.starts_with("git/commit/")
-                && tail.split('/').count() == 4
-                && ["files", "diff", "diff-full", "diff-worktree", "branches"]
-                    .contains(&tail.rsplit('/').next().unwrap_or(""))
+/// `Err(None)`: sessão inexistente. `Err(Some(motivo))`: leitura indisponível.
+async fn context(st: &Arc<AppState>, name: Option<&str>) -> Result<Value, Option<&'static str>> {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| Some("relogio"))?.as_secs_f64();
+    let found = st.list.discover(Some(now)).await.map_err(|_| Some("sessoes"))?;
+    let source = st.clone();
+    let name = name.map(str::to_owned);
+    tokio::task::spawn_blocking(move || {
+        let home = &source.list.env().dirs.as_ref().ok_or(Some("sessoes"))?.home;
+        let (orq, failed) = crate::list::local_facts::orq_rows(home, now);
+        if let Some(why) = failed {
+            source.diag.report_with("rust.list_orq_unavailable", "", "list_orq_unavailable",
+                "orquestração ilegível; fica a última linha boa", json!({"detalhe":why}));
+            return Err(Some("orquestracoes"));
         }
-        Method::POST => matches!(
-            tail,
-            "checkout"
-                | "git"
-                | "git/diff"
-                | "git/path-diff"
-                | "git/discard"
-                | "git/commit"
-                | "git/revert"
-                | "git/cherry-pick"
-                | "git/push"
-                | "git/reset"
-                | "git/branch"
-                | "git/tag"
-                | "files/write"
-                | "files/resolver"
-                | "file/text"
-        ),
-        _ => false,
-    }
+        let rows: Vec<_> = found.iter().chain(orq.iter()).collect();
+        let mut citation_session = Value::Null;
+        let session = match name {
+            Some(name) => {
+                let row = rows.iter().find(|row| row.name == name
+                    && row.cwd.as_deref().is_some_and(|cwd| !cwd.is_empty())).ok_or(None)?;
+                citation_session = json!(row);
+                json!({"name":row.name,"cwd":row.cwd,"jsonl":row.jsonl,"lifecycle_id":row.lifecycle_id,
+                    "git_cwd":row.git_cwd.as_deref().filter(|cwd| !cwd.is_empty()).or(row.cwd.as_deref())})
+            }
+            None => Value::Null,
+        };
+        let roots = crate::worktree_context::roots(&source).map_err(Some)?;
+        let sessions: Vec<Value> = rows.iter()
+            .filter(|row| row.cwd.as_deref().is_some_and(|cwd| !cwd.is_empty()))
+            .map(|row| json!({"name":row.name,"cwd":row.cwd})).collect();
+        Ok(json!({"roots":roots,"sessions":sessions,"session":session,"citation_session":citation_session}))
+    }).await.map_err(|_| Some("leitura"))?
 }
-/// `Err(None)`: sessão inexistente, resposta normal do Python. `Err(Some(motivo))`: falha.
-async fn context(st: &AppState, name: Option<&str>) -> Result<Value, Option<&'static str>> {
-    let query = name
-        .map(|n| {
-            format!(
-                "?name={}",
-                percent_encoding::utf8_percent_encode(n, percent_encoding::NON_ALPHANUMERIC)
-            )
-        })
-        .unwrap_or_default();
-    let req = axum::http::Request::get(format!(
-        "http://{}/internal/workspace/context{query}",
-        st.cfg.upstream
-    ))
-    .header("x-hangar-internal", &st.cfg.internal_secret)
-    .body(Body::empty())
-    .map_err(|_| Some("pedido"))?;
-    let resp = tokio::time::timeout(Duration::from_secs(10), st.http.request(req))
-        .await
-        .map_err(|_| Some("prazo"))?
-        .map_err(|_| Some("conexao"))?;
-    if resp.status() == StatusCode::NOT_FOUND && name.is_some() {
-        return Err(None);
-    }
-    if !resp.status().is_success() {
-        return Err(Some("status"));
-    }
-    let bytes = tokio::time::timeout(Duration::from_secs(10), resp.into_body().collect())
-        .await
-        .map_err(|_| Some("prazo"))?
-        .map_err(|_| Some("conexao"))?
-        .to_bytes();
-    if bytes.len() > MAX_BODY {
-        return Err(Some("tamanho"));
-    }
-    serde_json::from_slice(&bytes).map_err(|_| Some("json"))
+async fn citation_rows(st: &Arc<AppState>, ctx: &Value, ingress: Option<&Ingress>) -> hangar_workspace::Result<Option<Vec<String>>> {
+    let row: hangar_api::session::SessionRow = serde_json::from_value(ctx["citation_session"].clone())
+        .map_err(|_| hangar_workspace::unavailable("sessão indisponível"))?;
+    if row.provider != "codex" { return Ok(None); }
+    let dirs = st.list.env().dirs.clone().ok_or_else(|| hangar_workspace::unavailable("sessão indisponível"))?;
+    let permit = st.workspace_read_slots.clone().try_acquire_owned().map_err(|_| hangar_workspace::busy())?;
+    let ingress = ingress.cloned();
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let _ingress = ingress;
+        let invalid = || WorkspaceError { status:409, code:None, detail:json!({
+            "code":"session_transfer_history_invalid","params":{},"msg":"histórico da transferência indisponível"}) };
+        let id = crate::list::local_transfers::session_transfer_id(&dirs.home, &row).map_err(|_| invalid())?;
+        let mut row = row;
+        row.transfer_id = id;
+        crate::speech::history::transfer_history::citation_rows(&row, &dirs.home).map_err(|_| invalid())
+    }).await.map_err(|_| hangar_workspace::unavailable("pânico na leitura"))?
 }
+
+async fn transfer_blocked(st: &Arc<AppState>, name: &str) -> Result<bool, &'static str> {
+    let rows = st.list.discover(None).await.map_err(|_| "sessoes")?;
+    let dirs = st.list.env().dirs.clone().ok_or("sessoes")?;
+    let name = name.to_owned();
+    tokio::task::spawn_blocking(move || {
+        crate::list::local_transfers::transfers(&rows, &dirs)
+            .map(|(_, blocked)| blocked.contains(&name)).map_err(|_| "transferencia")
+    }).await.map_err(|_| "leitura")?
+}
+
+fn busy() -> Response { response(crate::session_write::busy_body(), 409) }
+
 fn bool_param(value: Option<&String>, default: bool) -> Option<bool> {
     match value.map(|s| s.to_lowercase()).as_deref() {
         None => Some(default),
@@ -240,7 +184,7 @@ fn bool_param(value: Option<&String>, default: bool) -> Option<bool> {
         _ => None,
     }
 }
-/// Pasta do git da sessão: a worktree onde o agente trabalha, ou o cwd (o Python já decide).
+/// Pasta do git da sessão: a worktree onde o agente trabalha, ou o cwd.
 fn git_cwd(ctx: &Value) -> Option<&str> {
     ctx["session"]["git_cwd"].as_str()
 }
@@ -319,26 +263,24 @@ pub(crate) fn login_fs_path(req: &Request) -> Option<String> {
         .then(|| path.into_owned())
 }
 
-pub async fn public(st: Arc<AppState>, req: Request, forward: Forward) -> Response {
-    let login_fs = login_fs_path(&req);
-    let route = login_fs.clone().unwrap_or_else(|| req.uri().path().to_owned());
-    let name = route
-        .strip_prefix("/api/sessions/")
-        .and_then(|p| p.split_once('/').map(|(n, _)| n))
-        .and_then(|n| {
-            percent_encoding::percent_decode_str(n)
-                .decode_utf8()
-                .ok()
-                .map(|s| s.into_owned())
-        });
-    let tail = match &name {
-        Some(_) => route
-            .strip_prefix("/api/sessions/")
-            .and_then(|p| p.split_once('/'))
-            .map_or("", |(_, t)| t),
-        None => route.as_str(),
+pub async fn public(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Response {
+    let headers = req.headers().clone();
+    let method = req.method().clone();
+    let mut response = public_inner(st, peer, req).await;
+    crate::routes::cors(&headers, response.headers_mut());
+    crate::http_route_response::suppress_head(&method, &mut response);
+    response
+}
+
+async fn public_inner(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Response {
+    let forward = crate::routes::forward_for(&st, peer, &req);
+    let path = crate::workspace_http::decoded(req.uri().path());
+    let decision = crate::http_contract::resolve(crate::workspace_http::ROUTES, req.method().as_str(), &path);
+    if let Some(response) = crate::http_route_response::response(&decision, req.method(), req.uri(), req.headers(), forward.https, "") {
+        return response;
     }
-    .to_owned();
+    let login_fs = login_fs_path(&req);
+    let (name, tail) = crate::workspace_http::name_tail(req.uri().path());
     // Pasta sem sessão (`/api/fs/*`) vai ao diário sem nome.
     let session = name.clone().unwrap_or_default();
     let (parts, body) = req.into_parts();
@@ -351,18 +293,61 @@ pub async fn public(st: Arc<AppState>, req: Request, forward: Forward) -> Respon
             Err(_) => return response(json!({"detail":"request body too large"}), 413),
         }
     };
+    let raw = match crate::workspace_http::frame(&tail, &parts.method, &parts.headers, &bytes) {
+        Ok(value) => crate::orchestration::codec::ValueGuard(value), Err(response) => return response,
+    };
+    let auth_request = Request::from_parts(parts, Body::empty());
+    let (_, caller) = match crate::routes::who(&st, peer, &auth_request).await {
+        Ok(value) => value, Err(error) => return crate::auth::unavailable(error),
+    };
+    let login = auth_request.extensions().get::<crate::login_guests::gate::Login>().is_some();
+    let share = caller.as_ref().and_then(crate::share::caller::Caller::grant).zip(name.as_ref())
+        .is_some_and(|(grant,name)|grant.sessions.get(name) == Some(&crate::share::store::Kind::Share));
+    if !matches!(caller, Some(crate::share::caller::Caller::Owner)) && !login && !share {
+        return match crate::routes::owner_gate(&st, peer, &auth_request).await {
+            Err(response) => response,
+            Ok(_) => response(json!({"detail":{"code":"erro_fora_do_convite","params":{},"msg":"fora da sessao compartilhada"}}), 403),
+        };
+    }
+    let (parts, _) = auth_request.into_parts();
     let guest_root = parts.extensions.get::<crate::login_guests::gate::Login>()
         .filter(|_| name.is_none()).map(|login| login.guest.root.clone());
     let resolved = if let Some(root) = guest_root {
         Ok(json!({"roots":[root],"sessions":[]}))
     } else { context(&st, name.as_deref()).await };
-    let ctx = match resolved {
+    let mut ctx = match resolved {
         Ok(ctx) => ctx,
-        // Sessão inexistente: o 404 é do Python, nada roda.
-        Err(None) => return pass(&st, Request::from_parts(parts, Body::from(bytes)), &forward).await,
+        Err(None) => return response(json!({"detail":{"code":"erro_sessao_inexistente","params":{},"msg":"sessao nao encontrada"}}), 404),
         Err(Some(reason)) => return refuse(&st, &session, &tail, CONTEXT, reason),
     };
-    match run(&st, parts, bytes, &tail, ctx, &forward).await {
+    let mutation = parts.method == Method::POST && (tail == "file/text"
+        || map_operation(&tail, &parts.method, &HashMap::new(), &raw, &ctx).is_none_or(|op| op.is_mutation()));
+    let ingress = if mutation && name.is_some() {
+        let name = name.as_deref().unwrap();
+        match transfer_blocked(&st, name).await {
+            Ok(true) => return busy(), Ok(false) => {}, Err(reason) => return refuse(&st, &session, &tail, CONTEXT, reason),
+        }
+        let Some(runtime) = st.state.runtime.get() else { return refuse(&st, &session, &tail, CONTEXT, "ingresso"); };
+        let pass = match runtime.ingress().enter(name, st.write_gate_wait).await {
+            Ok(pass) => Arc::new(pass), Err(_) => return busy(),
+        };
+        let current = match context(&st, Some(name)).await {
+            Ok(value) => value, Err(None) => return busy(), Err(Some(reason)) => return refuse(&st, &session, &tail, CONTEXT, reason),
+        };
+        if current["session"] != ctx["session"] { return busy(); }
+        match transfer_blocked(&st, name).await {
+            Ok(true) => return busy(), Ok(false) => {}, Err(reason) => return refuse(&st, &session, &tail, CONTEXT, reason),
+        }
+        ctx = current;
+        Some(pass)
+    } else { None };
+    let payload = match crate::workspace_http::payload(&tail, &parts.method, &raw) {
+        Ok(value) => crate::orchestration::codec::ValueGuard(value), Err(response) => return response,
+    };
+    let params = match crate::workspace_http::query(&tail, &parts.method, parts.uri.query()) {
+        Ok(value) => value, Err(response) => return response,
+    };
+    match run(&st, parts, &tail, ctx, &payload, params, ingress.as_ref()).await {
         Ok(response) => response,
         Err(e) if hangar_workspace::is_unavailable(&e) => {
             let code = if e.code.as_deref() == Some(hangar_workspace::BUSY) {
@@ -391,33 +376,13 @@ pub async fn public(st: Arc<AppState>, req: Request, forward: Forward) -> Respon
 async fn run(
     st: &Arc<AppState>,
     parts: axum::http::request::Parts,
-    bytes: Bytes,
     tail: &str,
     ctx: Value,
-    forward: &Forward,
+    payload: &Value,
+    params: HashMap<String, String>,
+    ingress: Option<&Ingress>,
 ) -> hangar_workspace::Result<Response> {
-    let params = form_urlencoded::parse(parts.uri.query().unwrap_or("").as_bytes())
-        .into_owned()
-        .collect::<HashMap<String, String>>();
     let method = parts.method.clone();
-    if parts.extensions.get::<crate::login_guests::gate::Login>().is_some()
-        && matches!(tail, "/api/fs/scan" | "/api/fs/branches")
-        && !params.contains_key("root")
-    {
-        return Ok(response(json!({"detail":[{"type":"missing","loc":["query","root"],
-            "msg":"Field required","input":null}]}), 422));
-    }
-    let payload = if bytes.is_empty() {
-        json!({})
-    } else {
-        match serde_json::from_slice::<Value>(&bytes) {
-            Ok(v) if v.is_object() => v,
-            _ => return Ok(pass(st, Request::from_parts(parts, Body::from(bytes)), forward).await),
-        }
-    };
-    if method == Method::POST && !body_valid(tail, &payload) {
-        return Ok(pass(st, Request::from_parts(parts, Body::from(bytes)), forward).await);
-    }
     if tail == "file" && bool_param(params.get("root"), false) == Some(true) {
         let Some(path) = params.get("path") else {
             return Err(hangar_workspace::file_error(400, "erro_arq_caminho_invalido", "caminho ausente"));
@@ -431,15 +396,19 @@ async fn run(
         return Ok(crate::thumbnail::serve(tokio::fs::File::from_std(opened.file), &opened.path, &parts.headers,
             bool_param(params.get("download"), false).unwrap_or(false), None, width).await);
     }
-    let Some(op) = map_operation(tail, &method, &params, &payload, &ctx) else {
-        return Ok(pass(st, Request::from_parts(parts, Body::from(bytes)), forward).await);
+    let mut rows = if matches!(tail, "file" | "file/text" | "files/resolver") {
+        citation_rows(st, &ctx, ingress).await?
+    } else { None };
+    let Some(mut op) = map_operation(tail, &method, &params, &payload, &ctx) else {
+        return Err(hangar_workspace::error(422, "operação de workspace inválida"));
     };
+    if let Operation::ResolveCited { rows: selected, .. } = &mut op { *selected = rows.take(); }
     if tail == "file" {
         let width = match crate::thumbnail::parse_width(params.get("w")) {
             Ok(w) => w,
             Err(r) => return Ok(r),
         };
-        let path = execute(st, op).await?;
+        let path = execute(st, op, ingress).await?;
         return Ok(serve_file(
             Path::new(path.as_str().unwrap_or("")),
             &parts.headers,
@@ -463,14 +432,16 @@ async fn run(
             .clone()
             .try_acquire_owned()
             .map_err(|_| hangar_workspace::busy())?;
+        let ingress = ingress.cloned();
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            resolve_many(&cwd, jsonl.as_deref(), &paths)
+            let _ingress = ingress;
+            resolve_many(&cwd, jsonl.as_deref(), rows.as_deref(), &paths)
         })
         .await
         .unwrap_or_else(|_| Err(hangar_workspace::unavailable("pânico na leitura")))?
     } else if tail == "file/text" {
-        let path = execute(st, op).await?;
+        let path = execute(st, op, ingress).await?;
         let path = path.as_str().unwrap_or("");
         let args = if method == Method::POST {
             json!({"alvo":path,"path":payload["path"],"texto":payload["text"],"digest_lido":payload["digest"]})
@@ -485,9 +456,9 @@ async fn run(
             },
             args,
         ) else {
-            return Ok(pass(st, Request::from_parts(parts, Body::from(bytes)), forward).await);
+            return Err(hangar_workspace::error(422, "operação de workspace inválida"));
         };
-        execute(st, next).await?
+        execute(st, next, ingress).await?
     } else if tail.starts_with("/api/fs/")
         && matches!(
             tail,
@@ -499,13 +470,13 @@ async fn run(
                 | "/api/fs/git/branch"
         )
     {
-        folder_operation(st, op, tail, &ctx, &payload, &params).await?
+        folder_operation(st, op, tail, &ctx, &payload, &params, ingress).await?
     } else {
-        execute(st, op).await?
+        execute(st, op, ingress).await?
     };
     if tail == "git/files" {
         let cwd = git_cwd(&ctx).unwrap_or("");
-        let sequencer = execute(st, Operation::SequencerState { cwd: cwd.into() }).await?;
+        let sequencer = execute(st, Operation::SequencerState { cwd: cwd.into() }, ingress).await?;
         result = json!({"files":result,"sequencer":sequencer});
     }
     if tail == "git/log" {
@@ -517,6 +488,7 @@ async fn run(
             Operation::GitSummary {
                 cwd: git_cwd(&ctx).map(str::to_owned),
             },
+            ingress,
         )
         .await
         .unwrap_or(Value::Null);
@@ -526,114 +498,6 @@ async fn run(
         result = json!({"files":result});
     }
     Ok(response(result, 200))
-}
-
-fn body_valid(tail: &str, body: &Value) -> bool {
-    let Some(map) = body.as_object() else {
-        return false;
-    };
-    let (allowed, required): (&[&str], &[&str]) = match tail {
-        "checkout" => (&["branch"], &["branch"]),
-        "git/diff" | "git/discard" => (&["path"], &["path"]),
-        "git/path-diff" => (&["path", "escopo"], &["path"]),
-        "git/commit" => (&["message", "paths", "amend", "new_branch"], &["message"]),
-        "git/revert" | "git/cherry-pick" => (&["sha"], &["sha"]),
-        "git/branch" => (&["name", "sha", "switch_after"], &["name"]),
-        "git/tag" => (&["name", "sha", "message"], &["name"]),
-        "files/resolver" => (&["caminhos"], &[]),
-        "file/text" | "files/write" => (&["path", "text", "digest"], &["path", "text"]),
-        "/api/fs/git/fetch" | "/api/fs/git/pull" => (&["root", "path"], &["root"]),
-        "/api/fs/git/switch" => (
-            &["root", "path", "branch", "confirm_sessions"],
-            &["root", "branch"],
-        ),
-        "/api/fs/git/branch" => (
-            &[
-                "root",
-                "path",
-                "name",
-                "base",
-                "checkout",
-                "confirm_sessions",
-            ],
-            &["root", "name"],
-        ),
-        "git" => (&["action"], &["action"]),
-        "git/reset" => (&["sha", "mode"], &["sha", "mode"]),
-        _ => return true,
-    };
-    if map.keys().any(|k| !allowed.contains(&k.as_str()))
-        || required.iter().any(|k| !body[*k].is_string())
-    {
-        return false;
-    }
-    if ["/api/fs/git/switch", "/api/fs/git/branch"].contains(&tail)
-        && required
-            .iter()
-            .any(|k| body[*k].as_str().is_some_and(str::is_empty))
-    {
-        return false;
-    }
-    if ["path", "digest", "base"]
-        .iter()
-        .any(|k| map.get(*k).is_some_and(|v| !v.is_null() && !v.is_string()))
-    {
-        return false;
-    }
-    if ["checkout", "confirm_sessions"]
-        .iter()
-        .any(|k| map.get(*k).is_some_and(|v| !v.is_boolean()))
-    {
-        return false;
-    }
-    if ["amend", "switch_after"]
-        .iter()
-        .any(|k| map.get(*k).is_some_and(|v| !v.is_boolean()))
-    {
-        return false;
-    }
-    if ["sha", "new_branch", "escopo"]
-        .iter()
-        .any(|k| map.get(*k).is_some_and(|v| !v.is_null() && !v.is_string()))
-    {
-        return false;
-    }
-    if tail == "files/resolver"
-        && !body["caminhos"]
-            .as_array()
-            .is_some_and(|paths| paths.iter().all(Value::is_string))
-    {
-        return false;
-    }
-    if tail == "git/commit"
-        && map.get("paths").is_some_and(|v| {
-            !v.as_array()
-                .is_some_and(|paths| paths.iter().all(Value::is_string))
-        })
-    {
-        return false;
-    }
-    if tail == "git"
-        && ![
-            "status",
-            "pull",
-            "fetch",
-            "stash",
-            "stash-pop",
-            "log",
-            "revert-abort",
-            "cherry-pick-abort",
-        ]
-        .contains(&body["action"].as_str().unwrap_or(""))
-    {
-        return false;
-    }
-    if tail == "git/reset"
-        && !["soft", "mixed", "hard"].contains(&body["mode"].as_str().unwrap_or(""))
-    {
-        return false;
-    }
-    true
 }
 
 fn map_operation(
@@ -777,6 +641,7 @@ async fn folder_operation(
     ctx: &Value,
     body: &Value,
     q: &HashMap<String, String>,
+    ingress: Option<&Ingress>,
 ) -> hangar_workspace::Result<Value> {
     // Como o api.py: recusa da pasta sai como erro_criacao_sessao; em /api/fs/branches, também a
     // do git. O código de reserva continua no campo `code` e não é afetado.
@@ -784,7 +649,7 @@ async fn folder_operation(
         detail: json!({"code":"erro_criacao_sessao","params":{},"msg":e.detail}),
         ..e
     };
-    execute(st, guard).await.map_err(session_error)?;
+    execute(st, guard, ingress).await.map_err(session_error)?;
     let root = if tail == "/api/fs/branches" || tail == "/api/fs/git" {
         q.get("root").map(String::as_str)
     } else {
@@ -800,7 +665,7 @@ async fn folder_operation(
         .to_string_lossy()
         .into_owned();
     if tail == "/api/fs/branches" {
-        let mut info = execute(st, Operation::ListBranches { cwd: cwd.clone() })
+        let mut info = execute(st, Operation::ListBranches { cwd: cwd.clone() }, ingress)
             .await
             .map_err(session_error)?;
         // Onde a worktree nova vai nascer, para a tela de criação mostrar; fora da operação, que o Python também atende.
@@ -814,7 +679,7 @@ async fn folder_operation(
         info["worktree_parent"] = json!(parent);
         return Ok(info);
     }
-    let status = execute(st, Operation::FolderStatus { cwd: cwd.clone() }).await?;
+    let status = execute(st, Operation::FolderStatus { cwd: cwd.clone() }, ingress).await?;
     let affected = sessions(ctx, status["toplevel"].as_str());
     if tail != "/api/fs/git"
         && let Some(top) = status["toplevel"].as_str()
@@ -853,7 +718,7 @@ async fn folder_operation(
         _ => None,
     };
     let mut result = if let Some(op) = op {
-        execute(st, op).await?
+        execute(st, op, ingress).await?
     } else {
         status
     };
@@ -865,11 +730,12 @@ async fn folder_operation(
 fn resolve_many(
     cwd: &str,
     jsonl: Option<&str>,
+    rows: Option<&[String]>,
     paths: &[String],
 ) -> hangar_workspace::Result<Value> {
-    let cited = jsonl
-        .map(|p| hangar_workspace::citations::cwds(hangar_workspace::citations::Transcript::File(Path::new(p)), paths))
-        .unwrap_or(json!({}));
+    use hangar_workspace::citations::Transcript;
+    let source = rows.map(Transcript::Rows).or_else(|| jsonl.map(|p| Transcript::File(Path::new(p))));
+    let cited = source.map(|source| hangar_workspace::citations::cwds(source, paths)).unwrap_or(json!({}));
     let mut found = serde_json::Map::new();
     let mut outside = 0;
     for path in paths {
@@ -906,9 +772,9 @@ fn resolve_many(
         }
         if !found.contains_key(path) && cited.get(path).is_some() && outside < 30 {
             outside += 1;
-            if let Some(jsonl) = jsonl
+            if let Some(source) = source
                 && let Some(p) = hangar_workspace::citations::find_elsewhere(
-                    hangar_workspace::citations::Transcript::File(Path::new(jsonl)),
+                    source,
                     Path::new(cwd),
                     path,
                     &bases,

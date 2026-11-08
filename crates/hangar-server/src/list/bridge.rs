@@ -443,6 +443,9 @@ impl ListBridge {
     /// Mudança de membro ou de modo: a próxima pergunta não serve a lista de antes.
     pub fn invalidate(&self) { self.epoch.fetch_add(1, Ordering::SeqCst); }
 
+    #[cfg(test)]
+    pub(crate) fn test_epoch(&self) -> u64 { self.epoch.load(Ordering::SeqCst) }
+
     /// O rastreador de planos da lista, para as rotas de plano: o eleito é o mesmo da linha.
     /// Lê disco: chamar fora do executor assíncrono.
     pub fn with_plans<R>(&self, f: impl FnOnce(&mut PlanTracker) -> R) -> R { self.caches.plans.with(f) }

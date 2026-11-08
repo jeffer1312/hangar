@@ -1580,3 +1580,70 @@ pub fn push(cwd: &Path) -> Result<Value> {
     invalidate(cwd);
     Ok(json!({"ok":true,"output":scrub(&out.both())}))
 }
+
+#[cfg(all(test,unix))]
+mod task3_cache {
+    use super::*;
+    use std::{fs,os::unix::fs::PermissionsExt,process::Command};
+
+    fn age(root:&Path,diff:bool,seconds:u64) {
+        let slot=CACHE.lock().unwrap()[&(real(root),diff)].clone();
+        slot.lock().unwrap().as_mut().unwrap().at=Instant::now()-Duration::from_secs(seconds);
+    }
+    fn call(root:&Path,diff:bool)->Value {
+        crate::execute(if diff {crate::Operation::GitDiffstat {cwd:Some(root.to_string_lossy().into_owned())}}
+            else {crate::Operation::GitSummary {cwd:Some(root.to_string_lossy().into_owned())}}).unwrap()
+    }
+    fn shim(path:&Path) {
+        fs::write(path,"#!/bin/sh\nprintf 'call\\n' >> \"$HANGAR_TASK3_CACHE_ROOT/calls\"\nprintf index > \"$HANGAR_TASK3_CACHE_ROOT/.git/index\"\nmode=$(cat \"$HANGAR_TASK3_CACHE_ROOT/mode\")\n[ \"$mode\" != broken ] || exit 1\ncase \"$*\" in *--numstat*)\n[ \"$mode\" != unborn ] || { printf \"fatal: ambiguous argument 'HEAD': unknown revision\\n\" >&2; exit 128; }\nprintf '10\\t2\\ta.py\\n3\\t0\\tdir/b.py\\n-\\t-\\timg.png\\n';;\n*) printf '## main...origin/main [ahead 2, behind 1]\\n M a.py\\n';;\nesac\n").unwrap();
+        fs::set_permissions(path,fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn public_operations_preserve_native_cache_deadlines_fingerprints_and_last_good_result() {
+        const TEST:&str="git::task3_cache::public_operations_preserve_native_cache_deadlines_fingerprints_and_last_good_result";
+        if let Some(root)=std::env::var_os("HANGAR_TASK3_CACHE_ROOT") {
+            let root=Path::new(&root); let git=root.join("bin/git");
+            let status=json!({"dirty":1,"ahead":2,"behind":1});
+            assert_eq!(call(root,false),status); assert_eq!(call(root,false),status);
+            assert_eq!(fs::read_to_string(root.join("calls")).unwrap().lines().count(),1);
+            age(root,false,4); assert_eq!(call(root,false),status);
+            assert_eq!(fs::read_to_string(root.join("calls")).unwrap().lines().count(),1);
+            fs::File::open(root.join(".git/index")).unwrap().set_modified(std::time::UNIX_EPOCH+Duration::from_secs(100)).unwrap();
+            assert_eq!(call(root,false),status); assert_eq!(fs::read_to_string(root.join("calls")).unwrap().lines().count(),2);
+            age(root,false,4); fs::write(root.join(".git/FETCH_HEAD"),"updated").unwrap();
+            assert_eq!(call(root,false),status); assert_eq!(fs::read_to_string(root.join("calls")).unwrap().lines().count(),3);
+            age(root,false,11); assert_eq!(call(root,false),status); assert_eq!(fs::read_to_string(root.join("calls")).unwrap().lines().count(),4);
+            assert_eq!(call(root,true),json!({"added":13,"removed":2})); assert_eq!(fs::read_to_string(root.join("calls")).unwrap().lines().count(),5);
+            age(root,false,11); fs::remove_file(&git).unwrap();
+            assert_eq!(call(root,false),status,"falha conserva o último bom");
+            assert_eq!(crate::execute(crate::Operation::GitLogSince {cwd:root.to_string_lossy().into_owned(),desde:0.,n:14}).unwrap(),json!([]));
+            shim(&git);
+            age(root,false,5); assert_eq!(call(root,false),status); assert_eq!(fs::read_to_string(root.join("calls")).unwrap().lines().count(),5);
+            invalidate(root); fs::remove_file(&git).unwrap(); assert_eq!(call(root,false),Value::Null); shim(&git);
+            age(root,false,5); assert_eq!(call(root,false),Value::Null,"erro de lançamento conserva prazo negativo");
+            age(root,false,11); assert_eq!(call(root,false),status);
+            invalidate(root); fs::write(root.join("mode"),"broken").unwrap(); assert_eq!(call(root,false),Value::Null);
+            fs::write(root.join("mode"),"good").unwrap(); age(root,false,2); assert_eq!(call(root,false),Value::Null);
+            age(root,false,4); assert_eq!(call(root,false),status,"rc diferente de zero usa prazo curto");
+            invalidate(root); fs::write(root.join("mode"),"unborn").unwrap(); assert_eq!(call(root,true),json!({}));
+            invalidate(root); fs::write(root.join("mode"),"good").unwrap(); fs::remove_file(&git).unwrap();
+            assert_eq!(call(root,true),Value::Null); shim(&git);
+            age(root,true,5); assert_eq!(call(root,true),Value::Null,"diffstat conserva o prazo negativo nativo");
+            age(root,true,11); assert_eq!(call(root,true),json!({"added":13,"removed":2}));
+            invalidate(root); fs::write(root.join("mode"),"broken").unwrap(); assert_eq!(call(root,true),Value::Null);
+            fs::write(root.join("mode"),"good").unwrap(); age(root,true,2); assert_eq!(call(root,true),Value::Null);
+            age(root,true,4); assert_eq!(call(root,true),json!({"added":13,"removed":2}),"erro de diffstat com rc usa prazo curto");
+            return;
+        }
+        let dir=tempfile::tempdir().unwrap(); let root=dir.path();
+        fs::create_dir_all(root.join(".git/refs/heads")).unwrap(); fs::create_dir(root.join("bin")).unwrap();
+        fs::write(root.join(".git/HEAD"),"ref: refs/heads/main\n").unwrap(); fs::write(root.join(".git/refs/heads/main"),"0".repeat(40)).unwrap(); fs::write(root.join(".git/index"),"index").unwrap();
+        fs::write(root.join("mode"),"good").unwrap(); shim(&root.join("bin/git"));
+        // O programa auxiliar cat fica no PATH privado; o Git real continua inacessível nessa prova.
+        std::os::unix::fs::symlink("/bin/cat",root.join("bin/cat")).unwrap();
+        let child=Command::new(std::env::current_exe().unwrap()).args(["--exact",TEST,"--nocapture"])
+            .env("PATH",root.join("bin")).env("HANGAR_TASK3_CACHE_ROOT",root).output().unwrap();
+        assert!(child.status.success(),"{}\n{}",String::from_utf8_lossy(&child.stdout),String::from_utf8_lossy(&child.stderr));
+    }
+}

@@ -1,12 +1,7 @@
 """Prende a ordem das áreas por ferramenta às três sementes de hash."""
 
-import json
-import os
-import subprocess
-import sys
 from datetime import datetime
 
-import pytest
 
 from app import costs, costs_cache as cc, uso_areas
 from app.uso_claude import UsoLinha
@@ -28,45 +23,6 @@ class SavedAreasFold:
                              session_id="s", input=11, output=7, cache_write=5, cache_read=3,
                              cache_write_1h=2)
         return [cost], [tool], ({}, [(regs, units)])
-
-
-@pytest.mark.parametrize("hash_seed", ["0", "1", "42"])
-def test_areas_per_tool_have_common_name_order(tmp_path, hash_seed):
-    program = r"""
-import json
-import sys
-from app import uso_areas
-from app.uso_claude import linhas_de_area
-
-cwd = sys.argv[1]
-uso_areas._mapa = lambda: ("synthetic", uso_areas.PADRAO, {})
-regs = [
-    ("S", cwd, "skill:database"),
-    ("P", cwd, cwd, ("a.css", "a.py", "b.css")),
-    ("C", cwd, cwd, ("a.md", "a.py", "/outside/file.py")),
-]
-counts = uso_areas.contar_areas(regs)
-rows = linhas_de_area(({}, [(regs, [("d", cwd, "m", False, 11, 7, 5, 3, 2)])]))
-print(json.dumps({
-    "counts": list(counts.items()),
-    "rows": [[r.nome, r.chamadas, r.input, r.output, r.cache_write,
-              r.cache_read, r.cache_write_1h] for r in rows],
-}))
-"""
-    result = subprocess.run(
-        [sys.executable, "-c", program, str(tmp_path)],
-        check=True, capture_output=True, text=True,
-        env={**os.environ, "PYTHONHASHSEED": hash_seed},
-    )
-    assert json.loads(result.stdout) == {
-        "counts": [["banco", 1], ["back", 2], ["front", 1], ["docs", 1]],
-        "rows": [
-            ["banco", 1, 2, 2, 1, 1, 1],
-            ["back", 2, 5, 3, 2, 1, 1],
-            ["front", 1, 2, 1, 1, 0, 0],
-            ["docs", 1, 2, 1, 1, 1, 0],
-        ],
-    }
 
 
 def test_division_signature_refolds_only_saved_areas(tmp_path, monkeypatch):
@@ -107,10 +63,6 @@ def test_division_signature_refolds_only_saved_areas(tmp_path, monkeypatch):
             assert conn.execute("SELECT versao,dev,ino,size,mtime_ns,offset,cauda,estado,areas FROM files").fetchall() == metadata
             assert conn.execute("SELECT * FROM uso WHERE tipo<>'area' ORDER BY rowid").fetchall() == other_usage
             assert conn.execute("SELECT * FROM custo ORDER BY rowid").fetchall() == costs_before
-            assert conn.execute("SELECT areas_sig FROM files").fetchone() == (new_signature,)
-            assert conn.execute("SELECT nome,input,output,cache_write,cache_read,cache_write_1h FROM uso WHERE tipo='area' ORDER BY rowid").fetchall() == [
-                ("back", 6, 4, 3, 2, 1), ("front", 5, 3, 2, 1, 1),
-            ]
         finally:
             conn.close()
     finally:

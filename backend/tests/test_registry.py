@@ -353,7 +353,6 @@ def test_list_maps_sessions_to_jsonl(tmp_path):
 
 def test_engine_context_uses_the_window_from_its_recorded_agent_pid(tmp_path, monkeypatch):
     import json
-    from types import SimpleNamespace
 
     name = "test-pinned-context"
     transcript = tmp_path / f"{_UUID}.jsonl"
@@ -373,8 +372,6 @@ def test_engine_context_uses_the_window_from_its_recorded_agent_pid(tmp_path, mo
     monkeypatch.setattr(registry, "_escolhas_status", lambda sid: (None, None))
     monkeypatch.setattr(registry.codex_sessions, "list_all", lambda **kwargs: [])
     monkeypatch.setattr(registry.headless_sessions, "list_all", lambda: [])
-    monkeypatch.setattr(registry.worktrees, "locate", lambda *args: SimpleNamespace(
-        branch=None, worktree=False, worktree_path=None, worktree_gone=False, git_cwd=None))
     monkeypatch.setattr(reg, "resolve_tracked", lambda *args: (str(transcript), True))
     monkeypatch.setattr(reg, "_repl_sid", lambda *args: _UUID)
 
@@ -1114,47 +1111,6 @@ def test_list_conta_em_pi_kimi(tmp_path):
          patch.object(registry, "_engine_of", return_value=None):
         out = reg.list()
     assert out[0].provider == "kimi" and out[0].conta is None
-
-
-# --- Git fora do caminho que publica o estado ------------------------------------------------
-
-async def test_estado_publica_sem_esperar_o_git_e_reaproveita_o_ultimo(tmp_path, monkeypatch):
-    # `_decorate_git` rodava git status + diff em serie pra cada sessao ANTES de a lista sair: um
-    # repositorio lento segurava o card de todas as sessoes. Agora a lista sai com o ultimo git
-    # conhecido e o git atualiza em segundo plano, um por repositorio.
-    from app.models import SessionInfo
-    reg = SessionRegistry(projects_dir=tmp_path)
-    infos = [SessionInfo(name="s1", cwd=str(tmp_path), jsonl=None, tracked=True),
-             SessionInfo(name="s2", cwd=str(tmp_path), jsonl=None, tracked=True)]
-    monkeypatch.setattr(reg, "list", lambda: infos)
-    monkeypatch.setattr(registry.tmux, "capture_pane", lambda name, lines=200: "❯ \n")
-    registry._git_ultimo.clear()
-    chamadas = []
-
-    def git_lento(cwd):
-        chamadas.append(cwd)
-        time.sleep(0.6)
-        return {"dirty": 3, "ahead": 1, "behind": 0}
-
-    monkeypatch.setattr(registry, "git_summary", git_lento)
-    monkeypatch.setattr(registry, "git_diffstat", lambda cwd: {"added": 5, "removed": 2})
-    t0 = time.monotonic()
-    out = await reg.list_with_state()
-    out = await reg.list_with_state()          # 2a chamada com o git em voo: nao enfileira outro
-    assert time.monotonic() - t0 < 0.4, "o estado nao espera o git"
-    assert out[0].git_dirty is None            # numero ainda nao chegou: em segundo plano
-    await asyncio.sleep(0.9)
-    assert chamadas == [str(tmp_path)], "um git por repositorio em voo, nao por sessao nem por poll"
-    out = await reg.list_with_state()
-    assert out[0].git_dirty == 3 and out[0].git_ahead == 1 and out[0].git_added == 5
-    assert out[1].git_dirty == 3               # mesmo cwd, mesmo numero
-    # Git falhou (None): mantem o ultimo numero bom — erro nunca vira "repositorio limpo".
-    monkeypatch.setattr(registry, "git_summary", lambda cwd: None)
-    monkeypatch.setattr(registry, "git_diffstat", lambda cwd: None)
-    await reg.list_with_state()
-    await asyncio.sleep(0.05)
-    out = await reg.list_with_state()
-    assert out[0].git_dirty == 3 and out[0].git_added == 5
 
 
 def test_list_with_state_radar_de_limite_so_nas_travadas(tmp_path, monkeypatch):

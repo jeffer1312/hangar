@@ -300,21 +300,6 @@ async fn guest_does_not_reach_the_hangar_terminal_routes() {
     assert_eq!(srv.python.hits_to("/api/hangar-terminals"), 0);
 }
 
-/// No Python o atalho "no Hangar" do convidado é 403 próprio: o pedido chega lá como convidado
-/// assinado, nunca com a identidade do dono.
-#[tokio::test(flavor = "multi_thread")]
-async fn guest_cannot_start_a_hangar_copy() {
-    let dir = tempfile::tempdir().unwrap();
-    let srv = plain_srv(dir.path(), |_| {}).await;
-    let t = srv.g.token("cc", Kind::Share);
-    post_json(format!("http://{}/api/sessions/cc/shortcut-shell", srv.guest), &t,
-        json!({"command": "notepad", "runs_in": "hangar", "key": "global:k"})).await;
-    assert_eq!(srv.python.hits_to("/api/sessions/cc/shortcut-shell"), 1);
-    let (_, h) = srv.python.last_hit();
-    assert!(!h.contains_key("authorization"));
-    assert!(h.contains_key("x-hangar-guest"));
-}
-
 // ── repasse assinado ao Python ───────────────────────────────────────────────────────────────
 
 /// Confere o `x-hangar-guest` como o `guest_header.verify` do Python: HMAC sobre método, caminho

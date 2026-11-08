@@ -135,17 +135,6 @@ fn error_reason(error: &CollectError) -> FailureReason {
     }
 }
 
-fn fresh(value: Option<String>) -> Option<bool> {
-    match value {
-        None => Some(false),
-        Some(value) => match value.to_ascii_lowercase().as_str() {
-            "1" | "true" | "on" | "yes" | "t" | "y" => Some(true),
-            "0" | "false" | "off" | "no" | "f" | "n" => Some(false),
-            _ => None,
-        },
-    }
-}
-
 enum Prepared {
     Warming(usize, usize),
     Body(Vec<u8>),
@@ -201,9 +190,13 @@ pub async fn costs(
     if !owner || request.method() != Method::GET {
         return pass(&state, request, &forward).await;
     }
-    // Valor fora do bool do FastAPI: o 422 é dele, não uma falha do Rust.
-    let Some(fresh) = fresh(crate::auth::query_param(request.uri().query(), "fresco")) else {
-        return pass(&state, request, &forward).await;
+    let query = form_urlencoded::parse(request.uri().query().unwrap_or_default().as_bytes()).into_owned().collect();
+    let fresh = match crate::query::bool_param(&query, "fresco") {
+        Ok(value) => value,
+        Err(mut response) => {
+            crate::http_cors::apply(request.headers(), &mut response);
+            return *response;
+        }
     };
     let period = crate::auth::query_param(request.uri().query(), "period")
         .filter(|p| p == "all" || report_costs::PERIODS.iter().any(|(key, _)| p == key))
@@ -365,17 +358,34 @@ fn usage_filters(query: Option<&str>) -> report_uso::UsoFilters {
     filters
 }
 
+pub(crate) fn usage_path(raw: &str) -> bool {
+    let path = percent_encoding::percent_decode_str(raw).decode_utf8_lossy();
+    path == "/api/uso" || path.starts_with("/api/uso/")
+}
+
 pub async fn usage(
     State(state): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     request: Request,
 ) -> Response {
-    let (forward, owner) = match gate(&state, peer, &request).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-    if !owner || request.method() != Method::GET {
-        return pass(&state, request, &forward).await;
+    let path = percent_encoding::percent_decode_str(request.uri().path()).decode_utf8_lossy();
+    let (_, https) = state.cfg.trusted.resolve(peer.ip(), request.headers());
+    let decision = crate::http_contract::resolve(&[("/api/uso", "GET")], request.method().as_str(), &path);
+    if let Some(mut response) = crate::http_route_response::response(&decision, request.method(), request.uri(), request.headers(), https, "") {
+        crate::http_cors::apply(request.headers(), &mut response);
+        return response;
     }
-    let Some(fresh) = fresh(crate::auth::query_param(request.uri().query(), "fresco")) else {
-        return pass(&state, request, &forward).await;
+    if let Err(mut response) = crate::routes::owner_gate(&state, peer, &request).await {
+        crate::http_cors::apply(request.headers(), &mut response);
+        return response;
+    }
+    let query = form_urlencoded::parse(request.uri().query().unwrap_or_default().as_bytes()).into_owned().collect();
+    let fresh = match crate::query::bool_param(&query, "fresco") {
+        Ok(value) => value,
+        Err(mut response) => {
+            crate::http_cors::apply(request.headers(), &mut response);
+            return *response;
+        }
     };
     let period = crate::auth::query_param(request.uri().query(), "period")
         .filter(|p| p == "all" || report_costs::PERIODS.iter().any(|(key, _)| p == key))

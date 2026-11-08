@@ -355,9 +355,10 @@ pub enum Decision { Opened(super::open::Opened), Refused(OpenError), NotOurs }
 /// `decide` numa tarefa própria: cliente que desconecta no meio não interrompe a criação (a worktree
 /// criada sem o pane ficaria para trás) nem o registro do convidado (`claim`), como o
 /// `complete_on_cancel` do Python.
-async fn decide_detached(st: &Arc<AppState>, request: SessionOpenRequest, caller: OpenCaller, claim: Option<LoginGuest>) -> Decision {
+async fn decide_detached(st: &Arc<AppState>, request: SessionOpenRequest, caller: OpenCaller, claim: Option<LoginGuest>, ingress: Option<Arc<crate::runtime::ingress::IngressPass>>) -> Decision {
     let st = st.clone();
     tokio::spawn(async move {
+        let _ingress = ingress;
         let host = ServerHost::new(st.clone()).await;
         let claim = match (claim, request.creator.as_deref()) {
             (None, Some(creator)) => match host.creator_guest(creator).await {
@@ -534,7 +535,7 @@ pub async fn create(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     let _progress = super::open::Progress::track(request.name.as_deref().unwrap_or(""));
     let name = request.name.clone().unwrap_or_default();
     let caller = guest.as_ref().map_or(OpenCaller::Owner, |g| OpenCaller::Guest { root: g.root.clone() });
-    match decide_detached(&st, request, caller, guest).await {
+    match decide_detached(&st, request, caller, guest, None).await {
         Decision::Opened(opened) => {
             let mut response = crate::session_write::json_response(StatusCode::OK, opened.body);
             crate::routes::cors(&parts.headers, response.headers_mut());
@@ -572,8 +573,6 @@ pub(super) fn baton_step(asked: &Value) -> &'static str {
     if asked["resumo_por_modelo"] == true { "resumo_modelo" } else { "resumo" }
 }
 
-/// `POST /api/sessions/{name}/bastao` do dono: o Python monta e grava o dossiê (é dele) e devolve o
-/// pedido de abertura da sucessora em vez de abrir; o Rust a abre com o kick-off como primeira mensagem.
 async fn prepare_baton_engine(st:&AppState,asked:&mut Value)->Result<(),OpenError>{
     if asked.get("provider").is_none(){
         let provider=if !asked["config_dir"].is_null()||asked["engine"].as_str().is_some_and(|v|!v.is_empty()){"claude".to_owned()}
@@ -595,33 +594,39 @@ async fn prepare_baton_engine(st:&AppState,asked:&mut Value)->Result<(),OpenErro
 }
 
 pub async fn bastao(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (fwd, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
+    let (_, owner) = match crate::routes::gate(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let (mut parts, body) = req.into_parts();
     parts.headers.remove(DECLINED);
     let Ok(bytes) = to_bytes(body, crate::session_write::BODY_LIMIT).await else {
         return crate::session_write::too_large(&parts.headers);
     };
     let headers = parts.headers.clone();
-    if owner { parts.headers.insert(DECLINED, axum::http::HeaderValue::from_static("rust")); }
-    let mut asked = serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null);
+    let mut asked = crate::orchestration::codec::ValueGuard(serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null));
     if owner && asked.is_object() {
         if let Err(error)=prepare_baton_engine(&st,&mut asked).await {return reply(&error);}
     }
-    let bytes=if owner && asked.is_object(){serde_json::to_vec(&asked).expect("Pedido JSON já lido").into()}else{bytes};
+    let bytes=if owner && asked.is_object(){serde_json::to_vec(&asked.0).expect("Pedido JSON já lido").into()}else{bytes};
     let successor = asked["name"].as_str().unwrap_or_default().to_owned();
     let _progress = super::open::Progress::track(&successor);
     super::open::progress_step(&successor, baton_step(&asked), json!({}));
-    let response = crate::routes::pass(&st, Request::from_parts(parts, Body::from(bytes)), &fwd).await;
-    if !owner || response.headers().get(DECLINED).is_none_or(|v| v != "rust") { return response; }
-    let prepared: Value = match to_bytes(response.into_body(), crate::session_write::BODY_LIMIT).await {
-        Ok(raw) => serde_json::from_slice(&raw).unwrap_or(Value::Null),
-        Err(_) => Value::Null,
+    let framed = match super::baton::frame(&headers,&bytes) {
+        Ok(value) => value,
+        Err(mut response) => { crate::http_cors::apply(&headers,&mut response); return response; }
     };
-    let mut response = match SessionOpenRequest::parse(prepared["open"].to_string().as_bytes()) {
+    let auth_request = Request::from_parts(parts,Body::empty());
+    if let Err(mut response) = crate::routes::owner_gate(&st,peer,&auth_request).await {
+        crate::http_cors::apply(&headers,&mut response); return response;
+    }
+    let name = crate::workspace_http::name_tail(auth_request.uri().path()).0.unwrap_or_default();
+    let prepared = match super::baton::prepare(&st,&name,&framed).await {
+        Ok(prepared) => prepared,
+        Err(mut response) => { crate::http_cors::apply(&headers,&mut response); return response; }
+    };
+    let mut response = match SessionOpenRequest::parse(prepared.body["open"].to_string().as_bytes()) {
         Err(_) => reply(&OpenError::new(502, "erro_criacao_sessao", "o preparo do bastão não devolveu um pedido de abertura")),
-        Ok(request) => match decide_detached(&st, request, OpenCaller::Owner, None).await {
+        Ok(request) => match decide_detached(&st, request, OpenCaller::Owner, None, Some(prepared._ingress.clone())).await {
             Decision::Opened(opened) => crate::session_write::json_response(StatusCode::OK, json!({"name": opened.body["name"],
-                "dossie": prepared["dossie"], "texto": prepared["texto"], "kickoff": prepared["kickoff"], "aviso": prepared["aviso"],
+                "dossie": prepared.body["dossie"], "texto": prepared.body["texto"], "kickoff": prepared.body["kickoff"], "aviso": prepared.body["aviso"],
                 "avisos": opened.body["avisos"]})),
             Decision::Refused(error) => reply(&error),
             Decision::NotOurs => reply(&OpenError::new(500, "erro_criacao_sessao", "a sucessora do bastão não abre com terminal no Rust")),
@@ -648,7 +653,7 @@ pub async fn bridge(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         Ok(request) => request,
         Err(error) => return reply(&error),
     };
-    match decide_detached(&st, request, OpenCaller::Owner, None).await {
+    match decide_detached(&st, request, OpenCaller::Owner, None, None).await {
         Decision::Opened(opened) => crate::session_write::json_response(StatusCode::OK, json!({"info": opened.body})),
         Decision::Refused(error) => reply(&error),
         Decision::NotOurs => StatusCode::MISDIRECTED_REQUEST.into_response(),

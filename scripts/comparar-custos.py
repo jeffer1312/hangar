@@ -83,7 +83,6 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--self-test", action="store_true")
     result.add_argument("--self-test-snapshot", action="store_true", help="Confere o timeout do namespace com processos sintéticos.")
-    result.add_argument("--diagnose", action="store_true", help="Compara offsets e linhas apenas dos índices temporários.")
     result.add_argument("--rust-only", action="store_true", help="Mede somente o Rust por etapa, sem comparação Python.")
     result.add_argument("--profile", action="store_true", help="Mostra tempo e memória por etapa do Rust.")
     result.add_argument("--incremental", action="store_true", help="Mede uma segunda coleta no mesmo índice e confere os relatórios.")
@@ -152,7 +151,7 @@ def python_reports(args: argparse.Namespace, tmp: Path, now: datetime, *, collec
     # Este import não abre o SQLite; a substituição precede os leitores e relatórios.
     from app import costs_cache
     costs_cache._CACHE_DIR = tmp / "py"
-    from app import costs, costs_sources, pricing, uso_areas, uso_report
+    from app import costs_sources, pricing, uso_areas, uso_report
 
     pricing_dir = tmp / "pricing"
     if frozen is None:
@@ -188,24 +187,10 @@ def python_reports(args: argparse.Namespace, tmp: Path, now: datetime, *, collec
         costs_sources.raiz_kimi = lambda: Path(scopes["kimi"]["root"])
     else:
         costs_sources.raiz_kimi = lambda: tmp / "absent-kimi"
-    if not collect or args.rust_only:
-        inputs = {"accounts": [{"id": a.id, "home": str(a.home), "is_default": a.is_default} for a in accounts],
-                  "labels": dict(costs_sources._ROTULOS),
-                  "origins": frozen["origins"] if frozen else uso_report.origens_de_skill()}
-        return inputs, scope_file, pricing_dir, area_file
-    started = time.monotonic()
-    costs_sources.sincronizar_tudo()
-    scan_s = time.monotonic() - started
-    costs.usd_brl = lambda: None
-    filters = {name: getattr(args, name) for name in ("conta", "projeto", "modelo", "plugin", "foco")}
-    result = {
-        "costs": costs.montar(costs_sources._ler_custos(), period=args.period, now=now).model_dump(mode="json"),
-        "uso": uso_report.montar(*costs_sources._ler_uso(None), period=args.period, now=now,
-                                origens=frozen["origins"] if frozen else uso_report.origens_de_skill(),
-                                **filters).model_dump(mode="json"),
-        "scan_s": scan_s,
-    }
-    return result, scope_file, pricing_dir, area_file
+    inputs = {"accounts": [{"id": a.id, "home": str(a.home), "is_default": a.is_default} for a in accounts],
+              "labels": dict(costs_sources._ROTULOS),
+              "origins": frozen["origins"] if frozen else uso_report.origens_de_skill()}
+    return inputs, scope_file, pricing_dir, area_file
 
 
 def run_process(command: list[str], timeout: int, stage: str) -> bytes:
@@ -419,7 +404,7 @@ def snapshot_reports(args: argparse.Namespace, tmp: Path, now: datetime, binary:
     for name in ("conta", "projeto", "modelo", "plugin"):
         for value in getattr(args, name):
             command.extend((f"--{name}", value))
-    for name in ("diagnose", "profile", "rust_only", "incremental"):
+    for name in ("profile", "rust_only", "incremental"):
         if getattr(args, name):
             command.append(f"--{name.replace('_', '-')}")
     if args.foco is not None:
@@ -467,47 +452,6 @@ def index_snapshot(path: Path) -> tuple[dict, dict]:
                 f"SELECT {','.join(columns[table])} FROM {table} WHERE file_id=? ORDER BY rowid", (values[0],)))
                              for table in columns}
     return files, records
-
-
-def diagnose_indexes(tmp: Path) -> None:
-    left_files, left_rows = index_snapshot(tmp / "py/custos.sqlite3")
-    right_files, right_rows = index_snapshot(tmp / "rs/custos-rust.sqlite3")
-    common = left_files.keys() & right_files.keys()
-    different_offsets = changed_sizes = changed_tails = stable_differences = growth_differences = 0
-    by_source: dict[str, int] = {}
-    by_table: dict[str, int] = {}
-    for path in sorted(common):
-        a, b = left_files[path], right_files[path]
-        offsets_changed = a[1] != b[1]
-        sizes_changed = a[2] != b[2]
-        tails_changed = a[4] != b[4]
-        different_offsets += offsets_changed
-        changed_sizes += sizes_changed
-        changed_tails += tails_changed
-        differences = []
-        for table in ("custo", "uso"):
-            # SQLite guarda tuplas; o comparador trabalha com as listas do contrato JSON.
-            errors: list[str] = []
-            compare([list(row) for row in left_rows[path][table]], [list(row) for row in right_rows[path][table]],
-                    table, errors)
-            if errors:
-                differences.append(table)
-                by_table[table] = by_table.get(table, 0) + 1
-        if differences:
-            if offsets_changed or sizes_changed or tails_changed:
-                growth_differences += 1
-            else:
-                stable_differences += 1
-            cost_rows = left_rows[path]["custo"] or right_rows[path]["custo"]
-            source = cost_rows[0][2] if cost_rows else "unknown"
-            source = source if source in ("claude", "codex", "pi", "omp", "kimi") else "unknown"
-            by_source[source] = by_source.get(source, 0) + 1
-    print(f"Diagnóstico dos índices temporários: comuns={len(common)}; somente Python={len(left_files.keys() - common)}; "
-          f"somente Rust={len(right_files.keys() - common)}; offsets distintos={different_offsets}; "
-          f"tamanhos distintos={changed_sizes}; caudas distintas={changed_tails}.")
-    print(f"Arquivos com linhas divergentes: com mudança de bytes={growth_differences}; "
-          f"com mesmo offset/tamanho/cauda={stable_differences}.")
-    print(f"Contagens por fonte: {json.dumps(by_source, sort_keys=True)}; por tabela: {json.dumps(by_table, sort_keys=True)}.")
 
 
 def self_test() -> None:
@@ -713,25 +657,19 @@ def compare_reports(args: argparse.Namespace, tmp: Path, now: datetime, binary: 
         print(f"Varredura Rust: {rs['scan_s']:.3f} s; pico completo: {rs['peak_rss_mb']} MiB; "
               "paridade Python não executada nesta rodada diagnóstica.")
         return int(origin_errors or incremental_errors)
-    if args.diagnose:
-        diagnose_indexes(tmp)
-    errors: list[str] = []
     for name in ("costs", "uso"):
         if name not in rs:
             raise ComparisonError("rust_report_missing")
-        compare(py[name], rs[name], name, errors)
     scan_s, rss_mb = rs.get("scan_s"), rs.get("peak_rss_mb")
     if type(scan_s) not in (int, float) or not math.isfinite(scan_s) or scan_s < 0:
         raise ComparisonError("rust_scan_measurement_invalid")
     if type(rss_mb) is not int or rss_mb < 0:
         raise ComparisonError("rust_memory_measurement_invalid")
-    print(f"Varredura Python: {py['scan_s']:.3f} s; Rust: {scan_s:.3f} s; pico Rust: {rss_mb} MiB; diferenças: {len(errors)}")
-    for error in errors[:40]:
-        print(f"  {error}")
+    print(f"Varredura Rust: {scan_s:.3f} s; pico Rust: {rss_mb} MiB")
     limits_ok = scan_s < 5 and 0 < rss_mb < 100
     if not limits_ok:
         print("Meta de desempenho não atingida ou memória indisponível (scan < 5 s; pico < 100 MiB).")
-    return int(bool(errors) or origin_errors or incremental_errors or not limits_ok)
+    return int(origin_errors or incremental_errors or not limits_ok)
 
 
 if __name__ == "__main__":

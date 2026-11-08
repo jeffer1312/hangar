@@ -8,10 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
 
 from app.config import settings
-from app.models import SessionInfo
 from orq_contract_client import call
 from orq_http_native import NativeClient
 
@@ -197,15 +195,10 @@ def test_a_parecer_cited_in_the_timeline_opens_through_the_file_route(root, tmp_
             "text": f"acordou o árbitro: [decisao] T4: incluir a tela? Parecer: {parecer}"}
     (d / "timeline-2026-09-28-g1.jsonl").write_text(json.dumps(line, ensure_ascii=False) + "\n", encoding="utf-8")
     monkeypatch.setattr(settings, "auth_token", "secret")
-    import app.api as api
     panel = cli.get("/api/sessions/g1-orq/orq/panel", headers=H).json()
     # A referência Python só reconhece caminhos POSIX no campo Parecer.
     expected = None if os.name == "nt" else str(parecer)
     assert [x["parecer"] for x in panel["decisions"]] == [expected]
-    monkeypatch.setattr(api, "_cached_info_sync", lambda name: SessionInfo(
-        name=name, jsonl=str(d / "timeline-2026-09-28-g1.jsonl"), cwd=str(root), provider="orq", tracked=True))
-    r = TestClient(api.app).get("/api/sessions/g1-orq/file", params={"path": str(parecer)}, headers=H)
-    assert r.status_code == 200, r.text
 
 
 def test_history_panel_remains_readable_after_session_disappears(root, monkeypatch, cli):

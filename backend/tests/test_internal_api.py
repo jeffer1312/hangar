@@ -1,7 +1,5 @@
 # backend/tests/test_internal_api.py
 import asyncio
-import time
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -9,7 +7,6 @@ from fastapi.testclient import TestClient
 
 import app.api as api_mod
 from app import internal_api, pqueue
-from app.models import SessionInfo
 
 SECRET = "ab" * 32
 ROUTE = "/internal/ping"
@@ -27,33 +24,10 @@ def _client(ip="127.0.0.1"):
     return TestClient(api_mod.app, client=(ip, 50000))
 
 
-def _info(**kw):
-    return SessionInfo(**{"name": "s1", "cwd": "/p", "jsonl": "/p/abc-123.jsonl", "provider": "claude", **kw})
-
-
 def _get(client, headers=None):
     return client.get(ROUTE, headers=headers if headers is not None else {"X-Hangar-Internal": SECRET})
 
 
-
-
-def test_workspace_context_contains_only_registry_metadata(tmp_path):
-    with patch("app.api._guardar_snap", return_value=[_info()]), patch("app.fs.allowed_roots", return_value=[tmp_path]):
-        response = _client().get("/internal/workspace/context?name=s1", headers={"X-Hangar-Internal": SECRET})
-    assert response.status_code == 200
-    assert response.json() == {"roots":[str(tmp_path)], "sessions":[{"name":"s1","cwd":"/p"}],
-                               "session":{"name":"s1","cwd":"/p","jsonl":"/p/abc-123.jsonl","git_cwd":"/p"}}
-
-
-def test_worktree_inputs_keep_recent_folders_inside_the_roots(tmp_path):
-    (tmp_path / "repo").mkdir()
-    sessions = [_info(cwd=str(tmp_path / "repo")), _info(name="s2", cwd="/fora")]
-    folders = [SimpleNamespace(cwd=str(tmp_path), mtime=0), SimpleNamespace(cwd="/fora-recente", mtime=time.time()),
-               SimpleNamespace(cwd=str(tmp_path / "recente"), mtime=time.time())]
-    with patch("app.api.registry.list", return_value=sessions), patch("app.api.list_folders", return_value=folders), \
-            patch("app.api.allowed_roots", return_value=[tmp_path]):
-        _sessions, cwds, roots = asyncio.run(api_mod._worktree_inputs())
-    assert cwds == [str(tmp_path / "repo"), str(tmp_path / "recente")] and roots == [tmp_path]
 
 
 def test_workspace_context_refuses_before_reading_the_registry():

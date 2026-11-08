@@ -11,6 +11,7 @@ use serde_json::{Map, Value, json};
 pub enum Schema {
     Shell,
     RunCode,
+    Project,
     Answer,
 }
 
@@ -82,6 +83,7 @@ pub fn parse(schema: Schema, bytes: &[u8], headers: &HeaderMap) -> Result<Value,
             ("language", 32, false, true),
             ("key", 80, false, false),
         ],
+        Schema::Project => &[("items", 500, true, false)],
         Schema::Answer => &[("text", 4096, false, false)],
     };
     let mut result = Map::new();
@@ -109,7 +111,15 @@ pub fn parse(schema: Schema, bytes: &[u8], headers: &HeaderMap) -> Result<Value,
             }
             continue;
         };
-        if matches!(field, "home" | "ask") {
+        if field == "items" {
+            if let Some(items) = input.as_array() {
+                if items.len() > max {
+                    errors.push(issue("too_long", Some(field),
+                        &format!("List should have at most {max} items after validation, not {}", items.len()), input,
+                        Some(json!({"field_type":"List","max_length":max,"actual_length":items.len()}))));
+                } else { result.insert(field.into(), codec::clone_value(input)); }
+            } else { errors.push(issue("list_type", Some(field), "Input should be a valid list", input, None)); }
+        } else if matches!(field, "home" | "ask") {
             if let Some(boolean) = crate::value_coercion::boolean(input) {
                 result.insert(field.into(), json!(boolean));
             } else {

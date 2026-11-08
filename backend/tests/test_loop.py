@@ -24,19 +24,6 @@ def test_active_set():
     assert "running" in ACTIVE and "done_claimed" in ACTIVE and "done" not in ACTIVE
 
 
-from app.git_ops import branch_of
-
-
-def test_branch_of(tmp_path):
-    git = tmp_path / ".git"
-    git.mkdir()
-    (git / "HEAD").write_text("ref: refs/heads/TICKET-0000\n", encoding="utf-8")
-    assert branch_of(str(tmp_path)) == "TICKET-0000"
-    (git / "HEAD").write_text("abc123def\n", encoding="utf-8")  # detached
-    assert branch_of(str(tmp_path)) is None
-    assert branch_of(str(tmp_path / "nao-existe")) is None
-
-
 from app.transcript import last_assistant_text
 
 

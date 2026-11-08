@@ -5,3 +5,6 @@ pub mod body;
 mod terminal;
 mod terminal_windows;
 pub(crate) mod guest;
+mod project;
+mod focus;
+pub mod http;

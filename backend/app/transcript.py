@@ -1156,10 +1156,3 @@ class TranscriptTailer:
                 _log.warning("transcript %s: a pasta %s sumiu debaixo do watch — esperando ela "
                              "voltar", self.path.name, self.path.parent)
                 continue
-
-
-from app.git_ops import GitError as _WorkspaceError
-from app.workspace_bridge import delegate as _workspace_delegate, text_rows as _text_rows
-
-citation_cwds = _workspace_delegate("citation_cwds", _WorkspaceError, prepare=_text_rows)(citation_cwds)
-cited_elsewhere = _workspace_delegate("cited_elsewhere", _WorkspaceError, prepare=_text_rows)(cited_elsewhere)

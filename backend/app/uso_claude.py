@@ -210,34 +210,6 @@ def skill_do_caminho(caminho: str) -> tuple[str, bool] | None:
 _CAMPOS_ENTRADA = ("file_path", "command", "subagent_type")
 
 
-def linhas_de_area(entradas) -> list[UsoLinha]:
-    """Linhas `area` a partir das entradas guardadas (`Acumulador.entradas_de_area`), com o mapa
-    de áreas ATUAL. O uso REAL de cada turno vai às áreas na proporção das tools; sem tool de
-    arquivo, à conversa. Tokens por maior resto: a soma das áreas fecha com o turno."""
-    cabecalho, turnos = entradas
-    linhas: dict[tuple, list] = {}
-    for registros, unidades in turnos:
-        contadas = uso_areas.contar_areas(registros)
-        pesos = contadas or {uso_areas.CONVERSA: 1}
-        for i, (dia, cwd, model, fast, *valores) in enumerate(unidades):
-            partes = [uso_areas.repartir(v, pesos) for v in valores]
-            for a in pesos:
-                i_, o, cw, cr, c1h = (p[a] for p in partes)
-                l = linhas.setdefault((dia, cwd, model, a), [0, 0, 0, 0, 0, 0, False])
-                # Turno que atravessa dia/modelo: as tools contam só no primeiro grupo.
-                l[0] += contadas.get(a, 0) if i == 0 else 0
-                l[1] += i_
-                l[2] += o
-                l[3] += cw
-                l[4] += cr
-                l[5] += min(max(0, c1h), max(0, cw))
-                l[6] = l[6] or fast
-    return [UsoLinha(dia=dia, cwd=cwd, model=model, tipo="area", nome=a, chamadas=v[0],
-                     input=v[1], output=v[2], cache_write=v[3], cache_read=v[4],
-                     cache_write_1h=v[5], fast=v[6], **cabecalho)
-            for (dia, cwd, model, a), v in linhas.items()]
-
-
 def _ordem(l: UsoLinha) -> tuple:
     return (l.dia, l.tipo, l.nome, l.detalhe)
 
@@ -531,7 +503,7 @@ class Acumulador:
                                    _int(u.get("cache_read_input_tokens")), c1h))
 
     def _turno_tool(self, nome: str, entrada: dict) -> None:
-        """Guarda o ALVO da tool no turno; a área sai dele na hora do relatório (`linhas_de_area`)."""
+        """Guarda o ALVO da tool no turno."""
         reg = None
         if nome in ("Read", "Edit", "Write", "NotebookEdit", "Grep", "Glob"):
             caminho = entrada.get("file_path") or entrada.get("notebook_path") or entrada.get("path")
@@ -545,7 +517,7 @@ class Acumulador:
             self._turnos[-1].append(reg)
 
     def entradas_de_area(self) -> tuple[dict, list]:
-        """(cabeçalho, turnos) que `linhas_de_area` transforma em linhas; não muda o acumulador.
+        """(cabeçalho, turnos); não muda o acumulador.
         Cada turno: (registros das tools, uso somado por grupo dia/cwd/modelo/rápido)."""
         somas: dict[int, dict[tuple, list]] = defaultdict(dict)
         for turno, grupo, u in self._respostas.values():
@@ -559,4 +531,4 @@ class Acumulador:
         return sorted(self._linhas.values(), key=_ordem)
 
     def resultado(self) -> list[UsoLinha]:
-        return sorted(self.linhas_sem_area() + linhas_de_area(self.entradas_de_area()), key=_ordem)
+        return sorted(self.linhas_sem_area(), key=_ordem)

@@ -305,6 +305,8 @@ pub enum Operation {
         path: String,
         #[serde(default)]
         write: bool,
+        #[serde(default)]
+        rows: Option<Vec<String>>,
     },
     ListWorktrees {
         cwds: Vec<String>,
@@ -572,10 +574,11 @@ pub fn execute(op: Operation) -> Result<Value> {
             jsonl,
             path,
             write,
+            rows,
         } => Ok(json!(
             citations::resolve(
                 Path::new(&cwd),
-                citations::Transcript::File(Path::new(&jsonl)),
+                transcript(&jsonl, &rows),
                 &path,
                 write
             )?
