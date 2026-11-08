@@ -271,6 +271,8 @@ impl Supervisor {
             let mut live = lock(&self.live);
             live.host = Some(linked.host.clone());
             live.start_error = None;
+            // A subida pode baixar o frpc e o Caddy por minutos: nesse tempo a tela não pode mostrar "parado".
+            live.active = true;
         }
         match self.launch(linked).await {
             Ok(started) => {
@@ -279,7 +281,9 @@ impl Supervisor {
             }
             Err(error) => {
                 tracing::warn!(code = error.code, "o Connect não subiu: {}", error.msg);
-                lock(&self.live).start_error = Some(error.msg.clone());
+                let mut live = lock(&self.live);
+                live.active = false;
+                live.start_error = Some(error.msg.clone());
                 Err(error)
             }
         }
