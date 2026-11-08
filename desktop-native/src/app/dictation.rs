@@ -91,15 +91,16 @@ impl OrganizationSelection {
     }
 }
 
+/// O detector de `packages/core/src/vad.ts` (`passoVad`); o corte em pedaços usa o mesmo.
 #[derive(Default)]
-struct Vad {
+pub(super) struct Vad {
     peak: f32,
     last: Option<Instant>,
-    quiet_since: Option<Instant>,
+    pub(super) quiet_since: Option<Instant>,
 }
 
 impl Vad {
-    fn step(&mut self, rms: f32, now: Instant) -> bool {
+    pub(super) fn step(&mut self, rms: f32, now: Instant) -> bool {
         let elapsed = self.last.map(|last| now.duration_since(last).as_secs_f32() * 1000.).unwrap_or(0.);
         self.last = Some(now);
         let decayed = self.peak * 0.98_f32.powf(elapsed / 55.);
@@ -250,7 +251,7 @@ impl Recorder {
     }
 }
 
-fn wav(pcm: &[u8]) -> Vec<u8> {
+pub(super) fn wav(pcm: &[u8]) -> Vec<u8> {
     let mut bytes = b"RIFF".to_vec();
     bytes.extend_from_slice(&(36 + pcm.len() as u32).to_le_bytes());
     bytes.extend_from_slice(b"WAVEfmt \x10\0\0\0\x01\0\x01\0\x80\x3e\0\0\0\x7d\0\0\x02\0\x10\0data");
@@ -313,17 +314,54 @@ fn dictation_append(draft: &str, text: &str) -> (String, std::ops::Range<usize>)
 /// tenta de novo com a cópia em memória.
 async fn upload_and_transcribe(api: Api, uploads: disk::Uploads, name: String, bytes: Vec<u8>, style: Option<&'static str>, options: api::DictationOptions)
     -> (Option<String>, Result<Value, Failure>) {
-    let saved = match uploads {
+    let saved = upload_dictation(api.clone(), uploads, name.clone(), bytes).await;
+    transcribe_uploaded(api, name, saved, style, options).await
+}
+
+/// O caminho do áudio nos anexos da sessão.
+async fn upload_dictation(api: Api, uploads: disk::Uploads, name: String, bytes: Vec<u8>) -> Result<String, Failure> {
+    match uploads {
         disk::Uploads::Remote => api.upload_audio(&name, "ditado.wav", bytes).await,
         local => local.upload(&api, &name, "ditado.wav", bytes, None).await,
-    };
+    }.map(|saved| saved.path)
+}
+
+async fn transcribe_uploaded(api: Api, name: String, saved: Result<String, Failure>, style: Option<&'static str>, options: api::DictationOptions)
+    -> (Option<String>, Result<Value, Failure>) {
     let path = match saved {
-        Ok(saved) => saved.path,
+        Ok(path) => path,
         Err(error) => return (None, Err(error)),
     };
     let file = path.rsplit(['/', '\\']).next().unwrap_or(&path).to_owned();
     let result = api.dictate_saved(&name, &file, style, &options).await;
     (Some(path), result)
+}
+
+/// Organiza `raw` pelo `/ditado/relimpar` com as escolhas congeladas ao gravar; a resposta leva o cru junto.
+async fn relimpar(api: &Api, raw: &str, style: &str, session: Option<&str>, options: &api::DictationOptions, references: Option<Value>)
+    -> Result<Value, Failure> {
+    api.server_send(reqwest::Method::POST, &["ditado", "relimpar"], Some(json!({"texto": raw, "estilo": style,
+        "session":session,"generation":options.generation,"organization_mode":options.mode,"organization_model":options.model,"organization_account":options.account,
+        "include_recent_messages":options.include_recent_messages,"recent_messages":references})), 210).await
+        .and_then(|mut value| {
+            let fields = value.as_object_mut().ok_or_else(|| Failure::local("invalid_response"))?;
+            fields.insert("raw".into(), json!(raw));
+            Ok(value)
+        })
+}
+
+/// O cru dos pedaços organizado uma vez, como o `/transcribe` faria com o arquivo inteiro: sem organização (`none`), o
+/// resultado é o próprio cru, no formato que o servidor devolve.
+async fn organize_pieces(api: &Api, jobs: Vec<Option<super::dictation_pieces::PieceJob>>, session: Option<&str>, style: Option<&'static str>,
+    options: &api::DictationOptions) -> Result<Value, Failure> {
+    let transcribed = super::dictation_pieces::transcribed(jobs).await?;
+    let value = if options.mode == "none" {
+        json!({"text": transcribed.raw, "raw": transcribed.raw, "organization_mode": "none", "estilo_aplicado": "cru", "aviso": null, "organization_code": null})
+    } else {
+        // O relimpar exige estilo; sem um lido, o mesmo padrão do servidor.
+        relimpar(api, &transcribed.raw, style.unwrap_or("prosa"), session, options, None).await?
+    };
+    Ok(super::dictation_pieces::with_transcription(value, &transcribed))
 }
 
 #[derive(Default)]
@@ -337,6 +375,8 @@ pub(super) struct Dictation {
     /// Sessão que recebe o texto; `None` na tela sem sessão, onde sair dela cancela como antes.
     target: Option<DictationTarget>,
     recorder: Option<Recorder>,
+    /// Pedaços já mandados durante a gravação; fora do `request`, que só nasce ao parar.
+    pieces: Option<super::dictation_pieces::Pieces>,
     request: Option<JoinHandle<()>>,
     started: Option<Instant>,
     /// Teto da gravação em curso, lido da máquina dela ao começar.
@@ -410,6 +450,10 @@ impl Dictation {
     pub(super) fn recording(&self) -> bool { self.recorder.is_some() }
     pub(super) fn processing(&self) -> bool { self.request.is_some() }
     pub(super) fn send_pending(&self) -> bool { self.pending_send.is_some() }
+    /// O arquivo inteiro do ditado em pedaços chegou aos anexos depois do texto: o "de novo" e o player passam a usá-lo.
+    pub(super) fn saved(&mut self, seq: u64, path: String) {
+        if self.seq == seq && self.owner.is_some() { self.server_path = Some(path); }
+    }
     pub(super) fn cancel_pending_send(&mut self) { self.pending_send = None; }
 
     fn observe_send_recipients(&mut self, recipients: &Option<(bool, Vec<String>)>) {
@@ -508,6 +552,8 @@ impl Dictation {
         self.owner = None;
         self.target = None;
         self.recorder = None;
+        // Soltar os pedaços aborta os que estão em voo.
+        self.pieces = None;
         if let Some(task) = self.request.take() { task.abort(); }
         self.started = None;
         self.level = 0.;
@@ -836,6 +882,9 @@ impl Hangar {
                 self.silence_voice_for_dictation();
                 self.dictation.owner = self.dictation_owner(cx);
                 self.dictation.target = self.open_dictation_target();
+                // Servidor sem a organização no Rust não tem `/dictation/transcribe` nem `relimpar`: arquivo inteiro.
+                self.dictation.pieces = self.dictation.snapshot.as_ref().filter(|options| options.rust_capable)
+                    .and(self.dictation_request(cx)).map(|(api, _)| super::dictation_pieces::Pieces::new(api));
                 self.dictation.hands_free = appearance::get().hands_free;
                 self.dictation.recorder = Some(recorder);
                 self.dictation.started = Some(Instant::now());
@@ -860,6 +909,9 @@ impl Hangar {
                                 return false;
                             }
                             let (level, rms) = recorder.signal();
+                            if let Some(pieces) = &mut this.dictation.pieces {
+                                pieces.feed(recorder.sampled, rms, &recorder.pcm, this.runtime.handle());
+                            }
                             this.dictation.level = level;
                             // Teto de 320, o mesmo do web: cobre a faixa inteira numa janela larga.
                             if this.dictation.bars.len() >= 320 { this.dictation.bars.pop_front(); }
@@ -936,6 +988,7 @@ impl Hangar {
 
     fn stop_dictation(&mut self, silence: bool, timed_out: bool, cx: &mut Context<Self>) {
         let Some(recorder) = self.dictation.recorder.take() else { return; };
+        let pieces = self.dictation.pieces.take();
         self.give_voice_mic_back();
         let Some((api, session)) = self.dictation_request(cx) else { self.cancel_dictation(); return; };
         self.dictation.auto_send = silence && self.dictation.hands_free;
@@ -949,18 +1002,43 @@ impl Hangar {
         let (tx, connection, seq) = (self.tx.clone(), self.connection, self.dictation.seq);
         // O fluxo de áudio não troca de thread; soltá-lo e montar o WAV é rápido o bastante para a tela.
         let audio = recorder.finish();
+        // Gravação cortada durante a fala: só falta o fim. `None` = nenhum corte, o caminho de sempre.
+        let jobs = match (&audio, pieces) { (Ok(bytes), Some(pieces)) => pieces.finish(&bytes[44..], self.runtime.handle()), _ => None };
         self.dictation.request = Some(self.runtime.spawn(async move {
+            let reply = |payload| { let tx = tx.clone(); async move { let _ = tx.send(Envelope { connection, selection: None, payload }).await; } };
             let (path, result) = match audio {
                 Ok(bytes) => {
                     *audio_cache.lock().unwrap() = bytes.clone();
-                    match (session, uploads) {
-                        (Some(name), Some(uploads)) => upload_and_transcribe(api, uploads, name, bytes, style,options).await,
-                        (session, _) => (None, api.dictate(session.as_deref(), "ditado.wav", bytes, style,&options).await),
+                    match (jobs, session, uploads) {
+                        (Some(jobs), session, uploads) => {
+                            // O arquivo inteiro sobe junto com os pedaços: o texto não espera a subida, e o caminho chega depois.
+                            let upload = session.clone().zip(uploads).map(|(name, uploads)|
+                                super::dictation_pieces::Job::spawn(&tokio::runtime::Handle::current(), upload_dictation(api.clone(), uploads, name, bytes.clone())));
+                            match organize_pieces(&api, jobs, session.as_deref(), style, &options).await {
+                                Ok(value) => {
+                                    reply(Payload::Dictation(seq, None, Ok(value))).await;
+                                    if let Some(Some(Ok(path))) = match upload { Some(job) => Some(job.join().await), None => None } {
+                                        reply(Payload::DictationSaved(seq, path)).await;
+                                    }
+                                    return;
+                                }
+                                // Pedaço ou organização que falhou: o caminho de sempre, com o arquivo inteiro.
+                                Err(_) => match (session, upload) {
+                                    (Some(name), Some(upload)) => {
+                                        let saved = upload.join().await.unwrap_or_else(|| Err(Failure::local("invalid_response")));
+                                        transcribe_uploaded(api, name, saved, style, options).await
+                                    }
+                                    (session, _) => (None, api.dictate(session.as_deref(), "ditado.wav", bytes, style, &options).await),
+                                },
+                            }
+                        }
+                        (None, Some(name), Some(uploads)) => upload_and_transcribe(api, uploads, name, bytes, style,options).await,
+                        (None, session, _) => (None, api.dictate(session.as_deref(), "ditado.wav", bytes, style,&options).await),
                     }
                 }
                 Err(error) => (None, Err(error)),
             };
-            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Dictation(seq, path, result) }).await;
+            reply(Payload::Dictation(seq, path, result)).await;
         }));
         cx.notify();
     }
@@ -1039,14 +1117,7 @@ impl Hangar {
         let (tx, connection, seq) = (self.tx.clone(), self.connection, self.dictation.seq);
         self.dictation.request = Some(self.runtime.spawn(async move {
             let (path, result) = if let Some(style) = style {
-                (None, api.server_send(reqwest::Method::POST, &["ditado", "relimpar"], Some(json!({"texto": raw, "estilo": style,
-                    "session":session,"generation":options.generation,"organization_mode":options.mode,"organization_model":options.model,"organization_account":options.account,
-                    "include_recent_messages":options.include_recent_messages,"recent_messages":references})), 210).await
-                    .and_then(|mut value| {
-                        let fields = value.as_object_mut().ok_or_else(|| Failure::local("invalid_response"))?;
-                        fields.insert("raw".into(), json!(raw));
-                        Ok(value)
-                    }))
+                (None, relimpar(&api, &raw, style, session.as_deref(), &options, references).await)
             } else if let (Some(file), Some(name)) = (saved, session.as_deref()) {
                 (None, if clean{api.dictate_saved(name,&file,recording_style,&options).await}else{api.transcribe_saved(name,&file,false,None).await})
             } else if let (true, Some(name), Some(uploads)) = (clean, session.clone(), uploads) {

@@ -97,5 +97,13 @@
       ],
       "stop": { "tail": "send", "piece": { "startMs": 17220, "endMs": 30000, "voicedMs": [2850, 3000], "skip": false } }
     }
+  ],
+  "joinAbout": "Junção do cru dos pedaços, na ordem: cada texto sem espaço nas pontas, os vazios fora, um espaço entre eles. Sem organização a emenda sairia sem pontuação (\"ela trava Não sei\"): quando o anterior não termina em . ! ? … : ; , e o seguinte começa com letra maiúscula (Unicode), entra um ponto antes do espaço.",
+  "join": [
+    { "pieces": ["ela trava", "Não sei o que fazer"], "expected": "ela trava. Não sei o que fazer" },
+    { "pieces": ["Primeiro ponto.", "Segundo ponto"], "expected": "Primeiro ponto. Segundo ponto" },
+    { "pieces": ["e aí a gente foi", "embora depois"], "expected": "e aí a gente foi embora depois" },
+    { "pieces": ["  Olá, ", "", "Mundo  "], "expected": "Olá, Mundo" },
+    { "pieces": ["deu certo", "Ótimo, segue"], "expected": "deu certo. Ótimo, segue" }
   ]
 }
