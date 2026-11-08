@@ -491,7 +491,10 @@ fn provider_hooks_installer_creates_missing_config_with_nine_native_entries() {
         if !partial.is_empty() {
             std::fs::write(&path, partial).unwrap();
         }
-        assert_eq!(kimi_hooks::sync(&env, root.path()).unwrap().len(), 1);
+        assert_eq!(
+            kimi_hooks::sync(&env, root.path()).unwrap(),
+            vec![path.to_string_lossy().into_owned()]
+        );
         let raw = std::fs::read_to_string(&path).unwrap();
         let data: toml::Value = toml::from_str(&raw).unwrap();
         let hooks = data["hooks"].as_array().unwrap();
