@@ -123,16 +123,15 @@ fn parse_links(value: Value) -> Result<Vec<PeerLink>, String> {
 /// A marca do Hangar acendendo arco por arco; `pulse` repete um respiro enquanto o Connect liga.
 fn connect_mark(id: &str, size: f32, pulse: bool, reduce: bool) -> AnyElement {
     let arc = |path: &'static str| svg().path(path).absolute().top_0().left_0().size(px(size)).text_color(theme::accent());
-    let (outer, inner) = (arc(crate::HANGAR_MARK_OUTER), arc(crate::HANGAR_MARK_INNER));
-    let mark = div().relative().size(px(size)).flex_shrink_0();
-    if reduce { return mark.child(outer).child(inner).into_any_element(); }
-    // O de dentro começa depois: uma animação só, com a janela de cada arco.
+    let mut mark = div().relative().size(px(size)).flex_shrink_0();
+    if reduce { return mark.children(crate::CONNECT_MARK_ARCS.map(arc)).into_any_element(); }
+    // De fora para dentro: uma animação por arco, cada um com a própria janela.
     let lit = |t: f32, from: f32| ((t - from) / 0.6).clamp(0., 1.);
-    let mark = mark
-        .child(outer.with_animation(SharedString::from(format!("{id}-outer")), Animation::new(MARK_IN).with_easing(crate::motion::ease_out),
-            move |el, t| el.opacity(lit(t, 0.)).top(px(3. * (1. - lit(t, 0.))))))
-        .child(inner.with_animation(SharedString::from(format!("{id}-inner")), Animation::new(MARK_IN).with_easing(crate::motion::ease_out),
-            move |el, t| el.opacity(lit(t, 0.35)).top(px(3. * (1. - lit(t, 0.35))))));
+    for (at, path) in crate::CONNECT_MARK_ARCS.into_iter().enumerate() {
+        let from = at as f32 * 0.2;
+        mark = mark.child(arc(path).with_animation(SharedString::from(format!("{id}-arc-{at}")), Animation::new(MARK_IN).with_easing(crate::motion::ease_out),
+            move |el, t| el.opacity(lit(t, from)).top(px(3. * (1. - lit(t, from))))));
+    }
     if !pulse { return mark.into_any_element(); }
     mark.with_animation(SharedString::from(format!("{id}-pulse")), Animation::new(MARK_PULSE).repeat(),
         |el, t| el.opacity(0.55 + 0.45 * (0.5 + 0.5 * (t * std::f32::consts::TAU).cos()))).into_any_element()
@@ -170,11 +169,22 @@ fn redraw_on_change(input: &Entity<InputState>, cx: &mut Context<Hangar>) -> Sub
 
 struct LinkForm { account: Entity<InputState>, password: Entity<InputState>, machine: Entity<InputState>, preview_port: Entity<InputState>, _subscriptions: [Subscription; 4] }
 
+/// O nome que o app já mostra para esta máquina, no formato que o serviço aceita: minúsculas, números e hífen, sem `--`.
+fn machine_label(shown: &str) -> String {
+    let mut label = String::new();
+    for c in shown.trim().to_lowercase().chars() {
+        let c = if c.is_ascii_alphanumeric() { c } else { '-' };
+        if !(c == '-' && (label.is_empty() || label.ends_with('-'))) { label.push(c); }
+    }
+    label.truncate(32);
+    label.trim_end_matches('-').to_owned()
+}
+
 impl LinkForm {
-    fn new(window: &mut Window, cx: &mut Context<Hangar>) -> Self {
+    fn new(machine_name: String, window: &mut Window, cx: &mut Context<Hangar>) -> Self {
         let account = cx.new(|cx| InputState::new(window, cx));
         let password = cx.new(|cx| InputState::new(window, cx).masked(true));
-        let machine = cx.new(|cx| InputState::new(window, cx));
+        let machine = cx.new(|cx| InputState::new(window, cx).default_value(machine_name));
         let preview_port = cx.new(|cx| InputState::new(window, cx));
         let _subscriptions = [submit_on_enter(&password, window, cx), submit_on_enter(&machine, window, cx),
             redraw_on_change(&account, cx), redraw_on_change(&machine, cx)];
@@ -203,6 +213,15 @@ pub(in crate::app) struct Connect {
     links: Vec<PeerLink>,
     linking: Option<String>,
     link_error: Option<String>,
+}
+
+impl Connect {
+    /// Religar ao mesmo servidor guarda o que está na tela, inclusive o que foi digitado. As respostas da conexão
+    /// anterior não chegam mais (o filtro descarta), então nada fica esperando por elas.
+    pub(super) fn carry_over(mut self) -> Self {
+        (self.saving, self.preview_busy, self.linking, self.revoking) = (false, false, None, None);
+        self
+    }
 }
 
 pub(super) enum ConnectReply {
@@ -495,7 +514,8 @@ impl Hangar {
             ConnectReply::PreviewState(result) => self.connect.preview_open = result.ok().as_ref().and_then(open_preview_port),
         }
         if self.connect.form.is_none() && self.settings == Some(Page::Connect) {
-            self.connect.form = Some(LinkForm::new(window, cx));
+            let name = machine_label(&self.vault_machine_label(&self.active_key(), cx));
+            self.connect.form = Some(LinkForm::new(name, window, cx));
         }
         cx.notify();
     }
@@ -686,7 +706,7 @@ impl Hangar {
             else if create { tr("connect_create_and_link") } else { tr("connect_login_and_link") };
         Some(settings_box().p_5().gap_3()
             .child(div().flex().items_center().gap_2()
-                .child(chrome::hangar_mark(22., theme::accent()))
+                .child(connect_mark("connect-form-mark", 24., false, true))
                 .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child(title)))
             .child(div().text_sm().text_color(theme::muted()).whitespace_normal().child(help))
             .child(div().flex().flex_col().gap_1().child(super::sync::sync_field(tr_shared("connect_account_name", &[]), &form.account, saving))
@@ -850,7 +870,7 @@ impl Hangar {
 
 #[cfg(test)]
 mod tests {
-    use super::{address_preview, device_card, device_view, identity_of, merge, open_preview_port, parse_account, parse_devices, parse_links, parse_port, parse_preview, parse_status, phase, take_password, Device, DeviceStatus, DeviceView, InputState, Notices, Phase, Remote, Request, REFUSED_PAUSE};
+    use super::{address_preview, device_card, device_view, identity_of, machine_label, merge, open_preview_port, parse_account, parse_devices, parse_links, parse_port, parse_preview, parse_status, phase, take_password, Device, DeviceStatus, DeviceView, InputState, Notices, Phase, Remote, Request, REFUSED_PAUSE};
     use crate::i18n::tr_shared;
     // O nome explícito vence qualquer `test` trazido por glob.
     use core::prelude::v1::test;
@@ -960,6 +980,27 @@ mod tests {
         assert_eq!(address_preview("", ""), "notebook.sua-conta.hangar.dev.br");
         assert_eq!(identity_of("notebook.jeffersonfelizardo.hangar.dev.br"), Some(("notebook", "jeffersonfelizardo")));
         assert_eq!(identity_of(""), None);
+    }
+
+    #[test]
+    fn machine_name_comes_from_the_shown_label_in_the_service_format() {
+        assert_eq!(machine_label("Notebook do Jefferson"), "notebook-do-jefferson");
+        assert_eq!(machine_label("  casa--pc  "), "casa-pc", "sem `--`, que é do endereço do convidado");
+        assert_eq!(machine_label("192.168.0.5"), "192-168-0-5");
+        assert_eq!(machine_label(&"a".repeat(40)).len(), 32);
+        assert_eq!(machine_label("é"), "", "nada aproveitável fica vazio para a pessoa digitar");
+    }
+
+    #[test]
+    fn reconnecting_to_the_same_server_keeps_the_form_and_the_phase() {
+        let mut kept = super::Connect { entry: Some(super::Entry::Create), saving: true, preview_busy: true,
+            linking: Some("casa".to_owned()), revoking: Some("x".to_owned()), ..Default::default() };
+        kept.status.set(Ok(parse_status(json!({"enabled": false, "running": false, "host": null, "error": null})).unwrap()));
+        let kept = kept.carry_over();
+        assert_eq!(kept.entry, Some(super::Entry::Create), "o formulário escolhido continua");
+        assert!(kept.status.ok().is_some(), "a fase continua até a nova leitura");
+        assert!(!kept.saving && !kept.preview_busy && kept.linking.is_none() && kept.revoking.is_none(),
+            "resposta da conexão anterior não chega: nada fica travado esperando por ela");
     }
 
     #[test]

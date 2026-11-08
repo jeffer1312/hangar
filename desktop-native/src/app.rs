@@ -1390,7 +1390,11 @@ impl Hangar {
         // A lista da máquina que sai fica na barra até o SSE dela chegar, sem piscar vazia.
         let previous = self.server.as_deref().map(servers::norm).filter(|key| *key != servers::norm(&api.identity()))
             .map(|key| (key, std::mem::take(&mut self.sessions), self.list_online, self.list_error.clone(), std::mem::take(&mut self.live_terms)));
+        // Religar ao mesmo servidor não apaga a página do Connect nem o que foi digitado nela; trocar de servidor apaga.
+        let same_server = self.server.as_deref().map(servers::norm) == Some(servers::norm(&api.identity()));
+        let connect = same_server.then(|| std::mem::take(&mut self.connect).carry_over());
         self.drop_connection(window, cx);
+        if let Some(connect) = connect { self.connect = connect; }
         self.active_token = token;
         self.api = Some(api.clone());
         self.server = Some(api.identity());

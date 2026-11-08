@@ -3,7 +3,6 @@ import { Pressable, Text, View } from 'react-native';
 import Animated, { Easing, useAnimatedProps, useReducedMotion, useSharedValue, withDelay, withTiming, type SharedValue } from 'react-native-reanimated';
 import Svg, { Path } from 'react-native-svg';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { HANGAR_MARK_ARCS } from '../../ui/HangarMark';
 import { Icon } from '../../ui/Icon';
 import { useSettingsColors } from '../config/colors';
 import * as m from '../../paraglide/messages';
@@ -17,22 +16,32 @@ function Arc({ d, length, progress }: { d: string; length: number; progress: Sha
   return <AnimatedPath d={d} strokeDasharray={[length, length + 2]} animatedProps={props} />;
 }
 
+// Os três arcos da marca da página (`assets/brand/mark.svg`), com o comprimento de cada um (raio × 240°, 216°, 192°).
+const CONNECT_MARK_ARCS = [
+  { d: 'M 34.18 154.00 A 76.00 76.00 0 1 1 165.82 154.00', length: 319 },
+  { d: 'M 49.59 132.38 A 53.00 53.00 0 1 1 150.41 132.38', length: 200 },
+  { d: 'M 70.16 119.14 A 30.00 30.00 0 1 1 129.84 119.14', length: 101 },
+] as const;
+
 /** A marca do Hangar se desenhando de fora para dentro, uma vez, ao abrir. */
 export function ConnectMark({ size = 72 }: { size?: number }) {
   const { theme } = useUnistyles();
   const reduced = useReducedMotion();
   const outer = useSharedValue(reduced ? 1 : 0);
+  const middle = useSharedValue(reduced ? 1 : 0);
   const inner = useSharedValue(reduced ? 1 : 0);
   useEffect(() => {
     if (reduced) return;
     outer.value = withTiming(1, { duration: 520, easing: ease });
-    inner.value = withDelay(220, withTiming(1, { duration: 480, easing: ease }));
-  }, [reduced, outer, inner]);
-  const [a, b] = HANGAR_MARK_ARCS;
+    middle.value = withDelay(160, withTiming(1, { duration: 480, easing: ease }));
+    inner.value = withDelay(320, withTiming(1, { duration: 440, easing: ease }));
+  }, [reduced, outer, middle, inner]);
+  const [a, b, c] = CONNECT_MARK_ARCS;
   return <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={theme.tokens.accent.base} strokeWidth={2.1} strokeLinecap="round">
+    <Svg width={size} height={size} viewBox="0 0 200 200" fill="none" stroke={theme.tokens.accent.base} strokeWidth={13} strokeLinecap="round">
       <Arc d={a.d} length={a.length} progress={outer} />
-      <Arc d={b.d} length={b.length} progress={inner} />
+      <Arc d={b.d} length={b.length} progress={middle} />
+      <Arc d={c.d} length={c.length} progress={inner} />
     </Svg>
   </View>;
 }
