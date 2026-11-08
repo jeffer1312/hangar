@@ -26,6 +26,7 @@ const HEARTBEAT: Duration = Duration::from_secs(5);
 /// Pasta que ainda não existe (sessão nascendo): nova tentativa a cada segundo, aviso uma vez.
 const DIR_RETRY: Duration = Duration::from_secs(1);
 const DIR_WARN_AFTER: u32 = 30;
+const HOOK_GRACE: Duration = Duration::from_millis(200);
 
 /// Quadro no formato do sse_starlette: id, event, data, linha em branco, tudo com `\r\n`.
 pub fn sse_frame(event: &str, data: &str, id: Option<&str>) -> Bytes {
@@ -61,6 +62,14 @@ pub fn comment_frame() -> Bytes {
     Bytes::from(format!(": ping - {}\r\n\r\n", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.6f+00:00")))
 }
 
+fn event_frames(events: Vec<hangar_api::chat::ChatEvent>, key: &str, fallback: u64) -> std::io::Result<Vec<Bytes>> {
+    events.into_iter().map(|event| {
+        let id = format!("{key}:{}", event.offset.unwrap_or(fallback));
+        let data = serde_json::to_string(&event).map_err(std::io::Error::other)?;
+        Ok(sse_frame("message", &data, Some(&id)))
+    }).collect()
+}
+
 /// Linhas completas de `from` até `to` (ou o fim) em quadros `message` com `id: <key>:<início da
 /// linha>`. Linha sem `\n` fica para a próxima leitura; arquivo ausente não é erro.
 pub fn read_frames(
@@ -69,6 +78,17 @@ pub fn read_frames(
     to: Option<u64>,
     parser: &mut LineParser,
     key: &str,
+) -> std::io::Result<(Vec<Bytes>, u64)> {
+    read_frames_before(path, from, to, parser, key, None)
+}
+
+fn read_frames_before(
+    path: &Path,
+    from: u64,
+    to: Option<u64>,
+    parser: &mut LineParser,
+    key: &str,
+    emit_before: Option<u64>,
 ) -> std::io::Result<(Vec<Bytes>, u64)> {
     let file = match File::open(path) {
         Ok(f) => f,
@@ -97,11 +117,8 @@ pub fn read_frames(
                 Vec::new()
             }
         };
-        for ev in evs {
-            let id = format!("{key}:{}", ev.offset.unwrap_or(at));
-            let data = serde_json::to_string(&ev).map_err(std::io::Error::other)?;
-            frames.push(sse_frame("message", &data, Some(&id)));
-        }
+        let evs = evs.into_iter().filter(|event| emit_before.is_none_or(|cut| event.offset.unwrap_or(at) < cut)).collect();
+        frames.extend(event_frames(evs, key, at)?);
         at += n as u64;
     }
     log_skipped(key, skipped_before);
@@ -201,7 +218,8 @@ fn seed_parser(path: &Path, parser: &mut LineParser, from: u64, to: u64, key: &s
 
 /// Cauda de UM aparelho, de onde ele pediu até `cut`, com parser próprio (cada leitor tem o seu).
 /// `resume` só vale com o stem desta sessão e dentro do arquivo; senão, as últimas 200 linhas.
-pub fn backfill(path: &Path, key: &str, provider: Provider, resume: Option<&str>, cut: u64) -> Vec<Bytes> {
+fn read_backfill(path: &Path, key: &str, provider: Provider, resume: Option<&str>, cut: u64)
+    -> std::io::Result<(Vec<Bytes>, LineParser, u64)> {
     let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     let resumed = resume.and_then(|raw| {
         let (stem, off) = raw.rsplit_once(':')?;
@@ -210,28 +228,67 @@ pub fn backfill(path: &Path, key: &str, provider: Provider, resume: Option<&str>
         }
         off.trim().parse::<u64>().ok().filter(|o| *o <= size)
     });
-    let start = match resumed.map_or_else(|| tail_offset(path, BACKFILL_LINES), Ok) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!(key, path = %path.display(), "cauda do transcript falhou: {e}");
-            return Vec::new();
-        }
-    };
-    if start >= cut {
-        return Vec::new();
-    }
+    let start = resumed.map_or_else(|| tail_offset(path, BACKFILL_LINES), Ok)?;
     let mut parser = LineParser::new(provider).with_path(path).with_notices();
+    if start >= cut {
+        return Ok((Vec::new(), parser, cut));
+    }
     // O aparelho que volta no meio do turno precisa do começo dele, como o leitor compartilhado.
     if matches!(provider, Provider::Claude | Provider::ClaudeHeadless) {
         seed_parser(path, &mut parser, crate::transcript::turn_seed_start(path, start), start, key);
     }
-    match read_frames(path, start, Some(cut), &mut parser, key) {
-        Ok((frames, _)) => frames,
+    let (frames, end) = read_frames(path, start, Some(cut), &mut parser, key)?;
+    Ok((frames, parser, end))
+}
+
+pub fn backfill(path: &Path, key: &str, provider: Provider, resume: Option<&str>, cut: u64) -> Vec<Bytes> {
+    let read = read_backfill(path, key, provider, resume, cut).and_then(|(mut frames, mut parser, end)| {
+        frames.extend(event_frames(parser.flush(), key, end)?);
+        Ok(frames)
+    });
+    match read {
+        Ok(frames) => frames,
         Err(e) => {
             tracing::warn!(key, "cauda do transcript falhou: {e}");
             Vec::new()
         }
     }
+}
+
+pub async fn backfill_guarded<F: std::future::Future<Output = ()>>(
+    path: PathBuf, key: String, provider: Provider, resume: Option<String>, cut: u64,
+    wait: impl FnOnce(Duration) -> F,
+) -> Vec<Bytes> {
+    let (read_path, read_key) = (path.clone(), key.clone());
+    let read = tokio::task::spawn_blocking(move || read_backfill(&read_path, &read_key, provider, resume.as_deref(), cut)).await;
+    let (mut frames, mut parser, end) = match read {
+        Ok(Ok(batch)) => batch,
+        Ok(Err(error)) => {
+            tracing::warn!(key, kind = ?error.kind(), "cauda do transcript falhou");
+            return Vec::new();
+        }
+        Err(error) => {
+            tracing::error!(key, panic = error.is_panic(), "leitura da cauda não concluiu");
+            return Vec::new();
+        }
+    };
+    if !parser.has_pending() { return frames; }
+    wait(HOOK_GRACE).await;
+    let read_key = key.clone();
+    let reread = tokio::task::spawn_blocking(move || {
+        // A irmã pode chegar depois do corte. Só a mensagem anterior ao corte pertence à cauda;
+        // as mensagens novas já estão no canal ao vivo que o aparelho assinou.
+        let (mut held, end) = read_frames_before(&path, end, None, &mut parser, &read_key, Some(cut))?;
+        let pending = parser.flush().into_iter().filter(|event| event.offset.unwrap_or(end) < cut).collect();
+        held.extend(event_frames(pending, &read_key, end)?);
+        Ok::<_, std::io::Error>(held)
+    }).await;
+    match reread {
+        Ok(Ok(held)) => frames.extend(held),
+        Ok(Err(error)) => tracing::warn!(key, kind = ?error.kind(), "releitura da mensagem retida falhou"),
+        Err(error) => tracing::error!(key, panic = error.is_panic(), "releitura da mensagem retida não concluiu"),
+    }
+    frames
 }
 
 /// Última resposta gravada na cauda que o `backfill` leria, direto dos eventos: montar e reler os
@@ -332,6 +389,7 @@ pub struct TailState {
     generation: u64,
     pos: Option<u64>,
     parser: LineParser,
+    pending: Option<(u64, tokio::time::Instant)>,
 }
 
 impl TailState {
@@ -340,7 +398,8 @@ impl TailState {
     /// Erro (fora arquivo ausente) deixa `pos` vazio: a próxima consulta tenta de novo.
     pub fn cut(&mut self) -> std::io::Result<u64> {
         if let Some(p) = self.pos {
-            return Ok(p);
+            // A linha retida ainda será publicada no canal que o aparelho acabou de assinar.
+            return Ok(self.parser.pending_offset().map_or(p, |pending| pending.min(p)));
         }
         #[cfg(test)]
         if self.key == PANIC_KEY {
@@ -368,16 +427,17 @@ impl TailState {
 
     /// Lê o que chegou e manda a todos, sob a trava. Arquivo menor que a posição = truncado:
     /// `reset` e releitura do início com parser novo.
-    fn poll(&mut self, tx: &broadcast::Sender<Out>) {
+    fn poll(&mut self, tx: &broadcast::Sender<Out>) -> bool {
         let Some(pos) = self.pos else {
             let _ = self.cut();
-            return;
+            return false;
         };
-        let Ok(meta) = std::fs::metadata(&self.path) else { return };
+        let Ok(meta) = std::fs::metadata(&self.path) else { return false };
         if meta.len() < pos {
             tracing::info!(key = %self.key, "transcript encolheu; recomeça do início");
             self.parser = LineParser::new(self.provider).with_path(&self.path).with_notices();
             self.pos = Some(0);
+            self.pending = None;
             let _ = tx.send(Out::Tail(self.generation, reset_frame()));
         }
         let from = self.pos.unwrap_or(0);
@@ -388,8 +448,28 @@ impl TailState {
                     let _ = tx.send(Out::Tail(self.generation, f));
                 }
             }
-            Err(e) => tracing::warn!(key = %self.key, "leitura do transcript falhou: {e}"),
+            Err(e) => {
+                tracing::warn!(key = %self.key, "leitura do transcript falhou: {e}");
+                return false;
+            }
         }
+        let now = tokio::time::Instant::now();
+        match self.parser.pending_offset() {
+            Some(offset) => {
+                if self.pending.is_none_or(|(previous, _)| previous != offset) {
+                    self.pending = Some((offset, now + HOOK_GRACE));
+                }
+                if self.pending.is_some_and(|(_, deadline)| now >= deadline) {
+                    match event_frames(self.parser.flush(), &self.key, from) {
+                        Ok(frames) => for frame in frames { let _ = tx.send(Out::Tail(self.generation, frame)); },
+                        Err(error) => tracing::warn!(key = %self.key, kind = ?error.kind(), "mensagem retida sem serialização"),
+                    }
+                    self.pending = None;
+                }
+            }
+            None => self.pending = None,
+        }
+        true
     }
 }
 
@@ -429,6 +509,7 @@ impl FileTail {
             generation,
             pos: None,
             parser: LineParser::new(provider).with_path(&path).with_notices(),
+            pending: None,
         }));
         let task = tokio::spawn(run(path, state.clone(), tx, watchers, on_dead)).abort_handle();
         Arc::new(FileTail { state, task })
@@ -485,15 +566,27 @@ async fn run(
         }
         let st = state.clone();
         let tx2 = tx.clone();
-        if let Err(e) = tokio::task::spawn_blocking(move || st.blocking_lock().poll(&tx2)).await {
-            // Sem o aviso, os aparelhos ficariam só com ping, sem mensagem nova.
-            if e.is_panic() {
-                tracing::error!(path = %sub.path.display(), "leitor do transcript caiu; aparelhos reconectam");
-                on_dead();
+        let done = tokio::task::spawn_blocking(move || {
+            let mut state = st.blocking_lock();
+            if state.poll(&tx2) {
+                state.pending.map(|(_, deadline)| deadline.saturating_duration_since(tokio::time::Instant::now()))
+            } else {
+                None
             }
-            return;
-        }
+        }).await;
+        let pending_in = match done {
+            Ok(pending_in) => pending_in,
+            Err(e) => {
+                // Sem o aviso, os aparelhos ficariam só com ping, sem mensagem nova.
+                if e.is_panic() {
+                    tracing::error!(path = %sub.path.display(), "leitor do transcript caiu; aparelhos reconectam");
+                    on_dead();
+                }
+                return;
+            }
+        };
         let wait = if watching { HEARTBEAT } else { DIR_RETRY };
+        let wait = pending_in.map_or(wait, |pending| pending.min(wait));
         tokio::select! {
             _ = sub.wake.notified() => {}
             _ = tokio::time::sleep(wait) => {}
@@ -507,21 +600,20 @@ mod tests {
     use std::io::Write;
 
     #[test]
-    fn pi_hook_pair_keeps_the_user_line_cursor() {
+    fn pi_cut_keeps_the_pending_user_in_the_live_channel_only() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session.jsonl");
         let user = serde_json::json!({"type":"message","id":"user-1","message":{
-            "role":"user","content":[{"type":"text","text":"contexto\n\nMensagem"}]}});
-        let hook = serde_json::json!({"type":"custom_message","customType":"claude-hook-context",
-            "parentId":"user-1","content":"contexto"});
-        std::fs::write(&path, format!("{user}\n{hook}\n")).unwrap();
+            "role":"user","content":[{"type":"text","text":"Mensagem"}]}});
+        std::fs::write(&path, format!("{user}\n")).unwrap();
         let mut parser = LineParser::new(Provider::Pi);
-        let (frames, _) = read_frames(&path, 0, None, &mut parser, "k").unwrap();
-        let frame = std::str::from_utf8(frames.first().expect("mensagem com contexto removido")).unwrap();
-        assert!(frame.starts_with("id: k:0\r\n"), "{frame}");
-        let data = frame.split("data: ").nth(1).unwrap().trim();
-        let value: serde_json::Value = serde_json::from_str(data).unwrap();
-        assert_eq!(value["text"], "Mensagem");
+        let (frames, end) = read_frames(&path, 0, None, &mut parser, "k").unwrap();
+        assert!(frames.is_empty());
+        let mut state = TailState { path, key: "k".into(), provider: Provider::Pi, generation: 1,
+            pos: Some(end), parser, pending: None };
+        assert_eq!(state.cut().unwrap(), 0, "a cauda não repete a mensagem que o produtor ainda publicará");
+        assert_eq!(state.pos, Some(end), "o cursor de leitura não volta");
+        assert_eq!(state.parser.flush().len(), 1, "o produtor conserva sua mensagem");
     }
 
     fn write(path: &Path, lines: std::ops::Range<usize>, tail: &str) -> Vec<u64> {
@@ -622,6 +714,7 @@ mod tests {
             generation: 1,
             pos: None,
             parser: LineParser::new(provider),
+            pending: None,
         };
         st.cut().unwrap();
         // A regravação do `--resume`: as mesmas linhas com uuid novo e o relógio original.
@@ -674,6 +767,7 @@ mod tests {
             generation: 1,
             pos: None,
             parser: LineParser::new(Provider::Claude),
+            pending: None,
         };
         let (tx, mut rx) = broadcast::channel(64);
         st.poll(&tx);

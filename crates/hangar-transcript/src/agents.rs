@@ -73,6 +73,7 @@ pub struct PiStream { held: Vec<ChatEvent>, id: String }
 
 impl PiStream {
     pub fn has_pending(&self) -> bool { !self.held.is_empty() }
+    pub fn pending_offset(&self) -> Option<u64> { self.held.first().and_then(|event| event.offset) }
     pub fn flush(&mut self) -> Vec<ChatEvent> {
         self.id.clear();
         std::mem::take(&mut self.held)

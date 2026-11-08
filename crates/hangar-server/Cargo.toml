@@ -183,3 +183,7 @@ path = "tests/other_terminal.rs"
 [[test]]
 name = "stats_agents"
 path = "tests/stats_agents.rs"
+
+[[test]]
+name = "tail_agents"
+path = "tests/tail_agents.rs"

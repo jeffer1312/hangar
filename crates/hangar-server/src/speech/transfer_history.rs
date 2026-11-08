@@ -735,8 +735,8 @@ pub(crate) fn baton_window(row: &SessionRow, home: &Path, claude: &Path) -> Resu
                 (rows, 0, String::new())
             }
         };
-        let mut parser = LineParser::new(if row.provider == "codex" {Provider::Codex} else {Provider::Claude});
-        let mut pi = super::PiStream::default();
+        let provider = Provider::parse(&row.provider).filter(|provider| *provider != Provider::Orq).unwrap_or(Provider::Claude);
+        let mut parser = LineParser::new(provider);
         let (mut parsed, mut position, mut previous, mut start, mut seen) = (Vec::new(), 0u64, 0., 0., HashSet::new());
         for (index, raw) in rows.iter().enumerate() {
             let offset = position;
@@ -746,14 +746,12 @@ pub(crate) fn baton_window(row: &SessionRow, home: &Path, claude: &Path) -> Resu
             if clock > 0. { previous = clock; if start == 0. { start = clock; } }
             let source = transferred && index < source_len;
             let mut events = if source { crate::transcript::parse_claude_object(value.as_object().unwrap()) }
-                else if row.provider == "pi" || row.provider == "omp" { pi.feed_with(&value, |_| crate::archive_history::agent_line(crate::session_open::AgentProvider::Pi, raw.as_bytes())) }
-                else if row.provider == "kimi" { crate::archive_history::agent_line(crate::session_open::AgentProvider::Kimi, raw.as_bytes()) }
                 else { parser.feed(raw.as_bytes(), offset) };
             events.retain(|event| !(event.id.starts_with("held:") || event.id.starts_with("delivery:")) || seen.insert(event.id.clone()));
             if transferred { for event in &mut events { prefix_event(event, &id, if source {"claude"} else {"codex"}); } }
-            for event in events { parsed.push((event.ts.filter(|t| *t != 0.).unwrap_or(previous), offset, event)); }
+            for event in events { parsed.push((event.ts.filter(|t| *t != 0.).unwrap_or(previous), event.offset.unwrap_or(offset), event)); }
         }
-        for event in pi.held { parsed.push((event.ts.unwrap_or(previous), position, event)); }
+        for event in parser.flush() { parsed.push((event.ts.unwrap_or(previous), event.offset.unwrap_or(position), event)); }
         // `merged_history(limit=600)` conserva a janela inteira, não só seiscentos eventos.
         let mut span = crate::transcript::TAIL_WINDOW;
         let offset = if transferred { 0 } else { loop {

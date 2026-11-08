@@ -1055,19 +1055,21 @@ impl Hub {
             let done = tokio::task::spawn_blocking(move || {
                 let mut g = guard;
                 // Erro já registrado no `cut`: o aparelho recebe `reset` e reconecta.
-                let cut = g.cut().ok()?;
-                drop(g);
-                Some(tail::backfill(&binding.jsonl, &binding.key, binding.provider, resume.as_deref(), cut))
+                g.cut().ok()
             })
             .await;
-            let mut frames = match done {
-                Ok(f) => f?,
+            let cut = match done {
+                Ok(cut) => cut?,
                 Err(e) => {
                     // Sem a mensagem do pânico: ela pode citar o texto da linha.
                     tracing::error!(session = %self.name, panic = e.is_panic(), "cauda do aparelho caiu; reset");
                     return None;
                 }
             };
+            let mut frames = tail::backfill_guarded(binding.jsonl, binding.key, binding.provider, resume, cut, tokio::time::sleep).await;
+            if self.bound.lock().unwrap().as_ref().map(|current| current.generation) != Some(b.generation) {
+                continue;
+            }
             frames.extend(cached);
             return Some(Attach { generation: b.generation, rx, frames, ui, has_ui });
         }

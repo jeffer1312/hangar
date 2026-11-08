@@ -110,6 +110,7 @@ impl LineParser {
     /// Libera a mensagem Pi sem irmã no fim do lote; o offset continua o da mensagem retida.
     pub fn flush(&mut self) -> Vec<ChatEvent> { self.pi.flush() }
     pub fn has_pending(&self) -> bool { self.pi.has_pending() }
+    pub fn pending_offset(&self) -> Option<u64> { self.pi.pending_offset() }
     pub fn new(provider: Provider) -> Self {
         Self { provider, rewrite: claude::RewriteFilter::default(), peer_resolver: peer::name_of_pid, run_dir: None, notices: None, pi: PiStream::default() }
     }
