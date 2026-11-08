@@ -127,6 +127,8 @@ async fn context(st: &Arc<AppState>, name: Option<&str>) -> Result<Value, Option
             return Err(Some("orquestracoes"));
         }
         let rows: Vec<_> = found.iter().chain(orq.iter()).collect();
+        // Só `/api/fs/*` (sem sessão) lê as raízes; sem `runtime-config.json`, ler a configuração espera a troca no Windows.
+        let roots = if name.is_none() { json!(crate::worktree_context::roots(&source).map_err(Some)?) } else { Value::Null };
         let mut citation_session = Value::Null;
         let session = match name {
             Some(name) => {
@@ -138,7 +140,6 @@ async fn context(st: &Arc<AppState>, name: Option<&str>) -> Result<Value, Option
             }
             None => Value::Null,
         };
-        let roots = crate::worktree_context::roots(&source).map_err(Some)?;
         let sessions: Vec<Value> = rows.iter()
             .filter(|row| row.cwd.as_deref().is_some_and(|cwd| !cwd.is_empty()))
             .map(|row| json!({"name":row.name,"cwd":row.cwd})).collect();

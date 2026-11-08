@@ -488,6 +488,42 @@ async fn g01_review_recreated_session_uses_first_request_cwd_without_cached_disc
 }
 
 #[tokio::test]
+async fn session_routes_do_not_read_scan_roots_configuration() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = hangar_workspace::real(dir.path());
+    let home = root.join("home");
+    let cwd = root.join("repo");
+    for path in [&home, &cwd] { std::fs::create_dir_all(path).unwrap(); }
+    std::fs::write(cwd.join("ação.txt"), "original").unwrap();
+    // `.env` que não se lê: só quem consome as raízes pode recusar por ele.
+    std::fs::create_dir_all(home.join(".hangar").join("config").join(".env")).unwrap();
+    let panes = home.join("panes.txt");
+    std::fs::write(&panes, format!("fixture\t1\t\t{}\t%1\t\tclaude\t1700000000\t0\t0\n", cwd.display())).unwrap();
+    #[cfg(unix)]
+    let mux = {
+        let mux = home.join("roots-mux");
+        crate::write_executable(&mux, format!("#!/bin/sh\n[ \"$1\" = list-panes ] || exit 0\ncat '{}'\n", panes.display()));
+        mux
+    };
+    #[cfg(windows)]
+    let mux = {
+        let mux = home.join("roots-mux.cmd");
+        std::fs::write(&mux, format!("@echo off\r\nif not \"%~1\"==\"list-panes\" exit /b 0\r\ntype \"{}\"\r\n", panes.display())).unwrap();
+        mux
+    };
+    let f = workspace_fixture::fixture_with_mux(&root, false, Some(&home), Some(&mux)).await;
+    let c = client();
+    let read = c.get(format!("http://{}/api/sessions/fixture/files/read?path=a%C3%A7%C3%A3o.txt", f.addr))
+        .bearer_auth(OWNER).send().await.unwrap();
+    assert_eq!(read.status(), 200);
+    assert_eq!(read.json::<Value>().await.unwrap()["text"], "original");
+    let roots = c.get(format!("http://{}/api/fs/roots", f.addr)).bearer_auth(OWNER).send().await.unwrap();
+    let body = refusal(roots, "workspace_context").await;
+    assert_eq!(body["detail"]["params"]["motivo"], "configuracao");
+    assert_eq!(f.hits(), 0);
+}
+
+#[tokio::test]
 async fn unavailable_native_context_answers_503_with_reason() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("missing-mux");
