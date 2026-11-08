@@ -74,19 +74,25 @@ pub async fn public(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Respon
     };
     let mut body=bytes.to_vec();
     let sse=response.headers().get("content-type").and_then(|v|v.to_str().ok()).is_some_and(|v|v.starts_with("text/event-stream"));
-    if body.len()>=1024 && !sse && !response.headers().contains_key("content-encoding")
+    // Sucesso no legado vinha em fluxo, que não aplica o mínimo de compressão.
+    let minimum=if response.status().is_success() && method!=Method::OPTIONS {0}else{1024};
+    if !body.is_empty() && body.len()>=minimum && !sse && !response.headers().contains_key("content-encoding")
         && response.extensions().get::<crate::http_cors::UnhandledServerError>().is_none() {
         let previous=response.headers().get("vary").map(|v|v.as_bytes().to_vec()).unwrap_or_default();
-        body=crate::routes::gzip_with_minimum(&headers,response.headers_mut(),body,1024);
+        body=crate::routes::gzip_with_minimum(&headers,response.headers_mut(),body,minimum);
         let mut vary=previous;
         if !vary.is_empty() { vary.extend_from_slice(b", "); }
         vary.extend_from_slice(b"Accept-Encoding");
         response.headers_mut().insert("vary",axum::http::HeaderValue::from_bytes(&vary).unwrap());
         if response.headers().contains_key("content-encoding") {
-            response.headers_mut().insert("content-length",axum::http::HeaderValue::from_str(&body.len().to_string()).unwrap());
+            if minimum==0 { response.headers_mut().remove("content-length"); }
+            else { response.headers_mut().insert("content-length",axum::http::HeaderValue::from_str(&body.len().to_string()).unwrap()); }
         }
     }
-    *response.body_mut()=Body::from(body);
+    let chunked=minimum==0 && response.headers().contains_key("content-encoding");
+    *response.body_mut()=if chunked {
+        Body::from_stream(futures_util::stream::once(async move { Ok::<_,std::convert::Infallible>(body) }))
+    } else { Body::from(body) };
     crate::http_route_response::suppress_head(&method,&mut response);
     response
 }

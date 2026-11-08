@@ -658,9 +658,9 @@ async fn s01_r2_gzip_identity_threshold_cors_and_errors_match_starlette() {
     let mut sample=item();sample["extra"]=json!("");
     let base=json!({"key":project_key(&scene.repo),"name":"meu-repo","root":scene.repo,"items":[sample.clone()]});
     let base_len=serde_json::to_vec(&base).unwrap().len();
-    assert!(base_len<1023);
+    assert!(base_len<512);
     let mut failures=Vec::new();
-    for size in [1023,1024,2048] {
+    for size in [512,1023,1024,2048] {
         sample["extra"]=json!("x".repeat(size-base_len));
         let expected=json!({"key":project_key(&scene.repo),"name":"meu-repo","root":scene.repo,"items":[sample.clone()]});
         for encoding in ["identity","gzip"] {
@@ -669,14 +669,15 @@ async fn s01_r2_gzip_identity_threshold_cors_and_errors_match_starlette() {
                 if method==reqwest::Method::PUT { request=request.json(&json!({"items":[sample.clone()]})); }
                 let response=request.send().await.unwrap();
                 let status=response.status().as_u16();let headers=response.headers().clone();let bytes=response.bytes().await.unwrap();
-                let gzip=size>=1024 && encoding=="gzip";
+                let gzip=encoding=="gzip";
                 let actual_gzip=headers.get("content-encoding").is_some_and(|h|h=="gzip");
                 let mut decoded=Vec::new();
                 if actual_gzip { flate2::read::GzDecoder::new(bytes.as_ref()).read_to_end(&mut decoded).unwrap(); }
                 else { decoded.extend_from_slice(&bytes); }
                 let vary=headers.get("vary").and_then(|h|h.to_str().ok());
-                if status!=200 || actual_gzip!=gzip || vary!=(if size>=1024{Some("Accept-Encoding")}else{None})
-                    || headers.get("content-length").and_then(|h|h.to_str().ok()).and_then(|s|s.parse::<usize>().ok())!=Some(bytes.len())
+                if status!=200 || actual_gzip!=gzip || vary!=Some("Accept-Encoding")
+                    || headers.get("content-length").and_then(|h|h.to_str().ok()).and_then(|s|s.parse::<usize>().ok())!=(if gzip{None}else{Some(size)})
+                    || headers.get("transfer-encoding").and_then(|h|h.to_str().ok())!=(if gzip{Some("chunked")}else{None})
                     || headers.get("access-control-expose-headers").and_then(|h|h.to_str().ok())!=Some("ETag, x-hangar-css-width, x-hangar-css-height")
                     || headers.get("access-control-allow-origin").and_then(|h|h.to_str().ok())!=Some("*")
                     || decoded.len()!=size || serde_json::from_slice::<Value>(&decoded).ok()!=Some(expected.clone()) {
@@ -696,6 +697,17 @@ async fn s01_r2_gzip_identity_threshold_cors_and_errors_match_starlette() {
         || headers.get("content-encoding").and_then(|h|h.to_str().ok())!=Some("gzip")
         || serde_json::from_slice::<Value>(&decoded).ok()!=Some(expected) {
         failures.push(format!("erro grande status={status},headers={headers:?}"));
+    }
+    for (authorized,body,status) in [(false,None,401),(true,Some(json!({"items":"wrong"})),422)] {
+        let request=if let Some(body)=body { client.put(&url).json(&body) } else { client.get(&url) };
+        let request=if authorized { request.bearer_auth(OWNER) } else { request };
+        let response=request.header("accept-encoding","gzip").send().await.unwrap();
+        assert_eq!(response.status(),status);
+        assert!(!response.headers().contains_key("content-encoding"));assert!(!response.headers().contains_key("vary"));
+        let expected=if authorized {
+            json!({"detail":[{"type":"list_type","loc":["body","items"],"msg":"Input should be a valid list","input":"wrong"}]})
+        } else { json!({"detail":{"code":"erro_nao_autorizado","params":{},"msg":"unauthorized"}}) };
+        assert_eq!(response.json::<Value>().await.unwrap(),expected);
     }
     let response=client.head(&url).header("accept-encoding","gzip").send().await.unwrap();
     assert_eq!(response.status(),405);assert_eq!(response.headers()["content-length"],"31");
