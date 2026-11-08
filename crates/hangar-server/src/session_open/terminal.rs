@@ -291,6 +291,9 @@ async fn is_this_one(mux: &dyn Mux, env: &TerminalEnv, pane: &PaneSpec) -> Prese
 pub fn client_command(program: &str) -> tokio::process::Command {
     let mut command = tokio::process::Command::from(crate::terminal_input::child_command(program));
     for var in ["CLAUDE_CONFIG_DIR"].into_iter().chain(NOT_INHERITED).chain(SERVER_SECRETS) { command.env_remove(var); }
+    // O servidor tmux herda a pasta de quem o sobe e nunca sai dela: pasta de worktree apagada
+    // faz todo pane novo nascer nela, ignorando o `-c`.
+    if let Some(home) = std::env::home_dir() { command.current_dir(&home).env("PWD", &home); }
     command
 }
 
