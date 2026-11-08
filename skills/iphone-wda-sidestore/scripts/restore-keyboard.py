@@ -71,8 +71,8 @@ def main():
                     x = size["width"] / 2
                     call("POST", f"/session/{s}/wda/dragfromtoforduration",
                          {"fromX": x, "fromY": size["height"] * 0.75, "toX": x, "toY": size["height"] * 0.35, "duration": 0.3})
-                except urllib.error.HTTPError as err:  # sem rolar, a busca segue e o "não achei" sai no fim
-                    print(f"aviso: a rolagem dos Ajustes falhou ({err.code})", file=sys.stderr)
+                except (urllib.error.URLError, KeyError, TypeError) as err:  # sem rolar, a busca segue e o "não achei" sai no fim
+                    print(f"aviso: a rolagem dos Ajustes falhou ({err})", file=sys.stderr)
                     can_swipe = False
             time.sleep(1)
         if not e:
