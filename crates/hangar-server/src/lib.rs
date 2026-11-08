@@ -70,6 +70,7 @@ pub mod share;
 pub mod state;
 pub mod speech;
 pub mod stats;
+pub mod usage_cli;
 pub mod subagents;
 pub mod tail;
 pub mod term;

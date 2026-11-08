@@ -10,6 +10,7 @@ use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::Duration;
 
 use indexmap::IndexMap;
+use num_bigint::BigInt;
 use serde_json::{Map, Value, json};
 
 use crate::side::{Binding, Hub};
@@ -44,8 +45,54 @@ struct Pending {
     message: Value,
 }
 
+#[derive(Default)]
+struct ExactUsage {
+    input_total: BigInt,
+    cache_read: BigInt,
+    cache_write: BigInt,
+    output: BigInt,
+    steps: u64,
+    codex_total: Option<[BigInt; 3]>,
+    invalid_usage: bool,
+}
+
+impl ExactUsage {
+    fn value(value: Option<&Value>) -> BigInt {
+        value.and_then(crate::orchestration::integer).map(|n| n.0).unwrap_or_default()
+    }
+
+    fn add(&mut self, usage: &Map<String, Value>, keys: [&str; 4]) {
+        let [input, read, write, output] = keys.map(|key| Self::value(usage.get(key)));
+        self.input_total += input + &read + &write;
+        self.cache_read += read;
+        self.cache_write += write;
+        self.output += output;
+        self.steps += 1;
+    }
+
+    fn codex(&mut self, total: &Map<String, Value>) {
+        let now = ["input_tokens", "cached_input_tokens", "output_tokens"].map(|key| Self::value(total.get(key)));
+        let previous = self.codex_total.replace(now.clone()).unwrap_or_default();
+        self.invalid_usage |= now.iter().zip(&previous).any(|(a, b)| a < b);
+        let delta: [BigInt; 3] = std::array::from_fn(|i| (&now[i] - &previous[i]).max(BigInt::default()));
+        if delta[0] == BigInt::default() && delta[2] == BigInt::default() { return; }
+        self.input_total += &delta[0];
+        self.cache_read += &delta[1];
+        self.output += &delta[2];
+        self.steps += 1;
+    }
+
+    fn totals(&self, bytes: u64) -> Value {
+        use crate::orchestration::Integer;
+        json!({"input":Integer(&self.input_total - &self.cache_read - &self.cache_write),
+            "output":Integer(self.output.clone()), "cache_read":Integer(self.cache_read.clone()),
+            "cache_write":Integer(self.cache_write.clone()), "steps":self.steps, "bytes":bytes})
+    }
+}
+
 struct Fold {
     kind: Kind,
+    exact: ExactUsage,
     turns: i64,
     steps: i64,
     llm_ms: f64,
@@ -72,7 +119,7 @@ struct Fold {
 impl Fold {
     fn new(kind: Kind) -> Self {
         Fold {
-            kind, turns: 0, steps: 0, llm_ms: 0.0, tool_ms: 0.0, in_tok: 0, out_tok: 0, out_untimed: 0,
+            kind, exact: ExactUsage::default(), turns: 0, steps: 0, llm_ms: 0.0, tool_ms: 0.0, in_tok: 0, out_tok: 0, out_untimed: 0,
             calls: VecDeque::with_capacity(RECENT_CALLS), pend: None, cache_read: 0, ttft_ms: 0.0, ttft_n: 0,
             prev_ts: None, prompt_ts: None, tools: IndexMap::new(), seen: HashSet::new(), codex_total: None,
             codex_call_llm_ms: 0.0, kimi_request_ts: None,
@@ -218,6 +265,7 @@ impl Fold {
             let mut out = 0;
             if let (Some(usage), Some(mid)) = (msg.get("usage").and_then(Value::as_object), mid) {
                 if self.seen.insert(mid.to_string()) {
+                    self.exact.add(usage, ["input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"]);
                     self.steps += 1;
                     let (input, read, write) = (int(usage.get("input_tokens")), int(usage.get("cache_read_input_tokens")),
                         int(usage.get("cache_creation_input_tokens")));
@@ -300,6 +348,7 @@ impl Fold {
             Some("user") => { self.human_turn(ts); self.gap(ts); }
             Some("assistant") => {
                 if let Some(usage) = msg.get("usage").and_then(Value::as_object) {
+                    self.exact.add(usage, ["input", "cacheRead", "cacheWrite", "output"]);
                     self.agent_usage(int(usage.get("input")), int(usage.get("cacheRead")), int(usage.get("cacheWrite")), int(usage.get("output")));
                 }
                 let gap = self.gap(ts);
@@ -330,6 +379,7 @@ impl Fold {
             Some("llm.request") => self.kimi_request_ts = ts,
             Some("usage.record") => {
                 if let Some(usage) = obj.get("usage").and_then(Value::as_object) {
+                    self.exact.add(usage, ["inputOther", "inputCacheRead", "inputCacheCreation", "output"]);
                     self.agent_usage(int(usage.get("inputOther")), int(usage.get("inputCacheRead")), int(usage.get("inputCacheCreation")), int(usage.get("output")));
                 }
                 if let (Some(start), Some(end)) = (self.kimi_request_ts.take(), ts) {
@@ -352,6 +402,7 @@ impl Fold {
 
     fn codex_usage(&mut self, info: &Map<String, Value>) {
         let Some(total) = info.get("total_token_usage").and_then(Value::as_object) else { return };
+        self.exact.codex(total);
         let now = (int(total.get("input_tokens")), int(total.get("cached_input_tokens")), int(total.get("output_tokens")));
         let before = self.codex_total.replace(now).unwrap_or((0, 0, 0));
         // O delta do acumulado, nunca o total: reset (compactação) vira zero em vez de subtrair.
@@ -484,7 +535,7 @@ fn iso_ts(value: Option<&Value>) -> Option<f64> {
 }
 
 /// Identidade do arquivo: (dispositivo, índice). No Windows vem do handle, como o `st_ino` do Python.
-fn identity(file: &std::fs::File, metadata: &std::fs::Metadata) -> io::Result<(u64, u64)> {
+pub(crate) fn identity(file: &std::fs::File, metadata: &std::fs::Metadata) -> io::Result<(u64, u64)> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -519,17 +570,18 @@ pub struct Accumulator {
     modified: Option<std::time::SystemTime>,
     /// Linha parcial no fim do arquivo (escrita em andamento).
     rest: Vec<u8>,
+    invalid_lines: u64,
 }
 
 impl Accumulator {
-    fn new(provider: Provider, path: PathBuf) -> Self {
+    pub(crate) fn new(provider: Provider, path: PathBuf) -> Self {
         let kind = match provider {
             Provider::Codex => Kind::Codex,
             Provider::Pi | Provider::Omp => Kind::Pi,
             Provider::Kimi => Kind::Kimi,
             _ => Kind::Claude,
         };
-        Accumulator { path, kind, fold: Fold::new(kind), offset: 0, identity: None, modified: None, rest: Vec::new() }
+        Accumulator { path, kind, fold: Fold::new(kind), offset: 0, identity: None, modified: None, rest: Vec::new(), invalid_lines: 0 }
     }
 
     /// Arquivo ainda inexistente devolve o último retrato; outra falha de leitura sobe.
@@ -548,6 +600,7 @@ impl Accumulator {
             self.fold = Fold::new(self.kind);
             self.offset = 0;
             self.rest.clear();
+            self.invalid_lines = 0;
         }
         self.identity = Some(id);
         self.modified = modified;
@@ -566,6 +619,8 @@ impl Accumulator {
                 }
                 if let Some(Value::Object(obj)) = transcript::decode_line(&line[..line.len() - 1]) {
                     self.fold.feed(&obj);
+                } else if !line[..line.len() - 1].iter().all(|byte| matches!(*byte, b' ' | b'\t' | b'\r' | b'\n' | 0x0b | 0x0c)) {
+                    self.invalid_lines += 1;
                 }
                 line.clear();
             }
@@ -577,6 +632,17 @@ impl Accumulator {
 
     pub fn last_call_ts(&self) -> Option<f64> {
         self.fold.last_call_ts()
+    }
+
+    pub fn usage_totals(&mut self) -> io::Result<Value> {
+        self.collect()?;
+        if self.invalid_lines > 0 {
+            return Err(io::Error::other(format!("Fonte contém {} linhas inválidas; consumo incompleto.", self.invalid_lines)));
+        }
+        if self.fold.exact.invalid_usage {
+            return Err(io::Error::other("Contadores de uso regrediram; consumo exato não pode ser reconstruído."));
+        }
+        Ok(self.fold.exact.totals(self.offset.saturating_sub(self.rest.len() as u64)))
     }
 }
 

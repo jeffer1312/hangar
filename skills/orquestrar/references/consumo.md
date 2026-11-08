@@ -12,10 +12,13 @@ Use Hangar's collector. The plan records the Hangar checkout path. Create `<dura
 and fill every placeholder; the transcript is the session's confirmed absolute path, never a
 tmux name or a glob.
 
+`<hangar-server>` é o executável Rust da versão ativa do Hangar. Resolva seu caminho antes de
+coletar; com ele indisponível, registre a lacuna, sem executar o coletor Python.
+
 ```bash
-uv run --directory <hangar>/backend --no-sync python -m app.orq_consumo snapshot \
-  --provider <claude|codex|pi|omp|kimi> --transcript <absolute-path> \
-  --role <role> --session <name> --model <observed-model> --effort <observed-effort> \
+<hangar-server> usage snapshot \
+  --provider <claude|codex|pi|omp|kimi> --transcript <caminho-absoluto> \
+  --role <papel> --session <nome> --model <modelo-observado> --effort <esforço-observado> \
   > <durable>/medicao/<name>-inicio.json
 ```
 
@@ -35,7 +38,7 @@ uv run --directory <hangar>/backend --no-sync python -m app.orq_consumo snapshot
 ## Report
 
 ```bash
-uv run --directory <hangar>/backend --no-sync python -m app.orq_consumo report \
+<hangar-server> usage report \
   --pair <durable>/medicao/<session1>-inicio.json <durable>/medicao/<session1>-fim.json \
   --pair <durable>/medicao/<session2>-inicio.json <durable>/medicao/<session2>-fim.json \
   > <durable>/medicao/relatorio.json

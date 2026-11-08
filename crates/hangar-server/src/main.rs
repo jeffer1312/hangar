@@ -12,6 +12,9 @@ fn main() -> std::process::ExitCode {
     }
     // `open`/`resolve`: o lançador como comando de terminal, com runtime próprio (fora do `run`).
     let args: Vec<String> = std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
+    if args.first().map(String::as_str) == Some("usage") {
+        return hangar_server::usage_cli::cli(&args[1..]);
+    }
     if matches!(args.first().map(String::as_str),Some("panel-data"|"panel-action")){
         return hangar_server::machine_peers::panel::cli(&args[0],&args[1..]);
     }

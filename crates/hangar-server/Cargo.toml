@@ -6,6 +6,10 @@ publish = false
 # Os testes de integração são um executável só (tests/it/) mais os que precisam de processo próprio.
 autotests = false
 
+[[test]]
+name = "usage_cli"
+path = "tests/usage_cli.rs"
+
 [[bin]]
 name = "hangar-dictation-fixture"
 path = "tests/fixtures/dictation_cli.rs"
