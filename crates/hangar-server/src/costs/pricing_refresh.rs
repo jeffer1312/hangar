@@ -119,6 +119,10 @@ impl PricingRefresh {
             // O snapshot usa o mesmo leitor: o que salva aqui é deixar o cache anterior de pé.
             Err(error) => return tracing::warn!("tarifas: formato do models.dev não reconhecido: {error}"),
         };
+        // Sem nenhum modelo conhecido, gravar deixaria os custos sem preço até o dia seguinte (D13).
+        if models.is_empty() {
+            return tracing::warn!("tarifas: models.dev sem modelo conhecido; tabela anterior mantida");
+        }
         let count = models.len();
         let text = hangar_core::pycompat::pyjson::dumps_unicode(&json!({"modelos": models}), false);
         if let Err(error) = write_atomic(&target, text.as_bytes()) {

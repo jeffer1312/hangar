@@ -342,13 +342,16 @@ mod refresh {
         }
     }
 
-    /// Paridade com o Python (corrigido depois pela D13): JSON válido sem modelo conhecido grava um catálogo vazio.
+    /// D13: JSON válido sem modelo conhecido (`{}`, `{"anthropic": 5}`) conserva a tabela anterior e avisa;
+    /// o Python gravava um catálogo vazio por cima.
     #[tokio::test]
-    async fn valid_answer_without_known_models_overwrites_the_cache() {
+    async fn valid_answer_without_known_models_keeps_the_previous_table() {
         for body in ["{}", r#"{"anthropic": 5}"#] {
             let r = run(Mode::Body(body), Some(true), 1).await;
-            assert_eq!(r.text().as_deref(), Some(r#"{"modelos": {}}"#), "{body}");
-            assert!(r.log.text().contains("tarifas: 0 modelos atualizados do models.dev"), "{}", r.log.text());
+            assert_eq!(r.text().as_deref(), Some(SEEDED), "{body}");
+            assert_eq!(r.mtime(), Some(UNIX_EPOCH + Duration::from_secs(JAN_1_2026)), "{body}");
+            assert!(r.log.text().contains("models.dev sem modelo conhecido; tabela anterior mantida"), "{}", r.log.text());
+            assert_eq!(run(Mode::Body(body), None, 1).await.text(), None, "{body}: sem cache, fica o snapshot");
         }
     }
 
