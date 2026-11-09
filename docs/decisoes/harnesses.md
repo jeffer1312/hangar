@@ -211,8 +211,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   bugs calados (binário próprio, raiz `~/.omp/agent`, sem `--session-id`, outros nomes de evento,
   subagente no mesmo processo). A raiz do agente omp é resolvida no `hangar-core`, pelo mesmo
   ambiente efetivo usado na lista, no lançamento e nas credenciais.
-- **A lista de modelos NUNCA é constante.** Conta Anthropic lê o picker ao vivo (cache de 1h,
-  porque ler dirige o terminal); sessão de motor usa `/v1/models` do provedor. `/model <id>`
+- **A lista de modelos NUNCA é constante.** Conta Anthropic consulta `list_models` pelo catálogo
+  compartilhado do Rust, com cache de 10 minutos invalidado pela troca do executável do Claude.
+  Atualizar catálogo força a consulta, sem dirigir o terminal; motor usa `/v1/models`. `/model <id>`
   grava default global — reponha o valor anterior.
 - **Antes de digitar no composer do Claude, ESVAZIE ele, e o rascunho do dono volta:** digitar por
   cima gruda as mensagens num Enter só e o reconcile reentrega. O escritor Rust guarda o rascunho

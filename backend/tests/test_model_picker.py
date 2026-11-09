@@ -323,20 +323,6 @@ def test_parse_model_rows_reads_fable_and_descriptions():
     assert rows[0]["name"] == "Default"  # "(recommended)" sai do nome exibido
 
 
-def test_list_model_options_reads_rows_and_closes_with_escape():
-    panes = [PANE_IDLE, PANE_FABLE]
-    with patch.object(terminal_input.tmux, "capture_pane", side_effect=panes), patch.object(
-        terminal_input, "send_keys"
-    ) as sk, patch.object(
-        terminal_input.tmux, "has_session", return_value=True
-    ), patch.object(terminal_input.time, "sleep"):
-        out = TerminalInput().list_model_options("cc")
-    assert [m["keyword"] for m in out["models"]] == ["default", "opus", "fable", "sonnet", "haiku"]
-    assert out["effort"] == "high"
-    keys = [c.args[1] for c in sk.call_args_list]
-    assert keys[:2] == ["/model", "Enter"]
-    assert keys[-1] == "Escape"      # so LE: fecha sem confirmar nada
-    assert "s" not in keys and keys.count("Enter") == 1
 
 
 def test_apply_aceita_a_variante_de_1m_e_recusa_lixo():
@@ -351,36 +337,8 @@ def test_apply_aceita_a_variante_de_1m_e_recusa_lixo():
             ti.set_model_effort("cc", model=mau, effort=None, scope="session")
 
 
-def test_list_model_options_refuses_while_working():
-    # Com o Claude trabalhando, digitar "/model" nao vira comando: cai no input e o Enter o
-    # ENFILEIRA como mensagem. O que prova "vivo" e a ANIMACAO — o texto do spinner muda entre as
-    # duas capturas.
-    panes = ["✻ Crunched for 24s\n❯ \n", "✻ Crunched for 26s\n❯ \n"]
-    with patch.object(terminal_input.tmux, "capture_pane", side_effect=panes), patch.object(
-        terminal_input, "send_keys"
-    ) as sk, patch.object(
-        terminal_input.tmux, "has_session", return_value=True
-    ), patch.object(terminal_input.time, "sleep"):
-        with pytest.raises(mp.PickerError) as ei:
-            TerminalInput().list_model_options("cc")
-    assert ei.value.status == 409
-    assert sk.call_args_list == []   # nao digitou NADA
 
 
-def test_list_model_options_aceita_marcador_de_turno_congelado():
-    # O bug medido: sessao que ACABOU de terminar fica com "✻ Crunched for 24s" na tela. Uma
-    # captura so nao distingue isso de spinner vivo (esta na docstring do state.classify) e a
-    # troca de modelo era recusada com "esta trabalhando" numa sessao parada.
-    congelado = "✻ Crunched for 24s\n❯ \n"
-    panes = [congelado, congelado, PANE_FABLE]
-    with patch.object(terminal_input.tmux, "capture_pane", side_effect=panes), patch.object(
-        terminal_input, "send_keys"
-    ) as sk, patch.object(
-        terminal_input.tmux, "has_session", return_value=True
-    ), patch.object(terminal_input.time, "sleep"):
-        out = TerminalInput().list_model_options("cc")
-    assert [m["keyword"] for m in out["models"]][:2] == ["default", "opus"]
-    assert [c.args[1] for c in sk.call_args_list][:2] == ["/model", "Enter"]
 
 
 # ── troca de modelo numa sessao de motor: `/model <id>`, sem picker ──────────
@@ -448,7 +406,6 @@ def test_drivers_do_model_pegam_o_lock_da_sessao():
     ti = TerminalInput()
     resultado = "❯ \n  ⎿  Set model to k3 and saved as your default for new sessions\n"
     chamadas = [
-        (lambda: ti.list_model_options("cc"), [PANE_IDLE, PANE_FABLE]),
         (lambda: ti.set_engine_model("cc", "k3"), [PANE_IDLE, resultado]),
         (lambda: ti.set_model_effort("cc", model="opus"),
          [PANE_IDLE, PANE_FABLE, PANE_FABLE,
@@ -481,37 +438,3 @@ def test_recusa_antes_de_digitar_e_uma_excecao_distinta():
          patch.object(terminal_input.time, "sleep"):
         with pytest.raises(TerminalInput.NaoDigitou):
             TerminalInput().set_engine_model("cc", "k3")
-
-
-def test_abrir_picker_insiste_na_leitura_antes_de_arriscar_um_2o_enter():
-    # O 2o Enter existe pro caso do autocomplete engolir o 1o. Mas se o picker JA abriu e a captura
-    # pegou o redraw pela metade, esse Enter confirma a linha sob o cursor COMO DEFAULT — trocando o
-    # modelo padrao do usuario num caminho que era pra ser so leitura (a folha busca a lista sozinha
-    # ao abrir). Entao: relê primeiro, e so manda o 2o Enter se o picker realmente nao veio.
-    meio_redraw = "❯ \n"                      # captura pegou a tela em transicao
-    panes = [PANE_IDLE, meio_redraw, PANE_FABLE]
-    with patch.object(terminal_input.tmux, "capture_pane", side_effect=panes), \
-         patch.object(terminal_input, "send_keys") as sk, \
-         patch.object(terminal_input.tmux, "has_session", return_value=True), \
-         patch.object(terminal_input.time, "sleep"):
-        out = TerminalInput().list_model_options("cc")
-    keys = [c.args[1] for c in sk.call_args_list]
-    assert keys.count("Enter") == 1           # NENHUM Enter extra
-    assert len(out["models"]) == 5
-
-
-def test_espera_o_picker_INTEIRO_antes_de_ler_a_lista():
-    # Medido numa sessao real: no instante em que o titulo aparece, as linhas ainda estao sendo
-    # pintadas — a leitura devolvia 4 modelos, sem o Haiku (a ultima linha). O rodape vem depois das
-    # linhas, entao ele e a prova de que a lista esta completa.
-    meio = PANE_FABLE.replace("     5. Haiku", "").replace(
-        "   Enter to set as default · s to use this session only · Esc to cancel", "")
-    assert mp.picker_open(meio) and not mp.picker_desenhado(meio)
-    panes = [PANE_IDLE, meio, PANE_FABLE]
-    with patch.object(terminal_input.tmux, "capture_pane", side_effect=panes), \
-         patch.object(terminal_input, "send_keys") as sk, \
-         patch.object(terminal_input.tmux, "has_session", return_value=True), \
-         patch.object(terminal_input.time, "sleep"):
-        out = TerminalInput().list_model_options("cc")
-    assert [m["keyword"] for m in out["models"]] == ["default", "opus", "fable", "sonnet", "haiku"]
-    assert [c.args[1] for c in sk.call_args_list].count("Enter") == 1

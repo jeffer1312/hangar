@@ -414,31 +414,6 @@ def paleta_vermelha():
 
 
 @pytest.fixture
-def models_cache_em_tmp(tmp_path, monkeypatch):
-    # O cache de modelos tem espelho em DISCO dentro do config dir (.hangar-models.json):
-    # sem o redirecionamento, os testes das rotas de model-options ESCREVEM no ~/.claude real de
-    # quem roda a suite, e os testes seguintes leem esse cache no lugar do mock. NAO e autouse
-    # global de proposito: a versao autouse derrubava os mocks de test_tmux quando rodava na
-    # suite cheia (interacao de fixtures via test_codex_adapter); cada arquivo que exercita as
-    # rotas liga o isolamento com um autouse local de uma linha (test_api.py e
-    # test_model_options_api.py).
-    from app import api
-
-    def _path_de_teste(chave: str):
-        # A chave e um CAMINHO (o config dir). Trocar so a barra bastava no POSIX; no Windows
-        # sobram `\` e o `:` do drive, que sao invalidos em nome de arquivo — o teste morria com
-        # WinError 123 antes de exercitar qualquer rota. `_sanitizar` tira tudo que nao serve pra
-        # nome, e o proposito continua o mesmo: um arquivo por chave, dentro do tmp_path.
-        seguro = "".join(c if c.isalnum() or c in "-._" else "_" for c in chave)
-        return tmp_path / f"models-{seguro}.json"
-
-    monkeypatch.setattr(api, "_models_cache_path", _path_de_teste)
-    api._claude_models_cache.clear()
-    yield
-    api._claude_models_cache.clear()
-
-
-@pytest.fixture
 def hangar_server_bin(monkeypatch, tmp_path):
     """O `hangar-server` desta cópia (`scripts/cargo-pinned build -p hangar-server`) para o que passa
     pelo `hangar-server conta`; nunca o `~/.hangar/bin` da casa."""

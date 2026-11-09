@@ -107,6 +107,21 @@ fn signature(home: &Path) -> Vec<Option<Vec<u8>>> {
     .collect()
 }
 
+fn claude_cli_signature(service: &AccountService) -> Option<Vec<u8>> {
+    let command = service.claude_command()?;
+    let command = command.as_std();
+    // O caminho real distingue versões do instalador; tamanho e data cobrem atualização no lugar.
+    // No Windows, o comando pode ser Node + cli.js: os dois arquivos pertencem à identidade.
+    let files = std::iter::once(command.get_program()).chain(command.get_args());
+    let mut identity = Vec::new();
+    for file in files {
+        let path = Path::new(file).canonicalize().ok()?;
+        let metadata = std::fs::metadata(&path).ok()?;
+        identity.push((path, metadata.len(), metadata.modified().ok()?));
+    }
+    serde_json::to_vec(&identity).ok()
+}
+
 pub fn codex_overrides(command: &mut tokio::process::Command) {
     let config: BTreeMap<String, Value> = serde_json::from_str(include_str!(
         "../../../../resources/dictation-codex-config.json"
@@ -226,6 +241,9 @@ impl Models {
         let key = (provider.to_owned(), context.home.clone());
         let mut sig = signature(&context.home);
         let account_signature = sig.clone();
+        if provider == "claude" && context.engine.is_none() {
+            sig.push(claude_cli_signature(service));
+        }
         if let Some(engine) = &context.engine {
             sig.push(Some(
                 ring::digest::digest(&ring::digest::SHA256, engine.to_string().as_bytes())
