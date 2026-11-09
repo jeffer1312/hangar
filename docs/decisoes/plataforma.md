@@ -1921,7 +1921,7 @@ campos nulos seguem os modelos Python.
 Com o Rust de pé, as quatro rotas são só dele (regra do dono único, 04/10/2026): uma tentativa
 por pedido; falha interna vira 503 com `error_code` e `detail.{code,params.motivo,msg}` (o
 envelope que o `lerErro` do app traduz), uma linha no `hangar-server.log` e o evento
-`rust.costs_failed` no diário pelo `POST /internal/diag`. Códigos fixos `costs_no_scopes`,
+`rust.costs_failed` gravado pelo próprio Rust no diário. Códigos fixos `costs_no_scopes`,
 `costs_no_disk`, `costs_reader_panic`, `costs_sqlite`, `costs_json`, `costs_worker_join`,
 `costs_io`, `costs_non_finite` e `internal_info`; o campo `sessao` do diário leva o nome da
 sessão no custo avulso e a rota (`costs`, `uso`, `cotacao`) nas outras, para uma não esconder a

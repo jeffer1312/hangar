@@ -40,7 +40,9 @@ impl Origin {
     async fn build(codex: bool, live: bool, router_only: bool) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let isolated = std::env::var_os("HANGAR_BATON_CHILD_ROOT").map(PathBuf::from);
-        let resolved = hangar_workspace::real(isolated.as_deref().unwrap_or(dir.path()));
+        // Forma longa: no Windows a pasta temporária pode vir curta (`RUNNER~1`), e o catálogo de contas,
+        // que o `config_dir` do pedido precisa igualar letra a letra, sai resolvido.
+        let resolved =hangar_workspace::real(isolated.as_deref().unwrap_or(dir.path()));
         let base = resolved.as_path();
         let (root, home) = (base.join("repo"), base.join("home"));
         std::fs::create_dir_all(&root).unwrap();
@@ -92,6 +94,7 @@ impl Origin {
         #[cfg(unix)]
         crate::write_executable(&mux, format!("#!/bin/sh\n[ \"$1\" = list-panes ] || exit 0\nprintf '%s' '{}'\n", pane.replace('\'', "'\\''")));
         #[cfg(windows)]
+        // `echo` sem nada imprime "ECHO is off."; sem pane, o script não imprime.
         std::fs::write(&mux, if pane.is_empty() { "@echo off\r\nexit /b 0\r\n".to_owned() } else {
             format!("@echo off\r\nif not \"%~1\"==\"list-panes\" exit /b 0\r\necho {}\r\n", pane.trim_end().replace('%', "%%"))
         }).unwrap();
