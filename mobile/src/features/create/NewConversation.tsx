@@ -454,6 +454,7 @@ export function NewConversation({
             if (!f) return;
             const mime = f.type || 'application/octet-stream';
             pick({ uri: f.uri, name: f.fileName, mime, kind: mime.startsWith('image/') ? 'image' : 'file', size: f.fileSize });
+            if (files.length > 1) setAttachError(m.nova_conversa_um_anexo());
           }} />
         {dictation.transcribing ? <Text style={styles.meta} accessibilityLiveRegion="polite">{m.composer_transcrevendo_audio()}</Text> : null}
         <ComposerActions attach={{ onPress: () => setAttachMenuOpen(true), disabled: busy || dictation.gravando }}

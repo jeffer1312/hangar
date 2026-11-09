@@ -58,13 +58,16 @@ pub fn transcript(env: &AccountEnvironment, spec: &SessionSpec, sid: &str) -> Pa
 }
 
 /// O `.jsonl` do sid na pasta do cwd ou, se lá não existe, em outra pasta de `projects`: o `--resume`
-/// aberto noutro cwd (pasta da sessão apagada) segue gravando no arquivo onde achou a conversa.
+/// aberto noutro cwd (pasta da sessão apagada) segue gravando no arquivo onde achou a conversa. Com o sid
+/// em mais de uma pasta, vale a cópia gravada por último: a outra parou de receber a conversa.
 pub(crate) fn transcript_in(base: &Path, cwd: &str, sid: &str) -> PathBuf {
     let expected = base.join(hangar_workspace::worktrees::sanitize_cwd(cwd)).join(format!("{sid}.jsonl"));
     if expected.exists() { return expected; }
     let moved = std::fs::read_dir(base).into_iter().flatten().flatten()
-        .map(|dir| dir.path().join(format!("{sid}.jsonl"))).find(|path| path.is_file());
-    moved.unwrap_or(expected)
+        .map(|dir| dir.path().join(format!("{sid}.jsonl")))
+        .filter_map(|path| path.metadata().ok().filter(|meta| meta.is_file()).and_then(|meta| meta.modified().ok()).map(|at| (at, path)))
+        .max_by_key(|(at, _)| *at);
+    moved.map_or(expected, |(_, path)| path)
 }
 
 /// `permissions.defaultMode` do `settings.json` da conta (a do servidor sem pasta própria), como a
@@ -434,6 +437,12 @@ mod tests {
         std::fs::create_dir_all(original.parent().unwrap()).unwrap();
         std::fs::write(&original, "").unwrap();
         assert_eq!(transcript_in(dir.path(), "/home/user", sid), original);
+        let stale = dir.path().join("-older-worktree").join(format!("{sid}.jsonl"));
+        std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
+        std::fs::write(&stale, "").unwrap();
+        let day_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(86_400);
+        std::fs::File::options().write(true).open(&stale).unwrap().set_modified(day_ago).unwrap();
+        assert_eq!(transcript_in(dir.path(), "/home/user", sid), original, "a cópia parada perde para a gravada por último");
         let fresh = "00000000-0000-0000-0000-000000000000";
         assert_eq!(transcript_in(dir.path(), "/home/user", fresh), dir.path().join("-home-user").join(format!("{fresh}.jsonl")));
     }
