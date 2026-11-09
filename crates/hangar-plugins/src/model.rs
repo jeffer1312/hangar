@@ -103,14 +103,6 @@ impl PluginId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
-
-    pub fn name(&self) -> &str {
-        self.0.split_once('@').map_or("", |(name, _)| name)
-    }
-
-    pub fn marketplace(&self) -> &str {
-        self.0.split_once('@').map_or("", |(_, origin)| origin)
-    }
 }
 
 impl std::str::FromStr for PluginId {
@@ -121,6 +113,13 @@ impl std::str::FromStr for PluginId {
 }
 
 impl std::str::FromStr for MarketplaceName {
+    type Err = InputError;
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        Self::parse(raw)
+    }
+}
+
+impl std::str::FromStr for MarketplaceSource {
     type Err = InputError;
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         Self::parse(raw)
@@ -207,8 +206,6 @@ mod tests {
             let id = PluginId::parse(raw).expect(raw);
             assert_eq!(id.as_str(), raw);
         }
-        let id = PluginId::parse("watch@claude-video").expect("id real");
-        assert_eq!((id.name(), id.marketplace()), ("watch", "claude-video"));
     }
 
     #[test]

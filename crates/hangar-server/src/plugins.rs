@@ -1,6 +1,6 @@
 //! Plugins do Claude Code da pasta principal (`~/.claude`) pela CLI oficial: só o dono, uma mudança
 //! por vez, e a mudança termina mesmo com o cliente fora.
-use std::{future::Future, net::SocketAddr, path::{Path, PathBuf}, sync::Arc, time::Duration};
+use std::{future::Future, net::SocketAddr, path::{Path, PathBuf}, str::FromStr, sync::Arc, time::Duration};
 
 use axum::{
     body::to_bytes,
@@ -11,7 +11,7 @@ use axum::{
 use hangar_core::http::{detail, json_response};
 use hangar_plugins::{
     AutoUpdateError, CliError, CliOutput, CliRunner, InputError, MarketplaceName, MarketplaceSource,
-    OperationResult, PluginId, Plugins, PluginsError, PluginsState, apply_auto_update,
+    OperationResult, PluginId, Plugins, PluginsError, PluginsState, apply_auto_update, read_state,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -23,10 +23,13 @@ use crate::{
     routes::{AppState, gate},
 };
 
-/// Variáveis que mudariam o que a CLI lê ou onde ela se pendura: plugins da sessão e o pane.
-const DROPPED_ENV: &[&str] = &["CLAUDE_CODE_PLUGIN_DIRS", "TMUX", "TMUX_PANE"];
-/// Sem atualização da própria CLI e sem tráfego que não seja o da operação (Task 1 Step 1).
-const QUIET_ENV: &[&str] = &["DISABLE_AUTOUPDATER", "DISABLE_UPDATES", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"];
+/// Toda chamada a `claude plugin` liga estas com `1`: sem atualização da própria CLI e sem tráfego que
+/// não seja o da operação.
+pub(crate) const QUIET_ENV: &[&str] = &["DISABLE_AUTOUPDATER", "DISABLE_UPDATES", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"];
+/// E tira esta: os plugins da sessão mudariam o que a CLI lê.
+pub(crate) const SESSION_PLUGINS_ENV: &str = "CLAUDE_CODE_PLUGIN_DIRS";
+/// O pane: a CLI se penduraria nele.
+const PANE_ENV: &[&str] = &["TMUX", "TMUX_PANE"];
 
 /// Estado do servidor: o cadeado das mudanças e o último `check` bem-sucedido.
 #[derive(Default)]
@@ -49,7 +52,7 @@ impl Runner {
         let mut env = state.accounts.env.clone();
         env.base.retain(|key, _| {
             let key = key.to_ascii_uppercase();
-            !DROPPED_ENV.contains(&key.as_str()) && !key.starts_with("CP_SESSION_")
+            key != SESSION_PLUGINS_ENV && !PANE_ENV.contains(&key.as_str()) && !key.starts_with("CP_SESSION_")
         });
         for key in QUIET_ENV {
             env.base.insert((*key).to_owned(), "1".to_owned());
@@ -113,27 +116,21 @@ enum PluginOp {
     Disable,
 }
 
+/// Erro já é resposta: o `?` devolve a recusa como está.
+type Reply = Result<Response, Response>;
+
 /// `GET /api/plugins`.
-pub async fn state(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, request: Request) -> Response {
-    if let Err(refused) = owner(&st, peer, &request).await {
-        return refused;
-    }
-    let context = Context::new(st);
-    match context.reread().await {
-        Ok(state) => json_response(StatusCode::OK, json!(state)),
-        Err(response) => response,
-    }
+pub async fn state(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, request: Request) -> Reply {
+    owner(&st, peer, &request).await?;
+    let state = Context::new(st).reread().await?;
+    Ok(json_response(StatusCode::OK, json!(state)))
 }
 
 /// `GET /api/plugins/available`.
-pub async fn available(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, request: Request) -> Response {
-    if let Err(refused) = owner(&st, peer, &request).await {
-        return refused;
-    }
-    match Context::new(st).plugins.available().await {
-        Ok(plugins) => json_response(StatusCode::OK, json!({"plugins": plugins})),
-        Err(error) => plugins_error(&error),
-    }
+pub async fn available(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, request: Request) -> Reply {
+    owner(&st, peer, &request).await?;
+    let plugins = Context::new(st).plugins.available().await.map_err(plugins_error)?;
+    Ok(json_response(StatusCode::OK, json!({"plugins": plugins})))
 }
 
 /// `GET /api/plugins/{id}/details`.
@@ -142,27 +139,18 @@ pub async fn details(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     RoutePath(raw): RoutePath<String>,
     request: Request,
-) -> Response {
-    if let Err(refused) = owner(&st, peer, &request).await {
-        return refused;
-    }
-    let id = match raw.parse::<PluginId>() {
-        Ok(id) => id,
-        Err(error) => return input_error(error),
-    };
-    match Context::new(st).plugins.details(&id).await {
-        Ok(details) => json_response(StatusCode::OK, json!(details)),
-        Err(error) => plugins_error(&error),
-    }
+) -> Reply {
+    owner(&st, peer, &request).await?;
+    let id: PluginId = parsed(&raw)?;
+    let details = Context::new(st).plugins.details(&id).await.map_err(plugins_error)?;
+    Ok(json_response(StatusCode::OK, json!(details)))
 }
 
 /// `POST /api/plugins/check`: baixa todos os marketplaces e guarda a hora do sucesso.
-pub async fn check(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, request: Request) -> Response {
-    if let Err(refused) = owner(&st, peer, &request).await {
-        return refused;
-    }
+pub async fn check(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, request: Request) -> Reply {
+    owner(&st, peer, &request).await?;
     mutate(st, move |context| async move {
-        context.plugins.check().await.map_err(|error| plugins_error(&error))?;
+        context.plugins.check().await.map_err(plugins_error)?;
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         *context.app.claude_plugins.checked_at.lock().unwrap_or_else(|e| e.into_inner()) = Some(now);
         Ok(None)
@@ -170,19 +158,19 @@ pub async fn check(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectIn
     .await
 }
 
-pub async fn install(st: State<Arc<AppState>>, peer: ConnectInfo<SocketAddr>, id: RoutePath<String>, request: Request) -> Response {
+pub async fn install(st: State<Arc<AppState>>, peer: ConnectInfo<SocketAddr>, id: RoutePath<String>, request: Request) -> Reply {
     plugin_op(PluginOp::Install, st, peer, id, request).await
 }
 
-pub async fn update(st: State<Arc<AppState>>, peer: ConnectInfo<SocketAddr>, id: RoutePath<String>, request: Request) -> Response {
+pub async fn update(st: State<Arc<AppState>>, peer: ConnectInfo<SocketAddr>, id: RoutePath<String>, request: Request) -> Reply {
     plugin_op(PluginOp::Update, st, peer, id, request).await
 }
 
-pub async fn enable(st: State<Arc<AppState>>, peer: ConnectInfo<SocketAddr>, id: RoutePath<String>, request: Request) -> Response {
+pub async fn enable(st: State<Arc<AppState>>, peer: ConnectInfo<SocketAddr>, id: RoutePath<String>, request: Request) -> Reply {
     plugin_op(PluginOp::Enable, st, peer, id, request).await
 }
 
-pub async fn disable(st: State<Arc<AppState>>, peer: ConnectInfo<SocketAddr>, id: RoutePath<String>, request: Request) -> Response {
+pub async fn disable(st: State<Arc<AppState>>, peer: ConnectInfo<SocketAddr>, id: RoutePath<String>, request: Request) -> Reply {
     plugin_op(PluginOp::Disable, st, peer, id, request).await
 }
 
@@ -193,17 +181,12 @@ pub async fn uninstall(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     RoutePath(raw): RoutePath<String>,
     request: Request,
-) -> Response {
-    if let Err(refused) = owner(&st, peer, &request).await {
-        return refused;
-    }
-    let id = match raw.parse::<PluginId>() {
-        Ok(id) => id,
-        Err(error) => return input_error(error),
-    };
+) -> Reply {
+    owner(&st, peer, &request).await?;
+    let id: PluginId = parsed(&raw)?;
     mutate(st, move |context| async move {
         context.settings_writable().await?;
-        let result = context.plugins.uninstall(&id).await.map_err(|error| plugins_error(&error))?;
+        let result = context.plugins.uninstall(&id).await.map_err(plugins_error)?;
         context.disable_in_settings(vec![id.as_str().to_owned()]).await?;
         Ok(Some(result))
     })
@@ -211,22 +194,11 @@ pub async fn uninstall(
 }
 
 /// `POST /api/plugins/marketplaces` `{source}`.
-pub async fn marketplace_add(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, request: Request) -> Response {
-    if let Err(refused) = owner(&st, peer, &request).await {
-        return refused;
-    }
-    let body = match read_body::<SourceBody>(request).await {
-        Ok(body) => body,
-        Err(response) => return response,
-    };
-    let source = match MarketplaceSource::parse(&body.source) {
-        Ok(source) => source,
-        Err(error) => return input_error(error),
-    };
-    mutate(st, move |context| async move {
-        context.plugins.marketplace_add(&source).await.map(Some).map_err(|error| plugins_error(&error))
-    })
-    .await
+pub async fn marketplace_add(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, request: Request) -> Reply {
+    owner(&st, peer, &request).await?;
+    let body: SourceBody = read_body(request).await?;
+    let source: MarketplaceSource = parsed(&body.source)?;
+    mutate(st, move |context| async move { context.plugins.marketplace_add(&source).await.map(Some).map_err(plugins_error) }).await
 }
 
 /// `POST /api/plugins/marketplaces/{name}/update`.
@@ -235,18 +207,10 @@ pub async fn marketplace_update(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     RoutePath(raw): RoutePath<String>,
     request: Request,
-) -> Response {
-    if let Err(refused) = owner(&st, peer, &request).await {
-        return refused;
-    }
-    let name = match raw.parse::<MarketplaceName>() {
-        Ok(name) => name,
-        Err(error) => return input_error(error),
-    };
-    mutate(st, move |context| async move {
-        context.plugins.marketplace_update(&name).await.map(Some).map_err(|error| plugins_error(&error))
-    })
-    .await
+) -> Reply {
+    owner(&st, peer, &request).await?;
+    let name: MarketplaceName = parsed(&raw)?;
+    mutate(st, move |context| async move { context.plugins.marketplace_update(&name).await.map(Some).map_err(plugins_error) }).await
 }
 
 /// `DELETE /api/plugins/marketplaces/{name}`: os plugins dele que estavam instalados ficam `false`
@@ -256,20 +220,15 @@ pub async fn marketplace_remove(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     RoutePath(raw): RoutePath<String>,
     request: Request,
-) -> Response {
-    if let Err(refused) = owner(&st, peer, &request).await {
-        return refused;
-    }
-    let name = match raw.parse::<MarketplaceName>() {
-        Ok(name) => name,
-        Err(error) => return input_error(error),
-    };
+) -> Reply {
+    owner(&st, peer, &request).await?;
+    let name: MarketplaceName = parsed(&raw)?;
     mutate(st, move |context| async move {
         context.settings_writable().await?;
         let before = context.reread().await?;
         let removed: Vec<String> =
             before.plugins.into_iter().filter(|plugin| plugin.marketplace == name.as_str()).map(|plugin| plugin.id).collect();
-        let result = context.plugins.marketplace_remove(&name).await.map_err(|error| plugins_error(&error))?;
+        let result = context.plugins.marketplace_remove(&name).await.map_err(plugins_error)?;
         if !removed.is_empty() {
             context.disable_in_settings(removed).await?;
         }
@@ -284,18 +243,10 @@ pub async fn auto_update(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     RoutePath(raw): RoutePath<String>,
     request: Request,
-) -> Response {
-    if let Err(refused) = owner(&st, peer, &request).await {
-        return refused;
-    }
-    let name = match raw.parse::<MarketplaceName>() {
-        Ok(name) => name,
-        Err(error) => return input_error(error),
-    };
-    let body = match read_body::<AutoUpdateBody>(request).await {
-        Ok(body) => body,
-        Err(response) => return response,
-    };
+) -> Reply {
+    owner(&st, peer, &request).await?;
+    let name: MarketplaceName = parsed(&raw)?;
+    let body: AutoUpdateBody = read_body(request).await?;
     mutate(st, move |context| async move {
         let settings = context.settings_path();
         let backups = context.backups.clone();
@@ -329,14 +280,9 @@ async fn plugin_op(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     RoutePath(raw): RoutePath<String>,
     request: Request,
-) -> Response {
-    if let Err(refused) = owner(&st, peer, &request).await {
-        return refused;
-    }
-    let id = match raw.parse::<PluginId>() {
-        Ok(id) => id,
-        Err(error) => return input_error(error),
-    };
+) -> Reply {
+    owner(&st, peer, &request).await?;
+    let id: PluginId = parsed(&raw)?;
     mutate(st, move |context| async move {
         let result = match op {
             PluginOp::Install => context.plugins.install(&id).await,
@@ -344,20 +290,20 @@ async fn plugin_op(
             PluginOp::Enable => context.plugins.enable(&id).await,
             PluginOp::Disable => context.plugins.disable(&id).await,
         };
-        result.map(Some).map_err(|error| plugins_error(&error))
+        result.map(Some).map_err(plugins_error)
     })
     .await
 }
 
 /// Uma mudança por servidor. Ela roda numa tarefa própria que leva o cadeado: o cliente que cai
 /// não mata a CLI pela metade (a captura encerra o filho quando quem espera desiste).
-async fn mutate<F, Fut>(st: Arc<AppState>, change: F) -> Response
+async fn mutate<F, Fut>(st: Arc<AppState>, change: F) -> Reply
 where
     F: FnOnce(Arc<Context>) -> Fut + Send + 'static,
     Fut: Future<Output = Change> + Send + 'static,
 {
     let Ok(guard) = st.claude_plugins.busy.clone().try_lock_owned() else {
-        return failure(StatusCode::CONFLICT, "plugins_busy", None);
+        return Err(failure(StatusCode::CONFLICT, "plugins_busy", None));
     };
     let context = Arc::new(Context::new(st));
     let task = tokio::spawn(async move {
@@ -370,13 +316,7 @@ where
         }
         Ok::<_, Response>(json_response(StatusCode::OK, body))
     });
-    match task.await {
-        Ok(Ok(response) | Err(response)) => response,
-        Err(error) => {
-            tracing::warn!(code = "plugins_task_failed", %error, "plugins: a tarefa da mudança caiu");
-            failure(StatusCode::BAD_GATEWAY, "plugins_cli_failed", Some(&error.to_string()))
-        }
-    }
+    task.await.unwrap_or_else(|error| Err(task_failed(&error)))
 }
 
 impl Context {
@@ -398,7 +338,12 @@ impl Context {
     /// Sempre do disco: a CLI, o `/plugin` das sessões e o omp-sync gravam os mesmos arquivos.
     async fn reread(&self) -> Result<PluginsState, Response> {
         let settings = read_settings(&self.settings_path()).await;
-        let mut state = self.plugins.state(&self.main_dir, &settings).await.map_err(|error| plugins_error(&error))?;
+        let installed = self.plugins.installed().await.map_err(plugins_error)?;
+        let main_dir = self.main_dir.clone();
+        // Lê o catálogo e o clone de cada marketplace: fora das threads do runtime.
+        let mut state = tokio::task::spawn_blocking(move || read_state(&main_dir, &settings, &installed))
+            .await
+            .map_err(|error| task_failed(&error))?;
         state.checked_at = self.app.claude_plugins.checked_at.lock().unwrap_or_else(|e| e.into_inner()).clone();
         Ok(state)
     }
@@ -474,13 +419,18 @@ fn settings_written(result: Result<Result<bool, EditError>, tokio::task::JoinErr
     }
 }
 
-fn input_error(error: InputError) -> Response {
-    failure(StatusCode::UNPROCESSABLE_ENTITY, error.code(), None)
+/// Caminho ou corpo fora do formato: 422 com o código da entrada.
+fn parsed<T: FromStr<Err = InputError>>(raw: &str) -> Result<T, Response> {
+    raw.parse().map_err(|error: InputError| failure(StatusCode::UNPROCESSABLE_ENTITY, error.code(), None))
 }
 
-fn plugins_error(error: &PluginsError) -> Response {
+fn task_failed(error: &tokio::task::JoinError) -> Response {
+    tracing::warn!(code = "plugins_task_failed", %error, "plugins: a tarefa caiu");
+    failure(StatusCode::BAD_GATEWAY, "plugins_cli_failed", Some(&error.to_string()))
+}
+
+fn plugins_error(error: PluginsError) -> Response {
     let status = match error {
-        PluginsError::Input(_) => StatusCode::UNPROCESSABLE_ENTITY,
         PluginsError::NotFound(_) | PluginsError::UnknownMarketplace(_) => StatusCode::NOT_FOUND,
         PluginsError::BuiltinLocked | PluginsError::NeedsReview(_) => StatusCode::CONFLICT,
         PluginsError::CliMissing => StatusCode::SERVICE_UNAVAILABLE,
@@ -498,16 +448,5 @@ fn failure(status: StatusCode, code: &str, message: Option<&str>) -> Response {
 
 /// O Rust responde a família inteira, inclusive o método recusado (405): nada vai ao Python.
 pub fn matches(path: &str) -> bool {
-    let Some(rest) = path.strip_prefix("/api/plugins") else { return false };
-    if rest.is_empty() {
-        return true;
-    }
-    let Some(rest) = rest.strip_prefix('/') else { return false };
-    let parts: Vec<&str> = rest.split('/').collect();
-    match parts.as_slice() {
-        [_] => true,
-        [_, "details" | "install" | "update" | "enable" | "disable"] => true,
-        ["marketplaces", _] | ["marketplaces", _, "update" | "auto-update"] => true,
-        _ => false,
-    }
+    path == "/api/plugins" || path.starts_with("/api/plugins/")
 }

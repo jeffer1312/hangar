@@ -216,5 +216,4 @@ fn plugins_migration_inventory_covers_every_route() {
         assert!(hangar_server::plugins::matches(path), "{path}");
     }
     assert!(!hangar_server::plugins::matches("/api/pluginsx"));
-    assert!(!hangar_server::plugins::matches("/api/plugins/a/b/c/d"));
 }

@@ -1,4 +1,6 @@
 //! Leitura do estado dos plugins no disco da pasta principal, sem executar git nem a CLI.
+use std::cell::OnceCell;
+use std::collections::HashMap;
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
@@ -80,10 +82,15 @@ pub fn read_state(main_dir: &Path, settings: &Value, installed_cli: &[CliInstall
         .and_then(|value| value.as_object().cloned())
         .unwrap_or_default();
     let declared = settings.get("extraKnownMarketplaces").and_then(Value::as_object);
+    let mut clones: HashMap<&str, Option<MarketplaceClone>> = HashMap::new();
     let plugins = installed_cli
         .iter()
         .filter(|plugin| plugin.scope == "user")
-        .map(|plugin| installed(plugin, &known))
+        .map(|plugin| {
+            let (name, marketplace) = plugin.id.split_once('@').unwrap_or((plugin.id.as_str(), ""));
+            let clone = clones.entry(marketplace).or_insert_with(|| MarketplaceClone::read(&known, marketplace));
+            installed(plugin, name, marketplace, clone.as_ref())
+        })
         .collect();
     let mut marketplaces: Vec<Marketplace> = known
         .iter()
@@ -107,12 +114,12 @@ pub fn read_state(main_dir: &Path, settings: &Value, installed_cli: &[CliInstall
 /// Versão que o `claude plugin update` compararia: `plugin.json` no clone, senão o `version` da
 /// entrada, senão 12 caracteres do `HEAD` do clone. Fonte fora do clone (objeto) dá `None`: a versão
 /// dela é a do `plugin.json` no commit remoto, que o disco não tem.
-pub fn source_version(marketplace_dir: &Path, entry: &Value) -> Option<String> {
+fn source_version(marketplace_dir: &Path, entry: &Value, head: impl FnOnce() -> Option<String>) -> Option<String> {
     let plugin_dir = inside(marketplace_dir, entry.get("source")?.as_str()?)?;
     read_json(&plugin_dir.join(".claude-plugin/plugin.json"))
         .and_then(|manifest| text(&manifest, "version"))
         .or_else(|| text(entry, "version"))
-        .or_else(|| head_sha(marketplace_dir).map(|sha| sha[..12].to_owned()))
+        .or_else(|| head().map(|sha| sha[..12].to_owned()))
 }
 
 /// # Errors
@@ -133,14 +140,36 @@ pub fn apply_auto_update(settings: &mut Value, name: &MarketplaceName, enabled: 
     Ok(())
 }
 
-fn installed(plugin: &CliInstalled, known: &Map<String, Value>) -> InstalledPlugin {
-    let (name, marketplace) = plugin.id.split_once('@').unwrap_or((plugin.id.as_str(), ""));
-    let clone = known
-        .get(marketplace)
-        .and_then(|entry| text(entry, "installLocation"))
-        .map(PathBuf::from);
-    let entry = clone.as_deref().and_then(|dir| catalog_entry(dir, name));
-    let source = clone.as_deref().zip(entry.as_ref()).and_then(|(dir, entry)| source_version(dir, entry));
+/// O clone de um marketplace, lido uma vez por leitura: o catálogo já aberto e o `HEAD` só se alguém pedir.
+struct MarketplaceClone {
+    dir: PathBuf,
+    catalog: Vec<Value>,
+    head: OnceCell<Option<String>>,
+}
+
+impl MarketplaceClone {
+    /// `None` sem clone registrado ou sem catálogo legível: nada do marketplace é conhecido.
+    fn read(known: &Map<String, Value>, marketplace: &str) -> Option<Self> {
+        let dir = PathBuf::from(text(known.get(marketplace)?, "installLocation")?);
+        let mut catalog = read_json(&dir.join(".claude-plugin/marketplace.json"))
+            .or_else(|| read_json(&dir.join("marketplace.json")))?;
+        let Value::Array(catalog) = catalog.get_mut("plugins")?.take() else { return None };
+        Some(Self { dir, catalog, head: OnceCell::new() })
+    }
+
+    fn entry(&self, name: &str) -> Option<&Value> {
+        self.catalog.iter().find(|entry| entry.get("name").and_then(Value::as_str) == Some(name))
+    }
+
+    fn head(&self) -> Option<String> {
+        self.head.get_or_init(|| head_sha(&self.dir)).clone()
+    }
+}
+
+fn installed(plugin: &CliInstalled, name: &str, marketplace: &str, clone: Option<&MarketplaceClone>) -> InstalledPlugin {
+    let entry = clone.and_then(|clone| clone.entry(name).map(|entry| (clone, entry)));
+    let source = entry.and_then(|(clone, entry)| source_version(&clone.dir, entry, || clone.head()));
+    let entry = entry.map(|(_, entry)| entry);
     InstalledPlugin {
         id: plugin.id.clone(),
         name: name.to_owned(),
@@ -150,7 +179,7 @@ fn installed(plugin: &CliInstalled, known: &Map<String, Value>) -> InstalledPlug
         enabled: plugin.enabled,
         update_known: source.is_some(),
         available_version: newer(&plugin.version, source),
-        description: entry.as_ref().and_then(|entry| text(entry, "description")),
+        description: entry.and_then(|entry| text(entry, "description")),
         notes: plugin.notes.clone(),
     }
 }
@@ -193,17 +222,6 @@ fn auto_update(name: &str, entry: &Value, declared: Option<bool>) -> bool {
         })
 }
 
-fn catalog_entry(clone: &Path, name: &str) -> Option<Value> {
-    let catalog = read_json(&clone.join(".claude-plugin/marketplace.json"))
-        .or_else(|| read_json(&clone.join("marketplace.json")))?;
-    catalog
-        .get("plugins")?
-        .as_array()?
-        .iter()
-        .find(|entry| entry.get("name").and_then(Value::as_str) == Some(name))
-        .cloned()
-}
-
 fn newer(installed: &str, source: Option<String>) -> Option<String> {
     source.filter(|version| version != installed)
 }
@@ -220,11 +238,17 @@ fn head_sha(clone: &Path) -> Option<String> {
     let git = clone.join(".git");
     let head = read_text(&git.join("HEAD"))?;
     let sha = match head.trim().strip_prefix("ref: ") {
+        // O `HEAD` vem do clone: a ref só vale dentro de `.git/refs`.
+        Some(name) if !valid_ref(name) => return None,
         Some(name) => read_text(&git.join(name)).or_else(|| packed_ref(&git, name))?,
         None => head,
     };
     let sha = sha.trim();
     (sha.len() >= 12 && sha.bytes().all(|b| b.is_ascii_hexdigit())).then(|| sha.to_owned())
+}
+
+fn valid_ref(name: &str) -> bool {
+    name.starts_with("refs/") && Path::new(name).components().all(|part| matches!(part, Component::Normal(_)))
 }
 
 fn packed_ref(git: &Path, name: &str) -> Option<String> {
@@ -265,6 +289,10 @@ mod tests {
 
     const SHA: &str = "a3829a90c85c7ac558ce67c425dbb613fca8b085";
 
+    fn version(dir: &Path, entry: &Value) -> Option<String> {
+        source_version(dir, entry, || head_sha(dir))
+    }
+
     fn write(path: &Path, text: &str) {
         fs::create_dir_all(path.parent().expect("pai")).expect("pasta");
         fs::write(path, text).expect("escrita");
@@ -275,7 +303,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("pasta");
         write(&dir.path().join("plugins/x/.claude-plugin/plugin.json"), r#"{"name":"x","version":"1.1.0"}"#);
         let entry = json!({"name": "x", "source": "./plugins/x", "version": "0.9.0"});
-        assert_eq!(source_version(dir.path(), &entry).as_deref(), Some("1.1.0"));
+        assert_eq!(version(dir.path(),&entry).as_deref(), Some("1.1.0"));
     }
 
     #[test]
@@ -283,7 +311,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("pasta");
         write(&dir.path().join(".claude-plugin/plugin.json"), r#"{"name":"ui-ux-pro-max"}"#);
         let entry = json!({"name": "ui-ux-pro-max", "source": "./", "version": "2.15.0"});
-        assert_eq!(source_version(dir.path(), &entry).as_deref(), Some("2.15.0"));
+        assert_eq!(version(dir.path(),&entry).as_deref(), Some("2.15.0"));
     }
 
     #[test]
@@ -293,7 +321,7 @@ mod tests {
         write(&dir.path().join(".git/HEAD"), "ref: refs/heads/main\n");
         write(&dir.path().join(".git/refs/heads/main"), &format!("{SHA}\n"));
         let entry = json!({"name": "acme", "source": "./plugin"});
-        assert_eq!(source_version(dir.path(), &entry).as_deref(), Some("a3829a90c85c"));
+        assert_eq!(version(dir.path(),&entry).as_deref(), Some("a3829a90c85c"));
     }
 
     #[test]
@@ -305,7 +333,7 @@ mod tests {
             &format!("# pack-refs with: peeled fully-peeled sorted \n1111111111111111111111111111111111111111 refs/remotes/origin/main\n{SHA} refs/heads/main\n"),
         );
         let entry = json!({"name": "acme", "source": "./"});
-        assert_eq!(source_version(dir.path(), &entry).as_deref(), Some("a3829a90c85c"));
+        assert_eq!(version(dir.path(),&entry).as_deref(), Some("a3829a90c85c"));
     }
 
     #[test]
@@ -313,7 +341,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("pasta");
         write(&dir.path().join(".git/HEAD"), &format!("{SHA}\n"));
         let entry = json!({"name": "x", "source": "./"});
-        assert_eq!(source_version(dir.path(), &entry).as_deref(), Some("a3829a90c85c"));
+        assert_eq!(version(dir.path(),&entry).as_deref(), Some("a3829a90c85c"));
     }
 
     #[test]
@@ -324,8 +352,8 @@ mod tests {
             "source": {"source": "url", "url": "https://github.com/obra/superpowers.git", "sha": "bb92a77741419a4ab5f06e711a283343f1ada0c3"}});
         let subdir = json!({"name": "adobe", "version": "1.0.0",
             "source": {"source": "git-subdir", "url": "https://github.com/adobe/skills.git", "path": "plugins/x"}});
-        assert_eq!(source_version(dir.path(), &url), None);
-        assert_eq!(source_version(dir.path(), &subdir), None);
+        assert_eq!(version(dir.path(),&url), None);
+        assert_eq!(version(dir.path(),&subdir), None);
     }
 
     #[test]
@@ -335,7 +363,17 @@ mod tests {
         let clone = dir.path().join("clone");
         write(&clone.join(".git/HEAD"), &format!("{SHA}\n"));
         let entry = json!({"name": "x", "source": "../fora"});
-        assert_eq!(source_version(&clone, &entry), None);
+        assert_eq!(version(&clone, &entry), None);
+    }
+
+    #[test]
+    fn head_ref_outside_refs_is_ignored() {
+        let dir = tempfile::tempdir().expect("pasta");
+        write(&dir.path().join("fora"), &format!("{SHA}\n"));
+        for head in ["ref: ../fora\n", "ref: refs/../../fora\n", "ref: /etc/hostname\n", "ref: HEAD\n"] {
+            write(&dir.path().join(".git/HEAD"), head);
+            assert_eq!(head_sha(dir.path()), None, "{head}");
+        }
     }
 
     /// Trechos de `claude plugin list --json` (2.1.319) desta máquina.

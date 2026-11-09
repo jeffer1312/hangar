@@ -1,7 +1,7 @@
 //! Operações pela CLI `claude plugin`. Nenhuma relê o estado depois de mudar: quem chama faz um
-//! [`Plugins::state`] em seguida, porque a releitura precisa do `settings.json` que o servidor lê.
+//! [`Plugins::installed`] e um [`crate::read_state`] em seguida, porque a releitura precisa do
+//! `settings.json` que o servidor lê.
 use std::fmt;
-use std::path::Path;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -9,18 +9,14 @@ use serde_json::Value;
 
 use crate::cli::{AVAILABLE, CliError, CliOutput, CliRunner, DOWNLOAD, SHORT};
 use crate::details;
-use crate::disk::{CliInstalled, read_state};
-use crate::model::{
-    AvailablePlugin, InputError, MarketplaceName, MarketplaceSource, OperationResult, PluginDetails, PluginId,
-    PluginsState,
-};
+use crate::disk::CliInstalled;
+use crate::model::{AvailablePlugin, MarketplaceName, MarketplaceSource, OperationResult, PluginDetails, PluginId};
 
 use crate::disk::BUILTIN;
 
 /// Um erro por código do contrato HTTP; `message` vai em `params.message`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginsError {
-    Input(InputError),
     NotFound(String),
     UnknownMarketplace(String),
     BuiltinLocked,
@@ -55,7 +51,6 @@ struct CliAvailable {
 impl PluginsError {
     pub fn code(&self) -> &'static str {
         match self {
-            Self::Input(error) => error.code(),
             Self::NotFound(_) => "plugins_not_found",
             Self::UnknownMarketplace(_) => "plugins_unknown_marketplace",
             Self::BuiltinLocked => "plugins_builtin_locked",
@@ -71,7 +66,7 @@ impl PluginsError {
             Self::NotFound(text) | Self::UnknownMarketplace(text) | Self::CliFailed(text) | Self::NeedsReview(text) => {
                 Some(text)
             }
-            Self::Input(_) | Self::BuiltinLocked | Self::CliMissing | Self::CliTimeout => None,
+            Self::BuiltinLocked | Self::CliMissing | Self::CliTimeout => None,
         }
     }
 }
@@ -81,19 +76,19 @@ impl<R: CliRunner> Plugins<R> {
         Self { runner }
     }
 
-    /// `plugin list --json` junto ao disco da pasta principal; `checked_at` sai `None` (é do servidor).
+    /// `plugin list --json`, para o [`crate::read_state`] juntar ao disco da pasta principal (leitura
+    /// bloqueante, que fica com quem chama).
     ///
     /// # Errors
     ///
     /// Falha da CLI ou lista ilegível.
-    pub async fn state(&self, main_dir: &Path, settings: &Value) -> Result<PluginsState, PluginsError> {
+    pub async fn installed(&self) -> Result<Vec<CliInstalled>, PluginsError> {
         let output = self.runner.run(&["plugin", "list", "--json"], SHORT).await?;
         if !output.success {
             return Err(PluginsError::CliFailed(failure_text(&output)));
         }
-        let installed: Vec<CliInstalled> = serde_json::from_str(output.stdout.trim())
-            .map_err(|error| PluginsError::CliFailed(format!("plugin list --json: {error}")))?;
-        Ok(read_state(main_dir, settings, &installed))
+        serde_json::from_str(output.stdout.trim())
+            .map_err(|error| PluginsError::CliFailed(format!("plugin list --json: {error}")))
     }
 
     /// Atualiza todos os marketplaces. Sem nome a CLI recusa `--json`, então vale o código de saída.
@@ -219,12 +214,6 @@ impl<R: CliRunner> Plugins<R> {
     async fn mutate(&self, args: &[&str], timeout: Duration) -> Result<OperationResult, PluginsError> {
         let output = self.runner.run(args, timeout).await?;
         operation_result(&output)
-    }
-}
-
-impl From<InputError> for PluginsError {
-    fn from(error: InputError) -> Self {
-        Self::Input(error)
     }
 }
 
@@ -572,12 +561,13 @@ mod tests {
     fn state_reads_cli_list_and_keeps_user_scope() {
         let dir = tempfile::tempdir().expect("pasta temporária");
         let plugins = plugins(vec![out(true, LIST, ""), out(false, "", "✘ quebrou")]);
-        let state = block_on(plugins.state(dir.path(), &serde_json::json!({}))).expect("estado");
+        let installed = block_on(plugins.installed()).expect("lista");
+        let state = crate::read_state(dir.path(), &serde_json::json!({}), &installed);
         assert_eq!(state.plugins.len(), 1);
         assert_eq!((state.plugins[0].id.as_str(), state.plugins[0].last_updated.as_str()), ("caveman@caveman", "2026-11-07T04:43:45.891Z"));
         assert_eq!(state.checked_at, None);
         assert_eq!(calls(&plugins), vec![(argv(&["plugin", "list", "--json"]), SHORT)]);
-        assert_eq!(block_on(plugins.state(dir.path(), &serde_json::json!({}))), Err(PluginsError::CliFailed("quebrou".into())));
+        assert_eq!(block_on(plugins.installed()), Err(PluginsError::CliFailed("quebrou".into())));
     }
 
     #[test]

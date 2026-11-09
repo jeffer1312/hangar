@@ -266,6 +266,11 @@ const IDLE_COMPACT_BEFORE:Duration = Duration::from_secs(59 * 60);
 /// Compactada parada, a sessão não tem mais por que esperar a hora inteira para estacionar.
 const PARK_AFTER_IDLE_COMPACT:Duration = Duration::from_secs(60);
 
+/// A conta e a pasta do Claude sem terminal que vai subir, como o sidecar as grava.
+async fn reconcile_sidecar_account(policy:&PolicyClient,metadata:&Value) -> Result<Vec<String>,RuntimeError> {
+    super::claude_reopen::reconcile_account(&policy.codex_environment(),metadata["config_dir"].as_str(),metadata["cwd"].as_str().unwrap_or_default()).await
+}
+
 /// Regra 1 do módulo de processo: cano gravado `Ours` conecta (mesmo sem `versao`); morto, de outro
 /// programa (pid reaproveitado) ou ausente, sobe outro com o ambiente calculado agora (nunca
 /// guardado): o Codex por `codex_launch`, o Claude pelo spec da sessão (`claude_launch`).
@@ -276,10 +281,7 @@ pub(super) async fn launch_if_needed(policy:&PolicyClient,target:&mut RuntimeTar
         let state = tokio::task::spawn_blocking(move||process::liveness(recorded,&key)).await.map_err(|_|failure("launch_job"))?;
         if state == process::Liveness::Ours { return Ok(None); }
     }
-    if target.provider == "claude" {
-        let cwd = target.metadata["cwd"].as_str().unwrap_or_default();
-        super::claude_reopen::reconcile_account(&policy.codex_environment(),target.metadata["config_dir"].as_str(),cwd).await?;
-    }
+    if target.provider == "claude" { reconcile_sidecar_account(policy,&target.metadata).await?; }
     let (base,dir,mut meta) = (policy.codex_environment(),sidecar_dir.to_owned(),target.metadata.clone());
     if let Value::Object(fields) = &mut meta { fields.insert("name".into(),json!(target.name)); fields.insert("key".into(),json!(target.key)); }
     let (claude,bridge,name,runtime) = (target.provider == "claude",policy.plugin_bridge(),target.name.clone(),tokio::runtime::Handle::current());
@@ -2729,7 +2731,7 @@ impl RuntimeRegistry {
             Arc::new(recipe)
         };
         let sidecar_dir=super::lifecycle::claude_sidecar_dir()?;
-        super::claude_reopen::reconcile_account(&self.policy.codex_environment(),target.metadata["config_dir"].as_str(),target.metadata["cwd"].as_str().unwrap_or_default()).await?;
+        reconcile_sidecar_account(&self.policy,&target.metadata).await?;
         // A vida nova sai do spec da sessão com a configuração de agora, nunca da receita do processo que
         // morre: a mesma conversa, o modo pedido e o modelo e o esforço que ela usava.
         let prepared={
