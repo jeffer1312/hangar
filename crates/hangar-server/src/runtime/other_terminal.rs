@@ -239,6 +239,8 @@ impl OtherFrame {
 pub struct OtherWriteGuard {
     pub target: crate::interactions::InteractionTarget,
     pub semantic: Value,
+    /// A tecla que responde a pergunta: depois dela a pergunta some, e isso é a entrega.
+    pub closing: bool,
 }
 /// Fronteira de E/S: testes não substituem fila, interações nem regras do próprio runtime.
 pub trait OtherIo: Send + Sync {

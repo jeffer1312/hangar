@@ -775,6 +775,7 @@ impl Control<'_> {
         let guard = self.native.as_ref().map(|pending| OtherWriteGuard {
             target: pending.target.clone(),
             semantic: pending.semantic.clone(),
+            closing,
         });
         let sent = write_io(self.target, self.io, value, literal, guard.as_ref()).await;
         match sent {

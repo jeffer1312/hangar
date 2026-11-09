@@ -521,7 +521,7 @@ async fn other_terminal_boundary_io_refuses_the_first_key_when_the_question_chan
     use hangar_server::runtime::other_terminal::{OtherIo,OtherWriteGuard,read_pending_interaction};
     let root=tempfile::tempdir().unwrap();let (target,io,marker)=process_terminal(root.path(),true,true);
     let pending=read_pending_interaction(&target).unwrap().unwrap();
-    let guard=OtherWriteGuard {target:pending.target,semantic:pending.semantic};
+    let guard=OtherWriteGuard {target:pending.target,semantic:pending.semantic,closing:false};
     let result=io.write(&target,"C-s",false,Some(&guard)).await;
     assert!(result.is_err(),"a pergunta trocada durante o await de prova não recebe a primeira tecla");
     assert!(!marker.exists());
@@ -572,7 +572,7 @@ fn partial_windows_terminal(root:&std::path::Path,refuse:bool)->(hangar_server::
 async fn other_terminal_partial_write_preserves_unknown_after_the_first_windows_chunk() {
     use hangar_server::runtime::other_terminal::{OtherIo,OtherWriteGuard,read_pending_interaction};
     let root=tempfile::tempdir().unwrap();let (target,io,written)=partial_windows_terminal(root.path(),false);
-    let pending=read_pending_interaction(&target).unwrap().unwrap();let guard=OtherWriteGuard {target:pending.target,semantic:pending.semantic};
+    let pending=read_pending_interaction(&target).unwrap().unwrap();let guard=OtherWriteGuard {target:pending.target,semantic:pending.semantic,closing:false};
     let result=io.write(&target,&"x".repeat(513),true,Some(&guard)).await;
     assert_eq!(std::fs::read_to_string(written).unwrap(),format!("{}\n","x".repeat(512)),"só o primeiro bloco foi escrito antes da troca");
     assert_eq!(result.unwrap_err().code,"other_terminal_delivery_unconfirmed","Unknown não pode virar recusa sem efeito que autoriza repetir o bloco");
@@ -582,10 +582,30 @@ async fn other_terminal_partial_write_preserves_unknown_after_the_first_windows_
 async fn other_terminal_partial_write_preserves_prior_effect_between_windows_lines() {
     use hangar_server::runtime::other_terminal::{OtherIo,OtherWriteGuard,read_pending_interaction};
     let root=tempfile::tempdir().unwrap();let (target,io,written)=partial_windows_terminal(root.path(),false);
-    let pending=read_pending_interaction(&target).unwrap().unwrap();let guard=OtherWriteGuard {target:pending.target,semantic:pending.semantic};
+    let pending=read_pending_interaction(&target).unwrap().unwrap();let guard=OtherWriteGuard {target:pending.target,semantic:pending.semantic,closing:false};
     let result=io.write(&target,"primeira\nsegunda",true,Some(&guard)).await;
     assert_eq!(std::fs::read_to_string(written).unwrap(),"primeira\n","o separador e a segunda linha não podem alcançar a pergunta nova");
     assert_eq!(result.unwrap_err().code,"other_terminal_delivery_unconfirmed","uma linha já aceita impede classificar a falha seguinte como ausência de efeito");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn other_terminal_closing_key_counts_the_answered_question_as_delivered() {
+    use hangar_server::runtime::other_terminal::{OtherIo,OtherWriteGuard,read_pending_interaction};
+    use std::os::unix::fs::PermissionsExt;
+    let root=tempfile::tempdir().unwrap();let (target,io,marker)=process_terminal(root.path(),true,false);
+    let quote=|path:&std::path::Path|format!("'{}'",path.to_string_lossy().replace('\'',"'\\''"));
+    let answered=json!({"type":"message","message":{"role":"toolResult","toolName":"question","toolCallId":"question-a","content":[]}}).to_string();
+    // A CLI grava a resposta no transcript logo depois da tecla.
+    let script=format!("#!/bin/sh\ncase \"$1\" in\ndisplay-message) printf '%s\\n' 'pi-a\t%1\t100\t123';;\nsend-keys) printf '%s\\n' effect >> {}; printf '%s\\n' {} >> {};;\n*) exit 1;;\nesac\n",
+        quote(&marker),quote(std::path::Path::new(&answered)),quote(&target.transcript));
+    let program=&target.binding.mux_argv[0];
+    std::fs::write(program,script).unwrap();std::fs::set_permissions(program,std::fs::Permissions::from_mode(0o700)).unwrap();
+    let pending=read_pending_interaction(&target).unwrap().unwrap();
+    let guard=OtherWriteGuard {target:pending.target.clone(),semantic:pending.semantic.clone(),closing:true};
+    io.write(&target,"C-j",false,Some(&guard)).await.expect("a pergunta fechada pela tecla é a resposta entregue");
+    assert!(marker.exists());
+    assert!(read_pending_interaction(&target).unwrap().is_none());
 }
 
 #[cfg(unix)]
@@ -595,7 +615,7 @@ async fn other_terminal_partial_write_distinguishes_no_effect_from_a_missing_key
     for wrote in [false,true] {
         let root=tempfile::tempdir().unwrap();
         let (target,io,written)=if wrote {partial_windows_terminal(root.path(),true)}else{process_terminal(root.path(),true,true)};
-        let pending=read_pending_interaction(&target).unwrap().unwrap();let guard=OtherWriteGuard {target:pending.target,semantic:pending.semantic};
+        let pending=read_pending_interaction(&target).unwrap().unwrap();let guard=OtherWriteGuard {target:pending.target,semantic:pending.semantic,closing:false};
         let result=io.write(&target,"C-s",false,Some(&guard)).await;
         if wrote {
             assert_eq!(std::fs::read_to_string(written).unwrap(),"C-s\n");

@@ -150,7 +150,9 @@ impl crate::terminal_input::TerminalIo for GuardedIo {
             let effect=request.args.iter().any(|arg|matches!(arg.as_str(),"send-keys"|"paste-buffer"));
             if !effect {return self.source.io.command(request).await;}
             let output=self.source.io.command_guarded(request,||Box::pin(self.check())).await?;
-            if self.check().await.is_err() {return Err(crate::terminal_input::IoFailure {code:"other_terminal_delivery_unconfirmed",may_have_written:true});}
+            // Depois da tecla que responde, a pergunta sumir é a entrega: aí só a vida é reconferida.
+            let checked=if self.guard.as_ref().is_some_and(|guard|guard.closing) {GuardedIo {guard:None,..self.clone()}.check().await} else {self.check().await};
+            if checked.is_err() {return Err(crate::terminal_input::IoFailure {code:"other_terminal_delivery_unconfirmed",may_have_written:true});}
             Ok(output)
         })
     }
