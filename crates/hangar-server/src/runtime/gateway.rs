@@ -2975,8 +2975,11 @@ impl RuntimeRegistry {
         let healthy = match probe(&handle).await {
             Some(healthy) => healthy,
             None => {
-                self.diag.report("runtime.write_actor_busy",name,"actor_busy","o ator não respondeu em 1 s; a escrita esperou a vez dele");
-                probe_within(&handle,WRITE_BUSY_LIMIT).await.unwrap_or(false)
+                self.diag.report("runtime.write_actor_busy",name,"actor_busy","o ator não respondeu em 1 s; a escrita espera a vez dele");
+                probe_within(&handle,WRITE_BUSY_LIMIT).await.unwrap_or_else(|| {
+                    self.diag.report("runtime.write_actor_stuck",name,"actor_stuck","o ator não respondeu no teto da escrita; tratado como travado");
+                    false
+                })
             }
         };
         Some(WriteTarget { key,generation,provider,terminal,healthy,handle })
