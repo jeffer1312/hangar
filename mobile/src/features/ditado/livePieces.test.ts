@@ -173,6 +173,17 @@ describe('startLivePieces', () => {
     await expect(handle.result).rejects.toThrow('502: groq');
   });
 
+  it('pedaço do fim que falha com o primeiro ainda sem resposta rejeita na hora e aborta o primeiro', async () => {
+    const { calls, transcribe } = api();
+    const wav = growingWav();
+    const run = startLivePieces({ server, open: () => wav.file, transcribe });
+    speak(run, wav, 0, [{ ms: 9000, voice: true }, { ms: 600, voice: false }, { ms: 6400, voice: true }]);
+    const handle = run.finish()!;
+    calls[1].reject(new Error('503: provedor fora'));
+    await expect(handle.result).rejects.toThrow('503: provedor fora');
+    expect(calls[0].signal.aborted).toBe(true);
+  });
+
   it('abandonar (cancelar, segundo plano) aborta o que está em voo e o fim volta ao caminho de hoje', () => {
     const { calls, transcribe } = api();
     const onFail = vi.fn();

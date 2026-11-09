@@ -186,18 +186,16 @@ export function startLivePieces(opts: {
       state = 'done';
       close();
       const replies = slots.flatMap((slot) => slot.reply ? [slot.reply] : []);
-      const result = (async (): Promise<PiecesText> => {
-        const texts: string[] = [];
+      // Um pedaço que falha encerra a espera na hora, sem aguardar os anteriores, e aborta os demais.
+      const result = Promise.all(replies).then((all): PiecesText => {
         const avisos: string[] = [];
         let provider: string | undefined;
-        for (const reply of replies) {
-          const r = await reply;
-          texts.push(r.raw ?? '');
+        for (const r of all) {
           if (r.provider) provider = r.provider;
           if (r.aviso && !avisos.includes(r.aviso)) avisos.push(r.aviso);
         }
-        return { raw: joinDictationPieces(texts), aviso: avisos.join(' · '), count: replies.length, ...(provider ? { provider } : {}) };
-      })();
+        return { raw: joinDictationPieces(all.map((r) => r.raw ?? '')), aviso: avisos.join(' · '), count: replies.length, ...(provider ? { provider } : {}) };
+      }, (e: unknown) => { run.abort(); throw e; });
       // Quem recebe decide; sem isto, um resultado ignorado (cancelar) vira rejeição solta.
       result.catch(() => {});
       return { result, abort: () => run.abort() };

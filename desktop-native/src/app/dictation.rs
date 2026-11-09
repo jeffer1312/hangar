@@ -546,7 +546,12 @@ impl Dictation {
     /// A subida do arquivo inteiro do ditado em pedaços terminou depois do texto: o caminho serve ao "de novo" e ao
     /// player; a falha aparece como a de hoje, sem tirar o texto.
     pub(super) fn saved(&mut self, id: u64, result: Result<String, Failure>) {
-        if self.upload.as_ref().is_none_or(|upload| upload.id != id) || self.owner.is_none() { return; }
+        if self.upload.as_ref().is_none_or(|upload| upload.id != id) || self.owner.is_none() {
+            if let Err(error) = &result {
+                crate::log_line(&format!("ditado: subida do áudio inteiro falhou depois do texto (status {:?}, código {:?}): {}", error.status, error.code, error.detail));
+            }
+            return;
+        }
         match result {
             Ok(path) => self.server_path = Some(path),
             Err(error) => self.result_error = Some(Hangar::dictation_failure(&error)),
@@ -1122,7 +1127,11 @@ impl Hangar {
                             let upload = upload.zip(upload_slot).map(|((name, uploads, bytes), (id, done))| {
                                 let api = api.clone();
                                 (id, super::dictation_pieces::Job::spawn(&tokio::runtime::Handle::current(), async move {
-                                    let saved = upload_dictation(api, uploads, name, bytes).await;
+                                    let saved = tokio::select! {
+                                        saved = upload_dictation(api, uploads, name, bytes) => saved,
+                                        // Ninguém mais espera esta subida (cancelou ou começou outra gravação): o arquivo não sobe à toa.
+                                        () = done.closed() => return Err(Failure::local("cancelled")),
+                                    };
                                     // O "de novo" pedido antes do fim espera por aqui em vez de subir outra vez.
                                     done.send_replace(Some(saved.clone()));
                                     saved
@@ -1139,7 +1148,8 @@ impl Hangar {
                                     return;
                                 }
                                 // Pedaço ou organização que falhou: o caminho de sempre, com o arquivo inteiro.
-                                Err(_) => {
+                                Err(error) => {
+                                    crate::log_line(&format!("ditado: pedaços voltaram ao arquivo inteiro (status {:?}, código {:?}): {}", error.status, error.code, error.detail));
                                     timing.path = " path=pieces_fallback".into();
                                     match (session, upload, body) {
                                         (Some(name), Some((_, job)), _) => {
