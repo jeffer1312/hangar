@@ -2,7 +2,7 @@
 //! aprova e o celular passa a abrir a máquina de qualquer rede. Mesmo roteiro do `cofre-de-senhas`.
 
 use std::time::Instant;
-use gpui_kit::*;
+use gpui_kit::{component::{Disableable, Sizable, button::*}, *};
 use super::password_vault::{CYCLE, SLIDE_STEPS, frame, schedule_repaint};
 use crate::{app, i18n::tr_shared, theme};
 
@@ -26,8 +26,8 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
         let content = if compact {
             line(tr_shared("connect_device_pending", &[("machine", &machine)])).into_any_element()
         } else {
-            // Aprovar apertado = o cartão real enviando a resposta.
-            app::device_card("news", &device, &machine, pressed, None, false, |_, _, _| {}, |_, _, _| {}).mx_0().my_0().into_any_element()
+            // Aprovar apertado = o cartão enviando a resposta.
+            approval_card(&device, &machine, pressed).into_any_element()
         };
         div().relative().top(px(((SLIDE_STEPS - step) * 4) as f32)).opacity(0.25 + 0.25 * step as f32).child(content)
     });
@@ -39,4 +39,15 @@ pub(super) fn render(started: Instant, width: Pixels, window: &mut Window, cx: &
         .text_color(theme::text())
         .child(stage.overflow_hidden())
         .into_any_element()
+}
+
+/// O cartão de aprovação por máquina como era nesta versão; a miniatura não entra no Tab.
+fn approval_card(name: &str, machine: &str, sending: bool) -> Div {
+    let button = |action: &str, key: &str| Button::new(SharedString::from(format!("news-connect-{action}"))).xsmall().w_full()
+        .label(tr_shared(key, &[])).disabled(sending).tab_stop(false);
+    div().p_2().rounded(px(8.)).bg(theme::inset()).flex().flex_col().gap_1()
+        .child(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::warning()).whitespace_normal()
+            .child(tr_shared("connect_device_pending", &[("machine", machine)])))
+        .child(div().text_sm().text_color(theme::text()).whitespace_normal().child(name.to_owned()))
+        .child(app::request_pair(button("approve", "connect_device_approve").primary(), button("deny", "connect_device_deny").outline()))
 }

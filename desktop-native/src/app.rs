@@ -100,7 +100,6 @@ pub(crate) use vault_requests::{approve_body, approve_title, request_button, req
 pub(crate) use create::{base_button, base_row, mode_row, quiet_button, worktree_field_label, worktree_warning};
 pub(crate) use reviews::{Comment as ReviewComment, Summary as ReviewSummary, Thread as ReviewThread,
     row_view as review_row_view, thread_actions as review_thread_actions, thread_box as review_thread_box, thread_buttons as review_thread_buttons};
-pub(crate) use connect::device_card;
 pub(crate) use scheduled::{row_frame as scheduled_row_frame, row_text as scheduled_row_text};
 pub(crate) use status::parts as status_parts;
 pub(crate) use viewer::{STRIP_THUMB, play_badge, show_in_chat_button, strip_day, strip_frame, strip_row, strip_thumb, strip_window, viewer_counter,
@@ -501,8 +500,6 @@ enum Payload {
     PluginInput(String, crate::plugin_ui::Control, EntityId, Result<Value, Failure>),
     // Destrancar o chaveiro de uma máquina (chave `servers::norm`): a resposta é dela, não da conexão ativa.
     Keyring(String, Result<Value, Failure>),
-    // Aparelho pedindo entrada no Connect de uma máquina: a resposta é dela, não da conexão ativa.
-    ConnectNotice(connect::NoticeReply),
     // Lista de outra máquina: a geração dos SSE de lista, a chave do servidor e o que chegou.
     Remote(u64, String, servers::RemoteUpdate),
     HeadlessPlan(SessionKey, controls::PlanOutcome),
@@ -1011,7 +1008,6 @@ pub struct Hangar {
     auto_hide: auto_hide::AutoHidePage,
     sync: sync::Sync,
     connect: connect::Connect,
-    connect_notices: connect::Notices,
     devices: devices::Devices,
     shared: shared_config::SharedConfig,
     machines: machines::Machines,
@@ -1362,7 +1358,7 @@ impl Hangar {
             palette_seq: 0, backdrop_seq: 0, backdrop_pending: false, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
             device: device::Device::new(window, cx), accounts: accounts::Accounts::default(), orchestration: orchestration::Orchestration::default(), orq_history: None, orq_history_serial: 0, home_usage: Default::default(), recents: Default::default(), reopen: None, shortcuts: shortcuts::Shortcuts::default(),
             worktree_settings: worktree_settings::WorktreeSettings::default(), auto_hide: Default::default(),
-            server_config: server_config::ServerConfig::default(), scheduled: scheduled::Scheduled::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), connect: connect::Connect::default(), connect_notices: connect::Notices::default(), devices: devices::Devices::default(), shared: shared_config::SharedConfig::default(), machines: machines::Machines::default(),
+            server_config: server_config::ServerConfig::default(), scheduled: scheduled::Scheduled::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), connect: connect::Connect::default(), devices: devices::Devices::default(), shared: shared_config::SharedConfig::default(), machines: machines::Machines::default(),
             costs: Default::default(), worktrees: Default::default(), reviews: Default::default(), mission: Default::default(), artifacts: Default::default(), usage_stats: Default::default(), search: Default::default(), topbar: Default::default(), computer: computer::Computer::default(), new_session: None, sidebar, machines_tray,
             terminal: None, terminal_serial: 0,
             system_notifications: SystemNotifications::default(),
@@ -2160,7 +2156,6 @@ impl Hangar {
                 return;
             }
             Payload::Keyring(key, result) => { self.receive_keyring(key, result, cx); return; }
-            Payload::ConnectNotice(reply) => { self.receive_connect_notice(reply, cx); return; }
             // Cada máquina responde por si: a troca do ativo não descarta a resposta.
             Payload::Presence(key, switched, result) => { self.receive_presence(key, switched, result, window, cx); return; }
             // Cada máquina tem a própria geração: a troca do ativo não derruba as listas das outras.
@@ -2573,7 +2568,7 @@ impl Hangar {
             Payload::Sent(..) | Payload::Interrupted(..) | Payload::Acted(..) | Payload::Files(..) | Payload::UploadStep(..)
                 | Payload::UploadsDone(..) | Payload::Saved(..) | Payload::SaveProgress(..) | Payload::UploadProgress(..) | Payload::PageOpened(..) | Payload::ConnectionNotSaved(..) | Payload::Reply(..) | Payload::HeadlessPlan(..)
                 | Payload::AppearanceSaved(..) | Payload::Backdrop(..) | Payload::BackdropPicked(..) | Payload::BackdropRemoved(..)
-                | Payload::Remote(..) | Payload::Route(..) | Payload::Keyring(..) | Payload::ConnectNotice(..) | Payload::Presence(..) | Payload::Voice(..) | Payload::VoiceGate(..) | Payload::VoiceMemory(..) | Payload::VoiceModels(..) | Payload::QueueJev(..)
+                | Payload::Remote(..) | Payload::Route(..) | Payload::Keyring(..) | Payload::Presence(..) | Payload::Voice(..) | Payload::VoiceGate(..) | Payload::VoiceMemory(..) | Payload::VoiceModels(..) | Payload::QueueJev(..)
                 | Payload::Mermaid(..) | Payload::TourProgress(..) => unreachable!(),
         }
         // Lista que trocou ou tirou a sessão aberta refaz a conversa.
