@@ -7341,9 +7341,11 @@ impl Hangar {
         // Conversa, faixa de baixo e terminal dividem o espaço medido no último desenho. A faixa fica com o que sobra do
         // piso da conversa e da altura escolhida para o terminal: ela cede (o mod rola por dentro) e o terminal aparece
         // inteiro. Pela altura que apareceu, o arraste gravaria um terminal menor a cada clique.
+        // Sem a conversa medida (primeiro desenho), sem teto: o próximo quadro já tem as medidas.
         let (term, shown) = self.docked_terminal_height().unwrap_or((0., 0.));
-        let space = self.panes.conversation_height.get() + self.panes.bottom_height.get() + shown;
-        let cap = (space - terminal::CONVERSATION_MIN_HEIGHT - term).max(BOTTOM_MIN_HEIGHT);
+        let conversation = self.panes.conversation_height.get();
+        let space = conversation + self.panes.bottom_applied.get() + shown;
+        let cap = if conversation > 0. { (space - terminal::CONVERSATION_MIN_HEIGHT - term).max(BOTTOM_MIN_HEIGHT) } else { f32::from(window.viewport_size().height) };
         self.measured_bottom(content, cap)
     }
 
