@@ -1,0 +1,123 @@
+import { useEffect, type ReactNode } from 'react';
+import { Pressable, Text, TextInput, View, type TextInputProps } from 'react-native';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { intlLocale, liveClaudeSessions, type Server } from '@hangar/core';
+import { InfoNotice } from '../config/InfoNotice';
+import { useSettingsColors } from '../config/colors';
+import { MachineGroup, MachineRow } from '../machines/MachineRows';
+import { Notice } from '../machines/parts';
+import { Icon, type IconName } from '../../ui/Icon';
+import { useSessions } from '../../stores/sessions';
+import { usePlugins } from './store';
+import * as m from '../../paraglide/messages';
+
+const EMPTY: never[] = [];
+
+/** Sessões Claude abertas do servidor: só reabrindo pegam a mudança. */
+export function useLiveClaude(server: Server | null) {
+  useEffect(() => useSessions.getState().retain(), []);
+  const sessions = useSessions((s) => (server ? s.byServerRecord[server.id] : undefined) ?? EMPTY);
+  return liveClaudeSessions(sessions);
+}
+
+/** Data curta na língua do app; o ano só quando não é o corrente. */
+export function shortDate(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const year = d.getFullYear() === new Date().getFullYear() ? undefined : 'numeric';
+  return d.toLocaleDateString(intlLocale(), { day: 'numeric', month: 'numeric', year });
+}
+
+export function checkedLabel(iso: string | null): string {
+  if (!iso) return m.plugins_never_checked();
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return m.plugins_never_checked();
+  if (d.toDateString() === new Date().toDateString()) {
+    return m.plugins_checked_today({ time: d.toLocaleTimeString(intlLocale(), { hour: '2-digit', minute: '2-digit' }) });
+  }
+  return m.plugins_checked_on({ date: d.toLocaleString(intlLocale(), { dateStyle: 'short', timeStyle: 'short' }) });
+}
+
+/** "<o que mudou> — N sessões abertas ainda estão com o estado anterior", com Reabrir e Depois. */
+export function ReopenBanner({ server }: { server: Server }) {
+  const live = useLiveClaude(server);
+  const changed = usePlugins((s) => s.changed);
+  const reopening = usePlugins((s) => s.reopening);
+  const refused = usePlugins((s) => s.refused);
+  if (!changed || (!live.length && !refused.length)) return null;
+  const n = live.length;
+  return <>
+    {n ? <InfoNotice text={n === 1 ? m.plugins_reopen_banner_one({ action: changed }) : m.plugins_reopen_banner({ action: changed, n })} /> : null}
+    {refused.map((r) => <Notice key={r} text={r} error />)}
+    <MachineGroup>
+      {n ? <MachineRow title={reopening ? m.plugins_reopening() : n === 1 ? m.plugins_reopen() : m.plugins_reopen_all({ n })} action
+        disabled={reopening} onPress={() => void usePlugins.getState().reopen(server, live.map((x) => x.name))} /> : null}
+      <MachineRow title={m.plugins_reopen_later()} disabled={reopening} onPress={() => usePlugins.getState().dismiss()} />
+    </MachineGroup>
+  </>;
+}
+
+/** Campo de busca/entrada no topo de uma aba. */
+export function PluginsField({ icon, ...props }: TextInputProps & { icon: IconName; placeholder: string }) {
+  const c = useSettingsColors();
+  return <View style={[styles.field, { borderColor: c.border, backgroundColor: c.inset }]}>
+    <Icon name={icon} size={14} color={c.faint} />
+    <TextInput autoCorrect={false} autoCapitalize="none" clearButtonMode="while-editing" placeholderTextColor={c.faint}
+      accessibilityLabel={props.placeholder} {...props} style={[styles.input, { color: c.text }]} />
+  </View>;
+}
+
+/** Botão pequeno no fim da linha; o alvo de toque chega a 44 pt pelo `hitSlop`. */
+export function RowButton({ label, onPress, disabled, primary }: { label: string; onPress: () => void; disabled?: boolean; primary?: boolean }) {
+  const c = useSettingsColors();
+  return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled }} disabled={disabled}
+    onPress={onPress} hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+    style={({ pressed }) => [styles.button, { borderColor: c.borderStrong, backgroundColor: primary ? c.accentDim : pressed ? c.hover : 'transparent', opacity: disabled ? 0.5 : 1 }]}>
+    <Text style={[styles.buttonText, { color: primary ? c.accentText : c.text }]}>{label}</Text>
+  </Pressable>;
+}
+
+/** Linha com título, pílula, meta e descrição; `onPress` abre o detalhe, `trailing` fica fora do toque dele. */
+export function PluginRow({ title, pill, meta, description, onPress, trailing, dimmed }: {
+  title: string;
+  pill?: string;
+  meta?: string;
+  description?: string | null;
+  onPress?: () => void;
+  trailing?: ReactNode;
+  dimmed?: boolean;
+}) {
+  const c = useSettingsColors();
+  const { theme } = useUnistyles();
+  const texts = <View style={[styles.texts, dimmed && { opacity: 0.6 }]}>
+    <View style={styles.titleLine}>
+      <Text style={[styles.title, { color: c.text }]} numberOfLines={1}>{title}</Text>
+      {pill ? <Text style={[styles.pill, { color: theme.tokens.status.warning, borderColor: theme.tokens.status.warning }]}>{pill}</Text> : null}
+    </View>
+    {meta ? <Text style={[styles.meta, { color: c.muted }]} numberOfLines={2}>{meta}</Text> : null}
+    {description ? <Text style={[styles.meta, { color: c.faint }]} numberOfLines={2}>{description}</Text> : null}
+  </View>;
+  return <View style={[styles.row, { borderTopColor: c.border }]}>
+    {onPress ? <Pressable accessibilityRole="button" accessibilityLabel={[title, pill].filter(Boolean).join(', ')} accessibilityHint={meta}
+      onPress={onPress} style={({ pressed }) => [styles.main, pressed && { opacity: 0.6 }]}>
+      {texts}
+      {trailing ? null : <Icon name="ChevronRight" size={17} color={c.faint} />}
+    </Pressable> : <View style={styles.main}>{texts}</View>}
+    {trailing}
+  </View>;
+}
+
+const styles = StyleSheet.create((theme) => ({
+  field: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], paddingHorizontal: theme.base.space[3], borderWidth: 1, borderRadius: theme.base.radius.sm },
+  input: { flex: 1, minHeight: 44, fontSize: theme.base.text.base, padding: 0 },
+  button: { minHeight: 32, justifyContent: 'center', paddingHorizontal: theme.base.space[3], borderWidth: 1, borderRadius: theme.base.radius.sm },
+  buttonText: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.medium },
+  row: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[3], paddingHorizontal: theme.base.space[4], paddingVertical: theme.base.space[3], borderTopWidth: 1 },
+  main: { flex: 1, minWidth: 0, minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2] },
+  texts: { flex: 1, minWidth: 0, gap: theme.base.space[1] },
+  titleLine: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: theme.base.space[2] },
+  title: { flexShrink: 1, fontSize: theme.base.text.base, fontWeight: theme.base.weight.medium },
+  pill: { fontSize: theme.base.text.xs, borderWidth: 1, borderRadius: theme.base.radius.full, paddingHorizontal: theme.base.space[2], overflow: 'hidden' },
+  meta: { fontSize: theme.base.text.xs, lineHeight: 18 },
+}));
