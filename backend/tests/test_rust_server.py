@@ -809,8 +809,6 @@ def test_protocol_is_the_same_number_on_both_sides():
 
 
 def _child_env(monkeypatch, tmp_path, host, port):
-    from app import list_bridge
-    monkeypatch.setattr(list_bridge, "dirs_env", lambda: "{}")
     sup = rust_server.Supervisor(tmp_path / "bin", host, port, 2, "t", "127.0.0.1", lambda: False)
     try:
         return sup._env()

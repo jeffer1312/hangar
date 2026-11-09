@@ -327,7 +327,6 @@ def test_provider_de_nascimento_cobre_o_shell_sem_impedir_troca(tmp_path, monkey
     monkeypatch.setattr(registry.tmux, "list_panes_all", lambda: panes)
     monkeypatch.setattr(registry, "_proc_children_map", lambda: {})
     monkeypatch.setattr(registry, "agente_do_pane", lambda *args: detected)
-    monkeypatch.setattr(registry, "kimi_session_file", lambda *args: None)
     with patch.object(SessionRegistry, "resolve_tracked", return_value=(reg._jsonl_cache["cx"], True)) as resolve:
         out = reg.list()
     resolve.assert_not_called()

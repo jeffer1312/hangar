@@ -382,10 +382,9 @@ def test_orq_grupo_in_python_mode_refuses(monkeypatch, client, mode):
 
 
 def test_child_gets_group_env(monkeypatch, tmp_path):
-    from app import list_bridge, rust_server
+    from app import rust_server
     monkeypatch.delenv("HANGAR_SERVER_ID", raising=False)
     monkeypatch.delenv("HANGAR_PEERS_FILE", raising=False)
-    monkeypatch.setattr(list_bridge, "dirs_env", lambda: "{}")
     monkeypatch.setattr(settings, "server_id", "casa")
     sup = rust_server.Supervisor(tmp_path / "bin", "127.0.0.1", 1, 2, "t", "127.0.0.1", lambda: False)
     try:

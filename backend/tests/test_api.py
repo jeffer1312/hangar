@@ -1415,15 +1415,6 @@ def test_espera_picker_fechar_estoura_e_envia_assim_mesmo(monkeypatch):
     assert api_mod._espera_picker_fechar("s", timeout=0.3) is False
 
 
-def test_texto_do_fallback_nao_diz_que_falhou():
-    # No Kimi o texto e o caminho NORMAL (nao ha drive de teclas), entao "o seletor de opcoes
-    # falhou" era mentira na cara do usuario — e o agente lia a mesma frase e respondia ao fantasma.
-    t = api_mod._pi_answer_fallback_text({"kind": "option", "labels": ["Rota nova (Recomendado)"]})
-    assert "falhou" not in t.lower()
-    assert "Rota nova (Recomendado)" in t
-    assert api_mod._pi_answer_fallback_text({"kind": "option", "labels": []}) == ""
-
-
 def test_kill_nao_avisa_ninguem_do_grupo(api_client):
     # A saída do grupo e os avisos são do Rust, depois do fechamento; aqui só o kill.
     with patch("app.api.registry.kill", return_value=[]) as kill:
