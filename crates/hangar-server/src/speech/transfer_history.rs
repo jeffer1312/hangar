@@ -706,6 +706,9 @@ pub(crate) struct BatonWindow {
     pub since: Option<f64>,
 }
 
+/// O teto de `_plano_citado` do Python: o plano citado e a janela de eventos cabem nele.
+const BATON_TAIL: u64 = 8 * 1024 * 1024;
+
 pub(crate) struct BatonReadError {
     pub verification: bool,
     pub cause: io::Error,
@@ -720,24 +723,33 @@ pub(crate) fn baton_window(row: &SessionRow, home: &Path, claude: &Path) -> Resu
             selected_rows(row, home).map_err(|cause| { verification = true; cause })?
         };
         let transferred = selected.is_some();
-        let (rows, source_len, id) = match selected {
-            Some(selected) => (selected.rows, selected.source_len, selected.transfer_id),
+        let (rows, source_len, id, base) = match selected {
+            Some(selected) => (selected.rows, selected.source_len, selected.transfer_id, 0),
             None => {
                 let Some(path) = row.jsonl.as_deref() else { return Ok(BatonWindow { rows:Vec::new(), events:Vec::new(), since:None }); };
-                let rows = match stable_read(Path::new(path), |reader, length| {
+                let (rows, base) = match stable_read(Path::new(path), |reader, length| {
+                    // Só o fim: o bastão quer a janela recente e o último plano citado, como o Python.
+                    // ponytail: teto fixo; 600 eventos além dele ficam de fora, crescer a janela se aparecer.
+                    let mut base = length.saturating_sub(BATON_TAIL);
+                    reader.seek(SeekFrom::Start(base))?;
                     let mut raw = Vec::new();
-                    reader.take(length).read_to_end(&mut raw)?;
-                    Ok(String::from_utf8_lossy(&raw).split_inclusive('\n').map(str::to_owned).collect::<Vec<_>>())
+                    reader.take(length - base).read_to_end(&mut raw)?;
+                    if base > 0 {
+                        let cut = raw.iter().position(|b| *b == b'\n').map_or(raw.len(), |i| i + 1);
+                        raw.drain(..cut);
+                        base += cut as u64;
+                    }
+                    Ok((String::from_utf8_lossy(&raw).split_inclusive('\n').map(str::to_owned).collect::<Vec<_>>(), base))
                 }) {
-                    Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => (Vec::new(), 0),
                     other => other?,
                 };
-                (rows, 0, String::new())
+                (rows, 0, String::new(), base)
             }
         };
         let mut parser = LineParser::new(if row.provider == "codex" {Provider::Codex} else {Provider::Claude});
         let mut pi = super::PiStream::default();
-        let (mut parsed, mut position, mut previous, mut start, mut seen) = (Vec::new(), 0u64, 0., 0., HashSet::new());
+        let (mut parsed, mut position, mut previous, mut start, mut seen) = (Vec::new(), base, 0., 0., HashSet::new());
         for (index, raw) in rows.iter().enumerate() {
             let offset = position;
             position += raw.len() as u64;
@@ -758,7 +770,7 @@ pub(crate) fn baton_window(row: &SessionRow, home: &Path, claude: &Path) -> Resu
         let mut span = crate::transcript::TAIL_WINDOW;
         let offset = if transferred { 0 } else { loop {
             let lower = position.saturating_sub(span);
-            let mut cursor = 0;
+            let mut cursor = base;
             let offset = if lower == 0 {0} else { rows.iter().find_map(|raw| { let old=cursor; cursor+=raw.len() as u64; (old>=lower).then_some(old) }).unwrap_or(position) };
             if offset == 0 || parsed.iter().filter(|(_,pos,_)| *pos >= offset).count() >= 600 { break offset; }
             span = span.saturating_mul(4);
