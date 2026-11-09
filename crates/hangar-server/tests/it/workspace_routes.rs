@@ -950,6 +950,26 @@ async fn task3_f03_corrupt_source_and_boundary_refuse_before_cache_or_write() {
 }
 
 #[tokio::test]
+async fn reads_the_python_guarded_answer_busy_while_the_transfer_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = TransferredFiles::new(dir.path()).await;
+    let mut record = h.record.clone();
+    record["phase"] = json!("publishing");
+    std::fs::write(&h.record_path, record.to_string()).unwrap();
+    let c = client();
+    let base = format!("http://{}/api/sessions/fixture", h.f.addr);
+    for (route, body) in [("files/resolver", json!({"caminhos":["historical-report.md"]})),
+        ("git/diff", json!({"path":"historical-report.md"})),
+        ("git/path-diff", json!({"path":"historical-report.md","escopo":"nao_commitado"}))] {
+        let response = c.post(format!("{base}/{route}")).bearer_auth(OWNER).json(&body).send().await.unwrap();
+        assert_eq!(response.status(), 409, "{route}");
+        assert_eq!(response.json::<Value>().await.unwrap(), json!({"detail":{"code":"session_transfer_busy",
+            "msg":"A sessão está trocando de agente; tente novamente quando terminar.","params":{}}}), "{route}");
+    }
+    h.no_python();
+}
+
+#[tokio::test]
 async fn task3_review_p2_unrelated_corrupt_transfer_does_not_block_healthy_codex_files() {
     let dir=tempfile::tempdir().unwrap(); let h=TransferredFiles::new(dir.path()).await;
     let target=h.born.join("healthy.txt"); std::fs::write(&target,"original").unwrap();
