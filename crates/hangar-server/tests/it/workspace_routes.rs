@@ -776,6 +776,10 @@ impl TransferredFiles {
     fn url(&self, route: &str, path: &str) -> reqwest::Url {
         reader_asset_url(&format!("http://{}/api/sessions/fixture/{route}", self.f.addr), path, false)
     }
+    // Por rename, como os escritores reais: a descoberta guarda os sidecars pela data da pasta.
+    pub(super) fn put_sidecar(&self, meta: &Value) {
+        hangar_server::runtime::codex_sidecar::put(self.sidecar.parent().unwrap(), "fixture", meta.as_object().unwrap()).unwrap();
+    }
     pub(super) fn no_python(&self) {
         assert_eq!(self.f.hits(), 0);
         assert_eq!(self.f.context_hits.load(Ordering::Relaxed), 0);
@@ -828,7 +832,7 @@ async fn task3_f03_archive_relocation_uses_account_thread_not_the_old_name() {
     meta["rollout_path"] = json!(moved);
     meta.as_object_mut().unwrap().remove("transfer_id");
     meta["key"] = json!("resumed-new-life");
-    std::fs::write(&h.sidecar, meta.to_string()).unwrap();
+    h.put_sidecar(&meta);
     let mut record = h.record.clone(); record["name"] = json!("closed-original");
     std::fs::write(&h.record_path, record.to_string()).unwrap();
     let response = client().get(h.url("file/text", "historical-report.md")).bearer_auth(OWNER).send().await.unwrap();
@@ -859,7 +863,7 @@ async fn task3_f03_clear_and_other_account_do_not_inherit_frozen_citations() {
             path
         };
         meta["rollout_path"] = json!(path);
-        std::fs::write(&h.sidecar, meta.to_string()).unwrap();
+        h.put_sidecar(&meta);
         let response = c.get(h.url("file/text", "historical-report.md")).bearer_auth(OWNER).send().await.unwrap();
         assert_eq!(response.status(), 403, "other_account={other_account}");
         let post = c.post(h.url("file/text", "historical-report.md")).bearer_auth(OWNER)
@@ -976,7 +980,7 @@ async fn task3_review_p2_unrelated_corrupt_transfer_does_not_block_healthy_codex
     std::fs::write(&h.rollout,json_line(json!({"type":"session_meta","payload":{"id":TRANSFER_THREAD,"cwd":h.born}}))+
         &json_line(json!({"type":"response_item","cwd":h.born,"payload":{"type":"message","role":"user","content":[{"type":"input_text","text":target}]}}))).unwrap();
     let mut meta:Value=serde_json::from_slice(&std::fs::read(&h.sidecar).unwrap()).unwrap();
-    meta.as_object_mut().unwrap().remove("transfer_id"); meta["key"]=json!("healthy-life"); std::fs::write(&h.sidecar,meta.to_string()).unwrap();
+    meta.as_object_mut().unwrap().remove("transfer_id"); meta["key"]=json!("healthy-life"); h.put_sidecar(&meta);
     std::fs::remove_file(&h.record_path).unwrap();
     let key=format!("[{}, {}]",json!(hangar_workspace::real(&h.home.join(".codex"))),json!(TRANSFER_THREAD));
     std::fs::remove_file(h.home.join(".hangar/conversation-transfers/indexes").join(format!("thread-{}.json",sha(key.as_bytes())))).unwrap();
@@ -999,7 +1003,7 @@ async fn task3_review_p2_unrelated_corrupt_transfer_does_not_block_healthy_codex
 async fn task3_review_p1_missing_indexed_transfer_record_never_authorizes_imported_prefix() {
     let dir=tempfile::tempdir().unwrap(); let h=TransferredFiles::new(dir.path()).await;
     let mut meta:Value=serde_json::from_slice(&std::fs::read(&h.sidecar).unwrap()).unwrap();
-    meta.as_object_mut().unwrap().remove("transfer_id"); meta["key"]=json!("resumed-life"); std::fs::write(&h.sidecar,meta.to_string()).unwrap();
+    meta.as_object_mut().unwrap().remove("transfer_id"); meta["key"]=json!("resumed-life"); h.put_sidecar(&meta);
     std::fs::remove_file(&h.record_path).unwrap();
     let target=h.old.join("uncited.md"); let c=client();
     let get=c.get(h.url("file/text",target.to_str().unwrap())).bearer_auth(OWNER).send().await.unwrap();
