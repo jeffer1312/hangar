@@ -309,7 +309,7 @@ async fn workspace_uses_distinct_native_cwds_without_python_context_g01() {
     }
     assert_eq!(statuses, [200, 200], "{bodies:?}; consultas ao contexto Python: {}", f.context_hits.load(Ordering::Relaxed));
     assert_eq!(bodies[0], json!({"current":"feature","branches":["feature","main"],
-        "remotes":[],"dirty":false,"elsewhere":{"main":{"path":repo,"main":true}},"upstreams":{}}));
+        "remotes":[],"dirty":false,"elsewhere":{"main":{"path":repo.to_string_lossy().replace('\\', "/"),"main":true}},"upstreams":{}}));
     assert_eq!(bodies[1], json!({"path":"sub/ação.txt","text":"primeira\nlinha mudada\n",
         "size":22,"truncated":false,"digest":"0fe20587a6b919286e72d57b501eec339f1afdeeef022141171485dbac529e26"}));
     assert_eq!(f.context_hits.load(Ordering::Relaxed), 0);
@@ -646,6 +646,8 @@ pub(super) struct TransferredFiles {
 
 impl TransferredFiles {
     pub(super) async fn new(root: &std::path::Path) -> Self {
+        let resolved = hangar_workspace::real(root);
+        let root = resolved.as_path();
         let home = root.join("home");
         let born = root.join("born");
         let old = root.join("original");
@@ -1047,7 +1049,7 @@ async fn task3_x01_busy_mutation_does_not_take_read_or_metadata_slots() {
 
 #[tokio::test]
 async fn task3_f01_public_literal_diff_subfolder_tree_scan_and_mkdir() {
-    let dir=tempfile::tempdir().unwrap(); let root=dir.path();
+    let dir=tempfile::tempdir().unwrap(); let resolved=hangar_workspace::real(dir.path()); let root=resolved.as_path();
     std::fs::create_dir_all(root.join("backend/app")).unwrap();
     std::fs::write(root.join("backend/app/x.txt"),"a\n").unwrap();
     std::fs::write(root.join("a[b].txt"),"colchete\n").unwrap(); std::fs::write(root.join("ab.txt"),"irmão\n").unwrap();
@@ -1075,7 +1077,7 @@ async fn task3_f01_public_literal_diff_subfolder_tree_scan_and_mkdir() {
 
 #[tokio::test]
 async fn task3_f01_effective_roots_expand_deduplicate_drop_missing_and_follow_runtime_override() {
-    let dir=tempfile::tempdir().unwrap(); let root=dir.path(); let home=root.join("home");
+    let dir=tempfile::tempdir().unwrap(); let resolved=hangar_workspace::real(dir.path()); let root=resolved.as_path(); let home=root.join("home");
     for folder in [home.join(".claude"),home.join("one"),home.join("two")] {std::fs::create_dir_all(folder).unwrap();}
     let f=workspace_fixture::fixture_with_home(root,false,Some(&home)).await;
     let c=client(); let url=format!("http://{}/api/fs/roots",f.addr);
@@ -1093,7 +1095,7 @@ async fn task3_f01_effective_roots_expand_deduplicate_drop_missing_and_follow_ru
 
 #[tokio::test]
 async fn task3_f02_public_digest_binary_path_and_search_errors_keep_envelopes() {
-    let dir=tempfile::tempdir().unwrap(); let root=dir.path();
+    let dir=tempfile::tempdir().unwrap(); let resolved=hangar_workspace::real(dir.path()); let root=resolved.as_path();
     std::fs::write(root.join("read.txt"),"original").unwrap(); std::fs::write(root.join("late.bin"),[vec![b'a';8192],vec![0]].concat()).unwrap();
     let (addr,hits,_fixture)=fixture(root).await; let c=client();
     for (route,status,code) in [("files/read?path=late.bin",415,"erro_arq_binario"),("files/read?path=..%2Foutside",400,"erro_arq_fora_da_raiz"),

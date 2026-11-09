@@ -59,7 +59,7 @@ impl Scene {
         let f = workspace_fixture::policy_fixture(&root, &home, &mux).await;
         Self { _dir:dir, root, repo, wt, home, panes, f }
     }
-    fn store(&self) -> PathBuf { self.home.join(".claude/.hangar-project-shortcuts.json") }
+    fn store(&self) -> PathBuf { self.home.join(".claude").join(".hangar-project-shortcuts.json") }
     fn request(&self, method: &str, name: &str, body: Value) -> reqwest::RequestBuilder {
         client().request(method.parse::<reqwest::Method>().unwrap(), format!("http://{}/api/sessions/fixture-{name}/project-shortcuts", self.f.addr))
             .bearer_auth(OWNER).json(&body)

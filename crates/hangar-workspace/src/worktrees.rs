@@ -1510,7 +1510,7 @@ mod tests {
         let same = git::create_worktree_at(&repo, "main", "same", &root, false, None, &location).unwrap();
         assert_eq!(same, json!([repo, false]));
         let made = git::create_worktree_at(&repo, "feature", "chat", &root, false, None, &location).unwrap();
-        let path = location.join("repo/chat");
+        let path = location.join("repo").join("chat");
         assert_eq!(made, json!([path, true]));
         assert_eq!(fixture_git(&path, &["branch", "--show-current"]), "feature");
         assert_eq!(std::fs::read_to_string(repo.join("untracked.txt")).unwrap(), "keep");
@@ -1836,7 +1836,7 @@ mod tests {
     fn t4_status_missing_nested_registration_and_equal_tips_are_protected() {
         if t4_isolated("t4_status_missing_nested_registration_and_equal_tips_are_protected") { return; }
         let (dir, repo, _location) = creation_fixture();
-        let wt = repo.join(".claude/worktrees/nested");
+        let wt = repo.join(".claude").join("worktrees").join("nested");
         fixture_git(&repo, &["worktree", "add", wt.to_str().unwrap(), "feature"]);
         let path = wt.to_str().unwrap();
         let fresh = status_of(path, &[], false, &[]);
