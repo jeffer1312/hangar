@@ -512,15 +512,7 @@ async def _grupos_pelo_rust(request: Request, call_next):
         return await call_next(request)
     if guest_of(request) is not None:
         return JSONResponse({"detail": erro("erro_fora_do_convite", "fora da sessao compartilhada")}, status_code=403)
-    resp = await _repasse_ao_rust(request, _groups_need_rust(), "/__hangar_server/forwarded")
-    # Recado a sessão que só o Python atende volta no corpo: sai dele e é entregue antes da resposta,
-    # num prazo, para quem não recebeu entrar na resposta como as falhas do Rust.
-    if b'"hangar_deliveries"' not in resp.body:
-        return resp
-    body = json.loads(resp.body)
-    failed = await _deliver_deferred(body.pop("hangar_deliveries"), _DEFERRED_WAIT)
-    _report_failed(body, failed, "grupos.entrega_adiada_falhou", ("failed", "pulados"))
-    return JSONResponse(body, status_code=resp.status_code)
+    return await _repasse_ao_rust(request, _groups_need_rust(), "/__hangar_server/forwarded")
 
 
 # Rotas de plano e o catálogo de plugins e skills: o dono é o Rust (`plans::routes`, `claude_customizations`).
@@ -1512,50 +1504,6 @@ def _jsonl_of_session(name: str) -> str | None:
         return None
 
 
-# Teto da entrega adiada pela 8768: abaixo do prazo da dona (`DELIVER_WAIT`, 5 s), como o das sessões do Rust.
-_DEFERRED_WAIT = 3.0
-
-
-async def _deliver_deferred(deliveries, wait: float | None = None) -> list[dict]:
-    """Recados que o Rust devolveu por serem a sessões que só o Python atende; falhas como avisos.
-    Com `wait`, a sessão que não termina no prazo é abandonada e conta como falha."""
-    by_session: dict[str, list[str]] = {}
-    for d in deliveries or []:
-        by_session.setdefault(d["name"], []).append(d["text"])
-
-    # Sessões em paralelo; dentro de cada uma, na ordem em que o Rust devolveu.
-    async def one(name: str, texts: list[str]) -> list[dict]:
-        results = [await _enviar(name, text) for text in texts]
-        return [{"sessao": name, "erro": res.get("error") or erro("erro_envio_falhou_desconhecida", "falha desconhecida no envio")}
-                for res in results if not res.get("ok")]
-
-    async def bounded(name: str, texts: list[str]) -> list[dict]:
-        try:
-            return await asyncio.wait_for(one(name, texts), wait)
-        except TimeoutError:
-            return [{"sessao": name, "erro": erro("erro_envio_falhou", "não deu pra enviar: groups_notice_timeout", erro="groups_notice_timeout")}]
-    return [f for failed in await asyncio.gather(*(bounded(n, t) for n, t in by_session.items())) for f in failed]
-
-
-def _report_failed(body, failed: list[dict], event: str, lists: tuple[str, ...] = ()) -> None:
-    """Põe na resposta quem não recebeu o recado entregue pelo Python: na primeira lista de `lists`
-    que o corpo tiver (as das rotas entre máquinas, qualificadas como as do Rust) ou no `warning`.
-    Sem corpo onde caber, o diário."""
-    if not failed:
-        return
-    names = [f["sessao"] for f in failed]
-    diag.registrar(event, "aviso", falhas=len(failed), sessoes=",".join(names))
-    key = next((k for k in lists if isinstance(body, dict) and isinstance(body.get(k), list)), None)
-    if key:
-        body[key].extend(f"{settings.server_id}::{n}" for n in names)
-    elif isinstance(body, dict) and body.get("warning") is None:
-        body["warning"] = erro("erro_pareamento_aviso_parcial", "aviso falhou em: " + "; ".join(names), avisos=failed)
-    elif isinstance(body, dict) and isinstance(body["warning"], dict):
-        body["warning"].setdefault("params", {}).setdefault("avisos", []).extend(failed)
-    else:
-        diag.registrar("grupos.falha_sem_corpo", "erro", falhas=len(failed), sessoes=",".join(names))
-
-
 def _sidecar_state(name: str) -> str:
     """`grouped`, `absent` (sem arquivo, ou válido sem grupo) ou `unreadable` (existe e não se lê)."""
     link = PairLink(name)
@@ -1578,8 +1526,7 @@ async def _rust_leave(name: str, phases: dict) -> list[dict]:
     except groups_bridge.GroupsBridgeError as e:
         _log.warning("kill(%s): o Rust não tirou a sessão do grupo: %s", name, e.code)
         return [{"sessao": name, "erro": erro("erro_grupo_indisponivel", "os grupos estão indisponíveis agora", detalhe=e.code)}]
-    warnings = out.get("warnings") if isinstance(out.get("warnings"), list) else []
-    return [*warnings, *await _deliver_deferred(out.get("deliveries"))]
+    return out.get("warnings") if isinstance(out.get("warnings"), list) else []
 
 
 @app.delete("/api/sessions/{name}", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
@@ -2812,14 +2759,6 @@ def _require_rust_groups() -> None:
         raise HTTPException(503, detail=_groups_need_rust())
 
 
-async def _route_after(out: dict) -> None:
-    """O que o Rust devolveu para o Python fazer depois da ponte, num sentido: entregar o recado a
-    sessão que só ele atende e promover o time do `orq`. Promoção que falha desfaz o grupo novo."""
-    failed = await _deliver_deferred(out.get("deliveries"))
-    body = out.get("body")
-    _report_failed(body, failed, "grupos.entrega_pela_ponte")
-
-
 async def _group_route(method: str, name: str, route: str, body: BaseModel | None = None):
     """Grupos são do Rust; aqui chega só o que entrou pela 8768 e segue num sentido. Sem o Rust não
     há reserva Python."""
@@ -2830,7 +2769,6 @@ async def _group_route(method: str, name: str, route: str, body: BaseModel | Non
                                       body=data, facts={})
     except groups_bridge.GroupsBridgeError as e:
         raise _group_unavailable(e.code) from None
-    await _route_after(out)
     return _bridge_reply(out)
 
 
