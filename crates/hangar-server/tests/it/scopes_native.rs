@@ -5,7 +5,7 @@ use std::{
 };
 
 use hangar_server::{
-    accounts::environment::AccountEnvironment,
+    accounts::{catalog::resolved, environment::AccountEnvironment},
     costs::{collect::ScopeSource, scopes::NativeScopes},
     list::discover_other::Dirs,
 };
@@ -19,7 +19,8 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
-        let home = temp.path().join("home");
+        // O alias usa a identidade canônica, inclusive quando TEMP vem no formato 8.3 do Windows.
+        let home = resolved(temp.path()).join("home");
         fs::create_dir(&home).unwrap();
         let dirs = Dirs {
             home: home.clone(),
@@ -106,8 +107,8 @@ fn scopes_native_preserves_accounts_labels_roots_and_effective_overrides() {
         .iter()
         .map(|c| (&c.root, c.account.as_str(), c.label.as_str()))
         .collect();
-    let root_a = f.home.join("café-a/projects");
-    let root_b = f.home.join("c-b/projects");
+    let root_a = f.home.join("café-a").join("projects");
+    let root_b = f.home.join("c-b").join("projects");
     assert_eq!(
         claude,
         vec![
