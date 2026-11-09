@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { transcribeDictationForServer } from '@hangar/core';
-import type { Server } from '@hangar/core';
-import { useDitado } from '../ditado/useDitado';
+import type { MotivoFim, Server } from '@hangar/core';
+import { useDitado, type RecordingStop } from '../ditado/useDitado';
+import { failureCode, recordTiming, stageClock } from '../ditado/clientTiming';
 import { dictationStyleStore } from '../ditado/ditadoEstiloStore';
 import * as m from '../../paraglide/messages';
 
@@ -22,25 +23,32 @@ export function useHomeDictation(server: Server, onText: (text: string) => void)
     return () => { mounted.current = false; };
   }, []);
 
-  const transcribe = useCallback(async (file: File) => {
+  // `stop` só na gravação nova: o "de novo" não mede, como na conversa.
+  const transcribe = useCallback(async (file: File, stop?: RecordingStop & { motivo: MotivoFim }) => {
     if (busy.current) return;
     busy.current = true;
     setTranscribing(true);
     setError('');
     setFailed(null);
+    const clock = stageClock();
     try {
       const style = dictationStyleStore(server).getState();
       const value = estilo.current?.serverId === server.id ? estilo.current.value : style.pronto ? style.valor : undefined;
+      // Sobe e transcreve num pedido só, sem sessão.
+      clock.enter('transcribe');
       const { text, aviso } = await transcribeDictationForServer(server, file, value);
       const trimmed = text.trim();
       if (!trimmed) throw new Error(m.composer_transcricao_vazia());
+      clock.enter('finish');
+      if (mounted.current) onTextRef.current(trimmed);
+      if (stop) recordTiming(server, stop, clock, stop.motivo, undefined, !!aviso);
       if (!mounted.current) return;
-      onTextRef.current(trimmed);
       // A limpeza pode desistir e devolver o cru: isso aparece, não passa por limpo.
       if (aviso) setError(aviso);
     } catch (e) {
-      if (!mounted.current) return;
       const detail = e instanceof Error ? e.message : m.composer_falha_transcricao();
+      if (stop) recordTiming(server, stop, clock, stop.motivo, { code: failureCode(detail) });
+      if (!mounted.current) return;
       setError(/^(501|503):/.test(detail) ? `${m.composer_ditado_indisponivel()}: ${detail}` : detail);
       setFailed(file);
     } finally {
@@ -53,9 +61,9 @@ export function useHomeDictation(server: Server, onText: (text: string) => void)
   const discard = useRef(false);
   const { gravando, rms, iniciar, parar } = useDitado({
     server,
-    onFim: (file) => {
+    onFim: (file, motivo, _uri, stop) => {
       if (discard.current) { discard.current = false; return; }
-      void transcribe(file);
+      void transcribe(file, { ...stop, motivo });
     },
     onErroParada: (e) => {
       if (mounted.current) setError(e.message === 'ditado_parada_falhou' ? m.composer_falha_gravacao() : e.message || m.composer_falha_gravacao());

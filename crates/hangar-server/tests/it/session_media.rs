@@ -360,6 +360,8 @@ impl Speech {
         let mut state = AppState::new(cfg);
         state.side.locate = scene.sessions.clone();
         state.hangar_dir = scene.dir.path().join(".hangar");
+        // O `dictation.timing` destes pedidos não pode cair no diário da máquina.
+        state.accounts = crate::dictation_timing::isolated_accounts(&scene.dir.path().join("home"));
         assert!(state.state.runtime.set(scene.runtime.clone()).is_ok());
         let state = Arc::new(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -413,6 +415,21 @@ async fn transcribe_saves_the_audio_and_answers_without_cleaning() {
     assert!(body["provider"].is_string());
     assert!(speech.heard_contains(b"\x00audio-bytes"));
     assert_eq!(*speech.python_paths.lock().unwrap(), Vec::<String>::new(), "nada além da configuração vai ao Python");
+}
+
+#[tokio::test]
+async fn dictation_timing_covers_the_session_transcribe_route() {
+    let speech = Speech::new(Value::Null).await;
+    speech.scene.claude("s", &[]);
+    let (status, body) = speech.transcribe("?limpar=1&organization_mode=none", b"audio", Some("ditado.wav")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (lines, text) = crate::dictation_timing::timing_lines(&speech.scene.dir.path().join("home"), 1).await;
+    assert_eq!(lines.len(), 1, "{text}");
+    let line = &lines[0];
+    assert_eq!((line["rota"].as_str(), line["status"].as_u64(), line["bytes"].as_u64()), (Some("sessao"), Some(200), Some(5)), "{line}");
+    assert!(line["provider"].is_string() && line["stt_ms"].is_u64() && line["config_ms"].is_u64() && line["total_ms"].is_u64(), "{line}");
+    assert!(line["read_ms"].is_u64() && line["store_ms"].is_u64(), "corpo lido e áudio gravado no cofre entram na linha: {line}");
+    assert!(!text.contains("ola mundo") && !text.contains(body["path"].as_str().unwrap()), "{text}");
 }
 
 #[tokio::test]

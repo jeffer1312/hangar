@@ -1,5 +1,6 @@
 use axum::body::{Body, to_bytes};
 use crate::routes::AppState;
+use crate::dictation::timing::{Step, timed};
 use super::model::{ConfigSnapshot, Profile, TranscriptionError};
 
 pub(crate) async fn configuration(state: &AppState) -> Result<ConfigSnapshot, TranscriptionError> {
@@ -19,20 +20,28 @@ pub(crate) async fn configuration(state: &AppState) -> Result<ConfigSnapshot, Tr
 pub(crate) async fn transcribe_here(state: &AppState, content: bytes::Bytes, filename: Option<String>, profile: Profile)
     -> Result<super::model::Transcription, TranscriptionError> {
     let (started, bytes) = (std::time::Instant::now(), content.len());
+    crate::dictation::timing::received(bytes);
     // Os provedores configurados (tipo:modelo), nunca chave nem endereço: o erro não diz qual foi tentado.
     let mut providers = String::new();
     let result = match state.transcription_slots.clone().try_acquire_owned() {
         Err(_) => Err(TranscriptionError { status: 503, code: "transcription_busy".into(), detail: "As vagas de transcrição estão ocupadas. Tente novamente.".into() }),
-        Ok(_slot) => match configuration(state).await {
+        Ok(_slot) => match timed(Step::Config, configuration(state)).await {
             Ok(snapshot) => {
                 providers = snapshot.providers.iter().chain(snapshot.legacy.iter())
                     .map(|p| format!("{}:{}", p.kind, if p.model.is_empty() { "-" } else { &p.model })).collect::<Vec<_>>().join(",");
-                state.transcription.configure(snapshot).await;
-                state.transcription.transcribe(content, filename, profile).await
+                timed(Step::Config, state.transcription.configure(snapshot)).await;
+                timed(Step::Stt, state.transcription.transcribe(content, filename, profile)).await
             }
             Err(error) => Err(error),
         },
     };
+    // O aviso só existe quando um provedor anterior falhou e a reserva transcreveu.
+    let code = match &result {
+        Ok(t) if t.aviso.as_deref().is_some_and(|a| !a.is_empty()) => Some("transcription_fallback"),
+        Ok(_) => None,
+        Err(e) => Some(e.code.as_str()),
+    };
+    crate::dictation::timing::transcribed(result.as_ref().ok().map(|t| t.provider.as_str()), code);
     if let Err(error) = &result {
         state.diag.report_with("transcription.failed", "", &error.code, "A transcrição falhou.",
             serde_json::json!({"status": error.status, "detalhe": error.detail, "provedores": providers,

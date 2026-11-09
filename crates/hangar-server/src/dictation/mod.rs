@@ -10,6 +10,7 @@ pub mod references;
 pub mod rename_suggestion;
 pub mod routes;
 pub mod service;
+pub(crate) mod timing;
 
 pub mod http;
 mod http_body;

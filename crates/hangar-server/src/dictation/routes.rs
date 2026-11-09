@@ -204,11 +204,15 @@ pub(crate) async fn organize_request(
     if request.mode == Some(OrganizationMode::None) {
         return OrganizationResult::original(request.raw, OrganizationMode::None);
     }
-    match tokio::time::timeout_at(started + std::time::Duration::from_secs(120), configuration(state)).await {
-        Ok(Ok(config)) => service::organize_started(state, request, &config, started).await,
+    use super::timing::{Step, timed};
+    let deadline = started + std::time::Duration::from_secs(120);
+    let result = match tokio::time::timeout_at(deadline, timed(Step::Config, configuration(state))).await {
+        Ok(Ok(config)) => timed(Step::Organize, service::organize_started(state, request, &config, started)).await,
         Err(_) => OrganizationResult::original(request.raw, request.mode.unwrap_or_default())
             .failed("dictation_organization_timeout", super::harness::detail("dictation_organization_timeout")),
         Ok(Err(())) => OrganizationResult::original(request.raw, request.mode.unwrap_or_default())
             .failed("dictation_rust_unavailable", "A configuração de organização está indisponível; foi mantida a transcrição original."),
-    }
+    };
+    super::timing::organized(result.organization_code.as_deref());
+    result
 }
