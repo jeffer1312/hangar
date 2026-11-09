@@ -861,7 +861,7 @@ async fn b01_transfer_partial_archived_keeps_the_checked_rollout_header_cwd() {
     let header:Value=serde_json::from_str(rollout.lines().next().unwrap()).unwrap();
     assert_eq!(header["type"],"session_meta");assert_eq!(header["payload"]["cwd"],json!(h.born));
     let mut metadata:Value=serde_json::from_slice(&std::fs::read(&h.sidecar).unwrap()).unwrap();
-    metadata["cwd"]=json!(h.old);std::fs::write(&h.sidecar,metadata.to_string()).unwrap();
+    metadata["cwd"]=json!(h.old);hangar_server::runtime::codex_sidecar::put(h.sidecar.parent().unwrap(),"fixture",metadata.as_object().unwrap()).unwrap();
     let r = client().get(format!("http://{}/api/sessions/morta/bastao?project=-&session_id=019f99de-9572-7221-89c0-80c62f883d44&provider=codex", h.f.addr)).bearer_auth(OWNER).send().await.unwrap();
     let status=r.status();let md=r.text().await.unwrap();h.f.runtime.shutdown().await.unwrap();
     assert_eq!(status,200);
@@ -922,7 +922,7 @@ async fn b01_clear_never_inherits_the_frozen_origin_or_imported_plan() {
         json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"pedido depois do clear"}]}}))).unwrap();
     let mut metadata: Value = serde_json::from_slice(&std::fs::read(&h.sidecar).unwrap()).unwrap();
     metadata["thread_id"] = json!(thread); metadata["rollout_path"] = json!(path);
-    std::fs::write(&h.sidecar, metadata.to_string()).unwrap();
+    hangar_server::runtime::codex_sidecar::put(h.sidecar.parent().unwrap(),"fixture",metadata.as_object().unwrap()).unwrap();
     std::fs::write(&h.snapshot, "inacessível depois de clear\n").unwrap();
     let r = client().get(format!("http://{}/api/sessions/fixture/bastao", h.f.addr)).bearer_auth(OWNER).send().await.unwrap();
     assert_eq!(r.status(), 200);
@@ -1063,7 +1063,7 @@ async fn b01_guard_source_busy_unreadable_and_recreated_life_are_separate() {
     std::fs::write(&h.record_path,record.to_string()).unwrap();
     let mut metadata:Value=serde_json::from_slice(&std::fs::read(&h.sidecar).unwrap()).unwrap();
     metadata.as_object_mut().unwrap().remove("transfer_id");metadata["key"]=json!("new-baton-life");
-    std::fs::write(&h.sidecar,metadata.to_string()).unwrap();
+    hangar_server::runtime::codex_sidecar::put(h.sidecar.parent().unwrap(),"fixture",metadata.as_object().unwrap()).unwrap();
     let rows=h.f.list.discover(Some(f64::MAX)).await.unwrap();
     assert_eq!(rows.iter().find(|r|r.name=="fixture").unwrap().lifecycle_id.as_deref(),Some("k:new-baton-life"));
     let r = client().post(&endpoint).bearer_auth(OWNER).json(&json!({"provider":"claude"})).send().await.unwrap();
