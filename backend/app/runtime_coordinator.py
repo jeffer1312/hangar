@@ -1164,12 +1164,6 @@ class RuntimeCoordinator:
             self.slots[key].binding.provider == "claude" and (isinstance(self.slots[key].binding.meta.get("terminal"), dict)
                 or self.slots[key].binding.meta.get("pending_terminal"))))
 
-    def terminal_in_rust(self, name):
-        """O terminal Claude da sessão está aberto no Rust: o clique e a interface dos mods são dele."""
-        slot = self.slots.get(self.names.get(name, ""))
-        return bool(slot is not None and slot.phase == Phase.Rust and not slot.binding.headless
-            and slot.binding.provider == "claude" and isinstance(slot.binding.meta.get("terminal"), dict))
-
     def managed_queue(self, name):
         return name in self.names
 

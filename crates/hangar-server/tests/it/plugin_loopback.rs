@@ -172,6 +172,14 @@ async fn plugin_endpoints_are_rust_and_mods_methods_keep_the_python_path() {
             assert!(response.status().is_client_error(), "{endpoint}: {}", response.status());
             assert!(!response.text().await.unwrap().contains("\"path\""), "{endpoint}: chegou ao Python");
         }
+        // As rotas dos mods também, com sessão que o Rust não tem: nada do POST chega ao Python.
+        for endpoint in ["press-start", "opened", "ui", "toast", "pressed", "copied", "focus-target", "focused", "scroll"] {
+            let response = http().post(format!("http://{base}/api/plugin/{endpoint}"))
+                .header("content-type", "application/json")
+                .body(json!({"sessao":"ghost", "token":"x", "requestId":"r", "element":"e", "attempt":"a", "url":"https://x", "text":"t"}).to_string())
+                .send().await.unwrap();
+            assert!(!response.text().await.unwrap().contains("\"path\""), "{endpoint}: chegou ao Python");
+        }
     }
     let response = http().request(reqwest::Method::OPTIONS, format!("http://{}/api/plugin/ui", server.bridge)).send().await.unwrap();
     assert_eq!(response.status().as_u16(), 200);

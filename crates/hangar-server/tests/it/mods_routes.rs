@@ -104,15 +104,49 @@ async fn refusal_becomes_409_with_code() {
 }
 
 #[tokio::test]
-async fn other_session_or_guest_goes_to_python() {
+async fn wrong_token_goes_to_python_which_authenticates() {
     let (python, server, _mods, link) = setup(FakeLink::default()).await;
-    assert_eq!(post(server, "outra", "press", json!({"site": "x", "plugin": "vitrine", "key": "y"}), Some(OWNER)).await.1, "from-python");
-    assert_eq!(python.hits_to("/api/sessions/outra/plugin/press"), 1);
-    assert_eq!(post(server, "outra", "show", json!({"site": "x"}), Some(OWNER)).await.1, "from-python");
-    assert_eq!(post(server, "outra", "close", json!({"site": "x"}), Some(OWNER)).await.1, "from-python");
-    assert_eq!(python.hits_to("/api/sessions/outra/plugin/close"), 1);
     assert_eq!(post(server, "s", "input", json!({"site": "x", "plugin": "vitrine", "key": "y", "kind": "change", "value": ""}), Some("errado")).await.1, "from-python");
     assert!(link.calls.lock().unwrap().is_empty());
+    assert_eq!(python.hits_to("/api/sessions/s/plugin/input"), 1);
+}
+
+/// R1.5-1/2/3 e D8: sessão fora do `Mods` recebe a recusa fixa do Python (contract/r1-mods `*_rust_404`,
+/// `*_rust_mode_no_endpoint`) sem validar o corpo nem perguntar a ninguém.
+#[tokio::test]
+async fn session_outside_the_mods_gets_the_fixed_answer_without_python() {
+    let (python, server, _mods, link) = setup(FakeLink::default()).await;
+    let need_rust = json!({"detail": {"code": "mods_need_rust_server", "params": {},
+        "msg": "O clique do mod precisa do servidor Rust de pé e da sessão aberta nele."}});
+    let tab_in_app = json!({"detail": {"code": "erro_mod_aba_no_app", "params": {}, "msg": "Nesta sessão a troca de aba do mod fica no app."}});
+    let cases = [
+        ("press", json!({"site": "above-prompt", "key": "mr-a", "plugin": "pm-mock"}), 503, need_rust.clone()),
+        // D8: corpo que o Python recusava com 422 (press_422_*, close_422_*) agora é a mesma recusa.
+        ("press", json!({"site": "above-prompt", "key": "mr-a", "plugin": ""}), 503, need_rust.clone()),
+        ("press", json!({"site": "above-prompt", "key": "mr-a"}), 503, need_rust.clone()),
+        ("close", json!({"site": "above-prompt"}), 503, need_rust.clone()),
+        ("close", json!({"site": "above-prompt", "extra": 1}), 503, need_rust.clone()),
+        ("show", json!({"site": "p"}), 404, tab_in_app.clone()),
+        ("show", json!("lixo"), 404, tab_in_app),
+        ("input", json!({}), 409, json!({"detail": {"code": "erro_mod_sem_digitacao", "params": {},
+            "msg": "Nesta sessão, o campo do mod só aceita digitação no terminal ou não está ligado ao app."}})),
+    ];
+    for (route, body, status, expected) in cases {
+        assert_eq!(post(server, "outra", route, body.clone(), Some(OWNER)).await, (status, expected), "{route} {body}");
+    }
+    assert!(link.calls.lock().unwrap().is_empty());
+    for route in ["press", "close", "show", "input"] {
+        assert_eq!(python.hits_to(&format!("/api/sessions/outra/plugin/{route}")), 0, "{route}");
+    }
+}
+
+#[tokio::test]
+async fn session_outside_the_mods_without_runtime_gets_the_fixed_answer() {
+    let (python, upstream) = spawn_fake().await;
+    let server = spawn_state(AppState::new(config(upstream, "127.0.0.1"))).await;
+    assert_eq!(post(server, "outra", "press", abrir(), Some(OWNER)).await.1["detail"]["code"], "mods_need_rust_server");
+    assert_eq!(post(server, "outra", "show", json!({"site": "p"}), Some(OWNER)).await.0, 404);
+    assert_eq!(python.hits_to("/api/sessions/outra/plugin/press"), 0);
 }
 
 #[tokio::test]
@@ -286,11 +320,10 @@ async fn copy_during_the_click_goes_back_to_the_app() {
 }
 
 #[tokio::test]
-async fn bridge_runs_what_python_authenticated() {
-    // O Python autentica o convidado (inclusive o convite da porta 8766) e devolve o pedido pela porta
-    // privada: o mod é acionado como pelo dono. Só a sessão fora do Rust é 404 (o Python a trata).
+async fn private_mods_bridge_no_longer_exists() {
+    // O Python não devolve mais pedido de mod ao Rust: a rota privada saiu, e nada aciona o mod por ela.
     let link = FakeLink::default();
-    let (python, upstream) = spawn_fake().await;
+    let (_python, upstream) = spawn_fake().await;
     let state = AppState::new(config(upstream, "127.0.0.1"));
     let _ = state.state.runtime.set(Arc::new(RuntimeRegistry::new(upstream, "secret-test".into(), "instance-test".into())));
     state.mods.attach("s", 1, Arc::new(link.clone()));
@@ -298,21 +331,11 @@ async fn bridge_runs_what_python_authenticated() {
     let private = listener.local_addr().unwrap();
     let app = hangar_server::routes::terminal_router(Arc::new(state));
     tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
-    let call = |name: &'static str, op: &'static str, body: Value, secret: &'static str| async move {
-        let response = client().post(format!("http://{private}/__hangar_server/mods/{name}/{op}"))
-            .header("content-type", "application/json").header("x-hangar-internal", secret).body(body.to_string()).send().await.unwrap();
-        let status = response.status().as_u16();
-        let text = response.text().await.unwrap();
-        (status, serde_json::from_str::<Value>(&text).unwrap_or(Value::String(text)))
-    };
-    assert_eq!(call("s", "press", json!({"site": "above-prompt", "plugin": "vitrine", "key": "abrir"}), SECRET).await, (200, json!({"ok": true})));
-    assert_eq!(call("s", "show", json!({"site": "painel"}), SECRET).await.0, 200);
-    assert_eq!(call("s", "input", json!({"site": "painel", "plugin": "vitrine", "key": "campo", "kind": "submit", "value": "olá"}), SECRET).await.0, 200);
-    assert_eq!(call("s", "close", json!({"site": "painel"}), SECRET).await.0, 200);
-    assert_eq!(link.calls.lock().unwrap().len(), 4);
-    assert_eq!(call("s", "press", json!({"site": "above-prompt", "plugin": "vitrine", "key": "abrir"}), "errado").await.0, 403);
-    assert_eq!(call("s", "outra-op", json!({}), SECRET).await.0, 400);
-    assert_eq!(call("outra", "press", json!({"site": "x", "plugin": "vitrine", "key": "y"}), SECRET).await.0, 404);
-    assert_eq!(link.calls.lock().unwrap().len(), 4, "segredo errado e sessão fora do Rust não acionam nada");
-    assert_eq!(python.hits_to("/api/sessions/outra/plugin/press"), 0, "a ponte nunca volta ao Python");
+    for op in ["press", "close", "show", "input"] {
+        let response = client().post(format!("http://{private}/__hangar_server/mods/s/{op}"))
+            .header("content-type", "application/json").header("x-hangar-internal", SECRET)
+            .body(json!({"site": "above-prompt", "plugin": "vitrine", "key": "abrir"}).to_string()).send().await.unwrap();
+        assert_eq!(response.status().as_u16(), 404, "{op}");
+    }
+    assert!(link.calls.lock().unwrap().is_empty());
 }

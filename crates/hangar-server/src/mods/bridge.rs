@@ -3,13 +3,14 @@
 //! `opened`, no clique do app pela superfície `desktop`. Na sessão com terminal do Rust (fase 3) o plugin
 //! roda no terminal e usa todas: a faixa e os painéis (`ui`), os avisos, o press, a cópia, a URL, o foco da
 //! reserva por teclado e a rolagem. A faixa e os avisos da sessão Claude que o Rust não atende (aberta à
-//! mão) também ficam aqui (`Mods::loose_ui`); as demais rotas dela seguem ao Python com o mesmo corpo.
-use std::net::SocketAddr;
+//! mão) também ficam aqui (`Mods::loose_ui`); as demais rotas dela respondem daqui o que o Python
+//! respondia, sem repasse.
 use std::sync::Arc;
 
-use axum::body::{Body, to_bytes};
-use axum::extract::{ConnectInfo, Request, State};
-use axum::http::StatusCode;
+use axum::body::to_bytes;
+use axum::extract::{Request, State};
+use axum::http::{HeaderMap, StatusCode};
+use hangar_core::http::{detail_body, not_found};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -19,7 +20,7 @@ use subtle::ConstantTimeEq;
 use super::http::{fits, invalid, reply};
 use super::model::PLUGIN_MAX;
 use super::state::{SurfaceExtra, TerminalPane, TerminalView};
-use crate::routes::{AppState, gate, pass};
+use crate::routes::AppState;
 
 const BODY_LIMIT: usize = 16 * 1024;
 const URL_MAX: usize = 8192;
@@ -40,7 +41,7 @@ const CAPS_MAX: usize = 16;
 use crate::json_envelope::Envelope;
 
 /// Corpo do `press-start` e do `pressed`. `plugin`: o mod do press, que o plugin do Hangar carregado antes
-/// desta versão não manda. O Python, que atende a sessão fora do Rust, ignora o campo.
+/// desta versão não manda.
 #[derive(Deserialize)]
 struct PressBody { #[serde(rename = "requestId")] request_id: String, element: String, #[serde(default)] plugin: Option<String> }
 
@@ -67,14 +68,14 @@ fn hmac_hex(secret: &str, message: &str) -> String {
     ring::hmac::sign(&key, message.as_bytes()).as_ref()[..16].iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// Corpo lido uma vez: sessão que não é do Rust volta ao Python com o mesmo corpo. Devolve o corpo e o
-/// nome atual da sessão, que pode não ser o `sessao` do plugin (sessão renomeada sem relançar o processo:
-/// o plugin manda o nome com que nasceu). Corpo que não serve ao tipo, de sessão do Rust, é 422, como o
+/// Corpo lido uma vez. Devolve o corpo e o nome atual da sessão, que pode não ser o `sessao` do plugin
+/// (sessão renomeada sem relançar o processo: o plugin manda o nome com que nasceu); `None` é a sessão sem
+/// entrada no Rust, que cada rota responde como o Python respondia. `missing`: a rota que o Python não
+/// tinha, 404 para essa sessão qualquer que seja o corpo. Corpo que não serve ao tipo é 422, como o
 /// Pydantic do Python.
-async fn owned_sized<T: DeserializeOwned>(st: &Arc<AppState>, peer: SocketAddr, req: Request, limit: usize) -> Result<(Envelope<T>, String), Box<Response>> {
-    let (fwd, _) = match gate(st, peer, &req).await { Ok(value) => value, Err(e) => return Err(Box::new(crate::auth::unavailable(e))) };
-    let (parts, raw) = req.into_parts();
-    let Ok(bytes) = to_bytes(raw, limit).await else { return Err(Box::new(StatusCode::PAYLOAD_TOO_LARGE.into_response())) };
+async fn owned_sized<T: DeserializeOwned>(st: &Arc<AppState>, req: Request, limit: usize, missing: bool)
+    -> Result<(Envelope<T>, Option<String>), Box<Response>> {
+    let Ok(bytes) = to_bytes(req.into_body(), limit).await else { return Err(Box::new(StatusCode::PAYLOAD_TOO_LARGE.into_response())) };
     let parsed = serde_json::from_slice::<Envelope<T>>(&bytes);
     let found = match &parsed {
         Ok(envelope) => st.mods.bridge_session(&envelope.sessao, &envelope.token),
@@ -82,15 +83,30 @@ async fn owned_sized<T: DeserializeOwned>(st: &Arc<AppState>, peer: SocketAddr, 
         Err(_) => serde_json::from_slice::<Value>(&bytes).ok().and_then(|body| body["sessao"].as_str()
             .and_then(|sessao| st.mods.bridge_session(sessao, body["token"].as_str().unwrap_or_default()))),
     };
-    if found.is_none() && matches!(&parsed, Ok(envelope) if envelope.token.contains('.')) {
-        // Normal para sessão do Python; numa do Rust é a chave que faltou no vínculo.
-        tracing::debug!("ponte do plugin: chave sem sessão no Rust; segue ao Python");
-    }
     match (parsed, found) {
-        (Ok(envelope), Some(name)) => Ok((envelope, name)),
-        (Err(_), Some(_)) => Err(Box::new(invalid(None))),
-        _ => Err(Box::new(pass(st, Request::from_parts(parts, Body::from(bytes)), &fwd).await)),
+        (_, None) if missing => Err(Box::new(not_found(&HeaderMap::new()))),
+        (Ok(envelope), found) => Ok((envelope, found)),
+        (Err(_), found) => Err(Box::new(invalid_for(&found))),
     }
+}
+
+/// 422 de corpo: o de antes na sessão do Rust; com código (D7) na que só o Python atendia.
+fn invalid_for(name: &Option<String>) -> Response {
+    match name {
+        Some(_) => invalid(None),
+        None => reply(None, StatusCode::UNPROCESSABLE_ENTITY, detail_body("erro_corpo_invalido", "corpo inválido", json!({}))),
+    }
+}
+
+/// Sessão sem entrada no Rust, token conferido: a chave que ninguém tem é registrada uma vez, como o
+/// Python fazia (`_chaves_sem_sessao`). `true`: foi a primeira vez desta chave.
+pub fn note_unknown_key(token: &str, sessao: &str) -> bool {
+    static SEEN: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::LazyLock::new(Default::default);
+    let Some((key, _)) = token.split_once('.') else { return false };
+    // shortcut: cresce uma entrada por lançamento sem sessão no Rust, como no Python; trocar por teto se pesar.
+    let first = SEEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(key.to_owned());
+    if first { tracing::info!("plugin: chave sem sessão no runtime; segue pelo nome sessao={sessao}"); }
+    first
 }
 
 /// Corpo do `/ui` e do `/toast`, que não seguem ao Python: com a sessão do Rust (nome atual), ou `None`
@@ -111,8 +127,21 @@ fn toast_ms(ms: Option<f64>) -> u64 {
     }
 }
 
-async fn owned<T: DeserializeOwned>(st: &Arc<AppState>, peer: SocketAddr, req: Request) -> Result<(Envelope<T>, String), Box<Response>> {
-    owned_sized(st, peer, req, BODY_LIMIT).await
+async fn owned<T: DeserializeOwned>(st: &Arc<AppState>, req: Request) -> Result<(Envelope<T>, Option<String>), Box<Response>> {
+    owned_sized(st, req, BODY_LIMIT, false).await
+}
+
+/// Rota que só a sessão do Rust tem (o Python não tinha): fora dela, 404.
+async fn owned_only<T: DeserializeOwned>(st: &Arc<AppState>, req: Request) -> Result<(Envelope<T>, String), Box<Response>> {
+    let (envelope, name) = owned_sized(st, req, BODY_LIMIT, true).await?;
+    name.map(|name| (envelope, name)).ok_or_else(|| Box::new(not_found(&HeaderMap::new())))
+}
+
+/// Token conferido; sessão sem entrada no Rust registra a chave desconhecida.
+fn admitted<T>(st: &AppState, envelope: &Envelope<T>, name: &Option<String>) -> bool {
+    let ok = token_ok(st, &envelope.sessao, &envelope.token);
+    if ok && name.is_none() { note_unknown_key(&envelope.token, &envelope.sessao); }
+    ok
 }
 
 /// Comparação em tempo constante, como o `secrets.compare_digest` do Python. `name` é o `sessao` do
@@ -135,35 +164,36 @@ pub fn machine_key_ok(secret: &str, key: &str) -> bool {
     machine_key(secret).as_bytes().ct_eq(key.as_bytes()).into()
 }
 
-pub async fn press_start(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (envelope, name) = match owned::<PressBody>(&st, peer, req).await { Ok(found) => found, Err(response) => return *response };
+pub async fn press_start(State(st): State<Arc<AppState>>, req: Request) -> Response {
+    let (envelope, name) = match owned::<PressBody>(&st, req).await { Ok(found) => found, Err(response) => return *response };
     let body = &envelope.body;
     // Os limites do Pydantic do Python (`PressBody`) vêm antes do token, como lá.
     if !fits(&body.request_id, ID_MAX) || !fits(&body.element, ELEMENT_MAX) || !fits_opt(&body.plugin, PLUGIN_MAX) {
-        return invalid(None);
+        return invalid_for(&name);
     }
-    if !token_ok(&st, &envelope.sessao, &envelope.token) {
-        return reply(None, StatusCode::FORBIDDEN, json!({"detail": "token do plugin inválido"}));
+    if !admitted(&st, &envelope, &name) {
+        return forbidden();
     }
-    let attempt = st.mods.match_click(&name, &body.request_id, body.plugin.as_deref(), &body.element);
+    // Sessão fora do Rust: nunca é clique do app.
+    let attempt = name.and_then(|name| st.mods.match_click(&name, &body.request_id, body.plugin.as_deref(), &body.element));
     reply(None, StatusCode::OK, json!({"fromApp": attempt.is_some(), "attempt": attempt}))
 }
 
-pub async fn opened(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (envelope, name) = match owned::<Opened>(&st, peer, req).await { Ok(found) => found, Err(response) => return *response };
+pub async fn opened(State(st): State<Arc<AppState>>, req: Request) -> Response {
+    let (envelope, name) = match owned::<Opened>(&st, req).await { Ok(found) => found, Err(response) => return *response };
     let body = &envelope.body;
     // Os limites do `OpenedBody`. A URL não tem mínimo no Pydantic: vazia passa daqui e cai no 400 do esquema.
     if !fits(&body.attempt, 64) || body.url.chars().count() > URL_MAX {
-        return invalid(None);
+        return invalid_for(&name);
     }
-    if !token_ok(&st, &envelope.sessao, &envelope.token) {
-        return reply(None, StatusCode::FORBIDDEN, json!({"detail": "token do plugin inválido"}));
+    if !admitted(&st, &envelope, &name) {
+        return forbidden();
     }
     let lower = body.url.to_ascii_lowercase();
     if !(lower.starts_with("http://") || lower.starts_with("https://")) {
         return reply(None, StatusCode::BAD_REQUEST, json!({"detail": "só http(s)"}));
     }
-    if st.mods.opened(&name, &body.attempt, &body.url) {
+    if name.is_some_and(|name| st.mods.opened(&name, &body.attempt, &body.url)) {
         reply(None, StatusCode::OK, json!({"ok": true}))
     } else {
         // 409: o plugin segue com o `next` e o mod abre a URL na máquina do servidor, como no Python.
@@ -244,30 +274,30 @@ pub async fn toast(State(st): State<Arc<AppState>>, req: Request) -> Response {
     ok()
 }
 
-pub async fn pressed(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (envelope, name) = match owned::<PressBody>(&st, peer, req).await { Ok(found) => found, Err(response) => return *response };
+pub async fn pressed(State(st): State<Arc<AppState>>, req: Request) -> Response {
+    let (envelope, name) = match owned::<PressBody>(&st, req).await { Ok(found) => found, Err(response) => return *response };
     let body = &envelope.body;
     if !fits(&body.request_id, ID_MAX) || !fits(&body.element, ELEMENT_MAX) || !fits_opt(&body.plugin, PLUGIN_MAX) {
-        return invalid(None);
+        return invalid_for(&name);
     }
-    if !token_ok(&st, &envelope.sessao, &envelope.token) {
+    if !admitted(&st, &envelope, &name) {
         return forbidden();
     }
-    st.mods.pressed(&name, &body.request_id, body.plugin.as_deref(), &body.element);
+    if let Some(name) = name { st.mods.pressed(&name, &body.request_id, body.plugin.as_deref(), &body.element); }
     ok()
 }
 
-pub async fn copied(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (envelope, name) = match owned_sized::<CopiedBody>(&st, peer, req, COPIED_BODY_LIMIT).await { Ok(found) => found, Err(response) => return *response };
+pub async fn copied(State(st): State<Arc<AppState>>, req: Request) -> Response {
+    let (envelope, name) = match owned_sized::<CopiedBody>(&st, req, COPIED_BODY_LIMIT, false).await { Ok(found) => found, Err(response) => return *response };
     let body = &envelope.body;
     // O `CopiedBody` do Python: `attempt` de 1 a 64, texto (vazio vale) até 65536 caracteres.
     if !fits(&body.attempt, ID_MAX) || body.text.chars().count() > COPIED_TEXT_MAX {
-        return invalid(None);
+        return invalid_for(&name);
     }
-    if !token_ok(&st, &envelope.sessao, &envelope.token) {
+    if !admitted(&st, &envelope, &name) {
         return forbidden();
     }
-    if st.mods.click_copied(&name, &body.attempt, &body.text) {
+    if name.is_some_and(|name| st.mods.click_copied(&name, &body.attempt, &body.text)) {
         ok()
     } else {
         // 409: o plugin segue com o `next` e a cópia acontece no terminal.
@@ -275,8 +305,8 @@ pub async fn copied(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     }
 }
 
-pub async fn focus_target(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (envelope, name) = match owned::<FocusTargetBody>(&st, peer, req).await { Ok(found) => found, Err(response) => return *response };
+pub async fn focus_target(State(st): State<Arc<AppState>>, req: Request) -> Response {
+    let (envelope, name) = match owned_only::<FocusTargetBody>(&st, req).await { Ok(found) => found, Err(response) => return *response };
     let body = &envelope.body;
     if !fits(&body.request_id, ID_MAX) || !fits_opt(&body.plugin, ID_MAX) || !fits_opt(&body.element, ELEMENT_MAX) {
         return invalid(None);
@@ -288,8 +318,8 @@ pub async fn focus_target(State(st): State<Arc<AppState>>, ConnectInfo(peer): Co
     reply(None, StatusCode::OK, serde_json::to_value(target).unwrap_or(Value::Null))
 }
 
-pub async fn focused(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (envelope, name) = match owned::<FocusedBody>(&st, peer, req).await { Ok(found) => found, Err(response) => return *response };
+pub async fn focused(State(st): State<Arc<AppState>>, req: Request) -> Response {
+    let (envelope, name) = match owned_only::<FocusedBody>(&st, req).await { Ok(found) => found, Err(response) => return *response };
     let body = &envelope.body;
     if !fits(&body.attempt, ID_MAX) || !fits(&body.request_id, ID_MAX) || !fits_opt(&body.plugin, PLUGIN_MAX) || !fits_opt(&body.element, ELEMENT_MAX) {
         return invalid(None);
@@ -304,8 +334,8 @@ pub async fn focused(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
     }
 }
 
-pub async fn scroll(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
-    let (envelope, name) = match owned::<ScrollBody>(&st, peer, req).await { Ok(found) => found, Err(response) => return *response };
+pub async fn scroll(State(st): State<Arc<AppState>>, req: Request) -> Response {
+    let (envelope, name) = match owned_only::<ScrollBody>(&st, req).await { Ok(found) => found, Err(response) => return *response };
     let body = &envelope.body;
     if !fits(&body.request_id, ID_MAX) {
         return invalid(None);

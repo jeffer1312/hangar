@@ -11,9 +11,7 @@ import subprocess
 import tempfile
 import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 import uuid
 from datetime import datetime
 from contextlib import asynccontextmanager
@@ -3099,7 +3097,6 @@ class PluginCloseBody(_StrictBody):
     site: str = Field(min_length=1, max_length=64)
 
 
-_MOD_SEM_RESPOSTA = erro("erro_mod_clique_sem_resposta", "O mod não respondeu a tempo.")
 # O clique dos mods é do Rust, sem reserva aqui: modo `python` ou sessão que ele não atende.
 _MOD_SEM_RUST = erro("mods_need_rust_server", "O clique do mod precisa do servidor Rust de pé e da sessão aberta nele.")
 
@@ -3108,72 +3105,27 @@ def _convidado(request: Request) -> bool:
     return guest_of(request) is not None
 
 
-async def _mod_no_rust(name: str, op: str, request: Request) -> Response | None:
-    """Operação de mod de sessão que o Rust atende, pedida por quem entrou pelo Python (convidado, de
-    convite ou com login, e o Connect): a autenticação foi a desta porta, e o Rust aciona pela ponte
-    privada com o mesmo efeito do dono. `None`: a sessão não é dele (só o 404) ou o Rust está fora; o
-    clique e o fechamento respondem o código, a aba e a digitação ficam no app."""
-    from app import list_bridge, runtime_coordinator
-    owner = runtime_coordinator.current()
-    endpoint = list_bridge.endpoint()
-    if owner is None or owner.mode not in ("pending", "rust") or endpoint is None:
-        return None
-    address, secret = endpoint
-    body = await request.body()
-
-    def call() -> tuple[int, bytes]:
-        req = urllib.request.Request(
-            f"http://{address}/__hangar_server/mods/{urllib.parse.quote(name, safe='')}/{op}", data=body,
-            headers={"content-type": "application/json", "x-hangar-internal": secret}, method="POST")
-        try:
-            # O Rust responde dentro do prazo dele (7,5 s); este só cobre o Rust mudo.
-            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=10) as r:
-                return r.status, r.read()
-        except urllib.error.HTTPError as e:
-            return e.code, e.read()
-
-    try:
-        status, raw = await asyncio.to_thread(call)
-    except OSError as exc:
-        _log.warning("ponte dos mods em %s falhou: %s", name, exc)
-        raise HTTPException(503, detail=_MOD_SEM_RESPOSTA) from None
-    if status == 404 and not (_convidado(request) and owner.terminal_in_rust(name)):
-        return None
-    if status in (400, 403, 404):
-        _log.warning("ponte dos mods em %s recusou %s com %s", name, op, status)
-        raise HTTPException(503, detail=_MOD_SEM_RESPOSTA)
-    return Response(raw, status_code=status, media_type="application/json")
-
-
 @app.post("/api/sessions/{name}/plugin/press", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-async def plugin_press(name: str, body: PluginPressBody, request: Request):
+async def plugin_press(name: str, body: PluginPressBody):
     """Clique num botão que um mod desenhou na faixa ou num painel, pedido pelo app."""
-    if (rust := await _mod_no_rust(name, "press", request)) is not None:
-        return rust
     raise HTTPException(503, detail=_MOD_SEM_RUST)
 
 
 @app.post("/api/sessions/{name}/plugin/close", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-async def plugin_close(name: str, body: PluginCloseBody, request: Request):
+async def plugin_close(name: str, body: PluginCloseBody):
     """Fecha um painel de mod pelo `✕` do cabeçalho, pedido pelo app."""
-    if (rust := await _mod_no_rust(name, "close", request)) is not None:
-        return rust
     raise HTTPException(503, detail=_MOD_SEM_RUST)
 
 
 @app.post("/api/sessions/{name}/plugin/show", dependencies=[Depends(require_auth)])
-async def plugin_show(name: str, request: Request):
+async def plugin_show(name: str):
     """Troca de aba de mod. Fora do Rust ela fica no app, que lê o 404 como "sem a rota"."""
-    if (rust := await _mod_no_rust(name, "show", request)) is not None:
-        return rust
     raise HTTPException(404, detail=erro("erro_mod_aba_no_app", "Nesta sessão a troca de aba do mod fica no app."))
 
 
 @app.post("/api/sessions/{name}/plugin/input", dependencies=[Depends(require_auth)])
-async def plugin_input(name: str, request: Request):
+async def plugin_input(name: str):
     """Digitação num campo de mod: só a sessão sem terminal que o Rust atende a aceita."""
-    if (rust := await _mod_no_rust(name, "input", request)) is not None:
-        return rust
     raise HTTPException(409, detail=erro("erro_mod_sem_digitacao",
         "Nesta sessão, o campo do mod só aceita digitação no terminal ou não está ligado ao app."))
 

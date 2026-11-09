@@ -1,12 +1,11 @@
 //! Rotas dos apps para a interface dos mods de uma sessão sem terminal que o Rust atende como
 //! superfície remota: clique (`press`), fechar painel (`close`), troca de aba (`show`) e digitação
-//! (`input`). Sessão que o Rust não atende assim segue para o Python, que é o dono, como no `/events`;
-//! a digitação, que o Python não tem, é recusada aqui.
+//! (`input`). Sessão que o Rust não atende assim recebe daqui a recusa fixa de cada rota: não há outro
+//! dono para ela.
 //!
 //! A sessão com terminal que o Rust atende (fase 3) usa as mesmas rotas, com o clique pela tela. O
-//! convidado de convite da 8766, já liberado pelo porteiro, é atendido aqui como o dono. Quem não é
-//! dono nem convidado de convite (login de convidado, Connect) segue ao Python, que o autentica e
-//! devolve o pedido pela ponte privada (`bridge`). A digitação é recusada logo na entrada, sem
+//! convidado já liberado pelo porteiro (convite da 8766 ou login) é atendido aqui como o dono; quem não
+//! é nenhum dos dois segue ao Python, que o autentica. A digitação é recusada logo na entrada, sem
 //! esperar a vez da sessão nem entrar na porta da troca de agente.
 //!
 //! A guarda da troca de agente é a porta de entrada da sessão no Rust (`IngressGates`), a mesma das
@@ -25,7 +24,7 @@ use axum::body::{Body, to_bytes};
 use axum::extract::rejection::PathRejection;
 use axum::extract::{ConnectInfo, Path, Request, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::json;
@@ -71,75 +70,51 @@ fn refused(headers: &HeaderMap, error: &ModsError) -> Response {
 /// viajar no `Err`.
 type Done = Box<Response>;
 
-/// O Rust atende quando o pedido é do dono (ou do convidado da 8766 liberado para a sessão) e a sessão
-/// é dele; senão, o Python, que autentica quem sobra (nenhum token tem tratamento pelo formato aqui). `outside`: a recusa do dono numa sessão sem
-/// superfície no Rust, para a rota que o Python não tem (`input`).
+/// O Rust atende quando o pedido é do dono (ou do convidado liberado para a sessão); quem sobra segue ao
+/// Python, que o autentica (nenhum token tem tratamento pelo formato aqui). Sessão sem a interface dos mods
+/// no Rust recebe a recusa fixa da rota (`outside`), sem validar o corpo: não há quem mais a atenda.
 async fn owned(st: &Arc<AppState>, peer: SocketAddr, path: Result<Path<String>, PathRejection>, req: Request,
-    outside: Option<fn() -> ModsError>) -> Result<(String, HeaderMap, Body), Done> {
+    outside: fn(&HeaderMap) -> Response) -> Result<(String, HeaderMap, Body), Done> {
     let (fwd, who) = match who(st, peer, &req).await { Ok(value) => value, Err(e) => return Err(Box::new(crate::auth::unavailable(e))) };
-    let bridged = req.extensions().get::<Bridged>().is_some();
-    let owner = matches!(who, Some(Caller::Owner)) || bridged;
-    // O convidado da 8766 é atendido como o que chega pela ponte.
+    let owner = matches!(who, Some(Caller::Owner));
     let method = req.method().clone();
     let guest = |name: &str| who.as_ref().is_some_and(|c| c.grant().is_some() && c.can(name, &method));
-    // O Claude com terminal ainda sem ator é adotado aqui, como na escrita: sem isso o clique ia ao Python, que
-    // abria a sessão no Rust no meio dele.
-    if let Ok(Path(name)) = &path && (owner || guest(name)) && let Err(error) = adopt(st, name).await {
+    let name = match path {
+        Ok(Path(name)) if owner || guest(&name) => name,
+        _ => return Err(Box::new(pass(st, req, &fwd).await)),
+    };
+    // O Claude com terminal ainda sem ator é adotado aqui, como na escrita.
+    if let Err(error) = adopt(st, &name).await {
         return Err(Box::new(reply(Some(req.headers()), StatusCode::SERVICE_UNAVAILABLE,
             json!({"detail": {"code": error.code, "params": {}, "msg": error.message}}))));
     }
-    match (path, outside) {
-        (Ok(Path(name)), _) if (owner || guest(&name)) && st.mods.owns(&name) => {
-            let headers = req.headers().clone();
-            Ok((name, headers, req.into_body()))
-        }
-        (Ok(Path(_)), Some(refusal)) if owner => Err(Box::new(refused(req.headers(), &refusal()))),
-        // Da ponte nunca volta ao Python: ele trata a sessão que não é do Rust.
-        _ if bridged => Err(Box::new(StatusCode::NOT_FOUND.into_response())),
-        // Terminal no Rust sem a interface dos mods aqui: o clique do Python dirigiria o pane do
-        // executor calado. A digitação o Python nem tem (404 abaixo).
-        (Ok(Path(name)), None) if guest(&name) && match st.state.runtime.get() {
-            Some(runtime) => runtime.is_terminal(&name).await,
-            None => false,
-        } => Err(Box::new(reply(Some(req.headers()), StatusCode::SERVICE_UNAVAILABLE, json!({"detail": no_answer().detail()})))),
-        _ => Err(Box::new(pass(st, req, &fwd).await)),
+    if st.mods.owns(&name) {
+        let headers = req.headers().clone();
+        return Ok((name, headers, req.into_body()));
     }
+    // Terminal no Rust sem a interface dos mods aqui: nada dirige o pane do convidado.
+    if !owner && let Some(runtime) = st.state.runtime.get() && runtime.is_terminal(&name).await {
+        return Err(Box::new(reply(Some(req.headers()), StatusCode::SERVICE_UNAVAILABLE, json!({"detail": no_answer().detail()}))));
+    }
+    Err(Box::new(outside(req.headers())))
 }
+
+/// `press` e `close` de sessão sem a interface dos mods no Rust.
+fn need_rust(headers: &HeaderMap) -> Response {
+    reply(Some(headers), StatusCode::SERVICE_UNAVAILABLE, json!({"detail": no_rust().detail()}))
+}
+
+/// `show` fora do Rust: o app lê o 404 e troca a aba sozinho.
+fn tab_in_app(headers: &HeaderMap) -> Response {
+    reply(Some(headers), StatusCode::NOT_FOUND, json!({"detail": tab_in_app_error().detail()}))
+}
+
+fn no_typing_here(headers: &HeaderMap) -> Response { refused(headers, &no_typing()) }
 
 /// A sessão fora do `Mods` que é um Claude com terminal sem ator passa a ser do Rust.
 async fn adopt(st: &Arc<AppState>, name: &str) -> Result<(), crate::runtime::protocol::RuntimeError> {
     if st.mods.owns(name) { return Ok(()); }
     match st.state.runtime.get() { Some(runtime) => runtime.adopt_claude_terminal(name).await, None => Ok(()) }
-}
-
-/// Pedido que o Python devolveu pela ponte privada depois de autenticar quem não é o dono (convidado,
-/// Connect). Extensão do pedido: nenhum cliente a põe pela rede.
-#[derive(Clone, Copy)]
-struct Bridged;
-
-/// `POST /__hangar_server/mods/{name}/{op}` na porta privada: a operação de mod de quem o Python já
-/// autenticou, com o mesmo efeito da do dono. Cada recusa tem status próprio, porque só o 404 deixa o
-/// Python clicar ele mesmo: 403 segredo ou origem errados, 400 operação desconhecida, 404 sessão que o
-/// Rust não atende.
-pub async fn bridge(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    Path((name, op)): Path<(String, String)>, mut req: Request) -> Response {
-    if !crate::workspace_routes::private_ok(&st, peer, req.headers()) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    if !matches!(op.as_str(), "press" | "close" | "show" | "input") {
-        return StatusCode::BAD_REQUEST.into_response();
-    }
-    if adopt(&st, &name).await.is_err() || !st.mods.owns(&name) {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    req.extensions_mut().insert(Bridged);
-    let path = Ok(Path(name));
-    match op.as_str() {
-        "press" => press(State(st), ConnectInfo(peer), path, req).await,
-        "close" => close(State(st), ConnectInfo(peer), path, req).await,
-        "show" => show(State(st), ConnectInfo(peer), path, req).await,
-        _ => input(State(st), ConnectInfo(peer), path, req).await,
-    }
 }
 
 async fn body<T: DeserializeOwned>(headers: &HeaderMap, raw: Body) -> Result<T, Done> {
@@ -198,7 +173,7 @@ async fn run(st: &AppState, headers: &HeaderMap, name: &str, call: ModsCall, dea
 pub async fn press(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>,
     path: Result<Path<String>, PathRejection>, req: Request) -> Response {
     let deadline = Instant::now() + REQUEST_BUDGET;
-    let (name, headers, raw) = match owned(&st, peer, path, req, None).await { Ok(parts) => parts, Err(response) => return *response };
+    let (name, headers, raw) = match owned(&st, peer, path, req, need_rust).await { Ok(parts) => parts, Err(response) => return *response };
     let request: PressBody = match body(&headers, raw).await { Ok(request) => request, Err(response) => return *response };
     if !fits(&request.site, 64) || !plugin_fits(request.plugin.as_deref()) || !fits(&request.key, 256) {
         return invalid(Some(&headers));
@@ -222,20 +197,20 @@ fn plugin_or_only(st: &AppState, name: &str, site: &str, plugin: Option<String>,
 /// Fechar o painel `site` (o `✕` do cabeçalho).
 pub async fn close(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>,
     path: Result<Path<String>, PathRejection>, req: Request) -> Response {
-    pane_route(&st, peer, path, req, |site| ModsCall::Close { site }).await
+    pane_route(&st, peer, path, req, need_rust, |site| ModsCall::Close { site }).await
 }
 
 /// Troca de aba: o painel `site` vai para a frente (`ui_pane_show`).
 pub async fn show(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>,
     path: Result<Path<String>, PathRejection>, req: Request) -> Response {
-    pane_route(&st, peer, path, req, |site| ModsCall::Show { site }).await
+    pane_route(&st, peer, path, req, tab_in_app, |site| ModsCall::Show { site }).await
 }
 
 /// Rota que só fala de um painel (`{site}`): `close` e `show`.
 async fn pane_route(st: &Arc<AppState>, peer: SocketAddr, path: Result<Path<String>, PathRejection>, req: Request,
-    call: fn(String) -> ModsCall) -> Response {
+    outside: fn(&HeaderMap) -> Response, call: fn(String) -> ModsCall) -> Response {
     let deadline = Instant::now() + REQUEST_BUDGET;
-    let (name, headers, raw) = match owned(st, peer, path, req, None).await { Ok(parts) => parts, Err(response) => return *response };
+    let (name, headers, raw) = match owned(st, peer, path, req, outside).await { Ok(parts) => parts, Err(response) => return *response };
     let request: SiteBody = match body(&headers, raw).await { Ok(request) => request, Err(response) => return *response };
     if !fits(&request.site, 64) {
         return invalid(Some(&headers));
@@ -247,7 +222,7 @@ async fn pane_route(st: &Arc<AppState>, peer: SocketAddr, path: Result<Path<Stri
 pub async fn input(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>,
     path: Result<Path<String>, PathRejection>, req: Request) -> Response {
     let deadline = Instant::now() + REQUEST_BUDGET;
-    let (name, headers, raw) = match owned(&st, peer, path, req, Some(no_typing)).await { Ok(parts) => parts, Err(response) => return *response };
+    let (name, headers, raw) = match owned(&st, peer, path, req, no_typing_here).await { Ok(parts) => parts, Err(response) => return *response };
     // Com terminal não há por onde digitar no campo do mod: a recusa não espera a vez da sessão (um clique
     // em curso a segura por segundos) nem entra na porta da troca de agente.
     if st.mods.is_terminal(&name) {
