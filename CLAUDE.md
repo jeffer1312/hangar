@@ -570,6 +570,12 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
 - **Mermaid é desenhado pelo `hangar-server` (`POST /api/mermaid`), em PNG, num Chromium sem rede**,
   com a biblioteca embutida no binário; os clientes só exibem a imagem. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#mermaid-desenhado-no-servidor-15102026).
+- **Plugins do Claude são do Rust (`hangar-plugins`), pela CLI oficial na pasta principal.** Vale
+  para todas as contas da máquina: ligar e remover gravam no `~/.claude/settings.json` (remover
+  grava `false`, porque o espelho não apaga nas contas), e toda subida de processo Claude em conta
+  do Hangar reconcilia a conta antes. Uma mudança por servidor, numa tarefa que sobrevive ao
+  cliente; argumento da CLI sempre validado e depois de `--`. Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#plugins-do-claude-na-tela-a-cli-oficial-na-pasta-principal-09112026).
 - **Busca, Perguntar e Arquivo são do Rust, com um índice de todos os agentes e contas.** A passada
   é por evento de arquivo; palavra inteira vem antes de pedaço (`whole`); o id do trecho é o do
   histórico. Sem Rust, 503 `erro_busca_precisa_rust`. Evidência em

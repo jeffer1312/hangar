@@ -185,6 +185,27 @@ async fn a_headless_session_parked_by_a_reboot_is_launched_by_the_next_write() {
     assert!(fx.args().is_empty(),"nenhum terminal nasceu");
 }
 
+/// A sessão sem terminal estacionada numa conta do Hangar religa pela escrita com a conta reconciliada antes:
+/// o plugin desligado no principal chega à cópia do `settings.json` antes de o processo novo subir.
+#[tokio::test]
+async fn a_parked_headless_session_in_a_hangar_account_reconciles_before_it_launches() {
+    crate::use_cano_bin();
+    let fx = fixture();
+    let key = "c9".repeat(16);
+    let b = account_b(&fx);
+    std::fs::write(b.join(".hangar-conta"),"").unwrap();
+    std::fs::write(b.join("settings.json"),r#"{"enabledPlugins":{"watch@loja":true}}"#).unwrap();
+    std::fs::write(fx.home.join(".claude/settings.json"),r#"{"enabledPlugins":{"watch@loja":false}}"#).unwrap();
+    fx.put_sidecar(json!({"name":"s1","provider":"claude","headless":true,"key":key,"cwd":fx.cwd,"session_id":SID,
+        "permission_mode":"manual","cano":null,"config_dir":b}));
+    let registry = fx.registry().await;
+    crate::write_executable(&fx.home.join("bin/claude"),"#!/bin/sh\nexec sleep 30\n");
+    // O `claude` falso não prova a identidade: a subida para depois do cano, e a reconciliação vem antes dele.
+    let _ = registry.adopt_now("s1").await.expect("é sessão Claude sem terminal daqui");
+    let settings:Value = serde_json::from_slice(&std::fs::read(b.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(settings["enabledPlugins"]["watch@loja"],false,"a cópia da conta segue o principal");
+}
+
 /// A vida nova só entrega o que chegou depois dela: o recado de continuar vai pelo `/input` depois da
 /// reabertura, e não gravado antes dela.
 #[tokio::test]
@@ -640,6 +661,38 @@ async fn an_old_claude_that_ignores_the_stop_is_killed_and_the_reopen_goes_on() 
     let args = fx.args();
     let command = args.last().unwrap();
     assert!(command.contains(&format!("claude --resume {SID}")) && command.contains("--permission-mode acceptEdits"),"a mesma conversa no mesmo modo: {command}");
+    let (found,_) = registry.terminal_view("s1").await.unwrap();
+    registry.close(&found,2).await.unwrap();
+    fx.finish();
+}
+
+/// Recarregar a sessão numa conta do Hangar reconcilia a conta antes da vida nova, como a abertura: o plugin
+/// desligado no principal chega à cópia do `settings.json` da conta, com o aviso de que o principal venceu.
+#[tokio::test]
+async fn a_reload_in_a_hangar_account_reconciles_the_account_first() {
+    let fx = fixture();
+    let key = "58".repeat(16);
+    let b = account_b(&fx);
+    std::fs::write(b.join(".hangar-conta"),"").unwrap();
+    std::fs::write(b.join("settings.json"),r#"{"enabledPlugins":{"watch@loja":true}}"#).unwrap();
+    std::fs::write(fx.home.join(".claude/settings.json"),r#"{"enabledPlugins":{"watch@loja":false}}"#).unwrap();
+    let project = b.join("projects").join(hangar_workspace::worktrees::sanitize_cwd(&fx.cwd.to_string_lossy()));
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(project.join(format!("{SID}.jsonl")),"{\"type\":\"user\"}\n").unwrap();
+    std::process::Command::new(&fx.tmux).args(["new-session","-d","-s","s1","-c"]).arg(&fx.cwd)
+        .arg("-e").arg(format!("CP_SESSION_KEY={key}")).arg("-e").arg(format!("CLAUDE_CONFIG_DIR={}",b.display())).status().unwrap();
+    let registry = fx.reopening_registry(&key).await;
+    let spec = json!({"version":1,"key":key,"name":"s1","cwd":fx.cwd,"provider":"claude","surface":"terminal","account":{"kind":"claude","config_dir":b},
+        "account_source":"explicit","model":null,"effort":null,"service_tier":null,"permission_mode":"acceptEdits","subagent_model":null,
+        "customizations":null,"jev":false,"read_only":false,"worktree":null,"creator":null,"created_at":1.0});
+    std::fs::write(fx.home.join(format!(".hangar/session-specs/{key}.json")),spec.to_string()).unwrap();
+    let change = SessionChange { reason:ChangeReason::Reload,surface:None,account:None,permission_mode:None,model:None,effort:None,service_tier:None };
+    let reopened = registry.reopen_claude_session("s1",change,None).await.expect("é sessão Claude daqui")
+        .map_err(|f|(f.error.code,f.error.message,f.stopped)).unwrap();
+    let settings:Value = serde_json::from_slice(&std::fs::read(b.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(settings["enabledPlugins"]["watch@loja"],false,"a cópia da conta segue o principal");
+    assert!(reopened.warnings.iter().any(|w|w.contains("enabledPlugins")),"o aviso da reconciliação: {:?}",reopened.warnings);
+    assert!(fx.args().windows(2).any(|w|w[0]=="-e" && w[1]==format!("CLAUDE_CONFIG_DIR={}",b.display())),"a vida nova na mesma conta");
     let (found,_) = registry.terminal_view("s1").await.unwrap();
     registry.close(&found,2).await.unwrap();
     fx.finish();

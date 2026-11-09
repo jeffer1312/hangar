@@ -276,6 +276,10 @@ pub(super) async fn launch_if_needed(policy:&PolicyClient,target:&mut RuntimeTar
         let state = tokio::task::spawn_blocking(move||process::liveness(recorded,&key)).await.map_err(|_|failure("launch_job"))?;
         if state == process::Liveness::Ours { return Ok(None); }
     }
+    if target.provider == "claude" {
+        let cwd = target.metadata["cwd"].as_str().unwrap_or_default();
+        super::claude_reopen::reconcile_account(&policy.codex_environment(),target.metadata["config_dir"].as_str(),cwd).await?;
+    }
     let (base,dir,mut meta) = (policy.codex_environment(),sidecar_dir.to_owned(),target.metadata.clone());
     if let Value::Object(fields) = &mut meta { fields.insert("name".into(),json!(target.name)); fields.insert("key".into(),json!(target.key)); }
     let (claude,bridge,name,runtime) = (target.provider == "claude",policy.plugin_bridge(),target.name.clone(),tokio::runtime::Handle::current());
@@ -2725,6 +2729,7 @@ impl RuntimeRegistry {
             Arc::new(recipe)
         };
         let sidecar_dir=super::lifecycle::claude_sidecar_dir()?;
+        super::claude_reopen::reconcile_account(&self.policy.codex_environment(),target.metadata["config_dir"].as_str(),target.metadata["cwd"].as_str().unwrap_or_default()).await?;
         // A vida nova sai do spec da sessão com a configuração de agora, nunca da receita do processo que
         // morre: a mesma conversa, o modo pedido e o modelo e o esforço que ela usava.
         let prepared={

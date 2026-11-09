@@ -4340,5 +4340,9 @@ A tela de Plugins chama `claude plugin …` (CLI 2.1.319) com a pasta padrão `~
   Não provado na prática: a passada de atualização só roda com login, até 10 min depois de abrir.
 - **Reabrir não reconcilia a conta.** Com `watch@claude-video` desligado no principal, o
   `POST /recarregar` de duas sessões de `~/.claude-claude-200-3` deixou a cópia da conta com `true` e
-  a skill carregada; uma sessão nova na conta reconciliou (`false`, sem a skill). Daí a Task 5 do
-  plano `docs/superpowers/plans/2026-11-09-plugins-claude-na-tela.md`.
+  a skill carregada; uma sessão nova na conta reconciliou (`false`, sem a skill). Corrigido: toda
+  subida de processo Claude em conta do Hangar reconcilia a conta antes (`reopen_by_spec`, e no
+  `gateway.rs` o `launch_if_needed` e o `reopen_headless_locked`, que cobrem `adopt_now`, acordar e o
+  religar depois de queda); a escolha de plugins da conversa segue valendo por cima. Falha na
+  reconciliação não sobe o processo: o reabrir responde 409 e a sessão sem terminal fica com
+  `headless_nao_subiu`.
