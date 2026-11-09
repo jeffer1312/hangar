@@ -10,11 +10,12 @@ use serde_json::json;
 use crate::routes::AppState;
 
 #[derive(Default)]
-struct Timing { config_ms: u64, stt_ms: u64, organize_ms: u64, provider: String, bytes: Option<usize>, code: String }
+struct Timing { config_ms: u64, read_ms: u64, store_ms: u64, stt_ms: u64, organize_ms: u64, provider: String, bytes: Option<usize>, code: String }
 
 tokio::task_local! { static TIMING: RefCell<Timing>; }
 
-pub(crate) enum Step { Config, Stt, Organize }
+/// `Read`: corpo do pedido ou arquivo já enviado; `Store`: gravação do áudio no cofre de anexos.
+pub(crate) enum Step { Config, Read, Store, Stt, Organize }
 
 /// Soma o tempo de `work` na etapa do pedido medido; fora de `measure` não faz nada. A soma sai no
 /// `Drop`: a etapa cortada por prazo (futuro descartado) é a lenta que se quer ver.
@@ -28,7 +29,10 @@ struct Elapsed { step: Step, started: Instant }
 impl Drop for Elapsed {
     fn drop(&mut self) {
         let ms = self.started.elapsed().as_millis() as u64;
-        note(|t| *match self.step { Step::Config => &mut t.config_ms, Step::Stt => &mut t.stt_ms, Step::Organize => &mut t.organize_ms } += ms);
+        note(|t| *match self.step {
+            Step::Config => &mut t.config_ms, Step::Read => &mut t.read_ms, Step::Store => &mut t.store_ms,
+            Step::Stt => &mut t.stt_ms, Step::Organize => &mut t.organize_ms,
+        } += ms);
     }
 }
 
@@ -36,17 +40,26 @@ fn note(change: impl FnOnce(&mut Timing)) {
     let _ = TIMING.try_with(|t| change(&mut t.borrow_mut()));
 }
 
-/// O que só quem transcreve ou organiza sabe: provedor (nome de exibição), tamanho e código da falha.
-pub(crate) fn transcribed(provider: Option<&str>, bytes: usize, code: Option<&str>) {
+/// Anotado antes do provedor: a transcrição cortada pelo prazo ainda diz o tamanho do áudio.
+pub(crate) fn received(bytes: usize) {
+    note(|t| t.bytes = Some(bytes));
+}
+
+/// O que só quem transcreve sabe: provedor (nome de exibição) e código da falha.
+pub(crate) fn transcribed(provider: Option<&str>, code: Option<&str>) {
     note(|t| {
         t.provider = provider.unwrap_or_default().to_owned();
-        t.bytes = Some(bytes);
         if let Some(code) = code { t.code = code.to_owned(); }
     });
 }
 
+/// Código de quem desistiu fora da transcrição e da organização (o prazo público, por exemplo).
+pub(crate) fn failed(code: &str) {
+    note(|t| t.code = code.to_owned());
+}
+
 pub(crate) fn organized(code: Option<&str>) {
-    if let Some(code) = code { note(|t| t.code = code.to_owned()); }
+    if let Some(code) = code { failed(code); }
 }
 
 /// Roda o pedido e grava uma linha no diário do servidor (`~/.hangar/logs/diario/servidor-rust`).
@@ -79,12 +92,17 @@ impl<R: FnOnce(serde_json::Value)> Line<R> {
         let mut timing = TIMING.try_with(RefCell::take).unwrap_or_default();
         let level = match status {
             None => { timing.code = "cancelled".into(); "aviso" }
-            Some(status) if status >= 400 => "erro",
+            Some(status) if status >= 400 => {
+                // Recusa montada fora da transcrição (404, 413, 422): o status vira o código, sem ler o corpo.
+                if timing.code.is_empty() { timing.code = format!("http_{status}"); }
+                "erro"
+            }
             Some(_) if timing.code.is_empty() => "ok",
             Some(_) => "aviso",
         };
         record(json!({"evento": "dictation.timing", "nivel": level, "rota": self.route, "status": status, "codigo": timing.code,
-            "provider": timing.provider, "bytes": timing.bytes, "config_ms": timing.config_ms, "stt_ms": timing.stt_ms,
+            "provider": timing.provider, "bytes": timing.bytes, "config_ms": timing.config_ms, "read_ms": timing.read_ms,
+            "store_ms": timing.store_ms, "stt_ms": timing.stt_ms,
             "organize_ms": timing.organize_ms, "total_ms": self.started.elapsed().as_millis() as u64}));
     }
 }
@@ -96,6 +114,7 @@ impl<R: FnOnce(serde_json::Value)> Drop for Line<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::response::IntoResponse;
 
     /// O passo cortado pelo prazo é justamente o lento: o tempo dele não pode sumir com o futuro descartado.
     #[tokio::test(start_paused = true)]
@@ -123,5 +142,46 @@ mod tests {
         let line = &lines[0];
         assert_eq!((line["nivel"].as_str(), line["codigo"].as_str(), line["status"].as_u64()), (Some("aviso"), Some("cancelled"), None), "{line}");
         assert_eq!((line["config_ms"].as_u64(), line["stt_ms"].as_u64(), line["total_ms"].as_u64()), (Some(40), Some(260), Some(300)), "{line}");
+    }
+
+    async fn one_line(work: impl Future<Output = Response>) -> serde_json::Value {
+        let lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = lines.clone();
+        measure_into("ditado", work, move |line| sink.lock().unwrap().push(line)).await;
+        let mut lines = lines.lock().unwrap();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        lines.remove(0)
+    }
+
+    /// Recusa montada fora da transcrição (404, 413, 422) não fica sem código.
+    #[tokio::test]
+    async fn dictation_timing_names_an_unnoted_error_by_its_status() {
+        let line = one_line(async { axum::http::StatusCode::UNPROCESSABLE_ENTITY.into_response() }).await;
+        assert_eq!((line["nivel"].as_str(), line["codigo"].as_str()), (Some("erro"), Some("http_422")), "{line}");
+    }
+
+    /// O prazo público vence a transcrição: a linha diz que foi o prazo e guarda o tamanho anotado antes do provedor.
+    #[tokio::test(start_paused = true)]
+    async fn dictation_timing_marks_the_public_deadline_and_keeps_the_bytes() {
+        let line = one_line(async {
+            let cut = super::super::http::within_public_deadline(180, async {
+                received(5);
+                timed(Step::Stt, std::future::pending::<Result<(), crate::transcription::model::TranscriptionError>>()).await
+            }).await;
+            assert!(cut.is_err());
+            axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response()
+        }).await;
+        assert_eq!((line["codigo"].as_str(), line["bytes"].as_u64(), line["stt_ms"].as_u64()), (Some("transcription_deadline"), Some(5), Some(180_000)), "{line}");
+    }
+
+    /// Leitura do corpo ou do arquivo e gravação no cofre entram em campos próprios.
+    #[tokio::test(start_paused = true)]
+    async fn dictation_timing_counts_reading_and_storing() {
+        let line = one_line(async {
+            timed(Step::Read, tokio::time::sleep(std::time::Duration::from_millis(30))).await;
+            timed(Step::Store, tokio::time::sleep(std::time::Duration::from_millis(20))).await;
+            axum::http::StatusCode::OK.into_response()
+        }).await;
+        assert_eq!((line["read_ms"].as_u64(), line["store_ms"].as_u64(), line["codigo"].as_str()), (Some(30), Some(20), Some("")), "{line}");
     }
 }

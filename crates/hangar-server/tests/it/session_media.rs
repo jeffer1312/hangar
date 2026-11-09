@@ -428,6 +428,7 @@ async fn dictation_timing_covers_the_session_transcribe_route() {
     let line = &lines[0];
     assert_eq!((line["rota"].as_str(), line["status"].as_u64(), line["bytes"].as_u64()), (Some("sessao"), Some(200), Some(5)), "{line}");
     assert!(line["provider"].is_string() && line["stt_ms"].is_u64() && line["config_ms"].is_u64() && line["total_ms"].is_u64(), "{line}");
+    assert!(line["read_ms"].is_u64() && line["store_ms"].is_u64(), "corpo lido e áudio gravado no cofre entram na linha: {line}");
     assert!(!text.contains("ola mundo") && !text.contains(body["path"].as_str().unwrap()), "{text}");
 }
 

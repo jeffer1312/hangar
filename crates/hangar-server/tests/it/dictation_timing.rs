@@ -109,7 +109,7 @@ async fn dictation_timing_records_each_step_of_a_public_dictation() {
     let line = &lines[0];
     assert_eq!((line["rota"].as_str(), line["status"].as_u64(), line["provider"].as_str(), line["bytes"].as_u64(), line["nivel"].as_str()),
         (Some("ditado"), Some(200), Some("Fixture STT"), Some(5), Some("ok")), "{line}");
-    for field in ["config_ms", "stt_ms", "organize_ms", "total_ms"] {
+    for field in ["config_ms", "read_ms", "stt_ms", "organize_ms", "total_ms"] {
         assert!(line[field].is_u64(), "{field} ausente: {line}");
     }
     assert!(line["total_ms"].as_u64() >= line["stt_ms"].as_u64(), "{line}");
@@ -132,4 +132,27 @@ async fn dictation_timing_records_reorganization_and_failure() {
     assert_eq!((failed["status"].as_u64(), failed["nivel"].as_str()), (Some(503), Some("erro")), "{failed}");
     assert!(failed["codigo"].as_str().is_some_and(|c| c.starts_with("transcription_")), "{failed}");
     assert_clean(&text);
+}
+
+/// A reserva que transcreveu, o pedido de organização que volta cru e a query recusada não saem como `ok` sem código.
+#[tokio::test]
+async fn dictation_timing_marks_fallback_raw_text_and_refused_query() {
+    let server = Server::start().await;
+    {
+        let mut config = server.config.lock().unwrap();
+        let good = config["providers"][0].clone();
+        let mut bad = good.clone();
+        bad["id"] = json!("q");
+        bad["base_url"] = json!(good["base_url"].as_str().unwrap().replace("/v1", "/fora/v1"));
+        config["providers"] = json!([bad, good]);
+    }
+    assert_eq!(server.post("/api/dictation/transcribe?limpar=0", "audio".into()).await, 200);
+    let (lines, text) = timing_lines(server.home.path(), 1).await;
+    assert_eq!((lines[0]["nivel"].as_str(), lines[0]["codigo"].as_str()), (Some("aviso"), Some("transcription_fallback")), "{text}");
+    assert_eq!(server.post("/api/dictation/transcribe?organization_mode=nenhum", "audio".into()).await, 200);
+    let (lines, text) = timing_lines(server.home.path(), 2).await;
+    assert_eq!((lines[1]["nivel"].as_str(), lines[1]["codigo"].as_str()), (Some("aviso"), Some("dictation_request_invalid")), "{text}");
+    assert_eq!(server.post("/api/dictation/transcribe?limpar=talvez", "audio".into()).await, 422);
+    let (lines, text) = timing_lines(server.home.path(), 3).await;
+    assert_eq!((lines[2]["nivel"].as_str(), lines[2]["codigo"].as_str()), (Some("erro"), Some("http_422")), "{text}");
 }

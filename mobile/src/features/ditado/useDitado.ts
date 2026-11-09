@@ -33,9 +33,11 @@ const backgroundRecording = () => Platform.OS === 'ios'
 // O tipo do áudio não resolve a base quando o core do Expo fica aninhado no SDK.
 type ManagedRecorder = AudioRecorder & InstanceType<SharedObject<RecordingEvents>>;
 
+export interface RecordingStop { stoppedAt: number; fileAt: number }
+
 interface Opts {
-  /** `stoppedAt`: o instante em que a parada começou (`Date.now()`), para medir até o texto. */
-  onFim: (file: File, motivo: MotivoFim, uri: string, stoppedAt: number) => void;
+  /** `stop`: quando a parada começou e quando o arquivo ficou pronto (`Date.now()`), para medir até o texto. */
+  onFim: (file: File, motivo: MotivoFim, uri: string, stop: RecordingStop) => void;
   onErroParada?: (e: Error) => void;
   /** Máquina da conversa: o teto da gravação é o configurado nela. */
   server?: Server | null;
@@ -139,7 +141,7 @@ export function useDitado({ onFim, onErroParada, server }: Opts) {
           const blob = await res.blob();
           if (recording.error) throw recording.error;
           const file = new File([blob], 'ditado.m4a', { type: 'audio/m4a' });
-          recording.onFim(file, recording.reason ?? motivo, uri, stoppedAt);
+          recording.onFim(file, recording.reason ?? motivo, uri, { stoppedAt, fileAt: Date.now() });
         } catch (e) {
           reportRecordingError(recording, e);
         } finally {

@@ -26,6 +26,8 @@ export interface Evento {
   tentativa?: number;
   espera_ms?: number;
   quantidade?: number;
+  etapa?: string;
+  motivo?: string;
 }
 
 export interface DiagSink {

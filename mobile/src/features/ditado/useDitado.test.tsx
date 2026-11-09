@@ -460,10 +460,11 @@ describe('useDitado — interrupção e origem da gravação', () => {
       emitRecordingStatus();
       await delivered.promise;
     });
-    expect(onFim.mock.calls[0]).toEqual([expect.any(File), 'escondeu', 'file://fake.m4a', expect.any(Number)]);
-    // O instante da parada, não o da entrega do arquivo: `dictation.client_timing` mede a partir dele.
-    const stoppedAt = (onFim.mock.calls[0] as unknown[])[3] as number;
+    expect(onFim.mock.calls[0]).toEqual([expect.any(File), 'escondeu', 'file://fake.m4a', { stoppedAt: expect.any(Number), fileAt: expect.any(Number) }]);
+    // A parada e o arquivo pronto: `dictation.client_timing` mede entre os dois, como o nativo mede o WAV.
+    const { stoppedAt, fileAt } = (onFim.mock.calls[0] as unknown[])[3] as { stoppedAt: number; fileAt: number };
     expect(stoppedAt >= beforeStop && stoppedAt <= stopped).toBe(true);
+    expect(fileAt >= stoppedAt && fileAt <= Date.now()).toBe(true);
     expect(fakeRec.release).toHaveBeenCalledTimes(1);
 
   });

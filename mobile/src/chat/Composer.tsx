@@ -18,7 +18,7 @@ import { removeDraftAttachment, retainDraftAttachment } from './draftAttachments
 import { useNavigation, useRouter } from 'expo-router';
 import { DictationStyleMenu, useDictationStyleLabel } from '../features/ditado/EstiloPill';
 import { useDictationOrganization } from '../features/ditado/dictationOrganization';
-import { useDitado } from '../features/ditado/useDitado';
+import { useDitado, type RecordingStop } from '../features/ditado/useDitado';
 import { dictationStyleStore } from '../features/ditado/ditadoEstiloStore';
 import { DictationError, dictationAudio, runDictation, uploadName, type DictationSource } from '../features/ditado/dictationRun';
 import { AudioChip } from './AudioChip';
@@ -911,7 +911,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
   }, [limparUndo]);
 
   const runTranscription = useCallback(async (voice: DictationDraft, source: DictationSource, server: Server, generation: number, allowAuto: boolean,
-    stoppedAt?: number) => {
+    stop?: RecordingStop) => {
     if (transcribingRef.current) return;
     const intent = voiceSendRef.current;
     if (intent && !intent.dictationId) intent.dictationId = voice.id;
@@ -937,7 +937,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     if (mountedRef.current) setDictation(voice);
     try {
       const { completed, text: trimmed, raw, aviso, path, applied } = await runDictation(server, origin.serverId, origin.name, voice, source, {
-        stoppedAt,
+        stoppedAt: stop?.stoppedAt, fileAt: stop?.fileAt,
         check: () => {
           const sessions = useSessions.getState();
           const live = sessions.byServerRecord?.[origin.serverId]?.find((s) => s.name === origin.name)
@@ -997,7 +997,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
   }, [origin, offerUndo, iniciarAuto, navigation, setBar, cancelVoiceSend]);
 
   const handleTranscribe = useCallback(
-    async (file: File, motivo: MotivoFim, uri: string, stoppedAt?: number, allowAuto = true) => {
+    async (file: File, motivo: MotivoFim, uri: string, stop?: RecordingStop, allowAuto = true) => {
       const target = recordingTargetRef.current;
       if (!target || transcribingRef.current) return;
       const generation = activityGenerationRef.current;
@@ -1024,7 +1024,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
         before: target.snapshot.text.trim(), motivo, estilo: target.estilo,
         status: 'pending', text: '', raw: '', issue: '',
       };
-      await runTranscription(voice, { file }, target.server, generation, allowAuto && generation === target.generation, stoppedAt);
+      await runTranscription(voice, { file }, target.server, generation, allowAuto && generation === target.generation, stop);
     },
     [runTranscription, cancelVoiceSend],
   );

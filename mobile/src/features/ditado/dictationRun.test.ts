@@ -74,17 +74,17 @@ describe('dictation.client_timing', () => {
   });
   afterEach(() => { vi.useRealTimers(); });
 
-  it('mede cada etapa até o texto (conferência, subida, gravação, transcrição, fechamento) e o motivo da parada', async () => {
+  it('mede cada etapa até o texto (arquivo, preparo, conferência, subida, gravação, transcrição, fechamento) e o motivo', async () => {
     core.upload.mockImplementationOnce(async () => { vi.setSystemTime(10_250); return { path: '/up/sess/d.m4a' }; });
     core.transcribe.mockImplementationOnce(async () => { vi.setSystemTime(11_250); return { path: '/up/sess/d.m4a', text: 'olá', raw: 'olá' }; });
     writeDictation('s1', 'sess', voice({ motivo: 'silencio' }));
     await runDictation(server, 's1', 'sess', voice({ motivo: 'silencio' }), { file: new File(['a'], 'd.m4a') }, {
       check: () => vi.setSystemTime(10_050),
       isActive: () => { vi.setSystemTime(11_330); return false; },
-      stoppedAt: 9_700,
+      stoppedAt: 9_700, fileAt: 9_900,
     });
-    expect(core.diag).toHaveBeenCalledExactlyOnceWith({ evento: 'dictation.client_timing', nivel: 'ok', ms: 1630,
-      detalhe: 'stop_to_file_ms=300 check_ms=50 upload_ms=200 save_ms=0 transcribe_ms=1000 finish_ms=80 total_ms=1630 motivo=silencio' },
+    expect(core.diag).toHaveBeenCalledExactlyOnceWith({ evento: 'dictation.client_timing', nivel: 'ok', ms: 1630, motivo: 'silencio',
+      detalhe: 'stop_to_file_ms=200 prepare_ms=100 check_ms=50 upload_ms=200 save_ms=0 transcribe_ms=1000 finish_ms=80 total_ms=1630' },
     'https://a.test');
   });
 
@@ -94,19 +94,19 @@ describe('dictation.client_timing', () => {
     await expect(runDictation(server, 's1', 'sess', voice(), { file: new File(['a'], 'd.m4a') }, {
       check: () => vi.setSystemTime(10_100), isActive: () => false, stoppedAt: 10_000,
     })).rejects.toThrow();
-    expect(core.diag).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ nivel: 'erro', codigo: 'failed',
-      detalhe: 'stop_to_file_ms=0 check_ms=100 upload_ms=200 save_ms=0 transcribe_ms=0 finish_ms=0 total_ms=300 motivo=botao etapa=upload' }),
+    expect(core.diag).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ nivel: 'erro', codigo: 'failed', etapa: 'upload', motivo: 'botao',
+      detalhe: 'stop_to_file_ms=0 prepare_ms=0 check_ms=100 upload_ms=200 save_ms=0 transcribe_ms=0 finish_ms=0 total_ms=300' }),
     'https://a.test');
   });
 
-  it('a conferência que recusa antes da rede fica na etapa check', async () => {
+  it('a conferência que recusa antes da rede (app escondido, outra conversa) é aviso, não erro', async () => {
     writeDictation('s1', 'sess', voice());
     await expect(runDictation(server, 's1', 'sess', voice(), { file: new File(['a'], 'd.m4a') }, {
       check: () => { vi.setSystemTime(10_020); throw new Error('outra conversa'); }, isActive: () => false, stoppedAt: 10_000,
     })).rejects.toThrow();
     expect(core.upload).not.toHaveBeenCalled();
-    expect(core.diag).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
-      detalhe: 'stop_to_file_ms=0 check_ms=20 upload_ms=0 save_ms=0 transcribe_ms=0 finish_ms=0 total_ms=20 motivo=botao etapa=check' }),
+    expect(core.diag).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ nivel: 'aviso', codigo: 'interrupted', etapa: 'check',
+      detalhe: 'stop_to_file_ms=0 prepare_ms=0 check_ms=20 upload_ms=0 save_ms=0 transcribe_ms=0 finish_ms=0 total_ms=20' }),
     'https://a.test');
   });
 
@@ -125,7 +125,8 @@ describe('dictation.client_timing', () => {
     await expect(runDictation(server, 's1', 'sess', voice(), { file: new File(['a'], 'd.m4a') }, { isActive: () => false, stoppedAt: 9_900 }))
       .rejects.toThrow();
     expect(core.diag).toHaveBeenCalledExactlyOnceWith({ evento: 'dictation.client_timing', nivel: 'erro', codigo: '502', ms: 500,
-      detalhe: 'stop_to_file_ms=100 check_ms=0 upload_ms=0 save_ms=0 transcribe_ms=400 finish_ms=0 total_ms=500 motivo=botao etapa=transcribe' },
+      etapa: 'transcribe', motivo: 'botao',
+      detalhe: 'stop_to_file_ms=100 prepare_ms=0 check_ms=0 upload_ms=0 save_ms=0 transcribe_ms=400 finish_ms=0 total_ms=500' },
     'https://a.test');
     core.diag.mockReset();
     core.transcribe.mockResolvedValueOnce({ path: '/up/sess/d.m4a', text: 'ok' });

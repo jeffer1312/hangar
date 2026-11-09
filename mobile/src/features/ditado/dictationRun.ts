@@ -1,5 +1,6 @@
-import { fileAuthHeader, registrarDiag, transcribeUploadedForServer, uploadFileForServer, uploadUrlNative, type Server } from '@hangar/core';
+import { fileAuthHeader, transcribeUploadedForServer, uploadFileForServer, uploadUrlNative, type Server } from '@hangar/core';
 import * as m from '../../paraglide/messages';
+import { failureCode, recordTiming, stageClock } from './clientTiming';
 import { chatStore } from '../../stores/chat';
 import { finishDictation, readDictation, readDraft, setDictationInFlight, writeDictation, type DictationDraft, type DraftAttachment } from '../../stores/drafts';
 import { removeDraftAttachment } from '../../chat/draftAttachments';
@@ -42,45 +43,15 @@ function notify(serverId: string, name: string): void {
   chatStore(serverId, name).use.setState((s) => ({ draftUpdate: s.draftUpdate + 1 }));
 }
 
-// `save`: o caminho do áudio subido gravado no aparelho; `finish`: o texto gravado no rascunho.
-type Stage = 'check' | 'upload' | 'save' | 'transcribe' | 'finish';
-const STAGES: Stage[] = ['check', 'upload', 'save', 'transcribe', 'finish'];
-
-// Etapas contíguas: a soma delas com a parada → arquivo é o total, e a falha cai na etapa em curso.
-function stageClock() {
-  const ms: Record<Stage, number> = { check: 0, upload: 0, save: 0, transcribe: 0, finish: 0 };
-  let stage: Stage = 'check';
-  let at = Date.now();
-  const close = () => { const now = Date.now(); ms[stage] += now - at; at = now; };
-  return {
-    ms, start: at,
-    get stage() { return stage; },
-    enter(next: Stage) { close(); stage = next; },
-    close,
-  };
-}
-
-// O diário do servidor só aceita campos conhecidos (`_CAMPOS` do Python): os tempos vão no `detalhe`. `motivo`
-// diz se a parada foi um toque ou o silêncio, o teto ou a tela escondida.
-function recordTiming(server: Server, stoppedAt: number, clock: ReturnType<typeof stageClock>, motivo: string,
-  failure?: { code: string }, warned = false): void {
-  clock.close();
-  const total = Date.now() - stoppedAt;
-  const steps = STAGES.map((s) => `${s}_ms=${clock.ms[s]}`).join(' ');
-  registrarDiag({
-    evento: 'dictation.client_timing', nivel: failure ? 'erro' : warned ? 'aviso' : 'ok', ...(failure ? { codigo: failure.code } : {}), ms: total,
-    detalhe: `stop_to_file_ms=${clock.start - stoppedAt} ${steps} total_ms=${total} motivo=${motivo}${failure ? ` etapa=${clock.stage}` : ''}`,
-  }, server.invite ? undefined : server.baseUrl);
-}
-
 /**
  * Ditado preso à conversa de origem, fora do ciclo de vida do Composer: trocar de conversa no meio
  * não descarta o resultado. Quem chama já gravou `voice`. `check` roda antes da rede; `isActive`, na
- * chegada, decide se o texto entra no campo aberto ou fica `ready` para a montagem. `stoppedAt`: a
- * parada da gravação nova (toque, silêncio, teto ou tela escondida, em `voice.motivo`), para medir cada etapa.
+ * chegada, decide se o texto entra no campo aberto ou fica `ready` para a montagem. `stoppedAt` e
+ * `fileAt`: a parada da gravação nova (toque, silêncio, teto ou tela escondida, em `voice.motivo`) e o arquivo
+ * pronto no gravador, para medir cada etapa.
  */
 export async function runDictation(server: Server, serverId: string, name: string, voice: DictationDraft,
-  source: DictationSource, opts: { isActive: () => boolean; check?: () => void; stoppedAt?: number }): Promise<DictationOutcome> {
+  source: DictationSource, opts: { isActive: () => boolean; check?: () => void; stoppedAt?: number; fileAt?: number }): Promise<DictationOutcome> {
   const clock = stageClock();
   setDictationInFlight(serverId, name, voice.id, true);
   notify(serverId, name);
@@ -111,12 +82,15 @@ export async function runDictation(server: Server, serverId: string, name: strin
     clock.enter('finish');
     const completed = finishDictation(serverId, name, voice.id,
       { text, raw, issue: aviso, serverPath: path, applied }, opts.isActive());
-    if (opts.stoppedAt !== undefined) recordTiming(server, opts.stoppedAt, clock, voice.motivo, undefined, !!aviso);
+    if (opts.stoppedAt !== undefined) recordTiming(server, { stoppedAt: opts.stoppedAt, fileAt: opts.fileAt }, clock, voice.motivo, undefined, !!aviso);
     return { completed, text, raw, aviso, path, applied };
   } catch (e) {
     const detail = e instanceof Error ? e.message : m.composer_falha_transcricao();
     if (opts.stoppedAt !== undefined) {
-      recordTiming(server, opts.stoppedAt, clock, voice.motivo, { code: /^(\d{3}):/.exec(detail)?.[1] ?? 'failed' });
+      // Na etapa `check` só há a conferência de quem chama: a recusa dela é prevista.
+      const refused = clock.stage === 'check';
+      recordTiming(server, { stoppedAt: opts.stoppedAt, fileAt: opts.fileAt }, clock, voice.motivo,
+        refused ? { code: 'interrupted', expected: true } : { code: failureCode(detail) });
     }
     const issue = /^(501|503):/.test(detail) ? `${m.composer_ditado_indisponivel()}: ${detail}` : detail;
     let lost = false;
