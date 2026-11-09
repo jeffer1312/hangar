@@ -322,7 +322,8 @@ fn sync_report_selected(
             }
             if enabled("pair-context") {
                 changed |= sync_hook(&mut data, "SessionStart", None, None, "pair_hook.py");
-                let exe = std::env::current_exe().map_err(|error| error.to_string())?;
+                // Caminho da versão mudaria o settings.json a cada atualização e acenderia o Recarregar.
+                let exe = crate::codex_setup::hook_command::persistent_server()?;
                 let command = format!(
                     "\"{}\" pair-context \"{}\" || exit 0",
                     exe.display(),

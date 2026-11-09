@@ -3,11 +3,15 @@ use std::{ffi::{OsStr, OsString}, io::{self, Read, Write}, process::{Command, Ou
 use std::path::{Component, Path, PathBuf};
 
 pub fn allow_wrapper() -> Result<(String, String), String> {
-    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-    let executable = persistent_executable(&executable, std::env::home_dir().as_deref());
-    let executable = executable.into_os_string().into_string()
+    let executable = persistent_server()?.into_os_string().into_string()
         .map_err(|_| "O caminho do servidor não está em UTF-8".to_owned())?;
     Ok((executable, "codex-hook-allow".into()))
+}
+
+/// Este `hangar-server` por um caminho que sobrevive à troca de versão, para gravar em config de fora.
+pub fn persistent_server() -> Result<PathBuf, String> {
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    Ok(persistent_executable(&executable, std::env::home_dir().as_deref()))
 }
 
 fn persistent_executable(executable: &Path, home: Option<&Path>) -> PathBuf {
