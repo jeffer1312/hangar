@@ -66,7 +66,7 @@ fn generation(state_path: &Path) -> Result<u64, RuntimeError> {
 pub struct BareClaude { pub pane_pid: i64, pub agent: i64, pub cwd: String, pub key: String, pub created: f64 }
 
 /// O que o pane prova: o agente, a conta e a conversa dele.
-struct Proven { agent: u32, config_dir: PathBuf, conversation: String, transcript: PathBuf, plugin_key: Option<String>, pane_birth: Option<f64> }
+struct Proven { agent: u32, config_dir: PathBuf, conversation: String, transcript: PathBuf, plugin_key: Option<String>, pane_birth: Option<f64>, by_plugin: bool }
 
 /// A conversa que o `/pull` do plugin informou, com a chave do token que o assina.
 pub struct PluginClaim { pub key: String, pub conversation: String }
@@ -116,6 +116,7 @@ fn prove(panes: &[Pane], name: &str, claude_base: &Path, claim: Option<&PluginCl
     // do token é a do ambiente do agente, o transcript dela existe e o argumento do processo não a contradiz.
     let claimed = claim.filter(|claim| native.is_none()
         && claim_holds(claim, plugin_key.as_deref(), &|sid| transcript_of(sid).is_file()));
+    let by_plugin = claimed.is_some();
     let (conversation, transcript) = match native.or_else(|| claimed.map(|claim| claim.conversation.clone())) {
         Some(sid) => {
             let transcript = transcript_of(&sid);
@@ -137,7 +138,7 @@ fn prove(panes: &[Pane], name: &str, claude_base: &Path, claim: Option<&PluginCl
         }
     };
     let pane_birth = row.pane_pid.and_then(|pid| procs.start_time(pid));
-    Ok(Some(Proven { agent, config_dir, conversation, transcript, plugin_key, pane_birth }))
+    Ok(Some(Proven { agent, config_dir, conversation, transcript, plugin_key, pane_birth, by_plugin }))
 }
 
 impl Watcher {
@@ -273,7 +274,7 @@ impl Watcher {
         let binding = TerminalBinding { name: name.to_owned(), pane: target_pane, conversation: proven.conversation.clone(), generation, created,
             mux_argv: vec![program], windows: cfg!(windows), clipboard_lock_path: Some(self.cfg.queue_dir.join("runtime").join("clipboard.lock")) };
         let meta = json!({"key": key, "config_dir": proven.config_dir, "agent_pid": proven.agent, "legacy_import_after": proven.pane_birth});
-        let metadata = TerminalMetadata::resolve(&meta, &binding, &proven.transcript).await.map_err(|error| refused(error.0, "o Claude do terminal não provou a vida dele"))?;
+        let metadata = TerminalMetadata::resolve(&meta, &binding, &proven.transcript, proven.by_plugin.then_some(proven.agent)).await.map_err(|error| refused(error.0, "o Claude do terminal não provou a vida dele"))?;
         let target = TerminalTarget { key, generation, name: name.to_owned(), binding, lease_path, state_path, projection_dir: self.cfg.queue_dir.clone(),
             transcript: proven.transcript, created: proven.pane_birth.unwrap_or(created as f64).max(created as f64), plugin_key: proven.plugin_key, metadata };
         registry.open_terminal(target).await.map(|_| ())

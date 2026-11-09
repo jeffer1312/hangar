@@ -34,8 +34,9 @@ impl TerminalMetadata {
     }
     pub fn cut(&self, created: f64) -> f64 { self.legacy_import_after.filter(|cut| *cut > 0.0).unwrap_or(created).max(self.agent_birth) }
 
-    /// Campos antigos ausentes são resolvidos pelo pane e processo, nunca pelo nome da sessão.
-    pub async fn resolve(meta: &Value, binding: &TerminalBinding, transcript: &Path) -> Result<Self, ServiceError> {
+    /// Campos antigos ausentes são resolvidos pelo pane e processo, nunca pelo nome da sessão. `plugin_agent`: o
+    /// agente cujo `/pull` já provou a conversa (depois de `/clear` o argumento do processo é o da anterior).
+    pub async fn resolve(meta: &Value, binding: &TerminalBinding, transcript: &Path, plugin_agent: Option<u32>) -> Result<Self, ServiceError> {
         if let Ok(metadata) = Self::from_descriptor(meta) { return Ok(metadata); }
         let io = input::ProcessIo::default();
         let (program, prefix) = binding.mux_argv.split_first().ok_or(ServiceError("mux_missing"))?;
@@ -68,7 +69,7 @@ impl TerminalMetadata {
             let record = read_native_record(&config.join("sessions").join(format!("{pid}.json")))?;
             let proven = match record {
                 Some(record) => record["pid"].as_u64() == Some(u64::from(pid)) && record["sessionId"].as_str() == Some(&binding.conversation),
-                None => row.repl_sid.as_deref() == Some(&binding.conversation) && row.transcript.as_ref().is_some_and(|source| source.tracked && source.jsonl.as_deref().is_some_and(|path| Path::new(path) == transcript)),
+                None => proven_without_record(plugin_agent, pid, row.repl_sid.as_deref() == Some(&binding.conversation) && row.transcript.as_ref().is_some_and(|source| source.tracked && source.jsonl.as_deref().is_some_and(|path| Path::new(path) == transcript))),
             };
             if !proven { return Err(ServiceError("terminal_native_record_changed")); }
             let mut resolved = meta;
@@ -286,6 +287,8 @@ fn read_json(path: &Path, code: &'static str) -> Result<Option<Value>, ServiceEr
 /// Registro nativo ilegível e parado há este tempo é escrita que o disco cheio cortou: o Claude só o refaz na
 /// próxima troca de estado, que a fila travada nunca traz. Ilegível recente é reescrita em andamento.
 pub(crate) const STUCK_NATIVE_RECORD: Duration = Duration::from_secs(5);
+/// Sem registro nativo, a conversa vale pelo `/pull` do plugin do MESMO agente ou pela prova da lista.
+fn proven_without_record(plugin_agent: Option<u32>, pid: u32, listed: bool) -> bool { plugin_agent == Some(pid) || listed }
 /// O `sessions/<pid>.json` do Claude; ilegível e parado vale como ausente, e quem lê segue a prova do registro sumido.
 pub(crate) fn read_native_record(path: &Path) -> Result<Option<Value>, ServiceError> {
     let unavailable = ServiceError("terminal_native_record_unavailable");
@@ -456,6 +459,13 @@ mod tests {
         for field in ["config_dir","agent_pid","agent_birth","fingerprint"] {let mut missing=meta.clone();missing.as_object_mut().unwrap().remove(field);assert!(TerminalMetadata::from_descriptor(&missing).is_err());}
         let mut missing=meta.clone();missing.as_object_mut().unwrap().remove("message_origin");assert_eq!(TerminalMetadata::from_descriptor(&missing).unwrap().origin,format!("uds:hangar-{}",std::process::id()));
         let mut wrong=meta;wrong["message_origin"]=json!("peer");assert!(TerminalMetadata::from_descriptor(&wrong).is_err());
+    }
+    #[test]
+    fn without_a_record_the_plugin_proof_counts_only_for_the_same_agent() {
+        assert!(proven_without_record(Some(7), 7, false), "depois de /clear o argumento é da conversa anterior; o /pull deste agente prova a atual");
+        assert!(!proven_without_record(Some(8), 7, false), "/pull de outro processo não prova nada");
+        assert!(proven_without_record(None, 7, true));
+        assert!(!proven_without_record(None, 7, false));
     }
     #[test]
     fn a_native_record_left_unreadable_counts_as_absent_only_once_it_stops_changing() {
