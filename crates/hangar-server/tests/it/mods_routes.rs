@@ -140,6 +140,30 @@ async fn session_outside_the_mods_gets_the_fixed_answer_without_python() {
     }
 }
 
+/// D8: os corpos que o Python recusava com 422 antes da ponte (contract/r1-mods `press_422_*`,
+/// `close_422_*`) recebem a mesma recusa fixa, um por um.
+#[tokio::test]
+async fn bodies_the_python_refused_with_422_get_the_fixed_answer() {
+    let (python, server, _mods, _link) = setup(FakeLink::default()).await;
+    let cases = [
+        ("press", r#"{"site": "above-prompt", "key": "mr-a", "plugin": ""}"#),
+        ("press", r#"{"site": "above-prompt", "key": "mr-a", "plugin": "pm-mock", "x": 1}"#),
+        ("press", "{nope"),
+        ("press", r#"{"site": "above-prompt"}"#),
+        ("close", r#"{"site": "pm-mock-mr", "key": "x"}"#),
+        ("close", "{}"),
+    ];
+    for (route, raw) in cases {
+        let response = client().post(format!("http://{server}/api/sessions/outra/plugin/{route}"))
+            .header("content-type", "application/json").header("authorization", format!("Bearer {OWNER}"))
+            .body(raw).send().await.unwrap();
+        assert_eq!(response.status().as_u16(), 503, "{route} {raw}");
+        let body: Value = serde_json::from_str(&response.text().await.unwrap()).unwrap();
+        assert_eq!(body["detail"]["code"], "mods_need_rust_server", "{route} {raw}");
+    }
+    assert_eq!(python.hits_to("/api/sessions/outra/plugin/press") + python.hits_to("/api/sessions/outra/plugin/close"), 0);
+}
+
 /// D21: cada recusa fixa grava no diário a linha `api.servidor` que o Python gravava (contract/r1-mods
 /// `*_rust_404`): nível, sessão, código, rota, etapa e causa.
 #[tokio::test]
