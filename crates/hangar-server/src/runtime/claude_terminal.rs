@@ -113,7 +113,7 @@ fn prove(panes: &[Pane], name: &str, claude_base: &Path, claim: Option<&PluginCl
     let plugin_key = env("HANGAR_PLUGIN_TOKEN").and_then(|token| token.split_once('.').map(|(key, _)| key.to_owned())).filter(|k| !k.is_empty());
     let transcript_of = |sid: &str| super::claude_launch::transcript_in(&config_dir.join("projects"), &row.cwd, sid);
     // Sem o registro nativo (o Claude não o recria), o `/pull` do plugin deste processo diz a conversa: a chave
-    // do token é a do ambiente do agente, o transcript dela existe e o argumento do processo não a contradiz.
+    // do token é a do ambiente do agente e o transcript dela existe; o argumento do processo não entra (`claim_holds`).
     let claimed = claim.filter(|claim| native.is_none()
         && claim_holds(claim, plugin_key.as_deref(), &|sid| transcript_of(sid).is_file()));
     let by_plugin = claimed.is_some();
