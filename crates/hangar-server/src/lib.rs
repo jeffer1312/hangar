@@ -96,7 +96,7 @@ pub mod dictation;
 pub mod workspace_routes;
 pub(crate) mod workspace_http;
 pub mod uploads;
-pub mod user_data;
+pub use hangar_core::user_data;
 pub mod machine_peers;
 pub mod install_root;
 pub mod update;

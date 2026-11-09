@@ -245,11 +245,10 @@ impl Outgoing {
     }
 }
 
-/// Binário de teste: o `cargo test` põe todos em `target/<perfil>/deps/`, e o teste de integração
-/// compila a crate sem `cfg(test)`. Nele o pedido do cofre nunca chega ao celular real do dono, que
-/// o `AccountEnvironment` capturado do ambiente aponta.
+/// No binário de teste o pedido do cofre nunca chega ao celular real do dono, que o
+/// `AccountEnvironment` capturado do ambiente aponta.
 fn test_binary() -> bool {
-    cfg!(test) || std::env::current_exe().ok().is_some_and(|exe| exe.parent().and_then(|dir| dir.file_name()).is_some_and(|name| name == "deps"))
+    cfg!(test) || hangar_core::process::cargo_test_binary()
 }
 
 /// O que segura um aviso, lido na hora (arquivo de preferências, convidados e presença).

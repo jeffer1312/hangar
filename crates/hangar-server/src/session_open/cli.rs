@@ -114,11 +114,7 @@ pub fn run(args: &[String]) -> ExitCode {
 /// O `.env` do servidor: `~/.hangar/config/.env` ou, sem ele, o da `backend/` da cópia do Hangar.
 fn env_file() -> std::io::Result<Option<PathBuf>> { crate::user_data::env_file(backend_dir().as_deref()) }
 
-/// Pasta `backend/` de uma cópia do Hangar. O `.env` pode já estar em `~/.hangar/config/`, então um
-/// arquivo que só o Hangar tem também a identifica (`app/main.py` casaria com qualquer projeto).
-pub fn is_backend(dir: &std::path::Path) -> bool {
-    dir.join(".env").is_file() || dir.join("app").join("rust_server.py").is_file()
-}
+pub use hangar_core::paths::is_backend;
 
 /// A `backend/` da raiz da instalação (`install_root::root`): o `~/.hangar/current` do pacote, ou a
 /// cópia acima do binário (checkout), ou a que o servidor anotou ao subir (binário em `~/.hangar/bin`).
@@ -186,8 +182,7 @@ fn usage() -> ExitCode {
     ExitCode::from(2)
 }
 
-/// Onde o servidor anota a pasta `backend/` dele, para o comando instalado longe dela achar o `.env`.
-pub(crate) fn pointer(home: &std::path::Path) -> PathBuf { home.join(".hangar").join("backend-dir") }
+pub(crate) use hangar_core::paths::pointer;
 
 /// O servidor anota a `backend/` de onde roda (a pasta de trabalho dele) ao subir.
 pub fn publish_backend_dir(home: &std::path::Path, backend: &std::path::Path) -> std::io::Result<()> {

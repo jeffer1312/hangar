@@ -369,14 +369,26 @@ Ficaram para depois:
 - O teste de `install_root` só de Windows usa `update::make_link` (`install_root.rs:221`): fica no
   servidor como teste de integração.
 
-- [ ] **Step 1: Listar as dependências de cada item**, inclusive de `catalog::Account`, e
+**Concluído (09/11/2026), depois do merge do #337.** Desceram `user_data`, `paths` (`log_base*`,
+`pointer`, `is_backend`, `current`), `diag` e a parte pura do `install_root` (`root`, `python_exe`,
+`backend_command`). Ficam no servidor o `version_route` do #337 (lê `AppState` e `boot_version`) no
+`diag.rs` e o lançador (`launch`, `run`, Job do Windows) no `install_root.rs`, que re-exportam o core.
+O `cfg!(test)` do `DiagClient` não basta fora do crate: o diário agora fecha em binário de teste do
+cargo (`process::cargo_test_binary`, a checagem que o `push/send.rs` já tinha), e o `diary_dir_in`
+também quando o HOME é o real. Isso fechou um vazamento antigo: o `it` gravava sessões de teste no
+diário real (visto nos dias 06 e 07/11).
+
+- [x] **Step 1: Listar as dependências de cada item**, inclusive de `catalog::Account`, e
   confirmar que a tabela fecha sem nada do servidor; trazer ao Jefferson o que puxar módulo grande.
-- [ ] **Step 2: Varrer `cfg!(test)`/`#[cfg(test)]`** no que desce e decidir cada caso pelo item 5.
-- [ ] **Step 3: Commit de corte** (funções e tipos) com `pub use` nos lugares antigos.
-- [ ] **Step 4: Commit de movimento** dos cinco módulos inteiros.
-- [ ] **Step 5: Provas comuns** (quando autorizadas), com o passo Windows (`scope_prefix`, `windows-sys`).
-- [ ] **Step 6: Conferir que os testes não gravam no diário real** (`~/.hangar/…/diario/servidor-rust`
-  sem linha nova depois da suíte).
+- [x] **Step 2: Varrer `cfg!(test)`/`#[cfg(test)]`** no que desce e decidir cada caso pelo item 5.
+- [x] **Step 3: Commit de corte** (funções e tipos) com `pub use` nos lugares antigos.
+- [x] **Step 4: Commit de movimento** dos cinco módulos inteiros.
+- [x] **Step 5: Provas comuns** (quando autorizadas), com o passo Windows (`scope_prefix`, `windows-sys`).
+  Feito: `check` do core e do servidor limpos; core 41 ok; servidor 2627 ok; `it` 3604 ok e 5 falhas
+  de testes novos do #337 que passam sozinhos (10/10 filtrados) ou pedem o `backend/.venv` do
+  checkout (`s01`); avisado à sessão do #337. Passo Windows fica com o CI.
+- [x] **Step 6: Conferir que os testes não gravam no diário real** (`~/.hangar/…/diario/servidor-rust`
+  sem linha nova depois da suíte). Feito: zero linha nova com sessão que não está viva.
 - [ ] **Step 7: Uso real — verificação manual** abrir sessão Claude e Codex, login de conta pelo
   navegador, e "Reportar problema" gera o diário.
 

@@ -6,13 +6,13 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::accounts::environment::AccountEnvironment;
+use crate::account_env::AccountEnvironment;
 
 /// `None` só quando o arquivo não está no lugar novo, a máquina não migrou e não há `backend/`
 /// conhecida. Disco que não deixa conferir o lugar novo é erro, nunca "não existe".
 pub fn path(home: &Path, backend: Option<&Path>, name: &str) -> io::Result<Option<PathBuf>> {
     let new = home.join(".hangar").join("config").join(name);
-    if new.try_exists()? || crate::install_root::current(home).try_exists()? {
+    if new.try_exists()? || crate::paths::current(home).try_exists()? {
         return Ok(Some(new));
     }
     Ok(backend.map(|dir| dir.join(name)))
@@ -45,7 +45,7 @@ pub fn read_env_raw(home: &Path, backend: Option<&Path>) -> Result<Option<String
 
 /// O `.env` cru de um caminho já resolvido, lido como numa troca atômica em andamento.
 pub fn read_env_at(env: &Path) -> Result<String, String> {
-    match crate::runtime::queue::read_replaced_to_string(env) {
+    match crate::fs::read_replaced_to_string(env) {
         Ok(raw) => Ok(raw),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(String::new()),
         Err(e) => Err(e.to_string()),
