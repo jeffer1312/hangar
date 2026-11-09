@@ -516,10 +516,11 @@ fn frame() -> Div {
         .font_family(theme::MONO).text_size(px(TEXT_PX)).line_height(px(CELL_H)).text_color(theme::text())
 }
 
-pub fn band(tree: &Value, view: &View) -> Option<AnyElement> {
+pub fn band(tree: &Value, view: &View, max_height: f32) -> Option<AnyElement> {
     if is_empty(tree) { return None; }
     let c = Ctx { site: BAND_SITE, view, place: view.columns, links: Default::default() };
-    Some(frame().w_full().mb(px(4.)).overflow_hidden().child(node(tree, &c, &Spot::root())).into_any_element())
+    Some(frame().id("plg-band").w_full().mb(px(4.)).min_h_0().flex_shrink(1.).max_h(px(max_height)).overflow_x_hidden().overflow_y_scroll()
+        .child(node(tree, &c, &Spot::root())).into_any_element())
 }
 
 /// Minimizar é uma preferência visual do app; o painel continua aberto no mod.

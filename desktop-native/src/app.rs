@@ -6591,6 +6591,8 @@ fn save_connection(address: &str, token: &str, servers: &[servers::ServerEntry])
 /// Fração da altura da janela que um painel de mod acima da faixa pode ocupar.
 const PLUGIN_PANE_MAX_SHARE: f32 = 0.45;
 const PLUGIN_PANE_MAX_HEIGHT: f32 = 360.;
+/// Menor teto da faixa de baixo: cabe o compositor com a linha de baixo, mesmo com o terminal puxado até o alto.
+const BOTTOM_MIN_HEIGHT: f32 = 200.;
 
 /// Altura da área entre a conversa e o compositor, onde mod e pergunta se revezam.
 fn plugin_space_height(window: &Window) -> f32 { (f32::from(window.viewport_size().height) * PLUGIN_PANE_MAX_SHARE).min(PLUGIN_PANE_MAX_HEIGHT) }
@@ -7336,7 +7338,13 @@ impl Hangar {
         if self.new_chat_screen() && self.reopen.is_some() { return self.render_reopen(window, cx); }
         if self.new_chat_screen() { return self.render_new_chat(window, cx); }
         let content = self.render_bottom_content(window, cx);
-        self.measured_bottom(content)
+        // Conversa, faixa de baixo e terminal dividem o espaço medido no último desenho. A faixa fica com o que sobra do
+        // piso da conversa e da altura escolhida para o terminal: ela cede (o mod rola por dentro) e o terminal aparece
+        // inteiro. Pela altura que apareceu, o arraste gravaria um terminal menor a cada clique.
+        let (term, shown) = self.docked_terminal_height().unwrap_or((0., 0.));
+        let space = self.panes.conversation_height.get() + self.panes.bottom_height.get() + shown;
+        let cap = (space - terminal::CONVERSATION_MIN_HEIGHT - term).max(BOTTOM_MIN_HEIGHT);
+        self.measured_bottom(content, cap)
     }
 
     /// A faixa de baixo da sessão aberta sem a medida da área: a prévia da aba desenha a dela com isto.
@@ -7360,7 +7368,8 @@ impl Hangar {
         let outgoing: Vec<SharedString> = selected_key.as_ref()
             .map(|key| self.delivery.outgoing(key).into_iter().map(|text| SharedString::from(text.to_owned())).collect()).unwrap_or_default();
         let prethread_open = self.prethread_key().is_some();
-        let mut content = div().w_full().flex().flex_col();
+        // Passando do teto, o que não encolhe sai por cima: o compositor, embaixo, fica sempre à vista.
+        let mut content = div().w_full().min_h_0().flex().flex_col().justify_end();
         let busy = selected_key.as_ref().is_some_and(|key| self.flight.busy(key));
         let action_note = selected_key.as_ref().and_then(|key| self.action_feedback.get(key)).cloned();
         let readable = self.selected.as_ref().is_some_and(|s| s.readable());
@@ -7466,7 +7475,11 @@ impl Hangar {
             Display::None => None,
         };
         let children = self.render_linked_children(window, cx).map(|el| in_column(el).into_any_element());
-        space.into_iter().chain(children).chain(readable.then(|| crate::plugin_ui::band(&self.plugin_band, &self.plugin_view(cx)).map(|band| in_column(band).into_any_element())).flatten()).collect()
+        // A faixa é a única peça daqui que encolhe: sem altura de conteúdo, ela rola por dentro.
+        let band = readable.then(|| crate::plugin_ui::band(&self.plugin_band, &self.plugin_view(cx), height)).flatten()
+            .map(|band| div().w_full().flex_shrink(1.).min_h_0().px(px(16.)).flex().justify_center()
+                .child(column_box(false).px(px(column_padding())).flex().flex_col().min_h_0().child(band)).into_any_element());
+        space.into_iter().chain(children).chain(band).collect()
     }
 
     /// O painel direito abrindo ou fechando na mesma conversa: a largura dele e quanto está à vista (0 a 1), pedindo

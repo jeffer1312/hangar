@@ -140,7 +140,7 @@ impl Hangar {
         let detached = !expanded && self.plan_review.expanded.is_some();
         let text = if !plan.plan.is_empty() { Some(plan.plan.clone()) } else { self.plan_review.file.as_ref().and_then(|result| result.as_ref().ok()).cloned() };
         let body = if detached {
-            div().h(px(inline_height)).into_any_element()
+            div().h(px(inline_height)).flex_shrink(1.).min_h_0().into_any_element()
         } else if let Some(text) = text {
             let source = safe_markdown(&text);
             let view = match &self.plan_view {
@@ -149,9 +149,10 @@ impl Hangar {
             };
             let document = div().p(px(22.)).child(TextView::new(&view).selectable(true).scrollable(false).code_block_actions(copy_code));
             let handle = &self.plan_scroll.1;
-            div().relative().min_h_0().when(expanded, |el| el.flex_1().h_full())
+            // Fora da tela cheia o texto cede altura ao cabeçalho e às opções, que nunca saem da área da pergunta.
+            div().relative().min_h_0().flex().flex_col().when(expanded, |el| el.flex_1().h_full()).when(!expanded, |el| el.flex_shrink(1.))
                 .child(div().id(if expanded { "plan-review-expanded-scroll" } else { "plan-review-scroll" })
-                    .when(expanded, |el| el.h_full()).when(!expanded, |el| el.h(px(inline_height)))
+                    .when(expanded, |el| el.h_full()).when(!expanded, |el| el.h(px(inline_height)).flex_shrink(1.).min_h_0())
                     .overflow_y_scroll().track_scroll(handle).pr_3().child(document))
                 .child(div().absolute().inset_0().child(Scrollbar::vertical(handle).mode(ScrollbarMode::Always)))
                 .into_any_element()
@@ -214,7 +215,8 @@ impl Hangar {
                 .when_some(plan.path.as_ref(), |el, path| el.child(div().max_w_full().text_xs().text_color(theme::muted()).truncate().child(composer::safe_name(path)))))
             .child(choices)
             .children(feedback_row);
-        Some(div().flex().flex_col().min_h_0().when(expanded, |el| el.size_full())
+        let space = self.question_space_height(true, window);
+        Some(div().flex().flex_col().min_h_0().when(expanded, |el| el.size_full()).when(!expanded, |el| el.max_h(px(space)))
             .rounded(px(14.)).border_1().border_color(theme::ask_highlight().opacity(0.55)).bg(theme::boxed()).overflow_hidden()
             .child(head).child(body).child(footer).into_any_element())
     }
