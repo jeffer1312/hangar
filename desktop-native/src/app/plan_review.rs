@@ -209,7 +209,8 @@ impl Hangar {
         let request = expected.clone();
         choices = choices.child(Button::new(if expanded { "plan-review-cancel-expanded" } else { "plan-review-cancel" }).small().ghost().disabled(busy || detached)
             .label(tr("cancel")).on_click(cx.listener(move |this, _, _, cx| this.review_action(&request, Action::Cancel, String::new(), cx))));
-        let footer = div().p_3().flex_shrink_0().border_t_1().border_color(theme::border()).flex().flex_col().gap_2()
+        // O texto cede antes (peso quase zero aqui); só sem texto a mostrar o rodapé encolhe e rola, sem cortar decisões.
+        let footer = div().id("plan-review-footer").p_3().flex_shrink(0.001).min_h_0().overflow_y_scroll().border_t_1().border_color(theme::border()).flex().flex_col().gap_2()
             .child(div().flex().flex_wrap().gap_2().items_center()
                 .child(div().flex_1().text_xs().text_color(theme::muted()).child(tr("plan_review_decision")))
                 .when_some(plan.path.as_ref(), |el, path| el.child(div().max_w_full().text_xs().text_color(theme::muted()).truncate().child(composer::safe_name(path)))))
