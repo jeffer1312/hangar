@@ -8,7 +8,7 @@ import { useRouter } from 'expo-router';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { SettingsList } from '../../ui/SettingsList';
 import { ComposerActions, ComposerBox, ComposerInput } from '../../chat/ComposerField';
-import type { PrewarmTicket, Server } from '@hangar/core';
+import { formataErro, type PrewarmTicket, type Server } from '@hangar/core';
 import { AnchoredPanel } from '../../ui/AnchoredPanel';
 import { Icon } from '../../ui/Icon';
 import { Glass } from '../../ui/Glass';
@@ -449,7 +449,7 @@ export function NewConversation({
           placeholder={m.composer_mensagem_para({ nome: providerLabel })} accessibilityLabel={m.nova_conversa_placeholder()}
           editable={!collapsed} autoFocus={!home && (router.canGoBack?.() ?? true)} recording={dictation.gravando} rms={dictation.rms} onCancelRecording={dictation.cancel}
           onPaste={(files, error) => {
-            if (error) { setAttachError(error); return; }
+            if (error) { setAttachError(formataErro(error) ?? error); return; }
             const f = files[0];
             if (!f) return;
             const mime = f.type || 'application/octet-stream';
