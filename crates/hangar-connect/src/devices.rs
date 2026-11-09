@@ -252,13 +252,14 @@ impl Store {
             if !same(&verifier, &ticket.verifier) {
                 return Err(Refusal::Ticket);
             }
-            // Nova tentativa do mesmo celular troca o pedido anterior: um cartão só, e tentar de novo não gasta o limite.
             let name = display_name(&ticket.device_name);
-            if let Some(install) = install_id {
+            let account_device = ticket.account_device.clone().filter(|d| ticket.preapproved && !d.is_empty());
+            // Nova tentativa do mesmo celular troca o pedido anterior: um cartão só, e tentar de novo não gasta o limite.
+            // Só pedido troca pedido: o `install_id` vem do celular, e um liberado apagaria o cartão de outro.
+            if let Some(install) = install_id.filter(|_| account_device.is_none()) {
                 state.devices.retain(|d| !(d.status == Status::Pending && d.install_id.as_deref() == Some(install) && d.name == name));
             }
-            let account_device = ticket.account_device.clone().filter(|d| ticket.preapproved && !d.is_empty());
-            if account_device.is_none() && state.devices.iter().filter(|d| d.status == Status::Pending).count() >= MAX_PENDING {
+            if account_device.is_none() &&state.devices.iter().filter(|d| d.status == Status::Pending).count() >= MAX_PENDING {
                 return Err(Refusal::TooManyPending);
             }
             // Só aqui: quem tem o bilhete sem o segredo, ou bateu no limite, não queima o nonce.
@@ -335,11 +336,29 @@ impl Store {
         })
     }
 
-    /// Aparelhos da conta revogados no serviço: saem daqui também. Sem cascata, como na conta.
+    /// Aparelhos da conta revogados no serviço saem daqui também, com o que eles aprovaram nesta máquina.
     pub fn revoke_account_devices(&self, account_devices: &[String]) -> Result<(), Refusal> {
         self.update(|state, now| {
-            withdraw(state, now, |device| device.account_device.as_ref().is_some_and(|d| account_devices.contains(d)));
+            let revoked: HashSet<DeviceId> = state.devices.iter()
+                .filter(|d| d.account_device.as_ref().is_some_and(|a| account_devices.contains(a)))
+                .flat_map(|d| cascade(state, &d.id))
+                .collect();
+            withdraw(state, now, |device| revoked.contains(&device.id));
             Ok(())
+        })
+    }
+
+    /// Aparelho aprovado aqui passa a ser `account_device` na conta; a ligação nunca troca de dono.
+    pub fn bind_account_device(&self, id: &str, account_device: &str) -> Result<(), Refusal> {
+        if account_device.is_empty() {
+            return Err(Refusal::Unknown);
+        }
+        self.update(|state, _| {
+            let device = state.devices.iter_mut().find(|d| d.id == id && d.status == Status::Approved).ok_or(Refusal::Unknown)?;
+            match &device.account_device {
+                Some(bound) if bound != account_device => Err(Refusal::NotYours),
+                _ => { device.account_device = Some(account_device.to_owned()); Ok(()) }
+            }
         })
     }
 
@@ -602,5 +621,46 @@ mod tests {
         assert_eq!(store.verify(tokens[2].1.as_bytes()), Some(tokens[2].0.clone()), "outro aparelho da conta fica");
         let reloaded = super::tests::store(&dir);
         assert_eq!(reloaded.list().iter().map(|r| r.device_id.clone()).collect::<Vec<_>>(), vec![tokens[2].0.clone()], "a revogação foi ao disco");
+    }
+
+    #[test]
+    fn revoking_an_account_device_takes_what_it_approved_here() {
+        let dir = dir();
+        let store = store(&dir);
+        let released = redeem(&store, "n1", "s1", json!({"preapproved": true, "account_device": "D"})).unwrap();
+        let child = redeem(&store, "n2", "s2", json!({})).unwrap();
+        store.approve(&child, Some(&released)).unwrap();
+        let Poll::Approved(Some(token)) = store.status(&child, "s2").unwrap() else { panic!("filho sem token") };
+        store.revoke_account_devices(&["D".to_owned()]).unwrap();
+        assert_eq!(store.verify(token.as_bytes()), None, "o que D aprovou nesta máquina sai junto");
+    }
+
+    #[test]
+    fn a_released_ticket_does_not_replace_a_pending_request() {
+        let dir = dir();
+        let store = store(&dir);
+        let (text, signature) = ticket("n1", "s1", json!({}));
+        let pending = store.redeem_from(&text, &signature, "s1", Some("install-1")).unwrap();
+        let (text, signature) = ticket("n2", "s2", json!({"preapproved": true, "account_device": "D"}));
+        store.redeem_from(&text, &signature, "s2", Some("install-1")).unwrap();
+        assert_eq!(store.status(&pending, "s1").unwrap(), Poll::Pending, "o pedido pendente continua");
+    }
+
+    #[test]
+    fn a_device_bound_to_the_account_falls_with_it() {
+        let dir = dir();
+        let store = store(&dir);
+        let id = redeem(&store, "n1", "s1", json!({})).unwrap();
+        assert!(matches!(store.bind_account_device(&id, "D"), Err(Refusal::Unknown)), "pendente não se liga");
+        store.approve(&id, None).unwrap();
+        let Poll::Approved(Some(token)) = store.status(&id, "s1").unwrap() else { panic!("sem token") };
+        assert!(matches!(store.bind_account_device("outro", "D"), Err(Refusal::Unknown)));
+        assert!(matches!(store.bind_account_device(&id, ""), Err(Refusal::Unknown)));
+        store.bind_account_device(&id, "D").unwrap();
+        store.bind_account_device(&id, "D").unwrap();
+        assert!(matches!(store.bind_account_device(&id, "E"), Err(Refusal::NotYours)));
+        let reloaded = super::tests::store(&dir);
+        reloaded.revoke_account_devices(&["D".to_owned()]).unwrap();
+        assert_eq!(reloaded.verify(token.as_bytes()), None, "a ligação foi ao disco e cai com a conta");
     }
 }
