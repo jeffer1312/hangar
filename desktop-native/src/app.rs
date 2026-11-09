@@ -251,8 +251,13 @@ fn column_box(composer: bool) -> Div {
 fn column_padding() -> f32 { if COLUMN_FRAME.get().0 >= 1280. { 32. } else { 24. } }
 
 /// Põe uma faixa na coluna da conversa: mesma margem e mesma largura das mensagens.
-fn in_column(el: impl IntoElement) -> Div {
-    div().w_full().flex_shrink_0().px(px(16.)).flex().justify_center().child(column_box(false).px(px(column_padding())).child(el))
+fn in_column(el: impl IntoElement) -> Div { in_column_with(el, false) }
+
+/// `in_column` que cede altura quando falta espaço: o conteúdo precisa encolher ou rolar por conta própria.
+fn in_column_with(el: impl IntoElement, shrink: bool) -> Div {
+    div().w_full().when(shrink, |row| row.flex_shrink(1.).min_h_0()).when(!shrink, |row| row.flex_shrink_0())
+        .px(px(16.)).flex().justify_center()
+        .child(column_box(false).px(px(column_padding())).when(shrink, |column| column.flex().flex_col().min_h_0()).child(el))
 }
 
 /// Faixa de problema da sessão: a frase do web pelo código, como no web; código sem frase mostra o detalhe cru.
@@ -6591,6 +6596,10 @@ fn save_connection(address: &str, token: &str, servers: &[servers::ServerEntry])
 /// Fração da altura da janela que um painel de mod acima da faixa pode ocupar.
 const PLUGIN_PANE_MAX_SHARE: f32 = 0.45;
 const PLUGIN_PANE_MAX_HEIGHT: f32 = 360.;
+/// Menor teto da faixa de baixo: cabe o compositor com a linha de baixo, mesmo com o terminal puxado até o alto.
+const BOTTOM_MIN_HEIGHT: f32 = 200.;
+/// Uma linha da faixa do mod, com a margem de baixo dela.
+const BAND_MIN_HEIGHT: f32 = 24.;
 
 /// Altura da área entre a conversa e o compositor, onde mod e pergunta se revezam.
 fn plugin_space_height(window: &Window) -> f32 { (f32::from(window.viewport_size().height) * PLUGIN_PANE_MAX_SHARE).min(PLUGIN_PANE_MAX_HEIGHT) }
@@ -7336,7 +7345,12 @@ impl Hangar {
         if self.new_chat_screen() && self.reopen.is_some() { return self.render_reopen(window, cx); }
         if self.new_chat_screen() { return self.render_new_chat(window, cx); }
         let content = self.render_bottom_content(window, cx);
-        self.measured_bottom(content)
+        // A faixa fica com o espaço medido menos o piso da conversa e o terminal inteiro; sem medida ainda, sem teto.
+        let (term, shown) = self.docked_terminal_height(window).unwrap_or((0., 0.));
+        let conversation = self.panes.conversation_height.get();
+        let space = conversation + self.panes.bottom_applied.get() + shown;
+        let cap = if conversation > 0. { (space - terminal::CONVERSATION_MIN_HEIGHT - term).max(BOTTOM_MIN_HEIGHT) } else { f32::from(window.viewport_size().height) };
+        self.measured_bottom(content, cap)
     }
 
     /// A faixa de baixo da sessão aberta sem a medida da área: a prévia da aba desenha a dela com isto.
@@ -7360,7 +7374,8 @@ impl Hangar {
         let outgoing: Vec<SharedString> = selected_key.as_ref()
             .map(|key| self.delivery.outgoing(key).into_iter().map(|text| SharedString::from(text.to_owned())).collect()).unwrap_or_default();
         let prethread_open = self.prethread_key().is_some();
-        let mut content = div().w_full().flex().flex_col();
+        // Passando do teto, o que não encolhe sai por cima: o compositor, embaixo, fica sempre à vista.
+        let mut content = div().w_full().min_h_0().flex().flex_col().justify_end();
         let busy = selected_key.as_ref().is_some_and(|key| self.flight.busy(key));
         let action_note = selected_key.as_ref().and_then(|key| self.action_feedback.get(key)).cloned();
         let readable = self.selected.as_ref().is_some_and(|s| s.readable());
@@ -7397,8 +7412,9 @@ impl Hangar {
             .when_some(self.chat.state.question.clone(), |el, question| el.child(div().text_color(theme::text()).child(question))))
             .into_any_element()));
         let plugin_space = self.render_plugin_space(interaction, readable, window, cx);
-        // Faixas e avisos entre a conversa e o compositor ficam na mesma coluna das mensagens.
-        content = content
+        // Faixas e avisos entre a conversa e o compositor ficam na mesma coluna das mensagens. Sem espaço, encolhem e
+        // rolam por dentro (a faixa do mod cede primeiro): o erro com o "tentar de novo" continua alcançável.
+        let notes = div().id("bottom-notes").w_full().min_h_0().flex_shrink(1.).flex().flex_col().overflow_y_scroll()
             .children(outgoing.into_iter().map(|text| in_column(div().w_full().flex().flex_col().items_end().gap_1().py_1()
                 .child(user_bubble(conversation_text(div().whitespace_normal().line_clamp(6).text_ellipsis(), true).child(text)).opacity(0.6))
                 .child(div().text_xs().text_color(theme::muted()).child(tr("sending"))))))
@@ -7412,7 +7428,8 @@ impl Hangar {
             .when_some(delivery_note, |el, (note, warning)| el.child(in_column(div().py_1().text_xs().text_color(if warning { theme::warning() } else { theme::muted() }).child(note))))
             .when_some(stop_note, |el, (note, warning)| el.child(in_column(div().py_1().text_xs().text_color(if warning { theme::warning() } else { theme::muted() }).child(note))))
             .when_some(self.render_codex_commands_chip(cx), |el, chip| el.child(in_column(chip)))
-            .children(plugin_space)
+            .children(plugin_space);
+        content = content.child(notes)
             .map(|el| match orq {
                 Some(orq) => el.child(in_column(self.render_orq_footer(&orq, cx))),
                 None if read_only => el.child(in_column(div().py_2().text_sm().text_color(theme::muted()).whitespace_normal().child(tr("par_so_leitura")))),
@@ -7449,7 +7466,8 @@ impl Hangar {
             Display::Question => question.map(|question| {
                 let height = self.question_space_height(readable, window);
                 div().id("plugin-interaction-space").track_focus(&self.plugin_question_focus)
-                    .relative().w_full().max_h(px(height)).when(reserve, |el| el.h(px(height))).flex_shrink_0().overflow_y_scroll()
+                    // Cede junto com a faixa do mod quando falta espaço: o cartão rola aqui dentro, ao lado do compositor.
+                    .relative().w_full().max_h(px(height)).when(reserve, |el| el.h(px(height))).flex_shrink(1.).min_h_0().overflow_y_scroll()
                     .child(question).into_any_element()
             }),
             Display::Panel => {
@@ -7466,7 +7484,10 @@ impl Hangar {
             Display::None => None,
         };
         let children = self.render_linked_children(window, cx).map(|el| in_column(el).into_any_element());
-        space.into_iter().chain(children).chain(readable.then(|| crate::plugin_ui::band(&self.plugin_band, &self.plugin_view(cx)).map(|band| in_column(band).into_any_element())).flatten()).collect()
+        // Sem espaço, a faixa rola por dentro e fica com uma linha à vista, em vez de sumir.
+        let band = readable.then(|| crate::plugin_ui::band(&self.plugin_band, &self.plugin_view(cx), height)).flatten()
+            .map(|band| in_column_with(band, true).min_h(px(BAND_MIN_HEIGHT)).into_any_element());
+        space.into_iter().chain(children).chain(band).collect()
     }
 
     /// O painel direito abrindo ou fechando na mesma conversa: a largura dele e quanto está à vista (0 a 1), pedindo

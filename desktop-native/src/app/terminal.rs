@@ -244,6 +244,14 @@ impl Hangar {
     /// Painel aberto no rodapé, não maximizado: divide a coluna com a conversa.
     pub(super) fn terminal_docked(&self) -> bool { self.terminal.as_ref().is_some_and(|panel| !panel.maximized) }
 
+    /// Do painel encaixado: a altura que `render_terminal` pede (a escolhida, cortada pela janela) e a que apareceu no
+    /// último desenho.
+    pub(super) fn docked_terminal_height(&self, window: &Window) -> Option<(f32, f32)> {
+        let limit = (f32::from(window.viewport_size().height) - 120.).max(120.);
+        self.terminal.as_ref().filter(|panel| !panel.maximized)
+            .map(|panel| (panel.height.min(limit).max(TERMINAL_MIN_HEIGHT), panel.shown.get()))
+    }
+
     pub(super) fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.terminal.is_some() { self.close_terminal(true, window, cx); return; }
         if self.selected.as_ref().is_some_and(|s| s.orq() || s.read_only()) { return; }
