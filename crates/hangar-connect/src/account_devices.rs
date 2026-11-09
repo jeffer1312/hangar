@@ -23,11 +23,18 @@ pub struct AccountDevice {
     pub name: String,
     /// `pending`, `approved` ou `revoked`. Texto: um estado novo no serviço não derruba a lista toda.
     pub status: String,
+    /// `machine` (PC da conta) ou `device`; serviço antigo não manda e todo mundo é aparelho.
+    #[serde(default = "default_kind")]
+    pub kind: String,
     pub created_at: f64,
     #[serde(default)]
     pub approved_at: Option<f64>,
     #[serde(default)]
     pub revoked_at: Option<f64>,
+}
+
+fn default_kind() -> String {
+    "device".to_owned()
 }
 
 /// O id vira pedaço do caminho no serviço.
