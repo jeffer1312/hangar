@@ -469,7 +469,7 @@ fn raw_list(root: &Path, agent: bool) -> Arc<hangar_server::list::bridge::ListBr
     let program = root.join("mux");
     let pane = format!("pi-a\t1\t123\t{}\t%1\t0\tpi\t100\t0\t0\t0", root.display());
     let script = format!(
-        "#!/bin/sh\ncase \"$1\" in\nlist-panes) if [ -f {} ]; then printf '%s\\n' '{}'; fi;;\nshow-environment) printf '%s\\n' 'CP_SESSION_KEY={KEY}';;\ndisplay-message) if [ ! -f {} ]; then printf '%s\\n' 'can\047t find session: pi-a' >&2; exit 1; fi\ncase \"$5\" in *pane_pid*) printf '%s\\n' 'pi-a\t%1\t100\t123';; *) printf '%s\\n' 'pi-a\t%1\t100';; esac;;\nhas-session) if [ -f {} ]; then exit 0; else printf '%s\\n' 'no server running' >&2; exit 1; fi;;\nkill-session) if [ -f {} ]; then exit 1; fi; /usr/bin/unlink {};;\n*) exit 1;;\nesac\n",
+        "#!/bin/sh\ncase \"$1\" in\nlist-panes) if [ -f {} ]; then printf '%s\\n' '{}'; fi;;\nshow-environment) printf '%s\\n' 'CP_SESSION_KEY={KEY}';;\ndisplay-message) if [ ! -f {} ]; then printf '%s\\n' 'can\047t find session: pi-a' >&2; exit 1; fi\ncase \"$5\" in *pane_pid*) printf '%s\\n' 'pi-a\t%1\t100\t123';; *) printf '%s\\n' 'pi-a\t%1\t100';; esac;;\nhas-session) if [ -f {} ]; then exit 0; else exit 1; fi;;\nkill-session) if [ -f {} ]; then exit 1; fi; /usr/bin/unlink {};;\n*) exit 1;;\nesac\n",
         quote(&root.join("alive")),
         pane.replace('\'', "'\\''"),
         quote(&root.join("alive")),

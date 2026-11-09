@@ -758,6 +758,7 @@ async fn mux_present(
     .await;
     match output.code {
         Some(0) => Ok(true),
+        Some(1) if output.stdout.trim().is_empty() && output.stderr.trim().is_empty() => Ok(false),
         Some(_) if crate::list::mux::is_absence(output.stderr.trim()) => Ok(false),
         _ => Err(failure("other_terminal_mux_unavailable")),
     }
