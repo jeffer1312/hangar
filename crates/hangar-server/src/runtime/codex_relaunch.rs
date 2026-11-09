@@ -114,7 +114,7 @@ pub(crate) fn transfer_open(home:&Path,name:&str,sidecar_transfer:Option<&str>,k
 /// (pid, nascimento) das raízes e de todos os descendentes vivos agora (o `_descendant_pids` do Python:
 /// no Windows o `app_pid` pode ser o shim `cmd.exe`). O que já saiu não entra; leitura que não prova
 /// nem vida nem saída é `Err`, e quem chama não segue às cegas.
-async fn births(roots:Vec<i64>) -> Result<Vec<(i64,f64)>,()> {
+pub(super) async fn births(roots:Vec<i64>) -> Result<Vec<(i64,f64)>,()> {
     let roots:Vec<i64> = roots.into_iter().filter(|pid|*pid > 1).collect();
     if roots.is_empty() { return Ok(Vec::new()); }
     tokio::task::spawn_blocking(move || {
@@ -171,7 +171,7 @@ fn alive_error(message:&str,pids:&[i64]) -> RuntimeError {
 }
 
 /// Os pids que não saíram dentro do prazo (vazio = todos saíram). Fonte ilegível não prova saída.
-async fn wait_absent(lives:Vec<(i64,f64)>) -> Vec<i64> {
+pub(super) async fn wait_absent(lives:Vec<(i64,f64)>) -> Vec<i64> {
     let all:Vec<i64> = lives.iter().map(|(pid,_)|*pid).collect();
     tokio::task::spawn_blocking(move || {
         let procs = SystemProcs::default();

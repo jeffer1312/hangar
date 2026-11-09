@@ -687,6 +687,15 @@ impl RuntimeRegistry {
             }
             return Err(error);
         }
+        // O shell do painel (`term-<nome>`) sai junto, só com a marca de que é nosso.
+        let hidden = format!("term-{}", life.name());
+        let marked = mux(life.binding(), vec!["show-options".into(), "-v".into(), "-t".into(), format!("={hidden}:"), "@cp_hidden".into()]).await;
+        if marked.code == Some(0) && marked.stdout.trim() == "1" {
+            let target = super::super::claude_terminal::session_target(&hidden);
+            if mux(life.binding(), vec!["kill-session".into(), "-t".into(), target]).await.code != Some(0) {
+                tracing::warn!(session = %life.name(), "shell escondido do Pi/omp/Kimi não fechou");
+            }
+        }
         let config = self.other.get().unwrap();
         config.opening.lock().await.remove(life.name());
         let location = match &life {
