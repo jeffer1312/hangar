@@ -2,7 +2,7 @@
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { configureApi, type Server } from '@hangar/core';
+import { configureApi, type ConnectMachine, type Server } from '@hangar/core';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const mocks = vi.hoisted(() => ({ vault: new Map<string, string>() }));
@@ -27,27 +27,29 @@ import { CONNECT_SERVICE_URL, useConnect } from './connectStore';
 import { ConnectMachines } from './ConnectMachines';
 import * as m from '../../paraglide/messages';
 
-const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 const machine = (id: string): Server => ({ id, label: id, baseUrl: `https://${id}.acme.hangar.dev.br`, token: 't', credential: 'device', deviceId: `dev-${id}` });
+const pc3: ConnectMachine = { machine_id: 'pc3', name: 'pc3', host: 'pc3.acme.hangar.dev.br', online: true };
 let root: Root;
 let el: HTMLDivElement;
 let machinesFail = true;
-let pc2: Promise<void>;
-let releasePc2: () => void;
-// Pedidos esperando por máquina (primeiro pedaço do host); a recusa falha quando `denyFails`.
-let deviceRows: Record<string, unknown[]> = {};
-let denyFails = false;
-// Relógio fixo: o cartão calcula "pediu há" a partir dele; o pedido chegou dois minutos antes.
+let machineList: ConnectMachine[] = [];
+// Status deste aparelho (`ad1`) na conta e a lista de aparelhos dela.
+let deviceStatus = 'pending';
+let accountRows: unknown[] = [];
+// Relógio fixo: a linha calcula "pediu há" a partir dele; o pedido chegou dois minutos antes.
 const CREATED_AT = 1_794_000_000;
 const NOW = new Date((CREATED_AT + 120) * 1000);
-const pending = (device_id: string, install_group: string, install_code: string, name = 'iPhone') =>
-  ({ device_id, name, status: 'pending', install_group, install_code, created_at: CREATED_AT });
+const row = (device_id: string, name: string, status: string) => ({ device_id, name, status, created_at: CREATED_AT, approved_at: null, revoked_at: null });
 
-const button = (label: string) => [...el.querySelectorAll('[role="button"]')].find((b) => b.getAttribute('aria-label') === label) as HTMLElement | undefined;
+const button = (label: string) => [...el.querySelectorAll('[role="button"]')].find((b) => b.getAttribute('aria-label') === label) as HTMLButtonElement | undefined;
+const serviceCalls = () => vi.mocked(fetch).mock.calls.map(([input, init]) => ({ url: new URL(String(input)), method: init?.method ?? 'GET',
+  device: new Headers(init?.headers).get('X-Hangar-Device') }));
 
 beforeEach(async () => {
   mocks.vault.clear();
   mocks.vault.set('cp_servers_v1', JSON.stringify({ servers: [machine('pc1'), machine('pc2')], activeId: 'pc1' }));
+  mocks.vault.set('cp_connect_device_v1', JSON.stringify({ name: 'acme', serviceUrl: CONNECT_SERVICE_URL, id: 'ad1', secret: 'ad-secret' }));
   await useServers.getState().load();
   configureApi({ getBaseUrl: () => '', getToken: () => null, onUnauthorized: vi.fn(), origin: null, createEventSource: () => { throw new Error('sem SSE'); } });
   useConnect.setState({ ...useConnect.getInitialState(), ready: true, account: { name: 'acme', token: 'account-token', serviceUrl: CONNECT_SERVICE_URL } });
@@ -55,33 +57,27 @@ beforeEach(async () => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(NOW);
   machinesFail = true;
-  deviceRows = {};
-  denyFails = false;
-  pc2 = new Promise<void>((resolve) => { releasePc2 = resolve; });
+  machineList = [];
+  deviceStatus = 'pending';
+  accountRows = [];
   vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
     const url = new URL(input);
-    if (url.origin === CONNECT_SERVICE_URL && url.pathname === '/v1/machines') {
+    if (url.origin !== CONNECT_SERVICE_URL) return json({});
+    if (url.pathname === '/v1/machines') {
       if (machinesFail) throw new TypeError('network');
-      return json([]);
+      return json(machineList);
     }
-    const host = url.hostname.split('.')[0];
-    if (init?.method === 'DELETE' && url.pathname.startsWith('/api/connect/devices/')) {
-      // O pedido some da lista de qualquer jeito (expirou ou foi respondido em outro lugar).
-      deviceRows[host] = [];
-      return denyFails ? new Response(JSON.stringify({ detail: 'fora do ar' }), { status: 503 }) : json({ ok: true });
-    }
-    // pc2 só responde no fim do teste: até lá a lista dele segue a caminho.
-    if (host === 'pc2') return pc2.then(() => json(deviceRows.pc2 ?? []));
-    if (url.pathname === '/api/connect/devices') return json(deviceRows[host] ?? []);
-    return json({});
+    if (url.pathname === '/v1/devices') return json(accountRows);
+    if (url.pathname === '/v1/devices/ad1') return json({ status: deviceStatus });
+    if (init?.method === 'DELETE') return new Response(null, { status: 204 });
+    return json({ status: 'approved' });
   }));
   el = document.createElement('div');
   document.body.appendChild(el);
   root = createRoot(el);
 });
 afterEach(async () => {
-  // A leitura de aparelhos em voo é do store, que sobrevive ao teste: termina antes do próximo.
-  releasePc2();
+  // A leitura do aparelho em voo é do store, que sobrevive ao teste: termina antes do próximo.
   await act(async () => { await useConnect.getState().refreshDevices(); });
   await act(async () => root.unmount());
   el.remove();
@@ -101,66 +97,34 @@ it('lista de máquinas com erro mostra "Tentar de novo", que relê a lista', asy
   expect(el.textContent).toContain(m.connect_machines_empty());
 });
 
-it('com a lista de aparelhos de uma máquina a caminho, mostra carregando e não "nenhum aparelho"', async () => {
+it('pendente mostra a espera da liberação e não deixa pedir entrada', async () => {
+  machinesFail = false;
+  machineList = [pc3];
   await render();
-  await vi.waitFor(() => expect(useConnect.getState().devices.pc1).toBeDefined());
-  await act(async () => {});
-  expect(el.textContent).toContain(m.comum_carregando());
-  expect(el.textContent).not.toContain(m.connect_devices_empty());
+  await vi.waitFor(() => expect(el.textContent).toContain(m.connect_device_waiting_release()));
+  expect(button('pc3')?.disabled).toBe(true);
+  expect(el.textContent).not.toContain(m.connect_account_devices());
 });
 
-const buttons = (label: string) => [...el.querySelectorAll('[role="button"], [role="switch"]')].filter((b) => b.getAttribute('aria-label') === label) as HTMLElement[];
-
-it('dois celulares com o mesmo código travam os dois cartões', async () => {
-  releasePc2();
-  deviceRows = { pc1: [pending('a', 'g1', 'ABC-DEF'), pending('b', 'g2', 'ABC-DEF', 'Pixel')] };
-  await render();
-  await vi.waitFor(() => expect(buttons(m.connect_group_approve())).toHaveLength(2));
-  expect(el.textContent?.split(m.connect_group_code_clash()).length).toBe(3);
-  expect(buttons(m.connect_group_approve()).map((b) => (b as HTMLButtonElement).disabled)).toEqual([true, true]);
-});
-
-it('cada máquina do cartão anuncia se está marcada, e o toque troca', async () => {
-  releasePc2();
-  deviceRows = { pc1: [pending('a', 'g1', 'ABC-DEF')], pc2: [pending('b', 'g1', 'ABC-DEF')] };
-  await render();
-  await vi.waitFor(() => expect(buttons('pc1')).toHaveLength(1));
-  expect(buttons('pc1')[0].getAttribute('aria-checked')).toBe('true');
-  await act(async () => buttons('pc1')[0].click());
-  expect(buttons('pc1')[0].getAttribute('aria-checked')).toBe('false');
-});
-
-it('o celular pede de novo com o alerta aberto: o "sim" não aprova o pedido antigo e avisa', async () => {
-  releasePc2();
-  deviceRows = { pc1: [pending('a', 'g1', 'ABC-DEF')] };
-  let yes: (() => void) | undefined;
+it('liberado lista os aparelhos da conta, e o pendente se libera pelo alerta, com a credencial deste aparelho', async () => {
+  deviceStatus = 'approved';
+  accountRows = [row('ad1', 'iPhone', 'approved'), row('ad2', 'Pixel', 'pending'), row('ad3', 'Moto', 'approved'), row('ad4', 'fixture-gone', 'revoked')];
+  let release: (() => void) | undefined;
   const { Alert } = await import('react-native');
   const alert = vi.spyOn(Alert, 'alert').mockImplementation((_t, _b, buttons) => {
-    yes = (buttons as { onPress?: () => void }[] | undefined)?.[1]?.onPress;
+    release = (buttons as { onPress?: () => void }[] | undefined)?.[2]?.onPress;
   });
   await render();
-  await vi.waitFor(() => expect(buttons(m.connect_group_approve())).toHaveLength(1));
-  await act(async () => buttons(m.connect_group_approve())[0].click());
-  deviceRows = { pc1: [pending('a2', 'g1', 'ABC-DEF')] };
-  await act(async () => { await useConnect.getState().refreshDevices(); });
-  await act(async () => yes!());
-  const approvals = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/approve'));
-  expect(approvals).toHaveLength(0);
-  expect(el.textContent).toContain(m.connect_group_unavailable());
-  alert.mockRestore();
-});
+  await vi.waitFor(() => expect(button('Pixel')).toBeTruthy());
+  expect(el.textContent).toContain(m.connect_account_device_asked({ when: m.tempo_min_atras({ n: 2 }) }));
+  expect(button('Moto')).toBeTruthy();
+  expect(el.textContent).toContain('fixture-phone');
+  expect(el.textContent).not.toContain('fixture-gone');
 
-it('o erro da resposta fica fora do cartão, mesmo depois de o cartão sumir, até dispensar', async () => {
-  releasePc2();
-  denyFails = true;
-  deviceRows = { pc1: [pending('a', 'g1', 'ABC-DEF')] };
-  await render();
-  await vi.waitFor(() => expect(buttons(m.connect_group_deny())).toHaveLength(1));
-  await act(async () => buttons(m.connect_group_deny())[0].click());
-  await vi.waitFor(() => expect(buttons(m.connect_group_deny())).toHaveLength(0));
-  expect(el.textContent).toContain('pc1');
-  const dismiss = buttons(m.connect_notice_dismiss());
-  expect(dismiss).toHaveLength(1);
-  await act(async () => dismiss[0].click());
-  expect(buttons(m.connect_notice_dismiss())).toHaveLength(0);
+  await act(async () => button('Pixel')!.click());
+  await act(async () => release!());
+
+  await vi.waitFor(() => expect(serviceCalls().filter((call) => call.url.pathname === '/v1/devices/ad2/approve')
+    .map((call) => `${call.method} ${call.device}`)).toEqual(['POST ad1']));
+  alert.mockRestore();
 });

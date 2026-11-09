@@ -12085,5 +12085,19 @@
   "native_video_no_route": "this video has no address to play here",
   "native_video_need_mpv_linux": "To play it here, install mpv (the mpv or libmpv package) and try again.",
   "native_video_need_mpv": "This computer doesn't have the app's video player (libmpv).",
-  "native_video_open_system": "Open in the system player"
+  "native_video_open_system": "Open in the system player",
+  "connect_error_device_pending": "This device is still waiting for the account to release it.",
+  "connect_error_device_revoked": "This device lost access to the account.",
+  "connect_error_device_required": "This device is not registered in the account yet. Open Connect again.",
+  "connect_device_waiting_release": "Waiting for release: open Hangar on one of your devices or PCs and tap Release.",
+  "connect_device_revoked_notice": "This device's access was removed in the account.",
+  "connect_device_request_again": "Ask for release again",
+  "connect_account_devices": "Account devices",
+  "connect_account_devices_empty": "No devices in the account.",
+  "connect_account_devices_help": "Releasing works on every machine in the account, including the ones you turn on later. Removing access closes Connect on all of them within a minute.",
+  "connect_account_device_asked": "Asked {when}",
+  "connect_account_device_release": "Release",
+  "connect_account_device_release_title": "Release {name}?",
+  "connect_account_device_release_body": "It will enter every machine in the account. Only release it if you just asked for it.",
+  "connect_account_device_revoke_body": "It loses access to every machine in the account."
 }

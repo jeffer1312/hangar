@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureApi, _resetApiEnvForTests } from './apiEnv';
-import { addMachine, changeAccountPassword, endAccountSessions, listMachines, signIn, signUp, upgradeToDevice, type AccountSession, type ConnectMachine } from './connectAccount';
+import { addMachine, approveAccountDevice, changeAccountPassword, deviceStatus, endAccountSessions, listAccountDevices, listMachines, registerDevice,
+  revokeAccountDevice, signIn, signUp, upgradeToDevice, type AccountSession, type ConnectMachine } from './connectAccount';
 import { _resetRotasForTests } from './rota';
 import type { Server } from './servers';
 
@@ -13,13 +14,13 @@ const owner: Server = { id: 's1', label: 'pc1', baseUrl: 'https://pc1.tail.ts.ne
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 
-type Call = { url: URL; method: string; body: Record<string, unknown> | undefined; auth: string | null };
+type Call = { url: URL; method: string; body: Record<string, unknown> | undefined; auth: string | null; headers: Headers };
 function network(route: (url: URL) => Response) {
   const calls: Call[] = [];
   vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
     const url = new URL(input);
     calls.push({ url, method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : undefined,
-      auth: new Headers(init?.headers).get('Authorization') });
+      auth: new Headers(init?.headers).get('Authorization'), headers: new Headers(init?.headers) });
     return route(url);
   }));
   return calls;
@@ -218,6 +219,71 @@ describe('addMachine', () => {
     const calls = enrollment([]);
     await expect(addMachine(session, machine, 'Pixel', () => {})).rejects.toMatchObject({ code: 'connect_secure_random_unavailable' });
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('aparelho da conta', () => {
+  const released = { ...session, device: { id: 'ad1', secret: 'ad-secret' } };
+  const credential = (call: Call) => [call.auth, call.headers.get('X-Hangar-Device'), call.headers.get('X-Hangar-Device-Secret')];
+  const row = { device_id: 'ad2', name: 'Pixel', status: 'pending', created_at: 1_794_000_000.5, approved_at: null, revoked_at: null };
+
+  it('registra o aparelho com a sessão da conta', async () => {
+    const calls = network(() => json({ device_id: 'ad1', device_secret: 'ad-secret', status: 'pending' }, 201));
+    expect(await registerDevice(session, 'iPhone', 'install-1')).toEqual({ id: 'ad1', secret: 'ad-secret' });
+    expect(calls.map((call) => `${call.method} ${call.url.href} ${call.auth}`)).toEqual([`POST ${SERVICE}/v1/devices Bearer account-token`]);
+    expect(calls[0].body).toEqual({ name: 'iPhone', install_id: 'install-1' });
+    await registerDevice(session, 'iPhone');
+    expect(calls[1].body).toEqual({ name: 'iPhone' });
+  });
+
+  it.each([{ device_id: 'ad1', status: 'pending' }, { device_id: '', device_secret: 's', status: 'pending' }, null])(
+    'recusa registro fora do contrato: %j', async (body) => {
+      network(() => json(body, 201));
+      await expect(registerDevice(session, 'iPhone')).rejects.toMatchObject({ code: 'connect_response_invalid' });
+    });
+
+  it('consulta o próprio status com a credencial do aparelho', async () => {
+    const calls = network(() => json({ status: 'approved' }));
+    expect(await deviceStatus(released)).toBe('approved');
+    expect(calls[0].url.pathname).toBe('/v1/devices/ad1');
+    expect(credential(calls[0])).toEqual(['Bearer account-token', 'ad1', 'ad-secret']);
+    network(() => json({ status: 'denied' }));
+    await expect(deviceStatus(released)).rejects.toMatchObject({ code: 'connect_response_invalid' });
+  });
+
+  it('lista, libera e revoga aparelhos da conta com a credencial do aparelho', async () => {
+    const calls = network((url) => (url.pathname === '/v1/devices' ? json([row]) : url.pathname.endsWith('/approve')
+      ? json({ status: 'approved' }) : new Response(null, { status: 204 })));
+    expect(await listAccountDevices(released)).toEqual([row]);
+    await approveAccountDevice(released, 'ad2');
+    await revokeAccountDevice(released, 'ad 2');
+    expect(calls.map((call) => `${call.method} ${call.url.pathname}`)).toEqual(['GET /v1/devices', 'POST /v1/devices/ad2/approve', 'DELETE /v1/devices/ad%202']);
+    expect(calls.map(credential)).toEqual(Array(3).fill(['Bearer account-token', 'ad1', 'ad-secret']));
+  });
+
+  it.each([{ ...row, status: 'denied' }, { ...row, created_at: 'ontem' }, { ...row, name: 7 }, { ...row, approved_at: 'x' }])(
+    'recusa linha da lista fora do contrato: %j', async (item) => {
+      network(() => json([row, item]));
+      await expect(listAccountDevices(released)).rejects.toMatchObject({ code: 'connect_response_invalid' });
+    });
+
+  it.each([['device_pending', 'connect_device_pending'], ['device_revoked', 'connect_device_revoked'], ['device_required', 'connect_device_required'],
+    ['eco: senha', 'connect_request_failed'], [undefined, 'connect_request_failed']])('o motivo %s do 403 vira o código %s, sem o texto', async (reason, code) => {
+    network(() => json({ error: 'eco: senha', reason }, 403));
+    const error: unknown = await addMachine(released, machine, 'Pixel', () => {}).catch((e: unknown) => e);
+    expect(error).toMatchObject({ code, status: 403 });
+    expect(String(error)).not.toContain('senha');
+  });
+
+  it('o pedido de bilhete leva a credencial do aparelho, e o bilhete pré-aprovado entra sem esperar', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const calls = enrollment([{ status: 'approved', token: 'device-token' }]);
+    const onPending = vi.fn();
+    const added = await addMachine(released, machine, 'Pixel', onPending);
+    expect(added.token).toBe('device-token');
+    expect(onPending).not.toHaveBeenCalled();
+    expect(credential(calls.find((call) => call.url.origin === SERVICE)!)).toEqual(['Bearer account-token', 'ad1', 'ad-secret']);
+    expect(calls.filter((call) => call.url.origin === MACHINE_URL).some((call) => call.headers.has('X-Hangar-Device-Secret'))).toBe(false);
   });
 });
 

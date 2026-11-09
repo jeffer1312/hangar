@@ -33,19 +33,25 @@ const entry: Server = { id: 'pc1', label: 'pc1', baseUrl: MACHINE_URL, token: 'd
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 const empty = () => new Response(null, { status: 204 });
 
-type Call = { url: URL; method: string; body: Record<string, unknown> | undefined; auth: string | null };
-type Overrides = { statuses?: unknown[]; machines?: ConnectMachine[]; rows?: unknown[]; route?: (call: Call) => Response | undefined };
+type Call = { url: URL; method: string; body: Record<string, unknown> | undefined; auth: string | null; device: string | null };
+// `device`: o status deste aparelho na conta (`GET /v1/devices/{id}`); `rows`: a lista de aparelhos da conta.
+type Overrides = { statuses?: unknown[]; machines?: ConnectMachine[]; rows?: unknown[]; device?: string; route?: (call: Call) => Response | undefined };
 
-function network({ statuses = [], machines = [online], rows = [], route }: Overrides = {}) {
+function network({ statuses = [], machines = [online], rows = [], device = 'pending', route }: Overrides = {}) {
   const calls: Call[] = [];
   vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
     const call: Call = { url: new URL(input), method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : undefined,
-      auth: new Headers(init?.headers).get('Authorization') };
+      auth: headers.get('Authorization'), device: headers.get('X-Hangar-Device') && `${headers.get('X-Hangar-Device')}:${headers.get('X-Hangar-Device-Secret')}` };
     calls.push(call);
     const { pathname, origin } = call.url;
     const custom = route?.(call);
     if (custom) return custom;
     if (origin === CONNECT_SERVICE_URL) {
+      if (pathname === '/v1/devices' && call.method === 'POST') return json({ device_id: 'ad1', device_secret: 'ad-secret', status: 'pending' }, 201);
+      if (pathname === '/v1/devices') return json(rows);
+      if (pathname.startsWith('/v1/devices/') && call.method === 'GET') return json({ status: device });
+      if (pathname.startsWith('/v1/devices/')) return call.method === 'DELETE' ? empty() : json({ status: 'approved' });
       if (pathname === '/v1/machines') return json(machines);
       if (pathname.endsWith('/devices')) return json({ url: MACHINE_URL, ticket: '{"nonce":"n"}', signature: 'c2ln' });
       if (pathname === '/v1/sessions' && call.method === 'DELETE') return empty();
@@ -54,8 +60,7 @@ function network({ statuses = [], machines = [online], rows = [], route }: Overr
     }
     if (pathname === '/api/connect/redeem') return json({ device_id: 'dev1', status: 'pending' }, 202);
     if (pathname === '/api/connect/redeem/status') return json(statuses.shift() ?? { status: 'pending' });
-    if (pathname === '/api/connect/devices') return json(rows);
-    if (pathname.startsWith('/api/connect/devices/')) return json({ ok: true });
+    if (pathname === '/api/connect/account-devices/self') return json({ status: 'approved' });
     return json({ identificador: 'pc1', lan_url: '' });
   }));
   return calls;
@@ -68,7 +73,6 @@ async function elapse(ms: number, step = 500) {
 }
 const connect = () => useConnect.getState();
 const servers = () => useServers.getState().servers;
-const signal = () => new AbortController().signal;
 
 async function seed(list: Server[]) {
   vault.set('cp_servers_v1', JSON.stringify({ servers: list, activeId: list[0]?.id ?? null }));
@@ -228,12 +232,13 @@ describe('conta do Connect', () => {
     network();
     await connect().signIn('acme', 'long-password');
     await settle();
-    useConnect.setState({ entries: { pc1: { phase: 'failed', error: 'x' } }, devices: { pc1: { rows: [], error: '' } } });
+    useConnect.setState({ entries: { pc1: { phase: 'failed', error: 'x' } }, devices: { rows: [], error: '' } });
 
     await connect().signOut();
 
     expect(connect().entries).toEqual({});
-    expect(connect().devices).toEqual({});
+    expect(connect().devices).toEqual({ rows: null, error: '' });
+    expect(connect().device).toBeNull();
   });
 
   it('senha atual errada não derruba a conta', async () => {
@@ -271,8 +276,6 @@ describe('máquinas da conta', () => {
     const entering = connect().enter(online);
     await elapse(2500);
     expect(connect().entries.pc1).toEqual({ phase: 'waiting' });
-    await elapse(2500);
-    expect(connect().entries.pc1).toEqual({ phase: 'waiting' });
     expect(servers()).toEqual([]);
     await elapse(5000);
     await entering;
@@ -306,14 +309,10 @@ describe('máquinas da conta', () => {
     expect(servers().map((s) => s.id).sort()).toEqual(['pc1', 'pc2']);
   });
 
-  it('mostra o código do celular e, com o cofre falhando ou mudo, para com erro e não inventa outro id', async () => {
+  it('com o cofre falhando ou mudo, a entrada para com erro e não inventa outro id', async () => {
     const events: { evento: string; codigo?: string }[] = [];
     configureDiag({ registrar: (event) => { events.push(event); }, novoReq: () => '' });
     vault.set('cp_connect_install_id_v1', codes[0].install_id);
-    await connect().loadInstallCode();
-    expect(connect().installCode).toBe(codes[0].code);
-
-    useConnect.setState({ installCode: '' });
     const calls = network({ statuses: [{ status: 'approved', token: 'device-token' }] });
     for (const fault of [broken.read, broken.hang]) {
       fault.add('cp_connect_install_id_v1');
@@ -326,55 +325,21 @@ describe('máquinas da conta', () => {
     }
     expect(vault.get('cp_connect_install_id_v1')).toBe(codes[0].install_id);
     expect(calls.some((call) => call.url.pathname === '/api/connect/redeem')).toBe(false);
-
-    // A tela diz por que o código não está disponível, em vez de só não mostrar nada.
-    broken.read.add('cp_connect_install_id_v1');
-    await connect().loadInstallCode();
-    expect([connect().installCode, connect().installCodeError]).toEqual(['', m.connect_install_code_unavailable()]);
-    broken.read.clear();
-    await connect().loadInstallCode();
-    expect([connect().installCode, connect().installCodeError]).toEqual([codes[0].code, '']);
-
-    vault.delete('cp_connect_install_id_v1');
-    for (const fault of [broken.write, broken.hangWrite]) {
-      fault.add('cp_connect_install_id_v1');
-      const loading = connect().loadInstallCode();
-      await elapse(6000);
-      await loading;
-      expect([connect().installCode, connect().installCodeError]).toEqual(['', m.connect_install_code_unavailable()]);
-      fault.clear();
-    }
-    // Sem gerador seguro o cofre não tem culpa: a causa dita é outra.
-    vi.stubGlobal('crypto', {});
-    await connect().loadInstallCode();
-    expect([connect().installCode, connect().installCodeError]).toEqual(['', m.connect_install_code_no_random()]);
-    expect(events.map((event) => event.codigo)).toEqual(['connect_install_id_unreadable', 'connect_install_id_unreadable',
-      'connect_install_id_unreadable', 'connect_install_id_unsaved', 'connect_install_id_unsaved', 'connect_install_id_no_random']);
+    expect(events.map((event) => event.codigo)).toEqual(['connect_install_id_unreadable', 'connect_install_id_unreadable']);
   });
 
   it('id guardado fora da regra do servidor é trocado por um novo, gravado e registrado', async () => {
     const events: { codigo?: string }[] = [];
     configureDiag({ registrar: (event) => { events.push(event); }, novoReq: () => '' });
     vault.set('cp_connect_install_id_v1', 'não vale');
-    await connect().loadInstallCode();
-    const saved = vault.get('cp_connect_install_id_v1');
-    expect(saved).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
-    expect(connect().installCode).toMatch(/^[2-9A-HJ-NP-Z]{3}-[2-9A-HJ-NP-Z]{3}$/);
-    expect(connect().installCodeError).toBe('');
-    expect(events.map((event) => event.codigo)).toEqual(['connect_install_id_invalid']);
-  });
-
-  it('a leitura do cofre que volta a dar certo na entrada limpa o aviso de código indisponível', async () => {
-    vault.set('cp_connect_install_id_v1', codes[0].install_id);
-    broken.read.add('cp_connect_install_id_v1');
-    await connect().loadInstallCode();
-    expect(connect().installCodeError).toBe(m.connect_install_code_unavailable());
-    broken.read.clear();
-    network({ statuses: [{ status: 'approved', token: 'device-token' }] });
+    const calls = network({ statuses: [{ status: 'approved', token: 'device-token' }] });
     const entering = connect().enter(online);
     await elapse(6000);
     await entering;
-    expect([connect().installCode, connect().installCodeError]).toEqual([codes[0].code, '']);
+    const saved = vault.get('cp_connect_install_id_v1');
+    expect(saved).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+    expect(calls.find((call) => call.url.pathname === '/api/connect/redeem')?.body?.install_id).toBe(saved);
+    expect(events.map((event) => event.codigo)).toEqual(['connect_install_id_invalid']);
   });
 
   it('adds a machine as a normal server', async () => {
@@ -445,7 +410,7 @@ describe('máquinas da conta', () => {
   });
 
   it('não pede duas vezes enquanto espera', async () => {
-    const calls = network({ statuses: [{ status: 'approved', token: 'device-token' }] });
+    const calls = network({ statuses: [{ status: 'pending' }, { status: 'approved', token: 'device-token' }] });
     const entering = connect().enter(online);
     await elapse(500);
 
@@ -513,99 +478,169 @@ describe('máquinas da conta', () => {
   });
 });
 
-describe('aparelhos da máquina', () => {
-  it('lets an approved device approve a new one', async () => {
+describe('aparelho da conta', () => {
+  const DEVICE_KEY = 'cp_connect_device_v1';
+  const saveDevice = () => vault.set(DEVICE_KEY, JSON.stringify({ name: 'acme', serviceUrl: CONNECT_SERVICE_URL, id: 'ad1', secret: 'ad-secret' }));
+  const tickets = (calls: Call[]) => calls.filter((call) => /^\/v1\/machines\/\w+\/devices$/.test(call.url.pathname));
+  const registers = (calls: Call[]) => calls.filter((call) => call.url.pathname === '/v1/devices' && call.method === 'POST');
+  const vouches = (calls: Call[]) => calls.filter((call) => call.url.pathname === '/api/connect/account-devices/self');
+  const signIn = () => connect().signIn('acme', 'long-password');
+
+  it('no login registra o aparelho, guarda id e segredo no cofre e, pendente, não entra em nada', async () => {
+    const calls = network();
+    await signIn();
+    await settle();
+
+    expect(connect().device).toEqual({ id: 'ad1', secret: 'ad-secret', status: 'pending' });
+    expect(JSON.parse(vault.get(DEVICE_KEY)!)).toEqual({ name: 'acme', serviceUrl: CONNECT_SERVICE_URL, id: 'ad1', secret: 'ad-secret' });
+    expect(JSON.parse(vault.get(ACCOUNT_KEY)!)).toEqual({ serviceUrl: CONNECT_SERVICE_URL, token: 'account-token', name: 'acme' });
+    expect(registers(calls)[0]).toMatchObject({ auth: 'Bearer account-token', body: { name: 'fixture-phone', install_id: vault.get('cp_connect_install_id_v1') } });
+    expect(tickets(calls)).toEqual([]);
+  });
+
+  it('reutiliza o aparelho guardado e, liberado, entra sozinho em todas as máquinas, inclusive na que aparece depois', async () => {
+    saveDevice();
+    const pc2: ConnectMachine = { machine_id: 'pc2', name: 'pc2', host: 'pc2.acme.hangar.dev.br', online: true };
+    let machines = [online];
+    const calls = network({ device: 'approved', statuses: [{ status: 'approved', token: 'device-a' }, { status: 'approved', token: 'device-b' }],
+      route: (call) => {
+        if (call.url.pathname === '/v1/machines') return json(machines);
+        const id = /^\/v1\/machines\/(\w+)\/devices$/.exec(call.url.pathname)?.[1];
+        if (id) return json({ url: `https://${id}.acme.hangar.dev.br`, ticket: '{"nonce":"n"}', signature: 'c2ln' });
+        const isPc2 = call.url.host === 'pc2.acme.hangar.dev.br' && !call.url.pathname.startsWith('/api/connect');
+        return isPc2 ? json({ identificador: 'pc2', lan_url: '' }) : undefined;
+      } });
+
+    await signIn();
+    await vi.waitFor(() => expect(servers().map((s) => s.id)).toEqual(['pc1']));
+    machines = [online, pc2];
+    await connect().refreshMachines();
+    await vi.waitFor(() => expect(servers().map((s) => s.id).sort()).toEqual(['pc1', 'pc2']));
+
+    expect(registers(calls)).toEqual([]);
+    expect(tickets(calls).map((call) => call.device)).toEqual(['ad1:ad-secret', 'ad1:ad-secret']);
+  });
+
+  it('a entrada automática que falhou espera o toque, sem repetir sozinha', async () => {
+    saveDevice();
+    const calls = network({ device: 'approved', route: (call) => (tickets([call]).length ? json({}, 500) : undefined) });
+    await signIn();
+    await vi.waitFor(() => expect(connect().entries.pc1?.phase).toBe('failed'));
+
+    await connect().refreshMachines();
+    await settle();
+
+    expect(tickets(calls)).toHaveLength(1);
+  });
+
+  it('pendente com entrada aprovada numa máquina pede a ela que o libere na conta (migração)', async () => {
     await seed([entry]);
-    let rows = [{ device_id: 'dev1', name: 'Hangar ios', status: 'approved', last_seen: null },
-      { device_id: 'dev2', name: 'fixture-signed', status: 'pending', last_seen: null }];
-    const calls = network({ route: ({ url, method }) => {
-      if (url.pathname === '/api/connect/devices/dev2/approve') {
-        rows = rows.map((row) => ({ ...row, status: 'approved' }));
-        return json({ ok: true });
-      }
-      if (url.pathname === '/api/connect/devices' && method === 'GET') return json(rows);
+    saveDevice();
+    let status = 'pending';
+    const calls = network({ route: (call) => {
+      if (call.url.pathname === '/v1/devices/ad1' && call.method === 'GET') return json({ status });
+      if (vouches([call]).length) { status = 'approved'; return json({ status: 'approved' }); }
       return undefined;
     } });
 
-    await connect().refreshDevices();
-    expect(connect().devices.pc1.rows?.find((row) => row.status === 'pending')?.name).toBe('fixture-signed');
+    await signIn();
 
-    await connect().answerDevice(servers()[0], 'dev2', true, signal());
-
-    const approve = calls.find((call) => call.url.pathname.endsWith('/approve'));
-    expect(approve).toMatchObject({ method: 'POST', auth: 'Bearer device-token' });
-    expect(approve?.url.origin).toBe(MACHINE_URL);
-    expect(connect().devices.pc1.rows?.every((row) => row.status === 'approved')).toBe(true);
+    expect(connect().device?.status).toBe('approved');
+    expect(vouches(calls)).toHaveLength(1);
+    expect(vouches(calls)[0]).toMatchObject({ method: 'POST', auth: 'Bearer device-token', body: { device_id: 'ad1', device_secret: 'ad-secret' } });
+    expect(vouches(calls)[0].url.origin).toBe(MACHINE_URL);
   });
 
-  it('aprova o mesmo celular só nas máquinas marcadas, cada uma com a credencial dela', async () => {
-    const pc2: Server = { ...entry, id: 'pc2', label: 'pc2', baseUrl: 'https://pc2.acme.hangar.dev.br', token: 'device-token-2' };
-    await seed([entry, pc2, { ...pc2, id: 'pc3', label: 'pc3', baseUrl: 'https://pc3.acme.hangar.dev.br' }]);
-    const calls = network();
-
-    const failed = await connect().answerGroup([{ serverId: 'pc1', label: 'pc1', deviceId: 'a1' }, { serverId: 'pc2', label: 'pc2', deviceId: 'a2' }], true);
-
-    const answers = calls.filter((call) => call.method === 'DELETE' || (call.method === 'POST' && call.url.pathname.endsWith('/approve')))
-      .map((call) => `${call.method} ${call.url.host}${call.url.pathname} ${call.auth}`).sort();
-    expect(answers).toEqual([
-      'POST pc1.acme.hangar.dev.br/api/connect/devices/a1/approve Bearer device-token',
-      'POST pc2.acme.hangar.dev.br/api/connect/devices/a2/approve Bearer device-token-2',
-    ]);
-    expect(failed).toEqual([]);
-  });
-
-  it('a resposta à aprovação relê a lista mesmo com uma leitura antiga em curso', async () => {
+  it('máquina que não libera deixa o aparelho pendente, e não é perguntada de novo', async () => {
     await seed([entry]);
-    let rows = [{ device_id: 'dev2', name: 'fixture-signed', status: 'pending', last_seen: null }];
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => { release = resolve; });
-    let first = true;
-    vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
-      const { pathname } = new URL(input);
-      if (pathname === '/api/connect/devices' && (init?.method ?? 'GET') === 'GET') {
-        const snapshot = rows;
-        if (first) { first = false; await gate; }
-        return json(snapshot);
-      }
-      if (pathname.endsWith('/approve')) { rows = rows.map((row) => ({ ...row, status: 'approved' })); return json({ ok: true }); }
-      return json({});
-    }));
+    saveDevice();
+    const calls = network({ route: (call) => (vouches([call]).length ? json({}, 404) : undefined) });
 
-    const polling = connect().refreshDevices();
-    const answering = connect().answerDevice(servers()[0], 'dev2', true, signal());
-    await settle();
-    release();
-    await polling;
-    await answering;
-
-    expect(connect().devices.pc1.rows?.map((row) => row.status)).toEqual(['approved']);
-  });
-
-  it('recusa um pedido pendente com DELETE', async () => {
-    await seed([entry]);
-    const calls = network();
-    await connect().answerDevice(servers()[0], 'dev2', false, signal());
-    expect(calls.some((call) => call.method === 'DELETE' && call.url.pathname === '/api/connect/devices/dev2')).toBe(true);
-  });
-
-  it('não lê aparelhos de entrada desligada ou sem credencial de aparelho', async () => {
-    await seed([{ ...entry, disabled: true }, { id: 's1', label: 's1', baseUrl: 'https://s1.test', token: 'owner-password' }]);
-    const calls = network();
+    await signIn();
     await connect().refreshDevices();
-    expect(calls).toEqual([]);
+
+    expect(connect().device?.status).toBe('pending');
+    expect(connect().deviceError).toBe('');
+    expect(vouches(calls)).toHaveLength(1);
+  });
+
+  it('pedido vencido registra outro; revogado fica revogado até pedir de novo', async () => {
+    saveDevice();
+    const newId = (call: Call) => (registers([call]).length ? json({ device_id: 'ad9', device_secret: 'ad9-secret', status: 'pending' }, 201) : undefined);
+    network({ route: (call) => newId(call) ?? (call.url.pathname === '/v1/devices/ad1' ? json({}, 404) : undefined) });
+    await signIn();
+    expect(connect().device).toEqual({ id: 'ad9', secret: 'ad9-secret', status: 'pending' });
+    expect(JSON.parse(vault.get(DEVICE_KEY)!)).toMatchObject({ id: 'ad9', secret: 'ad9-secret' });
+
+    await connect().signOut();
+    saveDevice();
+    const calls = network({ device: 'revoked', route: newId });
+    await signIn();
+    expect(connect().device?.status).toBe('revoked');
+    expect(registers(calls)).toEqual([]);
+
+    await connect().requestDeviceAgain();
+    expect(connect().device).toEqual({ id: 'ad9', secret: 'ad9-secret', status: 'pending' });
+  });
+
+  it('cofre ilegível não registra outro aparelho por cima do guardado', async () => {
+    saveDevice();
+    broken.read.add(DEVICE_KEY);
+    const calls = network();
+    await signIn();
+    expect(connect().device).toBeNull();
+    expect(connect().deviceError).toBe(m.connect_error_vault());
+    expect(registers(calls)).toEqual([]);
+  });
+
+  it('sessão vencida na consulta do aparelho volta ao login', async () => {
+    saveDevice();
+    network({ route: (call) => (call.url.pathname === '/v1/devices/ad1' ? json({}, 401) : undefined) });
+    await signIn();
+    expect(connect().account).toBeNull();
+    expect(connect().notice).toBe(m.connect_session_ended());
+  });
+
+  it('liberado, lista os aparelhos da conta e libera, recusa ou tira acesso pelo serviço', async () => {
+    saveDevice();
+    const rows = [{ device_id: 'ad1', name: 'fixture-phone', status: 'approved', created_at: 1, approved_at: 2, revoked_at: null },
+      { device_id: 'ad2', name: 'Pixel', status: 'pending', created_at: 3, approved_at: null, revoked_at: null }];
+    const calls = network({ device: 'approved', rows, machines: [] });
+    await signIn();
+    expect(connect().devices).toEqual({ rows, error: '' });
+
+    await connect().answerDevice('ad2', true);
+    await connect().answerDevice('ad3', false);
+
+    expect(calls.filter((call) => /^\/v1\/devices\/ad[23]/.test(call.url.pathname)).map((call) => `${call.method} ${call.url.pathname} ${call.device}`))
+      .toEqual(['POST /v1/devices/ad2/approve ad1:ad-secret', 'DELETE /v1/devices/ad3 ad1:ad-secret']);
   });
 
   it('mantém a lista na tela quando a leitura falha', async () => {
-    await seed([entry]);
-    network({ rows: [{ device_id: 'dev1', name: 'fixture-phone', status: 'approved', last_seen: null }] });
-    await connect().refreshDevices();
-    network({ route: () => json({ detail: 'fixture-failure' }, 500) });
+    saveDevice();
+    const rows = [{ device_id: 'ad1', name: 'fixture-phone', status: 'approved', created_at: 1, approved_at: 2, revoked_at: null }];
+    network({ device: 'approved', rows, machines: [] });
+    await signIn();
+    network({ device: 'approved', machines: [], route: (call) => (call.url.pathname === '/v1/devices' ? json({}, 500) : undefined) });
 
     await connect().refreshDevices();
 
-    expect(connect().devices.pc1.rows).toHaveLength(1);
-    expect(connect().devices.pc1.error).not.toBe('');
+    expect(connect().devices.rows).toEqual(rows);
+    expect(connect().devices.error).toBe(m.connect_error_unavailable());
   });
+
+  it('bilhete recusado porque o aparelho perdeu o acesso marca o aparelho e diz o motivo', async () => {
+    saveDevice();
+    network({ device: 'approved', machines: [],
+      route: (call) => (tickets([call]).length ? json({ error: 'fixture', reason: 'device_revoked' }, 403) : undefined) });
+    await signIn();
+
+    expect(await connect().enter(online)).toBeNull();
+
+    expect(connect().entries.pc1).toEqual({ phase: 'failed', error: m.connect_error_device_revoked() });
+    expect(connect().device?.status).toBe('revoked');
+  });
+
 });
 
 describe('religar o Connect', () => {

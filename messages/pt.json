@@ -12085,5 +12085,19 @@
   "native_video_no_route": "este vídeo não tem endereço para tocar aqui",
   "native_video_need_mpv_linux": "Para tocar aqui, instale o mpv (pacote mpv ou libmpv) e tente de novo.",
   "native_video_need_mpv": "Este computador não tem o player de vídeo do app (libmpv).",
-  "native_video_open_system": "Abrir no player do sistema"
+  "native_video_open_system": "Abrir no player do sistema",
+  "connect_error_device_pending": "Este aparelho ainda espera a liberação da conta.",
+  "connect_error_device_revoked": "Este aparelho perdeu o acesso à conta.",
+  "connect_error_device_required": "Este aparelho ainda não está registrado na conta. Abra o Connect de novo.",
+  "connect_device_waiting_release": "Esperando liberação: abra o Hangar num aparelho ou PC seu e toque em Liberar.",
+  "connect_device_revoked_notice": "O acesso deste aparelho foi tirado na conta.",
+  "connect_device_request_again": "Pedir liberação de novo",
+  "connect_account_devices": "Aparelhos da conta",
+  "connect_account_devices_empty": "Nenhum aparelho na conta.",
+  "connect_account_devices_help": "Liberar vale para todas as máquinas da conta, inclusive as que você ligar depois. Tirar o acesso fecha o Connect em todas em até um minuto.",
+  "connect_account_device_asked": "Pediu {when}",
+  "connect_account_device_release": "Liberar",
+  "connect_account_device_release_title": "Liberar {name}?",
+  "connect_account_device_release_body": "Ele passa a entrar em todas as máquinas da conta. Só libere se foi você que pediu agora.",
+  "connect_account_device_revoke_body": "Ele perde a entrada em todas as máquinas da conta."
 }

@@ -2,20 +2,23 @@ import { create } from 'zustand';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
-import { addMachine, changeAccountPassword, endAccountSessions, installCode, listMachines, registrarDiag, signIn, signUp, upgradeToDevice } from '@hangar/core';
-import type { AccountSession, ConnectMachine, Server } from '@hangar/core';
-import { approveDevice, readDevices, reason, removeDevice, validInstallField, type ConnectDevice } from '../machines/api';
+import { addMachine, approveAccountDevice, changeAccountPassword, deviceStatus, endAccountSessions, listAccountDevices, listMachines, registerDevice,
+  registrarDiag, revokeAccountDevice, signIn, signUp, upgradeToDevice } from '@hangar/core';
+import type { AccountDevice, AccountDeviceKey, AccountDeviceStatus, AccountSession, ConnectMachine, Server } from '@hangar/core';
+import { validInstallField, vouchAccountDevice } from '../machines/api';
 import { ownServers, useServers } from '../../stores/servers';
-import type { GroupTarget } from './pendingGroups';
 import * as m from '../../paraglide/messages';
 
 export const CONNECT_SERVICE_URL = 'https://connect.hangar.dev.br';
 const KEY = 'cp_connect_account_v1';
+// Fora da chave da conta: sair e entrar de novo reaproveita o aparelho já liberado.
+const DEVICE_KEY = 'cp_connect_device_v1';
 const DEVICES_TIMEOUT_MS = 15_000;
 
 export type ConnectAccount = AccountSession & { name: string };
 export type MachineEntry = { phase: 'asking' | 'waiting' | 'failed'; error?: string };
-export type DeviceList = { rows: ConnectDevice[] | null; error: string };
+export type ThisDevice = AccountDeviceKey & { status: AccountDeviceStatus };
+export type DeviceList = { rows: AccountDevice[] | null; error: string };
 type Step = 'signin' | 'signup' | 'password' | 'machine';
 
 export interface ConnectState {
@@ -26,14 +29,13 @@ export interface ConnectState {
   loadingMachines: boolean;
   /** Pedido de entrada por `machine_id`. Vive aqui, e não na tela: a aprovação leva até 10 minutos e o token sai uma vez só. */
   entries: Record<string, MachineEntry>;
-  devices: Record<string, DeviceList>;
+  /** Este aparelho na conta: pendente espera um aparelho ou PC liberado tocar em Liberar. */
+  device: ThisDevice | null;
+  deviceError: string;
+  /** Aparelhos da conta; só aparelho liberado consegue ler. */
+  devices: DeviceList;
   notice: string;
-  /** Código curto deste celular, repetido no cartão de quem aprova; vazio sem id guardado. */
-  installCode: string;
-  /** Por que o código deste celular não está disponível (cofre ou falta de gerador seguro); vazio quando está. */
-  installCodeError: string;
   load(): Promise<void>;
-  loadInstallCode(): Promise<void>;
   signIn(name: string, password: string): Promise<void>;
   signUp(name: string, password: string): Promise<void>;
   signOut(): Promise<void>;
@@ -41,17 +43,23 @@ export interface ConnectState {
   changePassword(oldPassword: string, newPassword: string): Promise<void>;
   refreshMachines(): Promise<void>;
   enter(machine: ConnectMachine): Promise<Server | null>;
-  /** Pede entrada em todas as máquinas online ainda fora deste aparelho, com um cartão só em quem aprova. */
+  /** Pede entrada em todas as máquinas online ainda fora deste aparelho. */
   enterAll(): Promise<void>;
   reenter(server: Server): Promise<void>;
   turnOnConnect(server: Server): Promise<boolean>;
+  /** Registra ou relê este aparelho na conta e, liberado, a lista de aparelhos dela. Nunca rejeita: o erro fica no estado. */
   refreshDevices(): Promise<void>;
-  answerDevice(server: Server, deviceId: string, approve: boolean, signal: AbortSignal): Promise<void>;
-  /** Responde o mesmo celular em várias máquinas, cada uma pela própria rota; devolve as que falharam, com o motivo. */
-  answerGroup(targets: GroupTarget[], approve: boolean): Promise<{ label: string; error: string }[]>;
+  /** Liberar ou recusar o pendente; recusar o liberado tira o acesso dele em todas as máquinas. */
+  answerDevice(deviceId: string, approve: boolean): Promise<void>;
+  /** Este aparelho perdeu o acesso: registra outro pedido de liberação. */
+  requestDeviceAgain(): Promise<void>;
 }
 
 const CODES: Record<string, () => string> = {
+  connect_device_pending: m.connect_error_device_pending,
+  connect_device_revoked: m.connect_error_device_revoked,
+  connect_device_required: m.connect_error_device_required,
+  connect_vault_failed: m.connect_error_vault,
   connect_device_denied: m.connect_error_denied,
   connect_approval_expired: m.connect_error_expired,
   connect_token_lost: m.connect_error_token_lost,
@@ -86,9 +94,9 @@ function isAccount(value: unknown): value is ConnectAccount {
 const deviceName = () => (Constants.deviceName || Platform.OS).slice(0, 64);
 
 const INSTALL_KEY = 'cp_connect_install_id_v1';
-// O mesmo valor em todos os pedidos deste aparelho: só junta o cartão de aprovação, nunca dá acesso.
-// Sem `id`, `missing` diz o motivo, para a tela: cofre ou falta de gerador seguro.
-type InstallId = { id: string; missing?: undefined } | { id?: undefined; missing: string };
+// O mesmo valor em todos os pedidos deste aparelho: o pedido novo troca o pendente anterior, nunca dá acesso.
+// Sem `id` (cofre ou falta de gerador seguro, já no diário), o pedido sai sem ele.
+type InstallId = { id?: string };
 let reading: Promise<InstallId> | null = null;
 // "Entrar em todas" pede o id várias vezes de uma vez: uma leitura só, senão cada pedido nasceria com o seu.
 const installId = () => (reading ??= readInstallId().finally(() => { reading = null; }));
@@ -104,8 +112,8 @@ async function readInstallId(): Promise<InstallId> {
   let saved: string | null;
   try { saved = await withinVaultTime(SecureStore.getItemAsync(INSTALL_KEY)); }
   catch {
-    // Gerar outro aqui trocaria o código que a pessoa já conferiu e separaria este celular em dois cartões: o pedido para
-    // com erro e "tentar de novo" relê o mesmo cofre.
+    // Gerar outro aqui deixaria o pedido antigo pendente ao lado do novo: o pedido para com erro e "tentar de novo"
+    // relê o mesmo cofre.
     registrarDiag({ evento: 'connect.install_id_unreadable', nivel: 'aviso', codigo: 'connect_install_id_unreadable' });
     throw Object.assign(new Error(m.connect_error_install_id()), { code: 'connect_install_id_unreadable' });
   }
@@ -114,14 +122,13 @@ async function readInstallId(): Promise<InstallId> {
   if (saved) registrarDiag({ evento: 'connect.install_id_invalid', nivel: 'aviso', codigo: 'connect_install_id_invalid' });
   if (!globalThis.crypto?.getRandomValues) {
     registrarDiag({ evento: 'connect.install_id_no_random', nivel: 'aviso', codigo: 'connect_install_id_no_random' });
-    return { missing: m.connect_install_code_no_random() };
+    return {};
   }
   const id = Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
-  // Sem cofre, os pedidos saem sem o id: cada máquina mostra o seu cartão, como antes.
   try { await withinVaultTime(SecureStore.setItemAsync(INSTALL_KEY, id)); }
   catch {
     registrarDiag({ evento: 'connect.install_id_unsaved', nivel: 'aviso', codigo: 'connect_install_id_unsaved' });
-    return { missing: m.connect_install_code_unavailable() };
+    return {};
   }
   return { id };
 }
@@ -147,11 +154,113 @@ export const needsEntry = (server: Server) => !!server.disabled && (server.crede
 /** Só quem tem credencial de aparelho está numa máquina com Connect. */
 export const connectServers = (servers: Server[]) => ownServers(servers).filter((s) => !s.disabled && s.credential === 'device');
 
+const vaultFailed = () => Object.assign(new Error('connect_vault_failed'), { code: 'connect_vault_failed' });
+
+function savedDevice(raw: string | null, account: ConnectAccount): AccountDeviceKey | null {
+  let saved: Record<string, unknown> | null;
+  // Registro estragado não volta a valer: um pedido novo substitui.
+  try { saved = raw ? JSON.parse(raw) as Record<string, unknown> | null : null; }
+  catch { return null; }
+  // Aparelho de outra conta (ou serviço) não vale aqui: esta conta registra o seu.
+  if (!saved || saved.name !== account.name || saved.serviceUrl !== account.serviceUrl) return null;
+  return typeof saved.id === 'string' && typeof saved.secret === 'string' ? { id: saved.id, secret: saved.secret } : null;
+}
+
 export const useConnect = create<ConnectState>((set, get) => {
   let devicesRead: Promise<void> | null = null;
   let readAgain = false;
   let machinesRead = 0;
   let newestMachines: Promise<void> = Promise.resolve();
+  // `requestDeviceAgain` pula o cofre: o guardado é o revogado.
+  let renew = false;
+  // As máquinas são perguntadas uma vez por aparelho e login: sem rota (máquina antiga), perguntar de novo não muda nada.
+  const vouched = new Set<string>();
+
+  const sessionOf = (account: ConnectAccount): AccountSession => {
+    const device = get().device;
+    return { ...account, device: device ? { id: device.id, secret: device.secret } : undefined };
+  };
+
+  // Pendente que já entrou numa máquina pela aprovação antiga: ela prova o segredo ao serviço e o libera (migração).
+  async function vouch(device: AccountDeviceKey): Promise<boolean> {
+    const servers = connectServers(useServers.getState().servers);
+    if (!servers.length || vouched.has(device.id)) return false;
+    vouched.add(device.id);
+    for (const server of servers) {
+      try {
+        await vouchAccountDevice(server, device.id, device.secret, AbortSignal.timeout(DEVICES_TIMEOUT_MS));
+        return true;
+      } catch (error) {
+        registrarDiag({ evento: 'connect.vouch_failed', nivel: 'aviso', codigo: String(statusOf(error) ?? 'connect_vouch_network') }, server.baseUrl);
+      }
+    }
+    return false;
+  }
+
+  async function checkDevice(account: ConnectAccount) {
+    const before = get().device;
+    let key: AccountDeviceKey | null = before;
+    if (!key && !renew) {
+      try { key = savedDevice(await withinVaultTime(SecureStore.getItemAsync(DEVICE_KEY)), account); }
+      // Registrar outro por cima apagaria um aparelho talvez já liberado.
+      catch { throw vaultFailed(); }
+    }
+    let status: AccountDeviceStatus | null = null;
+    if (key) {
+      // 404: o pedido venceu sem resposta (ou a conta não o conhece): vale um pedido novo.
+      try { status = await deviceStatus({ ...account, device: key }); }
+      catch (error) { if (statusOf(error) !== 404) throw error; }
+    }
+    if (!key || !status) {
+      key = await registerDevice(account, deviceName(), (await installId()).id);
+      try { await withinVaultTime(SecureStore.setItemAsync(DEVICE_KEY, JSON.stringify({ name: account.name, serviceUrl: account.serviceUrl, ...key }))); }
+      catch { throw vaultFailed(); }
+      renew = false;
+      status = 'pending';
+    }
+    if (status === 'pending' && await vouch(key)) status = await deviceStatus({ ...account, device: key });
+    if (get().account?.token !== account.token) return;
+    set({ device: { ...key, status }, deviceError: '' });
+    // Liberado agora: entra nas máquinas que faltam.
+    if (status === 'approved' && before?.status !== 'approved') void get().refreshMachines();
+  }
+
+  async function readDevicesOnce() {
+    const { account } = get();
+    if (!account) return;
+    const same = () => get().account?.token === account.token;
+    try { await checkDevice(account); }
+    catch (error) {
+      if (!same()) return;
+      if (statusOf(error) === 401) await dropAccount(m.connect_session_ended());
+      else set({ deviceError: failure(error, 'machine') });
+      return;
+    }
+    if (get().device?.status !== 'approved') return;
+    try {
+      const rows = await listAccountDevices(sessionOf(account));
+      if (same()) set({ devices: { rows, error: '' } });
+    } catch (error) {
+      if (!same()) return;
+      if (statusOf(error) === 401) await dropAccount(m.connect_session_ended());
+      else { refusedDevice(error); set((state) => ({ devices: { rows: state.devices.rows, error: failure(error, 'machine') } })); }
+    }
+  }
+
+  // O serviço diz que este aparelho não está liberado: a tela volta a mostrar a espera ou a perda do acesso.
+  function refusedDevice(error: unknown) {
+    const code = (error as { code?: string }).code;
+    const status = code === 'connect_device_revoked' ? 'revoked' : code === 'connect_device_pending' ? 'pending' : null;
+    if (status) set((state) => (state.device ? { device: { ...state.device, status } } : {}));
+  }
+
+  // Liberado na conta, entra sozinho nas máquinas que faltam; a que falhou espera o toque, para não insistir a cada leitura.
+  function enterMissing() {
+    if (get().device?.status !== 'approved') return;
+    for (const machine of missingMachines(get().machines, useServers.getState().servers)) {
+      if (!get().entries[machine.machine_id]) void get().enter(machine);
+    }
+  }
 
   async function readMachines(account: ConnectAccount) {
     const read = ++machinesRead;
@@ -164,6 +273,7 @@ export const useConnect = create<ConnectState>((set, get) => {
       const before = get().machines ?? [];
       const machines = fresh.map((row) => before.find((old) => sameRow(old, row)) ?? row);
       set({ machines, loadingMachines: false });
+      enterMissing();
     } catch (error) {
       if (!current()) return;
       if (statusOf(error) === 401) await dropAccount(m.connect_session_ended());
@@ -178,7 +288,9 @@ export const useConnect = create<ConnectState>((set, get) => {
     return { entries };
   });
 
-  const signedOut = (notice: string) => set({ account: null, machines: null, machinesError: '', loadingMachines: false, entries: {}, devices: {}, notice });
+  const noDevices: DeviceList = { rows: null, error: '' };
+  const signedOut = (notice: string) => set({ account: null, machines: null, machinesError: '', loadingMachines: false, entries: {},
+    device: null, deviceError: '', devices: noDevices, notice });
 
   // O token já não vale: a falha ao apagar só deixa um token morto, que o próximo 401 limpa.
   async function dropAccount(notice: string) {
@@ -196,8 +308,11 @@ export const useConnect = create<ConnectState>((set, get) => {
     const account = { ...session, name };
     try { await SecureStore.setItemAsync(KEY, JSON.stringify(account)); }
     catch { throw new Error(m.connect_error_vault()); }
-    set({ account, machines: null, machinesError: '', entries: {}, devices: {}, notice: '' });
+    vouched.clear();
+    set({ account, machines: null, machinesError: '', entries: {}, device: null, deviceError: '', devices: noDevices, notice: '' });
     void get().refreshMachines();
+    // No login: o aparelho se registra (ou reaproveita o guardado) e diz se já está liberado.
+    await get().refreshDevices();
   }
 
   return {
@@ -207,15 +322,10 @@ export const useConnect = create<ConnectState>((set, get) => {
     machinesError: '',
     loadingMachines: false,
     entries: {},
-    devices: {},
+    device: null,
+    deviceError: '',
+    devices: noDevices,
     notice: '',
-    installCode: '',
-    installCodeError: '',
-    async loadInstallCode() {
-      // A causa já foi ao diário em `readInstallId`.
-      const { id, missing } = await installId().catch((): InstallId => ({ missing: m.connect_install_code_unavailable() }));
-      set({ installCode: id ? installCode(id) : '', installCodeError: missing ?? '' });
-    },
     async load() {
       if (get().ready) return;
       try {
@@ -268,16 +378,15 @@ export const useConnect = create<ConnectState>((set, get) => {
       const sameAccount = () => get().account?.token === account.token;
       try {
         const install = await installId();
-        // Leitura boa depois de uma que falhou: o código volta à tela, o aviso sai.
-        if (install.id) set({ installCode: installCode(install.id), installCodeError: '' });
-        const server = await addMachine(account, machine, deviceName(), () => { if (sameAccount()) setEntry(machine.machine_id, { phase: 'waiting' }); },
-          install.id);
+        const server = await addMachine(sessionOf(account), machine, deviceName(),
+          () => { if (sameAccount()) setEntry(machine.machine_id, { phase: 'waiting' }); }, install.id);
         // O token sai uma vez só e a máquina é desta pessoa: guarda mesmo se a conta mudou.
         const saved = useServers.getState().addConnected(server);
         if (sameAccount()) setEntry(machine.machine_id, null);
         return saved;
       } catch (error) {
         if (!sameAccount()) return null;
+        refusedDevice(error);
         setEntry(machine.machine_id, { phase: 'failed', error: failure(error, 'machine') });
         // O 401 pode ser do bilhete, na máquina, ou da conta, no serviço: reler a lista diz qual foi.
         if (statusOf(error) === 401) void get().refreshMachines();
@@ -310,37 +419,28 @@ export const useConnect = create<ConnectState>((set, get) => {
     },
     refreshDevices() {
       // Pedido durante uma leitura pode vir depois de uma aprovação: a leitura em curso é antiga, então relê ao fim.
+      // Uma leitura por vez também impede dois registros do mesmo aparelho.
       if (devicesRead) { readAgain = true; return devicesRead; }
-      const readAll = () => Promise.all(connectServers(useServers.getState().servers).map(async (server) => {
-        try {
-          const rows = await readDevices(server, AbortSignal.timeout(DEVICES_TIMEOUT_MS));
-          set((state) => ({ devices: { ...state.devices, [server.id]: { rows, error: '' } } }));
-        } catch (error) {
-          set((state) => ({ devices: { ...state.devices, [server.id]: { rows: state.devices[server.id]?.rows ?? null, error: reason(error) } } }));
-        }
-      }));
       devicesRead = (async () => {
         try {
-          do { readAgain = false; await readAll(); } while (readAgain);
+          do { readAgain = false; await readDevicesOnce(); } while (readAgain);
         } finally {
           devicesRead = null;
         }
       })();
       return devicesRead;
     },
-    async answerDevice(server, deviceId, approve, signal) {
-      await (approve ? approveDevice : removeDevice)(server, deviceId, signal);
+    async answerDevice(deviceId, approve) {
+      const { account } = get();
+      if (!account) throw new Error(m.connect_session_ended());
+      try { await (approve ? approveAccountDevice : revokeAccountDevice)(sessionOf(account), deviceId); }
+      catch (error) { throw new Error(failure(error, 'machine')); }
       await get().refreshDevices();
     },
-    async answerGroup(targets, approve) {
-      const all = useServers.getState().servers;
-      const answered = await Promise.allSettled(targets.map(async ({ serverId, deviceId }) => {
-        const server = all.find((candidate) => candidate.id === serverId);
-        if (!server) throw new Error(m.connect_group_machine_gone());
-        await (approve ? approveDevice : removeDevice)(server, deviceId, AbortSignal.timeout(DEVICES_TIMEOUT_MS));
-      }));
+    async requestDeviceAgain() {
+      renew = true;
+      set({ device: null, deviceError: '', devices: noDevices });
       await get().refreshDevices();
-      return answered.flatMap((result, i) => result.status === 'rejected' ? [{ label: targets[i].label, error: reason(result.reason) }] : []);
     },
   };
 });

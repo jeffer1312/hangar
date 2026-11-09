@@ -1,6 +1,6 @@
 // Conta do Connect e entrada de aparelho. O `secret` vai direto à máquina e ao serviço só o hash
-// dele: isso protege de um serviço honesto que vaze. Contra um desonesto, a barreira é a aprovação
-// do dono na máquina.
+// dele: isso protege de um serviço honesto que vaze. Um serviço desonesto pode pré-aprovar bilhetes:
+// limite aceito em docs/decisoes/plataforma.md ("Confiança na conta").
 import { probeServerResponse } from './api';
 import { apiEnv } from './apiEnv';
 import { registrar as registrarDiag } from './diag';
@@ -15,13 +15,23 @@ const APPROVAL_POLL_MS = 3000;
 // O pedido pendente expira neste prazo na máquina (`PENDING_TTL`).
 const APPROVAL_WINDOW_MS = 10 * 60_000;
 
-export interface AccountSession { serviceUrl: string; token: string }
+/** Credencial deste aparelho na conta (`POST /v1/devices`); vai ao serviço, nunca à máquina. */
+export interface AccountDeviceKey { id: string; secret: string }
+export interface AccountSession { serviceUrl: string; token: string; device?: AccountDeviceKey }
 export interface ConnectMachine { machine_id: string; name: string; host: string; online: boolean }
+export type AccountDeviceStatus = 'pending' | 'approved' | 'revoked';
+/** Linha de `GET /v1/devices`; tempos em segundos. */
+export interface AccountDevice {
+  device_id: string; name: string; status: AccountDeviceStatus; created_at: number; approved_at: number | null; revoked_at: number | null;
+}
 
 const fail = (code: string, status?: number) => Object.assign(new Error(code), { code, status });
 const record = (value: unknown): Record<string, unknown> => (value && typeof value === 'object' && !Array.isArray(value)
   ? value as Record<string, unknown> : {});
 const filled = (value: unknown): value is string => typeof value === 'string' && !!value;
+const STATUSES: readonly unknown[] = ['pending', 'approved', 'revoked'];
+// Motivos do 403 do serviço que a tela explica; qualquer outro vira o genérico.
+const REASONS: readonly unknown[] = ['device_required', 'device_pending', 'device_revoked'];
 
 async function request(base: string, path: string, init: RequestInit): Promise<unknown> {
   // A senha da conta passa por aqui: http só em loopback, que é o caso dos testes.
@@ -31,13 +41,58 @@ async function request(base: string, path: string, init: RequestInit): Promise<u
     headers: { 'Content-Type': 'application/json', ...init.headers },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), redirect: 'error', credentials: 'omit',
   });
-  // Não incorpora o corpo do erro: ele pode ecoar o que recebeu.
-  if (!response.ok) throw fail('connect_request_failed', response.status);
+  if (!response.ok) {
+    // Do corpo do erro só sai o motivo conhecido, nunca o texto: ele pode ecoar o que recebeu.
+    const reason = await response.json().then((body: unknown) => record(body).reason, () => undefined);
+    throw fail(REASONS.includes(reason) ? `connect_${String(reason)}` : 'connect_request_failed', response.status);
+  }
   return response.status === 204 ? null : await response.json() as unknown;
 }
 
 const post = (base: string, path: string, body: unknown, headers?: Record<string, string>) =>
   request(base, path, { method: 'POST', body: JSON.stringify(body), headers });
+
+const auth = ({ token, device }: AccountSession): Record<string, string> => ({
+  Authorization: `Bearer ${token}`, ...(device ? { 'X-Hangar-Device': device.id, 'X-Hangar-Device-Secret': device.secret } : {}),
+});
+
+/** Registra este aparelho na conta: nasce pendente e espera a liberação de um aparelho ou PC já liberado. */
+export async function registerDevice(session: AccountSession, name: string, installId?: string): Promise<AccountDeviceKey> {
+  const { device_id: id, device_secret: secret } = record(await post(session.serviceUrl, '/v1/devices',
+    { name, ...(installId ? { install_id: installId } : {}) }, auth(session)));
+  if (!filled(id) || !filled(secret)) throw fail('connect_response_invalid');
+  return { id, secret };
+}
+
+/** Status deste aparelho na conta. 404 = pedido vencido ou desconhecido: registrar de novo. */
+export async function deviceStatus(session: AccountSession & { device: AccountDeviceKey }): Promise<AccountDeviceStatus> {
+  const { status } = record(await request(session.serviceUrl, `/v1/devices/${encodeURIComponent(session.device.id)}`, { headers: auth(session) }));
+  if (!STATUSES.includes(status)) throw fail('connect_response_invalid');
+  return status as AccountDeviceStatus;
+}
+
+const when = (value: unknown) => typeof value === 'number' && Number.isFinite(value);
+
+/** Aparelhos da conta; só responde a aparelho liberado. */
+export async function listAccountDevices(session: AccountSession): Promise<AccountDevice[]> {
+  const rows = await request(session.serviceUrl, '/v1/devices', { headers: auth(session) });
+  const valid = (item: unknown): item is AccountDevice => {
+    const row = record(item);
+    return filled(row.device_id) && typeof row.name === 'string' && STATUSES.includes(row.status) && when(row.created_at)
+      && (row.approved_at === null || when(row.approved_at)) && (row.revoked_at === null || when(row.revoked_at));
+  };
+  if (!Array.isArray(rows) || !rows.every(valid)) throw fail('connect_response_invalid');
+  return rows;
+}
+
+export async function approveAccountDevice(session: AccountSession, id: string): Promise<void> {
+  await post(session.serviceUrl, `/v1/devices/${encodeURIComponent(id)}/approve`, {}, auth(session));
+}
+
+/** Recusa o pendente ou tira o acesso do liberado, em todas as máquinas da conta. */
+export async function revokeAccountDevice(session: AccountSession, id: string): Promise<void> {
+  await request(session.serviceUrl, `/v1/devices/${encodeURIComponent(id)}`, { method: 'DELETE', headers: auth(session) });
+}
 
 async function accountSession(serviceUrl: string, path: string, name: string, password: string): Promise<AccountSession> {
   const { token } = record(await post(serviceUrl, path, { name, password }));
@@ -91,10 +146,12 @@ function machineUrl(raw: unknown, host: string): string {
   return url;
 }
 
-async function waitForApproval(base: string, deviceId: string, secret: string): Promise<string> {
+async function waitForApproval(base: string, deviceId: string, secret: string, onPending: () => void): Promise<string> {
   const deadline = Date.now() + APPROVAL_WINDOW_MS;
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, APPROVAL_POLL_MS));
+  // A primeira consulta sai na hora: bilhete pré-aprovado pela conta já entrega o token, sem espera nem aviso.
+  for (let polls = 0; Date.now() < deadline; polls++) {
+    if (polls === 1) onPending();
+    if (polls > 0) await new Promise((resolve) => setTimeout(resolve, APPROVAL_POLL_MS));
     let answer: Record<string, unknown>;
     try {
       answer = record(await post(base, '/api/connect/redeem/status', { device_id: deviceId, secret }));
@@ -115,20 +172,20 @@ async function waitForApproval(base: string, deviceId: string, secret: string): 
   throw fail('connect_approval_expired');
 }
 
-/** Pede a entrada do aparelho e espera a aprovação na máquina. `onPending` avisa uma vez que ela foi pedida. */
+/** Pede a entrada do aparelho na máquina. Liberado na conta, o bilhete já sai aprovado; senão (máquina antiga) espera
+ *  a aprovação nela, e `onPending` avisa uma vez que ela foi pedida. */
 export async function addMachine(session: AccountSession, machine: ConnectMachine, deviceName: string, onPending: () => void,
   installId?: string): Promise<Server> {
   const secret = newSecret();
   const verifier = sha256Hex(new TextEncoder().encode(secret));
   const ticket = record(await post(session.serviceUrl, `/v1/machines/${encodeURIComponent(machine.machine_id)}/devices`,
-    { device_name: deviceName, verifier }, { Authorization: `Bearer ${session.token}` }));
+    { device_name: deviceName, verifier }, auth(session)));
   const url = machineUrl(ticket.url, machine.host);
   const base = baseOf({ id: SERVIDOR_CANDIDATO, label: machine.name, baseUrl: url, token: '' });
   const { device_id: deviceId } = record(await post(base, '/api/connect/redeem',
     { ticket: ticket.ticket, signature: ticket.signature, secret, device_name: deviceName, ...(installId ? { install_id: installId } : {}) }));
   if (!filled(deviceId)) throw fail('connect_response_invalid');
-  onPending();
-  const token = await waitForApproval(base, deviceId, secret);
+  const token = await waitForApproval(base, deviceId, secret, onPending);
   const server: Server = { id: machine.machine_id, label: machine.name, baseUrl: url, token, credential: 'device', deviceId };
   try {
     const lan = await readMachineIdentity({ ...server, id: SERVIDOR_CANDIDATO }, { redirect: 'error' });
