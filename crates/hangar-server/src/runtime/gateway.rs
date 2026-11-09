@@ -57,9 +57,15 @@ async fn runtime_account_guard(provider: &str, metadata: &Value) -> Result<crate
         .map_err(|_| failure("account_busy"))
 }
 
+/// Até aqui o ator ocupado entregando (leitura de tela lenta no psmux) só faz a escrita esperar; depois conta como
+/// travado. Igual ao prazo do fechamento da porta e abaixo do transporte do Python.
+const WRITE_BUSY_LIMIT:Duration = Duration::from_secs(60);
+
 /// Retrato do ator em até 1 s: `None` no prazo esgotado, `Some(false)` doente ou fora.
-async fn probe(handle:&EntryHandle) -> Option<bool> {
-    match tokio::time::timeout(Duration::from_secs(1),handle.snapshot()).await {
+async fn probe(handle:&EntryHandle) -> Option<bool> { probe_within(handle,Duration::from_secs(1)).await }
+
+async fn probe_within(handle:&EntryHandle,limit:Duration) -> Option<bool> {
+    match tokio::time::timeout(limit,handle.snapshot()).await {
         Ok(Ok(view))=>Some(healthy(handle.has_terminal(),&view)),
         Ok(Err(_))=>Some(false),
         Err(_)=>None,
@@ -67,7 +73,8 @@ async fn probe(handle:&EntryHandle) -> Option<bool> {
 }
 /// Entrada aberta de uma sessão, achada por nome, para as rotas de escrita do Rust.
 #[allow(dead_code)] // o `handle` é lido pelas rotas de escrita que entram depois
-pub struct WriteTarget { pub key:String,pub generation:u64,pub provider:String,pub terminal:bool,pub healthy:bool,pub(crate) handle:EntryHandle }
+/// `busy`: o ator não respondeu em 1 s; quem escreve decide se espera por ele (`settle_busy`).
+pub struct WriteTarget { pub key:String,pub generation:u64,pub provider:String,pub terminal:bool,pub healthy:bool,pub busy:bool,pub(crate) handle:EntryHandle }
 
 /// Prazo do fechamento da porta: abaixo do `OP_TIMEOUT_S` (75 s) do transporte no Python.
 const INGRESS_CLOSE_WAIT:Duration = Duration::from_secs(60);
@@ -2979,8 +2986,16 @@ impl RuntimeRegistry {
         let (key,generation,provider,handle) = self.entries.lock().await.iter().filter(|(_,e)|e.name==name).max_by_key(|(_,e)|e.generation)
             .map(|(key,e)|(key.clone(),e.generation,e.provider.clone(),e.handle.clone()))?;
         let terminal = handle.has_terminal();
-        let healthy = probe(&handle).await.unwrap_or(false);
-        Some(WriteTarget { key,generation,provider,terminal,healthy,handle })
+        let probed = probe(&handle).await;
+        Some(WriteTarget { key,generation,provider,terminal,healthy:probed==Some(true),busy:probed.is_none(),handle })
+    }
+    /// Ocupado não é doente: a escrita que achou o ator ocupado espera a resposta dele até o teto; sem resposta, travado.
+    pub async fn settle_busy(&self,name:&str,target:&WriteTarget) -> bool {
+        self.diag.report("runtime.write_actor_busy",name,"actor_busy","o ator não respondeu em 1 s; a escrita espera a vez dele");
+        probe_within(&target.handle,WRITE_BUSY_LIMIT).await.unwrap_or_else(|| {
+            self.diag.report("runtime.write_actor_stuck",name,"actor_stuck","o ator não respondeu no teto da escrita; tratado como travado");
+            false
+        })
     }
     /// A saúde que o painel da fila mostra: `None` quando o ator não respondeu no prazo (ocupado entregando),
     /// para quem pergunta manter o último valor em vez de piscar os botões a cada entrega. A adormecida não tem

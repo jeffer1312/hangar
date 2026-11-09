@@ -149,7 +149,7 @@ pub(crate) async fn route_write(runtime: &RuntimeRegistry, name: &str, route: Wr
     use crate::runtime::protocol::RuntimeError;
     // O acordar fecha a porta: o texto que chega no meio dele vai à fila, sem esperar a vida nova.
     if route == WriteRoute::Input && let Some(key) = runtime.waking_key_for_text(name) { return Write::Asleep(key); }
-    let (pass_in, target) = match enter_then_find(runtime, name, wait).await {
+    let (pass_in, mut target) = match enter_then_find(runtime, name, wait).await {
         Err(GateClosed) => return Write::Busy,
         Ok(Some(found)) => found,
         Ok(None) => match runtime.adopt_now(name).await {
@@ -184,6 +184,7 @@ pub(crate) async fn route_write(runtime: &RuntimeRegistry, name: &str, route: Wr
     };
     let Some(provider) = Provider::from_str(&target.provider) else { return Write::Python };
     if decide(route, provider, target.terminal) == Owner::Python { return Write::Python; }
+    if target.busy { target.healthy = runtime.settle_busy(name, &target).await; }
     // Exceção da entrada doente: o modo de permissão do Codex sem terminal cujo processo caiu e não voltou
     // é lido e gravado no arquivo da sessão, e vale na próxima subida (como no Python).
     if !target.healthy && route == WriteRoute::CodexPermission && dead_headless_codex(&target).await { return Write::Rust(pass_in, target); }

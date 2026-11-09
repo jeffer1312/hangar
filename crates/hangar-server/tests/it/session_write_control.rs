@@ -442,6 +442,32 @@ async fn terminal_steer_of_an_absent_entry_is_409_and_sends_no_keys() {
     assert_eq!(keys_sent(&log), before);
 }
 
+/// Ator ocupado lendo a tela (psmux lento no Windows) não é entrada doente: a escrita espera a vez.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn terminal_steer_while_the_actor_reads_a_slow_screen_is_not_unhealthy() {
+    let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
+    let _log = open_terminal(&registry, dir.path(), "t").await;
+    let tmux = dir.path().join("tmux");
+    let script = std::fs::read_to_string(&tmux).unwrap();
+    let reading = dir.path().join("reading");
+    crate::write_executable(&tmux, script.replacen("= capture-pane ]; then",
+        &format!("= capture-pane ]; then touch '{}'; sleep 3;", reading.display()), 1));
+    let (_python, server) = serve(registry).await;
+    // O interromper lê a tela uma vez antes do Esc: segura o ator nessa leitura lenta.
+    let interrupt = tokio::spawn(send(server, "POST", "t/interrupt", ""));
+    let started = std::time::Instant::now();
+    while !reading.exists() {
+        assert!(started.elapsed() < Duration::from_secs(30), "o ator não começou a ler a tela");
+        tokio::time::sleep(Duration::from_millis(10)).await; // estavel: espera pelo marcador que o tmux falso cria, teto de 30 s
+    }
+    let asked = std::time::Instant::now();
+    let (status, reply) = send(server, "POST", "t/queue/nada/steer", "").await;
+    assert_eq!((status, reply["detail"]["code"].as_str()), (409, Some("queue_entry_gone")), "o Orientar chega ao ator: {reply}");
+    assert!(asked.elapsed() >= Duration::from_secs(1), "o Orientar achou o ator ocupado e esperou a vez dele");
+    tokio::time::timeout(Duration::from_secs(30), interrupt).await.expect("o interromper terminou").unwrap();
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn permission_held_by_the_plugin_refuses_option_3_and_the_actor_receives_nothing() {
