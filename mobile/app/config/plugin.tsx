@@ -53,7 +53,7 @@ export default function Plugin() {
       .then((d) => { if (alive) setDetails(d); })
       .catch((e: unknown) => { if (alive) setDetailsError(pluginsErrorText(e)); });
     return () => { alive = false; };
-  }, [server?.id, server?.baseUrl, server?.token, id]);
+  }, [server?.id, server?.baseUrl, server?.token, id, plugin?.version]);
 
   if (!server) return null;
   if (!plugin) {

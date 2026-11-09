@@ -20,7 +20,7 @@ type Filter = 'all' | 'on' | 'off' | 'up';
 const fold = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 const matches = (q: string, ...parts: Array<string | null | undefined>) => !q || fold(parts.filter(Boolean).join(' ')).includes(q);
 // O servidor confere de novo; aqui só barra o formato antes de mandar.
-const SOURCE = /^[\w.-]+\/[\w.-]+$|^https:\/\/\S+$|^\/\S*$/;
+const SOURCE = /^[\w.-]+\/[\w.-]+$|^https:\/\/\S+$|^\/.+$/;
 
 export default function Plugins() {
   const server = useServers((s) => s.active());
@@ -124,7 +124,7 @@ function Discover({ server, installed }: { server: Server; installed: InstalledP
   useEffect(() => {
     const st = usePlugins.getState();
     if (st.available === null && !st.availableLoading && !st.availableError) void st.loadAvailable(server);
-  }, [server]);
+  }, [server, available]);
   const ids = useMemo(() => new Set(installed.map((p) => p.id)), [installed]);
   const q = fold(query.trim());
   const shown = (available ?? []).filter((a) => matches(q, a.name, a.description));

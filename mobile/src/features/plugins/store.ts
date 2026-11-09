@@ -64,6 +64,8 @@ export const usePlugins = create<PluginsStore>((set, get) => {
         availableLoading: false, availableError: '', changed: null, reopening: false, refused: [] });
     },
     load: async (s) => {
+      // Com uma mudança em curso, a leitura poderia chegar depois dela com o disco de antes.
+      if (get().busy) return;
       set({ loading: true, error: '' });
       try {
         const state = await getPluginsForServer(s);
@@ -90,7 +92,7 @@ export const usePlugins = create<PluginsStore>((set, get) => {
       set({ busy: 'check' });
       try {
         const state = await checkPluginsForServer(s);
-        if (same(s)) set({ state });
+        if (same(s)) set({ state, available: null, availableError: '' });
       } catch (e) {
         if (same(s)) toast.erro(pluginsErrorText(e));
       } finally {
@@ -103,7 +105,8 @@ export const usePlugins = create<PluginsStore>((set, get) => {
       try {
         const { result, ...state } = await run();
         if (!same(s)) return false;
-        set({ state });
+        // Marketplace novo, removido ou atualizado muda o que o Descobrir oferece.
+        set(busy.startsWith('mkt:') ? { state, available: null, availableError: '' } : { state });
         const { text, note } = describe({ ...state, result });
         if (note) toast.ok(note);
         if (text && liveCount > 0) {
