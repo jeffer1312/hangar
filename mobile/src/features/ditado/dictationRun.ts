@@ -1,5 +1,6 @@
 import { fileAuthHeader, transcribeUploadedForServer, uploadFileForServer, uploadUrlNative, type Server } from '@hangar/core';
 import * as m from '../../paraglide/messages';
+import { failureCode, recordTiming, stageClock } from './clientTiming';
 import { chatStore } from '../../stores/chat';
 import { finishDictation, readDictation, readDraft, setDictationInFlight, writeDictation, type DictationDraft, type DraftAttachment } from '../../stores/drafts';
 import { removeDraftAttachment } from '../../chat/draftAttachments';
@@ -45,10 +46,13 @@ function notify(serverId: string, name: string): void {
 /**
  * Ditado preso à conversa de origem, fora do ciclo de vida do Composer: trocar de conversa no meio
  * não descarta o resultado. Quem chama já gravou `voice`. `check` roda antes da rede; `isActive`, na
- * chegada, decide se o texto entra no campo aberto ou fica `ready` para a montagem.
+ * chegada, decide se o texto entra no campo aberto ou fica `ready` para a montagem. `stoppedAt` e
+ * `fileAt`: a parada da gravação nova (toque, silêncio, teto ou tela escondida, em `voice.motivo`) e o arquivo
+ * pronto no gravador, para medir cada etapa.
  */
 export async function runDictation(server: Server, serverId: string, name: string, voice: DictationDraft,
-  source: DictationSource, opts: { isActive: () => boolean; check?: () => void }): Promise<DictationOutcome> {
+  source: DictationSource, opts: { isActive: () => boolean; check?: () => void; stoppedAt?: number; fileAt?: number }): Promise<DictationOutcome> {
+  const clock = stageClock();
   setDictationInFlight(serverId, name, voice.id, true);
   notify(serverId, name);
   try {
@@ -57,13 +61,16 @@ export async function runDictation(server: Server, serverId: string, name: strin
     let uploaded = '';
     if ('file' in source) {
       // Sobe e guarda o caminho antes de transcrever: transcrição que cai não custa outra cópia.
+      clock.enter('upload');
       ({ path: uploaded } = await uploadFileForServer(server, name, source.file, { audioOnly: true }));
+      clock.enter('save');
       const pending = readDictation(serverId, name);
       if (pending?.id === voice.id) writeDictation(serverId, name, { ...pending, serverPath: uploaded });
       arquivo = uploadName(uploaded);
     } else {
       arquivo = source.arquivo;
     }
+    clock.enter('transcribe');
     const res = await transcribeUploadedForServer(server, name, arquivo, { limpar: true, estilo: voice.estilo });
     const text = res.text.trim();
     if (!text) throw new Error(m.composer_transcricao_vazia());
@@ -72,11 +79,19 @@ export async function runDictation(server: Server, serverId: string, name: strin
     // O nome solto do "de novo" não é caminho: sem `path` na resposta, fica o guardado.
     const path = res.path || uploaded || voice.serverPath || arquivo;
     const applied = res.estilo_aplicado ?? voice.estilo;
+    clock.enter('finish');
     const completed = finishDictation(serverId, name, voice.id,
       { text, raw, issue: aviso, serverPath: path, applied }, opts.isActive());
+    if (opts.stoppedAt !== undefined) recordTiming(server, { stoppedAt: opts.stoppedAt, fileAt: opts.fileAt }, clock, voice.motivo, undefined, !!aviso);
     return { completed, text, raw, aviso, path, applied };
   } catch (e) {
     const detail = e instanceof Error ? e.message : m.composer_falha_transcricao();
+    if (opts.stoppedAt !== undefined) {
+      // Na etapa `check` só há a conferência de quem chama: a recusa dela é prevista.
+      const refused = clock.stage === 'check';
+      recordTiming(server, { stoppedAt: opts.stoppedAt, fileAt: opts.fileAt }, clock, voice.motivo,
+        refused ? { code: 'interrupted', expected: true } : { code: failureCode(detail) });
+    }
     const issue = /^(501|503):/.test(detail) ? `${m.composer_ditado_indisponivel()}: ${detail}` : detail;
     let lost = false;
     let storageIssue = '';

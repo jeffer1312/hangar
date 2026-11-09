@@ -29,14 +29,13 @@ mod posix {
         if unsafe { libc::kill(pid, 0) } != 0 {
             return false;
         }
+        // Zumbi (Z) e recolhimento em curso (X) já morreram, como no `group_active` do produto; sem
+        // `stat`, o recolhimento terminou entre o `kill` e a leitura.
         #[cfg(target_os = "linux")]
-        if std::fs::read_to_string(format!("/proc/{pid}/stat"))
-            .ok()
-            .is_some_and(|s| {
-                s.split_once(") ")
-                    .is_some_and(|(_, rest)| rest.starts_with('Z'))
-            })
-        {
+        if std::fs::read_to_string(format!("/proc/{pid}/stat")).map_or(true, |s| {
+            s.split_once(") ")
+                .is_some_and(|(_, rest)| rest.starts_with(['Z', 'X', 'x']))
+        }) {
             return false;
         }
         true
@@ -61,13 +60,13 @@ mod posix {
                     "/bin/sleep 60 & echo $! > child.pid; printf out; printf err >&2; wait".into(),
                 ],
                 env,
-                Duration::from_millis(if cancel { 60000 } else { 350 }),
+                // O estouro precisa vir depois de o `sh` gravar o filho, o que sob carga passa de 350 ms.
+                Duration::from_millis(if cancel { 60000 } else { 2000 }),
                 options(&cwd),
             ));
-            for _ in 0..100 {
-                if cwd.join("child.pid").is_file() || task.is_finished() {
-                    break;
-                }
+            // estavel: teto generoso da espera pelo arquivo do filho; a condição encerra antes.
+            let started = Instant::now() + Duration::from_secs(20);
+            while !cwd.join("child.pid").is_file() && !task.is_finished() && Instant::now() < started {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             let pid = std::fs::read_to_string(cwd.join("child.pid"))
@@ -84,10 +83,9 @@ mod posix {
             drop(outside);
             assert!(outside_alive, "outro grupo foi alcançado");
             let pid = pid.expect("filho sintético iniciou");
-            for _ in 0..100 {
-                if !alive(pid) {
-                    break;
-                }
+            // estavel: teto generoso; o término leva milissegundos e só estoura se o filho não morrer.
+            let gone = Instant::now() + Duration::from_secs(20);
+            while alive(pid) && Instant::now() < gone {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             let survived = alive(pid);
@@ -97,7 +95,8 @@ mod posix {
                 }
             }
             assert!(!survived, "filho sobreviveu ao término");
-            assert!(start.elapsed() < Duration::from_secs(4));
+            // Bem abaixo dos 60 s do filho e do prazo de cancelamento: não esperou nenhum dos dois.
+            assert!(start.elapsed() < Duration::from_secs(30), "levou {:?}", start.elapsed());
         }
     }
 }

@@ -1699,6 +1699,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-psmux"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "hangar-server"
 version = "0.1.0"
 dependencies = [
@@ -1719,6 +1726,7 @@ dependencies = [
  "hangar-core",
  "hangar-omp-sync",
  "hangar-package",
+ "hangar-psmux",
  "hangar-transcript",
  "hangar-workspace",
  "http-body-util",

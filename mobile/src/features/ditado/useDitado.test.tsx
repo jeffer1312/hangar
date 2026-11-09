@@ -449,7 +449,9 @@ describe('useDitado — interrupção e origem da gravação', () => {
     const h = mountHook({ onFim });
     await h.mount({ onFim });
     await act(async () => { await h.getHook().iniciar(); });
+    const beforeStop = Date.now();
     await h.unmount();
+    const stopped = Date.now();
     expect(fakeRec.stop).toHaveBeenCalledTimes(1);
     expect(fakeRec.release).not.toHaveBeenCalled();
     expect(useVoiceAudioState.getState().dictations).toBe(1);
@@ -458,7 +460,11 @@ describe('useDitado — interrupção e origem da gravação', () => {
       emitRecordingStatus();
       await delivered.promise;
     });
-    expect(onFim.mock.calls[0]).toEqual([expect.any(File), 'escondeu', 'file://fake.m4a']);
+    expect(onFim.mock.calls[0]).toEqual([expect.any(File), 'escondeu', 'file://fake.m4a', { stoppedAt: expect.any(Number), fileAt: expect.any(Number) }]);
+    // A parada e o arquivo pronto: `dictation.client_timing` mede entre os dois, como o nativo mede o WAV.
+    const { stoppedAt, fileAt } = (onFim.mock.calls[0] as unknown[])[3] as { stoppedAt: number; fileAt: number };
+    expect(stoppedAt >= beforeStop && stoppedAt <= stopped).toBe(true);
+    expect(fileAt >= stoppedAt && fileAt <= Date.now()).toBe(true);
     expect(fakeRec.release).toHaveBeenCalledTimes(1);
 
   });

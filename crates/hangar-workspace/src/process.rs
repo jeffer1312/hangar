@@ -27,7 +27,65 @@ impl Output {
 }
 
 pub fn run(cwd: &Path, args: &[&str], timeout: Duration) -> Result<Output> {
-    run_program(Command::new("git").arg("-C").arg(cwd).args(args), timeout)
+    run_program(git_command(None).arg("-C").arg(cwd).args(args), timeout)
+}
+
+/// O `git` do PATH, com `env` (se houver) como ambiente inteiro do filho.
+pub fn git_command(env: Option<&std::collections::BTreeMap<String, String>>) -> Command {
+    #[cfg(windows)]
+    if let Some(command) = launcher_target(env) {
+        return command;
+    }
+    let mut command = Command::new("git");
+    if let Some(env) = env {
+        command.env_clear().envs(env);
+    }
+    command
+}
+
+/// O `cmd\git.exe` do Git for Windows só relança o `mingw64\bin\git.exe` (~9 ms a mais por
+/// chamada); chama-se o real com o ambiente que o lançador montaria.
+#[cfg(windows)]
+fn launcher_target(env: Option<&std::collections::BTreeMap<String, String>>) -> Option<Command> {
+    use std::ffi::OsString;
+    let var = |name: &str| -> Option<OsString> {
+        match env {
+            Some(env) => env.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.into()),
+            None => std::env::var_os(name),
+        }
+    };
+    let path = var("PATH")?;
+    let launcher = std::env::split_paths(&path).map(|dir| dir.join("git.exe")).find(|p| p.is_file())?;
+    let cmd = launcher.parent()?;
+    if !cmd.file_name()?.eq_ignore_ascii_case("cmd") {
+        return None;
+    }
+    let top = cmd.parent()?;
+    let real = top.join("mingw64").join("bin").join("git.exe");
+    if !real.is_file() {
+        return None;
+    }
+    let drive_home = var("HOMEDRIVE").zip(var("HOMEPATH")).map(|(d, p)| {
+        let mut joined = d;
+        joined.push(p);
+        std::path::PathBuf::from(joined)
+    });
+    // estavel: código de produção; lê o HOME do ambiente do filho, como o lançador do Git for Windows.
+    let home = var("HOME").map(std::path::PathBuf::from)
+        .or_else(|| drive_home.filter(|h| h.is_dir()))
+        .or_else(|| var("USERPROFILE").map(std::path::PathBuf::from));
+    let mut dirs = vec![top.join("mingw64").join("bin"), top.join("usr").join("bin")];
+    dirs.extend(home.map(|h| h.join("bin")));
+    dirs.extend(std::env::split_paths(&path));
+    let mut command = Command::new(real);
+    if let Some(env) = env {
+        command.env_clear().envs(env);
+    }
+    command.env("PATH", std::env::join_paths(dirs).ok()?).env("MSYSTEM", "MINGW64");
+    if var("PLINK_PROTOCOL").is_none() {
+        command.env("PLINK_PROTOCOL", "ssh");
+    }
+    Some(command)
 }
 
 pub fn run_program_to_completion(command: &mut Command) -> Result<Output> {
@@ -261,5 +319,30 @@ mod tests {
         run_program(Command::new("sh").args(["-c", &script]), Duration::from_secs(5)).unwrap();
         std::thread::sleep(Duration::from_millis(900));
         assert!(mark.exists());
+    }
+}
+
+#[cfg(all(test, windows))]
+mod launcher_tests {
+    use super::*;
+
+    /// O ambiente que os comandos do git enxergam: o mesmo pelo lançador e pelo real.
+    fn seen(mut command: Command) -> Vec<String> {
+        let out = command.args(["-c", "alias.e=!env", "e"]).output().unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        let mut lines: Vec<String> = String::from_utf8(out.stdout).unwrap().lines()
+            .filter(|l| ["PATH=", "MSYSTEM=", "PLINK_PROTOCOL=", "HOME="].iter().any(|p| l.starts_with(p)))
+            .map(str::to_owned).collect();
+        lines.sort();
+        lines
+    }
+
+    #[test]
+    fn the_real_git_sees_the_environment_the_launcher_would_give() {
+        let env: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+        let mut launcher = Command::new("git");
+        launcher.env_clear().envs(&env);
+        assert_eq!(seen(git_command(Some(&env))), seen(launcher));
+        assert_eq!(seen(git_command(None)), seen(Command::new("git")));
     }
 }

@@ -3,6 +3,7 @@ pub mod citations;
 pub mod files;
 pub mod git;
 pub mod process;
+pub mod repo_layout;
 pub mod worktrees;
 pub mod worktree_settings;
 pub mod worktree_merge;
@@ -614,6 +615,10 @@ fn real_inner(path: &Path, depth: usize) -> PathBuf {
     } else {
         std::env::current_dir().unwrap_or_default().join(expanded)
     };
+    #[cfg(windows)]
+    if let Some(resolved) = existing_prefix_resolved(&absolute) {
+        return resolved;
+    }
     let mut result = PathBuf::new();
     for part in absolute.components() {
         match part {
@@ -641,6 +646,27 @@ fn real_inner(path: &Path, depth: usize) -> PathBuf {
     }
     result
 }
+/// Como o `ntpath.realpath` para caminho ausente: sem os `..`, a parte que existe sai resolvida (nome
+/// longo no lugar do 8.3, link seguido) e o resto vem como está. Sem isso a pasta aberta pelo nome
+/// curto deixa de conter os próprios arquivos novos.
+#[cfg(windows)]
+fn existing_prefix_resolved(absolute: &Path) -> Option<PathBuf> {
+    let mut lexical = PathBuf::new();
+    for part in absolute.components() {
+        match part {
+            std::path::Component::ParentDir => { lexical.pop(); }
+            std::path::Component::CurDir => {}
+            _ => lexical.push(part.as_os_str()),
+        }
+    }
+    // O mais fundo que existe como entrada; se for um link pendurado, o laço comum segue o link.
+    let base = lexical.ancestors().find(|base| base.symlink_metadata().is_ok())?;
+    if !base.exists() {
+        return None;
+    }
+    let real = simplify(std::fs::canonicalize(base).ok()?);
+    Some(real.join(lexical.strip_prefix(base).ok()?))
+}
 /// Como o `expanduser` do Python para o próprio usuário: `~outro/...` continua relativo e
 /// passa pela trava de `..`, em vez de virar absoluto a partir da pasta do servidor.
 pub fn expand_home(path: &str) -> PathBuf {
@@ -667,4 +693,46 @@ pub fn simplify(path: PathBuf) -> PathBuf {
         }
     }
     path
+}
+
+#[cfg(all(test, windows))]
+mod short_name_tests {
+    use super::*;
+
+    fn short(path: &Path) -> PathBuf {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+        let mut buffer = vec![0u16; 1024];
+        let n = unsafe {
+            windows_sys::Win32::Storage::FileSystem::GetShortPathNameW(wide.as_ptr(), buffer.as_mut_ptr(), buffer.len() as u32)
+        };
+        assert!(n > 0 && (n as usize) < buffer.len(), "GetShortPathNameW falhou");
+        PathBuf::from(std::ffi::OsString::from_wide(&buffer[..n as usize]))
+    }
+
+    /// O `ntpath.realpath` resolve a parte que existe (nome longo) também para arquivo ausente.
+    #[test]
+    fn a_missing_file_under_a_short_name_folder_resolves_to_the_long_name() {
+        let dir = tempfile::Builder::new().prefix("pasta-com-nome-longo-").tempdir().unwrap();
+        let long = real(dir.path());
+        let short = short(&long);
+        assert_ne!(short, long, "o volume da pasta temporária não gera nomes 8.3: o teste não prova nada aqui");
+        assert_eq!(real(&short.join(".git").join("config")), long.join(".git").join("config"));
+        assert_eq!(real(&short.join("a").join("..").join("b")), long.join("b"));
+    }
+
+    /// Link pendurado (o alvo ainda não existe) sai pelo alvo, como no `ntpath.realpath`: senão um
+    /// link dentro da raiz apontando para fora passaria como caminho dentro dela.
+    #[test]
+    fn a_dangling_link_resolves_to_its_target_outside_the_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = real(dir.path());
+        let (root, outside) = (base.join("raiz"), base.join("fora"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::windows::fs::symlink_file(outside.join("novo.txt"), root.join("evil")).unwrap();
+        assert_eq!(real(&root.join("evil")), outside.join("novo.txt"));
+        std::os::windows::fs::symlink_dir(outside.join("nova"), root.join("pasta")).unwrap();
+        assert_eq!(real(&root.join("pasta").join("x.txt")), outside.join("nova").join("x.txt"));
+    }
 }

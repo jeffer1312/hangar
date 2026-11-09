@@ -308,8 +308,10 @@ async fn workspace_uses_distinct_native_cwds_without_python_context_g01() {
         bodies.push(response.json::<Value>().await.unwrap());
     }
     assert_eq!(statuses, [200, 200], "{bodies:?}; consultas ao contexto Python: {}", f.context_hits.load(Ordering::Relaxed));
+    // O caminho vem do `git worktree list` como o git escreve: com `/` também no Windows, como no Python.
+    let listed = if cfg!(windows) { repo.to_string_lossy().replace('\\', "/") } else { repo.to_string_lossy().into_owned() };
     assert_eq!(bodies[0], json!({"current":"feature","branches":["feature","main"],
-        "remotes":[],"dirty":false,"elsewhere":{"main":{"path":repo.to_string_lossy().replace('\\', "/"),"main":true}},"upstreams":{}}));
+        "remotes":[],"dirty":false,"elsewhere":{"main":{"path":listed,"main":true}},"upstreams":{}}));
     assert_eq!(bodies[1], json!({"path":"sub/ação.txt","text":"primeira\nlinha mudada\n",
         "size":22,"truncated":false,"digest":"0fe20587a6b919286e72d57b501eec339f1afdeeef022141171485dbac529e26"}));
     assert_eq!(f.context_hits.load(Ordering::Relaxed), 0);
@@ -488,6 +490,66 @@ async fn g01_review_recreated_session_uses_first_request_cwd_without_cached_disc
 }
 
 #[tokio::test]
+async fn session_routes_do_not_read_scan_roots_configuration() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = hangar_workspace::real(dir.path());
+    let home = root.join("home");
+    let cwd = root.join("repo");
+    for path in [&home, &cwd] { std::fs::create_dir_all(path).unwrap(); }
+    std::fs::write(cwd.join("ação.txt"), "original").unwrap();
+    // `.env` que não se lê: só quem consome as raízes pode recusar por ele.
+    std::fs::create_dir_all(home.join(".hangar").join("config").join(".env")).unwrap();
+    let panes = home.join("panes.txt");
+    std::fs::write(&panes, format!("fixture\t1\t\t{}\t%1\t\tclaude\t1700000000\t0\t0\n", cwd.display())).unwrap();
+    #[cfg(unix)]
+    let mux = {
+        let mux = home.join("roots-mux");
+        crate::write_executable(&mux, format!("#!/bin/sh\n[ \"$1\" = list-panes ] || exit 0\ncat '{}'\n", panes.display()));
+        mux
+    };
+    #[cfg(windows)]
+    let mux = {
+        let mux = home.join("roots-mux.cmd");
+        std::fs::write(&mux, format!("@echo off\r\nif not \"%~1\"==\"list-panes\" exit /b 0\r\ntype \"{}\"\r\n", panes.display())).unwrap();
+        mux
+    };
+    let f = workspace_fixture::fixture_with_mux(&root, false, Some(&home), Some(&mux)).await;
+    let c = client();
+    let read = c.get(format!("http://{}/api/sessions/fixture/files/read?path=a%C3%A7%C3%A3o.txt", f.addr))
+        .bearer_auth(OWNER).send().await.unwrap();
+    assert_eq!(read.status(), 200);
+    assert_eq!(read.json::<Value>().await.unwrap()["text"], "original");
+    let roots = c.get(format!("http://{}/api/fs/roots", f.addr)).bearer_auth(OWNER).send().await.unwrap();
+    let body = refusal(roots, "workspace_context").await;
+    assert_eq!(body["detail"]["params"]["motivo"], "configuracao");
+    assert_eq!(f.hits(), 0);
+}
+
+#[tokio::test]
+async fn folder_routes_without_sessions_skip_session_discovery() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = hangar_workspace::real(dir.path());
+    let home = root.join("home");
+    for path in [&home, &root.join("pasta")] { std::fs::create_dir_all(path).unwrap(); }
+    let missing = root.join("missing-mux");
+    let f = workspace_fixture::fixture_with_mux(&root, false, Some(&home), Some(&missing)).await;
+    let c = client();
+    let roots = c.get(format!("http://{}/api/fs/roots", f.addr)).bearer_auth(OWNER).send().await.unwrap();
+    assert_eq!(roots.status(), 200);
+    let url = |route: &str| {
+        let mut url = reqwest::Url::parse(&format!("http://{}{route}", f.addr)).unwrap();
+        url.query_pairs_mut().append_pair("root", root.to_str().unwrap());
+        url
+    };
+    let scan = c.get(url("/api/fs/scan")).bearer_auth(OWNER).send().await.unwrap();
+    assert_eq!(scan.status(), 200);
+    // Pasta com Git lista as sessões dentro dela: sem multiplexador, recusa como antes.
+    let git = c.get(url("/api/fs/git")).bearer_auth(OWNER).send().await.unwrap();
+    assert_eq!(refusal(git, "workspace_context").await["detail"]["params"]["motivo"], "sessoes");
+    assert_eq!(f.hits(), 0);
+}
+
+#[tokio::test]
 async fn unavailable_native_context_answers_503_with_reason() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("missing-mux");
@@ -646,8 +708,8 @@ pub(super) struct TransferredFiles {
 
 impl TransferredFiles {
     pub(super) async fn new(root: &std::path::Path) -> Self {
-        let resolved = hangar_workspace::real(root);
-        let root = resolved.as_path();
+        // Forma longa: no Windows a pasta temporária pode vir curta (`RUNNER~1`) e o resultado sai resolvido.
+        let root = &hangar_workspace::real(root);
         let home = root.join("home");
         let born = root.join("born");
         let old = root.join("original");
@@ -888,6 +950,26 @@ async fn task3_f03_corrupt_source_and_boundary_refuse_before_cache_or_write() {
 }
 
 #[tokio::test]
+async fn reads_the_python_guarded_answer_busy_while_the_transfer_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = TransferredFiles::new(dir.path()).await;
+    let mut record = h.record.clone();
+    record["phase"] = json!("publishing");
+    std::fs::write(&h.record_path, record.to_string()).unwrap();
+    let c = client();
+    let base = format!("http://{}/api/sessions/fixture", h.f.addr);
+    for (route, body) in [("files/resolver", json!({"caminhos":["historical-report.md"]})),
+        ("git/diff", json!({"path":"historical-report.md"})),
+        ("git/path-diff", json!({"path":"historical-report.md","escopo":"nao_commitado"}))] {
+        let response = c.post(format!("{base}/{route}")).bearer_auth(OWNER).json(&body).send().await.unwrap();
+        assert_eq!(response.status(), 409, "{route}");
+        assert_eq!(response.json::<Value>().await.unwrap(), json!({"detail":{"code":"session_transfer_busy",
+            "msg":"A sessão está trocando de agente; tente novamente quando terminar.","params":{}}}), "{route}");
+    }
+    h.no_python();
+}
+
+#[tokio::test]
 async fn task3_review_p2_unrelated_corrupt_transfer_does_not_block_healthy_codex_files() {
     let dir=tempfile::tempdir().unwrap(); let h=TransferredFiles::new(dir.path()).await;
     let target=h.born.join("healthy.txt"); std::fs::write(&target,"original").unwrap();
@@ -906,6 +988,10 @@ async fn task3_review_p2_unrelated_corrupt_transfer_does_not_block_healthy_codex
     }
     assert_eq!(results.iter().map(|(status,_)|*status).collect::<Vec<_>>(),[200,200],"{results:?}");
     assert_eq!(results[0].1,"original"); assert_eq!(serde_json::from_str::<Value>(&results[1].1).unwrap()["text"],"original");
+    // A leitura protegida pela transferência também só lê o registro da própria sessão.
+    let resolved=c.post(format!("http://{}/api/sessions/fixture/files/resolver",h.f.addr)).bearer_auth(OWNER)
+        .json(&json!({"caminhos":[target]})).send().await.unwrap();
+    let status=resolved.status().as_u16(); assert_eq!(status,200,"{}",resolved.text().await.unwrap());
     h.no_python();
 }
 
@@ -1049,7 +1135,8 @@ async fn task3_x01_busy_mutation_does_not_take_read_or_metadata_slots() {
 
 #[tokio::test]
 async fn task3_f01_public_literal_diff_subfolder_tree_scan_and_mkdir() {
-    let dir=tempfile::tempdir().unwrap(); let resolved=hangar_workspace::real(dir.path()); let root=resolved.as_path();
+    // Forma longa: no Windows a pasta temporária pode vir curta (`RUNNER~1`) e o resultado sai resolvido.
+    let dir=tempfile::tempdir().unwrap(); let root=&hangar_workspace::real(dir.path());
     std::fs::create_dir_all(root.join("backend/app")).unwrap();
     std::fs::write(root.join("backend/app/x.txt"),"a\n").unwrap();
     std::fs::write(root.join("a[b].txt"),"colchete\n").unwrap(); std::fs::write(root.join("ab.txt"),"irmão\n").unwrap();
@@ -1077,7 +1164,7 @@ async fn task3_f01_public_literal_diff_subfolder_tree_scan_and_mkdir() {
 
 #[tokio::test]
 async fn task3_f01_effective_roots_expand_deduplicate_drop_missing_and_follow_runtime_override() {
-    let dir=tempfile::tempdir().unwrap(); let resolved=hangar_workspace::real(dir.path()); let root=resolved.as_path(); let home=root.join("home");
+    let dir=tempfile::tempdir().unwrap(); let root=&hangar_workspace::real(dir.path()); let home=root.join("home");
     for folder in [home.join(".claude"),home.join("one"),home.join("two")] {std::fs::create_dir_all(folder).unwrap();}
     let f=workspace_fixture::fixture_with_home(root,false,Some(&home)).await;
     let c=client(); let url=format!("http://{}/api/fs/roots",f.addr);

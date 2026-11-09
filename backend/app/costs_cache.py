@@ -24,7 +24,6 @@ from dataclasses import fields
 from pathlib import Path
 from typing import Protocol
 
-from app import uso_areas
 from app.uso_claude import UsoLinha
 
 _log = logging.getLogger(__name__)
@@ -122,9 +121,9 @@ def _talvez_mudou(conn: sqlite3.Connection) -> None:
 
 
 def relatorio(chave: tuple, montar: Callable[[], object]):
-    """`montar()` memorizado por `chave` + versão dos dados + mapa de áreas. A versão é lida
+    """`montar()` memorizado por `chave` + versão dos dados. A versão é lida
     ANTES de montar: gravação no meio vira outra chave, nunca um relatório velho na nova."""
-    chave = (_versao_dados, uso_areas.assinatura(), *chave)
+    chave = (_versao_dados, *chave)
     with _relatorios_lock:
         pronto = _relatorios.get(chave)
         if pronto is not None:
@@ -301,25 +300,19 @@ def _ler(p: Path, st: os.stat_result, reg: tuple | None, nova_dobra: Callable[[P
     return offset, cauda, estado, dobra.fechar(), offset + len(fragmento)
 
 
-def _areas_blob(entradas) -> bytes | None:
-    return None if entradas is None else zlib.compress(pickle.dumps(entradas, protocol=pickle.HIGHEST_PROTOCOL), 1)
-
-
 def _gravar_arquivo(conn: sqlite3.Connection, p: Path, st: os.stat_result, scope: str,
                     versao: str, lido, manter_escopo: bool = False) -> None:
-    offset, cauda, estado, (custos, usos, entradas), tamanho = lido
-    sig = uso_areas.assinatura()
+    offset, cauda, estado, (custos, usos, _), tamanho = lido
     # Upsert, não "INSERT se não conhecia": o custo de uma sessão (`sincronizar_arquivo`) grava
     # fora da varredura e pode ter inserido o mesmo caminho entre a leitura e a escrita dela.
     file_id = conn.execute(
-        "INSERT INTO files(scope, versao, dev, ino, size, mtime_ns, offset, cauda, estado, areas,"
-        " areas_sig, path) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET"
+        "INSERT INTO files(scope, versao, dev, ino, size, mtime_ns, offset, cauda, estado,"
+        " path) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET"
         " scope=IIF(?, files.scope, excluded.scope), versao=excluded.versao, dev=excluded.dev, ino=excluded.ino,"
         " size=excluded.size, mtime_ns=excluded.mtime_ns, offset=excluded.offset,"
-        " cauda=excluded.cauda, estado=excluded.estado, areas=excluded.areas,"
-        " areas_sig=excluded.areas_sig RETURNING id",
+        " cauda=excluded.cauda, estado=excluded.estado RETURNING id",
         (scope, versao, *_identidade(st), tamanho, st.st_mtime_ns, offset, cauda, estado,
-         _areas_blob(entradas), sig, str(p), manter_escopo)).fetchone()[0]
+         str(p), manter_escopo)).fetchone()[0]
     conn.execute("DELETE FROM custo WHERE file_id=?", (file_id,))
     conn.execute("DELETE FROM uso WHERE file_id=?", (file_id,))
     conn.executemany(_INS_CUSTO, [(file_id, *_linha_custo(r)) for r in custos])

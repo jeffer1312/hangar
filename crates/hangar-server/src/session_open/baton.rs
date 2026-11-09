@@ -144,7 +144,8 @@ fn model_effort(value: &str) -> String {
 fn cited_plan(rows: &[String]) -> Option<String> {
     let mut bytes = 0;
     rows.iter().rev().take_while(|raw| {bytes += raw.len(); bytes <= 8*1024*1024})
-        .find_map(|raw|PLAN.captures_iter(raw).last().map(|c|c[1].to_owned()))
+        // O trecho vem do JSON cru: no Windows a `\` chega escapada.
+        .find_map(|raw|PLAN.captures_iter(raw).last().map(|c|serde_json::from_str::<String>(&format!("\"{}\"",&c[1])).unwrap_or_else(|_|c[1].to_owned())))
 }
 fn source_section(o: &Origin) -> Vec<String> {
     let mut out = vec![format!("- Sessão de origem: `{}` (harness `{}`)",o.row.name,o.row.provider),
@@ -476,33 +477,22 @@ fn payload(value: &Value) -> Result<Value,Response> {
 }
 
 async fn blocked(st:&Arc<AppState>,name:&str,rows:Vec<SessionRow>)->Result<bool,Response> {
-    let Some(dirs)=st.list.env().dirs.clone() else{return Err(super::server::reply(&OpenError::new(503,"workspace_context","a identidade da sessão está indisponível")));};
-    let row=rows.into_iter().find(|row|row.name==name);
-    let birth=if row.is_none() {st.list.env().mux.list_panes().await
-        .map_err(|_|super::server::reply(&OpenError::new(503,"workspace_context","a vida da sessão está indisponível")))?
-        .into_iter().find(|pane|pane.session==name).and_then(|pane|pane.session_created)} else {None};
-    let (name,program)=(name.to_owned(),st.list.env().capture_program.clone());
-    tokio::task::spawn_blocking(move|| {
-        use crate::share::life::LifeProbe;
-        let life=if row.is_none() {
-            let key=crate::share::life::MuxProbe::new(program,dirs.home.clone()).sidecar(&name).map(|(key,_)|key);
-            crate::list::links::session_life(key.as_deref(),birth)
-        } else {None};
-        crate::list::local_transfers::session_phase(&dirs.home,&name,row.as_ref(),life.as_deref())
-            .map(|phase|phase.is_some_and(|phase|!matches!(phase.as_str(),"complete"|"rejected"|"rolled_back")))
-    }).await.map_err(|_|super::server::reply(&OpenError::new(503,"workspace_context","a leitura da transferência foi interrompida")))?
-        .map_err(|_|super::server::reply(&OpenError::new(503,"workspace_context","não foi possível ler a transferência")))
+    use crate::list::local_transfers::TransferCheckError as E;
+    crate::list::local_transfers::transfer_active(st.list.env(),name,rows).await.map_err(|e| super::server::reply(&OpenError::new(503,"workspace_context",match e {
+        E::Identity=>"a identidade da sessão está indisponível", E::Life=>"a vida da sessão está indisponível",
+        E::Interrupted=>"a leitura da transferência foi interrompida", E::Read=>"não foi possível ler a transferência",
+    })))
 }
 
 async fn guard(st:&Arc<AppState>,name:&str)->Result<Arc<crate::runtime::ingress::IngressPass>,Response> {
     let before=live_rows(st).await.map_err(|e|super::server::reply(&e))?;
-    let identity=|rows:&[SessionRow]|rows.iter().find(|r|r.name==name).map(|r|(r.lifecycle_id.clone(),r.jsonl.clone(),r.provider.clone()));
-    let life=identity(&before);
+    let life=before.iter().find(|r|r.name==name).cloned();
     if blocked(st,name,before).await? {return Err(crate::session_write::json_response(StatusCode::CONFLICT,crate::session_write::busy_body()));}
     let Some(runtime)=st.state.runtime.get() else{return Err(super::server::reply(&OpenError::new(503,"runtime_unhealthy","a entrada da sessão está indisponível")));};
     let ingress=Arc::new(runtime.ingress().enter(name,st.write_gate_wait).await.map_err(|_|crate::session_write::json_response(StatusCode::CONFLICT,crate::session_write::busy_body()))?);
     let after=live_rows(st).await.map_err(|e|super::server::reply(&e))?;
-    if identity(&after)!=life || blocked(st,name,after).await? {return Err(crate::session_write::json_response(StatusCode::CONFLICT,crate::session_write::busy_body()));}
+    let same=crate::list::local_transfers::same_life(life.as_ref(),after.iter().find(|r|r.name==name));
+    if !same || blocked(st,name,after).await? {return Err(crate::session_write::json_response(StatusCode::CONFLICT,crate::session_write::busy_body()));}
     Ok(ingress)
 }
 
@@ -636,4 +626,16 @@ async fn matched_response(st:Arc<AppState>,peer:std::net::SocketAddr,req:Request
     if let Err(response)=crate::routes::owner_gate(&st,peer,&req).await {return response;}
     let (name,tail)=crate::workspace_http::name_tail(req.uri().path());let name=name.unwrap_or_default();
     if tail=="bastao/dossie" {received(&st,&name,req.headers()).await} else {preview(&st,&name,req.uri().query(),req.headers()).await}
+}
+
+#[cfg(test)]
+mod cited_plan_tests {
+    /// A transcrição é JSON: o caminho do Windows vem com `\` escapada e sai como caminho.
+    #[test]
+    fn the_cited_plan_path_is_decoded_from_the_json_line() {
+        let line = r#"{"type":"tool_use","input":{"file_path":"C:\\Users\\u\\repo/docs/superpowers/plans/2026-09-02-x.md"}}"#;
+        assert_eq!(super::cited_plan(&[line.to_owned()]).as_deref(), Some(r"C:\Users\u\repo/docs/superpowers/plans/2026-09-02-x.md"));
+        let plain = r#"{"input":{"file_path":"/w/docs/superpowers/plans/a.md"}}"#;
+        assert_eq!(super::cited_plan(&[plain.to_owned()]).as_deref(), Some("/w/docs/superpowers/plans/a.md"));
+    }
 }

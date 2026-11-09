@@ -59,6 +59,7 @@ async fn dictation_public_characterized_contract() {
         trusted: TrustedHosts::parse("127.0.0.1"),
     });
     state.hangar_dir = temp.path().to_owned();
+    state.accounts = super::dictation_timing::isolated_accounts(temp.path());
     let server = tokio::spawn(async move {
         axum::serve(
             listener,
@@ -119,6 +120,8 @@ async fn dictation_public_characterized_contract() {
 
 struct PublicServer {
     _directory: tempfile::TempDir,
+    /// HOME das contas, fora de `_directory`: o diário do `dictation.timing` não conta como arquivo do ditado.
+    _home: tempfile::TempDir,
     state: Arc<AppState>,
     config: Arc<Mutex<Value>>,
     heard: Arc<Mutex<Vec<(String, String)>>>,
@@ -166,6 +169,8 @@ impl PublicServer {
             trusted: TrustedHosts::parse("127.0.0.1"),
         });
         state.hangar_dir = directory.path().to_owned();
+        let home = tempfile::tempdir().unwrap();
+        state.accounts = super::dictation_timing::isolated_accounts(home.path());
         #[cfg(unix)]
         {
             state.share = Some(crate::share_pair_routes::share_state(
@@ -186,6 +191,7 @@ impl PublicServer {
         });
         Self {
             _directory: directory,
+            _home: home,
             state,
             config,
             heard,

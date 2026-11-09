@@ -321,3 +321,39 @@ fn historical_image_serves_only_raster_media_types() {
     assert_eq!(media(1), "application/octet-stream");
     assert_eq!(media(2), "image/jpeg");
 }
+
+#[test]
+fn baton_window_keeps_a_last_line_bigger_than_the_tail() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.jsonl");
+    let first = json!({"type":"user","uuid":"u1","timestamp":"2026-11-08T12:00:01Z","message":{"role":"user","content":"pedido 1"}});
+    let big = json!({"type":"user","uuid":"u2","timestamp":"2026-11-08T12:00:02Z",
+        "message":{"role":"user","content":format!("pedido grande {}", "x".repeat(9 * 1024 * 1024))}});
+    std::fs::write(&path, format!("{first}\n{big}\n")).unwrap();
+    let mut row = crate::list::links::blank_row("s");
+    row.provider = "claude".into();
+    row.jsonl = Some(path.to_string_lossy().into_owned());
+    let Ok(window) = baton_window(&row, dir.path(), dir.path()) else { panic!("leitura do bastão falhou") };
+    let said: Vec<_> = window.events.iter().filter_map(|e| e.text.as_deref()).map(|t| &t[..t.len().min(13)]).collect();
+    assert_eq!(said, ["pedido 1", "pedido grande"]);
+}
+
+#[test]
+fn baton_window_reads_only_the_tail_of_a_large_transcript() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("s.jsonl");
+    let mut text = format!("{{\"type\":\"user\",\"pad\":\"{}\"}}\n", "x".repeat(9 * 1024 * 1024));
+    for i in 1..=3 {
+        text += &format!("{}\n", json!({"type":"user","uuid":format!("u{i}"),"timestamp":format!("2026-11-08T12:00:0{i}Z"),
+            "message":{"role":"user","content":format!("pedido {i}")}}));
+    }
+    std::fs::write(&path, text).unwrap();
+    let mut row = crate::list::links::blank_row("s");
+    row.provider = "claude".into();
+    row.jsonl = Some(path.to_string_lossy().into_owned());
+    let Ok(window) = baton_window(&row, dir.path(), dir.path()) else { panic!("leitura do bastão falhou") };
+    let read: usize = window.rows.iter().map(String::len).sum();
+    assert!(read <= 8 * 1024 * 1024, "leu {read} bytes");
+    let said: Vec<_> = window.events.iter().filter_map(|e| e.text.as_deref()).collect();
+    assert_eq!(said, ["pedido 1", "pedido 2", "pedido 3"]);
+}

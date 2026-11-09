@@ -835,6 +835,20 @@ Windows real, de tela, diferencial release ou desempenho neste teste; os portõe
 abertos no registro da migração. O protocolo privado candidato é 102, sujeito à conferência do
 próximo valor livre antes da integração final.
 
+**Desempenho no Windows e custo aceito (08/11/2026).** Medido na VM DELPHI-02, release, psmux
+3.3.8 em pasta privada, original 08db6bc92 e candidato no mesmo ambiente, mediana de 30 pedidos
+aquecidos: a leitura de arquivo foi de 5,37 ms para 13,04 ms (p95 13,17 → 17,05) e os atalhos de
+projeto de 22,83 ms para 12,85 ms; branches, status, histórico, diff, árvore e bastão já ficaram
+abaixo do original. O que levou a leitura de ~89 ms para 13 ms: retomar o Git do Windows por
+`NtResumeProcess`, não ler as raízes nas rotas que não as usam, leitura direta do registro do
+psmux (`hangar-psmux`, protocolo interno, conferida contra o CLI e reconferida a cada 30 s, com
+o CLI como reserva), `mingw64\bin\git.exe` direto em vez do lançador `cmd\git.exe`, e identidade
+de projeto lida da `.git`. Os ~8 ms que sobram são a descoberta fresca da sessão a cada pedido:
+retrato de processos (~5 ms) e linha de comando e ambiente dos processos das sessões (~5 ms); o
+Python não pagava isso porque guardava a lista por 1 s. O usuário aceitou esse custo para manter
+vida e identidade da sessão conferidas na hora, sem guarda por tempo. Cortar mais só lendo os
+processos da sessão pedida, mexendo na descoberta que a lista também usa.
+
 ## Chave do Jev: no runtime_config, e na sessão só por escolha da abertura
 
 18/09/2026. O Jev (typesafe.ai) decide a navegação do `hangar-preview objetivo`, e a chave estava

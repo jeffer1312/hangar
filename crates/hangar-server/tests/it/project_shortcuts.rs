@@ -200,7 +200,8 @@ exit 1
             ("CLAUDE_CONFIG_DIR".into(),scene.home.join(".claude").to_string_lossy().into_owned()),("SHELL".into(),shell.into()),
             ("HYPRLAND_INSTANCE_SIGNATURE".into(),"s01-fixture".into()),
             ("PATH".into(),format!("{}:/usr/bin:/bin",bin.display())),("GIT_CONFIG_GLOBAL".into(),"/dev/null".into()),("GIT_CONFIG_NOSYSTEM".into(),"1".into()),
-        ].into()));
+        // Com git injetado, uma variável de descoberta obriga o atalho a perguntar ao git em vez de ler a `.git`.
+        ].into_iter().chain(mode.map(|_| ("GIT_CEILING_DIRECTORIES".into(),String::new()))).collect()));
         state.login_guests=scene.f.policy.as_ref().unwrap().login.clone();
         let old = scene.f.list.env();
         let mut env = hangar_server::list::bridge::ListEnv::from_env();

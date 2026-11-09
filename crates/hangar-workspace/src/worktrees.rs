@@ -225,7 +225,8 @@ pub fn main_of_missing(path: &str) -> String {
     cands.extend(p.ancestors().skip(1).map(Path::to_path_buf));
     cands
         .into_iter()
-        .find(|c| c.join(".git").is_dir() && worktree_paths(&text(c)).iter().any(|w| w == path))
+        .find(|c| c.join(".git").is_dir()
+            && worktree_paths(&text(c)).iter().any(|w| same_path(&normpath(Path::new(w)), &normpath(p))))
         .map(|c| text(&c))
         .unwrap_or_else(|| path.to_owned())
 }
@@ -422,7 +423,8 @@ impl Repo {
 
     /// Branch de uma worktree cuja pasta sumiu, pelo HEAD guardado na administração dela.
     fn gone_branch(&self, path: &str) -> Option<String> {
-        let (admin, _) = self.admins.iter().find(|(_, p)| p == path)?;
+        let wanted = normpath(Path::new(path));
+        let (admin, _) = self.admins.iter().find(|(_, p)| same_path(&normpath(Path::new(p)), &wanted))?;
         let head = std::fs::read_to_string(admin.join("HEAD")).ok()?;
         head.trim()
             .strip_prefix("ref: refs/heads/")

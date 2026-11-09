@@ -311,12 +311,14 @@ fn dictation_append(draft: &str, text: &str) -> (String, std::ops::Range<usize>)
 /// Grava o áudio nos anexos da sessão (disco desta máquina ou `POST /upload`) e transcreve o arquivo salvo
 /// (`?arquivo=`). O caminho volta mesmo quando a transcrição falha; falha ao gravar não tem caminho, e o "de novo"
 /// tenta de novo com a cópia em memória.
-async fn upload_and_transcribe(api: Api, uploads: disk::Uploads, name: String, bytes: Vec<u8>, style: Option<&'static str>, options: api::DictationOptions)
-    -> (Option<String>, Result<Value, Failure>) {
+/// `uploaded` marca o fim da subida, para o `dictation.client_timing`.
+async fn upload_and_transcribe(api: Api, uploads: disk::Uploads, name: String, bytes: Vec<u8>, style: Option<&'static str>, options: api::DictationOptions,
+    uploaded: impl FnOnce()) -> (Option<String>, Result<Value, Failure>) {
     let saved = match uploads {
         disk::Uploads::Remote => api.upload_audio(&name, "ditado.wav", bytes).await,
         local => local.upload(&api, &name, "ditado.wav", bytes, None).await,
     };
+    uploaded();
     let path = match saved {
         Ok(saved) => saved.path,
         Err(error) => return (None, Err(error)),
@@ -324,6 +326,56 @@ async fn upload_and_transcribe(api: Api, uploads: disk::Uploads, name: String, b
     let file = path.rsplit(['/', '\\']).next().unwrap_or(&path).to_owned();
     let result = api.dictate_saved(&name, &file, style, &options).await;
     (Some(path), result)
+}
+
+/// `dictation.client_timing` do nativo, no mesmo formato do `detalhe` do app: o nativo não tem diário próprio, a
+/// linha vai ao `native.log`. Sem texto nem caminho.
+fn timing_line(stop_to_file: Duration, upload: Duration, transcribe: Duration, total: Duration, failure: Option<&Failure>) -> String {
+    let status = match failure {
+        None => "nivel=ok".to_owned(),
+        Some(f) => format!("nivel=erro codigo={}", f.code.clone().or_else(|| f.status.map(|s| s.to_string())).unwrap_or_else(|| "failed".into())),
+    };
+    steps_line(&status, stop_to_file, upload, transcribe, total)
+}
+
+fn steps_line(status: &str, stop_to_file: Duration, upload: Duration, transcribe: Duration, total: Duration) -> String {
+    format!("dictation.client_timing {status} stop_to_file_ms={} upload_ms={} transcribe_ms={} total_ms={}",
+        stop_to_file.as_millis(), upload.as_millis(), transcribe.as_millis(), total.as_millis())
+}
+
+/// Relógio do ditado da parada à resposta. Descartado antes de `finish` (cancelar aborta a tarefa), grava a linha
+/// com a etapa em curso: quem cancela costuma cancelar justo a etapa lenta.
+struct ClientTiming { stopped: Instant, stop_to_file: Duration, sent: Instant, upload: Option<Duration>, stage: Option<&'static str>, log: fn(&str) }
+
+impl ClientTiming {
+    fn new(stopped: Instant, stop_to_file: Duration, uploads: bool, log: fn(&str)) -> Self {
+        Self { stopped, stop_to_file, sent: Instant::now(), upload: None, stage: Some(if uploads { "upload" } else { "transcribe" }), log }
+    }
+
+    fn uploaded(&mut self) {
+        self.upload = Some(self.sent.elapsed());
+        self.stage = Some("transcribe");
+    }
+
+    fn steps(&self) -> (Duration, Duration) {
+        let sent = self.sent.elapsed();
+        let upload = self.upload.unwrap_or(if self.stage == Some("upload") { sent } else { Duration::ZERO });
+        (upload, sent.saturating_sub(upload))
+    }
+
+    fn finish(mut self, failure: Option<&Failure>) {
+        self.stage = None;
+        let (upload, transcribe) = self.steps();
+        (self.log)(&timing_line(self.stop_to_file, upload, transcribe, self.stopped.elapsed(), failure));
+    }
+}
+
+impl Drop for ClientTiming {
+    fn drop(&mut self) {
+        let Some(stage) = self.stage else { return };
+        let (upload, transcribe) = self.steps();
+        (self.log)(&steps_line(&format!("nivel=aviso codigo=cancelled etapa={stage}"), self.stop_to_file, upload, transcribe, self.stopped.elapsed()));
+    }
 }
 
 #[derive(Default)]
@@ -936,6 +988,7 @@ impl Hangar {
 
     fn stop_dictation(&mut self, silence: bool, timed_out: bool, cx: &mut Context<Self>) {
         let Some(recorder) = self.dictation.recorder.take() else { return; };
+        let stopped = Instant::now();
         self.give_voice_mic_back();
         let Some((api, session)) = self.dictation_request(cx) else { self.cancel_dictation(); return; };
         self.dictation.auto_send = silence && self.dictation.hands_free;
@@ -949,17 +1002,22 @@ impl Hangar {
         let (tx, connection, seq) = (self.tx.clone(), self.connection, self.dictation.seq);
         // O fluxo de áudio não troca de thread; soltá-lo e montar o WAV é rápido o bastante para a tela.
         let audio = recorder.finish();
+        let stop_to_file = stopped.elapsed();
+        // Fora da tarefa: abortada antes da primeira volta, o relógio vai junto e grava o cancelamento.
+        let mut timing = ClientTiming::new(stopped, stop_to_file, session.is_some() && uploads.is_some(), crate::log_line);
         self.dictation.request = Some(self.runtime.spawn(async move {
             let (path, result) = match audio {
                 Ok(bytes) => {
                     *audio_cache.lock().unwrap() = bytes.clone();
                     match (session, uploads) {
-                        (Some(name), Some(uploads)) => upload_and_transcribe(api, uploads, name, bytes, style,options).await,
+                        (Some(name), Some(uploads)) => upload_and_transcribe(api, uploads, name, bytes, style, options, || timing.uploaded()).await,
                         (session, _) => (None, api.dictate(session.as_deref(), "ditado.wav", bytes, style,&options).await),
                     }
                 }
                 Err(error) => (None, Err(error)),
             };
+            // ponytail: o total vai até a resposta chegar ao app, não até o texto entrar no campo (salto de canal, ~ms).
+            timing.finish(result.as_ref().err());
             let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Dictation(seq, path, result) }).await;
         }));
         cx.notify();
@@ -1050,7 +1108,7 @@ impl Hangar {
             } else if let (Some(file), Some(name)) = (saved, session.as_deref()) {
                 (None, if clean{api.dictate_saved(name,&file,recording_style,&options).await}else{api.transcribe_saved(name,&file,false,None).await})
             } else if let (true, Some(name), Some(uploads)) = (clean, session.clone(), uploads) {
-                upload_and_transcribe(api, uploads, name, audio, recording_style,options).await
+                upload_and_transcribe(api, uploads, name, audio, recording_style, options, || ()).await
             } else { (None, if clean{api.dictate(session.as_deref(),&filename,audio,recording_style,&options).await}else{api.transcribe(session.as_deref(),&filename,audio,false,None).await}) };
             let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Dictation(seq, path, result) }).await;
         }));
@@ -1471,6 +1529,36 @@ mod tests {
     use super::{dictation_append, dictation_insert, place, wav, wav_pcm, Dictation, DictationTarget, Downmix, OnLeave, Place, Recorder, Vad};
     use crate::{api::{Api, dto::SessionInfo}, delivery::SessionKey};
     use std::time::{Duration, Instant};
+    #[test]
+    fn dictation_timing_line_has_each_step_and_the_failure_code() {
+        let ms = Duration::from_millis;
+        assert_eq!(super::timing_line(ms(12), ms(300), ms(2000), ms(2312), None),
+            "dictation.client_timing nivel=ok stop_to_file_ms=12 upload_ms=300 transcribe_ms=2000 total_ms=2312");
+        let failure = crate::api::Failure { status: Some(503), detail: "texto que não entra".into(), retry_after: None, uncertain: false, code: None };
+        assert_eq!(super::timing_line(ms(5), ms(0), ms(40), ms(45), Some(&failure)),
+            "dictation.client_timing nivel=erro codigo=503 stop_to_file_ms=5 upload_ms=0 transcribe_ms=40 total_ms=45");
+        let coded = crate::api::Failure { code: Some("transcription_busy".into()), ..failure };
+        assert!(super::timing_line(ms(5), ms(0), ms(40), ms(45), Some(&coded)).contains(" codigo=transcription_busy "));
+    }
+    static CANCEL_LINES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    /// Cancelar aborta a tarefa: o relógio descartado grava a linha com a etapa em curso; o que terminou não grava duas.
+    #[test]
+    fn dictation_timing_logs_the_active_stage_when_cancelled() {
+        fn keep(line: &str) { CANCEL_LINES.lock().unwrap().push(line.to_owned()); }
+        let stopped = Instant::now() - Duration::from_millis(30);
+        drop(super::ClientTiming::new(stopped, Duration::from_millis(5), true, keep));
+        let mut transcribing = super::ClientTiming::new(stopped, Duration::from_millis(5), true, keep);
+        transcribing.uploaded();
+        drop(transcribing);
+        super::ClientTiming::new(stopped, Duration::from_millis(5), false, keep).finish(None);
+        let lines = CANCEL_LINES.lock().unwrap();
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(lines[0].starts_with("dictation.client_timing nivel=aviso codigo=cancelled etapa=upload stop_to_file_ms=5 "), "{}", lines[0]);
+        assert!(lines[1].contains(" codigo=cancelled etapa=transcribe "), "{}", lines[1]);
+        assert!(lines[2].starts_with("dictation.client_timing nivel=ok stop_to_file_ms=5 upload_ms=0 "), "{}", lines[2]);
+        let total: u64 = lines[0].rsplit("total_ms=").next().unwrap().parse().unwrap();
+        assert!(total >= 30, "{}", lines[0]);
+    }
     #[test]
     fn downmix_turns_48k_stereo_into_16k_mono() {
         let mut mix = Downmix::new(2, 48_000, super::PCM_LIMIT);

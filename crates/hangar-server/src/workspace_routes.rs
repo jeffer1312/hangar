@@ -111,11 +111,21 @@ async fn resolve_root_file(st: &AppState, cwd: &str, path: &str) -> hangar_works
 pub fn matches(_method: &Method, path: &str) -> bool {
     crate::workspace_http::owns(path)
 }
-/// `Err(None)`: sessão inexistente. `Err(Some(motivo))`: leitura indisponível.
-async fn context(st: &Arc<AppState>, name: Option<&str>) -> Result<Value, Option<&'static str>> {
+/// Leituras que dependem da conversa da sessão: durante a transferência ela está trocando.
+fn transfer_guarded_read(method: &Method, tail: &str) -> bool {
+    method == Method::POST && matches!(tail, "files/resolver" | "git/diff" | "git/path-diff")
+}
+/// `Err(None)`: sessão inexistente. `Err(Some(motivo))`: leitura indisponível. Com `transfer`, a
+/// transferência é conferida pelas mesmas linhas, antes de procurar a sessão: no meio da troca ela
+/// pode nem estar na descoberta, e a resposta é ocupado, não inexistente.
+async fn context(st: &Arc<AppState>, name: Option<&str>, transfer: bool) -> Result<Value, Option<&'static str>> {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| Some("relogio"))?.as_secs_f64();
     let found = st.list.discover(Some(now)).await.map_err(|_| Some("sessoes"))?;
+    if transfer && let Some(name) = name
+        && crate::list::local_transfers::transfer_active(st.list.env(), name, found.to_vec()).await.map_err(|_| Some("transferencia"))? {
+        return Ok(json!({"transfer_busy": true}));
+    }
     let source = st.clone();
     let name = name.map(str::to_owned);
     tokio::task::spawn_blocking(move || {
@@ -127,6 +137,8 @@ async fn context(st: &Arc<AppState>, name: Option<&str>) -> Result<Value, Option
             return Err(Some("orquestracoes"));
         }
         let rows: Vec<_> = found.iter().chain(orq.iter()).collect();
+        // Só `/api/fs/*` (sem sessão) lê as raízes; sem `runtime-config.json`, ler a configuração espera a troca no Windows.
+        let roots = if name.is_none() { json!(crate::worktree_context::roots(&source).map_err(Some)?) } else { Value::Null };
         let mut citation_session = Value::Null;
         let session = match name {
             Some(name) => {
@@ -138,11 +150,18 @@ async fn context(st: &Arc<AppState>, name: Option<&str>) -> Result<Value, Option
             }
             None => Value::Null,
         };
-        let roots = crate::worktree_context::roots(&source).map_err(Some)?;
         let sessions: Vec<Value> = rows.iter()
             .filter(|row| row.cwd.as_deref().is_some_and(|cwd| !cwd.is_empty()))
             .map(|row| json!({"name":row.name,"cwd":row.cwd})).collect();
         Ok(json!({"roots":roots,"sessions":sessions,"session":session,"citation_session":citation_session}))
+    }).await.map_err(|_| Some("leitura"))?
+}
+/// Pasta sem Git só pede as raízes: sem descoberta de sessões nem orquestrações.
+async fn roots_context(st: &Arc<AppState>) -> Result<Value, Option<&'static str>> {
+    let source = st.clone();
+    tokio::task::spawn_blocking(move || {
+        let roots = crate::worktree_context::roots(&source).map_err(Some)?;
+        Ok(json!({"roots":roots,"sessions":[],"session":null,"citation_session":null}))
     }).await.map_err(|_| Some("leitura"))?
 }
 async fn citation_rows(st: &Arc<AppState>, ctx: &Value, ingress: Option<&Ingress>) -> hangar_workspace::Result<Option<Vec<String>>> {
@@ -314,12 +333,15 @@ async fn public_inner(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Resp
         .filter(|_| name.is_none()).map(|login| login.guest.root.clone());
     let resolved = if let Some(root) = guest_root {
         Ok(json!({"roots":[root],"sessions":[]}))
-    } else { context(&st, name.as_deref()).await };
+    } else if name.is_none() && matches!(tail.as_str(), "/api/fs/roots" | "/api/fs/scan" | "/api/fs/mkdir") {
+        roots_context(&st).await
+    } else { context(&st, name.as_deref(), transfer_guarded_read(&parts.method, &tail)).await };
     let mut ctx = match resolved {
         Ok(ctx) => ctx,
         Err(None) => return response(json!({"detail":{"code":"erro_sessao_inexistente","params":{},"msg":"sessao nao encontrada"}}), 404),
         Err(Some(reason)) => return refuse(&st, &session, &tail, CONTEXT, reason),
     };
+    if ctx["transfer_busy"] == true { return busy(); }
     let mutation = parts.method == Method::POST && (tail == "file/text"
         || map_operation(&tail, &parts.method, &HashMap::new(), &raw, &ctx).is_none_or(|op| op.is_mutation()));
     let ingress = if mutation && name.is_some() {
@@ -331,7 +353,7 @@ async fn public_inner(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Resp
         let pass = match runtime.ingress().enter(name, st.write_gate_wait).await {
             Ok(pass) => Arc::new(pass), Err(_) => return busy(),
         };
-        let current = match context(&st, Some(name)).await {
+        let current = match context(&st, Some(name), false).await {
             Ok(value) => value, Err(None) => return busy(), Err(Some(reason)) => return refuse(&st, &session, &tail, CONTEXT, reason),
         };
         if current["session"] != ctx["session"] { return busy(); }

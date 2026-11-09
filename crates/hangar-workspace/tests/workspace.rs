@@ -584,7 +584,8 @@ mod task3_contract {
 
     #[test]
     fn citation_rows_override_the_file_keep_longest_match_and_line_cwd() {
-        let dir=tempfile::tempdir().unwrap(); let resolved=hangar_workspace::real(dir.path()); let root=resolved.as_path();
+        // Forma longa: no Windows a pasta temporária pode vir curta (`RUNNER~1`) e o resultado sai resolvido.
+        let dir=tempfile::tempdir().unwrap(); let root=&hangar_workspace::real(dir.path());
         let cwd=root.join("born"); let old=root.join("old"); fs::create_dir(&cwd).unwrap(); fs::create_dir(&old).unwrap();
         fs::write(old.join("config.json.bak"),"original").unwrap();
         let log=root.join("active.jsonl"); fs::write(&log,json!({"cwd":cwd,"text":"uncited.json"}).to_string()).unwrap();
@@ -677,7 +678,8 @@ mod task3_contract {
     #[test]
     fn network_remote_dwim_push_pull_and_divergence_keep_the_working_copy() {
         let dir=tempfile::tempdir().unwrap(); let base=dir.path(); let origin=base.join("origin"); repo(&origin);
-        g(&origin,&["config","receive.denyCurrentBranch","ignore"]); g(base,&["clone","--config","core.autocrlf=false","-q","origin","copy"]);
+        // O clone não herda o autocrlf da origem; sem isto o Git for Windows faz checkout em CRLF.
+        g(&origin,&["config","receive.denyCurrentBranch","ignore"]); g(base,&["clone","-q","-c","core.autocrlf=false","origin","copy"]);
         let root=base.join("copy"); g(&root,&["config","user.name","Teste"]); g(&root,&["config","user.email","teste@example.invalid"]); g(&root,&["config","commit.gpgSign","false"]);
         assert_eq!(op(&root,"list_branches",json!({}))["remotes"],json!(["feature"]));
         op(&root,"switch_branch",json!({"branch":"feature"})); assert_eq!(op(&root,"branch_of",json!({})),"feature");
@@ -805,7 +807,7 @@ mod task3_contract {
 
     #[test]
     fn remaining_metadata_empty_log_since_and_reference_parameters_keep_contract() {
-        let dir=tempfile::tempdir().unwrap(); let resolved=hangar_workspace::real(dir.path()); let root=resolved.as_path();
+        let dir=tempfile::tempdir().unwrap(); let root=&hangar_workspace::real(dir.path());
         assert_eq!(op(root,"git_summary",json!({})),Value::Null); assert_eq!(op(root,"git_diffstat",json!({})),Value::Null);
         assert_eq!(op(root,"git_log_since",json!({"desde":0.0})),json!([]));
         assert_eq!(op(root,"folder_status",json!({})),json!({"repo":false}));

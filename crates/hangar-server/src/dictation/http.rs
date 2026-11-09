@@ -14,6 +14,9 @@ use serde_json::{Value, json};
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 const AUDIO_LIMIT: usize = 100 * 1024 * 1024;
+// Um caminho só para a escolha da rota e para o nome dela no `dictation.timing`.
+const TRANSCRIBE: &str = "/api/dictation/transcribe";
+const REORGANIZE: &str = "/api/ditado/relimpar";
 
 pub fn matches(method: &Method, path: &str) -> bool {
     match method.as_str() {
@@ -22,7 +25,7 @@ pub fn matches(method: &Method, path: &str) -> bool {
             "/api/dictation/models" | "/api/transcription/providers/status"
         ),
         "POST" => {
-            matches!(path, "/api/dictation/transcribe" | "/api/ditado/relimpar")
+            matches!(path, TRANSCRIBE | REORGANIZE)
                 || provider_id(path).is_some()
         }
         _ => false,
@@ -83,6 +86,20 @@ pub async fn serve(
     guest: bool,
     grant: Option<Arc<GuestGrant>>,
 ) -> Response {
+    let route = match req.uri().path() {
+        TRANSCRIBE => "ditado",
+        REORGANIZE => "relimpar",
+        _ => return answer(st, req, guest, grant).await,
+    };
+    super::timing::measure(st, route, answer(st, req, guest, grant)).await
+}
+
+async fn answer(
+    st: &AppState,
+    req: Request,
+    guest: bool,
+    grant: Option<Arc<GuestGrant>>,
+) -> Response {
     if declared_too_large(&req) {
         return refuse_declared(req);
     }
@@ -91,7 +108,7 @@ pub async fn serve(
         form_urlencoded::parse(req.uri().query().unwrap_or("").as_bytes())
             .into_owned()
             .collect();
-    if path == "/api/ditado/relimpar" {
+    if path == REORGANIZE {
         return reorganize(st, req, guest, grant).await;
     }
     if path == "/api/dictation/models" {
@@ -220,7 +237,7 @@ pub async fn serve(
         .map(str::to_owned)
         .or_else(|| query.get("name").cloned());
     let headers = req.headers().clone();
-    let data = match limited_body(req.into_body()).await {
+    let data = match super::timing::timed(super::timing::Step::Read, limited_body(req.into_body())).await {
         Ok(v) => v,
         Err(error) => return audio_body_error(error, &headers),
     };
@@ -315,7 +332,10 @@ async fn reorganize(
 
 /// O tamanho e os erros da antiga ponte são parte da resposta pública: o cru nunca se perde.
 async fn organize(st: &AppState, payload: Value) -> Value {
-    let original = |code: &str, message: &str| json!({"text":payload["raw"],"raw":payload["raw"],"aviso":message,"estilo_aplicado":"cru","organization_mode":payload["mode"],"organization_code":code});
+    let original = |code: &str, message: &str| {
+        super::timing::organized(Some(code));
+        json!({"text":payload["raw"],"raw":payload["raw"],"aviso":message,"estilo_aplicado":"cru","organization_mode":payload["mode"],"organization_code":code})
+    };
     if crate::orchestration::codec::dumps(&payload, false).len() > 1024 * 1024 {
         return original(
             "dictation_text_too_large",
@@ -398,12 +418,15 @@ fn audio_body_error(error: BodyError, headers: &axum::http::HeaderMap) -> Respon
     }
 }
 
-/// O prazo público inclui configuração e todas as tentativas; cancelar solta o future e sua vaga.
-async fn within_public_deadline<T, F>(seconds: u64, operation: F) -> Result<T, TranscriptionError>
+/// O prazo público inclui configuração e todas as tentativas; cancelar solta o future e sua vaga. O
+/// `dictation.timing` registra que foi o prazo: quem transcrevia foi descartado sem anotar o código.
+pub(super) async fn within_public_deadline<T, F>(seconds: u64, operation: F) -> Result<T, TranscriptionError>
 where
     F: std::future::Future<Output = Result<T, TranscriptionError>>,
 {
-    tokio::time::timeout(std::time::Duration::from_secs(seconds),operation).await.unwrap_or_else(|_|Err(TranscriptionError{
+    tokio::time::timeout(std::time::Duration::from_secs(seconds),operation).await.unwrap_or_else(|_|{
+        super::timing::failed("transcription_deadline");
+        Err(TranscriptionError{
         status:503,code:"transcription_rust_unavailable".into(),detail:"Não foi possível confirmar a transcrição no Rust. O áudio foi preservado para tentar novamente.".into(),
-    }))
+    })})
 }

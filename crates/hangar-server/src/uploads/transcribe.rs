@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use super::{http, store::MAX_UPLOAD_BYTES};
 use crate::{
-    dictation::model::OrganizationRequest,
+    dictation::{model::OrganizationRequest, timing::{Step, timed}},
     routes::{AppState, pass, who},
     session_write::{detail_body, json_response},
     share::caller::Caller,
@@ -57,8 +57,12 @@ pub async fn route(
     serve(&st, &name, req, matches!(caller, Caller::Guest(_))).await
 }
 
-/// O convidado não transcreve por caminho absoluto nem usa a conta do harness para organizar.
 pub async fn serve(st: &AppState, name: &str, req: Request, guest: bool) -> Response {
+    crate::dictation::timing::measure(st, "sessao", transcribe(st, name, req, guest)).await
+}
+
+/// O convidado não transcreve por caminho absoluto nem usa a conta do harness para organizar.
+async fn transcribe(st: &AppState, name: &str, req: Request, guest: bool) -> Response {
     let query: HashMap<String, String> = form_urlencoded::parse(req.uri().query().unwrap_or("").as_bytes()).into_owned().collect();
     // A sessão (e a trava da troca de conversa) vem antes da validação da query, como no FastAPI.
     let facts = match http::facts(st, name, "", true).await {
@@ -85,7 +89,7 @@ pub async fn serve(st: &AppState, name: &str, req: Request, guest: bool) -> Resp
                 Ok(path) => path,
                 Err(response) => return response,
             };
-            let data = match tokio::fs::read(&path).await {
+            let data = match timed(Step::Read, tokio::fs::read(&path)).await {
                 Ok(data) => bytes::Bytes::from(data),
                 // A poda pode tirar o áudio entre a resolução e a leitura.
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -102,7 +106,7 @@ pub async fn serve(st: &AppState, name: &str, req: Request, guest: bool) -> Resp
                 return http::failure(413, "erro_arquivo_grande", "arquivo maior que 100 MiB");
             }
             let filename = req.headers().get("x-filename").and_then(|v| v.to_str().ok()).map(str::to_owned).or_else(|| text("name"));
-            let data = match axum::body::to_bytes(req.into_body(), MAX_UPLOAD_BYTES as usize).await {
+            let data = match timed(Step::Read, axum::body::to_bytes(req.into_body(), MAX_UPLOAD_BYTES as usize)).await {
                 Ok(data) => data,
                 Err(e) if std::error::Error::source(&e).is_some_and(|s| s.is::<http_body_util::LengthLimitError>()) => {
                     return http::failure(413, "erro_arquivo_grande", "arquivo maior que 100 MiB");
@@ -110,7 +114,7 @@ pub async fn serve(st: &AppState, name: &str, req: Request, guest: bool) -> Resp
                 Err(_) => return http::failure(400, "erro_upload_interrompido", "o envio do áudio foi interrompido"),
             };
             let body = futures_util::stream::iter([Ok::<_, std::io::Error>(data.clone())]);
-            let path = match http::publish(st, &store, &project, &facts, filename.as_deref().unwrap_or(""), Some(data.len() as u64), body).await {
+            let path = match timed(Step::Store, http::publish(st, &store, &project, &facts, filename.as_deref().unwrap_or(""), Some(data.len() as u64), body)).await {
                 Ok(path) => path,
                 Err(response) => return response,
             };
@@ -139,8 +143,11 @@ pub async fn serve(st: &AppState, name: &str, req: Request, guest: bool) -> Resp
             Err(_) => return unavailable(st, name, "dictation_result_unserializable"),
         },
         // Estilo ou modo desconhecido: o texto transcrito volta cru, com o motivo.
-        Err(_) => json!({"text": transcription.text, "raw": transcription.text, "aviso": "Pedido de organização inválido.",
-            "estilo_aplicado": "cru", "organization_mode": mode, "organization_code": "dictation_request_invalid"}),
+        Err(_) => {
+            crate::dictation::timing::organized(Some("dictation_request_invalid"));
+            json!({"text": transcription.text, "raw": transcription.text, "aviso": "Pedido de organização inválido.",
+                "estilo_aplicado": "cru", "organization_mode": mode, "organization_code": "dictation_request_invalid"})
+        }
     };
     let mut out = with_provider(result, &transcription.provider, aviso);
     out["path"] = json!(path);

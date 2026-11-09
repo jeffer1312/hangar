@@ -206,12 +206,6 @@ class SessionInfo(BaseModel):
     # ha plan_name — este campo e o que o mantem na tela pra dar o caminho de volta.
     plan_hidden: Optional[bool] = None
 
-    @property
-    def git_dir(self) -> Optional[str]:
-        """Onde o git da sessão roda: a worktree do agente, ou o cwd."""
-        return self.git_cwd or self.cwd
-
-
 
 class CreatedSessionInfo(SessionInfo):
     """Resposta do POST /api/sessions. Fora do `SessionInfo` porque ele é o contrato da lista com o
