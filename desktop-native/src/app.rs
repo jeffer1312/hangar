@@ -7356,10 +7356,12 @@ impl Hangar {
         if self.new_chat_screen() && self.reopen.is_some() { return self.render_reopen(window, cx); }
         if self.new_chat_screen() { return self.render_new_chat(window, cx); }
         let content = self.render_bottom_content(window, cx);
-        // A faixa fica com a coluna menos o cabeçalho, o piso da conversa e o terminal inteiro; sem medida ainda, sem teto.
+        // A faixa fica com a coluna menos o cabeçalho, o piso da conversa, a faixa do cofre e o terminal inteiro; sem medida
+        // ainda, sem teto.
         let term = self.docked_terminal_height(window).unwrap_or(0.);
         let column = self.panes.column_height.get();
-        let cap = if column > 0. { (column - SESSION_HEADER_HEIGHT - terminal::CONVERSATION_MIN_HEIGHT - term).max(BOTTOM_MIN_HEIGHT) }
+        let fixed = SESSION_HEADER_HEIGHT + terminal::CONVERSATION_MIN_HEIGHT + self.panes.vault_height.get() + term;
+        let cap = if column > 0. { (column - fixed).max(BOTTOM_MIN_HEIGHT) }
             else { f32::from(window.viewport_size().height) };
         self.measured_bottom(content, cap)
     }
@@ -7815,9 +7817,15 @@ impl Render for Hangar {
         });
         let landing::Frame { drop, shown, rise } = self.landing_frame(window, cx);
         let opening = self.opening.clone().filter(|_| self.selected.is_none());
+        // Terminal e faixa do cofre mudam o teto da faixa de baixo sem mudar a coluna: só ela, guardada, refaz.
+        let term = self.docked_terminal_height(window).unwrap_or(0.);
+        if (self.panes.docked_term.replace(term) - term).abs() > 0.5 { self.redraw(panes::Area::Bottom, cx); }
+        let vault = self.render_vault_session(cx)
+            .map(|band| div().relative().flex_shrink_0().w_full().flex().flex_col().child(band).child(self.cap_measure(&self.panes.vault_height)));
+        if vault.is_none() && self.panes.vault_height.replace(0.) > 0. { self.redraw(panes::Area::Bottom, cx); }
         let content = div().relative().flex_1().min_w_0().h_full().flex().flex_col()
             .when(!beside_sidebar, |el| chat_fill(el, self, window))
-            .child(self.column_measure())
+            .child(self.cap_measure(&self.panes.column_height))
             .child(div().h(px(SESSION_HEADER_HEIGHT)).pl(px(20.)).pr(px(12.)).flex_shrink_0().flex().items_center().gap(px(10.)).when(floating, |el| el.mx(px(4.)))
                 .relative().opacity(shown).top(px(rise))
                 .when_some(header_avatar, |el, avatar| el.child(avatar))
@@ -7848,7 +7856,7 @@ impl Render for Hangar {
             // Entre a conversa e a faixa de baixo: o que a faixa abre por cima (comandos, sugestões) cobre a marca. Sem a
             // conversa na tela, os lugares dela são do último desenho, de outra sessão.
             .when(page.is_none() && !self.new_chat_screen(), |el| el.child(self.working_mark_float(panes::Area::Conversation, WORKING_FADE, cx.reduce_motion())))
-            .children(self.render_vault_session(cx))
+            .children(vault)
             .child(self.pane_element(panes::Area::Bottom, if self.new_chat_screen() { StyleRefinement::default().w_full().flex_1().min_h_0() }
                 else { StyleRefinement::default().w_full().flex_shrink_0().h(px(self.panes.bottom_height.get())).top(px(-drop)) }))
             // Os avatares animados da faixa de baixo (subagentes e pai da filha), pintados fora da cópia guardada dela.

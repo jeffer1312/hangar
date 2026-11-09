@@ -23,6 +23,10 @@ pub(super) struct Panes {
     /// Altura da coluna da sessão (cabeçalho, conversa, faixa de baixo e terminal). Não depende da faixa de baixo, por
     /// isso o teto dela, tirado daqui, não volta a si mesmo.
     pub column_height: Rc<Cell<f32>>,
+    /// Altura da faixa do cofre, entre a conversa e a de baixo: sai do teto dela.
+    pub vault_height: Rc<Cell<f32>>,
+    /// Terminal encaixado no último desenho da raiz: ele muda sem mudar a coluna, e o teto da faixa de baixo depende dele.
+    pub docked_term: Cell<f32>,
     /// Lugares que as áreas guardadas deixaram para o que anima dentro delas (`MarkPlace`).
     pub marks: MarkPlaces,
 }
@@ -50,7 +54,8 @@ impl Panes {
         Self {
             nav: pane(Area::Nav), conversation: pane(Area::Conversation), bottom: pane(Area::Bottom), side: pane(Area::Side),
             top: pane(Area::Top), dictation: pane(Area::Dictation), top_beside: Cell::new(None),
-            bottom_height: Rc::new(Cell::new(120.)), column_height: Rc::new(Cell::new(0.)), marks: Rc::default(),
+            bottom_height: Rc::new(Cell::new(120.)), column_height: Rc::new(Cell::new(0.)), vault_height: Rc::new(Cell::new(0.)),
+            docked_term: Cell::new(0.), marks: Rc::default(),
         }
     }
 }
@@ -130,9 +135,9 @@ impl Hangar {
         frame.child(shown).child(AnyView::from(pane.clone()).cached(StyleRefinement::default().size_full())).into_any_element()
     }
 
-    /// Mede a coluna da sessão; mudou (janela, terminal), só a faixa de baixo, guardada, refaz o teto.
-    pub(super) fn column_measure(&self) -> impl IntoElement {
-        let height = self.panes.column_height.clone();
+    /// Mede algo de que o teto da faixa de baixo depende (a coluna, a faixa do cofre); mudou, só ela, guardada, refaz.
+    pub(super) fn cap_measure(&self, height: &Rc<Cell<f32>>) -> impl IntoElement {
+        let height = height.clone();
         let bottom = self.panes.bottom.entity_id();
         canvas(move |bounds, _, cx| {
             let measured = f32::from(bounds.size.height);
