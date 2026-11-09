@@ -190,8 +190,6 @@ class SessionInfo(BaseModel):
     loop_status: Optional[str] = None
     loop_iter: Optional[int] = None
     loop_max: Optional[int] = None
-    # Progresso do plano do superpowers que esta sessao esta executando (app.planprog), decorado em
-    # list_with_state DENTRO do to_thread do git. Sem plano -> tudo None (sem barra nem chip).
     # plan_task e ORDINAL (existe "### Task 0" nos planos), nao o N do heading.
     plan_name: Optional[str] = None
     plan_task: Optional[int] = None
@@ -207,12 +205,6 @@ class SessionInfo(BaseModel):
     # diferentes: o seletor que desfaz a escolha mora no painel do plano, que so e montado quando
     # ha plan_name — este campo e o que o mantem na tela pra dar o caminho de volta.
     plan_hidden: Optional[bool] = None
-
-    @property
-    def git_dir(self) -> Optional[str]:
-        """Onde o git da sessão roda: a worktree do agente, ou o cwd."""
-        return self.git_cwd or self.cwd
-
 
 
 class CreatedSessionInfo(SessionInfo):
@@ -372,27 +364,6 @@ class PreviewEvent(BaseModel):
     # real. O front mostra como veio: a máquina de escrever existe pra fonte que chega em blocos
     # (pane, hook), e por cima de stream de verdade só atrasa — e redigitava o que já tinha sido lido.
     vivo: bool = False
-
-
-class FsRoot(BaseModel):
-    # Raiz liberada do scanner, virando um chip no app. name = basename do caminho.
-    name: str
-    path: str
-
-
-class FsEntry(BaseModel):
-    # Subdiretorio imediato listado pelo scanner.
-    name: str
-    path: str
-    is_git: bool = False           # tem .git -> badge "git"
-    has_claude_md: bool = False    # tem CLAUDE.md -> badge "CLAUDE.md"
-    mtime: Optional[float] = None  # epoch s; o app formata o tempo relativo
-
-
-class FsScanResult(BaseModel):
-    # entries vazio + error preenchido = pasta valida porem ilegivel (ex: sem permissao).
-    entries: list[FsEntry] = []
-    error: Optional[str] = None
 
 
 class AskOption(BaseModel):
@@ -667,32 +638,6 @@ class CustomRunnersBody(BaseModel):
     commands: list[CustomRunner] = Field(max_length=500)
 
 
-class ShortcutShellBody(BaseModel):
-    command: str = Field(max_length=200_000)
-    # Rotulo da aba do terminal do atalho; vazio cai no proprio comando.
-    label: str = Field(default="", max_length=200)
-    # Onde rodar: absoluta ou relativa a raiz da copia da sessao; ausente = cwd da sessao.
-    pasta: Optional[str] = Field(default=None, max_length=4096)
-    runs_in: Literal["session", "hangar"] = "session"
-    # Identidade da copia unica No Hangar: o id do atalho.
-    key: str = Field(default="", max_length=200)
-    # No Hangar: roda na home (padrao) em vez da pasta da sessao que clicou.
-    home: bool = True
-    # Mostrar no app a pergunta que o terminal fizer.
-    ask: bool = True
-
-
-class RunCodeBody(BaseModel):
-    command: str = Field(max_length=200_000)
-    language: Optional[str] = Field(default=None, max_length=32)
-    key: str = Field(default="", max_length=80)
-
-
 class ShortcutAnswerBody(BaseModel):
     # Vazio = so Enter (aceita o valor padrao da pergunta).
     text: str = Field(default="", max_length=4096)
-
-
-# `Any` nos itens: item torto volta 400 apontando qual (validate_shortcut_item), nao 422 generico.
-class ProjectShortcutsBody(BaseModel):
-    items: list[Any] = Field(max_length=500)

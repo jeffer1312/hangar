@@ -27,6 +27,7 @@ pub struct Terminal {
 #[derive(Debug)]
 pub enum Error {
     MuxUnavailable,
+    Restart,
     Io(std::io::Error),
 }
 pub struct Service {
@@ -76,6 +77,10 @@ impl Service {
         let mut argv = self.program.clone();
         argv.extend(args);
         self.mux.run(argv).await
+    }
+    async fn option(&self, target: &str, option: &str) -> String {
+        self.run(["show-options".into(), "-v".into(), "-t".into(), format!("={target}:"), option.into()])
+            .await.stdout.replace("\r\n", "\n").replace('\r', "\n").trim_end_matches('\n').to_owned()
     }
     fn windows_dir(&self) -> PathBuf {
         terminal_windows::directory(&self.home, &self.env)
@@ -207,6 +212,39 @@ impl Service {
         tokio::spawn(async move { self.start_inner(spec).await })
             .await
             .map_err(|_| Error::MuxUnavailable)?
+    }
+    pub async fn start_hangar(self: Arc<Self>, mut spec: Spec) -> Result<(Option<Terminal>, bool), Error> {
+        static HANGAR: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+        tokio::spawn(async move {
+            let _lock = HANGAR.lock().await;
+            spec.key = key(&spec.key);
+            spec.owner.clear();
+            for row in self.rows().await? {
+                if !row.owner.is_empty() || row.key != spec.key { continue; }
+                if row.alive {
+                    return Ok((Some(Terminal { id:row.id, label:row.label, tmux:row.tmux }), true));
+                }
+                self.close_row(&row).await;
+            }
+            self.start_inner(spec).await.map(|terminal|(terminal,false))
+        }).await.map_err(|_|Error::MuxUnavailable)?
+    }
+    pub async fn restart_hangar(self: Arc<Self>, id: String) -> Result<(Option<Terminal>, bool), Error> {
+        tokio::spawn(async move {
+            if id.len() != 6 || !id.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f')) { return Ok((None, false)); }
+            let row = self.rows().await?.into_iter().find(|row| row.owner.is_empty() && row.id == id);
+            let Some(row) = row else { return Ok((None, false)); };
+            let cwd = self.option(&row.tmux, "@cp_shortcut_cwd").await;
+            let command = if self.windows {
+                let raw = std::fs::read(self.windows_dir().join(format!("{id}-cmd.cmd"))).map_err(|_| Error::Restart)?;
+                let text = terminal_windows::decode(&raw).map_err(Error::Io)?;
+                let (_, command) = text.split_once("\r\n").ok_or(Error::Restart)?;
+                terminal_windows::unescape(command.trim_end_matches(['\r', '\n']))
+            } else { self.option(&row.tmux, "@cp_shortcut_cmd").await };
+            if crate::transcript::py::strip(&command).is_empty() || cwd.is_empty() { return Err(Error::Restart); }
+            self.start_hangar(Spec { owner:String::new(), cwd, command, label:row.label, key:row.key,
+                origin:row.origin, ask:row.ask, powershell:false, shell:None }).await
+        }).await.map_err(|_| Error::MuxUnavailable)?
     }
     async fn start_inner(&self, spec: Spec) -> Result<Option<Terminal>, Error> {
         let id = (self.id)();

@@ -100,6 +100,8 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     // Essas famílias resolvem também os métodos recusados dentro do Rust.
     if crate::login_guests::owns_path(path) || crate::loops::http::owns_path(path)
         || crate::push::http::owns_path(path) || crate::machine_peers::owns_http_path(path)
+        || crate::session_open::baton::matches(path) || crate::shortcuts::http::matches(path)
+        || crate::costs_routes::usage_path(path) || crate::diag::version_matches(method, path)
         || matches!(path, "/api/config-sync/apply" | "/api/update-channel") { return true; }
     if *method == Method::GET && matches!(path, "/api/config-sync/manifest" | "/api/config-sync/bundle") { return true; }
     if crate::ui::matches(method, path) || crate::dictation::http::matches(method, path)
@@ -183,7 +185,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     // Rotas só do Codex, modos de permissão do Claude e as reaberturas (troca de modo, recarregar, conta,
     // conta ChatGPT fixa): o Rust atende as sessões dele.
     if *method == Method::POST && matches!(tail, Some("model" | "service-tier" | "codex/mode" | "codex/plan/implement" | "codex/terminate" | "question/skip" | "codex-permissions"
-        | "permission-mode" | "modo-execucao" | "recarregar" | "conta" | "engine/model" | "model-effort" | "bastao" | "resume" | "rename")) {
+        | "permission-mode" | "modo-execucao" | "recarregar" | "conta" | "engine/model" | "model-effort" | "resume" | "rename")) {
         return true;
     }
     // Sugestão de nome da sessão genérica (`dictation::rename_suggestion`): só o dono, nunca repassada.
@@ -327,7 +329,6 @@ pub async fn count_public(req: Request, next: Next) -> Response {
 pub async fn count_bridge(req: Request, next: Next) -> Response {
     let key = match req.uri().path() {
         "/__hangar_server/terminal" => "terminal_observe",
-        "/__hangar_server/workspace" => "workspace_bridge",
         "/__hangar_server/list" => "list_bridge",
         path if path.starts_with("/__hangar_server/dictation/") => "dictation_bridge",
         _ => "",
@@ -433,6 +434,10 @@ pub async fn status(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         Err(code) => (Value::Null, json!(code)),
     };
     if python.is_object() {
+        let env = st.accounts.env.clone();
+        let pid = python["processes"]["python"]["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok());
+        let version = tokio::task::spawn_blocking(move || pid.and_then(|pid| crate::boot_version::python_version(&env, pid))).await.ok().flatten();
+        python["version"] = json!(version.map(|version| version.describe).unwrap_or_else(|| "indisponivel".into()));
         let (branch, update_branch) = match owned_branch_fields(st.clone()).await {
             Ok(fields) => fields,
             Err(_) => {

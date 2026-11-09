@@ -69,12 +69,6 @@ def test_rollout_codex_tools_skill_e_areas(tmp_path):
     ])
     uso = uso_codex.ler_rollout(arq, cs.respostas_por_turno_codex(arq, "codex:x"))
     assert all(l.fonte == "codex" and l.session_id == SID for l in uso)
-    tokens = {l.nome: l.input + l.output + l.cache_write + l.cache_read for l in uso if l.tipo == "area"}
-    # t1: front 1 (patch), back 1 (pytest) — a leitura da skill fica fora do repositório.
-    assert set(tokens) == {"front", "back", "conversa"} and tokens["front"] == tokens["back"]
-    assert tokens["conversa"] == 65                                    # t2 não tocou arquivo
-    assert sum(tokens.values()) == sum(r.input + r.output + r.cache_write + r.cache_read
-                                       for r in cs._linhas_rollout_codex(arq, "codex:x"))
     r = uso_report.montar(uso, [], "all")
     sk = {b.key: b for b in r.by_skill}["superpowers:brainstorming"]
     # Carga em r1; no contexto em r2 e r3; a compactação tira antes de r4.

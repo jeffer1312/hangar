@@ -101,6 +101,9 @@ pub fn backend_command(home: &Path, args: &[String], windows: bool) -> Result<st
 #[cfg(unix)]
 fn run(mut command: std::process::Command, log: Option<&Path>, version: &str) -> ExitCode {
     use std::os::unix::process::CommandExt;
+    if let Err(error) = crate::boot_version::PythonLaunch::capture(&command).and_then(|launch| launch.record_exec()) {
+        report(log, &format!("launch_python_version_unavailable: {error}"));
+    }
     let error = command.exec();
     report(log, &format!("launch_exec_failed: versão {version}: {error}"));
     ExitCode::from(126)
@@ -113,6 +116,10 @@ fn run(mut command: std::process::Command, log: Option<&Path>, version: &str) ->
     if let Err(error) = die_with_the_launcher() {
         report(log, &format!("launch_job_failed: {error}"));
     }
+    let snapshot = match crate::boot_version::PythonLaunch::capture(&command) {
+        Ok(snapshot) => Some(snapshot),
+        Err(error) => { report(log, &format!("launch_python_version_unavailable: {error}")); None }
+    };
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
@@ -122,6 +129,23 @@ fn run(mut command: std::process::Command, log: Option<&Path>, version: &str) ->
     };
     let (pid, started) = (child.id(), std::time::Instant::now());
     report(log, &format!("launch_backend_started: versão {version}, python pid {pid}"));
+    if let Some(snapshot) = snapshot {
+        let mut birth = None;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let confirmed = loop {
+            if birth.is_none() { birth = crate::terminal_facts::agent_birth(pid); }
+            if let Some(birth) = birth {
+                match snapshot.record_windows(pid, birth) {
+                    Ok(true) => break true,
+                    Err(error) => { report(log, &format!("launch_python_version_unavailable: {error}")); break false; }
+                    Ok(false) => {}
+                }
+            }
+            if std::time::Instant::now() >= deadline || child.try_wait().ok().flatten().is_some() { break false; }
+            std::thread::park_timeout(std::time::Duration::from_millis(50));
+        };
+        if !confirmed { report(log, "launch_python_version_unavailable: interpretador efetivo não confirmado"); }
+    }
     match child.wait() {
         Ok(status) => {
             // 0xffffffff é o `Stop-Process` do reinício: a versão que estava de pé sendo parada.

@@ -198,82 +198,6 @@ def rastrear(evento: str, **campos: Any):
         return run
     return decorate
 
-_ROOT = Path(__file__).resolve().parents[2]
-
-
-def install_manifest() -> dict[str, Any] | None:
-    """`manifest.json` do pacote instalado; `None` no checkout git (modo desenvolvedor).
-
-    Manifesto torto também é `None`, com uma linha no log: a versão cai no git em vez de derrubar a
-    importação. O diário ainda não existe quando isto roda na importação.
-    """
-    path = _ROOT / "manifest.json"
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return None
-    except (OSError, ValueError) as e:
-        _log.warning("manifest.json ilegível em %s, versão pelo git: %s", path, e)
-        return None
-    if not isinstance(data, dict) or not all(
-            isinstance(data.get(k), str) and data[k] for k in ("version", "commit", "channel")):
-        _log.warning("manifest.json sem version/commit/channel em %s, versão pelo git", path)
-        return None
-    return data
-
-
-def _git_describe() -> str:
-    if m := install_manifest():
-        return f"{m['version']}-g{m['commit'][:12]}"
-    try:
-        return subprocess.run(
-            # So a `dist-latest` (movida pelo CI a cada push) da nome: sem `--match`, qualquer tag
-            # de backup vira "a versao". `--long` mantem o hash mesmo em cima da tag, senao dois
-            # commits diferentes (o rodando e o baixado) sairiam com o mesmo nome.
-            ["git", "describe", "--tags", "--match", "dist-latest", "--long", "--always", "--dirty"],
-            cwd=_ROOT, capture_output=True,
-            text=True, timeout=5, encoding="utf-8", errors="replace").stdout.strip() or "indisponivel"
-    except Exception:                                # noqa: BLE001 — versão nunca derruba nada
-        return "indisponivel"
-
-
-# Commit do backend EM EXECUÇÃO, resolvido na importação (ou seja, quando o processo subiu) e nunca
-# mais. Parece detalhe e não é: entre o `git pull` e o restart do serviço, o checkout já está no
-# commit novo e o processo ainda é o velho. Lendo `git describe` na hora do download, o diário
-# afirmaria estar rodando código que ninguém carregou — e a primeira pergunta de toda análise ("de
-# qual versão veio isto?") sairia com a resposta errada, justamente na janela em que a máquina está
-# meio atualizada, que é quando o defeito estranho aparece.
-VERSAO_EM_EXECUCAO = _git_describe()
-
-
-def versao_legivel(ref: str = "HEAD") -> str | None:
-    """`0.1.0.2533`: major.minor.patch do arquivo `VERSION` (mexido à mão quando o dono quiser) e
-    build = número de commits até `ref` — sobe sozinho a cada push, sem tag nem CI. `None` quando
-    o git não responde: a tela trata ausência; uma palavra fixa viraria texto cru (`vindisponivel`).
-
-    O `VERSION` é lido do próprio `ref` (`git show ref:VERSION`), não do disco: `origin/main` pode
-    ter um bump que este checkout ainda não puxou.
-    """
-    if ref == "HEAD" and (m := install_manifest()):
-        return m["version"]
-    raiz = _ROOT
-    try:
-        n = subprocess.run(["git", "rev-list", "--count", ref], cwd=raiz, capture_output=True,
-                           text=True, timeout=5, encoding="utf-8", errors="replace").stdout.strip()
-        if not n.isdigit():
-            return None
-        v = subprocess.run(["git", "show", f"{ref}:VERSION"], cwd=raiz, capture_output=True,
-                           text=True, timeout=5, encoding="utf-8", errors="replace").stdout.strip()
-        if not v and ref == "HEAD":
-            # Só o checkout local pode cair no disco. Num ref remoto sem o arquivo, juntar o
-            # VERSION daqui com a contagem de lá fabricaria uma versão plausível e falsa.
-            v = (raiz / "VERSION").read_text(encoding="utf-8").strip()
-        return f"{v}.{n}" if v else None
-    except Exception:                                # noqa: BLE001 — versão nunca derruba nada
-        return None
-
-
-VERSAO_LEGIVEL_EM_EXECUCAO = versao_legivel()
 INICIO_EM_EXECUCAO = datetime.now().astimezone().isoformat(timespec="milliseconds")
 
 _NIVEIS = ("ok", "aviso", "erro")
@@ -446,7 +370,7 @@ def registrar(evento: str, nivel: str = "ok", **campos: Any) -> None:
     """
     try:
         linha = _limpar({"operacao": _operacao_atual.get(), **campos, "evento": evento, "nivel": nivel,
-                         "backend": VERSAO_EM_EXECUCAO, "pid_backend": os.getpid(),
+                         "pid_backend": os.getpid(),
                          "inicio_backend": INICIO_EM_EXECUCAO,
                          "req": req_atual.get()})
         if linha:
@@ -550,19 +474,10 @@ def recursos() -> dict[str, Any]:
 
 def _cabecalho() -> str:
     """Primeira linha do download: o que o REPOSITÓRIO não pode contar.
-
-    Quem analisa tem o repo, então o dicionário de campos não precisa vir aqui — `_CAMPOS`, logo
-    acima, já é essa documentação, e repeti-la no arquivo só criaria uma segunda cópia pra
-    envelhecer. O que o repo NÃO diz é o estado da máquina de onde o diário veio: em qual commit o
-    backend está (o front manda o dele no `app.abriu`), qual sistema, e quantos dias o arquivo
-    guarda. Sem o commit não dá pra saber se o defeito relatado já foi corrigido, e é a primeira
-    pergunta de qualquer análise. JSON válido numa linha: não quebra parser de JSONL.
     """
-    v = VERSAO_EM_EXECUCAO
     return json.dumps({
         "evento": "diag.formato",
         "ts": datetime.now().astimezone().isoformat(timespec="milliseconds"),
-        "backend": v,
         "so_servidor": f"{os.name}/{sys.platform}",
         "formato": 2,
         "python": platform.python_version(),

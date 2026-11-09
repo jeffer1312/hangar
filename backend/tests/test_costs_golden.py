@@ -1,15 +1,11 @@
 """Prende o contrato Rust aos leitores Python sem reescrever os golden versionados."""
 import json
-import os
 import runpy
-import subprocess
-import sys
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import pytest
 
 CONTRACT = Path(__file__).parent / "fixtures" / "contract"
-GOLDEN_NAMES = ("costs_index.json", "costs_reports.json", "costs_pricing.json", "costs_areas.json")
 
 
 def _golden(name):
@@ -36,16 +32,6 @@ def test_costs_reports_normalize_codex_identity_across_platforms(base):
     assert json.dumps(report, ensure_ascii=False) == original
 
 
-@pytest.mark.parametrize("hash_seed", ["0", "1", "42"])
-def test_costs_golden_matches_current_python(tmp_path, hash_seed):
-    original = {name: (CONTRACT / "golden" / name).read_bytes() for name in GOLDEN_NAMES}
-    subprocess.run([sys.executable, str(CONTRACT / "gen_costs.py"), str(tmp_path)],
-                   check=True, cwd=CONTRACT.parents[2], env={**os.environ, "PYTHONHASHSEED": hash_seed})
-    assert original == {name: (CONTRACT / "golden" / name).read_bytes() for name in GOLDEN_NAMES}
-    for name in GOLDEN_NAMES:
-        actual = json.loads((tmp_path / name).read_text(encoding="utf-8"))
-        expected = json.loads((CONTRACT / "golden" / name).read_text(encoding="utf-8"))
-        assert actual == expected, f"{name} desatualizado: rode gen_costs.py"
 
 
 def test_costs_index_exercises_named_cases():

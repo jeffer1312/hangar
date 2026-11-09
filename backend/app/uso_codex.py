@@ -20,7 +20,7 @@ from pathlib import Path
 
 from app import uso_areas
 from app.costs_claude_transcript import LOCAL
-from app.uso_claude import Acumulador, UsoLinha, _int, _ordem, comando_bash, linhas_de_area
+from app.uso_claude import Acumulador, UsoLinha, _int, _ordem, comando_bash
 
 _CHAMADA = re.compile(r"tools\.(\w+)\(")
 _TEXTO_JS = r"""("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)"""
@@ -188,8 +188,7 @@ class AcumuladorCodex(Acumulador):
                        for l in self._linhas.values()), key=_ordem)
 
     def resultado_codex(self, por_turno: dict[str, list]) -> list[UsoLinha]:
-        return sorted(self.linhas_sem_area_codex()
-                      + linhas_de_area(self.entradas_de_area_codex(por_turno)), key=_ordem)
+        return sorted(self.linhas_sem_area_codex(), key=_ordem)
 
 
 def _quando(iso) -> datetime | None:

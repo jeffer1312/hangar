@@ -4,6 +4,7 @@
 pub mod adopt;
 pub mod agents;
 pub mod archive;
+pub mod baton;
 #[cfg(test)]
 pub(crate) mod cases;
 pub mod claude;

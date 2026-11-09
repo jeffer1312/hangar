@@ -8,7 +8,6 @@ import secrets
 import shutil
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 from app import diag, shortcut_terminals, tmux
@@ -18,8 +17,6 @@ from app.config import settings
 from app import claude_customizations as session_customizations
 from app import plugin_bridge
 from app import runtime_config
-from app.git_ops import git_summary, git_diffstat
-from app import worktrees
 from app.models import SessionInfo, session_key
 from app.pqueue import PromptQueue, merged_history
 from app.archive import _texto_simples, conversation_files
@@ -36,7 +33,6 @@ from app import claude_context
 from app.statusline import read as _sidecar_status, escolhas as _escolhas_status
 from app.adapters.codex.adapter import status_line_do_rollout as _codex_status_line
 from app.hook_state import hook_state
-from app.planprog import plan_progress, plano_escondido
 # As funcoes de /proc vivem no procinfo.py — e o unico ponto do backend preso ao Linux.
 # Importadas por NOME (nao `procinfo._cmdline(...)`) de proposito: os testes fazem
 # monkeypatch delas neste modulo, e o binding local preserva isso.
@@ -109,39 +105,6 @@ _AWAITING_DEMOTE_GRACE_S = 10.0
 # Folga para as entradas de sistema que o Claude Code grava logo depois do Stop.
 _IDLE_STALE_S = 1.0
 
-# Teto de pares (done, total) por sessao em plan_tasks. O front so segmenta a barra com <= 8 Tasks
-# (PlanBar.svelte), acima disso desenha barra unica e ignora a lista. 9 e nao 8 DE PROPOSITO: cortar
-# em 8 exatos faria o front achar que o plano TEM 8 Tasks e segmentar um plano de 30.
-_MAX_PLAN_TASK_SEGMENTS = 9
-
-
-# Ultimo git bom por cwd: (summary, diffstat). Resultado None (repo sumiu, timeout) NAO apaga o
-# anterior — erro nunca vira "repositorio limpo" no card.
-_git_ultimo: dict[str, tuple[dict | None, dict | None]] = {}
-_git_em_voo: set[str] = set()
-# O laço só guarda referência fraca da tarefa: sem esta, ela pode sumir antes do `finally` e o cwd
-# ficaria preso em `_git_em_voo`.
-_git_tarefas: set[asyncio.Task] = set()
-# Pool próprio: git lento não pode deixar na fila a captura do tmux e o resto do pool padrão.
-_git_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="hangar-git")
-
-
-def _git_dir(info) -> str | None:
-    """Onde o git da sessão roda (`SessionInfo.git_dir`), aceitando os objetos mínimos da lista."""
-    return getattr(info, "git_cwd", None) or info.cwd
-
-
-async def _atualizar_git(cwd: str) -> None:
-    try:
-        summary, diffstat = await asyncio.get_running_loop().run_in_executor(
-            _git_pool, lambda: (git_summary(cwd), git_diffstat(cwd)))
-        antes = _git_ultimo.get(cwd, (None, None))
-        _git_ultimo[cwd] = (summary if summary is not None else antes[0],
-                            diffstat if diffstat is not None else antes[1])
-    except Exception:
-        _log.exception("git em segundo plano falhou cwd=%s (mantido o ultimo numero)", cwd)
-    finally:
-        _git_em_voo.discard(cwd)
 
 
 def _pair_external(name: str, peers_: list[str] | None) -> dict | None:
@@ -172,33 +135,6 @@ def _decorate_loop(info) -> None:
         info.loop_status = d.get("status")
         info.loop_iter = d.get("iter")
         info.loop_max = d.get("max_iters")
-
-
-def _decorate_plan(info) -> None:
-    """Decora plan_* de UMA sessao a partir do .md do plano (app.planprog). Sem plano -> tudo None.
-    Engole a excecao de proposito: roda no tick da lista, e uma falha aqui nao pode derrubar o SSE
-    (incidente 2026-07-23). Module-level (nao closure) pra ser testavel isolado, igual _decorate_loop."""
-    try:
-        p = plan_progress(info.cwd)
-    except Exception:
-        _log.warning("decorate_plan falhou pra %r", getattr(info, "name", "?"), exc_info=True)
-        return
-    if p is None:
-        # Sem plano tem DOIS motivos: nao existe, ou o usuario escondeu. So o 2o mantem o painel
-        # (e o seletor que desfaz) na tela. Custo: um read do pin, so pra sessao sem plano.
-        info.plan_hidden = plano_escondido(info.cwd) or None
-        return
-    info.plan_name = p.name
-    info.plan_task = p.task_idx
-    info.plan_task_total = p.task_total
-    info.plan_done = p.done
-    info.plan_total = p.total
-    info.plan_complete = p.complete
-    # Sem o corte, um plano de 30 Tasks manda 30 pares por sessao em TODO /api/sessions e em toda
-    # re-emissao do SSE, de graca. Ver _MAX_PLAN_TASK_SEGMENTS acima pro porque de 9 e nao 8.
-    info.plan_tasks = [(t.done, t.total) for t in p.tasks[:_MAX_PLAN_TASK_SEGMENTS]]
-
-
 
 
 def _decorate_transfers(infos: list[SessionInfo]) -> None:
@@ -1373,12 +1309,8 @@ class SessionRegistry:
                 jsonl, tracked = self.resolve_tracked(p["name"], p["cwd"], p["pid"], children)
             link = ThenLink(p["name"]).get()
             pair = PairLink(p["name"]).get()
-            # Transcript de chute (untracked) pode ser de outra sessão: não decide onde esta está.
-            loc = worktrees.locate(prov, p["cwd"], jsonl if tracked else None)
             info = SessionInfo(name=p["name"], cwd=p["cwd"], jsonl=jsonl, tracked=tracked,
                                lifecycle_id=session_life(p["name"], meta=None, birth=p.get("session_created")),
-                               branch=loc.branch, worktree=loc.worktree,
-                               worktree_path=loc.worktree_path, worktree_gone=loc.worktree_gone, git_cwd=loc.git_cwd,
                                then_target=link.get("target") if link else None,
                                pair_peers=pair.get("peers") if pair else None,
                                pair_external=_pair_external(p["name"], pair.get("peers") if pair else None),
@@ -1421,15 +1353,12 @@ class SessionRegistry:
             codex_home = str(Path(meta.get("codex_home") or codex_contas.default_home())
                              .expanduser().resolve(strict=False))
             cwd = cwd_atual(meta)
-            loc = worktrees.locate("codex", cwd, meta.get("rollout_path"))
             out.append(SessionInfo(
                 name=meta["name"], cwd=cwd, jsonl=meta.get("rollout_path") or None,
                 lifecycle_id=session_life(meta["name"], meta=meta, birth=terminal_births.get(meta["name"])),
                 provider="codex", tracked=True, conta=f"codex:{codex_home}",
                 codex_home=codex_home, headless=bool(meta.get("headless")),
                 codex_service_tier=meta.get("service_tier"),
-                branch=loc.branch, worktree=loc.worktree,
-                worktree_path=loc.worktree_path, worktree_gone=loc.worktree_gone, git_cwd=loc.git_cwd,
                 then_target=(ThenLink(meta["name"]).get() or {}).get("target"),
                 pair_peers=(PairLink(meta["name"]).get() or {}).get("peers"),
                 pair_external=_pair_external(meta["name"], (PairLink(meta["name"]).get() or {}).get("peers")),
@@ -1443,7 +1372,6 @@ class SessionRegistry:
         for meta in headless_sessions.list_all():
             cwd = cwd_atual(meta)
             jsonl = hl.transcript_path_de(meta)
-            loc = worktrees.locate("claude", cwd, jsonl)
             cdir = meta.get("config_dir")
             out.append(SessionInfo(
                 name=meta["name"], cwd=cwd, jsonl=jsonl,
@@ -1453,8 +1381,6 @@ class SessionRegistry:
                 conta=(meta.get("engine_credential_id") if meta.get("engine_account") else
                        f"chave:{meta['engine']}" if meta.get("engine") else
                        f"claude:{Path(cdir or Path.home() / '.claude').resolve()}"),
-                branch=loc.branch, worktree=loc.worktree,
-                worktree_path=loc.worktree_path, worktree_gone=loc.worktree_gone, git_cwd=loc.git_cwd,
                 then_target=(ThenLink(meta["name"]).get() or {}).get("target"),
                 pair_peers=(PairLink(meta["name"]).get() or {}).get("peers"),
                 pair_external=_pair_external(meta["name"], (PairLink(meta["name"]).get() or {}).get("peers")),
@@ -1917,39 +1843,6 @@ class SessionRegistry:
             await asyncio.to_thread(self._decorate_replies, [i for i in infos if i.provider in ("pi", "omp", "kimi")])
             return infos
         await asyncio.to_thread(self._decorate_replies, infos)
-        # Estado de git por sessão — SÓ aqui (payload do /api/sessions), nunca em list(): git_summary
-        # forka `git status` e list() é o caminho leve chamado por kill()/resume/SSE. E como
-        # list_with_state é awaitado direto no event loop (/api/sessions, sse), o loop
-        # de forks vai pro threadpool via asyncio.to_thread — rodar na corrotina congelaria o backend
-        # inteiro no cache-miss. Gate em .git e except GitError moram no git_summary; cache de 3s
-        # segura o custo vs o poll de 2s.
-        # O git NAO segura a lista: ela sai com o ultimo numero conhecido por cwd e o git atualiza
-        # em segundo plano, um por repositorio (single-flight). Em serie, um repositorio lento
-        # atrasava o card de TODAS as sessoes — inclusive as que acabaram de mudar de estado.
-        # O git é o de onde o agente trabalha: numa worktree, a pasta de abertura não diz nada.
-        for info in infos:
-            summary, diffstat = _git_ultimo.get(_git_dir(info), (None, None))
-            if summary is not None:
-                info.git_dirty = summary["dirty"]
-                info.git_ahead = summary["ahead"]
-                info.git_behind = summary["behind"]
-            if diffstat is not None:
-                info.git_added = diffstat["added"]
-                info.git_removed = diffstat["removed"]
-        for cwd in {d for d in map(_git_dir, infos) if d}:
-            if cwd not in _git_em_voo:
-                _git_em_voo.add(cwd)
-                task = asyncio.create_task(_atualizar_git(cwd))
-                _git_tarefas.add(task)
-                task.add_done_callback(_git_tarefas.discard)
-
-        def _decorate_planos() -> None:
-            # Le markdown do disco: ler arquivo na corrotina e a mesma classe de erro que motivou
-            # o to_thread do git.
-            for info in infos:
-                _decorate_plan(info)
-
-        await asyncio.to_thread(_decorate_planos)
         for info in infos:
             _decorate_loop(info)
         return infos + transfers

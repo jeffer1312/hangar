@@ -28,19 +28,52 @@ pub(crate) struct Activity {
     pub mtime: f64,
 }
 
-pub fn matches(method: &Method, path: &str) -> bool {
-    match *method {
-        Method::GET => matches!(
-            path,
-            "/api/worktrees" | "/api/worktrees/detail" | "/api/worktrees/settings"
-        ),
-        Method::PUT => path == "/api/worktrees/settings",
-        Method::POST => matches!(
-            path,
-            "/api/worktrees/create" | "/api/worktrees/delete" | "/api/worktrees/delete-merged" | "/api/worktrees/fetch"
-        ),
-        _ => false,
+const ROUTES: &[(&str, &str)] = &[
+    ("/api/worktrees", "GET"), ("/api/worktrees/detail", "GET"),
+    ("/api/worktrees/settings", "GET"), ("/api/worktrees/settings", "PUT"),
+    ("/api/worktrees/create", "POST"), ("/api/worktrees/delete", "POST"),
+    ("/api/worktrees/delete-merged", "POST"), ("/api/worktrees/fetch", "POST"),
+];
+
+pub fn matches(_method: &Method, path: &str) -> bool {
+    let path = crate::workspace_http::decoded(path);
+    path == "/api/worktrees" || path.starts_with("/api/worktrees/")
+}
+
+pub(crate) async fn serve_forwarded(st: Arc<AppState>, peer: std::net::SocketAddr, mut req: Request, guest: bool) -> Response {
+    if guest { return response(json!({"detail":"convidado não acessa worktrees"}), 403); }
+    req.extensions_mut().insert(crate::session_write::bridge::BridgedOwner);
+    route(st, peer, req).await
+}
+
+pub async fn route(st: Arc<AppState>, peer: std::net::SocketAddr, req: Request) -> Response {
+    let headers = req.headers().clone();
+    let method = req.method().clone();
+    let mut response = route_inner(st, peer, req).await;
+    crate::routes::cors(&headers, response.headers_mut());
+    crate::http_route_response::suppress_head(&method, &mut response);
+    response
+}
+
+async fn route_inner(st: Arc<AppState>, peer: std::net::SocketAddr, req: Request) -> Response {
+    let path = crate::workspace_http::decoded(req.uri().path());
+    if path.trim_end_matches('/') == "/api/worktrees/fetch" { return crate::worktree_fetch::route(st, peer, req).await; }
+    if let Some(response) = crate::http_cors::preflight(req.method(), req.headers()) { return response; }
+    let decision = crate::http_contract::resolve(ROUTES, req.method().as_str(), &path);
+    let forward = crate::routes::forward_for(&st, peer, &req);
+    if let Some(response) = crate::http_route_response::response(&decision, req.method(), req.uri(), req.headers(), forward.https, "") {
+        return response;
     }
+    match crate::routes::who(&st, peer, &req).await {
+        Err(error) => return crate::auth::unavailable(error),
+        Ok((_, Some(crate::share::caller::Caller::Guest(_)))) => return response(
+            json!({"detail":if matches!(path.as_ref(), "/api/worktrees" | "/api/worktrees/detail") {
+                "convidado não acessa worktrees"
+            } else { "worktrees pertencem ao dono" }}), 403),
+        _ => {}
+    }
+    if let Err(response) = crate::routes::owner_gate(&st, peer, &req).await { return response; }
+    public(st, req).await
 }
 
 fn response(value: Value, status: u16) -> Response {
@@ -100,16 +133,16 @@ fn refuse(st: &AppState, route: &str, code: &'static str, motivo: &str) -> Respo
 }
 
 pub async fn public(st: Arc<AppState>, req: Request) -> Response {
-    if req.method() == Method::POST && req.uri().path() == "/api/worktrees/fetch" {
+    let route = crate::workspace_http::decoded(req.uri().path()).into_owned();
+    if req.method() == Method::POST && route == "/api/worktrees/fetch" {
         return crate::worktree_fetch::public(st, req).await;
     }
-    if req.uri().path() == "/api/worktrees/settings" {
+    if route == "/api/worktrees/settings" {
         return settings(st, req).await;
     }
     if req.method() == Method::POST {
-        return mutation(st, req).await;
+        return mutation(st, req, route).await;
     }
-    let route = req.uri().path().to_owned();
     let params = form_urlencoded::parse(req.uri().query().unwrap_or("").as_bytes())
         .into_owned()
         .collect::<HashMap<String, String>>();
@@ -259,7 +292,9 @@ struct DeleteMerged {
 pub(crate) async fn fresh_context(st: &Arc<AppState>) -> hangar_workspace::Result<Context> {
     let mut ctx = context(st)
         .await
-        .map_err(|_| hangar_workspace::error(503, "fatos de worktrees indisponíveis"))?;
+        .map_err(|reason| hangar_workspace::error(503, if reason == "sessoes" {
+            "terminais de worktrees indisponíveis"
+        } else { "fatos de worktrees indisponíveis" }))?;
     let (panes, problem) = st
         .list
         .env()
@@ -336,8 +371,7 @@ pub(crate) fn final_context(
     Ok(ctx)
 }
 
-async fn mutation(st: Arc<AppState>, req: Request) -> Response {
-    let route = req.uri().path().to_owned();
+async fn mutation(st: Arc<AppState>, req: Request, route: String) -> Response {
     if route == "/api/worktrees/create" {
         let b = match body::<Create>(req).await {
             Ok(v) => v,
@@ -561,6 +595,105 @@ mod tests {
 
     fn session(name: &str, cwd: &str) -> Session {
         Session { name: name.into(), cwd: Some(cwd.into()), ..Session::default() }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn t4_remaining_cancelled_creation_finishes_and_invalidates_the_list() {
+        use std::{io::{Read, Write}, os::{fd::AsRawFd, unix::fs::PermissionsExt}};
+        use crate::{accounts::{AccountService, environment::AccountEnvironment}, config::Config,
+            list::{bridge::{ListBridge, ListEnv, parse_dirs}, facts::FactsClient, mux::Mux}};
+        if std::env::var_os("HANGAR_T4_CANCELLED_CREATION").is_none() {
+            let home = tempfile::tempdir().unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "worktree_routes::tests::t4_remaining_cancelled_creation_finishes_and_invalidates_the_list"])
+                .env("HANGAR_T4_CANCELLED_CREATION", "1")
+                .env("HOME", home.path()).env("USERPROFILE", home.path())
+                .env("XDG_CONFIG_HOME", home.path().join("config"))
+                .env("CLAUDE_CONFIG_DIR", home.path().join(".claude"))
+                .env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1")
+                .env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").env_remove("GIT_INDEX_FILE")
+                .output().unwrap();
+            assert!(output.status.success(), "{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let root = hangar_workspace::real(dir.path());
+        let repo = root.join("repo");
+        let home = root.join("home");
+        std::fs::create_dir(&repo).unwrap();
+        std::fs::create_dir(&home).unwrap();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git").arg("-C").arg(&repo)
+                .args(["-c","user.name=Teste","-c","user.email=teste@example.invalid","-c","commit.gpgSign=false"])
+                .args(args).env("GIT_CONFIG_GLOBAL","/dev/null").env("GIT_CONFIG_NOSYSTEM","1").output().unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        };
+        git(&["init","-b","main"]);
+        git(&["-c","core.hooksPath=","commit","--allow-empty","-m","Inicial"]);
+        let ready = root.join("ready.fifo");
+        let release = root.join("release.fifo");
+        for path in [&ready, &release] {
+            let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(path.as_ptr(),0o600) },0);
+        }
+        let hook = repo.join(".git/hooks/post-checkout");
+        std::fs::write(&hook, format!("#!/bin/sh\nprintf ready > '{}'\nIFS= read -r resumed < '{}'\n", ready.display(), release.display())).unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o700)).unwrap();
+        git(&["config","core.hooksPath",repo.join(".git/hooks").to_str().unwrap()]);
+        let mux = home.join("mux");
+        std::fs::write(&mux,"#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&mux,std::fs::Permissions::from_mode(0o700)).unwrap();
+        let location = root.join("chosen");
+        hangar_workspace::worktree_settings::WorktreeSettings { location:location.to_string_lossy().into_owned(), ..Default::default() }
+            .save_at(&home.join(".hangar/worktree-settings.json"),&home).unwrap();
+        let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+        struct Release(std::fs::File);
+        impl Drop for Release { fn drop(&mut self) { let _ = self.0.write_all(b"go\n"); } }
+        let mut release = Release(std::fs::OpenOptions::new().read(true).write(true).open(&release).unwrap());
+        let mut ready = std::fs::OpenOptions::new().read(true).write(true).open(&ready).unwrap();
+        let (state, epoch) = runtime.block_on(async {
+            let upstream = "127.0.0.1:9".parse().unwrap();
+            let mut state = AppState::new(Config { listen:"127.0.0.1:0".parse().unwrap(),upstream,
+                internal_secret:"t4-private".into(),auth_token:"t4-owner".into(),log_path:None,
+                trusted:crate::auth::TrustedHosts::parse("127.0.0.1") });
+            state.origins_home = home.clone();
+            state.accounts = AccountService::new(AccountEnvironment::from_map([
+                ("HOME".into(),home.to_string_lossy().into_owned()),("USERPROFILE".into(),home.to_string_lossy().into_owned()),
+                ("CLAUDE_CONFIG_DIR".into(),home.join(".claude").to_string_lossy().into_owned()),("CP_SCAN_ROOTS".into(),root.to_string_lossy().into_owned()),
+            ].into()));
+            let mut env = ListEnv::from_env();
+            env.dirs = parse_dirs(&json!({"home":home,"claude":home.join(".claude"),"codex_home":home.join(".codex"),
+                "pi_sessions":home.join(".pi/agent/sessions"),"omp_config":home.join(".omp"),"omp_agent":home.join(".omp/agent"),"kimi_home":home.join(".kimi-code")}).to_string());
+            env.mux = Mux::with_program(mux,Duration::from_secs(5));
+            state.list = Arc::new(ListBridge::new(env,FactsClient::new(upstream,"t4-private".into())));
+            let state = Arc::new(state);
+            state.list.discover(None).await.unwrap();
+            let request = Request::builder().method("POST").uri("/api/worktrees/create")
+                .header("authorization","Bearer t4-owner").header("content-type","application/json")
+                .body(axum::body::Body::from(json!({"repo":repo,"branch":"cancelled","name":"cancelled","new_branch":true,"base":"main"}).to_string())).unwrap();
+            let call = tokio::spawn(route(state.clone(),"127.0.0.1:12345".parse().unwrap(),request));
+            tokio::task::spawn_blocking(move || {
+                let mut poll = libc::pollfd { fd:ready.as_raw_fd(),events:libc::POLLIN,revents:0 };
+                assert_eq!(unsafe { libc::poll(&mut poll,1,10_000) },1,"o Git não chegou à barreira de criação");
+                let mut bytes = [0;5];
+                ready.read_exact(&mut bytes).unwrap();
+                assert_eq!(&bytes,b"ready");
+            }).await.unwrap();
+            assert!(!call.is_finished());
+            let epoch = state.list.test_epoch();
+            call.abort();
+            assert!(call.await.unwrap_err().is_cancelled());
+            release.0.write_all(b"go\n").unwrap();
+            (state,epoch)
+        });
+        // Encerrar o runtime espera o trabalho bloqueante sobrevivente ao cancelamento.
+        drop(runtime);
+        assert!(state.list.test_epoch() > epoch);
+        let path = location.join("repo/cancelled");
+        assert!(path.join(".git").is_file());
+        assert_eq!(hangar_workspace::worktrees::worktree_paths(repo.to_str().unwrap()),[path.to_string_lossy().into_owned()]);
+        git(&["show-ref","--verify","refs/heads/cancelled"]);
     }
 
     #[test]
