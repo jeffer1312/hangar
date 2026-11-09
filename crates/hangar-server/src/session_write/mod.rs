@@ -22,6 +22,7 @@ pub mod permissions;
 pub mod relaunch;
 pub mod resume;
 pub mod table;
+mod unowned;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -100,7 +101,8 @@ pub(crate) async fn admit(st: &Arc<AppState>, peer: SocketAddr, req: Request, ro
     match route_write(&runtime, &name, route, st.write_gate_wait).await {
         Write::Rust(_, _) if !shaped => Err(invalid_body(&parts.headers)),
         Write::Rust(pass_in, target) => Ok((Ctx { st: st.clone(), name, target, _pass: pass_in, parts }, bytes)),
-        Write::Python => Err(forward_whole(st, parts, bytes, &fwd).await),
+        Write::Unowned if route == WriteRoute::Input => Err(input::unowned_response(st, &name, peer, &parts.headers, &bytes).await),
+        Write::Unowned | Write::Python => Err(forward_whole(st, parts, bytes, &fwd).await),
         Write::Busy => {
             let mut response = json_response(StatusCode::CONFLICT, busy_body());
             cors(&parts.headers, response.headers_mut());
@@ -139,12 +141,14 @@ pub(crate) fn failed_status(error: &crate::runtime::protocol::RuntimeError) -> S
 /// Codex com terminal que não deu para adotar); a escrita nunca cai no Python.
 /// `Opening`: texto para o Codex com terminal que ainda abre a conversa, com a chave da fila dela.
 /// `Asleep`: texto para a sessão adormecida (ou acordando), com a chave da fila dela.
-pub(crate) enum Write { Rust(IngressPass, WriteTarget), Python, Busy, Opening(String), Asleep(String), Failed(crate::runtime::protocol::RuntimeError) }
+/// `Unowned`: nenhum agente do Rust no nome (shell, Codex cru, nome inexistente); o texto é do `unowned`.
+/// `Python`: rota que a tabela não dá ao Rust para esse provedor e modo.
+pub(crate) enum Write { Rust(IngressPass, WriteTarget), Python, Unowned, Busy, Opening(String), Asleep(String), Failed(crate::runtime::protocol::RuntimeError) }
 
 /// Porta, entrada e tabela, nessa ordem. O passe só volta com `Rust`: repasse nunca o segura. Sem
 /// entrada, o Codex com terminal do Rust é adotado na hora (`adopt_now`) e a entrada procurada de novo;
 /// Codex com terminal ainda abrindo a conversa: texto vira `Opening`, o resto espera (`codex_terminal_starting`);
-/// sem entrada nem Codex com terminal (Pi/omp/Kimi), segue ao Python.
+/// sem nada a adotar, `Unowned`.
 pub(crate) async fn route_write(runtime: &RuntimeRegistry, name: &str, route: WriteRoute, wait: Duration) -> Write {
     use crate::runtime::protocol::RuntimeError;
     // O acordar fecha a porta: o texto que chega no meio dele vai à fila, sem esperar a vida nova.
@@ -153,7 +157,7 @@ pub(crate) async fn route_write(runtime: &RuntimeRegistry, name: &str, route: Wr
         Err(GateClosed) => return Write::Busy,
         Ok(Some(found)) => found,
         Ok(None) => match runtime.adopt_now(name).await {
-            None => return Write::Python,
+            None => return Write::Unowned,
             // Adormecida: o texto vai à fila da chave dela e o acordar já corre à parte; o resto espera.
             Some(Err(error)) if error.code == crate::runtime::gateway::ASLEEP_WAKING => {
                 if route != WriteRoute::Input { return Write::Busy; }

@@ -21,7 +21,7 @@ fn refused(code: &str, message: &str) -> RuntimeError { RuntimeError::new(code, 
 const WRAPPER_OPTIONS: [&str; 2] = ["--session-id", "--plugin-dir"];
 
 /// `_claude_login`: `claude auth`, `login` ou `setup-token` não são conversa.
-fn login(argv: &[String]) -> bool {
+pub(crate) fn login(argv: &[String]) -> bool {
     let mut rest = argv.get(1..).unwrap_or_default();
     while let Some(first) = rest.first().filter(|a| WRAPPER_OPTIONS.iter().any(|o| a.starts_with(o))) {
         rest = rest.get(if first.contains('=') { 1 } else { 2 }..).unwrap_or_default();

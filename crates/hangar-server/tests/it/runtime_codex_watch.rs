@@ -1420,7 +1420,15 @@ async fn owner_broadcast_answers_the_rust_code_for_a_codex_terminal_it_cannot_ad
     fx.put_sidecar("cx-proof",fx.meta("cx-proof",&server_app.endpoint,Some(app.id()),&tui));
     let registry = registry().await;
     registry.bind_watcher(fx.watcher());
-    let (python, server) = serve_owner(registry.clone()).await;
+    let (python, upstream) = crate::fake::spawn_fake().await;
+    let mut state = hangar_server::routes::AppState::new(crate::fake::config(upstream, "127.0.0.1"));
+    // A lista do teste: o multiplexador do fixture (nenhum pane) e nenhuma pasta de sessão.
+    state.list = Arc::new(hangar_server::list::bridge::ListBridge::new(hangar_server::list::bridge::ListEnv {
+        mux: Mux::with_program(&fx.tmux, Duration::from_secs(5)), capture_program: fx.tmux.clone().into_os_string(),
+        procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs: None },
+        hangar_server::list::facts::FactsClient::new(upstream, crate::fake::SECRET.into())));
+    assert!(state.state.runtime.set(registry.clone()).is_ok());
+    let server = crate::fake::spawn_state(state).await;
     let response = crate::fake::client().post(format!("http://{server}/api/broadcast"))
         .header("authorization", format!("Bearer {}", crate::fake::OWNER)).header("content-type","application/json")
         .body(json!({"names":["cx-proof","claude-x"],"text":"oi"}).to_string()).send().await.unwrap();
@@ -1428,11 +1436,9 @@ async fn owner_broadcast_answers_the_rust_code_for_a_codex_terminal_it_cannot_ad
     let body:Value = serde_json::from_str(&response.text().await.unwrap()).unwrap();
     assert_eq!(body["results"]["cx-proof"]["error"]["code"],"codex_terminal_absent");
     assert_eq!(body["results"]["cx-proof"]["delivered"],false);
-    assert_eq!(python.hits_to("/api/broadcast"),1,"só os outros nomes vão ao Python");
-    // O Python falso responde texto: resposta ilegível sai com código, nunca `error: null`.
-    assert_eq!(body["results"]["claude-x"]["error"]["code"],"broadcast_reply_unreadable");
-    let sent:Value = serde_json::from_slice(&python.last_body()).unwrap();
-    assert_eq!(sent["names"],json!(["claude-x"]),"o Codex com terminal do Rust nunca é repassado");
+    // O nome sem sessão também é respondido aqui: nada vai ao Python.
+    assert_eq!(body["results"]["claude-x"], json!({"ok": false, "error": {"code": "erro_sessao_inexistente", "params": {}, "msg": "sessão não encontrada"}, "delivered": false}));
+    assert_eq!(python.hits_to("/api/broadcast"),0);
     assert_eq!(python.hits_to("/api/sessions/cx-proof/input"),0);
     finish(&mut [&mut app,&mut tui]);
 }

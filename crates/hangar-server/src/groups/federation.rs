@@ -1279,8 +1279,8 @@ pub async fn serve_forwarded(st: Arc<AppState>, peer: SocketAddr, mut req: Reque
     let (method, path) = (req.method().clone(), req.uri().path().to_owned());
     let state = State(st);
     let info = ConnectInfo(peer);
-    // O Python segura este pedido: recado a sessão dele volta na resposta, nunca chamado daqui.
-    super::bridge::deferring(async move {
+    // O Python segura este pedido: o recado a sessão sem dono no Rust sai depois da rota, num prazo.
+    super::bridge::deferring(state.0.clone(), async move {
         if path.starts_with("/api/sessions/") { return session_group(state, info, req).await; }
         if path.rsplit_once('/').is_some_and(|(_, tail)| super::fed_notice::owns_tail(tail)) {
             return super::fed_notice::serve_forwarded(state.0, peer, req).await;

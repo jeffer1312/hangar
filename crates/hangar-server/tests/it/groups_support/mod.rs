@@ -28,7 +28,8 @@ pub const NAMES: [&str; 4] = ["s0", "s1", "s2", "s3"];
 /// `addr` = porta do dono; `private` = a porta privada (ponte do Python); `changes` conta os avisos
 /// de mudança à lista.
 pub struct Machine { pub addr: SocketAddr, pub private: SocketAddr, pub python: Arc<fake::Fake>, pub pair: PathBuf, pub root: PathBuf,
-    pub state: Arc<AppState>, pub share: Arc<hangar_server::share::ShareState>, pub changes: Arc<AtomicUsize>, pub runtime: Arc<RuntimeRegistry> }
+    pub state: Arc<AppState>, pub share: Arc<hangar_server::share::ShareState>, pub changes: Arc<AtomicUsize>, pub runtime: Arc<RuntimeRegistry>,
+    pub sink: crate::sink::Sink }
 
 /// Prazos de teste: o que deve acontecer tem teto folgado (15 s, abaixo dos 20 s de quem pede à
 /// dona) e só estoura se o código travar; a fila tenta de novo a cada 150 ms.
@@ -76,12 +77,16 @@ pub async fn machine(root: &Path, id: &str) -> Machine {
     state.peers = Arc::new(PeerClient::new(PeerBook::new(Some(root.join("peers.json")))));
     let share = crate::share_pair_routes::share_state(&root.join("shares.json"), &pair, Arc::new(Mutex::new(1_000.0)));
     state.share = Some(share.clone());
-    let runtime = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "s".into(), "i".into()).with_diagnostics(python.diagnostics()));
+    // Cada sessão da lista é um Claude sem terminal do Rust: os recados chegam ao cano falso dela.
+    let runtime = Arc::new(crate::sink::registry().await.with_diagnostics(python.diagnostics()));
+    let sink = crate::sink::Sink::default();
+    std::fs::create_dir_all(root.join("rt")).unwrap();
+    for name in NAMES { sink.open(&runtime, &root.join("rt"), name).await; }
     assert!(state.state.runtime.set(runtime.clone()).is_ok());
     let state = Arc::new(state);
     let addr = serve(router(state.clone())).await;
     let private = serve(terminal_router(state.clone())).await;
-    Machine { addr, private, python, pair, root: root.to_path_buf(), state, share, changes, runtime }
+    Machine { addr, private, python, pair, root: root.to_path_buf(), state, share, changes, runtime, sink }
 }
 
 /// Endereço que recusa conexão: a máquina fora do ar. A porta fica presa por um socket sem
@@ -132,7 +137,7 @@ pub fn sidecar(m: &Machine, name: &str) -> Option<Value> { read_json(m.pair.join
 pub fn record(m: &Machine, gid: &str) -> Option<Value> { read_json(m.pair.join("groups").join(format!("{gid}.json"))) }
 
 /// Recados que a sessão `name` de `m` recebeu.
-pub fn inputs(m: &Machine, name: &str) -> usize { m.python.hits_to(&format!("/api/sessions/{name}/input")) }
+pub fn inputs(m: &Machine, name: &str) -> usize { m.sink.count(name) }
 
 pub fn sorted(v: &Value, f: impl Fn(&Value) -> String) -> Vec<String> {
     let mut out: Vec<String> = v.as_array().unwrap().iter().map(f).collect();

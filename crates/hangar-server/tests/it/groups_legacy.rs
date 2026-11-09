@@ -14,7 +14,6 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::extract::Request;
-use axum::http::StatusCode;
 use axum::response::Response;
 use fake::{OWNER, SECRET, client};
 use hangar_server::groups::orq::PythonOrq;
@@ -30,7 +29,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const NAMES: [&str; 4] = ["s0", "s1", "s2", "s3"];
 
-struct Machine { addr: SocketAddr, python: Arc<fake::Fake>, pair: PathBuf, share: Arc<hangar_server::share::ShareState> }
+struct Machine { addr: SocketAddr, python: Arc<fake::Fake>, pair: PathBuf, share: Arc<hangar_server::share::ShareState>, sink: crate::sink::Sink }
 
 type Calls = Arc<Mutex<Vec<Value>>>;
 
@@ -56,13 +55,19 @@ async fn machine(root: &Path, id: &str) -> Machine {
     state.peers = Arc::new(PeerClient::new(PeerBook::new(Some(root.join("peers.json")))));
     let share = crate::share_pair_routes::share_state(&root.join("shares.json"), &pair, Arc::new(Mutex::new(1_000.0)));
     state.share = Some(share.clone());
+    // Cada sessão é um Claude sem terminal do Rust: o recado chega ao cano falso dela.
+    let runtime = Arc::new(crate::sink::registry().await);
+    let sink = crate::sink::Sink::default();
+    std::fs::create_dir_all(root.join("rt")).unwrap();
+    for name in NAMES { sink.open(&runtime, &root.join("rt"), name).await; }
+    assert!(state.state.runtime.set(runtime).is_ok());
     let state = Arc::new(state);
     let app = router(state)
         .into_make_service_with_connect_info::<SocketAddr>();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    Machine { addr, python, pair, share }
+    Machine { addr, python, pair, share, sink }
 }
 
 /// Repasse a `target` que anota `{to, method, path, body}` de cada pedido.
@@ -147,7 +152,7 @@ async fn call(addr: SocketAddr, method: &str, path: &str, body: Option<&Value>) 
 }
 
 fn inputs(m: &Machine) -> Vec<usize> {
-    NAMES.iter().map(|n| m.python.hits_to(&format!("/api/sessions/{n}/input"))).collect()
+    NAMES.iter().map(|n| m.sink.count(n)).collect()
 }
 
 /// O texto da rede caída depende da biblioteca: na tabela é `<rede>`.
@@ -182,7 +187,6 @@ async fn cross_routes_sequence() {
     let off = dropper("off", calls.clone()).await;
     for d in dirs.values() { peers_json(d.path(), lab_front, off); }
     let machines: HashMap<&str, &Machine> = HashMap::from([("casa", &casa), ("lab", &lab), ("anon", &anon)]);
-    let refusal = json!({"detail": {"code": "erro_fila_nao_digitada", "params": {}, "msg": "composer ilegível"}});
 
     let steps: Value = serde_json::from_str(crate::groups_routes::cases::CROSS_ROUTES).unwrap();
     assert_eq!(steps.as_array().unwrap().len(), 16);
@@ -202,12 +206,13 @@ async fn cross_routes_sequence() {
             for (n, sidecar) in seed { std::fs::write(at.pair.join(format!("{n}.json")), sidecar.to_string()).unwrap(); }
         }
         let failing = step["fail_delivery"].as_str().map(|m| machines[m]);
-        if let Some(m) = failing { m.python.set_input_reply(Some((StatusCode::BAD_REQUEST, refusal.clone()))); }
+        // O cano recusa a escrita: o envio do Rust responde a recusa com código.
+        if let Some(m) = failing { for n in NAMES { m.sink.outcome(n, "not_written"); } }
         calls.lock().unwrap().clear();
         let before: Vec<(&str, Vec<usize>)> = machines.iter().map(|(k, m)| (*k, inputs(m))).collect();
 
         let (status, body) = call(at.addr, step["method"].as_str().unwrap(), step["path"].as_str().unwrap(), step.get("body")).await;
-        if let Some(m) = failing { m.python.set_input_reply(None); }
+        if let Some(m) = failing { for n in NAMES { m.sink.outcome(n, "written"); } }
         if step["body_refused"] == true {
             // O 422 é do Rust, com código, sem repasse.
             assert_eq!((status, body["detail"]["code"].clone()), (422, json!("erro_corpo_invalido")), "{name}");
@@ -292,16 +297,14 @@ async fn restore_failed_in_diary(m: &Machine) {
 async fn pair_remote_whose_undo_fails_is_500() {
     let dir = tempfile::tempdir().unwrap();
     let casa = machine(dir.path(), "casa").await;
-    casa.python.set_input_reply(Some((StatusCode::BAD_REQUEST,
-        json!({"detail": {"code": "erro_fila_nao_digitada", "params": {}, "msg": "composer ilegível"}}))));
-    casa.python.hold_input(true);
+    // O cano recusa depois de uma espera: o tempo de trocar o temporário por uma pasta.
+    casa.sink.outcome("s1", "not_written");
+    casa.sink.hold("s1", Duration::from_secs(2));
     let addr = casa.addr;
     let asked = tokio::spawn(async move { call(addr, "POST", "s1/pair-remote", Some(&json!({"initiator": "lab::s1"}))).await });
     let s1 = casa.pair.join("s1.json");
     fake::wait_until(move || s1.is_file()).await;
     break_undo(&casa, "s1");
-    casa.python.hold_input(false);
-    casa.python.release.notify_one();
     assert_eq!(asked.await.unwrap(), (500, json!("Internal Server Error")));
     restore_failed_in_diary(&casa).await;
 }

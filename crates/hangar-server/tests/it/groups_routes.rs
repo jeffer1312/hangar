@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::http::StatusCode;
 use fake::{OWNER, SECRET, client};
 use hangar_server::groups::orq::PythonOrq;
 use hangar_server::groups::service::GroupService;
@@ -24,7 +23,7 @@ use hangar_server::runtime::gateway::RuntimeRegistry;
 use serde_json::{Value, json};
 
 struct Server { addr: SocketAddr, python: Arc<fake::Fake>, groups: Arc<GroupService>, pair: PathBuf, runtime: Arc<RuntimeRegistry>,
-    share: Arc<hangar_server::share::ShareState> }
+    share: Arc<hangar_server::share::ShareState>, sink: crate::sink::Sink }
 
 /// `n` sessões Claude (`s0`..) e o roteador de grupo montado na frente do principal.
 async fn server(root: &Path, n: usize) -> Server {
@@ -53,8 +52,11 @@ async fn server_with_orq(root: &Path, n: usize, orq: Option<Arc<dyn hangar_serve
     state.groups = Some(groups.clone());
     let share = crate::share_pair_routes::share_state(&root.join("shares.json"), &pair, Arc::new(std::sync::Mutex::new(1_000.0)));
     state.share = Some(share.clone());
-    // Sem entrada aberta: só a porta de entrada de cada nome conta. A política nunca é chamada.
-    let runtime = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "s".into(), "i".into()));
+    // Cada sessão é um Claude sem terminal do Rust: o recado chega ao cano falso dela.
+    let runtime = Arc::new(crate::sink::registry().await);
+    let sink = crate::sink::Sink::default();
+    std::fs::create_dir_all(root.join("rt")).unwrap();
+    for i in 0..n { sink.open(&runtime, &root.join("rt"), &format!("s{i}")).await; }
     assert!(state.state.runtime.set(runtime.clone()).is_ok());
     state.write_gate_wait = Duration::from_secs(10);
     state.hangar_dir = root.join("hangar");
@@ -64,7 +66,7 @@ async fn server_with_orq(root: &Path, n: usize, orq: Option<Arc<dyn hangar_serve
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    Server { addr, python, groups, pair, runtime, share }
+    Server { addr, python, groups, pair, runtime, share, sink }
 }
 
 async fn call(addr: SocketAddr, method: &str, path: &str, body: Option<&Value>, token: &str) -> (u16, Value) {
@@ -76,8 +78,8 @@ async fn call(addr: SocketAddr, method: &str, path: &str, body: Option<&Value>, 
     (status, serde_json::from_str(&text).unwrap_or(Value::String(text)))
 }
 
-fn input_hits(python: &fake::Fake, names: &[&str]) -> Vec<usize> {
-    names.iter().map(|n| python.hits_to(&format!("/api/sessions/{n}/input"))).collect()
+fn input_hits(sink: &crate::sink::Sink, names: &[&str]) -> Vec<usize> {
+    names.iter().map(|n| sink.count(n)).collect()
 }
 
 fn orchestrators(srv: &Server, names: &Value) {
@@ -130,7 +132,7 @@ async fn routes_sequence() {
         if let Some(text) = step["contract"].as_str() {
             std::fs::write(srv.pair.join(format!("grupo-{gid}.md")), text).unwrap();
         }
-        let before = input_hits(&srv.python, &names);
+        let before = input_hits(&srv.sink,&names);
         let (status, body) = call(srv.addr, step["method"].as_str().unwrap(), step["path"].as_str().unwrap(), step.get("body"), OWNER).await;
         if step["body_refused"] == true {
             // O 422 é do Rust, com código; o Python nunca recebe o corpo.
@@ -151,7 +153,7 @@ async fn routes_sequence() {
         }
         let actual = common::canon(&body).replace(&gid, table_gid).replace(srv.pair.to_str().unwrap(), "<pair>");
         assert_eq!((status as u64, actual), (step["status"].as_u64().unwrap(), common::canon(&step["response"])), "{name}");
-        let after = input_hits(&srv.python, &names);
+        let after = input_hits(&srv.sink,&names);
         let delivered: Vec<&str> = names.iter().zip(before.iter().zip(&after)).filter(|(_, (b, a))| a > b).map(|(n, _)| *n).collect();
         assert_eq!(json!(delivered), step["delivered"], "{name}: quem recebeu recado");
     }
@@ -163,18 +165,18 @@ async fn pair_delivers_protocol_only_to_newcomers() {
     let srv = server(dir.path(), 3).await;
     let (status, body) = call(srv.addr, "POST", "s0/pair", Some(&json!({"peers": ["s1"], "task": "t"})), OWNER).await;
     assert_eq!(status, 200, "{body}");
-    assert_eq!(input_hits(&srv.python, &["s0", "s1", "s2"]), [1, 1, 0]);
+    assert_eq!(input_hits(&srv.sink,&["s0", "s1", "s2"]), [1, 1, 0]);
     // O texto sai do Rust: o Python não é perguntado.
     let gid = body["gid"].as_str().unwrap();
     let contract = srv.pair.join(format!("grupo-{gid}.md")).to_str().unwrap().to_owned();
-    let sent: Value = serde_json::from_slice(&srv.python.last_body()).unwrap();
-    let text = sent["text"].as_str().unwrap();
+    let sent = srv.sink.last_any().unwrap();
+    let text = sent.as_str();
     assert!(text.starts_with("[painel: grupo de trabalho] Você, 's1', está num grupo de trabalho na tarefa: t."), "{text}");
     assert!(text.contains(&format!("vão em {contract} ")) && text.contains("hangar-send s0 \"msg\""), "{text}");
     assert!(srv.python.internal_bodies("pair/text").is_empty());
     let (status, _) = call(srv.addr, "POST", "s2/pair", Some(&json!({"peer": "s0"})), OWNER).await;
     assert_eq!(status, 200);
-    assert_eq!(input_hits(&srv.python, &["s0", "s1", "s2"]), [1, 1, 1], "veterano não é acordado");
+    assert_eq!(input_hits(&srv.sink,&["s0", "s1", "s2"]), [1, 1, 1], "veterano não é acordado");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -183,7 +185,7 @@ async fn linked_pair_marks_the_child_records_linked_at_and_sends_no_protocol() {
     let srv = server(dir.path(), 3).await;
     let (status, body) = call(srv.addr, "POST", "s0/pair", Some(&json!({"peer": "s1", "link": true})), OWNER).await;
     assert_eq!(status, 200, "{body}");
-    assert_eq!(input_hits(&srv.python, &["s0", "s1", "s2"]), [0, 0, 0], "ninguém recebe o protocolo");
+    assert_eq!(input_hits(&srv.sink,&["s0", "s1", "s2"]), [0, 0, 0], "ninguém recebe o protocolo");
     assert!(srv.python.internal_bodies("pair/text").is_empty());
     let child: Value = serde_json::from_str(&std::fs::read_to_string(srv.pair.join("s1.json")).unwrap()).unwrap();
     assert_eq!(child["linked_by"], "s0");
@@ -200,13 +202,15 @@ async fn linked_pair_marks_the_child_records_linked_at_and_sends_no_protocol() {
 async fn pair_is_undone_when_no_notice_arrives() {
     let dir = tempfile::tempdir().unwrap();
     let srv = server(dir.path(), 2).await;
-    let refusal = json!({"code": "erro_fila_nao_digitada", "params": {}, "msg": "composer ilegível"});
-    srv.python.set_input_reply(Some((StatusCode::BAD_REQUEST, json!({"detail": refusal.clone()}))));
+    // O cano recusa a escrita: o envio do Rust responde a recusa com código.
+    let rejected = "entrada recusada pelo runtime";
+    let refusal = json!({"code": "erro_envio_falhou", "params": {"erro": rejected}, "msg": rejected});
+    for name in ["s0", "s1"] { srv.sink.outcome(name, "not_written"); }
     let (status, body) = call(srv.addr, "POST", "s0/pair", Some(&json!({"peers": ["s1"]})), OWNER).await;
     assert_eq!(status, 502, "{body}");
     assert_eq!(body["detail"], json!({"code": "erro_pareamento_desfeito",
         "params": {"avisos": [{"sessao": "s0", "erro": refusal}, {"sessao": "s1", "erro": refusal}]},
-        "msg": "pareamento desfeito: falha ao avisar as sessões (s0: composer ilegível; s1: composer ilegível)"}));
+        "msg": format!("pareamento desfeito: falha ao avisar as sessões (s0: {rejected}; s1: {rejected})")}));
     let left: Vec<_> = std::fs::read_dir(&srv.pair).map(|d| d.flatten().map(|e| e.file_name()).collect()).unwrap_or_default();
     assert!(left.is_empty(), "nenhum sidecar: {left:?}");
 }
@@ -217,17 +221,14 @@ async fn pair_is_undone_when_no_notice_arrives() {
 async fn pair_whose_undo_fails_is_500_not_undone() {
     let dir = tempfile::tempdir().unwrap();
     let srv = server(dir.path(), 2).await;
-    let refusal = json!({"code": "erro_fila_nao_digitada", "params": {}, "msg": "composer ilegível"});
-    srv.python.set_input_reply(Some((StatusCode::BAD_REQUEST, json!({"detail": refusal}))));
-    srv.python.hold_input(true);
+    // O cano recusa depois de uma espera: o tempo de trocar o temporário por uma pasta.
+    for name in ["s0", "s1"] { srv.sink.outcome(name, "not_written"); srv.sink.hold(name, Duration::from_secs(2)); }
     let addr = srv.addr;
     let pairing = tokio::spawn(async move { call(addr, "POST", "s0/pair", Some(&json!({"peers": ["s1"]})), OWNER).await });
     let (s0, s1) = (srv.pair.join("s0.json"), srv.pair.join("s1.json"));
     fake::wait_until(move || s0.is_file() && s1.is_file()).await;
     // O temporário de s0 vira pasta: a restauração não consegue apagá-lo.
     std::fs::create_dir(srv.pair.join("s0.json.tmp")).unwrap();
-    srv.python.hold_input(false);
-    srv.python.release.notify_one();
     assert_eq!(pairing.await.unwrap(), (500, json!("Internal Server Error")));
     let python = srv.python.clone();
     fake::wait_until(move || python.diag().iter().any(|d| d["evento"] == "rust.groups_restore_failed")).await;
@@ -386,7 +387,7 @@ async fn group_notice_reaches_each_outside_pair_once() {
     let (status, body) = call(srv.addr, "POST", "s0/group-message", Some(&json!({"text": "oi"})), OWNER).await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["warning"], Value::Null, "{body}");
-    assert_eq!(input_hits(&srv.python, &["s0", "s1", "s2"]), [0, 1, 0]);
+    assert_eq!(input_hits(&srv.sink,&["s0", "s1", "s2"]), [0, 1, 0]);
     for (other, session, alias) in [(&ana, "Y", "pc-ana"), (&bia, "W", "pc-bia")] {
         let calls = other.calls();
         assert_eq!(calls.len(), 1, "{alias}: {calls:?}");
@@ -429,7 +430,7 @@ async fn group_notice_refuses_outside_header() {
     let (status, body) = call(srv.addr, "POST", "s0/group-message", Some(&json!({"text": "  [de fora: pc-ana::Y] oi"})), OWNER).await;
     assert_eq!((status, body["detail"]["code"].clone()), (400, json!("erro_group_message_resposta")));
     assert!(ana.calls().is_empty());
-    assert_eq!(input_hits(&srv.python, &["s0", "s1"]), [0, 0]);
+    assert_eq!(input_hits(&srv.sink,&["s0", "s1"]), [0, 0]);
 }
 
 /// BRG-10/PAIR-12: corpo que o Rust não aceita é 422 com código daqui, nunca repasse ao Python.
@@ -489,7 +490,7 @@ async fn orq_pair_without_peer_creates_a_group_of_one_without_protocol() {
     let (status, body) = call(srv.addr, "POST", "s1/pair", Some(&json!({"peer": "s0"})), OWNER).await;
     assert_eq!(status, 200, "{body}");
     assert!(srv.groups.link("s1").await.unwrap().unwrap().orq);
-    assert_eq!(input_hits(&srv.python, &["s0", "s1"]), [0, 0]);
+    assert_eq!(input_hits(&srv.sink,&["s0", "s1"]), [0, 0]);
 }
 
 /// Contrato ausente é vazio (como no Python); ilegível é 500 com código, nunca "vazio".

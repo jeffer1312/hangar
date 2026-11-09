@@ -153,13 +153,13 @@ async fn bridged_leave_never_calls_python() {
     }
     native_run(&srv, "g1", false);
     let out = result(&srv, "group.leave", json!({"name": "s0", "phases": {"g1": "ended"}})).await;
-    assert_eq!(out, json!({"ex_peers": ["s1"], "warnings": [], "deliveries": []}));
+    assert_eq!(out, json!({"ex_peers": ["s1"], "warnings": []}));
     assert!(!srv.pair.join("s0.json").exists());
     assert!(srv.pair.join("s1.json").exists(), "execução viva mantém o grupo orq de um");
     assert!(srv.python.internal_bodies("orq/group-phase").is_empty(), "a fase foi lida no cofre");
 
-    // Grupo entre máquinas desta dona que se dissolve: o aviso de saída ao membro Pi, que só o
-    // Python atende, volta na resposta em vez de o Rust chamar o `/input` dele.
+    // Grupo entre máquinas desta dona que se dissolve: o aviso de saída ao membro sem dono no Rust (o
+    // pane dele é só shell) sai depois da saída, em processo, e a recusa vira aviso do fechamento.
     let fed = json!({"owner": "casa", "local": true, "version": 1});
     for (me, other) in [("s0", "s1"), ("s1", "s0")] {
         std::fs::write(srv.pair.join(format!("{me}.json")), json!({"peers": [other], "task": "t", "gid": "g2",
@@ -169,11 +169,10 @@ async fn bridged_leave_never_calls_python() {
     std::fs::write(srv.pair.join("groups/g2.json"), json!({"protocol": 1, "gid": "g2", "owner": "casa", "version": 1, "task": "t",
         "members": [{"server": "casa", "name": "s0", "provider": "claude"}, {"server": "casa", "name": "s1", "provider": "pi"}], "outside": []}).to_string()).unwrap();
     let out = result(&srv, "group.leave", json!({"name": "s0", "phases": {}})).await;
-    let deliveries = out["deliveries"].as_array().unwrap();
-    assert_eq!(deliveries.len(), 1, "{out}");
-    assert_eq!(deliveries[0]["name"], "s1");
-    assert!(deliveries[0]["text"].as_str().unwrap().contains("Você saiu do grupo de trabalho entre máquinas"), "{out}");
-    assert_eq!(srv.python.hits_to("/api/sessions/s1/input"), 0, "o Rust não chamou o Python dentro da ponte");
+    let unbound = "vínculo gerenciado indisponível; escrita suspensa";
+    assert_eq!(out["warnings"], json!([{"sessao": "s1", "erro": {"code": "erro_envio_falhou", "params": {"erro": unbound}, "msg": unbound}}]), "{out}");
+    assert!(out.get("deliveries").is_none(), "{out}");
+    assert_eq!(srv.python.input_calls(), 0, "o Rust não chamou o Python");
     assert!(!srv.pair.join("s1.json").exists(), "ficou sozinho: o grupo acabou");
 }
 
@@ -254,14 +253,16 @@ async fn bridged_route_never_calls_python() {
     assert_eq!((refused["status"].clone(), refused["body"]["detail"]["code"].clone()), (json!(409), json!("erro_sessao_orq")), "o cofre nativo decide apesar do fato contrário enviado");
     let paired = result(&srv, "group.route", json!({"method": "POST", "name": "s0", "route": "pair", "body": {"peers": ["s1"]}, "facts": facts})).await;
     assert_eq!(paired["status"], 200, "{paired}");
-    let mut told: Vec<&str> = paired["deliveries"].as_array().unwrap().iter().map(|d| d["name"].as_str().unwrap()).collect();
+    // O protocolo sai depois da rota, em processo; os panes destes testes são só shell e recusam.
+    let mut told: Vec<&str> = paired["body"]["warning"]["params"]["avisos"].as_array().unwrap().iter().map(|d| d["sessao"].as_str().unwrap()).collect();
     told.sort();
-    assert_eq!(told, ["s0", "s1"], "o protocolo volta ao Python para entregar");
+    assert_eq!(told, ["s0", "s1"], "{paired}");
+    assert!(paired.get("deliveries").is_none(), "{paired}");
     let gid = paired["body"]["gid"].as_str().unwrap().to_owned();
     let left = result(&srv, "group.route", json!({"method": "DELETE", "name": "s1", "route": "pair", "body": null,
         "facts": {"orchestrators": [], "phases": {gid: "ended"}}})).await;
     assert_eq!(left["status"], 200, "{left}");
-    assert_eq!(left["deliveries"][0]["name"], "s1", "o aviso de saída também");
+    assert_eq!(left["body"]["warning"]["params"]["avisos"][0]["sessao"], "s1", "o aviso de saída também: {left}");
     let orq = result(&srv, "group.route", json!({"method": "POST", "name": "s2", "route": "pair", "body": {"orq": true}, "facts": facts})).await;
     assert_eq!(orq["status"], 200, "{orq}");
     assert_eq!(orq["post"],json!([]),"nenhuma promoção volta ao Python");

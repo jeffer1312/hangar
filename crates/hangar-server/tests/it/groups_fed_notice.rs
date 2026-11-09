@@ -19,14 +19,12 @@ async fn say(m: &Machine, name: &str, text: &str) -> (u16, Value) {
     call(m.addr, "POST", &format!("/api/sessions/{name}/group-message"), Some(&json!({"text": text}))).await
 }
 
-fn last_text(m: &Machine) -> String {
-    serde_json::from_slice::<Value>(&m.python.last_body()).unwrap()["text"].as_str().unwrap().to_owned()
-}
+fn last_text(m: &Machine) -> String { m.sink.last_any().unwrap() }
 
 /// Espera cada sessão de `m` em `names` chegar a `n` recados.
 async fn reach(m: &Machine, names: &[&str], n: usize) {
-    let (python, names): (_, Vec<String>) = (m.python.clone(), names.iter().map(|s| (*s).to_owned()).collect());
-    fake::wait_until(move || names.iter().all(|s| python.hits_to(&format!("/api/sessions/{s}/input")) >= n)).await;
+    let (sink, names): (_, Vec<String>) = (m.sink.clone(), names.iter().map(|s| (*s).to_owned()).collect());
+    fake::wait_until(move || names.iter().all(|s| sink.count(s) >= n)).await;
 }
 
 /// `casa::s0` + `casa::s1` + `lab::s2` + `vm::s3`, dona `casa`, com o protocolo já entregue.
@@ -221,12 +219,10 @@ async fn slow_owner_session_is_skipped_in_time() {
     let n = net().await;
     group(&n).await;
     federation_deliver_wait(&n.casa, Duration::from_secs(3));
-    n.casa.python.hold_input(true);
+    for name in ["s0", "s1"] { n.casa.sink.hold(name, Duration::from_secs(20)); }
     let started = std::time::Instant::now();
     let (status, body) = say(&n.lab, "s2", "oi").await;
     let took = started.elapsed();
-    n.casa.python.hold_input(false);
-    n.casa.python.release.notify_waiters();
     assert_eq!(status, 200, "{body}");
     assert_eq!((body["pulados"].clone(), body["warning"].clone()), (json!(["casa::s0", "casa::s1"]), Value::Null), "{body}");
     // Prazo de 3 s contra o padrão de 15 s: passar de 10 s é a dona ignorando o prazo dela.

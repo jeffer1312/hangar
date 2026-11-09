@@ -6,7 +6,6 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::http::StatusCode;
 use fake::*;
 use hangar_server::groups::text::{ContractLine, Kind, TextArgs, protocol_text};
 use hangar_server::groups::orq::{PythonOrq, is_orchestrator};
@@ -199,38 +198,6 @@ async fn codex_compact_notice_is_an_engine_control_in_rust() {
     let seen = methods.lock().unwrap().clone();
     assert!(seen.iter().any(|m| m == "thread/compact/start") && !seen.iter().any(|m| m == "turn/start"), "{seen:?}");
     assert!(registry.ingress().enter("c", Duration::ZERO).await.is_ok(), "o passe foi solto");
-}
-
-#[tokio::test]
-async fn notice_to_a_session_rust_does_not_own_goes_to_python_input_as_owner() {
-    let (python, st) = state(Some(registry().await), Duration::from_secs(5)).await;
-    python.set_input_reply(Some((StatusCode::OK, json!({"ok": true, "delivered": true, "steered": false, "native": false}))));
-    assert_eq!(deliver_text(&st, "codex-1", "aviso").await, Ok(()));
-    assert_eq!(python.hits_to("/api/sessions/codex-1/input"), 1);
-    assert_eq!(serde_json::from_slice::<Value>(&python.last_body()).unwrap(), json!({"text": "aviso", "steer": false}));
-    let (_, headers) = python.last_hit();
-    assert_eq!(headers["authorization"], format!("Bearer {OWNER}").as_str());
-    assert!(headers.get("x-hangar-internal").is_none());
-}
-
-#[tokio::test]
-async fn notice_without_runtime_goes_to_python() {
-    let (python, st) = state(None, Duration::from_secs(5)).await;
-    python.set_input_reply(Some((StatusCode::OK, json!({"ok": true}))));
-    assert_eq!(deliver_text(&st, "s", "aviso").await, Ok(()));
-    assert_eq!(python.input_calls(), 1);
-}
-
-#[tokio::test]
-async fn python_refusal_comes_back_as_its_envelope() {
-    let (python, st) = state(Some(registry().await), Duration::from_secs(5)).await;
-    let detail = json!({"code": "erro_sessao_recado_nao_enfileirado", "params": {}, "msg": "sessão não encontrada"});
-    python.set_input_reply(Some((StatusCode::NOT_FOUND, json!({"detail": detail.clone()}))));
-    assert_eq!(deliver_text(&st, "x", "aviso").await, Err(detail));
-    // Corpo que não é o envelope: o mesmo genérico do `_deliver` do Python.
-    python.set_input_reply(Some((StatusCode::BAD_GATEWAY, json!("o backend não respondeu"))));
-    let err = deliver_text(&st, "x", "aviso").await.unwrap_err();
-    assert_eq!(err["code"], "erro_envio_falhou_desconhecida");
 }
 
 #[tokio::test]
