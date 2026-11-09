@@ -64,6 +64,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   doente seguem 503 `runtime_unhealthy`. Motivo: era o comportamento do Python, e sem ele a pílula de
   permissão não abria depois de três subidas falhas (decisão do usuário, 13/10/2026).
 
+- **Ator ocupado não é entrada doente.** `writable()` sonda o ator em 1 s e só marca `busy` quando ele
+  não responde; quem não escreve não espera. A escrita (`route_write`) que acha `busy` espera a
+  resposta real até `WRITE_BUSY_LIMIT` (60 s) por `settle_busy`, e só então decide: doente ou sem
+  resposta no teto viram 503 `runtime_unhealthy` com reabertura. Ver
+  [ator ocupado não é doente](#ator-ocupado-não-é-doente-09112026).
+
 - **O organizador do ditado executa uma chamada mínima, separada da sessão principal.** Claude
   usa `--safe-mode` e conserva a autenticação de destino: assinatura OAuth, keychain, API key ou `apiKeyHelper`. Codex
   mantém a autenticação da conta de destino e usa execução efêmera com configurações mínimas.
@@ -1047,6 +1053,23 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   uma vez por aparição (`rust.trust_dialog_shown`, código `trust_flag_present` ou
   `trust_flag_absent`) e o log guarda a entrada, a idade do arquivo e a trava. Ver
   [diálogo de confiança com a pasta confiada](#diálogo-de-confiança-com-a-pasta-já-confiada-23102026).
+
+## Ator ocupado não é doente (09/11/2026)
+
+Toda escrita do dono pedia um retrato ao ator com prazo de 1 s e tratava a falta de resposta como
+doença: 503 `runtime_unhealthy` e pedido de reabertura. O ator do terminal atende uma coisa por vez e,
+no Windows, lê a tela pelo psmux (até 3 s por leitura, dezenas de leituras por entrega), então a
+sessão saudável e ocupada recusava envio e Orientar. O relatório `faovszas` (DESKTOP-JDPII8I,
+0.1.0.9735, 08/11) teve 12 recusas em 7 min com o Claude trabalhando. Na DELPHI-02 (0.1.0.9783), o 3º
+de 6 envios a um Claude trabalhando voltou 503 depois de 1,13 s; com a correção, 12 de 12 envios
+passaram (um esperou 1,64 s) e 4 Orientar entregaram em 3–9 s.
+
+A espera fica só na escrita: `writable()` é chamado também por quem só quer saber se a entrada
+existe (roteamento do Codex, ponte do convidado, `codex_relaunch` com trava compartilhada), e esperar
+ali prendia esses caminhos. O teto de 60 s é o do fechamento da porta e fica abaixo dos 75 s do
+transporte do Python; um ator travado de verdade é reaberto depois dele. Não resolve: ocupado e
+travado só se distinguem pelo relógio; publicar a saúde do ator fora da caixa de mensagens tiraria a
+espera.
 
 ## Compactação da sessão parada sem terminal (08/11/2026)
 

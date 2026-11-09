@@ -461,8 +461,10 @@ async fn terminal_steer_while_the_actor_reads_a_slow_screen_is_not_unhealthy() {
         assert!(started.elapsed() < Duration::from_secs(30), "o ator não começou a ler a tela");
         tokio::time::sleep(Duration::from_millis(10)).await; // estavel: espera pelo marcador que o tmux falso cria, teto de 30 s
     }
+    let asked = std::time::Instant::now();
     let (status, reply) = send(server, "POST", "t/queue/nada/steer", "").await;
     assert_eq!((status, reply["detail"]["code"].as_str()), (409, Some("queue_entry_gone")), "o Orientar chega ao ator: {reply}");
+    assert!(asked.elapsed() >= Duration::from_secs(1), "o Orientar achou o ator ocupado e esperou a vez dele");
     tokio::time::timeout(Duration::from_secs(30), interrupt).await.expect("o interromper terminou").unwrap();
 }
 
