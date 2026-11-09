@@ -326,6 +326,24 @@ async fn unreadable_hooks_publish_nothing() {
 }
 
 
+/// Sem raiz da instalação válida, o `plugin-dir` bom fica e a falha volta com código; o endereço da ponte
+/// é publicado mesmo assim.
+#[tokio::test]
+#[cfg(unix)]
+async fn missing_install_root_keeps_the_plugin_dir() {
+    use hangar_server::cli_probe::Probe;
+    use hangar_server::config_sync::plugin_publish::publish_in_turn;
+    let case = PublishCase::new(Some(Claude { version: "2.1.287 (Claude Code)", help_flag: false, exit: 0, sleep: 0 }), true);
+    for repo in [None, Some(case.home.path().join("nao-existe"))] {
+        let mut machine = case.machine(Probe::default());
+        machine.repo = repo.clone();
+        let error = publish_in_turn(machine, || true).await.unwrap_err();
+        assert_eq!(error.code, "plugin_root_missing", "{repo:?}");
+        assert_eq!(case.file("plugin-dir"), Some((0o644, "/stale/plugins/hangar\n".into())), "{repo:?}");
+        assert_eq!(case.file("plugin.json").unwrap().0, 0o600, "{repo:?}");
+    }
+}
+
 #[test]
 fn claude_version_is_read_like_the_python_regex() {
     use hangar_server::config_sync::plugin_publish::parse_version;

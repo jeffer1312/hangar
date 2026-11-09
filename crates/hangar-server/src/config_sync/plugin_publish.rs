@@ -75,7 +75,10 @@ fn publish_directories(target:&Path,repo:Option<&Path>,enabled:bool)->Result<(),
     if !enabled {
         return match std::fs::remove_file(target) {Err(error) if error.kind()==io::ErrorKind::NotFound=>Ok(()),result=>result.map_err(Error::from)};
     }
-    let Some(repo)=repo else {return Ok(())};
+    // Lista que aponta para pasta que não existe mataria toda sessão nova; a que já está lá fica.
+    let Some(repo)=repo.filter(|repo|repo.join("plugins/hangar").is_dir()) else {
+        return Err(Error::new("plugin_root_missing","raiz da instalação sem plugins/hangar; plugin-dir mantido",json!({})));
+    };
     let plugins=repo.join("plugins");let own=plugins.join("hangar");
     let others=(||->io::Result<Vec<_>> {
         std::fs::read_dir(&plugins)?.map(|entry|entry.map(|entry|entry.path())).collect()
