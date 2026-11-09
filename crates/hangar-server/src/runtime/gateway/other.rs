@@ -287,7 +287,12 @@ impl RuntimeRegistry {
     }
     pub(super) async fn adopt_other(&self, name: &str) -> Option<Result<(), RuntimeError>> {
         let config = self.other.get()?;
-        let found = (config.discovery.find)(name.into()).await?;
+        let found = (config.discovery.find)(name.into()).await;
+        // Abertura cujo CLI ou pane morreu antes do primeiro prompt sai do laço de espera.
+        if found.as_ref().is_none_or(|found| matches!(found, Err(error) if error.code == "other_terminal_dead")) {
+            config.opening.lock().await.remove(name);
+        }
+        let found = found?;
         let _pass = match self.ingress.enter(name, Duration::ZERO).await {
             Ok(pass) => pass,
             Err(_) => return Some(Err(failure("session_transfer_busy"))),

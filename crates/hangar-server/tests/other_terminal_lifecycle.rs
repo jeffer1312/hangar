@@ -300,6 +300,23 @@ async fn other_lifecycle_opening_retains_one_id_until_ready_and_delivers_without
     assert_eq!(snapshots[KEY]["queue"][0]["id"], "first-request");
 }
 #[tokio::test]
+async fn other_lifecycle_opening_that_dies_before_the_first_prompt_leaves_the_registry() {
+    let root = tempfile::tempdir().unwrap();
+    let source = Arc::new(Mutex::new(Some(OtherDiscoveryState::Opening(opening(root.path())))));
+    let (registry, _inbox) = registry(root.path(), Io::live(), source.clone(), None);
+    assert!(registry.adopt_now("pi-a").await.is_some());
+    assert!(registry.other_info("pi-a").await.is_some());
+    *source.lock().unwrap() = None;
+    let gone = tokio::time::timeout(Duration::from_secs(5), async {
+        while registry.other_info("pi-a").await.is_some() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    registry.shutdown().await.unwrap();
+    assert!(gone.is_ok(), "abertura morta continua no registro");
+}
+#[tokio::test]
 async fn other_lifecycle_reconcile_changes_conversation_without_relaunch_and_keeps_generation_on_restart()
  {
     let root = tempfile::tempdir().unwrap();
