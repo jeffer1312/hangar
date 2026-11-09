@@ -251,8 +251,13 @@ fn column_box(composer: bool) -> Div {
 fn column_padding() -> f32 { if COLUMN_FRAME.get().0 >= 1280. { 32. } else { 24. } }
 
 /// Põe uma faixa na coluna da conversa: mesma margem e mesma largura das mensagens.
-fn in_column(el: impl IntoElement) -> Div {
-    div().w_full().flex_shrink_0().px(px(16.)).flex().justify_center().child(column_box(false).px(px(column_padding())).child(el))
+fn in_column(el: impl IntoElement) -> Div { in_column_with(el, false) }
+
+/// `in_column` que cede altura quando falta espaço: o conteúdo precisa encolher ou rolar por conta própria.
+fn in_column_with(el: impl IntoElement, shrink: bool) -> Div {
+    div().w_full().when(shrink, |row| row.flex_shrink(1.).min_h_0()).when(!shrink, |row| row.flex_shrink_0())
+        .px(px(16.)).flex().justify_center()
+        .child(column_box(false).px(px(column_padding())).when(shrink, |column| column.flex().flex_col().min_h_0()).child(el))
 }
 
 /// Faixa de problema da sessão: a frase do web pelo código, como no web; código sem frase mostra o detalhe cru.
@@ -6593,6 +6598,8 @@ const PLUGIN_PANE_MAX_SHARE: f32 = 0.45;
 const PLUGIN_PANE_MAX_HEIGHT: f32 = 360.;
 /// Menor teto da faixa de baixo: cabe o compositor com a linha de baixo, mesmo com o terminal puxado até o alto.
 const BOTTOM_MIN_HEIGHT: f32 = 200.;
+/// Uma linha da faixa do mod, com a margem de baixo dela.
+const BAND_MIN_HEIGHT: f32 = 24.;
 
 /// Altura da área entre a conversa e o compositor, onde mod e pergunta se revezam.
 fn plugin_space_height(window: &Window) -> f32 { (f32::from(window.viewport_size().height) * PLUGIN_PANE_MAX_SHARE).min(PLUGIN_PANE_MAX_HEIGHT) }
@@ -7338,11 +7345,8 @@ impl Hangar {
         if self.new_chat_screen() && self.reopen.is_some() { return self.render_reopen(window, cx); }
         if self.new_chat_screen() { return self.render_new_chat(window, cx); }
         let content = self.render_bottom_content(window, cx);
-        // Conversa, faixa de baixo e terminal dividem o espaço medido no último desenho. A faixa fica com o que sobra do
-        // piso da conversa e da altura escolhida para o terminal: ela cede (o mod rola por dentro) e o terminal aparece
-        // inteiro. Pela altura que apareceu, o arraste gravaria um terminal menor a cada clique.
-        // Sem a conversa medida (primeiro desenho), sem teto: o próximo quadro já tem as medidas.
-        let (term, shown) = self.docked_terminal_height().unwrap_or((0., 0.));
+        // A faixa fica com o espaço medido menos o piso da conversa e o terminal inteiro; sem medida ainda, sem teto.
+        let (term, shown) = self.docked_terminal_height(window).unwrap_or((0., 0.));
         let conversation = self.panes.conversation_height.get();
         let space = conversation + self.panes.bottom_applied.get() + shown;
         let cap = if conversation > 0. { (space - terminal::CONVERSATION_MIN_HEIGHT - term).max(BOTTOM_MIN_HEIGHT) } else { f32::from(window.viewport_size().height) };
@@ -7462,7 +7466,8 @@ impl Hangar {
             Display::Question => question.map(|question| {
                 let height = self.question_space_height(readable, window);
                 div().id("plugin-interaction-space").track_focus(&self.plugin_question_focus)
-                    .relative().w_full().max_h(px(height)).when(reserve, |el| el.h(px(height))).flex_shrink_0().overflow_y_scroll()
+                    // Cede junto com a faixa do mod quando falta espaço: o cartão rola aqui dentro, ao lado do compositor.
+                    .relative().w_full().max_h(px(height)).when(reserve, |el| el.h(px(height))).flex_shrink(1.).min_h_0().overflow_y_scroll()
                     .child(question).into_any_element()
             }),
             Display::Panel => {
@@ -7479,10 +7484,9 @@ impl Hangar {
             Display::None => None,
         };
         let children = self.render_linked_children(window, cx).map(|el| in_column(el).into_any_element());
-        // A faixa é a única peça daqui que encolhe: sem altura de conteúdo, ela rola por dentro.
+        // Sem espaço, a faixa rola por dentro e fica com uma linha à vista, em vez de sumir.
         let band = readable.then(|| crate::plugin_ui::band(&self.plugin_band, &self.plugin_view(cx), height)).flatten()
-            .map(|band| div().w_full().flex_shrink(1.).min_h_0().px(px(16.)).flex().justify_center()
-                .child(column_box(false).px(px(column_padding())).flex().flex_col().min_h_0().child(band)).into_any_element());
+            .map(|band| in_column_with(band, true).min_h(px(BAND_MIN_HEIGHT)).into_any_element());
         space.into_iter().chain(children).chain(band).collect()
     }
 

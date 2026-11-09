@@ -121,11 +121,13 @@ impl Hangar {
     pub(super) fn pane_element_live(&self, area: Area, style: StyleRefinement, live: bool) -> AnyElement {
         let pane = self.pane(area);
         let shown = super::popup::area_on_screen(area);
+        // A conversa mudou de altura (terminal abrindo ou fechando): só a faixa de baixo, guardada, refaz o teto dela.
         let measure = matches!(area, Area::Conversation).then(|| {
             let height = self.panes.conversation_height.clone();
-            canvas(move |bounds, window, _| {
+            let bottom = self.panes.bottom.entity_id();
+            canvas(move |bounds, _, cx| {
                 let measured = f32::from(bounds.size.height);
-                if (height.get() - measured).abs() > 0.5 { height.set(measured); window.request_animation_frame(); }
+                if (height.get() - measured).abs() > 0.5 { height.set(measured); App::notify(cx, bottom); }
             }, |_, _, _, _| {}).absolute().inset_0()
         });
         if live {
@@ -149,12 +151,13 @@ impl Hangar {
     pub(super) fn measured_bottom(&self, content: AnyElement, max_height: f32) -> AnyElement {
         let height = self.panes.bottom_height.clone();
         let applied = self.panes.bottom_applied.clone();
+        let bottom = self.panes.bottom.entity_id();
         div().size_full().relative()
             // A caixa como foi desenhada neste quadro: somada à conversa e ao terminal do mesmo quadro, dá o espaço sem
             // misturar a medida nova do conteúdo, que só entra no layout no quadro seguinte.
-            .child(canvas(move |bounds, window, _| {
+            .child(canvas(move |bounds, _, cx| {
                 let measured = f32::from(bounds.size.height);
-                if (applied.get() - measured).abs() > 0.5 { applied.set(measured); window.request_animation_frame(); }
+                if (applied.get() - measured).abs() > 0.5 { applied.set(measured); App::notify(cx, bottom); }
             }, |_, _, _, _| {}).absolute().inset_0())
             // O teto vem do espaço medido, nunca da caixa: ela tem a altura do quadro anterior e nunca deixaria crescer.
             // Com ele, o que pode encolher (a faixa do mod) cede antes de o compositor sair da tela.
