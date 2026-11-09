@@ -205,11 +205,17 @@ async fn other_queue_contract_late_echo_rescues_abandoned_legacy_without_an_oper
 }
 
 #[derive(Default)]
-struct RecordingIo {writes:std::sync::Mutex<Vec<(String,bool)>>,captures:std::sync::atomic::AtomicUsize,captured:tokio::sync::Notify,before_prove:std::sync::Mutex<Option<Box<dyn FnOnce()+Send>>>}
+// `tui_queue`: a fila interna do Kimi mostra a dica de steer até o primeiro C-s.
+struct RecordingIo {writes:std::sync::Mutex<Vec<(String,bool)>>,captures:std::sync::atomic::AtomicUsize,captured:tokio::sync::Notify,before_prove:std::sync::Mutex<Option<Box<dyn FnOnce()+Send>>>,tui_queue:std::sync::atomic::AtomicBool}
 impl hangar_server::runtime::other_terminal::OtherIo for RecordingIo {
     fn prove<'a>(&'a self,_:&'a hangar_server::runtime::other_terminal::OtherTarget)->futures_util::future::BoxFuture<'a,Result<bool,hangar_server::runtime::protocol::RuntimeError>> {Box::pin(async move {if let Some(action)=self.before_prove.lock().unwrap().take() {action();}Ok(true)})}
-    fn capture<'a>(&'a self)->futures_util::future::BoxFuture<'a,Result<hangar_server::runtime::other_terminal::OtherFrame,hangar_server::runtime::protocol::RuntimeError>> {Box::pin(async move {self.captures.fetch_add(1,std::sync::atomic::Ordering::SeqCst);self.captured.notify_one();Ok(hangar_server::runtime::other_terminal::OtherFrame::from_styled("────────────────────────────────\n\n────────────────────────────────\n".into()))})}
-    fn write<'a>(&'a self,_:&'a hangar_server::runtime::other_terminal::OtherTarget,text:&'a str,literal:bool,_:Option<&'a hangar_server::runtime::other_terminal::OtherWriteGuard>)->futures_util::future::BoxFuture<'a,Result<(),hangar_server::runtime::protocol::RuntimeError>> {Box::pin(async move {self.writes.lock().unwrap().push((text.into(),literal));Ok(())})}
+    fn capture<'a>(&'a self)->futures_util::future::BoxFuture<'a,Result<hangar_server::runtime::other_terminal::OtherFrame,hangar_server::runtime::protocol::RuntimeError>> {Box::pin(async move {
+        self.captures.fetch_add(1,std::sync::atomic::Ordering::SeqCst);self.captured.notify_one();
+        let hint=if self.tui_queue.load(std::sync::atomic::Ordering::SeqCst) {"pedido digitado — ctrl-s to steer immediately\n"} else {""};
+        Ok(hangar_server::runtime::other_terminal::OtherFrame::from_styled(format!("{hint}────────────────────────────────\n\n────────────────────────────────\n")))})}
+    fn write<'a>(&'a self,_:&'a hangar_server::runtime::other_terminal::OtherTarget,text:&'a str,literal:bool,_:Option<&'a hangar_server::runtime::other_terminal::OtherWriteGuard>)->futures_util::future::BoxFuture<'a,Result<(),hangar_server::runtime::protocol::RuntimeError>> {Box::pin(async move {
+        if text=="C-s" && !literal {self.tui_queue.store(false,std::sync::atomic::Ordering::SeqCst);}
+        self.writes.lock().unwrap().push((text.into(),literal));Ok(())})}
     fn release<'a>(&'a self)->futures_util::future::BoxFuture<'a,()> {Box::pin(async {})}
 }
 fn start_recording(root:&std::path::Path,provider:&str,inbox:std::sync::Arc<hangar_server::provider_models::inbox::Store>,io:std::sync::Arc<RecordingIo>)->hangar_server::runtime::other_terminal::OtherHandle {
@@ -276,6 +282,37 @@ fn start_recording_with_pane(root:&std::path::Path,provider:&str,inbox:std::sync
     let mut options=OtherOptions::new(hangar_server::terminal_control::TerminalPool::new(),inbox,std::sync::Arc::new(hangar_server::list::procs::SystemProcs::default()),std::sync::Arc::new(hangar_server::interactions::InteractionStore::default()));
     options.io_override=Some(io);options.tick=tick;
     OtherHandle::spawn(target,queue,options,tokio::sync::watch::channel(None).0)
+}
+#[tokio::test]
+async fn kimi_steer_presses_ctrl_s_only_for_typed_rows_and_confirms_them() {
+    use hangar_server::runtime::{protocol::{RuntimeCommand,OperationKind,Disposition},queue::Action};
+    use serde_json::Value;
+    use std::sync::Arc;
+    let steer=|handle:&hangar_server::runtime::other_terminal::OtherHandle,id:&str,entry:Value| {let handle=handle.clone();let id=id.to_owned();
+        async move {handle.command(RuntimeCommand {operation_id:id,kind:OperationKind::SteerQueue,payload:json!({"entry_id":entry})}).await.unwrap()}};
+    for bare in [false,true] {
+        // A dica já está na tela que o observador guardou: é dela que o steer parte.
+        let root=tempfile::tempdir().unwrap();let io=Arc::new(RecordingIo {tui_queue:true.into(),..Default::default()});
+        let handle=start_recording(root.path(),"kimi",hangar_server::provider_models::inbox::Store::new(),io.clone());
+        let mut frames=handle.last_frame();
+        tokio::time::timeout(std::time::Duration::from_secs(10),async {while frames.borrow().is_none() {frames.changed().await.unwrap();}}).await.unwrap();
+        for (id,delivered) in [("typed",true),("waiting",false)] {
+            handle.queue(format!("append-{id}"),Action::Append {text:format!("mensagem {id}"),delivered,ts:None,pre_transcript:false,entry_id:Some(id.into())}).await.unwrap();
+        }
+        if !bare {
+            let refused=steer(&handle,"steer-waiting",json!("waiting")).await;
+            assert_ne!(refused.disposition,Disposition::Accepted,"{refused:?}");
+            assert_eq!(refused.payload["code"],"steer_no_turn","a rota promove a que a TUI ainda não recebeu");
+            assert!(io.writes.lock().unwrap().iter().all(|(text,_)| text!="C-s"),"sem C-s para a que não foi digitada");
+        }
+        let reply=steer(&handle,"steer-typed",if bare {Value::Null} else {json!("typed")}).await;
+        let snapshot=handle.snapshot().await.unwrap();handle.stop().await.unwrap();
+        assert_eq!(reply.disposition,Disposition::Accepted,"bare={bare}: {reply:?}");
+        assert_eq!(reply.payload["ids"],json!(["typed"]),"bare={bare}: o C-s leva só as digitadas: {reply:?}");
+        let confirmed=|id:&str| snapshot["queue"].as_array().unwrap().iter().any(|row| row["id"]==id && row["confirmed"]==true);
+        assert!(confirmed("typed") && !confirmed("waiting"),"bare={bare}: {snapshot}");
+        assert_eq!(io.writes.lock().unwrap().iter().filter(|(text,_)| text=="C-s").count(),1);
+    }
 }
 #[tokio::test]
 async fn other_terminal_inbox_ack_is_delivery_without_any_keystroke() {

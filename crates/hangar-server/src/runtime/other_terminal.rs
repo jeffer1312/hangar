@@ -432,15 +432,14 @@ impl OtherHandle {
                                 let mut control = kind.as_str();
                                 if matches!(control, "steer_entry" | "steer_queue" | "steer_first")
                                 {
-                                    let state =
-                                        queue.snapshot().await.map_err(|_| failed("queue_io"))?;
-                                    if let Some(row) = state.rows.iter().find(|row| {
-                                        payload["entry_id"]
-                                            .as_str()
-                                            .map_or(row["delivered"] == false, |id| row["id"] == id)
-                                    }) {
-                                        payload["entry_id"] = row["id"].clone();
-                                        payload["text"] = row["text"].clone();
+                                    // O C-s orienta a fila interna da TUI, que só tem as linhas já digitadas.
+                                    if let Some(entry) = payload["entry_id"].as_str() {
+                                        let state =
+                                            queue.snapshot().await.map_err(|_| failed("queue_io"))?;
+                                        if !state.rows.iter().any(|row| row["id"] == entry && row["delivered"] == true) {
+                                            return Ok(RuntimeReply { operation_id: id.clone(), disposition: Disposition::Rejected,
+                                                payload: json!({"ok": false, "code": "steer_no_turn"}) });
+                                        }
                                     }
                                     control = "steer_queue";
                                 }
@@ -512,6 +511,18 @@ impl OtherHandle {
                                                 )
                                                 .await
                                                 .map_err(|_| failed("queue_io"))?;
+                                        }
+                                        // O Kimi só grava a mensagem orientada no fim do turno: a baixa é agora.
+                                        if control == "steer_queue" && outcome.reply.payload["steered"] == true {
+                                            let state = queue.snapshot().await.map_err(|_| failed("queue_io"))?;
+                                            let ids: Vec<String> = state.rows.iter()
+                                                .filter(|row| row["delivered"] == true && row["confirmed"] != true)
+                                                .filter_map(|row| row["id"].as_str().map(str::to_owned)).collect();
+                                            if !ids.is_empty() {
+                                                queue.exec(target.generation, &format!("steer-confirm:{id}"), clock(),
+                                                    Action::Confirm { entry_ids: ids.clone() }).await.map_err(|_| failed("queue_io"))?;
+                                            }
+                                            outcome.reply.payload["ids"] = json!(ids);
                                         }
                                         Ok(outcome.reply)
                                     }
