@@ -55,9 +55,14 @@ async fn runtime_account_guard(provider: &str, metadata: &Value) -> Result<crate
         .map_err(|_| failure("account_busy"))
 }
 
+/// Uma entrega no psmux chega a minutos (até 80 leituras de tela de 3 s): só depois disso o ator ocupado conta como travado.
+const WRITE_BUSY_LIMIT:Duration = Duration::from_secs(300);
+
 /// Retrato do ator em até 1 s: `None` no prazo esgotado, `Some(false)` doente ou fora.
-async fn probe(handle:&EntryHandle) -> Option<bool> {
-    match tokio::time::timeout(Duration::from_secs(1),handle.snapshot()).await {
+async fn probe(handle:&EntryHandle) -> Option<bool> { probe_within(handle,Duration::from_secs(1)).await }
+
+async fn probe_within(handle:&EntryHandle,limit:Duration) -> Option<bool> {
+    match tokio::time::timeout(limit,handle.snapshot()).await {
         Ok(Ok(view))=>Some(healthy(handle.has_terminal(),&view)),
         Ok(Err(_))=>Some(false),
         Err(_)=>None,
@@ -2966,10 +2971,13 @@ impl RuntimeRegistry {
         let (key,generation,provider,handle) = self.entries.lock().await.iter().filter(|(_,e)|e.name==name).max_by_key(|(_,e)|e.generation)
             .map(|(key,e)|(key.clone(),e.generation,e.provider.clone(),e.handle.clone()))?;
         let terminal = handle.has_terminal();
-        // Sem resposta no prazo o ator está ocupado (leitura de tela lenta no psmux), não doente: a escrita espera a vez dele.
+        // Sem resposta em 1 s o ator está ocupado (leitura de tela lenta no psmux), não doente: a escrita espera a vez dele.
         let healthy = match probe(&handle).await {
             Some(healthy) => healthy,
-            None => { self.diag.report("runtime.write_actor_busy",name,"actor_busy","o ator não respondeu em 1 s; a escrita esperou a vez dele"); true }
+            None => {
+                self.diag.report("runtime.write_actor_busy",name,"actor_busy","o ator não respondeu em 1 s; a escrita esperou a vez dele");
+                probe_within(&handle,WRITE_BUSY_LIMIT).await.unwrap_or(false)
+            }
         };
         Some(WriteTarget { key,generation,provider,terminal,healthy,handle })
     }
