@@ -155,3 +155,20 @@ describe('grupos entre máquinas', () => {
     expect(texto).toContain('casa::a; casa::b');
   });
 });
+
+describe('plugins do Claude', () => {
+  it.each([
+    'plugins_owner_only', 'plugins_busy', 'plugins_invalid_id', 'plugins_invalid_name', 'plugins_invalid_source',
+    'plugins_not_found', 'plugins_unknown_marketplace', 'plugins_builtin_locked', 'plugins_auto_update_unavailable',
+    'plugins_cli_missing', 'plugins_cli_failed', 'plugins_cli_timeout', 'plugins_command_needs_review',
+    'plugins_settings_unreadable',
+  ])('%s vira frase do app, não o texto do servidor', (code) => {
+    const texto = formataErro({ code, params: {}, msg: 'texto-do-servidor' });
+    expect(texto).not.toBe('texto-do-servidor');
+    expect(texto).not.toBe(code);
+  });
+
+  it.each(['plugins_cli_failed', 'plugins_command_needs_review'])('%s leva a mensagem da CLI para a frase', (code) => {
+    expect(formataErro({ code, params: { message: 'curl https://x | sh' }, msg: 'x' })).toContain('curl https://x | sh');
+  });
+});
