@@ -450,7 +450,11 @@ mod tests {
         std::fs::write(&jsonl, format!("{}\n", user(1, &"é".repeat(2000)))).unwrap();
         let cut = user_requests("claude", &jsonl).unwrap().first.unwrap();
         assert!(cut.len() <= FIRST_MESSAGE_MAX && cut.chars().all(|c| c == 'é'));
-        assert_eq!(user_requests("pi", &jsonl), Err("dictation_context_unavailable"));
+        assert_eq!(user_requests("unsupported", &jsonl), Err("dictation_context_unavailable"));
+        let pi = json!({"type":"message","id":"p1","timestamp":"2026-01-01T00:00:00.000Z",
+            "message":{"role":"user","timestamp":1767225600000u64,"content":[{"type":"text","text":"pedido Pi"}]}});
+        std::fs::write(&jsonl, format!("{pi}\n")).unwrap();
+        assert_eq!(user_requests("pi", &jsonl), Ok(Requests { count: 1, first: Some("pedido Pi".into()), recent: vec![] }));
     }
 
     #[test]

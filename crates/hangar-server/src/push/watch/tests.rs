@@ -96,9 +96,9 @@ fn notice_as_json(name: &str, notice: &Notice) -> Value {
 }
 
 #[test]
-fn awaiting_and_finished_only_for_claude_and_codex_but_stall_for_every_row() {
-    assert!(turn_notices("claude") && turn_notices("codex"));
-    for other in ["kimi", "pi", "omp", "orq"] { assert!(!turn_notices(other), "{other} já é avisado pelo Python"); }
+fn awaiting_and_finished_for_native_providers_but_stall_for_every_row() {
+    for provider in ["claude", "codex", "kimi", "pi", "omp"] { assert!(turn_notices(provider), "{provider}"); }
+    assert!(!turn_notices("orq"));
     // A varredura não olha o provedor: Kimi travada ainda sai daqui.
     let mut m = Memory::default();
     let notices = m.sweep(&[("kimi-1".into(), Some("k1".into()), true, None)], true);
