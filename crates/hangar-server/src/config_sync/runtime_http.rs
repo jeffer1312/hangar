@@ -32,7 +32,7 @@ pub async fn handle(State(state): State<Arc<AppState>>, ConnectInfo(peer): Conne
         Err(_) => return crate::http_cors::json_guarded(StatusCode::SERVICE_UNAVAILABLE,json!({"detail":{"code":"config_unavailable","params":{},"msg":"configuração indisponível"}})),
     };
     let root = crate::install_root::root(&service.env.home).unwrap_or_else(||service.env.home.join(".hangar/current"));
-    let version = match crate::boot_version::ensure(root.clone(),service.env.base.clone()).await {
+    let version = match crate::boot_version::ensure(root,service.env.base.clone()).await {
         Ok(version)=>version,
         Err(_)=>return crate::http_cors::json_guarded(StatusCode::SERVICE_UNAVAILABLE,json!({"detail":{"code":"config_unavailable","params":{},"msg":"configuração indisponível"}})),
     };
@@ -48,7 +48,6 @@ pub async fn handle(State(state): State<Arc<AppState>>, ConnectInfo(peer): Conne
             Err(response) => return response,
         }
     } else {ValueGuard(Value::Null)};
-    // A publicação do plugin sonda o `claude` (assíncrono) de dentro da gravação.
     let runtime = tokio::runtime::Handle::current();
     let result = tokio::task::spawn_blocking(move || {
         if writing {
@@ -62,13 +61,9 @@ pub async fn handle(State(state): State<Arc<AppState>>, ConnectInfo(peer): Conne
                 Err(error) if error.is_validation() => return crate::http_cors::json_guarded(StatusCode::BAD_REQUEST,json!({"detail":error.message})),
                 Err(_) => return crate::http_cors::internal_error(),
             }
+            // A publicação sonda o `claude` por até 20 s: vai depois da resposta, na vez dela.
             if values.contains_key("claude_function_hooks") {
-                let enabled = ValueGuard(service.get("claude_function_hooks"));
-                let publish = super::plugin_publish::publish_for_machine(&service.env.home,&root,state.cfg.listen.port(),&state.cfg.auth_token,
-                    crate::orchestration::truthy(&enabled),&state.harness_probe,&service.env);
-                if let Err(error) = runtime.block_on(publish) {
-                    tracing::warn!(code=error.code,"caminho do plugin não foi republicado");
-                }
+                runtime.spawn(super::plugin_publish::publish_for_state(state.clone()));
             }
         }
         let fields = match service.state() {Ok(value)=>ValueGuard(value),Err(_)=>return crate::http_cors::internal_error()};
