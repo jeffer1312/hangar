@@ -29,5 +29,9 @@ tracing = { workspace = true }
 # Pacotes do frp e do Caddy no Windows (`binaries.rs`); versão e features do isideload.
 zip = { version = "=8.6.0", default-features = false, features = ["deflate"] }
 
+# Relógio parado no teste do laço que relê a conta (`supervisor.rs`).
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true

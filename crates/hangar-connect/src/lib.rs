@@ -4,6 +4,7 @@
 
 use axum::http::StatusCode;
 
+pub mod account_devices;
 pub mod binaries;
 pub mod config;
 pub mod devices;
