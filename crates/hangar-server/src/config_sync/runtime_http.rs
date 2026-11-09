@@ -48,6 +48,8 @@ pub async fn handle(State(state): State<Arc<AppState>>, ConnectInfo(peer): Conne
             Err(response) => return response,
         }
     } else {ValueGuard(Value::Null)};
+    // A publicação do plugin sonda o `claude` (assíncrono) de dentro da gravação.
+    let runtime = tokio::runtime::Handle::current();
     let result = tokio::task::spawn_blocking(move || {
         if writing {
             let Some(values) = body.as_object() else {
@@ -62,7 +64,9 @@ pub async fn handle(State(state): State<Arc<AppState>>, ConnectInfo(peer): Conne
             }
             if values.contains_key("claude_function_hooks") {
                 let enabled = ValueGuard(service.get("claude_function_hooks"));
-                if let Err(error) = super::plugin_publish::publish(&service.env.home,&root,state.cfg.listen.port(),&state.cfg.auth_token,crate::orchestration::truthy(&enabled)) {
+                let publish = super::plugin_publish::publish_for_machine(&service.env.home,&root,state.cfg.listen.port(),&state.cfg.auth_token,
+                    crate::orchestration::truthy(&enabled),&state.harness_probe,&service.env);
+                if let Err(error) = runtime.block_on(publish) {
                     tracing::warn!(code=error.code,"caminho do plugin não foi republicado");
                 }
             }

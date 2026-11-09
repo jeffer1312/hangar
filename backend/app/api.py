@@ -178,12 +178,6 @@ async def _lifespan(app: FastAPI):
     # sockets do Claude; sem ele o recibo de retenção/recusa não tem pra onde voltar.
     if uds_messaging.INBOX.ligar(_ao_recibo_nativo):
         _log.info("inbox nativo ligado em %s", uds_messaging.INBOX.path)
-    try:
-        # Em thread: a publicação sonda o `claude` (versão e flags) e não pode segurar o laço.
-        await asyncio.to_thread(plugin_bridge.publish_address)
-    except OSError:
-        _log.warning("plugin: endereço da ponte não gravado; sessão de terminal fica no tmux",
-                     exc_info=True)
     await _boot_sessions(runtime)
     _state_dirs =list({Path(c.path) for c in list_config_dirs()} | {_backend_config_base().resolve()})
     hook_state.on_transition = _on_hook_transition  # drain server-side + confirmacao de entrega

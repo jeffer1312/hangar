@@ -69,6 +69,7 @@ pub(crate) async fn maintenance(state: Arc<crate::routes::AppState>) {
         }
         Err(error) => tracing::warn!(code = "pairing_config_failed", %error, "pareamento sem configuração válida"),
     }
+    tokio::spawn(publish_plugin(state.clone()));
     state.costs.schedule_warmup(std::time::Duration::from_secs(30));
     let _search_producer = state.search.start();
     crate::pages::routes::spawn_sweep(state.list.clone(), state.pages.clone());
@@ -97,6 +98,23 @@ pub(crate) async fn maintenance(state: Arc<crate::routes::AppState>) {
 
     crate::update::git_engine::periodic::spawn(&state);
     std::future::pending::<()>().await;
+}
+
+/// `~/.hangar/plugin.json` e `~/.hangar/plugin-dir` na subida: a sessão aberta fora do Hangar e o
+/// lançador acham a ponte e os plugins por eles.
+async fn publish_plugin(state: Arc<crate::routes::AppState>) {
+    let service = match crate::config_sync::runtime::RuntimeConfig::from_state(&state) {
+        Ok(service) => service,
+        Err(error) => return tracing::warn!(code = "plugin_publish_failed", %error, "caminho do plugin não foi publicado"),
+    };
+    let home = service.env.home.clone();
+    let root = crate::install_root::root(&home).unwrap_or_else(|| home.join(".hangar/current"));
+    let env = service.env.clone();
+    let hooks = tokio::task::spawn_blocking(move || crate::orchestration::truthy(&service.get("claude_function_hooks"))).await.unwrap_or(false);
+    if let Err(error) = crate::config_sync::plugin_publish::publish_for_machine(&home, &root, state.cfg.listen.port(),
+        &state.cfg.auth_token, hooks, &state.harness_probe, &env).await {
+        tracing::warn!(code = error.code, "caminho do plugin não foi publicado");
+    }
 }
 
 pub async fn prepare_sessions(env: crate::accounts::environment::AccountEnvironment) {

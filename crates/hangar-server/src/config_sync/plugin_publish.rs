@@ -3,6 +3,34 @@ use super::{bundle::{Blob,Error},files};
 use serde_json::json;
 use std::{io,path::Path};
 
+/// Primeira versão do `claude` com os mods ligados por padrão.
+const MODS_BY_DEFAULT:(u64,u64,u64)=(2,1,287);
+
+/// Publica os dois arquivos com a lista de plugins valendo só se o `claude` desta máquina a aceita:
+/// `--plugin-dir` desconhecido mata a sessão ao nascer. Hooks desligados não sondam nada.
+pub async fn publish_for_machine(home:&Path,repo:&Path,port:u16,secret:&str,hooks:bool,
+    probe:&crate::cli_probe::Probe,env:&crate::accounts::environment::AccountEnvironment)->Result<(),Error> {
+    let enabled=hooks&&takes_plugin_dir(probe,env).await;
+    let (home,repo,secret)=(home.to_owned(),repo.to_owned(),secret.to_owned());
+    tokio::task::spawn_blocking(move||publish(&home,&repo,port,&secret,enabled)).await
+        .map_err(|error|Error::invalid(format!("publicação do plugin interrompida: {error}")))?
+}
+
+async fn takes_plugin_dir(probe:&crate::cli_probe::Probe,env:&crate::accounts::environment::AccountEnvironment)->bool {
+    let Some(version)=probe.version_text(env,"claude").await else {return false};
+    if parse_version(&version).is_some_and(|version|version>=MODS_BY_DEFAULT) {return true;}
+    probe.help_text(env,"claude").await.is_some_and(|help|help.contains("--plugin-dir"))
+}
+
+/// `X.Y.Z` no começo, como o `re.match(r"\s*(\d+)\.(\d+)\.(\d+)")` do Python.
+pub fn parse_version(text:&str)->Option<(u64,u64,u64)> {
+    let number=|part:&str|(!part.is_empty()&&part.bytes().all(|b|b.is_ascii_digit())).then(||part.parse().ok()).flatten();
+    let mut parts=text.trim_start().splitn(3,'.');
+    let (major,minor)=(number(parts.next()?)?,number(parts.next()?)?);
+    let patch=parts.next()?;
+    Some((major,minor,number(&patch[..patch.bytes().take_while(u8::is_ascii_digit).count()])?))
+}
+
 pub fn publish(home:&Path,repo:&Path,port:u16,secret:&str,enabled:bool)->Result<(),Error> {
     let directory=home.join(".hangar");
     let machine=json!({"url":format!("http://127.0.0.1:{port}/api/plugin"),"chave":crate::mods::bridge::machine_key(if secret.is_empty(){"hangar"}else{secret})});

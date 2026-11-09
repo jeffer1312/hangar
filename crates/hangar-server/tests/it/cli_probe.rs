@@ -125,3 +125,161 @@ async fn cli_probe_retries_failed_capture_and_nonzero_exit_without_invalidation(
         Some("2.1.999 --plugin-dir")
     );
 }
+
+/// Casa, repositório e `claude` falso de um caso de `contract/r1-plugin-publish`.
+#[cfg(unix)]
+struct PublishCase {
+    home: tempfile::TempDir,
+    repo: tempfile::TempDir,
+    bin: tempfile::TempDir,
+    env: AccountEnvironment,
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+struct Claude { version: &'static str, help_flag: bool, exit: i32, sleep: u32 }
+
+#[cfg(unix)]
+impl PublishCase {
+    fn new(claude: Option<Claude>, seeded: bool) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        let (home, repo, bin) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        for plugin in ["hangar", "github-actions"] {
+            std::fs::create_dir_all(repo.path().join("plugins").join(plugin).join(".claude-plugin")).unwrap();
+            std::fs::write(repo.path().join("plugins").join(plugin).join(".claude-plugin/plugin.json"), "{}").unwrap();
+        }
+        std::fs::create_dir_all(repo.path().join("plugins/sem-manifesto")).unwrap();
+        if seeded {
+            let hangar = home.path().join(".hangar");
+            std::fs::create_dir_all(&hangar).unwrap();
+            std::fs::write(hangar.join("plugin-dir"), "/stale/plugins/hangar\n").unwrap();
+            std::fs::write(hangar.join("plugin.json"), r#"{"url": "http://stale/api/plugin", "chave": "stale"}"#).unwrap();
+            for name in ["plugin-dir", "plugin.json"] {
+                std::fs::set_permissions(hangar.join(name), std::fs::Permissions::from_mode(0o644)).unwrap();
+            }
+        }
+        let probes = bin.path().join("probes");
+        if let Some(c) = claude {
+            let help = if c.help_flag { "  --plugin-dir <path>  Load plugins" } else { "  --model <model>" };
+            let script = format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n/bin/sleep {}\ncase \"$1\" in --version) printf '%s\\n' '{}';; --help) printf 'Options:\\n%s\\n' '{help}';; esac\nexit {}\n",
+                probes.display(), c.sleep, c.version, c.exit);
+            std::fs::write(bin.path().join("claude"), script).unwrap();
+            std::fs::set_permissions(bin.path().join("claude"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let env = AccountEnvironment::from_pairs([
+            ("HOME", home.path().to_string_lossy().into_owned()),
+            ("PATH", bin.path().to_string_lossy().into_owned()),
+        ]);
+        Self { home, repo, bin, env }
+    }
+
+    fn probes(&self) -> Vec<String> {
+        std::fs::read_to_string(self.bin.path().join("probes")).unwrap_or_default().lines().map(str::to_owned).collect()
+    }
+
+    fn file(&self, name: &str) -> Option<(u32, String)> {
+        use std::os::unix::fs::PermissionsExt;
+        let path = self.home.path().join(".hangar").join(name);
+        let mode = std::fs::metadata(&path).ok()?.permissions().mode() & 0o777;
+        Some((mode, std::fs::read_to_string(path).unwrap()))
+    }
+}
+
+#[cfg(unix)]
+#[derive(Clone, Default)]
+struct WarnLog(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+#[cfg(unix)]
+impl std::io::Write for WarnLog {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+}
+
+/// R1.5-11 / R1.7: `~/.hangar/plugin.json` sempre (0600) e `plugin-dir` (0644) só com os hooks ligados e
+/// o `claude` com mods por padrão (2.1.287+) ou com `--plugin-dir` no `--help`. Casos de
+/// `contract/r1-plugin-publish`; o `hooks_default` é o ligado (`claude_function_hooks` nasce ligado).
+#[tokio::test]
+#[cfg(unix)]
+async fn plugin_files_are_published_like_python() {
+    use hangar_server::cli_probe::Probe;
+    use hangar_server::config_sync::plugin_publish::publish_for_machine;
+    let v = |version, help_flag| Some(Claude { version, help_flag, exit: 0, sleep: 0 });
+    let both = vec!["--version".to_owned(), "--help".to_owned()];
+    let only_version = vec!["--version".to_owned()];
+    // (caso, claude, já tinha arquivos, sondas com hooks ligados, plugin-dir publicado)
+    let cases: Vec<(&str, Option<Claude>, bool, Vec<String>, bool)> = vec![
+        ("v2_1_287", v("2.1.287 (Claude Code)", false), true, only_version.clone(), true),
+        ("v2_1_287__no_seed", v("2.1.287 (Claude Code)", false), false, only_version.clone(), true),
+        ("v2_2_0", v("2.2.0 (Claude Code)", false), true, only_version, true),
+        ("v2_1_286_without_flag", v("2.1.286 (Claude Code)", false), true, both.clone(), false),
+        ("v2_1_286_without_flag__no_seed", v("2.1.286 (Claude Code)", false), false, both.clone(), false),
+        ("v2_1_200_with_flag", v("2.1.200 (Claude Code)", true), true, both.clone(), true),
+        ("garbage_version_with_flag", v("not a version", true), true, both.clone(), true),
+        ("garbage_version_without_flag", v("not a version", false), true, both.clone(), false),
+        ("probe_exit_1", Some(Claude { version: "", help_flag: false, exit: 1, sleep: 0 }), true, both.clone(), false),
+        ("no_claude_on_path", None, true, vec![], false),
+    ];
+    let plugin_json = r#"{"url": "http://127.0.0.1:8765/api/plugin", "chave": "4db1dc76b92e69cb0591f56830b89d1e"}"#;
+    for (name, claude, seeded, probes, published) in cases {
+        for hooks in [true, false] {
+            let case = PublishCase::new(claude, seeded);
+            let log = WarnLog::default();
+            let writer = log.clone();
+            let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+            let _guard = tracing::subscriber::set_default(subscriber);
+            publish_for_machine(case.home.path(), case.repo.path(), 8765, "contract-owner-token", hooks, &Probe::default(), &case.env).await.unwrap();
+            let context = format!("{name} hooks={hooks}");
+            assert_eq!(case.probes(), if hooks { probes.clone() } else { vec![] }, "{context}: hooks desligados não sondam");
+            assert_eq!(case.file("plugin.json"), Some((0o600, plugin_json.to_owned())), "{context}");
+            let dir = format!("{0}/plugins/hangar\n{0}/plugins/github-actions\n", case.repo.path().display());
+            assert_eq!(case.file("plugin-dir"), (hooks && published).then_some((0o644, dir)), "{context}");
+            assert!(!String::from_utf8_lossy(&log.0.lock().unwrap()).contains("WARN"), "{context}: só o prazo estourado avisa");
+        }
+    }
+}
+
+/// `probe_hangs`: as duas sondas estouram o prazo, cada uma com um aviso, e o `plugin-dir` sai.
+#[tokio::test]
+#[cfg(unix)]
+async fn plugin_dir_is_removed_when_the_claude_probe_hangs() {
+    use hangar_server::cli_probe::Probe;
+    use hangar_server::config_sync::plugin_publish::publish_for_machine;
+    let case = PublishCase::new(Some(Claude { version: "2.1.287 (Claude Code)", help_flag: true, exit: 0, sleep: 3 }), true);
+    let log = WarnLog::default();
+    let writer = log.clone();
+    let _guard = tracing::subscriber::set_default(tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish());
+    let mut probe = Probe::default();
+    probe.timeout = std::time::Duration::from_millis(300);
+    publish_for_machine(case.home.path(), case.repo.path(), 8765, "contract-owner-token", true, &probe, &case.env).await.unwrap();
+    assert_eq!(case.probes(), ["--version", "--help"]);
+    assert_eq!(case.file("plugin-dir"), None);
+    assert_eq!(case.file("plugin.json").unwrap().0, 0o600);
+    assert_eq!(String::from_utf8_lossy(&log.0.lock().unwrap()).matches("WARN").count(), 2);
+}
+
+#[test]
+fn claude_version_is_read_like_the_python_regex() {
+    use hangar_server::config_sync::plugin_publish::parse_version;
+    assert_eq!(parse_version("2.1.287 (Claude Code)"), Some((2, 1, 287)));
+    assert_eq!(parse_version("  2.2.0\n"), Some((2, 2, 0)));
+    assert_eq!(parse_version("2.1.287abc"), Some((2, 1, 287)));
+    for text in ["", "not a version", "2.1", "2..1", "2.1.", "v2.1.287", "2.1.x", "+2.1.287"] {
+        assert_eq!(parse_version(text), None, "{text}");
+    }
+}
+
+proptest::proptest! {
+    /// O `--version` é texto de outro programa: nada nele derruba a sonda.
+    #[test]
+    fn any_claude_version_text_is_read_without_panicking(text in "(?s).{0,40}") {
+        let _ = hangar_server::config_sync::plugin_publish::parse_version(&text);
+    }
+}
+
+#[test]
+fn default_probe_timeout_is_the_python_ten_seconds() {
+    assert_eq!(hangar_server::cli_probe::Probe::default().timeout, std::time::Duration::from_secs(10));
+}
