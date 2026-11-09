@@ -20,6 +20,7 @@ pub mod json_envelope;
 pub mod log_rotate;
 pub mod net;
 pub mod orq_codec;
+pub mod paths;
 // Descritor de segurança do Windows: chamadas de `windows-sys`.
 #[cfg(windows)]
 #[allow(unsafe_code)]
@@ -35,5 +36,6 @@ pub mod terminal_lock;
 #[allow(unsafe_code)]
 pub mod terminal_process;
 pub mod terminal_state;
+pub mod user_data;
 pub mod value_coercion;
 pub mod warn_limit;

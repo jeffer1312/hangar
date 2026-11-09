@@ -272,7 +272,9 @@ const DIARY_HARD_CAP: u64 = 8 << 20;
 /// `uso-*.jsonl` da árvore do diário (baixar, últimas linhas, poda dos 7 dias), e cada arquivo fica
 /// com um escritor só: no Windows o append de dois processos no mesmo arquivo se sobrescreve.
 pub fn diary_dir() -> Option<std::path::PathBuf> {
-    if DIARY_OFF.load(std::sync::atomic::Ordering::Relaxed) {
+    if DIARY_OFF.load(std::sync::atomic::Ordering::Relaxed)
+        || hangar_core::process::cargo_test_binary()
+    {
         return None;
     }
     Some(
@@ -295,6 +297,12 @@ pub fn disable_diary() {
 pub fn diary_dir_in(
     env: &crate::accounts::environment::AccountEnvironment,
 ) -> Option<std::path::PathBuf> {
+    // Teste que montou o ambiente com o HOME real não grava no diário da máquina.
+    if hangar_core::process::cargo_test_binary()
+        && std::env::home_dir().is_some_and(|home| home == env.home)
+    {
+        return None;
+    }
     Some(
         crate::runtime::local_policy::log_base_in(env)?
             .join("diario")

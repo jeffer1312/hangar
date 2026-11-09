@@ -8,9 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-/// `~/.hangar/current`: link (symlink no Linux, junction no Windows) para `versions/<v>` ou, no modo
-/// desenvolvedor, para um checkout.
-pub fn current(home: &Path) -> PathBuf { home.join(".hangar").join("current") }
+pub use hangar_core::paths::current;
 
 /// `~/.hangar/current` quando existe, SEM resolver o link: o que se grava fora do Hangar sobrevive à
 /// troca de versão. Senão, a cópia do Hangar acima do binário ou a que o servidor anotou ao subir.

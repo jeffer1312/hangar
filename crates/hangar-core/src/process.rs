@@ -2,6 +2,12 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// Binário de teste: o `cargo test` põe todos em `target/<perfil>/deps/`, e o teste de integração
+/// compila os crates sem `cfg(test)`. Nele nada pode chegar ao que é da máquina real.
+pub fn cargo_test_binary() -> bool {
+    std::env::current_exe().ok().is_some_and(|exe| exe.parent().and_then(|dir| dir.file_name()).is_some_and(|name| name == "deps"))
+}
+
 /// O executável pelo PATH do ambiente da sessão (PATHEXT no Windows: o `hangar-engine` é `.CMD`).
 pub fn resolve_program<'a>(name: &str, env: impl IntoIterator<Item = (&'a String, &'a String)> + Clone) -> Option<PathBuf> {
     let path = Path::new(name);
