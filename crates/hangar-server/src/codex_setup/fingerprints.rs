@@ -188,7 +188,7 @@ pub fn compute(
     projects.sort();
     let desired =
         super::plugin_selection::desired(&settings).map_err(|e| error(e.kind, e.message))?;
-    let claude = ValueGuard(files::object(&env.home.join(".claude.json"))?);
+    let claude = ValueGuard(files::object(&super::stage_sources::mcp_config_path(env))?);
     let mut values = ValueGuard(match phase {
         "instructions" => json!({"projects":projects}),
         "plugins" => json!({"enabled":desired}),

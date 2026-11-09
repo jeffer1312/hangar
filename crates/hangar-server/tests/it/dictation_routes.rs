@@ -59,7 +59,7 @@ pub(crate) async fn organize_text(
     .await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let state = AppState::new(Config {
+    let mut state = AppState::new(Config {
         listen: addr,
         upstream,
         internal_secret: "dictation-secret".into(),
@@ -67,6 +67,9 @@ pub(crate) async fn organize_text(
         log_path: None,
         trusted: TrustedHosts::parse("127.0.0.1"),
     });
+    // O `dictation.timing` do relimpar não pode cair no diário da máquina.
+    let home = tempfile::tempdir().unwrap();
+    state.accounts = super::dictation_timing::isolated_accounts(home.path());
     let router = hangar_server::routes::router(Arc::new(state));
     let server = tokio::spawn(async move {
         axum::serve(
@@ -183,7 +186,7 @@ async fn organize_against(base_url: &str, mode: &str, raw: &str) -> Value {
 async fn post_organize(upstream: std::net::SocketAddr, body: Value) -> Value {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let state = AppState::new(Config {
+    let mut state = AppState::new(Config {
         listen: addr,
         upstream,
         internal_secret: "dictation-secret".into(),
@@ -191,6 +194,8 @@ async fn post_organize(upstream: std::net::SocketAddr, body: Value) -> Value {
         log_path: None,
         trusted: TrustedHosts::parse("127.0.0.1"),
     });
+    let home = tempfile::tempdir().unwrap();
+    state.accounts = super::dictation_timing::isolated_accounts(home.path());
     let router = hangar_server::routes::router(Arc::new(state));
     let server = tokio::spawn(async move {
         axum::serve(

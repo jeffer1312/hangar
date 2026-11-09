@@ -2,6 +2,7 @@ import {
   fileAuthHeader, registrarDiag, relimparDitado, transcribeUploadedForServer, uploadFileForServer, uploadUrlNative, type Server,
 } from '@hangar/core';
 import * as m from '../../paraglide/messages';
+import { failureCode, recordTiming, stageClock } from './clientTiming';
 import { chatStore } from '../../stores/chat';
 import {
   attachDictationPath, finishDictation, keepDictationAudio, readDictation, readDraft, setDictationInFlight, writeDictation,
@@ -42,6 +43,8 @@ const issueOf = (e: unknown) => {
 // estilo: sem o da pílula, o salvo no servidor, e sem leitura dele o padrão do servidor.
 async function organizePieces(server: Server, name: string, voice: DictationDraft, pieces: PiecesHandle) {
   const transcribed = await pieces.result;
+  // Para o diário: quando o último pedaço voltou e quanto a organização levou.
+  const piecesAt = Date.now();
   const raw = transcribed.raw.trim();
   if (!raw) throw new Error('pieces_empty');
   const style = dictationStyleStore(server).getState();
@@ -53,8 +56,12 @@ async function organizePieces(server: Server, name: string, voice: DictationDraf
   if (!text) throw new Error('pieces_organized_empty');
   // Como o `with_provider` do servidor: o aviso da transcrição antes do da organização.
   const aviso = [transcribed.aviso, organized.aviso].filter(Boolean).join(' · ');
-  return { text, raw, aviso, applied: organized.estilo_aplicado ?? estilo };
+  return { text, raw, aviso, applied: organized.estilo_aplicado ?? estilo, count: transcribed.count, piecesAt,
+    organizeMs: Date.now() - piecesAt };
 }
+
+/** Marca no `detalhe` do `dictation.client_timing` do caminho de hoje depois de os pedaços desistirem. */
+const FALLBACK = 'path=pieces_fallback';
 
 // `lost`: o ditado sumiu do armazenamento e a repetição fica só na tela; `storageIssue`: guardar a falha falhou.
 export class DictationError extends Error {
@@ -84,13 +91,17 @@ function notify(serverId: string, name: string): void {
 /**
  * Ditado preso à conversa de origem, fora do ciclo de vida do Composer: trocar de conversa no meio
  * não descarta o resultado. Quem chama já gravou `voice`. `check` roda antes da rede; `isActive`, na
- * chegada, decide se o texto entra no campo aberto ou fica `ready` para a montagem.
+ * chegada, decide se o texto entra no campo aberto ou fica `ready` para a montagem. `stoppedAt` e
+ * `fileAt`: a parada da gravação nova (toque, silêncio, teto ou tela escondida, em `voice.motivo`) e o arquivo
+ * pronto no gravador, para medir cada etapa.
  */
 export async function runDictation(server: Server, serverId: string, name: string, voice: DictationDraft,
-  source: DictationSource, opts: { isActive: () => boolean; check?: () => void }): Promise<DictationOutcome> {
+  source: DictationSource, opts: { isActive: () => boolean; check?: () => void; stoppedAt?: number; fileAt?: number }): Promise<DictationOutcome> {
+  const clock = stageClock();
   setDictationInFlight(serverId, name, voice.id, true);
   notify(serverId, name);
   const pieces = 'file' in source ? source.pieces : null;
+  let fellBack = false;
   try {
     try {
       opts.check?.();
@@ -102,6 +113,8 @@ export async function runDictation(server: Server, serverId: string, name: strin
     let uploaded = '';
     if ('file' in source) {
       // Sobe e guarda o caminho antes de transcrever: transcrição que cai não custa outra cópia.
+      // Com pedaços a subida corre ao lado e só entra na medida se o caminho de hoje voltar a esperar por ela.
+      if (!pieces) clock.enter('upload');
       const upload = uploadFileForServer(server, name, source.file, { audioOnly: true }).then(({ path }) => {
         const pending = readDictation(serverId, name);
         if (pending?.id === voice.id) writeDictation(serverId, name, { ...pending, serverPath: path });
@@ -110,6 +123,8 @@ export async function runDictation(server: Server, serverId: string, name: strin
       if (pieces) {
         // A falha da subida é de quem a espera: o texto dos pedaços não espera por ela.
         upload.catch(() => {});
+        // `transcribe`: a espera do último pedaço e a organização; a subida corre fora da medida.
+        clock.enter('transcribe');
         const organized = await organizePieces(server, name, voice, pieces).catch((e: unknown) => {
           pieces.abort();
           registrarDiag({ evento: 'dictation.pieces_fallback', nivel: 'aviso', codigo: 'pieces_failed',
@@ -118,7 +133,12 @@ export async function runDictation(server: Server, serverId: string, name: strin
         });
         if (organized) {
           const { text, raw, aviso, applied } = organized;
+          clock.enter('finish');
           const completed = finishDictation(serverId, name, voice.id, { text, raw, issue: aviso, applied }, opts.isActive());
+          if (opts.stoppedAt !== undefined) {
+            recordTiming(server, { stoppedAt: opts.stoppedAt, fileAt: opts.fileAt }, clock, voice.motivo, undefined, !!aviso,
+              `path=pieces pieces=${organized.count} last_piece_wait_ms=${organized.piecesAt - opts.stoppedAt} organize_ms=${organized.organizeMs}`);
+          }
           const saved = upload.then(
             (path) => {
               if (!attachDictationPath(serverId, name, voice.id, path)) {
@@ -152,12 +172,16 @@ export async function runDictation(server: Server, serverId: string, name: strin
           saved.catch(() => {});
           return { completed, text, raw, aviso, path: '', applied, saved };
         }
+        fellBack = true;
+        clock.enter('upload');
       }
       uploaded = await upload;
+      clock.enter('save');
       arquivo = uploadName(uploaded);
     } else {
       arquivo = source.arquivo;
     }
+    clock.enter('transcribe');
     const res = await transcribeUploadedForServer(server, name, arquivo, { limpar: true, estilo: voice.estilo });
     const text = res.text.trim();
     if (!text) throw new Error(m.composer_transcricao_vazia());
@@ -166,10 +190,22 @@ export async function runDictation(server: Server, serverId: string, name: strin
     // O nome solto do "de novo" não é caminho: sem `path` na resposta, fica o guardado.
     const path = res.path || uploaded || voice.serverPath || arquivo;
     const applied = res.estilo_aplicado ?? voice.estilo;
+    clock.enter('finish');
     const completed = finishDictation(serverId, name, voice.id,
       { text, raw, issue: aviso, serverPath: path, applied }, opts.isActive());
+    if (opts.stoppedAt !== undefined) {
+      recordTiming(server, { stoppedAt: opts.stoppedAt, fileAt: opts.fileAt }, clock, voice.motivo, undefined, !!aviso,
+        fellBack ? FALLBACK : undefined);
+    }
     return { completed, text, raw, aviso, path, applied };
   } catch (e) {
+    const detail = e instanceof Error ? e.message : m.composer_falha_transcricao();
+    if (opts.stoppedAt !== undefined) {
+      // Na etapa `check` só há a conferência de quem chama: a recusa dela é prevista.
+      const refused = clock.stage === 'check';
+      recordTiming(server, { stoppedAt: opts.stoppedAt, fileAt: opts.fileAt }, clock, voice.motivo,
+        refused ? { code: 'interrupted', expected: true } : { code: failureCode(detail) }, false, fellBack ? FALLBACK : undefined);
+    }
     const issue = issueOf(e);
     let lost = false;
     let storageIssue = '';

@@ -108,13 +108,13 @@ vi.mock('react-native', async () => {
 });
 
 import { requestNotificationPermissionsAsync } from 'expo-audio';
-import { useDitado } from './useDitado';
+import { useDitado, type RecordingStop } from './useDitado';
 import { dictationStyleStore, useDitadoEstiloStore } from './ditadoEstiloStore';
 import { setLiveVoiceAudioActive, useVoiceAudioState } from '../voice/audioSession';
 import type { MotivoFim, Server } from '@hangar/core';
 import type { PiecesHandle } from './livePieces';
 
-function mountHook(opts: { onFim: (f: File, m: MotivoFim, uri: string, pieces?: PiecesHandle | null) => void;
+function mountHook(opts: { onFim: (f: File, m: MotivoFim, uri: string, stop?: RecordingStop, pieces?: PiecesHandle | null) => void;
   onErroParada?: (e: Error) => void; server?: Server | null; pieces?: boolean }) {
   let renders = 0;
   let hook: ReturnType<typeof useDitado> | null = null;
@@ -488,7 +488,9 @@ describe('useDitado — interrupção e origem da gravação', () => {
     const h = mountHook({ onFim });
     await h.mount({ onFim });
     await act(async () => { await h.getHook().iniciar(); });
+    const beforeStop = Date.now();
     await h.unmount();
+    const stopped = Date.now();
     expect(fakeRec.stop).toHaveBeenCalledTimes(1);
     expect(fakeRec.release).not.toHaveBeenCalled();
     expect(useVoiceAudioState.getState().dictations).toBe(1);
@@ -497,7 +499,11 @@ describe('useDitado — interrupção e origem da gravação', () => {
       emitRecordingStatus();
       await delivered.promise;
     });
-    expect(onFim.mock.calls[0]).toEqual([expect.any(File), 'escondeu', 'file://fake.m4a', null]);
+    expect(onFim.mock.calls[0]).toEqual([expect.any(File), 'escondeu', 'file://fake.m4a', { stoppedAt: expect.any(Number), fileAt: expect.any(Number) }, null]);
+    // A parada e o arquivo pronto: `dictation.client_timing` mede entre os dois, como o nativo mede o WAV.
+    const { stoppedAt, fileAt } = (onFim.mock.calls[0] as unknown[])[3] as { stoppedAt: number; fileAt: number };
+    expect(stoppedAt >= beforeStop && stoppedAt <= stopped).toBe(true);
+    expect(fileAt >= stoppedAt && fileAt <= Date.now()).toBe(true);
     expect(fakeRec.release).toHaveBeenCalledTimes(1);
 
   });
@@ -949,7 +955,7 @@ describe('useDitado — iPhone em WAV e pedaços durante a fala', () => {
     await act(async () => { vi.advanceTimersByTime(16_000); });
     await act(async () => { await h.getHook().parar('botao'); });
     expect(transcribePiece).not.toHaveBeenCalled();
-    const [file, , , pieces] = onFim.mock.calls[0];
+    const [file, , , , pieces] = onFim.mock.calls[0];
     expect((file as File).name).toBe('ditado.m4a');
     expect(pieces ?? null).toBeNull();
     await h.unmount();
@@ -961,7 +967,7 @@ describe('useDitado — iPhone em WAV e pedaços durante a fala', () => {
     await act(async () => { vi.advanceTimersByTime(6_000); });
     await act(async () => { await h.getHook().parar('botao'); });
     expect(transcribePiece).not.toHaveBeenCalled();
-    expect(onFim.mock.calls[0][3] ?? null).toBeNull();
+    expect(onFim.mock.calls[0][4] ?? null).toBeNull();
     await h.unmount();
   });
 
@@ -974,7 +980,7 @@ describe('useDitado — iPhone em WAV e pedaços durante a fala', () => {
     await act(async () => { vi.advanceTimersByTime(6_000); });
     await act(async () => { await h.getHook().parar('botao'); });
     expect(transcribePiece).toHaveBeenCalledTimes(2);
-    const pieces = onFim.mock.calls[0][3] as PiecesHandle;
+    const pieces = onFim.mock.calls[0][4] as PiecesHandle;
     await expect(pieces.result).resolves.toMatchObject({ raw: 'pedaço pedaço' });
     expect(wavFile.closed).toBe(wavFile.opened);
     await h.unmount();
@@ -991,7 +997,7 @@ describe('useDitado — iPhone em WAV e pedaços durante a fala', () => {
     await act(async () => { changeAppState('active'); vi.advanceTimersByTime(6_000); });
     await act(async () => { await h.getHook().parar('botao'); });
     expect(transcribePiece).toHaveBeenCalledTimes(1);
-    expect(onFim.mock.calls[0][3] ?? null).toBeNull();
+    expect(onFim.mock.calls[0][4] ?? null).toBeNull();
     expect(recordDiagnostic).toHaveBeenCalledWith(expect.objectContaining({ evento: 'dictation.pieces_fallback', codigo: 'background' }), undefined);
     await h.unmount();
   });
@@ -1006,7 +1012,7 @@ describe('useDitado — iPhone em WAV e pedaços durante a fala', () => {
     await act(async () => { vi.advanceTimersByTime(16_000); });
     await act(async () => { await h.getHook().parar('botao'); });
     expect(transcribePiece).not.toHaveBeenCalled();
-    expect(onFim.mock.calls[0][3] ?? null).toBeNull();
+    expect(onFim.mock.calls[0][4] ?? null).toBeNull();
     expect((onFim.mock.calls[0][0] as File).name).toBe('ditado.m4a');
     await h.unmount();
   });
@@ -1019,7 +1025,7 @@ describe('useDitado — iPhone em WAV e pedaços durante a fala', () => {
     await act(async () => { vi.advanceTimersByTime(16_000); });
     await act(async () => { await h.getHook().parar('botao'); });
     expect(transcribePiece).not.toHaveBeenCalled();
-    expect(onFim.mock.calls[0][3] ?? null).toBeNull();
+    expect(onFim.mock.calls[0][4] ?? null).toBeNull();
     expect((onFim.mock.calls[0][0] as File).name).toBe('ditado.m4a');
     await h.unmount();
   });

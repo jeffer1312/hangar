@@ -4,11 +4,13 @@
 # liberacao cala o aviso; a de bloqueio nao.
 # Arquivo so em ASCII: o PowerShell 5.1 le sem BOM como cp1252.
 #
-# Sem admin pede o UAC uma vez e espera ate 2 min. Nunca falha: passo que falha derruba o Atualizar
-# inteiro. UAC recusado ou sem resposta fica escrito na marca e na saida.
-# Uso: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/open-firewall.ps1 [-Ports 8765,8766] [-Check]
+# Sem admin pede o UAC uma vez. Nunca falha: passo que falha derruba o Atualizar inteiro. UAC
+# recusado, sem resposta ou pulado fica escrito na marca e na saida.
+# Uso: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/open-firewall.ps1 [-Ports 8765,8766] [-Check] [-NoPrompt]
 # -Check so confere: sai com o numero de portas ainda sem regra.
-param([int[]]$Ports = @(8765, 8766), [switch]$Check)
+# -NoPrompt nunca pede UAC: o da atualizacao vem de processo escondido, so pisca na barra de tarefas,
+# e o Start-Process fica preso esperando a resposta ate o passo estourar o prazo.
+param([int[]]$Ports = @(8765, 8766), [switch]$Check, [switch]$NoPrompt)
 $ErrorActionPreference = 'Continue'
 $marca = Join-Path $HOME '.hangar\firewall-ports'
 
@@ -36,6 +38,8 @@ if ($faltam.Count -gt 0) {
         [Security.Principal.WindowsBuiltInRole]::Administrator)
     if ($admin) {
         try { & ([scriptblock]::Create($cmd)) } catch { Write-Host "firewall: $($_.Exception.Message)" }
+    } elseif ($NoPrompt) {
+        Write-Host "firewall: sem admin e sem UAC (-NoPrompt); porta(s) $($faltam -join ', ') ficam pendentes"
     } else {
         Write-Host "firewall: pedindo o UAC para liberar a(s) porta(s) $($faltam -join ', ')"
         try {
@@ -48,8 +52,11 @@ if ($faltam.Count -gt 0) {
     $faltam = Missing
 }
 
+# A pasta da versao some na poda; no pacote o caminho estavel e o current.
+$fw = $PSCommandPath
+if ($fw -like (Join-Path $HOME '.hangar\versions\*')) { $fw = Join-Path $HOME '.hangar\current\scripts\open-firewall.ps1' }
 $texto = if ($faltam.Count -eq 0) { "liberadas: $($Ports -join ', ')" } else {
-    "sem regra: $($faltam -join ', ') - num PowerShell como admin: powershell -ExecutionPolicy Bypass -File scripts\open-firewall.ps1"
+    "sem regra: $($faltam -join ', ') - num PowerShell como admin: powershell -ExecutionPolicy Bypass -File `"$fw`""
 }
 Write-Host "firewall: $texto"
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $marca) | Out-Null

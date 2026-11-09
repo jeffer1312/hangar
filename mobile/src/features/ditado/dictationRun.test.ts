@@ -1,8 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DictationDraft } from '../../stores/drafts';
 
 const { memory, core } = vi.hoisted(() => ({ memory: new Map<string, string>(),
-  core: { transcribe: vi.fn(), upload: vi.fn(), relimpar: vi.fn() } }));
+  core: { transcribe: vi.fn(), upload: vi.fn(), relimpar: vi.fn(), diag: vi.fn() } }));
 vi.mock('react-native-mmkv', () => ({
   createMMKV: () => ({
     getString: (key: string) => memory.get(key),
@@ -15,12 +15,12 @@ vi.mock('@hangar/core', async (original) => ({
   transcribeUploadedForServer: core.transcribe,
   uploadFileForServer: core.upload,
   relimparDitado: core.relimpar,
+  registrarDiag: core.diag,
 }));
 vi.mock('../../stores/chat', () => ({ chatStore: () => ({ use: { setState: () => {} } }) }));
 // expo-file-system não carrega no node; a galeria só apaga a cópia local do ditado substituído.
 vi.mock('../../chat/draftAttachments', () => ({ removeDraftAttachment: vi.fn() }));
 
-import { configureDiag } from '@hangar/core';
 import { applyReadyDictation, readDictation, readDraft, recoverDictation, setDictationInFlight, writeDictation, writeDraft } from '../../stores/drafts';
 import { dictateUpload, dictationAudio, runDictation } from './dictationRun';
 import { removeDraftAttachment } from '../../chat/draftAttachments';
@@ -77,20 +77,20 @@ describe('runDictation com pedaços', () => {
     const promise = new Promise<T>((ok, fail) => { resolve = ok; reject = fail; });
     return { promise, resolve, reject };
   };
-  const pieces = (result: Promise<PiecesText>) => {
+  const pieces = (text: Promise<Omit<PiecesText, 'count'>>) => {
+    const result = text.then((r) => ({ count: 1, ...r }));
     result.catch(() => {});
     return { result, abort: vi.fn<() => void>() } satisfies PiecesHandle;
   };
   const wav = () => new File(['RIFF'], 'ditado.wav', { type: 'audio/wav' });
   const draft = () => writeDraft('s1', 'sess', { version: 1, text: '', revision: 0, transcript: null, attachments: [], submission: null });
 
-  const diag = vi.fn();
+  const diag = core.diag;
   beforeEach(() => {
     memory.clear(); core.transcribe.mockReset(); core.upload.mockReset(); core.relimpar.mockReset();
     vi.mocked(removeDraftAttachment).mockClear();
     useDictationOrganizationStore.setState({ byServer: {} });
-    diag.mockClear();
-    configureDiag({ registrar: diag, novoReq: () => '' });
+    diag.mockReset();
   });
   const localCopy = 'file:///doc/draft-attachments/1-1.m4a';
 
@@ -133,7 +133,7 @@ describe('runDictation com pedaços', () => {
     await out.saved;
     expect(readDraft('s1', 'sess')?.recordings).toEqual([]);
     expect(removeDraftAttachment).toHaveBeenCalledExactlyOnceWith(localCopy);
-    expect(diag).toHaveBeenCalledWith(expect.objectContaining({ evento: 'dictation.audio_unattached' }), undefined);
+    expect(diag).toHaveBeenCalledWith(expect.objectContaining({ evento: 'dictation.audio_unattached' }));
   });
 
   it('subida que falha com o texto já no campo: o áudio fica no aparelho, guardado com o ditado e tocável', async () => {
@@ -150,7 +150,7 @@ describe('runDictation com pedaços', () => {
     expect(kept).toMatchObject({ id: 'v1', status: 'applied', text: 'ok', audio: { uri: localCopy } });
     expect(dictationAudio(server, 'sess', kept!.audio, kept!.serverPath)?.uri).toBe(localCopy);
     expect(removeDraftAttachment).not.toHaveBeenCalled();
-    expect(diag).toHaveBeenCalledWith(expect.objectContaining({ evento: 'dictation.upload_failed' }), undefined);
+    expect(diag).toHaveBeenCalledWith(expect.objectContaining({ evento: 'dictation.upload_failed' }));
   });
 
   it('subida que falha com o ditado ainda para recuperar: o áudio fica e o Recuperar ainda funciona', async () => {
@@ -243,6 +243,103 @@ describe('runDictation com pedaços', () => {
       { isActive: () => false, check: () => { throw new Error('interrompido'); } })).rejects.toThrow('interrompido');
     expect(handle.abort).toHaveBeenCalled();
     expect(core.upload).not.toHaveBeenCalled();
+  });
+});
+
+describe('dictation.client_timing', () => {
+  beforeEach(() => {
+    memory.clear(); core.transcribe.mockReset(); core.upload.mockReset(); core.diag.mockReset();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(10_000);
+  });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('mede cada etapa até o texto (arquivo, preparo, conferência, subida, gravação, transcrição, fechamento) e o motivo', async () => {
+    core.upload.mockImplementationOnce(async () => { vi.setSystemTime(10_250); return { path: '/up/sess/d.m4a' }; });
+    core.transcribe.mockImplementationOnce(async () => { vi.setSystemTime(11_250); return { path: '/up/sess/d.m4a', text: 'olá', raw: 'olá' }; });
+    writeDictation('s1', 'sess', voice({ motivo: 'silencio' }));
+    await runDictation(server, 's1', 'sess', voice({ motivo: 'silencio' }), { file: new File(['a'], 'd.m4a') }, {
+      check: () => vi.setSystemTime(10_050),
+      isActive: () => { vi.setSystemTime(11_330); return false; },
+      stoppedAt: 9_700, fileAt: 9_900,
+    });
+    expect(core.diag).toHaveBeenCalledExactlyOnceWith({ evento: 'dictation.client_timing', nivel: 'ok', ms: 1630, motivo: 'silencio',
+      detalhe: 'stop_to_file_ms=200 prepare_ms=100 check_ms=50 upload_ms=200 save_ms=0 transcribe_ms=1000 finish_ms=80 total_ms=1630' },
+    'https://a.test');
+  });
+
+  it('pedaços: mede a espera do último pedaço e a organização, sem esperar a subida, com a marca do caminho', async () => {
+    core.upload.mockReturnValueOnce(new Promise(() => {}));
+    core.relimpar.mockImplementationOnce(async () => { vi.setSystemTime(11_000); return { text: 'Olá.', aviso: null, estilo_aplicado: 'prosa' }; });
+    const result = Promise.resolve().then(() => { vi.setSystemTime(10_600); return { raw: 'olá', aviso: '', count: 2 }; });
+    const v = voice({ estilo: 'prosa', motivo: 'silencio' });
+    writeDictation('s1', 'sess', v);
+    await runDictation(server, 's1', 'sess', v, { file: new File(['a'], 'd.wav'), pieces: { result, abort: vi.fn() } }, {
+      isActive: () => { vi.setSystemTime(11_050); return false; }, stoppedAt: 9_700, fileAt: 9_900,
+    });
+    expect(core.diag).toHaveBeenCalledExactlyOnceWith({ evento: 'dictation.client_timing', nivel: 'ok', ms: 1350, motivo: 'silencio',
+      detalhe: 'stop_to_file_ms=200 prepare_ms=100 check_ms=0 upload_ms=0 save_ms=0 transcribe_ms=1000 finish_ms=50 total_ms=1350 '
+        + 'path=pieces pieces=2 last_piece_wait_ms=900 organize_ms=400' },
+    'https://a.test');
+  });
+
+  it('pedaços que desistem: o caminho de hoje mede as etapas dele e leva a marca da volta', async () => {
+    core.upload.mockResolvedValueOnce({ path: '/up/sess/d.wav' });
+    core.transcribe.mockResolvedValueOnce({ path: '/up/sess/d.wav', text: 'ok', raw: 'ok' });
+    const result = Promise.reject(new Error('503: provedor fora'));
+    result.catch(() => {});
+    const v = voice({ estilo: 'prosa' });
+    writeDictation('s1', 'sess', v);
+    await runDictation(server, 's1', 'sess', v, { file: new File(['a'], 'd.wav'), pieces: { result, abort: vi.fn() } },
+      { isActive: () => false, stoppedAt: 10_000 });
+    expect(core.diag).toHaveBeenCalledWith(expect.objectContaining({ evento: 'dictation.client_timing', nivel: 'ok',
+      detalhe: expect.stringMatching(/upload_ms=\d+ .* total_ms=\d+ path=pieces_fallback$/) }), 'https://a.test');
+  });
+
+  it('a falha diz em que etapa parou: o tempo antes da subida não vira subida', async () => {
+    core.upload.mockImplementationOnce(async () => { vi.setSystemTime(10_300); throw new Error('rede caiu'); });
+    writeDictation('s1', 'sess', voice());
+    await expect(runDictation(server, 's1', 'sess', voice(), { file: new File(['a'], 'd.m4a') }, {
+      check: () => vi.setSystemTime(10_100), isActive: () => false, stoppedAt: 10_000,
+    })).rejects.toThrow();
+    expect(core.diag).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ nivel: 'erro', codigo: 'failed', etapa: 'upload', motivo: 'botao',
+      detalhe: 'stop_to_file_ms=0 prepare_ms=0 check_ms=100 upload_ms=200 save_ms=0 transcribe_ms=0 finish_ms=0 total_ms=300' }),
+    'https://a.test');
+  });
+
+  it('a conferência que recusa antes da rede (app escondido, outra conversa) é aviso, não erro', async () => {
+    writeDictation('s1', 'sess', voice());
+    await expect(runDictation(server, 's1', 'sess', voice(), { file: new File(['a'], 'd.m4a') }, {
+      check: () => { vi.setSystemTime(10_020); throw new Error('outra conversa'); }, isActive: () => false, stoppedAt: 10_000,
+    })).rejects.toThrow();
+    expect(core.upload).not.toHaveBeenCalled();
+    expect(core.diag).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ nivel: 'aviso', codigo: 'interrupted', etapa: 'check',
+      detalhe: 'stop_to_file_ms=0 prepare_ms=0 check_ms=20 upload_ms=0 save_ms=0 transcribe_ms=0 finish_ms=0 total_ms=20' }),
+    'https://a.test');
+  });
+
+  it('texto que voltou cru com aviso sai como aviso, igual ao servidor', async () => {
+    core.upload.mockResolvedValueOnce({ path: '/up/sess/d.m4a' });
+    core.transcribe.mockResolvedValueOnce({ path: '/up/sess/d.m4a', text: 'cru', raw: 'cru', aviso: 'organização falhou' });
+    writeDictation('s1', 'sess', voice());
+    await runDictation(server, 's1', 'sess', voice(), { file: new File(['a'], 'd.m4a') }, { isActive: () => false, stoppedAt: 10_000 });
+    expect(core.diag).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ evento: 'dictation.client_timing', nivel: 'aviso' }), 'https://a.test');
+  });
+
+  it('a falha leva o status como código; o "de novo", sem parada, não mede', async () => {
+    core.upload.mockResolvedValueOnce({ path: '/up/sess/d.m4a' });
+    core.transcribe.mockImplementationOnce(async () => { vi.setSystemTime(10_400); throw new Error('502: groq'); });
+    writeDictation('s1', 'sess', voice());
+    await expect(runDictation(server, 's1', 'sess', voice(), { file: new File(['a'], 'd.m4a') }, { isActive: () => false, stoppedAt: 9_900 }))
+      .rejects.toThrow();
+    expect(core.diag).toHaveBeenCalledExactlyOnceWith({ evento: 'dictation.client_timing', nivel: 'erro', codigo: '502', ms: 500,
+      etapa: 'transcribe', motivo: 'botao',
+      detalhe: 'stop_to_file_ms=100 prepare_ms=0 check_ms=0 upload_ms=0 save_ms=0 transcribe_ms=400 finish_ms=0 total_ms=500' },
+    'https://a.test');
+    core.diag.mockReset();
+    core.transcribe.mockResolvedValueOnce({ path: '/up/sess/d.m4a', text: 'ok' });
+    await runDictation(server, 's1', 'sess', voice({ audio: null }), { arquivo: 'd.m4a' }, { isActive: () => false });
+    expect(core.diag).not.toHaveBeenCalled();
   });
 });
 

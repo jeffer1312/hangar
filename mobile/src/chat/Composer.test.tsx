@@ -14,7 +14,8 @@ const h = vi.hoisted(() => ({
   listeners: [] as ((state: string) => void)[],
   server: { id: 'srv', label: 'server', baseUrl: 'https://example.test', token: 'token' } as Server,
   start: vi.fn(),
-  onFinish: null as null | ((file: File, reason: MotivoFim, uri: string, pieces?: { result: Promise<unknown>; abort: () => void } | null) => Promise<void>),
+  onFinish: null as null | ((file: File, reason: MotivoFim, uri: string, stop?: { stoppedAt: number; fileAt: number },
+    pieces?: { result: Promise<unknown>; abort: () => void } | null) => Promise<void>),
   transcribe: vi.fn(),
   navigation: { addListener: () => () => {}, isFocused: () => true },
 }));
@@ -217,7 +218,7 @@ describe('Composer — ditado', () => {
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="record"]')!.click());
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="cancel-recording"]')!.click());
     const pieces = { result: new Promise<never>(() => {}), abort: vi.fn() };
-    await act(async () => h.onFinish!(new File(['audio'], 'ditado.wav', { type: 'audio/wav' }), 'botao', 'file:///ditado.wav', pieces));
+    await act(async () => h.onFinish!(new File(['audio'], 'ditado.wav', { type: 'audio/wav' }), 'botao', 'file:///ditado.wav', undefined, pieces));
     expect(pieces.abort).toHaveBeenCalled();
     expect(h.transcribe).not.toHaveBeenCalled();
   });
@@ -234,7 +235,7 @@ describe('Composer — ditado', () => {
     const { container } = await mount();
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="record"]')!.click());
     const pieces = { result: Promise.resolve({ raw: 'texto dos pedaços', aviso: '' }), abort: vi.fn() };
-    await act(async () => h.onFinish!(new File(['audio'], 'ditado.wav', { type: 'audio/wav' }), 'botao', 'file:///ditado.wav', pieces));
+    await act(async () => h.onFinish!(new File(['audio'], 'ditado.wav', { type: 'audio/wav' }), 'botao', 'file:///ditado.wav', undefined, pieces));
     expect(h.transcribe.mock.calls[0][4]).toMatchObject({ pieces });
     expect(readDraft('srv', 'sess')?.text).toBe('Texto dos pedaços');
     expect(container.textContent).toContain('413: grande demais');
@@ -253,7 +254,7 @@ describe('Composer — ditado', () => {
     });
     const { container } = await mount();
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="record"]')!.click());
-    await act(async () => h.onFinish!(new File(['audio'], 'ditado.wav', { type: 'audio/wav' }), 'botao', 'file:///ditado.wav',
+    await act(async () => h.onFinish!(new File(['audio'], 'ditado.wav', { type: 'audio/wav' }), 'botao', 'file:///ditado.wav', undefined,
       { result: Promise.resolve({ raw: 'texto dos pedaços', aviso: '' }), abort: vi.fn() }));
     expect(container.textContent).toContain('organização parcial');
     await act(async () => { failUpload(new Error('413: grande demais')); });
@@ -274,7 +275,7 @@ describe('Composer — ditado', () => {
     });
     const { container, root } = await mount();
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="record"]')!.click());
-    await act(async () => h.onFinish!(new File(['audio'], 'ditado.wav', { type: 'audio/wav' }), 'botao', 'file:///ditado.wav',
+    await act(async () => h.onFinish!(new File(['audio'], 'ditado.wav', { type: 'audio/wav' }), 'botao', 'file:///ditado.wav', undefined,
       { result: Promise.resolve({ raw: 'texto', aviso: '' }), abort: vi.fn() }));
     await act(async () => root.render(null));
     await act(async () => { failUpload(new Error('413: grande demais')); });

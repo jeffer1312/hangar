@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react';
-import { Pressable, Text } from 'react-native';
+import type { ReactElement, ReactNode } from 'react';
+import { Pressable, Text, type RefreshControlProps } from 'react-native';
 import { Stack } from 'expo-router';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { StyleSheet } from 'react-native-unistyles';
@@ -7,10 +7,11 @@ import { Pagina } from '../config/Pagina';
 import { useSettingsColors } from '../config/colors';
 import * as m from '../../paraglide/messages';
 
-export function MachinePage({ title, children, save }: {
+export function MachinePage({ title, children, save, refreshControl }: {
   title: string;
   children: ReactNode;
   save?: { onPress: () => void; disabled: boolean; busy?: boolean };
+  refreshControl?: ReactElement<RefreshControlProps>;
 }) {
   const c = useSettingsColors();
   return <>
@@ -22,7 +23,7 @@ export function MachinePage({ title, children, save }: {
       </Text>
     </Pressable> : undefined }} />
     <KeyboardAvoidingView automaticOffset behavior="padding" style={{ flex: 1 }}>
-      <Pagina>{children}</Pagina>
+      <Pagina refreshControl={refreshControl}>{children}</Pagina>
     </KeyboardAvoidingView>
   </>;
 }

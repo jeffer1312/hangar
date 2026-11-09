@@ -37,13 +37,14 @@ const backgroundRecording = () => Platform.OS === 'ios'
 // O tipo do áudio não resolve a base quando o core do Expo fica aninhado no SDK.
 type ManagedRecorder = AudioRecorder & InstanceType<SharedObject<RecordingEvents>>;
 
-const M4A_OPTIONS: RecordingOptions = { ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true };
+// Montadas na hora de gravar, como antes: ler as constantes do expo-audio ao importar o módulo quebra quem só o importa.
+const m4aOptions = (): RecordingOptions => ({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
 // iPhone: PCM16 16 kHz mono num WAV que o gravador escreve aos poucos e dá para ler enquanto cresce.
-const WAV_OPTIONS: RecordingOptions = {
-  ...M4A_OPTIONS, extension: '.wav', sampleRate: 16000, numberOfChannels: 1, bitRate: 256000,
+const wavOptions = (): RecordingOptions => ({
+  ...m4aOptions(), extension: '.wav', sampleRate: 16000, numberOfChannels: 1, bitRate: 256000,
   ios: { extension: '.wav', outputFormat: IOSOutputFormat.LINEARPCM, audioQuality: AudioQuality.MAX, sampleRate: 16000,
     linearPCMBitDepth: 16, linearPCMIsBigEndian: false, linearPCMIsFloat: false },
-};
+});
 
 function openGrowingFile(uri: string): GrowingFile {
   const handle = new FsFile(uri).open(FileMode.ReadOnly);
@@ -54,9 +55,12 @@ function openGrowingFile(uri: string): GrowingFile {
   };
 }
 
+export interface RecordingStop { stoppedAt: number; fileAt: number }
+
 interface Opts {
-  /** `pieces`: pedaços já transcritos durante a fala (só iPhone, só com `pieces` ligado); `null` = caminho de hoje. */
-  onFim: (file: File, motivo: MotivoFim, uri: string, pieces: PiecesHandle | null) => void;
+  /** `stop`: quando a parada começou e quando o arquivo ficou pronto (`Date.now()`), para medir até o texto.
+   *  `pieces`: pedaços já transcritos durante a fala (só iPhone, só com `pieces` ligado); `null` = caminho de hoje. */
+  onFim: (file: File, motivo: MotivoFim, uri: string, stop: RecordingStop, pieces: PiecesHandle | null) => void;
   onErroParada?: (e: Error) => void;
   /** Máquina da conversa: o teto da gravação é o configurado nela. */
   server?: Server | null;
@@ -145,6 +149,7 @@ export function useDitado({ onFim, onErroParada, server, pieces: piecesWanted = 
       // A preparação pendente termina antes de liberar o objeto nativo.
       if (recording.phase !== 'recording' || !recording.recorder) return Promise.resolve();
       const recorder = recording.recorder;
+      const stoppedAt = Date.now();
       recording.phase = 'stopping';
       limparTimers();
       recording.stopping = (async () => {
@@ -167,9 +172,10 @@ export function useDitado({ onFim, onErroParada, server, pieces: piecesWanted = 
           if (recording.error) throw recording.error;
           const file = recording.wav ? new File([blob], 'ditado.wav', { type: 'audio/wav' })
             : new File([blob], 'ditado.m4a', { type: 'audio/m4a' });
+          const fileAt = Date.now();
           // Gravação parada: o arquivo está completo e o resto sai daqui.
           const pieces = recording.pieces?.finish() ?? null;
-          recording.onFim(file, recording.reason ?? motivo, uri, pieces);
+          recording.onFim(file, recording.reason ?? motivo, uri, { stoppedAt, fileAt }, pieces);
         } catch (e) {
           reportRecordingError(recording, e);
         } finally {
@@ -256,7 +262,7 @@ export function useDitado({ onFim, onErroParada, server, pieces: piecesWanted = 
       const prepare = async (): Promise<ManagedRecorder> => {
         if (Platform.OS === 'ios' && piecesServer) {
           try {
-            const wav = create(WAV_OPTIONS);
+            const wav = create(wavOptions());
             await wav.prepareToRecordAsync();
             recording.wav = true;
             return wav;
@@ -269,7 +275,7 @@ export function useDitado({ onFim, onErroParada, server, pieces: piecesWanted = 
             recording.recorder = null;
           }
         }
-        const created = create(M4A_OPTIONS);
+        const created = create(m4aOptions());
         await created.prepareToRecordAsync();
         return created;
       };

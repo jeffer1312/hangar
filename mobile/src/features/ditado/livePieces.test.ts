@@ -127,7 +127,7 @@ describe('startLivePieces', () => {
     expect(pcmSpan(calls[1].wav)).toEqual({ firstMs: 9185 % 251, ms: end + 120 - 9185 });
     calls[1].resolve({ raw: ' Não sei o que fazer ', provider: 'Groq' });
     calls[0].resolve({ raw: 'ela trava', provider: 'Groq', aviso: 'reserva usada' });
-    await expect(handle.result).resolves.toEqual({ raw: 'ela trava. Não sei o que fazer', aviso: 'reserva usada', provider: 'Groq' });
+    await expect(handle.result).resolves.toEqual({ raw: 'ela trava. Não sei o que fazer', aviso: 'reserva usada', provider: 'Groq', count: 2 });
   });
 
   it('final curto: o último pedaço é cancelado e reenviado junto com o resto', async () => {

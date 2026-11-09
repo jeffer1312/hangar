@@ -21,7 +21,8 @@ export interface GrowingFile {
   close(): void;
 }
 
-export interface PiecesText { raw: string; aviso: string; provider?: string }
+/** `count`: pedaços transcritos (os de pouca voz não contam). */
+export interface PiecesText { raw: string; aviso: string; provider?: string; count: number }
 /** Pedaços entregues ao parar. `abort` cancela os que ainda estão em voo. */
 export interface PiecesHandle { result: Promise<PiecesText>; abort(): void }
 
@@ -195,7 +196,7 @@ export function startLivePieces(opts: {
           if (r.provider) provider = r.provider;
           if (r.aviso && !avisos.includes(r.aviso)) avisos.push(r.aviso);
         }
-        return { raw: joinDictationPieces(texts), aviso: avisos.join(' · '), ...(provider ? { provider } : {}) };
+        return { raw: joinDictationPieces(texts), aviso: avisos.join(' · '), count: replies.length, ...(provider ? { provider } : {}) };
       })();
       // Quem recebe decide; sem isto, um resultado ignorado (cancelar) vira rejeição solta.
       result.catch(() => {});
