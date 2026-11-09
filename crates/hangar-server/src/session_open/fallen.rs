@@ -155,7 +155,10 @@ pub async fn reopen_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): Co
         Ok(Err(code)) if code == "erro_nome_em_uso" =>
             answer(&headers, StatusCode::CONFLICT, detail_body(&code, "já existe uma sessão com esse nome", json!({}))),
         Ok(Err(code)) => answer(&headers, StatusCode::UNPROCESSABLE_ENTITY, detail_body(&code, "a sessão não reabriu", json!({}))),
-        Err(_) => answer(&headers, StatusCode::INTERNAL_SERVER_ERROR, detail_body("restore_open_failed", "a sessão não reabriu", json!({}))),
+        Err(error) => {
+            tracing::error!(code = "restore_open_failed", %error, session = %name, "a reabertura da sessão caída parou no meio");
+            answer(&headers, StatusCode::INTERNAL_SERVER_ERROR, detail_body("restore_open_failed", "a sessão não reabriu", json!({})))
+        }
     }
 }
 
@@ -199,8 +202,11 @@ async fn journal(unit: &str) -> Option<String> {
     let run = tokio::process::Command::new("journalctl")
         .args(["--user", "-u", unit, "-o", "cat", "-n", "20", "--no-pager"])
         .stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).kill_on_drop(true).output();
-    let out = tokio::time::timeout(Duration::from_secs(2), run).await.ok()?.ok()?;
-    Some(String::from_utf8_lossy(&out.stdout).into_owned())
+    match tokio::time::timeout(Duration::from_secs(2), run).await {
+        Ok(Ok(out)) => Some(String::from_utf8_lossy(&out.stdout).into_owned()),
+        Ok(Err(error)) => { tracing::warn!(code = "fallen_journal_failed", %error, %unit, "journalctl não rodou"); None }
+        Err(_) => { tracing::warn!(code = "fallen_journal_timeout", %unit, "journalctl passou de 2 s"); None }
+    }
 }
 
 /// O systemd grava o `Failed with result` segundos depois de matar o escopo (4 s no oomd de 06/11).
@@ -216,6 +222,7 @@ pub async fn cause(unit: &str) -> Option<String> {
         if text.contains(": Consumed ") { return None; }
         if attempt + 1 < JOURNAL_TRIES { tokio::time::sleep(JOURNAL_GAP).await; }
     }
+    tracing::warn!(code = "fallen_journal_silent", %unit, "o journal não disse como a unidade acabou; a sessão não fica na lista");
     None
 }
 

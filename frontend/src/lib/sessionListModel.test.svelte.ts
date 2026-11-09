@@ -532,7 +532,28 @@ describe('sessão caída: reabrir e dispensar', () => {
     expect(await d.reopen('s', 'srv-b')).toBe('');
     expect(vi.mocked(reopenFallenSession).mock.calls[0]).toEqual(['s', expect.objectContaining({ id: 'srv-b' })]);
     expect(selectServer).not.toHaveBeenCalled();
-    expect(d.reopenBusy).toBe('');
+    expect(d.isReopening('s', 'srv-b')).toBe(false);
+  });
+  it('reabrindo A e B, o fim de A não libera o segundo toque em B', async () => {
+    let soltaA = () => {};
+    vi.mocked(reopenFallenSession).mockImplementation((name) => name === 'a'
+      ? new Promise((ok) => { soltaA = () => ok({ ok: true }); }) : new Promise(() => {}));
+    const d = createSessionListModel(opts('desktop'));
+    const a = d.reopen('a', 'srv-b');
+    void d.reopen('b', 'srv-b');
+    soltaA();
+    await a;
+    expect(await d.reopen('b', 'srv-b')).toBe('');
+    expect(vi.mocked(reopenFallenSession).mock.calls.map((c) => c[0])).toEqual(['a', 'b']);
+    expect(d.isReopening('b', 'srv-b')).toBe(true);
+  });
+  it('dispensar não mexe no diálogo de exclusão de outra sessão', async () => {
+    vi.mocked(deleteSession).mockResolvedValue({ ok: true, warning: null });
+    const d = createSessionListModel(opts('desktop'));
+    d.requestDelete('outra', 'srv-b');
+    await d.dismiss('s', 'srv-b');
+    expect(d.confirmDel).toEqual({ name: 'outra', serverId: 'srv-b', state: null });
+    expect(deleteSession).toHaveBeenCalledWith('s');
   });
   it('reabrir com erro devolve a mensagem do servidor', async () => {
     vi.mocked(reopenFallenSession).mockRejectedValue(new Error('nome em uso'));

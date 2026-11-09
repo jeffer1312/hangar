@@ -161,8 +161,8 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
   const loop = loopBadge(s.loop_status, s.loop_iter, s.loop_max);
   const pendingQuestions = s.pending_questions ?? 0;
   const reply = s.state === 'idle' ? s.last_reply : null;
-  const fallen = isFallenSession(s) ? problemLabel(s.problema) : null;
-  const sub = fallen ?? s.question ?? (s.state === 'working' ? s.label : reply) ?? null;
+  const fallen = isFallenSession(s);
+  const sub = (fallen ? problemLabel(s.problema) : null) ?? s.question ?? (s.state === 'working' ? s.label : reply) ?? null;
   const engineLabel = !orq && s.provider === 'claude' ? s.engine : null;
   const providerLabel = orq ? null : [providerName(s.provider), engineLabel].filter(Boolean).join(', ');
   const legacy = accountChip(s.conta);

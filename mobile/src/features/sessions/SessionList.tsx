@@ -238,10 +238,12 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
     (s: AggSession) =>
       comServidor(s, () => {
         useSessions.getState().markDeleting(s.serverId, s.name);
-        deleteSession(s.name).catch((e: unknown) => {
-          useSessions.getState().unmarkDeleting(s.serverId, s.name);
-          toast.erro(mensagemDe(e));
-        });
+        deleteSession(s.name)
+          .then((r) => { if (r.warning) toast.erro(formataErro(r.warning) ?? String(r.warning)); })
+          .catch((e: unknown) => {
+            useSessions.getState().unmarkDeleting(s.serverId, s.name);
+            toast.erro(mensagemDe(e));
+          });
       }),
     [comServidor],
   );

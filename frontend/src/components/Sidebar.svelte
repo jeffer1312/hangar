@@ -1057,7 +1057,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                 <button
                   class="sess-resume"
                   onclick={(e) => handleReopen(s.name, s.serverId, e)}
-                  disabled={model.reopenBusy === s.name}
+                  disabled={model.isReopening(s.name, s.serverId)}
                   aria-label={`${m.sessao_reabrir()} ${s.name}`}
                   title={m.sessao_reabrir()}
                 >
