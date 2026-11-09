@@ -132,7 +132,7 @@ pub enum Effect {
     StateChanged,
     /// Interface dos mods (superfície remota): quadro fora do diário, publicação, aviso e resposta aos apps.
     Surface { effect: crate::mods::model::SurfaceEffect },
-    /// Linha no diário exportável (`/internal/diag`), uma por minuto por código.
+    /// Linha no diário local exportável, uma por minuto por código.
     Diag { event: DiagEvent, code: String },
     Stop { reason: String },
     /// O processo da sessão sobe de novo na mesma conversa (reiniciar, trocar o sandbox). Quem sobe é
@@ -199,6 +199,8 @@ pub struct LiveState {
     pub binding: Option<crate::interactions::InteractionBinding>,
     pub public_state: Value,
     pub preview: String,
+    /// Sem valor conserva os sinalizadores dos atores anteriores; o texto permanece em `preview`.
+    pub preview_flags: Option<(bool, bool, bool)>,
     pub thinking: String,
     pub tool: String,
     /// Codex: objeto JSON `{item: rabo da saída}` dos comandos rodando.

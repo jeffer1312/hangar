@@ -225,18 +225,22 @@ impl Slot {
         (self.columns, self.anchor, self.marker) = (columns, anchor, marker);
     }
 
-    /// Leitura nova da fonte e o gravado de agora; devolve o que publicar. Como no `sse.py`, o
-    /// gravado novo só apaga a prévia já publicada, e a fonte só é reconferida quando muda: um
-    /// bloco gravado depois não traz de volta o texto que continua na tela.
-    fn offer(&mut self, text: String, md: bool, full: bool, committed: Option<Arc<str>>) -> Option<Text> {
-        let mut out = None;
+    fn reconcile(&mut self, committed: Option<Arc<str>>) -> Option<Text> {
         if committed != self.committed {
             self.committed = committed;
             if is_committed(&self.sent.text, self.committed.as_deref().unwrap_or("")) {
                 self.sent = Text::default();
-                out = Some(self.sent.clone());
+                return Some(self.sent.clone());
             }
         }
+        None
+    }
+
+    /// Leitura nova da fonte e o gravado de agora; devolve o que publicar. Como no `sse.py`, o
+    /// gravado novo só apaga a prévia já publicada, e a fonte só é reconferida quando muda: um
+    /// bloco gravado depois não traz de volta o texto que continua na tela.
+    fn offer(&mut self, text: String, md: bool, full: bool, committed: Option<Arc<str>>) -> Option<Text> {
+        let mut out = self.reconcile(committed);
         let raw = Text { text, md, full };
         if raw != self.raw {
             let gone = is_committed(&raw.text, self.committed.as_deref().unwrap_or(""));
@@ -248,6 +252,26 @@ impl Slot {
             }
         }
         out
+    }
+
+    /// Sem quadro novo, só reconcilia o commit; não copia uma resposta longa para reconferi-la.
+    pub(super) fn offer_event(&mut self, session: &str, source: Option<(String, bool, bool)>, committed: Option<Arc<str>>) -> Option<PreviewEvent> {
+        let changed = match source {
+            Some((text, md, full)) => self.offer(text, md, full, committed),
+            None => self.reconcile(committed),
+        };
+        changed.map(|text| PreviewEvent { session: session.to_owned(), text: text.text,
+            md: text.md, full: text.full, vivo: false })
+    }
+
+    /// A identidade do texto continua a mesma quando só a forma de apresentação mudou.
+    pub(super) fn source_text(&self) -> &str { &self.raw.text }
+
+    /// Limpa o publicado; o consumidor guarda separadamente a identidade do texto descartado.
+    pub(super) fn clear_event(&mut self, session: &str) -> Option<PreviewEvent> {
+        if self.sent == Text::default() { return None; }
+        self.sent = Text::default();
+        Some(PreviewEvent { session: session.to_owned(), ..Default::default() })
     }
 }
 

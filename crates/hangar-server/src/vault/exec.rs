@@ -184,8 +184,8 @@ pub async fn agent(st: &Arc<AppState>, name: &str) -> Result<Agent, String> {
         .map_err(|_| "erro_cofre_sessao_indisponivel: a lista de sessões não respondeu".to_owned())?;
     let Some((row, pid)) = found else { return Err(format!("sessao_desconhecida: '{name}' não está na lista de sessões")) };
     let text = |v: Option<String>| v.filter(|v| !v.is_empty());
+    let key = crate::list::links::runtime_key(row.lifecycle_id.as_deref()).map(str::to_owned);
     let cwd = text(row.git_cwd).or(text(row.cwd)).map(PathBuf::from);
-    let key = row.lifecycle_id.as_deref().and_then(|l| l.strip_prefix("k:")).map(str::to_owned);
     let codex_home = text(row.codex_home).map(PathBuf::from);
     let (st, name, provider, headless) = (st.clone(), name.to_owned(), row.provider, row.headless);
     tokio::task::spawn_blocking(move || {

@@ -1,21 +1,6 @@
-"""Onde Pi, omp, Kimi e Codex guardam conversa MORTA -- o equivalente ao projects/ do Claude, que e
-o unico que o app.archive conhecia.
+"""Conversa morta do Codex: sessions e archived_sessions, agrupados pelo cwd do cabeçalho.
 
-Cada um guarda de um jeito, e nenhum guarda como o Claude:
-
-- **Pi** (e o fork **omp**, mesmo formato, raiz propria via `pi_sessions.sessions_root`):
-  `~/.pi/agent/sessions/<slug-do-cwd>/<ts>_<uuid>.jsonl`. O slug NAO e reversivel pro cwd
-  (barra vira traco), entao o cwd sai de dentro do arquivo, na 1a linha (`{"type":"session",...}`).
-  Subagente escreve em `<stem>/<taskId>/run-N/session.jsonl` (Pi) ou `<stem>/<Nome>.jsonl` (omp)
-  e nao e conversa -- fica de fora do glob raso.
-- **Kimi**: `~/.kimi-code/sessions/<wd_...>/<session_id>/agents/main/wire.jsonl`, e existe um
-  `session_index.jsonl` no home que ja mapeia sessionId -> sessionDir + workDir. E a unica fonte
-  aqui que da o cwd SEM abrir transcript nenhum.
-- **Codex**: `~/.codex/sessions/<ano>/<mes>/<dia>/rollout-<ts>-<uuid>.jsonl`, sem agrupamento por
-  pasta; o cwd vem do `session_meta` da 1a linha.
-
-Resolver o caminho a partir do session_id e por BUSCA (glob), nao por montagem: so o Kimi tem
-indice, e o nome do arquivo do Pi e do Codex carrega um timestamp que nao da pra recriar.
+O caminho sai de busca pelo identificador; o nome também carrega um timestamp.
 """
 import json
 import logging
@@ -28,14 +13,13 @@ from app import codex_contas
 
 _log = logging.getLogger("hangar.archive_providers")
 
-PROVIDERS = ("pi", "omp", "kimi", "codex")
+PROVIDERS = ("codex",)
 
 # Publico: e o id que identifica uma conversa nestes providers, e quem retoma uma do Arquivo tem
 # que validar pelo MESMO criterio (o retomar do Arquivo, no Rust). Duas definicoes de "id
 # valido" faziam um id de 36 caracteres fora do formato passar numa e cair na outra, trocando a
 # mensagem que explica o problema por um "caminho invalido" generico.
 UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
-_KIMI_SID_RE = re.compile(r"^session_[0-9a-fA-F-]{36}$")
 
 
 @dataclass(frozen=True)
@@ -64,7 +48,7 @@ _CWD_CACHE: dict[tuple[str, int], str] = {}
 
 
 def _cwd_do_cabecalho(p: Path, campo: Callable[[dict], Optional[str]], max_linhas: int = 5) -> Optional[str]:
-    """cwd lido das PRIMEIRAS linhas do transcript. Pi e Codex gravam na 1a, mas ler algumas a mais
+    """cwd lido das PRIMEIRAS linhas do transcript. Codex grava na 1a, mas ler algumas a mais
     cobre um cabecalho que ganhe linha nova."""
     try:
         chave = (str(p), p.stat().st_ino)
@@ -97,79 +81,6 @@ def _ler_cwd_do_cabecalho(p: Path, campo: Callable[[dict], Optional[str]], max_l
     return None
 
 
-# ── Pi ────────────────────────────────────────────────────────────────────────
-def _pi_conversas(provider: str = "pi") -> list[Conversa]:
-    from app.adapters.pi import sessions as pi_sessions
-    raiz = pi_sessions.sessions_root(provider)
-    out: list[Conversa] = []
-    try:
-        pastas = [d for d in raiz.iterdir() if d.is_dir()]
-    except OSError:
-        return []
-    for pasta in pastas:
-        # glob raso: o transcript da conversa mora DIRETO no slug do cwd. O rglob pegaria tambem o
-        # `<stem>/<taskId>/run-N/session.jsonl` dos subagentes, que nao e conversa.
-        for f in pasta.glob("*.jsonl"):
-            sid = f.stem.split("_", 1)[-1]
-            if not UUID_RE.match(sid):
-                continue
-            cwd = _cwd_do_cabecalho(f, lambda o: o.get("cwd") if o.get("type") == "session" else None)
-            out.append(Conversa(provider, cwd, sid, f, _mtime(f)))
-    return out
-
-
-def _pi_jsonl(session_id: str, provider: str = "pi") -> Optional[Path]:
-    from app.adapters.pi import sessions as pi_sessions
-    if not UUID_RE.match(session_id):
-        raise ValueError("session_id invalido")
-    try:
-        achados = sorted(pi_sessions.sessions_root(provider).glob(f"*/*_{session_id}.jsonl"),
-                         key=_mtime, reverse=True)
-    except OSError:
-        return None
-    return achados[0] if achados else None
-
-
-# ── Kimi ──────────────────────────────────────────────────────────────────────
-def _kimi_conversas() -> list[Conversa]:
-    from app.adapters.kimi import sessions as kimi_sessions
-    out: list[Conversa] = []
-    try:
-        with open(kimi_sessions.kimi_home() / "session_index.jsonl", encoding="utf-8") as fh:
-            linhas = fh.readlines()
-    except OSError:
-        return []
-    vistos: set[str] = set()
-    # De tras pra frente: o indice e append-only e a MESMA sessao pode reaparecer; a entrada mais
-    # recente e a que vale.
-    for linha in reversed(linhas):
-        try:
-            o = json.loads(linha)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if not isinstance(o, dict):
-            continue
-        sid, sdir = o.get("sessionId"), o.get("sessionDir")
-        if not sid or not sdir or sid in vistos:
-            continue
-        vistos.add(sid)
-        wire = Path(sdir) / "agents" / "main" / "wire.jsonl"
-        if not wire.is_file():
-            continue    # sessao aberta e nunca usada: a TUI so cria o wire no 1o prompt
-        out.append(Conversa("kimi", o.get("workDir"), sid, wire, _mtime(wire)))
-    return out
-
-
-def _kimi_jsonl(session_id: str) -> Optional[Path]:
-    if not _KIMI_SID_RE.match(session_id):
-        raise ValueError("session_id invalido")
-    for c in _kimi_conversas():
-        if c.session_id == session_id:
-            return c.path
-    return None
-
-
-# ── Codex ─────────────────────────────────────────────────────────────────────
 def _codex_raizes(home: Path | str) -> tuple[Path, Path]:
     base = Path(home).expanduser().absolute()
     return base / "sessions", base / "archived_sessions"
@@ -275,14 +186,12 @@ def _codex_jsonl(session_id: str, codex_account: str | None = None) -> Optional[
 
 
 # ── Fachada ───────────────────────────────────────────────────────────────────
-_LISTAR = {"pi": _pi_conversas, "omp": lambda: _pi_conversas("omp"),
-           "kimi": _kimi_conversas, "codex": _codex_conversas}
-_RESOLVER = {"pi": _pi_jsonl, "omp": lambda sid: _pi_jsonl(sid, "omp"),
-             "kimi": _kimi_jsonl, "codex": _codex_jsonl}
+_LISTAR = {"codex": _codex_conversas}
+_RESOLVER = {"codex": _codex_jsonl}
 
 
 def conversas(codex_account: str | None = None) -> list[Conversa]:
-    """Todas as conversas mortas de Pi, Kimi e Codex. Provider que falhar (layout mudou, home
+    """Todas as conversas mortas do Codex. Provider que falhar (layout mudou, home
     ausente) sai da lista com um log -- nunca derruba os outros nem o Arquivo do Claude."""
     out: list[Conversa] = []
     for nome, fn in _LISTAR.items():

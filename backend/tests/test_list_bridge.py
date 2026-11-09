@@ -101,8 +101,3 @@ async def test_list_bridge_on_the_loop_is_logged_once_and_still_runs(bridge, mon
     await asyncio.to_thread(list_bridge.invalidate)
     assert logged == [("lista.ponte_no_laco", "list.invalidate")] * 2
     assert len(bridge["requests"]) == 4
-
-
-def test_dirs_env_has_every_folder(hangar_server_bin):
-    assert set(json.loads(list_bridge.dirs_env())) == {
-        "home", "claude", "codex_home", "pi_sessions", "omp_config", "omp_agent", "kimi_home"}

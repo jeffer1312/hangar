@@ -17,7 +17,7 @@ async fn setup(lines: std::ops::Range<usize>, stem: &str) -> (tempfile::TempDir,
     let offs = append_lines(&jsonl, lines);
     let (fake, up) = spawn_fake().await;
     fake.set_info(info_json("claude", &jsonl));
-    let srv = spawn_server(config(up, "127.0.0.1")).await;
+    let srv = spawn_server_with_diary(config(up, "127.0.0.1"), &fake).await;
     (dir, jsonl, offs, fake, srv)
 }
 
@@ -221,8 +221,8 @@ async fn provider_outside_rust_resets_and_next_connection_goes_to_python() {
     let mut a = sse(open_events(srv, "s", "", &[]).await);
     messages(&mut a, 1).await;
 
-    let pi = json!({"provider": "pi", "jsonl": jsonl, "session_key": "sess-f", "history": {}});
-    fake.set_info(pi.clone());
+    let unsupported = json!({"provider": "unsupported", "jsonl": jsonl, "session_key": "sess-f", "history": {}});
+    fake.set_info(unsupported.clone());
     readings(&fake, 1).await;
     next_named(&mut a, "reset").await;
     assert!(stream_ends(&mut a).await);
@@ -353,11 +353,12 @@ async fn history_without_owner_or_supported_provider_goes_to_python() {
 
     let r = client().get(format!("{url}?limit=abc")).bearer_auth(OWNER).send().await.unwrap();
     assert_eq!(r.text().await.unwrap(), "from-python");
+    assert_eq!(fake.info_calls(), 1, "a validação do limite resolve primeiro o provedor");
 
-    fake.set_info(json!({"provider": "pi", "jsonl": jsonl, "session_key": "sess-j", "history": {}}));
+    fake.set_info(json!({"provider": "unsupported", "jsonl": jsonl, "session_key": "sess-j", "history": {}}));
     let r = client().get(&url).bearer_auth(OWNER).send().await.unwrap();
     assert_eq!(r.text().await.unwrap(), "from-python");
-    assert_eq!(fake.info_calls(), 1, "o dono vindo do loopback consulta a rota interna");
+    assert_eq!(fake.info_calls(), 2, "cada pedido do dono resolve o provedor antes do repasse");
 }
 
 #[tokio::test]
@@ -405,8 +406,13 @@ async fn history_io_error_answers_503_with_code() {
     assert_503(r, "history_io").await;
     assert_eq!(fake.hits_to("/api/sessions/s-io/history"), 0, "o Python não recebe o pedido");
     wait_until(|| !fake.diag().is_empty()).await;
-    assert_eq!(fake.diag()[0], json!({"evento": "rust.history_failed", "sessao": "s-io", "codigo": "history_io",
-        "motivo": "a leitura do histórico falhou"}));
+    let line = fake.diag().into_iter().find(|line| line["evento"] == "rust.history_failed").unwrap();
+    assert_eq!(line["sessao"], "s-io");
+    assert_eq!(line["codigo"], "history_io");
+    assert_eq!(line["detalhe"], "a leitura do histórico falhou");
+    assert_eq!(line["nivel"], "erro");
+    assert_eq!(line["origem"], "servidor");
+    assert_eq!(fake.hits_to("/internal/diag"), 0);
 }
 
 #[tokio::test]

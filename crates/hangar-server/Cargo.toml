@@ -6,6 +6,10 @@ publish = false
 # Os testes de integração são um executável só (tests/it/) mais os que precisam de processo próprio.
 autotests = false
 
+[[test]]
+name = "usage_cli"
+path = "tests/usage_cli.rs"
+
 [[bin]]
 name = "hangar-dictation-fixture"
 path = "tests/fixtures/dictation_cli.rs"
@@ -17,6 +21,18 @@ name = "hangar-commands-fixture"
 path = "tests/fixtures/commands_cli.rs"
 test = false
 bench = false
+
+[[test]]
+name = "diag_client"
+path = "tests/diag_client.rs"
+
+[[test]]
+name = "other_terminal_drive"
+path = "tests/other_terminal_drive.rs"
+
+[[test]]
+name = "other_terminal_lifecycle"
+path = "tests/other_terminal_lifecycle.rs"
 
 [dependencies]
 hangar-auth = { path = "../hangar-auth" }
@@ -38,6 +54,10 @@ hangar-psmux.workspace = true
 # Pacote por versão: índice, manifesto e extração conferida (`update/`).
 hangar-package = { path = "../hangar-package" }
 regex.workspace = true
+# A guarda conserva lookaround e grupos nomeados aceitos pelo re.search anterior.
+fancy-regex = "=0.20.0"
+# A consulta estrita conserva as grafias e os aliases aceitos pela referência.
+unicode_names2 = "=1.3.0"
 # Largura em células para cortar o pane na coluna da conversa (`plugin_screen.cell_width`).
 unicode-width = "=0.2.2"
 memchr.workspace = true
@@ -168,3 +188,23 @@ path = "tests/contract_orq_conductor.rs"
 [[test]]
 name = "orq_bigint"
 path = "tests/orq_bigint.rs"
+
+[[test]]
+name = "other_terminal"
+path = "tests/other_terminal.rs"
+
+[[test]]
+name = "stats_agents"
+path = "tests/stats_agents.rs"
+
+[[test]]
+name = "tail_agents"
+path = "tests/tail_agents.rs"
+
+[[test]]
+name = "lifecycle_agents"
+path = "tests/lifecycle_agents.rs"
+
+[[test]]
+name = "provider_hooks"
+path = "tests/provider_hooks.rs"

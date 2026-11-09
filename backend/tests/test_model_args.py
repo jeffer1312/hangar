@@ -45,32 +45,12 @@ def test_claude_produz_model_e_effort():
     assert ma.args_de("claude", "opus", "max") == ["--model", "opus", "--effort", "max"]
 
 
-def test_pi_produz_model_e_thinking():
-    """Flag diferente de propósito: o binário do Pi não conhece --effort, e passar a errada mata o
-    processo no arranque com o pane já criado — o app reportaria sessão que não existe."""
-    assert ma.args_de("pi", "kimi-coding/k3", "high") == [
-        "--model", "kimi-coding/k3", "--thinking", "high"]
-
-
 def test_um_provider_nao_vaza_a_flag_do_outro():
     assert "--thinking" not in ma.args_de("claude", "opus", "max")
-    assert "--effort" not in ma.args_de("pi", "kimi-coding/k3", "high")
 
 
 def test_sem_escolha_nao_produz_argumento_nenhum():
     assert ma.args_de("claude", None, None) == []
-
-
-def test_provider_fora_de_escopo_passa_quando_ninguem_pediu_modelo():
-    """Criar sessão Kimi com esforço é o caso: estourar sem ninguém ter pedido nada faria TODO
-    POST daquele provider devolver 400."""
-    assert ma.validar("kimi", None, None) == (None, None)
-    assert ma.args_de("kimi", None, None) == []
-
-
-def test_provider_fora_de_escopo_estoura_se_alguem_pedir_esforco():
-    with pytest.raises(ValueError):
-        ma.validar("kimi", None, "high")
 
 
 def test_codex_aceita_modelo_e_esforco():
@@ -116,10 +96,6 @@ def test_ultracode_nao_e_valor_de_effort():
     'Run /effort ultracode in an interactive terminal'. Como flag de arranque, não existe."""
     with pytest.raises(ValueError):
         ma.validar("claude", "opus", "ultracode")
-
-
-def test_nivel_do_pi_aceita_off():
-    assert ma.validar("pi", "kimi-coding/k3", "off")[1] == "off"
 
 
 def test_modos_permissao_const_existe():

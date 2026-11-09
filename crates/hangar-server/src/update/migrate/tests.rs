@@ -361,7 +361,7 @@ async fn migrate_undo_points_everything_back_to_the_checkout() {
     migrate(&b.machine(&service, &fetcher), &health(&service, true), false).await.unwrap();
     // Depois da migração o backend novo grava hooks e dados pelo `current`.
     std::fs::write(b.home.join(".hangar/config/.env"), "CP_AUTH_TOKEN=segredo\nCP_SERVER_ID=caixa\nCP_NOVO=1\n").unwrap();
-    let current_hook = format!("\n[[hooks]]\nevent = \"Stop\"\ncommand = '\"/py\" \"{}/backend/hooks/kimi_state_hook.py\"'\ntimeout = 5\n", b.current().display());
+    let current_hook = format!("\n[[hooks]]\nevent = \"Stop\"\ncommand = '\"{}/bin/hangar-server\" kimi-state-hook'\ntimeout = 5\n", b.current().display());
     std::fs::write(b.home.join(".kimi-code/config.toml"), std::fs::read_to_string(b.home.join(".kimi-code/config.toml")).unwrap() + &current_hook).unwrap();
 
     let service = FakeService::default();

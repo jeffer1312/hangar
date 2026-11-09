@@ -1182,7 +1182,7 @@ async fn task3_f01_effective_roots_expand_deduplicate_drop_missing_and_follow_ru
 
 #[tokio::test]
 async fn task3_f02_public_digest_binary_path_and_search_errors_keep_envelopes() {
-    let dir=tempfile::tempdir().unwrap(); let root=dir.path();
+    let dir=tempfile::tempdir().unwrap(); let resolved=hangar_workspace::real(dir.path()); let root=resolved.as_path();
     std::fs::write(root.join("read.txt"),"original").unwrap(); std::fs::write(root.join("late.bin"),[vec![b'a';8192],vec![0]].concat()).unwrap();
     let (addr,hits,_fixture)=fixture(root).await; let c=client();
     for (route,status,code) in [("files/read?path=late.bin",415,"erro_arq_binario"),("files/read?path=..%2Foutside",400,"erro_arq_fora_da_raiz"),

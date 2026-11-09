@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
     fs,
-    path::{Path, PathBuf},
+    path::Path,
     sync::Mutex,
 };
 static LOCK: Mutex<()> = Mutex::new(());
@@ -139,34 +139,6 @@ pub fn sync_hook(
     }
     changed
 }
-fn guard(dir: &Path, script: &Path) -> PathBuf {
-    let path = dir.join("hooks/guard_tmux.py");
-    let result = (|| -> std::io::Result<()> {
-        fs::create_dir_all(path.parent().unwrap())?;
-        if path.is_symlink()
-            && fs::canonicalize(&path)
-                .ok()
-                .zip(fs::canonicalize(script).ok())
-                .is_some_and(|(a, b)| a == b)
-        {
-            return Ok(());
-        }
-        if fs::symlink_metadata(&path).is_ok() {
-            fs::remove_file(&path)?;
-        }
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(script, &path)?;
-        #[cfg(windows)]
-        std::os::windows::fs::symlink_file(script, &path)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        return script.into();
-    }
-    fs::canonicalize(path.parent().unwrap())
-        .unwrap_or_else(|_| path.parent().unwrap().into())
-        .join("guard_tmux.py")
-}
 fn safe_command(python: &Path, script: &Path, event: &str, telemetry: bool) -> String {
     let command = format!("\"{}\" \"{}\"", python.display(), script.display());
     if !telemetry {
@@ -244,9 +216,6 @@ fn sync_report_selected(
         if !seen.insert(path.clone()) {
             continue;
         }
-        // O instalador da trava prepara o link antes de conferir o settings pessoal.
-        let guard_path = (selected == Some("guard_tmux.py"))
-            .then(|| guard(&dir, &repo.join("backend/hooks/guard_tmux.py")));
         let result = (|| -> Result<bool, String> {
             let text = match fs::read_to_string(&path) {
                 Ok(v) => v,
@@ -309,15 +278,14 @@ fn sync_report_selected(
                 }
             }
             if enabled("guard_tmux.py") {
-                let guard_path = guard_path
-                    .unwrap_or_else(|| guard(&dir, &repo.join("backend/hooks/guard_tmux.py")));
-                let command = safe_command(&python, &guard_path, "PreToolUse", false);
+                let command = crate::provider_hooks::command("guard-tmux")?;
+                changed |= sync_hook(&mut data, "PreToolUse", None, Some("Bash"), "guard_tmux.py");
                 changed |= sync_hook(
                     &mut data,
                     "PreToolUse",
                     Some(&command),
                     Some("Bash"),
-                    "guard_tmux.py",
+                    "guard-tmux",
                 );
             }
             if enabled("pair-context") {

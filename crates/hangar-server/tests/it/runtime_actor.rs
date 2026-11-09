@@ -2,6 +2,12 @@ use hangar_server::runtime::{actor::*,cano,protocol::*,queue::*};
 use serde_json::{Value,json};
 use tokio::io::{AsyncBufReadExt,AsyncWriteExt,BufReader};
 
+// As provas só gravam nos destinos temporários que escolheram explicitamente.
+fn test_engine(provider:&str, metadata:Value, generation:u64, clock:ClockSample) -> Result<RuntimeEngine,RuntimeError> {
+    hangar_server::diag::disable_diary();
+    RuntimeEngine::new(provider,metadata,generation,clock)
+}
+
 /// Lê a próxima linha do ator. Fechar com dado ainda não lido vira reset no macOS (e às vezes no
 /// Windows) em vez de fim de arquivo: para o servidor falso as duas coisas são o ator saindo.
 async fn next_line<R:tokio::io::AsyncBufRead+Unpin>(reader:&mut R,raw:&mut String) -> bool {
@@ -77,7 +83,7 @@ async fn setup_recovered(reply_before_ack:bool,blocked_rpc:bool,compound:bool,pr
     let store = Store::open(&target.state_path,&target.projection_dir,State::new("key",1,"session",vec![])).unwrap();
     let queue = QueueActor::start(store,lease);
     let connection = cano::connect(&target.binding).await.unwrap();
-    let engine = RuntimeEngine::new("codex",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap();
+    let engine = test_engine("codex",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap();
     let handle = RuntimeActor::spawn(target,queue,connection,engine);
     (handle,server,dir)
 }
@@ -147,7 +153,7 @@ async fn queued_batch_runtime_case(provider:&str,headless:bool,race:bool) {
     let target=RuntimeTarget {key:"key".into(),generation:1,name:"session".into(),provider:provider.into(),metadata:metadata.clone(),binding:CanoBinding {pid:42,escuta:format!("tcp:{address}"),token:"fixture".into(),versao:2},
         lease_path:dir.path().join("key.lock"),state_path:dir.path().join("key.queue-state.json"),projection_dir:dir.path().join("projection"),transcript,created:0.0};
     let lease=acquire_lease(&target.lease_path).unwrap();let store=Store::open(&target.state_path,&target.projection_dir,State::new("key",1,"session",vec![])).unwrap();
-    let engine=RuntimeEngine::new(provider,metadata,1,clock_fixture()).unwrap();
+    let engine=test_engine(provider,metadata,1,clock_fixture()).unwrap();
     let handle=RuntimeActor::spawn(target.clone(),QueueActor::start(store,lease),cano::connect(&target.binding).await.unwrap(),engine);
     let image=dir.path().join("image.png");std::fs::write(&image,b"image-bytes").unwrap();
     let first=if race {format!("primeira \u{1f4ce} imagem: {}",image.display())}else{"primeira".into()};
@@ -538,7 +544,7 @@ async fn setup_claude_unreachable_policy(initialized:bool) -> (RuntimeHandle,tok
     let store = Store::open(&target.state_path,&target.projection_dir,State::new("key",1,"session",vec![])).unwrap();
     let queue = QueueActor::start(store,lease);
     let connection = cano::connect(&target.binding).await.unwrap();
-    let engine = RuntimeEngine::new("claude",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap()
+    let engine = test_engine("claude",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap()
         .with_policy(PolicyClient::new(closed,"secret".into()));
     (RuntimeActor::spawn(target,queue,connection,engine),server,dir,booted)
 }
@@ -596,7 +602,7 @@ async fn turn_end_confirms_the_delivered_input_without_being_asked() {
     let store = Store::open(&target.state_path,&target.projection_dir,State::new("key",1,"session",vec![])).unwrap();
     let queue = QueueActor::start(store,lease);
     let connection = cano::connect(&target.binding).await.unwrap();
-    let engine = RuntimeEngine::new("claude",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap();
+    let engine = test_engine("claude",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap();
     let handle = RuntimeActor::spawn(target,queue,connection,engine);
     let input = RuntimeCommand { operation_id:"msg".into(),kind:OperationKind::Input,payload:json!({"text":"Olá","entry_id":"msg"}) };
     assert!(handle.command(input).await.unwrap().disposition == Disposition::Accepted);
@@ -651,7 +657,7 @@ async fn transcript_growth_confirms_the_input_before_the_turn_ends() {
     let store = Store::open(&target.state_path,&target.projection_dir,State::new("key",1,"session",vec![])).unwrap();
     let queue = QueueActor::start(store,lease);
     let connection = cano::connect(&target.binding).await.unwrap();
-    let engine = RuntimeEngine::new("claude",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap();
+    let engine = test_engine("claude",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap();
     let handle = RuntimeActor::spawn(target,queue,connection,engine);
     let input = RuntimeCommand { operation_id:"msg".into(),kind:OperationKind::Input,payload:json!({"text":"Olá","entry_id":"msg"}) };
     assert!(handle.command(input).await.unwrap().disposition == Disposition::Accepted);
@@ -725,7 +731,7 @@ async fn status_turn(bad_rate:bool) -> Vec<Value> {
     let store = Store::open(&target.state_path,&target.projection_dir,State::new("key",1,"session",vec![])).unwrap();
     let queue = QueueActor::start(store,lease);
     let connection = cano::connect(&target.binding).await.unwrap();
-    let engine = RuntimeEngine::new("claude",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap()
+    let engine = test_engine("claude",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap()
         .with_policy(PolicyClient::new(crate::refused_address(),"secret".into()));
     let handle = RuntimeActor::spawn(target,queue,connection,engine);
     let mut events = handle.subscribe();
@@ -828,7 +834,7 @@ async fn local_command_result_confirms_the_slash_entry() {
     let store = Store::open(&target.state_path,&target.projection_dir,State::new("key",1,"session",vec![])).unwrap();
     let queue = QueueActor::start(store,lease);
     let connection = cano::connect(&target.binding).await.unwrap();
-    let engine = RuntimeEngine::new("claude",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap();
+    let engine = test_engine("claude",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap();
     let handle = RuntimeActor::spawn(target,queue,connection,engine);
     // Outra barra já reivindicada pelo drain e ainda não escrita: o result do /clear não pode confirmá-la.
     handle.queue("claimed".into(),Action::Append { text:"/cost".into(),delivered:true,ts:None,pre_transcript:false,entry_id:Some("next".into()) }).await.unwrap();
@@ -890,7 +896,7 @@ async fn headless_wait_writes_the_state_marker_that_drives_the_awaiting_push() {
     let store = Store::open(&target.state_path,&target.projection_dir,State::new("key",1,"session",vec![])).unwrap();
     let queue = QueueActor::start(store,lease);
     let connection = cano::connect(&target.binding).await.unwrap();
-    let engine = RuntimeEngine::new("claude",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap();
+    let engine = test_engine("claude",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap();
     let handle = RuntimeActor::spawn(target,queue,connection,engine);
     let marker = config.join(".hangar-state/sid-1.json");
     tokio::time::timeout(std::time::Duration::from_secs(3),async {
@@ -1163,7 +1169,7 @@ async fn claude_actor_with(dir:&std::path::Path,cano:std::net::SocketAddr,metada
     let store = Store::open(&target.state_path,&target.projection_dir,State::new("key",1,"session",vec![])).unwrap();
     let queue = QueueActor::start(store,lease);
     let connection = cano::connect(&target.binding).await.unwrap();
-    let engine = RuntimeEngine::new("claude",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap()
+    let engine = test_engine("claude",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap()
         .with_policy(PolicyClient::new(crate::refused_address(),"secret".into()));
     RuntimeActor::spawn(target,queue,connection,engine)
 }
@@ -1275,7 +1281,7 @@ async fn codex_live_actor_as(dir:&std::path::Path,cano:std::net::SocketAddr,live
     let store = Store::open(&target.state_path,&target.projection_dir,State::new("key",1,"session",vec![])).unwrap();
     let queue = QueueActor::start(store,lease);
     let connection = cano::connect(&target.binding).await.unwrap();
-    let mut engine = RuntimeEngine::new("codex",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap();
+    let mut engine = test_engine("codex",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap();
     if let Some(live) = live { engine = engine.with_live(live); }
     RuntimeActor::spawn(target,queue,connection,engine)
 }
@@ -1367,7 +1373,7 @@ async fn claude_headless_view_and_preview_go_to_live_not_to_events() {
     let store = Store::open(&target.state_path,&target.projection_dir,State::new("key",1,"session",vec![])).unwrap();
     let (events,mut rx) = tokio::sync::broadcast::channel(64);
     let (live,mut live_rx) = tokio::sync::watch::channel(None);
-    let engine = RuntimeEngine::new("claude",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap()
+    let engine = test_engine("claude",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap()
         .with_publisher(events).with_live(live);
     let connection = cano::connect(&target.binding).await.unwrap();
     let handle = RuntimeActor::spawn(target,QueueActor::start(store,lease),connection,engine);
@@ -1482,6 +1488,7 @@ for line in sys.stdin:
     /// (conta padrão e configuração do Jev isoladas) e um PATH só com ela e o `python3` do script: o
     /// `codex` de verdade da máquina nunca é achado, nem com o falso escondido.
     fn codex_env(dir:&std::path::Path) -> hangar_server::accounts::environment::AccountEnvironment {
+        hangar_server::diag::disable_diary();
         let mut map:std::collections::BTreeMap<String,String> = std::env::vars()
             .filter(|(k,_)|!k.starts_with("HANGAR_CANO_") && !matches!(k.as_str(),"CODEX_HOME" | "CLAUDE_CONFIG_DIR")).collect();
         let python = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).map(|p|p.join("python3")).find(|p|p.is_file()).expect("python3 no PATH");
@@ -2120,7 +2127,7 @@ mod terminal_async {
         let lease = acquire_lease(&target.lease_path).unwrap();
         let queue = QueueActor::start(Store::open(&target.state_path,&target.projection_dir,State::new("key",1,"session",vec![])).unwrap(),lease);
         let connection = cano::connect(&target.binding).await.unwrap();
-        let engine = RuntimeEngine::new("codex",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap()
+        let engine = test_engine("codex",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap()
             .with_interactions("key".into(),store).unwrap();
         RuntimeActor::spawn(target,queue,connection,engine)
     }
@@ -2618,15 +2625,26 @@ mod cano_reconnect {
         Waits { normal:normal.iter().copied().map(ms).collect(),pending:pending.iter().copied().map(ms).collect(),stall:ms(stall),output_lost:Duration::from_secs(60) }
     }
 
-    async fn actor(dir:&std::path::Path,cano:&LiveCano,pid:u32,birth:Option<f64>,diag:std::net::SocketAddr,waits:Waits)
+    enum DiaryTarget { Address(std::net::SocketAddr), Local(hangar_server::diag::DiagClient) }
+    impl From<std::net::SocketAddr> for DiaryTarget { fn from(address:std::net::SocketAddr)->Self { Self::Address(address) } }
+    impl From<hangar_server::diag::DiagClient> for DiaryTarget { fn from(client:hangar_server::diag::DiagClient)->Self { Self::Local(client) } }
+    impl DiaryTarget {
+        fn client(self)->hangar_server::diag::DiagClient { match self {
+            Self::Address(address)=>hangar_server::diag::DiagClient::new(address,String::new()).with_diary(None),
+            Self::Local(client)=>client,
+        } }
+    }
+
+    async fn actor(dir:&std::path::Path,cano:&LiveCano,pid:u32,birth:Option<f64>,diag:impl Into<DiaryTarget>,waits:Waits)
         -> (RuntimeHandle,tokio::sync::broadcast::Receiver<RuntimeEvent>) {
         actor_with(dir,cano,pid,birth,diag,waits,false,true).await
     }
 
     /// `cards`: com a loja de interações, os cartões publicados levam o ID que os responde.
     /// `initialized: false`: o ator manda o `initialize` na abertura.
-    async fn actor_with(dir:&std::path::Path,cano:&LiveCano,pid:u32,birth:Option<f64>,diag:std::net::SocketAddr,waits:Waits,cards:bool,initialized:bool)
+    async fn actor_with(dir:&std::path::Path,cano:&LiveCano,pid:u32,birth:Option<f64>,diag:impl Into<DiaryTarget>,waits:Waits,cards:bool,initialized:bool)
         -> (RuntimeHandle,tokio::sync::broadcast::Receiver<RuntimeEvent>) {
+        let diag: DiaryTarget = diag.into();
         let target = RuntimeTarget { key:"key".into(),generation:1,name:"session".into(),provider:"claude".into(),
             metadata:json!({"name":"session","headless":true,"session_id":"sid-1","initialized":initialized}),
             binding:CanoBinding { pid,escuta:cano.escuta.clone(),token:CANO_TOKEN.into(),versao:2 },
@@ -2635,8 +2653,8 @@ mod cano_reconnect {
         let lease = acquire_lease(&target.lease_path).unwrap();
         let store = Store::open(&target.state_path,&target.projection_dir,State::new("key",1,"session",vec![])).unwrap();
         let (events,rx) = tokio::sync::broadcast::channel(256);
-        let engine = RuntimeEngine::new("claude",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap()
-            .with_policy(PolicyClient::new(diag,crate::fake::SECRET.into())).with_publisher(events)
+        let engine = test_engine("claude",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap()
+            .with_policy(PolicyClient::new(crate::refused_address(),crate::fake::SECRET.into()).with_diagnostics(diag.client())).with_publisher(events)
             .with_reconnect_waits(waits.normal,waits.pending,waits.stall).with_cano_check(ms(100)).with_cano_birth(birth).with_output_lost(waits.output_lost);
         let engine = if cards { engine.with_interactions("key".into(),Arc::new(hangar_server::interactions::InteractionStore::default())).unwrap() } else { engine };
         let connection = cano::connect(&target.binding).await.unwrap();
@@ -2762,7 +2780,8 @@ mod cano_reconnect {
     async fn closing_during_the_wait_cancels_the_attempt_quietly() {
         let dir = tempfile::tempdir().unwrap();
         let proc = sleeper(dir.path());
-        let (fake,diag) = crate::fake::spawn_fake().await;
+        let (fake,_upstream) = crate::fake::spawn_fake().await;
+        let diag = fake.diagnostics();
         let cano = live_cano(|n|if n == 1 { Answer::Serve } else { Answer::Hang }).await;
         let (handle,mut rx) = actor(dir.path(),&cano,proc.0.id(),birth(&proc),diag,waits(&[0,50],&[0,50],60_000)).await;
         wait_for("abertura",||cano.accepts() == 1).await;
@@ -2782,7 +2801,8 @@ mod cano_reconnect {
     async fn missing_cano_birth_stops_once_and_keeps_the_session_healthy() {
         let dir = tempfile::tempdir().unwrap();
         let proc = sleeper(dir.path());
-        let (fake,diag) = crate::fake::spawn_fake().await;
+        let (fake,_upstream) = crate::fake::spawn_fake().await;
+        let diag = fake.diagnostics();
         let cano = live_cano(|_|Answer::Serve).await;
         let (handle,_rx) = actor(dir.path(),&cano,proc.0.id(),None,diag,waits(&[0,50],&[0,50],300)).await;
         wait_for("abertura",||cano.accepts() == 1).await;
@@ -2863,7 +2883,8 @@ mod cano_reconnect {
         // Cano e servidor de versões diferentes: o leitor encerra no envelope que não conhece, com o processo vivo.
         let dir = tempfile::tempdir().unwrap();
         let proc = sleeper(dir.path());
-        let (fake,diag) = crate::fake::spawn_fake().await;
+        let (fake,_upstream) = crate::fake::spawn_fake().await;
+        let diag = fake.diagnostics();
         let cano = live_cano(|_|Answer::Serve).await;
         let (handle,mut rx) = actor(dir.path(),&cano,proc.0.id(),birth(&proc),diag,waits(&[0,50],&[0,50],60_000)).await;
         wait_for("abertura",||cano.accepts() == 1).await;
@@ -2949,7 +2970,8 @@ mod cano_reconnect {
         append(dir.path(),&[said_by_user("antes")]);
         append(dir.path(),&turn_end("antes"));
         let proc = sleeper(dir.path());
-        let (fake,diag) = crate::fake::spawn_fake().await;
+        let (fake,_upstream) = crate::fake::spawn_fake().await;
+        let diag = fake.diagnostics();
         let cano = live_cano(|_|Answer::Serve).await;
         let prazo = 1_500;
         let (handle,_rx) = actor(dir.path(),&cano,proc.0.id(),birth(&proc),diag,Waits { output_lost:ms(prazo),..waits(&[0,50],&[0,50],60_000) }).await;
@@ -2988,7 +3010,8 @@ mod cano_reconnect {
         let dir = tempfile::tempdir().unwrap();
         append(dir.path(),&[said_by_user("antes")]);
         let proc = sleeper(dir.path());
-        let (fake,diag) = crate::fake::spawn_fake().await;
+        let (fake,_upstream) = crate::fake::spawn_fake().await;
+        let diag = fake.diagnostics();
         let cano = live_cano(|_|Answer::Serve).await;
         cano.aberto.store(true,Ordering::Release);
         let (handle,_rx) = actor(dir.path(),&cano,proc.0.id(),birth(&proc),diag,Waits { output_lost:ms(200),..waits(&[0,50],&[0,50],60_000) }).await;
@@ -3006,7 +3029,8 @@ mod cano_reconnect {
         append(dir.path(),&[said_by_user("antes")]);
         append(dir.path(),&turn_end("antes"));
         let proc = sleeper(dir.path());
-        let (fake,diag) = crate::fake::spawn_fake().await;
+        let (fake,_upstream) = crate::fake::spawn_fake().await;
+        let diag = fake.diagnostics();
         let cano = live_cano(|_|Answer::Serve).await;
         cano.aberto.store(true,Ordering::Release);
         let (handle,_rx) = actor(dir.path(),&cano,proc.0.id(),birth(&proc),diag,Waits { output_lost:ms(300),..waits(&[0,50],&[0,50],60_000) }).await;
@@ -3045,7 +3069,8 @@ mod cano_reconnect {
         for line in &mut end { line.as_object_mut().unwrap().remove("timestamp"); }
         append(dir.path(),&end);
         let proc = sleeper(dir.path());
-        let (fake,diag) = crate::fake::spawn_fake().await;
+        let (fake,_upstream) = crate::fake::spawn_fake().await;
+        let diag = fake.diagnostics();
         let cano = live_cano(|_|Answer::Serve).await;
         cano.aberto.store(true,Ordering::Release);
         let (handle,_rx) = actor(dir.path(),&cano,proc.0.id(),birth(&proc),diag,Waits { output_lost:ms(300),..waits(&[0,50],&[0,50],60_000) }).await;
@@ -3062,7 +3087,8 @@ mod cano_reconnect {
         append(dir.path(),&[said_by_user("antes")]);
         append(dir.path(),&turn_end("antes"));
         let proc = sleeper(dir.path());
-        let (fake,diag) = crate::fake::spawn_fake().await;
+        let (fake,_upstream) = crate::fake::spawn_fake().await;
+        let diag = fake.diagnostics();
         let cano = live_cano(|_|Answer::Serve).await;
         cano.aberto.store(true,Ordering::Release);
         let prazo = 1_500;
@@ -3101,7 +3127,7 @@ mod cano_reconnect {
             transcript:dir.join("rollout.jsonl"),created:0.0 };
         let lease = acquire_lease(&target.lease_path).unwrap();
         let store = Store::open(&target.state_path,&target.projection_dir,State::new("key",1,"session",vec![])).unwrap();
-        let mut engine = RuntimeEngine::new("codex",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap()
+        let mut engine = test_engine("codex",target.metadata.clone(),1,ClockSample { monotonic_s:0.0,epoch_s:1_800_000_000.0 }).unwrap()
             .with_launch(LaunchConfig { sidecar_dir:dir.into(),backoff:Duration::from_millis(50) })
             .with_reconnect_waits(waits.normal,waits.pending,waits.stall).with_cano_check(ms(100));
         if cards { engine = engine.with_interactions("key".into(),Arc::new(hangar_server::interactions::InteractionStore::default())).unwrap(); }

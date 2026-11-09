@@ -6,11 +6,9 @@ import http.client
 import ipaddress
 import json
 import logging
-import os
 import sys
 import urllib.error
 import urllib.request
-from pathlib import Path
 
 import pydantic
 
@@ -41,25 +39,6 @@ def configure(address: str | None, secret: str | None) -> None:
     if not ipaddress.ip_address(host.strip("[]")).is_loopback or not 1 <= int(port) <= 65535:
         raise ValueError("invalid list address")
     _config = (address, secret)
-
-
-def dirs_env() -> str:
-    """Pastas que só o Python sabe resolver (`HANGAR_LIST_DIRS` do filho Rust), as mesmas da
-    descoberta de hoje."""
-    from app import codex_contas, omp_dirs
-    from app.adapters.kimi.sessions import kimi_home
-    from app.adapters.pi.sessions import sessions_root
-    from app.config import settings
-    home = Path.home()
-    return json.dumps({
-        "home": str(home),
-        "claude": str(settings.projects_dir.parent),
-        "codex_home": str(codex_contas.default_home()),
-        "pi_sessions": str(sessions_root("pi")),
-        "omp_config": str(home / (os.environ.get("PI_CONFIG_DIR") or ".omp")),
-        "omp_agent": str(omp_dirs.agent_dir()),
-        "kimi_home": str(kimi_home()),
-    }, ensure_ascii=False)
 
 
 _on_loop_seen: set[tuple[str, tuple]] = set()

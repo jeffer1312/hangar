@@ -15,31 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 use std::time::SystemTime;
 
-/// Pastas que o Python tira do ambiente do backend. Em parâmetro, para o teste rodar sem tocar no
-/// `HOME` do processo.
-#[derive(Clone, Debug)]
-pub struct Dirs {
-    /// `Path.home()`: sidecars em `~/.hangar` e a conta Claude padrão (`~/.claude`).
-    pub home: PathBuf,
-    /// `settings.projects_dir.parent`: vínculos (`.hangar-pair`, `-chain`, `-loop`) e o transcript
-    /// sem terminal quando o sidecar não declara conta.
-    pub claude: PathBuf,
-    /// `codex_contas.default_home()`.
-    pub codex_home: PathBuf,
-    /// `PI_CODING_AGENT_SESSION_DIR` ou `~/.pi/agent/sessions`.
-    pub pi_sessions: PathBuf,
-    /// `~/<PI_CONFIG_DIR ou .omp>`, base dos perfis do omp.
-    pub omp_config: PathBuf,
-    /// Diretório do agente omp do próprio backend (sem perfil na sessão).
-    pub omp_agent: PathBuf,
-    /// `KIMI_CODE_HOME` ou `~/.kimi-code`.
-    pub kimi_home: PathBuf,
-}
-
-impl Dirs {
-    /// Conta Claude padrão das sessões que não declaram `CLAUDE_CONFIG_DIR`.
-    pub fn default_claude(&self) -> PathBuf { self.home.join(".claude") }
-}
+pub use hangar_core::session_dirs::SessionDirectories as Dirs;
 
 /// Variável do ambiente do processo; vazia é ausência. Ilegível também cai na ausência, como o
 /// `_env_var_of`, mas avisa: motor e conta sairiam do padrão nesta rodada.
@@ -184,7 +160,9 @@ const TICKET_SLACK: f64 = 2.0;
 fn pi_transcript(pane_id: &str, pid: Option<i64>, cwd: &str, provider: &str, procs: &dyn ProcessView, dirs: &Dirs,
                  problems: &mut Problems) -> Option<String> {
     let base = pid.and_then(|p| config_dir_of(procs, p)).unwrap_or_else(|| dirs.default_claude());
-    let ticket = base.join(".hangar-pi").join(format!("{}.json", ticket_key(pane_id, pid, procs)));
+    let stable=pid.and_then(|pid|env(procs,pid,"CP_SESSION_KEY")).filter(|key|key.len()==32&&key.bytes().all(|byte|byte.is_ascii_hexdigit()));
+    let stable=stable.map(|key|base.join(".hangar-pi").join(format!("{key}.json"))).filter(|path|path.exists());
+    let ticket = stable.unwrap_or_else(||base.join(".hangar-pi").join(format!("{}.json", ticket_key(pane_id,pid,procs))));
     let sid = pid.and_then(|p| env(procs, p, "CP_PI_SESSION"));
     let profile = || if provider == "omp" { pid.and_then(|p| env(procs, p, "OMP_PROFILE")) } else { None };
     // O Python: bilhete que não é objeto encerra; ilegível ou torto cai no `CP_PI_SESSION`.
@@ -701,6 +679,51 @@ mod tests {
         }
         fn start_time(&self, _: i64) -> Option<f64> { self.reads.fetch_add(1, Ordering::Relaxed); Some(1.0) }
         fn fds(&self, _: i64) -> Vec<PathBuf> { Vec::new() }
+    }
+
+    #[test]
+    fn native_directory_slugs_match_the_preserved_python_cases() {
+        #[cfg(not(windows))]
+        {
+            for (cwd, expected) in [
+                ("/home/jefferson", "--home-jefferson--"),
+                ("/home/jefferson/Projetos/hangar", "--home-jefferson-Projetos-hangar--"),
+                ("/home/jefferson/Área de trabalho/repos/servicos_api", "--home-jefferson-Área de trabalho-repos-servicos_api--"),
+                ("/tmp/claude-1000/-home-jefferson-Projetos/scratchpad/piprobe", "--tmp-claude-1000--home-jefferson-Projetos-scratchpad-piprobe--"),
+            ] {
+                assert_eq!(pi_cwd_slug(cwd), expected);
+            }
+            for _ in 0..2 {
+                assert_eq!(kimi_workdir_key("/w/projeto-a"), "wd_projeto-a_0922a32de8c3");
+                assert_eq!(kimi_workdir_key("/w/projeto-b"), "wd_projeto-b_731cae087c46");
+            }
+        }
+        #[cfg(windows)]
+        {
+            for (cwd, expected) in [
+                (r"C:\\cockpit", "--C--cockpit--"),
+                ("C:/cockpit", "--C--cockpit--"),
+                (r"C:\\cockpit\\backend", "--C--cockpit-backend--"),
+            ] {
+                assert_eq!(pi_cwd_slug(cwd), expected);
+            }
+        }
+        let root = Path::new(std::path::MAIN_SEPARATOR_STR).join("w");
+        let a = kimi_workdir_key(root.join("projeto-a").to_str().unwrap());
+        let b = kimi_workdir_key(root.join("projeto-b").to_str().unwrap());
+        assert!(a.starts_with("wd_projeto-a_"));
+        assert!(b.starts_with("wd_projeto-b_"));
+        assert_ne!(a, b);
+        for (cwd, expected) in [
+            ("/tmp/MinhaPasta".to_owned(), "minhapasta"),
+            ("/tmp/Área de trabalho".to_owned(), "rea-de-trabalho"),
+            ("/@@@".to_owned(), "workspace"),
+            (format!("/{}", "a".repeat(60)), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            (format!("/{}-{}", "a".repeat(39), "b".repeat(10)), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        ] {
+            let key = kimi_workdir_key(&cwd);
+            assert_eq!(key.split('_').nth(1), Some(expected));
+        }
     }
 
     fn write(path: &Path, text: &str) {

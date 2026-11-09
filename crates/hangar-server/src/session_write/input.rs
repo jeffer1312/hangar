@@ -354,6 +354,9 @@ fn received_line(name: &str, headers: &HeaderMap, peer: SocketAddr, text: &str, 
 /// Texto para o Codex com terminal que ainda abre a conversa: fica na fila da chave dela e a resposta é a
 /// do envio enfileirado, na hora. Sem turno, orientar vira só fila; `/clear` e `/compact` esperam a conversa.
 async fn queue_opening(st: &AppState, name: &str, key: &str, text: &str, steer: bool) -> (StatusCode, Value) {
+    if let Some(runtime)=st.state.runtime.get() && runtime.other_opening_key(name).await.is_some() {
+        return match runtime.queue_other_opening(name,key,text,&random_hex(16)).await {Ok(body)=>(StatusCode::OK,body),Err(error)=>(super::failed_status(&error),detail_body(&error.code,&error.message,json!({})))};
+    }
     if is_codex_clear("codex", text) || is_codex_compact("codex", text) {
         let error = crate::runtime::codex_relaunch::starting();
         return (StatusCode::CONFLICT, detail_body(&error.code, &error.message, json!({})));
@@ -492,9 +495,13 @@ pub async fn broadcast(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conne
     let (Some(runtime), true) = (st.state.runtime.get().cloned(), owner) else { return pass(&st, req, &fwd).await };
     let (parts, body) = req.into_parts();
     let Ok(bytes) = to_bytes(body, super::BODY_LIMIT).await else { return super::too_large(&parts.headers) };
-    // Barra e corpo torto: a recusa é a do Python, com o corpo intacto.
-    let parsed = parse_broadcast(&bytes).filter(|(_, text)| json_content_type(&parts.headers) && !text.trim_start().starts_with('/'));
-    let Some((names, text)) = parsed else { return super::forward_whole(&st, parts, bytes, &fwd).await };
+    let normalized = scrub_lone_surrogates(&bytes);
+    let Some((names, text)) = parse_broadcast(&Bytes::copy_from_slice(&normalized)).filter(|_| json_content_type(&parts.headers)) else {
+        return super::detail(StatusCode::UNPROCESSABLE_ENTITY, "erro_corpo_invalido", "corpo da mensagem inválido", json!({}));
+    };
+    if text.trim_start().starts_with('/') {
+        return super::detail(StatusCode::BAD_REQUEST, "erro_broadcast_slash", "broadcast não suporta slash-commands: envie por sessão", json!({}));
+    }
     let mut ours = std::collections::BTreeSet::new();
     // Codex com terminal do Rust que não deu para adotar: o código é daqui e o nome nunca vai ao Python.
     let mut refused = serde_json::Map::new();
@@ -503,7 +510,7 @@ pub async fn broadcast(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conne
         match runtime.adopt_now(name).await {
             Some(Ok(())) => { ours.insert(name.clone()); }
             // Conversa ainda abrindo ou sessão adormecida: a entrega do `/input` guarda o texto na fila dela.
-            Some(Err(error)) if error.code == crate::runtime::codex_relaunch::STARTING || error.code == crate::runtime::gateway::ASLEEP_WAKING => { ours.insert(name.clone()); }
+            Some(Err(error)) if error.code == crate::runtime::codex_relaunch::STARTING || error.code == crate::runtime::gateway::ASLEEP_WAKING || error.code == "other_terminal_starting" => { ours.insert(name.clone()); }
             Some(Err(error)) => {
                 let detail = detail_body(&error.code, &error.message, json!({}))["detail"].clone();
                 refused.insert(name.clone(), json!({"ok": false, "error": detail, "delivered": false}));

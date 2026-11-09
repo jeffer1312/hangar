@@ -126,26 +126,6 @@ def test_collect_processa_linhas_sem_leitura_integral(tmp_path, monkeypatch):
 
 # -- Kimi ---------------------------------------------------------------------
 
-def test_kimi_usage_llm_e_tool(tmp_path):
-    p = tmp_path / "wire.jsonl"
-    _w(p, [
-        {"type": "turn.prompt", "time": 1000_000},
-        {"type": "llm.request", "time": 1001_000},
-        {"type": "context.append_loop_event", "time": 1002_000,
-         "event": {"type": "content.part"}},
-        {"type": "context.append_loop_event", "time": 1003_000,
-         "event": {"type": "tool.call", "id": "c1"}},
-        {"type": "context.append_loop_event", "time": 1007_000,
-         "event": {"type": "tool.result", "id": "c1"}},
-        {"type": "usage.record", "time": 1009_000, "model": "apikey/k3",
-         "usage": {"inputOther": 100, "output": 50, "inputCacheRead": 300,
-                   "inputCacheCreation": 0}},
-    ])
-    snap = Accumulator("kimi", str(p)).collect()
-    assert snap == {"turns": 1, "steps": 1, "in_tok": 400, "out_tok": 50,
-                    "llm_ms": 8000, "tok_s": 6.2, "tool_ms": 4000,
-                    "cache_pct": 75, "cache_read_tok": 300, "ttft_ms": 2000}
-
 
 # -- Codex --------------------------------------------------------------------
 
@@ -280,25 +260,6 @@ def test_codex_recent_rates_exclude_tools_and_repeated_usage(tmp_path):
 # -- Pi -----------------------------------------------------------------------
 
 
-def test_pi_usage_e_toolresult(tmp_path):
-    p = tmp_path / "session.jsonl"
-    _w(p, [
-        {"type": "message", "message": {"role": "user", "timestamp": 1000_000,
-                                        "content": [{"type": "text", "text": "oi"}]}},
-        {"type": "message", "message": {"role": "assistant", "timestamp": 1003_000,
-                                        "content": [{"type": "toolCall", "id": "t1"}],
-                                        "usage": {"input": 20, "output": 40,
-                                                  "cacheRead": 80, "cacheWrite": 0}}},
-        {"type": "message", "message": {"role": "toolResult", "timestamp": 1005_000,
-                                        "toolCallId": "t1", "content": []}},
-    ])
-    snap = Accumulator("pi", str(p)).collect()
-    assert snap["turns"] == 1 and snap["steps"] == 1
-    assert snap["in_tok"] == 100 and snap["cache_pct"] == 80
-    assert snap["ttft_ms"] == 3000 and snap["llm_ms"] == 3000
-    assert snap["tool_ms"] == 2000
-
-
 def test_claude_linha_sintetica_avanca_o_cursor(tmp_path):
     # task-notification chegando com a sessão parada: sem avançar o cursor, a resposta
     # seguinte engolia a espera inteira como LLM (32min medidos numa sessão real).
@@ -311,27 +272,6 @@ def test_claude_linha_sintetica_avanca_o_cursor(tmp_path):
     ])
     snap = Accumulator("claude", str(p)).collect()
     assert snap["llm_ms"] == 9000        # 5s + 4s — os 30min parados ficam de fora
-
-
-def test_pi_duracao_vem_do_campo_e_tool_desconta_geracao(tmp_path):
-    # O Pi grava a linha do assistente no COMEÇO da geração; a duração real vem em
-    # _piClaudeStyleThinkingDurationMs. tool_ms começa no fim da geração.
-    p = tmp_path / "session.jsonl"
-    _w(p, [
-        {"type": "message", "message": {"role": "user", "timestamp": 1000_000,
-                                        "content": [{"type": "text", "text": "oi"}]}},
-        {"type": "message", "message": {"role": "assistant", "timestamp": 1001_000,
-                                        "_piClaudeStyleThinkingDurationMs": 7000,
-                                        "content": [{"type": "toolCall", "id": "t1"}],
-                                        "usage": {"input": 20, "output": 700,
-                                                  "cacheRead": 80, "cacheWrite": 0}}},
-        {"type": "message", "message": {"role": "toolResult", "timestamp": 1012_000,
-                                        "toolCallId": "t1", "content": []}},
-    ])
-    snap = Accumulator("pi", str(p)).collect()
-    assert snap["llm_ms"] == 7000        # do campo, não do gap de 1s
-    assert snap["tok_s"] == 100.0        # 700 tok / 7s
-    assert snap["tool_ms"] == 4000       # 1012.0 - (1001.0 + 7.0)
 
 
 def test_provider_sem_fold_retorna_none():
@@ -468,6 +408,5 @@ def test_compartilhado_por_provider_e_caminho(tmp_path):
     p = tmp_path / "s.jsonl"
     _w(p, [_claude_user("2026-08-17T12:00:00Z")])
     a = Accumulator.compartilhado("claude", str(p))
-    assert Accumulator.compartilhado("kimi", str(p)) is not a
     assert Accumulator.compartilhado("claude", str(tmp_path / "outro.jsonl")) is not a
     assert Accumulator.compartilhado("inexistente", str(p)) is None

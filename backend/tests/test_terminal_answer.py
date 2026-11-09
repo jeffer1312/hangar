@@ -50,7 +50,6 @@ def test_wait_input_ready_times_out_then_false():
 # repositorio e publico, nada de conversa do usuario aqui). O boot nao tem UMA moldura; o TUI pronto
 # desenha o chrome do composer. Sem provider="pi" o pane nunca casa as marcas do rodape do Claude e
 # TODO envio esperava os 12s inteiros de timeout antes de digitar.
-_PI_BOOT = " Warning: tmux extended-keys is off. Modified Enter keys may not work.\n"
 # Variante CAIXA (pi antigo / outro tema): o que o marcador `╰─` original media.
 _PI_IDLE = (
     " Reloaded keybindings, extensions, skills, prompts, themes, and context files\n"
@@ -62,65 +61,6 @@ _PI_IDLE = (
 # Variante REGUA — o desenho de HOJE, tanto no pi puro (`--no-extensions`) quanto com o pacote
 # `pi-claude-code-ui`: duas reguas e a statusline, ZERO `╰─`. Foi este pane que fez cada mensagem
 # custar 12s.
-_PI_IDLE_RULES = (
-    " ✻ Turn took 11s (Total time 3h 43m 36s · 12 turns)\n"
-    "\n"
-    "─" * 100 + "\n"
-    "\n"
-    "─" * 100 + "\n"
-    "🤖 cline-pass/glm-5.2 (xhigh) │ 📁 piprobe │ 📟 cp-pi-probe │ 💬 sessão 0in/0out · ctx 0/1M\n"
-)
-
-
-def test_wait_input_ready_pi_pronto_retorna_na_primeira_leitura():
-    with patch.object(ti, "_capture", lambda name: _PI_IDLE), \
-         patch.object(ti.time, "sleep", lambda *_: None):
-        assert ti._wait_input_ready("s", timeout=0.0, provider="pi") is True
-
-
-def test_wait_input_ready_omp_pronto_retorna_na_primeira_leitura():
-    # omp e o fork do Pi: mesmo desenho de composer, mesmo caminho de leitura.
-    with patch.object(ti, "_capture", lambda name: _PI_IDLE), \
-         patch.object(ti.time, "sleep", lambda *_: None):
-        assert ti._wait_input_ready("s", timeout=0.0, provider="omp") is True
-
-
-def test_wait_input_ready_pi_composer_de_reguas_e_pronto():
-    # Regressao do bug dos 12s: a UI atual do Pi desenha reguas, nao caixa. Se um dia mudar de novo,
-    # e ESTE teste que quebra — em vez de o app so ficar lento e calado.
-    with patch.object(ti, "_capture", lambda name: _PI_IDLE_RULES), \
-         patch.object(ti.time, "sleep", lambda *_: None):
-        assert ti._wait_input_ready("s", timeout=0.0, provider="pi") is True
-
-
-def test_wait_input_ready_pi_timeout_avisa_uma_vez(caplog):
-    # Marcador que para de casar nao pode ser silencioso: e assim que 12s por mensagem passam batido.
-    ti._READY_TIMEOUT_WARNED.clear()
-    with patch.object(ti, "_capture", lambda name: _PI_BOOT), \
-         patch.object(ti.time, "sleep", lambda *_: None), \
-         caplog.at_level("WARNING", logger="hangar.terminal_input"):
-        assert ti._wait_input_ready("s", timeout=0.0, provider="pi") is False
-        assert ti._wait_input_ready("s", timeout=0.0, provider="pi") is False
-    assert len(caplog.records) == 1
-    assert "pi" in caplog.records[0].getMessage()
-    ti._READY_TIMEOUT_WARNED.clear()
-
-
-def test_wait_input_ready_timeout_do_pi_e_menor_que_o_do_claude():
-    # A espera so compra seguranca no boot (~4.3s medidos ate o composer); no estouro a gente envia
-    # mesmo assim, entao teto menor = pior caso menor no dia em que o marcador desandar de novo.
-    assert ti._TIMEOUTS_BY_PROVIDER["pi"] < ti._DEFAULT_TIMEOUT
-
-
-def test_wait_input_ready_timeout_do_omp_e_menor_que_o_do_claude():
-    assert ti._TIMEOUTS_BY_PROVIDER["omp"] < ti._DEFAULT_TIMEOUT
-
-
-def test_wait_input_ready_pi_bootando_nao_diz_pronto():
-    # Sem a caixa do composer o TUI ainda nao aceita teclas -> a msg seria engolida.
-    with patch.object(ti, "_capture", lambda name: _PI_BOOT), \
-         patch.object(ti.time, "sleep", lambda *_: None):
-        assert ti._wait_input_ready("s", timeout=0.0, provider="pi") is False
 
 
 def test_wait_input_ready_claude_inalterado():
@@ -131,41 +71,6 @@ def test_wait_input_ready_claude_inalterado():
     with patch.object(ti, "_capture", lambda name: _PI_IDLE), \
          patch.object(ti.time, "sleep", lambda *_: None):
         assert ti._wait_input_ready("s", timeout=0.0) is False
-
-
-def test_send_prompt_leva_o_provider_ate_o_gate():
-    # Trava contra alguem DERRUBAR o argumento no meio do caminho: o gate roda de verdade (nao e
-    # mockado fora), so espiamos com que provider ele foi chamado.
-    real = ti._wait_input_ready
-    seen = {}
-
-    def spy(name, timeout=12.0, provider="claude"):
-        seen["provider"] = provider
-        return real(name, timeout=0.0, provider=provider)
-
-    with patch.object(ti.tmux, "has_session", return_value=True), \
-         patch.object(ti, "_capture", lambda name: _PI_IDLE), \
-         patch.object(ti, "_wait_input_ready", spy), \
-         patch.object(ti, "_entrou_no_composer", lambda *_a: True), \
-         patch.object(ti.time, "sleep", lambda *_: None), \
-         patch.object(ti, "send_keys", lambda name, k, **kw: None):
-        assert ti.TerminalInput().send_prompt("s", "oi", "pi") == "sent"
-    assert seen["provider"] == "pi"
-
-
-def test_drain_leva_o_provider_ate_o_send_prompt(tmp_path, monkeypatch):
-    # O caminho da FILA (drain) e o segundo ponto de entrada: sem repassar, a msg enfileirada de uma
-    # sessao Pi pagava os 12s mesmo com o /input corrigido.
-    from app import pqueue
-    monkeypatch.setattr(pqueue.settings, "projects_dir", tmp_path / "projects")
-    pqueue.PromptQueue("s").append("oi", delivered=False)
-    seen = []
-    with patch.object(ti.TerminalInput, "send_prompt",
-                      lambda self, name, text, provider="claude", pane_id=None, msg_id=None:
-                      seen.append(provider) or "sent"), \
-         patch.object(ti, "_transcript_start_ts", lambda j: 0.0):
-        assert ti.drain("s", "/nao/existe.jsonl", "pi") == 1
-    assert seen == ["pi"]
 
 
 def test_single_question_no_review_submits_without_escape():
@@ -527,21 +432,6 @@ def test_composer_residuo_ignora_digitacao_do_usuario():
                                 "linha um\nlinha final do recado") is False
 
 
-def test_composer_residuo_atravessa_a_borda_da_caixa_do_kimi():
-    # O composer do Kimi e uma caixa: cada linha do wrap chega entre `│`. Tirar so o espaco deixava
-    # `…naotinhasido││reinstalado` e a cauda nunca casava — o Enter nao era enviado e o envio virava
-    # 400 "envio incompleto" com o texto parado no terminal (sessao pm-nova, 27/08/2026).
-    texto = "abre outra, eu precisei fechar, era o wrapper que nao tinha sido reinstalado"
-    caixa = ("  eco da conversa aqui\n"
-             "╭" + "─" * 41 + "╮\n"
-             "│ > abre outra, eu precisei fechar,       │\n"
-             "│   era o wrapper que nao tinha sido      │\n"
-             "│   reinstalado                           │\n"
-             "╰" + "─" * 41 + "╯\n"
-             "  🤖 K3 │ 📁 pm-nova\n")
-    assert ti._composer_residuo(caixa, texto) is True
-
-
 def test_composer_residuo_pane_ilegivel_devolve_none_nao_false():
     # None e nao False: "nao sei ler" tem de cair pra lados OPOSTOS nos dois chamadores. Como False,
     # o _entrou_no_composer lia "nao chegou" e nunca mandava Enter.
@@ -740,114 +630,3 @@ def test_mensagem_curta_continua_sendo_enviada():
 # ── answer_question_pi: drive do picker da tool `question` do Pi ────────────────────────────────
 
 _Q = {"options": [{"label": "opcao A"}, {"label": "opcao B"}]}
-
-
-def _fake_pi_picker():
-    """Picker do Pi vivo. Cursor comeca na linha 1; Enter numa opcao fecha o picker (rodape some);
-    Enter no "Type something." abre o modo TEXTO (cursor sai da tela, literal entra, Enter fecha)."""
-    estado = {"cursor": 1, "aberto": True, "modo_texto": False, "digitado": ""}
-
-    def capture(name):
-        if not estado["aberto"]:
-            return "conversa normal\n" + ("─" * 60) + "\n status\n"
-        if estado["modo_texto"]:
-            return ("● Question qual?\n\n> " + estado["digitado"] + "\n"
-                    "Enter to submit • Esc to cancel\n" + ("─" * 60) + "\n status\n")
-        linhas = []
-        for i, lbl in enumerate(["opcao A", "opcao B", "Type something."], start=1):
-            marca = "> " if estado["cursor"] == i else "  "
-            linhas.append(f"{marca}{i}. {lbl}")
-        return ("● Question qual?\n\n" + "\n".join(linhas) + "\n"
-                "↑↓ navigate • Enter to select • Esc to cancel\n" + ("─" * 60) + "\n status\n")
-
-    def send_keys(name, k, **kw):
-        if not estado["aberto"]:
-            return True
-        if estado["modo_texto"]:
-            if kw.get("literal"):
-                estado["digitado"] = k
-            elif k == "Enter":
-                estado["aberto"] = False
-            return True
-        if k == "Down":
-            estado["cursor"] = min(3, estado["cursor"] + 1)
-        elif k == "Up":
-            estado["cursor"] = max(1, estado["cursor"] - 1)
-        elif k == "Enter":
-            if estado["cursor"] == 3:
-                estado["modo_texto"] = True     # "Type something." abre o campo de texto
-            else:
-                estado["aberto"] = False
-        return True
-    return capture, send_keys, estado
-
-
-def test_pi_answer_option_navega_e_submete():
-    capture, send_keys, estado = _fake_pi_picker()
-    with patch.object(ti, "_capture", capture), \
-         patch.object(ti, "send_keys", send_keys), \
-         patch.object(ti.time, "sleep", lambda *_: None):
-        ti.answer_question_pi("s", {"kind": "option", "indices": [1], "labels": ["opcao B"]}, _Q)
-    assert estado["aberto"] is False
-
-
-def test_pi_answer_text_vai_pro_type_something():
-    capture, send_keys, estado = _fake_pi_picker()
-    with patch.object(ti, "_capture", capture), \
-         patch.object(ti, "send_keys", send_keys), \
-         patch.object(ti.time, "sleep", lambda *_: None):
-        ti.answer_question_pi("s", {"kind": "text", "value": "resposta livre"}, _Q)
-    assert estado["digitado"] == "resposta livre"
-    assert estado["aberto"] is False
-
-
-def test_pi_answer_sem_picker_aberto_e_driveerror():
-    with patch.object(ti, "_capture", lambda name: "pane qualquer sem picker"), \
-         patch.object(ti.time, "sleep", lambda *_: None):
-        try:
-            ti.answer_question_pi("s", {"kind": "option", "indices": [0], "labels": ["opcao A"]}, _Q)
-            assert False, "devia ter levantado DriveError"
-        except ti.DriveError:
-            pass
-
-
-def test_pi_answer_capture_morrendo_no_meio_do_drive_nao_submete_as_cegas():
-    # O picker estava legivel na checagem inicial; se o capture passa a devolver "" (falha de tmux),
-    # o drive NAO pode dar Enter as cegas — DriveError e o fallback por texto assume.
-    chamadas = {"n": 0, "enter": False}
-
-    def capture(name):
-        chamadas["n"] += 1
-        return _fake_pi_picker()[0](name) if chamadas["n"] == 1 else ""
-
-    def send_keys(name, k, **kw):
-        if k == "Enter":
-            chamadas["enter"] = True
-        return True
-
-    with patch.object(ti, "_capture", capture), \
-         patch.object(ti, "send_keys", send_keys), \
-         patch.object(ti.time, "sleep", lambda *_: None):
-        try:
-            ti.answer_question_pi("s", {"kind": "option", "indices": [0], "labels": ["opcao A"]}, _Q)
-            assert False, "devia ter levantado DriveError"
-        except ti.DriveError:
-            pass
-    assert chamadas["enter"] is False
-
-
-def test_pi_answer_validacao():
-    import pytest
-    opt = {"kind": "option", "indices": [9], "labels": ["x"]}
-    with pytest.raises(ValueError):
-        ti.answer_question_pi("s", opt, _Q)                                     # fora do range
-    with pytest.raises(ValueError):
-        ti.answer_question_pi("s", {"kind": "option", "indices": [0, 1], "labels": ["a", "b"]}, _Q)  # multi
-    with pytest.raises(ValueError):
-        ti.answer_question_pi("s", {"kind": "option", "indices": [0]}, _Q)      # sem labels (fallback vazio)
-    with pytest.raises(ValueError):
-        ti.answer_question_pi("s", {"kind": "text", "value": "  "}, _Q)         # texto vazio
-    with pytest.raises(ValueError):
-        ti.answer_question_pi("s", {"kind": "text", "value": "a\x07b"}, _Q)    # control char
-    with pytest.raises(ValueError):
-        ti.answer_question_pi("s", {"kind": "chat"}, _Q)                        # kind sem suporte

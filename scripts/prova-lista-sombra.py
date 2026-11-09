@@ -53,8 +53,7 @@ import app.api as _api
 async def _sem_poda():
     return None
 _api._prune_loop = _sem_poda
-from app import sse as _sse, list_facts as _lf
-from app.models import SessionInfo as _SI
+from app import sse as _sse
 _py = open({py!r}, "a", buffering=1)
 _rs = open({rs!r}, "a", buffering=1)
 _dif = open({dif!r}, "a", buffering=1)
@@ -72,33 +71,6 @@ def _sig(infos):
         _py.write(f"{{_t.monotonic():.3f}} {{_t.monotonic() - t:.4f}} {{len(infos)}}\n")
     return _sig0(infos)
 _sse._list_sig = _sig
-_c0 = _lf.compute
-async def _c(rows, owner_clients, pane_pids, shadow=False):
-    t0 = _t.monotonic()
-    out = await _c0(rows, owner_clients, pane_pids, shadow)
-    if shadow:
-        _rs.write(f"{{t0:.3f}} {{_t.monotonic() - t0:.4f}} {{len(rows)}}\n")
-        try:
-            py = out.get("shadow") or {{}}
-            for r in rows:
-                st = (out.get("states") or {{}}).get(r.get("name"))
-                if st:
-                    r = {{**r, **{{k: v for k, v in st.items() if v is not None or k != "conta"}}}}
-                nome = r.get("name")
-                if nome not in py:
-                    continue
-                rsig = _lf._row_sig(_SI.model_validate(r))
-                for f, v in py[nome].items():
-                    if rsig.get(f) != v:
-                        chave = (nome, f, _j.dumps(rsig.get(f), default=str), _j.dumps(v, default=str))
-                        if chave not in _vistos:
-                            _vistos.add(chave)
-                            _dif.write(_j.dumps({{"t": round(t0, 3), "sessao": nome, "campo": f,
-                                                  "rust_pre": rsig.get(f), "py": v}}, default=str) + "\n")
-        except Exception as e:
-            _dif.write(_j.dumps({{"erro": type(e).__name__}}) + "\n")
-    return out
-_lf.compute = _c
 '''
 
 

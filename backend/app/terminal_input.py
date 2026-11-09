@@ -12,12 +12,13 @@ from app import diag as usage_diag
 from app import codex_permissions as cxperm
 from app.askquestion import pergunta_aberta
 from app import model_picker as mp
-from app import providers_bridge
+
+
 from app import tmux
 from app.models import scrub_surrogates
 from app.pqueue import PromptQueue, _transcript_start_ts
 from app.state import (_live_spinner, classify, cursor_sem_numero, foco_no_rodape, is_overlay, menu_codex,
-                       omp_box, aprovacao_kimi_no_pane)
+                       )
 from app.tmux import send_keys
 
 _log = logging.getLogger("hangar.terminal_input")
@@ -153,35 +154,8 @@ def _capture(name: str) -> str:
     return tmux.capture_pane(name)
 
 
-# Marcas do rodapé do Claude Code quando o input já está VIVO (TUI interativo). Durante o BOOT
-# (logo + carregamento) elas ainda não aparecem.
-# O rodape ATUAL (medido no claude v2.1.218) e `⏵⏵ auto mode on (shift+tab to cycle) · ← for agents`,
-# `⏸ manual mode on · ← for agents` ou `⏵⏵ bypass permissions on (...)` — nenhuma das marcas antigas
-# aparece nos dois primeiros, entao TODO envio queimava os 12s de timeout com o _send_lock na mao
-# (mesmo estrago que o `╰─` do Pi documentado abaixo).
-# O marcador e o GLIFO de modo, nao a frase "mode on": `_capture` le a tela INTEIRA, e "mode on" e
-# frase de duas palavras comuns — uma conversa citando "auto mode on", um `git show` deste commit ou
-# prosa com "debug mode on" ja casava, e o gate liberava com a TUI ainda bootando (mensagem engolida,
-# exatamente o bug que ele existe pra evitar). O proprio comentario anterior avisava dessa armadilha
-# ("discutir os marcadores no chat faz eles casarem com o texto da conversa") e caiu nela. `⏵⏵`/`⏸`
-# cobrem os MESMOS rodapes e nao aparecem em prosa.
-# As marcas antigas ficam pra versoes/telas anteriores. Se um dia o glifo mudar, o gate estoura o
-# timeout e AVISA uma vez (_warn_ready_timeout_once) em vez de ficar lento e calado.
 _READY_MARKERS = ("⏵⏵", "⏸", "bypass permissions", "? for shortcuts", "for shortcuts")
 
-# Quantas linhas do FIM do pane valem como "rodape" pra procurar marcador. O aviso acima ("cuidado ao
-# medir, o _capture le a tela inteira") virou codigo: casar no pane TODO deixa o gate refem do texto
-# da CONVERSA. "mode on" e frase de duas palavras comuns — um chat que cite `auto mode on`, um
-# `git show` deste commit, ou prosa com "debug mode on" ja casa. E o caso quebrado nao e teorico: numa
-# sessao reatachada/respawnada o pane ainda mostra a tela anterior por instantes, com a TUI ainda NAO
-# aceitando teclas -> o gate libera cedo e a mensagem e engolida, que e exatamente o bug que ele
-# existe pra evitar. O rodape do Claude Code mora sempre nas ultimas linhas (regua + 2-3 de statusline
-# + a linha de modo), e o composer do Pi tambem — entao a cauda serve pros dois providers, e nos
-# marcadores do Pi (glifos de moldura `─`/`│`) o ganho e ainda maior: qualquer tabela no meio da
-# conversa casava.
-# 12 linhas: a statusline do usuario ocupa 3 e o composer do Pi ~3, entao sobra folga de 2x.
-# ponytail: janela fixa; upgrade = casar por ancora de rodape (regua + statusline) se algum provider
-# passar a desenhar rodape alto.
 _READY_TAIL_LINES = 12
 
 
@@ -190,30 +164,7 @@ def _pane_tail(pane: str, lines: int = _READY_TAIL_LINES) -> str:
     # pra fora da janela e o gate voltaria a esperar os 12s inteiros.
     return "\n".join(pane.rstrip("\n").split("\n")[-lines:])
 
-# Por PROVIDER. O Pi não imprime rodapé nenhum: a prova de "TUI viva" é o CHROME do composer —
-# qualquer caractere de moldura na tela. NÃO é uma moldura específica: medido no pi 0.82.1, o mesmo
-# composer é desenhado de três jeitos diferentes (caixa `╭──╮ … ╰──╯` em versões antigas; DUAS
-# réguas `────` no pi puro `--no-extensions`; as mesmas réguas + statusline com o pacote
-# `pi-claude-code-ui` que o usuário usa). Casar UM desenho (`╰─`) foi o bug: com a UI atual o pane
-# não tem nenhum `╰─`, então TODO envio queimava os 12s de timeout com o _send_lock na mão.
-# Por que qualquer moldura serve como prova: no interactive-mode.js do Pi o editor entra na tela
-# (`addChild(editorContainer)` + `setFocus` + `setupKeyHandlers` + `ui.start()`) ANTES do header e
-# do `renderInitialMessages()` — nada é desenhado antes de as teclas serem aceitas. E o boot (que
-# baixa `fd`/`rg`) não imprime uma moldura sequer: medido em dois boots reais capturados a cada
-# 0.1–0.25s, o primeiro caractere de moldura aparece em 4.2s / 4.5s, junto com o composer.
-# ponytail: o conjunto de glifos é calibration knob, igual ao _LOGIN_RE do state.py.
-_READY_MARKERS_BY_PROVIDER = {"pi": ("─", "━", "═", "╰", "│"),
-                              # omp: fork do Pi, mesma TUI/composer.
-                              "omp": ("─", "━", "═", "╰", "│"),
-                              # Kimi: composer = mesma caixa arredondada do Pi (╭─╮ ╰─╯ com "> "
-                              # dentro) — medido num pane real do Kimi 0.34.0. O conjunto do Pi vale
-                              # inteiro: qualquer moldura em tela prova que a TUI ja aceita tecla.
-                              "kimi": ("─", "━", "═", "╰", "│")}
 
-# Timeout por provider. O Pi ficou mais curto de propósito: o boot medido até o composer é ~4.3s,
-# então 8s é ~2× de folga, e no estouro a gente ENVIA mesmo assim — ou seja, a espera só compra
-# segurança durante o boot e todo o resto é latência pura no dia em que o marcador desandar de novo.
-_TIMEOUTS_BY_PROVIDER = {"pi": 8.0, "omp": 8.0, "kimi": 8.0}
 _DEFAULT_TIMEOUT = 12.0
 
 # Um aviso por (sessão, provider): marcador que para de casar não pode ser silencioso — foi assim
@@ -221,9 +172,6 @@ _DEFAULT_TIMEOUT = 12.0
 _READY_TIMEOUT_WARNED: set[tuple[str, str]] = set()
 # Idem pro composer ilegivel: checagem que morre calada e o mesmo estrago do marcador que para de casar.
 _COMPOSER_WARNED: set[str] = set()
-# Defer por composer do Pi ocupado: o drain roda em TODO reconnect/idle — com um rascunho parado no
-# composer o mesmo WARNING repetiria pra sempre. Uma vez por sessao; sai do set quando desocupa,
-# pra um NOVO episodio avisar de novo.
 _OCUPADO_WARNED: set[str] = set()
 _OCUPADO_DEFER_COUNT: dict[str, int] = {}
 # Idem pro deferred de sessao INDISPONIVEL (`not deliverable`: overlay/menu aberto no terminal) —
@@ -234,14 +182,6 @@ _INDISPONIVEL_DEFER_COUNT: dict[str, int] = {}
 # Idem pro foco no rodapé do Claude Code que o Esc não devolveu ao composer.
 _FOCO_WARNED: set[str] = set()
 _FOCO_DEFER_COUNT: dict[str, int] = {}
-# Quantas vezes SEGUIDAS uma sessao pode ficar deferred (por composer ocupado OU por indisponivel)
-# antes do log virar ERRO, em vez do WARNING unico de praxe (_OCUPADO_WARNED/_INDISPONIVEL_WARNED),
-# que cala depois da primeira vez. Medido 02/08/2026: com o aviso de subagente do Pi contando como
-# "ocupado" (bug hoje corrigido em _composer_ocupado_pi), o usuario so descobria a fila emperrada
-# mexendo no terminal a mao — "adiar pra sempre e pior que avisar" vale tambem pro caso em que o
-# composer FICA ocupado de verdade (um rascunho de longa duracao, por exemplo) ou a sessao fica presa
-# num overlay. Contador por sessao; zera quando desocupa/fica disponivel de novo (ou quando a sessao
-# MORRE — ver _limpa_deferred —, senao os dicts cresceriam pra sempre pra um nome que nunca mais volta).
 _OCUPADO_DEFER_LIMIT = 5
 
 
@@ -319,18 +259,6 @@ def _warn_ready_timeout_once(name: str, provider: str, timeout: float) -> None:
 # regiao o comeco e prova tao segura quanto a cauda, entao virou evidencia valida — ver
 # _RESIDUO_INICIO logo abaixo.)
 _RESIDUO_CAUDA = 40
-# Quanto do COMECO do texto enviado a gente procura, como evidencia ALTERNATIVA a cauda. Causa raiz
-# medida 02/08/2026 (log real, duas ocorrencias seguidas): o composer do Claude Code CORTA a EXIBICAO
-# de texto longo — desenha as primeiras linhas e o resto (onde mora a cauda) nunca aparece. Pior com
-# imagem anexada, porque o caminho do arquivo colado vai pro FIM do texto e vira a cauda:
-#   cauda='ude-pocket-uploads/1785666473-67f17f.png'
-#   composer='───\n❯ [Image #1]Então aconteceu várias outras vezes aqui, mas imagino que seu oque é ,
-#   todas no pi ,\n  As vezes dps de rodar um subagnt ele aparece essa sugestão, não tem nd digitado
-#   aí , seu eu for\n  pelo terminal e escrever vai , mas se tá usando a visualização no pane talvez
-#   não quer enviar,\n  vi'
-# O texto ESTAVA la (da pra ver o comeco) — so a cauda que nunca foi desenhada, entao
-# _entrou_no_composer via False, o Enter nunca ia, e cada retry do app empilhava OUTRO envio (mensagem
-# triplicada que o usuario relatou). O comeco e exatamente a parte que o composer desenha.
 _RESIDUO_INICIO = 40
 # Minimo de caracteres (sem espaco) pra a cauda OU o comeco valerem como prova. Ver _composer_residuo.
 _RESIDUO_MIN = 12
@@ -362,23 +290,6 @@ def _sem_borda(s: str) -> str:
     return re.sub(r"[\s│┃║]+", "", s)
 
 
-# Numeros dos placeholders de paste numa regiao do pane. A IDENTIDADE importa: aceitar qualquer
-# placeholder fazia um paste ALHEIO (rascunho do usuario) contar como a nossa entrega — o Enter
-# submetia o texto do usuario como se fosse o prompt do agente (achado CRITICO da review de 31/07).
-# So um numero NOVO em relacao a foto tirada ANTES do nosso paste prova alguma coisa.
-#
-# DOIS desenhos, um por agente, e cada um tem de estar aqui porque o texto real nunca chega a ser
-# desenhado quando o TUI colapsa:
-#   Claude Code -> "[Pasted text #1 +12 lines]"
-#   Pi          -> "[paste #1 1032 chars]"      (medido 09/08/2026, pi 0.83.0)
-# So o do Claude estava coberto, e o do Pi custou o bug que o usuario relatou: recado longo de
-# pareamento entrava no composer do Pi, `_composer_residuo` nao achava prova nenhuma, o Enter nunca
-# era enviado e cada retry empilhava outro paste (o log do proprio codigo imprimia
-# `composer='… [paste #1 1032 chars] …' pastes(antes=[] depois=[])` — mostrando o chip na tela e o
-# detector cego). Depois do primeiro travamento o `_composer_ocupado_pi` passava a adiar tudo, e a
-# fila so drenava com um Enter manual no terminal, entregando a pilha de uma vez.
-# ponytail: e uma lista de desenhos medidos, igual ao _READY_MARKERS_BY_PROVIDER — provider novo que
-# colapse paste entra aqui, com a forma medida no pane, nunca chutada.
 _PASTE_ID_RE = re.compile(r"\[(?:Pasted text|paste) #(\d+)")
 # Imagem: o Claude Code troca o CAMINHO colado por "[Image #N]" e o caminho nunca e desenhado
 # (medido 12/09/2026). Id com prefixo para o `#1` da imagem nao se confundir com o do texto colado.
@@ -551,107 +462,14 @@ def _diag_composer(pane: str, texto: str, name: str, pastes_antes: set[str] | No
         return f"diag indisponivel: {e!r}"
 
 
-# Aviso do Pi de subagente async que a caixa de intercomunicacao nao confirmou — texto de SISTEMA,
-# nao rascunho do usuario. Causa raiz medida 02/08/2026: o Pi imprime esse aviso DENTRO da mesma
-# caixa do composer, e o guard antigo ("qualquer linha nao-vazia = ocupado") contava aviso como se
-# fosse rascunho -> deferred pra sempre (o usuario confirmou que so destravava mexendo no terminal a
-# mao). Log real:
-#   " Subagent async grouped result intercom delivery was not acknowledged for
-#   '/tmp/pi-subagents-uid-1000/async-subagent-results/a56523ed-40de-4fc7-a352-8fa39f29f908.json'."
-#
-# ACHADO DA REVIEW (mesmo dia): a 1a versao usava `[^\n]*`, exigindo a frase inteira numa LINHA
-# FISICA — mas o `capture-pane` devolve linha de TELA, e o aviso tem ~167 chars: num pane estreito
-# (medido em 90 e 99 colunas) ele QUEBRA no meio, `[^\n]*` para de casar na primeira quebra, e
-# _composer_ocupado_pi volta a devolver True (o bug "continua adiando pra sempre" reaberto). A
-# sessao nasce com `-x 200` mas o tmux segue o menor CLIENTE anexado, entao o pane estreito e real
-# em uso, nao teorico. Fix: casa contra o texto com TODO espaco em branco colapsado (a mesma tecnica
-# de _sem_espaco que o resto do arquivo ja usa pra sobreviver ao wrap de exibicao da cauda/comeco) —
-# um wrap NUNCA acrescenta nem apaga caractere, so reposiciona o cursor pra proxima linha da tela,
-# entao remover TODO whitespace (real ou introduzido pela quebra) reconstroi a sequencia de
-# caracteres original em qualquer ponto de corte.
-_AVISO_SUBAGENT_PI_FRASE = _sem_espaco(
-    "Subagent async grouped result intercom delivery was not acknowledged for")
-_AVISO_SUBAGENT_PI_RE = re.compile(
-    re.escape(_AVISO_SUBAGENT_PI_FRASE) + r".*?/tmp/pi-subagents-[^']*'?\.?")
-# Exige tambem o caminho `/tmp/pi-subagents-` alem da frase, pra nao casar por coincidencia um texto
-# de usuario que cite palavras parecidas.
-# ponytail: remendo — reconhece a FRASE especifica do aviso, nao distingue aviso de rascunho em
-# GERAL (uma frase nova de um aviso futuro nao vai casar). Foi o que aconteceu: a frase nova e a da
-# NOSSA extensao de estado, e ela recusava a troca de modelo com 409 e o composer vazio.
-#
-# O upgrade que este comentario propunha — comparar a caixa contra a leitura ANTERIOR, porque aviso
-# de sistema e ESTATICO e rascunho de quem digita MUDA — foi medido em 23/08/2026 e NAO se sustenta.
-# Rascunho PARADO tambem e estatico, e o guard existe exatamente pro rascunho parado (ABC-1234):
-#   com um rascunho na caixa da `pi-teste`, duas capturas com 1,5s de intervalo
-#   -> ' rascunho parado do usuario' nas duas, byte a byte.
-# Duas leituras separam "digitando agora" de "nao digitando", nao rascunho de aviso.
-#
-# O que resolve e nao raspar: PERGUNTAR pra extensao, que le `ctx.ui.getEditorText()` de dentro do
-# processo do Pi. Ver `_composer_ocupado_pi` logo abaixo. Este regex fica como plano B, pro caso
-# sem linha (extensao velha, socket caido) — la o remendo continua sendo o melhor que a tela da.
-
-
-def _composer_ocupado_pi(name: str, pane_id: str | None = None) -> bool:
-    """True = já ha RASCUNHO parado no composer do Pi. Digitar por cima COLARIA as mensagens num
-    submit so — caso real (ABC-1234, 31/07): aviso de grupo ficou no composer com o Enter engolido
-    (tmux extended-keys formato xterm), o prompt do cockpit foi digitado em cima, os dois viraram
-    UMA mensagem, e o reconcile — sem achar o prompt exato no transcript — reentregou (duplicata).
-
-    PERGUNTA primeiro, raspa depois. Quem sabe a resposta e o Pi, e a extensao ja esta dentro dele:
-    `ctx.ui.getEditorText()` devolve o texto do campo. A tela NAO responde isso — medido em
-    22/08/2026, com o aviso da nossa propria extensao na faixa do composer:
-
-        getEditorText() com o aviso na faixa   -> ""                        (nao e rascunho)
-        getEditorText() com rascunho parado    -> "rascunho parado do usuario"
-        ANSI da faixa nos dois casos           -> '\\x1b[0m … \\x1b[0m'      (identico)
-        cursor_flag/cursor_x do psmux          -> 0 / 199 (borda), sempre   (nao localiza nada)
-
-    Sem linha (extensao velha, socket caido, sessao Pi aberta antes deste commit) cai na raspagem
-    de sempre, que segue abaixo sem uma linha mudada.
-
-    So pro Pi porque nele a leitura e deterministica (medido): composer = linhas entre as DUAS
-    ULTIMAS reguas; vazio = nenhuma linha entre elas. No Claude Code o composer vazio desenha
-    glifo/placeholder, entao "tem texto" nao distingue rascunho de moldura — la fica o comportamento
-    de hoje. Ilegivel -> False (na duvida envia, mesma politica do resto do arquivo).
-
-    Antes de decidir "tem rascunho?", remove o aviso de subagente conhecido (ver
-    _AVISO_SUBAGENT_PI_RE) do texto da caixa, JA SEM ESPACO (sobrevive a quebra de linha do wrap de
-    tela — ver comentario ali): aviso de sistema nao e rascunho do usuario, e contá-lo como ocupado
-    travava o envio indefinidamente (o usuario so via a mensagem sair depois de mexer no terminal a
-    mao)."""
-    # `linha_de` e nao o pane cru: no psmux o pane e `%1` em toda sessao Pi, e perguntar pela chave
-    # errada leria o composer da conversa do vizinho (mesma raiz do 11909b31).
-    chave = providers_bridge.inbox_call("line", name=name, pane=pane_id)["line"]
-    if chave:
-        resposta = providers_bridge.inbox_call("question", key=chave, what="editor")["value"]
-        if resposta is not None:
-            # `.strip()`: um espaco solto no campo nao e rascunho que valha adiar envio — e o que
-            # sobra de um paste cancelado. Vazio e resposta ("nao ha rascunho"), None e ausencia.
-            return bool(resposta.strip())
-    try:
-        # Mesma poda do _composer_regiao, e pelo mesmo motivo: numa sessao Pi recem-aberta — que e
-        # justamente quando este caminho de raspagem roda, antes de haver linha do Pi — o composer
-        # fica no alto e o fundo em branco faz a checagem de rascunho responder "nao ha" sem ler.
-        linhas = _linhas_uteis(_capture(name))
-    except Exception:
-        return False
-    reguas = [i for i, l in enumerate(linhas) if l.count("─") >= 20]
-    if len(reguas) < 2 or len(linhas) - reguas[-1] > _COMPOSER_FUNDO \
-            or reguas[-1] - reguas[-2] > _COMPOSER_ALTURA:
-        return False
-    texto_composer = "\n".join(linhas[reguas[-2] + 1:reguas[-1]])
-    sem_aviso = _AVISO_SUBAGENT_PI_RE.sub("", _sem_espaco(texto_composer))
-    return bool(sem_aviso)
-
-
 def _wait_input_ready(name: str, timeout: float | None = None, provider: str = "claude") -> bool:
     """Espera o TUI ficar interativo antes de enviar. BUG: msg mandada logo após criar a
     sessão (agente ainda bootando, TUI não aceita teclas) era ENGOLIDA -> sumia (ficava só na fila
     como bubble fantasma, o agente nunca recebia). Sessão já pronta -> retorna na 1ª leitura (sem
     latência). Timeout -> loga UMA vez, retorna False e envia mesmo assim (não piora o caso de hoje)."""
-    markers = _READY_MARKERS_BY_PROVIDER.get(provider, _READY_MARKERS)
+    markers = _READY_MARKERS
     if timeout is None:
-        timeout = _TIMEOUTS_BY_PROVIDER.get(provider, _DEFAULT_TIMEOUT)
+        timeout = _DEFAULT_TIMEOUT
     deadline = time.monotonic() + timeout
     while True:
         # Só o rodapé (ver _READY_TAIL_LINES): no pane inteiro o marcador casa com o texto da conversa.
@@ -750,11 +568,6 @@ def drain(name: str, jsonl: str, provider: str = "claude") -> int:
     """Entrega ao tty as entradas pendentes (delivered=False) quando o pane volta a aceitar texto.
     Retorna quantas entregou. claim-1-envia-1: um crash entre o claim e o envio deixa NO MAXIMO 1
     entrada 'stranded', nao o lote, e recheca o overlay (via send_prompt) a cada iteracao."""
-    # Provider sem entrega por TECLA sai aqui, ANTES de qualquer coisa que toque o pane. No Codex a
-    # fila e entregue pelo adapter (`turn/start` no app-server): a TUI ja recebeu o texto por outro
-    # caminho, entao digitar seria a mensagem do usuario entrando duas vezes na conversa — o mesmo
-    # incidente ja registrado no Pi e no Kimi, aqui com o agravante de a entrega original ter sido
-    # bem-sucedida. A entrada fica pendente de proposito: quem a entrega e `CodexAdapter.drain`.
     from app.conversation_transfer import transfer_active
     if transfer_active(name):
         return 0
@@ -773,12 +586,6 @@ def drain(name: str, jsonl: str, provider: str = "claude") -> int:
     if pergunta_aberta(Path(jsonl).stem) is not None:
         _log.debug("drain name=%s: pergunta pendente fora da tela, fila segura", name)
         return 0
-    # Poda por DUAS idades, vale a mais nova: (a) inicio do transcript (pre-/clear cria transcript
-    # novo); (b) nascimento do tmux atual — sem ele, um resume (`pi -c`) reusa transcript VELHO e
-    # entradas enfileiradas pra vida anterior da sessao (mesmo nome de pasta) eram entregues na
-    # sessao nova. Regra do dono: sessao morreu devendo, a divida nao passa pra proxima.
-    # `or 0.0`: transcript ilegivel nao pode virar TypeError no max(). E aqui a perda e pequena —
-    # o corte cai pro nascimento do tmux, que e a outra metade da regra e continua valendo.
     start_ts = max(_transcript_start_ts(jsonl) or 0.0, tmux.session_created(name))
     # Orfas de sessao anterior: nunca mais casam nem drenam — remove (senao o cheap-check acima
     # fica quente pra sempre e o lixo acumula ate o cap). A poda some com a bubble do chat, entao
@@ -795,17 +602,7 @@ def drain(name: str, jsonl: str, provider: str = "claude") -> int:
             return sent
         entry = claimed[0]
         try:
-            # Resolve o pane NA HORA (drain roda em polls, nao no caminho quente do envio, entao
-            # pagar mais um `tmux list-panes` aqui nao pesa como pesaria no /input). Pelo pane do
-            # AGENTE, nao pelo ATIVO (I1 da revisao final): numa sessao Pi com split manual o ativo
-            # podia ser o do shell -> `INBOX.tem_linha(pane_id)` falhava e a linha rapida do Pi se
-            # perdia, o mesmo bug que a Task 4 matou no /input. MESMA resolucao do /input
-            # (api._pane_info delega pra ca), nao uma quarta.
             pane_id = agentpane.pane_info(name)[1]
-            # msg_id=entry["id"]: mesma identidade em TODA reentrega desta entrada (retry apos
-            # "deferred" logo abaixo, ou reenvio pelo reconcile de _confirm_and_drain) — e o que
-            # deixa a extensao do Pi (hangar-state.ts) reconhecer um retry e nao chamar sendUserMessage
-            # de novo. Ver pi_inbox.entregar.
             result = ti.send_prompt(name, entry["text"], provider, pane_id=pane_id, msg_id=entry["id"])
         except Exception:
             # Falha POS-gate (tty caiu no meio): pode ter emitido tecla -> at-most-once, NAO reverte.
@@ -864,20 +661,6 @@ def drain(name: str, jsonl: str, provider: str = "claude") -> int:
                                name, entry.get("id"))
             return sent
         if result == "deferred":
-            # Reverte pra retry e para — espera o proximo idle. No caminho de TECLA isto e
-            # literalmente pre-envio (send_prompt nao tocou a TUI: overlay reabriu entre claim e
-            # envio). No caminho da LINHA do Pi NAO e — pi_inbox.entregar pode devolver "deferred"
-            # DEPOIS de a extensao ja ter chamado sendUserMessage (ACK perdido/timeout, ou reconcile
-            # reenviando um "sent" nao confirmado no transcript — achado ALTA "Porta A"/"Porta B" da
-            # revisao 02/08/2026). Reenviar aqui SERIA duplicar a instrucao no agente se nao fosse
-            # por uma coisa: `msg_id=entry["id"]` (linha acima) mantem o MESMO id em toda reentrega
-            # desta entrada, e a extensao (hangar-state.ts) guarda os ids ja entregues — um id repetido
-            # so re-confirma, nunca chama sendUserMessage de novo. E o que torna o revert abaixo
-            # seguro nos DOIS casos, nao so no de tecla.
-            # Revert pode falhar (disco): nesse caso a entrada
-            # fica delivered=True (stranded-mas-VISIVEL como bubble queued-) -> nao re-dreva, mas nao some;
-            # nunca propaga (drain roda fire-and-forget no to_thread). delivered=True = "send_keys chamado",
-            # nao "Claude recebeu" (tmux engole erro de envio) -> a bubble visivel e a unica garantia.
             try:
                 q.set_delivered(entry["id"], False)
             except OSError:
@@ -1140,10 +923,6 @@ def answer_questions(name: str, answers: list[dict]) -> None:
         time.sleep(_OPEN_SETTLE)
         screen = _capture(name)
     if not screen.strip():
-        # Tela vazia e o MESMO valor para "pane em branco" e para "o capture-pane falhou" (tmux.py
-        # loga e devolve ""). Ler isso como "o picker sumiu, entao submeteu" era declarar entrega
-        # sem prova nenhuma — justo quando o multiplexador esta engasgado, que e quando isto
-        # acontece. Mesma decisao que o driver do Pi ja toma no lugar equivalente.
         raise DriveError("tela ilegivel no passo final — nao da pra confirmar a submissao")
     if "Submit answers" in screen:
         if not _review_matches(screen, answers):
@@ -1152,317 +931,6 @@ def answer_questions(name: str, answers: list[dict]) -> None:
     elif "Esc to cancel" in screen:
         raise DriveError("picker preso sem tela de review — nao submetido")
     # senao: pergunta unica ja submeteu na selecao; nada a confirmar.
-
-
-# ── Picker do Pi (tool `question`) e do omp (tool `ask`) ─────────────────────
-# Cursor do picker do Pi: "> 3. label" (ascii, nao o ❯ do Claude). Nao misturar no _CURSOR_ROW
-# do Claude: aquele faz search no pane INTEIRO e um "> N." citado em prosa viraria falso cursor;
-# aqui o match so vale junto com o is_overlay (rodape de navegacao no FUNDO do pane), que e o que
-# separa o picker vivo da citacao no scrollback.
-_PI_CURSOR_ROW = re.compile(r"^\s*>\s*(\d+)\.", re.M)
-# Picker do omp (tool `ask`): as opcoes NAO sao numeradas — cada uma leva o circulo U+F10C e a
-# selecionada ganha o chevron U+F054 na frente (glifos de nerd font, por codigo porque a area de uso
-# privado nao desenha em fonte comum). Sem numero na tela, a linha alvo so sai contando as opcoes.
-_OMP_SEL = chr(0xF054)
-_OMP_OPT = chr(0xF10C)
-_OMP_OPTION_ROW = re.compile(rf"^\s*│\s*(?:{_OMP_SEL}\s+)?{_OMP_OPT}\s")
-_OMP_CURSOR_ROW = re.compile(rf"^\s*│\s*{_OMP_SEL}\s+{_OMP_OPT}\s")
-
-
-def _pi_cursor_row(screen: str, provider: str = "pi") -> int | None:
-    if provider == "omp":
-        # Posicao (1-based) da linha marcada entre as linhas de opcao do picker. So dentro do ULTIMO
-        # box (omp_box) — o cartao-resumo do toolCall fica na tela com as mesmas marcas e somava
-        # opcao a mais. Sem marcador visivel -> None, igual ao Pi: o drive nao navega as cegas.
-        linhas = screen.splitlines()
-        faixa = omp_box(linhas)
-        if faixa is None:
-            return None
-        pos = 0
-        for ln in linhas[faixa[0]:faixa[1]]:
-            if _OMP_OPTION_ROW.match(ln):
-                pos += 1
-                if _OMP_CURSOR_ROW.match(ln):
-                    return pos
-        return None
-    rows = _PI_CURSOR_ROW.findall(screen)
-    return int(rows[-1]) if rows else None   # mais ao fundo = o picker vivo
-
-
-def answer_question_pi(name: str, answer: dict, question: dict, provider: str = "pi") -> None:
-    """Dirige o picker da tool `question` do Pi: Down/Up em malha fechada (mesmo padrao do
-    answer_questions do Claude) + Enter. kind=text: navega ate o "Type something." (sempre a
-    ultima linha), Enter, digita, Enter. Input invalido -> ValueError (409); drive falhou ->
-    DriveError SEM submeter e SEM Escape (o caller faz Escape + fallback por texto, igual Claude).
-
-    provider='omp' e o mesmo drive no picker da tool `ask`: so muda como a linha do cursor e lida
-    (ver _pi_cursor_row). A linha de texto livre e a ultima nos dois ("Type something." no Pi,
-    "Other (type your own)" no omp), entao o alvo do kind=text nao muda."""
-    options = question.get("options") if isinstance(question.get("options"), list) else []
-    kind = answer.get("kind")
-    if kind == "option":
-        indices = answer.get("indices") or []
-        if len(indices) > 1:
-            raise ValueError(f"multi-seleção do {provider} ainda não é dirigida pelo app — responda no terminal")
-        if not indices:
-            raise ValueError("sem opcao escolhida")
-        # labels alimentam o fallback por texto se o drive falhar — sem eles o fallback entregaria
-        # nada com cara de sucesso (achado do silent-failure-hunter 2026-08-04).
-        if not any(str(l).strip() for l in (answer.get("labels") or [])):
-            raise ValueError("opcao sem label (o fallback por texto ficaria vazio)")
-        target = int(indices[0]) + 1
-        if not 1 <= target <= len(options):
-            raise ValueError(f"opcao {target} fora do intervalo (1..{len(options)})")
-    elif kind == "text":
-        value = str(answer.get("value") or "")
-        if not value.strip():
-            raise ValueError("texto vazio")
-        # Mesma trava do _validate do Claude: control chars nao entram no TUI.
-        if any(ord(c) < 32 and c != "\t" for c in value):
-            raise ValueError("texto com caractere de controle")
-        target = len(options) + 1        # "Type something." e sempre a ultima linha do picker
-    else:
-        raise ValueError(f"kind nao suportado no picker do {provider}: {kind!r}")
-
-    screen = _capture(name)
-    if not is_overlay(screen) or _pi_cursor_row(screen, provider) is None:
-        raise DriveError(f"picker do {provider} nao esta aberto no pane")
-
-    def key(k: str) -> None:
-        send_keys(name, k)
-        time.sleep(_SETTLE)
-
-    # Nav em malha fechada. O picker estava legivel na checagem inicial: se o cursor ficar
-    # ILEGIVEL no meio (capture falho devolve ""), NAO se submete as cegas — DriveError e o
-    # fallback por texto assume (um Enter cego podia cair na opcao errada; o Pi nao tem Review).
-    for _ in range(3):
-        row = _pi_cursor_row(_capture(name), provider)
-        if row is None:
-            raise DriveError(f"cursor do picker do {provider} ficou ilegivel no meio do drive; nao submetido")
-        if row == target:
-            break
-        for _ in range(abs(target - row)):
-            key("Down" if target > row else "Up")
-    else:
-        raise DriveError(f"nav drift no picker do {provider} — nao convergiu pra linha {target}; nao submetido")
-    key("Enter")
-    if kind == "text":
-        time.sleep(_SETTLE)
-        send_keys(name, value, literal=True)
-        time.sleep(_SUBMIT_SETTLE)
-        key("Enter")
-    time.sleep(_OPEN_SETTLE)
-    after = _capture(name)
-    if not after.strip():
-        time.sleep(0.5)                # um retry: capture falho bem na hora do Enter nao e veredito
-        after = _capture(name)
-    if not after.strip():
-        raise DriveError("capture vazio apos o Enter — nao da pra confirmar a submissao")
-    if is_overlay(after) and _pi_cursor_row(after, provider) is not None:
-        raise DriveError(f"picker do {provider} ainda aberto apos o Enter — nada foi submetido")
-
-
-# Rodape do picker do Kimi. Ele muda conforme o MODO e e o que distingue os tres desenhos medidos
-# (13/08/2026, Kimi 0.36.0): escolha simples ("1-4 / ↵ choose"), multipla ("1-5 / ↵ toggle") e campo
-# de texto ("type answer  ↵ save"). No de texto a tecla numerica vira CARACTERE — mandar numero ali
-# escreveria "2" no campo em vez de escolher.
-# Quantas releituras esperando a aba certa aparecer antes de desistir (o redesenho da troca de aba
-# leva alguns quadros).
-_KIMI_ABA_TENTATIVAS = 6
-_KIMI_FOOTER_RE = re.compile(r"↵\s*(choose|toggle|save)|type answer")
-_KIMI_TEXTO_RE = re.compile(r"type answer")
-# Tela de Review do Kimi: sem passar por ela a resposta NAO chega na ferramenta (medido).
-_KIMI_REVIEW_RE = re.compile(r"Ready to submit your answers\?")
-# A pergunta desenhada AGORA. O relatorio da medicao: "pra saber qual aba esta ativa sem ler ANSI,
-# use o texto depois do `? ` — ele e sempre a pergunta da aba atual" (o destaque da aba e cor, que o
-# capture-pane -p descarta).
-_KIMI_PERGUNTA_RE = re.compile(r"^\s*\?\s+(\S.*?)\s*$", re.M)
-
-
-def _kimi_pergunta_atual(pane: str) -> str | None:
-    m = _KIMI_PERGUNTA_RE.search(pane)
-    return m.group(1) if m else None
-
-
-def _mesma_pergunta(na_tela: str, esperada: str) -> bool:
-    # Comparacao TOLERANTE: o pane quebra/corta o texto na largura da janela, entao exigir igualdade
-    # exata reprovaria pergunta longa legitima. Prefixo em qualquer direcao basta pra distinguir uma
-    # aba da outra, que e o unico julgamento necessario aqui.
-    a = " ".join(na_tela.split())
-    b = " ".join(esperada.split())
-    if not a or not b:
-        return False
-    return a.startswith(b[:40]) or b.startswith(a[:40])
-
-
-def _kimi_picker_aberto(pane: str) -> bool:
-    # Pane INTEIRO, nunca a cauda: o overlay do Kimi e desenhado logo abaixo do ultimo conteudo da
-    # conversa, e o resto do pane fica em branco — medido a 16, 11 e 3 linhas do fim conforme a
-    # conversa cresce. Um detector de cauda perde o picker justamente na conversa curta.
-    return bool(_KIMI_FOOTER_RE.search(pane))
-
-
-def picker_kimi_aberto(name: str) -> bool:
-    """O picker do Kimi ainda esta na tela? Usado como PROVA de que nada foi submetido quando a
-    confirmacao pelo transcript estoura o prazo."""
-    return _kimi_picker_aberto(_capture(name))
-
-
-# Painel de APROVACAO do Kimi: o desenho na TELA. Mora no state.py junto dos outros regexes de pane
-# (`_aprovacao_kimi_no_pane`), porque quem decide o ESTADO tambem precisa dele — o wire sozinho nao
-# distingue "painel aberto agora" de "pedido que ficou sem resposta numa execucao anterior".
-_KIMI_APROV_FEEDBACK_RE = re.compile(r"Type feedback")
-
-
-def aprovacao_kimi_aberta(name: str) -> bool:
-    """O painel de aprovacao do Kimi ainda esta na tela? PROVA de que a tecla nao pegou."""
-    return aprovacao_kimi_no_pane(_capture(name))
-
-
-def feedback_kimi_aberto(name: str) -> bool:
-    """O painel de aprovacao abriu o campo de texto (escolha `Revise` / `Reject with feedback`)?
-
-    E a confirmacao de entrega DESSAS escolhas: elas nao geram `interaction.resolved` na hora — o
-    painel troca o rodape e fica esperando a justificativa, que a pessoa escreve pelo composer."""
-    return bool(_KIMI_APROV_FEEDBACK_RE.search(_capture(name)))
-
-
-def select_kimi(name: str, option: int, jsonl: str, req_id: str) -> None:
-    """Escolhe a opcao `option` (1-based) do painel de APROVACAO do Kimi pela TECLA NUMERICA.
-
-    Nao conta linha e nao manda (n-1)xDown como o `select` generico, por dois motivos medidos: o
-    cursor do Kimi e `▶`, que o `_cursor_row` nao le (entao la o drive cairia no caminho ABERTO, as
-    cegas), e o painel trata numero como escolha direta — `handleInput` faz `Number(printable)-1` e
-    chama `selectAndSubmit`, sem passar pelo cursor. Menos tecla, nenhum drift.
-
-    Painel fora da tela -> DriveError SEM digitar: numero solto no composer viraria texto na
-    conversa. Quem confirma a entrega e o caller (`interaction.resolved` no wire, ou o campo de
-    texto abrindo quando a escolha pede justificativa).
-
-    `req_id` e o pedido que a pessoa VIU quando escolheu, reconferido no wire no ultimo instante
-    antes da tecla. Sem ele o guard so sabia que ha ALGUM painel na tela: se o pedido de agora for
-    respondido no terminal e outro abrir no mesmo piscar, a tecla acertaria o painel novo — com os
-    rotulos do antigo. Aprovar um plano que a pessoa nao leu e o pior desfecho possivel aqui, e a
-    releitura fecha a janela ate o ultimo microssegundo. Import local: `app.adapters` importa o
-    KimiAdapter, que importa este modulo."""
-    if option < 1:
-        raise ValueError("option must be >= 1")
-    if option > 9:
-        # O painel le UM caractere ("1".."9" — `buildNumericHint` para no 9). Digitar "10" mandaria
-        # o "1", que ja escolhe e fecha o painel, e o "0" cairia no composer como texto.
-        raise ValueError("o painel de aprovacao do Kimi so aceita as opcoes 1..9")
-    if not aprovacao_kimi_no_pane(_capture(name)):
-        raise DriveError("painel de aprovacao do Kimi nao esta aberto no pane")
-    from app.adapters.kimi.transcript import read_pending_interaction
-    agora = read_pending_interaction(jsonl)
-    if agora is None or agora["id"] != req_id:
-        raise DriveError(
-            f"o pedido pendente mudou entre a leitura e a tecla ({req_id} -> "
-            f"{agora['id'] if agora else 'nenhum'}); nao digitado")
-    send_keys(name, str(option), literal=True)   # literal: "1" e caractere, nao nome de tecla
-
-
-def answer_question_kimi(name: str, answers: list[dict], questions: list[dict]) -> None:
-    """Dirige o picker de AskUserQuestion do Kimi. Input invalido -> ValueError (409); drive falhou
-    -> DriveError SEM submeter (o caller faz Escape + fallback por texto, igual Claude/Pi).
-
-    Medido no Kimi 0.36.0 e diferente dos outros dois providers em tres pontos:
-
-    - As opcoes sao NUMERADAS na tela e a tecla numerica escolhe E JA AVANCA pra proxima aba. Nao se
-      conta linha nem se manda (n-1)xDown como no Claude: numero e mais barato e nao tem drift.
-    - Multi-escolha nao avanca sozinha (ali ↵ e toggle) — sai com Tab. E nao ha cursor visivel nas
-      linhas, so cor, entao contar linha ali seria cego de qualquer forma.
-    - "Other" e sempre a ULTIMA opcao (len(options)+1) e abre campo de texto; dali em diante numero
-      vira caractere, e o rodape muda pra "type answer" — que e como se detecta esse modo.
-
-    A CONFIRMACAO nao e visual: quem chama confere o `tool.result` daquele toolCallId no wire
-    (transcript.resposta_chegou). O pane so diz o que esta desenhado; o wire diz o que a ferramenta
-    recebeu."""
-    if len(answers) != len(questions):
-        raise ValueError(f"{len(answers)} respostas para {len(questions)} perguntas")
-
-    def opcoes(i: int) -> list:
-        o = questions[i].get("options")
-        return o if isinstance(o, list) else []
-
-    # Valida TUDO antes de tocar no terminal: um drive que para no meio deixa o picker aberto numa
-    # aba qualquer, e o fallback por texto depois disso entra por cima de um overlay meio-navegado.
-    plano: list[list[tuple[str, str]]] = []      # por pergunta: [(tipo, valor)]
-    for i, a in enumerate(answers):
-        kind, ops = a.get("kind"), opcoes(i)
-        if kind == "option":
-            idx = a.get("indices") or []
-            if not idx:
-                raise ValueError(f"pergunta {i + 1}: sem opcao escolhida")
-            for n in idx:
-                if not 0 <= int(n) < len(ops):
-                    raise ValueError(f"pergunta {i + 1}: opcao {int(n) + 1} fora de 1..{len(ops)}")
-            if len(idx) > 1 and not a.get("multi"):
-                raise ValueError(f"pergunta {i + 1}: varias opcoes numa pergunta de escolha unica")
-            # Em multi-escolha a tecla numerica e TOGGLE: o mesmo indice duas vezes liga e desliga, e
-            # a opcao terminaria DESMARCADA — o drive seguiria ate o Submit e entregaria uma resposta
-            # diferente da pedida, sem erro nenhum.
-            if len(set(int(n) for n in idx)) != len(idx):
-                raise ValueError(f"pergunta {i + 1}: indice repetido (a tecla numerica e toggle)")
-            passos = [("tecla", str(int(n) + 1)) for n in idx]
-            if a.get("multi"):
-                passos.append(("tecla", "Tab"))   # ↵ ali e toggle: quem avanca e o Tab
-            plano.append(passos)
-        elif kind == "text":
-            valor = str(a.get("value") or "")
-            if not valor.strip():
-                raise ValueError(f"pergunta {i + 1}: texto vazio")
-            if any(ord(c) < 32 and c != "\t" for c in valor):
-                raise ValueError(f"pergunta {i + 1}: texto com caractere de controle")
-            # "Other" e adicionado pela propria TUI depois das opcoes do modelo.
-            plano.append([("tecla", str(len(ops) + 1)), ("texto", valor), ("tecla", "Enter")])
-        else:
-            raise ValueError(f"pergunta {i + 1}: kind nao suportado no picker do Kimi: {kind!r}")
-
-    if not _kimi_picker_aberto(_capture(name)):
-        raise DriveError("picker do Kimi nao esta aberto no pane")
-
-    for i, passos in enumerate(plano):
-        # MALHA FECHADA por aba. Sem isto o drive so sabia "tem picker aberto" e "nao e campo de
-        # texto" — nunca QUAL pergunta estava na tela. Como a tecla numerica avanca de aba sozinha,
-        # um redesenho atrasado fazia a tecla da pergunta i+1 caier ainda na pergunta i, e o rodape
-        # casa igual em qualquer aba do mesmo modo: nada levantava erro, o Submit saia, o
-        # `tool.result` chegava e a resposta ia pra pergunta ERRADA com cara de sucesso.
-        esperada = str(questions[i].get("question") or "")
-        if esperada:
-            for tentativa in range(_KIMI_ABA_TENTATIVAS):
-                atual = _kimi_pergunta_atual(_capture(name))
-                if atual and _mesma_pergunta(atual, esperada):
-                    break
-                time.sleep(_SETTLE)     # redesenho da troca de aba pode estar em voo
-            else:
-                raise DriveError(
-                    f"a tela nao chegou na pergunta {i + 1} ({esperada[:40]!r}); nao submetido")
-        for tipo, valor in passos:
-            pane = _capture(name)
-            if not _kimi_picker_aberto(pane):
-                raise DriveError(f"picker do Kimi sumiu na pergunta {i + 1}; nao submetido")
-            # Numero so vale enquanto o rodape NAO estiver em modo texto — ali ele viraria caractere.
-            if tipo == "tecla" and valor.isdigit() and _KIMI_TEXTO_RE.search(pane):
-                raise DriveError(f"picker do Kimi em modo texto na pergunta {i + 1}; nao submetido")
-            if tipo == "texto":
-                send_keys(name, valor, literal=True)
-                time.sleep(_SUBMIT_SETTLE)
-            elif valor.isdigit():
-                send_keys(name, valor, literal=True)   # literal: "1" e caractere, nao nome de tecla
-                time.sleep(_SETTLE)
-            else:
-                send_keys(name, valor)
-                time.sleep(_SETTLE)
-
-    time.sleep(_OPEN_SETTLE)
-    review = _capture(name)
-    if not _KIMI_REVIEW_RE.search(review):
-        # Sem Review na tela nao se aperta nada: um "1" as cegas podia cair numa pergunta que ficou
-        # aberta e escolher a opcao errada.
-        raise DriveError("tela de Review do Kimi nao apareceu; nada submetido")
-    send_keys(name, "1", literal=True)                 # [1] Submit
-    time.sleep(_OPEN_SETTLE)
 
 
 # Teto de teclas na limpeza. C-u apaga UMA linha do composer (medido 07/08/2026: um bloco de 4
@@ -1630,43 +1098,13 @@ def _partial(name: str, motivo: str, texto: str, pastes_antes: set[str] | None =
     return "partial"
 
 
-# Marcador da fila INTERNA da TUI do Kimi ("↑ to edit · ctrl-s to steer immediately", medido em
-# 19/08/2026 no 0.37.2, some no instante em que a fila é promovida): presente = há o que steerar;
-# ausente = o ctrl-s seria no-op e o caller precisa saber disso (chip da UI fica ou sai).
-# Marcador e tecla do "promove agora", por provider: a TUI só aceita a tecla quando ELA mostra a
-# linha, e cada uma escreve a sua. Claude: medido no print do dono (18/09/2026, v2.1.277) — a
-# sessão com fila mostra "ctrl+x ctrl+s to send now" e "Press up to edit queued messages".
 _STEER_POR_PROVIDER = {
-    "kimi": ("ctrl-s to steer", ("C-s",)),
     "claude": ("ctrl+x ctrl+s to send now", ("C-x", "C-s")),
 }
-_STEER_MARKER = _STEER_POR_PROVIDER["kimi"][0]
 
 
-def steer_now(name: str, provider: str = "kimi") -> bool | str:
-    """`ctrl-s` AVULSO: promove o que JA esta na fila da TUI do Kimi pro turno em curso.
-
-    Medido em 14/08/2026 numa sessao Kimi real: texto+Enter com ele trabalhando deixa a msg na fila
-    DELE ("↑ to edit · ctrl-s to steer immediately" embaixo dela no terminal); o `ctrl-s` a injeta
-    no turno que ja esta rodando — vira `turn.steer` no wire.jsonl, no MESMO turnId, junto com o
-    `context.append_message` de user de sempre (por isso o dedup da fila do app nao muda nada).
-
-    Tecla avulsa, e nao um parametro do envio, DE PROPOSITO: o momento em que o dono decide "essa
-    nao espera" e depois de ja ter mandado — o app mostra a fila e oferece a saida, ele escolhe.
-
-    Dentro do `_send_lock` da sessao: senao esta tecla pode cair no MEIO de um envio digitando
-    (entre o texto e o Enter), e ai ela steera a msg ANTERIOR e deixa a nova pela metade no composer.
-
-    Sem nada na fila e no-op medido (14/08/2026: pane nao muda, teclado segue respondendo) — e e
-    por isso que o marcador e checado ANTES: devolve "sem-fila" sem teclar nada, pro caller nao
-    confirmar entrega de uma promocao que nao aconteceu. A checagem de marcador degrada pra tecla
-    cega se o pane estiver ilegivel (comportamento de sempre), nunca bloqueia.
-
-    Retorno TRI-ESTADO: False = o tmux RECUSOU a tecla (pane morto, sessao caiu) — sem repassar
-    isso, a rota respondia 200 pra uma tecla que nunca saiu, o chip sumia da tela e a msg ficava
-    parada na fila sem ninguem saber. "sem-fila" = a TUI nao tinha o que promover. True = promovido
-    (o caller baixa a fila duravel)."""
-    marcador, teclas = _STEER_POR_PROVIDER.get(provider, _STEER_POR_PROVIDER["kimi"])
+def steer_now(name: str, provider: str) -> bool | str:
+    marcador, teclas = _STEER_POR_PROVIDER.get(provider)
     with _send_lock(name):
         try:
             if marcador not in (_capture(name) or ""):
@@ -1684,14 +1122,6 @@ def steer_now(name: str, provider: str = "kimi") -> bool | str:
 class TerminalInput:
     def send_prompt(self, name: str, text: str, provider: str = "claude",
                     pane_id: str | None = None, msg_id: str | None = None) -> str:
-        # msg_id: SO importa pro caminho da linha do Pi (repassado a entregar_sync abaixo) — nada
-        # mais neste metodo le esse valor. Quem chama sem id estavel (nenhuma PromptQueue por perto)
-        # simplesmente nao passa; o caminho de tecla (Claude/Codex/Pi sem linha) nunca soube o que e
-        # isso e continua identico. Ver pi_inbox.entregar sobre POR QUE ele existe.
-        # Surrogate solto (meio emoji cortado pelo browser) tambem nao chega no tmux: o argv do
-        # subprocess e encodado em utf-8 e estouraria UnicodeEncodeError — um ValueError, que o
-        # caller ja traduz pra 400 "control characters". A msg era recusada com erro trocado e
-        # nunca entrava na fila. Troca por U+FFFD como no resto do app (ver app.models).
         from app.conversation_transfer import transfer_active
         if transfer_active(name):
             return "deferred"
@@ -1708,56 +1138,12 @@ class TerminalInput:
                 from app.adapters.codex import sessions as codex_sessions
                 if codex_sessions.exists(name):
                     return "deferred"
-            # Sessão Pi com a extensão conectada: entrega por chamada de função dentro do processo
-            # do Pi, sem digitar e sem ler a tela — a remoção da causa raiz dos bugs de 01-02/08.
-            #
-            # ANTES do gate `deliverable`: aquele gate existe pra não digitar às cegas num overlay,
-            # e aqui não se digita nada. Depois dele, sessão Pi com picker na tela nunca tentaria a
-            # linha e ficaria adiando — exatamente o bug que isto vem matar.
-            #
-            # "sem-linha" é o ÚNICO retorno que autoriza continuar pra tecla: depois de ter mandado
-            # pela linha, digitar por cima entregaria a mesma instrução duas vezes.
-            #
-            # ponytail: JANELA RESIDUAL CONHECIDA (registrada, nao fechada agora). Esta e a SEGUNDA
-            # checagem de tem_linha — a primeira roda em api.py (_send_one, decide se pre-cria a
-            # entrada da fila com msg_id) ANTES de disputar o _send_lock acima. As duas nao
-            # compartilham trava (claim_undelivered do drain, em pqueue.py, usa so o _append_lock,
-            # sem relacao com este _send_lock). Se a linha cair ENTRE a checagem de api.py e esta
-            # aqui, quem chega neste ponto ve tem_linha=False mesmo com uma entrada ja criada com
-            # msg_id — e cai pro fluxo de tecla abaixo, que NUNCA le msg_id (comentario no topo do
-            # metodo). Resultado: saiu pela linha de um lado, redigitado do outro. Nao e regressao
-            # deste commit — e o buraco original encolhido de "qualquer sessao Pi" pra "sessao com
-            # linha viva no instante do append em api.py, e a linha caiu bem nessa janela". Medido:
-            # entregar_sync segura o _send_lock por ate PRAZO_ACK+2.0 = 5s (pi_inbox.py), janela de
-            # segundos — tempo de sobra pra um drain de reconexao de SSE ou de transicao de hook
-            # entrar.
-            # CUIDADO no upgrade: so mover o append() de api.py pra dentro deste _send_lock fecha a
-            # corrida entre as DUAS LEITURAS de tem_linha() (o TOCTOU vira leitura unica) mas NAO
-            # fecha a duplicata. A entrada nasce delivered=False no append() e so vira True quando o
-            # set_delivered(...) do fim de _send_one roda DEPOIS que send_prompt() (este metodo)
-            # retorna — tambem fora de qualquer trava. Nesse intervalo (que inclui a espera inteira
-            # por este _send_lock MAIS os ate 5s do entregar_sync) a entrada continua reivindicavel
-            # por claim_undelivered. Upgrade completo precisa das DUAS coisas juntas: o append() E o
-            # set_delivered() final dentro da MESMA trava — ou claim_undelivered passar a
-            # respeitar/disputar o _send_lock. Mover so o append() e necessario, mas sozinho e
-            # insuficiente.
-            # `linha_de` (nome primeiro, pane depois) e nao o pane cru: no psmux TODA sessao Pi se
-            # declara `%1`, entao procurar por pane entregava a mensagem na conversa da OUTRA
-            # sessao — medido 22/08/2026, com `delivered: true` na resposta. Ver pi_inbox.
-            chave = provider in ("pi", "omp") and providers_bridge.inbox_call("line", name=name, pane=pane_id)["line"]
-            if chave:
-                r = providers_bridge.inbox_call("deliver", key=chave, text=text, msg_id=msg_id)["disposition"]
-                if r != "sem-linha":
-                    return r
             # Gate de entregabilidade (chokepoint UNICO p/ texto livre — /input e drain passam por
             # aqui): nao digitar as cegas num overlay (AskUserQuestion/picker), as teclas o
             # corromperiam. Sem pane entregavel agora, devolve "deferred" SEM tocar a TUI; o caller
             # enfileira pendente e o drain entrega quando o overlay fechar / a sessao voltar.
             if not deliverable(name):
                 if not tmux.has_session(name):
-                    # Sessao morreu de vez: o nome nunca mais volta, entao os contadores de deferred
-                    # (deste motivo e do composer-ocupado do Pi) so cresceriam pra sempre. Achado da
-                    # review 02/08/2026.
                     _limpa_deferred(name, _OCUPADO_WARNED, _OCUPADO_DEFER_COUNT)
                     _limpa_deferred(name, _INDISPONIVEL_WARNED, _INDISPONIVEL_DEFER_COUNT)
                     _limpa_deferred(name, _FOCO_WARNED, _FOCO_DEFER_COUNT)
@@ -1773,17 +1159,6 @@ class TerminalInput:
             # Não enviar pra um TUI ainda bootando: as teclas seriam engolidas e a msg sumiria (core
             # bug — msg mandada logo após criar a sessão nunca chegava no claude).
             _wait_input_ready(name, provider=provider)
-            # Composer do Pi ja com texto (residuo de Enter engolido / rascunho / parcial anterior):
-            # adia em vez de digitar por cima — deferred reverte pra delivered=False e o proximo
-            # drain (idle/reconnect) tenta de novo; a bubble queued- segue visivel no app.
-            # `pane_id` (quando o chamador tem) faz a pergunta ir pela linha da extensao em vez de
-            # raspar a tela — ver _composer_ocupado_pi. Este caminho so e alcancado quando a linha
-            # NAO entregou (o bloco acima retorna antes), entao aqui ele quase sempre e o plano B
-            # mesmo; passar o pane custa nada e cobre o caso de a linha ter voltado no meio.
-            if provider in ("pi", "omp") and _composer_ocupado_pi(name, pane_id):
-                _avisa_deferred(name, "composer do pi ja tem texto", _OCUPADO_WARNED,
-                                _OCUPADO_DEFER_COUNT, _diag_composer(_capture(name), text, name, None))
-                return "deferred"
             _limpa_deferred(name, _OCUPADO_WARNED, _OCUPADO_DEFER_COUNT)
             # Claude: apaga o que estiver parado no composer ANTES de digitar — por cima, o Enter
             # manda tudo grudado e o reconcile reentrega. ANTES da foto dos placeholders abaixo, pra
@@ -1800,10 +1175,6 @@ class TerminalInput:
                 # evidencia de entrega (ver _composer_residuo — paste alheio nao pode virar prova).
                 regiao_antes = _composer_regiao(_capture(name), name)
                 pastes_antes = _paste_ids(regiao_antes or "")
-                # Windows + Claude: o clipboard e o unico caminho que entrega multi-linha inteiro (o
-                # linha-a-linha mede 309 de 600 e devolve "sent"). Gated em `claude` porque `Alt+V` e
-                # binding DELE — Pi e Codex tem resposta propria (Codex nem passa aqui: usa o
-                # app-server).
                 if os.name == "nt" and provider == "claude":
                     # Composer ilegivel na hora da foto: `pastes_antes` sairia como conjunto VAZIO, e
                     # vazio nao quer dizer "nao havia placeholder", quer dizer "nao consegui olhar".
@@ -2244,11 +1615,6 @@ class TerminalInput:
                     # falha, em vez de deixar um overlay preso e reportar sucesso sobre um no-op.
                     self._abort(name)
                     raise mp.PickerError(409, f"o Claude Code nao aceitou `/model {alvo}`")
-                # Compara o TOKEN do modelo, nao substring: a linha da troca anterior continua na
-                # tela, e `alvo in result` casava nela quando um id e prefixo do outro — no catalogo
-                # da Kimi, ir de `k3-256k` pra `k3` dava sucesso lendo a confirmacao velha, antes de
-                # a troca acontecer. Medido: a linha nova demora ~1s a aparecer, entao essa leitura
-                # precoce e a regra, nao a exceção.
                 if mp.result_model(mp.parse_result_line(pane)) == alvo:
                     return {"ok": True, "result": mp.parse_result_line(pane)}
                 if time.monotonic() >= fim:
@@ -2283,11 +1649,6 @@ class TerminalInput:
             raise ValueError(f"unknown model {model!r}")
         if effort_kw and effort_kw not in mp.EFFORT_ORDER:
             raise ValueError(f"unknown effort {effort!r}")
-        # Mesmo lock por sessao do send_prompt/send_pi_commands: duas threads digitando no MESMO
-        # tty intercalam teclas. Sem ele, a folha buscando a lista (`list_model_options`) enquanto
-        # um POST de troca roda dava dois `/model` concorrentes — o `Esc` de um fechava o picker que
-        # o outro estava navegando. O `_require_drivable` nao cobre isso: ele ve spinner, nao ve
-        # outro driver em voo. A validacao acima fica FORA do lock (nao toca no terminal).
         with _send_lock(name):
             return self._drive_model_effort(name, model_kw, effort_kw, scope)
 

@@ -1,32 +1,7 @@
 """A soma conserva a ordem do arquivo sem depender da descoberta ou dos commits do índice."""
 
-import json
-import subprocess
-import sys
-from pathlib import Path
 
 import pytest
-
-CONTRACT = Path(__file__).parent / "fixtures" / "contract"
-
-
-def test_reports_are_identical_with_reversed_filesystem_discovery(tmp_path):
-    script = """
-import runpy, sys
-from pathlib import Path
-from unittest.mock import patch
-module = runpy.run_path(sys.argv[1])
-from app import costs_cache
-original = costs_cache.listar
-module['main'](Path(sys.argv[2]))
-with patch.object(costs_cache, 'listar', lambda *args: list(reversed(original(*args)))):
-    module['main'](Path(sys.argv[3]))
-"""
-    normal, reversed_order = tmp_path / "normal", tmp_path / "reversed"
-    subprocess.run([sys.executable, "-c", script, str(CONTRACT / "gen_costs.py"),
-                    str(normal), str(reversed_order)], check=True)
-    for name in ("costs_index.json", "costs_reports.json"):
-        assert json.loads((normal / name).read_text()) == json.loads((reversed_order / name).read_text()), name
 
 
 @pytest.mark.parametrize("initial_order", [("a", "b"), ("b", "a")])

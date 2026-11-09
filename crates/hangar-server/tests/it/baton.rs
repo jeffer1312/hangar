@@ -7,12 +7,6 @@ const CLAUDE_ID: &str = "2751096f-84dc-4986-b0a8-a40d641ee43d";
 const LIVE_ID: &str = "00000000-0000-4000-8000-000000000101";
 const CODEX_ID: &str = "019f0000-0000-7000-8000-000000000001";
 
-/// O caminho como fica dentro de um texto JSON: no Windows a `\` precisa de escape.
-fn in_json(path: &Path) -> String {
-    let quoted = serde_json::to_string(path.to_str().unwrap()).unwrap();
-    quoted[1..quoted.len() - 1].to_owned()
-}
-
 fn git(root: &Path, args: &[&str]) -> std::process::Output {
     let out = std::process::Command::new("git").arg("-C").arg(root)
         .args(["-c", if cfg!(windows) {"core.hooksPath=NUL"} else {"core.hooksPath=/dev/null"}, "-c", "commit.gpgSign=false"])
@@ -25,6 +19,12 @@ fn git(root: &Path, args: &[&str]) -> std::process::Output {
         .args(args).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     out
+}
+
+fn relocate_json_path(raw: &str, original: &str, path: &Path) -> String {
+    // A substituição ocorre dentro de strings JSON, preservando os demais bytes da fixture.
+    let encoded = serde_json::to_string(path.to_str().unwrap()).unwrap();
+    raw.replace(original, &encoded[1..encoded.len() - 1])
 }
 
 struct Origin {
@@ -42,7 +42,8 @@ impl Origin {
         let isolated = std::env::var_os("HANGAR_BATON_CHILD_ROOT").map(PathBuf::from);
         // Forma longa: no Windows a pasta temporária pode vir curta (`RUNNER~1`), e o catálogo de contas,
         // que o `config_dir` do pedido precisa igualar letra a letra, sai resolvido.
-        let base = &hangar_workspace::real(isolated.as_deref().unwrap_or(dir.path()));
+        let resolved =hangar_workspace::real(isolated.as_deref().unwrap_or(dir.path()));
+        let base = resolved.as_path();
         let (root, home) = (base.join("repo"), base.join("home"));
         std::fs::create_dir_all(&root).unwrap();
         std::fs::create_dir_all(home.join(".claude/projects/-mnt-case-work-repo")).unwrap();
@@ -51,8 +52,9 @@ impl Origin {
             let account = home.join(".codex-work");
             std::fs::create_dir_all(account.join("sessions/2026/09/02")).unwrap();
             std::fs::write(account.join(".hangar-codex-conta"), r#"{"version":1,"id":"work"}"#).unwrap();
-            let path = account.join("sessions").join("2026").join("09").join("02").join(format!("rollout-2026-09-02T14-00-00-{CODEX_ID}.jsonl"));
-            std::fs::write(&path, include_str!("../fixtures/baton/codex.jsonl").replace("/tmp/proj", &in_json(&root))).unwrap();
+            let path = account.join("sessions").join("2026").join("09").join("02")
+                .join(format!("rollout-2026-09-02T14-00-00-{CODEX_ID}.jsonl"));
+            std::fs::write(&path, relocate_json_path(include_str!("../fixtures/baton/codex.jsonl"), "/tmp/proj", &root)).unwrap();
             git(&root, &["commit", "-q", "--allow-empty", "-m", "um"]);
             path
         } else {
@@ -69,8 +71,9 @@ impl Origin {
             git(&root, &["commit", "-q", "-m", "Inicial"]);
             std::fs::write(&plan, text + "\n").unwrap();
             std::fs::write(root.join("outro.txt"), "outro\n").unwrap();
-            let path = home.join(".claude").join("projects").join("-mnt-case-work-repo").join(format!("{}.jsonl", if live {LIVE_ID} else {CLAUDE_ID}));
-            let relocated = include_str!("../fixtures/baton/claude.jsonl").replace("/repo", &in_json(&root));
+            let path = home.join(".claude").join("projects").join("-mnt-case-work-repo")
+                .join(format!("{}.jsonl", if live {LIVE_ID} else {CLAUDE_ID}));
+            let relocated = relocate_json_path(include_str!("../fixtures/baton/claude.jsonl"), "/repo", &root);
             let mut rows = String::new();
             for raw in relocated.lines() {
                 let mut value: Value = serde_json::from_str(raw).unwrap();
@@ -106,12 +109,13 @@ impl Origin {
     }
     fn expected(&self, codex: bool, name: &str) -> String {
         let original = if codex { include_str!("../fixtures/baton/codex-expected.txt") } else { include_str!("../fixtures/baton/claude-expected.txt") };
+        let root = self.root.to_str().unwrap();
         original.replace(if codex {"`morta`"} else {"`fixture-claude`"}, &format!("`{name}`"))
             .replace(if codex {"/mnt/case/home/.codex-work/sessions/2026/09/02/rollout-2026-09-02T14-00-00-019f0000-0000-7000-8000-000000000001.jsonl"} else {"/mnt/case/home/.claude/projects/-mnt-case-work-repo/00000000-0000-4000-8000-000000000101.jsonl"}, self.path.to_str().unwrap())
             .replace("`/mnt/case/work/repo`", &format!("`{}`", self.root.display()))
             // Estes caminhos vêm da transcrição, onde o resto depois da raiz está escrito com `/`.
-            .replace("/mnt/case/work/repo/docs/superpowers/plans/2026-09-02-grupo-pareamento-fim-sessao.md", &format!("{}/docs/superpowers/plans/2026-09-02-grupo-pareamento-fim-sessao.md", self.root.display()))
-            .replace("/mnt/case/work/repo/docs/superpowers/specs/2026-09-03-bastao-v2-design.md", &format!("{}/docs/superpowers/specs/2026-09-03-bastao-v2-design.md", self.root.display()))
+            .replace("/mnt/case/work/repo/docs/superpowers/plans/2026-09-02-grupo-pareamento-fim-sessao.md", &format!("{root}/docs/superpowers/plans/2026-09-02-grupo-pareamento-fim-sessao.md"))
+            .replace("/mnt/case/work/repo/docs/superpowers/specs/2026-09-03-bastao-v2-design.md", &format!("{root}/docs/superpowers/specs/2026-09-03-bastao-v2-design.md"))
     }
     fn url(&self, tail: &str) -> String { format!("http://{}/api/sessions/{tail}", self.fixture.addr) }
     fn archived(&self, codex: bool) -> String {
@@ -859,7 +863,7 @@ async fn b01_transfer_partial_archived_keeps_the_checked_rollout_header_cwd() {
     let header:Value=serde_json::from_str(rollout.lines().next().unwrap()).unwrap();
     assert_eq!(header["type"],"session_meta");assert_eq!(header["payload"]["cwd"],json!(h.born));
     let mut metadata:Value=serde_json::from_slice(&std::fs::read(&h.sidecar).unwrap()).unwrap();
-    metadata["cwd"]=json!(h.old);std::fs::write(&h.sidecar,metadata.to_string()).unwrap();
+    metadata["cwd"]=json!(h.old);hangar_server::runtime::codex_sidecar::put(h.sidecar.parent().unwrap(),"fixture",metadata.as_object().unwrap()).unwrap();
     let r = client().get(format!("http://{}/api/sessions/morta/bastao?project=-&session_id=019f99de-9572-7221-89c0-80c62f883d44&provider=codex", h.f.addr)).bearer_auth(OWNER).send().await.unwrap();
     let status=r.status();let md=r.text().await.unwrap();h.f.runtime.shutdown().await.unwrap();
     assert_eq!(status,200);
@@ -876,14 +880,14 @@ async fn b01_next_pi_omp_keep_full_tools_failures_and_stream_hook_context() {
         let sid = "45ce9c2d-48d4-491e-8ff3-672bb10a69b6";
         let directory = h.home.join(if provider=="pi" {".pi/agent/sessions/wd"} else {".omp/agent/sessions/wd"});
         std::fs::create_dir_all(&directory).unwrap();
-        let mut raw = include_str!("../fixtures/baton/pi.jsonl").replace("/work/demo",&in_json(&h.root));
+        let mut raw = relocate_json_path(include_str!("../fixtures/baton/pi.jsonl"), "/work/demo", &h.root);
         raw += &format!("{}\n{}\n",json!({"type":"message","id":"hook-user","message":{"role":"user","timestamp":1767225620000u64,"content":[{"type":"text","text":"contexto do hook\npedido sem prefixo"}]}}),
             json!({"type":"custom_message","customType":"claude-hook-context","parentId":"hook-user","content":"contexto do hook"}));
         std::fs::write(directory.join(format!("2026-01-01_{sid}.jsonl")),raw).unwrap();
         let r = client().get(format!("{}?project=-&session_id={sid}&provider={provider}",h.url("morta/bastao"))).bearer_auth(OWNER).send().await.unwrap();
         assert_eq!(r.status(),200);
         let md = r.text().await.unwrap();
-        assert!(md.contains(&format!("`{}/summary.txt`",h.root.display())), "{md}");
+        assert!(md.contains(&format!("`{}/summary.txt`",h.root.display())));
         assert!(md.contains("- Ferramentas que FALHARAM (as mais recentes):\n  - `write`: permission denied"),"{provider}: {md}");
         assert!(md.contains("pedido sem prefixo") && !md.contains("contexto do hook"));
         h.no_python();
@@ -920,7 +924,7 @@ async fn b01_clear_never_inherits_the_frozen_origin_or_imported_plan() {
         json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"pedido depois do clear"}]}}))).unwrap();
     let mut metadata: Value = serde_json::from_slice(&std::fs::read(&h.sidecar).unwrap()).unwrap();
     metadata["thread_id"] = json!(thread); metadata["rollout_path"] = json!(path);
-    std::fs::write(&h.sidecar, metadata.to_string()).unwrap();
+    hangar_server::runtime::codex_sidecar::put(h.sidecar.parent().unwrap(),"fixture",metadata.as_object().unwrap()).unwrap();
     std::fs::write(&h.snapshot, "inacessível depois de clear\n").unwrap();
     let r = client().get(format!("http://{}/api/sessions/fixture/bastao", h.f.addr)).bearer_auth(OWNER).send().await.unwrap();
     assert_eq!(r.status(), 200);
@@ -1061,7 +1065,7 @@ async fn b01_guard_source_busy_unreadable_and_recreated_life_are_separate() {
     std::fs::write(&h.record_path,record.to_string()).unwrap();
     let mut metadata:Value=serde_json::from_slice(&std::fs::read(&h.sidecar).unwrap()).unwrap();
     metadata.as_object_mut().unwrap().remove("transfer_id");metadata["key"]=json!("new-baton-life");
-    std::fs::write(&h.sidecar,metadata.to_string()).unwrap();
+    hangar_server::runtime::codex_sidecar::put(h.sidecar.parent().unwrap(),"fixture",metadata.as_object().unwrap()).unwrap();
     let rows=h.f.list.discover(Some(f64::MAX)).await.unwrap();
     assert_eq!(rows.iter().find(|r|r.name=="fixture").unwrap().lifecycle_id.as_deref(),Some("k:new-baton-life"));
     let r = client().post(&endpoint).bearer_auth(OWNER).json(&json!({"provider":"claude"})).send().await.unwrap();
@@ -1410,7 +1414,7 @@ fn b01_manual_kickoff_without_origin_account_or_model_keeps_the_fallback_line() 
         let h=Origin::new(false,false).await;let root=h.home.parent().unwrap();
         let sid="45ce9c2d-48d4-491e-8ff3-672bb10a69b6";let directory=h.home.join(".pi/agent/sessions/wd");
         std::fs::create_dir_all(&directory).unwrap();
-        std::fs::write(directory.join(format!("2026-01-01_{sid}.jsonl")),include_str!("../fixtures/baton/pi.jsonl").replace("/work/demo",&in_json(&h.root))).unwrap();
+        std::fs::write(directory.join(format!("2026-01-01_{sid}.jsonl")),relocate_json_path(include_str!("../fixtures/baton/pi.jsonl"), "/work/demo", &h.root)).unwrap();
         let response=client().post(h.url("origem-pi/bastao")).bearer_auth(OWNER).json(&json!({"name":"cc2","provider":"claude","headless":false,
             "project":"-","session_id":sid,"origem_provider":"pi","resumo_por_modelo":false})).send().await.unwrap();
         let status=response.status();let body=response.json::<Value>().await.unwrap();
@@ -1632,7 +1636,7 @@ fn b01_rewrite_public_uses_explicit_origin_and_keeps_original_on_failure() {
         }
         let codex=h.home.join(".codex-work");std::fs::create_dir_all(codex.join("sessions")).unwrap();
         std::fs::write(codex.join(".hangar-codex-conta"),r#"{"version":1,"id":"work"}"#).unwrap();
-        std::fs::write(codex.join(format!("sessions/rollout-fixture-{CODEX_ID}.jsonl")),include_str!("../fixtures/baton/codex.jsonl").replace("/tmp/proj",&in_json(&h.root))).unwrap();
+        std::fs::write(codex.join(format!("sessions/rollout-fixture-{CODEX_ID}.jsonl")),relocate_json_path(include_str!("../fixtures/baton/codex.jsonl"), "/tmp/proj", &h.root)).unwrap();
         let calls=std::fs::read(root.join("rewrite-calls")).unwrap();
         let response=c.post(h.url("morta/bastao")).bearer_auth(OWNER).json(&json!({"name":"no-claude","provider":"claude","config_dir":target,
             "project":"-","session_id":CODEX_ID,"origem_provider":"codex","resumo_por_modelo":true})).send().await.unwrap();

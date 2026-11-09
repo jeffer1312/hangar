@@ -1,19 +1,18 @@
-//! Python falso das rotas de Git/arquivos: contexto, diário e o resto contado como repasse.
+//! Contexto de teste das rotas de Git/arquivos, com diário Rust em arquivo isolado.
 #![allow(dead_code)]
 use crate::fake::{SECRET, config};
 use axum::{
     Router,
-    body::Bytes,
     extract::{Query, State},
-    routing::{get, post},
+    routing::get,
 };
 use serde_json::{Value, json};
 use std::sync::{
-    Arc, Mutex,
+    Arc,
     atomic::{AtomicUsize, Ordering},
 };
 
-pub type Diags = Arc<Mutex<Vec<Value>>>;
+pub type Diags = Arc<tempfile::TempDir>;
 
 pub struct Fixture {
     pub addr: std::net::SocketAddr,
@@ -23,7 +22,7 @@ pub struct Fixture {
     pub list: Arc<hangar_server::list::bridge::ListBridge>,
     pub runtime: Arc<hangar_server::runtime::gateway::RuntimeRegistry>,
     pub policy: Option<Policy>,
-    /// Corpos recebidos em `/internal/diag`.
+    /// Pasta do diário local do Rust.
     pub diags: Diags,
     pub workspace_slots: Arc<tokio::sync::Semaphore>,
     _home: Option<tempfile::TempDir>,
@@ -42,13 +41,7 @@ impl Fixture {
 
     /// O diário sai numa tarefa à parte: espera até 5 s pelo evento.
     pub async fn diag(&self, event: &str) -> Value {
-        for _ in 0..500 {
-            if let Some(found) = self.diags.lock().unwrap().iter().find(|d| d["evento"] == event) {
-                return found.clone();
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        panic!("diário sem {event}: {:?}", self.diags.lock().unwrap());
+        crate::fake::wait_diary(self.diags.path(), |row| row["evento"] == event).await.into_iter().find(|row| row["evento"] == event).unwrap()
     }
 }
 
@@ -86,7 +79,7 @@ async fn build(root: &std::path::Path, context_ok: bool, home: Option<&std::path
     let hits = Arc::new(AtomicUsize::new(0));
     let context_hits = Arc::new(AtomicUsize::new(0));
     let seen_context = context_hits.clone();
-    let diags: Diags = Arc::default();
+    let diags: Diags = Arc::new(tempfile::tempdir().unwrap());
     let context = json!({"roots":[root],"sessions":[{"name":"fixture","cwd":root}],"session":{"name":"fixture","cwd":root,"jsonl":root.join("fixture.jsonl"),"git_cwd":root}});
     let app = Router::new()
         .route(
@@ -109,15 +102,6 @@ async fn build(root: &std::path::Path, context_ok: bool, home: Option<&std::path
                 },
             ),
         )
-        .route(
-            "/internal/diag",
-            post(
-                |State((_, diags)): State<(Arc<AtomicUsize>, Diags)>, body: Bytes| async move {
-                    diags.lock().unwrap().push(serde_json::from_slice(&body).unwrap());
-                    "{}"
-                },
-            ),
-        )
         .fallback(
             |State((hits, _)): State<(Arc<AtomicUsize>, Diags)>, uri: axum::http::Uri| async move {
                 // A sonda de partida do servidor bate na raiz; repasse é só pedido de `/api/`.
@@ -136,6 +120,7 @@ async fn build(root: &std::path::Path, context_ok: bool, home: Option<&std::path
     let isolated_home=home.is_none().then(||tempfile::tempdir().unwrap());
     let home=home.unwrap_or_else(||isolated_home.as_ref().unwrap().path());
     let mut state=hangar_server::routes::AppState::new(config(upstream,"127.0.0.1"));
+    state.diag = state.diag.clone().with_diary(Some(diags.path().to_owned()));
     state.origins_home=home.into();
     state.accounts=hangar_server::accounts::AccountService::new(
         account_env.unwrap_or_else(||hangar_server::accounts::environment::AccountEnvironment::from_map([
@@ -235,7 +220,7 @@ pub async fn real_python_fixture(
     let addr = listener.local_addr().unwrap();
     let fixture = Fixture {
         addr, hits:Arc::default(), context_hits:Arc::default(), list:state.list.clone(),
-        runtime, policy:None, diags:Arc::default(), workspace_slots:state.workspace_slots.clone(), _home:None,
+        runtime, policy:None, diags:Arc::new(tempfile::tempdir().unwrap()), workspace_slots:state.workspace_slots.clone(), _home:None,
     };
     let state = Arc::new(state);
     let app = hangar_server::routes::router(state.clone())

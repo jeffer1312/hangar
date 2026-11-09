@@ -539,7 +539,10 @@ async fn t4_delete_keeps_conversations_until_resume_and_preserves_uuid_collision
     assert_eq!(std::fs::read_to_string(from.join(format!("{sid}.jsonl"))).unwrap(), original);
     assert!(!to.join(format!("{sid}.jsonl")).exists());
     let map = hangar_workspace::worktrees::try_removed_at(&home.join(".hangar/worktrees-removidas.json")).unwrap();
-    assert_eq!(map.get(path.to_str().unwrap()), Some(&repo.to_string_lossy().into_owned()));
+    assert_eq!(map.len(), 1);
+    let (removed_path, removed_repo) = map.iter().next().unwrap();
+    assert_eq!(std::path::Path::new(removed_path), path);
+    assert_eq!(std::path::Path::new(removed_repo), repo);
     let runtime = tokio::runtime::Handle::current();
     let root_copy = root.clone();
     tokio::task::spawn_blocking(move || {

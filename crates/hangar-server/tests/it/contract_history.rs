@@ -110,10 +110,15 @@ fn internal_info_becomes_history_request() {
     assert_eq!(req.queue.as_deref(), Some(Path::new("/q/s.jsonl")));
     assert_eq!((req.limit, req.tail_window), (None, TAIL_WINDOW));
     assert_eq!(info.history_request(Some(30)).unwrap().limit, Some(30));
-    let pi: InternalInfo =
-        serde_json::from_value(serde_json::json!({"provider": "pi", "jsonl": "/x/a.jsonl", "session_key": "a", "history": {}}))
+    let unsupported: InternalInfo =
+        serde_json::from_value(serde_json::json!({"provider": "unsupported", "jsonl": "/x/a.jsonl", "session_key": "a", "history": {}}))
             .unwrap();
-    assert!(pi.history_request(None).is_none());
+    assert!(unsupported.history_request(None).is_none());
+    for (name, provider) in [("pi", Provider::Pi), ("omp", Provider::Omp), ("kimi", Provider::Kimi)] {
+        let native: InternalInfo = serde_json::from_value(serde_json::json!({"provider": name,
+            "jsonl": "/x/a.jsonl", "session_key": "a", "history": {}})).unwrap();
+        assert_eq!(native.history_request(None).unwrap().provider, provider);
+    }
     let fresh: InternalInfo =
         serde_json::from_value(serde_json::json!({"provider": "codex", "jsonl": null, "session_key": "", "history": {}}))
             .unwrap();

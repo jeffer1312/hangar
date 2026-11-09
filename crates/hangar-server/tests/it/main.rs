@@ -418,3 +418,5 @@ fn physical_tempdir() -> tempfile::TempDir {
 }
 
 mod native_setup_cli;
+
+mod scopes_native;

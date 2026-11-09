@@ -75,7 +75,10 @@ fn provider_from_python_name() {
     assert_eq!(Provider::parse("claude"), Some(Provider::Claude));
     assert_eq!(Provider::parse("claude-headless"), Some(Provider::ClaudeHeadless));
     assert_eq!(Provider::parse("codex"), Some(Provider::Codex));
-    assert_eq!(Provider::parse("pi"), None);
+    assert_eq!(Provider::parse("pi"), Some(Provider::Pi));
+    assert_eq!(Provider::parse("omp"), Some(Provider::Omp));
+    assert_eq!(Provider::parse("kimi"), Some(Provider::Kimi));
+    assert_eq!(Provider::parse("unsupported"), None);
 }
 
 #[test]

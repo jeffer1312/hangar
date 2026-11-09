@@ -224,53 +224,6 @@ def test_codex_sem_archived_sessions_nao_quebra(tmp_path, monkeypatch):
     assert [r.session_id for r in cs.linhas_codex()] == ["viva"]
 
 
-def test_pi_soma_as_mensagens_e_inclui_o_subagente(tmp_path, monkeypatch):
-    # O Pi acumula POR MENSAGEM (não é snapshot cumulativo): tem que somar.
-    # E o subagente mora em <sessao>/<taskId>/run-N/session.jsonl. Medido: na janela em que o
-    # filho roda, o pai tem ZERO eventos de uso — não há duplicação, tem que somar os dois.
-    raiz = tmp_path / "sessions" / "--repo-tres--"
-    sess = raiz / "2026-07-30T20-29-24-651Z_18e48e08"
-    _escrever(sess.with_suffix(".jsonl"), [
-        {"type": "session", "timestamp": "2026-07-30T20:29:24Z", "cwd": "/repo/tres"},
-        {"type": "model_change", "provider": "kimi-coding", "modelId": "k3-256k"},
-        {"type": "message", "message": {"usage": {"input": 10, "output": 2,
-                                                  "cacheRead": 100, "cacheWrite": 5}}},
-        {"type": "message", "message": {"usage": {"input": 20, "output": 3,
-                                                  "cacheRead": 200, "cacheWrite": 0}}},
-    ])
-    _escrever(sess / "44bad0fb" / "run-0" / "session.jsonl", [
-        {"type": "session", "timestamp": "2026-07-30T20:52:12Z", "cwd": "/repo/tres"},
-        {"type": "model_change", "provider": "kimi-coding", "modelId": "k3"},
-        {"type": "message", "message": {"usage": {"input": 7, "output": 1,
-                                                  "cacheRead": 50, "cacheWrite": 0}}},
-    ])
-    monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "sessions")
-    linhas = sorted(cs.linhas_pi(), key=lambda r: r.input)
-    assert len(linhas) == 2, "o subagente é uma linha própria, não pode sumir"
-    filho, pai = linhas
-    assert (filho.input, filho.output, filho.cache_read) == (7, 1, 50)
-    assert filho.session_id != pai.session_id, "todo subagente se chama session.jsonl"
-    assert (pai.input, pai.output, pai.cache_read, pai.cache_write) == (30, 5, 300, 5)
-    assert pai.provider == "moonshotai", "'kimi-coding' é apelido; a chave é o provedor canônico"
-    assert pai.project == "/repo/tres"
-    assert pai.source == "pi"
-
-
-def test_pi_usa_o_ultimo_provedor_declarado(tmp_path, monkeypatch):
-    raiz = tmp_path / "sessions" / "--r--"
-    _escrever(raiz / "s.jsonl", [
-        {"type": "session", "timestamp": "2026-08-01T10:00:00Z", "cwd": "/r"},
-        {"type": "model_change", "provider": "openrouter", "modelId": "openrouter/free"},
-        {"type": "model_change", "provider": "openai-codex", "modelId": "gpt-5.6-sol"},
-        {"type": "message", "message": {"usage": {"input": 1, "output": 1,
-                                                  "cacheRead": 0, "cacheWrite": 0}}},
-    ])
-    monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "sessions")
-    r = cs.linhas_pi()[0]
-    assert r.provider == "openai", "'openai-codex' do Pi é a MESMA assinatura do 'openai' do Codex"
-    assert r.model == "gpt-5.6-sol"
-
-
 def test_as_tres_fontes_convergem_no_mesmo_provedor(tmp_path, monkeypatch):
     """Sem normalizar, a mesma assinatura fica partida em várias linhas do painel: OpenAI
     aparecia como 'openai' (Claude+Codex) e 'openai-codex' (Pi), e a Moonshot como
@@ -281,16 +234,9 @@ def test_as_tres_fontes_convergem_no_mesmo_provedor(tmp_path, monkeypatch):
     codex = tmp_path / "codex"
     _escrever(codex / "rollout-a.jsonl",
               _rollout_codex("/r", "a", {"input_tokens": 1, "output_tokens": 1}))
-    pi = tmp_path / "pi"
-    _escrever(pi / "s.jsonl", [
-        {"type": "session", "timestamp": "2026-08-01T10:00:00Z", "cwd": "/r"},
-        {"type": "model_change", "provider": "openai-codex", "modelId": "gpt-5.6-sol"},
-        {"type": "message", "message": {"usage": {"input": 1, "output": 1}}},
-    ])
     monkeypatch.setattr(cs, "raiz_codex", lambda home=None: codex)
-    monkeypatch.setattr(cs, "raiz_pi", lambda: pi)
     provs = {cs.linhas_claude(cfg, "conta-x")[0].provider,
-             cs.linhas_codex()[0].provider, cs.linhas_pi()[0].provider}
+             cs.linhas_codex()[0].provider}
     assert provs == {"openai"}, "as três fontes têm que cair na MESMA linha do painel"
 
 
@@ -300,15 +246,6 @@ def test_conta_anthropic_passa_intacta_pela_normalizacao(tmp_path):
     cfg = tmp_path / ".claude"
     _transcript_claude(cfg, "s", "claude-opus-5", "/r", i=1, o=1)
     assert cs.linhas_claude(cfg, "anthropic:758a9521-e2ef")[0].provider == "anthropic:758a9521-e2ef"
-
-
-def test_pi_ignora_sessao_sem_uso(tmp_path, monkeypatch):
-    raiz = tmp_path / "sessions" / "--r--"
-    _escrever(raiz / "vazia.jsonl", [
-        {"type": "session", "timestamp": "2026-08-01T10:00:00Z", "cwd": "/r"},
-    ])
-    monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "sessions")
-    assert cs.linhas_pi() == []
 
 
 def test_codex_le_modelo_so_do_turn_context(tmp_path, monkeypatch):
@@ -326,34 +263,10 @@ def test_codex_le_modelo_so_do_turn_context(tmp_path, monkeypatch):
     assert cs.linhas_codex()[0].model == "?"
 
 
-def test_coletar_junta_as_tres_fontes_e_dedup_e_por_fonte(tmp_path, monkeypatch):
-    # Chave de dedup é (fonte, session_id): um uuid repetido entre fontes não pode se comer.
-    cfg = tmp_path / ".claude"
-    _transcript_claude(cfg, "mesmo-id", "claude-opus-5", "/r", i=1, o=1)
-    _escrever(tmp_path / "sessions" / "--r--" / "mesmo-id.jsonl", [
-        {"type": "session", "timestamp": "2026-08-01T10:00:00Z", "cwd": "/r"},
-        {"type": "model_change", "provider": "kimi-coding", "modelId": "k3"},
-        {"type": "message", "message": {"usage": {"input": 2, "output": 2,
-                                                  "cacheRead": 0, "cacheWrite": 0}}},
-    ])
-    monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "sessions")
-    monkeypatch.setattr(cs, "raiz_omp", lambda: tmp_path / "sem-omp")
-    monkeypatch.setattr(cs, "raiz_codex", lambda home=None: tmp_path / "sem-codex")
-    monkeypatch.setattr(cs, "raiz_kimi", lambda: tmp_path / "sem-kimi")
-    monkeypatch.setattr(cs, "_config_dirs", lambda: [(str(cfg), "conta-x")])
-    cs.invalidar_cache()
-    linhas = cs.coletar()
-    assert {r.source for r in linhas} == {"claude", "pi"}
-    assert len(linhas) == 2
-
-
 def test_cache_relê_quando_o_arquivo_muda(tmp_path, monkeypatch):
     cfg = tmp_path / ".claude"
     _transcript_claude(cfg, "s", "claude-opus-5", "/r", i=1, o=0)
-    monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "x")
-    monkeypatch.setattr(cs, "raiz_omp", lambda: tmp_path / "sem-omp")
     monkeypatch.setattr(cs, "raiz_codex", lambda home=None: tmp_path / "y")
-    monkeypatch.setattr(cs, "raiz_kimi", lambda: tmp_path / "z")
     monkeypatch.setattr(cs, "_config_dirs", lambda: [(str(cfg), "c")])
     cs.invalidar_cache()
     assert len(cs.coletar()) == 1
@@ -366,21 +279,12 @@ def test_cache_evita_reparse_quando_nada_muda(tmp_path, monkeypatch):
     `costs_cache`: cada arquivo é lido do zero uma vez só enquanto não muda."""
     cfg = tmp_path / ".claude"
     _transcript_claude(cfg, "s", "claude-opus-5", "/r", i=1, o=0)
-    _escrever(tmp_path / "sessions" / "--r--" / "s.jsonl", [
-        {"type": "session", "timestamp": "2026-08-01T10:00:00Z", "cwd": "/r"},
-        {"type": "model_change", "provider": "kimi-coding", "modelId": "k3"},
-        {"type": "message", "message": {"usage": {"input": 1, "output": 1,
-                                                  "cacheRead": 0, "cacheWrite": 0}}},
-    ])
-    monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "sessions")
-    monkeypatch.setattr(cs, "raiz_omp", lambda: tmp_path / "sem-omp")
     monkeypatch.setattr(cs, "raiz_codex", lambda home=None: tmp_path / "sem-codex")
-    monkeypatch.setattr(cs, "raiz_kimi", lambda: tmp_path / "sem-kimi")
     monkeypatch.setattr(cs, "_config_dirs", lambda: [(str(cfg), "c")])
     cs.invalidar_cache()   # senão o estado de um teste anterior contamina a contagem
 
-    chamadas = {"claude": 0, "pi": 0}
-    claude_original, pi_original = ct._nova_dobra, cs._dobra_pi
+    chamadas = {"claude": 0}
+    claude_original = ct._nova_dobra
 
     def claude_contado(raiz):
         fabrica = claude_original(raiz)
@@ -390,49 +294,12 @@ def test_cache_evita_reparse_quando_nada_muda(tmp_path, monkeypatch):
             return fabrica(p)
         return nova
 
-    def pi_contado(*a, **kw):
-        chamadas["pi"] += 1
-        return pi_original(*a, **kw)
 
     monkeypatch.setattr(ct, "_nova_dobra", claude_contado)
-    monkeypatch.setattr(cs, "_dobra_pi", pi_contado)
 
-    assert sum(r.input for r in cs.coletar()) == 2
-    assert sum(r.input for r in cs.coletar()) == 2
-    assert chamadas == {"claude": 1, "pi": 1}, "cada arquivo é lido uma vez enquanto não muda"
-
-
-def test_linhas_omp_le_a_raiz_do_omp_com_source_omp_e_model_change_novo(tmp_path, monkeypatch):
-    # omp grava model_change como "provider/id" (Pi grava provider e modelId separados).
-    raiz = tmp_path / "omp" / "sessions" / "--w--"
-    raiz.mkdir(parents=True)
-    f = raiz / "2026-09-03T15-51-00-640Z_01a067f7-6120-700b-b71d-6a6092e0c720.jsonl"
-    _escrever(f, [
-        {"type": "session", "version": 3, "id": "01a067f7", "timestamp": "2026-09-03T15:51:00.640Z", "cwd": "/w"},
-        {"type": "model_change", "model": "opencode-go/deepseek-v4-flash", "resolvedModelIsFallback": False},
-        {"type": "message", "message": {"role": "assistant", "content": [], "usage": {"input": 10, "output": 5, "cacheRead": 0, "cacheWrite": 0}}},
-    ])
-    monkeypatch.setattr(cs, "raiz_omp", lambda: tmp_path / "omp" / "sessions")
-    monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "pi-vazia")
-    linhas = cs.linhas_omp()
-    assert len(linhas) == 1 and linhas[0].source == "omp"
-    assert linhas[0].model == "deepseek-v4-flash"
-    assert cs.linhas_pi() == []
-
-
-def test_coletar_nao_conta_duas_vezes_quando_as_raizes_coincidem(tmp_path, monkeypatch):
-    # PI_CODING_AGENT_DIR é do pi-coding-agent: exportada, os dois agentes caem na mesma árvore.
-    raiz = tmp_path / "sessions"
-    raiz.mkdir()
-    monkeypatch.setattr(cs, "raiz_pi", lambda: raiz)
-    monkeypatch.setattr(cs, "raiz_omp", lambda: raiz)
-    monkeypatch.setattr(cs, "raiz_codex", lambda home=None: tmp_path / "x")
-    monkeypatch.setattr(cs, "raiz_kimi", lambda: tmp_path / "y")
-    monkeypatch.setattr(cs, "_config_dirs", lambda: [])
-    vistos = []
-    monkeypatch.setattr(cs, "_sincronizar_pi", lambda raiz, source: vistos.append(source))
     cs.coletar()
-    assert vistos == ["pi"]
+    cs.coletar()
+    assert chamadas == {"claude": 1}, "cada arquivo é lido uma vez enquanto não muda"
 
 
 # --- Vieram do test_costs.py: o código que eles cobrem mudou de módulo, o risco não mudou -----
@@ -541,47 +408,6 @@ def test_provedor_clinepass_nao_vira_moonshot():
     assert pricing.canonizar_provedor("openai-codex") == "openai"
 
 
-def test_linhas_kimi_soma_usage_record_e_resolve_projeto(tmp_path, monkeypatch):
-    # Layout medido no Kimi 0.34.0: sessions/<wd>/<sid>/agents/main/wire.jsonl, um usage.record
-    # por turno com o DELTA (soma, nao ultima linha). Projeto vem do session_index.jsonl.
-    home = tmp_path / "kimi-home"
-    monkeypatch.setenv("KIMI_CODE_HOME", str(home))
-    monkeypatch.setattr(cs, "raiz_kimi", lambda: home / "sessions")
-    sid = "session_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-    wire = home / "sessions" / "wd_r_000000000000" / sid / "agents" / "main" / "wire.jsonl"
-    _escrever(wire, [
-        {"type": "metadata", "protocol_version": "1.5"},
-        {"type": "usage.record", "model": "apikey/k3", "time": 1786452188171,
-         "usage": {"inputOther": 100, "output": 10, "inputCacheRead": 50, "inputCacheCreation": 5}},
-        {"type": "usage.record", "model": "apikey/k3", "time": 1786452190000,
-         "usage": {"inputOther": 200, "output": 20, "inputCacheRead": 0, "inputCacheCreation": 0}},
-    ])
-    _escrever(home / "session_index.jsonl", [
-        {"sessionId": sid, "sessionDir": str(wire.parent.parent), "workDir": "/r"}])
-    linhas = cs.linhas_kimi()
-    assert len(linhas) == 1
-    r = linhas[0]
-    assert r.source == "kimi"
-    assert r.model == "apikey/k3"
-    assert (r.input, r.output, r.cache_read, r.cache_write) == (300, 30, 50, 5)
-    assert r.project == "/r"
-    assert r.session_id == sid
-    assert r.subagente is False
-
-
-def test_linhas_kimi_marca_subagente(tmp_path, monkeypatch):
-    home = tmp_path / "kimi-home"
-    monkeypatch.setenv("KIMI_CODE_HOME", str(home))
-    monkeypatch.setattr(cs, "raiz_kimi", lambda: home / "sessions")
-    sid = "session_bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
-    _escrever(home / "sessions" / "wd_r_000000000000" / sid / "agents" / "agent-0" / "wire.jsonl", [
-        {"type": "usage.record", "model": "apikey/k3", "time": 1786452188171,
-         "usage": {"inputOther": 1, "output": 1, "inputCacheRead": 0, "inputCacheCreation": 0}},
-    ])
-    (r,) = cs.linhas_kimi()
-    assert r.subagente is True
-
-
 def test_coletar_codex_separa_contas_e_deduplica_rollout_canonico(tmp_path, monkeypatch):
     monkeypatch.setattr(__import__("pathlib").Path, "home",
                         classmethod(lambda cls: tmp_path))
@@ -600,9 +426,6 @@ def test_coletar_codex_separa_contas_e_deduplica_rollout_canonico(tmp_path, monk
     link.parent.mkdir(parents=True)
     link.symlink_to(original)
     monkeypatch.setattr(cs, "_config_dirs", lambda: [])
-    monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "pi")
-    monkeypatch.setattr(cs, "raiz_omp", lambda: tmp_path / "omp")
-    monkeypatch.setattr(cs, "raiz_kimi", lambda: tmp_path / "kimi")
     cs.invalidar_cache()
 
     rows = cs.coletar()
@@ -623,9 +446,6 @@ def test_coletar_link_da_padrao_para_secundaria_preserva_dono_e_cache(tmp_path, 
     _escrever(rollout, _rollout_codex("/work", "only",
                                       {"input_tokens": 10, "output_tokens": 1}))
     monkeypatch.setattr(cs, "_config_dirs", lambda: [])
-    monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "pi")
-    monkeypatch.setattr(cs, "raiz_omp", lambda: tmp_path / "omp")
-    monkeypatch.setattr(cs, "raiz_kimi", lambda: tmp_path / "kimi")
     cs.invalidar_cache()
 
     def codex_rows():
@@ -653,9 +473,6 @@ def test_coletar_codex_gateway_nao_atribui_custo_a_conta_openai(tmp_path, monkey
     linhas[0]["payload"]["model_provider"] = "gateway-proprio"
     _escrever(home / "sessions" / "rollout-gateway.jsonl", linhas)
     monkeypatch.setattr(cs, "_config_dirs", lambda: [])
-    monkeypatch.setattr(cs, "raiz_pi", lambda: tmp_path / "pi")
-    monkeypatch.setattr(cs, "raiz_omp", lambda: tmp_path / "omp")
-    monkeypatch.setattr(cs, "raiz_kimi", lambda: tmp_path / "kimi")
     (row,) = cs.coletar()
     assert row.provider == "gateway-proprio"
     assert row.account_id == f"codex:{home.resolve()}"

@@ -1,9 +1,51 @@
-//! Acrescenta apenas entradas ausentes, conservando o TOML e o backup do usuário.
+//! Reconcilia os comandos do Hangar sem reescrever o TOML pessoal.
 use crate::accounts::environment::AccountEnvironment;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{fs, io::Write, path::Path};
 
-pub fn sync(env: &AccountEnvironment, repo: &Path) -> Result<Vec<String>, String> {
+pub const ENTRIES: &[(&str, Option<&str>, &str)] = &[
+    ("SessionStart", None, "kimi-state-hook"),
+    ("UserPromptSubmit", None, "kimi-state-hook"),
+    ("TurnStarted", None, "kimi-state-hook"),
+    ("Stop", None, "kimi-state-hook"),
+    ("Interrupt", None, "kimi-state-hook"),
+    ("PermissionRequest", None, "kimi-state-hook"),
+    ("PreToolUse", Some("AskUserQuestion"), "kimi-state-hook"),
+    ("PostToolUse", Some("AskUserQuestion"), "kimi-state-hook"),
+    ("PreToolUse", Some("Bash"), "guard-tmux"),
+];
+
+#[derive(Deserialize)]
+struct Config {
+    #[serde(default)]
+    hooks: Vec<Hook>,
+}
+#[derive(Deserialize)]
+struct Hook {
+    #[serde(default)]
+    command: Option<toml::Spanned<toml::Value>>,
+}
+
+pub fn installed(command: &str, mode: &str) -> bool {
+    crate::provider_hooks::command(mode).is_ok_and(|expected| {
+        super::hooks::tokens(command, cfg!(windows))
+            == super::hooks::tokens(&expected, cfg!(windows))
+    })
+}
+fn native_command(command: &str, mode: &str) -> bool {
+    let tokens = super::hooks::tokens(command, cfg!(windows));
+    tokens.len() == 2
+        && tokens[1] == mode
+        && tokens[0].rsplit(['/', '\\']).next().is_some_and(|name| {
+            matches!(
+                name,
+                "hangar-server" | "hangar-server.exe" | "hangar-server-command"
+            )
+        })
+}
+
+pub fn sync(env: &AccountEnvironment, _repo: &Path) -> Result<Vec<String>, String> {
     let home = super::files::directory(env, "kimi");
     if !home.is_dir() {
         return Ok(vec![]);
@@ -14,77 +56,72 @@ pub fn sync(env: &AccountEnvironment, repo: &Path) -> Result<Vec<String>, String
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(e.to_string()),
     };
-    let data: Value = if raw.trim().is_empty() {
+    let mut data: Value = if raw.trim().is_empty() {
         json!({})
     } else {
         toml::from_str(&raw).map_err(|_| "config.toml inválido; hooks preservados")?
     };
-    let python = crate::install_root::python_exe(repo, cfg!(windows));
-    let mut out = raw.clone();
-    if !out.is_empty() && !out.ends_with('\n') {
-        out.push('\n');
+    // Arrays inline não admitem acrescentar [[hooks]] sem redefinir a mesma chave.
+    if data.get("hooks").is_some() && !raw.lines().any(|l| l.trim().starts_with("[[hooks]]")) {
+        return Err("hooks inline; configuração preservada".into());
     }
-    let mut changed = false;
-    for (script, entries, header) in [
-        (
-            "kimi_state_hook.py",
-            vec![
-                ("SessionStart", None),
-                ("UserPromptSubmit", None),
-                ("TurnStarted", None),
-                ("Stop", None),
-                ("Interrupt", None),
-                ("PermissionRequest", None),
-                ("PreToolUse", Some("AskUserQuestion")),
-                ("PostToolUse", Some("AskUserQuestion")),
-            ],
-            "marcadores de estado e vínculo da sessão",
-        ),
-        (
-            "guard_tmux.py",
-            vec![("PreToolUse", Some("Bash"))],
-            "proteção do servidor tmux compartilhado",
-        ),
-    ] {
-        let script = repo
-            .join("backend/hooks")
-            .join(script)
-            .to_string_lossy()
-            .into_owned();
-        let command = format!("\"{}\" \"{script}\"", python.display());
-        let missing: Vec<_> = entries
-            .into_iter()
-            .filter(|(event, matcher)| {
-                !data["hooks"].as_array().into_iter().flatten().any(|h| {
-                    h["event"] == *event
-                        && h["matcher"].as_str() == *matcher
-                        && super::hooks::refers_platform(&h["command"], &script, false, false)
-                })
-            })
-            .collect();
-        if missing.is_empty() {
+    let parsed: Config =
+        toml::from_str(&raw).map_err(|_| "config.toml inválido; hooks preservados")?;
+    let mut replacements = Vec::new();
+    for hook in parsed.hooks {
+        let Some(command) = hook.command else {
+            continue;
+        };
+        let Some(text) = command.get_ref().as_str() else {
+            continue;
+        };
+        for (legacy, mode) in [
+            ("kimi_state_hook.py", "kimi-state-hook"),
+            ("guard_tmux.py", "guard-tmux"),
+        ] {
+            if super::hooks::refers_platform(&json!(text), legacy, true, cfg!(windows))
+                || native_command(text, mode)
+            {
+                replacements.push((
+                    command.span(),
+                    serde_json::to_string(&crate::provider_hooks::command(mode)?)
+                        .map_err(|e| e.to_string())?,
+                ));
+                break;
+            }
+        }
+    }
+    let mut out = raw.clone();
+    for (span, replacement) in replacements.into_iter().rev() {
+        out.replace_range(span, &replacement);
+    }
+    if out != raw {
+        data = toml::from_str(&out)
+            .map_err(|_| "migração de hooks inválida; configuração preservada")?;
+    }
+    for &(event, matcher, mode) in ENTRIES {
+        let exists = data["hooks"].as_array().into_iter().flatten().any(|h| {
+            h["event"] == event
+                && h["matcher"].as_str() == matcher
+                && h["command"].as_str().is_some_and(|c| installed(c, mode))
+        });
+        if exists {
             continue;
         }
-        if data.get("hooks").is_some() && !raw.contains("[[hooks]]") {
-            return Err("hooks inline; configuração preservada".into());
+        if !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
         }
-        changed = true;
+        out += &format!("\n# hangar: integração da sessão.\n[[hooks]]\nevent = \"{event}\"\n");
+        if let Some(matcher) = matcher {
+            out += &format!("matcher = \"{matcher}\"\n");
+        }
         out += &format!(
-            "\n# hangar: {header}.\n# Remova este bloco para desligar estes hooks do Hangar.\n"
+            "command = {}\ntimeout = 5\n",
+            serde_json::to_string(&crate::provider_hooks::command(mode)?)
+                .map_err(|e| e.to_string())?
         );
-        for (event, matcher) in missing {
-            out += &format!("[[hooks]]\nevent = \"{event}\"\n");
-            if let Some(matcher) = matcher {
-                out += &format!("matcher = \"{matcher}\"\n");
-            }
-            // String básica também aceita apóstrofo no caminho de instalação.
-            out += &format!(
-                "command = {}\ntimeout = 5\n\n",
-                serde_json::to_string(&command).map_err(|e| e.to_string())?
-            );
-        }
     }
-    if !changed {
+    if out == raw {
         return Ok(vec![]);
     }
     if !raw.trim().is_empty() {
@@ -101,6 +138,6 @@ pub fn sync(env: &AccountEnvironment, repo: &Path) -> Result<Vec<String>, String
             Err(e) => return Err(e.to_string()),
         }
     }
-    crate::runtime::queue::atomic_write(&path, out.as_bytes()).map_err(|e| e.to_string())?;
+    super::files::write_preserving(&path, &out)?;
     Ok(vec![path.to_string_lossy().into_owned()])
 }

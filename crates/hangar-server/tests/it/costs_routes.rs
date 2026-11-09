@@ -2,11 +2,11 @@ use crate::common;
 
 use axum::{Router, extract::{Path, Request, State}, http::StatusCode, response::{IntoResponse, Response}, routing::get};
 use common::costs::fixtures_copy;
-use hangar_server::{auth::TrustedHosts, config::Config, costs::collect::{Collector, HttpScopes, Scopes, ClaudeScope, CodexScope, PiScope, KimiScope}, costs::fx::Fx, routes::{AppState, router}};
+use hangar_server::{auth::TrustedHosts, config::Config, costs::collect::{Collector, ScopeSource, CollectError, Scopes, ClaudeScope, CodexScope, PiScope, KimiScope}, costs::fx::Fx, routes::{AppState, router}};
 use serde_json::{Value, json};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}};
 use std::time::{Duration, Instant};
 
 const OWNER: &str = "dono-de-teste";
@@ -30,10 +30,11 @@ fn session_rollout(path: &std::path::Path, model: &str, input: i64) {
 
 struct Upstream {
     scopes: Mutex<Option<Scopes>>,
+    scope_reads: AtomicUsize,
     infos: Mutex<indexmap::IndexMap<String, Value>>,
     hits: Mutex<Vec<(String, String)>>,
     info_failures: Mutex<std::collections::VecDeque<StatusCode>>,
-    journal: Mutex<Vec<Value>>,
+    journal: tempfile::TempDir,
 }
 
 async fn session_info(State(up): State<Arc<Upstream>>, Path(name): Path<String>, request: Request) -> Response {
@@ -46,19 +47,14 @@ async fn session_info(State(up): State<Arc<Upstream>>, Path(name): Path<String>,
     }
 }
 
-async fn journal(State(up): State<Arc<Upstream>>, request: Request) -> Response {
-    assert_eq!(request.headers()["x-hangar-internal"], SECRET);
-    let body = axum::body::to_bytes(request.into_body(), 8192).await.unwrap();
-    up.journal.lock().unwrap().push(serde_json::from_slice(&body).unwrap());
-    StatusCode::OK.into_response()
+impl Upstream {
+    fn journal(&self) -> Vec<Value> { crate::fake::read_diary(self.journal.path()) }
 }
 
-async fn scopes(State(up): State<Arc<Upstream>>, request: Request) -> Response {
-    up.hits.lock().unwrap().push((request.method().to_string(), request.uri().to_string()));
-    assert_eq!(request.headers()["x-hangar-internal"], SECRET);
-    match up.scopes.lock().unwrap().as_ref() {
-        Some(scopes) => ([("content-type", "application/json")], serde_json::to_vec(scopes).unwrap()).into_response(),
-        None => StatusCode::NOT_FOUND.into_response(),
+impl ScopeSource for Upstream {
+    fn fetch(&self) -> Result<Scopes, CollectError> {
+        self.scope_reads.fetch_add(1, Ordering::SeqCst);
+        self.scopes.lock().unwrap().clone().ok_or(CollectError::NoScopes)
     }
 }
 
@@ -104,13 +100,11 @@ impl Harness {
             kimi: Some(KimiScope { root: base.join("kimi/sessions"), index: base.join("kimi/session_index.jsonl") }),
             repo: base.clone(),
         };
-        let upstream = Arc::new(Upstream { scopes: Mutex::new(has_scopes.then_some(scopes)), infos: Mutex::new(indexmap::IndexMap::new()), hits: Mutex::new(Vec::new()),
-            info_failures: Mutex::new(Default::default()), journal: Mutex::new(Vec::new()) });
+        let upstream = Arc::new(Upstream { scopes: Mutex::new(has_scopes.then_some(scopes)), scope_reads: AtomicUsize::new(0), infos: Mutex::new(indexmap::IndexMap::new()), hits: Mutex::new(Vec::new()),
+            info_failures: Mutex::new(Default::default()), journal: tempfile::tempdir().unwrap() });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let up_address = listener.local_addr().unwrap();
-        let app = Router::new().route("/internal/costs/scopes", get(self::scopes))
-            .route("/internal/diag", axum::routing::post(journal))
-            .route("/internal/sessions/{name}/info", get(session_info)).fallback(python).with_state(upstream.clone());
+        let app = Router::new().route("/internal/sessions/{name}/info", get(session_info)).fallback(python).with_state(upstream.clone());
         let up_task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let index = if bad_disk {
             let blocked = dir.path().join("blocked");
@@ -130,10 +124,11 @@ impl Harness {
                 let file = dir.path().join("blocked-file"); std::fs::write(&file, "arquivo").unwrap(); file.join("idx")
             }
         } else { dir.path().join("idx") };
-        let collector = Arc::new(Collector::new(index, base.join("pricing"), dir.path().join("areas.json"), Arc::new(HttpScopes::new(up_address, SECRET.into()))));
+        let collector = Arc::new(Collector::new(index, base.join("pricing"), dir.path().join("areas.json"), upstream.clone()));
         let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(), upstream: up_address,
             internal_secret: SECRET.into(), auth_token: OWNER.into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1") };
         let mut state = AppState::with_parts(cfg, hangar_server::terminal_control::TerminalPool::new(), collector.clone(), fx, String::new());
+        state.diag = state.diag.clone().with_diary(Some(upstream.journal.path().to_owned()));
         state.origins_home = dir.path().join("home");
         state.side.locate = Arc::new(crate::fake::FakeLocate { upstream: up_address, http: hangar_server::proxy::client(), secret: SECRET.into() });
         for path in [state.origins_home.join(".claude/skills/minha-skill"), state.origins_home.join(".claude/plugins/cache/market/superpowers/1/skills/brainstorming")] {
@@ -239,12 +234,16 @@ async fn session_info_failure_is_503_with_code_once_and_other_sessions_keep_work
     let hits = h.upstream.hits.lock().unwrap().clone();
     assert_eq!(hits.iter().filter(|(_, uri)| uri == "/internal/sessions/broken%2Dinfo/info").count(), 1);
     let deadline = Instant::now() + Duration::from_secs(5);
-    while h.upstream.journal.lock().unwrap().is_empty() {
+    while h.upstream.journal().is_empty() {
         assert!(Instant::now() < deadline, "diário não recebeu a falha");
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    assert_eq!(h.upstream.journal.lock().unwrap()[0], json!({"evento":"rust.costs_failed", "sessao":"broken-info",
-        "codigo":"internal_info", "motivo":"o backend não devolveu os dados da sessão"}));
+    let entry = h.upstream.journal().into_iter().find(|row| row["evento"] == "rust.costs_failed").unwrap();
+    assert_eq!(entry["sessao"], "broken-info");
+    assert_eq!(entry["codigo"], "internal_info");
+    assert_eq!(entry["detalhe"], "o backend não devolveu os dados da sessão");
+    assert_eq!(entry["nivel"], "erro");
+    assert_eq!(entry["origem"], "servidor");
     // A falha não prende a sessão: o pedido seguinte já é atendido pelo Rust.
     let response = h.request(reqwest::Method::GET, "/api/sessions/broken-info/cost").send().await.unwrap();
     assert_eq!(serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap()["has_usage"], true);
@@ -300,7 +299,7 @@ async fn non_finite_quote_and_reports_fail_with_code_instead_of_serializing_null
     // Cada rota assina a própria linha: uma não esconde a outra no limite por minuto do diário.
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        let mut seen: Vec<String> = h.upstream.journal.lock().unwrap().iter()
+        let mut seen: Vec<String> = h.upstream.journal().iter()
             .filter(|e| e["codigo"] == "costs_non_finite").map(|e| e["sessao"].as_str().unwrap().to_owned()).collect();
         seen.sort();
         if seen == ["costs", "cotacao", "uso"] { break; }
@@ -649,7 +648,7 @@ async fn missing_or_guest_token_goes_to_python_without_starting_scopes() {
     let response = hangar_server::http_client().build().unwrap().get(format!("http://{}/api/costs", h.address)).send().await.unwrap();
     assert_eq!(response.status(), 401);
     assert!(h.forwarded("GET", "/api/costs"));
-    assert!(!h.forwarded("GET", "/internal/costs/scopes"));
+    assert_eq!(h.upstream.scope_reads.load(Ordering::SeqCst), 0);
     let response = hangar_server::http_client().build().unwrap().get(format!("http://{}/api/costs", h.address)).bearer_auth("convidado").send().await.unwrap();
     assert_eq!(response.status(), 401);
 }
@@ -683,11 +682,11 @@ async fn only_the_owner_reaches_the_login_window_routes() {
 }
 
 #[tokio::test]
-async fn missing_internal_scopes_fail_with_code_instead_of_returning_empty_report() {
+async fn missing_scopes_fail_with_code_instead_of_returning_empty_report() {
     let h = Harness::new(false, false).await;
     assert_eq!(h.request(reqwest::Method::GET, "/api/costs").send().await.unwrap().status(), 202);
     assert_eq!(h.failure("/api/costs").await, "costs_no_scopes");
-    assert!(h.forwarded("GET", "/internal/costs/scopes"));
+    assert!(h.upstream.scope_reads.load(Ordering::SeqCst) > 0);
 }
 
 #[tokio::test]
@@ -703,7 +702,7 @@ async fn cotacao_get_only_returns_fx_and_post_is_forwarded() {
     let response = h.request(reqwest::Method::GET, "/api/cotacao").send().await.unwrap();
     assert_eq!(response.status(), 200);
     assert_eq!(serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap(), json!({"usd_brl":5.25}));
-    assert!(!h.forwarded("GET", "/internal/costs/scopes"));
+    assert_eq!(h.upstream.scope_reads.load(Ordering::SeqCst), 0);
     let response = h.request(reqwest::Method::POST, "/api/cotacao").send().await.unwrap();
     assert_eq!(response.status(), 200);
     assert!(h.forwarded("POST", "/api/cotacao"));
@@ -888,7 +887,7 @@ async fn session_cost_reads_fixture_without_scopes_or_warming_scan() {
     common::costs::assert_close(&body, &json!({"cost_usd":0.0049875, "missing_models":[], "has_usage":true}), "custo da sessão");
     assert!(!h.forwarded("GET", "/api/sessions/codex-session/cost"));
     assert!(h.forwarded("GET", "/internal/sessions/codex%2Dsession/info"));
-    assert!(!h.forwarded("GET", "/internal/costs/scopes"));
+    assert_eq!(h.upstream.scope_reads.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -959,7 +958,7 @@ async fn session_cost_unavailable_index_fails_with_code() {
     h.upstream.infos.lock().unwrap().insert("session".into(), json!({"provider":"codex", "jsonl":h.base.join("codex/sessions/2026/09/30/rollout-c1.jsonl")}));
     assert_eq!(h.failure("/api/sessions/session/cost").await, "costs_no_disk");
     assert!(h.forwarded("GET", "/internal/sessions/session/info"));
-    assert!(!h.forwarded("GET", "/internal/costs/scopes"));
+    assert_eq!(h.upstream.scope_reads.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -1034,7 +1033,7 @@ async fn session_cost_empty_usage_is_null_and_pricing_reload_is_independent() {
     let response = h.request(reqwest::Method::GET, "/api/sessions/session/cost").send().await.unwrap();
     assert_eq!(response.status(), 200);
     assert_eq!(serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap(), json!({"cost_usd":7.0, "missing_models":[], "has_usage":true}));
-    assert!(!h.forwarded("GET", "/internal/costs/scopes"));
+    assert_eq!(h.upstream.scope_reads.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -1085,7 +1084,7 @@ async fn session_cost_finite_tariff_overflow_fails_with_code_but_zero_remains_nu
     h.upstream.infos.lock().unwrap().insert("session".into(), json!({"provider":"codex", "jsonl":path}));
     assert_eq!(h.failure("/api/sessions/session/cost").await, "costs_non_finite");
     assert!(h.forwarded("GET", "/internal/sessions/session/info"));
-    assert!(!h.forwarded("GET", "/internal/costs/scopes"));
+    assert_eq!(h.upstream.scope_reads.load(Ordering::SeqCst), 0);
     std::fs::write(h.base.join("pricing/overrides.json"), json!({"gpt-5.5":{
         "input":0, "output":0, "cache_write":0, "cache_read":0, "provider":"openai"
     }}).to_string()).unwrap();
@@ -1143,9 +1142,9 @@ async fn unreadable_folder_is_served_and_reported_to_the_journal_with_its_cause(
     let after: Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
     assert_eq!(after["totals"], before["totals"], "linhas da pasta ilegível mantidas");
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !h.upstream.journal.lock().unwrap().iter().any(|e| e["evento"] == "rust.costs_dir_unread"
+    while !h.upstream.journal().iter().any(|e| e["evento"] == "rust.costs_dir_unread"
         && e["codigo"] == "costs_dir_permission_denied" && e["sessao"] == "costs") {
-        assert!(Instant::now() < deadline, "diário: {:?}", h.upstream.journal.lock().unwrap());
+        assert!(Instant::now() < deadline, "diário: {:?}", h.upstream.journal());
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }

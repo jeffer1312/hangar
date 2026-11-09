@@ -631,6 +631,8 @@ fn revert(m: &Machine<'_>, done: &[Done]) -> Vec<String> {
                     Err(e) => { fail(format!("{} não voltou: ilegível ({e}), ficou como estava", path.display())); continue; }
                 };
                 let (text, _) = kimi_drop(&text, &m.hooks_needle(&current), m.windows);
+                let native = current.join("bin").join(if m.windows {"hangar-server.exe"} else {"hangar-server"});
+                let (text, _) = kimi_drop(&text, &native.to_string_lossy(), m.windows);
                 if let Err(e) = crate::runtime::queue::atomic_write(path, kimi_restore(&text, removed).as_bytes()) {
                     fail(format!("{} não voltou: {e}", path.display()));
                 }

@@ -94,7 +94,9 @@ pub(crate) async fn admit(st: &Arc<AppState>, peer: SocketAddr, req: Request, ro
     let (parts, body) = req.into_parts();
     let Ok(bytes) = to_bytes(body, BODY_LIMIT).await else { return Err(too_large(&parts.headers)) };
     let shaped = table::body_ok(route, &bytes);
-    if let Some(response) = control::asleep_queue(&runtime, &name, route, st.write_gate_wait, &parts, &bytes).await { return Err(response); }
+    let mut other=runtime.other_info(&name).await.is_some();
+    if !other && runtime.asleep(&name).await.is_some(){other=runtime.ensure_other(&name).await.is_some();}
+    if !other && let Some(response)=control::asleep_queue(&runtime,&name,route,st.write_gate_wait,&parts,&bytes).await {return Err(response);}
     match route_write(&runtime, &name, route, st.write_gate_wait).await {
         Write::Rust(_, _) if !shaped => Err(invalid_body(&parts.headers)),
         Write::Rust(pass_in, target) => Ok((Ctx { st: st.clone(), name, target, _pass: pass_in, parts }, bytes)),
@@ -129,7 +131,7 @@ pub(crate) async fn orchestration_guard(st: &Arc<AppState>, name: &str, headers:
 
 /// Recusa do Rust a uma sessão dele: esperar a conversa abrir é 409; o resto, 503.
 pub(crate) fn failed_status(error: &crate::runtime::protocol::RuntimeError) -> StatusCode {
-    if error.code == crate::runtime::codex_relaunch::STARTING || error.code == crate::runtime::gateway::ASLEEP_WAKING { StatusCode::CONFLICT } else { StatusCode::SERVICE_UNAVAILABLE }
+    if error.code == crate::runtime::codex_relaunch::STARTING || error.code == crate::runtime::gateway::ASLEEP_WAKING || error.code=="other_terminal_starting" { StatusCode::CONFLICT } else { StatusCode::SERVICE_UNAVAILABLE }
 }
 
 
@@ -164,6 +166,7 @@ pub(crate) async fn route_write(runtime: &RuntimeRegistry, name: &str, route: Wr
                     Ok(None) => return Write::Failed(error),
                 }
             }
+            Some(Err(error)) if error.code=="other_terminal_starting" && route==WriteRoute::Input=> {return match runtime.other_opening_key(name).await {Some(key)=>Write::Opening(key),None=>Write::Failed(error)};}
             Some(Err(error)) if error.code == crate::runtime::codex_relaunch::STARTING && route == WriteRoute::Input => {
                 return match runtime.codex_opening(name).await {
                     Some(Ok(key)) => Write::Opening(key),

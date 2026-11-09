@@ -98,10 +98,14 @@ struct Patterns {
     subagent: Regex, subagent_body: Regex, digit: Regex, word: Regex, agent_cursor: Regex,
 }
 
+fn terminal_regex(pattern: &str) -> Regex {
+    Regex::new(&pattern.replace(r"\s", r"[\s\x1c-\x1f]")
+        .replace(r"\S", r"[^\s\x1c-\x1f]").replace(r"\w", r"[\p{L}\p{N}_]")).unwrap()
+}
+
 static P: LazyLock<Patterns> = LazyLock::new(|| {
     // Python considera também os separadores de informação como espaço.
-    let r = |s: &str| Regex::new(&s.replace(r"\s", r"[\s\x1c-\x1f]")
-        .replace(r"\S", r"[^\s\x1c-\x1f]").replace(r"\w", r"[\p{L}\p{N}_]")).unwrap();
+    let r = terminal_regex;
     // O re.I do Python reúne também as duas formas turcas de i.
     let insensitive = |s: &str| {
         let expanded: String = s.chars().map(|c| match c {
@@ -368,7 +372,7 @@ fn tool_header(lines: &[&str], i: usize) -> bool {
 
 /// `anchor`: começo da faixa dos mods, que fica entre a conversa e a caixa de digitar e pode
 /// começar com ●; a ocorrência mais baixa dela fecha a conversa.
-fn preview(lines: &[&str], anchor: Option<&str>) -> String {
+fn preview(lines: &[&str], anchor: Option<&str>, skip: impl Fn(&[&str], usize, &str) -> bool, stop: impl Fn(&str) -> bool) -> String {
     let mut end = lines.iter().rposition(|l| P.rule.is_match(l) || P.overlay_rule.is_match(l) || P.pi_box.is_match(l))
         .unwrap_or(lines.len());
     if let Some(anchor) = anchor.filter(|a| !a.is_empty()) {
@@ -391,7 +395,7 @@ fn preview(lines: &[&str], anchor: Option<&str>) -> String {
         let subagent = P.subagent.is_match(body) && lines[i + 1..].iter().find(|l| !trim(l).is_empty())
             .is_some_and(|l| P.subagent_body.is_match(l));
         if !tool(body) && !mcp(body) && !end_word(&P.finished, body)
-            && !P.todo.is_match(line) && !subagent && !tool_header(lines, i) { start = Some(i); }
+            && !P.todo.is_match(line) && !subagent && !tool_header(lines, i) && !skip(lines, i, body) { start = Some(i); }
     }
     let Some(start) = start else { return String::new(); };
     let first = left(lines[start]);
@@ -399,7 +403,7 @@ fn preview(lines: &[&str], anchor: Option<&str>) -> String {
     for (j, line) in lines.iter().enumerate().skip(start + 1) {
         let s = left(line);
         if P.rule.is_match(line) || boundary(line) || P.user.is_match(line) || tool(s)
-            || mcp(s) || P.todo.is_match(line) || P.ascii_spinner.is_match(s) || P.effort.is_match(s)
+            || mcp(s) || P.todo.is_match(line) || P.ascii_spinner.is_match(s) || P.effort.is_match(s) || stop(line)
             // Só no começo de parágrafo: as linhas do mesmo parágrafo dão a mesma resposta.
             || activity(s) || (!trim(s).is_empty() && trim(lines[j - 1]).is_empty() && tool_header(lines, j - 1)) { break; }
         out.push(right(line));
@@ -411,9 +415,140 @@ fn preview(lines: &[&str], anchor: Option<&str>) -> String {
 /// Prévia do pane e se o spinner corre, sem o resto da análise: o `Monitor` a chama no quadro
 /// cortado na largura da conversa ou com a faixa dos mods à vista.
 pub fn pane_preview(pane: &str, anchor: Option<&str>) -> (String, bool) {
-    let lines = lines(pane);
-    (preview(&lines, anchor), live_spinner(&lines).is_some())
+    pane_preview_filtered(pane, anchor, |_, _, _| false, |_| false)
 }
+
+/// A mesma extração, com as fronteiras e os blocos adicionais da TUI do provedor.
+fn pane_preview_filtered(
+    pane: &str,
+    anchor: Option<&str>,
+    skip: impl Fn(&[&str], usize, &str) -> bool,
+    stop: impl Fn(&str) -> bool,
+) -> (String, bool) {
+    let lines = lines(pane);
+    (preview(&lines, anchor, skip, stop), live_spinner(&lines).is_some())
+}
+
+/// A moldura do composer compartilhada pelos provedores de terminal.
+fn is_composer_box(line: &str) -> bool { P.pi_box.is_match(line) }
+
+/// Fronteira da continuação cujo início já rolou para fora do quadro.
+fn is_preview_boundary(line: &str) -> bool {
+    boundary(line) || P.rule.is_match(line) || P.overlay_rule.is_match(line)
+        || P.user.is_match(line) || is_composer_box(line)
+}
+
+struct OtherPreviewPatterns {
+    tool: Regex,
+    used: Regex,
+    ansi: Regex,
+    folded: Regex,
+}
+
+static OTHER_PREVIEW: LazyLock<OtherPreviewPatterns> = LazyLock::new(|| OtherPreviewPatterns {
+    tool: terminal_regex(r"^(Bash|Read|Write|Edit|MultiEdit|Grep|Glob|Task|Agent|Skill|WebFetch|WebSearch|NotebookEdit|TodoWrite|Multiple Tools|Chrome Devtools)[\s:(]"),
+    used: terminal_regex(r"^Us(?:ed|ing)\s+[A-Z][\w-]*\s*\("),
+    ansi: terminal_regex(r"\x1b\[[0-9;?]*[a-zA-Z]"),
+    folded: terminal_regex(r"^\s*\.\.\.\s*\(\d+ more lines"),
+});
+
+fn kimi_spinner(line: &str) -> bool {
+    matches!(left(line).chars().next(), Some('\u{2800}'..='\u{28ff}' | '\u{1f311}'..='\u{1f318}'))
+}
+
+fn kimi_prompt(line: &str) -> bool {
+    left(line).strip_prefix('\u{2728}').is_some_and(|rest| rest.chars().next().is_some_and(whitespace))
+}
+
+fn kimi_todo_item(line: &str) -> bool {
+    let mut chars = left(line).chars();
+    matches!(chars.next(), Some('✓' | '●' | '○')) && chars.next().is_some_and(whitespace)
+}
+
+fn kimi_in_todo(lines: &[&str], at: usize) -> bool {
+    for line in lines[..=at].iter().rev() {
+        if trim(line) == "Todo" { return true; }
+        if !trim(line).is_empty() && !kimi_todo_item(line) { return false; }
+    }
+    false
+}
+
+fn kimi_plain(pane: &str) -> String {
+    lines(pane).into_iter().filter_map(|line| {
+        // Cor e posição do itálico juntas separam raciocínio de ênfase na resposta.
+        if let Some(at) = line.find("\x1b[3m")
+            && line.contains("38;2;136;136;136")
+            && OTHER_PREVIEW.ansi.replace_all(&line[..at], "").trim_matches([' ', '●']).is_empty()
+        { return None; }
+        let clean = OTHER_PREVIEW.ansi.replace_all(line, "");
+        (!OTHER_PREVIEW.folded.is_match(&clean)).then(|| clean.into_owned())
+    }).collect::<Vec<_>>().join("\n")
+}
+
+fn pi_tool(lines: &[&str], at: usize, body: &str) -> bool {
+    OTHER_PREVIEW.tool.is_match(body) && lines[at + 1..].iter().find(|line| !trim(line).is_empty())
+        .is_some_and(|line| matches!(left(line).chars().next(), Some('├' | '└' | '│' | '▌' | '⎿')))
+}
+
+fn other_stop(provider: &str, line: &str) -> bool {
+    is_composer_box(line) || (provider == "kimi" && (kimi_spinner(line) || kimi_prompt(line)
+        || trim(line) == "Todo" || OTHER_PREVIEW.used.is_match(left(line))))
+}
+
+/// Prosa do quadro Pi/omp/Kimi, usando a mesma eleição de blocos dos outros terminais.
+pub fn other_pane_preview(provider: &str, pane: &str) -> String {
+    if !matches!(provider, "pi" | "omp" | "kimi") { return pane_preview(pane, None).0; }
+    let plain = (provider == "kimi").then(|| kimi_plain(pane));
+    let pane = plain.as_deref().unwrap_or(pane);
+    pane_preview_filtered(pane, None, |lines, at, body| {
+        if provider == "kimi" { OTHER_PREVIEW.used.is_match(body) || kimi_in_todo(lines, at) }
+        else { pi_tool(lines, at, body) }
+    }, |line| other_stop(provider, line)).0
+}
+
+/// Texto visível do começo do quadro que só pode ser aceito quando a costura comprovar a continuação.
+pub fn kimi_continuation(pane: &str) -> String {
+    let plain = kimi_plain(pane);
+    let mut out = Vec::new();
+    for line in lines(&plain) {
+        if is_preview_boundary(line) || kimi_spinner(line) || kimi_todo_item(line)
+            || other_stop("kimi", line)
+        { break; }
+        out.push(right(line));
+    }
+    let begin = out.iter().position(|line| !trim(line).is_empty()).unwrap_or(out.len());
+    let end = out.iter().rposition(|line| !trim(line).is_empty()).map_or(begin, |at| at + 1);
+    out[begin..end].join("\n")
+}
+
+/// Costura em pontos de código; o booleano distingue crescimento de troca de bloco.
+pub fn stitch_preview(accumulated: &str, frame: &str) -> (String, bool) {
+    if frame.is_empty() { return (accumulated.into(), true); }
+    if accumulated.is_empty() || frame.starts_with(accumulated) { return (frame.into(), true); }
+    // A tabela de prefixos encontra a sobreposição sem repetir fatias de um quadro longo.
+    let pattern: Vec<_> = frame.chars().collect();
+    let mut prefixes = vec![0; pattern.len()];
+    for at in 1..pattern.len() {
+        let mut matched = prefixes[at - 1];
+        while matched > 0 && pattern[at] != pattern[matched] { matched = prefixes[matched - 1]; }
+        if pattern[at] == pattern[matched] { matched += 1; }
+        prefixes[at] = matched;
+    }
+    let mut matched = 0;
+    for c in accumulated.chars() {
+        while matched > 0 && (matched == pattern.len() || pattern[matched] != c) {
+            matched = prefixes[matched - 1];
+        }
+        if pattern[matched] == c { matched += 1; }
+    }
+    // Sobreposição menor que uma frase é coincidência, não continuação do mesmo bloco.
+    if matched < 24 { return (frame.into(), false); }
+    let cut = frame.char_indices().nth(matched).map_or(frame.len(), |(at, _)| at);
+    let mut combined = accumulated.to_owned();
+    combined.push_str(&frame[cut..]);
+    (combined, true)
+}
+
 
 pub fn analyze(pane: &str) -> PaneAnalysis {
     let lines = lines(pane);
@@ -424,7 +559,7 @@ pub fn analyze(pane: &str) -> PaneAnalysis {
         login: P.login.is_match(pane) && !P.composer.is_match(&tail(&lines, 12)),
         limit_reset: P.limit.captures(&lines[lines.len().saturating_sub(8)..].join("\n"))
             .map(|c| trim(c.get(1).unwrap().as_str()).into()),
-        preview: preview(&lines, None), codex_menu: codex_menu(&lines), ..Default::default()
+        preview: preview(&lines, None, |_, _, _| false, |_| false), codex_menu: codex_menu(&lines), ..Default::default()
     };
     let menu = if let Some((top, bottom)) = menu_block(&lines) {
         let region = &lines[top..bottom];
@@ -556,4 +691,75 @@ mod tests {
         assert_eq!(pane_preview(&format!("● resposta\n\n{RELOAD}\n"), None).0, "resposta");
         assert_eq!(pane_preview("● nginx: reloaded (pid 42), tudo certo\n", None).0, "nginx: reloaded (pid 42), tudo certo");
     }
+    #[test]
+    fn other_preview_panes_preserve_provider_contract() {
+        let cases = [
+            ("PANE_PI_TOOL_DEPOIS_DA_PROSA", "pi", "● Fechei o wire e subi o commit; o back valida na sequência.\n\n● Bash cd \"/home/jefferson/x\" && dotnet run\n └ pid 326487\n   t+35s: vivo\n\n✻ Unfurling… (7m 11s)\n", "Fechei o wire e subi o commit; o back valida na sequência."),
+            ("PANE_PI_SPINNER_ASCII", "pi", "● Duas respostas — deixa eu confirmar a segunda\n\n   Thinking…\n\n * Boondoggling… (thinking with high effort · 12s)\n\n○ Todos (3/3)\n├─ ✓ Marcar RESPONSAVEL_FALLBACK com badge onde renderiza\n└─ ✓ Atualizar MOCKS.md com o que a auditoria encontrar\n\n────────────────────────────────────────────────────────────\n", "Duas respostas — deixa eu confirmar a segunda\n\n   Thinking…"),
+            ("pane_pi_working.txt", "pi", "\n   Na teoria são complementares, mas na prática dois pacotes que mexem na interface do pi podem sim\n   pisar um no outro. A documentação pode estar otimista.\n\n   A única forma de ter certeza é testar. Se você acha que são concorrentes, acho justo remover os\n   dois e instalar de um em um:\n\n   ╭· bash ······················································································ ╮\n   │   pi remove npm:pi-claude-code-tui                                                           │\n   │   pi remove npm:pi-claude-code-ui                                                            │\n   ╰······························································································╯\n\n   Reinicia o pi. Aí instala só um deles:\n\n   ╭· bash ······················································································ ╮\n   │   pi install npm:pi-claude-code-tui                                                          │\n   ╰······························································································╯\n\n   Testa. Se ainda não resolver, remove e instala só o outro:\n\n   ╭· bash ······················································································ ╮\n   │   pi remove npm:pi-claude-code-tui                                                           │\n   │   pi install npm:pi-claude-code-ui                                                           │\n   ╰······························································································╯\n\n   Quer fazer esse teste? Posso te acompanhar nos comandos.\n\n   ✻ Turn took 17s (Total time 18m 5s · 10 turns)\n\n›  eu nao consigo copiar do conteudo do pi?\n\n   Thought for 3s\n\n ● Tem sim, algumas formas:\n\n   Copiar a última resposta do assistente:\n   ◉ Comando: /copy\n   ◉ Atalho: Ctrl+X\n\n   Copiar uma mensagem antiga específica:\n\n╭─────────────────────────────────────────────────────────────────────────────────────────────────╮\n\n╰─────────────────────────────────────────────────────────────────────────────────────────────────╯\n🤖 kimi-for-coding (high) │ 📁 jefferson │ 📟 jefferson-2 │ 💬 sessão 44kin/16kout · cache 1.1M ...", "Tem sim, algumas formas:\n\n   Copiar a última resposta do assistente:\n   ◉ Comando: /copy\n   ◉ Atalho: Ctrl+X\n\n   Copiar uma mensagem antiga específica:"),
+            ("PANE_PI_TOOL_DEPOIS_DA_PROSA", "omp", "● Fechei o wire e subi o commit; o back valida na sequência.\n\n● Bash cd \"/home/jefferson/x\" && dotnet run\n └ pid 326487\n   t+35s: vivo\n\n✻ Unfurling… (7m 11s)\n", "Fechei o wire e subi o commit; o back valida na sequência."),
+            ("PANE_PI_SPINNER_ASCII", "omp", "● Duas respostas — deixa eu confirmar a segunda\n\n   Thinking…\n\n * Boondoggling… (thinking with high effort · 12s)\n\n○ Todos (3/3)\n├─ ✓ Marcar RESPONSAVEL_FALLBACK com badge onde renderiza\n└─ ✓ Atualizar MOCKS.md com o que a auditoria encontrar\n\n────────────────────────────────────────────────────────────\n", "Duas respostas — deixa eu confirmar a segunda\n\n   Thinking…"),
+            ("pane_pi_working.txt", "omp", "\n   Na teoria são complementares, mas na prática dois pacotes que mexem na interface do pi podem sim\n   pisar um no outro. A documentação pode estar otimista.\n\n   A única forma de ter certeza é testar. Se você acha que são concorrentes, acho justo remover os\n   dois e instalar de um em um:\n\n   ╭· bash ······················································································ ╮\n   │   pi remove npm:pi-claude-code-tui                                                           │\n   │   pi remove npm:pi-claude-code-ui                                                            │\n   ╰······························································································╯\n\n   Reinicia o pi. Aí instala só um deles:\n\n   ╭· bash ······················································································ ╮\n   │   pi install npm:pi-claude-code-tui                                                          │\n   ╰······························································································╯\n\n   Testa. Se ainda não resolver, remove e instala só o outro:\n\n   ╭· bash ······················································································ ╮\n   │   pi remove npm:pi-claude-code-tui                                                           │\n   │   pi install npm:pi-claude-code-ui                                                           │\n   ╰······························································································╯\n\n   Quer fazer esse teste? Posso te acompanhar nos comandos.\n\n   ✻ Turn took 17s (Total time 18m 5s · 10 turns)\n\n›  eu nao consigo copiar do conteudo do pi?\n\n   Thought for 3s\n\n ● Tem sim, algumas formas:\n\n   Copiar a última resposta do assistente:\n   ◉ Comando: /copy\n   ◉ Atalho: Ctrl+X\n\n   Copiar uma mensagem antiga específica:\n\n╭─────────────────────────────────────────────────────────────────────────────────────────────────╮\n\n╰─────────────────────────────────────────────────────────────────────────────────────────────────╯\n🤖 kimi-for-coding (high) │ 📁 jefferson │ 📟 jefferson-2 │ 💬 sessão 44kin/16kout · cache 1.1M ...", "Tem sim, algumas formas:\n\n   Copiar a última resposta do assistente:\n   ◉ Comando: /copy\n   ◉ Atalho: Ctrl+X\n\n   Copiar uma mensagem antiga específica:"),
+            ("_KIMI_PENSANDO", "kimi", " \u{001b}[38;2;136;136;136m● \u{001b}[3mCount letter r in \"strawberry raspberry blueberry\".\u{001b}[0m\n   \u{001b}[2m... (9 more lines, ctrl+o to expand)\u{001b}[0m\n\n  \u{001b}[38;2;136;136;136m⠋ working...\u{001b}[0m\n", ""),
+            ("_KIMI_RESPONDENDO", "kimi", " \u{001b}[38;2;224;224;224m● \u{001b}[39mSao 6 letras r no total.\n", "Sao 6 letras r no total."),
+            ("_KIMI_RESPOSTA_COM_ITALICO", "kimi", " \u{001b}[38;2;224;224;224m● \u{001b}[39mO \u{001b}[3mteste\u{001b}[0m \u{001b}[1mpassou\u{001b}[0m com sucesso.\n", "O teste passou com sucesso."),
+            ("_KIMI_USED", "kimi", "● Used ReadMediaFile (…rojetos/hangar/.hangar-uploads/1787141544-3efdfc.png) · image (image/jpeg, 49.1 KB)\n", ""),
+            ("_KIMI_USING", "kimi", "● Using Write (docs/superpowers/plans/2026-08-24-folha-de-exames.md)\n      1  # Folha de exames — Implementation Plan\n", ""),
+            ("_PANE_KIMI_TODO", "kimi", " ● Enquanto a captura roda, vou aproveitar pra deixar registrado o desenho completo.\n   O texto continua aqui, segundo paragrafo do bloco em voo.\n\n  ⠸ working... · Tip: Try /dance for a hidden Easter egg\n ─────────────────────────────────────────────────────────────────────────\n   Todo\n   ✓ Backend: costura (_costurar) + acumulador no PreviewBroker (só kimi)\n   ● Testes backend (costura, broker, unpacks) e suíte verde\n ╭───────────────────────────────────────────────────────────────────────╮\n │ >                                                                     │\n ╰───────────────────────────────────────────────────────────────────────╯\n", "Enquanto a captura roda, vou aproveitar pra deixar registrado o desenho completo.\n   O texto continua aqui, segundo paragrafo do bloco em voo."),
+            ("pane_kimi_eco_e_dica.txt", "kimi", "\n ● Resposta curta: não, só parcialmente. Sou o Kimi Code CLI, não o Claude — então as configurações dele não vêm automaticamente. O que existe:\n\n   Skills que eu realmente tenho carregadas (escopo User, em ~/.agents/skills/):\n   • agent-browser, emil-design-eng, falar, find-skills, humanizer, impeccable\n\n   Skills suas em ~/.claude/skills/ que eu NÃO vejo (o Claude tem, eu não):\n   • conselho-5-agentes, design-sprint, graphify, handoff, hooked-ux, ios-hig-design, learned, orchestrating-idea-to-push, orquestrar, refactoring-ui, scout-fix, supply-chain-hardening, ux-heuristics\n\n   Hooks (~/.claude/hooks/): não tenho acesso — são específicos do Claude Code. O Kimi Code tem um sistema próprio de hooks configurável no config.toml, mas seus scripts (skill-suggester.py,\n   guard_tmux.py, etc.) não estão conectados a ele. Aliás, vejo que existe um sync-skills.sh lá — talvez seja justamente pra isso.\n\n   Se quiser, posso:\n   1. Ler o sync-skills.sh e ver se ele já faz a ponte ~/.claude/skills → ~/.agents/skills (e rodá-lo, se fizer sentido), ou\n   2. Criar symlinks das skills faltantes para o diretório que eu leio.\n\n   Qual prefere?\n\n ✨ onde ta esse sync-skills.sh?\n\n ● It's in ~/.claude/hooks/sync-skills.sh. Let me confirm path and maybe show it briefly.\n\n ● Ran a command\n   $ ls -la ~/.claude/hooks/sync-skills.sh && head -30 ~/.claude/hooks/sync-skills.sh\n   lrwxrwxrwx 1 jefferson jefferson 52 jul 15 11:55 /home/jefferson/.claude/hooks/sync-skills.sh -> /home/jefferson/Projetos/skills/hooks/sync-skills.sh\n   #!/usr/bin/env bash\n   # Pulls jeffer1312/skills repo and syncs symlinks into ~/.claude/skills/\n   ... (28 more lines, ctrl+o to expand)\n\n ● Está em ~/.claude/hooks/sync-skills.sh, que é um symlink para /home/jefferson/Projetos/skills/hooks/sync-skills.sh.\n\n   O que ele faz (pelo início do script):\n\n   • Faz git pull do repo ~/Projetos/skills (seu repo de skills, jeffer1312/skills)\n   • Cria symlinks de cada pasta com SKILL.md para ~/.claude/skills/\n   • Sincroniza scripts de hooks (*.sh, *.py) para ~/.claude/hooks/\n   • É disparado como hook SessionStart do Claude Code\n\n   Ou seja: ele sincroniza só para o Claude — nada aponta para ~/.agents/skills/ (onde eu leio skills). Por isso eu só vejo as 6 que já existem lá.\n\n   Se quiser que eu também enxergue as outras, dá pra estender o script com um segundo destino (~/.agents/skills/) ou só criar os symlinks manualmente agora. Quer que eu faça?\n\n ✨ sim\n\n  🌓 · Tip: Try /dance for a hidden Easter egg\n ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮\n │ >                                                                                                                                                                                                  │\n ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯\n 🤖 K3 │ 📁 projeto-exemplo [ABC-123] │ ⚡5h:25% ↺1h25m │ 📅7d:30% ↺seg 14h·5d22h │ 🕐 16:34\n                                                                                                                                                                                 context: 3% (23.5k/1M)\n", "Está em ~/.claude/hooks/sync-skills.sh, que é um symlink para /home/jefferson/Projetos/skills/hooks/sync-skills.sh.\n\n   O que ele faz (pelo início do script):\n\n   • Faz git pull do repo ~/Projetos/skills (seu repo de skills, jeffer1312/skills)\n   • Cria symlinks de cada pasta com SKILL.md para ~/.claude/skills/\n   • Sincroniza scripts de hooks (*.sh, *.py) para ~/.claude/hooks/\n   • É disparado como hook SessionStart do Claude Code\n\n   Ou seja: ele sincroniza só para o Claude — nada aponta para ~/.agents/skills/ (onde eu leio skills). Por isso eu só vejo as 6 que já existem lá.\n\n   Se quiser que eu também enxergue as outras, dá pra estender o script com um segundo destino (~/.agents/skills/) ou só criar os symlinks manualmente agora. Quer que eu faça?"),
+            ("test_bullet_de_markdown_com_asterisco_nao_trunca_a_previa", "pi", "● Ficou assim:\n* primeiro item\n* segundo item\n\n✻ Unfurling… (2s)\n", "Ficou assim:\n* primeiro item\n* segundo item"),
+            ("test_caixa_do_composer_do_pi_tambem_corta", "pi", "● Prosa do Pi em voo.\n╭──────────────────────────────╮\n│ digitar aqui                 │\n╰──────────────────────────────╯\n  🤖 k3 (high)\n\n  ● main\n  ◯ general-purpose  Grepping  1m 34s\n", "Prosa do Pi em voo."),
+            ("test_kimi_enfase_na_resposta_nao_e_confundida_com_rascunho", "kimi", "\n  ⠋ working...\n ● O teste passou com sucesso.", "O teste passou com sucesso."),
+            ("test_kimi_raciocinio_sai_da_previa", "kimi", "\n  ⠋ working...", ""),
+            ("test_kimi_resposta_continua_na_previa", "kimi", "\n  ⠋ working...\n ● Sao 6 letras r no total.", "Sao 6 letras r no total."),
+            ("test_kimi_spinner_sem_dica_para_a_continuacao", "kimi", " ● Enquanto a captura roda, vou aproveitar pra deixar registrado o desenho completo.\n   O texto continua aqui, segundo paragrafo do bloco em voo.\n\n  ⠋ working...\n ─────────────────────────────────────────────────────────────────────────\n   Todo\n   ✓ Backend: costura (_costurar) + acumulador no PreviewBroker (só kimi)\n   ● Testes backend (costura, broker, unpacks) e suíte verde\n ╭───────────────────────────────────────────────────────────────────────╮\n │ >                                                                     │\n ╰───────────────────────────────────────────────────────────────────────╯\n", "Enquanto a captura roda, vou aproveitar pra deixar registrado o desenho completo.\n   O texto continua aqui, segundo paragrafo do bloco em voo."),
+            ("test_kimi_used_depois_da_prosa_corta_o_bloco", "kimi", "● A resposta comeca aqui.\n● Used ReadMediaFile (…rojetos/hangar/.hangar-uploads/1787141544-3efdfc.png) · image (image/jpeg, 49.1 KB)\n", "A resposta comeca aqui."),
+            ("test_kimi_used_em_prosa_inglesa_nao_descarta", "kimi", "● Used correctly, the flag avoids the double render.\n", "Used correctly, the flag avoids the double render."),
+            ("test_kimi_using_depois_da_prosa_corta_o_bloco", "kimi", "● A resposta comeca aqui.\n● Using Write (docs/superpowers/plans/2026-08-24-folha-de-exames.md)\n      1  # Folha de exames — Implementation Plan\n", "A resposta comeca aqui."),
+            ("test_kimi_using_em_prosa_inglesa_nao_descarta", "kimi", "● Using it twice made the render flicker.\n", "Using it twice made the render flicker."),
+            ("test_painel_de_tarefas_nao_vira_previa", "pi", "● Todos (11/13)\n├─ ✓ Avisar back: revisar DDL\n└─ +3 more (3 completed)\n\n✻ Unfurling… (2m)\n", ""),
+            ("test_preview_kimi_corta_a_dica_nas_DUAS_formas", "kimi", "● resposta do assistente\n\n  🌓 · Tip: Try /dance for a hidden Easter egg\n ╭───────────╮\n │ >         │\n ╰───────────╯", "resposta do assistente"),
+            ("test_preview_kimi_corta_a_dica_nas_DUAS_formas", "kimi", "● resposta do assistente\n\n  ⠋ working... · Tip: /goal for multi-step work with a clear finish line\n ╭───────────╮\n │ >         │\n ╰───────────╯", "resposta do assistente"),
+            ("test_preview_pi_pula_as_quatro_formas_de_cabecalho_de_tool", "pi", "● A prosa que deve sobreviver.\n\n● Bash cd \"/home/jefferson/x\" && dotnet run\n └ pid 326487\n\n✻ Unfurling… (2m)\n", "A prosa que deve sobreviver."),
+            ("test_preview_pi_pula_as_quatro_formas_de_cabecalho_de_tool", "pi", "● A prosa que deve sobreviver.\n\n● Bash: 2 done • ctrl+o to toggle\n └ pid 326487\n\n✻ Unfurling… (2m)\n", "A prosa que deve sobreviver."),
+            ("test_preview_pi_pula_as_quatro_formas_de_cabecalho_de_tool", "pi", "● A prosa que deve sobreviver.\n\n● Write  (81 lines)\n └ pid 326487\n\n✻ Unfurling… (2m)\n", "A prosa que deve sobreviver."),
+            ("test_preview_pi_pula_as_quatro_formas_de_cabecalho_de_tool", "pi", "● A prosa que deve sobreviver.\n\n● Multiple Tools: 3 done • bash, chrome_devtools_navigate_page\n └ pid 326487\n\n✻ Unfurling… (2m)\n", "A prosa que deve sobreviver."),
+            ("test_preview_pi_pula_edit_com_diff", "pi", "● A prosa que deve sobreviver.\n\n● Edit  (2 edits)\n │ ▌57- const [printOpen, setPrintOpen] = React.useState(false)\n\n✻ Inspecting… (6m)\n", "A prosa que deve sobreviver."),
+            ("test_preview_pi_pula_grupo_de_bash_com_dois_pontos", "pi", "● Segue o resumo do que mudou no wire.\n\n● Bash: 2 done • ctrl+o to toggle\n ├ ● grep -rn \"Adicionar\" src/\n └ ● dotnet build\n\n✻ Unfurling… (2m)\n", "Segue o resumo do que mudou no wire."),
+            ("test_prosa_pi_que_apresenta_trecho_sem_dois_pontos_sobrevive", "pi", "● Aqui vai o trecho pra comparar\n│ codigo original\n│ codigo novo\n\n✻ Unfurling… (2s)\n", "Aqui vai o trecho pra comparar\n│ codigo original\n│ codigo novo"),
+            ("test_prosa_pi_que_termina_em_arvore_continua_sendo_prosa", "pi", "● Estrutura final:\n └ src/\n   └ wire.ts\n\n✻ Unfurling… (1s)\n", "Estrutura final:\n └ src/\n   └ wire.ts"),
+        ];
+        for (case, provider, pane, expected) in cases {
+            let actual = super::other_pane_preview(provider, pane);
+            assert_eq!(actual, expected, "{provider}: {case}");
+        }
+    }
+
+    #[test]
+    fn other_preview_stitch_preserves_character_overlap_and_new_blocks() {
+        let cases = [
+            ("test_costura_cola_pela_sobreposicao_quando_o_topo_some", "Primeira frase comprida pra valer. Segunda frase comprida pra valer.", "Segunda frase comprida pra valer. Terceira frase, recem-chegada.", "Primeira frase comprida pra valer. Segunda frase comprida pra valer. Terceira frase, recem-chegada.", true),
+            ("test_costura_cresce_sem_rolar", "", "Primeira frase.", "Primeira frase.", true),
+            ("test_costura_cresce_sem_rolar", "Primeira frase.", "Primeira frase. Segunda frase.", "Primeira frase. Segunda frase.", true),
+            ("test_costura_overlap_curto_demais_e_coincidencia", "Termina com a", "a resposta nova comeca aqui de verdade", "a resposta nova comeca aqui de verdade", false),
+            ("test_costura_quadro_vazio_mantem_o_acumulado", "texto acumulado", "", "texto acumulado", true),
+            ("test_costura_sem_sobreposicao_recomeca", "Resposta da primeira pergunta, completa.", "Assunto totalmente diferente agora.", "Assunto totalmente diferente agora.", false),
+            ("janela Unicode derivada do pane real Pi", "Tem sim, algumas formas:\n\n   Copiar a última resposta do assistente:\n   ◉ Comando: /copy\n   ◉ Atalho", "sta do assistente:\n   ◉ Comando: /copy\n   ◉ Atalho: Ctrl+X\n\n   Copiar uma mensagem antiga específica:", "Tem sim, algumas formas:\n\n   Copiar a última resposta do assistente:\n   ◉ Comando: /copy\n   ◉ Atalho: Ctrl+X\n\n   Copiar uma mensagem antiga específica:", true),
+        ];
+        for (case, accumulated, frame, expected, joined) in cases {
+            let actual = super::stitch_preview(accumulated, frame);
+            assert_eq!((actual.0.as_str(), actual.1), (expected, joined), "{case}");
+        }
+    }
+    #[test]
+    fn other_preview_continuation_stops_at_the_real_kimi_chrome() {
+        let cases = [
+            ("test_kimi_continuacao_sem_bullet_pega_o_topo_ate_o_chrome", "   meio do paragrafo que estava rolando.\n   A ideia. O PreviewBroker le o pane a cada 150ms.\n\n  ⠸ working... · Tip: Try /dance\n ╭───────────────────────────────────────────────────────────╮\n", "   meio do paragrafo que estava rolando.\n   A ideia. O PreviewBroker le o pane a cada 150ms."),
+            ("test_kimi_continuacao_nao_aceita_saida_de_ferramenta", "total 48\n-rw-r--r-- 1 jefferson jefferson  9131 ago 19 09:41 preview.py\n  ⠸ working... · Tip: x\n", "total 48\n-rw-r--r-- 1 jefferson jefferson  9131 ago 19 09:41 preview.py"),
+        ];
+        for (case, pane, expected) in cases {
+            assert_eq!(super::kimi_continuation(pane), expected, "{case}");
+        }
+    }
+
 }

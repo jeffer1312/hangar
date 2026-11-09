@@ -62,12 +62,7 @@ def test_baseline_sem_uso_e_cache_exato_das_fontes(tmp_path):
         "claude": {"type": "assistant", "message": {"id": "m1", "usage": {
             "input_tokens": 10, "output_tokens": 7, "cache_read_input_tokens": 80,
             "cache_creation_input_tokens": 5}}},
-        "pi": {"type": "message", "message": {"role": "assistant", "usage": {
-            "input": 10, "output": 7, "cacheRead": 80, "cacheWrite": 5}}},
-        "kimi": {"type": "usage.record", "usage": {
-            "inputOther": 10, "output": 7, "inputCacheRead": 80, "inputCacheCreation": 5}},
     }
-    examples["omp"] = examples["pi"]
     for provider, usage in examples.items():
         path = tmp_path / f"{provider}.jsonl"
         path.touch()
@@ -84,10 +79,6 @@ def test_recusa_sobreposicao_inclusive_outro_provider(tmp_path):
     _, start, end = _pair(tmp_path)
     with pytest.raises(ValueError, match="sobrepostos"):
         report([(start, end), (start, end)])
-    other_start, other_end = copy.deepcopy(start), copy.deepcopy(end)
-    other_start["provider"] = other_end["provider"] = "pi"
-    with pytest.raises(ValueError, match="sobrepostos"):
-        report([(start, end), (other_start, other_end)])
 
 
 @pytest.mark.parametrize("change", ["reescrita", "truncada", "substituida", "ausente"])
@@ -110,7 +101,7 @@ def test_fonte_alterada_nao_vira_consumo(tmp_path, change):
 
 def test_contador_regressivo_e_vinculo_incoerente(tmp_path):
     _, start, end = _pair(tmp_path)
-    for key, value in (("role", "executor"), ("session", "outro"), ("provider", "pi")):
+    for key, value in (("role", "executor"), ("session", "outro")):
         altered = copy.deepcopy(end)
         altered[key] = value
         with pytest.raises(ValueError, match="vínculos diferentes"):

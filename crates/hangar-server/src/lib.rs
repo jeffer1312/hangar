@@ -70,6 +70,7 @@ pub mod share;
 pub mod state;
 pub mod speech;
 pub mod stats;
+pub mod usage_cli;
 pub mod subagents;
 pub mod tail;
 pub mod term;
@@ -112,7 +113,7 @@ use hangar_core::warn_limit;
 
 /// Versão do contrato com o Python (rotas `/internal`, canal privado do estado, ambiente). O
 /// Python (`RUST_SERVER_PROTOCOL`) recusa um binário de outra versão e atende sozinho.
-pub const INTERNAL_PROTOCOL: u32 = 102;
+pub const INTERNAL_PROTOCOL: u32 = 105;
 
 pub use hangar_core::net::http_client;
 pub(crate) use hangar_core::net::{AbortOnDrop, nodelay};
@@ -191,7 +192,7 @@ pub async fn serve_until_with_guest(
         let private = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let port = private.local_addr()?.port();
         let registry = std::sync::Arc::new(runtime::gateway::RuntimeRegistry::new(cfg.upstream,
-            cfg.internal_secret.clone(),instance.clone()).with_startup(state.startup.clone()).with_mods(state.mods.clone()).with_accounts(state.accounts.clone())
+            cfg.internal_secret.clone(),instance.clone()).with_diagnostics(state.diag.clone()).with_startup(state.startup.clone()).with_mods(state.mods.clone()).with_accounts(state.accounts.clone())
             .with_interactions(state.interactions.clone()).with_plugin(state.plugin.clone())
             .with_terminal_states(state.list.published.clone()).with_terms(state.term.clone())
             .with_permissions(state.state.permissions.clone())
@@ -407,6 +408,7 @@ pub(crate) fn write_test_executable(path: &std::path::Path, content: impl AsRef<
 pub mod codex_setup;
 
 pub mod harness_setup;
+pub mod provider_hooks;
 
 pub mod cliproxy_config;
 pub use hangar_core::value_coercion;

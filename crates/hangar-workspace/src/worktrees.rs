@@ -1838,7 +1838,7 @@ mod tests {
     fn t4_status_missing_nested_registration_and_equal_tips_are_protected() {
         if t4_isolated("t4_status_missing_nested_registration_and_equal_tips_are_protected") { return; }
         let (dir, repo, _location) = creation_fixture();
-        let wt = repo.join(".claude/worktrees/nested");
+        let wt = repo.join(".claude").join("worktrees").join("nested");
         fixture_git(&repo, &["worktree", "add", wt.to_str().unwrap(), "feature"]);
         let path = wt.to_str().unwrap();
         let fresh = status_of(path, &[], false, &[]);

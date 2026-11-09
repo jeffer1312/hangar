@@ -187,23 +187,33 @@ impl AppState {
     }
 
     fn build(cfg: Config, terminal: crate::terminal_control::TerminalPool, server_id: String) -> AppState {
+        let env = crate::accounts::environment::AccountEnvironment::capture();
+        let list_env = crate::list::bridge::ListEnv::from_env();
+        let scopes = list_env.dirs.clone().zip(crate::install_root::root(&env.home))
+            .map(|(dirs, repo)| crate::costs::scopes::NativeScopes::new(env, dirs, crate::list::links::resolve_lenient(&repo)));
         let costs = Arc::new(crate::costs::collect::Collector::new(
             crate::costs::index::default_dir(), crate::costs::pricing::default_dir(),
             crate::costs::areas::default_map_file(),
-            Arc::new(crate::costs::collect::HttpScopes::new(cfg.upstream, cfg.internal_secret.clone())),
+            Arc::new(scopes),
         ));
-        Self::with_parts(cfg, terminal, costs, Arc::new(crate::costs::fx::Fx::new()), server_id)
+        Self::with_parts_env(cfg, terminal, costs, Arc::new(crate::costs::fx::Fx::new()), server_id, list_env)
     }
 
     pub fn with_parts(cfg: Config, terminal: crate::terminal_control::TerminalPool,
                       costs: Arc<crate::costs::collect::Collector>, fx: Arc<crate::costs::fx::Fx>, server_id: String) -> AppState {
+        Self::with_parts_env(cfg, terminal, costs, fx, server_id, crate::list::bridge::ListEnv::from_env())
+    }
+
+    fn with_parts_env(cfg: Config, terminal: crate::terminal_control::TerminalPool,
+                      costs: Arc<crate::costs::collect::Collector>, fx: Arc<crate::costs::fx::Fx>, server_id: String,
+                      list_env: crate::list::bridge::ListEnv) -> AppState {
         crate::transcript::set_orq_parser(crate::orchestration::timeline::parse_obj);
         let http = proxy::client();
         let mods = crate::mods::state::Mods::default();
         let interactions = Arc::new(crate::interactions::InteractionStore::default());
         let plugin = Arc::new(crate::plugin::Store::new(interactions.clone()));
         let facts = crate::list::facts::FactsClient::new(cfg.upstream, cfg.internal_secret.clone());
-        let list = Arc::new(crate::list::bridge::ListBridge::new(crate::list::bridge::ListEnv::from_env(), facts));
+        let list = Arc::new(crate::list::bridge::ListBridge::new(list_env, facts));
         let mut side = SideCtx {
             watchers: Watchers::default(),
             hubs: Hubs::default(),
@@ -357,6 +367,13 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
         .chain([guest, state.front, state.connect, state.preview].into_iter().flatten().map(|addr| addr.port())));
     let public_v6 = state.public_v6.take();
     let state = Arc::new(state);
+    if let Some(registry) = state.side.runtime.get() {
+        let mut other = crate::runtime::other_terminal::OtherOptions::new(state.terminal.clone(),
+            crate::provider_models::inbox::INBOX.clone(), state.list.env().procs.clone(), state.interactions.clone());
+        other.preview = Some(std::sync::Arc::new(crate::state::other_preview::RuntimePreview::new(state.side.hubs.downgrade())));
+        other.after_closed = Some(crate::session_write::bridge::other_cleanup(std::sync::Arc::downgrade(&state)));
+        registry.bind_other(other, crate::runtime::other_terminal::discovery(state.list.clone())).map_err(std::io::Error::other)?;
+    }
     let main_startup = state.startup.prepares();
     let producers = state.startup_producers.clone();
     let _producer_scope = producers.register(tokio::spawn({
@@ -1304,6 +1321,35 @@ pub(crate) fn diag_req(req: &Request) -> String {
         .unwrap_or_default()
 }
 
+fn native_history_limit(raw: &str) -> Result<Option<usize>, ()> {
+    let raw = raw.trim();
+    let (negative, unsigned) = if let Some(rest) = raw.strip_prefix('-') { (true, rest) }
+        else { (false, raw.strip_prefix('+').unwrap_or(raw)) };
+    let integer = match unsigned.split_once('.') {
+        Some((integer, fraction)) if !fraction.is_empty() && fraction.bytes().all(|byte| byte == b'0') => integer,
+        Some(_) => return Err(()),
+        None => unsigned,
+    };
+    let mut digit = false;
+    for byte in integer.bytes() {
+        if byte.is_ascii_digit() { digit = true; }
+        else if byte == b'_' && digit { digit = false; }
+        else { return Err(()); }
+    }
+    if !digit { return Err(()); }
+    if negative { return Ok(None); }
+    // Limite maior que o arquivo equivale ao histórico inteiro, inclusive além do usize.
+    Ok(integer.replace('_', "").parse::<usize>().ok().filter(|limit| *limit > 0))
+}
+
+fn invalid_history_limit(raw: String, headers: &axum::http::HeaderMap) -> Response {
+    let mut response = crate::session_write::json_response(StatusCode::UNPROCESSABLE_ENTITY, serde_json::json!({"detail":[{
+        "type":"int_parsing","loc":["query","limit"],"msg":"Input should be a valid integer, unable to parse string as an integer","input":raw
+    }]}));
+    cors(headers, response.headers_mut());
+    response
+}
+
 pub(crate) async fn history(
     State(st): State<Arc<AppState>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -1315,6 +1361,7 @@ pub(crate) async fn history(
         Ok(Path(n)) if req.method() == Method::GET && who.as_ref().is_some_and(|c| c.can(&n, req.method())) => n,
         _ => return pass(&st, req, &fwd).await,
     };
+    let mut selected_info = None;
     let limit = match auth::query_param(req.uri().query(), "limit") {
         None => None,
         Some(v) => match v.parse::<i64>() {
@@ -1322,19 +1369,36 @@ pub(crate) async fn history(
             Ok(n) if n > 0 => usize::try_from(n).ok(),
             Ok(_) => None,
             // Texto ou vazio fica com o FastAPI e o 422 dele.
-            Err(_) if req.extensions().get::<crate::forwarded::ReadGuest>().is_some() => return crate::session_write::json_response(
-                StatusCode::UNPROCESSABLE_ENTITY, serde_json::json!({"detail":[{"type":"int_parsing","loc":["query","limit"],
-                "msg":"Input should be a valid integer, unable to parse string as an integer","input":v}]})),
-            Err(_) => return pass(&st, req, &fwd).await,
+            Err(_) => {
+                let info = match st.info(&name).await {
+                    Ok(info) => info,
+                    Err(_) => return route_failed(&st, req.headers(), "rust.history_failed", &name, "internal_info", INFO_REASON),
+                };
+                if info.as_ref().is_some_and(|info| matches!(info.provider.as_str(), "pi" | "omp" | "kimi")) {
+                    let parsed = match native_history_limit(&v) { Ok(limit) => limit, Err(()) => return invalid_history_limit(v, req.headers()) };
+                    selected_info = info;
+                    parsed
+                } else if req.extensions().get::<crate::forwarded::ReadGuest>().is_some() {
+                    return invalid_history_limit(v, req.headers());
+                } else {
+                    return pass(&st, req, &fwd).await;
+                }
+            }
         },
     };
-    let Ok(info) = st.info(&name).await else {
+    let found = match selected_info { Some(info) => Ok(Some(info)), None => st.info(&name).await };
+    let Ok(info) = found else {
         return route_failed(&st, req.headers(), "rust.history_failed", &name, "internal_info", INFO_REASON);
     };
     // Sessão inexistente ou provedor fora do Rust: o Python é o dono.
     let Some(info) = info else { return pass(&st, req, &fwd).await };
     // Antes de qualquer repasse: sessão em erro ainda sem transcript também é reaberta.
     st.request_reopen(&name);
+    if matches!(info.provider.as_str(), "pi" | "omp" | "kimi") && info.jsonl.is_none() {
+        let mut response = crate::session_write::json_response(StatusCode::OK, serde_json::json!([]));
+        cors(req.headers(), response.headers_mut());
+        return response;
+    }
     let Some(mut hreq) = info.history_request(limit) else {
         return pass(&st, req, &fwd).await;
     };

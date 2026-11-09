@@ -104,7 +104,6 @@ pub async fn claude(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
         "select" => control::select(s, c, req).await,
         "permission-mode" => permissions::set_mode(s, c, req).await,
         "permission-modes" => permissions::modes(s, c, req).await,
-        "input" => super::input::input(s, c, req).await,
         "model-effort" => super::engine::effort(s, c, req).await,
         _ => control::select_submit(s, c, req).await,
     }
@@ -168,6 +167,12 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     if owner && let Some(name) = name.as_deref()
         && let Some(response) = super::orchestration_guard(&st, name, req.headers()).await {
         return response;
+    }
+    if let (Some(runtime),Some(name))=(st.state.runtime.get(),name.as_deref()) {
+        let (_,caller)=match crate::routes::who(&st,peer,&req).await {Ok(value)=>value,Err(error)=>return crate::auth::unavailable(error)};
+        if caller.as_ref().is_some_and(|caller|caller.can(name,req.method())) && let Some(closed)=runtime.close_other(name).await {
+            return match closed {Ok(body)=>super::json_response(StatusCode::OK,body),Err(error)=>close_refusal(&error)};
+        }
     }
     // Sem vigia (sem as pastas da lista), `kill_codex_terminal` é `None`.
     // Fechada de propósito não volta no próximo reboot, de qualquer agente.
@@ -390,4 +395,37 @@ mod close_tests {
         assert_eq!((line["evento"].as_str(), line["sessao"].as_str(), line["codigo"].as_str()), (Some("sessao.fechamento_pedido"), Some("s1"), Some("session_close_requested_by_owner")));
         assert_eq!((line["cliente"].as_str(), line["origem"].as_str()), (Some("curl/8.10"), Some("127.0.0.1")));
     }
+}
+
+/// O callback retém apenas o AppState fraco: fechar o servidor não deixa um ciclo de proprietários.
+pub fn other_cleanup(state:std::sync::Weak<AppState>)->crate::runtime::other_terminal::OtherAfterClosed {
+    Arc::new(move|closed|{let state=state.clone();Box::pin(async move {
+        let Some(st)=state.upgrade()else{return Ok(vec![]);};let Some(runtime)=st.state.runtime.get().cloned()else{return Ok(vec![json!({"code":"other_cleanup_unavailable"})]);};
+        let life=closed.life;let mut warnings=Vec::new();let name=life.name().to_owned();
+        if !runtime.other_cleanup_allowed(&life).await? {return Ok(vec![json!({"code":"other_cleanup_replaced"})]);}
+        if let Some(groups)=st.groups.clone(){warnings.extend(leave_warnings(&st,&groups,&name).await);}
+        if runtime.other_cleanup_allowed(&life).await? && let Some(share)=st.share.clone() {
+            match share.store.revoke_session(&name,None) {Ok(0)=>{},Ok(_)=>crate::share::owner_routes::sync_tunnel(&share).await,Err(_)=>warnings.push(json!({"code":"other_share_cleanup_failed"}))}
+        }
+        if runtime.other_cleanup_allowed(&life).await? {if crate::loops::store(&st).forget(&name).is_err(){warnings.push(json!({"code":"other_loop_cleanup_failed"}));}}
+        if runtime.other_cleanup_allowed(&life).await? {st.list.forget(&name);st.list.invalidate();}
+        if runtime.other_cleanup_allowed(&life).await? {
+            if crate::loops::store(&st).clear_chain(&name).is_err(){warnings.push(json!({"code":"other_chain_cleanup_failed"}));}
+            if closed.reason==crate::runtime::other_terminal::OtherEnd::Requested {crate::session_open::restore::forget(&life.dirs().home,&name);}
+        }
+        let guard_life=life.clone();let weak=Arc::downgrade(&runtime);
+        warnings.extend(crate::shortcuts::close_for_session(&st,&name,move||{let weak=weak.clone();let life=guard_life.clone();Box::pin(async move{match weak.upgrade(){Some(runtime)=>runtime.other_cleanup_allowed(&life).await.unwrap_or(false),None=>false}})}).await);
+        if runtime.other_cleanup_allowed(&life).await? && let Some(path)=life.transcript().map(std::path::Path::to_path_buf) {
+            let config=life.dirs().claude.clone();let closed_name=name.clone();let result=tokio::task::spawn_blocking(move||record_other_closed_name(&config,&path,&closed_name)).await;
+            if !matches!(result,Ok(Ok(()))){warnings.push(json!({"code":"other_closed_name_failed"}));}
+        }
+        Ok(warnings)
+    })})
+}
+fn record_other_closed_name(config:&std::path::Path,path:&std::path::Path,name:&str)->std::io::Result<()> {
+    static SERIAL:std::sync::Mutex<()>=std::sync::Mutex::new(());let _guard=SERIAL.lock().unwrap_or_else(|error|error.into_inner());let target=config.join("closed-sessions.json");
+    let mut data:serde_json::Map<String,Value>=match crate::runtime::queue::read_replaced(&target){Ok(bytes)=>serde_json::from_slice(&bytes).map_err(|error|std::io::Error::new(std::io::ErrorKind::InvalidData,error))?,Err(error) if error.kind()==std::io::ErrorKind::NotFound=>Default::default(),Err(error)=>return Err(error)};
+    let real=std::fs::canonicalize(path).unwrap_or_else(|_|path.into());let now=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64();data.insert(real.to_string_lossy().into_owned(),json!({"name":name,"closed_at":now}));
+    if data.len()>500 {let mut oldest=data.iter().map(|(path,value)|(path.clone(),value["closed_at"].as_f64().unwrap_or(0.0))).collect::<Vec<_>>();oldest.sort_by(|a,b|a.1.total_cmp(&b.1));for(key,_)in oldest.into_iter().take(data.len()-500){data.remove(&key);}}
+    std::fs::create_dir_all(config)?;crate::runtime::queue::atomic_write(&target,&serde_json::to_vec(&data)?)
 }

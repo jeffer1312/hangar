@@ -7,6 +7,7 @@ struct Fake {
     gates: crate::runtime::ingress::IngressGates,
     guard_error: Option<&'static str>,
     rows: Mutex<Option<Vec<SessionRow>>>,
+    live: Option<crate::runtime::protocol::LiveSender>,
     sent: bool,
     automations: bool,
     config: Option<Arc<AppState>>,
@@ -18,6 +19,7 @@ struct Fake {
 }
 
 impl Host for Fake {
+    fn terminal_live(&self, _: &str) -> Option<crate::runtime::protocol::LiveReceiver> { self.live.as_ref().map(|sender| sender.subscribe()) }
     fn store(&self) -> Store { Store::new(&self.claude) }
     fn guard<'a>(&'a self, expected: &'a SessionRow) -> BoxFuture<'a, Result<(crate::runtime::ingress::IngressPass, SessionRow), &'static str>> {
         Box::pin(async move {
@@ -48,12 +50,17 @@ impl Host for Fake {
 }
 
 fn row(name: &str, provider: &str, headless: bool, state: &str) -> SessionRow {
+    let life = if provider == "kimi" { crate::runtime::other_terminal::lifecycle_id(name, 1) } else { format!("k:{name}") };
     serde_json::from_value(json!({"name": name, "provider": provider, "headless": headless, "state": state,
-        "jsonl": format!("/p/{name}-0000.jsonl"), "lifecycle_id": format!("k:{name}"), "cwd": "/w"})).unwrap()
+        "jsonl": format!("/p/{name}-0000.jsonl"), "lifecycle_id": life, "cwd": "/w"})).unwrap()
 }
 
 fn host(dir: &tempfile::TempDir, rows: Vec<SessionRow>) -> Fake {
-    Fake { claude: dir.path().to_owned(), rows: Mutex::new(Some(rows)), automations: true, ..Fake::default() }
+    let live = rows.first().filter(|row| row.provider == "kimi").map(|row| tokio::sync::watch::channel(Some(Arc::new(crate::runtime::protocol::LiveState {
+        binding: Some(crate::interactions::InteractionBinding {key:row.name.clone(), conversation:key_of(row).unwrap(), generation:1}),
+        public_state:json!({"state":row.state}), ..Default::default()
+    }))).0);
+    Fake { claude: dir.path().to_owned(), rows: Mutex::new(Some(rows)), live, automations: true, ..Fake::default() }
 }
 
 fn idle(name: &str) -> TurnEvent { TurnEvent { sid: format!("{name}-0000"), state: "idle".into(), ts: 999.0 } }
@@ -144,17 +151,24 @@ async fn failed_or_switched_off_chain_keeps_the_link() {
     assert!(off.store().chain("s").is_none());
 }
 
-/// O `then` de Kimi, Pi e omp ainda sai do Python: dois leitores do vínculo o mandariam duas vezes.
+/// O vínculo dos três provedores dispara no fim confirmado; loop ativo conserva a recusa.
 #[tokio::test]
-async fn kimi_pi_and_omp_stay_with_the_python() {
+async fn terminal_providers_fire_their_chain_and_refuse_active_loops() {
     for provider in ["kimi", "pi", "omp"] {
         let dir = tempfile::tempdir().unwrap();
         let w = Watcher::new(Arc::new(host(&dir, vec![row("k", provider, false, "idle")])), Duration::from_millis(20));
         w.host.store().set_chain("k", "t", "x").unwrap();
         w.on_event(idle("k"));
         settle().await;
-        assert!(lock(&w.host.delivered).is_empty(), "{provider}");
+        assert_eq!(*lock(&w.host.delivered), [("t".into(), "x".into())], "{provider}");
+        assert!(w.host.store().chain("k").is_none(), "{provider}");
+        running(&w.host.store(), "k");
+        w.host.store().set_chain("k", "t", "y").unwrap();
+        w.on_event(idle("k"));
+        settle().await;
+        assert_eq!(lock(&w.host.delivered).len(), 1, "{provider}");
         assert!(w.host.store().chain("k").is_some(), "{provider}");
+        assert!(lock(&w.host.ticks).is_empty(), "{provider}");
     }
 }
 
@@ -363,4 +377,74 @@ async fn guest_loop_life_pass_is_released_when_the_cycle_is_cancelled() {
     assert!(task.await.unwrap_err().is_cancelled());
     gates.hold("s", Duration::from_secs(1)).await.unwrap();
     gates.release("s");
+}
+
+#[tokio::test(start_paused = true)]
+async fn kimi_false_idle_waits_for_the_current_row_without_parallel_chains() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = Watcher::new(Arc::new(host(&dir, vec![row("k", "kimi", false, "working")])), Duration::from_millis(10));
+    w.host.store().set_chain("k", "t", "x").unwrap();
+    w.on_event(idle("k"));
+    settle().await;
+    assert!(lock(&w.host.delivered).is_empty());
+    w.on_event(idle("k"));
+    settle().await;
+    assert!(lock(&w.host.delivered).is_empty());
+    lock(&w.host.rows).as_mut().unwrap()[0].state = "idle".into();
+    w.host.live.as_ref().unwrap().send_modify(|state| {
+        Arc::make_mut(state.as_mut().unwrap()).public_state["state"] = json!("idle");
+    });
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    assert!(lock(&w.host.delivered).is_empty(), "o idle corrigido ainda precisa assentar antes do vínculo");
+    lock(&w.host.rows).as_mut().unwrap()[0].state = "working".into();
+    w.host.live.as_ref().unwrap().send_modify(|state| {
+        Arc::make_mut(state.as_mut().unwrap()).public_state["state"] = json!("working");
+    });
+    settle().await;
+    assert!(lock(&w.host.delivered).is_empty());
+    lock(&w.host.rows).as_mut().unwrap()[0].state = "idle".into();
+    w.host.live.as_ref().unwrap().send_modify(|state| {
+        Arc::make_mut(state.as_mut().unwrap()).public_state["state"] = json!("idle");
+    });
+    tokio::time::timeout(Duration::from_secs(6), async {
+        while lock(&w.host.delivered).is_empty() { tokio::time::sleep(Duration::from_millis(20)).await; }
+    }).await.expect("o idle repetido não precisa de outra transição do hook");
+    assert_eq!(*lock(&w.host.delivered), [("t".into(), "x".into())]);
+    assert!(w.host.store().chain("k").is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn kimi_unstarted_life_closing_releases_the_chain_waiter_without_sending() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = Watcher::new(Arc::new(host(&dir, vec![row("k", "kimi", false, "working")])), Duration::from_millis(20));
+    let live = w.host.live.as_ref().unwrap();
+    live.send_replace(None);
+    w.host.store().set_chain("k", "t", "x").unwrap();
+    w.on_event(idle("k"));
+    settle().await;
+    assert_eq!(live.receiver_count(), 1);
+    live.send_replace(None);
+    settle().await;
+    assert_eq!(live.receiver_count(), 0, "a vida encerrada não fica presa numa espera sem publicador");
+    assert!(lock(&w.host.delivered).is_empty());
+    assert!(w.host.store().chain("k").is_some());
+}
+
+#[tokio::test(start_paused = true)]
+async fn kimi_first_observation_failure_keeps_the_chain_until_recovery() {
+    let dir = tempfile::tempdir().unwrap();
+    let w = Watcher::new(Arc::new(host(&dir, vec![row("k", "kimi", false, "idle")])), Duration::from_millis(20));
+    let live = w.host.live.as_ref().unwrap();
+    let ready = live.borrow().clone();
+    live.send_replace(Some(Arc::new(crate::runtime::protocol::LiveState {
+        error:Some(("other_terminal_files_unavailable".into(), "leitura indisponível".into())), ..Default::default()
+    })));
+    w.host.store().set_chain("k", "t", "x").unwrap();
+    w.on_event(idle("k"));
+    settle().await;
+    assert!(lock(&w.host.delivered).is_empty());
+    live.send_replace(ready);
+    settle().await;
+    assert_eq!(*lock(&w.host.delivered), [("t".into(), "x".into())]);
+    assert!(w.host.store().chain("k").is_none());
 }

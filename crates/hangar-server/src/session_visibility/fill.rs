@@ -82,7 +82,7 @@ pub async fn fill_rows(home: &Path, mux: &Mux, rows: &mut [SessionRow], diag: &D
     if !cfg.enabled && !marks.values().any(|m| m.hidden) { return; }
     // Em paralelo: cada falta no cache é um processo do multiplexador.
     let keys = futures_util::future::join_all(rows.iter().map(|row| async move {
-        match row.lifecycle_id.as_deref().and_then(|l| l.strip_prefix("k:")) {
+        match crate::list::links::runtime_key(row.lifecycle_id.as_deref()) {
             Some(key) => Some(key.to_owned()),
             None if !row.headless => pane_key(mux, row).await,
             None => None,

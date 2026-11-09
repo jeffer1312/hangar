@@ -229,17 +229,21 @@ passo_preparo() {
         (cd backend && uv sync) || falhou=1
     fi
     if [[ "$plano" == *" rust "* ]]; then
-        # O cano é o binário que o passo rust entrega ao pytest do cano.
-        (cd crates && cargo build --locked -p hangar-server -p hangar-cano -p hangar-auth && \
-            cargo test --locked --workspace --no-run) || falhou=1
+        # Binários, exemplos e testes usam o mesmo grafo de features; trocar o conjunto de pacotes
+        # entre comandos fazia o servidor inteiro recompilar antes de qualquer teste rodar.
+        (cd crates && cargo build --locked --workspace --all-targets) || falhou=1
     fi
     if [[ "$plano" == *" backend "* ]]; then
         # Os contratos e as sondas de contas que o pytest executa (ci.yml): as sondas são módulos do
         # executável de testes `it` do hangar-server.
-        (cd crates && cargo build --locked -p hangar-server -p hangar-auth && \
-            pin_auth_pair && \
-            cargo build --locked -p hangar-server --example orq_contract && \
-            cargo test --locked -p hangar-server --no-run --test it) || falhou=1
+        if [[ "$plano" == *" rust "* ]]; then
+            (cd crates && pin_auth_pair) || falhou=1
+        else
+            (cd crates && cargo build --locked -p hangar-server -p hangar-auth && \
+                pin_auth_pair && \
+                cargo build --locked -p hangar-server --example orq_contract && \
+                cargo test --locked -p hangar-server --no-run --test it) || falhou=1
+        fi
     fi
     if [[ "$plano" == *" backend_rapido "* ]]; then
         # A prova das duas portas precisa do mesmo executável e biblioteca desta árvore fixa. Sempre:

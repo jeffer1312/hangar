@@ -81,8 +81,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **Observação terminal tem uma captura canônica por rodada, sem grade auxiliar.** O controle
   tmux confere sessão/pane a cada leitura; a análise acompanha esse quadro. Em Claude com
   terminal e o Rust de pé, o estado temporal é do `Monitor` do Rust, que pega o quadro do pool em
-  processo; nos provedores que o Python observa (Pi, omp, Kimi), permanece no Python, sem outro
-  HTTP. O cliente da ponte do observador usa somente HTTP sem proxy/redirect
+  processo; Pi, omp e Kimi usam o quadro compartilhado do ator em `runtime/other_terminal/`,
+  sem observador Python ou HTTP para os fatos. O cliente da ponte do observador usa somente HTTP sem proxy/redirect
   e não carrega certificados por pedido (a ponte ficou sem consumidor desde a parte 4; vale se
   voltar a ser usada). Medição:
   [custo da observação terminal](#custo-da-observação-terminal).
@@ -203,7 +203,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 
 - **`omp` é um FORK do Pi** — mesmo JSONL, mesmas extensões, e as diferenças pequenas já custaram
   bugs calados (binário próprio, raiz `~/.omp/agent`, sem `--session-id`, outros nomes de evento,
-  subagente no mesmo processo). Raiz do agente omp tem UMA resposta: `app/omp_dirs.agent_dir()`.
+  subagente no mesmo processo). A raiz do agente omp é resolvida no `hangar-core`, pelo mesmo
+  ambiente efetivo usado na lista, no lançamento e nas credenciais.
 - **A lista de modelos NUNCA é constante.** Conta Anthropic lê o picker ao vivo (cache de 1h,
   porque ler dirige o terminal); sessão de motor usa `/v1/models` do provedor. `/model <id>`
   grava default global — reponha o valor anterior.
