@@ -36,7 +36,6 @@ from app.send_executor import send_thread as _send_thread
 from app.model_picker import PickerError
 from app.mensagens import erro
 from app import claude_customizations
-from app import codex_models
 from app import model_args
 from app import registry as registry_mod
 from app.registry import KillFailed, SessionRegistry

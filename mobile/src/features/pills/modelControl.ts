@@ -87,7 +87,7 @@ export function useModelControl({ serverId, name, provider, chosen, onChosen, cl
         const res = await getKimiModels(name, server);
         setItems(res.models.map((mo) => ({ id: mo.alias, label: mo.name, hint: mo.alias, selected: mo.name === current })));
       } else {
-        const res = await getModelOptions(name, server, { refresh });
+        const res = refresh ? await getModelOptions(name, server, { refresh: true }) : await getModelOptions(name, server);
         const isSelected = (mo: (typeof res.models)[number]) =>
           chosen.model ? (mo.name ?? mo.id) === chosen.model || mo.id === chosen.model : mesmoModelo(mo.name ?? mo.id, current);
         // A troca com terminal usa os apelidos vivos do seletor do Claude Code.

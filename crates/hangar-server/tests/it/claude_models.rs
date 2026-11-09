@@ -27,6 +27,8 @@ impl Scene {
         std::fs::create_dir(&home).unwrap();
         let program = bin.join(if cfg!(windows) { "claude.exe" } else { "claude" });
         std::fs::copy(env!("CARGO_BIN_EXE_hangar-dictation-fixture"), &program).unwrap();
+        std::fs::copy(env!("CARGO_BIN_EXE_hangar-dictation-fixture"),
+            bin.join(if cfg!(windows) { "codex.exe" } else { "codex" })).unwrap();
         let service = AccountService::new(AccountEnvironment::from_map([
             ("HOME".into(), root.path().to_string_lossy().into_owned()),
             ("PATH".into(), bin.to_string_lossy().into_owned()),
@@ -67,6 +69,19 @@ async fn claude_creation_catalog_ignores_legacy_cache_and_refreshes_explicitly()
         std::fs::write(scene.home.join("fixture-catalog.json"),
             json!({"models":[{"value":"refreshed-model","displayName":"Refreshed"}]}).to_string()).unwrap();
     }
+    // A mesma rota também serve a conta Codex escolhida na abertura.
+    let codex_home = scene.root.path().join(".codex-work");
+    std::fs::create_dir(&codex_home).unwrap();
+    std::fs::write(codex_home.join(hangar_server::accounts::storage::CODEX_MARKER),
+        json!({"version":1,"id":"work"}).to_string()).unwrap();
+    let response = app.oneshot(Request::builder()
+        .uri("/api/model-options?provider=codex&codex_account=work")
+        .header("authorization", "Bearer owner").extension(ConnectInfo(address))
+        .body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(response.status(), 200);
+    let body = axum::body::to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let value: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["models"][0]["id"], "model-.codex-work");
 }
 
 #[tokio::test]
