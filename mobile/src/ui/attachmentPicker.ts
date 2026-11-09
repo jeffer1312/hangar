@@ -1,5 +1,6 @@
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
+import type { PastedFile } from '@mattermost/react-native-paste-input';
 import type { DraftAttachment } from '../stores/drafts';
 import * as m from '../paraglide/messages';
 
@@ -14,6 +15,11 @@ const fromImageAsset = (asset: ImagePicker.ImagePickerAsset): PickedAttachment =
   kind: 'image',
   size: asset.fileSize,
 });
+
+export const fromPastedFile = (file: PastedFile): PickedAttachment => {
+  const mime = file.type || 'application/octet-stream';
+  return { uri: file.uri, name: file.fileName, mime, kind: mime.startsWith('image/') ? 'image' : 'file', size: file.fileSize };
+};
 
 const isDenied = (e: unknown) => {
   const code = (e as { code?: string } | null)?.code;

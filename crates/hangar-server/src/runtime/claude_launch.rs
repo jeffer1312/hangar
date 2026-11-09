@@ -58,15 +58,16 @@ pub fn transcript(env: &AccountEnvironment, spec: &SessionSpec, sid: &str) -> Pa
 }
 
 /// O `.jsonl` do sid na pasta do cwd ou, se lá não existe, em outra pasta de `projects`: o `--resume`
-/// aberto noutro cwd (pasta da sessão apagada) segue gravando no arquivo onde achou a conversa. Com o sid
-/// em mais de uma pasta, vale a cópia gravada por último: a outra parou de receber a conversa.
+/// aberto noutro cwd (pasta da sessão apagada) segue gravando no arquivo onde achou a conversa. Fora da
+/// pasta do cwd, com o sid em mais de uma pasta, vale a cópia gravada por último (a outra parou de receber
+/// a conversa); no empate, o caminho decide, para toda chamada escolher o mesmo arquivo.
 pub(crate) fn transcript_in(base: &Path, cwd: &str, sid: &str) -> PathBuf {
     let expected = base.join(hangar_workspace::worktrees::sanitize_cwd(cwd)).join(format!("{sid}.jsonl"));
     if expected.exists() { return expected; }
     let moved = std::fs::read_dir(base).into_iter().flatten().flatten()
         .map(|dir| dir.path().join(format!("{sid}.jsonl")))
         .filter_map(|path| path.metadata().ok().filter(|meta| meta.is_file()).and_then(|meta| meta.modified().ok()).map(|at| (at, path)))
-        .max_by_key(|(at, _)| *at);
+        .max();
     moved.map_or(expected, |(_, path)| path)
 }
 
@@ -443,6 +444,12 @@ mod tests {
         let day_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(86_400);
         std::fs::File::options().write(true).open(&stale).unwrap().set_modified(day_ago).unwrap();
         assert_eq!(transcript_in(dir.path(), "/home/user", sid), original, "a cópia parada perde para a gravada por último");
+        let tied = dir.path().join("-p-worktree").join(format!("{sid}.jsonl"));
+        std::fs::create_dir_all(tied.parent().unwrap()).unwrap();
+        std::fs::write(&tied, "").unwrap();
+        let at = std::time::SystemTime::now();
+        for path in [&original, &tied] { std::fs::File::options().write(true).open(path).unwrap().set_modified(at).unwrap(); }
+        assert_eq!(transcript_in(dir.path(), "/home/user", sid), tied, "no empate o caminho decide");
         let fresh = "00000000-0000-0000-0000-000000000000";
         assert_eq!(transcript_in(dir.path(), "/home/user", fresh), dir.path().join("-home-user").join(format!("{fresh}.jsonl")));
     }

@@ -14,7 +14,7 @@ import { Icon } from '../../ui/Icon';
 import { Glass } from '../../ui/Glass';
 import type { HomeScreen } from '../../stores/aparencia';
 import { AttachmentPreview } from '../../ui/AttachmentPreview';
-import { readClipboard, type PickedAttachment } from '../../ui/attachmentPicker';
+import { fromPastedFile, readClipboard, type PickedAttachment } from '../../ui/attachmentPicker';
 import { AttachSheet } from '../../ui/AttachSheet';
 import { usePressScale } from '../../ui/pressScale';
 import { HomeUsageCard } from '../usage/HomeUsageCard';
@@ -449,11 +449,11 @@ export function NewConversation({
           placeholder={m.composer_mensagem_para({ nome: providerLabel })} accessibilityLabel={m.nova_conversa_placeholder()}
           editable={!collapsed} autoFocus={!home && (router.canGoBack?.() ?? true)} recording={dictation.gravando} rms={dictation.rms} onCancelRecording={dictation.cancel}
           onPaste={(files, error) => {
+            if (busy || dictation.gravando) return;
             if (error) { setAttachError(formataErro(error) ?? error); return; }
             const f = files[0];
             if (!f) return;
-            const mime = f.type || 'application/octet-stream';
-            pick({ uri: f.uri, name: f.fileName, mime, kind: mime.startsWith('image/') ? 'image' : 'file', size: f.fileSize });
+            pick(fromPastedFile(f));
             if (files.length > 1) setAttachError(m.nova_conversa_um_anexo());
           }} />
         {dictation.transcribing ? <Text style={styles.meta} accessibilityLiveRegion="polite">{m.composer_transcrevendo_audio()}</Text> : null}

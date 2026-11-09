@@ -25,15 +25,10 @@ fn projects_dir(config_dir: Option<&str>, home: &Path) -> PathBuf {
     env("CP_PROJECTS_DIR").unwrap_or_else(|| env("CLAUDE_CONFIG_DIR").unwrap_or_else(|| home.join(".claude")).join("projects"))
 }
 
-/// O transcript esperado; o `EnterWorktree` o move para a pasta do cwd da worktree, e o id não repete entre pastas.
+/// O transcript da sessão, achado como na abertura: na pasta do cwd ou na pasta para onde a conversa foi.
 fn transcript_path(meta: &Value, home: &Path) -> Option<PathBuf> {
     let (cwd, sid) = (meta["cwd"].as_str()?, meta["session_id"].as_str()?);
-    let base = projects_dir(meta["config_dir"].as_str(), home);
-    let expected = base.join(hangar_workspace::worktrees::sanitize_cwd(cwd)).join(format!("{sid}.jsonl"));
-    if expected.exists() { return Some(expected); }
-    let mut folders: Vec<PathBuf> = std::fs::read_dir(&base).ok()?.flatten().map(|entry| entry.path()).collect();
-    folders.sort();
-    Some(folders.into_iter().map(|folder| folder.join(format!("{sid}.jsonl"))).find(|path| path.exists()).unwrap_or(expected))
+    Some(crate::runtime::claude_launch::transcript_in(&projects_dir(meta["config_dir"].as_str(), home), cwd, sid))
 }
 
 /// `_linha_parada`: o que a sessão escolheu na abertura e o contexto que o transcript mostra.
