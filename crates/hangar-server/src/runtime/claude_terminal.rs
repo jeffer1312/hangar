@@ -81,8 +81,16 @@ fn claim_holds(claim: &PluginClaim, plugin_key: Option<&str>, transcript_exists:
 
 /// Registro vazio ou cortado (disco cheio no meio da escrita) vale como ausente: o Claude não o
 /// reescreve, e o caminho do registro sumido (`/pull` do plugin, depois a lista) ainda prova a conversa.
-fn native_conversation(raw: &[u8], agent: u32) -> Result<Option<String>, RuntimeError> {
-    let Ok(native) = serde_json::from_slice::<Value>(raw) else { return Ok(None) };
+fn native_conversation(raw: &[u8], agent: u32, name: &str, record: &Path) -> Result<Option<String>, RuntimeError> {
+    let native: Value = match serde_json::from_slice(raw) {
+        Ok(native) => native,
+        Err(error) => {
+            if crate::warn_limit::allow(Some(name), "terminal_native_record_invalid") {
+                tracing::warn!(code = "terminal_native_record_invalid", session = name, record = %record.display(), bytes = raw.len(), kind = ?error.classify(), "registro nativo do Claude ilegível; vale como ausente");
+            }
+            return Ok(None);
+        }
+    };
     if native["pid"].as_u64() != Some(u64::from(agent)) { return Err(refused("terminal_native_record_changed", "o registro do Claude no terminal é de outro processo")); }
     Ok(native["sessionId"].as_str().filter(|s| !s.is_empty()).map(str::to_owned))
 }
@@ -111,7 +119,7 @@ fn prove(panes: &[Pane], name: &str, claude_base: &Path, claim: Option<&PluginCl
     let config_dir = env("CLAUDE_CONFIG_DIR").map_or_else(|| claude_base.to_owned(), PathBuf::from);
     let record = config_dir.join("sessions").join(format!("{agent}.json"));
     let native = match std::fs::read(&record) {
-        Ok(raw) => native_conversation(&raw, agent)?,
+        Ok(raw) => native_conversation(&raw, agent, name, &record)?,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(_) => return Err(refused("terminal_native_record_unavailable", "o registro do Claude no terminal não pôde ser lido")),
     };
@@ -332,10 +340,11 @@ mod tests {
 
     #[test]
     fn a_native_record_left_empty_or_cut_counts_as_absent() {
-        assert_eq!(native_conversation(b"", 7).unwrap(), None, "disco cheio deixou o arquivo com 0 bytes");
-        assert_eq!(native_conversation(br#"{"pid":7,"sess"#, 7).unwrap(), None, "escrita cortada no meio");
-        assert_eq!(native_conversation(br#"{"pid":7,"sessionId":"s1"}"#, 7).unwrap().as_deref(), Some("s1"));
-        assert_eq!(native_conversation(br#"{"pid":8,"sessionId":"s1"}"#, 7).unwrap_err().code, "terminal_native_record_changed");
+        let read = |raw: &[u8]| native_conversation(raw, 7, "s", Path::new("r"));
+        assert_eq!(read(b"").unwrap(), None, "disco cheio deixou o arquivo com 0 bytes");
+        assert_eq!(read(br#"{"pid":7,"sess"#).unwrap(), None, "escrita cortada no meio");
+        assert_eq!(read(br#"{"pid":7,"sessionId":"s1"}"#).unwrap().as_deref(), Some("s1"));
+        assert_eq!(read(br#"{"pid":8,"sessionId":"s1"}"#).unwrap_err().code, "terminal_native_record_changed");
     }
 
     #[test]
