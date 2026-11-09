@@ -1133,7 +1133,8 @@ async fn other_lifecycle_first_input_creates_transcript_then_confirms_the_origin
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 let snapshot = registry.list_snapshots().await;
-                if snapshot[KEY]["queue"][0]["confirmed"] == true {
+                if snapshot.get(KEY).and_then(|state| state.get("queue")).and_then(Value::as_array)
+                    .and_then(|rows| rows.first()).is_some_and(|row| row["confirmed"] == true) {
                     assert_eq!(snapshot[KEY]["queue"][0]["id"], "first-id");
                     break;
                 }

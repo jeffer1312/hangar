@@ -59,7 +59,7 @@ async fn semantic_capture_errors_are_bad_requests() {
     let client = reqwest::Client::new();
     let capture = serde_json::json!({"op":"capture", "consumer":"c", "name":"s", "provider":"claude", "binding":"b",
         "target":"%8", "started":1.0, "lines":200, "colors":false, "join":false});
-    for (field, value) in [("provider", serde_json::json!("kimi")), ("target", serde_json::json!("command")),
+    for (field, value) in [("provider", serde_json::json!("unsupported")), ("target", serde_json::json!("command")),
         ("binding", serde_json::json!("")), ("lines", serde_json::json!(10001)), ("started", serde_json::json!(true))] {
         let mut body = capture.clone();
         body[field] = value;
@@ -218,6 +218,6 @@ async fn removed_pure_reduce_rpc_is_rejected() {
         "plugin_question":null,"plugin_state":null,"hook_state":null,"hook_grace":8,"status_line":null}});
     let r = reqwest::Client::new().post(url).header("x-hangar-internal", "internal").body(body.to_string()).send().await.unwrap();
     assert_eq!(r.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(hangar_server::INTERNAL_PROTOCOL, 102);
+    assert_eq!(hangar_server::INTERNAL_PROTOCOL, 105);
     task.abort();
 }

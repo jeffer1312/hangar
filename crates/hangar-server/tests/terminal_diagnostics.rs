@@ -41,7 +41,7 @@ async fn terminal_error_statuses_preserve_static_cause_without_private_data() {
             assert_eq!(result.status(), status);
             assert_eq!(to_bytes(result.into_body(), 1024).await.unwrap().as_ref(), response.as_bytes());
         }
-        for (name, provider, target) in [("another", "claude", "bad-target"), ("fixture", "kimi", "%8"), ("private-unsafe/name", "claude", "%8")] {
+        for (name, provider, target) in [("another", "claude", "bad-target"), ("fixture", "unsupported", "%8"), ("private-unsafe/name", "claude", "%8")] {
             let mut body = valid.clone();
             body["name"] = name.into(); body["provider"] = provider.into(); body["target"] = target.into();
             for _ in 0..20 {
