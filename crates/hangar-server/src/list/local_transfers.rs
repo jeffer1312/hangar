@@ -276,6 +276,41 @@ pub(crate) fn session_phase(home: &Path, name: &str, row: Option<&SessionRow>, r
     Ok(record.map(|record| record.phase))
 }
 
+/// Por que não deu para saber se a sessão está em transferência; cada rota diz isso do seu jeito.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TransferCheckError { Identity, Life, Interrupted, Read }
+
+/// Transferência ainda em curso para `name`, pelas linhas já descobertas; sem linha, pela vida do pane.
+pub(crate) async fn transfer_active(env: &super::bridge::ListEnv, name: &str, rows: Vec<SessionRow>) -> Result<bool, TransferCheckError> {
+    let dirs = env.dirs.clone().ok_or(TransferCheckError::Identity)?;
+    let row = rows.into_iter().find(|row| row.name == name);
+    let birth = if row.is_none() {
+        env.mux.list_panes().await.map_err(|_| TransferCheckError::Life)?
+            .into_iter().find(|pane| pane.session == name).and_then(|pane| pane.session_created)
+    } else { None };
+    let (name, program) = (name.to_owned(), env.capture_program.clone());
+    tokio::task::spawn_blocking(move || {
+        use crate::share::life::LifeProbe;
+        let life = if row.is_none() {
+            let key = crate::share::life::MuxProbe::new(program, dirs.home.clone()).sidecar(&name).map(|(key, _)| key);
+            super::links::session_life(key.as_deref(), birth)
+        } else { None };
+        session_phase(&dirs.home, &name, row.as_ref(), life.as_deref())
+            .map(|phase| phase.is_some_and(|phase| !matches!(phase.as_str(), "complete" | "rejected" | "rolled_back")))
+            .map_err(|_| TransferCheckError::Read)
+    }).await.map_err(|_| TransferCheckError::Interrupted)?
+}
+
+/// A mesma vida da sessão antes e depois de entrar na porta: troca de conversa, pasta ou superfície recusa.
+pub(crate) fn same_life(a: Option<&SessionRow>, b: Option<&SessionRow>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => a.lifecycle_id == b.lifecycle_id && a.cwd == b.cwd && a.jsonl == b.jsonl
+            && a.provider == b.provider && a.headless == b.headless,
+        _ => false,
+    }
+}
+
 pub(crate) fn session_transfer_id(home: &Path, row: &SessionRow) -> Result<Option<String>, String> {
     Ok(for_session(&mut Reader::new(home), home, row, false)?.map(|record| record.id))
 }

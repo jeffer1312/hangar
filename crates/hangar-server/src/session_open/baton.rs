@@ -477,33 +477,22 @@ fn payload(value: &Value) -> Result<Value,Response> {
 }
 
 async fn blocked(st:&Arc<AppState>,name:&str,rows:Vec<SessionRow>)->Result<bool,Response> {
-    let Some(dirs)=st.list.env().dirs.clone() else{return Err(super::server::reply(&OpenError::new(503,"workspace_context","a identidade da sessão está indisponível")));};
-    let row=rows.into_iter().find(|row|row.name==name);
-    let birth=if row.is_none() {st.list.env().mux.list_panes().await
-        .map_err(|_|super::server::reply(&OpenError::new(503,"workspace_context","a vida da sessão está indisponível")))?
-        .into_iter().find(|pane|pane.session==name).and_then(|pane|pane.session_created)} else {None};
-    let (name,program)=(name.to_owned(),st.list.env().capture_program.clone());
-    tokio::task::spawn_blocking(move|| {
-        use crate::share::life::LifeProbe;
-        let life=if row.is_none() {
-            let key=crate::share::life::MuxProbe::new(program,dirs.home.clone()).sidecar(&name).map(|(key,_)|key);
-            crate::list::links::session_life(key.as_deref(),birth)
-        } else {None};
-        crate::list::local_transfers::session_phase(&dirs.home,&name,row.as_ref(),life.as_deref())
-            .map(|phase|phase.is_some_and(|phase|!matches!(phase.as_str(),"complete"|"rejected"|"rolled_back")))
-    }).await.map_err(|_|super::server::reply(&OpenError::new(503,"workspace_context","a leitura da transferência foi interrompida")))?
-        .map_err(|_|super::server::reply(&OpenError::new(503,"workspace_context","não foi possível ler a transferência")))
+    use crate::list::local_transfers::TransferCheckError as E;
+    crate::list::local_transfers::transfer_active(st.list.env(),name,rows).await.map_err(|e| super::server::reply(&OpenError::new(503,"workspace_context",match e {
+        E::Identity=>"a identidade da sessão está indisponível", E::Life=>"a vida da sessão está indisponível",
+        E::Interrupted=>"a leitura da transferência foi interrompida", E::Read=>"não foi possível ler a transferência",
+    })))
 }
 
 async fn guard(st:&Arc<AppState>,name:&str)->Result<Arc<crate::runtime::ingress::IngressPass>,Response> {
     let before=live_rows(st).await.map_err(|e|super::server::reply(&e))?;
-    let identity=|rows:&[SessionRow]|rows.iter().find(|r|r.name==name).map(|r|(r.lifecycle_id.clone(),r.jsonl.clone(),r.provider.clone()));
-    let life=identity(&before);
+    let life=before.iter().find(|r|r.name==name).cloned();
     if blocked(st,name,before).await? {return Err(crate::session_write::json_response(StatusCode::CONFLICT,crate::session_write::busy_body()));}
     let Some(runtime)=st.state.runtime.get() else{return Err(super::server::reply(&OpenError::new(503,"runtime_unhealthy","a entrada da sessão está indisponível")));};
     let ingress=Arc::new(runtime.ingress().enter(name,st.write_gate_wait).await.map_err(|_|crate::session_write::json_response(StatusCode::CONFLICT,crate::session_write::busy_body()))?);
     let after=live_rows(st).await.map_err(|e|super::server::reply(&e))?;
-    if identity(&after)!=life || blocked(st,name,after).await? {return Err(crate::session_write::json_response(StatusCode::CONFLICT,crate::session_write::busy_body()));}
+    let same=crate::list::local_transfers::same_life(life.as_ref(),after.iter().find(|r|r.name==name));
+    if !same || blocked(st,name,after).await? {return Err(crate::session_write::json_response(StatusCode::CONFLICT,crate::session_write::busy_body()));}
     Ok(ingress)
 }
 

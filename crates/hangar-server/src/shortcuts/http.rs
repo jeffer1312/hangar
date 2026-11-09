@@ -35,33 +35,9 @@ async fn rows(st: &Arc<AppState>) -> Result<Vec<SessionRow>, Response> {
     }).await.map_err(|_|unavailable())?
 }
 async fn blocked(st: &AppState, rows: Vec<SessionRow>, name: &str) -> Result<bool, Response> {
-    let dirs = st.list.env().dirs.clone().ok_or_else(unavailable)?;
-    let row = rows.into_iter().find(|row|row.name==name);
-    let birth = if row.is_none() {
-        st.list.env().mux.list_panes().await.map_err(|_|unavailable())?.into_iter()
-            .find(|pane|pane.session==name).and_then(|pane|pane.session_created)
-    } else { None };
-    let program = st.list.env().capture_program.clone();
-    let name = name.to_owned();
-    tokio::task::spawn_blocking(move || {
-        use crate::share::life::LifeProbe;
-        let life = if row.is_none() {
-            let key=crate::share::life::MuxProbe::new(program,dirs.home.clone()).sidecar(&name).map(|(key,_)|key);
-            crate::list::links::session_life(key.as_deref(),birth)
-        } else { None };
-        crate::list::local_transfers::session_phase(&dirs.home,&name,row.as_ref(),life.as_deref())
-            .map(|phase|phase.is_some_and(|phase|!matches!(phase.as_str(),"complete"|"rejected"|"rolled_back")))
-            .map_err(|_|unavailable())
-    }).await.map_err(|_|unavailable())?
+    crate::list::local_transfers::transfer_active(st.list.env(), name, rows).await.map_err(|_| unavailable())
 }
 fn find(rows: &[SessionRow], name: &str) -> Option<SessionRow> { rows.iter().find(|row| row.name == name).cloned() }
-fn same_life(a: &Option<SessionRow>, b: &Option<SessionRow>) -> bool {
-    match (a,b) {
-        (None,None) => true,
-        (Some(a),Some(b)) => a.lifecycle_id == b.lifecycle_id && a.cwd == b.cwd && a.jsonl == b.jsonl && a.provider == b.provider && a.headless == b.headless,
-        _ => false,
-    }
-}
 
 pub async fn public(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Response {
     let headers = req.headers().clone();
@@ -136,7 +112,7 @@ async fn inner(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Response {
         let pass = match runtime.ingress().enter(&name,st.write_gate_wait).await { Ok(pass)=>Arc::new(pass), Err(_)=>return busy() };
         let current = match rows(&st).await { Ok(rows)=>rows, Err(response)=>return response };
         let next = find(&current,&name);
-        if !same_life(&row,&next) { return busy(); }
+        if !crate::list::local_transfers::same_life(row.as_ref(),next.as_ref()) { return busy(); }
         match blocked(&st,current,&name).await { Ok(true)=>return busy(), Ok(false)=>{}, Err(response)=>return response }
         row = next;
         Some(pass)
