@@ -5,6 +5,31 @@ set -uo pipefail
 
 V="$(dirname "$0")/verificar-local"
 falhou=0
+
+# O preparo conjunto não alterna grafos de features entre builds do servidor.
+(
+    verifier_path="$(realpath "$V")"
+    preparation_root="$(mktemp -d)"
+    trap 'rm -rf "$preparation_root"' EXIT
+    mkdir -p "$preparation_root/crates" "$preparation_root/backend"
+    preparation_log="$preparation_root/cargo.log"
+    cargo() { printf '%s\n' "$*" >> "$preparation_log"; }
+    uv() { :; }
+    python3() { :; }
+    pin_auth_pair() { :; }
+    omp_de_teste() { :; }
+    PLANO='rust backend'
+    PROCESSOS=2
+    CARGO_BUILD_JOBS=2
+    eval "$(sed -n '/^passo_preparo() {/,/^}/p' "$verifier_path")"
+    cd "$preparation_root" || exit 1
+    passo_preparo || exit 1
+    [[ "$(cat "$preparation_log")" == 'build --locked --workspace --all-targets' ]] || {
+        echo 'FALHOU: preparo Rust/backend repetiu compilação'
+        cat "$preparation_log"
+        exit 1
+    }
+) || falhou=1
 caso() {   # $1 = arquivos (um por linha), $2 = linux esperado, $3 = windows esperado
     local saida lin win
     saida="$(printf '%s\n' "$1" | "$V" --classificar)"
