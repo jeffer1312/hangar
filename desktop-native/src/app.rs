@@ -306,6 +306,18 @@ fn conversation_line(user: bool) -> f32 {
     let (size, line) = conversation_metrics(user);
     size * a.text_size as f32 / 100. * line * a.line_height as f32 / 100.
 }
+
+/// Pedido no runtime do tokio; a volta cai na entidade, se ela ainda existir.
+fn run<V: 'static, T: Send + 'static, F>(runtime: &Runtime, request: F, window: &mut Window, cx: &mut Context<V>,
+    then: impl FnOnce(&mut V, Result<T, Failure>, &mut Window, &mut Context<V>) + 'static)
+where F: Future<Output = Result<T, Failure>> + Send + 'static {
+    let (done, result) = tokio::sync::oneshot::channel();
+    runtime.spawn(async move { let _ = done.send(request.await); });
+    cx.spawn_in(window, async move |this, cx| {
+        let result = result.await.unwrap_or_else(|_| Err(Failure::local("network_error")));
+        let _ = this.update_in(cx, |this, window, cx| { then(this, result, window, cx); cx.notify(); });
+    }).detach();
+}
 const DETAIL_MAX: usize = 20_000;
 const LIVE_THINKING_TAIL: usize = 1_500;
 

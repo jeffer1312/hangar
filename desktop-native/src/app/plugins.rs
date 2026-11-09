@@ -3,6 +3,9 @@
 use super::*;
 use super::settings::{Disclosure, Page, settings_box};
 use super::side::{notice, notice_button};
+use super::accounts::fold;
+use super::harness::grouped_number;
+use super::vault::{alert, chip, muted};
 use gpui_kit::component::switch::Switch;
 
 // A CLI baixa repositórios nas mudanças longas; o servidor tem o teto dele um pouco abaixo destes.
@@ -42,13 +45,14 @@ impl Filter {
 /// Só a versão nova conhecida pelo disco vira pílula; a fonte externa só descobre ao atualizar.
 fn has_update(plugin: &InstalledPlugin) -> bool { plugin.update_known && plugin.available_version.is_some() }
 
+/// `query` já passou pelo `fold`: dobra uma vez por desenho, não por item.
 fn found(name: &str, description: Option<&str>, query: &str) -> bool {
-    let query = query.trim().to_lowercase();
-    query.is_empty() || name.to_lowercase().contains(&query) || description.is_some_and(|d| d.to_lowercase().contains(&query))
+    query.is_empty() || fold(name).contains(query) || description.is_some_and(|d| fold(d).contains(query))
 }
 
 fn shown<'a>(plugins: &'a [InstalledPlugin], filter: Filter, query: &str) -> Vec<&'a InstalledPlugin> {
-    plugins.iter().filter(|p| filter.keeps(p) && found(&p.name, p.description.as_deref(), query)).collect()
+    let query = fold(query.trim());
+    plugins.iter().filter(|p| filter.keeps(p) && found(&p.name, p.description.as_deref(), &query)).collect()
 }
 
 /// O mesmo formato que o servidor aceita: `dono/repo`, URL `https://` ou caminho absoluto.
@@ -87,18 +91,6 @@ fn checked_label<Tz: chrono::TimeZone>(checked_at: Option<&str>, now: &chrono::D
     }
 }
 
-/// Milhar com o separador da língua: `1.366` em português, `1,366` em inglês.
-fn thousands(n: u64) -> String {
-    let digits = n.to_string();
-    let sep = if crate::i18n::english() { ',' } else { '.' };
-    let mut out = String::new();
-    for (i, c) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 { out.push(sep); }
-        out.push(c);
-    }
-    out
-}
-
 fn inventory_labels(inventory: &PluginInventory) -> Vec<String> {
     [(inventory.skills, "plugins_inventory_skills", Some("plugins_inventory_skills_one")),
         (inventory.agents, "plugins_inventory_agents", Some("plugins_inventory_agents_one")),
@@ -110,16 +102,6 @@ fn inventory_labels(inventory: &PluginInventory) -> Vec<String> {
         }).collect()
 }
 
-fn muted(text: String) -> Div { div().text_sm().text_color(theme::muted()).whitespace_normal().child(text) }
-
-fn alert(id: impl Into<ElementId>, text: String) -> Stateful<Div> {
-    div().id(id).role(Role::Alert).text_sm().text_color(theme::danger()).whitespace_normal().child(text)
-}
-
-fn pill(text: String, color: Hsla, bg: Hsla) -> Div {
-    div().flex_shrink_0().px(px(6.)).py(px(1.)).rounded(px(4.)).bg(bg).text_xs().text_color(color).child(text)
-}
-
 fn row_box(id: impl Into<ElementId>) -> Stateful<Div> {
     div().id(id).role(Role::ListItem).mt(px(-1.)).border_t_1().border_color(theme::border()).px_4().py(px(12.)).flex().items_center().gap(px(14.))
 }
@@ -129,18 +111,6 @@ fn text_block(name: Div, meta: String, description: Option<String>) -> Div {
         .child(name)
         .child(div().truncate().text_size(px(12.5)).text_color(theme::muted()).child(meta))
         .when_some(description.filter(|d| !d.is_empty()), |el, d| el.child(div().text_size(px(12.5)).text_color(theme::faint()).whitespace_normal().child(d)))
-}
-
-/// Pedido no runtime do tokio; a volta cai na entidade, se ela ainda existir.
-fn run<V: 'static, T: Send + 'static, F>(runtime: &Runtime, request: F, window: &mut Window, cx: &mut Context<V>,
-    then: impl FnOnce(&mut V, Result<T, Failure>, &mut Window, &mut Context<V>) + 'static)
-where F: Future<Output = Result<T, Failure>> + Send + 'static {
-    let (done, result) = tokio::sync::oneshot::channel();
-    runtime.spawn(async move { let _ = done.send(request.await); });
-    cx.spawn_in(window, async move |this, cx| {
-        let result = result.await.unwrap_or_else(|_| Err(Failure::local("network_error")));
-        let _ = this.update_in(cx, |this, window, cx| { then(this, result, window, cx); cx.notify(); });
-    }).detach();
 }
 
 /// Faixa depois de uma mudança: quem ainda está no estado anterior e o que deu errado ao reabrir.
@@ -226,7 +196,7 @@ impl PluginsPage {
                 let list = result.map_err(|e| Hangar::fetch_failure(&e)).and_then(|v| v.get("plugins").cloned()
                     .and_then(|p| serde_json::from_value::<Vec<AvailablePlugin>>(p).ok()).ok_or_else(|| tr("invalid_response")));
                 if let Ok(list) = &list {
-                    let hint = tr("plugins_discover_placeholder").replace("{n}", &thousands(list.len() as u64));
+                    let hint = tr("plugins_discover_placeholder").replace("{n}", &grouped_number(list.len() as u64));
                     this.discover_query.update(cx, |input, cx| input.set_placeholder(hint, window, cx));
                 }
                 this.available = Some(list);
@@ -313,6 +283,11 @@ impl PluginsPage {
         ["plugins", id].into_iter().chain(action).map(str::to_owned).collect()
     }
 
+    /// As linhas guardam só o `id`; o plugin sai do estado na hora do clique.
+    fn installed(&self, id: &str) -> Option<InstalledPlugin> {
+        self.state.as_ref()?.as_ref().ok()?.plugins.iter().find(|p| p.id == id).cloned()
+    }
+
     fn set_enabled(&mut self, plugin: &InstalledPlugin, on: bool, window: &mut Window, cx: &mut Context<Self>) {
         let name = plugin.name.clone();
         let path = Self::plugin_path(&plugin.id, Some(if on { "enable" } else { "disable" }));
@@ -353,8 +328,7 @@ impl PluginsPage {
         });
     }
 
-    fn install(&mut self, plugin: &AvailablePlugin, window: &mut Window, cx: &mut Context<Self>) {
-        let (id, name) = (plugin.id.clone(), plugin.name.clone());
+    fn install(&mut self, id: String, name: String, window: &mut Window, cx: &mut Context<Self>) {
         self.change(id.clone(), reqwest::Method::POST, Self::plugin_path(&id, Some("install")), None, LONG_SECONDS, move |this, _, _, cx| {
             this.installed_now.insert(id);
             this.changed(tr("plugins_action_installed").replace("{name}", &name), cx);
@@ -496,20 +470,20 @@ impl PluginsPage {
             .child(div().min_w_0().truncate().font_weight(FontWeight::MEDIUM).text_color(if plugin.enabled { theme::text() } else { theme::muted() })
                 .child(plugin.name.clone()))
             .when_some(plugin.available_version.clone().filter(|_| has_update(plugin)), |el, v| el
-                .child(pill(tr("plugins_available").replace("{version}", &v), theme::accent_text(), theme::accent_dim())));
+                .child(chip(tr("plugins_available").replace("{version}", &v), theme::accent_text(), theme::accent_dim())));
         let meta = tr("plugins_row_meta").replace("{version}", &plugin.version).replace("{date}", &day(&plugin.last_updated))
             .replace("{marketplace}", &plugin.marketplace);
         let page = cx.entity().downgrade();
-        let (toggle_id, switch_plugin, update_plugin) = (id.clone(), plugin.clone(), plugin.clone());
+        let (toggle_id, switch_id, update_id) = (id.clone(), id.clone(), id.clone());
         row_box(SharedString::from(format!("plugins-row-{id}"))).aria_label(plugin.name.clone()).cursor_pointer().hover(|el| el.bg(theme::hover()))
             .on_click(cx.listener(move |this, _, _, cx| this.toggle_detail(toggle_id.clone(), cx)))
             .child(text_block(name, meta, plugin.description.clone()))
             .when(has_update(plugin), |el| el.child(Button::new(SharedString::from(format!("plugins-update-{id}"))).outline().small()
                 .label(tr(if busy { "plugins_updating" } else { "plugins_update" })).loading(busy).disabled(busy)
-                .on_click(cx.listener(move |this, _, window, cx| this.update(&update_plugin, window, cx)))))
+                .on_click(cx.listener(move |this, _, window, cx| if let Some(p) = this.installed(&update_id) { this.update(&p, window, cx) }))))
             .child(Switch::new(SharedString::from(format!("plugins-switch-{id}"))).checked(plugin.enabled).disabled(busy)
                 .accessibility_label(format!("{} · {}", tr(if plugin.enabled { "plugins_disable" } else { "plugins_enable" }), plugin.name))
-                .on_click(cx.listener(move |this, on: &bool, window, cx| this.set_enabled(&switch_plugin, *on, window, cx))))
+                .on_click(cx.listener(move |this, on: &bool, window, cx| if let Some(p) = this.installed(&switch_id) { this.set_enabled(&p, *on, window, cx) })))
             .child(Disclosure::new(format!("plugins-open-{id}"), open, String::new(), true).name(plugin.name.clone())
                 // A seta é o caminho do teclado; sem parar aqui, o clique nela também chegaria à linha e desfaria a troca.
                 .on_change(move |_, cx| {
@@ -535,8 +509,8 @@ impl PluginsPage {
             Some(Err(error)) => (alert(SharedString::from(format!("plugins-detail-error-{id}")), error.clone()).into_any_element(), div().into_any_element()),
             Some(Ok(details)) => (
                 div().flex().flex_wrap().gap_1().children(inventory_labels(&details.inventory).into_iter()
-                    .map(|l| pill(l, theme::muted(), theme::inset()))).into_any_element(),
-                value(details.always_on_tokens.map(|n| tr("plugins_detail_tokens").replace("{n}", &thousands(n))).unwrap_or_else(|| "—".into())).into_any_element(),
+                    .map(|l| chip(l, theme::muted(), theme::inset()))).into_any_element(),
+                value(details.always_on_tokens.map(|n| tr("plugins_detail_tokens").replace("{n}", &grouped_number(n))).unwrap_or_else(|| "—".into())).into_any_element(),
             ),
         };
         let line = |label: &str, value: AnyElement| div().flex().items_start().gap_4()
@@ -552,20 +526,20 @@ impl PluginsPage {
             (Some(v), true) => tr("plugins_update_to").replace("{version}", v),
             _ => tr("plugins_update"),
         };
-        let (update_plugin, switch_plugin, remove_plugin) = (plugin.clone(), plugin.clone(), plugin.clone());
+        let (update_id, switch_id, remove_id) = (id.clone(), id.clone(), id.clone());
         let on = plugin.enabled;
         // Fonte externa também mostra Atualizar: a versão nova só se descobre pedindo.
         let can_update = has_update(plugin) || !plugin.update_known;
         let actions = div().flex().flex_wrap().items_center().gap_2()
             .when(can_update, |el| el.child(Button::new(SharedString::from(format!("plugins-detail-update-{id}")))
                 .map(|b| if has_update(plugin) { b.primary() } else { b.outline() }).small().label(update_label).loading(busy).disabled(busy)
-                .on_click(cx.listener(move |this, _, window, cx| this.update(&update_plugin, window, cx)))))
+                .on_click(cx.listener(move |this, _, window, cx| if let Some(p) = this.installed(&update_id) { this.update(&p, window, cx) }))))
             .child(Button::new(SharedString::from(format!("plugins-detail-toggle-{id}"))).outline().small()
                 .label(tr(if on { "plugins_disable" } else { "plugins_enable" })).disabled(busy)
-                .on_click(cx.listener(move |this, _, window, cx| this.set_enabled(&switch_plugin, !on, window, cx))))
+                .on_click(cx.listener(move |this, _, window, cx| if let Some(p) = this.installed(&switch_id) { this.set_enabled(&p, !on, window, cx) })))
             .child(div().flex_1())
             .child(Button::new(SharedString::from(format!("plugins-detail-remove-{id}"))).danger().outline().small().label(tr("plugins_remove")).disabled(busy)
-                .on_click(cx.listener(move |this, _, window, cx| this.confirm_remove(&remove_plugin, window, cx))));
+                .on_click(cx.listener(move |this, _, window, cx| if let Some(p) = this.installed(&remove_id) { this.confirm_remove(&p, window, cx) })));
         div().id(SharedString::from(format!("plugins-detail-{id}"))).role(Role::Group).aria_label(plugin.name.clone())
             .mt(px(-1.)).border_t_1().border_color(theme::border()).bg(theme::inset()).px_4().py(px(14.)).flex().flex_col().gap_3()
             .child(grid).child(actions)
@@ -583,7 +557,9 @@ impl PluginsPage {
             Some(Ok(list)) => list,
         };
         let query = self.discover_query.read(cx).value().to_string();
-        let hits: Vec<&AvailablePlugin> = list.iter().filter(|p| found(&p.name, p.description.as_deref(), &query)).collect();
+        let folded = fold(query.trim());
+        let hits: Vec<&AvailablePlugin> = list.iter().filter(|p| found(&p.name, p.description.as_deref(), &folded)).collect();
+        let installed: HashSet<&str> = state.plugins.iter().map(|i| i.id.as_str()).collect();
         let body = if list.is_empty() {
             settings_box().px_4().py(px(18.)).child(muted(tr("plugins_discover_none"))).into_any_element()
         } else if hits.is_empty() {
@@ -591,16 +567,16 @@ impl PluginsPage {
         } else {
             settings_box().id("plugins-available").role(Role::List).aria_label(tr("plugins_tab_discover")).children(hits.into_iter().map(|p| {
                 let id = p.id.clone();
-                let done = self.installed_now.contains(&id) || state.plugins.iter().any(|i| i.id == id);
+                let done = self.installed_now.contains(&id) || installed.contains(id.as_str());
                 let busy = self.busy.contains(&id);
                 let meta = [p.version.clone(), Some(p.marketplace.clone())].into_iter().flatten().collect::<Vec<_>>().join(" · ");
-                let target = p.clone();
+                let (target, target_name) = (id.clone(), p.name.clone());
                 row_box(SharedString::from(format!("plugins-available-{id}"))).aria_label(p.name.clone())
                     .child(text_block(div().truncate().font_weight(FontWeight::MEDIUM).child(p.name.clone()), meta, p.description.clone()))
-                    .child(if done { pill(tr("plugins_installed"), theme::success_text(), theme::success().opacity(0.12)).into_any_element() } else {
+                    .child(if done { chip(tr("plugins_installed"), theme::success_text(), theme::success().opacity(0.12)).into_any_element() } else {
                         Button::new(SharedString::from(format!("plugins-install-{id}"))).primary().small()
                             .label(tr(if busy { "plugins_installing" } else { "plugins_install" })).loading(busy).disabled(busy)
-                            .on_click(cx.listener(move |this, _, window, cx| this.install(&target, window, cx))).into_any_element()
+                            .on_click(cx.listener(move |this, _, window, cx| this.install(target.clone(), target_name.clone(), window, cx))).into_any_element()
                     })
                     .into_any_element()
             })).into_any_element()
@@ -673,12 +649,12 @@ impl Render for PluginsPage {
         let state = match &self.state {
             None => return page.child(div().id("plugins-loading").role(Role::Status).child(muted(tr("plugins_loading")))),
             Some(Err(error)) => { let error = error.clone(); return page.child(alert("plugins-state-error", error)).child(div().child(self.retry("plugins-retry", cx))); }
-            Some(Ok(state)) => state.clone(),
+            Some(Ok(state)) => state,
         };
         let body = match self.tab {
-            TAB_INSTALLED => self.render_installed(&state, cx),
-            TAB_DISCOVER => self.render_discover(&state, cx),
-            _ => self.render_marketplaces(&state, cx),
+            TAB_INSTALLED => self.render_installed(state, cx),
+            TAB_DISCOVER => self.render_discover(state, cx),
+            _ => self.render_marketplaces(state, cx),
         };
         page.child(body)
     }
@@ -749,7 +725,7 @@ mod tests {
     #[test]
     fn numbers_and_check_time_follow_the_language() {
         crate::i18n::english_in_this_thread(false);
-        assert_eq!((thousands(90), thousands(1366), thousands(1_234_567)), ("90".into(), "1.366".into(), "1.234.567".into()));
+        assert_eq!((grouped_number(90), grouped_number(1366), grouped_number(1_234_567)), ("90".into(), "1.366".into(), "1.234.567".into()));
         use chrono::TimeZone;
         // Relógio e fuso fixos (UTC-3): a suíte não depende do fuso da máquina.
         let zone = chrono::FixedOffset::west_opt(3 * 3600).unwrap();
@@ -759,7 +735,7 @@ mod tests {
         assert_eq!(checked_label(Some("2026-11-09T02:00:00Z"), &now), "Conferido em 08/11/2026");
         assert_eq!(checked_label(None, &now), tr("plugins_never_checked"));
         crate::i18n::english_in_this_thread(true);
-        assert_eq!(thousands(1366), "1,366");
+        assert_eq!(grouped_number(1366), "1,366");
     }
 
     #[test]
