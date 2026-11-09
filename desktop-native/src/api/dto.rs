@@ -37,6 +37,76 @@ pub struct ClaudeCustomizations {
     pub blocked_skills: Vec<String>,
 }
 
+/// `GET /api/plugins` e a resposta de toda mudança da página Plugins (o `result` vem à parte).
+#[non_exhaustive]
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct PluginsState {
+    pub plugins: Vec<InstalledPlugin>,
+    pub marketplaces: Vec<PluginMarketplace>,
+    #[serde(default)] pub checked_at: Option<String>,
+}
+
+#[non_exhaustive]
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct InstalledPlugin {
+    pub id: String,
+    pub name: String,
+    pub marketplace: String,
+    pub version: String,
+    pub last_updated: String,
+    pub enabled: bool,
+    #[serde(default)] pub available_version: Option<String>,
+    /// Falso na fonte externa: a versão nova só aparece ao atualizar.
+    #[serde(default)] pub update_known: bool,
+    #[serde(default)] pub description: Option<String>,
+}
+
+#[non_exhaustive]
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct PluginMarketplace {
+    pub name: String,
+    pub source_label: String,
+    #[serde(default)] pub last_updated: Option<String>,
+    #[serde(default)] pub auto_update: bool,
+    #[serde(default)] pub auto_update_editable: bool,
+    #[serde(default)] pub builtin: bool,
+}
+
+#[non_exhaustive]
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct AvailablePlugin {
+    pub id: String,
+    pub name: String,
+    pub marketplace: String,
+    #[serde(default)] pub version: Option<String>,
+    #[serde(default)] pub description: Option<String>,
+}
+
+#[non_exhaustive]
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct PluginDetails {
+    pub inventory: PluginInventory,
+    #[serde(default)] pub always_on_tokens: Option<u64>,
+}
+
+#[non_exhaustive]
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct PluginInventory {
+    #[serde(default)] pub skills: Option<u32>,
+    #[serde(default)] pub agents: Option<u32>,
+    #[serde(default)] pub hooks: Option<u32>,
+    #[serde(default)] pub mcp: Option<u32>,
+    #[serde(default)] pub lsp: Option<u32>,
+}
+
+/// O `result` de uma mudança: `outcome` do `update` é `up_to_date` ou `updated`.
+#[non_exhaustive]
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct PluginOperation {
+    pub outcome: String,
+    #[serde(default)] pub new_version: Option<String>,
+}
+
 // Os formatos da conversa vêm do crate que o hangar-server também usa; os nomes antigos ficam para o
 // resto do app não mudar.
 pub use hangar_api::chat::{ChatEvent, PatchHunk};

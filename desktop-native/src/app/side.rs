@@ -286,7 +286,7 @@ pub(super) fn now_seconds() -> f64 {
 }
 
 /// Aviso do painel (`.aviso` do web): alerta em âmbar, grave em vermelho.
-fn notice(text: String, serious: bool) -> Div {
+pub(super) fn notice(text: String, serious: bool) -> Div {
     let color = if serious { theme::danger() } else { theme::warning() };
     div().flex().flex_col().gap_2().px_3().py_2().rounded(px(12.)).border_1().border_color(color.opacity(0.34)).bg(color.opacity(0.10))
         .child(div().flex().items_start().gap_2()
@@ -294,7 +294,7 @@ fn notice(text: String, serious: bool) -> Div {
             .child(div().flex_1().min_w_0().text_size(px(11.)).text_color(theme::muted()).child(text)))
 }
 
-fn notice_button(id: &'static str, label: String, serious: bool, cx: &App) -> Button {
+pub(super) fn notice_button(id: &'static str, label: String, serious: bool, cx: &App) -> Button {
     let color = if serious { theme::danger() } else { theme::warning() };
     Button::new(id).custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(color).hover(color.opacity(0.14)).active(color.opacity(0.2)))
         .xsmall().rounded_full().border_1().border_color(color.opacity(0.45)).px(px(10.))
