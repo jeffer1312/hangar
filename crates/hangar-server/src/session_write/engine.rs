@@ -160,9 +160,9 @@ pub async fn effort(State(st):State<Arc<AppState>>,ConnectInfo(peer):ConnectInfo
     let Ok(bytes)=to_bytes(body,BODY_LIMIT).await else {return too_large(&parts.headers)};
     let spec=match runtime.claude_spec(&name).await {
         Some(Ok(spec)) if matches!(&spec.account,Account::Engine { account:Some(_),.. })=>spec,
-        _=>match super::model_effort::serve(&st,runtime,name,&parts.headers,&bytes).await {
+        found=>match super::model_effort::serve(&st,runtime,name,&parts.headers,&bytes).await {
             Some(response)=>return response,
-            None=>return crate::routes::pass(&st,Request::from_parts(parts,axum::body::Body::from(bytes)),&fwd).await,
+            None=>return super::model_effort::refuse(&parts.headers,&bytes,found.is_some()),
         },
     };
     let Ok(body)=serde_json::from_slice::<Value>(&bytes) else {return super::invalid_body(&parts.headers)};

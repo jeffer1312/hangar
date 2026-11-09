@@ -81,16 +81,24 @@ async fn model_effort_b6_open_terminal_panel_refuses() {
     assert_eq!(python.hits_to("/api/sessions/t/model-effort"), 0);
 }
 
-/// Sessão sem entrada no Rust e que não é Claude com terminal para adotar (Pi, omp, Kimi, ou nenhuma): segue
-/// ao Python como antes, com o corpo como veio; lá ficam a validação e o "sessao nao esta viva".
+/// R1.4 (D6, D7): sessão que não é Claude (Pi, omp, Kimi, nenhuma) recusa com código, sem tecla e sem
+/// repasse; o corpo fora de forma vem antes, como a validação do pydantic antes do handler Python. As
+/// capturas `pi_idle_*`, `kimi_idle_model`, `omp_idle_model`, `pi_working`, `pi_dead_session`,
+/// `unknown_session_no_info` e `panel_open_409` eram todas 409 sem código; `invalid_scope_422`,
+/// `extra_field_422` e `malformed_json_422`, a lista do FastAPI.
 #[tokio::test]
-async fn model_effort_without_a_rust_claude_goes_to_python() {
+async fn model_effort_r1_4_other_providers_are_refused_in_rust() {
     let terms = Arc::new(Terms::new(TermConfig::default()));
-    let (python, server) = serve(registry(&terms).await, terms, None, Duration::from_secs(5)).await;
-    for (n, body) in [r#"{"scope":"session"}"#, r#"{"model":"sonnet"}"#].into_iter().enumerate() {
-        assert_eq!(post(server, "pi1", body).await.1, "from-python", "{body}");
-        assert_eq!(python.hits_to("/api/sessions/pi1/model-effort"), n + 1);
+    let (python, server) = serve(registry(&terms).await, terms, Some("pi1"), Duration::from_secs(5)).await;
+    for body in [r#"{"scope":"session"}"#, r#"{"model":"sonnet"}"#, r#"{"effort":"turbo"}"#, "{}", r#"{"model":"opus","effort":"high","scope":"default"}"#] {
+        let (status, reply) = post(server, "pi1", body).await;
+        assert_eq!((status, reply["detail"]["code"].as_str()), (409, Some("erro_model_effort_so_claude")), "{body}: {reply}");
     }
+    for body in [r#"{"scope":"global"}"#, r#"{"model":"sonnet","x":1}"#, "{", "[]"] {
+        let (status, reply) = post(server, "pi1", body).await;
+        assert_eq!((status, reply["detail"]["code"].as_str()), (422, Some("erro_corpo_invalido")), "{body}: {reply}");
+    }
+    assert_eq!(python.hits_to("/api/sessions/pi1/model-effort"), 0, "nada ao Python");
 }
 
 /// B9: com terminal, modelo torto é 422 antes do terminal.
