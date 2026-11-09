@@ -110,15 +110,12 @@ impl Origin {
     fn expected(&self, codex: bool, name: &str) -> String {
         let original = if codex { include_str!("../fixtures/baton/codex-expected.txt") } else { include_str!("../fixtures/baton/claude-expected.txt") };
         let root = self.root.to_str().unwrap();
-        let encoded = serde_json::to_string(root).unwrap();
-        let raw_root = &encoded[1..encoded.len() - 1];
         original.replace(if codex {"`morta`"} else {"`fixture-claude`"}, &format!("`{name}`"))
             .replace(if codex {"/mnt/case/home/.codex-work/sessions/2026/09/02/rollout-2026-09-02T14-00-00-019f0000-0000-7000-8000-000000000001.jsonl"} else {"/mnt/case/home/.claude/projects/-mnt-case-work-repo/00000000-0000-4000-8000-000000000101.jsonl"}, self.path.to_str().unwrap())
             .replace("`/mnt/case/work/repo`", &format!("`{}`", self.root.display()))
+            // Estes caminhos vêm da transcrição, onde o resto depois da raiz está escrito com `/`.
             .replace("/mnt/case/work/repo/docs/superpowers/plans/2026-09-02-grupo-pareamento-fim-sessao.md", &format!("{root}/docs/superpowers/plans/2026-09-02-grupo-pareamento-fim-sessao.md"))
             .replace("/mnt/case/work/repo/docs/superpowers/specs/2026-09-03-bastao-v2-design.md", &format!("{root}/docs/superpowers/specs/2026-09-03-bastao-v2-design.md"))
-            // A seção do plano cita o caminho do JSON cru; a de arquivos usa os eventos já decodificados.
-            .replace(&format!("— `{root}/docs/"), &format!("— `{raw_root}/docs/"))
     }
     fn url(&self, tail: &str) -> String { format!("http://{}/api/sessions/{tail}", self.fixture.addr) }
     fn archived(&self, codex: bool) -> String {
