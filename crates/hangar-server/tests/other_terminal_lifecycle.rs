@@ -211,7 +211,8 @@ fn registry(
     Arc<RuntimeRegistry>,
     Arc<hangar_server::provider_models::inbox::Store>,
 ) {
-    registry_with_interactions(root, io, source, after, Arc::new(hangar_server::interactions::InteractionStore::default()))
+    registry_with_interactions(root, io, source, after, Arc::new(hangar_server::interactions::InteractionStore::default()),
+        Arc::new(hangar_server::list::procs::SystemProcs::default()))
 }
 fn registry_with_interactions(
     root: &Path,
@@ -219,12 +220,13 @@ fn registry_with_interactions(
     source: Arc<Mutex<Option<OtherDiscoveryState>>>,
     after: Option<OtherAfterClosed>,
     interactions: Arc<hangar_server::interactions::InteractionStore>,
+    processes: Arc<dyn hangar_server::list::procs::ProcessView>,
 ) -> (Arc<RuntimeRegistry>, Arc<hangar_server::provider_models::inbox::Store>) {
     let inbox = hangar_server::provider_models::inbox::Store::new();
     let mut options = OtherOptions::new(
         hangar_server::terminal_control::TerminalPool::new(),
         inbox.clone(),
-        Arc::new(hangar_server::list::procs::SystemProcs::default()),
+        processes,
         interactions.clone(),
     );
     options.io_override = Some(io);
@@ -629,7 +631,9 @@ async fn other_lifecycle_close_failure_preserves_queue_and_success_cleans_only_a
         })
     });
     let source = Arc::new(Mutex::new(Some(OtherDiscoveryState::Ready(target.clone()))));
-    let (registry, _) = registry(root.path(), Io::live(), source, Some(after));
+    // Os pids do alvo são inventados: na tabela real da máquina eles podem existir (thread do kernel).
+    let (registry, _) = registry_with_interactions(root.path(), Io::live(), source, Some(after),
+        Arc::new(hangar_server::interactions::InteractionStore::default()), Arc::new(Processes { root: root.path().into() }));
     registry.open_other_terminal(target.clone()).await.unwrap();
     registry
         .queue_action(
@@ -654,7 +658,7 @@ async fn other_lifecycle_close_failure_preserves_queue_and_success_cleans_only_a
     std::fs::remove_file(root.path().join("refuse")).unwrap();
     let closed = registry.close_other("pi-a").await;
     registry.shutdown().await.unwrap();
-    assert!(closed.is_some_and(|result| result.is_ok()));
+    assert!(closed.as_ref().is_some_and(|result| result.is_ok()), "{closed:?}");
     assert_eq!(after_count.load(Ordering::SeqCst), 1);
 }
 
@@ -1138,7 +1142,8 @@ async fn other_lifecycle_public_select_and_answer_refuse_an_open_terminal_panel(
             });
             let interactions = Arc::new(hangar_server::interactions::InteractionStore::default());
             let source = Arc::new(Mutex::new(Some(OtherDiscoveryState::Ready(target.clone()))));
-            let (registry, _) = registry_with_interactions(root.path(), io.clone(), source, None, interactions.clone());
+            let (registry, _) = registry_with_interactions(root.path(), io.clone(), source, None, interactions.clone(),
+                Arc::new(hangar_server::list::procs::SystemProcs::default()));
             registry.open_other_terminal(target.clone()).await.unwrap();
             let mut live = registry.live(&target.name);
             let published_id = tokio::time::timeout(Duration::from_secs(5), async {
