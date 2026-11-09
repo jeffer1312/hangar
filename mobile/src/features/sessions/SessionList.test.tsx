@@ -88,7 +88,7 @@ vi.mock('./RenameSheet', () => ({ RenameSheet: () => null }));
 vi.mock('../worktrees/WorktreeSheet', () => ({ WorktreeSheet: () => null }));
 vi.mock('../vault/VaultRequests', () => ({ VaultRequests: ({ byServer }: { byServer: { server: { id: string } }[] }) =>
   React.createElement('div', { 'data-vault-servers': byServer.map((bucket) => bucket.server.id).join(',') }) }));
-vi.mock('../../paraglide/messages', () => ({ ...Object.fromEntries((
+vi.mock('../../paraglide/messages', async (importOriginal) => ({ ...await importOriginal<object>(), ...Object.fromEntries((
   'lista_agrupar_nenhum lista_agrupar_servidor lista_agrupar_projeto lista_agrupar ' +
   'native_brand lista_buscar lista_filtrar lista_filtro_limpar native_connected config_modal_titulo switcher_buscar_conversas nav_custos ' +
   'native_new_chat_title native_sidebar_all_sessions lista_sessoes_plural sessao_expandir sessao_recolher ' +
