@@ -4502,7 +4502,7 @@ impl Hangar {
             .filter(|(pick, item)| interaction::answer(&ask, item, pick).is_some()).count();
         let progress = tr("ask_progress").replace("{done}", &completed.to_string()).replace("{total}", &total.to_string());
         let minimized = self.ask_form.minimized;
-        Some(in_column(questions::card(minimized, progress, tabs, body,
+        Some(in_column_with(questions::card(minimized, progress, tabs, body,
             div().flex().flex_wrap().items_center().gap_2()
                 .child(div().flex_1().min_w_0().text_xs().text_color(theme::muted()).child(tr(if ready { "ask_ready" } else { "ask_incomplete" })))
                 .when(tab > 0, |el| {
@@ -4529,7 +4529,7 @@ impl Hangar {
                 // O campo sai da árvore ao recolher: o foco volta para um controle que continua visível.
                 this.composer.update(cx, |input, cx| input.focus(window, cx));
                 cx.notify();
-            }))).py_2().into_any_element())
+            })), true).py_2().into_any_element())
     }
 
     fn render_options(&mut self, busy: bool, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -6607,6 +6607,8 @@ const PLUGIN_PANE_MAX_SHARE: f32 = 0.45;
 const PLUGIN_PANE_MAX_HEIGHT: f32 = 360.;
 /// Menor teto da faixa de baixo: cabe o compositor com a linha de baixo, mesmo com o terminal puxado até o alto.
 const BOTTOM_MIN_HEIGHT: f32 = 200.;
+/// Cabeçalho da sessão, acima da conversa.
+const SESSION_HEADER_HEIGHT: f32 = 44.;
 /// Uma linha da faixa do mod, com a margem de baixo dela.
 const BAND_MIN_HEIGHT: f32 = 24.;
 
@@ -7354,11 +7356,11 @@ impl Hangar {
         if self.new_chat_screen() && self.reopen.is_some() { return self.render_reopen(window, cx); }
         if self.new_chat_screen() { return self.render_new_chat(window, cx); }
         let content = self.render_bottom_content(window, cx);
-        // A faixa fica com o espaço medido menos o piso da conversa e o terminal inteiro; sem medida ainda, sem teto.
-        let (term, shown) = self.docked_terminal_height(window).unwrap_or((0., 0.));
-        let conversation = self.panes.conversation_height.get();
-        let space = conversation + self.panes.bottom_applied.get() + shown;
-        let cap = if conversation > 0. { (space - terminal::CONVERSATION_MIN_HEIGHT - term).max(BOTTOM_MIN_HEIGHT) } else { f32::from(window.viewport_size().height) };
+        // A faixa fica com a coluna menos o cabeçalho, o piso da conversa e o terminal inteiro; sem medida ainda, sem teto.
+        let term = self.docked_terminal_height(window).unwrap_or(0.);
+        let column = self.panes.column_height.get();
+        let cap = if column > 0. { (column - SESSION_HEADER_HEIGHT - terminal::CONVERSATION_MIN_HEIGHT - term).max(BOTTOM_MIN_HEIGHT) }
+            else { f32::from(window.viewport_size().height) };
         self.measured_bottom(content, cap)
     }
 
@@ -7476,7 +7478,8 @@ impl Hangar {
                 let height = self.question_space_height(readable, window);
                 div().id("plugin-interaction-space").track_focus(&self.plugin_question_focus)
                     // Cede junto com a faixa do mod quando falta espaço: o cartão rola aqui dentro, ao lado do compositor.
-                    .relative().w_full().max_h(px(height)).when(reserve, |el| el.h(px(height))).flex_shrink(1.).min_h_0().overflow_y_scroll()
+                    // Coluna flex: sem ela o cartão não encolhe e a área o corta, com as ações fora da vista.
+                    .relative().w_full().flex().flex_col().max_h(px(height)).when(reserve, |el| el.h(px(height))).flex_shrink(1.).min_h_0().overflow_y_scroll()
                     .child(question).into_any_element()
             }),
             Display::Panel => {
@@ -7814,7 +7817,8 @@ impl Render for Hangar {
         let opening = self.opening.clone().filter(|_| self.selected.is_none());
         let content = div().relative().flex_1().min_w_0().h_full().flex().flex_col()
             .when(!beside_sidebar, |el| chat_fill(el, self, window))
-            .child(div().h(px(44.)).pl(px(20.)).pr(px(12.)).flex_shrink_0().flex().items_center().gap(px(10.)).when(floating, |el| el.mx(px(4.)))
+            .child(self.column_measure())
+            .child(div().h(px(SESSION_HEADER_HEIGHT)).pl(px(20.)).pr(px(12.)).flex_shrink_0().flex().items_center().gap(px(10.)).when(floating, |el| el.mx(px(4.)))
                 .relative().opacity(shown).top(px(rise))
                 .when_some(header_avatar, |el, avatar| el.child(avatar))
                 .when_some(opening.as_ref(), |el, o| el.child(chrome::session_avatar(&chrome::AvatarLook::new(&o.provider, None, "", false), 26., None)))

@@ -20,10 +20,9 @@ pub(super) struct Panes {
     pub top_beside: Cell<Option<f32>>,
     /// Altura medida da faixa de baixo: a view guardada precisa de altura definida, e o compositor cresce com o texto.
     pub bottom_height: Rc<Cell<f32>>,
-    /// Altura medida da conversa: com a da faixa de baixo e a do terminal, dá o espaço que as três dividem.
-    pub conversation_height: Rc<Cell<f32>>,
-    /// Altura da caixa da faixa de baixo como foi desenhada: a `bottom_height` nova só entra no quadro seguinte.
-    pub bottom_applied: Rc<Cell<f32>>,
+    /// Altura da coluna da sessão (cabeçalho, conversa, faixa de baixo e terminal). Não depende da faixa de baixo, por
+    /// isso o teto dela, tirado daqui, não volta a si mesmo.
+    pub column_height: Rc<Cell<f32>>,
     /// Lugares que as áreas guardadas deixaram para o que anima dentro delas (`MarkPlace`).
     pub marks: MarkPlaces,
 }
@@ -51,7 +50,7 @@ impl Panes {
         Self {
             nav: pane(Area::Nav), conversation: pane(Area::Conversation), bottom: pane(Area::Bottom), side: pane(Area::Side),
             top: pane(Area::Top), dictation: pane(Area::Dictation), top_beside: Cell::new(None),
-            bottom_height: Rc::new(Cell::new(120.)), conversation_height: Rc::new(Cell::new(0.)), bottom_applied: Rc::new(Cell::new(0.)), marks: Rc::default(),
+            bottom_height: Rc::new(Cell::new(120.)), column_height: Rc::new(Cell::new(0.)), marks: Rc::default(),
         }
     }
 }
@@ -121,23 +120,24 @@ impl Hangar {
     pub(super) fn pane_element_live(&self, area: Area, style: StyleRefinement, live: bool) -> AnyElement {
         let pane = self.pane(area);
         let shown = super::popup::area_on_screen(area);
-        // A conversa mudou de altura (terminal abrindo ou fechando): só a faixa de baixo, guardada, refaz o teto dela.
-        let measure = matches!(area, Area::Conversation).then(|| {
-            let height = self.panes.conversation_height.clone();
-            let bottom = self.panes.bottom.entity_id();
-            canvas(move |bounds, _, cx| {
-                let measured = f32::from(bounds.size.height);
-                if (height.get() - measured).abs() > 0.5 { height.set(measured); App::notify(cx, bottom); }
-            }, |_, _, _, _| {}).absolute().inset_0()
-        });
         if live {
-            let mut frame = div().relative();
+            let mut frame = div();
             frame.style().refine(&style);
-            return frame.child(shown).children(measure).child(AnyView::from(pane.clone())).into_any_element();
+            return frame.child(shown).child(AnyView::from(pane.clone())).into_any_element();
         }
         let mut frame = div().relative();
         frame.style().refine(&style);
-        frame.child(shown).children(measure).child(AnyView::from(pane.clone()).cached(StyleRefinement::default().size_full())).into_any_element()
+        frame.child(shown).child(AnyView::from(pane.clone()).cached(StyleRefinement::default().size_full())).into_any_element()
+    }
+
+    /// Mede a coluna da sessão; mudou (janela, terminal), só a faixa de baixo, guardada, refaz o teto.
+    pub(super) fn column_measure(&self) -> impl IntoElement {
+        let height = self.panes.column_height.clone();
+        let bottom = self.panes.bottom.entity_id();
+        canvas(move |bounds, _, cx| {
+            let measured = f32::from(bounds.size.height);
+            if (height.get() - measured).abs() > 0.5 { height.set(measured); App::notify(cx, bottom); }
+        }, |_, _, _, _| {}).absolute().inset_0()
     }
 
     /// Redesenha uma área só, sem acordar as outras: para o que muda só nela (texto chegando, rolagem, digitação).
@@ -150,23 +150,16 @@ impl Hangar {
     /// devolve a altura nova à janela no quadro seguinte.
     pub(super) fn measured_bottom(&self, content: AnyElement, max_height: f32) -> AnyElement {
         let height = self.panes.bottom_height.clone();
-        let applied = self.panes.bottom_applied.clone();
-        let bottom = self.panes.bottom.entity_id();
+        // O conteúdo é medido numa caixa da altura do teto, nunca na da faixa: ela tem a altura do quadro anterior, e o
+        // que encolhe e rola (avisos, pergunta, faixa do mod) se ajustaria a ela, crescendo aos degraus.
         div().size_full().relative()
-            // A caixa como foi desenhada neste quadro: somada à conversa e ao terminal do mesmo quadro, dá o espaço sem
-            // misturar a medida nova do conteúdo, que só entra no layout no quadro seguinte.
-            .child(canvas(move |bounds, _, cx| {
-                let measured = f32::from(bounds.size.height);
-                if (applied.get() - measured).abs() > 0.5 { applied.set(measured); App::notify(cx, bottom); }
-            }, |_, _, _, _| {}).absolute().inset_0())
-            // O teto vem do espaço medido, nunca da caixa: ela tem a altura do quadro anterior e nunca deixaria crescer.
-            // Com ele, o que pode encolher (a faixa do mod) cede antes de o compositor sair da tela.
-            .child(div().absolute().left_0().right_0().bottom_0().max_h(px(max_height)).flex().flex_col()
-                .child(content)
-                .child(canvas(move |bounds, window, _| {
-                    let measured = f32::from(bounds.size.height);
-                    if (height.get() - measured).abs() > 0.5 { height.set(measured); window.request_animation_frame(); }
-                }, |_, _, _, _| {}).absolute().inset_0()))
+            .child(div().absolute().left_0().right_0().bottom_0().h(px(max_height))
+                .child(div().absolute().left_0().right_0().bottom_0().max_h_full().flex().flex_col()
+                    .child(content)
+                    .child(canvas(move |bounds, window, _| {
+                        let measured = f32::from(bounds.size.height);
+                        if (height.get() - measured).abs() > 0.5 { height.set(measured); window.request_animation_frame(); }
+                    }, |_, _, _, _| {}).absolute().inset_0())))
             .into_any_element()
     }
 }
