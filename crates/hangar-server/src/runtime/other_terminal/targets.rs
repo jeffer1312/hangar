@@ -259,11 +259,7 @@ async fn resolve(
         None if agent.is_some() => {
             let mut value:open::SessionSpec=serde_json::from_value(json!({"version":open::SPEC_VERSION,"key":key,"name":name,"cwd":cwd,"provider":kind.as_str(),"surface":"terminal","account":{"kind":"default"},"account_source":"default","jev":false,"read_only":false,"created_at":created as f64})).map_err(|_|failed("other_terminal_spec_invalid"))?;
             value.conversation = source.as_deref().map(crate::locate::session_key);
-            let (home, saved) = (context.dirs.home.clone(), value.clone());
-            tokio::task::spawn_blocking(move || open::record::write(&home, &saved))
-                .await
-                .map_err(|_| failed("other_terminal_spec_worker"))?
-                .map_err(|_| failed("other_terminal_spec_unwritable"))?;
+            // A chave vai ao pane antes do spec: sem ela a próxima descoberta sortearia outra.
             let output = ProcessMux::default()
                 .run(vec![
                     program.clone(),
@@ -277,6 +273,11 @@ async fn resolve(
             if output.code != Some(0) {
                 return Err(failed("other_terminal_key_unwritable"));
             }
+            let (home, saved) = (context.dirs.home.clone(), value.clone());
+            tokio::task::spawn_blocking(move || open::record::write(&home, &saved))
+                .await
+                .map_err(|_| failed("other_terminal_spec_worker"))?
+                .map_err(|_| failed("other_terminal_spec_unwritable"))?;
             value
         }
         None => return Err(failed("other_terminal_opening_unproved")),

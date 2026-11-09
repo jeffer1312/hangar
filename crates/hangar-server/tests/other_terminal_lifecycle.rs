@@ -513,6 +513,25 @@ async fn other_lifecycle_factory_recognizes_opening_without_agent_and_rejects_st
 }
 #[cfg(unix)]
 #[tokio::test]
+async fn other_lifecycle_factory_without_key_writes_no_spec_when_the_key_cannot_be_set() {
+    let root = tempfile::tempdir().unwrap();
+    let list = raw_list(root.path(), true);
+    let program = root.path().join("mux");
+    let script = std::fs::read_to_string(&program).unwrap().replace(
+        &format!("show-environment) printf '%s\\n' 'CP_SESSION_KEY={KEY}';;"),
+        "show-environment) printf '%s\\n' 'unknown variable: CP_SESSION_KEY' >&2; exit 1;;",
+    );
+    std::fs::write(&program, script).unwrap();
+    let specs = || std::fs::read_dir(hangar_server::session_open::record::dir(root.path())).unwrap().count();
+    let before = specs();
+    for _ in 0..2 {
+        let found = (discovery(list.clone()).find)("pi-a".into()).await;
+        assert!(matches!(found, Some(Err(ref error)) if error.code == "other_terminal_key_unwritable"), "{found:?}");
+    }
+    assert_eq!(specs(), before, "chave que não chegou ao pane não deixa spec órfão");
+}
+#[cfg(unix)]
+#[tokio::test]
 async fn other_lifecycle_factory_accepts_fresh_ticket_before_jsonl_and_preserves_old_same_life_hook()
  {
     let root = tempfile::tempdir().unwrap();
