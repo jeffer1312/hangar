@@ -640,10 +640,15 @@ impl ListBridge {
             return list_facts::Fetched { states: Arc::new(states), ok: true, fresh };
         };
         for row in rows.iter_mut().filter(|row| list_facts::OTHERS.contains(&row.provider.as_str())) {
-            if let Some(Err(error)) = registry.ensure_other(&row.name).await {
-                self.facts.diag.report("rust.list_facts_unavailable", &row.name, &error.code, "o ator ainda não comprovou a vida desta sessão");
+            // Adotada ou abrindo já tem quem vigie a vida (o ator e o laço de abertura): adotar só sem dono.
+            let mut info = registry.other_info(&row.name).await;
+            if info.is_none() {
+                if let Some(Err(error)) = registry.ensure_other(&row.name).await {
+                    self.facts.diag.report("rust.list_facts_unavailable", &row.name, &error.code, "o ator ainda não comprovou a vida desta sessão");
+                }
+                info = registry.other_info(&row.name).await;
             }
-            if let Some(info) = registry.other_info(&row.name).await {
+            if let Some(info) = info {
                 row.lifecycle_id = info.lifecycle_id;
                 row.jsonl = info.jsonl.map(|path| path.to_string_lossy().into_owned());
                 row.tracked = row.jsonl.is_some();

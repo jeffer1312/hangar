@@ -571,6 +571,45 @@ async fn other_lifecycle_factory_accepts_fresh_ticket_before_jsonl_and_preserves
 }
 #[cfg(unix)]
 #[tokio::test]
+async fn other_lifecycle_list_tick_does_not_rediscover_an_adopted_session() {
+    let root = tempfile::tempdir().unwrap();
+    let list = raw_list(root.path(), true);
+    let target = target(root.path());
+    std::fs::write(&target.transcript, b"").unwrap();
+    let finds = Arc::new(AtomicUsize::new(0));
+    let mut options = OtherOptions::new(
+        hangar_server::terminal_control::TerminalPool::new(),
+        hangar_server::provider_models::inbox::Store::new(),
+        Arc::new(hangar_server::list::procs::SystemProcs::default()),
+        Arc::new(hangar_server::interactions::InteractionStore::default()),
+    );
+    options.io_override = Some(Io::live());
+    options.tick = Duration::from_secs(3600);
+    let registry = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "test-only".into(), "lifecycle-test".into()));
+    let (counted, ready) = (finds.clone(), target.clone());
+    registry
+        .bind_other(
+            options,
+            OtherDiscovery {
+                find: Arc::new(move |_| {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    let ready = ready.clone();
+                    Box::pin(async move { Some(Ok(OtherDiscoveryState::Ready(ready))) })
+                }),
+                names: Arc::new(|| Box::pin(async { Ok(vec![]) })),
+            },
+        )
+        .unwrap();
+    registry.open_other_terminal(target).await.unwrap();
+    list.set_plugin_runtime(registry.clone());
+    let before = finds.load(Ordering::SeqCst);
+    let _ = list.produce(&hangar_server::list::bridge::ProduceFacts { owner_clients: 0 }).await;
+    let after = finds.load(Ordering::SeqCst);
+    registry.shutdown().await.unwrap();
+    assert_eq!(after, before, "sessão já adotada não refaz a descoberta a cada tique");
+}
+#[cfg(unix)]
+#[tokio::test]
 async fn other_lifecycle_close_failure_preserves_queue_and_success_cleans_only_after_proof() {
     let root = tempfile::tempdir().unwrap();
     let _list = raw_list(root.path(), true);
