@@ -115,12 +115,17 @@ pub fn matches(_method: &Method, path: &str) -> bool {
 fn transfer_guarded_read(method: &Method, tail: &str) -> bool {
     method == Method::POST && matches!(tail, "files/resolver" | "git/diff" | "git/path-diff")
 }
-/// `Err(None)`: sessão inexistente. `Err(Some(motivo))`: leitura indisponível. Com `transfer`, o
-/// `transfer_busy` sai das mesmas linhas, sem outra descoberta.
+/// `Err(None)`: sessão inexistente. `Err(Some(motivo))`: leitura indisponível. Com `transfer`, a
+/// transferência é conferida pelas mesmas linhas, antes de procurar a sessão: no meio da troca ela
+/// pode nem estar na descoberta, e a resposta é ocupado, não inexistente.
 async fn context(st: &Arc<AppState>, name: Option<&str>, transfer: bool) -> Result<Value, Option<&'static str>> {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| Some("relogio"))?.as_secs_f64();
     let found = st.list.discover(Some(now)).await.map_err(|_| Some("sessoes"))?;
+    if transfer && let Some(name) = name
+        && crate::list::local_transfers::transfer_active(st.list.env(), name, found.to_vec()).await.map_err(|_| Some("transferencia"))? {
+        return Ok(json!({"transfer_busy": true}));
+    }
     let source = st.clone();
     let name = name.map(str::to_owned);
     tokio::task::spawn_blocking(move || {
@@ -145,18 +150,10 @@ async fn context(st: &Arc<AppState>, name: Option<&str>, transfer: bool) -> Resu
             }
             None => Value::Null,
         };
-        let transfer_busy = match (transfer, session["name"].as_str()) {
-            (true, Some(name)) => {
-                let dirs = source.list.env().dirs.as_ref().ok_or(Some("sessoes"))?;
-                crate::list::local_transfers::transfers(&found, dirs).map_err(|_| Some("transferencia"))?.1.contains(name)
-            }
-            _ => false,
-        };
         let sessions: Vec<Value> = rows.iter()
             .filter(|row| row.cwd.as_deref().is_some_and(|cwd| !cwd.is_empty()))
             .map(|row| json!({"name":row.name,"cwd":row.cwd})).collect();
-        Ok(json!({"roots":roots,"sessions":sessions,"session":session,"citation_session":citation_session,
-            "transfer_busy":transfer_busy}))
+        Ok(json!({"roots":roots,"sessions":sessions,"session":session,"citation_session":citation_session}))
     }).await.map_err(|_| Some("leitura"))?
 }
 /// Pasta sem Git só pede as raízes: sem descoberta de sessões nem orquestrações.

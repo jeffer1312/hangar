@@ -988,6 +988,10 @@ async fn task3_review_p2_unrelated_corrupt_transfer_does_not_block_healthy_codex
     }
     assert_eq!(results.iter().map(|(status,_)|*status).collect::<Vec<_>>(),[200,200],"{results:?}");
     assert_eq!(results[0].1,"original"); assert_eq!(serde_json::from_str::<Value>(&results[1].1).unwrap()["text"],"original");
+    // A leitura protegida pela transferência também só lê o registro da própria sessão.
+    let resolved=c.post(format!("http://{}/api/sessions/fixture/files/resolver",h.f.addr)).bearer_auth(OWNER)
+        .json(&json!({"caminhos":[target]})).send().await.unwrap();
+    let status=resolved.status().as_u16(); assert_eq!(status,200,"{}",resolved.text().await.unwrap());
     h.no_python();
 }
 
