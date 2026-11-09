@@ -296,17 +296,14 @@ pub fn disable_diary() {
 pub fn diary_dir_in(
     env: &crate::account_env::AccountEnvironment,
 ) -> Option<std::path::PathBuf> {
-    // Teste que montou o ambiente com o HOME real não grava no diário da máquina.
+    let base = crate::paths::log_base_in(env)?;
+    // Teste cujo ambiente aponta para os logs reais (HOME ou LOCALAPPDATA) não grava no diário da máquina.
     if crate::process::cargo_test_binary()
-        && std::env::home_dir().is_some_and(|home| home == env.home)
+        && crate::paths::log_base().is_some_and(|real| real == base)
     {
         return None;
     }
-    Some(
-        crate::paths::log_base_in(env)?
-            .join("diario")
-            .join("servidor-rust"),
-    )
+    Some(base.join("diario").join("servidor-rust"))
 }
 
 /// As linhas que o próprio Rust grava no diário exportável, no formato do `diag.registrar`: texto
