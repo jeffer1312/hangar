@@ -140,6 +140,27 @@ async fn session_outside_the_mods_gets_the_fixed_answer_without_python() {
     }
 }
 
+/// D21: cada recusa fixa grava no diário a linha `api.servidor` que o Python gravava (contract/r1-mods
+/// `*_rust_404`): nível, sessão, código, rota, etapa e causa.
+#[tokio::test]
+async fn refusal_outside_the_mods_leaves_the_python_access_line() {
+    let (python, server, _mods, _link) = setup(FakeLink::default()).await;
+    for (route, body) in [("press", abrir()), ("close", json!({"site": "p"})), ("show", json!({"site": "p"})),
+        ("input", json!({"site": "p", "plugin": "m", "key": "k", "kind": "change", "value": "o"}))] {
+        post(server, "outra", route, body, Some(OWNER)).await;
+    }
+    wait_until(|| python.diag().iter().filter(|line| line["evento"] == "api.servidor").count() == 4).await;
+    let lines: Vec<Value> = python.diag().into_iter().filter(|line| line["evento"] == "api.servidor").collect();
+    for (route, nivel, codigo, causa) in [("press", "erro", "503", "mods_need_rust_server"), ("close", "erro", "503", "mods_need_rust_server"),
+        ("show", "aviso", "404", "erro_mod_aba_no_app"), ("input", "aviso", "409", "erro_mod_sem_digitacao")] {
+        let detalhe = format!("POST /api/sessions/{{name}}/plugin/{route}");
+        let line = lines.iter().find(|line| line["detalhe"] == detalhe.as_str()).unwrap_or_else(|| panic!("{route}: {lines:?}"));
+        assert_eq!((line["nivel"].as_str(), line["sessao"].as_str(), line["codigo"].as_str(), line["etapa"].as_str(), line["causa"].as_str(), line["origem"].as_str()),
+            (Some(nivel), Some("outra"), Some(codigo), Some("cabecalhos"), Some(causa), Some("servidor")), "{route}");
+        assert!(line["ms"].is_u64() && line["ts"].is_string(), "{route}: {line}");
+    }
+}
+
 #[tokio::test]
 async fn session_outside_the_mods_without_runtime_gets_the_fixed_answer() {
     let (python, upstream) = spawn_fake().await;
