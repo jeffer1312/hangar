@@ -40,7 +40,8 @@ impl Origin {
     async fn build(codex: bool, live: bool, router_only: bool) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let isolated = std::env::var_os("HANGAR_BATON_CHILD_ROOT").map(PathBuf::from);
-        let base = isolated.as_deref().unwrap_or(dir.path());
+        let resolved = hangar_workspace::real(isolated.as_deref().unwrap_or(dir.path()));
+        let base = resolved.as_path();
         let (root, home) = (base.join("repo"), base.join("home"));
         std::fs::create_dir_all(&root).unwrap();
         std::fs::create_dir_all(home.join(".claude/projects/-mnt-case-work-repo")).unwrap();
@@ -89,7 +90,9 @@ impl Origin {
         #[cfg(unix)]
         crate::write_executable(&mux, format!("#!/bin/sh\n[ \"$1\" = list-panes ] || exit 0\nprintf '%s' '{}'\n", pane.replace('\'', "'\\''")));
         #[cfg(windows)]
-        std::fs::write(&mux, format!("@echo off\r\nif not \"%~1\"==\"list-panes\" exit /b 0\r\necho {}\r\n", pane.trim_end().replace('%', "%%"))).unwrap();
+        std::fs::write(&mux, if pane.is_empty() { "@echo off\r\nexit /b 0\r\n".to_owned() } else {
+            format!("@echo off\r\nif not \"%~1\"==\"list-panes\" exit /b 0\r\necho {}\r\n", pane.trim_end().replace('%', "%%"))
+        }).unwrap();
         let opening_mux = isolated.as_ref().map(|root|root.join("bin/tmux"));
         let fixture = if let Some(opening_mux)=opening_mux.as_deref() {
             workspace_fixture::fixture_with_account_env(&root,false,&home,opening_mux,hangar_server::accounts::environment::AccountEnvironment::capture(),router_only).await
@@ -101,11 +104,16 @@ impl Origin {
     }
     fn expected(&self, codex: bool, name: &str) -> String {
         let original = if codex { include_str!("../fixtures/baton/codex-expected.txt") } else { include_str!("../fixtures/baton/claude-expected.txt") };
+        let root = self.root.to_str().unwrap();
+        let encoded = serde_json::to_string(root).unwrap();
+        let raw_root = &encoded[1..encoded.len() - 1];
         original.replace(if codex {"`morta`"} else {"`fixture-claude`"}, &format!("`{name}`"))
             .replace(if codex {"/mnt/case/home/.codex-work/sessions/2026/09/02/rollout-2026-09-02T14-00-00-019f0000-0000-7000-8000-000000000001.jsonl"} else {"/mnt/case/home/.claude/projects/-mnt-case-work-repo/00000000-0000-4000-8000-000000000101.jsonl"}, self.path.to_str().unwrap())
             .replace("`/mnt/case/work/repo`", &format!("`{}`", self.root.display()))
-            .replace("/mnt/case/work/repo/docs/superpowers/plans/2026-09-02-grupo-pareamento-fim-sessao.md", self.root.join("docs/superpowers/plans/2026-09-02-grupo-pareamento-fim-sessao.md").to_str().unwrap())
-            .replace("/mnt/case/work/repo/docs/superpowers/specs/2026-09-03-bastao-v2-design.md", self.root.join("docs/superpowers/specs/2026-09-03-bastao-v2-design.md").to_str().unwrap())
+            .replace("/mnt/case/work/repo/docs/superpowers/plans/2026-09-02-grupo-pareamento-fim-sessao.md", &format!("{root}/docs/superpowers/plans/2026-09-02-grupo-pareamento-fim-sessao.md"))
+            .replace("/mnt/case/work/repo/docs/superpowers/specs/2026-09-03-bastao-v2-design.md", &format!("{root}/docs/superpowers/specs/2026-09-03-bastao-v2-design.md"))
+            // A seção do plano cita o caminho do JSON cru; a de arquivos usa os eventos já decodificados.
+            .replace(&format!("— `{root}/docs/"), &format!("— `{raw_root}/docs/"))
     }
     fn url(&self, tail: &str) -> String { format!("http://{}/api/sessions/{tail}", self.fixture.addr) }
     fn archived(&self, codex: bool) -> String {
@@ -877,7 +885,7 @@ async fn b01_next_pi_omp_keep_full_tools_failures_and_stream_hook_context() {
         let r = client().get(format!("{}?project=-&session_id={sid}&provider={provider}",h.url("morta/bastao"))).bearer_auth(OWNER).send().await.unwrap();
         assert_eq!(r.status(),200);
         let md = r.text().await.unwrap();
-        assert!(md.contains(&format!("`{}`",h.root.join("summary.txt").display())));
+        assert!(md.contains(&format!("`{}/summary.txt`",h.root.display())));
         assert!(md.contains("- Ferramentas que FALHARAM (as mais recentes):\n  - `write`: permission denied"),"{provider}: {md}");
         assert!(md.contains("pedido sem prefixo") && !md.contains("contexto do hook"));
         h.no_python();
