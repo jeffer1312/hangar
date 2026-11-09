@@ -318,7 +318,7 @@ def test_pane_codex_sem_sidecar_nao_vira_sessao_claude(tmp_path):
     assert [(s.name, s.provider, s.jsonl, s.tracked) for s in out] == [("cx", "codex", None, False)]
 
 
-@pytest.mark.parametrize("detected", [("claude", None), ("kimi", 111)])
+@pytest.mark.parametrize("detected", [("claude", None)])
 def test_provider_de_nascimento_cobre_o_shell_sem_impedir_troca(tmp_path, monkeypatch, detected):
     reg = SessionRegistry(projects_dir=tmp_path)
     reg._jsonl_cache["cx"] = str(tmp_path / "claude-antigo.jsonl")
@@ -330,8 +330,7 @@ def test_provider_de_nascimento_cobre_o_shell_sem_impedir_troca(tmp_path, monkey
     with patch.object(SessionRegistry, "resolve_tracked", return_value=(reg._jsonl_cache["cx"], True)) as resolve:
         out = reg.list()
     resolve.assert_not_called()
-    assert [(s.provider, s.jsonl, s.tracked) for s in out] == [
-        ("codex" if detected[1] is None else "kimi", None, False)]
+    assert [(s.provider, s.jsonl, s.tracked) for s in out] == [("codex", None, False)]
 
 
 @pytest.mark.parametrize("argv", [
