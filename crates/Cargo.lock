@@ -1699,6 +1699,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-plugins"
+version = "0.1.0"
+dependencies = [
+ "hangar-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "hangar-psmux"
 version = "0.1.0"
 dependencies = [
