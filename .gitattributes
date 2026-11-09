@@ -17,3 +17,5 @@ backend/tests/fixtures/contract/transcripts/** -text
 backend/tests/fixtures/contract/queue/** -text
 # HOME de mentira da busca e do Arquivo: o índice grava tamanho e offset em bytes de cada transcript.
 crates/hangar-server/tests/fixtures/search/** -text
+# Dossiês literais do bastão: conteúdo e Content-Length são comparados byte a byte.
+crates/hangar-server/tests/fixtures/baton/*-expected.txt text eol=lf

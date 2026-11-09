@@ -21,6 +21,12 @@ fn git(root: &Path, args: &[&str]) -> std::process::Output {
     out
 }
 
+fn relocate_json_path(raw: &str, original: &str, path: &Path) -> String {
+    // A substituição ocorre dentro de strings JSON, preservando os demais bytes da fixture.
+    let encoded = serde_json::to_string(path.to_str().unwrap()).unwrap();
+    raw.replace(original, &encoded[1..encoded.len() - 1])
+}
+
 struct Origin {
     _dir: tempfile::TempDir,
     root: PathBuf,
@@ -44,7 +50,7 @@ impl Origin {
             std::fs::create_dir_all(account.join("sessions/2026/09/02")).unwrap();
             std::fs::write(account.join(".hangar-codex-conta"), r#"{"version":1,"id":"work"}"#).unwrap();
             let path = account.join(format!("sessions/2026/09/02/rollout-2026-09-02T14-00-00-{CODEX_ID}.jsonl"));
-            std::fs::write(&path, include_str!("../fixtures/baton/codex.jsonl").replace("/tmp/proj", root.to_str().unwrap())).unwrap();
+            std::fs::write(&path, relocate_json_path(include_str!("../fixtures/baton/codex.jsonl"), "/tmp/proj", &root)).unwrap();
             git(&root, &["commit", "-q", "--allow-empty", "-m", "um"]);
             path
         } else {
@@ -62,7 +68,7 @@ impl Origin {
             std::fs::write(&plan, text + "\n").unwrap();
             std::fs::write(root.join("outro.txt"), "outro\n").unwrap();
             let path = home.join(format!(".claude/projects/-mnt-case-work-repo/{}.jsonl", if live {LIVE_ID} else {CLAUDE_ID}));
-            let relocated = include_str!("../fixtures/baton/claude.jsonl").replace("/repo", root.to_str().unwrap());
+            let relocated = relocate_json_path(include_str!("../fixtures/baton/claude.jsonl"), "/repo", &root);
             let mut rows = String::new();
             for raw in relocated.lines() {
                 let mut value: Value = serde_json::from_str(raw).unwrap();
@@ -864,7 +870,7 @@ async fn b01_next_pi_omp_keep_full_tools_failures_and_stream_hook_context() {
         let sid = "45ce9c2d-48d4-491e-8ff3-672bb10a69b6";
         let directory = h.home.join(if provider=="pi" {".pi/agent/sessions/wd"} else {".omp/agent/sessions/wd"});
         std::fs::create_dir_all(&directory).unwrap();
-        let mut raw = include_str!("../fixtures/baton/pi.jsonl").replace("/work/demo",h.root.to_str().unwrap());
+        let mut raw = relocate_json_path(include_str!("../fixtures/baton/pi.jsonl"), "/work/demo", &h.root);
         raw += &format!("{}\n{}\n",json!({"type":"message","id":"hook-user","message":{"role":"user","timestamp":1767225620000u64,"content":[{"type":"text","text":"contexto do hook\npedido sem prefixo"}]}}),
             json!({"type":"custom_message","customType":"claude-hook-context","parentId":"hook-user","content":"contexto do hook"}));
         std::fs::write(directory.join(format!("2026-01-01_{sid}.jsonl")),raw).unwrap();
@@ -1398,7 +1404,7 @@ fn b01_manual_kickoff_without_origin_account_or_model_keeps_the_fallback_line() 
         let h=Origin::new(false,false).await;let root=h.home.parent().unwrap();
         let sid="45ce9c2d-48d4-491e-8ff3-672bb10a69b6";let directory=h.home.join(".pi/agent/sessions/wd");
         std::fs::create_dir_all(&directory).unwrap();
-        std::fs::write(directory.join(format!("2026-01-01_{sid}.jsonl")),include_str!("../fixtures/baton/pi.jsonl").replace("/work/demo",h.root.to_str().unwrap())).unwrap();
+        std::fs::write(directory.join(format!("2026-01-01_{sid}.jsonl")),relocate_json_path(include_str!("../fixtures/baton/pi.jsonl"), "/work/demo", &h.root)).unwrap();
         let response=client().post(h.url("origem-pi/bastao")).bearer_auth(OWNER).json(&json!({"name":"cc2","provider":"claude","headless":false,
             "project":"-","session_id":sid,"origem_provider":"pi","resumo_por_modelo":false})).send().await.unwrap();
         let status=response.status();let body=response.json::<Value>().await.unwrap();
@@ -1620,7 +1626,7 @@ fn b01_rewrite_public_uses_explicit_origin_and_keeps_original_on_failure() {
         }
         let codex=h.home.join(".codex-work");std::fs::create_dir_all(codex.join("sessions")).unwrap();
         std::fs::write(codex.join(".hangar-codex-conta"),r#"{"version":1,"id":"work"}"#).unwrap();
-        std::fs::write(codex.join(format!("sessions/rollout-fixture-{CODEX_ID}.jsonl")),include_str!("../fixtures/baton/codex.jsonl").replace("/tmp/proj",h.root.to_str().unwrap())).unwrap();
+        std::fs::write(codex.join(format!("sessions/rollout-fixture-{CODEX_ID}.jsonl")),relocate_json_path(include_str!("../fixtures/baton/codex.jsonl"), "/tmp/proj", &h.root)).unwrap();
         let calls=std::fs::read(root.join("rewrite-calls")).unwrap();
         let response=c.post(h.url("morta/bastao")).bearer_auth(OWNER).json(&json!({"name":"no-claude","provider":"claude","config_dir":target,
             "project":"-","session_id":CODEX_ID,"origem_provider":"codex","resumo_por_modelo":true})).send().await.unwrap();
