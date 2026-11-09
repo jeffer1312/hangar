@@ -50,7 +50,8 @@ impl Origin {
             let account = home.join(".codex-work");
             std::fs::create_dir_all(account.join("sessions/2026/09/02")).unwrap();
             std::fs::write(account.join(".hangar-codex-conta"), r#"{"version":1,"id":"work"}"#).unwrap();
-            let path = account.join(format!("sessions/2026/09/02/rollout-2026-09-02T14-00-00-{CODEX_ID}.jsonl"));
+            let path = account.join("sessions").join("2026").join("09").join("02")
+                .join(format!("rollout-2026-09-02T14-00-00-{CODEX_ID}.jsonl"));
             std::fs::write(&path, relocate_json_path(include_str!("../fixtures/baton/codex.jsonl"), "/tmp/proj", &root)).unwrap();
             git(&root, &["commit", "-q", "--allow-empty", "-m", "um"]);
             path
@@ -68,7 +69,8 @@ impl Origin {
             git(&root, &["commit", "-q", "-m", "Inicial"]);
             std::fs::write(&plan, text + "\n").unwrap();
             std::fs::write(root.join("outro.txt"), "outro\n").unwrap();
-            let path = home.join(format!(".claude/projects/-mnt-case-work-repo/{}.jsonl", if live {LIVE_ID} else {CLAUDE_ID}));
+            let path = home.join(".claude").join("projects").join("-mnt-case-work-repo")
+                .join(format!("{}.jsonl", if live {LIVE_ID} else {CLAUDE_ID}));
             let relocated = relocate_json_path(include_str!("../fixtures/baton/claude.jsonl"), "/repo", &root);
             let mut rows = String::new();
             for raw in relocated.lines() {
