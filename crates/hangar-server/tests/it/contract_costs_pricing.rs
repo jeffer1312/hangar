@@ -468,6 +468,33 @@ mod refresh {
         }
     }
 
+    /// Resposta acima do teto é recusada antes de ser juntada, e o cache fica.
+    #[tokio::test]
+    async fn oversized_answer_keeps_the_cache() {
+        let fake = fake(Mode::Strict).await;
+        let dir = tempfile::tempdir().unwrap();
+        let log = Log::default();
+        let writer = log.clone();
+        let _guard = tracing::subscriber::set_default(tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish());
+        PricingRefresh::new(dir.path().to_owned(), fake.url.clone()).with_max_body(1024).run().await;
+        assert_eq!(fake.seen.lock().unwrap().len(), 1);
+        assert!(!dir.path().join("models.dev.json").exists());
+        assert!(log.text().contains("resposta maior que 1024 bytes"), "{}", log.text());
+    }
+
+    /// A subida não baixa nada com `CP_PRICING_OFFLINE=1`; sem ele, baixa uma vez.
+    #[tokio::test]
+    async fn boot_task_follows_the_offline_switch() {
+        let fake = fake(Mode::Strict).await;
+        let dir = tempfile::tempdir().unwrap();
+        assert!(PricingRefresh::start(dir.path().to_owned(), &fake.url, true).is_none());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(fake.seen.lock().unwrap().is_empty());
+        PricingRefresh::start(dir.path().to_owned(), &fake.url, false).unwrap().await.unwrap();
+        assert_eq!(fake.seen.lock().unwrap().len(), 1);
+        assert_eq!(std::fs::read_to_string(dir.path().join("models.dev.json")).unwrap(), python_cache());
+    }
+
     proptest::proptest! {
         /// O catálogo vem da rede: nada nele derruba o leitor nem o recorte.
         #[test]

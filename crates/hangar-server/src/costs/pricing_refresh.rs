@@ -15,6 +15,8 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 const CACHE: &str = "models.dev.json";
 /// O models.dev responde 403 a quem não diz quem é.
 const USER_AGENT: &str = "hangar/pricing";
+/// O catálogo inteiro tem uns 3 MB; acima disto a resposta não é ele.
+pub const MAX_BODY: usize = 32 << 20;
 
 /// Catálogo cru do models.dev para o mapa enxuto modelo -> tarifa, como o `slim()` do Python. `Err`:
 /// formato que o Python também recusava (lista no lugar de objeto, número que não é número).
@@ -75,11 +77,26 @@ pub struct PricingRefresh {
     dir: PathBuf,
     url: String,
     attempted: Mutex<Option<SystemTime>>,
+    max_body: usize,
 }
 
 impl PricingRefresh {
     pub fn new(dir: PathBuf, url: impl Into<String>) -> Self {
-        Self { dir, url: url.into(), attempted: Mutex::new(None) }
+        Self { dir, url: url.into(), attempted: Mutex::new(None), max_body: MAX_BODY }
+    }
+
+    /// Teto da resposta, para provar o corte sem servir 32 MB.
+    #[doc(hidden)]
+    pub fn with_max_body(mut self, max_body: usize) -> Self {
+        self.max_body = max_body;
+        self
+    }
+
+    /// A tarefa única da subida; `offline` não baixa nada.
+    pub fn start(dir: PathBuf, url: &str, offline: bool) -> Option<tokio::task::JoinHandle<()>> {
+        if offline { return None; }
+        let refresh = Self::new(dir, url);
+        Some(tokio::spawn(async move { refresh.run().await }))
     }
 
     /// Só `CP_PRICING_OFFLINE=1` exato desliga: máquina sem saída para a internet fica no snapshot.
@@ -94,21 +111,22 @@ impl PricingRefresh {
     pub async fn run(&self) {
         let target = self.dir.join(CACHE);
         let now = SystemTime::now();
+        let modified = tokio::fs::metadata(&target).await.and_then(|m| m.modified()).ok();
         {
             let mut attempted = self.attempted.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if attempted.is_some_and(|at| now.duration_since(at).unwrap_or_default() < TTL) {
                 return;
             }
-            let modified = std::fs::metadata(&target).and_then(|m| m.modified()).ok();
             if modified.is_some_and(|at| now.duration_since(at).unwrap_or_default() < TTL) {
                 return;
             }
             *attempted = Some(now);
         }
-        let raw = match self.download(&target).await {
+        let raw = match self.download(modified).await {
             Download::Fresh(raw) => raw,
             Download::NotModified => {
-                if let Err(error) = touch(&target) { tracing::warn!("tarifas: não deu para marcar o cache como conferido: {error}"); }
+                let path = target.clone();
+                if let Err(error) = blocking(move || touch(&path)).await { tracing::warn!("tarifas: não deu para marcar o cache como conferido: {error}"); }
                 return;
             }
             Download::Refused(status) => return tracing::warn!("tarifas: models.dev respondeu {status}"),
@@ -125,20 +143,20 @@ impl PricingRefresh {
         }
         let count = models.len();
         let text = hangar_core::pycompat::pyjson::dumps_unicode(&json!({"modelos": models}), false);
-        if let Err(error) = write_atomic(&target, text.as_bytes()) {
+        if let Err(error) = blocking(move || write_atomic(&target, text.as_bytes())).await {
             return tracing::warn!("tarifas: não deu para gravar o cache: {error}");
         }
         tracing::info!("tarifas: {count} modelos atualizados do models.dev");
     }
 
-    async fn download(&self, target: &Path) -> Download {
+    async fn download(&self, modified: Option<SystemTime>) -> Download {
         let client = match hangar_core::net::http_client().timeout(TIMEOUT).build() {
             Ok(client) => client,
             Err(error) => return Download::Failed(error.to_string()),
         };
         let mut request = client.get(&self.url).header(reqwest::header::USER_AGENT, USER_AGENT);
         // Com cache, o caso normal vira 304 em vez de 3 MB.
-        if let Ok(modified) = std::fs::metadata(target).and_then(|m| m.modified()) {
+        if let Some(modified) = modified {
             let since = chrono::DateTime::<chrono::Utc>::from(modified).format("%a, %d %b %Y %H:%M:%S GMT").to_string();
             request = request.header(reqwest::header::IF_MODIFIED_SINCE, since);
         }
@@ -151,11 +169,28 @@ impl PricingRefresh {
             status if !(200..300).contains(&status) => return Download::Refused(status),
             _ => {}
         }
-        match response.bytes().await {
+        match read_capped(response, self.max_body).await {
             Ok(body) => serde_json::from_slice(&body).map_or_else(|error| Download::Failed(error.to_string()), Download::Fresh),
-            Err(error) => Download::Failed(error.to_string()),
+            Err(error) => Download::Failed(error),
         }
     }
+}
+
+/// O corpo inteiro, recusado ao passar de `max` bytes, antes de juntar tudo na memória.
+async fn read_capped(mut response: reqwest::Response, max: usize) -> Result<Vec<u8>, String> {
+    let too_big = || format!("resposta maior que {max} bytes");
+    if response.content_length().is_some_and(|length| length > max as u64) { return Err(too_big()); }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
+        if body.len() + chunk.len() > max { return Err(too_big()); }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+/// IO de arquivo fora das tarefas do runtime.
+async fn blocking<T: Send + 'static>(work: impl FnOnce() -> std::io::Result<T> + Send + 'static) -> std::io::Result<T> {
+    tokio::task::spawn_blocking(work).await.unwrap_or_else(|error| Err(std::io::Error::other(error)))
 }
 
 enum Download {
