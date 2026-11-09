@@ -353,11 +353,12 @@ async fn history_without_owner_or_supported_provider_goes_to_python() {
 
     let r = client().get(format!("{url}?limit=abc")).bearer_auth(OWNER).send().await.unwrap();
     assert_eq!(r.text().await.unwrap(), "from-python");
+    assert_eq!(fake.info_calls(), 1, "a validação do limite resolve primeiro o provedor");
 
     fake.set_info(json!({"provider": "unsupported", "jsonl": jsonl, "session_key": "sess-j", "history": {}}));
     let r = client().get(&url).bearer_auth(OWNER).send().await.unwrap();
     assert_eq!(r.text().await.unwrap(), "from-python");
-    assert_eq!(fake.info_calls(), 1, "o dono vindo do loopback consulta a rota interna");
+    assert_eq!(fake.info_calls(), 2, "cada pedido do dono resolve o provedor antes do repasse");
 }
 
 #[tokio::test]
