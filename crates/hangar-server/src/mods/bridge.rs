@@ -227,7 +227,8 @@ struct ScrollBody { #[serde(rename = "requestId")] request_id: String, offset: u
     #[serde(rename = "bodyRows")] _body_rows: u64, #[serde(rename = "contentRows")] _content_rows: u64 }
 
 fn ok() -> Response { reply(None, StatusCode::OK, json!({"ok": true})) }
-fn forbidden() -> Response { reply(None, StatusCode::FORBIDDEN, json!({"detail": "token do plugin inválido"})) }
+/// O texto do Python, sem acento: o plugin e quem lê o log comparam por ele.
+fn forbidden() -> Response { reply(None, StatusCode::FORBIDDEN, json!({"detail": "token do plugin invalido"})) }
 /// Campo opcional: ausente, ou dentro do limite.
 fn fits_opt(text: &Option<String>, max: usize) -> bool { text.as_deref().is_none_or(|text| fits(text, max)) }
 

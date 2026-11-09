@@ -28,6 +28,14 @@ async fn json_of(response: reqwest::Response) -> Value {
     serde_json::from_str(&response.text().await.unwrap()).unwrap()
 }
 
+/// O 403 da ponte com o texto do Python (contract/r1-mods `bridge_*_403`), sem acento.
+fn denied() -> Value { json!({"detail": "token do plugin invalido"}) }
+
+async fn assert_denied(response: reqwest::Response) {
+    assert_eq!(response.status().as_u16(), 403);
+    assert_eq!(json_of(response).await, denied());
+}
+
 /// O mod de um clique do app: o plugin do Hangar casa o press e manda a URL, como faz no `claude -p`
 /// (Task 12) e fará na sessão com terminal da fase 3. Implementado direto no tipo local (A2): o `call`
 /// só copia o endereço.
@@ -74,7 +82,7 @@ async fn bridge_checks_token_and_url_and_passes_other_sessions() {
     let (python, server, mods, _plugin) = setup().await;
     let base = format!("http://{server}/api/plugin");
     let wrong = post(format!("{base}/press-start"), json!({"sessao": "mods-s", "token": "x", "requestId": "a", "element": "b"}), false).await;
-    assert_eq!(wrong.status().as_u16(), 403);
+    assert_denied(wrong).await;
     let attempt = mods.begin_click("mods-s", "a", "vitrine", "b");
     let ftp = post(format!("{base}/opened"), json!({"sessao": "mods-s", "token": mint(OWNER, "mods-s"), "attempt": attempt, "url": "ftp://x"}), false).await;
     assert_eq!(ftp.status().as_u16(), 400);
@@ -82,7 +90,7 @@ async fn bridge_checks_token_and_url_and_passes_other_sessions() {
     assert_eq!(late.status().as_u16(), 409, "fora do clique o mod abre no servidor");
     // Sessão fora do Rust com token que não é o dela: 403 daqui, como o Python.
     let other = post(format!("{base}/press-start"), json!({"sessao": "com-terminal", "token": "t", "requestId": "a", "element": "b"}), false).await;
-    assert_eq!(other.status().as_u16(), 403);
+    assert_denied(other).await;
     assert_eq!(python.hits_to("/api/plugin/press-start"), 0);
 }
 
@@ -93,7 +101,7 @@ async fn opened_checks_token_case_size_and_passes_invalid_bodies() {
     let token = mint(OWNER, "mods-s");
     let attempt = mods.begin_click("mods-s", "a", "vitrine", "b");
     let wrong = post(format!("{base}/opened"), json!({"sessao": "mods-s", "token": "x", "attempt": attempt, "url": "https://x"}), false).await;
-    assert_eq!(wrong.status().as_u16(), 403);
+    assert_denied(wrong).await;
     let empty = post(format!("{base}/opened"), json!({"sessao": "mods-s", "token": token, "attempt": attempt, "url": ""}), false).await;
     assert_eq!(empty.status().as_u16(), 400, "URL vazia não tem limite no Pydantic: é o esquema que recusa");
     // Mais de 8192 bytes, menos de 8192 caracteres: o teto conta caracteres, como o Pydantic do Python.
@@ -129,7 +137,7 @@ async fn bridge_applies_the_python_limits_before_the_token() {
     // No limite exato, contado em caracteres e não em bytes, passa da validação e cai no token.
     let edge = post(format!("{base}/press-start"), json!({"sessao": "mods-s", "token": "x",
         "requestId": "é".repeat(64), "element": "é".repeat(256)}), false).await;
-    assert_eq!(edge.status().as_u16(), 403);
+    assert_denied(edge).await;
 }
 
 #[tokio::test]
@@ -190,7 +198,7 @@ async fn token_without_a_key_goes_by_the_current_name_and_unknown_keys_get_the_p
     let unknown = post(format!("{base}/press-start"), json!({"sessao": "x", "token": mint_keyed(OWNER, "x", "outra"), "requestId": "a", "element": "b"}), false).await;
     assert_eq!(json_of(unknown).await, not_from_app);
     let forged = post(format!("{base}/press-start"), json!({"sessao": "x", "token": "mods-s.00", "requestId": "a", "element": "b"}), false).await;
-    assert_eq!(forged.status().as_u16(), 403);
+    assert_denied(forged).await;
     assert_eq!(python.hits_to("/api/plugin/press-start"), 0);
 }
 
@@ -210,19 +218,19 @@ async fn bridge_without_a_rust_session_answers_like_python() {
     let cases: Vec<(&str, Value, bool, u16, Option<Value>)> = vec![
         ("pressed", press(&token), false, 200, Some(json!({"ok": true}))),
         ("pressed", press(&token), true, 200, Some(json!({"ok": true}))),
-        ("pressed", press(wrong), false, 403, None),
-        ("pressed", json!({"sessao": "s2", "token": &token, "requestId": "r", "element": "e"}), false, 403, None),
+        ("pressed", press(wrong), false, 403, Some(denied())),
+        ("pressed", json!({"sessao": "s2", "token": &token, "requestId": "r", "element": "e"}), false, 403, Some(denied())),
         ("press-start", press(&token), false, 200, Some(json!({"fromApp": false, "attempt": null}))),
-        ("press-start", press(wrong), false, 403, None),
+        ("press-start", press(wrong), false, 403, Some(denied())),
         ("copied", copied(&token), false, 409, Some(clicked.clone())),
-        ("copied", copied(wrong), false, 403, None),
+        ("copied", copied(wrong), false, 403, Some(denied())),
         ("opened", opened(&token, "http://example.com/x"), false, 409, Some(clicked.clone())),
         ("opened", opened(&token, "HTTPS://example.com"), false, 409, Some(clicked)),
         ("opened", opened(&token, "ftp://example.com/f"), false, 400, Some(only_http.clone())),
         ("opened", opened(&token, "javascript:alert(1)"), false, 400, Some(only_http.clone())),
         ("opened", opened(&token, "/x"), false, 400, Some(only_http)),
-        ("opened", opened(wrong, "http://x"), false, 403, None),
-        ("opened", opened(wrong, "ftp://x"), false, 403, None),
+        ("opened", opened(wrong, "http://x"), false, 403, Some(denied())),
+        ("opened", opened(wrong, "ftp://x"), false, 403, Some(denied())),
     ];
     for (route, body, owner, status, expected) in cases {
         let response = post(format!("{base}/{route}"), body.clone(), owner).await;
