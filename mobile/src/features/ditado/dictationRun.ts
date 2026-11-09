@@ -42,27 +42,46 @@ function notify(serverId: string, name: string): void {
   chatStore(serverId, name).use.setState((s) => ({ draftUpdate: s.draftUpdate + 1 }));
 }
 
-// O diário do servidor só aceita campos conhecidos (`_CAMPOS` do Python): os tempos vão no `detalhe`.
-function recordTiming(server: Server, stoppedAt: number, fileAt: number, uploadMs: number, transcribeMs: number,
-  code?: string, warned = false): void {
+// `save`: o caminho do áudio subido gravado no aparelho; `finish`: o texto gravado no rascunho.
+type Stage = 'check' | 'upload' | 'save' | 'transcribe' | 'finish';
+const STAGES: Stage[] = ['check', 'upload', 'save', 'transcribe', 'finish'];
+
+// Etapas contíguas: a soma delas com a parada → arquivo é o total, e a falha cai na etapa em curso.
+function stageClock() {
+  const ms: Record<Stage, number> = { check: 0, upload: 0, save: 0, transcribe: 0, finish: 0 };
+  let stage: Stage = 'check';
+  let at = Date.now();
+  const close = () => { const now = Date.now(); ms[stage] += now - at; at = now; };
+  return {
+    ms, start: at,
+    get stage() { return stage; },
+    enter(next: Stage) { close(); stage = next; },
+    close,
+  };
+}
+
+// O diário do servidor só aceita campos conhecidos (`_CAMPOS` do Python): os tempos vão no `detalhe`. `motivo`
+// diz se a parada foi um toque ou o silêncio, o teto ou a tela escondida.
+function recordTiming(server: Server, stoppedAt: number, clock: ReturnType<typeof stageClock>, motivo: string,
+  failure?: { code: string }, warned = false): void {
+  clock.close();
   const total = Date.now() - stoppedAt;
+  const steps = STAGES.map((s) => `${s}_ms=${clock.ms[s]}`).join(' ');
   registrarDiag({
-    evento: 'dictation.client_timing', nivel: code ? 'erro' : warned ? 'aviso' : 'ok', ...(code ? { codigo: code } : {}), ms: total,
-    detalhe: `stop_to_file_ms=${fileAt - stoppedAt} upload_ms=${uploadMs} transcribe_ms=${transcribeMs} total_ms=${total}`,
+    evento: 'dictation.client_timing', nivel: failure ? 'erro' : warned ? 'aviso' : 'ok', ...(failure ? { codigo: failure.code } : {}), ms: total,
+    detalhe: `stop_to_file_ms=${clock.start - stoppedAt} ${steps} total_ms=${total} motivo=${motivo}${failure ? ` etapa=${clock.stage}` : ''}`,
   }, server.invite ? undefined : server.baseUrl);
 }
 
 /**
  * Ditado preso à conversa de origem, fora do ciclo de vida do Composer: trocar de conversa no meio
  * não descarta o resultado. Quem chama já gravou `voice`. `check` roda antes da rede; `isActive`, na
- * chegada, decide se o texto entra no campo aberto ou fica `ready` para a montagem. `stoppedAt`: o
- * toque em parar da gravação nova, para medir cada etapa até o texto.
+ * chegada, decide se o texto entra no campo aberto ou fica `ready` para a montagem. `stoppedAt`: a
+ * parada da gravação nova (toque, silêncio, teto ou tela escondida, em `voice.motivo`), para medir cada etapa.
  */
 export async function runDictation(server: Server, serverId: string, name: string, voice: DictationDraft,
   source: DictationSource, opts: { isActive: () => boolean; check?: () => void; stoppedAt?: number }): Promise<DictationOutcome> {
-  const fileAt = Date.now();
-  let uploadMs = 0;
-  let transcribeStarted: number | undefined;
+  const clock = stageClock();
   setDictationInFlight(serverId, name, voice.id, true);
   notify(serverId, name);
   try {
@@ -71,17 +90,17 @@ export async function runDictation(server: Server, serverId: string, name: strin
     let uploaded = '';
     if ('file' in source) {
       // Sobe e guarda o caminho antes de transcrever: transcrição que cai não custa outra cópia.
+      clock.enter('upload');
       ({ path: uploaded } = await uploadFileForServer(server, name, source.file, { audioOnly: true }));
-      uploadMs = Date.now() - fileAt;
+      clock.enter('save');
       const pending = readDictation(serverId, name);
       if (pending?.id === voice.id) writeDictation(serverId, name, { ...pending, serverPath: uploaded });
       arquivo = uploadName(uploaded);
     } else {
       arquivo = source.arquivo;
     }
-    const started = transcribeStarted = Date.now();
+    clock.enter('transcribe');
     const res = await transcribeUploadedForServer(server, name, arquivo, { limpar: true, estilo: voice.estilo });
-    const transcribeMs = Date.now() - started;
     const text = res.text.trim();
     if (!text) throw new Error(m.composer_transcricao_vazia());
     const raw = res.raw?.trim() ?? '';
@@ -89,17 +108,15 @@ export async function runDictation(server: Server, serverId: string, name: strin
     // O nome solto do "de novo" não é caminho: sem `path` na resposta, fica o guardado.
     const path = res.path || uploaded || voice.serverPath || arquivo;
     const applied = res.estilo_aplicado ?? voice.estilo;
+    clock.enter('finish');
     const completed = finishDictation(serverId, name, voice.id,
       { text, raw, issue: aviso, serverPath: path, applied }, opts.isActive());
-    if (opts.stoppedAt !== undefined) recordTiming(server, opts.stoppedAt, fileAt, uploadMs, transcribeMs, undefined, !!aviso);
+    if (opts.stoppedAt !== undefined) recordTiming(server, opts.stoppedAt, clock, voice.motivo, undefined, !!aviso);
     return { completed, text, raw, aviso, path, applied };
   } catch (e) {
     const detail = e instanceof Error ? e.message : m.composer_falha_transcricao();
     if (opts.stoppedAt !== undefined) {
-      // Falha antes da transcrição: o tempo até ela é da subida.
-      const now = Date.now();
-      const [up, tr] = transcribeStarted === undefined ? [now - fileAt, 0] : [uploadMs, now - transcribeStarted];
-      recordTiming(server, opts.stoppedAt, fileAt, up, tr, /^(\d{3}):/.exec(detail)?.[1] ?? 'failed');
+      recordTiming(server, opts.stoppedAt, clock, voice.motivo, { code: /^(\d{3}):/.exec(detail)?.[1] ?? 'failed' });
     }
     const issue = /^(501|503):/.test(detail) ? `${m.composer_ditado_indisponivel()}: ${detail}` : detail;
     let lost = false;

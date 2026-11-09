@@ -74,13 +74,40 @@ describe('dictation.client_timing', () => {
   });
   afterEach(() => { vi.useRealTimers(); });
 
-  it('mede parada → arquivo, subida, transcrição e total até o texto, sem texto nem caminho', async () => {
-    core.upload.mockImplementationOnce(async () => { vi.setSystemTime(10_200); return { path: '/up/sess/d.m4a' }; });
-    core.transcribe.mockImplementationOnce(async () => { vi.setSystemTime(11_200); return { path: '/up/sess/d.m4a', text: 'olá', raw: 'olá' }; });
+  it('mede cada etapa até o texto (conferência, subida, gravação, transcrição, fechamento) e o motivo da parada', async () => {
+    core.upload.mockImplementationOnce(async () => { vi.setSystemTime(10_250); return { path: '/up/sess/d.m4a' }; });
+    core.transcribe.mockImplementationOnce(async () => { vi.setSystemTime(11_250); return { path: '/up/sess/d.m4a', text: 'olá', raw: 'olá' }; });
+    writeDictation('s1', 'sess', voice({ motivo: 'silencio' }));
+    await runDictation(server, 's1', 'sess', voice({ motivo: 'silencio' }), { file: new File(['a'], 'd.m4a') }, {
+      check: () => vi.setSystemTime(10_050),
+      isActive: () => { vi.setSystemTime(11_330); return false; },
+      stoppedAt: 9_700,
+    });
+    expect(core.diag).toHaveBeenCalledExactlyOnceWith({ evento: 'dictation.client_timing', nivel: 'ok', ms: 1630,
+      detalhe: 'stop_to_file_ms=300 check_ms=50 upload_ms=200 save_ms=0 transcribe_ms=1000 finish_ms=80 total_ms=1630 motivo=silencio' },
+    'https://a.test');
+  });
+
+  it('a falha diz em que etapa parou: o tempo antes da subida não vira subida', async () => {
+    core.upload.mockImplementationOnce(async () => { vi.setSystemTime(10_300); throw new Error('rede caiu'); });
     writeDictation('s1', 'sess', voice());
-    await runDictation(server, 's1', 'sess', voice(), { file: new File(['a'], 'd.m4a') }, { isActive: () => false, stoppedAt: 9_700 });
-    expect(core.diag).toHaveBeenCalledExactlyOnceWith({ evento: 'dictation.client_timing', nivel: 'ok', ms: 1500,
-      detalhe: 'stop_to_file_ms=300 upload_ms=200 transcribe_ms=1000 total_ms=1500' }, 'https://a.test');
+    await expect(runDictation(server, 's1', 'sess', voice(), { file: new File(['a'], 'd.m4a') }, {
+      check: () => vi.setSystemTime(10_100), isActive: () => false, stoppedAt: 10_000,
+    })).rejects.toThrow();
+    expect(core.diag).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ nivel: 'erro', codigo: 'failed',
+      detalhe: 'stop_to_file_ms=0 check_ms=100 upload_ms=200 save_ms=0 transcribe_ms=0 finish_ms=0 total_ms=300 motivo=botao etapa=upload' }),
+    'https://a.test');
+  });
+
+  it('a conferência que recusa antes da rede fica na etapa check', async () => {
+    writeDictation('s1', 'sess', voice());
+    await expect(runDictation(server, 's1', 'sess', voice(), { file: new File(['a'], 'd.m4a') }, {
+      check: () => { vi.setSystemTime(10_020); throw new Error('outra conversa'); }, isActive: () => false, stoppedAt: 10_000,
+    })).rejects.toThrow();
+    expect(core.upload).not.toHaveBeenCalled();
+    expect(core.diag).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      detalhe: 'stop_to_file_ms=0 check_ms=20 upload_ms=0 save_ms=0 transcribe_ms=0 finish_ms=0 total_ms=20 motivo=botao etapa=check' }),
+    'https://a.test');
   });
 
   it('texto que voltou cru com aviso sai como aviso, igual ao servidor', async () => {
@@ -98,7 +125,8 @@ describe('dictation.client_timing', () => {
     await expect(runDictation(server, 's1', 'sess', voice(), { file: new File(['a'], 'd.m4a') }, { isActive: () => false, stoppedAt: 9_900 }))
       .rejects.toThrow();
     expect(core.diag).toHaveBeenCalledExactlyOnceWith({ evento: 'dictation.client_timing', nivel: 'erro', codigo: '502', ms: 500,
-      detalhe: 'stop_to_file_ms=100 upload_ms=0 transcribe_ms=400 total_ms=500' }, 'https://a.test');
+      detalhe: 'stop_to_file_ms=100 check_ms=0 upload_ms=0 save_ms=0 transcribe_ms=400 finish_ms=0 total_ms=500 motivo=botao etapa=transcribe' },
+    'https://a.test');
     core.diag.mockReset();
     core.transcribe.mockResolvedValueOnce({ path: '/up/sess/d.m4a', text: 'ok' });
     await runDictation(server, 's1', 'sess', voice({ audio: null }), { arquivo: 'd.m4a' }, { isActive: () => false });
