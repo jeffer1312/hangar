@@ -72,6 +72,10 @@ fn main() -> std::process::ExitCode {
     if args.first().map(String::as_str) == Some("conta") {
         return hangar_server::accounts::claude_config::cli(&args[1..]);
     }
+    // Regrava o snapshot versionado de tarifas a partir do models.dev.
+    if args.first().map(String::as_str) == Some("pricing-snapshot") {
+        return hangar_server::costs::pricing_refresh::cli(&args[1..]);
+    }
     // Hook de SessionStart: só disco, nunca sobe o servidor.
     if args.first().map(String::as_str) == Some("pair-context") {
         return hangar_server::groups::context_cmd::run(&args);

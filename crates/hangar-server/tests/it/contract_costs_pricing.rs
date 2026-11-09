@@ -200,3 +200,287 @@ fn pricing_reload_invalidates_both_memos_and_keeps_alias_order() {
     assert_eq!(canonizar_provedor("moonshot"), "moonshotai");
     assert_eq!(canonizar_provedor("anthropic:abc"), "anthropic:abc");
 }
+
+// ── R1.6: download das tarifas (contract/r1-pricing) ─────────────────────────────────────────────
+
+mod refresh {
+    use hangar_server::costs::pricing_refresh::{PROVIDERS, PricingRefresh, excerpt, slim, versioned_text, write_snapshot};
+    use serde_json::{Value, json};
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    fn fixtures() -> PathBuf { Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/it/fixtures/pricing") }
+    fn recorte() -> Vec<u8> { std::fs::read(fixtures().join("models_dev_recorte.json")).unwrap() }
+    /// `~/.claude/.hangar-pricing/models.dev.json` que o Python gravou a partir do recorte (bg_no_cache_200).
+    fn python_cache() -> String { std::fs::read_to_string(fixtures().join("models_dev_cache.json")).unwrap() }
+    /// O cache antigo dos casos `stale`, com mtime 2026-01-01.
+    const SEEDED: &str = r#"{"modelos": {"seeded-model": {"provider": "anthropic", "input": 1, "output": 2, "cache_read": null, "cache_write": null}}}"#;
+    const JAN_1_2026: u64 = 1_767_225_600;
+
+    #[derive(Clone, Copy)]
+    enum Mode { Strict, Body(&'static str), Status(u16) }
+
+    /// models.dev falso em loopback; `Strict` imita o real: 403 sem o UA do Hangar, 304 com `If-Modified-Since`.
+    struct Fake { url: String, seen: Arc<Mutex<Vec<(Option<String>, Option<String>)>>> }
+
+    async fn fake(mode: Mode) -> Fake {
+        let seen: Arc<Mutex<Vec<(Option<String>, Option<String>)>>> = Arc::default();
+        let log = seen.clone();
+        let body = recorte();
+        let app = axum::Router::new().route("/api.json", axum::routing::get(move |headers: axum::http::HeaderMap| {
+            let (log, body) = (log.clone(), body.clone());
+            async move {
+                let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok()).map(str::to_owned);
+                let (agent, since) = (header("user-agent"), header("if-modified-since"));
+                log.lock().unwrap().push((agent.clone(), since.clone()));
+                let status = |code: u16| axum::http::StatusCode::from_u16(code).unwrap();
+                match mode {
+                    Mode::Strict if !agent.as_deref().is_some_and(|a| a.starts_with("hangar/")) => (status(403), Vec::new()),
+                    Mode::Strict if since.is_some() => (status(304), Vec::new()),
+                    Mode::Strict => (status(200), body),
+                    Mode::Body(text) => (status(200), text.as_bytes().to_vec()),
+                    Mode::Status(code) => (status(code), b"{}".to_vec()),
+                }
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/api.json", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        Fake { url, seen }
+    }
+
+    #[derive(Clone, Default)]
+    struct Log(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Log {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> { self.0.lock().unwrap().extend_from_slice(bytes); Ok(bytes.len()) }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+    impl Log {
+        fn text(&self) -> String { String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned() }
+    }
+
+    struct Run { dir: tempfile::TempDir, fake: Fake, log: Log }
+    impl Run {
+        fn cache(&self) -> PathBuf { self.dir.path().join("models.dev.json") }
+        fn text(&self) -> Option<String> { std::fs::read_to_string(self.cache()).ok() }
+        fn mtime(&self) -> Option<SystemTime> { std::fs::metadata(self.cache()).and_then(|m| m.modified()).ok() }
+        fn requests(&self) -> Vec<(Option<String>, Option<String>)> { self.fake.seen.lock().unwrap().clone() }
+    }
+
+    /// `seed`: cache antigo (2026-01-01) ou recém-gravado; `times`: chamadas no mesmo processo.
+    async fn run(mode: Mode, seed: Option<bool>, times: usize) -> Run {
+        let fake = fake(mode).await;
+        let dir = tempfile::tempdir().unwrap();
+        if let Some(stale) = seed {
+            let path = dir.path().join("models.dev.json");
+            std::fs::write(&path, SEEDED).unwrap();
+            if stale {
+                std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_modified(UNIX_EPOCH + Duration::from_secs(JAN_1_2026)).unwrap();
+            }
+        }
+        let log = Log::default();
+        let writer = log.clone();
+        let _guard = tracing::subscriber::set_default(tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish());
+        let refresh = PricingRefresh::new(dir.path().to_owned(), fake.url.clone());
+        for _ in 0..times { refresh.run().await; }
+        Run { dir, fake, log }
+    }
+
+    fn ua() -> Option<String> { Some("hangar/pricing".into()) }
+    fn jan_1() -> Option<String> { Some("Thu, 01 Jan 2026 00:00:00 GMT".into()) }
+
+    #[tokio::test]
+    async fn first_download_writes_the_slim_catalog_like_python() {
+        let r = run(Mode::Strict, None, 1).await;
+        assert_eq!(r.requests(), [(ua(), None)]);
+        assert_eq!(r.text().unwrap(), python_cache(), "mesmo arquivo, byte a byte");
+        #[cfg(unix)]
+        { use std::os::unix::fs::PermissionsExt; assert_eq!(std::fs::metadata(r.cache()).unwrap().permissions().mode() & 0o777, 0o644); }
+        assert_eq!(r.log.text().matches("tarifas: 80 modelos atualizados do models.dev").count(), 1, "{}", r.log.text());
+    }
+
+    #[tokio::test]
+    async fn fresh_cache_asks_nothing() {
+        let r = run(Mode::Strict, Some(false), 1).await;
+        assert!(r.requests().is_empty());
+        assert_eq!(r.text().as_deref(), Some(SEEDED));
+    }
+
+    #[tokio::test]
+    async fn stale_cache_sends_its_mtime_and_304_only_touches_it() {
+        let r = run(Mode::Strict, Some(true), 1).await;
+        assert_eq!(r.requests(), [(ua(), jan_1())]);
+        assert_eq!(r.text().as_deref(), Some(SEEDED));
+        assert!(r.mtime().unwrap().duration_since(SystemTime::now() - Duration::from_secs(60)).is_ok(), "o mtime virou agora");
+        assert!(!r.log.text().contains("tarifas"), "{}", r.log.text());
+    }
+
+    #[tokio::test]
+    async fn stale_cache_is_replaced_by_a_new_catalog() {
+        let r = run(Mode::Body(std::str::from_utf8(&recorte()).unwrap().to_owned().leak()), Some(true), 1).await;
+        assert_eq!(r.requests(), [(ua(), jan_1())]);
+        assert_eq!(r.text().unwrap(), python_cache());
+    }
+
+    #[tokio::test]
+    async fn broken_or_unknown_answers_keep_the_cache() {
+        let cases = [
+            (Mode::Body("{garbage"), "falha ao baixar models.dev"),
+            (Mode::Body("[1, 2]"), "formato do models.dev não reconhecido"),
+            (Mode::Body(r#"{"anthropic": {"models": [1]}}"#), "formato do models.dev não reconhecido"),
+            (Mode::Status(403), "models.dev respondeu 403"),
+            (Mode::Status(500), "models.dev respondeu 500"),
+        ];
+        for (mode, warning) in cases {
+            let r = run(mode, Some(true), 1).await;
+            assert_eq!(r.text().as_deref(), Some(SEEDED), "{warning}");
+            assert_eq!(r.mtime(), Some(UNIX_EPOCH + Duration::from_secs(JAN_1_2026)), "{warning}");
+            assert!(r.log.text().contains("WARN") && r.log.text().contains(warning), "{}", r.log.text());
+            let r = run(mode, None, 1).await;
+            assert_eq!(r.text(), None, "{warning}");
+        }
+    }
+
+    /// Paridade com o Python (corrigido depois pela D13): JSON válido sem modelo conhecido grava um catálogo vazio.
+    #[tokio::test]
+    async fn valid_answer_without_known_models_overwrites_the_cache() {
+        for body in ["{}", r#"{"anthropic": 5}"#] {
+            let r = run(Mode::Body(body), Some(true), 1).await;
+            assert_eq!(r.text().as_deref(), Some(r#"{"modelos": {}}"#), "{body}");
+            assert!(r.log.text().contains("tarifas: 0 modelos atualizados do models.dev"), "{}", r.log.text());
+        }
+    }
+
+    #[tokio::test]
+    async fn connection_refused_warns_and_writes_nothing() {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/api.json", closed.local_addr().unwrap());
+        drop(closed);
+        let dir = tempfile::tempdir().unwrap();
+        let log = Log::default();
+        let writer = log.clone();
+        let _guard = tracing::subscriber::set_default(tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish());
+        PricingRefresh::new(dir.path().to_owned(), url).run().await;
+        assert!(log.text().contains("tarifas: falha ao baixar models.dev"), "{}", log.text());
+        assert!(!dir.path().join("models.dev.json").exists());
+    }
+
+    #[tokio::test]
+    async fn one_attempt_per_day_after_failure_or_success() {
+        assert_eq!(run(Mode::Status(500), None, 2).await.requests().len(), 1);
+        let r = run(Mode::Body(std::str::from_utf8(&recorte()).unwrap().to_owned().leak()), None, 2).await;
+        assert_eq!(r.requests().len(), 1);
+        assert!(r.text().is_some());
+    }
+
+    #[test]
+    fn only_the_exact_one_turns_the_download_off() {
+        use std::ffi::OsStr;
+        assert!(PricingRefresh::offline_value(Some(OsStr::new("1"))));
+        for value in [None, Some("true"), Some("0"), Some(" 1"), Some("")] {
+            assert!(!PricingRefresh::offline_value(value.map(OsStr::new)), "{value:?}");
+        }
+    }
+
+    /// slim_of_fixture: 80 entradas, chaves `id` e `provedor/id`, só os provedores de primeira mão.
+    #[test]
+    fn slim_of_the_fixture_matches_python() {
+        let raw: Value = serde_json::from_slice(&recorte()).unwrap();
+        let expected: Value = serde_json::from_str(&python_cache()).unwrap();
+        let models = slim(&raw).unwrap();
+        assert_eq!(models.len(), 80);
+        assert_eq!(models["kimi-k3"]["provider"], "moonshotai");
+        assert!(!models.contains_key("k3"), "modelo de revenda com preço zero não entra");
+        assert_eq!(Value::Object(models), expected["modelos"]);
+        assert_eq!(PROVIDERS, ["anthropic", "openai", "moonshotai", "zhipuai", "deepseek", "google", "xai", "mistral"]);
+    }
+
+    #[test]
+    fn slim_follows_the_python_rules() {
+        let raw = json!({
+            "anthropic": {"models": {
+                "sem-input": {"cost": {"output": 5}},
+                "sem-output": {"cost": {"input": 5}},
+                "zero": {"cost": {"input": 0, "output": 1}},
+                "texto": {"cost": {"input": " 1_0 ", "output": true, "cache_read": 0}},
+                "lista": [1],
+                "cost-lista": {"cost": [1]},
+            }},
+            "revenda": {"models": {"texto": {"cost": {"input": 0, "output": 0}}}},
+            "openai": 5,
+            "google": {"models": null},
+        });
+        assert_eq!(Value::Object(slim(&raw).unwrap()), json!({
+            "texto": {"provider": "anthropic", "input": 10.0, "output": 1.0, "cache_read": 0.0, "cache_write": null},
+            "anthropic/texto": {"provider": "anthropic", "input": 10.0, "output": 1.0, "cache_read": 0.0, "cache_write": null},
+        }));
+        for bad in [json!([]), json!(null), json!({"openai": {"models": "x"}}), json!({"openai": {"models": {"m": {"cost": {"input": "abc", "output": 1}}}}})] {
+            assert!(slim(&bad).is_err(), "{bad}");
+        }
+        // Uma entrada ruim não derruba o catálogo inteiro, e a ordem é a de chegada.
+        let mixed = json!({"openai": {"models": {"text-embedding-9": {"cost": {"input": 0.02}}, "gpt-bom": {"cost": {"input": 1, "output": 2}}}}});
+        assert_eq!(slim(&mixed).unwrap().keys().collect::<Vec<_>>(), ["gpt-bom", "openai/gpt-bom"]);
+    }
+
+    /// O cache guarda cada preço de cache como veio: o `cache_read` de quem só não publica `cache_write`
+    /// continua valendo na releitura.
+    #[tokio::test]
+    async fn downloaded_cache_keeps_cache_read_when_only_cache_write_is_missing() {
+        let body = r#"{"deepseek": {"models": {"deepseek-v4-flash": {"cost": {"input": 0.14, "output": 0.28, "cache_read": 0.0028, "cache_write": null}}}}}"#;
+        let r = run(Mode::Body(body), None, 1).await;
+        let cached: Value = serde_json::from_str(&r.text().unwrap()).unwrap();
+        assert_eq!(cached["modelos"]["deepseek-v4-flash"]["cache_read"], json!(0.0028));
+        assert_eq!(cached["modelos"]["deepseek-v4-flash"]["cache_write"], Value::Null);
+        let rate = hangar_server::costs::pricing::Pricing::load(r.dir.path()).rate_for("deepseek-v4-flash").unwrap();
+        assert_eq!((rate.cache_read, rate.cache_write, rate.origin.as_str()), (0.0028, 0.14, "models.dev"));
+    }
+
+    /// fetch_script_200: o snapshot e o recorte saem como o script gravava; o recorte do recorte é ele mesmo.
+    #[tokio::test]
+    async fn snapshot_writes_the_versioned_files_like_the_script() {
+        let fake = fake(Mode::Strict).await;
+        let root = tempfile::tempdir().unwrap();
+        let lines = write_snapshot(root.path(), &fake.url).await.unwrap();
+        assert_eq!(fake.seen.lock().unwrap().clone(), [(Some("hangar/fetch_model_prices".to_owned()), None)]);
+        let snapshot = std::fs::read_to_string(root.path().join("backend/app/pricing_data.json")).unwrap();
+        let python = std::fs::read_to_string(fixtures().join("pricing_data_snapshot.json")).unwrap();
+        let generated = |text: &str| text.lines().nth(1).unwrap().to_owned();
+        assert!(generated(&snapshot).starts_with(" \"gerado_em\": \"") && generated(&snapshot).ends_with("+00:00\","), "{}", generated(&snapshot));
+        assert_eq!(snapshot.replace(&generated(&snapshot), ""), python.replace(&generated(&python), ""));
+        let written = std::fs::read(root.path().join("crates/hangar-server/tests/it/fixtures/pricing/models_dev_recorte.json")).unwrap();
+        assert_eq!(written, recorte(), "o recorte do recorte sai byte a byte igual");
+        assert_eq!(lines[0], format!("80 entradas -> {}", root.path().join("backend/app/pricing_data.json").display()));
+        // A versão do Python vira o mesmo texto pelo leitor do snapshot.
+        assert_eq!(versioned_text(&serde_json::from_str(&python).unwrap()), python);
+    }
+
+    #[tokio::test]
+    async fn snapshot_failure_writes_nothing() {
+        for mode in [Mode::Status(403), Mode::Body("{garbage")] {
+            let fake = fake(mode).await;
+            let root = tempfile::tempdir().unwrap();
+            assert!(write_snapshot(root.path(), &fake.url).await.is_err());
+            assert!(!root.path().join("backend").exists());
+        }
+    }
+
+    proptest::proptest! {
+        /// O catálogo vem da rede: nada nele derruba o leitor nem o recorte.
+        #[test]
+        fn any_catalog_is_read_without_panicking(text in "(?s).{0,200}") {
+            if let Ok(raw) = serde_json::from_str::<Value>(&text) {
+                let _ = slim(&raw);
+                let _ = excerpt(&raw);
+            }
+        }
+
+        #[test]
+        fn any_catalog_shape_is_read_without_panicking(input in proptest::option::of(proptest::prelude::any::<f64>()), text in ".{0,10}", flag in proptest::prelude::any::<bool>()) {
+            let raw = json!({"anthropic": {"models": {"m": {"cost": {"input": input, "output": text, "cache_read": flag}}}},
+                "revenda": {"models": {"m": {"cost": {"input": flag}}}}});
+            let _ = slim(&raw);
+            let _ = excerpt(&raw);
+        }
+    }
+}

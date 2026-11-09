@@ -43,7 +43,7 @@ EXCLUDE = [
     "scripts/cargo-pinned", "scripts/podar-target", "scripts/verificar-*", "scripts/ci-gates.sh",
     "scripts/check-*", "scripts/checar-*", "scripts/conferir-*", "scripts/core-front-tests.mjs",
     "scripts/hook-*.mjs", "scripts/i18n-compile.mjs", "scripts/deploy.sh", "scripts/comparar-custos.py",
-    "scripts/fetch_model_prices.py", "scripts/post-merge.hook", "scripts/install-hooks.sh",
+    "scripts/post-merge.hook", "scripts/install-hooks.sh",
     "scripts/migrate-to-*", "scripts/montar-pacote.py",
 ]
 # Backend de build dos pacotes do lock que só têm sdist (setup.py sem pyproject usa setuptools e wheel).

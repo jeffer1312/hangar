@@ -62,7 +62,7 @@ from app.guest_header import guest_of, guest_safe
 from app.share_life import session_life
 from app import contas, default_model, procinfo
 from app.costs import report as costs_report, usd_brl as _usd_brl, PERIODOS as _COST_PERIODOS
-from app import costs_sources, pricing
+from app import costs_sources
 from app import loop as loop_mod
 from app.transcript import last_assistant_text
 from app import tunnel
@@ -206,8 +206,7 @@ async def _lifespan(app: FastAPI):
 
     prune_task.add_done_callback(_prune_done)
 
-    pricing.atualizar_em_background()  # NUNCA num request: o cliente aborta em 4s
-    # Mesmo motivo, outra rede: usd_brl() tem cache de 1h e timeout de 3s, e é chamado DENTRO do
+    # usd_brl() tem cache de 1h e timeout de 3s, e é chamado DENTRO do
     # montar(). Sem aquecer aqui, o primeiro /api/costs depois de todo restart paga a coleta fria
     # (657ms medidos) MAIS até 3s de câmbio, contra o AbortSignal.timeout(4000) do cliente.
     threading.Thread(target=_usd_brl, name="usd-brl-warm", daemon=True).start()

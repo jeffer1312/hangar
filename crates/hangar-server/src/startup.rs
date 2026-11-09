@@ -70,6 +70,11 @@ pub(crate) async fn maintenance(state: Arc<crate::routes::AppState>) {
         Err(error) => tracing::warn!(code = "pairing_config_failed", %error, "pareamento sem configuração válida"),
     }
     tokio::spawn(publish_plugin(state.clone()));
+    if !crate::costs::pricing_refresh::PricingRefresh::offline() {
+        tokio::spawn(async {
+            crate::costs::pricing_refresh::PricingRefresh::new(crate::costs::pricing::default_dir(), crate::costs::pricing_refresh::URL).run().await
+        });
+    }
     state.costs.schedule_warmup(std::time::Duration::from_secs(30));
     let _search_producer = state.search.start();
     crate::pages::routes::spawn_sweep(state.list.clone(), state.pages.clone());
