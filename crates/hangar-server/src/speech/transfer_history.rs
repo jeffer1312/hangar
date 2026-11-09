@@ -730,14 +730,22 @@ pub(crate) fn baton_window(row: &SessionRow, home: &Path, claude: &Path) -> Resu
                 let (rows, base) = match stable_read(Path::new(path), |reader, length| {
                     // Só o fim: o bastão quer a janela recente e o último plano citado, como o Python.
                     // ponytail: teto fixo; 600 eventos além dele ficam de fora, crescer a janela se aparecer.
-                    let mut base = length.saturating_sub(BATON_TAIL);
+                    // Um byte antes do corte: se ele já fecha uma linha, a seguinte entra inteira.
+                    let mut base = length.saturating_sub(BATON_TAIL + 1);
                     reader.seek(SeekFrom::Start(base))?;
                     let mut raw = Vec::new();
-                    reader.take(length - base).read_to_end(&mut raw)?;
+                    reader.by_ref().take(length - base).read_to_end(&mut raw)?;
                     if base > 0 {
-                        let cut = raw.iter().position(|b| *b == b'\n').map_or(raw.len(), |i| i + 1);
-                        raw.drain(..cut);
-                        base += cut as u64;
+                        match raw.iter().position(|b| *b == b'\n') {
+                            Some(end) if end + 1 < raw.len() => { raw.drain(..=end); base += end as u64 + 1; }
+                            // A última linha sozinha passa da janela: lê o arquivo todo em vez de nada.
+                            _ => {
+                                reader.seek(SeekFrom::Start(0))?;
+                                raw.clear();
+                                reader.take(length).read_to_end(&mut raw)?;
+                                base = 0;
+                            }
+                        }
                     }
                     Ok((String::from_utf8_lossy(&raw).split_inclusive('\n').map(str::to_owned).collect::<Vec<_>>(), base))
                 }) {
