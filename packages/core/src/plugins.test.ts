@@ -14,16 +14,16 @@ afterEach(() => vi.restoreAllMocks());
 describe('chamadas de plugins', () => {
   const calls: Array<[string, () => Promise<unknown>, string, string, unknown, number]> = [
     ['lista', () => getPluginsForServer(server), 'GET', '/api/plugins', undefined, 30_000],
-    ['check', () => checkPluginsForServer(server), 'POST', '/api/plugins/check', undefined, 210_000],
+    ['check', () => checkPluginsForServer(server), 'POST', '/api/plugins/check', undefined, 240_000],
     ['disponíveis', () => getAvailablePluginsForServer(server), 'GET', '/api/plugins/available', undefined, 70_000],
     ['detalhe', () => getPluginDetailsForServer(server, 'a b@c/d'), 'GET', '/api/plugins/a%20b%40c%2Fd/details', undefined, 30_000],
-    ['instalar', () => pluginActionForServer(server, 'caveman@caveman', 'install'), 'POST', '/api/plugins/caveman%40caveman/install', undefined, 210_000],
-    ['atualizar', () => pluginActionForServer(server, 'caveman@caveman', 'update'), 'POST', '/api/plugins/caveman%40caveman/update', undefined, 210_000],
+    ['instalar', () => pluginActionForServer(server, 'caveman@caveman', 'install'), 'POST', '/api/plugins/caveman%40caveman/install', undefined, 240_000],
+    ['atualizar', () => pluginActionForServer(server, 'caveman@caveman', 'update'), 'POST', '/api/plugins/caveman%40caveman/update', undefined, 240_000],
     ['ligar', () => pluginActionForServer(server, 'caveman@caveman', 'enable'), 'POST', '/api/plugins/caveman%40caveman/enable', undefined, 50_000],
     ['desligar', () => pluginActionForServer(server, 'caveman@caveman', 'disable'), 'POST', '/api/plugins/caveman%40caveman/disable', undefined, 50_000],
     ['remover', () => pluginActionForServer(server, 'caveman@caveman', 'uninstall'), 'DELETE', '/api/plugins/caveman%40caveman', undefined, 50_000],
-    ['marketplace novo', () => addMarketplaceForServer(server, 'JuliusBrussee/caveman'), 'POST', '/api/plugins/marketplaces', { source: 'JuliusBrussee/caveman' }, 210_000],
-    ['marketplace atualizar', () => updateMarketplaceForServer(server, 'caveman'), 'POST', '/api/plugins/marketplaces/caveman/update', undefined, 210_000],
+    ['marketplace novo', () => addMarketplaceForServer(server, 'JuliusBrussee/caveman'), 'POST', '/api/plugins/marketplaces', { source: 'JuliusBrussee/caveman' }, 240_000],
+    ['marketplace atualizar', () => updateMarketplaceForServer(server, 'caveman'), 'POST', '/api/plugins/marketplaces/caveman/update', undefined, 240_000],
     ['marketplace remover', () => removeMarketplaceForServer(server, 'caveman'), 'DELETE', '/api/plugins/marketplaces/caveman', undefined, 70_000],
     ['atualizar sozinho', () => setMarketplaceAutoUpdateForServer(server, 'caveman', false), 'PUT', '/api/plugins/marketplaces/caveman/auto-update', { enabled: false }, 50_000],
   ];

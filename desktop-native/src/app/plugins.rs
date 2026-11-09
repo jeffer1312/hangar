@@ -9,8 +9,16 @@ use gpui_kit::component::switch::Switch;
 const READ_SECONDS: u64 = 30;
 const AVAILABLE_SECONDS: u64 = 70;
 const SHORT_SECONDS: u64 = 50;
-const LONG_SECONDS: u64 = 210;
+const LONG_SECONDS: u64 = 240;
 const MARKETPLACE_REMOVE_SECONDS: u64 = 70;
+
+/// Só estes 409 do `/recarregar` são "sessão ocupada"; os outros (conta que não reconciliou) têm motivo próprio.
+const SESSION_BUSY_CODES: [&str; 5] =
+    ["erro_sessao_iniciando", "erro_sessao_esperando_resposta", "erro_sessao_trabalhando", "erro_fila_pendente", "session_transfer_busy"];
+
+fn session_busy(error: &Failure) -> bool {
+    error.status == Some(409) && error.code.as_deref().is_some_and(|code| SESSION_BUSY_CODES.contains(&code))
+}
 
 const TAB_INSTALLED: usize = 0;
 const TAB_DISCOVER: usize = 1;
@@ -421,7 +429,7 @@ impl PluginsPage {
                 match result {
                     Ok(value) => warnings.extend(controls::reopen_warnings(&value).map(|w| format!("{name}: {w}"))),
                     Err(error) => {
-                        failures.push(if error.status == Some(409) { tr("plugins_reopen_refused").replace("{name}", &name) }
+                        failures.push(if session_busy(&error) { tr("plugins_reopen_refused").replace("{name}", &name) }
                             else { format!("{name}: {}", Hangar::fetch_failure(&error)) });
                         names.push(name);
                     }

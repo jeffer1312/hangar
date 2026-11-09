@@ -76,7 +76,7 @@ export type PluginAction = 'install' | 'update' | 'enable' | 'disable' | 'uninst
 const READ_MS = 30_000;
 const AVAILABLE_MS = 70_000;
 const CHANGE_MS = 50_000;
-const DOWNLOAD_MS = 210_000;
+const DOWNLOAD_MS = 240_000;
 /** Remover marketplace lê a lista antes, para desligar os plugins dele nas contas. */
 const MARKETPLACE_REMOVE_MS = 70_000;
 
