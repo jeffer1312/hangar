@@ -278,7 +278,9 @@ impl Mux {
         }
         if matches!(gate, Gate::Unchecked) {
             // É a versão do programa chamado; a dos servidores vivos fica provada só pela comparação.
-            let code = match self.version_until(deadline).await {
+            // Tem o orçamento da leitura direta: um `-V` lento não tira o prazo do CLI.
+            let (_, probe) = direct_window(tokio::time::Instant::now(), deadline, self.direct_budget);
+            let code = match self.version_until(probe).await {
                 Some(v) if hangar_psmux::known_version(&v) => None,
                 Some(_) => Some("psmux_direct_version"),
                 None => Some("psmux_direct_version_unread"),
@@ -528,22 +530,22 @@ mod tests {
         fn new(version: &str) -> Self {
             let dir = tempfile::tempdir().unwrap();
             let (data, count, listing) = (dir.path().join("data"), dir.path().join("count"), dir.path().join("listing"));
-            let (version_file, fail) = (dir.path().join("version"), dir.path().join("fail"));
+            let (version_file, fail, slow) = (dir.path().join("version"), dir.path().join("fail"), dir.path().join("slow"));
             std::fs::create_dir(&data).unwrap();
             std::fs::write(&listing, "").unwrap();
             std::fs::write(&version_file, version).unwrap();
             #[cfg(unix)]
             let path = {
                 let path = dir.path().join("fake-tmux");
-                crate::write_test_executable(&path, format!("#!/bin/sh\ncase \"$1\" in -V) [ -e '{}' ] && exit 1 ; cat '{}' ;; list-panes) echo x >> '{}' ; cat '{}' ;; esac\n",
-                    fail.display(), version_file.display(), count.display(), listing.display()));
+                crate::write_test_executable(&path, format!("#!/bin/sh\ncase \"$1\" in -V) [ -e '{}' ] && exec sleep 10 ; [ -e '{}' ] && exit 1 ; cat '{}' ;; list-panes) echo x >> '{}' ; cat '{}' ;; esac\n",
+                    slow.display(), fail.display(), version_file.display(), count.display(), listing.display()));
                 path
             };
             #[cfg(windows)]
             let path = {
                 let path = dir.path().join("fake-tmux.cmd");
-                std::fs::write(&path, format!("@echo off\r\nif \"%~1\"==\"-V\" (\r\n  if exist \"{}\" exit /b 1\r\n  type \"{}\"\r\n  exit /b 0\r\n)\r\nif \"%~1\"==\"list-panes\" (\r\n  >>\"{}\" echo x\r\n  type \"{}\"\r\n)\r\n",
-                    fail.display(), version_file.display(), count.display(), listing.display())).unwrap();
+                std::fs::write(&path, format!("@echo off\r\nif \"%~1\"==\"-V\" (\r\n  if exist \"{}\" ping -n 11 127.0.0.1 >nul\r\n  if exist \"{}\" exit /b 1\r\n  type \"{}\"\r\n  exit /b 0\r\n)\r\nif \"%~1\"==\"list-panes\" (\r\n  >>\"{}\" echo x\r\n  type \"{}\"\r\n)\r\n",
+                    slow.display(), fail.display(), version_file.display(), count.display(), listing.display())).unwrap();
                 path
             };
             Self { dir, path, data, count, listing }
@@ -554,6 +556,8 @@ mod tests {
             let flag = self.dir.path().join("fail");
             if fail { std::fs::write(flag, "").unwrap(); } else { let _ = std::fs::remove_file(flag); }
         }
+        /// O `-V` passa a demorar 10 s, mais que qualquer prazo dos testes.
+        fn slow_version(&self) { std::fs::write(self.dir.path().join("slow"), "").unwrap(); }
         fn calls(&self) -> usize { std::fs::read_to_string(&self.count).map_or(0, |t| t.lines().count()) }
         /// Leituras diretas concluídas nesta pasta. Conexões não servem: o cliente tenta de novo após
         /// um reset, e no Windows os testes em paralelo provocam resets.
@@ -625,6 +629,19 @@ mod tests {
         cli.eager(ROOMY).list_panes().await.unwrap();
         cli.mux(ROOMY).list_panes().await.unwrap();
         assert_eq!((cli.calls(), cli.reads()), (2, 2));
+    }
+
+    #[tokio::test]
+    async fn a_slow_version_probe_leaves_the_cli_its_deadline() {
+        let cli = FakeCli::new(hangar_psmux::VERSIONS[1]);
+        let a = FakeServer::start("ka", LINE_A.into());
+        a.register(&cli.data, "a", "ka");
+        cli.lists(LINE_A);
+        cli.slow_version();
+        // Orçamento de produto: a conferência não pode levar o prazo inteiro do `list-panes`.
+        let mux = Mux::with_direct(&cli.path, Duration::from_secs(5), cli.data.clone());
+        let panes = mux.list_panes().await.unwrap();
+        assert_eq!((panes[0].session.as_str(), cli.calls(), cli.reads()), ("a", 1, 0));
     }
 
     #[tokio::test]
