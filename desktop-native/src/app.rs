@@ -7408,8 +7408,9 @@ impl Hangar {
             .when_some(self.chat.state.question.clone(), |el, question| el.child(div().text_color(theme::text()).child(question))))
             .into_any_element()));
         let plugin_space = self.render_plugin_space(interaction, readable, window, cx);
-        // Faixas e avisos entre a conversa e o compositor ficam na mesma coluna das mensagens.
-        content = content
+        // Faixas e avisos entre a conversa e o compositor ficam na mesma coluna das mensagens. Sem espaço, encolhem e
+        // rolam por dentro (a faixa do mod cede primeiro): o erro com o "tentar de novo" continua alcançável.
+        let notes = div().id("bottom-notes").w_full().min_h_0().flex_shrink(1.).flex().flex_col().overflow_y_scroll()
             .children(outgoing.into_iter().map(|text| in_column(div().w_full().flex().flex_col().items_end().gap_1().py_1()
                 .child(user_bubble(conversation_text(div().whitespace_normal().line_clamp(6).text_ellipsis(), true).child(text)).opacity(0.6))
                 .child(div().text_xs().text_color(theme::muted()).child(tr("sending"))))))
@@ -7423,7 +7424,8 @@ impl Hangar {
             .when_some(delivery_note, |el, (note, warning)| el.child(in_column(div().py_1().text_xs().text_color(if warning { theme::warning() } else { theme::muted() }).child(note))))
             .when_some(stop_note, |el, (note, warning)| el.child(in_column(div().py_1().text_xs().text_color(if warning { theme::warning() } else { theme::muted() }).child(note))))
             .when_some(self.render_codex_commands_chip(cx), |el, chip| el.child(in_column(chip)))
-            .children(plugin_space)
+            .children(plugin_space);
+        content = content.child(notes)
             .map(|el| match orq {
                 Some(orq) => el.child(in_column(self.render_orq_footer(&orq, cx))),
                 None if read_only => el.child(in_column(div().py_2().text_sm().text_color(theme::muted()).whitespace_normal().child(tr("par_so_leitura")))),
