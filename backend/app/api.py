@@ -33,28 +33,18 @@ from app import (atomico, closed_names, diag,
 from app import groups_bridge, internal_api, list_bridge, migration_status, share_bridge
 from app.auth import require_auth, require_loopback
 from app.send_executor import send_thread as _send_thread
-from app import bastao as bastao_mod   # `bastao` sem sufixo é a ROTA GET, mais abaixo neste arquivo
-from app.bastao import montar as bastao_montar
-from app.fs import FsError, allowed_roots, list_roots, make_dir, scan_dir
 from app.model_picker import PickerError
 from app.mensagens import erro
 from app import claude_models
 from app import claude_customizations
 from app import codex_models
 from app import model_args
-from app import filesearch, filetree, git_ops, worktrees
-from app.file_response import file_response
-from app.filesearch import SearchError
-from app.filetree import FileError
-from app import cli_probe
 from app import registry as registry_mod
-from app import providers_bridge
 from app.registry import KillFailed, SessionRegistry
 from app.names import sanitize_session_name
-from app.models import (SessionInfo, CreatedSessionInfo, ChatEvent, CostReport, UsoReport, RunnersResponse, RunBody,
-                        RunInfo, Runner, CustomRunnersBody, ProjectStatus, ShortcutShellBody, RunCodeBody,
-                        ProjectShortcutsBody, ShortcutAnswerBody, session_key)
-from app import uso_report
+from app.models import (SessionInfo, CreatedSessionInfo, ChatEvent, CostReport, RunnersResponse, RunBody,
+                        RunInfo, Runner, CustomRunnersBody, ProjectStatus,
+                        ShortcutAnswerBody, session_key)
 from app.pqueue import (PromptQueue, _transcript_start_ts, committed_user_lines,
                         fila_interna_pendente, linha_mais_parecida)
 from app.prune import prune_loop as _prune_loop
@@ -65,10 +55,9 @@ from app.adapters import CLAUDE_HEADLESS, get_adapter
 from app.adapters.claude_headless import sessions as headless_sessions
 from app.adapters.codex import sessions as codex_sessions
 from app.sse import invalidate_recent_list, merged_events, nav_confirmar, nav_pendente
-from app.state import corrige_ocioso_kimi, forget_frame, menu_codex
+from app.state import forget_frame, menu_codex
 from app.uploads import MAX_BYTES
 from app.config import (list_config_dirs, _backend_config_base, settings,
-                        resolve_scan_roots,
                         automations_enabled, resolve_bind_ip)
 from app import runtime_config
 from app.guest_header import guest_of, guest_safe
@@ -76,15 +65,10 @@ from app.share_life import session_life
 from app import contas, default_model, procinfo
 from app.costs import report as costs_report, usd_brl as _usd_brl, PERIODOS as _COST_PERIODOS
 from app import costs_sources, pricing
-from app.git_ops import (
-    list_branches, switch_branch, create_worktree, git_action, git_log, assign_lanes, changed_files, file_diff, discard_file, commit_files, commit_file_diff, commit_diff, revert_commit, cherry_pick, reset_to, create_branch_at, create_tag, diff_vs_worktree, branches_containing, commit, last_commit_message, push as push_branch, sequencer_state, GitError, branch_of, git_summary,
-    folder_status, folder_fetch, folder_pull, folder_switch, folder_create_branch,
-)
 from app import loop as loop_mod
 from app.transcript import last_assistant_text
 from app import tunnel
 from app import runner
-from app import project_shortcuts
 from app import projects
 from app import archive_providers
 from app.archive import (archive_cwd, archive_jsonl,
@@ -306,7 +290,6 @@ async def _codex_rust_port(name: str, request: Request):
     port = (request.scope.get("server") or (None, None))[1]
     if port == GUEST_PORT and port != settings.port:
         route, body = request.url.path.split("/", 4)[4] + (f"?{request.url.query}" if request.url.query else ""), await request.body()
-        # Só Codex consulta a ponte dele: com a ponte ainda sem endereço, Pi/omp/Kimi levariam o 503 dela.
         reply = None
         if codex_sessions.exists(name):
             reply = await asyncio.to_thread(runtime_coordinator.rust_codex_terminal, name, route, request.method, body)
@@ -370,16 +353,6 @@ async def _client_gone(request: Request, exc: ClientDisconnect):
     """Quem pediu fechou antes de mandar o corpo (o Rust estoura o prazo dele e desiste): ninguém
     lê a resposta, e quem desistiu já registrou o próprio prazo."""
     return Response(status_code=499)
-
-
-@app.exception_handler(GitError)
-async def _git_failed(request: Request, exc: GitError):
-    """GitError que escapou da rota (citação, resolver) sai com o status dele, nunca 500 sem corpo.
-
-    Falha da ponte de Git/arquivos traz o código (`workspace_busy`...), que o front traduz."""
-    code = getattr(exc, "code", None)
-    detail = erro(code, exc.detail, motivo=exc.detail) if code else exc.detail
-    return JSONResponse(status_code=exc.status, content={"detail": detail})
 
 
 @app.exception_handler(tmux.MuxIndisponivel)
@@ -662,8 +635,6 @@ async def prewarm_forward(request: Request):
                                   "/__hangar_server/forwarded")
 
 
-
-
 @app.get("/api/client-api")
 async def client_api_pelo_rust(request: Request):
     """O número é do Rust (`hangar_api::CLIENT_API`). Aqui chega o dono pelo Connect, que segue pela
@@ -788,8 +759,6 @@ terminal = TerminalInput()
 
 @app.websocket("/api/sessions/{name}/term")
 async def term_ws_route(ws: WebSocket, name: str):
-    # Sem a trava de loopback do /api/pi/inbox: aquela existe porque quem liga la e uma extensao
-    # LOCAL. Aqui o celular vai precisar entrar de fora na fase 2.
     from app import termsock
     # `?shortcut=<id>`: terminal de atalho DESTA sessao. O alvo tmux sai do dono conferido no
     # servidor, nunca da query — o id sozinho nao alcanca terminal de outra conversa.
@@ -1037,16 +1006,7 @@ def _rust_conduz(info) -> bool:
     return c is not None and c.mode in {"pending", "rust"} and c.rust_owns(info.provider, bool(getattr(info, "headless", False)))
 
 
-
-
 _CONFIRM_GRACE = 8.0  # s entre o send e a checagem "o transcript gravou o prompt?"
-# Kimi: o mesmo prazo, esticado. Ali nao existe segunda tentativa (redigitar duplicaria a msg), e
-# sem segunda chance o prazo tem que ser generoso — senao ruido de timing carimba `desistiu` numa
-# msg que so estava esperando a vez na fila da propria TUI.
-_CONFIRM_GRACE_KIMI = 30.0
-# Claude sem terminal: mesma regra do Kimi (nunca redigita). O .jsonl só ganha a linha depois dos
-# hooks de UserPromptSubmit, que com plugins passam de 8s; o prazo cobre isso e ainda termina em
-# `desistiu` visível quando a entrega morreu de verdade (processo caiu logo após a escrita).
 _CONFIRM_GRACE_HEADLESS = 60.0
 # Cada checagem relê o transcript inteiro (MBs). Um prompt parado na fila interna da TUI durante um
 # turno longo reagendava a cada `grace` pelo turno todo; espaça até este teto.
@@ -1075,9 +1035,6 @@ def _agendar_confirmacao(name: str, delay: float) -> None:
         timer.daemon = True
         _confirm_pend[name] = (timer, due)
     timer.start()
-# Kimi: de quanto em quanto tempo reavaliar um "idle" que o transcript desmentiu. Nao ha evento pra
-# esperar (o fim de turno real grava idle sobre idle e nao gera transicao), entao a saida e reolhar.
-# 5s: a sessao demora isso pra aparecer parada, e enquanto o turno anda o custo e um getmtime.
 _RECHECA_KIMI = 5.0
 
 
@@ -1183,16 +1140,8 @@ def _confirm_and_drain(name: str) -> None:
         # interna do Claude Code) — decidir requeue agora arriscaria redigitar mensagem ja recebida.
         # Adia pro proximo ciclo (o turno acabando dispara transicao -> novo timer).
         m = hook_state.get_state(session_key(info.jsonl))
-        # No Kimi o marcador mente pra baixo (idle congelado do turno anterior, ver
-        # state.corrige_ocioso_kimi). Sem corrigir AQUI, o guard de mid-turn abaixo nunca segurava
-        # nada nesse provider — e ai toda entrega virava `desistiu` 8s depois do envio, mesmo a que
-        # so estava esperando a vez na fila da propria TUI.
-        if m and info.provider == "kimi":
-            m = corrige_ocioso_kimi(m, info.jsonl)
-        # Kimi espera MAIS antes de declarar perdida (30s contra 8s): ver o comentario no else.
         headless = _headless(name)
-        grace = (_CONFIRM_GRACE_KIMI if info.provider == "kimi"
-                 else _CONFIRM_GRACE_HEADLESS if headless else _CONFIRM_GRACE)
+        grace = _CONFIRM_GRACE_HEADLESS if headless else _CONFIRM_GRACE
         # UMA leitura do oraculo pros dois ramos. None = nao deu pra ler o transcript (ver
         # committed_user_lines): sai SEM decidir e SEM reagendar. Sem reagendar de proposito — um
         # Timer a cada `grace` contra um arquivo que nao abre e tempestade sem fim; o proximo fim
@@ -1233,32 +1182,7 @@ def _confirm_and_drain(name: str) -> None:
                 na_fila_tui=na_fila,
             )
         else:
-            # Estado DESCONHECIDO (marcador ausente): nao da pra provar que a sessao nao esta no meio de
-            # um turno — e redigitar e a acao destrutiva daqui (mete texto num prompt em uso). Entao
-            # confirma sem NUNCA redigitar (max_attempts=0). O caso real e sessao RESSUSCITADA: o
-            # kill-server de 2026-08-11 13:55 matou o tmux, a sessao voltou por `claude --resume` e a
-            # fila duravel (arquivo por NOME) sobreviveu ao pane — o guard acima caiu pra frente com
-            # get_state()=None e o backend redigitou dentro do turno vivo (log REQUEUE 14:01:48).
-            # Pior caso agora = comportamento antigo: envio engolido fica visivel como bolha da fila,
-            # que e falha VISIVEL. Duplicar a msg do usuario nao e.
-            # Kimi NUNCA redigita. Prompt digitado durante um turno fica na fila da TUI e so entra no
-            # wire.jsonl quando o turno chega nele — nao ha o equivalente do `queue-operation` do Claude
-            # Code, que e o registro feito NO MOMENTO da digitacao. Entao, no Kimi, "ausente do
-            # transcript" nao prova engolido, e redigitar e a acao destrutiva. Some a isso o marcador de
-            # estado dizer "ociosa" no meio do turno (o Stop do SUBAGENTE grava na chave do pai) e o
-            # guard de working acima nao segura nada: medido em 13/08/2026, a mesma mensagem entrou 3x na
-            # fila de uma sessao Kimi (REQUEUE n=3 no log das 08:29). Pior caso agora e o mesmo aceito
-            # logo acima pro estado desconhecido: envio de verdade engolido fica VISIVEL como bolha da
-            # fila (`desistiu`), que e falha visivel — duplicar a msg do usuario nao e.
-            # Sem terminal também nunca: não há tecla engolida (a escrita no stdin do processo vivo é
-            # a entrega), e "ausente do transcript" antes dos hooks terminarem virava redigitação —
-            # cada recado chegava duas vezes ao agente (REQUEUE medido em sessões headless).
-            max_attempts = 0 if (m is None or info.provider == "kimi" or headless) else 2
-            # Kimi espera MAIS antes de declarar perdida: com max_attempts=0 nao ha segunda chance — a
-            # primeira checagem depois do prazo ja carimba `desistiu`. Subir pra 1 nao serve (no
-            # reconcile, attempts < max REDIGITA, a duplicacao que este provider nao pode ter). Entao
-            # o que se estica e o PRAZO (grace=30s): cobre o tempo entre a TUI aceitar o texto e ele
-            # aparecer no wire.jsonl, sem nunca digitar duas vezes.
+            max_attempts = 0 if (m is None or headless) else 2
             requeued = q.reconcile_delivered(
                 committed, inicio_ts,
                 time.time(),
@@ -1280,11 +1204,6 @@ def _confirm_and_drain(name: str) -> None:
                               (linha_mais_parecida(txt, committed) or "")[:200])
                 _log.info("REQUEUE name=%s n=%d (TUI engoliu o send; re-drenando)", name, len(requeued))
                 _drenar(name, info.jsonl, info.provider)
-        # Sobrou entrada AINDA DENTRO do prazo (o reconcile a pulou por "recente demais")? Volta a
-        # olhar. Os agendamentos usam _CONFIRM_GRACE (8,5s) e o prazo do Kimi e 30s, entao num turno
-        # curto a unica checagem caia cedo demais e a entrada ficava sem confirmar E sem desistir —
-        # presa ate a proxima mensagem do usuario, ou pra sempre se nao houvesse proxima. O laco
-        # termina sozinho: passado o prazo, toda linha vira `confirmed` ou `desistiu`.
         working = bool(m and m[0] == "working")
         streak = _confirm_working_streak.get(name, 0) + 1 if working else 0
         _confirm_working_streak[name] = streak
@@ -1332,12 +1251,28 @@ def _maybe_chain(name: str) -> None:
 # Sessoes com uma reavaliacao de "idle mentiroso" ja agendada. UMA cadeia por sessao: sem isto, cada
 # transicao espuria abria a sua propria corrente de Timers, e duas correntes em paralelo dobram o
 # `registry.list()` (que toca tmux) a cada 5s, sem limite e sem ninguem notar.
-_recheca_armada: set[str] = set()
-_recheca_lock = threading.Lock()
 
 
 # Tentativas seguidas com FALHA antes de abandonar a cadeia de reavaliacao de uma sessao.
+
+
+            # Reagenda MESMO ASSIM quando o idle era suspeito: a falha pode ter sido pontual
+            # (registry/tmux piscando), e desistir aqui e o que deixa a sessao presa. Mas com TETO:
+            # falha PERMANENTE (jsonl corrompido, erro reproduzivel no registry) reergueria a mesma
+            # excecao a cada 5s pra sempre, pagando `registry.list()` (tmux) toda volta. Depois de
+            # _RETRY_FALHA tentativas a cadeia para e diz isso no log — sessao presa e ruim, laco
+            # eterno tocando tmux e pior.
+
+
+_recheca_armada: set[str] = set()
+
+
+_recheca_lock = threading.Lock()
+
+
 _RETRY_FALHA = 5
+
+
 _falhas_seguidas: dict[str, int] = {}
 
 
@@ -1369,10 +1304,6 @@ def _on_hook_transition(session_id: str, state: str) -> None:
                 return
             if info and info.jsonl:
                 real = state
-                if state == "idle" and getattr(info, "provider", "claude") == "kimi":
-                    m = hook_state.get_state(session_id)
-                    if m and corrige_ocioso_kimi(m, info.jsonl)[0] == "working":
-                        real = "working"
                 sent = _drenar(info.name, info.jsonl, info.provider)
                 # Confirmacao em TODO idle (nao so pos-drain): Timers pendentes morrem no restart
                 # do backend — sem isto, entrada entregue ficava sem confirmar indefinidamente.
@@ -1392,16 +1323,7 @@ def _on_hook_transition(session_id: str, state: str) -> None:
                 # UMA cadeia por sessao (_recheca_armada): cada transicao espuria abria a sua, e
                 # duas cadeias em paralelo dobram `registry.list()` (tmux) a cada 5s pra sempre.
                 _falhas_seguidas.pop(session_id, None)   # esta volta foi ate o fim: zera o teto
-                if real != state and _armar_recheca(session_id):
-                    threading.Timer(_RECHECA_KIMI, _recheca_kimi,
-                                    args=(session_id, state)).start()
         except Exception as exc:
-            # LOGA, nao `pass` mudo: e daqui que saem o drain da fila, o tick do loop, o vinculo
-            # `then` e o push de "terminou". Falha calada aqui devolve exatamente o sintoma que este
-            # bloco existe pra matar — sessao que nunca drena — sem uma linha pra investigar. E o
-            # texto diz a CONSEQUENCIA, nao so "falhou": no Kimi o fim de turno real nao gera
-            # transicao nova (idle sobre idle), entao sem reavaliacao a sessao pode ficar parada
-            # sem drenar ate a proxima msg do usuario.
             from app.runtime_coordinator import RustCacheInvalid
             # Cache inválido já vai ao diário uma vez por sequência pelo coordenador; aqui repetiria a cada volta.
             if not isinstance(exc, RustCacheInvalid):
@@ -1439,26 +1361,6 @@ class _StrictBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 class InputBody(_StrictBody):
     text: str
     # Recados 1:1 pedem orientação imediata; envios comuns conservam a fila normal.
@@ -1486,7 +1388,6 @@ class TermInputBody(_StrictBody):
     key: str | None = None
 
 
-
 @app.get("/api/whoami", dependencies=[Depends(require_auth)])
 async def whoami(request: Request):
     """Qual sessão está chamando, pelos cabeçalhos X-Hangar-* (ver quem_chama). Diagnóstico e
@@ -1496,8 +1397,6 @@ async def whoami(request: Request):
     except quem_chama.SessaoDesconhecida as e:
         raise HTTPException(404, detail=erro("erro_sessao_desconhecida", str(e)))
     return {"name": nome, "origem": origem}
-
-
 
 
 @app.post("/api/diag", dependencies=[Depends(require_auth)])
@@ -1586,25 +1485,6 @@ def _aquecendo(e: costs_sources.Aquecendo) -> JSONResponse:
     return JSONResponse({"aquecendo": True, "lidos": e.lidos, "total": e.total}, status_code=202)
 
 
-@app.get("/api/uso", dependencies=[Depends(require_auth)], response_model=UsoReport)
-def uso_endpoint(period: str = "all", conta: list[str] = Query([]), projeto: list[str] = Query([]),
-                 modelo: list[str] = Query([]), plugin: list[str] = Query([]), foco: str = "",
-                 fresco: bool = False):
-    """Uso de skills/tools/hooks/MCP/agentes do Claude Code, do mesmo cache que o /api/costs.
-    Filtros repetíveis (`?conta=a&conta=b`); vazio = tudo; as chaves são as de
-    `by_conta`/`by_projeto`/`by_modelo`/`by_plugin`. `foco` = nome de um item: só a série diária
-    (`by_day`) recorta por ele."""
-    if period not in _COST_PERIODOS and period != "all":
-        period = "all"
-    limpo = lambda xs: [x for x in xs if x]  # `?conta=` (vazio) é "todas", não a conta ""
-    try:
-        return uso_report.report(period=period, fresco=fresco, conta=limpo(conta),
-                                 projeto=limpo(projeto), modelo=limpo(modelo),
-                                 plugin=limpo(plugin), foco=foco or None)
-    except costs_sources.Aquecendo as e:
-        return _aquecendo(e)
-
-
 def _codex_as_claude_mode(name: str) -> str | None:
     """Modo do Claude equivalente ao da sessão Codex `name` (None se não for Codex)."""
     from app.adapters.codex import sessions as codex_sessions
@@ -1618,20 +1498,9 @@ def _codex_as_claude_mode(name: str) -> str | None:
     return "acceptEdits" if sandbox == "workspace-write" else "manual"
 
 
-
-
 @app.post("/api/sessions", dependencies=[Depends(require_auth)], response_model=CreatedSessionInfo)
 async def create_session(request: Request) -> CreatedSessionInfo:
     raise registry_mod.SessionOpenNeedsRust()
-
-
-def _allowed_scan_root(path: str) -> Path:
-    target = Path(os.path.realpath(os.path.expanduser(path)))
-    root = next((r for r in allowed_roots() if target.is_relative_to(r)), None)
-    if root is None:
-        raise FsError(403, "root not allowed")
-    scan_dir(str(root), str(target))
-    return root
 
 
 def _jsonl_of_session(name: str) -> str | None:
@@ -1971,8 +1840,6 @@ async def trocar_conta(name: str, body: AccountMoveBody):
         raise HTTPException(exc.status, detail=public_error(exc)) from None
 
 
-
-
 @app.post("/api/sessions/{name}/rename")
 async def rename_session(name: str, request: Request):
     """Trocar o nome é do Rust; aqui chega só quem entrou por uma porta do Python (Connect, convidado
@@ -2021,7 +1888,6 @@ async def descartar_da_fila(name: str, entry_id: str):
 
 
 async def _queue_unavailable():
-    # Só chega aqui quem o Rust não atende: Pi, omp e Kimi, ou o processo no modo `python`.
     raise HTTPException(409, erro("queue_action_unavailable", "esta sessão não permite mexer na fila agora"))
 
 
@@ -2097,293 +1963,6 @@ async def codex_session_cost(name: str):
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "Codex rollout not found")) from None
 
 
-async def _bastao_alvo(name: str, project: str | None, session_id: str | None,
-                       config_dir: str | None, provider: str,
-                       origem_codex_account: str | None = None) -> SessionInfo:
-    """Origem VIVA pelo registry; morta pelo archive (project + session_id, como o resume do
-    Arquivo). O gatilho automático pode chegar depois de o 429 derrubar o pane — sem isto o
-    bastão só existia enquanto a origem respirava."""
-    info = await _cached_info(name)
-    if info and info.jsonl:
-        if info.provider == "codex":
-            try:
-                owner = codex_accounts.account_for_rollout(Path(info.jsonl))
-            except codex_accounts.AccountError as e:
-                raise _erro_conta_codex(e) from None
-            if owner is None and info.codex_home:
-                raiz = Path(info.codex_home).expanduser().resolve(strict=False)
-                owner = next((account for account in codex_accounts.list_accounts()
-                              if account.home.expanduser().resolve(strict=False) == raiz), None)
-            if owner is None and origem_codex_account is not None:
-                raise _erro_conta_codex(codex_accounts.AccountError(
-                    409, "codex_account_archive_mismatch",
-                    {"account_id": origem_codex_account}))
-            if owner is not None:
-                if origem_codex_account is not None and owner.id != origem_codex_account:
-                    raise _erro_conta_codex(codex_accounts.AccountError(
-                        409, "codex_account_archive_mismatch",
-                        {"account_id": origem_codex_account, "origin_account": owner.id}))
-                info.codex_home = str(owner.home.resolve(strict=False))
-                info.conta = f"codex:{info.codex_home}"
-        return info
-    if not (project and session_id):
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
-    # Mesma guarda de archive_history e do retomar do Arquivo: sem ela, qualquer pasta da máquina vira
-    # "conta" e o GET lê <pasta>/projects/<proj>/<uuid>.jsonl.
-    if config_dir is not None and config_dir not in {c.path for c in list_config_dirs()}:
-        raise HTTPException(400, detail=erro("erro_config_dir_invalido", "config_dir invalido"))
-    if provider != "claude" and provider not in archive_providers.PROVIDERS:
-        raise HTTPException(400, detail=erro("erro_provider_invalido", "provider invalido"))
-    try:
-        if provider == "codex":
-            p = await asyncio.to_thread(archive_jsonl, project, session_id, config_dir, provider,
-                                        origem_codex_account)
-            owner = codex_accounts.account_for_rollout(p)
-            if owner is None:
-                raise FileNotFoundError(session_id)
-            if origem_codex_account is not None and owner.id != origem_codex_account:
-                raise _erro_conta_codex(codex_accounts.AccountError(
-                    409, "codex_account_archive_mismatch",
-                    {"account_id": origem_codex_account, "origin_account": owner.id}))
-            cwd = await asyncio.to_thread(archive_cwd, project, session_id, config_dir, provider,
-                                          owner.id)
-            return SessionInfo(name=name, cwd=cwd, jsonl=str(p), provider=provider,
-                               codex_home=str(owner.home.resolve(strict=False)),
-                               conta=f"codex:{owner.home.resolve(strict=False)}")
-        p = await asyncio.to_thread(archive_jsonl, project, session_id, config_dir, provider)
-        cwd = await asyncio.to_thread(archive_cwd, project, session_id, config_dir, provider)
-    except codex_accounts.AccountError as e:
-        raise _erro_conta_codex(e) from None
-    except (ValueError, FileNotFoundError):
-        raise HTTPException(404, detail=erro("erro_transcript_nao_encontrado", "transcript not found"))
-    return SessionInfo(name=name, cwd=cwd, jsonl=str(p), provider=provider)
-
-
-@app.get("/api/sessions/{name}/bastao", dependencies=[Depends(require_auth)])
-async def bastao(name: str, project: str | None = None, session_id: str | None = None,
-                 config_dir: str | None = None, provider: str = "claude",
-                 origem_codex_account: str | None = None):
-    """Dossiê de continuidade da sessão, em markdown. SÓ leitura — não cria nada e não grava nada.
-
-    to_thread não é detalhe: `montar` roda `git status`/`git diff` (subprocess) e parseia a cauda de
-    um transcript que pode ter MB. Trabalho desses dentro da corrotina trava o loop e leva junto o
-    SSE de TODAS as sessões — é o incidente de 2026-07-23, quando um `git status` no tick da lista
-    derrubou a conexão inteira.
-    """
-    info = await _bastao_alvo(name, project, session_id, config_dir, provider,
-                              origem_codex_account)
-    texto = await asyncio.to_thread(bastao_montar, info.jsonl, info.cwd, info.provider, name,
-                                    info.codex_home)
-    return Response(content=texto, media_type="text/markdown; charset=utf-8")
-
-
-@app.get("/api/sessions/{name}/bastao/dossie", dependencies=[Depends(require_auth)])
-async def bastao_dossie(name: str):
-    """O dossiê que ESTA sessão RECEBEU, lido do disco — não um novo.
-
-    Irmão do GET acima e diferente dele de propósito: aquele MONTA o dossiê da sessão pedida agora,
-    e serve pra prévia de quem vai passar o bastão. Este devolve o arquivo gravado na hora da
-    passagem, que é o que a sucessora leu. Mostrar um dossiê remontado no lugar dele seria exibir
-    um texto que ninguém leu como se fosse a instrução recebida.
-    """
-    alvo = bastao_mod.caminho(name)
-    if not alvo.exists():
-        raise HTTPException(404, detail=erro("erro_bastao_sem_dossie", "no handover dossier for this session"))
-    texto = await asyncio.to_thread(alvo.read_text, encoding="utf-8")
-    return Response(content=texto, media_type="text/markdown; charset=utf-8")
-
-
-class BastaoBody(_StrictBody):
-    """Sessão NOVA que vai continuar o trabalho de `{name}`.
-
-    O padrão do `cwd` é o da ORIGEM (a passagem continua o mesmo trabalho, na mesma árvore). Os
-    campos do pedido de abertura vão ao Rust tal e qual, e é ele que valida
-    provider/conta/motor/modelo/esforço/permissão — `provider` aqui é sempre o da SUCESSORA.
-    """
-    name: str = Field(min_length=1)          # nome da sessão nova (o destino)
-    cwd: str | None = None                   # None = o cwd da origem
-    config_dir: str | None = None
-    provider: str = "claude"
-    remember_provider: bool = Field(default=False, strict=True)
-    engine: str | None = None
-    engine_account: str | None = None
-    model: str | None = None
-    effort: str | None = None
-    permission_mode: str | None = None
-    omp_profile: str | None = None
-    codex_account: str | None = None
-    # Modo de execução da SUCESSORA (Claude/Codex sem terminal). A sessão que recebe o trabalho é
-    # nova e nasce onde a pessoa escolher — não herda o modo da origem.
-    headless: bool | None = None
-    # Pedir ao modelo que reescreva o resumo antes de gravar. Gasta cota DA ORIGEM e é por isso
-    # que é escolha, não padrão; falhando, o resumo montado por código vai pro disco do mesmo jeito.
-    resumo_por_modelo: bool = False
-    # Endereçam a origem MORTA no archive (project + session_id); nunca a sucessora, e são
-    # ignorados quando a origem está viva.
-    project: str | None = None
-    session_id: str | None = None
-    origem_config_dir: str | None = None
-    origem_codex_account: str | None = None
-    origem_provider: str | None = None       # None = mesmo provider da sucessora (`provider`)
-
-
-def _nome_ocupado(nome: str) -> bool:
-    """Já existe sessão com esse nome? Mesmas duas fontes que `registry.create` consulta antes de
-    levantar `ValueError` — tmux (Claude/Pi/Kimi) e o sidecar do Codex."""
-    from app.adapters.codex import sessions as codex_sessions
-    return tmux.has_session(nome) or codex_sessions.exists(nome) or headless_sessions.exists(nome)
-
-
-def _bastao_preparar(info: SessionInfo, origem: str, destino: str,
-                     por_modelo: bool = False) -> tuple[str, Path, str, str | None]:
-    """Monta o resumo, GRAVA e devolve (texto, caminho, kick-off, aviso). Tudo sync, numa thread só.
-
-    Gravar antes de criar a sessão é o que fecha o caso "sessão nova viva apontando pra um arquivo
-    que não existe": se o disco recusar, a exceção sobe daqui e nada foi criado ainda.
-
-    Com `por_modelo`, o texto de código passa pelo modelo ANTES de gravar — e só ele vai pro disco
-    se der certo. A reescrita nunca levanta: falhando, grava o de código e devolve o aviso, porque
-    uma continuação sem a camada interpretada é muito melhor que continuação nenhuma.
-    """
-    texto = bastao_montar(info.jsonl, info.cwd, info.provider, origem, info.codex_home)
-    aviso = None
-    if por_modelo:
-        # A conta TEM de ser a da ORIGEM: é o trabalho dela que está sendo resumido e é a cota dela
-        # que a pessoa aceitou gastar. O transcript do Claude mora em
-        # `<config_dir>/projects/<projeto>/<uuid>.jsonl`, daí os três níveis.
-        #
-        # Não dando pra determinar a conta (origem Codex/Pi/Kimi, ou caminho fora do formato), a
-        # reescrita NÃO acontece. Rodar sem o env usaria a conta Claude padrão da máquina: daria
-        # certo, devolveria um resumo bonito e cobraria de quem não foi escolhido — pior que
-        # recusar, porque ninguém ficaria sabendo.
-        cfg = None
-        if info.provider == "claude" and info.jsonl:
-            p = Path(info.jsonl).parents
-            if len(p) >= 3:
-                cfg = str(p[2])
-        if cfg is None:
-            aviso = "só dá pra usar o modelo quando a sessão de origem é Claude nesta máquina"
-        else:
-            texto, aviso = bastao_mod.reescrever_com_modelo(texto, cfg)
-    alvo = bastao_mod.gravar(destino, texto)
-    conta, modelo = bastao_mod.origem_resumida(info.jsonl, info.provider, info.codex_home)
-    return texto, alvo, bastao_mod.kickoff(origem, alvo, conta, modelo), aviso
-
-
-@app.post("/api/sessions/{name}/bastao", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-async def bastao_passar(name: str, body: BastaoBody, request: Request):
-    return await _passar_bastao(name, body, request)
-
-
-async def _passar_bastao(name: str, body: BastaoBody, request: Request):
-    """Passa o bastão de `{name}` pra uma sessão nova: dossiê no disco + sessão criada + kick-off
-    na fila durável dela.
-
-    A ordem é a feature: **monta → grava → cria → enfileira**. Invertida, um erro de disco deixaria
-    uma sessão viva com um kick-off mandando ler um arquivo inexistente.
-
-    A entrega NÃO passa pelo caminho do `/input` (que digita PRIMEIRO e só depois grava na fila):
-    numa sessão criada há milissegundos a TUI ainda está subindo e as teclas se perdem. Entra como
-    `append(delivered=False)` — durável — e o drain entrega quando ela aceitar texto.
-
-    `to_thread` no preparo pelo mesmo motivo do GET: `montar` roda `git status` (subprocess) e
-    parseia a cauda do transcript; no loop isso derruba o SSE de todas as sessões (2026-07-23).
-    """
-    info = await _bastao_alvo(name, body.project, body.session_id, body.origem_config_dir,
-                              body.origem_provider or body.provider, body.origem_codex_account)
-    sucessora_codex_account = body.codex_account
-    if sucessora_codex_account is not None and body.provider != "codex":
-        raise HTTPException(400, detail=erro("codex_account_so_codex",
-                                             "codex_account só vale para provider codex"))
-    if body.provider == "codex":
-        try:
-            if sucessora_codex_account is not None:
-                codex_accounts.resolve_account(sucessora_codex_account)
-            if info.provider == "codex":
-                origem = codex_accounts.account_for_rollout(Path(info.jsonl)) if info.jsonl else None
-                if origem is None and info.codex_home:
-                    origem = next((account for account in codex_accounts.list_accounts()
-                                   if account.home.resolve(strict=False)
-                                   == Path(info.codex_home).resolve(strict=False)), None)
-                if origem is None:
-                    raise codex_accounts.AccountError(
-                        409, "codex_account_archive_mismatch", {})
-                if origem is not None:
-                    if sucessora_codex_account is None:
-                        sucessora_codex_account = origem.id
-                    elif sucessora_codex_account != origem.id:
-                        raise codex_accounts.AccountError(
-                            409, "codex_account_archive_mismatch",
-                            {"account_id": sucessora_codex_account, "origin_account": origem.id},
-                        )
-        except codex_accounts.AccountError as e:
-            raise _erro_conta_codex(e) from None
-    # UM nome só, sanitizado pelo MESMO lugar que a criação usa (`registry.create` chama isto), e
-    # daqui pra frente é ele quem nomeia o arquivo e a sessão. Sanitizar duas vezes por dois
-    # caminhos diferentes era o bug: `api.v2` gravava `api.v2.md` mas nascia como `api-v2`, e aí o
-    # `prune` não achava chave viva pro dossiê e APAGAVA o sidecar de uma sessão viva. De quebra,
-    # a guarda do "bastão pra si mesma" passa a pegar `"cc "` contra `"cc"`.
-    destino = sanitize_session_name(body.name)
-    if not destino:
-        raise HTTPException(400, detail=erro("erro_nome_invalido", "nome invalido"))
-    if destino == name:
-        raise HTTPException(400, detail=erro("erro_bastao_para_si_mesma",
-                                             "a sessão não passa o bastão pra si mesma"))
-    # Nome JÁ OCUPADO recusa aqui, ANTES de gravar. O `create_session` lá embaixo também recusa
-    # (registry.create: `ja existe uma sessao com esse nome` -> 409), só que tarde demais: o dossiê
-    # é `<destino>.md`, keyed por nome, então digitar o nome de uma sessão viva que já recebeu um
-    # bastão SOBRESCREVIA o dossiê dela — e o kick-off dela aponta pra aquele caminho. Mesma dupla
-    # de fontes do registry (tmux + sidecar do Codex), pra recusar o mesmo conjunto de nomes.
-    # Sobra uma janela estreita: se ALGUÉM MAIS criar esse nome entre esta checagem e o create, o
-    # dossiê já terá sido gravado por cima. O 409 do `create_session` impede duas sessões com o
-    # mesmo nome — ele NÃO desfaz essa escrita. Fechar de vez exigiria criar a sessão antes de
-    # gravar, que é a ordem que a feature proíbe (sessão viva apontando pra arquivo inexistente).
-    if await asyncio.to_thread(_nome_ocupado, destino):
-        raise HTTPException(409, detail=erro("erro_nome_em_uso", "ja existe uma sessao com esse nome"))
-    cwd = body.cwd or info.cwd
-    if not cwd:
-        # A origem sem cwd conhecido é o caso do transcript resolvido sem pane utilizável: sem
-        # diretório não há onde criar a sessão nova, e chutar um seria pior que recusar.
-        raise HTTPException(400, detail=erro("erro_bastao_sem_cwd",
-                                             "a sessão de origem não tem diretório conhecido; "
-                                             "escolha o cwd da sessão nova"))
-    # Pasta renomeada/movida com a origem morta (viva, o registry já devolve a atual): recusa antes
-    # de gravar o dossiê.
-    if not await asyncio.to_thread(os.path.isdir, os.path.expanduser(cwd)):
-        raise HTTPException(400, detail=erro("erro_bastao_cwd_inexistente",
-                                             f"a pasta {cwd} não existe mais; se ela foi renomeada "
-                                             f"ou movida, escolha a pasta nova", cwd=cwd))
-    try:
-        texto, alvo, kick, aviso_resumo = await asyncio.to_thread(
-            _bastao_preparar, info, name, destino, body.resumo_por_modelo)
-    except OSError as e:
-        # Falha APARECE, e a sessão não nasce órfã: nada foi criado até aqui.
-        _log.warning("bastao: não deu pra gravar o dossiê de %s -> %s: %s", name, destino, e)
-        # `motivo` como PARAM, e não só embutido no `msg`: sem ele o front não tem como traduzir a
-        # frase sem jogar fora o erro do sistema de arquivos, que é a única parte acionável dela.
-        raise HTTPException(500, detail=erro("erro_bastao_gravar",
-                                             f"não consegui gravar o dossiê: {e}",
-                                             motivo=str(e))) from None
-    # Reusa a abertura do Rust inteira (validação de provider/conta/motor/modelo, ciclo da conta,
-    # Codex): uma segunda porta de criação aqui seria mais uma pra manter em dia.
-    # A recusa dele sobe tal e qual — o dossiê já gravado vira sidecar órfão, que o `prune`
-    # recolhe pelo nome (ver bastao_mod.caminho).
-    # A sucessora nasce no Rust com o kick-off como primeira mensagem. Pela 8765 o Rust já olhou o
-    # pedido e abre ele mesmo com o que volta daqui (sem voltar a ele de dentro dele).
-    creation = {k: v for k, v in {
-        "name": destino, "cwd": cwd, "config_dir": body.config_dir, "provider": body.provider,
-        "remember_provider": body.remember_provider,
-        "engine": body.engine, "engine_account": body.engine_account, "model": body.model, "effort": body.effort,
-        "permission_mode": body.permission_mode, "omp_profile": body.omp_profile,
-        "codex_account": sucessora_codex_account,
-        # Cliente antigo não manda `headless`: sem ele, com terminal.
-        "headless": bool(body.headless), "initial_prompt": kick}.items() if v is not None}
-    if request.headers.get("x-hangar-open") == "rust":
-        return JSONResponse({"open": creation, "dossie": str(alvo),
-                             "texto": texto, "kickoff": kick, "aviso": aviso_resumo}, headers={"x-hangar-open": "rust"})
-    raise registry_mod.SessionOpenNeedsRust()
-
-
 @app.get("/api/sessions/{name}/workflows", dependencies=[Depends(require_auth)])
 async def workflows_list(name: str):
     info = await _cached_info(name)
@@ -2442,16 +2021,12 @@ async def subagents_pelo_rust(request: Request, name: str, agent_id: str | None 
     return await account_bridge.forward_public(request, "/__hangar_server/subagents")
 
 
-
-
 @app.get("/api/sessions/{name}/events", dependencies=[Depends(require_auth)])
 async def events(name: str, request: Request):
     # handler async -> registry.list() (subprocess tmux) vai pro threadpool pra nao bloquear o loop.
     sessions = await asyncio.to_thread(registry.list)
     info = next((s for s in sessions if s.name == name), None)
     if not info or not info.jsonl:
-        # No diário COM o motivo: o 404 sozinho não separa sessão que sumiu da lista de sessão viva
-        # sem transcript (Pi/Kimi nos primeiros segundos, ou tmux sem responder).
         diag.registrar("sse.recusado", "aviso", sessao=name,
                        detalhe="fora-da-lista" if not info else "sem-transcript")
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
@@ -2665,62 +2240,7 @@ def _send_one_available(name: str, text: str, track_entry: bool = False) -> dict
         if _rust_mode(coordinator):
             return _no_rust_binding_error()
     stripped = text.lstrip()
-    # Pi COM LINHA: cria a entrada da fila ANTES do 1o envio, pra ter um id ESTAVEL pra oferecer
-    # como msg_id (achado ALTA da revisao 02/08/2026 — "Porta A"). A extensao chama sendUserMessage
-    # ANTES de confirmar, entao a PRIMEIRA tentativa (esta aqui) e a que mais importa: sem id nela,
-    # um retry do drain() (apos "deferred" por ACK perdido) nao tem como a extensao reconhecer como
-    # a MESMA mensagem.
-    #
-    # SO com linha (achado da re-revisao 02/08/2026): pre-criar a entrada TAMBEM pra Pi sem linha
-    # (fallback de teclado) abre uma janela de duplo envio que nao existia antes deste commit. Entre
-    # este append() e o send_prompt() abaixo nao ha trava nenhuma — o _send_lock so e adquirido
-    # DENTRO do send_prompt (terminal_input.py) — e o claim_undelivered do drain() usa so o
-    # _append_lock da fila, que nao tem relacao com aquele. Um drain() concorrente (hook, /input
-    # duplo, _maybe_chain) podia reivindicar essa entrada na janela e digitar o MESMO texto de novo
-    # assim que o send_lock liberasse. E o msg_id nao ajuda em nada nesse caminho: quem digita no
-    # tty nunca le esse valor (ver comentario em terminal_input.send_prompt). Claude/Codex-via-tty
-    # e Pi-sem-linha ficam todos no fluxo de sempre (append DEPOIS do send, delivered ja resolvido)
-    # — e ali NAO ha janela, porque a entrada so nasce depois que o unico send_prompt desta chamada
-    # ja terminou.
     entry = None
-    # ponytail: JANELA RESIDUAL CONHECIDA (nao fechada agora, registrada por decisao do usuario). A
-    # decisao "vai por linha ou por tecla" e tomada DUAS vezes — aqui, FORA de qualquer trava, e de
-    # novo dentro do _send_lock (terminal_input.py, perto de "provider == pi and pane_id and
-    # INBOX.tem_linha"). Entre as duas nao ha trava compartilhada: claim_undelivered (pqueue.py) usa
-    # so o _append_lock da fila, sem relacao com o _send_lock. Se a linha cair ENTRE esta leitura de
-    # tem_linha() e a segunda checagem dentro do lock, quem perde a corrida pelo _send_lock ve
-    # tem_linha=False, cai pro teclado — que NUNCA le msg_id (ver terminal_input.send_prompt). Sai
-    # pela linha de um lado, e redigitado do outro. Nao e regressao deste commit: e o buraco
-    # original encolhido de "qualquer sessao Pi" pra "sessao com linha viva no instante do append, e
-    # a linha caiu bem nessa janela". Medido: entregar_sync segura o _send_lock por ate PRAZO_ACK+2.0
-    # = 5s (pi_inbox.py) — janela de segundos, nao de microssegundos, tempo de sobra pra um drain de
-    # reconexao de SSE ou de transicao de hook entrar.
-    # CUIDADO no upgrade: so mover o append() pra dentro do _send_lock fecha a corrida entre as DUAS
-    # LEITURAS de tem_linha() (o TOCTOU vira leitura unica) mas NAO fecha a duplicata. A entrada
-    # nasce delivered=False aqui e so vira True quando o set_delivered(...) do fim desta funcao roda
-    # DEPOIS que send_prompt() retorna — tambem fora de qualquer trava. Nesse intervalo (que inclui
-    # a espera inteira pelo _send_lock MAIS os ate 5s do entregar_sync) a entrada continua
-    # reivindicavel por claim_undelivered. Upgrade completo precisa das DUAS coisas juntas: o
-    # append() E o set_delivered() final dentro da MESMA trava — ou claim_undelivered passar a
-    # respeitar/disputar o _send_lock. Mover so o append() e necessario, mas sozinho e insuficiente.
-    # `pi_inbox.linha_de` (nome primeiro, pane depois), nunca o pane cru: no psmux o pane e `%1`
-    # em toda sessao Pi e a busca por pane achava a linha da OUTRA — ver pi_inbox.
-    is_pi = (provider in ("pi", "omp") and providers_bridge.inbox_call("line", name=name, pane=pane_id)["line"] is not None
-             and not stripped.startswith("/"))
-    if is_pi:
-        try:
-            entry = PromptQueue(name).append(text, delivered=False, ts=t0)
-        except OSError:
-            # Fail-soft, mas NAO calado: sem log aqui, um disco ruim degrada pro uuid4-por-tentativa
-            # de sempre (vulneravel a duplicata) exatamente na hora em que este conserto deveria
-            # entrar em acao — achado da re-revisao 02/08/2026.
-            _log.exception("fila indisponivel antes do envio (Pi com linha) name=%s", name)
-            entry = None
-    # Limpa a flag ANTES de chamar send_prompt (nao so depois de ler, mais abaixo): assim a AUSENCIA
-    # dela depois so pode significar "esta chamada nao passou pelo _partial", em vez de herdar o
-    # valor de uma chamada anterior na MESMA thread do pool. `_ULTIMA_LIMPEZA` e threading.local
-    # (ver o comentario ao lado da declaracao em terminal_input.py) e o pool REUSA thread — sem isto,
-    # um "partial" que um dia devolvesse sem passar por `_partial()` leria a sobra de outro envio.
     if hasattr(terminal_input._ULTIMA_LIMPEZA, "limpou"):
         del terminal_input._ULTIMA_LIMPEZA.limpou
     # Escada de entrega, um degrau só depois que o anterior não deu: socket nativo do Claude
@@ -2730,8 +2250,7 @@ def _send_one_available(name: str, text: str, track_entry: bool = False) -> dict
         _log.info("SEND name=%s pelo socket nativo msg_id=%s text=%r", name, nativo, text[:80])
     try:
         result = "sent" if nativo else terminal.send_prompt(
-            name, text, provider, pane_id=pane_id,
-            **({"msg_id": entry["id"]} if entry is not None else {}))
+            name, text, provider, pane_id=pane_id)
         if result != "sent" and (error := _transfer_send_error(name)):
             return error
         if result != "sent" and provider == "claude" and codex_sessions.exists(name):
@@ -2771,15 +2290,6 @@ def _send_one_available(name: str, text: str, track_entry: bool = False) -> dict
         limpou = getattr(terminal_input._ULTIMA_LIMPEZA, "limpou", False)
         if hasattr(terminal_input._ULTIMA_LIMPEZA, "limpou"):
             del terminal_input._ULTIMA_LIMPEZA.limpou
-        if entry is not None:
-            # A entrada do Pi ja existe (criada acima, ANTES de saber o resultado) — sem isto ficaria
-            # delivered=False pra sempre e o proximo drain reentraria digitando em cima do residuo.
-            try:
-                PromptQueue(name).set_delivered(entry["id"], True)
-            except OSError:
-                # Achado da re-revisao 02/08/2026: falhar calado aqui e o MESMO bug que o comentario
-                # acima descreve (residuo redigitado por cima) voltando sem deixar rastro nenhum.
-                _log.exception("fechar entrada apos 'partial' falhou name=%s", name)
         if limpou:
             return {"ok": False, "error": erro("erro_envio_incompleto_limpo",
                                                "envio incompleto: o composer foi limpo e a mensagem NAO foi enviada — pode "
@@ -2797,19 +2307,6 @@ def _send_one_available(name: str, text: str, track_entry: bool = False) -> dict
                 PromptQueue(name).clear()
             except OSError:
                 pass
-            # ponytail: o sidecar do AskUserQuestion NAO e limpo aqui — /clear abre um transcript com
-            # session_id novo, entao o sidecar antigo vira lixo inofensivo (nao reabre nada).
-    elif entry is not None:
-        # Pi com id estavel: a entrada JA existe (criada antes do send) — so atualiza o delivered,
-        # nunca um segundo append (duplicaria a bubble na fila).
-        try:
-            PromptQueue(name).set_delivered(entry["id"], result == "sent")
-        except OSError:
-            _log.exception("atualizar fila apos envio falhou name=%s", name)
-        if result == "sent":
-            _agendar_confirmacao(name, _CONFIRM_GRACE + 0.5)
-        else:
-            threading.Thread(target=_drain_session, args=(name,), daemon=True).start()
     else:
         # Registra na fila duravel (sidecar) sempre — aparece como user_msg em ordem e persiste no
         # reload; o merge dedup-a contra o transcript quando o Claude Code grava o prompt. delivered =
@@ -2852,27 +2349,6 @@ def _provider_of(name: str) -> str:
 
 
 def _pane_info(name: str) -> tuple[str, str | None]:
-    """(provider, pane_id) numa leitura só — era `_pane_provider`, que pagava seu próprio
-    `tmux list-panes -t <name>` (via `tmux.pane_pid`); agora usa `list_panes_all()` (MESMA chamada
-    `list-panes -a` que o antigo `list_panes_active` já fazia — um fork só), e o `pane_id` sai de
-    carona, sem tmux novo no caminho quente. Provider do pane (claude/pi) continua lido do /proc
-    como antes: o gate de "TUI pronta" do terminal_input casa marcas do rodape do Claude, que o Pi
-    nao imprime, e sem saber o provider todo envio a uma sessao Pi queimava os 12s de timeout
-    antes de digitar.
-
-    Task 6: resolve pelo pane do AGENTE (`SessionRegistry._agent_pane`, Task 5.5), nao mais pelo
-    pane ATIVO — reusa a MESMA resolucao que `registry.list()` ja usa, nao uma terceira. Com um
-    split (o shell escondido, ou qualquer split manual), o pane ativo podia ser o do shell: uma
-    sessao Pi virava ("claude", pane_id do shell) neste caminho de ENVIO — o gate esperava as
-    marcas de rodape do Claude e queimava os 12s por mensagem, e `INBOX.tem_linha(pane_id)`
-    falhava (derrubava a linha rapida do Pi), porque o pane_id devolvido era do pane errado.
-
-    Erro/pane sumido -> ("claude", None) — comportamento de hoje, marcas do Claude, sem pane_id
-    (cai pra tecla, igual a antes desta task).
-
-    Revisao final (I1): o corpo mudou de casa pro `agentpane.pane_info` — o drain da fila duravel e
-    o adapter do Pi precisavam da MESMA resolucao e estavam no pane ativo. Esta funcao fica como o
-    nome que as rotas (e os testes) ja conhecem."""
     from app import agentpane
     return agentpane.pane_info(name)
 
@@ -3156,16 +2632,6 @@ async def input_prompt(name: str, body: InputBody):
             elif _headless(name) and not res.get("delivered"):
                 sent = await get_adapter(CLAUDE_HEADLESS).steer_queue(name, entry_id=entry_id)
                 steered = entry_id in sent
-            elif provider != "codex" and not _headless(name):
-                provider, _ = await _send_thread(_pane_info, name)
-                q = PromptQueue(name)
-                # Só Kimi: o steer dele injeta no turno em curso. O "send now" do Claude INTERROMPE o
-                # turno (mata o comando rodando), então lá a promoção é só pelo botão, nunca colada
-                # num recado.
-                if provider == "kimi" and await _send_thread(q.entry_delivered, entry_id):
-                    if await _send_thread(terminal_input.steer_now, name, provider) is True:
-                        steered = True
-                        await _send_thread(q.confirm_delivered)
         except Exception:
             # O recado já existe na fila. Falha de orientação nunca faz outro append/envio.
             _log.exception("falha apos persistir recado name=%s entry=%s steered=%s", name, entry_id, steered)
@@ -3219,8 +2685,6 @@ async def steer_session(name: str, body: InputBody | None = None):
             # Processo morreu entre a checagem e a escrita: a mensagem continua na fila.
             raise HTTPException(502, detail=erro("erro_envio_falhou", f"o processo não recebeu: {e}")) from None
     provider, _ = await _send_thread(_pane_info, name)
-    if provider not in ("kimi", "claude"):
-        raise HTTPException(409, "só sessão Kimi ou Claude tem steer pela fila do terminal")
     if provider == "claude":
         from app import runtime_coordinator
         from app.runtime_terminal import route
@@ -3248,9 +2712,6 @@ async def steer_session(name: str, body: InputBody | None = None):
         # outra via, ou o wire ainda nao flushou): NAO confirma nada — quem decide e o reconcile
         # do transcript, nunca um carimbo sobre promocao que nao aconteceu.
         return {"ok": True, "promoted": False}
-    # Promovido de verdade: baixa a fila duravel AGORA. O Kimi so grava o append_message da msg
-    # steerada no FIM do turno (medido: 34s depois do ctrl-s), entao esperar o transcript confirmar
-    # deixava o chip "N na fila" aceso o turno inteiro — e clicavel, sobre um no-op.
     n = await _send_thread(PromptQueue(name).confirm_delivered)
     return {"ok": True, "promoted": True, "confirmed": n}
 
@@ -3351,16 +2812,12 @@ def _require_rust_groups() -> None:
         raise HTTPException(503, detail=_groups_need_rust())
 
 
-
-
 async def _route_after(out: dict) -> None:
     """O que o Rust devolveu para o Python fazer depois da ponte, num sentido: entregar o recado a
     sessão que só ele atende e promover o time do `orq`. Promoção que falha desfaz o grupo novo."""
     failed = await _deliver_deferred(out.get("deliveries"))
     body = out.get("body")
     _report_failed(body, failed, "grupos.entrega_pela_ponte")
-
-
 
 
 async def _group_route(method: str, name: str, route: str, body: BaseModel | None = None):
@@ -3446,12 +2903,6 @@ async def pair_contract_put(name: str, body: PairContractBody):
     return await _group_route("PUT", name, "contract", body)
 
 
-
-
-
-
-
-
 @app.delete("/api/sessions/{name}/pair", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
 async def unpair_session(name: str):
     """`name` SAI do grupo (os demais membros continuam entre si; grupo restante de 1 dissolve).
@@ -3493,103 +2944,6 @@ def _espera_picker_fechar(name: str, timeout: float = _FECHA_PICKER_TIMEOUT) -> 
     _log.warning("picker de %s nao fechou em %.1fs apos o Escape; enviando o texto assim mesmo",
                  name, timeout)
     return False
-
-
-# Prazo pro `tool.result` do picker do Kimi aparecer no wire depois do Submit.
-_RESULT_KIMI_TIMEOUT = 5.0
-
-
-def _espera_resposta_kimi(jsonl: str | None, call_id: str,
-                          timeout: float = _RESULT_KIMI_TIMEOUT) -> bool:
-    """True quando o `tool.result` daquele toolCallId chega no wire. A escrita nao e instantanea —
-    sem a espera, a checagem rodaria antes do Kimi gravar e todo drive bem-sucedido cairia no
-    fallback por texto, entregando a resposta DUAS vezes (uma pela ferramenta, outra como msg)."""
-    if not jsonl:
-        return False
-    from app.adapters.kimi.transcript import resposta_chegou
-    limite = time.monotonic() + timeout
-    while time.monotonic() < limite:
-        if resposta_chegou(jsonl, call_id):
-            return True
-        time.sleep(0.2)
-    return False
-
-
-# Prazo pra escolha no painel de aprovacao do Kimi aterrissar (mesmo criterio do picker).
-_APROV_KIMI_TIMEOUT = 5.0
-
-
-def _espera_escolha_kimi(name: str, jsonl: str, req_id: str, pede_feedback: bool,
-                         timeout: float = _APROV_KIMI_TIMEOUT) -> bool:
-    """True quando a escolha no painel de aprovacao do Kimi esta comprovadamente entregue.
-
-    Duas provas, porque as escolhas do painel terminam de dois jeitos diferentes: a comum vira
-    `interaction.resolved` no wire, e a que pede justificativa (`Revise`, `Reject with feedback`)
-    NAO resolve nada na hora — o painel troca o rodape por um campo de texto e espera a pessoa
-    escrever. Sem a segunda prova, escolher `Revise` gastaria o prazo inteiro e voltaria erro numa
-    tecla que pegou."""
-    from app.adapters.kimi.transcript import interacao_resolvida
-    limite = time.monotonic() + timeout
-    while time.monotonic() < limite:
-        if interacao_resolvida(jsonl, req_id):
-            return True
-        if pede_feedback and terminal_input.feedback_kimi_aberto(name):
-            return True
-        time.sleep(0.2)
-    return False
-
-
-def _select_aprovacao_kimi(name: str, info, option: int) -> dict:
-    """Escolhe no painel de APROVACAO do Kimi (plano/comando/arquivo).
-
-    As opcoes vem do WIRE (`read_pending_interaction`), nao do pane — e a mesma fonte que o estado
-    usou pra desenhar os botoes, entao o numero que chega aqui casa com o que a pessoa leu.
-
-    Sem pedido pendente, 409 — NUNCA cair no `terminal.select` generico. Ele conta a linha do cursor
-    e, quando nao acha (`_cursor_row` so le `❯`, e o Kimi desenha `▶`), manda Down x(n-1) + Enter as
-    CEGAS. Numa sessao Kimi isso nao tem alvo: ou o painel ja fechou e as teclas caem na conversa em
-    execucao, ou ele esta aberto e o Enter confirma a linha errada — nos dois casos a rota devolveria
-    {"ok": true}, que e o sucesso falso que este projeto proibe. E nao ha o que perder: `_menu_block`
-    exige cursor `❯`/`>`, entao o pane do Kimi nunca produziu opcao por raspagem — este endpoint so
-    e alcancavel, nesse provider, pelos botoes que o wire desenhou."""
-    from app.adapters.kimi.transcript import read_pending_interaction
-    jsonl = info.jsonl if info else None
-    pend = read_pending_interaction(jsonl) if jsonl else None
-    if pend is None:
-        # Cobre "ja foi respondida no terminal" e "nao deu pra ler o wire agora" — pro usuario a
-        # saida e a mesma (nada foi enviado, olhe a sessao). O caso ilegivel nao some calado: o
-        # `_objetos_da_cauda` loga uma vez por arquivo.
-        raise HTTPException(409, detail=erro(
-            "erro_sem_pergunta_kimi",
-            "nenhuma pergunta do Kimi pendente (ja respondida no terminal?)"))
-    escolhas = pend["escolhas"]
-    if not 1 <= option <= len(escolhas):
-        raise HTTPException(409, detail=erro(
-            "erro_opcao_fora_da_lista",
-            f"opção {option} não existe neste pedido (são {len(escolhas)}) — opção NÃO enviada"))
-    try:
-        terminal_input.select_kimi(name, option, jsonl, pend["id"])
-    except ValueError as e:
-        raise HTTPException(409, str(e))
-    except terminal_input.DriveError as e:
-        # O wire dizia pendente e o painel ja saiu da tela: respondido no terminal entre o toque e
-        # aqui. Mesmo caso (e mesma frase) do picker do Kimi no /answer.
-        diag.registrar("aprovacao_kimi.painel_fechado", "erro", sessao=name, detalhe=str(e))
-        raise HTTPException(409, detail=erro(
-            "erro_sem_pergunta_kimi",
-            "nenhuma pergunta do Kimi pendente (ja respondida no terminal?)"))
-    if not _espera_escolha_kimi(name, jsonl, pend["id"], escolhas[option - 1]["requires_feedback"]):
-        # Prazo estourado NAO prova que nada pegou — pode ser o Kimi demorando pra gravar. Igual ao
-        # /answer do picker: so se o painel CONTINUA na tela e que a tecla comprovadamente nao pegou.
-        if terminal_input.aprovacao_kimi_aberta(name):
-            raise HTTPException(409, detail=erro(
-                "erro_opcao_nao_convergiu", "não consegui marcar essa opção no terminal — tente de novo",
-                detalhe="o painel de aprovação continua aberto e nada foi resolvido no wire"))
-        raise HTTPException(409, detail=erro(
-            "erro_sem_confirmacao_resposta",
-            "resposta enviada, mas nao deu pra confirmar a tempo — "
-            "confira na sessao antes de responder de novo"))
-    return {"ok": True, "feedback_pendente": escolhas[option - 1]["requires_feedback"]}
 
 
 def _recusa_se_so_enfileirou(name: str, res: dict) -> None:
@@ -3680,11 +3034,6 @@ def select(name: str, body: SelectBody):
     _recusa_se_painel_aberto(name)
     if not _session_exists(name):
         raise HTTPException(404, detail=erro("erro_sessao_opcao_nao_enviada", "sessão não encontrada — opção NÃO enviada"))
-    # Kimi: os botoes de aprovacao (plano/comando/arquivo) sao desenhados a partir do WIRE, entao a
-    # escolha volta pelo wire tambem — tecla numerica + `interaction.resolved` como prova. O drive
-    # generico abaixo NAO atende este provider em hipotese nenhuma (ver _select_aprovacao_kimi).
-    if getattr(info, "provider", "claude") == "kimi":
-        return _select_aprovacao_kimi(name, info, body.option)
     codex_sem_terminal = getattr(info, "provider", "claude") == "codex" and getattr(info, "headless", False)
     if _headless(name) or codex_sem_terminal:
         # Opção = resposta ao pedido de permissão em aberto (1 permite, 2 nega), pelo stdin.
@@ -3906,14 +3255,6 @@ async def limits(name: str):
     }
 
 
-
-
-
-
-
-
-
-
 class CodexModelBody(_StrictBody):
     model: str
     effort: str | None = None
@@ -4132,67 +3473,6 @@ def term_input(name: str, body: TermInputBody):
     return {"ok": True}
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-class CheckoutBody(_StrictBody):
-    branch: str
-
-
-class GitActionBody(_StrictBody):
-    # allowlist declarativa no schema (alem do git_ops)
-    action: Literal["status", "pull", "fetch", "stash", "stash-pop", "log",
-                    "revert-abort", "cherry-pick-abort"]
-
-
-class GitPathBody(_StrictBody):
-    path: str   # validado em git_ops contra a lista real de arquivos alterados (anti-traversal)
-
-
-class GitPathDiffBody(_StrictBody):
-    # `escopo` e str de proposito, nao Literal: o Literal era validado pelo FastAPI e o
-    # cliente recebia 422 com detail em LISTA — o envelope erro_git_diff nunca chegava a
-    # nascer. Quem rejeita o valor e o git_ops.path_diff, e o erro sai no envelope.
-    path: str
-    escopo: str = "branch"
-
-
-class GitCommitBody(_StrictBody):
-    message: str = Field(min_length=1)
-    paths: list[str] = []        # sem min_length: amend=True aceita [] (reword); git_ops barra [] sem amend
-    amend: bool = False
-    new_branch: str | None = None
-
-
 def _session_info_with_cwd(name: str):
     # Mesmo lookup do upload. 404 se a sessão ou o cwd não existe.
     info = _cached_info_sync(name)
@@ -4203,326 +3483,6 @@ def _session_info_with_cwd(name: str):
 
 def _session_cwd(name: str) -> str:
     return _session_info_with_cwd(name).cwd
-
-
-def _session_git_cwd(name: str) -> str:
-    """O git segue o agente até a worktree; arquivos, uploads e execução ficam no cwd."""
-    return _session_info_with_cwd(name).git_dir
-
-
-@app.get("/api/sessions/{name}/branches", dependencies=[Depends(require_auth)])
-def branches(name: str):
-    try:
-        return list_branches(_session_git_cwd(name))
-    except GitError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.post("/api/sessions/{name}/checkout", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-def checkout(name: str, body: CheckoutBody):
-    try:
-        return switch_branch(_session_git_cwd(name), body.branch)
-    except GitError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.post("/api/sessions/{name}/git", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-def git(name: str, body: GitActionBody):
-    try:
-        return git_action(_session_git_cwd(name), body.action)
-    except GitError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.get("/api/sessions/{name}/git/files", dependencies=[Depends(require_auth)])
-def git_files(name: str):
-    try:
-        cwd = _session_git_cwd(name)
-        # sequencer: revert/cherry-pick em andamento (conflito) — o front deriva o botao de abort
-        # DAQUI, nao de memoria de sessao (ver gitStore.svelte.ts:pendingAbort).
-        return {"files": changed_files(cwd), "sequencer": sequencer_state(cwd)}
-    except GitError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.get("/api/sessions/{name}/git/log", dependencies=[Depends(require_auth)])
-def git_log_route(name: str, q: str | None = None, n: int = 50):
-    try:
-        cwd = _session_git_cwd(name)
-        # `n` vem do "carregar mais" da coluna: a lista pede o dobro a cada vez. Teto de 2000 pra
-        # uma URL forjada não fazer o git montar o histórico inteiro de um repo grande.
-        commits = git_log(cwd, n=max(1, min(n, 2000)), grep=q)
-        resumo = git_summary(cwd) or {}
-        # Com busca ativa (q), NAO monta o grafo: --grep tira commits do meio e assign_lanes
-        # desenharia arestas pra parents que sumiram da lista (lane que nunca fecha).
-        return {"commits": commits if q else assign_lanes(commits),
-                "ahead": resumo.get("ahead"), "behind": resumo.get("behind")}
-    except GitError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.post("/api/sessions/{name}/git/diff", dependencies=[Depends(require_auth), Depends(_transfer_check)])
-def git_diff(name: str, body: GitPathBody):
-    try:
-        return file_diff(_session_git_cwd(name), body.path)
-    except GitError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.post("/api/sessions/{name}/git/discard", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-def git_discard(name: str, body: GitPathBody):
-    try:
-        return discard_file(_session_git_cwd(name), body.path)
-    except GitError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.post("/api/sessions/{name}/git/commit", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-def git_commit(name: str, body: GitCommitBody):
-    try:
-        return commit(_session_git_cwd(name), body.message, body.paths, body.amend, body.new_branch)
-    except GitError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.get("/api/sessions/{name}/git/last-message", dependencies=[Depends(require_auth)])
-def git_last_message(name: str):
-    try:
-        return last_commit_message(_session_git_cwd(name))
-    except GitError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.get("/api/sessions/{name}/git/commit/{sha}/files", dependencies=[Depends(require_auth)])
-def git_commit_files(name: str, sha: str):
-    try:
-        return {"files": commit_files(_session_git_cwd(name), sha)}
-    except GitError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.get("/api/sessions/{name}/git/commit/{sha}/diff", dependencies=[Depends(require_auth)])
-def git_commit_diff(name: str, sha: str, path: str):
-    try:
-        return commit_file_diff(_session_git_cwd(name), sha, path)
-    except GitError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-class GitShaBody(_StrictBody):
-    sha: str   # validado em git_ops por _SHA_RE (hex 7-40) antes de virar argv
-
-
-class GitResetBody(_StrictBody):
-    sha: str
-    mode: Literal["soft", "mixed", "hard"]   # enum no schema E no git_ops
-
-
-class GitBranchBody(_StrictBody):
-    name: str
-    sha: str | None = None
-    switch_after: bool = False
-
-
-class GitTagBody(_StrictBody):
-    name: str
-    sha: str | None = None
-    message: str | None = None
-
-
-@app.get("/api/sessions/{name}/git/commit/{sha}/diff-full", dependencies=[Depends(require_auth)])
-def git_commit_diff_full(name: str, sha: str):
-    try:
-        return commit_diff(_session_git_cwd(name), sha)
-    except GitError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.post("/api/sessions/{name}/git/revert", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-def git_revert(name: str, body: GitShaBody):
-    try:
-        return revert_commit(_session_git_cwd(name), body.sha)
-    except GitError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.post("/api/sessions/{name}/git/cherry-pick", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-def git_cherry_pick(name: str, body: GitShaBody):
-    try:
-        return cherry_pick(_session_git_cwd(name), body.sha)
-    except GitError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.post("/api/sessions/{name}/git/push", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-def git_push(name: str):
-    try:
-        return push_branch(_session_git_cwd(name))
-    except GitError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.post("/api/sessions/{name}/git/reset", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-def git_reset(name: str, body: GitResetBody):
-    try:
-        return reset_to(_session_git_cwd(name), body.sha, body.mode)
-    except GitError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.post("/api/sessions/{name}/git/branch", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-def git_branch_create(name: str, body: GitBranchBody):
-    try:
-        return create_branch_at(_session_git_cwd(name), body.name, body.sha, body.switch_after)
-    except GitError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.post("/api/sessions/{name}/git/tag", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-def git_tag_create(name: str, body: GitTagBody):
-    try:
-        return create_tag(_session_git_cwd(name), body.name, body.sha, body.message)
-    except GitError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.get("/api/sessions/{name}/git/commit/{sha}/diff-worktree", dependencies=[Depends(require_auth)])
-def git_commit_diff_worktree(name: str, sha: str):
-    try:
-        return diff_vs_worktree(_session_git_cwd(name), sha)
-    except GitError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.get("/api/sessions/{name}/git/commit/{sha}/branches", dependencies=[Depends(require_auth)])
-def git_commit_branches(name: str, sha: str):
-    try:
-        return branches_containing(_session_git_cwd(name), sha)
-    except GitError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-# Textos FIXOS do envelope, por familia de erro: o detalhe interno (e.msg/str(e) do
-# SearchError e do GitError pode carregar caminho absoluto ou stderr do git, e atravessar
-# a API exporia segredo. O detalhe vai SO para o log, passando pelo _scrub (redige
-# userinfo de remote). O front mostra a chave traduzida; o `msg` do envelope e a rede
-# quando o front nao conhece o code — e ele tambem e fixo, por isso.
-_MSG_ARQ = "Não deu para acessar esse arquivo ou pasta."
-_MSG_BUSCA = "Não deu para completar a busca."
-_MSG_DIFF = "Não deu para montar o diff."
-
-
-def _erro_arq(e: FileError | SearchError) -> HTTPException:
-    # As chaves `erro_arq_busca_falhou` e `erro_git_diff` trazem `{msg}` no texto, e a
-    # funcao do paraglide exige o argumento — sem ele o front renderiza `undefined` ou
-    # nem compila. O `erro()` tem `msg` como parametro nomeado, entao o valor entra no
-    # dict de params DEPOIS, por chave.
-    fixo = e.msg if e.code.startswith("workspace_") else (_MSG_BUSCA if isinstance(e, SearchError) else _MSG_ARQ)
-    _log.warning("files: %s", git_ops._scrub(e.msg))
-    d = erro(e.code, fixo)
-    d["params"]["msg"] = fixo
-    return HTTPException(status_code=e.status, detail=d)
-
-
-@app.get("/api/sessions/{name}/files/list", dependencies=[Depends(require_auth)])
-def files_list(name: str, path: str | None = None, so_modificados: bool = True):
-    try:
-        return filetree.list_dir(_session_cwd(name), path, so_modificados)
-    except FileError as e:
-        raise _erro_arq(e)
-
-
-@app.get("/api/sessions/{name}/files/read", dependencies=[Depends(require_auth)])
-def files_read(name: str, path: str):
-    try:
-        return filetree.read_file(_session_cwd(name), path)
-    except FileError as e:
-        raise _erro_arq(e)
-
-
-class FileWriteBody(_StrictBody):
-    path: str
-    text: str
-    # A impressão da leitura. Sem ela a gravação é recusada: escrever às cegas por cima do que o
-    # agente da sessão acabou de mudar é o desfecho que este campo existe pra impedir.
-    digest: str | None = None
-
-
-@app.post("/api/sessions/{name}/files/write", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-def files_write(name: str, body: FileWriteBody):
-    try:
-        return filetree.write_file(_session_cwd(name), body.path, body.text, body.digest)
-    except FileError as e:
-        raise _erro_arq(e)
-
-
-@app.get("/api/sessions/{name}/files/search", dependencies=[Depends(require_auth)])
-def files_search(name: str, q: str, mode: str = "names"):
-    # `mode` e str de proposito, nao Literal: o Literal era validado pelo FastAPI e o 422
-    # com detail em LISTA engolia o erro_arq_modo_invalido. Quem rejeita e o filesearch.
-    try:
-        return filesearch.search(_session_cwd(name), q, mode)
-    except SearchError as e:
-        raise _erro_arq(e)
-
-
-class ResolverBody(_StrictBody):
-    caminhos: list[str]
-
-
-_ELSEWHERE_MAX = 30
-
-
-@app.post("/api/sessions/{name}/files/resolver", dependencies=[Depends(require_auth), Depends(_transfer_check)])
-def files_resolver(name: str, body: ResolverBody):
-    """Visão "citados": confere de uma vez quais caminhos citados existem (e resolve os relativos
-    a outra pasta pelo sufixo). Quem não existe não entra na lista."""
-    try:
-        info = _cached_info_sync(name)
-        if info is None or not info.cwd:
-            raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
-        from app.transcript import citation_cwds
-        rows = _conversation_rows(info) if info.jsonl else None
-        cited = citation_cwds(info.jsonl, body.caminhos, rows=rows) if info.jsonl else {}
-        found: dict[str, dict] = {}
-        elsewhere = 0
-        for path in body.caminhos:
-            bases = list(dict.fromkeys([*(cited.get(path) or []), info.cwd]))
-            for suffix in (False, True):
-                for base in bases:
-                    result = filesearch.resolver(base, [path], suffix=suffix)
-                    target = result["ok"].get(path)
-                    if target is None:
-                        continue
-                    if os.path.realpath(base) != os.path.realpath(info.cwd):
-                        # O FilesStore lê relativos pelo cwd de nascimento. Outro cwd usa /file.
-                        target["relativo"] = None
-                    found[path] = target
-                    break
-                if path in found:
-                    break
-            # Nome solto ou relativo de outro repositório, só se a conversa o citou; a leitura vai pela rota de arquivo
-            # citado, que faz a mesma busca. Cada um relê o transcript: teto por pedido.
-            if path not in found and info.jsonl and path in cited and elsewhere < _ELSEWHERE_MAX:
-                elsewhere += 1
-                whole = _cited_elsewhere(info.jsonl, info.cwd, path, cited[path], siblings=True, rows=rows)
-                if whole:
-                    found[path] = {"relativo": None, "real": os.path.realpath(whole)}
-        return {"ok": {path: found[path] for path in body.caminhos if path in found},
-                "faltam": [path for path in body.caminhos if path not in found]}
-    except SearchError as e:
-        raise _erro_arq(e)
-
-
-@app.post("/api/sessions/{name}/git/path-diff", dependencies=[Depends(require_auth), Depends(_transfer_check)])
-def git_path_diff(name: str, body: GitPathDiffBody):
-    try:
-        return git_ops.path_diff(_session_git_cwd(name), body.path, body.escopo)
-    except GitError as e:
-        _log.warning("path-diff: %s", git_ops._scrub(str(e)))
-        d = erro("erro_git_diff", _MSG_DIFF)
-        d["params"]["msg"] = _MSG_DIFF
-        raise HTTPException(status_code=e.status, detail=d)
 
 
 @app.get("/api/sessions/{name}/runners", dependencies=[Depends(require_auth)],
@@ -4579,49 +3539,7 @@ def runner_pane(name: str):
     return {"pane": runner.run_pane(_session_cwd(name))}
 
 
-def _project_error(e: project_shortcuts.ProjectError) -> HTTPException:
-    return HTTPException(409, detail=erro("erro_project_shortcuts_projeto", str(e), detalhe=str(e)))
-
-
-def _project_file_error(e: project_shortcuts.FileError) -> HTTPException:
-    return HTTPException(500, detail=erro("erro_project_shortcuts_arquivo", str(e), detalhe=str(e)))
-
-
-@app.get("/api/sessions/{name}/project-shortcuts", dependencies=[Depends(require_auth)])
-def get_project_shortcuts(name: str):
-    try:
-        return project_shortcuts.describe(_session_cwd(name))
-    except project_shortcuts.ProjectError as e:
-        raise _project_error(e)
-    except project_shortcuts.FileError as e:
-        raise _project_file_error(e)
-
-
-@app.put("/api/sessions/{name}/project-shortcuts", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-def put_project_shortcuts(name: str, body: ProjectShortcutsBody):
-    # Lista INTEIRA do projeto (add/editar/remover sao a mesma gravacao); vazia remove o projeto.
-    cwd = _session_cwd(name)
-    try:
-        project = project_shortcuts.project_of(cwd)
-        project_shortcuts.save_items(project["key"], body.items)
-        return {**project, "items": project_shortcuts.load_items(project["key"])}
-    except project_shortcuts.ProjectError as e:
-        raise _project_error(e)
-    except project_shortcuts.FileError as e:
-        raise _project_file_error(e)
-    except ValueError as e:
-        raise HTTPException(400, detail=erro("erro_project_shortcuts", str(e), detalhe=str(e)))
-
-
 _DISPLAY_VARS = ("DISPLAY", "WAYLAND_DISPLAY", "XDG_CURRENT_DESKTOP", "HYPRLAND_INSTANCE_SIGNATURE")
-_SHORTCUT_FAIL_WINDOW = 2.0
-
-
-def _shortcut_output_tail(raw: bytes, lines: int = 5, chars: int = 400) -> str:
-    """Ultimas linhas da saida do atalho, curtas o bastante pra caber no aviso da tela."""
-    text = raw.decode("utf-8", errors="replace")
-    tail = " | ".join(l.strip() for l in text.strip().splitlines()[-lines:] if l.strip())
-    return tail if len(tail) <= chars else "…" + tail[-chars:]
 
 
 def _shortcut_env() -> dict[str, str]:
@@ -4645,157 +3563,11 @@ def _shortcut_env() -> dict[str, str]:
     return env
 
 
-@app.post("/api/sessions/{name}/shortcut-shell", dependencies=[Depends(require_auth), Depends(_transfer_guard)],
-          status_code=202)
-def shortcut_shell(name: str, body: ShortcutShellBody, request: Request):
-    return _shortcut_shell(name, body, request, powershell=False)
-
-
-@app.post("/api/sessions/{name}/run-code", dependencies=[Depends(require_auth), Depends(_transfer_guard)], status_code=202)
-def run_code(name: str, body: RunCodeBody, request: Request):
-    if len(body.command) > 4096:
-        raise HTTPException(400, detail=erro("erro_run_code_longo", "comando longo demais"))
-    if "\0" in body.command:
-        raise HTTPException(400, detail=erro("erro_run_code_invalido", "comando invalido"))
-    if body.key and (not body.key.startswith("run-code:") or not all(c.isascii() and (c.isalnum() or c in ":-") for c in body.key)):
-        raise HTTPException(400, detail=erro("erro_run_code_invalido", "identificador invalido"))
-    language = (body.language or "").strip().lower()
-    unix = {"bash", "sh", "zsh", "fish"}
-    powershell = {"powershell", "ps1", "pwsh"}
-    if language and language not in unix | powershell | {"shell"}:
-        raise HTTPException(400, detail=erro("erro_run_code_linguagem", "linguagem de terminal invalida"))
-    if (os.name == "nt" and language in unix) or (os.name != "nt" and language in powershell):
-        raise HTTPException(409, detail=erro("erro_run_code_shell_incompativel", "o bloco nao combina com o sistema deste servidor",
-                                              linguagem=language, sistema="Windows" if os.name == "nt" else "Linux"))
-    shell = None
-    if os.name == "nt" and language == "pwsh":
-        shell = shutil.which("pwsh.exe")
-    elif os.name != "nt" and language not in ("", "shell"):
-        shell = shutil.which(language)
-    if language not in ("", "shell") and shell is None and (os.name != "nt" or language == "pwsh"):
-        raise HTTPException(409, detail=erro("erro_run_code_shell_ausente", "interpretador nao instalado", linguagem=language))
-    from app import termsock
-    if not termsock.painel_disponivel():
-        raise HTTPException(409, detail=erro("erro_run_code_terminal", "terminal indisponivel nesta maquina"))
-    # O nome da aba vai ao SSE; nunca derive dos bytes do comando, que podem conter credencial.
-    return _shortcut_shell(name, ShortcutShellBody(command=body.command, label="Terminal", key=body.key), request, powershell=True, shell=shell)
-
-
-def _shortcut_shell(name: str, body: ShortcutShellBody, request: Request, *, powershell: bool, shell: str | None = None):
-    # Atalho "shell" da fileira. Cada execucao ganha um terminal escondido proprio
-    # (app/shortcut_terminals.py, no tmux e no psmux): a pessoa ve a saida numa aba do painel e
-    # fecha quando quiser, e o programa sobrevive a restart do backend. `runs_in="hangar"` cria uma
-    # copia unica do servidor, sem dono.
-    from app.guest_header import guest_of
-    # Convidado nao cria nem reaproveita copia No Hangar: ele nao a ve, nao a fecha, e o reuso traria
-    # uma janela pra frente na tela do dono.
-    if body.runs_in == "hangar" and (guest_of(request) is not None):
-        raise HTTPException(403, detail=erro("erro_shortcut_hangar_convidado",
-                                             "convidado nao roda atalho No Hangar"))
-    cwd = _session_cwd(name)
-    command = body.command.strip()
-    if not command:
-        raise HTTPException(400, detail=erro("erro_shortcut_vazio", "comando vazio"))
-    # No Hangar a pasta e a home, mesmo com `pasta` configurada; com `home` desligado vale a pasta.
-    if body.runs_in == "hangar" and body.home:
-        cwd = os.path.expanduser("~")
-    elif body.pasta is not None:
-        try:
-            cwd = project_shortcuts.resolve_folder(cwd, body.pasta)
-        except project_shortcuts.ProjectError as e:
-            raise _project_error(e)
-        except ValueError as e:
-            raise HTTPException(400, detail=erro("erro_shortcut_pasta", str(e), detalhe=str(e)))
-    # Atalho importado com a credencial em branco: rodar mandaria o marcador literal pro programa.
-    from app.shortcut_transfer import has_placeholder
-    missing = has_placeholder(command)
-    if missing:
-        # Na rota nova, 422 fica reservado para comando que abriu terminal e falhou.
-        raise HTTPException(400 if powershell else 422, detail=erro("erro_shortcut_segredo",
-                                             f"preencha a credencial {missing} antes de usar",
-                                             nome=missing))
-    if body.runs_in == "hangar":
-        return _shortcut_shell_hangar(name, cwd, command, body)
-    from app import shortcut_terminals
-    term = shortcut_terminals.start(name, cwd, command, body.label or "", _shortcut_display_env(),
-                                    key=body.key, ask=body.ask, powershell=powershell, shell=shell)
-    if term is None:
-        raise HTTPException(500, detail=erro("erro_shortcut_shell", "o multiplexador recusou criar o terminal"))
-    # Sem o texto do comando: ele pode carregar credencial.
-    _log.info("shortcut-shell: sessao=%s terminal=%s", name, term["tmux"])
-    return _shortcut_started(name, term)
-
-
-def _shortcut_display_env() -> dict[str, str]:
-    return {k: v for k, v in _shortcut_env().items() if k in _DISPLAY_VARS}
-
-
-def _shortcut_started(name: str, term: dict) -> dict:
-    """202 quando o processo ainda vive (ou saiu 0) na janela; 422 com o fim da saida se morreu."""
-    from app import shortcut_terminals
-    public = {"id": term["id"], "label": term["label"]}
-    # Quem clicou precisa saber que falhou. Comando que erra (nao existe, sintaxe, VPN fora)
-    # morre em segundos; o que ainda roda depois da janela e programa longo e conta como ok.
-    limit = time.monotonic() + _SHORTCUT_FAIL_WINDOW
-    alive, code = True, None
-    while True:
-        alive, code = shortcut_terminals.status(term["tmux"])
-        if not alive or time.monotonic() >= limit:
-            break
-        time.sleep(0.1)
-    if alive or code == 0:
-        return {"ok": True, "terminal": {**public, "alive": alive, "exit_code": code}}
-    tail = _shortcut_output_tail(shortcut_terminals.output(term["tmux"]).encode())
-    _log.info("shortcut-shell: sessao=%s terminal=%s saiu com %s", name, term["tmux"], code)
-    msg = f"o comando saiu com o código {code}" + (f": {tail}" if tail else "")
-    # O terminal fica: a aba mostra a saida inteira que o aviso resume.
-    raise HTTPException(422, detail=erro("erro_shortcut_falhou", msg, codigo=code, saida=tail,
-                                         terminal={**public, "alive": False, "exit_code": code}))
-
-
 def _focus_hangar_terminal(row: dict | None) -> bool:
     if not row or not row["alive"] or not row["pid"]:
         return False
     from app import window_focus
     return window_focus.focus_tree(row["pid"], _shortcut_env())
-
-
-def _shortcut_reused(term: dict) -> dict:
-    from app import shortcut_terminals
-    try:
-        focused = _focus_hangar_terminal(shortcut_terminals.hangar_row(term["id"]))
-    except shortcut_terminals.MuxUnavailable:
-        # O terminal foi reaproveitado; so o foco da janela ficou sem resposta.
-        _log.warning("shortcut-shell: multiplexador sem resposta ao focar o terminal %s", term["id"])
-        focused = False
-    return {"ok": True, "reused": True, "focused": focused,
-            "terminal": {"id": term["id"], "label": term["label"], "alive": True, "exit_code": None}}
-
-
-def _shortcut_mux_unavailable() -> HTTPException:
-    # Sem resposta nao da pra saber se a copia ja existe: abrir outra derrubaria a primeira.
-    return HTTPException(500, detail=erro("erro_shortcut_mux_indisponivel",
-                                          "o multiplexador nao respondeu; tente de novo"))
-
-
-def _shortcut_shell_hangar(name: str, cwd: str, command: str, body: ShortcutShellBody):
-    # Copia unica do servidor: clicar de novo reaproveita em vez de abrir outra (a VM do RDP so
-    # aceita uma conexao por usuario, e a segunda derrubava a primeira).
-    key = body.key.strip()
-    if not key:
-        raise HTTPException(400, detail=erro("erro_shortcut_sem_chave", "atalho No Hangar sem chave"))
-    from app import shortcut_terminals
-    try:
-        term, reused = shortcut_terminals.start_hangar(key, cwd, command, body.label or "",
-                                                       _shortcut_display_env(), name, body.ask)
-    except shortcut_terminals.MuxUnavailable:
-        raise _shortcut_mux_unavailable()
-    if term is None:
-        raise HTTPException(500, detail=erro("erro_shortcut_shell", "o multiplexador recusou criar o terminal"))
-    _log.info("shortcut-shell: hangar terminal=%s reaproveitou=%s", term["tmux"], reused)
-    if reused:
-        return _shortcut_reused(term)
-    return {**_shortcut_started(name, term), "reused": False, "focused": False}
 
 
 @app.get("/api/sessions/{name}/shortcut-terminals", dependencies=[Depends(require_auth)])
@@ -4873,23 +3645,6 @@ def hangar_terminal_focus(ident: str):
     if row is None:
         raise _hangar_404()
     return {"focused": _focus_hangar_terminal(row)}
-
-
-@app.post("/api/hangar-terminals/{ident}/restart", dependencies=[Depends(require_auth)], status_code=202)
-def hangar_terminal_restart(ident: str):
-    from app import shortcut_terminals
-    try:
-        term, reused = shortcut_terminals.restart_hangar(ident, _shortcut_display_env())
-    except shortcut_terminals.RestartError:
-        raise HTTPException(500, detail=erro("erro_hangar_terminal_rodar_de_novo",
-                                             "nao foi possivel recuperar o comando do terminal No Hangar"))
-    except shortcut_terminals.MuxUnavailable:
-        raise _shortcut_mux_unavailable()
-    if term is None:
-        raise _hangar_404()
-    if reused:
-        return _shortcut_reused(term)
-    return {**_shortcut_started("hangar", term), "reused": False, "focused": False}
 
 
 class ShortcutImportBody(BaseModel):
@@ -5119,158 +3874,6 @@ def computer_control_new_target(body: ComputerControlTargetBody):
     return _computer_control_call(cc.create_target, body.model_dump())
 
 
-# Anexo citado na conversa: 60s sem perguntar + ETag pro resto. A miniatura de 96px do
-# FileAttachment carrega o arquivo ORIGINAL, entao sem cache toda repintura da lista rebaixava o
-# PNG inteiro. Starlette 1.3.1 poe o ETag no FileResponse mas NAO responde 304 — o 304 abaixo e
-# nosso. ponytail: arquivo reescrito no MESMO caminho so aparece depois dos 60s; e o preco de nao
-# perguntar. Documento (html/pdf) que o agente regenera e o caso que mais sente isso.
-_CACHE_ARQUIVO = "max-age=60"
-
-
-def _cited_elsewhere(jsonl: str, cwd: str | None, path: str, worked: list[str], *,
-                     siblings: bool, rows=None) -> str | None:
-    """Arquivo de um nome solto ou relativo que não está na pasta da sessão: o absoluto que a conversa citou antes,
-    ou um relativo citado (`docs/x/nome`) dentro das pastas onde a conversa trabalhou (`worked`, o cwd das linhas
-    que o citaram) e da pasta da sessão. `siblings` também tenta as pastas ao lado da sessão (outro repositório,
-    como num `cd ../outro && git status`): só para LER, porque ali o mesmo relativo pode ser de outro projeto."""
-    from app.transcript import cited_elsewhere
-    absolutes, cited_relatives = cited_elsewhere(jsonl, path, rows=rows)
-    if absolutes:
-        return absolutes[0]
-    if not cwd:
-        return None
-    rel = path.replace("\\", "/").removeprefix("./")
-    if ".." in rel.split("/"):
-        return None
-    relatives = [rel] if "/" in rel else cited_relatives
-    base = os.path.realpath(cwd)
-    folders = list(dict.fromkeys([*(os.path.realpath(w) for w in worked), base]))
-    if siblings:
-        parent = os.path.dirname(base)
-        try:
-            # ponytail: só o primeiro nível ao lado da sessão, e no máximo 200 pastas.
-            folders += sorted(e.path for e in os.scandir(parent) if e.is_dir() and e.path not in folders)[:200]
-        except OSError:
-            _log.warning("pastas ao lado de %s ilegíveis ao procurar %s citado", base, path, exc_info=True)
-    for relative in relatives:
-        for folder in folders:
-            candidate = os.path.realpath(os.path.join(folder, relative))
-            if candidate.startswith(folder + os.sep) and os.path.isfile(candidate):
-                return candidate
-    return None
-
-
-def _conversation_rows(info):
-    from app.conversation_history import citation_rows, HistoryError
-    try:
-        return citation_rows(info)
-    except (HistoryError, OSError) as exc:
-        raise HTTPException(409, detail=erro("session_transfer_history_invalid", "histórico da transferência indisponível")) from exc
-
-
-from app.workspace_bridge import delegate as _workspace_delegate, text_rows as _text_rows
-_cited_elsewhere = _workspace_delegate("find_elsewhere", GitError, prepare=_text_rows)(_cited_elsewhere)
-
-
-def _resolver_citado(name: str, path: str, *, write: bool = False) -> str:
-    """Devolve o caminho REAL de um arquivo citado no transcript desta sessao.
-
-    TRAVA de seguranca compartilhada por quem le e por quem grava fora da raiz da sessao: so
-    resolve se o `path` aparece no transcript (citado por voce ou pelo agente = consentido) E
-    existe E e arquivo regular -> bloqueia leitura/escrita arbitraria de disco e path-traversal.
-    Path RELATIVO (ex "./mock.png", "sub/x.png") resolve contra o CWD DA SESSAO (onde o agente
-    criou o arquivo), nao o cwd do processo backend; guard extra: o resolvido nao pode ESCAPAR
-    do cwd.
-    """
-    info = _cached_info_sync(name)
-    if info is None or not info.jsonl:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
-    from app import workspace_bridge
-    rows = _conversation_rows(info)
-    # Sessão Codex transferida: a conversa inclui o histórico de antes da troca, que o Rust não lê.
-    if rows is None and (info.cwd or os.path.isabs(os.path.expanduser(path))):
-        result = workspace_bridge.request("resolve_cited", {"cwd": info.cwd or "", "jsonl": info.jsonl,
-            "path": path, "write": write})
-        if result is not None:
-            if result["ok"]:
-                return result["result"]
-            failure = result["error"]
-            detail = failure["detail"]
-            if failure.get("code"):
-                detail = erro(failure["code"], str(detail), motivo=str(detail))
-            raise HTTPException(failure["status"], detail=detail)
-    from app.transcript import citation_cwds
-    cited = citation_cwds(info.jsonl, [path], rows=rows)
-    if path not in cited:
-        raise HTTPException(403, detail=erro("erro_arquivo_nao_citado", "file not referenced in this conversation"))
-    expanded = os.path.expanduser(path)
-    if os.path.isabs(expanded):
-        real = os.path.realpath(expanded)
-    else:
-        if not info.cwd:
-            raise HTTPException(409, detail=erro("erro_cwd_indisponivel", "cwd da sessao indisponivel"))
-        if ".." in path.replace("\\", "/").split("/"):
-            raise HTTPException(403, detail=erro("erro_caminho_fora_cwd", "path escapes session cwd"))
-        bases = list(dict.fromkeys([*cited[path], info.cwd]))
-        real = ""
-        for raw_base in bases:
-            base = os.path.realpath(raw_base)
-            candidate = os.path.realpath(os.path.join(base, expanded))
-            if candidate != base and not candidate.startswith(base + os.sep):
-                continue
-            if os.path.isfile(candidate):
-                real = candidate
-                break
-        if not real:
-            whole = _cited_elsewhere(info.jsonl, info.cwd, path, cited[path], siblings=not write, rows=rows)
-            real = os.path.realpath(whole) if whole else ""
-        if not real:
-            raise HTTPException(404, detail=erro("erro_arquivo_nao_encontrado", "file not found"))
-    if not os.path.isfile(real):
-        raise HTTPException(404, detail=erro("erro_arquivo_nao_encontrado", "file not found"))
-    # Mesma regra do filetree para a arvore da sessao: nenhum caminho que passe por uma pasta
-    # `.git` e servido. Comparada sobre o realpath, entao `atalho -> .git` tambem nao escapa.
-    if ".git" in Path(real).parts:
-        raise HTTPException(403, detail=erro("erro_arq_area_do_git", "area interna do git"))
-    return real
-
-
-@app.get("/api/sessions/{name}/file", dependencies=[Depends(require_auth)])
-def serve_file(name: str, path: str, request: Request, download: bool = False):
-    # FileResponse trata Range -> <video> faz seek/streaming.
-    real = _resolver_citado(name, path)
-    st = os.stat(real)
-    representation = "download" if download else "isolated"
-    etag = f'"{representation}-{st.st_mtime_ns:x}-{st.st_size:x}"'
-    cabecalhos = {"etag": etag, "cache-control": _CACHE_ARQUIVO}
-    # Depois da trava do transcript, nunca antes: 304 e resposta sobre um arquivo, e quem nao pode
-    # ver o arquivo tambem nao pode saber que ele mudou.
-    if request.headers.get("if-none-match") == etag:
-        return Response(status_code=304, headers=cabecalhos)
-    return file_response(real, headers=cabecalhos, download=download)
-
-
-# Arquivo CITADO na conversa, como texto editavel. O par com `/files/read` e `/files/write` da
-# arvore: mesma mecanica do filetree (teto, binario, digest, escrita atomica), outra politica de
-# caminho — a raiz da sessao la, a citacao no transcript aqui.
-@app.get("/api/sessions/{name}/file/text", dependencies=[Depends(require_auth)])
-def serve_file_text(name: str, path: str):
-    try:
-        return filetree.read_at(Path(_resolver_citado(name, path)), path)
-    except FileError as e:
-        raise _erro_arq(e)
-
-
-@app.post("/api/sessions/{name}/file/text", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-def write_file_text(name: str, body: FileWriteBody):
-    try:
-        return filetree.write_at(
-            Path(_resolver_citado(name, body.path, write=True)), body.path, body.text, body.digest
-        )
-    except FileError as e:
-        raise _erro_arq(e)
-
-
 class AnswerItem(_StrictBody):
     kind: str
     question_id: str | None = None
@@ -5354,29 +3957,6 @@ def _askq_conversar_text(answers: list[dict], jsonl: str | None) -> str:
     linhas.append("Já respondi:")
     linhas.extend(respondidas)
     return "\n".join(linhas)
-
-
-def _pi_answer_fallback_text(a: dict) -> str:
-    """Resposta em TEXTO pro fallback da pergunta do Pi (drive do picker falhou). Mesma filosofia
-    do _askq_fallback_text do Claude: a resposta do usuario NUNCA se perde — vira mensagem normal."""
-    if a.get("kind") == "option":
-        resp = ", ".join(a.get("labels") or [])
-    elif a.get("kind") == "text":
-        resp = a.get("value") or ""
-    else:
-        resp = ""
-    if not resp:
-        return ""
-    # Texto NEUTRO. Dizia "o seletor de opções falhou" — e no Kimi isso era mentira ate hoje: la nao
-    # havia drive de teclas, o texto era o caminho NORMAL e unico. O usuario lia "falhou" na propria
-    # conversa e achava que a resposta tinha dado errado (relatado em 13/08/2026), e o agente lia a
-    # mesma frase e respondia ao fantasma.
-    #
-    # Quem soube que houve fallback foi o LOG do servidor. O `fallback: true` volta no corpo da
-    # resposta, mas o front descarta (`api.ts answerQuestions` tipa so `{ok}`) — entao nao prometa
-    # aqui que o usuario ve isso. O que ele ve e a propria resposta virando mensagem no chat, que ja
-    # diz "foi por texto" sem precisar de aviso.
-    return f"Respondendo à pergunta: {resp}"
 
 
 class SkipQuestionBody(_StrictBody):
@@ -5464,92 +4044,7 @@ def answer(name: str, body: AnswerBody):
     jsonl = info.jsonl if info else None
     fallback = False
 
-    # Pi: a pergunta nativa (tool `question`) mora no proprio transcript — o front sintetiza o
-    # payload do AskUserQuestion a partir do tool_use pendente e posta aqui igual; o drive e outro
-    # (picker ascii do Pi, sem tela de Review). A pergunta some da fila (respondida no terminal)
-    # entre o card abrir e o toque -> 409 legivel, nunca drive as cegas. O omp e o mesmo caminho
-    # com outra tool (`ask`, uma lista de perguntas que o parser normaliza) e outro cursor.
-    if getattr(info, "provider", "claude") in ("pi", "omp"):
-        from app.adapters.pi.transcript import read_pending_question
-        tool = "ask" if info.provider == "omp" else "question"
-        q = read_pending_question(jsonl, tool=tool) if jsonl else None
-        if q is None:
-            raise HTTPException(409, detail=erro("erro_sem_pergunta_pi", "nenhuma pergunta do Pi pendente (ja respondida no terminal?)"))
-        if not answers:
-            raise HTTPException(409, detail=erro("erro_sem_resposta", "sem resposta"))
-        try:
-            terminal_input.answer_question_pi(name, answers[0], q, provider=info.provider)
-        except ValueError as e:
-            raise HTTPException(409, str(e))
-        except terminal_input.DriveError as e:
-            text = _pi_answer_fallback_text(answers[0])
-            _log.warning("PI-QUESTION fallback name=%s reason=%s text=%r", name, e, text[:120])
-            if not text:
-                # Sem texto de fallback, NAO manda o Escape: picker aberto = usuario ainda responde
-                # no terminal. Fechar e devolver ok sem entregar nada seria a pior saida (silencio).
-                raise HTTPException(409, detail=erro("erro_drive_sem_fallback", f"drive falhou ({e}) e nao ha texto de fallback — responda no terminal", erro=str(e)))
-            terminal.interrupt(name)  # Escape unico: fecha o picker do Pi (sem clear — input vazio)
-            _espera_picker_fechar(name)   # sem isto o texto sai junto do Escape e a TUI o engole
-            res = _send_one(name, text)
-            if not res["ok"]:
-                raise HTTPException(409, detail=erro("erro_drive_fallback_falhou", f"drive falhou e fallback por texto tambem: {_erro_texto(res['error'])}", erro=res['error']))
-            _recusa_se_so_enfileirou(name, res)
-            fallback = True
-        return {"ok": True, "fallback": fallback}
 
-    # Kimi: a pergunta nativa (tool AskUserQuestion) mora no wire — o front sintetiza o card a
-    # partir do tool_use pendente, igual ao Pi. O drive do picker foi medido em 13/08/2026 (Kimi
-    # 0.36.0) e e mais confiavel que o dos outros dois: as opcoes sao numeradas e a tecla numerica
-    # escolhe e avanca (sem contar linha), e a CONFIRMACAO nao e visual — o `tool.result` daquele
-    # toolCallId aparecendo no wire prova que a ferramenta recebeu. Drive falhou -> Escape +
-    # fallback por texto, igual Claude/Pi: a resposta do usuario nunca se perde.
-    if getattr(info, "provider", "claude") == "kimi":
-        from app.adapters.kimi.transcript import read_pending_call, resposta_chegou
-        pend = read_pending_call(jsonl) if jsonl else None
-        if pend is None:
-            raise HTTPException(409, detail=erro("erro_sem_pergunta_kimi", "nenhuma pergunta do Kimi pendente (ja respondida no terminal?)"))
-        if not answers:
-            raise HTTPException(409, detail=erro("erro_sem_resposta", "sem resposta"))
-        call_id, args = pend
-        perguntas = args.get("questions") if isinstance(args.get("questions"), list) else []
-        try:
-            terminal_input.answer_question_kimi(name, answers, perguntas)
-            # PROVA no transcript, nao no pane: o Kimi so escreve o tool.result depois de a
-            # ferramenta receber as respostas. Sem esta checagem, um Submit que nao pegou voltaria
-            # 200 com cara de sucesso — o mesmo "sent sem chegar" que ja custou uma resposta perdida.
-            if not _espera_resposta_kimi(jsonl, call_id):
-                # Prazo estourado NAO prova que nada foi submetido — pode ser o Kimi demorando pra
-                # gravar. Os outros dois drivers so levantam DriveError com prova estrutural (o
-                # picker AINDA na tela), e aqui vale o mesmo: se o picker sumiu, alguem submeteu.
-                # Cair no fallback nesse caso mandaria Escape num turno que ja processa a resposta
-                # certa e entregaria a mesma resposta DUAS vezes — uma pela ferramenta, outra como
-                # mensagem. Entre duplicar calado e admitir a duvida, admite-se a duvida.
-                if terminal_input.picker_kimi_aberto(name):
-                    raise terminal_input.DriveError(
-                        "Submit nao pegou: o picker continua aberto e o tool.result nao apareceu")
-                raise HTTPException(409, detail=erro("erro_sem_confirmacao_resposta",
-                                             "resposta enviada, mas nao deu pra confirmar a tempo — "
-                                             "confira na sessao antes de responder de novo"))
-        except ValueError as e:
-            raise HTTPException(409, str(e))
-        except terminal_input.DriveError as e:
-            text = _pi_answer_fallback_text(answers[0])
-            _log.warning("KIMI-QUESTION fallback name=%s reason=%s text=%r", name, e, text[:120])
-            if not text:
-                # Sem texto de fallback, NAO manda o Escape: picker aberto = o usuario ainda pode
-                # responder no terminal. Fechar e devolver ok sem entregar nada seria a pior saida.
-                raise HTTPException(409, detail=erro("erro_drive_sem_fallback", f"drive falhou ({e}) e nao ha texto de fallback — responda no terminal", erro=str(e)))
-            terminal.interrupt(name)  # Escape unico: fecha o picker do Kimi (sem clear — input vazio)
-            _espera_picker_fechar(name)   # sem isto o texto sai junto do Escape e a TUI o engole
-            res = _send_one(name, text)
-            if not res["ok"]:
-                raise HTTPException(409, detail=erro("erro_drive_fallback_falhou", f"drive falhou e fallback por texto tambem: {_erro_texto(res['error'])}", erro=res['error']))
-            _recusa_se_so_enfileirou(name, res)
-            return {"ok": True, "fallback": True}
-        return {"ok": True, "fallback": False}
-    # "Conversar sobre isso" junto de perguntas já respondidas: dirigir o picker perde as respostas
-    # — a TUI cancela tudo ao chegar nessa opção. Fecha por Escape e entrega o que ele escolheu como
-    # texto, o mesmo caminho do plano B do drive.
     texto_conversar = _askq_conversar_text(answers, jsonl) if any(
         a.get("kind") == "chat" for a in answers) else ""
     if texto_conversar:
@@ -5576,10 +4071,6 @@ def answer(name: str, body: AnswerBody):
         # de "nav drift" quando o relato chega dias depois.
         diag.registrar("pergunta.fallback_texto", "erro", sessao=name, detalhe=str(e))
         if not text:
-            # Sem texto de fallback (resposta `chat`, ou rotulos vazios) nao ha o que entregar. Nao
-            # manda o Escape e nao limpa o sidecar: o picker segue aberto pra quem responder no
-            # terminal. Ate 01/09/2026 este ramo caia em `fallback = True` e apagava o sidecar como
-            # se tivesse respondido, sem uma tecla ter saido — os ramos Pi e Kimi ja barravam.
             raise HTTPException(409, detail=erro(
                 "erro_drive_sem_fallback",
                 f"drive falhou ({e}) e nao ha texto de fallback — responda no terminal", erro=str(e)))
@@ -5606,8 +4097,6 @@ class ModelEffortBody(_StrictBody):
 
 @app.post("/api/sessions/{name}/model-effort", dependencies=[Depends(require_auth), Depends(_transfer_guard), Depends(_codex_rust_port)])
 async def model_effort(name: str, body: ModelEffortBody):
-    # Do Claude é o Rust que troca (seletor no ator do terminal, controle no sem terminal); Pi, omp e Kimi,
-    # que não têm entrada lá, seguem aqui.
     info = await _cached_info(name)
     if info is not None and getattr(info, "provider", "claude") == "claude":
         raise HTTPException(503, detail=erro("model_effort_needs_rust_server", "trocar modelo e esforço precisa do servidor Rust"))
@@ -5834,7 +4323,6 @@ def _bypass_no_ciclo(name: str) -> bool:
 #     morar no codigo.
 
 
-
 # Catalogo por motor: e uma chamada de REDE ao provedor, e abrir a folha nao pode pagar isso toda
 # vez. TTL curto porque a lista muda com o plano do usuario, nao a cada minuto.
 
@@ -5917,14 +4405,6 @@ def _chave_config(p) -> str:
     return str(Path(s).expanduser().resolve())
 
 
-
-
-
-
-
-
-
-
 @app.get("/api/sessions/{name}/model/options", dependencies=[Depends(require_auth)])
 async def model_options(name: str):
     """Modelos que ESTA sessao pode escolher. `kind` diz de onde vieram e como aplicar."""
@@ -5993,16 +4473,12 @@ async def model_options_sem_sessao(provider: str = "claude", engine: str = "",
                         codex_models.listar,
                         **({"codex_home": account.home} if not account.is_default else {}))}
         except codex_models.CodexAusente as e:
-            # Codigo proprio pelo mesmo motivo do Pi: "nao achei o codex" nao e "o codex falhou".
             raise HTTPException(502, detail=erro("erro_codex_ausente", str(e), erro=str(e)))
         except (codex_models.CodexIndisponivel, codex_models.CodexRecusado,
                 codex_models.CodexRespostaInvalida, RuntimeError, OSError) as e:
-            # Sem `TimeoutExpired` aqui, ao contrario do ramo do Pi: o teto de tempo do
-            # `codex_models` mata o processo por um Timer, entao ele vira "nao respondeu" (um
-            # RuntimeError) — capturar a outra seria um ramo que o codigo nunca produz.
             raise HTTPException(502, detail=erro("erro_codex_model_list", f"codex app-server model/list falhou: {e}", erro=str(e)))
     if provider != "claude":
-        raise HTTPException(400, detail=erro("erro_provider_invalido", "provider deve ser 'claude', 'pi', 'omp', 'kimi' ou 'codex'"))
+        raise HTTPException(400, detail=erro("erro_provider_invalido", "provider deve ser 'claude' ou 'codex'"))
     chave = _chave_config(config_dir)
     cacheado = _models_cache_get(chave)
     if cacheado is not None:
@@ -6028,13 +4504,7 @@ async def model_options_sem_sessao(provider: str = "claude", engine: str = "",
             "models": [{"id": a} for a in ("opus", "fable", "sonnet", "haiku")]}
 
 
-
-
 def _session_config_dir(name: str) -> Path | None:
-    """CLAUDE_CONFIG_DIR do processo do pane (o sidecar do Pi e o settings.json moram la dentro).
-    None -> ~/.claude.
-    Usa o mesmo `_config_dir_of` do registry (privado do pacote) que ja resolve o transcript do Pi:
-    duas leituras diferentes do /proc dariam respostas diferentes pra mesma sessao."""
     from app import registry as registry_mod
     from app import tmux
     try:
@@ -6044,286 +4514,9 @@ def _session_config_dir(name: str) -> Path | None:
         # Cair no ~/.claude CALADO transformava um bug de resolucao (pane sem pid, /proc ilegivel)
         # num 409 mentiroso "extensao desatualizada": o sidecar existe, so estavamos procurando na
         # pasta errada. Nao propaga — o default ainda e o certo pra maioria das sessoes.
-        _log.warning("pi: nao consegui resolver o config dir de %s; usando ~/.claude", name,
+        _log.warning("não consegui resolver o config dir de %s; usando ~/.claude", name,
                      exc_info=True)
         return None
-
-
-
-@app.get("/api/fs/roots", dependencies=[Depends(require_auth)])
-def fs_roots():
-    return list_roots()
-
-
-@app.get("/api/fs/scan", dependencies=[Depends(require_auth)])
-def fs_scan(root: str, path: str | None = None):
-    # A seguranca (allowlist + rejeicao de escape) vive em scan_dir; aqui so traduzimos
-    # a FsError pro status HTTP correspondente.
-    try:
-        return scan_dir(root, path)
-    except FsError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-class FsMkdirBody(BaseModel):
-    root: str
-    path: str | None = None
-    name: str
-
-
-@app.post("/api/fs/mkdir", dependencies=[Depends(require_auth)])
-def fs_mkdir(body: FsMkdirBody):
-    try:
-        return make_dir(body.root, body.path, body.name)
-    except FsError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.get("/api/fs/branches", dependencies=[Depends(require_auth)])
-def fs_branches(root: str, path: str | None = None):
-    try:
-        scan_dir(root, path)
-        return list_branches(str(Path(os.path.realpath(os.path.expanduser(path or root)))))
-    except (FsError, GitError) as exc:
-        raise HTTPException(exc.status, detail=erro("erro_criacao_sessao", exc.detail)) from None
-
-
-
-
-def _allowed_repo(path: str) -> str:
-    """Repo/worktree dentro de uma raiz autorizada; pasta sumida valida pela pasta-mãe."""
-    probe = path if os.path.isdir(path) else str(Path(path).parent)
-    try:
-        _allowed_scan_root(probe)
-    except FsError as exc:
-        if not _registered_in_allowed_repo(path):
-            raise HTTPException(exc.status, detail=exc.detail) from None
-    return os.path.realpath(path) if os.path.isdir(path) else path
-
-
-def _registered_in_allowed_repo(path: str) -> bool:
-    """Worktree fora das raízes (o Codex cria em `~/.codex/worktrees`) vale pelo repo principal que
-    a registra, se ele estiver numa raiz: a mesma regra da lista e do lote."""
-    if os.path.isdir(path):
-        root = worktrees.repo_root_of(path)
-        if not root or os.path.realpath(root) != os.path.realpath(path):
-            return False
-        main = worktrees.main_repo_of(root)
-    else:
-        main = worktrees._main_of_missing(path)
-    if os.path.realpath(main) == os.path.realpath(path):
-        return False
-    try:
-        _allowed_scan_root(main)
-    except FsError:
-        return False
-    real = os.path.realpath(path)
-    return any(p == path or os.path.realpath(p) == real for p in worktrees.worktree_paths(main))
-
-
-async def _worktree_inputs():
-    sessions = await asyncio.to_thread(registry.list)
-    corte = time.time() - 30 * 86400
-    folders = await asyncio.to_thread(list_folders)
-    cwds = [s.cwd for s in sessions] + [f.cwd for f in folders if f.cwd and f.mtime >= corte]
-    roots = allowed_roots()
-    allowed = await asyncio.to_thread(
-        lambda: [c for c in cwds if c and any(Path(os.path.realpath(c)).is_relative_to(r) for r in roots)])
-    return sessions, allowed, roots
-
-
-@app.get("/api/worktrees", dependencies=[Depends(require_auth)])
-async def worktrees_list(repo: str | None = None, sizes: bool = True):
-    """`repo`: só as desse repositório; `sizes=false`: não agenda medir o espaço (menu de branch)."""
-    sessions, allowed, roots = await _worktree_inputs()
-    if repo is not None:
-        repo = await asyncio.to_thread(_allowed_repo, repo)
-    return {"repos": await asyncio.to_thread(worktrees.list_all, allowed, sessions, roots, repo, sizes)}
-
-
-def _allowed_worktree(path: str) -> str:
-    path = _allowed_repo(path)
-    # Pasta que existe mas não é raiz de repo/worktree daria uma situação inventada.
-    if os.path.isdir(path) and not os.path.exists(os.path.join(path, ".git")):
-        raise HTTPException(404, detail="não é um repositório git")
-    return path
-
-
-@app.get("/api/worktrees/detail", dependencies=[Depends(require_auth)])
-async def worktrees_detail(path: str):
-    path = await asyncio.to_thread(_allowed_worktree, path)
-    sessions = await asyncio.to_thread(registry.list)
-    return await asyncio.to_thread(worktrees.status, path, sessions)
-
-
-class WorktreeDeleteBody(_StrictBody):
-    repo: str = Field(min_length=1)
-    path: str = Field(min_length=1)
-    confirm: bool = Field(default=False, strict=True)
-    delete_branch: bool = Field(default=False, strict=True)
-    keep_branch: bool = Field(default=False, strict=True)
-
-
-@app.post("/api/worktrees/delete", dependencies=[Depends(require_auth)])
-async def worktrees_delete(body: WorktreeDeleteBody):
-    repo, path = await asyncio.to_thread(lambda: (_allowed_repo(body.repo), _allowed_repo(body.path)))
-    sessions = await asyncio.to_thread(registry.list)
-    try:
-        return await asyncio.to_thread(worktrees.delete, repo, path, sessions,
-                                       confirm=body.confirm, delete_branch=body.delete_branch,
-                                       keep_branch=body.keep_branch)
-    except GitError as exc:
-        raise HTTPException(exc.status, detail=exc.detail) from None
-    finally:   # falha no meio também muda a lista (conversa que não voltou, worktree que saiu)
-        await asyncio.to_thread(_invalidate_lists)
-
-
-class WorktreeDeleteMergedBody(_StrictBody):
-    repo: str = Field(min_length=1)
-    # As worktrees que a tela mostrou na confirmação; sem a lista, só as que não perdem nada.
-    paths: list[str] | None = None
-    confirm: bool = Field(default=False, strict=True)
-    # Das mostradas, as que a confirmação exibiu perdendo arquivos; as demais só saem se limpas.
-    lossy: list[str] | None = None
-
-
-@app.post("/api/worktrees/delete-merged", dependencies=[Depends(require_auth)])
-async def worktrees_delete_merged(body: WorktreeDeleteMergedBody):
-    if body.confirm and body.paths is None:
-        raise HTTPException(422, detail="confirmar exige a lista das worktrees mostradas")
-    repo = await asyncio.to_thread(_allowed_repo, body.repo)
-    sessions = await asyncio.to_thread(registry.list)
-    try:
-        return {"removed": await asyncio.to_thread(worktrees.delete_merged, repo, sessions,
-                                                   body.paths, body.confirm, body.lossy)}
-    except GitError as exc:
-        raise HTTPException(exc.status, detail=exc.detail) from None
-    finally:   # as que saíram antes do erro também mudam a lista
-        await asyncio.to_thread(_invalidate_lists)
-
-
-class WorktreeCreateBody(_StrictBody):
-    repo: str = Field(min_length=1)
-    branch: str = Field(min_length=1)
-    # Sufixo da pasta: a worktree nasce em `<repo>-<name>`, como as das sessões.
-    name: str = Field(min_length=1)
-    new_branch: bool = Field(default=False, strict=True)
-    base: str | None = None
-    fetch: bool = Field(default=False, strict=True)
-
-
-@app.post("/api/worktrees/create", dependencies=[Depends(require_auth)])
-async def worktrees_create(body: WorktreeCreateBody):
-    """Só a worktree, sem sessão; com sessão, o caminho continua sendo o `POST /api/sessions`."""
-    name = sanitize_session_name(body.name)
-    if not name:
-        raise HTTPException(400, detail="nome de pasta inválido")
-    def create() -> tuple[str, bool]:
-        root = _allowed_scan_root(body.repo)
-        if body.fetch:
-            worktrees.fetch(body.repo)
-        path, created = create_worktree(body.repo, body.branch, name, root,
-                                        new_branch=body.new_branch, base=body.base)
-        # Na mesma thread: cliente que desconecta cancela o await, não a criação já em curso.
-        if created:
-            _invalidate_lists()
-        return path, created
-
-    try:
-        path, created = await asyncio.to_thread(create)
-    except (FsError, GitError) as exc:
-        raise HTTPException(exc.status, detail=exc.detail) from None
-    if not created:
-        raise HTTPException(409, detail="essa branch já é a da pasta principal")
-    return {"path": path}
-
-
-# Git da pasta escolhida na tela de nova conversa: a mesma fronteira do seletor de pastas
-# (`scan_dir`), e o git sempre fora do laço de eventos.
-class FolderGitBody(_StrictBody):
-    root: str
-    path: str | None = None
-
-
-class FolderSwitchBody(FolderGitBody):
-    branch: str = Field(min_length=1)
-    confirm_sessions: bool = False
-
-
-class FolderBranchBody(FolderGitBody):
-    name: str = Field(min_length=1)
-    base: str | None = None
-    checkout: bool = False
-    confirm_sessions: bool = False
-
-
-def _folder_cwd(root: str, path: str | None) -> str:
-    scan_dir(root, path)
-    return str(Path(os.path.realpath(os.path.expanduser(path or root))))
-
-
-def _sessions_in(toplevel: str | None) -> list[str]:
-    """Sessões vivas no mesmo checkout: trocar a branch dele muda os arquivos delas."""
-    if not toplevel:
-        return []
-    top = Path(toplevel)
-    return sorted(s.name for s in _guardar_snap()
-                  if s.cwd and Path(os.path.realpath(s.cwd)).is_relative_to(top))
-
-
-def _folder_git_sync(root: str, path: str | None, op: str, body=None) -> dict:
-    try:
-        cwd = _folder_cwd(root, path)
-        if op == "status":
-            st = folder_status(cwd)
-        else:
-            # Pasta dentro da raiz mas repositório acima dela (ex.: um repo na home): escrever nele
-            # mexeria em arquivos fora da raiz liberada.
-            top = folder_status(cwd).get("toplevel")
-            if top and not Path(top).is_relative_to(Path(os.path.realpath(os.path.expanduser(root)))):
-                raise GitError(400, "repositório fora da raiz autorizada")
-            sessions = _sessions_in(top)
-        if op == "fetch":
-            st = folder_fetch(cwd)
-        elif op == "pull":
-            st = folder_pull(cwd)
-        elif op != "status":
-            if op == "switch":
-                st = folder_switch(cwd, body.branch, sessions, body.confirm_sessions)
-            else:
-                st = folder_create_branch(cwd, body.name, body.base, body.checkout, sessions, body.confirm_sessions)
-    except FsError as exc:
-        raise HTTPException(exc.status, detail=erro("erro_criacao_sessao", exc.detail)) from None
-    except GitError as exc:
-        raise HTTPException(exc.status, detail=exc.detail) from None
-    if st.get("repo"):
-        st["sessions"] = _sessions_in(st.get("toplevel"))
-    return st
-
-
-@app.get("/api/fs/git", dependencies=[Depends(require_auth)])
-async def fs_git_status(root: str, path: str | None = None):
-    return await asyncio.to_thread(_folder_git_sync, root, path, "status")
-
-
-@app.post("/api/fs/git/fetch", dependencies=[Depends(require_auth)])
-async def fs_git_fetch(body: FolderGitBody):
-    return await asyncio.to_thread(_folder_git_sync, body.root, body.path, "fetch")
-
-
-@app.post("/api/fs/git/pull", dependencies=[Depends(require_auth)])
-async def fs_git_pull(body: FolderGitBody):
-    return await asyncio.to_thread(_folder_git_sync, body.root, body.path, "pull")
-
-
-@app.post("/api/fs/git/switch", dependencies=[Depends(require_auth)])
-async def fs_git_switch(body: FolderSwitchBody):
-    return await asyncio.to_thread(_folder_git_sync, body.root, body.path, "switch", body)
-
-
-@app.post("/api/fs/git/branch", dependencies=[Depends(require_auth)])
-async def fs_git_branch(body: FolderBranchBody):
-    return await asyncio.to_thread(_folder_git_sync, body.root, body.path, "branch", body)
 
 
 # ── Preview: expoe um projeto local (porta) via tailscale serve, pro app ver num iframe ──

@@ -3,10 +3,8 @@
 #
 # Makes every interactive `kimi` opened in a terminal a Hangar session, same as the app opens.
 #
-# SIMPLER than the pi wrapper ON PURPOSE: the Kimi CLI has no `--session-id` flag (the session id
-# is born inside, at the first prompt), so there is no id to inject and no env var to export. The
-# pane<->session link is the ticket the backend's kimi hook writes (it inherits TMUX_PANE from the
-# pane) — see backend/hooks/kimi_state_hook.py and registry.kimi_session_file.
+# O Kimi cria o ID no primeiro prompt. O hook `hangar-server kimi-state-hook` herda
+# TMUX_PANE e grava o bilhete que liga o pane à sessão.
 #
 # Rules:
 #  - subcommand as the FIRST argument -> raw (export/provider/acp/web/server/login/doctor/vis/

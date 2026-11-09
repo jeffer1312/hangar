@@ -1,0 +1,10 @@
+[package]
+name = "hangar-psmux"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
+tempfile.workspace = true

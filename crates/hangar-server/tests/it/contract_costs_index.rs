@@ -520,3 +520,92 @@ fn claude_hook_skill_search_still_accepts_object_content() {
     assert_eq!(out.usage[0].origem, "hook");
     assert_eq!(out.usage[0].ctx_chars, 20);
 }
+
+#[test]
+fn claude_streamed_response_replaces_saved_area_between_syncs() {
+    let d = tempfile::tempdir().unwrap();
+    let root = d.path().join("projects");
+    let transcript = root.join("p/s.jsonl");
+    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    let record = |id: &str, input: i64, output: i64| {
+        let mut raw = serde_json::to_vec(&json!({
+            "type":"assistant", "timestamp":"2026-09-10T12:00:00Z", "cwd":"/repo",
+            "requestId":format!("req-{id}"),
+            "message":{"id":id, "model":"claude-opus-5", "usage":{
+                "input_tokens":input, "output_tokens":output,
+                "cache_creation_input_tokens":0, "cache_read_input_tokens":0
+            }}
+        })).unwrap();
+        raw.push(b'\n');
+        raw
+    };
+    std::fs::write(&transcript, record("r1", 10, 2)).unwrap();
+    let ix = Index::open(&d.path().join("idx")).unwrap();
+    let areas = AreaMap::load(&d.path().join("areas.json"));
+    ix.sync("synthetic", &[transcript.clone()], &claude::new_fold(&root), claude::VERSION,
+        areas.signature(), &|e| areas.area_lines(e), &progress()).unwrap();
+    let first = ix.read_costs(Some("synthetic"), None, None).unwrap();
+    assert_eq!(first.iter().map(|r| (r.input, r.output)).collect::<Vec<_>>(), [(10, 2)]);
+
+    append(&transcript, &record("r1", 10, 12));
+    append(&transcript, &record("r2", 1, 1));
+    ix.sync("synthetic", &[transcript], &claude::new_fold(&root), claude::VERSION,
+        areas.signature(), &|e| areas.area_lines(e), &progress()).unwrap();
+    let second = ix.read_costs(Some("synthetic"), None, None).unwrap();
+    assert_eq!(second.iter().map(|r| (r.input, r.output)).collect::<Vec<_>>(), [(11, 13)]);
+    let usage = ix.read_usage("synthetic", None).unwrap();
+    assert_eq!(usage.iter().filter(|r| r.tipo == "area").map(|r| r.output).sum::<i64>(), 13);
+}
+
+#[test]
+fn codex_literal_rollout_keeps_front_back_conversation_and_cost_totals() {
+    let d = tempfile::tempdir().unwrap();
+    let rollout = d.path().join("rollout-2026-09-10T12-00-00-x.jsonl");
+    let session_id = "019a0000-0000-7000-8000-000000000001";
+    let records = [
+        ("session_meta", json!({"id":session_id, "cwd":"/repo", "model_provider":"openai"})),
+        ("turn_context", json!({"turn_id":"t1", "cwd":"/repo", "model":"gpt-5.6-sol"})),
+        ("response_item", json!({"type":"custom_tool_call", "name":"exec", "call_id":"c1",
+            "input":r#"text(await tools.exec_command({cmd:"sed -n '1,240p' /h/.codex/plugins/cache/mkt/superpowers/6.3.0/skills/brainstorming/SKILL.md",workdir:"/repo"}));"#})),
+        ("response_item", json!({"type":"custom_tool_call_output", "call_id":"c1",
+            "output":[{"type":"input_text", "text":"b".repeat(1000)}]})),
+        ("token_usage_record", json!({"thread_id":session_id, "turn_id":"t1", "response_id":"r1",
+            "usage":{"input_tokens":100, "cached_input_tokens":0, "output_tokens":10}})),
+        ("event_msg", json!({"type":"token_count", "info":{"total_token_usage":{"input_tokens":100}}})),
+        ("response_item", json!({"type":"custom_tool_call", "name":"exec", "call_id":"c2",
+            "input":concat!(
+                r#"await tools.apply_patch("*** Begin Patch\n*** Update File: /repo/frontend/src/A.svelte\n@@\n-x\n+y\n*** End Patch");"#,
+                "\n",
+                r#"text(await tools.exec_command({cmd:"uv run pytest backend/tests/test_x.py",workdir:"/repo"}));"#)})),
+        ("response_item", json!({"type":"custom_tool_call_output", "call_id":"c2",
+            "output":[{"type":"input_text", "text":"o".repeat(60)}]})),
+        ("token_usage_record", json!({"thread_id":session_id, "turn_id":"t1", "response_id":"r2",
+            "usage":{"input_tokens":300, "cached_input_tokens":200, "output_tokens":30}})),
+        ("event_msg", json!({"type":"token_count", "info":{"total_token_usage":{"input_tokens":400}}})),
+        ("turn_context", json!({"turn_id":"t2", "cwd":"/repo", "model":"gpt-5.6-sol"})),
+        ("token_usage_record", json!({"thread_id":session_id, "turn_id":"t2", "response_id":"r3",
+            "usage":{"input_tokens":50, "cached_input_tokens":0, "output_tokens":5}})),
+        ("event_msg", json!({"type":"token_count", "info":{"total_token_usage":{"input_tokens":450}}})),
+        ("compacted", json!({"message":"resumo"})),
+        ("token_usage_record", json!({"thread_id":session_id, "turn_id":"t2", "response_id":"r4",
+            "usage":{"input_tokens":10, "cached_input_tokens":0, "output_tokens":0}})),
+        ("event_msg", json!({"type":"token_count", "info":{"total_token_usage":{"input_tokens":460}}})),
+    ];
+    let text = records.iter().map(|(kind, payload)| serde_json::to_string(&json!({
+        "type":kind, "timestamp":"2026-09-10T12:00:00Z", "payload":payload
+    })).unwrap()).collect::<Vec<_>>().join("\n") + "\n";
+    std::fs::write(&rollout, text).unwrap();
+    let ix = Index::open(&d.path().join("idx")).unwrap();
+    let areas = AreaMap::load(&d.path().join("uso-areas.json"));
+    ix.sync("codex:x", &[rollout], &codex::new_fold, codex::VERSION,
+        areas.signature(), &|e| areas.area_lines(e), &progress()).unwrap();
+    let usage = ix.read_usage("codex:x", None).unwrap();
+    let costs = ix.read_costs(Some("codex:x"), None, None).unwrap();
+    let tokens = usage.iter().filter(|r| r.tipo == "area")
+        .map(|r| (r.nome.as_str(), r.input + r.output + r.cache_write + r.cache_read))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(tokens.keys().copied().collect::<Vec<_>>(), ["back", "conversa", "front"]);
+    assert_eq!(tokens["front"], tokens["back"]);
+    assert_eq!(tokens["conversa"], 65);
+    assert_eq!(tokens.values().sum::<i64>(), costs.iter().map(|r| r.input + r.output + r.cache_write + r.cache_read).sum::<i64>());
+}

@@ -425,7 +425,7 @@ pub async fn open_adopting(host: &dyn OpenHost, resolved: Resolved, caller: &Ope
     // Modelo de motor deixado no `settings.json` faria a sessão Anthropic nascer nele.
     if !engine && spec.provider == AgentProvider::Claude { warnings.extend(claude::drop_foreign_model(host.home(), spec.account.config_dir())); }
     let mut undo = None;
-    if let Some(wt) = spec.worktree.clone() {
+    if let Some(wt) = spec.worktree.clone().filter(|_| !restore) {
         let root = allowed_root(host, caller, &spec.cwd, &runtime)?;
         let stem = crate::list::discover_other::sanitize_session_name(&wt.branch);
         let stem = if stem.is_empty() { "worktree".to_owned() } else { stem };

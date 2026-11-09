@@ -8,7 +8,6 @@ import secrets
 import shutil
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 from app import diag, shortcut_terminals, tmux
@@ -18,8 +17,6 @@ from app.config import settings
 from app import claude_customizations as session_customizations
 from app import plugin_bridge
 from app import runtime_config
-from app.git_ops import git_summary, git_diffstat
-from app import worktrees
 from app.models import SessionInfo, session_key
 from app.pqueue import PromptQueue, merged_history
 from app.archive import _texto_simples, conversation_files
@@ -29,14 +26,13 @@ from app.adapters.claude_headless import sessions as headless_sessions
 from app.adapters.codex import sessions as codex_sessions
 from app import codex_contas
 from app.askquestion import clear_pending_askq, pergunta_aberta
-from app.state import (classify, _live_spinner, rate_limit_reset, corrige_ocioso_kimi,
-                       aprovacao_kimi, codex_turno_aberto, menu_codex,
+from app.state import (classify, _live_spinner, rate_limit_reset,
+                       codex_turno_aberto, menu_codex,
                        status_line as _pane_status)
 from app import claude_context
 from app.statusline import read as _sidecar_status, escolhas as _escolhas_status
 from app.adapters.codex.adapter import status_line_do_rollout as _codex_status_line
 from app.hook_state import hook_state
-from app.planprog import plan_progress, plano_escondido
 # As funcoes de /proc vivem no procinfo.py — e o unico ponto do backend preso ao Linux.
 # Importadas por NOME (nao `procinfo._cmdline(...)`) de proposito: os testes fazem
 # monkeypatch delas neste modulo, e o binding local preserva isso.
@@ -109,39 +105,6 @@ _AWAITING_DEMOTE_GRACE_S = 10.0
 # Folga para as entradas de sistema que o Claude Code grava logo depois do Stop.
 _IDLE_STALE_S = 1.0
 
-# Teto de pares (done, total) por sessao em plan_tasks. O front so segmenta a barra com <= 8 Tasks
-# (PlanBar.svelte), acima disso desenha barra unica e ignora a lista. 9 e nao 8 DE PROPOSITO: cortar
-# em 8 exatos faria o front achar que o plano TEM 8 Tasks e segmentar um plano de 30.
-_MAX_PLAN_TASK_SEGMENTS = 9
-
-
-# Ultimo git bom por cwd: (summary, diffstat). Resultado None (repo sumiu, timeout) NAO apaga o
-# anterior — erro nunca vira "repositorio limpo" no card.
-_git_ultimo: dict[str, tuple[dict | None, dict | None]] = {}
-_git_em_voo: set[str] = set()
-# O laço só guarda referência fraca da tarefa: sem esta, ela pode sumir antes do `finally` e o cwd
-# ficaria preso em `_git_em_voo`.
-_git_tarefas: set[asyncio.Task] = set()
-# Pool próprio: git lento não pode deixar na fila a captura do tmux e o resto do pool padrão.
-_git_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="hangar-git")
-
-
-def _git_dir(info) -> str | None:
-    """Onde o git da sessão roda (`SessionInfo.git_dir`), aceitando os objetos mínimos da lista."""
-    return getattr(info, "git_cwd", None) or info.cwd
-
-
-async def _atualizar_git(cwd: str) -> None:
-    try:
-        summary, diffstat = await asyncio.get_running_loop().run_in_executor(
-            _git_pool, lambda: (git_summary(cwd), git_diffstat(cwd)))
-        antes = _git_ultimo.get(cwd, (None, None))
-        _git_ultimo[cwd] = (summary if summary is not None else antes[0],
-                            diffstat if diffstat is not None else antes[1])
-    except Exception:
-        _log.exception("git em segundo plano falhou cwd=%s (mantido o ultimo numero)", cwd)
-    finally:
-        _git_em_voo.discard(cwd)
 
 
 def _pair_external(name: str, peers_: list[str] | None) -> dict | None:
@@ -172,33 +135,6 @@ def _decorate_loop(info) -> None:
         info.loop_status = d.get("status")
         info.loop_iter = d.get("iter")
         info.loop_max = d.get("max_iters")
-
-
-def _decorate_plan(info) -> None:
-    """Decora plan_* de UMA sessao a partir do .md do plano (app.planprog). Sem plano -> tudo None.
-    Engole a excecao de proposito: roda no tick da lista, e uma falha aqui nao pode derrubar o SSE
-    (incidente 2026-07-23). Module-level (nao closure) pra ser testavel isolado, igual _decorate_loop."""
-    try:
-        p = plan_progress(info.cwd)
-    except Exception:
-        _log.warning("decorate_plan falhou pra %r", getattr(info, "name", "?"), exc_info=True)
-        return
-    if p is None:
-        # Sem plano tem DOIS motivos: nao existe, ou o usuario escondeu. So o 2o mantem o painel
-        # (e o seletor que desfaz) na tela. Custo: um read do pin, so pra sessao sem plano.
-        info.plan_hidden = plano_escondido(info.cwd) or None
-        return
-    info.plan_name = p.name
-    info.plan_task = p.task_idx
-    info.plan_task_total = p.task_total
-    info.plan_done = p.done
-    info.plan_total = p.total
-    info.plan_complete = p.complete
-    # Sem o corte, um plano de 30 Tasks manda 30 pares por sessao em TODO /api/sessions e em toda
-    # re-emissao do SSE, de graca. Ver _MAX_PLAN_TASK_SEGMENTS acima pro porque de 9 e nao 8.
-    info.plan_tasks = [(t.done, t.total) for t in p.tasks[:_MAX_PLAN_TASK_SEGMENTS]]
-
-
 
 
 def _decorate_transfers(infos: list[SessionInfo]) -> None:
@@ -431,13 +367,6 @@ def _jsonl_mtime(jsonl: Optional[str]) -> Optional[float]:
         return None
 
 
-def _kimi_corrige_ocioso(info, marker):
-    """Aplica `corrige_ocioso_kimi` (app/state.py) a uma linha da lista. So pra provider kimi."""
-    if getattr(info, "provider", "claude") != "kimi":
-        return marker
-    return corrige_ocioso_kimi(marker, info.jsonl)
-
-
 # Executavel do agente -> provider. Casa o BASENAME do argv[0], nunca a linha inteira: `pip`,
 # `pipx`, `mpirun` e um caminho contendo "/pi/" nao sao o agente Pi. O Kimi entra DUAS vezes:
 # sessões antigas (0.36.x) reescrevem o argv0 como `kimi`; a 0.37.2 reescreve como `kimi-code` —
@@ -648,218 +577,6 @@ def inbox_socket_of(name: str) -> Optional[str]:
     return None
 
 
-def _pi_sid_of(pid: int) -> Optional[str]:
-    # CP_PI_SESSION: o uuid que o wrapper do pi injetou. Mesmo truque do _engine_of — o env do
-    # processo VIVO e o registro autoritativo. Existe porque o `--session-id` some do cmdline: o pi
-    # sobrescreve o proprio argv (medido na Task 0).
-    if not procinfo._TEM_PROC:
-        # Escapou do procinfo quando ele foi extraido: sem /proc isto abria um caminho de arquivo
-        # inexistente e caia no `except OSError: return None`, perdendo o fallback CP_PI_SESSION —
-        # a sessao Pi entrava na lista sem transcript, em silencio.
-        return procinfo._env_psutil(pid).get("CP_PI_SESSION") or None
-    try:
-        with open(procinfo._proc_environ_path(pid), "rb") as fh:
-            for kv in fh.read().split(b"\x00"):
-                if kv.startswith(b"CP_PI_SESSION="):
-                    return kv.split(b"=", 1)[1].decode("utf-8", "replace") or None
-    except OSError:
-        return None
-    return None
-
-
-def _pi_transcript_of_id(cwd: str, sid: str, provider: str = "pi", perfil: str | None = None) -> Optional[str]:
-    # Indireção pro adapter (Task 1), que sabe o slug e o glob <timestamp>_<uuid>.jsonl. Import local
-    # pelo mesmo motivo do get_adapter em create(): evita qualquer ciclo se um adapter futuro vier a
-    # importar daqui.
-    from app.adapters import get_adapter
-    return get_adapter(provider).transcript_path(cwd, sid, perfil) or None
-
-
-def _omp_profile_of(pid: Optional[int]) -> Optional[str]:
-    # Perfil do omp DAQUELE pane: move a raiz das sessoes pra ~/.omp/profiles/<p>/agent. Lido do
-    # processo vivo, como CP_ENGINE e CLAUDE_CONFIG_DIR — o backend pode estar noutro perfil.
-    return procinfo._env_var_of(pid, "OMP_PROFILE") if pid else None
-
-
-def _pi_is_subagent(path: str) -> bool:
-    # Import local pelo mesmo motivo do _pi_transcript_of_id. Quem sabe o layout no disco e o
-    # adapter; aqui so se decide o que fazer com a resposta.
-    from app.adapters.pi.sessions import is_subagent_transcript
-    return is_subagent_transcript(path)
-
-
-def _pi_root_transcript(path: str) -> Optional[str]:
-    from app.adapters.pi.sessions import root_transcript
-    return root_transcript(path) or None
-
-
-# Panes ja avisados sobre bilhete sem frescor. list() e polled (de segundo em segundo), entao um
-# warning por varredura entupiria o journal; um por pane+motivo basta pra um /proc cronicamente
-# ilegivel nao ficar calado pra sempre. ponytail: set simples — o teto e o numero de panes da
-# maquina, nao ha o que expirar.
-_PI_TICKET_WARNED: set[tuple[str, str]] = set()
-
-
-def _warn_bilhete_once(pane_id: str, motivo: str) -> None:
-    if (pane_id, motivo) not in _PI_TICKET_WARNED:
-        _PI_TICKET_WARNED.add((pane_id, motivo))
-        _log.warning("pi: bilhete de %s recusado (%s); usando CP_PI_SESSION", pane_id, motivo)
-
-
-def _chave_do_bilhete(pane_id: str, pid: Optional[int]) -> str:
-    """Mesma chave que a extensao usa pra gravar o bilhete (scripts/pi/hangar-state.ts, paneKey).
-
-    No tmux e o `%N`, que e unico no servidor. No psmux (Windows) NAO e: medido em 21/08/2026,
-    quatro sessoes vivas ao mesmo tempo e todas com `TMUX_PANE=%1` — a segunda sessao Pi
-    sobrescrevia o bilhete da primeira e `pi_session_file` passava a devolver o MESMO transcript
-    pras duas, ou seja, uma abria a conversa da outra. Ali a chave e o `PSMUX_SESSION`, que carrega
-    o nome da sessao e e unico por construcao.
-
-    Lido do ambiente do PROCESSO do pane, e nao de um parametro novo, pra ser exatamente o que a
-    extensao leu — as duas pontas olham a mesma fonte, entao nao ha como divergirem. No Linux a
-    variavel nao existe, `_env_var_of` devolve None e a chave fica byte-identica a de sempre.
-    """
-    if pid is not None:
-        psmux = procinfo._env_var_of(pid, "PSMUX_SESSION")
-        if psmux:
-            return re.sub(r"[^A-Za-z0-9._-]", "-", psmux)
-    return pane_id.lstrip("%")
-
-
-def pi_session_file(pane_id: str, pid: Optional[int] = None,
-                    cwd: str = "", provider: str = "pi") -> Optional[str]:
-    """Transcript de um pane Pi: bilhete da extensao primeiro, env do wrapper depois.
-
-    Nenhum dos dois presente -> None, e a sessao entra na lista SEM transcript. Chutar o arquivo
-    mais novo do cwd (o que resolve_jsonl faz pro Claude) faria a sessao Pi abrir mostrando a
-    conversa de outro agente.
-    """
-    base = (_config_dir_of(pid) if pid else None) or Path.home() / ".claude"
-    ticket = Path(base) / ".hangar-pi" / f"{_chave_do_bilhete(pane_id, pid)}.json"
-    sid = _pi_sid_of(pid) if pid else None
-    try:
-        # encoding explicito: o bilhete guarda o CAMINHO do transcript, e no Windows o default e
-        # cp1252. Uma pasta com acento (Area de trabalho) ou emoji volta corrompida daqui — e o
-        # caminho corrompido nao existe, entao a sessao Pi ficaria sem transcript sem erro nenhum.
-        data = json.loads(ticket.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            return None            # ver o irmao em kimi_session_file: nao-dict derruba list() inteira
-        f, ts = data.get("file"), data.get("ts")
-        # Bilhete de OUTRA encarnacao do pane: o tmux reusa %pane_id apos um restart do servidor e o
-        # .jsonl da sessao anterior continua no disco, entao o exists() abaixo nao pega nada — o pane
-        # novo abriria a conversa do pane velho. O criterio e FRESCOR, nunca "os ids divergem": a
-        # extensao reescreve o bilhete a cada agent_start justamente porque /tree, /fork e troca de
-        # sessao mudam o arquivo com a sessao ja rodando, enquanto o CP_PI_SESSION fica congelado no
-        # /proc desde o exec. Depois de um fork a divergencia e o comportamento CORRETO; rejeitar por
-        # ela devolveria a conversa anterior pelo resto da vida do pane. Bilhete escrito ANTES de o
-        # processo deste pane nascer e que e de outra sessao.
-        nasceu = _proc_start_time(pid) if pid else None
-        # 2s de folga: o ts vem do Date.now() da extensao e o nascimento, do btime+ticks do kernel —
-        # granularidades e relogios diferentes, e o bilhete do session_start nasce colado no exec.
-        if nasceu is None or not isinstance(ts, (int, float)):
-            # Frescor INDETERMINAVEL: /proc/<pid>/stat ilegivel (pid morto, permissao, kernel sem
-            # /proc) ou bilhete sem `ts` numerico (extensao antiga, escrita parcial). Recusa, igual a
-            # um bilhete velho — deixar passar era o furo silencioso: o guarda simplesmente nao
-            # rodava e o pane reusado abria a conversa da encarnacao ANTERIOR, tracked=True e sem
-            # nenhum rastro. Sem frescor o CP_PI_SESSION e o unico sinal que ainda prova de quem e
-            # o pane (vem do /proc do processo VIVO).
-            _warn_bilhete_once(pane_id, "nascimento" if nasceu is None else "ts")
-            f = None
-        elif ts < nasceu - 2:
-            f = None
-        elif f and _pi_is_subagent(f):
-            # O Pi dispara `agent_start` TAMBEM pro subagente (Task tool), com um ctx cujo
-            # getSessionFile() aponta pro transcript do subagente — e o publishPane da extensao
-            # reescreve o bilhete com ele. Aceitar isso trocava a conversa inteira da sessao pela do
-            # subagente no app (medido 2026-07-30, numa sessão real: bilhete do pane %26 caiu em
-            # `…_18e48e08-…/44bad0fb/run-2/session.jsonl`), enquanto o terminal seguia normal — ele
-            # nao le o bilhete. Tratar aqui e mais forte que consertar so a extensao: pega TODA
-            # sessao Pi ja de pe, sem reinstalar nem reiniciar nada. O caminho do subagente carrega
-            # a raiz dentro dele, entao subimos pra ela em vez de devolver None e deixar a sessao
-            # sem transcript ate o proximo turno do agente principal reescrever o bilhete.
-            _warn_bilhete_once(pane_id, "subagente")
-            f = _pi_root_transcript(f)
-        # Bilhete FRESCO vale mesmo com o arquivo ainda inexistente: o Pi so escreve o .jsonl no 1o
-        # turno, e a extensao publica o bilhete la no session_start. Exigir exists() aqui deixava
-        # TODA sessao Pi recem-criada pelo app como "sem id" — sem transcript e inclicavel — ate
-        # alguem digitar a primeira mensagem no terminal, que e justamente o que nao da pra fazer
-        # pelo celular. O caso que o exists() guardava (bilhete orfao de uma encarnacao anterior do
-        # pane, apontando pra .jsonl deletado) ja e coberto pelo teste de frescor acima, que e mais
-        # forte: compara o bilhete com o nascimento DESTE processo. Mesmo contrato do Claude, cujo
-        # create() tambem fixa um caminho que so passa a existir depois.
-        if f:
-            # omp: o bilhete devolve o caminho do `--session`, mas o transcript principal nasce
-            # em `sessions/-/<nome>` (ver pi_sessions.localizar_na_raiz). Mesmo nome, outra pasta.
-            if provider == "omp" and not os.path.exists(f):
-                from app.adapters.pi.sessions import localizar_na_raiz   # import local, como os irmaos acima
-                f = localizar_na_raiz(os.path.basename(f), provider, _omp_profile_of(pid)) or f
-            return f
-    except (OSError, ValueError):
-        pass
-    if not sid:
-        return None
-    perfil = _omp_profile_of(pid) if provider == "omp" else None
-    return _pi_transcript_of_id(cwd, sid, provider, perfil) if perfil else _pi_transcript_of_id(cwd, sid, provider)
-
-
-_KIMI_TICKET_WARNED: set[tuple[str, str]] = set()
-
-
-def _warn_kimi_once(pane_id: str, motivo: str) -> None:
-    # Mesmo aviso-uma-vez do _warn_bilhete_once: list() e polled, um warning por varredura
-    # entupiria o journal.
-    if (pane_id, motivo) not in _KIMI_TICKET_WARNED:
-        _KIMI_TICKET_WARNED.add((pane_id, motivo))
-        _log.warning("kimi: bilhete de %s recusado (%s)", pane_id, motivo)
-
-
-def kimi_session_file(pane_id: str, pid: Optional[int] = None,
-                      cwd: str = "") -> Optional[str]:
-    """Transcript (wire.jsonl) de um pane Kimi: so o bilhete do hook — NAO ha fallback por env
-    (o wrapper do kimi nao injeta id; o CLI nao aceita id escolhido pelo caller).
-
-    Bilhete ausente/velho -> None, e a sessao entra na lista SEM transcript (tracked=False),
-    nunca um chute newest-by-mtime que abriria o wire de OUTRA sessao. E temporario por
-    construcao: o hook grava o bilhete no 1o evento da sessao (SessionStart/UserPromptSubmit)
-    e a proxima varredura resolve. Mesmo contrato do pi_session_file, inclusive o teste de
-    FRESCOR: o tmux reusa %pane_id apos restart do servidor, e um bilhete da encarnacao anterior
-    apontaria pra sessao errada.
-    """
-    base = (_config_dir_of(pid) if pid else None) or Path.home() / ".claude"
-    # Mesma chave do bilhete do Pi, pelo mesmo motivo: no psmux o %N nao e unico e dois panes Kimi
-    # dividiriam um bilhete so (ver _chave_do_bilhete).
-    ticket = Path(base) / ".hangar-kimi" / f"{_chave_do_bilhete(pane_id, pid)}.json"
-    try:
-        data = json.loads(ticket.read_text(encoding="utf-8"))   # mesmo motivo do pi_session_file
-        if not isinstance(data, dict):
-            # JSON VALIDO do tipo errado (`null`, lista) nao levanta ValueError, entao o except
-            # abaixo nao pega: `.get` num nao-dict e AttributeError, que sobe pelo loop de list()
-            # SEM guarda e apaga TODAS as sessoes da tela (Claude, Codex, Pi junto). Mesmo furo que
-            # o CLAUDE.md ja registra pro hook_state. Bilhete torto acontece: o _write_marker do
-            # hook usa tmp de nome fixo, sem pid, entao dois eventos sobrepostos entrelacam bytes.
-            return None
-        sid, ts = data.get("session_id"), data.get("ts")
-        if not sid:
-            return None
-        nasceu = _proc_start_time(pid) if pid else None
-        if nasceu is None or not isinstance(ts, (int, float)):
-            # Frescor INDETERMINAVEL (proc ilegivel ou bilhete sem ts): recusa, como no Pi —
-            # deixar passar era o furo silencioso do pane reusado abrindo a conversa anterior.
-            _warn_kimi_once(pane_id, "nascimento" if nasceu is None else "ts")
-            return None
-        if ts < nasceu - 2:
-            # 2s de folga: relogios/granularidades diferentes (mesmo criterio do bilhete do Pi).
-            return None
-        from app.adapters.kimi import sessions as kimi_sessions
-        # cwd do bilhete (o hook grava o cwd que o CLI reporta) com fallback pro do pane.
-        wire = kimi_sessions.transcript_path(data.get("cwd") or cwd, sid)
-        return wire or None
-    except (OSError, ValueError):
-        return None
-
-
-# Cadencia do cache de statusline da lista (list_with_state): TTL por sessao + teto de capturas de
-# pane por chamada (o custo real e o fork do tmux).
 def _claude_config_dir(info) -> Optional[str]:
     """Pasta de configuração da conta da sessão Claude (`conta` = "claude:<pasta>")."""
     conta = getattr(info, "conta", None) or ""
@@ -1336,10 +1053,6 @@ class SessionRegistry:
                 # entao pelo menos NAO e silencioso: o log diz qual nome foi filtrado e por que.
                 _log.debug("list: pane %r filtrado por sidecar Codex de mesmo nome", p["name"])
                 continue
-            # Pi anda no MESMO caminho tmux que o Claude (pane real, mtime real) — so a resolucao do
-            # jsonl muda: o --session-id nao sobrevive no cmdline (Task 0, fato 7) e resolve_tracked
-            # cairia no fallback newest-by-mtime, que pegaria o transcript do CLAUDE do mesmo cwd (a
-            # regressao mais cara desta task). Resolve pelo bilhete da extensao / env do wrapper.
             prov, pid_agente = agente_do_pane(p["pid"], children)
             # Durante o boot só há shell: a escolha da criação já identifica o dono.
             if pid_agente is None and p.get("provider"):
@@ -1348,20 +1061,9 @@ class SessionRegistry:
             # o pane e o shell, e o shell nao tem CLAUDE_CONFIG_DIR nem CP_ENGINE.
             pid_env = pid_agente or p["pid"]
             if prov in ("pi", "omp"):
-                jsonl = pi_session_file(p.get("pane_id", ""), p["pid"], p["cwd"], prov)
-                # tracked segue o TRANSCRITO, nao o provider. O bilhete/env sao deterministicos
-                # (nunca um chute como o newest-by-mtime do Claude), mas quando NENHUM dos dois
-                # resolve um arquivo nao ha vinculo nenhum: /events e /history exigem info.jsonl e
-                # devolvem 404. Com o True fixo a lista mostrava um card clicavel que abria um chat
-                # quebrado e, por ser "tracked", sem nenhuma das afordancias de sessao sem id. Com
-                # False as duas views cinzam a linha e explicam. E temporario por construcao: no 1o
-                # turno o Pi escreve o transcript, o bilhete passa a resolver e a proxima varredura
-                # devolve tracked=True sozinha (list() e polled).
-                tracked = jsonl is not None
+                continue
             elif prov == "kimi":
-                # Só o bilhete do hook liga o pane ao wire; o Kimi não aceita um ID escolhido.
-                jsonl = kimi_session_file(p.get("pane_id", ""), p["pid"], p["cwd"])
-                tracked = jsonl is not None
+                continue
             elif prov == "codex":
                 # Chegar aqui significa pane de Codex SEM sidecar (o filtro acima ja tirou os que
                 # tem): a TUI subiu e ainda nao abriu a thread. Nao ha transcript a resolver — o
@@ -1373,18 +1075,14 @@ class SessionRegistry:
                 jsonl, tracked = self.resolve_tracked(p["name"], p["cwd"], p["pid"], children)
             link = ThenLink(p["name"]).get()
             pair = PairLink(p["name"]).get()
-            # Transcript de chute (untracked) pode ser de outra sessão: não decide onde esta está.
-            loc = worktrees.locate(prov, p["cwd"], jsonl if tracked else None)
             info = SessionInfo(name=p["name"], cwd=p["cwd"], jsonl=jsonl, tracked=tracked,
                                lifecycle_id=session_life(p["name"], meta=None, birth=p.get("session_created")),
-                               branch=loc.branch, worktree=loc.worktree,
-                               worktree_path=loc.worktree_path, worktree_gone=loc.worktree_gone, git_cwd=loc.git_cwd,
                                then_target=link.get("target") if link else None,
                                pair_peers=pair.get("peers") if pair else None,
                                pair_external=_pair_external(p["name"], pair.get("peers") if pair else None),
                                pair_gid=pair.get("gid") if pair else None,
                                pair_task=pair.get("task") if pair else None)
-            if prov in ("pi", "omp", "kimi", "codex"):
+            if prov in ("codex",):
                 info.provider = prov
             # Motor da sessão, do mesmo pid que já resolve o config_dir. É uma leitura de
             # /proc/<pid>/environ por sessão (a mesma ordem de custo do _config_dir_of ao lado) —
@@ -1421,15 +1119,12 @@ class SessionRegistry:
             codex_home = str(Path(meta.get("codex_home") or codex_contas.default_home())
                              .expanduser().resolve(strict=False))
             cwd = cwd_atual(meta)
-            loc = worktrees.locate("codex", cwd, meta.get("rollout_path"))
             out.append(SessionInfo(
                 name=meta["name"], cwd=cwd, jsonl=meta.get("rollout_path") or None,
                 lifecycle_id=session_life(meta["name"], meta=meta, birth=terminal_births.get(meta["name"])),
                 provider="codex", tracked=True, conta=f"codex:{codex_home}",
                 codex_home=codex_home, headless=bool(meta.get("headless")),
                 codex_service_tier=meta.get("service_tier"),
-                branch=loc.branch, worktree=loc.worktree,
-                worktree_path=loc.worktree_path, worktree_gone=loc.worktree_gone, git_cwd=loc.git_cwd,
                 then_target=(ThenLink(meta["name"]).get() or {}).get("target"),
                 pair_peers=(PairLink(meta["name"]).get() or {}).get("peers"),
                 pair_external=_pair_external(meta["name"], (PairLink(meta["name"]).get() or {}).get("peers")),
@@ -1443,7 +1138,6 @@ class SessionRegistry:
         for meta in headless_sessions.list_all():
             cwd = cwd_atual(meta)
             jsonl = hl.transcript_path_de(meta)
-            loc = worktrees.locate("claude", cwd, jsonl)
             cdir = meta.get("config_dir")
             out.append(SessionInfo(
                 name=meta["name"], cwd=cwd, jsonl=jsonl,
@@ -1453,8 +1147,6 @@ class SessionRegistry:
                 conta=(meta.get("engine_credential_id") if meta.get("engine_account") else
                        f"chave:{meta['engine']}" if meta.get("engine") else
                        f"claude:{Path(cdir or Path.home() / '.claude').resolve()}"),
-                branch=loc.branch, worktree=loc.worktree,
-                worktree_path=loc.worktree_path, worktree_gone=loc.worktree_gone, git_cwd=loc.git_cwd,
                 then_target=(ThenLink(meta["name"]).get() or {}).get("target"),
                 pair_peers=(PairLink(meta["name"]).get() or {}).get("peers"),
                 pair_external=_pair_external(meta["name"], (PairLink(meta["name"]).get() or {}).get("peers")),
@@ -1546,50 +1238,7 @@ class SessionRegistry:
         # a statusline nao tem outra fonte. O "custo ~0" continua valendo pra CLASSIFICACAO; o
         # sweep e limitado a _STATUS_BUDGET capturas por chamada com TTL de _STATUS_TTL.
         def _sid(jsonl):
-            # session_key, NAO Path().stem: no Kimi todo transcript se chama wire.jsonl, entao o stem
-            # e "wire" pra TODA sessao — get_state("wire") nunca casava o marcador (que o hook grava
-            # sob o session_id) e toda sessao Kimi caia no fallback de pane. La o spinner e fase de
-            # lua, fora de SPINNER_GLYPHS, entao sessao trabalhando aparecia OCIOSA na lista.
             return session_key(jsonl) if jsonl else None
-        # `corrige_ocioso_kimi` LE o fim do wire.jsonl (state._kimi_turno_aberto) quando o mtime
-        # contradiz um marcador ocioso — I/O de arquivo, nao mais um stat. Esta corrotina e awaitada
-        # DIRETO no event loop (/api/sessions, o poller do SSE), entao a leitura vai
-        # pro threadpool numa tacada so: mesma regra do git status em `_decorate_git`, e o mesmo
-        # incidente que ela documenta — feature lenta na corrotina congela o backend pra TODAS as
-        # sessoes e conexoes, nao so pra dona do arquivo grande.
-        kimis = [i for i in infos if getattr(i, "provider", "claude") == "kimi"]
-        corrigidos: dict[str, object] = {}
-        # Aprovacao pendente do Kimi (plano/comando/arquivo): sai do WIRE, nao do pane — ver
-        # state.aprovacao_kimi. Aqui isso e o que faz o card mostrar "aguardando" com os botoes: no
-        # painel aberto o turno segue ABERTO no wire, entao `corrige_ocioso_kimi` promove a sessao
-        # pra "working" e ela some da coluna de quem espera resposta. Vai na MESMA thread da
-        # correcao — as duas leem o rabo do mesmo arquivo.
-        aprovacoes: dict[str, tuple[str, list[str]]] = {}
-        if kimis:
-            brutos = {i.name: hook_state.get_state(_sid(i.jsonl)) for i in kimis}
-
-            def _kimi_sweep():
-                corr, aprov = {}, {}
-                for i in kimis:
-                    corr[i.name] = _kimi_corrige_ocioso(i, brutos[i.name])
-                    # O pane responde a outra metade da pergunta ("o painel esta na tela AGORA?"),
-                    # sem a qual uma sessao RETOMADA sobre um wire com pedido orfao nasceria com
-                    # botoes de um painel inexistente (ver state.aprovacao_kimi). O callable so e
-                    # chamado DEPOIS de o wire dizer que ha pedido pendente, que e raro — este
-                    # caminho nao acrescenta captura nenhuma ao poll normal. (O sweep de statusline,
-                    # mais abaixo, captura por conta propria; e outro orcamento, com TTL.)
-                    # Pane ilegivel -> sem prova de tela, sem botao.
-                    try:
-                        a = aprovacao_kimi(i.jsonl, lambda nome=i.name: tmux.capture_pane(nome))
-                    except Exception:
-                        a = None
-                        _log.debug("capture_pane falhou lendo aprovacao de %s", i.name,
-                                   exc_info=True)
-                    if a is not None:
-                        aprov[i.name] = a
-                return corr, aprov
-
-            corrigidos, aprovacoes = await asyncio.to_thread(_kimi_sweep)
         from app.adapters import get_adapter, CLAUDE_HEADLESS
         hl = get_adapter(CLAUDE_HEADLESS)
         pending = []  # infos sem marcador (ou awaiting) -> precisa raspar o pane
@@ -1668,18 +1317,7 @@ class SessionRegistry:
                 from app.runtime_adapter import runtime_problem
                 if problem := runtime_problem(info.name):
                     info.problema = problem[0]
-            aprov = aprovacoes.get(info.name)
-            if aprov is not None:
-                # Wire manda: o painel de aprovacao esta na tela AGORA. Nao entra no `pending` (nao
-                # ha o que raspar — os rotulos nao estao no pane em formato que este modulo leia) e
-                # nao mexe no hook_state: o marcador volta a valer sozinho quando a aprovacao for
-                # resolvida, sem promover/rebaixar nada.
-                info.state = "awaiting_input"
-                info.question, info.options = aprov
-                info.last_activity = _jsonl_mtime(info.jsonl)
-                continue
-            marker = (corrigidos[info.name] if info.name in corrigidos
-                      else hook_state.get_state(_sid(info.jsonl)))
+            marker = hook_state.get_state(_sid(info.jsonl))
             # Marker autoritativo pra working/idle/dead (custo ~0). Pra awaiting_input o marcador NAO
             # carrega a pergunta -> raspa o pane (junto das sem-marcador) pra pegar question/options.
             # LIMITACAO CONHECIDA (rate-limit radar, feature #8): este fast-path PULA a captura do pane,
@@ -1913,43 +1551,8 @@ class SessionRegistry:
             )
         await self._radar_de_limite(infos, raspadas={i.name for i in pending})
         if state_only:
-            # Pi, omp e Kimi: o histórico deles ainda é do Python, então a última resposta vai nos fatos.
-            await asyncio.to_thread(self._decorate_replies, [i for i in infos if i.provider in ("pi", "omp", "kimi")])
             return infos
         await asyncio.to_thread(self._decorate_replies, infos)
-        # Estado de git por sessão — SÓ aqui (payload do /api/sessions), nunca em list(): git_summary
-        # forka `git status` e list() é o caminho leve chamado por kill()/resume/SSE. E como
-        # list_with_state é awaitado direto no event loop (/api/sessions, sse), o loop
-        # de forks vai pro threadpool via asyncio.to_thread — rodar na corrotina congelaria o backend
-        # inteiro no cache-miss. Gate em .git e except GitError moram no git_summary; cache de 3s
-        # segura o custo vs o poll de 2s.
-        # O git NAO segura a lista: ela sai com o ultimo numero conhecido por cwd e o git atualiza
-        # em segundo plano, um por repositorio (single-flight). Em serie, um repositorio lento
-        # atrasava o card de TODAS as sessoes — inclusive as que acabaram de mudar de estado.
-        # O git é o de onde o agente trabalha: numa worktree, a pasta de abertura não diz nada.
-        for info in infos:
-            summary, diffstat = _git_ultimo.get(_git_dir(info), (None, None))
-            if summary is not None:
-                info.git_dirty = summary["dirty"]
-                info.git_ahead = summary["ahead"]
-                info.git_behind = summary["behind"]
-            if diffstat is not None:
-                info.git_added = diffstat["added"]
-                info.git_removed = diffstat["removed"]
-        for cwd in {d for d in map(_git_dir, infos) if d}:
-            if cwd not in _git_em_voo:
-                _git_em_voo.add(cwd)
-                task = asyncio.create_task(_atualizar_git(cwd))
-                _git_tarefas.add(task)
-                task.add_done_callback(_git_tarefas.discard)
-
-        def _decorate_planos() -> None:
-            # Le markdown do disco: ler arquivo na corrotina e a mesma classe de erro que motivou
-            # o to_thread do git.
-            for info in infos:
-                _decorate_plan(info)
-
-        await asyncio.to_thread(_decorate_planos)
         for info in infos:
             _decorate_loop(info)
         return infos + transfers

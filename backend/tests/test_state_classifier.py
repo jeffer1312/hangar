@@ -358,18 +358,6 @@ async def test_hook_working_marker_expires_for_claude():
     assert ("idle", None) in seen
 
 
-@pytest.mark.asyncio
-async def test_hook_working_marker_never_expires_without_a_readable_spinner():
-    # FINDING 2: SPINNER_GLYPHS sao os do Claude; o loader do Pi e braille (⠋⠙⠹…), entao o contador
-    # `no_spinner` sobe DURANTE o turno e o marcador working era descartado no meio da conversa
-    # (chat mostrando "ocioso" com o agente trabalhando). Sem spinner legivel o marcador e a UNICA
-    # verdade — mesma politica que a lista ja usa (registry.py:719, sem grace nenhuma).
-    mon = StateMonitor("pi", poll=0.001, sid_get=lambda: "sid", hook_grace=None)
-    seen = await _run_until(mon, polls=StateMonitor.HOOK_WORKING_GRACE + 8,
-                            pane="⠙ pensando\n❯ \n")
-    assert seen == [("working", None)], f"caiu pra idle no meio do turno: {seen}"
-
-
 def test_is_overlay_true_with_nav_footer():
     pane = "alguma conversa\n● resposta\n────────\n  Esc to cancel · Enter to select\n"
     assert state_mod.is_overlay(pane) is True
@@ -438,30 +426,6 @@ def test_status_line_is_the_chrome_below_the_input_box():
     assert "✻ Worked" not in sl     # spinner / completed marker excluded
 
 
-# --- Pi: a ancora e a caixa arredondada do composer, nao a regua reta do Claude ----------------
-# pane_pi_idle.txt e um `tmux capture-pane -p` REAL de uma sessao Pi ociosa (Pi 0.82.1). Sem a
-# ancora da caixa, o fallback devolvia as 2 ultimas linhas nao-vazias -> a borda `╰───╯` colada no
-# chip, ou conversa pura quando o usuario nao tem extensao de statusline.
-
-def _pane_pi() -> str:
-    return (Path(__file__).parent / "fixtures" / "pane_pi_idle.txt").read_text(encoding="utf-8")
-
-
-def test_status_line_pi_is_the_row_below_the_composer_box():
-    sl = state_mod.status_line(_pane_pi())
-    assert sl is not None
-    assert sl.startswith("🤖 kimi-for-coding (high)") and "💬 sessão 135in/470out" in sl
-    assert "╰" not in sl and "╭" not in sl      # borda da caixa fora
-    assert "Como posso te ajudar" not in sl     # conversa fora
-
-
-def test_status_line_pi_sem_extensao_de_statusline_e_none():
-    # MESMO pane sem a ultima linha: e exatamente o que ve quem nao instalou a extensao de
-    # statusline. Nada abaixo da caixa -> nada. Devolver conversa seria pior que devolver vazio.
-    pane = "\n".join(_pane_pi().splitlines()[:-1]) + "\n"
-    assert state_mod.status_line(pane) is None
-
-
 def test_status_line_claude_fixtures_byte_identical():
     # Trava de nao-regressao: a ancora nova NAO pode mover um byte do que o Claude ja devolvia.
     # Valores conferidos contra a implementacao anterior (so a regua reta) nestes mesmos arquivos.
@@ -480,31 +444,6 @@ def test_status_line_claude_fixtures_byte_identical():
         assert state_mod.status_line((fx / nome).read_text(encoding="utf-8")) == valor, nome
     # O banner de boas-vindas do Claude TEM `╰───╯` (linha 12 do pane_idle) — a asserção acima já
     # prova que ele nao vira ancora: a regua do input, mais abaixo, continua ganhando.
-
-
-def test_pi_question_picker_is_awaiting_input():
-    # Picker do Pi (tool `question`): cursor ascii "> N." + rodape de navegacao no FUNDO do pane.
-    # Medido no pi 0.82.1 (a pergunta "Quando mostrar o diff" desta feature).
-    pane = (
-        "● Question No pi o diff do Edit aparece aberto na conversa?\n"
-        + ("─" * 60) + "\n"
-        "\n"
-        "[Quando mostrar o diff]\n"
-        "No pi o diff do Edit aparece aberto na conversa?\n"
-        "\n"
-        "> 1. Sempre aberto na conversa\n"
-        "  2. Só ao expandir (toque/clique)\n"
-        "  3. Aberto por padrão, recolhível\n"
-        "  4. Type something.\n"
-        "↑↓ navigate • Enter to select • Esc to cancel\n"
-        + ("─" * 60) + "\n"
-        " k3 (high) | hangar | sessão 45k\n"
-    )
-    state, label, question, options = classify(pane)
-    assert state == "awaiting_input"
-    assert question == "No pi o diff do Edit aparece aberto na conversa?"
-    assert options == ["Sempre aberto na conversa", "Só ao expandir (toque/clique)",
-                       "Aberto por padrão, recolhível", "Type something."]
 
 
 def test_rascunho_numerado_no_composer_nao_e_menu():
@@ -529,17 +468,6 @@ def test_rascunho_numerado_no_composer_nao_e_menu():
     state, _, _, options = classify(pane)
     assert state == "idle"
     assert options is None
-
-
-def test_rascunho_numerado_no_composer_do_pi_nao_e_menu():
-    # Mesma coisa no cursor do Pi ("> N."), que desenha o rodape de navegacao por outro motivo.
-    pane = (
-        "Resposta anterior do agente.\n"
-        "> 1. pode subir 2. depois me avisa\n"
-        "↑↓ navigate • Enter to select • Esc to cancel\n"
-    )
-    state, *_ = classify(pane)
-    assert state == "idle"
 
 
 def test_opcao_com_numero_no_texto_continua_sendo_menu():
@@ -598,84 +526,6 @@ def test_uma_opcao_sozinha_nao_e_menu():
         "Texto qualquer da conversa.\n"
         "\n"
         "❯ 1. isto aqui e um rascunho\n"
-    )
-    state, *_ = classify(pane)
-    assert state == "idle"
-
-
-# Glifos de nerd font do picker do omp, por codigo pro arquivo ficar legivel (fonte comum nao
-# desenha a area de uso privado): chevron da linha selecionada e circulo que marca toda opcao.
-_OMP_SEL = chr(0xF054)
-_OMP_OPT = chr(0xF10C)
-
-
-def test_omp_ask_picker_is_awaiting_input():
-    """Picker da tool `ask` do omp: opcoes SEM numero, marcadas por glifos de nerd font.
-
-    Medido no omp 18.1.4: a linha selecionada traz U+F054 (chevron) antes do U+F10C (circulo) que
-    marca toda opcao; o rodape e "Enter select · n note · ↑/↓ move · Esc cancel". A linha de texto
-    livre ("Other (type your own)") e sempre a ultima.
-    """
-    pane = (
-        "● Perguntando preferência de cor\n"
-        "╭─ Ask " + "─" * 45 + "\n"
-        "│ Qual cor você prefere?\n"
-        "├" + "─" * 51 + "\n"
-        f"│ {_OMP_SEL} {_OMP_OPT} Azul\n"
-        f"│   {_OMP_OPT} Verde\n"
-        f"│   {_OMP_OPT} Other (type your own)\n"
-        "│\n"
-        "├" + "─" * 51 + "\n"
-        "│ Enter select · n note · ↑/↓ move · Esc cancel\n"
-        "╰" + "─" * 51 + "\n"
-        " k3 (high) | hangar | sessão 45k\n"
-    )
-    state, label, question, options = classify(pane)
-    assert state == "awaiting_input"
-    assert question == "Qual cor você prefere?"
-    assert options == ["Azul", "Verde", "Other (type your own)"]
-
-
-def test_omp_ask_picker_tela_viva():
-    """Captura REAL do pane com o picker aberto (`tmux capture-pane -p`, 160 colunas).
-
-    Duas armadilhas que a tela medida a mao nao tinha e que quebraram o drive ao vivo: o omp deixa
-    NA TELA um cartao-resumo do toolCall com as mesmas marcas de opcao (as opcoes vinham duplicadas
-    e o alvo do drive saia deslocado), e o modelo pode pendurar uma DESCRICAO embaixo de cada opcao
-    (linha dentro da moldura, sem a marca) — que nao e opcao."""
-    pane = (Path(__file__).parent / "fixtures" / "pane_omp_ask_picker.txt").read_text(encoding="utf-8")
-    state, _, question, options = classify(pane)
-    assert state == "awaiting_input"
-    assert question == "Qual cor você prefere?"
-    assert options == ["Azul", "Verde (Recommended)", "Other (type your own)"]
-
-
-def test_omp_ask_picker_citado_sem_rodape_no_fundo_nao_e_menu():
-    # Mesma trava do Pi: o picker do omp so vale com o rodape de navegacao no FUNDO do pane.
-    pane = (
-        "Veja como o omp desenha:\n"
-        f"│ {_OMP_SEL} {_OMP_OPT} Azul\n"
-        f"│   {_OMP_OPT} Verde\n"
-        "│ Enter select · n note · ↑/↓ move · Esc cancel\n"
-        + "".join(f"linha de conversa {i} depois da citacao\n" for i in range(12))
-        + "╰" + "─" * 40 + "╯\n"
-        + " k3 (high) | sessao\n"
-    )
-    state, *_ = classify(pane)
-    assert state == "idle"
-
-
-def test_pi_cursor_citation_without_live_footer_is_not_a_menu():
-    # "> 1." CITADO em prosa (o rodape da citacao subiu no scrollback) nao e picker vivo — sem a
-    # trava do rodape-no-fundo isto travava a sessao num menu fantasma.
-    pane = (
-        "Veja como o pi desenha:\n"
-        "> 1. Sempre aberto na conversa\n"
-        "  2. Só ao expandir\n"
-        "↑↓ navigate • Enter to select • Esc to cancel\n"
-        + "".join(f"linha de conversa {i} depois da citacao\n" for i in range(12))
-        + "╰" + "─" * 40 + "╯\n"
-        + " k3 (high) | sessao\n"
     )
     state, *_ = classify(pane)
     assert state == "idle"

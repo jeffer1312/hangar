@@ -8210,6 +8210,7 @@
   "nova_conversa_envio_conferir_erro": "Não consegui conferir a mensagem nesta conversa: {erro}",
   "nova_conversa_resultado_salvar_erro": "Não foi possível guardar o resultado do envio neste aparelho. Confira a conversa antes de enviar novamente.",
   "nova_conversa_placeholder": "Escreva a primeira mensagem",
+  "nova_conversa_um_anexo": "A nova conversa leva um anexo: só o primeiro entrou.",
   "nova_conversa_enviar": "Enviar",
   "nova_conversa_opcoes": "Opções",
   "nova_conversa_destino_hint": "Abre as opções para escolher a máquina e a pasta da conversa.",

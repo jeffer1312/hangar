@@ -619,37 +619,6 @@ async def test_cancelled_common_send_keeps_participation_until_receipt(terminal_
         pass
 
 
-async def test_slow_query_does_not_exclude_input_or_interrupt(terminal_ingress, monkeypatch):
-    import threading
-    from httpx2 import ASGITransport, AsyncClient
-    entered, release = threading.Event(), threading.Event()
-
-    def slow(*args, **kwargs):
-        entered.set()
-        assert release.wait(5)
-        return "resultado"
-
-    monkeypatch.setattr(api, "file_diff", slow)
-    monkeypatch.setattr(api, "_session_cwd", lambda name: terminal_ingress.info.cwd)
-    monkeypatch.setattr(api.terminal, "send_prompt", lambda *args, **kwargs: "deferred")
-    headers = {"Authorization": "Bearer test-secret"}
-    async with AsyncClient(transport=ASGITransport(app=api.app), base_url="http://test", headers=headers) as client:
-        pending = asyncio.create_task(client.post("/api/sessions/s/git/diff", json={"path": "example.py"}))
-        try:
-            assert await asyncio.to_thread(entered.wait, 5)
-            # Consulta pendente também não prende a operação exclusiva de troca.
-            with store.session_operation("s"):
-                pass
-            sent = await client.post("/api/sessions/s/input", json={"text": "mensagem"})
-            interrupted = await client.post("/api/sessions/s/interrupt")
-            assert sent.status_code == 200 and interrupted.status_code == 200
-            assert api.terminal.interrupt.called and not pending.done()
-        finally:
-            release.set()
-            response = await pending
-        assert response.status_code == 200
-
-
 async def test_two_normal_http_inputs_share_the_ingress_gate(terminal_ingress, monkeypatch):
     import threading
     from httpx2 import ASGITransport, AsyncClient
@@ -691,13 +660,11 @@ async def test_transfer_still_refuses_queries_input_and_interrupt(terminal_ingre
                                   None, {**scenario.meta, "jsonl": str(scenario.source)}, None, None, None)
     store.save_transfer(record)
     never = Mock(side_effect=AssertionError("handler não deve executar durante a transferência"))
-    monkeypatch.setattr(api, "file_diff", never)
     monkeypatch.setattr(api.terminal, "send_prompt", never)
     monkeypatch.setattr(api.terminal, "interrupt", never)
     headers = {"Authorization": "Bearer test-secret"}
     async with AsyncClient(transport=ASGITransport(app=api.app), base_url="http://test", headers=headers) as client:
-        requests = [client.post("/api/sessions/s/git/diff", json={"path": "example.py"}),
-                    client.post("/api/sessions/s/input", json={"text": "mensagem"}),
+        requests = [client.post("/api/sessions/s/input", json={"text": "mensagem"}),
                     client.post("/api/sessions/s/interrupt")]
         responses = await asyncio.gather(*requests)
     assert all(response.status_code == 409 for response in responses)

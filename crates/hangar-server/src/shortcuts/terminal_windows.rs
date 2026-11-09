@@ -59,6 +59,12 @@ pub fn escape(command: &str, env: &BTreeMap<String, String>) -> String {
     }
     result
 }
+pub fn unescape(text: &str) -> String {
+    static ESCAPED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"%%|%[A-Za-z_][A-Za-z0-9_()]*%").unwrap());
+    ESCAPED.replace_all(text, |found: &regex::Captures<'_>| {
+        if &found[0] == "%%" { "%".to_owned() } else { found[0].to_owned() }
+    }).into_owned()
+}
 pub fn forget(dir: &Path, id: &str) -> std::io::Result<()> {
     for suffix in SUFFIXES {
         match std::fs::remove_file(dir.join(format!("{id}{suffix}"))) {
@@ -181,6 +187,27 @@ pub fn encode(text: &str) -> std::io::Result<Vec<u8>> {
         return Err(std::io::Error::last_os_error());
     }
     Ok(out)
+}
+
+#[cfg(windows)]
+pub fn decode(bytes: &[u8]) -> std::io::Result<String> {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn MultiByteToWideChar(page: u32, flags: u32, bytes: *const u8, len: i32, out: *mut u16, size: i32) -> i32;
+    }
+    if bytes.is_empty() { return Ok(String::new()); }
+    let len = i32::try_from(bytes.len()).map_err(std::io::Error::other)?;
+    let size = unsafe { MultiByteToWideChar(1, 8, bytes.as_ptr(), len, std::ptr::null_mut(), 0) };
+    if size == 0 { return Err(std::io::Error::last_os_error()); }
+    let mut wide = vec![0; size as usize];
+    if unsafe { MultiByteToWideChar(1, 8, bytes.as_ptr(), len, wide.as_mut_ptr(), size) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    String::from_utf16(&wide).map_err(std::io::Error::other)
+}
+#[cfg(not(windows))]
+pub fn decode(bytes: &[u8]) -> std::io::Result<String> {
+    String::from_utf8(bytes.to_vec()).map_err(std::io::Error::other)
 }
 
 #[cfg(not(windows))]

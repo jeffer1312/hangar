@@ -1,6 +1,6 @@
 ---
 name: iphone-wda-sidestore
-description: Instala e mantém, a partir do Linux, o SideStore e o WebDriverAgent (WDA) num iPhone com conta Apple gratuita, e renova o WDA antes de vencer (o perfil grátis dura 7 dias). Use sempre que pedirem para instalar, reinstalar ou renovar o SideStore, o WebDriverAgent, o LocalDevVPN ou um .ipa no iPhone pelo Linux; quando o WDA "sumiu", "venceu", "não abre", dá erro 103 ou a porta 8100 não responde; quando falarem em Impactor, plumesign, zsign, go-ios, ios-ctl, start-wda.sh ou ligar.sh; e para montar esse ambiente para outra pessoa, mesmo que ela não diga "SideStore" nem "WDA".
+description: Instala e mantém, a partir do Linux, o SideStore e o WebDriverAgent (WDA) num iPhone com conta Apple gratuita, e renova o WDA antes de vencer (o perfil grátis dura 7 dias), pelo cabo ou pelo Wi-Fi. Use sempre que pedirem para instalar, reinstalar ou renovar o SideStore, o WebDriverAgent, o LocalDevVPN ou um .ipa no iPhone pelo Linux; para controlar ou renovar o iPhone sem cabo; quando o WDA "sumiu", "venceu", "não abre", dá erro 103 ou a porta 8100 não responde; quando falarem em Impactor, plumesign, zsign, go-ios, ios-ctl, tunneld, start-wda.sh ou ligar.sh; e para montar esse ambiente para outra pessoa, mesmo que ela não diga "SideStore" nem "WDA".
 ---
 
 # iPhone pelo Linux: SideStore + WebDriverAgent
@@ -18,7 +18,7 @@ Por que o WDA fica de fora: o WDA tem um pacote de teste (`PlugIns/WebDriverAgen
 ~/Applications/ios-ctl/wda.sh status
 ```
 
-A saída diz se há um iPhone no cabo, se o WDA está instalado, em quantos dias o perfil vence e se a sessão da Apple vale. Com isso você pula direto pro passo que falta. O kit fica em `~/Applications/ios-ctl` (troque com `IOS_CTL=`). Se o kit não existir, comece pela montagem.
+A saída diz se há um iPhone no cabo ou pelo Wi-Fi, se o WDA está instalado, em quantos dias o perfil vence e se a sessão da Apple vale. Com isso você pula direto pro passo que falta. O kit fica em `~/Applications/ios-ctl` (troque com `IOS_CTL=`). Se o kit não existir, comece pela montagem.
 
 ## 1. Montar o kit (uma vez por máquina)
 
@@ -34,7 +34,7 @@ Junte numa pasta (`~/Applications/ios-ctl`):
 | `ca-com-apple.pem` | os certificados do sistema mais o "Apple Root CA" (receita abaixo) | `ios image auto` baixar a imagem de desenvolvedor |
 | `wda.sh`, `start-wda.sh`, `restore-keyboard.py` | links para os `scripts/` desta skill (vem com o Hangar) | Instalar, renovar e subir |
 
-Instale também o `pymobiledevice3` (`pipx install pymobiledevice3`) e o `openssl`.
+Instale também o `pymobiledevice3` com Python 3.13 ou mais novo (`uv tool install --python 3.13 pymobiledevice3`) e o `openssl`. Com Python mais velho o túnel sai em QUIC, que o iOS 18.2+ recusa.
 
 ```bash
 K=~/Applications/ios-ctl; S=~/.claude/skills/iphone-wda-sidestore/scripts
@@ -87,15 +87,55 @@ O `wda.sh` pede perfil novo pelo `plumesign`, que reaproveita a sessão salva em
 ```bash
 ~/Applications/ios-ctl/wda.sh install    # registra o iPhone na conta, pede perfil, assina com zsign e instala
 ~/Applications/ios-ctl/wda.sh renew      # só se faltar <= 3 dias (WDA_RENEW_DAYS); --force renova já
-~/Applications/ios-ctl/start-wda.sh      # renova se preciso, sobe túnel + WDA + porta 8100 (logs em $XDG_RUNTIME_DIR/ios-ctl)
-curl -s http://127.0.0.1:8100/status     # "ready" : true
+~/Applications/ios-ctl/start-wda.sh      # renova se preciso e sobe túnel + WDA (logs em $XDG_RUNTIME_DIR/ios-ctl)
+curl -s "$(cat $XDG_RUNTIME_DIR/ios-ctl/wda-url)/status"   # "ready" : true
 ```
+
+O endereço do WDA fica em `$XDG_RUNTIME_DIR/ios-ctl/wda-url`: `http://127.0.0.1:8100` pelo cabo, `http://<IP do iPhone>:8100` pelo Wi-Fi.
 
 - O `install` usa o zsign de propósito. O Impactor troca o ID do `WebDriverAgentRunner.xctest`, e aí o WDA instala mas não sobe (erro 103). O `plumesign` nem assina esse pacote. Por isso ele só serve para buscar o perfil. O zsign mantém `com.facebook.WebDriverAgentRunner`. O IPA base vai sem o `.dSYM`, que o script tira.
 - O `renew` instala **só o perfil novo** no iPhone. O app continua o mesmo, assinado pelo mesmo certificado, e volta a abrir mesmo que já tenha vencido. Se depois disso o WDA não subir (certificado trocado, app apagado), rode `install`.
 - Primeiro uso num iPhone: confie no desenvolvedor em Ajustes > Geral > VPN e Gerenciamento de Dispositivos.
 - Com mais de um iPhone no cabo: `UDID=<udid> wda.sh ...`. O `start-wda.sh` não escolhe aparelho, então deixe só um conectado.
 - Conta com mais de um time (pessoal + empresa): o `wda.sh` escolhe o time salvo na conta (`team_id`) na lista do `plumesign` e confere o perfil que volta.
+
+## 5. Sem cabo (Wi-Fi)
+
+Depois de uma preparação pelo cabo, `wda.sh` e `start-wda.sh` funcionam com o iPhone só no Wi-Fi. Com cabo ligado, o cabo vence.
+
+1. **Uma vez, iPhone no cabo e desbloqueado:**
+
+   ```bash
+   pymobiledevice3 lockdown wifi-connections on   # deixa este PC falar com o iPhone pela rede
+   pymobiledevice3 lockdown remotepairing --pair  # grava ~/.pymobiledevice3/remote_<udid>.plist
+   ```
+
+2. **Uma vez por máquina, o `tunneld` como serviço.** O túnel pelo Wi-Fi precisa de root, e sem ele os comandos só procuram o iPhone no usbmuxd. `HOME` aponta para a pasta do pareamento do passo 1:
+
+   ```bash
+   sudo tee /etc/systemd/system/pmd3-tunneld.service >/dev/null <<EOF
+   [Unit]
+   Description=pymobiledevice3 tunneld (iPhone pelo Wi-Fi)
+   After=network-online.target
+   Wants=network-online.target
+
+   [Service]
+   Environment=HOME=$HOME
+   ExecStart=$(command -v pymobiledevice3) remote tunneld --no-usb --no-usbmux
+   Restart=on-failure
+
+   [Install]
+   WantedBy=multi-user.target
+   EOF
+   sudo systemctl daemon-reload && sudo systemctl enable --now pmd3-tunneld
+   curl -s http://127.0.0.1:49151/   # o UDID do iPhone com "interface": <IP dele>
+   ```
+
+   O `tunneld` atende só em `127.0.0.1:49151`, mas qualquer usuário desta máquina alcança o iPhone por ele.
+
+3. **Dali em diante:** `wda.sh status | renew | install` e `start-wda.sh` sem cabo. Pelo Wi-Fi, o `start-wda.sh` sobe o WDA com `pymobiledevice3 developer dvt xcuitest`, e não com o `developer wda` nem com o go-ios: os dois procuram o iPhone no usbmuxd.
+
+iPhone e PC precisam estar na mesma rede. O IP do iPhone muda com o DHCP; o `start-wda.sh` o lê do `tunneld` a cada subida.
 
 ## Erros já vistos
 
@@ -106,3 +146,6 @@ curl -s http://127.0.0.1:8100/status     # "ready" : true
 | WDA instala mas `runwda` falha com 103 | Pacote de teste com o ID trocado (instalado pelo Impactor ou pelo SideStore) | `wda.sh install` |
 | `IO error: not a terminal` no `plumesign sign` | Lista de times sem terminal | Use o `wda.sh`, que já roda num terminal falso |
 | App do SideStore some depois de uns dias | Assinado com outro certificado ou sem o LocalDevVPN | Reinstalar pelo Impactor (passo 2) e deixar o LocalDevVPN ligado |
+| `iOS 18.2+ removed QUIC tunnel support` | `pymobiledevice3` com Python < 3.13 | Reinstalar com Python 3.13+ (passo 1) |
+| `Failed to connect to usbmuxd socket` sem cabo | Comando que só procura o iPhone no cabo | `tunneld` de pé (passo 5) e `--tunnel <udid>` no comando |
+| `achei 0 no cabo ... e 0 pelo Wi-Fi` | Sem cabo e o `tunneld` não vê o iPhone | `systemctl status pmd3-tunneld`; iPhone na mesma rede; refazer o passo 5.1 pelo cabo |

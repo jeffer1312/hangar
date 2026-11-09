@@ -223,11 +223,10 @@ async def test_codex_sem_persistencia_nao_tenta_orientar(isolated, monkeypatch):
     assert rpc.calls == []
 
 
-@pytest.mark.parametrize("provider", ["kimi", "claude", "pi", "omp"])
+@pytest.mark.parametrize("provider", ["claude"])
 async def test_kimi_promove_mesmo_entregue_e_outros_nao_reenviam(isolated, monkeypatch, provider):
     monkeypatch.setattr(api, "_provider_of", lambda name: "claude")
     monkeypatch.setattr(api, "_pane_info", lambda name: (provider, "%test"))
-    monkeypatch.setattr(api.providers_bridge, "inbox_call", lambda op, **args: {"line": "test-line" if provider in ("pi", "omp") else None})
     monkeypatch.setattr(tmux, "list_panes_active", lambda: [])
     monkeypatch.setattr(api.registry, "resolve_tracked", lambda *args: (None, False))
     monkeypatch.setattr(api.threading, "Timer", lambda *args, **kwargs: SimpleNamespace(start=lambda: None))
@@ -242,24 +241,6 @@ async def test_kimi_promove_mesmo_entregue_e_outros_nao_reenviam(isolated, monke
     assert steer.call_count == int(provider == "kimi")
     queue = pqueue.PromptQueue("dest")
     assert len(queue.load()) == 1
-    if provider == "kimi":
-        assert queue.load()[0]["confirmed"] is True
-        assert queue.reconcile_delivered(set(), 0, time.time() + 100) == []
-        assert pqueue.PromptQueue("dest").claim_undelivered() == []
-
-
-@pytest.mark.parametrize("promoted", [False, "sem-fila"])
-async def test_kimi_sem_promocao_mantem_recado(isolated, monkeypatch, promoted):
-    queue = pqueue.PromptQueue("dest")
-    entry = queue.append("recado", delivered=True)
-    monkeypatch.setattr(api, "_provider_of", lambda name: "claude")
-    monkeypatch.setattr(api, "_pane_info", lambda name: ("kimi", "%test"))
-    monkeypatch.setattr(api, "_send_one", lambda *args: {"ok": True, "delivered": True, "entry_id": entry["id"]})
-    monkeypatch.setattr(api.terminal_input, "steer_now", lambda name: promoted)
-    result = await api.input_prompt("dest", api.InputBody(text="recado", steer=True))
-    assert result["steered"] is False
-    assert len(queue.load()) == 1
-    assert not queue.load()[0].get("confirmed")
 
 
 def _relatar_envio(source: str) -> str:

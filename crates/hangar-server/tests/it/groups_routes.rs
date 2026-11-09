@@ -39,6 +39,7 @@ async fn server_with_orq(root: &Path, n: usize, orq: Option<Arc<dyn hangar_serve
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
     let (python, upstream) = fake::spawn_fake().await;
     let mut state = AppState::new(fake::config(upstream, ""));
+    state.diag = python.bind_diary(state.diag.clone());
     state.accounts = hangar_server::accounts::AccountService::new(
         hangar_server::accounts::environment::AccountEnvironment::from_map(
             [("HOME".into(), home.to_string_lossy().into_owned()),

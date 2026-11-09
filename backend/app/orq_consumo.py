@@ -13,7 +13,7 @@ from app.stats import Accumulator
 
 TOKENS = ("input", "cache_read", "cache_write", "output")
 COUNTERS = (*TOKENS, "steps", "bytes")
-PROVIDERS = ("claude", "codex", "pi", "omp", "kimi")
+PROVIDERS = ("claude", "codex")
 
 
 def _digest(path: Path, size: int) -> str:

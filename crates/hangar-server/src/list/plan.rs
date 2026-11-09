@@ -369,7 +369,7 @@ pub fn blank_fences(b: &mut [u8]) {
 }
 
 /// `parse_plan`: None sem step nenhum ou, com `require_started`, sem step marcado.
-fn parse(raw: &[u8], path: &Path, require_started: bool) -> Option<Plan> {
+pub(crate) fn parse(raw: &[u8], path: &Path, require_started: bool) -> Option<Plan> {
     let mut text = String::from_utf8_lossy(raw).into_owned().into_bytes();
     blank_fences(&mut text);
     let steps: Vec<(usize, StepProgress)> = STEP_RE

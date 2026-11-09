@@ -63,7 +63,7 @@ impl Binding {
     pub fn state_events(&self) -> Option<&'static [&'static str]> {
         match (self.provider, self.headless) {
             (Provider::Claude, _) => Some(&STATE_EVENTS),
-            (Provider::ClaudeHeadless, _) | (Provider::Codex, true) => Some(&FEED_EVENTS),
+            (Provider::ClaudeHeadless | Provider::Pi | Provider::Omp | Provider::Kimi, _) | (Provider::Codex, true) => Some(&FEED_EVENTS),
             (Provider::Orq, _) => Some(&["state"]),
             _ => None,
         }
@@ -71,14 +71,22 @@ impl Binding {
 
     /// O estado desta ligação sai do feed do runtime (o ator escreve no canal em processo).
     pub fn runtime_feed(&self) -> bool {
-        matches!((self.provider, self.headless), (Provider::ClaudeHeadless, _) | (Provider::Codex, true))
+        matches!((self.provider, self.headless), (Provider::ClaudeHeadless | Provider::Pi | Provider::Omp | Provider::Kimi, _) | (Provider::Codex, true))
     }
+
+    pub fn has_transcript_path(&self) -> bool { !self.jsonl.as_os_str().is_empty() }
 
     /// Mesmo critério de `InternalInfo::history_request`: provider lido pelo Rust e com jsonl.
     pub fn from_info(info: &InternalInfo) -> Option<Binding> {
+        let provider = Provider::parse(&info.provider)?;
+        let jsonl = match info.jsonl.clone() {
+            Some(path) => path,
+            None if matches!(provider, Provider::Pi | Provider::Omp | Provider::Kimi) && info.session_key.is_empty() => PathBuf::new(),
+            None => return None,
+        };
         Some(Binding {
-            provider: Provider::parse(&info.provider)?,
-            jsonl: info.jsonl.clone()?,
+            provider,
+            jsonl,
             key: info.session_key.clone(),
             headless: info.headless,
             life: info.lifecycle_id.clone(),
@@ -105,7 +113,7 @@ enum Verdict {
 /// `Binding::changes_at_once` vale na hora.
 fn judge(current: &Binding, seen: Option<Option<Binding>>, pending: &mut Option<Option<Option<Binding>>>) -> Verdict {
     let immediate = match &seen {
-        Some(Some(b)) if b.same_conversation(current) => {
+        Some(Some(b)) if b.same_conversation(current) && !current.changes_at_once(b) => {
             *pending = None;
             return Verdict::Keep;
         }
@@ -226,6 +234,14 @@ impl SideCtx {
     /// religou o hub), senão a descoberta. Sem isso a vigia desfaria o `/clear` que a descoberta ainda não viu.
     pub(crate) async fn info(&self, name: &str) -> Result<Option<InternalInfo>, crate::locate::InfoFailed> {
         if let Some(runtime) = self.runtime.get() && let Some(info) = runtime.claude_info(name).await { return Ok(Some(info)); }
+        if let Some(runtime) = self.runtime.get() {
+            if let Some(Err(error)) = runtime.ensure_other(name).await {
+                if error.code != "other_terminal_starting" {
+                    return Err(crate::locate::InfoFailed("other_terminal_binding_unavailable"));
+                }
+            }
+            if let Some(info) = runtime.other_info(name).await { return Ok(Some(info)); }
+        }
         self.locate.info(name).await
     }
 }
@@ -692,6 +708,10 @@ impl Hub {
 
     /// Produtor do `stats` da geração dada, chamado junto com o da fila e sob a mesma trava.
     fn start_stats_feed(self: &Arc<Self>, generation: u64, binding: &Binding) {
+        if !binding.has_transcript_path() {
+            if let Some(old) = self.stats_feed.lock().unwrap().take() { old.abort(); }
+            return;
+        }
         if binding.provider == Provider::Orq { return; }
         let feed = tokio::spawn(crate::stats::run(Arc::downgrade(self), generation, binding.clone(), self.ctx.watchers.clone()));
         if let Some(old) = self.stats_feed.lock().unwrap().replace(feed.abort_handle()) {
@@ -720,13 +740,13 @@ impl Hub {
             None => return,
             Some(b) => b.binding.clone(),
         };
-        if current.same_conversation(binding) {
-            // Sessão que voltou com a mesma conversa (resume): o `Monitor` que viu a morte renasce.
-            self.ensure_monitor();
-        } else if current.changes_at_once(binding) {
+        if current.changes_at_once(binding) {
             tracing::info!(session = %self.name, "provider trocou ou a sessão é outra; reset nos aparelhos");
             self.rebind(binding.clone());
             self.restart_side();
+        } else if current.same_conversation(binding) {
+            // Sessão que voltou com a mesma conversa (resume): o `Monitor` que viu a morte renasce.
+            self.ensure_monitor();
         } else {
             tracing::info!(session = %self.name, ligado = %file_name(&current.jsonl), lido = %file_name(&binding.jsonl),
                 "aparelho leu outro transcript; a vigia confirma antes de trocar");
@@ -1055,19 +1075,21 @@ impl Hub {
             let done = tokio::task::spawn_blocking(move || {
                 let mut g = guard;
                 // Erro já registrado no `cut`: o aparelho recebe `reset` e reconecta.
-                let cut = g.cut().ok()?;
-                drop(g);
-                Some(tail::backfill(&binding.jsonl, &binding.key, binding.provider, resume.as_deref(), cut))
+                g.cut().ok()
             })
             .await;
-            let mut frames = match done {
-                Ok(f) => f?,
+            let cut = match done {
+                Ok(cut) => cut?,
                 Err(e) => {
                     // Sem a mensagem do pânico: ela pode citar o texto da linha.
                     tracing::error!(session = %self.name, panic = e.is_panic(), "cauda do aparelho caiu; reset");
                     return None;
                 }
             };
+            let mut frames = tail::backfill_guarded(binding.jsonl, binding.key, binding.provider, resume, cut, tokio::time::sleep).await;
+            if self.bound.lock().unwrap().as_ref().map(|current| current.generation) != Some(b.generation) {
+                continue;
+            }
             frames.extend(cached);
             return Some(Attach { generation: b.generation, rx, frames, ui, has_ui });
         }
@@ -1144,6 +1166,7 @@ const SEED_TIMEOUT: Duration = Duration::from_secs(5);
 /// prévia logo depois de abrir o chat. Só preenche o vazio; a resposta ao vivo vence.
 async fn seed_committed(hub: &Weak<Hub>, only_if_empty: bool) {
     let Some((binding, generation)) = hub.upgrade().and_then(|h| h.bound.lock().unwrap().as_ref().map(|b| (b.binding.clone(), b.generation))) else { return };
+    if !binding.has_transcript_path() { return; }
     let mut read = tokio::task::spawn_blocking(move || match tail::last_committed(&binding.jsonl, binding.provider) {
         Ok(text) => text,
         Err(e) => {
@@ -1353,7 +1376,7 @@ impl Hubs {
             hub.learn_queue(&info);
             // A mesma conversa (reabertura em bypass): nada a religar; o `reset` faria o chat sumir e voltar
             // em todos os aparelhos. Como o Python, só o transcript novo reseta.
-            if hub.bound.lock().unwrap().as_ref().is_some_and(|bound|bound.binding.same_conversation(&binding)) {return Ok(());}
+            if hub.bound.lock().unwrap().as_ref().is_some_and(|bound|bound.binding.same_conversation(&binding) && !bound.binding.changes_at_once(&binding)) {return Ok(());}
             hub.rebind(binding);
             // A vigia renasce sobre a conversa nova, como na troca que ela mesma detecta.
             hub.restart_side();
@@ -1366,6 +1389,15 @@ impl Hubs {
         let hub = self.0.lock().unwrap().get(name).map(|(h, _)| h.clone())?;
         let bound = hub.bound.lock().unwrap();
         bound.as_ref().map(|b| b.binding.clone())
+    }
+
+    pub(crate) fn preview_committed(&self, name: &str, life: &str, conversation: &str) -> Option<Option<Arc<str>>> {
+        let hub = self.0.lock().unwrap().get(name).map(|(hub, _)| hub.clone())?;
+        let source = hub.source_binding()?;
+        if source.1.life.as_deref() != Some(life) || source.1.key != conversation
+            || !source.1.has_transcript_path() || !hub.committed_known() { return None; }
+        let committed = hub.committed();
+        (hub.source_binding().as_ref() == Some(&source)).then_some(committed)
     }
 
     fn evict(&self, name: &str, hub: &Arc<Hub>) {
@@ -1436,6 +1468,29 @@ pub(crate) fn fake_monitors(pane: &'static str) -> (SpawnMonitor, Arc<std::sync:
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn other_preview_uses_the_latest_conversation_and_proven_commit() {
+        use super::*;
+        let ctx = test_ctx();
+        let binding = |conversation: &str| Binding { provider: Provider::Pi, jsonl: format!("{conversation}.jsonl").into(), key: conversation.into(), headless: false, life: Some("life".into()) };
+        let first = ctx.hubs.acquire("pi-preview", binding("old"), &ctx);
+        assert!(ctx.hubs.preview_committed("pi-preview", "life", "old").is_none());
+        let generation = first.hub.generation().unwrap();
+        first.hub.set_committed(generation, "resposta anterior".into(), false);
+        first.hub.mark_seeded(generation);
+        assert_eq!(ctx.hubs.preview_committed("pi-preview", "life", "old").flatten().as_deref(), Some("resposta anterior"));
+        let second = ctx.hubs.acquire("pi-preview", binding("new"), &ctx);
+        assert_eq!(ctx.hubs.preview_committed("pi-preview", "life", "old").flatten().as_deref(), Some("resposta anterior"));
+        second.hub.rebind(binding("new"));
+        assert!(ctx.hubs.preview_committed("pi-preview", "life", "old").is_none());
+        assert!(ctx.hubs.preview_committed("pi-preview", "life", "new").is_none());
+        let generation = second.hub.generation().unwrap();
+        second.hub.set_committed(generation, "resposta nova".into(), false);
+        second.hub.mark_seeded(generation);
+        assert_eq!(ctx.hubs.preview_committed("pi-preview", "life", "new").flatten().as_deref(), Some("resposta nova"));
+        assert!(ctx.hubs.preview_committed("pi-preview", "outra vida", "new").is_none());
+        first.hub.close();
+    }
     #[tokio::test]
     async fn orchestration_activity_is_published_by_its_hub_and_stops_with_the_old_life() {
         use super::*;
@@ -2630,18 +2685,14 @@ mod tests {
         let (sink, reports) = crate::runtime::gateway::tests::diag_sink().await;
         let dir = tempfile::tempdir().unwrap();
         let ctx = SideCtx { queue_dir: Some(dir.path().to_path_buf()), problem_hold: crate::problem_gate::HOLD,
-            diag: crate::diag::DiagClient::new(sink, "s".into()), ..test_ctx() };
+            diag: sink, ..test_ctx() };
         let lease = ctx.hubs.acquire("velho", queue_binding(dir.path(), "a"), &ctx);
         assert!(lease.hub.publish_own("state", r#"{"state":"idle","problema":"state_facts_unavailable","problema_detalhe":"runtime_binding"}"#));
         let frames = replay_text(&lease.hub);
         assert!(frames.contains("event: state"), "o estado sai");
         assert!(!frames.contains("state_facts_unavailable") && !frames.contains("runtime_binding"), "sem o aviso: {frames}");
         assert!(lease.hub.problems.lock().unwrap().timer.is_none(), "nada retido para sair depois do prazo");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !reports.lock().unwrap().iter().any(|r| r["evento"] == "rust.problem_hidden" && r["codigo"] == "state_facts_unavailable" && r["sessao"] == "velho") {
-            assert!(std::time::Instant::now() < deadline, "o aviso tirado da tela não foi ao diário: {:?}", reports.lock().unwrap());
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
+        crate::diag::test_support::wait_for(reports.path(), |r| r["evento"] == "rust.problem_hidden" && r["codigo"] == "state_facts_unavailable" && r["sessao"] == "velho").await;
     }
 
     /// Troca de conversa: o retrato perde a fila da anterior na hora, quadro da geração anterior não

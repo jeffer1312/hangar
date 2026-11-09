@@ -1,0 +1,376 @@
+[
+  {
+    "name": "pi_ticket",
+    "ticks": [
+      {
+        "at": 1800000000.0,
+        "fs": [
+          {
+            "op": "mkdir",
+            "path": "⟦ROOT⟧/work/g"
+          },
+          {
+            "op": "write",
+            "path": "⟦ROOT⟧/home/.pi/agent/sessions/-⟦ROOT_SAN⟧-work-g--/2027-01-15T08-00-00-000Z_88888888-8888-4888-8888-888888888888.jsonl",
+            "text": "{}\n",
+            "mtime": 1799999950.0
+          },
+          {
+            "op": "write",
+            "path": "⟦ROOT⟧/home/.pi/agent/sessions/-⟦ROOT_SAN⟧-work-g--/2027-01-15T08-00-00-000Z_88888888-8888-4888-8888-888888888888/44bad0fb/run-2/session.jsonl",
+            "text": "{}\n",
+            "mtime": 1799999960.0
+          },
+          {
+            "op": "write",
+            "path": "⟦ROOT⟧/home/.claude/.hangar-pi/8.json",
+            "text": "{\"file\": \"⟦ROOT⟧/work/g/declarado.jsonl\", \"ts\": 1799999941.0}",
+            "mtime": null
+          }
+        ],
+        "procs": [
+          {
+            "pid": 800,
+            "ppid": 1,
+            "argv": [
+              "pi"
+            ],
+            "cwd": "⟦ROOT⟧/work/g",
+            "env": {
+              "CP_PI_SESSION": "88888888-8888-4888-8888-888888888888"
+            },
+            "start": 1799999940.0,
+            "fds": []
+          }
+        ],
+        "panes": [
+          {
+            "name": "pi",
+            "pid": 800,
+            "cwd": "⟦ROOT⟧/work/g",
+            "pane_id": "%8",
+            "active": true,
+            "hidden": false,
+            "provider": null,
+            "session_created": 1799999400
+          }
+        ]
+      },
+      {
+        "at": 1800000002.0,
+        "fs": [
+          {
+            "op": "write",
+            "path": "⟦ROOT⟧/home/.claude/.hangar-pi/8.json",
+            "text": "{\"file\": \"⟦ROOT⟧/work/g/declarado.jsonl\", \"ts\": 1799999400.0}",
+            "mtime": null
+          }
+        ],
+        "procs": [
+          {
+            "pid": 800,
+            "ppid": 1,
+            "argv": [
+              "pi"
+            ],
+            "cwd": "⟦ROOT⟧/work/g",
+            "env": {
+              "CP_PI_SESSION": "88888888-8888-4888-8888-888888888888"
+            },
+            "start": 1799999940.0,
+            "fds": []
+          }
+        ],
+        "panes": [
+          {
+            "name": "pi",
+            "pid": 800,
+            "cwd": "⟦ROOT⟧/work/g",
+            "pane_id": "%8",
+            "active": true,
+            "hidden": false,
+            "provider": null,
+            "session_created": 1799999400
+          }
+        ]
+      },
+      {
+        "at": 1800000004.0,
+        "fs": [
+          {
+            "op": "write",
+            "path": "⟦ROOT⟧/home/.claude/.hangar-pi/8.json",
+            "text": "{\"file\": \"⟦ROOT⟧/work/g/declarado.jsonl\"}",
+            "mtime": null
+          }
+        ],
+        "procs": [
+          {
+            "pid": 800,
+            "ppid": 1,
+            "argv": [
+              "pi"
+            ],
+            "cwd": "⟦ROOT⟧/work/g",
+            "env": {
+              "CP_PI_SESSION": "88888888-8888-4888-8888-888888888888"
+            },
+            "start": 1799999940.0,
+            "fds": []
+          }
+        ],
+        "panes": [
+          {
+            "name": "pi",
+            "pid": 800,
+            "cwd": "⟦ROOT⟧/work/g",
+            "pane_id": "%8",
+            "active": true,
+            "hidden": false,
+            "provider": null,
+            "session_created": 1799999400
+          }
+        ]
+      },
+      {
+        "at": 1800000006.0,
+        "fs": [
+          {
+            "op": "write",
+            "path": "⟦ROOT⟧/home/.claude/.hangar-pi/8.json",
+            "text": "{\"file\": \"⟦ROOT⟧/home/.pi/agent/sessions/-⟦ROOT_SAN⟧-work-g--/2027-01-15T08-00-00-000Z_88888888-8888-4888-8888-888888888888/44bad0fb/run-2/session.jsonl\", \"ts\": 1800000000.0}",
+            "mtime": null
+          }
+        ],
+        "procs": [
+          {
+            "pid": 800,
+            "ppid": 1,
+            "argv": [
+              "pi"
+            ],
+            "cwd": "⟦ROOT⟧/work/g",
+            "env": {
+              "CP_PI_SESSION": "sem-arquivo"
+            },
+            "start": 1799999940.0,
+            "fds": []
+          }
+        ],
+        "panes": [
+          {
+            "name": "pi",
+            "pid": 800,
+            "cwd": "⟦ROOT⟧/work/g",
+            "pane_id": "%8",
+            "active": true,
+            "hidden": false,
+            "provider": null,
+            "session_created": 1799999400
+          }
+        ]
+      },
+      {
+        "at": 1800000008.0,
+        "fs": [
+          {
+            "op": "rm",
+            "path": "⟦ROOT⟧/home/.claude/.hangar-pi/8.json"
+          }
+        ],
+        "procs": [
+          {
+            "pid": 800,
+            "ppid": 1,
+            "argv": [
+              "pi"
+            ],
+            "cwd": "⟦ROOT⟧/work/g",
+            "env": {},
+            "start": 1799999940.0,
+            "fds": []
+          }
+        ],
+        "panes": [
+          {
+            "name": "pi",
+            "pid": 800,
+            "cwd": "⟦ROOT⟧/work/g",
+            "pane_id": "%8",
+            "active": true,
+            "hidden": false,
+            "provider": null,
+            "session_created": 1799999400
+          }
+        ]
+      },
+      {
+        "at": 1800000010.0,
+        "procs": [
+          {
+            "pid": 810,
+            "ppid": 1,
+            "argv": [
+              "omp"
+            ],
+            "cwd": "⟦ROOT⟧/work/g",
+            "env": {
+              "PSMUX_SESSION": "omp s.1"
+            },
+            "start": 1799999940.0,
+            "fds": []
+          }
+        ],
+        "fs": [
+          {
+            "op": "write",
+            "path": "⟦ROOT⟧/home/.claude/.hangar-pi/omp-s.1.json",
+            "text": "{\"file\": \"⟦ROOT⟧/work/g/omp.jsonl\", \"ts\": 1800000000.0}",
+            "mtime": null
+          }
+        ],
+        "panes": [
+          {
+            "name": "omp",
+            "pid": 810,
+            "cwd": "⟦ROOT⟧/work/g",
+            "pane_id": "%1",
+            "active": true,
+            "hidden": false,
+            "provider": null,
+            "session_created": 1799999400
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "kimi_ticket",
+    "ticks": [
+      {
+        "at": 1800000000.0,
+        "fs": [
+          {
+            "op": "mkdir",
+            "path": "⟦ROOT⟧/work/k"
+          },
+          {
+            "op": "write",
+            "path": "⟦ROOT⟧/home/.kimi-code/sessions/wd/kimi-sess-1/agents/main/wire.jsonl",
+            "text": "{}\n",
+            "mtime": 1799999970.0
+          },
+          {
+            "op": "write",
+            "path": "⟦ROOT⟧/home/.kimi-code/session_index.jsonl",
+            "text": "{\"sessionId\": \"kimi-sess-1\", \"sessionDir\": \"⟦ROOT⟧/home/.kimi-code/sessions/wd/kimi-sess-1\"}\n",
+            "mtime": null
+          },
+          {
+            "op": "write",
+            "path": "⟦ROOT⟧/home/.claude/.hangar-kimi/9.json",
+            "text": "{\"session_id\": \"kimi-sess-1\", \"ts\": 1799999990.0, \"cwd\": \"⟦ROOT⟧/work/k\"}",
+            "mtime": null
+          }
+        ],
+        "procs": [
+          {
+            "pid": 900,
+            "ppid": 1,
+            "argv": [
+              "kimi-code"
+            ],
+            "cwd": "⟦ROOT⟧/work/k",
+            "env": {},
+            "start": 1799999940.0,
+            "fds": []
+          }
+        ],
+        "panes": [
+          {
+            "name": "kimi",
+            "pid": 900,
+            "cwd": "⟦ROOT⟧/work/k",
+            "pane_id": "%9",
+            "active": true,
+            "hidden": false,
+            "provider": null,
+            "session_created": 1799999400
+          }
+        ]
+      },
+      {
+        "at": 1800000002.0,
+        "fs": [
+          {
+            "op": "write",
+            "path": "⟦ROOT⟧/home/.claude/.hangar-kimi/9.json",
+            "text": "{\"session_id\": \"kimi-sess-1\", \"ts\": 1799999400.0}",
+            "mtime": null
+          }
+        ],
+        "procs": [
+          {
+            "pid": 900,
+            "ppid": 1,
+            "argv": [
+              "kimi-code"
+            ],
+            "cwd": "⟦ROOT⟧/work/k",
+            "env": {},
+            "start": 1799999940.0,
+            "fds": []
+          }
+        ],
+        "panes": [
+          {
+            "name": "kimi",
+            "pid": 900,
+            "cwd": "⟦ROOT⟧/work/k",
+            "pane_id": "%9",
+            "active": true,
+            "hidden": false,
+            "provider": null,
+            "session_created": 1799999400
+          }
+        ]
+      },
+      {
+        "at": 1800000004.0,
+        "fs": [
+          {
+            "op": "write",
+            "path": "⟦ROOT⟧/home/.claude/.hangar-kimi/9.json",
+            "text": "null",
+            "mtime": null
+          }
+        ],
+        "procs": [
+          {
+            "pid": 900,
+            "ppid": 1,
+            "argv": [
+              "kimi-code"
+            ],
+            "cwd": "⟦ROOT⟧/work/k",
+            "env": {},
+            "start": 1799999940.0,
+            "fds": []
+          }
+        ],
+        "panes": [
+          {
+            "name": "kimi",
+            "pid": 900,
+            "cwd": "⟦ROOT⟧/work/k",
+            "pane_id": "%9",
+            "active": true,
+            "hidden": false,
+            "provider": null,
+            "session_created": 1799999400
+          }
+        ]
+      }
+    ]
+  }
+]

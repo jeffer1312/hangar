@@ -15,7 +15,6 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app import diag
 from app.auth import require_auth
 from app.config import settings
 from app.mensagens import erro
@@ -184,7 +183,6 @@ def facts() -> dict:
         "reason": reason(),
         "protocol": rust_server.RUST_SERVER_PROTOCOL,
         "port": _listen_port,
-        "version": diag.VERSAO_EM_EXECUCAO,
         "binary": binary_info,
         "processes": {
             "python": _usage(os.getpid()),

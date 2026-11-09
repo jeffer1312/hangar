@@ -186,14 +186,11 @@ Kimi Code. Setup details, Tailscale, the phone and every feature are in the
                           (guest port :8766 via Funnel, invites,
                           external pairs)
                                                │
-        ┌──────────────┬──────────────┬────────┴─────┐
-   Claude Code       Codex      your browser  Python backend
-   JSONL + tmux     app-server   per session  (loopback, behind it)
-   or headless      + TUI or                         │
-                    headless                   ┌─────┴────────┐
-                                           Pi / omp       Kimi Code
-                                         JSONL + ext.    wire.jsonl
-                                           sidecars        + hooks
+        ┌──────────────┬──────────────┬──────────────┬──────────────────┐
+   Claude Code       Codex       Pi / omp       Kimi Code      Python em loopback
+   JSONL + tmux     app-server   JSONL + ext.    wire.jsonl     transferência C→C,
+   ou sem terminal  + TUI ou     e sidecars     e hooks        workflows e runners
+                    sem terminal
 ```
 
 Chat content comes from each agent's structured transcript, never from scraping the terminal. The
@@ -201,13 +198,13 @@ tmux pane is used only for live state and input of sessions that have a terminal
 and Codex run as managed processes with durable sidecars. The CLIs and providers you configure may
 still send data according to their own policies.
 
-The backend moves to Rust part by part. With the Rust server up, it handles Claude and Codex
-sessions, the session list, accounts and quotas, attachments, MCP, guest logins, transcription and
-session sharing (the guest port 8766, invites and external pairs). Python still handles the
-transcript, state and input of Pi, omp and Kimi Code sessions, the transfer from Claude to Codex,
-workflows, and a reduced fallback when the supervisor turns Rust off. Without the Rust server the
-guest port stays closed. Contracts and limits:
-[accounts and attachments](docs/decisoes/accounts-uploads-rust.md).
+O backend migra para Rust por responsabilidade. O servidor Rust atende as sessões dos cinco
+agentes, a lista, contas e cotas, anexos, MCP, convidados, transcrição e compartilhamento
+(porta 8766, convites e pares externos). Pi, omp e Kimi têm estado, prévia, entrada, perguntas,
+fila, histórico e ciclo de vida inteiros no Rust. O Python conserva a transferência do Claude
+para o Codex, workflows, runners e a reserva reduzida de Claude/Codex quando o Supervisor
+desliga o Rust. Sem Rust, a porta de convidados fica fechada. Contratos e limites:
+[contas e anexos](docs/decisoes/accounts-uploads-rust.md).
 
 Repository map: `crates/` (Rust server), `backend/` (Python, FastAPI), `desktop-native/` (Rust
 desktop app), `frontend/` (Svelte PWA), `mobile/` (Expo app, in development), `packages/core`

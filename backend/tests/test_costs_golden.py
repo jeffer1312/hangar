@@ -1,51 +1,13 @@
 """Prende o contrato Rust aos leitores Python sem reescrever os golden versionados."""
 import json
-import os
-import runpy
-import subprocess
-import sys
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 
-import pytest
 
 CONTRACT = Path(__file__).parent / "fixtures" / "contract"
-GOLDEN_NAMES = ("costs_index.json", "costs_reports.json", "costs_pricing.json", "costs_areas.json")
 
 
 def _golden(name):
     return json.loads((CONTRACT / "golden" / name).read_text(encoding="utf-8"))
-
-
-@pytest.mark.parametrize("base", [PurePosixPath("/tmp/fixture/inteiro"),
-                                 PureWindowsPath(r"C:\Temp\fixture\inteiro"),
-                                 PureWindowsPath(r"D:\Temporário\outra-fixture\inteiro")])
-def test_costs_reports_normalize_codex_identity_across_platforms(base):
-    normalize = runpy.run_path(str(CONTRACT / "gen_costs.py"))["_normalize_reports"]
-    identity = "codex:" + str(base / "codex")
-    session = ["codex", identity, "c1", False]
-    nested = json.dumps({"session_ids": [json.dumps(session)]}, ensure_ascii=False)
-    report = {"provider": identity, "buckets": [{"key": identity, "session_ids": [json.dumps(session)]}],
-              "nested": nested, "amounts": [1.25, 0, None], "text": "Texto sintético sem identidade."}
-    expected_session = ["codex", "codex:__BASE__/codex", "c1", False]
-    expected = {"provider": "codex:__BASE__/codex",
-                "buckets": [{"key": "codex:__BASE__/codex", "session_ids": [json.dumps(expected_session)]}],
-                "nested": json.dumps({"session_ids": [json.dumps(expected_session)]}, ensure_ascii=False),
-                "amounts": [1.25, 0, None], "text": "Texto sintético sem identidade."}
-    original = json.dumps(report, ensure_ascii=False)
-    assert normalize(report, base) == expected
-    assert json.dumps(report, ensure_ascii=False) == original
-
-
-@pytest.mark.parametrize("hash_seed", ["0", "1", "42"])
-def test_costs_golden_matches_current_python(tmp_path, hash_seed):
-    original = {name: (CONTRACT / "golden" / name).read_bytes() for name in GOLDEN_NAMES}
-    subprocess.run([sys.executable, str(CONTRACT / "gen_costs.py"), str(tmp_path)],
-                   check=True, cwd=CONTRACT.parents[2], env={**os.environ, "PYTHONHASHSEED": hash_seed})
-    assert original == {name: (CONTRACT / "golden" / name).read_bytes() for name in GOLDEN_NAMES}
-    for name in GOLDEN_NAMES:
-        actual = json.loads((tmp_path / name).read_text(encoding="utf-8"))
-        expected = json.loads((CONTRACT / "golden" / name).read_text(encoding="utf-8"))
-        assert actual == expected, f"{name} desatualizado: rode gen_costs.py"
 
 
 def test_costs_index_exercises_named_cases():
@@ -114,21 +76,6 @@ def test_costs_index_exercises_named_cases():
     long = rows(codex + "rollout-c3.jsonl", "custo")[0]
     assert (long["input"], long["cache_write"], long["cache_read"], long["codex_long_context"], long["subagente"]) == (275000, 5000, 20000, 1, 1)
 
-    pi = rows("pi/--repo--/2026-09-30_s.jsonl", "custo")[0]
-    assert (pi["input"], pi["output"], pi["cache_write"], pi["cache_read"], pi["provider"]) == (30, 10, 15, 50, "moonshotai")
-    pi_child_path = "pi/--repo--/2026-09-30_s/t1/run-1/session.jsonl"
-    pi_child = rows(pi_child_path, "custo")[0]
-    assert pi_child["session_id"] == "--repo--/2026-09-30_s/t1/run-1/session"
-    assert (pi_child["model"], pi_child["provider"], pi_child["input"]) == ("deepseek/deepseek-v4-flash", "openrouter", 50)
-    kimi = "kimi/sessions/wd_x/session_k1/agents/"
-    main = rows(kimi + "main/wire.jsonl", "custo")[0]
-    kimi_child = rows(kimi + "agent-1/wire.jsonl", "custo")[0]
-    assert (main["input"], main["output"], main["cache_write"], main["cache_read"]) == (40, 15, 15, 80)
-    assert main["ts"] == "2026-09-30T09:00:01.123000-03:00"
-    assert (kimi_child["subagente"], kimi_child["input"], kimi_child["model"]) == (1, 8, "apikey/k3")
-    for path in ("pi/--repo--/2026-09-30_s.jsonl", pi_child_path, kimi + "main/wire.jsonl", kimi + "agent-1/wire.jsonl"):
-        assert index[path]["uso"] == index[path]["areas"] == []
-
 
 def test_costs_pricing_areas_and_filtered_reports():
     prices = {row["model"]: row for row in _golden("costs_pricing.json")}
@@ -155,7 +102,6 @@ def test_costs_pricing_areas_and_filtered_reports():
     assert reports["costs"]["all"]["totals"]["regravado"] == 800
     assert reports["costs"]["7d"]["totals"]["regravado"] == 0
     assert reports["costs"]["all"]["sem_tarifa"] == ["deepseek-v4-flash"]
-    assert any(row["project"] == "/repo/k" for row in reports["costs"]["all"]["sessoes"] if row["source"] == "kimi")
     usage = reports["uso"]
     assert usage["conta"]["conta"] == ["anthropic:u-fixture"]
     assert usage["projeto"]["projeto"] == ["/repo/a"]

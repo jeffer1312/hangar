@@ -390,6 +390,9 @@ pub async fn select(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     let Some((option, supplied, text)) = parse_option(&bytes).filter(|_| json_content_type(ctx.headers())) else { return invalid_body(ctx.headers()) };
     let expected = match expected(&ctx, supplied.as_deref()).await { Ok(expected) => expected, Err(failed) => return answer(&ctx, failed) };
     if text.is_some() && !plan_interaction(&expected) { return invalid_body(ctx.headers()); }
+    if matches!(ctx.target.handle, EntryHandle::OtherTerminal { .. }) && st.term.is_active(&ctx.name) {
+        return answer(&ctx, panel_open_refusal());
+    }
     let operation_id = random_hex(16);
     let result = match &ctx.target.handle {
         EntryHandle::Terminal { handle, .. } => match select_plan(&expected, option, st.term.is_active(&ctx.name)) {
@@ -416,6 +419,11 @@ pub async fn select_submit(State(st): State<Arc<AppState>>, ConnectInfo(peer): C
     let expected = match expected(&ctx, supplied.as_deref()).await { Ok(expected) => expected, Err(failed) => return answer(&ctx, failed) };
     // A TUI do Codex não tem a aba Submit do Claude: a pergunta dele se responde pelo `/answer`.
     if matches!(ctx.target.handle, EntryHandle::CodexTerminal { .. }) { return answer(&ctx, interaction_failure(InteractionError::Changed)); }
+    if let EntryHandle::OtherTerminal {handle,..}=&ctx.target.handle {
+        if st.term.is_active(&ctx.name) {return answer(&ctx,panel_open_refusal());}
+        let (answered,diary)=submit_answer(&handle.control(random_hex(16),"submit_selected".into(),json!({"interaction_id":supplied})).await);
+        report(&ctx,diary);return answer(&ctx,answered);
+    }
     let EntryHandle::Terminal { handle, .. } = &ctx.target.handle else { unreachable!("a tabela manda o sem terminal ao Python") };
     if expected.target.kind != crate::interactions::InteractionKind::Menu { return answer(&ctx, interaction_failure(InteractionError::Changed)); }
     let result = if st.term.is_active(&ctx.name) { panel_open_refusal() } else {
@@ -437,6 +445,7 @@ pub async fn interrupt(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conne
     let result = match &ctx.target.handle {
         // O ator lê a pergunta do plugin antes do Esc e a fecha só se o Esc saiu.
         EntryHandle::Terminal { handle, .. } => interrupt_terminal_answer(&handle.control(operation_id, "interrupt".into(), json!({"clear": clear})).await),
+        EntryHandle::OtherTerminal {handle,..}=>interrupt_terminal_answer(&handle.control(operation_id,"interrupt".into(),json!({"clear":clear})).await),
         headless => {
             let sent = headless.command(RuntimeCommand { operation_id, kind: OperationKind::Interrupt, payload: json!({}) }).await;
             let codex = ctx.target.provider == "codex";
@@ -457,6 +466,7 @@ pub async fn keys(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInf
         EntryHandle::Terminal { handle, .. } => control_step_answer(&handle.control(random_hex(16), "navigation_key".into(), json!({"key": key})).await),
         // Codex com terminal: o pane é do Rust também, pelo mesmo escritor de teclas.
         EntryHandle::CodexTerminal { target, cell, .. } => pane_step_answer(&crate::runtime::codex_terminal::pane_driver(&target.terminal, cell.pane_serial(), None).key(&key, false).await),
+        EntryHandle::OtherTerminal {handle,..} => control_step_answer(&handle.control(random_hex(16), "navigation_key".into(), json!({"key":key})).await),
         EntryHandle::Headless(_) => unreachable!("a tabela manda o sem terminal ao Python"),
     };
     answer(&ctx, result.map_or_else(|refused| refused, |()| ok()))
@@ -480,6 +490,7 @@ pub async fn term_input(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conn
                         pane_step_answer(&if control == "terminal_input" { driver.text(payload["text"].as_str().unwrap_or("")).await }
                             else { driver.key(payload["key"].as_str().unwrap_or(""), true).await })
                     }
+                    EntryHandle::OtherTerminal {handle,..} => control_step_answer(&handle.control(random_hex(16), control.into(), payload).await),
                     EntryHandle::Headless(_) => unreachable!("a tabela manda o sem terminal ao Python"),
                 };
                 if let Err(refused) = step { done = refused; break; }

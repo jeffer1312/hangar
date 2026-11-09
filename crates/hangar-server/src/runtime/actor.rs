@@ -38,6 +38,7 @@ impl PolicyClient {
     pub fn new(upstream:std::net::SocketAddr,secret:String) -> Self {
         Self { diag:crate::diag::DiagClient::new(upstream,secret),accounts:None,preparation:None,codex_env:None,plugin_bridge:None }
     }
+    pub fn with_diagnostics(mut self, diag: crate::diag::DiagClient) -> Self { self.diag = diag; self }
     pub(super) fn with_preparation(mut self,bridge:Option<crate::accounts::bridge::AccountsBridge>) -> Self { self.preparation=bridge; self }
     pub(super) async fn prepare_codex(&self,home:&str) -> Result<(),RuntimeError> {
         let Some(accounts) = &self.accounts else { return Ok(()) };
@@ -2688,7 +2689,7 @@ fn give_up_now(target:&RuntimeTarget,view:&Value) -> Option<bool> {
 /// Prazo do Claude sem terminal para a linha da entrada aparecer no transcript (hooks lentos incluídos).
 const HEADLESS_PROOF_GRACE_S:f64 = 60.0;
 
-async fn prove_inputs(queue:Arc<QueueActor>,receipt:Arc<std::sync::Mutex<ReceiptIndex>>,path:std::path::PathBuf,conversation:Option<String>,
+pub(super) async fn prove_inputs(queue:Arc<QueueActor>,receipt:Arc<std::sync::Mutex<ReceiptIndex>>,path:std::path::PathBuf,conversation:Option<String>,
     generation:u64,sample:ClockSample) -> Result<(Vec<String>,usize),RuntimeError> {
     // Conversa trocada pela TUI: cursores e leitura da anterior não provam entrega na nova.
     if let Some(conversation) = conversation { receipt.lock().map_err(|_|failure("receipt_panic"))?.rebind(&conversation); }

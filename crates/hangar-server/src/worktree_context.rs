@@ -91,17 +91,18 @@ pub(crate) fn project_bases(st: &AppState) -> Result<Vec<PathBuf>, &'static str>
 }
 
 pub(crate) async fn load(st: Arc<AppState>) -> Result<Context, &'static str> {
-    let rows = st.list.discover(None).await.map_err(|_| "sessoes")?;
-    tokio::task::spawn_blocking(move || {
-        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_| "relogio")?.as_secs_f64();
-        collect(&st, &rows, now)
-    }).await.map_err(|_| "leitura")?
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_| "relogio")?.as_secs_f64();
+    let rows = st.list.discover(Some(now)).await.map_err(|_| "sessoes")?;
+    tokio::task::spawn_blocking(move || collect(&st, &rows, now)).await.map_err(|_| "leitura")?
 }
 
 fn collect(st: &AppState, rows: &[hangar_api::session::SessionRow], now: f64) -> Result<Context, &'static str> {
     let home = &st.list.env().dirs.as_ref().ok_or("sessoes")?.home;
     let (orq, failed) = crate::list::local_facts::orq_rows(home, now);
-    if failed.is_some() { st.diag.report_with("rust.worktrees_failed", "", "worktree_orq_uncertain", "leitura de orquestrações incompleta", serde_json::json!({})); }
+    if failed.is_some() {
+        st.diag.report_with("rust.worktrees_failed", "", "worktree_orq_uncertain", "leitura de orquestrações incompleta", serde_json::json!({}));
+        return Err("orquestracoes");
+    }
     let sessions = rows.iter().chain(orq.iter()).map(|row| Session {
         name: row.name.clone(), cwd: row.cwd.clone(),
         git_cwd: row.git_cwd.clone().filter(|cwd| !cwd.is_empty()).or_else(|| row.cwd.clone()),

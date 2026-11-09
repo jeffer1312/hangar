@@ -198,6 +198,7 @@ pub fn each_event(provider: Provider, jsonl: &Path, mut visit: impl FnMut(ChatEv
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e),
     };
+    let mut pi = super::PiStream::default();
     for raw in BufReader::new(file).split(b'\n') {
         let raw = raw?;
         let line = String::from_utf8_lossy(&raw);
@@ -206,12 +207,15 @@ pub fn each_event(provider: Provider, jsonl: &Path, mut visit: impl FnMut(ChatEv
         let events = match provider {
             Provider::Claude | Provider::ClaudeHeadless => claude::parse_obj(obj, peer::name_of_pid),
             Provider::Codex => codex::parse_rollout_obj(&value),
+            Provider::Pi | Provider::Omp => pi.feed(&value),
+            Provider::Kimi => super::parse_kimi_object(&value),
             Provider::Orq => return Ok(()),
         };
         for event in events {
             if !visit(event) { return Ok(()); }
         }
     }
+    for event in pi.flush() { if !visit(event) { break; } }
     Ok(())
 }
 
@@ -357,6 +361,7 @@ fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64, notices: bool) -
         seed_notices(&req.jsonl, fold, turn_seed_start(&req.jsonl, offset), offset);
     }
     let mut held_ids = HashSet::new();
+    let mut pi = super::PiStream::default();
     let mut raw = Vec::new();
     let mut i = 0u64;
     loop {
@@ -396,6 +401,8 @@ fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64, notices: bool) -
                 let mut evs = match req.provider {
                     Provider::Claude | Provider::ClaudeHeadless => claude::parse_obj(obj, peer::name_of_pid),
                     Provider::Codex => codex::parse_rollout_obj(&value),
+                    Provider::Pi | Provider::Omp => pi.feed(&value),
+                    Provider::Kimi => super::parse_kimi_object(&value),
                     Provider::Orq => super::parse_orq(&value, req.jsonl.parent()),
                 };
                 if let Some(fold) = notices.as_mut() { fold.feed(obj, &mut evs); }
@@ -418,6 +425,8 @@ fn parse_from(req: &HistoryRequest, offset: u64, start_ts: f64, notices: bool) -
         p.prev_ts = ts;
         absorb(&mut p, ts, idx, evs, &mut held_ids);
     }
+    let clock = p.prev_ts;
+    absorb(&mut p, clock, i, pi.flush(), &mut held_ids);
     Ok(p)
 }
 

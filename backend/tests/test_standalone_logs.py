@@ -19,8 +19,7 @@ def ambiente(tmp_path):
 
 
 @pytest.mark.parametrize("plataforma,local", [("posix", True), ("nt", True), ("nt", False)])
-@pytest.mark.parametrize("hook,arquivo", [("guard_tmux.py", "guard_tmux-falhas.log"),
-                                        ("kimi_state_hook.py", "kimi_hook_error.log")])
+@pytest.mark.parametrize("hook,arquivo", [("guard_tmux.py", "guard_tmux-falhas.log")])
 def test_hook_falha_grava_na_pasta_da_maquina(tmp_path, ambiente, plataforma, local, hook, arquivo):
     path = Path(__file__).resolve().parents[1] / "hooks" / hook
     if not local:
@@ -33,7 +32,7 @@ def test_hook_falha_grava_na_pasta_da_maquina(tmp_path, ambiente, plataforma, lo
     )
     payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": {"invalido": True}}})
     result = subprocess.run([sys.executable, "-c", launcher, plataforma, str(path)], env=ambiente,
-                            input=payload if hook == "guard_tmux.py" else "json invalido",
+                            input=payload,
                             capture_output=True, text=True, timeout=10)
     assert result.returncode == 0 and result.stdout == ""
     if plataforma == "posix":

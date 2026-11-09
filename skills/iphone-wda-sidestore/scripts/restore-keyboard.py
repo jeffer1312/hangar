@@ -5,12 +5,13 @@ O WebDriverAgent desliga as duas ao subir, e o ajuste dele (`appium/settings`) r
 sem mudar nada no iOS: só o toque na chave pega. Rótulos em pt-BR, como o aparelho está.
 """
 import json
+import os
 import sys
 import time
 import urllib.error
 import urllib.request
 
-WDA = "http://127.0.0.1:8100"
+WDA = os.environ.get("WDA_URL", "http://127.0.0.1:8100")
 SWITCHES = ("Correção Automática", "Texto Preditivo")
 
 
@@ -26,20 +27,23 @@ def call(method, path, body=None):
         raise
 
 
-def main():
-    # Logo depois do "ready" a primeira sessão às vezes cai sem resposta.
+def new_session(caps):
+    # Logo depois do "ready" as primeiras sessões às vezes caem sem resposta ou com 500.
     for attempt in range(5):
         try:
-            s = call("POST", "/session", {"capabilities": {"alwaysMatch": {}}})["sessionId"]
-            break
+            return call("POST", "/session", {"capabilities": {"alwaysMatch": caps}})["sessionId"]
         except OSError:
             if attempt == 4:
                 raise
             time.sleep(3)
+
+
+def main():
+    s = new_session({})
     # Fechar antes de abrir: os Ajustes reabrem na última tela, e o caminho parte da raiz. A sessão
     # nova presa ao app é a que enxerga os elementos dele.
     call("POST", f"/session/{s}/wda/apps/terminate", {"bundleId": "com.apple.Preferences"})
-    s = call("POST", "/session", {"capabilities": {"alwaysMatch": {"bundleId": "com.apple.Preferences"}}})["sessionId"]
+    s = new_session({"bundleId": "com.apple.Preferences"})
 
     def find(pred):
         try:

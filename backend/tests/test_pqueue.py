@@ -802,68 +802,6 @@ def test_merged_history_nao_absorve_legenda_igual_enviada_depois(tmp_path):
     assert any(e.id == "queued-e2" for e in pqueue.merged_history("s", str(j)))
 
 
-def _wire_kimi(tmp_path, linhas):
-    import json
-    j = tmp_path / "wire.jsonl"
-    j.write_text("\n".join(json.dumps(l) for l in linhas) + "\n", encoding="utf-8")
-    return str(j)
-
-
-def test_committed_user_lines_kimi_provider(tmp_path):
-    # Sem o branch kimi o oraculo devolvia set() vazio e o reconcile redigitava cada entrega
-    # (3x "ola" em producao, 2026-08-11). A injection NAO pode contar como texto do usuario.
-    wire = _wire_kimi(tmp_path, [
-        {"type": "context.append_message", "time": 1786453187986,
-         "message": {"role": "user", "id": "msg_1", "origin": {"kind": "user"},
-                     "content": [{"type": "text", "text": "ola"}]}},
-        {"type": "context.append_message", "time": 1786453187990,
-         "message": {"role": "user", "id": "msg_2", "origin": {"kind": "injection"},
-                     "content": [{"type": "text", "text": "<system-reminder>x</system-reminder>"}]}},
-    ])
-    lines = pqueue.committed_user_lines(wire, "kimi")
-    assert "ola" in lines
-    assert not any("system-reminder" in l for l in lines)
-
-
-def test_committed_user_lines_pi_e_omp_provider(tmp_path):
-    # omp e o fork do Pi e usa o MESMO parser (app/adapters/pi/transcript.py) — sem cobertura direta
-    # aqui, um shape novo do parser quebraria os dois calado.
-    import json
-    j = tmp_path / "t.jsonl"
-    j.write_text(json.dumps({"type": "message", "id": "m1", "message": {
-        "role": "user", "timestamp": 1, "content": [{"type": "text", "text": "oi"}]}}) + "\n",
-        encoding="utf-8")
-    assert pqueue.committed_user_lines(str(j), provider="omp") == {"oi"}
-    assert pqueue.committed_user_lines(str(j), provider="pi") == {"oi"}
-
-
-def test_transcript_start_ts_kimi_envelope_time(tmp_path):
-    # O ts do Kimi mora no envelope `time` (ms) — sem isto o start_ts era 0.0 e a poda de fila
-    # pre-/clear nao funcionava pro provider.
-    wire = _wire_kimi(tmp_path, [
-        {"type": "metadata", "protocol_version": "1.5", "created_at": 1786452160239},
-        {"type": "context.append_message", "time": 1786453187986,
-         "message": {"role": "user", "id": "m1", "origin": {"kind": "user"},
-                     "content": [{"type": "text", "text": "oi"}]}},
-    ])
-    assert pqueue._transcript_start_ts(wire) == 1786452160.239
-
-
-def test_merged_history_kimi_provider(tmp_path):
-    # O /history passa o provider: sem o branch, o parser do Claude nao lia NENHUMA linha do wire
-    # e o historico de uma sessao Kimi voltava vazio (so o SSE ao vivo enchia o chat).
-    wire = _wire_kimi(tmp_path, [
-        {"type": "context.append_message", "time": 1786453187986,
-         "message": {"role": "user", "id": "m1", "origin": {"kind": "user"},
-                     "content": [{"type": "text", "text": "ola"}]}},
-        {"type": "context.append_loop_event", "time": 1786453190000,
-         "event": {"type": "content.part", "uuid": "u1",
-                   "part": {"type": "text", "text": "oi!"}}},
-    ])
-    evs = pqueue.merged_history("s", wire, "kimi")
-    assert [(e.kind, e.text) for e in evs] == [("user_msg", "ola"), ("assistant_msg", "oi!")]
-
-
 # --- Redigitacao as cegas: o incidente de 2026-08-11 (kill-server -> resume -> msg duplicada) ---
 # Cadeia medida: um subagente rodou `tmux kill-server` 13:55:29 (o log do backend registra
 # "no server running on /tmp/tmux-1000/default"); as sessoes morreram e a de nome `hangar` voltou
@@ -877,6 +815,7 @@ def test_merged_history_kimi_provider(tmp_path):
 # Regra: redigitar e a acao destrutiva aqui (mete texto num prompt em uso). Sem PROVA de que a
 # sessao nao esta no meio de um turno, nao se redigita — confirma e desiste. O pior caso vira o
 # comportamento antigo (envio engolido fica visivel como bolha), que e falha VISIVEL, nao duplicata.
+
 
 def _sessao_fake(nome, jsonl, provider="claude"):
     from types import SimpleNamespace
@@ -1185,14 +1124,6 @@ def test_turno_longo_nao_decide_engolida_sem_prova(tmp_path, monkeypatch):
 # Claude Code, que e o registro feito no momento da digitacao. Logo "ausente do transcript" nao
 # prova engolido. E o marcador de estado nao salva: o Stop de um SUBAGENTE grava "idle" na chave do
 # pai, entao o guard de working acima ja tinha soltado o caminho.
-def test_confirm_nunca_redigita_no_kimi_mesmo_ocioso(tmp_path, monkeypatch):
-    import time as _t
-    chamou, row = _cenario_engolida(tmp_path, monkeypatch, ("idle", _t.time()), provider="kimi")
-    assert chamou == []                        # nada de re-drenar -> nunca uma segunda digitacao
-    assert row["delivered"] is True
-    assert not row.get("attempts")
-    assert row["desistiu"] is True             # visivel como bolha da fila, nao escondida
-    assert "confirmed" not in row
 
 
 # `desistiu` e decidido DEPOIS que a entrada nasce (o reconcile roda num Timer, segundos mais tarde).

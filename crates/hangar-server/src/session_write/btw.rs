@@ -7,6 +7,7 @@ use axum::{body::to_bytes, extract::{ConnectInfo, Request, State}, http::StatusC
 use serde_json::{Value, json};
 
 use crate::routes::{AppState, cors, pass, who};
+use crate::runtime::claude_launch::transcript_in as transcript;
 use crate::runtime::gateway::EntryHandle;
 use super::{BODY_LIMIT, busy_body, detail, enter_then_find, json_response, session_name};
 
@@ -171,16 +172,6 @@ pub fn fork_answer(stdout: &[u8]) -> Result<String, BtwError> {
     let answer = answer.trim_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c));
     if answer.is_empty() { return Err(fail(502, "erro_btw_ilegivel", "a pergunta lateral respondeu, mas não consegui ler a resposta")); }
     Ok(answer.to_owned())
-}
-
-/// `<base>/<cwd>/<sid>.jsonl`, ou onde o `EnterWorktree` o levou (o sid não repete entre pastas).
-fn transcript(base: &Path, cwd: &str, sid: &str) -> PathBuf {
-    let file = format!("{sid}.jsonl");
-    let expected = base.join(hangar_workspace::worktrees::sanitize_cwd(cwd)).join(&file);
-    if expected.exists() { return expected; }
-    let mut moved: Vec<PathBuf> = std::fs::read_dir(base).into_iter().flatten().flatten().map(|d| d.path().join(&file)).filter(|p| p.exists()).collect();
-    moved.sort();
-    moved.into_iter().next().unwrap_or(expected)
 }
 
 async fn run_fork(argv: &[String], programs: &Programs, cwd: &str, config_dir: Option<&str>, timeout: Duration) -> Result<(bool, Vec<u8>), BtwError> {

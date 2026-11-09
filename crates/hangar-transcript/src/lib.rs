@@ -1,11 +1,14 @@
-//! Leitura das conversas do Claude e do Codex, portada de backend/app/transcript.py,
-//! adapters/codex/rollout.py e pqueue.py. A saída tem que sair igual à do Python: os aparelhos
+//! Leitura das conversas estruturadas dos agentes, portada dos leitores de transcript e fila.
+//! A saída tem que sair igual à do Python: os aparelhos
 //! deduplicam por id, e um id diferente na troca vira mensagem repetida na tela.
 
 mod claude;
 mod codex;
+mod agents;
+pub use agents::{parse_pi_object, parse_kimi_object, PiStream};
 pub mod history;
 mod peer;
+pub mod interactions;
 pub use hangar_core::pycompat::py;
 pub use hangar_core::pycompat::pyjson;
 // Re-export de compatibilidade: ninguém o usa mais pelo caminho `transcript::`.
@@ -36,6 +39,9 @@ pub enum Provider {
     Claude,
     ClaudeHeadless,
     Codex,
+    Pi,
+    Omp,
+    Kimi,
     Orq,
 }
 
@@ -45,6 +51,9 @@ impl Provider {
             "claude" => Some(Self::Claude),
             "claude-headless" => Some(Self::ClaudeHeadless),
             "codex" => Some(Self::Codex),
+            "pi" => Some(Self::Pi),
+            "omp" => Some(Self::Omp),
+            "kimi" => Some(Self::Kimi),
             "orq" => Some(Self::Orq),
             _ => None,
         }
@@ -55,6 +64,9 @@ impl Provider {
             Self::Claude => "claude",
             Self::ClaudeHeadless => "claude-headless",
             Self::Codex => "codex",
+            Self::Pi => "pi",
+            Self::Omp => "omp",
+            Self::Kimi => "kimi",
             Self::Orq => "orq",
         }
     }
@@ -91,11 +103,16 @@ pub struct LineParser {
     peer_resolver: claude::PeerResolver,
     run_dir: Option<std::path::PathBuf>,
     notices: Option<claude::NoticeFold>,
+    pi: PiStream,
 }
 
 impl LineParser {
+    /// Libera a mensagem Pi sem irmã no fim do lote; o offset continua o da mensagem retida.
+    pub fn flush(&mut self) -> Vec<ChatEvent> { self.pi.flush() }
+    pub fn has_pending(&self) -> bool { self.pi.has_pending() }
+    pub fn pending_offset(&self) -> Option<u64> { self.pi.pending_offset() }
     pub fn new(provider: Provider) -> Self {
-        Self { provider, rewrite: claude::RewriteFilter::default(), peer_resolver: peer::name_of_pid, run_dir: None, notices: None }
+        Self { provider, rewrite: claude::RewriteFilter::default(), peer_resolver: peer::name_of_pid, run_dir: None, notices: None, pi: PiStream::default() }
     }
 
     /// Com as notas dos avisos da CLI (hook que falha, nova tentativa, recusa). Só o chat as pede: quem procura
@@ -133,6 +150,7 @@ impl LineParser {
     }
 
     fn at_line(&mut self, offset: u64) {
+        if offset == 0 { self.pi = PiStream::default(); }
         if offset == 0 && let Some(fold) = self.notices.as_mut() { fold.file_start(); }
     }
 
@@ -142,6 +160,8 @@ impl LineParser {
         let Some(value) = line_value(line) else { return Vec::new() };
         let mut evs = match (self.provider, &value) {
             (Provider::Codex, _) => codex::parse_rollout_obj(&value),
+            (Provider::Pi | Provider::Omp, _) => self.pi.feed_with_offset(&value, Some(offset)),
+            (Provider::Kimi, _) => parse_kimi_object(&value),
             (Provider::Orq, _) => parse_orq(&value, self.run_dir.as_deref()),
             (Provider::Claude | Provider::ClaudeHeadless, Value::Object(obj)) if self.rewrite.keep(obj) => {
                 let mut evs = claude::parse_obj(obj, self.peer_resolver);
@@ -151,7 +171,7 @@ impl LineParser {
             _ => Vec::new(),
         };
         for ev in &mut evs {
-            ev.offset = Some(offset);
+            if ev.offset.is_none() { ev.offset = Some(offset); }
         }
         evs
     }

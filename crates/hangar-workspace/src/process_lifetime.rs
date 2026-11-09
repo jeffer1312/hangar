@@ -94,39 +94,20 @@ impl Guard {
     }
     pub fn attach(&self, child: &Child) -> std::io::Result<()> {
         use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::{
-            Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
-            System::{
-                Diagnostics::ToolHelp::*,
-                JobObjects::AssignProcessToJobObject,
-                Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME},
-            },
-        };
+        use windows_sys::Win32::{Foundation::HANDLE, System::JobObjects::AssignProcessToJobObject};
+        // O std não entrega a thread do filho, e achá-la pelo retrato varre as threads da máquina
+        // inteira a cada comando. O processo suspenso só tem a thread inicial.
+        #[link(name = "ntdll", kind = "raw-dylib")]
+        unsafe extern "system" {
+            fn NtResumeProcess(process: HANDLE) -> i32;
+        }
         unsafe {
             if AssignProcessToJobObject(self.job, child.as_raw_handle() as _) == 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-            if snapshot == INVALID_HANDLE_VALUE {
-                return Err(std::io::Error::last_os_error());
-            }
-            let mut entry: THREADENTRY32 = std::mem::zeroed();
-            entry.dwSize = std::mem::size_of_val(&entry) as u32;
-            let mut valid = Thread32First(snapshot, &mut entry);
-            let mut resumed = false;
-            while valid != 0 {
-                if entry.th32OwnerProcessID == child.id() {
-                    let thread = OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID);
-                    if !thread.is_null() {
-                        resumed |= ResumeThread(thread) != u32::MAX;
-                        CloseHandle(thread);
-                    }
-                }
-                valid = Thread32Next(snapshot, &mut entry);
-            }
-            CloseHandle(snapshot);
-            if !resumed {
-                return Err(std::io::Error::other("command thread not resumed"));
+            let status = NtResumeProcess(child.as_raw_handle() as _);
+            if status < 0 {
+                return Err(std::io::Error::other(format!("command thread not resumed: NTSTATUS {status:#x}")));
             }
             Ok(())
         }

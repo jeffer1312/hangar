@@ -1,4 +1,4 @@
-//! Coleta incremental com escopos do Python e uma varredura compartilhada por vez.
+//! Coleta incremental com escopos nativos e uma varredura compartilhada por vez.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, atomic::{AtomicU64, Ordering}};
@@ -45,30 +45,6 @@ impl std::error::Error for CollectError {}
 impl From<IndexError> for CollectError { fn from(error: IndexError) -> Self { Self::Index(error) } }
 
 pub trait ScopeSource: Send + Sync { fn fetch(&self) -> Result<Scopes, CollectError>; }
-
-pub struct HttpScopes { upstream: std::net::SocketAddr, secret: String }
-impl HttpScopes {
-    pub fn new(upstream: std::net::SocketAddr, secret: String) -> Self { Self { upstream, secret } }
-}
-impl ScopeSource for HttpScopes {
-    fn fetch(&self) -> Result<Scopes, CollectError> {
-        use http_body_util::BodyExt;
-        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()
-            .map_err(|_| CollectError::NoScopes)?;
-        runtime.block_on(async {
-            tokio::time::timeout(Duration::from_secs(10), async {
-                let request = axum::http::Request::builder()
-                    .uri(format!("http://{}/internal/costs/scopes", self.upstream))
-                    .header("X-Hangar-Internal", &self.secret).body(axum::body::Body::empty())
-                    .map_err(|_| CollectError::NoScopes)?;
-                let response = crate::proxy::client().request(request).await.map_err(|_| CollectError::NoScopes)?;
-                if !response.status().is_success() { return Err(CollectError::NoScopes); }
-                let body = response.into_body().collect().await.map_err(|_| CollectError::NoScopes)?.to_bytes();
-                serde_json::from_slice(&body).map_err(|_| CollectError::NoScopes)
-            }).await.map_err(|_| CollectError::NoScopes)?
-        })
-    }
-}
 
 #[derive(Debug)]
 pub enum Ready { Go, Warming { read: usize, total: usize } }

@@ -1,6 +1,6 @@
 """Instalador dos hooks de estado, navegador e proteção do Hangar no `~/.codex/hooks.json`.
 
-Irmao do hook_installer.py (Claude) e do kimi_hook_installer.py (Kimi): cada harness recebe o
+Irmão do hook_installer.py (Claude): cada harness recebe o
 hook do app pelo instalador dele, nunca pelo importador do Codex — que arrastaria junto os outros
 hooks so-Claude do app (previa, AskUserQuestion, pareamento) e reescreveria o comando a cada
 checkout diferente. O adapter do Codex le o marcador deste hook como segunda fonte de "turno

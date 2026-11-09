@@ -805,12 +805,10 @@ def test_watcher_failure_puts_the_cause_in_the_diary(monkeypatch, events):
 def test_protocol_is_the_same_number_on_both_sides():
     lib = (Path(__file__).resolve().parents[2] / "crates/hangar-server/src/lib.rs").read_text()
     rust = int(re.search(r"pub const INTERNAL_PROTOCOL: u32 = (\d+);", lib).group(1))
-    assert rust == rust_server.RUST_SERVER_PROTOCOL == 101
+    assert rust == rust_server.RUST_SERVER_PROTOCOL == 105
 
 
 def _child_env(monkeypatch, tmp_path, host, port):
-    from app import list_bridge
-    monkeypatch.setattr(list_bridge, "dirs_env", lambda: "{}")
     sup = rust_server.Supervisor(tmp_path / "bin", host, port, 2, "t", "127.0.0.1", lambda: False)
     try:
         return sup._env()
@@ -886,7 +884,7 @@ def test_invalid_private_address_is_startup_failure(monkeypatch):
 
 def test_terminal_panel_from_rust_health(monkeypatch):
     from types import SimpleNamespace
-    from app import list_bridge, runtime_coordinator, terminal_observer, termsock, workspace_bridge
+    from app import list_bridge, runtime_coordinator, terminal_observer, termsock
     supervisor = _supervisor(lambda: False)
     monkeypatch.setattr(rust_server, "_spawn", lambda binary, env: SimpleNamespace(poll=lambda: None, pid=1))
     monkeypatch.setattr(rust_server, "_runtime_ready", lambda proc, instance: {"type":"runtime_ready",
@@ -911,7 +909,7 @@ def test_terminal_panel_from_rust_health(monkeypatch):
             assert asyncio.run(supervisor._start()) == "address"
     finally:
         internal_api.set_secret(None)
-        for bridge in (terminal_observer, workspace_bridge, list_bridge):
+        for bridge in (terminal_observer, list_bridge):
             bridge.configure(None, None)
 
 

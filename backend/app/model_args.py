@@ -8,9 +8,6 @@ omniroute) ou de parse de tabela — nenhum dos dois é fonte confiável, e o fr
 entre outros. O repo já trata assim todo caminho comparável: uuid validado em registry.py:1404
 ("vai DIRETO pro comando do shell"), _PROIBIDO_NO_VALOR no engines.py, _clean no pi_models.py.
 
-Por que flags diferentes por provider: o binário do Pi não conhece `--effort` e o do Claude não
-conhece `--thinking`. A errada mata o processo no arranque com o pane já criado — o app reportaria
-uma sessão aberta que não existe.
 """
 import re
 
@@ -40,7 +37,6 @@ def _e_flag(valor: str) -> bool:
 # Listas FECHADAS, do --help de cada binário (medido em 10/08/2026). `ultracode` NÃO entra: é do
 # picker interativo (`/effort ultracode`), não da flag de arranque.
 EFFORT_CLAUDE = ("low", "medium", "high", "xhigh", "max")
-EFFORT_PI = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
 
 # Modos de permissão do Claude Code, do `claude --help` (medido em 19/08/2026).
 # choices: "acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan"
@@ -53,14 +49,9 @@ MODOS_PERMISSAO_CLAUDE = ("acceptEdits", "auto", "bypassPermissions", "manual", 
 # sobrescrita de config no comando do pane (`-c model_reasoning_effort="<nível>"`).
 NIVEL_OK = re.compile(r"^[a-z]{2,32}\Z")
 
-# Quem aceita ESCOLHA DE MODELO no arranque: todos têm `--model`/`-m` (o do Kimi aceita o alias
-# `provider/id` do config.toml, medido no --help do Kimi Code 0.37.2). Esforço é separado: o Kimi
-# NÃO tem flag de esforço no CLI (mora no [thinking] do config.toml), então não entra nos mapas
-# abaixo — pedir esforço pra ele é recusado com mensagem própria, não com "provider inválido".
-# omp: fork do Pi, mesma flag `--thinking` e mesmos níveis (EFFORT_PI).
-_ACEITA_MODELO = ("claude", "pi", "omp", "kimi", "codex")
-_FLAG_ESFORCO = {"claude": "--effort", "pi": "--thinking", "omp": "--thinking"}
-_NIVEIS = {"claude": EFFORT_CLAUDE, "pi": EFFORT_PI, "omp": EFFORT_PI}
+_ACEITA_MODELO = ("claude", "codex")
+_FLAG_ESFORCO = {"claude": "--effort"}
+_NIVEIS = {"claude": EFFORT_CLAUDE}
 
 
 def validar(provider: str, model: str | None, effort: str | None, permission_mode: str | None = None) -> tuple[str | None, str | None]:

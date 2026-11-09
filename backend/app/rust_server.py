@@ -33,7 +33,7 @@ _log = logging.getLogger("hangar.rust_server")
 HEALTH_PATH = "/__hangar_server/health"
 # Versão do contrato interno (rotas /internal, canal privado do estado, ambiente). Tem de casar com o
 # `protocol` da saúde (hangar_server::INTERNAL_PROTOCOL); outro número = o Python atende sozinho.
-RUST_SERVER_PROTOCOL = 101
+RUST_SERVER_PROTOCOL = 105
 START_TIMEOUT = 10.0
 OP_TIMEOUT_S = 75
 PROTECTED_SHUTDOWN_SECONDS = 120
@@ -327,9 +327,9 @@ class RuntimeTransport:
 
 def _point_bridges(address: str | None, secret: str | None) -> None:
     """Pontes Python → Rust no endereço privado dele, ou em nada; o observador primeiro, que recusa endereço torto."""
-    from app import account_bridge, costs_sources, groups_bridge, list_bridge, transcription_bridge, workspace_bridge
+    from app import account_bridge, costs_sources, groups_bridge, list_bridge, transcription_bridge
     costs_sources.set_served_by_rust(address is not None)
-    for bridge in (terminal_observer, workspace_bridge, claude_customizations, list_bridge,
+    for bridge in (terminal_observer, claude_customizations, list_bridge,
                    groups_bridge, transcription_bridge):
         bridge.configure(address, secret)
     account_bridge.configure_preparation(address, secret)
@@ -388,14 +388,6 @@ class Supervisor:
         # O segredo vai só no ambiente do filho; no os.environ ele vazaria para toda sessão que o
         # backend sobe. O require_internal lê da memória do módulo a cada pedido.
         internal_api.set_secret(secret)
-        from app import list_bridge
-        try:
-            lists = {"HANGAR_LIST_DIRS": list_bridge.dirs_env()}
-        except Exception as e:                           # noqa: BLE001 — o Rust sobe e a ponte da lista recusa com código
-            _log.exception("pastas da lista sem resolver")
-            diag.registrar("hangar_server.pastas_lista", "erro", **diag.erro_campos(e))
-            # Vazia, e não a herdada do ambiente: o Rust recusa com código em vez de usar pastas velhas.
-            lists = {"HANGAR_LIST_DIRS": ""}
         from app import pair
         from app.config import settings
         groups = {
@@ -411,7 +403,7 @@ class Supervisor:
         context = shared_auth.current()
         auth_env = context.child_env(self.binary) if context is not None else {}
         env = {k: v for k, v in os.environ.items() if k not in ("HANGAR_SERVER_GUEST_LISTEN", "HANGAR_AUTH_CONTEXT")}
-        return {**env, **lists, **groups, **guest, **auth_env,
+        return {**env, **groups, **guest, **auth_env,
                 "HANGAR_SERVER_LISTEN": listen_addr(self.host, self.port),
                 "HANGAR_SERVER_UPSTREAM": f"127.0.0.1:{self.upstream_port}",
                 "HANGAR_INTERNAL_SECRET": secret,

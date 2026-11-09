@@ -123,7 +123,7 @@ pub struct Cli { pub accounts: crate::accounts::AccountService, pub bridge: Opti
 
 impl Cli {
     /// `run` com o teto de tempo dado.
-    fn run_within<'a>(&'a self, prompt: &'a str, account: Option<&'a str>, limit: Duration) -> BoxFuture<'a, Result<Output, String>> {
+    pub(crate) fn run_within<'a>(&'a self, prompt: &'a str, account: Option<&'a str>, limit: Duration) -> BoxFuture<'a, Result<Output, String>> {
         Box::pin(async move {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             let Some(mut command) = self.accounts.claude_command() else { return Err("claude CLI não encontrado".into()) };

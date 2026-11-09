@@ -128,7 +128,7 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
         Owned::Prewarm => crate::prewarm::http::serve(&st, req).await,
         Owned::BrowserUrl(guest) => crate::remote_browser::url::serve_forwarded(&st, req, guest).await,
         Owned::Nav => crate::nav_requests::serve(&st, req).await,
-        Owned::Worktrees => crate::worktree_routes::public(st, req).await,
+        Owned::Worktrees => crate::worktree_routes::serve_forwarded(st, peer, req, guest).await,
         Owned::Plans => crate::plans::routes::serve(&st, req).await,
         Owned::ArchiveResume(project, sid) => {
             let Ok(bytes) = axum::body::to_bytes(req.into_body(), crate::session_write::BODY_LIMIT).await else {

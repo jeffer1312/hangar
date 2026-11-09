@@ -441,3 +441,20 @@ fn matching_signature_refolds_only_saved_areas_without_reading_the_transcript() 
     assert_eq!(usage.iter().filter(|r| r.tipo == "area").map(|r| (r.nome.as_str(), r.input, r.output, r.cache_write, r.cache_read, r.cache_write_1h)).collect::<Vec<_>>(), [("back",6,4,3,2,1), ("front",5,3,2,1,1)]);
     assert!(!ix.sync("synthetic", &[transcript], &forbid_read, "v1", map.signature(), &redo, &Progress::default()).unwrap());
 }
+
+#[test]
+fn default_area_paths_keep_folder_extension_priority() {
+    let map = default_map();
+    let rules = map.rules_for("/r");
+    for (path, expected) in [
+        ("/r/backend/migrations/001.sql", "banco"),
+        ("/r/backend/app/api.py", "back"),
+        ("/r/frontend/README.md", "docs"),
+        ("/r/scripts/instalar.py", "infra"),
+        ("/r/deploy/Dockerfile", "infra"),
+        ("/r/packages/core/src/uso.ts", "front"),
+        ("/r/qualquer.txt", "outros"),
+    ] {
+        assert_eq!(map.area_of_path(path, "/r", &rules), expected, "{path}");
+    }
+}

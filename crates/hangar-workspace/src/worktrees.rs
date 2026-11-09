@@ -225,7 +225,8 @@ pub fn main_of_missing(path: &str) -> String {
     cands.extend(p.ancestors().skip(1).map(Path::to_path_buf));
     cands
         .into_iter()
-        .find(|c| c.join(".git").is_dir() && worktree_paths(&text(c)).iter().any(|w| w == path))
+        .find(|c| c.join(".git").is_dir()
+            && worktree_paths(&text(c)).iter().any(|w| same_path(&normpath(Path::new(w)), &normpath(p))))
         .map(|c| text(&c))
         .unwrap_or_else(|| path.to_owned())
 }
@@ -422,7 +423,8 @@ impl Repo {
 
     /// Branch de uma worktree cuja pasta sumiu, pelo HEAD guardado na administração dela.
     fn gone_branch(&self, path: &str) -> Option<String> {
-        let (admin, _) = self.admins.iter().find(|(_, p)| p == path)?;
+        let wanted = normpath(Path::new(path));
+        let (admin, _) = self.admins.iter().find(|(_, p)| same_path(&normpath(Path::new(p)), &wanted))?;
         let head = std::fs::read_to_string(admin.join("HEAD")).ok()?;
         head.trim()
             .strip_prefix("ref: refs/heads/")
@@ -1437,6 +1439,512 @@ mod tests {
         let discovery = discover_repositories(&[text(&root)]);
         assert!(discovery.repos.is_empty());
         assert!(!discovery.partial);
+    }
+
+    fn t4_isolated(name: &str) -> bool {
+        if std::env::var("HANGAR_T4_ISOLATED").as_deref() == Ok(name) { return false; }
+        let home = tempfile::tempdir().unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &format!("worktrees::tests::{name}")])
+            .env("HANGAR_T4_ISOLATED", name).env("HOME", home.path()).env("USERPROFILE", home.path())
+            .env("XDG_CONFIG_HOME", home.path().join("config")).env("XDG_CACHE_HOME", home.path().join("cache"))
+            .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" }).env("GIT_CONFIG_NOSYSTEM", "1")
+            .env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").env_remove("GIT_INDEX_FILE").output().unwrap();
+        assert!(output.status.success(), "{name}: {}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        true
+    }
+
+    fn fixture_git(cwd: &Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git").arg("-C").arg(cwd)
+            .args(["-c", "core.hooksPath=", "-c", "commit.gpgSign=false", "-c", "user.name=Teste", "-c", "user.email=teste@example.invalid"])
+            .args(args).env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
+            .env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_TERMINAL_PROMPT", "0").output().unwrap();
+        assert!(output.status.success(), "{args:?}: {}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+
+    fn published_fixture(root: &Path, source: &str, remote: &str) -> (PathBuf, PathBuf) {
+        let repo = root.join("repo");
+        let feature = root.join("feature");
+        std::fs::create_dir(&repo).unwrap();
+        fixture_git(&repo, &["init", "-b", "main"]);
+        fixture_git(&repo, &["commit", "--allow-empty", "-m", "Inicial"]);
+        let origin = root.join("origin.git");
+        fixture_git(root, &["init", "--bare", "-b", "main", origin.to_str().unwrap()]);
+        fixture_git(&repo, &["remote", "add", remote, origin.to_str().unwrap()]);
+        fixture_git(&repo, &["push", "-u", remote, "main"]);
+        fixture_git(&repo, &["branch", "server"]);
+        fixture_git(&repo, &["push", remote, "server"]);
+        let base = if source == "remote-main" { "main" } else { "server" };
+        let start = if source == "local-server" { "server".to_owned() } else { format!("{remote}/{base}") };
+        fixture_git(&repo, &["worktree", "add", "--no-track", "-b", "feature", feature.to_str().unwrap(), &start]);
+        std::fs::write(feature.join("feature.txt"), "Implementação\n").unwrap();
+        fixture_git(&feature, &["add", "feature.txt"]);
+        fixture_git(&feature, &["commit", "-m", "Implementação"]);
+        let integration = root.join("integration");
+        fixture_git(&repo, &["worktree", "add", "--detach", integration.to_str().unwrap(), &format!("{remote}/{base}")]);
+        fixture_git(&integration, &["merge", "--no-ff", "-m", "Integração", "feature"]);
+        fixture_git(&integration, &["push", remote, &format!("HEAD:{base}")]);
+        (repo, feature)
+    }
+
+    fn creation_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = real(dir.path());
+        let repo = root.join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        fixture_git(&repo, &["init", "-b", "main"]);
+        fixture_git(&repo, &["config", "core.hooksPath", ""]);
+        std::fs::write(repo.join("tracked.txt"), "linha original\n").unwrap();
+        fixture_git(&repo, &["add", "tracked.txt"]);
+        fixture_git(&repo, &["commit", "-m", "Inicial"]);
+        fixture_git(&repo, &["branch", "feature"]);
+        let location = root.join("configured");
+        (dir, repo, location)
+    }
+
+    #[test]
+    fn t4_core_creation_preserves_dirty_source_and_rejects_occupied_invalid_and_foreign_targets() {
+        if t4_isolated("t4_core_creation_preserves_dirty_source_and_rejects_occupied_invalid_and_foreign_targets") { return; }
+        let (dir, repo, location) = creation_fixture();
+        let root = real(dir.path());
+        std::fs::write(repo.join("untracked.txt"), "keep").unwrap();
+        let same = git::create_worktree_at(&repo, "main", "same", &root, false, None, &location).unwrap();
+        assert_eq!(same, json!([repo, false]));
+        let made = git::create_worktree_at(&repo, "feature", "chat", &root, false, None, &location).unwrap();
+        let path = location.join("repo").join("chat");
+        assert_eq!(made, json!([path, true]));
+        assert_eq!(fixture_git(&path, &["branch", "--show-current"]), "feature");
+        assert_eq!(std::fs::read_to_string(repo.join("untracked.txt")).unwrap(), "keep");
+        git::remove_worktree(&repo, path.to_str().unwrap(), false).unwrap();
+        assert!(!path.exists());
+        std::fs::create_dir(&path).unwrap();
+        let occupied = git::create_worktree_at(&repo, "feature", "chat", &root, false, None, &location).unwrap_err();
+        assert_eq!((occupied.status, occupied.detail), (409, json!("destino da worktree já existe")));
+        let foreign = root.join("not-authorized");
+        std::fs::create_dir(&foreign).unwrap();
+        assert_eq!(git::create_worktree_at(&repo, "feature", "other", &foreign, false, None, &location).unwrap_err().status, 400);
+        for branch in ["nao-existe", "--detach"] {
+            assert_eq!(git::create_worktree_at(&repo, branch, "x", &root, false, None, &location).unwrap_err().status, 400);
+            assert!(!location.join("repo/x").exists());
+        }
+        for branch in ["-x", "com espaco", "a..b", "", "nova "] {
+            assert_eq!(git::create_worktree_at(&repo, branch, "invalid", &root, true, None, &location).unwrap_err().status, 400);
+            assert!(!location.join("repo/invalid").exists());
+        }
+        assert_eq!(git::create_worktree_at(&repo, "feature", "existing", &root, true, None, &location).unwrap_err().status, 409);
+        assert_eq!(git::create_worktree_at(&repo, "nova", "missing-base", &root, true, Some("ausente"), &location).unwrap_err().status, 400);
+        assert_eq!(fixture_git(&repo, &["branch", "--show-current"]), "main");
+    }
+
+    #[test]
+    fn t4_core_creation_serializes_same_branch_without_duplicate_registration() {
+        if t4_isolated("t4_core_creation_serializes_same_branch_without_duplicate_registration") { return; }
+        let (dir, repo, location) = creation_fixture();
+        let root = real(dir.path());
+        let barrier = std::sync::Barrier::new(2);
+        let results = std::thread::scope(|scope| {
+            let attempts = ["a", "b"].map(|name| {
+                let (repo, root, location, barrier) = (&repo, &root, &location, &barrier);
+                scope.spawn(move || {
+                    barrier.wait();
+                    git::create_worktree_at(repo, "feature", name, root, false, None, location)
+                })
+            });
+            attempts.map(|thread| thread.join().unwrap())
+        });
+        assert_eq!(results.iter().filter(|result| result.as_ref().is_ok_and(|value| value[1] == true)).count(), 1);
+        assert_eq!(results.iter().filter(|result| result.as_ref().is_err_and(|error| error.status == 409)).count(), 1);
+        assert_eq!(fixture_git(&repo, &["worktree", "list", "--porcelain"]).matches("branch refs/heads/feature").count(), 1);
+    }
+
+    #[test]
+    fn t4_core_creation_records_base_copies_only_small_ignored_files_and_preserves_versioned_content() {
+        if t4_isolated("t4_core_creation_records_base_copies_only_small_ignored_files_and_preserves_versioned_content") { return; }
+        let (dir, repo, location) = creation_fixture();
+        let root = real(dir.path());
+        std::fs::write(repo.join(".gitignore"), ".env\nlocal.ini\nbig.bin\ncache/\n").unwrap();
+        std::fs::write(repo.join("local.ini"), "versioned").unwrap();
+        fixture_git(&repo, &["add", ".gitignore"]);
+        fixture_git(&repo, &["add", "-f", "local.ini"]);
+        fixture_git(&repo, &["commit", "-m", "ignore"]);
+        fixture_git(&repo, &["branch", "-f", "feature"]);
+        fixture_git(&repo, &["rm", "--cached", "local.ini"]);
+        fixture_git(&repo, &["commit", "-m", "untrack"]);
+        std::fs::write(repo.join("local.ini"), "main-local").unwrap();
+        std::fs::write(repo.join(".env"), "SECRET=1").unwrap();
+        std::fs::write(repo.join("big.bin"), vec![b'x';1024 * 1024 + 1]).unwrap();
+        std::fs::create_dir(repo.join("cache")).unwrap();
+        std::fs::write(repo.join("cache/a"), "a").unwrap();
+        let first = git::create_worktree_at(&repo, "feature", "a", &root, false, None, &location).unwrap();
+        let first = Path::new(first[0].as_str().unwrap());
+        std::fs::write(first.join(".env"), "FROM-WORKTREE").unwrap();
+        let next = git::create_worktree_at(first, "nova", "b", &root, true, Some("feature"), &location).unwrap();
+        let next = Path::new(next[0].as_str().unwrap());
+        assert_eq!(next, location.join("repo/b"));
+        assert_eq!(fixture_git(next, &["branch", "--show-current"]), "nova");
+        assert_eq!(fixture_git(next, &["config", "--get", "branch.nova.hangar-base"]), "feature");
+        assert_eq!(std::fs::read_to_string(next.join(".env")).unwrap(), "SECRET=1");
+        assert_eq!(std::fs::read_to_string(next.join("local.ini")).unwrap(), "versioned");
+        assert!(!next.join("big.bin").exists());
+        assert!(!next.join("cache").exists());
+        let default = git::create_worktree_at(&repo, "default-base", "default", &root, true, None, &location).unwrap();
+        assert_eq!(fixture_git(Path::new(default[0].as_str().unwrap()), &["config", "--get", "branch.default-base.hangar-base"]), "main");
+    }
+
+    #[test]
+    fn t4_core_creation_from_remote_base_does_not_track_it() {
+        if t4_isolated("t4_core_creation_from_remote_base_does_not_track_it") { return; }
+        let (dir, repo, location) = creation_fixture();
+        let root = real(dir.path());
+        let remote = root.join("upstream.git");
+        fixture_git(&root, &["clone", "--bare", repo.to_str().unwrap(), remote.to_str().unwrap()]);
+        fixture_git(&remote, &["branch", "only-remote", "main"]);
+        fixture_git(&repo, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        fixture_git(&repo, &["fetch", "origin"]);
+        let made = git::create_worktree_at(&repo, "nova", "new", &root, true, Some("only-remote"), &location).unwrap();
+        let path = Path::new(made[0].as_str().unwrap());
+        assert_eq!(fixture_git(path, &["config", "--get", "branch.nova.hangar-base"]), "only-remote");
+        assert_eq!(git::command(path, &["config", "--get", "branch.nova.remote"]).unwrap().code, 1);
+        let tracked = git::create_worktree_at(&repo, "only-remote", "remote", &root, false, None, &location).unwrap();
+        assert_eq!(fixture_git(Path::new(tracked[0].as_str().unwrap()), &["branch", "--show-current"]), "only-remote");
+    }
+
+    #[test]
+    fn t4_core_low_level_remove_and_disk_diff_preserve_their_contracts() {
+        if t4_isolated("t4_core_low_level_remove_and_disk_diff_preserve_their_contracts") { return; }
+        for force in [false, true] {
+            let (dir, repo, location) = creation_fixture();
+            let root = real(dir.path());
+            let made = git::create_worktree_at(&repo, "feature", "dirty", &root, false, None, &location).unwrap();
+            let path = Path::new(made[0].as_str().unwrap());
+            std::fs::write(path.join("sujo.txt"), "não versionado\n").unwrap();
+            let result = git::remove_worktree(&repo, path.to_str().unwrap(), force);
+            assert_eq!(result.is_ok(), force);
+            if let Err(error) = result { assert_eq!(error.status, 500); }
+            assert_eq!(path.exists(), !force);
+            let head = fixture_git(&repo, &["rev-parse", "HEAD"]);
+            std::fs::write(repo.join("tracked.txt"), "linha original\nlinha nova nao commitada\n").unwrap();
+            let diff = git::diff_worktree(&repo, &head).unwrap();
+            assert!(diff["diff"].as_str().unwrap().contains("+linha nova nao commitada"));
+            assert_ne!(git::commit_diff(&repo, &head).unwrap()["diff"], diff["diff"]);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn t4_core_reflog_read_failure_cannot_prove_merge() {
+        use std::os::unix::fs::PermissionsExt;
+        if std::env::var_os("HANGAR_T4_REFLOG_FAILURE").is_none() {
+            let dir = tempfile::tempdir().unwrap();
+            let bin = dir.path().join("bin");
+            let home = dir.path().join("home");
+            std::fs::create_dir(&bin).unwrap();
+            std::fs::create_dir(&home).unwrap();
+            let git = std::env::split_paths(&std::env::var_os("PATH").unwrap()).map(|path| path.join("git"))
+                .find(|path| path.is_file()).unwrap().canonicalize().unwrap();
+            let wrapper = bin.join("git");
+            std::fs::write(&wrapper, format!("#!/bin/sh\nfor arg do\n  if [ \"$arg\" = reflog ]; then printf '%s\\n' 'Falha ao ler o reflog' >&2; exit 128; fi\ndone\nexec '{}' \"$@\"\n", git.to_string_lossy().replace('\'', "'\\''"))).unwrap();
+            std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "worktrees::tests::t4_core_reflog_read_failure_cannot_prove_merge"])
+                .env("HANGAR_T4_REFLOG_FAILURE", "1")
+                .env("PATH", std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap()))).unwrap())
+                .env("HOME", &home).env("USERPROFILE", &home)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").output().unwrap();
+            assert!(child.status.success(), "{}{}", String::from_utf8_lossy(&child.stdout), String::from_utf8_lossy(&child.stderr));
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (_repo, feature) = published_fixture(dir.path(), "remote-main", "origin");
+        assert_eq!(git::command(&feature, &["reflog", "show", "--format=%gs", "refs/heads/feature"]).unwrap().code, 128);
+        let status = status_of(feature.to_str().unwrap(), &[], false, &[]);
+        assert_eq!(status["base"], "origin/main");
+        assert_eq!(status["merged"], false);
+        assert_eq!(status["degraded"], true);
+    }
+
+    #[cfg(unix)]
+    fn t4_timeout_process(name: &str, command: &str) -> bool {
+        use std::os::unix::fs::PermissionsExt;
+        if std::env::var("HANGAR_T4_TIMEOUT_TEST").as_deref() == Ok(name) { return false; }
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        let home = dir.path().join("home");
+        std::fs::create_dir(&bin).unwrap();
+        std::fs::create_dir(&home).unwrap();
+        let marker = dir.path().join("armed");
+        let fifo = dir.path().join("command-fifo");
+        let path = std::ffi::CString::new(fifo.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+        let git = std::env::split_paths(&std::env::var_os("PATH").unwrap()).map(|path| path.join("git"))
+            .find(|path| path.is_file()).unwrap().canonicalize().unwrap();
+        let wrapper = bin.join("git");
+        std::fs::write(&wrapper, format!("#!/bin/sh\nif [ -e '{}' ]; then\n  for arg do\n    if [ \"$arg\" = '{command}' ]; then IFS= read -r line < '{}'; exit 0; fi\n  done\nfi\nexec '{}' \"$@\"\n", marker.display(), fifo.display(), git.to_string_lossy().replace('\'', "'\\''"))).unwrap();
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &format!("worktrees::tests::{name}")])
+            .env("HANGAR_T4_TIMEOUT_TEST", name).env("HANGAR_T4_TIMEOUT_MARKER", marker)
+            .env("PATH", std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap()))).unwrap())
+            .env("HOME", &home).env("USERPROFILE", &home).env("XDG_CONFIG_HOME", home.join("config"))
+            .env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1")
+            .env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").env_remove("GIT_INDEX_FILE").output().unwrap();
+        assert!(output.status.success(), "{name}: {}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        true
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn t4_remaining_status_timeout_504_degrades_list_without_hiding_local_work() {
+        if t4_timeout_process("t4_remaining_status_timeout_504_degrades_list_without_hiding_local_work", "status") { return; }
+        let (dir, repo, location) = creation_fixture();
+        let root = real(dir.path());
+        let made = git::create_worktree_at(&repo, "feature", "status-timeout", &root, false, None, &location).unwrap();
+        let path = Path::new(made[0].as_str().unwrap());
+        std::fs::write(path.join("solto.txt"), "?").unwrap();
+        std::fs::write(std::env::var_os("HANGAR_T4_TIMEOUT_MARKER").unwrap(), "armed").unwrap();
+        let failure = git::command(path, &["status", "--porcelain"]).err().expect("o comando bloqueado deveria vencer o prazo");
+        assert_eq!(failure.status, 504);
+        assert_eq!(failure.detail, "git timeout");
+        let rows = list_all(&[text(&repo)], &[], Some(&[text(&root)]), None, false, &[]);
+        let status = &rows[0]["worktrees"][0];
+        assert_eq!(status["dirty"], 0);
+        assert_eq!(status["degraded"], true);
+        assert_eq!(status["merged"], false);
+        assert_eq!(std::fs::read_to_string(path.join("solto.txt")).unwrap(), "?");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn t4_remaining_ancestry_timeout_504_revokes_merge_and_prevents_removal() {
+        if t4_timeout_process("t4_remaining_ancestry_timeout_504_revokes_merge_and_prevents_removal", "rev-list") { return; }
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, feature) = published_fixture(dir.path(), "remote-main", "origin");
+        let path = feature.to_str().unwrap();
+        let healthy = status_of(path, &[], false, &[]);
+        assert_eq!(healthy["merged"], true);
+        assert_eq!(healthy["degraded"], false);
+        std::fs::write(std::env::var_os("HANGAR_T4_TIMEOUT_MARKER").unwrap(), "armed").unwrap();
+        let failure = git::command(&feature, &["rev-list", "--left-right", "--count", "origin/main...refs/heads/feature"]).err().expect("a prova bloqueada deveria vencer o prazo");
+        assert_eq!(failure.status, 504);
+        assert_eq!(failure.detail, "git timeout");
+        let status = status_of(path, &[], false, &[]);
+        assert_eq!(status["merged"], false);
+        assert_eq!(status["degraded"], true);
+        let removed = crate::worktree_cleanup::remove(repo.to_str().unwrap(), path, &[], &[], dir.path(),
+            crate::worktree_cleanup::RemoveOptions { merged_only:true, ..Default::default() });
+        assert_eq!(removed.unwrap_err().status, 409);
+        assert!(feature.join("feature.txt").exists());
+    }
+
+    #[test]
+    fn t4_remaining_deleted_work_branch_upstream_cannot_prove_merge() {
+        if t4_isolated("t4_remaining_deleted_work_branch_upstream_cannot_prove_merge") { return; }
+        let dir = tempfile::tempdir().unwrap();
+        let root = real(dir.path());
+        let remote = root.join("remote");
+        std::fs::create_dir(&remote).unwrap();
+        fixture_git(&remote, &["init", "-b", "main"]);
+        fixture_git(&remote, &["commit", "--allow-empty", "-m", "Inicial"]);
+        fixture_git(&remote, &["branch", "x"]);
+        let repo = root.join("clone");
+        fixture_git(&root, &["clone", remote.to_str().unwrap(), repo.to_str().unwrap()]);
+        fixture_git(&repo, &["switch", "x"]);
+        std::fs::write(repo.join("a.txt"), "Não integrada\n").unwrap();
+        fixture_git(&repo, &["add", "a.txt"]);
+        fixture_git(&repo, &["commit", "-m", "Não integrada"]);
+        fixture_git(&repo, &["switch", "main"]);
+        let x = root.join("repo-x");
+        fixture_git(&repo, &["worktree", "add", x.to_str().unwrap(), "x"]);
+        assert_eq!(status_of(x.to_str().unwrap(), &[], false, &[])["merged"], false);
+        fixture_git(&remote, &["branch", "-D", "x"]);
+        fixture_git(&repo, &["fetch", "--prune"]);
+        assert_ne!(git::command(&repo, &["show-ref", "--verify", "refs/remotes/origin/x"]).unwrap().code, 0);
+        assert_eq!(fixture_git(&repo, &["for-each-ref", "--format=%(upstream)", "refs/heads/x"]), "refs/remotes/origin/x");
+        let status = status_of(x.to_str().unwrap(), &[], false, &[]);
+        assert_eq!(status["merged"], false);
+        assert_eq!(status["ahead"], 1);
+        assert_eq!(std::fs::read_to_string(x.join("a.txt")).unwrap(), "Não integrada\n");
+    }
+
+    #[test]
+    fn t4_status_list_detail_sessions_and_closed_conversations_share_identity() {
+        if t4_isolated("t4_status_list_detail_sessions_and_closed_conversations_share_identity") { return; }
+        let (dir, repo, location) = creation_fixture();
+        let root = real(dir.path());
+        std::fs::write(repo.join(".gitignore"), ".env\nnotas.txt\nnode_modules/\n").unwrap();
+        fixture_git(&repo, &["add", ".gitignore"]);
+        fixture_git(&repo, &["commit", "-m", "ignore"]);
+        fixture_git(&repo, &["branch", "-f", "feature"]);
+        std::fs::write(repo.join(".env"), "S=1").unwrap();
+        let made = git::create_worktree_at(&repo, "feature", "status", &root, false, None, &location).unwrap();
+        let path = made[0].as_str().unwrap();
+        fixture_git(Path::new(path), &["config", "branch.feature.hangar-base", "main"]);
+        assert_eq!(status_of(path, &[], false, &[])["merged"], false);
+        std::fs::write(Path::new(path).join("a.txt"), "a").unwrap();
+        fixture_git(Path::new(path), &["add", "a.txt"]);
+        fixture_git(Path::new(path), &["commit", "-m", "a.txt"]);
+        std::fs::write(Path::new(path).join("solto.txt"), "?").unwrap();
+        std::fs::write(Path::new(path).join("notas.txt"), "minha").unwrap();
+        let projects = root.join("projects");
+        let project = projects.join(sanitize_cwd(path));
+        std::fs::create_dir_all(&project).unwrap();
+        let closed = project.join("d0000001-0000-4000-8000-000000000000.jsonl");
+        let live = project.join("d0000003-0000-4000-8000-000000000000.jsonl");
+        std::fs::write(&closed, "{}\n").unwrap();
+        std::fs::write(&live, "{}\n").unwrap();
+        std::fs::write(project.join("d0000003-0000-4000-8000-000000000000.from-account.jsonl"), "{}\n").unwrap();
+        let sessions = [Session { name:"s1".into(), cwd:Some(text(&repo)), worktree_path:Some(path.into()), jsonl:Some(text(&live)), ..Default::default() }];
+        let bases = [text(&projects)];
+        let status = status_of(path, &sessions, false, &bases);
+        for (key, expected) in [("branch",json!("feature")),("base",json!("main")),("ahead",json!(1)),
+            ("merged",json!(false)),("dirty",json!(1)),("ignored",json!(["notas.txt"])),
+            ("sessions",json!(["s1"])),("closed",json!(1)),("exists",json!(true)),("repo",json!(repo))] {
+            assert_eq!(status[key], expected, "{key}: {status}");
+        }
+        fixture_git(&repo, &["switch", "-c", "dev"]);
+        let status = status_of(path, &sessions, false, &bases);
+        assert_eq!(status["base"], "main");
+        assert_eq!(status["main_branch"], "dev");
+        let roots = [text(&root)];
+        let rows = list_all(&[text(&repo),path.into()], &sessions, Some(&roots), None, false, &bases);
+        assert_eq!(rows.as_array().unwrap().len(), 1);
+        assert_eq!(rows[0]["worktrees"].as_array().unwrap().len(), 1);
+        assert_eq!(rows[0]["worktrees"][0]["closed"], 1);
+        assert_eq!(list_all(&[], &sessions, Some(&roots), Some(path), false, &bases)[0]["repo"], json!(repo));
+        let foreign = root.join("other-root");
+        std::fs::create_dir(&foreign).unwrap();
+        assert_eq!(list_all(&[path.into()], &[], Some(&[text(&foreign)]), None, false, &[]), json!([]));
+        assert_eq!(status_allowed(path, &[text(&foreign)], &[], false, &[]).unwrap_err().status, 403);
+        assert_eq!(status_allowed(foreign.to_str().unwrap(), &roots, &[], false, &[]).unwrap_err().status, 404);
+    }
+
+    #[test]
+    fn t4_status_relative_pointers_keep_main_and_registration_identity() {
+        if t4_isolated("t4_status_relative_pointers_keep_main_and_registration_identity") { return; }
+        let (dir, repo, _location) = creation_fixture();
+        let wt = real(dir.path()).join("repo-x");
+        fixture_git(&repo, &["worktree", "add", wt.to_str().unwrap(), "feature"]);
+        std::fs::create_dir(wt.join("sub")).unwrap();
+        assert_eq!(repo_root_of(wt.join("sub").to_str().unwrap()).as_deref(), wt.to_str());
+        std::fs::write(wt.join(".git"), "gitdir: ../repo/.git/worktrees/repo-x\n").unwrap();
+        std::fs::write(repo.join(".git/worktrees/repo-x/gitdir"), "../../../../repo-x/.git\n").unwrap();
+        assert_eq!(main_repo_of(wt.to_str().unwrap()), text(&repo));
+        assert_eq!(main_repo_of(repo.to_str().unwrap()), text(&repo));
+        assert_eq!(worktree_paths(repo.to_str().unwrap()), [text(&wt)]);
+    }
+
+    #[test]
+    fn t4_status_missing_nested_registration_and_equal_tips_are_protected() {
+        if t4_isolated("t4_status_missing_nested_registration_and_equal_tips_are_protected") { return; }
+        let (dir, repo, _location) = creation_fixture();
+        let wt = repo.join(".claude").join("worktrees").join("nested");
+        fixture_git(&repo, &["worktree", "add", wt.to_str().unwrap(), "feature"]);
+        let path = wt.to_str().unwrap();
+        let fresh = status_of(path, &[], false, &[]);
+        assert_eq!(fresh["merged"], false);
+        assert_eq!((fresh["ahead"].as_u64(), fresh["behind"].as_u64()), (Some(0), Some(0)));
+        fixture_git(&wt, &["commit", "--allow-empty", "-m", "feature"]);
+        assert_eq!(status_of(path, &[], false, &[])["merged"], false);
+        fixture_git(&repo, &["merge", "--no-ff", "-m", "Integração", "feature"]);
+        assert_eq!(status_of(path, &[], false, &[])["merged"], true);
+        std::fs::remove_dir_all(&wt).unwrap();
+        let missing = status_of(path, &[], false, &[]);
+        assert_eq!(missing["exists"], false);
+        assert_eq!(missing["repo"], json!(repo));
+        assert_eq!(missing["branch"], "feature");
+        let roots = [text(&real(dir.path()))];
+        let listed = list_all(&[text(&repo)], &[], Some(&roots), None, false, &[]);
+        assert_eq!(listed[0]["worktrees"][0]["repo"], json!(repo));
+        assert_eq!(listed[0]["worktrees"][0]["branch"], "feature");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn t4_status_aliases_deduplicate_repositories_and_match_live_sessions() {
+        if t4_isolated("t4_status_aliases_deduplicate_repositories_and_match_live_sessions") { return; }
+        let (dir, repo, location) = creation_fixture();
+        let root = real(dir.path());
+        let made = git::create_worktree_at(&repo, "feature", "alias", &root, false, None, &location).unwrap();
+        let path = made[0].as_str().unwrap();
+        let link = root.join("link");
+        std::os::unix::fs::symlink(&root, &link).unwrap();
+        let alias = link.join(Path::new(path).strip_prefix(&root).unwrap());
+        let session = Session { name:"s1".into(), cwd:Some(text(&alias)), ..Default::default() };
+        assert_eq!(status_of(path, &[session], false, &[])["sessions"], json!(["s1"]));
+        let rows = list_all(&[text(&repo),text(&link.join("repo")),path.into()], &[], Some(&[text(&root)]), None, false, &[]);
+        assert_eq!(rows.as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn t4_seventeen_creation_bases_use_published_history() {
+        if t4_isolated("t4_seventeen_creation_bases_use_published_history") { return; }
+        // Esperados literais de test_worktree_merge_base.py, sem eleger a base pelo candidato.
+        let cases = [
+            ("remote-main", None, "", "origin", "origin/main", true, false),
+            ("remote-server", None, "", "origin", "origin/server", true, false),
+            ("local-server", None, "", "origin", "origin/server", true, false),
+            ("remote-server", Some("server"), "", "origin", "origin/server", true, false),
+            ("remote-server", Some("origin/server"), "", "origin", "origin/server", true, false),
+            ("remote-server", Some("main"), "", "origin", "origin/main", false, false),
+            ("remote-server", None, "expire", "origin", "origin/main", false, false),
+            ("remote-server", None, "switch", "origin", "origin/server", true, false),
+            ("remote-server", None, "new-commit", "origin", "origin/server", false, false),
+            ("remote-server", None, "missing", "origin", "origin/server", false, true),
+            ("remote-server", Some("origin/missing"), "", "origin", "origin/missing", false, true),
+            ("local-server", Some("server"), "", "team", "team/server", true, false),
+            ("remote-server", None, "tag", "origin", "refs/remotes/origin/server", true, false),
+            ("remote-server", Some("main"), "tag-main", "origin", "refs/remotes/origin/main", false, false),
+            ("local-server", None, "ambiguous", "origin", "server", false, true),
+            ("local-server", None, "upstream", "origin", "origin/server", true, false),
+            ("remote-server", None, "track", "origin", "origin/server", true, false),
+        ];
+        assert_eq!(cases.len(), 17);
+        for (index, (source, configured, action, remote, base, merged, degraded)) in cases.into_iter().enumerate() {
+            let dir = tempfile::tempdir().unwrap();
+            let (repo, feature) = published_fixture(dir.path(), source, remote);
+            if let Some(base) = configured { fixture_git(&repo, &["config", "branch.feature.hangar-base", base]); }
+            match action {
+                "expire" => { fixture_git(&repo, &["reflog", "expire", "--expire=all", "refs/heads/feature"]); }
+                "switch" => { fixture_git(&repo, &["switch", "-c", "unrelated", &format!("{remote}/server")]); }
+                "new-commit" => {
+                    std::fs::write(feature.join("pending.txt"), "Não integrada\n").unwrap();
+                    fixture_git(&feature, &["add", "pending.txt"]);
+                    fixture_git(&feature, &["commit", "-m", "Ainda em andamento"]);
+                }
+                "track" => { fixture_git(&repo, &["branch", "--set-upstream-to=origin/server", "feature"]); }
+                "missing" => { fixture_git(&repo, &["update-ref", "-d", &format!("refs/remotes/{remote}/server")]); }
+                "tag" => { fixture_git(&repo, &["tag", "origin/server", "main"]); }
+                "tag-main" => { fixture_git(&repo, &["tag", "origin/main", "refs/remotes/origin/server"]); }
+                "ambiguous" | "upstream" => {
+                    fixture_git(&repo, &["remote", "add", "team", dir.path().join("origin.git").to_str().unwrap()]);
+                    fixture_git(&repo, &["fetch", "team"]);
+                    if action == "upstream" { fixture_git(&repo, &["branch", "--set-upstream-to=origin/server", "server"]); }
+                }
+                _ => {}
+            }
+            let status = status_of(feature.to_str().unwrap(), &[], false, &[]);
+            assert_eq!(status["base"], base, "case {}: {status}", index + 1);
+            assert_eq!(status["merged"], merged, "case {}: {status}", index + 1);
+            assert_eq!(status["degraded"], degraded, "case {}: {status}", index + 1);
+            if merged { assert_eq!((status["ahead"].as_u64(), status["behind"].as_u64()), (Some(0), Some(1))); }
+            if action == "new-commit" { assert_eq!(status["ahead"], 1); }
+        }
+    }
+
+    #[test]
+    fn t4_tag_named_like_branch_does_not_hide_pending_commits() {
+        if t4_isolated("t4_tag_named_like_branch_does_not_hide_pending_commits") { return; }
+        let dir = tempfile::tempdir().unwrap();
+        let (repo, feature) = published_fixture(dir.path(), "remote-server", "origin");
+        fixture_git(&repo, &["tag", "feature", "feature"]);
+        std::fs::write(feature.join("pending.txt"), "Não integrada\n").unwrap();
+        fixture_git(&feature, &["add", "pending.txt"]);
+        fixture_git(&feature, &["commit", "-m", "Ainda em andamento"]);
+        let status = status_of(feature.to_str().unwrap(), &[], false, &[]);
+        assert_eq!(status["merged"], false);
+        assert_eq!(status["ahead"], 1);
+        assert_eq!(status["last_commit"]["subject"], "Ainda em andamento");
     }
 
     #[test]

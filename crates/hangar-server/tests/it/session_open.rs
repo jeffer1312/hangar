@@ -62,23 +62,6 @@ async fn the_private_claude_bridge_opens_what_entered_python_directly() {
     assert_eq!(refused["detail"]["code"], "erro_corpo_invalido");
 }
 
-/// O bastão do dono vai ao Python com a marca de que o Rust abre a sucessora Claude com terminal; a
-/// resposta sem a marca (outro provedor, recusa) volta como veio. Sem ser o dono, nada de marca.
-#[tokio::test]
-async fn the_owner_bastao_goes_to_python_marked_for_rust() {
-    let (fake, up) = spawn_fake().await;
-    let srv = spawn_server(config(up, "127.0.0.1")).await;
-    let post = |token: Option<&'static str>| {
-        let request = client().post(format!("http://{srv}/api/sessions/cc/bastao")).header("content-type", "application/json")
-            .header("x-hangar-open", "rust").body(r#"{"name":"cc2"}"#);
-        async move { (match token { Some(t) => request.bearer_auth(t), None => request }).send().await.unwrap() }
-    };
-    assert_eq!(post(Some(OWNER)).await.text().await.unwrap(), "from-python");
-    assert_eq!(fake.last_hit().1["x-hangar-open"], "rust");
-    post(None).await;
-    assert!(fake.last_hit().1.get("x-hangar-open").is_none(), "a marca de fora não passa");
-}
-
 /// O passo da criação é do Rust (o Python também cria pelo repasse dele): a rota responde daqui.
 #[tokio::test]
 async fn the_creation_progress_is_answered_by_rust() {

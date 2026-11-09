@@ -31,7 +31,7 @@ import { SlashSuggest } from './SlashSuggest';
 import { QueuePanel } from './QueuePanel';
 import { queueSendMode, type DeliveryFeedback, type QueueSendMode } from './queueDelivery';
 import { useDeliveryMode, useQueueDelivery } from './useQueueDelivery';
-import { readClipboard, type PickedAttachment } from '../ui/attachmentPicker';
+import { fromPastedFile, readClipboard, type PickedAttachment } from '../ui/attachmentPicker';
 import { AttachSheet } from '../ui/AttachSheet';
 
 import { AttachmentPreview } from '../ui/AttachmentPreview';
@@ -1599,10 +1599,7 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
   // Colar imagens ou arquivos no campo os acrescenta aos anexos, como o paste do PWA.
   const handlePaste = useCallback((files: PastedFile[], erro: string | null) => {
     if (erro) { setError(formataErro(erro) ?? erro); return; }
-    for (const f of files) {
-      const mime = f.type || 'application/octet-stream';
-      handlePicked({ uri: f.uri, name: f.fileName, mime, kind: mime.startsWith('image/') ? 'image' : 'file', size: f.fileSize });
-    }
+    for (const f of files) handlePicked(fromPastedFile(f));
   }, [handlePicked]);
 
   // O menu de segurar do campo no iOS não oferece Colar: o "+" cola pela área de transferência.

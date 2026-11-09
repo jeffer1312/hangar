@@ -35,9 +35,12 @@ fn registration(repo: &str, path: &str) -> Result<Registration> {
     let real_path = worktrees::registration_path(Path::new(path));
     for record in out.stdout.split("\0\0") {
         let fields = record.split('\0').collect::<Vec<_>>();
-        let Some(p) = fields.first().and_then(|f| f.strip_prefix("worktree ")) else {
+        let Some(listed) = fields.first().and_then(|f| f.strip_prefix("worktree ")) else {
             continue;
         };
+        // No Windows o git escreve `C:/...`; como o `os.path.normpath` do Python, o caminho que segue
+        // (chave do mapa de remoções, sessão aberta dentro dela) usa o separador do sistema.
+        let p = &worktrees::normpath(Path::new(listed)).to_string_lossy().into_owned();
         if !worktrees::same_path(&worktrees::registration_path(Path::new(p)), &real_path) {
             continue;
         }

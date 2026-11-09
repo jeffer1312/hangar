@@ -68,6 +68,8 @@ impl Drop for Pending {
 #[derive(Default)]
 pub struct Store {
     lines: Mutex<HashMap<String, Arc<Line>>>,
+    names: Mutex<HashMap<String, String>>,
+    legacy: Mutex<HashMap<String, String>>,
 }
 impl Store {
     pub fn new() -> Arc<Self> {
@@ -110,32 +112,74 @@ impl Store {
     }
     pub fn remove(&self, key: &str, line: &Arc<Line>) {
         let mut lines = self.lines.lock().unwrap_or_else(|e| e.into_inner());
-        if lines
-            .get(key)
-            .is_some_and(|current| Arc::ptr_eq(current, line))
-        {
-            lines.remove(key);
-        }
+        let _ = key;
+        lines.retain(|_, current| !Arc::ptr_eq(current, line));
         drop(lines);
         Self::cancel(line);
     }
     fn get(&self, key: &str) -> Option<Arc<Line>> {
-        self.lines
+        let canonical = self
+            .names
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(|error| error.into_inner())
             .get(key)
             .cloned()
+            .unwrap_or_else(|| key.into());
+        self.lines
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get(&canonical)
+            .cloned()
+    }
+    pub fn bind_session(&self, name: &str, key: &str, legacy: Option<&str>) {
+        self.names
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(name.into(), key.into());
+        if let Some(legacy) = legacy {
+            self.legacy
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .insert(key.into(), legacy.into());
+            let mut lines = self.lines.lock().unwrap_or_else(|error| error.into_inner());
+            if let Some(line) = lines.remove(legacy) {
+                if let Some(old) = lines.insert(key.into(), line.clone())
+                    && !Arc::ptr_eq(&old, &line)
+                {
+                    Self::cancel(&old);
+                }
+            }
+        }
+    }
+    pub fn rename_session(&self, old: &str, new: &str, key: &str) {
+        let mut names = self.names.lock().unwrap_or_else(|error| error.into_inner());
+        if names.get(old).is_some_and(|current| current == key) {
+            names.remove(old);
+        }
+        names.insert(new.into(), key.into());
     }
     pub fn has_line(&self, key: &str) -> bool {
-        self.get(key).is_some()
+        self.get(key).is_some_and(|line| !line.outgoing.is_closed())
     }
     pub fn line_for(&self, name: Option<&str>, pane: Option<&str>) -> Option<String> {
+        if let Some(name) = name.filter(|name| !name.is_empty())
+            && self
+                .names
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .contains_key(name)
+        {
+            return self.has_line(name).then(|| name.into());
+        }
         name.filter(|v| !v.is_empty() && self.has_line(v))
             .or_else(|| pane.filter(|v| !v.is_empty() && self.has_line(v)))
             .map(str::to_owned)
     }
     pub fn respond(&self, key: &str, message: &Value) {
         let Some(line) = self.get(key) else { return };
+        Self::respond_registered(&line, message);
+    }
+    pub fn respond_registered(line: &Arc<Line>, message: &Value) {
         let Some(id) = message["id"].as_str().filter(|v| !v.is_empty()) else {
             return;
         };
@@ -188,6 +232,17 @@ impl Store {
             .remove(&id);
         result
     }
+    pub fn registered(&self, key: &str) -> Option<Arc<Line>> {
+        self.get(key)
+    }
+    pub async fn deliver_registered(
+        &self,
+        line: Arc<Line>,
+        text: &str,
+        id: Option<&str>,
+    ) -> &'static str {
+        self.deliver_line("", line, text, id, ACK_TIMEOUT).await
+    }
     pub async fn deliver(&self, key: &str, text: &str, id: Option<&str>) -> &'static str {
         self.deliver_for(key, text, id, ACK_TIMEOUT).await
     }
@@ -201,10 +256,29 @@ impl Store {
         let Some(line) = self.get(key) else {
             return "sem-linha";
         };
+        self.deliver_line(key, line, text, id, deadline).await
+    }
+    async fn deliver_line(
+        &self,
+        key: &str,
+        line: Arc<Line>,
+        text: &str,
+        id: Option<&str>,
+        deadline: Duration,
+    ) -> &'static str {
         // Sem vez na linha dentro do prazo, nada sai: a ponte do Python desiste antes e a fila reenviaria.
         let Ok(_serial) = tokio::time::timeout(deadline, line.serial.lock()).await else {
             return "deferred";
         };
+        if !self
+            .lines
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .values()
+            .any(|current| Arc::ptr_eq(current, &line))
+        {
+            return "sem-linha";
+        }
         let id = id
             .filter(|v| !v.is_empty())
             .map(str::to_owned)
@@ -362,7 +436,7 @@ async fn connection(store: Arc<Store>, mut socket: WebSocket, interval: Duration
           inbound=tokio::time::timeout_at(heartbeat,socket.recv())=>{
             match inbound{
               Err(_)=>{heartbeat=tokio::time::Instant::now()+interval;unanswered+=1;if unanswered>2{close(&mut socket,1000).await;break;}if socket.send(Message::Text(json!({"ping":true}).to_string().into())).await.is_err(){break;}}
-              Ok(Some(Ok(Message::Text(text))))=>{heartbeat=tokio::time::Instant::now()+interval;unanswered=0;if !message_fits(&text){close(&mut socket,1009).await;break;}let Some(value)=crate::transcript::pyjson::loads_lossless(&text)else{break};if !super::pure::truthy(&value["ping"])&&!super::pure::truthy(&value["pong"]){store.respond(&key,&value);}}
+              Ok(Some(Ok(Message::Text(text))))=>{heartbeat=tokio::time::Instant::now()+interval;unanswered=0;if !message_fits(&text){close(&mut socket,1009).await;break;}let Some(value)=crate::transcript::pyjson::loads_lossless(&text)else{break};if !super::pure::truthy(&value["ping"])&&!super::pure::truthy(&value["pong"]){Store::respond_registered(&line,&value);}}
               Ok(Some(Ok(Message::Ping(data))))=>{heartbeat=tokio::time::Instant::now()+interval;unanswered=0;if socket.send(Message::Pong(data)).await.is_err(){break;}}
               Ok(Some(Ok(Message::Pong(_))))=>{heartbeat=tokio::time::Instant::now()+interval;unanswered=0;}
               _=>break,
@@ -371,45 +445,6 @@ async fn connection(store: Arc<Store>, mut socket: WebSocket, interval: Duration
         }
     }
     store.remove(&key, &line);
-}
-
-/// Transporte privado para os emissores que ainda vivem no Python; o estado da linha só existe aqui.
-pub async fn private(st: &Arc<AppState>, peer: SocketAddr, request: Request) -> Response {
-    if !crate::terminal_routes::trusted_internal(st, peer, request.headers()) {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    let bytes = match axum::body::to_bytes(request.into_body(), MAX_MESSAGE).await {
-        Ok(v) => v,
-        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
-    };
-    let value: Value = match std::str::from_utf8(&bytes).ok().and_then(crate::transcript::pyjson::loads_lossless) {
-        Some(v) => v,
-        None => return StatusCode::BAD_REQUEST.into_response(),
-    };
-    match call(value).await {
-        Ok(value) => crate::session_write::json_response(StatusCode::OK, value),
-        Err(error) => error.response(),
-    }
-}
-
-/// A ponte existente da lista chama este dispatcher no processo do Rust.
-pub async fn call(value: Value) -> Result<Value, super::ModelError> {
-    let s = |key: &str| value[key].as_str().unwrap_or("");
-    let result = match s("op") {
-        "line" => json!({"line":INBOX.line_for(value["name"].as_str(),value["pane"].as_str())}),
-        "has_line" => json!({"present":INBOX.has_line(s("key"))}),
-        "question" => json!({"value":INBOX.question(s("key"),s("what")).await}),
-        "deliver" => {
-            json!({"disposition":INBOX.deliver(s("key"),s("text"),value["msg_id"].as_str()).await})
-        }
-        _ => {
-            return Err(super::ModelError::text(
-                400,
-                "operação da extensão desconhecida",
-            ));
-        }
-    };
-    Ok(result)
 }
 
 pub fn write_endpoint(

@@ -5,8 +5,9 @@ set -euo pipefail
 # Sem isso o `die` dentro de $(...) não para quem chamou: o erro seguia adiante como saída vazia.
 shopt -s inherit_errexit
 
-USAGE="uso: wda.sh status | login [apple-id] | install | renew [--force] | bundle"
+USAGE="uso: wda.sh status | login [apple-id] | install | renew [--force] | bundle | device"
 KIT="${IOS_CTL:-$HOME/Applications/ios-ctl}"
+TUNNELD="${PMD3_TUNNELD:-127.0.0.1:49151}"
 CFG="${XDG_CONFIG_HOME:-$HOME/.config}/PlumeImpactor"
 BASE_IPA="${WDA_IPA:-$KIT/wda-base.ipa}"
 RENEW_DAYS="${WDA_RENEW_DAYS:-3}"
@@ -28,27 +29,34 @@ pmd() {
 	pymobiledevice3 "$@" 2>"$TMP/pmd.err" || { tail -3 "$TMP/pmd.err" >&2; die "pymobiledevice3 $1 $2 falhou (iPhone desbloqueado e confiando neste computador?)"; }
 }
 
-device_udid() {
-	if [ -n "${UDID:-}" ]; then echo "$UDID"; return; fi
-	local json list n
-	json=$(pmd usbmux list)
-	list=$(printf '%s' "$json" | python3 -I -c 'import json,sys; [print(d["Identifier"]) for d in json.load(sys.stdin) if d.get("ConnectionType")=="USB"]')
-	n=$(printf '%s' "$list" | grep -c . || true)
-	[ "$n" = 1 ] || die "preciso de exatamente 1 iPhone no cabo (achei $n); ou defina UDID=<udid>"
-	echo "$list"
+count() { grep -c . <<<"$1" || true; }
+
+# Define $udid e $DEV (como o pymobiledevice3 alcança o aparelho). O cabo vence; sem cabo, vale o
+# único iPhone que o tunneld alcança pelo Wi-Fi. Sem usbmuxd (nada no cabo) o USB só conta zero.
+select_device() {
+	local usb wifi
+	usb=$(pymobiledevice3 usbmux list 2>/dev/null | python3 -I -c 'import json,sys; [print(d["Identifier"]) for d in json.load(sys.stdin) if d.get("ConnectionType")=="USB"]' 2>/dev/null || true)
+	wifi=$(curl -s -m 3 "http://$TUNNELD/" | python3 -I -c 'import json,sys; [print(u) for u in json.load(sys.stdin)]' 2>/dev/null || true)
+	if [ -n "${UDID:-}" ]; then
+		usb=$(grep -Fx "$UDID" <<<"$usb" || true)
+		wifi=$(grep -Fx "$UDID" <<<"$wifi" || true)
+	fi
+	if [ "$(count "$usb")" = 1 ]; then udid=$usb; DEV=(--udid "$udid"); return; fi
+	if [ -z "$usb" ] && [ "$(count "$wifi")" = 1 ]; then udid=$wifi; DEV=(--tunnel "$udid"); return; fi
+	die "preciso de exatamente 1 iPhone: achei $(count "$usb") no cabo (desbloqueado e confiando?) e $(count "$wifi") pelo Wi-Fi (tunneld de pé em $TUNNELD?); ou defina UDID=<udid>"
 }
 
 wda_installed() {
 	local out
 	# `exit` explícito: dentro de `if` o set -e não vale, e a falha viraria "não instalado".
-	out=$(pmd apps query "$BUNDLE" --udid "$1") || exit 1
+	out=$(pmd apps query "$BUNDLE" "${DEV[@]}") || exit 1
 	printf '%s' "$out" | grep -q CFBundleIdentifier
 }
 
 # Validade (em dias, com fração) do perfil mais novo do WDA instalado no aparelho; vazio se não houver.
 profile_days_left() {
 	local json
-	json=$(pmd provision list --udid "$1")
+	json=$(pmd provision list "${DEV[@]}")
 	printf '%s' "$json" | python3 -I -c '
 import json,sys,datetime
 app=sys.argv[1]
@@ -131,7 +139,11 @@ signing_cert() {
 }
 
 cmd="${1:-status}"
-case "$cmd" in bundle|login|status|install|renew) ;; *) die "$USAGE" ;; esac
+case "$cmd" in bundle|login|status|install|renew|device) ;; *) die "$USAGE" ;; esac
+
+if [ "$cmd" = device ]; then # "udid <udid>" no cabo, "tunnel <udid>" pelo Wi-Fi
+	select_device; echo "${DEV[0]#--} $udid"; exit
+fi
 
 if [ "$cmd" = login ]; then
 	email="${2:-}"
@@ -147,10 +159,10 @@ BUNDLE="com.facebook.WebDriverAgentRunner.xctrunner.$TEAM"
 case "$cmd" in
 bundle) echo "$BUNDLE" ;;
 status)
-	udid=$(device_udid)
-	echo "aparelho: $udid  time: $TEAM"
-	if wda_installed "$udid"; then
-		d=$(profile_days_left "$udid"); echo "WDA instalado; perfil vence em ${d:-?} dias"
+	select_device
+	echo "aparelho: $udid ($([ "${DEV[0]}" = --tunnel ] && echo Wi-Fi || echo cabo))  time: $TEAM"
+	if wda_installed; then
+		d=$(profile_days_left); echo "WDA instalado; perfil vence em ${d:-?} dias"
 	else
 		echo "WDA não instalado: rode 'wda.sh install'"
 	fi
@@ -159,9 +171,9 @@ status)
 	else echo "sessão da Apple: erro ao consultar:"; grep -v DEBUG "$TMP/session.log" | tail -2; fi
 	;;
 install)
-	udid=$(device_udid)
+	select_device
 	# A Apple devolve o aparelho já registrado sem erro, então registrar sempre é seguro.
-	name=$(pmd lockdown info --udid "$udid" | python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("DeviceName","iPhone"))')
+	name=$(pmd lockdown info "${DEV[@]}" | python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("DeviceName","iPhone"))')
 	"$PLUME" account register-device -t "$TEAM" -u "$udid" -n "$name" >"$TMP/register.log" 2>&1 \
 		|| { session_expired "$TMP/register.log" && ask_login; tail -5 "$TMP/register.log" >&2; die "não consegui registrar o aparelho na conta"; }
 	fetch_profile
@@ -178,20 +190,20 @@ install)
 	# o plumesign nem assina esse pacote, só serve para buscar o perfil.
 	"$KIT/zsign" -k "$CFG/keys/$TEAM/key.pem" -c "$cert" -m "$TMP/wda.mobileprovision" -b "$BUNDLE" -o "$TMP/wda.ipa" "$TMP/base.ipa" >"$TMP/zsign.log" 2>&1 \
 		|| { tail -5 "$TMP/zsign.log" >&2; die "zsign falhou"; }
-	pymobiledevice3 apps install "$TMP/wda.ipa" --udid "$udid"
+	pymobiledevice3 apps install "$TMP/wda.ipa" "${DEV[@]}"
 	echo "WDA instalado ($BUNDLE). No primeiro uso: Ajustes > Geral > VPN e Gerenciamento de Dispositivos > confiar no desenvolvedor."
 	;;
 renew)
 	[[ $RENEW_DAYS =~ ^[0-9]+([.][0-9]+)?$ ]] || die "WDA_RENEW_DAYS precisa ser um número de dias (está '$RENEW_DAYS')"
-	udid=$(device_udid)
-	wda_installed "$udid" || die "WDA não instalado: rode 'wda.sh install'"
-	d=$(profile_days_left "$udid")
+	select_device
+	wda_installed || die "WDA não instalado: rode 'wda.sh install'"
+	d=$(profile_days_left)
 	if [ "${2:-}" != --force ] && [ -n "$d" ] && python3 -I -c 'import sys; sys.exit(0 if float(sys.argv[1]) > float(sys.argv[2]) else 1)' "$d" "$RENEW_DAYS"; then
 		echo "perfil do WDA ok: vence em $d dias"; exit 0
 	fi
 	fetch_profile
 	# Só o perfil: o app instalado continua o mesmo, assinado pelo mesmo certificado, e volta a abrir.
-	pymobiledevice3 provision install "$TMP/wda.mobileprovision" --udid "$udid"
+	pymobiledevice3 provision install "$TMP/wda.mobileprovision" "${DEV[@]}"
 	echo "perfil renovado no aparelho"
 	;;
 esac

@@ -5,8 +5,6 @@ from app import codex_contas, costs_sources as cs
 
 def test_codex_cache_rele_so_rollout_alterado_e_remove_arquivo_ausente(tmp_path, monkeypatch):
     monkeypatch.setattr(cs, "_config_dirs", lambda: [])
-    for name in ("raiz_pi", "raiz_omp", "raiz_kimi"):
-        monkeypatch.setattr(cs, name, lambda: tmp_path / "ausente")
     account = codex_contas.Account("default", tmp_path, True)
     sessions = tmp_path / "sessions"
     sessions.mkdir()

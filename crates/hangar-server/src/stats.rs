@@ -1,4 +1,4 @@
-//! Faixa de estatísticas da conversa aberta (evento `stats`), porte das contas de Claude e Codex de
+//! Faixa de estatísticas da conversa aberta (evento `stats`), porte das contas de Claude, Codex, Pi, omp e Kimi de
 //! backend/app/stats.py. Lê o mesmo arquivo do transcript, incrementalmente: guarda o ponto de leitura
 //! e a cada coleta dobra só as linhas novas. Os tempos e velocidades são aproximados por construção (o
 //! cliente prefixa "~"); a medida exata do stream entra por cima (`RateStore`). O esperado vem de rodar o
@@ -10,6 +10,7 @@ use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::Duration;
 
 use indexmap::IndexMap;
+use num_bigint::BigInt;
 use serde_json::{Map, Value, json};
 
 use crate::side::{Binding, Hub};
@@ -21,7 +22,7 @@ pub const RECENT_CALLS: usize = 10;
 pub const MIN_GEN_S: f64 = 0.2;
 /// Gap acima disto não é trabalho, é sessão parada.
 const GAP_MAX_S: f64 = 3600.0;
-/// Ferramentas sem resultado guardadas; cheio, sai a mais velha (a que nunca fecha não trava a conta).
+/// Teto de ferramentas sem resultado; cada provedor conserva sua política para as chamadas em voo.
 const TOOLS_PENDING_MAX: usize = 200;
 /// Acumuladores soltos guardados para a reabertura não reler o transcript inteiro.
 const INACTIVE_MAX: usize = 16;
@@ -32,6 +33,8 @@ const TICK: Duration = Duration::from_secs(1);
 enum Kind {
     Claude,
     Codex,
+    Pi,
+    Kimi,
 }
 
 /// Resposta mais nova do Claude: tokens, início, fim (relógio de parede) e o id da mensagem.
@@ -42,8 +45,54 @@ struct Pending {
     message: Value,
 }
 
+#[derive(Default)]
+struct ExactUsage {
+    input_total: BigInt,
+    cache_read: BigInt,
+    cache_write: BigInt,
+    output: BigInt,
+    steps: u64,
+    codex_total: Option<[BigInt; 3]>,
+    invalid_usage: bool,
+}
+
+impl ExactUsage {
+    fn value(value: Option<&Value>) -> BigInt {
+        value.and_then(crate::orchestration::integer).map(|n| n.0).unwrap_or_default()
+    }
+
+    fn add(&mut self, usage: &Map<String, Value>, keys: [&str; 4]) {
+        let [input, read, write, output] = keys.map(|key| Self::value(usage.get(key)));
+        self.input_total += input + &read + &write;
+        self.cache_read += read;
+        self.cache_write += write;
+        self.output += output;
+        self.steps += 1;
+    }
+
+    fn codex(&mut self, total: &Map<String, Value>) {
+        let now = ["input_tokens", "cached_input_tokens", "output_tokens"].map(|key| Self::value(total.get(key)));
+        let previous = self.codex_total.replace(now.clone()).unwrap_or_default();
+        self.invalid_usage |= now.iter().zip(&previous).any(|(a, b)| a < b);
+        let delta: [BigInt; 3] = std::array::from_fn(|i| (&now[i] - &previous[i]).max(BigInt::default()));
+        if delta[0] == BigInt::default() && delta[2] == BigInt::default() { return; }
+        self.input_total += &delta[0];
+        self.cache_read += &delta[1];
+        self.output += &delta[2];
+        self.steps += 1;
+    }
+
+    fn totals(&self, bytes: u64) -> Value {
+        use crate::orchestration::Integer;
+        json!({"input":Integer(&self.input_total - &self.cache_read - &self.cache_write),
+            "output":Integer(self.output.clone()), "cache_read":Integer(self.cache_read.clone()),
+            "cache_write":Integer(self.cache_write.clone()), "steps":self.steps, "bytes":bytes})
+    }
+}
+
 struct Fold {
     kind: Kind,
+    exact: ExactUsage,
     turns: i64,
     steps: i64,
     llm_ms: f64,
@@ -64,15 +113,16 @@ struct Fold {
     seen: HashSet<String>,
     codex_total: Option<(i64, i64, i64)>,
     codex_call_llm_ms: f64,
+    kimi_request_ts: Option<f64>,
 }
 
 impl Fold {
     fn new(kind: Kind) -> Self {
         Fold {
-            kind, turns: 0, steps: 0, llm_ms: 0.0, tool_ms: 0.0, in_tok: 0, out_tok: 0, out_untimed: 0,
+            kind, exact: ExactUsage::default(), turns: 0, steps: 0, llm_ms: 0.0, tool_ms: 0.0, in_tok: 0, out_tok: 0, out_untimed: 0,
             calls: VecDeque::with_capacity(RECENT_CALLS), pend: None, cache_read: 0, ttft_ms: 0.0, ttft_n: 0,
             prev_ts: None, prompt_ts: None, tools: IndexMap::new(), seen: HashSet::new(), codex_total: None,
-            codex_call_llm_ms: 0.0,
+            codex_call_llm_ms: 0.0, kimi_request_ts: None,
         }
     }
 
@@ -80,18 +130,19 @@ impl Fold {
         match self.kind {
             Kind::Claude => self.feed_claude(obj),
             Kind::Codex => self.feed_codex(obj),
+            Kind::Pi => self.feed_pi(obj),
+            Kind::Kimi => self.feed_kimi(obj),
         }
     }
 
-    /// Gap em segundos desde a linha anterior, e avança o cursor. Linha sem horário não move; horário
-    /// que volta para trás não conta nem move o relógio para trás.
+    /// Gap desde a linha anterior. Pi conserva a cronologia escrita; Claude/Codex não recuam o cursor.
     fn gap(&mut self, ts: Option<f64>) -> Option<f64> {
         let ts = ts?;
-        if self.prev_ts.is_some_and(|prev| ts < prev) {
+        if self.kind != Kind::Pi && self.prev_ts.is_some_and(|prev| ts < prev) {
             return None;
         }
         let prev = self.prev_ts.replace(ts)?;
-        (ts - prev <= GAP_MAX_S).then_some(ts - prev)
+        (0.0..=GAP_MAX_S).contains(&(ts - prev)).then_some(ts - prev)
     }
 
     fn llm(&mut self, ts: Option<f64>) {
@@ -102,6 +153,8 @@ impl Fold {
 
     fn tool_start(&mut self, id: Option<&str>, ts: Option<f64>) {
         let (Some(id), Some(ts)) = (id.filter(|id| !id.is_empty()), ts) else { return };
+        // Pi/Kimi preservam as chamadas acompanhadas; Claude/Codex renovam as abandonadas.
+        if matches!(self.kind, Kind::Pi | Kind::Kimi) && self.tools.len() >= TOOLS_PENDING_MAX { return; }
         if self.tools.len() >= TOOLS_PENDING_MAX && !self.tools.contains_key(id) {
             self.tools.shift_remove_index(0);
         }
@@ -212,6 +265,7 @@ impl Fold {
             let mut out = 0;
             if let (Some(usage), Some(mid)) = (msg.get("usage").and_then(Value::as_object), mid) {
                 if self.seen.insert(mid.to_string()) {
+                    self.exact.add(usage, ["input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens"]);
                     self.steps += 1;
                     let (input, read, write) = (int(usage.get("input_tokens")), int(usage.get("cache_read_input_tokens")),
                         int(usage.get("cache_creation_input_tokens")));
@@ -279,8 +333,76 @@ impl Fold {
         self.gap(ts);
     }
 
+    fn agent_usage(&mut self, input: i64, read: i64, write: i64, output: i64) {
+        self.steps += 1;
+        self.in_tok = self.in_tok.saturating_add(input).saturating_add(read).saturating_add(write);
+        self.cache_read = self.cache_read.saturating_add(read);
+        self.out_tok = self.out_tok.saturating_add(output);
+    }
+
+    fn feed_pi(&mut self, obj: &Map<String, Value>) {
+        if obj.get("type").and_then(Value::as_str) != Some("message") { return; }
+        let Some(msg) = obj.get("message").and_then(Value::as_object) else { return; };
+        let ts = ms_ts(msg.get("timestamp"));
+        match msg.get("role").and_then(Value::as_str) {
+            Some("user") => { self.human_turn(ts); self.gap(ts); }
+            Some("assistant") => {
+                if let Some(usage) = msg.get("usage").and_then(Value::as_object) {
+                    self.exact.add(usage, ["input", "cacheRead", "cacheWrite", "output"]);
+                    self.agent_usage(int(usage.get("input")), int(usage.get("cacheRead")), int(usage.get("cacheWrite")), int(usage.get("output")));
+                }
+                let gap = self.gap(ts);
+                let duration = msg.get("_piClaudeStyleThinkingDurationMs").and_then(Value::as_f64)
+                    .filter(|ms| ms.is_finite() && (0.0..=GAP_MAX_S * 1000.0).contains(ms)).map(|ms| ms / 1000.0);
+                if let Some(seconds) = duration.or(gap) { self.llm_ms += seconds * 1000.0; }
+                self.ttft(ts);
+                // O timestamp antecede a geração; a ferramenta só começa depois da duração publicada.
+                let tool_at = ts.map(|ts| ts + duration.unwrap_or(0.0));
+                for block in msg.get("content").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_object) {
+                    if block.get("type").and_then(Value::as_str) == Some("toolCall") {
+                        self.tool_start(block.get("id").and_then(Value::as_str), tool_at);
+                    }
+                }
+            }
+            Some("toolResult") => {
+                self.tool_end(msg.get("toolCallId").and_then(Value::as_str), ts);
+                self.gap(ts);
+            }
+            _ => {}
+        }
+    }
+
+    fn feed_kimi(&mut self, obj: &Map<String, Value>) {
+        let ts = ms_ts(obj.get("time"));
+        match obj.get("type").and_then(Value::as_str) {
+            Some("turn.prompt") => self.human_turn(ts),
+            Some("llm.request") => self.kimi_request_ts = ts,
+            Some("usage.record") => {
+                if let Some(usage) = obj.get("usage").and_then(Value::as_object) {
+                    self.exact.add(usage, ["inputOther", "inputCacheRead", "inputCacheCreation", "output"]);
+                    self.agent_usage(int(usage.get("inputOther")), int(usage.get("inputCacheRead")), int(usage.get("inputCacheCreation")), int(usage.get("output")));
+                }
+                if let (Some(start), Some(end)) = (self.kimi_request_ts.take(), ts) {
+                    if (0.0..=GAP_MAX_S).contains(&(end - start)) { self.llm_ms += (end - start) * 1000.0; }
+                }
+            }
+            Some("context.append_loop_event") => {
+                let Some(event) = obj.get("event").and_then(Value::as_object) else { return; };
+                let id = event.get("id").filter(|id| truthy(Some(id))).or_else(|| event.get("toolCallId")).and_then(Value::as_str);
+                match event.get("type").and_then(Value::as_str) {
+                    Some("content.part") => self.ttft(ts),
+                    Some("tool.call") => self.tool_start(id, ts),
+                    Some("tool.result") => self.tool_end(id, ts),
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn codex_usage(&mut self, info: &Map<String, Value>) {
         let Some(total) = info.get("total_token_usage").and_then(Value::as_object) else { return };
+        self.exact.codex(total);
         let now = (int(total.get("input_tokens")), int(total.get("cached_input_tokens")), int(total.get("output_tokens")));
         let before = self.codex_total.replace(now).unwrap_or((0, 0, 0));
         // O delta do acumulado, nunca o total: reset (compactação) vira zero em vez de subtrair.
@@ -404,12 +526,16 @@ fn int(value: Option<&Value>) -> i64 {
     }
 }
 
+fn ms_ts(value: Option<&Value>) -> Option<f64> {
+    value?.as_f64().map(|ts| ts / 1000.0)
+}
+
 fn iso_ts(value: Option<&Value>) -> Option<f64> {
     transcript::ts_of_iso(value?.as_str()?)
 }
 
 /// Identidade do arquivo: (dispositivo, índice). No Windows vem do handle, como o `st_ino` do Python.
-fn identity(file: &std::fs::File, metadata: &std::fs::Metadata) -> io::Result<(u64, u64)> {
+pub(crate) fn identity(file: &std::fs::File, metadata: &std::fs::Metadata) -> io::Result<(u64, u64)> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -444,12 +570,18 @@ pub struct Accumulator {
     modified: Option<std::time::SystemTime>,
     /// Linha parcial no fim do arquivo (escrita em andamento).
     rest: Vec<u8>,
+    invalid_lines: u64,
 }
 
 impl Accumulator {
-    fn new(provider: Provider, path: PathBuf) -> Self {
-        let kind = if provider == Provider::Codex { Kind::Codex } else { Kind::Claude };
-        Accumulator { path, kind, fold: Fold::new(kind), offset: 0, identity: None, modified: None, rest: Vec::new() }
+    pub(crate) fn new(provider: Provider, path: PathBuf) -> Self {
+        let kind = match provider {
+            Provider::Codex => Kind::Codex,
+            Provider::Pi | Provider::Omp => Kind::Pi,
+            Provider::Kimi => Kind::Kimi,
+            _ => Kind::Claude,
+        };
+        Accumulator { path, kind, fold: Fold::new(kind), offset: 0, identity: None, modified: None, rest: Vec::new(), invalid_lines: 0 }
     }
 
     /// Arquivo ainda inexistente devolve o último retrato; outra falha de leitura sobe.
@@ -468,6 +600,7 @@ impl Accumulator {
             self.fold = Fold::new(self.kind);
             self.offset = 0;
             self.rest.clear();
+            self.invalid_lines = 0;
         }
         self.identity = Some(id);
         self.modified = modified;
@@ -486,6 +619,8 @@ impl Accumulator {
                 }
                 if let Some(Value::Object(obj)) = transcript::decode_line(&line[..line.len() - 1]) {
                     self.fold.feed(&obj);
+                } else if !line[..line.len() - 1].iter().all(|byte| matches!(*byte, b' ' | b'\t' | b'\r' | b'\n' | 0x0b | 0x0c)) {
+                    self.invalid_lines += 1;
                 }
                 line.clear();
             }
@@ -497,6 +632,17 @@ impl Accumulator {
 
     pub fn last_call_ts(&self) -> Option<f64> {
         self.fold.last_call_ts()
+    }
+
+    pub fn usage_totals(&mut self) -> io::Result<Value> {
+        self.collect()?;
+        if self.invalid_lines > 0 {
+            return Err(io::Error::other(format!("Fonte contém {} linhas inválidas; consumo incompleto.", self.invalid_lines)));
+        }
+        if self.fold.exact.invalid_usage {
+            return Err(io::Error::other("Contadores de uso regrediram; consumo exato não pode ser reconstruído."));
+        }
+        Ok(self.fold.exact.totals(self.offset.saturating_sub(self.rest.len() as u64)))
     }
 }
 
@@ -617,6 +763,7 @@ pub(crate) async fn run(hub: Weak<Hub>, generation: u64, binding: Binding, watch
 mod tests {
     use super::*;
     use std::io::Write;
+
 
     const CASES: &str = include_str!("../../../backend/tests/fixtures/contract/stats/cases.json");
 

@@ -216,9 +216,9 @@ async fn dead_owner_of_a_cross_machine_pair_leaves() {
 async fn lone_orq_clear_failure_does_not_stop_the_others() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("pair");
-    let (python, upstream) = fake::spawn_fake().await;
+    let (python, _upstream) = fake::spawn_fake().await;
     let groups = GroupService::new(PairDir::new(root.clone(), tmp.path().join("arquivo")), Arc::new(Phase(Mutex::default())), "casa".into())
-        .with_diary(hangar_server::diag::DiagClient::new(upstream, fake::SECRET.into()));
+        .with_diary(python.diagnostics());
     for name in ["a1", "b2"] { join(&groups, name, &[], true).await; }
     // O temporário de `a1` é uma pasta: apagar o sidecar dele falha.
     std::fs::create_dir(root.join("a1.json.tmp")).unwrap();
@@ -263,6 +263,7 @@ async fn dead_session_with_sanitized_name_ends_its_external_pair_by_the_raw_name
         "peer_owner": "Ana", "peer_session": "Y", "peer_address": format!("http://{other_addr}"), "peer_token": "tok", "created_at": 1.0}]).to_string()).unwrap();
     let (python, upstream) = fake::spawn_fake().await;
     let mut state = hangar_server::routes::AppState::new(fake::config(upstream, ""));
+    state.diag = python.bind_diary(state.diag.clone());
     let groups = Arc::new(GroupService::new(PairDir::new(root.clone(), tmp.path().join("arquivo")),
         Arc::new(PythonOrq::from_state(&state)), "casa".into()));
     state.groups = Some(groups.clone());

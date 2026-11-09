@@ -277,7 +277,7 @@ impl TerminalPool {
 fn validate(r: &CaptureRequest) -> Result<()> {
     let bounded = |s: &str, max: usize| !s.is_empty() && s.len() <= max && !s.chars().any(char::is_control);
     if !bounded(&r.consumer, 256) || !bounded(&r.binding, 1024) || !bounded(&r.target, 256) || !r.started.is_finite() || r.lines > 10000
-        || !matches!(r.provider.as_str(), "claude" | "codex") || !bounded(&r.name, 64)
+        || !matches!(r.provider.as_str(), "claude" | "codex" | "pi" | "omp" | "kimi") || !bounded(&r.name, 64)
         || !r.name.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b)) {
         return Err(TerminalError("invalid capture request"));
     }

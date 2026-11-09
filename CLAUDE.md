@@ -18,8 +18,7 @@ Only terminal sessions use the tmux pane for live **state** and input. Backend p
   headless sidecars and their JSONL/rollout history.
 - `transcript.py` — tails `~/.claude/projects/<cwd>/<uuid>.jsonl` (the chat content).
 - `state.py` — classifies live state from `tmux capture-pane`: `working` / `idle` / `awaiting_input` / `dead`
-  (Pi/omp/Kimi and the Python fallback; under the Rust server the live state of Claude with a terminal is the
-  Rust `Monitor`, and `classify` remains for push and actions).
+  (reserva Python de Claude/Codex; o estado de Pi, omp e Kimi é do ator Rust em `runtime/other_terminal/`).
 - `terminal_input.py` + `tmux.py` — input via `tmux send-keys` (prompt / option select via `(n-1)×Down`+`Enter` / `Esc`).
 - `adapters/codex/` — um app-server WebSocket de loopback por sessão Codex; o backend
   consome eventos JSON-RPC enquanto a TUI `codex --remote` da mesma thread roda no tmux.
@@ -27,8 +26,8 @@ Only terminal sessions use the tmux pane for live **state** and input. Backend p
   como filho do mesmo cano do Claude sem terminal, e o backend abre a thread e responde as
   aprovações por cartão. Decisões e armadilhas:
   [`docs/decisoes/harnesses.md`](docs/decisoes/harnesses.md).
-- `difusor.py` — **uma fonte por chave, não uma por conexão**: monitor de estado,
-  acumulador de estatísticas e git da listagem são compartilhados entre os SSE abertos.
+- `difusor.py` — **uma fonte por chave, não uma por conexão**: monitor de estado e
+  acumulador de estatísticas são compartilhados entre os SSE abertos.
   Por quê e o que quebrou antes: [`docs/decisoes/plataforma.md`](docs/decisoes/plataforma.md).
 - Voz ao vivo — roda no `hangar-server` (`crates/hangar-server/src/voice/`), **disponível em todo
   servidor com Codex instalado e ao menos uma conta Codex**, sem interruptor; o microfone só abre
@@ -37,15 +36,13 @@ Only terminal sessions use the tmux pane for live **state** and input. Backend p
   aparelho. Clientes: nativo (`desktop-native/src/voice/`) e PWA no celular
   (`lib/liveVoice.ts`). Contrato: "Regras vigentes" de
   [`docs/decisoes/harnesses.md`](docs/decisoes/harnesses.md).
-- `adapters/kimi/` + `hooks/kimi_state_hook.py` + `kimi_hook_installer.py` — Kimi Code runs in the
-  same tmux-native shape as Pi: TUI in the pane, chat from
-  `~/.kimi-code/sessions/<wd>/<session_id>/agents/main/wire.jsonl`, state pushed by hooks in
-  `~/.kimi-code/config.toml` (no pane scraping for state). The pane↔session link is the hook's
-  ticket (`~/.claude/.hangar-kimi/<pane>.json`) — the CLI has no caller-chosen session-id.
+- `crates/hangar-server/src/runtime/other_terminal/` — atores Pi, omp e Kimi: identidade da vida,
+  estado, prévia, perguntas, fila, entrada, fechamento e troca de nome. Os leitores estruturados
+  ficam em `hangar-transcript`; hooks e guarda do Kimi/Pi são comandos Rust em `provider_hooks/`.
 - `sse.py` — merges the above into the SSE stream. `api.py` — FastAPI routes. `auth.py` — bearer token / `cp_token` cookie.
 - Also: `pqueue.py` (durable input queue), `preview.py` (live in-flight block), `askquestion.py`
-  (native AskUserQuestion stepper), `uploads.py`, `git_ops.py`, `workflows.py`,
-  `model_picker.py`, `config.py`, `fs.py`, `hook_installer.py`.
+  (native AskUserQuestion stepper), `uploads.py`, `workflows.py`,
+  `model_picker.py`, `config.py`, `hook_installer.py`.
 - `crates/hangar-server/src/commands/` — catálogo de comandos do Claude, sonda compartilhada e
   filtro em processo; o Python só autentica e repassa nas portas que atende.
 - `site/` — landing page de `hangar.dev.br` (HTML estático em PT/EN gerado por `site/build.py`,
@@ -478,9 +475,9 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   Descoberta global incompleta avisa sobre repositórios ainda não encontrados; não bloqueia a
   limpeza de worktrees conhecidas, cuja identidade, arquivos, locks e uso são reconferidos.
 - **Plan progress lê o `.md` do plano**, sem arquivo de estado: blocos cercados são removidos
-  preservando offsets, e a decoração do Python roda dentro do `to_thread` do git. As rotas de
-  plano e a prévia do plano nativo são do Rust e usam o mesmo rastreador da lista, para o
-  painel e a linha elegerem o mesmo plano. Evidência em
+  preservando offsets. A lista, as rotas, o bastão e a prévia do plano nativo usam os leitores
+  Rust e o mesmo rastreador da lista, para o painel e a linha elegerem o mesmo plano.
+  A decoração e o parser Python foram retirados. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#plan-progress).
 - **Ditado: a transcrição não é o problema, o que vem depois é.** Vocabulário vai para a Whisper
   (consertar depois é impossível por construção); regra de prompt só funciona com exemplo de
@@ -558,10 +555,11 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   no `cwd`.
   Evidência em [plataforma.md](docs/decisoes/plataforma.md#git-da-sessão-segue-a-worktree-onde-o-agente-trabalha).
 - **Arquivo citado na conversa é LEGÍVEL e EDITÁVEL; a citação é o consentimento.** Fora da raiz
-  da sessão a política de caminho é `_resolver_citado()` (aparece no transcript), não a raiz — e
-  é a mesma para o `GET` e para o `POST` de `/file/text`. A mecânica de ler e gravar é a do
-  `filetree` (`read_at`/`write_at`): digest da leitura, tmp+rename, `.git` fora por componente
-  do realpath. Escrita nova fora da raiz entra por aqui, nunca afrouxando o `/files/write`.
+  da sessão a política de caminho é a citação no transcript verificado, não a raiz — e é a mesma
+  para o `GET` e para o `POST` de `/file/text`. Leitura e escrita usam o núcleo Rust:
+  digest da leitura, tmp+rename, `.git` fora por componente do realpath. Citação transferida
+  exige snapshot, digest e fronteira verificados. Escrita nova fora da raiz entra por aqui,
+  nunca afrouxando o `/files/write`.
 - **HTML servido como arquivo executa isolado e sem o token na URL do documento interno.**
   Arquivos citados e uploads usam `file_response`; SVG/XML mantêm o MIME com scripts bloqueados.
 - **Citação e elemento escolhido vão no texto da mensagem, como blocos `<hangar-ref>`.** O transcript
@@ -750,34 +748,38 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
 - **O que ainda passa pelo Python com o Rust de pé (modo `rust`).** Esta lista é o inventário
   vivo: migração que tira um item o apaga daqui no mesmo commit; item novo só entra com o arquivo
   e a linha. Conferir antes de afirmar que algo "é do Rust" ou "ainda é do Python".
-  - Chat Claude/Codex do dono: nada. `/history`, `/events`, mensagens, estado, prévia, fila, faixa
+  - Chat dos cinco provedores do dono: nada. `/history`, `/events`, mensagens, estado, prévia, fila, faixa
     `stats` (`stats.rs`), faixa e avisos de mod (`mods`) e pedido de navegador (`nav_requests.rs`)
     são do hub do Rust, sem conexão ao Python. O `sse.merged_events` só serve o `/events` do próprio
-    Python: Pi/omp/Kimi e o modo `python`;
-    o `stats.py` serve esse `/events`. O consumo da orquestração é calculado no Rust.
-  - Lista do dono: montada pelo Rust; só com linha Pi/omp/Kimi o tique pede `POST
-    /internal/list/facts` (`list/facts.rs` → `list_facts.py`), levando só essas linhas: estado,
-    e última resposta delas. A associação da credencial Pi/omp/Kimi à cota é do Rust.
+    Python no modo `python` de Claude/Codex; o `stats.py` serve esse `/events`. O consumo da orquestração é calculado no Rust.
+  - Lista do dono: montada pelo Rust; Pi/omp/Kimi publicam o estado pelos atores em processo,
+    e a última resposta vem dos leitores nativos. Não existe `/internal/list/facts`.
   - Outras perguntas do Rust ao Python (`/internal/*`): `accounts/prepare` (só contas Codex; a
     reconciliação das contas Claude é do Rust, `accounts/claude_config.rs`),
-    `accounts/codex-invalidate`, `workspace/context`,
-    `transcription/config`, `costs/scopes`, `migration/status`, `diag` e `ping`.
-  - Partes ainda no Python: transcript, estado e entrada geral de Pi, omp e Kimi;
-    transferência Claude→Codex; workflows e runners.
-  - Contexto e fetch das worktrees são do Rust (`worktree_context.rs`, `worktree_fetch.rs`),
-    inclusive a fonte usada pelas guardas de exclusão e pela limpeza automática. O fetch conserva
-    validação, raízes e erros anteriores; usa credenciais configuradas, mas não pergunta login no
-    terminal. A porta Python só repassa o fetch e responde `worktrees_need_rust_server` sem Rust.
-    Não existe `/internal/worktrees/context`. Evidência em
+    `accounts/codex-invalidate`, `transcription/config`, `migration/status` e `ping`.
+  - Partes ainda no Python: transferência Claude→Codex; workflows e runners.
+  - Atalhos de projeto: identidade, GET/PUT, `shortcut-shell`, `run-code` e reinício são do Rust.
+    Lista, fechamento, foco, respostas e WebSocket dos terminais ainda usam os consumidores
+    genéricos Python existentes; não consultam Git. O bastão é montado, opcionalmente reescrito,
+    gravado e entregue ao lançador pelo Rust, sem montador Python.
+  - Git, arquivos e administração de worktrees são do Rust, inclusive contexto, validação,
+    autorização, criação, exclusão e limpeza automática. O fetch usa credenciais configuradas,
+    mas não pergunta login no terminal. Os handlers Python foram retirados, sem motor de reserva:
+    sem Rust, o transporte autenticado preexistente conserva seu 503; onde ele não existe,
+    a rota retirada recebe o 404/405 padrão dessa porta. Não existem
+    `/internal/worktrees/context`, `/internal/workspace/context` ou a porta privada genérica
+    `/__hangar_server/workspace`. Evidência em
     [plataforma.md](docs/decisoes/plataforma.md#contexto-e-fetch-de-worktrees-sem-python-05112026).
-  - Arquivo e busca são do Rust. O `archive.py` guarda os leitores da lista legada de worktrees
-    no modo `python` (`list_folders`, `_worktree_inputs`) e os leitores compartilhados com o bastão
-    e o redirecionamento de conversas (`_contas`, `_head_info`, `archive_jsonl`, `archive_cwd`).
+  - Arquivo e busca são do Rust. O `archive.py` conserva os leitores genéricos de conversas
+    (`list_folders`, `_contas`, `_head_info`, `archive_jsonl`, `archive_cwd`). O localizador e o motor
+    Python de worktrees foram retirados; `worktrees.py` conserva leitores genéricos, o mapa de
+    redirecionamento e os auxiliares de arquivos ainda usados, sem consultar Git ou interpretar `.git`.
+    Não existe `/internal/workspace/context`.
   - Atualização: rotas, passos iniciais, fetch e atualização automática são do Rust.
     O pacote usa `update/http.rs` e `update/periodic.rs`; o checkout usa `update/git_engine/`.
     O `rust_bins.py` lança o Rust pelo caminho real da versão.
-  - Tarefas próprias do Python em modo `rust`: `hook_state.watch` (estado de Pi/omp/Kimi; não reage
-    a sessão do Rust) e `watch_sessions` do Codex a cada 2 s (desligada quando todo Codex é do Rust). Travada, limite e queda são avisados
+  - Tarefas próprias do Python em modo `rust`: os leitores legados de Claude/Codex não observam
+    Pi/omp/Kimi. `watch_sessions` do Codex a cada 2 s fica desligada quando todo Codex é do Rust. Travada, limite e queda são avisados
     pelo Rust (`push/watch.rs`); o vigia Python foi apagado e, no modo `python`, esses avisos não
     saem. A retomada dos loops ativos na subida também é só do Rust (`loops/watch.rs`): no modo
     `python` eles não voltam depois do reinício.
@@ -822,7 +824,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   `/select/submit`, `/term-input`, `/answer`, o descarte da fila, o painel da fila (`PATCH` e
   `DELETE queue/<id>`, este com `?only_waiting`, `POST queue/reorder` e `POST queue/<id>/steer`) e
   os controles do Codex são decididos no `hangar-server` (`session_write/table.rs`). Repasse ao Python só sem entrada no
-  Rust (abertura, Pi/omp/Kimi) e nas rotas de pane de sessão sem terminal. Entrada doente é 503
+  Rust e nas rotas de pane de sessão sem terminal. Entrada doente é 503
   `runtime_unhealthy`, corpo fora de forma é 422 `erro_corpo_invalido`, nunca repasse. Sessão sem
   terminal religando ao mesmo cano vivo não é entrada doente: a escrita vai ao ator e espera na
   fila até religar. Cada sessão
@@ -834,7 +836,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   `queue/*` do Claude a `/__hangar_server/claude/<nome>/<rota>`, tudo do Codex do Rust (`queue/*`
   incluídas) a
   `/__hangar_server/codex/<nome>/<rota>` (a mesma ponte recebe o texto de broadcast para Codex
-  com terminal); Pi/omp/Kimi seguem fechando no Python; 421 = o Rust não atende e o Python segue, transporte que falha =
+  com terminal); Pi/omp/Kimi fecham pelos atores Rust; 421 = o Rust não atende e o Python segue, transporte que falha =
   5xx `<provedor>_bridge_failed`. Texto que nasce no Python para o Claude segue em `_send_one`, coberto
   só pelo `freeze`. Contrato e motivo em
   [plataforma.md](docs/decisoes/plataforma.md#escritas-do-claude-no-hangar-server) e
@@ -902,13 +904,13 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   sai do `ReplyCache` (último evento da conversa); o mtime anda sozinho e impediria ocultar e
   adormecer. O mtime segue como chave dos caches. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#tempo-da-sessão-parada-vem-da-conversa-não-do-mtime-05112026).
-- **A lista do dono é do Rust; o Python só fornece fatos.** `GET /api/sessions` e
+- **A lista do dono é do Rust; o estado vem dos atores em processo.** `GET /api/sessions` e
   `/api/sessions/events` do dono saem do `ListHub` (`list/hub.rs`): um produtor por servidor,
   ligado enquanto houver lista aberta, tique de 1,5 s, JSON só quando a assinatura muda; cada
   conexão só lê o publicado. Escrita nas pastas de estado das contas (marcador, registro nativo,
   pergunta aberta) reclassifica só a sessão afetada sobre a última rodada boa, juntada em 150 ms;
-  observador que falha vai ao diário e o tique continua valendo. Só estado e resposta de
-  Pi/omp/Kimi vêm de `POST /internal/list/facts`, e só com linha deles; transferências, `orq`,
+  observador que falha vai ao diário e o tique continua valendo. Pi/omp/Kimi usam o estado
+  dos atores com identidade da vida e conversa; transferências, `orq`,
   acesso de convidado, atalhos e problema do Claude sem terminal a ponte lê do disco
   (`list/local_*.rs`); sessão sem terminal e Codex com terminal adotado, do
   `RuntimeRegistry`; pergunta segurada e presença do app no Claude, do `plugin::Store`. Falha
@@ -944,8 +946,8 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   estado ao vivo é o `Monitor` (abaixo; modo de permissão, entrega e captura avulsa do push também
   são do Rust), e a ponte Python do observador (`terminal_observer` →
   `/__hangar_server/terminal`) ficou sem consumidor, porque o `StateMonitor`/`PreviewBroker` de
-  Claude só roda no modo `python`, com a ponte desligada. Pi, omp e Kimi capturam pelo Python e
-  guardam lá o estado temporal; Codex conserva estado e prévia nativos. `/clear` ou troca do filho
+  Claude só roda no modo `python`, com a ponte desligada. Pi, omp e Kimi compartilham a captura
+  e o estado temporal no ator Rust; Codex conserva estado e prévia nativos. `/clear` ou troca do filho
   descartam leituras antigas; sidecar Claude vazio continua sendo uma resposta; erro de captura
   vira `problema` registrado no diário e no log (não chega à tela), nunca leitura Python.
   Evidência em [plataforma.md](docs/decisoes/plataforma.md#observação-terminal-rust-erro-visível-sem-captura-python).
@@ -973,8 +975,8 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
 - **A fila durável ao vivo do chat é do hub do Rust no modo `rust`/`pending`, em qualquer porta.**
   Um produtor por hub e por geração (`queue_feed.rs`) lê a projeção da fila e publica
   `message`/`queue_confirmed` pelo retrato; o login de convidado lê o mesmo hub no Rust. A
-  baixa da fila do Codex sem terminal é pedida pelo hub ao ator, em processo. O `follow` do Python fica com Pi/omp/Kimi e o modo
-  `python`. Contrato e diferenças em
+  baixa da fila do Codex sem terminal é pedida pelo hub ao ator, em processo. O `follow` do Python
+  fica com a reserva de Claude/Codex no modo `python`. Contrato e diferenças em
   [plataforma.md](docs/decisoes/plataforma.md#fila-durável-ao-vivo-no-hub-do-rust).
 - **Com o Rust de pé, o Python não lê o arquivo de estado da fila (`runtime/<chave>.json`).** No
   Windows a leitura no meio da troca do Rust falha e faz a troca falhar. O que precisava dele é do
@@ -995,8 +997,8 @@ Preserve `COLORTERM=truecolor` e `CLAUDE_CODE_TMUX_TRUECOLOR=1` antes de iniciar
 ### Issue tracker
 
 Markdown versionado, não GitHub Issues: spec em `docs/superpowers/specs/`, tickets como Tasks de um
-plano em `docs/superpowers/plans/` — que é de onde `backend/app/planprog.py` lê a barra de progresso
-e de onde `skills/orquestrar` recorta a Task do executor. O formato de `### Task N:`
+plano em `docs/superpowers/plans/` — que é de onde `crates/hangar-server/src/list/plan.rs` lê a barra
+de progresso e de onde `skills/orquestrar` recorta a Task do executor. O formato de `### Task N:`
 e `- [ ] **Step N: …**` é casado por regex e não é livre. Ver
 [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md).
 

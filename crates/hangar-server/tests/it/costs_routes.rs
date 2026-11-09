@@ -2,11 +2,11 @@ use crate::common;
 
 use axum::{Router, extract::{Path, Request, State}, http::StatusCode, response::{IntoResponse, Response}, routing::get};
 use common::costs::fixtures_copy;
-use hangar_server::{auth::TrustedHosts, config::Config, costs::collect::{Collector, HttpScopes, Scopes, ClaudeScope, CodexScope, PiScope, KimiScope}, costs::fx::Fx, routes::{AppState, router}};
+use hangar_server::{auth::TrustedHosts, config::Config, costs::collect::{Collector, ScopeSource, CollectError, Scopes, ClaudeScope, CodexScope, PiScope, KimiScope}, costs::fx::Fx, routes::{AppState, router}};
 use serde_json::{Value, json};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}};
 use std::time::{Duration, Instant};
 
 const OWNER: &str = "dono-de-teste";
@@ -30,10 +30,11 @@ fn session_rollout(path: &std::path::Path, model: &str, input: i64) {
 
 struct Upstream {
     scopes: Mutex<Option<Scopes>>,
+    scope_reads: AtomicUsize,
     infos: Mutex<indexmap::IndexMap<String, Value>>,
     hits: Mutex<Vec<(String, String)>>,
     info_failures: Mutex<std::collections::VecDeque<StatusCode>>,
-    journal: Mutex<Vec<Value>>,
+    journal: tempfile::TempDir,
 }
 
 async fn session_info(State(up): State<Arc<Upstream>>, Path(name): Path<String>, request: Request) -> Response {
@@ -46,19 +47,14 @@ async fn session_info(State(up): State<Arc<Upstream>>, Path(name): Path<String>,
     }
 }
 
-async fn journal(State(up): State<Arc<Upstream>>, request: Request) -> Response {
-    assert_eq!(request.headers()["x-hangar-internal"], SECRET);
-    let body = axum::body::to_bytes(request.into_body(), 8192).await.unwrap();
-    up.journal.lock().unwrap().push(serde_json::from_slice(&body).unwrap());
-    StatusCode::OK.into_response()
+impl Upstream {
+    fn journal(&self) -> Vec<Value> { crate::fake::read_diary(self.journal.path()) }
 }
 
-async fn scopes(State(up): State<Arc<Upstream>>, request: Request) -> Response {
-    up.hits.lock().unwrap().push((request.method().to_string(), request.uri().to_string()));
-    assert_eq!(request.headers()["x-hangar-internal"], SECRET);
-    match up.scopes.lock().unwrap().as_ref() {
-        Some(scopes) => ([("content-type", "application/json")], serde_json::to_vec(scopes).unwrap()).into_response(),
-        None => StatusCode::NOT_FOUND.into_response(),
+impl ScopeSource for Upstream {
+    fn fetch(&self) -> Result<Scopes, CollectError> {
+        self.scope_reads.fetch_add(1, Ordering::SeqCst);
+        self.scopes.lock().unwrap().clone().ok_or(CollectError::NoScopes)
     }
 }
 
@@ -104,13 +100,11 @@ impl Harness {
             kimi: Some(KimiScope { root: base.join("kimi/sessions"), index: base.join("kimi/session_index.jsonl") }),
             repo: base.clone(),
         };
-        let upstream = Arc::new(Upstream { scopes: Mutex::new(has_scopes.then_some(scopes)), infos: Mutex::new(indexmap::IndexMap::new()), hits: Mutex::new(Vec::new()),
-            info_failures: Mutex::new(Default::default()), journal: Mutex::new(Vec::new()) });
+        let upstream = Arc::new(Upstream { scopes: Mutex::new(has_scopes.then_some(scopes)), scope_reads: AtomicUsize::new(0), infos: Mutex::new(indexmap::IndexMap::new()), hits: Mutex::new(Vec::new()),
+            info_failures: Mutex::new(Default::default()), journal: tempfile::tempdir().unwrap() });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let up_address = listener.local_addr().unwrap();
-        let app = Router::new().route("/internal/costs/scopes", get(self::scopes))
-            .route("/internal/diag", axum::routing::post(journal))
-            .route("/internal/sessions/{name}/info", get(session_info)).fallback(python).with_state(upstream.clone());
+        let app = Router::new().route("/internal/sessions/{name}/info", get(session_info)).fallback(python).with_state(upstream.clone());
         let up_task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let index = if bad_disk {
             let blocked = dir.path().join("blocked");
@@ -130,10 +124,11 @@ impl Harness {
                 let file = dir.path().join("blocked-file"); std::fs::write(&file, "arquivo").unwrap(); file.join("idx")
             }
         } else { dir.path().join("idx") };
-        let collector = Arc::new(Collector::new(index, base.join("pricing"), dir.path().join("areas.json"), Arc::new(HttpScopes::new(up_address, SECRET.into()))));
+        let collector = Arc::new(Collector::new(index, base.join("pricing"), dir.path().join("areas.json"), upstream.clone()));
         let cfg = Config { listen: "127.0.0.1:0".parse().unwrap(), upstream: up_address,
             internal_secret: SECRET.into(), auth_token: OWNER.into(), log_path: None, trusted: TrustedHosts::parse("127.0.0.1") };
         let mut state = AppState::with_parts(cfg, hangar_server::terminal_control::TerminalPool::new(), collector.clone(), fx, String::new());
+        state.diag = state.diag.clone().with_diary(Some(upstream.journal.path().to_owned()));
         state.origins_home = dir.path().join("home");
         state.side.locate = Arc::new(crate::fake::FakeLocate { upstream: up_address, http: hangar_server::proxy::client(), secret: SECRET.into() });
         for path in [state.origins_home.join(".claude/skills/minha-skill"), state.origins_home.join(".claude/plugins/cache/market/superpowers/1/skills/brainstorming")] {
@@ -144,7 +139,7 @@ impl Harness {
         let address = listener.local_addr().unwrap();
         let app = router(state.clone());
         let server = tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap() });
-        Self { _dir: dir, base, address, upstream, collector, state, tasks: vec![up_task, server], client: hangar_server::http_client().build().unwrap() }
+        Self { _dir: dir, base, address, upstream, collector, state, tasks: vec![up_task, server], client: hangar_server::http_client().redirect(reqwest::redirect::Policy::none()).build().unwrap() }
     }
 
     fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
@@ -191,6 +186,25 @@ impl Harness {
     fn forwarded(&self, method: &str, path: &str) -> bool {
         self.upstream.hits.lock().unwrap().iter().any(|hit| hit == &(method.into(), path.into()))
     }
+
+    fn assert_no_collection_or_forwarding(&self) {
+        assert!(self.upstream.hits.lock().unwrap().is_empty(), "pedido chegou ao upstream");
+        assert!(self.state.origins.lock().unwrap().is_empty());
+        assert!(self.collector.repo().is_none());
+        assert!(!self._dir.path().join("idx").exists());
+    }
+
+    async fn shutdown(mut self) {
+        for task in &self.tasks { task.abort(); }
+        for task in self.tasks.drain(..) { assert!(task.await.unwrap_err().is_cancelled()); }
+        crate::assert_closed(self.address, "servidor de custos").await;
+        crate::assert_closed(self.state.cfg.upstream, "upstream de custos").await;
+    }
+}
+
+fn fresh_error(input: &str) -> Value {
+    json!({"detail":[{"type":"bool_parsing","loc":["query","fresco"],
+        "msg":"Input should be a valid boolean, unable to interpret input","input":input}]})
 }
 
 #[tokio::test]
@@ -220,12 +234,16 @@ async fn session_info_failure_is_503_with_code_once_and_other_sessions_keep_work
     let hits = h.upstream.hits.lock().unwrap().clone();
     assert_eq!(hits.iter().filter(|(_, uri)| uri == "/internal/sessions/broken%2Dinfo/info").count(), 1);
     let deadline = Instant::now() + Duration::from_secs(5);
-    while h.upstream.journal.lock().unwrap().is_empty() {
+    while h.upstream.journal().is_empty() {
         assert!(Instant::now() < deadline, "diário não recebeu a falha");
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    assert_eq!(h.upstream.journal.lock().unwrap()[0], json!({"evento":"rust.costs_failed", "sessao":"broken-info",
-        "codigo":"internal_info", "motivo":"o backend não devolveu os dados da sessão"}));
+    let entry = h.upstream.journal().into_iter().find(|row| row["evento"] == "rust.costs_failed").unwrap();
+    assert_eq!(entry["sessao"], "broken-info");
+    assert_eq!(entry["codigo"], "internal_info");
+    assert_eq!(entry["detalhe"], "o backend não devolveu os dados da sessão");
+    assert_eq!(entry["nivel"], "erro");
+    assert_eq!(entry["origem"], "servidor");
     // A falha não prende a sessão: o pedido seguinte já é atendido pelo Rust.
     let response = h.request(reqwest::Method::GET, "/api/sessions/broken-info/cost").send().await.unwrap();
     assert_eq!(serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap()["has_usage"], true);
@@ -281,7 +299,7 @@ async fn non_finite_quote_and_reports_fail_with_code_instead_of_serializing_null
     // Cada rota assina a própria linha: uma não esconde a outra no limite por minuto do diário.
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        let mut seen: Vec<String> = h.upstream.journal.lock().unwrap().iter()
+        let mut seen: Vec<String> = h.upstream.journal().iter()
             .filter(|e| e["codigo"] == "costs_non_finite").map(|e| e["sessao"].as_str().unwrap().to_owned()).collect();
         seen.sort();
         if seen == ["costs", "cotacao", "uso"] { break; }
@@ -339,22 +357,182 @@ async fn served_usage_matches_python_golden_for_all_and_each_filter() {
 }
 
 #[tokio::test]
-async fn usage_auth_methods_and_invalid_bool_forward_before_reading_origins() {
+async fn usage_rejects_invalid_fresh_without_upstream_or_collection() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0)); let fetched = calls.clone();
+    let h = Harness::with_fx(true, false, Arc::new(Fx::with_fetch(move || { fetched.fetch_add(1, Ordering::SeqCst); Some(5.25) }))).await;
+    for (query, input, length) in [("fresco=invalid", "invalid", "146"), ("fresco=", "", "139"),
+        ("fresco=%69nvalid", "invalid", "146"), ("fresco=false&fresco=invalid", "invalid", "146")] {
+        for origin in [false, true] {
+            let mut request = h.request(reqwest::Method::GET, &format!("/api/uso?{query}"));
+            if origin { request = request.header("origin", "https://teste.exemplo"); }
+            let response = request.send().await.unwrap();
+            assert_eq!(response.status(), 422, "{query}");
+            assert_eq!(response.headers()["content-type"], "application/json");
+            assert_eq!(response.headers()["content-length"], length);
+            if origin {
+                assert_eq!(response.headers()["access-control-allow-origin"], "*");
+                assert_eq!(response.headers()["access-control-expose-headers"], "ETag, x-hangar-css-width, x-hangar-css-height");
+            } else { assert!(!response.headers().contains_key("access-control-allow-origin")); }
+            assert_eq!(serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap(), fresh_error(input));
+            h.assert_no_collection_or_forwarding();
+        }
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "recusa buscou cotação");
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn usage_authentication_precedes_validation_without_upstream_or_collection() {
     let h = Harness::new(true, false).await;
+    let unauthorized = json!({"detail":{"code":"erro_nao_autorizado","params":{},"msg":"unauthorized"}});
     for token in [None, Some("convidado")] {
-        let request = hangar_server::http_client().build().unwrap().get(format!("http://{}/api/uso", h.address));
-        let request = if let Some(token) = token { request.bearer_auth(token) } else { request };
-        assert_eq!(request.send().await.unwrap().status(), 401);
+        for path in ["/api/uso", "/api/uso?fresco=invalid", "/api/uso?fresco="] {
+            let mut request = h.client.get(format!("http://{}{path}", h.address)).header("origin", "https://teste.exemplo");
+            if let Some(token) = token { request = request.bearer_auth(token); }
+            let response = request.send().await.unwrap();
+            assert_eq!(response.status(), 401);
+            assert_eq!(response.headers().get("content-type").and_then(|v| v.to_str().ok()), Some("application/json"));
+            assert_eq!(response.headers()["content-length"], "74");
+            assert_eq!(response.headers()["access-control-allow-origin"], "*");
+            assert_eq!(response.headers()["access-control-expose-headers"], "ETag, x-hangar-css-width, x-hangar-css-height");
+            assert_eq!(serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap(), unauthorized);
+        }
     }
-    assert!(h.forwarded("GET", "/api/uso"));
-    for method in [reqwest::Method::POST, reqwest::Method::HEAD, reqwest::Method::OPTIONS] {
-        assert_eq!(h.request(method.clone(), "/api/uso").send().await.unwrap().status(), 200);
-        assert!(h.forwarded(method.as_str(), "/api/uso"));
+    for (bearer, query, cookie, expected) in [
+        (None, Some(OWNER), None, 422), (None, None, Some(OWNER), 422),
+        (Some("errado"), Some(OWNER), None, 401), (None, Some("errado"), Some(OWNER), 401),
+    ] {
+        let mut url = reqwest::Url::parse(&format!("http://{}/api/uso?fresco=invalid", h.address)).unwrap();
+        if let Some(token) = query { url.query_pairs_mut().append_pair("token", token); }
+        let mut request = h.client.get(url);
+        if let Some(token) = bearer { request = request.bearer_auth(token); }
+        if let Some(token) = cookie { request = request.header("cookie", format!("cp_token={token}")).header("origin", "https://teste.exemplo"); }
+        let response = request.send().await.unwrap();
+        assert_eq!(response.status(), expected);
+        if cookie.is_some() {
+            assert_eq!(response.headers()["access-control-allow-origin"], "*");
+            assert!(!response.headers().contains_key("vary"));
+            assert!(!response.headers().contains_key("access-control-allow-credentials"));
+        }
+        assert_eq!(serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap(), if expected == 401 { unauthorized.clone() } else { fresh_error("invalid") });
     }
-    assert_eq!(h.request(reqwest::Method::GET, "/api/uso?fresco=invalid").send().await.unwrap().status(), 422);
-    assert!(h.forwarded("GET", "/api/uso?fresco=invalid"));
-    assert!(!h.forwarded("GET", "/internal/costs/scopes"));
-    assert!(h.state.origins.lock().unwrap().is_empty());
+    h.assert_no_collection_or_forwarding();
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn usage_methods_and_slash_match_original_without_upstream_or_collection() {
+    let h = Harness::new(true, false).await;
+    for owner in [false, true] {
+        for method in [reqwest::Method::POST, reqwest::Method::HEAD, reqwest::Method::OPTIONS] {
+            for query in ["", "?fresco=invalid"] {
+                let mut request = h.client.request(method.clone(), format!("http://{}/api/uso{query}", h.address)).header("origin", "https://teste.exemplo");
+                if owner { request = request.bearer_auth(OWNER); }
+                let response = request.send().await.unwrap();
+                assert_eq!(response.status(), 405, "{method}{query}");
+                assert_eq!(response.headers()["allow"], "GET");
+                assert_eq!(response.headers()["content-length"], "31");
+                assert_eq!(response.headers()["content-type"], "application/json");
+                assert_eq!(response.headers()["access-control-allow-origin"], "*");
+                assert_eq!(response.headers()["access-control-expose-headers"], "ETag, x-hangar-css-width, x-hangar-css-height");
+                let bytes = response.bytes().await.unwrap();
+                if method == reqwest::Method::HEAD { assert!(bytes.is_empty()); }
+                else { assert_eq!(bytes.as_ref(), br#"{"detail":"Method Not Allowed"}"#); }
+            }
+        }
+        for (path, target) in [("/api/uso/", "/api/uso"), ("/api/uso/?fresco=invalid", "/api/uso?fresco=invalid")] {
+            let mut request = h.client.get(format!("http://{}{path}", h.address)).header("origin", "https://teste.exemplo");
+            if owner { request = request.bearer_auth(OWNER); }
+            let response = request.send().await.unwrap();
+            assert_eq!(response.status(), 307);
+            assert_eq!(response.headers()["location"], format!("http://{}{target}", h.address));
+            assert_eq!(response.headers()["content-length"], "0");
+            assert_eq!(response.headers()["access-control-allow-origin"], "*");
+            assert!(response.bytes().await.unwrap().is_empty());
+        }
+    }
+    h.assert_no_collection_or_forwarding();
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn usage_trace_preflight_matches_public_original_without_upstream_or_collection() {
+    let h = Harness::new(true, false).await;
+    let response = h.request(reqwest::Method::OPTIONS, "/api/uso").header("origin", "http://other-server.invalid")
+        .header("access-control-request-method", "TRACE").send().await.unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.headers()["content-type"], "text/plain; charset=utf-8");
+    assert_eq!(response.headers()["content-length"], "2");
+    assert_eq!(response.headers()["allow"], "GET,HEAD");
+    assert_eq!(response.headers()["access-control-allow-origin"], "*");
+    assert_eq!(response.headers()["access-control-allow-methods"], "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT");
+    assert_eq!(response.headers()["access-control-max-age"], "600");
+    for header in ["access-control-expose-headers", "vary", "access-control-allow-credentials", "access-control-allow-private-network", "access-control-allow-headers"] {
+        assert!(!response.headers().contains_key(header));
+    }
+    assert!(!response.headers().contains_key("location"));
+    assert_eq!(response.text().await.unwrap(), "OK");
+    h.assert_no_collection_or_forwarding();
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn usage_origin_cookie_refusals_match_original_without_upstream_or_collection() {
+    let h = Harness::new(true, false).await;
+    for (method, path, cookie, status, length) in [
+        (reqwest::Method::GET, "/api/uso?fresco=invalid", false, 422, "146"),
+        (reqwest::Method::GET, "/api/uso?fresco=invalid", true, 422, "146"),
+        (reqwest::Method::POST, "/api/uso", true, 405, "31"),
+    ] {
+        let mut request = h.request(method, path).header("origin", "http://other-server.invalid");
+        if cookie { request = request.header("cookie", format!("cp_token={OWNER}")); }
+        let response = request.send().await.unwrap();
+        assert_eq!(response.status(), status);
+        assert_eq!(response.headers().get("content-type").and_then(|v| v.to_str().ok()), Some("application/json"));
+        assert_eq!(response.headers()["content-length"], length);
+        assert_eq!(response.headers()["access-control-allow-origin"], "*");
+        assert_eq!(response.headers()["access-control-expose-headers"], "ETag, x-hangar-css-width, x-hangar-css-height");
+        for header in ["vary", "access-control-allow-credentials", "access-control-allow-private-network"] {
+            assert!(!response.headers().contains_key(header));
+        }
+        if status == 405 { assert_eq!(response.headers()["allow"], "GET"); }
+        else { assert!(!response.headers().contains_key("allow")); }
+        assert_eq!(serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap(),
+            if status == 422 { fresh_error("invalid") } else { json!({"detail":"Method Not Allowed"}) });
+    }
+    h.assert_no_collection_or_forwarding();
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn usage_private_network_preflight_matches_original_without_upstream_or_collection() {
+    let h = Harness::new(true, false).await;
+    for (method, private, body, length) in [
+        ("GET", "true", "Disallowed CORS private-network", "31"),
+        ("GET", "false", "Disallowed CORS private-network", "31"),
+        ("TRACE", "true", "Disallowed CORS private-network", "31"),
+    ] {
+        let response = h.request(reqwest::Method::OPTIONS, "/api/uso").header("origin", "http://other-server.invalid")
+            .header("access-control-request-method", method).header("access-control-request-private-network", private).send().await.unwrap();
+        assert_eq!(response.status(), 400);
+        assert_eq!(response.headers()["content-type"], "text/plain; charset=utf-8");
+        assert_eq!(response.headers()["content-length"], length);
+        assert_eq!(response.headers()["allow"], "GET,HEAD");
+        assert_eq!(response.headers()["access-control-allow-origin"], "*");
+        assert_eq!(response.headers()["access-control-allow-methods"], "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT");
+        assert_eq!(response.headers()["access-control-max-age"], "600");
+        for header in ["access-control-expose-headers", "vary", "access-control-allow-credentials", "access-control-allow-private-network"] {
+            assert!(!response.headers().contains_key(header));
+        }
+        assert_eq!(response.text().await.unwrap(), body);
+    }
+    let response = h.request(reqwest::Method::GET, "/api/uso?fresco=invalid").header("origin", "http://other-server.invalid")
+        .header("access-control-request-private-network", "true").send().await.unwrap();
+    assert_eq!(response.status(), 422, "fora de preflight o cabeçalho não muda a validação");
+    assert_eq!(serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap(), fresh_error("invalid"));
+    h.assert_no_collection_or_forwarding();
+    h.shutdown().await;
 }
 
 #[tokio::test]
@@ -470,7 +648,7 @@ async fn missing_or_guest_token_goes_to_python_without_starting_scopes() {
     let response = hangar_server::http_client().build().unwrap().get(format!("http://{}/api/costs", h.address)).send().await.unwrap();
     assert_eq!(response.status(), 401);
     assert!(h.forwarded("GET", "/api/costs"));
-    assert!(!h.forwarded("GET", "/internal/costs/scopes"));
+    assert_eq!(h.upstream.scope_reads.load(Ordering::SeqCst), 0);
     let response = hangar_server::http_client().build().unwrap().get(format!("http://{}/api/costs", h.address)).bearer_auth("convidado").send().await.unwrap();
     assert_eq!(response.status(), 401);
 }
@@ -504,11 +682,11 @@ async fn only_the_owner_reaches_the_login_window_routes() {
 }
 
 #[tokio::test]
-async fn missing_internal_scopes_fail_with_code_instead_of_returning_empty_report() {
+async fn missing_scopes_fail_with_code_instead_of_returning_empty_report() {
     let h = Harness::new(false, false).await;
     assert_eq!(h.request(reqwest::Method::GET, "/api/costs").send().await.unwrap().status(), 202);
     assert_eq!(h.failure("/api/costs").await, "costs_no_scopes");
-    assert!(h.forwarded("GET", "/internal/costs/scopes"));
+    assert!(h.upstream.scope_reads.load(Ordering::SeqCst) > 0);
 }
 
 #[tokio::test]
@@ -524,7 +702,7 @@ async fn cotacao_get_only_returns_fx_and_post_is_forwarded() {
     let response = h.request(reqwest::Method::GET, "/api/cotacao").send().await.unwrap();
     assert_eq!(response.status(), 200);
     assert_eq!(serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap(), json!({"usd_brl":5.25}));
-    assert!(!h.forwarded("GET", "/internal/costs/scopes"));
+    assert_eq!(h.upstream.scope_reads.load(Ordering::SeqCst), 0);
     let response = h.request(reqwest::Method::POST, "/api/cotacao").send().await.unwrap();
     assert_eq!(response.status(), 200);
     assert!(h.forwarded("POST", "/api/cotacao"));
@@ -550,16 +728,40 @@ async fn owner_report_uses_shared_gzip_and_cors_contract() {
 }
 
 #[tokio::test]
-async fn fresh_accepts_fastapi_bool_spellings_and_invalid_value_is_forwarded() {
+async fn fresh_accepts_fastapi_bool_spellings_and_last_value_without_forwarding() {
     let h = Harness::new(true, false).await;
     h.ready().await;
-    for value in ["0", "1", "true", "FALSE", "on", "Off", "yes", "NO", "t", "Y", "F", "n"] {
-        let response = h.request(reqwest::Method::GET, &format!("/api/costs?fresco={value}")).send().await.unwrap();
-        assert_eq!(response.status(), 200, "{value}");
+    for route in ["/api/costs", "/api/uso"] {
+        for value in ["0", "1", "true", "FALSE", "on", "Off", "yes", "NO", "t", "Y", "F", "n"] {
+            let path = format!("{route}?fresco={value}");
+            let response = h.request(reqwest::Method::GET, &path).send().await.unwrap();
+            assert_eq!(response.status(), 200, "{path}");
+            assert!(!h.forwarded("GET", &path));
+        }
+        for query in ["fresco=invalid&fresco=false", "fresco=&fresco=%6Fn", "fresco=invalid&%66resco=FALSE"] {
+            let path = format!("{route}?{query}");
+            let response = h.request(reqwest::Method::GET, &path).send().await.unwrap();
+            assert_eq!(response.status(), 200, "{path}");
+            assert_eq!(serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap()["applied"], json!({"period":"all"}));
+            assert!(!h.forwarded("GET", &path));
+        }
     }
-    let response = h.request(reqwest::Method::GET, "/api/costs?fresco=invalid").send().await.unwrap();
-    assert_eq!(response.status(), 422);
-    assert!(h.forwarded("GET", "/api/costs?fresco=invalid"));
+    h.shutdown().await;
+}
+
+#[tokio::test]
+async fn costs_rejects_invalid_fresh_without_upstream_or_collection() {
+    let h = Harness::new(true, false).await;
+    for (query, input) in [("fresco=invalid", "invalid"), ("fresco=", ""),
+        ("fresco=%69nvalid", "invalid"), ("fresco=false&fresco=invalid", "invalid")] {
+        let response = h.request(reqwest::Method::GET, &format!("/api/costs?{query}")).header("origin", "https://teste.exemplo").send().await.unwrap();
+        assert_eq!(response.status(), 422);
+        assert_eq!(response.headers().get("access-control-allow-origin").and_then(|v| v.to_str().ok()), Some("*"));
+        assert_eq!(response.headers()["access-control-expose-headers"], "ETag, x-hangar-css-width, x-hangar-css-height");
+        assert_eq!(serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap(), fresh_error(input));
+        h.assert_no_collection_or_forwarding();
+    }
+    h.shutdown().await;
 }
 
 #[tokio::test]
@@ -685,7 +887,7 @@ async fn session_cost_reads_fixture_without_scopes_or_warming_scan() {
     common::costs::assert_close(&body, &json!({"cost_usd":0.0049875, "missing_models":[], "has_usage":true}), "custo da sessão");
     assert!(!h.forwarded("GET", "/api/sessions/codex-session/cost"));
     assert!(h.forwarded("GET", "/internal/sessions/codex%2Dsession/info"));
-    assert!(!h.forwarded("GET", "/internal/costs/scopes"));
+    assert_eq!(h.upstream.scope_reads.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -756,7 +958,7 @@ async fn session_cost_unavailable_index_fails_with_code() {
     h.upstream.infos.lock().unwrap().insert("session".into(), json!({"provider":"codex", "jsonl":h.base.join("codex/sessions/2026/09/30/rollout-c1.jsonl")}));
     assert_eq!(h.failure("/api/sessions/session/cost").await, "costs_no_disk");
     assert!(h.forwarded("GET", "/internal/sessions/session/info"));
-    assert!(!h.forwarded("GET", "/internal/costs/scopes"));
+    assert_eq!(h.upstream.scope_reads.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -831,7 +1033,7 @@ async fn session_cost_empty_usage_is_null_and_pricing_reload_is_independent() {
     let response = h.request(reqwest::Method::GET, "/api/sessions/session/cost").send().await.unwrap();
     assert_eq!(response.status(), 200);
     assert_eq!(serde_json::from_slice::<Value>(&response.bytes().await.unwrap()).unwrap(), json!({"cost_usd":7.0, "missing_models":[], "has_usage":true}));
-    assert!(!h.forwarded("GET", "/internal/costs/scopes"));
+    assert_eq!(h.upstream.scope_reads.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -882,7 +1084,7 @@ async fn session_cost_finite_tariff_overflow_fails_with_code_but_zero_remains_nu
     h.upstream.infos.lock().unwrap().insert("session".into(), json!({"provider":"codex", "jsonl":path}));
     assert_eq!(h.failure("/api/sessions/session/cost").await, "costs_non_finite");
     assert!(h.forwarded("GET", "/internal/sessions/session/info"));
-    assert!(!h.forwarded("GET", "/internal/costs/scopes"));
+    assert_eq!(h.upstream.scope_reads.load(Ordering::SeqCst), 0);
     std::fs::write(h.base.join("pricing/overrides.json"), json!({"gpt-5.5":{
         "input":0, "output":0, "cache_write":0, "cache_read":0, "provider":"openai"
     }}).to_string()).unwrap();
@@ -940,9 +1142,9 @@ async fn unreadable_folder_is_served_and_reported_to_the_journal_with_its_cause(
     let after: Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
     assert_eq!(after["totals"], before["totals"], "linhas da pasta ilegível mantidas");
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !h.upstream.journal.lock().unwrap().iter().any(|e| e["evento"] == "rust.costs_dir_unread"
+    while !h.upstream.journal().iter().any(|e| e["evento"] == "rust.costs_dir_unread"
         && e["codigo"] == "costs_dir_permission_denied" && e["sessao"] == "costs") {
-        assert!(Instant::now() < deadline, "diário: {:?}", h.upstream.journal.lock().unwrap());
+        assert!(Instant::now() < deadline, "diário: {:?}", h.upstream.journal());
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }

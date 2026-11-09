@@ -216,6 +216,7 @@ impl RuntimeFeed {
         let Some(hub) = self.hub.upgrade() else { return false };
         let Some(source) = hub.source_binding() else { return false };
         let generation = source.0;
+        let other = matches!(source.1.provider, crate::transcript::Provider::Pi | crate::transcript::Provider::Omp | crate::transcript::Provider::Kimi);
         if self.source_binding.is_none() && self.facts.is_none() { self.source_binding = Some(source.clone()); }
         if self.source_binding.as_ref() != Some(&source) {
             self.plugin_reading = None;
@@ -268,11 +269,18 @@ impl RuntimeFeed {
             crate::problem_gate::report_hidden(hub.diag(), &self.name, code, Some(message));
             true
         };
+        if other && let Some(Some(live)) = &value {
+            let matched = live.binding.as_ref().is_some_and(|binding| binding.conversation == source.1.key
+                && source.1.life.as_deref() == Some(crate::runtime::other_terminal::lifecycle_id(&binding.key, binding.generation).as_str()));
+            if !matched { return unproven("state_feed_binding_unavailable", "o estado não prova a vida desta conversa"); }
+        }
+        let preview_flags = value.as_ref().and_then(|live| live.as_ref()).and_then(|live| live.preview_flags).unwrap_or((true, true, true));
         let (mut state, texts) = match &value {
             None => return unproven("runtime_absent", "o servidor não tem o runtime ligado"),
             // Sessão parada (não aberta no Rust, encerrada, ou abrindo): `idle`, como o Python. Abertura
             // que falhou e vida que acabou com erro chegam como `Some` com o erro.
             // Claude parado leva o que o sidecar diz dele; sem sidecar (ou Codex) fica o `idle` puro.
+            Some(None) if other => return unproven("other_terminal_observation_pending", "a sessão ainda não tem observação comprovada"),
             Some(None) => match &self.parked {
                 Parked::State(state) => (state.clone(), Default::default()),
                 Parked::Hold => return true,
@@ -289,6 +297,9 @@ impl RuntimeFeed {
                 (state, Default::default())
             }
             Some(Some(live)) => {
+                if other && live.public_state.is_null() {
+                    return unproven("other_terminal_observation_pending", "a sessão ainda não tem observação comprovada");
+                }
                 let mut state = if live.public_state.is_null() { idle(&self.name, self.headless) } else {
                     match serde_json::from_value(live.public_state.clone()) {
                         Ok(state) => state,
@@ -296,8 +307,11 @@ impl RuntimeFeed {
                     }
                 };
                 if let Some((code, message)) = &live.error {
-                    state.problema = Some("runtime_falhou".into());
-                    state.problema_detalhe = Some(actor_problem(code, message));
+                    if other { crate::problem_gate::report_hidden(hub.diag(), &self.name, code, Some(message)); }
+                    else {
+                        state.problema = Some("runtime_falhou".into());
+                        state.problema_detalhe = Some(actor_problem(code, message));
+                    }
                 }
                 (state, [live.preview.clone(), live.thinking.clone(), live.tool.clone(), live.output.clone()])
             }
@@ -316,11 +330,13 @@ impl RuntimeFeed {
         let [preview, thinking, tool, output] = texts;
         // A prévia daqui é o texto exato do bloco, não a tela pintada: o começo da resposta gravada é ela
         // mesma lida antes do commit, em qualquer tamanho.
-        let preview = match hub.committed() {
+        let preview = if other {
+            if !hub.committed_known() || matches!(state.state.as_str(), "idle" | "dead") { String::new() } else { preview }
+        } else { match hub.committed() {
             Some(committed) if super::preview::is_committed(&preview, &committed) => String::new(),
             Some(committed) if { let n = super::preview::norm(&preview); !n.is_empty() && committed.starts_with(&n) } => String::new(),
             _ => preview,
-        };
+        }};
         // A sugestão só muda por fato novo; vazia desde o início não é mudança.
         let suggestion = self.plugin_reading.as_ref().and_then(|r| r.facts.as_ref().ok()).map(|r| r.suggestion.clone());
         if let Some(text) = suggestion.filter(|t| t != self.sent.suggestion.as_deref().unwrap_or("")) {
@@ -336,7 +352,8 @@ impl RuntimeFeed {
             if !self.emit_with(&hub, &source, runtime_binding.as_ref(), "state", data, |s| &mut s.state,
                 move || published.set(owner, &name, sid, Arc::new(state))).await { return hub.generation().is_some(); }
         }
-        let preview = serde_json::to_string(&PreviewEvent { session: self.name.clone(), text: preview, md: true, full: true, vivo: true }).unwrap_or_default();
+        let (md, full, vivo) = preview_flags;
+        let preview = serde_json::to_string(&PreviewEvent { session: self.name.clone(), text: preview, md, full, vivo }).unwrap_or_default();
         let sent = self.emit(&hub, &source, runtime_binding.as_ref(), "preview", preview, |s| &mut s.preview).await
             && self.emit(&hub, &source, runtime_binding.as_ref(), "pensamento", serde_json::json!({"text": thinking}).to_string(), |s| &mut s.thinking).await
             && self.emit(&hub, &source, runtime_binding.as_ref(), "ferramenta", serde_json::json!({"text": tool}).to_string(), |s| &mut s.tool).await
