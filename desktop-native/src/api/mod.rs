@@ -457,6 +457,15 @@ impl Api {
         Self::transcribed(request).await
     }
 
+    /// Pedaço do ditado em curso: só a transcrição (`limpar=0`), sem sessão nem anexo; o texto juntado é organizado no
+    /// fim. Teto curto: um pedaço tem segundos de fala, e o que trava volta ao caminho do arquivo inteiro.
+    pub async fn transcribe_piece(&self, wav: Vec<u8>) -> Result<Value, Failure> {
+        let r = self.client.post(self.transcribe_url(None, None, false, None))
+            .header(header::CONTENT_TYPE, "audio/wav").header("X-Filename", "ditado.wav").body(wav)
+            .timeout(Duration::from_secs(60)).send().await.map_err(|_| Failure::transport(true))?;
+        Self::checked(r, true).await?.json().await.map_err(|_| Failure::local("invalid_response"))
+    }
+
     pub async fn dictate_saved(&self,name:&str,filename:&str,style:Option<&str>,options:&DictationOptions)->Result<Value,Failure> {
         Self::transcribed(self.client.post(self.transcribe_url_with_options(Some(name),Some(filename),true,style,options))).await
     }

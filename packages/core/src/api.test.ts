@@ -24,6 +24,7 @@ import type { Server } from './servers';
 import { createShare, exportShortcuts, sendSubagentMessage } from './api';
 import { cancelQueuedMessage, editQueuedMessage, reorderQueuedMessage, steerQueuedMessage, terminateCodexCommand } from './api';
 import { fileUrl, uploadUrl, uploadUrlNative } from './api';
+import { relimparDitado, transcribePiece } from './api';
 import { editTranscriptionProviderKey, editTranscriptionProviderTarget, moveTranscriptionProvider, parseTranscriptionProviders, transcriptionProviderKeepsKey, transcriptionProviderLabel, transcriptionProvidersMissingKey, testTranscriptionProvider } from './api';
 const server = { id: 'a', label: 'Servidor A', baseUrl: 'https://a.test', token: 'token-a' };
 /** O campo `V18-campo` da vitrine, como o `inputControl` o tira da árvore. */
@@ -1043,6 +1044,70 @@ describe('formataErro (Task 11 round 2: envelopes nos helpers de envio e avisos 
   it('não-envelope devolve undefined', () => {
     expect(formataErro(undefined)).toBeUndefined();
     expect(formataErro(42)).toBeUndefined();
+  });
+});
+
+// Pedaço do ditado: só transcreve, sem organizar nem guardar; a organização vem uma vez no fim.
+describe('transcribePiece', () => {
+  it('manda o WAV ao servidor escolhido com limpar=0 e devolve o cru', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ text: ' primeiro pedaço ', provider: 'Groq', aviso: 'reserva usada' }), { status: 200 }));
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    const wav = new Blob(['RIFF'], { type: 'audio/wav' });
+    const r = await transcribePiece(server, wav);
+    expect(fetchMock.mock.calls[0][0]).toBe('https://a.test/api/dictation/transcribe?limpar=0');
+    const init = fetchMock.mock.calls[0][1]!;
+    expect(init.method).toBe('POST');
+    expect(init.body).toBe(wav);
+    expect(init.headers).toMatchObject({ Authorization: 'Bearer token-a', 'Content-Type': 'audio/wav' });
+    expect(timeout).toHaveBeenCalledWith(60_000);
+    expect(r).toEqual({ raw: ' primeiro pedaço ', provider: 'Groq', aviso: 'reserva usada' });
+  });
+
+  it('cancelar pelo chamador aborta o pedido', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ text: 'x' }), { status: 200 }));
+    const ctl = new AbortController();
+    await transcribePiece(server, new Blob(['RIFF']), ctl.signal);
+    const sent = fetchMock.mock.calls[0][1]!.signal!;
+    expect(sent.aborted).toBe(false);
+    ctl.abort();
+    expect(sent.aborted).toBe(true);
+  });
+
+  it('aceita os bytes do WAV (o React Native não monta Blob de bytes) e os manda como audio/wav', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ text: 'ok' }), { status: 200 }));
+    const bytes = new Uint8Array([0x52, 0x49, 0x46, 0x46]);
+    await transcribePiece(server, bytes);
+    const init = fetchMock.mock.calls[0][1]!;
+    expect(init.body).toBe(bytes);
+    expect(init.headers).toMatchObject({ 'Content-Type': 'audio/wav' });
+  });
+
+  it('falha leva o status', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ detail: 'provedor fora' }), { status: 503 }));
+    await expect(transcribePiece(server, new Blob(['RIFF']))).rejects.toMatchObject({ status: 503, message: '503: provedor fora' });
+  });
+});
+
+describe('relimparDitado', () => {
+  it('leva as escolhas de organização do ditado ao relimpar', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ text: 'organizado' }), { status: 200 }));
+    await relimparDitado('cru junto', 'briefing', server, {
+      session: 's1', generation: 'g2', organization_mode: 'harness', organization_model: 'opus',
+      organization_account: '/home/u/.claude-x', include_recent_messages: true,
+    });
+    expect(fetchMock.mock.calls[0][0]).toBe('https://a.test/api/ditado/relimpar');
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]!.body))).toEqual({
+      texto: 'cru junto', estilo: 'briefing', session: 's1', generation: 'g2', organization_mode: 'harness',
+      organization_model: 'opus', organization_account: '/home/u/.claude-x', include_recent_messages: true,
+    });
+
+    await relimparDitado('cru', 'prosa', server, { session: 's1' });
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]!.body))).toEqual({ texto: 'cru', estilo: 'prosa', session: 's1' });
   });
 });
 

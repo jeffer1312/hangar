@@ -3,7 +3,7 @@ import { configureApi, configureDiag, registrarSucesso } from '@hangar/core';
 import type { ChatEvent } from '@hangar/core';
 import { chatStore, _resetChatsForTests, filaCount, setChatsForeground, submitConversationDraft, isSubmitting } from './chat';
 import * as m from '../paraglide/messages';
-import { readDraft, writeDraft } from './drafts';
+import { attachDictationPath, readDraft, writeDraft } from './drafts';
 const disk = vi.hoisted(() => ({ values: new Map<string, string>(), fail: false }));
 vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({
   getString: (key: string) => disk.values.get(key),
@@ -1545,6 +1545,24 @@ test('falha parcial de broadcast conserva detalhe por destino e snapshot incerto
   })).rejects.toThrow('chegou em a; não chegou em b');
   expect(readDraft('srv1', 'sess')?.submission?.status).toBe('unknown');
   expect(isSubmitting('srv1', 'sess')).toBe(false);
+});
+
+test('envio entregue do campo solta o ditado inserido: o áudio que sobe depois não pega carona no rascunho vazio', async () => {
+  writeDraft('srv1', 'sess', { version: 1, text: 'ditado', revision: 1, transcript: null, attachments: [], submission: null, dictationId: 'd1' });
+  const requests = fetchManual();
+  const sending = chatStore('srv1', 'sess').send('ditado');
+  requests[0].responder(null);
+  await sending;
+  expect(readDraft('srv1', 'sess')?.dictationId).toBeUndefined();
+  expect(attachDictationPath('srv1', 'sess', 'd1', '/up/sess/ditado.wav')).toBe(false);
+  expect(readDraft('srv1', 'sess')?.recordings ?? []).toEqual([]);
+});
+
+test('envio recusado devolve o texto e o ditado continua dele', async () => {
+  writeDraft('srv1', 'sess', { version: 1, text: 'ditado', revision: 1, transcript: null, attachments: [], submission: null, dictationId: 'd1' });
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ detail: 'não' }), { status: 422 })));
+  await expect(chatStore('srv1', 'sess').send('ditado')).rejects.toThrow();
+  expect(readDraft('srv1', 'sess')).toMatchObject({ text: 'ditado', dictationId: 'd1' });
 });
 
 test('envio esvazia o campo na hora; ACK só tira o snapshot e conserva o texto digitado de novo', async () => {

@@ -1,0 +1,109 @@
+{
+  "about": "Casos da regra de corte do ditado em pedaços. Lidos pelo core (dictationPieces.test.ts) e pelo desktop nativo, que reimplementa a regra. Cada caso vira quadros {ts_ms, level}: ts_ms = k * frameMs (k = 1, 2, ...) até o fim do último segmento; o quadro pertence ao segmento cujo intervalo (início, fim] contém ts_ms; level = levels[i % levels.length], i = índice do quadro dentro do segmento. voicedMs é [mínimo, máximo] inclusive: depende do aquecimento do detector de vad.ts.",
+  "constants": {
+    "frameMs": 30,
+    "minPieceMs": 8000,
+    "pauseMs": 400,
+    "maxPieceMs": 20000,
+    "forcedWindowMs": 3000,
+    "tailMergeMs": 4000,
+    "minVoiceMs": 500
+  },
+  "cases": [
+    {
+      "name": "ditado de 6 s com pausa curta entre palavras: nenhum corte, segue inteiro",
+      "frameMs": 30,
+      "segments": [
+        { "ms": 3000, "levels": [0.06, 0.04, 0.05, 0.03] },
+        { "ms": 150, "levels": [0.002] },
+        { "ms": 2850, "levels": [0.06, 0.04, 0.05, 0.03] }
+      ],
+      "pieces": [],
+      "stop": { "tail": "whole", "piece": { "startMs": 0, "endMs": 6000, "voicedMs": [5700, 5850], "skip": false } }
+    },
+    {
+      "name": "16 s com pausa de 600 ms aos 9 s: um corte no meio da pausa",
+      "note": "pausa começa em 9000 (fim do último quadro de fala); chega a 420 ms no quadro 9420; corte em 9000 + 420/2",
+      "frameMs": 30,
+      "segments": [
+        { "ms": 9000, "levels": [0.06, 0.04, 0.05, 0.03] },
+        { "ms": 600, "levels": [0.002] },
+        { "ms": 6420, "levels": [0.06, 0.04, 0.05, 0.03] }
+      ],
+      "pieces": [ { "startMs": 0, "endMs": 9210, "voicedMs": [8850, 9000], "skip": false } ],
+      "stop": { "tail": "send", "piece": { "startMs": 9210, "endMs": 16020, "voicedMs": [6330, 6420], "skip": false } }
+    },
+    {
+      "name": "quem fala baixo (picos de 0.012 a 0.016): a fala conta como voz e o pedaço não é descartado",
+      "note": "voz = quadro acima de 0.01 que o detector não chama de silêncio: 3 de cada 6 quadros. Último quadro de voz em 8970; pausa chega a 420 ms no quadro 9390; corte em 8970 + 420/2",
+      "frameMs": 30,
+      "segments": [
+        { "ms": 9000, "levels": [0.014, 0.006, 0.012, 0.005, 0.016, 0.004] },
+        { "ms": 600, "levels": [0.002] },
+        { "ms": 6420, "levels": [0.014, 0.006, 0.012, 0.005, 0.016, 0.004] }
+      ],
+      "pieces": [ { "startMs": 0, "endMs": 9180, "voicedMs": [4400, 4500], "skip": false } ],
+      "stop": { "tail": "send", "piece": { "startMs": 9180, "endMs": 16020, "voicedMs": [3100, 3210], "skip": false } }
+    },
+    {
+      "name": "o mesmo ditado com quadros de 55 ms (medidor ao vivo): o corte segue o tempo, não a contagem",
+      "note": "último quadro de fala em 8965; pausa chega a 440 ms no quadro 9405; corte em 8965 + 440/2; último quadro em 15950",
+      "frameMs": 55,
+      "segments": [
+        { "ms": 9000, "levels": [0.06, 0.04, 0.05, 0.03] },
+        { "ms": 600, "levels": [0.002] },
+        { "ms": 6400, "levels": [0.06, 0.04, 0.05, 0.03] }
+      ],
+      "pieces": [ { "startMs": 0, "endMs": 9185, "voicedMs": [8750, 8965], "skip": false } ],
+      "stop": { "tail": "send", "piece": { "startMs": 9185, "endMs": 15950, "voicedMs": [6250, 6380], "skip": false } }
+    },
+    {
+      "name": "25 s de fala contínua com pausa de 390 ms (curta demais): corte forçado no quadro mais baixo dos últimos 3 s",
+      "note": "aos 20010 o pedaço passa de 20 s; entre 17010 e 20010 o quadro mais baixo é o de 18540 (0.02)",
+      "frameMs": 30,
+      "segments": [
+        { "ms": 9990, "levels": [0.06, 0.04, 0.05, 0.03] },
+        { "ms": 390, "levels": [0.002] },
+        { "ms": 8130, "levels": [0.06, 0.04, 0.05, 0.03] },
+        { "ms": 30, "levels": [0.02] },
+        { "ms": 6450, "levels": [0.06, 0.04, 0.05, 0.03] }
+      ],
+      "pieces": [ { "startMs": 0, "endMs": 18540, "voicedMs": [18000, 18150], "skip": false } ],
+      "stop": { "tail": "send", "piece": { "startMs": 18540, "endMs": 24990, "voicedMs": [6360, 6450], "skip": false } }
+    },
+    {
+      "name": "final de 2 s depois do corte: reenvia o último pedaço junto com o resto",
+      "frameMs": 30,
+      "segments": [
+        { "ms": 9000, "levels": [0.06, 0.04, 0.05, 0.03] },
+        { "ms": 510, "levels": [0.002] },
+        { "ms": 1680, "levels": [0.06, 0.04, 0.05, 0.03] }
+      ],
+      "pieces": [ { "startMs": 0, "endMs": 9210, "voicedMs": [8850, 9000], "skip": false } ],
+      "stop": { "tail": "merge", "piece": { "startMs": 0, "endMs": 11190, "voicedMs": [10500, 10680], "skip": false } }
+    },
+    {
+      "name": "18 s só de ruído da sala no meio: o pedaço de ruído é descartado",
+      "note": "depois do corte em 9210 a pausa conta a partir do corte; o meio dela passa de 9210 + 8000 no quadro 25230 (meio = 9210 + 16020/2)",
+      "frameMs": 30,
+      "segments": [
+        { "ms": 9000, "levels": [0.06, 0.04, 0.05, 0.03] },
+        { "ms": 18000, "levels": [0.001, 0.0015, 0.0008] },
+        { "ms": 3000, "levels": [0.06, 0.04, 0.05, 0.03] }
+      ],
+      "pieces": [
+        { "startMs": 0, "endMs": 9210, "voicedMs": [8850, 9000], "skip": false },
+        { "startMs": 9210, "endMs": 17220, "voicedMs": [0, 0], "skip": true }
+      ],
+      "stop": { "tail": "send", "piece": { "startMs": 17220, "endMs": 30000, "voicedMs": [2850, 3000], "skip": false } }
+    }
+  ],
+  "joinAbout": "Junção do cru dos pedaços, na ordem: cada texto sem espaço nas pontas, os vazios fora, um espaço entre eles. Sem organização a emenda sairia sem pontuação (\"ela trava Não sei\"): quando o anterior não termina em . ! ? … : ; , e o seguinte começa com letra maiúscula (Unicode), entra um ponto antes do espaço.",
+  "join": [
+    { "pieces": ["ela trava", "Não sei o que fazer"], "expected": "ela trava. Não sei o que fazer" },
+    { "pieces": ["Primeiro ponto.", "Segundo ponto"], "expected": "Primeiro ponto. Segundo ponto" },
+    { "pieces": ["e aí a gente foi", "embora depois"], "expected": "e aí a gente foi embora depois" },
+    { "pieces": ["  Olá, ", "", "Mundo  "], "expected": "Olá, Mundo" },
+    { "pieces": ["deu certo", "Ótimo, segue"], "expected": "deu certo. Ótimo, segue" }
+  ]
+}

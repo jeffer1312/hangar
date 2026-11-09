@@ -54,6 +54,7 @@ export { theme, dark as themeDark, light as themeLight, base as themeBase } from
 export type { ThemeTokens } from './theme';
 export * from './corTema';
 export * from './vad';
+export * from './dictationPieces';
 export * from './autoEnvio';
 export * from './ditadoEstilo';
 export * from './tableChart';

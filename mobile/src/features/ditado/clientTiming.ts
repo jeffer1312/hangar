@@ -26,10 +26,11 @@ export const failureCode = (detail: string) => /^(\d{3}):/.exec(detail)?.[1] ?? 
  * tempos no `detalhe`. `motivo` diz se a parada foi um toque, o silêncio, o teto ou a tela escondida.
  * `stop_to_file_ms` vai da parada ao arquivo pronto no gravador, como no nativo; `prepare_ms`, a cópia e o
  * registro do áudio antes do envio. Sem `fileAt`, todo o intervalo conta como `stop_to_file_ms`.
- * `failure.expected`: recusa prevista (app escondido, outra conversa), que é aviso.
+ * `failure.expected`: recusa prevista (app escondido, outra conversa), que é aviso. `extra`: marca do caminho
+ * (`path=pieces …`, `path=pieces_fallback`) no fim do `detalhe`, para comparar pedaços com o arquivo inteiro.
  */
 export function recordTiming(server: Server, stop: { stoppedAt: number; fileAt?: number }, clock: ReturnType<typeof stageClock>,
-  motivo: string, failure?: { code: string; expected?: boolean }, warned = false): void {
+  motivo: string, failure?: { code: string; expected?: boolean }, warned = false, extra?: string): void {
   clock.close();
   const total = Date.now() - stop.stoppedAt;
   const fileAt = stop.fileAt ?? clock.start;
@@ -38,6 +39,6 @@ export function recordTiming(server: Server, stop: { stoppedAt: number; fileAt?:
   registrarDiag({
     evento: 'dictation.client_timing', nivel, ...(failure ? { codigo: failure.code } : {}), ms: total,
     ...(failure ? { etapa: clock.stage } : {}), motivo,
-    detalhe: `stop_to_file_ms=${fileAt - stop.stoppedAt} prepare_ms=${clock.start - fileAt} ${steps} total_ms=${total}`,
+    detalhe: `stop_to_file_ms=${fileAt - stop.stoppedAt} prepare_ms=${clock.start - fileAt} ${steps} total_ms=${total}${extra ? ` ${extra}` : ''}`,
   }, server.invite ? undefined : server.baseUrl);
 }

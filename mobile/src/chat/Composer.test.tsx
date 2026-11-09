@@ -14,7 +14,8 @@ const h = vi.hoisted(() => ({
   listeners: [] as ((state: string) => void)[],
   server: { id: 'srv', label: 'server', baseUrl: 'https://example.test', token: 'token' } as Server,
   start: vi.fn(),
-  onFinish: null as null | ((file: File, reason: MotivoFim, uri: string) => Promise<void>),
+  onFinish: null as null | ((file: File, reason: MotivoFim, uri: string, stop?: { stoppedAt: number; fileAt: number },
+    pieces?: { result: Promise<unknown>; abort: () => void } | null) => Promise<void>),
   transcribe: vi.fn(),
   navigation: { addListener: () => () => {}, isFocused: () => true },
 }));
@@ -60,7 +61,9 @@ vi.mock('../features/ditado/dictationRun', () => ({
 vi.mock('./draftAttachments', () => ({ retainDraftAttachment: async (attachment: unknown) => attachment, removeDraftAttachment: vi.fn() }));
 vi.mock('./ComposerField', () => ({
   ComposerBox: ({ children }: { children: ReactNode }) => createElement('div', null, children),
-  ComposerInput: ({ value }: { value: string }) => createElement('textarea', { value, readOnly: true }),
+  ComposerInput: ({ value, onCancelRecording }: { value: string; onCancelRecording?: () => void }) => createElement('div', null,
+    createElement('textarea', { value, readOnly: true }),
+    onCancelRecording ? createElement('button', { 'aria-label': 'cancel-recording', onClick: onCancelRecording }) : null),
   ComposerActions: ({ mic, send }: { mic: { onPress: () => void; disabled: boolean }; send: { onPress: () => void; disabled: boolean } }) =>
     createElement('div', null,
       createElement('button', { 'aria-label': 'record', disabled: mic.disabled, onClick: mic.onPress }),
@@ -87,6 +90,8 @@ import { overwriteGetLocale } from '../paraglide/runtime';
 import * as m from '../paraglide/messages';
 import { Composer } from './Composer';
 import { addContextRef, contextRefsSnapshot, useContextRefs } from '../stores/contextRefs';
+import { removeDraftAttachment } from './draftAttachments';
+import { toast } from '../ui/Toast';
 
 const roots: Root[] = [];
 const props = { serverId: 'srv', name: 'sess', queuePanel: { entries: [], revision: 0 } as any };
@@ -206,6 +211,75 @@ describe('Composer — ditado', () => {
     expect(container.querySelectorAll('[data-audio]')).toHaveLength(1);
     expect(container.textContent).not.toContain('interrompida');
     expect(container.textContent).not.toContain('Enviando em');
+  });
+
+  it('cancelar a gravação aborta os pedaços em voo e não transcreve', async () => {
+    const { container } = await mount();
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="record"]')!.click());
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="cancel-recording"]')!.click());
+    const pieces = { result: new Promise<never>(() => {}), abort: vi.fn() };
+    await act(async () => h.onFinish!(new File(['audio'], 'ditado.wav', { type: 'audio/wav' }), 'botao', 'file:///ditado.wav', undefined, pieces));
+    expect(pieces.abort).toHaveBeenCalled();
+    expect(h.transcribe).not.toHaveBeenCalled();
+  });
+
+  it('os pedaços vão junto com o arquivo; a subida que falha depois do texto aparece e o texto fica', async () => {
+    h.transcribe.mockImplementationOnce(async (_server: Server, serverId: string, name: string, voice: DictationDraft,
+      _source: unknown, opts: { isActive: () => boolean }) => {
+      const result = { text: 'Texto dos pedaços', raw: 'texto dos pedaços', issue: '', applied: 'prosa' };
+      const saved = Promise.reject(new Error('413: grande demais'));
+      saved.catch(() => {});
+      return { completed: finishDictation(serverId, name, voice.id, result, opts.isActive()), text: result.text,
+        raw: result.raw, aviso: '', path: '', applied: 'prosa', saved };
+    });
+    const { container } = await mount();
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="record"]')!.click());
+    const pieces = { result: Promise.resolve({ raw: 'texto dos pedaços', aviso: '' }), abort: vi.fn() };
+    await act(async () => h.onFinish!(new File(['audio'], 'ditado.wav', { type: 'audio/wav' }), 'botao', 'file:///ditado.wav', undefined, pieces));
+    expect(h.transcribe.mock.calls[0][4]).toMatchObject({ pieces });
+    expect(readDraft('srv', 'sess')?.text).toBe('Texto dos pedaços');
+    expect(container.textContent).toContain('413: grande demais');
+    expect(pieces.abort).not.toHaveBeenCalled();
+  });
+
+  it('a falha da subida soma ao aviso já mostrado e não apaga a cópia local (o ditado guardado a usa)', async () => {
+    let failUpload!: (e: Error) => void;
+    h.transcribe.mockImplementationOnce(async (_server: Server, serverId: string, name: string, voice: DictationDraft,
+      _source: unknown, opts: { isActive: () => boolean }) => {
+      const result = { text: 'Texto dos pedaços', raw: 'texto dos pedaços', issue: 'organização parcial', applied: 'prosa' };
+      const saved = new Promise<void>((_, reject) => { failUpload = reject; });
+      saved.catch(() => {});
+      return { completed: finishDictation(serverId, name, voice.id, result, opts.isActive()), text: result.text,
+        raw: result.raw, aviso: 'organização parcial', path: '', applied: 'prosa', saved };
+    });
+    const { container } = await mount();
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="record"]')!.click());
+    await act(async () => h.onFinish!(new File(['audio'], 'ditado.wav', { type: 'audio/wav' }), 'botao', 'file:///ditado.wav', undefined,
+      { result: Promise.resolve({ raw: 'texto dos pedaços', aviso: '' }), abort: vi.fn() }));
+    expect(container.textContent).toContain('organização parcial');
+    await act(async () => { failUpload(new Error('413: grande demais')); });
+    expect(container.textContent).toContain('organização parcial');
+    expect(container.textContent).toContain('413: grande demais');
+    expect(removeDraftAttachment).not.toHaveBeenCalled();
+  });
+
+  it('a falha da subida com a conversa já fechada vai a um aviso', async () => {
+    let failUpload!: (e: Error) => void;
+    h.transcribe.mockImplementationOnce(async (_server: Server, serverId: string, name: string, voice: DictationDraft,
+      _source: unknown, opts: { isActive: () => boolean }) => {
+      const result = { text: 'Texto', raw: 'texto', issue: '', applied: 'prosa' };
+      const saved = new Promise<void>((_, reject) => { failUpload = reject; });
+      saved.catch(() => {});
+      return { completed: finishDictation(serverId, name, voice.id, result, opts.isActive()), text: result.text,
+        raw: result.raw, aviso: '', path: '', applied: 'prosa', saved };
+    });
+    const { container, root } = await mount();
+    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="record"]')!.click());
+    await act(async () => h.onFinish!(new File(['audio'], 'ditado.wav', { type: 'audio/wav' }), 'botao', 'file:///ditado.wav', undefined,
+      { result: Promise.resolve({ raw: 'texto', aviso: '' }), abort: vi.fn() }));
+    await act(async () => root.render(null));
+    await act(async () => { failUpload(new Error('413: grande demais')); });
+    expect(toast.erro).toHaveBeenCalledWith('413: grande demais');
   });
 
   it('mantém vários chips ao gravar novamente e remover preserva o texto, inclusive após remontar', async () => {

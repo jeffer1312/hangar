@@ -1,13 +1,23 @@
-import { fileAuthHeader, transcribeUploadedForServer, uploadFileForServer, uploadUrlNative, type Server } from '@hangar/core';
+import {
+  fileAuthHeader, registrarDiag, relimparDitado, transcribeUploadedForServer, uploadFileForServer, uploadUrlNative, type Server,
+} from '@hangar/core';
 import * as m from '../../paraglide/messages';
 import { failureCode, recordTiming, stageClock } from './clientTiming';
 import { chatStore } from '../../stores/chat';
-import { finishDictation, readDictation, readDraft, setDictationInFlight, writeDictation, type DictationDraft, type DraftAttachment } from '../../stores/drafts';
+import {
+  attachDictationPath, finishDictation, keepDictationAudio, readDictation, readDraft, setDictationInFlight, writeDictation,
+  type DictationDraft,
+  type DraftAttachment,
+} from '../../stores/drafts';
 import { removeDraftAttachment } from '../../chat/draftAttachments';
+import { useDictationOrganizationStore } from './dictationOrganization';
+import { dictationStyleStore } from './ditadoEstiloStore';
+import type { PiecesHandle } from './livePieces';
 
-// `file`: gravação nova, sobe antes de transcrever. `arquivo`: nome solto na pasta da conversa, ou o
+// `file`: gravação nova, sobe antes de transcrever; com `pieces`, o texto vem dos pedaços transcritos
+// durante a fala e o arquivo sobe em paralelo. `arquivo`: nome solto na pasta da conversa, ou o
 // `path` absoluto guardado (alcança o áudio de antes de um /clear; o convidado não pode usá-lo).
-export type DictationSource = { file: File } | { arquivo: string };
+export type DictationSource = { file: File; pieces?: PiecesHandle | null } | { arquivo: string };
 
 export interface DictationOutcome {
   completed: ReturnType<typeof finishDictation>;
@@ -16,7 +26,43 @@ export interface DictationOutcome {
   aviso: string;
   path: string;
   applied?: string;
+  /** Ditado em pedaços: a subida do arquivo inteiro, que termina depois do texto. Rejeita com a falha dela. */
+  saved?: Promise<void>;
 }
+
+function dropLocalCopy(uri: string): void {
+  try { removeDraftAttachment(uri); } catch { /* só um arquivo órfão na pasta do app */ }
+}
+
+const issueOf = (e: unknown) => {
+  const detail = e instanceof Error ? e.message : m.composer_falha_transcricao();
+  return /^(501|503):/.test(detail) ? `${m.composer_ditado_indisponivel()}: ${detail}` : detail;
+};
+
+// O cru dos pedaços organizado uma vez, como o `/transcribe` faria com o arquivo inteiro. O relimpar exige
+// estilo: sem o da pílula, o salvo no servidor; antes de lê-lo, o arquivo inteiro deixa o servidor usar o dele.
+async function organizePieces(server: Server, name: string, voice: DictationDraft, pieces: PiecesHandle) {
+  const transcribed = await pieces.result;
+  // Para o diário: quando o último pedaço voltou e quanto a organização levou.
+  const piecesAt = Date.now();
+  const raw = transcribed.raw.trim();
+  if (!raw) throw new Error('pieces_empty');
+  const style = dictationStyleStore(server).getState();
+  const estilo = voice.estilo ?? (style.pronto ? style.valor : undefined);
+  if (!estilo) throw new Error('style_unknown');
+  const organized = useDictationOrganizationStore.getState().byServer[server.id] === 'off'
+    ? { text: raw, aviso: null, estilo_aplicado: 'cru' }
+    : await relimparDitado(raw, estilo, server, { session: name });
+  const text = organized.text.trim();
+  if (!text) throw new Error('pieces_organized_empty');
+  // Como o `with_provider` do servidor: o aviso da transcrição antes do da organização.
+  const aviso = [transcribed.aviso, organized.aviso].filter(Boolean).join(' · ');
+  return { text, raw, aviso, applied: organized.estilo_aplicado ?? estilo, count: transcribed.count, piecesAt,
+    organizeMs: Date.now() - piecesAt };
+}
+
+/** Marca no `detalhe` do `dictation.client_timing` do caminho de hoje depois de os pedaços desistirem. */
+const FALLBACK = 'path=pieces_fallback';
 
 // `lost`: o ditado sumiu do armazenamento e a repetição fica só na tela; `storageIssue`: guardar a falha falhou.
 export class DictationError extends Error {
@@ -55,17 +101,83 @@ export async function runDictation(server: Server, serverId: string, name: strin
   const clock = stageClock();
   setDictationInFlight(serverId, name, voice.id, true);
   notify(serverId, name);
+  const pieces = 'file' in source ? source.pieces : null;
+  let fellBack = false;
   try {
-    opts.check?.();
+    try {
+      opts.check?.();
+    } catch (e) {
+      pieces?.abort();
+      throw e;
+    }
     let arquivo: string;
     let uploaded = '';
     if ('file' in source) {
       // Sobe e guarda o caminho antes de transcrever: transcrição que cai não custa outra cópia.
-      clock.enter('upload');
-      ({ path: uploaded } = await uploadFileForServer(server, name, source.file, { audioOnly: true }));
+      // Com pedaços a subida corre ao lado e só entra na medida se o caminho de hoje voltar a esperar por ela.
+      if (!pieces) clock.enter('upload');
+      const upload = uploadFileForServer(server, name, source.file, { audioOnly: true }).then(({ path }) => {
+        const pending = readDictation(serverId, name);
+        if (pending?.id === voice.id) writeDictation(serverId, name, { ...pending, serverPath: path });
+        return path;
+      });
+      if (pieces) {
+        // A falha da subida é de quem a espera: o texto dos pedaços não espera por ela.
+        upload.catch(() => {});
+        // `transcribe`: a espera do último pedaço e a organização; a subida corre fora da medida.
+        clock.enter('transcribe');
+        const organized = await organizePieces(server, name, voice, pieces).catch((e: unknown) => {
+          pieces.abort();
+          registrarDiag({ evento: 'dictation.pieces_fallback', nivel: 'aviso', codigo: 'pieces_failed',
+            detalhe: e instanceof Error ? e.message : undefined });
+          return null;
+        });
+        if (organized) {
+          const { text, raw, aviso, applied } = organized;
+          clock.enter('finish');
+          const completed = finishDictation(serverId, name, voice.id, { text, raw, issue: aviso, applied }, opts.isActive());
+          if (opts.stoppedAt !== undefined) {
+            recordTiming(server, { stoppedAt: opts.stoppedAt, fileAt: opts.fileAt }, clock, voice.motivo, undefined, !!aviso,
+              `path=pieces pieces=${organized.count} last_piece_wait_ms=${organized.piecesAt - opts.stoppedAt} organize_ms=${organized.organizeMs}`);
+          }
+          const saved = upload.then(
+            (path) => {
+              if (!attachDictationPath(serverId, name, voice.id, path)) {
+                registrarDiag({ evento: 'dictation.audio_unattached', nivel: 'aviso', codigo: 'dictation_already_left' });
+              }
+              // A cópia local sai quando nenhum ditado guardado a toca mais; o áudio está no servidor.
+              if (voice.audio && readDictation(serverId, name)?.id !== voice.id) dropLocalCopy(voice.audio.uri);
+              notify(serverId, name);
+            },
+            (e: unknown) => {
+              const issue = issueOf(e);
+              registrarDiag({ evento: 'dictation.upload_failed', nivel: 'erro', codigo: 'pieces_upload_failed', detalhe: issue });
+              // Sem o arquivo no servidor, a cópia local é o único áudio: fica com o ditado enquanto ele existir.
+              let kept = true;
+              try {
+                kept = keepDictationAudio(serverId, name, { ...voice, text, raw, applied, issue: '' }, issue);
+              } catch (storageError) {
+                // Sem conseguir guardar, a cópia fica no disco: apagar seria perder o áudio.
+                registrarDiag({ evento: 'dictation.audio_unattached', nivel: 'erro', codigo: 'dictation_audio_not_stored',
+                  detalhe: storageError instanceof Error ? storageError.message : undefined });
+              }
+              if (!kept) {
+                registrarDiag({ evento: 'dictation.audio_unattached', nivel: 'aviso', codigo: 'dictation_already_left' });
+                if (voice.audio) dropLocalCopy(voice.audio.uri);
+              }
+              notify(serverId, name);
+              throw new Error(issue);
+            },
+          );
+          // Quem chama escuta a mesma promessa; isto só evita a rejeição solta se ninguém escutar.
+          saved.catch(() => {});
+          return { completed, text, raw, aviso, path: '', applied, saved };
+        }
+        fellBack = true;
+        clock.enter('upload');
+      }
+      uploaded = await upload;
       clock.enter('save');
-      const pending = readDictation(serverId, name);
-      if (pending?.id === voice.id) writeDictation(serverId, name, { ...pending, serverPath: uploaded });
       arquivo = uploadName(uploaded);
     } else {
       arquivo = source.arquivo;
@@ -82,7 +194,10 @@ export async function runDictation(server: Server, serverId: string, name: strin
     clock.enter('finish');
     const completed = finishDictation(serverId, name, voice.id,
       { text, raw, issue: aviso, serverPath: path, applied }, opts.isActive());
-    if (opts.stoppedAt !== undefined) recordTiming(server, { stoppedAt: opts.stoppedAt, fileAt: opts.fileAt }, clock, voice.motivo, undefined, !!aviso);
+    if (opts.stoppedAt !== undefined) {
+      recordTiming(server, { stoppedAt: opts.stoppedAt, fileAt: opts.fileAt }, clock, voice.motivo, undefined, !!aviso,
+        fellBack ? FALLBACK : undefined);
+    }
     return { completed, text, raw, aviso, path, applied };
   } catch (e) {
     const detail = e instanceof Error ? e.message : m.composer_falha_transcricao();
@@ -90,9 +205,9 @@ export async function runDictation(server: Server, serverId: string, name: strin
       // Na etapa `check` só há a conferência de quem chama: a recusa dela é prevista.
       const refused = clock.stage === 'check';
       recordTiming(server, { stoppedAt: opts.stoppedAt, fileAt: opts.fileAt }, clock, voice.motivo,
-        refused ? { code: 'interrupted', expected: true } : { code: failureCode(detail) });
+        refused ? { code: 'interrupted', expected: true } : { code: failureCode(detail) }, false, fellBack ? FALLBACK : undefined);
     }
-    const issue = /^(501|503):/.test(detail) ? `${m.composer_ditado_indisponivel()}: ${detail}` : detail;
+    const issue = issueOf(e);
     let lost = false;
     let storageIssue = '';
     try {

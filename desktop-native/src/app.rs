@@ -102,6 +102,7 @@ mod sidebar;
 mod machines_tray;
 mod subagent;
 pub(crate) mod dictation;
+mod dictation_pieces;
 mod sync;
 mod connect;
 mod devices;
@@ -387,6 +388,8 @@ enum Payload {
     Terminal(terminal::Reply),
     // O caminho do áudio que este pedido guardou nos anexos, também quando a transcrição falhou.
     Dictation(u64, Option<String>, Result<Value, Failure>),
+    // Ditado em pedaços: a subida do arquivo inteiro terminou depois do texto (id da gravação).
+    DictationSaved(u64, Result<String, Failure>),
     // Aba Atividade: a conta de subagentes no disco e a lista da aba.
     Activity(activity::ActivityReply),
     TabPreview(tab_preview::TabPreviewReply),
@@ -2181,6 +2184,12 @@ impl Hangar {
                 if self.dictation_in_tab_preview(cx) {
                     self.with_tab_preview_slot(cx, |this, cx| this.receive_dictation(seq, path, result, window, cx));
                 } else { self.receive_dictation(seq, path, result, window, cx); }
+                return;
+            }
+            Payload::DictationSaved(id, saved) => {
+                self.dictation.saved(id, saved);
+                self.redraw(panes::Area::Bottom, cx);
+                cx.notify();
                 return;
             }
             Payload::FileView(reply) => { self.receive_file_view(reply, window, cx); return; }
