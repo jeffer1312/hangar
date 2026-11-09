@@ -2966,7 +2966,11 @@ impl RuntimeRegistry {
         let (key,generation,provider,handle) = self.entries.lock().await.iter().filter(|(_,e)|e.name==name).max_by_key(|(_,e)|e.generation)
             .map(|(key,e)|(key.clone(),e.generation,e.provider.clone(),e.handle.clone()))?;
         let terminal = handle.has_terminal();
-        let healthy = probe(&handle).await.unwrap_or(false);
+        // Sem resposta no prazo o ator está ocupado (leitura de tela lenta no psmux), não doente: a escrita espera a vez dele.
+        let healthy = match probe(&handle).await {
+            Some(healthy) => healthy,
+            None => { self.diag.report("runtime.write_actor_busy",name,"actor_busy","o ator não respondeu em 1 s; a escrita esperou a vez dele"); true }
+        };
         Some(WriteTarget { key,generation,provider,terminal,healthy,handle })
     }
     /// A saúde que o painel da fila mostra: `None` quando o ator não respondeu no prazo (ocupado entregando),
