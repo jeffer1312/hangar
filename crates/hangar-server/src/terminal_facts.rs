@@ -65,7 +65,7 @@ impl TerminalMetadata {
             if matches.next().is_some() { return Err(ServiceError("terminal_metadata_ambiguous")); }
             let pid = row.agent_pid.and_then(|pid| u32::try_from(pid).ok()).filter(|pid| *pid > 0).ok_or(ServiceError("terminal_metadata_process_unavailable"))?;
             let birth = agent_birth(pid).ok_or(ServiceError("terminal_agent_unavailable"))?;
-            let record = read_json(&config.join("sessions").join(format!("{pid}.json")), "terminal_native_record_unavailable")?;
+            let record = read_native_record(&config.join("sessions").join(format!("{pid}.json")))?;
             let proven = match record {
                 Some(record) => record["pid"].as_u64() == Some(u64::from(pid)) && record["sessionId"].as_str() == Some(&binding.conversation),
                 None => row.repl_sid.as_deref() == Some(&binding.conversation) && row.transcript.as_ref().is_some_and(|source| source.tracked && source.jsonl.as_deref().is_some_and(|path| Path::new(path) == transcript)),
@@ -283,8 +283,28 @@ fn clipboard_available(pane_pid: i64) -> bool {
 fn read_json(path: &Path, code: &'static str) -> Result<Option<Value>, ServiceError> {
     match std::fs::read(path) { Ok(bytes) => serde_json::from_slice(&bytes).map(Some).map_err(|_| ServiceError(code)), Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None), Err(_) => Err(ServiceError(code)) }
 }
+/// Registro nativo ilegível e parado há este tempo é escrita que o disco cheio cortou: o Claude só o refaz na
+/// próxima troca de estado, que a fila travada nunca traz. Ilegível recente é reescrita em andamento.
+pub(crate) const STUCK_NATIVE_RECORD: Duration = Duration::from_secs(5);
+/// O `sessions/<pid>.json` do Claude; ilegível e parado vale como ausente, e quem lê segue a prova do registro sumido.
+pub(crate) fn read_native_record(path: &Path) -> Result<Option<Value>, ServiceError> {
+    let unavailable = ServiceError("terminal_native_record_unavailable");
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(unavailable),
+    };
+    let error = match serde_json::from_slice::<Value>(&bytes) { Ok(record) => return Ok(Some(record)), Err(error) => error };
+    let stuck = std::fs::metadata(path).and_then(|meta| meta.modified()).ok().and_then(|at| at.elapsed().ok()).is_some_and(|age| age >= STUCK_NATIVE_RECORD);
+    if !stuck { return Err(unavailable); }
+    let record = path.to_string_lossy();
+    if crate::warn_limit::allow(Some(&record), "terminal_native_record_invalid") {
+        tracing::warn!(code = "terminal_native_record_invalid", %record, bytes = bytes.len(), kind = ?error.classify(), "registro nativo do Claude ilegível e parado; vale como ausente");
+    }
+    Ok(None)
+}
 fn native_record(metadata: &TerminalMetadata, conversation: &str) -> Result<Option<Value>, ServiceError> {
-    let record = read_json(&metadata.config_dir.join("sessions").join(format!("{}.json", metadata.agent_pid)), "terminal_native_record_unavailable")?;
+    let record = read_native_record(&metadata.config_dir.join("sessions").join(format!("{}.json", metadata.agent_pid)))?;
     if let Some(record) = &record && (record["pid"].as_u64() != Some(u64::from(metadata.agent_pid)) || record["sessionId"].as_str() != Some(conversation)) { return Err(ServiceError("terminal_native_record_changed")); } Ok(record)
 }
 /// `recent`: o `/pull` visto há pouco cobre só a leitura que falta (nenhum transcript aberto, ou os arquivos
@@ -436,6 +456,19 @@ mod tests {
         for field in ["config_dir","agent_pid","agent_birth","fingerprint"] {let mut missing=meta.clone();missing.as_object_mut().unwrap().remove(field);assert!(TerminalMetadata::from_descriptor(&missing).is_err());}
         let mut missing=meta.clone();missing.as_object_mut().unwrap().remove("message_origin");assert_eq!(TerminalMetadata::from_descriptor(&missing).unwrap().origin,format!("uds:hangar-{}",std::process::id()));
         let mut wrong=meta;wrong["message_origin"]=json!("peer");assert!(TerminalMetadata::from_descriptor(&wrong).is_err());
+    }
+    #[test]
+    fn a_native_record_left_unreadable_counts_as_absent_only_once_it_stops_changing() {
+        let dir=tempfile::tempdir().unwrap();let target=target(dir.path());std::fs::create_dir(dir.path().join("sessions")).unwrap();let path=dir.path().join("sessions").join(format!("{}.json",target.metadata.agent_pid));
+        let age=|path:&Path|std::fs::File::options().write(true).open(path).unwrap().set_modified(SystemTime::now()-STUCK_NATIVE_RECORD-Duration::from_secs(1)).unwrap();
+        for raw in ["",r#"{"pid":1,"sess"#] {
+            std::fs::write(&path,raw).unwrap();
+            assert_eq!(native_record(&target.metadata,"sid").unwrap_err().0,"terminal_native_record_unavailable","reescrita em andamento: a próxima leitura acerta");
+            age(&path);
+            assert_eq!(native_record(&target.metadata,"sid").unwrap(),None,"o disco cheio cortou a escrita e o Claude não a refaz");
+        }
+        std::fs::write(&path,json!({"pid":target.metadata.agent_pid,"sessionId":"sid"}).to_string()).unwrap();age(&path);
+        assert_eq!(native_record(&target.metadata,"sid").unwrap().unwrap()["sessionId"],"sid","registro bom e antigo segue valendo");
     }
     #[test]
     fn native_record_absent_is_distinct_from_unreadable_or_other_life() {

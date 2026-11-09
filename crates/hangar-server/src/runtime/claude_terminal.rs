@@ -79,22 +79,6 @@ fn claim_holds(claim: &PluginClaim, plugin_key: Option<&str>, transcript_exists:
         && transcript_exists(sid)
 }
 
-/// Registro vazio ou cortado (disco cheio no meio da escrita) vale como ausente: o Claude não o
-/// reescreve, e o caminho do registro sumido (`/pull` do plugin, depois a lista) ainda prova a conversa.
-fn native_conversation(raw: &[u8], agent: u32, name: &str, record: &Path) -> Result<Option<String>, RuntimeError> {
-    let native: Value = match serde_json::from_slice(raw) {
-        Ok(native) => native,
-        Err(error) => {
-            if crate::warn_limit::allow(Some(name), "terminal_native_record_invalid") {
-                tracing::warn!(code = "terminal_native_record_invalid", session = name, record = %record.display(), bytes = raw.len(), kind = ?error.classify(), "registro nativo do Claude ilegível; vale como ausente");
-            }
-            return Ok(None);
-        }
-    };
-    if native["pid"].as_u64() != Some(u64::from(agent)) { return Err(refused("terminal_native_record_changed", "o registro do Claude no terminal é de outro processo")); }
-    Ok(native["sessionId"].as_str().filter(|s| !s.is_empty()).map(str::to_owned))
-}
-
 /// O agente Claude do pane e a conversa que ele roda. `Ok(None)`: o pane não é de uma conversa Claude
 /// (shell, outro agente, `claude login`), e a escrita segue o caminho de sempre.
 fn prove(panes: &[Pane], name: &str, claude_base: &Path, claim: Option<&PluginClaim>) -> Result<Option<Proven>, RuntimeError> {
@@ -118,9 +102,12 @@ fn prove(panes: &[Pane], name: &str, claude_base: &Path, claim: Option<&PluginCl
     let env = |var: &str| procs.env_var(i64::from(agent), var).ok().flatten().map(|v| v.to_string_lossy().into_owned()).filter(|v| !v.is_empty());
     let config_dir = env("CLAUDE_CONFIG_DIR").map_or_else(|| claude_base.to_owned(), PathBuf::from);
     let record = config_dir.join("sessions").join(format!("{agent}.json"));
-    let native = match std::fs::read(&record) {
-        Ok(raw) => native_conversation(&raw, agent, name, &record)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+    let native = match crate::terminal_facts::read_native_record(&record) {
+        Ok(Some(native)) => {
+            if native["pid"].as_u64() != Some(u64::from(agent)) { return Err(refused("terminal_native_record_changed", "o registro do Claude no terminal é de outro processo")); }
+            native["sessionId"].as_str().filter(|s| !s.is_empty()).map(str::to_owned)
+        }
+        Ok(None) => None,
         Err(_) => return Err(refused("terminal_native_record_unavailable", "o registro do Claude no terminal não pôde ser lido")),
     };
     let plugin_key = env("HANGAR_PLUGIN_TOKEN").and_then(|token| token.split_once('.').map(|(key, _)| key.to_owned())).filter(|k| !k.is_empty());
@@ -336,15 +323,6 @@ mod tests {
         assert!(!claim_holds(&claim, None, &exists), "Claude aberto sem a chave do Hangar");
         assert!(!claim_holds(&claim, Some("k"), &|_| false), "sem o transcript dela");
         assert!(!claim_holds(&PluginClaim { key: "k".into(), conversation: "../x".into() }, Some("k"), &|_| true));
-    }
-
-    #[test]
-    fn a_native_record_left_empty_or_cut_counts_as_absent() {
-        let read = |raw: &[u8]| native_conversation(raw, 7, "s", Path::new("r"));
-        assert_eq!(read(b"").unwrap(), None, "disco cheio deixou o arquivo com 0 bytes");
-        assert_eq!(read(br#"{"pid":7,"sess"#).unwrap(), None, "escrita cortada no meio");
-        assert_eq!(read(br#"{"pid":7,"sessionId":"s1"}"#).unwrap().as_deref(), Some("s1"));
-        assert_eq!(read(br#"{"pid":8,"sessionId":"s1"}"#).unwrap_err().code, "terminal_native_record_changed");
     }
 
     #[test]
