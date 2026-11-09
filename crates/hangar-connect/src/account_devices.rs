@@ -15,6 +15,8 @@ use super::supervisor::off_thread;
 
 /// Pedido da tela e leitura periódica: serviço fora não segura nenhum dos dois.
 const TIMEOUT: Duration = Duration::from_secs(5);
+/// Lista da conta maior que isso não é lida, nem em parte: corte no meio deixaria revogado de fora.
+const MAX_BODY: usize = 1024 * 1024;
 
 /// Uma linha de `GET /v1/devices`.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -50,9 +52,13 @@ fn unreachable() -> ConnectError {
     ConnectError::new(StatusCode::BAD_GATEWAY, "connect_service_unreachable", "o serviço do Connect não respondeu")
 }
 
-fn refused(status: u16) -> ConnectError {
+/// `reason` vem do corpo do serviço: o 403 de PC ainda pendente na conta não é recusa de aparelho.
+fn refused(status: u16, reason: Option<&str>) -> ConnectError {
     match status {
-        403 => ConnectError::new(StatusCode::FORBIDDEN, "connect_account_device_refused", "o serviço do Connect recusou o pedido para esse aparelho"),
+        401 => ConnectError::new(StatusCode::CONFLICT, "connect_account_machine_unknown", "a conta não reconhece este computador: ligue-o de novo ao Connect"),
+        403 if reason == Some("device_pending") => ConnectError::new(StatusCode::FORBIDDEN, "connect_account_machine_pending",
+            "este computador espera liberação: libere-o em \"Aparelhos da conta\" num aparelho já liberado"),
+        403 =>ConnectError::new(StatusCode::FORBIDDEN, "connect_account_device_refused", "o serviço do Connect recusou o pedido para esse aparelho"),
         404 => ConnectError::new(StatusCode::NOT_FOUND, "connect_account_device_unknown", "esse aparelho não está na conta"),
         409 => ConnectError::new(StatusCode::CONFLICT, "connect_account_device_revoked", "esse aparelho foi revogado na conta"),
         429 => ConnectError::new(StatusCode::TOO_MANY_REQUESTS, "connect_service_busy", "o serviço do Connect pediu para esperar; tente mais tarde"),
@@ -70,11 +76,20 @@ async fn call(linked: &Linked, method: reqwest::Method, path: &[&str], body: Opt
     if let Some(body) = body {
         request = request.json(&body);
     }
-    let response = request.send().await.map_err(|_| unreachable())?;
-    if !response.status().is_success() {
-        return Err(refused(response.status().as_u16()));
+    let mut response = request.send().await.map_err(|_| unreachable())?;
+    let status = response.status();
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| unreachable())? {
+        if body.len() + chunk.len() > MAX_BODY {
+            return Err(Linked::invalid());
+        }
+        body.extend_from_slice(&chunk);
     }
-    Ok(response.bytes().await.map_err(|_| unreachable())?.to_vec())
+    if !status.is_success() {
+        let reason = serde_json::from_slice::<serde_json::Value>(&body).ok();
+        return Err(refused(status.as_u16(), reason.as_ref().and_then(|body| body["reason"].as_str())));
+    }
+    Ok(body)
 }
 
 pub async fn list(linked: &Linked) -> Result<Vec<AccountDevice>, ConnectError> {

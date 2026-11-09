@@ -37,6 +37,8 @@ fn sign(text: &str) -> String {
 #[derive(Default)]
 struct Account {
     devices: Mutex<Vec<(Value, String)>>,
+    /// Este PC ainda espera liberação na conta: a lista responde como o serviço responde a ele.
+    machine_pending: std::sync::atomic::AtomicBool,
 }
 
 impl Account {
@@ -62,7 +64,10 @@ fn holds_the_key(headers: &HeaderMap) -> bool {
 
 async fn list(State(account): State<Arc<Account>>, headers: HeaderMap) -> (StatusCode, String) {
     if !holds_the_key(&headers) {
-        return (StatusCode::UNAUTHORIZED, String::new());
+        return (StatusCode::UNAUTHORIZED, json!({"error": "não autorizado", "reason": null}).to_string());
+    }
+    if account.machine_pending.load(std::sync::atomic::Ordering::Relaxed) {
+        return (StatusCode::FORBIDDEN, json!({"error": "este aparelho espera liberação", "reason": "device_pending"}).to_string());
     }
     let rows: Vec<Value> = account.devices.lock().unwrap().iter().map(|(row, _)| row.clone()).collect();
     (StatusCode::OK, json!(rows).to_string())
@@ -356,4 +361,51 @@ async fn account_devices_need_a_linked_machine() {
     let m = machine(service, false).await;
     let (status, body) = relay(&m, reqwest::Method::GET, "/api/connect/account-devices", Some(OWNER), None).await;
     assert_eq!((status, body["detail"]["code"].clone()), (409, json!("connect_not_linked")));
+}
+
+#[tokio::test]
+async fn a_machine_still_pending_in_the_account_says_so_and_removes_no_one() {
+    let log = Log::default();
+    let writer = log.clone();
+    // O teste roda numa thread só: a leitura chamada daqui vê este assinante.
+    let _log = tracing::subscriber::set_default(tracing_subscriber::fmt().with_writer(move || writer.clone()).finish());
+    let (account, service) = spawn_service().await;
+    account.add("D", "revoked", "s-d");
+    account.machine_pending.store(true, std::sync::atomic::Ordering::Relaxed);
+    let m = machine(service, true).await;
+    let d = released(&m.store, "n1", "D");
+    m.supervisor.sync_account_devices(&m.linked).await;
+    m.supervisor.sync_account_devices(&m.linked).await;
+    assert_eq!(gate(&m, &d).await, 200, "a conta não respondeu a lista: ninguém sai");
+    let text = String::from_utf8_lossy(&log.0.lock().unwrap()).into_owned();
+    assert_eq!((text.matches("code=\"connect_account_machine_pending\"").count(), text.matches(CODE).count()), (1, 0), "{text}");
+    let (status, body) = relay(&m, reqwest::Method::GET, "/api/connect/account-devices", Some(OWNER), None).await;
+    assert_eq!((status, body["detail"]["code"].clone()), (403, json!("connect_account_machine_pending")), "{body}");
+}
+
+#[tokio::test]
+async fn a_machine_key_the_account_does_not_know_has_its_own_code() {
+    let (account, service) = spawn_service().await;
+    account.add("D", "revoked", "s-d");
+    let m = machine(service, true).await;
+    let d = released(&m.store, "n1", "D");
+    let stranger = Linked { machine_key: "chave-que-a-conta-nao-conhece".into(), ..m.linked.clone() };
+    state::write(&m.connect_dir(), &stranger).unwrap();
+    m.supervisor.sync_account_devices(&stranger).await;
+    assert_eq!(gate(&m, &d).await, 200);
+    let (_, body) = relay(&m, reqwest::Method::GET, "/api/connect/account-devices", Some(OWNER), None).await;
+    assert_eq!(body["detail"]["code"], "connect_account_machine_unknown", "{body}");
+}
+
+#[tokio::test]
+async fn an_oversized_device_list_applies_nothing() {
+    let (account, service) = spawn_service().await;
+    account.add("D", "revoked", "s-d");
+    account.add(&"x".repeat(1024 * 1024), "approved", "s-x");
+    let m = machine(service, true).await;
+    let d = released(&m.store, "n1", "D");
+    m.supervisor.sync_account_devices(&m.linked).await;
+    assert_eq!(gate(&m, &d).await, 200, "lista acima do limite não é lida, nem em parte");
+    let (status, body) = relay(&m, reqwest::Method::GET, "/api/connect/account-devices", Some(OWNER), None).await;
+    assert_eq!(status, 502, "{body}");
 }

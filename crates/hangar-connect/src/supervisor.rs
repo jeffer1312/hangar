@@ -131,8 +131,9 @@ impl AccountSync {
         match account_devices::apply_revocations(linked, &self.devices).await {
             Ok(()) => self.failing.store(false, Ordering::Relaxed),
             Err(error) => if !self.failing.swap(true, Ordering::Relaxed) {
-                tracing::warn!(code = "connect_account_devices_unreadable", cause = error.code,
-                    "aparelhos da conta não lidos; os desta máquina ficam como estão: {}", error.msg);
+                // PC pendente ou desconhecido na conta tem causa e remédio próprios.
+                let code = if error.code.starts_with("connect_account_machine_") { error.code } else { "connect_account_devices_unreadable" };
+                tracing::warn!(code, cause = error.code, "aparelhos da conta não lidos; os desta máquina ficam como estão: {}", error.msg);
             },
         }
     }
