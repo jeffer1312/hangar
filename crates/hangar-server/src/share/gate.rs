@@ -2,43 +2,24 @@
 //!
 //! O filtro delimita a INTERFACE do convidado, não é fronteira de segurança: quem entra numa
 //! sessão em bypass já roda comando como o dono.
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::extract::connect_info::Connected;
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use axum::serve::IncomingStream;
 use futures_util::StreamExt;
-use tokio::net::TcpListener;
+
+pub use hangar_core::guest::{CLOSE_ENDED, GuestConn};
+pub(crate) use hangar_core::guest::{is_websocket, preflight};
 
 use super::ShareState;
 use super::caller::{Caller, GuestGrant, SessionPath, allowed};
 use super::life::{Verdict, verdict};
 
 pub const WATCH_EVERY: Duration = Duration::from_secs(5);
-/// Fecha o WebSocket quando o acesso acaba: espelho do HTTP 410, o cliente não reconecta.
-pub const CLOSE_ENDED: u16 = 4410;
-
-/// Dado de cada conexão TCP. Sem limite de tokens errados: atrás do Funnel a conexão é dividida
-/// entre clientes da internet, e o token de 256 bits não se adivinha.
-/// Servir com `into_make_service_with_connect_info::<GuestConn>()` num `TcpListener` puro.
-#[derive(Clone, Debug)]
-pub struct GuestConn {
-    pub peer: SocketAddr,
-    /// Endereço desta ponta da conexão: decide entre o link do Funnel e o da rede da casa.
-    pub local: Option<SocketAddr>,
-}
-
-impl Connected<IncomingStream<'_, TcpListener>> for GuestConn {
-    fn connect_info(stream: IncomingStream<'_, TcpListener>) -> Self {
-        Self { peer: *stream.remote_addr(), local: stream.io().local_addr().ok() }
-    }
-}
 
 pub struct Gate {
     pub share: Arc<ShareState>,
@@ -111,10 +92,6 @@ fn token_of(req: &Request) -> String {
     }).unwrap_or_default()
 }
 
-pub(crate) fn is_websocket(req: &Request) -> bool {
-    req.headers().get(header::UPGRADE).is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"websocket"))
-}
-
 async fn deny(req: Request, status: StatusCode, code: &str, msg: &str) -> Response {
     if is_websocket(&req) {
         // O que o uvicorn responde ao `close` antes do `accept`: 403 vazio, sem CORS, e a
@@ -129,29 +106,6 @@ async fn deny(req: Request, status: StatusCode, code: &str, msg: &str) -> Respon
     // O CORS do Python fica por fora do porteiro: a recusa também leva o cabeçalho.
     crate::routes::cors(req.headers(), resp.headers_mut());
     resp
-}
-
-/// O preflight que o `CORSMiddleware` do Python (por fora do porteiro) respondia com `*` em origem,
-/// método e cabeçalho, sem credenciais.
-pub(crate) fn preflight(req: &Request) -> Option<Response> {
-    let h = req.headers();
-    if req.method() != Method::OPTIONS || !h.contains_key(header::ORIGIN) || !h.contains_key(header::ACCESS_CONTROL_REQUEST_METHOD) {
-        return None;
-    }
-    let (status, body) = if h.contains_key("access-control-request-private-network") {
-        (StatusCode::BAD_REQUEST, "Disallowed CORS private-network")
-    } else {
-        (StatusCode::OK, "OK")
-    };
-    let mut resp = (status, [(header::CONTENT_TYPE, "text/plain; charset=utf-8")], body).into_response();
-    let out = resp.headers_mut();
-    out.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
-    out.insert(header::ACCESS_CONTROL_ALLOW_METHODS, HeaderValue::from_static("DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT"));
-    out.insert(header::ACCESS_CONTROL_MAX_AGE, HeaderValue::from_static("600"));
-    if let Some(asked) = h.get(header::ACCESS_CONTROL_REQUEST_HEADERS) {
-        out.insert(header::ACCESS_CONTROL_ALLOW_HEADERS, asked.clone());
-    }
-    Some(resp)
 }
 
 /// Middleware da 8766. Ordem das recusas: 401 → 403 sessão fora → 410/503 → 403 por rota.

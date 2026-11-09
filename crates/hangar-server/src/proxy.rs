@@ -1,31 +1,19 @@
 //! Repasse ao Python de tudo que o hangar-server não atende sozinho, inclusive WebSocket,
 //! upload e streaming. Nunca segue redirect: a resposta volta como veio.
 use std::net::SocketAddr;
-use std::sync::Arc;
 use axum::body::Body;
 use axum::extract::Request;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use hyper_util::rt::TokioIo;
 
-use crate::share::caller::GuestGrant;
 use crate::share::forward::HEADER as GUEST_HEADER;
 use crate::share::gate::Watcher;
 
 pub use hangar_core::net::{HttpClient, POOL_IDLE, client};
-pub(crate) const AUTH_EMPTY_QUERY: &str = "x-hangar-auth-empty-query";
+pub(crate) use hangar_core::edge::AUTH_EMPTY_QUERY;
 
-/// Cliente já resolvido pelo `TrustedHosts`. Vai ao Python como valor único do X-Forwarded-For:
-/// o uvicorn confia em 127.0.0.1 (o Rust) e chega ao mesmo cliente que chegaria sem o Rust.
-#[derive(Clone)]
-pub struct Forward {
-    pub client_ip: String,
-    pub https: bool,
-    /// Convidado da 8766 decidido pelo porteiro; `routes::pass` assina o cabeçalho na hora do repasse.
-    pub guest: Option<Arc<GuestGrant>>,
-    /// Só uma admissão deste pedido, assinada pelo contexto privado do pai.
-    pub auth_receipt: Option<String>,
-}
+pub use hangar_core::edge::Forward;
 
 const HOP: [&str; 7] = ["connection", "keep-alive", "proxy-connection", "transfer-encoding", "te", "trailer", "upgrade"];
 
