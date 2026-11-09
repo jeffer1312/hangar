@@ -277,26 +277,44 @@ pub fn versioned_text(value: &Value) -> String {
 }
 
 /// Baixa o catálogo e regrava o snapshot (`backend/app/pricing_data.json`) e o recorte dos testes a
-/// partir da raiz do repositório. Falha antes de gravar qualquer um.
+/// partir da raiz do repositório, que tem de ter as duas pastas (nada é criado). Catálogo sem modelo
+/// conhecido é recusado (D13). Os dois arquivos só trocam depois de os dois estarem prontos.
 pub async fn write_snapshot(root: &Path, url: &str) -> Result<Vec<String>, String> {
+    let snapshot = root.join("backend/app/pricing_data.json");
+    let fixture = root.join("crates/hangar-server/tests/it/fixtures/pricing/models_dev_recorte.json");
+    for path in [&snapshot, &fixture] {
+        let parent = path.parent().unwrap_or(root).to_owned();
+        if !tokio::fs::metadata(&parent).await.is_ok_and(|m| m.is_dir()) {
+            return Err(format!("{} não existe: rode na raiz do repositório", parent.display()));
+        }
+    }
     let client = hangar_core::net::http_client().timeout(TIMEOUT).build().map_err(|e| e.to_string())?;
     let response = client.get(url).header(reqwest::header::USER_AGENT, "hangar/fetch_model_prices").send().await.map_err(|e| e.to_string())?;
     let status = response.status();
     if !status.is_success() { return Err(format!("models.dev respondeu {}", status.as_u16())); }
-    let body = response.bytes().await.map_err(|e| e.to_string())?;
+    let body = read_capped(response, MAX_BODY).await?;
     let raw: Value = serde_json::from_slice(&body).map_err(|e| format!("JSON inválido: {e}"))?;
     let models = slim(&raw)?;
+    if models.is_empty() { return Err("models.dev sem modelo conhecido; snapshot mantido".into()); }
     let excerpt = excerpt(&raw)?;
-    let snapshot = root.join("backend/app/pricing_data.json");
-    let fixture = root.join("crates/hangar-server/tests/it/fixtures/pricing/models_dev_recorte.json");
     let generated = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S+00:00").to_string();
     let count = models.len();
-    for (path, text) in [(&snapshot, versioned_text(&json!({"gerado_em": generated, "modelos": models}))),
-        (&fixture, versioned_text(&Value::Object(excerpt)))] {
-        if let Some(parent) = path.parent() { std::fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
-        std::fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))?;
-    }
+    let files = vec![(snapshot.clone(), versioned_text(&json!({"gerado_em": generated, "modelos": models}))),
+        (fixture.clone(), versioned_text(&Value::Object(excerpt)))];
+    blocking(move || replace_together(&files)).await.map_err(|e| e.to_string())?;
     Ok(vec![format!("{count} entradas -> {}", snapshot.display()), format!("recorte -> {}", fixture.display())])
+}
+
+/// Grava cada arquivo num temporário ao lado e só renomeia depois de todos prontos.
+fn replace_together(files: &[(PathBuf, String)]) -> std::io::Result<()> {
+    let temporary: Vec<PathBuf> = files.iter().map(|(path, _)| path.with_extension(format!("{}.tmp", std::process::id()))).collect();
+    let written = files.iter().zip(&temporary).try_for_each(|((_, text), tmp)| std::fs::write(tmp, text));
+    if let Err(error) = written {
+        for tmp in &temporary { let _ = std::fs::remove_file(tmp); }
+        return Err(error);
+    }
+    for ((path, _), tmp) in files.iter().zip(&temporary) { std::fs::rename(tmp, path)?; }
+    Ok(())
 }
 
 /// `hangar-server pricing-snapshot [raiz]`: a raiz do repositório, ou a pasta atual.

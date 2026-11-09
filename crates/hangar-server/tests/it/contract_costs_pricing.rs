@@ -443,7 +443,7 @@ mod refresh {
     #[tokio::test]
     async fn snapshot_writes_the_versioned_files_like_the_script() {
         let fake = fake(Mode::Strict).await;
-        let root = tempfile::tempdir().unwrap();
+        let root = repo_root();
         let lines = write_snapshot(root.path(), &fake.url).await.unwrap();
         assert_eq!(fake.seen.lock().unwrap().clone(), [(Some("hangar/fetch_model_prices".to_owned()), None)]);
         let snapshot = std::fs::read_to_string(root.path().join("backend/app/pricing_data.json")).unwrap();
@@ -460,12 +460,24 @@ mod refresh {
 
     #[tokio::test]
     async fn snapshot_failure_writes_nothing() {
-        for mode in [Mode::Status(403), Mode::Body("{garbage")] {
+        // Catálogo sem modelo conhecido também é recusado (D13): o snapshot bom fica.
+        for mode in [Mode::Status(403), Mode::Body("{garbage"), Mode::Body("{}"), Mode::Body(r#"{"anthropic": 5}"#)] {
             let fake = fake(mode).await;
-            let root = tempfile::tempdir().unwrap();
+            let root = repo_root();
             assert!(write_snapshot(root.path(), &fake.url).await.is_err());
-            assert!(!root.path().join("backend").exists());
+            assert_eq!(files_under(root.path()), ["backend/app", "crates/hangar-server/tests/it/fixtures/pricing"].map(String::from));
         }
+    }
+
+    /// Fora da raiz do repositório nada é criado nem baixado.
+    #[tokio::test]
+    async fn snapshot_needs_the_repository_folders() {
+        let fake = fake(Mode::Strict).await;
+        let root = tempfile::tempdir().unwrap();
+        let error = write_snapshot(root.path(), &fake.url).await.unwrap_err();
+        assert!(error.contains("backend/app"), "{error}");
+        assert!(std::fs::read_dir(root.path()).unwrap().next().is_none(), "nenhuma pasta criada");
+        assert!(fake.seen.lock().unwrap().is_empty(), "nada baixado");
     }
 
     /// Resposta acima do teto é recusada antes de ser juntada, e o cache fica.
@@ -493,6 +505,28 @@ mod refresh {
         PricingRefresh::start(dir.path().to_owned(), &fake.url, false).unwrap().await.unwrap();
         assert_eq!(fake.seen.lock().unwrap().len(), 1);
         assert_eq!(std::fs::read_to_string(dir.path().join("models.dev.json")).unwrap(), python_cache());
+    }
+
+    /// Raiz com as duas pastas que o snapshot regrava, vazias.
+    fn repo_root() -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        for dir in ["backend/app", "crates/hangar-server/tests/it/fixtures/pricing"] { std::fs::create_dir_all(root.path().join(dir)).unwrap(); }
+        root
+    }
+
+    /// Caminhos relativos de tudo sob `root` que é pasta folha ou arquivo, em ordem.
+    fn files_under(root: &Path) -> Vec<String> {
+        fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
+            let mut entries: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).collect();
+            if entries.is_empty() { out.push(dir.strip_prefix(root).unwrap().display().to_string()); }
+            entries.sort();
+            for path in entries {
+                if path.is_dir() { walk(&path, root, out) } else { out.push(path.strip_prefix(root).unwrap().display().to_string()); }
+            }
+        }
+        let mut out = Vec::new();
+        walk(root, root, &mut out);
+        out
     }
 
     proptest::proptest! {
