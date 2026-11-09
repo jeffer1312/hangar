@@ -54,11 +54,21 @@ fn text<'a>(meta: &'a Value, key: &str) -> Option<&'a str> { meta[key].as_str().
 /// `transcript_path_de`: o `.jsonl` da conversa na conta da sessão, ou onde o `EnterWorktree` o pôs.
 pub fn transcript(env: &AccountEnvironment, spec: &SessionSpec, sid: &str) -> PathBuf {
     let base = spec.account.config_dir().map_or_else(|| env.claude_base.join("projects"), |dir| Path::new(dir).join("projects"));
-    let expected = base.join(hangar_workspace::worktrees::sanitize_cwd(&spec.cwd)).join(format!("{sid}.jsonl"));
+    transcript_in(&base, &spec.cwd, sid)
+}
+
+/// O `.jsonl` do sid na pasta do cwd ou, se lá não existe, em outra pasta de `projects`: o `--resume`
+/// aberto noutro cwd (pasta da sessão apagada) segue gravando no arquivo onde achou a conversa. Fora da
+/// pasta do cwd, com o sid em mais de uma pasta, vale a cópia gravada por último (a outra parou de receber
+/// a conversa); no empate, o caminho decide, para toda chamada escolher o mesmo arquivo.
+pub(crate) fn transcript_in(base: &Path, cwd: &str, sid: &str) -> PathBuf {
+    let expected = base.join(hangar_workspace::worktrees::sanitize_cwd(cwd)).join(format!("{sid}.jsonl"));
     if expected.exists() { return expected; }
-    let moved = std::fs::read_dir(&base).into_iter().flatten().flatten()
-        .map(|dir| dir.path().join(format!("{sid}.jsonl"))).find(|path| path.is_file());
-    moved.unwrap_or(expected)
+    let moved = std::fs::read_dir(base).into_iter().flatten().flatten()
+        .map(|dir| dir.path().join(format!("{sid}.jsonl")))
+        .filter_map(|path| path.metadata().ok().filter(|meta| meta.is_file()).and_then(|meta| meta.modified().ok()).map(|at| (at, path)))
+        .max();
+    moved.map_or(expected, |(_, path)| path)
 }
 
 /// `permissions.defaultMode` do `settings.json` da conta (a do servidor sem pasta própria), como a
@@ -418,5 +428,29 @@ mod tests {
         assert_eq!(plan(&spec, &case.meta(), &ctx).unwrap_err().code, "launch_service_tier");
         spec.service_tier = Some(crate::session_open::ServiceTier::Default);
         assert!(!plan(&spec, &case.meta(), &ctx).unwrap().program.contains(&"--service-tier".to_owned()), "default sem Fast é ignorado");
+    }
+
+    #[test]
+    fn resume_from_another_cwd_finds_the_conversation_in_its_original_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let sid = "ef455c07-c342-40ca-8308-76d368f0db04";
+        let original = dir.path().join("-old-worktree").join(format!("{sid}.jsonl"));
+        std::fs::create_dir_all(original.parent().unwrap()).unwrap();
+        std::fs::write(&original, "").unwrap();
+        assert_eq!(transcript_in(dir.path(), "/home/user", sid), original);
+        let stale = dir.path().join("-older-worktree").join(format!("{sid}.jsonl"));
+        std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
+        std::fs::write(&stale, "").unwrap();
+        let day_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(86_400);
+        std::fs::File::options().write(true).open(&stale).unwrap().set_modified(day_ago).unwrap();
+        assert_eq!(transcript_in(dir.path(), "/home/user", sid), original, "a cópia parada perde para a gravada por último");
+        let tied = dir.path().join("-p-worktree").join(format!("{sid}.jsonl"));
+        std::fs::create_dir_all(tied.parent().unwrap()).unwrap();
+        std::fs::write(&tied, "").unwrap();
+        let at = std::time::SystemTime::now();
+        for path in [&original, &tied] { std::fs::File::options().write(true).open(path).unwrap().set_modified(at).unwrap(); }
+        assert_eq!(transcript_in(dir.path(), "/home/user", sid), tied, "no empate o caminho decide");
+        let fresh = "00000000-0000-0000-0000-000000000000";
+        assert_eq!(transcript_in(dir.path(), "/home/user", fresh), dir.path().join("-home-user").join(format!("{fresh}.jsonl")));
     }
 }

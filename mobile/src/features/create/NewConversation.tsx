@@ -8,13 +8,13 @@ import { useRouter } from 'expo-router';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { SettingsList } from '../../ui/SettingsList';
 import { ComposerActions, ComposerBox, ComposerInput } from '../../chat/ComposerField';
-import type { PrewarmTicket, Server } from '@hangar/core';
+import { formataErro, type PrewarmTicket, type Server } from '@hangar/core';
 import { AnchoredPanel } from '../../ui/AnchoredPanel';
 import { Icon } from '../../ui/Icon';
 import { Glass } from '../../ui/Glass';
 import type { HomeScreen } from '../../stores/aparencia';
 import { AttachmentPreview } from '../../ui/AttachmentPreview';
-import { readClipboard, type PickedAttachment } from '../../ui/attachmentPicker';
+import { fromPastedFile, readClipboard, type PickedAttachment } from '../../ui/attachmentPicker';
 import { AttachSheet } from '../../ui/AttachSheet';
 import { usePressScale } from '../../ui/pressScale';
 import { HomeUsageCard } from '../usage/HomeUsageCard';
@@ -447,7 +447,15 @@ export function NewConversation({
         {attachment ? <AttachmentPreview attachment={attachment} onRemove={removeAttachment} disabled={busy} /> : null}
         <ComposerInput ref={input} value={text} onChangeText={setText} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
           placeholder={m.composer_mensagem_para({ nome: providerLabel })} accessibilityLabel={m.nova_conversa_placeholder()}
-          editable={!collapsed} autoFocus={!home && (router.canGoBack?.() ?? true)} recording={dictation.gravando} rms={dictation.rms} onCancelRecording={dictation.cancel} />
+          editable={!collapsed} autoFocus={!home && (router.canGoBack?.() ?? true)} recording={dictation.gravando} rms={dictation.rms} onCancelRecording={dictation.cancel}
+          onPaste={(files, error) => {
+            if (busy || dictation.gravando) return;
+            if (error) { setAttachError(formataErro(error) ?? error); return; }
+            const f = files[0];
+            if (!f) return;
+            pick(fromPastedFile(f));
+            if (files.length > 1) setAttachError(m.nova_conversa_um_anexo());
+          }} />
         {dictation.transcribing ? <Text style={styles.meta} accessibilityLiveRegion="polite">{m.composer_transcrevendo_audio()}</Text> : null}
         <ComposerActions attach={{ onPress: () => setAttachMenuOpen(true), disabled: busy || dictation.gravando }}
           mic={{ onPress: () => void dictation.toggle(), disabled: dictation.transcribing || busy, busy: dictation.transcribing, showBusy: true,

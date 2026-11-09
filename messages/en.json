@@ -8210,6 +8210,7 @@
   "nova_conversa_envio_conferir_erro": "Could not check the message in this conversation: {erro}",
   "nova_conversa_resultado_salvar_erro": "Could not save the send result on this device. Check the conversation before sending again.",
   "nova_conversa_placeholder": "Write the first message",
+  "nova_conversa_um_anexo": "A new conversation takes one attachment: only the first was added.",
   "nova_conversa_enviar": "Send",
   "nova_conversa_opcoes": "Options",
   "nova_conversa_destino_hint": "Opens options to choose the machine and folder for the conversation.",
