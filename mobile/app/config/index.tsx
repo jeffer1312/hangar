@@ -3,7 +3,7 @@ import { Platform, Pressable, Text, TextInput, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
 import { MenuView } from '@react-native-menu/menu';
-import { serverColor } from '@hangar/core';
+import { fold, serverColor } from '@hangar/core';
 import { Pagina } from '../../src/features/config/Pagina';
 import { SettingsMenuGroup, SettingsMenuItem } from '../../src/features/config/SettingsMenu';
 import { useSettingsColors } from '../../src/features/config/colors';
@@ -51,9 +51,6 @@ const SERVER: Page[] = [
   { route: '/config/worktrees', icon: 'GitBranch', title: m.worktrees_titulo, rows: [] },
   { route: '/config/advanced', icon: 'SlidersHorizontal', title: m.native_settings_page_advanced, rows: [] },
 ];
-
-/** Minúsculas e sem acento, para "aparencia" achar "Aparência". */
-const fold = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
 function search(query: string) {
   const q = fold(query.trim());

@@ -6,7 +6,7 @@ import { Pagina } from '../../src/features/config/Pagina';
 import { InfoNotice } from '../../src/features/config/InfoNotice';
 import { MachineGroup, MachineHelp, MachineRow } from '../../src/features/machines/MachineRows';
 import { Notice } from '../../src/features/machines/parts';
-import { ReopenBanner, shortDate, useLiveClaude } from '../../src/features/plugins/parts';
+import { ReopenBanner, shortDate, useLiveClaudeCount } from '../../src/features/plugins/parts';
 import { pluginsErrorText, runPluginAction, usePlugins } from '../../src/features/plugins/store';
 import { useServers } from '../../src/stores/servers';
 import * as m from '../../src/paraglide/messages';
@@ -30,7 +30,7 @@ export default function Plugin() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const server = useServers((s) => s.active());
-  const live = useLiveClaude(server);
+  const liveCount = useLiveClaudeCount(server);
   const plugin = usePlugins((s) => s.state?.plugins.find((p) => p.id === id));
   const hasState = usePlugins((s) => !!s.state);
   const busy = usePlugins((s) => s.busy);
@@ -68,7 +68,7 @@ export default function Plugin() {
   const remove = () => Alert.alert(m.plugins_remove_confirm({ name: p.name }), undefined, [
     { text: m.comum_cancelar(), style: 'cancel' },
     { text: m.plugins_remove(), style: 'destructive', onPress: () => {
-      void runPluginAction(server, p, 'uninstall', live.length).then((ok) => { if (ok) router.back(); });
+      void runPluginAction(server, p, 'uninstall', liveCount).then((ok) => { if (ok) router.back(); });
     } },
   ]);
   const version = p.available_version ? `${p.version} → ${m.plugins_available({ version: p.available_version })}`
@@ -95,9 +95,9 @@ export default function Plugin() {
       {!p.update_known ? <InfoNotice text={m.plugins_external_note()} /> : null}
       <MachineGroup>
         {p.available_version || !p.update_known ? <MachineRow title={updateLabel} action disabled={!!busy}
-          onPress={() => void runPluginAction(server, p, 'update', live.length)} /> : null}
+          onPress={() => void runPluginAction(server, p, 'update', liveCount)} /> : null}
         <MachineRow title={p.enabled ? m.plugins_disable() : m.plugins_enable()} action disabled={!!busy}
-          onPress={() => void runPluginAction(server, p, p.enabled ? 'disable' : 'enable', live.length)} />
+          onPress={() => void runPluginAction(server, p, p.enabled ? 'disable' : 'enable', liveCount)} />
         <MachineRow title={m.plugins_remove()} danger disabled={!!busy} onPress={remove} />
       </MachineGroup>
     </Pagina>

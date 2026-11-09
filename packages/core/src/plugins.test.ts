@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   addMarketplaceForServer, checkPluginsForServer, getAvailablePluginsForServer, getPluginDetailsForServer,
-  getPluginsForServer, liveClaudeSessions, pluginActionForServer, removeMarketplaceForServer,
+  getPluginsForServer, isSessionBusyRefusal, liveClaudeSessions, pluginActionForServer, removeMarketplaceForServer,
   setMarketplaceAutoUpdateForServer, updateMarketplaceForServer,
 } from './plugins';
 import type { SessionInfo } from './types';
@@ -59,5 +59,16 @@ describe('sessões que ainda estão com o estado anterior', () => {
       s('pi', { provider: 'pi' }),
     ];
     expect(liveClaudeSessions(sessions).map((x) => x.name)).toEqual(['sem-provider', 'claude']);
+  });
+});
+
+describe('reabrir recusado por sessão ocupada', () => {
+  it('só 409 com código de sessão ocupada', () => {
+    expect(isSessionBusyRefusal({ status: 409, code: 'erro_sessao_trabalhando' })).toBe(true);
+    expect(isSessionBusyRefusal({ status: 409, code: 'session_transfer_busy' })).toBe(true);
+    expect(isSessionBusyRefusal({ status: 409, code: 'erro_conta_nao_reconciliada' })).toBe(false);
+    expect(isSessionBusyRefusal({ status: 500, code: 'erro_sessao_trabalhando' })).toBe(false);
+    expect(isSessionBusyRefusal(new Error('rede'))).toBe(false);
+    expect(isSessionBusyRefusal(null)).toBe(false);
   });
 });

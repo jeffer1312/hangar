@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import {
-  checkPluginsForServer, formataErro, getAvailablePluginsForServer, getPluginsForServer, pluginActionForServer,
+  checkPluginsForServer, formataErro, getAvailablePluginsForServer, getPluginsForServer, isSessionBusyRefusal, pluginActionForServer,
   recarregarSessao, removeMarketplaceForServer, updateMarketplaceForServer,
   type AvailablePlugin, type PluginAction, type PluginsChange, type PluginsState, type Server,
 } from '@hangar/core';
@@ -16,9 +16,6 @@ export function pluginsErrorText(e: unknown): string {
 
 /** `text`: o que mudou (null = nada mudou); `note`: resultado que sempre vira aviso curto. */
 export interface Outcome { text: string | null; note?: string }
-
-/** Só estes 409 do `/recarregar` são "sessão ocupada"; os outros (conta que não reconciliou) têm motivo próprio. */
-const SESSION_BUSY_CODES = ['erro_sessao_iniciando', 'erro_sessao_esperando_resposta', 'erro_sessao_trabalhando', 'erro_fila_pendente', 'session_transfer_busy'];
 
 const keyOf = (s: Server) => `${s.id}|${s.baseUrl}|${s.token}`;
 
@@ -132,9 +129,7 @@ export const usePlugins = create<PluginsStore>((set, get) => {
         try {
           await recarregarSessao(name, s);
         } catch (e) {
-          const { status, code } = (e ?? {}) as { status?: number; code?: string };
-          const busy = status === 409 && SESSION_BUSY_CODES.includes(code ?? '');
-          refused.push(busy ? m.plugins_reopen_refused({ name }) : `${name}: ${pluginsErrorText(e)}`);
+          refused.push(isSessionBusyRefusal(e) ? m.plugins_reopen_refused({ name }) : `${name}: ${pluginsErrorText(e)}`);
         }
       }
       if (!same(s)) return;

@@ -1,7 +1,7 @@
 import { useEffect, type ReactNode } from 'react';
 import { Pressable, Text, TextInput, View, type TextInputProps } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { intlLocale, liveClaudeSessions, type Server } from '@hangar/core';
+import { fmtWhen, intlLocale, liveClaudeSessions, type Server } from '@hangar/core';
 import { InfoNotice } from '../config/InfoNotice';
 import { useSettingsColors } from '../config/colors';
 import { MachineGroup, MachineRow } from '../machines/MachineRows';
@@ -13,11 +13,15 @@ import * as m from '../../paraglide/messages';
 
 const EMPTY: never[] = [];
 
-/** Sessões Claude abertas do servidor: só reabrindo pegam a mudança. */
-export function useLiveClaude(server: Server | null) {
+/** Quantas sessões Claude abertas o servidor tem: só reabrindo pegam a mudança. Número, para só redesenhar quando ele muda. */
+export function useLiveClaudeCount(server: Server | null): number {
   useEffect(() => useSessions.getState().retain(), []);
-  const sessions = useSessions((s) => (server ? s.byServerRecord[server.id] : undefined) ?? EMPTY);
-  return liveClaudeSessions(sessions);
+  return useSessions((s) => (server ? liveClaudeSessions(s.byServerRecord[server.id] ?? EMPTY).length : 0));
+}
+
+/** Nomes lidos na hora do toque, sem assinar a lista inteira. */
+function liveClaudeNames(server: Server): string[] {
+  return liveClaudeSessions(useSessions.getState().byServerRecord[server.id] ?? EMPTY).map((x) => x.name);
 }
 
 /** Data curta na língua do app; o ano só quando não é o corrente. */
@@ -36,23 +40,22 @@ export function checkedLabel(iso: string | null): string {
   if (d.toDateString() === new Date().toDateString()) {
     return m.plugins_checked_today({ time: d.toLocaleTimeString(intlLocale(), { hour: '2-digit', minute: '2-digit' }) });
   }
-  return m.plugins_checked_on({ date: d.toLocaleString(intlLocale(), { dateStyle: 'short', timeStyle: 'short' }) });
+  return m.plugins_checked_on({ date: fmtWhen(d.getTime() / 1000) });
 }
 
 /** "<o que mudou> — N sessões abertas ainda estão com o estado anterior", com Reabrir e Depois. */
 export function ReopenBanner({ server }: { server: Server }) {
-  const live = useLiveClaude(server);
+  const n = useLiveClaudeCount(server);
   const changed = usePlugins((s) => s.changed);
   const reopening = usePlugins((s) => s.reopening);
   const refused = usePlugins((s) => s.refused);
-  if (!changed || (!live.length && !refused.length)) return null;
-  const n = live.length;
+  if (!changed || (!n && !refused.length)) return null;
   return <>
     {n ? <InfoNotice text={n === 1 ? m.plugins_reopen_banner_one({ action: changed }) : m.plugins_reopen_banner({ action: changed, n })} /> : null}
     {refused.map((r) => <Notice key={r} text={r} error />)}
     <MachineGroup>
       {n ? <MachineRow title={reopening ? m.plugins_reopening() : n === 1 ? m.plugins_reopen() : m.plugins_reopen_all({ n })} action
-        disabled={reopening} onPress={() => void usePlugins.getState().reopen(server, live.map((x) => x.name))} /> : null}
+        disabled={reopening} onPress={() => void usePlugins.getState().reopen(server, liveClaudeNames(server))} /> : null}
       <MachineRow title={m.plugins_reopen_later()} disabled={reopening} onPress={() => usePlugins.getState().dismiss()} />
     </MachineGroup>
   </>;

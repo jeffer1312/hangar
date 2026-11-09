@@ -1,14 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, AppState, Switch } from 'react-native';
-import { Stack, useRouter } from 'expo-router';
-import { addMarketplaceForServer, intlLocale, setMarketplaceAutoUpdateForServer, type InstalledPlugin, type PluginMarketplace, type Server } from '@hangar/core';
+import { Stack, useFocusEffect, useRouter } from 'expo-router';
+import { addMarketplaceForServer, fold, intlLocale, setMarketplaceAutoUpdateForServer, type InstalledPlugin, type PluginMarketplace, type Server } from '@hangar/core';
 import { Pagina } from '../../src/features/config/Pagina';
 import { InfoNotice } from '../../src/features/config/InfoNotice';
 import { SectionTabs } from '../../src/features/config/SectionTabs';
 import { Segmented } from '../../src/features/config/Segmented';
 import { MachineGroup, MachineHelp, MachineRow } from '../../src/features/machines/MachineRows';
 import { Notice } from '../../src/features/machines/parts';
-import { PluginRow, PluginsField, ReopenBanner, RowButton, checkedLabel, shortDate, useLiveClaude } from '../../src/features/plugins/parts';
+import { PluginRow, PluginsField, ReopenBanner, RowButton, checkedLabel, shortDate, useLiveClaudeCount } from '../../src/features/plugins/parts';
 import { runMarketplaceAction, runPluginAction, usePlugins } from '../../src/features/plugins/store';
 import { useServers } from '../../src/stores/servers';
 import { haptic } from '../../src/ui/haptics';
@@ -17,7 +17,6 @@ import * as m from '../../src/paraglide/messages';
 type Tab = 'installed' | 'discover' | 'marketplaces';
 type Filter = 'all' | 'on' | 'off' | 'up';
 
-const fold = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 const matches = (q: string, ...parts: Array<string | null | undefined>) => !q || fold(parts.filter(Boolean).join(' ')).includes(q);
 // O servidor confere de novo; aqui só barra o formato antes de mandar.
 const SOURCE = /^[\w.-]+\/[\w.-]+$|^https:\/\/\S+$|^\/.+$/;
@@ -36,14 +35,14 @@ export default function Plugins() {
     void usePlugins.getState().load(server);
   }, [server?.id, server?.baseUrl, server?.token]);
 
-  // A rota fica montada no fundo: ao voltar, o terminal pode ter instalado ou atualizado algo.
-  useEffect(() => {
+  // Ao voltar ao app com a tela à vista, o terminal pode ter instalado ou atualizado algo.
+  useFocusEffect(useCallback(() => {
     const sub = AppState.addEventListener('change', (st) => {
       const current = useServers.getState().active();
       if (st === 'active' && current) void usePlugins.getState().load(current);
     });
     return () => sub.remove();
-  }, []);
+  }, []));
 
   return (
     <Pagina>
@@ -77,7 +76,7 @@ export default function Plugins() {
 
 function Installed({ server, plugins }: { server: Server; plugins: InstalledPlugin[] }) {
   const router = useRouter();
-  const live = useLiveClaude(server);
+  const liveCount = useLiveClaudeCount(server);
   const busy = usePlugins((s) => s.busy);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
@@ -105,9 +104,9 @@ function Installed({ server, plugins }: { server: Server; plugins: InstalledPlug
             onPress={() => router.push({ pathname: '/config/plugin', params: { id: p.id } })}
             trailing={<>
               {p.available_version ? <RowButton label={updating ? m.plugins_updating() : m.plugins_update()} disabled={!!busy}
-                onPress={() => void runPluginAction(server, p, 'update', live.length)} /> : null}
+                onPress={() => void runPluginAction(server, p, 'update', liveCount)} /> : null}
               <Switch value={p.enabled} disabled={!!busy} accessibilityLabel={p.name}
-                onValueChange={(on) => void runPluginAction(server, p, on ? 'enable' : 'disable', live.length)} />
+                onValueChange={(on) => void runPluginAction(server, p, on ? 'enable' : 'disable', liveCount)} />
             </>} />;
         })}
       </MachineGroup>}
@@ -115,7 +114,7 @@ function Installed({ server, plugins }: { server: Server; plugins: InstalledPlug
 }
 
 function Discover({ server, installed }: { server: Server; installed: InstalledPlugin[] }) {
-  const live = useLiveClaude(server);
+  const liveCount = useLiveClaudeCount(server);
   const available = usePlugins((s) => s.available);
   const loading = usePlugins((s) => s.availableLoading);
   const error = usePlugins((s) => s.availableError);
@@ -126,8 +125,10 @@ function Discover({ server, installed }: { server: Server; installed: InstalledP
     if (st.available === null && !st.availableLoading && !st.availableError) void st.loadAvailable(server);
   }, [server, available]);
   const ids = useMemo(() => new Set(installed.map((p) => p.id)), [installed]);
-  const q = fold(query.trim());
-  const shown = (available ?? []).filter((a) => matches(q, a.name, a.description));
+  // A lista passa de milhares: dobra cada item uma vez por carga e a busca uma vez por tecla.
+  const searchable = useMemo(() => (available ?? []).map((a) => ({ a, text: fold([a.name, a.description].filter(Boolean).join(' ')) })), [available]);
+  const q = useMemo(() => fold(query.trim()), [query]);
+  const shown = useMemo(() => q ? searchable.filter((x) => x.text.includes(q)).map((x) => x.a) : available ?? [], [searchable, q, available]);
   if (!available) {
     return loading ? <InfoNotice text={m.plugins_loading()} />
       : error ? <>
@@ -147,14 +148,14 @@ function Discover({ server, installed }: { server: Server; installed: InstalledP
             meta={[a.version, a.marketplace].filter(Boolean).join(' · ')}
             trailing={ids.has(a.id) ? <MachineHelp>{m.plugins_installed()}</MachineHelp>
               : <RowButton primary label={installing ? m.plugins_installing() : m.plugins_install()} disabled={!!busy}
-                onPress={() => void runPluginAction(server, a, 'install', live.length)} />} />;
+                onPress={() => void runPluginAction(server, a, 'install', liveCount)} />} />;
         })}
       </MachineGroup>}
   </>;
 }
 
 function Marketplaces({ server, marketplaces }: { server: Server; marketplaces: PluginMarketplace[] }) {
-  const live = useLiveClaude(server);
+  const liveCount = useLiveClaudeCount(server);
   const busy = usePlugins((s) => s.busy);
   const [source, setSource] = useState('');
   const [formatError, setFormatError] = useState('');
@@ -164,15 +165,15 @@ function Marketplaces({ server, marketplaces }: { server: Server; marketplaces: 
     setFormatError('');
     const before = new Set(marketplaces.map((x) => x.name));
     void usePlugins.getState().change(server, 'mkt:add', () => addMarketplaceForServer(server, value),
-      (c) => ({ text: m.plugins_action_marketplace_added({ name: c.marketplaces.find((x) => !before.has(x.name))?.name ?? value }) }), live.length)
+      (c) => ({ text: m.plugins_action_marketplace_added({ name: c.marketplaces.find((x) => !before.has(x.name))?.name ?? value }) }), liveCount)
       .then((ok) => { if (ok) setSource(''); });
   };
   const remove = (mk: PluginMarketplace) => Alert.alert(m.plugins_marketplace_remove_confirm({ name: mk.name }), undefined, [
     { text: m.comum_cancelar(), style: 'cancel' },
-    { text: m.plugins_remove(), style: 'destructive', onPress: () => void runMarketplaceAction(server, mk.name, 'remove', live.length) },
+    { text: m.plugins_remove(), style: 'destructive', onPress: () => void runMarketplaceAction(server, mk.name, 'remove', liveCount) },
   ]);
   const autoUpdate = (mk: PluginMarketplace) => void usePlugins.getState().change(server, `mkt:${mk.name}:auto`,
-    () => setMarketplaceAutoUpdateForServer(server, mk.name, !mk.auto_update), () => ({ text: null }), live.length);
+    () => setMarketplaceAutoUpdateForServer(server, mk.name, !mk.auto_update), () => ({ text: null }), liveCount);
   return <>
     <PluginsField icon="Plus" value={source} onChangeText={(t) => { setSource(t); setFormatError(''); }}
       placeholder={m.plugins_marketplace_placeholder()} returnKeyType="done" onSubmitEditing={add} />
@@ -192,7 +193,7 @@ function Marketplaces({ server, marketplaces }: { server: Server; marketplaces: 
             trailing={<Switch value={mk.auto_update} disabled={!!busy || !mk.auto_update_editable}
               accessibilityLabel={`${m.plugins_marketplace_auto_update()} ${mk.name}`} onValueChange={() => autoUpdate(mk)} />} />
           <MachineRow title={updating ? m.plugins_updating() : m.plugins_update()} action disabled={!!busy}
-            onPress={() => void runMarketplaceAction(server, mk.name, 'update', live.length)} />
+            onPress={() => void runMarketplaceAction(server, mk.name, 'update', liveCount)} />
           <MachineRow title={m.plugins_remove()} danger disabled={!!busy} onPress={() => remove(mk)} />
         </>}
       </MachineGroup>;

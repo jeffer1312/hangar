@@ -126,3 +126,12 @@ export function setMarketplaceAutoUpdateForServer(s: Server, name: string, enabl
 export function liveClaudeSessions<T extends Pick<SessionInfo, 'provider' | 'state' | 'asleep'>>(sessions: T[]): T[] {
   return sessions.filter((x) => (x.provider ?? 'claude') === 'claude' && x.state !== 'dead' && !x.asleep);
 }
+
+/** Só estes 409 do `/recarregar` são "sessão ocupada"; os outros (conta que não reconciliou) têm motivo próprio. */
+const SESSION_BUSY_CODES = ['erro_sessao_iniciando', 'erro_sessao_esperando_resposta', 'erro_sessao_trabalhando', 'erro_fila_pendente', 'session_transfer_busy'];
+
+/** Reabrir recusado porque a sessão estava ocupada (vale tentar depois), não por outro motivo. */
+export function isSessionBusyRefusal(e: unknown): boolean {
+  const { status, code } = (e ?? {}) as { status?: number; code?: string };
+  return status === 409 && SESSION_BUSY_CODES.includes(code ?? '');
+}
