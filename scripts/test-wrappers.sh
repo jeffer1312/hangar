@@ -632,6 +632,12 @@ tty_case() {
     [ "$mode" = noopen ] && path="$TMP/bin:/usr/bin:/bin"
     [ "$mode" = none ] || [ "$mode" = noopen ] || path="$HS_DIR:$path"
     local -a extra=() run=() pty=(python3 -c 'import pty,sys; pty.spawn(sys.argv[1:])')
+    # A cópia pode ter um binário compilado que vence o PATH; o caso escolhe sua própria sonda.
+    if [ "$mode" = none ]; then
+        extra+=("CP_RUST_SERVER_BIN=$d/absent-server")
+    else
+        extra+=("CP_RUST_SERVER_BIN=$HS_DIR/hangar-server")
+    fi
     [ -n "${CASE_CFG:-}" ] && extra+=("CLAUDE_CONFIG_DIR=$CASE_CFG")
     [ -n "${CASE_ENGINE:-}" ] && extra+=("CP_ENGINE=$CASE_ENGINE" "CP_ENGINES_FILE=$CP_ENGINES_FILE")
     [ -n "${CASE_PROFILE:-}" ] && extra+=("OMP_PROFILE=$CASE_PROFILE")
