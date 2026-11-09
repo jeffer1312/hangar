@@ -201,6 +201,17 @@ describe('runDictation com pedaços', () => {
     expect(out.saved).toBeUndefined();
   });
 
+  it('sem estilo escolhido nem lido do servidor: o arquivo inteiro deixa o servidor usar o estilo salvo', async () => {
+    core.upload.mockResolvedValueOnce({ path: '/up/sess/ditado.wav' });
+    core.transcribe.mockResolvedValueOnce({ path: '/up/sess/ditado.wav', text: 'pelo arquivo', raw: 'cru', aviso: null });
+    const handle = pieces(Promise.resolve({ raw: 'cru', aviso: '' }));
+    writeDictation('s1', 'sess', voice());
+    const out = await runDictation(server, 's1', 'sess', voice(), { file: wav(), pieces: handle }, { isActive: () => false });
+    expect(core.relimpar).not.toHaveBeenCalled();
+    expect(core.transcribe).toHaveBeenCalledExactlyOnceWith(server, 'sess', 'ditado.wav', { limpar: true, estilo: undefined });
+    expect(out).toMatchObject({ text: 'pelo arquivo' });
+  });
+
   it('organização desligada no servidor: o cru juntado é o texto, sem chamar o relimpar', async () => {
     useDictationOrganizationStore.setState({ byServer: { s1: 'off' } });
     core.upload.mockResolvedValueOnce({ path: '/up/sess/ditado.wav' });
@@ -210,17 +221,6 @@ describe('runDictation com pedaços', () => {
       { isActive: () => false });
     expect(core.relimpar).not.toHaveBeenCalled();
     expect(out).toMatchObject({ text: 'ela trava. Não sei', raw: 'ela trava. Não sei', applied: 'cru', aviso: '' });
-  });
-
-  it('pílula sem estilo carregado: o relimpar recebe o padrão prosa', async () => {
-    core.upload.mockResolvedValueOnce({ path: '/up/sess/ditado.wav' });
-    core.relimpar.mockResolvedValueOnce({ text: 'ok', aviso: null });
-    const v = voice();
-    writeDictation('s1', 'sess', v);
-    const out = await runDictation(server, 's1', 'sess', v, { file: wav(), pieces: pieces(Promise.resolve({ raw: 'ok', aviso: '' })) },
-      { isActive: () => false });
-    expect(core.relimpar).toHaveBeenCalledWith('ok', 'prosa', server, { session: 'sess' });
-    expect(out.applied).toBe('prosa');
   });
 
   it('subida que falha depois do texto: o texto fica e a falha aparece', async () => {

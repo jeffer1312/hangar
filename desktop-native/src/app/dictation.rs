@@ -365,7 +365,7 @@ async fn transcribe_uploaded(api: Api, name: String, saved: Result<String, Failu
 }
 
 /// Organiza `raw` pelo `/ditado/relimpar` com as escolhas congeladas ao gravar; a resposta leva o cru junto.
-async fn relimpar(api: &Api, raw: &str, style: &str, session: Option<&str>, options: &api::DictationOptions, references: Option<Value>)
+async fn reorganize(api: &Api, raw: &str, style: &str, session: Option<&str>, options: &api::DictationOptions, references: Option<Value>)
     -> Result<Value, Failure> {
     api.server_send(reqwest::Method::POST, &["ditado", "relimpar"], Some(json!({"texto": raw, "estilo": style,
         "session":session,"generation":options.generation,"organization_mode":options.mode,"organization_model":options.model,"organization_account":options.account,
@@ -384,12 +384,15 @@ async fn organize_pieces(api: &Api, jobs: Vec<Option<super::dictation_pieces::Pi
     options: &api::DictationOptions, timing: &mut ClientTiming) -> Result<Value, Failure> {
     let count = jobs.iter().flatten().count();
     let transcribed = super::dictation_pieces::transcribed(jobs).await?;
+    // Pedaços sem texto: o arquivo inteiro ainda pode ter, como no celular.
+    if transcribed.raw.trim().is_empty() { return Err(Failure::local("pieces_empty")); }
     let (waited, organizing) = (timing.stopped.elapsed(), Instant::now());
     let value = if options.mode == "none" {
         json!({"text": transcribed.raw, "raw": transcribed.raw, "organization_mode": "none", "estilo_aplicado": "cru", "aviso": null, "organization_code": null})
     } else {
-        // O relimpar exige estilo; sem um lido, o mesmo padrão do servidor.
-        relimpar(api, &transcribed.raw, style.unwrap_or("prosa"), session, options, None).await?
+        // O relimpar exige estilo; antes de ler o salvo, o arquivo inteiro deixa o servidor usar o dele.
+        let style = style.ok_or_else(|| Failure::local("style_unknown"))?;
+        reorganize(api, &transcribed.raw, style, session, options, None).await?
     };
     timing.path = format!(" path=pieces pieces={count} last_piece_wait_ms={} organize_ms={}", waited.as_millis(), organizing.elapsed().as_millis());
     Ok(super::dictation_pieces::with_transcription(value, &transcribed))
@@ -1127,11 +1130,7 @@ impl Hangar {
                             let upload = upload.zip(upload_slot).map(|((name, uploads, bytes), (id, done))| {
                                 let api = api.clone();
                                 (id, super::dictation_pieces::Job::spawn(&tokio::runtime::Handle::current(), async move {
-                                    let saved = tokio::select! {
-                                        saved = upload_dictation(api, uploads, name, bytes) => saved,
-                                        // Ninguém mais espera esta subida (cancelou ou começou outra gravação): o arquivo não sobe à toa.
-                                        () = done.closed() => return Err(Failure::local("cancelled")),
-                                    };
+                                    let saved = upload_dictation(api, uploads, name, bytes).await;
                                     // O "de novo" pedido antes do fim espera por aqui em vez de subir outra vez.
                                     done.send_replace(Some(saved.clone()));
                                     saved
@@ -1253,7 +1252,7 @@ impl Hangar {
         let (tx, connection, seq) = (self.tx.clone(), self.connection, self.dictation.seq);
         self.dictation.request = Some(self.runtime.spawn(async move {
             let (path, result) = if let Some(style) = style {
-                (None, relimpar(&api, &raw, style, session.as_deref(), &options, references).await)
+                (None, reorganize(&api, &raw, style, session.as_deref(), &options, references).await)
             } else if let (Some(file), Some(name)) = (saved, session.as_deref()) {
                 (None, if clean{api.dictate_saved(name,&file,recording_style,&options).await}else{api.transcribe_saved(name,&file,false,None).await})
             } else if let (true, Some(name), Some(uploads)) = (clean, session.clone(), uploads) {

@@ -40,7 +40,7 @@ const issueOf = (e: unknown) => {
 };
 
 // O cru dos pedaços organizado uma vez, como o `/transcribe` faria com o arquivo inteiro. O relimpar exige
-// estilo: sem o da pílula, o salvo no servidor, e sem leitura dele o padrão do servidor.
+// estilo: sem o da pílula, o salvo no servidor; antes de lê-lo, o arquivo inteiro deixa o servidor usar o dele.
 async function organizePieces(server: Server, name: string, voice: DictationDraft, pieces: PiecesHandle) {
   const transcribed = await pieces.result;
   // Para o diário: quando o último pedaço voltou e quanto a organização levou.
@@ -48,7 +48,8 @@ async function organizePieces(server: Server, name: string, voice: DictationDraf
   const raw = transcribed.raw.trim();
   if (!raw) throw new Error('pieces_empty');
   const style = dictationStyleStore(server).getState();
-  const estilo = voice.estilo ?? (style.pronto ? style.valor : 'prosa');
+  const estilo = voice.estilo ?? (style.pronto ? style.valor : undefined);
+  if (!estilo) throw new Error('style_unknown');
   const organized = useDictationOrganizationStore.getState().byServer[server.id] === 'off'
     ? { text: raw, aviso: null, estilo_aplicado: 'cru' }
     : await relimparDitado(raw, estilo, server, { session: name });

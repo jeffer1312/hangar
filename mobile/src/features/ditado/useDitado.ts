@@ -257,7 +257,8 @@ export function useDitado({ onFim, onErroParada, server, pieces: piecesWanted = 
         return created;
       };
       // Convidado não alcança a rota dos pedaços. Sem pedaços, o WAV só dobraria a subida.
-      const piecesServer = piecesWanted && server && !server.invite && !server.inviteEnded && !server.removed ? { ...server } : null;
+      const piecesServer = piecesWanted && server && !server.invite && !server.inviteEnded && !server.removed && !server.ephemeral
+        ? { ...server } : null;
       // iPhone com pedaços grava em WAV; o que não abre volta ao .m4a de hoje, sem pedaços.
       const prepare = async (): Promise<ManagedRecorder> => {
         if (Platform.OS === 'ios' && piecesServer) {
