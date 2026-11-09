@@ -227,14 +227,15 @@ struct EditorAwareOtherIo {
     inbox: Arc<crate::provider_models::inbox::Store>,
 }
 impl EditorAwareOtherIo {
-    async fn editor(&self) -> Result<Option<String>, RuntimeError> {
-        if !self.base.prove(&self.target).await? {
-            return Err(failed("other_terminal_life_changed"));
-        }
-        let value = match inbox_line(&self.target, &self.inbox) {
+    async fn unproved_editor(&self) -> Option<String> {
+        match inbox_line(&self.target, &self.inbox) {
             Some(key) => self.inbox.question(&key, "editor").await,
             None => None,
-        };
+        }
+    }
+    /// Como `Observer::read`: a prova depois da leitura cobre o que foi lido antes dela.
+    async fn editor(&self) -> Result<Option<String>, RuntimeError> {
+        let value = self.unproved_editor().await;
         if !self.base.prove(&self.target).await? {
             return Err(failed("other_terminal_life_changed"));
         }
@@ -251,11 +252,12 @@ impl OtherIo for EditorAwareOtherIo {
     }
     fn capture<'a>(&'a self) -> BoxFuture<'a, Result<OtherFrame, RuntimeError>> {
         Box::pin(async move {
-            let editor = self.editor().await?;
-            let mut frame = self.base.capture().await?;
+            let editor = self.unproved_editor().await;
+            let captured = self.base.capture().await;
             if !self.base.prove(&self.target).await? {
                 return Err(failed("other_terminal_life_changed"));
             }
+            let mut frame = captured?;
             frame.editor = editor;
             Ok(frame)
         })

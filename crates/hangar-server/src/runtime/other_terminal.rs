@@ -124,6 +124,39 @@ mod tests {
         reused.provider = hangar_transcript::Provider::Kimi;
         assert!(!original.same_life(&reused));
     }
+    struct CountingIo(std::sync::atomic::AtomicUsize);
+    impl OtherIo for CountingIo {
+        fn prove<'a>(&'a self, _: &'a OtherTarget) -> BoxFuture<'a, Result<bool, RuntimeError>> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async { Ok(true) })
+        }
+        fn capture<'a>(&'a self) -> BoxFuture<'a, Result<OtherFrame, RuntimeError>> {
+            Box::pin(async { Ok(OtherFrame::from_styled("> \n".into())) })
+        }
+        fn write<'a>(&'a self, _: &'a OtherTarget, _: &'a str, _: bool, _: Option<&'a OtherWriteGuard>)
+            -> BoxFuture<'a, Result<(), RuntimeError>> {
+            Box::pin(async { unreachable!("observar não escreve") })
+        }
+        fn release<'a>(&'a self) -> BoxFuture<'a, ()> { Box::pin(async {}) }
+    }
+    #[tokio::test]
+    async fn other_terminal_observation_proves_the_life_once_per_round() {
+        let root = tempfile::tempdir().unwrap();
+        let mut target = target();
+        target.transcript = root.path().join("conversation-a.jsonl");
+        std::fs::write(&target.transcript, b"").unwrap();
+        let options = OtherOptions::new(
+            crate::terminal_control::TerminalPool::new(),
+            crate::provider_models::inbox::Store::new(),
+            Arc::new(crate::list::procs::SystemProcs::default()),
+            Arc::new(crate::interactions::InteractionStore::default()),
+        );
+        let observer = Observer::new(&target, &options).unwrap();
+        let counting = Arc::new(CountingIo(Default::default()));
+        let io: Arc<dyn OtherIo> = counting.clone();
+        observer.read(&target, &io, false).await.unwrap();
+        assert_eq!(counting.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
 }
 
 use super::{
@@ -889,10 +922,13 @@ impl Observer {
         io: &Arc<dyn OtherIo>,
         interested: bool,
     ) -> Result<(observe::Observation, OtherFrame), RuntimeError> {
-        if !io.prove(target).await? {
-            return Err(failed("other_terminal_life_changed"));
-        }
-        let frame = io.capture().await?;
+        // Uma prova só, depois da leitura: a vida provada no fim já existia na captura (pid e
+        // nascimento não voltam).
+        let frame = match io.capture().await {
+            Ok(frame) => frame,
+            Err(_) if !io.prove(target).await? => return Err(failed("other_terminal_life_changed")),
+            Err(error) => return Err(error),
+        };
         let (owned, text, memory, cache) = (
             target.clone(),
             frame.text.clone(),
