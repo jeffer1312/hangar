@@ -130,7 +130,7 @@ impl OtherIo for Io {
                     let event = if target.provider == hangar_transcript::Provider::Kimi {
                         json!({"type":"context.append_message","message":{"role":"user","content":[{"type":"text","text":"NATIVE_PROOF_1"}],"toolCalls":[],"origin":{"kind":"user"},"id":"first-user"},"time":chrono::Utc::now().timestamp_millis()})
                     } else {
-                        json!({"type":"message","id":"first-user","timestamp":chrono::Utc::now().to_rfc3339(),"message":{"role":"user","content":[{"type":"text","text":"NATIVE_PROOF_1"}]}})
+                        json!({"type":"message","id":"first-user","timestamp":chrono::Utc::now().to_rfc3339(),"message":{"role":"user","timestamp":chrono::Utc::now().timestamp_millis(),"content":[{"type":"text","text":"NATIVE_PROOF_1"}]}})
                     };
                     std::fs::write(&target.transcript, format!("{event}\n")).unwrap();
                     *source.lock().unwrap() = Some(OtherDiscoveryState::Ready(target.clone()));
