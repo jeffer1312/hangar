@@ -10,7 +10,9 @@ import * as m from '../../paraglide/messages';
 
 /** Frase do código do servidor; sem envelope, a mensagem do pedido (rede, prazo). */
 export function pluginsErrorText(e: unknown): string {
-  const { envelope } = (e ?? {}) as { envelope?: unknown };
+  const { envelope, status, code } = (e ?? {}) as { envelope?: unknown; status?: number; code?: string };
+  // 404 sem código é servidor que ainda não tem as rotas de plugins.
+  if (status === 404 && !code) return m.plugins_server_outdated();
   return formataErro(envelope) ?? (e instanceof Error ? e.message : String(e));
 }
 

@@ -182,7 +182,8 @@ impl PluginsPage {
         let api = self.api.clone();
         run(&self.runtime, async move { api.server_read(&["plugins"], &[], READ_SECONDS).await }, window, cx, move |this: &mut Self, result, _, _| {
             if seq != this.seq { return; }
-            this.state = Some(result.map_err(|e| Hangar::fetch_failure(&e))
+            // 404 sem código é servidor que ainda não tem as rotas de plugins.
+            this.state = Some(result.map_err(|e| if e.status == Some(404) && e.code.is_none() { tr("plugins_server_outdated") } else { Hangar::fetch_failure(&e) })
                 .and_then(|v| serde_json::from_value(v).map_err(|_| tr("invalid_response"))));
         });
         cx.notify();
@@ -483,7 +484,11 @@ impl PluginsPage {
                 .on_click(cx.listener(move |this, _, window, cx| if let Some(p) = this.installed(&update_id) { this.update(&p, window, cx) }))))
             .child(Switch::new(SharedString::from(format!("plugins-switch-{id}"))).checked(plugin.enabled).disabled(busy)
                 .accessibility_label(format!("{} · {}", tr(if plugin.enabled { "plugins_disable" } else { "plugins_enable" }), plugin.name))
-                .on_click(cx.listener(move |this, on: &bool, window, cx| if let Some(p) = this.installed(&switch_id) { this.set_enabled(&p, *on, window, cx) })))
+                .on_click(cx.listener(move |this, on: &bool, window, cx| {
+                    // A chave fica dentro da linha clicável: sem parar aqui, ligar também abriria o detalhe.
+                    cx.stop_propagation();
+                    if let Some(p) = this.installed(&switch_id) { this.set_enabled(&p, *on, window, cx) }
+                })))
             .child(Disclosure::new(format!("plugins-open-{id}"), open, String::new(), true).name(plugin.name.clone())
                 // A seta é o caminho do teclado; sem parar aqui, o clique nela também chegaria à linha e desfaria a troca.
                 .on_change(move |_, cx| {
