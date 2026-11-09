@@ -3238,7 +3238,7 @@ async fn dispatch(registry:&RuntimeRegistry,envelope:&Envelope) -> Result<Value,
         if value["provider"]=="claude" && value["headless"]==false {
             let parsed:Descriptor=serde_json::from_value(value.clone()).map_err(|_|failure("descriptor_shape"))?;
             let binding=terminal_binding(&parsed)?;
-            let metadata=crate::terminal_facts::TerminalMetadata::resolve(&parsed.meta,&binding,std::path::Path::new(&parsed.jsonl)).await.map_err(|error|failure(error.0))?;
+            let metadata=crate::terminal_facts::TerminalMetadata::resolve(&parsed.meta,&binding,std::path::Path::new(&parsed.jsonl),None).await.map_err(|error|failure(error.0))?;
             value["meta"]["config_dir"]=json!(metadata.config_dir);value["meta"]["agent_pid"]=json!(metadata.agent_pid);
             value["meta"]["agent_birth"]=json!(metadata.agent_birth);value["meta"]["fingerprint"]=json!(metadata.fingerprint);value["meta"]["message_origin"]=json!(metadata.origin);
         }
