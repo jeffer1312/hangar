@@ -1037,7 +1037,7 @@ pub(crate) async fn pass(st: &AppState, mut req: Request, fwd: &Forward) -> Resp
     let mut admitted_forward = fwd.clone();
     if admitted_forward.auth_receipt.is_none() {
         if let Some(cached) = cached {
-            admitted_forward.auth_receipt = cached.0.lock().await.as_ref().and_then(|(_, receipt)| receipt.clone());
+            admitted_forward.auth_receipt = cached.receipt().await;
         }
     }
     let upgrade = req.headers().contains_key(header::UPGRADE);

@@ -27,7 +27,14 @@ pub struct LoginPort;
 
 /// Quem pede e se é o dono, resolvidos uma vez por pedido.
 #[derive(Clone, Default)]
-pub struct RequestAuth(pub Arc<tokio::sync::Mutex<Option<(ReceiptContext, Option<String>)>>>);
+pub struct RequestAuth(Arc<tokio::sync::Mutex<Option<(ReceiptContext, Option<String>)>>>);
+
+impl RequestAuth {
+    /// O recibo da admissão que o `gate` já fez neste pedido; só ele grava.
+    pub async fn receipt(&self) -> Option<String> {
+        self.0.lock().await.as_ref().and_then(|(_, receipt)| receipt.clone())
+    }
+}
 
 /// Cliente já resolvido pelo `TrustedHosts`. Vai ao Python como valor único do X-Forwarded-For:
 /// o uvicorn confia em 127.0.0.1 (o Rust) e chega ao mesmo cliente que chegaria sem o Rust.
