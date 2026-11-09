@@ -1594,7 +1594,7 @@ async def kill_session(name: str, by: str | None = None, request: Request = None
     # Fechamento que não passou pelo Rust (Connect, convidado) e o do Claude pelo Connect, que o Rust
     # encerrou sem sair do grupo: a saída vai pela ponte, com a fase do `orq` lida aqui antes, para o
     # Rust não perguntar de volta.
-    skip_leave = (closed and bridged is None) or marked("x-hangar-rust-leaves")
+    skip_leave = closed and bridged is None
     # Sem sidecar não há grupo a deixar: a ponte nem é chamada. Ilegível não é ausente: sai pela ponte.
     sidecar = "absent" if skip_leave else await asyncio.to_thread(_sidecar_state, name)
     if sidecar == "unreadable":
