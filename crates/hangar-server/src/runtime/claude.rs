@@ -359,8 +359,11 @@ impl ClaudeEngine {
         }
     }
 
-    fn deliverable(&self) -> bool { self.alive && self.transport_up && self.initialized && !self.initializing && !self.in_progress
+    pub(super) fn deliverable(&self) -> bool { self.alive && self.transport_up && self.initialized && !self.initializing && !self.in_progress
         && self.pending.is_empty() && self.question.is_none() && self.active_input.is_none() }
+
+    /// O `conversation` da vista, para quem só precisa dele.
+    pub(super) fn conversation(&self) -> &str { self.metadata["session_id"].as_str().unwrap_or("") }
 
     pub fn forget_policy(&mut self,request_id:&RequestId) {
         // Pedido de status que falhou não pode barrar o próximo igual.

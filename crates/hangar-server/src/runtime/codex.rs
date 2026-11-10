@@ -679,7 +679,10 @@ impl Engine {
     fn sendable(&self) -> bool { if self.headless { self.ready } else { self.initialized && self.connected && self.turn_known && !self.thread_id.is_empty() } }
 
     /// Pergunta assíncrona não segura mensagem comum: ela vira turno novo, como no Python.
-    fn deliverable(&self) -> bool { self.async_dispatch_ready() }
+    pub(super) fn deliverable(&self) -> bool { self.async_dispatch_ready() }
+
+    /// O `conversation` da vista, para quem só precisa dele.
+    pub(super) fn conversation(&self) -> &str { &self.thread_id }
 
     /// Tudo o que segura um turno novo, menos as perguntas assíncronas: a resposta reservada de uma
     /// delas não pode esperar a si mesma.
