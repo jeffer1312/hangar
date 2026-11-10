@@ -446,16 +446,68 @@ async fn broadcast_answers_each_unowned_name_in_order() {
     assert_eq!(rig.python_inputs(), 0);
 }
 
-// R1.1-4 (paridade do Python): tela que nunca fica pronta espera 12 s e digita assim mesmo.
+// D9/D14: menu, diálogo de confiança, popup de barra ou texto de alguém na caixa: nada é digitado, o
+// recado espera na fila (`delivered: false`), na hora. O Python esperava 12 s e digitava dentro deles.
 #[tokio::test]
-async fn raw_codex_screen_never_ready_types_after_the_readiness_wait() {
+async fn raw_codex_menu_dialog_popup_or_busy_composer_wait_in_the_queue() {
     let rig = Rig::new().await;
-    rig.codex("cx", "pane_codex_trust_dialog.txt", "static").await;
+    let screens = [("menu", "pane_codex_model_menu.txt"), ("confia", "pane_codex_trust_dialog.txt"),
+        ("popup", "pane_codex_slash_popup.txt"), ("rascunho", "pane_codex_composer_text.txt")];
+    for (name, screen) in screens { rig.codex(name, screen, "static").await; }
+    for (name, screen) in screens {
+        let start = Instant::now();
+        let (status, body) = rig.input(name, json!({"text": "oi"})).await;
+        assert!(start.elapsed() < Duration::from_secs(5), "{screen}: adiado sem a espera de prontidão ({:?})", start.elapsed());
+        assert_eq!((status, body), (200, json!({"ok": true, "delivered": false, "steered": false, "native": false})), "{screen}");
+        assert_eq!(rig.tui(name, "keys.jsonl"), Vec::<Value>::new(), "{screen}: nada digitado");
+        let rows = rig.queue(name).unwrap();
+        assert_eq!((rows.len(), rows[0]["text"].as_str(), rows[0]["delivered"].as_bool()), (1, Some("oi"), Some(false)), "{screen}");
+    }
+    assert_eq!(rig.python_inputs(), 0);
+}
+
+// D14: tela em branco (o `codex` ainda não pintou nada) espera a prontidão (12 s, D10) e, sem caixa de
+// digitar, guarda o recado na fila em vez de digitar às cegas.
+#[tokio::test]
+async fn raw_codex_screen_never_ready_waits_then_queues_without_typing() {
+    let rig = Rig::new().await;
+    rig.pane("cx", "bash --norc --noprofile -c '( exec -a codex sleep 100000 ); exec sleep 100000'");
+    tokio::time::sleep(Duration::from_millis(300)).await;
     let start = Instant::now();
     let (status, body) = rig.input("cx", json!({"text": "oi"})).await;
     assert!(start.elapsed() >= Duration::from_secs(12), "{:?}", start.elapsed());
-    assert_eq!((status, body["delivered"].clone()), (200, json!(true)));
-    assert_eq!(submitted(&rig, "cx"), vec![json!({"enter_on_static_screen": "pane_codex_trust_dialog.txt"})]);
+    assert_eq!((status, body["delivered"].clone()), (200, json!(false)));
+    assert!(!rig.tmux(&["capture-pane", "-p", "-t", "=cx:"]).contains("oi"), "nada digitado");
+    assert_eq!(rig.queue("cx").unwrap()[0]["delivered"], false);
+}
+
+// R1.1-5: não digitado e a fila sem gravar: a mensagem não está em lugar nenhum, então é erro.
+#[tokio::test]
+async fn raw_codex_not_typed_with_unwritable_queue_is_400() {
+    use std::os::unix::fs::PermissionsExt;
+    let rig = Rig::new().await;
+    rig.codex("cx", "pane_codex_model_menu.txt", "static").await;
+    let queue = rig.home.join(".claude/.hangar-queue");
+    std::fs::create_dir_all(&queue).unwrap();
+    std::fs::set_permissions(&queue, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let (status, body) = rig.input("cx", json!({"text": "oi"})).await;
+    std::fs::set_permissions(&queue, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!((status, body["detail"]["code"].clone()), (400, json!("erro_fila_nao_digitada")), "{body}");
+    assert!(body["detail"]["params"]["erro"].is_string());
+    assert_eq!(rig.tui("cx", "keys.jsonl"), Vec::<Value>::new());
+}
+
+// D9 no broadcast: o nome com menu aberto fica na fila dele; os outros seguem.
+#[tokio::test]
+async fn broadcast_queues_a_raw_codex_with_a_menu_open() {
+    let rig = Rig::new().await;
+    rig.codex("cx", "pane_codex_idle.txt", "echo").await;
+    rig.codex("cxmenu", "pane_codex_model_menu.txt", "static").await;
+    let (status, body) = rig.post("/api/broadcast", &json!({"names": ["cx", "cxmenu"], "text": "oi todos"}).to_string()).await;
+    assert_eq!(status, 200);
+    assert_eq!(body["results"]["cx"], json!({"ok": true, "error": null, "delivered": true, "native": false}));
+    assert_eq!(body["results"]["cxmenu"], json!({"ok": true, "error": null, "delivered": false, "native": false}));
+    assert_eq!(rig.tui("cxmenu", "keys.jsonl"), Vec::<Value>::new());
 }
 
 // R1.1 por dentro (aviso de grupo, par, MCP…): o mesmo envio, sem ida ao Python.

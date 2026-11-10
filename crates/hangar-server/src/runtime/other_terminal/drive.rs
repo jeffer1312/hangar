@@ -42,6 +42,7 @@ static READY_WARNED: LazyLock<Mutex<HashSet<(String, u64, String)>>> =
 const CODEX_READY: [&str; 5] = ["⏵⏵", "⏸", "bypass permissions", "? for shortcuts", "for shortcuts"];
 const CODEX_READY_LINES: usize = 12;
 const CODEX_READY_WAIT: Duration = Duration::from_secs(12);
+const CODEX_PLACEHOLDER: &str = "Ask Codex to do anything";
 
 pub struct OtherControlOutcome {
     pub reply: RuntimeReply,
@@ -164,6 +165,9 @@ fn ready(target: &OtherTarget, frame: &OtherFrame) -> bool {
         .any(|line| line.chars().any(|c| "─━═╰│".contains(c)))
 }
 fn composer(target: &OtherTarget, frame: &OtherFrame) -> Option<ComposerSnapshot> {
+    if codex(target) {
+        return codex_composer(frame);
+    }
     if matches!(
         target.provider,
         hangar_transcript::Provider::Pi | hangar_transcript::Provider::Omp
@@ -246,6 +250,24 @@ fn composer(target: &OtherTarget, frame: &OtherFrame) -> Option<ComposerSnapshot
     Some(ComposerSnapshot {
         content,
         placeholders,
+        stashed: false,
+    })
+}
+/// A caixa de digitar do Codex: a última linha `›` e as que continuam o texto até a linha em branco.
+/// A sugestão vem esmaecida e sai do `typed`; a captura sem estilo traz a sugestão padrão por extenso.
+fn codex_composer(frame: &OtherFrame) -> Option<ComposerSnapshot> {
+    let text = frame.typed.as_deref().unwrap_or(&frame.text);
+    let lines: Vec<&str> = text.lines().collect();
+    let at = lines.iter().rposition(|line| line.trim_start().starts_with('›'))?;
+    let mut content = vec![lines[at].trim_start().trim_start_matches('›').trim()];
+    content.extend(lines[at + 1..].iter().take_while(|line| !line.trim().is_empty()).map(|line| line.trim()));
+    let mut content = content.join("\n");
+    if content == CODEX_PLACEHOLDER {
+        content.clear();
+    }
+    Some(ComposerSnapshot {
+        content,
+        placeholders: BTreeSet::new(),
         stashed: false,
     })
 }
@@ -436,6 +458,16 @@ async fn prompt_inner(
             "input_unavailable",
         );
     }
+    // Codex cru só recebe com a caixa vazia: menu ou diálogo aberto, popup de barra ou texto de
+    // alguém esperam na fila (as teclas cairiam dentro deles).
+    if codex(target) {
+        if crate::terminal_state::codex_menu_of(&frame.text).is_some() {
+            return result(Disposition::Deferred, DeliveryStage::Ready, Cleanup::NotNeeded, "codex_menu_open");
+        }
+        if composer(target, &frame).is_some_and(|current| !current.is_empty()) {
+            return result(Disposition::Deferred, DeliveryStage::Composer, Cleanup::NotNeeded, "composer_busy");
+        }
+    }
     let deadline = Instant::now() + if codex(target) { CODEX_READY_WAIT } else { Duration::from_secs(8) };
     while !ready(target, &frame) && Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -479,6 +511,10 @@ async fn prompt_inner(
         );
     }
     let before = composer(target, &frame);
+    // Tela que nunca ficou pronta ou sem caixa de digitar: espera na fila em vez de digitar às cegas.
+    if codex(target) && (!ready(target, &frame) || before.is_none()) {
+        return result(Disposition::Deferred, DeliveryStage::Ready, Cleanup::NotNeeded, "input_unavailable");
+    }
     if let Some(composer_checked) = composer_checked {
         composer_checked(before.as_ref().is_some_and(ComposerSnapshot::is_empty));
     }
