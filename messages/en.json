@@ -8396,6 +8396,8 @@
   "home_usage_model_count": "Models used",
   "home_usage_top_model": "Most used",
   "home_usage_activity": "Recorded activity · {start}–{end}",
+  "home_usage_show_activity": "Show activity",
+  "home_usage_hide_activity": "Hide activity",
   "home_usage_day": "{date} · {tokens} tokens",
   "home_usage_method": "This machine, including subagents and cache. Top model by tokens. List-price estimate, not a bill.",
   "home_usage_partial": "Includes subagents and cache. Partial cost: some models have no known rate. Top model by tokens.",

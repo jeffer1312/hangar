@@ -4,6 +4,7 @@ import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withTimi
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { mergeReports, intlLocale, localeAtual, rotuloModelo, type CostReport, type DimBucket } from '@hangar/core';
 import { useSettingsColors } from '../config/colors';
+import { Icon } from '../../ui/Icon';
 import { superficie } from '../../theme/superficie';
 import { useServers } from '../../stores/servers';
 import { useReports } from './useReports';
@@ -17,6 +18,8 @@ type Summary = { report: Partial<CostReport>; totals: DimBucket; models: DimBuck
 // Escolhas e última leitura em memória: o cartão desmonta a cada vez que o teclado abre.
 let lastPeriod: Period = 'all';
 let lastTab: Tab = 'overview';
+// O calendário começa fechado: aberto, o cartão toma mais da metade da tela do celular.
+let lastActivity = false;
 // Aparição da tela que já contou: o cartão remonta quando o teclado fecha e não deve contar de novo.
 let playedEpoch = -1;
 
@@ -129,6 +132,8 @@ export function HomeUsageCard({ intro = null }: { intro?: HomeIntro | null }) {
   const c = useSettingsColors();
   const [period, setPeriodState] = useState<Period>(lastPeriod);
   const [tab, setTabState] = useState<Tab>(lastTab);
+  const [activity, setActivityState] = useState(lastActivity);
+  const toggleActivity = () => { lastActivity = !activity; setActivityState(!activity); };
   const servers = useServers((s) => s.servers);
   const load = useReports('costs', servers, period, {}, true, true);
   const summary = useMemo(() => load.accepted ? summarize(mergeReports(load.parts, period).report) : null, [load.parts, load.accepted, period]);
@@ -252,6 +257,13 @@ export function HomeUsageCard({ intro = null }: { intro?: HomeIntro | null }) {
             </View>
           ))}
           {cal ? (
+            <Pressable accessibilityRole="button" accessibilityState={{ expanded: activity }} onPress={toggleActivity}
+              hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }} style={styles.activityToggle}>
+              <Text style={[styles.note, { color: c.accentText }]}>{activity ? m.home_usage_hide_activity() : m.home_usage_show_activity()}</Text>
+              <Icon name={activity ? 'ChevronUp' : 'ChevronDown'} size={12} color={c.accentText} />
+            </Pressable>
+          ) : null}
+          {cal && activity ? (
             <View style={styles.calendar}>
               <Text style={[styles.note, muted]}>{cal.title}</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.calendarScroll}>
@@ -301,12 +313,15 @@ export function HomeUsageCard({ intro = null }: { intro?: HomeIntro | null }) {
         </>
       );
     }
+    // A nota de método acompanha o detalhe: com o calendário fechado, ficam só os números.
     body = (
       <>
         {content}
-        <Text style={[styles.note, muted]}>
-          {partial ? m.home_usage_partial() : m.home_usage_method()}
-        </Text>
+        {tab === 'models' || activity ? (
+          <Text style={[styles.note, muted]}>
+            {partial ? m.home_usage_partial() : m.home_usage_method()}
+          </Text>
+        ) : null}
       </>
     );
   }
@@ -370,6 +385,7 @@ const styles = StyleSheet.create((theme) => ({
     flexShrink: 0, fontSize: theme.base.text.xxxs, paddingHorizontal: theme.base.space[1], borderWidth: 1,
     borderRadius: theme.base.radius.xs, overflow: 'hidden',
   },
+  activityToggle: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1] },
   calendar: { gap: theme.base.space[2] },
   // flexGrow centraliza quando cabe; quando não cabe o conteúdo passa da largura e rola.
   calendarScroll: { flexGrow: 1, justifyContent: 'center' },

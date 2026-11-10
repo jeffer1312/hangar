@@ -8396,6 +8396,8 @@
   "home_usage_model_count": "Modelos usados",
   "home_usage_top_model": "Mais usado",
   "home_usage_activity": "Atividade registrada · {start}–{end}",
+  "home_usage_show_activity": "Ver atividade",
+  "home_usage_hide_activity": "Ocultar atividade",
   "home_usage_day": "{date} · {tokens} tokens",
   "home_usage_method": "Desta máquina, incluindo subagentes e cache. Modelo mais usado por tokens. Custo de tabela, não fatura.",
   "home_usage_partial": "Inclui subagentes e cache. Custo parcial: há modelos sem tarifa. Modelo mais usado por tokens.",

@@ -236,7 +236,7 @@ vi.mock('../../paraglide/messages', () => ({
     'composer_submission_recover_first composer_transcrevendo_audio composer_transcrever_de_novo composer_transcricao_vazia criar_mais_opcoes ' +
     'criar_modo_exec criar_modo_exec_headless criar_modo_exec_headless_resumo criar_modo_exec_headless_resumo_codex criar_modo_exec_tmux ' +
     'criar_modo_exec_tmux_resumo criar_modo_exec_tmux_resumo_codex ctx_anexos_da_sessao ditado_estilo_titulo draft_clear_error draft_invalid ' +
-    'draft_read_error draft_write_error home_usage_30d home_usage_7d home_usage_active_days home_usage_activity home_usage_all home_usage_cost ' +
+    'draft_read_error draft_write_error home_usage_30d home_usage_7d home_usage_active_days home_usage_activity home_usage_show_activity home_usage_hide_activity home_usage_all home_usage_cost ' +
     'home_usage_day home_usage_empty home_usage_load_failed home_usage_method home_usage_model_count home_usage_models home_usage_overview ' +
     'home_usage_partial home_usage_period_unsupported home_usage_sessions home_usage_today home_usage_tokens home_usage_top_model home_usage_warming ' +
     'home_usage_warming_timeout native_close native_create_checkout_branch native_create_checkout_current native_create_checkout_failed ' +
