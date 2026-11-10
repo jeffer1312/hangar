@@ -1033,8 +1033,8 @@ impl Executor {
         let driver=TerminalDriver::new(self.target.binding.clone(),self.services(id,id,""),self.options.io.clone(),self.options.limits.clone());
         self.action(Action::Prepare {id:id.into(),payload:original,entry_id:None}).await?;
         self.action(Action::BeginDispatch {id:id.into(),wire_id:format!("model:{}:{id}",self.target.generation),staged:false}).await?;
-        let changed=if kind=="set_engine_model" {
-            self.engine_model(&driver,&payload).await
+        let changed=if kind=="set_engine_model" || payload["model"].as_str().is_some_and(|model|model.starts_with("claude-")) {
+            self.argument_model(&driver,&payload).await
         } else {
             crate::model_picker::drive(&driver,payload["model"].as_str(),payload["effort"].as_str(),payload["scope"]=="default").await
         };
@@ -1046,7 +1046,7 @@ impl Executor {
         Ok(result)
     }
 
-    async fn engine_model(&self,driver:&TerminalDriver,payload:&Value)->Result<Value,crate::model_picker::Refusal> {
+    async fn argument_model(&self,driver:&TerminalDriver,payload:&Value)->Result<Value,crate::model_picker::Refusal> {
         use crate::{model_picker::default_model,model_picker::Refusal};
         let failure=|code,detail:&str,typed| Refusal {code:Some(code),detail:detail.into(),uncertain:typed,typed};
         let config=self.target.metadata.config_dir.clone();
@@ -1054,8 +1054,12 @@ impl Executor {
         let before=tokio::task::spawn_blocking(move||default_model::snapshot(&snapshot_config)).await
             .map_err(|_|failure("engine_default_read_failed","não consegui ler o modelo padrão da conta",false))?
             .map_err(|_|failure("engine_default_read_failed","não consegui ler o modelo padrão da conta",false))?;
+        let default_scope=payload["scope"]=="default";
+        if !default_scope && matches!(before,default_model::Snapshot::Unreadable) {
+            return Err(failure("engine_default_read_failed","não consegui ler o modelo padrão da conta",false));
+        }
         let result=crate::model_picker::drive_engine(driver,payload["model"].as_str().unwrap_or("")).await;
-        if result.as_ref().map_or_else(|error|error.typed,|_|true) {
+        if !default_scope && result.as_ref().map_or_else(|error|error.typed,|_|true) {
             default_model::restore_after_write(&config,&before).await
                 .map_err(|_|failure("engine_default_restore_failed","não consegui restaurar o modelo padrão da conta; confira settings.json",true))?;
         }
@@ -1063,12 +1067,14 @@ impl Executor {
         if let Some(effort)=payload["effort"].as_str().filter(|effort|!effort.is_empty()) {
             match crate::model_picker::normalize(None,Some(effort)) {
                 Err(error)=>value["effort_error"]=json!(error),
-                Ok((model,effort))=>if let Err(error)=crate::model_picker::drive(driver,model.as_deref(),effort.as_deref(),false).await {
-                    value["effort_error"]=json!(error.detail);
+                Ok((model,effort))=>match crate::model_picker::drive(driver,model.as_deref(),effort.as_deref(),default_scope).await {
+                    Err(error)=>value["effort_error"]=json!(error.detail),
+                    Ok(effort)=>if let Some(pending)=effort.get("pending_confirm") {value["pending_confirm"]=pending.clone();},
                 },
             }
         }
-        value["model"]=payload["model"].clone();
+        if payload.get("scope").is_some() {value["scope"]=json!(if default_scope {"default"} else {"session"});}
+        else {value["model"]=payload["model"].clone();}
         Ok(value)
     }
 

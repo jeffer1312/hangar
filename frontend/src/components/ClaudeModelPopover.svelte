@@ -89,21 +89,21 @@
   // rodando em `Fable 5` aparecia com o tique no Opus. Agora o que a statusline diz AGORA ganha;
   // `active` so entra quando o nome nao casa com nada.
   function matchCurrent(cur: string | null | undefined, opts: ModelOption[]): string | null {
-    const c = cur?.trim().toLowerCase();
+    const normalized = (value: string) => value.toLowerCase().replace(/\(1m context\)|·1m/g, '[1m]').replace(/\s/g, '');
+    const c = normalized(cur ?? '');
     if (!c) return opts.find((m) => m.active)?.id ?? null;
-    const exato = opts.find((m) => m.id.toLowerCase() === c);
+    const exato = opts.find((m) => normalized(m.id) === c);
     if (exato) return exato.id;
-    // Substring nos dois sentidos: no picker o id e a keyword ('fable' dentro de 'Fable 5'); no
-    // motor o id e o proprio nome que a statusline mostra ('k3').
-    //
-    // DUAS linhas podem dividir a mesma palavra — 'opus' e 'opus[1m]'. O que decide entre elas e a
-    // statusline citar a janela de 1M ou nao ('Opus5·1M' vs 'Opus 5'); sem isso, quem roda no 1M
-    // via o tique no Opus normal, que foi o que apareceu na tela.
     const querMilhao = c.includes('1m');
-    const base = (id: string) => id.replace(/\[[^\]]*\]$/, '').toLowerCase();
+    const base = (id: string) => normalized(id).replace(/\[[^\]]*\]$/, '');
+    // O nome distingue versões da mesma família, mesmo quando o ID completo não aparece na barra.
+    const nomes = opts.filter((m) => m.id !== 'default' && base(m.name ?? m.id) === base(c));
+    const porNome = nomes.find((m) => (normalized(m.id).endsWith('[1m]') || normalized(m.name ?? '').endsWith('[1m]')) === querMilhao)
+      ?? nomes[0];
+    if (porNome) return porNome.id;
     const candidatos = opts.filter((m) => m.id !== 'default' && c.includes(base(m.id)));
     const porJanela = candidatos.find(
-      (m) => m.id.toLowerCase().endsWith('[1m]') === querMilhao,
+      (m) => normalized(m.id).endsWith('[1m]') === querMilhao,
     );
     if (porJanela) return porJanela.id;
     if (candidatos.length) return candidatos[0].id;

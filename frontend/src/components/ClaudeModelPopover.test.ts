@@ -68,6 +68,20 @@ function montar(currentModel = 'Opus 5') {
 beforeEach(() => vi.clearAllMocks());
 
 describe('ClaudeModelPopover — picker com keyword repetida', () => {
+  it.each(['Fable 5.2', 'Fable5.2·1M'])('marca a versão escolhida pelo nome do catálogo: %s', async (current) => {
+    apiMock.getModelOptions.mockResolvedValue({ kind: 'claude', engine: null, models: [
+      { id: 'default', name: 'Default', active: true },
+      { id: 'fable', name: 'Fable 5.1', active: false },
+      { id: 'claude-fable-5-2', name: 'Fable 5.2', active: false },
+    ] });
+    const comp = montar(current);
+    try {
+      await vi.waitFor(() => expect(document.querySelector('.pop .linha.ativa .nome')?.textContent?.trim()).toBe('Fable 5.2'));
+    } finally {
+      await unmount(comp);
+    }
+  });
+
   it('desenha as seis linhas mesmo com o id repetido de antes', async () => {
     apiMock.getModelOptions.mockResolvedValue(PICKER_ID_REPETIDO);
     const comp = montar();

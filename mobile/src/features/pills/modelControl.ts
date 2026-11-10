@@ -90,11 +90,7 @@ export function useModelControl({ serverId, name, provider, chosen, onChosen, cl
         const res = refresh ? await getModelOptions(name, server, { refresh: true }) : await getModelOptions(name, server);
         const isSelected = (mo: (typeof res.models)[number]) =>
           chosen.model ? (mo.name ?? mo.id) === chosen.model || mo.id === chosen.model : mesmoModelo(mo.name ?? mo.id, current);
-        // A troca com terminal usa os apelidos vivos do seletor do Claude Code.
-        const live = res.kind === 'claude' && !res.engine
-          ? res.models.filter((mo) => !mo.id.startsWith('claude-') || isSelected(mo))
-          : res.models;
-        const models = live.length ? live : res.models;
+        const models = res.models;
         catalog.current = { kind: res.kind, names: new Map(models.map((mo) => [mo.id, mo.name ?? mo.id])) };
         setItems(models.map((mo) => ({
           id: mo.id, label: mo.name ?? mo.id, hint: mo.desc ?? undefined, selected: isSelected(mo),

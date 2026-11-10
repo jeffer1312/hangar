@@ -1010,6 +1010,18 @@ async fn model_picker_that_never_opens_is_refused_with_a_code() {
 async fn model_picker_b14_navigates_by_id_with_arrows() {
  for name in ["session_navigates_and_presses_s", "variant_1m", "absent_model"] { picker_replay(name).await; }
 }
+
+#[tokio::test]
+async fn model_picker_accepts_the_full_claude_catalog_id() {
+ let model = "claude-fable-5-2";
+ let normalized = hangar_server::model_picker::normalize(Some(model), None);
+ assert_eq!(normalized, Ok((Some(model.into()), None)));
+ let io = Arc::new(FakeIo::new(vec![screen(""), screen(""), screen(""),
+     format!("  ⎿  Set model to Fable 5.2 and saved as your default for new sessions\n{}", screen(""))]));
+ let out = hangar_server::model_picker::drive_engine(&driver(io.clone(), Arc::new(Services::new())), model).await;
+ assert!(out.is_ok(), "{out:?}");
+ assert_eq!(picker_keys(&io), ["/model claude-fable-5-2", "Enter"]);
+}
 /// B15: Right até o alvo acima, relê uma vez; sem suporte, nenhuma tecla. O `effort_cycle_unavailable` do
 /// golden prende a volta do slider que o Python esperava e o Claude não dá: o caso novo está abaixo.
 #[tokio::test]
