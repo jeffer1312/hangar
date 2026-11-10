@@ -2002,7 +2002,7 @@ export function isFallenSession(s: { state?: string | null; problema?: string | 
   return s.state === 'dead' && (FALLEN_PROBLEMS as readonly string[]).includes(s.problema ?? '');
 }
 
-// Reabre a sessão caída pelo spec dela, na mesma conversa. Dispensar é o `deleteSession`.
+// Reabre a sessão caída pelo spec dela, na mesma conversa.
 export async function reopenFallenSession(name: string, server?: Server | null): Promise<{ ok: boolean }> {
   return sessionFetch<{ ok: boolean }>(server, `/api/sessions/${encodeURIComponent(name)}/reabrir`, { method: 'POST' });
 }

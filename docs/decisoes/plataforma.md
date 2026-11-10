@@ -3225,8 +3225,10 @@ defeitos achados nele (todos consertados no Rust, decisão do usuário) estão n
   restore) e Dispensar (`POST /api/sessions/{name}/dispensar`, que só age se o nome ainda está caído: a
   linha velha no app não fecha a sessão que acabou de reabrir). `/exit` e kill pedido não deixam `Failed with result`: é a pessoa
   saindo, sem linha (decisão do usuário). Sem journal (Windows/psmux) não há registro. A linha caída
-  fica fora do push e da varredura de grupos. O build (`cargo-pinned`, `verificar-local`) roda em
-  escopo próprio com teto (`scripts/escopo-memoria`): falta de memória mata o build, não a sessão.
+  fica fora do push e da varredura de grupos. O build roda em escopo próprio com teto: o `cargo-pinned`
+  abre o dele (`MemoryHigh` pela memória livre) e o `verificar-local` roda inteiro no `scripts/escopo-memoria`
+  (só `MemoryMax`: com `MemoryHigh` o Node tira o heap do teto menor e o `svelte-check` estoura). Falta de
+  memória mata o build, não a sessão.
 - **Limite de uso troca de conta sozinho (Claude).** Sinal pelo transcript (com terminal) ou pelo
   stream-json (sem terminal), nunca pelo pane. A fila fica segura até a troca terminar; o recado de
   continuar vai à frente na fila durável; conta gasta fica marcada até o reset (`limit-spent.json`);

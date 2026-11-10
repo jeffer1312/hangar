@@ -178,6 +178,16 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     // Fechada de propósito não volta no próximo reboot, de qualquer agente; a caída sai do registro aqui.
     if let (true, Some(name), Some(dirs)) = (owner, name.as_deref(), st.list.env().dirs.as_ref()) {
         let fell = crate::session_open::fallen::get(&dirs.home, name).is_some();
+        // Reabrindo: fechar no meio apagaria o registro e mataria o pane que está subindo.
+        let _hold = match fell.then(|| crate::session_open::fallen::Reopening::begin(name)) {
+            Some(None) => {
+                let mut response = super::json_response(StatusCode::CONFLICT,
+                    super::detail_body("erro_reabrindo", "a sessão está reabrindo", json!({"name": name})));
+                crate::routes::cors(req.headers(), response.headers_mut());
+                return response;
+            }
+            hold => hold.flatten(),
+        };
         crate::session_open::restore::forget(&dirs.home, name);
         // Dispensar a caída: não há processo para matar nem o que o Python fechar.
         if fell && st.list.discovered_session(name).await.is_ok_and(|found| found.is_none()) {

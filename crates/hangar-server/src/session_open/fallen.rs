@@ -150,11 +150,12 @@ pub async fn reopen_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): Co
     let (Some(name), Some(dirs)) = (session_name(req.uri().path()), st.list.env().dirs.clone()) else {
         return answer(&headers, StatusCode::NOT_FOUND, detail_body("erro_sessao_nao_caida", "a sessão não está caída", json!({})));
     };
-    let Some(fallen) = get(&dirs.home, &name) else {
-        return answer(&headers, StatusCode::NOT_FOUND, detail_body("erro_sessao_nao_caida", "a sessão não está caída", json!({"name": name})));
-    };
+    // A marca antes da leitura: um Dispensar que termine entre as duas não deixa reabrir o registro já tirado.
     let Some(reopening) = Reopening::begin(&name) else {
         return answer(&headers, StatusCode::CONFLICT, detail_body("erro_reabrindo", "a sessão já está reabrindo", json!({"name": name})));
+    };
+    let Some(fallen) = get(&dirs.home, &name) else {
+        return answer(&headers, StatusCode::NOT_FOUND, detail_body("erro_sessao_nao_caida", "a sessão não está caída", json!({"name": name})));
     };
     // Cliente que cai no meio não interrompe a abertura. O mesmo caminho do restore: agente de pé, diário, e o
     // registro só sai no sucesso.
@@ -180,10 +181,10 @@ pub async fn reopen_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): Co
 /// Nomes reabrindo agora; sai quando a tarefa da reabertura acaba, mesmo com o cliente já desconectado.
 static REOPENING: std::sync::Mutex<std::collections::BTreeSet<String>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
 
-struct Reopening(String);
+pub(crate) struct Reopening(String);
 
 impl Reopening {
-    fn begin(name: &str) -> Option<Self> {
+    pub(crate) fn begin(name: &str) -> Option<Self> {
         REOPENING.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(name.to_owned()).then(|| Self(name.to_owned()))
     }
     #[cfg(test)]
@@ -228,7 +229,8 @@ pub fn failure(journal: &str) -> Option<String> {
 pub fn unit_of_cgroup(cgroup: &str) -> Option<String> {
     let path = cgroup.lines().find_map(|line| line.strip_prefix("0::"))?;
     let unit = path.trim().rsplit('/').next()?;
-    unit.ends_with(".scope").then(|| unit.to_owned())
+    // Só o escopo que o tmux abre por pane é da sessão; sem ele o pane herda o grupo do servidor ou do login.
+    (unit.starts_with("tmux-spawn-") && unit.ends_with(".scope")).then(|| unit.to_owned())
 }
 
 /// A unidade do pane de cada sessão (o processo que o multiplexador lançou), numa consulta só. Relida a
@@ -245,7 +247,11 @@ pub async fn pane_units(program: &std::ffi::OsStr) -> BTreeMap<String, String> {
 static FORGOTTEN: std::sync::Mutex<BTreeMap<String, std::time::Instant>> = std::sync::Mutex::new(BTreeMap::new());
 
 pub fn mark_forgotten(name: &str) {
-    FORGOTTEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(name.to_owned(), std::time::Instant::now());
+    let now = std::time::Instant::now();
+    let mut forgotten = FORGOTTEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    // A confirmação em voo dura no máximo o journal (~20 s): marca mais velha que isso não decide mais nada.
+    forgotten.retain(|_, at| now.duration_since(*at) < Duration::from_secs(120));
+    forgotten.insert(name.to_owned(), now);
 }
 
 fn forgotten_since(name: &str, since: std::time::Instant) -> bool {
@@ -254,7 +260,8 @@ fn forgotten_since(name: &str, since: std::time::Instant) -> bool {
 
 async fn journal(unit: &str) -> Option<String> {
     let run = tokio::process::Command::new("journalctl")
-        .args(["--user", "-u", unit, "-o", "cat", "-n", "20", "--no-pager"])
+        // `-b`: o nome do escopo pode se repetir entre boots, e a falha de um boot antigo não é desta sessão.
+        .args(["--user", "-b", "-u", unit, "-o", "cat", "-n", "20", "--no-pager"])
         .stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).kill_on_drop(true).output();
     match tokio::time::timeout(Duration::from_secs(2), run).await {
         Ok(Ok(out)) => Some(String::from_utf8_lossy(&out.stdout).into_owned()),
@@ -263,7 +270,7 @@ async fn journal(unit: &str) -> Option<String> {
     }
 }
 
-/// O systemd grava o `Failed with result` segundos depois de matar o escopo (4 s no oomd de 06/11).
+/// O systemd grava o `Failed with result` alguns segundos depois de matar o escopo.
 const JOURNAL_TRIES: u32 = 4;
 const JOURNAL_GAP: Duration = Duration::from_secs(5);
 
@@ -303,6 +310,9 @@ mod tests {
         let cgroup = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/tmux-spawn-7ba9eb0b-4cd5-4c65-a55e-68d979c03ed7.scope\n";
         assert_eq!(unit_of_cgroup(cgroup).as_deref(), Some("tmux-spawn-7ba9eb0b-4cd5-4c65-a55e-68d979c03ed7.scope"));
         assert_eq!(unit_of_cgroup("0::/user.slice/user-1000.slice/session-2.slice\n"), None);
+        // Tmux sem escopo por pane: o login e o terminal se repetem entre sessões e boots, não dizem qual caiu.
+        assert_eq!(unit_of_cgroup("0::/user.slice/user-1000.slice/session-2.scope\n"), None);
+        assert_eq!(unit_of_cgroup("0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-kitty-1234.scope\n"), None);
     }
 
     fn oom(key: &str) -> Fallen {
