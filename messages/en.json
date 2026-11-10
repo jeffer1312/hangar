@@ -7756,6 +7756,7 @@
   "native_new_chat_place_here": "current folder",
   "native_new_chat_where": "Where it runs",
   "native_new_chat_run_on": "Run on",
+  "native_new_chat_on_machine": "on {maquina}",
   "native_new_chat_no_roots": "No folders configured on this server.",
   "native_new_chat_no_accounts": "No accounts available.",
   "native_new_chat_machine": "Machine",

@@ -100,7 +100,9 @@ export function modeMenuHandlers(menu: ModeMenu | undefined) {
   return { pick, openIOS, actions, a11yActions, current: options.find((o) => o.checked)!.mode };
 }
 
-export function ComposerActions({ attach, mic, send, settings, beforeMic, afterMic, afterSettings, modeMenu }: {
+// `field`: o campo entra na própria fileira ([+] campo [modelo] [mic] [enviar]), que cresce com o texto.
+export function ComposerActions({ attach, mic, send, settings, beforeMic, afterMic, afterSettings, modeMenu, field }: {
+  field?: ReactNode;
   attach: Action;
   mic: Action & { recording: boolean; styleLabel: string; onStyle: () => void };
   send: Action & { label: string; hint?: string; editing?: boolean; count?: number; visible?: boolean };
@@ -110,13 +112,7 @@ export function ComposerActions({ attach, mic, send, settings, beforeMic, afterM
   const count = send.count ?? 0;
   const menu = useMemo(() => modeMenuHandlers(modeMenu), [modeMenu]);
   const ios = Platform.OS === 'ios';
-  return <View style={styles.row}>
-    <Pressable onPress={attach.onPress} disabled={attach.disabled} hitSlop={5}
-      accessibilityState={{ disabled: attach.disabled, busy: attach.busy }}
-      style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed, attach.disabled && styles.disabled]}
-      accessibilityLabel={m.composer_adicionar_ao_chat()} accessibilityRole="button">
-      {attach.busy ? <ActivityIndicator size="small" color={theme.tokens.text.secondary} /> : <Icon name="Plus" size={22} color={theme.tokens.text.secondary} />}
-    </Pressable>
+  const micGroup = <>
     {beforeMic}
     <Pressable onPress={mic.onPress} disabled={mic.disabled} hitSlop={5}
       accessibilityState={{ disabled: mic.disabled, busy: mic.busy }}
@@ -130,8 +126,17 @@ export function ComposerActions({ attach, mic, send, settings, beforeMic, afterM
         : <Icon name={mic.recording ? 'Square' : 'Mic'} size={mic.recording ? 16 : 20} color={mic.recording ? theme.tokens.status.error : theme.tokens.text.secondary} />}
     </Pressable>
     {afterMic}
-    <View style={styles.spacer} />
+  </>;
+  return <View style={[styles.row, field ? styles.rowField : null]}>
+    <Pressable onPress={attach.onPress} disabled={attach.disabled} hitSlop={5}
+      accessibilityState={{ disabled: attach.disabled, busy: attach.busy }}
+      style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed, attach.disabled && styles.disabled]}
+      accessibilityLabel={m.composer_adicionar_ao_chat()} accessibilityRole="button">
+      {attach.busy ? <ActivityIndicator size="small" color={theme.tokens.text.secondary} /> : <Icon name="Plus" size={22} color={theme.tokens.text.secondary} />}
+    </Pressable>
+    {field ? <View style={styles.spacer}>{field}</View> : <>{micGroup}<View style={styles.spacer} /></>}
     {settings}
+    {field ? micGroup : null}
     {afterSettings}
     {send.visible === false ? null : withModeMenu(menu, ios, send.disabled, <Pressable
       onPress={() => { void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); send.onPress(); }}
@@ -181,6 +186,8 @@ const styles = StyleSheet.create((theme) => ({
   recordingWrap: { minHeight: 92 },
   wave: { justifyContent: 'center', paddingHorizontal: theme.base.space[1] },
   row: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1.5] },
+  // Texto de várias linhas: os botões ficam no pé da caixa.
+  rowField: { alignItems: 'flex-end' },
   spacer: { flex: 1, minWidth: 0 },
   iconBtn: { width: 34, height: 34, borderRadius: theme.base.radius.full, alignItems: 'center', justifyContent: 'center' },
   recordingBtn: { width: 44, height: 44 },
