@@ -1,4 +1,4 @@
-use super::configuration::snapshot;
+use super::routes::configuration_snapshot as snapshot;
 use crate::{
     accounts::{AccountService, environment::AccountEnvironment},
     auth::TrustedHosts,

@@ -1,5 +1,4 @@
 pub mod model;
-pub(crate) mod configuration;
 mod cloud;
 pub mod service;
 mod quota;

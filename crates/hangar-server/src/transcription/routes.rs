@@ -2,10 +2,16 @@ use crate::routes::AppState;
 use crate::dictation::timing::{Step, timed};
 use super::model::{ConfigSnapshot, Profile, TranscriptionError};
 
+/// A leitura de disco fica fora do laço assíncrono.
+pub(crate) async fn configuration_snapshot(state: &AppState) -> Result<crate::config_sync::runtime_values::ValueGuard, ()> {
+    let config = crate::config_sync::runtime::RuntimeConfig::from_state(state).map_err(|_| ())?;
+    tokio::task::spawn_blocking(move || config.transcription_snapshot()).await.map_err(|_| ())
+}
+
 pub(crate) async fn configuration(state: &AppState) -> Result<ConfigSnapshot, TranscriptionError> {
     let failed = || TranscriptionError { status: 503, code: "transcription_config_unavailable".into(),
         detail: "A configuração de transcrição não está disponível.".into() };
-    let mut snapshot = super::configuration::snapshot(state).await.map_err(|_| failed())?;
+    let mut snapshot = configuration_snapshot(state).await.map_err(|_| failed())?;
     serde_json::from_value(snapshot.take()).map_err(|_| failed())
 }
 

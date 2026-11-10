@@ -458,7 +458,7 @@ async fn read_too_large(reader: &mut tokio::net::tcp::OwnedReadHalf) -> String {
 async fn dictation_public_provider_test_selects_only_requested_provider() {
     let server = PublicServer::start().await;
     let endpoint = format!("http://{}", server.state.cfg.upstream);
-    super::dictation_timing::configure(&server.state, &json!({"providers":[{"id":"first","name":"primeiro","kind":"openai","base_url":format!("{endpoint}/first")},{"id":"second","name":"segundo","kind":"openai","base_url":endpoint}],"legacy":{"id":"legacy","kind":"openai","base_url":endpoint}}));
+    super::dictation_timing::configure(&server.state, &json!({"providers":[{"id":"first","name":"primeiro","kind":"openai","base_url":format!("{endpoint}/first")},{"id":"second","name":"segundo","kind":"openai","base_url":endpoint}]}));
     let client = reqwest::Client::new();
     let response = client
         .post(format!(

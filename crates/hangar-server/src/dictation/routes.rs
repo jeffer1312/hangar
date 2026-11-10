@@ -33,7 +33,7 @@ pub(crate) async fn configuration(state: &AppState) -> Result<OrganizationConfig
             "configuração da organização do ditado indisponível"
         );
     };
-    let mut snapshot = crate::transcription::configuration::snapshot(state)
+    let mut snapshot = crate::transcription::routes::configuration_snapshot(state)
         .await.map_err(|_| failed("configuration"))?;
     serde_json::from_value(snapshot["organization"].take())
         .map_err(|_| failed("organization_invalid"))
