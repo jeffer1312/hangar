@@ -16,6 +16,9 @@ import termios
 import tty
 
 fixture, logdir, mode = sys.argv[1], sys.argv[2], sys.argv[3]
+# Optional 4th argument: the screen a submitted slash command opens (the model menu after `/model`).
+# From then on the TUI is static on it, like the real selector waiting for a choice.
+after_slash = sys.argv[4] if len(sys.argv) > 4 else None
 lines = open(fixture, encoding="utf-8").read().split("\n")[:45]
 comp = max((i for i, l in enumerate(lines) if l.startswith("› ")), default=None) if mode == "echo" else None
 buf = ""
@@ -41,7 +44,7 @@ def render():
 
 
 def feed(text):
-    global buf, in_paste
+    global buf, in_paste, mode, fixture, lines, comp
     i = 0
     while i < len(text):
         if text.startswith("\x1b[200~", i):
@@ -62,6 +65,9 @@ def feed(text):
                 buf += "\n"
             else:
                 log("submitted.jsonl", {"text": buf})
+                if after_slash and buf.startswith("/"):
+                    fixture, mode, comp = after_slash, "static", None
+                    lines = open(fixture, encoding="utf-8").read().split("\n")[:45]
                 buf = ""
         elif ch in "\x7f\x08":
             buf = buf[:-1]

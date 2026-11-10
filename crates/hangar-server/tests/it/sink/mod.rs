@@ -20,6 +20,8 @@ struct Inner {
     order: Vec<(String, String)>,
     outcome: HashMap<String, &'static str>,
     hold: HashMap<String, Duration>,
+    /// Falhas do cano falso (pânico em tarefa some): toda leitura do teste estoura com elas.
+    errors: Vec<String>,
 }
 
 /// Quem recebeu o quê. Clonável: todas as cópias veem os mesmos recados.
@@ -27,12 +29,19 @@ struct Inner {
 pub struct Sink(Arc<Mutex<Inner>>);
 
 impl Sink {
-    pub fn texts(&self, name: &str) -> Vec<String> { self.0.lock().unwrap().texts.get(name).cloned().unwrap_or_default() }
+    /// O estado, depois de conferir que o cano falso não falhou.
+    fn read(&self) -> std::sync::MutexGuard<'_, Inner> {
+        let inner = self.0.lock().unwrap();
+        assert!(inner.errors.is_empty(), "o cano falso falhou: {:?}", inner.errors);
+        inner
+    }
+    fn failed(&self, name: &str, error: impl std::fmt::Display) { self.0.lock().unwrap().errors.push(format!("{name}: {error}")); }
+    pub fn texts(&self, name: &str) -> Vec<String> { self.read().texts.get(name).cloned().unwrap_or_default() }
     pub fn count(&self, name: &str) -> usize { self.texts(name).len() }
-    pub fn total(&self) -> usize { self.0.lock().unwrap().texts.values().map(Vec::len).sum() }
+    pub fn total(&self) -> usize { self.read().texts.values().map(Vec::len).sum() }
     pub fn last(&self, name: &str) -> Option<String> { self.texts(name).pop() }
     /// O último recado que chegou a qualquer sessão.
-    pub fn last_any(&self) -> Option<String> { self.0.lock().unwrap().order.last().map(|(_, text)| text.clone()) }
+    pub fn last_any(&self) -> Option<String> { self.read().order.last().map(|(_, text)| text.clone()) }
     /// O ACK das próximas escritas da sessão (`written` por padrão).
     pub fn outcome(&self, name: &str, outcome: &'static str) { self.0.lock().unwrap().outcome.insert(name.into(), outcome); }
     /// Espera antes do ACK (cano lento); zero tira.
@@ -65,11 +74,11 @@ impl Sink {
                     if reader.read_line(&mut header).await.is_err() || header != "secret-test\n" { return; }
                     let snapshot = json!({"type":"cano_snapshot","versao":2,"pid":42,"init":null,"aberto":false,
                         "pendentes":[],"ultimo_result":null,"rate_limit":null,"stderr_tail":[],"saiu":null,"inflight":{}});
-                    write.write_all(format!("{snapshot}\n").as_bytes()).await.unwrap();
+                    if let Err(error) = write.write_all(format!("{snapshot}\n").as_bytes()).await { return sink.failed(&name, error); }
                     loop {
                         let mut raw = String::new();
                         if reader.read_line(&mut raw).await.unwrap_or(0) == 0 { return; }
-                        let envelope: Value = serde_json::from_str(&raw).unwrap();
+                        let envelope: Value = match serde_json::from_str(&raw) { Ok(envelope) => envelope, Err(error) => return sink.failed(&name, error) };
                         let frame: Value = serde_json::from_str(envelope["frame"].as_str().unwrap_or("{}")).unwrap_or_default();
                         let text = frame["message"]["content"][0]["text"].as_str().unwrap_or_default().to_owned();
                         let (outcome, wait) = {
