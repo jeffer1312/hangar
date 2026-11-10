@@ -3228,7 +3228,9 @@ defeitos achados nele (todos consertados no Rust, decisão do usuário) estão n
   fica fora do push e da varredura de grupos. O build roda em escopo próprio com teto: o `cargo-pinned`
   abre o dele (`MemoryHigh` pela memória livre) e o `verificar-local` roda inteiro no `scripts/escopo-memoria`
   (só `MemoryMax`: com `MemoryHigh` o Node tira o heap do teto menor e o `svelte-check` estoura). Falta de
-  memória mata o build, não a sessão.
+  memória mata o build, não a sessão. Sem o systemd do usuário (CI, Windows, macOS) ou com
+  `HANGAR_SEM_ESCOPO`, os dois rodam no grupo de quem chamou, sem teto, e avisam no stderr: aí a falta de
+  memória volta a poder levar a sessão junto.
 - **Limite de uso troca de conta sozinho (Claude).** Sinal pelo transcript (com terminal) ou pelo
   stream-json (sem terminal), nunca pelo pane. A fila fica segura até a troca terminar; o recado de
   continuar vai à frente na fila durável; conta gasta fica marcada até o reset (`limit-spent.json`);
