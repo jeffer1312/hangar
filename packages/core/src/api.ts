@@ -452,6 +452,11 @@ export function vaultFetchForServer<T>(s: Server, path: string, init?: RequestIn
   return apiFetchForServer<T>(s, path, init, prazoMs);
 }
 
+/** Rotas dos plugins do Claude (`plugins.ts`): o mesmo pedido de `apiFetchForServer`. */
+export function pluginsFetchForServer<T>(s: Server, path: string, init?: RequestInit, timeoutMs?: number): Promise<T> {
+  return apiFetchForServer<T>(s, path, init, timeoutMs);
+}
+
 export { recentFailures, type RecentFailure };
 
 /** Teto do texto da pessoa no relatório; acima disso o servidor responde 422. */
@@ -3686,9 +3691,10 @@ function _invalidarCatalogo(name: string): void {
   for (const k of _catCache.keys()) if (k.endsWith(`|${name}`)) _catCache.delete(k);
 }
 
-export function getModelOptions(name: string, server?: Server | null, options?: { fresh?: boolean }): Promise<ModelOptionsResponse> {
-  const read = () => sessionFetch<ModelOptionsResponse>(server, `/api/sessions/${encodeURIComponent(name)}/model/options`);
-  return options?.fresh ? read() : _catalogo(`model|${server?.id ?? ''}|${name}`, read);
+export function getModelOptions(name: string, server?: Server | null, options?: { fresh?: boolean; refresh?: boolean }): Promise<ModelOptionsResponse> {
+  const read = () => sessionFetch<ModelOptionsResponse>(server, `/api/sessions/${encodeURIComponent(name)}/model/options${options?.refresh ? '?refresh=1' : ''}`);
+  if (options?.refresh) _invalidarCatalogo(name);
+  return options?.fresh || options?.refresh ? read() : _catalogo(`model|${server?.id ?? ''}|${name}`, read);
 }
 
 /**

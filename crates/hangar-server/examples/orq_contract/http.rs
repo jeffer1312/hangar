@@ -66,6 +66,20 @@ fn request(input: &Value, public: bool) -> Result<Value, String> {
         };
         state.list = Arc::new(ListBridge::new(list_env, FactsClient::new(upstream_addr, "fixture-internal".into())));
         state.side.locate = Arc::new(hangar_server::locate::ListLocate { list: state.list.clone() });
+        // O kick-off é entregue pelo Rust: no "Começar", cada sessão da prova é um Claude sem terminal
+        // dele, e o que chega ao cano falso sai em `deliveries` na forma do `/input`.
+        let sink = crate::sink::Sink::default();
+        if input["method"] == "POST" && input["path"].as_str().is_some_and(|path| path.ends_with("/orq/comecar")) {
+            let home = Path::new(input["dirs"]["home"].as_str().ok_or("home da prova ausente")?);
+            let runtime_dir = home.join(".hangar/prova-runtime");
+            std::fs::create_dir_all(&runtime_dir).map_err(|e| e.to_string())?;
+            let registry = Arc::new(crate::sink::registry().await);
+            let mut names: Vec<String> = std::fs::read_dir(home.join(".hangar/claude-headless")).map_err(|e| e.to_string())?
+                .filter_map(|entry| entry.ok()?.path().file_stem()?.to_str().map(str::to_owned)).collect();
+            names.sort();
+            for name in &names { sink.open(&registry, &runtime_dir, name).await; }
+            if state.state.runtime.set(registry).is_err() { return Err("o runtime da prova já estava ligado".into()); }
+        }
         let mut request = Request::builder().method(input["method"].as_str().unwrap_or("GET"))
             .uri(input["path"].as_str().ok_or("caminho da prova ausente")?)
             .header("content-type", "application/json")
@@ -129,7 +143,9 @@ fn request(input: &Value, public: bool) -> Result<Value, String> {
             json!({"first":first,"second":second})
         } else { body };
         server.abort();
-        let deliveries = deliveries.lock().unwrap().clone();
+        let mut deliveries = deliveries.lock().unwrap().clone();
+        deliveries.extend(sink.order().into_iter().map(|(name, text)|
+            json!({"method":"POST","path":format!("/api/sessions/{name}/input"),"body":{"text":text}})));
         Ok(json!({"status":status,"body":body,"deliveries":deliveries}))
     })
 }

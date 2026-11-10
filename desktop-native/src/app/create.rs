@@ -479,8 +479,8 @@ impl Menu {
             Menu::Account => "new-chat-account", Menu::Branch => "new-chat-branch",
         }
     }
-    /// Máquina e pasta ficam acima do compositor: o menu delas abre para cima, sem cobrir o campo.
-    pub(in crate::app) fn above(self) -> bool { matches!(self, Menu::Machine | Menu::Folder) }
+    /// A pasta fica no título, acima do compositor: o menu dela abre para cima, sem cobrir o campo.
+    pub(in crate::app) fn above(self) -> bool { matches!(self, Menu::Folder) }
 }
 
 /// O diálogo "Nova sessão". Entidade própria: o diálogo é desenhado durante o desenho da janela, quando o `Hangar` não pode ser
@@ -643,6 +643,8 @@ pub(in crate::app) struct NewSession {
     /// O nome que a tela pôs no campo: mantido, a criação leva o nome da reserva.
     suggested_name: String,
     prewarm: prewarm::Reserve,
+    /// Etiquetas por máquina, cópia do evento `tags` que o app guarda: a pílula e os menus mostram a mesma marca das abas.
+    pub(in crate::app) tags: HashMap<String, super::tags::Event>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -722,7 +724,7 @@ impl NewSession {
             spreads: Default::default(),
             archive: Remote::default(), want_resume: false, conversation: String::new(), before: None, preview: Remote::default(),
             preview_scroll: ScrollHandle::new(), resuming: false, baton, baton_by_model: false, baton_open: false,
-            baton_preview: Remote::default(), suggested_name: String::new(), prewarm, _subscriptions: subscriptions,
+            baton_preview: Remote::default(), suggested_name: String::new(), prewarm, tags: HashMap::new(), _subscriptions: subscriptions,
         };
         dialog.start_prewarm(cx);
         dialog
@@ -2168,7 +2170,13 @@ pub(super) fn menu_row(id: impl Into<ElementId>, on: bool, label: String, hint: 
 
 /// A mesma linha com uma segunda linha sob o nome: a cota da conta.
 fn menu_row_with(id: impl Into<ElementId>, on: bool, label: String, hint: String, below: Option<AnyElement>) -> Button {
+    menu_row_marked(id, on, None, label, hint, below)
+}
+
+/// A linha com a marca da etiqueta à esquerda (ícone na cor dela), como na placa das abas.
+fn menu_row_marked(id: impl Into<ElementId>, on: bool, mark: Option<AnyElement>, label: String, hint: String, below: Option<AnyElement>) -> Button {
     popup::row(id, on).accessibility_label(label.clone()).child(div().w_full().flex().items_center().gap_2()
+        .children(mark.map(|mark| div().flex_shrink_0().child(mark)))
         .child(div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
             .child(div().truncate().text_sm().font_weight(FontWeight::MEDIUM).child(label))
             .children(below))
@@ -2200,6 +2208,38 @@ fn quiet_pill(menu: Menu, open: bool, icon: IconName, text: String, aria: String
         .on_click(cx.listener(move |this, _, window, cx| this.toggle_menu(menu, window, cx))))
 }
 
+/// A pílula quieta com a marca de etiqueta no lugar do ícone; `tip` diz por inteiro o que o texto curto resume.
+#[allow(clippy::too_many_arguments)]
+fn mark_pill(menu: Menu, open: bool, mark: AnyElement, text: String, aria: String, tip: Option<String>, disabled: bool,
+    cx: &mut Context<NewSession>) -> Div {
+    let label = format!("{aria}: {text}");
+    popup::anchor(div(), menu.anchor()).child(Button::new(menu.anchor())
+        .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::muted()).hover(theme::hover()).active(theme::hover()))
+        .h(px(26.)).px(px(8.)).rounded(px(6.)).selected(open).disabled(disabled).accessibility_label(label)
+        .when_some(tip, |button, tip| button.tooltip(tip))
+        .child(div().flex().items_center().gap(px(6.)).text_size(px(12.5))
+            .child(mark)
+            .child(div().max_w(px(320.)).truncate().child(text))
+            .child(chrome::small_icon(IconName::ChevronDown, 12., theme::faint())))
+        .on_click(cx.listener(move |this, _, window, cx| this.toggle_menu(menu, window, cx))))
+}
+
+/// Ícone da etiqueta da máquina na cor dela; sem etiqueta, o monitor apagado de antes.
+fn machine_mark(tag: Option<&super::tags::Tag>, size: f32) -> AnyElement {
+    let color = tag.and_then(|t| t.color.as_deref()).and_then(theme::tag_color).unwrap_or_else(theme::faint);
+    chrome::small_icon(tag.map_or(IconName::Monitor, |t| super::tags::machine_icon(&t.icon)), size, color).into_any_element()
+}
+
+/// Ícone da etiqueta da conta na cor dela (`provider` desenha o logo do agente); sem etiqueta, o usuário apagado.
+fn account_mark(badge: Option<&super::tags::Badge>, provider: &str, size: f32) -> AnyElement {
+    let Some(badge) = badge else { return chrome::small_icon(IconName::CircleUser, size, theme::faint()).into_any_element() };
+    let color = badge.color.as_deref().and_then(theme::tag_color).unwrap_or_else(theme::faint);
+    match super::tags::account_icon(&badge.icon) {
+        Some(icon) => chrome::small_icon(icon, size, color).into_any_element(),
+        None => super::tags::provider_mark(provider, size, color),
+    }
+}
+
 impl NewSession {
     pub(super) fn toggle_menu(&mut self, menu: Menu, window: &mut Window, cx: &mut Context<Self>) {
         let open = self.menu.get() != Some(menu) && !self.creating;
@@ -2209,7 +2249,8 @@ impl NewSession {
         if open && menu == Menu::Folder { self.query.update(cx, |input, cx| input.focus(window, cx)); }
         // No menu de branch a busca só aparece nas listas internas; quem as abre põe o foco nela.
         else if open { self.menu_query.update(cx, |input, cx| { input.set_value("", window, cx); if menu != Menu::Branch { input.focus(window, cx); } }); }
-        if open && menu == Menu::Branch { (self.picking, self.base_open) = (false, false); self.git_opened(cx); }
+        // O menu da máquina traz também onde o agente trabalha: abre com o mesmo começo do de branch.
+        if open && (menu == Menu::Branch || menu == Menu::Machine && !self.no_project()) { (self.picking, self.base_open) = (false, false); self.git_opened(cx); }
         cx.notify();
     }
 
@@ -2243,47 +2284,104 @@ impl NewSession {
             .unwrap_or_else(|| self.link.api.identity().trim_start_matches("http://").trim_start_matches("https://").trim_end_matches('/').to_owned())
     }
 
-    /// Máquina e pasta, acima do compositor e à direita.
-    pub(super) fn render_top_pills(&self, cx: &mut Context<Self>) -> Div {
-        let open = self.menu.get();
-        let machine = self.server_label();
-        let no_project = self.no_project();
-        let folder = if no_project { tr("new_chat_no_project") } else {
-            self.picked.as_deref().map(basename).filter(|s| !s.is_empty()).map(str::to_owned).unwrap_or_else(|| tr("new_chat_folder"))
-        };
+    /// Acima do compositor, a pasta no título ("O que vamos fazer em [pasta]?") e, embaixo dele, começar sem projeto num
+    /// clique; sem projeto, a linha volta para a escolha da pasta. `hint`: a tecla de "sem projeto", quando há uma.
+    pub(super) fn render_top_pills(&self, hint: Option<AnyElement>, cx: &mut Context<Self>) -> Div {
+        let open = self.menu.get() == Some(Menu::Folder);
         let folders_ready = !self.roots.loading && self.roots.ok().is_some_and(|roots| !roots.is_empty());
-        div().flex().justify_end().items_center().gap(px(2.)).pb(px(6.))
-            .child(quiet_pill(Menu::Machine, open == Some(Menu::Machine), IconName::Monitor, machine, tr("new_chat_machine"), false, cx))
-            .child(quiet_pill(Menu::Folder, open == Some(Menu::Folder), IconName::Folder, folder, tr("new_chat_folder"), !folders_ready, cx))
-            .children((!no_project).then(|| quiet_button("new-chat-no-project", IconName::House, tr("new_chat_no_project"), false, cx)
-                .disabled(self.creating).accessibility_label(tr("new_chat_no_project_hint"))
-                .on_click(cx.listener(|this, _, window, cx| this.pick(NO_PROJECT_CWD.to_owned(), window, cx)))))
+        let disabled = !folders_ready || self.creating;
+        let quiet = |cx: &App| ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::muted())
+            .hover(theme::hover()).active(theme::hover());
+        let title = div().flex().flex_wrap().justify_center().items_center().gap(px(6.)).text_size(px(24.)).text_color(theme::text());
+        let line = div().flex().justify_center().items_center().gap(px(4.)).text_size(px(12.5)).text_color(theme::faint());
+        if self.no_project() {
+            let choose = popup::anchor(div(), Menu::Folder.anchor()).child(Button::new(Menu::Folder.anchor()).custom(quiet(cx))
+                .h(px(22.)).px(px(4.)).rounded(px(6.)).selected(open).disabled(disabled)
+                .child(div().text_size(px(12.5)).child(tr("new_chat_choose_folder")))
+                .on_click(cx.listener(|this, _, window, cx| this.toggle_menu(Menu::Folder, window, cx))));
+            return div().flex().flex_col().items_center().gap(px(8.)).pb(px(14.))
+                .child(title.child(tr("new_chat_hero")))
+                .child(line.child(tr("new_chat_no_project_line")).child("·").child(choose));
+        }
+        let folder = self.picked.as_deref().map(basename).filter(|s| !s.is_empty()).map(str::to_owned).unwrap_or_else(|| tr("new_chat_folder"));
+        let trigger = popup::anchor(div(), Menu::Folder.anchor()).child(Button::new(Menu::Folder.anchor())
+            .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::text()).hover(theme::hover()).active(theme::hover()))
+            .h(px(36.)).px(px(8.)).rounded(px(8.)).selected(open).disabled(disabled)
+            .accessibility_label(format!("{}: {folder}", tr("new_chat_folder")))
+            .child(div().flex().items_center().gap(px(6.)).text_size(px(24.)).font_weight(FontWeight::SEMIBOLD)
+                .child(chrome::small_icon(IconName::Folder, 18., theme::muted()))
+                .child(div().max_w(px(360.)).truncate().child(folder))
+                .child(chrome::small_icon(IconName::ChevronDown, 16., theme::faint())))
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_menu(Menu::Folder, window, cx))));
+        let without = Button::new("new-chat-no-project").custom(quiet(cx)).h(px(22.)).px(px(4.)).rounded(px(6.))
+            .disabled(self.creating).accessibility_label(tr("new_chat_no_project_hint"))
+            .child(div().text_size(px(12.5)).child(tr("new_chat_start_without_project")))
+            .on_click(cx.listener(|this, _, window, cx| this.pick(NO_PROJECT_CWD.to_owned(), window, cx)));
+        div().flex().flex_col().items_center().gap(px(6.)).pb(px(14.))
+            .child(title.child(tr("new_chat_hero_in")).child(trigger).child("?"))
+            .child(line.child(without).children(hint.map(|key| div().font_family(theme::MONO).text_size(px(11.)).child(key))))
     }
 
     fn no_project(&self) -> bool { self.picked.as_deref() == Some(NO_PROJECT_CWD) }
 
-    /// Conta e branch, abaixo do compositor e à esquerda; cada uma só quando existe para o provider e a pasta.
+    /// O atalho de teclado: a tela nova já sem projeto.
+    pub(in crate::app) fn choose_no_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.no_project() && !self.creating { self.pick(NO_PROJECT_CWD.to_owned(), window, cx); }
+    }
+
+    /// A etiqueta da máquina `key` (endereço normalizado), se o servidor dela mandou uma.
+    fn machine_tag(&self, key: &str) -> Option<&super::tags::Tag> { self.tags.get(key)?.machine.as_ref() }
+
+    /// A etiqueta da conta `id` (o id de `/api/credenciais`), lida na máquina desta tela.
+    fn account_badge(&self, id: &str) -> Option<&super::tags::Badge> {
+        self.tags.get(&super::servers::norm(&self.link.api.identity()))?.accounts.get(id)
+    }
+
+    /// Onde o agente trabalha, curto, para a pílula de baixo; o texto completo da branch vai na dica. Sem Git, nada.
+    fn place_label(&self) -> Option<String> {
+        match (self.checkout.loading, self.checkout.ok()) {
+            (true, _) => Some(tr("create_checkout_loading")),
+            (false, Some(Some(_))) if self.new_branch || !self.branch.is_empty() => Some(tr("new_chat_place_new")),
+            (false, Some(Some(_))) if self.existing.is_some() =>
+                Some(tr_shared("worktree_menu_pill_existente", &[("nome", self.existing.as_deref().map(basename).unwrap_or_default())])),
+            (false, Some(Some(_))) => Some(tr("new_chat_place_here")),
+            _ => None,
+        }
+    }
+
+    /// Abaixo do compositor, à esquerda: onde roda (a máquina e, com pasta Git, onde o agente trabalha, num menu só, como o
+    /// "Run on" do t3code) e a conta; máquina e conta com a marca da etiqueta delas.
     pub(super) fn render_bottom_pills(&self, cx: &mut Context<Self>) -> Div {
         let open = self.menu.get();
-        let account = match self.provider {
-            "claude" if self.proxy_accounts().is_some() => Some((self.proxy_account().map(|a|
+        let (account, credential) = match self.provider {
+            "claude" if self.proxy_accounts().is_some() => (Some((self.proxy_account().map(|a|
                 if a.label.is_empty() { a.email.clone() } else { a.label.clone() }).unwrap_or_else(|| tr("create_proxy_choose_account")), tr("create_chatgpt_account"))),
-            "claude" => self.configs.ok().filter(|list| !list.is_empty()).map(|list| {
+                self.proxy_account().map(|a| a.credential_id.clone())),
+            "claude" => (self.configs.ok().filter(|list| !list.is_empty()).map(|list| {
                 let label = list.iter().find(|c| Some(&c.path) == self.config.as_ref()).map(|c| c.label.clone()).unwrap_or_else(|| tr("create_default"));
                 (label, tr("create_claude_account"))
-            }),
-            "codex" => self.codex.ok().filter(|list| !list.is_empty()).map(|list| {
+            // Sem escolha, a padrão é a conta ativa: a etiqueta dela, como na linha do menu.
+            }), self.config.clone().or_else(|| self.configs.ok().and_then(|list| list.iter().find(|c| c.active)).map(|c| c.path.clone()))
+                .map(|path| format!("claude:{path}"))),
+            "codex" => (self.codex.ok().filter(|list| !list.is_empty()).map(|list| {
                 let label = list.iter().find(|a| a.id == self.codex_account).map(|a| a.name.clone()).unwrap_or_else(|| tr("create_default"));
                 (label, tr("create_codex_account"))
-            }),
-            _ => None,
+            }), self.codex.ok().and_then(|list| list.iter().find(|a| a.id == self.codex_account)).and_then(|a| a.credential_id.clone())),
+            _ => (None, None),
         };
-        let branch = self.branch_pill_label(cx);
+        let badge = credential.as_deref().and_then(|id| self.account_badge(id)).cloned();
+        let tag = self.machine_tag(&super::servers::norm(&self.link.api.identity())).cloned();
+        let machine = super::tags::machine_name(tag.as_ref(), &self.server_label(), &self.link.api.identity());
+        let place = if self.no_project() { None } else { self.place_label() };
+        let text = place.map_or_else(|| machine.clone(), |place| format!("{machine} · {place}"));
         div().flex().items_center().gap(px(2.)).pt(px(2.)).pl(px(6.))
-            .children(account.map(|(label, aria)| quiet_pill(Menu::Account, open == Some(Menu::Account), IconName::CircleUser, label, aria,
-                self.configs.loading || self.codex.loading, cx)))
-            .children(branch.map(|label| quiet_pill(Menu::Branch, open == Some(Menu::Branch), IconName::GitBranch, label,
-                tr("create_checkout_branch"), self.checkout.loading, cx)))
+            .child(mark_pill(Menu::Machine, open == Some(Menu::Machine), machine_mark(tag.as_ref(), 14.), text, tr("new_chat_where"),
+                self.branch_pill_label(cx).filter(|_| !self.no_project()), false, cx))
+            .children(account.map(|(label, aria)| {
+                let label = badge.as_ref().map(|b| b.name.trim()).filter(|n| !n.is_empty()).map_or(label, str::to_owned);
+                mark_pill(Menu::Account, open == Some(Menu::Account), account_mark(badge.as_ref(), self.provider, 14.), label, aria, None,
+                    self.configs.loading || self.codex.loading, cx)
+            }))
     }
 
     /// A pílula única de branch: onde o agente trabalha e, depois, a situação do Git da pasta.
@@ -2407,22 +2505,41 @@ impl NewSession {
             Menu::Branch => return div().id("new-chat-branch-menu").max_h(room).overflow_y_scroll().p(px(popup::INSET))
                 .flex().flex_col().gap(px(2.)).when(self.picking, |el| el.child(self.menu_search()))
                 .child(self.render_branch_menu(&query, cx)).into_any_element(),
-            Menu::Machine => match (&self.servers.value, self.servers.ok()) {
-                _ if self.servers.loading => popup::skeleton("new-chat-machines", 2).into_any_element(),
-                (Some(Err(error)), _) => Self::menu_failure("new-chat-machines-error", error.clone(), |this, window, cx| this.load_servers(window, cx), cx),
-                (_, Some(list)) => {
-                    let rows = list.iter().filter(|c| wanted(&query, &c.label, &c.address)).map(|choice| {
-                        let current = self.current_server(choice);
-                        let key = choice.key.clone();
-                        menu_row(SharedString::from(format!("new-chat-machine-{}", choice.key)), current, choice.label.clone(),
-                            if current { tr("create_current") } else { String::new() })
-                            .when(!current, |row| row.on_click(cx.listener(move |this, _, window, cx| this.pick_machine(key.clone(), window, cx))))
-                            .into_any_element()
-                    }).collect();
-                    div().child(Self::menu_list("new-chat-machine-list", rows)).into_any_element()
-                }
-                _ => div().into_any_element(),
-            },
+            // As listas internas de worktree e de branch tomam o menu inteiro, como no de branch.
+            Menu::Machine if self.picking || self.git_branching() => return div().id("new-chat-where-menu").max_h(room)
+                .overflow_y_scroll().p(px(popup::INSET)).flex().flex_col().gap(px(2.)).when(self.picking, |el| el.child(self.menu_search()))
+                .child(self.render_branch_menu(&query, cx)).into_any_element(),
+            Menu::Machine => {
+                let machines = match (&self.servers.value, self.servers.ok()) {
+                    _ if self.servers.loading => popup::skeleton("new-chat-machines", 2).into_any_element(),
+                    (Some(Err(error)), _) => Self::menu_failure("new-chat-machines-error", error.clone(), |this, window, cx| this.load_servers(window, cx), cx),
+                    (_, Some(list)) => {
+                        let rows = list.iter().filter(|c| wanted(&query, &c.label, &c.address)).map(|choice| {
+                            let current = self.current_server(choice);
+                            let key = choice.key.clone();
+                            let tag = self.machine_tag(&choice.key);
+                            let name = super::tags::machine_name(tag, &choice.label, &choice.address);
+                            // Etiqueta com outro nome: o nome desta tela fica ao lado, menor, para reconhecer a máquina.
+                            let hint = [(name != choice.label).then(|| choice.label.clone()), current.then(|| tr("create_current"))]
+                                .into_iter().flatten().collect::<Vec<_>>().join(" · ");
+                            menu_row_marked(SharedString::from(format!("new-chat-machine-{}", choice.key)), current,
+                                Some(machine_mark(tag, 14.)), name, hint, None)
+                                .when(!current, |row| row.on_click(cx.listener(move |this, _, window, cx| this.pick_machine(key.clone(), window, cx))))
+                                .into_any_element()
+                        }).collect();
+                        Self::menu_list("new-chat-machine-list", rows)
+                    }
+                    _ => div().into_any_element(),
+                };
+                let place = (!self.no_project() && self.branch_pill_label(cx).is_some()).then(|| self.render_branch_menu(&query, cx));
+                return div().id("new-chat-where-menu").max_h(room).overflow_y_scroll().p(px(popup::INSET))
+                    .flex().flex_col().gap(px(2.))
+                    .child(popup::title(tr("new_chat_run_on"), None))
+                    .child(self.menu_search())
+                    .child(machines)
+                    .when_some(place, |el, place| el.child(popup::separator()).child(place))
+                    .into_any_element();
+            }
             Menu::Account if self.reopen_config.is_some() => {
                 let chosen = self.reopen_config.clone().flatten();
                 // `config_dir` nulo no resume = a conta dona da conversa, que aqui é a do servidor.
@@ -2448,7 +2565,8 @@ impl NewSession {
                 let rows = self.proxy_accounts().unwrap_or_default().iter().filter(|a| wanted(&query, &a.label, &a.email)).map(|account| {
                     let id = account.account.clone();
                     let quota = self.quota_line(format!("new-chat-engine-quota-{id}"), &account.credential_id);
-                    menu_row_with(SharedString::from(format!("new-chat-engine-account-{id}")), id == self.engine_account,
+                    let mark = account_mark(self.account_badge(&account.credential_id), "codex", 14.);
+                    menu_row_marked(SharedString::from(format!("new-chat-engine-account-{id}")), id == self.engine_account, Some(mark),
                         if account.label.is_empty() { account.email.clone() } else { account.label.clone() }, account.email.clone(), quota)
                         .disabled(self.creating || self.engines.loading)
                         .on_click(cx.listener(move |this, _, window, cx| {
@@ -2469,8 +2587,9 @@ impl NewSession {
                 let rows = self.codex.ok().into_iter().flatten().filter(|a| wanted(&query, &a.name, &a.hint())).map(|account| {
                     let id = account.id.clone();
                     let quota = account.credential_id.as_deref().and_then(|c| self.quota_line(format!("new-chat-codex-quota-{id}"), c));
-                    menu_row_with(SharedString::from(format!("new-chat-codex-{id}")), account.id == self.codex_account, account.name.clone(),
-                        account.hint(), quota)
+                    let mark = account_mark(account.credential_id.as_deref().and_then(|c| self.account_badge(c)), "codex", 14.);
+                    menu_row_marked(SharedString::from(format!("new-chat-codex-{id}")), account.id == self.codex_account, Some(mark),
+                        account.name.clone(), account.hint(), quota)
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.menu.set(None);
                             if this.codex_account != id { this.codex_account = id.clone(); this.load_models(window, cx); }
@@ -2485,7 +2604,8 @@ impl NewSession {
                         let path = c.path.clone();
                         let quota = self.quota_line(format!("new-chat-account-quota-{path}"), &format!("claude:{path}"));
                         let on = Some(&c.path) == self.config.as_ref();
-                        menu_row_with(SharedString::from(format!("new-chat-account-{path}")), on, c.label.clone(),
+                        let mark = account_mark(self.account_badge(&format!("claude:{path}")), "claude", 14.);
+                        menu_row_marked(SharedString::from(format!("new-chat-account-{path}")), on, Some(mark), c.label.clone(),
                             if c.active { tr("create_current") } else { String::new() }, quota)
                             .disabled(!on && self.account_exhausted(&c.path))
                             .accessibility_label(Some(self.config_hint(c)).filter(|h| !h.is_empty())
@@ -2931,7 +3051,13 @@ impl Hangar {
         let view = self.ensure_new_chat(api, window, cx);
         view.update(cx, |view, _| view.reopen_config = None);
         if self.opening.is_some() && view.read(cx).creating { return self.render_opening(view, window, cx); }
-        let (top, bottom, note) = view.update(cx, |view, cx| (view.render_top_pills(cx), view.render_bottom_pills(cx), view.note()));
+        let hint = gpui_kit::component::kbd::Kbd::global_binding_for_action(&super::NewChatNoProject, window)
+            .map(|key| key.appearance(false).into_any_element());
+        let tags = &self.tags;
+        let (top, bottom, note) = view.update(cx, |view, cx| {
+            if view.tags != *tags { view.tags = tags.clone(); }
+            (view.render_top_pills(hint, cx), view.render_bottom_pills(cx), view.note())
+        });
         // Anexo recusado (grande demais, ilegível) avisa aqui, onde a tela sem sessão mostra os avisos dela.
         let note = self.action_feedback.get(&new_chat_key()).cloned().or(note);
         let composer = self.render_composer(false, false, false, 0, false, false, window, cx);

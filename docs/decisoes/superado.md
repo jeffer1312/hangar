@@ -277,3 +277,17 @@ dono pelo Connect não zerava esse contador: o app dele acerta a cada poucos seg
 atacante 7 palpites novos a cada acerto. Esse Connect do Python (`connect.py`, `connect_port.py`)
 nunca foi posto em uso e foi apagado; a regra de nunca decidir "local" por cabeçalho vale
 igual na entrada do Rust.
+
+## Recado adiado devolvido ao Python na resposta
+
+Até 10/11/2026, o recado de grupo a uma sessão que só o Python atendia (Pi, omp, Kimi antes dos
+atores Rust; depois, sessão sem entrada no Rust) não era entregue dentro do pedido da ponte: voltava
+na resposta, em `deliveries` (`group.leave`) ou em `hangar_deliveries` no corpo das rotas entre
+máquinas. O Python tirava a chave da resposta e entregava depois dela (`_deliver_deferred`, 3 s por
+sessão pela porta do Connect), com a falha no diário como `grupos.entrega_adiada_falhou`. O recado
+adiado contava como entregue em `failed`/`pulados`.
+
+Saiu quando o Rust passou a atender sozinho o texto para sessão sem entrada nele: a entrega adiada
+roda em processo (`groups/bridge.rs`), e as chaves `deliveries`/`hangar_deliveries` deixaram o
+contrato interno (protocolo 107). O que vale hoje está em
+[plataforma.md](plataforma.md#o-rust-atende-sozinho-o-que-ainda-repassava-com-trabalho-real-10112026).

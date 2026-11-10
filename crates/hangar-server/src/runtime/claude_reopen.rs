@@ -359,6 +359,17 @@ fn spec_of(procs:&dyn ProcessView,pid:i64,key:&str,name:&str,cwd:String,created:
     Ok((spec,settings))
 }
 
+/// A conta do Hangar em que um Claude novo vai subir se reconcilia antes, como na abertura: sem isso a cópia
+/// do `settings.json` dela segue com o que o principal já mudou. Conta padrão não tem o que reconciliar.
+pub(super) async fn reconcile_account(env:&crate::accounts::environment::AccountEnvironment,config_dir:Option<&str>,cwd:&str) -> Result<Vec<String>,RuntimeError> {
+    let Some(dir)=config_dir.filter(|dir|!dir.is_empty()) else {return Ok(Vec::new())};
+    let Some(account)=crate::session_open::claude::hangar_account(std::path::Path::new(dir)) else {return Ok(Vec::new())};
+    let diary=crate::diag::diary_dir_in(env);
+    let (_,result)=crate::session_open::open::reconcile_hangar_dir(env.home.clone(),dir,&account,cwd,crate::session_open::open::RECONCILE_LIMIT,None,
+        |events|{crate::diag::record(diary,events,"conta");}).await;
+    result.map_err(|error|refused(error.code.unwrap_or("erro_conta_reconciliacao_falhou"),&error.msg))
+}
+
 /// A marca da troca de conta em curso; sai quando a reabertura termina, de qualquer jeito.
 struct SwitchMark(PathBuf);
 impl SwitchMark {
@@ -679,6 +690,7 @@ impl RuntimeRegistry {
                 .map_err(|_|ReopenFailure::refused(refused("reopen_preflight","a subida nova não pôde ser conferida")))?.map_err(ReopenFailure::refused)?;}
         // O único aviso do pré-voo é o motor que sumiu.
         if !warnings.is_empty() {self.diag.report("runtime.reopen_engine_gone",name,"reopen_engine_gone","o motor saiu do catálogo e a sessão volta na conta Anthropic");}
+        warnings.extend(reconcile_account(&self.codex_environment(),next.account.config_dir(),&next.cwd).await.map_err(ReopenFailure::refused)?);
         if let Some(between)=between {between.check(&current.spec,&next,&current.sid).await.map_err(ReopenFailure::refused)?;}
         let start=self.prepare_start(name,&next,&current,&sid).await.map_err(ReopenFailure::refused)?;
         // A conversa que muda de conta fica marcada até a vida nova estar gravada: o Rust que cair no meio

@@ -623,7 +623,7 @@ pub(super) fn session_proxy_targets(session: &SessionInfo, credentials: Value, e
 // Ordenar, filtrar e buscar seguem o `packages/core/src/accountsList.ts`; mudou lá, muda aqui.
 
 /// Sem acento e sem caixa, para a busca e a ordem por nome.
-fn fold(text: &str) -> String {
+pub(super) fn fold(text: &str) -> String {
     text.to_lowercase().chars().map(|ch| match ch {
         'á' | 'à' | 'â' | 'ã' | 'ä' => 'a', 'é' | 'è' | 'ê' | 'ë' => 'e', 'í' | 'ì' | 'î' | 'ï' => 'i',
         'ó' | 'ò' | 'ô' | 'õ' | 'ö' => 'o', 'ú' | 'ù' | 'û' | 'ü' => 'u', 'ç' => 'c', 'ñ' => 'n', other => other,

@@ -28,6 +28,7 @@ pub mod claude_relaunch;
 pub mod claude_terminal;
 pub mod claude_reopen;
 pub mod lifecycle;
+pub mod close_name;
 
 #[derive(Default)]
 pub(crate) struct LiveBuffer {

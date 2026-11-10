@@ -1,62 +1,8 @@
 //! Quem chama e o que o convidado alcança: as listas do `share_gate.py`, copiadas.
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use axum::http::Method;
 
-use super::store::{Guest, Kind};
-
-#[derive(Clone, Debug)]
-pub enum Caller {
-    Owner,
-    Guest(Arc<GuestGrant>),
-}
-
-/// Fotografia do token no momento do pedido: sessões vivas e o nível de cada uma.
-#[derive(Clone, Debug)]
-pub struct GuestGrant {
-    pub token: String,
-    pub token_hash: String,
-    pub sessions: HashMap<String, Kind>,
-    /// Sessões dos registros de par que são raiz (não cópia de `attach`).
-    pub pair_roots: Vec<String>,
-    /// Convite de compartilhamento de verdade: só ele alcança as rotas globais do chat.
-    pub invite: bool,
-}
-
-impl Caller {
-    /// Quem pode usar a sessão nesse método: o dono sempre; o convidado só nas do convite, e o de
-    /// par só lendo. O recorte fino por rota é do porteiro; este é o do handler.
-    pub fn can(&self, name: &str, method: &Method) -> bool {
-        match self {
-            Caller::Owner => true,
-            Caller::Guest(grant) => match grant.sessions.get(name) {
-                Some(Kind::Share) => true,
-                Some(Kind::Pair) => *method == Method::GET,
-                None => false,
-            },
-        }
-    }
-
-    pub fn grant(&self) -> Option<&Arc<GuestGrant>> {
-        match self { Caller::Guest(grant) => Some(grant), Caller::Owner => None }
-    }
-}
-
-/// O `Caller` que o porteiro da 8766 pôs no pedido; na 8765 nunca há um (ver `routes::who`).
-pub fn caller(req: &axum::extract::Request) -> Option<&Caller> {
-    req.extensions().get::<Caller>()
-}
-
-impl GuestGrant {
-    pub fn new(token: &str, guest: &Guest) -> Self {
-        let sessions = guest.sessions().into_iter()
-            .filter_map(|name| guest.kind_of(&name).map(|kind| (name, kind)))
-            .collect();
-        let pair_roots = guest.pair_shares().into_iter().map(|s| s.session.clone()).collect();
-        Self { token: token.into(), token_hash: guest.token_hash.clone(), sessions, pair_roots, invite: guest.invite }
-    }
-}
+pub use hangar_core::guest::{Caller, GuestGrant, caller};
+use super::store::Kind;
 
 const LIST_ROUTES: &[(&str, &str)] = &[("GET", "/api/sessions"), ("GET", "/api/sessions/events")];
 const GLOBAL_ROUTES: &[(&str, &str)] = &[

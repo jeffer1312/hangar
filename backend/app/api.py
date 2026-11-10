@@ -11,9 +11,7 @@ import subprocess
 import tempfile
 import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 import uuid
 from datetime import datetime
 from contextlib import asynccontextmanager
@@ -35,9 +33,7 @@ from app.auth import require_auth, require_loopback
 from app.send_executor import send_thread as _send_thread
 from app.model_picker import PickerError
 from app.mensagens import erro
-from app import claude_models
 from app import claude_customizations
-from app import codex_models
 from app import model_args
 from app import registry as registry_mod
 from app.registry import KillFailed, SessionRegistry
@@ -64,7 +60,7 @@ from app.guest_header import guest_of, guest_safe
 from app.share_life import session_life
 from app import contas, default_model, procinfo
 from app.costs import report as costs_report, usd_brl as _usd_brl, PERIODOS as _COST_PERIODOS
-from app import costs_sources, pricing
+from app import costs_sources
 from app import loop as loop_mod
 from app.transcript import last_assistant_text
 from app import tunnel
@@ -180,12 +176,6 @@ async def _lifespan(app: FastAPI):
     # sockets do Claude; sem ele o recibo de retenção/recusa não tem pra onde voltar.
     if uds_messaging.INBOX.ligar(_ao_recibo_nativo):
         _log.info("inbox nativo ligado em %s", uds_messaging.INBOX.path)
-    try:
-        # Em thread: a publicação sonda o `claude` (versão e flags) e não pode segurar o laço.
-        await asyncio.to_thread(plugin_bridge.publish_address)
-    except OSError:
-        _log.warning("plugin: endereço da ponte não gravado; sessão de terminal fica no tmux",
-                     exc_info=True)
     await _boot_sessions(runtime)
     _state_dirs =list({Path(c.path) for c in list_config_dirs()} | {_backend_config_base().resolve()})
     hook_state.on_transition = _on_hook_transition  # drain server-side + confirmacao de entrega
@@ -214,8 +204,7 @@ async def _lifespan(app: FastAPI):
 
     prune_task.add_done_callback(_prune_done)
 
-    pricing.atualizar_em_background()  # NUNCA num request: o cliente aborta em 4s
-    # Mesmo motivo, outra rede: usd_brl() tem cache de 1h e timeout de 3s, e é chamado DENTRO do
+    # usd_brl() tem cache de 1h e timeout de 3s, e é chamado DENTRO do
     # montar(). Sem aquecer aqui, o primeiro /api/costs depois de todo restart paga a coleta fria
     # (657ms medidos) MAIS até 3s de câmbio, contra o AbortSignal.timeout(4000) do cliente.
     threading.Thread(target=_usd_brl, name="usd-brl-warm", daemon=True).start()
@@ -512,15 +501,7 @@ async def _grupos_pelo_rust(request: Request, call_next):
         return await call_next(request)
     if guest_of(request) is not None:
         return JSONResponse({"detail": erro("erro_fora_do_convite", "fora da sessao compartilhada")}, status_code=403)
-    resp = await _repasse_ao_rust(request, _groups_need_rust(), "/__hangar_server/forwarded")
-    # Recado a sessão que só o Python atende volta no corpo: sai dele e é entregue antes da resposta,
-    # num prazo, para quem não recebeu entrar na resposta como as falhas do Rust.
-    if b'"hangar_deliveries"' not in resp.body:
-        return resp
-    body = json.loads(resp.body)
-    failed = await _deliver_deferred(body.pop("hangar_deliveries"), _DEFERRED_WAIT)
-    _report_failed(body, failed, "grupos.entrega_adiada_falhou", ("failed", "pulados"))
-    return JSONResponse(body, status_code=resp.status_code)
+    return await _repasse_ao_rust(request, _groups_need_rust(), "/__hangar_server/forwarded")
 
 
 # Rotas de plano e o catálogo de plugins e skills: o dono é o Rust (`plans::routes`, `claude_customizations`).
@@ -1512,50 +1493,6 @@ def _jsonl_of_session(name: str) -> str | None:
         return None
 
 
-# Teto da entrega adiada pela 8768: abaixo do prazo da dona (`DELIVER_WAIT`, 5 s), como o das sessões do Rust.
-_DEFERRED_WAIT = 3.0
-
-
-async def _deliver_deferred(deliveries, wait: float | None = None) -> list[dict]:
-    """Recados que o Rust devolveu por serem a sessões que só o Python atende; falhas como avisos.
-    Com `wait`, a sessão que não termina no prazo é abandonada e conta como falha."""
-    by_session: dict[str, list[str]] = {}
-    for d in deliveries or []:
-        by_session.setdefault(d["name"], []).append(d["text"])
-
-    # Sessões em paralelo; dentro de cada uma, na ordem em que o Rust devolveu.
-    async def one(name: str, texts: list[str]) -> list[dict]:
-        results = [await _enviar(name, text) for text in texts]
-        return [{"sessao": name, "erro": res.get("error") or erro("erro_envio_falhou_desconhecida", "falha desconhecida no envio")}
-                for res in results if not res.get("ok")]
-
-    async def bounded(name: str, texts: list[str]) -> list[dict]:
-        try:
-            return await asyncio.wait_for(one(name, texts), wait)
-        except TimeoutError:
-            return [{"sessao": name, "erro": erro("erro_envio_falhou", "não deu pra enviar: groups_notice_timeout", erro="groups_notice_timeout")}]
-    return [f for failed in await asyncio.gather(*(bounded(n, t) for n, t in by_session.items())) for f in failed]
-
-
-def _report_failed(body, failed: list[dict], event: str, lists: tuple[str, ...] = ()) -> None:
-    """Põe na resposta quem não recebeu o recado entregue pelo Python: na primeira lista de `lists`
-    que o corpo tiver (as das rotas entre máquinas, qualificadas como as do Rust) ou no `warning`.
-    Sem corpo onde caber, o diário."""
-    if not failed:
-        return
-    names = [f["sessao"] for f in failed]
-    diag.registrar(event, "aviso", falhas=len(failed), sessoes=",".join(names))
-    key = next((k for k in lists if isinstance(body, dict) and isinstance(body.get(k), list)), None)
-    if key:
-        body[key].extend(f"{settings.server_id}::{n}" for n in names)
-    elif isinstance(body, dict) and body.get("warning") is None:
-        body["warning"] = erro("erro_pareamento_aviso_parcial", "aviso falhou em: " + "; ".join(names), avisos=failed)
-    elif isinstance(body, dict) and isinstance(body["warning"], dict):
-        body["warning"].setdefault("params", {}).setdefault("avisos", []).extend(failed)
-    else:
-        diag.registrar("grupos.falha_sem_corpo", "erro", falhas=len(failed), sessoes=",".join(names))
-
-
 def _sidecar_state(name: str) -> str:
     """`grouped`, `absent` (sem arquivo, ou válido sem grupo) ou `unreadable` (existe e não se lê)."""
     link = PairLink(name)
@@ -1578,8 +1515,7 @@ async def _rust_leave(name: str, phases: dict) -> list[dict]:
     except groups_bridge.GroupsBridgeError as e:
         _log.warning("kill(%s): o Rust não tirou a sessão do grupo: %s", name, e.code)
         return [{"sessao": name, "erro": erro("erro_grupo_indisponivel", "os grupos estão indisponíveis agora", detalhe=e.code)}]
-    warnings = out.get("warnings") if isinstance(out.get("warnings"), list) else []
-    return [*warnings, *await _deliver_deferred(out.get("deliveries"))]
+    return out.get("warnings") if isinstance(out.get("warnings"), list) else []
 
 
 @app.delete("/api/sessions/{name}", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
@@ -1590,11 +1526,10 @@ async def kill_session(name: str, by: str | None = None, request: Request = None
     # Marca do Rust: ele já encerrou o Codex com terminal dele (e o grupo); aqui só as lojas daqui.
     marked = lambda h: bool(request and internal_api._secret) and secrets.compare_digest(request.headers.get(h, "").encode(), internal_api._secret.encode())
     closed = marked("x-hangar-rust-closed")
-    bridged = None
     # Fechamento que não passou pelo Rust (Connect, convidado) e o do Claude pelo Connect, que o Rust
     # encerrou sem sair do grupo: a saída vai pela ponte, com a fase do `orq` lida aqui antes, para o
     # Rust não perguntar de volta.
-    skip_leave = (closed and bridged is None) or marked("x-hangar-rust-leaves")
+    skip_leave = closed
     # Sem sidecar não há grupo a deixar: a ponte nem é chamada. Ilegível não é ausente: sai pela ponte.
     sidecar = "absent" if skip_leave else await asyncio.to_thread(_sidecar_state, name)
     if sidecar == "unreadable":
@@ -1605,7 +1540,7 @@ async def kill_session(name: str, by: str | None = None, request: Request = None
     orphan = grouped and phases is None
     # Fechada pelo Rust a sessão já saiu da lista: o transcript vem no cabeçalho ou na resposta dele.
     if closed:
-        jsonl = bridged or urllib.parse.unquote(request.headers.get("x-hangar-closed-transcript", "")) or None
+        jsonl = urllib.parse.unquote(request.headers.get("x-hangar-closed-transcript", "")) or None
     else:
         jsonl = await asyncio.to_thread(_jsonl_of_session, name)
     try:
@@ -2812,14 +2747,6 @@ def _require_rust_groups() -> None:
         raise HTTPException(503, detail=_groups_need_rust())
 
 
-async def _route_after(out: dict) -> None:
-    """O que o Rust devolveu para o Python fazer depois da ponte, num sentido: entregar o recado a
-    sessão que só ele atende e promover o time do `orq`. Promoção que falha desfaz o grupo novo."""
-    failed = await _deliver_deferred(out.get("deliveries"))
-    body = out.get("body")
-    _report_failed(body, failed, "grupos.entrega_pela_ponte")
-
-
 async def _group_route(method: str, name: str, route: str, body: BaseModel | None = None):
     """Grupos são do Rust; aqui chega só o que entrou pela 8768 e segue num sentido. Sem o Rust não
     há reserva Python."""
@@ -2830,7 +2757,6 @@ async def _group_route(method: str, name: str, route: str, body: BaseModel | Non
                                       body=data, facts={})
     except groups_bridge.GroupsBridgeError as e:
         raise _group_unavailable(e.code) from None
-    await _route_after(out)
     return _bridge_reply(out)
 
 
@@ -3099,7 +3025,6 @@ class PluginCloseBody(_StrictBody):
     site: str = Field(min_length=1, max_length=64)
 
 
-_MOD_SEM_RESPOSTA = erro("erro_mod_clique_sem_resposta", "O mod não respondeu a tempo.")
 # O clique dos mods é do Rust, sem reserva aqui: modo `python` ou sessão que ele não atende.
 _MOD_SEM_RUST = erro("mods_need_rust_server", "O clique do mod precisa do servidor Rust de pé e da sessão aberta nele.")
 
@@ -3108,72 +3033,27 @@ def _convidado(request: Request) -> bool:
     return guest_of(request) is not None
 
 
-async def _mod_no_rust(name: str, op: str, request: Request) -> Response | None:
-    """Operação de mod de sessão que o Rust atende, pedida por quem entrou pelo Python (convidado, de
-    convite ou com login, e o Connect): a autenticação foi a desta porta, e o Rust aciona pela ponte
-    privada com o mesmo efeito do dono. `None`: a sessão não é dele (só o 404) ou o Rust está fora; o
-    clique e o fechamento respondem o código, a aba e a digitação ficam no app."""
-    from app import list_bridge, runtime_coordinator
-    owner = runtime_coordinator.current()
-    endpoint = list_bridge.endpoint()
-    if owner is None or owner.mode not in ("pending", "rust") or endpoint is None:
-        return None
-    address, secret = endpoint
-    body = await request.body()
-
-    def call() -> tuple[int, bytes]:
-        req = urllib.request.Request(
-            f"http://{address}/__hangar_server/mods/{urllib.parse.quote(name, safe='')}/{op}", data=body,
-            headers={"content-type": "application/json", "x-hangar-internal": secret}, method="POST")
-        try:
-            # O Rust responde dentro do prazo dele (7,5 s); este só cobre o Rust mudo.
-            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=10) as r:
-                return r.status, r.read()
-        except urllib.error.HTTPError as e:
-            return e.code, e.read()
-
-    try:
-        status, raw = await asyncio.to_thread(call)
-    except OSError as exc:
-        _log.warning("ponte dos mods em %s falhou: %s", name, exc)
-        raise HTTPException(503, detail=_MOD_SEM_RESPOSTA) from None
-    if status == 404 and not (_convidado(request) and owner.terminal_in_rust(name)):
-        return None
-    if status in (400, 403, 404):
-        _log.warning("ponte dos mods em %s recusou %s com %s", name, op, status)
-        raise HTTPException(503, detail=_MOD_SEM_RESPOSTA)
-    return Response(raw, status_code=status, media_type="application/json")
-
-
 @app.post("/api/sessions/{name}/plugin/press", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-async def plugin_press(name: str, body: PluginPressBody, request: Request):
+async def plugin_press(name: str, body: PluginPressBody):
     """Clique num botão que um mod desenhou na faixa ou num painel, pedido pelo app."""
-    if (rust := await _mod_no_rust(name, "press", request)) is not None:
-        return rust
     raise HTTPException(503, detail=_MOD_SEM_RUST)
 
 
 @app.post("/api/sessions/{name}/plugin/close", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-async def plugin_close(name: str, body: PluginCloseBody, request: Request):
+async def plugin_close(name: str, body: PluginCloseBody):
     """Fecha um painel de mod pelo `✕` do cabeçalho, pedido pelo app."""
-    if (rust := await _mod_no_rust(name, "close", request)) is not None:
-        return rust
     raise HTTPException(503, detail=_MOD_SEM_RUST)
 
 
 @app.post("/api/sessions/{name}/plugin/show", dependencies=[Depends(require_auth)])
-async def plugin_show(name: str, request: Request):
+async def plugin_show(name: str):
     """Troca de aba de mod. Fora do Rust ela fica no app, que lê o 404 como "sem a rota"."""
-    if (rust := await _mod_no_rust(name, "show", request)) is not None:
-        return rust
     raise HTTPException(404, detail=erro("erro_mod_aba_no_app", "Nesta sessão a troca de aba do mod fica no app."))
 
 
 @app.post("/api/sessions/{name}/plugin/input", dependencies=[Depends(require_auth)])
-async def plugin_input(name: str, request: Request):
+async def plugin_input(name: str):
     """Digitação num campo de mod: só a sessão sem terminal que o Rust atende a aceita."""
-    if (rust := await _mod_no_rust(name, "input", request)) is not None:
-        return rust
     raise HTTPException(409, detail=erro("erro_mod_sem_digitacao",
         "Nesta sessão, o campo do mod só aceita digitação no terminal ou não está ligado ao app."))
 
@@ -4312,211 +4192,6 @@ def _bypass_no_ciclo(name: str) -> bool:
     agent = registry_mod._pid_do_agente((registry._pane_of(name) or {}).get("pid"))
     cmd = " ".join(procinfo._cmdline(agent).split()).replace("--permission-mode=", "--permission-mode ") if agent else ""
     return any(f in cmd for f in _FLAGS_BYPASS)
-
-
-# ── Catalogo de modelos de uma sessao Claude Code ───────────────────────────────────────────────
-# Duas fontes, escolhidas pelo que a sessao E, porque medimos que so uma funciona em cada caso:
-#   * sessao de MOTOR -> o /v1/models do provedor (o mesmo probe da tela de Motores). O picker do
-#     Claude Code ali lista so os 4 aliases, todos apontando pro mesmo ANTHROPIC_MODEL — inutil.
-#   * sessao da CONTA -> as linhas do proprio picker, lidas ao vivo. A lista muda com a conta e com
-#     a versao do CC (o Fable entrou e a lista chumbada no front nao soube), entao ela nao pode
-#     morar no codigo.
-
-
-# Catalogo por motor: e uma chamada de REDE ao provedor, e abrir a folha nao pode pagar isso toda
-# vez. TTL curto porque a lista muda com o plano do usuario, nao a cada minuto.
-
-# Catalogo da conta Anthropic: ler o picker DIRIGE O TERMINAL, e isso deixa RASTRO — o `❯ /model` e
-# o `⎿ Kept model as …` (o Esc de saida) ficam no scrollback do tmux pra sempre. Nao aparece no chat
-# do app (entra no jsonl como `type: system`, que o transcript ignora), mas aparece pra quem estiver
-# com aquele terminal aberto: foi o que pareceu bug quando 5 leituras seguidas empilharam ali.
-# Trinta dias, porque a lista muda quando a Anthropic lanca modelo ou o plano do usuario muda —
-# eventos de meses, nao de horas; e cache vencido cai na lista reduzida, que e pior que uma lista
-# de algumas semanas atras. Uma hora (o valor antigo) fazia o `/model` reaparecer no
-# terminal do usuario "sozinho" no meio de sessoes longas, e cada restart do backend zerava o
-# cache em memoria e relia tudo de novo — dai o espelho em DISCO, dentro do proprio config dir
-# (`.hangar-models.json`): a leitura dirigida do picker vira acontecimento raro.
-# A chave e o config dir, nao a sessao: a lista vem da CONTA, e a mesma pra todas as sessoes dela.
-_CLAUDE_MODELS_TTL = 30 * 24 * 3600.0
-_claude_models_cache: dict[str, tuple[float, dict]] = {}
-
-
-def _models_cache_path(chave: str) -> Path:
-    return Path(chave) / ".hangar-models.json"
-
-
-def _leitura_cortada(resp: dict) -> bool:
-    """Picker lido com o pane estreito: o nome vem cortado ("Opus (1M con…") e a lista, pela metade.
-    Serve pra tela uma vez, mas guardada viraria a lista da conta por 30 dias."""
-    return any(str(m.get("name", "")).rstrip().endswith(("…", "...")) for m in resp.get("models") or [])
-
-
-def _sem_repetidos(models: list[dict]) -> list[dict]:
-    """Versões antigas saem do picker com a keyword da família (`opus`): escolher "Opus 4.6" abriria o
-    Opus atual. Só a primeira linha de cada id é escolhível de verdade."""
-    vistos: set = set()
-    return [m for m in models if not (m.get("id") in vistos or vistos.add(m.get("id")))]
-
-
-def _models_cache_get(chave: str) -> dict | None:
-    hit = _claude_models_cache.get(chave)
-    if hit and time.monotonic() - hit[0] < _CLAUDE_MODELS_TTL and not _leitura_cortada(hit[1]):
-        return {**hit[1], "models": _sem_repetidos(hit[1].get("models") or [])}
-    try:
-        # Sem a ponte do nome antigo, ao contrário dos outros sidecars: `.claude-pocket-models.json`
-        # ficou SYMLINKADO pro ~/.claude dentro de toda conta (o `_NAO_LIGAR` do contas.py só
-        # conhece o nome novo), então lê-lo servia o cache da conta padrão pra todas as outras —
-        # o vazamento que `test_cache_de_outra_conta_nao_vaza` proíbe. Cache perdido custa uma
-        # leitura; cache de outra conta mente sobre quais modelos aquele login tem.
-        bruto = json.loads(_models_cache_path(chave).read_text(encoding="utf-8"))
-        resp = bruto["resp"]
-        if not isinstance(resp, dict) or time.time() - float(bruto["ts"]) >= _CLAUDE_MODELS_TTL or _leitura_cortada(resp):
-            return None
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
-    # Promove pra memoria DESCONTANDO a idade que o registro ja tem no disco — carimbar com o
-    # monotonic de agora zerava o relogio e um dado de 6d23h passava a valer mais 7 dias.
-    idade = time.time() - float(bruto["ts"])
-    _claude_models_cache[chave] = (time.monotonic() - idade, resp)
-    # Cache gravado antes da trava de repetidos ainda vale pelos 30 dias: a limpeza vale na leitura também.
-    return {**resp, "models": _sem_repetidos(resp.get("models") or [])}
-
-
-def _models_cache_put(chave: str, resp: dict) -> None:
-    if _leitura_cortada(resp):
-        return
-    _claude_models_cache[chave] = (time.monotonic(), resp)
-    alvo = _models_cache_path(chave)
-    tmp = alvo.with_name(f"{alvo.name}.{os.getpid()}.tmp")
-    try:
-        tmp.write_text(json.dumps({"ts": time.time(), "resp": resp}), encoding="utf-8")
-        atomico.substituir(tmp, alvo)
-    except OSError:
-        # Config dir somente-leitura ou inexistente: o cache em memoria segue valendo.
-        tmp.unlink(missing_ok=True)
-
-
-def _chave_config(p) -> str:
-    """Chave única do cache de modelos da conta. As duas rotas TÊM que passar por aqui: a da sessão
-    viva deriva do /proc (vazio = "~") e a da abertura recebe caminho do cliente."""
-    s = str(p or "").strip()
-    if not s or s == "~":
-        return str(Path.home() / ".claude")
-    return str(Path(s).expanduser().resolve())
-
-
-@app.get("/api/sessions/{name}/model/options", dependencies=[Depends(require_auth)])
-async def model_options(name: str):
-    """Modelos que ESTA sessao pode escolher. `kind` diz de onde vieram e como aplicar."""
-    info = await _cached_info(name)
-    if not info:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
-    if info.provider not in (None, "claude"):
-        raise HTTPException(400, detail=erro("erro_rota_so_claude", "esta rota so existe pra sessoes Claude Code"))
-    if _headless(name):
-        # Sem terminal: a lista vem do `control_request list_models` do próprio processo — sem
-        # picker, sem rastro no scrollback e sem cache de 1h.
-        hl = get_adapter(CLAUDE_HEADLESS)
-        try:
-            modelos = await hl.list_models(name)
-            meta = headless_sessions.load(name) or {}
-            atual = hl.escolhas(name)[0] or meta.get("model")
-            models = await asyncio.to_thread(claude_models.para_tela, modelos, atual)
-        except Exception as e:
-            raise HTTPException(503, detail=erro("erro_modelos_indisponiveis", f"não consegui listar os modelos: {e}"))
-        return {"kind": "claude", "engine": None, "effort": meta.get("effort"),
-                "models": models}
-    # Conta Anthropic: le o picker de verdade. Abre e fecha um overlay — nao vai pro scrollback,
-    # nao entra no transcript e nao gasta token.
-    await asyncio.to_thread(_recusa_se_painel_aberto, name)
-    chave = _chave_config(_session_config_dir(name))
-    cacheado = _models_cache_get(chave)
-    if cacheado is not None:
-        return cacheado
-    try:
-        lido = await asyncio.to_thread(terminal.list_model_options, name)
-    except PickerError as e:
-        raise HTTPException(e.status, e.detail)
-    resp = {"kind": "claude", "engine": None, "effort": lido["effort"],
-            # `id` (único por linha), não `keyword`: duas linhas do picker compartilham a keyword
-            # `opus` ("Opus" e "Opus (1M context)"), e id repetido derrubava a lista na tela.
-            "models": [{"id": r["id"], "name": r["name"], "desc": r["desc"],
-                        "active": r["active"]} for r in lido["models"]]}
-    resp["models"] = _sem_repetidos(resp["models"])
-    _models_cache_put(chave, resp)
-    return resp
-
-
-@app.get("/api/model-options", dependencies=[Depends(require_auth)])
-async def model_options_sem_sessao(provider: str = "claude", engine: str = "",
-                                   config_dir: str = "", codex_account: str = "",
-                                   engine_account: str | None = None):
-    """Modelos oferecidos na tela de ABERTURA, onde ainda não existe sessão.
-
-    Irmã de /api/sessions/{name}/model/options, que não serve aqui: no ramo da conta Anthropic
-    aquela LÊ O PICKER dirigindo o terminal de uma sessão viva. Sem sessão, o melhor que existe é o
-    cache por config dir que aquela rota já alimentou — e, frio, os aliases mínimos, ditos como
-    reduzidos em vez de fingirem ser a lista completa (ver o comentário acima sobre a lista
-    chumbada que não soube do Fable).
-    """
-    if engine_account is not None and (provider != "claude" or not engine):
-        raise HTTPException(400, detail=erro("erro_cliproxy_conta", "conta ChatGPT exige Claude com motor CLIProxyAPI local"))
-    if provider == "codex":
-        account = _resolve_codex_account(codex_account or None)
-        await _codex_require_idle_preparation(account, _codex_service())
-        # Nem config no disco (o ~/.codex/config.toml guarda o modelo escolhido, nunca a lista) nem
-        # `codex --list-models`: a fonte e o `model/list` de um app-server efemero em stdio, a MESMA
-        # que a folha da sessao viva usa. Ver app/codex_models.py.
-        try:
-            return {"kind": "codex", "reduced": False,
-                    "models": await asyncio.to_thread(
-                        codex_models.listar,
-                        **({"codex_home": account.home} if not account.is_default else {}))}
-        except codex_models.CodexAusente as e:
-            raise HTTPException(502, detail=erro("erro_codex_ausente", str(e), erro=str(e)))
-        except (codex_models.CodexIndisponivel, codex_models.CodexRecusado,
-                codex_models.CodexRespostaInvalida, RuntimeError, OSError) as e:
-            raise HTTPException(502, detail=erro("erro_codex_model_list", f"codex app-server model/list falhou: {e}", erro=str(e)))
-    if provider != "claude":
-        raise HTTPException(400, detail=erro("erro_provider_invalido", "provider deve ser 'claude' ou 'codex'"))
-    chave = _chave_config(config_dir)
-    cacheado = _models_cache_get(chave)
-    if cacheado is not None:
-        return {**cacheado, "reduced": False}
-    try:
-        crus = await asyncio.to_thread(claude_models.listar, config_dir or None)
-    except claude_models.ClaudeIndisponivel as e:
-        # Fallback, nao 502: a lista reduzida abre a sessao, e recusar a tela inteira porque o
-        # catalogo nao veio seria pior que oferecer os aliases. O motivo vai pro log.
-        _log.warning("catalogo claude sem sessao falhou config_dir=%s: %s", chave, e)
-    else:
-        # Sem `effort`: quem sabe o nivel atual e a SESSAO, e aqui nao ha uma. A chave e a mesma do
-        # picker de proposito (a lista vem da conta, nao da sessao); nenhum leitor do cache usa o
-        # campo, e inventar um nivel aqui seria pior que a ausencia dele.
-        try:
-            models = await asyncio.to_thread(claude_models.para_tela, crus)
-        except claude_models.ClaudeIndisponivel as error:
-            raise HTTPException(503, detail=erro("erro_modelos_indisponiveis", str(error))) from None
-        resp = {"kind": "claude", "engine": None, "models": models}
-        _models_cache_put(chave, resp)
-        return {**resp, "reduced": False}
-    return {"kind": "claude", "reduced": True,
-            "models": [{"id": a} for a in ("opus", "fable", "sonnet", "haiku")]}
-
-
-def _session_config_dir(name: str) -> Path | None:
-    from app import registry as registry_mod
-    from app import tmux
-    try:
-        pid = tmux.pane_pid(name)
-        return registry_mod._config_dir_of(pid) if pid else None
-    except Exception:
-        # Cair no ~/.claude CALADO transformava um bug de resolucao (pane sem pid, /proc ilegivel)
-        # num 409 mentiroso "extensao desatualizada": o sidecar existe, so estavamos procurando na
-        # pasta errada. Nao propaga — o default ainda e o certo pra maioria das sessoes.
-        _log.warning("não consegui resolver o config dir de %s; usando ~/.claude", name,
-                     exc_info=True)
-        return None
 
 
 # ── Preview: expoe um projeto local (porta) via tailscale serve, pro app ver num iframe ──

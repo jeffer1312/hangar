@@ -211,8 +211,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   bugs calados (binário próprio, raiz `~/.omp/agent`, sem `--session-id`, outros nomes de evento,
   subagente no mesmo processo). A raiz do agente omp é resolvida no `hangar-core`, pelo mesmo
   ambiente efetivo usado na lista, no lançamento e nas credenciais.
-- **A lista de modelos NUNCA é constante.** Conta Anthropic lê o picker ao vivo (cache de 1h,
-  porque ler dirige o terminal); sessão de motor usa `/v1/models` do provedor. `/model <id>`
+- **A lista de modelos NUNCA é constante.** Conta Anthropic consulta `list_models` pelo catálogo
+  compartilhado do Rust, com cache de 10 minutos invalidado pela troca do executável do Claude.
+  Atualizar catálogo força a consulta, sem dirigir o terminal; motor usa `/v1/models`. `/model <id>`
   grava default global — reponha o valor anterior.
 - **Antes de digitar no composer do Claude, ESVAZIE ele, e o rascunho do dono volta:** digitar por
   cima gruda as mensagens num Enter só e o reconcile reentrega. O escritor Rust guarda o rascunho
@@ -1054,6 +1055,44 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   uma vez por aparição (`rust.trust_dialog_shown`, código `trust_flag_present` ou
   `trust_flag_absent`) e o log guarda a entrada, a idade do arquivo e a trava. Ver
   [diálogo de confiança com a pasta confiada](#diálogo-de-confiança-com-a-pasta-já-confiada-23102026).
+- **Ator sem terminal (Claude/Codex): a vista que só mudou em medição espera até 2 s pelo disco.**
+  Medição é `usage`, `cost`, `idle_compact_tokens`, `token_usage` e `rate_limits`. Mudança durável
+  grava na hora e leva a medição; a parada grava o que o disco não tem. Quem lê `usage`/`cost` do
+  disco (a reabertura) pode ver a medição da mensagem anterior depois de queda forçada. Quadro
+  enviado e prompt preparado não ficam guardados depois do envio e do desfecho: nada os relê. Ver
+  [gravação da vista e observação sem trabalho repetido](#gravação-da-vista-e-observação-sem-trabalho-repetido-10112026).
+- **Pi/omp/Kimi: o retrato só é publicado quando muda, e a observação aceita o mapa de processos
+  guardado só para confirmar presença.** A rodada de observação aceita o mapa com idade até
+  `CHILDREN_TTL` (só no Linux); ausência vem sempre de varredura nova. Escrita, drenagem e guarda de
+  tecla usam prova de idade zero. Ver
+  [gravação da vista e observação sem trabalho repetido](#gravação-da-vista-e-observação-sem-trabalho-repetido-10112026).
+
+## Gravação da vista e observação sem trabalho repetido (10/11/2026)
+
+Uma leitura de código do servidor parado achou trabalho feito sem mudança nos dois atores.
+
+No ator sem terminal, cada volta do laço montava a vista inteira duas vezes só para ler
+`conversation` e `deliverable`, e a vista leva o catálogo de comandos (141 KB e 340 itens num estado
+real). Cada mensagem do agente muda o `usage` e gravava a vista com fsync. O quadro de cada escrita
+(com a imagem em base64) e o prompt preparado ficavam na memória até a sessão fechar: cerca de
+2,7 MB por imagem de 1 MB.
+
+No ator de Pi, omp e Kimi, a sessão parada republicava o mesmo retrato duas vezes por rodada e
+relia todos os processos a cada rodada de 500 ms.
+
+Contagens pelo código, não medida de processo vivo:
+
+| | Antes | Depois |
+|---|---|---|
+| Montagens da vista por volta do laço | 2 | 0 |
+| Gravações da vista | uma por mensagem do agente | no máximo uma a cada 2 s quando só mudou medição |
+| Publicações do retrato por rodada parada | 2 | 0 |
+| Varreduras de processos na observação (Linux) | uma por rodada por sessão | no máximo uma a cada 3 s enquanto o mapa guardado confirma o agente; escrita, drenagem, guarda de tecla e ausência do agente varrem sempre |
+
+Não resolve: o `tmux display-message` por rodada de Pi/omp/Kimi continua, porque tirá-lo muda a
+captura que o Claude também usa. Um agente vivo que saiu do pane segue "no pane" por até 3 s para
+quem observa. Falha de disco na gravação adiada da medição e na da parada só vai ao log: a sessão
+não entra em erro por uma medição, e a próxima gravação da vista a leva.
 
 ## Ator ocupado não é doente (09/11/2026)
 
@@ -3102,9 +3141,9 @@ Feito na fase 3 dos mods, com terminal, no `hangar-server` (`mods/screen.rs`, `m
 - **Reserva por teclado.** Só fora da tela cheia e só nos casos medidos: rótulo repetido no mesmo painel, título de aba fora da linha e o `ctrl+x tab` que traz o painel ou o botão da faixa. Exige o prompt na tela e vazio, cada passo confirmado pelo `ui.focus` do plugin e a volta por `ctrl+x tab`. O `Enter` só sai depois de ler a tela e conferir que o último foco visto é o do alvo, no lugar pedido, e que nenhum foco mais novo o levou a outro elemento; com o alvo já focado pela primeira tecla, o `Tab` seguinte não é dado. Com diálogo na tela só valem o botão do painel já mostrado ao lado da conversa e o fechar dele. Cada passo do anel custa a tecla e uma leitura da tela, sem reler o tamanho, e a leitura depois da tecla se repete até ver a tela mudar (até 300 ms; a tecla aparece em 50 a 60 ms): no psmux cada operação é um processo, e com a conferência do pane e o tamanho relidos a cada passo um anel de doze botões na faixa custava 0,4 s por passo e estourava o prazo (prova na VM, 06/10/2026). Dentro da reserva do pane o executor confere a identidade do pane uma vez só. A espera por uma reescrita já no `ctrl+x tab` de entrada no painel é a da tela, não a do foco: nas provas ela vem no `Tab`.
 - **Vigia do tamanho (`mods/terminal.rs`).** Sem terminal de verdade ligado, o Hangar mantém a janela em 144 colunas por 40 linhas. O vigia ouve os avisos de cliente e de janela do multiplexador e repõe o mínimo; se um clique está em curso, espera a vez sem prazo e age assim que o clique solta o pane, porque o terminal que se desliga no meio do clique não avisa de novo (a espera com teto, primeiro de 9,5 s e depois do orçamento mais a limpeza mais longa, desistia quando a limpeza passava dele; a limpeza tem prazo, então a vez sempre volta). No Windows o vigia recusa (o psmux não avisa, e o Hangar não liga cliente de controle lá): o mínimo volta no preparo de cada operação de mod.
 - **Elo e posse no gateway.** `TerminalLink` é a ligação da sessão com o `Mods`: leva os pedidos dos apps ao clique, lê o painel na frente e encerra o vigia ao sair de escopo. O gateway cria uma vida única por abertura (`new_life`), grava-a na entrada, e `attach_terminal` registra o processo (chave durável, pane e criação, que o renomear mantém). Antes de ligar, `unstretch` devolve a janela que um clique cortado pelo fim do servidor deixou com 250 linhas (só sem cliente ligado), e o vigia sobe depois do `attach`, para não derrubar o próprio elo. A reabertura da mesma vida só religa o elo quando o nome saiu do `Mods` (`mods.life(name)` é `None`); nome que já tem outra vida fica com ela, porque é uma sessão mais nova e viva, e tomá-lo a deixaria sem dono e sem o nome de nascimento. O `close` esquece a entrada pela vida dela.
-- **Ponte com terminal (`mods/bridge.rs`).** O plugin que roda no terminal usa todas as rotas: faixa e painéis (`ui`), avisos, `press`, cópia, URL, foco da reserva por teclado e rolagem; sessão que o Rust não atende segue ao Python com o mesmo corpo, menos a faixa e os avisos. A prévia corta pelo espelho do Rust (`crop_columns`) e o campo `faixa` do `/pull` é do Rust (`Mods::band_present`). Desde 23/10/2026 (migração "Python fora do chat e da lista", R2) a faixa e os avisos de toda sessão Claude são só do `Mods`: os da sessão aberta à mão, sem entrada no Rust, ficam guardados pelo `sessao` do plugin (`Mods::loose_ui`/`loose_toast`, no formato `{above, panes}` que o Python publicava) até ela entrar; a cópia do `/ui` ao Python saiu, e a conexão interna não traz mais `plugin_ui`/`plugin_toast`. O dono pela porta do Connect recebe os avisos pelo canal privado; o convidado, não.
+- **Ponte com terminal (`mods/bridge.rs`).** O plugin que roda no terminal usa todas as rotas: faixa e painéis (`ui`), avisos, `press`, cópia, URL, foco da reserva por teclado e rolagem; sessão que o Rust não atende recebe daqui o que o Python respondia (`pressed` `{ok}`, `press-start` `{fromApp:false}`, `copied` e `opened` http(s) 409, `opened` de outro esquema 400, token errado 403, corpo inválido 422 `erro_corpo_invalido`, foco e rolagem 404), sem repasse. O código do 422 vale só nessas quatro rotas (`pressed`, `press-start`, `copied`, `opened`); `ui` e `toast`, que o Rust já atendia também para a sessão sem entrada, seguem com o 422 de antes, `{"detail": "corpo inválido"}`. A prévia corta pelo espelho do Rust (`crop_columns`) e o campo `faixa` do `/pull` é do Rust (`Mods::band_present`). Desde 23/10/2026 (migração "Python fora do chat e da lista", R2) a faixa e os avisos de toda sessão Claude são só do `Mods`: os da sessão aberta à mão, sem entrada no Rust, ficam guardados pelo `sessao` do plugin (`Mods::loose_ui`/`loose_toast`, no formato `{above, panes}` que o Python publicava) até ela entrar; a cópia do `/ui` ao Python saiu, e a conexão interna não traz mais `plugin_ui`/`plugin_toast`. O dono pela porta do Connect recebe os avisos pelo canal privado; o convidado, não.
 - **Digitação.** Com terminal não há por onde digitar no campo do mod: `input` é recusado com `no_typing`, sem reservar o pane, e o `ui.input` do app responde `erro_mod_sem_digitacao`.
-- **Convidado (issue #74).** O convidado (convite ou usuário convidado) vê e aciona os mods como o dono, por decisão do dono do projeto. O Rust continua sem autenticar convidado: repassa ao Python todo pedido que não é do dono, e o convite chega pela porta 8766 sem passar por ele. O Python autentica pelos porteiros dele e, no modo `rust`/`pending`, devolve `press`, `close`, `show` e `input` ao Rust pela porta privada (`POST /__hangar_server/mods/{name}/{op}`, com o segredo interno); o Rust trata o pedido como do dono e recusa com status próprio: 403 segredo ou origem errados, 400 operação desconhecida, 404 sessão que não é dele. Só o 404 deixa o Python seguir com o clique próprio, e nunca para convidado em sessão cujo terminal é do Rust (`terminal_in_rust`): ali, e em todo 400 ou 403, o Python registra e responde 503 `erro_mod_clique_sem_resposta`, para um segredo divergente não fazer o convidado dirigir o pane do executor por fora. Pedido da ponte nunca volta ao Python. Fora do Rust, `show` responde 404 `erro_mod_aba_no_app` (o app troca a aba localmente) e `input` 409 `erro_mod_sem_digitacao`, nunca 405. Ver: o canal privado do estado (`/__hangar_server/state/{name}/events`) leva também o `plugin_ui` do hub, que junta a faixa do Rust e a do Python; com o estado no hub, o `/events` do convidado manda só essa, e não a do Python. A recusa antiga (`erro_mod_convidado`, `guest_admin`, `GuestRefused`) saiu; a chave de tradução fica para o app falar com servidor antigo.
+- **Convidado (issue #74).** O convidado (convite ou usuário convidado) vê e aciona os mods como o dono, por decisão do dono do projeto. O convidado que o porteiro do Rust já liberou (convite da 8766 ou login) é atendido pelo Rust como o dono; só quem não é dono nem convidado liberado segue ao Python, que o autentica. Sessão sem a interface dos mods no Rust recebe a recusa fixa do Rust, sem validar o corpo (D8 do fim da reserva Python): `press` e `close` 503 `mods_need_rust_server`, `show` 404 `erro_mod_aba_no_app` (o app troca a aba localmente), `input` 409 `erro_mod_sem_digitacao`, nunca 405; convidado em sessão cujo terminal é do Rust sem a interface, 503 `erro_mod_clique_sem_resposta`, para ninguém dirigir o pane do executor por fora. A ponte privada `/__hangar_server/mods/{name}/{op}` saiu. Ver: o canal privado do estado (`/__hangar_server/state/{name}/events`) leva também o `plugin_ui` do hub, que junta a faixa do Rust e a do Python; com o estado no hub, o `/events` do convidado manda só essa, e não a do Python. A recusa antiga (`erro_mod_convidado`, `guest_admin`, `GuestRefused`) saiu; a chave de tradução fica para o app falar com servidor antigo.
 
 Limites conhecidos da fase 3:
 

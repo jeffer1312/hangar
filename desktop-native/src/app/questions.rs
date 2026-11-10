@@ -42,7 +42,7 @@ pub(super) fn card(
     let body = div().relative().flex_shrink_1().min_h_0().flex().flex_col().border_t_1().border_color(theme::border())
         .child(div().id("ask-body-scroll").flex_shrink_1().min_h_0().overflow_y_scroll().track_scroll(scroll).p_3().pr_6().child(body))
         .child(div().absolute().inset_0().child(Scrollbar::vertical(scroll).mode(ScrollbarMode::Always)));
-    div().id("ask-card").debug_selector(|| "ask-card".into()).max_h(px(max_height)).rounded(px(12.)).border_1()
+    div().id("ask-card").debug_selector(|| "ask-card".into()).max_h(px(max_height)).min_h_0().rounded(px(12.)).border_1()
         .border_color(theme::ask_highlight().opacity(0.55))
         .bg(theme::boxed()).shadow(theme::card_shadow()).flex().flex_col().text_sm()
         .child(header.flex_shrink_0())
@@ -66,6 +66,8 @@ mod tests {
         long_question: bool,
         // A área do app que recebe o cartão: altura máxima e rolagem própria, como `plugin-interaction-space`.
         space: Option<f32>,
+        // O teto que o app dá ao cartão; maior que a área quando ela encolheu por falta de espaço.
+        card_max: Option<f32>,
     }
 
     impl Render for QuestionSurface {
@@ -77,9 +79,10 @@ mod tests {
                     .when(self.long_question, |el| el.child(div().h(px(1500.)).child("Pergunta longa")))
                     .child(Textarea::new(&self.input)).into_any_element(),
                 div().debug_selector(|| "question-footer".into()).child("Enviar").into_any_element(),
-                &self.scroll, max,
+                &self.scroll, self.card_max.unwrap_or(max),
                 cx.listener(|this, _, _, cx| { this.minimized = !this.minimized; cx.notify(); }));
-            div().id("space").debug_selector(|| "space".into()).w_full().max_h(px(max)).overflow_y_scroll().child(card)
+            div().id("space").debug_selector(|| "space".into()).w_full().flex().flex_col().max_h(px(max)).overflow_y_scroll()
+                .child(crate::app::in_column_with(card, true))
         }
     }
 
@@ -93,7 +96,7 @@ mod tests {
         cx.update(gpui_kit::init);
         let (view, cx) = cx.add_window_view(|window, cx| {
             window.retain_a11y_tree(true);
-            QuestionSurface { minimized: false, scroll: ScrollHandle::new(), long_question: false, space: None,
+            QuestionSurface { minimized: false, scroll: ScrollHandle::new(), long_question: false, space: None, card_max: None,
                 input: cx.new(|cx| TextareaState::new(window, cx).default_value("Primeira linha\nSegunda linha")) }
         });
         cx.simulate_resize(size(px(680.), px(800.)));
@@ -120,7 +123,7 @@ mod tests {
     fn long_question_scrolls_without_pushing_actions_out_of_a_short_window(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
         let (view, cx) = cx.add_window_view(|window, cx| QuestionSurface {
-            minimized: false, scroll: ScrollHandle::new(), long_question: true, space: None,
+            minimized: false, scroll: ScrollHandle::new(), long_question: true, space: None, card_max: None,
             input: cx.new(|cx| TextareaState::new(window, cx)),
         });
         cx.simulate_resize(size(px(680.), px(480.)));
@@ -141,7 +144,7 @@ mod tests {
     fn card_fits_the_question_space_and_keeps_header_and_tabs_while_scrolling(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
         let (view, cx) = cx.add_window_view(|window, cx| QuestionSurface {
-            minimized: false, scroll: ScrollHandle::new(), long_question: true, space: Some(360.),
+            minimized: false, scroll: ScrollHandle::new(), long_question: true, space: Some(360.), card_max: None,
             input: cx.new(|cx| TextareaState::new(window, cx)),
         });
         cx.simulate_resize(size(px(680.), px(900.)));
@@ -160,6 +163,22 @@ mod tests {
         assert_eq!(cx.debug_bounds("ask-minimize").unwrap(), header, "rolar não esconde o cabeçalho");
         assert_eq!(cx.debug_bounds("question-tabs").unwrap(), tabs, "rolar não esconde as abas");
         assert_eq!(cx.debug_bounds("question-footer").unwrap(), footer, "rolar não desloca as ações");
+    }
+
+    #[gpui::test]
+    fn card_shrinks_with_the_space_and_keeps_its_actions_in_view(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (_, cx) = cx.add_window_view(|window, cx| QuestionSurface {
+            minimized: false, scroll: ScrollHandle::new(), long_question: true, space: Some(200.), card_max: Some(360.),
+            input: cx.new(|cx| TextareaState::new(window, cx)),
+        });
+        cx.simulate_resize(size(px(680.), px(900.)));
+        draw(cx);
+        let space = cx.debug_bounds("space").unwrap();
+        let card = cx.debug_bounds("ask-card").unwrap();
+        let (header, footer) = (cx.debug_bounds("ask-minimize").unwrap(), cx.debug_bounds("question-footer").unwrap());
+        assert!(card.bottom() <= space.bottom(), "o cartão encolhe com a área, sem ser cortado: {card:?} {space:?}");
+        assert!(header.top() >= space.top() && footer.bottom() <= space.bottom(), "cabeçalho e ações à vista");
     }
 
     struct FieldSurface(AnyInputState);

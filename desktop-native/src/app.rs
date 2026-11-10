@@ -36,6 +36,7 @@ mod group_sheet;
 mod hangar_live;
 mod harness;
 mod keyring;
+mod plugins;
 mod vault;
 mod vault_requests;
 mod rename_suggest;
@@ -86,6 +87,8 @@ pub(crate) use vault_requests::{approve_body, approve_title, request_button, req
 pub(crate) use create::{base_button, base_row, quiet_button, worktree_field_label, worktree_warning};
 pub(crate) use connect::device_card;
 pub(crate) use settings::{setting_row, settings_box};
+pub(crate) use plugins::{plugin_meta, plugin_name, plugin_switch, plugin_update_button, reopen_notice as plugins_reopen_notice,
+    row_box as plugin_row_box, text_block as plugin_text_block};
 pub(crate) use accounts::{login_heading, target_row};
 pub(crate) use search::{ScopeFound, highlighted as search_highlighted, search_agent_label, search_chat_header, search_chat_sub, search_field, search_filter_chip, search_found_frame,
     search_group_frame, search_group_header, search_group_sub, search_hit_line, search_live_label, search_open_look, search_scope_block,
@@ -124,7 +127,7 @@ pub(crate) mod setup;
 /// Variável do ambiente do script com o código de uso único do askpass (`setup::askpass`).
 pub(crate) const ASKPASS_CODE_ENV: &str = "HANGAR_ASKPASS_CODE";
 
-actions!(hangar, [FocusComposer, OpenSettings, CopyLastReply, FocusSettingsSearch, FindProjectFile, FindProjectText, NextSession, PreviousSession, ToggleDictation, NewChat, OpenNewSession, CloseSession, RenameSession, OpenCosts, OpenSearch,
+actions!(hangar, [FocusComposer, OpenSettings, CopyLastReply, FocusSettingsSearch, FindProjectFile, FindProjectText, NextSession, PreviousSession, ToggleDictation, NewChat, NewChatNoProject, OpenNewSession, CloseSession, RenameSession, OpenCosts, OpenSearch,
     ToggleSidebar, CyclePermission, OpenWorktrees, CycleToolLook, CycleNavigation]);
 
 const LIVE_THINKING: &str = "__thinking__";
@@ -148,6 +151,31 @@ const COLUMN: f32 = 780.;
 /// inteira (`HISTORY_PAGE`) custa muito mais em transcript grande. Ela vem logo depois, por baixo.
 const FIRST_PAGE: usize = 60;
 const HISTORY_PAGE: usize = 400;
+/// Eventos de folga acima da primeira linha na tela que o corte do histórico não alcança.
+const TRIM_MARGIN: usize = 40;
+
+/// Quanto o transcript inteiro fica na memória depois do último uso (busca, volta a uma citação): cortado logo, a
+/// busca seguinte baixaria e remontaria tudo de novo.
+const FULL_HISTORY_KEEP: Duration = Duration::from_secs(600);
+
+/// Quantos eventos antigos saem quando o transcript inteiro (busca, volta a uma citação) deixa de ser preciso: fica a
+/// janela normal. `first_visible` é o evento da primeira linha na tela, `None` no fim da conversa. Com ela antes da
+/// janela, ou colada ao começo dela, nada sai: a leitura não é tirada do lugar, e o corte espera a volta ao fim.
+fn history_cut(events: usize, first_visible: Option<usize>) -> usize {
+    let cut = events.saturating_sub(HISTORY_PAGE);
+    if first_visible.is_some_and(|first| first < cut + TRIM_MARGIN) { 0 } else { cut }
+}
+
+/// O evento mais antigo que a linha mostra; a lista de tarefas não é de evento nenhum.
+fn first_event(item: &Item) -> Option<usize> {
+    match item {
+        Item::Event(i) | Item::Orphan(i) => Some(*i),
+        Item::Tool(tool) => Some(tool.call),
+        Item::Group { tools, .. } => tools.first().map(|tool| tool.call),
+        Item::Thinking { parts, .. } => parts.first().copied(),
+        Item::Tasks { .. } => None,
+    }
+}
 
 /// Conexão, máquina e nome da sessão aberta (`session_owner`).
 pub(crate) type SessionOwner = (u64, String, String);
@@ -304,6 +332,18 @@ fn conversation_line(user: bool) -> f32 {
     let a = crate::appearance::get();
     let (size, line) = conversation_metrics(user);
     size * a.text_size as f32 / 100. * line * a.line_height as f32 / 100.
+}
+
+/// Pedido no runtime do tokio; a volta cai na entidade, se ela ainda existir.
+fn run<V: 'static, T: Send + 'static, F>(runtime: &Runtime, request: F, window: &mut Window, cx: &mut Context<V>,
+    then: impl FnOnce(&mut V, Result<T, Failure>, &mut Window, &mut Context<V>) + 'static)
+where F: Future<Output = Result<T, Failure>> + Send + 'static {
+    let (done, result) = tokio::sync::oneshot::channel();
+    runtime.spawn(async move { let _ = done.send(request.await); });
+    cx.spawn_in(window, async move |this, cx| {
+        let result = result.await.unwrap_or_else(|_| Err(Failure::local("network_error")));
+        let _ = this.update_in(cx, |this, window, cx| { then(this, result, window, cx); cx.notify(); });
+    }).detach();
 }
 const DETAIL_MAX: usize = 20_000;
 const LIVE_THINKING_TAIL: usize = 1_500;
@@ -635,6 +675,8 @@ pub struct Hangar {
     vault: HashMap<String, Entity<vault_requests::VaultRequests>>,
     /// Página Cofre aberta, com a conexão em que nasceu.
     vault_page: Option<(u64, Entity<vault::VaultPage>)>,
+    /// Página Plugins aberta, com a conexão em que nasceu.
+    plugins_page: Option<(u64, Entity<plugins::PluginsPage>)>,
     rename_suggest: rename_suggest::RenameSuggest,
     /// Último evento `tags` da lista de cada máquina (chave `servers::norm`); máquina sem ele é servidor antigo.
     /// Fica na queda do stream: a etiqueta não muda por a máquina estar fora.
@@ -690,6 +732,11 @@ pub struct Hangar {
     preview_drop_epoch: u64,
     preview_drop_scheduled: bool,
     visible_preview: Preview,
+    preview_cache: PreviewSource,
+    /// Desde quando o transcript inteiro está carregado sem uso (`history_trim`).
+    full_history_idle: Option<std::time::Instant>,
+    /// Já há um despertar marcado para o fim desse prazo.
+    full_history_wake: bool,
     preview_tick_epoch: u64,
     preview_tick_scheduled: bool,
     preview_last_tick: Option<Instant>,
@@ -1132,13 +1179,13 @@ impl Hangar {
             history_installed: false, pending_chat: Vec::new(),
             history_limit: 400, has_older: false, etag: None, error: None, list_error: None,
             delivery: DeliveryTracker::default(), stopping: HashSet::new(), stop_feedback: HashMap::new(), drafts: HashMap::new(), input_history: HashMap::new(),
-            flight: InFlight::default(), action_feedback: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), vault: HashMap::new(), vault_page: None, rename_suggest: Default::default(), tags: HashMap::new(), question_open: None, question_card: None,
+            flight: InFlight::default(), action_feedback: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), vault: HashMap::new(), vault_page: None, plugins_page: None, rename_suggest: Default::default(), tags: HashMap::new(), question_open: None, question_card: None,
             hangar_open: false, hangar_focus: cx.focus_handle(), hangar_error: None, live_clock: None, ask_form: AskForm::default(), ask_drafts: HashMap::new(), plans_dismissed: HashSet::new(), answered_tools: HashSet::new(), answering: HashMap::new(), ask_scroll: Default::default(), plan_scroll: Default::default(), plan_view: None,
             plan_review: Default::default(),
             list_state, rail_hover: None, follow: Default::default(), row_ids: Vec::new(), row_signatures: Vec::new(), conversation: Default::default(), row_assets: Vec::new(), expanded: HashSet::new(), kept_expanded: HashMap::new(), orq_days: HashSet::new(),
             table_column: HashMap::new(), tables: HashMap::new(), last_message: None, live_clear_epoch: [0; 2], rich: HashMap::new(), prepared: HashMap::new(), cites: CiteCheck::default(), render_tick: 0,
             preview_drop_epoch: 0, preview_drop_scheduled: false,
-            visible_preview: Preview::default(), preview_tick_epoch: 0, preview_tick_scheduled: false,
+            visible_preview: Preview::default(), preview_cache: PreviewSource::default(), full_history_idle: None, full_history_wake: false, preview_tick_epoch: 0, preview_tick_scheduled: false,
             preview_last_tick: None, preview_carry: 0., preview_deadline: None,
             attachments: HashMap::new(), quotes: Default::default(), mermaid: Default::default(), attach_seq: 0, uploading: HashMap::new(), commands: HashMap::new(), commands_latest: HashMap::new(), commands_seq: 0,
             plugin_question_seen: None,
@@ -1393,7 +1440,7 @@ impl Hangar {
         };
         // Como o `cp_active` do web: a máquina que abriu vira a da próxima abertura.
         self.unsaved_connection = Some((address, token.clone()));
-        if let Some(key) = self.selected_key() { let draft = self.composer_draft(cx); self.drafts.insert(key, draft); }
+        self.keep_draft(cx);
         let reopen = self.selected.clone().zip(self.session_server().map(|s| servers::norm(&s)));
         // A lista da máquina que sai fica na barra até o SSE dela chegar, sem piscar vazia.
         let previous = self.server.as_deref().map(servers::norm).filter(|key| *key != servers::norm(&api.identity()))
@@ -1584,7 +1631,7 @@ impl Hangar {
         if !same_server || self.selected.as_ref().is_none_or(|selected| selected.name != session.name) {
             self.close_terminal(false, window, cx);
         }
-        if let Some(old) = self.selected_key() { let draft = self.composer_draft(cx); self.drafts.insert(old, draft); }
+        self.keep_draft(cx);
         self.keep_expanded();
         self.open_api = open_api;
         // Avisos, atalhos globais e contas passam a ser os da máquina desta conversa.
@@ -1616,7 +1663,7 @@ impl Hangar {
         self.etag = None;
         self.has_older = false;
         self.rich.clear();
-        self.pages.clear();
+        self.pages.clear(cx);
         // A busca era da conversa anterior.
         self.find.reset();
         row_patch::reset_rows(&mut self.row_ids, &mut self.arrived, &mut self.tree_folds);
@@ -1691,11 +1738,27 @@ impl Hangar {
         cx.notify();
     }
 
+    /// A tela de conversa nova já sem projeto: a mesma do `Ctrl N`, com a pasta tirada do caminho.
+    pub(super) fn new_chat_no_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.go_home(window, cx);
+        if !self.new_chat_screen() { return; }
+        let Some(api) = self.api.clone() else { return };
+        let view = self.ensure_new_chat(api, window, cx);
+        view.update(cx, |view, cx| view.choose_no_project(window, cx));
+    }
+
+    /// Guarda o campo da sessão aberta; campo vazio não deixa entrada.
+    fn keep_draft(&mut self, cx: &App) {
+        let Some(key) = self.selected_key() else { return };
+        let draft = self.composer_draft(cx);
+        if draft.is_empty() { self.drafts.remove(&key); } else { self.drafts.insert(key, draft); }
+    }
+
     /// Fecha a sessão aberta, guardando o rascunho dela.
     pub(super) fn close_open_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected.is_none() { return; }
         self.close_terminal(false, window, cx);
-        if let Some(old) = self.selected_key() { let draft = self.composer_draft(cx); self.drafts.insert(old, draft); }
+        self.keep_draft(cx);
         self.keep_expanded();
         self.selection += 1;
         if let Some(task) = self.session_task.take() { task.abort(); }
@@ -1711,6 +1774,11 @@ impl Hangar {
         self.reset_details();
         self.cancel_preview_drop();
         self.clear_visible_preview();
+        // Sem sessão aberta, nada da conversa anterior fica de pé: textos preparados, páginas e o Chromium delas.
+        self.rich.clear();
+        self.pages.clear(cx);
+        self.sync_rows(cx);
+        self.pages.warm(false, window, cx);
         self.error = None;
         self.loading = false;
         self.chat_online = false;
@@ -1735,6 +1803,30 @@ impl Hangar {
         if let Some(task) = self.history_task.take() { task.abort(); }
         (self.history_limit, self.etag) = (0, None);
         self.load_history(cx);
+    }
+
+    /// Quantos eventos antigos do transcript inteiro já podem sair (`history_cut`); zero enquanto a busca ou a volta
+    /// a uma citação ainda o usam, e por `FULL_HISTORY_KEEP` depois do último uso.
+    fn history_trim(&mut self) -> usize {
+        if self.history_limit != 0 || self.loading || self.find.open || self.quote_flashing() {
+            self.full_history_idle = None;
+            return 0;
+        }
+        if self.full_history_idle.get_or_insert_with(std::time::Instant::now).elapsed() < FULL_HISTORY_KEEP { return 0; }
+        let top = self.list_state.logical_scroll_top().item_ix;
+        let first_visible = self.conversation.items.get(top..).and_then(|rest| rest.iter().find_map(first_event));
+        history_cut(self.chat.events.len(), first_visible)
+    }
+
+    /// Devolve a conversa à janela normal sem mexer no que está na tela; o que saiu volta por "Carregar anteriores".
+    fn trim_history(&mut self, cx: &mut Context<Self>) {
+        let cut = self.history_trim();
+        if cut == 0 { return; }
+        self.chat.drop_oldest(cut);
+        (self.history_limit, self.has_older, self.etag) = (HISTORY_PAGE, true, None);
+        self.sync_rows(cx);
+        self.follow_keep_end();
+        self.redraw(panes::Area::Conversation, cx);
     }
 
     fn load_history(&mut self, cx: &mut Context<Self>) {
@@ -1858,11 +1950,14 @@ impl Hangar {
                         _ => None,
                     };
                     // Menu, renomear, fechar e grupo das linhas desta máquina acompanham a lista dela como os da ativa.
-                    if self.receive_remote(generation, key.clone(), update, cx) {
+                    let (changed, gone) = self.receive_remote(generation, key.clone(), update, cx);
+                    if changed {
                         self.tour_dirty = true;
                         self.sidebar_sessions_changed(window, cx);
                     }
                     self.remote_changed(&key, window, cx);
+                    // Depois do `follow_open`: a aberta que fechou de vez já saiu da seleção.
+                    self.forget_closed(&key, &gone);
                     if live { self.live_changed(&key, window, cx); }
                     if let Some(locked) = keyring && self.set_keyring(&key, locked, window, cx) {
                         self.redraw(panes::Area::Nav, cx);
@@ -1884,7 +1979,11 @@ impl Hangar {
         let selection = self.selection;
         let (mut rows, mut visible, mut tail, mut keep_end) = (false, true, false, false);
         match payload {
-            Payload::Terminal(reply) => self.receive_terminal(reply, window, cx),
+            Payload::Terminal(reply) => {
+                // Bytes do terminal repintam por conta própria (`receive_terminal`), sem o `notify` da janela inteira.
+                visible = !matches!(reply, terminal::Reply::Socket(_, _, _, Ok(crate::ws::Event::Data(_))));
+                self.receive_terminal(reply, window, cx);
+            }
             Payload::Mentions(seq, result) => { self.receive_mentions(seq, result, cx); }
             Payload::Sessions(Ok(sessions)) => {
                 self.list_error = None;
@@ -2303,7 +2402,8 @@ impl Hangar {
         let focused_tab = self.visible_order(cx).into_iter().enumerate().find(|(_, target)| self.is_active_key(&target.server)
             && self.row_focus(target).is_some_and(|focus| focus.is_focused(window)));
         // Sessão que sumiu da lista acabou de fechar: a conversa dela passa a ser recente.
-        let closed = self.sessions.iter().any(|old| !sessions.iter().any(|s| s.name == old.name));
+        let gone = servers::left_list(&self.sessions, &sessions);
+        let closed = !gone.is_empty();
         self.sessions = sessions;
         self.recents_sessions_changed(closed, cx);
         self.resolve_local_dirs(cx);
@@ -2327,6 +2427,9 @@ impl Hangar {
             let list = self.sessions.clone();
             self.follow_open(&list, window, cx);
         }
+        // Depois do `follow_open`: a aberta que fechou de vez já saiu da seleção; a que troca de conta segue nela.
+        let server = self.active_key();
+        self.forget_closed(&server, &gone);
         self.sidebar_sessions_changed(window, cx);
         self.tour_planner.list_read();
         self.tour_dirty = true;
@@ -2638,7 +2741,7 @@ impl Hangar {
                 self.has_older = false;
                 self.rich.clear();
                 row_patch::reset_rows(&mut self.row_ids, &mut self.arrived, &mut self.tree_folds);
-                self.pages.clear();
+                self.pages.clear(cx);
                 self.list_state.reset(0);
                 self.follow_reset();
                 self.etag = None;
@@ -2767,6 +2870,7 @@ impl Hangar {
         self.preview_carry = 0.;
         self.preview_deadline = None;
         self.visible_preview = Preview::default();
+        self.preview_cache = PreviewSource::default();
     }
 
     fn update_visible_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2775,8 +2879,10 @@ impl Hangar {
             && self.visible_preview.vivo == next.vivo && next.text.starts_with(&self.visible_preview.text);
         if self.visible_preview.text.is_empty() || next.vivo || cx.reduce_motion() || !extends {
             let next = next.clone();
+            // A prévia trocada inteira quase sempre só cresceu: o começo já pronto continua valendo.
+            let cache = std::mem::take(&mut self.preview_cache);
             self.clear_visible_preview();
-            self.visible_preview = next;
+            (self.visible_preview, self.preview_cache) = (next, cache);
             return;
         }
         self.preview_deadline = Some(Instant::now() + Duration::from_millis(1200));
@@ -3719,7 +3825,7 @@ impl Hangar {
         let rewritten: Vec<(usize, String)> = ids.iter().enumerate().filter_map(|(i, id)| {
             let cached = self.rich.get(id)?;
             if id == PREVIEW {
-                let body = preview_source(&self.visible_preview);
+                let body = self.preview_cache.source(&self.visible_preview);
                 return (cached.source != body).then_some((from + i, body));
             }
             let Prepared::Message { markdown, .. } = self.prepared.get(id)? else { return None };
@@ -3768,7 +3874,7 @@ impl Hangar {
         let removed: HashSet<_> = self.row_ids[from..].iter().filter(|id| !kept.contains(id)).cloned().collect();
         // Visões fora da lista (plano, diff do painel) usam linha "__…__" e saem só pelo limite do cache.
         self.rich.retain(|_, rich| !removed.contains(&rich.row) || rich.row.starts_with("__"));
-        self.pages.retain_rows(|row| !removed.contains(row));
+        self.pages.retain_rows(|row| !removed.contains(row), cx);
         for id in removed {
             self.arrived.remove(&id);
             self.tree_folds.remove(&id);
@@ -3784,7 +3890,7 @@ impl Hangar {
     /// a cada quadro. Devolve falso quando a linha ainda não existe e é preciso o `sync_rows` inteiro.
     fn sync_preview_row(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(index) = self.row_ids.iter().rposition(|id| id == PREVIEW) else { return false };
-        let body = preview_source(&self.visible_preview);
+        let body = self.preview_cache.source(&self.visible_preview);
         let Some(cached) = self.rich.get(PREVIEW) else { return true };
         if cached.source == body { return true; }
         let added = body.strip_prefix(&cached.source).map(str::to_owned);
@@ -4502,7 +4608,7 @@ impl Hangar {
             .filter(|(pick, item)| interaction::answer(&ask, item, pick).is_some()).count();
         let progress = tr("ask_progress").replace("{done}", &completed.to_string()).replace("{total}", &total.to_string());
         let minimized = self.ask_form.minimized;
-        Some(in_column(questions::card(minimized, progress, tabs, body,
+        Some(in_column_with(questions::card(minimized, progress, tabs, body,
             div().flex().flex_wrap().items_center().gap_2()
                 .child(div().flex_1().min_w_0().text_xs().text_color(theme::muted()).child(tr(if ready { "ask_ready" } else { "ask_incomplete" })))
                 .when(tab > 0, |el| {
@@ -4529,7 +4635,7 @@ impl Hangar {
                 // O campo sai da árvore ao recolher: o foco volta para um controle que continua visível.
                 this.composer.update(cx, |input, cx| input.focus(window, cx));
                 cx.notify();
-            }))).py_2().into_any_element())
+            })), true).py_2().into_any_element())
     }
 
     fn render_options(&mut self, busy: bool, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -5008,7 +5114,11 @@ impl Hangar {
         let textarea = Textarea::new(&self.composer).accessibility_id("composer-input").appearance(false).disabled((!readable && !new_chat && !reopen) || creating || resuming).on_paste(move |item, window, cx| {
             paste_target.update(cx, |this, cx| { if preview { this.enter_tab_preview_event(window, cx); } this.paste(item, cx) }).unwrap_or(false)
         });
+        let roomy = self.new_chat_screen();
         let field = div().id("composer-field").text_base()
+            // Na tela inicial a caixa nasce com três linhas: o campo cresce de uma, e a área vazia abaixo dele também foca.
+            .when(roomy, |el| el.min_h(px(78.)).text_size(px(15.)).cursor_text()
+                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.composer.update(cx, |input, cx| input.focus(window, cx)))))
             // Teclas do campo que o compositor intercepta; sem uso aqui, seguem para o editor.
             .capture_action(cx.listener(move |this, _: &MoveUp, window, cx| { if preview { this.enter_tab_preview_event(window, cx); } this.move_composer(-1, window, cx) }))
             .capture_action(cx.listener(move |this, _: &MoveDown, window, cx| { if preview { this.enter_tab_preview_event(window, cx); } this.move_composer(1, window, cx) }))
@@ -6607,6 +6717,8 @@ const PLUGIN_PANE_MAX_SHARE: f32 = 0.45;
 const PLUGIN_PANE_MAX_HEIGHT: f32 = 360.;
 /// Menor teto da faixa de baixo: cabe o compositor com a linha de baixo, mesmo com o terminal puxado até o alto.
 const BOTTOM_MIN_HEIGHT: f32 = 200.;
+/// Cabeçalho da sessão, acima da conversa.
+const SESSION_HEADER_HEIGHT: f32 = 44.;
 /// Uma linha da faixa do mod, com a margem de baixo dela.
 const BAND_MIN_HEIGHT: f32 = 24.;
 
@@ -6869,14 +6981,65 @@ fn preview_source(preview: &Preview) -> String {
     output
 }
 
+/// A fonte da prévia em markdown guardada entre os passos do streaming: o começo que já não muda fica pronto, e
+/// cada passo refaz só o fim do texto. O resultado é o de `preview_source`.
+#[derive(Default)]
+struct PreviewSource {
+    /// Começo do texto já sem as marcas do protocolo, sempre em fim de linha.
+    stable: String,
+    /// `stable` com as citações e o escape aplicados.
+    output: String,
+    fence: composer::CitationFence,
+    safe: SafeState,
+}
+
+impl PreviewSource {
+    fn source(&mut self, preview: &Preview) -> String {
+        if !preview.md { return preview_source(preview); }
+        let plain = interaction::plan_display(&preview.text);
+        let mended = crate::mend::close_hanging(&plain);
+        // Texto que não continua o guardado (outra resposta, marcação refeita mais atrás): começa de novo.
+        if !mended.starts_with(&self.stable) { *self = Self::default(); }
+        let kept = self.stable.len();
+        // O `close_hanging` só mexe no fim: linha inteira que ele deixou como chegou não muda mais.
+        let same = plain.as_bytes().get(kept..).map_or(0, |rest| rest.iter().zip(&mended.as_bytes()[kept..]).take_while(|(a, b)| a == b).count());
+        let end = mended.as_bytes()[kept..kept + same].iter().rposition(|byte| *byte == b'\n').map_or(kept, |at| kept + at + 1);
+        let alive = |_: &str| false;
+        if end > kept {
+            let mut fence = self.fence;
+            let cited = composer::citation_markdown_resumed(&mended[kept..end], &alive, &[], &mut source_map::Edits::default(), &mut fence);
+            // A emenda com o resto só vale em fim de linha, também depois das citações.
+            if cited.ends_with('\n') {
+                self.output.push_str(&safe_markdown_resumed(&cited, &mut source_map::Edits::default(), &mut self.safe));
+                self.stable.push_str(&mended[kept..end]);
+                self.fence = fence;
+            }
+        }
+        let (mut fence, mut safe) = (self.fence, self.safe);
+        let cited = composer::citation_markdown_resumed(&mended[self.stable.len()..], &alive, &[], &mut source_map::Edits::default(), &mut fence);
+        let mut output = String::with_capacity(self.output.len() + cited.len() + 8);
+        output.push_str(&self.output);
+        output.push_str(&safe_markdown_resumed(&cited, &mut source_map::Edits::default(), &mut safe));
+        output
+    }
+}
+
 fn safe_markdown(source: &str) -> String { safe_markdown_mapped(source, &mut source_map::Edits::default()) }
 
 /// Como `safe_markdown`, anotando em `edits` cada trecho trocado (escape, imagem).
 fn safe_markdown_mapped(source: &str, edits: &mut source_map::Edits) -> String {
     if !source.contains('<') && !source.contains("![") { return source.to_owned(); }
+    safe_markdown_resumed(source, edits, &mut SafeState::default())
+}
+
+/// Cerca e código em linha abertos no fim de um texto.
+type SafeState = (Option<char>, Option<usize>);
+
+/// Como `safe_markdown_mapped`, para um texto que continua outro em fim de linha: parte de `state` e deixa nele o
+/// estado do fim deste.
+fn safe_markdown_resumed(source: &str, edits: &mut source_map::Edits, state: &mut SafeState) -> String {
     let mut output = String::with_capacity(source.len());
-    let mut fence = None;
-    let mut inline = None;
+    let (mut fence, mut inline) = *state;
     let mut line_start = 0;
     for line in source.split_inclusive('\n') {
         let line_at = line_start;
@@ -6916,6 +7079,7 @@ fn safe_markdown_mapped(source: &str, edits: &mut source_map::Edits) -> String {
             } else { output.push(ch); }
         }
     }
+    *state = (fence, inline);
     output
 }
 
@@ -7057,6 +7221,19 @@ impl Hangar {
                         .child(column_box(false).h_full().rounded(px(14.)).border_1().border_color(theme::border())
                             .bg(theme::sheet()).shadow(theme::sheet_shadow())));
                     self.paint_quote_flash(cx);
+                    // Busca fechada ou citação já mostrada: o transcript inteiro sai depois deste desenho.
+                    if self.history_trim() > 0 {
+                        let view = cx.entity().downgrade();
+                        cx.defer(move |cx| { view.update(cx, |this, cx| this.trim_history(cx)).ok(); });
+                    } else if let Some(since) = self.full_history_idle.filter(|since| !self.full_history_wake && since.elapsed() < FULL_HISTORY_KEEP) {
+                        // Conversa parada não é desenhada de novo: sem este despertar o prazo passaria sem ninguém conferir.
+                        self.full_history_wake = true;
+                        let wait = FULL_HISTORY_KEEP.saturating_sub(since.elapsed());
+                        cx.spawn(async move |this, cx| {
+                            cx.background_executor().timer(wait).await;
+                            let _ = this.update(cx, |this, cx| { this.full_history_wake = false; this.redraw(panes::Area::Conversation, cx); });
+                        }).detach();
+                    }
                     let cite_offer = self.render_cite_offer(window, cx);
                     content = content.child(div().relative().flex_1().min_h_0().flex().flex_col()
                         // A seleção numa resposta oferece "Citar" ao soltar o mouse.
@@ -7363,11 +7540,13 @@ impl Hangar {
         if self.new_chat_screen() && self.reopen.is_some() { return self.render_reopen(window, cx); }
         if self.new_chat_screen() { return self.render_new_chat(window, cx); }
         let content = self.render_bottom_content(window, cx);
-        // A faixa fica com o espaço medido menos o piso da conversa e o terminal inteiro; sem medida ainda, sem teto.
-        let (term, shown) = self.docked_terminal_height(window).unwrap_or((0., 0.));
-        let conversation = self.panes.conversation_height.get();
-        let space = conversation + self.panes.bottom_applied.get() + shown;
-        let cap = if conversation > 0. { (space - terminal::CONVERSATION_MIN_HEIGHT - term).max(BOTTOM_MIN_HEIGHT) } else { f32::from(window.viewport_size().height) };
+        // A faixa fica com a coluna menos o cabeçalho, o piso da conversa, a faixa do cofre e o terminal inteiro; sem medida
+        // ainda, sem teto.
+        let term = self.docked_terminal_height(window).unwrap_or(0.);
+        let column = self.panes.column_height.get();
+        let fixed = SESSION_HEADER_HEIGHT + terminal::CONVERSATION_MIN_HEIGHT + self.panes.vault_height.get() + term;
+        let cap = if column > 0. { (column - fixed).max(BOTTOM_MIN_HEIGHT) }
+            else { f32::from(window.viewport_size().height) };
         self.measured_bottom(content, cap)
     }
 
@@ -7485,7 +7664,8 @@ impl Hangar {
                 let height = self.question_space_height(readable, window);
                 div().id("plugin-interaction-space").track_focus(&self.plugin_question_focus)
                     // Cede junto com a faixa do mod quando falta espaço: o cartão rola aqui dentro, ao lado do compositor.
-                    .relative().w_full().max_h(px(height)).when(reserve, |el| el.h(px(height))).flex_shrink(1.).min_h_0().overflow_y_scroll()
+                    // Coluna flex: sem ela o cartão não encolhe e a área o corta, com as ações fora da vista.
+                    .relative().w_full().flex().flex_col().max_h(px(height)).when(reserve, |el| el.h(px(height))).flex_shrink(1.).min_h_0().overflow_y_scroll()
                     .child(question).into_any_element()
             }),
             Display::Panel => {
@@ -7821,14 +8001,22 @@ impl Render for Hangar {
         });
         let landing::Frame { drop, shown, rise } = self.landing_frame(window, cx);
         let opening = self.opening.clone().filter(|_| self.selected.is_none());
+        // Terminal e faixa do cofre mudam o teto da faixa de baixo sem mudar a coluna: só ela, guardada, refaz.
+        let term = self.docked_terminal_height(window).unwrap_or(0.);
+        if (self.panes.docked_term.replace(term) - term).abs() > 0.5 { self.redraw(panes::Area::Bottom, cx); }
+        let vault = self.render_vault_session(cx)
+            .map(|band| div().relative().flex_shrink_0().w_full().flex().flex_col().child(band).child(self.cap_measure(&self.panes.vault_height)));
+        if vault.is_none() && self.panes.vault_height.replace(0.) > 0. { self.redraw(panes::Area::Bottom, cx); }
         let content = div().relative().flex_1().min_w_0().h_full().flex().flex_col()
             .when(!beside_sidebar, |el| chat_fill(el, self, window))
-            .child(div().h(px(44.)).pl(px(20.)).pr(px(12.)).flex_shrink_0().flex().items_center().gap(px(10.)).when(floating, |el| el.mx(px(4.)))
+            .child(self.cap_measure(&self.panes.column_height))
+            .child(div().h(px(SESSION_HEADER_HEIGHT)).pl(px(20.)).pr(px(12.)).flex_shrink_0().flex().items_center().gap(px(10.)).when(floating, |el| el.mx(px(4.)))
                 .relative().opacity(shown).top(px(rise))
                 .when_some(header_avatar, |el, avatar| el.child(avatar))
                 .when_some(opening.as_ref(), |el, o| el.child(chrome::session_avatar(&chrome::AvatarLook::new(&o.provider, None, "", false), 26., None)))
-                .child(div().flex_shrink_0().font_weight(FontWeight::SEMIBOLD)
-                    .child(selected_name.clone().or_else(|| opening.as_ref().map(|o| o.name.clone())).unwrap_or_else(|| tr("title"))))
+                // Sem sessão o nome do app já está na barra da janela; repetido aqui só disputava com a tela inicial.
+                .children(selected_name.clone().or_else(|| opening.as_ref().map(|o| o.name.clone()))
+                    .map(|name| div().flex_shrink_0().font_weight(FontWeight::SEMIBOLD).child(name)))
                 .when_some(place, |el, place| el.child(div().id("session-place").min_w_0().flex().items_center().gap(px(4.)).text_color(theme::faint()).aria_label(place)
                     .when_some(self.selected.as_ref().and_then(folder_name), |el, folder| el
                         .child(chrome::small_icon(IconName::Folder, 12., theme::faint()))
@@ -7853,7 +8041,7 @@ impl Render for Hangar {
             // Entre a conversa e a faixa de baixo: o que a faixa abre por cima (comandos, sugestões) cobre a marca. Sem a
             // conversa na tela, os lugares dela são do último desenho, de outra sessão.
             .when(page.is_none() && !self.new_chat_screen(), |el| el.child(self.working_mark_float(panes::Area::Conversation, WORKING_FADE, cx.reduce_motion())))
-            .children(self.render_vault_session(cx))
+            .children(vault)
             .child(self.pane_element(panes::Area::Bottom, if self.new_chat_screen() { StyleRefinement::default().w_full().flex_1().min_h_0() }
                 else { StyleRefinement::default().w_full().flex_shrink_0().h(px(self.panes.bottom_height.get())).top(px(-drop)) }))
             // Os avatares animados da faixa de baixo (subagentes e pai da filha), pintados fora da cópia guardada dela.
@@ -8005,6 +8193,7 @@ impl Render for Hangar {
             .on_action(cx.listener(|this, _: &NextSession, window, cx| this.step_session(1, window, cx)))
             .on_action(cx.listener(|this, _: &PreviousSession, window, cx| this.step_session(-1, window, cx)))
             .on_action(cx.listener(|this, _: &NewChat, window, cx| this.go_home(window, cx)))
+            .on_action(cx.listener(|this, _: &NewChatNoProject, window, cx| this.new_chat_no_project(window, cx)))
             .on_action(cx.listener(|this, _: &OpenNewSession, window, cx| {
                 if !this.create_blocked(window, cx) { this.open_new_session(None, window, cx); }
             }))
@@ -8605,6 +8794,57 @@ mod tests {
         }
         let preview = super::Preview { text: text.into(), md: true, ..Default::default() };
         assert_eq!(super::preview_source(&preview), "Resposta\n");
+    }
+
+    #[test]
+    fn full_history_is_cut_back_to_the_window_only_when_the_reader_is_inside_it() {
+        use super::{history_cut, HISTORY_PAGE, TRIM_MARGIN};
+        let events = HISTORY_PAGE + 600;
+        assert_eq!(history_cut(HISTORY_PAGE, None), 0, "conversa que cabe na janela fica inteira");
+        assert_eq!(history_cut(events, None), 600, "no fim da conversa sai tudo antes da janela");
+        assert_eq!(history_cut(events, Some(600 + TRIM_MARGIN)), 600, "lendo dentro da janela, com a folga");
+        assert_eq!(history_cut(events, Some(600 + TRIM_MARGIN - 1)), 0, "colado ao começo da janela, espera");
+        assert_eq!(history_cut(events, Some(100)), 0, "lendo lá atrás, nada sai");
+    }
+
+    #[test]
+    fn streamed_preview_source_equals_the_full_pass_and_keeps_finished_lines() {
+        use super::{preview_source, Preview, PreviewSource};
+        let text = concat!(
+            "Resumo com **negrito aberto\ne `código` em src/app.rs:12 e <b>tag</b>.\n\n",
+            "- item um com [link](https://a.b/c)\n- item dois ![img](/tmp/g.png) e `a < b`\n\n",
+            "```rust\nlet x = \"<div>\"; // src/main.rs:3\n```\n\n",
+            "````md\n```\ndentro <i>\n````\n\n",
+            "~~~\ntil <p>\n~~~\n",
+            "<proposed_plan>\nplano com `crase aberta\ne <span> depois\n</proposed_plan>\n\n",
+            "| Conta | Uso |\n|---|---|\n| Kimi | <62%> |\n\n",
+            "<hangar-ref kind=\"quote\" v=\"1\" source=\"s:1\">\n<hangar-text>\ntrecho **citado**\n</hangar-text>\n</hangar-ref>\n\n",
+            "Título\n-\n\ntexto final com [link pendente](https://x.y/z e ~~risco",
+        );
+        let cuts: Vec<usize> = text.char_indices().map(|(at, _)| at).chain([text.len()]).collect();
+        for step in [1, 7, 41] {
+            let mut cache = PreviewSource::default();
+            for &end in cuts.iter().step_by(step).chain([&text.len()]) {
+                let preview = Preview { text: text[..end].to_owned(), md: true, ..Default::default() };
+                assert_eq!(cache.source(&preview), preview_source(&preview), "passo {step}, corte em {end}");
+            }
+            let kept = crate::interaction::plan_display(text).rfind("\n\n").unwrap();
+            assert!(cache.stable.len() > kept, "passo {step}: as linhas prontas ficam guardadas ({} de {kept})", cache.stable.len());
+            // Outra resposta, que não continua a guardada: nada do que ficou vale.
+            for other in ["Outra <b>resposta</b>\n\ncom `código", &text[..40]] {
+                let preview = Preview { text: other.to_owned(), md: true, ..Default::default() };
+                assert_eq!(cache.source(&preview), preview_source(&preview), "passo {step}, troca para {other:?}");
+            }
+        }
+        // Rodapé de memória some até o fim do texto e volta quando fecha: o guardado não pode esconder o resto.
+        let mut cache = PreviewSource::default();
+        for text in ["Resposta\n\nmais\n", "Resposta\n\nmais\n<oai-mem-citation>M.md:1\nx\n", "Resposta\n\nmais\n<oai-mem-citation>M.md:1\nx\n</oai-mem-citation>\nfim <b>\n"] {
+            let preview = Preview { text: text.to_owned(), md: true, ..Default::default() };
+            assert_eq!(cache.source(&preview), preview_source(&preview), "{text:?}");
+        }
+        // Prévia que não é markdown não passa pelo guardado.
+        let plain = Preview { text: "a < b\n".into(), md: false, ..Default::default() };
+        assert_eq!(PreviewSource::default().source(&plain), preview_source(&plain));
     }
 
     #[test]

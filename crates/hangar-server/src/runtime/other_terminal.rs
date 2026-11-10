@@ -124,10 +124,18 @@ mod tests {
         reused.provider = hangar_transcript::Provider::Kimi;
         assert!(!original.same_life(&reused));
     }
-    struct CountingIo(std::sync::atomic::AtomicUsize);
+    #[derive(Default)]
+    struct CountingIo {
+        strict: std::sync::atomic::AtomicUsize,
+        observed: std::sync::atomic::AtomicUsize,
+    }
     impl OtherIo for CountingIo {
         fn prove<'a>(&'a self, _: &'a OtherTarget) -> BoxFuture<'a, Result<bool, RuntimeError>> {
-            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.strict.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async { Ok(true) })
+        }
+        fn prove_observed<'a>(&'a self, _: &'a OtherTarget) -> BoxFuture<'a, Result<bool, RuntimeError>> {
+            self.observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Box::pin(async { Ok(true) })
         }
         fn capture<'a>(&'a self) -> BoxFuture<'a, Result<OtherFrame, RuntimeError>> {
@@ -152,10 +160,35 @@ mod tests {
             Arc::new(crate::interactions::InteractionStore::default()),
         );
         let observer = Observer::new(&target, &options).unwrap();
-        let counting = Arc::new(CountingIo(Default::default()));
+        let counting = Arc::new(CountingIo::default());
         let io: Arc<dyn OtherIo> = counting.clone();
         observer.read(&target, &io, false).await.unwrap();
-        assert_eq!(counting.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+        let count = |counter: &std::sync::atomic::AtomicUsize| counter.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!((count(&counting.observed), count(&counting.strict)), (1, 0), "a rodada prova a vida uma vez, com a prova de quem observa");
+    }
+    #[tokio::test]
+    async fn other_terminal_round_without_change_does_not_republish_the_snapshot() {
+        let root = tempfile::tempdir().unwrap();
+        let mut target = target();
+        target.transcript = root.path().join("conversation-a.jsonl");
+        std::fs::write(&target.transcript, b"").unwrap();
+        let options = OtherOptions::new(
+            crate::terminal_control::TerminalPool::new(),
+            crate::provider_models::inbox::Store::new(),
+            Arc::new(crate::list::procs::SystemProcs::default()),
+            Arc::new(crate::interactions::InteractionStore::default()),
+        );
+        let mut observer = Observer::new(&target, &options).unwrap();
+        let io: Arc<dyn OtherIo> = Arc::new(CountingIo::default());
+        let live = tokio::sync::watch::channel(None).0;
+        let (snapshots, mut seen) = tokio::sync::watch::channel(snapshot_value(&target, &[], None));
+        let frames = tokio::sync::watch::channel(None).0;
+        observer.round(&target, &options, &io, &live, &snapshots, &frames, false).await.unwrap();
+        assert!(seen.has_changed().unwrap(), "a primeira rodada publica o estado");
+        let first = seen.borrow_and_update().clone();
+        observer.round(&target, &options, &io, &live, &snapshots, &frames, false).await.unwrap();
+        assert_eq!(*snapshots.borrow(), first);
+        assert!(!seen.has_changed().unwrap(), "rodada sem mudança republicou o retrato");
     }
 }
 
@@ -278,6 +311,10 @@ pub struct OtherWriteGuard {
 /// Fronteira de E/S: testes não substituem fila, interações nem regras do próprio runtime.
 pub trait OtherIo: Send + Sync {
     fn prove<'a>(&'a self, target: &'a OtherTarget) -> BoxFuture<'a, Result<bool, RuntimeError>>;
+    /// A prova de quem só observa: pode aceitar leitura recente do sistema. Quem escreve usa `prove`.
+    fn prove_observed<'a>(&'a self, target: &'a OtherTarget) -> BoxFuture<'a, Result<bool, RuntimeError>> {
+        self.prove(target)
+    }
     fn capture<'a>(&'a self) -> BoxFuture<'a, Result<OtherFrame, RuntimeError>>;
     fn write<'a>(
         &'a self,
@@ -770,15 +807,26 @@ async fn publish_snapshot(
     alive: Option<bool>,
 ) -> Result<(), RuntimeError> {
     let state = queue.snapshot().await.map_err(|_| failed("queue_io"))?;
-    let mut next = snapshot.borrow().clone();
-    next["queue"] = serde_json::to_value(&state.rows).map_err(|_| failed("queue_io"))?;
-    if let Some(alive) = alive {
-        next["view"]["alive"] = json!(alive);
-    }
-    next["key"] = json!(target.key);
-    next["generation"] = json!(target.generation);
-    snapshot.send_replace(next);
+    snapshot.send_if_modified(|next| {
+        let mut changed = next["queue"].as_array().is_none_or(|rows| *rows != state.rows);
+        if changed {
+            next["queue"] = Value::Array(state.rows.clone());
+        }
+        if let Some(alive) = alive {
+            changed |= replace(&mut next["view"]["alive"], json!(alive));
+        }
+        changed |= replace(&mut next["key"], json!(target.key));
+        changed | replace(&mut next["generation"], json!(target.generation))
+    });
     Ok(())
+}
+/// Troca o campo só se o valor mudou: o retrato igual não é republicado a cada rodada.
+fn replace(slot: &mut Value, value: Value) -> bool {
+    let changed = *slot != value;
+    if changed {
+        *slot = value;
+    }
+    changed
 }
 
 struct Observer {
@@ -879,13 +927,16 @@ impl Observer {
                     next.preview = event.text;
                     next.preview_flags = Some((event.md, event.full, event.vivo));
                 }
-                let mut view = snapshot.borrow().clone();
-                view["error"] = Value::Null;
-                view["view"]["alive"] = json!(true);
-                view["view"]["public_state"] = next.public_state.clone();
-                view["view"]["in_progress"] = json!(progress);
-                view["view"]["working_revision"] = json!(self.working_revision);
-                snapshot.send_replace(view);
+                snapshot.send_if_modified(|view| {
+                    let mut changed = replace(&mut view["error"], Value::Null);
+                    changed |= replace(&mut view["view"]["alive"], json!(true));
+                    if view["view"]["public_state"] != next.public_state {
+                        view["view"]["public_state"] = next.public_state.clone();
+                        changed = true;
+                    }
+                    changed |= replace(&mut view["view"]["in_progress"], json!(progress));
+                    changed | replace(&mut view["view"]["working_revision"], json!(self.working_revision))
+                });
                 frames.send_replace(Some(Arc::new(frame)));
                 if prior.as_ref().is_none_or(|prior| **prior != next) {
                     live.send_replace(Some(Arc::new(next)));
@@ -943,7 +994,7 @@ impl Observer {
         })
         .await
         .map_err(|_| failed("other_terminal_observation_worker"))??;
-        if !io.prove(target).await? {
+        if !io.prove_observed(target).await? {
             return Err(failed("other_terminal_life_changed"));
         }
         Ok((observed, frame))
@@ -978,8 +1029,10 @@ async fn confirm(
         && snapshot.borrow()["view"]["public_state"]["state"] != "working" {
         let state = queue.snapshot().await.map_err(|_| failed("queue_io"))?;
         let sample = clock();
-        queue.exec(target.generation, &format!("other-unproved:{}", state.next_seq), sample,
-            Action::GiveUpUnproved {now:sample.epoch_s, grace:30.0}).await.map_err(|_| failed("queue_io"))?;
+        if state.unproved_due(sample.epoch_s, 30.0) {
+            queue.exec(target.generation, &format!("other-unproved:{}", state.next_seq), sample,
+                Action::GiveUpUnproved {now:sample.epoch_s, grace:30.0}).await.map_err(|_| failed("queue_io"))?;
+        }
     }
     publish_snapshot(target, queue, snapshot, None).await?;
     Ok(json!({"confirmed":confirmed.len()+legacy}))

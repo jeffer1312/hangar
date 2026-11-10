@@ -333,13 +333,6 @@ async fn guest_forward_is_signed_and_carries_no_invite_token() {
     assert_eq!(h["x-forwarded-for"], "127.0.0.1");
     assert_eq!(verified(&h, "GET", "/api/sessions/cc/plan-preview")["s"], json!({"cc": "share"}));
 
-    // Rota global (fora de sessão) também vai assinada, e o Bearer não segue.
-    let r = client().get(format!("http://{}/api/model-options", srv.guest)).bearer_auth(&t).send().await.unwrap();
-    assert_eq!(r.status(), 200);
-    let (path, h) = srv.python.last_hit();
-    assert_eq!(path, "/api/model-options");
-    assert!(!h.contains_key("authorization"));
-    verified(&h, "GET", "/api/model-options");
 }
 
 /// IP desta máquina na rede da casa; `None` sem rede (o teste que precisa dele não roda).
@@ -579,6 +572,29 @@ async fn guest_mod_click_on_a_rust_terminal_without_surface_is_503() {
         json!({"site": "x", "plugin": "p", "key": "k"})).await;
     assert_eq!((status, body["detail"]["code"].as_str()), (503, Some("erro_mod_clique_sem_resposta")));
     assert_eq!(srv.python.hits_to("/api/sessions/t/plugin/press"), 0);
+    // A digitação também: o Python respondia o mesmo 503 a convidado em terminal do Rust.
+    let (status, body) = post_json(format!("http://{}/api/sessions/t/plugin/input", srv.guest), &t,
+        json!({"site": "x", "plugin": "p", "key": "k", "kind": "change", "value": "o"})).await;
+    assert_eq!((status, body["detail"]["code"].as_str()), (503, Some("erro_mod_clique_sem_resposta")));
+    assert_eq!(srv.python.hits_to("/api/sessions/t/plugin/input"), 0);
+}
+
+/// R1.5-6: o convidado numa sessão sem mods no Rust recebe a mesma recusa fixa do dono, sem o Python.
+#[tokio::test(flavor = "multi_thread")]
+async fn guest_mod_on_a_session_outside_the_rust_gets_the_fixed_answer() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = plain_srv(dir.path(), |st| {
+        let _ = st.state.runtime.set(Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "secret-test".into(), "instance-test".into())));
+    }).await;
+    let t = srv.g.token("o", Kind::Share);
+    let url = |op: &str| format!("http://{}/api/sessions/o/plugin/{op}", srv.guest);
+    assert_eq!(post_json(url("press"), &t, json!({"site": "x", "plugin": "p", "key": "k"})).await.1["detail"]["code"], "mods_need_rust_server");
+    assert_eq!(post_json(url("close"), &t, json!({"site": "x"})).await.1["detail"]["code"], "mods_need_rust_server");
+    assert_eq!(post_json(url("show"), &t, json!({"site": "x"})).await.0, 404);
+    assert_eq!(post_json(url("input"), &t, json!({"site": "x", "plugin": "p", "key": "k", "kind": "change", "value": "o"})).await.0, 409);
+    for op in ["press", "close", "show", "input"] {
+        assert_eq!(srv.python.hits_to(&format!("/api/sessions/o/plugin/{op}")), 0, "{op}");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

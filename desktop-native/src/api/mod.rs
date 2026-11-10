@@ -252,6 +252,13 @@ fn failure_detail(body: Option<Value>, status: u16) -> String {
                     return Some(message);
                 }
             }
+            // Plugins do Claude: a frase pelo código; a recusa da CLI leva a mensagem dela, e sem mensagem fica a frase curta.
+            if let Some(code) = fields.get("code").and_then(Value::as_str).filter(|code| code.starts_with("plugins_")) {
+                let message = fields.get("params").and_then(|p| p.get("message")).and_then(Value::as_str).filter(|m| !m.trim().is_empty());
+                let key = if code == "plugins_cli_failed" && message.is_none() { "plugins_cli_failed_plain" } else { code };
+                let params = std::collections::HashMap::from([("message".to_owned(), message.unwrap_or("").to_owned())]);
+                if let Some(text) = crate::i18n::tr_web(key, &params) { return Some(text); }
+            }
             if let Some(code) = fields.get("code").and_then(Value::as_str).filter(|code| code.starts_with("erro_run_code_")) {
                 let params = fields.get("params").and_then(Value::as_object).map(|p| p.iter()
                     .map(|(k, v)| (k.clone(), v.as_str().map_or_else(|| v.to_string(), str::to_owned))).collect()).unwrap_or_default();
@@ -1197,6 +1204,15 @@ mod tests {
         for code in ["erro_pareamento_desfeito", "erro_sessao_nao_pareada", "erro_peer_nao_avisado", "erro_group_message_tempestade"] {
             assert_ne!(detail(code), "frase fixa do servidor", "{code}");
         }
+    }
+
+    #[test]
+    fn plugin_errors_use_the_phrase_of_the_code_with_the_cli_message() {
+        crate::i18n::english_in_this_thread(false);
+        let detail = |code: &str, params: Value| failure_detail(Some(json!({"detail": {"code": code, "params": params, "msg": "msg cru"}})), 409);
+        assert_eq!(detail("plugins_busy", json!({})), "Outra mudança de plugins está rodando. Espere ela terminar.");
+        assert_eq!(detail("plugins_cli_failed", json!({"message": "boom"})), "O Claude Code recusou a operação: boom");
+        assert_eq!(detail("plugins_cli_failed", json!({})), "O Claude Code recusou a operação.");
     }
 
     #[test]

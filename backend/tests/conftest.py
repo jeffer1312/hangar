@@ -168,19 +168,6 @@ def _isolated_runtime_storage(tmp_path_factory):
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _sem_endereco_do_plugin_real():
-    # O `_lifespan` grava ~/.hangar/plugin.json; sem isto o TestClient trocaria o arquivo da máquina
-    # pela config do teste e as sessões vivas do plugin falariam com um backend que não existe.
-    from app import plugin_bridge
-    original = plugin_bridge.publish_address
-    plugin_bridge.publish_address = lambda home=None: None
-    try:
-        yield
-    finally:
-        plugin_bridge.publish_address = original
-
-
-@pytest.fixture(scope="session", autouse=True)
 def _sem_orquestracoes_reais(tmp_path_factory):
     # O Rust resolve o cofre pela casa do processo; um patch no módulo Python não o isolaria.
     pasta = tmp_path_factory.mktemp("rust-home")
@@ -411,31 +398,6 @@ def paleta_azul():
 @pytest.fixture
 def paleta_vermelha():
     return PALETA_VERMELHA
-
-
-@pytest.fixture
-def models_cache_em_tmp(tmp_path, monkeypatch):
-    # O cache de modelos tem espelho em DISCO dentro do config dir (.hangar-models.json):
-    # sem o redirecionamento, os testes das rotas de model-options ESCREVEM no ~/.claude real de
-    # quem roda a suite, e os testes seguintes leem esse cache no lugar do mock. NAO e autouse
-    # global de proposito: a versao autouse derrubava os mocks de test_tmux quando rodava na
-    # suite cheia (interacao de fixtures via test_codex_adapter); cada arquivo que exercita as
-    # rotas liga o isolamento com um autouse local de uma linha (test_api.py e
-    # test_model_options_api.py).
-    from app import api
-
-    def _path_de_teste(chave: str):
-        # A chave e um CAMINHO (o config dir). Trocar so a barra bastava no POSIX; no Windows
-        # sobram `\` e o `:` do drive, que sao invalidos em nome de arquivo — o teste morria com
-        # WinError 123 antes de exercitar qualquer rota. `_sanitizar` tira tudo que nao serve pra
-        # nome, e o proposito continua o mesmo: um arquivo por chave, dentro do tmp_path.
-        seguro = "".join(c if c.isalnum() or c in "-._" else "_" for c in chave)
-        return tmp_path / f"models-{seguro}.json"
-
-    monkeypatch.setattr(api, "_models_cache_path", _path_de_teste)
-    api._claude_models_cache.clear()
-    yield
-    api._claude_models_cache.clear()
 
 
 @pytest.fixture

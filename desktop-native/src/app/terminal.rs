@@ -244,12 +244,10 @@ impl Hangar {
     /// Painel aberto no rodapé, não maximizado: divide a coluna com a conversa.
     pub(super) fn terminal_docked(&self) -> bool { self.terminal.as_ref().is_some_and(|panel| !panel.maximized) }
 
-    /// Do painel encaixado: a altura que `render_terminal` pede (a escolhida, cortada pela janela) e a que apareceu no
-    /// último desenho.
-    pub(super) fn docked_terminal_height(&self, window: &Window) -> Option<(f32, f32)> {
+    /// Do painel encaixado, a altura que `render_terminal` pede: a escolhida, cortada pela janela.
+    pub(super) fn docked_terminal_height(&self, window: &Window) -> Option<f32> {
         let limit = (f32::from(window.viewport_size().height) - 120.).max(120.);
-        self.terminal.as_ref().filter(|panel| !panel.maximized)
-            .map(|panel| (panel.height.min(limit).max(TERMINAL_MIN_HEIGHT), panel.shown.get()))
+        self.terminal.as_ref().filter(|panel| !panel.maximized).map(|panel| panel.height.min(limit).max(TERMINAL_MIN_HEIGHT))
     }
 
     pub(super) fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -542,6 +540,7 @@ impl Hangar {
             }
             Reply::Socket(id, uid, generation, event) => {
                 let Some(panel) = self.terminal.as_mut().filter(|panel| panel.id == id) else { return; };
+                let shown = panel.tabs.get(panel.active).is_some_and(|slot| slot.uid == uid);
                 let Some(slot) = panel.tabs.iter_mut().find(|slot| slot.uid == uid && slot.generation == generation) else { return; };
                 match event {
                     Ok(ws::Event::Connected) => {
@@ -551,7 +550,16 @@ impl Hangar {
                         slot.fixture_loaded = false;
                         slot.status = Status::Connected;
                     }
-                    Ok(ws::Event::Data(bytes)) => { slot.view.feed(&bytes); Self::flush_terminal(slot); }
+                    Ok(ws::Event::Data(bytes)) => {
+                        let changed = slot.view.feed(&bytes);
+                        Self::flush_terminal(slot);
+                        // Saída do programa chega o tempo todo: repinta só a raiz, onde o terminal é desenhado, e só da
+                        // aba à vista. O `notify` do `Hangar` acordaria todas as áreas guardadas.
+                        if !matches!(slot.status, Status::Failed(_)) {
+                            if changed && shown && !motion::tick_root(cx) { cx.notify(); }
+                            return;
+                        }
+                    }
                     Ok(ws::Event::Closed) => {
                         crate::log_line(&format!("terminal {}: o servidor fechou o socket", slot.name));
                         slot.socket = None; slot.status = Status::Failed(tr("term_disconnected"));

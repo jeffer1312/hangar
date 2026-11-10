@@ -73,6 +73,18 @@ impl Probe {
         }
         result
     }
+    /// O stdout do `--help`, qualquer que seja o código de saída. `None`: sem o programa, ou sonda que
+    /// não respondeu (só esta avisa).
+    pub async fn help_text(&self, env: &AccountEnvironment, cli: &str) -> Option<String> {
+        match self.raw(env, cli, "--help").await {
+            Ok(None) => None,
+            Err(error) => {
+                tracing::warn!(cli, %error, "Sonda de ajuda falhou");
+                None
+            }
+            Ok(Some(out)) => Some(out.stdout),
+        }
+    }
     pub async fn version_text(&self, env: &AccountEnvironment, cli: &str) -> Option<String> {
         match self
             .raw(env, cli, if cli == "tmux" { "-V" } else { "--version" })

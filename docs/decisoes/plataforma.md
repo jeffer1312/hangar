@@ -293,8 +293,10 @@ Este
 `/api/ditado/relimpar`, `/api/dictation/models` e status/teste de provedores de transcrição
 chamam os motores dentro do Rust. As portas Python não as atendem nem repassam: por elas
 (convidado com login próprio, 8768) e no modo `python`, o ditado responde 404.
-Os fatos de configuração continuam no Python, sem chamar o Rust de volta; as pontes de
-catálogo só ficam onde ainda têm consumidores. TTS é outra capacidade: sua migração e a dos
+Desde 09/11/2026, transcrição e organização leem a configuração efetiva pelo `RuntimeConfig`
+do Rust, preservando a precedência do arquivo sobre o ambiente, os provedores em ordem,
+a opção legada e o vocabulário. A rota interna `/internal/transcription/config` foi removida;
+as pontes de catálogo só ficam onde ainda têm consumidores. TTS é outra capacidade: sua migração e a dos
 consumidores de narração estão descritas em [Leitura, narração e traduções no Rust](#leitura-narração-e-traduções-no-rust-29102026).
 
 As referências de equivalência vêm da execução do Python antes da remoção e estão escritas em
@@ -848,6 +850,22 @@ retrato de processos (~5 ms) e linha de comando e ambiente dos processos das ses
 Python não pagava isso porque guardava a lista por 1 s. O usuário aceitou esse custo para manter
 vida e identidade da sessão conferidas na hora, sem guarda por tempo. Cortar mais só lendo os
 processos da sessão pedida, mexendo na descoberta que a lista também usa.
+
+**Citações sem reler o transcript inteiro (10/11/2026).** Cada pedido de `/file`, `/file/text` e
+`files/resolver` relia a conversa do começo ao fim para saber se o caminho foi citado. O
+`citations.rs` guarda, por transcript e por pergunta, até onde ela leu e o que achou, e lê só o que
+entrou depois. Relê do começo quando o arquivo é outro (dispositivo e inode no Unix), quando o
+tamanho ficou menor que o ponto guardado ou quando os 64 bytes antes do ponto mudaram. Linha final
+sem `\n` entra na resposta do pedido e não avança o ponto. Tetos: 64 transcripts e 512 perguntas por
+transcript; ao encher, esvazia. A resposta é a da leitura completa: o guardado só diz "citado" para
+o que esteve naquele arquivo.
+
+Medido em release, no transcript de 481 MB desta máquina, com o cache de página quente: `cwds` de
+um caminho levava 248–255 ms; agora 249–262 ms na primeira vez e 0,0 ms repetida. `elsewhere`
+levava 201–220 ms; repetida, 0,2–0,3 ms. Não resolve: o primeiro pedido de cada caminho novo ainda
+lê o arquivo inteiro, então dez miniaturas de caminhos diferentes custam dez leituras na primeira
+vez. No Windows não há identidade de arquivo nesse crate: só o tamanho e os 64 bytes detectam a
+troca.
 
 ## Chave do Jev: no runtime_config, e na sessão só por escolha da abertura
 
@@ -2666,16 +2684,19 @@ Antes, parear com `servidor::sessao` fazia um par 1:1 que não crescia, e `--gro
 - **Limites registrados.** Só o Claude reinjeta o protocolo depois de `/clear` ou compactação
   (Codex, Pi, omp e Kimi perdem). A sugestão de tarefa do grupo (`/api/pair/task-suggestion`,
   Python) só lê conversas desta máquina.
-- **Pela 8768, recado a sessão do Python volta na resposta.** `group.leave` da ponte e as rotas
-  `/api/groups/*` repassadas da porta do Connect rodam sob o contexto da ponte: recado a Pi, omp
-  ou Kimi não chama o `/input` do Python dentro do pedido dele. Na saída vem em `deliveries`; nas
-  rotas entre máquinas, em `hangar_deliveries` no corpo, que o Python tira da resposta e entrega
-  depois dela (falha vai ao diário como `grupos.entrega_adiada_falhou`). Limites aceitos: nessas
-  rotas o recado adiado conta como entregue em `failed`/`pulados`; o `orq` (`is-orchestrator`,
-  fase, promoção) ainda é perguntado ao Python dentro do pedido, porque a outra máquina não manda
-  esses fatos; e o protocolo ao membro novo e o aviso de saída que saem depois da resposta
-  (`tell_newcomers`, `local_apply`, `relay_outside`) chamam o Python direto, fora do pedido.
-  Prova: `bridged_leave_never_calls_python`, `connect_forwarded_deliver_defers_python_sessions`.
+- **Pela 8768, recado a sessão sem entrada no Rust sai depois da rota, pelo próprio Rust.**
+  `group.leave` da ponte e as rotas `/api/groups/*` repassadas da porta do Connect rodam sob o
+  contexto da ponte: o recado a uma sessão sem entrada no Rust não é digitado dentro do pedido;
+  sai depois da rota, em processo (`groups/bridge.rs`, `deliver_deferred`), na ordem por sessão e
+  com as sessões em paralelo. Pela porta do Connect cada sessão tem 3 s; pela ponte do Python, o
+  que sobra de 75 s desde o começo do pedido. Quem não recebeu entra em `failed`/`pulados` (como
+  `servidor::sessão`) ou no `warning`, e no diário como `rust.groups_deferred_failed` ou
+  `rust.groups_bridge_delivery_failed`. Limite aceito: o prazo larga a espera sem cancelar a
+  entrega, então um recado marcado como não entregue ainda pode chegar. O mecanismo anterior, em
+  que o recado voltava ao Python na resposta, está em
+  [superado.md](superado.md#recado-adiado-devolvido-ao-python-na-resposta).
+  Prova: `bridged_leave_never_calls_python`, `connect_forwarded_deliver_never_returns_work_to_python`,
+  `connect_forwarded_notice_delivers_unowned_sessions_after_the_route_within_three_seconds`.
 
 ## Organização opcional do ditado no Rust
 
@@ -4321,3 +4342,91 @@ e Caddy 2.11.6 pelo caminho real (wss até `connect.hangar.dev.br`, traefik 3.6.
 Não testado: renovação, a CA de produção e um nome que dependa só do curinga novo
 `*.hangar.dev.br`. Cargas e logs completos em
 `.superpowers/sdd/2026-11-06-hangar-connect-rust/prova-tunel.md` da árvore principal.
+
+## O Rust atende sozinho o que ainda repassava com trabalho real (10/11/2026)
+
+Primeira metade do fim da reserva do modo python. Com o Rust de pé, o dono não chega mais ao Python
+para: texto e broadcast a sessão sem entrada no Rust, fechar sessão, `model-effort`, mods fora do
+Rust, publicar `plugin.json`/`plugin-dir` na subida e baixar os preços do models.dev.
+
+Diferenças em relação ao Python, decididas pelo dono:
+
+- Codex rodando direto no tmux só recebe texto com o campo vazio e pronto. Com menu, diálogo, popup de
+  barra ou rascunho, 409 na hora (`codex_menu_open`, `codex_composer_busy`), sem fila: o Python
+  digitava por cima, e adiar na fila perdia o recado, porque nada drena a fila de um Codex sem ator.
+- Comando de barra nesse Codex leva um Enter; o segundo, que o Python sempre mandava, só sai com o
+  comando ainda na caixa. Medido no Codex 0.167: depois de um Enter o `/resume` mostra a lista de
+  conversas (rodapé `enter resume`), e outro Enter retomaria a que está sob o cursor.
+- A caixa do Codex é lida até a barra de estado, com as linhas em branco dos parágrafos: lida só até a
+  primeira linha em branco, um texto com parágrafos nunca provava a digitação.
+- Shell ou programa desconhecido no pane: 400 na hora. O Python esperava 14 s por um agente nascendo,
+  que o Rust adota.
+- `DELETE` com processo que não morre: 500 `session_kill_unconfirmed`, com fila, sidecar, convite e
+  a fotografia de restauração intactos. `DELETE` de sessão já morta: 200, sem erro de tmux no diário.
+- `model-effort` fora do Claude: 409 `erro_model_effort_so_claude` (nenhum cliente o manda).
+- Mods fora do Rust: 503; lista de convidado com convite revogado: 410 `erro_convite_encerrado`.
+- Preços: resposta válida sem nenhum modelo conhecido conserva a tabela anterior.
+- Corpo fora de forma: 422 `erro_corpo_invalido`.
+
+Medido: os testes do lote (936) passam no código novo; dos testes novos, 58 falham no código de
+antes e 3 passam nos dois lados por afirmarem o que não mudou. Não conferido: uso real no servidor
+do dono e desempenho. Iguais ao Python e ainda abertos: a sonda do `claude` que falha apaga o
+`plugin-dir`; tmux que não responde vira 404; Enter sem prova no Codex cru conta como entregue.
+Fica no Python até o convidado por login sair dele: `/input`, `/api/broadcast`, `registry.kill` e
+`set_model_effort` para quem entra pela 8766.
+
+**Dívida registrada: módulos novos dentro do `hangar-server`.** Três arquivos desta migração nasceram
+no servidor, contra a regra "módulo novo nasce como crate próprio":
+
+- `costs/pricing_refresh.rs` mora em `costs/`, que a Task 6 do
+  [plano da divisão](../superpowers/plans/2026-11-06-split-hangar-server.md) leva inteiro para o
+  `hangar-costs`, com o `py::normalized_number` de que ele depende. Extrair só este arquivo antes
+  criaria um crate que a Task 6 fundiria em seguida.
+- `session_write/unowned.rs` e `runtime/close_name.rs` são partes de `session_write` e `runtime`,
+  o nó que o plano deixa para a segunda fase (`runtime`/`accounts`/`list`/`session_open`/
+  `session_write`). Eles usam `AppState`, `ListBridge`, `RuntimeRegistry` e `ProcessOtherIo`; tirá-los
+  agora pede os traits de descoberta de panes, condução do terminal e registro que essa fase define.
+
+Saem do servidor com as áreas a que pertencem, nessas duas etapas do plano.
+
+## Plugins do Claude na tela: a CLI oficial na pasta principal (09/11/2026)
+
+A tela de Plugins chama `claude plugin …` (CLI 2.1.319) com a pasta padrão `~/.claude`, sem
+`CLAUDE_CONFIG_DIR`. Provas feitas em pastas de config descartáveis, salvo a do reabrir:
+
+- **Saída em JSON.** `list --json` (0,4 s), `list --json --available` (2,7 s) e
+  `install|uninstall|enable|disable|update … --json` imprimem o JSON na última linha da stdout; na
+  falha vem `outcome: failed`, `failureCode` (`not_found`, `not_installed_at_scope`), o `✘` na stderr e
+  rc 1. `plugin details` só sai em texto. `marketplace update --json` exige nome; sem nome e sem
+  `--json` atualiza todos e só imprime texto.
+- **`--` e `-s user` são aceitos** em install, update, enable, disable, uninstall e em
+  `marketplace add|update|remove` (`install -s user --json -- -x@caveman` tratou `-x@caveman` como id).
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, `DISABLE_AUTOUPDATER=1` e `DISABLE_UPDATES=1` não
+  atrapalham add, install nem update.
+- **Versão nova.** O `update` compara a versão: `version` do `plugin.json` do plugin no clone do
+  marketplace, senão a da entrada do `marketplace.json`, senão 12 caracteres do `HEAD` do clone.
+  Conteúdo mudado sem versão nova responde `up_to_date`. Fonte externa (`source: url` + `sha`): a
+  versão é a do `plugin.json` naquele commit e o `version` da entrada é ignorado; sha novo com a
+  mesma versão também dá `up_to_date`. Por isso, para fonte externa, a versão nova não se descobre
+  pelo disco.
+- **Remover apaga a chave.** `uninstall` e `marketplace remove` tiram `enabledPlugins[id]` do
+  `settings.json`; o espelho de contas não apaga o que falta no principal. Depois de remover, o
+  Hangar grava `false` no principal.
+- **Sem trava no `settings.json` nem no `installed_plugins.json`.** A CLI grava os dois por tmp +
+  rename; só `known_marketplaces.json` (pasta `.lock`, com queda para gravar sem ela) e
+  `.claude.json` têm trava. O cadeado do Hangar só coordena o próprio Hangar; o estado é sempre
+  relido do disco depois da operação.
+- **`autoUpdate`.** Mora em `extraKnownMarketplaces.<nome>.autoUpdate`; a abertura copia o valor para
+  o `known_marketplaces.json` (`Synced autoUpdate=false from settings for marketplace: caveman`).
+  Pelo código, o settings vence e, sem a chave, vale `true` só para os marketplaces oficiais.
+  Não provado na prática: a passada de atualização só roda com login, até 10 min depois de abrir.
+  Nomes no pacote 2.1.319, de onde `disk.rs` copiou as regras: embutido `ptt`, oficiais `fbt`
+  menos `rf`, precedência `BVe`, forma do `shownCommand` em `mrt`/`sMo`.
+- **Reabrir não reconcilia a conta.** Com `watch@claude-video` desligado no principal, o
+  `POST /recarregar` de duas sessões de `~/.claude-claude-200-3` deixou a cópia da conta com `true` e
+  a skill carregada; uma sessão nova na conta reconciliou (`false`, sem a skill). Corrigido: toda
+  subida de processo Claude em conta do Hangar reconcilia a conta antes (`reopen_by_spec`, e no
+  `gateway.rs` o `launch_if_needed` e o `reopen_headless_locked`, que cobrem `adopt_now`, acordar e o
+  religar depois de queda); a escolha de plugins da conversa segue valendo por cima. Falha na
+  reconciliação não sobe o processo: o reabrir responde 409 e a sessão sem terminal fica com
+  `headless_nao_subiu`.

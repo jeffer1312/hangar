@@ -23,7 +23,7 @@ use tokio::sync::{broadcast, mpsc};
 use crate::auth::{self, Auth};
 use crate::config::Config;
 use crate::proxy::{self, Forward, HttpClient};
-use crate::share::caller::{Caller, SessionPath, caller};
+use crate::share::caller::{Caller, SessionPath};
 use crate::share::pair_routes::PairState;
 use crate::side::{Binding, Hub, Hubs, Lease, Out, Queued, SideCtx};
 use crate::tail::{self, Watchers};
@@ -144,6 +144,8 @@ pub struct AppState {
     pub vault: Arc<crate::vault::Vault>,
     /// Pedidos do cofre (aprovação e cadastro) na memória; o `hub` publica o evento `vault` deles.
     pub vault_requests: Arc<crate::vault::requests::Requests>,
+    /// Cadeado das mudanças em plugins do Claude e o último `check` bem-sucedido.
+    pub claude_plugins: Arc<crate::plugins::Service>,
 }
 
 impl AppState {
@@ -283,6 +285,7 @@ impl AppState {
             vault: Arc::new(crate::vault::Vault::system()),
             hub: Arc::new(crate::list::hub::ListHub::with_vault(vault_requests.feed())),
             vault_requests,
+            claude_plugins: Arc::default(),
             hangar_dir, device_install,
             upload_naming: Default::default(),
             origins: std::sync::Mutex::new(indexmap::IndexMap::new()),
@@ -325,15 +328,8 @@ impl AppState {
 
 pub(crate) use crate::locate::InfoFailed;
 
-/// Falha do Rust numa rota que é dele: 503 com o código, que o app mostra, e uma linha no diário.
-/// `detail` é o envelope que o `lerErro` do app já traduz; `reason` é frase fixa, nunca conversa.
 pub(crate) fn route_failed(st: &AppState, req: &HeaderMap, event: &'static str, name: &str, code: &'static str, reason: &'static str) -> Response {
-    st.diag.report(event, name, code, reason);
-    let body = serde_json::json!({"ok": false, "error_code": code, "message": reason,
-        "detail": {"code": code, "params": {"motivo": reason}, "msg": format!("{reason} — {code}")}}).to_string();
-    let mut resp = (StatusCode::SERVICE_UNAVAILABLE, [(header::CONTENT_TYPE, "application/json")], body).into_response();
-    cors(req, resp.headers_mut());
-    resp
+    hangar_core::edge::route_failed(&st.diag, req, event, name, code, reason)
 }
 
 pub(crate) const INFO_REASON: &str = "o backend não devolveu os dados da sessão";
@@ -734,7 +730,6 @@ fn terminal_router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> 
         .route("/__hangar_server/groups", axum::routing::post(crate::groups::bridge::private))
         .route("/__hangar_server/codex/{*rest}", axum::routing::any(crate::session_write::bridge::codex))
         .route("/__hangar_server/claude/{*rest}", axum::routing::any(crate::session_write::bridge::claude))
-        .route("/__hangar_server/mods/{name}/{op}", axum::routing::post(crate::mods::routes::bridge))
         .route("/__hangar_server/jev/aux", axum::routing::any(crate::jev_aux::private))
         .route("/__hangar_server/subagents", get(crate::subagents::private))
         .route("/__hangar_server/share", axum::routing::post(crate::share::bridge::private))
@@ -841,6 +836,20 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/session-defaults", axum::routing::get(crate::session_defaults::handle).put(crate::session_defaults::handle))
         // O que já foi visto do tour do nativo: só o dono, nunca repassado (o Python não tem a rota).
         .route("/api/tour-progress", axum::routing::get(crate::tour_progress::handle).put(crate::tour_progress::handle))
+        // Plugins do Claude da pasta principal: só o dono, nunca repassados (o Python não tem as rotas).
+        .route("/api/plugins", get(crate::plugins::state))
+        .route("/api/plugins/check", axum::routing::post(crate::plugins::check))
+        .route("/api/plugins/available", get(crate::plugins::available))
+        .route("/api/plugins/marketplaces", axum::routing::post(crate::plugins::marketplace_add))
+        .route("/api/plugins/marketplaces/{name}", axum::routing::delete(crate::plugins::marketplace_remove))
+        .route("/api/plugins/marketplaces/{name}/update", axum::routing::post(crate::plugins::marketplace_update))
+        .route("/api/plugins/marketplaces/{name}/auto-update", axum::routing::put(crate::plugins::auto_update))
+        .route("/api/plugins/{id}", axum::routing::delete(crate::plugins::uninstall))
+        .route("/api/plugins/{id}/details", get(crate::plugins::details))
+        .route("/api/plugins/{id}/install", axum::routing::post(crate::plugins::install))
+        .route("/api/plugins/{id}/update", axum::routing::post(crate::plugins::update))
+        .route("/api/plugins/{id}/enable", axum::routing::post(crate::plugins::enable))
+        .route("/api/plugins/{id}/disable", axum::routing::post(crate::plugins::disable))
         // Sugestão de nome da sessão genérica: só o dono, nunca repassada (o Python não tem a rota).
         .route("/api/sessions/{name}/rename-suggestion", axum::routing::post(crate::dictation::rename_suggestion::route).delete(crate::dictation::rename_suggestion::route))
         .route("/api/peers", axum::routing::any(crate::machine_peers::handle))
@@ -986,9 +995,7 @@ pub(crate) fn client_api_reply() -> Response {
     ([(header::CONTENT_TYPE, "application/json")], serde_json::json!({"api": hangar_api::CLIENT_API}).to_string()).into_response()
 }
 
-/// Quem pede e se é o dono, resolvidos uma vez por pedido.
-#[derive(Clone, Default)]
-struct RequestAuth(Arc<tokio::sync::Mutex<Option<(auth::ReceiptContext, Option<String>)>>>);
+use hangar_core::edge::RequestAuth;
 
 async fn request_auth(mut req: Request, next: axum::middleware::Next) -> Response {
     // O porteiro externo e o roteador interno compartilham a mesma admissão.
@@ -1003,89 +1010,24 @@ async fn request_auth(mut req: Request, next: axum::middleware::Next) -> Respons
 
 pub(crate) fn gate(st: &AppState, peer: SocketAddr, req: &Request)
     -> impl std::future::Future<Output = Result<(Forward, bool), auth::AuthError>> + Send + use<> {
-    let (client_ip, https) = st.cfg.trusted.resolve(peer.ip(), req.headers());
-    // A ponte privada do Codex com terminal recebe o pedido já autenticado pela porta do Python.
-    let bridged = req.extensions().get::<crate::session_write::bridge::BridgedOwner>().is_some();
-    let token = auth::presented_token(req.headers(), req.uri().query(), req.method(), https);
-    let source = if req.headers().get(header::AUTHORIZATION).is_some_and(|v| v.as_bytes().starts_with(b"Bearer ")) { "bearer" }
-        else if auth::query_param(req.uri().query(), "token").is_some_and(|t| !t.is_empty()) { "query" }
-        else if token.is_some() { "cookie" } else { "ausente" };
-    let context = auth::ReceiptContext { connection_kind: "private_upstream".into(), profile: auth::Profile::LegacyOwnerProbe,
-        origin: client_ip.clone(), method: req.method().as_str().into(),
-        raw_target: req.uri().path_and_query().map_or("/", |p| p.as_str()).into(),
-        credential_source: source.into(), presented_token: token.clone() };
-    let request_auth = req.extensions().get::<RequestAuth>().cloned().unwrap_or_default();
-    let auth = st.auth.clone();
-    async move {
-    if bridged { return Ok((Forward { client_ip, https, guest: None, auth_receipt: None }, true)); }
-    let mut admitted = request_auth.0.lock().await;
-    if let Some((_, receipt)) = admitted.as_ref().filter(|(previous, _)| *previous == context) {
-        return Ok((Forward { client_ip, https, guest: None, auth_receipt: receipt.clone() }, true));
-    }
-    let owner = auth.owner(&client_ip, token.as_deref()).await?;
-    let receipt = if owner { auth.receipt(&context).await? } else { None };
-    if owner { *admitted = Some((context, receipt.clone())); }
-    Ok((Forward { client_ip, https, guest: None, auth_receipt: receipt }, owner))
-    }
+    hangar_core::edge::gate(&st.cfg.trusted, &st.auth, peer, req)
 }
 
-/// Porta exclusiva do dono: conta a recusa aqui, pois ela não passa pelo Python.
 pub(crate) fn owner_gate(st: &AppState, peer: SocketAddr, req: &Request)
     -> impl std::future::Future<Output = Result<Forward, Response>> + Send + use<> {
-    let admission = gate(st, peer, req);
-    let (_, https) = st.cfg.trusted.resolve(peer.ip(), req.headers());
-    let token = auth::presented_token(req.headers(), req.uri().query(), req.method(), https);
-    let auth = st.auth.clone();
-    async move {
-    let (forward, owner) = admission.await.map_err(crate::auth::unavailable)?;
-    if owner { return Ok(forward); }
-    let decision = auth.evaluate(crate::auth::AuthAttempt {
-        profile: crate::auth::Profile::RequireAuthHttp, origin: forward.client_ip.clone(),
-        presented_token: token, verified_guest: false, login_guest: false,
-    }).await.map_err(crate::auth::unavailable)?;
-    if decision.status == 0 { return Ok(forward); }
-    let blocked = decision.status == crate::auth::AuthDecision::BLOCKED.status;
-    let (status, code, msg) = if blocked {
-        (StatusCode::TOO_MANY_REQUESTS, "erro_muitas_tentativas", "muitas tentativas — aguarde")
-    } else {
-        (StatusCode::UNAUTHORIZED, "erro_nao_autorizado", "unauthorized")
-    };
-    let mut response = crate::session_write::json_response(status, serde_json::json!({"detail":{"code":code,"params":{},"msg":msg}}));
-    if blocked { response.headers_mut().insert(header::RETRY_AFTER, axum::http::HeaderValue::from_static("30")); }
-    Err(response)
-    }
+    hangar_core::edge::owner_gate(&st.cfg.trusted, &st.auth, peer, req)
 }
 
-/// Quem pede. Na 8766 só o convidado que o porteiro pôs (nunca `is_owner`, nem `X-Forwarded-For`);
-/// na 8765, o dono pelo token.
 pub(crate) fn who(st: &AppState, peer: SocketAddr, req: &Request)
     -> impl std::future::Future<Output = Result<(Forward, Option<Caller>), auth::AuthError>> + Send + use<> {
-    let guest = (on_guest_port(req) || req.extensions().get::<crate::login_guests::gate::Login>().is_some()).then(|| (forward_for(st, peer, req), caller(req).cloned()));
-    let owner = gate(st, peer, req);
-    async move {
-    if let Some(guest) = guest { return Ok(guest); }
-    let (fwd, owner) = owner.await?;
-    Ok((fwd, owner.then_some(Caller::Owner)))
-    }
+    hangar_core::edge::who(&st.cfg.trusted, &st.auth, peer, req)
 }
 
-/// O repasse de quem pede, sem decidir se é o dono. Convidado vai como loopback para o Python
-/// aceitar o cabeçalho assinado.
 pub(crate) fn forward_for(st: &AppState, peer: SocketAddr, req: &Request) -> Forward {
-    if on_guest_port(req) || req.extensions().get::<crate::login_guests::gate::Login>().is_some() {
-        let guest = caller(req).and_then(Caller::grant).cloned();
-        let client_ip = if guest.is_some() { "127.0.0.1".into() } else { peer.ip().to_string() };
-        let https = !on_guest_port(req) && st.cfg.trusted.resolve(peer.ip(), req.headers()).1;
-        return Forward { client_ip, https, guest, auth_receipt: None };
-    }
-    let (client_ip, https) = st.cfg.trusted.resolve(peer.ip(), req.headers());
-    Forward { client_ip, https, guest: None, auth_receipt: None }
+    hangar_core::edge::forward_for(&st.cfg.trusted, peer, req)
 }
 
-/// Chegou pela 8766: o `GuestConn` só existe no listener do convidado.
-pub(crate) fn on_guest_port(req: &Request) -> bool {
-    req.extensions().get::<ConnectInfo<crate::share::gate::GuestConn>>().is_some()
-}
+pub(crate) use hangar_core::edge::on_guest_port;
 
 pub(crate) use hangar_core::http::{cors, gzip_with_minimum, maybe_gzip, not_found};
 
@@ -1113,7 +1055,7 @@ pub(crate) async fn pass(st: &AppState, mut req: Request, fwd: &Forward) -> Resp
     let mut admitted_forward = fwd.clone();
     if admitted_forward.auth_receipt.is_none() {
         if let Some(cached) = cached {
-            admitted_forward.auth_receipt = cached.0.lock().await.as_ref().and_then(|(_, receipt)| receipt.clone());
+            admitted_forward.auth_receipt = cached.receipt().await;
         }
     }
     let upgrade = req.headers().contains_key(header::UPGRADE);

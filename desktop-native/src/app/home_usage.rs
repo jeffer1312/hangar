@@ -132,12 +132,11 @@ impl Hangar {
         let state = &self.home_usage;
         let header = div().flex().flex_wrap().items_center().justify_between().gap_2()
             .child(div().flex().gap_1().children([(false, "home_usage_overview"), (true, "home_usage_models")].map(|(models, key)| {
-                Button::new(key).ghost().small().selected(state.models == models).label(web(key))
+                tab_button(key.into(), web(key), state.models == models, cx)
                     .on_click(cx.listener(move |this, _, _, cx| { this.home_usage.models = models; cx.notify(); }))
             })))
             .child(div().flex().gap_1().children([Period::All, Period::Month, Period::Week, Period::Day].map(|period| {
-                Button::new(SharedString::from(format!("home-usage-{}", period.key()))).ghost().small()
-                    .selected(state.period == period).label(period.label())
+                tab_button(SharedString::from(format!("home-usage-{}", period.key())), period.label(), state.period == period, cx)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         // Período novo: os números do anterior ficariam errados na tela enquanto carrega.
                         if this.home_usage.period != period {
@@ -150,8 +149,9 @@ impl Hangar {
                         }
                     }))
             })));
-        let mut card = div().w_full().flex().flex_col().gap_3().p_3().rounded_lg()
-            .border_1().border_color(theme::border()).child(header);
+        // O mesmo material do compositor: sem ele, os números e o mapa somem sobre o papel de parede.
+        let mut card = div().w_full().flex().flex_col().gap_3().p_3().rounded_lg().bg(theme::boxed())
+            .border_1().border_color(theme::border_strong()).child(header);
         // A recarga de cada minuto mantém o resumo na tela; "carregando" só sem nada para mostrar.
         if state.report.loading && state.report.value.is_none() {
             let text = state.warming.map_or_else(|| tr("loading"), |(read, total)|
@@ -179,12 +179,12 @@ impl Hangar {
             card = card.child(div().id("home-usage-model-list").max_h(rems(14.)).overflow_y_scroll().flex().flex_col().gap_2()
                 .children(report.models.iter().map(|model| div().flex().flex_col().gap_1()
                     .child(div().flex().items_center().gap_2().text_sm()
-                        .child(div().min_w_0().flex_1().truncate().child(model.label.clone().unwrap_or_else(|| model.key.clone())))
+                        .child(div().min_w_0().flex_1().truncate().child(model.label.clone().unwrap_or_else(|| crate::status::model_label(&model.key))))
                         .child(tok(model.raw())))
                     .child(div().w_full().h_1().rounded_full().bg(theme::inset())
                         .child(div().h_full().rounded_full().bg(theme::accent()).w(relative((model.raw() / max) as f32)))))));
         } else {
-            let favorite = report.models.first().map(|m| m.label.clone().unwrap_or_else(|| m.key.clone())).unwrap_or_else(|| "—".into());
+            let favorite = report.models.first().map(|m| m.label.clone().unwrap_or_else(|| crate::status::model_label(&m.key))).unwrap_or_else(|| "—".into());
             let metrics = [("home_usage_sessions", dec(report.totals.sessions, 0)), ("home_usage_tokens", tok(report.totals.raw())),
                 ("home_usage_cost", money2(report.totals.cost, report.rate)), ("home_usage_active_days", report.active_days.to_string()),
                 ("home_usage_model_count", report.models.len().to_string()), ("home_usage_top_model", favorite)];
@@ -192,14 +192,30 @@ impl Hangar {
                 card = card.child(div().flex().gap_3().children(row.iter().map(|(key, value)|
                     div().flex_1().min_w_0().flex().flex_col().gap_1()
                         .child(div().text_xs().text_color(theme::muted()).child(web(key)))
-                        .child(div().id(SharedString::from(format!("home-{key}"))).text_sm().font_weight(FontWeight::MEDIUM)
-                            .truncate().child(value.clone()).tooltip({ let value = value.clone(); move |w, cx| gpui_kit::component::tooltip::Tooltip::new(value.clone()).build(w, cx) })))));
+                        .child(div().flex().items_center().gap(px(6.)).min_w_0()
+                            .child(div().id(SharedString::from(format!("home-{key}"))).min_w_0().text_sm().font_weight(FontWeight::MEDIUM)
+                                .truncate().child(value.clone()).tooltip({ let value = value.clone(); move |w, cx| gpui_kit::component::tooltip::Tooltip::new(value.clone()).build(w, cx) }))
+                            // Preço de tabela, não fatura: a nota do rodapé ficava longe do número.
+                            .when(*key == "home_usage_cost", |el| el.child(div().flex_shrink_0().px(px(5.)).rounded(px(5.))
+                                .border_1().border_color(theme::border_strong()).text_size(px(10.5)).text_color(theme::faint())
+                                .child(tr("home_usage_cost_tag"))))))));
             }
             card = card.child(self.activity_calendar(report, cx));
         }
         card.child(div().text_xs().text_color(if report.partial_cost { theme::warning() } else { theme::muted() })
             .child(web(if report.partial_cost { "home_usage_partial" } else { "home_usage_method" })))
     }
+}
+
+/// Aba e período do resumo: o escolhido em destaque suave, como os segmentos das Configurações; o `selected` do ghost
+/// some sobre o papel de parede.
+fn tab_button(id: SharedString, label: String, on: bool, cx: &App) -> Button {
+    Button::new(id).small().aria_selected(on).label(label)
+        .custom(ButtonCustomVariant::new(cx).color(if on { theme::accent_dim() } else { transparent_black() })
+            .foreground(if on { theme::accent_text() } else { theme::muted() }).hover(theme::hover()).active(theme::hover()))
+        // Cor e fundo no próprio botão: o `selected` do kit pinta o fundo com a cor de pressionado.
+        .text_color(if on { theme::accent_text() } else { theme::muted() })
+        .when(on, |el| el.bg(theme::accent_dim()))
 }
 
 // A data vem do histórico: o cliente não desloca os dias agregados no fuso do servidor.
@@ -225,9 +241,26 @@ impl Hangar {
         let first = start - chrono::Duration::days(start.weekday().num_days_from_monday() as i64);
         let weeks = ((end - first).num_days() / 7 + 1) as usize;
         let max = report.days.values().map(|d| d.tokens).fold(1., f64::max);
-        let mut grid = div().id("home-usage-calendar").overflow_x_scroll().flex().gap_1();
+        let months: Vec<String> = tr("home_usage_months").split(',').map(str::to_owned).collect();
+        let weekdays: Vec<String> = tr("home_usage_weekdays").split(',').map(str::to_owned).collect();
+        let label = |text: String| div().h(px(12.)).text_size(px(9.5)).line_height(px(12.)).text_color(theme::faint())
+            .whitespace_nowrap().child(text);
+        // Segunda, quarta e sexta, como no GitHub: as sete linhas sem rótulo não diziam qual dia era qual.
+        let day_names = div().flex().flex_col().gap_1().flex_shrink_0().child(label(String::new()))
+            .children((0..7).map(|row| label(if row % 2 == 0 && row < 6 { weekdays.get(row / 2).cloned().unwrap_or_default() } else { String::new() })));
+        let mut grid = div().id("home-usage-calendar").min_w_0().overflow_x_scroll().flex().gap_1();
+        let mut shown_month = None;
+        // O último dia visível da coluna: o mês que começa no meio da semana já leva o nome nela.
+        let month_at = |week: usize| (first + chrono::Duration::days((week * 7 + 6) as i64)).min(end).month0();
         for week in 0..weeks {
-            grid = grid.child(div().flex().flex_col().gap_1().children((0..7).map(|weekday| {
+            let month = (shown_month != Some(month_at(week))).then(|| {
+                shown_month = Some(month_at(week));
+                months.get(month_at(week) as usize).cloned().unwrap_or_default()
+            })
+            // A primeira semana só leva o nome se o mês dura três colunas: senão ele cobriria o seguinte.
+            .filter(|_| week > 0 || weeks < 3 || month_at(2) == month_at(0));
+            // Largura da coluna: o nome do mês passa por cima das semanas seguintes sem alargar a dele.
+            grid = grid.child(div().flex().flex_col().gap_1().child(label(month.unwrap_or_default()).w(px(12.))).children((0..7).map(|weekday| {
                 let day = first + chrono::Duration::days((week * 7 + weekday) as i64);
                 let usage = report.days.get(&day);
                 let value = usage.map_or(0., |d| d.tokens);
@@ -252,10 +285,17 @@ impl Hangar {
                 .map(|(day, usage)| tr("home_usage_busiest").replace("{detail}", &day_detail(*day, Some(usage), report.rate)))
                 .unwrap_or_default(),
         };
+        let swatch = |level: Option<f32>| div().size(px(10.)).rounded_sm()
+            .bg(level.map_or_else(theme::inset, |l| theme::accent().opacity(l)));
+        let legend = div().ml_auto().flex().items_center().gap(px(3.)).text_size(px(10.5)).text_color(theme::faint())
+            .child(tr("home_usage_less")).child(swatch(None))
+            .children([0.4, 0.6, 0.8, 1.].map(|l| swatch(Some(l)))).child(tr("home_usage_more"));
         div().flex().flex_col().gap_2()
-            .child(div().text_xs().text_color(theme::muted()).child(web_with("home_usage_activity", &[
-                ("start", start.format("%d/%m/%Y").to_string()), ("end", end.format("%d/%m/%Y").to_string())])))
-            .child(grid)
+            .child(div().flex().items_center().gap_2()
+                .child(div().text_xs().text_color(theme::muted()).child(web_with("home_usage_activity", &[
+                    ("start", start.format("%d/%m/%Y").to_string()), ("end", end.format("%d/%m/%Y").to_string())])))
+                .child(legend))
+            .child(div().flex().gap(px(6.)).child(day_names).child(grid))
             // Altura fixa: trocar de dia não pode empurrar o compositor.
             .child(div().id("home-usage-day").h(px(16.)).text_xs().truncate()
                 .text_color(if shown.is_some() { theme::text() } else { theme::muted() }).child(line))

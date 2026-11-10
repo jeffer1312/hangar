@@ -149,6 +149,11 @@ impl State {
         let conversation=Value::from(conversation);
         self.operations.iter().any(|(key,op)|!key.starts_with(CALL_PREFIX) && holds_terminal_write(op,&conversation))
     }
+    /// O `GiveUpUnproved` desistiria de alguma entrada agora? Toda ação grava a fila, até a que não muda nada.
+    pub fn unproved_due(&self,now:f64,grace:f64)->bool {
+        let uncertain=uncertain_entries(self);
+        self.rows.iter().any(|row|unproved_since(&self.operations,&uncertain,row).is_some_and(|since|since+grace<=now))
+    }
     /// Linha mais antiga que a drenagem ainda entregaria (mesmo filtro do `Claim`): a nova espera atrás dela.
     pub fn pending_ahead(&self,min_ts:f64)->bool {
         self.rows.iter().any(|r|r["delivered"]==false && current(r,min_ts) && !self.protected(row_id(r)))
@@ -527,6 +532,27 @@ fn append_row(state: &mut State, row: Value) -> io::Result<Value> {
     Ok(row)
 }
 
+/// Entradas com escrita incerta fora do terminal. Incerta de terminal pode ser tecla já digitada: a
+/// finalização dela é do ator do terminal.
+fn uncertain_entries(state:&State)->BTreeSet<String> {
+    state.operations.iter()
+        .filter(|(key, op)| !key.starts_with(CALL_PREFIX) && op.status == Status::Unknown && !terminal_input(state, op))
+        .filter_map(|(_, op)| op.entry_id.clone()).collect()
+}
+
+/// Desde quando a linha espera prova, se o `GiveUpUnproved` ainda pode desistir dela.
+fn unproved_since(operations:&BTreeMap<String,Operation>,uncertain:&BTreeSet<String>,row:&Value)->Option<f64> {
+    if row["confirmed"] == true || row["desistiu"] == true
+        || row["papel"] == "assistant" || row["steered"] == true { return None; }
+    let id = row_id(row);
+    // A não marcada como entregue só entra incerta: fora da espera, nada mais a mexeria.
+    if row["delivered"] != true && !uncertain.contains(id) { return None; }
+    // Escrita em curso: o desfecho é do ator.
+    if operations.iter().any(|(key, op)| !key.starts_with(CALL_PREFIX) && op.entry_id.as_deref() == Some(id)
+        && op.status == Status::Dispatching) { return None; }
+    Some(["dispatched_ts","claimed_ts","ts"].iter().find_map(|key| row[*key].as_f64()).unwrap_or(0.0))
+}
+
 fn terminal_input(state:&State,op:&Operation)->bool {
     if op.entry_id.is_none() || op.payload["kind"]!="input" || !op.payload["payload"]["text"].is_string() {return false;}
     if let Some(generation)=op.payload["payload"].get("_terminal_generation") {return generation.as_u64()==Some(state.generation);}
@@ -833,21 +859,11 @@ fn apply(state: &mut State, action: Action, clock: ClockSample, call_id: &str) -
         Action::GiveUpUnproved { now, grace } => {
             let mut given = Vec::new();
             let mut next_due: Option<f64> = None;
-            // Incerta de terminal pode ser tecla já digitada: a finalização dela é do ator do terminal.
-            let uncertain: BTreeSet<String> = state.operations.iter()
-                .filter(|(key, op)| !key.starts_with(CALL_PREFIX) && op.status == Status::Unknown && !terminal_input(state, op))
-                .filter_map(|(_, op)| op.entry_id.clone()).collect();
+            let uncertain = uncertain_entries(state);
             for row in &mut state.rows {
-                if row["confirmed"] == true || row["desistiu"] == true
-                    || row["papel"] == "assistant" || row["steered"] == true { continue; }
-                let id = row_id(row).to_owned();
-                let ops = || state.operations.iter().filter(|(key, op)| !key.starts_with(CALL_PREFIX) && op.entry_id.as_deref() == Some(id.as_str()));
-                // A não marcada como entregue só entra incerta: fora da espera, nada mais a mexeria.
-                if row["delivered"] != true && !uncertain.contains(&id) { continue; }
-                // Escrita em curso: o desfecho é do ator.
-                if ops().any(|(_, op)| op.status == Status::Dispatching) { continue; }
-                let since = ["dispatched_ts","claimed_ts","ts"].iter().find_map(|key| row[*key].as_f64()).unwrap_or(0.0);
+                let Some(since) = unproved_since(&state.operations, &uncertain, row) else { continue };
                 if since + grace > now { next_due = Some(next_due.map_or(since + grace, |due: f64| due.min(since + grace))); continue; }
+                let id = row_id(row).to_owned();
                 row["delivered"] = json!(true); row["desistiu"] = json!(true); row["desistiu_ts"] = json!(now);
                 given.push(id);
             }

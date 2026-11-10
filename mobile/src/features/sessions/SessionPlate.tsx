@@ -10,6 +10,13 @@ import * as m from '../../paraglide/messages';
 export type PlateMachine = { label: string; color: string; icon: IconName };
 export type PlateAccount = { label: string; name: string; color: string; icon: AccountIcon | null };
 
+// Ícone da etiqueta da conta na cor dela; sem ícone, um ponto. Placa e seletores de conta desenham este.
+export function AccountGlyph({ icon, color, provider, size = SPACE[3] }: { icon: AccountIcon | null; color: string; provider: string; size?: number }) {
+  return icon === 'provider' ? <ProviderGlyph provider={provider} size={size} inline color={color} />
+    : icon ? <Icon name={ACCOUNT_ICON_NAME[icon]} size={size} color={color} />
+    : <View style={[styles.accountDot, { backgroundColor: color }]} />;
+}
+
 // Placa da linha da sessão: [máquina] [conta]. A linha da lista e a animação da novidade desenham esta.
 export function SessionPlate({ machine, account, provider }: { machine: PlateMachine | null; account: PlateAccount | null; provider: string }) {
   const { theme } = useUnistyles();
@@ -27,9 +34,7 @@ export function SessionPlate({ machine, account, provider }: { machine: PlateMac
       ) : null}
       {account ? (
         <View style={[styles.plateSeg, styles.account]} accessibilityLabel={m.sessao_conta({ n: account.name })}>
-          {account.icon === 'provider' ? <ProviderGlyph provider={provider} size={SPACE[3]} inline color={account.color} />
-            : account.icon ? <Icon name={ACCOUNT_ICON_NAME[account.icon]} size={SPACE[3]} color={account.color} />
-            : <View style={[styles.accountDot, { backgroundColor: account.color }]} />}
+          <AccountGlyph icon={account.icon} color={account.color} provider={provider} />
           <Text style={[styles.accountText, { color: theme.tokens.text.secondary }]} numberOfLines={1}>{account.label}</Text>
         </View>
       ) : null}

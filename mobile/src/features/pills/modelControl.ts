@@ -64,7 +64,7 @@ export function useModelControl({ serverId, name, provider, chosen, onChosen, cl
   const model = pillLabels(statusFields, chosen).model;
   const display = tempError ?? (model ? spacedModel(model) : m.composer_modelo());
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (refresh = false) => {
     if (!server) { setItems([]); setError(m.chat_servidor_removido()); return; }
     setLoading(true);
     setError(null);
@@ -87,16 +87,14 @@ export function useModelControl({ serverId, name, provider, chosen, onChosen, cl
         const res = await getKimiModels(name, server);
         setItems(res.models.map((mo) => ({ id: mo.alias, label: mo.name, hint: mo.alias, selected: mo.name === current })));
       } else {
-        const res = await getModelOptions(name, server);
+        const res = refresh ? await getModelOptions(name, server, { refresh: true }) : await getModelOptions(name, server);
         const isSelected = (mo: (typeof res.models)[number]) =>
           chosen.model ? (mo.name ?? mo.id) === chosen.model || mo.id === chosen.model : mesmoModelo(mo.name ?? mo.id, current);
-        // Conta Claude: id longo (`claude-*`) é versão antiga presa no catálogo; o picker só aceita
-        // os apelidos vivos (default/opus/...), então as antigas saem — menos a que está em uso, e a
-        // lista inteira volta se o filtro não deixar nada.
-        const vivos = res.kind === 'claude' && !res.engine
+        // A troca com terminal usa os apelidos vivos do seletor do Claude Code.
+        const live = res.kind === 'claude' && !res.engine
           ? res.models.filter((mo) => !mo.id.startsWith('claude-') || isSelected(mo))
           : res.models;
-        const models = vivos.length ? vivos : res.models;
+        const models = live.length ? live : res.models;
         catalog.current = { kind: res.kind, names: new Map(models.map((mo) => [mo.id, mo.name ?? mo.id])) };
         setItems(models.map((mo) => ({
           id: mo.id, label: mo.name ?? mo.id, hint: mo.desc ?? undefined, selected: isSelected(mo),
@@ -171,5 +169,7 @@ export function useModelControl({ serverId, name, provider, chosen, onChosen, cl
     [name, server, isCodex, isPi, isKimi, chosen, onChosen, statusFields?.effort, flash, close],
   );
 
-  return { model, display, failed: tempError !== null, items, loading, error, notice, load, select };
+  const refresh = useCallback(() => load(true), [load]);
+  return { model, display, failed: tempError !== null, items, loading, error, notice, load, select,
+    refresh: !isCodex && !isPi && !isKimi ? refresh : undefined };
 }

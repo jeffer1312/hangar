@@ -25,6 +25,8 @@ mod tags;
 mod machine_peers;
 mod update_process;
 mod tour_progress;
+#[cfg(unix)]
+mod plugins;
 mod push_expo;
 mod artifacts;
 mod archive_history;
@@ -50,6 +52,7 @@ mod dictation_timing;
 mod session_open_cases;
 mod baton;
 mod dictation_catalog;
+mod claude_models;
 mod dictation_harness;
 mod dictation_process;
 mod dictation_provider;
@@ -59,6 +62,7 @@ mod groups_support;
 #[cfg(unix)]
 mod list_support;
 mod mods_support;
+mod sink;
 #[cfg(unix)]
 mod voice_support;
 mod workspace_fixture;
@@ -278,7 +282,9 @@ mod session_write_answer;
 mod session_write_control;
 mod session_write_input;
 mod session_write_model_effort;
+mod session_close_by_name;
 mod session_write_routes;
+mod session_write_unowned;
 mod session_rename;
 mod share_reach;
 mod share_store;

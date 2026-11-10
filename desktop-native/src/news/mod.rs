@@ -10,6 +10,7 @@ mod dictation_pill;
 mod login_browser;
 mod no_project;
 mod password_vault;
+mod plugins;
 mod hide_from_list;
 mod image_reveal;
 mod rename_suggestion;
@@ -67,6 +68,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "hangar-connect" => Some(connect_approval::render),
         "worktree-atualizada" => Some(worktree_fresh::render),
         "compactar-parada" => Some(compact_idle::render),
+        "plugins-do-claude" => Some(plugins::render),
         _ => None,
     }
 }

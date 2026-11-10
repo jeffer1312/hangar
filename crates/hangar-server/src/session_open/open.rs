@@ -536,27 +536,33 @@ pub(crate) async fn prepare_account(host: &dyn OpenHost, spec: &SessionSpec, cod
         let account = claude::hangar_account(Path::new(dir))
             .ok_or_else(|| OpenError::plain(404, format!("{dir} não é uma conta criada pelo hangar")))?;
         progress_step(&spec.name, "conta", json!({"conta": account}));
-        use crate::accounts::claude_config::{Outcome, Wait, late_outcome, reconcile_dir, refused};
-        // A pasta conferida acima, não `~/.claude-<nome>`: a conta pode morar fora do HOME.
-        let (home, dir, project) = (host.home().to_owned(), PathBuf::from(dir), hangar_workspace::worktrees::sanitize_cwd(&spec.cwd));
-        let limit = host.reconcile_limit();
-        let wait = Wait::within(limit);
-        // As travas esperam só até o prazo, e a guarda vai com a tarefa: a recusa no limite não deixa
-        // reconciliação rodando sem ela (a exclusão da conta esperaria) nem segurando o runtime.
-        let held = guard.take();
-        let task = tokio::task::spawn_blocking(move || (held, reconcile_dir(&home, &dir, Some(&project), wait)));
-        let outcome = match tokio::time::timeout(limit, task).await {
-            Ok(Ok((held, outcome))) => {
-                guard = held;
-                outcome
-            }
-            Ok(Err(e)) => Outcome::failed(refused(format!("a reconciliação parou no meio: {e}"))),
-            Err(_) => late_outcome(limit),
-        };
-        host.account_diary(outcome.diary);
-        avisos = claude::account_result(&account, outcome.result)?;
+        let (held, result) = reconcile_hangar_dir(host.home().to_owned(), dir, &account, &spec.cwd, host.reconcile_limit(), guard.take(),
+            |events| host.account_diary(events)).await;
+        guard = held;
+        avisos = result?;
     }
     Ok((guard, avisos))
+}
+
+/// A reconciliação da conta do Hangar `dir` (pasta já conferida) dentro do prazo, com a guarda `held` na
+/// mesma tarefa, devolvida quando ela termina. A abertura e a reabertura do Claude passam por aqui.
+pub(crate) async fn reconcile_hangar_dir(home: PathBuf, dir: &str, account: &str, cwd: &str, limit: Duration,
+    held: Option<crate::accounts::AccountGuard>, diary: impl FnOnce(Vec<Value>))
+    -> (Option<crate::accounts::AccountGuard>, Result<Vec<String>, OpenError>) {
+    use crate::accounts::claude_config::{Outcome, Wait, late_outcome, reconcile_dir, refused};
+    // A pasta conferida, não `~/.claude-<nome>`: a conta pode morar fora do HOME.
+    let (dir, project) = (PathBuf::from(dir), hangar_workspace::worktrees::sanitize_cwd(cwd));
+    let wait = Wait::within(limit);
+    // As travas esperam só até o prazo, e a guarda vai com a tarefa: a recusa no limite não deixa
+    // reconciliação rodando sem ela (a exclusão da conta esperaria) nem segurando o runtime.
+    let task = tokio::task::spawn_blocking(move || (held, reconcile_dir(&home, &dir, Some(&project), wait)));
+    let (guard, outcome) = match tokio::time::timeout(limit, task).await {
+        Ok(Ok((held, outcome))) => (held, outcome),
+        Ok(Err(e)) => (None, Outcome::failed(refused(format!("a reconciliação parou no meio: {e}")))),
+        Err(_) => (None, late_outcome(limit)),
+    };
+    diary(outcome.diary);
+    (guard, claude::account_result(account, outcome.result))
 }
 
 /// Com motor: o `hangar-engine` no PATH (sem ele a sessão nasce e morre calada) e a conta ChatGPT fixa,

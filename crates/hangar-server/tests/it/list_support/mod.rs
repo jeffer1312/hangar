@@ -32,8 +32,9 @@ pub fn sessions(root: &Path, n: usize) -> std::path::PathBuf {
     }
     let script = root.join("tmux");
     crate::write_executable(&script, format!(
-        "#!/bin/sh\necho \"$1\" >> '{log}'\n[ -e '{fail}' ] && exit 2\n[ \"$1\" = list-panes ] || {{ printf '● pronto\\n❯\\n'; exit 0; }}\n[ -e '{slow}' ] && sleep 0.8\nprintf '{panes}'\n",
-        log = root.join("calls.log").display(), fail = root.join("fail").display(), slow = root.join("slow").display()));
+        // `kill-session` derruba de fato: o `has-session` seguinte não acha mais o nome.
+        "#!/bin/sh\necho \"$1\" >> '{log}'\n[ -e '{fail}' ] && exit 2\n[ \"$1\" = kill-session ] && {{ echo \"${{3#=}}\" >> '{killed}'; exit 0; }}\n[ \"$1\" = has-session ] && grep -qx -- \"${{3#=}}\" '{killed}' 2>/dev/null && exit 1\n[ \"$1\" = list-panes ] || {{ printf '● pronto\\n❯\\n'; exit 0; }}\n[ -e '{slow}' ] && sleep 0.8\nprintf '{panes}'\n",
+        log = root.join("calls.log").display(), fail = root.join("fail").display(), slow = root.join("slow").display(), killed = root.join("killed").display()));
     script
 }
 

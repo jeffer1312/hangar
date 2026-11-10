@@ -86,27 +86,18 @@ fn top(lead: String) -> Div {
         .child(div().mt(px(6.)).text_color(theme::muted()).whitespace_normal().child(lead))
 }
 
-fn muted(text: String) -> Div { div().text_sm().text_color(theme::muted()).whitespace_normal().child(text) }
+pub(super) fn muted(text: String) -> Div { div().text_sm().text_color(theme::muted()).whitespace_normal().child(text) }
 
-fn alert(id: &'static str, text: String) -> Stateful<Div> {
+pub(super) fn alert(id: impl Into<ElementId>, text: String) -> Stateful<Div> {
     div().id(id).role(Role::Alert).text_sm().text_color(theme::danger()).whitespace_normal().child(text)
 }
 
-fn policy_chip(policy: Policy) -> Div {
-    div().flex_shrink_0().px(px(6.)).py(px(1.)).rounded(px(4.)).bg(theme::inset()).text_xs()
-        .text_color(if policy == Policy::Free { theme::warning() } else { theme::muted() }).child(policy.label())
+pub(super) fn chip(text: String, color: Hsla, bg: Hsla) -> Div {
+    div().flex_shrink_0().px(px(6.)).py(px(1.)).rounded(px(4.)).bg(bg).text_xs().text_color(color).child(text)
 }
 
-/// Pedido no runtime do tokio; a volta cai na entidade, se ela ainda existir.
-fn run<V: 'static, F>(runtime: &Runtime, request: F, window: &mut Window, cx: &mut Context<V>,
-    then: impl FnOnce(&mut V, Result<Value, Failure>, &mut Window, &mut Context<V>) + 'static)
-where F: Future<Output = Result<Value, Failure>> + Send + 'static {
-    let (done, result) = tokio::sync::oneshot::channel();
-    runtime.spawn(async move { let _ = done.send(request.await); });
-    cx.spawn_in(window, async move |this, cx| {
-        let result = result.await.unwrap_or_else(|_| Err(Failure::local("network_error")));
-        let _ = this.update_in(cx, |this, window, cx| { then(this, result, window, cx); cx.notify(); });
-    }).detach();
+fn policy_chip(policy: Policy) -> Div {
+    chip(policy.label(), if policy == Policy::Free { theme::warning() } else { theme::muted() }, theme::inset())
 }
 
 pub(super) struct VaultPage {

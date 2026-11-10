@@ -1063,6 +1063,34 @@ async fn a_parked_headless_codex_is_opened_here_instead_of_going_to_python() {
     registry.close_with_kill("k-parked",generation).await.unwrap();
 }
 
+/// R1.3: o `DELETE` do Codex sem terminal com ator aberto aqui fecha o ator (`close_with_kill`), o cano morre e
+/// sidecar e fila saem; o Python recebe só o pedido marcado.
+#[tokio::test]
+async fn delete_r1_3_codex_headless_with_a_live_actor_closes_in_rust() {
+    crate::use_cano_bin();
+    let fx = fixture();
+    let registry = relaunch_registry(&fx).await;
+    let bin = fx.root.join("bin");
+    let log = fx.root.join("codex-methods.jsonl");
+    fake_headless_codex(&bin,&log);
+    let rollout = fx.root.join("rollout.jsonl");
+    std::fs::write(&rollout,"{}\n").unwrap();
+    fx.put_sidecar("cx-h",json!({"name":"cx-h","provider":"codex","headless":true,"key":"k-live","thread_id":"thread-1",
+        "rollout_path":rollout,"cwd":fx.root,"codex_home":fx.home.join(".codex"),"permission_mode":"Full Access","model":"gpt-test"}));
+    registry.bind_watcher(fx.watcher());
+    assert_eq!(registry.restart_codex("cx-h").await.expect("Codex sem terminal do Rust").unwrap(),json!({"ok":true}));
+    assert!(registry.owns_codex_headless("cx-h").await);
+    let cano = fx.sidecar("cx-h").unwrap()["cano"]["pid"].as_u64().map(|pid|pid as u32).expect("cano gravado");
+    let (python, server) = serve_owner(registry.clone()).await;
+    let response = crate::fake::client().delete(format!("http://{server}/api/sessions/cx-h")).bearer_auth(crate::fake::OWNER).send().await.unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    assert!(!registry.owns_codex_headless("cx-h").await,"o ator saiu");
+    assert!(hangar_server::runtime::process::liveness(cano,"k-live")!=hangar_server::runtime::process::Liveness::Ours,"o cano morreu");
+    assert!(fx.sidecar("cx-h").is_none());
+    assert!(!fx.queue.join("runtime/k-live.json").exists(),"a fila da chave saiu");
+    assert_eq!(python.last_hit().1.get("x-hangar-rust-closed").and_then(|v| v.to_str().ok()), Some(crate::fake::SECRET));
+}
+
 #[tokio::test]
 async fn relaunch_routes_go_to_python_when_the_session_is_not_a_codex_of_the_rust() {
     let (python, server) = serve_owner(registry().await).await;
@@ -1194,10 +1222,10 @@ async fn owner_delete_kills_in_rust_then_forwards_marked_to_python() {
     let transcript = headers.get("x-hangar-closed-transcript").and_then(|v| v.to_str().ok()).unwrap();
     assert_eq!(percent_encoding::percent_decode_str(transcript).decode_utf8().unwrap(), "/r/Área de trabalho/rollout-1.jsonl",
         "a conversa encerrada vai junto, para o nome fechado");
-    // Outra sessão (sem sidecar Codex) vai ao Python como chegou, sem marca.
+    // Outra sessão (sem sidecar Codex) também fecha no Rust, pelo nome (R1.3), e a conversa forjada sai.
     let _ = delete_session(server, "claude-x").await;
     let (_, headers) = python.last_hit();
-    assert!(headers.get("x-hangar-rust-closed").is_none());
+    assert_eq!(headers.get("x-hangar-rust-closed").and_then(|v| v.to_str().ok()), Some(crate::fake::SECRET));
     assert!(headers.get("x-hangar-closed-transcript").is_none(), "o forjado sai");
     finish(&mut [&mut app,&mut tui]);
 }
@@ -1420,7 +1448,15 @@ async fn owner_broadcast_answers_the_rust_code_for_a_codex_terminal_it_cannot_ad
     fx.put_sidecar("cx-proof",fx.meta("cx-proof",&server_app.endpoint,Some(app.id()),&tui));
     let registry = registry().await;
     registry.bind_watcher(fx.watcher());
-    let (python, server) = serve_owner(registry.clone()).await;
+    let (python, upstream) = crate::fake::spawn_fake().await;
+    let mut state = hangar_server::routes::AppState::new(crate::fake::config(upstream, "127.0.0.1"));
+    // A lista do teste: o multiplexador do fixture (nenhum pane) e nenhuma pasta de sessão.
+    state.list = Arc::new(hangar_server::list::bridge::ListBridge::new(hangar_server::list::bridge::ListEnv {
+        mux: Mux::with_program(&fx.tmux, Duration::from_secs(5)), capture_program: fx.tmux.clone().into_os_string(),
+        procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs: None },
+        hangar_server::list::facts::FactsClient::new(upstream, crate::fake::SECRET.into())));
+    assert!(state.state.runtime.set(registry.clone()).is_ok());
+    let server = crate::fake::spawn_state(state).await;
     let response = crate::fake::client().post(format!("http://{server}/api/broadcast"))
         .header("authorization", format!("Bearer {}", crate::fake::OWNER)).header("content-type","application/json")
         .body(json!({"names":["cx-proof","claude-x"],"text":"oi"}).to_string()).send().await.unwrap();
@@ -1428,11 +1464,9 @@ async fn owner_broadcast_answers_the_rust_code_for_a_codex_terminal_it_cannot_ad
     let body:Value = serde_json::from_str(&response.text().await.unwrap()).unwrap();
     assert_eq!(body["results"]["cx-proof"]["error"]["code"],"codex_terminal_absent");
     assert_eq!(body["results"]["cx-proof"]["delivered"],false);
-    assert_eq!(python.hits_to("/api/broadcast"),1,"só os outros nomes vão ao Python");
-    // O Python falso responde texto: resposta ilegível sai com código, nunca `error: null`.
-    assert_eq!(body["results"]["claude-x"]["error"]["code"],"broadcast_reply_unreadable");
-    let sent:Value = serde_json::from_slice(&python.last_body()).unwrap();
-    assert_eq!(sent["names"],json!(["claude-x"]),"o Codex com terminal do Rust nunca é repassado");
+    // O nome sem sessão também é respondido aqui: nada vai ao Python.
+    assert_eq!(body["results"]["claude-x"], json!({"ok": false, "error": {"code": "erro_sessao_inexistente", "params": {}, "msg": "sessão não encontrada"}, "delivered": false}));
+    assert_eq!(python.hits_to("/api/broadcast"),0);
     assert_eq!(python.hits_to("/api/sessions/cx-proof/input"),0);
     finish(&mut [&mut app,&mut tui]);
 }

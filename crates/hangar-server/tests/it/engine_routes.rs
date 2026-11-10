@@ -204,7 +204,7 @@ async fn engine_model_options_preserve_share_permissions() {
             .bearer_auth(token).body("{}").send().await.unwrap();
         if response.status()!=403 { failures.push(format!("recusa {method} {path}: {}",response.status())); }
     }
-    assert!(scene.upstream.paths().iter().any(|path|path=="/api/sessions/s0/model/options"),"sem motor conserva o transporte existente");
+    assert!(!scene.upstream.paths().iter().any(|path|path=="/api/sessions/s0/model/options"),"o catálogo Claude é atendido sem Python");
     scene.close().await;
     provider.close().await;
     assert!(failures.is_empty(),"{}",failures.join("\n"));

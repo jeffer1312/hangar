@@ -113,6 +113,14 @@ pub fn close_refused() -> ModsError {
 pub fn no_typing() -> ModsError {
     ModsError::new("erro_mod_sem_digitacao", "Nesta sessão, o campo do mod só aceita digitação no terminal ou não está ligado ao app.")
 }
+/// `press`/`close` numa sessão sem a interface dos mods no Rust.
+pub fn no_rust() -> ModsError {
+    ModsError::new("mods_need_rust_server", "O clique do mod precisa do servidor Rust de pé e da sessão aberta nele.")
+}
+/// `show` numa sessão sem a interface dos mods no Rust: o app troca a aba sozinho.
+pub fn tab_in_app_error() -> ModsError {
+    ModsError::new("erro_mod_aba_no_app", "Nesta sessão a troca de aba do mod fica no app.")
+}
 
 // Recusas do clique com terminal (fase 3). Os textos são os de `messages/pt.json` (fase 1); o painel que
 // fechou no meio do clique usa o `pane_missing` acima.

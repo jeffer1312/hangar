@@ -234,6 +234,10 @@ impl RuntimeEngine {
             let mut view = core.control_view(); view["public_state"] = core.view(); view["conversation"] = view["thread_id"].clone(); view
         } }
     }
+    /// `conversation` e `deliverable` da vista, lidos a cada volta do laço: montar a vista inteira para
+    /// isso copiava o catálogo de comandos todas as vezes.
+    fn conversation(&self) -> &str { match &self.core { Core::Claude(core)=>core.conversation(),Core::Codex(core)=>core.conversation() } }
+    fn deliverable(&self) -> bool { match &self.core { Core::Claude(core)=>core.deliverable(),Core::Codex(core)=>core.deliverable() } }
     fn refresh_write_sources(core:&Core,sources:&mut WriteSources,guards:&AsyncGuards) {
         for (expected,current,waker) in sources.values_mut() {
             let next = match core { Core::Claude(core)=>core.interaction_source(expected),Core::Codex(core)=>core.interaction_source(expected) };
@@ -421,9 +425,9 @@ fn steer_refusal(view:&Value,provider:&str)->Option<(&'static str,&'static str)>
     }
     None
 }
-fn claude_delivery_allowed(target:&RuntimeTarget,view:&Value,error:bool)->bool {view["deliverable"]==true && !error && target.metadata["lifecycle_pending"]!=true}
-fn block_claude_sid(target:&mut RuntimeTarget,view:&Value)->bool {
-    let changed=target.provider=="claude" && view["conversation"].as_str().is_some_and(|sid|!sid.is_empty() && target.metadata["session_id"]!=sid);
+fn claude_delivery_allowed(target:&RuntimeTarget,deliverable:bool,error:bool)->bool {deliverable && !error && target.metadata["lifecycle_pending"]!=true}
+fn block_claude_sid(target:&mut RuntimeTarget,conversation:&str)->bool {
+    let changed=target.provider=="claude" && !conversation.is_empty() && target.metadata["session_id"]!=conversation;
     if changed {target.metadata["lifecycle_pending"]=json!(true);}
     changed
 }
@@ -603,6 +607,9 @@ impl crate::mods::state::SurfaceLink for RuntimeHandle {
     }
 }
 
+/// O que o `prepare_prompt` junta ao comando: Claude (`content`) e Codex (`input`).
+const PREPARED_INPUT:[&str;2] = ["content","input"];
+
 struct Pending {
     from_queue:bool,
     defer_for_batch:bool,
@@ -624,6 +631,21 @@ impl Pending {
         Self { from_queue:false,defer_for_batch:false,original:serde_json::to_value(&command).unwrap(),command,responses:Vec::new(),result:Some(reply),preparing:false,
             cancelled:false,error:None,deadline:0.0,timed_out:false,ready_to_run:false,arrival:0 }
     }
+    /// Desfecho dado a quem espera. O prompt preparado (imagem em base64) só servia para montar a escrita.
+    fn settle(&mut self,reply:RuntimeReply) {
+        self.preparing = false;
+        if let Some(fields) = self.command.payload.as_object_mut() { for key in PREPARED_INPUT { fields.remove(key); } }
+        for response in self.responses.drain(..) { let _ = response.send(Ok(reply.clone())); }
+        self.result = Some(reply);
+    }
+}
+
+/// Repetição do mesmo id: a mesma resposta, ou a mesma espera; outro conteúdo com o id é recusa.
+fn answer_repeat(pending:&mut Pending,command:&RuntimeCommand,response:Response) {
+    if pending.original != serde_json::to_value(command).unwrap() { let _ = response.send(Err(failure("operation_reused"))); }
+    else if let Some(error) = &pending.error { let _ = response.send(Err(error.clone())); }
+    else if let Some(reply) = &pending.result { let _ = response.send(Ok(reply.clone())); }
+    else { pending.responses.push(response); }
 }
 
 #[derive(Clone)]
@@ -646,12 +668,14 @@ fn spawn_sid_commit(jobs:&mut JoinSet<Job>,registry:Option<std::sync::Weak<super
 #[derive(Clone)]
 /// `volatile`: escrita fora do diário (assinatura da TUI); preparo, recibo e desfecho não tocam a fila.
 struct Attempt { logical_id:String,phase_id:String,frame:Value,order:u64,epoch:u64,generation:u64,volatile:bool }
-fn next_current_write<'a>(ready:&mut BTreeMap<u64,(String,u64,Result<(),RuntimeError>)>,next:&mut u64,attempts:&'a BTreeMap<String,Attempt>,generation:u64)->Option<(&'a Attempt,Result<(),RuntimeError>)> {
+/// A próxima escrita preparada desta geração, na ordem em que foi pedida. Cada uma sai daqui uma vez só,
+/// e leva o quadro junto: guardado, ele (com a imagem em base64) ficava na memória até o ator fechar.
+fn next_current_write(ready:&mut BTreeMap<u64,(String,u64,Result<(),RuntimeError>)>,next:&mut u64,attempts:&mut BTreeMap<String,Attempt>,generation:u64)->Option<(Attempt,Result<(),RuntimeError>)> {
     while let Some((wire,source,result))=ready.remove(next) {
         *next+=1;
-        let Some(attempt)=attempts.get(&wire) else {continue};
+        let Some(attempt)=attempts.get_mut(&wire) else {continue};
         if source!=generation || attempt.generation!=generation {continue;}
-        return Some((attempt,result));
+        return Some((Attempt { frame:std::mem::take(&mut attempt.frame),..attempt.clone() },result));
     }
     None
 }
@@ -666,7 +690,10 @@ enum Job {
     Saved(Result<(),RuntimeError>),
     ClaudeSid {context:SidCommitAttempt,result:Result<RuntimeTarget,RuntimeError>},
     Queued { wake:bool,result:Result<(),RuntimeError> },
-    View { generation:u64,version:u64,view:Value,result:Result<(),RuntimeError> },
+    /// `Ok(true)`: a vista só mudou na medição e ficou esperando o intervalo (`store_view`).
+    View { generation:u64,version:u64,view:Value,result:Result<bool,RuntimeError> },
+    /// A medição que esperava o intervalo foi ao disco; nada a publicar.
+    Flushed { generation:u64,result:Result<(),RuntimeError> },
     Drained {generation:u64,result:Result<Vec<RuntimeCommand>,RuntimeError>},
     DrainFinished(Result<RuntimeReply,RuntimeError>),
     Confirmed { response:Option<oneshot::Sender<Result<Value,RuntimeError>>>,result:Result<(Vec<String>,usize,Option<f64>),RuntimeError> },
@@ -810,7 +837,8 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
     let mut arrival = 0u64;
     let mut attempts:BTreeMap<String,Attempt> = initial.operations.values().filter(|phase|recover_phase(&initial,phase))
         .filter_map(|phase|Some((phase.id.clone(),Attempt { logical_id:phase.payload["logical_id"].as_str()?.into(),
-            phase_id:phase.id.clone(),frame:phase.payload["frame"].clone(),order:0,epoch:0,generation:phase.payload["generation"].as_u64().unwrap_or(target.generation),volatile:false }))).collect();
+            // Fase recuperada nunca volta ao fio daqui: fica sem o quadro, só com o que o desfecho e a queda consultam.
+            phase_id:phase.id.clone(),frame:Value::Null,order:0,epoch:0,generation:phase.payload["generation"].as_u64().unwrap_or(target.generation),volatile:false }))).collect();
     // Época local do transporte adotado: sobe na queda e na reconexão, e escrita preparada em outra época
     // não sai no socket novo.
     let mut transport_epoch = 0u64;
@@ -842,6 +870,8 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
     let mut state_version = 0u64;
     let mut published_state_version = 0u64;
     let state_gate = Arc::new(Mutex::new(SavedView::default()));
+    // Vista que só mudou na medição e espera o intervalo: quando ela vai ao disco (relógio do ator).
+    let mut view_flush_at:Option<f64> = None;
     let mut durable_view = json!({"alive":true,"initialized":false,"ready":false});
     let mut last_state = String::new();
     let mut last_marker = String::new();
@@ -966,7 +996,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
             let view = engine.view();
             for response in hold_waiters.drain(..) { let _ = response.send(turn_hold_reply(&view,&mut turn_hold,&turn_hold_released)); }
         }
-        if block_claude_sid(&mut target,&engine.view()) {
+        if block_claude_sid(&mut target,engine.conversation()) {
             sid_transition=true;
             for (id,pending) in roots.iter_mut().filter(|(_,pending)|pending.result.is_none()) {
                 pending.cancelled=true;
@@ -1082,7 +1112,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                     let wire = format!("wire:{logical_id}:{sequence}");
                     let volatile = engine.volatile_write(&logical_id);
                     let attempt = Attempt { logical_id:logical_id.clone(),phase_id:wire.clone(),frame:frame.clone(),order:write_order,epoch:transport_epoch,generation:target.generation,volatile };
-                    attempts.insert(wire.clone(),attempt.clone());
+                    attempts.insert(wire.clone(),attempt);
                     // Sem preparo nem vista forçada: os IDs dela nunca entram no diário, então o contador salvo
                     // continua cobrindo todos os que entram. Mantém a ordem das escritas.
                     if volatile { prepared_writes.insert(write_order,(wire,target.generation,Ok(()))); continue; }
@@ -1136,7 +1166,8 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                     let queue = queue.clone(); let generation = target.generation; let sample = clock(start);
                     let gate = state_gate.clone();
                     jobs.spawn(async move {
-                        let result = save_view(&queue,generation,sample,&gate,version,&view,false).await;
+                        // Cada mensagem do agente muda o `usage`: sozinho, ele não vale uma gravação com fsync.
+                        let result = store_view(&queue,generation,sample,&gate,Some((version,&view)),false,true).await;
                         Job::View { generation,version,view,result }
                     });
                 }
@@ -1373,7 +1404,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                 }
             }
         }
-        while let Some((attempt,result))=next_current_write(&mut prepared_writes,&mut next_write,&attempts,target.generation) {
+        while let Some((attempt,result))=next_current_write(&mut prepared_writes,&mut next_write,&mut attempts,target.generation) {
             let wire=attempt.phase_id.clone();
             let ended = roots.iter().any(|(id,root)|(attempt.logical_id == *id || attempt.logical_id.starts_with(&format!("{id}:")))
                 && (root.cancelled || root.timed_out));
@@ -1395,7 +1426,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                 }
                 effects.extend(acknowledgements);
                 if let Err(failure) = result { enter_error(&mut error,&target,failure); }
-            } else if sid_transition || io.try_send(WireFrame { operation_id:wire,frame:attempt.frame.clone(),ephemeral:false,until:None,guard:engine.interaction_guard(&attempt.logical_id)? }).is_err() {
+            } else if sid_transition || io.try_send(WireFrame { operation_id:wire,frame:attempt.frame,ephemeral:false,until:None,guard:engine.interaction_guard(&attempt.logical_id)? }).is_err() {
                 effects.extend(engine.apply(EngineInput::WriteAck { operation_id:attempt.logical_id.clone(),outcome:WriteOutcome::NotWritten },clock(start))?);
             } else {
                 handed.insert(attempt.logical_id.clone());
@@ -1403,7 +1434,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
         }
         // Resposta reservada apta sai antes da mensagem comum: ela responde a uma pergunta já feita.
         let limit_held = || engine.lifecycle.as_ref().and_then(std::sync::Weak::upgrade).is_some_and(|registry|registry.limit_held(&target.name));
-        let deliverable = if target.provider=="claude" {claude_delivery_allowed(&target,&engine.view(),error.is_some()) && !limit_held()} else {engine.view()["deliverable"]==true};
+        let deliverable = if target.provider=="claude" {claude_delivery_allowed(&target,engine.deliverable(),error.is_some()) && !limit_held()} else {engine.deliverable()};
         let reserved = if target.metadata["lifecycle_pending"]==true { None } else { engine.ready_async_answer_entry() };
         if drain_requested && !drain_active && turn_hold.is_none() && !closed.load(Ordering::Acquire) && (deliverable || reserved.is_some())
             && !roots.values().any(|root|(root.preparing || root.defer_for_batch && root.result.is_none() && root.error.is_none()) && matches!(root.command.kind,OperationKind::Input | OperationKind::Steer)) {
@@ -1447,7 +1478,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
         // Antes de a saída do cano ser dada como perdida, só depois do silêncio dele; depois, a cada `TURN_POLL`.
         let turn_check_due = (adoption.is_none() && io_open && !turn_checking && engine.turn_watch()).then(|| if engine.output_lost() { turn_check_after }
             else { (last_output + engine.reconnect_waits.output_lost.as_secs_f64()).max(turn_check_after) });
-        let deadline = engine.deadline().into_iter().chain(turn_check_due).chain(respawn.next_at).chain(reconnect.next_at.filter(|_|respawn.task.is_none())).chain(cano_check_at.filter(|_|respawn.task.is_none())).chain(stall_due.filter(|_|!stall_shown)).chain(sid_retry.as_ref().map(|(_,at)|*at)).chain(roots.values().filter(|root|root.result.is_none() && !root.timed_out).map(|root|root.deadline))
+        let deadline = engine.deadline().into_iter().chain(turn_check_due).chain(respawn.next_at).chain(reconnect.next_at.filter(|_|respawn.task.is_none())).chain(cano_check_at.filter(|_|respawn.task.is_none())).chain(stall_due.filter(|_|!stall_shown)).chain(sid_retry.as_ref().map(|(_,at)|*at)).chain(view_flush_at).chain(roots.values().filter(|root|root.result.is_none() && !root.timed_out).map(|root|root.deadline))
             .min_by(f64::total_cmp).map(|seconds|start + Duration::from_secs_f64(seconds.max(0.0)))
             .unwrap_or_else(||Instant::now()+Duration::from_secs(3600));
         tokio::select! {
@@ -1478,14 +1509,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                         if from_queue && roots.get(&id).is_some_and(|pending|pending.result.as_ref().is_some_and(|reply|reply.disposition == Disposition::Deferred)) {
                             roots.remove(&id);
                         }
-                        if let Some(pending) = roots.get_mut(&id) {
-                            if pending.original != serde_json::to_value(&command).unwrap() {
-                                let _ = response.send(Err(failure("operation_reused")));
-                            } else if let Some(error) = &pending.error { let _ = response.send(Err(error.clone()));
-                            } else if let Some(reply) = &pending.result { let _ = response.send(Ok(reply.clone())); }
-                            else { pending.responses.push(response); }
-                            continue;
-                        }
+                        if let Some(pending) = roots.get_mut(&id) { answer_repeat(pending,&command,response); continue; }
                         if command.kind == OperationKind::Interrupt {
                             for pending in roots.values_mut().filter(|root|root.preparing && matches!(root.command.kind,OperationKind::Input | OperationKind::Steer)) { pending.cancelled = true; }
                         }
@@ -1610,6 +1634,9 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                         finish_respawn(&mut respawn,&mut target).await;
                         jobs.abort_all();
                         while jobs.join_next().await.is_some() {}
+                        // Vista que esperava o intervalo, ou cuja gravação o `abort_all` cortou: a parada a leva
+                        // ao disco. Sem diferença para o que já está gravado, nada é escrito.
+                        if !sid_transition { flush_view_on_stop(&queue,&target,clock(start),&state_gate).await; }
                         io.stop().await;
                         let killed = if kill { kill_process(&engine,&target).await } else { Ok(()) };
                         let result = queue.exec(target.generation,&format!("stop-repair:{}",unique()),clock(start),Action::EnsureProjection).await
@@ -1916,12 +1943,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                         let stored = match result { Ok(stored)=>stored,Err(failure)=>{ fail_root(&mut roots,&id,failure); continue; } };
                         let pending = roots.get_mut(&id).unwrap();
                         // A fila já tem o desfecho (linha confirmada ou operação final): responde sem escrever no fio.
-                        if let Some(reply) = stored {
-                            pending.preparing = false;
-                            pending.result = Some(reply.clone());
-                            for response in pending.responses.drain(..) { let _ = response.send(Ok(reply.clone())); }
-                            continue;
-                        }
+                        if let Some(reply) = stored { pending.settle(reply); continue; }
                         // Esgotada: o prazo já respondeu (adiada, sem escrita); uma segunda resposta a tornaria incerta.
                         if pending.timed_out { pending.preparing = false; continue; }
                         if pending.cancelled {
@@ -2060,9 +2082,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                               }
                           }
                           if let Some(pending) = roots.get_mut(&reply.operation_id) {
-                            pending.preparing = false;
-                            pending.result = Some(reply.clone());
-                            for response in pending.responses.drain(..) { let _ = response.send(Ok(reply.clone())); }
+                            pending.settle(reply.clone());
                             if reply.disposition == Disposition::Deferred && matches!(pending.command.kind,OperationKind::Input | OperationKind::Steer | OperationKind::DispatchAsyncAnswer)
                                 && !rowless(&target.provider,&pending.command) {
                                 let queue = queue.clone(); let id = reply.operation_id.clone(); let generation = target.generation; let sample = clock(start);
@@ -2140,8 +2160,10 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                     }
                     Job::View { generation,version,view,result } => {
                         if generation!=target.generation || sid_transition {continue;}
+                        // O que ficou esperando sai sozinho no fim do intervalo, mesmo sem outra mudança.
+                        if matches!(result,Ok(true)) && view_flush_at.is_none() { view_flush_at = Some(clock(start).monotonic_s + VIEW_SAVE_EVERY); }
                         match result {
-                            Ok(()) if version > published_state_version => {
+                            Ok(_) if version > published_state_version => {
                                 published_state_version = version;
                                 // Confirmar em todo idle, como o adapter Python: sem isto nenhuma entrada vira
                                 // confirmed, a poda não as alcança e a fila enche.
@@ -2172,7 +2194,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                                     publish(&events,&target,&mut revision,"state",view["public_state"].clone());
                                 }
                             }
-                            Ok(()) => {},
+                            Ok(_) => {},
                             Err(failure) => {
                                 publish(&events,&target,&mut revision,"problem",json!({"error_code":failure.code,"message":failure.message}));
                                 enter_error(&mut error,&target,failure);
@@ -2204,6 +2226,14 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                             },
                         }
                     },
+                    // Resultado de uma vida que já passou é descartado, como o de `Job::View`. Falhar aqui não põe a
+                    // sessão em erro: só a medição atrasa, e a próxima gravação da vista (ou a parada) a leva.
+                    Job::Flushed { generation,result } => {
+                        if generation!=target.generation || sid_transition {continue;}
+                        if let Err(failure) = result {
+                            tracing::warn!(key=%target.key,session=%target.name,code=%failure.code,"a medição que esperava o intervalo não foi gravada");
+                        }
+                    }
                     Job::Saved(result) => { stall_dirty |= cano_lost; if let Err(failure) = result {
                         publish(&events,&target,&mut revision,"problem",json!({"error_code":failure.code,"message":failure.message}));
                         enter_error(&mut error,&target,failure);
@@ -2410,6 +2440,14 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                     }
                 }
                 effects.extend(engine.apply(EngineInput::Tick,sample)?);
+                if view_flush_at.is_some_and(|at|sample.monotonic_s >= at) {
+                    view_flush_at = None;
+                    // Em troca de conversa nada vai ao disco: a gravação do fim da troca leva a medição.
+                    if !sid_transition {
+                        let queue = queue.clone(); let generation = target.generation; let gate = state_gate.clone();
+                        jobs.spawn(async move { Job::Flushed { generation,result:store_view(&queue,generation,sample,&gate,None,false,false).await.map(|_|()) } });
+                    }
+                }
                 if turn_check_due.is_some_and(|due|sample.monotonic_s >= due) {
                     turn_checking = true;
                     let view = engine.view();
@@ -2471,8 +2509,16 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
     reconnect.cancel();
     finish_respawn(&mut respawn,&mut target).await;
     jobs.abort_all(); while jobs.join_next().await.is_some() {}
+    if !sid_transition { flush_view_on_stop(&queue,&target,clock(start),&state_gate).await; }
     io.stop().await;
     Arc::try_unwrap(queue).map_err(|_|failure("queue_busy"))?.shutdown().await.map_err(io_failure)
+}
+
+/// Parada do ator: a vista que esperava o intervalo vai ao disco. Falhar aqui não impede a parada.
+async fn flush_view_on_stop(queue:&QueueActor,target:&RuntimeTarget,sample:ClockSample,gate:&Mutex<SavedView>) {
+    if let Err(failure) = store_view(queue,target.generation,sample,gate,None,false,false).await {
+        tracing::warn!(key=%target.key,session=%target.name,code=%failure.code,"a vista que esperava o intervalo não foi gravada na parada");
+    }
 }
 
 type SavedState = (Arc<QueueActor>,ClockSample,Arc<Mutex<SavedView>>,u64,Value);
@@ -2766,7 +2812,21 @@ async fn run_local(kind:String,payload:Value,target:&RuntimeTarget,quota:Option<
 }
 
 #[derive(Default)]
-struct SavedView { version:u64, durable:Option<Value>, latest:Value }
+struct SavedView { version:u64, durable:Option<Value>, latest:Value, written_at:f64 }
+
+/// Só a medição mudou: a vista espera até este intervalo desde a última gravação (segundos do relógio do ator).
+const VIEW_SAVE_EVERY:f64 = 2.0;
+
+/// Medição que muda a cada mensagem do agente. Do disco ela só é relida na reabertura, para mostrar o
+/// contexto; `context_window` fica de fora porque o patch do sidecar o confere com a vista salva.
+const MEASURED_VIEW:[&str;5] = ["usage","cost","idle_compact_tokens","token_usage","rate_limits"];
+
+fn only_measures_differ(written:&Value,next:&Value) -> bool {
+    let (Some(written),Some(next)) = (written.as_object(),next.as_object()) else { return false };
+    let lasting = |fields:&serde_json::Map<String,Value>| fields.keys().filter(|key|!MEASURED_VIEW.contains(&key.as_str())).count();
+    lasting(written) == lasting(next)
+        && written.iter().filter(|(key,_)|!MEASURED_VIEW.contains(&key.as_str())).all(|(key,value)|next.get(key) == Some(value))
+}
 
 /// Campos que mudam a cada evento e que ninguém relê do disco: o motor parte de `in_progress:false`
 /// e o estado público é recalculado. O contador sai da comparação porque a escrita no fio salva a
@@ -2780,19 +2840,33 @@ fn durable_part(view:&Value) -> Value {
 }
 
 async fn save_view(queue:&QueueActor,generation:u64,sample:ClockSample,gate:&Mutex<SavedView>,version:u64,view:&Value,force:bool) -> Result<(),RuntimeError> {
+    store_view(queue,generation,sample,gate,Some((version,view)),force,false).await.map(|_|())
+}
+
+/// `next` = a vista nova e a versão dela; `None` grava a que ficou esperando. `patient`: mudança só de
+/// medição espera `VIEW_SAVE_EVERY` desde a última gravação. `Ok(true)` = ficou esperando.
+async fn store_view(queue:&QueueActor,generation:u64,sample:ClockSample,gate:&Mutex<SavedView>,next:Option<(u64,&Value)>,force:bool,patient:bool) -> Result<bool,RuntimeError> {
     let mut saved = gate.lock().await;
-    if version >= saved.version { saved.version = version; saved.latest = view.clone(); }
-    else if !force { return Ok(()); }
+    match next {
+        Some((version,view)) if version >= saved.version => { saved.version = version; saved.latest = view.clone(); }
+        Some(_) if !force => return Ok(false),
+        Some(_) => {},
+        // Sem gravação anterior nada ficou esperando.
+        None if saved.durable.is_none() => return Ok(false),
+        None => {},
+    }
     // A forçada pode chegar depois de uma mudança de estado mais nova que pulou o disco: grava a vista
     // mais nova conhecida, cujo contador é o maior.
     let latest = saved.latest.clone();
     let durable = durable_part(&latest);
-    if force || saved.durable.as_ref() != Some(&durable) {
-        queue.exec(generation,&format!("state:{}",unique()),sample,
-            Action::AdvanceLifecycle { generation,state:json!({"view":latest}) }).await.map_err(io_failure)?;
-        saved.durable = Some(durable);
-    }
-    Ok(())
+    if !force && saved.durable.as_ref() == Some(&durable) { return Ok(false); }
+    if patient && sample.monotonic_s - saved.written_at < VIEW_SAVE_EVERY
+        && saved.durable.as_ref().is_some_and(|written|only_measures_differ(written,&durable)) { return Ok(true); }
+    queue.exec(generation,&format!("state:{}",unique()),sample,
+        Action::AdvanceLifecycle { generation,state:json!({"view":latest}) }).await.map_err(io_failure)?;
+    saved.durable = Some(durable);
+    saved.written_at = sample.monotonic_s;
+    Ok(false)
 }
 
 /// Operação que a fila devolve já final nunca volta a ser enviada; sem resposta guardada no
@@ -2992,7 +3066,8 @@ mod tests {
         assert!(effects.iter().any(|effect|matches!(effect,Effect::PersistClaude {patch,..} if patch["session_id"]=="b")));
         let mut initial=super::super::queue::State::new("key",4,"s",vec![json!({"id":"a-row","text":"a-message","delivered":false,"ts":1.0})]);initial.runtime_state["view"]=json!({"conversation":"a"});
         let mut store=super::super::queue::Store::open(&dir.path().join("state"),dir.path(),initial).unwrap();
-        assert!(block_claude_sid(&mut target,&engine.view()));assert!(!claude_delivery_allowed(&target,&engine.view(),false));assert_eq!(store.state().rows.len(),1);
+        assert_eq!((engine.conversation(),engine.deliverable()),(engine.view()["conversation"].as_str().unwrap(),engine.view()["deliverable"]==true));
+        assert!(block_claude_sid(&mut target,engine.conversation()));assert!(!claude_delivery_allowed(&target,engine.deliverable(),false));assert_eq!(store.state().rows.len(),1);
         store.exec(4,"sdk-sid-commit",ClockSample {monotonic_s:1.0,epoch_s:2.0},Action::AdvanceLifecycle {generation:5,state:json!({"conversation_reset":{"previous":"a","next":"b"},"metadata":{"key":"key","session_id":"b"}})}).unwrap();
         engine.advance_claude_generation(5).unwrap();target.generation=5;target.metadata["session_id"]=json!("b");target.metadata["lifecycle_pending"]=json!(false);
         assert!(store.state().rows.is_empty());
@@ -3051,10 +3126,10 @@ mod tests {
     }
     #[test]
     fn sid_b_blocks_claim_before_async_metadata_commit() {
-        let mut target=commit_target();let view=json!({"conversation":"b","deliverable":true});
-        assert!(block_claude_sid(&mut target,&view));
+        let mut target=commit_target();
+        assert!(block_claude_sid(&mut target,"b"));
         assert_eq!(target.metadata["lifecycle_pending"],true);assert_eq!(target.generation,4);
-        assert!(!claude_delivery_allowed(&target,&view,false));
+        assert!(!claude_delivery_allowed(&target,true,false));
     }
     #[tokio::test]
     async fn late_bind_dispatch_a_is_retired_without_an_order_gap_or_error_in_b() {
@@ -3068,13 +3143,17 @@ mod tests {
         let (release,wait)=oneshot::channel();let old_queue=queue.clone();
         let old=tokio::spawn(async move {wait.await.unwrap();Job::Write {wire:"wire-a".into(),generation:4,result:old_queue.exec(4,"late-cursor-a",clock,Action::BindDispatch {id:"wire-a".into(),cursor:json!({})}).await.map(|_|()).map_err(io_failure)}});
         queue.exec(4,"sid-b",clock,Action::AdvanceLifecycle {generation:5,state:json!({"conversation_reset":{"previous":"a","next":"b"},"metadata":{"key":"key","session_id":"b"}})}).await.unwrap();
-        let attempts=BTreeMap::from([("wire-a".into(),Attempt {logical_id:"a".into(),phase_id:"wire-a".into(),frame:json!({"message":"a"}),order:1,epoch:0,generation:4,volatile:false}),
+        let mut attempts=BTreeMap::from([("wire-a".into(),Attempt {logical_id:"a".into(),phase_id:"wire-a".into(),frame:json!({"message":"a"}),order:1,epoch:0,generation:4,volatile:false}),
             ("wire-b".into(),Attempt {logical_id:"b".into(),phase_id:"wire-b".into(),frame:json!({"message":"b"}),order:2,epoch:0,generation:5,volatile:false})]);
         let mut ready=BTreeMap::from([(2,("wire-b".into(),5,Ok(())))]);let mut next=1;
-        assert!(next_current_write(&mut ready,&mut next,&attempts,5).is_none());
+        assert!(next_current_write(&mut ready,&mut next,&mut attempts,5).is_none());
         release.send(()).unwrap();let Job::Write {wire,generation,result}=old.await.unwrap() else {panic!("resultado de escrita")};assert!(result.is_err());
-        ready.insert(1,(wire,generation,result));let (attempt,result)=next_current_write(&mut ready,&mut next,&attempts,5).unwrap();
+        ready.insert(1,(wire,generation,result));let (attempt,result)=next_current_write(&mut ready,&mut next,&mut attempts,5).unwrap();
         assert_eq!(attempt.logical_id,"b");assert!(result.is_ok());assert_eq!(next,3);assert!(ready.is_empty());
+        // O quadro (com a imagem em base64) sai com a escrita; fica só o que o desfecho e a queda consultam.
+        assert_eq!(attempt.frame,json!({"message":"b"}));
+        assert!(attempts["wire-b"].frame.is_null(),"o quadro já enviado continuou guardado");
+        assert_eq!((attempts["wire-b"].logical_id.as_str(),attempts["wire-b"].phase_id.as_str()),("b","wire-b"));
         assert_eq!(queue.snapshot().await.unwrap().operations["wire-a"].status,Status::Unknown);
         Arc::try_unwrap(queue).ok().unwrap().shutdown().await.unwrap();
     }
@@ -3298,6 +3377,66 @@ mod tests {
         save_view(&queue,1,sample,&gate,2,&view(2,true),true).await.unwrap();
         let state = queue.snapshot().await.unwrap();
         assert_eq!(state.runtime_state["view"]["runtime_counter"],3);
+        queue.shutdown().await.unwrap();
+    }
+
+    #[test]
+    fn a_settled_input_drops_the_prepared_prompt_and_still_answers_the_same_id() {
+        let original = RuntimeCommand {operation_id:"op".into(),kind:OperationKind::Input,payload:json!({"text":"veja [Image #1]","entry_id":"op"})};
+        let mut pending = Pending::stored(original.clone(),RuntimeReply {operation_id:"op".into(),disposition:Disposition::Unknown,payload:Value::Null});
+        pending.result = None;
+        // O preparo junta ao comando o prompt pronto, com a imagem em base64.
+        pending.command.payload["content"] = json!([{"type":"image","source":{"type":"base64","data":"A".repeat(1_000_000)}}]);
+        let (first,mut receive_first) = oneshot::channel(); pending.responses.push(first);
+        let reply = RuntimeReply {operation_id:"op".into(),disposition:Disposition::Accepted,payload:json!({"ok":true})};
+        pending.settle(reply.clone());
+        assert!(receive_first.try_recv().unwrap().unwrap() == reply);
+        assert!(pending.command.payload.get("content").is_none(),"o prompt preparado continuou guardado depois do desfecho");
+        assert_eq!(pending.command.payload["entry_id"],"op");
+        // O mesmo id de novo recebe o mesmo desfecho; outro conteúdo com o id segue recusado.
+        let (again,mut receive_again) = oneshot::channel();
+        answer_repeat(&mut pending,&original,again);
+        assert!(receive_again.try_recv().unwrap().unwrap() == reply);
+        let (other,mut receive_other) = oneshot::channel();
+        answer_repeat(&mut pending,&RuntimeCommand {payload:json!({"text":"outro"}),..original.clone()},other);
+        assert_eq!(receive_other.try_recv().unwrap().err().unwrap().code,"operation_reused");
+    }
+
+    #[tokio::test]
+    async fn measure_only_changes_wait_for_the_interval_and_the_stop_flush_writes_the_last() {
+        let dir = tempfile::tempdir().unwrap();
+        let lease = super::super::queue::acquire_lease(&dir.path().join("key.lock")).unwrap();
+        let store = super::super::queue::Store::open(&dir.path().join("state.json"),&dir.path().join("projection"),
+            super::super::queue::State::new("key",1,"session",vec![])).unwrap();
+        let queue = QueueActor::start(store,lease);
+        let gate = Mutex::new(SavedView::default());
+        let at = |seconds:f64| ClockSample { monotonic_s:seconds,epoch_s:seconds };
+        let view = |tokens:u64,model:&str| json!({"model":model,"usage":{"input_tokens":tokens},"runtime_counter":tokens,"in_progress":true});
+        // (gravações feitas, tokens no disco, modelo no disco)
+        let disk = || async { let state = queue.snapshot().await.unwrap();
+            (state.next_seq,state.runtime_state["view"]["usage"]["input_tokens"].as_u64(),state.runtime_state["view"]["model"].clone()) };
+        assert!(!store_view(&queue,1,at(0.0),&gate,Some((1,&view(1,"m"))),false,true).await.unwrap());
+        let (first,..) = disk().await;
+        // Mensagens seguidas do agente só mudam a medição: dentro do intervalo nenhuma toca o disco.
+        for tokens in 2..=5 { assert!(store_view(&queue,1,at(0.5),&gate,Some((tokens,&view(tokens,"m"))),false,true).await.unwrap(),"medição dentro do intervalo foi gravada"); }
+        assert_eq!(disk().await,(first,Some(1),json!("m")));
+        // Passado o intervalo, a seguinte grava: uma gravação por intervalo.
+        assert!(!store_view(&queue,1,at(VIEW_SAVE_EVERY+0.1),&gate,Some((6,&view(6,"m"))),false,true).await.unwrap());
+        assert_eq!(disk().await,(first+1,Some(6),json!("m")));
+        // Mudança durável grava na hora e leva a medição que esperava.
+        assert!(store_view(&queue,1,at(VIEW_SAVE_EVERY+0.2),&gate,Some((7,&view(7,"m"))),false,true).await.unwrap());
+        assert!(!store_view(&queue,1,at(VIEW_SAVE_EVERY+0.3),&gate,Some((8,&view(8,"outro"))),false,true).await.unwrap());
+        assert_eq!(disk().await,(first+2,Some(8),json!("outro")));
+        // A forçada (antes de uma escrita no fio) também.
+        assert!(store_view(&queue,1,at(VIEW_SAVE_EVERY+0.4),&gate,Some((9,&view(9,"outro"))),false,true).await.unwrap());
+        save_view(&queue,1,at(VIEW_SAVE_EVERY+0.5),&gate,9,&view(9,"outro"),true).await.unwrap();
+        assert_eq!(disk().await,(first+3,Some(9),json!("outro")));
+        // Parada: a última medição que esperava vai ao disco; sem nada esperando, nenhuma gravação.
+        assert!(store_view(&queue,1,at(VIEW_SAVE_EVERY+0.6),&gate,Some((10,&view(10,"outro"))),false,true).await.unwrap());
+        store_view(&queue,1,at(VIEW_SAVE_EVERY+0.7),&gate,None,false,false).await.unwrap();
+        assert_eq!(disk().await,(first+4,Some(10),json!("outro")));
+        store_view(&queue,1,at(VIEW_SAVE_EVERY+0.8),&gate,None,false,false).await.unwrap();
+        assert_eq!(disk().await.0,first+4);
         queue.shutdown().await.unwrap();
     }
 }

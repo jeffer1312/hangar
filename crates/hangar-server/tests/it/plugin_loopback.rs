@@ -141,6 +141,7 @@ async fn bridge_never_promotes_owner_guest_or_internal_credentials_to_plugin_ide
             .header(extra_header.0, extra_header.1).header("content-type", "application/json")
             .body(json!({"sessao":"t", "token":"wrong", "above":null, "panes":[]}).to_string()).send().await.unwrap();
         assert_eq!(response.status().as_u16(), 403);
+        assert_eq!(response.text().await.unwrap(), r#"{"detail":"token do plugin invalido"}"#);
     }
     let missing = post(server.bridge, "ui", json!({"sessao":"t", "above":null, "panes":[]})).await;
     assert!(!missing.status().is_success());
@@ -170,6 +171,14 @@ async fn plugin_endpoints_are_rust_and_mods_methods_keep_the_python_path() {
             let response = http().post(format!("http://{base}/api/plugin/{endpoint}?check=1"))
                 .header("x-hangar-internal", SECRET).body(json!({"probe":endpoint}).to_string()).send().await.unwrap();
             assert!(response.status().is_client_error(), "{endpoint}: {}", response.status());
+            assert!(!response.text().await.unwrap().contains("\"path\""), "{endpoint}: chegou ao Python");
+        }
+        // As rotas dos mods também, com sessão que o Rust não tem: nada do POST chega ao Python.
+        for endpoint in ["press-start", "opened", "ui", "toast", "pressed", "copied", "focus-target", "focused", "scroll"] {
+            let response = http().post(format!("http://{base}/api/plugin/{endpoint}"))
+                .header("content-type", "application/json")
+                .body(json!({"sessao":"ghost", "token":"x", "requestId":"r", "element":"e", "attempt":"a", "url":"https://x", "text":"t"}).to_string())
+                .send().await.unwrap();
             assert!(!response.text().await.unwrap().contains("\"path\""), "{endpoint}: chegou ao Python");
         }
     }

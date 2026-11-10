@@ -52,7 +52,20 @@ enum Operation {
     },
 }
 
-/// Pedido repassado pelo Python: só a entrega a provedores externos é adiada.
+/// Prazo de cada sessão na entrega adiada de quem entrou pela porta do Connect, abaixo do prazo da
+/// dona (`DELIVER_WAIT`, 5 s), como o das sessões do Rust.
+const DEFERRED_WAIT: Duration = Duration::from_secs(3);
+
+/// Teto da rota mais as entregas dela num pedido da ponte, abaixo dos 90 s que o Python espera: passou
+/// disso, quem não recebeu vira aviso e a resposta sai antes de o Python desistir.
+const BRIDGE_BUDGET: Duration = Duration::from_secs(75);
+
+/// O que sobra do teto da ponte para as entregas, contado do começo do pedido.
+fn bridge_wait(started: std::time::Instant) -> Option<Duration> {
+    Some(BRIDGE_BUDGET.saturating_sub(started.elapsed()).max(Duration::from_secs(1)))
+}
+
+/// Pedido repassado pelo Python: o recado a sessão sem dono no Rust sai depois da rota (`deliver_deferred`).
 pub(crate) struct BridgeCtx {
     deliveries: std::sync::Mutex<Vec<Value>>,
 }
@@ -75,46 +88,97 @@ impl BridgeCtx {
     }
 }
 
-/// Rota entre máquinas que o Python repassou da 8768: o recado a sessão que só ele atende volta no
-/// corpo (`hangar_deliveries`), para ele entregar depois de responder.
-pub(crate) async fn deferring(handler: impl std::future::Future<Output = Response>) -> Response {
+/// Rota entre máquinas que o Python repassou da 8768: o recado a sessão sem dono no Rust sai depois da
+/// rota, cada sessão em no máximo `DEFERRED_WAIT`, e quem não recebeu entra na resposta.
+pub(crate) async fn deferring(st: Arc<AppState>, handler: impl std::future::Future<Output = Response>) -> Response {
     let ctx = BridgeCtx::new();
     let resp = CTX.scope(ctx.clone(), handler).await;
     let deliveries = ctx.take_deliveries();
     if deliveries.is_empty() {
         return resp;
     }
+    let failed = deliver_deferred(&st, deliveries, Some(DEFERRED_WAIT)).await;
+    if failed.is_empty() {
+        return resp;
+    }
     let (mut parts, body) = resp.into_parts();
-    let mut value = match to_bytes(body, MAX_REPLY)
-        .await
-        .ok()
-        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
-    {
-        Some(v) if v.is_object() => v,
-        _ => {
-            // Sem corpo para levar as entregas: elas se perderiam caladas.
-            tracing::error!(
-                code = "groups_deferred_lost",
-                count = deliveries.len(),
-                "groups: recado adiado sem corpo de resposta para voltar ao Python"
-            );
-            return crate::session_write::json_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                crate::session_write::detail_body(
-                    "erro_grupo_indisponivel",
-                    "os grupos estão indisponíveis agora",
-                    json!({"detalhe": "groups_deferred_lost"}),
-                ),
-            );
-        }
+    let Ok(bytes) = to_bytes(body, MAX_REPLY).await else {
+        report_failed(&st, &mut Value::Null, failed, "rust.groups_deferred_failed", &[]);
+        return crate::session_write::json_response(StatusCode::INTERNAL_SERVER_ERROR, crate::session_write::detail_body(
+            "erro_grupo_indisponivel", "os grupos estão indisponíveis agora", json!({"detalhe": "groups_reply_unreadable"})));
     };
-    value["hangar_deliveries"] = Value::Array(deliveries);
+    let mut value = serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null);
+    report_failed(&st, &mut value, failed, "rust.groups_deferred_failed", &["failed", "pulados"]);
+    if !value.is_object() {
+        return Response::from_parts(parts, Body::from(bytes));
+    }
     parts.headers.remove(header::CONTENT_LENGTH);
     Response::from_parts(parts, Body::from(value.to_string()))
 }
 
+/// O recado adiado, em processo: cada sessão na ordem em que chegou, as sessões ao mesmo tempo. A
+/// entrega roda em tarefa própria; o prazo larga só a espera, e a sessão que não terminou nele conta
+/// como falha (`groups_notice_timeout`). Devolve `{sessao, erro}` de quem não recebeu.
+pub(crate) async fn deliver_deferred(st: &Arc<AppState>, deliveries: Vec<Value>, wait: Option<Duration>) -> Vec<Value> {
+    let mut by_session: Vec<(String, Vec<(String, bool)>)> = Vec::new();
+    for d in deliveries {
+        let (Some(name), Some(text)) = (d["name"].as_str(), d["text"].as_str()) else { continue };
+        let item = (text.to_owned(), d["steer"] == true);
+        match by_session.iter_mut().find(|(n, _)| n == name) {
+            Some((_, items)) => items.push(item),
+            None => by_session.push((name.to_owned(), vec![item])),
+        }
+    }
+    let runs = by_session.into_iter().map(|(name, items)| {
+        let (st, owned) = (st.clone(), name.clone());
+        let task = tokio::spawn(async move {
+            let mut failed = Vec::new();
+            for (text, steer) in items {
+                let (status, reply) = crate::session_write::input::write_input(&st, &owned, &text, steer).await;
+                // Sessão sem dono nunca responde 200 sem entregar (o Codex cru fora da caixa vazia é 409): 200 com
+                // `delivered: false` aqui é a fila de um ator do Rust, que entrega sozinho.
+                if status.is_success() { continue; }
+                let error = reply.get("detail").filter(|d| !d.is_null()).cloned().unwrap_or_else(|| json!({"code": "erro_envio_falhou_desconhecida", "params": {}, "msg": "falha desconhecida no envio"}));
+                failed.push(json!({"sessao": owned, "erro": error}));
+            }
+            failed
+        });
+        async move {
+            let joined = match wait { Some(wait) => tokio::time::timeout(wait, task).await.ok(), None => Some(task.await) };
+            match joined {
+                Some(Ok(failed)) => failed,
+                Some(Err(_)) => vec![json!({"sessao": name, "erro": {"code": "erro_envio_falhou_desconhecida", "params": {}, "msg": "falha desconhecida no envio"}})],
+                None => vec![json!({"sessao": name, "erro": {"code": "erro_envio_falhou", "params": {"erro": "groups_notice_timeout"}, "msg": "não deu pra enviar: groups_notice_timeout"}})],
+            }
+        }
+    });
+    futures_util::future::join_all(runs).await.into_iter().flatten().collect()
+}
+
+/// Quem não recebeu o recado adiado: na primeira lista de `lists` que o corpo tiver, qualificado como as
+/// falhas do Rust, ou no `warning`. Sem corpo onde caber, só o diário.
+fn report_failed(st: &AppState, body: &mut Value, failed: Vec<Value>, event: &'static str, lists: &[&str]) {
+    if failed.is_empty() { return; }
+    let names: Vec<String> = failed.iter().map(|f| f["sessao"].as_str().unwrap_or_default().to_owned()).collect();
+    let fields = json!({"falhas": failed.len(), "sessoes": names.join(",")});
+    st.diag.report_with(event, "", "deferred_not_delivered", "recado adiado da ponte de grupos não entregue", fields.clone());
+    let me = st.groups.as_ref().map_or_else(|| st.server_id.clone(), |groups| groups.server_id().to_owned());
+    if let Some(key) = lists.iter().find(|key| body.get(**key).is_some_and(Value::is_array)) {
+        if let Some(list) = body[*key].as_array_mut() { list.extend(names.iter().map(|name| json!(format!("{me}::{name}")))); }
+    } else if body.is_object() && body.get("warning").is_none_or(Value::is_null) {
+        body["warning"] = crate::session_write::detail_body("erro_pareamento_aviso_parcial", &format!("aviso falhou em: {}", names.join("; ")),
+            json!({"avisos": failed}))["detail"].clone();
+    } else if let Some(warning) = body.get_mut("warning").filter(|warning| warning.is_object()) {
+        if !warning["params"].is_object() { warning["params"] = json!({}); }
+        if !warning["params"]["avisos"].is_array() { warning["params"]["avisos"] = json!([]); }
+        if let Some(avisos) = warning["params"]["avisos"].as_array_mut() { avisos.extend(failed); }
+    } else {
+        st.diag.report_with("rust.groups_deferred_without_body", "", "deferred_not_delivered", "recado adiado sem corpo onde caber", fields);
+    }
+}
+
 impl BridgeCtx {
-    /// Recado a sessão que só o Python atende: ele entrega depois que a ponte responder.
+    /// Recado a sessão sem dono no Rust dentro de pedido da ponte: sai depois da rota (`deliver_deferred`).
     pub(crate) fn defer_delivery(&self, name: &str, text: &str, steer: bool) {
         self.deliveries
             .lock()
@@ -241,17 +305,20 @@ async fn execute(
             facts: _,
         } => {
             let ctx = BridgeCtx::new();
+            let started = std::time::Instant::now();
             let mut out = CTX
-                .scope(ctx.clone(), route(st, &method, &name, &path, body))
+                .scope(ctx.clone(), route(st.clone(), &method, &name, &path, body))
                 .await?;
-            out["deliveries"] = Value::Array(ctx.take_deliveries());
+            let failed = deliver_deferred(&st, ctx.take_deliveries(), bridge_wait(started)).await;
+            report_failed(&st, &mut out["body"], failed, "rust.groups_bridge_delivery_failed", &[]);
             out["post"] = json!([]);
             Ok(out)
         }
         Operation::Leave { name, phases: _ } => {
-            // A saída de grupo entre máquinas avisa quem ficou sozinho: Pi/omp/Kimi só o Python atende.
+            // A saída de grupo entre máquinas avisa quem ficou sozinho; sessão sem dono recebe depois.
             let ctx = BridgeCtx::new();
-            let (ex, warnings) = CTX
+            let started = std::time::Instant::now();
+            let (ex, mut warnings) = CTX
                 .scope(ctx.clone(), async {
                     let (ex, tell) = super::exit::leave(&st, &groups, &name, None)
                         .await
@@ -259,7 +326,11 @@ async fn execute(
                     Ok::<_, Failed>((ex, notify_exit(&st, &groups, &name, &tell).await))
                 })
                 .await?;
-            Ok(json!({"ex_peers": ex, "warnings": warnings, "deliveries": ctx.take_deliveries()}))
+            let failed = deliver_deferred(&st, ctx.take_deliveries(), bridge_wait(started)).await;
+            // O aviso vai na resposta, em `warnings`; daqui sai só a linha do diário (o corpo é descartado).
+            report_failed(&st, &mut json!({}), failed.clone(), "rust.groups_bridge_delivery_failed", &[]);
+            warnings.extend(failed);
+            Ok(json!({"ex_peers": ex, "warnings": warnings}))
         }
         Operation::OrqAssociate {
             name,

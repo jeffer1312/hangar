@@ -69,6 +69,12 @@ pub(crate) async fn maintenance(state: Arc<crate::routes::AppState>) {
         }
         Err(error) => tracing::warn!(code = "pairing_config_failed", %error, "pareamento sem configuração válida"),
     }
+    // `~/.hangar/plugin.json` e `plugin-dir`: a sessão aberta fora do Hangar e o lançador acham a ponte por eles.
+    tokio::spawn(crate::config_sync::plugin_publish::publish_for_state(state.clone()));
+    {
+        use crate::costs::pricing_refresh::{PricingRefresh, URL};
+        let _ = PricingRefresh::start(crate::costs::pricing::default_dir(), URL, PricingRefresh::offline());
+    }
     state.costs.schedule_warmup(std::time::Duration::from_secs(30));
     let _search_producer = state.search.start();
     crate::pages::routes::spawn_sweep(state.list.clone(), state.pages.clone());

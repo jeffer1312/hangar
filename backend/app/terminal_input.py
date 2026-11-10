@@ -1569,20 +1569,6 @@ class TerminalInput:
                 # confirmaria a linha sob o cursor como default.
                 return pane if mp.picker_open(pane) else None
 
-    def list_model_options(self, name: str) -> dict:
-        """Le as linhas do picker do `/model` e o fecha com Esc, sem aplicar nada.
-
-        E a fonte da lista que a tela mostra pra sessao da CONTA ANTHROPIC: chumbar os modelos no
-        front ja tinha ficado velho (o Fable entrou no picker e sumiu da tela do app). O picker e
-        um overlay — nao vai pro scrollback —, entao abrir e fechar nao deixa rastro na conversa
-        nem gasta token.
-        """
-        with _send_lock(name):
-            pane = self._open_model_picker(name)
-            rows = mp.parse_model_rows(pane)
-            effort = mp.parse_current_effort(pane)
-            self._abort(name)
-        return {"models": rows, "effort": effort}
 
     def set_engine_model(self, name: str, model_id: str) -> dict:
         """Troca o modelo de uma sessao de MOTOR digitando `/model <id>`.
@@ -1904,5 +1890,5 @@ steer_now = _wrap_terminal_driver(steer_now, control='steer')
 for _method, _control in {'send_prompt':'submit', 'send_key':'navigation_key', 'send_term_key':'interactive_key',
         'send_text':'terminal_input', 'select':'select', 'submeter_multipla':'submit_selected', 'interrupt':'interrupt'}.items():
     setattr(TerminalInput, _method, _wrap_terminal_driver(getattr(TerminalInput, _method), control=_control))
-for _method in ('set_model_effort', 'list_model_options', 'set_engine_model'):
+for _method in ('set_model_effort', 'set_engine_model'):
     setattr(TerminalInput, _method, _wrap_terminal_driver(getattr(TerminalInput, _method), admin=True))

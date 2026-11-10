@@ -460,20 +460,27 @@ impl Watcher {
             let mut problems = crate::list::discover::Problems::default();
             crate::list::discover_other::sidecars(&dir,"sidecar Codex ilegível ou torto",&mut problems)
         }).await.unwrap_or_default();
-        let panes = match self.cfg.mux.list_panes().await {
-            Ok(panes) => panes,
-            Err(error) => {
-                if crate::warn_limit::allow(None,"codex_watch_panes_unavailable") {
-                    tracing::warn!(code="codex_watch_panes_unavailable",reason=%error.code,"vigia do Codex com terminal sem a lista de panes; rodada sem decisão");
+        let home = &self.cfg.home;
+        let targets = registry.codex_terminals().await;
+        let candidates = sidecars.iter().map(|(_,meta)|candidate(meta,home)).collect::<Vec<_>>();
+        // Sem ator nem sidecar adotável nada abaixo lê os panes: a rodada não abre o multiplexador.
+        let panes = if targets.is_empty() && candidates.iter().all(Option::is_none) { Vec::new() } else {
+            match self.cfg.mux.list_panes().await {
+                Ok(panes) => panes,
+                Err(error) => {
+                    if crate::warn_limit::allow(None,"codex_watch_panes_unavailable") {
+                        tracing::warn!(code="codex_watch_panes_unavailable",reason=%error.code,"vigia do Codex com terminal sem a lista de panes; rodada sem decisão");
+                    }
+                    return;
                 }
-                return;
             }
         };
-        let home = &self.cfg.home;
         let mut seen = BTreeSet::new();
-        for target in registry.codex_terminals().await {
-            let raw = sidecars.iter().map(|(_,meta)|meta).find(|meta|text(meta,"key") == Some(target.key.as_str()));
-            match raw.map(|meta|candidate(meta,home)) {
+        for target in targets {
+            // O mesmo cálculo do vetor acima: lido duas vezes, o registro de transferência podia dar duas respostas na rodada.
+            let found = sidecars.iter().position(|(_,meta)|text(meta,"key") == Some(target.key.as_str()));
+            let raw = found.and_then(|at|sidecars.iter().map(|(_,meta)|meta).nth(at));
+            match found.map(|at|candidates[at].clone()) {
                 // Renomeada, app-server ressubido ou troca de modo em curso: esta vida acaba sem matar nada,
                 // e a adoção abaixo pega a nova quando ela estiver pronta.
                 Some(Some(c)) if c.name != target.name || c.endpoint != target.endpoint || c.app_pid != target.app_pid => self.release(registry,&target).await,
@@ -487,12 +494,12 @@ impl Watcher {
                 }
             }
         }
-        for meta in sidecars.iter().map(|(_,meta)|meta) {
+        for (meta,candidate) in sidecars.iter().map(|(_,meta)|meta).zip(candidates) {
             if let (Some(name),Some(transfer)) = (text(meta,"name"),text(meta,"transfer_id"))
                 && let Err(error) = transfer_state(home,transfer) && crate::warn_limit::allow(Some(name),&error.code) {
                 tracing::warn!(session=%name,code=%error.code,reason=%error.message,"Codex com terminal não adotado");
             }
-            let Some(c) = candidate(meta,home) else { continue };
+            let Some(c) = candidate else { continue };
             // Entrada com terminal de outra vida (o Claude que saiu deste nome) não reserva o nome para o Codex.
             if let Err(error) = self.retire_other_life(registry,&c.name).await && crate::warn_limit::allow(Some(&c.name),&error.code) {
                 tracing::warn!(session=%c.name,code=%error.code,"entrada de outra vida não saiu; o Codex espera");
@@ -614,8 +621,8 @@ impl Watcher {
         Ok(json!({"closed":true,"killed":true}))
     }
 
-    /// `DELETE` que entrou pelo Python. `None` = não é Codex com terminal (o Python encerra como hoje). Sem
-    /// ator aberto (vida ainda não pronta), o pane e o que a vida comprovar; o resto é das lojas do Python.
+    /// `DELETE` do dono. `None` = sem sidecar Codex. Sem ator aberto (vida ainda não pronta), o pane e o que a
+    /// vida comprovar; o sem terminal fecha aqui também (`close_name`); o resto é das lojas do Python.
     /// O `Ok` leva `transcript` (a conversa atual do sidecar) quando ela é conhecida: o sidecar some no
     /// encerramento, e o Python precisa dela para guardar o nome fechado.
     pub async fn kill_by_name(&self,registry:&RuntimeRegistry,name:&str) -> Option<Result<Value,RuntimeError>> {
@@ -640,7 +647,10 @@ impl Watcher {
             return Some(self.kill(registry,&target).await.map(|v|with_transcript(v,target.transcript.as_deref())));
         }
         let meta = match read { Ok(meta) => meta?, Err(error) => return Some(Err(error)) };
-        if meta.get("headless").is_some_and(truthy) { return None; }
+        if meta.get("headless").is_some_and(truthy) {
+            let closed = super::close_name::close_codex_headless(registry,&self.cfg.home,&self.cfg.queue_dir,&self.cfg.mux_program,name).await;
+            return Some(closed.map(|v|with_transcript(v,None)));
+        }
         let _round = self.misses.lock().await;
         if let Err(error) = self.kill_pane(name).await { return Some(Err(error)); }
         if let Some(c) = candidate(&meta,&self.cfg.home) {
