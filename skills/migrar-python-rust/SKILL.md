@@ -29,8 +29,9 @@ autorização registrada no `decisoes.md` é defeito na revisão.
 1. Escreva a responsabilidade numa frase ("quem responde GET /api/X e lê as fontes Y").
 2. Liste todo chamador dos dois lados: rotas FastAPI, `/internal/*`, pontes `*_bridge`,
    `to_thread`/pool que esperam o Rust, chamadas do Rust ao Python, clientes (`packages/core`,
-   `desktop-native/`, `mobile/`), `scripts/`, hooks e plugins. Busca sem filtro de pasta; com
-   busca parcial, nunca afirme "ninguém mais chama". Cada chamador vira um item do plano.
+   `desktop-native/`, `mobile/`), `scripts/`, hooks e plugins, dentro e fora do repositório
+   (`~/.claude/plugins`, `~/.claude/skills`, repositórios que chamam a API). Busca sem filtro de
+   pasta; com busca parcial, nunca afirme "ninguém mais chama". Cada chamador vira um item do plano.
 3. Marque toda volta Rust → Python → Rust e Python → Rust → Python: todas somem.
 4. Estado que o Rust passa a guardar onde o Python relia a fonte viva: todo fim da vida dele
    entra no escopo e é do Rust — fechar pelo Hangar, processo sair sozinho,
@@ -80,6 +81,8 @@ commit, decisão) | plataforma`. Mostre a contagem por área e peça a aprovaç�
 5. Sinal do Claude Code ou do Codex vence adivinhação por transcript ou pane: hook, evento do
    stream-json, campo da statusline, pedido de controle. Confirme no binário instalado e numa
    sessão `cx-*` descartável antes de usar.
+6. Decisão que faz o Rust guardar algo (fila, adiamento, cache, marca) diz quem consome, quando
+   sai e o que a pessoa vê quando ninguém consome. Sem consumidor, a decisão não fecha.
 
 ## 4. Prender o comportamento antes de portar
 
@@ -119,39 +122,47 @@ commit, decisão) | plataforma`. Mostre a contagem por área e peça a aprovaç�
 
 1. Commite tudo antes de abrir worktrees. Rotas independentes, ou cuja base já foi mesclada,
    abrem juntas: um subagente por rota, cada um numa worktree própria a partir da ponta da branch
-   (no Claude Code, `isolation: "worktree"`), no máximo 3 por vez. Todas compilam no target
-   comum da máquina, só o que mudou. Rota que depende de outra espera a base ser mesclada.
+   (no Claude Code, `isolation: "worktree"`), no máximo 3 por vez. Rota que depende de outra
+   espera a base ser mesclada.
 2. O subagente recebe os caminhos absolutos dos arquivos de fase (`.superpowers/` não vai para a
    worktree) e o recorte da rota: as linhas do inventário, o contrato e as decisões que a tocam,
-   as armadilhas da fase 4 e as regras abaixo. Devolve cada ID fechado com o teste que o prova e
-   as linhas RED e GREEN; ID sem teste ou sem RED volta a ele. Só a sessão escreve nos arquivos
-   de fase: a linha nova de inventário (regra 2) e a diferença que pede classificação do usuário
-   vêm no relato, e a sessão grava ou pergunta antes de apagar a worktree.
-3. Rota que toca concorrência, prazo, repetição ou o contrato entre Python e Rust passa, antes da
-   mesclagem, por um revisor de contexto limpo, só leitura, sobre o diff da worktree contra o
-   contrato e o recorte do inventário. A correção volta ao subagente que escreveu; a sessão
-   confere o diff e os testes dela, sem nova rodada do revisor.
-4. A sessão mescla uma worktree por vez: resolve o conflito, sobe o protocolo (regra 7) e roda
-   os testes da rota e dos arquivos do conflito; falha volta à rota até ficar verde. A bateria
-   inteira roda uma vez, após a última mesclagem, antes do push. Worktree mesclada é apagada;
-   rota que dependia dela abre agora.
+   as armadilhas da fase 4 e as regras abaixo. Não compila nem roda teste: escreve o código e os
+   testes, commita e devolve cada ID com o teste que o prova, marcado "escrito sem rodar"; ID sem
+   teste volta a ele. Só a sessão escreve nos arquivos de fase: a linha nova de inventário
+   (regra 2) e a diferença que pede classificação do usuário vêm no relato, e a sessão grava ou
+   pergunta antes de apagar a worktree.
+3. Antes de qualquer compilação, a rota que toca concorrência, prazo, repetição ou o contrato
+   entre Python e Rust passa por um revisor de contexto limpo, só leitura, sobre o diff da
+   worktree contra o contrato e o recorte do inventário. A correção volta ao subagente que
+   escreveu, também sem compilar; a sessão confere o diff dela, sem nova rodada do revisor.
+4. A sessão mescla uma worktree por vez, sem compilar: resolve o conflito e sobe o protocolo
+   (regra 7). Rota que dependia da mesclada abre agora.
+5. Só a sessão compila, depois da última mesclagem do lote, duas vezes, cada uma numa chamada só
+   com os filtros de todas as rotas (`cargo-pinned test -p hangar-server --test it -- <filtros>`):
+   - **Prova de falha:** numa worktree temporária no commit de antes do lote, só com os arquivos
+     de teste novos. Teste novo que passa ali não prova o item e volta à rota; teste que não
+     compila contra o código de antes entra no `conferencia.md` como "sem prova de falha".
+   - **Prova de sucesso:** na branch mesclada.
+6. Falha volta ao subagente da rota: só as linhas da falha dele, todas de uma vez, corrigidas na
+   worktree dele sem compilar. Nova compilação só com as correções de todas as rotas mescladas.
+   Três compilações sem verde: pare e mostre ao usuário. Worktree sai depois da prova de sucesso;
+   a bateria inteira roda uma vez, antes do push.
 
 **Regras de cada item, para o subagente e para a sessão:**
 
 1. Um teste Rust por item, pela interface pública (rota, ator, fila), com o esperado tirado da
-   captura, do teste Python ou do commit de fix e escrito no próprio teste. RED com falha de
-   asserção, depois GREEN.
-2. Diferença achada: primeiro um teste que falha por ela, depois o conserto; então varra a classe
+   captura, do teste Python ou do commit de fix e escrito no próprio teste. O teste usa só a
+   interface pública, para compilar também contra o código de antes.
+2. Diferença achada: um teste que falha por ela e o conserto; então varra a classe
    inteira (os casos irmãos) e registre a linha de inventário que faltava, com o motivo de não
    ter sido pega (o subagente, no relato).
 3. Fixtures reais (pane capturado, JSONL real, payload medido), nunca inventadas.
 4. Toda entrada externa (JSONL, texto de pane, payload HTTP, sidecar) passa por `proptest` ou
    fuzz sem pânico.
 5. Falha visível com código; nunca sucesso falso; nunca reserva Python com o Rust de pé.
-6. Um escritor por worktree. Compile por `scripts/cargo-pinned` (target comum, trava, `-j 2`):
-   pytest e diferencial rodam a cópia que ele fixa no `crates/target` da worktree. Durante a rota,
-   só o teste dela (`cargo-pinned test -p hangar-server --test it <filtro>`), com porta e config
-   dir próprios da worktree, nunca o backend real.
+6. Um escritor por worktree. Só a sessão compila, por `scripts/cargo-pinned` (target comum,
+   trava): pytest e diferencial rodam a cópia que ele fixa no `crates/target` da worktree. Todo
+   teste usa porta e config dir próprios, nunca o backend real.
 7. Contrato interno mudou (rota `/internal`, evento, variável do filho): a sessão sobe
    `INTERNAL_PROTOCOL` (Rust) e `RUST_SERVER_PROTOCOL` (Python) no mesmo commit, na mesclagem; o
    subagente só avisa que a rota dele muda o contrato.
