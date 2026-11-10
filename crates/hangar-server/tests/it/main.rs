@@ -29,6 +29,8 @@ mod tour_progress;
 mod plugins;
 mod push_expo;
 mod artifacts;
+#[cfg(unix)]
+mod workflows;
 mod archive_history;
 mod archive_list;
 mod session_media;

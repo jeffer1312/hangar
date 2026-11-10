@@ -1898,39 +1898,6 @@ async def codex_session_cost(name: str):
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "Codex rollout not found")) from None
 
 
-@app.get("/api/sessions/{name}/workflows", dependencies=[Depends(require_auth)])
-async def workflows_list(name: str):
-    info = await _cached_info(name)
-    if not info or not info.jsonl:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
-    from app.workflows import list_workflows
-    return await asyncio.to_thread(list_workflows, info.jsonl)
-
-
-@app.get("/api/sessions/{name}/workflows/{run_id}", dependencies=[Depends(require_auth)])
-async def workflow_detail(name: str, run_id: str):
-    info = await _cached_info(name)
-    if not info or not info.jsonl:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
-    from app.workflows import get_workflow
-    wf = await asyncio.to_thread(get_workflow, info.jsonl, run_id)
-    if wf is None:
-        raise HTTPException(404, detail=erro("erro_workflow_inexistente", "workflow run not found"))
-    return wf
-
-
-@app.get("/api/sessions/{name}/workflows/{run_id}/agents/{agent_id}", dependencies=[Depends(require_auth)])
-async def workflow_agent_detail(name: str, run_id: str, agent_id: str):
-    info = await _cached_info(name)
-    if not info or not info.jsonl:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
-    from app.workflows import get_agent
-    a = await asyncio.to_thread(get_agent, info.jsonl, run_id, agent_id)
-    if a is None:
-        raise HTTPException(404, detail=erro("erro_agente_inexistente", "agent not found"))
-    return a
-
-
 @app.get("/api/sessions/{name}/peer-address", dependencies=[Depends(require_auth)])
 async def peer_address(name: str):
     """Endereço do inbox nativo desta sessão (cross-session messaging), ou `null`.
