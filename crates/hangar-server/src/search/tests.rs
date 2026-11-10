@@ -1657,12 +1657,15 @@ fn a_conversation_matches_by_its_session_name_first() {
     set_mtime(&other, T0 + 20);
     env.index.update().unwrap();
     let live = std::collections::HashMap::from([(named.to_string_lossy().into_owned(), "hangar-connect".to_owned())]);
-    let found = |q: &str| super::hits::search(&env.index, q, &live, 50).unwrap().into_iter()
-        .map(|h| (h.event_id.unwrap(), h.session_name)).collect::<Vec<_>>();
+    let pairs = |hits: Vec<super::hits::Hit>| hits.into_iter().map(|h| (h.event_id.unwrap(), h.session_name)).collect::<Vec<_>>();
+    let found = |q: &str| pairs(super::hits::search_counted(&env.index, q, &live, 50).unwrap().0);
     let want = vec![("n2".to_owned(), Some("hangar-connect".to_owned())), ("o1".to_owned(), None)];
     assert_eq!(found("connect"), want);
     assert_eq!(found("Hangar Connect"), want, "termos soltos e maiúsculas casam o nome como casam o texto");
     assert_eq!(found("começo"), vec![("n1".to_owned(), Some("hangar-connect".to_owned()))], "sem o nome, só o texto");
+    assert_eq!(found("conn"), vec![("o1".to_owned(), None)], "pedaço de palavra não casa o nome");
+    let asked = pairs(super::hits::search(&env.index, "connect", &live, 50).unwrap());
+    assert_eq!(asked, vec![("o1".to_owned(), None)], "o Perguntar não leva ao modelo a conversa que só o nome trouxe");
 }
 
 #[test]
@@ -1679,7 +1682,7 @@ fn many_matching_names_do_not_push_out_the_text_hits() {
     let text = env.write(SID2, &[line("falei do proj aqui", "t1", "user")], false);
     set_mtime(&text, T0 + 100);
     env.index.update().unwrap();
-    let ids: Vec<String> = super::hits::search(&env.index, "proj", &live, 50).unwrap().into_iter().map(|h| h.event_id.unwrap()).collect();
+    let ids: Vec<String> = super::hits::search_counted(&env.index, "proj", &live, 50).unwrap().0.into_iter().map(|h| h.event_id.unwrap()).collect();
     let mut named: Vec<&str> = ids.iter().map(String::as_str).filter(|id| id.starts_with('n')).collect();
     named.sort_unstable();
     assert_eq!(named, ["n10", "n11", "n2", "n3", "n4", "n5", "n6", "n7", "n8", "n9"]);

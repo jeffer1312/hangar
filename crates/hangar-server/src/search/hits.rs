@@ -232,27 +232,31 @@ pub(crate) fn search(index: &Index, q: &str, live: &HashMap<String, String>, lim
 }
 
 /// `search` e quantas conversas foram consideradas: os transcripts não internos, do índice ou, antes
-/// dele, os achados pela varredura (lidos ou não).
+/// dele, os achados pela varredura (lidos ou não). Casa também o nome da sessão.
 pub(crate) fn search_counted(index: &Index, q: &str, live: &HashMap<String, String>, limit: usize)
     -> Result<(Vec<Hit>, usize), String> {
     found(index, q, live, limit, true)
 }
 
-/// `count`: só a busca mostra quantas conversas considerou; o Perguntar não paga a contagem por termo.
-fn found(index: &Index, q: &str, live: &HashMap<String, String>, limit: usize, count: bool)
+/// `screen`: a busca da tela conta as conversas consideradas e casa o nome; o Perguntar não paga a
+/// contagem por termo nem leva ao modelo a mensagem de uma conversa que só o nome trouxe.
+fn found(index: &Index, q: &str, live: &HashMap<String, String>, limit: usize, screen: bool)
     -> Result<(Vec<Hit>, usize), String> {
     let terms = terms(q);
     if terms.is_empty() {
         return Ok((Vec::new(), 0));
     }
     let indexed = index.search(&terms, limit)
-        .and_then(|rows| rows.map(|rows| Ok((rows, if count { index.conversations()? } else { 0 }))).transpose());
+        .and_then(|rows| rows.map(|rows| Ok((rows, if screen { index.conversations()? } else { 0 }))).transpose());
     if indexed.is_ok() { index.recovered("busca.indice_falhou", ""); }
-    let folded: Vec<String> = terms.iter().map(|t| fold(t)).collect();
+    let mut first = HashSet::new();
     let (hits, considered) = match indexed {
         Ok(Some((mut rows, considered))) => {
             let closed = closed_names(index);
-            rows.extend(named_rows(index, &rows, &folded, live, &closed));
+            if screen {
+                let folded: Vec<String> = terms.iter().map(|t| fold(t)).collect();
+                first = by_name(index, &mut rows, &folded, live, &closed);
+            }
             (from_rows(rows, &terms, live, &closed), considered)
         }
         // shortcut: antes do índice pronto a varredura casa só o texto; o nome entra quando ele fica pronto.
@@ -263,43 +267,39 @@ fn found(index: &Index, q: &str, live: &HashMap<String, String>, limit: usize, c
         }
     };
     let mut hits = order(without_repeats(hits), usize::MAX);
-    // Quem procura o nome de uma sessão quer ela primeiro; só as mais novas, para termo comum a muitos
-    // nomes ("hangar") não tirar os trechos de texto.
-    let mut named: Vec<(f64, &str)> = hits.iter()
-        .filter(|h| h.session_name.as_deref().or(h.name.as_deref()).is_some_and(|n| name_matches(n, &folded)))
-        .map(|h| (h.mtime, h.session_id.as_str())).collect();
-    named.sort_by(|a, b| b.0.total_cmp(&a.0));
-    let mut first: HashSet<String> = HashSet::new();
-    for (_, sid) in named {
-        if first.len() == NAMED_FIRST { break; }
-        first.insert(sid.to_owned());
-    }
     hits.sort_by_key(|h| !first.contains(&h.session_id));
     hits.truncate(limit);
     Ok((hits, considered))
 }
 
+/// Quantas conversas o nome põe à frente: termo comum a muitos nomes ("hangar") não tira os trechos de texto.
 const NAMED_FIRST: usize = 10;
 
-fn name_matches(name: &str, folded: &[String]) -> bool {
-    let name = fold(name);
-    folded.iter().all(|t| name.contains(t.as_str()))
-}
+/// Todos os termos como palavra inteira no nome, a regra do texto (D28): "tour" não casa "estoura".
+fn name_matches(name: &str, folded: &[String]) -> bool { whole(name, folded) }
 
-/// A última mensagem de cada conversa cujo nome (o da sessão viva, senão o de fechada) tem os termos e
-/// que o texto não trouxe.
-fn named_rows(index: &Index, rows: &[Row], folded: &[String], live: &HashMap<String, String>, closed: &HashMap<String, String>)
-    -> Vec<Row> {
-    let found: HashSet<String> = rows.iter().map(|r| crate::list::discover::real(&r.path)).collect();
-    let mut wanted: Vec<(f64, &String)> = live.keys().chain(closed.keys())
-        .filter(|p| !found.contains(*p) && live.get(*p).or_else(|| closed.get(*p)).is_some_and(|n| name_matches(n, folded)))
+/// As conversas mais novas cujo nome (o da sessão viva, senão o de fechada) tem os termos vão à frente;
+/// as que o texto não trouxe entram pela última mensagem. Devolve as `session_id` delas.
+fn by_name(index: &Index, rows: &mut Vec<Row>, folded: &[String], live: &HashMap<String, String>, closed: &HashMap<String, String>)
+    -> HashSet<String> {
+    let paths: HashSet<&String> = live.keys().chain(closed.keys()).collect();
+    let mut named: Vec<(f64, &String)> = paths.into_iter()
+        .filter(|p| live.get(*p).or_else(|| closed.get(*p)).is_some_and(|n| name_matches(n, folded)))
         .filter_map(|p| Some((mtime_of(p)?, p))).collect();
-    wanted.sort_by(|a, b| b.0.total_cmp(&a.0));
-    let wanted: HashSet<String> = wanted.into_iter().take(NAMED_FIRST).map(|(_, p)| p.clone()).collect();
-    match index.last_messages(&wanted) {
-        Ok(rows) => { index.recovered("busca.nome_falhou", ""); rows }
-        Err(e) => { index.report_once("busca.nome_falhou", "", || e.to_string()); Vec::new() }
+    named.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let top: HashSet<&String> = named.into_iter().take(NAMED_FIRST).map(|(_, p)| p).collect();
+    let reals: Vec<String> = rows.iter().map(|r| crate::list::discover::real(&r.path)).collect();
+    let mut first: HashSet<String> = rows.iter().zip(&reals).filter(|(_, p)| top.contains(p)).map(|(r, _)| r.session_id.clone()).collect();
+    let missing: HashSet<String> = top.into_iter().filter(|p| !reals.contains(*p)).cloned().collect();
+    match index.last_messages(&missing) {
+        Ok(new) => {
+            index.recovered("busca.nome_falhou", "");
+            first.extend(new.iter().map(|r| r.session_id.clone()));
+            rows.extend(new);
+        }
+        Err(e) => index.report_once("busca.nome_falhou", "", || e.to_string()),
     }
+    first
 }
 
 /// Nomes das sessões fechadas, pelo mesmo leitor do Arquivo; índice sem ambiente não tem nenhum.
