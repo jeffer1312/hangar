@@ -263,11 +263,23 @@ fn found(index: &Index, q: &str, live: &HashMap<String, String>, limit: usize, c
         }
     };
     let mut hits = order(without_repeats(hits), usize::MAX);
-    // Quem procura o nome de uma sessão quer ela primeiro.
-    hits.sort_by_key(|h| !h.session_name.as_deref().or(h.name.as_deref()).is_some_and(|n| name_matches(n, &folded)));
+    // Quem procura o nome de uma sessão quer ela primeiro; só as mais novas, para termo comum a muitos
+    // nomes ("hangar") não tirar os trechos de texto.
+    let mut named: Vec<(f64, &str)> = hits.iter()
+        .filter(|h| h.session_name.as_deref().or(h.name.as_deref()).is_some_and(|n| name_matches(n, &folded)))
+        .map(|h| (h.mtime, h.session_id.as_str())).collect();
+    named.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let mut first: HashSet<String> = HashSet::new();
+    for (_, sid) in named {
+        if first.len() == NAMED_FIRST { break; }
+        first.insert(sid.to_owned());
+    }
+    hits.sort_by_key(|h| !first.contains(&h.session_id));
     hits.truncate(limit);
     Ok((hits, considered))
 }
+
+const NAMED_FIRST: usize = 10;
 
 fn name_matches(name: &str, folded: &[String]) -> bool {
     let name = fold(name);
@@ -279,9 +291,11 @@ fn name_matches(name: &str, folded: &[String]) -> bool {
 fn named_rows(index: &Index, rows: &[Row], folded: &[String], live: &HashMap<String, String>, closed: &HashMap<String, String>)
     -> Vec<Row> {
     let found: HashSet<String> = rows.iter().map(|r| crate::list::discover::real(&r.path)).collect();
-    let wanted: HashSet<String> = live.keys().chain(closed.keys())
+    let mut wanted: Vec<(f64, &String)> = live.keys().chain(closed.keys())
         .filter(|p| !found.contains(*p) && live.get(*p).or_else(|| closed.get(*p)).is_some_and(|n| name_matches(n, folded)))
-        .cloned().collect();
+        .filter_map(|p| Some((mtime_of(p)?, p))).collect();
+    wanted.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let wanted: HashSet<String> = wanted.into_iter().take(NAMED_FIRST).map(|(_, p)| p.clone()).collect();
     match index.last_messages(&wanted) {
         Ok(rows) => { index.recovered("busca.nome_falhou", ""); rows }
         Err(e) => { index.report_once("busca.nome_falhou", "", || e.to_string()); Vec::new() }
