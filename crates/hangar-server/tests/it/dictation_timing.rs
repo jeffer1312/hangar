@@ -1,5 +1,5 @@
 //! `dictation.timing`: cada pedido de ditado deixa no diário o tempo de cada etapa, sem texto nem chave.
-use axum::{Router, routing::{get, post}};
+use axum::{Router, routing::post};
 use hangar_server::{
     accounts::{AccountService, environment::AccountEnvironment},
     auth::TrustedHosts,
@@ -7,13 +7,27 @@ use hangar_server::{
     routes::{AppState, router},
 };
 use serde_json::{Value, json};
-use std::{net::SocketAddr, path::{Path, PathBuf}, sync::{Arc, Mutex}};
+use std::{net::SocketAddr, path::{Path, PathBuf}, sync::Arc};
 
 const SPOKEN: &str = "Fala original do ditado.";
 
 /// Contas num HOME temporário: o diário do teste não cai no da máquina.
 pub fn isolated_accounts(home: &Path) -> AccountService {
     AccountService::new(environment(home))
+}
+
+/// Grava a configuração real usada pela transcrição e pela organização do ditado.
+pub fn configure(state: &AppState, snapshot: &Value) {
+    let mut values = snapshot.get("organization").and_then(Value::as_object).cloned().unwrap_or_default();
+    if let Some(providers) = snapshot.get("providers") {
+        values.insert("transcription_providers".into(), providers.clone());
+    }
+    for (source, target) in [("user_vocabulary", "ditado_vocabulario"), ("vocabulary", "ditado_vocabulario"), ("dictation_max_minutes", "dictation_max_minutes")] {
+        if let Some(value) = snapshot.get(source) { values.insert(target.into(), value.clone()); }
+    }
+    let directory = &state.accounts.env.claude_base;
+    std::fs::create_dir_all(directory).unwrap();
+    std::fs::write(directory.join("runtime-config.json"), serde_json::to_vec(&values).unwrap()).unwrap();
 }
 
 fn environment(home: &Path) -> AccountEnvironment {
@@ -39,7 +53,7 @@ pub async fn timing_lines(home: &Path, count: usize) -> (Vec<Value>, String) {
 
 struct Server {
     home: tempfile::TempDir,
-    config: Arc<Mutex<Value>>,
+    state: Arc<AppState>,
     base: String,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
@@ -55,17 +69,12 @@ impl Server {
         let home = tempfile::tempdir().unwrap();
         let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let upstream_addr = upstream.local_addr().unwrap();
-        let config = Arc::new(Mutex::new(json!({
+        let config = json!({
             "providers": [{"id":"p","name":"Fixture STT","kind":"openai","api_key":"fixture-secret-key",
                 "base_url":format!("http://{upstream_addr}/v1"),"model":"fixture"}],
-            "organization": {"dictation_organization_mode":"none"}})));
-        let served = config.clone();
-        let python = tokio::spawn(async move {
+            "organization": {"dictation_organization_mode":"none"}});
+        let provider = tokio::spawn(async move {
             axum::serve(upstream, Router::new()
-                .route("/internal/transcription/config", get(move || {
-                    let value = served.lock().unwrap().clone();
-                    async move { ([("content-type", "application/json")], value.to_string()) }
-                }))
                 .route("/v1/audio/transcriptions", post(|| async { ([("content-type", "application/json")], json!({"text": SPOKEN}).to_string()) })))
                 .await.unwrap();
         });
@@ -81,11 +90,13 @@ impl Server {
         });
         state.hangar_dir = home.path().join(".hangar");
         state.accounts = isolated_accounts(home.path());
-        let app = router(Arc::new(state));
+        configure(&state, &config);
+        let state = Arc::new(state);
+        let app = router(state.clone());
         let server = tokio::spawn(async move {
             axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap();
         });
-        Self { home, config, base: format!("http://{addr}"), tasks: vec![python, server] }
+        Self { home, state, base: format!("http://{addr}"), tasks: vec![provider, server] }
     }
     async fn post(&self, path: &str, body: reqwest::Body) -> u16 {
         reqwest::Client::new().post(format!("{}{path}", self.base)).bearer_auth("owner").body(body)
@@ -121,7 +132,7 @@ async fn dictation_timing_records_reorganization_and_failure() {
     let server = Server::start().await;
     let body = json!({"texto": SPOKEN, "estilo": "limpar", "organization_mode": "none"}).to_string();
     assert_eq!(server.post("/api/ditado/relimpar", body.into()).await, 200);
-    server.config.lock().unwrap()["providers"] = json!([]);
+    configure(&server.state, &json!({"providers":[]}));
     assert_eq!(server.post("/api/dictation/transcribe?limpar=0", "audio".into()).await, 503);
     let (lines, text) = timing_lines(server.home.path(), 2).await;
     assert_eq!(lines.len(), 2, "{text}");
@@ -139,12 +150,13 @@ async fn dictation_timing_records_reorganization_and_failure() {
 async fn dictation_timing_marks_fallback_raw_text_and_refused_query() {
     let server = Server::start().await;
     {
-        let mut config = server.config.lock().unwrap();
-        let good = config["providers"][0].clone();
+        let path = server.state.accounts.env.claude_base.join("runtime-config.json");
+        let config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let good = config["transcription_providers"][0].clone();
         let mut bad = good.clone();
         bad["id"] = json!("q");
         bad["base_url"] = json!(good["base_url"].as_str().unwrap().replace("/v1", "/fora/v1"));
-        config["providers"] = json!([bad, good]);
+        configure(&server.state, &json!({"providers":[bad, good]}));
     }
     assert_eq!(server.post("/api/dictation/transcribe?limpar=0", "audio".into()).await, 200);
     let (lines, text) = timing_lines(server.home.path(), 1).await;

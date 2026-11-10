@@ -293,8 +293,10 @@ Este
 `/api/ditado/relimpar`, `/api/dictation/models` e status/teste de provedores de transcrição
 chamam os motores dentro do Rust. As portas Python não as atendem nem repassam: por elas
 (convidado com login próprio, 8768) e no modo `python`, o ditado responde 404.
-Os fatos de configuração continuam no Python, sem chamar o Rust de volta; as pontes de
-catálogo só ficam onde ainda têm consumidores. TTS é outra capacidade: sua migração e a dos
+Desde 09/11/2026, transcrição e organização leem a configuração efetiva pelo `RuntimeConfig`
+do Rust, preservando a precedência do arquivo sobre o ambiente, os provedores em ordem,
+a opção legada e o vocabulário. A rota interna `/internal/transcription/config` foi removida;
+as pontes de catálogo só ficam onde ainda têm consumidores. TTS é outra capacidade: sua migração e a dos
 consumidores de narração estão descritas em [Leitura, narração e traduções no Rust](#leitura-narração-e-traduções-no-rust-29102026).
 
 As referências de equivalência vêm da execução do Python antes da remoção e estão escritas em

@@ -1,7 +1,7 @@
 //! Organização preserva a transcrição e não escolhe outro serviço quando o solicitado falha.
 use axum::{
     Router,
-    routing::{get, post},
+    routing::post,
 };
 use hangar_server::{auth::TrustedHosts, config::Config, routes::AppState};
 use serde_json::{Value, json};
@@ -49,19 +49,11 @@ pub(crate) async fn organize_text(
     let config = json!({"organization": {"dictation_organization_mode": mode,
         "llm_base_url":format!("http://{llm}/v1"), "llm_api_key":"fixture-key", "llm_model":"fixture-model",
         "ditado_estilo":"limpar"}});
-    let (upstream, upstream_task) = serve(Router::new().route(
-        "/internal/transcription/config",
-        get(move || {
-            let config = config.clone();
-            async move { ([("content-type", "application/json")], config.to_string()) }
-        }),
-    ))
-    .await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let mut state = AppState::new(Config {
         listen: addr,
-        upstream,
+        upstream: "127.0.0.1:1".parse().unwrap(),
         internal_secret: "dictation-secret".into(),
         auth_token: "fixture-owner".into(),
         log_path: None,
@@ -70,6 +62,7 @@ pub(crate) async fn organize_text(
     // O `dictation.timing` do relimpar não pode cair no diário da máquina.
     let home = tempfile::tempdir().unwrap();
     state.accounts = super::dictation_timing::isolated_accounts(home.path());
+    super::dictation_timing::configure(&state, &config);
     let router = hangar_server::routes::router(Arc::new(state));
     let server = tokio::spawn(async move {
         axum::serve(
@@ -90,7 +83,6 @@ pub(crate) async fn organize_text(
     let status = response.status();
     let body = response.text().await.unwrap();
     server.abort();
-    upstream_task.abort();
     llm_task.abort();
     assert_eq!(status, 200, "organização não respondeu: {body}");
     (
@@ -149,19 +141,6 @@ async fn dictation_external_names_the_api_failure_instead_of_invalid_text() {
     }
 }
 
-#[tokio::test]
-async fn dictation_missing_organization_config_is_an_error_not_mode_none() {
-    let (upstream, upstream_task) = serve(Router::new().route(
-        "/internal/transcription/config",
-        get(|| async { ([("content-type", "application/json")], "{\"providers\":[]}") }),
-    ))
-    .await;
-    let result = post_organize(upstream, json!({"raw":raw_text(),"style":"limpar"})).await;
-    upstream_task.abort();
-    assert_eq!(result["organization_code"], "dictation_rust_unavailable", "{result}");
-    assert_eq!(result["text"], raw_text());
-}
-
 fn raw_text() -> &'static str {
     "  Hoje vamos conferir o ditado completo.\n"
 }
@@ -170,25 +149,15 @@ async fn organize_against(base_url: &str, mode: &str, raw: &str) -> Value {
     let config = json!({"organization": {"dictation_organization_mode": mode,
         "llm_base_url":base_url, "llm_api_key":"fixture-key", "llm_model":"fixture-model",
         "ditado_estilo":"limpar"}});
-    let (upstream, upstream_task) = serve(Router::new().route(
-        "/internal/transcription/config",
-        get(move || {
-            let config = config.clone();
-            async move { ([("content-type", "application/json")], config.to_string()) }
-        }),
-    ))
-    .await;
-    let result = post_organize(upstream, json!({"raw":raw,"style":"limpar"})).await;
-    upstream_task.abort();
-    result
+    post_organize(config, json!({"raw":raw,"style":"limpar"})).await
 }
 
-async fn post_organize(upstream: std::net::SocketAddr, body: Value) -> Value {
+async fn post_organize(config: Value, body: Value) -> Value {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let mut state = AppState::new(Config {
         listen: addr,
-        upstream,
+        upstream: "127.0.0.1:1".parse().unwrap(),
         internal_secret: "dictation-secret".into(),
         auth_token: "fixture-owner".into(),
         log_path: None,
@@ -196,6 +165,7 @@ async fn post_organize(upstream: std::net::SocketAddr, body: Value) -> Value {
     });
     let home = tempfile::tempdir().unwrap();
     state.accounts = super::dictation_timing::isolated_accounts(home.path());
+    super::dictation_timing::configure(&state, &config);
     let router = hangar_server::routes::router(Arc::new(state));
     let server = tokio::spawn(async move {
         axum::serve(

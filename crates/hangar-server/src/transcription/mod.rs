@@ -1,4 +1,5 @@
 pub mod model;
+pub(crate) mod configuration;
 mod cloud;
 pub mod service;
 mod quota;
@@ -10,3 +11,6 @@ mod vocabulary;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod configuration_tests;
