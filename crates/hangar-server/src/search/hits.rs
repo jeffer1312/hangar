@@ -232,31 +232,74 @@ pub(crate) fn search(index: &Index, q: &str, live: &HashMap<String, String>, lim
 }
 
 /// `search` e quantas conversas foram consideradas: os transcripts não internos, do índice ou, antes
-/// dele, os achados pela varredura (lidos ou não).
+/// dele, os achados pela varredura (lidos ou não). Casa também o nome da sessão.
 pub(crate) fn search_counted(index: &Index, q: &str, live: &HashMap<String, String>, limit: usize)
     -> Result<(Vec<Hit>, usize), String> {
     found(index, q, live, limit, true)
 }
 
-/// `count`: só a busca mostra quantas conversas considerou; o Perguntar não paga a contagem por termo.
-fn found(index: &Index, q: &str, live: &HashMap<String, String>, limit: usize, count: bool)
+/// `screen`: a busca da tela conta as conversas consideradas e casa o nome; o Perguntar não paga a
+/// contagem por termo nem leva ao modelo a mensagem de uma conversa que só o nome trouxe.
+fn found(index: &Index, q: &str, live: &HashMap<String, String>, limit: usize, screen: bool)
     -> Result<(Vec<Hit>, usize), String> {
     let terms = terms(q);
     if terms.is_empty() {
         return Ok((Vec::new(), 0));
     }
     let indexed = index.search(&terms, limit)
-        .and_then(|rows| rows.map(|rows| Ok((rows, if count { index.conversations()? } else { 0 }))).transpose());
+        .and_then(|rows| rows.map(|rows| Ok((rows, if screen { index.conversations()? } else { 0 }))).transpose());
     if indexed.is_ok() { index.recovered("busca.indice_falhou", ""); }
+    let mut first = HashSet::new();
     let (hits, considered) = match indexed {
-        Ok(Some((rows, considered))) => (from_rows(rows, &terms, live, &closed_names(index)), considered),
+        Ok(Some((mut rows, considered))) => {
+            let closed = closed_names(index);
+            if screen {
+                let folded: Vec<String> = terms.iter().map(|t| fold(t)).collect();
+                first = by_name(index, &mut rows, &folded, live, &closed);
+            }
+            (from_rows(rows, &terms, live, &closed), considered)
+        }
+        // shortcut: antes do índice pronto a varredura casa só o texto; o nome entra quando ele fica pronto.
         Ok(None) => scan(index, &index.accounts()?, &terms, live, limit),
         Err(e) => {
             index.report_once("busca.indice_falhou", "", || e.to_string());
             scan(index, &index.accounts()?, &terms, live, limit)
         }
     };
-    Ok((order(without_repeats(hits), limit), considered))
+    let mut hits = order(without_repeats(hits), usize::MAX);
+    hits.sort_by_key(|h| !first.contains(&h.session_id));
+    hits.truncate(limit);
+    Ok((hits, considered))
+}
+
+/// Quantas conversas o nome põe à frente: termo comum a muitos nomes ("hangar") não tira os trechos de texto.
+const NAMED_FIRST: usize = 10;
+
+/// Todos os termos como palavra inteira no nome, a regra do texto (D28): "tour" não casa "estoura".
+fn name_matches(name: &str, folded: &[String]) -> bool { whole(name, folded) }
+
+/// As conversas mais novas cujo nome (o da sessão viva, senão o de fechada) tem os termos vão à frente;
+/// as que o texto não trouxe entram pela última mensagem. Devolve as `session_id` delas.
+fn by_name(index: &Index, rows: &mut Vec<Row>, folded: &[String], live: &HashMap<String, String>, closed: &HashMap<String, String>)
+    -> HashSet<String> {
+    let paths: HashSet<&String> = live.keys().chain(closed.keys()).collect();
+    let mut named: Vec<(f64, &String)> = paths.into_iter()
+        .filter(|p| live.get(*p).or_else(|| closed.get(*p)).is_some_and(|n| name_matches(n, folded)))
+        .filter_map(|p| Some((mtime_of(p)?, p))).collect();
+    named.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let top: HashSet<&String> = named.into_iter().take(NAMED_FIRST).map(|(_, p)| p).collect();
+    let reals: Vec<String> = rows.iter().map(|r| crate::list::discover::real(&r.path)).collect();
+    let mut first: HashSet<String> = rows.iter().zip(&reals).filter(|(_, p)| top.contains(p)).map(|(r, _)| r.session_id.clone()).collect();
+    let missing: HashSet<String> = top.into_iter().filter(|p| !reals.contains(*p)).cloned().collect();
+    match index.last_messages(&missing) {
+        Ok(new) => {
+            index.recovered("busca.nome_falhou", "");
+            first.extend(new.iter().map(|r| r.session_id.clone()));
+            rows.extend(new);
+        }
+        Err(e) => index.report_once("busca.nome_falhou", "", || e.to_string()),
+    }
+    first
 }
 
 /// Nomes das sessões fechadas, pelo mesmo leitor do Arquivo; índice sem ambiente não tem nenhum.

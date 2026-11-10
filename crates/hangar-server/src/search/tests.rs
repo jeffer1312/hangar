@@ -1645,3 +1645,46 @@ fn rebuilds_in_a_row_stop_waking_the_producer_after_three_until_a_pass_works() {
     env.index.rebuild_after_corruption();
     assert_eq!(rx.try_iter().count(), 1, "passada boa zera a contagem");
 }
+
+#[test]
+fn a_conversation_matches_by_its_session_name_first() {
+    // O nome da sessão tem os termos e a conversa não: ela entra pela última mensagem, à frente das que
+    // só falam deles.
+    let env = Env::small(quiet());
+    let named = env.write(SID, &[line("começo", "n1", "user"), line("fim da conversa", "n2", "assistant")], false);
+    set_mtime(&named, T0 + 10);
+    let other = env.write(SID2, &[line("falei do hangar-connect aqui", "o1", "user")], false);
+    set_mtime(&other, T0 + 20);
+    env.index.update().unwrap();
+    let live = std::collections::HashMap::from([(named.to_string_lossy().into_owned(), "hangar-connect".to_owned())]);
+    let pairs = |hits: Vec<super::hits::Hit>| hits.into_iter().map(|h| (h.event_id.unwrap(), h.session_name)).collect::<Vec<_>>();
+    let found = |q: &str| pairs(super::hits::search_counted(&env.index, q, &live, 50).unwrap().0);
+    let want = vec![("n2".to_owned(), Some("hangar-connect".to_owned())), ("o1".to_owned(), None)];
+    assert_eq!(found("connect"), want);
+    assert_eq!(found("Hangar Connect"), want, "termos soltos e maiúsculas casam o nome como casam o texto");
+    assert_eq!(found("começo"), vec![("n1".to_owned(), Some("hangar-connect".to_owned()))], "sem o nome, só o texto");
+    assert_eq!(found("conn"), vec![("o1".to_owned(), None)], "pedaço de palavra não casa o nome");
+    let asked = pairs(super::hits::search(&env.index, "connect", &live, 50).unwrap());
+    assert_eq!(asked, vec![("o1".to_owned(), None)], "o Perguntar não leva ao modelo a conversa que só o nome trouxe");
+}
+
+#[test]
+fn many_matching_names_do_not_push_out_the_text_hits() {
+    // Termo comum a muitos nomes ("hangar"): entram só as 10 conversas mais novas pelo nome, e o trecho
+    // de texto continua.
+    let env = Env::small(quiet());
+    let mut live = std::collections::HashMap::new();
+    for i in 0..12u64 {
+        let path = env.write(&format!("{i:08}-0000-4000-8000-000000000000"), &[line("oi", &format!("n{i}"), "user")], false);
+        set_mtime(&path, T0 + i);
+        live.insert(path.to_string_lossy().into_owned(), format!("proj-{i}"));
+    }
+    let text = env.write(SID2, &[line("falei do proj aqui", "t1", "user")], false);
+    set_mtime(&text, T0 + 100);
+    env.index.update().unwrap();
+    let ids: Vec<String> = super::hits::search_counted(&env.index, "proj", &live, 50).unwrap().0.into_iter().map(|h| h.event_id.unwrap()).collect();
+    let mut named: Vec<&str> = ids.iter().map(String::as_str).filter(|id| id.starts_with('n')).collect();
+    named.sort_unstable();
+    assert_eq!(named, ["n10", "n11", "n2", "n3", "n4", "n5", "n6", "n7", "n8", "n9"]);
+    assert!(ids.contains(&"t1".to_owned()), "{ids:?}");
+}
