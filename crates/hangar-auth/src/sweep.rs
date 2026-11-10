@@ -185,8 +185,10 @@ mod tests {
         let dir = root.path().join("hangar-auth-child");
         fs::create_dir(&dir).unwrap();
         let _owner = SharedLimiter::open(config(&dir, "create")).unwrap();
+        // O descritor que o próprio shell abre para listar a pasta já fechou na hora do `readlink`: ele falha,
+        // e sem o `|| true` o resultado do comando dependia de quais descritores o processo herdou.
         let listed = std::process::Command::new("/bin/sh")
-            .args(["-c", "for f in /proc/$$/fd/*; do readlink \"$f\"; done"]).output().unwrap();
+            .args(["-c", "for f in /proc/$$/fd/*; do readlink \"$f\" 2>/dev/null || true; done"]).output().unwrap();
         let open = String::from_utf8_lossy(&listed.stdout);
         assert!(listed.status.success() && !open.is_empty(), "o filho não listou os descritores");
         assert!(!open.contains(ALIVE), "o marcador vazou para o processo filho: {open}");
