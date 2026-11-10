@@ -168,19 +168,6 @@ def _isolated_runtime_storage(tmp_path_factory):
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _sem_endereco_do_plugin_real():
-    # O `_lifespan` grava ~/.hangar/plugin.json; sem isto o TestClient trocaria o arquivo da máquina
-    # pela config do teste e as sessões vivas do plugin falariam com um backend que não existe.
-    from app import plugin_bridge
-    original = plugin_bridge.publish_address
-    plugin_bridge.publish_address = lambda home=None: None
-    try:
-        yield
-    finally:
-        plugin_bridge.publish_address = original
-
-
-@pytest.fixture(scope="session", autouse=True)
 def _sem_orquestracoes_reais(tmp_path_factory):
     # O Rust resolve o cofre pela casa do processo; um patch no módulo Python não o isolaria.
     pasta = tmp_path_factory.mktemp("rust-home")

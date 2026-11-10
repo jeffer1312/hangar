@@ -1,6 +1,5 @@
 """Ponte do plugin de function hooks: token, instalação, faixa e avisos dos mods."""
 import asyncio
-import json
 from pathlib import Path
 
 import pytest
@@ -113,10 +112,6 @@ def test_hangar_abre_a_lista_dos_mods_e_pasta_sem_manifesto_fica_fora(tmp_path, 
     assert argv[:9] == ["claude", "--session-id", "sid",
                         "--plugin-dir", raizes[0], "--plugin-dir", raizes[1], "--plugin-dir", raizes[2]]
 
-    home = tmp_path / "home"
-    pb._publish_plugin_dir(home)
-    assert pb.plugin_dir_file(home).read_text(encoding="utf-8") == "".join(f"{r}\n" for r in raizes)
-
 
 def test_interruptor_desligado_tira_o_plugin_mesmo_com_mods_por_padrao(monkeypatch):
     from app import runtime_config
@@ -128,30 +123,6 @@ def test_interruptor_desligado_tira_o_plugin_mesmo_com_mods_por_padrao(monkeypat
 async def _ate(cond):
     while not cond():
         await asyncio.sleep(0.01)
-
-
-def test_endereco_da_maquina_e_gravado_sem_o_bearer(tmp_path):
-    pb._publish_address(tmp_path)
-    texto = pb.machine_file(tmp_path).read_text(encoding="utf-8")
-    from app.config import settings
-    assert json.loads(texto)["url"].endswith("/api/plugin")
-    assert json.loads(texto)["chave"] == pb.machine_key()
-    assert not settings.auth_token or settings.auth_token not in texto
-
-
-def test_plugin_dir_is_published_for_the_shell_wrapper(tmp_path, monkeypatch):
-    monkeypatch.setattr(pb, "raizes_dos_plugins", lambda: ["/repo com espaço/plugins/hangar"])
-    pb._publish_plugin_dir(tmp_path)
-    # Uma linha só e sem BOM: o wrapper lê com `read` do shell.
-    assert pb.plugin_dir_file(tmp_path).read_bytes() == "/repo com espaço/plugins/hangar\n".encode()
-
-
-def test_plugin_dir_file_is_removed_when_mods_are_off(tmp_path, monkeypatch):
-    monkeypatch.setattr(pb, "raizes_dos_plugins", lambda: ["/repo/plugins/hangar"])
-    pb._publish_plugin_dir(tmp_path)
-    monkeypatch.setattr(pb, "raizes_dos_plugins", lambda: [])
-    pb._publish_plugin_dir(tmp_path)
-    assert not pb.plugin_dir_file(tmp_path).exists()
 
 
 def test_conversa_acompanhada_so_vale_com_vinculo_certo(monkeypatch):
