@@ -107,7 +107,9 @@ pub struct Produced { pub rows: Arc<Vec<SessionRow>>, pub facts: Arc<ListFacts>,
 
 /// Últimas leituras boas do disco que podem falhar numa rodada: transferências e atalhos.
 #[derive(Default)]
-struct LocalLast { transfers: Option<(Vec<SessionRow>, HashSet<String>)>, shortcuts: Option<String> }
+struct LocalLast { transfers: Option<(Vec<SessionRow>, HashSet<String>)>, shortcuts: Option<String>,
+    /// A última leitura dos panes descartou linha: o que falta nela não prova ausência.
+    panes_partial: bool }
 
 struct Discovery { at: Instant, wall: f64, epoch: u64,
     /// Mapa de processos relido nesta descoberta, não o do cache de 3 s.
@@ -512,6 +514,7 @@ impl ListBridge {
         let dirs = self.dirs()?;
         let (at, wall) = (Instant::now(), wall_now());
         let (panes, dropped) = self.env.mux.list_panes_checked().await.map_err(|e| fail("mux_unavailable", e.code))?;
+        let partial = dropped.is_some();
         if let Some(p) = dropped {
             self.facts.diag.report("rust.list_discovery", &p.key, p.code, p.reason);
         }
@@ -527,6 +530,8 @@ impl ListBridge {
             self.facts.diag.report("rust.list_discovery", &p.key, p.code, p.reason);
         }
         self.flush_notes();
+        // Junto da descoberta guardada: se esta falhasse antes daqui, a marca descreveria panes que ninguém usa.
+        lock(&self.local).panes_partial = partial;
         *slot = Some(Discovery { at, wall, epoch, fresh: newer_than.is_some(), rows: rows.clone(), agent_pids: agent_pids.clone(),
             panes: panes.clone(), children: children.clone() });
         Ok((rows, agent_pids, panes, children))
@@ -686,9 +691,10 @@ impl ListBridge {
         let (program, kids) = (self.env.capture_program.clone(), children.clone());
         // Os panes desta rodada já dizem se existe sessão de atalho. No Windows a leitura direta do psmux
         // não foi conferida para isso, e lá o `list-sessions` segue a cada rodada. Com atalho na última
-        // lista a leitura continua: só ela confirma que o último saiu.
-        let listed = lock(&self.local).shortcuts.as_deref().is_some_and(|last| last != "[]");
-        let present = cfg!(windows) || listed || panes.iter().any(|pane| pane.session.starts_with(local_shortcuts::PREFIX));
+        // lista a leitura continua: só ela confirma que o último saiu. Leitura de panes que descartou
+        // linha também não prova ausência.
+        let unproved = { let last = lock(&self.local); last.panes_partial || last.shortcuts.as_deref().is_some_and(|list| list != "[]") };
+        let present = cfg!(windows) || unproved || panes.iter().any(|pane| pane.session.starts_with(local_shortcuts::PREFIX));
         let shortcuts = self.shortcuts.round(move || async move { local_shortcuts::list_all(&program, &kids, present).await });
         let (runtime, plugins) = tokio::join!(runtime, self.plugin_facts(&rows));
         let (facts_ok, facts_fresh) = (fetched.ok, fetched.fresh);

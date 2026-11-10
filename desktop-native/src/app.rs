@@ -1768,6 +1768,7 @@ impl Hangar {
         self.clear_visible_preview();
         // Sem sessão aberta, nada da conversa anterior fica de pé: textos preparados, páginas e o Chromium delas.
         self.rich.clear();
+        self.pages.clear(cx);
         self.sync_rows(cx);
         self.pages.warm(false, window, cx);
         self.error = None;
@@ -1937,11 +1938,14 @@ impl Hangar {
                         _ => None,
                     };
                     // Menu, renomear, fechar e grupo das linhas desta máquina acompanham a lista dela como os da ativa.
-                    if self.receive_remote(generation, key.clone(), update, cx) {
+                    let (changed, gone) = self.receive_remote(generation, key.clone(), update, cx);
+                    if changed {
                         self.tour_dirty = true;
                         self.sidebar_sessions_changed(window, cx);
                     }
                     self.remote_changed(&key, window, cx);
+                    // Depois do `follow_open`: a aberta que fechou de vez já saiu da seleção.
+                    self.forget_closed(&key, &gone);
                     if live { self.live_changed(&key, window, cx); }
                     if let Some(locked) = keyring && self.set_keyring(&key, locked, window, cx) {
                         self.redraw(panes::Area::Nav, cx);

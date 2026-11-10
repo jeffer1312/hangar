@@ -35,11 +35,10 @@ pub async fn read(service: &AccountService) -> Result<Snapshot,OpenError> {
     if available("claude") {
         match service.claude_accounts() {
             Ok(accounts) => {
-                use futures_util::StreamExt;
-                // Cada leitura pode subir a CLI: no máximo 4 de uma vez, como em `claude_states_of`.
-                logins = futures_util::stream::iter(accounts)
-                    .map(|(_,account)|async move { service.read_claude_auth(&account).await["loggedIn"].as_bool() })
-                    .buffered(4).collect().await;
+                // Todas de uma vez: a abertura de sessão sem provedor espera por esta leitura, e em janelas ela
+                // somaria o tempo da CLI mais lenta de cada janela.
+                logins = futures_util::future::join_all(accounts.iter().map(|(_,account)|service.read_claude_auth(account))).await
+                    .into_iter().map(|state|state["loggedIn"].as_bool()).collect();
             }
             Err(error) => tracing::warn!(code=error.code,"catálogo de provedores: login Claude ilegível"),
         }

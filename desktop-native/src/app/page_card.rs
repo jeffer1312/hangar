@@ -566,8 +566,6 @@ impl Hangar {
             crate::browser::Event::Frame => {
                 let Some(running) = &mut view.running else { return };
                 let first = !std::mem::replace(&mut running.framed, true);
-                // A capa de quando estacionou não é mais pintada.
-                let cover = if first { view.last_frame.take() } else { None };
                 let replaced = running.engine.texture_replaced();
                 // Visto só quando a janela desenhar: quadro que chega antes espera, e só o último é decodificado.
                 let engine = Rc::downgrade(&running.engine);
@@ -577,7 +575,6 @@ impl Hangar {
                 // Mesma textura, com o conteúdo novo: a cópia guardada da conversa já a pinta, basta a raiz redesenhar.
                 // Textura nova (primeiro quadro, outro tamanho) ou sem relógio na raiz: a conversa redesenha.
                 if first || replaced || !crate::motion::tick_root(cx) { self.redraw(panes::Area::Conversation, cx); }
-                release(cover.into_iter().collect(), cx);
             }
             crate::browser::Event::Host(raw) => match parse_host(&raw) {
                 Some(HostMsg::Height(height)) if view.reported != Some(height) => {

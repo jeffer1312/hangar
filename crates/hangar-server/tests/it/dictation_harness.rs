@@ -1,4 +1,3 @@
-use axum::{Router, routing::get};
 use hangar_server::{
     accounts::{AccountService, environment::AccountEnvironment},
     auth::TrustedHosts,
@@ -119,18 +118,7 @@ async fn attempt_with_budget(
         .map(str::to_owned)
         .unwrap_or_else(|| format!("model-{provider}-a"));
     let config = json!({"organization":{"dictation_organization_mode":"harness","dictation_claude_model":selected,"dictation_codex_model":selected,"ditado_estilo":"limpar"}});
-    let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let upstream = upstream_listener.local_addr().unwrap();
-    let app = Router::new().route(
-        "/internal/transcription/config",
-        get(move || {
-            let config = config.clone();
-            async move { ([("content-type", "application/json")], config.to_string()) }
-        }),
-    );
-    let python = tokio::spawn(async move {
-        axum::serve(upstream_listener, app).await.unwrap();
-    });
+    let upstream = "127.0.0.1:1".parse().unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let mut state = AppState::new(Config {
@@ -150,6 +138,7 @@ async fn attempt_with_budget(
         .into(),
     );
     state.accounts = AccountService::new(environment);
+    super::dictation_timing::configure(&state, &config);
     let key = hangar_server::accounts::AccountKey::new(
         if provider == "claude" {
             hangar_server::accounts::Provider::Claude
@@ -224,7 +213,6 @@ async fn attempt_with_budget(
         .await;
         tokio::time::resume();
         server.abort();
-        python.abort();
         let responses = responses.expect("fresh concorrentes ultrapassaram o teto público de60s");
         let expected: Value = serde_json::from_str(super::dictation_public_cases::CATALOG_TIMEOUT).unwrap();
         let mut timed_out = 0;
@@ -275,7 +263,6 @@ async fn attempt_with_budget(
             !account.join("fixture-executed").exists(),
             "a organização não pode começar depois do prazo"
         );
-        python.abort();
         return (serde_json::to_value(result).unwrap(), Value::Null);
     }
     let app = hangar_server::routes::router(state);
@@ -293,7 +280,6 @@ async fn attempt_with_budget(
     let status = response.status();
     let data = response.bytes().await.unwrap();
     server.abort();
-    python.abort();
     assert_eq!(status, 200);
     let record = std::fs::read(account.join("fixture-record.json"))
         .ok()

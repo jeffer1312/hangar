@@ -7,10 +7,7 @@ use crate::{
 use serde_json::{Value, json};
 use std::{
     net::SocketAddr,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::Arc,
 };
 
 #[tokio::test]
@@ -54,35 +51,12 @@ async fn public_status_deadline_includes_waiting_for_shared_configuration() {
         );
         return;
     }
-    let calls = Arc::new(AtomicUsize::new(0));
-    let seen = calls.clone();
-    let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = upstream.local_addr().unwrap();
-    let source = tokio::spawn(async move {
-        axum::serve(
-            upstream,
-            axum::Router::new().route(
-                "/internal/transcription/config",
-                axum::routing::get(move || {
-                    seen.fetch_add(1, Ordering::SeqCst);
-                    async {
-                        (
-                            [("content-type", "application/json")],
-                            json!({"providers":[]}).to_string(),
-                        )
-                    }
-                }),
-            ),
-        )
-        .await
-        .unwrap();
-    });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let public = listener.local_addr().unwrap();
     let temporary = tempfile::tempdir().unwrap();
     let mut state = AppState::new(Config {
         listen: public,
-        upstream: address,
+        upstream: "127.0.0.1:1".parse().unwrap(),
         auth_token: "owner".into(),
         internal_secret: "private".into(),
         log_path: None,
@@ -112,10 +86,8 @@ async fn public_status_deadline_includes_waiting_for_shared_configuration() {
             .unwrap()
     });
     tokio::time::timeout(Duration::from_secs(2), async {
-        // O escritor na fila comprova que o corpo HTTP já foi consumido; contar a chamada não comprova.
-        while calls.load(Ordering::SeqCst) == 0
-            || state.transcription.snapshot.try_read().is_ok()
-        {
+        // O escritor na fila comprova que a configuração local já foi consumida.
+        while state.transcription.snapshot.try_read().is_ok() {
             tokio::task::yield_now().await;
         }
     })
@@ -148,7 +120,6 @@ async fn public_status_deadline_includes_waiting_for_shared_configuration() {
         200
     );
     server.abort();
-    source.abort();
     std::fs::write(
         std::env::var_os("HANGAR_STATUS_DEADLINE_PROOF").unwrap(),
         b"ok",

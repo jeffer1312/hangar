@@ -103,9 +103,10 @@ impl Memory {
     }
 }
 
-/// Grava a memória serializada se ela mudou desde a última gravação (`saved`). `Ok(true)` = gravou.
+/// Grava a memória serializada se ela mudou desde a última gravação (`saved`) ou se o arquivo sumiu: sem ele, o
+/// reinício começaria sem memória. `Ok(true)` = gravou.
 fn save_changed(path: &Path, saved: &mut Option<Vec<u8>>, bytes: Vec<u8>) -> std::io::Result<bool> {
-    if saved.as_deref() == Some(bytes.as_slice()) { return Ok(false); }
+    if saved.as_deref() == Some(bytes.as_slice()) && path.exists() { return Ok(false); }
     std::fs::create_dir_all(path.parent().ok_or_else(|| std::io::Error::other("pasta ausente"))?)?;
     crate::runtime::queue::atomic_write(path, &bytes)?;
     *saved = Some(bytes);
