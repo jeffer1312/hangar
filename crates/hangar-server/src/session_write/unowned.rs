@@ -27,8 +27,9 @@ const QUEUE_MAX: usize = 1000;
 /// Espera máxima pela vez de digitar na sessão, abaixo do prazo de 3 s da entrega adiada do Connect.
 const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// Uma digitação por sessão: dois recados no mesmo tty sairiam concatenados.
-static LOCKS: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = LazyLock::new(Default::default);
+/// Uma digitação por sessão: dois recados no mesmo tty sairiam concatenados. A chave leva o servidor
+/// (a lista dele): dois servidores no mesmo processo não disputam o mesmo nome.
+static LOCKS: LazyLock<Mutex<HashMap<(usize, String), Arc<tokio::sync::Mutex<()>>>>> = LazyLock::new(Default::default);
 
 /// `Missing`: nem pane nem sidecar. `Answer`: status e o corpo do `_send_one` (`{ok, error, delivered?, native?}`).
 pub(crate) enum Sent { Missing, Answer(StatusCode, Value) }
@@ -49,7 +50,10 @@ pub(crate) async fn send(st: &AppState, name: &str, text: &str) -> Sent {
     let (name, text) = (name.to_owned(), text.to_owned());
     match tokio::spawn(async move { send_owned(deps, &name, &text).await }).await {
         Ok(sent) => sent,
-        Err(_) => refused("erro_envio_falhou", "o envio parou no meio", json!({"erro": "unowned_send_aborted"}), false),
+        Err(error) => {
+            tracing::error!(code = "unowned_send_aborted", panicked = error.is_panic(), "a tarefa do envio caiu");
+            refused("erro_envio_falhou", "o envio parou no meio", json!({"erro": "unowned_send_aborted"}), false)
+        }
     }
 }
 
@@ -128,7 +132,8 @@ async fn codex(deps: &Deps, name: &str, text: &str, panes: &[Pane], children: &c
         return Sent::Answer(StatusCode::SERVICE_UNAVAILABLE, json!({"ok": false, "error": detail_body("codex_sidecar_invalid",
             "o arquivo da sessão não abre no servidor; feche e abra a sessão", json!({}))["detail"], "delivered": false}));
     }
-    let lock = LOCKS.lock().unwrap_or_else(|e| e.into_inner()).entry(name.to_owned()).or_default().clone();
+    let key = (Arc::as_ptr(&deps.list) as usize, name.to_owned());
+    let lock = LOCKS.lock().unwrap_or_else(|e| e.into_inner()).entry(key.clone()).or_default().clone();
     // Fila curta atrás de outro recado: esperar além do prazo de quem pediu (3 s no Connect) faria o
     // reenvio dele entrar depois deste, em dobro.
     let sent = match tokio::time::timeout(LOCK_WAIT, lock.clone().lock_owned()).await {
@@ -142,7 +147,7 @@ async fn codex(deps: &Deps, name: &str, text: &str, panes: &[Pane], children: &c
     };
     let mut locks = LOCKS.lock().unwrap_or_else(|e| e.into_inner());
     // Só o mapa e esta cópia: ninguém mais espera a vez, a entrada sai.
-    if Arc::strong_count(&lock) <= 2 { locks.remove(name); }
+    if Arc::strong_count(&lock) <= 2 { locks.remove(&key); }
     sent
 }
 

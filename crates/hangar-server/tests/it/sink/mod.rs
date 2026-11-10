@@ -1,6 +1,7 @@
 //! Sessões Claude sem terminal com cano falso, para os testes que só precisam de alguém do Rust que
 //! receba o recado (grupos, par, MCP…): o texto de cada tentativa fica anotado por sessão, e o resultado
 //! da escrita (`written`, `not_written`, `unknown`) e uma espera antes do ACK são escolhidos pelo teste.
+//! Cada recado escrito fecha o próprio turno (`result`), para o seguinte não ficar na fila da sessão.
 #![allow(dead_code)]
 
 use std::collections::HashMap;
@@ -91,7 +92,14 @@ impl Sink {
                         };
                         if !wait.is_zero() { tokio::time::sleep(wait).await; }
                         let ack = json!({"type":"cano_input_ack","operation_id":envelope["operation_id"],"outcome":outcome});
-                        let _ = write.write_all(format!("{ack}\n").as_bytes()).await;
+                        let mut out = format!("{ack}\n");
+                        // O turno que o recado abriu acaba na hora: sem o `result` a sessão fica "trabalhando" para
+                        // sempre, e todo recado seguinte espera na fila dela sem nunca chegar aqui.
+                        if outcome == "written" && frame["type"] == "user" {
+                            let result = json!({"type":"cano_output","frame":json!({"type":"result","subtype":"success","is_error":false}).to_string()});
+                            out.push_str(&format!("{result}\n"));
+                        }
+                        let _ = write.write_all(out.as_bytes()).await;
                     }
                 });
             }

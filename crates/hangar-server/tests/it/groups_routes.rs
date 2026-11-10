@@ -31,6 +31,15 @@ async fn server(root: &Path, n: usize) -> Server {
 }
 
 async fn server_with_orq(root: &Path, n: usize, orq: Option<Arc<dyn hangar_server::groups::service::OrqFacts>>) -> Server {
+    server_built(root, n, orq, true).await
+}
+
+/// As mesmas `n` sessões, sem entrada aberta no Rust: panes Claude que ele não adotou.
+async fn server_unowned(root: &Path, n: usize) -> Server {
+    server_built(root, n, None, false).await
+}
+
+async fn server_built(root: &Path, n: usize, orq: Option<Arc<dyn hangar_server::groups::service::OrqFacts>>, owned: bool) -> Server {
     let script = list_support::sessions(root, n);
     let home = root.join("home");
     let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
@@ -52,11 +61,12 @@ async fn server_with_orq(root: &Path, n: usize, orq: Option<Arc<dyn hangar_serve
     state.groups = Some(groups.clone());
     let share = crate::share_pair_routes::share_state(&root.join("shares.json"), &pair, Arc::new(std::sync::Mutex::new(1_000.0)));
     state.share = Some(share.clone());
-    // Cada sessão é um Claude sem terminal do Rust: o recado chega ao cano falso dela.
-    let runtime = Arc::new(crate::sink::registry().await);
+    // Cada sessão é um Claude sem terminal do Rust: o recado chega ao cano falso dela. Sem `owned`, só a
+    // porta de entrada de cada nome conta (a política nunca é chamada).
+    let runtime = Arc::new(if owned { crate::sink::registry().await } else { RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "s".into(), "i".into()) });
     let sink = crate::sink::Sink::default();
     std::fs::create_dir_all(root.join("rt")).unwrap();
-    for i in 0..n { sink.open(&runtime, &root.join("rt"), &format!("s{i}")).await; }
+    if owned { for i in 0..n { sink.open(&runtime, &root.join("rt"), &format!("s{i}")).await; } }
     assert!(state.state.runtime.set(runtime.clone()).is_ok());
     state.write_gate_wait = Duration::from_secs(10);
     state.hangar_dir = root.join("hangar");
@@ -466,7 +476,8 @@ async fn surrogate_task_is_422() {
 #[tokio::test(flavor = "multi_thread")]
 async fn repassed_close_leaves_the_group_r1_3() {
     let dir = tempfile::tempdir().unwrap();
-    let srv = server(dir.path(), 3).await;
+    // Sem entrada no Rust: com o cano falso aberto, quem fecharia seria a sessão sem terminal do dublê.
+    let srv = server_unowned(dir.path(), 3).await;
     write_group(&srv, "s0", &["s1", "s2"]);
     write_group(&srv, "s1", &["s0", "s2"]);
     write_group(&srv, "s2", &["s0", "s1"]);
