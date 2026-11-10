@@ -281,15 +281,19 @@ fn codex_busy(target: &OtherTarget, frame: &OtherFrame) -> Option<DeliveryResult
     composer(target, frame).filter(|current| !current.is_empty())
         .map(|_| result(Disposition::Deferred, DeliveryStage::Composer, Cleanup::NotNeeded, "composer_busy"))
 }
-/// A caixa de digitar do Codex: a última linha `›` e as que continuam o texto até a linha em branco.
-/// A sugestão vem esmaecida e sai do `typed`; a captura sem estilo traz a sugestão padrão por extenso.
+/// A caixa de digitar do Codex: a última linha `›` e as que continuam o texto. Parágrafo deixa linha em
+/// branco dentro da caixa, então ela vai até a última linha em branco: o bloco depois dessa é a barra de
+/// estado. A sugestão vem esmaecida e sai do `typed`; a captura sem estilo traz a sugestão padrão por extenso.
 fn codex_composer(frame: &OtherFrame) -> Option<ComposerSnapshot> {
     let text = frame.typed.as_deref().unwrap_or(&frame.text);
     let lines: Vec<&str> = text.lines().collect();
     let at = lines.iter().rposition(|line| line.trim_start().starts_with('›'))?;
+    let below = &lines[at + 1..];
+    let below = &below[..below.iter().rposition(|line| !line.trim().is_empty()).map_or(0, |last| last + 1)];
+    let below = &below[..below.iter().rposition(|line| line.trim().is_empty()).unwrap_or(below.len())];
     let mut content = vec![lines[at].trim_start().trim_start_matches('›').trim()];
-    content.extend(lines[at + 1..].iter().take_while(|line| !line.trim().is_empty()).map(|line| line.trim()));
-    let mut content = content.join("\n");
+    content.extend(below.iter().map(|line| line.trim()));
+    let mut content = content.join("\n").trim_end().to_owned();
     if content == CODEX_PLACEHOLDER {
         content.clear();
     }
@@ -712,17 +716,20 @@ async fn prompt_inner(
                     );
                 }
             };
-            // O comando de barra do Codex que abriu o seletor (`/model`) já rodou: outro Enter escolheria
+            // No Codex um Enter já roda o comando de barra. Outro só sai se o comando continua na caixa: em
+            // qualquer outra tela (seletor do `/model`, lista do `/resume`, ainda carregando) ele escolheria
             // a linha sob o cursor.
-            if codex(target) && slash && submit == 0 && codex_menu_open(&current) {
+            if codex(target) && slash && submit == 0 {
+                let still_typed = !codex_menu_open(&current)
+                    && composer(target, &current).is_some_and(|box_now| compact(&box_now.content) == compact(text));
+                if still_typed {
+                    break;
+                }
                 return result(Disposition::Accepted, DeliveryStage::SubmitProof, Cleanup::NotNeeded, "submit_proved");
             }
             let Some(current) = composer(target, &current) else {
                 // Codex sem composer legível: como o Python, sem prova o Enter vale.
                 if codex(target) {
-                    if slash && submit == 0 {
-                        break;
-                    }
                     return result(
                         Disposition::Accepted,
                         DeliveryStage::SubmitProof,
@@ -1700,5 +1707,43 @@ pub async fn control(
             &error.code
         })),
         Err(error) => Err(error),
+    }
+}
+
+/// Telas reais do Codex (`tests/it/fixtures/raw_codex/`, origem em `ORIGEM.txt`).
+#[cfg(test)]
+mod codex_screens {
+    use super::*;
+
+    fn frame(text: &str) -> OtherFrame {
+        OtherFrame { text: text.to_owned(), typed: None, styled: None, editor: None }
+    }
+
+    // Parágrafo deixa linha em branco dentro da caixa: ler só até ela fazia a prova da digitação falhar.
+    #[test]
+    fn composer_with_paragraphs_is_read_whole_and_proves_the_text() {
+        let text = "Oi, tudo bem?\n\nSegue o plano completo.";
+        let empty = codex_composer(&frame(include_str!("../../../tests/it/fixtures/raw_codex/pane_codex_idle.txt"))).unwrap();
+        assert_eq!(empty.content, "");
+        let typed = codex_composer(&frame(include_str!("../../../tests/it/fixtures/raw_codex/pane_codex_paragraphs.txt"))).unwrap();
+        assert_eq!(typed.content, text);
+        assert!(typed.proves(text, &empty) == Proof::Present);
+    }
+
+    // A caixa de uma linha continua sem a barra de estado.
+    #[test]
+    fn composer_of_one_line_stops_before_the_status_bar() {
+        let typed = codex_composer(&frame(include_str!("../../../tests/it/fixtures/raw_codex/pane_codex_composer_text.txt"))).unwrap();
+        assert!(!typed.content.is_empty() && !typed.content.contains('\n'), "{:?}", typed.content);
+    }
+
+    // Depois do Enter no `/resume` a tela não é a caixa com o comando: outro Enter retomaria uma conversa.
+    #[test]
+    fn resume_selector_is_not_the_composer_with_the_command() {
+        for screen in [include_str!("../../../tests/it/fixtures/raw_codex/pane_codex_resume_loading.txt"),
+            include_str!("../../../tests/it/fixtures/raw_codex/pane_codex_resume_list.txt")] {
+            let still_typed = codex_composer(&frame(screen)).is_some_and(|now| compact(&now.content) == compact("/resume"));
+            assert!(!still_typed);
+        }
     }
 }

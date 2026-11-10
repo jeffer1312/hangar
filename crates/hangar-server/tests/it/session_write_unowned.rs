@@ -313,14 +313,15 @@ async fn raw_codex_nothing_more_happens_after_the_answer() {
     assert_eq!(rig.python_inputs(), 0);
 }
 
-// R1.1-4 slash, R1.1-7: barra com Enter duplo e sem linha; `/clear` apaga a fila.
+// R1.1-4 slash, R1.1-7: barra sem linha na fila; `/clear` apaga a fila. No Codex um Enter roda o comando:
+// o segundo (que o Python mandava) só sai com o comando ainda na caixa, senão cairia no que ele abriu.
 #[tokio::test]
-async fn raw_codex_slash_gets_two_enters_and_clear_drops_the_queue() {
+async fn raw_codex_slash_runs_with_one_enter_and_clear_drops_the_queue() {
     let rig = Rig::new().await;
     rig.codex("cx", "pane_codex_idle.txt", "echo").await;
     let (status, body) = rig.input("cx", json!({"text": "/model"})).await;
     assert_eq!((status, body["delivered"].clone()), (200, json!(true)));
-    assert_eq!(submitted(&rig, "cx"), vec![json!({"text": "/model"}), json!({"text": ""})]);
+    assert_eq!(submitted(&rig, "cx"), vec![json!({"text": "/model"})]);
     assert_eq!(rig.queue("cx"), None);
     assert_eq!(rig.input("cx", json!({"text": "fica na fila"})).await.0, 200);
     assert!(rig.queue("cx").is_some());
@@ -581,6 +582,21 @@ async fn raw_codex_slash_that_opens_a_menu_gets_a_single_enter() {
     assert_eq!((status, body), (200, json!({"ok": true, "delivered": true, "steered": false, "native": false})));
     assert_eq!(submitted(&rig, "cx"), vec![json!({"text": "/model"})], "um Enter só: nenhum modelo escolhido");
     rig.screen_shows("cx", "Select Model and Effort").await;
+}
+
+// `/resume` abre a lista de conversas (tela real, ainda carregando): um Enter só, nenhuma conversa retomada.
+#[tokio::test]
+async fn raw_codex_slash_that_opens_a_list_gets_a_single_enter() {
+    let rig = Rig::new().await;
+    let log = rig.dir.path().join("codex-cx");
+    std::fs::create_dir_all(&log).unwrap();
+    rig.pane("cx", &format!("bash --norc --noprofile -c '( exec -a codex python3 {} {} {} echo {} ); exec sleep 100000'",
+        fixture("fake_codex.py").display(), fixture("pane_codex_idle.txt").display(), log.display(), fixture("pane_codex_resume_loading.txt").display()));
+    rig.screen_shows("cx", "Ask Codex to do anything").await;
+    let (status, body) = rig.input("cx", json!({"text": "/resume"})).await;
+    assert_eq!((status, body), (200, json!({"ok": true, "delivered": true, "steered": false, "native": false})));
+    assert_eq!(submitted(&rig, "cx"), vec![json!({"text": "/resume"})], "um Enter só: nenhuma conversa retomada");
+    rig.screen_shows("cx", "Resume a previous session").await;
 }
 
 // Linha longa (captura `codex_raw_idle_long_line`): 200 entregue, o texto inteiro submetido.

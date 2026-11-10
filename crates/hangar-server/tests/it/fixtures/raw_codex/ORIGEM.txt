@@ -1,3 +1,8 @@
 origem: codex-cli 0.167.0
 comando: tmux new-session -d -s cx-codex-fixture -x 160 -y 45 "command codex"; capture-pane -p
 data: 2026-11-09
+
+pane_codex_paragraphs.txt, pane_codex_resume_loading.txt, pane_codex_resume_list.txt:
+origem: codex-cli 0.167.0, tmux isolado 144x40, "command codex" numa pasta vazia
+comando: load-buffer + paste-buffer -p -d (parágrafos); "/resume" + Enter (lista); capture-pane -p
+data: 2026-11-10; caminho da pasta trocado por /tmp/sonda e títulos de conversa por "conversa"

@@ -22,6 +22,7 @@ const MSG_UNBOUND: &str = "vínculo gerenciado indisponível; escrita suspensa";
 const MSG_LOGIN: &str = "sessão Claude sem vínculo no Rust";
 const MSG_CONTROL: &str = "control characters not allowed in prompt";
 const MSG_PARTIAL: &str = "envio incompleto: parte do texto ficou no composer da sessao e nada foi submetido. Confira o terminal antes de reenviar.";
+const MSG_UNCONFIRMED: &str = "o texto foi digitado e o Enter enviado, mas o terminal não confirmou o envio. Confira o terminal antes de reenviar.";
 /// O teto do `PromptQueue` do Python.
 const QUEUE_MAX: usize = 1000;
 /// Espera máxima pela vez de digitar na sessão, abaixo do prazo de 3 s da entrega adiada do Connect.
@@ -164,6 +165,11 @@ async fn codex_locked(deps: &Deps, name: &str, text: &str, panes: &[Pane], child
         // Fora da caixa vazia e pronta nada é digitado nem guardado: a pessoa vê o erro e reenvia.
         Disposition::Deferred => return not_at_composer(deps, name, &result.code),
         Disposition::Rejected => return refused("erro_envio_falhou", &format!("falha ao enviar: {}", result.code), json!({"erro": result.code}), false),
+        // O Enter já saiu e a prova não veio: não dá para dizer "nada foi submetido", e reenviar pode dobrar.
+        Disposition::Unknown if result.stage == crate::terminal_input::DeliveryStage::SubmitProof => {
+            deps.diag.report("runtime.send_uncertain", name, &result.code, "Enter enviado ao Codex cru sem confirmação de que o texto saiu");
+            return refused("erro_envio_sem_confirmacao", MSG_UNCONFIRMED, json!({"erro": result.code}), false);
+        }
         // Parou com texto na caixa: como o Python no Codex, sem limpar e sem Enter.
         Disposition::Unknown => {
             deps.diag.report("rust.unowned_send_partial", name, &result.code, "texto ficou pela metade no Codex cru; Enter não enviado");
