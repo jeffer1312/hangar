@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MenuView } from '@react-native-menu/menu';
 import {
   deleteSession,
+  dismissFallenSession,
   effectiveGroupBy,
   formataErro,
   groupBadges,
@@ -17,6 +18,7 @@ import {
   machinesAllDown,
   renameSession,
   setPairAccess,
+  reopenFallenSession,
   resumeSession,
   showSession,
   type AggSession,
@@ -216,6 +218,34 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
       }),
     [comServidor],
   );
+
+  // Fala com o servidor da linha, sem trocar o ativo; a linha morta some quando a lista chega.
+  // O servidor responde quando o agente sobe: o segundo toque não manda outro pedido.
+  const reopening = useRef(new Set<string>());
+  const reopen = useCallback((s: AggSession) => {
+    const server = useServers.getState().servers.find((x) => x.id === s.serverId);
+    if (!server) { toast.erro(m.servidor_nao_existe()); return; }
+    const key = `${s.serverId}::${s.name}`;
+    if (reopening.current.has(key)) return;
+    reopening.current.add(key);
+    reopenFallenSession(s.name, server)
+      .then(() => toast.ok(s.name))
+      .catch((e: unknown) => toast.erro(mensagemDe(e)))
+      .finally(() => reopening.current.delete(key));
+  }, []);
+
+  // Sem confirmação: não há processo para matar, só a linha e o registro para reabrir. Rota própria, não o
+  // DELETE: se o nome já voltou vivo (a linha da tela está velha), o servidor recusa em vez de fechar.
+  const dismiss = useCallback((s: AggSession) => {
+    const server = useServers.getState().servers.find((x) => x.id === s.serverId);
+    if (!server) { toast.erro(m.servidor_nao_existe()); return; }
+    if (reopening.current.has(`${s.serverId}::${s.name}`)) return;
+    useSessions.getState().markDeleting(s.serverId, s.name);
+    dismissFallenSession(s.name, server).catch((e: unknown) => {
+      useSessions.getState().unmarkDeleting(s.serverId, s.name);
+      toast.erro(mensagemDe(e));
+    });
+  }, []);
 
   // A marca mora no servidor da sessão, por endereço explícito: não troca a ativa. A linha muda de
   // lugar quando a lista do servidor chega, sem aviso de sucesso.
@@ -539,6 +569,8 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
               onExcluir={excluir}
               onRenomear={setRenomeando}
               onResume={retomar}
+              onReopen={proprios.has(item.serverId) ? reopen : undefined}
+              onDismiss={proprios.has(item.serverId) ? dismiss : undefined}
               onWorktree={proprios.has(item.serverId) ? abrirWorktree : undefined}
               onPair={proprios.has(item.serverId) || item.outside ? fazerPar : undefined}
               onHidden={proprios.has(item.serverId) && !item.outside ? toggleHidden : undefined}

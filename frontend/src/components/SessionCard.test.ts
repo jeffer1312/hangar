@@ -91,6 +91,24 @@ describe('SessionCard: clique em sessão "sem id"', () => {
   });
 });
 
+describe('SessionCard: sessão que o sistema derrubou', () => {
+  it('não abre o chat, diz o motivo e oferece Reabrir e Dispensar', async () => {
+    const onReopen = vi.fn();
+    const onDismiss = vi.fn();
+    const { el, comp, onClick } = montar(sessao({ state: 'dead', problema: 'terminal_out_of_memory' }), { onReopen, onDismiss });
+    expect(el.querySelector('.status-sub')?.textContent).toBe(m.problema_terminal_out_of_memory());
+    await clicaNaRow(el);
+    expect(onClick).not.toHaveBeenCalled();
+    const [reopen, dismiss] = el.querySelectorAll<HTMLElement>('.fallen-acts button');
+    reopen.click();
+    dismiss.click();
+    expect(onReopen).toHaveBeenCalledTimes(1);
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(onClick).not.toHaveBeenCalled();
+    unmount(comp);
+  });
+});
+
 describe('SessionCard: diff stats e tempo (referência super.engineering)', () => {
   it('mostra "+a −d" ao lado da branch quando o backend manda os números', () => {
     const { el, comp } = montar(sessao({ branch: 'PM-1', git_added: 128, git_removed: 24 }));

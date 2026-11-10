@@ -13,6 +13,7 @@ pub mod codex;
 #[cfg(all(test, target_os = "linux"))]
 mod contract;
 pub mod facts;
+pub mod fallen;
 pub mod legacy_restore;
 pub mod local;
 pub mod open;

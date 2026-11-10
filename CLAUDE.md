@@ -62,7 +62,10 @@ bubbles, sheets, Spinner/Lottie, …), `lib/` (`api.ts` SSE client, `activity.ts
   - **The board must never open an SSE per card** — browsers cap ~6 per host. Live state comes from the
     aggregated `openSessionsStream` (one per *server*); the card's conversation comes from
     `GET /history?limit=N` on mount only. There is no `dead` column: `classify()` never returns `dead`
-    for the list (only the per-session SSE does), so a killed session's row simply disappears.
+    for a live terminal row (only the per-session SSE does). The list does carry `dead` rows for a headless
+    process that died (`headless_processo_caiu`) and for a terminal session the systemd killed
+    (`terminal_out_of_memory`/`terminal_died`, `session_open/fallen.rs`: Reabrir and Dispensar); the board,
+    home and canvas leave those out.
 - **canvas** (`#/canvas`) — `screens/Canvas.svelte`: the free-form sibling of the board. Same
   `BoardCard` (now with a `fill` prop), but each card is a floating tile you drag by its handle and
   resize with the native CSS resize corner (a `ResizeObserver` captures the size). No columns and no

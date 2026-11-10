@@ -3237,6 +3237,21 @@ defeitos achados nele (todos consertados no Rust, decisão do usuário) estão n
   uma sessão também não). Falha passageira tenta 3 vezes antes de o servidor novo virar o da
   fotografia. A varredura de grupos espera o restore. Motivo de não digitar no shell: com zsh e
   `CORRECT_ALL` o shell parava em "correct 'claude' to '.claude'?".
+- **Sessão derrubada pelo systemd fica na lista (06/11/2026).** O `systemd-oomd` matou o escopo
+  `tmux-spawn-*.scope` inteiro de duas sessões (118 processos, 16 GB entre RAM e swap) e elas sumiram
+  da lista e da busca: com o servidor do tmux de pé, a ausência contava como fechamento. Agora a sessão
+  que some sem `forget` e cuja unidade do pane tem `Failed with result '<r>'` no journal vira registro
+  em `~/.hangar/fallen-sessions.json` e linha `dead` (`terminal_out_of_memory` para `oom-kill`,
+  `terminal_died` para o resto), com Reabrir (`POST /api/sessions/{name}/reopen`, pelo spec, como o
+  restore) e Dispensar (`POST /api/sessions/{name}/dismiss`, que só age se o nome ainda está caído: a
+  linha velha no app não fecha a sessão que acabou de reabrir). `/exit` e kill pedido não deixam `Failed with result`: é a pessoa
+  saindo, sem linha (decisão do usuário). Sem journal (Windows/psmux) não há registro. A linha caída
+  fica fora do push e da varredura de grupos. O build roda em escopo próprio com teto: o `cargo-pinned`
+  abre o dele (`MemoryHigh` pela memória livre) e o `verificar-local` roda inteiro no `scripts/memory-scope`
+  (só `MemoryMax`: com `MemoryHigh` o Node tira o heap do teto menor e o `svelte-check` estoura). Falta de
+  memória mata o build, não a sessão. Sem o systemd do usuário (CI, Windows, macOS) ou com
+  `HANGAR_NO_MEMORY_SCOPE`, os dois rodam no grupo de quem chamou, sem teto, e avisam no stderr: aí a falta de
+  memória volta a poder levar a sessão junto.
 - **Limite de uso troca de conta sozinho (Claude).** Sinal pelo transcript (com terminal) ou pelo
   stream-json (sem terminal), nunca pelo pane. A fila fica segura até a troca terminar; o recado de
   continuar vai à frente na fila durável; conta gasta fica marcada até o reset (`limit-spent.json`);

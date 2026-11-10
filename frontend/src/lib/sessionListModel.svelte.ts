@@ -2,10 +2,12 @@
 // Lógica da lista de sessões compartilhada pelas duas views (Sidebar desktop, SessionList
 // celular). Só lógica: template e CSS continuam em cada view. Formato do sessionsStore — fábrica
 // com getters, sem destructuring (perderia a reatividade).
-import { broadcast, deleteSession, renameSession, resumeSession } from '@hangar/core';
+import { broadcast, deleteSession, dismissFallenSession, renameSession, reopenFallenSession, resumeSession } from '@hangar/core';
 import { getActiveId, selectServer, serverColor } from './auth';
+import { sessionServerFor } from './sessionServer';
 import { formataErro } from '@hangar/core';
 import { sessionsStore } from './sessionsStore.svelte';
+import { SvelteSet } from 'svelte/reactivity';
 import {
   countAwaiting, effectiveGroupBy, groupBadges, groupSelectedByServer, projectKey, projectLabel, providerName,
   isOrq, sortSessions, type GroupBy, placeExternalRows, pairExternals, pairHeaderLabel, groupGlobal, clusterByPair,
@@ -406,6 +408,28 @@ export function createSessionListModel(opts: SessionListModelOptions) {
     }
   }
 
+  // Sessão com terminal que o sistema derrubou. Reabrir vai direto ao servidor dela, sem trocar o
+  // ativo; o SSE troca a linha morta pela viva.
+  const reopening = new SvelteSet<string>();
+  const reopenKey = (name: string, serverId: string) => `${serverId}\u0000${name}`;
+  async function reopen(name: string, serverId: string): Promise<string> {
+    // O servidor leva até o agente subir: o segundo toque não manda outro pedido.
+    const key = reopenKey(name, serverId);
+    if (reopening.has(key)) return '';
+    reopening.add(key);
+    try { await reopenFallenSession(name, sessionServerFor(serverId)()); return ''; }
+    catch (e) { return errMsg(e); }
+    finally { reopening.delete(key); }
+  }
+  // Dispensar não pede confirmação: a sessão já morreu, só a linha sai da lista.
+  // Rota própria, não o DELETE: se o nome já voltou vivo (a linha da tela está velha), o servidor recusa.
+  async function dismiss(name: string, serverId: string): Promise<{ ok: boolean; erro: string }> {
+    if (reopening.has(reopenKey(name, serverId))) return { ok: false, erro: '' };
+    sessionsStore.markDeleting(serverId, name);
+    try { await dismissFallenSession(name, sessionServerFor(serverId)()); return { ok: true, erro: '' }; }
+    catch (e) { sessionsStore.unmarkDeleting(serverId, name); return { ok: false, erro: errMsg(e) }; }
+  }
+
   // Git/Loop miram o servidor ATIVO (api.ts): aponta pro dono enquanto a folha está aberta e
   // restaura no fechar — nas duas views, sem regra.
   let gitSheet = $state<{ name: string } | null>(null);
@@ -448,7 +472,8 @@ export function createSessionListModel(opts: SessionListModelOptions) {
     get broadcastDisabled() { return broadcastDisabled; },
     get compareDisabled() { return compareDisabled; },
     toggleSelectMode, openSelectMode, toggleSelected, selectGroupForBroadcast, openCompare, sendBroadcast,
-    open, requestDelete, doDelete, rename, resume, openGit, closeGit,
+    open, requestDelete, doDelete, rename, resume, reopen, dismiss, openGit, closeGit,
+    isReopening: (name: string, serverId: string) => reopening.has(reopenKey(name, serverId)),
     get confirmDel() { return confirmDel; },
     set confirmDel(v: { name: string; serverId: string; state: State | null } | null) { confirmDel = v; },
     get resumeCandidates() { return resumeCandidates; },

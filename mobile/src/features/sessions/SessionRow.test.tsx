@@ -37,7 +37,8 @@ vi.mock('react-native-svg', async (original) => ({
   default: ({ children, ...props }: { children?: ReactNode }) => createElement('svg', props, children),
   Path: (props: { d: string }) => createElement('path', props),
 }));
-vi.mock('../../paraglide/messages', () => ({
+vi.mock('../../paraglide/messages', async (importOriginal) => ({
+  ...await importOriginal<object>(),
   criar_modo_exec_headless: () => 'Sem terminal',
   ask_perguntas: () => 'ask_perguntas',
   conta_padrao: () => 'conta_padrao',

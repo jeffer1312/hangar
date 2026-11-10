@@ -124,3 +124,22 @@ describe('sessões ocultas', () => {
     }
   });
 });
+
+describe('sessão caída pelo sistema', () => {
+  it('fica na lista fora do topo; outra morta sai', () => {
+    const fallen = [
+      { ...nb, name: 'viva', state: 'working', last_activity: 30 } as AggSession,
+      { ...nb, name: 'sem-memoria', state: 'dead', problema: 'terminal_out_of_memory', last_activity: 20 } as AggSession,
+      { ...nb, name: 'caiu', state: 'dead', problema: 'terminal_died', last_activity: 15 } as AggSession,
+      { ...nb, name: 'headless', state: 'dead', problema: 'headless_processo_caiu', last_activity: 10 } as AggSession,
+      { ...nb, name: 'morta', state: 'dead', last_activity: 5 } as AggSession,
+    ];
+    const sections = buildSessionSections(fallen, 'collapsed', 'none', '', new Set());
+    const flat = sections.flatMap((s) => s.data.map(key));
+    expect(flat).toEqual(expect.arrayContaining(['nb::viva', 'nb::sem-memoria', 'nb::caiu']));
+    expect(flat).not.toContain('nb::headless');
+    expect(flat).not.toContain('nb::morta');
+    expect(sections.find((s) => s.id === 'state:working')?.data.map(key)).toEqual(['nb::viva']);
+    expect(sections.some((s) => s.id === 'state:awaiting_input')).toBe(false);
+  });
+});

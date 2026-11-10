@@ -27,6 +27,11 @@ describe('SessionProblem', () => {
     expect(await texto('limit_switch_login_lost')).toBe(m.problema_limit_switch_login_lost());
   });
 
+  it('sessão de terminal derrubada pelo sistema tem frase própria', async () => {
+    expect(await texto('terminal_out_of_memory')).toBe(m.problema_terminal_out_of_memory());
+    expect(await texto('terminal_died')).toBe(m.problema_terminal_died());
+  });
+
   it('mensagem presa sem entrega tem frase própria, não a de código desconhecido', async () => {
     const out = await texto('headless_delivery_stalled');
     expect(out).toBe(m.problema_headless_delivery_stalled());

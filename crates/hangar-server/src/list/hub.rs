@@ -214,7 +214,7 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, devices: Arc<Registry
         if let Err(code) = outcome {
             diag.report("rust.list_failed", "", code, "lista do dono em erro");
         }
-        publish(&hub.tx, &mut last, outcome, &diag);
+        publish(&hub.tx, &mut last, outcome, &diag, list.env().dirs.as_ref().map(|dirs| dirs.home.as_path()));
         publish_nav(&hub.tx, &mut last, list.nav.live(crate::nav_requests::now()));
         publish_keyring(&hub.tx, &mut last, *keyring.borrow_and_update());
         publish_vault(&hub.tx, &mut last, vault.borrow_and_update().clone());
@@ -255,7 +255,7 @@ async fn produce(hub: Arc<ListHub>, list: Arc<ListBridge>, devices: Arc<Registry
             tokio::time::sleep(COALESCE).await;
             let Some(asked) = files.drain(first, &diag) else { break };
             match list.reclassify(asked).await {
-                Ok(Partial::Done(p)) => publish(&hub.tx, &mut last, Ok(p), &diag),
+                Ok(Partial::Done(p)) => publish(&hub.tx, &mut last, Ok(p), &diag, list.env().dirs.as_ref().map(|dirs| dirs.home.as_path())),
                 // Sem produção guardada (fatos desconhecidos, invalidada) quem resolve é o tique: rodar a
                 // inteira a cada escrita tiraria o teto de frequência.
                 Ok(Partial::Unchanged | Partial::NeedsFull) => {}
@@ -444,14 +444,17 @@ fn visible(p: &Produced) -> Vec<&SessionRow> {
 
 fn error_frame(code: &str) -> Bytes { sse_frame("list_error", &json!({"code": code}).to_string(), None) }
 
-fn publish(tx: &watch::Sender<Arc<Published>>, last: &mut Last, outcome: Result<Produced, &'static str>, diag: &DiagClient) {
+fn publish(tx: &watch::Sender<Arc<Published>>, last: &mut Last, outcome: Result<Produced, &'static str>, diag: &DiagClient,
+    home: Option<&std::path::Path>) {
     let prev = tx.borrow().clone();
     let mut next = (*prev).clone();
     let mut changed = false;
     match outcome {
         Err(code) => changed |= fail(&prev, &mut next, code),
         Ok(p) => {
-            let rows = visible(&p);
+            let mut rows = visible(&p);
+            let fallen = home.map(|home| crate::session_open::fallen::rows(home, &rows)).unwrap_or_default();
+            rows.extend(fallen.iter());
             let sig = sig::list_sig(rows.iter().copied());
             // Volta do erro reemite a mesma lista: é ela que limpa o erro na tela.
             if prev.error.is_some() || last.sig.as_deref() != Some(sig.as_str()) {
@@ -782,7 +785,12 @@ pub async fn list(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInf
             Err(()) => return unavailable(&st, req.headers(), ListError { code: "guests_worker_failed", detail: "" }),
         }
     } else { match &guest {
-        None => serde_json::to_vec(&visible(&produced)),
+        None => {
+            let mut rows = visible(&produced);
+            let fallen = st.list.env().dirs.as_ref().map(|dirs| crate::session_open::fallen::rows(&dirs.home, &rows)).unwrap_or_default();
+            rows.extend(fallen.iter());
+            serde_json::to_vec(&rows)
+        }
         Some(guest) => serde_json::to_vec(&guest_rows(visible(&produced), guest)),
     }};
     let body = match body {

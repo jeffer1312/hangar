@@ -34,6 +34,8 @@ const problemLabels: Record<string, () => string> = {
   codex_prompt_bloqueado: m.problema_codex_prompt_bloqueado,
   headless_sem_resposta: m.problema_headless_sem_resposta,
   headless_processo_caiu: m.problema_headless_processo_caiu,
+  terminal_out_of_memory: m.problema_terminal_out_of_memory,
+  terminal_died: m.problema_terminal_died,
   headless_turno_erro: m.problema_headless_turno_erro,
   headless_sem_login: m.problema_headless_sem_login,
   headless_delivery_stalled: m.problema_headless_delivery_stalled,
@@ -54,6 +56,11 @@ const problemLabels: Record<string, () => string> = {
   list_facts_unavailable: m.problema_list_facts_unavailable,
   interacao_indisponivel: m.problema_interacao_indisponivel,
 };
+
+/** O texto de um código de problema conhecido; `null` para o desconhecido. */
+export function problemLabel(code: string | null | undefined): string | null {
+  return code && Object.hasOwn(problemLabels, code) ? problemLabels[code]() : null;
+}
 
 export function SessionProblem({ problem, detail }: Props) {
   const [expanded, setExpanded] = useState(false);
