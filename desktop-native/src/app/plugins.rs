@@ -281,7 +281,8 @@ impl PluginsPage {
     fn check(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.locked() { return; }
         (self.checking, self.error) = (true, None);
-        self.seq += 1;
+        // Sem estado ainda, a leitura em curso é a única que vai preenchê-lo: não se descarta.
+        if self.state.is_some() { self.seq += 1; }
         let api = self.api.clone();
         run(&self.runtime, async move { api.server_send(reqwest::Method::POST, &["plugins", "check"], None, LONG_SECONDS).await }, window, cx,
             |this: &mut Self, result, window, cx| {
@@ -306,7 +307,7 @@ impl PluginsPage {
         if self.locked() { return; }
         self.busy.insert(busy.clone());
         self.error = None;
-        self.seq += 1;
+        if self.state.is_some() { self.seq += 1; }
         let api = self.api.clone();
         run(&self.runtime, async move {
             let parts: Vec<&str> = path.iter().map(String::as_str).collect();
