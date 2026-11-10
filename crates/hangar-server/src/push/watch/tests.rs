@@ -147,9 +147,11 @@ fn memory_is_only_written_when_it_changed() {
     let path = Memory::path(dir.path());
     let mut saved = None;
     assert!(save_changed(&path, &mut saved, b"{}".to_vec()).unwrap());
-    std::fs::remove_file(&path).unwrap();
     assert!(!save_changed(&path, &mut saved, b"{}".to_vec()).unwrap(), "memória igual foi regravada");
-    assert!(!path.exists());
+    // Arquivo apagado com o servidor de pé: a próxima gravação o refaz, mesmo sem mudança.
+    std::fs::remove_file(&path).unwrap();
+    assert!(save_changed(&path, &mut saved, b"{}".to_vec()).unwrap(), "arquivo sumido não foi recriado");
+    assert_eq!(std::fs::read(&path).unwrap(), b"{}");
     assert!(save_changed(&path, &mut saved, b"[]".to_vec()).unwrap());
     assert_eq!(std::fs::read(&path).unwrap(), b"[]");
 }

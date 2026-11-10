@@ -109,13 +109,14 @@ impl Hangar {
         self.presence_beat();
     }
 
-    /// Devolve se a lista (ou o estado dela) mudou.
-    pub(super) fn receive_remote(&mut self, generation: u64, key: String, update: RemoteUpdate, cx: &mut Context<Self>) -> bool {
-        if generation != self.remote_gen { return false; }
+    /// Devolve se a lista (ou o estado dela) mudou, e as sessões que saíram dela: quem chama as esquece depois de
+    /// acertar a sessão aberta (`forget_closed`).
+    pub(super) fn receive_remote(&mut self, generation: u64, key: String, update: RemoteUpdate, cx: &mut Context<Self>) -> (bool, Vec<String>) {
+        if generation != self.remote_gen { return (false, Vec::new()); }
         let invite = self.server_entry(&key).is_some_and(|s| s.invite);
         // 401 só é "encerrado" num convite; nos outros continua sendo login perdido.
         let ended = |error: &Failure| error.status == Some(410) || (invite && super::invite::ends_invite(error.status));
-        let Some(list) = self.remote.get_mut(&key) else { return false };
+        let Some(list) = self.remote.get_mut(&key) else { return (false, Vec::new()) };
         // Ping e lista igual à de antes não redesenham: cada aviso aqui acordava todas as áreas.
         let mut changed = true;
         let mut gone = Vec::new();
@@ -172,20 +173,19 @@ impl Hangar {
                 let _ = frame.applied.send(applied);
             }
         }
-        self.forget_closed(&key, &gone);
-        if !changed { return false; }
+        if !changed { return (false, gone); }
         self.redraw(panes::Area::Nav, cx);
         cx.notify();
-        true
+        (true, gone)
     }
 
     pub(super) fn server_entry(&self, key: &str) -> Option<&ServerEntry> { self.servers.iter().find(|s| norm(&s.address) == key) }
 
     /// Sessões que saíram de uma lista boa da máquina `server`: a lista de comandos delas não é mais lida. A aberta
-    /// fica, porque trocando de conta ela some da lista e volta.
+    /// nessa máquina fica, porque trocando de conta ela some da lista e volta; a de mesmo nome em outra não a segura.
     pub(super) fn forget_closed(&mut self, server: &str, gone: &[String]) {
         if gone.is_empty() { return; }
-        let open = self.selected.as_ref().map(|s| s.name.clone());
+        let open = self.selected.as_ref().filter(|_| self.open_server() == server).map(|s| s.name.clone());
         let closed = |key: &String| commands_of_closed(key, server, gone, open.as_deref());
         self.commands.retain(|key, _| !closed(key));
         self.commands_latest.retain(|key, _| !closed(key));
