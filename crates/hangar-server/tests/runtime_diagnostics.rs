@@ -45,6 +45,11 @@ async fn refusals_leave_their_reason_in_the_log() {
 
     // Vigia do Codex com terminal sem multiplexador: a rodada sai sem decidir, mas diz por quê.
     let home = tempfile::tempdir().unwrap();
+    // Sem sessão para adotar a rodada nem abre o multiplexador: o sidecar dá a ela o que decidir.
+    let sidecars = hangar_server::runtime::codex_sidecar::dir(home.path());
+    std::fs::create_dir_all(&sidecars).unwrap();
+    std::fs::write(sidecars.join("watched.json"),
+        serde_json::json!({"name":"watched","endpoint":"ws://127.0.0.1:9","thread_id":"thread-test","app_pid":1}).to_string()).unwrap();
     let missing = home.path().join("missing-mux");
     let watcher = hangar_server::runtime::codex_terminal::Watcher::new(hangar_server::runtime::codex_terminal::WatchConfig {
         home: home.path().into(), queue_dir: home.path().join("queue"),
