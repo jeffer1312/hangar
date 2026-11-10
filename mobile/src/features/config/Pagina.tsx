@@ -1,5 +1,5 @@
 import type { ReactElement, ReactNode, RefObject } from 'react';
-import { Platform, ScrollView, type RefreshControlProps } from 'react-native';
+import { FlatList, Platform, ScrollView, View, type FlatListProps, type RefreshControlProps } from 'react-native';
 import { useHeaderHeight } from 'expo-router/react-navigation';
 import { StyleSheet } from 'react-native-unistyles';
 import type { Edge } from 'react-native-safe-area-context';
@@ -16,21 +16,32 @@ const BORDAS_IOS: Edge[] = ['left', 'right'];
 const IOS = Platform.OS === 'ios';
 
 /** Casca das telas de `/config`: papel de parede, área segura e rolagem com o recuo do cabeçalho. */
-export function Pagina({
+export function Pagina<T>({
   children,
   scrollRef,
   stickyHeaderIndices,
   refreshControl,
+  list,
 }: {
   children: ReactNode;
   scrollRef?: RefObject<ScrollView | null>;
   stickyHeaderIndices?: number[];
   refreshControl?: ReactElement<RefreshControlProps>;
+  /** Lista longa: ela vira a rolagem da tela, virtualizada, e `children` fica no cabeçalho dela. */
+  list?: Pick<FlatListProps<T>, 'data' | 'renderItem' | 'keyExtractor'>;
 }) {
   const cabecalho = useHeaderHeight();
   return (
     <Screen edges={IOS ? BORDAS_IOS : BORDAS_SEM_TOPO}>
-      <ScrollView
+      {list ? <FlatList
+        {...list}
+        ListHeaderComponent={<View style={styles.listHeader}>{children}</View>}
+        refreshControl={refreshControl}
+        style={IOS ? undefined : { marginTop: cabecalho }}
+        contentInsetAdjustmentBehavior={IOS ? 'automatic' : undefined}
+        contentContainerStyle={styles.listContent}
+        keyboardShouldPersistTaps="handled"
+      /> : <ScrollView
         ref={scrollRef}
         stickyHeaderIndices={stickyHeaderIndices}
         refreshControl={refreshControl}
@@ -40,7 +51,7 @@ export function Pagina({
         keyboardShouldPersistTaps="handled"
       >
         {children}
-      </ScrollView>
+      </ScrollView>}
     </Screen>
   );
 }
@@ -52,4 +63,11 @@ const styles = StyleSheet.create((theme) => ({
     paddingBottom: theme.base.space[8],
     gap: theme.base.space[4],
   },
+  // As células da lista ficam coladas (um cartão só); o espaçamento vale entre as peças do cabeçalho.
+  listContent: {
+    paddingTop: theme.base.space[3],
+    paddingHorizontal: theme.base.space[3],
+    paddingBottom: theme.base.space[8],
+  },
+  listHeader: { gap: theme.base.space[4], paddingBottom: theme.base.space[4] },
 }));

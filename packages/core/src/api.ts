@@ -452,6 +452,11 @@ export function vaultFetchForServer<T>(s: Server, path: string, init?: RequestIn
   return apiFetchForServer<T>(s, path, init, prazoMs);
 }
 
+/** Rotas dos plugins do Claude (`plugins.ts`): o mesmo pedido de `apiFetchForServer`. */
+export function pluginsFetchForServer<T>(s: Server, path: string, init?: RequestInit, timeoutMs?: number): Promise<T> {
+  return apiFetchForServer<T>(s, path, init, timeoutMs);
+}
+
 export { recentFailures, type RecentFailure };
 
 /** Teto do texto da pessoa no relatório; acima disso o servidor responde 422. */

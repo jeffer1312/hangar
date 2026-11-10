@@ -25,7 +25,8 @@ export function accountMatches(c: Pick<Credencial, 'nome' | 'nome_natural' | 'lo
   return [c.nome, c.nome_natural, c.login?.email ?? ''].some((s) => fold(s).includes(t));
 }
 
-function fold(s: string): string {
+/** Minúsculas e sem acento, para a busca achar "Aparência" digitando "aparencia". */
+export function fold(s: string): string {
   return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 }
 

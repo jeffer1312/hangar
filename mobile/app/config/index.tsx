@@ -3,7 +3,7 @@ import { Platform, Pressable, Text, TextInput, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
 import { MenuView } from '@react-native-menu/menu';
-import { serverColor } from '@hangar/core';
+import { fold, serverColor } from '@hangar/core';
 import { Pagina } from '../../src/features/config/Pagina';
 import { SettingsMenuGroup, SettingsMenuItem } from '../../src/features/config/SettingsMenu';
 import { useSettingsColors } from '../../src/features/config/colors';
@@ -37,6 +37,8 @@ const SERVER: Page[] = [
   { route: '/config/shared-config', icon: 'Layers', title: m.shared_config_title, rows: [] },
   { route: '/config/contas', icon: 'User', title: m.native_settings_page_accounts,
     rows: [m.contas_atualizar, m.contas_secao_claude, m.contas_secao_modelos, m.contas_secao_outros] },
+  { route: '/config/plugins', icon: 'PackageOpen', title: m.plugins_title,
+    rows: [m.plugins_tab_installed, m.plugins_tab_discover, m.plugins_tab_marketplaces, m.plugins_check] },
   { route: '/config/cofre', icon: 'KeyRound', title: m.vault_app_title, rows: [m.vault_app_where, m.vault_app_add] },
   { route: '/config/orchestration', icon: 'Users', title: m.native_settings_page_orchestration, rows: [] },
   { route: '/config/orchestration-history', icon: 'History', title: m.orq_history_title, rows: [] },
@@ -49,9 +51,6 @@ const SERVER: Page[] = [
   { route: '/config/worktrees', icon: 'GitBranch', title: m.worktrees_titulo, rows: [] },
   { route: '/config/advanced', icon: 'SlidersHorizontal', title: m.native_settings_page_advanced, rows: [] },
 ];
-
-/** Minúsculas e sem acento, para "aparencia" achar "Aparência". */
-const fold = (s: string) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
 function search(query: string) {
   const q = fold(query.trim());

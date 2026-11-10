@@ -283,7 +283,7 @@ fn codex_date(value: Option<&str>) -> String {
     at.format(if crate::i18n::english() { "%-m/%-d/%Y, %-I:%M:%S %p" } else { "%d/%m/%Y, %H:%M:%S" }).to_string()
 }
 
-fn grouped_number(n: u64) -> String {
+pub(super) fn grouped_number(n: u64) -> String {
     let mut text = n.to_string();
     let separator = if crate::i18n::english() { ',' } else { '.' };
     let mut at = text.len();

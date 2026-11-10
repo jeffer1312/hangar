@@ -108,6 +108,13 @@ impl AccountService {
         Ok(())
     }
     pub(crate) fn claude_command(&self) -> Option<tokio::process::Command> {
+        let program = self.claude_program()?;
+        let mut command = tokio::process::Command::new(&program[0]);
+        command.args(&program[1..]);
+        Some(command)
+    }
+    /// O `claude` do `PATH` da conta como argv: no Windows sem `claude.exe`, o `node.exe` + `cli.js`.
+    pub(crate) fn claude_program(&self) -> Option<Vec<std::path::PathBuf>> {
         let path = &self
             .env
             .base
@@ -118,19 +125,17 @@ impl AccountService {
             if cfg!(windows) {
                 let exe = dir.join("claude.exe");
                 if exe.is_file() {
-                    return Some(tokio::process::Command::new(exe));
+                    return Some(vec![exe]);
                 }
                 let script = dir.join("node_modules/@anthropic-ai/claude-code/cli.js");
                 if script.is_file() {
                     let node = std::env::split_paths(path)
                         .map(|dir| dir.join("node.exe"))
                         .find(|p| p.is_file())?;
-                    let mut command = tokio::process::Command::new(node);
-                    command.arg(script);
-                    return Some(command);
+                    return Some(vec![node, script]);
                 }
             } else if dir.join("claude").is_file() {
-                return Some(tokio::process::Command::new(dir.join("claude")));
+                return Some(vec![dir.join("claude")]);
             }
         }
         None

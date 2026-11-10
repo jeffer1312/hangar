@@ -54,7 +54,7 @@ gpui_kit::assets::icon_assets!(ExtraIcons, [ArrowUp, GitBranch, RotateCcwClock, 
     CircleStop, Upload, Workflow, CloudDownload, ArrowDownToLine, ArrowUpFromLine, GitFork, Trash, MessageCircleQuestionMark, Brain,
     ListOrdered, CornerUpRight, TextQuote, MousePointerClick, Code, Hourglass,
     CreditCard, House, Laptop, Briefcase, Cloud, KeyRound, Wallet, UserRound, CircleUser, Contact, BadgeCheck, AtSign, Ticket, IdCard,
-    Recycle, ChartLine, PiggyBank, Gauge, Database, Coins, Boxes, TrendingUp, TrendingDown]);
+    Recycle, ChartLine, PiggyBank, Gauge, Database, Coins, Boxes, TrendingUp, TrendingDown, Package]);
 
 pub const HANGAR_MARK: &str = "brand/hangar-mark.svg";
 /// Os três arcos da marca da página (`assets/brand/mark.svg`), um arquivo cada: a abertura do Connect acende um depois do outro.

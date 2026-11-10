@@ -9,8 +9,10 @@ export type MachineView = 'edit' | 'connection' | 'discover' | 'remote' | 'advan
 
 export const MachineGroup = ({ children }: { children: ReactNode }) => <SectionCard>{children}</SectionCard>;
 
-export function MachineRow({ title, value, description, onPress, disabled, danger, action, selected, expanded, valueTone, checked }: {
+export function MachineRow({ title, accessibilityLabel, value, description, onPress, disabled, danger, action, selected, expanded, valueTone, checked }: {
   title: string;
+  /** Quando o título sozinho não diz de quem é a ação (vários "Atualizar" na mesma tela). */
+  accessibilityLabel?: string;
   value?: string;
   description?: string;
   onPress?: () => void;
@@ -35,7 +37,7 @@ export function MachineRow({ title, value, description, onPress, disabled, dange
       : onPress && !action && checked === undefined ? <Icon name="ChevronRight" size={17} color={c.faint} /> : null}
   </>;
   const style = [rowStyles.row, { borderTopColor: c.border, opacity: disabled ? 0.5 : 1 }];
-  return onPress ? <Pressable accessibilityRole={checked === undefined ? 'button' : 'switch'} accessibilityLabel={title}
+  return onPress ? <Pressable accessibilityRole={checked === undefined ? 'button' : 'switch'} accessibilityLabel={accessibilityLabel ?? title}
     // No interruptor o estado já é lido pelo `checked`; o texto só vale enquanto ele é `mixed`.
     accessibilityValue={value && (checked === undefined || checked === 'mixed') ? { text: value } : undefined}
     accessibilityHint={description}

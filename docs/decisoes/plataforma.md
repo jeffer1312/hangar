@@ -4306,3 +4306,45 @@ e Caddy 2.11.6 pelo caminho real (wss até `connect.hangar.dev.br`, traefik 3.6.
 Não testado: renovação, a CA de produção e um nome que dependa só do curinga novo
 `*.hangar.dev.br`. Cargas e logs completos em
 `.superpowers/sdd/2026-11-06-hangar-connect-rust/prova-tunel.md` da árvore principal.
+
+## Plugins do Claude na tela: a CLI oficial na pasta principal (09/11/2026)
+
+A tela de Plugins chama `claude plugin …` (CLI 2.1.319) com a pasta padrão `~/.claude`, sem
+`CLAUDE_CONFIG_DIR`. Provas feitas em pastas de config descartáveis, salvo a do reabrir:
+
+- **Saída em JSON.** `list --json` (0,4 s), `list --json --available` (2,7 s) e
+  `install|uninstall|enable|disable|update … --json` imprimem o JSON na última linha da stdout; na
+  falha vem `outcome: failed`, `failureCode` (`not_found`, `not_installed_at_scope`), o `✘` na stderr e
+  rc 1. `plugin details` só sai em texto. `marketplace update --json` exige nome; sem nome e sem
+  `--json` atualiza todos e só imprime texto.
+- **`--` e `-s user` são aceitos** em install, update, enable, disable, uninstall e em
+  `marketplace add|update|remove` (`install -s user --json -- -x@caveman` tratou `-x@caveman` como id).
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, `DISABLE_AUTOUPDATER=1` e `DISABLE_UPDATES=1` não
+  atrapalham add, install nem update.
+- **Versão nova.** O `update` compara a versão: `version` do `plugin.json` do plugin no clone do
+  marketplace, senão a da entrada do `marketplace.json`, senão 12 caracteres do `HEAD` do clone.
+  Conteúdo mudado sem versão nova responde `up_to_date`. Fonte externa (`source: url` + `sha`): a
+  versão é a do `plugin.json` naquele commit e o `version` da entrada é ignorado; sha novo com a
+  mesma versão também dá `up_to_date`. Por isso, para fonte externa, a versão nova não se descobre
+  pelo disco.
+- **Remover apaga a chave.** `uninstall` e `marketplace remove` tiram `enabledPlugins[id]` do
+  `settings.json`; o espelho de contas não apaga o que falta no principal. Depois de remover, o
+  Hangar grava `false` no principal.
+- **Sem trava no `settings.json` nem no `installed_plugins.json`.** A CLI grava os dois por tmp +
+  rename; só `known_marketplaces.json` (pasta `.lock`, com queda para gravar sem ela) e
+  `.claude.json` têm trava. O cadeado do Hangar só coordena o próprio Hangar; o estado é sempre
+  relido do disco depois da operação.
+- **`autoUpdate`.** Mora em `extraKnownMarketplaces.<nome>.autoUpdate`; a abertura copia o valor para
+  o `known_marketplaces.json` (`Synced autoUpdate=false from settings for marketplace: caveman`).
+  Pelo código, o settings vence e, sem a chave, vale `true` só para os marketplaces oficiais.
+  Não provado na prática: a passada de atualização só roda com login, até 10 min depois de abrir.
+  Nomes no pacote 2.1.319, de onde `disk.rs` copiou as regras: embutido `ptt`, oficiais `fbt`
+  menos `rf`, precedência `BVe`, forma do `shownCommand` em `mrt`/`sMo`.
+- **Reabrir não reconcilia a conta.** Com `watch@claude-video` desligado no principal, o
+  `POST /recarregar` de duas sessões de `~/.claude-claude-200-3` deixou a cópia da conta com `true` e
+  a skill carregada; uma sessão nova na conta reconciliou (`false`, sem a skill). Corrigido: toda
+  subida de processo Claude em conta do Hangar reconcilia a conta antes (`reopen_by_spec`, e no
+  `gateway.rs` o `launch_if_needed` e o `reopen_headless_locked`, que cobrem `adopt_now`, acordar e o
+  religar depois de queda); a escolha de plugins da conversa segue valendo por cima. Falha na
+  reconciliação não sobe o processo: o reabrir responde 409 e a sessão sem terminal fica com
+  `headless_nao_subiu`.
