@@ -602,8 +602,10 @@ fn steps(home: &Path, dir: &Path, project: Option<&str>, op: &str, diary: &mut V
     log_stage(diary, "espelhar_settings", false);
     warnings.extend(seed_settings(home, dir)?);
     log_stage(diary, "conferir_plugins", false);
-    warnings.extend(share_plugin_registry(home));
-    warnings.extend(check_plugins(home, dir)?);
+    let shared = share_plugin_registry(home);
+    let checked = check_plugins(home, dir)?;
+    warnings.extend(shared.into_iter().filter(|w| !checked.contains(w)));
+    warnings.extend(checked);
     log_stage(diary, "espelhar_config", false);
     warnings.extend(mirror_claude_json(home, dir)?);
     // Atalho para o que sumiu do compartilhado, e qualquer outro link morto no topo.
@@ -984,8 +986,21 @@ pub(crate) fn share_plugin_registry(home: &Path) -> Vec<String> {
     let mut warnings = Vec::new();
     for (file, key) in [("installed_plugins.json", "installPath"), ("known_marketplaces.json", "installLocation")] {
         let path = plugins.join(file);
-        let Ok(Some(mut data)) = read_json(&path) else { continue };
+        // A mesma frase do `check_plugins`, para a reconciliação não repetir o aviso.
+        let unreadable = |error: String| format!("plugins: não consegui ler {}: {error}", path.display());
+        let before = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => { warnings.push(unreadable(format!("{}: {error}", path.display()))); continue; }
+        };
+        let mut data = match parse_json(&path, Ok(before.clone())) {
+            Ok(Some(data)) => data,
+            Ok(None) => continue,
+            Err(error) => { warnings.push(unreadable(error)); continue; }
+        };
         if !rewrite_account_paths(home, &plugins, key, &mut data) { continue; }
+        // Sem trava em comum com o CLI: se ele gravou desde a leitura, a próxima reconciliação refaz.
+        if fs::read(&path).ok().as_ref() != Some(&before) { continue; }
         if let Err(error) = write_replacing(&path, &pyjson::dumps_indent(&data, 2, false)) {
             warnings.push(format!("plugins: não consegui trocar o caminho das contas em {}: {}", path.display(), error.cause()));
         }
@@ -1013,7 +1028,11 @@ fn rewrite_account_paths(home: &Path, plugins: &Path, key: &str, value: &mut Val
 }
 
 fn shared_plugin_path(home: &Path, plugins: &Path, text: &str) -> Option<PathBuf> {
-    let mut parts = Path::new(text).strip_prefix(home).ok()?.components();
+    // Sem distinguir caixa: no Windows o CLI pode gravar a letra do drive diferente da do HOME.
+    let mut parts = Path::new(text).components();
+    for want in home.components() {
+        if !parts.next()?.as_os_str().eq_ignore_ascii_case(want.as_os_str()) { return None; }
+    }
     if !parts.next()?.as_os_str().to_str()?.starts_with(".claude-") { return None; }
     if parts.next()?.as_os_str() != "plugins" { return None; }
     let shared = plugins.join(parts.as_path());
@@ -1391,6 +1410,9 @@ mod tests {
         fs::write(&installed, untouched).unwrap();
         assert!(reconcile(home, &home.join(".claude-conta2"), None).result.is_ok());
         assert_eq!(fs::read_to_string(&installed).unwrap(), untouched, "sem caminho de conta o arquivo não é regravado");
+        fs::write(&known, "{").unwrap();
+        let warnings = share_plugin_registry(home);
+        assert!(warnings.len() == 1 && warnings[0].contains("known_marketplaces.json"), "registro ilegível avisa: {warnings:?}");
     }
 
     #[test]
