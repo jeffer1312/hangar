@@ -27,6 +27,9 @@ static QUESTION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^\s*\?\s+(\S.*?)\s*$").unwrap());
 static PLACEHOLDER: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\[(?:Pasted\s*text|paste)\s*#(\d+)|\[Image\s*#(\d+)\]").unwrap());
+/// Colagem longa que o Codex recolhe na caixa: o texto não aparece, só o marcador com o tamanho.
+static CODEX_PASTE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[Pasted Content (\d+) chars\]").unwrap());
 static PI_CURSOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^\s*>\s*(\d+)\.").unwrap());
 static AGENT_ROW: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*(?:❯\s+)?[●◯]\s+(\S+)").unwrap());
@@ -43,6 +46,7 @@ const CODEX_READY: [&str; 5] = ["⏵⏵", "⏸", "bypass permissions", "? for sh
 const CODEX_READY_LINES: usize = 12;
 const CODEX_READY_WAIT: Duration = Duration::from_secs(12);
 const CODEX_PLACEHOLDER: &str = "Ask Codex to do anything";
+const CODEX_MENU_FOOTERS: [&str; 5] = ["enter select", "enter to confirm", "enter to continue", "enter confirm", "enter continue"];
 
 pub struct OtherControlOutcome {
     pub reply: RuntimeReply,
@@ -253,6 +257,30 @@ fn composer(target: &OtherTarget, frame: &OtherFrame) -> Option<ComposerSnapshot
         stashed: false,
     })
 }
+/// Menu ou diálogo do Codex na tela: o seletor que a lista reconhece (`codex_menu_of`) ou opções
+/// numeradas com o cursor e o rodapé de escolha. O de modelo e esforço ("enter select") fica só aqui:
+/// em `CODEX_FOOTERS` ele viraria pergunta para o app.
+fn codex_menu_open(frame: &OtherFrame) -> bool {
+    if crate::terminal_state::codex_menu_of(&frame.text).is_some() {
+        return true;
+    }
+    // A captura traz o resto do pane em branco: o rodapé é das últimas linhas com texto.
+    let footer = frame.text.trim_end().lines().rev().take(8)
+        .any(|line| { let line = line.to_lowercase(); CODEX_MENU_FOOTERS.iter().any(|mark| line.contains(mark)) });
+    footer && CURSOR.is_match(&frame.text)
+}
+/// Codex cru só recebe com a caixa vazia: com menu ou diálogo aberto, popup de barra ou texto de alguém
+/// nada é digitado (as teclas cairiam dentro deles).
+fn codex_busy(target: &OtherTarget, frame: &OtherFrame) -> Option<DeliveryResult> {
+    if !codex(target) {
+        return None;
+    }
+    if codex_menu_open(frame) {
+        return Some(result(Disposition::Deferred, DeliveryStage::Ready, Cleanup::NotNeeded, "codex_menu_open"));
+    }
+    composer(target, frame).filter(|current| !current.is_empty())
+        .map(|_| result(Disposition::Deferred, DeliveryStage::Composer, Cleanup::NotNeeded, "composer_busy"))
+}
 /// A caixa de digitar do Codex: a última linha `›` e as que continuam o texto até a linha em branco.
 /// A sugestão vem esmaecida e sai do `typed`; a captura sem estilo traz a sugestão padrão por extenso.
 fn codex_composer(frame: &OtherFrame) -> Option<ComposerSnapshot> {
@@ -265,9 +293,10 @@ fn codex_composer(frame: &OtherFrame) -> Option<ComposerSnapshot> {
     if content == CODEX_PLACEHOLDER {
         content.clear();
     }
+    let placeholders = CODEX_PASTE.captures_iter(&content).map(|found| format!("pasted{}", &found[1])).collect();
     Some(ComposerSnapshot {
         content,
-        placeholders: BTreeSet::new(),
+        placeholders,
         stashed: false,
     })
 }
@@ -358,6 +387,10 @@ async fn before_submit_failure(
     stage: DeliveryStage,
     code: &str,
 ) -> DeliveryResult {
+    // Como o Python no Codex: o que ficou na caixa fica, e a resposta diz isso (nunca "limpo").
+    if codex(target) {
+        return result(Disposition::Unknown, stage, Cleanup::Unproved, code);
+    }
     let cleanup = cleanup_own(target, io, text, before).await;
     result(
         if cleanup == Cleanup::Proved {
@@ -450,6 +483,10 @@ async fn prompt_inner(
         }
         _ => {}
     }
+    // Antes do bloqueio genérico: o menu do Codex sai com o código dele.
+    if let Some(refused) = codex_busy(target, &frame) {
+        return refused;
+    }
     if blocked(&frame) {
         return result(
             Disposition::Deferred,
@@ -457,16 +494,6 @@ async fn prompt_inner(
             Cleanup::NotNeeded,
             "input_unavailable",
         );
-    }
-    // Codex cru só recebe com a caixa vazia: menu ou diálogo aberto, popup de barra ou texto de
-    // alguém esperam na fila (as teclas cairiam dentro deles).
-    if codex(target) {
-        if crate::terminal_state::codex_menu_of(&frame.text).is_some() {
-            return result(Disposition::Deferred, DeliveryStage::Ready, Cleanup::NotNeeded, "codex_menu_open");
-        }
-        if composer(target, &frame).is_some_and(|current| !current.is_empty()) {
-            return result(Disposition::Deferred, DeliveryStage::Composer, Cleanup::NotNeeded, "composer_busy");
-        }
     }
     let deadline = Instant::now() + if codex(target) { CODEX_READY_WAIT } else { Duration::from_secs(8) };
     while !ready(target, &frame) && Instant::now() < deadline {
@@ -510,8 +537,12 @@ async fn prompt_inner(
             "a TUI não mostrou prontidão no prazo; o envio físico continua"
         );
     }
+    // A tela pode ter mudado durante a espera: menu ou texto que abriu agora também barra.
+    if let Some(refused) = codex_busy(target, &frame) {
+        return refused;
+    }
     let before = composer(target, &frame);
-    // Tela que nunca ficou pronta ou sem caixa de digitar: espera na fila em vez de digitar às cegas.
+    // Tela que nunca ficou pronta ou sem caixa de digitar: recusa em vez de digitar às cegas.
     if codex(target) && (!ready(target, &frame) || before.is_none()) {
         return result(Disposition::Deferred, DeliveryStage::Ready, Cleanup::NotNeeded, "input_unavailable");
     }
@@ -681,6 +712,11 @@ async fn prompt_inner(
                     );
                 }
             };
+            // O comando de barra do Codex que abriu o seletor (`/model`) já rodou: outro Enter escolheria
+            // a linha sob o cursor.
+            if codex(target) && slash && submit == 0 && codex_menu_open(&current) {
+                return result(Disposition::Accepted, DeliveryStage::SubmitProof, Cleanup::NotNeeded, "submit_proved");
+            }
             let Some(current) = composer(target, &current) else {
                 // Codex sem composer legível: como o Python, sem prova o Enter vale.
                 if codex(target) {

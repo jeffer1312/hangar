@@ -1,7 +1,8 @@
 //! Texto para sessão que o Rust não adotou (`adopt_now` sem dono): nome sem pane nem sidecar, pane de
 //! shell ou programa qualquer, `claude login` e o Codex cru (`command codex`, sem sidecar). Só o Codex
 //! cru recebe digitação, pela mesma condução com prova do Pi/omp/Kimi (`other_terminal::drive`), sem
-//! ator; o resto é recusa com código, na hora. Respostas no formato do `_send_one` do Python.
+//! ator, e só com a caixa de digitar vazia e pronta: fora disso é 409 com código, sem fila (ninguém a
+//! drenaria). O resto é recusa com código, na hora. Respostas no formato do `_send_one` do Python.
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -15,15 +16,16 @@ use crate::list::discover_other::Dirs;
 use crate::list::mux::Pane;
 use crate::routes::AppState;
 use crate::runtime::other_terminal::{OtherIo, OtherOptions, OtherTarget, ProcessOtherIo, drive};
-use crate::terminal_input::{Cleanup, Disposition, TerminalBinding};
+use crate::terminal_input::{Disposition, TerminalBinding};
 
 const MSG_UNBOUND: &str = "vínculo gerenciado indisponível; escrita suspensa";
 const MSG_LOGIN: &str = "sessão Claude sem vínculo no Rust";
 const MSG_CONTROL: &str = "control characters not allowed in prompt";
-const MSG_CLEANED: &str = "envio incompleto: o composer foi limpo e a mensagem NAO foi enviada — pode reenviar sem risco de duplicar.";
 const MSG_PARTIAL: &str = "envio incompleto: parte do texto ficou no composer da sessao e nada foi submetido. Confira o terminal antes de reenviar.";
 /// O teto do `PromptQueue` do Python.
 const QUEUE_MAX: usize = 1000;
+/// Espera máxima pela vez de digitar na sessão, abaixo do prazo de 3 s da entrega adiada do Connect.
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Uma digitação por sessão: dois recados no mesmo tty sairiam concatenados.
 static LOCKS: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = LazyLock::new(Default::default);
@@ -119,45 +121,78 @@ async fn codex(deps: &Deps, name: &str, text: &str, panes: &[Pane], children: &c
     if text.chars().any(|c| u32::from(c) < 32 && c != '\t' && c != '\n') {
         return refused("erro_envio_falhou", &format!("falha ao enviar: {MSG_CONTROL}"), json!({"erro": MSG_CONTROL}), false);
     }
+    // Pane do Codex com sidecar é do `codex --remote` gerenciado: o Rust o adota, nunca digita cru nele.
+    let sidecar = crate::runtime::codex_sidecar::path(&crate::runtime::codex_sidecar::dir(&dirs.home), name);
+    if tokio::task::spawn_blocking(move || sidecar.exists()).await.unwrap_or(true) {
+        deps.diag.report("runtime.send_failed", name, "codex_sidecar_invalid", "Codex gerenciado que o Rust não adotou; nada foi digitado");
+        return Sent::Answer(StatusCode::SERVICE_UNAVAILABLE, json!({"ok": false, "error": detail_body("codex_sidecar_invalid",
+            "o arquivo da sessão não abre no servidor; feche e abra a sessão", json!({}))["detail"], "delivered": false}));
+    }
     let lock = LOCKS.lock().unwrap_or_else(|e| e.into_inner()).entry(name.to_owned()).or_default().clone();
-    let _held = lock.lock().await;
+    // Fila curta atrás de outro recado: esperar além do prazo de quem pediu (3 s no Connect) faria o
+    // reenvio dele entrar depois deste, em dobro.
+    let sent = match tokio::time::timeout(LOCK_WAIT, lock.clone().lock_owned()).await {
+        Ok(held) => {
+            let sent = codex_locked(deps, name, text, panes, children, dirs, config_dirs, row).await;
+            drop(held);
+            sent
+        }
+        Err(_) => Sent::Answer(StatusCode::CONFLICT, json!({"ok": false, "error": detail_body("erro_envio_em_andamento",
+            "outro recado ainda está sendo digitado nesta sessão; tente de novo em instantes", json!({}))["detail"], "delivered": false})),
+    };
+    let mut locks = LOCKS.lock().unwrap_or_else(|e| e.into_inner());
+    // Só o mapa e esta cópia: ninguém mais espera a vez, a entrada sai.
+    if Arc::strong_count(&lock) <= 2 { locks.remove(name); }
+    sent
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn codex_locked(deps: &Deps, name: &str, text: &str, panes: &[Pane], children: &crate::list::procs::ChildrenMap, dirs: &Dirs, config_dirs: &[PathBuf], row: &PaneSession) -> Sent {
     let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64());
     let Some(target) = target(deps, name, panes, children, dirs, config_dirs, row) else { return unbound(deps, name, "unowned_codex_unproved") };
     let io = ProcessOtherIo::new(&target, &OtherOptions::new(deps.terminal.clone(), crate::provider_models::inbox::INBOX.clone(),
         deps.list.env().procs.clone(), deps.interactions.clone()));
     let result = drive::prompt(&target, &io, text, None).await;
     io.release().await;
-    let typed = match (result.disposition, result.cleanup) {
-        (Disposition::Accepted, _) => true,
-        (Disposition::Deferred, Cleanup::Proved) => return partial(deps, name, &result.code, MSG_CLEANED, "erro_envio_incompleto_limpo"),
-        (Disposition::Deferred, _) => false,
-        (Disposition::Rejected, _) => return refused("erro_envio_falhou", &format!("falha ao enviar: {}", result.code), json!({"erro": result.code}), false),
-        (Disposition::Unknown, _) => return partial(deps, name, &result.code, MSG_PARTIAL, "erro_envio_incompleto_composer"),
-    };
+    match result.disposition {
+        Disposition::Accepted => {}
+        // Fora da caixa vazia e pronta nada é digitado nem guardado: a pessoa vê o erro e reenvia.
+        Disposition::Deferred => return not_at_composer(deps, name, &result.code),
+        Disposition::Rejected => return refused("erro_envio_falhou", &format!("falha ao enviar: {}", result.code), json!({"erro": result.code}), false),
+        // Parou com texto na caixa: como o Python no Codex, sem limpar e sem Enter.
+        Disposition::Unknown => {
+            deps.diag.report("rust.unowned_send_partial", name, &result.code, "texto ficou pela metade no Codex cru; Enter não enviado");
+            return refused("erro_envio_incompleto_composer", MSG_PARTIAL, json!({}), false);
+        }
+    }
     let queue = crate::locate::queue_path(&dirs.claude, name);
     let stripped = text.trim_start();
     if stripped.starts_with('/') {
-        // Comando de barra não tem linha na fila; o `/clear` leva a fila junto (a conversa é outra).
-        if stripped[1..].split_whitespace().next() == Some("clear") {
+        // Comando de barra não tem linha na fila; o `/clear` que rodou leva a fila junto (a conversa é outra).
+        if stripped.split_whitespace().next() == Some("/clear") {
             let _ = tokio::task::spawn_blocking(move || clear_queue(&queue)).await;
         }
     } else {
-        let row = json!({"id": crate::mods::state::random_hex(16), "text": text, "ts": ts, "delivered": typed});
+        let row = json!({"id": crate::mods::state::random_hex(16), "text": text, "ts": ts, "delivered": true});
         let written = tokio::task::spawn_blocking(move || append(&queue, row)).await.map_err(std::io::Error::other).and_then(|r| r);
         if let Err(error) = written {
-            if !typed {
-                return refused("erro_fila_nao_digitada", &format!("fila indisponivel e prompt nao foi digitado: {error}"), json!({"erro": error.to_string()}), false);
-            }
             // Digitado: o recado chegou; só a fila ficou sem a linha.
             tracing::error!(session = %name, %error, "fila indisponível depois de digitar no Codex cru; o recado foi entregue sem linha na fila");
         }
     }
-    Sent::Answer(StatusCode::OK, json!({"ok": true, "error": null, "delivered": typed, "native": false}))
+    Sent::Answer(StatusCode::OK, json!({"ok": true, "error": null, "delivered": true, "native": false}))
 }
 
-fn partial(deps: &Deps, name: &str, code: &str, msg: &str, public: &str) -> Sent {
-    deps.diag.report("envio.parcial", name, code, "texto ficou pela metade no Codex cru; Enter não enviado");
-    refused(public, msg, json!({}), false)
+/// 409 com código: menu ou diálogo aberto (`codex_menu_open`) ou qualquer outra tela que não é a caixa
+/// vazia e pronta (`codex_composer_busy`), com o motivo da condução.
+fn not_at_composer(deps: &Deps, name: &str, reason: &str) -> Sent {
+    let (code, msg) = if reason == "codex_menu_open" {
+        ("codex_menu_open", "há um menu ou diálogo aberto no terminal do Codex; nada foi enviado. Feche-o e mande de novo.")
+    } else {
+        ("codex_composer_busy", "a caixa de digitar do Codex não está vazia e pronta; nada foi enviado. Mande de novo.")
+    };
+    deps.diag.report("runtime.send_failed", name, code, "Codex cru fora da caixa vazia; nada foi digitado nem guardado");
+    Sent::Answer(StatusCode::CONFLICT, json!({"ok": false, "error": detail_body(code, msg, json!({"motivo": reason}))["detail"], "delivered": false}))
 }
 
 /// A vida do Codex cru, montada da descoberta como a dos atores do Pi/omp/Kimi, sem fila nem conversa.
