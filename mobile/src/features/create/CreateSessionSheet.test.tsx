@@ -250,6 +250,8 @@ vi.mock('../../paraglide/messages', () => ({
     'worktree_menu_buscar worktree_menu_no_match native_create_checkout_dirty native_folder_git_branch_entry ' +
     'worktree_menu_ocupada worktree_menu_parte_de worktree_menu_branch worktree_menu_ja_existe worktree_menu_ja_aberta worktree_menu_pasta_destino ' +
     'worktree_nova_so_remoto worktree_subagentes worktree_parada_dias worktree_dias_atras ' +
+    'native_new_chat_hero native_new_chat_hero_in native_new_chat_no_project_line native_new_chat_choose_folder native_new_chat_start_without_project native_new_chat_run_on ' +
+    'native_new_chat_place_new native_new_chat_place_here ' +
     'composer_session_settings composer_session_settings_hint native_ctl_model_title native_ctl_search native_ctl_no_results ' +
     'comum_nenhum_modelo native_new_chat_reasoning modelo_sem_niveis native_ctl_loading native_ctl_retry native_ctl_failed ' +
     'native_ctl_fast native_ctl_fast_on native_ctl_fast_off native_ctl_fast_hint native_ctl_fast_unavailable ' +
@@ -421,10 +423,11 @@ describe('CreateSessionSheet Codex', () => {
   it('worktree nova com a branch atual da pasta não envia a primeira mensagem', async () => {
     const { container, root } = await renderSheet(false, false);
     try {
-      const pill = [...container.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.getAttribute('aria-label')?.startsWith('native_create_checkout_branch'))!;
+      // Na conversa nova o seletor de worktree é o grupo "Onde" do painel da máquina.
+      const pill = [...container.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.getAttribute('aria-label')?.startsWith('native_new_chat_machine'))!;
       await act(async () => pill.click());
       for (let i = 0; i < 3; i++) await act(async () => Promise.resolve());
-      const panel = container.querySelector('[data-testid="folder-panel"][aria-label="native_create_checkout_branch"]') as HTMLElement;
+      const panel = container.querySelector('[data-testid="folder-panel"][aria-label="native_new_chat_machine"]') as HTMLElement;
       await act(async () => button(panel, 'worktree_menu_nova')!.click());
       const field = panel.querySelector('textarea[aria-label="worktree_menu_branch"]') as HTMLTextAreaElement;
       await act(async () => { field.value = 'main'; field.dispatchEvent(new Event('input', { bubbles: true })); });

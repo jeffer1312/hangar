@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { Icon } from './Icon';
@@ -10,6 +10,9 @@ export interface SettingsItem {
   hint?: string;
   selected?: boolean;
   disabled?: boolean;
+  // Ícone da etiqueta (máquina, conta) antes do nome, e a cor dela no nome.
+  leading?: ReactNode;
+  labelColor?: string;
 }
 
 export function SettingsList({ items, onPick, searchable = true }: {
@@ -32,8 +35,9 @@ export function SettingsList({ items, onPick, searchable = true }: {
         style={({ pressed }) => [styles.row, { backgroundColor: it.selected ? theme.tokens.accent.dim : pressed ? theme.tokens.fillSubtle : 'transparent' }, it.disabled && styles.disabled]}
         accessibilityRole="radio" accessibilityLabel={it.label} accessibilityHint={it.hint}
         accessibilityState={{ selected: !!it.selected, disabled: !!it.disabled }}>
+        {it.leading}
         <Text style={styles.rowText} numberOfLines={2}>
-          <Text style={styles.modelName}>{it.label}</Text>
+          <Text style={[styles.modelName, it.labelColor ? { color: it.labelColor } : null]}>{it.label}</Text>
           {it.hint ? <Text style={styles.detail}>{`  ${it.hint}`}</Text> : null}
         </Text>
         {it.selected ? <Icon name="Check" size={16} color={theme.tokens.accent.base} /> : null}
