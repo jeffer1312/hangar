@@ -198,6 +198,8 @@ pub async fn serve_until_with_guest(
             .with_permissions(state.state.permissions.clone())
             .with_plugin_bridge(session_open::claude::PluginBridge { port: cfg.listen.port(), secret: cfg.auth_token.clone() }));
         registry.bind_lifecycle();
+        // A vigia só nasce depois da subida (abaixo): a escrita que chega antes espera por ela.
+        if state.list.env().dirs.is_some() { registry.expect_watcher(); }
         state.state.lifecycle.set(registry.clone()).map_err(|_|std::io::Error::other("state_lifecycle_already_bound"))?;
         runtime_registry=Some(registry.clone());
         state.list.set_runtime(registry.clone());

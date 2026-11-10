@@ -27,6 +27,9 @@ static QUESTION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^\s*\?\s+(\S.*?)\s*$").unwrap());
 static PLACEHOLDER: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\[(?:Pasted\s*text|paste)\s*#(\d+)|\[Image\s*#(\d+)\]").unwrap());
+/// Colagem longa que o Codex recolhe na caixa: o texto não aparece, só o marcador com o tamanho.
+static CODEX_PASTE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[Pasted Content (\d+) chars\]").unwrap());
 static PI_CURSOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^\s*>\s*(\d+)\.").unwrap());
 static AGENT_ROW: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*(?:❯\s+)?[●◯]\s+(\S+)").unwrap());
@@ -38,6 +41,12 @@ static MULTIPLE: LazyLock<Regex> =
 static CURSOR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^\s*[>❯›]\s*(\d+)\.").unwrap());
 static READY_WARNED: LazyLock<Mutex<HashSet<(String, u64, String)>>> =
     LazyLock::new(Default::default);
+/// Marcas de TUI pronta do `_wait_input_ready` do Python, procuradas só no rodapé.
+const CODEX_READY: [&str; 5] = ["⏵⏵", "⏸", "bypass permissions", "? for shortcuts", "for shortcuts"];
+const CODEX_READY_LINES: usize = 12;
+const CODEX_READY_WAIT: Duration = Duration::from_secs(12);
+const CODEX_PLACEHOLDER: &str = "Ask Codex to do anything";
+const CODEX_MENU_FOOTERS: [&str; 5] = ["enter select", "enter to confirm", "enter to continue", "enter confirm", "enter continue"];
 
 pub struct OtherControlOutcome {
     pub reply: RuntimeReply,
@@ -112,6 +121,11 @@ async fn pending(
     target: &OtherTarget,
     io: &dyn OtherIo,
 ) -> Result<Option<PendingInteraction>, RuntimeError> {
+    // Codex cru (sem sidecar): não há conversa de onde ler pergunta nativa.
+    if codex(target) {
+        life(target, io).await?;
+        return Ok(None);
+    }
     let owned = target.clone();
     let value = tokio::task::spawn_blocking(move || read_pending_interaction(&owned))
         .await
@@ -132,7 +146,20 @@ fn blocked(frame: &OtherFrame) -> bool {
     let analysis = crate::terminal_state::analyze(&frame.text);
     analysis.overlay || analysis.state == "awaiting_input"
 }
-fn ready(frame: &OtherFrame) -> bool {
+fn codex(target: &OtherTarget) -> bool {
+    target.provider == hangar_transcript::Provider::Codex
+}
+fn ready(target: &OtherTarget, frame: &OtherFrame) -> bool {
+    if codex(target) {
+        // No pane inteiro a marca casaria com o texto da conversa.
+        return frame
+            .text
+            .trim_end_matches('\n')
+            .split('\n')
+            .rev()
+            .take(CODEX_READY_LINES)
+            .any(|line| CODEX_READY.iter().any(|mark| line.contains(mark)));
+    }
     frame
         .text
         .trim_end_matches('\n')
@@ -142,6 +169,9 @@ fn ready(frame: &OtherFrame) -> bool {
         .any(|line| line.chars().any(|c| "─━═╰│".contains(c)))
 }
 fn composer(target: &OtherTarget, frame: &OtherFrame) -> Option<ComposerSnapshot> {
+    if codex(target) {
+        return codex_composer(frame);
+    }
     if matches!(
         target.provider,
         hangar_transcript::Provider::Pi | hangar_transcript::Provider::Omp
@@ -221,6 +251,49 @@ fn composer(target: &OtherTarget, frame: &OtherFrame) -> Option<ComposerSnapshot
             None => format!("img{}", &captures[2]),
         })
         .collect();
+    Some(ComposerSnapshot {
+        content,
+        placeholders,
+        stashed: false,
+    })
+}
+/// Menu ou diálogo do Codex na tela: o seletor que a lista reconhece (`codex_menu_of`) ou opções
+/// numeradas com o cursor e o rodapé de escolha. O de modelo e esforço ("enter select") fica só aqui:
+/// em `CODEX_FOOTERS` ele viraria pergunta para o app.
+fn codex_menu_open(frame: &OtherFrame) -> bool {
+    if crate::terminal_state::codex_menu_of(&frame.text).is_some() {
+        return true;
+    }
+    // A captura traz o resto do pane em branco: o rodapé é das últimas linhas com texto.
+    let footer = frame.text.trim_end().lines().rev().take(8)
+        .any(|line| { let line = line.to_lowercase(); CODEX_MENU_FOOTERS.iter().any(|mark| line.contains(mark)) });
+    footer && CURSOR.is_match(&frame.text)
+}
+/// Codex cru só recebe com a caixa vazia: com menu ou diálogo aberto, popup de barra ou texto de alguém
+/// nada é digitado (as teclas cairiam dentro deles).
+fn codex_busy(target: &OtherTarget, frame: &OtherFrame) -> Option<DeliveryResult> {
+    if !codex(target) {
+        return None;
+    }
+    if codex_menu_open(frame) {
+        return Some(result(Disposition::Deferred, DeliveryStage::Ready, Cleanup::NotNeeded, "codex_menu_open"));
+    }
+    composer(target, frame).filter(|current| !current.is_empty())
+        .map(|_| result(Disposition::Deferred, DeliveryStage::Composer, Cleanup::NotNeeded, "composer_busy"))
+}
+/// A caixa de digitar do Codex: a última linha `›` e as que continuam o texto até a linha em branco.
+/// A sugestão vem esmaecida e sai do `typed`; a captura sem estilo traz a sugestão padrão por extenso.
+fn codex_composer(frame: &OtherFrame) -> Option<ComposerSnapshot> {
+    let text = frame.typed.as_deref().unwrap_or(&frame.text);
+    let lines: Vec<&str> = text.lines().collect();
+    let at = lines.iter().rposition(|line| line.trim_start().starts_with('›'))?;
+    let mut content = vec![lines[at].trim_start().trim_start_matches('›').trim()];
+    content.extend(lines[at + 1..].iter().take_while(|line| !line.trim().is_empty()).map(|line| line.trim()));
+    let mut content = content.join("\n");
+    if content == CODEX_PLACEHOLDER {
+        content.clear();
+    }
+    let placeholders = CODEX_PASTE.captures_iter(&content).map(|found| format!("pasted{}", &found[1])).collect();
     Some(ComposerSnapshot {
         content,
         placeholders,
@@ -314,6 +387,10 @@ async fn before_submit_failure(
     stage: DeliveryStage,
     code: &str,
 ) -> DeliveryResult {
+    // Como o Python no Codex: o que ficou na caixa fica, e a resposta diz isso (nunca "limpo").
+    if codex(target) {
+        return result(Disposition::Unknown, stage, Cleanup::Unproved, code);
+    }
     let cleanup = cleanup_own(target, io, text, before).await;
     result(
         if cleanup == Cleanup::Proved {
@@ -325,6 +402,21 @@ async fn before_submit_failure(
         cleanup,
         code,
     )
+}
+
+async fn line_by_line(target: &OtherTarget, io: &dyn OtherIo, text: &str) -> Result<(), RuntimeError> {
+    let mut wrote = false;
+    for (index, line) in text.split('\n').enumerate() {
+        if index > 0 {
+            write_io(target, io, "C-j", false, None).await.map_err(|error| if wrote { failure("other_terminal_delivery_unconfirmed") } else { error })?;
+            wrote = true;
+        }
+        if !line.is_empty() {
+            write_io(target, io, line, true, None).await.map_err(|error| if wrote { failure("other_terminal_delivery_unconfirmed") } else { error })?;
+            wrote = true;
+        }
+    }
+    Ok(())
 }
 
 pub async fn prompt(
@@ -391,6 +483,10 @@ async fn prompt_inner(
         }
         _ => {}
     }
+    // Antes do bloqueio genérico: o menu do Codex sai com o código dele.
+    if let Some(refused) = codex_busy(target, &frame) {
+        return refused;
+    }
     if blocked(&frame) {
         return result(
             Disposition::Deferred,
@@ -399,8 +495,8 @@ async fn prompt_inner(
             "input_unavailable",
         );
     }
-    let deadline = Instant::now() + Duration::from_secs(8);
-    while !ready(&frame) && Instant::now() < deadline {
+    let deadline = Instant::now() + if codex(target) { CODEX_READY_WAIT } else { Duration::from_secs(8) };
+    while !ready(target, &frame) && Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(200)).await;
         if life(target, io).await.is_err() {
             return result(
@@ -425,7 +521,7 @@ async fn prompt_inner(
             );
         }
     }
-    if !ready(&frame)
+    if !ready(target, &frame)
         && READY_WARNED
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -441,7 +537,15 @@ async fn prompt_inner(
             "a TUI não mostrou prontidão no prazo; o envio físico continua"
         );
     }
+    // A tela pode ter mudado durante a espera: menu ou texto que abriu agora também barra.
+    if let Some(refused) = codex_busy(target, &frame) {
+        return refused;
+    }
     let before = composer(target, &frame);
+    // Tela que nunca ficou pronta ou sem caixa de digitar: recusa em vez de digitar às cegas.
+    if codex(target) && (!ready(target, &frame) || before.is_none()) {
+        return result(Disposition::Deferred, DeliveryStage::Ready, Cleanup::NotNeeded, "input_unavailable");
+    }
     if let Some(composer_checked) = composer_checked {
         composer_checked(before.as_ref().is_some_and(ComposerSnapshot::is_empty));
     }
@@ -461,7 +565,12 @@ async fn prompt_inner(
             "other_terminal_life_changed",
         );
     }
-    if let Err(error) = write_io(target, io, text, true, None).await {
+    let written = match write_io(target, io, text, true, None).await {
+        // Como o `paste_text` do Python: sem buffer, linha a linha com C-j.
+        Err(error) if codex(target) && error.code == "buffer_failed" => line_by_line(target, io, text).await,
+        written => written,
+    };
+    if let Err(error) = written {
         return before_submit_failure(
             target,
             io,
@@ -603,7 +712,24 @@ async fn prompt_inner(
                     );
                 }
             };
+            // O comando de barra do Codex que abriu o seletor (`/model`) já rodou: outro Enter escolheria
+            // a linha sob o cursor.
+            if codex(target) && slash && submit == 0 && codex_menu_open(&current) {
+                return result(Disposition::Accepted, DeliveryStage::SubmitProof, Cleanup::NotNeeded, "submit_proved");
+            }
             let Some(current) = composer(target, &current) else {
+                // Codex sem composer legível: como o Python, sem prova o Enter vale.
+                if codex(target) {
+                    if slash && submit == 0 {
+                        break;
+                    }
+                    return result(
+                        Disposition::Accepted,
+                        DeliveryStage::SubmitProof,
+                        Cleanup::NotNeeded,
+                        "submit_unreadable",
+                    );
+                }
                 return result(
                     Disposition::Unknown,
                     DeliveryStage::SubmitProof,

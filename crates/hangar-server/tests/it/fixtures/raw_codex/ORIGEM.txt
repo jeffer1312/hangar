@@ -1,0 +1,3 @@
+origem: codex-cli 0.167.0
+comando: tmux new-session -d -s cx-codex-fixture -x 160 -y 45 "command codex"; capture-pane -p
+data: 2026-11-09
