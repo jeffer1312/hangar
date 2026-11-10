@@ -207,8 +207,7 @@ fn touch(path: &Path) -> std::io::Result<()> {
 fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
     if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
     let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
-    std::fs::write(&tmp, data)?;
-    std::fs::rename(&tmp, path).inspect_err(|_| { let _ = std::fs::remove_file(&tmp); })
+    std::fs::write(&tmp, data).and_then(|()| std::fs::rename(&tmp, path)).inspect_err(|_| { let _ = std::fs::remove_file(&tmp); })
 }
 
 /// Modelos citados pelo nome nos testes: o corte por posição poderia deixá-los de fora.
@@ -305,7 +304,8 @@ pub async fn write_snapshot(root: &Path, url: &str) -> Result<Vec<String>, Strin
     Ok(vec![format!("{count} entradas -> {}", snapshot.display()), format!("recorte -> {}", fixture.display())])
 }
 
-/// Grava cada arquivo num temporário ao lado e só renomeia depois de todos prontos.
+/// Grava cada arquivo num temporário ao lado e só renomeia depois de todos prontos: escrita que falha
+/// não troca nenhum. Uma troca que falha no meio deixa os anteriores trocados e limpa os temporários.
 fn replace_together(files: &[(PathBuf, String)]) -> std::io::Result<()> {
     let temporary: Vec<PathBuf> = files.iter().map(|(path, _)| path.with_extension(format!("{}.tmp", std::process::id()))).collect();
     let written = files.iter().zip(&temporary).try_for_each(|((_, text), tmp)| std::fs::write(tmp, text));
@@ -313,8 +313,9 @@ fn replace_together(files: &[(PathBuf, String)]) -> std::io::Result<()> {
         for tmp in &temporary { let _ = std::fs::remove_file(tmp); }
         return Err(error);
     }
-    for ((path, _), tmp) in files.iter().zip(&temporary) { std::fs::rename(tmp, path)?; }
-    Ok(())
+    let renamed = files.iter().zip(&temporary).try_for_each(|((path, _), tmp)| std::fs::rename(tmp, path));
+    if renamed.is_err() { for tmp in &temporary { let _ = std::fs::remove_file(tmp); } }
+    renamed
 }
 
 /// `hangar-server pricing-snapshot [raiz]`: a raiz do repositório, ou a pasta atual.

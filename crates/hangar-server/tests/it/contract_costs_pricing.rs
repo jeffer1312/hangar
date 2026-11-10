@@ -447,7 +447,8 @@ mod refresh {
         let lines = write_snapshot(root.path(), &fake.url).await.unwrap();
         assert_eq!(fake.seen.lock().unwrap().clone(), [(Some("hangar/fetch_model_prices".to_owned()), None)]);
         let snapshot = std::fs::read_to_string(root.path().join("backend/app/pricing_data.json")).unwrap();
-        let python = std::fs::read_to_string(fixtures().join("pricing_data_snapshot.json")).unwrap();
+        // O checkout do Windows traz a fixture com CRLF; o snapshot sai sempre com LF.
+        let python = std::fs::read_to_string(fixtures().join("pricing_data_snapshot.json")).unwrap().replace("\r\n", "\n");
         let generated = |text: &str| text.lines().nth(1).unwrap().to_owned();
         assert!(generated(&snapshot).starts_with(" \"gerado_em\": \"") && generated(&snapshot).ends_with("+00:00\","), "{}", generated(&snapshot));
         assert_eq!(snapshot.replace(&generated(&snapshot), ""), python.replace(&generated(&python), ""));
@@ -516,12 +517,16 @@ mod refresh {
 
     /// Caminhos relativos de tudo sob `root` que é pasta folha ou arquivo, em ordem.
     fn files_under(root: &Path) -> Vec<String> {
+        // Sempre com `/`: no Windows o caminho relativo viria com `\`.
+        fn relative(path: &Path, root: &Path) -> String {
+            path.strip_prefix(root).unwrap().components().map(|part| part.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/")
+        }
         fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
             let mut entries: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().path()).collect();
-            if entries.is_empty() { out.push(dir.strip_prefix(root).unwrap().display().to_string()); }
+            if entries.is_empty() { out.push(relative(dir, root)); }
             entries.sort();
             for path in entries {
-                if path.is_dir() { walk(&path, root, out) } else { out.push(path.strip_prefix(root).unwrap().display().to_string()); }
+                if path.is_dir() { walk(&path, root, out) } else { out.push(relative(&path, root)); }
             }
         }
         let mut out = Vec::new();

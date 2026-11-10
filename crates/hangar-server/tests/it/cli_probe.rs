@@ -311,7 +311,8 @@ async fn plugin_publications_run_in_order_and_read_hooks_in_their_turn() {
     assert_eq!(case.file("plugin-dir"), None, "a troca (hooks desligados) é a que vale");
 }
 
-/// Leitura de `claude_function_hooks` que não termina não vira "desligado": nada é publicado nem apagado.
+/// Leitura de `claude_function_hooks` que não termina não vira "desligado": a lista não é publicada nem
+/// apagada. O endereço da ponte não depende dos hooks e sai mesmo assim.
 #[tokio::test]
 #[cfg(unix)]
 async fn unreadable_hooks_publish_nothing() {
@@ -321,7 +322,8 @@ async fn unreadable_hooks_publish_nothing() {
     let error = publish_in_turn(case.machine(Probe::default()), || panic!("leitura interrompida")).await.unwrap_err();
     assert_eq!(error.code, "plugin_hooks_unreadable");
     assert_eq!(case.file("plugin-dir"), Some((0o644, "/stale/plugins/hangar\n".into())));
-    assert_eq!(case.file("plugin.json"), Some((0o644, r#"{"url": "http://stale/api/plugin", "chave": "stale"}"#.into())));
+    let (mode, address) = case.file("plugin.json").unwrap();
+    assert!(mode == 0o600 && !address.contains("stale"), "{mode:o} {address}");
     assert!(case.probes().is_empty());
 }
 

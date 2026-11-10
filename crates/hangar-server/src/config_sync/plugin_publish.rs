@@ -20,24 +20,44 @@ pub struct Machine {
 /// que uma troca de `claude_function_hooks` pediu depois.
 static TURN:tokio::sync::Mutex<()>=tokio::sync::Mutex::const_new(());
 
-/// Publica os dois arquivos com a lista de plugins valendo só se o `claude` desta máquina a aceita:
+/// Publica os dois arquivos. O endereço sai primeiro e não espera a sonda: o `claude` aberto enquanto
+/// ela roda já fala com a ponte certa. A lista de plugins vale só se o `claude` desta máquina a aceita:
 /// `--plugin-dir` desconhecido mata a sessão ao nascer. `hooks` é lido já na vez, para valer o estado
-/// mais novo; hooks desligados não sondam nada. Leitura que não termina não publica nada.
+/// mais novo; hooks desligados não sondam nada. Leitura dos hooks que não termina não publica a lista.
 pub async fn publish_in_turn(machine:Machine,hooks:impl FnOnce()->bool+Send+'static)->Result<(),Error> {
     let _turn=TURN.lock().await;
-    let hooks=tokio::task::spawn_blocking(hooks).await
-        .map_err(|error|Error::new("plugin_hooks_unreadable",format!("leitura de claude_function_hooks interrompida: {error}"),json!({})))?;
-    let enabled=hooks&&takes_plugin_dir(&machine.probe,&machine.env).await;
-    let Machine{home,repo,port,secret,..}=machine;
-    tokio::task::spawn_blocking(move||publish(&home,repo.as_deref(),port,&secret,enabled)).await
-        .map_err(|error|Error::new("plugin_publish_interrupted",format!("publicação do plugin interrompida: {error}"),json!({})))?
+    let interrupted=|error:tokio::task::JoinError|Error::new("plugin_publish_interrupted",format!("publicação do plugin interrompida: {error}"),json!({}));
+    let Machine{home,repo,port,secret,probe,env}=machine;
+    let directory=home.join(".hangar");
+    let address={
+        let directory=directory.clone();
+        tokio::task::spawn_blocking(move||publish_address(&directory,port,&secret)).await.map_err(interrupted)?
+    };
+    let list=async {
+        let hooks=tokio::task::spawn_blocking(hooks).await
+            .map_err(|error|Error::new("plugin_hooks_unreadable",format!("leitura de claude_function_hooks interrompida: {error}"),json!({})))?;
+        let enabled=hooks&&takes_plugin_dir(&probe,&env).await;
+        tokio::task::spawn_blocking(move||publish_directories(&directory.join("plugin-dir"),repo.as_deref(),enabled)).await.map_err(interrupted)?
+    }.await;
+    list.and(address)
 }
 
 /// Pelo estado do servidor, na subida e quando `claude_function_hooks` muda. A falha vai ao log.
 pub async fn publish_for_state(state:Arc<crate::routes::AppState>) {
     let service=match super::runtime::RuntimeConfig::from_state(&state) {
         Ok(service)=>service,
-        Err(error)=>return tracing::warn!(code="plugin_publish_failed",%error,"caminho do plugin não foi publicado"),
+        Err(error)=>{
+            tracing::warn!(code="plugin_publish_failed",%error,"lista de plugins não foi publicada");
+            // Sem a configuração não há como decidir a lista; o endereço não depende dela.
+            let (directory,port,secret)=(state.accounts.env.home.join(".hangar"),state.cfg.listen.port(),state.cfg.auth_token.clone());
+            let _turn=TURN.lock().await;
+            match tokio::task::spawn_blocking(move||publish_address(&directory,port,&secret)).await {
+                Ok(Ok(()))=>{},
+                Ok(Err(error))=>tracing::warn!(code=error.code,%error,"endereço do plugin não foi publicado"),
+                Err(error)=>tracing::warn!(code="plugin_publish_interrupted",%error,"endereço do plugin não foi publicado"),
+            }
+            return;
+        },
     };
     let home=service.env.home.clone();
     let machine=Machine{repo:crate::install_root::root(&home),home,port:state.cfg.listen.port(),secret:state.cfg.auth_token.clone(),
@@ -64,11 +84,16 @@ pub fn parse_version(text:&str)->Option<(u64,u64,u64)> {
 
 pub fn publish(home:&Path,repo:Option<&Path>,port:u16,secret:&str,enabled:bool)->Result<(),Error> {
     let directory=home.join(".hangar");
-    let machine=json!({"url":format!("http://127.0.0.1:{port}/api/plugin"),"chave":crate::mods::bridge::machine_key(if secret.is_empty(){"hangar"}else{secret})});
-    let address=files::write_file(&directory.join("plugin.json"),&Blob{data:crate::transcript::pyjson::dumps(&machine,false).into_bytes(),mode:0o600});
+    let address=publish_address(&directory,port,secret);
     // O endereço e a lista são independentes: uma falha não conserva o interruptor antigo.
     publish_directories(&directory.join("plugin-dir"),repo,enabled)?;
     address
+}
+
+/// `plugin.json`: onde a ponte atende e a chave desta máquina.
+fn publish_address(directory:&Path,port:u16,secret:&str)->Result<(),Error> {
+    let machine=json!({"url":format!("http://127.0.0.1:{port}/api/plugin"),"chave":crate::mods::bridge::machine_key(if secret.is_empty(){"hangar"}else{secret})});
+    files::write_file(&directory.join("plugin.json"),&Blob{data:crate::transcript::pyjson::dumps(&machine,false).into_bytes(),mode:0o600})
 }
 
 fn publish_directories(target:&Path,repo:Option<&Path>,enabled:bool)->Result<(),Error> {
