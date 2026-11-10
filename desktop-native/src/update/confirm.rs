@@ -1,6 +1,6 @@
 //! Confirmação da atualização com os avisos e as novidades da versão nova, e "O que chegou para você" depois dela.
 
-use std::{cell::{Cell, RefCell}, path::Path, rc::Rc, time::Instant};
+use std::{cell::Cell, path::Path, rc::Rc, time::Instant};
 use gpui_kit::{assets::IconName, component::{Sizable, WindowExt, button::*, dialog::DialogFooter, radio::Radio, text::TextView}, prelude::FluentBuilder, *};
 use serde::Deserialize;
 use serde_json::Value;
@@ -252,7 +252,6 @@ pub(crate) fn open(window: &mut Window, cx: &mut App, title: String, description
     let (width, height) = if tall { (px(620.).min(window.viewport_size().width * 0.92), window.viewport_size().height * 0.8) } else { (px(360.), px(150.)) };
     chrome::confirm_dialog(window, cx, width, height, None, Rc::new(body), enabled, tr("update_confirm_ok"), None,
         |dialog| dialog.p(px(18.)).rounded(px(14.)), move |window, cx| {
-            remember_click(&notes[0].server, &notes[0].news);
             act(notes.iter().zip(developer.iter()).map(|(n, d)| n.acceptance(d.get())).collect(), window, cx);
             true
         });
@@ -396,24 +395,12 @@ fn open_whats_new(items: Vec<News>, show: Option<ShowInApp>, window: &mut Window
 
 fn for_desktop(news: &News) -> bool { matches!(news.platforms.as_str(), "desktop" | "all") }
 
-thread_local! {
-    /// As novidades do último "Atualizar?" confirmado e a máquina delas: o fim do clique as mostra quando a lista do que
-    /// chegou não serve (servidor sem a rota, ou a atualização foi de outra máquina).
-    static CLICK: RefCell<Option<(String, Vec<News>)>> = const { RefCell::new(None) };
-}
-
-fn remember_click(server: &str, news: &[News]) {
-    CLICK.with(|click| *click.borrow_mut() = (!news.is_empty()).then(|| (server.to_owned(), news.to_vec())));
-}
-
-pub(super) fn take_click() -> Option<(String, Vec<News>)> { CLICK.with(|click| click.borrow_mut().take()) }
-
 /// A resposta de `GET /api/update/arrived`, já só com as novidades do desktop. `Seen`: nada a abrir, só marcar visto.
 #[derive(Debug, PartialEq)]
 pub(super) enum Arrived { Show { news: Vec<News>, through: u64 }, Seen(u64), Already, Absent, Failed(String) }
 
 /// `last`: o `through` que este processo já tratou; resposta até ele veio de outro gatilho e não abre de novo.
-/// 404/405 = servidor anterior à rota.
+/// 404/405 = servidor sem a rota: não há o que mostrar.
 pub(super) fn arrived(read: Result<Value, Failure>, last: Option<u64>) -> Arrived {
     #[derive(Deserialize)]
     struct Wire { #[serde(default)] news: Vec<News>, through: u64 }
@@ -429,7 +416,7 @@ pub(super) fn arrived(read: Result<Value, Failure>, last: Option<u64>) -> Arrive
     }
 }
 
-/// O `device` que o servidor aceita.
+/// O `device` que o servidor aceita: casar com `hangar_update_news::valid_device` e com a regex do mobile.
 fn valid_device(id: &str) -> bool { (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') }
 
 /// Um id por instalação do app, igual para todos os servidores: criado na primeira vez, lido depois.
@@ -445,14 +432,25 @@ fn device_id_in(dir: &Path) -> std::io::Result<String> {
     let id = format!("{}-{}-{}-{}-{}", &hex[..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..]);
     std::fs::create_dir_all(dir)?;
     let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, &id)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
+    let mut file = options.open(&tmp)?;
+    // O `mode` só vale na criação: um tmp que sobrou levaria o modo antigo ao arquivo no `rename`.
+    #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; file.set_permissions(std::fs::Permissions::from_mode(0o600))?; }
+    std::io::Write::write_all(&mut file, id.as_bytes())?;
+    drop(file);
     std::fs::rename(&tmp, &path)?;
     Ok(id)
 }
 
+/// Lido do disco uma vez por processo; falha não fica guardada e tenta de novo no próximo pedido.
 pub(super) fn device_id() -> Option<String> {
-    crate::appearance::dir().ok_or_else(|| std::io::Error::other("sem pasta de configuração")).and_then(|dir| device_id_in(&dir))
-        .map_err(|error| crate::log_line(&format!("update news: id do aparelho: {error}"))).ok()
+    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    if let Some(id) = ID.get() { return Some(id.clone()); }
+    let id = crate::appearance::dir().ok_or_else(|| std::io::Error::other("sem pasta de configuração")).and_then(|dir| device_id_in(&dir))
+        .map_err(|error| crate::log_line(&format!("update news: id do aparelho: {error}"))).ok()?;
+    Some(ID.get_or_init(|| id).clone())
 }
 
 /// Abre "O que chegou para você" na janela ativa (ou na primeira), com o "Mostrar no app" do app.
@@ -463,17 +461,6 @@ pub(super) fn show_news(items: Vec<News>, cx: &mut App) {
         Rc::new(move |note: crate::tour::Note, _: &mut Window, cx: &mut App| { let _ = hangar.update(cx, |this, cx| this.show_news(note, cx)); })
     });
     let _ = handle.update(cx, |_, window, cx| open_whats_new(items, show, window, cx));
-}
-
-/// "O que chegou para você", lido do servidor desta máquina. `startup` na abertura do app; sem ele, o fim de uma
-/// atualização.
-pub(crate) fn show_pending(startup: bool, cx: &mut App) {
-    // A lista local de antes do servidor guardar o que chegou: some sem ser lida.
-    if startup && let Some(dir) = crate::appearance::dir() { let _ = std::fs::remove_file(dir.join("novidades-pendentes.json")); }
-    let Some(updater) = cx.try_global::<super::Handle>().map(|handle| handle.0.clone()) else { return };
-    let trigger = if startup { super::Arrival::Startup } else { super::Arrival::UpdateEnd };
-    // Adiado: quem chama pode estar dentro de uma atualização do próprio `Updater`.
-    cx.defer(move |cx| updater.update(cx, |this, cx| this.show_arrived(trigger, cx)));
 }
 
 /// `HANGAR_NATIVE_PREVIEW=update-confirm` e `=whats-new` (build de debug): os dois modais com uma amostra fixa.

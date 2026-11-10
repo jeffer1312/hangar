@@ -551,7 +551,8 @@ impl Updater {
         cx.notify();
         if install { self.install_app(window, cx); }
         else if !self.all_running && self.survey.rows.iter().any(|r| r.local && matches!(r.status, Status::Updated | Status::UpdatedManual)) {
-            self.show_arrived(super::Arrival::UpdateEnd, cx);
+            // No meio do lote a releitura do fim da atualização local foi pulada; esta traz o que chegou.
+            self.refresh_server(cx);
         }
     }
 
@@ -1005,7 +1006,7 @@ mod tests {
             local: None, server: None, server_api: None, server_seq: 0, active: None, active_state: None, active_api: None, active_seq: 0,
             run: Run::Idle, checking: false, checked: None, checked_channel: None, known_channel: None, channel_blocked: None,
             suspended: false, intent_lock: None, all_servers: vec![entry("local"), entry("remote")], survey: Survey::default(), batch: None, all_running: true,
-            news_version: None, arrived_through: None, arrived_waiting: false });
+            arrived: Default::default() });
         updater.update(cx, |this, cx| {
             let machine = Machine::from_entry(&entry("remote"), None);
             this.survey.prepare(&[machine.clone()], HashMap::from([("alias".into(), machine.key.clone())]));
@@ -1026,7 +1027,7 @@ mod tests {
             local: None, server: None, server_api: None, server_seq: 0, active: None, active_state: None, active_api: None, active_seq: 0,
             run: Run::Idle, checking: false, checked: None, checked_channel: None, known_channel: None, channel_blocked: None,
             suspended: false, intent_lock: None, all_servers: vec![entry("local"), entry("remote")], survey: Survey::default(), batch: None, all_running: false,
-            news_version: None, arrived_through: None, arrived_waiting: false };
+            arrived: Default::default() };
         assert!(!updater.plan().visible());
         assert!(!updater.idle_visible(&updater.plan()));
         updater.survey.rows.push(Row { key: "remote".into(), label: "remote".into(), local: false, status: Status::Available, warnings: vec![] });

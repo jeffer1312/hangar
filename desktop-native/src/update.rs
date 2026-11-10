@@ -611,23 +611,26 @@ pub struct Updater {
     survey: all::Survey,
     batch: Option<all::Batch>,
     all_running: bool,
-    /// `versao_legivel.backend` da última leitura do servidor desta máquina: mudar pede a lista do que chegou.
-    news_version: Option<String>,
-    /// O `through` do que chegou que este processo já mostrou ou marcou: dois gatilhos juntos não abrem duas vezes.
-    arrived_through: Option<u64>,
-    /// A abertura do app pediu a lista antes de o servidor desta máquina ser conhecido: a primeira leitura dele a pede.
-    arrived_waiting: bool,
+    arrived: ArrivedState,
 }
 
-/// Quem pede a lista do que chegou: a abertura do app, a versão do servidor desta máquina que mudou, ou o fim de uma
-/// atualização (que traz as novidades do clique para servidor sem a rota).
-#[derive(Clone, Copy, PartialEq)]
-pub(crate) enum Arrival { Startup, Version, UpdateEnd }
+/// "O que chegou para você" do servidor desta máquina: lido quando a versão dele muda, inclusive a primeira vista.
+#[derive(Default)]
+struct ArrivedState {
+    /// `versao_legivel.backend` da última leitura do servidor desta máquina.
+    version: Option<String>,
+    /// O `through` que este processo já mostrou ou marcou: dois gatilhos juntos não abrem duas vezes.
+    through: Option<u64>,
+    /// A versão mudou no meio de uma atualização: a primeira leitura depois dela pede a lista.
+    due: bool,
+    /// Um `GET` já está a caminho: outro gatilho no meio não manda um segundo.
+    reading: bool,
+}
 
-/// A versão do servidor desta máquina mudou desde a leitura anterior; a primeira só é guardada.
+/// A versão do servidor desta máquina mudou desde a leitura anterior; a primeira também conta (abertura do app).
 fn version_changed(last: &mut Option<String>, now: Option<&str>) -> bool {
     let Some(now) = now else { return false };
-    let changed = last.as_deref().is_some_and(|last| last != now);
+    let changed = last.as_deref() != Some(now);
     *last = Some(now.to_owned());
     changed
 }
@@ -658,7 +661,7 @@ pub fn start(runtime: Arc<Runtime>, cx: &mut App) {
     let exe_stamp = exe.as_deref().and_then(modified);
     let entity = cx.new(|_| Updater { runtime, client, exe, exe_stamp, offer: None, local: None, server: None,
         server_api: None, server_seq: 0, active: None, active_state: None, active_api: None, active_seq: 0, run: Run::Idle, checking: false, checked: None, checked_channel: None, known_channel: None, channel_blocked: None, suspended: false, intent_lock: None, all_servers: Vec::new(), survey: all::Survey::default(), batch: None, all_running: false,
-        news_version: None, arrived_through: None, arrived_waiting: false });
+        arrived: ArrivedState::default() });
     let weak = entity.downgrade();
     cx.spawn(async move |cx| loop {
         let Ok(()) = weak.update(cx, |this, cx| {
@@ -685,6 +688,15 @@ fn read_api(runtime: &Runtime, api: &Api) -> tokio::task::JoinHandle<Option<u32>
     runtime.spawn(async move { client_api(api.server_read(&["client-api"], &[], 20).await) })
 }
 
+fn mark_seen(runtime: &Runtime, api: Api, device: String, through: u64) {
+    runtime.spawn(async move {
+        let body = serde_json::json!({"device": device, "through": through});
+        if let Err(error) = api.server_send(reqwest::Method::POST, &["update", "arrived", "seen"], Some(body), 20).await {
+            crate::log_line(&format!("update news: marcar visto falhou: {}", error.detail));
+        }
+    });
+}
+
 impl Updater {
     pub fn set_channel_blocked(&mut self, address: Option<String>, cx: &mut Context<Self>) {
         if self.channel_blocked == address { return; }
@@ -707,61 +719,49 @@ impl Updater {
     /// refaz a procura da release, e a oferta da branch anterior deixa de valer.
     fn receive_server(&mut self, state: Option<Value>, cx: &mut Context<Self>) {
         if let Some(state) = &state { self.known_channel = Some(alvo(state)); }
-        // No meio de uma atualização quem mostra é o fim dela, ou o app novo quando ela o troca.
-        let changed = version_changed(&mut self.news_version, state.as_ref().and_then(|s| s["versao_legivel"]["backend"].as_str()))
-            && !self.busy();
-        let waiting = state.is_some() && std::mem::take(&mut self.arrived_waiting);
+        self.arrived.due |= version_changed(&mut self.arrived.version, state.as_ref().and_then(|s| s["versao_legivel"]["backend"].as_str()));
         self.server = state;
-        if changed { self.show_arrived(Arrival::Version, cx); } else if waiting { self.show_arrived(Arrival::Startup, cx); }
+        // No meio de uma atualização fica para a releitura do fim dela, ou para o app novo quando ela o troca.
+        if self.arrived.due && !self.busy() { self.show_arrived(cx); }
         if self.checked_channel.as_ref().is_some_and(|checked| *checked != self.channel()) { self.check_app(cx); }
     }
 
     /// Lê o que chegou no servidor desta máquina e mostra uma vez, marcando visto ao abrir (ou quando não há nada para
     /// o desktop).
-    pub(crate) fn show_arrived(&mut self, trigger: Arrival, cx: &mut Context<Self>) {
-        let click = if trigger == Arrival::UpdateEnd { confirm::take_click() } else { None };
-        let Some(api) = self.local.clone() else {
-            self.arrived_waiting |= trigger == Arrival::Startup;
-            if let Some((_, news)) = click { confirm::show_news(news, cx); }
-            return;
-        };
-        // Atualização de outra máquina: o que chegou fica no servidor dela, que este app não lê.
-        let click = match click {
-            Some((server, news)) if server != api.identity() => return confirm::show_news(news, cx),
-            click => click.map(|(_, news)| news),
-        };
+    fn show_arrived(&mut self, cx: &mut Context<Self>) {
+        let Some(api) = self.local.clone() else { return };
+        self.arrived.due = false;
+        if self.arrived.reading { return; }
         let Some(device) = confirm::device_id() else { return };
+        self.arrived.reading = true;
         let task = { let (api, device) = (api.clone(), device.clone());
             self.runtime.spawn(async move { api.server_read(&["update", "arrived"], &[("device", &device)], 20).await }) };
         cx.spawn(async move |this, cx| {
             let read = task.await.unwrap_or_else(|e| Err(Failure::local(e.to_string())));
-            let open = this.update(cx, |this, _| {
-                let (through, open) = match confirm::arrived(read, this.arrived_through) {
-                    confirm::Arrived::Show { news, through } => (Some(through), Some(news)),
-                    confirm::Arrived::Seen(through) => (Some(through), None),
-                    confirm::Arrived::Already => (None, None),
-                    confirm::Arrived::Absent => {
-                        crate::log_line("update news: o servidor desta máquina não tem /api/update/arrived");
-                        (None, click)
-                    }
-                    confirm::Arrived::Failed(detail) => {
-                        crate::log_line(&format!("update news: leitura do que chegou falhou: {detail}"));
-                        (None, None)
-                    }
-                };
-                if let Some(through) = through {
-                    this.arrived_through = Some(through);
-                    this.runtime.spawn(async move {
-                        let body = serde_json::json!({"device": device, "through": through});
-                        if let Err(error) = api.server_send(reqwest::Method::POST, &["update", "arrived", "seen"], Some(body), 20).await {
-                            crate::log_line(&format!("update news: marcar visto falhou: {}", error.detail));
-                        }
-                    });
-                }
-                open
-            });
+            let open = this.update(cx, |this, _| this.receive_arrived(read, api, device));
             if let Ok(Some(news)) = open { cx.update(|cx| confirm::show_news(news, cx)); }
         }).detach();
+    }
+
+    /// A resposta do `GET`: o que abrir. Marca visto o que veio, mesmo sem nada para o desktop.
+    fn receive_arrived(&mut self, read: Result<Value, Failure>, api: Api, device: String) -> Option<Vec<confirm::News>> {
+        self.arrived.reading = false;
+        let (news, through) = match confirm::arrived(read, self.arrived.through) {
+            confirm::Arrived::Show { news, through } => (Some(news), through),
+            confirm::Arrived::Seen(through) => (None, through),
+            confirm::Arrived::Already => return None,
+            confirm::Arrived::Absent => {
+                crate::log_line("update news: o servidor desta máquina não tem /api/update/arrived");
+                return None;
+            }
+            confirm::Arrived::Failed(detail) => {
+                crate::log_line(&format!("update news: leitura do que chegou falhou: {detail}"));
+                return None;
+            }
+        };
+        self.arrived.through = Some(through);
+        mark_seen(&self.runtime, api, device, through);
+        news
     }
 
     /// O canal de testes do servidor mudou pela tela: relê o estado e, com ele, a release do app.
@@ -770,7 +770,7 @@ impl Updater {
     /// A lista de servidores ou o servidor ativo mudou: relê o estado dos dois.
     pub fn set_servers(&mut self, local: Option<Api>, active: Option<Api>, cx: &mut Context<Self>) {
         if self.local.as_ref().map(Api::identity) != local.as_ref().map(Api::identity) {
-            (self.known_channel, self.news_version, self.arrived_through) = (None, None, None);
+            (self.known_channel, self.arrived) = (None, ArrivedState::default());
         }
         self.local = local;
         self.active = active;
@@ -1210,7 +1210,6 @@ impl Updater {
         let version = self.server.as_ref().and_then(|s| s["versao_legivel"]["backend"].as_str()).unwrap_or("?").to_owned();
         let text = if manual { tr("update_done_manual") } else { tr("update_done").replace("{version}", &version) };
         window.push_notification(Notification::success(text).id::<Updater>(), cx);
-        self.show_arrived(Arrival::UpdateEnd, cx);
         self.end_intent();
         cx.notify();
         self.refresh_server(cx);
@@ -1305,9 +1304,10 @@ mod tests {
     use core::prelude::v1::test;
 
     #[test]
-    fn server_version_change_fires_only_after_the_first_value() {
+    fn server_version_change_fires_on_the_first_value_and_on_each_change() {
         let mut last = None;
-        assert!(!version_changed(&mut last, Some("0.1.0.9940")), "a primeira leitura só guarda");
+        assert!(!version_changed(&mut last, None), "leitura que falhou antes da primeira não pede nada");
+        assert!(version_changed(&mut last, Some("0.1.0.9940")), "a primeira leitura conta: é a abertura do app");
         assert!(!version_changed(&mut last, Some("0.1.0.9940")));
         assert!(!version_changed(&mut last, None), "leitura que falhou não muda nada");
         assert!(version_changed(&mut last, Some("0.1.0.9967")));
@@ -1386,7 +1386,7 @@ mod tests {
             local: Some(local.clone()), server: Some(server(serde_json::json!({"atualizacao_disponivel": true}))), server_api: Some(2),
             server_seq: 0, active: None, active_state: None, active_api: None, active_seq: 0, run: Run::Idle, checking: false, checked: None,
             checked_channel: None, known_channel: None, channel_blocked: Some(local.identity()), suspended: false, intent_lock: None, all_servers: Vec::new(), survey: all::Survey::default(), batch: None, all_running: false,
-            news_version: None, arrived_through: None, arrived_waiting: false };
+            arrived: ArrivedState::default() };
         assert_eq!(updater.plan(), Plan { server: ServerStep::Held(Hold::ChannelDraft), app: true });
         assert!(!Hold::ChannelDraft.stops());
         updater.channel_blocked = Some("http://other-machine:8765".into());
@@ -1410,7 +1410,7 @@ mod tests {
             offer: Some(Offer { version: "9999.0.0.0".into(), url: String::new(), sha256: String::new(), channel: "main".into(), requires_api: REQUIRED_API }),
             local: None, server: None, server_api: None, server_seq: 0, active: None, active_state: None, active_api: Some(REQUIRED_API), active_seq: 0,
             run: Run::Idle, checking: false, checked: None, checked_channel: None, known_channel: None, channel_blocked: None, suspended: false, intent_lock: None, all_servers: Vec::new(), survey: all::Survey::default(), batch: None, all_running: false,
-            news_version: None, arrived_through: None, arrived_waiting: false };
+            arrived: ArrivedState::default() };
         assert!(updater.plan().app);
         assert!(!updater.server_outdated());
         updater.active_api = Some(REQUIRED_API - 1);
@@ -1516,7 +1516,7 @@ mod tests {
             local: None, server: None, server_api: None, server_seq: 0, active: None, active_state: None, active_api: None, active_seq: 0,
             run: Run::Idle, checking: false, checked: None, checked_channel: None, known_channel: Some("hangar-server-parte1".into()),
             channel_blocked: None, suspended: false, intent_lock: None, all_servers: Vec::new(), survey: all::Survey::default(), batch: None, all_running: false,
-            news_version: None, arrived_through: None, arrived_waiting: false };
+            arrived: ArrivedState::default() };
         assert_eq!(updater.channel(), "main", "sem servidor local não há canal");
         updater.local = Some(Api::new("http://127.0.0.1:8765", "synthetic-token").unwrap());
         assert_eq!(updater.channel(), "hangar-server-parte1", "leitura que falhou mantém o último canal");
