@@ -48,9 +48,9 @@ type Props = {
   providerLabel: string;
   // Painel de pastas da pílula; `close` fecha o painel depois da escolha final.
   folderPanel: (close: () => void) => ReactNode;
-  // Máquina e pasta, acima da caixa e à direita, como no app de PC.
+  // Título acima da caixa, com a pasta tocável ("O que vamos fazer em [pasta]?").
   topPills: (openFolder: (opener: View | null) => void) => ReactNode;
-  // Conta e terminal, abaixo da caixa e à esquerda.
+  // Máquina e worktree, conta e terminal, abaixo da caixa e à esquerda.
   bottomPills: ReactNode;
   providerChip: ReactNode;
   // Conversas antigas desta pasta que dá para continuar (hoje só o Codex lista).
@@ -445,7 +445,7 @@ export function NewConversation({
           ditado à esquerda; o chip do provider e o Enviar à direita. */}
       <ComposerBox focused={focused}>
         {attachment ? <AttachmentPreview attachment={attachment} onRemove={removeAttachment} disabled={busy} /> : null}
-        <ComposerInput ref={input} value={text} onChangeText={setText} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+        <ComposerInput ref={input} style={styles.homeInput} value={text} onChangeText={setText} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
           placeholder={m.composer_mensagem_para({ nome: providerLabel })} accessibilityLabel={m.nova_conversa_placeholder()}
           editable={!collapsed} autoFocus={!home && (router.canGoBack?.() ?? true)} recording={dictation.gravando} rms={dictation.rms} onCancelRecording={dictation.cancel}
           onPaste={(files, error) => {
@@ -540,14 +540,13 @@ const styles = StyleSheet.create((theme) => ({
   usage: { paddingTop: theme.base.space[2] },
   emptyHint: { flexGrow: 1, minHeight: 140, alignItems: 'center', justifyContent: 'center', paddingHorizontal: theme.base.space[5] },
   topPills: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'flex-end',
-    alignItems: 'center',
-    gap: theme.base.space[0.5],
-    paddingHorizontal: theme.base.space[3],
-    paddingBottom: theme.base.space[1.5],
+    alignItems: 'flex-start',
+    gap: theme.base.space[1],
+    paddingHorizontal: theme.base.space[4],
+    paddingBottom: theme.base.space[3],
   },
+  // Campo da conversa nova: ~3 linhas de altura mínima e letra um degrau acima do chat.
+  homeInput: { fontSize: theme.base.text.lg, lineHeight: 26, minHeight: 26 * 3 + theme.base.space[2] * 2 },
   // 34 pt + hitSlop 5 = 44 pt de toque; o ícone fica sem fundo, como no PC.
   tool: { width: 34, height: 34, borderRadius: theme.base.radius.full, alignItems: 'center', justifyContent: 'center' },
   dim: { opacity: 0.5 },

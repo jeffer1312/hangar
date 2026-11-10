@@ -124,7 +124,7 @@ pub(crate) mod setup;
 /// Variável do ambiente do script com o código de uso único do askpass (`setup::askpass`).
 pub(crate) const ASKPASS_CODE_ENV: &str = "HANGAR_ASKPASS_CODE";
 
-actions!(hangar, [FocusComposer, OpenSettings, CopyLastReply, FocusSettingsSearch, FindProjectFile, FindProjectText, NextSession, PreviousSession, ToggleDictation, NewChat, OpenNewSession, CloseSession, RenameSession, OpenCosts, OpenSearch,
+actions!(hangar, [FocusComposer, OpenSettings, CopyLastReply, FocusSettingsSearch, FindProjectFile, FindProjectText, NextSession, PreviousSession, ToggleDictation, NewChat, NewChatNoProject, OpenNewSession, CloseSession, RenameSession, OpenCosts, OpenSearch,
     ToggleSidebar, CyclePermission, OpenWorktrees, CycleToolLook, CycleNavigation]);
 
 const LIVE_THINKING: &str = "__thinking__";
@@ -1689,6 +1689,15 @@ impl Hangar {
         if !home { self.load_view_draft(window, cx); }
         self.composer.update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
+    }
+
+    /// A tela de conversa nova já sem projeto: a mesma do `Ctrl N`, com a pasta tirada do caminho.
+    pub(super) fn new_chat_no_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.go_home(window, cx);
+        if !self.new_chat_screen() { return; }
+        let Some(api) = self.api.clone() else { return };
+        let view = self.ensure_new_chat(api, window, cx);
+        view.update(cx, |view, cx| view.choose_no_project(window, cx));
     }
 
     /// Fecha a sessão aberta, guardando o rascunho dela.
@@ -5008,7 +5017,11 @@ impl Hangar {
         let textarea = Textarea::new(&self.composer).accessibility_id("composer-input").appearance(false).disabled((!readable && !new_chat && !reopen) || creating || resuming).on_paste(move |item, window, cx| {
             paste_target.update(cx, |this, cx| { if preview { this.enter_tab_preview_event(window, cx); } this.paste(item, cx) }).unwrap_or(false)
         });
+        let roomy = self.new_chat_screen();
         let field = div().id("composer-field").text_base()
+            // Na tela inicial a caixa nasce com três linhas: o campo cresce de uma, e a área vazia abaixo dele também foca.
+            .when(roomy, |el| el.min_h(px(78.)).text_size(px(15.)).cursor_text()
+                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| this.composer.update(cx, |input, cx| input.focus(window, cx)))))
             // Teclas do campo que o compositor intercepta; sem uso aqui, seguem para o editor.
             .capture_action(cx.listener(move |this, _: &MoveUp, window, cx| { if preview { this.enter_tab_preview_event(window, cx); } this.move_composer(-1, window, cx) }))
             .capture_action(cx.listener(move |this, _: &MoveDown, window, cx| { if preview { this.enter_tab_preview_event(window, cx); } this.move_composer(1, window, cx) }))
@@ -7830,8 +7843,9 @@ impl Render for Hangar {
                 .relative().opacity(shown).top(px(rise))
                 .when_some(header_avatar, |el, avatar| el.child(avatar))
                 .when_some(opening.as_ref(), |el, o| el.child(chrome::session_avatar(&chrome::AvatarLook::new(&o.provider, None, "", false), 26., None)))
-                .child(div().flex_shrink_0().font_weight(FontWeight::SEMIBOLD)
-                    .child(selected_name.clone().or_else(|| opening.as_ref().map(|o| o.name.clone())).unwrap_or_else(|| tr("title"))))
+                // Sem sessão o nome do app já está na barra da janela; repetido aqui só disputava com a tela inicial.
+                .children(selected_name.clone().or_else(|| opening.as_ref().map(|o| o.name.clone()))
+                    .map(|name| div().flex_shrink_0().font_weight(FontWeight::SEMIBOLD).child(name)))
                 .when_some(place, |el, place| el.child(div().id("session-place").min_w_0().flex().items_center().gap(px(4.)).text_color(theme::faint()).aria_label(place)
                     .when_some(self.selected.as_ref().and_then(folder_name), |el, folder| el
                         .child(chrome::small_icon(IconName::Folder, 12., theme::faint()))
@@ -8008,6 +8022,7 @@ impl Render for Hangar {
             .on_action(cx.listener(|this, _: &NextSession, window, cx| this.step_session(1, window, cx)))
             .on_action(cx.listener(|this, _: &PreviousSession, window, cx| this.step_session(-1, window, cx)))
             .on_action(cx.listener(|this, _: &NewChat, window, cx| this.go_home(window, cx)))
+            .on_action(cx.listener(|this, _: &NewChatNoProject, window, cx| this.new_chat_no_project(window, cx)))
             .on_action(cx.listener(|this, _: &OpenNewSession, window, cx| {
                 if !this.create_blocked(window, cx) { this.open_new_session(None, window, cx); }
             }))

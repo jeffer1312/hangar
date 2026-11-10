@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Pressable, ScrollView, Text, View, type StyleProp, type TextStyle } from 'react-native';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { mergeReports, intlLocale, localeAtual, type CostReport, type DimBucket } from '@hangar/core';
+import { mergeReports, intlLocale, localeAtual, rotuloModelo, type CostReport, type DimBucket } from '@hangar/core';
 import { useSettingsColors } from '../config/colors';
+import { superficie } from '../../theme/superficie';
 import { useServers } from '../../stores/servers';
 import { useReports } from './useReports';
 import * as m from '../../paraglide/messages';
@@ -40,6 +41,14 @@ function tok(n: number): string {
 // ponytail: o app ainda não tem a preferência de moeda; fica em dólar como o Rust sem cotação.
 const money = (usd: number) => `US$ ${dec(usd, 2)}`;
 const br = (k: string) => k.split('-').reverse().join('/');
+// Nome amigável do modelo ("Opus 5.5"); id de outro formato fica como veio.
+const modelName = (b: DimBucket) => rotuloModelo(b.label ?? b.key);
+// Seg, Qua e Sex na lateral do mapa: linhas 0, 2 e 4 da semana que começa na segunda.
+const WEEKDAY_ROWS = [0, 2, 4];
+const LEGEND_LEVELS = [0, 0.3, 0.53, 0.77, 1];
+const CELL = 11;
+// Largura da coluna "Seg/Qua/Sex" à esquerda do mapa.
+const CELL_LABEL = 26;
 
 function summarize(report: Partial<CostReport>): Summary {
   const models = (report.by_model ?? []).filter((b) => raw(b) > 0)
@@ -59,7 +68,19 @@ function calendar(days: Map<string, number>) {
   const first = start - ((new Date(start).getUTCDay() + 6) % 7) * 86400000;
   const weeks = Math.floor((end - first) / 86400000 / 7) + 1;
   const max = Math.max(1, ...days.values());
+  // Mês na coluna em que ele começa; a primeira semana leva o seu.
+  const names = m.native_home_usage_months().split(',');
+  const months: { week: number; label: string }[] = [];
+  // O último dia visível da coluna: o mês que começa no meio da semana já leva o nome nela.
+  const monthAt = (w: number) => new Date(Math.min(end, first + (w * 7 + 6) * 86400000)).getUTCMonth();
+  for (let w = 0, prev = -1; w < weeks; w++) {
+    const month = monthAt(w);
+    // A primeira semana só leva o nome se o mês dura três colunas: senão ele cobriria o seguinte.
+    if (month !== prev && (w > 0 || weeks < 3 || monthAt(2) === month)) months.push({ week: w, label: names[month] ?? '' });
+    prev = month;
+  }
   return {
+    months,
     title: m.home_usage_activity({ start: br(keys[0]), end: br(keys[keys.length - 1]) }),
     weeks: Array.from({ length: weeks }, (_, w) => Array.from({ length: 7 }, (_, d) => {
       const t = first + (w * 7 + d) * 86400000;
@@ -180,7 +201,7 @@ export function HomeUsageCard({ intro = null }: { intro?: HomeIntro | null }) {
           {models.map((b) => (
             <View key={b.key} style={styles.model}>
               <View style={styles.modelRow}>
-                <Text style={[styles.modelName, { color: c.text }]} numberOfLines={1}>{b.label ?? b.key}</Text>
+                <Text style={[styles.modelName, { color: c.text }]} numberOfLines={1}>{modelName(b)}</Text>
                 <Text style={[styles.modelValue, { color: c.text }]}>{tok(raw(b))}</Text>
               </View>
               <View style={[styles.track, { backgroundColor: c.inset }]}>
@@ -191,7 +212,7 @@ export function HomeUsageCard({ intro = null }: { intro?: HomeIntro | null }) {
         </ScrollView>
       );
     } else {
-      const top = models[0] ? (models[0].label ?? models[0].key) : '—';
+      const top = models[0] ? modelName(models[0]) : '—';
       const activeDays = [...days.values()].filter((v) => v > 0).length;
       const metrics: [string, number | string, (n: number) => string][] = [
         [m.home_usage_sessions(), totals.sessions, (n) => dec(n, 0)],
@@ -204,14 +225,25 @@ export function HomeUsageCard({ intro = null }: { intro?: HomeIntro | null }) {
       const cal = calendar(days);
       const step = cal ? Math.min(30, CASCADE_MS / cal.weeks.length) : 0;
       const valueStyle = [styles.metricValue, { color: c.text }];
+      // Uma coluna do mapa (célula + vão): onde cada mês começa.
+      const colStep = CELL + theme.base.space[0.5];
+      const weekdays = m.native_home_usage_weekdays().split(',');
       content = (
         <>
           {[metrics.slice(0, 3), metrics.slice(3)].map((row, i) => (
             <View key={i} style={styles.metricRow}>
               {row.map(([label, value, format]) => (
                 <View key={label} style={styles.metric} accessible
-                  accessibilityLabel={`${label}: ${typeof value === 'number' ? format(value) : value}`}>
-                  <Text style={[styles.metricLabel, muted]} numberOfLines={1}>{label}</Text>
+                  accessibilityLabel={`${label}${label === m.home_usage_cost() ? ` (${m.native_home_usage_cost_tag()})` : ''}: ${typeof value === 'number' ? format(value) : value}`}>
+                  {/* Custo de tabela, não fatura: a etiqueta fica no título para o número ter a coluna inteira. */}
+                  <View style={styles.metricLine}>
+                    <Text style={[styles.metricLabel, muted]} numberOfLines={1}>{label}</Text>
+                    {label === m.home_usage_cost() ? (
+                      <Text style={[styles.costTag, { color: c.faint, borderColor: c.borderStrong }]} numberOfLines={1}>
+                        {m.native_home_usage_cost_tag()}
+                      </Text>
+                    ) : null}
+                  </View>
                   {typeof value === 'number'
                     ? <CountUp key={startAt ?? 'rest'} value={value} format={format} startAt={startAt} style={valueStyle} />
                     : <Text style={valueStyle} numberOfLines={1}>{value}</Text>}
@@ -222,7 +254,22 @@ export function HomeUsageCard({ intro = null }: { intro?: HomeIntro | null }) {
           {cal ? (
             <View style={styles.calendar}>
               <Text style={[styles.note, muted]}>{cal.title}</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.weeks}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.calendarScroll}>
+                <View style={styles.calendarGrid}>
+                <View style={[styles.months, { width: cal.weeks.length * colStep }]}
+                  accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+                  {cal.months.map((mo) => (
+                    <Text key={mo.week} style={[styles.axis, styles.month, { color: c.faint, left: mo.week * colStep }]} numberOfLines={1}>{mo.label}</Text>
+                  ))}
+                </View>
+                <View style={styles.weeks}>
+                <View style={styles.week} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+                  {Array.from({ length: 7 }, (_, d) => (
+                    <Text key={d} style={[styles.axis, styles.weekday, { color: c.faint }]} numberOfLines={1}>
+                      {WEEKDAY_ROWS.includes(d) ? weekdays[WEEKDAY_ROWS.indexOf(d)] ?? '' : ''}
+                    </Text>
+                  ))}
+                </View>
                 {cal.weeks.map((week, wi) => (
                   // A chave remonta a coluna a cada abertura: começa apagada, sem um quadro aceso antes.
                   <Week key={`${wi}-${startAt ?? 'rest'}`} startAt={startAt} delay={wi * step}>
@@ -239,7 +286,16 @@ export function HomeUsageCard({ intro = null }: { intro?: HomeIntro | null }) {
                     ))}
                   </Week>
                 ))}
+                </View>
+                </View>
               </ScrollView>
+              <View style={styles.legend} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+                <Text style={[styles.axis, { color: c.faint }]}>{m.native_home_usage_less()}</Text>
+                {LEGEND_LEVELS.map((level) => (
+                  <View key={level} style={[styles.cell, { backgroundColor: level ? c.accent : c.inset, opacity: level || 1 }]} />
+                ))}
+                <Text style={[styles.axis, { color: c.faint }]}>{m.native_home_usage_more()}</Text>
+              </View>
             </View>
           ) : null}
         </>
@@ -257,7 +313,7 @@ export function HomeUsageCard({ intro = null }: { intro?: HomeIntro | null }) {
 
   return (
     <View
-      style={styles.card}
+      style={[styles.card, { borderColor: c.borderStrong, backgroundColor: superficie(theme, 0.5) }]}
       accessibilityLabel={m.home_usage_overview()}
     >
       {header}
@@ -292,8 +348,11 @@ export function TextTabs<T extends string>({ options, value, onChange, label }: 
 }
 
 const styles = StyleSheet.create((theme) => ({
-  // Sem moldura, como no PC: os números ficam direto sobre o fundo.
-  card: { width: '100%', maxWidth: 560, alignSelf: 'center', gap: theme.base.space[3], paddingHorizontal: theme.base.space[1] },
+  // Borda e vidro leve: os números continuam legíveis sobre o papel de parede.
+  card: {
+    width: '100%', maxWidth: 560, alignSelf: 'center', gap: theme.base.space[3], padding: theme.base.space[3],
+    borderWidth: 1, borderRadius: theme.base.radius.md,
+  },
   header: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.base.space[2], justifyContent: 'space-between', alignItems: 'center' },
   textTabs: { flexDirection: 'row', gap: theme.base.space[0.5] },
   textTab: { height: 28, paddingHorizontal: theme.base.space[2], borderRadius: theme.base.radius.sm, justifyContent: 'center' },
@@ -304,13 +363,26 @@ const styles = StyleSheet.create((theme) => ({
   retryText: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.medium },
   metricRow: { flexDirection: 'row', gap: theme.base.space[3] },
   metric: { flex: 1, minWidth: 0, gap: theme.base.space[1] },
-  metricLabel: { fontSize: theme.base.text.xs },
-  metricValue: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.medium, fontVariant: ['tabular-nums'] },
+  metricLabel: { flexShrink: 1, fontSize: theme.base.text.xs },
+  metricValue: { flexShrink: 1, fontSize: theme.base.text.sm, fontWeight: theme.base.weight.medium, fontVariant: ['tabular-nums'] },
+  metricLine: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1], minWidth: 0 },
+  costTag: {
+    flexShrink: 0, fontSize: theme.base.text.xxxs, paddingHorizontal: theme.base.space[1], borderWidth: 1,
+    borderRadius: theme.base.radius.xs, overflow: 'hidden',
+  },
   calendar: { gap: theme.base.space[2] },
   // flexGrow centraliza quando cabe; quando não cabe o conteúdo passa da largura e rola.
-  weeks: { gap: theme.base.space[0.5], flexGrow: 1, justifyContent: 'center' },
+  calendarScroll: { flexGrow: 1, justifyContent: 'center' },
+  calendarGrid: { gap: theme.base.space[1] },
+  // O recuo à esquerda é a coluna dos dias da semana.
+  months: { height: 14, marginLeft: CELL_LABEL + theme.base.space[0.5] },
+  month: { position: 'absolute', top: 0, width: 40 },
+  weeks: { flexDirection: 'row', gap: theme.base.space[0.5] },
   week: { gap: theme.base.space[0.5] },
-  cell: { width: 11, height: 11, borderRadius: theme.base.radius.xs },
+  weekday: { width: CELL_LABEL, height: CELL, lineHeight: CELL },
+  axis: { fontSize: theme.base.text.xxxs },
+  legend: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: theme.base.space[0.5] },
+  cell: { width: CELL, height: CELL, borderRadius: theme.base.radius.xs },
   modelList: { maxHeight: 224 },
   modelListInner: { gap: theme.base.space[2] },
   model: { gap: theme.base.space[1] },

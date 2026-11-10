@@ -9,7 +9,12 @@ import { getArchivePorCwd, getCodexAccountsForServer, defaultCodexAccount,
   commitsLeftOut, folderGitActionForServer, freshBase, getFolderBranchesForServer,
   PrewarmReserve, prewarmSessionForServer, releasePrewarmForServer } from '@hangar/core';
 import { basename, ctxWindow, providerName, contaComFolga, cotaDaConta, cotaParada, janelaEsgotada, motivoCotaAntiga, resumoCota, CLAUDE_PERMISSION_MODES, EFFORT_LEVELS,
-  SESSION_PROVIDERS, hasExecutionMode, effortLevels, contextRefsPlainText } from '@hangar/core';
+  SESSION_PROVIDERS, hasExecutionMode, effortLevels, contextRefsPlainText, machineLabel, serverColor, tagHex } from '@hangar/core';
+import type { AccountBadge } from '@hangar/core';
+import { useShallow } from 'zustand/react/shallow';
+import { useSessions } from '../../stores/sessions';
+import { MACHINE_ICON_NAME } from '../tags/tagVisuals';
+import { AccountGlyph } from '../sessions/SessionPlate';
 import type { ArchiveEntry, CodexAccount, ConfigDirInfo, Provider, ModelOption, CotaContaResumo, Server, WorktreeChoice, WorktreeRepo } from '@hangar/core';
 import { SessionSettingsControl } from '../../chat/SessionSettings';
 import { semEsforco } from '../pills/pills';
@@ -93,6 +98,8 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
 }) {
   const router = useRouter();
   const { theme } = useUnistyles();
+  // Etiquetas das máquinas (a mesma fonte da lista de sessões); valor estável, sem redesenhar a cada evento.
+  const machineTags = useSessions(useShallow((s) => machines.map((sv) => s.tags?.[sv.id] ?? null)));
   const [initialized, setInitialized] = useState(home?.mode !== 'sessions');
   const enabled = initialized || home?.mode !== 'sessions';
   useEffect(() => {
@@ -732,6 +739,12 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const terminalPill = <QuietPill {...terminalChoice} />;
 
   const janelaCheia = provider === 'claude' ? janelaEsgotada(cotaSelecionada) : null;
+  // Etiqueta da conta pela mesma chave da conta da lista: claude:<pasta>, codex:<home>.
+  const activeTags = machineTags[machines.findIndex((sv) => sv.id === active.id)] ?? null;
+  const tagGlyph = (key: string) => {
+    const tag: AccountBadge | undefined = activeTags?.accounts[key];
+    return tag ? <AccountGlyph icon={tag.icon} color={tagHex(tag.color) ?? theme.tokens.text.secondary} provider={provider} size={14} /> : undefined;
+  };
   const accountChoice = ((): Choice | null => {
     if (provider !== 'claude' && provider !== 'codex') return null;
     const aria = provider === 'claude' ? m.comum_conta_claude() : m.native_create_codex_account();
@@ -752,21 +765,24 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     return provider === 'claude' ? {
       icon: janelaCheia ? 'TriangleAlert' : switchedFrom ? 'ArrowLeftRight' : 'CircleUser',
       tone: janelaCheia ? 'warning' : switchedFrom ? 'accent' : undefined,
+      // Aviso de cota ou troca vence a etiqueta: é estado que a pessoa precisa ver.
+      leading: janelaCheia || switchedFrom ? undefined : tagGlyph(`claude:${selectedConfig}`),
       label: full ? `${label} · ${full.rotulo} ${Math.round(full.pct)}%` : label,
       aria: detail ? `${aria} (${detail})` : aria,
       menuTitle: detail || aria,
       actions: configs.map((c) => ({
-        id: c.path, title: c.label, state: on(c.path === selectedConfig),
+        id: c.path, title: c.label, state: on(c.path === selectedConfig), leading: tagGlyph(`claude:${c.path}`),
         subtitle: [c.active ? (m.switcher_atual() as string) : '', resumoCota(cotaDaConta(cotas, c.path))].filter(Boolean).join(' · ') || undefined,
       })),
       onAction: chooseConfig,
     } : {
       icon: 'CircleUser',
+      leading: contaCodex ? tagGlyph(`codex:${contaCodex.home}`) : undefined,
       label: contaCodex?.name ?? m.criar_padrao(),
       aria,
       menuTitle: aria,
       actions: codexAccounts.map((account) => ({
-        id: account.id, title: account.name, state: on(account.id === codexAccount),
+        id: account.id, title: account.name, state: on(account.id === codexAccount), leading: tagGlyph(`codex:${account.home}`),
         subtitle: account.auth.status === 'connected'
           ? (account.auth.email ?? m.codex_ui_account())
           : account.auth.status === 'disconnected' ? m.contas_nao_conectada() : m.codex_ui_unknown(),
@@ -913,22 +929,47 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setServiceTier((cur) => cur === 'priority' ? undefined : 'priority');
   };
 
-  // Mesmo painel preso à linha/pílula de branch nas duas apresentações.
-  const branchPanel = (
-    <AnchoredPanel
-      open={branchOpen && !!picked && !noProject}
-      anchor={branchRef.current}
-      maxHeightRatio={0.75}
-      onClose={() => setBranchOpen(false)}
-      onDismissed={() => { if (branchRef.current) AccessibilityInfo.sendAccessibilityEvent(branchRef.current, 'focus'); }}
-      label={m.native_create_checkout_branch()}
-      closeLabel={m.native_close()}
-    >
-      {picked && !noProject ? <BranchPicker server={active} cwd={pickedRepo ?? picked} worktreePath={pickedRepo && pickedRepo !== picked ? picked : undefined}
+  // Mesmo seletor de branch/worktree nas duas apresentações: linha própria no formulário, grupo "Onde" na pílula da máquina.
+  const branchPicker = picked && !noProject ? <BranchPicker server={active} cwd={pickedRepo ?? picked} worktreePath={pickedRepo && pickedRepo !== picked ? picked : undefined}
                               sessionName={name.trim() || basename(picked)}
                               value={worktree} onChange={onWorktree} basePicked={basePicked}
                               onPickFolder={(path, keepOpen, repo) => { setFolderRepo(repo ? { path, repo } : null); void handlePick(path); if (!keepOpen) setBranchOpen(false); }}
-                              onTakenChange={setBranchTaken} /> : null}
+                              onTakenChange={setBranchTaken} /> : null;
+  const focusBranchAnchor = () => { if (branchRef.current) AccessibilityInfo.sendAccessibilityEvent(branchRef.current, 'focus'); };
+  const branchPanel = (
+    <AnchoredPanel
+      open={branchOpen && !!branchPicker}
+      anchor={branchRef.current}
+      maxHeightRatio={0.75}
+      onClose={() => setBranchOpen(false)}
+      onDismissed={focusBranchAnchor}
+      label={m.native_create_checkout_branch()}
+      closeLabel={m.native_close()}
+    >
+      {branchPicker}
+    </AnchoredPanel>
+  );
+  // Máquina com a etiqueta dela (ícone, nome e cor), como na lista de sessões.
+  const machineView = (sv: Server, i: number) => {
+    const tags = machineTags[i];
+    return { label: machineLabel(sv, tags), color: tagHex(tags?.machine?.color) ?? serverColor(sv.id),
+      icon: tags?.machine ? MACHINE_ICON_NAME[tags.machine.icon] : 'Monitor' as const };
+  };
+  const activeMachine = machineView(active, machines.findIndex((sv) => sv.id === active.id));
+  // Pílula única da conversa nova: "Rodar em" (máquinas) e, com projeto, "Onde" (o seletor de branch acima).
+  const placePanel = (
+    <AnchoredPanel open={branchOpen} anchor={branchRef.current} maxHeightRatio={0.75} onClose={() => setBranchOpen(false)}
+      onDismissed={focusBranchAnchor} label={m.native_new_chat_machine()} closeLabel={m.native_close()} radius={12} padding={4}>
+      <Text style={styles.groupTitle} accessibilityRole="header">{m.native_new_chat_run_on()}</Text>
+      <SettingsList searchable={false}
+        items={machines.map((sv, i) => {
+          const view = machineView(sv, i);
+          return { id: sv.id, label: view.label, labelColor: view.color, selected: sv.id === active.id,
+            hint: sv.label.trim() && sv.label !== view.label ? sv.label : undefined,
+            leading: <Icon name={view.icon} size={14} color={theme.tokens.text.muted} /> };
+        })}
+        onPick={(id) => { setBranchOpen(false); if (id !== active.id) onPickMachine(id); }} />
+      {branchPicker ? <View style={styles.placeWhere}>{branchPicker}</View> : null}
     </AnchoredPanel>
   );
 
@@ -1096,29 +1137,49 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       destinationPending={!picked}
       providerLabel={providerName(provider)}
       folderPanel={(close) => <CwdPicker server={active} onPick={handlePick} selected={picked} autoSelect={false} onDone={close} compact repos={repos} />}
-      topPills={(openFolder) => (
+      topPills={(openFolder) => {
+        // A pasta mora no título, como no PC: "O que vamos fazer em [pasta]?".
+        return noProject ? (
+          <>
+            <Text style={styles.headingText} accessibilityRole="header">{m.native_new_chat_hero()}</Text>
+            <View style={styles.headingLine}>
+              <Text style={styles.hint}>{`${m.native_new_chat_no_project_line()} · `}</Text>
+              <Pressable ref={folderRef} onPress={() => openFolder(folderRef.current)} hitSlop={12} accessibilityRole="button"
+                accessibilityLabel={`${m.native_new_chat_folder()}: ${folderLabel}`}>
+                <Text style={styles.headingLink}>{m.native_new_chat_choose_folder()}</Text>
+              </Pressable>
+            </View>
+          </>
+        ) : (
+          <>
+            <View style={styles.headingLine}>
+              <Text style={styles.headingText} accessibilityRole="header">{`${m.native_new_chat_hero_in()} `}</Text>
+              <Pressable ref={folderRef} onPress={() => openFolder(folderRef.current)} hitSlop={12} accessibilityRole="button"
+                accessibilityLabel={`${m.native_new_chat_folder()}: ${folderLabel}`} style={styles.headingFolder}>
+                <Icon name="Folder" size={18} color={theme.tokens.accent.base} />
+                <Text style={[styles.headingText, styles.headingFolderText]} numberOfLines={1}>{folderLabel}</Text>
+                <Icon name="ChevronDown" size={16} color={theme.tokens.text.muted} />
+              </Pressable>
+              <Text style={styles.headingText}>?</Text>
+            </View>
+            {!active.invite ? (
+              <Pressable onPress={() => { void handlePick(NO_PROJECT_CWD); }} hitSlop={12} accessibilityRole="button"
+                accessibilityHint={m.native_new_chat_no_project_hint()}>
+                <Text style={styles.headingLink}>{m.native_new_chat_start_without_project()}</Text>
+              </Pressable>
+            ) : null}
+          </>
+        );
+      }}
+      bottomPills={(
         <>
-          <QuietPill
-            icon="Monitor"
-            label={active.label}
-            aria={m.native_new_chat_machine()}
-            menuTitle={m.native_new_chat_machine()}
-            actions={machines.map((s) => ({ id: s.id, title: s.label, state: on(s.id === active.id) }))}
-            onAction={(id) => { if (id !== active.id) onPickMachine(id); }}
-          />
-          <QuietPill ref={folderRef} icon="Folder" label={folderLabel} aria={m.native_new_chat_folder()}
-                     onPress={() => openFolder(folderRef.current)} />
-          {picked && !noProject ? (
-            <QuietPill ref={branchRef} icon="GitBranch" label={branchLabel}
-                       aria={m.native_create_checkout_branch()} onPress={() => setBranchOpen(true)} />
-          ) : null}
-          {!noProject && !active.invite ? (
-            <QuietPill plain icon="House" label={m.native_new_chat_no_project()} aria={m.native_new_chat_no_project_hint()}
-                       onPress={() => { void handlePick(NO_PROJECT_CWD); }} />
-          ) : null}
+          {/* Máquina e worktree numa pílula só; sem projeto, só a máquina. */}
+          <QuietPill ref={branchRef} icon={activeMachine.icon} label={activeMachine.label} aria={m.native_new_chat_machine()}
+            detail={!branchPicker ? undefined : worktree ? m.native_new_chat_place_new()
+              : pickedWorktree ? branchLabel : m.native_new_chat_place_here()} onPress={() => setBranchOpen(true)} />
+          {accountPill}{terminalPill}
         </>
       )}
-      bottomPills={<>{accountPill}{terminalPill}</>}
       providerChip={(
         <SessionSettingsControl open={settingsOpen} onOpen={() => setSettingsOpen(true)} onClose={() => setSettingsOpen(false)}
           header={<ProviderPicker value={provider} onChange={chooseProvider} disabledMap={providerProbe ?? undefined} />}
@@ -1151,7 +1212,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       blocked={blocked || branchBlocked}
       keyboardOffset={keyboardOffset}
     />
-    {branchPanel}
+    {placePanel}
     </>
   );
 }
@@ -1186,6 +1247,16 @@ const styles = StyleSheet.create((theme) => ({
   rowCenter: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2] },
   hint: { fontSize: theme.base.text.sm, color: theme.tokens.text.secondary },
   hintAlerta: { color: theme.tokens.status.warning },
+  headingLine: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' },
+  headingText: { ...theme.type.heading, color: theme.tokens.text.primary },
+  headingFolder: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1], maxWidth: '100%', paddingHorizontal: theme.base.space[1] },
+  headingFolderText: { flexShrink: 1, color: theme.tokens.accent.base },
+  headingLink: { fontSize: theme.base.text.sm, color: theme.tokens.accent.base },
+  groupTitle: {
+    fontSize: theme.base.text.xxs, fontWeight: theme.base.weight.semibold, color: theme.tokens.text.muted,
+    paddingHorizontal: theme.base.space[2], paddingTop: theme.base.space[1], paddingBottom: theme.base.space[0.5],
+  },
+  placeWhere: { flexShrink: 1, minHeight: 0, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.tokens.border.default, paddingTop: theme.base.space[2] },
   hintSm: { fontSize: theme.base.text.xs, color: theme.tokens.text.muted, marginTop: theme.base.space[1] },
   field: { gap: theme.base.space[2] },
   label: { fontSize: theme.base.text.sm, color: theme.tokens.text.secondary, fontWeight: theme.base.weight.medium },
