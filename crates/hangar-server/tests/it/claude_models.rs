@@ -26,9 +26,9 @@ impl Scene {
         std::fs::create_dir(&bin).unwrap();
         std::fs::create_dir(&home).unwrap();
         let program = bin.join(if cfg!(windows) { "claude.exe" } else { "claude" });
-        std::fs::copy(env!("CARGO_BIN_EXE_hangar-dictation-fixture"), &program).unwrap();
-        std::fs::copy(env!("CARGO_BIN_EXE_hangar-dictation-fixture"),
-            bin.join(if cfg!(windows) { "codex.exe" } else { "codex" })).unwrap();
+        let fixture = std::path::Path::new(env!("CARGO_BIN_EXE_hangar-dictation-fixture"));
+        crate::copy_executable(fixture, &program);
+        crate::copy_executable(fixture, &bin.join(if cfg!(windows) { "codex.exe" } else { "codex" }));
         let service = AccountService::new(AccountEnvironment::from_map([
             ("HOME".into(), root.path().to_string_lossy().into_owned()),
             ("PATH".into(), bin.to_string_lossy().into_owned()),
@@ -97,9 +97,12 @@ async fn claude_catalog_detects_cli_upgrade_before_cache_expires() {
     assert_eq!(cached[0]["id"], "before-upgrade");
     // O instalador troca o executável mantendo o caminho público.
     let replacement = scene.root.path().join("replacement");
-    std::fs::copy(&scene.program, &replacement).unwrap();
-    use std::io::Write;
-    std::fs::OpenOptions::new().append(true).open(&replacement).unwrap().write_all(b"fixture-upgrade").unwrap();
+    let mut upgraded = std::fs::read(&scene.program).unwrap();
+    upgraded.extend_from_slice(b"fixture-upgrade");
+    #[cfg(unix)]
+    crate::write_executable(&replacement, &upgraded);
+    #[cfg(not(unix))]
+    std::fs::write(&replacement, &upgraded).unwrap();
     std::fs::rename(&replacement, &scene.program).unwrap();
     let (updated, _) = models.get(&scene.service, &slots, "claude", &scene.home, false).await.unwrap();
     assert_eq!(updated[0]["id"], "after-upgrade");

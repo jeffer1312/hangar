@@ -19,6 +19,7 @@ type CacheEntry = (tokio::time::Instant, Option<Vec<u8>>, u64, Value);
 pub struct AuthCache {
     entries: Arc<Mutex<HashMap<AccountKey, CacheEntry>>>,
     generations: Arc<Mutex<HashMap<AccountKey, u64>>>,
+    gates: super::locks::KeyedGates,
     /// Prazo da CLI do Claude; `None` = o de produção (10 s, 20 s no `mcp list`). Teste que mede outro prazo
     /// injeta um que a subida da CLI falsa nunca alcança.
     pub cli_timeout: Option<Duration>,
@@ -254,13 +255,22 @@ impl AccountService {
                 .unwrap()
                 .get(&key)
                 .unwrap_or(&0);
-            if let Some((at, old, epoch, value)) =
-                service.claude_auth.entries.lock().unwrap().get(&key)
-                && old == &signature
-                && *epoch == generation
-                && at.elapsed() < Duration::from_secs(if signature.is_some() { 120 } else { 30 })
-            {
-                return value.clone();
+            let cached = || {
+                let entries = service.claude_auth.entries.lock().unwrap();
+                let (at, old, epoch, value) = entries.get(&key)?;
+                (old == &signature
+                    && *epoch == generation
+                    && at.elapsed() < Duration::from_secs(if signature.is_some() { 120 } else { 30 }))
+                .then(|| value.clone())
+            };
+            if let Some(value) = cached() {
+                return value;
+            }
+            // Uma CLI por conta: quem chega junto espera e lê o que a primeira guardou.
+            let gate = service.claude_auth.gates.gate(&key);
+            let _reading = gate.lock().await;
+            if let Some(value) = cached() {
+                return value;
             }
             let state = service.claude_auth_guarded(&account).await;
             let generations = service.claude_auth.generations.lock().unwrap();

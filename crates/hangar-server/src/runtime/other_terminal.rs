@@ -978,8 +978,10 @@ async fn confirm(
         && snapshot.borrow()["view"]["public_state"]["state"] != "working" {
         let state = queue.snapshot().await.map_err(|_| failed("queue_io"))?;
         let sample = clock();
-        queue.exec(target.generation, &format!("other-unproved:{}", state.next_seq), sample,
-            Action::GiveUpUnproved {now:sample.epoch_s, grace:30.0}).await.map_err(|_| failed("queue_io"))?;
+        if state.unproved_due(sample.epoch_s, 30.0) {
+            queue.exec(target.generation, &format!("other-unproved:{}", state.next_seq), sample,
+                Action::GiveUpUnproved {now:sample.epoch_s, grace:30.0}).await.map_err(|_| failed("queue_io"))?;
+        }
     }
     publish_snapshot(target, queue, snapshot, None).await?;
     Ok(json!({"confirmed":confirmed.len()+legacy}))

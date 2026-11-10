@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 
 use super::procs::ChildrenMap;
 
-const PREFIX: &str = "shortcut-";
+pub(crate) const PREFIX: &str = "shortcut-";
 pub(crate) const FORMAT: &str = "#{session_name}\t#{@cp_shortcut_owner}\t#{@cp_shortcut_id}\t#{session_created}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_pid}\t#{@cp_shortcut_seq}\t#{@cp_shortcut_key}\t#{@cp_shortcut_origin}\t#{@cp_shortcut_ask}\t#{@cp_shortcut_label}";
 const MUX_TIMEOUT: Duration = Duration::from_secs(5);
 const TTY_WAITS: [&str; 2] = ["wait_woken", "n_tty_read"];
@@ -200,9 +200,12 @@ impl Refresher {
 
 /// `list_all` em JSON: todos os terminais de atalho, do mais antigo ao mais novo. `Err` = o
 /// multiplexador não respondeu (lista vazia apagaria as abas e as perguntas).
-pub async fn list_all(program: &OsString, children: &ChildrenMap) -> Result<String, &'static str> {
-    let out = mux(program, &["list-sessions", "-F", FORMAT]).await.ok_or("shortcuts_mux_unavailable")?;
-    let mut rows = if out.status.success() { parse(&String::from_utf8_lossy(&out.stdout), windows_status) } else { Vec::new() };
+pub async fn list_all(program: &OsString, children: &ChildrenMap, present: bool) -> Result<String, &'static str> {
+    // `present` falso = quem chama já viu que não há sessão de atalho: o resto corre igual, sem abrir o multiplexador.
+    let mut rows = if present {
+        let out = mux(program, &["list-sessions", "-F", FORMAT]).await.ok_or("shortcuts_mux_unavailable")?;
+        if out.status.success() { parse(&String::from_utf8_lossy(&out.stdout), windows_status) } else { Vec::new() }
+    } else { Vec::new() };
     #[cfg(windows)]
     sweep_orphans(&rows.iter().map(|r| r.id.as_str()).collect());
     rows.sort_by(|a, b| (a.created, a.seq, &a.tmux).cmp(&(b.created, b.seq, &b.tmux)));
@@ -244,6 +247,14 @@ mod tests {
         let screen = ["abcd", "ef:"];
         assert_eq!(logical_line(&screen, 1, 5), "abcd ef:");
         assert_eq!(logical_line(&screen, 1, 10), "ef:");
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn no_shortcut_session_skips_the_mux() {
+        let (program, children) = (OsString::from("missing-test-mux"), ChildrenMap::default());
+        assert_eq!(list_all(&program, &children, false).await, Ok("[]".to_owned()), "sem sessão de atalho o multiplexador foi chamado");
+        assert_eq!(list_all(&program, &children, true).await, Err("shortcuts_mux_unavailable"));
     }
 
     #[tokio::test]

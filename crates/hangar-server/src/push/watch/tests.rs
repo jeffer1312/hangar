@@ -142,6 +142,21 @@ fn turn_series_keeps_the_first_start() {
 }
 
 #[test]
+fn memory_is_only_written_when_it_changed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = Memory::path(dir.path());
+    let mut saved = None;
+    assert!(save_changed(&path, &mut saved, b"{}".to_vec()).unwrap());
+    assert!(!save_changed(&path, &mut saved, b"{}".to_vec()).unwrap(), "memória igual foi regravada");
+    // Arquivo apagado com o servidor de pé: a próxima gravação o refaz, mesmo sem mudança.
+    std::fs::remove_file(&path).unwrap();
+    assert!(save_changed(&path, &mut saved, b"{}".to_vec()).unwrap(), "arquivo sumido não foi recriado");
+    assert_eq!(std::fs::read(&path).unwrap(), b"{}");
+    assert!(save_changed(&path, &mut saved, b"[]".to_vec()).unwrap());
+    assert_eq!(std::fs::read(&path).unwrap(), b"[]");
+}
+
+#[test]
 fn memory_survives_a_restart_so_nothing_is_lost_or_repeated() {
     let dir = tempfile::tempdir().unwrap();
     let path = Memory::path(dir.path());
@@ -149,7 +164,7 @@ fn memory_survives_a_restart_so_nothing_is_lost_or_repeated() {
     m.working("sid", 100.0);
     assert!(m.sweep(&[("a".into(), Some("sid".into()), true, None), ("b".into(), None, false, None)], true)
         .contains(&("a".into(), Notice::Stalled)));
-    m.save(&path).unwrap();
+    save_changed(&path, &mut None, serde_json::to_vec(&m).unwrap()).unwrap();
     let mut back = Memory::load(&path);
     assert_eq!(back.started.get("sid"), Some(&100.0), "o início da série sobrevive: o 'terminou' sai depois do reinício");
     // Ainda travada depois do reinício: não repete; quem não voltou (restauração em curso, reboot) não
