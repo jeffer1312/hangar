@@ -9,7 +9,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use indexmap::IndexMap;
-use serde::{Deserialize, Serialize};
 
 pub const CODE_TTL: f64 = 24.0 * 3600.0;
 pub const KEEP_EXPIRED: f64 = 24.0 * 3600.0;
@@ -17,47 +16,7 @@ pub const KEEP_REVOKED: f64 = 30.0 * 24.0 * 3600.0;
 
 pub type Clock = Arc<dyn Fn() -> f64 + Send + Sync>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Kind {
-    #[default]
-    Share,
-    Pair,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Share {
-    pub id: String,
-    pub session: String,
-    pub life: Option<String>,
-    pub created_at: f64,
-    pub code_expires_at: f64,
-    pub code_hash: String,
-    #[serde(default)]
-    pub token_hash: Option<String>,
-    #[serde(default)]
-    pub device: Option<String>,
-    #[serde(default)]
-    pub redeemed_at: Option<f64>,
-    #[serde(default)]
-    pub revoked_at: Option<f64>,
-    #[serde(default)]
-    pub local: bool,
-    #[serde(default)]
-    pub kind: Kind,
-    #[serde(default)]
-    pub parent_id: Option<String>,
-    /// Nível que o convite de par dará no resgate. No arquivo: reiniciar não pode rebaixá-lo.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub level: Option<Kind>,
-}
-
-
-impl Share {
-    pub fn active(&self, now: f64) -> bool {
-        self.revoked_at.is_none() && (self.redeemed_at.is_some() || now <= self.code_expires_at)
-    }
-}
+pub use hangar_core::guest::{Guest, Kind, Share};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PeekError {
@@ -67,44 +26,6 @@ pub enum PeekError {
     Expired,
     /// Só do `redeem`: o resgate não chegou ao disco.
     Io(String),
-}
-
-/// Tudo o que um token de convidado alcança: um registro por sessão.
-#[derive(Debug, Clone)]
-pub struct Guest {
-    pub token_hash: String,
-    pub records: Vec<Share>,
-    /// Tem convite de compartilhamento vivo (não acesso vindo de par): só ele gasta o crédito do dono.
-    pub invite: bool,
-}
-
-impl Guest {
-    pub fn share_for(&self, session: &str) -> Option<&Share> {
-        let cand: Vec<&Share> = self.records.iter().filter(|s| s.session == session).collect();
-        let live: Vec<&Share> = cand.iter().copied().filter(|s| s.revoked_at.is_none()).collect();
-        // Só revogado: devolve mesmo assim, para o porteiro dizer "encerrado" e não "fora do convite".
-        let pool = if live.is_empty() { cand } else { live };
-        // Compartilhada E pareada sob o mesmo token: o convite vence a cópia do par.
-        let key = |s: &Share| (s.kind == Kind::Share, s.created_at);
-        pool.into_iter().fold(None, |best: Option<&Share>, s| match best {
-            Some(b) if key(s).partial_cmp(&key(b)) != Some(std::cmp::Ordering::Greater) => Some(b),
-            _ => Some(s),
-        })
-    }
-    pub fn sessions(&self) -> HashSet<String> {
-        self.records.iter().filter(|s| s.revoked_at.is_none()).map(|s| s.session.clone()).collect()
-    }
-    pub fn sees(&self, name: &str) -> bool {
-        self.records.iter().any(|s| s.revoked_at.is_none() && s.session == name)
-    }
-    pub fn kind_of(&self, name: &str) -> Option<Kind> {
-        self.share_for(name).map(|s| s.kind)
-    }
-    pub fn pair_shares(&self) -> Vec<&Share> {
-        self.records.iter()
-            .filter(|s| s.kind == Kind::Pair && s.parent_id.is_none() && s.revoked_at.is_none())
-            .collect()
-    }
 }
 
 fn hash(value: &str) -> String {

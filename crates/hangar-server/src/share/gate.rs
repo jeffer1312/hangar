@@ -2,19 +2,17 @@
 //!
 //! O filtro delimita a INTERFACE do convidado, não é fronteira de segurança: quem entra numa
 //! sessão em bypass já roda comando como o dono.
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::extract::connect_info::Connected;
 use axum::extract::{ConnectInfo, Request, State};
 use axum::http::{HeaderValue, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use axum::serve::IncomingStream;
 use futures_util::StreamExt;
-use tokio::net::TcpListener;
+
+pub use hangar_core::guest::GuestConn;
 
 use super::ShareState;
 use super::caller::{Caller, GuestGrant, SessionPath, allowed};
@@ -23,22 +21,6 @@ use super::life::{Verdict, verdict};
 pub const WATCH_EVERY: Duration = Duration::from_secs(5);
 /// Fecha o WebSocket quando o acesso acaba: espelho do HTTP 410, o cliente não reconecta.
 pub const CLOSE_ENDED: u16 = 4410;
-
-/// Dado de cada conexão TCP. Sem limite de tokens errados: atrás do Funnel a conexão é dividida
-/// entre clientes da internet, e o token de 256 bits não se adivinha.
-/// Servir com `into_make_service_with_connect_info::<GuestConn>()` num `TcpListener` puro.
-#[derive(Clone, Debug)]
-pub struct GuestConn {
-    pub peer: SocketAddr,
-    /// Endereço desta ponta da conexão: decide entre o link do Funnel e o da rede da casa.
-    pub local: Option<SocketAddr>,
-}
-
-impl Connected<IncomingStream<'_, TcpListener>> for GuestConn {
-    fn connect_info(stream: IncomingStream<'_, TcpListener>) -> Self {
-        Self { peer: *stream.remote_addr(), local: stream.io().local_addr().ok() }
-    }
-}
 
 pub struct Gate {
     pub share: Arc<ShareState>,

@@ -15,9 +15,7 @@ use serde_json::{Value, json};
 
 use crate::routes::AppState;
 
-/// Marca do pedido repassado pela ponte: o `gate` o trata como do dono e o `pass` nunca o devolve ao Python.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct BridgedOwner;
+pub(crate) use hangar_core::edge::BridgedOwner;
 
 fn not_ours() -> Response { StatusCode::MISDIRECTED_REQUEST.into_response() }
 
