@@ -974,6 +974,43 @@ pub(crate) fn check_plugins(home: &Path, dir: &Path) -> Result<Vec<String>> {
     Ok(warnings)
 }
 
+/// O registro de plugins é um só para todas as contas, mas o CLI grava o caminho pela pasta da conta
+/// que instalou: apagar a conta deixaria o plugin sem pasta em todas. O caminho passa ao destino real.
+pub(crate) fn detach_plugin_paths(home: &Path, dir: &Path) -> Result<()> {
+    let real_dir = super::catalog::resolved(dir);
+    let plugins = home.join(".claude").join("plugins");
+    for (file, field) in [("installed_plugins.json", "installPath"), ("known_marketplaces.json", "installLocation")] {
+        let path = plugins.join(file);
+        let unreadable = |e: String| refused(format!("plugins: não consegui ler {}: {e}", path.display()));
+        let Some(mut data) = read_json(&path).map_err(unreadable)? else { continue };
+        if repoint(&mut data, field, dir, &real_dir) {
+            let text = serde_json::to_string_pretty(&data).map_err(|e| unreadable(e.to_string()))?;
+            write_replacing(&path, &text)?;
+        }
+    }
+    Ok(())
+}
+
+/// Caminho que entra pela conta e cujo destino real fica fora dela passa a apontar para o real.
+fn repoint(value: &mut Value, field: &str, dir: &Path, real_dir: &Path) -> bool {
+    match value {
+        Value::Array(items) => items.iter_mut().fold(false, |changed, item| repoint(item, field, dir, real_dir) | changed),
+        Value::Object(map) => map.iter_mut().fold(false, |changed, (key, item)| {
+            let swapped = match item {
+                Value::String(text) if key == field && Path::new(text.as_str()).starts_with(dir) => {
+                    let real = super::catalog::resolved(Path::new(text.as_str()));
+                    let outside = !real.starts_with(real_dir) && !real.starts_with(dir);
+                    if outside { *text = real.to_string_lossy().into_owned(); }
+                    outside
+                }
+                _ => repoint(item, field, dir, real_dir),
+            };
+            swapped | changed
+        }),
+        _ => false,
+    }
+}
+
 /// O preparo da pasta pendente da criação: `~/.claude` garantido, o `.claude.json` do principal sem o
 /// `oauthAccount` (as permissões e os MCP ficam, o login não), `projects/` e a reconciliação sob a
 /// trava da pendência, o único arquivo que existe antes da publicação.
