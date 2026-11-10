@@ -104,7 +104,7 @@ async fn package(state: &AppState) -> Result<Value, String> {
     Ok(json!({"target": entry.version, "warnings": warnings, "news": news}))
 }
 
-async fn git(dir: &Path, args: &[&str]) -> Result<String, ()> {
+pub(crate) async fn git(dir: &Path, args: &[&str]) -> Result<String, ()> {
     let (dir, args): (PathBuf, Vec<String>) = (dir.to_owned(), args.iter().map(|a| (*a).to_owned()).collect());
     let out = tokio::task::spawn_blocking(move || {
         hangar_workspace::process::run(&dir, &args.iter().map(String::as_str).collect::<Vec<_>>(), GIT_TIMEOUT)
@@ -132,7 +132,7 @@ async fn list_md(repo: &Path, rev: &str, dir: &str) -> Result<Vec<String>, ()> {
     Ok(names)
 }
 
-fn is_note_file(name: &str) -> bool { name.ends_with(".md") && !name.to_uppercase().starts_with("README") }
+pub(crate) fn is_note_file(name: &str) -> bool { name.ends_with(".md") && !name.to_uppercase().starts_with("README") }
 
 /// Espelho do `_frontmatter` de `backend/app/atualizacoes.py`: `chave: valor` entre `---`.
 fn frontmatter(text: &str) -> (HashMap<String, String>, String) {
@@ -168,7 +168,7 @@ fn for_system(field: Option<&String>, os: &str) -> Option<bool> {
 }
 
 /// `os`: o sistema da máquina que vai atualizar, nos nomes do `std::env::consts::OS`.
-fn news_item(id: &str, text: &str, os: &str) -> Option<(u8, Value)> {
+pub(crate) fn news_item(id: &str, text: &str, os: &str) -> Option<(u8, Value)> {
     let (f, body) = frontmatter(text);
     let title = f.get("titulo").filter(|t| !t.is_empty())?;
     if !for_system(f.get("sistema"), os)? { return None; }
@@ -223,15 +223,15 @@ fn package_warning(name: &str, text: &str, windows: bool) -> Option<(String, Val
 }
 
 /// Na ordem da tela: novo, melhoria, correção; dentro de cada, pelo id.
-fn order_news(mut news: Vec<(u8, String, Value)>) -> Vec<Value> {
+pub(crate) fn order_news(mut news: Vec<(u8, String, Value)>) -> Vec<Value> {
     news.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
     news.into_iter().map(|n| n.2).collect()
 }
 
-/// Novidades que o alvo tem e o instalado não: `*.md` direto em `docs/novidades`, sem README.
-async fn news(repo: &Path, target: &str) -> Result<Vec<Value>, ()> {
+/// Novidades que `target` tem e `from` não: `*.md` direto em `docs/novidades`, sem README.
+pub(crate) async fn added_news(repo: &Path, from: &str, target: &str) -> Result<Vec<Value>, ()> {
     // `--no-renames`: arquivo renomeado conta como novo, como na comparação de nomes.
-    let added = git(repo, &["diff", "-z", "--no-renames", "--name-only", "--diff-filter=A", "HEAD", target, "--", "docs/novidades"]).await?;
+    let added = git(repo, &["diff", "-z", "--no-renames", "--name-only", "--diff-filter=A", from, target, "--", "docs/novidades"]).await?;
     let mut names: Vec<&str> = added.split('\0').filter_map(|p| p.strip_prefix("docs/novidades/"))
         .filter(|n| !n.contains('/') && is_note_file(n)).collect();
     names.sort();
@@ -245,7 +245,7 @@ async fn news(repo: &Path, target: &str) -> Result<Vec<Value>, ()> {
 
 pub(crate) async fn collect(cwd: &Path, target: &str, state_dir: &Path) -> Result<Value, ()> {
     let repo = PathBuf::from(git(cwd, &["rev-parse", "--show-toplevel"]).await?.trim());
-    let (warnings, news) = tokio::join!(warnings(&repo, target, state_dir), news(&repo, target));
+    let (warnings, news) = tokio::join!(warnings(&repo, target, state_dir), added_news(&repo, "HEAD", target));
     Ok(json!({"target": target, "warnings": warnings?, "news": news?}))
 }
 

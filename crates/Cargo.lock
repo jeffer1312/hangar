@@ -1739,6 +1739,7 @@ dependencies = [
  "hangar-plugins",
  "hangar-psmux",
  "hangar-transcript",
+ "hangar-update-news",
  "hangar-workspace",
  "http-body-util",
  "hyper",

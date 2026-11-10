@@ -100,6 +100,8 @@ pub(crate) async fn maintenance(state: Arc<crate::routes::AppState>) {
 }
 
 pub async fn prepare_sessions(env: crate::accounts::environment::AccountEnvironment) {
+    // Dentro da preparação: o aparelho que pergunta logo na subida já acha a chegada gravada, e a saúde segue livre.
+    crate::update_arrived::record_startup(&env.home).await;
     // Órfãos do cano têm dono só: com o runtime ligado, o Rust varre uma vez, antes de anunciar o
     // gateway (o Python só abre sessões depois do anúncio). Só aqui, pelo mesmo motivo do tmux acima.
     // `CP_RUST_NO_ORPHAN_SWEEP=1`: o teste que sobe este binário de verdade nunca varre processos da máquina.
