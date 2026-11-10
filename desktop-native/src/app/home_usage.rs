@@ -250,14 +250,15 @@ impl Hangar {
             .children((0..7).map(|row| label(if row % 2 == 0 && row < 6 { weekdays.get(row / 2).cloned().unwrap_or_default() } else { String::new() })));
         let mut grid = div().id("home-usage-calendar").min_w_0().overflow_x_scroll().flex().gap_1();
         let mut shown_month = None;
+        // O último dia visível da coluna: o mês que começa no meio da semana já leva o nome nela.
+        let month_at = |week: usize| (first + chrono::Duration::days((week * 7 + 6) as i64)).min(end).month0();
         for week in 0..weeks {
-            let monday = first + chrono::Duration::days((week * 7) as i64);
-            let month = (shown_month != Some(monday.month0())).then(|| {
-                shown_month = Some(monday.month0());
-                months.get(monday.month0() as usize).cloned().unwrap_or_default()
+            let month = (shown_month != Some(month_at(week))).then(|| {
+                shown_month = Some(month_at(week));
+                months.get(month_at(week) as usize).cloned().unwrap_or_default()
             })
             // A primeira semana só leva o nome se o mês dura três colunas: senão ele cobriria o seguinte.
-            .filter(|_| week > 0 || weeks < 3 || (first + chrono::Duration::days(14)).month0() == monday.month0());
+            .filter(|_| week > 0 || weeks < 3 || month_at(2) == month_at(0));
             // Largura da coluna: o nome do mês passa por cima das semanas seguintes sem alargar a dele.
             grid = grid.child(div().flex().flex_col().gap_1().child(label(month.unwrap_or_default()).w(px(12.))).children((0..7).map(|weekday| {
                 let day = first + chrono::Duration::days((week * 7 + weekday) as i64);

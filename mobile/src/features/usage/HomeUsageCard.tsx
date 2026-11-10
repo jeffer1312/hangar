@@ -71,7 +71,8 @@ function calendar(days: Map<string, number>) {
   // Mês na coluna em que ele começa; a primeira semana leva o seu.
   const names = m.native_home_usage_months().split(',');
   const months: { week: number; label: string }[] = [];
-  const monthAt = (w: number) => new Date(Math.max(start, first + w * 7 * 86400000)).getUTCMonth();
+  // O último dia visível da coluna: o mês que começa no meio da semana já leva o nome nela.
+  const monthAt = (w: number) => new Date(Math.min(end, first + (w * 7 + 6) * 86400000)).getUTCMonth();
   for (let w = 0, prev = -1; w < weeks; w++) {
     const month = monthAt(w);
     // A primeira semana só leva o nome se o mês dura três colunas: senão ele cobriria o seguinte.
@@ -233,19 +234,19 @@ export function HomeUsageCard({ intro = null }: { intro?: HomeIntro | null }) {
             <View key={i} style={styles.metricRow}>
               {row.map(([label, value, format]) => (
                 <View key={label} style={styles.metric} accessible
-                  accessibilityLabel={`${label}: ${typeof value === 'number' ? format(value) : value}`}>
-                  <Text style={[styles.metricLabel, muted]} numberOfLines={1}>{label}</Text>
+                  accessibilityLabel={`${label}${label === m.home_usage_cost() ? ` (${m.native_home_usage_cost_tag()})` : ''}: ${typeof value === 'number' ? format(value) : value}`}>
+                  {/* Custo de tabela, não fatura: a etiqueta fica no título para o número ter a coluna inteira. */}
                   <View style={styles.metricLine}>
-                    {typeof value === 'number'
-                      ? <CountUp key={startAt ?? 'rest'} value={value} format={format} startAt={startAt} style={valueStyle} />
-                      : <Text style={valueStyle} numberOfLines={1}>{value}</Text>}
-                    {/* Custo de tabela, não fatura: a etiqueta diz isso sem tirar o número do lugar. */}
+                    <Text style={[styles.metricLabel, muted]} numberOfLines={1}>{label}</Text>
                     {label === m.home_usage_cost() ? (
                       <Text style={[styles.costTag, { color: c.faint, borderColor: c.borderStrong }]} numberOfLines={1}>
                         {m.native_home_usage_cost_tag()}
                       </Text>
                     ) : null}
                   </View>
+                  {typeof value === 'number'
+                    ? <CountUp key={startAt ?? 'rest'} value={value} format={format} startAt={startAt} style={valueStyle} />
+                    : <Text style={valueStyle} numberOfLines={1}>{value}</Text>}
                 </View>
               ))}
             </View>
@@ -362,7 +363,7 @@ const styles = StyleSheet.create((theme) => ({
   retryText: { fontSize: theme.base.text.sm, fontWeight: theme.base.weight.medium },
   metricRow: { flexDirection: 'row', gap: theme.base.space[3] },
   metric: { flex: 1, minWidth: 0, gap: theme.base.space[1] },
-  metricLabel: { fontSize: theme.base.text.xs },
+  metricLabel: { flexShrink: 1, fontSize: theme.base.text.xs },
   metricValue: { flexShrink: 1, fontSize: theme.base.text.sm, fontWeight: theme.base.weight.medium, fontVariant: ['tabular-nums'] },
   metricLine: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1], minWidth: 0 },
   costTag: {
