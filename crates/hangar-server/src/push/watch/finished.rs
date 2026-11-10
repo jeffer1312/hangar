@@ -171,7 +171,7 @@ mod tests {
                 frozen: super::super::settings::Frozen::load(&state.settings_snapshot().unwrap()).unwrap(),
                 st: state, hooks: Mutex::default(),
                 memory: Mutex::new(super::super::Memory {started:[("sid".into(),1000.0)].into(),..Default::default()}),
-                memory_path: home.path().join("push.json"),
+                memory_path: home.path().join("push.json"), saved: Mutex::default(),
             });
             watch.finished("sid".into(),1000.0,1100.0).await;
             assert_eq!(*source.notices.lock().unwrap(), vec![serde_json::json!(["session"])], "GUE-082 {provider}");

@@ -460,18 +460,23 @@ impl Watcher {
             let mut problems = crate::list::discover::Problems::default();
             crate::list::discover_other::sidecars(&dir,"sidecar Codex ilegível ou torto",&mut problems)
         }).await.unwrap_or_default();
-        let panes = match self.cfg.mux.list_panes().await {
-            Ok(panes) => panes,
-            Err(error) => {
-                if crate::warn_limit::allow(None,"codex_watch_panes_unavailable") {
-                    tracing::warn!(code="codex_watch_panes_unavailable",reason=%error.code,"vigia do Codex com terminal sem a lista de panes; rodada sem decisão");
+        let home = &self.cfg.home;
+        let targets = registry.codex_terminals().await;
+        let candidates = sidecars.iter().map(|(_,meta)|candidate(meta,home)).collect::<Vec<_>>();
+        // Sem ator nem sidecar adotável nada abaixo lê os panes: a rodada não abre o multiplexador.
+        let panes = if targets.is_empty() && candidates.iter().all(Option::is_none) { Vec::new() } else {
+            match self.cfg.mux.list_panes().await {
+                Ok(panes) => panes,
+                Err(error) => {
+                    if crate::warn_limit::allow(None,"codex_watch_panes_unavailable") {
+                        tracing::warn!(code="codex_watch_panes_unavailable",reason=%error.code,"vigia do Codex com terminal sem a lista de panes; rodada sem decisão");
+                    }
+                    return;
                 }
-                return;
             }
         };
-        let home = &self.cfg.home;
         let mut seen = BTreeSet::new();
-        for target in registry.codex_terminals().await {
+        for target in targets {
             let raw = sidecars.iter().map(|(_,meta)|meta).find(|meta|text(meta,"key") == Some(target.key.as_str()));
             match raw.map(|meta|candidate(meta,home)) {
                 // Renomeada, app-server ressubido ou troca de modo em curso: esta vida acaba sem matar nada,
@@ -487,12 +492,12 @@ impl Watcher {
                 }
             }
         }
-        for meta in sidecars.iter().map(|(_,meta)|meta) {
+        for (meta,candidate) in sidecars.iter().map(|(_,meta)|meta).zip(candidates) {
             if let (Some(name),Some(transfer)) = (text(meta,"name"),text(meta,"transfer_id"))
                 && let Err(error) = transfer_state(home,transfer) && crate::warn_limit::allow(Some(name),&error.code) {
                 tracing::warn!(session=%name,code=%error.code,reason=%error.message,"Codex com terminal não adotado");
             }
-            let Some(c) = candidate(meta,home) else { continue };
+            let Some(c) = candidate else { continue };
             // Entrada com terminal de outra vida (o Claude que saiu deste nome) não reserva o nome para o Codex.
             if let Err(error) = self.retire_other_life(registry,&c.name).await && crate::warn_limit::allow(Some(&c.name),&error.code) {
                 tracing::warn!(session=%c.name,code=%error.code,"entrada de outra vida não saiu; o Codex espera");

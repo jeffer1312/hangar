@@ -49,7 +49,6 @@ pub struct Memory {
     #[serde(default)] pub last_idle: BTreeMap<String, f64>,
     #[serde(default)] pub stalled: BTreeSet<String>,
     #[serde(default)] pub limited: BTreeSet<String>,
-    #[serde(default)] pub dead: BTreeSet<String>,
     /// Vivas na varredura anterior desta execução: nome → chave da conversa. Fica fora do disco: quem
     /// não voltou depois do reinício (reboot, restauração em curso) não vira "caiu" em massa.
     #[serde(skip)] pub seen: BTreeMap<String, Option<String>>,
@@ -73,10 +72,6 @@ impl Memory {
         })
     }
 
-    fn save(&self, path: &Path) -> std::io::Result<()> {
-        std::fs::create_dir_all(path.parent().ok_or_else(|| std::io::Error::other("pasta ausente"))?)?;
-        crate::runtime::queue::atomic_write(path, &serde_json::to_vec(self)?)
-    }
 
     /// "working": só o primeiro turno da série grava; parada longa antes dele abre série nova.
     pub fn working(&mut self, sid: &str, ts: f64) {
@@ -89,17 +84,14 @@ impl Memory {
 
     /// Uma varredura da lista: o que avisar (nome, aviso) e o que liberar.
     pub fn sweep(&mut self, rows: &[SweepRow], notify_dead: bool) -> Vec<(String, Notice)> {
-        let (mut out, mut dead_sids, mut dead_names) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut out, mut dead_sids) = (Vec::new(), Vec::new());
         let now_live: BTreeMap<String, Option<String>> = rows.iter().map(|(n, k, _, _)| (n.clone(), k.clone())).collect();
         for (name, sid) in &self.seen {
-            if now_live.contains_key(name) || self.dead.contains(name) { continue; }
+            if now_live.contains_key(name) { continue; }
             if notify_dead { out.push((name.clone(), Notice::Dead)); }
             if let Some(sid) = sid { dead_sids.push(sid.clone()); }
-            dead_names.push(name.clone());
         }
         for sid in dead_sids { self.forget(&sid); }
-        self.dead.extend(dead_names);
-        self.dead.retain(|n| !now_live.contains_key(n));
         self.seen = now_live;
         let stalled: BTreeSet<String> = rows.iter().filter(|r| r.2).map(|r| r.0.clone()).collect();
         out.extend(stalled.difference(&self.stalled).map(|n| (n.clone(), Notice::Stalled)));
@@ -109,6 +101,15 @@ impl Memory {
         self.limited = limited.into_keys().collect();
         out
     }
+}
+
+/// Grava a memória serializada se ela mudou desde a última gravação (`saved`). `Ok(true)` = gravou.
+fn save_changed(path: &Path, saved: &mut Option<Vec<u8>>, bytes: Vec<u8>) -> std::io::Result<bool> {
+    if saved.as_deref() == Some(bytes.as_slice()) { return Ok(false); }
+    std::fs::create_dir_all(path.parent().ok_or_else(|| std::io::Error::other("pasta ausente"))?)?;
+    crate::runtime::queue::atomic_write(path, &bytes)?;
+    *saved = Some(bytes);
+    Ok(true)
 }
 
 /// Valor efetivo de um campo do `runtime_config`: o arquivo vence o ambiente, que vence o padrão.
@@ -290,6 +291,8 @@ struct Watch {
     hooks: Mutex<HookStates>,
     memory: Mutex<Memory>,
     memory_path: PathBuf,
+    /// Bytes da última gravação da memória: igual a eles, o arquivo não é reescrito.
+    saved: Mutex<Option<Vec<u8>>>,
 }
 
 async fn resolve_row<F, Fut>(mut lookup: F, fresh: bool) -> Option<hangar_api::session::SessionRow>
@@ -313,8 +316,15 @@ impl Watch {
     }
 
     fn persist(&self) {
-        let saved = self.memory.lock().unwrap_or_else(|e| e.into_inner()).save(&self.memory_path);
-        if saved.is_err() { self.st.diag.report("rust.push_memory_unwritable", "push", "push_memory_unwritable", "memória dos avisos não gravou"); }
+        // A trava da última gravação põe as escritas na ordem em que a memória foi lida; a da memória
+        // já está solta quando o disco é tocado.
+        let mut saved = self.saved.lock().unwrap_or_else(|e| e.into_inner());
+        let bytes = serde_json::to_vec(&*self.memory.lock().unwrap_or_else(|e| e.into_inner()));
+        let write = || bytes.map_err(std::io::Error::from).and_then(|bytes| save_changed(&self.memory_path, &mut saved, bytes));
+        let multi = tokio::runtime::Handle::try_current().is_ok_and(|runtime| runtime.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread);
+        // O worker passa as outras tarefas adiante antes do fsync.
+        let stored = if multi { tokio::task::block_in_place(write) } else { write() };
+        if stored.is_err() { self.st.diag.report("rust.push_memory_unwritable", "push", "push_memory_unwritable", "memória dos avisos não gravou"); }
     }
 
     fn state_of(&self, sid: &str) -> Option<crate::list::facts_files::Marker> {
@@ -549,7 +559,7 @@ pub fn start(st: Arc<AppState>) -> Vec<tokio::task::JoinHandle<()>> {
     };
     let memory_path = Memory::path(&st.accounts.env.home);
     let w = Arc::new(Watch { #[cfg(test)] finish_source: None, sender, config, frozen, memory: Mutex::new(Memory::load(&memory_path)),
-        memory_path, hooks: Mutex::new(HookStates::default()), st });
+        memory_path, saved: Mutex::default(), hooks: Mutex::new(HookStates::default()), st });
     vec![tokio::spawn(w.clone().transitions()), tokio::spawn(w.sweep())]
 }
 

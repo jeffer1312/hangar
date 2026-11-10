@@ -684,7 +684,10 @@ impl ListBridge {
         // Um ator lento não soma o prazo dele ao dos fatos.
         let runtime = async { match self.runtime.get() { Some(r) => Some(r.snapshots().await), None => None } };
         let (program, kids) = (self.env.capture_program.clone(), children.clone());
-        let shortcuts = self.shortcuts.round(move || async move { local_shortcuts::list_all(&program, &kids).await });
+        // Os panes desta rodada já dizem se existe sessão de atalho. No Windows a leitura direta do psmux
+        // não foi conferida para isso, e lá o `list-sessions` segue a cada rodada.
+        let present = cfg!(windows) || panes.iter().any(|pane| pane.session.starts_with(local_shortcuts::PREFIX));
+        let shortcuts = self.shortcuts.round(move || async move { local_shortcuts::list_all(&program, &kids, present).await });
         let (runtime, plugins) = tokio::join!(runtime, self.plugin_facts(&rows));
         let (facts_ok, facts_fresh) = (fetched.ok, fetched.fresh);
         let states = fetched.states;
