@@ -39,7 +39,10 @@ impl Sink {
     pub fn hold(&self, name: &str, wait: Duration) { self.0.lock().unwrap().hold.insert(name.into(), wait); }
 
     /// Abre `name` no registro como Claude sem terminal, ligado a um cano falso desta sessão.
-    pub async fn open(&self, registry: &RuntimeRegistry, dir: &Path, name: &str) {
+    pub async fn open(&self, registry: &Arc<RuntimeRegistry>, dir: &Path, name: &str) {
+        // Com o registro ligado, recado `[de: …]`/`[painel: …]` sem socket nativo cai no cano, como num
+        // Claude sem o canal de mensagens.
+        registry.bind_lifecycle();
         registry.open(RuntimeTarget { key: format!("k-{name}"), generation: 1, name: name.into(), provider: "claude".into(),
             metadata: json!({"name": name, "headless": true, "session_id": "sid-1", "initialized": true}),
             binding: CanoBinding { pid: 42, escuta: self.cano(name).await, token: "secret-test".into(), versao: 2 },

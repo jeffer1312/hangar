@@ -80,8 +80,11 @@ pub async fn machine(root: &Path, id: &str) -> Machine {
     // Cada sessão da lista é um Claude sem terminal do Rust: os recados chegam ao cano falso dela.
     let runtime = Arc::new(crate::sink::registry().await.with_diagnostics(python.diagnostics()));
     let sink = crate::sink::Sink::default();
-    std::fs::create_dir_all(root.join("rt")).unwrap();
-    for name in NAMES { sink.open(&runtime, &root.join("rt"), name).await; }
+    // Uma pasta por máquina montada: a mesma raiz reaberta com outro id tem outras travas de fila.
+    static OPENED: AtomicUsize = AtomicUsize::new(0);
+    let rt = root.join(format!("rt-{}", OPENED.fetch_add(1, Ordering::SeqCst)));
+    std::fs::create_dir_all(&rt).unwrap();
+    for name in NAMES { sink.open(&runtime, &rt, name).await; }
     assert!(state.state.runtime.set(runtime.clone()).is_ok());
     let state = Arc::new(state);
     let addr = serve(router(state.clone())).await;
