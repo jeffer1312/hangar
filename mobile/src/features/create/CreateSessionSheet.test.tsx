@@ -443,7 +443,7 @@ describe('CreateSessionSheet Codex', () => {
     calls.defaults.mockResolvedValue({ model: 'opus', effort: 'high', permission: 'bypassPermissions' });
     const { container, root } = await renderSheet(false, false);
     try {
-      expect(button(container, 'composer_session_settings')?.textContent).toContain('Opus');
+      expect(button(container, 'composer_session_settings')?.getAttribute('aria-valuetext')).toContain('Opus');
       await openOptions(container);
       await act(async () => button(container, 'bypassPermissions')!.click());
       await act(async () => button(container, 'manual')!.click());
@@ -660,7 +660,7 @@ describe('CreateSessionSheet Codex', () => {
     calls.models.mockResolvedValue({ kind: 'codex', reduced: false, models: [{ id: 'sol', name: 'Sol', efforts: ['low', 'high'] }] });
     const { container, root } = await renderSheet(false, false);
     try {
-      expect(button(container, 'composer_session_settings')!.textContent).toContain('Sol high');
+      expect(button(container, 'composer_session_settings')!.getAttribute('aria-valuetext')).toContain('Sol, high');
       await appState('background');
       await appState('active');
       await send(container);
@@ -1084,7 +1084,7 @@ describe('CreateSessionSheet Codex', () => {
     await act(async () => configs.resolve([{ path: '/late-claude', label: 'Conta tardia', active: true }]));
     expect(calls.models.mock.calls.filter((call) => call[1] === 'codex')).toHaveLength(codexReads);
     expect(container.querySelector('[role="switch"][aria-label="native_ctl_fast"]')!.getAttribute('aria-checked')).toBe('true');
-    expect(button(container, 'composer_session_settings')!.textContent).toContain('Sol high');
+    expect(button(container, 'composer_session_settings')!.getAttribute('aria-valuetext')).toContain('Sol, high');
     await send(container);
     expect(calls.create).toHaveBeenCalledExactlyOnceWith(server, expect.objectContaining({
       provider: 'codex', model: 'sol', effort: 'high', service_tier: 'priority', codex_account: 'work',
@@ -1196,7 +1196,7 @@ describe('CreateSessionSheet Codex', () => {
     const fast = container.querySelector<HTMLButtonElement>('[role="switch"][aria-label="native_ctl_fast"]');
     expect(fast).not.toBeNull();
     await act(async () => fast!.click());
-    expect(button(container, 'composer_session_settings')!.textContent).toBe('Sol · 272K high · native_ctl_fast');
+    expect(button(container, 'composer_session_settings')!.getAttribute('aria-valuetext')).toBe('Sol · 272K, high, native_ctl_fast');
     expect(calls.create).not.toHaveBeenCalled();
     expect(calls.send).not.toHaveBeenCalled();
     expect(calls.mutate).not.toHaveBeenCalled();
@@ -1420,7 +1420,7 @@ describe('CreateSessionSheet Codex', () => {
     calls.providers.mockResolvedValue({ [provider]: { disponivel: true, default: true } });
     calls.models.mockResolvedValue({ kind: provider, reduced: false, models, default: catalogDefault });
     const { container, root } = await renderSheet(false, false);
-    expect(button(container, 'composer_session_settings')!.textContent).toBe(label);
+    expect(button(container, 'composer_session_settings')!.getAttribute('aria-valuetext')).toBe(label);
     await send(container);
     expect(calls.create.mock.calls[0][1].model).toBeNull();
     expect(calls.create.mock.calls[0][1]).not.toHaveProperty('service_tier');
@@ -1488,7 +1488,7 @@ describe('CreateSessionSheet Codex', () => {
     await act(async () => button(container, 'reasoning_level_high')!.click());
     await closePanel(container, 'composer_session_settings');
     expect(button(container, 'native_new_chat_folder: child')).toBeTruthy();
-    expect(button(container, 'composer_session_settings')!.textContent).toBe('Sol high');
+    expect(button(container, 'composer_session_settings')!.getAttribute('aria-valuetext')).toBe('Sol, high');
     expect((container.querySelector('textarea[aria-label="nova_conversa_placeholder"]') as HTMLTextAreaElement).value).toBe('primeira mensagem');
     await act(async () => button(container, 'nova_conversa_enviar')!.click());
     for (let i = 0; i < 4; i++) await act(async () => Promise.resolve());

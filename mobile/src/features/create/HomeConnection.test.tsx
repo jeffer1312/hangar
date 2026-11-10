@@ -18,8 +18,9 @@ vi.mock('react-native', async (original) => {
   };
   return {
     ...native, View: view, Text: view, ScrollView: view,
-    Pressable: ({ children, accessibilityLabel, onPress, disabled }: { children?: ReactNode; accessibilityLabel?: string; onPress?: () => void; disabled?: boolean }) =>
-      React.createElement('button', { 'aria-label': accessibilityLabel, onClick: onPress, disabled }, children),
+    Pressable: ({ children, accessibilityLabel, accessibilityValue, onPress, disabled }: {
+      children?: ReactNode; accessibilityLabel?: string; accessibilityValue?: { text?: string }; onPress?: () => void; disabled?: boolean;
+    }) => React.createElement('button', { 'aria-label': accessibilityLabel, 'aria-valuetext': accessibilityValue?.text, onClick: onPress, disabled }, children),
     TextInput: ({ value, accessibilityLabel, onChangeText, ref, editable, onFocus, onBlur }: {
       value?: string; accessibilityLabel?: string; onChangeText?: (value: string) => void;
       ref?: React.Ref<HTMLTextAreaElement>; editable?: boolean; onFocus?: () => void; onBlur?: () => void;
@@ -257,7 +258,7 @@ it('Home real carrega criação na primeira abertura e conserva escolhas ao alte
   expect(button('Máquina: fixture-healthy')).toBeTruthy();
   expect(button('Pasta: project')).toBeTruthy();
   expect(button('Conta Claude: Conta fixture')).toBeTruthy();
-  expect(button('Modelo, nível e permissão')?.textContent).toBe('Modelo fixture B');
+  expect(button('Modelo, nível e permissão')?.getAttribute('aria-valuetext')).toBe('Modelo fixture B');
   expect(button('Enviar')?.disabled).toBe(false);
   console.info('criacao-reaberta', { count: creationCalls().length, endpoints: creationCalls() });
   expect(creationCalls()).toEqual(loaded);

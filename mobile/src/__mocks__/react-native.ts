@@ -12,6 +12,8 @@ function domProps(props: any) {
     ...(accessibilityLabel ? { 'aria-label': accessibilityLabel } : {}),
     // Como o leitor de tela recebe o `checked` do `accessibilityState` no aparelho.
     ...(accessibilityState?.checked !== undefined ? { 'aria-checked': String(accessibilityState.checked) } : {}),
+    // O valor falado do controle: é onde fica o que o desenho mostra só como ícone.
+    ...(props.accessibilityValue?.text ? { 'aria-valuetext': props.accessibilityValue.text } : {}),
     ...(onPress ? { onClick: onPress } : {}),
   };
 }
