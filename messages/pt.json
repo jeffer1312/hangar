@@ -10146,6 +10146,8 @@
   "news_auto_report_sample_machine": "escritorio",
   "news_auto_report_sample_step": "Reiniciando",
   "news_auto_report_sample_error": "a versão nova não respondeu",
+  "news_plugins_sample_caveman": "Talk like caveman. Cut filler.",
+  "news_plugins_sample_humanizer": "Remove signs of AI-generated writing.",
   "native_git_elsewhere_closed_failed": "{pasta} foi fechada, mas a troca de branch falhou: {motivo}",
   "news_branch_sample_main": "main",
   "news_branch_sample_work": "nova-tela",

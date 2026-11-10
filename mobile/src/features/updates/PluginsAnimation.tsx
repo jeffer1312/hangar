@@ -27,9 +27,9 @@ function samplePlugins(): InstalledPlugin[] {
   const base = { update_known: true, notes: [] };
   return [
     { ...base, id: 'caveman@caveman', name: 'caveman', marketplace: 'caveman', version: '4.1.0', enabled: true,
-      last_updated: new Date(Date.now() - 12 * day).toISOString(), available_version: '4.2.0', description: 'Talk like caveman. Cut filler.' },
+      last_updated: new Date(Date.now() - 12 * day).toISOString(), available_version: '4.2.0', description: m.news_plugins_sample_caveman() },
     { ...base, id: 'humanizer@humanizer', name: 'humanizer', marketplace: 'humanizer', version: '3.1.0', enabled: false,
-      last_updated: new Date(Date.now() - 3 * day).toISOString(), available_version: null, description: 'Write like a person, not a template.' },
+      last_updated: new Date(Date.now() - 3 * day).toISOString(), available_version: null, description: m.news_plugins_sample_humanizer() },
   ];
 }
 
