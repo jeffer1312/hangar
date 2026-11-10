@@ -685,8 +685,10 @@ impl ListBridge {
         let runtime = async { match self.runtime.get() { Some(r) => Some(r.snapshots().await), None => None } };
         let (program, kids) = (self.env.capture_program.clone(), children.clone());
         // Os panes desta rodada já dizem se existe sessão de atalho. No Windows a leitura direta do psmux
-        // não foi conferida para isso, e lá o `list-sessions` segue a cada rodada.
-        let present = cfg!(windows) || panes.iter().any(|pane| pane.session.starts_with(local_shortcuts::PREFIX));
+        // não foi conferida para isso, e lá o `list-sessions` segue a cada rodada. Com atalho na última
+        // lista a leitura continua: só ela confirma que o último saiu.
+        let listed = lock(&self.local).shortcuts.as_deref().is_some_and(|last| last != "[]");
+        let present = cfg!(windows) || listed || panes.iter().any(|pane| pane.session.starts_with(local_shortcuts::PREFIX));
         let shortcuts = self.shortcuts.round(move || async move { local_shortcuts::list_all(&program, &kids, present).await });
         let (runtime, plugins) = tokio::join!(runtime, self.plugin_facts(&rows));
         let (facts_ok, facts_fresh) = (fetched.ok, fetched.fresh);
