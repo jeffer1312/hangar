@@ -785,7 +785,7 @@ impl Hangar {
                                     tr("update_done").replace("{version}", &parse_version(&value).version)
                                 };
                                 self.finish_update(ok, message, cx);
-                                if ok { crate::update::confirm::show_pending(false, window, cx); }
+                                if ok { crate::update::confirm::show_pending(false, cx); }
                             }
                             _ => {}
                         }

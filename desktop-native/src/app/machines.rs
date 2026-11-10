@@ -1299,7 +1299,7 @@ impl Hangar {
                 // A atualização também troca de modo quando o aceite do aviso da migração a lançou.
                 self.load_dev_mode(cx);
                 self.sync_updater(cx);
-                if done { crate::update::confirm::show_pending(false, window, cx); }
+                if done { crate::update::confirm::show_pending(false, cx); }
             }
             MachinesReply::Peers(seq, result) => {
                 let parsed = result.map_err(|e| Self::failure(&e)).and_then(|v| parse_peers(&v).ok_or_else(|| tr("invalid_response")));

@@ -1092,8 +1092,8 @@ impl Hangar {
                 }
             }).detach();
         }
-        // "O que chegou para você" depois de o app ser trocado pela atualização.
-        cx.defer_in(window, |_, window, cx| crate::update::confirm::show_pending(true, window, cx));
+        // "O que chegou para você": o que o servidor desta máquina recebeu desde a última vez deste aparelho.
+        crate::update::confirm::show_pending(true, cx);
         // Só para ver e fotografar no build de debug: HANGAR_NATIVE_PREVIEW=update-confirm, whats-new ou o nome de uma
         // animação das novidades. Espera a subida para abrir por cima do diálogo de primeira execução de um perfil vazio.
         #[cfg(debug_assertions)]
