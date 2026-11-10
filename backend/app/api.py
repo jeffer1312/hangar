@@ -1590,11 +1590,10 @@ async def kill_session(name: str, by: str | None = None, request: Request = None
     # Marca do Rust: ele já encerrou o Codex com terminal dele (e o grupo); aqui só as lojas daqui.
     marked = lambda h: bool(request and internal_api._secret) and secrets.compare_digest(request.headers.get(h, "").encode(), internal_api._secret.encode())
     closed = marked("x-hangar-rust-closed")
-    bridged = None
     # Fechamento que não passou pelo Rust (Connect, convidado) e o do Claude pelo Connect, que o Rust
     # encerrou sem sair do grupo: a saída vai pela ponte, com a fase do `orq` lida aqui antes, para o
     # Rust não perguntar de volta.
-    skip_leave = closed and bridged is None
+    skip_leave = closed
     # Sem sidecar não há grupo a deixar: a ponte nem é chamada. Ilegível não é ausente: sai pela ponte.
     sidecar = "absent" if skip_leave else await asyncio.to_thread(_sidecar_state, name)
     if sidecar == "unreadable":
@@ -1605,7 +1604,7 @@ async def kill_session(name: str, by: str | None = None, request: Request = None
     orphan = grouped and phases is None
     # Fechada pelo Rust a sessão já saiu da lista: o transcript vem no cabeçalho ou na resposta dele.
     if closed:
-        jsonl = bridged or urllib.parse.unquote(request.headers.get("x-hangar-closed-transcript", "")) or None
+        jsonl = urllib.parse.unquote(request.headers.get("x-hangar-closed-transcript", "")) or None
     else:
         jsonl = await asyncio.to_thread(_jsonl_of_session, name)
     try:
