@@ -36,7 +36,7 @@ vi.mock('react-native-keyboard-controller', () => ({ KeyboardAvoidingView: ({ ch
 vi.mock('../../ui/Sheet', () => ({ Sheet: ({ children }: { children: React.ReactNode }) => children }));
 import { UpdateConfirmSheet } from './UpdateConfirmSheet';
 import { WhatsNewSheet } from './WhatsNewSheet';
-import { loadArrivedNews, takeClickNews, type ConfirmRequest } from './pending';
+import { loadArrivedNews, type ConfirmRequest } from './pending';
 import * as m from '../../paraglide/messages';
 
 const server = { id: 'srv', label: 'fixture-machine', baseUrl: 'https://notes.test', token: 'fixture-token' };
@@ -87,8 +87,6 @@ describe('folha "Atualizar?"', () => {
     await act(async () => update.click());
     expect(request.resolve).toHaveBeenCalledWith(true, { srv: { ids: ['w1'] } });
     expect(onClose).toHaveBeenCalled();
-    const saved = takeClickNews(server.id);
-    expect([...saved?.cards ?? [], ...saved?.fixes ?? []].map((n) => n.id)).toEqual(['n1', 'f1']);
   });
 
   it('falha ao ler os avisos mostra uma linha e deixa atualizar', async () => {
@@ -192,7 +190,8 @@ describe('folha "Atualizar?"', () => {
     mocks.fetch.mockReset();
     mocks.fetch.mockImplementation(async () => json({}, 404));
     expect(await loadArrivedNews(server)).toBe(false);
-    expect(await loadArrivedNews(server, { cards: [notes.news[0]], fixes: [] })).toBe(true);
+    mocks.fetch.mockImplementation(async () => json({}, 405));
+    expect(await loadArrivedNews(server)).toBe(false);
     expect(seenCalls()).toEqual([]);
   });
 

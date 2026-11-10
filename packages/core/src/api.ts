@@ -2680,9 +2680,15 @@ export async function getUpdateNotesEm(s: Server | null, fetcher?: typeof fetch)
   }
 }
 
-/** Novidades das atualizações que este aparelho ainda não viu; `through` é o que marcar visto. */
-export function getArrivedNews(s: Server, device: string, fetcher?: typeof fetch): Promise<{ news: UpdateNews[]; through: number }> {
-  return apiFetchForServer(s, `/api/update/arrived?device=${encodeURIComponent(device)}`, undefined, 20000, true, fetcher);
+/** Novidades das atualizações que este aparelho ainda não viu; `through` é o que marcar visto.
+ *  Servidor sem a rota (404/405): `null`. */
+export async function getArrivedNews(s: Server, device: string, fetcher?: typeof fetch): Promise<{ news: UpdateNews[]; through: number } | null> {
+  try {
+    return await apiFetchForServer(s, `/api/update/arrived?device=${encodeURIComponent(device)}`, undefined, 20000, true, fetcher);
+  } catch (e) {
+    if (isMissingRoute(e)) return null;
+    throw e;
+  }
 }
 
 /** Marca visto até `through`; o servidor nunca recua o cursor e devolve o que ficou. */

@@ -29,21 +29,11 @@ export function dropLegacyPendingNews(): void {
 }
 
 export type ShownNews = { cards: UpdateNews[]; fixes: UpdateNews[]; server?: Server; through?: number };
-type News = Pick<ShownNews, 'cards' | 'fixes'>;
 
 // A rota da folha só recebe o id do servidor: a lista fica aqui até ela abrir.
 const shown = new Map<string, ShownNews>();
 // `servidor:through` já oferecido nesta abertura do app: abrir, voltar ao primeiro plano e o fim do clique não repetem a folha.
 const offered = new Set<string>();
-// O que a folha "Atualizar?" mostrou, só em memória: vale quando o servidor ainda não tem a rota das chegadas.
-const clicked = new Map<string, News>();
-
-export function rememberClickNews(serverId: string, news: News): void { clicked.set(serverId, news); }
-export function takeClickNews(serverId: string): News | undefined {
-  const news = clicked.get(serverId);
-  clicked.delete(serverId);
-  return news;
-}
 
 function markSeen(server: Server, through: number): void {
   markArrivedSeen(server, updateDeviceId(), through).catch((e: unknown) => {
@@ -51,23 +41,16 @@ function markSeen(server: Server, through: number): void {
   });
 }
 
-const hasNews = (news: News) => news.cards.length > 0 || news.fixes.length > 0;
-
-/**
- * Lê o que chegou para este aparelho. `true` = há o que mostrar, e quem chamou abre `whatsNewHref`.
- * `fallback`: o que o clique já leu, mostrado só quando o servidor não tem a rota (404/405).
- */
-export async function loadArrivedNews(server: Server, fallback?: News): Promise<boolean> {
-  let arrived: { news: UpdateNews[]; through: number };
+/** Lê o que chegou para este aparelho. `true` = há o que mostrar, e quem chamou abre `whatsNewHref`. */
+export async function loadArrivedNews(server: Server): Promise<boolean> {
+  let arrived: { news: UpdateNews[]; through: number } | null;
   try { arrived = await getArrivedNews(server, updateDeviceId()); }
   catch (e) {
-    const status = (e as { status?: unknown } | null)?.status;
-    if (status === 404 || status === 405) {
-      if (fallback && hasNews(fallback)) { shown.set(server.id, fallback); return true; }
-      registrarDiag({ evento: 'update.arrived_absent', nivel: 'ok', codigo: 'update_arrived_absent' });
-      return false;
-    }
     registrarDiag({ evento: 'update.arrived_failed', nivel: 'aviso', codigo: 'update_arrived_failed', detalhe: e instanceof Error ? e.message : String(e) });
+    return false;
+  }
+  if (arrived === null) {
+    registrarDiag({ evento: 'update.arrived_absent', nivel: 'ok', codigo: 'update_arrived_absent' });
     return false;
   }
   if (!Array.isArray(arrived?.news) || !Number.isSafeInteger(arrived.through)) {

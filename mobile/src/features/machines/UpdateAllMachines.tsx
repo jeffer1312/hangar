@@ -11,7 +11,7 @@ import { MachineRow } from './MachineRows';
 import { haptic } from '../../ui/haptics';
 import { useRouter } from 'expo-router';
 import { useServers } from '../../stores/servers';
-import { loadArrivedNews, requestUpdateConfirm, takeClickNews, whatsNewHref } from '../updates/pending';
+import { loadArrivedNews, requestUpdateConfirm, whatsNewHref } from '../updates/pending';
 import * as m from '../../paraglide/messages';
 
 function statusText(value: UpdateAllState): string {
@@ -71,7 +71,6 @@ export function UpdateAllMachines({ servers, compact = false }: { servers: reado
     // Quem não mostrou os avisos fica fora da rodada: atualizá-la passaria por cima do aceite.
     const targets = (await prepared).run.map((entry) => entry.server);
     // A folha já trava o Atualizar sem máquina para rodar; isto só cobre a corrida.
-    const clicked = takeClickNews(notesServer.id);
     if (!targets.length) return;
     setOpen(true);
     if (round.busy) return;
@@ -90,7 +89,7 @@ export function UpdateAllMachines({ servers, compact = false }: { servers: reado
       else haptic.success();
       const done = results.find((row) => row.server.id === notesServer.id);
       // Abre ao fechar a folha de resultados: por cima dela, no iOS, ficaria escondida e a lista se perderia.
-      if (done && (done.state.status === 'atualizado' || done.state.status === 'atualizado_manual')) void loadArrivedNews(notesServer, clicked).then((show) => {
+      if (done && (done.state.status === 'atualizado' || done.state.status === 'atualizado_manual')) void loadArrivedNews(notesServer).then((show) => {
         if (!show) return;
         if (openRef.current) newsAfterClose.current = notesServer.id;
         else router.push(whatsNewHref(notesServer.id));

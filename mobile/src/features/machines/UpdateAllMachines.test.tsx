@@ -44,7 +44,7 @@ beforeEach(() => {
   mocks.updateAll.mockReset(); mocks.notification.mockReset(); mocks.notification.mockResolvedValue(undefined);
   mocks.push.mockReset(); mocks.confirm = true; mocks.accept = undefined; mocks.store.clear();
   mocks.prepare.mockReset();
-  mocks.arrived.mockReset(); mocks.arrived.mockRejectedValue(Object.assign(new Error('404: fixture'), { status: 404 }));
+  mocks.arrived.mockReset(); mocks.arrived.mockResolvedValue(null);
   mocks.seen.mockReset(); mocks.seen.mockResolvedValue({ through: 0 });
   mocks.prepare.mockImplementation(async (servers: Server[]) => ({ run: servers.map((server) => ({ server, notes: null })), failed: [] }));
   el = document.createElement('div'); document.body.appendChild(el); root = createRoot(el);

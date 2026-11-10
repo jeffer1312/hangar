@@ -67,12 +67,10 @@ fn package_news(current: &Path, previous: &Path) -> io::Result<Vec<Value>> {
 }
 
 async fn checkout(home: &Path, root: &Path) -> io::Result<()> {
-    let git = |args: &'static [&'static str]| async move {
-        crate::update_notes::git(root, args).await.map(|out| out.trim().to_owned())
-            .map_err(|()| io::Error::other(format!("git {} falhou em {}", args.join(" "), root.display())))
-    };
-    let repo = PathBuf::from(git(&["rev-parse", "--show-toplevel"]).await?);
-    let head = git(&["rev-parse", "HEAD"]).await?;
+    let failed = || io::Error::other(format!("git rev-parse --show-toplevel HEAD falhou em {}", root.display()));
+    let out = crate::update_notes::git(root, &["rev-parse", "--show-toplevel", "HEAD"]).await.map_err(|()| failed())?;
+    let mut lines = out.lines().map(str::trim);
+    let (Some(repo), Some(head)) = (lines.next().map(PathBuf::from), lines.next().map(str::to_owned)) else { return Err(failed()) };
     let known = blocking(home, hangar_update_news::known_version).await?;
     if known.as_deref() == Some(head.as_str()) { return Ok(()); }
     let news = match known.as_deref() {
@@ -94,9 +92,7 @@ async fn blocking<T: Send + 'static>(home: &Path, work: impl FnOnce(&Path) -> io
 /// `GET /api/update/arrived?device=<id>`: o que o aparelho ainda não viu. Aparelho novo é gravado no
 /// ponto atual, por isso o convidado é recusado antes.
 pub async fn unseen(State(state): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, request: Request) -> Response {
-    if !(match gate(&state, peer, &request).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) }).1 {
-        return owner_only();
-    }
+    if let Err(refused) = owner_gate(&state, peer, &request).await { return refused; }
     let device = Query::<HashMap<String, String>>::try_from_uri(request.uri()).ok()
         .and_then(|Query(mut query)| query.remove("device")).filter(|device| hangar_update_news::valid_device(device));
     let Some(device) = device else { return bad_device() };
@@ -111,9 +107,7 @@ struct Seen { device: String, through: u64 }
 
 /// `POST /api/update/arrived/seen` com `{device, through}`: o cursor do aparelho avança, nunca volta.
 pub async fn seen(State(state): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, request: Request) -> Response {
-    if !(match gate(&state, peer, &request).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) }).1 {
-        return owner_only();
-    }
+    if let Err(refused) = owner_gate(&state, peer, &request).await { return refused; }
     let body = to_bytes(request.into_body(), 4 * 1024).await.ok()
         .and_then(|raw| serde_json::from_slice::<Seen>(&raw).ok()).filter(|body| hangar_update_news::valid_device(&body.device));
     let Some(Seen { device, through }) = body else { return bad_device() };
@@ -127,6 +121,19 @@ pub async fn seen(State(state): State<Arc<AppState>>, ConnectInfo(peer): Connect
 fn by_kind(news: Vec<Value>) -> Vec<Value> {
     let rank = |item: &Value| match item["kind"].as_str() { Some("new") => 0, Some("improvement") => 1, _ => 2 };
     crate::update_notes::order_news(news.into_iter().map(|item| (rank(&item), item["id"].as_str().unwrap_or_default().to_owned(), item)).collect())
+}
+
+/// Só o dono: o convidado recebe o código desta rota, não o genérico do `routes::owner_gate`.
+/// Sem `async fn`: o `&Request` atravessando o `await` tiraria o `Send` do handler.
+fn owner_gate(state: &AppState, peer: SocketAddr, request: &Request) -> impl Future<Output = Result<(), Response>> + Send + use<> {
+    let admission = gate(state, peer, request);
+    async move {
+        match admission.await {
+            Ok((_, true)) => Ok(()),
+            Ok(_) => Err(owner_only()),
+            Err(error) => Err(crate::auth::unavailable(error)),
+        }
+    }
 }
 
 fn owner_only() -> Response {

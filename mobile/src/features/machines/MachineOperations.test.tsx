@@ -15,7 +15,7 @@ vi.mock('react-native-keyboard-controller', () => ({ KeyboardAvoidingView: ({ ch
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../../ui/Sheet', () => ({ Sheet: ({ children }: { children: React.ReactNode }) => children }));
 import { MachineOperations } from './MachineOperations';
-import { currentConfirmRequest, markShownNews, peekShownNews, rememberClickNews, takeClickNews, whatsNewHref } from '../updates/pending';
+import { currentConfirmRequest, markShownNews, peekShownNews, whatsNewHref } from '../updates/pending';
 import * as m from '../../paraglide/messages';
 const server = { id: 'ops-b', label: 'fixture-operations', baseUrl: 'https://operations.test', token: 'secret-b' };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
@@ -92,10 +92,8 @@ describe('operações da máquina explícita', () => {
       ? refuse ? json({ detail: 'fixture-refused' }, 500) : json({ ok: true, started: false })
       : json({ atualizacao_disponivel: false, pending_warning: true, versoes: { repo: 'a', backend: 'a' }, estado: {} }));
     await render(); await click(m.mobile_machines_update());
-    rememberClickNews(server.id, { cards: [{ id: 'n1', title: 'fixture-news', kind: 'new', text: '', platforms: 'all', try_it: null, animation: null }], fixes: [] });
     await act(async () => { currentConfirmRequest()!.resolve(true, { [server.id]: { ids: ['mig'], mode: 'package' } }); });
     expect(postCalls().map(([url]) => url)).toEqual([`${server.baseUrl}/api/update/accept`]);
-    expect(takeClickNews(server.id)).toBeUndefined();
     expect(el.textContent).toContain(m.update_all_up_to_date());
     expect(el.textContent).not.toContain(m.mobile_machines_operation_ready());
     refuse = true; mocks.fetch.mockClear();
@@ -139,7 +137,6 @@ describe('operações da máquina explícita', () => {
     mocks.fetch.mockImplementation(async (url: string, init) => String(url).includes('/api/update/arrived') ? arrived()
       : init?.method === 'POST' ? json({ ok: true, pid: 77 }) : json({ estado: { pid: 77, fase: 'pronto', ok: true } }));
     await render(); await click(m.mobile_machines_update());
-    rememberClickNews(server.id, { cards: [card], fixes: [] });
     await act(async () => answerUpdate(true)()); await tick();
   };
 
@@ -151,11 +148,12 @@ describe('operações da máquina explícita', () => {
     markShownNews(server.id);
   });
 
-  it('servidor sem a rota (404) mostra o que a folha leu neste clique', async () => {
+  it('servidor sem a rota (404) não abre "O que chegou para você"', async () => {
     await finishUpdate(() => json({}, 404));
-    expect(mocks.push).toHaveBeenLastCalledWith(whatsNewHref(server.id));
-    expect(peekShownNews(server.id).cards.map((n) => n.id)).toEqual(['n1']);
-    markShownNews(server.id);
+    await vi.waitFor(() => expect(mocks.fetch.mock.calls.some(([url]) => String(url).includes('/api/update/arrived'))).toBe(true));
+    await tick();
+    expect(mocks.push).not.toHaveBeenCalledWith(whatsNewHref(server.id));
+    expect(peekShownNews(server.id).cards).toEqual([]);
   });
 
   it('chegada já oferecida nesta abertura não abre de novo', async () => {

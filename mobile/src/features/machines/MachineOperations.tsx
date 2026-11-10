@@ -5,7 +5,7 @@ import { MachineGroup, MachineRow } from './MachineRows';
 import { ensureActive, reason } from './api';
 import { Notice, styles, useMachineAction } from './parts';
 import { useRouter } from 'expo-router';
-import { loadArrivedNews, requestUpdateConfirm, takeClickNews, whatsNewHref, type UpdateAcceptances } from '../updates/pending';
+import { loadArrivedNews, requestUpdateConfirm, whatsNewHref, type UpdateAcceptances } from '../updates/pending';
 import * as m from '../../paraglide/messages';
 
 type Operation = 'restart' | 'update';
@@ -116,8 +116,7 @@ function OperationControls({ server }: { server: Server }) {
           };
           const started = await launch();
           ensureActive(signal);
-          // Aceite gravado e nada a instalar: as novidades guardadas pela folha não vão chegar.
-          if (started === null) { takeClickNews(server.id); return null; }
+          if (started === null) return null;
           if (started?.ok !== true || !Number.isSafeInteger(started.pid) || started.pid <= 0) throw new Error(m.mobile_machines_invalid_response());
           let state = await followOperation(server,
             (state) => operation === 'restart' ? matchesRestartResult(state, started) : state.pid === started.pid,
@@ -141,8 +140,7 @@ function OperationControls({ server }: { server: Server }) {
           return state;
         }, setResult, (state) => state ? m.mobile_machines_operation_ready() : m.update_all_up_to_date()).finally(() => {
           if (alive.current && confirmation.current === ticket) { confirmation.current = null; setAsking(false); }
-          const clicked = takeClickNews(server.id);
-          if (updated) void loadArrivedNews(server, clicked).then((show) => { if (show && alive.current) router.push(whatsNewHref(server.id)); });
+          if (updated) void loadArrivedNews(server).then((show) => { if (show && alive.current) router.push(whatsNewHref(server.id)); });
         });
     };
     if (operation === 'update') {

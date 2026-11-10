@@ -9,7 +9,7 @@ import { Icon } from '../../ui/Icon';
 import { haptic } from '../../ui/haptics';
 import { Notice } from '../machines/parts';
 import { NewsSections, PrimaryButton, SheetHeader, styles, useNewsTones, useSmallMarkdown } from './WhatsNewSheet';
-import { rememberClickNews, type ConfirmRequest, type UpdateAcceptances } from './pending';
+import { type ConfirmRequest, type UpdateAcceptances } from './pending';
 import * as m from '../../paraglide/messages';
 
 // `title` só no "Atualizar todas": os avisos vêm agrupados por máquina.
@@ -80,7 +80,6 @@ export function UpdateConfirmSheet({ request, onClose }: { request: ConfirmReque
   const confirm = () => {
     if (blocked) return;
     answered.current = true;
-    rememberClickNews(request.server.id, { cards: notes?.cards ?? [], fixes: notes?.fixes ?? [] });
     const accept: UpdateAcceptances = Object.fromEntries(groups.map(({ server, warnings, incomplete }) => [server.id, {
       ids: warnings.map((w) => w.id),
       ...(warnings.some((w) => w.choice === 'mode') ? { mode: modes[server.id] ?? 'package' } : {}),

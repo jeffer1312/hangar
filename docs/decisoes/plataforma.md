@@ -4368,6 +4368,6 @@ novidades veio vazia e "O que chegou para você" não abriu. A lista só existia
 registro e toda gravação um passo atrás. No checkout, a comparação é `from..HEAD`: depois do pull,
 `HEAD..alvo` sai vazio.
 
-**Limites:** servidor antigo responde 404 e o cliente não mostra nada (no clique, mostra o que o
-`/api/update/notes` daquele clique trouxe). Marcação de visto que falha na rede, seguida de reabertura,
+**Limites:** servidor antigo responde 404 e o cliente não mostra nada; depois de atualizar ele já roda a
+versão que tem a rota, por isso o clique não guarda reserva própria. Marcação de visto que falha na rede, seguida de reabertura,
 mostra o modal de novo. O nativo lê só o servidor local, como antes.

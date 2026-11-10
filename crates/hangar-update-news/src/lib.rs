@@ -61,14 +61,19 @@ pub fn known_version(home: &Path) -> io::Result<Option<String>> { Ok(read(&path(
 /// Id de aparelho inválido, arquivo ilegível ou falha ao gravar o aparelho novo.
 pub fn unseen(home: &Path, device: &str) -> io::Result<Unseen> {
     check(device)?;
-    let _lock = lock(home)?;
     let path = path(home);
+    // Leitura sem trava: a gravação troca o arquivo inteiro. Só o aparelho novo grava, e relê sob a trava.
     let mut store = read(&path)?;
-    let Some(cursor) = store.devices.get(device).map(|known| known.cursor) else {
-        store.devices.insert(device.to_owned(), Device { cursor: store.seq, at: now() });
-        write(&path, &mut store)?;
-        return Ok(Unseen { news: Vec::new(), through: store.seq });
-    };
+    if !store.devices.contains_key(device) {
+        let _lock = lock(home)?;
+        store = read(&path)?;
+        if !store.devices.contains_key(device) {
+            store.devices.insert(device.to_owned(), Device { cursor: store.seq, at: now() });
+            write(&path, &mut store)?;
+            return Ok(Unseen { news: Vec::new(), through: store.seq });
+        }
+    }
+    let cursor = store.devices[device].cursor;
     let mut ids = HashSet::new();
     let mut news = Vec::new();
     let mut through = cursor;
