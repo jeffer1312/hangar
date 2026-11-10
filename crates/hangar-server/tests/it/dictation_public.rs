@@ -208,6 +208,10 @@ async fn dictation_public_limits_and_slots_preserve_raw() {
     assert_eq!(body["text"], raw);
     assert_eq!(body["raw"], raw);
     assert_eq!(body["organization_code"], "dictation_text_too_large");
+    super::dictation_timing::configure(&server.state, &json!({"organization": {
+        "dictation_organization_mode":"external_api", "llm_api_key":"fixture",
+        "llm_base_url":"http://127.0.0.1:1"
+    }}));
     let slot = server
         .state
         .dictation_slots
