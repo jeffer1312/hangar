@@ -66,7 +66,7 @@ impl Hangar {
         let t = motion::SPLASH_OUT.ease(motion::SPLASH_OUT.raw(landing.start));
         if t >= 1. { return None; }
         let (top, bottom, ghost) = (landing.top, landing.bottom, landing.ghost.clone());
-        let (top_row, bottom_row) = ghost.update(cx, |view, cx| (view.render_top_pills(cx), view.render_bottom_pills(cx)));
+        let (top_row, bottom_row) = ghost.update(cx, |view, cx| (view.render_top_pills(None, cx), view.render_bottom_pills(cx)));
         let place = |bounds: Bounds<Pixels>, row: Div| div().absolute().left(bounds.origin.x).top(bounds.origin.y - px(LIFT * t))
             .w(bounds.size.width).h(bounds.size.height).opacity(1. - t).occlude().child(row);
         Some(div().absolute().inset_0()
