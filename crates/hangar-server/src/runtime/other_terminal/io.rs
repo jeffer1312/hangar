@@ -72,17 +72,9 @@ fn agent_in_pane(processes:&dyn crate::list::procs::ProcessView,target:&OtherTar
     if shell==target.agent_pid {return Ok(true);}
     let children=|max_age|processes.children(max_age).map_err(|_|failed("other_terminal_process_unreadable"));
     // O mapa guardado só confirma. A ausência sai da varredura nova: ele pode ser de antes de o agente nascer.
-    if !max_age.is_zero() && descends(&*children(max_age)?,shell,target.agent_pid) {return Ok(true);}
-    Ok(descends(&*children(Duration::ZERO)?,shell,target.agent_pid))
-}
-fn descends(children:&crate::list::procs::ChildrenMap,root:i64,pid:i64)->bool {
-    let mut stack=vec![root];let mut seen=std::collections::HashSet::new();
-    while let Some(next)=stack.pop() {
-        if !seen.insert(next) {continue;}
-        if next==pid {return true;}
-        if let Some(children)=children.get(&next) {stack.extend(children.iter().copied());}
-    }
-    false
+    let descends=crate::list::bridge::descends;
+    if !max_age.is_zero() && descends(target.agent_pid,shell,&*children(max_age)?) {return Ok(true);}
+    Ok(descends(target.agent_pid,shell,&*children(Duration::ZERO)?))
 }
 impl OtherIo for ProcessOtherIo {
     fn prove<'a>(&'a self,target:&'a OtherTarget)->BoxFuture<'a,Result<bool,RuntimeError>> {Box::pin(self.prove_inner(target))}

@@ -692,6 +692,8 @@ enum Job {
     Queued { wake:bool,result:Result<(),RuntimeError> },
     /// `Ok(true)`: a vista só mudou na medição e ficou esperando o intervalo (`store_view`).
     View { generation:u64,version:u64,view:Value,result:Result<bool,RuntimeError> },
+    /// A medição que esperava o intervalo foi ao disco; nada a publicar.
+    Flushed { generation:u64,result:Result<(),RuntimeError> },
     Drained {generation:u64,result:Result<Vec<RuntimeCommand>,RuntimeError>},
     DrainFinished(Result<RuntimeReply,RuntimeError>),
     Confirmed { response:Option<oneshot::Sender<Result<Value,RuntimeError>>>,result:Result<(Vec<String>,usize,Option<f64>),RuntimeError> },
@@ -2224,6 +2226,14 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                             },
                         }
                     },
+                    // Resultado de uma vida que já passou é descartado, como o de `Job::View`: só a falha desta aparece.
+                    Job::Flushed { generation,result } => {
+                        if generation!=target.generation || sid_transition {continue;}
+                        if let Err(failure) = result {
+                            publish(&events,&target,&mut revision,"problem",json!({"error_code":failure.code,"message":failure.message}));
+                            enter_error(&mut error,&target,failure);
+                        }
+                    }
                     Job::Saved(result) => { stall_dirty |= cano_lost; if let Err(failure) = result {
                         publish(&events,&target,&mut revision,"problem",json!({"error_code":failure.code,"message":failure.message}));
                         enter_error(&mut error,&target,failure);
@@ -2435,9 +2445,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                     // Em troca de conversa nada vai ao disco: a gravação do fim da troca leva a medição.
                     if !sid_transition {
                         let queue = queue.clone(); let generation = target.generation; let gate = state_gate.clone();
-                        // Como `Job::View`, para o resultado de uma vida que já passou ser descartado: a versão 0
-                        // nunca publica, só a falha desta geração aparece.
-                        jobs.spawn(async move { Job::View { generation,version:0,view:Value::Null,result:store_view(&queue,generation,sample,&gate,None,false,false).await } });
+                        jobs.spawn(async move { Job::Flushed { generation,result:store_view(&queue,generation,sample,&gate,None,false,false).await.map(|_|()) } });
                     }
                 }
                 if turn_check_due.is_some_and(|due|sample.monotonic_s >= due) {

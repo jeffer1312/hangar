@@ -1130,7 +1130,8 @@ fn pane_targets(panes: &[Pane], agent_pids: &HashMap<String, u32>, children: &Ch
     out
 }
 
-fn descends(pid: i64, root: i64, children: &ChildrenMap) -> bool {
+/// `pid` é `root` ou descende dele no mapa de processos?
+pub(crate) fn descends(pid: i64, root: i64, children: &ChildrenMap) -> bool {
     let mut stack = vec![root];
     let mut seen = std::collections::HashSet::new();
     while let Some(p) = stack.pop() {

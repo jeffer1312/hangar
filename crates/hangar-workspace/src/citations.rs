@@ -159,8 +159,8 @@ impl Query {
 }
 
 const ANCHOR: u64 = 64;
-// ponytail: ao encher, esvazia; LRU se as conversas abertas ao mesmo tempo passarem disso.
-const MAX_FILES: usize = 16;
+// ponytail: ao encher, esvazia tudo; passando de 64 conversas com citação ao mesmo tempo, despejar uma por vez.
+const MAX_FILES: usize = 64;
 const MAX_QUERIES: usize = 512;
 
 #[cfg(unix)]

@@ -154,6 +154,10 @@ const HISTORY_PAGE: usize = 400;
 /// Eventos de folga acima da primeira linha na tela que o corte do histórico não alcança.
 const TRIM_MARGIN: usize = 40;
 
+/// Quanto o transcript inteiro fica na memória depois do último uso (busca, volta a uma citação): cortado logo, a
+/// busca seguinte baixaria e remontaria tudo de novo.
+const FULL_HISTORY_KEEP: Duration = Duration::from_secs(600);
+
 /// Quantos eventos antigos saem quando o transcript inteiro (busca, volta a uma citação) deixa de ser preciso: fica a
 /// janela normal. `first_visible` é o evento da primeira linha na tela, `None` no fim da conversa. Com ela antes da
 /// janela, ou colada ao começo dela, nada sai: a leitura não é tirada do lugar, e o corte espera a volta ao fim.
@@ -729,6 +733,8 @@ pub struct Hangar {
     preview_drop_scheduled: bool,
     visible_preview: Preview,
     preview_cache: PreviewSource,
+    /// Desde quando o transcript inteiro está carregado sem uso (`history_trim`).
+    full_history_idle: Option<std::time::Instant>,
     preview_tick_epoch: u64,
     preview_tick_scheduled: bool,
     preview_last_tick: Option<Instant>,
@@ -1177,7 +1183,7 @@ impl Hangar {
             list_state, rail_hover: None, follow: Default::default(), row_ids: Vec::new(), row_signatures: Vec::new(), conversation: Default::default(), row_assets: Vec::new(), expanded: HashSet::new(), kept_expanded: HashMap::new(), orq_days: HashSet::new(),
             table_column: HashMap::new(), tables: HashMap::new(), last_message: None, live_clear_epoch: [0; 2], rich: HashMap::new(), prepared: HashMap::new(), cites: CiteCheck::default(), render_tick: 0,
             preview_drop_epoch: 0, preview_drop_scheduled: false,
-            visible_preview: Preview::default(), preview_cache: PreviewSource::default(), preview_tick_epoch: 0, preview_tick_scheduled: false,
+            visible_preview: Preview::default(), preview_cache: PreviewSource::default(), full_history_idle: None, preview_tick_epoch: 0, preview_tick_scheduled: false,
             preview_last_tick: None, preview_carry: 0., preview_deadline: None,
             attachments: HashMap::new(), quotes: Default::default(), mermaid: Default::default(), attach_seq: 0, uploading: HashMap::new(), commands: HashMap::new(), commands_latest: HashMap::new(), commands_seq: 0,
             plugin_question_seen: None,
@@ -1798,9 +1804,13 @@ impl Hangar {
     }
 
     /// Quantos eventos antigos do transcript inteiro já podem sair (`history_cut`); zero enquanto a busca ou a volta
-    /// a uma citação ainda o usam.
-    fn history_trim(&self) -> usize {
-        if self.history_limit != 0 || self.loading || self.find.open || self.quote_flashing() { return 0; }
+    /// a uma citação ainda o usam, e por `FULL_HISTORY_KEEP` depois do último uso.
+    fn history_trim(&mut self) -> usize {
+        if self.history_limit != 0 || self.loading || self.find.open || self.quote_flashing() {
+            self.full_history_idle = None;
+            return 0;
+        }
+        if self.full_history_idle.get_or_insert_with(std::time::Instant::now).elapsed() < FULL_HISTORY_KEEP { return 0; }
         let top = self.list_state.logical_scroll_top().item_ix;
         let first_visible = self.conversation.items.get(top..).and_then(|rest| rest.iter().find_map(first_event));
         history_cut(self.chat.events.len(), first_visible)
