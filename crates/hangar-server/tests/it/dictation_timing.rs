@@ -18,6 +18,8 @@ pub fn isolated_accounts(home: &Path) -> AccountService {
 
 /// Grava a configuração real usada pela transcrição e pela organização do ditado.
 pub fn configure(state: &AppState, snapshot: &Value) {
+    // Impede que a configuração do checkout entre na fixture.
+    std::fs::create_dir_all(state.accounts.env.home.join(".hangar/current")).unwrap();
     let mut values = snapshot.get("organization").and_then(Value::as_object).cloned().unwrap_or_default();
     if let Some(providers) = snapshot.get("providers") {
         values.insert("transcription_providers".into(), providers.clone());
