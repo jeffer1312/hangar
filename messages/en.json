@@ -8401,6 +8401,7 @@
   "home_usage_day": "{date} · {tokens} tokens",
   "home_usage_method": "This machine, including subagents and cache. Top model by tokens. List-price estimate, not a bill.",
   "home_usage_partial": "Includes subagents and cache. Partial cost: some models have no known rate. Top model by tokens.",
+  "home_usage_partial_short": "Partial cost: some models have no known rate.",
   "home_usage_empty": "No usage recorded in this period.",
   "home_usage_warming": "Reading history: {read} of {total}",
   "home_usage_warming_timeout": "History is still being prepared. Try again.",

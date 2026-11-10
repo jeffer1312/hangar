@@ -8401,6 +8401,7 @@
   "home_usage_day": "{date} · {tokens} tokens",
   "home_usage_method": "Desta máquina, incluindo subagentes e cache. Modelo mais usado por tokens. Custo de tabela, não fatura.",
   "home_usage_partial": "Inclui subagentes e cache. Custo parcial: há modelos sem tarifa. Modelo mais usado por tokens.",
+  "home_usage_partial_short": "Custo parcial: há modelos sem tarifa.",
   "home_usage_empty": "Nenhum consumo registrado neste período.",
   "home_usage_warming": "Lendo histórico: {read} de {total}",
   "home_usage_warming_timeout": "O histórico ainda está sendo preparado. Tente novamente.",

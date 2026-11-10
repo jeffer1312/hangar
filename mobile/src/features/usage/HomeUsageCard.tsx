@@ -313,13 +313,14 @@ export function HomeUsageCard({ intro = null }: { intro?: HomeIntro | null }) {
         </>
       );
     }
-    // A nota de método acompanha o detalhe: com o calendário fechado, ficam só os números.
+    // A nota de método acompanha o detalhe. Fechado ficam os números e, se o custo é parcial, só esse aviso.
+    const detailed = tab === 'models' || activity;
     body = (
       <>
         {content}
-        {tab === 'models' || activity ? (
+        {detailed || partial ? (
           <Text style={[styles.note, muted]}>
-            {partial ? m.home_usage_partial() : m.home_usage_method()}
+            {!partial ? m.home_usage_method() : detailed ? m.home_usage_partial() : m.home_usage_partial_short()}
           </Text>
         ) : null}
       </>

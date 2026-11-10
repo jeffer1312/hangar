@@ -73,6 +73,14 @@ it('Home esconde o calendário de atividade até o toque em Ver atividade', asyn
   expect(node.textContent).not.toContain(title);
 });
 
+it('Home mantém o aviso de custo parcial com o calendário fechado', async () => {
+  await act(async () => useServers.setState({ servers: [{ ...a, token: 'no-rate' }] }));
+  net.costs.mockImplementation((_server: Server, period: string) => Promise.resolve({ ...report(period), sem_tarifa: ['model-x'] }));
+  await render();
+  expect(node.textContent).toContain(m.home_usage_partial_short());
+  expect(node.textContent).not.toContain(m.home_usage_partial());
+});
+
 it('Home conserva cache ao remontar e invalida credencial, endereço e conjunto', async () => {
   await render();
   await act(async () => root.render(null));

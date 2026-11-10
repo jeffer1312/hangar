@@ -238,7 +238,7 @@ vi.mock('../../paraglide/messages', () => ({
     'criar_modo_exec_tmux_resumo criar_modo_exec_tmux_resumo_codex ctx_anexos_da_sessao ditado_estilo_titulo draft_clear_error draft_invalid ' +
     'draft_read_error draft_write_error home_usage_30d home_usage_7d home_usage_active_days home_usage_activity home_usage_show_activity home_usage_hide_activity home_usage_all home_usage_cost ' +
     'home_usage_day home_usage_empty home_usage_load_failed home_usage_method home_usage_model_count home_usage_models home_usage_overview ' +
-    'home_usage_partial home_usage_period_unsupported home_usage_sessions home_usage_today home_usage_tokens home_usage_top_model home_usage_warming ' +
+    'home_usage_partial home_usage_partial_short home_usage_period_unsupported home_usage_sessions home_usage_today home_usage_tokens home_usage_top_model home_usage_warming ' +
     'home_usage_warming_timeout native_close native_create_checkout_branch native_create_checkout_current native_create_checkout_failed ' +
     'native_create_checkout_loading native_create_checkout_worktree ' +
     'native_create_codex_account native_loading native_new_chat_machine native_network_error criar_providers_erro ' +
