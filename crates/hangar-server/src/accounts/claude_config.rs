@@ -984,7 +984,8 @@ pub(crate) fn detach_plugin_paths(home: &Path, dir: &Path) -> Result<()> {
         let unreadable = |e: String| refused(format!("plugins: não consegui ler {}: {e}", path.display()));
         let Some(mut data) = read_json(&path).map_err(unreadable)? else { continue };
         if repoint(&mut data, field, dir, &real_dir) {
-            let text = serde_json::to_string_pretty(&data).map_err(|e| unreadable(e.to_string()))?;
+            let text = serde_json::to_string_pretty(&data)
+                .map_err(|e| refused(format!("plugins: não consegui gravar {}: {e}", path.display())))?;
             write_replacing(&path, &text)?;
         }
     }

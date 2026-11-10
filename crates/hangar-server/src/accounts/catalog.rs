@@ -592,11 +592,6 @@ impl AccountService {
                 json!({"pids":facts.holders}),
             ));
         }
-        let kept = if keep {
-            Some(self.keep_transcripts(provider, &current)?)
-        } else {
-            None
-        };
         if provider == Provider::Claude {
             super::claude_config::detach_plugin_paths(&self.env.home, &current.home).map_err(|error| {
                 AccountError::new(500, "erro_registro_plugins",
@@ -604,6 +599,11 @@ impl AccountService {
                     json!({}))
             })?;
         }
+        let kept = if keep {
+            Some(self.keep_transcripts(provider, &current)?)
+        } else {
+            None
+        };
         storage::remove_tree(&current.home).map_err(|_| {
             AccountError::codex(500, "codex_account_delete_failed", Some(&account.id))
         })?;
