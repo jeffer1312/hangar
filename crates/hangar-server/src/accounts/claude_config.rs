@@ -977,59 +977,83 @@ pub(crate) fn check_plugins(home: &Path, dir: &Path) -> Result<Vec<String>> {
     Ok(warnings)
 }
 
-/// O CLI grava no registro de plugins o caminho pela pasta da conta que instalou
-/// (`~/.claude-<conta>/plugins/...`). O registro é um só para todas as contas: apagar aquela conta
-/// quebrava o plugin em toda sessão que leu o registro. Troca pelo `~/.claude/plugins` quando o
-/// alvo existe lá. Registro ilegível fica com o `check_plugins` e com o próprio CLI.
-pub(crate) fn share_plugin_registry(home: &Path) -> Vec<String> {
+const PLUGIN_REGISTRY: [&str; 2] = ["installed_plugins.json", "known_marketplaces.json"];
+
+/// O registro de plugins é um só para todas as contas, mas o CLI grava o caminho pela pasta da conta
+/// que instalou: apagar a conta deixaria o plugin sem pasta em todas. O caminho passa ao destino real.
+pub(crate) fn detach_plugin_paths(home: &Path, dir: &Path) -> Result<()> {
+    let dirs = [dir.to_path_buf(), super::catalog::resolved(dir)];
     let plugins = home.join(".claude").join("plugins");
-    let mut warnings = Vec::new();
-    for (file, key) in [("installed_plugins.json", "installPath"), ("known_marketplaces.json", "installLocation")] {
-        let path = plugins.join(file);
-        // A mesma frase do `check_plugins`, para a reconciliação não repetir o aviso.
-        let unreadable = |error: String| format!("plugins: não consegui ler {}: {error}", path.display());
-        let before = match fs::read(&path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-            Err(error) => { warnings.push(unreadable(format!("{}: {error}", path.display()))); continue; }
-        };
-        let mut data = match parse_json(&path, Ok(before.clone())) {
-            Ok(Some(data)) => data,
-            Ok(None) => continue,
-            Err(error) => { warnings.push(unreadable(error)); continue; }
-        };
-        if !rewrite_account_paths(home, &plugins, key, &mut data) { continue; }
-        // Sem trava em comum com o CLI: se ele gravou desde a leitura, a próxima reconciliação refaz.
-        if fs::read(&path).ok().as_ref() != Some(&before) { continue; }
-        if let Err(error) = write_replacing(&path, &pyjson::dumps_indent(&data, 2, false)) {
-            warnings.push(format!("plugins: não consegui trocar o caminho das contas em {}: {}", path.display(), error.cause()));
-        }
+    for file in PLUGIN_REGISTRY {
+        rewrite_registry(&plugins.join(file), &|path| outside(path, &dirs))?;
     }
-    warnings
+    Ok(())
 }
 
-fn rewrite_account_paths(home: &Path, plugins: &Path, key: &str, value: &mut Value) -> bool {
-    match value {
-        Value::Object(map) => {
-            let mut changed = false;
-            for (name, item) in map.iter_mut() {
-                if name == key && let Value::String(text) = item && let Some(shared) = shared_plugin_path(home, plugins, text) {
-                    *text = shared.to_string_lossy().into_owned();
-                    changed = true;
-                } else {
-                    changed |= rewrite_account_paths(home, plugins, key, item);
-                }
-            }
-            changed
+/// Conta apagada sem passar pelo `detach_plugin_paths` (a pasta removida à mão) não tem mais o link
+/// para resolver: o caminho dela vai ao `~/.claude/plugins` quando o alvo existe lá.
+pub(crate) fn share_plugin_registry(home: &Path) -> Vec<String> {
+    let plugins = home.join(".claude").join("plugins");
+    PLUGIN_REGISTRY.iter()
+        .filter_map(|file| rewrite_registry(&plugins.join(file), &|path| shared_plugin_path(home, &plugins, path)).err())
+        .map(|error| error.cause())
+        .collect()
+}
+
+/// O CLI de outra conta grava o mesmo arquivo sem trava que o Hangar alcance: só grava se o arquivo
+/// ainda é o que foi lido, e refaz a troca quando ele mudou no meio.
+fn rewrite_registry(path: &Path, target: &dyn Fn(&Path) -> Option<PathBuf>) -> Result<()> {
+    const ATTEMPTS: usize = 3;
+    // A frase do `check_plugins` (`read_json`): a reconciliação não repete o mesmo aviso.
+    let unreadable = |e: String| refused(format!("plugins: não consegui ler {}: {e}", path.display()));
+    let io_error = |e: io::Error| unreadable(format!("{}: {e}", path.display()));
+    for _ in 0..ATTEMPTS {
+        let before = match fs::read(path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            read => read.map_err(io_error)?,
+        };
+        let Some(mut data) = parse_json(path, Ok(before.clone())).map_err(unreadable)? else { return Ok(()) };
+        if !repoint(&mut data, target) { return Ok(()); }
+        let text = pyjson::dumps_indent(&data, 2, false);
+        if text.chars().any(py::is_marker) {
+            return Err(refused(format!("plugins: {} tem texto com surrogate solto, que não dá pra gravar em UTF-8", path.display())));
         }
-        Value::Array(items) => items.iter_mut().fold(false, |changed, item| rewrite_account_paths(home, plugins, key, item) | changed),
+        match fs::read(path) {
+            Ok(now) if now == before => return write_replacing(path, &text),
+            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(io_error(error)),
+            _ => {}
+        }
+    }
+    Err(refused(format!("plugins: {} mudou {ATTEMPTS} vezes durante a troca; tente de novo", path.display())))
+}
+
+/// Todo texto que é caminho dentro da conta: o registro tem mais de um campo de caminho.
+fn repoint(value: &mut Value, target: &dyn Fn(&Path) -> Option<PathBuf>) -> bool {
+    match value {
+        Value::Array(items) => items.iter_mut().fold(false, |changed, item| repoint(item, target) | changed),
+        Value::Object(map) => map.values_mut().fold(false, |changed, item| repoint(item, target) | changed),
+        Value::String(text) => match target(Path::new(text.as_str())) {
+            Some(real) => { *text = real.to_string_lossy().into_owned(); true }
+            None => false,
+        },
         _ => false,
     }
 }
 
-fn shared_plugin_path(home: &Path, plugins: &Path, text: &str) -> Option<PathBuf> {
+/// Resolve só a primeira pasta abaixo da conta (o link `plugins`): a versão que o caminho cita pode já
+/// não existir, e o caminho real ainda é o do compartilhado.
+fn outside(path: &Path, dirs: &[PathBuf]) -> Option<PathBuf> {
+    let rest = dirs.iter().find_map(|dir| path.strip_prefix(dir).ok().map(|rest| (dir, rest)));
+    let (dir, rest) = rest?;
+    let mut parts = rest.components();
+    let first = dir.join(parts.next()?);
+    let real = PathBuf::from(super::catalog::displayed(&fs::canonicalize(&first).ok()?));
+    (!dirs.iter().any(|dir| real.starts_with(dir))).then(|| real.join(parts.as_path()))
+}
+
+fn shared_plugin_path(home: &Path, plugins: &Path, path: &Path) -> Option<PathBuf> {
     // Sem distinguir caixa: no Windows o CLI pode gravar a letra do drive diferente da do HOME.
-    let mut parts = Path::new(text).components();
+    let mut parts = path.components();
     for want in home.components() {
         if !parts.next()?.as_os_str().eq_ignore_ascii_case(want.as_os_str()) { return None; }
     }

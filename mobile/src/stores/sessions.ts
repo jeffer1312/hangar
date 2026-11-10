@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { openSessionsStream, deviceIdentityReady, aggregateSessions, jsonlDaSessao, sweepHidden, registrarDiag, decidirRota, discoverConnectRoute, discoverRemoteRoute, upgradeToDevice, esquecerRota, rotaDecidida, baseOf, UNCONFIRMED_BASE, probeServerResponse, comTeto, parseTagsEvent, patchSlot, placeExternalRows, listExternalPairs, attachGuest, createExternalPairSync } from '@hangar/core';
-import type { SessionInfo, Server, AggSession, ExternalPair, VaultEvent, VaultRequest } from '@hangar/core';
+import type { SessionInfo, Server, AggSession, ExternalPair, TagsEvent, VaultEvent, VaultRequest } from '@hangar/core';
 import { sortSessions, definirArmazem, definirProtegido, definirSemPrazo, isServerParked, parkServer, registrarFalha, registrarSucesso, retryAfterMs, estaDesligado, startOutage, endOutage, respondeuRecentemente, retentarAgora, esquecerServidor, onServerRecovered, _limparEsfriamentoParaTestes } from '@hangar/core';
 import type { Slot, ServerBucket, Aggregate } from '@hangar/core';
 import { useServers } from './servers';
@@ -24,6 +24,8 @@ export interface SessionsState {
   byServerRecord: Record<string, AggSession[]>;
   /** Último evento `vault` de cada servidor; vale só enquanto o balde dele está sem erro. */
   vault: Record<string, VaultEvent>;
+  /** Etiquetas de máquina e contas de cada servidor (evento `tags`); o valor de cada servidor só muda quando a etiqueta dele muda. */
+  tags: Record<string, TagsEvent>;
   loading: boolean;
   servers: Server[];
   retain: () => () => void;
@@ -264,10 +266,13 @@ function recompute(set: (p: Partial<SessionsState>) => void) {
   aggCache = { ...stabilizeRows(placeExternalRows(agg)), loading: agg.loading };
   const byServerRecord: Record<string, AggSession[]> = {};
   for (const b of aggCache.byServer) byServerRecord[b.server.id] = b.sessions;
+  const tags: Record<string, TagsEvent> = {};
+  for (const [id, slot] of slots) if (slot.tags) tags[id] = slot.tags;
   set({
     rows: aggCache.rows,
     byServer: aggCache.byServer,
     byServerRecord,
+    tags,
     loading: aggCache.loading,
     servers: serversCache,
   });
@@ -718,6 +723,7 @@ export const useSessions = create<SessionsState>((set, get) => ({
   byServer: [],
   byServerRecord: {},
   vault: {},
+  tags: {},
   loading: false,
   servers: [],
   retain() {
@@ -812,5 +818,5 @@ export function _resetSessionsForTests() {
   _limparEsfriamentoParaTestes();
   definirArmazem(null);
   configureCooldown();
-  useSessions.setState({ rows: [], byServer: [], byServerRecord: {}, vault: {}, loading: false, servers: [] });
+  useSessions.setState({ rows: [], byServer: [], byServerRecord: {}, vault: {}, tags: {}, loading: false, servers: [] });
 }
