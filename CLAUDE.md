@@ -576,6 +576,13 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   do Hangar reconcilia a conta antes. Uma mudança por servidor, numa tarefa que sobrevive ao
   cliente; argumento da CLI sempre validado e depois de `--`. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#plugins-do-claude-na-tela-a-cli-oficial-na-pasta-principal-09112026).
+- **O que uma atualização trouxe é gravado pelo servidor NOVO, na subida, e cada aparelho vê uma
+  vez.** `update_arrived` compara a versão em uso com a última vista (`~/.hangar/update-news.json`,
+  crate `hangar-update-news`) e grava as novidades novas; nunca o executor da atualização, que roda o
+  binário antigo. Nativo e Expo leem `GET /api/update/arrived?device=<id>` na abertura, na troca de
+  versão e no fim do "Atualizar?", e marcam visto ao abrir o modal; não há lista local. Aparelho novo
+  começa no ponto atual. Servidor sem a rota (404) não mostra nada. Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#novidades-da-atualização-automática-gravadas-pelo-servidor-novo-10112026).
 - **Busca, Perguntar e Arquivo são do Rust, com um índice de todos os agentes e contas.** A passada
   é por evento de arquivo; palavra inteira vem antes de pedaço (`whole`); o id do trecho é o do
   histórico. Sem Rust, 503 `erro_busca_precisa_rust`. Evidência em

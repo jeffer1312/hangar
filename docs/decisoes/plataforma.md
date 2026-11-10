@@ -4350,3 +4350,24 @@ A tela de Plugins chama `claude plugin …` (CLI 2.1.319) com a pasta padrão `~
   religar depois de queda); a escolha de plugins da conversa segue valendo por cima. Falha na
   reconciliação não sobe o processo: o reabrir responde 409 e a sessão sem terminal fica com
   `headless_nao_subiu`.
+
+## Novidades da atualização automática gravadas pelo servidor novo (10/11/2026)
+
+**Regra:** o servidor que acabou de subir compara a versão em uso (pacote) ou o `HEAD` (checkout) com a
+última que ele viu em `~/.hangar/update-news.json` e grava ali as novidades que chegaram; cada aparelho
+guarda um cursor no mesmo arquivo e lê `GET /api/update/arrived?device=<id>`, marcando visto por
+`POST /api/update/arrived/seen`. Aparelho que nunca falou com o servidor começa no ponto atual.
+
+**Caso que motivou:** a tela de Plugins chegou pela atualização automática das 08:26 (0.1.0.9940 →
+0.1.0.9967). O clique em "Atualizar?" às 08:59 achou o servidor já na versão nova, a lista de
+novidades veio vazia e "O que chegou para você" não abriu. A lista só existia no aparelho que clicava
+(`novidades-pendentes.json` no nativo, `update.whatsNew.v1` no Expo).
+
+**Por que na subida e não no executor:** o executor da atualização roda o binário que estava de pé
+(`update/executor.rs`, `current_exe`); gravar ali deixaria a atualização que instala o recurso sem
+registro e toda gravação um passo atrás. No checkout, a comparação é `from..HEAD`: depois do pull,
+`HEAD..alvo` sai vazio.
+
+**Limites:** servidor antigo responde 404 e o cliente não mostra nada (no clique, mostra o que o
+`/api/update/notes` daquele clique trouxe). Marcação de visto que falha na rede, seguida de reabertura,
+mostra o modal de novo. O nativo lê só o servidor local, como antes.
