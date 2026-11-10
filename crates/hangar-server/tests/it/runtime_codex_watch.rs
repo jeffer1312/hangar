@@ -24,7 +24,7 @@ pub(crate) fn fixture() -> Fixture {
     let (home,queue,panes,tmux) = (root.join("home"),root.join("claude").join(".hangar-queue"),root.join("panes"),root.join("fake-tmux"));
     std::fs::write(&panes,"").unwrap();
     let p = panes.display();
-    crate::write_executable(&tmux,format!("#!/bin/sh\nP='{p}'\ncase \"$1\" in\n  list-panes) [ -f \"$P.down\" ] && exit 2; cat \"$P\";;\n  \
+    crate::write_executable(&tmux,format!("#!/bin/sh\nP='{p}'\ncase \"$1\" in\n  list-panes) echo x >> \"$P.calls\"; [ -f \"$P.down\" ] && exit 2; cat \"$P\";;\n  \
         has-session) n=\"${{3#=}}\"; grep -q \"^$n\t\" \"$P\";;\n  \
         kill-session) n=\"${{3#=}}\"; grep -v \"^$n\t\" \"$P\" > \"$P.new\"; mv \"$P.new\" \"$P\";;\n  \
         display-message) printf 'cx-proof\t%%7\t1700000000\\n';;\n  \
@@ -40,6 +40,8 @@ impl Fixture {
             mux:Mux::with_program(&self.tmux,Duration::from_secs(5)),mux_program:self.tmux.clone().into_os_string() })
             .with_death_after(DEATH_AFTER))
     }
+    /// Quantas vezes o `list-panes` do tmux falso foi aberto.
+    fn list_calls(&self) -> usize { std::fs::read_to_string(self.panes.with_extension("calls")).map_or(0,|calls|calls.lines().count()) }
     fn sidecar_dir(&self) -> PathBuf { self.home.join(".hangar").join("codex-sessions") }
     fn sidecar_path(&self,name:&str) -> PathBuf { self.sidecar_dir().join(format!("{name}.json")) }
     /// Grava por rename, como o Python: a pasta muda e a leitura em cache da lista vê a versão nova.
@@ -131,6 +133,53 @@ async fn a_round_adopts_follows_a_new_app_server_and_buries_the_dead_pane() {
     assert!(fx.sidecar("cx-proof").is_none(),"sidecar da vida apagado");
     assert!(!fx.queue_state(&key).exists(),"fila da vida apagada");
     finish(&mut [&mut app1,&mut app2]);
+}
+
+#[tokio::test]
+async fn panes_the_list_just_read_spare_the_watchers_read_but_never_decide_absence() {
+    let fx = fixture();
+    let server = fake_app_server(true).await;
+    let (mut app,mut tui) = (app_server_process(&server.endpoint),tui());
+    fx.put_sidecar("cx-proof",fx.meta("cx-proof",&server.endpoint,Some(app.id()),&tui));
+    fx.panes(&["cx-proof"]);
+    let registry = registry().await;
+    // Prazo de ausência que o teste nunca alcança: o que se confere é quem lê os panes, não a morte.
+    let watcher = Watcher::new(WatchConfig { home:fx.home.clone(),queue_dir:fx.queue.clone(),
+        mux:Mux::with_program(&fx.tmux,Duration::from_secs(5)),mux_program:fx.tmux.clone().into_os_string() })
+        .with_death_after(Duration::from_secs(3600))
+        // A validade de produção (um tique da lista) faria a prova depender de a rodada começar a tempo.
+        .with_shared_age(Duration::from_secs(600));
+    watcher.round(&registry).await;
+    assert!(registry.owns_codex_terminal("cx-proof"));
+    // A lista lê pelo mesmo programa e publica o que leu.
+    let list = Mux::with_program(&fx.tmux,Duration::from_secs(5));
+    let alive = Arc::new(vec![hangar_server::list::mux::Pane { session:"cx-proof".into(),active:true,pid:Some(4242),cwd:"/w".into(),
+        pane_id:"%7".into(),provider:Some("codex".into()),session_created:Some(1_700_000_000),..Default::default() }]);
+
+    list.share(alive.clone());
+    let calls = fx.list_calls();
+    watcher.round(&registry).await;
+    assert_eq!(fx.list_calls(),calls,"a sessão aparece viva nos panes que a lista acabou de ler e a vigia abriu o multiplexador");
+    assert!(registry.owns_codex_terminal("cx-proof"));
+
+    // A sessão falta no retrato da lista: a vigia lê por conta própria antes de contar qualquer ausência.
+    list.share(Arc::new(Vec::new()));
+    watcher.round(&registry).await;
+    assert_eq!(fx.list_calls(),calls + 1,"ausência no retrato da lista não foi conferida com leitura própria");
+    assert!(registry.owns_codex_terminal("cx-proof"),"viva na leitura própria: fica");
+
+    // Pane e TUI mortos: a leitura própria começa a contar a ausência.
+    fx.panes(&[]);
+    tui.kill().unwrap(); tui.wait().unwrap();
+    watcher.round(&registry).await;
+    assert_eq!(fx.list_calls(),calls + 2);
+    // Com a ausência em contagem, um retrato da lista (que pode ser anterior a ela) dizendo "viva" não vale:
+    // a vigia segue lendo por conta própria.
+    list.share(alive);
+    watcher.round(&registry).await;
+    assert_eq!(fx.list_calls(),calls + 3,"com a ausência em contagem a vigia confiou no retrato da lista");
+    assert!(registry.owns_codex_terminal("cx-proof"),"o prazo deste teste não chega: a morte fica com o teste de cima");
+    finish(&mut [&mut app]);
 }
 
 #[tokio::test]

@@ -1,7 +1,7 @@
 //! E/S da vida comprovada: transporte existente e captura compartilhada.
 use super::*;
 use crate::terminal_input::{CommandRequest, ProcessIo, TerminalIo, TerminalDriver, InputLimits};
-use crate::terminal_control::{TerminalPool,CaptureRequest};
+use crate::terminal_control::{TerminalPool,CaptureRequest,PaneIdentity};
 
 #[derive(Clone)]
 pub struct ProcessOtherIo {
@@ -10,12 +10,14 @@ pub struct ProcessOtherIo {
     target: OtherTarget,
     processes: Arc<dyn crate::list::procs::ProcessView>,
     io: Arc<ProcessIo>,
+    /// Quem era o pane na última captura. A prova de quem observa a consome: vale para a rodada dela, uma vez.
+    captured: Arc<std::sync::Mutex<Option<PaneIdentity>>>,
 }
 impl ProcessOtherIo {
     pub fn new(target: &OtherTarget, options: &OtherOptions) -> Self {
         let request=CaptureRequest {consumer:format!("other:{}:{}",target.key,target.generation),name:target.name.clone(),provider:target.provider.as_str().into(),
             binding:format!("{}:{}",target.key,target.generation),target:target.pane_address.clone(),started:clock().epoch_s,lines:200,colors:true,join:false};
-        Self {pool:options.pool.clone(),request,target:target.clone(),processes:options.processes.clone(),io:Arc::new(ProcessIo::default())}
+        Self {pool:options.pool.clone(),request,target:target.clone(),processes:options.processes.clone(),io:Arc::new(ProcessIo::default()),captured:Arc::default()}
     }
     fn driver(&self,target:&OtherTarget,guard:Option<&OtherWriteGuard>)->TerminalDriver {
         let mut binding=target.binding.clone();binding.pane=target.pane_address.clone();
@@ -46,6 +48,16 @@ impl ProcessOtherIo {
             || fields[2].parse::<u64>().ok()!=Some(target.binding.created) {return Ok(false);}
         let shell=fields[3].parse::<i64>().map_err(|_|failed("other_terminal_pane_unreadable"))?;
         if shell!=target.pane_pid {return Ok(false);}
+        self.prove_agent(target,shell,max_age).await
+    }
+    /// A prova de quem observa com a identidade que veio na captura da rodada: as mesmas quatro
+    /// conferências do `prove_aged`, sem abrir outro processo do multiplexador.
+    async fn prove_captured(&self,target:&OtherTarget,pane:&PaneIdentity)->Result<bool,RuntimeError> {
+        if pane.name!=target.name || !target.binding.windows && pane.id!=target.binding.pane
+            || pane.created!=target.binding.created || pane.pane_pid!=target.pane_pid {return Ok(false);}
+        self.prove_agent(target,pane.pane_pid,OBSERVED_AGE).await
+    }
+    async fn prove_agent(&self,target:&OtherTarget,shell:i64,max_age:Duration)->Result<bool,RuntimeError> {
         let (processes,target)=(self.processes.clone(),target.clone());
         tokio::task::spawn_blocking(move || agent_in_pane(&*processes,&target,shell,max_age))
             .await.map_err(|_|failed("other_terminal_process_worker"))?
@@ -78,14 +90,26 @@ fn agent_in_pane(processes:&dyn crate::list::procs::ProcessView,target:&OtherTar
 }
 impl OtherIo for ProcessOtherIo {
     fn prove<'a>(&'a self,target:&'a OtherTarget)->BoxFuture<'a,Result<bool,RuntimeError>> {Box::pin(self.prove_inner(target))}
-    fn prove_observed<'a>(&'a self,target:&'a OtherTarget)->BoxFuture<'a,Result<bool,RuntimeError>> {Box::pin(self.prove_aged(target,OBSERVED_AGE))}
+    fn prove_observed<'a>(&'a self,target:&'a OtherTarget)->BoxFuture<'a,Result<bool,RuntimeError>> {Box::pin(async move {
+        // Sem a identidade da captura (Windows, multiplexador que não a devolveu), a prova à parte.
+        let pane=self.captured.lock().unwrap_or_else(|e|e.into_inner()).take();
+        match pane {
+            Some(pane)=>self.prove_captured(target,&pane).await,
+            None=>self.prove_aged(target,OBSERVED_AGE).await,
+        }
+    })}
     fn capture<'a>(&'a self)->BoxFuture<'a,Result<OtherFrame,RuntimeError>> {Box::pin(async move {
         let styled=if self.target.binding.windows {
             let output=self.raw(&self.target,&["capture-pane","-p","-e","-t",&self.target.pane_address,"-S","-200"]).await?;
             let text=String::from_utf8(output).map_err(|_|failed("other_terminal_capture_unreadable"))?;
             if text.contains('\u{fffd}') {return Err(failed("other_terminal_capture_unreadable"));}
             text
-        }else{self.pool.capture(self.request.clone()).await.map_err(|_|failed("other_terminal_capture_unavailable"))?.text};
+        }else{
+            let captured=self.pool.capture(self.request.clone()).await;
+            // Captura que falha não deixa a identidade da anterior para a prova seguinte.
+            *self.captured.lock().unwrap_or_else(|e|e.into_inner())=captured.as_ref().ok().and_then(|capture|capture.pane.clone());
+            captured.map_err(|_|failed("other_terminal_capture_unavailable"))?.text
+        };
         Ok(OtherFrame::from_styled(styled))
     })}
     fn write<'a>(&'a self,target:&'a OtherTarget,value:&'a str,literal:bool,guard:Option<&'a OtherWriteGuard>)->BoxFuture<'a,Result<(),RuntimeError>> {Box::pin(async move {
@@ -213,6 +237,35 @@ mod tests {
         assert_eq!(older.scans.load(Ordering::SeqCst),1);
         let left=Tree::new(&[],&[]);
         assert!(!agent_in_pane(&left,&target,100,AGE).unwrap());
+    }
+
+    fn pane(target:&OtherTarget)->PaneIdentity {
+        PaneIdentity {id:target.binding.pane.clone(),name:target.name.clone(),created:target.binding.created,pane_pid:target.pane_pid}
+    }
+
+    #[tokio::test]
+    async fn observation_proves_the_pane_from_its_own_capture_and_still_sees_another_life() {
+        let mut target=target();
+        // Multiplexador que não existe: qualquer prova por processo separado falha.
+        target.binding.mux_argv=vec!["/nonexistent/hangar-mux".into()];
+        let options=OtherOptions::new(TerminalPool::new(),crate::provider_models::inbox::Store::new(),
+            Arc::new(Tree::new(&[(100,123)],&[(100,123)])),Arc::new(crate::interactions::InteractionStore::default()));
+        let io=ProcessOtherIo::new(&target,&options);
+        let seen=|pane:PaneIdentity|*io.captured.lock().unwrap()=Some(pane);
+        seen(pane(&target));
+        assert_eq!(io.prove_observed(&target).await.map_err(|error|error.code),Ok(true),"com a identidade da captura a observação abriu o multiplexador");
+        // Consumida: sem captura nova na rodada, a prova volta ao multiplexador.
+        assert!(io.prove_observed(&target).await.is_err(),"identidade de uma captura antiga serviu a outra rodada");
+        let others=[PaneIdentity {created:target.binding.created+1,..pane(&target)},PaneIdentity {pane_pid:999,..pane(&target)},
+            PaneIdentity {id:"%9".into(),..pane(&target)},PaneIdentity {name:"outra".into(),..pane(&target)}];
+        for other in others {
+            seen(other.clone());
+            assert_eq!(io.prove_observed(&target).await.map_err(|error|error.code),Ok(false),"{other:?} passou por esta vida");
+        }
+        // Quem escreve nunca usa a identidade da captura.
+        seen(pane(&target));
+        assert!(io.prove(&target).await.is_err(),"a prova de quem escreve aceitou a identidade da captura");
+        assert!(io.captured.lock().unwrap().is_some());
     }
 
     #[test]

@@ -1063,9 +1063,53 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   [gravação da vista e observação sem trabalho repetido](#gravação-da-vista-e-observação-sem-trabalho-repetido-10112026).
 - **Pi/omp/Kimi: o retrato só é publicado quando muda, e a observação aceita o mapa de processos
   guardado só para confirmar presença.** A rodada de observação aceita o mapa com idade até
-  `CHILDREN_TTL` (só no Linux); ausência vem sempre de varredura nova. Escrita, drenagem e guarda de
-  tecla usam prova de idade zero. Ver
+  `CHILDREN_TTL` (só no Linux); ausência vem sempre de varredura nova. A identidade do pane na
+  observação vem da mesma chamada da captura, sem `tmux display-message` à parte (no Windows segue a
+  prova por processo). Escrita, drenagem e guarda de tecla usam prova de idade zero. Ver
   [gravação da vista e observação sem trabalho repetido](#gravação-da-vista-e-observação-sem-trabalho-repetido-10112026).
+- **Vigia do Codex com terminal: os panes que a lista leu há menos de um tique só confirmam presença.**
+  Ausência, morte, adoção e limpeza de órfã usam leitura própria do multiplexador; com a ausência já em
+  contagem, o retrato da lista é ignorado. Sem lista aberta não há retrato e a vigia lê sozinha.
+- **O catálogo de comandos da vista mora num arquivo irmão da fila (`runtime/<chave>.commands`), nunca
+  no principal.** Só o `Store` (`queue.rs`: `encode`, `decode`, `persist`) conhece a divisão: em memória
+  a vista segue com `commands` inteiro; no principal fica `commands: null` e o sha256 do irmão em
+  `runtime_state.commands_ref`. O irmão é gravado antes do principal e só quando o catálogo muda; nada
+  crítico sai do principal. Irmão ausente, ilegível ou de outro sha256 abre a fila sem catálogo, com
+  aviso no log. A sessão só pede o catálogo ao Claude quando um processo novo dela sobe (`initialize`);
+  religada ao mesmo processo, segue sem o dela, e a rota de comandos usa a sondagem compartilhada da
+  conta. Quem apaga a fila apaga o irmão (`queue::discard`). Quem lê o arquivo cru sem o `Store`
+  não vê o catálogo. Ver
+  [catálogo de comandos fora do arquivo da fila](#catálogo-de-comandos-fora-do-arquivo-da-fila-10112026).
+
+## Catálogo de comandos fora do arquivo da fila (10/11/2026)
+
+Cada operação da fila que não é só leitura regrava o arquivo `runtime/<chave>.json` inteiro, com fsync
+do arquivo e da pasta. A vista do Claude sem terminal leva o catálogo de comandos de barra, que não
+muda entre as operações. Medido no servidor com o PR #367, uma sessão Claude sem terminal numa tarefa
+de 20 chamadas de ferramenta: 18,5 MB escritos pelo `hangar-server` (`write_bytes` de
+`/proc/<pid>/io`), 61 operações (`next_seq`), arquivo de 186 KB, dos quais 149 KB eram
+`runtime_state.view.commands`.
+
+Agora o catálogo fica no arquivo irmão. Contagem em teste, não processo vivo
+(`queue_operations_leave_an_unchanged_command_catalog_out_of_every_write`): catálogo de 300 comandos
+(132 KB) e 60 operações; o principal termina com 20 KB e as 60 gravações somam 625 KB, contra 8,56 MB
+com o catálogo embutido. O irmão é gravado uma vez.
+
+Compatibilidade: arquivo antigo, com o catálogo embutido, carrega igual e passa ao formato novo na
+gravação seguinte. O binário anterior lê o formato novo sem erro: `commands: null` é "sem catálogo"
+para ele (`claude.rs`, `metadata.get("commands").filter(|c| !c.is_null())`) e `runtime_state` é JSON
+livre. A reserva Python só lê campos da vista que continuam no principal. Queda depois do irmão e
+antes do principal deixa o principal apontando o sha256 anterior: o `decode` recusa o irmão e a fila
+abre sem catálogo.
+
+Sessão que ficou sem o catálogo dela não o pede de novo sozinha: o pedido (`initialize`,
+`claude.rs` `start_initialize`) só sai quando um processo novo da sessão sobe. Religada ao mesmo
+processo, a lista de `/` continua vindo, porque a rota de comandos cai na sondagem compartilhada da
+conta quando a sessão não tem catálogo (`commands/service.rs`, `NativeProbe`); pode faltar comando
+específico do projeto até a sessão ser reaberta.
+
+Não resolve: o resto do arquivo (linhas, operações, recibos) ainda é regravado inteiro a cada
+operação, e `queue.snapshot()` ainda clona o estado inteiro.
 
 ## Gravação da vista e observação sem trabalho repetido (10/11/2026)
 
@@ -1089,9 +1133,15 @@ Contagens pelo código, não medida de processo vivo:
 | Publicações do retrato por rodada parada | 2 | 0 |
 | Varreduras de processos na observação (Linux) | uma por rodada por sessão | no máximo uma a cada 3 s enquanto o mapa guardado confirma o agente; escrita, drenagem, guarda de tecla e ausência do agente varrem sempre |
 
-Não resolve: o `tmux display-message` por rodada de Pi/omp/Kimi continua, porque tirá-lo muda a
-captura que o Claude também usa. Um agente vivo que saiu do pane segue "no pane" por até 3 s para
-quem observa. Falha de disco na gravação adiada da medição e na da parada só vai ao log: a sessão
+Depois, no mesmo dia: a captura do pane passou a trazer `session_created` e `pane_pid` na mesma
+chamada, e a observação de Pi/omp/Kimi usa essa identidade em vez do `tmux display-message` por
+rodada (1 processo por rodada parada → 0; no Windows continua 1). A vigia do Codex com terminal usa
+os panes que a lista leu há menos de um tique só para confirmar presença: com um Codex aberto e a
+lista aberta, de ~1,67 para ~0,67 processos `tmux` por segundo, contagem pelo código.
+
+Não resolve: um agente vivo que saiu do pane segue "no pane" por até 3 s para quem observa, e a
+identidade do pane é a do instante da captura, então troca nos milissegundos seguintes só aparece na
+rodada seguinte. Falha de disco na gravação adiada da medição e na da parada só vai ao log: a sessão
 não entra em erro por uma medição, e a próxima gravação da vista a leva.
 
 ## Ator ocupado não é doente (09/11/2026)

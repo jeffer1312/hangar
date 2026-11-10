@@ -193,6 +193,8 @@ pub struct Watcher {
     /// escrita, encerramento e troca de modo.
     pub(super) misses:tokio::sync::Mutex<BTreeMap<String,std::time::Instant>>,
     death_after:Duration,
+    /// Até que idade os panes lidos pela lista ainda valem para dizer "está viva".
+    shared_age:Duration,
     /// Relançamentos seguidos que falharam do sidecar antigo, por nome, com a hora da última falha (o
     /// `TETO_SUBIDAS` do Python).
     pub(super) legacy_failures:tokio::sync::Mutex<BTreeMap<String,(u8,std::time::Instant)>>,
@@ -420,7 +422,7 @@ fn pending_projection(queue_dir:&Path,name:&str) -> Result<Vec<Value>,RuntimeErr
 
 impl Watcher {
     pub fn new(cfg:WatchConfig) -> Self {
-        Self { cfg,misses:Default::default(),death_after:DEATH_AFTER,legacy_failures:Default::default(),scope_probe:crate::session_open::terminal::systemd_scope }
+        Self { cfg,misses:Default::default(),death_after:DEATH_AFTER,shared_age:crate::list::hub::TICK,legacy_failures:Default::default(),scope_probe:crate::session_open::terminal::systemd_scope }
     }
     pub fn with_scope_probe(mut self,probe:fn()->Vec<String>) -> Self { self.scope_probe = probe; self }
     /// O multiplexador que cria panes, com o escopo desta vigia.
@@ -430,6 +432,8 @@ impl Watcher {
     pub(super) fn mux_program(&self) -> String { self.cfg.mux_program.to_string_lossy().into_owned() }
     /// Prazo de ausência antes da morte; os testes encurtam.
     pub fn with_death_after(mut self,after:Duration) -> Self { self.death_after = after; self }
+    /// Validade dos panes lidos pela lista; os testes alongam para não depender da velocidade da máquina.
+    pub fn with_shared_age(mut self,age:Duration) -> Self { self.shared_age = age; self }
 
     /// A ausência de `id` dura o prazo? A primeira vez só marca o início.
     fn absent_long_enough(&self,misses:&mut BTreeMap<String,std::time::Instant>,id:&str) -> bool {
@@ -437,6 +441,20 @@ impl Watcher {
         if since.elapsed() < self.death_after { return false; }
         misses.remove(id);
         true
+    }
+
+    /// Os panes lidos agora pela própria vigia. Sem resposta do multiplexador o aviso sai e quem chama
+    /// encerra a rodada sem decidir.
+    async fn own_panes(&self) -> Option<Vec<Pane>> {
+        match self.cfg.mux.list_panes().await {
+            Ok(panes) => Some(panes),
+            Err(error) => {
+                if crate::warn_limit::allow(None,"codex_watch_panes_unavailable") {
+                    tracing::warn!(code="codex_watch_panes_unavailable",reason=%error.code,"vigia do Codex com terminal sem a lista de panes; rodada sem decisão");
+                }
+                None
+            }
+        }
     }
 
     /// Uma rodada por segundo, ou na hora em que um ator adotado perde o app-server.
@@ -453,6 +471,7 @@ impl Watcher {
 
     /// Lê os sidecars e os panes e acerta o registro: vida trocada fecha, pane morto encerra, sessão nova
     /// é adotada. Sem resposta do multiplexador nada se decide: sessão que não se vê não é sessão morta.
+    /// Enquanto a lista está aberta e mostra vivas as sessões adotadas, a rodada não abre o multiplexador.
     pub async fn round(&self,registry:&RuntimeRegistry) {
         let mut misses = self.misses.lock().await;
         let dir = codex_sidecar::dir(&self.cfg.home);
@@ -464,17 +483,15 @@ impl Watcher {
         let targets = registry.codex_terminals().await;
         let candidates = sidecars.iter().map(|(_,meta)|candidate(meta,home)).collect::<Vec<_>>();
         // Sem ator nem sidecar adotável nada abaixo lê os panes: a rodada não abre o multiplexador.
-        let panes = if targets.is_empty() && candidates.iter().all(Option::is_none) { Vec::new() } else {
-            match self.cfg.mux.list_panes().await {
-                Ok(panes) => panes,
-                Err(error) => {
-                    if crate::warn_limit::allow(None,"codex_watch_panes_unavailable") {
-                        tracing::warn!(code="codex_watch_panes_unavailable",reason=%error.code,"vigia do Codex com terminal sem a lista de panes; rodada sem decisão");
-                    }
-                    return;
-                }
-            }
-        };
+        let idle = targets.is_empty() && candidates.iter().all(Option::is_none);
+        // Os panes que a lista leu no último intervalo dela só servem para dizer "está viva". Ausência, morte
+        // e adoção se decidem com leitura própria, feita na primeira vez em que a rodada precisa dela.
+        let shared = if idle { None } else { self.cfg.mux.shared(self.shared_age) };
+        let mut own = idle.then(Vec::new);
+        if own.is_none() && shared.is_none() {
+            let Some(panes) = self.own_panes().await else { return };
+            own = Some(panes);
+        }
         let mut seen = BTreeSet::new();
         for target in targets {
             // O mesmo cálculo do vetor acima: lido duas vezes, o registro de transferência podia dar duas respostas na rodada.
@@ -488,7 +505,16 @@ impl Watcher {
                 _ => {
                     // O pid da TUI relido a cada rodada: o lançador costuma gravá-lo depois da adoção.
                     let tui = raw.and_then(|meta|pid(meta,"tui_pid")).or_else(||pid(target.metadata.as_object()?,"tui_pid"));
-                    if !gone(&panes,&target.name,Some((target.terminal.pane.as_str(),target.terminal.created)),tui).await { continue; }
+                    let life = Some((target.terminal.pane.as_str(),target.terminal.created));
+                    // Com a ausência já em contagem o retrato da lista não vale: ele pode ser anterior a ela.
+                    if own.is_none() && !misses.contains_key(&target.key)
+                        && shared.as_deref().is_some_and(|panes|present(panes,&target.name,life)) { continue; }
+                    if own.is_none() {
+                        let Some(panes) = self.own_panes().await else { return };
+                        own = Some(panes);
+                    }
+                    let Some(panes) = own.as_deref() else { return };
+                    if !gone(panes,&target.name,life,tui).await { continue; }
                     seen.insert(target.key.clone());
                     if self.absent_long_enough(&mut misses,&target.key) { self.bury(registry,&target).await; }
                 }
@@ -506,13 +532,18 @@ impl Watcher {
                 registry.report("runtime.stale_life_failed",&c.name,&error.code,"a entrada de outra vida não saiu e o Codex não foi adotado");
             }
             if registry.has_entry(c.key.as_deref(),&c.name).await { continue; }
-            match pane_of(&panes,&c.name) {
+            if own.is_none() {
+                let Some(panes) = self.own_panes().await else { return };
+                own = Some(panes);
+            }
+            let Some(panes) = own.as_deref() else { return };
+            match pane_of(panes,&c.name) {
                 Some(pane) => if let Err(error) = self.adopt(registry,c.clone(),pane).await
                     && crate::warn_limit::allow(Some(&c.name),&error.code) {
                     tracing::warn!(session=%c.name,code=%error.code,reason=%error.message,"Codex com terminal não adotado");
                 },
                 // Sem ator e sem pane: a sessão morreu com o Rust fora; a vigia limpa o que sobrou.
-                None if gone(&panes,&c.name,None,c.tui_pid).await => {
+                None if gone(panes,&c.name,None,c.tui_pid).await => {
                     let orphan = format!("\0{}\0{}\0{}",c.name,c.endpoint,c.app_pid);
                     seen.insert(orphan.clone());
                     if self.absent_long_enough(&mut misses,&orphan) {
@@ -783,13 +814,18 @@ pub fn pane_driver(binding:&crate::terminal_input::TerminalBinding,serial:Arc<to
         .with_serial(serial)
 }
 
-/// A sessão acabou: o multiplexador respondeu sem o pane dela (nem pelo nome com o mesmo nascimento, nem,
-/// fora do psmux, pelo id, que sobrevive ao renomear) e a TUI da vida morreu.
-// ponytail: pid da TUI reaproveitado por outro processo segura a sessão como viva até o pid sair.
-async fn gone(panes:&[Pane],name:&str,life:Option<(&str,u64)>,tui:Option<u32>) -> bool {
+/// Os panes mostram a sessão: pelo nome com o mesmo nascimento ou, fora do psmux, pelo id, que sobrevive
+/// ao renomear.
+fn present(panes:&[Pane],name:&str,life:Option<(&str,u64)>) -> bool {
     let born = |pane:&Pane|life.is_none_or(|(_,c)|c == 0 || pane.session_created.is_none_or(|b|b == c));
     let by_id = |pane:&Pane|!cfg!(windows) && life.is_some_and(|(id,_)|pane.pane_id == id) && born(pane);
-    if pane_of(panes,name).is_some_and(born) || panes.iter().any(by_id) { return false; }
+    pane_of(panes,name).is_some_and(born) || panes.iter().any(by_id)
+}
+
+/// A sessão acabou: o multiplexador respondeu sem o pane dela (`present`) e a TUI da vida morreu.
+// ponytail: pid da TUI reaproveitado por outro processo segura a sessão como viva até o pid sair.
+async fn gone(panes:&[Pane],name:&str,life:Option<(&str,u64)>,tui:Option<u32>) -> bool {
+    if present(panes,name,life) { return false; }
     match tui {
         None => true,
         Some(pid) => tokio::task::spawn_blocking(move||super::process::argv(pid).is_none()).await.unwrap_or(false),

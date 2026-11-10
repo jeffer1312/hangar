@@ -815,8 +815,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
     mut receiver:mpsc::Receiver<Message>,internal:mpsc::Sender<Message>,closed:Arc<AtomicBool>,events:broadcast::Sender<RuntimeEvent>,
     adoption:Option<super::codex_terminal::Adoption>) -> Result<(),RuntimeError> {
     let start = Instant::now();
-    let initial = queue.initial_state().clone();
-    engine.restore(&initial);
+    engine.restore(queue.initial_state());
     // Socket novo nunca herda `connected`/`subscribed` da vista salva: inicializa e assina de novo.
     let adopted = matches!(connection,Some(RuntimeConnection::WebSocket(_)));
     let unconnected = connection.is_none();
@@ -831,6 +830,8 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
     };
     let mut io = io.hold_lease(queue.lease());
     let queue = Arc::new(queue);
+    // Emprestado, não copiado: o estado da abertura leva a vista com o catálogo de comandos e todas as operações.
+    let initial = queue.initial_state();
     let mut jobs = JoinSet::new();
     let mut roots:BTreeMap<String,Pending> = BTreeMap::new();
     let preparation = Arc::new((Mutex::new(1u64),Notify::new()));
@@ -2857,11 +2858,12 @@ async fn store_view(queue:&QueueActor,generation:u64,sample:ClockSample,gate:&Mu
     }
     // A forçada pode chegar depois de uma mudança de estado mais nova que pulou o disco: grava a vista
     // mais nova conhecida, cujo contador é o maior.
-    let latest = saved.latest.clone();
-    let durable = durable_part(&latest);
+    let durable = durable_part(&saved.latest);
     if !force && saved.durable.as_ref() == Some(&durable) { return Ok(false); }
     if patient && sample.monotonic_s - saved.written_at < VIEW_SAVE_EVERY
         && saved.durable.as_ref().is_some_and(|written|only_measures_differ(written,&durable)) { return Ok(true); }
+    // Só quem grava copia a vista inteira (ela leva o catálogo de comandos).
+    let latest = saved.latest.clone();
     queue.exec(generation,&format!("state:{}",unique()),sample,
         Action::AdvanceLifecycle { generation,state:json!({"view":latest}) }).await.map_err(io_failure)?;
     saved.durable = Some(durable);
@@ -3400,6 +3402,31 @@ mod tests {
         let (other,mut receive_other) = oneshot::channel();
         answer_repeat(&mut pending,&RuntimeCommand {payload:json!({"text":"outro"}),..original.clone()},other);
         assert_eq!(receive_other.try_recv().unwrap().err().unwrap().code,"operation_reused");
+    }
+
+    #[tokio::test]
+    async fn a_view_with_the_command_catalog_reaches_the_disk_unchanged_and_only_when_it_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let lease = super::super::queue::acquire_lease(&dir.path().join("key.lock")).unwrap();
+        let store = super::super::queue::Store::open(&dir.path().join("state.json"),&dir.path().join("projection"),
+            super::super::queue::State::new("key",1,"session",vec![])).unwrap();
+        let queue = QueueActor::start(store,lease);
+        let gate = Mutex::new(SavedView::default());
+        let sample = ClockSample { monotonic_s:0.0,epoch_s:0.0 };
+        let commands:Vec<Value> = (0..300).map(|i|json!({"name":format!("/comando-{i}"),"description":"x".repeat(200),"argumentHint":"<arg>"})).collect();
+        let view = |working:bool| json!({"model":"m","commands":commands,"terminal_commands":[],"in_progress":working,"runtime_counter":1});
+        save_view(&queue,1,sample,&gate,1,&view(false),false).await.unwrap();
+        let written = queue.snapshot().await.unwrap();
+        assert_eq!(serde_json::to_vec(&written.runtime_state["view"]).unwrap(),serde_json::to_vec(&view(false)).unwrap());
+        // Só campo volátil mudou: nada vai ao disco, e a vista guardada continua a que foi gravada.
+        save_view(&queue,1,sample,&gate,2,&view(true),false).await.unwrap();
+        let after = queue.snapshot().await.unwrap();
+        assert_eq!(after.next_seq,written.next_seq,"vista sem mudança durável foi regravada");
+        assert_eq!(after.runtime_state["view"],view(false));
+        // A forçada grava a mais nova inteira, com o catálogo.
+        save_view(&queue,1,sample,&gate,2,&view(true),true).await.unwrap();
+        assert_eq!(queue.snapshot().await.unwrap().runtime_state["view"],view(true));
+        queue.shutdown().await.unwrap();
     }
 
     #[tokio::test]

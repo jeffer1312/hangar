@@ -519,6 +519,8 @@ impl ListBridge {
             self.facts.diag.report("rust.list_discovery", &p.key, p.code, p.reason);
         }
         let panes = Arc::new(panes);
+        // A vigia do Codex com terminal lê os mesmos panes a cada segundo: com estes à mão, ela não abre o programa.
+        self.env.mux.share(panes.clone());
         let (env, caches, p) = (self.env.clone(), self.caches.clone(), panes.clone());
         let max_age = if newer_than.is_some() { Duration::ZERO } else { procs::CHILDREN_TTL };
         let (rows, agent_pids, children, problems) = tokio::task::spawn_blocking(move || {

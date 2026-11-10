@@ -31,6 +31,18 @@ pub struct CaptureResult {
     pub started: f64,
     pub text: String,
     pub analysis: PaneAnalysis,
+    /// Quem era o pane nesta leitura; fora do JSON, que segue como era.
+    #[serde(skip)]
+    pub pane: Option<PaneIdentity>,
+}
+
+/// Identidade do pane lida na mesma resposta dos metadados da captura.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PaneIdentity {
+    pub id: String,
+    pub name: String,
+    pub created: u64,
+    pub pane_pid: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -292,17 +304,24 @@ fn validate(r: &CaptureRequest) -> Result<()> {
 fn quote(value: &str) -> String { format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\"").replace('$', "\\$")) }
 
 #[derive(Clone, PartialEq, Eq)]
-struct PaneInfo { id: String, name: String, columns: usize, rows: usize, cursor_x: usize, cursor_y: usize, alternate: bool }
+struct PaneInfo { id: String, name: String, columns: usize, rows: usize, cursor_x: usize, cursor_y: usize, alternate: bool,
+    /// `session_created` e `pane_pid`, quando o multiplexador os devolveu inteiros.
+    life: Option<(u64, i64)> }
 impl PaneInfo {
     fn parse(text: &str, name: &str) -> Result<Self> {
         let fields: Vec<_> = text.trim_end_matches('\n').split('\t').collect();
-        if fields.len() != 7 || !pane_id(fields[0]) || fields[1] != name || !matches!(fields[6], "0" | "1") {
+        // Os dois últimos são acréscimo: quem responde só os sete de antes segue aceito, sem a identidade.
+        if !matches!(fields.len(), 7 | 9) || !pane_id(fields[0]) || fields[1] != name || !matches!(fields[6], "0" | "1") {
             return Err(TerminalError("invalid terminal metadata"));
         }
         let number = |index: usize| fields[index].parse::<usize>().map_err(|_| TerminalError("invalid terminal metadata"));
-        let info = Self { id: fields[0].into(), name: fields[1].into(), columns: number(2)?, rows: number(3)?, cursor_x: number(4)?, cursor_y: number(5)?, alternate: fields[6] == "1" };
+        let life = fields.get(7).and_then(|created| created.parse().ok()).zip(fields.get(8).and_then(|pid| pid.parse().ok()));
+        let info = Self { id: fields[0].into(), name: fields[1].into(), columns: number(2)?, rows: number(3)?, cursor_x: number(4)?, cursor_y: number(5)?, alternate: fields[6] == "1", life };
         if info.columns == 0 || info.rows == 0 || info.cursor_x > info.columns || info.cursor_y >= info.rows { return Err(TerminalError("invalid terminal cursor")); }
         Ok(info)
+    }
+    fn identity(&self) -> Option<PaneIdentity> {
+        self.life.map(|(created, pane_pid)| PaneIdentity { id: self.id.clone(), name: self.name.clone(), created, pane_pid })
     }
 }
 struct Observer {
@@ -383,7 +402,7 @@ impl Observer {
         }).await.map_err(|_| TerminalError("terminal command timeout"))?
     }
     async fn info(&mut self, key: &Key) -> Result<PaneInfo> {
-        let text = self.command(format!("display-message -p -t {} \"#{{pane_id}}\\t#{{session_name}}\\t#{{pane_width}}\\t#{{pane_height}}\\t#{{cursor_x}}\\t#{{cursor_y}}\\t#{{alternate_on}}\"\n", quote(&key.target))).await?;
+        let text = self.command(format!("display-message -p -t {} \"#{{pane_id}}\\t#{{session_name}}\\t#{{pane_width}}\\t#{{pane_height}}\\t#{{cursor_x}}\\t#{{cursor_y}}\\t#{{alternate_on}}\\t#{{session_created}}\\t#{{pane_pid}}\"\n", quote(&key.target))).await?;
         let info = PaneInfo::parse(&text, &key.name)?;
         if self.pane.as_ref().is_some_and(|old| old.id != info.id) { return Err(TerminalError("terminal target changed")); }
         Ok(info)
@@ -391,9 +410,10 @@ impl Observer {
     async fn capture(&mut self, key: &Key, request: CaptureRequest) -> Result<CaptureResult> {
         let info = self.info(key).await?;
         self.pane = Some(info.clone());
+        let pane = info.identity();
         let text = self.command(format!("capture-pane -p {}{}-t {} -S -{}\n", if request.colors { "-e " } else { "" }, if request.join { "-J " } else { "" }, quote(&info.id), request.lines)).await?;
         let analysis = terminal_state::analyze(&text);
-        Ok(CaptureResult { binding: request.binding, started: request.started, text, analysis })
+        Ok(CaptureResult { binding: request.binding, started: request.started, text, analysis, pane })
     }
     async fn stop(&mut self) {
         self.pane = None; self.events.clear();
@@ -522,4 +542,21 @@ pub fn watch_notices(mux_argv: &[String], name: &str) -> Result<(mpsc::Receiver<
         }
     });
     Ok((rx, task))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pane_identity_is_an_addition_that_never_fails_the_capture() {
+        let full = PaneInfo::parse("%3\tfixture\t80\t24\t0\t0\t0\t1794329077\t1042814\n", "fixture").unwrap();
+        assert_eq!(full.identity(), Some(PaneIdentity { id: "%3".into(), name: "fixture".into(), created: 1794329077, pane_pid: 1042814 }));
+        // Quem responde só os sete campos de antes, ou não sabe os dois novos, segue capturando sem a identidade.
+        for text in ["%3\tfixture\t80\t24\t0\t0\t0\n", "%3\tfixture\t80\t24\t0\t0\t0\t\t\n", "%3\tfixture\t80\t24\t0\t0\t0\t1794329077\t\n"] {
+            assert_eq!(PaneInfo::parse(text, "fixture").map(|info| info.identity()), Ok(None), "{text:?}");
+        }
+        assert!(PaneInfo::parse("%3\tfixture\t80\t24\t0\t0\t0\t1794329077\n", "fixture").is_err());
+        assert!(PaneInfo::parse("%3\toutra\t80\t24\t0\t0\t0\t1794329077\t1042814\n", "fixture").is_err());
+    }
 }
