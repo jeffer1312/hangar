@@ -21,7 +21,41 @@ pub struct AuthConfig {
 #[serde(deny_unknown_fields)]
 struct Store { version: u32, parent_epoch: String, origins: Origins }
 
-pub struct SharedLimiter { path: PathBuf, epoch: String, expected: Vec<u8>, key: hmac::Key }
+pub struct SharedLimiter { path: PathBuf, epoch: String, expected: Vec<u8>, key: hmac::Key,
+    #[cfg(unix)] _alive: Option<File> }
+
+/// Marcador de vida da pasta: a trava compartilhada dura enquanto este limitador existir, e o kernel a solta
+/// se o processo morrer. Sem ele o limitador segue igual; só a varredura deixa de reconhecer a pasta.
+#[cfg(unix)]
+fn hold_marker(state: &std::path::Path) -> Option<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let marker = state.with_file_name(crate::sweep::ALIVE);
+    let report = |what: &str, error: &dyn std::fmt::Display| {
+        let _ = writeln!(std::io::stderr(), "hangar-auth: marcador de vida {what} em {}: {error}", marker.display());
+    };
+    let open = |fresh: bool| OpenOptions::new().read(true).write(true).create_new(fresh).mode(0o600).open(&marker);
+    let (file, created) = match open(true) {
+        Ok(file) => (file, true),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => match open(false) {
+            Ok(file) => (file, false),
+            Err(error) => { report("indisponível", &error); return None; }
+        },
+        Err(error) => { report("indisponível", &error); return None; }
+    };
+    // Sem esperar: a única trava que barra esta é a da varredura, que só a pega em pasta já sem dono.
+    match file.try_lock_shared() {
+        Ok(()) => Some(file),
+        Err(fs::TryLockError::WouldBlock) => { report("ocupado", &"a varredura segura a pasta"); None }
+        Err(fs::TryLockError::Error(error)) => {
+            // Marcador nosso e sem trava pareceria órfão depois da folga: sem ele a pasta nunca sai. O de
+            // outro processo fica, porque quem o criou pode estar segurando a trava.
+            if created { let _ = fs::remove_file(&marker); }
+            report("indisponível", &error);
+            None
+        }
+    }
+}
+
 impl SharedLimiter {
     pub fn open(config: AuthConfig) -> Result<Self, AuthError> {
         if config.abi != AUTH_ABI || config.store_version != AUTH_STORE { return Err(AuthError::AbiMismatch); }
@@ -31,7 +65,8 @@ impl SharedLimiter {
         }
         let key = unhex(&config.receipt_key).ok_or(AuthError::InvalidInput)?;
         if key.len() != 32 { return Err(AuthError::InvalidInput); }
-        let context = Self { path: config.state_path, epoch: config.parent_epoch,
+        let context = Self { #[cfg(unix)] _alive: hold_marker(&config.state_path),
+            path: config.state_path, epoch: config.parent_epoch,
             expected: config.expected_token.into_bytes(), key: hmac::Key::new(hmac::HMAC_SHA256, &key) };
         let _guard = context.lock()?;
         if config.mode == "create" {

@@ -39,7 +39,7 @@ use crate::share::store::{Guest, Kind};
 use crate::tail::{comment_frame, ping_frame, sse_frame};
 
 /// O tique do `_ListRefresher`, contado do fim do trabalho.
-const TICK: Duration = Duration::from_millis(1500);
+pub(crate) const TICK: Duration = Duration::from_millis(1500);
 const PING_EVERY: Duration = Duration::from_secs(8);
 const COMMENT_EVERY: Duration = Duration::from_secs(15);
 /// Envio preso por 30 s fecha a conexão, como o `send_timeout` do Python.

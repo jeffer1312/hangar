@@ -233,6 +233,21 @@ async def _worker(binary):
                         if time.monotonic() >= deadline:
                             raise RuntimeError("servidor de ensaio não abriu a porta pública")
                         await asyncio.sleep(.01)
+                    # A saúde responde antes de a preparação inicial liberar as rotas: até lá todo pedido é 503
+                    # `server_starting`, e o processo não imprime nada quando ela termina. O pedido de loopback
+                    # sem token nunca conta falha no limitador.
+                    prepared_by = time.monotonic() + 30
+                    while True:
+                        try:
+                            response = await probe.get(f"http://127.0.0.1:{root_port}/api/me")
+                            if not (response.status_code == 503 and response.json() == {"detail": "server_starting"}):
+                                break
+                        except httpx.TransportError:
+                            pass
+                        if time.monotonic() >= prepared_by:
+                            raise RuntimeError("servidor de ensaio não terminou a preparação inicial")
+                        # estavel: intervalo entre consultas de uma espera por condição com teto de 30 s, não espera por tempo.
+                        await asyncio.sleep(.01)
                 return process
             except BaseException:
                 process.kill()
@@ -298,7 +313,7 @@ async def _worker(binary):
                 # As falhas atravessam as duas implementações e duas portas de verdade.
                 for i in range(7):
                     response = await request(root, browser if i % 2 else "/api/me")
-                    assert response.status_code == 401
+                    assert response.status_code == 401, (i, response.status_code, response.text[:300])
                 assert await ws_status(direct, "/api/auth-ws/browser", "wrong", "198.51.100.10") == 403
                 assert len(hits("198.51.100.10")) == 8
                 for path in (browser, "/api/me"):

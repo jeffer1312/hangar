@@ -85,6 +85,13 @@ struct Query {
     found: Found,
 }
 impl Query {
+    /// O texto que a linha precisa conter para esta pergunta achar algo nela.
+    fn needle(&self) -> &str {
+        match &self.kind {
+            Kind::Cited { escaped, .. } => escaped,
+            Kind::Mentions { name, .. } => name,
+        }
+    }
     fn line(&mut self, line: &Line<'_>) {
         let Query { kind, found, .. } = self;
         let text = line.text;
@@ -214,8 +221,12 @@ fn anchor_at(mut file: &File, end: u64) -> Option<Vec<u8>> {
 /// Põe em cada pergunta o que ela já tinha achado neste arquivo e devolve de onde cada uma continua.
 /// Sem geração (`None`) nada é guardado depois.
 fn resume(path: &Path, file: &File, queries: &mut [Query]) -> (Option<u64>, Vec<u64>) {
-    let Ok(meta) = file.metadata() else {
-        return (None, vec![0; queries.len()]);
+    let meta = match file.metadata() {
+        Ok(meta) => meta,
+        Err(error) => {
+            tracing::warn!(code = "citations_transcript_unreadable", kind = ?error.kind(), "conversa sem metadados; lida inteira, sem guardar");
+            return (None, vec![0; queries.len()]);
+        }
     };
     let id = file_id(&meta);
     let mut scanned = SCANNED.lock().unwrap_or_else(|e| e.into_inner());
@@ -273,7 +284,29 @@ fn store(path: &Path, generation: u64, end: u64, anchor: Vec<u8>, queries: &[Que
     }
 }
 
-fn feed(queries: &mut [Query], starts: &[u64], at: u64, bytes: &[u8]) {
+/// Bytes lidos numa passada antes de valer a pena montar o padrão. Nos testes vale desde a primeira linha,
+/// para as conversas pequenas deles passarem pelo atalho.
+const PREFILTER_AFTER: u64 = if cfg!(test) { 0 } else { 256 * 1024 };
+
+/// Uma procura só, nos bytes da linha, pelo texto de todas as perguntas: a linha sem nenhum não muda a resposta
+/// de nenhuma, e deixa de custar a conversão para texto e uma procura por pergunta. `None` (sem atalho) se o
+/// padrão não couber ou se algum texto tiver U+FFFD: a conversão põe esse caractere no lugar de byte inválido, e
+/// só aí o texto da linha poderia ter o que os bytes dela não têm.
+fn any_needle(queries: &[Query]) -> Option<regex::bytes::Regex> {
+    if queries.iter().any(|query| query.needle().contains('\u{FFFD}')) {
+        return None;
+    }
+    let needles = queries.iter().map(|query| regex::escape(query.needle())).collect::<Vec<_>>();
+    // Sem o erro no log: ele pode trazer o padrão, que é feito dos caminhos procurados.
+    regex::bytes::Regex::new(&needles.join("|"))
+        .inspect_err(|_| tracing::warn!(code = "citations_needle_pattern_failed", queries = queries.len(), "padrão das perguntas não coube; a leitura segue sem o atalho"))
+        .ok()
+}
+
+fn feed(queries: &mut [Query], starts: &[u64], any: Option<&regex::bytes::Regex>, at: u64, bytes: &[u8]) {
+    if any.is_some_and(|any| !any.is_match(bytes)) {
+        return;
+    }
     let text = String::from_utf8_lossy(bytes);
     let line = Line::new(&text);
     for (query, start) in queries.iter_mut().zip(starts) {
@@ -295,31 +328,49 @@ fn scan(source: Transcript<'_>, mut queries: Vec<Query>) -> Vec<Query> {
         }
         Transcript::File(path) => path,
     };
-    let Ok(file) = File::open(path) else {
-        return queries;
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(error) => {
+            // Conversa que ainda não existe é resposta vazia, não defeito.
+            if error.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(code = "citations_transcript_unreadable", kind = ?error.kind(), "conversa não abriu; nenhuma citação lida");
+            }
+            return queries;
+        }
     };
     let (generation, starts) = resume(path, &file, &mut queries);
     let Some(from) = starts.iter().copied().min() else {
         return queries;
     };
-    let mut reader = BufReader::new(&file);
-    if reader.seek(SeekFrom::Start(from)).is_err() {
+    let mut reader = BufReader::with_capacity(1 << 20, &file);
+    if let Err(error) = reader.seek(SeekFrom::Start(from)) {
+        tracing::warn!(code = "citations_transcript_unreadable", kind = ?error.kind(), "conversa não posicionou; nenhuma citação lida");
         return queries;
     }
     let mut end = from;
     let mut buffer = Vec::new();
+    // O padrão só é montado depois de `PREFILTER_AFTER` bytes lidos: no trecho curto que a conversa
+    // cresceu entre dois pedidos, montá-lo custa mais do que ele poupa.
+    let any = OnceCell::new();
     // `partial`: a última linha ainda sem `\n` (escrita em curso).
     let partial = loop {
         buffer.clear();
         match reader.read_until(b'\n', &mut buffer) {
-            Ok(0) | Err(_) => break false,
+            Ok(0) => break false,
+            // O ponto guardado abaixo é o fim da última linha lida inteira: a próxima leitura retoma no
+            // trecho que falhou, sem pular nada.
+            Err(error) => {
+                tracing::warn!(code = "citations_transcript_read_failed", kind = ?error.kind(), at = end, "leitura da conversa falhou no meio; a resposta vai só até ali");
+                break false;
+            }
             Ok(read) => {
                 #[cfg(test)]
                 READ.with(|total| total.set(total.get() + read as u64));
                 if buffer.last() != Some(&b'\n') {
                     break true;
                 }
-                feed(&mut queries, &starts, end, &buffer);
+                let any = (end - from >= PREFILTER_AFTER).then(|| any.get_or_init(|| any_needle(&queries)).as_ref()).flatten();
+                feed(&mut queries, &starts, any, end, &buffer);
                 end += read as u64;
             }
         }
@@ -334,22 +385,29 @@ fn scan(source: Transcript<'_>, mut queries: Vec<Query>) -> Vec<Query> {
     }
     // A linha incompleta entra só nesta resposta: o ponto guardado fica antes dela, e ela é relida inteira.
     if partial {
-        feed(&mut queries, &starts, end, &buffer);
+        let any = any.get_or_init(|| any_needle(&queries)).as_ref();
+        feed(&mut queries, &starts, any, end, &buffer);
     }
     queries
 }
 
 pub fn cwds(jsonl: Transcript<'_>, needles: &[String]) -> Value {
+    ask(jsonl, needles, &[]).0
+}
+
+/// Uma leitura da conversa para tudo o que o pedido pergunta: as pastas de quem citou cada caminho de `cited`
+/// (`cwds`) e, na ordem pedida, as menções de cada caminho de `mentioned` (`elsewhere`).
+fn ask(jsonl: Transcript<'_>, cited: &[String], mentioned: &[String]) -> (Value, Vec<Value>) {
     // A linha é JSON cru: caminho do Windows aparece com a contrabarra dobrada (`C:\\Users\\x.png`). Procura-se a
     // forma escapada de cada caminho e o achado volta com o caminho original.
-    let mut wanted = needles
+    let mut wanted = cited
         .iter()
         .filter(|s| !s.is_empty())
         .map(|s| (json_escaped(s), s.clone()))
         .collect::<Vec<_>>();
     wanted.sort();
     wanted.dedup();
-    let queries = wanted
+    let mut queries = wanted
         .iter()
         .map(|(escaped, _)| {
             // Na mesma posição vale o caminho mais longo: os que começam por este o escondem ali.
@@ -364,16 +422,37 @@ pub fn cwds(jsonl: Transcript<'_>, needles: &[String]) -> Value {
                 found: Found::default(),
             }
         })
-        .collect();
+        .collect::<Vec<_>>();
+    // `None`: caminho que não se procura (vazio ou com `..`).
+    let asked = mentioned
+        .iter()
+        .map(|path| mentions(path).map(|query| queries.push(query)).is_some())
+        .collect::<Vec<_>>();
+    let mut answers = scan(jsonl, queries).into_iter();
     let mut map = serde_json::Map::new();
-    for ((_, needle), query) in wanted.iter().zip(scan(jsonl, queries)) {
+    for ((_, needle), query) in wanted.iter().zip(answers.by_ref()) {
         if query.found.seen {
             let mut list = query.found.folders;
             list.reverse();
             map.insert(needle.clone(), json!(list));
         }
     }
-    Value::Object(map)
+    let mentions = asked
+        .into_iter()
+        .map(|asked| {
+            let found = asked.then(|| answers.next()).flatten().map(|query| query.found).unwrap_or_default();
+            let absolute = recent(found.absolute, KEEP_ABSOLUTE)
+                .into_iter()
+                .filter(|p| Path::new(p).is_file())
+                .collect::<Vec<_>>();
+            let relative = recent(found.relative, KEEP_RELATIVE)
+                .into_iter()
+                .filter(|p| !p.split('/').any(|s| s == ".."))
+                .collect::<Vec<_>>();
+            json!([absolute, relative])
+        })
+        .collect();
+    (Value::Object(map), mentions)
 }
 fn json_escaped(text: &str) -> String {
     let quoted = serde_json::to_string(text).unwrap_or_default();
@@ -396,34 +475,32 @@ fn beginning(prefix: &str) -> bool {
             .last()
             .is_some_and(|c| c.is_whitespace() || "\"`'([=:,".contains(c))
 }
-pub fn elsewhere(jsonl: Transcript<'_>, path: &str) -> Value {
+/// A pergunta pelas menções de `path`; `None` para caminho vazio ou com `..`.
+fn mentions(path: &str) -> Option<Query> {
     let tail = path
         .replace('\\', "/")
         .trim_start_matches("./")
         .trim_matches('/')
         .to_owned();
     if tail.is_empty() || tail.split('/').any(|p| p == "..") {
-        return json!([[], []]);
+        return None;
     }
     let name = tail.rsplit('/').next().unwrap().to_owned();
     let relative = (!tail.contains('/'))
         .then(|| regex::Regex::new(&format!(r"(?:[\p{{L}}\p{{N}}_.-]+/)+{}", regex::escape(&name))).ok())
         .flatten();
-    let query = Query {
+    Some(Query {
         key: format!("mentions\0{tail}"),
         kind: Kind::Mentions { suffix: format!("/{tail}"), name, relative },
         found: Found::default(),
-    };
-    let found = scan(jsonl, vec![query]).pop().map(|query| query.found).unwrap_or_default();
-    let absolute = recent(found.absolute, KEEP_ABSOLUTE)
-        .into_iter()
-        .filter(|p| Path::new(p).is_file())
-        .collect::<Vec<_>>();
-    let relative = recent(found.relative, KEEP_RELATIVE)
-        .into_iter()
-        .filter(|p| !p.split('/').any(|s| s == ".."))
-        .collect::<Vec<_>>();
-    json!([absolute, relative])
+    })
+}
+pub fn elsewhere(jsonl: Transcript<'_>, path: &str) -> Value {
+    ask(jsonl, &[], std::slice::from_ref(&path.to_owned())).1.pop().unwrap_or_else(|| json!([[], []]))
+}
+/// `elsewhere` de vários caminhos numa leitura só da conversa, na ordem pedida.
+pub fn elsewhere_many(jsonl: Transcript<'_>, paths: &[String]) -> Vec<Value> {
+    ask(jsonl, &[], paths).1
 }
 pub fn find_elsewhere(
     jsonl: Transcript<'_>,
@@ -432,7 +509,10 @@ pub fn find_elsewhere(
     worked: &[String],
     siblings: bool,
 ) -> Option<PathBuf> {
-    let result = elsewhere(jsonl, path);
+    locate(&elsewhere(jsonl, path), cwd, path, worked, siblings)
+}
+/// O arquivo que as menções de `path` (resposta de `elsewhere`) apontam, procurado nas pastas da sessão.
+pub fn locate(result: &Value, cwd: &Path, path: &str, worked: &[String], siblings: bool) -> Option<PathBuf> {
     if let Some(p) = result[0].as_array()?.first().and_then(Value::as_str) {
         return Some(PathBuf::from(p));
     }
@@ -484,7 +564,9 @@ pub fn resolve(cwd: &Path, jsonl: Transcript<'_>, path: &str, write: bool) -> Re
     if path.is_empty() || path.contains('\0') {
         return Err(error(400, "invalid path"));
     }
-    let cited = cwds(jsonl, &[path.into()]);
+    let expanded = crate::expand_home(path);
+    let relative = !expanded.is_absolute() && !path.replace('\\', "/").split('/').any(|p| p == "..");
+    let cited = cwds(jsonl, &[path.to_owned()]);
     let Some(bases) = cited.get(path).and_then(Value::as_array) else {
         return Err(crate::WorkspaceError {
             status: 403,
@@ -492,11 +574,10 @@ pub fn resolve(cwd: &Path, jsonl: Transcript<'_>, path: &str, write: bool) -> Re
             code: None,
         });
     };
-    let expanded = crate::expand_home(path);
     let target = if expanded.is_absolute() {
         real(&expanded)
     } else {
-        if path.replace('\\', "/").split('/').any(|p| p == "..") {
+        if !relative {
             return Err(crate::WorkspaceError {
                 status: 403,
                 detail: json!({"code":"erro_caminho_fora_cwd","params":{},"msg":"path escapes session cwd"}),
@@ -519,7 +600,8 @@ pub fn resolve(cwd: &Path, jsonl: Transcript<'_>, path: &str, write: bool) -> Re
                 let target = real(&base.join(&expanded));
                 (target != *base && target.starts_with(base) && target.is_file()).then_some(target)
             })
-            // Caminho real antes da trava do `.git`: um atalho citado não pode escapar dela.
+            // Só quem não resolveu nas pastas da sessão pergunta pelas menções. Caminho real antes da trava
+            // do `.git`: um atalho citado não pode escapar dela.
             .or_else(|| find_elsewhere(jsonl, cwd, path, &worked, !write).map(|p| real(&p)))
             .ok_or_else(not_found)?
     };
@@ -545,7 +627,7 @@ fn not_found() -> crate::WorkspaceError {
 
 #[cfg(test)]
 mod tests {
-    use super::{READ, Transcript, cwds, elsewhere};
+    use super::{READ, Transcript, cwds, elsewhere, elsewhere_many};
     use serde_json::{Value, json};
     use std::{io::Write, path::Path};
 
@@ -633,6 +715,100 @@ mod tests {
             json!({"/tmp/a.png": ["/proj/a"], "/tmp/early.png": ["/proj/b"], "/tmp/shot.png": ["/proj/b"]}),
             "a linha completada perdeu o começo"
         );
+    }
+
+    #[test]
+    fn many_questions_take_one_reading_and_answer_like_one_each() {
+        let dir = tempfile::tempdir().unwrap();
+        let jsonl = dir.path().join("c.jsonl");
+        let text = row("/proj/a", "veja src/a.rs e docs/b.md") + &row("/proj/b", "depois web/src/a.rs, c.png e docs/b.md");
+        append(&jsonl, &text);
+        let paths = ["a.rs".to_owned(), "docs/b.md".to_owned(), "../fora.rs".to_owned(), "c.png".to_owned(), "nada.txt".to_owned()];
+        let lines = rows(&jsonl);
+        let alone: Vec<Value> = paths.iter().map(|path| elsewhere(Transcript::Rows(&lines), path)).collect();
+        assert_eq!(alone[0][1], json!(["web/src/a.rs", "src/a.rs"]));
+        let read = read_by(|| assert_eq!(elsewhere_many(Transcript::File(&jsonl), &paths), alone));
+        assert_eq!(read, text.len() as u64, "cada pergunta leu a conversa de novo");
+        assert_eq!(elsewhere_many(Transcript::Rows(&lines), &paths), alone);
+    }
+
+    #[test]
+    fn bytes_that_are_not_text_do_not_change_what_a_full_reading_finds() {
+        let dir = tempfile::tempdir().unwrap();
+        let jsonl = dir.path().join("c.jsonl");
+        // Um byte inválido no meio de um caminho: no texto da linha ele vira U+FFFD.
+        let mut bytes = br#"{"cwd":"/proj","m":"veja /tmp/a"#.to_vec();
+        bytes.push(0xFF);
+        bytes.extend_from_slice(b".png e /tmp/b.png\"}\n");
+        std::fs::write(&jsonl, &bytes).unwrap();
+        let lines = [String::from_utf8_lossy(&bytes).into_owned()];
+        for needles in [
+            vec!["/tmp/a.png".to_owned(), "/tmp/b.png".to_owned()],
+            vec!["/tmp/a\u{FFFD}.png".to_owned(), "/tmp/b.png".to_owned()],
+            vec!["/tmp/a\u{FFFD}.png".to_owned()],
+        ] {
+            let found = cwds(Transcript::File(&jsonl), &needles);
+            assert_eq!(found, cwds(Transcript::Rows(&lines), &needles), "{needles:?}");
+            assert_eq!(found.get("/tmp/a.png"), None);
+        }
+        assert_eq!(cwds(Transcript::File(&jsonl), &["/tmp/a\u{FFFD}.png".to_owned()]), json!({"/tmp/a\u{FFFD}.png": ["/proj"]}));
+    }
+
+    /// Números repetíveis para o ensaio abaixo.
+    struct Dice(u64);
+    impl Dice {
+        fn roll(&mut self, sides: usize) -> usize {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((self.0 >> 33) as usize) % sides
+        }
+        fn pick<'a>(&mut self, from: &[&'a str]) -> &'a str {
+            from[self.roll(from.len())]
+        }
+    }
+
+    #[test]
+    fn any_order_of_questions_on_a_growing_conversation_matches_a_full_reading() {
+        // Caminhos que começam um pelo outro, com espaço, acento e contrabarra, citados e nunca citados.
+        let paths = [
+            "/tmp/a.png", "/tmp/a.png.bak", "/tmp/a", "/tmp/dir/a.png", r"C:\Users\Ana\shot 1.png", r"C:\Users\Ana",
+            "docs/ação.md", "ação.md", "src/app.rs", "app.rs", "web/src/app.rs", "/var/log/nunca.txt", "x", "ab",
+        ];
+        let filler = ["veja", "print em", "depois de", "e também", "```", "\\n", "(", "nada aqui", "/", "./"];
+        let mut dice = Dice(7);
+        for case in 0..200 {
+            let dir = tempfile::tempdir().unwrap();
+            let jsonl = dir.path().join("c.jsonl");
+            for step in 0..6 {
+                let mut text = String::new();
+                for _ in 0..dice.roll(12) {
+                    let words: Vec<&str> = (0..1 + dice.roll(6))
+                        .map(|_| if dice.roll(3) == 0 { dice.pick(&paths) } else { dice.pick(&filler) })
+                        .collect();
+                    text += &row(dice.pick(&["/proj/a", "/proj/b", ""]), &words.join(dice.pick(&[" ", "", ": "])));
+                }
+                match dice.roll(12) {
+                    // Regravado no lugar: tudo o que estava guardado deixa de valer.
+                    0 => std::fs::write(&jsonl, &text).unwrap(),
+                    // Linha ainda sendo escrita.
+                    1 => append(&jsonl, text.trim_end_matches('\n')),
+                    _ => append(&jsonl, &text),
+                }
+                for _ in 0..1 + dice.roll(3) {
+                    let asked: Vec<String> = (0..1 + dice.roll(4)).map(|_| dice.pick(&paths).to_owned()).collect();
+                    let lines = rows(&jsonl);
+                    assert_eq!(
+                        cwds(Transcript::File(&jsonl), &asked),
+                        cwds(Transcript::Rows(&lines), &asked),
+                        "caso {case}, passo {step}: {asked:?}"
+                    );
+                    assert_eq!(
+                        elsewhere_many(Transcript::File(&jsonl), &asked),
+                        elsewhere_many(Transcript::Rows(&lines), &asked),
+                        "menções, caso {case}, passo {step}: {asked:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -973,8 +973,9 @@ impl Observer {
         io: &Arc<dyn OtherIo>,
         interested: bool,
     ) -> Result<(observe::Observation, OtherFrame), RuntimeError> {
-        // Uma prova só, depois da leitura: a vida provada no fim já existia na captura (pid e
-        // nascimento não voltam).
+        // Uma prova só, depois da leitura. A identidade do pane é a do instante da captura (veio na
+        // mesma chamada); o agente é conferido no fim. Vida trocada entre os dois aparece na rodada
+        // seguinte. Sem a identidade da captura, a prova inteira é do fim.
         let frame = match io.capture().await {
             Ok(frame) => frame,
             Err(_) if !io.prove(target).await? => return Err(failed("other_terminal_life_changed")),

@@ -754,6 +754,10 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   com o binding nativo do contador compartilhado; sem Rust, HTTP responde 503 e WS fecha 1013.
   Não há callback HTTP de autenticação nem volta Rust → Python → Rust. Contrato e provas em
   [plataforma.md](docs/decisoes/plataforma.md#navegador-remoto-e-contador-compartilhado-de-autenticação-28102026).
+- **Pasta `hangar-auth-*` só sai com o marcador `state.alive` velho e sem trava.** Cada
+  `SharedLimiter` aberto segura a trava compartilhada nele; a subida do Rust apaga as órfãs
+  (`hangar_auth::sweep_orphans`, só Unix). Pasta sem marcador nunca sai; na dúvida, fica. Evidência em
+  [plataforma.md](docs/decisoes/plataforma.md#pastas-órfãs-do-contador-de-autenticação-10112026).
 - **O que ainda passa pelo Python com o Rust de pé (modo `rust`).** Esta lista é o inventário
   vivo: migração que tira um item o apaga daqui no mesmo commit; item novo só entra com o arquivo
   e a linha. Conferir antes de afirmar que algo "é do Rust" ou "ainda é do Python".

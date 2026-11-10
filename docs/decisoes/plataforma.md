@@ -867,6 +867,27 @@ lê o arquivo inteiro, então dez miniaturas de caminhos diferentes custam dez l
 vez. No Windows não há identidade de arquivo nesse crate: só o tamanho e os 64 bytes detectam a
 troca.
 
+**Primeira leitura mais barata e uma leitura por pedido (10/11/2026).** A primeira leitura de cada
+caminho novo continua passando pela conversa inteira, mas cada linha custava a conversão para texto
+e uma procura por pergunta. Agora uma procura só, nos bytes da linha, pelo texto de todas as
+perguntas decide se a linha interessa a alguma; a que não tem nenhum é pulada. O atalho não vale
+quando algum texto procurado tem U+FFFD, o caractere que a conversão põe no lugar de byte inválido:
+só aí o texto da linha poderia ter o que os bytes não têm. O padrão só é montado depois de 256 KiB
+lidos na passada (`PREFILTER_AFTER`): no trecho curto que a conversa cresceu entre dois pedidos,
+montá-lo custa mais do que poupa. O `files/resolver` pede todos os caminhos numa leitura
+(`elsewhere_many`): antes era uma por caminho, até 30 por pedido. O `resolve` de um arquivo só
+pergunta pelas menções quando o caminho não resolve nas pastas da sessão. A leitura de referência
+dos testes (`Transcript::Rows`) segue sem o atalho, e um ensaio de 200 conversas geradas compara as
+duas a cada pergunta.
+
+Medido em release no mesmo transcript de 481 MB, cache de página quente, mínimo de 3 execuções:
+resolver com 30 caminhos novos, 8.626 ms antes (uma leitura do `cwds` mais 30 do `elsewhere`) e
+278 ms agora (113 ms + 165 ms, duas leituras); dez caminhos novos pedidos um a um, 2.543 ms antes
+(241–279 ms cada) e 863 ms agora (85–89 ms cada); repetição, 0,0 ms. Um índice por blocos de
+1 MiB com as trincas de bytes de cada bloco foi ensaiado e não entrou: dava a mesma resposta e
+custava 14,7 MB para esse transcript, mas a pergunta nova ainda lia de 17 a 144 ms (caminho é feito
+de trincas comuns, quase todo bloco passa), o mesmo que a procura nos bytes entrega sem índice.
+
 ## Chave do Jev: no runtime_config, e na sessão só por escolha da abertura
 
 18/09/2026. O Jev (typesafe.ai) decide a navegação do `hangar-preview objetivo`, e a chave estava
@@ -3756,6 +3777,29 @@ pé é a anterior: o recurso só vale quando a versão de origem já o tem. A li
 Python pode trazer texto da conversa que o `scrub` não reconhece; ela sai porque é o motivo da
 falha, e só sai com o consentimento. O consentimento é por máquina: duas telas abertas ao mesmo
 tempo podem perguntar duas vezes.
+
+## Pastas órfãs do contador de autenticação (10/11/2026)
+
+**Regra.** Cada backend cria a sua pasta `~/.hangar/hangar-auth-*` para o contador compartilhado
+e a apaga na saída limpa. Morto sem saída limpa, a pasta ficava para sempre: 72 nesta máquina em
+10/11/2026. Agora cada `SharedLimiter` aberto (o do Python e o do Rust anexado) segura uma trava
+compartilhada no marcador `state.alive` da pasta, aberto com close-on-exec; o kernel a solta quando
+o processo morre. Na subida, fora do caminho dela, o `hangar-server` apaga
+(`hangar_auth::sweep_orphans`) a pasta que cumpre tudo: nome com o prefixo, pasta de verdade (link
+não é seguido), não é a do contexto atual, marcador é arquivo comum com pelo menos 6 h, e a trava
+exclusiva passa sem esperar.
+
+**O que nunca sai.** Pasta sem marcador (todas as criadas antes desta mudança, as 72 inclusive):
+nada prova que o dono morreu. A pasta do contexto atual. Qualquer pasta quando o contexto
+(`HANGAR_AUTH_CONTEXT`) não se lê ou a pasta atual não resolve: na dúvida fica, e a contagem vai ao
+log (`auth_orphans_kept`, `auth_orphans_context_unreadable`). Marcador que não abre ou não trava
+não impede o limitador de funcionar; se o marcador era deste processo e a trava falhou por outro
+motivo que não "ocupado", ele é apagado, para a pasta não parecer órfã depois da folga.
+
+**Limites.** Só Unix: no Windows o marcador não existe e as pastas seguem acumulando. Um filho
+recém-criado de outro processo pode segurar o marcador por um instante; a órfã espera a próxima
+subida. `CP_RUST_NO_ORPHAN_SWEEP=1` desliga, como na varredura dos canos: servidor de ensaio não
+varre a máquina.
 
 ## Navegador remoto e contador compartilhado de autenticação (28/10/2026)
 

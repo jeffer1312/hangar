@@ -93,7 +93,17 @@ pub(crate) fn is_absence(stderr: &str) -> bool {
         || (stderr.starts_with("error connecting to ") && stderr.trim_end().ends_with("(No such file or directory)"))
 }
 
-pub struct Mux { program: OsString, timeout: Duration, direct: Option<Direct>, revalidate: Duration, direct_budget: Duration }
+pub struct Mux { program: OsString, timeout: Duration, direct: Option<Direct>, revalidate: Duration, direct_budget: Duration, shared: SharedPanes }
+
+/// Os panes que a lista acabou de ler, com a hora da leitura.
+type SharedPanes = std::sync::Arc<std::sync::Mutex<Option<(std::time::Instant, std::sync::Arc<Vec<Pane>>)>>>;
+
+/// A leitura é do programa, não do `Mux`: a lista e a vigia do Codex criam cada uma o seu.
+fn shared_panes(program: &OsString) -> SharedPanes {
+    static SHARED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<OsString, SharedPanes>>> =
+        std::sync::LazyLock::new(Default::default);
+    SHARED.lock().unwrap_or_else(|e| e.into_inner()).entry(program.clone()).or_default().clone()
+}
 
 /// Leitura direta do psmux (Windows): vale só para os servidores que uma comparação com o CLI
 /// conferiu; servidor novo, recriado ou falha voltam ao CLI.
@@ -162,15 +172,31 @@ impl Mux {
         let dir = if cfg!(windows) { hangar_psmux::data_dir(|name| std::env::var_os(name)) } else { None };
         match dir {
             Some(dir) => Self::with_direct(program, timeout, dir),
-            None => Self { program: program.into(), timeout, direct: None, revalidate: REVALIDATE, direct_budget: DIRECT_BUDGET },
+            None => {
+                let program = program.into();
+                Self { shared: shared_panes(&program), program, timeout, direct: None, revalidate: REVALIDATE, direct_budget: DIRECT_BUDGET }
+            }
         }
+    }
+
+    /// A lista publica os panes que acabou de ler, para outro leitor do mesmo multiplexador não abrir o
+    /// programa de novo logo em seguida. `at` é de antes da leitura: o que ela mostra pode ser dali.
+    pub fn share(&self, at: std::time::Instant, panes: std::sync::Arc<Vec<Pane>>) {
+        *self.shared.lock().unwrap_or_else(|e| e.into_inner()) = Some((at, panes));
+    }
+
+    /// Os panes publicados há menos de `max_age`. Servem para dizer que uma sessão está viva; o que falta
+    /// neles não prova ausência (linha descartada, sessão que nasceu depois).
+    pub fn shared(&self, max_age: Duration) -> Option<std::sync::Arc<Vec<Pane>>> {
+        let shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+        shared.as_ref().filter(|(at, _)| at.elapsed() < max_age).map(|(_, panes)| panes.clone())
     }
 
     /// Como `with_program`, lendo os servidores do psmux em `dir` direto quando o portão aceitar.
     pub fn with_direct(program: impl Into<OsString>, timeout: Duration, dir: std::path::PathBuf) -> Self {
         let program = program.into();
         let gate = shared_gate(&program, &dir);
-        Self { program, timeout, direct: Some(Direct { dir, gate }), revalidate: REVALIDATE, direct_budget: DIRECT_BUDGET }
+        Self { shared: shared_panes(&program), program, timeout, direct: Some(Direct { dir, gate }), revalidate: REVALIDATE, direct_budget: DIRECT_BUDGET }
     }
 
     /// Valor de uma variável no ambiente da sessão (`show-environment`); ausente ou erro = `None`.
@@ -353,6 +379,21 @@ fn unavailable(code: &'static str, error: Option<&std::io::Error>, exit: Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_panes_belong_to_the_program_and_expire() {
+        let dir = tempfile::tempdir().unwrap();
+        let (list, watcher) = (Mux::with_program(dir.path().join("mux"), Duration::from_secs(1)), Mux::with_program(dir.path().join("mux"), Duration::from_secs(1)));
+        let other = Mux::with_program(dir.path().join("other-mux"), Duration::from_secs(1));
+        assert!(watcher.shared(Duration::from_secs(60)).is_none(), "nada publicado ainda");
+        let panes = std::sync::Arc::new(vec![Pane { session: "s".into(), ..Default::default() }]);
+        // Uma leitura que começou há 5 s e só agora é publicada.
+        list.share(std::time::Instant::now().checked_sub(Duration::from_secs(5)).unwrap(), panes);
+        assert!(watcher.shared(Duration::from_secs(1)).is_none(), "a idade conta do começo da leitura, não da publicação");
+        assert_eq!(watcher.shared(Duration::from_secs(60)).unwrap()[0].session, "s", "outro Mux do mesmo programa lê o publicado");
+        assert!(watcher.shared(Duration::ZERO).is_none(), "passado o prazo, não vale");
+        assert!(other.shared(Duration::from_secs(60)).is_none(), "outro programa não recebe");
+    }
 
     #[test]
     fn parses_list_panes_fields() {

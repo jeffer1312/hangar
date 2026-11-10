@@ -758,8 +758,8 @@ fn resolve_many(
     use hangar_workspace::citations::Transcript;
     let source = rows.map(Transcript::Rows).or_else(|| jsonl.map(|p| Transcript::File(Path::new(p))));
     let cited = source.map(|source| hangar_workspace::citations::cwds(source, paths)).unwrap_or(json!({}));
-    let mut found = serde_json::Map::new();
-    let mut outside = 0;
+    // Primeiro o que as pastas da sessão resolvem, por caminho: as pastas e o achado.
+    let mut local = Vec::with_capacity(paths.len());
     for path in paths {
         let mut bases = cited[path]
             .as_array()
@@ -771,7 +771,8 @@ fn resolve_many(
         if !bases.iter().any(|b| b == cwd) {
             bases.push(cwd.into());
         }
-        for suffix in [false, true] {
+        let mut hit = None;
+        'bases: for suffix in [false, true] {
             for base in &bases {
                 let result = hangar_workspace::files::resolver(
                     Path::new(base),
@@ -784,24 +785,35 @@ fn resolve_many(
                     {
                         target["relativo"] = Value::Null;
                     }
-                    found.insert(path.clone(), target);
-                    break;
+                    hit = Some(target);
+                    break 'bases;
                 }
             }
-            if found.contains_key(path) {
-                break;
-            }
         }
-        if !found.contains_key(path) && cited.get(path).is_some() && outside < 30 {
+        local.push((bases, hit));
+    }
+    // As menções dos que sobraram saem de uma leitura só da conversa. Só 30 procuras cabem no pedido, e cada
+    // caminho gasta uma na primeira vez: os 30 primeiros distintos cobrem todas.
+    let mut pending: Vec<String> = Vec::new();
+    for (path, (_, hit)) in paths.iter().zip(&local) {
+        if hit.is_none() && cited.get(path).is_some() && pending.len() < 30 && !pending.contains(path) {
+            pending.push(path.clone());
+        }
+    }
+    let mentions = match source {
+        Some(source) if !pending.is_empty() => hangar_workspace::citations::elsewhere_many(source, &pending),
+        _ => Vec::new(),
+    };
+    let mut found = serde_json::Map::new();
+    let mut outside = 0;
+    for (path, (bases, hit)) in paths.iter().zip(local) {
+        if let Some(target) = hit {
+            found.insert(path.clone(), target);
+        } else if !found.contains_key(path) && cited.get(path).is_some() && outside < 30 {
             outside += 1;
-            if let Some(source) = source
-                && let Some(p) = hangar_workspace::citations::find_elsewhere(
-                    source,
-                    Path::new(cwd),
-                    path,
-                    &bases,
-                    true,
-                )
+            if let Some(at) = pending.iter().position(|p| p == path)
+                && let Some(mentioned) = mentions.get(at)
+                && let Some(p) = hangar_workspace::citations::locate(mentioned, Path::new(cwd), path, &bases, true)
             {
                 found.insert(
                     path.clone(),

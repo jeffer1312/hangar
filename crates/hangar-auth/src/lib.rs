@@ -1,10 +1,12 @@
 //! Uma decisão de autenticação por transação, inclusive entre processos.
 mod ffi;
 mod shared;
+mod sweep;
 
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 pub use shared::{AuthConfig, SharedLimiter};
+pub use sweep::{sweep_orphans, Sweep};
 
 pub const AUTH_ABI: u32 = 1;
 pub const AUTH_STORE: u32 = 1;
