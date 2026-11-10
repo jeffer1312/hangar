@@ -739,7 +739,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
   const terminalPill = <QuietPill {...terminalChoice} />;
 
   const janelaCheia = provider === 'claude' ? janelaEsgotada(cotaSelecionada) : null;
-  // Etiqueta da conta pela mesma chave da `conta` da lista: `claude:<pasta>` ou `codex:<home>`.
+  // Etiqueta da conta pela mesma chave da conta da lista: claude:<pasta>, codex:<home>.
   const activeTags = machineTags[machines.findIndex((sv) => sv.id === active.id)] ?? null;
   const tagGlyph = (key: string) => {
     const tag: AccountBadge | undefined = activeTags?.accounts[key];
