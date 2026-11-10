@@ -204,14 +204,15 @@ pub async fn dismiss_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): C
     let (Some(name), Some(dirs)) = (session_name(req.uri().path()), st.list.env().dirs.clone()) else {
         return answer(&headers, StatusCode::NOT_FOUND, detail_body("erro_sessao_nao_caida", "a sessão não está caída", json!({})));
     };
-    if get(&dirs.home, &name).is_none() {
-        return answer(&headers, StatusCode::NOT_FOUND, detail_body("erro_sessao_nao_caida", "a sessão não está caída", json!({"name": name})));
-    }
     // Reabrindo (por outro aparelho): dispensar agora tiraria o registro, e a reabertura que falhar não teria
-    // mais como tentar de novo pela lista. Segurar a mesma marca impede a reabertura de começar no meio.
+    // mais como tentar de novo pela lista. A marca vem antes da leitura: a reabertura que terminar entre as
+    // duas já tirou o registro, e o `forget` não apaga da fotografia a sessão que acabou de voltar.
     let Some(_hold) = Reopening::begin(&name) else {
         return answer(&headers, StatusCode::CONFLICT, detail_body("erro_reabrindo", "a sessão está reabrindo", json!({"name": name})));
     };
+    if get(&dirs.home, &name).is_none() {
+        return answer(&headers, StatusCode::NOT_FOUND, detail_body("erro_sessao_nao_caida", "a sessão não está caída", json!({"name": name})));
+    }
     // O `forget` também tira o nome da fotografia do restore: a dispensada não volta no próximo reboot.
     super::restore::forget(&dirs.home, &name);
     answer(&headers, StatusCode::OK, json!({"ok": true}))
