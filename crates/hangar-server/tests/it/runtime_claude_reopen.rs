@@ -199,11 +199,15 @@ async fn a_parked_headless_session_in_a_hangar_account_reconciles_before_it_laun
     fx.put_sidecar(json!({"name":"s1","provider":"claude","headless":true,"key":key,"cwd":fx.cwd,"session_id":SID,
         "permission_mode":"manual","cano":null,"config_dir":b}));
     let registry = fx.registry().await;
-    crate::write_executable(&fx.home.join("bin/claude"),"#!/bin/sh\nexec sleep 30\n");
-    // O `claude` falso não prova a identidade: a subida para depois do cano, e a reconciliação vem antes dele.
-    let _ = registry.adopt_now("s1").await.expect("é sessão Claude sem terminal daqui");
-    let settings:Value = serde_json::from_slice(&std::fs::read(b.join("settings.json")).unwrap()).unwrap();
-    assert_eq!(settings["enabledPlugins"]["watch@loja"],false,"a cópia da conta segue o principal");
+    // O `claude` falso guarda a cópia que viu ao subir: a conta tem de estar reconciliada antes dele.
+    let seen = fx.home.join("seen-settings.json");
+    crate::write_executable(&fx.home.join("bin/claude"),
+        &format!("#!/bin/sh\ncat \"$CLAUDE_CONFIG_DIR/settings.json\" > '{}'\nexec sleep 30\n", seen.display()));
+    // Ele não prova a identidade: a subida para depois do cano, já com o processo de pé.
+    let opened = registry.adopt_now("s1").await.expect("é sessão Claude sem terminal daqui").map_err(|e|e.code);
+    assert_eq!(opened,Err("relaunch_agent_identity".into()),"a escrita subiu o cano e esperou o claude dele");
+    let settings:Value = serde_json::from_slice(&std::fs::read(&seen).expect("o claude falso subiu")).unwrap();
+    assert_eq!(settings["enabledPlugins"]["watch@loja"],false,"o processo já subiu com a cópia seguindo o principal");
 }
 
 /// A vida nova só entrega o que chegou depois dela: o recado de continuar vai pelo `/input` depois da

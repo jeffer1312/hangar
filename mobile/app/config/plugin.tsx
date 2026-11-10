@@ -36,6 +36,8 @@ export default function Plugin() {
   const busy = usePlugins((s) => s.busy);
   const [details, setDetails] = useState<PluginDetails | null>(null);
   const [detailsError, setDetailsError] = useState('');
+  // Remoção que deu certo tira o plugin do estado antes de a tela sair: sem isso, pisca "não encontrado".
+  const [removing, setRemoving] = useState(false);
 
   // Aberto direto (sem passar pela lista) ou com o servidor trocado: lê o estado aqui. `reset` não mexe no mesmo servidor.
   useEffect(() => {
@@ -61,7 +63,7 @@ export default function Plugin() {
   if (!plugin) {
     return <Pagina>
       <Stack.Screen options={{ title: m.plugins_title() }} />
-      {hasState ? <Notice text={m.plugins_not_found()} error /> : <InfoNotice text={m.plugins_loading()} />}
+      {removing ? null : hasState ? <Notice text={m.plugins_not_found()} error /> : <InfoNotice text={m.plugins_loading()} />}
     </Pagina>;
   }
 
@@ -70,7 +72,8 @@ export default function Plugin() {
   const remove = () => Alert.alert(m.plugins_remove_confirm({ name: p.name }), undefined, [
     { text: m.comum_cancelar(), style: 'cancel' },
     { text: m.plugins_remove(), style: 'destructive', onPress: () => {
-      void runPluginAction(server, p, 'uninstall', liveCount).then((ok) => { if (ok) router.back(); });
+      setRemoving(true);
+      void runPluginAction(server, p, 'uninstall', liveCount).then((ok) => { if (ok) router.back(); else setRemoving(false); });
     } },
   ]);
   const version = p.available_version ? `${p.version} → ${m.plugins_available({ version: p.available_version })}`

@@ -356,6 +356,7 @@ impl PluginsPage {
             let _ = page.update(cx, |page, cx| {
                 if page.open.as_ref() == Some(&id) { page.open = None; }
                 page.change(id.clone(), reqwest::Method::DELETE, Self::plugin_path(&id, None), None, SHORT_SECONDS, move |this, _, _, cx| {
+                    this.installed_now.remove(&id);
                     this.changed(tr("plugins_action_removed").replace("{name}", &name), cx);
                 }, window, cx);
             });
@@ -380,6 +381,7 @@ impl PluginsPage {
             .map(|s| s.marketplaces.iter().map(|m| m.name.clone()).collect()).unwrap_or_default();
         self.change("mkt:+".into(), reqwest::Method::POST, path, Some(json!({"source": source.clone()})), LONG_SECONDS, move |this, _, window, cx| {
             this.source.update(cx, |input, cx| input.set_value("", window, cx));
+            this.available = None;
             let name = this.state.as_ref().and_then(|s| s.as_ref().ok())
                 .and_then(|s| s.marketplaces.iter().find(|m| !before.contains(&m.name)).map(|m| m.name.clone())).unwrap_or(source);
             this.changed(tr("plugins_action_marketplace_added").replace("{name}", &name), cx);
@@ -393,6 +395,8 @@ impl PluginsPage {
     fn update_marketplace(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
         let path = Self::marketplace_path(&name, Some("update"));
         self.change(format!("mkt:{name}"), reqwest::Method::POST, path, None, LONG_SECONDS, move |this, _, _, cx| {
+            // Marketplace mudado muda o catálogo: o Descobrir relê na próxima visita.
+            this.available = None;
             this.changed(tr("plugins_action_marketplace_updated").replace("{name}", &name), cx);
         }, window, cx);
     }
@@ -411,6 +415,7 @@ impl PluginsPage {
             let _ = page.update(cx, |page, cx| {
                 let path = Self::marketplace_path(&name, None);
                 page.change(format!("mkt:{name}"), reqwest::Method::DELETE, path, None, MARKETPLACE_REMOVE_SECONDS, move |this, _, _, cx| {
+                    this.available = None;
                     this.changed(tr("plugins_action_marketplace_removed").replace("{name}", &name), cx);
                 }, window, cx);
             });

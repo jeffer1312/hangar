@@ -112,7 +112,8 @@ export const usePlugins = create<PluginsStore>((set, get) => {
     },
     change: async (s, busy, run, describe, liveCount) => {
       if (get().busy) return false;
-      const mkt = busy.startsWith('mkt:');
+      // Atualizar sozinho (`mkt:<nome>:auto`) não muda o que o Descobrir oferece.
+      const mkt = busy.startsWith('mkt:') && !busy.endsWith(':auto');
       stateSeq++;
       if (mkt) availableSeq++;
       set({ busy, loading: false });
