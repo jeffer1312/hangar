@@ -327,8 +327,8 @@ async fn execute(
                 })
                 .await?;
             let failed = deliver_deferred(&st, ctx.take_deliveries(), bridge_wait(started)).await;
-            // O aviso vai na resposta; o diário leva a mesma falha das rotas.
-            report_failed(&st, &mut Value::Null, failed.clone(), "rust.groups_bridge_delivery_failed", &[]);
+            // O aviso vai na resposta, em `warnings`; daqui sai só a linha do diário (o corpo é descartado).
+            report_failed(&st, &mut json!({}), failed.clone(), "rust.groups_bridge_delivery_failed", &[]);
             warnings.extend(failed);
             Ok(json!({"ex_peers": ex, "warnings": warnings}))
         }
