@@ -258,7 +258,7 @@ export function HomeUsageCard({ intro = null }: { intro?: HomeIntro | null }) {
           ))}
           {cal ? (
             <Pressable accessibilityRole="button" accessibilityState={{ expanded: activity }} onPress={toggleActivity}
-              hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }} style={styles.activityToggle}>
+              hitSlop={{ top: 14, bottom: 14, left: 8, right: 8 }} style={styles.activityToggle}>
               <Text style={[styles.note, { color: c.accentText }]}>{activity ? m.home_usage_hide_activity() : m.home_usage_show_activity()}</Text>
               <Icon name={activity ? 'ChevronUp' : 'ChevronDown'} size={12} color={c.accentText} />
             </Pressable>

@@ -63,9 +63,13 @@ it('Home esconde o calendário de atividade até o toque em Ver atividade', asyn
   expect(node.textContent).not.toContain(m.home_usage_method());
   expect(metric(m.home_usage_sessions())).toBe(`${m.home_usage_sessions()}: 2`);
   await click(m.home_usage_show_activity());
-  expect(node.textContent).toContain(title);
-  expect(node.textContent).toContain(m.home_usage_method());
-  await click(m.home_usage_hide_activity());
+  // A escolha fica no módulo: o teste fecha o calendário mesmo se falhar no meio.
+  try {
+    expect(node.textContent).toContain(title);
+    expect(node.textContent).toContain(m.home_usage_method());
+  } finally {
+    await click(m.home_usage_hide_activity());
+  }
   expect(node.textContent).not.toContain(title);
 });
 
