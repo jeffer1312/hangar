@@ -597,6 +597,11 @@ impl AccountService {
         } else {
             None
         };
+        if provider == Provider::Claude {
+            for warning in super::claude_config::share_plugin_registry(&self.env.home) {
+                tracing::warn!(%warning, "registro de plugins ainda aponta para a conta apagada");
+            }
+        }
         storage::remove_tree(&current.home).map_err(|_| {
             AccountError::codex(500, "codex_account_delete_failed", Some(&account.id))
         })?;

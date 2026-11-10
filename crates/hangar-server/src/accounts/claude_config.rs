@@ -602,6 +602,7 @@ fn steps(home: &Path, dir: &Path, project: Option<&str>, op: &str, diary: &mut V
     log_stage(diary, "espelhar_settings", false);
     warnings.extend(seed_settings(home, dir)?);
     log_stage(diary, "conferir_plugins", false);
+    warnings.extend(share_plugin_registry(home));
     warnings.extend(check_plugins(home, dir)?);
     log_stage(diary, "espelhar_config", false);
     warnings.extend(mirror_claude_json(home, dir)?);
@@ -974,6 +975,51 @@ pub(crate) fn check_plugins(home: &Path, dir: &Path) -> Result<Vec<String>> {
     Ok(warnings)
 }
 
+/// O CLI grava no registro de plugins o caminho pela pasta da conta que instalou
+/// (`~/.claude-<conta>/plugins/...`). O registro é um só para todas as contas: apagar aquela conta
+/// quebrava o plugin em toda sessão que leu o registro. Troca pelo `~/.claude/plugins` quando o
+/// alvo existe lá. Registro ilegível fica com o `check_plugins` e com o próprio CLI.
+pub(crate) fn share_plugin_registry(home: &Path) -> Vec<String> {
+    let plugins = home.join(".claude").join("plugins");
+    let mut warnings = Vec::new();
+    for (file, key) in [("installed_plugins.json", "installPath"), ("known_marketplaces.json", "installLocation")] {
+        let path = plugins.join(file);
+        let Ok(Some(mut data)) = read_json(&path) else { continue };
+        if !rewrite_account_paths(home, &plugins, key, &mut data) { continue; }
+        if let Err(error) = write_replacing(&path, &pyjson::dumps_indent(&data, 2, false)) {
+            warnings.push(format!("plugins: não consegui trocar o caminho das contas em {}: {}", path.display(), error.cause()));
+        }
+    }
+    warnings
+}
+
+fn rewrite_account_paths(home: &Path, plugins: &Path, key: &str, value: &mut Value) -> bool {
+    match value {
+        Value::Object(map) => {
+            let mut changed = false;
+            for (name, item) in map.iter_mut() {
+                if name == key && let Value::String(text) = item && let Some(shared) = shared_plugin_path(home, plugins, text) {
+                    *text = shared.to_string_lossy().into_owned();
+                    changed = true;
+                } else {
+                    changed |= rewrite_account_paths(home, plugins, key, item);
+                }
+            }
+            changed
+        }
+        Value::Array(items) => items.iter_mut().fold(false, |changed, item| rewrite_account_paths(home, plugins, key, item) | changed),
+        _ => false,
+    }
+}
+
+fn shared_plugin_path(home: &Path, plugins: &Path, text: &str) -> Option<PathBuf> {
+    let mut parts = Path::new(text).strip_prefix(home).ok()?.components();
+    if !parts.next()?.as_os_str().to_str()?.starts_with(".claude-") { return None; }
+    if parts.next()?.as_os_str() != "plugins" { return None; }
+    let shared = plugins.join(parts.as_path());
+    exists(&shared).then_some(shared)
+}
+
 /// O preparo da pasta pendente da criação: `~/.claude` garantido, o `.claude.json` do principal sem o
 /// `oauthAccount` (as permissões e os MCP ficam, o login não), `projects/` e a reconciliação sob a
 /// trava da pendência, o único arquivo que existe antes da publicação.
@@ -1316,6 +1362,35 @@ mod tests {
         left.sort();
         assert_eq!(left, ["hooks.1", "hooks.2", "hooks.3"], "a cópia com o mtime antigo é a podada na entrada seguinte");
         assert_eq!(fs::read_to_string(dir.join(".drift/hooks.1")).unwrap(), "novo");
+    }
+
+    #[test]
+    fn the_prep_points_the_plugin_registry_at_the_shared_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let h = home.display();
+        fs::create_dir_all(home.join(".claude/plugins/cache/m/p/1")).unwrap();
+        fs::create_dir_all(home.join(".claude/plugins/marketplaces/m")).unwrap();
+        fs::create_dir_all(home.join(".claude-conta2")).unwrap();
+        fs::write(home.join(".claude-conta2/.hangar-conta"), "").unwrap();
+        let installed = home.join(".claude/plugins/installed_plugins.json");
+        let known = home.join(".claude/plugins/known_marketplaces.json");
+        fs::write(&installed, format!(r#"{{"version": 2, "plugins": {{"p@m": [
+            {{"installPath": "{h}/.claude-apagada/plugins/cache/m/p/1"}},
+            {{"installPath": "{h}/.claude-apagada/plugins/cache/m/p/2"}},
+            {{"installPath": "/outro/lugar/plugins/cache/m/p/1"}}]}}}}"#)).unwrap();
+        fs::write(&known, format!(r#"{{"m": {{"installLocation": "{h}/.claude-conta2/plugins/marketplaces/m"}}}}"#)).unwrap();
+        assert!(reconcile(home, &home.join(".claude-conta2"), None).result.is_ok());
+        let read = |path: &Path| serde_json::from_str::<Value>(&fs::read_to_string(path).unwrap()).unwrap();
+        let paths: Vec<_> = read(&installed)["plugins"]["p@m"].as_array().unwrap().iter().map(|e| e["installPath"].as_str().unwrap().to_owned()).collect();
+        assert_eq!(paths, [format!("{h}/.claude/plugins/cache/m/p/1"),
+            format!("{h}/.claude-apagada/plugins/cache/m/p/2"), "/outro/lugar/plugins/cache/m/p/1".into()],
+            "só troca o que existe no compartilhado e passa por uma conta");
+        assert_eq!(read(&known)["m"]["installLocation"], format!("{h}/.claude/plugins/marketplaces/m"));
+        let untouched = r#"{"version":2,"plugins":{}}"#;
+        fs::write(&installed, untouched).unwrap();
+        assert!(reconcile(home, &home.join(".claude-conta2"), None).result.is_ok());
+        assert_eq!(fs::read_to_string(&installed).unwrap(), untouched, "sem caminho de conta o arquivo não é regravado");
     }
 
     #[test]
