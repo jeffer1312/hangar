@@ -153,11 +153,15 @@ pub async fn reopen_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): Co
     let Some(fallen) = get(&dirs.home, &name) else {
         return answer(&headers, StatusCode::NOT_FOUND, detail_body("erro_sessao_nao_caida", "a sessão não está caída", json!({"name": name})));
     };
+    let Some(reopening) = Reopening::begin(&name) else {
+        return answer(&headers, StatusCode::CONFLICT, detail_body("erro_reabrindo", "a sessão já está reabrindo", json!({"name": name})));
+    };
     // Cliente que cai no meio não interrompe a abertura. O mesmo caminho do restore: agente de pé, diário, e o
     // registro só sai no sucesso.
     let entry = fallen.entry(&name);
     let program = st.list.env().capture_program.clone();
     let task = tokio::spawn(async move {
+        let _reopening = reopening;
         let host = super::server::ServerHost::new(st.clone()).await;
         super::restore::restore_one(&host, &st, &program, &fallen.key, &entry).await
     });
@@ -173,6 +177,22 @@ pub async fn reopen_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): Co
     }
 }
 
+/// Nomes reabrindo agora; sai quando a tarefa da reabertura acaba, mesmo com o cliente já desconectado.
+static REOPENING: std::sync::Mutex<std::collections::BTreeSet<String>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+struct Reopening(String);
+
+impl Reopening {
+    fn begin(name: &str) -> Option<Self> {
+        REOPENING.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(name.to_owned()).then(|| Self(name.to_owned()))
+    }
+    fn active(name: &str) -> bool { REOPENING.lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains(name) }
+}
+
+impl Drop for Reopening {
+    fn drop(&mut self) { REOPENING.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&self.0); }
+}
+
 /// `POST /api/sessions/{name}/dispensar`: tira a caída da lista sem tocar em sessão nenhuma. Só age se o nome
 /// ainda está caído: a linha velha no app não fecha a sessão que acabou de reabrir com o mesmo nome.
 pub async fn dismiss_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
@@ -184,6 +204,11 @@ pub async fn dismiss_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): C
     };
     if get(&dirs.home, &name).is_none() {
         return answer(&headers, StatusCode::NOT_FOUND, detail_body("erro_sessao_nao_caida", "a sessão não está caída", json!({"name": name})));
+    }
+    // Reabrindo (por outro aparelho): dispensar agora tiraria o registro, e a reabertura que falhar não teria
+    // mais como tentar de novo pela lista.
+    if Reopening::active(&name) {
+        return answer(&headers, StatusCode::CONFLICT, detail_body("erro_reabrindo", "a sessão está reabrindo", json!({"name": name})));
     }
     // O `forget` também tira o nome da fotografia do restore: a dispensada não volta no próximo reboot.
     super::restore::forget(&dirs.home, &name);
@@ -323,6 +348,17 @@ mod tests {
         assert!(!insert_unless_forgotten(home.path(), "depois", started, oom("k2")));
         assert_eq!(get(home.path(), "depois"), None);
         assert_eq!(get(home.path(), "antes"), Some(oom("k1")));
+    }
+
+    /// Um nome reabre uma vez por vez, e fica livre quando a reabertura acaba (o fim da tarefa solta a marca).
+    #[test]
+    fn a_name_reopens_once_at_a_time() {
+        let first = Reopening::begin("reabre-um").expect("primeira reabertura");
+        assert!(Reopening::begin("reabre-um").is_none(), "a segunda espera");
+        assert!(Reopening::active("reabre-um"));
+        drop(first);
+        assert!(!Reopening::active("reabre-um"));
+        assert!(Reopening::begin("reabre-um").is_some());
     }
 
     #[test]

@@ -249,6 +249,8 @@ pub(super) struct Sidebar {
     leads_gen: u64,
     /// Fechadas agora: somem da lista na hora e voltam se o servidor recusar.
     deleting: HashSet<Target>,
+    /// Caídas dispensadas: a marca só esconde a linha enquanto ela segue caída, nunca a viva que voltar com o nome.
+    dismissing: HashSet<Target>,
     /// Desocultadas por mensagem há pouco: a linha só perde a marca na lista seguinte, e outro envio até lá não repete
     /// o pedido nem a pergunta do grupo.
     revealed: HashMap<Target, std::time::Instant>,
@@ -301,7 +303,7 @@ impl Sidebar {
     pub(super) fn new(window: &mut Window, cx: &mut Context<Hangar>) -> Self {
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder(tr("sidebar_filter")).clean_on_escape());
         cx.subscribe(&filter, |_, _, _: &InputEvent, cx| cx.notify()).detach();
-        Self { filter, collapsed: load_json(collapsed_path()), group_leads: load_json(group_leads_path()), leads_gen: 0, deleting: HashSet::new(), revealed: HashMap::new(), editing: None, renaming: HashSet::new(), reopening: HashSet::new(), follow: None, lost: None, moving: HashMap::new(),
+        Self { filter, collapsed: load_json(collapsed_path()), group_leads: load_json(group_leads_path()), leads_gen: 0, deleting: HashSet::new(), dismissing: HashSet::new(), revealed: HashMap::new(), editing: None, renaming: HashSet::new(), reopening: HashSet::new(), follow: None, lost: None, moving: HashMap::new(),
             menu: None, menu_seq: 0, rename_seq: 0, chain: None, chain_seq: 0, focus_tab: None, remote_focus: HashMap::new(), collapse_gen: 0, button_menu: None, hover: None, last_sub: Default::default(), press_seq: 0,
             long_pressed: false, rail_anim: None, resize: None, grouping: Default::default(), flip: Default::default(), tab_flip: Default::default(), tab_follow: Default::default(), still_avatar: Default::default() }
     }
@@ -309,6 +311,7 @@ impl Sidebar {
     /// Troca de servidor: o que é da conexão anterior sai; filtro e grupos recolhidos são deste computador e ficam.
     pub(super) fn reset_server(&mut self) {
         self.deleting.clear();
+        self.dismissing.clear();
         self.renaming.clear();
         self.reopening.clear();
         (self.editing, self.follow, self.lost, self.menu, self.button_menu, self.hover) = (None, None, None, None, None, None);
@@ -746,9 +749,12 @@ impl Hangar {
     /// Uma lista nova chegou (a ativa ou a de outra máquina): fechadas que saíram dela deixam de ser escondidas; renomeada
     /// aberta é reaberta pelo nome novo.
     pub(super) fn sidebar_sessions_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let alive = |this: &Self, t: &Target| this.target_session(t).is_some();
+        let alive = |this: &Self, t: &Target| this.target_session(t)
+            .is_some_and(|s| !this.sidebar.dismissing.contains(t) || fallen(s));
         let deleting = std::mem::take(&mut self.sidebar.deleting);
         self.sidebar.deleting = deleting.into_iter().filter(|t| alive(self, t)).collect();
+        let deleting = &self.sidebar.deleting;
+        self.sidebar.dismissing.retain(|t| deleting.contains(t));
         // Cada linha das outras máquinas guarda o próprio foco pela vida da sessão, como as da ativa.
         let rows: HashSet<Target> = self.remote.iter()
             .flat_map(|(key, list)| list.sessions.iter().map(move |s| Target::new(key, &s.name))).collect();
@@ -1008,6 +1014,7 @@ impl Hangar {
     pub(super) fn dismiss_target(&mut self, target: Target, cx: &mut Context<Self>) {
         if self.sidebar.reopening.contains(&target) { return; }
         self.sidebar.deleting.insert(target.clone());
+        self.sidebar.dismissing.insert(target.clone());
         self.write(target, Write::Dismiss, cx);
     }
 
@@ -1522,6 +1529,7 @@ impl Hangar {
                     (Write::Dismiss, Ok(_)) => None,
                     (Write::Dismiss, Err(error)) => {
                         self.sidebar.deleting.remove(&target);
+                        self.sidebar.dismissing.remove(&target);
                         Some(Notification::error(format!("{}: {}", tr("sessao_dispensar"), Self::fetch_failure(&error))))
                     }
                 };
