@@ -108,22 +108,24 @@ scripts/verificar-local --passos rust      # repete só um passo (o que já pass
 node scripts/test-pi-hangar-state.mjs          # hangar-state.ts: fork de subagente do Pi não rouba o pane
 ```
 
-**A verificação da tarefa é o uso real**: abrir a tela, clicar, rodar o fluxo. **Teste
-automatizado avulso (vitest, pytest, check) só roda quando o usuário pedir** — ele pede no fim, antes do
-push; nem entre edições, nem ao terminar a tarefa. Pedido o focado: num comando só, os testes dos
-arquivos tocados (`cd backend && uv run pytest tests/test_x.py tests/test_y.py`,
-`cd frontend && npx vitest run src/x.test.ts src/y.test.ts`); falhou → repita só o que falhou.
-Pedido o completo: `npm run check` na raiz, `vitest` e `pytest` inteiros. **`scripts/verificar-local` é exigido ao
-abrir PR e ao subir para a `main` ou para branch com PR aberto**: ele roda, numa árvore fixa da
-máquina e em fila única, só o ligado aos arquivos que o commit muda (`--completo`: o que o CI rodaria),
-no Linux e, com arquivo de Windows no diff, na VM (`git config hangar.verificarWindows <host>`, teto de
-10 min), e grava pela árvore cada passo que passou. No Linux os
-passos rodam em faixas paralelas e o pytest em vários processos: `git config hangar.verificarProcessos <n>`
-(padrão 4; `1` = tudo em fila). O Node é o do `.node-version`, o mesmo do CI: com o `fnm` instalado, o
-script e o `ci-gates.sh` trocam sozinhos; sem ele, o aviso diz que front e mobile podem falhar por isso. O hook do
-`gh pr create` (`.claude/settings.json`) confere o PR inteiro desde a base; a trava `pre-push`, cada
-push. Branch sem PR sobe livre. Emergência explícita: `HANGAR_SEM_VERIFICACAO=1` no comando. O que ela cobre e o que só o CI cobre:
-[instalacao.md](docs/decisoes/instalacao.md#verificação-local-antes-do-push-06102026). `npm run build` só para servir o `dist` local. Ao reportar, diga o que foi conferido no uso real e que os testes automatizados não rodaram.
+**Valide o comportamento alterado no uso real e por provas focadas**, incluindo os consumidores
+diretamente afetados quando houver mudança de contrato. Selecione os testes pelo arquivo ou pelo
+caso e compile apenas o alvo necessário. Registre comando, resultado, versão do código e alcance.
+Reaproveite a prova no fechamento, no push e no PR enquanto código, dados e ambiente relevantes
+forem os mesmos. Mudança posterior ou falha repete somente a prova afetada.
+
+**Bateria completa, workspace inteiro, `--completo` e `--tudo` exigem pedido explícito do usuário.**
+Push, PR, quantidade de arquivos e uma trava automática não constituem esse pedido. Texto e
+instruções se conferem pela leitura e pelo diff, sem builds ou suítes. Confira Windows quando o
+comportamento alterado for específico desse sistema, definindo esse escopo antes de executar.
+
+Use `scripts/verificar-local` somente quando o escopo selecionado corresponder à alteração;
+consulte `--plano` antes de iniciar. Com provas focadas aprovadas, publique com
+`HANGAR_SEM_VERIFICACAO=1` quando a trava exigir repetição ou uma bateria mais ampla. O CI faz a
+cobertura global e é acompanhado no PR. Se uma bateria completa tiver sido pedida, o script pode
+executá-la em árvore isolada, com a VM Windows configurada e reutilizando os passos já aprovados.
+O Node segue `.node-version`; `npm run build` só é necessário para servir o `dist` local.
+No relato, identifique as provas efetivamente executadas e seus limites.
 
 Claude sessions with a terminal must run as `claude --session-id <uuid>` **inside tmux** —
 `scripts/install-claude-wrapper.sh` sets this up. Headless Claude/Codex sessions are created by the
