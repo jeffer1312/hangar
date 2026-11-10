@@ -1,4 +1,5 @@
 use super::protocol::{ClockSample, RequestId};
+use crate::config_sync::bundle::sha256;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -137,11 +138,7 @@ fn fingerprint(value: &Value) -> String {
             other => other.clone(),
         }
     }
-    sha256_hex(&serde_json::to_vec(&sorted(value)).expect("Value tem chaves String e números finitos"))
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    ring::digest::digest(&ring::digest::SHA256, bytes).as_ref().iter().map(|b| format!("{b:02x}")).collect()
+    sha256(&serde_json::to_vec(&sorted(value)).expect("Value tem chaves String e números finitos"))
 }
 
 /// sha256 do arquivo irmão que guarda `runtime_state.view.commands`, gravado no principal no lugar do catálogo.
@@ -161,7 +158,7 @@ fn encode(state: &mut State) -> io::Result<(Vec<u8>, Option<(String, Vec<u8>)>)>
     // ponytail: o catálogo é serializado e resumido a cada gravação, só para saber se mudou; guardar o
     // último resumo junto de uma cópia para comparar, se isso aparecer no perfil.
     let catalog = serde_json::to_vec(&commands);
-    let hash = catalog.as_deref().map(sha256_hex).unwrap_or_default();
+    let hash = catalog.as_deref().map(sha256).unwrap_or_default();
     state.runtime_state[COMMANDS_REF] = json!(hash);
     let main = serde_json::to_vec(state);
     if let Some(runtime) = state.runtime_state.as_object_mut() { runtime.shift_remove(COMMANDS_REF); }
@@ -180,14 +177,14 @@ fn decode(state: &mut State, state_path: &Path, kept: Option<&Value>) -> Option<
     // Catálogo embutido ao lado da referência: gravado pelo binário anterior, que não conhece o irmão.
     if view.get("commands").is_some_and(|commands| !commands.is_null()) { return None; }
     let hash = reference.as_str()?;
-    let commands = read_replaced(&commands_path(state_path)).ok().filter(|bytes| sha256_hex(bytes) == hash)
+    let commands = read_replaced(&commands_path(state_path)).ok().filter(|bytes| sha256(bytes) == hash)
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
     if let Some(commands) = commands {
         view.insert("commands".into(), commands);
         return Some(hash.to_owned());
     }
     // O principal que falhou depois de o irmão trocar ainda aponta o catálogo anterior.
-    if let Some(kept) = kept.filter(|kept| serde_json::to_vec(kept).is_ok_and(|bytes| sha256_hex(&bytes) == hash)) {
+    if let Some(kept) = kept.filter(|kept| serde_json::to_vec(kept).is_ok_and(|bytes| sha256(&bytes) == hash)) {
         view.insert("commands".into(), kept.clone());
         return None;
     }

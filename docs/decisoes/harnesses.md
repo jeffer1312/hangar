@@ -334,7 +334,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   varredura de órfãos roda UMA vez na subida do Rust, sobre `~/.hangar/claude-headless` e
   `~/.hangar/codex-sessions`, com dono = HOME (`HANGAR_CANO_OWNER`); o `matar_orfaos` do Python
   só roda no modo `python`. Teste ou backend isolado que sobe o Rust usa dono único ou
-  `CP_RUST_NO_ORPHAN_SWEEP=1`, senão mata os canos reais da máquina. Windows não varre (sem
+  `CP_RUST_NO_ORPHAN_SWEEP=1`, senão mata os canos reais da máquina (a mesma variável desliga a
+  varredura das pastas `hangar-auth-*`, em `plataforma.md`). Windows não varre (sem
   `/proc`); mata por `taskkill /T /F`, aceitando 0 e 128.
 - **Protocolo do Codex no Rust é tipado e tolerante** (`crates/hangar-codex`): todo campo usado
   existe no recorte do schema da versão conferida (`schema/<versão>.json`, teste
@@ -1069,7 +1070,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   [gravação da vista e observação sem trabalho repetido](#gravação-da-vista-e-observação-sem-trabalho-repetido-10112026).
 - **Vigia do Codex com terminal: os panes que a lista leu há menos de um tique só confirmam presença.**
   Ausência, morte, adoção e limpeza de órfã usam leitura própria do multiplexador; com a ausência já em
-  contagem, o retrato da lista é ignorado. Sem lista aberta não há retrato e a vigia lê sozinha.
+  contagem, o retrato da lista é ignorado. Sem lista aberta não há retrato e a vigia lê sozinha. A
+  idade do retrato conta do começo da leitura da lista, não da publicação.
 - **O catálogo de comandos da vista mora num arquivo irmão da fila (`runtime/<chave>.commands`), nunca
   no principal.** Só o `Store` (`queue.rs`: `encode`, `decode`, `persist`) conhece a divisão: em memória
   a vista segue com `commands` inteiro; no principal fica `commands: null` e o sha256 do irmão em

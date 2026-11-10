@@ -156,14 +156,14 @@ async fn panes_the_list_just_read_spare_the_watchers_read_but_never_decide_absen
     let alive = Arc::new(vec![hangar_server::list::mux::Pane { session:"cx-proof".into(),active:true,pid:Some(4242),cwd:"/w".into(),
         pane_id:"%7".into(),provider:Some("codex".into()),session_created:Some(1_700_000_000),..Default::default() }]);
 
-    list.share(alive.clone());
+    list.share(Instant::now(),alive.clone());
     let calls = fx.list_calls();
     watcher.round(&registry).await;
     assert_eq!(fx.list_calls(),calls,"a sessão aparece viva nos panes que a lista acabou de ler e a vigia abriu o multiplexador");
     assert!(registry.owns_codex_terminal("cx-proof"));
 
     // A sessão falta no retrato da lista: a vigia lê por conta própria antes de contar qualquer ausência.
-    list.share(Arc::new(Vec::new()));
+    list.share(Instant::now(),Arc::new(Vec::new()));
     watcher.round(&registry).await;
     assert_eq!(fx.list_calls(),calls + 1,"ausência no retrato da lista não foi conferida com leitura própria");
     assert!(registry.owns_codex_terminal("cx-proof"),"viva na leitura própria: fica");
@@ -175,7 +175,7 @@ async fn panes_the_list_just_read_spare_the_watchers_read_but_never_decide_absen
     assert_eq!(fx.list_calls(),calls + 2);
     // Com a ausência em contagem, um retrato da lista (que pode ser anterior a ela) dizendo "viva" não vale:
     // a vigia segue lendo por conta própria.
-    list.share(alive);
+    list.share(Instant::now(),alive);
     watcher.round(&registry).await;
     assert_eq!(fx.list_calls(),calls + 3,"com a ausência em contagem a vigia confiou no retrato da lista");
     assert!(registry.owns_codex_terminal("cx-proof"),"o prazo deste teste não chega: a morte fica com o teste de cima");

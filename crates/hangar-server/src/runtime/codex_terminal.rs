@@ -445,6 +445,12 @@ impl Watcher {
 
     /// Os panes lidos agora pela própria vigia. Sem resposta do multiplexador o aviso sai e quem chama
     /// encerra a rodada sem decidir.
+    /// Os panes lidos pela própria rodada, uma vez só. `None`: o multiplexador não respondeu e a rodada acaba.
+    async fn own<'a>(&self,slot:&'a mut Option<Vec<Pane>>) -> Option<&'a [Pane]> {
+        if slot.is_none() { *slot = Some(self.own_panes().await?); }
+        slot.as_deref()
+    }
+
     async fn own_panes(&self) -> Option<Vec<Pane>> {
         match self.cfg.mux.list_panes().await {
             Ok(panes) => Some(panes),
@@ -488,10 +494,7 @@ impl Watcher {
         // e adoção se decidem com leitura própria, feita na primeira vez em que a rodada precisa dela.
         let shared = if idle { None } else { self.cfg.mux.shared(self.shared_age) };
         let mut own = idle.then(Vec::new);
-        if own.is_none() && shared.is_none() {
-            let Some(panes) = self.own_panes().await else { return };
-            own = Some(panes);
-        }
+        if shared.is_none() && self.own(&mut own).await.is_none() { return; }
         let mut seen = BTreeSet::new();
         for target in targets {
             // O mesmo cálculo do vetor acima: lido duas vezes, o registro de transferência podia dar duas respostas na rodada.
@@ -509,11 +512,7 @@ impl Watcher {
                     // Com a ausência já em contagem o retrato da lista não vale: ele pode ser anterior a ela.
                     if own.is_none() && !misses.contains_key(&target.key)
                         && shared.as_deref().is_some_and(|panes|present(panes,&target.name,life)) { continue; }
-                    if own.is_none() {
-                        let Some(panes) = self.own_panes().await else { return };
-                        own = Some(panes);
-                    }
-                    let Some(panes) = own.as_deref() else { return };
+                    let Some(panes) = self.own(&mut own).await else { return };
                     if !gone(panes,&target.name,life,tui).await { continue; }
                     seen.insert(target.key.clone());
                     if self.absent_long_enough(&mut misses,&target.key) { self.bury(registry,&target).await; }
@@ -532,11 +531,7 @@ impl Watcher {
                 registry.report("runtime.stale_life_failed",&c.name,&error.code,"a entrada de outra vida não saiu e o Codex não foi adotado");
             }
             if registry.has_entry(c.key.as_deref(),&c.name).await { continue; }
-            if own.is_none() {
-                let Some(panes) = self.own_panes().await else { return };
-                own = Some(panes);
-            }
-            let Some(panes) = own.as_deref() else { return };
+            let Some(panes) = self.own(&mut own).await else { return };
             match pane_of(panes,&c.name) {
                 Some(pane) => if let Err(error) = self.adopt(registry,c.clone(),pane).await
                     && crate::warn_limit::allow(Some(&c.name),&error.code) {

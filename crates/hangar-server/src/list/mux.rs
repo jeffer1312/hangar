@@ -180,9 +180,9 @@ impl Mux {
     }
 
     /// A lista publica os panes que acabou de ler, para outro leitor do mesmo multiplexador não abrir o
-    /// programa de novo logo em seguida.
-    pub fn share(&self, panes: std::sync::Arc<Vec<Pane>>) {
-        *self.shared.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), panes));
+    /// programa de novo logo em seguida. `at` é de antes da leitura: o que ela mostra pode ser dali.
+    pub fn share(&self, at: std::time::Instant, panes: std::sync::Arc<Vec<Pane>>) {
+        *self.shared.lock().unwrap_or_else(|e| e.into_inner()) = Some((at, panes));
     }
 
     /// Os panes publicados há menos de `max_age`. Servem para dizer que uma sessão está viva; o que falta
@@ -386,7 +386,10 @@ mod tests {
         let (list, watcher) = (Mux::with_program(dir.path().join("mux"), Duration::from_secs(1)), Mux::with_program(dir.path().join("mux"), Duration::from_secs(1)));
         let other = Mux::with_program(dir.path().join("other-mux"), Duration::from_secs(1));
         assert!(watcher.shared(Duration::from_secs(60)).is_none(), "nada publicado ainda");
-        list.share(std::sync::Arc::new(vec![Pane { session: "s".into(), ..Default::default() }]));
+        let panes = std::sync::Arc::new(vec![Pane { session: "s".into(), ..Default::default() }]);
+        // Uma leitura que começou há 5 s e só agora é publicada.
+        list.share(std::time::Instant::now().checked_sub(Duration::from_secs(5)).unwrap(), panes);
+        assert!(watcher.shared(Duration::from_secs(1)).is_none(), "a idade conta do começo da leitura, não da publicação");
         assert_eq!(watcher.shared(Duration::from_secs(60)).unwrap()[0].session, "s", "outro Mux do mesmo programa lê o publicado");
         assert!(watcher.shared(Duration::ZERO).is_none(), "passado o prazo, não vale");
         assert!(other.shared(Duration::from_secs(60)).is_none(), "outro programa não recebe");

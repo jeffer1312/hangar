@@ -520,7 +520,7 @@ impl ListBridge {
         }
         let panes = Arc::new(panes);
         // A vigia do Codex com terminal lê os mesmos panes a cada segundo: com estes à mão, ela não abre o programa.
-        self.env.mux.share(panes.clone());
+        self.env.mux.share(at, panes.clone());
         let (env, caches, p) = (self.env.clone(), self.caches.clone(), panes.clone());
         let max_age = if newer_than.is_some() { Duration::ZERO } else { procs::CHILDREN_TTL };
         let (rows, agent_pids, children, problems) = tokio::task::spawn_blocking(move || {

@@ -2822,23 +2822,18 @@ const VIEW_SAVE_EVERY:f64 = 2.0;
 /// contexto; `context_window` fica de fora porque o patch do sidecar o confere com a vista salva.
 const MEASURED_VIEW:[&str;5] = ["usage","cost","idle_compact_tokens","token_usage","rate_limits"];
 
-fn only_measures_differ(written:&Value,next:&Value) -> bool {
+/// As duas vistas são iguais fora dos campos de `skip`. Compara no lugar: a vista leva o catálogo de comandos.
+fn same_outside(written:&Value,next:&Value,skip:&[&[&str]]) -> bool {
     let (Some(written),Some(next)) = (written.as_object(),next.as_object()) else { return false };
-    let lasting = |fields:&serde_json::Map<String,Value>| fields.keys().filter(|key|!MEASURED_VIEW.contains(&key.as_str())).count();
-    lasting(written) == lasting(next)
-        && written.iter().filter(|(key,_)|!MEASURED_VIEW.contains(&key.as_str())).all(|(key,value)|next.get(key) == Some(value))
+    let kept = |key:&String| !skip.iter().any(|fields|fields.contains(&key.as_str()));
+    written.keys().filter(|key|kept(key)).count() == next.keys().filter(|key|kept(key)).count()
+        && written.iter().filter(|(key,_)|kept(key)).all(|(key,value)|next.get(key) == Some(value))
 }
 
 /// Campos que mudam a cada evento e que ninguém relê do disco: o motor parte de `in_progress:false`
 /// e o estado público é recalculado. O contador sai da comparação porque a escrita no fio salva a
 /// vista inteira (`force`) antes de usar um ID novo.
 const VOLATILE_VIEW:[&str;11] = ["public_state","alive","iniciando","in_progress","pending","question","deliverable","runtime_counter","turn_id","connected","subscribed"];
-
-fn durable_part(view:&Value) -> Value {
-    let mut durable = view.clone();
-    if let Some(fields) = durable.as_object_mut() { for key in VOLATILE_VIEW { fields.remove(key); } }
-    durable
-}
 
 async fn save_view(queue:&QueueActor,generation:u64,sample:ClockSample,gate:&Mutex<SavedView>,version:u64,view:&Value,force:bool) -> Result<(),RuntimeError> {
     store_view(queue,generation,sample,gate,Some((version,view)),force,false).await.map(|_|())
@@ -2858,15 +2853,15 @@ async fn store_view(queue:&QueueActor,generation:u64,sample:ClockSample,gate:&Mu
     }
     // A forçada pode chegar depois de uma mudança de estado mais nova que pulou o disco: grava a vista
     // mais nova conhecida, cujo contador é o maior.
-    let durable = durable_part(&saved.latest);
-    if !force && saved.durable.as_ref() == Some(&durable) { return Ok(false); }
+    let written = saved.durable.as_ref();
+    if !force && written.is_some_and(|written|if written.is_object() { same_outside(written,&saved.latest,&[&VOLATILE_VIEW[..]]) } else { *written == saved.latest }) { return Ok(false); }
     if patient && sample.monotonic_s - saved.written_at < VIEW_SAVE_EVERY
-        && saved.durable.as_ref().is_some_and(|written|only_measures_differ(written,&durable)) { return Ok(true); }
-    // Só quem grava copia a vista inteira (ela leva o catálogo de comandos).
+        && written.is_some_and(|written|same_outside(written,&saved.latest,&[&VOLATILE_VIEW[..],&MEASURED_VIEW[..]])) { return Ok(true); }
+    // Só quem grava copia a vista de novo (ela leva o catálogo de comandos).
     let latest = saved.latest.clone();
     queue.exec(generation,&format!("state:{}",unique()),sample,
         Action::AdvanceLifecycle { generation,state:json!({"view":latest}) }).await.map_err(io_failure)?;
-    saved.durable = Some(durable);
+    saved.durable = Some(saved.latest.clone());
     saved.written_at = sample.monotonic_s;
     Ok(false)
 }

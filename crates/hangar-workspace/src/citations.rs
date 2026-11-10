@@ -284,6 +284,10 @@ fn store(path: &Path, generation: u64, end: u64, anchor: Vec<u8>, queries: &[Que
     }
 }
 
+/// Bytes lidos numa passada antes de valer a pena montar o padrão. Nos testes vale desde a primeira linha,
+/// para as conversas pequenas deles passarem pelo atalho.
+const PREFILTER_AFTER: u64 = if cfg!(test) { 0 } else { 256 * 1024 };
+
 /// Uma procura só, nos bytes da linha, pelo texto de todas as perguntas: a linha sem nenhum não muda a resposta
 /// de nenhuma, e deixa de custar a conversão para texto e uma procura por pergunta. `None` (sem atalho) se o
 /// padrão não couber ou se algum texto tiver U+FFFD: a conversão põe esse caractere no lugar de byte inválido, e
@@ -345,7 +349,8 @@ fn scan(source: Transcript<'_>, mut queries: Vec<Query>) -> Vec<Query> {
     }
     let mut end = from;
     let mut buffer = Vec::new();
-    // Só quando há linha para ler: sem novidade na conversa o padrão nem é montado.
+    // O padrão só é montado depois de `PREFILTER_AFTER` bytes lidos: no trecho curto que a conversa
+    // cresceu entre dois pedidos, montá-lo custa mais do que ele poupa.
     let any = OnceCell::new();
     // `partial`: a última linha ainda sem `\n` (escrita em curso).
     let partial = loop {
@@ -364,7 +369,7 @@ fn scan(source: Transcript<'_>, mut queries: Vec<Query>) -> Vec<Query> {
                 if buffer.last() != Some(&b'\n') {
                     break true;
                 }
-                let any = any.get_or_init(|| any_needle(&queries)).as_ref();
+                let any = (end - from >= PREFILTER_AFTER).then(|| any.get_or_init(|| any_needle(&queries)).as_ref()).flatten();
                 feed(&mut queries, &starts, any, end, &buffer);
                 end += read as u64;
             }
@@ -560,10 +565,8 @@ pub fn resolve(cwd: &Path, jsonl: Transcript<'_>, path: &str, write: bool) -> Re
         return Err(error(400, "invalid path"));
     }
     let expanded = crate::expand_home(path);
-    let asked = [path.to_owned()];
-    // Caminho relativo pode precisar das menções mais abaixo: a mesma leitura da conversa responde as duas perguntas.
     let relative = !expanded.is_absolute() && !path.replace('\\', "/").split('/').any(|p| p == "..");
-    let (cited, mentioned) = ask(jsonl, &asked, if relative { &asked } else { &[] });
+    let cited = cwds(jsonl, &[path.to_owned()]);
     let Some(bases) = cited.get(path).and_then(Value::as_array) else {
         return Err(crate::WorkspaceError {
             status: 403,
@@ -597,8 +600,9 @@ pub fn resolve(cwd: &Path, jsonl: Transcript<'_>, path: &str, write: bool) -> Re
                 let target = real(&base.join(&expanded));
                 (target != *base && target.starts_with(base) && target.is_file()).then_some(target)
             })
-            // Caminho real antes da trava do `.git`: um atalho citado não pode escapar dela.
-            .or_else(|| locate(mentioned.first()?, cwd, path, &worked, !write).map(|p| real(&p)))
+            // Só quem não resolveu nas pastas da sessão pergunta pelas menções. Caminho real antes da trava
+            // do `.git`: um atalho citado não pode escapar dela.
+            .or_else(|| find_elsewhere(jsonl, cwd, path, &worked, !write).map(|p| real(&p)))
             .ok_or_else(not_found)?
     };
     if !target.is_file() {
