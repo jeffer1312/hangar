@@ -4306,3 +4306,30 @@ e Caddy 2.11.6 pelo caminho real (wss até `connect.hangar.dev.br`, traefik 3.6.
 Não testado: renovação, a CA de produção e um nome que dependa só do curinga novo
 `*.hangar.dev.br`. Cargas e logs completos em
 `.superpowers/sdd/2026-11-06-hangar-connect-rust/prova-tunel.md` da árvore principal.
+
+## O Rust atende sozinho o que ainda repassava com trabalho real (10/11/2026)
+
+Primeira metade do fim da reserva do modo python. Com o Rust de pé, o dono não chega mais ao Python
+para: texto e broadcast a sessão sem entrada no Rust, fechar sessão, `model-effort`, mods fora do
+Rust, publicar `plugin.json`/`plugin-dir` na subida e baixar os preços do models.dev.
+
+Diferenças em relação ao Python, decididas pelo dono:
+
+- Codex rodando direto no tmux só recebe texto com o campo vazio e pronto. Com menu, diálogo, popup de
+  barra ou rascunho, 409 na hora (`codex_menu_open`, `codex_composer_busy`), sem fila: o Python
+  digitava por cima, e adiar na fila perdia o recado, porque nada drena a fila de um Codex sem ator.
+- Shell ou programa desconhecido no pane: 400 na hora. O Python esperava 14 s por um agente nascendo,
+  que o Rust adota.
+- `DELETE` com processo que não morre: 500 `session_kill_unconfirmed`, com fila, sidecar, convite e
+  a fotografia de restauração intactos. `DELETE` de sessão já morta: 200, sem erro de tmux no diário.
+- `model-effort` fora do Claude: 409 `erro_model_effort_so_claude` (nenhum cliente o manda).
+- Mods fora do Rust: 503; lista de convidado com convite revogado: 410 `erro_convite_encerrado`.
+- Preços: resposta válida sem nenhum modelo conhecido conserva a tabela anterior.
+- Corpo fora de forma: 422 `erro_corpo_invalido`.
+
+Medido: os testes do lote (936) passam no código novo; dos testes novos, 58 falham no código de
+antes e 3 passam nos dois lados por afirmarem o que não mudou. Não conferido: uso real no servidor
+do dono e desempenho. Iguais ao Python e ainda abertos: a sonda do `claude` que falha apaga o
+`plugin-dir`; tmux que não responde vira 404; Enter sem prova no Codex cru conta como entregue.
+Fica no Python até o convidado por login sair dele: `/input`, `/api/broadcast`, `registry.kill` e
+`set_model_effort` para quem entra pela 8766.
