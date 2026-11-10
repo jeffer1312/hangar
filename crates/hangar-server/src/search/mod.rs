@@ -451,6 +451,26 @@ impl Index {
         Ok(Some(cap(batch, limit, &folded)))
     }
 
+    /// A última mensagem de cada transcript não interno cujo caminho real está em `reals`.
+    pub(crate) fn last_messages(&self, reals: &HashSet<String>) -> Result<Vec<Row>, IndexError> {
+        if reals.is_empty() { return Ok(Vec::new()); }
+        let conn = self.reader()?;
+        // Pelo nome do arquivo: o caminho do índice pode passar por link da conta; o real confere.
+        let mut files = conn.prepare("SELECT id, path FROM files WHERE COALESCE(internal, 0) = 0 AND substr(path, -length(?1)) = ?1")?;
+        let mut last = conn.prepare(&format!(
+            "SELECT {CANDIDATE_COLUMNS} FROM msg m JOIN files f ON f.id = m.file_id WHERE m.file_id = ?1 ORDER BY m.id DESC LIMIT 1"))?;
+        let mut out = Vec::new();
+        for real in reals {
+            let Some(name) = Path::new(real).file_name() else { continue };
+            let ids = files.query_map([name.to_string_lossy()], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for (id, _) in ids.into_iter().filter(|(_, path)| crate::list::discover::real(path) == *real) {
+                if let Some(c) = last.query_row([id], Candidate::from_row).optional()? { out.push(c.row); }
+            }
+        }
+        Ok(out)
+    }
+
     /// Transcripts não internos do índice: as conversas que a busca considera.
     pub fn conversations(&self) -> Result<usize, IndexError> {
         let n: i64 = self.reader()?.query_row("SELECT COUNT(*) FROM files WHERE COALESCE(internal, 0) = 0", [], |r| r.get(0))?;

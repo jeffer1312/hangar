@@ -248,15 +248,44 @@ fn found(index: &Index, q: &str, live: &HashMap<String, String>, limit: usize, c
     let indexed = index.search(&terms, limit)
         .and_then(|rows| rows.map(|rows| Ok((rows, if count { index.conversations()? } else { 0 }))).transpose());
     if indexed.is_ok() { index.recovered("busca.indice_falhou", ""); }
+    let folded: Vec<String> = terms.iter().map(|t| fold(t)).collect();
     let (hits, considered) = match indexed {
-        Ok(Some((rows, considered))) => (from_rows(rows, &terms, live, &closed_names(index)), considered),
+        Ok(Some((mut rows, considered))) => {
+            let closed = closed_names(index);
+            rows.extend(named_rows(index, &rows, &folded, live, &closed));
+            (from_rows(rows, &terms, live, &closed), considered)
+        }
+        // shortcut: antes do índice pronto a varredura casa só o texto; o nome entra quando ele fica pronto.
         Ok(None) => scan(index, &index.accounts()?, &terms, live, limit),
         Err(e) => {
             index.report_once("busca.indice_falhou", "", || e.to_string());
             scan(index, &index.accounts()?, &terms, live, limit)
         }
     };
-    Ok((order(without_repeats(hits), limit), considered))
+    let mut hits = order(without_repeats(hits), usize::MAX);
+    // Quem procura o nome de uma sessão quer ela primeiro.
+    hits.sort_by_key(|h| !h.session_name.as_deref().or(h.name.as_deref()).is_some_and(|n| name_matches(n, &folded)));
+    hits.truncate(limit);
+    Ok((hits, considered))
+}
+
+fn name_matches(name: &str, folded: &[String]) -> bool {
+    let name = fold(name);
+    folded.iter().all(|t| name.contains(t.as_str()))
+}
+
+/// A última mensagem de cada conversa cujo nome (o da sessão viva, senão o de fechada) tem os termos e
+/// que o texto não trouxe.
+fn named_rows(index: &Index, rows: &[Row], folded: &[String], live: &HashMap<String, String>, closed: &HashMap<String, String>)
+    -> Vec<Row> {
+    let found: HashSet<String> = rows.iter().map(|r| crate::list::discover::real(&r.path)).collect();
+    let wanted: HashSet<String> = live.keys().chain(closed.keys())
+        .filter(|p| !found.contains(*p) && live.get(*p).or_else(|| closed.get(*p)).is_some_and(|n| name_matches(n, folded)))
+        .cloned().collect();
+    match index.last_messages(&wanted) {
+        Ok(rows) => { index.recovered("busca.nome_falhou", ""); rows }
+        Err(e) => { index.report_once("busca.nome_falhou", "", || e.to_string()); Vec::new() }
+    }
 }
 
 /// Nomes das sessões fechadas, pelo mesmo leitor do Arquivo; índice sem ambiente não tem nenhum.
