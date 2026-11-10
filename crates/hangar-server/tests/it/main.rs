@@ -50,6 +50,7 @@ mod dictation_timing;
 mod session_open_cases;
 mod baton;
 mod dictation_catalog;
+mod claude_models;
 mod dictation_harness;
 mod dictation_process;
 mod dictation_provider;

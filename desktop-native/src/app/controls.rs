@@ -424,7 +424,7 @@ impl Hangar {
         if let Some((path, query)) = read {
             // `sondar` passa por todos os modos no terminal: timeout maior que a volta completa.
             let seconds = if probe { 60 } else { 45 };
-            if provider == "claude" && ctl == Ctl::Model { self.read_claude_model_catalog(api, key, seconds); }
+            if provider == "claude" && ctl == Ctl::Model { self.read_claude_model_catalog(api, key, seconds, probe); }
             else {
                 let (connection, tx) = (self.connection, self.tx.clone());
                 self.runtime.spawn(async move {
@@ -436,13 +436,14 @@ impl Hangar {
         cx.notify();
     }
 
-    fn read_claude_model_catalog(&mut self, api: Api, key: SessionKey, seconds: u64) {
+    fn read_claude_model_catalog(&mut self, api: Api, key: SessionKey, seconds: u64, refresh: bool) {
         let Some(identity) = self.controls.model_identities.get(&key).cloned() else { return; };
         let (send, receive) = tokio::sync::oneshot::channel();
         self.controls.model_reads.insert(key.clone(), (identity, receive));
         let (connection, tx) = (self.connection, self.tx.clone());
         self.runtime.spawn(async move {
-            let result = api.read(&key.name, &["model", "options"], &[], seconds).await;
+            let query = if refresh { vec![("refresh", "1")] } else { vec![] };
+            let result = api.read(&key.name, &["model", "options"], &query, seconds).await;
             if send.send(result).is_err() { return; }
             let _ = tx.send(Envelope { connection, selection: None,
                 payload: Payload::Reply(key, Reply::Catalog(Ctl::Model), Ok(Value::Null)) }).await;
@@ -762,7 +763,7 @@ impl Hangar {
                         if ctl == Ctl::Model && !pending {
                             if claude_model_action {
                                 // O backend pode conservar Fast na troca de GPT; só a nova leitura diz o tier que ficou.
-                                if let Some(api) = self.session_api() { self.read_claude_model_catalog(api, key.clone(), 45); }
+                                if let Some(api) = self.session_api() { self.read_claude_model_catalog(api, key.clone(), 45, false); }
                             } else { self.controls.known.remove(&(key.clone(), Ctl::Model)); }
                         }
                         // No Codex, guardar Fast no rótulo deixaria um valor velho vencer o SSE.
@@ -1066,7 +1067,7 @@ impl Hangar {
                 .child(tr("ctl_failed").replace("{reason}", reason))
                 .child(Button::new("ctl-retry").outline().xsmall().label(tr("ctl_retry")).on_click(cx.listener(move |this, _, window, cx| {
                     this.close_controls();
-                    this.open_ctl(ctl, false, cx);
+                    this.open_ctl(ctl, ctl == Ctl::Model && this.provider().0 == "claude", cx);
                     this.focus_ctl_panel(window, cx);
                 })))
                 .into_any_element(),
@@ -1119,6 +1120,12 @@ impl Hangar {
                 let effort = (ctl == Ctl::Model && self.ctl_paired()).then(|| self.render_effort_footer(catalog, busy, cx)).flatten();
                 div().flex().flex_col().gap(px(2.))
                     .children(search)
+                    .when(provider == "claude" && ctl == Ctl::Model, |el| el.child(
+                        Button::new("ctl-model-refresh").ghost().small().label(tr("voice_models_refresh")).disabled(busy)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_ctl(Ctl::Model, true, cx);
+                                this.focus_ctl_panel(window, cx);
+                            }))))
                     .child(list)
                     .children(effort)
                     .children((ctl == Ctl::Model).then(|| self.render_fast_footer(catalog, busy, cx)).flatten())

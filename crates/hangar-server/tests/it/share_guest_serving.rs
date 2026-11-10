@@ -333,13 +333,6 @@ async fn guest_forward_is_signed_and_carries_no_invite_token() {
     assert_eq!(h["x-forwarded-for"], "127.0.0.1");
     assert_eq!(verified(&h, "GET", "/api/sessions/cc/plan-preview")["s"], json!({"cc": "share"}));
 
-    // Rota global (fora de sessão) também vai assinada, e o Bearer não segue.
-    let r = client().get(format!("http://{}/api/model-options", srv.guest)).bearer_auth(&t).send().await.unwrap();
-    assert_eq!(r.status(), 200);
-    let (path, h) = srv.python.last_hit();
-    assert_eq!(path, "/api/model-options");
-    assert!(!h.contains_key("authorization"));
-    verified(&h, "GET", "/api/model-options");
 }
 
 /// IP desta máquina na rede da casa; `None` sem rede (o teste que precisa dele não roda).

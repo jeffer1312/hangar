@@ -201,7 +201,10 @@ fn main() {
                         std::thread::park();
                     }
                 }
-                json!({"models":[{"value":model,"displayName":account}]})
+                std::fs::read(std::path::Path::new(&root).join("fixture-catalog.json"))
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                    .unwrap_or_else(|| json!({"models":[{"value":model,"displayName":account}]}))
             } else {
                 json!({})
             };

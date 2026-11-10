@@ -3669,9 +3669,10 @@ function _invalidarCatalogo(name: string): void {
   for (const k of _catCache.keys()) if (k.endsWith(`|${name}`)) _catCache.delete(k);
 }
 
-export function getModelOptions(name: string, server?: Server | null, options?: { fresh?: boolean }): Promise<ModelOptionsResponse> {
-  const read = () => sessionFetch<ModelOptionsResponse>(server, `/api/sessions/${encodeURIComponent(name)}/model/options`);
-  return options?.fresh ? read() : _catalogo(`model|${server?.id ?? ''}|${name}`, read);
+export function getModelOptions(name: string, server?: Server | null, options?: { fresh?: boolean; refresh?: boolean }): Promise<ModelOptionsResponse> {
+  const read = () => sessionFetch<ModelOptionsResponse>(server, `/api/sessions/${encodeURIComponent(name)}/model/options${options?.refresh ? '?refresh=1' : ''}`);
+  if (options?.refresh) _invalidarCatalogo(name);
+  return options?.fresh || options?.refresh ? read() : _catalogo(`model|${server?.id ?? ''}|${name}`, read);
 }
 
 /**

@@ -121,7 +121,7 @@ export function SessionSettingsButton({ serverId, name, provider, headless, open
 }
 
 type ModelView = Pick<ReturnType<typeof useModelControl>, 'display' | 'items' | 'select'> &
-  Partial<Pick<ReturnType<typeof useModelControl>, 'failed' | 'loading' | 'error' | 'notice' | 'load'>>;
+  Partial<Pick<ReturnType<typeof useModelControl>, 'failed' | 'loading' | 'error' | 'notice' | 'load' | 'refresh'>>;
 const modelItemKey = (item: ModelView['items'][number]) => item.id ?? item.hint ?? item.label;
 type EffortView = Pick<ReturnType<typeof useEffortControl>, 'items' | 'select'> &
   Partial<Pick<ReturnType<typeof useEffortControl>, 'hidden' | 'value' | 'loading' | 'applying' | 'error' | 'notice' | 'load'>>;
@@ -157,7 +157,11 @@ export function SessionSettingsControl({ open, onOpen, onClose, model, effort, f
       <ScrollView style={styles.panel} contentContainerStyle={styles.panelContent} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
         {header}
         <Title text={m.native_ctl_model_title()} /><Notice text={model.notice} />
-        {model.loading ? <Skeleton rows={5} /> : model.error ? <Failure text={model.error} onRetry={() => void model.load?.()} /> :
+        {model.refresh ? <Pressable accessibilityRole="button" disabled={model.loading}
+          onPress={() => void model.refresh?.()} style={{ minHeight: 44, justifyContent: 'center' }}>
+          <Text style={[styles.note, { color: theme.tokens.accent.base }]}>{m.native_voice_models_refresh()}</Text>
+        </Pressable> : null}
+        {model.loading ? <Skeleton rows={5} /> : model.error ? <Failure text={model.error} onRetry={() => void (model.refresh ?? model.load)?.()} /> :
           <SettingsList items={model.items.map((it) => ({ id: modelItemKey(it), label: it.label, hint: it.hint, selected: it.selected, disabled: !!it.unavailable }))}
             onPick={(id) => { const it = model.items.find((item) => modelItemKey(item) === id); if (!it) return; if (it.selected) onClose(); else void model.select(it); }} />}
         {effort.hidden ? null : <>

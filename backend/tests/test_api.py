@@ -12,12 +12,6 @@ import app.api as api_mod
 
 
 @pytest.fixture(autouse=True)
-def _models_cache_isolado(models_cache_em_tmp):
-    """Liga o redirecionamento do cache de modelos em disco (ver tests/conftest.py)."""
-    yield
-
-
-@pytest.fixture(autouse=True)
 def _pair_dir_isolado(tmp_path, monkeypatch):
     # registry.list() varre pareamento (Task 8) a cada chamada, inclusive dentro de rotas exercitadas
     # via TestClient — sem isto a suite varria o .hangar-pair REAL de quem roda (achado do review).
@@ -1277,82 +1271,6 @@ def test_broadcast_uses_send_thread(api_client, monkeypatch):
     assert r.status_code == 200
     # _session_exists e patchado como lambda pelo fixture -> checa o ENVIO real (_send_one) pelas 2 sessoes
     assert calls.count("_send_one") == 2
-
-
-# ---------------------------------------------------------------------------
-# Catalogo de modelos da sessao Claude — GET /model/options, POST /engine/model
-# ---------------------------------------------------------------------------
-
-from app import model_picker as mp
-
-
-@pytest.fixture
-def api_client_limpo(api_client):
-    # O cache do catalogo e por processo e vive 5 min: sem limpar, um teste leria o do anterior.
-    from app import api as api_mod
-    api_mod._claude_models_cache.clear()
-    yield api_client
-    api_mod._claude_models_cache.clear()
-
-
-def test_model_options_conta_anthropic_recusa_com_painel_aberto(api_client_limpo, monkeypatch):
-    # O ramo da conta Anthropic dirige o picker do /model contando linha do pane -- este SIM tem
-    # que recusar com o painel aberto.
-    from app import termsock
-    monkeypatch.setitem(termsock._ativos, "cc", object())
-    with patch("app.api._cached_info", AsyncMock(return_value=SessionInfo(
-            name="cc", cwd="/p", jsonl="/p/a.jsonl", provider="claude"))), \
-         patch("app.api.terminal.list_model_options") as picker:
-        r = api_client_limpo.get("/api/sessions/cc/model/options", headers=_h())
-    assert r.status_code == 409
-    picker.assert_not_called()
-
-
-def test_model_options_conta_anthropic_le_o_picker_ao_vivo(api_client_limpo):
-    # A lista muda com a conta e com a versao do CC (o Fable entrou e a lista chumbada no front nao
-    # soube): ela vem das linhas lidas, nunca de constante.
-    lido = {"effort": "high", "models": [
-        {"keyword": "default", "id": "default", "name": "Default", "desc": "Opus 5 …", "active": False},
-        {"keyword": "fable", "id": "fable", "name": "Fable", "desc": "Fable 5 …", "active": True},
-    ]}
-    with patch("app.api._cached_info", AsyncMock(return_value=SessionInfo(
-            name="cc", cwd="/p", jsonl="/p/a.jsonl", provider="claude"))), \
-         patch("app.api.terminal.list_model_options", return_value=lido):
-        r = api_client_limpo.get("/api/sessions/cc/model/options", headers=_h())
-    assert r.status_code == 200
-    body = r.json()
-    assert body["kind"] == "claude" and body["effort"] == "high"
-    assert [m["id"] for m in body["models"]] == ["default", "fable"]
-    assert body["models"][1]["active"] is True
-
-
-def test_model_options_nao_repete_id_com_as_duas_linhas_opus(api_client_limpo):
-    """O picker desta máquina tem DUAS linhas `opus` (a normal e a de 1M). Enquanto a rota mandava a
-    keyword como id, os dois ids vinham iguais: a lista da tela morria em `each_key_duplicate` e
-    escolher a de 1M aplicava o Opus normal."""
-    lido = {"effort": "high", "models": [
-        {"keyword": "opus", "id": "opus", "name": "Opus",
-         "desc": "Opus 5 · Best for everyday", "active": False},
-        {"keyword": "opus", "id": "opus[1m]", "name": "Opus (1M context)",
-         "desc": "Opus 5 with 1M context", "active": True},
-    ]}
-    with patch("app.api._cached_info", AsyncMock(return_value=SessionInfo(
-            name="cc", cwd="/p", jsonl="/p/a.jsonl", provider="claude"))), \
-         patch("app.api.terminal.list_model_options", return_value=lido):
-        r = api_client_limpo.get("/api/sessions/cc/model/options", headers=_h())
-    ids = [m["id"] for m in r.json()["models"]]
-    assert ids == ["opus", "opus[1m]"]
-    assert len(set(ids)) == len(ids)
-
-
-def test_model_options_sessao_ocupada_propaga_409(api_client_limpo):
-    with patch("app.api._cached_info", AsyncMock(return_value=SessionInfo(
-            name="cc", cwd="/p", jsonl="/p/a.jsonl", provider="claude"))), \
-         patch("app.api.terminal.list_model_options",
-               side_effect=mp.PickerError(409, "a sessao esta trabalhando — espere ela terminar")):
-        r = api_client_limpo.get("/api/sessions/cc/model/options", headers=_h())
-    assert r.status_code == 409
-    assert "trabalhando" in r.json()["detail"]
 
 
 # 13/08/2026 — o "idle" mentiroso do Kimi no caminho de ACAO
