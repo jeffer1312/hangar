@@ -26,6 +26,7 @@ import type {
   AtualizacaoEstado,
   UpdateMode,
   UpdateNotes,
+  UpdateNews,
   MigrationStatus,
   SessionInfo,
   Provider,
@@ -2677,6 +2678,17 @@ export async function getUpdateNotesEm(s: Server | null, fetcher?: typeof fetch)
     if ((e as { status?: number }).status === 404) return null;
     throw e;
   }
+}
+
+/** Novidades das atualizações que este aparelho ainda não viu; `through` é o que marcar visto. */
+export function getArrivedNews(s: Server, device: string, fetcher?: typeof fetch): Promise<{ news: UpdateNews[]; through: number }> {
+  return apiFetchForServer(s, `/api/update/arrived?device=${encodeURIComponent(device)}`, undefined, 20000, true, fetcher);
+}
+
+/** Marca visto até `through`; o servidor nunca recua o cursor e devolve o que ficou. */
+export function markArrivedSeen(s: Server, device: string, through: number, fetcher?: typeof fetch): Promise<{ through: number }> {
+  return apiFetchForServer(s, '/api/update/arrived/seen',
+    { method: 'POST', body: JSON.stringify({ device, through }) }, 15000, true, fetcher);
 }
 
 export interface UpdateAcceptResult { ok: true; started: boolean; pid?: number }

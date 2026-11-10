@@ -1809,6 +1809,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-update-news"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hangar-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "hangar-workspace"
 version = "0.1.0"
 dependencies = [
