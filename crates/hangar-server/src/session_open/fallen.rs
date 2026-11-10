@@ -97,8 +97,19 @@ fn with<T>(home: &Path, change: impl FnOnce(&mut BTreeMap<String, Fallen>) -> (T
 
 pub fn get(home: &Path, name: &str) -> Option<Fallen> { with(home, |map| (map.get(name).cloned(), false)) }
 
-pub fn insert(home: &Path, name: &str, fallen: Fallen) {
+#[cfg(test)]
+fn insert(home: &Path, name: &str, fallen: Fallen) {
     with(home, |map| ((), map.insert(name.to_owned(), fallen.clone()).as_ref() != Some(&fallen)));
+}
+
+/// Grava só se o nome não foi fechado de propósito desde `since`. Conferido sob a trava do mapa: o `forget`
+/// marca antes de remover, então ou ele vê o registro e o tira, ou a gravação vê a marca e desiste.
+pub fn insert_unless_forgotten(home: &Path, name: &str, since: std::time::Instant, fallen: Fallen) -> bool {
+    with(home, |map| {
+        if forgotten_since(name, since) { return (false, false); }
+        let changed = map.insert(name.to_owned(), fallen.clone()).as_ref() != Some(&fallen);
+        (true, changed)
+    })
 }
 
 pub fn remove(home: &Path, name: &str) -> Option<Fallen> {
@@ -162,6 +173,23 @@ pub async fn reopen_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): Co
     }
 }
 
+/// `POST /api/sessions/{name}/dispensar`: tira a caída da lista sem tocar em sessão nenhuma. Só age se o nome
+/// ainda está caído: a linha velha no app não fecha a sessão que acabou de reabrir com o mesmo nome.
+pub async fn dismiss_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    let headers = req.headers().clone();
+    let owner = match crate::routes::gate(&st, peer, &req).await { Ok((_, owner)) => owner, Err(e) => return crate::auth::unavailable(e) };
+    if !owner { return answer(&headers, StatusCode::FORBIDDEN, detail_body("erro_so_dono", "só o dono dispensa a sessão", json!({}))); }
+    let (Some(name), Some(dirs)) = (session_name(req.uri().path()), st.list.env().dirs.clone()) else {
+        return answer(&headers, StatusCode::NOT_FOUND, detail_body("erro_sessao_nao_caida", "a sessão não está caída", json!({})));
+    };
+    if get(&dirs.home, &name).is_none() {
+        return answer(&headers, StatusCode::NOT_FOUND, detail_body("erro_sessao_nao_caida", "a sessão não está caída", json!({"name": name})));
+    }
+    // O `forget` também tira o nome da fotografia do restore: a dispensada não volta no próximo reboot.
+    super::restore::forget(&dirs.home, &name);
+    answer(&headers, StatusCode::OK, json!({"ok": true}))
+}
+
 /// O `<r>` da última linha `Failed with result '<r>'` do journal da unidade.
 pub fn failure(journal: &str) -> Option<String> {
     journal.lines().rev().find_map(|line| {
@@ -194,7 +222,7 @@ pub fn mark_forgotten(name: &str) {
     FORGOTTEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(name.to_owned(), std::time::Instant::now());
 }
 
-pub fn forgotten_since(name: &str, since: std::time::Instant) -> bool {
+fn forgotten_since(name: &str, since: std::time::Instant) -> bool {
     FORGOTTEN.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(name).is_some_and(|at| *at >= since)
 }
 
@@ -283,6 +311,18 @@ mod tests {
         assert_eq!(remove(home.path(), "b"), Some(oom("k2")));
         *MAP.lock().unwrap() = None;
         assert_eq!(get(home.path(), "b"), None, "relido do arquivo, sem a dispensada");
+    }
+
+    /// Dispensada (ou reaberta e fechada) enquanto o journal era lido: a confirmação que começou antes não grava.
+    #[test]
+    fn a_name_closed_after_the_check_started_is_not_recorded() {
+        let home = tempfile::tempdir().unwrap();
+        let started = std::time::Instant::now();
+        assert!(insert_unless_forgotten(home.path(), "antes", started, oom("k1")));
+        mark_forgotten("depois");
+        assert!(!insert_unless_forgotten(home.path(), "depois", started, oom("k2")));
+        assert_eq!(get(home.path(), "depois"), None);
+        assert_eq!(get(home.path(), "antes"), Some(oom("k1")));
     }
 
     #[test]

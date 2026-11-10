@@ -13,6 +13,7 @@ vi.mock('./sessionsStore.svelte', () => ({ sessionsStore: store }));
 vi.mock('@hangar/core', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@hangar/core')>()),
   deleteSession: vi.fn(), renameSession: vi.fn(), resumeSession: vi.fn(), broadcast: vi.fn(), reopenFallenSession: vi.fn(),
+  dismissFallenSession: vi.fn(),
 }));
 vi.mock('./auth', () => ({
   getActiveId: vi.fn(() => 'srv-a'), selectServer: vi.fn(), serverColor: (id: string) => `c-${id}`,
@@ -311,7 +312,7 @@ describe('colapso de grupo', () => {
   });
 });
 
-import { broadcast, deleteSession, renameSession, reopenFallenSession, resumeSession } from '@hangar/core';
+import { broadcast, deleteSession, dismissFallenSession, renameSession, reopenFallenSession, resumeSession } from '@hangar/core';
 import { getActiveId, selectServer } from './auth';
 import * as m from '../paraglide/messages';
 
@@ -548,23 +549,34 @@ describe('sessão caída: reabrir e dispensar', () => {
     expect(d.isReopening('b', 'srv-b')).toBe(true);
   });
   it('dispensar não mexe no diálogo de exclusão de outra sessão', async () => {
-    vi.mocked(deleteSession).mockResolvedValue({ ok: true, warning: null });
+    vi.mocked(dismissFallenSession).mockResolvedValue({ ok: true });
     const d = createSessionListModel(opts('desktop'));
     d.requestDelete('outra', 'srv-b');
     await d.dismiss('s', 'srv-b');
     expect(d.confirmDel).toEqual({ name: 'outra', serverId: 'srv-b', state: null });
-    expect(deleteSession).toHaveBeenCalledWith('s');
+  });
+  it('dispensar enquanto a mesma sessão reabre não manda nada', async () => {
+    vi.mocked(reopenFallenSession).mockImplementation(() => new Promise(() => {}));
+    const d = createSessionListModel(opts('desktop'));
+    void d.reopen('s', 'srv-b');
+    expect(await d.dismiss('s', 'srv-b')).toEqual({ ok: false, erro: '' });
+    expect(dismissFallenSession).not.toHaveBeenCalled();
   });
   it('reabrir com erro devolve a mensagem do servidor', async () => {
     vi.mocked(reopenFallenSession).mockRejectedValue(new Error('nome em uso'));
     expect(await createSessionListModel(opts('desktop')).reopen('s', 'srv-b')).toBe('nome em uso');
   });
-  it('dispensar apaga sem pedir confirmação', async () => {
-    vi.mocked(deleteSession).mockResolvedValue({ ok: true, warning: null });
+  it('dispensar vai pela rota própria ao servidor da linha, sem confirmação nem DELETE', async () => {
+    vi.mocked(dismissFallenSession).mockResolvedValue({ ok: true });
     const d = createSessionListModel(opts('desktop'));
     expect(await d.dismiss('s', 'srv-b')).toEqual({ ok: true, erro: '' });
-    expect(d.confirmDel).toBeNull();
-    expect(deleteSession).toHaveBeenCalledWith('s');
+    expect(vi.mocked(dismissFallenSession).mock.calls[0]).toEqual(['s', expect.objectContaining({ id: 'srv-b' })]);
+    expect(deleteSession).not.toHaveBeenCalled();
+    expect(selectServer).not.toHaveBeenCalled();
+  });
+  it('dispensar recusado (o nome voltou vivo) devolve o erro e a linha volta', async () => {
+    vi.mocked(dismissFallenSession).mockRejectedValue(new Error('a sessão não está caída'));
+    expect(await createSessionListModel(opts('desktop')).dismiss('s', 'srv-b')).toEqual({ ok: false, erro: 'a sessão não está caída' });
   });
 });
 

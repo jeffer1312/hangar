@@ -140,6 +140,8 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
     else if (nome === 'pair-invite') onPair?.(s, { kind: 'invite' });
     else if (nome === 'pair-accept') onPair?.(s, { kind: 'accept' });
     else if (nome === 'group') onPair?.(s, { kind: 'group' });
+    else if (nome === 'reopen') onReopen?.(s);
+    else if (nome === 'dismiss') onDismiss?.(s);
     else if (nome.startsWith('undo:')) {
       const pair = pares[Number(nome.slice(5))];
       if (pair) onPair?.(s, { kind: 'undo', pair });
@@ -151,9 +153,16 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
   // O selo abre o painel do grupo; no leitor de tela vira ação da linha.
   const groupTitle = badge && onPair && !fora ? m.par_grupo_titulo({ n: (s.pair_peers?.length ?? 0) + 1 }) : null;
   // O desabilitado não vira ação do leitor de tela: o rótulo da linha já diz que ela espera você.
+  // A linha caída não abre ao toque: Reabrir e Dispensar são o que ela faz, também no leitor de tela.
+  const fallen = isFallenSession(s);
   const acoesA11y = useMemo(
-    () => [...acoesMenu.filter((a) => !isDisabled(a)).map((a) => ({ name: a.id, label: a.title })), ...(groupTitle ? [{ name: 'group', label: groupTitle }] : [])],
-    [acoesMenu, groupTitle],
+    () => [
+      ...(fallen && onReopen ? [{ name: 'reopen', label: m.sessao_reabrir() }] : []),
+      ...(fallen && onDismiss ? [{ name: 'dismiss', label: m.sessao_dispensar() }] : []),
+      ...acoesMenu.filter((a) => !isDisabled(a)).map((a) => ({ name: a.id, label: a.title })),
+      ...(groupTitle ? [{ name: 'group', label: groupTitle }] : []),
+    ],
+    [fallen, onReopen, onDismiss, acoesMenu, groupTitle],
   );
   const pendentes = pares.filter((p) => p.pending);
   const untracked = s.tracked === false;
@@ -161,7 +170,6 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
   const loop = loopBadge(s.loop_status, s.loop_iter, s.loop_max);
   const pendingQuestions = s.pending_questions ?? 0;
   const reply = s.state === 'idle' ? s.last_reply : null;
-  const fallen = isFallenSession(s);
   const sub = (fallen ? problemLabel(s.problema) : null) ?? s.question ?? (s.state === 'working' ? s.label : reply) ?? null;
   const engineLabel = !orq && s.provider === 'claude' ? s.engine : null;
   const providerLabel = orq ? null : [providerName(s.provider), engineLabel].filter(Boolean).join(', ');
@@ -341,13 +349,13 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
         {fallen && (onReopen || onDismiss) ? (
           <View style={styles.fallenActions}>
             {onReopen ? (
-              <Pressable onPress={() => onReopen(s)} style={styles.resume} accessibilityRole="button" accessibilityLabel={m.sessao_reabrir()}>
+              <Pressable onPress={() => onReopen(s)} style={styles.resume} hitSlop={8} accessibilityRole="button" accessibilityLabel={m.sessao_reabrir()}>
                 <Icon name="RotateCw" size={12} color={theme.tokens.text.secondary} />
                 <Text style={[styles.metaTxt, { color: theme.tokens.text.primary }]}>{m.sessao_reabrir()}</Text>
               </Pressable>
             ) : null}
             {onDismiss ? (
-              <Pressable onPress={() => onDismiss(s)} style={styles.resume} accessibilityRole="button" accessibilityLabel={m.sessao_dispensar()}>
+              <Pressable onPress={() => onDismiss(s)} style={styles.resume} hitSlop={8} accessibilityRole="button" accessibilityLabel={m.sessao_dispensar()}>
                 <Icon name="X" size={12} color={theme.tokens.text.secondary} />
                 <Text style={[styles.metaTxt, { color: theme.tokens.text.primary }]}>{m.sessao_dispensar()}</Text>
               </Pressable>

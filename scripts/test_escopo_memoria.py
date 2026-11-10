@@ -6,7 +6,9 @@ from pathlib import Path
 import pytest
 
 SCRIPT = Path(__file__).resolve().parent / "escopo-memoria"
-CGROUP = "cat /proc/self/cgroup; exit 7"
+# Sem /proc (macOS) não há cgroup a comparar: a saída fixa só prova que o comando rodou.
+CGROUP = "cat /proc/self/cgroup 2>/dev/null || echo sem-proc; exit 7"
+OWN = Path("/proc/self/cgroup").read_text() if Path("/proc/self/cgroup").exists() else "sem-proc\n"
 
 
 def _run(env=None, command=CGROUP):
@@ -38,10 +40,10 @@ def test_without_systemd_runs_in_place(tmp_path):
     (tmp_path / "cat").symlink_to(shutil.which("cat"))
     result = _run({"PATH": str(tmp_path)})
     assert result.returncode == 7, result.stderr
-    assert result.stdout == Path("/proc/self/cgroup").read_text()
+    assert result.stdout == OWN
 
 
 def test_opt_out_runs_in_place():
     result = _run({"HANGAR_SEM_ESCOPO": "1"})
     assert result.returncode == 7, result.stderr
-    assert result.stdout == Path("/proc/self/cgroup").read_text()
+    assert result.stdout == OWN

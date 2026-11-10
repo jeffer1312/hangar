@@ -2,7 +2,7 @@
 // Lógica da lista de sessões compartilhada pelas duas views (Sidebar desktop, SessionList
 // celular). Só lógica: template e CSS continuam em cada view. Formato do sessionsStore — fábrica
 // com getters, sem destructuring (perderia a reatividade).
-import { broadcast, deleteSession, renameSession, reopenFallenSession, resumeSession } from '@hangar/core';
+import { broadcast, deleteSession, dismissFallenSession, renameSession, reopenFallenSession, resumeSession } from '@hangar/core';
 import { getActiveId, selectServer, serverColor } from './auth';
 import { sessionServerFor } from './sessionServer';
 import { formataErro } from '@hangar/core';
@@ -353,9 +353,6 @@ export function createSessionListModel(opts: SessionListModelOptions) {
     if (!confirmDel) return { ok: false, erro: '' };
     const { name, serverId } = confirmDel;
     confirmDel = null;
-    return removeSession(name, serverId);
-  }
-  async function removeSession(name: string, serverId: string): Promise<{ ok: boolean; erro: string }> {
     const prev = getActiveId();
     selectServer(serverId);
     // Otimista: some na hora; falhou, desmarca (reaparece) e a view mostra o erro.
@@ -425,7 +422,13 @@ export function createSessionListModel(opts: SessionListModelOptions) {
     finally { reopening.delete(key); }
   }
   // Dispensar não pede confirmação: a sessão já morreu, só a linha sai da lista.
-  function dismiss(name: string, serverId: string) { return removeSession(name, serverId); }
+  // Rota própria, não o DELETE: se o nome já voltou vivo (a linha da tela está velha), o servidor recusa.
+  async function dismiss(name: string, serverId: string): Promise<{ ok: boolean; erro: string }> {
+    if (reopening.has(reopenKey(name, serverId))) return { ok: false, erro: '' };
+    sessionsStore.markDeleting(serverId, name);
+    try { await dismissFallenSession(name, sessionServerFor(serverId)()); return { ok: true, erro: '' }; }
+    catch (e) { sessionsStore.unmarkDeleting(serverId, name); return { ok: false, erro: errMsg(e) }; }
+  }
 
   // Git/Loop miram o servidor ATIVO (api.ts): aponta pro dono enquanto a folha está aberta e
   // restaura no fechar — nas duas views, sem regra.

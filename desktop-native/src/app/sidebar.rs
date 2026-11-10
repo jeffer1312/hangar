@@ -112,7 +112,7 @@ struct MenuRead { target: Target, seq: u64, mute: Mute, branches: Option<Branche
 
 #[derive(Clone, Debug)]
 /// O renomear leva o número do pedido: resposta de um diálogo cancelado não fecha a tentativa seguinte na mesma sessão.
-pub(super) enum Write { Rename(String, u64), Mute(bool), Editor, Delete, Mode(bool), Reload, Account { path: String, label: String, engine_account: Option<String> }, DismissRename, AnotherRename, Hide, Show, Reopen }
+pub(super) enum Write { Rename(String, u64), Mute(bool), Editor, Delete, Mode(bool), Reload, Account { path: String, label: String, engine_account: Option<String> }, DismissRename, AnotherRename, Hide, Show, Reopen, Dismiss }
 
 /// Gravações de git e o remover vínculo: o resultado é a notificação da sessão, já em texto.
 enum GitWrite { Pull, Checkout(String), StashCheckout(String), Unlink }
@@ -1003,6 +1003,14 @@ impl Hangar {
         self.write(target, Write::Reopen, cx);
     }
 
+    /// Tira a caída da lista pela rota própria: se o nome já voltou vivo (menu aberto sobre a linha velha), o
+    /// servidor recusa em vez de fechar a sessão. Durante a reabertura da mesma sessão, não manda nada.
+    pub(super) fn dismiss_target(&mut self, target: Target, cx: &mut Context<Self>) {
+        if self.sidebar.reopening.contains(&target) { return; }
+        self.sidebar.deleting.insert(target.clone());
+        self.write(target, Write::Dismiss, cx);
+    }
+
     fn write(&mut self, target: Target, what: Write, cx: &mut Context<Self>) {
         let api = self.machine_api(&target.server).ok_or_else(|| self.machine_error(&target.server));
         let tell = self.sidebar_tell();
@@ -1029,6 +1037,7 @@ impl Hangar {
                 Write::Mode(terminal) => api.act(name, &["modo-execucao"], Some(json!({"terminal": terminal})), false, crate::api::REOPEN_SECONDS).await,
                 Write::Reload => api.act(name, &["recarregar"], None, false, crate::api::REOPEN_SECONDS).await,
                 Write::Reopen => api.act(name, &["reabrir"], None, false, crate::api::REOPEN_SECONDS).await,
+                Write::Dismiss => api.act(name, &["dispensar"], None, false, 15).await,
                 Write::Account { path, engine_account, .. } => api.act(name, &["conta"], Some(account_body(path, engine_account.as_deref())), false, crate::api::REOPEN_SECONDS).await,
             };
             tell.send(SidebarReply::Wrote(target, what, result)).await;
@@ -1510,6 +1519,11 @@ impl Hangar {
                         self.sidebar.reopening.remove(&target);
                         result.err().map(|error| Notification::error(format!("{}: {}", tr("sessao_reabrir"), Self::fetch_failure(&error))))
                     }
+                    (Write::Dismiss, Ok(_)) => None,
+                    (Write::Dismiss, Err(error)) => {
+                        self.sidebar.deleting.remove(&target);
+                        Some(Notification::error(format!("{}: {}", tr("sessao_dispensar"), Self::fetch_failure(&error))))
+                    }
                 };
                 if let Some(note) = note { window.push_notification(note, cx); }
                 if let Some(warnings) = warnings { window.push_notification(Notification::warning(warnings), cx); }
@@ -1759,13 +1773,13 @@ fn fill_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, target: &Target, sess
     let label = exit_label(session, invite);
     // A caída não tem processo a fechar: Dispensar só tira a linha, sem a confirmação do Fechar.
     let fell = !invite && fallen(session);
+    let busy = fell && hangar.upgrade().is_some_and(|e| e.read(cx).sidebar.reopening.contains(target));
     let close = {
         let (hangar, target) = (hangar.clone(), target.clone());
-        PopupMenuItem::element(move |_, _| div().text_color(theme::danger()).child(label.clone())).disabled(invite && access.active)
-            .on_click(move |_, window, cx| { let _ = hangar.update(cx, |this, cx| if fell { this.delete_target(target.clone(), cx) } else { this.close_target(target.clone(), window, cx) }); })
+        PopupMenuItem::element(move |_, _| div().text_color(theme::danger()).child(label.clone())).disabled((invite && access.active) || busy)
+            .on_click(move |_, window, cx| { let _ = hangar.update(cx, |this, cx| if fell { this.dismiss_target(target.clone(), cx) } else { this.close_target(target.clone(), window, cx) }); })
     };
     let reopen = fell.then(|| {
-        let busy = hangar.upgrade().is_some_and(|e| e.read(cx).sidebar.reopening.contains(target));
         let label = if busy { format!("{}…", tr("sessao_reabrir")) } else { tr("sessao_reabrir") };
         let (hangar, target) = (hangar.clone(), target.clone());
         PopupMenuItem::new(label).disabled(busy)

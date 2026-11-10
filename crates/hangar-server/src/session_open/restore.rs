@@ -241,15 +241,16 @@ async fn confirm_fallen(home: PathBuf, program: std::ffi::OsString, key: String,
         }
     }
     let Some(cause) = super::fallen::cause(&unit).await else { return };
-    // Fechada de propósito enquanto o journal era lido (a sessão nova com o nome): não caiu. A que voltou viva
-    // sai pelo `forget_live` do próximo tique.
-    if super::fallen::forgotten_since(&entry.name, started) { return; }
-    tracing::warn!(session = %entry.name, %cause, %unit, "o systemd derrubou a sessão; ela fica na lista para reabrir");
     let cwd = super::record::read(&home, &key)
         .inspect_err(|error| tracing::warn!(code = "fallen_spec_unreadable", %error, session = %entry.name, "a pasta da sessão caída não foi lida"))
         .ok().flatten().map(|spec| spec.cwd);
-    super::fallen::insert(&home, &entry.name, super::fallen::Fallen { key, provider: entry.provider, conversation: entry.conversation,
-        permission_mode: entry.permission_mode, cwd, died_at: now(), cause });
+    // Fechada de propósito enquanto o journal era lido (a sessão nova com o nome, ou dispensada): não caiu. A
+    // que voltou viva sai pelo `forget_live` do próximo tique.
+    let name = entry.name.clone();
+    if super::fallen::insert_unless_forgotten(&home, &name, started, super::fallen::Fallen { key, provider: entry.provider,
+        conversation: entry.conversation, permission_mode: entry.permission_mode, cwd, died_at: now(), cause: cause.clone() }) {
+        tracing::warn!(session = %name, %cause, %unit, "o systemd derrubou a sessão; ela fica na lista para reabrir");
+    }
 }
 
 /// Tira da fotografia os nomes fechados desde a última; chamar com `CLOSED` travada.

@@ -3222,7 +3222,8 @@ defeitos achados nele (todos consertados no Rust, decisão do usuário) estão n
   que some sem `forget` e cuja unidade do pane tem `Failed with result '<r>'` no journal vira registro
   em `~/.hangar/sessoes-caidas.json` e linha `dead` (`terminal_sem_memoria` para `oom-kill`,
   `terminal_caiu` para o resto), com Reabrir (`POST /api/sessions/{name}/reabrir`, pelo spec, como o
-  restore) e Dispensar (o `DELETE`). `/exit` e kill pedido não deixam `Failed with result`: é a pessoa
+  restore) e Dispensar (`POST /api/sessions/{name}/dispensar`, que só age se o nome ainda está caído: a
+  linha velha no app não fecha a sessão que acabou de reabrir). `/exit` e kill pedido não deixam `Failed with result`: é a pessoa
   saindo, sem linha (decisão do usuário). Sem journal (Windows/psmux) não há registro. A linha caída
   fica fora do push e da varredura de grupos. O build (`cargo-pinned`, `verificar-local`) roda em
   escopo próprio com teto (`scripts/escopo-memoria`): falta de memória mata o build, não a sessão.

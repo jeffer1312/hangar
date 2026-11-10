@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MenuView } from '@react-native-menu/menu';
 import {
   deleteSession,
+  dismissFallenSession,
   effectiveGroupBy,
   formataErro,
   groupBadges,
@@ -233,20 +234,18 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
       .finally(() => reabrindo.current.delete(chave));
   }, []);
 
-  // Sem confirmação: não há processo para matar, só a linha e o registro para reabrir.
-  const dispensar = useCallback(
-    (s: AggSession) =>
-      comServidor(s, () => {
-        useSessions.getState().markDeleting(s.serverId, s.name);
-        deleteSession(s.name)
-          .then((r) => { if (r.warning) toast.erro(formataErro(r.warning) ?? String(r.warning)); })
-          .catch((e: unknown) => {
-            useSessions.getState().unmarkDeleting(s.serverId, s.name);
-            toast.erro(mensagemDe(e));
-          });
-      }),
-    [comServidor],
-  );
+  // Sem confirmação: não há processo para matar, só a linha e o registro para reabrir. Rota própria, não o
+  // DELETE: se o nome já voltou vivo (a linha da tela está velha), o servidor recusa em vez de fechar.
+  const dispensar = useCallback((s: AggSession) => {
+    const server = useServers.getState().servers.find((x) => x.id === s.serverId);
+    if (!server) { toast.erro(m.servidor_nao_existe()); return; }
+    if (reabrindo.current.has(`${s.serverId}::${s.name}`)) return;
+    useSessions.getState().markDeleting(s.serverId, s.name);
+    dismissFallenSession(s.name, server).catch((e: unknown) => {
+      useSessions.getState().unmarkDeleting(s.serverId, s.name);
+      toast.erro(mensagemDe(e));
+    });
+  }, []);
 
   // A marca mora no servidor da sessão, por endereço explícito: não troca a ativa. A linha muda de
   // lugar quando a lista do servidor chega, sem aviso de sucesso.
