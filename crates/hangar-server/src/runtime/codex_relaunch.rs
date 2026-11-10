@@ -114,7 +114,7 @@ pub(crate) fn transfer_open(home:&Path,name:&str,sidecar_transfer:Option<&str>,k
 /// (pid, nascimento) das raízes e de todos os descendentes vivos agora (o `_descendant_pids` do Python:
 /// no Windows o `app_pid` pode ser o shim `cmd.exe`). O que já saiu não entra; leitura que não prova
 /// nem vida nem saída é `Err`, e quem chama não segue às cegas.
-pub(super) async fn births(roots:Vec<i64>) -> Result<Vec<(i64,f64)>,()> {
+async fn births(roots:Vec<i64>) -> Result<Vec<(i64,f64)>,()> {
     let roots:Vec<i64> = roots.into_iter().filter(|pid|*pid > 1).collect();
     if roots.is_empty() { return Ok(Vec::new()); }
     tokio::task::spawn_blocking(move || {

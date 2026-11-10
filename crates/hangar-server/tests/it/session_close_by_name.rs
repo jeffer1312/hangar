@@ -30,9 +30,21 @@ struct Env {
     server: std::net::SocketAddr,
     registry: Arc<RuntimeRegistry>,
     share: Arc<hangar_server::share::ShareState>,
+    upstream: std::net::SocketAddr,
 }
 
 impl Env {
+    /// A porta privada das pontes que o Python chama, sobre o mesmo registro.
+    async fn private(&self) -> std::net::SocketAddr {
+        let mut state = AppState::new(fake::config(self.upstream, "127.0.0.1"));
+        assert!(state.state.runtime.set(self.registry.clone()).is_ok());
+        state.share = Some(self.share.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let router = hangar_server::routes::terminal_router(Arc::new(state));
+        tokio::spawn(async move { axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
+        address
+    }
     fn sessions(&self, names: &[&str]) {
         std::fs::write(self.root.join("sessions"), names.iter().map(|n| format!("{n}\n")).collect::<String>()).unwrap();
     }
@@ -50,6 +62,24 @@ impl Env {
     async fn invite(&self, name: &str) -> (hangar_server::share::store::Share, String) {
         let life = self.share.lives.life(name, true).await;
         self.share.store.create(name, life, hangar_server::share::store::Kind::Share, true).unwrap()
+    }
+    fn restore_path(&self) -> PathBuf { self.home.join(".hangar/session-restore.json") }
+    /// A sessão na fotografia que o reboot reabre.
+    fn restore_entry(&self, name: &str) {
+        std::fs::create_dir_all(self.restore_path().parent().unwrap()).unwrap();
+        std::fs::write(self.restore_path(), json!({"sessions": {format!("k-{name}"): {"name": name, "provider": "claude", "conversation": null}}}).to_string()).unwrap();
+    }
+    fn restore_names(&self) -> Vec<String> {
+        let snap: Value = serde_json::from_slice(&std::fs::read(self.restore_path()).unwrap()).unwrap();
+        snap["sessions"].as_object().unwrap().values().map(|entry| entry["name"].as_str().unwrap().to_owned()).collect()
+    }
+    /// A linha do diário com esse código chega (a gravação é em segundo plano).
+    async fn diary_has(&self, name: &str, code: &str) -> bool {
+        for _ in 0..40 {
+            if self.python.diag().iter().any(|l| l["sessao"] == name && l["codigo"] == code) { return true; }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        false
     }
     fn projection(&self, name: &str) -> PathBuf { self.queue.join(format!("{name}.jsonl")) }
     fn chain(&self, name: &str) -> PathBuf { self.queue.parent().unwrap().join(".hangar-chain").join(format!("{name}.json")) }
@@ -117,6 +147,7 @@ async fn env_with(adjust: impl FnOnce(&Arc<RuntimeRegistry>), display: &str) -> 
     adjust(&registry);
     let (python, upstream) = fake::spawn_fake().await;
     let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
+    state.diag = python.bind_diary(state.diag.clone());
     let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
         "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"), "omp_agent": home.join(".omp/agent"),
         "kimi_home": home.join(".kimi-code")}).to_string());
@@ -127,27 +158,42 @@ async fn env_with(adjust: impl FnOnce(&Arc<RuntimeRegistry>), display: &str) -> 
     state.write_gate_wait = Duration::from_secs(5);
     assert!(state.state.runtime.set(registry.clone()).is_ok());
     let server = fake::spawn_state(state).await;
-    Env { _dir: dir, root, home, queue, tmux, python, server, registry, share }
+    Env { _dir: dir, root, home, queue, tmux, python, server, registry, share, upstream }
 }
 
 async fn env() -> Env { env_with(|_| {}, "x").await }
 
 /// Cano falso: o argv que o `process::kill` reconhece (`--escuta`, `--log …/cano-<key16>.log`), num grupo
 /// próprio (o encerramento é por `killpg`). `stubborn`: ignora o SIGTERM. Uma thread o colhe ao sair. Cada
-/// teste usa a sua chave: cano vivo de outra prova com a mesma chave seguraria os rastros desta.
-fn fake_cano(dir: &Path, key: &str, stubborn: bool) -> u32 {
+/// teste usa a sua chave: cano vivo de outra prova com a mesma chave seguraria os rastros desta. O grupo
+/// morre no `Drop`, também quando uma asserção cai.
+fn fake_cano(dir: &Path, key: &str, body: Cano) -> FakeCano {
     std::fs::create_dir_all(dir).unwrap();
     let log = dir.join(format!("cano-{key}.log"));
     std::fs::write(&log, "").unwrap();
-    let body = if stubborn { "trap '' TERM; while :; do sleep 0.2; done" } else { "while :; do sleep 0.2; done" };
+    let body = match body {
+        Cano::Plain => "while :; do sleep 0.2; done",
+        Cano::Stubborn => "trap '' TERM; while :; do sleep 0.2; done",
+        // Um neto que sai do grupo (`setsid`) e vive mais que a espera: não é o cano nem o agente.
+        Cano::LoneGrandchild => "sh -c 'setsid sleep 8 & wait' & while :; do sleep 0.2; done",
+    };
     let mut child = std::process::Command::new("sh").args(["-c", body, "hangar-cano", "--escuta", "unix:/nao-existe", "--log"]).arg(&log)
         .process_group(0).spawn().unwrap();
     let pid = child.id();
     std::thread::spawn(move || { let _ = child.wait(); });
     std::thread::sleep(Duration::from_millis(150));
-    pid
+    FakeCano(pid)
 }
 
+enum Cano { Plain, Stubborn, LoneGrandchild }
+
+struct FakeCano(u32);
+
+impl Drop for FakeCano {
+    fn drop(&mut self) { kill_group(self.0) }
+}
+
+#[cfg(target_os = "linux")]
 fn alive(pid: u32) -> bool { Path::new(&format!("/proc/{pid}")).exists() && !std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default().contains(") Z ") }
 
 fn kill_group(pid: u32) { let _ = std::process::Command::new("kill").args(["-9", &format!("-{pid}")]).status(); }
@@ -219,12 +265,20 @@ async fn delete_r1_3_pane_that_survives_is_500_and_keeps_everything() {
     e.put_queue("s-cat1");
     let (invite, _) = e.invite("s-cat1").await;
     std::fs::write(e.root.join("survive"), "").unwrap();
+    e.restore_entry("s-cat1");
     let (status, body) = e.delete("s-cat1").await;
     assert_eq!((status, body["detail"]["code"].as_str()), (500, Some("session_kill_unconfirmed")), "{body}");
     assert_eq!(e.calls("kill-session"), ["kill-session -t =s-cat1"], "o shell não é tocado");
     assert!(e.projection("s-cat1").exists() && e.chain("s-cat1").exists());
     assert!(e.share.store.all().iter().any(|s| s.id == invite.id && s.revoked_at.is_none()), "convite intacto");
     assert_eq!(e.python.hits_to("/api/sessions/s-cat1"), 0);
+    assert_eq!(e.restore_names(), ["s-cat1"], "segue viva: volta no próximo reboot");
+    // A falha vai ao diário com o código.
+    assert!(e.diary_has("s-cat1", "session_kill_unconfirmed").await, "{:?}", e.python.diag());
+    // Fechada de fato, sai da fotografia.
+    std::fs::remove_file(e.root.join("survive")).unwrap();
+    assert_eq!(e.delete("s-cat1").await.0, 200);
+    assert!(e.restore_names().is_empty());
 }
 
 /// R1.3-9: os convites da sessão fechada pelo nome são revogados; a revogação que falha vira aviso e o
@@ -262,21 +316,27 @@ async fn delete_r1_3_transfer_in_progress_refuses() {
 }
 
 /// Codex sem terminal parado, com cano vivo, morto ou sem cano: o Rust mata o cano e apaga sidecar, rastros
-/// do cano e fila, e manda a conversa (`rollout_path`) junto. Capturas `codex_headless_*`.
+/// do cano e fila, e manda a conversa (`rollout_path`) junto; o shell `term-<nome>` só sai com a nossa
+/// marca (`registry.py` `_kill_hidden_shell`). Capturas `codex_headless_*`.
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn delete_r1_3_parked_codex_headless_closes_in_rust() {
     const KEY: &str = "kkkkkkkk0000000a";
     let e = env().await;
     let dir = e.sidecar_dir("codex");
-    let pid = fake_cano(&dir, KEY, false);
+    let process = fake_cano(&dir, KEY, Cano::Plain);
+    let pid = process.0;
     let sidecar = e.put_sidecar("codex", "cxh", json!({"name": "cxh", "provider": "codex", "headless": true, "key": KEY,
         "cano": cano(pid), "rollout_path": "/r/rollout-1.jsonl"}));
     e.put_queue("cxh");
+    e.sessions(&["term-cxh", "term-cxn"]);
+    e.hidden(&["term-cxh"]);
     let (status, body) = e.delete("cxh").await;
     assert_eq!(status, 200, "{body}");
     assert!(!alive(pid), "cano encerrado");
     assert_eq!((sidecar.exists(), dir.join(format!("cano-{KEY}.log")).exists(), e.projection("cxh").exists()), (false, false, false));
     assert_eq!(e.forwarded("cxh"), (Some(SECRET.into()), Some("/r/rollout-1.jsonl".into())));
+    assert_eq!(e.alive(), ["term-cxn"], "o shell marcado saiu");
     // Sem cano gravado (o `save(headless=True)` antes de subir) e com o cano já morto.
     for (name, process) in [("cxn", Value::Null), ("cxd", cano(exited_pid()))] {
         let sidecar = e.put_sidecar("codex", name, json!({"name": name, "provider": "codex", "headless": true, "key": KEY, "cano": process}));
@@ -285,52 +345,110 @@ async fn delete_r1_3_parked_codex_headless_closes_in_rust() {
         assert_eq!(status, 200, "{name}: {body}");
         assert!(!sidecar.exists() && !e.projection(name).exists(), "{name}");
     }
+    assert_eq!(e.alive(), ["term-cxn"], "sem a marca o shell é de outro: fica");
     assert_eq!(e.python.hits_to("/api/sessions/cxh"), 1);
+}
+
+/// O `kill` da ponte do Codex (o `DELETE` que entrou pelo Python, Connect e convidado) fecha aqui o Codex
+/// sem terminal parado: 200, nunca o 421 que devolvia ao Python.
+#[tokio::test]
+async fn delete_r1_3_codex_bridge_kill_closes_a_parked_headless() {
+    let e = env().await;
+    let sidecar = e.put_sidecar("codex", "cxb", json!({"name": "cxb", "provider": "codex", "headless": true, "key": "kkkkkkkk0000000e", "cano": null}));
+    e.put_queue("cxb");
+    let private = e.private().await;
+    let response = fake::client().post(format!("http://{private}/__hangar_server/codex/cxb/kill")).header("x-hangar-internal", SECRET).send().await.unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    assert!(!sidecar.exists() && !e.projection("cxb").exists());
 }
 
 /// D16: o cano do Codex sem terminal que ignora o SIGTERM segura o fechamento: 500 com código, e sidecar e
 /// fila ficam. Captura `codex_headless_cano_ignores_term`.
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn delete_r1_3_codex_headless_cano_that_survives_is_500() {
     const KEY: &str = "kkkkkkkk0000000b";
     let e = env().await;
     let dir = e.sidecar_dir("codex");
-    let pid = fake_cano(&dir, KEY, true);
-    let sidecar = e.put_sidecar("codex", "cxh", json!({"name": "cxh", "provider": "codex", "headless": true, "key": KEY, "cano": cano(pid)}));
+    let process = fake_cano(&dir, KEY, Cano::Stubborn);
+    let sidecar = e.put_sidecar("codex", "cxh", json!({"name": "cxh", "provider": "codex", "headless": true, "key": KEY, "cano": cano(process.0)}));
     e.put_queue("cxh");
     let (status, body) = e.delete("cxh").await;
-    let still = alive(pid);
-    kill_group(pid);
+    assert!(alive(process.0), "o cano seguia vivo");
     assert_eq!((status, body["detail"]["code"].as_str()), (500, Some("session_kill_unconfirmed")), "{body}");
-    assert!(still, "o cano seguia vivo");
     assert!(sidecar.exists() && e.projection("cxh").exists(), "sidecar e fila conservados");
     assert_eq!(e.python.hits_to("/api/sessions/cxh"), 0);
 }
 
 /// Claude sem terminal parado (sem ator aqui): o cano morre, e sidecar, rastros e fila saem. Capturas
 /// `claude_headless_dead_cano`/`_live_cano`; a que ignora o SIGTERM é 500 com tudo conservado (D16).
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn delete_r1_3_parked_claude_headless_closes_in_rust() {
     const KEY: &str = "kkkkkkkk0000000c";
     let e = env().await;
     let dir = e.sidecar_dir("claude");
-    let pid = fake_cano(&dir, KEY, false);
-    let sidecar = e.put_sidecar("claude", "hl1", json!({"name": "hl1", "provider": "claude", "headless": true, "key": KEY, "cano": cano(pid)}));
+    let process = fake_cano(&dir, KEY, Cano::Plain);
+    let sidecar = e.put_sidecar("claude", "hl1", json!({"name": "hl1", "provider": "claude", "headless": true, "key": KEY, "cano": cano(process.0)}));
     e.put_queue("hl1");
     let (status, body) = e.delete("hl1").await;
     assert_eq!(status, 200, "{body}");
-    assert!(!alive(pid));
+    assert!(!alive(process.0));
     assert_eq!((sidecar.exists(), dir.join(format!("cano-{KEY}.log")).exists(), e.projection("hl1").exists()), (false, false, false));
     assert_eq!(e.forwarded("hl1").0.as_deref(), Some(SECRET));
     const STUBBORN: &str = "kkkkkkkk0000000d";
-    let stubborn = fake_cano(&dir, STUBBORN, true);
-    let sidecar = e.put_sidecar("claude", "hl2", json!({"name": "hl2", "provider": "claude", "headless": true, "key": STUBBORN, "cano": cano(stubborn)}));
+    let stubborn = fake_cano(&dir, STUBBORN, Cano::Stubborn);
+    let sidecar = e.put_sidecar("claude", "hl2", json!({"name": "hl2", "provider": "claude", "headless": true, "key": STUBBORN, "cano": cano(stubborn.0)}));
     e.put_queue("hl2");
     let (status, body) = e.delete("hl2").await;
-    let still = alive(stubborn);
-    kill_group(stubborn);
+    assert!(alive(stubborn.0));
     assert_eq!((status, body["detail"]["code"].as_str()), (500, Some("session_kill_unconfirmed")), "{body}");
-    assert!(still && sidecar.exists() && e.projection("hl2").exists());
+    assert!(sidecar.exists() && e.projection("hl2").exists());
+}
+
+/// Um neto que saiu do grupo do cano (`setsid`) não segura o fechamento: só o cano e o agente contam, como no
+/// Python, que esperava só o cano.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn delete_r1_3_a_detached_grandchild_does_not_hold_the_close() {
+    const KEY: &str = "kkkkkkkk0000000f";
+    let e = env().await;
+    let dir = e.sidecar_dir("claude");
+    let process = fake_cano(&dir, KEY, Cano::LoneGrandchild);
+    let sidecar = e.put_sidecar("claude", "hl3", json!({"name": "hl3", "provider": "claude", "headless": true, "key": KEY, "cano": cano(process.0)}));
+    let (status, body) = e.delete("hl3").await;
+    assert_eq!(status, 200, "{body}");
+    assert!(!alive(process.0) && !sidecar.exists());
+}
+
+/// O pid gravado que já não é o cano da chave não leva sinal, e o fechamento diz que nada foi morto.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn delete_r1_3_a_foreign_pid_is_not_killed_and_says_so() {
+    let e = env().await;
+    let mut other = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+    e.put_sidecar("claude", "hl4", json!({"name": "hl4", "provider": "claude", "headless": true, "key": "kkkkkkkk00000010", "cano": cano(other.id())}));
+    let closed = e.registry.close_by_name(None, "hl4", None, async { None }).await.map_err(|error| error.code);
+    let survived = alive(other.id());
+    let _ = other.kill();
+    let _ = other.wait();
+    assert!(survived, "processo alheio intacto");
+    assert_eq!(closed.map(|value| value["killed"].clone()), Ok(json!(false)));
+}
+
+/// A fila que não sai depois do encerramento é 500 com código, como o `PromptQueue.clear` que falhava no
+/// Python, e o Python não recebe nada.
+#[tokio::test]
+async fn delete_r1_3_a_queue_that_cannot_be_cleared_is_500() {
+    use std::os::unix::fs::PermissionsExt;
+    let e = env().await;
+    e.sessions(&["cat9"]);
+    e.put_queue("cat9");
+    std::fs::set_permissions(&e.queue, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let (status, body) = e.delete("cat9").await;
+    std::fs::set_permissions(&e.queue, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!((status, body["detail"]["code"].as_str()), (500, Some("session_queue_clear_failed")), "{body}");
+    assert_eq!(e.python.hits_to("/api/sessions/cat9"), 0);
 }
 
 /// Claude com terminal cujo agente morreu (o pane ficou com o shell): a entrada sai sem matar processo, o
@@ -398,6 +516,12 @@ async fn delete_r1_3_other_terminal_close_takes_the_marked_shell() {
     assert!(closed.is_ok(), "{:?}", closed.err().map(|e| e.code));
     let left = std::fs::read_to_string(root.join("sessions")).unwrap();
     assert_eq!(left, "", "o pane e o shell marcado fecharam");
+    // Sem a marca o `term-` é de outro: fica.
+    std::fs::write(root.join("sessions"), "pi-a\nterm-pi-a\n").unwrap();
+    std::fs::write(root.join("hidden"), "").unwrap();
+    let closed = registry.close_other("pi-a").await.expect("Pi daqui");
+    assert!(closed.is_ok(), "{:?}", closed.err().map(|e| e.code));
+    assert_eq!(std::fs::read_to_string(root.join("sessions")).unwrap(), "term-pi-a\n");
 }
 
 /// Pid de um processo que já saiu.

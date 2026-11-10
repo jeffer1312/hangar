@@ -167,29 +167,28 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     }
     // A chave antes do kill (depois dele o pane não a diz mais); os arquivos do cofre saem só no sucesso.
     let vault_files = match (owner, name.as_deref()) { (true, Some(name)) => crate::vault::files::before_close(&st, name).await, _ => None };
-    if let (true, Some(name)) = (owner, name.as_deref()) {
-        crate::diag::record(crate::diag::diary_dir(), vec![close_line(name, req.headers(), peer)], "sessão fechada");
-    }
     if let (Some(runtime),Some(name))=(st.state.runtime.get(),name.as_deref()) {
         let (_,caller)=match crate::routes::who(&st,peer,&req).await {Ok(value)=>value,Err(error)=>return crate::auth::unavailable(error)};
         if caller.as_ref().is_some_and(|caller|caller.can(name,req.method())) && let Some(closed)=runtime.close_other(name).await {
             match closed {
                 Ok(body)=>{
                     if let Some(files) = vault_files { files.done(); }
+                    if owner { closed_line(name, req.headers(), peer); }
                     return super::json_response(StatusCode::OK,body);
                 },
                 // A sessão já acabou: fecha pelo nome, como qualquer outra que acabou (D17).
                 Err(error) if error.code=="other_terminal_dead"=>{},
-                Err(error)=>return close_refusal(&error),
+                Err(error)=>return close_failed(&st, name, &error, req.headers()),
             }
         }
     }
-    // Fechada de propósito não volta no próximo reboot, de qualquer agente.
-    if let (true, Some(name), Some(dirs)) = (owner, name.as_deref(), st.list.env().dirs.as_ref()) {
-        crate::session_open::restore::forget(&dirs.home, name);
-    }
     let (Some(runtime), true, Some(name)) = (st.state.runtime.get().cloned(), owner, name)
         else { return vault_files_after(vault_files, crate::routes::pass(&st, req, &fwd).await) };
+    // O nome e a porta de entrada antes de qualquer encerramento: abertura e escrita do mesmo nome esperam.
+    let closing = match runtime.begin_close(st.list.env().dirs.as_ref().map(|dirs| dirs.home.clone()), &name).await {
+        Ok(closing) => closing,
+        Err(error) => return close_failed(&st, &name, &error, req.headers()),
+    };
     // Claude aberto aqui (com ou sem terminal) também fecha aqui: só matar pelo nome deixava a entrada da
     // vida morta presa ao nome, e a próxima sessão com ele herdava a conversa dela.
     let closed = match runtime.kill_codex_terminal(&name).await {
@@ -203,14 +202,14 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
             }
         }
     };
+    drop(closing);
     let closed = match closed {
         Ok(closed) => closed,
-        Err(error) => {
-            let mut response = close_refusal(&error);
-            crate::routes::cors(req.headers(), response.headers_mut());
-            return response;
-        }
+        Err(error) => return close_failed(&st, &name, &error, req.headers()),
     };
+    // Fechada de propósito não volta no próximo reboot, de qualquer agente; recusada, segue voltando.
+    if let Some(dirs) = st.list.env().dirs.as_ref() { crate::session_open::restore::forget(&dirs.home, &name); }
+    closed_line(&name, req.headers(), peer);
     if let Some(files) = vault_files { files.done(); }
     // Só o caminho da conversa, para o Python guardar o nome fechado; sem ele, o Python registra a falta.
     if let Some(path) = closed["transcript"].as_str() {
@@ -298,10 +297,26 @@ fn with_leave_warning(current: Option<Value>, name: &str, mut errs: Vec<Value>) 
 }
 
 fn close_refusal(error: &crate::runtime::protocol::RuntimeError) -> Response {
+    if error.code == crate::runtime::close_name::NAME_BUSY {
+        return super::detail(StatusCode::CONFLICT, &error.code, &error.message, json!({}));
+    }
     match super::busy_refusal(error) {
         Some((status, body)) => super::json_response(status, body),
         None => super::detail(StatusCode::INTERNAL_SERVER_ERROR, &error.code, &error.message, json!({})),
     }
+}
+
+/// O fechamento do dono recusado: o código vai ao diário e na resposta, e nada segue ao Python.
+fn close_failed(st: &AppState, name: &str, error: &crate::runtime::protocol::RuntimeError, headers: &axum::http::HeaderMap) -> Response {
+    st.diag.report("rust.close_failed", name, &error.code, "o fechamento da sessão falhou");
+    let mut response = close_refusal(error);
+    crate::routes::cors(headers, response.headers_mut());
+    response
+}
+
+/// O fechamento que deu certo vai ao diário com o cliente e a origem.
+fn closed_line(name: &str, headers: &axum::http::HeaderMap, peer: SocketAddr) {
+    crate::diag::record(crate::diag::diary_dir(), vec![close_line(name, headers, peer)], "sessão fechada");
 }
 
 /// Depois de o Rust encerrar a sessão: revoga os convites e some da lista. A saída do grupo é de quem chamou.
@@ -381,8 +396,8 @@ async fn dispatch(st: Arc<AppState>, peer: SocketAddr, method: &str, rest: &str,
     }
 }
 
-/// Quem pediu o fechamento: o cliente e a origem que a requisição traz (o dono não manda identidade própria). O
-/// pedido, não o resultado: o encerramento pode falhar depois, e a sessão que some sem ele vai como `sessao.sumiu`.
+/// Quem pediu o fechamento: o cliente e a origem que a requisição traz (o dono não manda identidade própria).
+/// No `DELETE` do dono a linha sai depois do encerramento; a falha vai como `rust.close_failed`, com o código.
 fn close_line(name: &str, headers: &axum::http::HeaderMap, peer: SocketAddr) -> serde_json::Value {
     asked_line("sessao.fechamento_pedido", "session_close_requested_by_owner", name, headers, peer)
 }

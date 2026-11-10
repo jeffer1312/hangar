@@ -641,7 +641,7 @@ impl Watcher {
         }
         let meta = match read { Ok(meta) => meta?, Err(error) => return Some(Err(error)) };
         if meta.get("headless").is_some_and(truthy) {
-            let closed = super::close_name::close_codex_headless(registry,&self.cfg.home,&self.cfg.queue_dir,name).await;
+            let closed = super::close_name::close_codex_headless(registry,&self.cfg.home,&self.cfg.queue_dir,&self.cfg.mux_program,name).await;
             return Some(closed.map(|v|with_transcript(v,None)));
         }
         let _round = self.misses.lock().await;
