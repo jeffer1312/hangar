@@ -453,7 +453,9 @@ mod refresh {
         assert!(generated(&snapshot).starts_with(" \"gerado_em\": \"") && generated(&snapshot).ends_with("+00:00\","), "{}", generated(&snapshot));
         assert_eq!(snapshot.replace(&generated(&snapshot), ""), python.replace(&generated(&python), ""));
         let written = std::fs::read(root.path().join("crates/hangar-server/tests/it/fixtures/pricing/models_dev_recorte.json")).unwrap();
-        assert_eq!(written, recorte(), "o recorte do recorte sai byte a byte igual");
+        // O checkout do Windows traz a fixture com CRLF; o recorte sai sempre com LF.
+        let expected = String::from_utf8(recorte()).unwrap().replace("\r\n", "\n");
+        assert_eq!(String::from_utf8(written).unwrap(), expected, "o recorte do recorte sai byte a byte igual");
         assert_eq!(lines[0], format!("80 entradas -> {}", root.path().join("backend/app/pricing_data.json").display()));
         // A versão do Python vira o mesmo texto pelo leitor do snapshot.
         assert_eq!(versioned_text(&serde_json::from_str(&python).unwrap()), python);

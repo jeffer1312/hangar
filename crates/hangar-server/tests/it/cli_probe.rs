@@ -165,8 +165,7 @@ impl PublishCase {
             let pids = bin.path().join("pids");
             let script = format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\necho $$ >> '{}'\n/bin/sleep {} &\necho $! >> '{}'\nwait\ncase \"$1\" in --version) printf '%s\\n' '{}';; --help) printf 'Options:\\n%s\\n' '{help}';; esac\nexit {}\n",
                 probes.display(), pids.display(), c.sleep, pids.display(), c.version, c.exit);
-            std::fs::write(bin.path().join("claude"), script).unwrap();
-            std::fs::set_permissions(bin.path().join("claude"), std::fs::Permissions::from_mode(0o755)).unwrap();
+            crate::write_executable(&bin.path().join("claude"), script);
         }
         let env = AccountEnvironment::from_pairs([
             ("HOME", home.path().to_string_lossy().into_owned()),

@@ -201,6 +201,18 @@ exec tmux -L '{label}' -f /dev/null "$@"
         self.screen_shows(name, &first).await;
     }
 
+    /// Espera o `exec -a <program>` do pane trocar o argv: antes disso a descoberta vê só o `bash`.
+    pub(crate) async fn agent_runs(&self, name: &str, program: &str) {
+        let shell = self.tmux(&["display-message", "-p", "-t", &format!("={name}:"), "#{pane_pid}"]);
+        for _ in 0..400 {
+            let children = Command::new("ps").args(["-o", "args=", "--ppid", shell.trim()]).output().unwrap();
+            if String::from_utf8_lossy(&children.stdout).lines().any(|line| line.split_whitespace().next() == Some(program)) { return; }
+            // estavel: intervalo da espera pelo argv do filho; a condição encerra antes do teto de 10 s.
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        panic!("o pane de {name} não mostrou o processo {program}");
+    }
+
     pub(crate) async fn screen_shows(&self, name: &str, needle: &str) {
         for _ in 0..200 {
             if self.tmux(&["capture-pane", "-p", "-t", &format!("={name}:")]).contains(needle) { return; }
@@ -271,7 +283,7 @@ async fn claude_login_pane_is_400_without_rust_binding() {
     assert!(Command::new("mkfifo").arg(cwd.join("login")).status().unwrap().success());
     // `claude login` = um `cat` lendo o FIFO ./login, preso para sempre (como na captura).
     rig.pane("lg1", "bash --norc --noprofile -c '( exec -a claude cat login ); exec sleep 100000'");
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    rig.agent_runs("lg1", "claude").await;
     let (status, body) = rig.input("lg1", json!({"text": "oi"})).await;
     assert_eq!((status, body), (400, json!({"detail": {"code": "erro_envio_falhou", "params": {}, "msg": "sessão Claude sem vínculo no Rust"}})));
     assert_eq!(rig.python_inputs(), 0);
@@ -308,6 +320,7 @@ async fn raw_codex_nothing_more_happens_after_the_answer() {
     // Entregue e com a linha na fila: é este estado que não pode mudar sozinho depois.
     assert_eq!(submitted(&rig, "cx"), vec![json!({"text": "oi"})]);
     assert_eq!(rows.as_ref().map(|rows| rows.len()), Some(1));
+    // estavel: janela em que nada pode acontecer; não há sinal a esperar, só a ausência dele.
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_eq!((rig.tui("cx", "keys.jsonl"), rig.queue("cx")), (keys, rows));
     assert_eq!(rig.python_inputs(), 0);
@@ -340,7 +353,7 @@ async fn raw_codex_multiline_pastes_and_falls_back_to_ctrl_j() {
     assert_eq!(rig.tui("cx", "keys.jsonl")[0], json!({"read": "\u{1b}[200~linha 1\rlinha 2\u{1b}[201~"}));
     rig.flag("fail-buffer", true);
     let (status, body) = rig.input("cx", json!({"text": "linha 3\nlinha 4"})).await;
-    assert_eq!((status, body["delivered"].clone()), (200, json!(true)));
+    assert_eq!((status, body["delivered"].clone()), (200, json!(true)), "{body} | tela: {}", rig.tmux(&["capture-pane", "-p", "-t", "=cx:"]));
     let keys: String = rig.tui("cx", "keys.jsonl").iter().skip(2).map(|k| k["read"].as_str().unwrap().to_owned()).collect();
     assert_eq!(keys, "linha 3\nlinha 4\r");
     assert_eq!(submitted(&rig, "cx"), vec![json!({"text": "linha 1\nlinha 2"}), json!({"text": "linha 3\nlinha 4"})]);
@@ -429,24 +442,29 @@ async fn raw_codex_send_never_holds_the_ingress_pass() {
     assert_eq!(rig.python_inputs(), 0);
 }
 
-// Dois recados para a mesma sessão: o segundo espera a vez no máximo 2 s (abaixo do prazo de 3 s de
+// Dois recados para a mesma sessão: quem não pega a vez espera no máximo 2 s (abaixo do prazo de 3 s de
 // quem entrega pelo Connect) e sai com código, em vez de ser digitado depois que quem pediu já desistiu.
 #[tokio::test]
 async fn raw_codex_second_sender_gives_up_the_turn_with_a_code() {
     let rig = Rig::new().await;
-    // Tela em branco: o primeiro segura a vez pelos 12 s da espera de prontidão.
+    // Tela em branco: quem pega a vez a segura pelos 12 s da espera de prontidão. Os dois saem juntos e
+    // qualquer um pode pegá-la: o teste não depende de quem chega primeiro.
     rig.pane("cx", "bash --norc --noprofile -c '( exec -a codex sleep 100000 ); exec sleep 100000'");
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let url = format!("http://{}/api/sessions/cx/input", rig.server);
-    let first = tokio::spawn(client().post(url).bearer_auth(OWNER).header("content-type", "application/json").body(r#"{"text":"primeiro"}"#).timeout(Duration::from_secs(60)).send());
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    let start = Instant::now();
-    let (status, body) = rig.input("cx", json!({"text": "segundo"})).await;
-    assert_eq!((status, body["detail"]["code"].clone()), (409, json!("erro_envio_em_andamento")), "{body}");
-    assert!(start.elapsed() < Duration::from_secs(8), "desistiu antes de a primeira acabar: {:?}", start.elapsed());
-    assert!(!first.is_finished(), "a primeira ainda espera a tela");
-    assert_eq!(first.await.unwrap().unwrap().status().as_u16(), 409);
-    assert!(!rig.tmux(&["capture-pane", "-p", "-t", "=cx:"]).contains("segundo"), "o segundo nunca foi digitado");
+    rig.agent_runs("cx", "codex").await;
+    let rig = &rig;
+    let timed = |text: &'static str| async move {
+        let start = Instant::now();
+        let (status, body) = rig.input("cx", json!({"text": text})).await;
+        (status, body["detail"]["code"].as_str().unwrap_or_default().to_owned(), start.elapsed())
+    };
+    let (one, other) = tokio::join!(timed("primeiro"), timed("segundo"));
+    let (gave_up, held) = if one.1 == "erro_envio_em_andamento" { (one, other) } else { (other, one) };
+    assert_eq!((gave_up.0, gave_up.1.as_str()), (409, "erro_envio_em_andamento"));
+    assert!(gave_up.2 < Duration::from_secs(8), "desistiu antes de a outra acabar: {:?}", gave_up.2);
+    assert_eq!((held.0, held.1.as_str()), (409, "codex_composer_busy"));
+    assert!(held.2 >= Duration::from_secs(12), "a que pegou a vez esperou a tela: {:?}", held.2);
+    let screen = rig.tmux(&["capture-pane", "-p", "-t", "=cx:"]);
+    assert!(!screen.contains("primeiro") && !screen.contains("segundo"), "nenhum dos dois foi digitado");
 }
 
 // R1.1-8: troca de agente em curso fecha a porta: 409 na hora, nada digitado.
@@ -531,7 +549,7 @@ async fn raw_codex_refused_clear_keeps_the_queue() {
 async fn raw_codex_screen_never_ready_waits_then_is_409_without_typing() {
     let rig = Rig::new().await;
     rig.pane("cx", "bash --norc --noprofile -c '( exec -a codex sleep 100000 ); exec sleep 100000'");
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    rig.agent_runs("cx", "codex").await;
     let start = Instant::now();
     let (status, body) = rig.input("cx", json!({"text": "oi"})).await;
     assert!(start.elapsed() >= Duration::from_secs(12), "{:?}", start.elapsed());
@@ -618,6 +636,7 @@ async fn write_in_the_startup_window_waits_for_the_watcher() {
     rig.codex("cx", "pane_codex_idle.txt", "echo").await;
     let url = format!("http://{}/api/sessions/cx/input", rig.server);
     let sending = tokio::spawn(client().post(url).bearer_auth(OWNER).header("content-type", "application/json").body(r#"{"text":"oi"}"#).timeout(Duration::from_secs(60)).send());
+    // estavel: janela em que a escrita tem de seguir esperando; não há sinal a esperar, só a ausência dele.
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert!(!sending.is_finished() && rig.tui("cx", "keys.jsonl").is_empty(), "espera a vigia sem responder nem digitar");
     rig.runtime.bind_watcher(rig.watcher());
