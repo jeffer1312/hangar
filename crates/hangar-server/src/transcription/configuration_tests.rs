@@ -85,7 +85,7 @@ async fn saved_providers_override_legacy_and_are_read_after_normal_writes() {
     assert_eq!(updated["organization"]["dictation_include_recent_messages"], false);
     assert_eq!(updated["organization"]["dictation_organization_mode"], "none");
     apply(&state, json!({"transcription_providers":[], "groq_api_key":""}));
-    assert_eq!(snapshot(&state).await.unwrap()["legacy"], Value::Null);
+    assert_eq!(snapshot(&state).await.unwrap()["legacy"], initial["legacy"]);
 }
 
 #[tokio::test]
