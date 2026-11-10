@@ -1059,6 +1059,8 @@ async fn headless_registry(fx:&Fixture) -> Arc<RuntimeRegistry> {
     let fake = fx.home.join("fake-claude.sh");
     crate::write_executable(&fake,format!(r#"#!/bin/bash
 printf '%s\n' "$*" >> '{args}'
+# `stubborn-agent`: este `claude` ignora o SIGTERM e sobrevive ao cano.
+[ -f '{stub}' ] && trap '' TERM
 while IFS= read -r -t 120 line; do
   case "$line" in
     *'"type":"control_request"'*)
@@ -1066,7 +1068,8 @@ while IFS= read -r -t 120 line; do
       printf '{{"type":"control_response","response":{{"subtype":"success","request_id":"%s","response":{{"commands":[]}}}}}}\n' "$rid";;
   esac
 done
-"#,args=fx.home.join("claude.args").display()));
+[ -f '{stub}' ] && echo $$ > '{stub}.pid' && sleep 30
+"#,args=fx.home.join("claude.args").display(),stub=fx.home.join("stubborn-agent").display()));
     crate::write_executable(&bin.join("claude"),format!("#!/bin/bash\nexec -a claude /bin/bash '{}' \"$@\"\n",fake.display()));
     let path = format!("{}:{}",bin.display(),std::env::var("PATH").unwrap());
     let env = AccountEnvironment::from_map([("HOME".to_owned(),fx.home.to_string_lossy().into_owned()),("PATH".to_owned(),path)].into());
@@ -1119,6 +1122,34 @@ async fn a_terminal_session_goes_headless_on_the_same_conversation_and_mode() {
     assert_eq!((meta["headless"].as_bool(),meta["session_id"].as_str(),meta["permission_mode"].as_str(),meta["key"].as_str()),
         (Some(true),Some(SID),Some("acceptEdits"),Some(key.as_str())));
     registry.close_with_kill(&key,generation(&fx,&key)).await.unwrap();
+}
+
+/// R1.3 (D16): o Claude sem terminal aberto aqui cujo agente sobrevive ao cano não fecha pelo nome: o
+/// `DELETE` é 500 `session_kill_unconfirmed`, e sidecar e fila ficam para a próxima tentativa.
+#[tokio::test]
+async fn delete_r1_3_headless_claude_whose_agent_outlives_the_cano_is_500() {
+    let fx = fixture();
+    fx.transcript();
+    let key = "3a".repeat(16);
+    terminal_with_spec(&fx,&key);
+    std::fs::write(fx.home.join("stubborn-agent"),"").unwrap();
+    let registry = headless_registry(&fx).await;
+    let reopened = registry.reopen_claude_session("s1",mode_switch(false),None).await.expect("é sessão Claude daqui");
+    assert!(reopened.is_ok(),"{:?}",reopened.err().map(|f|f.error.code));
+    let (python,server) = crate::runtime_codex_watch::serve_owner(registry.clone()).await;
+    let response = crate::fake::client().delete(format!("http://{server}/api/sessions/s1")).bearer_auth(crate::fake::OWNER).send().await.unwrap();
+    let status = response.status().as_u16();
+    let body:Value = serde_json::from_str(&response.text().await.unwrap()).unwrap_or(Value::Null);
+    let agent = std::fs::read_to_string(fx.home.join("stubborn-agent.pid")).ok().and_then(|pid|pid.trim().parse::<u32>().ok());
+    if let Some(pid) = agent {
+        let _ = std::process::Command::new("pkill").args(["-9","-P",&pid.to_string()]).status();
+        let _ = std::process::Command::new("kill").args(["-9",&pid.to_string()]).status();
+    }
+    assert!(agent.is_some(),"o agente seguiu vivo depois do cano");
+    assert_eq!((status,body["detail"]["code"].as_str()),(500,Some("session_kill_unconfirmed")),"{body}");
+    assert!(fx.sidecar_path("s1").exists(),"sidecar conservado");
+    assert!(fx.queue.join(format!("runtime/{key}.json")).exists(),"fila conservada");
+    assert_eq!(python.hits_to("/api/sessions/s1"),0);
 }
 
 /// Rodapé sem o modo na hora de ir ao sem terminal: o modo sai do spec.

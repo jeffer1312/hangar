@@ -62,6 +62,7 @@ mod groups_support;
 #[cfg(unix)]
 mod list_support;
 mod mods_support;
+mod sink;
 #[cfg(unix)]
 mod voice_support;
 mod workspace_fixture;
@@ -281,7 +282,9 @@ mod session_write_answer;
 mod session_write_control;
 mod session_write_input;
 mod session_write_model_effort;
+mod session_close_by_name;
 mod session_write_routes;
+mod session_write_unowned;
 mod session_rename;
 mod share_reach;
 mod share_store;

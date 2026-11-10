@@ -165,7 +165,7 @@ async fn other_sessions_bad_tokens_and_bad_bodies() {
     assert_eq!(python.hits_to("/api/plugin/ui"), 0, "a faixa de sessão sem entrada no Rust fica no Rust");
     let mut wrong = signed("t", json!({"requestId": "a", "element": "k"}));
     wrong["token"] = json!("x");
-    assert_eq!(post(server, "pressed", wrong).await.0, 403);
+    assert_eq!(post(server, "pressed", wrong).await, (403, json!({"detail": "token do plugin invalido"})));
     // Os limites do Pydantic vêm antes do token, como no Python: com token errado, 422.
     let bad = |extra: Value| { let mut body = signed("t", extra); body["token"] = json!("x"); body };
     for (route, body) in [

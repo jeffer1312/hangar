@@ -621,8 +621,8 @@ impl Watcher {
         Ok(json!({"closed":true,"killed":true}))
     }
 
-    /// `DELETE` que entrou pelo Python. `None` = não é Codex com terminal (o Python encerra como hoje). Sem
-    /// ator aberto (vida ainda não pronta), o pane e o que a vida comprovar; o resto é das lojas do Python.
+    /// `DELETE` do dono. `None` = sem sidecar Codex. Sem ator aberto (vida ainda não pronta), o pane e o que a
+    /// vida comprovar; o sem terminal fecha aqui também (`close_name`); o resto é das lojas do Python.
     /// O `Ok` leva `transcript` (a conversa atual do sidecar) quando ela é conhecida: o sidecar some no
     /// encerramento, e o Python precisa dela para guardar o nome fechado.
     pub async fn kill_by_name(&self,registry:&RuntimeRegistry,name:&str) -> Option<Result<Value,RuntimeError>> {
@@ -647,7 +647,10 @@ impl Watcher {
             return Some(self.kill(registry,&target).await.map(|v|with_transcript(v,target.transcript.as_deref())));
         }
         let meta = match read { Ok(meta) => meta?, Err(error) => return Some(Err(error)) };
-        if meta.get("headless").is_some_and(truthy) { return None; }
+        if meta.get("headless").is_some_and(truthy) {
+            let closed = super::close_name::close_codex_headless(registry,&self.cfg.home,&self.cfg.queue_dir,&self.cfg.mux_program,name).await;
+            return Some(closed.map(|v|with_transcript(v,None)));
+        }
         let _round = self.misses.lock().await;
         if let Err(error) = self.kill_pane(name).await { return Some(Err(error)); }
         if let Some(c) = candidate(&meta,&self.cfg.home) {

@@ -91,19 +91,7 @@ async fn policy() -> std::net::SocketAddr {
     address
 }
 
-/// Cano 42 com o `claude` 43 da conversa dada (`--session-id`).
-pub(crate) struct RecipeProcesses(pub &'static str);
-impl hangar_server::list::procs::ProcessView for RecipeProcesses {
-    fn children(&self,_:Duration)->std::io::Result<Arc<hangar_server::list::procs::ChildrenMap>> {Ok(Arc::new(std::collections::HashMap::from([(42,vec![43])]))) }
-    fn argv(&self,_:i64)->Vec<String> {vec![]}
-    fn cwd(&self,_:i64)->Option<std::path::PathBuf> {Some(std::env::temp_dir())}
-    fn env_var(&self,_:i64,_:&str)->std::io::Result<Option<std::ffi::OsString>> {Ok(None)}
-    fn start_time(&self,_:i64)->Option<f64> {Some(1000.0)}
-    fn recipe(&self,pid:i64)->std::io::Result<hangar_server::list::procs::ProcessRecipe> {
-        let argv=match pid {42=>vec!["hangar-cano".into()],43=>vec!["claude".into(),"--session-id".into(),self.0.into()],_=>return Err(std::io::ErrorKind::NotFound.into())};
-        Ok(hangar_server::list::procs::ProcessRecipe {pid,birth:1000.0,executable:if pid==42 {"/fixture/hangar-cano".into()} else {"/fixture/claude".into()},cwd:std::env::temp_dir(),argv,environ:vec!["HOME=/fixture".into()],cgroup:None})
-    }
-}
+pub(crate) use crate::sink::RecipeProcesses;
 pub(crate) fn with_hubs(registry:RuntimeRegistry)->Arc<RuntimeRegistry> {
     let registry=Arc::new(registry);let hubs=hangar_server::side::Hubs::default();registry.bind_lifecycle();registry.bind_hubs(hubs.downgrade());
     let mut events=registry.subscribe();

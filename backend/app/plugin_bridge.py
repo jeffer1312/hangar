@@ -24,7 +24,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app import atomico, install_root, state_facts
+from app import install_root, state_facts
 
 _log = logging.getLogger("hangar.plugin_bridge")
 
@@ -162,67 +162,6 @@ def mint(name: str, key: str | None = None) -> str:
     if key is None:
         return hmac.new(segredo, f"plugin:{name}".encode(), hashlib.sha256).hexdigest()[:32]
     return key + "." + hmac.new(segredo, f"plugin:{name}:{key}".encode(), hashlib.sha256).hexdigest()[:32]
-
-
-def machine_key() -> str:
-    """Chave desta máquina para o `/whoami`: derivada como o `mint`, e só abre aquela rota."""
-    from app.config import settings
-    segredo = (settings.auth_token or "hangar").encode()
-    return hmac.new(segredo, b"plugin:machine", hashlib.sha256).hexdigest()[:32]
-
-
-def machine_file(home: Path | None = None) -> Path:
-    return (home or Path.home()) / ".hangar" / "plugin.json"
-
-
-def _publish_address(home: Path | None = None) -> None:
-    """Onde o plugin acha a ponte: sessão aberta fora do Hangar não recebe `HANGAR_PLUGIN_*`."""
-    from app.config import settings
-    alvo = machine_file(home)
-    alvo.parent.mkdir(parents=True, exist_ok=True)
-    tmp = alvo.with_name(alvo.name + ".tmp")
-    tmp.write_text(json.dumps({"url": f"http://127.0.0.1:{settings.port}/api/plugin",
-                               "chave": machine_key()}), encoding="utf-8")
-    try:
-        tmp.chmod(0o600)
-    except OSError:
-        pass
-    atomico.substituir(tmp, alvo)
-
-
-def plugin_dir_file(home: Path | None = None) -> Path:
-    return (home or Path.home()) / ".hangar" / "plugin-dir"
-
-
-def _publish_plugin_dir(home: Path | None = None) -> None:
-    """Caminhos dos plugins para o wrapper do shell, que não sabe onde o repositório mora.
-
-    Sessão aberta no terminal precisa do mesmo `--plugin-dir` das que o backend abre: é o único
-    caminho do plugin, e o que o põe por fora do marketplace para enxergar a faixa dos mods. Sem
-    `raizes_dos_plugins()` o arquivo sai, porque flag que o CLI não conhece mata a sessão ao nascer."""
-    alvo = plugin_dir_file(home)
-    raizes = raizes_dos_plugins()
-    if not raizes:
-        alvo.unlink(missing_ok=True)
-        return
-    alvo.parent.mkdir(parents=True, exist_ok=True)
-    tmp = alvo.with_name(alvo.name + ".tmp")
-    # Uma pasta por linha, texto puro: quem lê é shell (bash, zsh, fish, PowerShell), sem JSON.
-    tmp.write_text("".join(r + "\n" for r in raizes), encoding="utf-8", newline="\n")
-    atomico.substituir(tmp, alvo)
-
-
-def _publish_for_machine(home: Path | None = None) -> None:
-    # Um não segura o outro: endereço que falhou não pode deixar o wrapper com o plugin-dir velho.
-    try:
-        _publish_address(home)
-    finally:
-        _publish_plugin_dir(home)
-
-
-# O conftest troca `publish_address`; o teste chega na implementação por `_publish_address` e
-# `_publish_plugin_dir`.
-publish_address = _publish_for_machine
 
 
 def esquecer(name: str) -> None:

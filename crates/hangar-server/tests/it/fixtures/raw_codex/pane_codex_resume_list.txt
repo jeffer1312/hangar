@@ -1,0 +1,39 @@
+ Resume a previous session
+
+ Filter:  Cwd  All    Status:  Active  Archived    Sort:  Updated  Created
+
+ Type to search
+
+  › 4d ago      ● conversa
+    4d ago      ● conversa
+    5d ago      ● conversa
+    6d ago      ● conversa
+    6d ago      ● conversa
+    6d ago      ● conversa
+    6d ago      ● conversa
+    6d ago      ● conversa
+    6d ago      ● conversa
+    6d ago      ● conversa
+    9d ago      ● conversa
+    11d ago     Torne 1 milhão o padrão
+    11d ago     ● conversa
+    11d ago     ● conversa
+    11d ago     ● conversa
+    11d ago     ● conversa
+    12d ago     ● conversa
+    15d ago     ● conversa
+    15d ago     Generate 3 desktop wallpaper images (16:9, as large as your image tool allows) to be used as the background behind a trans...
+    15d ago     ● conversa
+    16d ago     ● conversa
+    16d ago     ● conversa
+    22d ago     ● conversa
+    25d ago     Rode no shell: sleep 20 && echo pronto. Depois responda só CODEX1.
+    25d ago     Rode no shell: sleep 20 && echo pronto. Depois responda só CODEX1.
+    26d ago     Verificar espaço usado pelo Codex
+    27d ago     Diga oi
+    29d ago     Criar sessão Hangar
+    29d ago     Testar pareamento do Hangar
+  ↓ more
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 1 / 50 · 0% ─
+ enter resume   ^a archive   esc exit   ^c exit   tab focus sort/filter   ←/→ change option
+ ^o comfortable view   ^t transcript   ^e expand   ↑/↓ browse

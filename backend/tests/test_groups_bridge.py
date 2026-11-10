@@ -263,33 +263,8 @@ def test_close_that_skipped_rust_leaves_without_rebuilding_orq_facts(monkeypatch
         assert r.status_code == 200, r.text
         assert calls == [("group.leave", {"name": "a", "phases": {}})]
         assert r.json()["warning"]["params"]["avisos"] == [not_notified]
-        # Repassado pelo Rust, quem sai do grupo é ele: nada pela ponte.
-        calls.clear()
-        r = client.delete("/api/sessions/a", headers={**H, "x-hangar-rust-leaves": "s3gredo"})
-        assert (r.status_code, calls) == (200, [])
     finally:
         internal_api.set_secret(None)
-
-
-def test_close_delivers_what_the_rust_left_for_python(monkeypatch, client):
-    """A saída pela ponte devolve o aviso a sessão que só o Python atende (Pi/omp/Kimi): ele entrega
-    depois que a ponte respondeu, e a falha vira aviso do fechamento."""
-    _sidecar("a", ["b"])
-    left = [{"name": "b", "text": "saiu", "steer": False}, {"name": "c", "text": "saiu", "steer": False}]
-    _rust(monkeypatch, reply={"ex_peers": ["b"], "warnings": [], "deliveries": left})
-    sent = []
-
-    async def enviar(name, text):
-        sent.append((name, text))
-        return {"ok": name == "b", "error": {"code": "erro_x", "params": {}, "msg": "x"}}
-    monkeypatch.setattr(api, "_enviar", enviar)
-    monkeypatch.setattr(api.registry, "kill", lambda n, closed_by_rust=False: [])
-    monkeypatch.setattr(api, "_invalidate_lists", lambda: None)
-    monkeypatch.setattr(api.share_bridge, "revoke_session", lambda n: None)
-    r = client.delete("/api/sessions/a", headers=H)
-    assert r.status_code == 200, r.text
-    assert sent == [("b", "saiu"), ("c", "saiu")]
-    assert [w["sessao"] for w in r.json()["warning"]["params"]["avisos"]] == ["c"]
 
 
 def test_pair_route_forwards_status_and_body(monkeypatch, client):
@@ -395,7 +370,7 @@ def test_child_gets_group_env(monkeypatch, tmp_path):
     assert "HANGAR_SERVER_ID" not in env
     assert "HANGAR_PEERS_FILE" not in env
     assert env["HANGAR_PAIR_ARCHIVE"] == str(pair._arquivo_dir())
-    assert rust_server.RUST_SERVER_PROTOCOL == 106
+    assert rust_server.RUST_SERVER_PROTOCOL == 107
 
 
 @pytest.mark.parametrize("mode", ["python", None])

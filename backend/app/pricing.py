@@ -4,30 +4,18 @@ REGRA DURA: modelo sem tarifa devolve None. Nunca zero — zero afirma "não cus
 mentira diferente de "não sei o preço". Foi o fallback silencioso pra Sonnet (costs.py:29) que
 motivou este módulo.
 
-REDE NUNCA NO CAMINHO DO REQUEST: rate_for() lê disco. Quem baixa é
-atualizar_em_background(), chamado no startup. fetchCostsForServer aborta em 4s
+REDE NUNCA NO CAMINHO DO REQUEST: rate_for() lê disco. fetchCostsForServer aborta em 4s
 (frontend/src/lib/api.ts:166).
 """
 from __future__ import annotations
 
 import json
-import logging
 import os
 import threading
-import time
-import urllib.request
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 from app import atomico
-
-# Só provedores de primeira mão. Varrer os 176 do models.dev casa 'k3' com uma entrada de preço
-# ZERO de alguma revenda e a sessão inteira vira US$ 0,00, calada — medido. Ampliar esta lista
-# quebra test_lista_de_provedores_e_fechada de propósito.
-PROVEDORES = (
-    "anthropic", "openai", "moonshotai", "zhipuai",
-    "deepseek", "google", "xai", "mistral",
-)
 
 
 @dataclass(frozen=True)
@@ -39,44 +27,6 @@ class Rate:
     provider: str
     origin: str            # "override" | "models.dev" | "snapshot"
     cache_estimado: bool   # provedor não publica preço de cache; cobrado como input
-
-
-def slim(bruto: dict) -> dict[str, dict]:
-    """Catálogo cru do models.dev (176 provedores, ~3,2 MB) -> mapa enxuto modelo -> tarifa."""
-    out: dict[str, dict] = {}
-    for pid in PROVEDORES:
-        p = bruto.get(pid) or {}
-        if not isinstance(p, dict):
-            continue
-        for mid, m in (p.get("models") or {}).items():
-            if not isinstance(m, dict):
-                continue
-            c = m.get("cost") or {}
-            if not isinstance(c, dict):
-                continue
-            # Sem preço de INPUT a entrada não serve pra nada aqui: cache e "equivalente cobrado"
-            # são ambos relativos a ele. E a linha seguinte faz float(c["input"]) — com `and`, um
-            # {"output": 5} sem input estourava KeyError. Esta é a primeira tarefa a passar dado
-            # AO VIVO pro slim(), então a fragilidade sai de teórica.
-            # O `output` leva a MESMA guarda pelo motivo espelhado: um modelo de embedding (input
-            # sem output) faria float(c["output"]) levantar KeyError, o _baixar() engoliria com um
-            # warning genérico e a atualização de tarifa morreria PRA SEMPRE, congelada no
-            # snapshot — exatamente a doença que este módulo existe pra curar.
-            if not c.get("input") or not c.get("output"):
-                continue
-            entrada = {
-                "provider": pid,
-                "input": float(c["input"]),
-                "output": float(c["output"]),
-                # None, não um palpite: aplicar a regra 1.25x/0.1x da Anthropic num modelo de
-                # outro provedor é inventar tarifa. Quem decide o que fazer com o None é o
-                # _rate(), e ele MARCA a linha como estimada.
-                "cache_read": float(c["cache_read"]) if c.get("cache_read") is not None else None,
-                "cache_write": float(c["cache_write"]) if c.get("cache_write") is not None else None,
-            }
-            out.setdefault(mid, entrada)
-            out.setdefault(f"{pid}/{mid}", entrada)
-    return out
 
 
 def _rate(d: dict, origin: str) -> Rate:
@@ -100,12 +50,8 @@ def _rate(d: dict, origin: str) -> Rate:
     )
 
 
-_log = logging.getLogger(__name__)
-
-URL = "https://models.dev/api.json"
 SNAPSHOT = Path(__file__).with_name("pricing_data.json")
 _CACHE_DIR = Path.home() / ".claude" / ".hangar-pricing"
-_TTL = 24 * 3600
 
 # Prefixos de provedor que o Pi e os gateways grudam no id. A ordem não importa: só um casa.
 _PREFIXOS = (
@@ -188,12 +134,6 @@ def invalidar_cache() -> None:
         _canon.clear()
         _tarifas.clear()
         _geracao += 1
-
-
-def catalogo_de_bruto(bruto: dict) -> dict[str, Rate]:
-    """api.json cru do models.dev -> catálogo de Rate. Usa o slim() da Task 1: uma regra só,
-    num lugar só — o script e o backend não podem divergir sobre o que entra no catálogo."""
-    return {k: _rate(v, "models.dev") for k, v in slim(bruto).items()}
 
 
 def _ler_json(p: Path) -> dict | None:
@@ -382,70 +322,3 @@ def rate_codex(rate: Rate, model: str, long_context: bool) -> Rate:
         return rate
     return replace(rate, input=rate.input * 2, output=rate.output * 1.5,
                    cache_read=rate.cache_read * 2, cache_write=rate.cache_write * 2)
-
-
-_ultima_tentativa = 0.0
-
-
-def atualizar_em_background() -> None:
-    """Baixa o catálogo numa thread. Chamado no startup do backend, NUNCA num request.
-
-    CP_PRICING_OFFLINE=1 desliga — máquina sem saída pra internet é justamente o motivo de o
-    snapshot existir."""
-    if os.environ.get("CP_PRICING_OFFLINE") == "1":
-        return
-    threading.Thread(target=_baixar, name="pricing-refresh", daemon=True).start()
-
-
-def _baixar() -> None:
-    global _ultima_tentativa
-    destino = _CACHE_DIR / "models.dev.json"
-    agora = time.time()
-    # A tentativa conta mesmo falhando (mesma disciplina do usd_brl em costs.py:165): senão,
-    # cada startup offline paga o timeout de novo.
-    if _ultima_tentativa and agora - _ultima_tentativa < _TTL:
-        return
-    try:
-        if destino.is_file() and agora - destino.stat().st_mtime < _TTL:
-            return
-    except OSError:
-        pass
-    _ultima_tentativa = agora
-    # UA próprio é OBRIGATÓRIO: o models.dev responde 403 ao User-Agent default do urllib
-    # (`Python-urllib/3.x`) — medido na Task 1, onde o mesmo download só passou com header.
-    # Sem isto, toda atualização de tarifa falha calada e o app fica preso no snapshot.
-    req = urllib.request.Request(URL, headers={"User-Agent": "hangar/pricing"})
-    try:
-        if destino.is_file():
-            ts = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(destino.stat().st_mtime))
-            req.add_header("If-Modified-Since", ts)   # caso normal vira 304, não 3,2 MB
-        with urllib.request.urlopen(req, timeout=30) as r:
-            bruto = json.load(r)
-    except urllib.error.HTTPError as e:
-        if e.code == 304:
-            destino.touch()
-            return
-        _log.warning("tarifas: models.dev respondeu %s", e.code)
-        return
-    except Exception as e:
-        _log.warning("tarifas: falha ao baixar models.dev: %r", e)
-        return
-    try:
-        cat = catalogo_de_bruto(bruto)
-    except Exception as e:
-        # Formato mudou. O snapshot NÃO salva (é o mesmo parser), então o que salva é isto:
-        # falhar aqui deixa o cache anterior de pé em vez de gravar lixo.
-        _log.warning("tarifas: formato do models.dev não reconhecido: %r", e)
-        return
-    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    # Formato CRU do slim, igual ao do snapshot: `cache_estimado` é true quando QUALQUER um dos
-    # dois preços falta, e o payload antigo (`None if cache_estimado`) zerava os DOIS — o
-    # cache_read real de quem só não publica cache_write (deepseek, moonshot, google) sumia e
-    # cache lido passava a ser cobrado a preço de input (medido: deepseek 50x, kimi-k3 85%).
-    # O _carregar() já relê este arquivo com _rate(), que trata None -> input e marca estimado.
-    payload = {"modelos": slim(bruto)}
-    tmp = destino.with_suffix(f".{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")   # ver gravar_override
-    atomico.substituir(tmp, destino)
-    invalidar_cache()
-    _log.info("tarifas: %d modelos atualizados do models.dev", len(cat))

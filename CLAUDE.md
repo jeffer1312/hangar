@@ -765,6 +765,9 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
     `accounts/codex-invalidate`, `migration/status` e `ping`.
     Transcrição e organização do ditado leem a configuração efetiva diretamente no Rust.
   - Partes ainda no Python: transferência Claude→Codex; workflows e runners.
+  - Mods (`press`/`close`/`show`/`input`), `~/.hangar/plugin.json` e `plugin-dir` publicados na
+    subida e o download dos preços do models.dev: nada; são do Rust (`mods/`,
+    `config_sync/plugin_publish.rs`, `costs/pricing_refresh.rs`).
   - Atalhos de projeto: identidade, GET/PUT, `shortcut-shell`, `run-code` e reinício são do Rust.
     Lista, fechamento, foco, respostas e WebSocket dos terminais ainda usam os consumidores
     genéricos Python existentes; não consultam Git. O bastão é montado, opcionalmente reescrito,
@@ -830,8 +833,12 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   (`/clear` incluído: o ator do terminal o conduz), `/steer`, `/interrupt`, `/keys`, `/select`,
   `/select/submit`, `/term-input`, `/answer`, o descarte da fila, o painel da fila (`PATCH` e
   `DELETE queue/<id>`, este com `?only_waiting`, `POST queue/reorder` e `POST queue/<id>/steer`) e
-  os controles do Codex são decididos no `hangar-server` (`session_write/table.rs`). Repasse ao Python só sem entrada no
-  Rust e nas rotas de pane de sessão sem terminal. Entrada doente é 503
+  os controles do Codex são decididos no `hangar-server` (`session_write/table.rs`). O `/input` e o
+  `/api/broadcast` para nome sem entrada no Rust também são dele (`session_write/unowned.rs`): Codex
+  rodando direto no tmux é digitado com prova, só com o campo vazio e pronto (senão 409
+  `codex_composer_busy` ou `codex_menu_open`, sem fila); shell ou programa desconhecido, 400 na
+  hora; nome inexistente, 404. `model-effort` fora do Claude é 409 `erro_model_effort_so_claude`.
+  As outras rotas sem entrada no Rust e as de pane de sessão sem terminal seguem ao Python. Entrada doente é 503
   `runtime_unhealthy`, corpo fora de forma é 422 `erro_corpo_invalido`, nunca repasse. Sessão sem
   terminal religando ao mesmo cano vivo não é entrada doente: a escrita vai ao ator e espera na
   fila até religar. Cada sessão
@@ -873,7 +880,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   segue o mesmo vigia: com login no disco reabre uma vez na mesma conta; recusou de novo ou o login
   sumiu, vai à conta logada de mais folga; sem nenhuma, avisa `limit_switch_login_lost`. No modo
   `python`, abrir e reabrir respondem 503 com código, sem lançador Python. Exceções que ainda passam
-  pelo Python: texto que nasce nele (broadcast) acorda Claude/Codex sem terminal pedindo
+  pelo Python: texto que nasce nele (broadcast que entra pelas portas do Python) acorda Claude/Codex sem terminal pedindo
   ao Rust, e a transferência Claude→Codex. Decisões e medições em
   [plataforma.md](docs/decisoes/plataforma.md#abertura-de-sessão-única-no-rust).
 - **Trocar o nome da sessão é do Rust (`session_rename/`), com desfazer.** Tudo que recusa vem antes
@@ -902,7 +909,9 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   troca de conversa e sidecar, e toda reabertura pelo spec (`claude_reopen.rs`, `codex_relaunch`):
   terminal↔sem terminal, `/recarregar`, `/conta` com a conta ChatGPT fixa, o modelo e o Fast dela, e
   o bypass; o modo vem do spec e do observado, nunca do rodapé lido na hora. A transferência
-  Claude→Codex (`/conta` com `credential_id`) segue no Python. Python: autorização das portas dele com o repasse acima e, depois do `DELETE` de Codex com terminal
+  Claude→Codex (`/conta` com `credential_id`) segue no Python. Todo `DELETE` do dono fecha no Rust,
+  pelo nome quando não há entrada (`runtime/close_name.rs`); processo que sobrevive é 500
+  `session_kill_unconfirmed`, com fila, sidecar e convite intactos. Python: autorização das portas dele com o repasse acima e, depois do `DELETE`
   concluído no Rust, só a limpeza externa (`share_store`/`sync_tunnel`, `ThenLink`, atalhos,
   caches), sem chamar o Rust de volta. Responsabilidade migrada nunca volta ao Python em
   `rust`/`pending`: Rust indisponível é erro visível. Modo de permissão gravado desconhecido é

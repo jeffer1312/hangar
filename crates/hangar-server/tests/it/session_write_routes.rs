@@ -297,18 +297,7 @@ async fn forwarding_never_holds_the_ingress_pass() {
     }
     assert!(!registry.writable("doente").await.unwrap().healthy, "a entrada ficou doente");
     let (python, server) = serve_with(Some(registry.clone())).await;
-    // Sem entrada (abertura, do Python): o `close` do Python não espera o nosso passe.
-    python.hold_input(true);
-    let url = format!("http://{server}/api/sessions/sem-entrada/input");
-    let sending = tokio::spawn(client().post(url).header("authorization", format!("Bearer {OWNER}")).body(r#"{"text":"oi"}"#).send());
-    let path = "/api/sessions/sem-entrada/input";
-    for _ in 0..100 { if python.hits_to(path) == 1 { break; } tokio::time::sleep(Duration::from_millis(20)).await; }
-    assert_eq!(python.hits_to(path), 1, "o pedido chegou ao Python");
-    assert!(registry.ingress().close("sem-entrada", Duration::from_millis(300)).await.is_ok(), "passe na mão durante o repasse");
-    registry.ingress().open("sem-entrada");
-    python.hold_input(false);
-    python.release.notify_one();
-    assert_eq!(sending.await.unwrap().unwrap().status().as_u16(), 200);
+    // Sem entrada: o envio a sessão sem dono não segura o passe (`session_write_unowned`).
     // Doente e corpo que a rota recusa: o Rust responde com código, nunca repassa, e solta o passe.
     for (name, body, status, code) in [("doente", r#"{"text":"oi"}"#, 503, "runtime_unhealthy"), ("s", r#"{"text":"oi","x":1}"#, 422, "erro_corpo_invalido")] {
         let (got, text) = post_to(server, name, "input", body).await;

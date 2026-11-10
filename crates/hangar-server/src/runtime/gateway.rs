@@ -78,6 +78,8 @@ pub struct WriteTarget { pub key:String,pub generation:u64,pub provider:String,p
 
 /// Prazo do fechamento da porta: abaixo do `OP_TIMEOUT_S` (75 s) do transporte no Python.
 const INGRESS_CLOSE_WAIT:Duration = Duration::from_secs(60);
+/// Teto da espera pela vigia do Codex na janela da subida (`wait_watcher`).
+const WATCHER_WAIT:Duration = Duration::from_secs(10);
 pub struct RuntimeRegistry {
     startup: crate::startup::Readiness,
     other:std::sync::OnceLock<other::OtherConfiguration>,
@@ -108,6 +110,8 @@ pub struct RuntimeRegistry {
     self_ref:std::sync::OnceLock<std::sync::Weak<RuntimeRegistry>>,
     /// Vigia do Codex com terminal; só existe quando a tabela entrega essas sessões ao Rust.
     watcher:std::sync::OnceLock<Arc<super::codex_terminal::Watcher>>,
+    /// `true` da subida até a vigia ser ligada (ou dispensada): a escrita nessa janela espera por ela.
+    watcher_pending:tokio::sync::watch::Sender<bool>,
     /// Acorda a vigia quando um ator adotado perde o app-server.
     codex_wake:Arc<tokio::sync::Notify>,
     pub(super) diag:crate::diag::DiagClient,
@@ -431,7 +435,7 @@ impl RuntimeRegistry {
         Self { startup: Default::default(), other:std::sync::OnceLock::new(), diag:crate::diag::DiagClient::new(upstream,secret.clone()),reopening:Default::default(),terminal_problems:Default::default(),terminal_status:Default::default(),heal_attempts:Default::default(),interactions:None,entries:Arc::new(Mutex::new(BTreeMap::new())),terminal_states:None,terms:None,events:broadcast::channel(1024).0,
             policy:PolicyClient::new(upstream,secret).with_preparation(preparation),instance,lifecycle:Mutex::new(BTreeMap::new()),revisions:Mutex::new(BTreeMap::new()),mods:None,plugin:None,ingress:Default::default(),
             respawn_base:Duration::from_secs(5),reconnect_waits:Default::default(),permissions:None,processes:Arc::new(crate::list::procs::SystemProcs::default()),live:Default::default(),codex_owned:Default::default(),hubs:std::sync::OnceLock::new(),self_ref:std::sync::OnceLock::new(),
-            watcher:std::sync::OnceLock::new(),codex_wake:Arc::new(tokio::sync::Notify::new()),native:Default::default(),limits:std::sync::OnceLock::new(),auth_refusals:std::sync::OnceLock::new(),limit_holds:Default::default(),waking:Default::default(),rewake:Default::default() }
+            watcher:std::sync::OnceLock::new(),watcher_pending:tokio::sync::watch::channel(false).0,codex_wake:Arc::new(tokio::sync::Notify::new()),native:Default::default(),limits:std::sync::OnceLock::new(),auth_refusals:std::sync::OnceLock::new(),limit_holds:Default::default(),waking:Default::default(),rewake:Default::default() }
     }
     pub fn with_diagnostics(mut self, diag: crate::diag::DiagClient) -> Self {
         self.diag = diag.clone();
@@ -537,7 +541,19 @@ impl RuntimeRegistry {
         Ok(true)
     }
     /// Liga a vigia do Codex com terminal: escrita sem ator adota na hora e encerrar passa por ela.
-    pub fn bind_watcher(&self,watcher:Arc<super::codex_terminal::Watcher>) { let _ = self.watcher.set(watcher); }
+    pub fn bind_watcher(&self,watcher:Arc<super::codex_terminal::Watcher>) { let _ = self.watcher.set(watcher); self.watcher_pending.send_replace(false); }
+    /// A subida vai ligar a vigia: até lá, a escrita sem ator espera por ela (no máximo `WATCHER_WAIT`).
+    pub fn expect_watcher(&self) { if self.watcher.get().is_none() { self.watcher_pending.send_replace(true); } }
+    /// `Ok(None)`: a subida não liga vigia. `Err`: ela não ligou no teto; a escrita sai com o código, sem
+    /// virar sessão sem dono.
+    pub(crate) async fn wait_watcher(&self) -> Result<Option<Arc<super::codex_terminal::Watcher>>,RuntimeError> {
+        let mut pending = self.watcher_pending.subscribe();
+        // Teto: subida que parou no meio nunca segura a escrita para sempre.
+        if tokio::time::timeout(WATCHER_WAIT, pending.wait_for(|pending| !pending)).await.is_err() {
+            return Err(RuntimeError::new("runtime_watcher","a vigia do Codex com terminal não ligou a tempo; tente de novo em instantes"));
+        }
+        Ok(self.watcher.get().cloned())
+    }
     pub fn codex_wake(&self) -> Arc<tokio::sync::Notify> { self.codex_wake.clone() }
     /// Escrita para uma sessão sem ator: o Claude sem terminal abre aqui (subindo o processo parado, como o
     /// `ensure_running` do Python antes de toda operação) e, com a vigia ligada, o Codex é adotado agora.
@@ -555,7 +571,7 @@ impl RuntimeRegistry {
             Err(_)=>return Some(Err(RuntimeError::new("session_transfer_busy","a sessão está trocando de agente"))),
         };
         if let Some(opened) = self.open_claude_headless(name,true).await { return Some(opened); }
-        let watcher = self.watcher.get()?.clone();
+        let watcher = match self.wait_watcher().await { Ok(found) => found?, Err(error) => return Some(Err(error)) };
         if let Some(adopted) = watcher.adopt_now(self,name).await { return Some(adopted); }
         watcher.adopt_claude(self,name).await
     }
@@ -776,7 +792,7 @@ impl RuntimeRegistry {
     }
     /// `DELETE` do Claude aberto aqui, com ou sem terminal: o Rust encerra a vida que guarda. O `Ok` leva o
     /// `transcript`. `None` = não há Claude com esse nome aqui, ou a vida guardada já não era a do nome (a
-    /// entrada sai e o Python fecha pelo nome, como antes).
+    /// entrada sai e o fechamento segue pelo nome, `close_by_name`).
     pub async fn kill_claude(&self,name:&str) -> Option<Result<Value,RuntimeError>> {
         if let Err(error)=self.retire_other_life(name).await { return Some(Err(error)); }
         let found=self.entries.lock().await.iter().find_map(|(key,entry)|match &entry.handle {
@@ -816,9 +832,15 @@ impl RuntimeRegistry {
                 tracing::warn!(session=%name,key=%key,code="close_killed_false","processo do Claude não comprovado desta vida; o fechamento segue pelo nome");
                 None
             },
-            Err(error) if gone=>{
-                tracing::warn!(session=%name,key=%key,code=%error.code,"vida guardada do Claude saiu com erro; o fechamento segue pelo nome");
+            Err(error) if gone && LIFE_UNPROVEN.contains(&error.code.as_str())=>{
+                tracing::warn!(session=%name,key=%key,code=%error.code,"vida guardada do Claude não se comprovou; o fechamento segue pelo nome");
                 None
+            },
+            // O processo desta vida não saiu (o agente sobreviveu ao cano): nada segue pelo nome, e sidecar e
+            // fila ficam para a próxima tentativa.
+            Err(error) if gone=>{
+                tracing::warn!(session=%name,key=%key,code=%error.code,"processo do Claude não saiu ao fechar");
+                Some(Err(super::close_name::unconfirmed(&format!("o processo da sessão não saiu ({}); sidecar e fila conservados",error.code))))
             },
             // A vida guardada não se comprova (pane, nascimento ou vínculo): a entrada sai sem matar nada e o
             // Python fecha pelo nome, como antes.
@@ -827,7 +849,7 @@ impl RuntimeRegistry {
         }
     }
     /// A entrada de uma vida que não se comprova sai do registro sem matar nada e vai ao diário; `None`
-    /// devolve o fechamento ao Python, pelo nome. Se nem sair ela consegue, o erro volta a quem pediu.
+    /// devolve o fechamento a quem chamou, pelo nome. Se nem sair ela consegue, o erro volta a quem pediu.
     async fn release_unproven(&self,name:&str,key:&str,generation:u64,code:&str) -> Option<Result<Value,RuntimeError>> {
         tracing::warn!(session=%name,key,code,"vida guardada do Claude não se comprova; sai do registro e o fechamento segue pelo nome");
         self.diag.report("runtime.stale_life",name,"runtime_stale_life","a vida guardada não se comprovou no fechamento");

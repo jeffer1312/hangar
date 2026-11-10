@@ -46,8 +46,25 @@ fn headless_invalid(model: Option<&str>, effort: Option<&str>) -> Option<&'stati
     None
 }
 
-/// `None`: a sessão não é um Claude do Rust (Pi, omp, Kimi, Codex sem ator, nenhuma) e o pedido segue ao Python
-/// como veio.
+/// Só objeto, como o modelo do pydantic: o serde aceitaria a lista `[]` como struct vazio.
+fn parse(bytes: &[u8]) -> Option<Body> {
+    serde_json::from_slice::<Value>(bytes).ok().filter(Value::is_object).and_then(|v| serde_json::from_value::<Body>(v).ok())
+}
+
+/// A sessão que `serve` não atende. Corpo fora de forma é 422 antes de tudo, como a validação do pydantic
+/// antes do handler Python; `claude`: Claude sem ator aqui, 503; o resto (Pi, omp, Kimi, Codex, nenhuma)
+/// recusa com código, porque o seletor do `/model` é só do Claude (D6).
+pub(super) fn refuse(headers: &HeaderMap, bytes: &[u8], claude: bool) -> Response {
+    if parse(bytes).is_none() { return invalid_body(headers); }
+    if claude {
+        return answer(headers, StatusCode::SERVICE_UNAVAILABLE, detail_body("model_effort_needs_rust_server",
+            "a sessão Claude não está aberta neste servidor para trocar modelo e esforço", json!({})));
+    }
+    answer(headers, StatusCode::CONFLICT, detail_body("erro_model_effort_so_claude",
+        "trocar modelo e esforço por aqui só vale para sessão Claude", json!({})))
+}
+
+/// `None`: a sessão não é um Claude do Rust (Pi, omp, Kimi, Codex sem ator, nenhuma); quem chamou recusa.
 pub(super) async fn serve(st: &Arc<AppState>, runtime: Arc<RuntimeRegistry>, name: String, headers: &HeaderMap, bytes: &[u8]) -> Option<Response> {
     // Claude com terminal ainda sem ator aqui: o Rust o adota agora.
     let found = match enter_then_find(&runtime, &name, st.write_gate_wait).await {
@@ -62,9 +79,7 @@ pub(super) async fn serve(st: &Arc<AppState>, runtime: Arc<RuntimeRegistry>, nam
     };
     let Ok(found) = found else { return Some(answer(headers, StatusCode::CONFLICT, busy_body())) };
     let (held, target) = found.filter(|(_, target)| target.provider == "claude")?;
-    // Só objeto, como o modelo do pydantic: o serde aceitaria a lista `[]` como struct vazio.
-    let body = serde_json::from_slice::<Value>(bytes).ok().filter(Value::is_object).and_then(|v| serde_json::from_value::<Body>(v).ok());
-    let Some(body) = body else { return Some(invalid_body(headers)) };
+    let Some(body) = parse(bytes) else { return Some(invalid_body(headers)) };
     let id = crate::mods::state::random_hex(16);
     let (status, value) = match (held, target) {
         (held, target) if !target.terminal => {

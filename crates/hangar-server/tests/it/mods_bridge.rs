@@ -3,7 +3,7 @@ use crate::fake;
 use std::sync::Arc;
 
 use fake::*;
-use hangar_server::mods::bridge::{mint, mint_keyed};
+use hangar_server::mods::bridge::{mint, mint_keyed, note_unknown_key};
 use hangar_server::mods::model::*;
 use hangar_server::mods::state::*;
 use serde_json::{Value, json};
@@ -26,6 +26,14 @@ async fn post(url: String, body: Value, owner: bool) -> reqwest::Response {
 
 async fn json_of(response: reqwest::Response) -> Value {
     serde_json::from_str(&response.text().await.unwrap()).unwrap()
+}
+
+/// O 403 da ponte com o texto do Python (contract/r1-mods `bridge_*_403`), sem acento.
+fn denied() -> Value { json!({"detail": "token do plugin invalido"}) }
+
+async fn assert_denied(response: reqwest::Response) {
+    assert_eq!(response.status().as_u16(), 403);
+    assert_eq!(json_of(response).await, denied());
 }
 
 /// O mod de um clique do app: o plugin do Hangar casa o press e manda a URL, como faz no `claude -p`
@@ -74,15 +82,16 @@ async fn bridge_checks_token_and_url_and_passes_other_sessions() {
     let (python, server, mods, _plugin) = setup().await;
     let base = format!("http://{server}/api/plugin");
     let wrong = post(format!("{base}/press-start"), json!({"sessao": "mods-s", "token": "x", "requestId": "a", "element": "b"}), false).await;
-    assert_eq!(wrong.status().as_u16(), 403);
+    assert_denied(wrong).await;
     let attempt = mods.begin_click("mods-s", "a", "vitrine", "b");
     let ftp = post(format!("{base}/opened"), json!({"sessao": "mods-s", "token": mint(OWNER, "mods-s"), "attempt": attempt, "url": "ftp://x"}), false).await;
     assert_eq!(ftp.status().as_u16(), 400);
     let late = post(format!("{base}/opened"), json!({"sessao": "mods-s", "token": mint(OWNER, "mods-s"), "attempt": "outra", "url": "https://x"}), false).await;
     assert_eq!(late.status().as_u16(), 409, "fora do clique o mod abre no servidor");
+    // Sessão fora do Rust com token que não é o dela: 403 daqui, como o Python.
     let other = post(format!("{base}/press-start"), json!({"sessao": "com-terminal", "token": "t", "requestId": "a", "element": "b"}), false).await;
-    assert_eq!(other.text().await.unwrap(), "from-python");
-    assert_eq!(python.hits_to("/api/plugin/press-start"), 1);
+    assert_denied(other).await;
+    assert_eq!(python.hits_to("/api/plugin/press-start"), 0);
 }
 
 #[tokio::test]
@@ -92,7 +101,7 @@ async fn opened_checks_token_case_size_and_passes_invalid_bodies() {
     let token = mint(OWNER, "mods-s");
     let attempt = mods.begin_click("mods-s", "a", "vitrine", "b");
     let wrong = post(format!("{base}/opened"), json!({"sessao": "mods-s", "token": "x", "attempt": attempt, "url": "https://x"}), false).await;
-    assert_eq!(wrong.status().as_u16(), 403);
+    assert_denied(wrong).await;
     let empty = post(format!("{base}/opened"), json!({"sessao": "mods-s", "token": token, "attempt": attempt, "url": ""}), false).await;
     assert_eq!(empty.status().as_u16(), 400, "URL vazia não tem limite no Pydantic: é o esquema que recusa");
     // Mais de 8192 bytes, menos de 8192 caracteres: o teto conta caracteres, como o Pydantic do Python.
@@ -101,10 +110,11 @@ async fn opened_checks_token_case_size_and_passes_invalid_bodies() {
     assert_eq!(accepted.status().as_u16(), 200);
     let upper = post(format!("{base}/opened"), json!({"sessao": "mods-s", "token": token, "attempt": attempt, "url": "HTTPS://Example.com/x"}), false).await;
     assert_eq!(upper.status().as_u16(), 200, "o esquema não distingue caixa");
-    // Corpo que não é o de uma rota da ponte: o Rust não sabe de quem é, e o Python responde.
+    // Corpo que não é o de uma rota da ponte, de sessão fora do Rust: 422 com código (D7).
     let broken = post(format!("{base}/opened"), json!({"sessao": "com-terminal"}), false).await;
-    assert_eq!(broken.text().await.unwrap(), "from-python");
-    assert_eq!(python.hits_to("/api/plugin/opened"), 1);
+    assert_eq!(broken.status().as_u16(), 422);
+    assert_eq!(json_of(broken).await["detail"]["code"], "erro_corpo_invalido");
+    assert_eq!(python.hits_to("/api/plugin/opened"), 0);
 }
 
 #[tokio::test]
@@ -127,7 +137,7 @@ async fn bridge_applies_the_python_limits_before_the_token() {
     // No limite exato, contado em caracteres e não em bytes, passa da validação e cai no token.
     let edge = post(format!("{base}/press-start"), json!({"sessao": "mods-s", "token": "x",
         "requestId": "é".repeat(64), "element": "é".repeat(256)}), false).await;
-    assert_eq!(edge.status().as_u16(), 403);
+    assert_denied(edge).await;
 }
 
 #[tokio::test]
@@ -173,22 +183,88 @@ async fn two_processes_born_with_the_same_name_each_reach_only_their_session() {
 }
 
 #[tokio::test]
-async fn token_without_a_key_goes_by_the_current_name_and_unknown_keys_go_to_python() {
+async fn token_without_a_key_goes_by_the_current_name_and_unknown_keys_get_the_python_answer() {
     // O processo lançado antes da chave manda o token só do nome: vale para a sessão que tem o nome agora.
     let (python, server, mods, plugin) = setup().await;
     mods.forget("mods-s", 1);
     mods.attach_process("renomeada", "mods-s", 2, Arc::new(plugin));
     let base = format!("http://{server}/api/plugin");
+    let not_from_app = json!({"fromApp": false, "attempt": null});
     let legacy = post(format!("{base}/press-start"), json!({"sessao": "mods-s", "token": mint(OWNER, "mods-s"), "requestId": "a", "element": "b"}), false).await;
-    assert_eq!(legacy.text().await.unwrap(), "from-python");
+    assert_eq!(json_of(legacy).await, not_from_app);
     let current = post(format!("{base}/press-start"), json!({"sessao": "renomeada", "token": mint(OWNER, "renomeada"), "requestId": "a", "element": "b"}), false).await;
     assert_eq!(current.status().as_u16(), 200);
-    // Chave que nenhuma sessão do Rust tem é de uma sessão do Python; HMAC errado com chave daqui é 403.
+    // Chave que nenhuma sessão do Rust tem: nunca é clique do app; HMAC errado com chave daqui é 403.
     let unknown = post(format!("{base}/press-start"), json!({"sessao": "x", "token": mint_keyed(OWNER, "x", "outra"), "requestId": "a", "element": "b"}), false).await;
-    assert_eq!(unknown.text().await.unwrap(), "from-python");
+    assert_eq!(json_of(unknown).await, not_from_app);
     let forged = post(format!("{base}/press-start"), json!({"sessao": "x", "token": "mods-s.00", "requestId": "a", "element": "b"}), false).await;
-    assert_eq!(forged.status().as_u16(), 403);
-    assert_eq!(python.hits_to("/api/plugin/press-start"), 2);
+    assert_denied(forged).await;
+    assert_eq!(python.hits_to("/api/plugin/press-start"), 0);
+}
+
+/// R1.5-9: a ponte do plugin de sessão sem entrada no Rust responde como o Python (contract/r1-mods
+/// `bridge_*`), sem repassar nada.
+#[tokio::test]
+async fn bridge_without_a_rust_session_answers_like_python() {
+    let (python, server, _mods, _plugin) = setup().await;
+    let base = format!("http://{server}/api/plugin");
+    let token = mint(OWNER, "s1");
+    let wrong = "k-unknown.00000000000000000000000000000000";
+    let clicked = json!({"detail": "clique do app já respondido"});
+    let only_http = json!({"detail": "só http(s)"});
+    let press = |token: &str| json!({"sessao": "s1", "token": token, "requestId": "req-1", "element": "btn-a"});
+    let copied = |token: &str| json!({"sessao": "s1", "token": token, "attempt": "a1", "text": "copiado"});
+    let opened = |token: &str, url: &str| json!({"sessao": "s1", "token": token, "attempt": "a1", "url": url});
+    let cases: Vec<(&str, Value, bool, u16, Option<Value>)> = vec![
+        ("pressed", press(&token), false, 200, Some(json!({"ok": true}))),
+        ("pressed", press(&token), true, 200, Some(json!({"ok": true}))),
+        ("pressed", press(wrong), false, 403, Some(denied())),
+        ("pressed", json!({"sessao": "s2", "token": &token, "requestId": "r", "element": "e"}), false, 403, Some(denied())),
+        ("press-start", press(&token), false, 200, Some(json!({"fromApp": false, "attempt": null}))),
+        ("press-start", press(wrong), false, 403, Some(denied())),
+        ("copied", copied(&token), false, 409, Some(clicked.clone())),
+        ("copied", copied(wrong), false, 403, Some(denied())),
+        ("opened", opened(&token, "http://example.com/x"), false, 409, Some(clicked.clone())),
+        ("opened", opened(&token, "HTTPS://example.com"), false, 409, Some(clicked)),
+        ("opened", opened(&token, "ftp://example.com/f"), false, 400, Some(only_http.clone())),
+        ("opened", opened(&token, "javascript:alert(1)"), false, 400, Some(only_http.clone())),
+        ("opened", opened(&token, "/x"), false, 400, Some(only_http)),
+        ("opened", opened(wrong, "http://x"), false, 403, Some(denied())),
+        ("opened", opened(wrong, "ftp://x"), false, 403, Some(denied())),
+    ];
+    for (route, body, owner, status, expected) in cases {
+        let response = post(format!("{base}/{route}"), body.clone(), owner).await;
+        assert_eq!(response.status().as_u16(), status, "{route} {body}");
+        if let Some(expected) = expected { assert_eq!(json_of(response).await, expected, "{route} {body}"); }
+    }
+    // D7: corpo inválido é 422 com código.
+    for (route, body) in [("pressed", json!({"sessao": "s1", "token": &token, "requestId": "r"})),
+        ("copied", json!({"sessao": "s1", "token": &token, "attempt": "a".repeat(65), "text": "x"}))] {
+        let response = post(format!("{base}/{route}"), body, false).await;
+        assert_eq!(response.status().as_u16(), 422, "{route}");
+        assert_eq!(json_of(response).await["detail"]["code"], "erro_corpo_invalido", "{route}");
+    }
+    // O Python não tem estas rotas: 404 do FastAPI, com ou sem o bearer.
+    for route in ["focus-target", "focused", "scroll"] {
+        for owner in [false, true] {
+            let response = post(format!("{base}/{route}"), json!({"sessao": "s1", "token": "k1.9f4b61638d8f41ffacc16dc205251311",
+                "id": "x", "seq": 1, "offset": 0}), owner).await;
+            assert_eq!(response.status().as_u16(), 404, "{route}");
+            assert_eq!(json_of(response).await, json!({"detail": "Not Found"}), "{route}");
+        }
+    }
+    // Chave sem sessão: registrada uma vez só, por mais que o plugin volte; a rota já a registrou.
+    let keyed = mint_keyed(OWNER, "s1", "k-unknown-once");
+    for _ in 0..3 {
+        assert_eq!(json_of(post(format!("{base}/pressed"), press(&keyed), false).await).await, json!({"ok": true}));
+    }
+    assert!(!note_unknown_key(&keyed, "s1"), "a chave foi registrada pela rota");
+    assert!(note_unknown_key("k-nunca-vista.00", "s1"));
+    assert!(!note_unknown_key("k-nunca-vista.00", "s1"), "uma vez só");
+    assert!(!note_unknown_key("sem-chave", "s1"), "token só do nome não tem chave a registrar");
+    for route in ["pressed", "press-start", "copied", "opened", "focus-target", "focused", "scroll"] {
+        assert_eq!(python.hits_to(&format!("/api/plugin/{route}")), 0, "{route}");
+    }
 }
 
 /// Superfície que não é chamada nos testes da ponte.

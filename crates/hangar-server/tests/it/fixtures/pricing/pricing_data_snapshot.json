@@ -1,0 +1,565 @@
+{
+ "gerado_em": "2026-11-09T15:23:25+00:00",
+ "modelos": {
+  "anthropic/claude-fable-5": {
+   "cache_read": 1.0,
+   "cache_write": 12.5,
+   "input": 10.0,
+   "output": 50.0,
+   "provider": "anthropic"
+  },
+  "anthropic/claude-haiku-4-5": {
+   "cache_read": 0.1,
+   "cache_write": 1.25,
+   "input": 1.0,
+   "output": 5.0,
+   "provider": "anthropic"
+  },
+  "anthropic/claude-opus-4-1": {
+   "cache_read": 1.5,
+   "cache_write": 18.75,
+   "input": 15.0,
+   "output": 75.0,
+   "provider": "anthropic"
+  },
+  "anthropic/claude-opus-4-6": {
+   "cache_read": 0.5,
+   "cache_write": 6.25,
+   "input": 5.0,
+   "output": 25.0,
+   "provider": "anthropic"
+  },
+  "anthropic/claude-opus-4-8": {
+   "cache_read": 0.5,
+   "cache_write": 6.25,
+   "input": 5.0,
+   "output": 25.0,
+   "provider": "anthropic"
+  },
+  "anthropic/claude-sonnet-4-6": {
+   "cache_read": 0.3,
+   "cache_write": 3.75,
+   "input": 3.0,
+   "output": 15.0,
+   "provider": "anthropic"
+  },
+  "claude-fable-5": {
+   "cache_read": 1.0,
+   "cache_write": 12.5,
+   "input": 10.0,
+   "output": 50.0,
+   "provider": "anthropic"
+  },
+  "claude-haiku-4-5": {
+   "cache_read": 0.1,
+   "cache_write": 1.25,
+   "input": 1.0,
+   "output": 5.0,
+   "provider": "anthropic"
+  },
+  "claude-opus-4-1": {
+   "cache_read": 1.5,
+   "cache_write": 18.75,
+   "input": 15.0,
+   "output": 75.0,
+   "provider": "anthropic"
+  },
+  "claude-opus-4-6": {
+   "cache_read": 0.5,
+   "cache_write": 6.25,
+   "input": 5.0,
+   "output": 25.0,
+   "provider": "anthropic"
+  },
+  "claude-opus-4-8": {
+   "cache_read": 0.5,
+   "cache_write": 6.25,
+   "input": 5.0,
+   "output": 25.0,
+   "provider": "anthropic"
+  },
+  "claude-sonnet-4-6": {
+   "cache_read": 0.3,
+   "cache_write": 3.75,
+   "input": 3.0,
+   "output": 15.0,
+   "provider": "anthropic"
+  },
+  "deep-research-preview-04-2026": {
+   "cache_read": 0.2,
+   "cache_write": null,
+   "input": 2.0,
+   "output": 12.0,
+   "provider": "google"
+  },
+  "deepseek-chat": {
+   "cache_read": 0.0028,
+   "cache_write": null,
+   "input": 0.14,
+   "output": 0.28,
+   "provider": "deepseek"
+  },
+  "deepseek-reasoner": {
+   "cache_read": 0.0028,
+   "cache_write": null,
+   "input": 0.14,
+   "output": 0.28,
+   "provider": "deepseek"
+  },
+  "deepseek-v4-flash": {
+   "cache_read": 0.0028,
+   "cache_write": null,
+   "input": 0.14,
+   "output": 0.28,
+   "provider": "deepseek"
+  },
+  "deepseek-v4-pro": {
+   "cache_read": 0.003625,
+   "cache_write": null,
+   "input": 0.435,
+   "output": 0.87,
+   "provider": "deepseek"
+  },
+  "deepseek/deepseek-chat": {
+   "cache_read": 0.0028,
+   "cache_write": null,
+   "input": 0.14,
+   "output": 0.28,
+   "provider": "deepseek"
+  },
+  "deepseek/deepseek-reasoner": {
+   "cache_read": 0.0028,
+   "cache_write": null,
+   "input": 0.14,
+   "output": 0.28,
+   "provider": "deepseek"
+  },
+  "deepseek/deepseek-v4-flash": {
+   "cache_read": 0.0028,
+   "cache_write": null,
+   "input": 0.14,
+   "output": 0.28,
+   "provider": "deepseek"
+  },
+  "deepseek/deepseek-v4-pro": {
+   "cache_read": 0.003625,
+   "cache_write": null,
+   "input": 0.435,
+   "output": 0.87,
+   "provider": "deepseek"
+  },
+  "gemini-2.5-computer-use-preview-10-2025": {
+   "cache_read": null,
+   "cache_write": null,
+   "input": 1.25,
+   "output": 10.0,
+   "provider": "google"
+  },
+  "gemini-3.1-flash-tts-preview": {
+   "cache_read": null,
+   "cache_write": null,
+   "input": 1.0,
+   "output": 20.0,
+   "provider": "google"
+  },
+  "gemini-flash-latest": {
+   "cache_read": 0.15,
+   "cache_write": null,
+   "input": 1.5,
+   "output": 9.0,
+   "provider": "google"
+  },
+  "glm-4.7": {
+   "cache_read": 0.11,
+   "cache_write": 0.0,
+   "input": 0.6,
+   "output": 2.2,
+   "provider": "zhipuai"
+  },
+  "glm-5": {
+   "cache_read": 0.2,
+   "cache_write": 0.0,
+   "input": 1.0,
+   "output": 3.2,
+   "provider": "zhipuai"
+  },
+  "glm-5.1": {
+   "cache_read": 0.26,
+   "cache_write": 0.0,
+   "input": 1.4,
+   "output": 4.4,
+   "provider": "zhipuai"
+  },
+  "glm-5.2": {
+   "cache_read": 0.26,
+   "cache_write": 0.0,
+   "input": 1.4,
+   "output": 4.4,
+   "provider": "zhipuai"
+  },
+  "glm-5v-turbo": {
+   "cache_read": 1.2,
+   "cache_write": 0.0,
+   "input": 5.0,
+   "output": 22.0,
+   "provider": "zhipuai"
+  },
+  "google/deep-research-preview-04-2026": {
+   "cache_read": 0.2,
+   "cache_write": null,
+   "input": 2.0,
+   "output": 12.0,
+   "provider": "google"
+  },
+  "google/gemini-2.5-computer-use-preview-10-2025": {
+   "cache_read": null,
+   "cache_write": null,
+   "input": 1.25,
+   "output": 10.0,
+   "provider": "google"
+  },
+  "google/gemini-3.1-flash-tts-preview": {
+   "cache_read": null,
+   "cache_write": null,
+   "input": 1.0,
+   "output": 20.0,
+   "provider": "google"
+  },
+  "google/gemini-flash-latest": {
+   "cache_read": 0.15,
+   "cache_write": null,
+   "input": 1.5,
+   "output": 9.0,
+   "provider": "google"
+  },
+  "gpt-4.1-mini": {
+   "cache_read": 0.1,
+   "cache_write": null,
+   "input": 0.4,
+   "output": 1.6,
+   "provider": "openai"
+  },
+  "gpt-4o": {
+   "cache_read": 1.25,
+   "cache_write": null,
+   "input": 2.5,
+   "output": 10.0,
+   "provider": "openai"
+  },
+  "gpt-5.2-pro": {
+   "cache_read": null,
+   "cache_write": null,
+   "input": 21.0,
+   "output": 168.0,
+   "provider": "openai"
+  },
+  "gpt-5.3-codex-spark": {
+   "cache_read": 0.175,
+   "cache_write": null,
+   "input": 1.75,
+   "output": 14.0,
+   "provider": "openai"
+  },
+  "gpt-5.5-pro": {
+   "cache_read": null,
+   "cache_write": null,
+   "input": 30.0,
+   "output": 180.0,
+   "provider": "openai"
+  },
+  "gpt-image-2": {
+   "cache_read": 1.25,
+   "cache_write": null,
+   "input": 5.0,
+   "output": 30.0,
+   "provider": "openai"
+  },
+  "grok-4.20-0309-non-reasoning": {
+   "cache_read": 0.2,
+   "cache_write": null,
+   "input": 1.25,
+   "output": 2.5,
+   "provider": "xai"
+  },
+  "grok-4.20-multi-agent-0309": {
+   "cache_read": 0.2,
+   "cache_write": null,
+   "input": 1.25,
+   "output": 2.5,
+   "provider": "xai"
+  },
+  "grok-4.3": {
+   "cache_read": 0.2,
+   "cache_write": null,
+   "input": 1.25,
+   "output": 2.5,
+   "provider": "xai"
+  },
+  "kimi-k2-0711-preview": {
+   "cache_read": 0.15,
+   "cache_write": null,
+   "input": 0.6,
+   "output": 2.5,
+   "provider": "moonshotai"
+  },
+  "kimi-k2-thinking-turbo": {
+   "cache_read": 0.15,
+   "cache_write": null,
+   "input": 1.15,
+   "output": 8.0,
+   "provider": "moonshotai"
+  },
+  "kimi-k2-turbo-preview": {
+   "cache_read": 0.6,
+   "cache_write": null,
+   "input": 2.4,
+   "output": 10.0,
+   "provider": "moonshotai"
+  },
+  "kimi-k2.5": {
+   "cache_read": 0.1,
+   "cache_write": null,
+   "input": 0.6,
+   "output": 3.0,
+   "provider": "moonshotai"
+  },
+  "kimi-k2.6": {
+   "cache_read": 0.16,
+   "cache_write": null,
+   "input": 0.95,
+   "output": 4.0,
+   "provider": "moonshotai"
+  },
+  "kimi-k2.7-code-highspeed": {
+   "cache_read": 0.38,
+   "cache_write": null,
+   "input": 1.9,
+   "output": 8.0,
+   "provider": "moonshotai"
+  },
+  "kimi-k3": {
+   "cache_read": 0.3,
+   "cache_write": null,
+   "input": 3.0,
+   "output": 15.0,
+   "provider": "moonshotai"
+  },
+  "magistral-medium-latest": {
+   "cache_read": null,
+   "cache_write": null,
+   "input": 2.0,
+   "output": 5.0,
+   "provider": "mistral"
+  },
+  "mistral-small-2506": {
+   "cache_read": null,
+   "cache_write": null,
+   "input": 0.1,
+   "output": 0.3,
+   "provider": "mistral"
+  },
+  "mistral/magistral-medium-latest": {
+   "cache_read": null,
+   "cache_write": null,
+   "input": 2.0,
+   "output": 5.0,
+   "provider": "mistral"
+  },
+  "mistral/mistral-small-2506": {
+   "cache_read": null,
+   "cache_write": null,
+   "input": 0.1,
+   "output": 0.3,
+   "provider": "mistral"
+  },
+  "mistral/open-mixtral-8x7b": {
+   "cache_read": null,
+   "cache_write": null,
+   "input": 0.7,
+   "output": 0.7,
+   "provider": "mistral"
+  },
+  "mistral/pixtral-12b": {
+   "cache_read": null,
+   "cache_write": null,
+   "input": 0.15,
+   "output": 0.15,
+   "provider": "mistral"
+  },
+  "mistral/pixtral-large-latest": {
+   "cache_read": null,
+   "cache_write": null,
+   "input": 2.0,
+   "output": 6.0,
+   "provider": "mistral"
+  },
+  "moonshotai/kimi-k2-0711-preview": {
+   "cache_read": 0.15,
+   "cache_write": null,
+   "input": 0.6,
+   "output": 2.5,
+   "provider": "moonshotai"
+  },
+  "moonshotai/kimi-k2-thinking-turbo": {
+   "cache_read": 0.15,
+   "cache_write": null,
+   "input": 1.15,
+   "output": 8.0,
+   "provider": "moonshotai"
+  },
+  "moonshotai/kimi-k2-turbo-preview": {
+   "cache_read": 0.6,
+   "cache_write": null,
+   "input": 2.4,
+   "output": 10.0,
+   "provider": "moonshotai"
+  },
+  "moonshotai/kimi-k2.5": {
+   "cache_read": 0.1,
+   "cache_write": null,
+   "input": 0.6,
+   "output": 3.0,
+   "provider": "moonshotai"
+  },
+  "moonshotai/kimi-k2.6": {
+   "cache_read": 0.16,
+   "cache_write": null,
+   "input": 0.95,
+   "output": 4.0,
+   "provider": "moonshotai"
+  },
+  "moonshotai/kimi-k2.7-code-highspeed": {
+   "cache_read": 0.38,
+   "cache_write": null,
+   "input": 1.9,
+   "output": 8.0,
+   "provider": "moonshotai"
+  },
+  "moonshotai/kimi-k3": {
+   "cache_read": 0.3,
+   "cache_write": null,
+   "input": 3.0,
+   "output": 15.0,
+   "provider": "moonshotai"
+  },
+  "open-mixtral-8x7b": {
+   "cache_read": null,
+   "cache_write": null,
+   "input": 0.7,
+   "output": 0.7,
+   "provider": "mistral"
+  },
+  "openai/gpt-4.1-mini": {
+   "cache_read": 0.1,
+   "cache_write": null,
+   "input": 0.4,
+   "output": 1.6,
+   "provider": "openai"
+  },
+  "openai/gpt-4o": {
+   "cache_read": 1.25,
+   "cache_write": null,
+   "input": 2.5,
+   "output": 10.0,
+   "provider": "openai"
+  },
+  "openai/gpt-5.2-pro": {
+   "cache_read": null,
+   "cache_write": null,
+   "input": 21.0,
+   "output": 168.0,
+   "provider": "openai"
+  },
+  "openai/gpt-5.3-codex-spark": {
+   "cache_read": 0.175,
+   "cache_write": null,
+   "input": 1.75,
+   "output": 14.0,
+   "provider": "openai"
+  },
+  "openai/gpt-5.5-pro": {
+   "cache_read": null,
+   "cache_write": null,
+   "input": 30.0,
+   "output": 180.0,
+   "provider": "openai"
+  },
+  "openai/gpt-image-2": {
+   "cache_read": 1.25,
+   "cache_write": null,
+   "input": 5.0,
+   "output": 30.0,
+   "provider": "openai"
+  },
+  "pixtral-12b": {
+   "cache_read": null,
+   "cache_write": null,
+   "input": 0.15,
+   "output": 0.15,
+   "provider": "mistral"
+  },
+  "pixtral-large-latest": {
+   "cache_read": null,
+   "cache_write": null,
+   "input": 2.0,
+   "output": 6.0,
+   "provider": "mistral"
+  },
+  "xai/grok-4.20-0309-non-reasoning": {
+   "cache_read": 0.2,
+   "cache_write": null,
+   "input": 1.25,
+   "output": 2.5,
+   "provider": "xai"
+  },
+  "xai/grok-4.20-multi-agent-0309": {
+   "cache_read": 0.2,
+   "cache_write": null,
+   "input": 1.25,
+   "output": 2.5,
+   "provider": "xai"
+  },
+  "xai/grok-4.3": {
+   "cache_read": 0.2,
+   "cache_write": null,
+   "input": 1.25,
+   "output": 2.5,
+   "provider": "xai"
+  },
+  "zhipuai/glm-4.7": {
+   "cache_read": 0.11,
+   "cache_write": 0.0,
+   "input": 0.6,
+   "output": 2.2,
+   "provider": "zhipuai"
+  },
+  "zhipuai/glm-5": {
+   "cache_read": 0.2,
+   "cache_write": 0.0,
+   "input": 1.0,
+   "output": 3.2,
+   "provider": "zhipuai"
+  },
+  "zhipuai/glm-5.1": {
+   "cache_read": 0.26,
+   "cache_write": 0.0,
+   "input": 1.4,
+   "output": 4.4,
+   "provider": "zhipuai"
+  },
+  "zhipuai/glm-5.2": {
+   "cache_read": 0.26,
+   "cache_write": 0.0,
+   "input": 1.4,
+   "output": 4.4,
+   "provider": "zhipuai"
+  },
+  "zhipuai/glm-5v-turbo": {
+   "cache_read": 1.2,
+   "cache_write": 0.0,
+   "input": 5.0,
+   "output": 22.0,
+   "provider": "zhipuai"
+  }
+ }
+}

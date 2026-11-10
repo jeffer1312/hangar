@@ -171,7 +171,7 @@ fn alive_error(message:&str,pids:&[i64]) -> RuntimeError {
 }
 
 /// Os pids que não saíram dentro do prazo (vazio = todos saíram). Fonte ilegível não prova saída.
-async fn wait_absent(lives:Vec<(i64,f64)>) -> Vec<i64> {
+pub(super) async fn wait_absent(lives:Vec<(i64,f64)>) -> Vec<i64> {
     let all:Vec<i64> = lives.iter().map(|(pid,_)|*pid).collect();
     tokio::task::spawn_blocking(move || {
         let procs = SystemProcs::default();

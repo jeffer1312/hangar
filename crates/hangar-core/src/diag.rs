@@ -176,6 +176,16 @@ impl DiagClient {
         }
     }
 
+    /// Uma linha já montada, como a `api.servidor` do acesso que o Python gravava, no destino deste
+    /// cliente. Só campos escalares conhecidos: texto de conversa não entra por aqui.
+    pub fn record_line(&self, line: serde_json::Value) {
+        let settings = self.settings.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let directory = if !settings.explicit && DIARY_OFF.load(std::sync::atomic::Ordering::Relaxed) { None } else { settings.directory };
+        let Some(directory) = directory else { return };
+        self.pending.active.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        record_with_clock(Some(directory), vec![line], "acesso", settings.clock, Some(PendingWrite(self.pending.clone())));
+    }
+
     /// O motivo é fixo no código; erros formatados e texto de conversa não entram por esta interface.
     pub fn report(&self, event: &'static str, session: &str, code: &str, reason: &'static str) {
         self.emit(event, session, code, reason, json!({}), true, true);

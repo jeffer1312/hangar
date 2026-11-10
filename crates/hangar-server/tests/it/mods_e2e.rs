@@ -115,9 +115,9 @@ async fn app_press_goes_through_the_actor_and_the_pane_reaches_the_devices() {
 }
 
 #[tokio::test]
-async fn session_leaving_rust_mid_press_answers_and_the_next_press_goes_to_python() {
+async fn session_leaving_rust_mid_press_answers_and_the_next_press_gets_the_fixed_answer() {
     // I3 (b): o mod engole o press; a sessão sai do Rust no meio. A rota responde com código, sem
-    // pendurar o app, e o pedido seguinte já não tem dono no Rust: vai ao Python.
+    // pendurar o app, e o pedido seguinte já não tem a interface no Rust: recusa fixa, sem o Python.
     let world = world(&["ui_press"]).await;
     let mut events = sse(open_events(world.server, "session", "", &[]).await);
     next_named(&mut events, "plugin_ui").await;
@@ -131,7 +131,8 @@ async fn session_leaving_rust_mid_press_answers_and_the_next_press_goes_to_pytho
     assert!(!world.mods.owns("session"));
     let cleared: Value = serde_json::from_str(&next_named(&mut events, "plugin_ui").await.data).unwrap();
     assert!(cleared["above"].is_null() && cleared["panes"] == serde_json::json!([]), "a faixa sai dos aparelhos");
-    assert_eq!(press(world.server, "abrir-vitrine-botoes").await, (200, Value::String("from-python".into())));
-    assert_eq!(world.python.hits_to("/api/sessions/session/plugin/press"), 1);
+    let (status, body) = press(world.server, "abrir-vitrine-botoes").await;
+    assert_eq!((status, body["detail"]["code"].as_str()), (503, Some("mods_need_rust_server")));
+    assert_eq!(world.python.hits_to("/api/sessions/session/plugin/press"), 0);
     assert_eq!(pressed(&world.seen), 1, "o segundo pedido não chegou ao cano pelo Rust");
 }
