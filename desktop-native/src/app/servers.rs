@@ -129,7 +129,8 @@ impl Hangar {
             }
             RemoteUpdate::Sessions(Err(error)) if ended(&error) => {
                 self.invite_ended.insert(key.clone());
-                list.sessions.clear();
+                // Convite encerrado não volta: as sessões dele saem como as fechadas.
+                gone = std::mem::take(&mut list.sessions).into_iter().map(|s| s.name).collect();
                 list.error = Some(tr_shared("convite_encerrado", &[]));
             }
             RemoteUpdate::Sessions(Err(error)) => list.error = Some(Self::failure(&error)),
@@ -141,7 +142,7 @@ impl Hangar {
                 list.live_terms.clear();
                 list.error = Some(if ended(&error) {
                     self.invite_ended.insert(key.clone());
-                    list.sessions.clear();
+                    gone = std::mem::take(&mut list.sessions).into_iter().map(|s| s.name).collect();
                     tr_shared("convite_encerrado", &[])
                 } else { Self::failure(&error) });
                 // Máquina fora é tentada sem parar: a mesma queda de antes não redesenha.
