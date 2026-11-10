@@ -75,7 +75,7 @@ fn canonical(provider: Provider, path: &Path) -> Result<PathBuf, AccountError> {
         .map(|key| key.canonical_home)
         .map_err(|_| AccountError::io())
 }
-fn displayed(path: &Path) -> String {
+pub(crate) fn displayed(path: &Path) -> String {
     // O prefixo estendido do Windows é detalhe do canonicalize, ausente nos DTOs Python.
     let value = path.to_string_lossy();
     value
@@ -592,6 +592,13 @@ impl AccountService {
                 json!({"pids":facts.holders}),
             ));
         }
+        if provider == Provider::Claude {
+            super::claude_config::detach_plugin_paths(&self.env.home, &current.home).map_err(|error| {
+                AccountError::new(500, "claude_plugin_registry_failed",
+                    format!("a conta não foi apagada: o registro de plugins ainda depende dela ({})", error.cause()),
+                    json!({}))
+            })?;
+        }
         let kept = if keep {
             Some(self.keep_transcripts(provider, &current)?)
         } else {
@@ -781,6 +788,50 @@ mod tests {
         assert_eq!(fs::read_to_string(kept.join("abc.jsonl")).unwrap(), "conversa");
         assert!(kept.join("abc/subagents/x.jsonl").is_file());
         assert!(!root.path().join(".claude/.credentials.json").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claude_delete_moves_plugin_paths_off_the_account() {
+        let root = tempfile::tempdir().unwrap();
+        let service = service_in(root.path());
+        let account = service.create(Provider::Claude, "work", |_| Ok(())).unwrap();
+        let shared = root.path().join(".claude/plugins");
+        fs::create_dir_all(shared.join("cache/m/p/1")).unwrap();
+        fs::create_dir_all(shared.join("marketplaces/m")).unwrap();
+        std::os::unix::fs::symlink(&shared, account.home.join("plugins")).unwrap();
+        let via = |rest: &str| account.home.join("plugins").join(rest).to_string_lossy().into_owned();
+        let real = |rest: &str| resolved(&shared).join(rest).to_string_lossy().into_owned();
+        fs::write(shared.join("installed_plugins.json"), json!({"version": 2, "plugins": {
+            "p@m": [{"scope": "user", "installPath": via("cache/m/p/1"), "version": "1"}],
+            "gone@m": [{"scope": "user", "installPath": via("cache/m/gone/9")}],
+            "q@m": [{"scope": "user", "installPath": "/fora/da/conta"}]}}).to_string()).unwrap();
+        fs::write(shared.join("known_marketplaces.json"), json!({"m": {
+            "source": {"source": "directory", "path": via("marketplaces/m")},
+            "installLocation": via("marketplaces/m")}}).to_string()).unwrap();
+        delete_with(&service, Provider::Claude, &account, false).unwrap();
+        assert!(!account.home.exists());
+        let read = |file: &str| serde_json::from_str::<Value>(&fs::read_to_string(shared.join(file)).unwrap()).unwrap();
+        let installed = read("installed_plugins.json");
+        assert_eq!(installed["plugins"]["p@m"][0]["installPath"], real("cache/m/p/1"));
+        assert_eq!(installed["plugins"]["p@m"][0]["version"], "1");
+        assert_eq!(installed["plugins"]["gone@m"][0]["installPath"], real("cache/m/gone/9"));
+        assert_eq!(installed["plugins"]["q@m"][0]["installPath"], "/fora/da/conta");
+        let marketplaces = read("known_marketplaces.json");
+        assert_eq!(marketplaces["m"]["installLocation"], real("marketplaces/m"));
+        assert_eq!(marketplaces["m"]["source"]["path"], real("marketplaces/m"));
+    }
+
+    #[test]
+    fn claude_delete_keeps_the_account_when_the_plugin_registry_is_unreadable() {
+        let root = tempfile::tempdir().unwrap();
+        let service = service_in(root.path());
+        let account = service.create(Provider::Claude, "work", |_| Ok(())).unwrap();
+        fs::create_dir_all(root.path().join(".claude/plugins")).unwrap();
+        fs::write(root.path().join(".claude/plugins/installed_plugins.json"), "{quebrado").unwrap();
+        let error = delete_with(&service, Provider::Claude, &account, false).unwrap_err();
+        assert_eq!(error.code, "claude_plugin_registry_failed");
+        assert!(account.home.exists());
     }
 
     #[test]

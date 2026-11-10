@@ -282,11 +282,10 @@ struct Installation {
 }
 fn configure_plugin_command(command: &mut tokio::process::Command, cwd: &Path, config_dir: &Path) {
     for key in crate::terminal_process::PRIVATE_ENV_KEYS { command.env_remove(key); }
+    for key in crate::plugins::QUIET_ENV { command.env(key, "1"); }
     command.args(["plugin", "list", "--json"]).current_dir(cwd)
         .env("CLAUDE_CONFIG_DIR", config_dir)
-        .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1")
-        .env("DISABLE_AUTOUPDATER", "1").env("DISABLE_UPDATES", "1")
-        .env_remove("CLAUDE_CODE_PLUGIN_DIRS")
+        .env_remove(crate::plugins::SESSION_PLUGINS_ENV)
         .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
     #[cfg(windows)] { command.creation_flags(0x08000000); }
 }

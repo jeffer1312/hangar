@@ -82,3 +82,4 @@ export * from './updateAll';
 export * from './tags';
 export * from './applyToOwnServers';
 export * from './passwordVault';
+export * from './plugins';

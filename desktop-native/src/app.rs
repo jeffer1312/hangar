@@ -36,6 +36,7 @@ mod group_sheet;
 mod hangar_live;
 mod harness;
 mod keyring;
+mod plugins;
 mod vault;
 mod vault_requests;
 mod rename_suggest;
@@ -86,6 +87,8 @@ pub(crate) use vault_requests::{approve_body, approve_title, request_button, req
 pub(crate) use create::{base_button, base_row, quiet_button, worktree_field_label, worktree_warning};
 pub(crate) use connect::device_card;
 pub(crate) use settings::{setting_row, settings_box};
+pub(crate) use plugins::{plugin_meta, plugin_name, plugin_switch, plugin_update_button, reopen_notice as plugins_reopen_notice,
+    row_box as plugin_row_box, text_block as plugin_text_block};
 pub(crate) use accounts::{login_heading, target_row};
 pub(crate) use search::{ScopeFound, highlighted as search_highlighted, search_agent_label, search_chat_header, search_chat_sub, search_field, search_filter_chip, search_found_frame,
     search_group_frame, search_group_header, search_group_sub, search_hit_line, search_live_label, search_open_look, search_scope_block,
@@ -304,6 +307,18 @@ fn conversation_line(user: bool) -> f32 {
     let a = crate::appearance::get();
     let (size, line) = conversation_metrics(user);
     size * a.text_size as f32 / 100. * line * a.line_height as f32 / 100.
+}
+
+/// Pedido no runtime do tokio; a volta cai na entidade, se ela ainda existir.
+fn run<V: 'static, T: Send + 'static, F>(runtime: &Runtime, request: F, window: &mut Window, cx: &mut Context<V>,
+    then: impl FnOnce(&mut V, Result<T, Failure>, &mut Window, &mut Context<V>) + 'static)
+where F: Future<Output = Result<T, Failure>> + Send + 'static {
+    let (done, result) = tokio::sync::oneshot::channel();
+    runtime.spawn(async move { let _ = done.send(request.await); });
+    cx.spawn_in(window, async move |this, cx| {
+        let result = result.await.unwrap_or_else(|_| Err(Failure::local("network_error")));
+        let _ = this.update_in(cx, |this, window, cx| { then(this, result, window, cx); cx.notify(); });
+    }).detach();
 }
 const DETAIL_MAX: usize = 20_000;
 const LIVE_THINKING_TAIL: usize = 1_500;
@@ -635,6 +650,8 @@ pub struct Hangar {
     vault: HashMap<String, Entity<vault_requests::VaultRequests>>,
     /// Página Cofre aberta, com a conexão em que nasceu.
     vault_page: Option<(u64, Entity<vault::VaultPage>)>,
+    /// Página Plugins aberta, com a conexão em que nasceu.
+    plugins_page: Option<(u64, Entity<plugins::PluginsPage>)>,
     rename_suggest: rename_suggest::RenameSuggest,
     /// Último evento `tags` da lista de cada máquina (chave `servers::norm`); máquina sem ele é servidor antigo.
     /// Fica na queda do stream: a etiqueta não muda por a máquina estar fora.
@@ -1132,7 +1149,7 @@ impl Hangar {
             history_installed: false, pending_chat: Vec::new(),
             history_limit: 400, has_older: false, etag: None, error: None, list_error: None,
             delivery: DeliveryTracker::default(), stopping: HashSet::new(), stop_feedback: HashMap::new(), drafts: HashMap::new(), input_history: HashMap::new(),
-            flight: InFlight::default(), action_feedback: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), vault: HashMap::new(), vault_page: None, rename_suggest: Default::default(), tags: HashMap::new(), question_open: None, question_card: None,
+            flight: InFlight::default(), action_feedback: HashMap::new(), file_cards: HashMap::new(), queue: Default::default(), live_terms: Vec::new(), keyring: HashMap::new(), vault: HashMap::new(), vault_page: None, plugins_page: None, rename_suggest: Default::default(), tags: HashMap::new(), question_open: None, question_card: None,
             hangar_open: false, hangar_focus: cx.focus_handle(), hangar_error: None, live_clock: None, ask_form: AskForm::default(), ask_drafts: HashMap::new(), plans_dismissed: HashSet::new(), answered_tools: HashSet::new(), answering: HashMap::new(), ask_scroll: Default::default(), plan_scroll: Default::default(), plan_view: None,
             plan_review: Default::default(),
             list_state, rail_hover: None, follow: Default::default(), row_ids: Vec::new(), row_signatures: Vec::new(), conversation: Default::default(), row_assets: Vec::new(), expanded: HashSet::new(), kept_expanded: HashMap::new(), orq_days: HashSet::new(),

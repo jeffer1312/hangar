@@ -144,6 +144,8 @@ pub struct AppState {
     pub vault: Arc<crate::vault::Vault>,
     /// Pedidos do cofre (aprovação e cadastro) na memória; o `hub` publica o evento `vault` deles.
     pub vault_requests: Arc<crate::vault::requests::Requests>,
+    /// Cadeado das mudanças em plugins do Claude e o último `check` bem-sucedido.
+    pub claude_plugins: Arc<crate::plugins::Service>,
 }
 
 impl AppState {
@@ -283,6 +285,7 @@ impl AppState {
             vault: Arc::new(crate::vault::Vault::system()),
             hub: Arc::new(crate::list::hub::ListHub::with_vault(vault_requests.feed())),
             vault_requests,
+            claude_plugins: Arc::default(),
             hangar_dir, device_install,
             upload_naming: Default::default(),
             origins: std::sync::Mutex::new(indexmap::IndexMap::new()),
@@ -831,6 +834,20 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/session-defaults", axum::routing::get(crate::session_defaults::handle).put(crate::session_defaults::handle))
         // O que já foi visto do tour do nativo: só o dono, nunca repassado (o Python não tem a rota).
         .route("/api/tour-progress", axum::routing::get(crate::tour_progress::handle).put(crate::tour_progress::handle))
+        // Plugins do Claude da pasta principal: só o dono, nunca repassados (o Python não tem as rotas).
+        .route("/api/plugins", get(crate::plugins::state))
+        .route("/api/plugins/check", axum::routing::post(crate::plugins::check))
+        .route("/api/plugins/available", get(crate::plugins::available))
+        .route("/api/plugins/marketplaces", axum::routing::post(crate::plugins::marketplace_add))
+        .route("/api/plugins/marketplaces/{name}", axum::routing::delete(crate::plugins::marketplace_remove))
+        .route("/api/plugins/marketplaces/{name}/update", axum::routing::post(crate::plugins::marketplace_update))
+        .route("/api/plugins/marketplaces/{name}/auto-update", axum::routing::put(crate::plugins::auto_update))
+        .route("/api/plugins/{id}", axum::routing::delete(crate::plugins::uninstall))
+        .route("/api/plugins/{id}/details", get(crate::plugins::details))
+        .route("/api/plugins/{id}/install", axum::routing::post(crate::plugins::install))
+        .route("/api/plugins/{id}/update", axum::routing::post(crate::plugins::update))
+        .route("/api/plugins/{id}/enable", axum::routing::post(crate::plugins::enable))
+        .route("/api/plugins/{id}/disable", axum::routing::post(crate::plugins::disable))
         // Sugestão de nome da sessão genérica: só o dono, nunca repassada (o Python não tem a rota).
         .route("/api/sessions/{name}/rename-suggestion", axum::routing::post(crate::dictation::rename_suggestion::route).delete(crate::dictation::rename_suggestion::route))
         .route("/api/peers", axum::routing::any(crate::machine_peers::handle))

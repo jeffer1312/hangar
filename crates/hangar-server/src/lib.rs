@@ -60,6 +60,7 @@ pub mod session_sleep;
 pub mod session_visibility;
 pub mod tags;
 pub mod tour_progress;
+pub mod plugins;
 pub mod push;
 pub mod push_expo;
 pub mod session_media;

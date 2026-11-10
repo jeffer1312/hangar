@@ -25,6 +25,8 @@ mod tags;
 mod machine_peers;
 mod update_process;
 mod tour_progress;
+#[cfg(unix)]
+mod plugins;
 mod push_expo;
 mod artifacts;
 mod archive_history;

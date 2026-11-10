@@ -8,6 +8,7 @@ import { HideFromListAnimation } from './HideFromListAnimation';
 import { ImageRevealAnimation } from './ImageRevealAnimation';
 import { LoginPasswordAnimation } from './LoginPasswordAnimation';
 import { NoProjectAnimation } from './NoProjectAnimation';
+import { PluginsAnimation } from './PluginsAnimation';
 import { RenameSuggestionAnimation } from './RenameSuggestionAnimation';
 import { SleepHiddenAnimation } from './SleepHiddenAnimation';
 import { SessionVaultAnimation } from './SessionVaultAnimation';
@@ -26,6 +27,7 @@ const animations: Record<string, ComponentType<{ width: number }>> = {
   'hangar-connect': ConnectAnimation,
   'login-usuario-senha': LoginPasswordAnimation,
   'ocultar-da-lista': HideFromListAnimation,
+  'plugins-do-claude': PluginsAnimation,
   'relatorio-automatico': AutoReportAnimation,
   'revelacao-imagem': ImageRevealAnimation,
   'pedido-na-sessao': SessionVaultAnimation,

@@ -47,6 +47,7 @@ hangar-codex.workspace = true
 hangar-core.workspace = true
 hangar-transcript.workspace = true
 hangar-omp-sync.workspace = true
+hangar-plugins.workspace = true
 hangar-connect.workspace = true
 toml = { version = "=1.1.7", default-features = false, features = ["parse", "std", "serde", "preserve_order"] }
 hangar-workspace = { path = "../hangar-workspace" }

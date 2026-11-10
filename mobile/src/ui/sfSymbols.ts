@@ -97,6 +97,7 @@ export const SF_SYMBOLS: Partial<Record<IconName, SFSymbol>> = {
   Moon: 'moon',
   Network: 'network',
   OctagonX: 'xmark.octagon',
+  PackageOpen: 'shippingbox',
   Palette: 'paintpalette',
   Paperclip: 'paperclip',
   PanelLeft: 'sidebar.left',
