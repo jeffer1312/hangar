@@ -867,6 +867,24 @@ lê o arquivo inteiro, então dez miniaturas de caminhos diferentes custam dez l
 vez. No Windows não há identidade de arquivo nesse crate: só o tamanho e os 64 bytes detectam a
 troca.
 
+**Primeira leitura mais barata e uma leitura por pedido (10/11/2026).** A primeira leitura de cada
+caminho novo continua passando pela conversa inteira, mas cada linha custava a conversão para texto
+e uma procura por pergunta. Agora uma procura só, nos bytes da linha, pelo texto de todas as
+perguntas decide se a linha interessa a alguma; a que não tem nenhum é pulada. O atalho não vale
+quando algum texto procurado tem U+FFFD, o caractere que a conversão põe no lugar de byte inválido:
+só aí o texto da linha poderia ter o que os bytes não têm. O `files/resolver` e o `resolve` pedem
+tudo numa leitura (`elsewhere_many`, `ask`): antes era uma leitura por caminho, até 30 por pedido. A
+leitura de referência dos testes (`Transcript::Rows`) segue sem o atalho, e um ensaio de 200
+conversas geradas compara as duas a cada pergunta.
+
+Medido em release no mesmo transcript de 481 MB, cache de página quente, mínimo de 3 execuções:
+resolver com 30 caminhos novos, 8.626 ms antes (uma leitura do `cwds` mais 30 do `elsewhere`) e
+278 ms agora (113 ms + 165 ms, duas leituras); dez caminhos novos pedidos um a um, 2.543 ms antes
+(241–279 ms cada) e 863 ms agora (85–89 ms cada); repetição, 0,0 ms. Um índice por blocos de
+1 MiB com as trincas de bytes de cada bloco foi ensaiado e não entrou: dava a mesma resposta e
+custava 14,7 MB para esse transcript, mas a pergunta nova ainda lia de 17 a 144 ms (caminho é feito
+de trincas comuns, quase todo bloco passa), o mesmo que a procura nos bytes entrega sem índice.
+
 ## Chave do Jev: no runtime_config, e na sessão só por escolha da abertura
 
 18/09/2026. O Jev (typesafe.ai) decide a navegação do `hangar-preview objetivo`, e a chave estava
