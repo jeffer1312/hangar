@@ -602,9 +602,12 @@ fn steps(home: &Path, dir: &Path, project: Option<&str>, op: &str, diary: &mut V
     log_stage(diary, "espelhar_settings", false);
     warnings.extend(seed_settings(home, dir)?);
     log_stage(diary, "conferir_plugins", false);
-    let shared = share_plugin_registry(home);
+    let registry_warnings = share_plugin_registry(home);
     let checked = check_plugins(home, dir)?;
-    warnings.extend(shared.into_iter().filter(|w| !checked.contains(w)));
+    // O `check_plugins` já avisa quando não consegue ler o installed_plugins.json.
+    let unread = format!("plugins: não consegui ler {}:", shared.join("plugins").join("installed_plugins.json").display());
+    let reported = checked.iter().any(|c| c.starts_with(&unread));
+    warnings.extend(registry_warnings.into_iter().filter(|w| !(reported && w.starts_with(&unread))));
     warnings.extend(checked);
     log_stage(diary, "espelhar_config", false);
     warnings.extend(mirror_claude_json(home, dir)?);
@@ -1004,9 +1007,8 @@ pub(crate) fn share_plugin_registry(home: &Path) -> Vec<String> {
 /// ainda é o que foi lido, e refaz a troca quando ele mudou no meio.
 fn rewrite_registry(path: &Path, target: &dyn Fn(&Path) -> Option<PathBuf>) -> Result<()> {
     const ATTEMPTS: usize = 3;
-    // A frase do `check_plugins` (`read_json`): a reconciliação não repete o mesmo aviso.
     let unreadable = |e: String| refused(format!("plugins: não consegui ler {}: {e}", path.display()));
-    let io_error = |e: io::Error| unreadable(format!("{}: {e}", path.display()));
+    let io_error = |e: io::Error| unreadable(e.to_string());
     for _ in 0..ATTEMPTS {
         let before = match fs::read(path) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -1051,16 +1053,21 @@ fn outside(path: &Path, dirs: &[PathBuf]) -> Option<PathBuf> {
     (!dirs.iter().any(|dir| real.starts_with(dir))).then(|| real.join(parts.as_path()))
 }
 
+/// Só conta cuja pasta sumiu: a viva tem o CLI regravando o caminho dela a cada atualização de plugin.
 fn shared_plugin_path(home: &Path, plugins: &Path, path: &Path) -> Option<PathBuf> {
-    // Sem distinguir caixa: no Windows o CLI pode gravar a letra do drive diferente da do HOME.
     let mut parts = path.components();
     for want in home.components() {
-        if !parts.next()?.as_os_str().eq_ignore_ascii_case(want.as_os_str()) { return None; }
+        let got = parts.next()?.as_os_str();
+        // No Windows a letra do drive pode vir com outra caixa.
+        let same = if cfg!(windows) { got.eq_ignore_ascii_case(want.as_os_str()) } else { got == want.as_os_str() };
+        if !same { return None; }
     }
-    if !parts.next()?.as_os_str().to_str()?.starts_with(".claude-") { return None; }
-    if parts.next()?.as_os_str() != "plugins" { return None; }
-    let shared = plugins.join(parts.as_path());
-    exists(&shared).then_some(shared)
+    let account = parts.next()?.as_os_str();
+    if !account.to_str()?.starts_with(".claude-") || parts.next()?.as_os_str() != "plugins" { return None; }
+    if fs::symlink_metadata(home.join(account)).is_ok() { return None; }
+    let mut shared = plugins.to_path_buf();
+    shared.extend(parts);
+    Some(shared)
 }
 
 /// O preparo da pasta pendente da criação: `~/.claude` garantido, o `.claude.json` do principal sem o
@@ -1421,14 +1428,15 @@ mod tests {
         fs::write(&installed, format!(r#"{{"version": 2, "plugins": {{"p@m": [
             {{"installPath": "{h}/.claude-apagada/plugins/cache/m/p/1"}},
             {{"installPath": "{h}/.claude-apagada/plugins/cache/m/p/2"}},
+            {{"installPath": "{h}/.claude-conta2/plugins/cache/m/p/1"}},
             {{"installPath": "/outro/lugar/plugins/cache/m/p/1"}}]}}}}"#)).unwrap();
-        fs::write(&known, format!(r#"{{"m": {{"installLocation": "{h}/.claude-conta2/plugins/marketplaces/m"}}}}"#)).unwrap();
+        fs::write(&known, format!(r#"{{"m": {{"installLocation": "{h}/.claude-apagada/plugins/marketplaces/m"}}}}"#)).unwrap();
         assert!(reconcile(home, &home.join(".claude-conta2"), None).result.is_ok());
         let read = |path: &Path| serde_json::from_str::<Value>(&fs::read_to_string(path).unwrap()).unwrap();
         let paths: Vec<_> = read(&installed)["plugins"]["p@m"].as_array().unwrap().iter().map(|e| e["installPath"].as_str().unwrap().to_owned()).collect();
-        assert_eq!(paths, [format!("{h}/.claude/plugins/cache/m/p/1"),
-            format!("{h}/.claude-apagada/plugins/cache/m/p/2"), "/outro/lugar/plugins/cache/m/p/1".into()],
-            "só troca o que existe no compartilhado e passa por uma conta");
+        assert_eq!(paths, [format!("{h}/.claude/plugins/cache/m/p/1"), format!("{h}/.claude/plugins/cache/m/p/2"),
+            format!("{h}/.claude-conta2/plugins/cache/m/p/1"), "/outro/lugar/plugins/cache/m/p/1".into()],
+            "só troca caminho de conta cuja pasta sumiu, mesmo com a versão já fora do cache");
         assert_eq!(read(&known)["m"]["installLocation"], format!("{h}/.claude/plugins/marketplaces/m"));
         let untouched = r#"{"version":2,"plugins":{}}"#;
         fs::write(&installed, untouched).unwrap();
