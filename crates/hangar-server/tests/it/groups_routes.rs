@@ -459,18 +459,31 @@ async fn surrogate_task_is_422() {
     assert!(!srv.pair.join("s0.json").exists());
 }
 
-/// BRG-25: fechamento que o Rust só repassa (Pi/omp/Kimi, sessão sem entrada aqui) sai do grupo
-/// daqui, depois que o Python fechou; o Python não pede mais pela ponte.
+/// BRG-25, R1.3-7/8/10: sessão sem entrada aqui (pane Claude que o Rust não adotou) fecha no Rust pelo
+/// nome, sai do grupo daqui e segue marcada ao Python com a conversa da lista, para o nome fechado; a
+/// pergunta aberta dela não fica para uma sessão futura com a mesma conversa.
 #[tokio::test(flavor = "multi_thread")]
-async fn repassed_close_leaves_the_group() {
+async fn repassed_close_leaves_the_group_r1_3() {
     let dir = tempfile::tempdir().unwrap();
     let srv = server(dir.path(), 3).await;
     write_group(&srv, "s0", &["s1", "s2"]);
     write_group(&srv, "s1", &["s0", "s2"]);
     write_group(&srv, "s2", &["s0", "s1"]);
+    let claude = dir.path().join("home/.claude");
+    let jsonl = claude.join("projects").join(hangar_workspace::worktrees::sanitize_cwd(dir.path().join("w0").to_str().unwrap()))
+        .join("00000000-0000-0000-0000-000000000000.jsonl");
+    let ask = claude.join(".hangar-askq/00000000-0000-0000-0000-000000000000.json");
+    std::fs::create_dir_all(ask.parent().unwrap()).unwrap();
+    std::fs::write(&ask, "{}").unwrap();
     let (status, _) = call(srv.addr, "DELETE", "s0", None, OWNER).await;
     assert_eq!(status, 200);
-    assert_eq!(srv.python.hits_to("/api/sessions/s0"), 1, "o Python fecha");
+    assert_eq!(list_support::calls(dir.path(), "kill-session"), 1, "o Rust fecha o pane");
+    assert_eq!(srv.python.hits_to("/api/sessions/s0"), 1, "o Python só limpa as lojas dele");
+    let (_, headers) = srv.python.last_hit();
+    assert_eq!(headers.get("x-hangar-rust-closed").and_then(|v| v.to_str().ok()), Some(SECRET));
+    let closed = headers.get("x-hangar-closed-transcript").and_then(|v| v.to_str().ok()).unwrap();
+    assert_eq!(percent_encoding::percent_decode_str(closed).decode_utf8().unwrap(), jsonl.to_string_lossy());
+    assert!(!ask.exists(), "pergunta aberta apagada");
     assert!(!srv.pair.join("s0.json").exists(), "quem fechou saiu");
     assert_eq!(srv.groups.link("s1").await.unwrap().unwrap().peers, ["s2"]);
     assert_eq!(srv.groups.link("s2").await.unwrap().unwrap().peers, ["s1"]);

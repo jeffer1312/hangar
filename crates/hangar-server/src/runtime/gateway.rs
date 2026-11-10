@@ -767,7 +767,7 @@ impl RuntimeRegistry {
     }
     /// `DELETE` do Claude aberto aqui, com ou sem terminal: o Rust encerra a vida que guarda. O `Ok` leva o
     /// `transcript`. `None` = não há Claude com esse nome aqui, ou a vida guardada já não era a do nome (a
-    /// entrada sai e o Python fecha pelo nome, como antes).
+    /// entrada sai e o fechamento segue pelo nome, `close_by_name`).
     pub async fn kill_claude(&self,name:&str) -> Option<Result<Value,RuntimeError>> {
         if let Err(error)=self.retire_other_life(name).await { return Some(Err(error)); }
         let found=self.entries.lock().await.iter().find_map(|(key,entry)|match &entry.handle {
@@ -807,9 +807,15 @@ impl RuntimeRegistry {
                 tracing::warn!(session=%name,key=%key,code="close_killed_false","processo do Claude não comprovado desta vida; o fechamento segue pelo nome");
                 None
             },
-            Err(error) if gone=>{
-                tracing::warn!(session=%name,key=%key,code=%error.code,"vida guardada do Claude saiu com erro; o fechamento segue pelo nome");
+            Err(error) if gone && LIFE_UNPROVEN.contains(&error.code.as_str())=>{
+                tracing::warn!(session=%name,key=%key,code=%error.code,"vida guardada do Claude não se comprovou; o fechamento segue pelo nome");
                 None
+            },
+            // O processo desta vida não saiu (o agente sobreviveu ao cano): nada segue pelo nome, e sidecar e
+            // fila ficam para a próxima tentativa.
+            Err(error) if gone=>{
+                tracing::warn!(session=%name,key=%key,code=%error.code,"processo do Claude não saiu ao fechar");
+                Some(Err(super::close_name::unconfirmed(&format!("o processo da sessão não saiu ({}); sidecar e fila conservados",error.code))))
             },
             // A vida guardada não se comprova (pane, nascimento ou vínculo): a entrada sai sem matar nada e o
             // Python fecha pelo nome, como antes.
@@ -818,7 +824,7 @@ impl RuntimeRegistry {
         }
     }
     /// A entrada de uma vida que não se comprova sai do registro sem matar nada e vai ao diário; `None`
-    /// devolve o fechamento ao Python, pelo nome. Se nem sair ela consegue, o erro volta a quem pediu.
+    /// devolve o fechamento a quem chamou, pelo nome. Se nem sair ela consegue, o erro volta a quem pediu.
     async fn release_unproven(&self,name:&str,key:&str,generation:u64,code:&str) -> Option<Result<Value,RuntimeError>> {
         tracing::warn!(session=%name,key,code,"vida guardada do Claude não se comprova; sai do registro e o fechamento segue pelo nome");
         self.diag.report("runtime.stale_life",name,"runtime_stale_life","a vida guardada não se comprovou no fechamento");

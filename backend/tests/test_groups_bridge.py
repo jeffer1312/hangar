@@ -263,10 +263,6 @@ def test_close_that_skipped_rust_leaves_without_rebuilding_orq_facts(monkeypatch
         assert r.status_code == 200, r.text
         assert calls == [("group.leave", {"name": "a", "phases": {}})]
         assert r.json()["warning"]["params"]["avisos"] == [not_notified]
-        # Repassado pelo Rust, quem sai do grupo é ele: nada pela ponte.
-        calls.clear()
-        r = client.delete("/api/sessions/a", headers={**H, "x-hangar-rust-leaves": "s3gredo"})
-        assert (r.status_code, calls) == (200, [])
     finally:
         internal_api.set_secret(None)
 

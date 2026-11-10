@@ -170,14 +170,14 @@ async fn codex_terminal_answers_and_refuses_in_rust() {
     let (status, reply) = send(server, "POST", "cx-proof/modo-execucao", r#"{"terminal":"sim"}"#).await;
     assert_eq!((status, reply["detail"]["code"].as_str()), (422, Some("erro_corpo_invalido")));
     assert_eq!(python.hits_to("/api/sessions/cx-proof/modo-execucao"), 0);
-    // DELETE: fecha no Rust e repassa marcado uma vez; o repetido chega sem a marca, e nada o devolve ao Rust.
+    // DELETE: fecha no Rust e repassa marcado; o repetido (sessão que já acabou) também fecha no Rust, pelo nome.
     let delete = || fake::client().delete(format!("http://{server}/api/sessions/cx-proof")).header("authorization", format!("Bearer {OWNER}")).send();
     assert_eq!(delete().await.unwrap().status().as_u16(), 200);
     assert_eq!(python.last_hit().1.get("x-hangar-rust-closed").and_then(|v| v.to_str().ok()), Some(SECRET));
     assert!(!registry.owns_codex_terminal("cx-proof"));
     assert_eq!(delete().await.unwrap().status().as_u16(), 200);
     assert_eq!(python.hits_to("/api/sessions/cx-proof"), 2);
-    assert!(python.last_hit().1.get("x-hangar-rust-closed").is_none(), "o repetido não foi encerrado aqui");
+    assert_eq!(python.last_hit().1.get("x-hangar-rust-closed").and_then(|v| v.to_str().ok()), Some(SECRET), "o repetido é sucesso fechado aqui (D17)");
     finish(&mut [&mut app, &mut tui]);
 }
 
