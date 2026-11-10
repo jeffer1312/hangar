@@ -326,6 +326,8 @@ async fn health_port_must_belong_to_the_started_process() {
 async fn transcribe_here_uses_server_configuration() {
     let (provider, provider_task) = endpoint(Router::new().route("/audio/transcriptions", post(openai_endpoint))).await;
     let temporary = tempfile::tempdir().unwrap();
+    // Impede que o .env do checkout entre na fixture.
+    std::fs::create_dir_all(temporary.path().join(".hangar/current")).unwrap();
     let mut state = crate::routes::AppState::new(crate::config::Config {
         listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:1".parse().unwrap(),
         internal_secret: "fixture-internal".into(), auth_token: "fixture-owner".into(), log_path: None,

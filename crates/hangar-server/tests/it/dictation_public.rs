@@ -643,7 +643,7 @@ async fn dictation_public_180_second_deadline_cancels_both_audio_routes() {
             4,
             "a tentativa vencida reteve sua vaga"
         );
-        super::dictation_timing::configure(&server.state, &json!({"providers":[{"id":"fixture","kind":"openai","base_url":endpoint}]}));
+        super::dictation_timing::configure(&server.state, &json!({"dictation_max_minutes":10,"providers":[{"id":"fixture","kind":"openai","base_url":endpoint}],"organization":{"dictation_organization_mode":"none"}}));
         let response = reqwest::Client::new()
             .post(format!("{}{}", server.base, case["path"].as_str().unwrap()))
             .bearer_auth("owner")

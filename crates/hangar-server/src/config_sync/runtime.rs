@@ -46,12 +46,15 @@ impl RuntimeConfig {
     }
     /// Configuração efetiva compartilhada pela transcrição e pela organização do ditado.
     pub(crate) fn transcription_snapshot(&self) -> ValueGuard {
+        // Uma leitura só: uma escrita no meio não mistura duas versões do arquivo.
+        let current = Values(self.read());
+        let get = |key: &str| self.effective(key, &current);
         let value_or = |key: &str, default: Value| {
-            let value = self.get(key);
+            let value = get(key);
             if truthy(&value) { value } else { default }
         };
         let mut providers = ValueGuard(value_or("transcription_providers", json!([])));
-        let key = ValueGuard(self.get("groq_api_key"));
+        let key = ValueGuard(get("groq_api_key"));
         let key = crate::transcript::py::strip(key.as_str().unwrap_or(""));
         let legacy = if !truthy(&providers) && !key.is_empty() {
             json!({"id":"legacy", "kind":"openai", "api_key":key,
@@ -59,7 +62,7 @@ impl RuntimeConfig {
                 "model":value_or("transcription_model",json!(""))})
         } else { Value::Null };
         let mut organization = ValueGuard(json!({"dictation_include_recent_messages":
-            truthy(&self.get("dictation_include_recent_messages"))}));
+            truthy(&get("dictation_include_recent_messages"))}));
         for field in ["dictation_organization_mode", "dictation_claude_model", "dictation_codex_model",
             "ditado_estilo", "llm_base_url", "llm_api_key", "llm_model", "llm_reasoning_effort",
             "llm_briefing_base_url", "llm_briefing_api_key", "llm_briefing_model"] {
