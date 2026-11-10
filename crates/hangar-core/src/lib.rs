@@ -12,7 +12,6 @@ pub mod display_env;
 pub mod edge;
 pub mod fs;
 pub mod guest;
-pub mod guest_forward;
 pub mod http;
 pub mod http_body_input;
 pub mod http_body_limit;

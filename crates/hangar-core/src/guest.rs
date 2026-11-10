@@ -6,14 +6,10 @@ use std::sync::Arc;
 
 use axum::extract::Request;
 use axum::extract::connect_info::Connected;
-use axum::http::{HeaderValue, Method, StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::http::Method;
 use axum::serve::IncomingStream;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
-
-/// Fecha o WebSocket quando o acesso acaba: espelho do HTTP 410, o cliente não reconecta.
-pub const CLOSE_ENDED: u16 = 4410;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -131,7 +127,7 @@ impl Caller {
     }
 }
 
-/// O `Caller` que o porteiro da 8766 pôs no pedido; na 8765 nunca há um.
+/// O `Caller` que um porteiro de convidado (8766 ou login) pôs no pedido; o do dono não tem.
 pub fn caller(req: &Request) -> Option<&Caller> {
     req.extensions().get::<Caller>()
 }
@@ -160,31 +156,4 @@ impl Connected<IncomingStream<'_, TcpListener>> for GuestConn {
     fn connect_info(stream: IncomingStream<'_, TcpListener>) -> Self {
         Self { peer: *stream.remote_addr(), local: stream.io().local_addr().ok() }
     }
-}
-
-pub fn is_websocket(req: &Request) -> bool {
-    req.headers().get(header::UPGRADE).is_some_and(|v| v.as_bytes().eq_ignore_ascii_case(b"websocket"))
-}
-
-/// O preflight que o `CORSMiddleware` do Python (por fora do porteiro) respondia com `*` em origem,
-/// método e cabeçalho, sem credenciais.
-pub fn preflight(req: &Request) -> Option<Response> {
-    let h = req.headers();
-    if req.method() != Method::OPTIONS || !h.contains_key(header::ORIGIN) || !h.contains_key(header::ACCESS_CONTROL_REQUEST_METHOD) {
-        return None;
-    }
-    let (status, body) = if h.contains_key("access-control-request-private-network") {
-        (StatusCode::BAD_REQUEST, "Disallowed CORS private-network")
-    } else {
-        (StatusCode::OK, "OK")
-    };
-    let mut resp = (status, [(header::CONTENT_TYPE, "text/plain; charset=utf-8")], body).into_response();
-    let out = resp.headers_mut();
-    out.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
-    out.insert(header::ACCESS_CONTROL_ALLOW_METHODS, HeaderValue::from_static("DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT"));
-    out.insert(header::ACCESS_CONTROL_MAX_AGE, HeaderValue::from_static("600"));
-    if let Some(asked) = h.get(header::ACCESS_CONTROL_REQUEST_HEADERS) {
-        out.insert(header::ACCESS_CONTROL_ALLOW_HEADERS, asked.clone());
-    }
-    Some(resp)
 }

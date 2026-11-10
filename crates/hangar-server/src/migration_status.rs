@@ -16,7 +16,9 @@ use serde_json::{Value, json};
 
 use crate::routes::{AppState, cors, gate, pass};
 
-pub(crate) use hangar_core::edge::Forwarded;
+/// Marca da resposta que veio do Python: posta por `routes::pass`, lida pelo contador.
+#[derive(Clone, Copy)]
+pub(crate) struct Forwarded;
 
 pub const AREAS: [&str; 22] = [
     "history", "list", "send", "session", "terminal", "workspace", "worktrees", "costs", "quotas",

@@ -392,7 +392,7 @@ diário real (visto nos dias 06 e 07/11).
 - [ ] **Step 7: Uso real — verificação manual** abrir sessão Claude e Codex, login de conta pelo
   navegador, e "Reportar problema" gera o diário.
 
-### Task 4: Portão do dono e repasse ao Python no core
+### Task 4: Portão do dono no core
 
 Status: ready-for-agent (depois da Task 3)
 Revisão: risco — autorização do dono e do convidado.
@@ -417,17 +417,18 @@ impl Edge {
 }
 ```
 
-- Desceram: `Forward`, `AUTH_EMPTY_QUERY`, `RequestAuth`, `migration_status::Forwarded`,
-  `session_write::bridge::BridgedOwner`, `share::gate::{GuestConn, CLOSE_ENDED, preflight,
-  is_websocket}`, `share::caller::{Caller, GuestGrant, caller}`, `share::store::{Guest, Kind,
-  Share}` (`hangar_core::guest`) e o `share/forward.rs` inteiro (`hangar_core::guest_forward`).
+- Desceram só o que o portão lê: `Forward`, `RequestAuth`, `session_write::bridge::BridgedOwner`
+  (`hangar_core::edge`), `share::gate::GuestConn`, `share::caller::{Caller, GuestGrant, caller}` e
+  `share::store::{Guest, Kind, Share}` (`hangar_core::guest`).
 - `login_guests::gate::Login` não desce: carrega o cadastro do convidado, que depende de fila,
-  troca de nome e contas. O core tem a marca vazia `LoginPort`, que o porteiro do login insere
-  junto; `who` e `forward_for` só conferem a presença.
-- Ficam no servidor: `routes::pass` (com o gancho de `/api/config`), `proxy.rs` e o
-  `share::gate::Watcher`. Recurso que ainda repassa (custo de sessão para convidado) recebe o
-  repasse como função no estado dele, na Task 5. A voz lê o `Watcher` direto: a marca de fim de
-  acesso é decidida na Task 7, com o consumidor na frente.
+  troca de nome e contas. O portão não precisa dele: os dois porteiros de convidado (8766 e login)
+  põem um `Caller` no pedido, e é a presença dele que tira o pedido do portão do dono.
+- Ficam no servidor: `routes::pass` (com o gancho de `/api/config`), `proxy.rs`, o
+  `share/forward.rs` (assinatura do convidado), `Forwarded`, `AUTH_EMPTY_QUERY`, `CLOSE_ENDED`,
+  `preflight`, `is_websocket` e o `share::gate::Watcher`: nada no core os usa. Recurso que ainda
+  repassa (custo de sessão para convidado) recebe o repasse como função no estado dele, na Task 5.
+  A voz lê o `Watcher` direto: a marca de fim de acesso é decidida na Task 7, com o consumidor na
+  frente.
 - O `AppState` não ganha campo `edge`: os testes trocam `state.auth` e `state.diag` depois de
   montar o estado, e uma cópia guardada ficaria velha. As funções de `routes` passam as peças do
   `AppState` às funções livres, com a mesma assinatura: nenhum chamador muda nesta Task. O `Edge`
@@ -438,8 +439,9 @@ impl Edge {
   campo do `AppState` entra.
 - [x] **Step 2: Descer tipos e marcas** (Fix A), com `pub use` nos lugares antigos.
 - [x] **Step 3: Criar `Edge` e delegar** as funções de `routes` às do core.
-- [ ] **Step 4: Provas comuns** (quando autorizadas), com atenção aos testes de autorização em
+- [x] **Step 4: Provas comuns** (quando autorizadas), com atenção aos testes de autorização em
   `tests/it` (dono, convidado, bloqueio por tentativas, recibo de admissão, convite revogado).
+  Feito: `check --tests` do core e do servidor, `verificar-local` e o CI do PR.
 - [ ] **Step 5: Uso real — verificação manual** dono pelo token, dono pelo cookie, convidado por
   convite na 8766, convidado por login, e token errado recusado com 401 e depois 429.
 
@@ -503,7 +505,7 @@ Status: ready-for-agent (depois da Task 6)
 `voice` (12.717 linhas) usa do servidor: `groups::peers` (`PeerClient`, `PeerBook`, `PeerError`,
 `TOO_LARGE`), `st.groups.server_id()` (`voice/hub.rs:178`), `st.peers`, `accounts` em
 `hub.rs:232-242` (`codex_command()`, `visible_codex_accounts()` que devolve `catalog::Account`, e
-`env.codex(&account)`), `share::gate::preflight` (core pela Task 4), `display_env` e
+`env.codex(&account)`), `share::gate::preflight` (desce nesta Task, ou troca pelo `http_cors::preflight` do core), `display_env` e
 `terminal_process::PRIVATE_ENV_KEYS` (core pela Task 3).
 
 - `groups::peers` (409 linhas) usa `diag::record_blocking`, `random_hex`, `transcript::py`,

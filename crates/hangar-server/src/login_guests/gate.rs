@@ -254,8 +254,6 @@ pub async fn guard(
             invite: true,
         })));
     request.extensions_mut().insert(Login { guest, token });
-    // O portão do core só confere a presença: o cadastro do `Login` não sai do servidor.
-    request.extensions_mut().insert(hangar_core::edge::LoginPort);
     request.extensions_mut().insert(watcher.clone());
     let response = next.run(request).await;
     if path.ends_with("/events") {

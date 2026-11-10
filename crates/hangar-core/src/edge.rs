@@ -1,5 +1,5 @@
-//! Portão do dono: quem pede, se é o dono, e as marcas que os porteiros põem no pedido e na
-//! resposta. O repasse ao Python fica no servidor.
+//! Portão do dono: quem pede, se é o dono, e as marcas que o servidor põe no pedido.
+//! O repasse ao Python fica no servidor.
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -11,19 +11,9 @@ use crate::auth::{self, Auth, AuthError, ReceiptContext, TrustedHosts};
 use crate::diag::DiagClient;
 use crate::guest::{Caller, GuestConn, GuestGrant, caller};
 
-pub const AUTH_EMPTY_QUERY: &str = "x-hangar-auth-empty-query";
-
 /// Marca do pedido repassado pela ponte: o `gate` o trata como do dono e o `pass` nunca o devolve ao Python.
 #[derive(Clone, Copy, Debug)]
 pub struct BridgedOwner;
-
-/// Marca da resposta que veio do Python: posta por `pass`, lida pelo contador.
-#[derive(Clone, Copy)]
-pub struct Forwarded;
-
-/// Marca do pedido que entrou pelo login de convidado: o cadastro dele fica no servidor.
-#[derive(Clone, Copy, Debug)]
-pub struct LoginPort;
 
 /// Quem pede e se é o dono, resolvidos uma vez por pedido.
 #[derive(Clone, Default)]
@@ -132,9 +122,9 @@ pub fn owner_gate(trusted: &TrustedHosts, auth: &Auth, peer: SocketAddr, req: &R
     }
 }
 
-/// Entrou pela 8766 ou pelo login de convidado: quem pede não é decidido pelo token do dono.
+/// Entrou pela 8766 ou um porteiro de convidado já disse quem pede: o token do dono não decide.
 fn guest_side(req: &Request) -> bool {
-    on_guest_port(req) || req.extensions().get::<LoginPort>().is_some()
+    on_guest_port(req) || caller(req).is_some()
 }
 
 /// Quem pede. Na 8766 só o convidado que o porteiro pôs (nunca `is_owner`, nem `X-Forwarded-For`);

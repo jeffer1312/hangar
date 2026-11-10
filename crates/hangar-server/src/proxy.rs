@@ -11,7 +11,7 @@ use crate::share::forward::HEADER as GUEST_HEADER;
 use crate::share::gate::Watcher;
 
 pub use hangar_core::net::{HttpClient, POOL_IDLE, client};
-pub(crate) use hangar_core::edge::AUTH_EMPTY_QUERY;
+pub(crate) const AUTH_EMPTY_QUERY: &str = "x-hangar-auth-empty-query";
 
 pub use hangar_core::edge::Forward;
 
