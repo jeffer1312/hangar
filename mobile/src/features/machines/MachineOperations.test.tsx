@@ -15,7 +15,7 @@ vi.mock('react-native-keyboard-controller', () => ({ KeyboardAvoidingView: ({ ch
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
 vi.mock('../../ui/Sheet', () => ({ Sheet: ({ children }: { children: React.ReactNode }) => children }));
 import { MachineOperations } from './MachineOperations';
-import { currentConfirmRequest, readPendingNews, savePendingNews, whatsNewHref } from '../updates/pending';
+import { currentConfirmRequest, markShownNews, peekShownNews, rememberClickNews, takeClickNews, whatsNewHref } from '../updates/pending';
 import * as m from '../../paraglide/messages';
 const server = { id: 'ops-b', label: 'fixture-operations', baseUrl: 'https://operations.test', token: 'secret-b' };
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
@@ -92,10 +92,10 @@ describe('operações da máquina explícita', () => {
       ? refuse ? json({ detail: 'fixture-refused' }, 500) : json({ ok: true, started: false })
       : json({ atualizacao_disponivel: false, pending_warning: true, versoes: { repo: 'a', backend: 'a' }, estado: {} }));
     await render(); await click(m.mobile_machines_update());
-    savePendingNews(server.id, { cards: [{ id: 'n1', title: 'fixture-news', kind: 'new', text: '', platforms: 'all', try_it: null, animation: null }], fixes: [] });
+    rememberClickNews(server.id, { cards: [{ id: 'n1', title: 'fixture-news', kind: 'new', text: '', platforms: 'all', try_it: null, animation: null }], fixes: [] });
     await act(async () => { currentConfirmRequest()!.resolve(true, { [server.id]: { ids: ['mig'], mode: 'package' } }); });
     expect(postCalls().map(([url]) => url)).toEqual([`${server.baseUrl}/api/update/accept`]);
-    expect(readPendingNews(server.id)).toBeNull();
+    expect(takeClickNews(server.id)).toBeUndefined();
     expect(el.textContent).toContain(m.update_all_up_to_date());
     expect(el.textContent).not.toContain(m.mobile_machines_operation_ready());
     refuse = true; mocks.fetch.mockClear();
@@ -134,12 +134,37 @@ describe('operações da máquina explícita', () => {
     expect((el.querySelector(`[aria-label="${m.mobile_machines_update()}"]`) as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it('atualização concluída abre "O que chegou para você" com o que a folha guardou', async () => {
-    mocks.fetch.mockImplementation(async (_url, init) => init?.method === 'POST' ? json({ ok: true, pid: 77 }) : json({ estado: { pid: 77, fase: 'pronto', ok: true } }));
+  const card = { id: 'n1', title: 'fixture-news', kind: 'new' as const, text: '', platforms: 'all' as const, try_it: null, animation: null };
+  const finishUpdate = async (arrived: () => Response) => {
+    mocks.fetch.mockImplementation(async (url: string, init) => String(url).includes('/api/update/arrived') ? arrived()
+      : init?.method === 'POST' ? json({ ok: true, pid: 77 }) : json({ estado: { pid: 77, fase: 'pronto', ok: true } }));
     await render(); await click(m.mobile_machines_update());
-    savePendingNews(server.id, { cards: [{ id: 'n1', title: 'fixture-news', kind: 'new', text: '', platforms: 'all', try_it: null, animation: null }], fixes: [] });
+    rememberClickNews(server.id, { cards: [card], fixes: [] });
     await act(async () => answerUpdate(true)()); await tick();
+  };
+
+  it('atualização concluída abre "O que chegou para você" com a lista do servidor', async () => {
+    await finishUpdate(() => json({ news: [{ ...card, id: 'fixture-arrived' }], through: 41 }));
+    expect(mocks.fetch.mock.calls.some(([url]) => String(url).startsWith(`${server.baseUrl}/api/update/arrived?device=`))).toBe(true);
     expect(mocks.push).toHaveBeenLastCalledWith(whatsNewHref(server.id));
+    expect(peekShownNews(server.id).cards.map((n) => n.id)).toEqual(['fixture-arrived']);
+    markShownNews(server.id);
+  });
+
+  it('servidor sem a rota (404) mostra o que a folha leu neste clique', async () => {
+    await finishUpdate(() => json({}, 404));
+    expect(mocks.push).toHaveBeenLastCalledWith(whatsNewHref(server.id));
+    expect(peekShownNews(server.id).cards.map((n) => n.id)).toEqual(['n1']);
+    markShownNews(server.id);
+  });
+
+  it('chegada já oferecida nesta abertura não abre de novo', async () => {
+    await finishUpdate(() => json({ news: [{ ...card, id: 'fixture-twice' }], through: 42 }));
+    expect(mocks.push).toHaveBeenLastCalledWith(whatsNewHref(server.id));
+    markShownNews(server.id);
+    await act(async () => root.unmount()); root = createRoot(el); mocks.push.mockReset();
+    await finishUpdate(() => json({ news: [{ ...card, id: 'fixture-twice' }], through: 42 }));
+    expect(mocks.push).not.toHaveBeenCalledWith(whatsNewHref(server.id));
   });
 
   it('reinício Windows confirma pela tentativa mesmo com pid diferente do lançador', async () => {

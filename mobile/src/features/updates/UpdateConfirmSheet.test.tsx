@@ -35,7 +35,8 @@ vi.mock('./PluginsAnimation', () => ({ PluginsAnimation: () => null }));
 vi.mock('react-native-keyboard-controller', () => ({ KeyboardAvoidingView: ({ children }: { children: React.ReactNode }) => children }));
 vi.mock('../../ui/Sheet', () => ({ Sheet: ({ children }: { children: React.ReactNode }) => children }));
 import { UpdateConfirmSheet } from './UpdateConfirmSheet';
-import { readPendingNews, type ConfirmRequest } from './pending';
+import { WhatsNewSheet } from './WhatsNewSheet';
+import { loadArrivedNews, takeClickNews, type ConfirmRequest } from './pending';
 import * as m from '../../paraglide/messages';
 
 const server = { id: 'srv', label: 'fixture-machine', baseUrl: 'https://notes.test', token: 'fixture-token' };
@@ -86,7 +87,7 @@ describe('folha "Atualizar?"', () => {
     await act(async () => update.click());
     expect(request.resolve).toHaveBeenCalledWith(true, { srv: { ids: ['w1'] } });
     expect(onClose).toHaveBeenCalled();
-    const saved = readPendingNews(server.id);
+    const saved = takeClickNews(server.id);
     expect([...saved?.cards ?? [], ...saved?.fixes ?? []].map((n) => n.id)).toEqual(['n1', 'f1']);
   });
 
@@ -160,6 +161,39 @@ describe('folha "Atualizar?"', () => {
     expect(el.textContent).toContain(m.update_notes_failed());
     expect(el.textContent).not.toContain(m.update_notes_loading());
     expect(button(m.update_confirm_action()).disabled).toBe(true);
+  });
+
+  const seenCalls = () => mocks.fetch.mock.calls.filter(([url]) => String(url).endsWith('/api/update/arrived/seen'))
+    .map(([, init]) => JSON.parse(String((init as RequestInit).body)) as { device: string; through: number });
+
+  it('"O que chegou para você" mostra a lista do servidor filtrada e marca visto ao abrir', async () => {
+    mocks.fetch.mockImplementation(async (url: string) => String(url).endsWith('/seen') ? json({ through: 9 }) : json({ news: notes.news, through: 9 }));
+    expect(await loadArrivedNews(server)).toBe(true);
+    const [[url]] = mocks.fetch.mock.calls;
+    expect(String(url)).toMatch(/^https:\/\/notes\.test\/api\/update\/arrived\?device=[A-Za-z0-9_-]{1,64}$/);
+    expect(seenCalls()).toEqual([]);
+    await act(async () => root.render(<WhatsNewSheet serverId={server.id} onClose={vi.fn()} />));
+    await act(async () => { await vi.waitFor(() => expect(seenCalls()).toHaveLength(1)); });
+    expect(el.textContent).toContain('fixture-card');
+    expect(el.textContent).not.toContain('fixture-desktop-only');
+    expect(el.textContent).toContain(m.update_notes_fixes({ n: '1' }));
+    expect(seenCalls()).toEqual([{ device: expect.stringMatching(/^[A-Za-z0-9_-]{1,64}$/), through: 9 }]);
+    // O id fica gravado: a próxima leitura usa o mesmo aparelho.
+    expect(mocks.store.get('update.deviceId.v1')).toBe(seenCalls()[0].device);
+    // A mesma chegada não volta nesta abertura do app.
+    expect(await loadArrivedNews(server)).toBe(false);
+  });
+
+  it('lista vazia para o celular não abre e marca visto; servidor sem a rota não abre nada', async () => {
+    mocks.fetch.mockImplementation(async (url: string) => String(url).endsWith('/seen') ? json({ through: 10 })
+      : json({ news: [notes.news[1]], through: 10 }));
+    expect(await loadArrivedNews(server)).toBe(false);
+    await vi.waitFor(() => expect(seenCalls().map((c) => c.through)).toEqual([10]));
+    mocks.fetch.mockReset();
+    mocks.fetch.mockImplementation(async () => json({}, 404));
+    expect(await loadArrivedNews(server)).toBe(false);
+    expect(await loadArrivedNews(server, { cards: [notes.news[0]], fixes: [] })).toBe(true);
+    expect(seenCalls()).toEqual([]);
   });
 
   it('servidor antigo (404) mostra só a confirmação; fechar é cancelar', async () => {

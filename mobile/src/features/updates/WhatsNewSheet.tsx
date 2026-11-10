@@ -8,7 +8,7 @@ import { mkMarkdownStyle } from '../../chat/AssistantBubble';
 import { useSettingsColors } from '../config/colors';
 import { Icon } from '../../ui/Icon';
 import { animationFor } from './animations';
-import { clearPendingNews, readPendingNews } from './pending';
+import { markShownNews, peekShownNews } from './pending';
 import * as m from '../../paraglide/messages';
 
 // Âmbar do aviso, violeta do selo e fundo do cartão: os tons do mock aprovado, que o tema não tem.
@@ -108,9 +108,9 @@ export function PrimaryButton({ label, onPress, disabled }: { label: string; onP
 export function WhatsNewSheet({ serverId, onClose }: { serverId: string; onClose: () => void }) {
   const insets = useSafeAreaInsets();
   const c = useSettingsColors();
-  // Lido uma vez e apagado na hora: a tela aparece uma só vez, mesmo se fechar pelo gesto.
-  const [news] = useState(() => readPendingNews(serverId) ?? { cards: [], fixes: [] });
-  useEffect(() => { clearPendingNews(serverId); }, [serverId]);
+  // Lido uma vez e marcado visto ao abrir: a tela aparece uma só vez, mesmo se fechar pelo gesto.
+  const [news] = useState(() => peekShownNews(serverId));
+  useEffect(() => { markShownNews(serverId); }, [serverId]);
   return <ScrollView contentContainerStyle={[styles.sheet, { paddingBottom: insets.bottom + 24 }]}>
     <SheetHeader title={m.update_whats_new_title()} onClose={onClose} />
     {news.cards.length || news.fixes.length
