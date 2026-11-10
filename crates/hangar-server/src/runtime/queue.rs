@@ -171,8 +171,10 @@ fn encode(state: &mut State) -> io::Result<(Vec<u8>, Option<(String, Vec<u8>)>)>
 
 /// Devolve à vista lida do principal o catálogo do arquivo irmão e diz o sha256 conferido. Irmão ausente,
 /// ilegível ou de outro conteúdo (a queda entre as duas escritas) deixa a vista sem catálogo, e a fila abre
-/// igual: a sessão só o pede de novo quando um processo novo dela sobe.
-fn decode(state: &mut State, state_path: &Path) -> Option<String> {
+/// igual: a sessão só o pede de novo quando um processo novo dela sobe. `kept` é o catálogo que a memória
+/// ainda tem: se é o que o principal aponta, volta à vista, e o `None` devolvido faz a gravação seguinte
+/// refazer o irmão.
+fn decode(state: &mut State, state_path: &Path, kept: Option<&Value>) -> Option<String> {
     let reference = state.runtime_state.as_object_mut()?.shift_remove(COMMANDS_REF)?;
     let view = state.runtime_state.get_mut("view")?.as_object_mut()?;
     // Catálogo embutido ao lado da referência: gravado pelo binário anterior, que não conhece o irmão.
@@ -180,12 +182,17 @@ fn decode(state: &mut State, state_path: &Path) -> Option<String> {
     let hash = reference.as_str()?;
     let commands = read_replaced(&commands_path(state_path)).ok().filter(|bytes| sha256_hex(bytes) == hash)
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
-    let Some(commands) = commands else {
-        tracing::warn!(code = "queue_commands_unreadable", key = %state.owner_key, "catálogo de comandos da fila ausente ou de outro conteúdo; a vista fica sem ele");
+    if let Some(commands) = commands {
+        view.insert("commands".into(), commands);
+        return Some(hash.to_owned());
+    }
+    // O principal que falhou depois de o irmão trocar ainda aponta o catálogo anterior.
+    if let Some(kept) = kept.filter(|kept| serde_json::to_vec(kept).is_ok_and(|bytes| sha256_hex(&bytes) == hash)) {
+        view.insert("commands".into(), kept.clone());
         return None;
-    };
-    view.insert("commands".into(), commands);
-    Some(hash.to_owned())
+    }
+    tracing::warn!(code = "queue_commands_unreadable", key = %state.owner_key, "catálogo de comandos da fila ausente ou de outro conteúdo; a vista fica sem ele");
+    None
 }
 
 /// Grava o estado: o irmão do catálogo antes, e só quando mudou (`written` é o sha256 do que está lá); o
@@ -455,7 +462,7 @@ impl Store {
             Ok(bytes) => {
                 let (mut state, migrated) = State::load(&bytes)?;
                 if state.owner_key != initial.owner_key { return Err(invalid("estado da fila incompatível")); }
-                commands_hash = decode(&mut state, state_path);
+                commands_hash = decode(&mut state, state_path, None);
                 if migrated && !needs_terminal_recovery(&state) { persist(state_path, &mut state, &mut commands_hash)?; }
                 state
             }
@@ -497,7 +504,8 @@ impl Store {
     pub fn unfence(&mut self) -> io::Result<()> {
         if self.fenced {
             let mut state = State::load(&std::fs::read(&self.state_path)?)?.0;
-            self.commands_hash = decode(&mut state, &self.state_path);
+            let kept = self.state.runtime_state.get("view").and_then(|view| view.get("commands")).filter(|commands| !commands.is_null());
+            self.commands_hash = decode(&mut state, &self.state_path, kept);
             self.state = Arc::new(state);
             self.recover_before_compact=needs_terminal_recovery(&self.state);
             self.ensure_projection()?;
@@ -1744,6 +1752,21 @@ mod lifecycle_tests {
             drop(store);
             assert_eq!(reopen(&dir).state().runtime_state["view"]["commands"],commands,"{damage:?}");
         }
+    }
+
+    #[test]
+    fn a_failed_main_write_after_a_new_catalog_keeps_the_catalog_the_main_file_points_to() {
+        let dir=tempfile::tempdir().unwrap();
+        let commands=catalog(20);
+        let (path,mut store)=with_catalog(&dir,&commands);
+        // O que a falha deixa: o irmão já com o catálogo novo, o principal apontando o anterior.
+        std::fs::write(path.with_extension("commands"),serde_json::to_vec(&catalog(21)).unwrap()).unwrap();
+        store.fenced=true;
+        store.unfence().unwrap();
+        assert_eq!(store.state().runtime_state["view"]["commands"],commands,"a falha levou o catálogo que a memória ainda tinha");
+        append(&mut store,"a");
+        drop(store);
+        assert_eq!(reopen(&dir).state().runtime_state["view"]["commands"],commands,"a gravação seguinte não devolveu o catálogo ao irmão");
     }
 
     #[test]

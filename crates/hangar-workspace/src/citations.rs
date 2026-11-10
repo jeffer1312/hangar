@@ -293,7 +293,10 @@ fn any_needle(queries: &[Query]) -> Option<regex::bytes::Regex> {
         return None;
     }
     let needles = queries.iter().map(|query| regex::escape(query.needle())).collect::<Vec<_>>();
-    regex::bytes::Regex::new(&needles.join("|")).ok()
+    // Sem o erro no log: ele pode trazer o padrão, que é feito dos caminhos procurados.
+    regex::bytes::Regex::new(&needles.join("|"))
+        .inspect_err(|_| tracing::warn!(code = "citations_needle_pattern_failed", queries = queries.len(), "padrão das perguntas não coube; a leitura segue sem o atalho"))
+        .ok()
 }
 
 fn feed(queries: &mut [Query], starts: &[u64], any: Option<&regex::bytes::Regex>, at: u64, bytes: &[u8]) {

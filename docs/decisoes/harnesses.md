@@ -1100,7 +1100,9 @@ gravação seguinte. O binário anterior lê o formato novo sem erro: `commands:
 para ele (`claude.rs`, `metadata.get("commands").filter(|c| !c.is_null())`) e `runtime_state` é JSON
 livre. A reserva Python só lê campos da vista que continuam no principal. Queda depois do irmão e
 antes do principal deixa o principal apontando o sha256 anterior: o `decode` recusa o irmão e a fila
-abre sem catálogo.
+abre sem catálogo. Com o processo vivo é diferente: se só a gravação do principal falha, o `unfence`
+relê o disco e devolve à vista o catálogo que a memória ainda tem, quando é ele o que o principal
+aponta; a gravação seguinte refaz o irmão.
 
 Sessão que ficou sem o catálogo dela não o pede de novo sozinha: o pedido (`initialize`,
 `claude.rs` `start_initialize`) só sai quando um processo novo da sessão sobe. Religada ao mesmo
