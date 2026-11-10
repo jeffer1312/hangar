@@ -1410,7 +1410,7 @@ impl Hangar {
         };
         // Como o `cp_active` do web: a máquina que abriu vira a da próxima abertura.
         self.unsaved_connection = Some((address, token.clone()));
-        if let Some(key) = self.selected_key() { let draft = self.composer_draft(cx); self.drafts.insert(key, draft); }
+        self.keep_draft(cx);
         let reopen = self.selected.clone().zip(self.session_server().map(|s| servers::norm(&s)));
         // A lista da máquina que sai fica na barra até o SSE dela chegar, sem piscar vazia.
         let previous = self.server.as_deref().map(servers::norm).filter(|key| *key != servers::norm(&api.identity()))
@@ -1601,7 +1601,7 @@ impl Hangar {
         if !same_server || self.selected.as_ref().is_none_or(|selected| selected.name != session.name) {
             self.close_terminal(false, window, cx);
         }
-        if let Some(old) = self.selected_key() { let draft = self.composer_draft(cx); self.drafts.insert(old, draft); }
+        self.keep_draft(cx);
         self.keep_expanded();
         self.open_api = open_api;
         // Avisos, atalhos globais e contas passam a ser os da máquina desta conversa.
@@ -1633,7 +1633,7 @@ impl Hangar {
         self.etag = None;
         self.has_older = false;
         self.rich.clear();
-        self.pages.clear();
+        self.pages.clear(cx);
         // A busca era da conversa anterior.
         self.find.reset();
         row_patch::reset_rows(&mut self.row_ids, &mut self.arrived, &mut self.tree_folds);
@@ -1717,11 +1717,18 @@ impl Hangar {
         view.update(cx, |view, cx| view.choose_no_project(window, cx));
     }
 
+    /// Guarda o campo da sessão aberta; campo vazio não deixa entrada.
+    fn keep_draft(&mut self, cx: &App) {
+        let Some(key) = self.selected_key() else { return };
+        let draft = self.composer_draft(cx);
+        if draft.is_empty() { self.drafts.remove(&key); } else { self.drafts.insert(key, draft); }
+    }
+
     /// Fecha a sessão aberta, guardando o rascunho dela.
     pub(super) fn close_open_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected.is_none() { return; }
         self.close_terminal(false, window, cx);
-        if let Some(old) = self.selected_key() { let draft = self.composer_draft(cx); self.drafts.insert(old, draft); }
+        self.keep_draft(cx);
         self.keep_expanded();
         self.selection += 1;
         if let Some(task) = self.session_task.take() { task.abort(); }
@@ -1737,6 +1744,10 @@ impl Hangar {
         self.reset_details();
         self.cancel_preview_drop();
         self.clear_visible_preview();
+        // Sem sessão aberta, nada da conversa anterior fica de pé: textos preparados, páginas e o Chromium delas.
+        self.rich.clear();
+        self.sync_rows(cx);
+        self.pages.warm(false, window, cx);
         self.error = None;
         self.loading = false;
         self.chat_online = false;
@@ -1910,7 +1921,11 @@ impl Hangar {
         let selection = self.selection;
         let (mut rows, mut visible, mut tail, mut keep_end) = (false, true, false, false);
         match payload {
-            Payload::Terminal(reply) => self.receive_terminal(reply, window, cx),
+            Payload::Terminal(reply) => {
+                // Bytes do terminal repintam por conta própria (`receive_terminal`), sem o `notify` da janela inteira.
+                visible = !matches!(reply, terminal::Reply::Socket(_, _, _, Ok(crate::ws::Event::Data(_))));
+                self.receive_terminal(reply, window, cx);
+            }
             Payload::Mentions(seq, result) => { self.receive_mentions(seq, result, cx); }
             Payload::Sessions(Ok(sessions)) => {
                 self.list_error = None;
@@ -2329,7 +2344,8 @@ impl Hangar {
         let focused_tab = self.visible_order(cx).into_iter().enumerate().find(|(_, target)| self.is_active_key(&target.server)
             && self.row_focus(target).is_some_and(|focus| focus.is_focused(window)));
         // Sessão que sumiu da lista acabou de fechar: a conversa dela passa a ser recente.
-        let closed = self.sessions.iter().any(|old| !sessions.iter().any(|s| s.name == old.name));
+        let gone = servers::left_list(&self.sessions, &sessions);
+        let closed = !gone.is_empty();
         self.sessions = sessions;
         self.recents_sessions_changed(closed, cx);
         self.resolve_local_dirs(cx);
@@ -2353,6 +2369,9 @@ impl Hangar {
             let list = self.sessions.clone();
             self.follow_open(&list, window, cx);
         }
+        // Depois do `follow_open`: a aberta que fechou de vez já saiu da seleção; a que troca de conta segue nela.
+        let server = self.active_key();
+        self.forget_closed(&server, &gone);
         self.sidebar_sessions_changed(window, cx);
         self.tour_planner.list_read();
         self.tour_dirty = true;
@@ -2664,7 +2683,7 @@ impl Hangar {
                 self.has_older = false;
                 self.rich.clear();
                 row_patch::reset_rows(&mut self.row_ids, &mut self.arrived, &mut self.tree_folds);
-                self.pages.clear();
+                self.pages.clear(cx);
                 self.list_state.reset(0);
                 self.follow_reset();
                 self.etag = None;
@@ -3794,7 +3813,7 @@ impl Hangar {
         let removed: HashSet<_> = self.row_ids[from..].iter().filter(|id| !kept.contains(id)).cloned().collect();
         // Visões fora da lista (plano, diff do painel) usam linha "__…__" e saem só pelo limite do cache.
         self.rich.retain(|_, rich| !removed.contains(&rich.row) || rich.row.starts_with("__"));
-        self.pages.retain_rows(|row| !removed.contains(row));
+        self.pages.retain_rows(|row| !removed.contains(row), cx);
         for id in removed {
             self.arrived.remove(&id);
             self.tree_folds.remove(&id);

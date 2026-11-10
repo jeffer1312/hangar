@@ -242,6 +242,19 @@ struct PageView {
     collapsed: bool,
 }
 
+impl PageView {
+    /// As imagens da visão que sai, para o atlas soltar.
+    fn images(&mut self) -> impl Iterator<Item = Arc<RenderImage>> + use<> {
+        self.last_frame.take().into_iter().chain(self.shot.take().map(|(_, _, image)| image))
+    }
+}
+
+/// O atlas só solta textura a pedido. A janela que está desenhando sai da lista do App: solta depois, quando voltou.
+fn release(images: Vec<Arc<RenderImage>>, cx: &mut App) {
+    if images.is_empty() { return; }
+    cx.defer(move |cx| for image in images { cx.drop_image(image, None); });
+}
+
 pub struct Pages {
     views: HashMap<String, PageView>,
     budget: Budget,
@@ -283,7 +296,8 @@ impl Pages {
 
     /// Conversa trocada ou recarregada: nada da anterior é reaproveitado (a página pode ter expirado). Os motores caem
     /// junto com as visões.
-    pub fn clear(&mut self) {
+    pub fn clear(&mut self, cx: &mut App) {
+        release(self.views.values_mut().flat_map(PageView::images).collect(), cx);
         self.views.clear();
         self.budget.clear();
         self.paint.away.borrow_mut().clear();
@@ -293,8 +307,10 @@ impl Pages {
     pub fn unpin(&mut self) { self.budget.unpin(); }
 
     /// Conversa refeita: sai quem não tem mais linha.
-    pub fn retain_rows(&mut self, keep: impl Fn(&String) -> bool) {
-        self.views.retain(|_, view| keep(&view.row));
+    pub fn retain_rows(&mut self, keep: impl Fn(&String) -> bool, cx: &mut App) {
+        let mut gone = Vec::new();
+        self.views.retain(|_, view| keep(&view.row) || { gone.extend(view.images()); false });
+        release(gone, cx);
         let views = &self.views;
         self.budget.order.retain(|id| views.contains_key(id));
     }
@@ -447,7 +463,10 @@ impl Hangar {
                     Ok(image) => if let Some(view) = this.pages.views.get_mut(&id) {
                         view.busy = false;
                         match image {
-                            Some(image) => { view.shot = Some((dark, bucket, image)); view.state = ViewState::Ready; }
+                            Some(image) => {
+                                if let Some((_, _, old)) = view.shot.replace((dark, bucket, image)) { cx.drop_image(old, None); }
+                                view.state = ViewState::Ready;
+                            }
                             None => view.state = ViewState::Error,
                         }
                     },
@@ -532,7 +551,9 @@ impl Hangar {
                 .and_then(|bytes| media::decode(&bytes, 4096, 8192, None));
             drop(running);
             let _ = this.update(cx, |this, cx| {
-                if let Some(view) = this.pages.views.get_mut(&id) { view.last_frame = frame; }
+                if let Some(view) = this.pages.views.get_mut(&id) && let Some(old) = std::mem::replace(&mut view.last_frame, frame) {
+                    cx.drop_image(old, None);
+                }
                 cx.notify();
             });
         }).detach();
@@ -545,6 +566,8 @@ impl Hangar {
             crate::browser::Event::Frame => {
                 let Some(running) = &mut view.running else { return };
                 let first = !std::mem::replace(&mut running.framed, true);
+                // A capa de quando estacionou não é mais pintada.
+                let cover = if first { view.last_frame.take() } else { None };
                 let replaced = running.engine.texture_replaced();
                 // Visto só quando a janela desenhar: quadro que chega antes espera, e só o último é decodificado.
                 let engine = Rc::downgrade(&running.engine);
@@ -554,6 +577,7 @@ impl Hangar {
                 // Mesma textura, com o conteúdo novo: a cópia guardada da conversa já a pinta, basta a raiz redesenhar.
                 // Textura nova (primeiro quadro, outro tamanho) ou sem relógio na raiz: a conversa redesenha.
                 if first || replaced || !crate::motion::tick_root(cx) { self.redraw(panes::Area::Conversation, cx); }
+                release(cover.into_iter().collect(), cx);
             }
             crate::browser::Event::Host(raw) => match parse_host(&raw) {
                 Some(HostMsg::Height(height)) if view.reported != Some(height) => {
@@ -587,9 +611,11 @@ impl Hangar {
             if let Some(running) = view.running.take() && view.page.url.is_some() && let Some(at) = running.at {
                 view.page.url = Some(at);
             }
-            (view.parked, view.last_frame, view.pressed) = (false, None, false);
+            let cover = view.last_frame.take();
+            (view.parked, view.pressed) = (false, false);
             self.pages.budget.order.retain(|x| x != id);
             self.pages.paint.away.borrow_mut().remove(id);
+            release(cover.into_iter().collect(), cx);
         }
         self.remeasure_page(id);
         cx.notify();
@@ -597,8 +623,10 @@ impl Hangar {
 
     fn retry_page(&mut self, id: &str, cx: &mut Context<Self>) {
         if let Some(view) = self.pages.views.get_mut(id) {
-            (view.state, view.busy, view.html, view.shot, view.no_image) = (ViewState::Loading, false, None, None, false);
+            let shot = view.shot.take().map(|(_, _, image)| image);
+            (view.state, view.busy, view.html, view.no_image) = (ViewState::Loading, false, None, false);
             view.live = self.pages.live;
+            release(shot.into_iter().collect(), cx);
         }
         self.remeasure_page(id);
         cx.notify();
