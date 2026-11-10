@@ -977,39 +977,44 @@ pub(crate) fn check_plugins(home: &Path, dir: &Path) -> Result<Vec<String>> {
 /// O registro de plugins é um só para todas as contas, mas o CLI grava o caminho pela pasta da conta
 /// que instalou: apagar a conta deixaria o plugin sem pasta em todas. O caminho passa ao destino real.
 pub(crate) fn detach_plugin_paths(home: &Path, dir: &Path) -> Result<()> {
-    let real_dir = super::catalog::resolved(dir);
+    let dirs = [dir.to_path_buf(), super::catalog::resolved(dir)];
     let plugins = home.join(".claude").join("plugins");
-    for (file, field) in [("installed_plugins.json", "installPath"), ("known_marketplaces.json", "installLocation")] {
+    for file in ["installed_plugins.json", "known_marketplaces.json"] {
         let path = plugins.join(file);
-        let unreadable = |e: String| refused(format!("plugins: não consegui ler {}: {e}", path.display()));
-        let Some(mut data) = read_json(&path).map_err(unreadable)? else { continue };
-        if repoint(&mut data, field, dir, &real_dir) {
-            let text = serde_json::to_string_pretty(&data)
-                .map_err(|e| refused(format!("plugins: não consegui gravar {}: {e}", path.display())))?;
-            write_replacing(&path, &text)?;
+        let Some(mut data) = read_json(&path)
+            .map_err(|e| refused(format!("plugins: não consegui ler {}: {e}", path.display())))? else { continue };
+        if !repoint(&mut data, &dirs) { continue; }
+        let text = pyjson::dumps_indent(&data, 2, false);
+        if text.chars().any(py::is_marker) {
+            return Err(refused(format!("plugins: {} tem texto com surrogate solto, que não dá pra gravar em UTF-8", path.display())));
         }
+        write_replacing(&path, &text)?;
     }
     Ok(())
 }
 
-/// Caminho que entra pela conta e cujo destino real fica fora dela passa a apontar para o real.
-fn repoint(value: &mut Value, field: &str, dir: &Path, real_dir: &Path) -> bool {
+/// Todo texto que é caminho dentro da conta: o registro tem mais de um campo de caminho.
+fn repoint(value: &mut Value, dirs: &[PathBuf]) -> bool {
     match value {
-        Value::Array(items) => items.iter_mut().fold(false, |changed, item| repoint(item, field, dir, real_dir) | changed),
-        Value::Object(map) => map.iter_mut().fold(false, |changed, (key, item)| {
-            let swapped = match item {
-                Value::String(text) if key == field && Path::new(text.as_str()).starts_with(dir) => {
-                    let real = super::catalog::resolved(Path::new(text.as_str()));
-                    let outside = !real.starts_with(real_dir) && !real.starts_with(dir);
-                    if outside { *text = real.to_string_lossy().into_owned(); }
-                    outside
-                }
-                _ => repoint(item, field, dir, real_dir),
-            };
-            swapped | changed
-        }),
+        Value::Array(items) => items.iter_mut().fold(false, |changed, item| repoint(item, dirs) | changed),
+        Value::Object(map) => map.values_mut().fold(false, |changed, item| repoint(item, dirs) | changed),
+        Value::String(text) => match outside(Path::new(text.as_str()), dirs) {
+            Some(real) => { *text = real.to_string_lossy().into_owned(); true }
+            None => false,
+        },
         _ => false,
     }
+}
+
+/// Resolve só a primeira pasta abaixo da conta (o link `plugins`): a versão que o caminho cita pode já
+/// não existir, e o caminho real ainda é o do compartilhado.
+fn outside(path: &Path, dirs: &[PathBuf]) -> Option<PathBuf> {
+    let rest = dirs.iter().find_map(|dir| path.strip_prefix(dir).ok().map(|rest| (dir, rest)));
+    let (dir, rest) = rest?;
+    let mut parts = rest.components();
+    let first = dir.join(parts.next()?);
+    let real = PathBuf::from(super::catalog::displayed(&fs::canonicalize(&first).ok()?));
+    (!dirs.iter().any(|dir| real.starts_with(dir))).then(|| real.join(parts.as_path()))
 }
 
 /// O preparo da pasta pendente da criação: `~/.claude` garantido, o `.claude.json` do principal sem o
