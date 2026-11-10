@@ -974,6 +974,67 @@ pub(crate) fn check_plugins(home: &Path, dir: &Path) -> Result<Vec<String>> {
     Ok(warnings)
 }
 
+/// O registro de plugins é um só para todas as contas, mas o CLI grava o caminho pela pasta da conta
+/// que instalou: apagar a conta deixaria o plugin sem pasta em todas. O caminho passa ao destino real.
+pub(crate) fn detach_plugin_paths(home: &Path, dir: &Path) -> Result<()> {
+    let dirs = [dir.to_path_buf(), super::catalog::resolved(dir)];
+    let plugins = home.join(".claude").join("plugins");
+    for file in ["installed_plugins.json", "known_marketplaces.json"] {
+        detach_file(&plugins.join(file), &dirs)?;
+    }
+    Ok(())
+}
+
+/// O CLI de outra conta grava o mesmo arquivo sem trava que o Hangar alcance: só grava se o arquivo
+/// ainda é o que foi lido, e refaz a troca quando ele mudou no meio.
+fn detach_file(path: &Path, dirs: &[PathBuf]) -> Result<()> {
+    const ATTEMPTS: usize = 3;
+    for _ in 0..ATTEMPTS {
+        let before = match fs::read(path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            read => read,
+        };
+        let unreadable = |e: String| refused(format!("plugins: não consegui ler {}: {e}", path.display()));
+        let before = before.map_err(|e| unreadable(e.to_string()))?;
+        let Some(mut data) = parse_json(path, Ok(before.clone())).map_err(unreadable)? else { return Ok(()) };
+        if !repoint(&mut data, dirs) { return Ok(()); }
+        let text = pyjson::dumps_indent(&data, 2, false);
+        if text.chars().any(py::is_marker) {
+            return Err(refused(format!("plugins: {} tem texto com surrogate solto, que não dá pra gravar em UTF-8", path.display())));
+        }
+        match fs::read(path) {
+            Ok(now) if now == before => return write_replacing(path, &text),
+            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(unreadable(error.to_string())),
+            _ => {}
+        }
+    }
+    Err(refused(format!("plugins: {} mudou {ATTEMPTS} vezes durante a troca; tente de novo", path.display())))
+}
+
+/// Todo texto que é caminho dentro da conta: o registro tem mais de um campo de caminho.
+fn repoint(value: &mut Value, dirs: &[PathBuf]) -> bool {
+    match value {
+        Value::Array(items) => items.iter_mut().fold(false, |changed, item| repoint(item, dirs) | changed),
+        Value::Object(map) => map.values_mut().fold(false, |changed, item| repoint(item, dirs) | changed),
+        Value::String(text) => match outside(Path::new(text.as_str()), dirs) {
+            Some(real) => { *text = real.to_string_lossy().into_owned(); true }
+            None => false,
+        },
+        _ => false,
+    }
+}
+
+/// Resolve só a primeira pasta abaixo da conta (o link `plugins`): a versão que o caminho cita pode já
+/// não existir, e o caminho real ainda é o do compartilhado.
+fn outside(path: &Path, dirs: &[PathBuf]) -> Option<PathBuf> {
+    let rest = dirs.iter().find_map(|dir| path.strip_prefix(dir).ok().map(|rest| (dir, rest)));
+    let (dir, rest) = rest?;
+    let mut parts = rest.components();
+    let first = dir.join(parts.next()?);
+    let real = PathBuf::from(super::catalog::displayed(&fs::canonicalize(&first).ok()?));
+    (!dirs.iter().any(|dir| real.starts_with(dir))).then(|| real.join(parts.as_path()))
+}
+
 /// O preparo da pasta pendente da criação: `~/.claude` garantido, o `.claude.json` do principal sem o
 /// `oauthAccount` (as permissões e os MCP ficam, o login não), `projects/` e a reconciliação sob a
 /// trava da pendência, o único arquivo que existe antes da publicação.
