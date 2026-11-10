@@ -186,6 +186,7 @@ impl Reopening {
     fn begin(name: &str) -> Option<Self> {
         REOPENING.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(name.to_owned()).then(|| Self(name.to_owned()))
     }
+    #[cfg(test)]
     fn active(name: &str) -> bool { REOPENING.lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains(name) }
 }
 
@@ -206,10 +207,10 @@ pub async fn dismiss_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): C
         return answer(&headers, StatusCode::NOT_FOUND, detail_body("erro_sessao_nao_caida", "a sessão não está caída", json!({"name": name})));
     }
     // Reabrindo (por outro aparelho): dispensar agora tiraria o registro, e a reabertura que falhar não teria
-    // mais como tentar de novo pela lista.
-    if Reopening::active(&name) {
+    // mais como tentar de novo pela lista. Segurar a mesma marca impede a reabertura de começar no meio.
+    let Some(_hold) = Reopening::begin(&name) else {
         return answer(&headers, StatusCode::CONFLICT, detail_body("erro_reabrindo", "a sessão está reabrindo", json!({"name": name})));
-    }
+    };
     // O `forget` também tira o nome da fotografia do restore: a dispensada não volta no próximo reboot.
     super::restore::forget(&dirs.home, &name);
     answer(&headers, StatusCode::OK, json!({"ok": true}))
