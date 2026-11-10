@@ -15,9 +15,6 @@ pub type Acker = Box<dyn Fn(Value) + Send + Sync>;
 pub struct Frames {
     /// Textura pintada; trocada só quando o tamanho ou o device mudam.
     shown: Mutex<Option<Arc<SurfaceTexture>>>,
-    /// Pixels do último quadro escrito: refazem a textura depois de perder o device, porque página parada não manda
-    /// quadro novo.
-    last: Mutex<Option<(u32, u32, Vec<u8>)>>,
     slot: Mutex<Slot>,
     wake: Condvar,
     events: async_channel::Sender<Event>,
@@ -56,7 +53,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> { m.lock().unwrap_or_el
 
 impl Frames {
     pub fn new(events: async_channel::Sender<Event>, ack: Acker) -> Arc<Self> {
-        let frames = Arc::new(Frames { shown: Mutex::new(None), last: Mutex::new(None), slot: Mutex::default(), wake: Condvar::new(), events, ack });
+        let frames = Arc::new(Frames { shown: Mutex::new(None), slot: Mutex::default(), wake: Condvar::new(), events, ack });
         let worker = frames.clone();
         if let Err(e) = std::thread::Builder::new().name("webview2-frames".into()).spawn(move || worker.decode_loop()) {
             eprintln!("[pagina] sem thread para os quadros: {e}");
@@ -111,9 +108,7 @@ impl Frames {
     /// quadro, outro tamanho, device perdido): aí um desenho guardado ainda aponta para a antiga.
     pub fn commit(&self) -> bool {
         let Some(frame) = lock(&self.slot).pixels.take() else { return false };
-        let replaced = self.upload(&frame);
-        *lock(&self.last) = Some(frame);
-        replaced
+        self.upload(&frame)
     }
 
     fn upload(&self, (width, height, pixels): &(u32, u32, Vec<u8>)) -> bool {
@@ -141,19 +136,19 @@ impl Frames {
         self.wake.notify_one();
     }
 
-    /// Textura atual, na thread da interface. Feita num device que se perdeu, é refeita com o último quadro.
-    pub fn shown(&self) -> Option<Arc<SurfaceTexture>> {
-        if lock(&self.shown).as_ref().is_some_and(|t| !t.is_current()) {
-            *lock(&self.shown) = None;
-            if let Some(frame) = lock(&self.last).as_ref() { self.upload(frame); }
-        }
-        lock(&self.shown).clone()
+    /// A textura ficou num device que se perdeu? Solta-a e avisa quem pinta, que reinicia o screencast: guardar os
+    /// pixels do último quadro para refazê-la custava um quadro inteiro de memória por página viva.
+    pub fn lost(&self) -> bool {
+        let mut shown = lock(&self.shown);
+        let lost = shown.as_ref().is_some_and(|t| !t.is_current());
+        if lost { *shown = None; }
+        lost
     }
 
-    pub fn clear(&self) {
-        *lock(&self.shown) = None;
-        *lock(&self.last) = None;
-    }
+    /// Textura atual, na thread da interface.
+    pub fn shown(&self) -> Option<Arc<SurfaceTexture>> { lock(&self.shown).clone() }
+
+    pub fn clear(&self) { *lock(&self.shown) = None; }
 
     pub fn close(&self) {
         lock(&self.slot).closed = true;

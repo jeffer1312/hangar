@@ -125,8 +125,12 @@ impl Page {
     pub(super) fn place(&self, view: &wry::WebView, bounds: Bounds<Pixels>, window: &mut Window) {
         let scale = window.scale_factor();
         // Desenhada no dobro da tela e reduzida pela GPU: em 1x o texto da página sai borrado ao lado do texto do app.
+        // Arredondado para cima: em fator inteiro a WebView2 desenha as letras mais nítidas do que no dobro exato
+        // (2,5 numa tela a 125%), mesmo com a redução saindo em razão quebrada.
         let frame_scale = (scale * 2.).ceil();
         let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+        // Device perdido leva a textura, e página parada não manda quadro novo: o screencast recomeça como num resize.
+        if self.frames.lost() { self.placed.set(None); }
         let resized = self.placed.get() != Some((bounds.size, scale));
         let first = !self.visible.replace(true);
         if resized || first {

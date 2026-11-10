@@ -1227,6 +1227,29 @@ Windows usa uma WebView2 estacionada por página, quadros por screencast e entra
   assumiu" (`user_input` em `app/browser.rs`); a WebView2 do modo página é outra e não passa por
   essa pausa.
 
+### Quadro em fator inteiro, e sem guardar o último quadro (10/11/2026)
+
+Medido numa VM Windows (tela 1024×768, WebView2), app em build de desenvolvimento, com a página de
+`desktop-native/tools/page_card_fixture.py` e o rastro de `HANGAR_NATIVE_NAV_TRACE`.
+
+- **O fator do quadro fica `ceil(escala × 2)`.** Foi ensaiado o dobro exato (2,5 numa tela a 125%), que
+  gasta 30% menos pixels: para um cartão de 453,6×240, quadro de 1134×599 em vez de 1361×719. O texto
+  saiu pior. No mesmo recorte de tela (340×115 px, texto de 13 e de 10 px), a variância do laplaciano
+  caiu de 17.540 para 14.038 e a franja de cor nas bordas (média de máx−mín entre R, G e B) subiu de
+  5,59 para 6,51; os mesmos números em duas capturas. Em fator inteiro a WebView2 desenha as letras
+  alinhadas ao pixel do quadro, e isso pesa mais que a redução em razão quebrada (2,4) feita pela GPU.
+  A 100% e 150% os dois dão o mesmo quadro.
+- **O último quadro não fica mais guardado em memória.** Ele só servia para refazer a textura depois
+  de o device se perder. Agora a textura é solta (`Frames::lost`) e o `place` reinicia o screencast,
+  como num resize. Memória privada do processo com a página em tela cheia (quadro de 1816×1120,
+  8,1 MB), seis amostras em uma execução de cada: 79,2 a 80,2 MB antes, 69,6 a 70,6 MB depois. No
+  cartão pequeno (quadro de 716×480, 1,4 MB) a diferença fica dentro do ruído.
+- **O que não foi visto:** a perda do device em si. Nem o atalho que reinicia o driver de vídeo nem
+  desconectar e reconectar a sessão a provocaram nessa VM. Foi visto o estado equivalente: sair da
+  conversa e voltar solta a textura e reinicia o screencast no mesmo tamanho, e o quadro novo chega
+  em 25 ms e é pintado.
+- A altura do quadro vem 1 px menor que a pedida em escala quebrada (719 e 599), nas duas versões.
+
 ## Mensagem esperando mora no painel "Na fila", não na conversa (14/10/2026)
 
 O painel acima do composer (nativo, PWA no celular e app) lista o que espera a vez no Hangar, na
