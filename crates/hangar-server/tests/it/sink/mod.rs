@@ -41,6 +41,8 @@ impl Sink {
     pub fn count(&self, name: &str) -> usize { self.texts(name).len() }
     pub fn total(&self) -> usize { self.read().texts.values().map(Vec::len).sum() }
     pub fn last(&self, name: &str) -> Option<String> { self.texts(name).pop() }
+    /// Todos os recados, `(sessão, texto)`, na ordem de chegada.
+    pub fn order(&self) -> Vec<(String, String)> { self.read().order.clone() }
     /// O último recado que chegou a qualquer sessão.
     pub fn last_any(&self) -> Option<String> { self.read().order.last().map(|(_, text)| text.clone()) }
     /// O ACK das próximas escritas da sessão (`written` por padrão).
@@ -111,7 +113,22 @@ impl Sink {
 /// Registro do runtime com a política falsa que as aberturas pedem e o processo do cano conhecido.
 pub async fn registry() -> RuntimeRegistry {
     RuntimeRegistry::new(policy().await, "secret-test".into(), "instance-test".into())
-        .with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1")))
+        .with_processes(Arc::new(RecipeProcesses("sid-1")))
+}
+
+/// Cano 42 com o `claude` 43 da conversa dada (`--session-id`). Mora aqui para o módulo servir também
+/// à prova de orquestração (`examples/orq_contract`), que o inclui pelo caminho.
+pub struct RecipeProcesses(pub &'static str);
+impl hangar_server::list::procs::ProcessView for RecipeProcesses {
+    fn children(&self,_:Duration)->std::io::Result<Arc<hangar_server::list::procs::ChildrenMap>> {Ok(Arc::new(std::collections::HashMap::from([(42,vec![43])]))) }
+    fn argv(&self,_:i64)->Vec<String> {vec![]}
+    fn cwd(&self,_:i64)->Option<std::path::PathBuf> {Some(std::env::temp_dir())}
+    fn env_var(&self,_:i64,_:&str)->std::io::Result<Option<std::ffi::OsString>> {Ok(None)}
+    fn start_time(&self,_:i64)->Option<f64> {Some(1000.0)}
+    fn recipe(&self,pid:i64)->std::io::Result<hangar_server::list::procs::ProcessRecipe> {
+        let argv=match pid {42=>vec!["hangar-cano".into()],43=>vec!["claude".into(),"--session-id".into(),self.0.into()],_=>return Err(std::io::ErrorKind::NotFound.into())};
+        Ok(hangar_server::list::procs::ProcessRecipe {pid,birth:1000.0,executable:if pid==42 {"/fixture/hangar-cano".into()} else {"/fixture/claude".into()},cwd:std::env::temp_dir(),argv,environ:vec!["HOME=/fixture".into()],cgroup:None})
+    }
 }
 
 pub async fn policy() -> std::net::SocketAddr {

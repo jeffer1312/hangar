@@ -9,6 +9,9 @@ mod consumption;
 mod http;
 #[path = "orq_contract/projection.rs"]
 mod projection;
+// As sessões Claude sem terminal com cano falso dos testes de integração: quem recebe o kick-off.
+#[path = "../tests/it/sink/mod.rs"]
+mod sink;
 use std::{
     collections::BTreeSet,
     io::{self, Read},
