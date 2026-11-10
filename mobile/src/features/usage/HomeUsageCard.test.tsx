@@ -56,6 +56,31 @@ it('Home soma máquinas próprias e dias e modelos únicos sem herdar destino ou
   expect(net.costs).toHaveBeenCalledTimes(2);
 });
 
+it('Home esconde o calendário de atividade até o toque em Ver atividade', async () => {
+  await render();
+  const title = m.home_usage_activity({ start: '01/10/2026', end: '01/10/2026' });
+  expect(node.textContent).not.toContain(title);
+  expect(node.textContent).not.toContain(m.home_usage_method());
+  expect(metric(m.home_usage_sessions())).toBe(`${m.home_usage_sessions()}: 2`);
+  await click(m.home_usage_show_activity());
+  // A escolha fica no módulo: o teste fecha o calendário mesmo se falhar no meio.
+  try {
+    expect(node.textContent).toContain(title);
+    expect(node.textContent).toContain(m.home_usage_method());
+  } finally {
+    await click(m.home_usage_hide_activity());
+  }
+  expect(node.textContent).not.toContain(title);
+});
+
+it('Home mantém o aviso de custo parcial com o calendário fechado', async () => {
+  await act(async () => useServers.setState({ servers: [{ ...a, token: 'no-rate' }] }));
+  net.costs.mockImplementation((_server: Server, period: string) => Promise.resolve({ ...report(period), sem_tarifa: ['model-x'] }));
+  await render();
+  expect(node.textContent).toContain(m.home_usage_partial_short());
+  expect(node.textContent).not.toContain(m.home_usage_partial());
+});
+
 it('Home conserva cache ao remontar e invalida credencial, endereço e conjunto', async () => {
   await render();
   await act(async () => root.render(null));
