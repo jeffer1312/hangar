@@ -535,11 +535,15 @@ impl RuntimeRegistry {
     pub fn bind_watcher(&self,watcher:Arc<super::codex_terminal::Watcher>) { let _ = self.watcher.set(watcher); self.watcher_pending.send_replace(false); }
     /// A subida vai ligar a vigia: até lá, a escrita sem ator espera por ela (no máximo `WATCHER_WAIT`).
     pub fn expect_watcher(&self) { if self.watcher.get().is_none() { self.watcher_pending.send_replace(true); } }
-    async fn wait_watcher(&self) -> Option<Arc<super::codex_terminal::Watcher>> {
+    /// `Ok(None)`: a subida não liga vigia. `Err`: ela não ligou no teto; a escrita sai com o código, sem
+    /// virar sessão sem dono.
+    async fn wait_watcher(&self) -> Result<Option<Arc<super::codex_terminal::Watcher>>,RuntimeError> {
         let mut pending = self.watcher_pending.subscribe();
         // Teto: subida que parou no meio nunca segura a escrita para sempre.
-        let _ = tokio::time::timeout(WATCHER_WAIT, pending.wait_for(|pending| !pending)).await;
-        self.watcher.get().cloned()
+        if tokio::time::timeout(WATCHER_WAIT, pending.wait_for(|pending| !pending)).await.is_err() {
+            return Err(RuntimeError::new("runtime_watcher","a vigia do Codex com terminal não ligou a tempo; tente de novo em instantes"));
+        }
+        Ok(self.watcher.get().cloned())
     }
     pub fn codex_wake(&self) -> Arc<tokio::sync::Notify> { self.codex_wake.clone() }
     /// Escrita para uma sessão sem ator: o Claude sem terminal abre aqui (subindo o processo parado, como o
@@ -558,7 +562,7 @@ impl RuntimeRegistry {
             Err(_)=>return Some(Err(RuntimeError::new("session_transfer_busy","a sessão está trocando de agente"))),
         };
         if let Some(opened) = self.open_claude_headless(name,true).await { return Some(opened); }
-        let watcher = self.wait_watcher().await?;
+        let watcher = match self.wait_watcher().await { Ok(found) => found?, Err(error) => return Some(Err(error)) };
         if let Some(adopted) = watcher.adopt_now(self,name).await { return Some(adopted); }
         watcher.adopt_claude(self,name).await
     }

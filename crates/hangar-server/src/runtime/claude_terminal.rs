@@ -158,6 +158,12 @@ impl Watcher {
             Err(_) => return None,
         };
         let pane = panes.iter().filter(|p| p.session == name).max_by_key(|p| p.active)?.clone();
+        let mut panes = panes;
+        // `#{CP_PROVIDER}` cai no ambiente global quando a sessão não tem o dela: o tmux que nasceu de dentro
+        // de um pane do Hangar o herda, e todo shell pareceria um Claude nascendo. Só vale o da sessão.
+        if panes.iter().any(|p| p.session == name && p.provider.is_some()) && !self.session_provider(name).await {
+            for p in panes.iter_mut().filter(|p| p.session == name) { p.provider = None; }
+        }
         let claude_base = registry.codex_environment().claude_base;
         let found = {
             let (panes, name, base) = (panes.clone(), name.to_owned(), claude_base.clone());
@@ -300,6 +306,15 @@ impl Watcher {
     }
 
     /// Saída de um comando do multiplexador que deu certo.
+    /// A sessão tem `CP_PROVIDER` próprio? `false` só com a resposta "variável desconhecida"; sem resposta do
+    /// multiplexador fica a marca lida da lista.
+    async fn session_provider(&self, name: &str) -> bool {
+        let mut command = crate::terminal_input::child_command(&self.cfg.mux_program);
+        command.args(["show-environment", "-t", &session_target(name), "CP_PROVIDER"]).stdin(std::process::Stdio::null()).kill_on_drop(true);
+        let Ok(Ok(out)) = tokio::time::timeout(Duration::from_secs(5), command.output()).await else { return true };
+        out.status.success() || !String::from_utf8_lossy(&out.stderr).contains("unknown variable")
+    }
+
     pub(super) async fn mux_text(&self, args: &[&str]) -> Option<String> {
         let mut command = crate::terminal_input::child_command(&self.cfg.mux_program);
         command.args(args).stdin(std::process::Stdio::null()).kill_on_drop(true);

@@ -539,7 +539,13 @@ pub async fn broadcast(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conne
                 },
             }
         } else {
-            super::unowned::broadcast_result(super::unowned::send(&st, name, &text).await)
+            // A mesma porta do `/input`: no meio de uma troca de agente o nome recusa, nada é digitado.
+            let open = match &runtime {
+                Some(runtime) => runtime.ingress().enter(name, st.write_gate_wait).await.map(drop).is_ok(),
+                None => true,
+            };
+            if open { super::unowned::broadcast_result(super::unowned::send(&st, name, &text).await) }
+            else { json!({"ok": false, "error": busy_body()["detail"].clone(), "delivered": false}) }
         };
         results.insert(name.clone(), result);
     }

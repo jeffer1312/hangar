@@ -94,12 +94,12 @@ pub(crate) async fn deferring(st: Arc<AppState>, handler: impl std::future::Futu
     }
     let (mut parts, body) = resp.into_parts();
     let Ok(bytes) = to_bytes(body, MAX_REPLY).await else {
-        report_failed(&st, &mut Value::Null, failed, "grupos.entrega_adiada_falhou", &[]);
+        report_failed(&st, &mut Value::Null, failed, "rust.groups_deferred_failed", &[]);
         return crate::session_write::json_response(StatusCode::INTERNAL_SERVER_ERROR, crate::session_write::detail_body(
             "erro_grupo_indisponivel", "os grupos estão indisponíveis agora", json!({"detalhe": "groups_reply_unreadable"})));
     };
     let mut value = serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null);
-    report_failed(&st, &mut value, failed, "grupos.entrega_adiada_falhou", &["failed", "pulados"]);
+    report_failed(&st, &mut value, failed, "rust.groups_deferred_failed", &["failed", "pulados"]);
     if !value.is_object() {
         return Response::from_parts(parts, Body::from(bytes));
     }
@@ -126,6 +126,8 @@ pub(crate) async fn deliver_deferred(st: &Arc<AppState>, deliveries: Vec<Value>,
             let mut failed = Vec::new();
             for (text, steer) in items {
                 let (status, reply) = crate::session_write::input::write_input(&st, &owned, &text, steer).await;
+                // Sessão sem dono nunca responde 200 sem entregar (o Codex cru fora da caixa vazia é 409): 200 com
+                // `delivered: false` aqui é a fila de um ator do Rust, que entrega sozinho.
                 if status.is_success() { continue; }
                 let error = reply.get("detail").filter(|d| !d.is_null()).cloned().unwrap_or_else(|| json!({"code": "erro_envio_falhou_desconhecida", "params": {}, "msg": "falha desconhecida no envio"}));
                 failed.push(json!({"sessao": owned, "erro": error}));
@@ -162,7 +164,7 @@ fn report_failed(st: &AppState, body: &mut Value, failed: Vec<Value>, event: &'s
         if !warning["params"]["avisos"].is_array() { warning["params"]["avisos"] = json!([]); }
         if let Some(avisos) = warning["params"]["avisos"].as_array_mut() { avisos.extend(failed); }
     } else {
-        st.diag.report_with("grupos.falha_sem_corpo", "", "deferred_not_delivered", "recado adiado sem corpo onde caber", fields);
+        st.diag.report_with("rust.groups_deferred_without_body", "", "deferred_not_delivered", "recado adiado sem corpo onde caber", fields);
     }
 }
 
@@ -298,7 +300,7 @@ async fn execute(
                 .scope(ctx.clone(), route(st.clone(), &method, &name, &path, body))
                 .await?;
             let failed = deliver_deferred(&st, ctx.take_deliveries(), None).await;
-            report_failed(&st, &mut out["body"], failed, "grupos.entrega_pela_ponte", &[]);
+            report_failed(&st, &mut out["body"], failed, "rust.groups_bridge_delivery_failed", &[]);
             out["post"] = json!([]);
             Ok(out)
         }
