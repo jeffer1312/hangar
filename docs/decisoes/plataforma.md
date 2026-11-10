@@ -851,6 +851,22 @@ Python não pagava isso porque guardava a lista por 1 s. O usuário aceitou esse
 vida e identidade da sessão conferidas na hora, sem guarda por tempo. Cortar mais só lendo os
 processos da sessão pedida, mexendo na descoberta que a lista também usa.
 
+**Citações sem reler o transcript inteiro (10/11/2026).** Cada pedido de `/file`, `/file/text` e
+`files/resolver` relia a conversa do começo ao fim para saber se o caminho foi citado. O
+`citations.rs` guarda, por transcript e por pergunta, até onde ela leu e o que achou, e lê só o que
+entrou depois. Relê do começo quando o arquivo é outro (dispositivo e inode no Unix), quando o
+tamanho ficou menor que o ponto guardado ou quando os 64 bytes antes do ponto mudaram. Linha final
+sem `\n` entra na resposta do pedido e não avança o ponto. Tetos: 64 transcripts e 512 perguntas por
+transcript; ao encher, esvazia. A resposta é a da leitura completa: o guardado só diz "citado" para
+o que esteve naquele arquivo.
+
+Medido em release, no transcript de 481 MB desta máquina, com o cache de página quente: `cwds` de
+um caminho levava 248–255 ms; agora 249–262 ms na primeira vez e 0,0 ms repetida. `elsewhere`
+levava 201–220 ms; repetida, 0,2–0,3 ms. Não resolve: o primeiro pedido de cada caminho novo ainda
+lê o arquivo inteiro, então dez miniaturas de caminhos diferentes custam dez leituras na primeira
+vez. No Windows não há identidade de arquivo nesse crate: só o tamanho e os 64 bytes detectam a
+troca.
+
 ## Chave do Jev: no runtime_config, e na sessão só por escolha da abertura
 
 18/09/2026. O Jev (typesafe.ai) decide a navegação do `hangar-preview objetivo`, e a chave estava

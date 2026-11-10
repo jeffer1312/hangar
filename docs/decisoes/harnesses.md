@@ -1055,6 +1055,44 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   uma vez por aparição (`rust.trust_dialog_shown`, código `trust_flag_present` ou
   `trust_flag_absent`) e o log guarda a entrada, a idade do arquivo e a trava. Ver
   [diálogo de confiança com a pasta confiada](#diálogo-de-confiança-com-a-pasta-já-confiada-23102026).
+- **Ator sem terminal (Claude/Codex): a vista que só mudou em medição espera até 2 s pelo disco.**
+  Medição é `usage`, `cost`, `idle_compact_tokens`, `token_usage` e `rate_limits`. Mudança durável
+  grava na hora e leva a medição; a parada grava o que o disco não tem. Quem lê `usage`/`cost` do
+  disco (a reabertura) pode ver a medição da mensagem anterior depois de queda forçada. Quadro
+  enviado e prompt preparado não ficam guardados depois do envio e do desfecho: nada os relê. Ver
+  [gravação da vista e observação sem trabalho repetido](#gravação-da-vista-e-observação-sem-trabalho-repetido-10112026).
+- **Pi/omp/Kimi: o retrato só é publicado quando muda, e a observação aceita o mapa de processos
+  guardado só para confirmar presença.** A rodada de observação aceita o mapa com idade até
+  `CHILDREN_TTL` (só no Linux); ausência vem sempre de varredura nova. Escrita, drenagem e guarda de
+  tecla usam prova de idade zero. Ver
+  [gravação da vista e observação sem trabalho repetido](#gravação-da-vista-e-observação-sem-trabalho-repetido-10112026).
+
+## Gravação da vista e observação sem trabalho repetido (10/11/2026)
+
+Uma leitura de código do servidor parado achou trabalho feito sem mudança nos dois atores.
+
+No ator sem terminal, cada volta do laço montava a vista inteira duas vezes só para ler
+`conversation` e `deliverable`, e a vista leva o catálogo de comandos (141 KB e 340 itens num estado
+real). Cada mensagem do agente muda o `usage` e gravava a vista com fsync. O quadro de cada escrita
+(com a imagem em base64) e o prompt preparado ficavam na memória até a sessão fechar: cerca de
+2,7 MB por imagem de 1 MB.
+
+No ator de Pi, omp e Kimi, a sessão parada republicava o mesmo retrato duas vezes por rodada e
+relia todos os processos a cada rodada de 500 ms.
+
+Contagens pelo código, não medida de processo vivo:
+
+| | Antes | Depois |
+|---|---|---|
+| Montagens da vista por volta do laço | 2 | 0 |
+| Gravações da vista | uma por mensagem do agente | no máximo uma a cada 2 s quando só mudou medição |
+| Publicações do retrato por rodada parada | 2 | 0 |
+| Varreduras de processos na observação (Linux) | uma por rodada por sessão | no máximo uma a cada 3 s enquanto o mapa guardado confirma o agente; escrita, drenagem, guarda de tecla e ausência do agente varrem sempre |
+
+Não resolve: o `tmux display-message` por rodada de Pi/omp/Kimi continua, porque tirá-lo muda a
+captura que o Claude também usa. Um agente vivo que saiu do pane segue "no pane" por até 3 s para
+quem observa. Falha de disco na gravação adiada da medição e na da parada só vai ao log: a sessão
+não entra em erro por uma medição, e a próxima gravação da vista a leva.
 
 ## Ator ocupado não é doente (09/11/2026)
 

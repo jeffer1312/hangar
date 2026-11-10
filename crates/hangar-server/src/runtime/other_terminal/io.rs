@@ -36,7 +36,8 @@ impl ProcessOtherIo {
         if !output.success {return Err(failed("other_terminal_delivery_unconfirmed"));}
         Ok(())
     }
-    async fn prove_inner(&self,target:&OtherTarget)->Result<bool,RuntimeError> {
+    async fn prove_inner(&self,target:&OtherTarget)->Result<bool,RuntimeError> {self.prove_aged(target,Duration::ZERO).await}
+    async fn prove_aged(&self,target:&OtherTarget,max_age:Duration)->Result<bool,RuntimeError> {
         let read=self.raw(target,&["display-message","-p","-t",&target.pane_address,"#{session_name}\t#{pane_id}\t#{session_created}\t#{pane_pid}"]).await?;
         let text=std::str::from_utf8(&read).map_err(|_|failed("other_terminal_pane_unreadable"))?;
         let fields:Vec<_>=text.trim_end().split('\t').collect();
@@ -46,33 +47,38 @@ impl ProcessOtherIo {
         let shell=fields[3].parse::<i64>().map_err(|_|failed("other_terminal_pane_unreadable"))?;
         if shell!=target.pane_pid {return Ok(false);}
         let (processes,target)=(self.processes.clone(),target.clone());
-        tokio::task::spawn_blocking(move || {
-            let argv=match processes.argv_checked(target.agent_pid) {
-                Ok(argv)=>argv,
-                Err(error) if crate::list::procs::vanished(&error)=>return Ok(false),
-                Err(_)=>return Err(failed("other_terminal_process_unreadable")),
-            };
-            if argv.is_empty() {return Ok(false);}
-            let birth=processes.start_time(target.agent_pid).ok_or_else(||failed("other_terminal_process_unreadable"))?;
-            if !crate::terminal_facts::same_birth(birth,target.agent_birth) || crate::list::discover::provider_from_argv(&argv)!=Some(target.provider.as_str()) {return Ok(false);}
-            if !target.binding.conversation.is_empty() {
-                let found=locate_source(&target,&*processes).ok_or_else(||failed("other_terminal_conversation_unavailable"))?;
-                if found!=target.transcript {return Err(failed("other_terminal_conversation_changed"));}
-            }
-            if shell==target.agent_pid {return Ok(true);}
-            let children=processes.children(Duration::ZERO).map_err(|_|failed("other_terminal_process_unreadable"))?;
-            let mut stack=vec![shell];let mut seen=std::collections::HashSet::new();
-            while let Some(pid)=stack.pop() {
-                if !seen.insert(pid) {continue;}
-                if pid==target.agent_pid {return Ok(true);}
-                if let Some(children)=children.get(&pid) {stack.extend(children.iter().copied());}
-            }
-            Ok(false)
-        }).await.map_err(|_|failed("other_terminal_process_worker"))?
+        tokio::task::spawn_blocking(move || agent_in_pane(&*processes,&target,shell,max_age))
+            .await.map_err(|_|failed("other_terminal_process_worker"))?
     }
+}
+/// Idade do mapa de processos que a observação aceita. Fora do Linux o retrato guardado também
+/// atrasa argv e nascimento (`SysInfo`), e lá a observação segue lendo de novo.
+const OBSERVED_AGE:Duration=if cfg!(target_os="linux") {crate::list::procs::CHILDREN_TTL} else {Duration::ZERO};
+
+/// O agente desta vida segue vivo, com a conversa dela, e dentro do pane de `shell`?
+fn agent_in_pane(processes:&dyn crate::list::procs::ProcessView,target:&OtherTarget,shell:i64,max_age:Duration)->Result<bool,RuntimeError> {
+    let argv=match processes.argv_checked(target.agent_pid) {
+        Ok(argv)=>argv,
+        Err(error) if crate::list::procs::vanished(&error)=>return Ok(false),
+        Err(_)=>return Err(failed("other_terminal_process_unreadable")),
+    };
+    if argv.is_empty() {return Ok(false);}
+    let birth=processes.start_time(target.agent_pid).ok_or_else(||failed("other_terminal_process_unreadable"))?;
+    if !crate::terminal_facts::same_birth(birth,target.agent_birth) || crate::list::discover::provider_from_argv(&argv)!=Some(target.provider.as_str()) {return Ok(false);}
+    if !target.binding.conversation.is_empty() {
+        let found=locate_source(target,processes).ok_or_else(||failed("other_terminal_conversation_unavailable"))?;
+        if found!=target.transcript {return Err(failed("other_terminal_conversation_changed"));}
+    }
+    if shell==target.agent_pid {return Ok(true);}
+    let children=|max_age|processes.children(max_age).map_err(|_|failed("other_terminal_process_unreadable"));
+    // O mapa guardado só confirma. A ausência sai da varredura nova: ele pode ser de antes de o agente nascer.
+    let descends=crate::list::bridge::descends;
+    if !max_age.is_zero() && descends(target.agent_pid,shell,&*children(max_age)?) {return Ok(true);}
+    Ok(descends(target.agent_pid,shell,&*children(Duration::ZERO)?))
 }
 impl OtherIo for ProcessOtherIo {
     fn prove<'a>(&'a self,target:&'a OtherTarget)->BoxFuture<'a,Result<bool,RuntimeError>> {Box::pin(self.prove_inner(target))}
+    fn prove_observed<'a>(&'a self,target:&'a OtherTarget)->BoxFuture<'a,Result<bool,RuntimeError>> {Box::pin(self.prove_aged(target,OBSERVED_AGE))}
     fn capture<'a>(&'a self)->BoxFuture<'a,Result<OtherFrame,RuntimeError>> {Box::pin(async move {
         let styled=if self.target.binding.windows {
             let output=self.raw(&self.target,&["capture-pane","-p","-e","-t",&self.target.pane_address,"-S","-200"]).await?;
@@ -158,5 +164,66 @@ impl crate::terminal_input::TerminalIo for GuardedIo {
     }
     fn socket<'a>(&'a self,descriptor:&'a crate::terminal_input::NativeMessage,envelope:Vec<u8>)->crate::terminal_input::IoFuture<'a,crate::terminal_input::WriteOutcome> {
         Box::pin(async move {self.check().await?;self.source.io.socket(descriptor,envelope).await})
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::list::procs::{ChildrenMap,ProcessView};
+    use std::sync::atomic::{AtomicBool,AtomicUsize,Ordering};
+
+    /// `kept` é o mapa guardado; `scanned`, o que a varredura nova acha.
+    struct Tree {kept:ChildrenMap,scanned:ChildrenMap,scans:AtomicUsize,alive:AtomicBool}
+    impl Tree {
+        fn new(kept:&[(i64,i64)],scanned:&[(i64,i64)])->Self {
+            let map=|pairs:&[(i64,i64)]|pairs.iter().map(|(parent,child)|(*parent,vec![*child])).collect();
+            Self {kept:map(kept),scanned:map(scanned),scans:AtomicUsize::new(0),alive:AtomicBool::new(true)}
+        }
+    }
+    impl ProcessView for Tree {
+        fn children(&self,max_age:Duration)->std::io::Result<Arc<ChildrenMap>> {
+            if !max_age.is_zero() {return Ok(Arc::new(self.kept.clone()));}
+            self.scans.fetch_add(1,Ordering::SeqCst);
+            Ok(Arc::new(self.scanned.clone()))
+        }
+        fn argv_checked(&self,_:i64)->std::io::Result<Vec<String>> {
+            if self.alive.load(Ordering::SeqCst) {Ok(vec!["pi".into()])} else {Err(std::io::ErrorKind::NotFound.into())}
+        }
+        fn cwd(&self,_:i64)->Option<std::path::PathBuf> {None}
+        fn env_var(&self,_:i64,_:&str)->std::io::Result<Option<std::ffi::OsString>> {Ok(None)}
+        fn start_time(&self,_:i64)->Option<f64> {Some(100.5)}
+    }
+    fn target()->OtherTarget {
+        let mut target=super::super::tests::target();
+        (target.pane_pid,target.agent_pid,target.binding.conversation)=(100,123,String::new());
+        target
+    }
+    const AGE:Duration=Duration::from_secs(3);
+
+    #[test]
+    fn observation_reuses_the_kept_process_map_and_only_a_new_scan_says_the_agent_left() {
+        let target=target();
+        let kept=Tree::new(&[(100,123)],&[(100,123)]);
+        assert!(agent_in_pane(&kept,&target,100,AGE).unwrap());
+        assert_eq!(kept.scans.load(Ordering::SeqCst),0,"com o agente no mapa guardado a observação varreu os processos de novo");
+        // Mapa guardado de antes de o agente nascer: sessão viva não pode parecer morta.
+        let older=Tree::new(&[],&[(100,123)]);
+        assert!(agent_in_pane(&older,&target,100,AGE).unwrap());
+        assert_eq!(older.scans.load(Ordering::SeqCst),1);
+        let left=Tree::new(&[],&[]);
+        assert!(!agent_in_pane(&left,&target,100,AGE).unwrap());
+    }
+
+    #[test]
+    fn agent_death_is_seen_at_once_and_the_writer_proof_never_trusts_the_kept_map() {
+        let target=target();
+        let dead=Tree::new(&[(100,123)],&[(100,123)]);
+        dead.alive.store(false,Ordering::SeqCst);
+        assert!(!agent_in_pane(&dead,&target,100,AGE).unwrap(),"agente morto seguiu vivo pelo mapa guardado");
+        // Saiu do pane depois do mapa guardado: quem escreve (idade zero) vê na hora.
+        let moved=Tree::new(&[(100,123)],&[]);
+        assert!(!agent_in_pane(&moved,&target,100,Duration::ZERO).unwrap());
+        assert_eq!(moved.scans.load(Ordering::SeqCst),1);
     }
 }

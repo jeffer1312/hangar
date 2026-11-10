@@ -148,3 +148,45 @@ async fn idle_kimi_only_writes_the_queue_when_an_entry_is_overdue() {
     let state = queue.snapshot().await.unwrap();
     assert_eq!(state.rows[0]["desistiu"], true, "a vencida deixou de ser desistida");
 }
+#[tokio::test]
+async fn confirm_republishes_the_snapshot_only_when_the_queue_changed() {
+    let root = tempfile::tempdir().unwrap();
+    let mut target = tests::target();
+    target.transcript = root.path().join("conversation.jsonl");
+    std::fs::write(&target.transcript, b"").unwrap();
+    let store = super::super::queue::Store::open(
+        &root.path().join("state.json"),
+        &root.path().join("queue"),
+        super::super::queue::State::new(&target.key, 1, &target.name, vec![]),
+    )
+    .unwrap();
+    let queue = Arc::new(QueueActor::start(
+        store,
+        super::super::queue::acquire_lease(&root.path().join("state.lock")).unwrap(),
+    ));
+    let receipt = Arc::new(std::sync::Mutex::new(super::super::receipt::ReceiptIndex::new(
+        target.provider.as_str(),
+        &target.binding.conversation,
+    )));
+    let (snapshot, mut seen) = tokio::sync::watch::channel(snapshot_value(&target, &[], None));
+    confirm(&target, &queue, &receipt, &snapshot).await.unwrap();
+    assert!(!seen.has_changed().unwrap(), "fila igual republicou o retrato");
+    queue
+        .exec(
+            1,
+            "append",
+            clock(),
+            Action::Append {
+                text: "continuar".into(),
+                delivered: false,
+                ts: None,
+                pre_transcript: false,
+                entry_id: Some("entry".into()),
+            },
+        )
+        .await
+        .unwrap();
+    confirm(&target, &queue, &receipt, &snapshot).await.unwrap();
+    assert!(seen.has_changed().unwrap());
+    assert_eq!(seen.borrow_and_update()["queue"][0]["id"], "entry");
+}
