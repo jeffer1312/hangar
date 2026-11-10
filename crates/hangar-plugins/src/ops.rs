@@ -18,6 +18,8 @@ use crate::disk::BUILTIN;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginsError {
     NotFound(String),
+    /// Instalar algo que o catálogo do marketplace não tem mais.
+    NotInMarketplace(String),
     UnknownMarketplace(String),
     BuiltinLocked,
     CliMissing,
@@ -52,6 +54,7 @@ impl PluginsError {
     pub fn code(&self) -> &'static str {
         match self {
             Self::NotFound(_) => "plugins_not_found",
+            Self::NotInMarketplace(_) => "plugins_not_in_marketplace",
             Self::UnknownMarketplace(_) => "plugins_unknown_marketplace",
             Self::BuiltinLocked => "plugins_builtin_locked",
             Self::CliMissing => "plugins_cli_missing",
@@ -63,7 +66,7 @@ impl PluginsError {
 
     pub fn message(&self) -> Option<&str> {
         match self {
-            Self::NotFound(text) | Self::UnknownMarketplace(text) | Self::CliFailed(text) | Self::NeedsReview(text) => {
+            Self::NotFound(text) | Self::NotInMarketplace(text) | Self::UnknownMarketplace(text) | Self::CliFailed(text) | Self::NeedsReview(text) => {
                 Some(text)
             }
             Self::BuiltinLocked | Self::CliMissing | Self::CliTimeout => None,
@@ -133,9 +136,10 @@ impl<R: CliRunner> Plugins<R> {
         if output.success {
             return Ok(details::parse(id, &output.stdout));
         }
-        // `details` não tem `--json`: o "não instalado" só aparece no texto.
+        // `details` não tem `--json`: o "não instalado" só aparece no texto, nesta frase.
         let text = failure_text(&output);
-        Err(if text.contains("not found") { PluginsError::NotFound(text) } else { PluginsError::CliFailed(text) })
+        let missing = format!("Plugin \"{}\" not found. Run `claude plugin list`", id.as_str());
+        Err(if text.contains(&missing) { PluginsError::NotFound(text) } else { PluginsError::CliFailed(text) })
     }
 
     /// # Errors
@@ -258,7 +262,10 @@ fn operation_result(output: &CliOutput) -> Result<OperationResult, PluginsError>
             new_version: text(&line, "newVersion"),
         });
     }
+    let command = line.get("command").and_then(Value::as_str);
     Err(match line.get("failureCode").and_then(Value::as_str) {
+        // No `install` o `not_found` é o catálogo do marketplace, não a instalação.
+        Some("not_found") if command == Some("install") => PluginsError::NotInMarketplace(message),
         Some("not_found" | "not_installed" | "not_installed_at_scope") => PluginsError::NotFound(message),
         Some("not_configured") => PluginsError::UnknownMarketplace(message),
         _ => PluginsError::CliFailed(message),
@@ -295,7 +302,7 @@ mod tests {
 
     use super::*;
 
-    /// Saídas reais da CLI 2.1.319 (pasta de config descartável, 09/11/2026).
+    /// Saídas reais da CLI, numa pasta de config descartável.
     const INSTALL_OK: &str = r#"{"command":"install","outcome":"ok","plugin":"caveman@caveman","pluginId":"caveman@caveman","scope":"user","message":"Successfully installed plugin: caveman@caveman (scope: user)"}"#;
     const UPDATE_UP_TO_DATE: &str = r#"{"command":"update","outcome":"ok","plugin":"caveman@caveman","pluginId":"caveman@caveman","scope":"user","message":"caveman is already at the latest version (4.1.0).","updateOutcome":"up_to_date","oldVersion":"4.1.0","newVersion":"4.1.0"}"#;
     const UPDATE_UPDATED: &str = r#"{"command":"update","outcome":"ok","plugin":"caveman@caveman","pluginId":"caveman@caveman","scope":"user","message":"Plugin \"caveman\" updated from 1.0.0 to 1.1.0","updateOutcome":"updated","oldVersion":"1.0.0","newVersion":"1.1.0"}"#;
@@ -306,7 +313,7 @@ mod tests {
     const MARKETPLACE_UPDATE_OK: &str = r#"{"command":"marketplace-update","outcome":"ok","marketplace":"caveman","message":"Refreshing marketplace cache (timeout: 120s)…\nSuccessfully updated marketplace: caveman"}"#;
     const MARKETPLACE_REMOVE_OK: &str = r#"{"command":"marketplace-remove","outcome":"ok","marketplace":"caveman","message":"Successfully removed marketplace: caveman"}"#;
     const MARKETPLACE_REMOVE_MISSING: &str = r#"{"command":"marketplace-remove","marketplace":"caveman","outcome":"failed","message":"Marketplace 'caveman' not found","failureCode":"not_configured"}"#;
-    /// Forma tirada do `mrt`/`sMo` do pacote 2.1.319; não reproduzida (precisa de fonte `command`).
+    /// Forma tirada do pacote da CLI; não reproduzida (precisa de fonte `command`).
     const INSTALL_SHOWN_COMMAND: &str = r#"{"command":"install","outcome":"failed","plugin":"x@y","scope":"user","message":"needs review","shownCommand":{"kind":"command_source","pluginId":"x@y","command":"npx -y gerar-plugin","mode":"build","catalogRevision":"r1","sha256":"abc"}}"#;
     const LIST: &str = r#"[
   {"id": "caveman@caveman", "version": "4.1.0", "scope": "user", "enabled": true,
@@ -427,15 +434,15 @@ mod tests {
     }
 
     #[test]
-    fn failed_not_found_and_not_installed_are_not_found() {
+    fn install_not_found_is_not_in_marketplace_and_not_installed_is_not_found() {
         let plugins = plugins(vec![
             out(false, INSTALL_NOT_FOUND, "✘ Failed to install plugin \"comver@teste-mkt\": Plugin \"comver\" not found"),
             out(false, UNINSTALL_NOT_INSTALLED, "✘ Failed to uninstall plugin"),
         ]);
         let missing = PluginId::parse("comver@teste-mkt").expect("id");
         let error = block_on(plugins.install(&missing)).expect_err("not_found");
-        assert_eq!(error, PluginsError::NotFound("Plugin \"comver\" not found in marketplace \"teste-mkt\".".into()));
-        assert_eq!(error.code(), "plugins_not_found");
+        assert_eq!(error, PluginsError::NotInMarketplace("Plugin \"comver\" not found in marketplace \"teste-mkt\".".into()));
+        assert_eq!(error.code(), "plugins_not_in_marketplace");
         let error = block_on(plugins.uninstall(&caveman())).expect_err("not_installed");
         assert_eq!(error.code(), "plugins_not_found");
     }
@@ -573,11 +580,19 @@ mod tests {
     #[test]
     fn details_runs_cli_and_maps_not_found() {
         let not_found = "Plugin \"nada@caveman\" not found. Run `claude plugin list` to see installed plugins, or pass --plugin-dir <path> to load one from disk.\n";
-        let plugins = plugins(vec![out(true, "caveman 4.1.0\n  Skills (23)  a\n  Always-on:   ~1,991 tok\n", ""), out(false, not_found, "")]);
+        let plugins = plugins(vec![
+            out(true, "caveman 4.1.0\n  Skills (23)  a\n  Always-on:   ~1,991 tok\n", ""),
+            out(false, not_found, ""),
+            out(false, "", "/usr/bin/env: node: not found"),
+        ]);
         let details = block_on(plugins.details(&caveman())).expect("detalhe");
         assert_eq!((details.inventory.skills, details.always_on_tokens), (Some(23), Some(1991)));
         let missing = PluginId::parse("nada@caveman").expect("id");
         assert_eq!(block_on(plugins.details(&missing)).expect_err("ausente").code(), "plugins_not_found");
+        assert_eq!(
+            block_on(plugins.details(&caveman())),
+            Err(PluginsError::CliFailed("/usr/bin/env: node: not found".into()))
+        );
         assert_eq!(calls(&plugins)[0], (argv(&["plugin", "details", "--", "caveman@caveman"]), SHORT));
     }
 }

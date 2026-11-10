@@ -18,8 +18,8 @@ type Tab = 'installed' | 'discover' | 'marketplaces';
 type Filter = 'all' | 'on' | 'off' | 'up';
 
 const matches = (q: string, ...parts: Array<string | null | undefined>) => !q || fold(parts.filter(Boolean).join(' ')).includes(q);
-// O servidor confere de novo; aqui só barra o formato antes de mandar.
-const SOURCE = /^[\w.-]+\/[\w.-]+$|^https:\/\/\S+$|^\/.+$/;
+// O servidor confere de novo; aqui só barra o formato antes de mandar, como o `source_ok` do nativo.
+const SOURCE = /^(?!-)(?:[\w.-]+\/[\w.-]+|https:\/\/.*|\/.*|[A-Za-z]:\\.*)$/;
 
 export default function Plugins() {
   const server = useServers((s) => s.active());

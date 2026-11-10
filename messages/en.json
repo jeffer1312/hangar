@@ -10255,6 +10255,7 @@
   "plugins_invalid_name": "Invalid marketplace name.",
   "plugins_invalid_source": "Invalid source: use a GitHub owner/repo, an https:// URL or a folder that exists on this machine.",
   "plugins_not_found": "That plugin is not installed.",
+  "plugins_not_in_marketplace": "This plugin is no longer in the marketplace.",
   "plugins_unknown_marketplace": "That marketplace does not exist on this machine.",
   "plugins_builtin_locked": "The built-in Anthropic marketplace cannot be changed.",
   "plugins_auto_update_unavailable": "Auto-update for this marketplace can't be changed from here.",

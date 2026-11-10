@@ -9,10 +9,10 @@ use serde_json::{Map, Value};
 
 use crate::model::{InstalledPlugin, Marketplace, MarketplaceName, PluginsState};
 
-/// Marketplace embutido da CLI (`ptt` na 2.1.319); não aparece no `known_marketplaces.json`.
+/// Marketplace embutido da CLI; não aparece no `known_marketplaces.json`.
 pub(crate) const BUILTIN: &str = "anthropic-plugin-directory";
 
-/// Conjunto `fbt` menos `rf` da CLI 2.1.319: os que atualizam sozinhos sem `autoUpdate` gravado.
+/// Oficiais da CLI: os que atualizam sozinhos sem `autoUpdate` gravado.
 const OFFICIAL: &[&str] = &[
     "claude-code-marketplace",
     "claude-code-plugins",
@@ -223,7 +223,7 @@ fn without_userinfo(label: &str) -> String {
     }
 }
 
-/// Cópia de `BVe` da CLI 2.1.319: o `settings.json` vence, depois o `known_marketplaces.json`;
+/// Mesma regra da CLI: o `settings.json` vence, depois o `known_marketplaces.json`;
 /// sem nenhum, só fonte embutida e marketplace oficial atualizam sozinhos.
 fn auto_update(name: &str, entry: &Value, declared: Option<bool>) -> bool {
     declared
@@ -388,7 +388,7 @@ mod tests {
         }
     }
 
-    /// Trechos de `claude plugin list --json` (2.1.319) desta máquina.
+    /// Trechos de `claude plugin list --json` desta máquina.
     fn cli_list() -> Vec<CliInstalled> {
         serde_json::from_value(json!([
             {"id": "caveman@caveman", "version": "4.1.0", "scope": "user", "enabled": true,

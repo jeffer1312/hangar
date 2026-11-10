@@ -465,7 +465,9 @@ fn task_failed(error: &tokio::task::JoinError) -> Response {
 
 fn plugins_error(error: PluginsError) -> Response {
     let status = match error {
-        PluginsError::NotFound(_) | PluginsError::UnknownMarketplace(_) => StatusCode::NOT_FOUND,
+        PluginsError::NotFound(_) | PluginsError::NotInMarketplace(_) | PluginsError::UnknownMarketplace(_) => {
+            StatusCode::NOT_FOUND
+        }
         PluginsError::BuiltinLocked | PluginsError::NeedsReview(_) => StatusCode::CONFLICT,
         PluginsError::CliMissing => StatusCode::SERVICE_UNAVAILABLE,
         PluginsError::CliFailed(_) => StatusCode::BAD_GATEWAY,

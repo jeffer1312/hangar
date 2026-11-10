@@ -34,7 +34,7 @@ fn always_on(line: &str) -> Option<u64> {
 mod tests {
     use super::*;
 
-    /// Saída real de `claude plugin details caveman@caveman` (CLI 2.1.319, caveman 4.1.0).
+    /// Saída real de `claude plugin details caveman@caveman` (caveman 4.1.0).
     const CAVEMAN: &str = "caveman 4.1.0
   Description: Talk like caveman. Cut filler. Keep technical details explicit.
   Source: caveman@caveman

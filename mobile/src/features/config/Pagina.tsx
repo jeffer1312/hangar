@@ -35,11 +35,11 @@ export function Pagina<T>({
     <Screen edges={IOS ? BORDAS_IOS : BORDAS_SEM_TOPO}>
       {list ? <FlatList
         {...list}
-        ListHeaderComponent={<View style={styles.cabecalhoLista}>{children}</View>}
+        ListHeaderComponent={<View style={styles.listHeader}>{children}</View>}
         refreshControl={refreshControl}
         style={IOS ? undefined : { marginTop: cabecalho }}
         contentInsetAdjustmentBehavior={IOS ? 'automatic' : undefined}
-        contentContainerStyle={styles.lista}
+        contentContainerStyle={styles.listContent}
         keyboardShouldPersistTaps="handled"
       /> : <ScrollView
         ref={scrollRef}
@@ -64,10 +64,10 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.base.space[4],
   },
   // As células da lista ficam coladas (um cartão só); o espaçamento vale entre as peças do cabeçalho.
-  lista: {
+  listContent: {
     paddingTop: theme.base.space[3],
     paddingHorizontal: theme.base.space[3],
     paddingBottom: theme.base.space[8],
   },
-  cabecalhoLista: { gap: theme.base.space[4], paddingBottom: theme.base.space[4] },
+  listHeader: { gap: theme.base.space[4], paddingBottom: theme.base.space[4] },
 }));

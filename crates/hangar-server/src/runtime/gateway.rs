@@ -267,8 +267,11 @@ const IDLE_COMPACT_BEFORE:Duration = Duration::from_secs(59 * 60);
 const PARK_AFTER_IDLE_COMPACT:Duration = Duration::from_secs(60);
 
 /// A conta e a pasta do Claude sem terminal que vai subir, como o sidecar as grava.
-async fn reconcile_sidecar_account(policy:&PolicyClient,metadata:&Value) -> Result<Vec<String>,RuntimeError> {
-    super::claude_reopen::reconcile_account(&policy.codex_environment(),metadata["config_dir"].as_str(),metadata["cwd"].as_str().unwrap_or_default()).await
+/// Aqui não há resposta que leve os avisos à tela, como na reabertura: ficam no log.
+async fn reconcile_sidecar_account(policy:&PolicyClient,metadata:&Value) -> Result<(),RuntimeError> {
+    let warnings=super::claude_reopen::reconcile_account(&policy.codex_environment(),metadata["config_dir"].as_str(),metadata["cwd"].as_str().unwrap_or_default()).await?;
+    for warning in warnings {tracing::warn!(code="account_reconcile_warning",%warning,"conta: a reconciliação antes de subir deixou aviso");}
+    Ok(())
 }
 
 /// Regra 1 do módulo de processo: cano gravado `Ours` conecta (mesmo sem `versao`); morto, de outro

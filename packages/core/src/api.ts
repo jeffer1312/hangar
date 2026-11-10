@@ -453,8 +453,8 @@ export function vaultFetchForServer<T>(s: Server, path: string, init?: RequestIn
 }
 
 /** Rotas dos plugins do Claude (`plugins.ts`): o mesmo pedido de `apiFetchForServer`. */
-export function pluginsFetchForServer<T>(s: Server, path: string, init?: RequestInit, prazoMs?: number): Promise<T> {
-  return apiFetchForServer<T>(s, path, init, prazoMs);
+export function pluginsFetchForServer<T>(s: Server, path: string, init?: RequestInit, timeoutMs?: number): Promise<T> {
+  return apiFetchForServer<T>(s, path, init, timeoutMs);
 }
 
 export { recentFailures, type RecentFailure };

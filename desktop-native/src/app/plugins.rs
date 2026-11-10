@@ -159,8 +159,10 @@ pub(super) struct PluginsPage {
     api: Api,
     runtime: Arc<Runtime>,
     hangar: WeakEntity<Hangar>,
-    /// Número da leitura: resposta de uma leitura anterior não pisa na nova.
+    /// Número da leitura do estado; mudança e conferência também sobem: leitura anterior não pisa no que elas gravaram.
     seq: u64,
+    /// O mesmo para o Descobrir: sobe a cada leitura e a cada vez que o catálogo é jogado fora.
+    available_seq: u64,
     tab: usize,
     filter: Filter,
     state: Option<Result<PluginsState, String>>,
@@ -171,7 +173,7 @@ pub(super) struct PluginsPage {
     /// Sobe a cada mudança: detalhe pedido antes dela chega velho e é descartado.
     details_generation: u64,
     open: Option<String>,
-    /// Plugins (`id`) e marketplaces (`mkt:<nome>`) com mudança em andamento.
+    /// Plugin (`id`) ou marketplace (`mkt:<nome>`) com mudança em andamento; o servidor aceita uma por vez.
     busy: HashSet<String>,
     installed_now: HashSet<String>,
     checking: bool,
@@ -202,14 +204,19 @@ impl PluginsPage {
                 _ => {}
             }),
         ];
-        let mut page = Self { api, runtime, hangar, seq: 0, tab: TAB_INSTALLED, filter: Filter::All, state: None, available: None,
+        let mut page = Self { api, runtime, hangar, seq: 0, available_seq: 0, tab: TAB_INSTALLED, filter: Filter::All, state: None, available: None,
             details: HashMap::new(), pending_details: HashSet::new(), details_generation: 0, open: None, busy: HashSet::new(), installed_now: HashSet::new(), checking: false, error: None,
             source_error: None, reopen: None, query, discover_query, source, _subscriptions };
         page.load(window, cx);
         page
     }
 
+    /// Uma mudança ou conferência em curso: o servidor recusaria a segunda (409 `plugins_busy`).
+    fn locked(&self) -> bool { !self.busy.is_empty() || self.checking }
+
     fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A leitura poderia chegar depois da mudança em curso com o disco de antes.
+        if self.locked() { return; }
         self.seq += 1;
         let seq = self.seq;
         (self.state, self.error) = (None, None);
@@ -225,9 +232,11 @@ impl PluginsPage {
 
     fn load_available(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.available = None;
-        let api = self.api.clone();
+        self.available_seq += 1;
+        let (api, seq) = (self.api.clone(), self.available_seq);
         run(&self.runtime, async move { api.server_read(&["plugins", "available"], &[], AVAILABLE_SECONDS).await }, window, cx,
-            |this: &mut Self, result, window, cx| {
+            move |this: &mut Self, result, window, cx| {
+                if seq != this.available_seq { return; }
                 let list = result.map_err(|e| Hangar::fetch_failure(&e)).and_then(|v| v.get("plugins").cloned()
                     .and_then(|p| serde_json::from_value::<Vec<AvailablePlugin>>(p).ok()).ok_or_else(|| tr("invalid_response")));
                 if let Ok(list) = &list {
@@ -237,6 +246,11 @@ impl PluginsPage {
                 this.available = Some(list);
             });
         cx.notify();
+    }
+
+    /// Marketplace mudado muda o catálogo: leitura em curso chega velha; no Descobrir aberto, relê já.
+    fn drop_available(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.tab == TAB_DISCOVER { self.load_available(window, cx); } else { (self.available, self.available_seq) = (None, self.available_seq + 1); }
     }
 
     fn select_tab(&mut self, tab: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -265,14 +279,19 @@ impl PluginsPage {
     }
 
     fn check(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.checking { return; }
+        if self.locked() { return; }
         (self.checking, self.error) = (true, None);
+        self.seq += 1;
         let api = self.api.clone();
         run(&self.runtime, async move { api.server_send(reqwest::Method::POST, &["plugins", "check"], None, LONG_SECONDS).await }, window, cx,
-            |this: &mut Self, result, _, _| {
+            |this: &mut Self, result, window, cx| {
                 this.checking = false;
                 match result.map(serde_json::from_value::<PluginsState>) {
-                    Ok(Ok(state)) => this.state = Some(Ok(state)),
+                    Ok(Ok(state)) => {
+                        this.state = Some(Ok(state));
+                        // A conferência atualiza os marketplaces: o catálogo pode ter mudado.
+                        this.drop_available(window, cx);
+                    }
                     Ok(Err(_)) => this.error = Some(tr("invalid_response")),
                     Err(error) => this.error = Some(Hangar::fetch_failure(&error)),
                 }
@@ -284,8 +303,10 @@ impl PluginsPage {
     #[allow(clippy::too_many_arguments)]
     fn change(&mut self, busy: String, method: reqwest::Method, path: Vec<String>, body: Option<Value>, seconds: u64,
         done: impl FnOnce(&mut Self, &Value, &mut Window, &mut Context<Self>) + 'static, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.busy.insert(busy.clone()) { return; }
+        if self.locked() { return; }
+        self.busy.insert(busy.clone());
         self.error = None;
+        self.seq += 1;
         let api = self.api.clone();
         run(&self.runtime, async move {
             let parts: Vec<&str> = path.iter().map(String::as_str).collect();
@@ -381,7 +402,7 @@ impl PluginsPage {
             .map(|s| s.marketplaces.iter().map(|m| m.name.clone()).collect()).unwrap_or_default();
         self.change("mkt:+".into(), reqwest::Method::POST, path, Some(json!({"source": source.clone()})), LONG_SECONDS, move |this, _, window, cx| {
             this.source.update(cx, |input, cx| input.set_value("", window, cx));
-            this.available = None;
+            this.drop_available(window, cx);
             let name = this.state.as_ref().and_then(|s| s.as_ref().ok())
                 .and_then(|s| s.marketplaces.iter().find(|m| !before.contains(&m.name)).map(|m| m.name.clone())).unwrap_or(source);
             this.changed(tr("plugins_action_marketplace_added").replace("{name}", &name), cx);
@@ -394,9 +415,8 @@ impl PluginsPage {
 
     fn update_marketplace(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
         let path = Self::marketplace_path(&name, Some("update"));
-        self.change(format!("mkt:{name}"), reqwest::Method::POST, path, None, LONG_SECONDS, move |this, _, _, cx| {
-            // Marketplace mudado muda o catálogo: o Descobrir relê na próxima visita.
-            this.available = None;
+        self.change(format!("mkt:{name}"), reqwest::Method::POST, path, None, LONG_SECONDS, move |this, _, window, cx| {
+            this.drop_available(window, cx);
             this.changed(tr("plugins_action_marketplace_updated").replace("{name}", &name), cx);
         }, window, cx);
     }
@@ -414,8 +434,8 @@ impl PluginsPage {
             let name = name.clone();
             let _ = page.update(cx, |page, cx| {
                 let path = Self::marketplace_path(&name, None);
-                page.change(format!("mkt:{name}"), reqwest::Method::DELETE, path, None, MARKETPLACE_REMOVE_SECONDS, move |this, _, _, cx| {
-                    this.available = None;
+                page.change(format!("mkt:{name}"), reqwest::Method::DELETE, path, None, MARKETPLACE_REMOVE_SECONDS, move |this, _, window, cx| {
+                    this.drop_available(window, cx);
                     this.changed(tr("plugins_action_marketplace_removed").replace("{name}", &name), cx);
                 }, window, cx);
             });
@@ -498,7 +518,7 @@ impl PluginsPage {
 
     fn render_plugin(&self, plugin: &InstalledPlugin, open: bool, cx: &mut Context<Self>) -> AnyElement {
         let id = plugin.id.clone();
-        let busy = self.busy.contains(&id);
+        let (busy, locked) = (self.busy.contains(&id), self.locked());
         let name = plugin_name(plugin.name.clone(), plugin.enabled, plugin.available_version.clone().filter(|_| has_update(plugin)));
         let meta = plugin_meta(&plugin.version, &plugin.last_updated, &plugin.marketplace);
         let page = cx.entity().downgrade();
@@ -506,9 +526,9 @@ impl PluginsPage {
         row_box(SharedString::from(format!("plugins-row-{id}"))).aria_label(plugin.name.clone()).cursor_pointer().hover(|el| el.bg(theme::hover()))
             .on_click(cx.listener(move |this, _, _, cx| this.toggle_detail(toggle_id.clone(), cx)))
             .child(text_block(name, meta, plugin.description.clone()))
-            .when(has_update(plugin), |el| el.child(plugin_update_button(SharedString::from(format!("plugins-update-{id}")), busy)
+            .when(has_update(plugin), |el| el.child(plugin_update_button(SharedString::from(format!("plugins-update-{id}")), busy).disabled(locked)
                 .on_click(cx.listener(move |this, _, window, cx| if let Some(p) = this.installed(&update_id) { this.update(&p, window, cx) }))))
-            .child(plugin_switch(SharedString::from(format!("plugins-switch-{id}")), &plugin.name, plugin.enabled, busy)
+            .child(plugin_switch(SharedString::from(format!("plugins-switch-{id}")), &plugin.name, plugin.enabled, locked)
                 .on_click(cx.listener(move |this, on: &bool, window, cx| {
                     // A chave fica dentro da linha clicável: sem parar aqui, ligar também abriria o detalhe.
                     cx.stop_propagation();
@@ -526,7 +546,7 @@ impl PluginsPage {
 
     fn render_detail(&self, plugin: &InstalledPlugin, cx: &mut Context<Self>) -> AnyElement {
         let id = plugin.id.clone();
-        let busy = self.busy.contains(&id);
+        let (busy, locked) = (self.busy.contains(&id), self.locked());
         let key = |k: &str| div().text_sm().text_color(theme::muted()).child(tr(k));
         let value = |text: String| div().text_sm().whitespace_normal().child(text);
         let version = match (&plugin.available_version, plugin.update_known) {
@@ -562,13 +582,13 @@ impl PluginsPage {
         let can_update = has_update(plugin) || !plugin.update_known;
         let actions = div().flex().flex_wrap().items_center().gap_2()
             .when(can_update, |el| el.child(Button::new(SharedString::from(format!("plugins-detail-update-{id}")))
-                .map(|b| if has_update(plugin) { b.primary() } else { b.outline() }).small().label(update_label).loading(busy).disabled(busy)
+                .map(|b| if has_update(plugin) { b.primary() } else { b.outline() }).small().label(update_label).loading(busy).disabled(locked)
                 .on_click(cx.listener(move |this, _, window, cx| if let Some(p) = this.installed(&update_id) { this.update(&p, window, cx) }))))
             .child(Button::new(SharedString::from(format!("plugins-detail-toggle-{id}"))).outline().small()
-                .label(tr(if on { "plugins_disable" } else { "plugins_enable" })).disabled(busy)
+                .label(tr(if on { "plugins_disable" } else { "plugins_enable" })).disabled(locked)
                 .on_click(cx.listener(move |this, _, window, cx| if let Some(p) = this.installed(&switch_id) { this.set_enabled(&p, !on, window, cx) })))
             .child(div().flex_1())
-            .child(Button::new(SharedString::from(format!("plugins-detail-remove-{id}"))).danger().outline().small().label(tr("plugins_remove")).disabled(busy)
+            .child(Button::new(SharedString::from(format!("plugins-detail-remove-{id}"))).danger().outline().small().label(tr("plugins_remove")).disabled(locked)
                 .on_click(cx.listener(move |this, _, window, cx| if let Some(p) = this.installed(&remove_id) { this.confirm_remove(&p, window, cx) })));
         div().id(SharedString::from(format!("plugins-detail-{id}"))).role(Role::Group).aria_label(plugin.name.clone())
             .mt(px(-1.)).border_t_1().border_color(theme::border()).bg(theme::inset()).px_4().py(px(14.)).flex().flex_col().gap_3()
@@ -598,14 +618,14 @@ impl PluginsPage {
             settings_box().id("plugins-available").role(Role::List).aria_label(tr("plugins_tab_discover")).children(hits.into_iter().map(|p| {
                 let id = p.id.clone();
                 let done = self.installed_now.contains(&id) || installed.contains(id.as_str());
-                let busy = self.busy.contains(&id);
+                let (busy, locked) = (self.busy.contains(&id), self.locked());
                 let meta = [p.version.clone(), Some(p.marketplace.clone())].into_iter().flatten().collect::<Vec<_>>().join(" · ");
                 let (target, target_name) = (id.clone(), p.name.clone());
                 row_box(SharedString::from(format!("plugins-available-{id}"))).aria_label(p.name.clone())
                     .child(text_block(div().truncate().font_weight(FontWeight::MEDIUM).child(p.name.clone()), meta, p.description.clone()))
                     .child(if done { chip(tr("plugins_installed"), theme::success_text(), theme::success().opacity(0.12)).into_any_element() } else {
                         Button::new(SharedString::from(format!("plugins-install-{id}"))).primary().small()
-                            .label(tr(if busy { "plugins_installing" } else { "plugins_install" })).loading(busy).disabled(busy)
+                            .label(tr(if busy { "plugins_installing" } else { "plugins_install" })).loading(busy).disabled(locked)
                             .on_click(cx.listener(move |this, _, window, cx| this.install(target.clone(), target_name.clone(), window, cx))).into_any_element()
                     })
                     .into_any_element()
@@ -618,7 +638,7 @@ impl PluginsPage {
         let adding = self.busy.contains("mkt:+");
         let bar = div().flex().items_center().gap_2()
             .child(div().flex_1().min_w_0().child(Input::new(&self.source).small().disabled(adding).aria_label(tr("plugins_marketplace_placeholder"))))
-            .child(Button::new("plugins-marketplace-add").primary().small().label(tr("plugins_marketplace_add")).loading(adding).disabled(adding)
+            .child(Button::new("plugins-marketplace-add").primary().small().label(tr("plugins_marketplace_add")).loading(adding).disabled(self.locked())
                 .on_click(cx.listener(|this, _, window, cx| this.add_marketplace(window, cx))));
         let body = if state.marketplaces.is_empty() {
             settings_box().px_4().py(px(18.)).child(muted(tr("plugins_marketplaces_empty"))).into_any_element()
@@ -633,7 +653,7 @@ impl PluginsPage {
 
     fn render_marketplace(&self, marketplace: &PluginMarketplace, cx: &mut Context<Self>) -> AnyElement {
         let name = marketplace.name.clone();
-        let busy = self.busy.contains(&format!("mkt:{name}"));
+        let (busy, locked) = (self.busy.contains(&format!("mkt:{name}")), self.locked());
         let source = if marketplace.builtin { tr("plugins_marketplace_builtin") } else { marketplace.source_label.clone() };
         let downloaded = marketplace.last_updated.as_deref().map(|d| tr("plugins_marketplace_downloaded").replace("{date}", &day(d)));
         let (auto_name, update_name, remove_name) = (name.clone(), name.clone(), name.clone());
@@ -645,14 +665,14 @@ impl PluginsPage {
                     .child(div().text_sm().text_color(if marketplace.auto_update_editable { theme::muted() } else { theme::faint() })
                         .child(tr("plugins_marketplace_auto_update")))
                     .child(Switch::new(SharedString::from(format!("plugins-auto-{name}"))).checked(marketplace.auto_update)
-                        .disabled(busy || !marketplace.auto_update_editable)
+                        .disabled(locked || !marketplace.auto_update_editable)
                         .accessibility_label(format!("{} · {name}", tr("plugins_marketplace_auto_update")))
                         .on_click(cx.listener(move |this, on: &bool, window, cx| this.set_auto_update(auto_name.clone(), *on, window, cx)))))
                 .child(Button::new(SharedString::from(format!("plugins-marketplace-update-{name}"))).outline().small()
-                    .label(tr(if busy { "plugins_updating" } else { "plugins_update" })).loading(busy).disabled(busy)
+                    .label(tr(if busy { "plugins_updating" } else { "plugins_update" })).loading(busy).disabled(locked)
                     .on_click(cx.listener(move |this, _, window, cx| this.update_marketplace(update_name.clone(), window, cx))))
                 .child(Button::new(SharedString::from(format!("plugins-marketplace-remove-{name}"))).danger().outline().small()
-                    .label(tr("plugins_remove")).disabled(busy)
+                    .label(tr("plugins_remove")).disabled(locked)
                     .on_click(cx.listener(move |this, _, window, cx| this.confirm_remove_marketplace(remove_name.clone(), window, cx)))))
             .into_any_element()
     }
@@ -672,7 +692,7 @@ impl Render for PluginsPage {
             .child(div().flex_1().min_w_0().child(tabs))
             .children(checked.map(|text| div().id("plugins-checked").role(Role::Status).text_sm().text_color(theme::muted()).child(text)))
             .child(Button::new("plugins-check").outline().small().label(tr(if self.checking { "plugins_checking" } else { "plugins_check" }))
-                .loading(self.checking).disabled(self.checking || self.state.is_none())
+                .loading(self.checking).disabled(self.locked() || self.state.is_none())
                 .on_click(cx.listener(|this, _, window, cx| this.check(window, cx))));
         let mut page = div().flex().flex_col().gap_4().child(top).child(bar).children(self.render_reopen(cx));
         if let Some(error) = self.error.clone() { page = page.child(alert("plugins-error", error)); }

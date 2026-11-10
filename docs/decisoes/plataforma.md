@@ -4338,6 +4338,8 @@ A tela de Plugins chama `claude plugin …` (CLI 2.1.319) com a pasta padrão `~
   o `known_marketplaces.json` (`Synced autoUpdate=false from settings for marketplace: caveman`).
   Pelo código, o settings vence e, sem a chave, vale `true` só para os marketplaces oficiais.
   Não provado na prática: a passada de atualização só roda com login, até 10 min depois de abrir.
+  Nomes no pacote 2.1.319, de onde `disk.rs` copiou as regras: embutido `ptt`, oficiais `fbt`
+  menos `rf`, precedência `BVe`, forma do `shownCommand` em `mrt`/`sMo`.
 - **Reabrir não reconcilia a conta.** Com `watch@claude-video` desligado no principal, o
   `POST /recarregar` de duas sessões de `~/.claude-claude-200-3` deixou a cópia da conta com `true` e
   a skill carregada; uma sessão nova na conta reconciliou (`false`, sem a skill). Corrigido: toda

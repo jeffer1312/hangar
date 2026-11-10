@@ -102,8 +102,8 @@ export function getPluginDetailsForServer(s: Server, id: string): Promise<Plugin
 
 export function pluginActionForServer(s: Server, id: string, action: PluginAction): Promise<PluginsChange> {
   if (action === 'uninstall') return pluginsFetchForServer(s, pluginPath(id), { method: 'DELETE' }, CHANGE_MS);
-  const prazo = action === 'install' || action === 'update' ? DOWNLOAD_MS : CHANGE_MS;
-  return pluginsFetchForServer(s, `${pluginPath(id)}/${action}`, { method: 'POST' }, prazo);
+  const timeout = action === 'install' || action === 'update' ? DOWNLOAD_MS : CHANGE_MS;
+  return pluginsFetchForServer(s, `${pluginPath(id)}/${action}`, { method: 'POST' }, timeout);
 }
 
 export function addMarketplaceForServer(s: Server, source: string): Promise<PluginsChange> {

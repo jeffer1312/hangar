@@ -85,6 +85,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   plugins_invalid_name: () => m.plugins_invalid_name(),
   plugins_invalid_source: () => m.plugins_invalid_source(),
   plugins_not_found: () => m.plugins_not_found(),
+  plugins_not_in_marketplace: () => m.plugins_not_in_marketplace(),
   plugins_unknown_marketplace: () => m.plugins_unknown_marketplace(),
   plugins_builtin_locked: () => m.plugins_builtin_locked(),
   plugins_auto_update_unavailable: () => m.plugins_auto_update_unavailable(),
