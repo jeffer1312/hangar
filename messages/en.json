@@ -10264,6 +10264,7 @@
   "plugins_cli_timeout": "Claude Code took too long and the operation was stopped.",
   "plugins_command_needs_review": "The install wants to run a command that needs review; install it from the terminal: {message}",
   "plugins_settings_unreadable": "Claude's settings.json could not be read; nothing was saved.",
+  "plugins_settings_not_written": "The plugin was removed, but Claude's settings.json could not be saved; other accounts may still have it on.",
   "plugins_title": "Plugins",
   "plugins_subtitle": "Claude Code plugins on this machine. Applies to every Claude account here; open sessions only pick up the change when reopened.",
   "plugins_tab_installed": "Installed",

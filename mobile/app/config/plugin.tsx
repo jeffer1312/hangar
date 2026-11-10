@@ -37,23 +37,25 @@ export default function Plugin() {
   const [details, setDetails] = useState<PluginDetails | null>(null);
   const [detailsError, setDetailsError] = useState('');
 
-  // Aberto direto (sem passar pela lista): lê o estado aqui.
+  // Aberto direto (sem passar pela lista) ou com o servidor trocado: lê o estado aqui. `reset` não mexe no mesmo servidor.
   useEffect(() => {
-    if (!server || usePlugins.getState().state) return;
+    if (!server) return;
     usePlugins.getState().reset(server);
-    void usePlugins.getState().load(server);
-  }, [server?.id]);
+    if (!usePlugins.getState().state) void usePlugins.getState().load(server);
+  }, [server?.id, server?.baseUrl, server?.token]);
 
+  // Versão nova relê o conteúdo e troca no lugar, sem piscar; plugin removido não se busca.
+  const version = plugin ? plugin.version : null;
   useEffect(() => {
     if (!server || !id) return;
+    if (version === null) { setDetails(null); return; }
     let alive = true;
-    setDetails(null);
     setDetailsError('');
     getPluginDetailsForServer(server, id)
       .then((d) => { if (alive) setDetails(d); })
       .catch((e: unknown) => { if (alive) setDetailsError(pluginsErrorText(e)); });
     return () => { alive = false; };
-  }, [server?.id, server?.baseUrl, server?.token, id, plugin?.version]);
+  }, [server?.id, server?.baseUrl, server?.token, id, version]);
 
   if (!server) return null;
   if (!plugin) {

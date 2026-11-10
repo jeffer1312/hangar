@@ -10,6 +10,9 @@ pub struct PluginsState {
     pub marketplaces: Vec<Marketplace>,
     /// Último `check` bem-sucedido; quem guarda é o servidor, a leitura do disco devolve `None`.
     pub checked_at: Option<String>,
+    /// Arquivo presente que não pôde ser lido: a lista sai sem ele e quem chama registra o motivo.
+    #[serde(skip)]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

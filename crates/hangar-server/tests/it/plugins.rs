@@ -179,6 +179,32 @@ async fn plugins_uninstall_leaves_false_in_the_main_settings() {
 }
 
 #[tokio::test]
+async fn plugins_uninstall_says_when_the_false_did_not_reach_the_settings() {
+    let fixture = Fixture::start().await;
+    let before = json!({"enabledPlugins": {"caveman@caveman": true}});
+    fixture.write_settings(&before);
+    // Outro escritor segura a trava do arquivo durante toda a remoção (ela só vence em 10 s).
+    let mut lock = std::fs::canonicalize(fixture.settings()).unwrap().into_os_string();
+    lock.push(".lock");
+    std::fs::create_dir(&lock).unwrap();
+    let (status, value) = body(fixture.request(reqwest::Method::DELETE, "/caveman@caveman").send().await.unwrap()).await;
+    std::fs::remove_dir(&lock).unwrap();
+    assert_eq!((status, value["detail"]["code"].clone()), (500, json!("plugins_settings_not_written")), "{value}");
+    assert!(fixture.home().join("finished-uninstall").exists(), "a CLI já tinha removido");
+    assert_eq!(fixture.read_settings(), before);
+}
+
+#[tokio::test]
+async fn plugins_uninstall_refuses_unreadable_settings_before_the_cli() {
+    let fixture = Fixture::start().await;
+    // Uma pasta no lugar do arquivo: a leitura falha sem ser "ausente".
+    std::fs::create_dir_all(fixture.settings()).unwrap();
+    let (status, value) = body(fixture.request(reqwest::Method::DELETE, "/caveman@caveman").send().await.unwrap()).await;
+    assert_eq!((status, value["detail"]["code"].clone()), (500, json!("plugins_settings_unreadable")), "{value}");
+    assert!(!fixture.home().join("started-uninstall").exists(), "a CLI não pode rodar");
+}
+
+#[tokio::test]
 async fn plugins_auto_update_changes_only_its_key() {
     let fixture = Fixture::start().await;
     let declared = json!({"model": "opus", "extraKnownMarketplaces": {

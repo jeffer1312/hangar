@@ -161,7 +161,7 @@ describe('plugins do Claude', () => {
     'plugins_owner_only', 'plugins_busy', 'plugins_invalid_id', 'plugins_invalid_name', 'plugins_invalid_source',
     'plugins_not_found', 'plugins_unknown_marketplace', 'plugins_builtin_locked', 'plugins_auto_update_unavailable',
     'plugins_cli_missing', 'plugins_cli_failed', 'plugins_cli_timeout', 'plugins_command_needs_review',
-    'plugins_settings_unreadable',
+    'plugins_settings_unreadable', 'plugins_settings_not_written',
   ])('%s vira frase do app, não o texto do servidor', (code) => {
     const texto = formataErro({ code, params: {}, msg: 'texto-do-servidor' });
     expect(texto).not.toBe('texto-do-servidor');

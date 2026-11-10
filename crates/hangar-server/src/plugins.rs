@@ -337,13 +337,16 @@ impl Context {
 
     /// Sempre do disco: a CLI, o `/plugin` das sessões e o omp-sync gravam os mesmos arquivos.
     async fn reread(&self) -> Result<PluginsState, Response> {
-        let settings = read_settings(&self.settings_path()).await;
+        let settings = read_settings(&self.settings_path()).await.unwrap_or(Value::Null);
         let installed = self.plugins.installed().await.map_err(plugins_error)?;
         let main_dir = self.main_dir.clone();
         // Lê o catálogo e o clone de cada marketplace: fora das threads do runtime.
         let mut state = tokio::task::spawn_blocking(move || read_state(&main_dir, &settings, &installed))
             .await
             .map_err(|error| task_failed(&error))?;
+        for warning in &state.warnings {
+            tracing::warn!(code = "plugins_disk_unreadable", %warning, "plugins: a lista saiu sem um arquivo da pasta principal");
+        }
         state.checked_at = self.app.claude_plugins.checked_at.lock().unwrap_or_else(|e| e.into_inner()).clone();
         Ok(state)
     }
@@ -352,14 +355,16 @@ impl Context {
     /// precisa caber no arquivo.
     async fn settings_writable(&self) -> Result<(), Response> {
         let settings = read_settings(&self.settings_path()).await;
-        let fits = settings.as_object().is_some_and(|map| map.get("enabledPlugins").is_none_or(Value::is_object));
+        let fits = settings.as_ref().and_then(Value::as_object).is_some_and(|map| map.get("enabledPlugins").is_none_or(Value::is_object));
         if fits { Ok(()) } else { Err(failure(StatusCode::INTERNAL_SERVER_ERROR, "plugins_settings_unreadable", None)) }
     }
 
+    /// Roda depois da CLI: a remoção já valeu, então falhar aqui não é "tente de novo" (a CLI diria
+    /// que o plugin não existe) e sim avisar que as contas podem seguir com ele ligado.
     async fn disable_in_settings(&self, ids: Vec<String>) -> Result<(), Response> {
         let settings = self.settings_path();
         let backups = self.backups.clone();
-        let edit = tokio::task::spawn_blocking(move || {
+        let edit = tokio::task::spawn_blocking(move || retry_changed(SETTINGS_ATTEMPTS, || {
             crate::config_sync::files::edit_json(&settings, &backups, |current| {
                 let enabled = current
                     .as_object_mut()
@@ -373,17 +378,46 @@ impl Context {
                 }
                 Ok(())
             })
-        });
-        settings_written(edit.await)
+        }));
+        let message = match edit.await {
+            Ok(Ok(_)) => return Ok(()),
+            Ok(Err(error)) => error.message,
+            Err(error) => error.to_string(),
+        };
+        tracing::warn!(code = "plugins_settings_not_written", %message, "plugins: removido pela CLI, mas o false não entrou no settings.json");
+        Err(failure(StatusCode::INTERNAL_SERVER_ERROR, "plugins_settings_not_written", Some(&message)))
     }
 }
 
-/// Ausente vale `{}`; ilegível vale `null`, e a lista sai sem o que dependia dele.
-async fn read_settings(path: &Path) -> Value {
-    match tokio::fs::read(path).await {
-        Ok(raw) => serde_json::from_slice(&raw).unwrap_or(Value::Null),
-        Err(_) => json!({}),
+/// Ausente vale `{}`; ilegível (leitura recusada ou JSON inválido) fica registrado e vale `None`: a
+/// lista sai sem o que dependia dele e nenhuma remoção roda.
+async fn read_settings(path: &Path) -> Option<Value> {
+    let raw = match tokio::fs::read(path).await {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Some(json!({})),
+        Err(error) => {
+            tracing::warn!(code = "plugins_settings_unreadable", %error, "plugins: settings.json não pôde ser lido");
+            return None;
+        }
+    };
+    serde_json::from_slice(&raw)
+        .inspect_err(|error| tracing::warn!(code = "plugins_settings_unreadable", %error, "plugins: settings.json não é JSON"))
+        .ok()
+}
+
+/// Tentativas da gravação que segue a CLI; cada uma já espera a trava do arquivo.
+const SETTINGS_ATTEMPTS: usize = 3;
+
+/// Outro escritor no meio (a trava ocupada, o arquivo mudando) passa com nova tentativa; o resto não.
+fn retry_changed<T>(attempts: usize, mut edit: impl FnMut() -> Result<T, EditError>) -> Result<T, EditError> {
+    let mut result = edit();
+    for _ in 1..attempts {
+        match &result {
+            Err(error) if error.code == "config_sync_changed" => result = edit(),
+            _ => break,
+        }
     }
+    result
 }
 
 async fn read_body<T: serde::de::DeserializeOwned>(request: Request) -> Result<T, Response> {

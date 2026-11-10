@@ -48,6 +48,9 @@ interface PluginsStore {
 
 export const usePlugins = create<PluginsStore>((set, get) => {
   const same = (s: Server) => get().serverKey === keyOf(s);
+  // Leitura que volta depois de uma mudança ou conferência traria o disco de antes: só vale a mais recente.
+  let stateSeq = 0;
+  let availableSeq = 0;
   return {
     serverKey: '',
     state: null,
@@ -68,33 +71,39 @@ export const usePlugins = create<PluginsStore>((set, get) => {
     load: async (s) => {
       // Com uma mudança em curso, a leitura poderia chegar depois dela com o disco de antes.
       if (get().busy) return;
+      const n = ++stateSeq;
+      const current = () => same(s) && n === stateSeq;
       set({ loading: true, error: '' });
       try {
         const state = await getPluginsForServer(s);
-        if (same(s)) set({ state });
+        if (current()) set({ state });
       } catch (e) {
-        if (same(s)) set({ error: pluginsErrorText(e) });
+        if (current()) set({ error: pluginsErrorText(e) });
       } finally {
-        if (same(s)) set({ loading: false });
+        if (current()) set({ loading: false });
       }
     },
     loadAvailable: async (s) => {
+      const n = ++availableSeq;
+      const current = () => same(s) && n === availableSeq;
       set({ availableLoading: true, availableError: '' });
       try {
         const { plugins } = await getAvailablePluginsForServer(s);
-        if (same(s)) set({ available: plugins });
+        if (current()) set({ available: plugins });
       } catch (e) {
-        if (same(s)) set({ availableError: pluginsErrorText(e) });
+        if (current()) set({ availableError: pluginsErrorText(e) });
       } finally {
-        if (same(s)) set({ availableLoading: false });
+        if (current()) set({ availableLoading: false });
       }
     },
     check: async (s) => {
       if (get().busy) return;
-      set({ busy: 'check' });
+      stateSeq++;
+      availableSeq++;
+      set({ busy: 'check', loading: false });
       try {
         const state = await checkPluginsForServer(s);
-        if (same(s)) set({ state, available: null, availableError: '' });
+        if (same(s)) set({ state, available: null, availableLoading: false, availableError: '' });
       } catch (e) {
         if (same(s)) toast.erro(pluginsErrorText(e));
       } finally {
@@ -103,12 +112,15 @@ export const usePlugins = create<PluginsStore>((set, get) => {
     },
     change: async (s, busy, run, describe, liveCount) => {
       if (get().busy) return false;
-      set({ busy });
+      const mkt = busy.startsWith('mkt:');
+      stateSeq++;
+      if (mkt) availableSeq++;
+      set({ busy, loading: false });
       try {
         const { result, ...state } = await run();
         if (!same(s)) return false;
         // Marketplace novo, removido ou atualizado muda o que o Descobrir oferece.
-        set(busy.startsWith('mkt:') ? { state, available: null, availableError: '' } : { state });
+        set(mkt ? { state, available: null, availableLoading: false, availableError: '' } : { state });
         const { text, note } = describe({ ...state, result });
         if (note) toast.ok(note);
         if (text && liveCount > 0) {
@@ -124,6 +136,7 @@ export const usePlugins = create<PluginsStore>((set, get) => {
       }
     },
     reopen: async (s, names) => {
+      const was = get().changed;
       set({ reopening: true, refused: [] });
       const refused: string[] = [];
       // Uma por vez: reabrir várias juntas disputaria a mesma conta.
@@ -135,7 +148,8 @@ export const usePlugins = create<PluginsStore>((set, get) => {
         }
       }
       if (!same(s)) return;
-      set({ reopening: false, refused, changed: refused.length ? get().changed : null });
+      // Mudança feita durante a reabertura não chegou às sessões: o aviso dela fica.
+      set({ reopening: false, refused, changed: refused.length || get().changed !== was ? get().changed : null });
       if (refused.length) haptic.error();
       else haptic.success();
     },

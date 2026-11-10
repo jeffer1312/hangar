@@ -7,6 +7,7 @@ import { useSettingsColors } from '../config/colors';
 import { MachineGroup, MachineRow } from '../machines/MachineRows';
 import { Notice } from '../machines/parts';
 import { Icon, type IconName } from '../../ui/Icon';
+import { superficie } from '../../theme/superficie';
 import { useSessions } from '../../stores/sessions';
 import { usePlugins } from './store';
 import * as m from '../../paraglide/messages';
@@ -89,7 +90,7 @@ export function InstalledPluginRow({ plugin: p, updating, disabled, onPress, onU
     description={p.description}
     onPress={onPress}
     trailing={<>
-      {p.available_version ? <RowButton label={updating ? m.plugins_updating() : m.plugins_update()} disabled={disabled} onPress={onUpdate} /> : null}
+      {p.available_version ? <RowButton label={updating ? m.plugins_updating() : m.plugins_update()} name={p.name} disabled={disabled} onPress={onUpdate} /> : null}
       <Switch value={p.enabled} disabled={disabled} accessibilityLabel={p.name} onValueChange={onToggle} />
     </>} />;
 }
@@ -104,14 +105,24 @@ export function PluginsField({ icon, ...props }: TextInputProps & { icon: IconNa
   </View>;
 }
 
-/** Botão pequeno no fim da linha; o alvo de toque chega a 44 pt pelo `hitSlop`. */
-export function RowButton({ label, onPress, disabled, primary }: { label: string; onPress: () => void; disabled?: boolean; primary?: boolean }) {
+/** Botão pequeno no fim da linha; o alvo de toque chega a 44 pt pelo `hitSlop`. `name`: de quem é, para o leitor de tela. */
+export function RowButton({ label, name, onPress, disabled, primary }: { label: string; name?: string; onPress: () => void; disabled?: boolean; primary?: boolean }) {
   const c = useSettingsColors();
-  return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled }} disabled={disabled}
+  return <Pressable accessibilityRole="button" accessibilityLabel={name ? `${label} ${name}` : label} accessibilityState={{ disabled }} disabled={disabled}
     onPress={onPress} hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
     style={({ pressed }) => [styles.button, { borderColor: c.borderStrong, backgroundColor: primary ? c.accentDim : pressed ? c.hover : 'transparent', opacity: disabled ? 0.5 : 1 }]}>
     <Text style={[styles.buttonText, { color: primary ? c.accentText : c.text }]}>{label}</Text>
   </Pressable>;
+}
+
+/** Célula de lista virtualizada desenhada como o cartão do `MachineGroup`: as células juntas formam um só. */
+export function PluginListCell({ first, last, children }: { first: boolean; last: boolean; children: ReactNode }) {
+  const c = useSettingsColors();
+  const { theme } = useUnistyles();
+  return <View style={[styles.cell, { borderColor: c.border, backgroundColor: superficie(theme, 0.6) }, first && styles.cellFirst, last && styles.cellLast]}>
+    {/* Como no cartão sem cabeçalho: a divisória da primeira linha sobe 1px e some. */}
+    <View style={first ? styles.cellBare : undefined}>{children}</View>
+  </View>;
 }
 
 /** Linha com título, pílula, meta e descrição; `onPress` abre o detalhe, `trailing` fica fora do toque dele. */
@@ -156,4 +167,8 @@ const styles = StyleSheet.create((theme) => ({
   title: { flexShrink: 1, fontSize: theme.base.text.base, fontWeight: theme.base.weight.medium },
   pill: { fontSize: theme.base.text.xs, borderWidth: 1, borderRadius: theme.base.radius.full, paddingHorizontal: theme.base.space[2], overflow: 'hidden' },
   meta: { fontSize: theme.base.text.xs, lineHeight: 18 },
+  cell: { borderLeftWidth: 1, borderRightWidth: 1, overflow: 'hidden' },
+  cellFirst: { borderTopWidth: 1, borderTopLeftRadius: theme.base.radius.md, borderTopRightRadius: theme.base.radius.md },
+  cellLast: { borderBottomWidth: 1, borderBottomLeftRadius: theme.base.radius.md, borderBottomRightRadius: theme.base.radius.md },
+  cellBare: { marginTop: -1 },
 }));

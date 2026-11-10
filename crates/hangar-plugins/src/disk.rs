@@ -78,9 +78,7 @@ impl std::error::Error for AutoUpdateError {}
 /// Junta o `plugin list --json` (só escopo `user`) ao que o disco da pasta principal diz. Arquivo
 /// ausente ou ilegível nunca derruba a lista: o que dependia dele sai desconhecido.
 pub fn read_state(main_dir: &Path, settings: &Value, installed_cli: &[CliInstalled]) -> PluginsState {
-    let known = read_json(&main_dir.join("plugins/known_marketplaces.json"))
-        .and_then(|value| value.as_object().cloned())
-        .unwrap_or_default();
+    let (known, warning) = known_marketplaces(main_dir);
     let declared = settings.get("extraKnownMarketplaces").and_then(Value::as_object);
     let mut clones: HashMap<&str, Option<MarketplaceClone>> = HashMap::new();
     let plugins = installed_cli
@@ -108,7 +106,21 @@ pub fn read_state(main_dir: &Path, settings: &Value, installed_cli: &[CliInstall
     }
     // Mesma ordem da CLI: o embutido primeiro, depois por nome.
     marketplaces.sort_by(|a, b| b.builtin.cmp(&a.builtin).then_with(|| a.name.cmp(&b.name)));
-    PluginsState { plugins, marketplaces, checked_at: None }
+    PluginsState { plugins, marketplaces, checked_at: None, warnings: warning.into_iter().collect() }
+}
+
+/// Ausente é normal (nenhum marketplace adicionado); presente e ilegível vira aviso, nunca lista vazia calada.
+fn known_marketplaces(main_dir: &Path) -> (Map<String, Value>, Option<String>) {
+    let raw = match hangar_core::fs::read_replaced_to_string(&main_dir.join("plugins/known_marketplaces.json")) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return (Map::new(), None),
+        Err(error) => return (Map::new(), Some(format!("known_marketplaces.json não pôde ser lido: {error}"))),
+    };
+    match serde_json::from_str(&raw) {
+        Ok(Value::Object(known)) => (known, None),
+        Ok(_) => (Map::new(), Some("known_marketplaces.json não é objeto".to_owned())),
+        Err(error) => (Map::new(), Some(format!("known_marketplaces.json não é JSON: {error}"))),
+    }
 }
 
 /// Versão que o `claude plugin update` compararia: `plugin.json` no clone, senão o `version` da
@@ -497,6 +509,11 @@ mod tests {
         assert_eq!(state.plugins.len(), 4);
         assert!(state.plugins.iter().all(|p| p.available_version.is_none() && !p.update_known));
         assert_eq!(state.marketplaces.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), vec!["anthropic-plugin-directory"]);
+        assert_eq!(state.warnings.len(), 1, "presente e quebrado vira aviso");
+        assert!(state.warnings[0].starts_with("known_marketplaces.json não é JSON"), "{:?}", state.warnings);
+
+        let absent = tempfile::tempdir().expect("pasta");
+        assert_eq!(read_state(absent.path(), &json!({}), &cli_list()).warnings, Vec::<String>::new(), "ausente é normal");
     }
 
     #[test]

@@ -10264,6 +10264,7 @@
   "plugins_cli_timeout": "O Claude Code demorou demais e a operação foi interrompida.",
   "plugins_command_needs_review": "A instalação quer rodar um comando que precisa de revisão; instale pelo terminal: {message}",
   "plugins_settings_unreadable": "O settings.json do Claude não pôde ser lido; nada foi gravado.",
+  "plugins_settings_not_written": "O plugin foi removido, mas o settings.json do Claude não pôde ser gravado; outras contas podem continuar com ele ligado.",
   "plugins_title": "Plugins",
   "plugins_subtitle": "Plugins do Claude Code nesta máquina. Vale para todas as contas Claude daqui; sessões abertas só pegam a mudança ao reabrir.",
   "plugins_tab_installed": "Instalados",

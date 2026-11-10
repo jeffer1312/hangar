@@ -93,6 +93,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   plugins_cli_timeout: () => m.plugins_cli_timeout(),
   plugins_command_needs_review: (p) => m.plugins_command_needs_review({ message: String(p.message ?? '') }),
   plugins_settings_unreadable: () => m.plugins_settings_unreadable(),
+  plugins_settings_not_written: () => m.plugins_settings_not_written(),
   codex_account_error_unknown: () => m.codex_account_error_unknown(),
   codex_account_ambiguous_rollout: () => m.codex_account_ambiguous_rollout(),
   codex_account_archive_mismatch: () => m.codex_account_archive_mismatch(),
