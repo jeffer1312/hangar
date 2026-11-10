@@ -160,6 +160,30 @@ async fn run() {
             Err(_) => tracing::warn!(code = "orq_archive_prune_failed", "tarefa da poda falhou; pedido conservado"),
         }
     });
+    // Backend morto sem saída limpa deixa a pasta do contador de login para trás; fora do caminho da subida.
+    tokio::spawn(async {
+        // O servidor de ensaio não varre a máquina, como em `startup.rs`.
+        if std::env::var_os("CP_RUST_NO_ORPHAN_SWEEP").is_some_and(|value| value == "1") { return; }
+        let root = hangar_server::accounts::environment::AccountEnvironment::capture().home.join(".hangar");
+        let context = std::env::var("HANGAR_AUTH_CONTEXT").ok();
+        // Contexto que não se lê não diz qual pasta é a nossa: nessa dúvida nada é varrido.
+        let current = match context.as_deref().map(serde_json::from_str::<hangar_auth::AuthConfig>) {
+            Some(Ok(config)) => config.state_path.parent().map(std::path::Path::to_path_buf),
+            Some(Err(_)) => {
+                tracing::warn!(code = "auth_orphans_context_unreadable", "contexto do contador de login ilegível; varredura das pastas órfãs não rodou");
+                return;
+            }
+            None => None,
+        };
+        match tokio::task::spawn_blocking(move || hangar_auth::sweep_orphans(&root, current.as_deref(), std::time::SystemTime::now())).await {
+            Ok(Ok(outcome)) if outcome.failed > 0 || outcome.skipped > 0 => tracing::warn!(code = "auth_orphans_kept", removed = outcome.removed, failed = outcome.failed,
+                skipped = outcome.skipped, first = ?outcome.first_failure, "pastas do contador de login que a varredura não tirou ou não conferiu"),
+            Ok(Ok(outcome)) if outcome.removed > 0 => tracing::info!(code = "auth_orphans_removed", removed = outcome.removed, "pastas órfãs do contador de login apagadas"),
+            Ok(Ok(_)) => {},
+            Ok(Err(error)) => tracing::warn!(code = "auth_orphans_unreadable", kind = ?error.kind(), "pasta do Hangar ilegível; varredura do contador de login não rodou"),
+            Err(_) => tracing::warn!(code = "auth_orphans_failed", "tarefa da varredura do contador de login falhou"),
+        }
+    });
     // O `hangar-server open` instalado em `~/.hangar/bin` acha a `backend/` por aqui (o servidor roda nela).
     if let Ok(backend) = std::env::current_dir() && hangar_server::session_open::cli::is_backend(&backend) {
         let home = hangar_server::accounts::environment::AccountEnvironment::capture().home;
