@@ -52,6 +52,13 @@ impl Chat {
 
     pub fn position(&self, id: &str) -> Option<usize> { self.index.get(id).copied() }
 
+    /// Tira da memória os `count` eventos mais antigos; o servidor continua com eles e o histórico os traz de volta.
+    pub fn drop_oldest(&mut self, count: usize) {
+        self.events.drain(..count.min(self.events.len()));
+        self.reindex();
+        self.unsynced = 0;
+    }
+
     pub fn apply(&mut self, event: ChatEvent) {
         if event.queued_confirmed == Some(true) {
             self.removed.insert(event.id.clone());
@@ -573,6 +580,21 @@ mod tests {
         chat.update_preview(Preview { text: "Resposta longa o bastante. É a mesma do histórico.".into(), ..Default::default() });
         chat.merge_history(vec![event("assistant_msg", "said", "Resposta longa o bastante. É a mesma do histórico.")]);
         assert!(chat.preview.text.is_empty());
+    }
+
+    #[test]
+    fn dropped_oldest_events_leave_the_tail_indexed_and_come_back_with_older_history() {
+        let mut chat = Chat::default();
+        let all: Vec<ChatEvent> = (0..5).map(|i| event("assistant_msg", &format!("e{i}"), &format!("texto {i}"))).collect();
+        chat.merge_history(all.clone());
+        chat.take_unsynced();
+        chat.drop_oldest(3);
+        assert_eq!(chat.events.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["e3", "e4"]);
+        assert_eq!((chat.position("e3"), chat.position("e4"), chat.position("e1")), (Some(0), Some(1), None));
+        assert_eq!(chat.take_unsynced(), 0, "as linhas são refeitas desde o começo");
+        // "Carregar anteriores" pede uma janela maior: os que saíram voltam na ordem, sem duplicar os que ficaram.
+        chat.merge_history(all[1..].to_vec());
+        assert_eq!(chat.events.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["e1", "e2", "e3", "e4"]);
     }
 
     #[test]

@@ -151,6 +151,27 @@ const COLUMN: f32 = 780.;
 /// inteira (`HISTORY_PAGE`) custa muito mais em transcript grande. Ela vem logo depois, por baixo.
 const FIRST_PAGE: usize = 60;
 const HISTORY_PAGE: usize = 400;
+/// Eventos de folga acima da primeira linha na tela que o corte do histórico não alcança.
+const TRIM_MARGIN: usize = 40;
+
+/// Quantos eventos antigos saem quando o transcript inteiro (busca, volta a uma citação) deixa de ser preciso: fica a
+/// janela normal. `first_visible` é o evento da primeira linha na tela, `None` no fim da conversa. Com ela antes da
+/// janela, ou colada ao começo dela, nada sai: a leitura não é tirada do lugar, e o corte espera a volta ao fim.
+fn history_cut(events: usize, first_visible: Option<usize>) -> usize {
+    let cut = events.saturating_sub(HISTORY_PAGE);
+    if first_visible.is_some_and(|first| first < cut + TRIM_MARGIN) { 0 } else { cut }
+}
+
+/// O evento mais antigo que a linha mostra; a lista de tarefas não é de evento nenhum.
+fn first_event(item: &Item) -> Option<usize> {
+    match item {
+        Item::Event(i) | Item::Orphan(i) => Some(*i),
+        Item::Tool(tool) => Some(tool.call),
+        Item::Group { tools, .. } => tools.first().map(|tool| tool.call),
+        Item::Thinking { parts, .. } => parts.first().copied(),
+        Item::Tasks { .. } => None,
+    }
+}
 
 /// Conexão, máquina e nome da sessão aberta (`session_owner`).
 pub(crate) type SessionOwner = (u64, String, String);
@@ -707,6 +728,7 @@ pub struct Hangar {
     preview_drop_epoch: u64,
     preview_drop_scheduled: bool,
     visible_preview: Preview,
+    preview_cache: PreviewSource,
     preview_tick_epoch: u64,
     preview_tick_scheduled: bool,
     preview_last_tick: Option<Instant>,
@@ -1155,7 +1177,7 @@ impl Hangar {
             list_state, rail_hover: None, follow: Default::default(), row_ids: Vec::new(), row_signatures: Vec::new(), conversation: Default::default(), row_assets: Vec::new(), expanded: HashSet::new(), kept_expanded: HashMap::new(), orq_days: HashSet::new(),
             table_column: HashMap::new(), tables: HashMap::new(), last_message: None, live_clear_epoch: [0; 2], rich: HashMap::new(), prepared: HashMap::new(), cites: CiteCheck::default(), render_tick: 0,
             preview_drop_epoch: 0, preview_drop_scheduled: false,
-            visible_preview: Preview::default(), preview_tick_epoch: 0, preview_tick_scheduled: false,
+            visible_preview: Preview::default(), preview_cache: PreviewSource::default(), preview_tick_epoch: 0, preview_tick_scheduled: false,
             preview_last_tick: None, preview_carry: 0., preview_deadline: None,
             attachments: HashMap::new(), quotes: Default::default(), mermaid: Default::default(), attach_seq: 0, uploading: HashMap::new(), commands: HashMap::new(), commands_latest: HashMap::new(), commands_seq: 0,
             plugin_question_seen: None,
@@ -1772,6 +1794,26 @@ impl Hangar {
         if let Some(task) = self.history_task.take() { task.abort(); }
         (self.history_limit, self.etag) = (0, None);
         self.load_history(cx);
+    }
+
+    /// Quantos eventos antigos do transcript inteiro já podem sair (`history_cut`); zero enquanto a busca ou a volta
+    /// a uma citação ainda o usam.
+    fn history_trim(&self) -> usize {
+        if self.history_limit != 0 || self.loading || self.find.open || self.quote_flashing() { return 0; }
+        let top = self.list_state.logical_scroll_top().item_ix;
+        let first_visible = self.conversation.items.get(top..).and_then(|rest| rest.iter().find_map(first_event));
+        history_cut(self.chat.events.len(), first_visible)
+    }
+
+    /// Devolve a conversa à janela normal sem mexer no que está na tela; o que saiu volta por "Carregar anteriores".
+    fn trim_history(&mut self, cx: &mut Context<Self>) {
+        let cut = self.history_trim();
+        if cut == 0 { return; }
+        self.chat.drop_oldest(cut);
+        (self.history_limit, self.has_older, self.etag) = (HISTORY_PAGE, true, None);
+        self.sync_rows(cx);
+        self.follow_keep_end();
+        self.redraw(panes::Area::Conversation, cx);
     }
 
     fn load_history(&mut self, cx: &mut Context<Self>) {
@@ -2812,6 +2854,7 @@ impl Hangar {
         self.preview_carry = 0.;
         self.preview_deadline = None;
         self.visible_preview = Preview::default();
+        self.preview_cache = PreviewSource::default();
     }
 
     fn update_visible_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2820,8 +2863,10 @@ impl Hangar {
             && self.visible_preview.vivo == next.vivo && next.text.starts_with(&self.visible_preview.text);
         if self.visible_preview.text.is_empty() || next.vivo || cx.reduce_motion() || !extends {
             let next = next.clone();
+            // A prévia trocada inteira quase sempre só cresceu: o começo já pronto continua valendo.
+            let cache = std::mem::take(&mut self.preview_cache);
             self.clear_visible_preview();
-            self.visible_preview = next;
+            (self.visible_preview, self.preview_cache) = (next, cache);
             return;
         }
         self.preview_deadline = Some(Instant::now() + Duration::from_millis(1200));
@@ -3764,7 +3809,7 @@ impl Hangar {
         let rewritten: Vec<(usize, String)> = ids.iter().enumerate().filter_map(|(i, id)| {
             let cached = self.rich.get(id)?;
             if id == PREVIEW {
-                let body = preview_source(&self.visible_preview);
+                let body = self.preview_cache.source(&self.visible_preview);
                 return (cached.source != body).then_some((from + i, body));
             }
             let Prepared::Message { markdown, .. } = self.prepared.get(id)? else { return None };
@@ -3829,7 +3874,7 @@ impl Hangar {
     /// a cada quadro. Devolve falso quando a linha ainda não existe e é preciso o `sync_rows` inteiro.
     fn sync_preview_row(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(index) = self.row_ids.iter().rposition(|id| id == PREVIEW) else { return false };
-        let body = preview_source(&self.visible_preview);
+        let body = self.preview_cache.source(&self.visible_preview);
         let Some(cached) = self.rich.get(PREVIEW) else { return true };
         if cached.source == body { return true; }
         let added = body.strip_prefix(&cached.source).map(str::to_owned);
@@ -6920,14 +6965,65 @@ fn preview_source(preview: &Preview) -> String {
     output
 }
 
+/// A fonte da prévia em markdown guardada entre os passos do streaming: o começo que já não muda fica pronto, e
+/// cada passo refaz só o fim do texto. O resultado é o de `preview_source`.
+#[derive(Default)]
+struct PreviewSource {
+    /// Começo do texto já sem as marcas do protocolo, sempre em fim de linha.
+    stable: String,
+    /// `stable` com as citações e o escape aplicados.
+    output: String,
+    fence: composer::CitationFence,
+    safe: SafeState,
+}
+
+impl PreviewSource {
+    fn source(&mut self, preview: &Preview) -> String {
+        if !preview.md { return preview_source(preview); }
+        let plain = interaction::plan_display(&preview.text);
+        let mended = crate::mend::close_hanging(&plain);
+        // Texto que não continua o guardado (outra resposta, marcação refeita mais atrás): começa de novo.
+        if !mended.starts_with(&self.stable) { *self = Self::default(); }
+        let kept = self.stable.len();
+        // O `close_hanging` só mexe no fim: linha inteira que ele deixou como chegou não muda mais.
+        let same = plain.as_bytes().get(kept..).map_or(0, |rest| rest.iter().zip(&mended.as_bytes()[kept..]).take_while(|(a, b)| a == b).count());
+        let end = mended.as_bytes()[kept..kept + same].iter().rposition(|byte| *byte == b'\n').map_or(kept, |at| kept + at + 1);
+        let alive = |_: &str| false;
+        if end > kept {
+            let mut fence = self.fence;
+            let cited = composer::citation_markdown_resumed(&mended[kept..end], &alive, &[], &mut source_map::Edits::default(), &mut fence);
+            // A emenda com o resto só vale em fim de linha, também depois das citações.
+            if cited.ends_with('\n') {
+                self.output.push_str(&safe_markdown_resumed(&cited, &mut source_map::Edits::default(), &mut self.safe));
+                self.stable.push_str(&mended[kept..end]);
+                self.fence = fence;
+            }
+        }
+        let (mut fence, mut safe) = (self.fence, self.safe);
+        let cited = composer::citation_markdown_resumed(&mended[self.stable.len()..], &alive, &[], &mut source_map::Edits::default(), &mut fence);
+        let mut output = String::with_capacity(self.output.len() + cited.len() + 8);
+        output.push_str(&self.output);
+        output.push_str(&safe_markdown_resumed(&cited, &mut source_map::Edits::default(), &mut safe));
+        output
+    }
+}
+
 fn safe_markdown(source: &str) -> String { safe_markdown_mapped(source, &mut source_map::Edits::default()) }
 
 /// Como `safe_markdown`, anotando em `edits` cada trecho trocado (escape, imagem).
 fn safe_markdown_mapped(source: &str, edits: &mut source_map::Edits) -> String {
     if !source.contains('<') && !source.contains("![") { return source.to_owned(); }
+    safe_markdown_resumed(source, edits, &mut SafeState::default())
+}
+
+/// Cerca e código em linha abertos no fim de um texto.
+type SafeState = (Option<char>, Option<usize>);
+
+/// Como `safe_markdown_mapped`, para um texto que continua outro em fim de linha: parte de `state` e deixa nele o
+/// estado do fim deste.
+fn safe_markdown_resumed(source: &str, edits: &mut source_map::Edits, state: &mut SafeState) -> String {
     let mut output = String::with_capacity(source.len());
-    let mut fence = None;
-    let mut inline = None;
+    let (mut fence, mut inline) = *state;
     let mut line_start = 0;
     for line in source.split_inclusive('\n') {
         let line_at = line_start;
@@ -6967,6 +7063,7 @@ fn safe_markdown_mapped(source: &str, edits: &mut source_map::Edits) -> String {
             } else { output.push(ch); }
         }
     }
+    *state = (fence, inline);
     output
 }
 
@@ -7099,6 +7196,11 @@ impl Hangar {
                         .child(column_box(false).h_full().rounded(px(14.)).border_1().border_color(theme::border())
                             .bg(theme::sheet()).shadow(theme::sheet_shadow())));
                     self.paint_quote_flash(cx);
+                    // Busca fechada ou citação já mostrada: o transcript inteiro sai depois deste desenho.
+                    if self.history_trim() > 0 {
+                        let view = cx.entity().downgrade();
+                        cx.defer(move |cx| { view.update(cx, |this, cx| this.trim_history(cx)).ok(); });
+                    }
                     let cite_offer = self.render_cite_offer(window, cx);
                     content = content.child(div().relative().flex_1().min_h_0().flex().flex_col()
                         // A seleção numa resposta oferece "Citar" ao soltar o mouse.
@@ -8659,6 +8761,57 @@ mod tests {
         }
         let preview = super::Preview { text: text.into(), md: true, ..Default::default() };
         assert_eq!(super::preview_source(&preview), "Resposta\n");
+    }
+
+    #[test]
+    fn full_history_is_cut_back_to_the_window_only_when_the_reader_is_inside_it() {
+        use super::{history_cut, HISTORY_PAGE, TRIM_MARGIN};
+        let events = HISTORY_PAGE + 600;
+        assert_eq!(history_cut(HISTORY_PAGE, None), 0, "conversa que cabe na janela fica inteira");
+        assert_eq!(history_cut(events, None), 600, "no fim da conversa sai tudo antes da janela");
+        assert_eq!(history_cut(events, Some(600 + TRIM_MARGIN)), 600, "lendo dentro da janela, com a folga");
+        assert_eq!(history_cut(events, Some(600 + TRIM_MARGIN - 1)), 0, "colado ao começo da janela, espera");
+        assert_eq!(history_cut(events, Some(100)), 0, "lendo lá atrás, nada sai");
+    }
+
+    #[test]
+    fn streamed_preview_source_equals_the_full_pass_and_keeps_finished_lines() {
+        use super::{preview_source, Preview, PreviewSource};
+        let text = concat!(
+            "Resumo com **negrito aberto\ne `código` em src/app.rs:12 e <b>tag</b>.\n\n",
+            "- item um com [link](https://a.b/c)\n- item dois ![img](/tmp/g.png) e `a < b`\n\n",
+            "```rust\nlet x = \"<div>\"; // src/main.rs:3\n```\n\n",
+            "````md\n```\ndentro <i>\n````\n\n",
+            "~~~\ntil <p>\n~~~\n",
+            "<proposed_plan>\nplano com `crase aberta\ne <span> depois\n</proposed_plan>\n\n",
+            "| Conta | Uso |\n|---|---|\n| Kimi | <62%> |\n\n",
+            "<hangar-ref kind=\"quote\" v=\"1\" source=\"s:1\">\n<hangar-text>\ntrecho **citado**\n</hangar-text>\n</hangar-ref>\n\n",
+            "Título\n-\n\ntexto final com [link pendente](https://x.y/z e ~~risco",
+        );
+        let cuts: Vec<usize> = text.char_indices().map(|(at, _)| at).chain([text.len()]).collect();
+        for step in [1, 7, 41] {
+            let mut cache = PreviewSource::default();
+            for &end in cuts.iter().step_by(step).chain([&text.len()]) {
+                let preview = Preview { text: text[..end].to_owned(), md: true, ..Default::default() };
+                assert_eq!(cache.source(&preview), preview_source(&preview), "passo {step}, corte em {end}");
+            }
+            let kept = crate::interaction::plan_display(text).rfind("\n\n").unwrap();
+            assert!(cache.stable.len() > kept, "passo {step}: as linhas prontas ficam guardadas ({} de {kept})", cache.stable.len());
+            // Outra resposta, que não continua a guardada: nada do que ficou vale.
+            for other in ["Outra <b>resposta</b>\n\ncom `código", &text[..40]] {
+                let preview = Preview { text: other.to_owned(), md: true, ..Default::default() };
+                assert_eq!(cache.source(&preview), preview_source(&preview), "passo {step}, troca para {other:?}");
+            }
+        }
+        // Rodapé de memória some até o fim do texto e volta quando fecha: o guardado não pode esconder o resto.
+        let mut cache = PreviewSource::default();
+        for text in ["Resposta\n\nmais\n", "Resposta\n\nmais\n<oai-mem-citation>M.md:1\nx\n", "Resposta\n\nmais\n<oai-mem-citation>M.md:1\nx\n</oai-mem-citation>\nfim <b>\n"] {
+            let preview = Preview { text: text.to_owned(), md: true, ..Default::default() };
+            assert_eq!(cache.source(&preview), preview_source(&preview), "{text:?}");
+        }
+        // Prévia que não é markdown não passa pelo guardado.
+        let plain = Preview { text: "a < b\n".into(), md: false, ..Default::default() };
+        assert_eq!(PreviewSource::default().source(&plain), preview_source(&plain));
     }
 
     #[test]

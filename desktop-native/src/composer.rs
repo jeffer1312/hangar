@@ -454,10 +454,18 @@ pub fn citation_markdown_with(source: &str, dead: &dyn Fn(&str) -> bool) -> Stri
 /// Como `citation_markdown_with`, anotando em `edits` cada trecho trocado por um chip. Os caminhos de `hidden` já
 /// aparecem como anexo: a linha que só os tinha some e, no meio da frase, fica o nome do arquivo.
 pub fn citation_markdown_mapped(source: &str, dead: &dyn Fn(&str) -> bool, hidden: &[String], edits: &mut crate::source_map::Edits) -> String {
+    citation_markdown_resumed(source, dead, hidden, edits, &mut None)
+}
+
+/// Cerca de código aberta no fim de um texto: o marcador e o tamanho dele.
+pub type CitationFence = Option<(char, usize)>;
+
+/// Como `citation_markdown_mapped`, para um texto que continua outro em fim de linha: parte da cerca em `fence` e
+/// deixa nela a do fim deste.
+pub fn citation_markdown_resumed(source: &str, dead: &dyn Fn(&str) -> bool, hidden: &[String], edits: &mut crate::source_map::Edits, fence: &mut CitationFence) -> String {
     let mut hidden = hidden.to_vec();
     hidden.sort_by_key(|path| std::cmp::Reverse(path.len()));
     let mut output = String::with_capacity(source.len());
-    let mut fence = None;
     let mut line_start = 0;
     let mut squeeze = false;
     for line in source.split_inclusive('\n') {
@@ -470,9 +478,9 @@ pub fn citation_markdown_mapped(source: &str, dead: &dyn Fn(&str) -> bool, hidde
         if let Some(marker) = marker {
             let count = trimmed.chars().take_while(|c| *c == marker).count();
             if count >= 3 && line.len() - trimmed.len() <= 3 {
-                match fence {
-                    None => fence = Some((marker, count)),
-                    Some((open, length)) if marker == open && count >= length && trimmed[count..].trim().is_empty() => fence = None,
+                match *fence {
+                    None => *fence = Some((marker, count)),
+                    Some((open, length)) if marker == open && count >= length && trimmed[count..].trim().is_empty() => *fence = None,
                     _ => {},
                 }
                 output.push_str(line); continue;
