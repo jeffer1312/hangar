@@ -955,7 +955,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     return { label: machineLabel(sv, tags), color: tagHex(tags?.machine?.color) ?? serverColor(sv.id),
       icon: tags?.machine ? MACHINE_ICON_NAME[tags.machine.icon] : 'Monitor' as const };
   };
-  const activeMachine = machineView(active, Math.max(0, machines.findIndex((sv) => sv.id === active.id)));
+  const activeMachine = machineView(active, machines.findIndex((sv) => sv.id === active.id));
   // Pílula única da conversa nova: "Rodar em" (máquinas) e, com projeto, "Onde" (o seletor de branch acima).
   const placePanel = (
     <AnchoredPanel open={branchOpen} anchor={branchRef.current} maxHeightRatio={0.75} onClose={() => setBranchOpen(false)}
