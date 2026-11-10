@@ -602,7 +602,13 @@ fn steps(home: &Path, dir: &Path, project: Option<&str>, op: &str, diary: &mut V
     log_stage(diary, "espelhar_settings", false);
     warnings.extend(seed_settings(home, dir)?);
     log_stage(diary, "conferir_plugins", false);
-    warnings.extend(check_plugins(home, dir)?);
+    let registry_warnings = share_plugin_registry(home);
+    let checked = check_plugins(home, dir)?;
+    // O `check_plugins` já avisa quando não consegue ler o installed_plugins.json.
+    let unread = format!("plugins: não consegui ler {}:", shared.join("plugins").join("installed_plugins.json").display());
+    let reported = checked.iter().any(|c| c.starts_with(&unread));
+    warnings.extend(registry_warnings.into_iter().filter(|w| !(reported && w.starts_with(&unread))));
+    warnings.extend(checked);
     log_stage(diary, "espelhar_config", false);
     warnings.extend(mirror_claude_json(home, dir)?);
     // Atalho para o que sumiu do compartilhado, e qualquer outro link morto no topo.
@@ -974,37 +980,49 @@ pub(crate) fn check_plugins(home: &Path, dir: &Path) -> Result<Vec<String>> {
     Ok(warnings)
 }
 
+const PLUGIN_REGISTRY: [&str; 2] = ["installed_plugins.json", "known_marketplaces.json"];
+
 /// O registro de plugins é um só para todas as contas, mas o CLI grava o caminho pela pasta da conta
 /// que instalou: apagar a conta deixaria o plugin sem pasta em todas. O caminho passa ao destino real.
 pub(crate) fn detach_plugin_paths(home: &Path, dir: &Path) -> Result<()> {
     let dirs = [dir.to_path_buf(), super::catalog::resolved(dir)];
     let plugins = home.join(".claude").join("plugins");
-    for file in ["installed_plugins.json", "known_marketplaces.json"] {
-        detach_file(&plugins.join(file), &dirs)?;
+    for file in PLUGIN_REGISTRY {
+        rewrite_registry(&plugins.join(file), &|path| outside(path, &dirs))?;
     }
     Ok(())
 }
 
+/// Conta apagada sem passar pelo `detach_plugin_paths` (a pasta removida à mão) não tem mais o link
+/// para resolver: o caminho dela vai ao `~/.claude/plugins` quando o alvo existe lá.
+pub(crate) fn share_plugin_registry(home: &Path) -> Vec<String> {
+    let plugins = home.join(".claude").join("plugins");
+    PLUGIN_REGISTRY.iter()
+        .filter_map(|file| rewrite_registry(&plugins.join(file), &|path| shared_plugin_path(home, &plugins, path)).err())
+        .map(|error| error.cause())
+        .collect()
+}
+
 /// O CLI de outra conta grava o mesmo arquivo sem trava que o Hangar alcance: só grava se o arquivo
 /// ainda é o que foi lido, e refaz a troca quando ele mudou no meio.
-fn detach_file(path: &Path, dirs: &[PathBuf]) -> Result<()> {
+fn rewrite_registry(path: &Path, target: &dyn Fn(&Path) -> Option<PathBuf>) -> Result<()> {
     const ATTEMPTS: usize = 3;
+    let unreadable = |e: String| refused(format!("plugins: não consegui ler {}: {e}", path.display()));
+    let io_error = |e: io::Error| unreadable(e.to_string());
     for _ in 0..ATTEMPTS {
         let before = match fs::read(path) {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-            read => read,
+            read => read.map_err(io_error)?,
         };
-        let unreadable = |e: String| refused(format!("plugins: não consegui ler {}: {e}", path.display()));
-        let before = before.map_err(|e| unreadable(e.to_string()))?;
         let Some(mut data) = parse_json(path, Ok(before.clone())).map_err(unreadable)? else { return Ok(()) };
-        if !repoint(&mut data, dirs) { return Ok(()); }
+        if !repoint(&mut data, target) { return Ok(()); }
         let text = pyjson::dumps_indent(&data, 2, false);
         if text.chars().any(py::is_marker) {
             return Err(refused(format!("plugins: {} tem texto com surrogate solto, que não dá pra gravar em UTF-8", path.display())));
         }
         match fs::read(path) {
             Ok(now) if now == before => return write_replacing(path, &text),
-            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(unreadable(error.to_string())),
+            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(io_error(error)),
             _ => {}
         }
     }
@@ -1012,11 +1030,11 @@ fn detach_file(path: &Path, dirs: &[PathBuf]) -> Result<()> {
 }
 
 /// Todo texto que é caminho dentro da conta: o registro tem mais de um campo de caminho.
-fn repoint(value: &mut Value, dirs: &[PathBuf]) -> bool {
+fn repoint(value: &mut Value, target: &dyn Fn(&Path) -> Option<PathBuf>) -> bool {
     match value {
-        Value::Array(items) => items.iter_mut().fold(false, |changed, item| repoint(item, dirs) | changed),
-        Value::Object(map) => map.values_mut().fold(false, |changed, item| repoint(item, dirs) | changed),
-        Value::String(text) => match outside(Path::new(text.as_str()), dirs) {
+        Value::Array(items) => items.iter_mut().fold(false, |changed, item| repoint(item, target) | changed),
+        Value::Object(map) => map.values_mut().fold(false, |changed, item| repoint(item, target) | changed),
+        Value::String(text) => match target(Path::new(text.as_str())) {
             Some(real) => { *text = real.to_string_lossy().into_owned(); true }
             None => false,
         },
@@ -1033,6 +1051,23 @@ fn outside(path: &Path, dirs: &[PathBuf]) -> Option<PathBuf> {
     let first = dir.join(parts.next()?);
     let real = PathBuf::from(super::catalog::displayed(&fs::canonicalize(&first).ok()?));
     (!dirs.iter().any(|dir| real.starts_with(dir))).then(|| real.join(parts.as_path()))
+}
+
+/// Só conta cuja pasta sumiu: a viva tem o CLI regravando o caminho dela a cada atualização de plugin.
+fn shared_plugin_path(home: &Path, plugins: &Path, path: &Path) -> Option<PathBuf> {
+    let mut parts = path.components();
+    for want in home.components() {
+        let got = parts.next()?.as_os_str();
+        // No Windows a letra do drive pode vir com outra caixa.
+        let same = if cfg!(windows) { got.eq_ignore_ascii_case(want.as_os_str()) } else { got == want.as_os_str() };
+        if !same { return None; }
+    }
+    let account = parts.next()?.as_os_str();
+    if !account.to_str()?.starts_with(".claude-") || parts.next()?.as_os_str() != "plugins" { return None; }
+    if fs::symlink_metadata(home.join(account)).is_ok() { return None; }
+    let mut shared = plugins.to_path_buf();
+    shared.extend(parts);
+    Some(shared)
 }
 
 /// O preparo da pasta pendente da criação: `~/.claude` garantido, o `.claude.json` do principal sem o
@@ -1377,6 +1412,39 @@ mod tests {
         left.sort();
         assert_eq!(left, ["hooks.1", "hooks.2", "hooks.3"], "a cópia com o mtime antigo é a podada na entrada seguinte");
         assert_eq!(fs::read_to_string(dir.join(".drift/hooks.1")).unwrap(), "novo");
+    }
+
+    #[test]
+    fn the_prep_points_the_plugin_registry_at_the_shared_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let h = home.display();
+        fs::create_dir_all(home.join(".claude/plugins/cache/m/p/1")).unwrap();
+        fs::create_dir_all(home.join(".claude/plugins/marketplaces/m")).unwrap();
+        fs::create_dir_all(home.join(".claude-conta2")).unwrap();
+        fs::write(home.join(".claude-conta2/.hangar-conta"), "").unwrap();
+        let installed = home.join(".claude/plugins/installed_plugins.json");
+        let known = home.join(".claude/plugins/known_marketplaces.json");
+        fs::write(&installed, format!(r#"{{"version": 2, "plugins": {{"p@m": [
+            {{"installPath": "{h}/.claude-apagada/plugins/cache/m/p/1"}},
+            {{"installPath": "{h}/.claude-apagada/plugins/cache/m/p/2"}},
+            {{"installPath": "{h}/.claude-conta2/plugins/cache/m/p/1"}},
+            {{"installPath": "/outro/lugar/plugins/cache/m/p/1"}}]}}}}"#)).unwrap();
+        fs::write(&known, format!(r#"{{"m": {{"installLocation": "{h}/.claude-apagada/plugins/marketplaces/m"}}}}"#)).unwrap();
+        assert!(reconcile(home, &home.join(".claude-conta2"), None).result.is_ok());
+        let read = |path: &Path| serde_json::from_str::<Value>(&fs::read_to_string(path).unwrap()).unwrap();
+        let paths: Vec<_> = read(&installed)["plugins"]["p@m"].as_array().unwrap().iter().map(|e| e["installPath"].as_str().unwrap().to_owned()).collect();
+        assert_eq!(paths, [format!("{h}/.claude/plugins/cache/m/p/1"), format!("{h}/.claude/plugins/cache/m/p/2"),
+            format!("{h}/.claude-conta2/plugins/cache/m/p/1"), "/outro/lugar/plugins/cache/m/p/1".into()],
+            "só troca caminho de conta cuja pasta sumiu, mesmo com a versão já fora do cache");
+        assert_eq!(read(&known)["m"]["installLocation"], format!("{h}/.claude/plugins/marketplaces/m"));
+        let untouched = r#"{"version":2,"plugins":{}}"#;
+        fs::write(&installed, untouched).unwrap();
+        assert!(reconcile(home, &home.join(".claude-conta2"), None).result.is_ok());
+        assert_eq!(fs::read_to_string(&installed).unwrap(), untouched, "sem caminho de conta o arquivo não é regravado");
+        fs::write(&known, "{").unwrap();
+        let warnings = share_plugin_registry(home);
+        assert!(warnings.len() == 1 && warnings[0].contains("known_marketplaces.json"), "registro ilegível avisa: {warnings:?}");
     }
 
     #[test]
