@@ -74,7 +74,7 @@ add_page()
 class Handler(T22NS["Handler"]):
     def do_GET(self):
         parts = [unquote(p) for p in urlparse(self.path).path.strip("/").split("/")]
-        if parts[:2] == ["api", "sessions"] and parts[3:5] == ["pages", PAGE_ID] and len(parts) in (5, 6):
+        if parts[:3] == ["api", "sessions", PAGE_NAME] and parts[3:5] == ["pages", PAGE_ID] and len(parts) in (5, 6):
             if not self.authorized():
                 return
             if len(parts) == 6:
