@@ -86,6 +86,9 @@ async fn saved_providers_override_legacy_and_are_read_after_normal_writes() {
     assert_eq!(updated["organization"]["dictation_organization_mode"], "none");
     apply(&state, json!({"transcription_providers":[], "groq_api_key":""}));
     assert_eq!(snapshot(&state).await.unwrap()["legacy"], initial["legacy"]);
+    std::fs::write(state.accounts.env.claude_base.join("runtime-config.json"),
+        json!({"dictation_max_minutes":"12"}).to_string()).unwrap();
+    assert_eq!(snapshot(&state).await.unwrap()["dictation_max_minutes"], 12);
 }
 
 #[tokio::test]

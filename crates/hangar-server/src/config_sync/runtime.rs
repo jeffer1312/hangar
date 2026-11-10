@@ -73,10 +73,13 @@ impl RuntimeConfig {
                 organization[field] = json!("");
             }
         }
+        // Mesma conversão do `int()` da rota Python: "12" salvo como texto vale 12.
+        let max_minutes = value_or("dictation_max_minutes", json!(0));
+        let max_minutes = crate::value_coercion::integer(&max_minutes).unwrap_or(max_minutes);
         ValueGuard(json!({"providers":providers.take(), "legacy":legacy,
             "organization":organization.take(),
             "user_vocabulary":value_or("ditado_vocabulario",json!("")),
-            "dictation_max_minutes":value_or("dictation_max_minutes",json!(0)),
+            "dictation_max_minutes":max_minutes,
             "state_path":self.env.home.join(".hangar/transcription-wait.json").to_string_lossy()}))
     }
     fn effective(&self,key:&str,current:&Map<String,Value>)->Value {
