@@ -2666,16 +2666,19 @@ Antes, parear com `servidor::sessao` fazia um par 1:1 que não crescia, e `--gro
 - **Limites registrados.** Só o Claude reinjeta o protocolo depois de `/clear` ou compactação
   (Codex, Pi, omp e Kimi perdem). A sugestão de tarefa do grupo (`/api/pair/task-suggestion`,
   Python) só lê conversas desta máquina.
-- **Pela 8768, recado a sessão do Python volta na resposta.** `group.leave` da ponte e as rotas
-  `/api/groups/*` repassadas da porta do Connect rodam sob o contexto da ponte: recado a Pi, omp
-  ou Kimi não chama o `/input` do Python dentro do pedido dele. Na saída vem em `deliveries`; nas
-  rotas entre máquinas, em `hangar_deliveries` no corpo, que o Python tira da resposta e entrega
-  depois dela (falha vai ao diário como `grupos.entrega_adiada_falhou`). Limites aceitos: nessas
-  rotas o recado adiado conta como entregue em `failed`/`pulados`; o `orq` (`is-orchestrator`,
-  fase, promoção) ainda é perguntado ao Python dentro do pedido, porque a outra máquina não manda
-  esses fatos; e o protocolo ao membro novo e o aviso de saída que saem depois da resposta
-  (`tell_newcomers`, `local_apply`, `relay_outside`) chamam o Python direto, fora do pedido.
-  Prova: `bridged_leave_never_calls_python`, `connect_forwarded_deliver_defers_python_sessions`.
+- **Pela 8768, recado a sessão sem entrada no Rust sai depois da rota, pelo próprio Rust.**
+  `group.leave` da ponte e as rotas `/api/groups/*` repassadas da porta do Connect rodam sob o
+  contexto da ponte: o recado a uma sessão sem entrada no Rust não é digitado dentro do pedido;
+  sai depois da rota, em processo (`groups/bridge.rs`, `deliver_deferred`), na ordem por sessão e
+  com as sessões em paralelo. Pela porta do Connect cada sessão tem 3 s; pela ponte do Python, o
+  que sobra de 75 s desde o começo do pedido. Quem não recebeu entra em `failed`/`pulados` (como
+  `servidor::sessão`) ou no `warning`, e no diário como `rust.groups_deferred_failed` ou
+  `rust.groups_bridge_delivery_failed`. Limite aceito: o prazo larga a espera sem cancelar a
+  entrega, então um recado marcado como não entregue ainda pode chegar. O mecanismo anterior, em
+  que o recado voltava ao Python na resposta, está em
+  [superado.md](superado.md#recado-adiado-devolvido-ao-python-na-resposta).
+  Prova: `bridged_leave_never_calls_python`, `connect_forwarded_deliver_never_returns_work_to_python`,
+  `connect_forwarded_notice_delivers_unowned_sessions_after_the_route_within_three_seconds`.
 
 ## Organização opcional do ditado no Rust
 
@@ -4318,6 +4321,11 @@ Diferenças em relação ao Python, decididas pelo dono:
 - Codex rodando direto no tmux só recebe texto com o campo vazio e pronto. Com menu, diálogo, popup de
   barra ou rascunho, 409 na hora (`codex_menu_open`, `codex_composer_busy`), sem fila: o Python
   digitava por cima, e adiar na fila perdia o recado, porque nada drena a fila de um Codex sem ator.
+- Comando de barra nesse Codex leva um Enter; o segundo, que o Python sempre mandava, só sai com o
+  comando ainda na caixa. Medido no Codex 0.167: depois de um Enter o `/resume` mostra a lista de
+  conversas (rodapé `enter resume`), e outro Enter retomaria a que está sob o cursor.
+- A caixa do Codex é lida até a barra de estado, com as linhas em branco dos parágrafos: lida só até a
+  primeira linha em branco, um texto com parágrafos nunca provava a digitação.
 - Shell ou programa desconhecido no pane: 400 na hora. O Python esperava 14 s por um agente nascendo,
   que o Rust adota.
 - `DELETE` com processo que não morre: 500 `session_kill_unconfirmed`, com fila, sidecar, convite e
