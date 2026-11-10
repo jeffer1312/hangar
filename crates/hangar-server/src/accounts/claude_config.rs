@@ -1002,8 +1002,10 @@ fn detach_file(path: &Path, dirs: &[PathBuf]) -> Result<()> {
         if text.chars().any(py::is_marker) {
             return Err(refused(format!("plugins: {} tem texto com surrogate solto, que não dá pra gravar em UTF-8", path.display())));
         }
-        if fs::read(path).ok().as_deref() == Some(before.as_slice()) {
-            return write_replacing(path, &text);
+        match fs::read(path) {
+            Ok(now) if now == before => return write_replacing(path, &text),
+            Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(unreadable(error.to_string())),
+            _ => {}
         }
     }
     Err(refused(format!("plugins: {} mudou {ATTEMPTS} vezes durante a troca; tente de novo", path.display())))
