@@ -1746,6 +1746,7 @@ impl Hangar {
         self.clear_visible_preview();
         // Sem sessão aberta, nada da conversa anterior fica de pé: textos preparados, páginas e o Chromium delas.
         self.rich.clear();
+        self.pages.clear(cx);
         self.sync_rows(cx);
         self.pages.warm(false, window, cx);
         self.error = None;

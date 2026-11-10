@@ -477,8 +477,10 @@ impl Watcher {
         };
         let mut seen = BTreeSet::new();
         for target in targets {
-            let raw = sidecars.iter().map(|(_,meta)|meta).find(|meta|text(meta,"key") == Some(target.key.as_str()));
-            match raw.map(|meta|candidate(meta,home)) {
+            // O mesmo cálculo do vetor acima: lido duas vezes, o registro de transferência podia dar duas respostas na rodada.
+            let found = sidecars.iter().position(|(_,meta)|text(meta,"key") == Some(target.key.as_str()));
+            let raw = found.and_then(|at|sidecars.iter().map(|(_,meta)|meta).nth(at));
+            match found.map(|at|candidates[at].clone()) {
                 // Renomeada, app-server ressubido ou troca de modo em curso: esta vida acaba sem matar nada,
                 // e a adoção abaixo pega a nova quando ela estiver pronta.
                 Some(Some(c)) if c.name != target.name || c.endpoint != target.endpoint || c.app_pid != target.app_pid => self.release(registry,&target).await,

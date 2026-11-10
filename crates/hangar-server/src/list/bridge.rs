@@ -514,7 +514,7 @@ impl ListBridge {
         let dirs = self.dirs()?;
         let (at, wall) = (Instant::now(), wall_now());
         let (panes, dropped) = self.env.mux.list_panes_checked().await.map_err(|e| fail("mux_unavailable", e.code))?;
-        lock(&self.local).panes_partial = dropped.is_some();
+        let partial = dropped.is_some();
         if let Some(p) = dropped {
             self.facts.diag.report("rust.list_discovery", &p.key, p.code, p.reason);
         }
@@ -530,6 +530,8 @@ impl ListBridge {
             self.facts.diag.report("rust.list_discovery", &p.key, p.code, p.reason);
         }
         self.flush_notes();
+        // Junto da descoberta guardada: se esta falhasse antes daqui, a marca descreveria panes que ninguém usa.
+        lock(&self.local).panes_partial = partial;
         *slot = Some(Discovery { at, wall, epoch, fresh: newer_than.is_some(), rows: rows.clone(), agent_pids: agent_pids.clone(),
             panes: panes.clone(), children: children.clone() });
         Ok((rows, agent_pids, panes, children))
