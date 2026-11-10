@@ -31,7 +31,8 @@ let clockEpoch = 0;
 const previousLocale = localeAtual();
 const previousMessages = getLocale();
 const render = async () => { await act(async () => root.render(React.createElement(HomeUsageCard))); };
-const metric = (label: string) => node.querySelector(`[aria-label^="${label}:"]`)?.getAttribute('aria-label');
+// O custo leva "(tabela)" entre o nome e o valor.
+const metric = (label: string) => node.querySelector(`[aria-label^="${label}:"], [aria-label^="${label} ("]`)?.getAttribute('aria-label');
 const click = async (label: string) => { const button = [...node.querySelectorAll('button')].find((item) => item.textContent === label)!; expect(button).toBeTruthy(); await act(async () => button.click()); };
 beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(Date.parse('2026-10-22T12:00:00Z') + clockEpoch++ * 60_001);
@@ -45,7 +46,7 @@ afterEach(async () => { await act(async () => root.unmount()); vi.useRealTimers(
 
 it('Home soma máquinas próprias e dias e modelos únicos sem herdar destino ou filtros de Custos', async () => {
   await render();
-  expect(metric(m.home_usage_cost())).toBe(`${m.home_usage_cost()}: US$ 4,00`);
+  expect(metric(m.home_usage_cost())).toBe(`${m.home_usage_cost()} (${m.native_home_usage_cost_tag()}): US$ 4,00`);
   expect(metric(m.home_usage_sessions())).toBe(`${m.home_usage_sessions()}: 2`);
   expect(metric(m.home_usage_active_days())).toBe(`${m.home_usage_active_days()}: 1`);
   expect(metric(m.home_usage_model_count())).toBe(`${m.home_usage_model_count()}: 1`);

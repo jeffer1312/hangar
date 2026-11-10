@@ -50,8 +50,8 @@ type Props = {
   folderPanel: (close: () => void) => ReactNode;
   // Título acima da caixa, com a pasta tocável ("O que vamos fazer em [pasta]?").
   topPills: (openFolder: (opener: View | null) => void) => ReactNode;
-  // Máquina e worktree, conta e terminal, abaixo da caixa e à esquerda.
-  bottomPills: ReactNode;
+  // Onde o agente trabalha, conta e terminal, numa linha acima da caixa.
+  optionPills: ReactNode;
   providerChip: ReactNode;
   // Conversas antigas desta pasta que dá para continuar (hoje só o Codex lista).
   resume: { entries: { id: string; label: string }[]; busy: boolean; onPick: (id: string) => void } | null;
@@ -103,7 +103,7 @@ function HistoryButton({ onPress, disabled, busy }: { onPress: () => void; disab
 
 export function NewConversation({
   server, destination, destinationPending, providerLabel, folderPanel,
-  topPills, bottomPills, providerChip, resume, notices, body, takePrewarm, resumePrewarm, blocked, keyboardOffset, home,
+  topPills, optionPills, providerChip, resume, notices, body, takePrewarm, resumePrewarm, blocked, keyboardOffset, home,
 }: Props) {
   const collapsed = home?.mode === 'sessions';
   const input = useRef<TextInput>(null);
@@ -441,12 +441,13 @@ export function NewConversation({
 
       <Animated.View style={!home ? riseStyle : undefined}>
 
-      {/* A caixa do app de PC: campo em cima; anexo, conversas antigas, microfone e estilo do
-          ditado à esquerda; o chip do provider e o Enviar à direita. */}
+      <View style={styles.optionPills}>{optionPills}</View>
+      {/* Uma fileira só: anexo, campo, chip do provider, microfone e Enviar; cresce com o texto. */}
       <ComposerBox focused={focused}>
         {attachment ? <AttachmentPreview attachment={attachment} onRemove={removeAttachment} disabled={busy} /> : null}
-        <ComposerInput ref={input} style={styles.homeInput} value={text} onChangeText={setText} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
-          placeholder={m.composer_mensagem_para({ nome: providerLabel })} accessibilityLabel={m.nova_conversa_placeholder()}
+        {dictation.transcribing ? <Text style={styles.meta} accessibilityLiveRegion="polite">{m.composer_transcrevendo_audio()}</Text> : null}
+        <ComposerActions field={<ComposerInput ref={input} value={text} onChangeText={setText} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+          placeholder={m.composer_mensagem()} accessibilityLabel={m.nova_conversa_placeholder()}
           editable={!collapsed} autoFocus={!home && (router.canGoBack?.() ?? true)} recording={dictation.gravando} rms={dictation.rms} onCancelRecording={dictation.cancel}
           onPaste={(files, error) => {
             if (busy || dictation.gravando) return;
@@ -455,9 +456,8 @@ export function NewConversation({
             if (!f) return;
             pick(fromPastedFile(f));
             if (files.length > 1) setAttachError(m.nova_conversa_um_anexo());
-          }} />
-        {dictation.transcribing ? <Text style={styles.meta} accessibilityLiveRegion="polite">{m.composer_transcrevendo_audio()}</Text> : null}
-        <ComposerActions attach={{ onPress: () => setAttachMenuOpen(true), disabled: busy || dictation.gravando }}
+          }} />}
+          attach={{ onPress: () => setAttachMenuOpen(true), disabled: busy || dictation.gravando }}
           mic={{ onPress: () => void dictation.toggle(), disabled: dictation.transcribing || busy, busy: dictation.transcribing, showBusy: true,
             recording: dictation.gravando, styleLabel: dictationStyle, onStyle: () => setStyleMenuOpen(true) }}
           settings={providerChip}
@@ -476,7 +476,7 @@ export function NewConversation({
         ) : null}
         {attachError ? <Text style={styles.error} accessibilityRole="alert">{attachError}</Text> : null}
       </ComposerBox>
-      <View style={styles.bottomPills}>{bottomPills}</View>
+      <View style={styles.underBox} />
       </Animated.View>
       </Animated.View>
       </Animated.View>
@@ -539,27 +539,27 @@ const styles = StyleSheet.create((theme) => ({
   // Como no PC: o uso fica no alto, longe da caixa de mensagem.
   usage: { paddingTop: theme.base.space[2] },
   emptyHint: { flexGrow: 1, minHeight: 140, alignItems: 'center', justifyContent: 'center', paddingHorizontal: theme.base.space[5] },
+  // O título da conversa nova, no meio; o respiro de cima o separa do resumo de uso.
   topPills: {
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: theme.base.space[1],
     paddingHorizontal: theme.base.space[4],
+    paddingTop: theme.base.space[4],
     paddingBottom: theme.base.space[3],
   },
-  // Campo da conversa nova: ~3 linhas de altura mínima e letra um degrau acima do chat.
-  homeInput: { fontSize: theme.base.text.lg, lineHeight: 26, minHeight: 26 * 3 + theme.base.space[2] * 2 },
   // 34 pt + hitSlop 5 = 44 pt de toque; o ícone fica sem fundo, como no PC.
   tool: { width: 34, height: 34, borderRadius: theme.base.radius.full, alignItems: 'center', justifyContent: 'center' },
   dim: { opacity: 0.5 },
-  bottomPills: {
+  // Onde trabalha, conta e terminal numa linha só, acima da caixa; a conta encolhe com "…".
+  optionPills: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     alignItems: 'center',
     gap: theme.base.space[0.5],
     paddingHorizontal: theme.base.space[3],
-    paddingTop: theme.base.space[1],
-    paddingBottom: theme.base.space[2],
+    paddingBottom: theme.base.space[1],
     minHeight: 34,
   },
+  underBox: { height: theme.base.space[2] },
   errorRow: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], flexWrap: 'wrap' },
   flex: { flex: 1 },
   retry: {

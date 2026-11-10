@@ -129,10 +129,11 @@ type FastView = Pick<ReturnType<typeof useServiceTierControl>, 'on' | 'available
   Partial<Pick<ReturnType<typeof useServiceTierControl>, 'hidden' | 'loading' | 'applying' | 'error' | 'notice' | 'load'>>;
 
 // A criação entrega escolhas locais; só o controlador do chat conhece uma sessão viva.
-export function SessionSettingsControl({ open, onOpen, onClose, model, effort, fast, plan = false, icon, modeText, header, children }: {
+export function SessionSettingsControl({ open, onOpen, onClose, model, effort, fast, plan = false, icon, glyph, modeText, header, children }: {
   open: boolean; onOpen: () => void; onClose: () => void;
   model: ModelView; effort: EffortView; fast: FastView;
-  plan?: boolean; icon?: IconName; modeText?: string | null; header?: ReactNode; children?: ReactNode;
+  // `glyph`: o chip mostra só ele e a seta; modelo e esforço seguem no valor lido e no painel.
+  plan?: boolean; icon?: IconName; glyph?: ReactNode; modeText?: string | null; header?: ReactNode; children?: ReactNode;
 }) {
   const { theme } = useUnistyles();
   const anchor = useRef<View>(null);
@@ -144,12 +145,12 @@ export function SessionSettingsControl({ open, onOpen, onClose, model, effort, f
       accessibilityRole="button" accessibilityLabel={m.composer_session_settings()} accessibilityHint={m.composer_session_settings_hint()}
       accessibilityValue={{ text: [modeText, model.display, effortText, fast.on ? m.native_ctl_fast() : null].filter(Boolean).join(', ') }}>
       {icon ? <Icon name={icon} size={13} color={tint} /> : null}
-      <Text style={styles.chipText} numberOfLines={1}>
+      {glyph ?? <Text style={styles.chipText} numberOfLines={1}>
         {plan ? <Text style={[styles.chipStrong, { color: tint }]}>{`${m.chat_mode_plan()} · `}</Text> : null}
         <Text style={[plan ? { color: tint } : styles.chipStrong, !plan && { color: model.failed ? theme.tokens.status.error : theme.tokens.text.primary }]}>{model.display}</Text>
         {effortText ? <Text style={{ color: theme.tokens.text.secondary }}>{` ${effortText}`}</Text> : null}
         {fast.on ? <Text style={{ color: theme.tokens.text.secondary }}>{` · ${m.native_ctl_fast()}`}</Text> : null}
-      </Text>
+      </Text>}
       <Icon name="ChevronDown" size={13} color={tint} />
     </Pressable>
     <AnchoredPanel open={open} anchor={anchor.current} onClose={onClose} label={m.composer_session_settings()}

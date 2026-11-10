@@ -231,7 +231,7 @@ vi.mock('../../paraglide/messages', () => ({
   ...Object.fromEntries((
     'board_arquivo board_falha_upload board_imagem board_remover_anexo chat_envio_incerto chat_historico_sem_resposta chat_nao_carregou_historico ' +
     'chat_servidor_removido composer_adicionar_ao_chat composer_adicionar_arquivos composer_anexar_arquivo composer_camera composer_ditado_indisponivel ' +
-    'composer_ditado_interrompido composer_falha_gravacao composer_falha_transcricao composer_fotos composer_gravar_audio composer_mensagem_para ' +
+    'composer_ditado_interrompido composer_falha_gravacao composer_falha_transcricao composer_fotos composer_gravar_audio composer_mensagem ' +
     'composer_mic_style_hint composer_parar_gravacao composer_sem_acesso_camera composer_sem_acesso_fotos composer_sem_acesso_mic ' +
     'composer_submission_recover_first composer_transcrevendo_audio composer_transcrever_de_novo composer_transcricao_vazia criar_mais_opcoes ' +
     'criar_modo_exec criar_modo_exec_headless criar_modo_exec_headless_resumo criar_modo_exec_headless_resumo_codex criar_modo_exec_tmux ' +
@@ -250,7 +250,7 @@ vi.mock('../../paraglide/messages', () => ({
     'worktree_menu_buscar worktree_menu_no_match native_create_checkout_dirty native_folder_git_branch_entry ' +
     'worktree_menu_ocupada worktree_menu_parte_de worktree_menu_branch worktree_menu_ja_existe worktree_menu_ja_aberta worktree_menu_pasta_destino ' +
     'worktree_nova_so_remoto worktree_subagentes worktree_parada_dias worktree_dias_atras ' +
-    'native_new_chat_hero native_new_chat_hero_in native_new_chat_no_project_line native_new_chat_choose_folder native_new_chat_start_without_project native_new_chat_run_on ' +
+    'native_new_chat_hero native_new_chat_hero_in native_new_chat_no_project_line native_new_chat_choose_folder native_new_chat_start_without_project native_new_chat_on_machine ' +
     'native_new_chat_place_new native_new_chat_place_here ' +
     'composer_session_settings composer_session_settings_hint native_ctl_model_title native_ctl_search native_ctl_no_results ' +
     'comum_nenhum_modelo native_new_chat_reasoning modelo_sem_niveis native_ctl_loading native_ctl_retry native_ctl_failed ' +
@@ -423,11 +423,11 @@ describe('CreateSessionSheet Codex', () => {
   it('worktree nova com a branch atual da pasta não envia a primeira mensagem', async () => {
     const { container, root } = await renderSheet(false, false);
     try {
-      // Na conversa nova o seletor de worktree é o grupo "Onde" do painel da máquina.
-      const pill = [...container.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.getAttribute('aria-label')?.startsWith('native_new_chat_machine'))!;
+      // Na conversa nova o seletor de worktree abre pela pílula de onde o agente trabalha, acima da caixa.
+      const pill = [...container.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.getAttribute('aria-label')?.startsWith('native_create_checkout_branch'))!;
       await act(async () => pill.click());
       for (let i = 0; i < 3; i++) await act(async () => Promise.resolve());
-      const panel = container.querySelector('[data-testid="folder-panel"][aria-label="native_new_chat_machine"]') as HTMLElement;
+      const panel = container.querySelector('[data-testid="folder-panel"][aria-label="native_create_checkout_branch"]') as HTMLElement;
       await act(async () => button(panel, 'worktree_menu_nova')!.click());
       const field = panel.querySelector('textarea[aria-label="worktree_menu_branch"]') as HTMLTextAreaElement;
       await act(async () => { field.value = 'main'; field.dispatchEvent(new Event('input', { bubbles: true })); });
@@ -443,7 +443,7 @@ describe('CreateSessionSheet Codex', () => {
     calls.defaults.mockResolvedValue({ model: 'opus', effort: 'high', permission: 'bypassPermissions' });
     const { container, root } = await renderSheet(false, false);
     try {
-      expect(button(container, 'composer_session_settings')?.textContent).toContain('Opus');
+      expect(button(container, 'composer_session_settings')?.getAttribute('aria-valuetext')).toContain('Opus');
       await openOptions(container);
       await act(async () => button(container, 'bypassPermissions')!.click());
       await act(async () => button(container, 'manual')!.click());
@@ -660,7 +660,7 @@ describe('CreateSessionSheet Codex', () => {
     calls.models.mockResolvedValue({ kind: 'codex', reduced: false, models: [{ id: 'sol', name: 'Sol', efforts: ['low', 'high'] }] });
     const { container, root } = await renderSheet(false, false);
     try {
-      expect(button(container, 'composer_session_settings')!.textContent).toContain('Sol high');
+      expect(button(container, 'composer_session_settings')!.getAttribute('aria-valuetext')).toContain('Sol, high');
       await appState('background');
       await appState('active');
       await send(container);
@@ -1084,7 +1084,7 @@ describe('CreateSessionSheet Codex', () => {
     await act(async () => configs.resolve([{ path: '/late-claude', label: 'Conta tardia', active: true }]));
     expect(calls.models.mock.calls.filter((call) => call[1] === 'codex')).toHaveLength(codexReads);
     expect(container.querySelector('[role="switch"][aria-label="native_ctl_fast"]')!.getAttribute('aria-checked')).toBe('true');
-    expect(button(container, 'composer_session_settings')!.textContent).toContain('Sol high');
+    expect(button(container, 'composer_session_settings')!.getAttribute('aria-valuetext')).toContain('Sol, high');
     await send(container);
     expect(calls.create).toHaveBeenCalledExactlyOnceWith(server, expect.objectContaining({
       provider: 'codex', model: 'sol', effort: 'high', service_tier: 'priority', codex_account: 'work',
@@ -1196,7 +1196,7 @@ describe('CreateSessionSheet Codex', () => {
     const fast = container.querySelector<HTMLButtonElement>('[role="switch"][aria-label="native_ctl_fast"]');
     expect(fast).not.toBeNull();
     await act(async () => fast!.click());
-    expect(button(container, 'composer_session_settings')!.textContent).toBe('Sol · 272K high · native_ctl_fast');
+    expect(button(container, 'composer_session_settings')!.getAttribute('aria-valuetext')).toBe('Sol · 272K, high, native_ctl_fast');
     expect(calls.create).not.toHaveBeenCalled();
     expect(calls.send).not.toHaveBeenCalled();
     expect(calls.mutate).not.toHaveBeenCalled();
@@ -1420,7 +1420,7 @@ describe('CreateSessionSheet Codex', () => {
     calls.providers.mockResolvedValue({ [provider]: { disponivel: true, default: true } });
     calls.models.mockResolvedValue({ kind: provider, reduced: false, models, default: catalogDefault });
     const { container, root } = await renderSheet(false, false);
-    expect(button(container, 'composer_session_settings')!.textContent).toBe(label);
+    expect(button(container, 'composer_session_settings')!.getAttribute('aria-valuetext')).toBe(label);
     await send(container);
     expect(calls.create.mock.calls[0][1].model).toBeNull();
     expect(calls.create.mock.calls[0][1]).not.toHaveProperty('service_tier');
@@ -1488,7 +1488,7 @@ describe('CreateSessionSheet Codex', () => {
     await act(async () => button(container, 'reasoning_level_high')!.click());
     await closePanel(container, 'composer_session_settings');
     expect(button(container, 'native_new_chat_folder: child')).toBeTruthy();
-    expect(button(container, 'composer_session_settings')!.textContent).toBe('Sol high');
+    expect(button(container, 'composer_session_settings')!.getAttribute('aria-valuetext')).toBe('Sol, high');
     expect((container.querySelector('textarea[aria-label="nova_conversa_placeholder"]') as HTMLTextAreaElement).value).toBe('primeira mensagem');
     await act(async () => button(container, 'nova_conversa_enviar')!.click());
     for (let i = 0; i < 4; i++) await act(async () => Promise.resolve());

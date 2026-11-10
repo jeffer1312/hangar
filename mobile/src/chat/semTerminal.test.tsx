@@ -918,7 +918,7 @@ const newConversationProps = (server: object) => ({
     ref: (el: HTMLButtonElement | null) => { folderOpener = el; },
     onClick: () => openFolder(folderOpener as never),
   }, 'repo'),
-  bottomPills: null,
+  optionPills: null,
   providerChip: createElement('button', null, 'Codex'),
   resume: null, notices: null,
   body: { cwd: '/repo', provider: 'codex' as const }, blocked: false,

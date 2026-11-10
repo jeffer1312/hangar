@@ -1,5 +1,6 @@
 import { Children, Fragment, useEffect, useState, useCallback, useRef, type ComponentProps, type ReactNode } from 'react';
 import { Icon } from '../../ui/Icon';
+import { ProviderGlyph } from '../../ui/ProviderGlyph';
 import { AccessibilityInfo, ActivityIndicator, AppState, BackHandler, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { useRouter } from 'expo-router';
@@ -38,6 +39,8 @@ import * as m from '../../paraglide/messages';
 
 type ProviderProbe = Record<string, { disponivel: boolean; motivo: string | null; default?: boolean }>;
 type Choice = Omit<ComponentProps<typeof QuietPill>, 'ref'>;
+// Em cima só o vão até a pílula da máquina: mais que isso roubaria o toque dela.
+const LINK_SLOP = { top: 4, bottom: 12, left: 12, right: 12 };
 
 function valorModelo(mm: ModelOption): string {
   return mm.provider ? `${mm.provider}/${mm.id}` : mm.id;
@@ -736,7 +739,6 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     ],
     onAction: (id) => { if (canHeadless) chooseHeadless(id === 'headless'); },
   };
-  const terminalPill = <QuietPill {...terminalChoice} />;
 
   const janelaCheia = provider === 'claude' ? janelaEsgotada(cotaSelecionada) : null;
   // Etiqueta da conta pela mesma chave da conta da lista: claude:<pasta>, codex:<home>.
@@ -929,7 +931,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setServiceTier((cur) => cur === 'priority' ? undefined : 'priority');
   };
 
-  // Mesmo seletor de branch/worktree nas duas apresentações: linha própria no formulário, grupo "Onde" na pílula da máquina.
+  // Mesmo seletor de branch/worktree nas duas apresentações: linha no formulário, pílula acima da caixa na conversa nova.
   const branchPicker = picked && !noProject ? <BranchPicker server={active} cwd={pickedRepo ?? picked} worktreePath={pickedRepo && pickedRepo !== picked ? picked : undefined}
                               sessionName={name.trim() || basename(picked)}
                               value={worktree} onChange={onWorktree} basePicked={basePicked}
@@ -956,21 +958,17 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       icon: tags?.machine ? MACHINE_ICON_NAME[tags.machine.icon] : 'Monitor' as const };
   };
   const activeMachine = machineView(active, machines.findIndex((sv) => sv.id === active.id));
-  // Pílula única da conversa nova: "Rodar em" (máquinas) e, com projeto, "Onde" (o seletor de branch acima).
-  const placePanel = (
-    <AnchoredPanel open={branchOpen} anchor={branchRef.current} maxHeightRatio={0.75} onClose={() => setBranchOpen(false)}
-      onDismissed={focusBranchAnchor} label={m.native_new_chat_machine()} closeLabel={m.native_close()} radius={12} padding={4}>
-      <Text style={styles.groupTitle} accessibilityRole="header">{m.native_new_chat_run_on()}</Text>
-      <SettingsList searchable={false}
-        items={machines.map((sv, i) => {
-          const view = machineView(sv, i);
-          return { id: sv.id, label: view.label, labelColor: view.color, selected: sv.id === active.id,
-            hint: sv.label.trim() && sv.label !== view.label ? sv.label : undefined,
-            leading: <Icon name={view.icon} size={14} color={theme.tokens.text.muted} /> };
-        })}
-        onPick={(id) => { setBranchOpen(false); if (id !== active.id) onPickMachine(id); }} />
-      {branchPicker ? <View style={styles.placeWhere}>{branchPicker}</View> : null}
-    </AnchoredPanel>
+  // A máquina fica sob o título da conversa nova ("em notebook"), com o menu das máquinas.
+  const machinePill = (
+    <QuietPill icon={activeMachine.icon} label={activeMachine.label} shown={m.native_new_chat_on_machine({ maquina: activeMachine.label })}
+      aria={m.native_new_chat_machine()} menuTitle={m.native_new_chat_machine()}
+      actions={machines.map((sv, i) => {
+        const view = machineView(sv, i);
+        return { id: sv.id, title: view.label, titleColor: view.color, state: on(sv.id === active.id),
+          subtitle: sv.label.trim() && sv.label !== view.label ? sv.label : undefined,
+          leading: <Icon name={view.icon} size={14} color={theme.tokens.text.muted} /> };
+      })}
+      onAction={(id) => { if (id !== active.id) onPickMachine(id); }} />
   );
 
   const blocked = contextBusy || retomando || !!retomavel || (!!picked && !codexReady);
@@ -1138,13 +1136,14 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       providerLabel={providerName(provider)}
       folderPanel={(close) => <CwdPicker server={active} onPick={handlePick} selected={picked} autoSelect={false} onDone={close} compact repos={repos} />}
       topPills={(openFolder) => {
-        // A pasta mora no título, como no PC: "O que vamos fazer em [pasta]?".
+        // A pasta mora no título, no meio da tela: "O que vamos fazer em [pasta]?", e a máquina logo abaixo.
         return noProject ? (
           <>
-            <Text style={styles.headingText} accessibilityRole="header">{m.native_new_chat_hero()}</Text>
+            <Text style={styles.heroText} accessibilityRole="header">{m.native_new_chat_hero()}</Text>
+            {machinePill}
             <View style={styles.headingLine}>
               <Text style={styles.hint}>{`${m.native_new_chat_no_project_line()} · `}</Text>
-              <Pressable ref={folderRef} onPress={() => openFolder(folderRef.current)} hitSlop={12} accessibilityRole="button"
+              <Pressable ref={folderRef} onPress={() => openFolder(folderRef.current)} hitSlop={LINK_SLOP} accessibilityRole="button"
                 accessibilityLabel={`${m.native_new_chat_folder()}: ${folderLabel}`}>
                 <Text style={styles.headingLink}>{m.native_new_chat_choose_folder()}</Text>
               </Pressable>
@@ -1152,18 +1151,19 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
           </>
         ) : (
           <>
+            <Text style={styles.heroText} accessibilityRole="header">{m.native_new_chat_hero_in()}</Text>
             <View style={styles.headingLine}>
-              <Text style={styles.headingText} accessibilityRole="header">{`${m.native_new_chat_hero_in()} `}</Text>
               <Pressable ref={folderRef} onPress={() => openFolder(folderRef.current)} hitSlop={12} accessibilityRole="button"
                 accessibilityLabel={`${m.native_new_chat_folder()}: ${folderLabel}`} style={styles.headingFolder}>
-                <Icon name="Folder" size={18} color={theme.tokens.accent.base} />
-                <Text style={[styles.headingText, styles.headingFolderText]} numberOfLines={1}>{folderLabel}</Text>
+                <Icon name="Folder" size={20} color={theme.tokens.accent.base} />
+                <Text style={[styles.heroText, styles.headingFolderText]} numberOfLines={1}>{folderLabel}</Text>
                 <Icon name="ChevronDown" size={16} color={theme.tokens.text.muted} />
               </Pressable>
-              <Text style={styles.headingText}>?</Text>
+              <Text style={styles.heroText}> ?</Text>
             </View>
+            {machinePill}
             {!active.invite ? (
-              <Pressable onPress={() => { void handlePick(NO_PROJECT_CWD); }} hitSlop={12} accessibilityRole="button"
+              <Pressable onPress={() => { void handlePick(NO_PROJECT_CWD); }} hitSlop={LINK_SLOP} accessibilityRole="button"
                 accessibilityHint={m.native_new_chat_no_project_hint()}>
                 <Text style={styles.headingLink}>{m.native_new_chat_start_without_project()}</Text>
               </Pressable>
@@ -1171,17 +1171,19 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
           </>
         );
       }}
-      bottomPills={(
+      optionPills={(
         <>
-          {/* Máquina e worktree numa pílula só; sem projeto, só a máquina. */}
-          <QuietPill ref={branchRef} icon={activeMachine.icon} label={activeMachine.label} aria={m.native_new_chat_machine()}
-            detail={!branchPicker ? undefined : worktree ? m.native_new_chat_place_new()
-              : pickedWorktree ? branchLabel : m.native_new_chat_place_here()} onPress={() => setBranchOpen(true)} />
-          {accountPill}{terminalPill}
+          {/* Onde o agente trabalha (com projeto), a conta e o terminal, este só com o ícone. */}
+          {branchPicker ? <QuietPill ref={branchRef} icon="GitBranch" aria={m.native_create_checkout_branch()}
+            label={worktree ? m.native_new_chat_place_new() : pickedWorktree ? branchLabel : m.native_new_chat_place_here()}
+            onPress={() => setBranchOpen(true)} /> : null}
+          {accountPill}
+          {/* Sem o texto, a cor diz o modo: realçado quando a sessão nasce no terminal. */}
+          <QuietPill {...terminalChoice} iconOnly tone={canHeadless && headless ? undefined : 'accent'} />
         </>
       )}
       providerChip={(
-        <SessionSettingsControl open={settingsOpen} onOpen={() => setSettingsOpen(true)} onClose={() => setSettingsOpen(false)}
+        <SessionSettingsControl glyph={retomavel ? undefined : <ProviderGlyph provider={provider} size={16} inline />} open={settingsOpen} onOpen={() => setSettingsOpen(true)} onClose={() => setSettingsOpen(false)}
           header={<ProviderPicker value={provider} onChange={chooseProvider} disabledMap={providerProbe ?? undefined} />}
           model={{ display: chipLabel, loading: modelsLoading, notice: erroModelos,
             items: retomavel ? [] : [{ id: '', label: m.criar_padrao(), selected: !modelo },
@@ -1212,7 +1214,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
       blocked={blocked || branchBlocked}
       keyboardOffset={keyboardOffset}
     />
-    {placePanel}
+    {branchPanel}
     </>
   );
 }
@@ -1247,16 +1249,15 @@ const styles = StyleSheet.create((theme) => ({
   rowCenter: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2] },
   hint: { fontSize: theme.base.text.sm, color: theme.tokens.text.secondary },
   hintAlerta: { color: theme.tokens.status.warning },
-  headingLine: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' },
-  headingText: { ...theme.type.heading, color: theme.tokens.text.primary },
-  headingFolder: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1], maxWidth: '100%', paddingHorizontal: theme.base.space[1] },
+  headingLine: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center' },
+  heroText: { fontSize: theme.base.text.xl, lineHeight: 30, fontWeight: theme.base.weight.medium, color: theme.tokens.text.primary, textAlign: 'center' },
+  // A pasta do título: sublinhada, para se ler como o que dá para trocar.
+  headingFolder: {
+    flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1.5], maxWidth: '100%',
+    borderBottomWidth: 1, borderBottomColor: theme.tokens.accent.dim,
+  },
   headingFolderText: { flexShrink: 1, color: theme.tokens.accent.base },
   headingLink: { fontSize: theme.base.text.sm, color: theme.tokens.accent.base },
-  groupTitle: {
-    fontSize: theme.base.text.xxs, fontWeight: theme.base.weight.semibold, color: theme.tokens.text.muted,
-    paddingHorizontal: theme.base.space[2], paddingTop: theme.base.space[1], paddingBottom: theme.base.space[0.5],
-  },
-  placeWhere: { flexShrink: 1, minHeight: 0, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.tokens.border.default, paddingTop: theme.base.space[2] },
   hintSm: { fontSize: theme.base.text.xs, color: theme.tokens.text.muted, marginTop: theme.base.space[1] },
   field: { gap: theme.base.space[2] },
   label: { fontSize: theme.base.text.sm, color: theme.tokens.text.secondary, fontWeight: theme.base.weight.medium },
