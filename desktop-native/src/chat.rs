@@ -55,6 +55,8 @@ impl Chat {
     /// Tira da memória os `count` eventos mais antigos; o servidor continua com eles e o histórico os traz de volta.
     pub fn drop_oldest(&mut self, count: usize) {
         self.events.drain(..count.min(self.events.len()));
+        // O `drain` mantém a alocação do transcript inteiro: sem isto o corte não a devolve.
+        self.events.shrink_to_fit();
         self.reindex();
         self.unsynced = 0;
     }

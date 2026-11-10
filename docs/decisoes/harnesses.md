@@ -1087,11 +1087,12 @@ Contagens pelo código, não medida de processo vivo:
 | Montagens da vista por volta do laço | 2 | 0 |
 | Gravações da vista | uma por mensagem do agente | no máximo uma a cada 2 s quando só mudou medição |
 | Publicações do retrato por rodada parada | 2 | 0 |
-| Varreduras de processos | uma por rodada por sessão | no máximo uma a cada 3 s, compartilhada |
+| Varreduras de processos na observação (Linux) | uma por rodada por sessão | no máximo uma a cada 3 s enquanto o mapa guardado confirma o agente; escrita, drenagem, guarda de tecla e ausência do agente varrem sempre |
 
 Não resolve: o `tmux display-message` por rodada de Pi/omp/Kimi continua, porque tirá-lo muda a
 captura que o Claude também usa. Um agente vivo que saiu do pane segue "no pane" por até 3 s para
-quem observa. Falha de disco na gravação da parada só vai ao log.
+quem observa. Falha de disco na gravação adiada da medição e na da parada só vai ao log: a sessão
+não entra em erro por uma medição, e a próxima gravação da vista a leva.
 
 ## Ator ocupado não é doente (09/11/2026)
 

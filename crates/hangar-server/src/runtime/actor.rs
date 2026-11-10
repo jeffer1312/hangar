@@ -2226,12 +2226,12 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                             },
                         }
                     },
-                    // Resultado de uma vida que já passou é descartado, como o de `Job::View`: só a falha desta aparece.
+                    // Resultado de uma vida que já passou é descartado, como o de `Job::View`. Falhar aqui não põe a
+                    // sessão em erro: só a medição atrasa, e a próxima gravação da vista (ou a parada) a leva.
                     Job::Flushed { generation,result } => {
                         if generation!=target.generation || sid_transition {continue;}
                         if let Err(failure) = result {
-                            publish(&events,&target,&mut revision,"problem",json!({"error_code":failure.code,"message":failure.message}));
-                            enter_error(&mut error,&target,failure);
+                            tracing::warn!(key=%target.key,session=%target.name,code=%failure.code,"a medição que esperava o intervalo não foi gravada");
                         }
                     }
                     Job::Saved(result) => { stall_dirty |= cano_lost; if let Err(failure) = result {

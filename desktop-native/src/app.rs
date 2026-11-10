@@ -735,6 +735,8 @@ pub struct Hangar {
     preview_cache: PreviewSource,
     /// Desde quando o transcript inteiro está carregado sem uso (`history_trim`).
     full_history_idle: Option<std::time::Instant>,
+    /// Já há um despertar marcado para o fim desse prazo.
+    full_history_wake: bool,
     preview_tick_epoch: u64,
     preview_tick_scheduled: bool,
     preview_last_tick: Option<Instant>,
@@ -1183,7 +1185,7 @@ impl Hangar {
             list_state, rail_hover: None, follow: Default::default(), row_ids: Vec::new(), row_signatures: Vec::new(), conversation: Default::default(), row_assets: Vec::new(), expanded: HashSet::new(), kept_expanded: HashMap::new(), orq_days: HashSet::new(),
             table_column: HashMap::new(), tables: HashMap::new(), last_message: None, live_clear_epoch: [0; 2], rich: HashMap::new(), prepared: HashMap::new(), cites: CiteCheck::default(), render_tick: 0,
             preview_drop_epoch: 0, preview_drop_scheduled: false,
-            visible_preview: Preview::default(), preview_cache: PreviewSource::default(), full_history_idle: None, preview_tick_epoch: 0, preview_tick_scheduled: false,
+            visible_preview: Preview::default(), preview_cache: PreviewSource::default(), full_history_idle: None, full_history_wake: false, preview_tick_epoch: 0, preview_tick_scheduled: false,
             preview_last_tick: None, preview_carry: 0., preview_deadline: None,
             attachments: HashMap::new(), quotes: Default::default(), mermaid: Default::default(), attach_seq: 0, uploading: HashMap::new(), commands: HashMap::new(), commands_latest: HashMap::new(), commands_seq: 0,
             plugin_question_seen: None,
@@ -7214,6 +7216,14 @@ impl Hangar {
                     if self.history_trim() > 0 {
                         let view = cx.entity().downgrade();
                         cx.defer(move |cx| { view.update(cx, |this, cx| this.trim_history(cx)).ok(); });
+                    } else if let Some(since) = self.full_history_idle.filter(|since| !self.full_history_wake && since.elapsed() < FULL_HISTORY_KEEP) {
+                        // Conversa parada não é desenhada de novo: sem este despertar o prazo passaria sem ninguém conferir.
+                        self.full_history_wake = true;
+                        let wait = FULL_HISTORY_KEEP.saturating_sub(since.elapsed());
+                        cx.spawn(async move |this, cx| {
+                            cx.background_executor().timer(wait).await;
+                            let _ = this.update(cx, |this, cx| { this.full_history_wake = false; this.redraw(panes::Area::Conversation, cx); });
+                        }).detach();
                     }
                     let cite_offer = self.render_cite_offer(window, cx);
                     content = content.child(div().relative().flex_1().min_h_0().flex().flex_col()
