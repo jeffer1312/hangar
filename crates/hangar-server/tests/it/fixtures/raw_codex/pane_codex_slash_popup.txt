@@ -1,6 +1,6 @@
 
   >_ OpenAI Codex (v0.167.0)
-     /tmp/claude-1000/-home-jefferson--hangar-worktrees-hangar-hangar-4/0e20f6dc-b304-4be9-961a-76b6ba62214b/scratchpad/codexcru
+     /tmp/sonda
 
 
 
@@ -41,5 +41,5 @@
 
 › /mo
 
-  GPT-6.1-Sol high Fast · /tmp/claude-1000/-home-jefferson--hangar-worktrees-hangar-hangar-4/0e20f6dc-b304-4be9-961a-76b6ba62214b/scratchpad/codexcru · codexcr…
+  GPT-6.1-Sol high Fast · /tmp/sonda · codexcr…
 
