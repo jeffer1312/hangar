@@ -45,17 +45,17 @@ export default function Plugin() {
   }, [server?.id, server?.baseUrl, server?.token]);
 
   // Versão nova relê o conteúdo e troca no lugar, sem piscar; plugin removido não se busca.
-  const version = plugin ? plugin.version : null;
+  const installedVersion = plugin ? plugin.version : null;
   useEffect(() => {
     if (!server || !id) return;
-    if (version === null) { setDetails(null); return; }
+    if (installedVersion === null) { setDetails(null); return; }
     let alive = true;
     setDetailsError('');
     getPluginDetailsForServer(server, id)
       .then((d) => { if (alive) setDetails(d); })
       .catch((e: unknown) => { if (alive) setDetailsError(pluginsErrorText(e)); });
     return () => { alive = false; };
-  }, [server?.id, server?.baseUrl, server?.token, id, version]);
+  }, [server?.id, server?.baseUrl, server?.token, id, installedVersion]);
 
   if (!server) return null;
   if (!plugin) {
