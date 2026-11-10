@@ -30,8 +30,6 @@ type Props = {
   plain?: boolean;
   // Ícone próprio no lugar de `icon` (etiqueta da conta, com a cor dela).
   leading?: ReactNode;
-  // Segunda parte do texto ("worktree nova"): visível após " · ", lida como dica, fora do nome.
-  detail?: string;
   // Só o ícone: a escolha continua no nome lido e no menu.
   iconOnly?: boolean;
   // Texto à vista quando ele não é o nome lido ("em notebook" para a máquina "notebook").
@@ -41,7 +39,7 @@ type Props = {
 // A pílula quieta do app de PC (quiet_pill): 26 de altura, texto 12.5 apagado, ícone 14 e a seta do
 // menu. O hitSlop leva o toque aos 44 pt sem engordar o desenho.
 export const QuietPill = forwardRef<View, Props>(function QuietPill(
-  { icon, label, aria, disabled, actions, menuTitle, onAction, onPress, tone, plain, leading, detail, iconOnly, shown }, ref,
+  { icon, label, aria, disabled, actions, menuTitle, onAction, onPress, tone, plain, leading, iconOnly, shown }, ref,
 ) {
   const anchor = useRef<View>(null);
   useImperativeHandle(ref, () => anchor.current!, []);
@@ -59,12 +57,11 @@ export const QuietPill = forwardRef<View, Props>(function QuietPill(
       hitSlop={{ top: 9, bottom: 9, left: iconOnly ? 7 : 2, right: iconOnly ? 7 : 2 }}
       accessibilityRole="button"
       accessibilityLabel={`${aria}: ${label}`}
-      accessibilityHint={detail}
       accessibilityState={{ disabled: !!disabled }}
       style={[styles.pill, press.style, disabled && styles.disabled]}
     >
       {leading ?? (icon ? <Icon name={icon} size={14} color={ink} /> : null)}
-      {iconOnly ? null : <Text style={[styles.text, tone && { color: ink }]} numberOfLines={1}>{shown ?? (detail ? `${label} · ${detail}` : label)}</Text>}
+      {iconOnly ? null : <Text style={[styles.text, tone && { color: ink }]} numberOfLines={1}>{shown ?? label}</Text>}
       {plain || iconOnly ? null : <Icon name="ChevronDown" size={12} color={theme.tokens.text.muted} />}
     </AnimatedPressable>
   );

@@ -7755,7 +7755,6 @@
   "native_new_chat_place_new": "worktree nova",
   "native_new_chat_place_here": "pasta atual",
   "native_new_chat_where": "Onde roda",
-  "native_new_chat_run_on": "Rodar em",
   "native_new_chat_on_machine": "em {maquina}",
   "native_new_chat_no_roots": "Nenhuma pasta configurada neste servidor.",
   "native_new_chat_no_accounts": "Nenhuma conta disponível.",

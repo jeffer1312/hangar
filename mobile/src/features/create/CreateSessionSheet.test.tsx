@@ -231,7 +231,7 @@ vi.mock('../../paraglide/messages', () => ({
   ...Object.fromEntries((
     'board_arquivo board_falha_upload board_imagem board_remover_anexo chat_envio_incerto chat_historico_sem_resposta chat_nao_carregou_historico ' +
     'chat_servidor_removido composer_adicionar_ao_chat composer_adicionar_arquivos composer_anexar_arquivo composer_camera composer_ditado_indisponivel ' +
-    'composer_ditado_interrompido composer_falha_gravacao composer_falha_transcricao composer_fotos composer_gravar_audio composer_mensagem_para ' +
+    'composer_ditado_interrompido composer_falha_gravacao composer_falha_transcricao composer_fotos composer_gravar_audio composer_mensagem ' +
     'composer_mic_style_hint composer_parar_gravacao composer_sem_acesso_camera composer_sem_acesso_fotos composer_sem_acesso_mic ' +
     'composer_submission_recover_first composer_transcrevendo_audio composer_transcrever_de_novo composer_transcricao_vazia criar_mais_opcoes ' +
     'criar_modo_exec criar_modo_exec_headless criar_modo_exec_headless_resumo criar_modo_exec_headless_resumo_codex criar_modo_exec_tmux ' +

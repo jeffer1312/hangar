@@ -447,7 +447,7 @@ export function NewConversation({
         {attachment ? <AttachmentPreview attachment={attachment} onRemove={removeAttachment} disabled={busy} /> : null}
         {dictation.transcribing ? <Text style={styles.meta} accessibilityLiveRegion="polite">{m.composer_transcrevendo_audio()}</Text> : null}
         <ComposerActions field={<ComposerInput ref={input} value={text} onChangeText={setText} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
-          placeholder={m.composer_mensagem_para({ nome: providerLabel })} accessibilityLabel={m.nova_conversa_placeholder()}
+          placeholder={m.composer_mensagem()} accessibilityLabel={m.nova_conversa_placeholder()}
           editable={!collapsed} autoFocus={!home && (router.canGoBack?.() ?? true)} recording={dictation.gravando} rms={dictation.rms} onCancelRecording={dictation.cancel}
           onPaste={(files, error) => {
             if (busy || dictation.gravando) return;

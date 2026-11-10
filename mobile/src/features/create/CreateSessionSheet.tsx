@@ -39,6 +39,8 @@ import * as m from '../../paraglide/messages';
 
 type ProviderProbe = Record<string, { disponivel: boolean; motivo: string | null; default?: boolean }>;
 type Choice = Omit<ComponentProps<typeof QuietPill>, 'ref'>;
+// Em cima só o vão até a pílula da máquina: mais que isso roubaria o toque dela.
+const LINK_SLOP = { top: 4, bottom: 12, left: 12, right: 12 };
 
 function valorModelo(mm: ModelOption): string {
   return mm.provider ? `${mm.provider}/${mm.id}` : mm.id;
@@ -929,7 +931,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
     setServiceTier((cur) => cur === 'priority' ? undefined : 'priority');
   };
 
-  // Mesmo seletor de branch/worktree nas duas apresentações: linha própria no formulário, grupo "Onde" na pílula da máquina.
+  // Mesmo seletor de branch/worktree nas duas apresentações: linha no formulário, pílula acima da caixa na conversa nova.
   const branchPicker = picked && !noProject ? <BranchPicker server={active} cwd={pickedRepo ?? picked} worktreePath={pickedRepo && pickedRepo !== picked ? picked : undefined}
                               sessionName={name.trim() || basename(picked)}
                               value={worktree} onChange={onWorktree} basePicked={basePicked}
@@ -1141,7 +1143,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
             {machinePill}
             <View style={styles.headingLine}>
               <Text style={styles.hint}>{`${m.native_new_chat_no_project_line()} · `}</Text>
-              <Pressable ref={folderRef} onPress={() => openFolder(folderRef.current)} hitSlop={12} accessibilityRole="button"
+              <Pressable ref={folderRef} onPress={() => openFolder(folderRef.current)} hitSlop={LINK_SLOP} accessibilityRole="button"
                 accessibilityLabel={`${m.native_new_chat_folder()}: ${folderLabel}`}>
                 <Text style={styles.headingLink}>{m.native_new_chat_choose_folder()}</Text>
               </Pressable>
@@ -1161,7 +1163,7 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
             </View>
             {machinePill}
             {!active.invite ? (
-              <Pressable onPress={() => { void handlePick(NO_PROJECT_CWD); }} hitSlop={12} accessibilityRole="button"
+              <Pressable onPress={() => { void handlePick(NO_PROJECT_CWD); }} hitSlop={LINK_SLOP} accessibilityRole="button"
                 accessibilityHint={m.native_new_chat_no_project_hint()}>
                 <Text style={styles.headingLink}>{m.native_new_chat_start_without_project()}</Text>
               </Pressable>
@@ -1176,11 +1178,12 @@ function CreateSessionForm({ active, machines, onPickMachine, onClose, keyboardO
             label={worktree ? m.native_new_chat_place_new() : pickedWorktree ? branchLabel : m.native_new_chat_place_here()}
             onPress={() => setBranchOpen(true)} /> : null}
           {accountPill}
-          <QuietPill {...terminalChoice} iconOnly />
+          {/* Sem o texto, a cor diz o modo: realçado quando a sessão nasce no terminal. */}
+          <QuietPill {...terminalChoice} iconOnly tone={canHeadless && headless ? undefined : 'accent'} />
         </>
       )}
       providerChip={(
-        <SessionSettingsControl glyph={<ProviderGlyph provider={provider} size={16} inline />} open={settingsOpen} onOpen={() => setSettingsOpen(true)} onClose={() => setSettingsOpen(false)}
+        <SessionSettingsControl glyph={retomavel ? undefined : <ProviderGlyph provider={provider} size={16} inline />} open={settingsOpen} onOpen={() => setSettingsOpen(true)} onClose={() => setSettingsOpen(false)}
           header={<ProviderPicker value={provider} onChange={chooseProvider} disabledMap={providerProbe ?? undefined} />}
           model={{ display: chipLabel, loading: modelsLoading, notice: erroModelos,
             items: retomavel ? [] : [{ id: '', label: m.criar_padrao(), selected: !modelo },
