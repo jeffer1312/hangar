@@ -10,3 +10,6 @@ mod vocabulary;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod configuration_tests;
