@@ -1194,7 +1194,10 @@ async fn owner_delete_kills_in_rust_then_forwards_marked_to_python() {
     let transcript = headers.get("x-hangar-closed-transcript").and_then(|v| v.to_str().ok()).unwrap();
     assert_eq!(percent_encoding::percent_decode_str(transcript).decode_utf8().unwrap(), "/r/Área de trabalho/rollout-1.jsonl",
         "a conversa encerrada vai junto, para o nome fechado");
-    // Outra sessão (sem sidecar Codex) também fecha no Rust, pelo nome (R1.3): `session_close_by_name.rs`.
+    // Outra sessão (sem sidecar Codex) também fecha no Rust, pelo nome (R1.3), e a conversa forjada sai.
+    let _ = delete_session(server, "claude-x").await;
+    let (_, headers) = python.last_hit();
+    assert_eq!(headers.get("x-hangar-rust-closed").and_then(|v| v.to_str().ok()), Some(crate::fake::SECRET));
     assert!(headers.get("x-hangar-closed-transcript").is_none(), "o forjado sai");
     finish(&mut [&mut app,&mut tui]);
 }
