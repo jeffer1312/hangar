@@ -326,7 +326,10 @@ async fn execute(
                     Ok::<_, Failed>((ex, notify_exit(&st, &groups, &name, &tell).await))
                 })
                 .await?;
-            warnings.extend(deliver_deferred(&st, ctx.take_deliveries(), bridge_wait(started)).await);
+            let failed = deliver_deferred(&st, ctx.take_deliveries(), bridge_wait(started)).await;
+            // O aviso vai na resposta; o diário leva a mesma falha das rotas.
+            report_failed(&st, &mut Value::Null, failed.clone(), "rust.groups_bridge_delivery_failed", &[]);
+            warnings.extend(failed);
             Ok(json!({"ex_peers": ex, "warnings": warnings}))
         }
         Operation::OrqAssociate {

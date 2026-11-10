@@ -65,7 +65,12 @@ impl RuntimeRegistry {
         let mux = MuxProcess::new(&env.mux_program,TIMEOUT);
         let present = parked || mux.has_session(name).await.ok_or_else(mux_silent)?;
         let transcript = match known { Some(path)=>Some(path), None if present=>lookup.await, None=>None };
-        let killed = if parked { stop_parked(&dir,name,&env.queue_dir).await? } else { kill_pane(&mux,name,present).await?; present };
+        let killed = if parked {
+            let killed = stop_parked(&dir,name,&env.queue_dir).await?;
+            // A rota `/shell` cria o `term-<nome>` também para a sessão sem terminal.
+            kill_hidden(&mux,name).await;
+            killed
+        } else { kill_pane(&mux,name,present).await?; present };
         // Como o Python: a pergunta aberta desta conversa não reabre numa sessão futura com o mesmo nome.
         if let Some(path) = transcript.as_deref().and_then(crate::state::ask::sidecar_path)
             && let Err(error) = std::fs::remove_file(&path) && error.kind() != std::io::ErrorKind::NotFound {
