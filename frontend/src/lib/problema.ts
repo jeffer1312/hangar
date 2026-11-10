@@ -26,8 +26,8 @@ export function textoProblema(codigo: string | null | undefined): string | null 
     case 'headless_turno_erro': return m.problema_headless_turno_erro();
     case 'headless_delivery_stalled': return m.problema_headless_delivery_stalled();
     case 'headless_sem_login': return m.problema_headless_sem_login();
-    case 'terminal_sem_memoria': return m.problema_terminal_sem_memoria();
-    case 'terminal_caiu': return m.problema_terminal_caiu();
+    case 'terminal_out_of_memory': return m.problema_terminal_out_of_memory();
+    case 'terminal_died': return m.problema_terminal_died();
     case 'runtime_falhou': return m.problema_runtime_falhou();
     case 'terminal_observacao_falhou': return m.problema_terminal_observacao_falhou();
     case 'state_facts_unavailable': return m.problema_state_facts_unavailable();

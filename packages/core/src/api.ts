@@ -2001,7 +2001,7 @@ export async function renameSession(name: string, newName: string, server?: Serv
 }
 
 // Sessão com terminal que o sistema derrubou (falta de memória): linha `dead` com Reabrir e Dispensar.
-const FALLEN_PROBLEMS = ['terminal_sem_memoria', 'terminal_caiu'] as const;
+const FALLEN_PROBLEMS = ['terminal_out_of_memory', 'terminal_died'] as const;
 
 export function isFallenSession(s: { state?: string | null; problema?: string | null }): boolean {
   return s.state === 'dead' && (FALLEN_PROBLEMS as readonly string[]).includes(s.problema ?? '');
@@ -2009,12 +2009,12 @@ export function isFallenSession(s: { state?: string | null; problema?: string | 
 
 // Reabre a sessão caída pelo spec dela, na mesma conversa.
 export async function reopenFallenSession(name: string, server?: Server | null): Promise<{ ok: boolean }> {
-  return sessionFetch<{ ok: boolean }>(server, `/api/sessions/${encodeURIComponent(name)}/reabrir`, { method: 'POST' });
+  return sessionFetch<{ ok: boolean }>(server, `/api/sessions/${encodeURIComponent(name)}/reopen`, { method: 'POST' });
 }
 
 // Tira a caída da lista; recusa (404) se o nome já voltou vivo, em vez de fechar a sessão reaberta.
 export async function dismissFallenSession(name: string, server?: Server | null): Promise<{ ok: boolean }> {
-  return sessionFetch<{ ok: boolean }>(server, `/api/sessions/${encodeURIComponent(name)}/dispensar`, { method: 'POST' });
+  return sessionFetch<{ ok: boolean }>(server, `/api/sessions/${encodeURIComponent(name)}/dismiss`, { method: 'POST' });
 }
 
 // Relança uma sessão "sem id" com `claude --resume <uuid>` -> passa a rastreá-la, continuando a

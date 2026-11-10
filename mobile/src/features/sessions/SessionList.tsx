@@ -221,25 +221,25 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
 
   // Fala com o servidor da linha, sem trocar o ativo; a linha morta some quando a lista chega.
   // O servidor responde quando o agente sobe: o segundo toque não manda outro pedido.
-  const reabrindo = useRef(new Set<string>());
-  const reabrir = useCallback((s: AggSession) => {
+  const reopening = useRef(new Set<string>());
+  const reopen = useCallback((s: AggSession) => {
     const server = useServers.getState().servers.find((x) => x.id === s.serverId);
     if (!server) { toast.erro(m.servidor_nao_existe()); return; }
-    const chave = `${s.serverId}::${s.name}`;
-    if (reabrindo.current.has(chave)) return;
-    reabrindo.current.add(chave);
+    const key = `${s.serverId}::${s.name}`;
+    if (reopening.current.has(key)) return;
+    reopening.current.add(key);
     reopenFallenSession(s.name, server)
       .then(() => toast.ok(s.name))
       .catch((e: unknown) => toast.erro(mensagemDe(e)))
-      .finally(() => reabrindo.current.delete(chave));
+      .finally(() => reopening.current.delete(key));
   }, []);
 
   // Sem confirmação: não há processo para matar, só a linha e o registro para reabrir. Rota própria, não o
   // DELETE: se o nome já voltou vivo (a linha da tela está velha), o servidor recusa em vez de fechar.
-  const dispensar = useCallback((s: AggSession) => {
+  const dismiss = useCallback((s: AggSession) => {
     const server = useServers.getState().servers.find((x) => x.id === s.serverId);
     if (!server) { toast.erro(m.servidor_nao_existe()); return; }
-    if (reabrindo.current.has(`${s.serverId}::${s.name}`)) return;
+    if (reopening.current.has(`${s.serverId}::${s.name}`)) return;
     useSessions.getState().markDeleting(s.serverId, s.name);
     dismissFallenSession(s.name, server).catch((e: unknown) => {
       useSessions.getState().unmarkDeleting(s.serverId, s.name);
@@ -569,8 +569,8 @@ export function SessionList({ onClose, onOpenServers, onNewConversation = onClos
               onExcluir={excluir}
               onRenomear={setRenomeando}
               onResume={retomar}
-              onReopen={proprios.has(item.serverId) ? reabrir : undefined}
-              onDismiss={proprios.has(item.serverId) ? dispensar : undefined}
+              onReopen={proprios.has(item.serverId) ? reopen : undefined}
+              onDismiss={proprios.has(item.serverId) ? dismiss : undefined}
               onWorktree={proprios.has(item.serverId) ? abrirWorktree : undefined}
               onPair={proprios.has(item.serverId) || item.outside ? fazerPar : undefined}
               onHidden={proprios.has(item.serverId) && !item.outside ? toggleHidden : undefined}

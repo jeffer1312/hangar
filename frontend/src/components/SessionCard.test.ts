@@ -95,13 +95,13 @@ describe('SessionCard: sessão que o sistema derrubou', () => {
   it('não abre o chat, diz o motivo e oferece Reabrir e Dispensar', async () => {
     const onReopen = vi.fn();
     const onDismiss = vi.fn();
-    const { el, comp, onClick } = montar(sessao({ state: 'dead', problema: 'terminal_sem_memoria' }), { onReopen, onDismiss });
-    expect(el.querySelector('.status-sub')?.textContent).toBe(m.problema_terminal_sem_memoria());
+    const { el, comp, onClick } = montar(sessao({ state: 'dead', problema: 'terminal_out_of_memory' }), { onReopen, onDismiss });
+    expect(el.querySelector('.status-sub')?.textContent).toBe(m.problema_terminal_out_of_memory());
     await clicaNaRow(el);
     expect(onClick).not.toHaveBeenCalled();
-    const [reabrir, dispensar] = el.querySelectorAll<HTMLElement>('.fallen-acts button');
-    reabrir.click();
-    dispensar.click();
+    const [reopen, dismiss] = el.querySelectorAll<HTMLElement>('.fallen-acts button');
+    reopen.click();
+    dismiss.click();
     expect(onReopen).toHaveBeenCalledTimes(1);
     expect(onDismiss).toHaveBeenCalledTimes(1);
     expect(onClick).not.toHaveBeenCalled();

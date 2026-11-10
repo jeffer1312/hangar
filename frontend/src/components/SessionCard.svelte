@@ -103,8 +103,8 @@ import { textoProblema } from '../lib/problema';
   // a TUI parada num seletor dela (aprovar hooks, escolher login). Sem abrir, a única saída era um
   // `tmux attach` na máquina — que no celular não existe.
   // Terminal derrubado pelo sistema: não há conversa viva para abrir, só Reabrir ou Dispensar.
-  const caida = $derived(isFallenSession(session));
-  const abreChat = $derived(!caida && (!untracked || session.provider === 'kimi' || session.provider === 'codex'));
+  const fallen = $derived(isFallenSession(session));
+  const abreChat = $derived(!fallen && (!untracked || session.provider === 'kimi' || session.provider === 'codex'));
 
   // "Precisa de voce": aguardando input -> fundo tingido.
   const action = $derived(session.state === 'awaiting_input');
@@ -720,18 +720,18 @@ import { textoProblema } from '../lib/problema';
       <!-- Retomar e Claude-only de ponta a ponta (candidatos de ~/.claude/projects + relance com
            `claude --resume`): numa sessao Pi/Kimi/OMP o botao so poderia errar, entao mostramos a
            razao no lugar dele. O backend recusa igual, pra um cliente velho nao matar o pane. -->
-      {#if caida}
+      {#if fallen}
         <span class="fallen-acts">
           <button
             class="resume-btn"
             onpointerdown={(e) => e.stopPropagation()}
             onclick={(e) => { e.stopPropagation(); onReopen?.(); }}
-          >↻ {m.sessao_reabrir()}</button>
+          >↻ {m.session_reopen()}</button>
           <button
             class="resume-btn dismiss-btn"
             onpointerdown={(e) => e.stopPropagation()}
             onclick={(e) => { e.stopPropagation(); onDismiss?.(); }}
-          >{m.sessao_dispensar()}</button>
+          >{m.session_dismiss()}</button>
         </span>
       {:else if untracked && (session.provider === 'pi' || session.provider === 'kimi' || session.provider === 'omp' || session.provider === 'codex')}
         <span class="untracked-hint">{untrackedReason(session.provider)}</span>

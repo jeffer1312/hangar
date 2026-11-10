@@ -31,8 +31,8 @@
 set -uo pipefail
 
 # Sem memória, o systemd-oomd mata a verificação, não a sessão do agente que a chamou.
-[[ -n "${HANGAR_VERIFICAR_NO_ESCOPO:-}" ]] ||
-    HANGAR_VERIFICAR_NO_ESCOPO=1 exec bash "$(dirname "$0")/escopo-memoria" bash "$0" "$@"
+[[ -n "${HANGAR_VERIFY_IN_MEMORY_SCOPE:-}" ]] ||
+    HANGAR_VERIFY_IN_MEMORY_SCOPE=1 exec bash "$(dirname "$0")/memory-scope" bash "$0" "$@"
 
 ESTADO="${XDG_STATE_HOME:-$HOME/.local/state}/hangar-verificacao"
 FIXO="${HANGAR_VERIFICAR_ARVORE:-${XDG_CACHE_HOME:-$HOME/.cache}/hangar-verificacao/arvore}"

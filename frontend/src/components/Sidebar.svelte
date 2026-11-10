@@ -229,7 +229,7 @@ import ConfirmDialog from './ConfirmDialog.svelte';
   async function handleReopen(name: string, serverId: string, e: MouseEvent) {
     e.stopPropagation();
     const erro = await model.reopen(name, serverId);
-    if (erro) flash(`${m.sessao_reabrir()}: ${erro}`);
+    if (erro) flash(`${m.session_reopen()}: ${erro}`);
   }
   async function handleDismiss(name: string, serverId: string, e: MouseEvent) {
     e.stopPropagation();
@@ -1058,8 +1058,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                   class="sess-resume"
                   onclick={(e) => handleReopen(s.name, s.serverId, e)}
                   disabled={model.isReopening(s.name, s.serverId)}
-                  aria-label={`${m.sessao_reabrir()} ${s.name}`}
-                  title={m.sessao_reabrir()}
+                  aria-label={`${m.session_reopen()} ${s.name}`}
+                  title={m.session_reopen()}
                 >
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <polyline points="1 4 1 10 7 10"/>
@@ -1070,8 +1070,8 @@ import ConfirmDialog from './ConfirmDialog.svelte';
                   class="sess-resume sess-dismiss"
                   onclick={(e) => handleDismiss(s.name, s.serverId, e)}
                   disabled={model.isReopening(s.name, s.serverId)}
-                  aria-label={`${m.sessao_dispensar()} ${s.name}`}
-                  title={m.sessao_dispensar()}
+                  aria-label={`${m.session_dismiss()} ${s.name}`}
+                  title={m.session_dismiss()}
                 >
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>

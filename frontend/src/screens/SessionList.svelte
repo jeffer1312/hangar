@@ -429,7 +429,7 @@ import * as m from '../paraglide/messages';
   // Sessão que o sistema derrubou: o erro sai como mensagem de ação, igual ao excluir.
   async function handleReopen(s: AggSession) {
     const erro = await model.reopen(s.name, s.serverId);
-    if (erro) showActionMsg(`${m.sessao_reabrir()}: ${erro}`);
+    if (erro) showActionMsg(`${m.session_reopen()}: ${erro}`);
   }
   async function handleDismiss(s: AggSession) {
     const r = await model.dismiss(s.name, s.serverId);

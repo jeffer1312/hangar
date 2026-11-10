@@ -64,7 +64,7 @@ bubbles, sheets, Spinner/Lottie, …), `lib/` (`api.ts` SSE client, `activity.ts
     `GET /history?limit=N` on mount only. There is no `dead` column: `classify()` never returns `dead`
     for a live terminal row (only the per-session SSE does). The list does carry `dead` rows for a headless
     process that died (`headless_processo_caiu`) and for a terminal session the systemd killed
-    (`terminal_sem_memoria`/`terminal_caiu`, `session_open/fallen.rs`: Reabrir and Dispensar); the board,
+    (`terminal_out_of_memory`/`terminal_died`, `session_open/fallen.rs`: Reabrir and Dispensar); the board,
     home and canvas leave those out.
 - **canvas** (`#/canvas`) — `screens/Canvas.svelte`: the free-form sibling of the board. Same
   `BoardCard` (now with a `fill` prop), but each card is a floating tile you drag by its handle and

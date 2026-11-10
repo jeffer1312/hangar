@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parent / "escopo-memoria"
+SCRIPT = Path(__file__).resolve().parent / "memory-scope"
 # Sem /proc (macOS) não há cgroup a comparar: a saída fixa só prova que o comando rodou.
 CGROUP = "cat /proc/self/cgroup 2>/dev/null || echo sem-proc; exit 7"
 OWN = Path("/proc/self/cgroup").read_text() if Path("/proc/self/cgroup").exists() else "sem-proc\n"
@@ -44,6 +44,6 @@ def test_without_systemd_runs_in_place(tmp_path):
 
 
 def test_opt_out_runs_in_place():
-    result = _run({"HANGAR_SEM_ESCOPO": "1"})
+    result = _run({"HANGAR_NO_MEMORY_SCOPE": "1"})
     assert result.returncode == 7, result.stderr
     assert result.stdout == OWN

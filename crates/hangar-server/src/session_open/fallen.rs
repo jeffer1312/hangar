@@ -3,7 +3,7 @@
 //! lista sem jeito de voltar. Só vira registro a que tem no journal `Failed with result` da unidade do pane:
 //! a saída pelo próprio agente (`/exit`) não deixa essa linha e é a pessoa saindo.
 //!
-//! O registro é pelo nome, em memória atrás de `MAP` e espelhado em `~/.hangar/sessoes-caidas.json`. A lista
+//! O registro é pelo nome, em memória atrás de `MAP` e espelhado em `~/.hangar/fallen-sessions.json`. A lista
 //! mostra cada um como linha `dead`; o Reabrir volta pelo spec (`restore::reopen`) e o `DELETE` o dispensa.
 use std::collections::{BTreeMap, HashSet};
 use std::net::SocketAddr;
@@ -23,9 +23,9 @@ use super::restore::Entry;
 use crate::routes::{AppState, cors};
 use crate::session_write::{detail_body, json_response, session_name};
 
-pub const FILE: &str = "sessoes-caidas.json";
-pub const OOM: &str = "terminal_sem_memoria";
-pub const OTHER: &str = "terminal_caiu";
+pub const FILE: &str = "fallen-sessions.json";
+pub const OOM: &str = "terminal_out_of_memory";
+pub const OTHER: &str = "terminal_died";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Fallen {
@@ -141,21 +141,21 @@ fn answer(headers: &HeaderMap, status: StatusCode, body: Value) -> Response {
     response
 }
 
-/// `POST /api/sessions/{name}/reabrir`: a caída volta pelo spec, na conversa em que estava (o mesmo
+/// `POST /api/sessions/{name}/reopen`: a caída volta pelo spec, na conversa em que estava (o mesmo
 /// caminho do restore depois do reboot). O registro só sai quando a sessão abriu.
 pub async fn reopen_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let headers = req.headers().clone();
     let owner = match crate::routes::gate(&st, peer, &req).await { Ok((_, owner)) => owner, Err(e) => return crate::auth::unavailable(e) };
     if !owner { return answer(&headers, StatusCode::FORBIDDEN, detail_body("erro_so_dono", "só o dono reabre a sessão", json!({}))); }
     let (Some(name), Some(dirs)) = (session_name(req.uri().path()), st.list.env().dirs.clone()) else {
-        return answer(&headers, StatusCode::NOT_FOUND, detail_body("erro_sessao_nao_caida", "a sessão não está caída", json!({})));
+        return answer(&headers, StatusCode::NOT_FOUND, detail_body("session_not_fallen", "a sessão não está caída", json!({})));
     };
     // A marca antes da leitura: um Dispensar que termine entre as duas não deixa reabrir o registro já tirado.
     let Some(reopening) = Reopening::begin(&name) else {
-        return answer(&headers, StatusCode::CONFLICT, detail_body("erro_reabrindo", "a sessão já está reabrindo", json!({"name": name})));
+        return answer(&headers, StatusCode::CONFLICT, detail_body("session_reopening", "a sessão já está reabrindo", json!({"name": name})));
     };
     let Some(fallen) = get(&dirs.home, &name) else {
-        return answer(&headers, StatusCode::NOT_FOUND, detail_body("erro_sessao_nao_caida", "a sessão não está caída", json!({"name": name})));
+        return answer(&headers, StatusCode::NOT_FOUND, detail_body("session_not_fallen", "a sessão não está caída", json!({"name": name})));
     };
     // Cliente que cai no meio não interrompe a abertura. O mesmo caminho do restore: agente de pé, diário, e o
     // registro só sai no sucesso.
@@ -195,23 +195,23 @@ impl Drop for Reopening {
     fn drop(&mut self) { REOPENING.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&self.0); }
 }
 
-/// `POST /api/sessions/{name}/dispensar`: tira a caída da lista sem tocar em sessão nenhuma. Só age se o nome
+/// `POST /api/sessions/{name}/dismiss`: tira a caída da lista sem tocar em sessão nenhuma. Só age se o nome
 /// ainda está caído: a linha velha no app não fecha a sessão que acabou de reabrir com o mesmo nome.
 pub async fn dismiss_route(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
     let headers = req.headers().clone();
     let owner = match crate::routes::gate(&st, peer, &req).await { Ok((_, owner)) => owner, Err(e) => return crate::auth::unavailable(e) };
     if !owner { return answer(&headers, StatusCode::FORBIDDEN, detail_body("erro_so_dono", "só o dono dispensa a sessão", json!({}))); }
     let (Some(name), Some(dirs)) = (session_name(req.uri().path()), st.list.env().dirs.clone()) else {
-        return answer(&headers, StatusCode::NOT_FOUND, detail_body("erro_sessao_nao_caida", "a sessão não está caída", json!({})));
+        return answer(&headers, StatusCode::NOT_FOUND, detail_body("session_not_fallen", "a sessão não está caída", json!({})));
     };
     // Reabrindo (por outro aparelho): dispensar agora tiraria o registro, e a reabertura que falhar não teria
     // mais como tentar de novo pela lista. A marca vem antes da leitura: a reabertura que terminar entre as
     // duas já tirou o registro, e o `forget` não apaga da fotografia a sessão que acabou de voltar.
     let Some(_hold) = Reopening::begin(&name) else {
-        return answer(&headers, StatusCode::CONFLICT, detail_body("erro_reabrindo", "a sessão está reabrindo", json!({"name": name})));
+        return answer(&headers, StatusCode::CONFLICT, detail_body("session_reopening", "a sessão está reabrindo", json!({"name": name})));
     };
     if get(&dirs.home, &name).is_none() {
-        return answer(&headers, StatusCode::NOT_FOUND, detail_body("erro_sessao_nao_caida", "a sessão não está caída", json!({"name": name})));
+        return answer(&headers, StatusCode::NOT_FOUND, detail_body("session_not_fallen", "a sessão não está caída", json!({"name": name})));
     }
     // O `forget` também tira o nome da fotografia do restore: a dispensada não volta no próximo reboot.
     super::restore::forget(&dirs.home, &name);

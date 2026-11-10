@@ -40,7 +40,7 @@ TREES = ["backend/app", "backend/hooks", "resources", "scripts", "skills", "plug
 EXCLUDE = [
     "*__pycache__*", "*.pyc", "*node_modules*", "*/tests/*", "*/test_*", "*/test-*", "*.test.*",
     "scripts/hooks/*", "scripts/prova-*", "scripts/medir-*", "scripts/probe-*", "scripts/RODAR-TESTE*",
-    "scripts/cargo-pinned", "scripts/escopo-memoria", "scripts/podar-target", "scripts/verificar-*", "scripts/ci-gates.sh",
+    "scripts/cargo-pinned", "scripts/memory-scope", "scripts/podar-target", "scripts/verificar-*", "scripts/ci-gates.sh",
     "scripts/check-*", "scripts/checar-*", "scripts/conferir-*", "scripts/core-front-tests.mjs",
     "scripts/hook-*.mjs", "scripts/i18n-compile.mjs", "scripts/deploy.sh", "scripts/comparar-custos.py",
     "scripts/post-merge.hook", "scripts/install-hooks.sh",

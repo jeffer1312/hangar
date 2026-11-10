@@ -4,18 +4,18 @@
 # a sessão do agente inteira (o Claude, os subagentes e o build juntos); assim vai só o build.
 # Sem o systemd do usuário (CI, Windows, macOS), roda o comando direto.
 #
-# Uso:  scripts/escopo-memoria <comando> [args...]
+# Uso:  scripts/memory-scope <comando> [args...]
 # Tetos: HANGAR_BUILD_MEMORY_MAX (padrão 70%, mata o build) e HANGAR_BUILD_SWAP_MAX (8G). Sem
 # MemoryHigh: o Node dimensiona o heap pelo menor teto do grupo, e com ele o svelte-check estoura.
 set -euo pipefail
 
-if [[ -z "${HANGAR_SEM_ESCOPO:-}" ]] && command -v systemd-run >/dev/null 2>&1; then
+if [[ -z "${HANGAR_NO_MEMORY_SCOPE:-}" ]] && command -v systemd-run >/dev/null 2>&1; then
     if systemd-run --user --scope --quiet --collect true >/dev/null 2>&1; then
         exec systemd-run --user --scope --quiet --collect \
             -p MemoryMax="${HANGAR_BUILD_MEMORY_MAX:-70%}" \
             -p MemorySwapMax="${HANGAR_BUILD_SWAP_MAX:-8G}" \
             -- "$@"
     fi
-    echo "escopo-memoria: o systemd do usuário não abriu o escopo; rodando sem teto de memória" >&2
+    echo "memory-scope: o systemd do usuário não abriu o escopo; rodando sem teto de memória" >&2
 fi
 exec "$@"

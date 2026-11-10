@@ -7192,7 +7192,7 @@ impl Hangar {
                 // Sem transcript não há stream nem faixa de problema: a frase vem da linha da lista, com o Reabrir.
                 let target = sidebar::Target::new(&self.open_server(), &selected.name);
                 let busy = self.sidebar.reopening.contains(&target);
-                let label = if busy { format!("{}…", tr("sessao_reabrir")) } else { tr("sessao_reabrir") };
+                let label = if busy { format!("{}…", tr("session_reopen")) } else { tr("session_reopen") };
                 content = content.child(div().flex_1().p_6().flex().flex_col().items_start().gap_3().text_sm().text_color(theme::warning())
                     .child(selected.problema.as_deref().and_then(problem_text).unwrap_or_default())
                     .child(Button::new("fallen-reopen").small().label(label).disabled(busy)

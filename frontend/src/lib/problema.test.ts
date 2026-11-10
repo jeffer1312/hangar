@@ -6,7 +6,7 @@ import * as m from '../paraglide/messages';
 
 // Códigos que o estado do Rust publica sem passar pelo Python.
 const NOVOS = ['state_facts_unavailable', 'permission_observe_failed', 'interacao_indisponivel', 'limit_switch_no_room', 'limit_switch_failed',
-  'limit_switch_no_target', 'terminal_sem_memoria', 'terminal_caiu'];
+  'limit_switch_no_target', 'terminal_out_of_memory', 'terminal_died'];
 
 describe('textoProblema', () => {
   it('traduz os códigos do estado do Rust', () => {

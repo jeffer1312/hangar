@@ -1044,8 +1044,8 @@ impl Hangar {
                 Write::Show => api.server_send(reqwest::Method::DELETE, &["sessions", name.as_str(), "hidden"], None, 15).await,
                 Write::Mode(terminal) => api.act(name, &["modo-execucao"], Some(json!({"terminal": terminal})), false, crate::api::REOPEN_SECONDS).await,
                 Write::Reload => api.act(name, &["recarregar"], None, false, crate::api::REOPEN_SECONDS).await,
-                Write::Reopen => api.act(name, &["reabrir"], None, false, crate::api::REOPEN_SECONDS).await,
-                Write::Dismiss => api.act(name, &["dispensar"], None, false, 15).await,
+                Write::Reopen => api.act(name, &["reopen"], None, false, crate::api::REOPEN_SECONDS).await,
+                Write::Dismiss => api.act(name, &["dismiss"], None, false, 15).await,
                 Write::Account { path, engine_account, .. } => api.act(name, &["conta"], Some(account_body(path, engine_account.as_deref())), false, crate::api::REOPEN_SECONDS).await,
             };
             tell.send(SidebarReply::Wrote(target, what, result)).await;
@@ -1525,13 +1525,13 @@ impl Hangar {
                     }
                     (Write::Reopen, result) => {
                         self.sidebar.reopening.remove(&target);
-                        result.err().map(|error| Notification::error(format!("{}: {}", tr("sessao_reabrir"), Self::fetch_failure(&error))))
+                        result.err().map(|error| Notification::error(format!("{}: {}", tr("session_reopen"), Self::fetch_failure(&error))))
                     }
                     (Write::Dismiss, Ok(_)) => None,
                     (Write::Dismiss, Err(error)) => {
                         self.sidebar.deleting.remove(&target);
                         self.sidebar.dismissing.remove(&target);
-                        Some(Notification::error(format!("{}: {}", tr("sessao_dispensar"), Self::fetch_failure(&error))))
+                        Some(Notification::error(format!("{}: {}", tr("session_dismiss"), Self::fetch_failure(&error))))
                     }
                 };
                 if let Some(note) = note { window.push_notification(note, cx); }
@@ -1789,7 +1789,7 @@ fn fill_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, target: &Target, sess
             .on_click(move |_, window, cx| { let _ = hangar.update(cx, |this, cx| if fell { this.dismiss_target(target.clone(), cx) } else { this.close_target(target.clone(), window, cx) }); })
     };
     let reopen = fell.then(|| {
-        let label = if busy { format!("{}…", tr("sessao_reabrir")) } else { tr("sessao_reabrir") };
+        let label = if busy { format!("{}…", tr("session_reopen")) } else { tr("session_reopen") };
         let (hangar, target) = (hangar.clone(), target.clone());
         PopupMenuItem::new(label).disabled(busy)
             .on_click(move |_, _, cx| { let _ = hangar.update(cx, |this, cx| this.reopen_target(target.clone(), cx)); })
@@ -1881,12 +1881,12 @@ fn fill_menu(menu: PopupMenu, hangar: &WeakEntity<Hangar>, target: &Target, sess
 
 /// Sessão de terminal que o sistema derrubou (falta de memória ou queda): a linha fica para reabrir ou dispensar.
 pub(super) fn fallen(session: &SessionInfo) -> bool {
-    session.state == "dead" && matches!(session.problema.as_deref(), Some("terminal_sem_memoria" | "terminal_caiu"))
+    session.state == "dead" && matches!(session.problema.as_deref(), Some("terminal_out_of_memory" | "terminal_died"))
 }
 
 /// O item que tira a linha da lista: o convite para de acompanhar; a caída é só dispensada.
 fn exit_label(session: &SessionInfo, invite: bool) -> String {
-    if invite { tr_shared("convite_parar", &[]) } else if fallen(session) { tr("sessao_dispensar") } else { tr("sidebar_close") }
+    if invite { tr_shared("convite_parar", &[]) } else if fallen(session) { tr("session_dismiss") } else { tr("sidebar_close") }
 }
 
 /// O submenu de branches se refaz sozinho quando a leitura chega: refazer o menu de cima fecharia o submenu aberto.
@@ -2269,18 +2269,18 @@ mod tests {
         use super::{exit_label, fallen};
         crate::i18n::english_in_this_thread(false);
         let row = |state: &str, problema: Option<&str>| SessionInfo { name: "s".into(), state: state.into(), problema: problema.map(Into::into), ..Default::default() };
-        for code in ["terminal_sem_memoria", "terminal_caiu"] {
+        for code in ["terminal_out_of_memory", "terminal_died"] {
             let fell = row("dead", Some(code));
             assert!(fallen(&fell), "{code}: o menu ganha Reabrir");
             assert_eq!(exit_label(&fell, false), "Dispensar");
         }
         // Processo sem terminal que caiu, morta sem motivo e problema em sessão viva: o Fechar de sempre, sem Reabrir.
-        for other in [row("dead", Some("headless_processo_caiu")), row("dead", None), row("idle", Some("terminal_caiu"))] {
+        for other in [row("dead", Some("headless_processo_caiu")), row("dead", None), row("idle", Some("terminal_died"))] {
             assert!(!fallen(&other));
             assert_eq!(exit_label(&other, false), "Fechar");
         }
         // No convite a sessão é do dono: segue "Parar de acompanhar".
-        assert_eq!(exit_label(&row("dead", Some("terminal_caiu")), true), crate::i18n::tr_shared("convite_parar", &[]));
+        assert_eq!(exit_label(&row("dead", Some("terminal_died")), true), crate::i18n::tr_shared("convite_parar", &[]));
     }
 
     #[test]

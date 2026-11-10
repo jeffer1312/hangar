@@ -129,8 +129,8 @@ describe('sessão caída pelo sistema', () => {
   it('fica na lista fora do topo; outra morta sai', () => {
     const fallen = [
       { ...nb, name: 'viva', state: 'working', last_activity: 30 } as AggSession,
-      { ...nb, name: 'sem-memoria', state: 'dead', problema: 'terminal_sem_memoria', last_activity: 20 } as AggSession,
-      { ...nb, name: 'caiu', state: 'dead', problema: 'terminal_caiu', last_activity: 15 } as AggSession,
+      { ...nb, name: 'sem-memoria', state: 'dead', problema: 'terminal_out_of_memory', last_activity: 20 } as AggSession,
+      { ...nb, name: 'caiu', state: 'dead', problema: 'terminal_died', last_activity: 15 } as AggSession,
       { ...nb, name: 'headless', state: 'dead', problema: 'headless_processo_caiu', last_activity: 10 } as AggSession,
       { ...nb, name: 'morta', state: 'dead', last_activity: 5 } as AggSession,
     ];

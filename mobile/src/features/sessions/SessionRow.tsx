@@ -157,8 +157,8 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
   const fallen = isFallenSession(s);
   const acoesA11y = useMemo(
     () => [
-      ...(fallen && onReopen ? [{ name: 'reopen', label: m.sessao_reabrir() }] : []),
-      ...(fallen && onDismiss ? [{ name: 'dismiss', label: m.sessao_dispensar() }] : []),
+      ...(fallen && onReopen ? [{ name: 'reopen', label: m.session_reopen() }] : []),
+      ...(fallen && onDismiss ? [{ name: 'dismiss', label: m.session_dismiss() }] : []),
       ...acoesMenu.filter((a) => !isDisabled(a)).map((a) => ({ name: a.id, label: a.title })),
       ...(groupTitle ? [{ name: 'group', label: groupTitle }] : []),
     ],
@@ -349,15 +349,15 @@ export const SessionRow = memo(function SessionRow({ session: s, mostrarServidor
         {fallen && (onReopen || onDismiss) ? (
           <View style={styles.fallenActions}>
             {onReopen ? (
-              <Pressable onPress={() => onReopen(s)} style={styles.resume} hitSlop={8} accessibilityRole="button" accessibilityLabel={m.sessao_reabrir()}>
+              <Pressable onPress={() => onReopen(s)} style={styles.resume} hitSlop={8} accessibilityRole="button" accessibilityLabel={m.session_reopen()}>
                 <Icon name="RotateCw" size={12} color={theme.tokens.text.secondary} />
-                <Text style={[styles.metaTxt, { color: theme.tokens.text.primary }]}>{m.sessao_reabrir()}</Text>
+                <Text style={[styles.metaTxt, { color: theme.tokens.text.primary }]}>{m.session_reopen()}</Text>
               </Pressable>
             ) : null}
             {onDismiss ? (
-              <Pressable onPress={() => onDismiss(s)} style={styles.resume} hitSlop={8} accessibilityRole="button" accessibilityLabel={m.sessao_dispensar()}>
+              <Pressable onPress={() => onDismiss(s)} style={styles.resume} hitSlop={8} accessibilityRole="button" accessibilityLabel={m.session_dismiss()}>
                 <Icon name="X" size={12} color={theme.tokens.text.secondary} />
-                <Text style={[styles.metaTxt, { color: theme.tokens.text.primary }]}>{m.sessao_dispensar()}</Text>
+                <Text style={[styles.metaTxt, { color: theme.tokens.text.primary }]}>{m.session_dismiss()}</Text>
               </Pressable>
             ) : null}
           </View>
