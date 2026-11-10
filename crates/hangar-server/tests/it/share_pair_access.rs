@@ -37,6 +37,7 @@ struct Srv {
     pair: PathBuf,
     other: Arc<Other>,
     other_base: String,
+    _sink: crate::sink::Sink,
 }
 
 async fn server() -> Srv {
@@ -49,6 +50,12 @@ async fn server() -> Srv {
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
     let (_python, upstream) = fake::spawn_fake().await;
     let mut state = AppState::new(fake::config(upstream, ""));
+    // Cada sessão é um Claude sem terminal do Rust: o aviso do grupo chega ao cano falso dela.
+    let runtime = Arc::new(crate::sink::registry().await);
+    let sink = crate::sink::Sink::default();
+    std::fs::create_dir_all(root.join("rt")).unwrap();
+    for name in ["s0", "s1", "s2", "s3"] { sink.open(&runtime, &root.join("rt"), name).await; }
+    assert!(state.state.runtime.set(runtime).is_ok());
     state.list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
         FactsClient::new(upstream, SECRET.into())));
@@ -66,7 +73,7 @@ async fn server() -> Srv {
     tokio::spawn(async move { axum::serve(l2, r2.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap() });
     tokio::spawn(async move { axum::serve(l3, r3.into_make_service_with_connect_info::<GuestConn>()).await.unwrap() });
     let (other, other_base) = other_machine().await;
-    Srv { _dir: dir, public, private, guest, app, share, pair, other, other_base }
+    Srv { _dir: dir, public, private, guest, app, share, pair, other, other_base, _sink: sink }
 }
 
 impl Srv {

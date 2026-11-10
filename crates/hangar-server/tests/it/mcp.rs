@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 const PYTHON_CATALOG: &str = include_str!("fixtures/mcp_catalog_python.json");
 const PYTHON_INSTRUCTIONS: &str = "Hangar: sessões vizinhas e o navegador embutido desta sessão. Mostrar algo que você montou ao usuário (desenho, mock de tela, comparação, gráfico, tabela, diagrama): html_render, sem esperar pedido; imagem por caminho só para print real de tela. Ver ou testar uma página: browser_open e depois browser (um verbo) ou browser_batch (vários já conhecidos); tela desconhecida com várias ações: browser_goal, quando a sessão tem o Jev. Falar com outra sessão: sessions, send, group, pair; abrir ou fechar: new_session, close_session.";
 
-struct Scene { addr: SocketAddr, python: Arc<fake::Fake>, home: PathBuf, _dir: tempfile::TempDir }
+struct Scene { addr: SocketAddr, python: Arc<fake::Fake>, home: PathBuf, sink: crate::sink::Sink, _dir: tempfile::TempDir }
 
 /// Sessões `s0` (pane `%0`) e `s1` (`%1`) com conversa; `beta` com os panes `%1` (repetido, como no
 /// psmux) e `%7`; `sem-term` sem terminal, de chave `k123`; o Python falso atrás.
@@ -26,7 +26,12 @@ async fn scene() -> Scene { scene_with(false).await }
 /// `groups`: o serviço de grupo do Rust sobre `home/.claude/.hangar-pair` (sem ele, grupo segue ao Python).
 async fn scene_with(groups: bool) -> Scene { scene_full(groups, None).await }
 
-async fn scene_full(groups: bool, peers: Option<hangar_server::groups::peers::PeerClient>) -> Scene {
+async fn scene_full(groups: bool, peers: Option<hangar_server::groups::peers::PeerClient>) -> Scene { scene_built(groups, peers, false).await }
+
+/// Grupos do Rust com `s0`, `s1` e `beta` abertos como Claude sem terminal: o recado chega ao cano falso.
+async fn scene_owned() -> Scene { scene_built(true, None, true).await }
+
+async fn scene_built(groups: bool, peers: Option<hangar_server::groups::peers::PeerClient>, owned: bool) -> Scene {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     list_support::sessions(root, 2);
@@ -42,6 +47,13 @@ async fn scene_full(groups: bool, peers: Option<hangar_server::groups::peers::Pe
         "omp_agent": home.join(".omp/agent"), "kimi_home": home.join(".kimi-code")}).to_string());
     let (python, upstream) = fake::spawn_fake().await;
     let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
+    let sink = crate::sink::Sink::default();
+    if owned {
+        let runtime = Arc::new(crate::sink::registry().await);
+        std::fs::create_dir_all(root.join("rt")).unwrap();
+        for name in ["s0", "s1", "beta"] { sink.open(&runtime, &root.join("rt"), name).await; }
+        assert!(state.state.runtime.set(runtime).is_ok());
+    }
     let list = Arc::new(ListBridge::new(ListEnv { mux: Mux::with_program(&script, Duration::from_secs(5)),
         capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
         FactsClient::new(upstream, SECRET.into())));
@@ -59,7 +71,7 @@ async fn scene_full(groups: bool, peers: Option<hangar_server::groups::peers::Pe
     let addr = listener.local_addr().unwrap();
     let app = router(Arc::new(state)).into_make_service_with_connect_info::<SocketAddr>();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    Scene { addr, python, home, _dir: dir }
+    Scene { addr, python, home, sink, _dir: dir }
 }
 
 fn write_json(path: &Path, value: Value) {
@@ -284,7 +296,7 @@ async fn send_goes_through_the_input_route_as_the_caller() {
 #[tokio::test(flavor = "multi_thread")]
 async fn group_pair_unpair_call_the_routes_as_the_caller() {
     // Grupos são do Rust: nada disso segue ao Python.
-    let s = scene_with(true).await;
+    let s = scene_owned().await;
     let pair = s.home.join(".claude/.hangar-pair");
     let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%7")]).await;
     let paired = mcp.call("pair", json!({"alvo": "s0", "tarefa": "t"})).await;
@@ -533,12 +545,12 @@ async fn html_render_publishes_for_the_caller() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn voice_names_the_session_it_acts_for() {
-    let s = scene_with(true).await;
+    let s = scene_owned().await;
     desktop(&s.home, |verb| format!("ok: {verb}")).await;
     let voice = hangar_server::voice::machines::voice_signature(SECRET).unwrap();
     let mut mcp = Mcp::open(s.addr, &[("x-hangar-voice", &voice)]).await;
-    assert!(!failed(&mcp.call("send", json!({"alvo": "fora", "texto": "terminei"})).await));
-    assert_eq!(serde_json::from_slice::<Value>(&s.python.last_body()).unwrap()["text"], "[de: voz] terminei");
+    assert!(!failed(&mcp.call("send", json!({"alvo": "s1", "texto": "terminei"})).await));
+    assert_eq!(s.sink.last("s1").as_deref(), Some("[de: voz] terminei"));
     for (tool, args) in [("pair", json!({"alvo": "s0"})), ("group", json!({"texto": "x"})), ("unpair", json!({})),
         ("browser", json!({"verbo": "snapshot"})), ("browser_batch", json!({"passos": []})), ("html_render", json!({"title": "t", "html": "<p>x</p>"}))] {
         let result = mcp.call(tool, args.clone()).await;
