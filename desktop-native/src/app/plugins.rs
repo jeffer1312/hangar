@@ -102,15 +102,49 @@ fn inventory_labels(inventory: &PluginInventory) -> Vec<String> {
         }).collect()
 }
 
-fn row_box(id: impl Into<ElementId>) -> Stateful<Div> {
+// As partes de vista abaixo também desenham a novidade `plugins-do-claude` (`crate::news`): a página liga os eventos.
+pub(crate) fn row_box(id: impl Into<ElementId>) -> Stateful<Div> {
     div().id(id).role(Role::ListItem).mt(px(-1.)).border_t_1().border_color(theme::border()).px_4().py(px(12.)).flex().items_center().gap(px(14.))
 }
 
-fn text_block(name: Div, meta: String, description: Option<String>) -> Div {
+pub(crate) fn text_block(name: Div, meta: String, description: Option<String>) -> Div {
     div().flex_1().min_w_0().flex().flex_col().gap(px(2.))
         .child(name)
         .child(div().truncate().text_size(px(12.5)).text_color(theme::muted()).child(meta))
         .when_some(description.filter(|d| !d.is_empty()), |el, d| el.child(div().text_size(px(12.5)).text_color(theme::faint()).whitespace_normal().child(d)))
+}
+
+/// Nome do plugin na linha, com a pílula da versão nova.
+pub(crate) fn plugin_name(name: String, enabled: bool, update: Option<String>) -> Div {
+    div().flex().items_center().gap_2()
+        .child(div().min_w_0().truncate().font_weight(FontWeight::MEDIUM).text_color(if enabled { theme::text() } else { theme::muted() }).child(name))
+        .when_some(update, |el, v| el.child(chip(tr("plugins_available").replace("{version}", &v), theme::accent_text(), theme::accent_dim())))
+}
+
+pub(crate) fn plugin_meta(version: &str, last_updated: &str, marketplace: &str) -> String {
+    tr("plugins_row_meta").replace("{version}", version).replace("{date}", &day(last_updated)).replace("{marketplace}", marketplace)
+}
+
+pub(crate) fn plugin_update_button(id: impl Into<ElementId>, busy: bool) -> Button {
+    Button::new(id).outline().small().label(tr(if busy { "plugins_updating" } else { "plugins_update" })).loading(busy).disabled(busy)
+}
+
+pub(crate) fn plugin_switch(id: impl Into<ElementId>, name: &str, enabled: bool, busy: bool) -> Switch {
+    Switch::new(id).checked(enabled).disabled(busy)
+        .accessibility_label(format!("{} · {name}", tr(if enabled { "plugins_disable" } else { "plugins_enable" })))
+}
+
+/// A faixa de reabrir; `go` e `later` recebem os botões prontos para ganhar o clique.
+pub(crate) fn reopen_notice(action: &str, n: usize, busy: bool, failures: &[String], go: impl FnOnce(Button) -> Button,
+    later: impl FnOnce(Button) -> Button, cx: &App) -> Div {
+    let text = if n == 1 { tr("plugins_reopen_banner_one").replace("{action}", action) }
+        else { tr("plugins_reopen_banner").replace("{action}", action).replace("{n}", &n.to_string()) };
+    let label = if busy { tr("plugins_reopening") } else if n == 1 { tr("plugins_reopen") } else { tr("plugins_reopen_all").replace("{n}", &n.to_string()) };
+    notice(text, false)
+        .children(failures.iter().map(|f| div().pl(px(23.)).text_size(px(11.)).text_color(theme::warning()).whitespace_normal().child(f.clone())))
+        .child(div().pl(px(23.)).flex().gap_2()
+            .child(go(notice_button("plugins-reopen-go", label, false, cx).disabled(busy)))
+            .child(later(notice_button("plugins-reopen-later", tr("plugins_reopen_later"), false, cx).disabled(busy))))
 }
 
 /// Faixa depois de uma mudança: quem ainda está no estado anterior e o que deu errado ao reabrir.
@@ -422,17 +456,10 @@ impl PluginsPage {
 
     fn render_reopen(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let reopen = self.reopen.as_ref()?;
-        let n = reopen.names.len();
-        let text = if n == 1 { tr("plugins_reopen_banner_one").replace("{action}", &reopen.action) }
-            else { tr("plugins_reopen_banner").replace("{action}", &reopen.action).replace("{n}", &n.to_string()) };
-        let label = if reopen.busy { tr("plugins_reopening") } else if n == 1 { tr("plugins_reopen") } else { tr("plugins_reopen_all").replace("{n}", &n.to_string()) };
-        Some(div().id("plugins-reopen").role(Role::Status).child(notice(text, false)
-            .children(reopen.failures.iter().map(|f| div().pl(px(23.)).text_size(px(11.)).text_color(theme::warning()).whitespace_normal().child(f.clone())))
-            .child(div().pl(px(23.)).flex().gap_2()
-                .child(notice_button("plugins-reopen-go", label, false, cx).disabled(reopen.busy)
-                    .on_click(cx.listener(|this, _, window, cx| this.reopen_all(window, cx))))
-                .child(notice_button("plugins-reopen-later", tr("plugins_reopen_later"), false, cx).disabled(reopen.busy)
-                    .on_click(cx.listener(|this, _, _, cx| { this.reopen = None; cx.notify(); })))))
+        let go = cx.listener(|this, _: &ClickEvent, window, cx| this.reopen_all(window, cx));
+        let later = cx.listener(|this, _: &ClickEvent, _, cx| { this.reopen = None; cx.notify(); });
+        Some(div().id("plugins-reopen").role(Role::Status)
+            .child(reopen_notice(&reopen.action, reopen.names.len(), reopen.busy, &reopen.failures, |b| b.on_click(go), |b| b.on_click(later), cx))
             .into_any_element())
     }
 
@@ -467,23 +494,16 @@ impl PluginsPage {
     fn render_plugin(&self, plugin: &InstalledPlugin, open: bool, cx: &mut Context<Self>) -> AnyElement {
         let id = plugin.id.clone();
         let busy = self.busy.contains(&id);
-        let name = div().flex().items_center().gap_2()
-            .child(div().min_w_0().truncate().font_weight(FontWeight::MEDIUM).text_color(if plugin.enabled { theme::text() } else { theme::muted() })
-                .child(plugin.name.clone()))
-            .when_some(plugin.available_version.clone().filter(|_| has_update(plugin)), |el, v| el
-                .child(chip(tr("plugins_available").replace("{version}", &v), theme::accent_text(), theme::accent_dim())));
-        let meta = tr("plugins_row_meta").replace("{version}", &plugin.version).replace("{date}", &day(&plugin.last_updated))
-            .replace("{marketplace}", &plugin.marketplace);
+        let name = plugin_name(plugin.name.clone(), plugin.enabled, plugin.available_version.clone().filter(|_| has_update(plugin)));
+        let meta = plugin_meta(&plugin.version, &plugin.last_updated, &plugin.marketplace);
         let page = cx.entity().downgrade();
         let (toggle_id, switch_id, update_id) = (id.clone(), id.clone(), id.clone());
         row_box(SharedString::from(format!("plugins-row-{id}"))).aria_label(plugin.name.clone()).cursor_pointer().hover(|el| el.bg(theme::hover()))
             .on_click(cx.listener(move |this, _, _, cx| this.toggle_detail(toggle_id.clone(), cx)))
             .child(text_block(name, meta, plugin.description.clone()))
-            .when(has_update(plugin), |el| el.child(Button::new(SharedString::from(format!("plugins-update-{id}"))).outline().small()
-                .label(tr(if busy { "plugins_updating" } else { "plugins_update" })).loading(busy).disabled(busy)
+            .when(has_update(plugin), |el| el.child(plugin_update_button(SharedString::from(format!("plugins-update-{id}")), busy)
                 .on_click(cx.listener(move |this, _, window, cx| if let Some(p) = this.installed(&update_id) { this.update(&p, window, cx) }))))
-            .child(Switch::new(SharedString::from(format!("plugins-switch-{id}"))).checked(plugin.enabled).disabled(busy)
-                .accessibility_label(format!("{} · {}", tr(if plugin.enabled { "plugins_disable" } else { "plugins_enable" }), plugin.name))
+            .child(plugin_switch(SharedString::from(format!("plugins-switch-{id}")), &plugin.name, plugin.enabled, busy)
                 .on_click(cx.listener(move |this, on: &bool, window, cx| {
                     // A chave fica dentro da linha clicável: sem parar aqui, ligar também abriria o detalhe.
                     cx.stop_propagation();

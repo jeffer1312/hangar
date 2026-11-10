@@ -8,7 +8,7 @@ import { SectionTabs } from '../../src/features/config/SectionTabs';
 import { Segmented } from '../../src/features/config/Segmented';
 import { MachineGroup, MachineHelp, MachineRow } from '../../src/features/machines/MachineRows';
 import { Notice } from '../../src/features/machines/parts';
-import { PluginRow, PluginsField, ReopenBanner, RowButton, checkedLabel, shortDate, useLiveClaudeCount } from '../../src/features/plugins/parts';
+import { InstalledPluginRow, PluginRow, PluginsField, ReopenBanner, RowButton, checkedLabel, shortDate, useLiveClaudeCount } from '../../src/features/plugins/parts';
 import { runMarketplaceAction, runPluginAction, usePlugins } from '../../src/features/plugins/store';
 import { useServers } from '../../src/stores/servers';
 import { haptic } from '../../src/ui/haptics';
@@ -95,20 +95,10 @@ function Installed({ server, plugins }: { server: Server; plugins: InstalledPlug
     {!plugins.length ? <InfoNotice text={m.plugins_empty_installed()} />
       : !shown.length ? <InfoNotice text={filter === 'up' && !q ? m.plugins_all_latest() : m.plugins_empty_filter()} />
       : <MachineGroup>
-        {shown.map((p) => {
-          const updating = busy === `${p.id}:update`;
-          return <PluginRow key={p.id} title={p.name} dimmed={!p.enabled}
-            pill={p.available_version ? m.plugins_available({ version: p.available_version }) : undefined}
-            meta={m.plugins_row_meta({ version: p.version, date: shortDate(p.last_updated), marketplace: p.marketplace })}
-            description={p.description}
-            onPress={() => router.push({ pathname: '/config/plugin', params: { id: p.id } })}
-            trailing={<>
-              {p.available_version ? <RowButton label={updating ? m.plugins_updating() : m.plugins_update()} disabled={!!busy}
-                onPress={() => void runPluginAction(server, p, 'update', liveCount)} /> : null}
-              <Switch value={p.enabled} disabled={!!busy} accessibilityLabel={p.name}
-                onValueChange={(on) => void runPluginAction(server, p, on ? 'enable' : 'disable', liveCount)} />
-            </>} />;
-        })}
+        {shown.map((p) => <InstalledPluginRow key={p.id} plugin={p} updating={busy === `${p.id}:update`} disabled={!!busy}
+          onPress={() => router.push({ pathname: '/config/plugin', params: { id: p.id } })}
+          onUpdate={() => void runPluginAction(server, p, 'update', liveCount)}
+          onToggle={(on) => void runPluginAction(server, p, on ? 'enable' : 'disable', liveCount)} />)}
       </MachineGroup>}
   </>;
 }

@@ -1,7 +1,7 @@
 import { useEffect, type ReactNode } from 'react';
-import { Pressable, Text, TextInput, View, type TextInputProps } from 'react-native';
+import { Pressable, Switch, Text, TextInput, View, type TextInputProps } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { fmtWhen, intlLocale, liveClaudeSessions, type Server } from '@hangar/core';
+import { fmtWhen, intlLocale, liveClaudeSessions, type InstalledPlugin, type Server } from '@hangar/core';
 import { InfoNotice } from '../config/InfoNotice';
 import { useSettingsColors } from '../config/colors';
 import { MachineGroup, MachineRow } from '../machines/MachineRows';
@@ -50,15 +50,48 @@ export function ReopenBanner({ server }: { server: Server }) {
   const reopening = usePlugins((s) => s.reopening);
   const refused = usePlugins((s) => s.refused);
   if (!changed || (!n && !refused.length)) return null;
+  return <ReopenBannerView n={n} action={changed} refused={refused} reopening={reopening}
+    onReopen={() => void usePlugins.getState().reopen(server, liveClaudeNames(server))} onLater={() => usePlugins.getState().dismiss()} />;
+}
+
+/** O aviso de reabrir só com props: o `ReopenBanner` liga à loja, a novidade passa dados de exemplo. */
+export function ReopenBannerView({ n, action, refused, reopening, onReopen, onLater }: {
+  n: number;
+  action: string;
+  refused: string[];
+  reopening: boolean;
+  onReopen: () => void;
+  onLater: () => void;
+}) {
   return <>
-    {n ? <InfoNotice text={n === 1 ? m.plugins_reopen_banner_one({ action: changed }) : m.plugins_reopen_banner({ action: changed, n })} /> : null}
+    {n ? <InfoNotice text={n === 1 ? m.plugins_reopen_banner_one({ action }) : m.plugins_reopen_banner({ action, n })} /> : null}
     {refused.map((r) => <Notice key={r} text={r} error />)}
     <MachineGroup>
       {n ? <MachineRow title={reopening ? m.plugins_reopening() : n === 1 ? m.plugins_reopen() : m.plugins_reopen_all({ n })} action
-        disabled={reopening} onPress={() => void usePlugins.getState().reopen(server, liveClaudeNames(server))} /> : null}
-      <MachineRow title={m.plugins_reopen_later()} disabled={reopening} onPress={() => usePlugins.getState().dismiss()} />
+        disabled={reopening} onPress={onReopen} /> : null}
+      <MachineRow title={m.plugins_reopen_later()} disabled={reopening} onPress={onLater} />
     </MachineGroup>
   </>;
+}
+
+/** Linha de plugin instalado: versão, data, pílula de versão nova, Atualizar e a chave de ligar. */
+export function InstalledPluginRow({ plugin: p, updating, disabled, onPress, onUpdate, onToggle }: {
+  plugin: InstalledPlugin;
+  updating: boolean;
+  disabled: boolean;
+  onPress: () => void;
+  onUpdate: () => void;
+  onToggle: (on: boolean) => void;
+}) {
+  return <PluginRow title={p.name} dimmed={!p.enabled}
+    pill={p.available_version ? m.plugins_available({ version: p.available_version }) : undefined}
+    meta={m.plugins_row_meta({ version: p.version, date: shortDate(p.last_updated), marketplace: p.marketplace })}
+    description={p.description}
+    onPress={onPress}
+    trailing={<>
+      {p.available_version ? <RowButton label={updating ? m.plugins_updating() : m.plugins_update()} disabled={disabled} onPress={onUpdate} /> : null}
+      <Switch value={p.enabled} disabled={disabled} accessibilityLabel={p.name} onValueChange={onToggle} />
+    </>} />;
 }
 
 /** Campo de busca/entrada no topo de uma aba. */

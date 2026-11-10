@@ -87,6 +87,8 @@ pub(crate) use vault_requests::{approve_body, approve_title, request_button, req
 pub(crate) use create::{base_button, base_row, quiet_button, worktree_field_label, worktree_warning};
 pub(crate) use connect::device_card;
 pub(crate) use settings::{setting_row, settings_box};
+pub(crate) use plugins::{plugin_meta, plugin_name, plugin_switch, plugin_update_button, reopen_notice as plugins_reopen_notice,
+    row_box as plugin_row_box, text_block as plugin_text_block};
 pub(crate) use accounts::{login_heading, target_row};
 pub(crate) use search::{ScopeFound, highlighted as search_highlighted, search_agent_label, search_chat_header, search_chat_sub, search_field, search_filter_chip, search_found_frame,
     search_group_frame, search_group_header, search_group_sub, search_hit_line, search_live_label, search_open_look, search_scope_block,
