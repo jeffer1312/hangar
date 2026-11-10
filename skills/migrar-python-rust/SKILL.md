@@ -137,8 +137,11 @@ commit, decisão) | plataforma`. Mostre a contagem por área e peça a aprovaç�
    escreveu, também sem compilar; a sessão confere o diff dela, sem nova rodada do revisor.
 4. A sessão mescla uma worktree por vez, sem compilar: resolve o conflito e sobe o protocolo
    (regra 7). Rota que dependia da mesclada abre agora.
-5. Só a sessão compila, depois da última mesclagem do lote, duas vezes, cada uma numa chamada só
-   com os filtros de todas as rotas (`cargo-pinned test -p hangar-server --test it -- <filtros>`):
+5. Só a sessão compila, depois da última mesclagem do lote, em duas provas. Cada prova:
+   `cargo-pinned check -p hangar-server --tests` até não haver erro de compilação, depois
+   `cargo-pinned test -p hangar-server --test it --no-run` e o binário `deps/it-*` mais novo do
+   target comum rodado uma vez, num subshell em `crates/hangar-server`, com os filtros de todas as
+   rotas (o `cargo-pinned` não repassa filtros depois de `--`):
    - **Prova de falha:** numa worktree temporária no commit de antes do lote, só com os arquivos
      de teste novos. Teste novo que passa ali não prova o item e volta à rota; teste que não
      compila contra o código de antes entra no `conferencia.md` como "sem prova de falha".
