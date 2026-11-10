@@ -56,6 +56,15 @@ enum Operation {
 /// dona (`DELIVER_WAIT`, 5 s), como o das sessões do Rust.
 const DEFERRED_WAIT: Duration = Duration::from_secs(3);
 
+/// Teto da rota mais as entregas dela num pedido da ponte, abaixo dos 90 s que o Python espera: passou
+/// disso, quem não recebeu vira aviso e a resposta sai antes de o Python desistir.
+const BRIDGE_BUDGET: Duration = Duration::from_secs(75);
+
+/// O que sobra do teto da ponte para as entregas, contado do começo do pedido.
+fn bridge_wait(started: std::time::Instant) -> Option<Duration> {
+    Some(BRIDGE_BUDGET.saturating_sub(started.elapsed()).max(Duration::from_secs(1)))
+}
+
 /// Pedido repassado pelo Python: o recado a sessão sem dono no Rust sai depois da rota (`deliver_deferred`).
 pub(crate) struct BridgeCtx {
     deliveries: std::sync::Mutex<Vec<Value>>,
@@ -296,10 +305,11 @@ async fn execute(
             facts: _,
         } => {
             let ctx = BridgeCtx::new();
+            let started = std::time::Instant::now();
             let mut out = CTX
                 .scope(ctx.clone(), route(st.clone(), &method, &name, &path, body))
                 .await?;
-            let failed = deliver_deferred(&st, ctx.take_deliveries(), None).await;
+            let failed = deliver_deferred(&st, ctx.take_deliveries(), bridge_wait(started)).await;
             report_failed(&st, &mut out["body"], failed, "rust.groups_bridge_delivery_failed", &[]);
             out["post"] = json!([]);
             Ok(out)
@@ -307,6 +317,7 @@ async fn execute(
         Operation::Leave { name, phases: _ } => {
             // A saída de grupo entre máquinas avisa quem ficou sozinho; sessão sem dono recebe depois.
             let ctx = BridgeCtx::new();
+            let started = std::time::Instant::now();
             let (ex, mut warnings) = CTX
                 .scope(ctx.clone(), async {
                     let (ex, tell) = super::exit::leave(&st, &groups, &name, None)
@@ -315,7 +326,7 @@ async fn execute(
                     Ok::<_, Failed>((ex, notify_exit(&st, &groups, &name, &tell).await))
                 })
                 .await?;
-            warnings.extend(deliver_deferred(&st, ctx.take_deliveries(), None).await);
+            warnings.extend(deliver_deferred(&st, ctx.take_deliveries(), bridge_wait(started)).await);
             Ok(json!({"ex_peers": ex, "warnings": warnings}))
         }
         Operation::OrqAssociate {

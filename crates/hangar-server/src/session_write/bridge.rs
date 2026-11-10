@@ -182,6 +182,9 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     }
     let (Some(runtime), true, Some(name)) = (st.state.runtime.get().cloned(), owner, name)
         else { return vault_files_after(vault_files, crate::routes::pass(&st, req, &fwd).await) };
+    // Na janela da subida, a vigia é quem lê o sidecar do Codex: sem ela o fechamento pelo nome deixaria o
+    // cano de um Codex sem terminal vivo. Subida que não liga vigia segue pelo nome.
+    if let Err(error) = runtime.wait_watcher().await { return close_failed(&st, &name, &error, req.headers()); }
     // O nome e a porta de entrada antes de qualquer encerramento: abertura e escrita do mesmo nome esperam.
     let closing = match runtime.begin_close(st.list.env().dirs.as_ref().map(|dirs| dirs.home.clone()), &name).await {
         Ok(closing) => closing,

@@ -537,7 +537,7 @@ impl RuntimeRegistry {
     pub fn expect_watcher(&self) { if self.watcher.get().is_none() { self.watcher_pending.send_replace(true); } }
     /// `Ok(None)`: a subida não liga vigia. `Err`: ela não ligou no teto; a escrita sai com o código, sem
     /// virar sessão sem dono.
-    async fn wait_watcher(&self) -> Result<Option<Arc<super::codex_terminal::Watcher>>,RuntimeError> {
+    pub(crate) async fn wait_watcher(&self) -> Result<Option<Arc<super::codex_terminal::Watcher>>,RuntimeError> {
         let mut pending = self.watcher_pending.subscribe();
         // Teto: subida que parou no meio nunca segura a escrita para sempre.
         if tokio::time::timeout(WATCHER_WAIT, pending.wait_for(|pending| !pending)).await.is_err() {

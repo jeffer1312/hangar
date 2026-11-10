@@ -4333,3 +4333,17 @@ do dono e desempenho. Iguais ao Python e ainda abertos: a sonda do `claude` que 
 `plugin-dir`; tmux que não responde vira 404; Enter sem prova no Codex cru conta como entregue.
 Fica no Python até o convidado por login sair dele: `/input`, `/api/broadcast`, `registry.kill` e
 `set_model_effort` para quem entra pela 8766.
+
+**Dívida registrada: módulos novos dentro do `hangar-server`.** Três arquivos desta migração nasceram
+no servidor, contra a regra "módulo novo nasce como crate próprio":
+
+- `costs/pricing_refresh.rs` mora em `costs/`, que a Task 6 do
+  [plano da divisão](../superpowers/plans/2026-11-06-split-hangar-server.md) leva inteiro para o
+  `hangar-costs`, com o `py::normalized_number` de que ele depende. Extrair só este arquivo antes
+  criaria um crate que a Task 6 fundiria em seguida.
+- `session_write/unowned.rs` e `runtime/close_name.rs` são partes de `session_write` e `runtime`,
+  o nó que o plano deixa para a segunda fase (`runtime`/`accounts`/`list`/`session_open`/
+  `session_write`). Eles usam `AppState`, `ListBridge`, `RuntimeRegistry` e `ProcessOtherIo`; tirá-los
+  agora pede os traits de descoberta de panes, condução do terminal e registro que essa fase define.
+
+Saem do servidor com as áreas a que pertencem, nessas duas etapas do plano.
