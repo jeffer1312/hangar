@@ -100,3 +100,51 @@ async fn other_deferred_actor_reports_thresholds_from_real_drains() {
         .collect();
     assert_eq!(counts, vec![1, 6, 10]);
 }
+#[tokio::test]
+async fn idle_kimi_only_writes_the_queue_when_an_entry_is_overdue() {
+    let root = tempfile::tempdir().unwrap();
+    let mut target = tests::target();
+    target.provider = hangar_transcript::Provider::Kimi;
+    target.transcript = root.path().join("conversation.jsonl");
+    std::fs::write(&target.transcript, b"").unwrap();
+    let store = super::super::queue::Store::open(
+        &root.path().join("state.json"),
+        &root.path().join("queue"),
+        super::super::queue::State::new(&target.key, 1, &target.name, vec![]),
+    )
+    .unwrap();
+    let queue = Arc::new(QueueActor::start(
+        store,
+        super::super::queue::acquire_lease(&root.path().join("state.lock")).unwrap(),
+    ));
+    let receipt = Arc::new(std::sync::Mutex::new(super::super::receipt::ReceiptIndex::new(
+        target.provider.as_str(),
+        &target.binding.conversation,
+    )));
+    let snapshot = tokio::sync::watch::channel(json!({})).0;
+    let before = queue.snapshot().await.unwrap().next_seq;
+    confirm(&target, &queue, &receipt, &snapshot).await.unwrap();
+    assert_eq!(
+        queue.snapshot().await.unwrap().next_seq,
+        before,
+        "Kimi parado sem entrada vencida regravou a fila"
+    );
+    queue
+        .exec(
+            1,
+            "append",
+            clock(),
+            Action::Append {
+                text: "perdida".into(),
+                delivered: true,
+                ts: Some(1.0),
+                pre_transcript: false,
+                entry_id: Some("lost".into()),
+            },
+        )
+        .await
+        .unwrap();
+    confirm(&target, &queue, &receipt, &snapshot).await.unwrap();
+    let state = queue.snapshot().await.unwrap();
+    assert_eq!(state.rows[0]["desistiu"], true, "a vencida deixou de ser desistida");
+}

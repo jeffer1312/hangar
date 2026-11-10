@@ -109,43 +109,51 @@ impl Hangar {
         self.presence_beat();
     }
 
-    /// Devolve se a lista (ou o estado dela) mudou.
-    pub(super) fn receive_remote(&mut self, generation: u64, key: String, update: RemoteUpdate, cx: &mut Context<Self>) -> bool {
-        if generation != self.remote_gen { return false; }
+    /// Devolve se a lista (ou o estado dela) mudou, e as sessões que saíram dela: quem chama as esquece depois de
+    /// acertar a sessão aberta (`forget_closed`).
+    pub(super) fn receive_remote(&mut self, generation: u64, key: String, update: RemoteUpdate, cx: &mut Context<Self>) -> (bool, Vec<String>) {
+        if generation != self.remote_gen { return (false, Vec::new()); }
         let invite = self.server_entry(&key).is_some_and(|s| s.invite);
         // 401 só é "encerrado" num convite; nos outros continua sendo login perdido.
         let ended = |error: &Failure| error.status == Some(410) || (invite && super::invite::ends_invite(error.status));
-        let Some(list) = self.remote.get_mut(&key) else { return false };
+        let Some(list) = self.remote.get_mut(&key) else { return (false, Vec::new()) };
         // Ping e lista igual à de antes não redesenham: cada aviso aqui acordava todas as áreas.
         let mut changed = true;
+        let mut gone = Vec::new();
         let same = |list: &RemoteList, sessions: &[SessionInfo]| list.loaded && list.error.is_none() && list.sessions == sessions;
         match update {
             RemoteUpdate::Sessions(Ok(sessions)) => {
                 changed = !same(list, &sessions);
+                gone = left_list(&list.sessions, &sessions);
                 list.sessions = sessions; list.loaded = true; list.error = None;
             }
             RemoteUpdate::Sessions(Err(error)) if ended(&error) => {
                 self.invite_ended.insert(key.clone());
-                list.sessions.clear();
+                // Convite encerrado não volta: as sessões dele saem como as fechadas.
+                gone = std::mem::take(&mut list.sessions).into_iter().map(|s| s.name).collect();
                 list.error = Some(tr_shared("convite_encerrado", &[]));
             }
             RemoteUpdate::Sessions(Err(error)) => list.error = Some(Self::failure(&error)),
             // Voltou: o erro da queda sai do cabeçalho.
             RemoteUpdate::Stream(Update::Online) => { changed = !list.online || list.error.is_some(); list.online = true; list.error = None; }
             RemoteUpdate::Stream(Update::Offline(error)) => {
+                let before = (list.online, list.sessions.len(), list.error.take());
                 list.online = false;
                 list.live_terms.clear();
                 list.error = Some(if ended(&error) {
                     self.invite_ended.insert(key.clone());
-                    list.sessions.clear();
+                    gone = std::mem::take(&mut list.sessions).into_iter().map(|s| s.name).collect();
                     tr_shared("convite_encerrado", &[])
                 } else { Self::failure(&error) });
+                // Máquina fora é tentada sem parar: a mesma queda de antes não redesenha.
+                changed = before.0 || before.1 != list.sessions.len() || before.2 != list.error;
             }
             RemoteUpdate::Stream(Update::Frame(frame)) => {
                 let applied = match frame.event.as_str() {
                     "sessions" => match serde_json::from_value::<Vec<SessionInfo>>(frame.data) {
                         Ok(sessions) => {
                             changed = !same(list, &sessions);
+                            gone = left_list(&list.sessions, &sessions);
                             list.sessions = sessions; list.loaded = true; list.error = None; true
                         }
                         Err(_) => { list.error = Some(tr("invalid_response")); false }
@@ -166,13 +174,23 @@ impl Hangar {
                 let _ = frame.applied.send(applied);
             }
         }
-        if !changed { return false; }
+        if !changed { return (false, gone); }
         self.redraw(panes::Area::Nav, cx);
         cx.notify();
-        true
+        (true, gone)
     }
 
     pub(super) fn server_entry(&self, key: &str) -> Option<&ServerEntry> { self.servers.iter().find(|s| norm(&s.address) == key) }
+
+    /// Sessões que saíram de uma lista boa da máquina `server`: a lista de comandos delas não é mais lida. A aberta
+    /// nessa máquina fica, porque trocando de conta ela some da lista e volta; a de mesmo nome em outra não a segura.
+    pub(super) fn forget_closed(&mut self, server: &str, gone: &[String]) {
+        if gone.is_empty() { return; }
+        let open = self.selected.as_ref().filter(|_| self.open_server() == server).map(|s| s.name.clone());
+        let closed = |key: &String| commands_of_closed(key, server, gone, open.as_deref());
+        self.commands.retain(|key, _| !closed(key));
+        self.commands_latest.retain(|key, _| !closed(key));
+    }
 
     /// Clique numa sessão de outra máquina: abre nela sem trocar o servidor ativo; lista ainda não lida abre quando chegar.
     pub(super) fn open_remote(&mut self, key: &str, name: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -373,11 +391,34 @@ impl Hangar {
     }
 }
 
+/// Nomes que estavam na lista de antes e não vieram na nova.
+pub(super) fn left_list(before: &[SessionInfo], now: &[SessionInfo]) -> Vec<String> {
+    before.iter().filter(|old| !now.iter().any(|s| s.name == old.name)).map(|old| old.name.clone()).collect()
+}
+
+/// A chave de `Hangar.commands` (`servidor|provider|nome`) é de uma sessão fechada da máquina `server`?
+fn commands_of_closed(key: &str, server: &str, gone: &[String], open: Option<&str>) -> bool {
+    let mut parts = key.rsplitn(3, '|');
+    let (Some(name), Some(_), Some(owner)) = (parts.next(), parts.next(), parts.next()) else { return false };
+    norm(owner) == server && Some(name) != open && gone.iter().any(|g| g == name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     // O glob pode trazer o `test` da gpui, que colide com o atributo padrão; o nome explícito vence o glob.
     use core::prelude::v1::test;
+
+    #[test]
+    fn commands_leave_only_for_a_closed_session_of_that_machine() {
+        let (server, gone) = (norm("http://127.0.0.1:8765"), vec!["api".to_owned(), "web".to_owned()]);
+        let closed = |key: &str, open| commands_of_closed(key, &server, &gone, open);
+        assert!(closed("http://127.0.0.1:8765/|claude|api", None));
+        assert!(!closed("http://127.0.0.1:8765/|claude|docs", None), "sessão viva fica");
+        assert!(!closed("https://notebook.ts.net/|claude|api", None), "mesmo nome em outra máquina fica");
+        assert!(!closed("http://127.0.0.1:8765/|claude|web", Some("web")), "a aberta fica");
+        assert!(!closed("sem-separador", None));
+    }
 
     #[test]
     fn upsert_matches_same_machine_and_keeps_label() {

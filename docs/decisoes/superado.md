@@ -289,5 +289,5 @@ adiado contava como entregue em `failed`/`pulados`.
 
 Saiu quando o Rust passou a atender sozinho o texto para sessão sem entrada nele: a entrega adiada
 roda em processo (`groups/bridge.rs`), e as chaves `deliveries`/`hangar_deliveries` deixaram o
-contrato interno (protocolo 106). O que vale hoje está em
+contrato interno (protocolo 107). O que vale hoje está em
 [plataforma.md](plataforma.md#o-rust-atende-sozinho-o-que-ainda-repassava-com-trabalho-real-10112026).

@@ -2,7 +2,7 @@
 use super::dictation_public_cases as cases;
 use axum::{
     Router,
-    routing::{get, post},
+    routing::post,
 };
 use hangar_server::{
     auth::TrustedHosts,
@@ -19,21 +19,10 @@ use std::{
 async fn dictation_public_characterized_contract() {
     let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = upstream.local_addr().unwrap();
-    let configuration = Arc::new(Mutex::new(
-        json!({"organization":{"dictation_organization_mode":"none"}}),
-    ));
-    let config = configuration.clone();
     let upstream_task = tokio::spawn(async move {
         axum::serve(
             upstream,
             Router::new()
-                .route(
-                    "/internal/transcription/config",
-                    get(move || {
-                        let data = config.lock().unwrap().clone();
-                        async move { ([("content-type", "application/json")], data.to_string()) }
-                    }),
-                )
                 .route(
                     "/v1/audio/transcriptions",
                     post(|| async {
@@ -60,10 +49,12 @@ async fn dictation_public_characterized_contract() {
     });
     state.hangar_dir = temp.path().to_owned();
     state.accounts = super::dictation_timing::isolated_accounts(temp.path());
+    let state = Arc::new(state);
+    let public = state.clone();
     let server = tokio::spawn(async move {
         axum::serve(
             listener,
-            router(Arc::new(state)).into_make_service_with_connect_info::<SocketAddr>(),
+            router(public).into_make_service_with_connect_info::<SocketAddr>(),
         )
         .await
         .unwrap();
@@ -73,7 +64,7 @@ async fn dictation_public_characterized_contract() {
     let client = reqwest::Client::new();
     let mut differences = Vec::new();
     for case in &table {
-        configuration.lock().unwrap()["providers"] = if case["path"]
+        let providers = if case["path"]
             .as_str()
             .unwrap()
             .contains("limpar=0")
@@ -82,6 +73,7 @@ async fn dictation_public_characterized_contract() {
         } else {
             json!([])
         };
+        super::dictation_timing::configure(&state, &json!({"providers":providers,"organization":{"dictation_organization_mode":"none"}}));
         let mut request = client
             .request(
                 case["method"].as_str().unwrap().parse().unwrap(),
@@ -123,7 +115,6 @@ struct PublicServer {
     /// HOME das contas, fora de `_directory`: o diário do `dictation.timing` não conta como arquivo do ditado.
     _home: tempfile::TempDir,
     state: Arc<AppState>,
-    config: Arc<Mutex<Value>>,
     heard: Arc<Mutex<Vec<(String, String)>>>,
     base: String,
     tasks: Vec<tokio::task::JoinHandle<()>>,
@@ -140,16 +131,11 @@ impl PublicServer {
         let directory = tempfile::tempdir().unwrap();
         let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let upstream_addr = upstream.local_addr().unwrap();
-        let config = Arc::new(Mutex::new(
-            json!({"providers":[],"organization":{"llm_api_key":"fixture","llm_base_url":"http://127.0.0.1:1","dictation_organization_mode":"none"}}),
-        ));
+        let config = json!({"providers":[],"organization":{"llm_api_key":"fixture","llm_base_url":"http://127.0.0.1:1","dictation_organization_mode":"none"}});
         let heard: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
-        let configuration = config.clone();
         let seen = heard.clone();
         let task = tokio::spawn(async move {
-            axum::serve(upstream,Router::new().route("/internal/transcription/config",get(move || {
-                let value=configuration.lock().unwrap().clone();async move { ([("content-type","application/json")],value.to_string()) }
-            })).fallback(move |uri:axum::http::Uri,body:axum::body::Bytes| {
+            axum::serve(upstream,Router::new().fallback(move |uri:axum::http::Uri,body:axum::body::Bytes| {
                 seen.lock().unwrap().push((uri.path().to_owned(),String::from_utf8_lossy(&body).into_owned()));
                 async move {
                     if uri.path().starts_with("/stall/"){std::future::pending::<()>().await;}
@@ -171,6 +157,7 @@ impl PublicServer {
         state.hangar_dir = directory.path().to_owned();
         let home = tempfile::tempdir().unwrap();
         state.accounts = super::dictation_timing::isolated_accounts(home.path());
+        super::dictation_timing::configure(&state, &config);
         #[cfg(unix)]
         {
             state.share = Some(crate::share_pair_routes::share_state(
@@ -193,7 +180,6 @@ impl PublicServer {
             _directory: directory,
             _home: home,
             state,
-            config,
             heard,
             base: format!("http://{addr}"),
             tasks: vec![task, server],
@@ -222,6 +208,10 @@ async fn dictation_public_limits_and_slots_preserve_raw() {
     assert_eq!(body["text"], raw);
     assert_eq!(body["raw"], raw);
     assert_eq!(body["organization_code"], "dictation_text_too_large");
+    super::dictation_timing::configure(&server.state, &json!({"organization": {
+        "dictation_organization_mode":"external_api", "llm_api_key":"fixture",
+        "llm_base_url":"http://127.0.0.1:1"
+    }}));
     let slot = server
         .state
         .dictation_slots
@@ -369,8 +359,7 @@ async fn dictation_public_audio_edges_answer_each_case() {
         if case["id"] == "stt_error" {
             providers.clear();
         }
-        *server.config.lock().unwrap() =
-            json!({"providers":providers,"organization":{"dictation_organization_mode":"none"}});
+        super::dictation_timing::configure(&server.state, &json!({"providers":providers,"organization":{"dictation_organization_mode":"none"}}));
         let mut request = reqwest::Client::new()
             .post(format!("{}{}", server.base, case["path"].as_str().unwrap()))
             .bearer_auth("owner")
@@ -469,7 +458,7 @@ async fn read_too_large(reader: &mut tokio::net::tcp::OwnedReadHalf) -> String {
 async fn dictation_public_provider_test_selects_only_requested_provider() {
     let server = PublicServer::start().await;
     let endpoint = format!("http://{}", server.state.cfg.upstream);
-    *server.config.lock().unwrap() = json!({"providers":[{"id":"first","name":"primeiro","kind":"openai","base_url":format!("{endpoint}/first")},{"id":"second","name":"segundo","kind":"openai","base_url":endpoint}],"legacy":{"id":"legacy","kind":"openai","base_url":endpoint}});
+    super::dictation_timing::configure(&server.state, &json!({"providers":[{"id":"first","name":"primeiro","kind":"openai","base_url":format!("{endpoint}/first")},{"id":"second","name":"segundo","kind":"openai","base_url":endpoint}]}));
     let client = reqwest::Client::new();
     let response = client
         .post(format!(
@@ -516,7 +505,7 @@ async fn dictation_public_provider_test_selects_only_requested_provider() {
 #[tokio::test]
 async fn dictation_public_without_cleanup_keeps_dictation_deadline() {
     let server = PublicServer::start().await;
-    *server.config.lock().unwrap() = json!({"dictation_max_minutes":2,"providers":[{"id":"stall","name":"stall","kind":"openai","base_url":format!("http://{}/stall",server.state.cfg.upstream)}]});
+    super::dictation_timing::configure(&server.state, &json!({"dictation_max_minutes":2,"providers":[{"id":"stall","name":"stall","kind":"openai","base_url":format!("http://{}/stall",server.state.cfg.upstream)}]}));
     let url = format!("{}/api/dictation/transcribe?limpar=0", server.base);
     let response = tokio::spawn(async move {
         reqwest::Client::new()
@@ -568,7 +557,7 @@ fn directory_snapshot(root: &std::path::Path) -> Vec<std::path::PathBuf> {
 async fn dictation_public_global_does_not_inherit_a_session_from_query() {
     let server = PublicServer::start().await;
     let endpoint = format!("http://{}", server.state.cfg.upstream);
-    *server.config.lock().unwrap() = json!({"providers":[{"id":"p","kind":"openai","name":"fixture","base_url":endpoint}],"organization":{"dictation_organization_mode":"external_api","llm_base_url":endpoint,"llm_api_key":"fixture","llm_model":"organization-model"}});
+    super::dictation_timing::configure(&server.state, &json!({"providers":[{"id":"p","kind":"openai","name":"fixture","base_url":endpoint}],"organization":{"dictation_organization_mode":"external_api","llm_base_url":endpoint,"llm_api_key":"fixture","llm_model":"organization-model"}}));
     let response=reqwest::Client::new().post(format!("{}/api/dictation/transcribe?organization_mode=external_api&include_recent_messages=true&session=inexistente&generation=outra&organization_account=outra",server.base)).bearer_auth("owner").body("audio").send().await.unwrap();
     assert_eq!(response.status(), 200);
     let body: Value = response.json().await.unwrap();
@@ -619,7 +608,7 @@ async fn dictation_public_180_second_deadline_cancels_both_audio_routes() {
     for case in table.iter().filter(|case| case["timeout_seconds"] == 180) {
         let server = PublicServer::start().await;
         let endpoint = format!("http://{}", server.state.cfg.upstream);
-        *server.config.lock().unwrap() = json!({"dictation_max_minutes":10,"providers":[{"id":"fixture","kind":"openai","base_url":format!("{endpoint}/stall")}],"organization":{"dictation_organization_mode":"none"}});
+        super::dictation_timing::configure(&server.state, &json!({"dictation_max_minutes":10,"providers":[{"id":"fixture","kind":"openai","base_url":format!("{endpoint}/stall")}],"organization":{"dictation_organization_mode":"none"}}));
         let url = format!("{}{}", server.base, case["path"].as_str().unwrap());
         let response = tokio::spawn(async move {
             reqwest::Client::new()
@@ -654,7 +643,7 @@ async fn dictation_public_180_second_deadline_cancels_both_audio_routes() {
             4,
             "a tentativa vencida reteve sua vaga"
         );
-        server.config.lock().unwrap()["providers"][0]["base_url"] = json!(endpoint);
+        super::dictation_timing::configure(&server.state, &json!({"dictation_max_minutes":10,"providers":[{"id":"fixture","kind":"openai","base_url":endpoint}],"organization":{"dictation_organization_mode":"none"}}));
         let response = reqwest::Client::new()
             .post(format!("{}{}", server.base, case["path"].as_str().unwrap()))
             .bearer_auth("owner")

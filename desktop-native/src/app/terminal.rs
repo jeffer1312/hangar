@@ -540,6 +540,7 @@ impl Hangar {
             }
             Reply::Socket(id, uid, generation, event) => {
                 let Some(panel) = self.terminal.as_mut().filter(|panel| panel.id == id) else { return; };
+                let shown = panel.tabs.get(panel.active).is_some_and(|slot| slot.uid == uid);
                 let Some(slot) = panel.tabs.iter_mut().find(|slot| slot.uid == uid && slot.generation == generation) else { return; };
                 match event {
                     Ok(ws::Event::Connected) => {
@@ -549,7 +550,16 @@ impl Hangar {
                         slot.fixture_loaded = false;
                         slot.status = Status::Connected;
                     }
-                    Ok(ws::Event::Data(bytes)) => { slot.view.feed(&bytes); Self::flush_terminal(slot); }
+                    Ok(ws::Event::Data(bytes)) => {
+                        let changed = slot.view.feed(&bytes);
+                        Self::flush_terminal(slot);
+                        // Saída do programa chega o tempo todo: repinta só a raiz, onde o terminal é desenhado, e só da
+                        // aba à vista. O `notify` do `Hangar` acordaria todas as áreas guardadas.
+                        if !matches!(slot.status, Status::Failed(_)) {
+                            if changed && shown && !motion::tick_root(cx) { cx.notify(); }
+                            return;
+                        }
+                    }
                     Ok(ws::Event::Closed) => {
                         crate::log_line(&format!("terminal {}: o servidor fechou o socket", slot.name));
                         slot.socket = None; slot.status = Status::Failed(tr("term_disconnected"));

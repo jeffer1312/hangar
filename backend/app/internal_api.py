@@ -4,7 +4,6 @@ import asyncio
 import secrets
 import json
 import logging
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
@@ -111,28 +110,3 @@ async def account_prepare(request: Request):
 async def migration_status() -> dict:
     from app import migration_status
     return await internal_thread(migration_status.facts)
-
-
-@router.get("/transcription/config")
-def transcription_config():
-    """Configuração efetiva exclusiva da ponte privada; chaves nunca vão à resposta pública."""
-    from app import runtime_config
-    providers = runtime_config.get("transcription_providers") or []
-    legacy = None
-    key = (runtime_config.get("groq_api_key") or "").strip()
-    if not runtime_config.get("transcription_providers") and key:
-        legacy = {"id": "legacy", "kind": "openai", "api_key": key,
-                  "base_url": runtime_config.get("transcription_base_url") or "",
-                  "model": runtime_config.get("transcription_model") or ""}
-    organization = {"dictation_include_recent_messages": bool(runtime_config.get("dictation_include_recent_messages")),
-                    **{field: runtime_config.get(field) or "" for field in (
-                        "dictation_organization_mode", "dictation_claude_model", "dictation_codex_model", "ditado_estilo",
-                        "llm_base_url", "llm_api_key", "llm_model", "llm_reasoning_effort",
-                        "llm_briefing_base_url", "llm_briefing_api_key", "llm_briefing_model")}}
-    if organization["dictation_organization_mode"] != "external_api":
-        # A chave da API externa só sai quando é ela que organiza; os campos ficam vazios pro Rust.
-        organization.update(llm_base_url="", llm_api_key="", llm_briefing_base_url="", llm_briefing_api_key="")
-    return {"providers": providers, "legacy": legacy, "organization": organization,
-            "user_vocabulary": runtime_config.get("ditado_vocabulario") or "",
-            "dictation_max_minutes": int(runtime_config.get("dictation_max_minutes") or 0),
-            "state_path": str(Path.home() / ".hangar" / "transcription-wait.json")}

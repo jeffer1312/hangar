@@ -344,11 +344,10 @@ impl Speech {
         let providers = if providers.is_null() {
             json!([{"id": "p", "kind": "openai", "model": "m", "base_url": format!("http://{provider}")}])
         } else { providers };
-        let config = json!({"providers": providers, "organization": {"dictation_organization_mode": "none"}}).to_string();
+        let config = json!({"providers": providers, "organization": {"dictation_organization_mode": "none"}});
         let python_paths: Arc<Mutex<Vec<String>>> = Arc::default();
         let seen = python_paths.clone();
         let (upstream, upstream_task) = serve_router(axum::Router::new()
-            .route("/internal/transcription/config", axum::routing::get(move || { let c = config.clone(); async move { ([("content-type", "application/json")], c) } }))
             .fallback(move |uri: axum::http::Uri| {
                 if crate::app_route(uri.path()) { seen.lock().unwrap().push(uri.path().to_owned()); }
                 async { StatusCode::NOT_FOUND }
@@ -362,6 +361,7 @@ impl Speech {
         state.hangar_dir = scene.dir.path().join(".hangar");
         // O `dictation.timing` destes pedidos não pode cair no diário da máquina.
         state.accounts = crate::dictation_timing::isolated_accounts(&scene.dir.path().join("home"));
+        crate::dictation_timing::configure(&state, &config);
         assert!(state.state.runtime.set(scene.runtime.clone()).is_ok());
         let state = Arc::new(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

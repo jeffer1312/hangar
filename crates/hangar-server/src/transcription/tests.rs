@@ -325,18 +325,25 @@ async fn health_port_must_belong_to_the_started_process() {
 #[tokio::test]
 async fn transcribe_here_uses_server_configuration() {
     let (provider, provider_task) = endpoint(Router::new().route("/audio/transcriptions", post(openai_endpoint))).await;
-    let snapshot = serde_json::json!({"providers":[{"id":"p", "kind":"openai", "model":"modelo-do-usuario", "base_url":provider}], "vocabulary":"hangar-send"}).to_string();
-    let (upstream, upstream_task) = endpoint(Router::new().route("/internal/transcription/config", axum::routing::get(move || {
-        let snapshot = snapshot.clone();
-        async move { ([("content-type", "application/json")], snapshot) }
-    }))).await;
-    let state = Arc::new(crate::routes::AppState::new(crate::config::Config {
-        listen: "127.0.0.1:0".parse().unwrap(), upstream: upstream.trim_start_matches("http://").parse().unwrap(),
+    let temporary = tempfile::tempdir().unwrap();
+    // Impede que o .env do checkout entre na fixture.
+    std::fs::create_dir_all(temporary.path().join(".hangar/current")).unwrap();
+    let mut state = crate::routes::AppState::new(crate::config::Config {
+        listen: "127.0.0.1:0".parse().unwrap(), upstream: "127.0.0.1:1".parse().unwrap(),
         internal_secret: "fixture-internal".into(), auth_token: "fixture-owner".into(), log_path: None,
         trusted: crate::auth::TrustedHosts::parse("127.0.0.1"),
-    }));
+    });
+    let home = temporary.path().to_string_lossy().into_owned();
+    state.accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(
+        [("HOME".into(), home.clone()), ("USERPROFILE".into(), home)].into()));
+    let directory = &state.accounts.env.claude_base;
+    std::fs::create_dir_all(directory).unwrap();
+    std::fs::write(directory.join("runtime-config.json"), serde_json::json!({
+        "transcription_providers":[{"id":"p", "kind":"openai", "model":"modelo-do-usuario", "base_url":provider}],
+        "ditado_vocabulario":"hangar-send"
+    }).to_string()).unwrap();
     let result = super::routes::transcribe_here(&state, bytes::Bytes::from_static(b"bytes-do-audio"), Some("fala.wav".into()), Profile::Dictation)
         .await.unwrap();
     assert_eq!(result.text, "Transcrição em português.");
-    upstream_task.abort(); provider_task.abort();
+    provider_task.abort();
 }

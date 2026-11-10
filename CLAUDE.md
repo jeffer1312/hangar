@@ -762,7 +762,8 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
     e a última resposta vem dos leitores nativos. Não existe `/internal/list/facts`.
   - Outras perguntas do Rust ao Python (`/internal/*`): `accounts/prepare` (só contas Codex; a
     reconciliação das contas Claude é do Rust, `accounts/claude_config.rs`),
-    `accounts/codex-invalidate`, `transcription/config`, `migration/status` e `ping`.
+    `accounts/codex-invalidate`, `migration/status` e `ping`.
+    Transcrição e organização do ditado leem a configuração efetiva diretamente no Rust.
   - Partes ainda no Python: transferência Claude→Codex; workflows e runners.
   - Mods (`press`/`close`/`show`/`input`), `~/.hangar/plugin.json` e `plugin-dir` publicados na
     subida e o download dos preços do models.dev: nada; são do Rust (`mods/`,

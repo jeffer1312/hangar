@@ -790,12 +790,13 @@ impl Hangar {
 
     pub(super) fn row_hover(&mut self, target: Target, hovered: bool, cx: &mut Context<Self>) {
         if !hovered {
-            if self.sidebar.hover.as_ref() == Some(&target) { self.clear_hover(); cx.notify(); }
+            if self.sidebar.hover.as_ref() == Some(&target) { self.clear_hover(); self.redraw(panes::Area::Nav, cx); }
             self.sidebar.press_seq += 1;
             return;
         }
         self.sidebar.hover = Some(target);
-        cx.notify();
+        // Só as linhas da lista leem `hover`: basta a área dela.
+        self.redraw(panes::Area::Nav, cx);
     }
 
     pub(super) fn clear_hover(&mut self) { self.sidebar.hover = None; }
