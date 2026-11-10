@@ -30,6 +30,28 @@ async fn serve(registry: Arc<RuntimeRegistry>, terms: Arc<Terms>, panel: Option<
     (python, fake::spawn_state(state).await)
 }
 
+/// O servidor do dono sem vigia, com a lista no tmux falso de `n` sessões Claude (`s0`…) e nas pastas do
+/// teste; `panel`: a sessão com o painel de terminal aberto.
+#[cfg(unix)]
+async fn serve_listed(root: &std::path::Path, n: usize, panel: Option<&str>) -> (Arc<Fake>, std::net::SocketAddr) {
+    use hangar_server::list::bridge::{ListBridge, ListEnv, parse_dirs};
+    let script = crate::list_support::sessions(root, n);
+    let home = root.join("home");
+    let dirs = parse_dirs(&json!({"home": home, "claude": home.join(".claude"), "codex_home": home.join(".codex"),
+        "pi_sessions": home.join(".pi/agent/sessions"), "omp_config": home.join(".omp"), "omp_agent": home.join(".omp/agent"),
+        "kimi_home": home.join(".kimi-code")}).to_string());
+    let terms = Arc::new(Terms::new(TermConfig::default()));
+    let (python, upstream) = fake::spawn_fake().await;
+    let mut state = AppState::new(fake::config(upstream, "127.0.0.1"));
+    state.list = Arc::new(ListBridge::new(ListEnv { mux: hangar_server::list::mux::Mux::with_program(&script, Duration::from_secs(5)),
+        capture_program: script.into_os_string(), procs: Arc::new(hangar_server::list::procs::SystemProcs::default()), dirs },
+        hangar_server::list::facts::FactsClient::new(upstream, SECRET.into())));
+    state.term = terms.clone();
+    if let Some(name) = panel { state.term.mark_open_for_test(name, &state.diag).await; }
+    assert!(state.state.runtime.set(registry(&terms).await).is_ok());
+    (python, fake::spawn_state(state).await)
+}
+
 async fn post(server: std::net::SocketAddr, name: &str, body: &str) -> (u16, Value) { send(server, "POST", &format!("{name}/model-effort"), body).await }
 
 /// B1: corpo estrito (campo a mais, `scope` fora da lista, tipo errado) é 422 do Rust.
@@ -86,10 +108,11 @@ async fn model_effort_b6_open_terminal_panel_refuses() {
 /// capturas `pi_idle_*`, `kimi_idle_model`, `omp_idle_model`, `pi_working`, `pi_dead_session`,
 /// `unknown_session_no_info` e `panel_open_409` eram todas 409 sem código; `invalid_scope_422`,
 /// `extra_field_422` e `malformed_json_422`, a lista do FastAPI.
+#[cfg(unix)]
 #[tokio::test]
 async fn model_effort_r1_4_other_providers_are_refused_in_rust() {
-    let terms = Arc::new(Terms::new(TermConfig::default()));
-    let (python, server) = serve(registry(&terms).await, terms, Some("pi1"), Duration::from_secs(5)).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (python, server) = serve_listed(dir.path(), 0, Some("pi1")).await;
     for body in [r#"{"scope":"session"}"#, r#"{"model":"sonnet"}"#, r#"{"effort":"turbo"}"#, "{}", r#"{"model":"opus","effort":"high","scope":"default"}"#] {
         let (status, reply) = post(server, "pi1", body).await;
         assert_eq!((status, reply["detail"]["code"].as_str()), (409, Some("erro_model_effort_so_claude")), "{body}: {reply}");
@@ -99,6 +122,18 @@ async fn model_effort_r1_4_other_providers_are_refused_in_rust() {
         assert_eq!((status, reply["detail"]["code"].as_str()), (422, Some("erro_corpo_invalido")), "{body}: {reply}");
     }
     assert_eq!(python.hits_to("/api/sessions/pi1/model-effort"), 0, "nada ao Python");
+}
+
+/// R1.4-1: Claude que o Rust não atende (sem vigia, ou com terminal que não se adota) é Claude pela linha da
+/// lista: 503 `model_effort_needs_rust_server`, nunca o 409 de "só Claude".
+#[cfg(unix)]
+#[tokio::test]
+async fn model_effort_r1_4_unserved_claude_is_503_by_the_list_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let (python, server) = serve_listed(dir.path(), 1, None).await;
+    let (status, reply) = post(server, "s0", r#"{"model":"sonnet"}"#).await;
+    assert_eq!((status, reply["detail"]["code"].as_str()), (503, Some("model_effort_needs_rust_server")), "{reply}");
+    assert_eq!(python.hits_to("/api/sessions/s0/model-effort"), 0);
 }
 
 /// B9: com terminal, modelo torto é 422 antes do terminal.

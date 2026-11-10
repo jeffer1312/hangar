@@ -160,9 +160,13 @@ pub async fn effort(State(st):State<Arc<AppState>>,ConnectInfo(peer):ConnectInfo
     let Ok(bytes)=to_bytes(body,BODY_LIMIT).await else {return too_large(&parts.headers)};
     let spec=match runtime.claude_spec(&name).await {
         Some(Ok(spec)) if matches!(&spec.account,Account::Engine { account:Some(_),.. })=>spec,
-        found=>match super::model_effort::serve(&st,runtime,name,&parts.headers,&bytes).await {
+        found=>match super::model_effort::serve(&st,runtime,name.clone(),&parts.headers,&bytes).await {
             Some(response)=>return response,
-            None=>return super::model_effort::refuse(&parts.headers,&bytes,found.is_some()),
+            None=>{
+                // Sem vigia ou sem adoção o spec não sai; o provedor de verdade é o da linha da lista.
+                let listed=st.list.discovered_session(&name).await.ok().flatten().is_some_and(|(row,_)|row.provider=="claude");
+                return super::model_effort::refuse(&parts.headers,&bytes,found.is_some() || listed);
+            },
         },
     };
     let Ok(body)=serde_json::from_slice::<Value>(&bytes) else {return super::invalid_body(&parts.headers)};
