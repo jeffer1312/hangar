@@ -980,17 +980,33 @@ pub(crate) fn detach_plugin_paths(home: &Path, dir: &Path) -> Result<()> {
     let dirs = [dir.to_path_buf(), super::catalog::resolved(dir)];
     let plugins = home.join(".claude").join("plugins");
     for file in ["installed_plugins.json", "known_marketplaces.json"] {
-        let path = plugins.join(file);
-        let Some(mut data) = read_json(&path)
-            .map_err(|e| refused(format!("plugins: não consegui ler {}: {e}", path.display())))? else { continue };
-        if !repoint(&mut data, &dirs) { continue; }
+        detach_file(&plugins.join(file), &dirs)?;
+    }
+    Ok(())
+}
+
+/// O CLI de outra conta grava o mesmo arquivo sem trava que o Hangar alcance: só grava se o arquivo
+/// ainda é o que foi lido, e refaz a troca quando ele mudou no meio.
+fn detach_file(path: &Path, dirs: &[PathBuf]) -> Result<()> {
+    const ATTEMPTS: usize = 3;
+    for _ in 0..ATTEMPTS {
+        let before = match fs::read(path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            read => read,
+        };
+        let unreadable = |e: String| refused(format!("plugins: não consegui ler {}: {e}", path.display()));
+        let before = before.map_err(|e| unreadable(e.to_string()))?;
+        let Some(mut data) = parse_json(path, Ok(before.clone())).map_err(unreadable)? else { return Ok(()) };
+        if !repoint(&mut data, dirs) { return Ok(()); }
         let text = pyjson::dumps_indent(&data, 2, false);
         if text.chars().any(py::is_marker) {
             return Err(refused(format!("plugins: {} tem texto com surrogate solto, que não dá pra gravar em UTF-8", path.display())));
         }
-        write_replacing(&path, &text)?;
+        if fs::read(path).ok().as_deref() == Some(before.as_slice()) {
+            return write_replacing(path, &text);
+        }
     }
-    Ok(())
+    Err(refused(format!("plugins: {} mudou {ATTEMPTS} vezes durante a troca; tente de novo", path.display())))
 }
 
 /// Todo texto que é caminho dentro da conta: o registro tem mais de um campo de caminho.
