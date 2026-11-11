@@ -314,11 +314,14 @@ fn unnumbered_menu(lines: &[&str]) -> Option<TerminalQuestion> {
     Some(TerminalQuestion { question, options })
 }
 
+/// O `*` comum também é um quadro da animação do Claude, mas só vale logo acima da caixa de mensagem: fora
+/// dali é texto. Sem ele, o quadro pulava para o resumo do turno anterior que segue mais acima na tela.
 fn live_spinner(lines: &[&str]) -> Option<String> {
-    lines.iter().rev().map(|l| trim(l)).find(|s| {
+    lines.iter().enumerate().rev().map(|(i, l)| (i, trim(l))).find(|(i, s)| {
         let mut chars = s.chars();
         chars.next().is_some_and(|c| SPINNERS.contains(c)) && chars.next() == Some(' ')
-    }).map(String::from)
+            || P.ascii_spinner.is_match(s) && lines[i + 1..].iter().find(|l| !trim(l).is_empty()).is_some_and(|l| P.rule.is_match(l))
+    }).map(|(_, s)| String::from(s))
 }
 
 fn status_line(lines: &[&str]) -> Option<String> {
@@ -726,6 +729,23 @@ mod tests {
         }
         assert_eq!(pane_preview("● Background command line tools are handy.\n", None).0, "Background command line tools are handy.");
     }
+
+    /// Resumo do turno anterior, que o Claude Code deixa na tela com uma tarefa de fundo rodando.
+    const DONE: &str = "✻ Cooked for 2m 52s · done 22:55 · 1 monitor still running";
+
+    #[test]
+    fn every_frame_of_the_live_spinner_wins_over_the_previous_turn_summary() {
+        for glyph in ['✻', '✽', '*', '✶', '✢', '·'] {
+            let pane = format!("{DONE}\n\n● resposta em andamento\n\n{glyph} Precipitating… (2m 12s · ↓ 9.3k tokens)\n\n{RULE}\n❯ \n{RULE}\n");
+            let analysis = super::analyze(&pane);
+            assert_eq!(analysis.state, "working", "{glyph}");
+            assert_eq!(analysis.label.as_deref(), Some("Precipitating… (2m 12s · ↓ 9.3k tokens)"), "{glyph}");
+        }
+        // Fora do lugar da animação, o `*` segue sendo texto.
+        let pane = format!("{DONE}\n\n● resposta\n* Precipitating… (2m 12s)\nfora\n\n{RULE}\n❯ \n{RULE}\n");
+        assert_eq!(super::analyze(&pane).spinner.as_deref(), Some(DONE));
+    }
+
     #[test]
     fn other_preview_panes_preserve_provider_contract() {
         let cases = [
