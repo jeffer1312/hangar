@@ -33,6 +33,8 @@ struct Slot {
     drawn: Option<Value>,
     /// Quadros trocados antes de decodificar, confirmados junto com o próximo desenho.
     owed: Vec<Value>,
+    /// Página fora da tela: quadro que ainda chega antes da parada do screencast não vira textura.
+    hidden: bool,
     closed: bool,
 }
 
@@ -107,7 +109,8 @@ impl Frames {
     /// Na thread da interface: escreve o quadro decodificado na textura. Devolve se a textura foi recriada (primeiro
     /// quadro, outro tamanho, device perdido): aí um desenho guardado ainda aponta para a antiga.
     pub fn commit(&self) -> bool {
-        let Some(frame) = lock(&self.slot).pixels.take() else { return false };
+        let frame = { let mut slot = lock(&self.slot); let pixels = slot.pixels.take(); if slot.hidden { None } else { pixels } };
+        let Some(frame) = frame else { return false };
         self.upload(&frame)
     }
 
@@ -148,7 +151,13 @@ impl Frames {
     /// Textura atual, na thread da interface.
     pub fn shown(&self) -> Option<Arc<SurfaceTexture>> { lock(&self.shown).clone() }
 
-    pub fn clear(&self) { *lock(&self.shown) = None; }
+    /// A confirmação do quadro descartado fica para o `seen` da volta à tela, que libera o próximo.
+    pub fn hide(&self) {
+        { let mut slot = lock(&self.slot); slot.hidden = true; slot.pixels = None; }
+        *lock(&self.shown) = None;
+    }
+
+    pub fn show(&self) { lock(&self.slot).hidden = false; }
 
     pub fn close(&self) {
         lock(&self.slot).closed = true;

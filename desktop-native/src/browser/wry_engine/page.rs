@@ -135,6 +135,7 @@ impl Page {
         if self.frames.lost() { self.placed.set(None); }
         let resized = self.placed.get() != Some((bounds.size, scale));
         let first = !self.cast.visible.replace(true);
+        if first { self.frames.show(); }
         if resized || first {
             crate::browser::frames::trace(format_args!("cartão {w}x{h} (primeiro: {first}); screencast reiniciado"));
             self.placed.set(Some((bounds.size, scale)));
@@ -185,7 +186,7 @@ impl Page {
     /// Fora da tela: sem screencast e sem a textura na GPU.
     pub(super) fn hide(&self) {
         if self.cast.visible.replace(false) { self.cast.request(None); }
-        self.frames.clear();
+        self.frames.hide();
     }
 
     /// O `clickCount` da soltura repete o do aperto: sem ele o Chromium não dispara `dblclick`.
