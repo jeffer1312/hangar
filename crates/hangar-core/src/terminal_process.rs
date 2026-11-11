@@ -6,6 +6,21 @@ use tokio::process::{Child,Command};
 pub const PRIVATE_ENV_KEYS: [&str; 7] = ["HANGAR_INTERNAL_SECRET", "CP_AUTH_TOKEN", "HANGAR_RUNTIME_INSTANCE", "HANGAR_AUTH_CONTEXT", "HANGAR_PLUGIN_TOKEN",
     "HANGAR_SERVER_LISTEN", "HANGAR_SERVER_UPSTREAM"];
 
+/// Faz o programa gráfico sobreviver aos sinais da sessão do servidor, como `start_new_session`.
+/// No Windows o parâmetro do Python não altera a criação do processo.
+pub fn detach_launch(command: &mut Command) {
+    #[cfg(unix)]
+    {
+        // SAFETY: o callback só chama setsid, que é async-signal-safe e não aloca.
+        unsafe { command.pre_exec(|| {
+            unsafe extern "C" { fn setsid() -> i32; }
+            if setsid() < 0 { Err(io::Error::last_os_error()) } else { Ok(()) }
+        }); }
+    }
+    #[cfg(not(unix))]
+    let _ = command;
+}
+
 pub trait OwnedTree: Send {
     fn terminate(&mut self)->io::Result<()>;
     fn active(&mut self)->io::Result<bool>;
