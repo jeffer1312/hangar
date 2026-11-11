@@ -422,11 +422,11 @@ fn valid_device(id: &str) -> bool { (1..=64).contains(&id.len()) && id.bytes().a
 /// Um id por instalação do app, igual para todos os servidores: criado na primeira vez, lido depois.
 fn device_id_in(dir: &Path) -> std::io::Result<String> {
     let path = dir.join("device-id");
-    match std::fs::read_to_string(&path) {
+    let replace = match std::fs::read_to_string(&path) {
         Ok(text) if valid_device(text.trim()) => return Ok(text.trim().to_owned()),
-        Ok(_) => std::fs::remove_file(&path)?,
-        Err(_) => {}
-    }
+        Ok(_) => true,
+        Err(_) => false,
+    };
     let mut raw = [0u8; 16];
     ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut raw).map_err(|_| std::io::Error::other("sem número aleatório"))?;
     // UUID versão 4.
@@ -444,16 +444,17 @@ fn device_id_in(dir: &Path) -> std::io::Result<String> {
     #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; file.set_permissions(std::fs::Permissions::from_mode(0o600))?; }
     std::io::Write::write_all(&mut file, id.as_bytes())?;
     drop(file);
-    // Sem sobrescrever: duas instâncias abrindo juntas ficam com o id de quem gravou primeiro.
-    let linked = std::fs::hard_link(&tmp, &path);
-    let _ = std::fs::remove_file(&tmp);
+    // Sem sobrescrever: duas instâncias abrindo juntas ficam com o id de quem gravou primeiro. Ilegível, ou sistema de
+    // arquivos sem hard link, troca pelo `rename`.
+    let linked = if replace { Err(std::io::ErrorKind::Unsupported.into()) } else { std::fs::hard_link(&tmp, &path) };
     match linked {
-        Ok(()) => Ok(id),
+        Ok(()) => { let _ = std::fs::remove_file(&tmp); Ok(id) }
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let _ = std::fs::remove_file(&tmp);
             let text = std::fs::read_to_string(&path)?;
             if valid_device(text.trim()) { Ok(text.trim().to_owned()) } else { Err(std::io::Error::other("device-id ilegível")) }
         }
-        Err(error) => Err(error),
+        Err(_) => { std::fs::rename(&tmp, &path)?; Ok(id) }
     }
 }
 
