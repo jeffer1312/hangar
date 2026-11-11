@@ -242,9 +242,10 @@ mede a `verificar-local`.
   binário do próprio pacote, aqui o do servidor). Teste que cai nos dois critérios conta como 2a.
 - **Módulo de um arquivo do `it`:** o prefixo do nome do arquivo (`share_gate.rs` → `share`); sem
   prefixo que case, o módulo de `hangar_server::` mais citado nele.
-- **Usa do servidor:** quantos outros módulos de topo o módulo cita por `crate::`, teste incluído.
-  Conta também módulo que já é só reexportação de outro crate (`transcript`, `diag`), então o número
-  é teto.
+- **Usa do servidor:** quantos outros módulos de topo com arquivo em `src/` o módulo cita por
+  `crate::`, teste incluído. O que o `lib.rs` reexporta do core (`auth`, `http_cors`…) fica fora;
+  `diag` e `transcript` ainda têm arquivo em `src/` e contam, então o número é teto do que falta
+  cortar.
 - **Toques em 30 dias:** arquivos do módulo tocados por commit na origin/main
   (`git log --since="30 days ago" --no-merges --name-only --format= origin/main --
   crates/hangar-server/src`, agrupado pelo 4º componente do caminho). É o quanto mexer nele dispara
@@ -298,7 +299,7 @@ mede a `verificar-local`.
 | `routes` | 1.977 | 1 (1 + 0) | 0 (0 + 0) | 21 (12 + 9) | 5% | 92 | 175 |
 | `workspace_routes` | 852 | 1 (1 + 0) | 0 (0 + 0) | 49 (0 + 49) | 2% | 11 | 17 |
 | `costs_routes` | 443 | 0 (0 + 0) | 0 (0 + 0) | 50 (0 + 50) | 0% | 2 | 3 |
-| outros 72 (módulos menores, `lib.rs`, `main.rs`) | 26.863 | 430 (317 + 113) | 17 (0 + 17) | 243 (20 + 223) | 65% | — | 841 |
+| outros 72 (módulos menores, `lib.rs`, `main.rs`; nos toques, também os que já saíram, como `omp_sync`) | 26.863 | 430 (317 + 113) | 17 (0 + 17) | 243 (20 + 223) | 65% | — | 927 |
 | executáveis à parte (22 arquivos) | — | 207 | 1 | 44 | 83% | — | — |
 | **Total** | 253.316 | 4.575 | 88 | 1.656 | 74% | | 5.398 |
 
@@ -311,8 +312,9 @@ O que a tabela mostra:
 - **O alívio do dia a dia só chega com o nó** `runtime`/`accounts`/`list`/`session_open`/
   `session_write`/`state`: ele tem 1.998 dos 5.398 toques de 30 dias (37%) e 1.779 dos 4.663 testes
   que saem (38%); `runtime` sozinho tem 708 toques e 868 testes. É o corte mais caro. Os arquivos
-  grandes do `runtime` no `it` (`terminal_runtime.rs`, `runtime_claude.rs`) citam `terminal_input`,
-  `mods`, `plugin` e `interactions`: saem quando esses módulos estiverem fora.
+  grandes do `runtime` no `it` (`terminal_runtime.rs`, `runtime_claude.rs`) citam `terminal_facts`,
+  `term`, `plugin`, `interactions`, `terminal_input` e `mods`: saem quando esses módulos estiverem
+  fora.
 - **1.919 testes que saem moram no `tests/it` do servidor.** Eles não saem sozinhos: mover o módulo
   sem levar esses arquivos para o `tests/it` do crate novo deixa a verificação igual. Só os de
   `src/` saem de graça.
@@ -320,11 +322,13 @@ O que a tabela mostra:
   executáveis à parte. Não somem: são os que precisam do servidor inteiro.
 - **Rende pouco na verificação** (quase tudo 2a, mexer neles ainda dispara o `it` grande):
   `workspace_routes` 2%, `routes` 5%, `worktree_routes` 12%, `archive_list` 14%, `session_media`
-  26%, `term` 35%, `dictation` 37%, `mcp` 43%, `connect` 46%. `costs_routes` está em 0% hoje porque
-  os 50 testes dele sobem o servidor; com o `CostsState` da Task 5 podem montar só a rota de custos.
-- **140 testes de `connect` e 36 de `transcript` ainda estão no `it` do servidor**, embora os dois
-  já sejam crate: entram pelo `pub use` do servidor. Os do tipo 1 (64 e 16) podem ir para os crates
-  deles sem extrair código.
+  26%, `term` 35%, `dictation` 37%, `mcp` 43%, `connect` 46%. `costs_routes` está em 0%: os 50 testes dele montam o
+  `AppState` e o roteador do servidor (`tests/it/costs_routes.rs`). Só saem se o apoio do teste for
+  reescrito sobre o `CostsState` da Task 5; mover o arquivo não basta.
+- **140 testes de `connect` e 36 de `transcript` ainda estão no `it` do servidor.** `transcript` já
+  é crate; `connect` tem a supervisão no `hangar-connect` e o porteiro e as rotas no servidor (611
+  linhas). Dos tipo 1 (64 e 16), o que exercita só o que já está no crate pode ir para ele,
+  conferindo teste a teste: os arquivos `connect_*` misturam os dois.
 - **Cerca de 20 executáveis à parte ainda linkam o servidor inteiro** (252 testes). `hangar-package`
   e `hangar-transcript` têm 2 arquivos em `tests/` cada, contra a regra do item 5 do contrato.
 - **Número de testes não é tempo.** Medido em 10/11 pela sessão da `verificar-local`, com 4 threads:
@@ -354,14 +358,16 @@ fase; `plugin_listener` fica no servidor. Depois do core, a ordem segue o que fa
 módulo". O alívio na verificação só chega com o nó: os primeiros cortes da segunda fase quase não
 mudam o dia a dia e valem como pré-requisito dele.
 
-1. Nesta fase a ordem fica: Task 5 e 6 (`costs`: 166 testes, mais os 71 de `tests/costs_hook` e,
-   com o `CostsState`, os 50 de `costs_routes`; 13 toques em 30 dias) e Task 7 (`voice`: 314, todos
-   em `src/`; 111 toques).
-2. Segunda fase, primeiro o que destrava o nó, nesta ordem: `interactions` (14 testes; usa
-   `runtime` e `session_write`), `terminal_input` (108 testes em 1.870 linhas; usa `interactions`,
-   `state::{ask, permission}` e `session_write::answer`), `mods` (174) e `plugin` (56). Os dois
-   primeiros citam módulos do nó: cada um começa por um commit de corte (Fix A ou Fix B), senão o
-   crate novo dependeria do servidor.
+1. Nesta fase a ordem fica: Task 5 e 6 (`costs`: 166 testes, mais os 71 de `tests/costs_hook`; 13
+   toques em 30 dias; os 50 de `costs_routes` só com o apoio reescrito) e Task 7 (`voice`: 314,
+   todos em `src/`; 111 toques).
+2. Segunda fase, primeiro o que destrava o nó, nesta ordem: `interactions` (14 testes),
+   `terminal_input` (108 em 1.870 linhas), `term` (8) e `terminal_facts` (794 linhas), `mods` (174)
+   e `plugin` (56). Todos citam módulos do nó (`runtime`, `session_write`, `state`, `list`) e o
+   `runtime` os usa de volta (16 arquivos dele citam `terminal_input`, 14 `interactions`, 13
+   `mods`, 12 `terminal_facts`): cada um começa por um commit de corte (Fix A ou Fix B), senão o
+   crate novo dependeria do servidor. O tamanho desses cortes não está medido; é a primeira conta
+   da Task 10.
 3. Avaliar cedo, na Task 10: `codex_setup` (235 toques, 96% sai, 7.306 linhas) e `update` (174
    toques, 87% sai, 11.737 linhas). Mudam muito e quase tudo sai; o custo é o que usam do servidor
    (17 e 19 módulos).
@@ -371,7 +377,8 @@ mudam o dia a dia e valem como pré-requisito dele.
    `orchestration` e `uploads` (45 cada) e os pequenos `pages` (50), `permission_control` (35),
    `subagents` (22) e `tail` (20). `share` (184 de 332) e `groups` (140 de 271) deixam metade no
    `it` de qualquer jeito.
-6. Sem pressa, porque não aliviam a verificação: os módulos de rota listados na seção de testes.
+6. Sem pressa, porque não aliviam a verificação: os módulos de rota listados na seção de testes
+   (menos `term`, que entra no item 2 por destravar o nó).
 
 O core é um crate só, com módulos por assunto (`net`, `http`, `pycompat`, `fs`, `process`, `paths`,
 `edge`…). Separar a parte pura num crate próprio não reduz memória; fica para quando houver motivo
@@ -637,13 +644,16 @@ já usa `CostsState` (Task 5).
 - [ ] **Step 2: Mover `costs/` e `costs_routes.rs`** para `crates/hangar-costs/` pelo contrato.
   Vão junto, num `tests/it/` só, os arquivos do tipo 1 que hoje estão no `it` do servidor
   (`contract_costs_*`, `costs_*_unit`, `costs_fx`, `costs_origins`, `costs_fast_paths`,
-  `scopes_native`; 156 testes). `tests/costs_hook/*` (71 testes) vai como `[[test]]` próprio do
+  `scopes_native`; 156 testes), com o apoio `tests/it/common/costs.rs` que três deles e o
+  `costs_hook` importam. Os testes trocam `hangar_server::costs` por `hangar_costs` (edição que o
+  item 2 do contrato permite) e o crate novo ganha `hangar-transcript` em `[dev-dependencies]`
+  (`contract_costs_reports.rs`). `tests/costs_hook/*` (71 testes) vai como `[[test]]` próprio do
   `hangar-costs`, porque instala o gancho de pânico do processo inteiro (exceção do item 5); antes,
   `install_panic_hook` (`lib.rs:334`) desce para o core, senão os testes que o chamam ficam no
   servidor. Os 50 de `tests/it/costs_routes.rs` vão se montarem só o
-  `CostsState`; os que precisam do servidor inteiro ficam.
-- [ ] **Step 3: Provas comuns** (quando autorizadas), incluindo `tests/costs_hook/*` (31 usos de
-  `hangar_server::costs`) e `tests/it/contract_costs_*.rs` (26).
+  `CostsState`; hoje todos montam o `AppState`, então ficam até o apoio ser reescrito.
+- [ ] **Step 3: Provas comuns** (quando autorizadas), incluindo os testes movidos no Step 2 e os
+  que ficaram no servidor citando `hangar_server::costs` (`tests/it/costs_routes.rs`).
 - [ ] **Step 4: Uso real — verificação manual** Custos e Uso no app.
 
 ### Task 7: Extrair `hangar-voice`
@@ -777,7 +787,8 @@ Status: ready-for-agent (depois da Task 9)
   Jefferson autorizar o build) e trocar a tabela de estimativa pelo medido.
 - [ ] **Step 3: Escrever o plano da segunda fase** em `docs/superpowers/plans/`, na ordem da seção
   "Ordem e paralelismo" (revista pelos testes) e refazendo a contagem de "Testes por módulo":
-  `interactions`, `terminal_input`, `mods` e `plugin` (destravam o nó); a avaliação de
+  `interactions`, `terminal_input`, `term`, `terminal_facts`, `mods` e `plugin` (destravam o nó,
+  cada um com o corte medido antes); a avaliação de
   `codex_setup` e `update`; o nó `runtime`/`accounts`/`list`/`session_open`/`session_write`/`state`
   (com a inversão da seção "Adiado"); depois `speech`, `remote_browser`, `orchestration` (com
   `orq_storage`), `uploads`, os pequenos (`pages`, `permission_control`, `subagents`, `tail`),
