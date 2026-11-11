@@ -80,6 +80,9 @@ fn isolated(command: &mut Command) -> &mut Command {
     for (key, _) in std::env::vars_os() {
         if key.to_str().is_some_and(|k| k.starts_with("CP_") || k.starts_with("HANGAR_")) { command.env_remove(key); }
     }
+    // Sem `SHELL` o tmux cai no shell de login; um fish não dá `exec` no comando do pane e o agente
+    // vira neto do `pane_pid`, que é onde `agent_runs` procura.
+    command.env("SHELL", "/bin/bash");
     unsafe {
         use std::os::unix::process::CommandExt;
         command.pre_exec(|| { crate::close_inherited_fds([]); Ok(()) });
