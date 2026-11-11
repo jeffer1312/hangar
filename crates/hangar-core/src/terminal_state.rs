@@ -141,7 +141,8 @@ static P: LazyLock<Patterns> = LazyLock::new(|| {
         effort: r(r"^[○◐●◉◈◎] \S+(?: · ultracode)? · /effort\s*$"),
         tool: r(r"^([A-Z][\w-]*\(|(Running|Reading|Writing|Editing|Searching|Listing|Fetching|Updating|Creating|Deleting|Crawling|Downloading|Globbing|Grepping|Waiting|Loading|Compiling|Building|Installing|Ran|Making))"),
         // Linha que a TUI escreve para cada `<task-notification>`: o resumo dela, não texto do Claude.
-        task_notice: r(r#"^(?:Agent ".*" (?:finished|is waiting|was stopped|failed)|Background (?:command|agent) ".*" (?:completed|failed|was stopped|didn't finish)|Background shell command didn't finish|Monitor (?:event: |".*" (?:stream ended|script failed)))"#),
+        // Só o começo: a descrição entre aspas pode quebrar de linha antes do status.
+        task_notice: r(r#"^(?:Agent "|Background (?:command|agent) "|Background shell command\b|Monitor (?:event:|"))"#),
         activity: r(r"ran \d+ shell commands?\s*$"),
         mcp: r(r"^Calling[^\n]*(…|\.\.\.)\s*$"),
         pi_box: r(r"^\s*[╭╰][─\s]*[╮╯]\s*$"),
@@ -163,9 +164,6 @@ pub fn right(s: &str) -> &str { s.trim_end_matches(whitespace) }
 fn word(c: char) -> bool {
     let mut encoded = [0; 4];
     P.word.is_match(c.encode_utf8(&mut encoded))
-}
-fn end_word(pattern: &Regex, s: &str) -> bool {
-    pattern.find(s).is_some_and(|m| s[m.end()..].chars().next().is_none_or(|c| !word(c)))
 }
 fn tool(s: &str) -> bool {
     P.tool.find(s).is_some_and(|m| m.as_str().ends_with('(')
@@ -376,6 +374,7 @@ fn tool_header(lines: &[&str], i: usize) -> bool {
 fn preview(lines: &[&str], anchor: Option<&str>, skip: impl Fn(&[&str], usize, &str) -> bool, stop: impl Fn(&str) -> bool) -> String {
     let mut end = lines.iter().rposition(|l| P.rule.is_match(l) || P.overlay_rule.is_match(l) || P.pi_box.is_match(l))
         .unwrap_or(lines.len());
+    // Só a faixa corta a continuação: o `end` do quadro pode ser a borda de uma caixa da própria resposta.
     let mut band = lines.len();
     if let Some(row) = anchor.filter(|a| !a.is_empty()).and_then(|a| lines[..end].iter().rposition(|l| l.contains(a))) {
         (end, band) = (row, row);
@@ -396,7 +395,7 @@ fn preview(lines: &[&str], anchor: Option<&str>, skip: impl Fn(&[&str], usize, &
         if P.effort.is_match(s) { continue; }
         let subagent = P.subagent.is_match(body) && lines[i + 1..].iter().find(|l| !trim(l).is_empty())
             .is_some_and(|l| P.subagent_body.is_match(l));
-        if !tool(body) && !mcp(body) && !end_word(&P.task_notice, body)
+        if !tool(body) && !mcp(body) && !P.task_notice.is_match(body)
             && !P.todo.is_match(line) && !subagent && !tool_header(lines, i) && !skip(lines, i, body) { start = Some(i); }
     }
     let Some(start) = start else { return String::new(); };
@@ -717,6 +716,10 @@ mod tests {
             "Monitor event: \"build\"",
             "Monitor \"build\" stream ended",
             "Monitor \"build\" script failed (exit 1)",
+            "Monitor event: build finished",
+            "Agent \"revisor\" completed",
+            "Agent \"revisor\" killed",
+            "Background agent \"Sleep 240 seconds then report done and\n  verify\" didn't finish before the previous session ended",
         ] {
             assert_eq!(pane_preview(&format!("● {notice}\n{RULE}\n❯ \n{RULE}\n"), None).0, "", "{notice}");
             assert_eq!(pane_preview(&format!("● resposta\n\n● {notice}\n{RULE}\n❯ \n{RULE}\n"), None).0, "resposta", "{notice}");
