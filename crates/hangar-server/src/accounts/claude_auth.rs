@@ -129,13 +129,21 @@ impl AccountService {
                 if exe.is_file() {
                     return Some(vec![exe]);
                 }
-                let package = dir.join("node_modules/@anthropic-ai/claude-code");
-                // Sem o postinstall, o `bin/claude.exe` é um script de aviso de poucos bytes.
-                let exe = package.join("bin/claude.exe");
-                if std::fs::metadata(&exe).is_ok_and(|m| m.is_file() && m.len() > 64 * 1024) {
-                    return Some(vec![exe]);
+                // Só a pasta com o `claude.cmd` é a que o terminal rodaria; nela o pacote fica em
+                // `node_modules` (global) ou ao lado da `.bin` (local).
+                if dir.join("claude.cmd").is_file() {
+                    let package = if dir.file_name().is_some_and(|n| n == ".bin") {
+                        dir.with_file_name("@anthropic-ai/claude-code")
+                    } else {
+                        dir.join("node_modules/@anthropic-ai/claude-code")
+                    };
+                    // Sem o postinstall, o `bin/claude.exe` é um script de aviso de poucos bytes.
+                    let exe = package.join("bin/claude.exe");
+                    if std::fs::metadata(&exe).is_ok_and(|m| m.is_file() && m.len() > 64 * 1024) {
+                        return Some(vec![exe]);
+                    }
                 }
-                let script = package.join("cli.js");
+                let script = dir.join("node_modules/@anthropic-ai/claude-code/cli.js");
                 if script.is_file() {
                     let node = std::env::split_paths(path)
                         .map(|dir| dir.join("node.exe"))
