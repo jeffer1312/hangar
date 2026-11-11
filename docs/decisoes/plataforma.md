@@ -4565,3 +4565,29 @@ registro e toda gravação um passo atrás. No checkout, a comparação é `from
 **Limites:** servidor antigo responde 404 e o cliente não mostra nada; depois de atualizar ele já roda a
 versão que tem a rota, por isso o clique não guarda reserva própria. Marcação de visto que falha na rede, seguida de reabertura,
 mostra o modal de novo. O nativo lê só o servidor local, como antes.
+
+## Editor, shell e terminal externo no Rust (11/11/2026)
+
+As rotas `POST /api/sessions/{name}/open-editor`, `/shell` e `/open-terminal` são atendidas
+pelo `hangar-server`, com os efeitos no crate `hangar-session-tools`, sobre o `hangar-core`.
+Os clientes conservam os endpoints. Os handlers e o criador de shell Python foram retirados;
+as portas sem Rust recebem o 404 padrão das rotas removidas, sem lançador de reserva.
+
+O shell continua separado, chamado `term-<nome>`, e a marca `@cp_hidden` comprova que pertence
+ao painel. Uma colisão sem marca recusa antes de qualquer efeito. Reabrir conserva o trabalho;
+o diretório de nascimento diferente exige encerrar e conferir a saída antes de recriar.
+Os consumidores de lista, fechamento e renomeação já leem essa mesma identidade no multiplexador.
+A recuperação de escopo só repete a criação sem prefixo quando a sonda confirma a recusa do systemd;
+timeout não repete uma criação que pode ter acontecido.
+
+Editor lê a configuração viva e recebe a pasta como argumento único, sem shell. O emulador
+conserva a ordem e os argumentos dos seis programas já aceitos, o alvo exato, a espera de 300 ms
+e o stderr em arquivo comum. Os processos gráficos recebem o ambiente sem a autoridade privada
+do servidor Rust. No Unix o emulador nasce em sessão própria; o editor não muda sua política.
+Erros e comandos lentos do multiplexador continuam no diário do servidor.
+
+Evidência: testes públicos do crate para reuso, colisão, falhas e processos; testes HTTP
+`tests/it/session_tools.rs` para autorização, guarda de transferência, configuração viva,
+redirecionamento e ausência de chamadas ao Python. A caracterização do Python e o diferencial
+do shell ficam nos artefatos locais da migração. As provas com emulador falso verificam argumentos,
+ambiente e saída do processo; não comprovam uma janela gráfica real nem medem desempenho.

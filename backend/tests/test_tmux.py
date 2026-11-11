@@ -22,10 +22,6 @@ def _isola_o_cache_do_scope():
     devolve o RUN de verdade no fim, mas NAO desfaz a gravacao. Do teste seguinte em diante, quem
     fala com o tmux de verdade herda um prefixo `systemd-run` decidido por uma mentira.
 
-    Foi o que derrubava o `test_new_hidden_shell_config_dir_chega_no_ambiente_do_pane` quando o
-    arquivo rodava inteiro (sozinho ele passava): o `new_hidden_shell` real ia embrulhado em
-    systemd-run, falhava, e `alvo` vinha None. Na suite completa isso ficou escondido por acidente
-    ate 21/08/2026, quando outra correcao tirou o andaime que zerava o cache sem querer.
 
     Sem `monkeypatch` de proposito: pedir fixture dentro de fixture autouse muda a ordem de
     setup/teardown de todo teste — e foi exatamente essa a armadilha do conftest (ver o comentario

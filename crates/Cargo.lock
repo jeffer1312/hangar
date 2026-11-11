@@ -1777,6 +1777,7 @@ dependencies = [
  "hangar-package",
  "hangar-plugins",
  "hangar-psmux",
+ "hangar-session-tools",
  "hangar-transcript",
  "hangar-update-news",
  "hangar-workflows",
@@ -1831,6 +1832,19 @@ dependencies = [
  "zbus",
  "zeroize",
  "zip",
+]
+
+[[package]]
+name = "hangar-session-tools"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "hangar-core",
+ "libc",
+ "proptest",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

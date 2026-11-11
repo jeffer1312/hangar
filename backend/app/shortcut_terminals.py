@@ -2,7 +2,6 @@
 
 O tmux e a unica fonte de verdade: dono, id e rotulo moram em opcoes de usuario da sessao
 (`@cp_shortcut_*`), entao a lista sobrevive a restart do backend sem arquivo de estado. A marca
-`@cp_hidden` e a mesma do shell do painel (`tmux.new_hidden_shell`): sem ela a sessao viraria card.
 
 `remain-on-exit` mantem o pane depois que o comando sai, com a saida na tela (o codigo de saida vai
 na aba) — e o que deixa a pessoa conferir o que o atalho fez e fechar quando quiser.

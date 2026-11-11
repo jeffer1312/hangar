@@ -46,28 +46,103 @@ mod unix {
     struct Fixture {
         root: tempfile::TempDir,
         env: BTreeMap<String, String>,
+        done: tokio::io::unix::AsyncFd<std::fs::File>,
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            reap_fake(&self.root.path().join("pid"));
+        }
+    }
+    fn reap_fake(path: &std::path::Path) {
+        let Some(pid) = fs::read_to_string(path)
+            .ok()
+            .and_then(|value| value.parse::<i32>().ok())
+        else {
+            return;
+        };
+        let mut status = 0;
+        // Só sinaliza filho ainda nosso; um PID já recolhido nunca é reaproveitado como alvo.
+        let mut observed = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        while observed < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+            observed = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        }
+        if observed == 0 {
+            unsafe {
+                let killed = libc::kill(-pid, libc::SIGKILL);
+                let signal_error = std::io::Error::last_os_error().raw_os_error();
+                let mut waited = libc::waitpid(pid, &mut status, 0);
+                while waited < 0
+                    && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR)
+                {
+                    waited = libc::waitpid(pid, &mut status, 0);
+                }
+                let reaped = waited == pid
+                    || std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD);
+                if !std::thread::panicking() {
+                    assert!(
+                        killed == 0 || signal_error == Some(libc::ESRCH),
+                        "o emulador falso não foi encerrado"
+                    );
+                    assert!(reaped, "o emulador falso não foi recolhido");
+                }
+            }
+        }
     }
     impl Fixture {
         fn new() -> Self {
             let root = tempfile::tempdir().unwrap();
             let path = root.path().to_string_lossy().into_owned();
+            use std::os::unix::{ffi::OsStrExt, fs::OpenOptionsExt};
+            let fifo = root.path().join("done");
+            let name = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&fifo)
+                .unwrap();
+            let done = tokio::io::unix::AsyncFd::new(file).unwrap();
             Self {
                 root,
+                done,
                 env: BTreeMap::from([
                     ("PATH".into(), path.clone()),
                     ("HOME".into(), path.clone()),
                     ("XDG_RUNTIME_DIR".into(), path.clone()),
                     ("RESULT".into(), format!("{path}/result")),
+                    ("DONE".into(), format!("{path}/done")),
+                    ("PID_FILE".into(), format!("{path}/pid")),
                 ]),
             }
         }
         fn program(&self, name: &str, body: &str) {
             let file = self.root.path().join(name);
-            fs::write(&file, format!("#!/bin/sh\n{body}\n")).unwrap();
+            fs::write(&file, format!("#!/bin/sh\nprintf '%s' \"$$\" > \"$PID_FILE\"\ntrap 'printf done > \"$DONE\"' 0\n{body}\n")).unwrap();
             fs::set_permissions(file, fs::Permissions::from_mode(0o700)).unwrap();
         }
-        fn result(&self) -> String {
+        async fn result(&self) -> String {
+            self.finished().await;
             fs::read_to_string(self.root.path().join("result")).unwrap()
+        }
+        async fn finished(&self) {
+            use std::io::Read;
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                loop {
+                    let mut ready = self.done.readable().await.unwrap();
+                    match ready.try_io(|file| {
+                        let mut bytes = [0; 16];
+                        file.get_ref().read(&mut bytes)
+                    }) {
+                        Ok(Ok(count)) if count > 0 => return,
+                        Ok(Err(error)) => panic!("{error}"),
+                        _ => {}
+                    }
+                }
+            })
+            .await
+            .expect("sinal de conclusão do emulador falso");
+            reap_fake(&self.root.path().join("pid"));
         }
     }
 
@@ -94,7 +169,7 @@ mod unix {
                 .unwrap(),
             json!({"ok": true})
         );
-        assert_eq!(fixture.result(), "wezterm");
+        assert_eq!(fixture.result().await, "wezterm");
     }
 
     #[tokio::test]
@@ -105,7 +180,29 @@ mod unix {
         external::open("session", &fixture.env, vec![])
             .await
             .unwrap();
-        assert_eq!(fixture.result(), "kitty");
+        assert_eq!(fixture.result().await, "kitty");
+    }
+
+    #[tokio::test]
+    async fn probe_obeys_owner_permissions_instead_of_any_execute_bit() {
+        let fixture = Fixture::new();
+        fixture.program("wezterm", "printf wezterm > \"$RESULT\"");
+        fs::set_permissions(
+            fixture.root.path().join("wezterm"),
+            fs::Permissions::from_mode(0o641),
+        )
+        .unwrap();
+        fixture.program("kitty", "printf kitty > \"$RESULT\"");
+        external::open("session", &fixture.env, vec![])
+            .await
+            .unwrap();
+        // Root pode executar com o bit de outros; o dono comum precisa do seu próprio bit.
+        let expected = if unsafe { libc::getuid() } == 0 {
+            "wezterm"
+        } else {
+            "kitty"
+        };
+        assert_eq!(fixture.result().await, expected);
     }
 
     #[tokio::test]
@@ -123,7 +220,7 @@ mod unix {
             fixture.env.insert("CP_TERMINAL".into(), emulator.into());
             external::open("a-2", &fixture.env, vec![]).await.unwrap();
             assert_eq!(
-                fixture.result(),
+                fixture.result().await,
                 format!("{prefix}tmux\nattach\n-t\n=a-2:\n")
             );
         }
@@ -155,7 +252,7 @@ mod unix {
         .await
         .unwrap();
         assert_eq!(
-            fixture.result(),
+            fixture.result().await,
             "kitty\ntmux\nattach\n-t\n=session:\n:72\nwayland-2\n"
         );
         fixture
@@ -175,7 +272,7 @@ mod unix {
         )
         .await
         .unwrap();
-        assert!(fixture.result().ends_with(":72\nchosen\n"));
+        assert!(fixture.result().await.ends_with(":72\nchosen\n"));
     }
 
     #[tokio::test]
@@ -188,7 +285,7 @@ mod unix {
         external::open("session", &fixture.env, vec![])
             .await
             .unwrap();
-        let result = fixture.result();
+        let result = fixture.result().await;
         let ids: Vec<u32> = result
             .split_whitespace()
             .map(|part| part.parse().unwrap())
@@ -270,6 +367,7 @@ mod unix {
                 .unwrap(),
             json!({"ok": true})
         );
+        fixture.finished().await;
     }
 
     #[tokio::test]
@@ -282,6 +380,6 @@ mod unix {
                 .unwrap(),
             json!({"ok": true})
         );
-        assert_eq!(fixture.result(), "done");
+        assert_eq!(fixture.result().await, "done");
     }
 }

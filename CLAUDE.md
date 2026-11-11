@@ -793,6 +793,10 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
     reconciliação das contas Claude é do Rust, `accounts/claude_config.rs`),
     `accounts/codex-invalidate`, `migration/status` e `ping`.
     Transcrição e organização do ditado leem a configuração efetiva diretamente no Rust.
+  - Abrir editor, shell separado e terminal externo: do Rust (`hangar-session-tools`). As três
+    rotas conservam os clientes existentes; sem Rust, não há lançador Python de reserva. O shell
+    continua no multiplexador, com `@cp_hidden`, e usa os fechamentos e renomeações existentes.
+    Evidência em [plataforma.md](docs/decisoes/plataforma.md#editor-shell-e-terminal-externo-no-rust-11112026).
   - Partes ainda no Python: transferência Claude→Codex e runners.
   - Mods (`press`/`close`/`show`/`input`), `~/.hangar/plugin.json` e `plugin-dir` publicados na
     subida e o download dos preços do models.dev: nada; são do Rust (`mods/`,

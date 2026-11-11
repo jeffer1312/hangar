@@ -1,5 +1,6 @@
 //! Servidor do Hangar: lê conversas e custos das sessões e repassa o restante ao backend Python.
 pub mod startup;
+mod session_tools;
 pub mod accounts;
 pub mod archive_history;
 pub mod archive_list;

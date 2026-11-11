@@ -145,7 +145,6 @@ fn internal_error(_: std::io::Error) -> Error {
 fn executable(name: &str, env: &BTreeMap<String, String>) -> Option<PathBuf> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
         std::env::split_paths(
             env.get("PATH")
                 .map(String::as_str)
@@ -153,8 +152,9 @@ fn executable(name: &str, env: &BTreeMap<String, String>) -> Option<PathBuf> {
         )
         .map(|dir| dir.join(name))
         .find(|path| {
-            path.metadata()
-                .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+            path.metadata().is_ok_and(|meta| {
+                meta.is_file() && hangar_core::terminal_process::can_execute(path)
+            })
         })
     }
     #[cfg(not(unix))]

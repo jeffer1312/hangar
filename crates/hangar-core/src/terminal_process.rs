@@ -21,6 +21,16 @@ pub fn detach_launch(command: &mut Command) {
     let _ = command;
 }
 
+/// Permissão de execução para o usuário do processo, como `os.access(path, os.X_OK)`.
+#[cfg(unix)]
+pub fn can_execute(path: &std::path::Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    std::ffi::CString::new(path.as_os_str().as_bytes()).is_ok_and(|path| {
+        // SAFETY: a CString mantém o caminho terminado em NUL vivo durante a chamada.
+        (unsafe { libc::access(path.as_ptr(), libc::X_OK) }) == 0
+    })
+}
+
 pub trait OwnedTree: Send {
     fn terminate(&mut self)->io::Result<()>;
     fn active(&mut self)->io::Result<bool>;
