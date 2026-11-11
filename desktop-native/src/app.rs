@@ -1092,9 +1092,8 @@ impl Hangar {
                 }
             }).detach();
         }
-        // A lista local de antes do servidor guardar o que chegou: some sem ser lida. Quem mostra agora é o `Updater`,
-        // na primeira leitura do servidor desta máquina.
-        if let Some(dir) = crate::appearance::dir() { let _ = std::fs::remove_file(dir.join("novidades-pendentes.json")); }
+        // A lista que um app anterior guardou no "Atualizar?"; daqui em diante quem mostra é o `Updater`.
+        cx.defer_in(window, |_, window, cx| crate::update::confirm::show_legacy_pending(window, cx));
         // Só para ver e fotografar no build de debug: HANGAR_NATIVE_PREVIEW=update-confirm, whats-new ou o nome de uma
         // animação das novidades. Espera a subida para abrir por cima do diálogo de primeira execução de um perfil vazio.
         #[cfg(debug_assertions)]

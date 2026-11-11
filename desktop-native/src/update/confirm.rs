@@ -407,7 +407,7 @@ pub(super) fn arrived(read: Result<Value, Failure>, last: Option<u64>) -> Arrive
     match read.map(serde_json::from_value::<Wire>) {
         Ok(Ok(wire)) if last.is_some_and(|last| wire.through <= last) => Arrived::Already,
         Ok(Ok(Wire { mut news, through })) => {
-            news.retain(for_desktop);
+            news.retain(|item| for_desktop(item) && !legacy_shown(&item.id));
             if news.is_empty() { Arrived::Seen(through) } else { Arrived::Show { news, through } }
         }
         Ok(Err(error)) => Arrived::Failed(error.to_string()),
@@ -422,7 +422,11 @@ fn valid_device(id: &str) -> bool { (1..=64).contains(&id.len()) && id.bytes().a
 /// Um id por instalação do app, igual para todos os servidores: criado na primeira vez, lido depois.
 fn device_id_in(dir: &Path) -> std::io::Result<String> {
     let path = dir.join("device-id");
-    if let Ok(text) = std::fs::read_to_string(&path) && valid_device(text.trim()) { return Ok(text.trim().to_owned()); }
+    match std::fs::read_to_string(&path) {
+        Ok(text) if valid_device(text.trim()) => return Ok(text.trim().to_owned()),
+        Ok(_) => std::fs::remove_file(&path)?,
+        Err(_) => {}
+    }
     let mut raw = [0u8; 16];
     ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut raw).map_err(|_| std::io::Error::other("sem número aleatório"))?;
     // UUID versão 4.
@@ -431,7 +435,7 @@ fn device_id_in(dir: &Path) -> std::io::Result<String> {
     let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
     let id = format!("{}-{}-{}-{}-{}", &hex[..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..]);
     std::fs::create_dir_all(dir)?;
-    let tmp = path.with_extension("tmp");
+    let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
@@ -440,8 +444,17 @@ fn device_id_in(dir: &Path) -> std::io::Result<String> {
     #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; file.set_permissions(std::fs::Permissions::from_mode(0o600))?; }
     std::io::Write::write_all(&mut file, id.as_bytes())?;
     drop(file);
-    std::fs::rename(&tmp, &path)?;
-    Ok(id)
+    // Sem sobrescrever: duas instâncias abrindo juntas ficam com o id de quem gravou primeiro.
+    let linked = std::fs::hard_link(&tmp, &path);
+    let _ = std::fs::remove_file(&tmp);
+    match linked {
+        Ok(()) => Ok(id),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let text = std::fs::read_to_string(&path)?;
+            if valid_device(text.trim()) { Ok(text.trim().to_owned()) } else { Err(std::io::Error::other("device-id ilegível")) }
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// Lido do disco uma vez por processo; falha não fica guardada e tenta de novo no próximo pedido.
@@ -456,11 +469,35 @@ pub(super) fn device_id() -> Option<String> {
 /// Abre "O que chegou para você" na janela ativa (ou na primeira), com o "Mostrar no app" do app; `false` sem janela.
 pub(super) fn show_news(items: Vec<News>, cx: &mut App) -> bool {
     let Some(handle) = cx.active_window().or_else(|| cx.windows().first().copied()) else { return false };
-    // Chamado do `Updater`, que não tem a entidade do app no contexto: ela vem do global.
-    let show = crate::app::Hangar::weak(cx).map(|hangar| -> ShowInApp {
-        Rc::new(move |note: crate::tour::Note, _: &mut Window, cx: &mut App| { let _ = hangar.update(cx, |this, cx| this.show_news(note, cx)); })
-    });
+    let show = show_in_app(cx);
     handle.update(cx, |_, window, cx| open_whats_new(items, show, window, cx)).is_ok()
+}
+
+// Chamado também do `Updater`, que não tem a entidade do app no contexto: ela vem do global.
+fn show_in_app(cx: &App) -> Option<ShowInApp> {
+    crate::app::Hangar::weak(cx).map(|hangar| -> ShowInApp {
+        Rc::new(move |note: crate::tour::Note, _: &mut Window, cx: &mut App| { let _ = hangar.update(cx, |this, cx| this.show_news(note, cx)); })
+    })
+}
+
+/// Ids que a lista antiga já mostrou nesta abertura: a primeira leitura do servidor não os repete.
+static LEGACY_SHOWN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn legacy_shown(id: &str) -> bool { LEGACY_SHOWN.lock().is_ok_and(|ids| ids.iter().any(|shown| shown == id)) }
+
+/// A lista que o "Atualizar?" de um app anterior guardou em `novidades-pendentes.json`: abre uma vez se o app foi
+/// trocado desde então, e o arquivo some. O servidor guarda o que chegou desde esta versão.
+pub(crate) fn show_legacy_pending(window: &mut Window, cx: &mut App) {
+    #[derive(Deserialize)]
+    struct Pending { from_native: String, items: Vec<News> }
+    let Some(path) = crate::appearance::dir().map(|dir| dir.join("novidades-pendentes.json")) else { return };
+    let Ok(bytes) = std::fs::read(&path) else { return };
+    let _ = std::fs::remove_file(&path);
+    let Ok(pending) = serde_json::from_slice::<Pending>(&bytes) else { return };
+    if pending.from_native == super::CURRENT || pending.items.is_empty() { return; }
+    if let Ok(mut ids) = LEGACY_SHOWN.lock() { ids.extend(pending.items.iter().map(|item| item.id.clone())); }
+    let show = show_in_app(cx);
+    open_whats_new(pending.items, show, window, cx);
 }
 
 /// `HANGAR_NATIVE_PREVIEW=update-confirm` e `=whats-new` (build de debug): os dois modais com uma amostra fixa.
