@@ -354,6 +354,10 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
   quadro é a do processo do Chromium (`--force-device-scale-factor`), nunca a emulada por alvo: as
   páginas têm um Chromium próprio em escala 2, e o painel fica no de escala 1.
   [Medição](docs/decisoes/frontend.md#página-da-conversa-no-linux-quadro-no-tamanho-dele-e-chromium-próprio-em-escala-2-15102026).
+- **Página da conversa no nativo do Windows: o quadro é desenhado em fator inteiro, `ceil(escala × 2)`.**
+  O dobro exato gasta menos pixels e deixa o texto pior em tela a 125%. Textura perdida com o device
+  reinicia o screencast; o último quadro não fica guardado.
+  [Medição](docs/decisoes/frontend.md#quadro-em-fator-inteiro-e-sem-guardar-o-último-quadro-10112026).
 - **Bandeja do nativo: fechar ESCONDE a janela, nunca a destrói, e só com bandeja presente.** A tela
   não sobrevive a fechar e reabrir; quem esconde é `Window::set_hidden`, ajuste nosso no GPUI
   vendorizado, chamado de dentro do `should_close` (por isso ele não toca nos callbacks da
