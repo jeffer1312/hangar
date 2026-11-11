@@ -232,7 +232,8 @@ impl ProcessIo {
         if !cfg!(windows) || !request.stdin.is_empty() { return None; }
         let verb = request.args.first()?.clone();
         if !matches!(verb.as_str(), "send-keys" | "capture-pane" | "display-message") { return None; }
-        let target = request.args.iter().position(|arg| arg == "-t").and_then(|at| request.args.get(at + 1))?;
+        let target_at = request.args.iter().position(|arg| arg == "-t")? + 1;
+        let target = request.args.get(target_at)?;
         let base = target.strip_prefix('=')?.split(':').next()?.to_owned();
         let dir = crate::list::mux::verified_direct(std::ffi::OsStr::new(&request.program), &base)?;
         let (args, deadline) = (request.args.clone(), std::time::Instant::now() + self.command_timeout);
@@ -242,7 +243,9 @@ impl ProcessIo {
             Ok(Ok(stdout)) => Some(Ok((CommandOutput { success: true, stdout }, Vec::new()))),
             Ok(Err(failure)) if typed && failure.written => Some(Err(IoFailure { code: failure.code, may_have_written: true })),
             Ok(Err(failure)) => {
-                if crate::warn_limit::allow(None, failure.code) { tracing::warn!(code = failure.code, "psmux direto falhou; o comando segue pelo CLI"); }
+                if crate::warn_limit::allow(Some(&request.args[target_at]), failure.code) {
+                    tracing::warn!(code = failure.code, session = %request.args[target_at], %verb, "psmux direto falhou antes de escrever; o comando segue pelo CLI");
+                }
                 None
             }
             Err(_) if typed => Some(Err(IoFailure { code: "psmux_direct_panicked", may_have_written: true })),
@@ -1156,8 +1159,8 @@ impl TerminalDriver {
                 if expected.is_none() && !slash && !resent && attempt >= attempts / 4
                     && ComposerSnapshot::parse(&typed).is_some_and(|now| now.only(text))
                     && ComposerSnapshot::parse(&screen).is_some_and(|now| now.only(text)) {
-                    resent = true;
                     if !self.verify().await.is_ok_and(|facts| !facts.open_question) { continue; }
+                    resent = true;
                     tracing::info!(code = "submit_enter_repeated", "o texto seguiu no campo depois do Enter; um Enter de novo");
                     if let Err(e) = self.key_inner("Enter").await { return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Submit, e.code); }
                     continue;

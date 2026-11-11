@@ -51,7 +51,7 @@ impl Busy {
     }
 }
 
-/// O que segura a atualização nesta máquina; fila ilegível não segura.
+/// O que segura a atualização nesta máquina; fila ilegível segura como fila esperando.
 pub async fn busy_now(list: &crate::list::bridge::ListBridge, state: &crate::state::live::StateEnv) -> Result<Option<Busy>, String> {
     let produced = list.snapshot().await.map_err(|e| e.code.to_owned())?;
     let working = produced.rows.iter().any(|row| row.state == "working");
@@ -64,9 +64,19 @@ pub async fn busy_now(list: &crate::list::bridge::ListBridge, state: &crate::sta
     Ok(if working { Some(Busy::Working) } else { queues.first().copied() })
 }
 
+/// Ilegível (antivírus, escrita em curso, arquivo estragado) não prova que nada espera: segura como fila,
+/// que o teto de 24 h ainda solta, em vez de reiniciar o servidor no escuro.
 fn queue_hold(path: &std::path::Path, created: f64) -> Option<Busy> {
-    let bytes = crate::runtime::queue::read_replaced(path).ok()?;
-    let (state, _) = crate::runtime::queue::State::load(&bytes).ok()?;
+    let unreadable = |why: String| {
+        tracing::warn!(path = %path.display(), code = "update_queue_unreadable", "update: fila ilegível segura a atualização: {why}");
+        Some(Busy::Queue)
+    };
+    let bytes = match crate::runtime::queue::read_replaced(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => return unreadable(error.to_string()),
+    };
+    let state = match crate::runtime::queue::State::load(&bytes) { Ok((state, _)) => state, Err(error) => return unreadable(error.to_string()) };
     if state.delivery_uncertain() { return Some(Busy::Uncertain); }
     (!crate::runtime::queue::waiting_ids(&state, created).is_empty()).then_some(Busy::Queue)
 }
@@ -107,6 +117,8 @@ pub async fn tick(machine: &impl Machine, now: Time, since: Option<Time>) -> Tic
             return Tick::Deferred(busy.why().to_owned());
         }
         Ok(Some(busy)) => tracing::warn!("update: adiada há 24 h ({}); atualiza assim mesmo", busy.why()),
+        // Já adiada, não saber se a máquina parou não solta nem zera o teto.
+        Err(e) if since.is_some() => return Tick::Deferred(format!("lista indisponível: {e}")),
         Err(e) => return Tick::Skipped(format!("lista indisponível: {e}")),
     }
     match machine.launch().await {
@@ -206,13 +218,14 @@ mod tests {
         state: Value,
         newer: Option<&'static str>,
         busy: Option<Busy>,
+        list_down: bool,
         launched: AtomicUsize,
     }
 
     impl Default for Fake {
         fn default() -> Fake {
             Fake { channel: Some("latest"), automations: true, state: json!({"fase": "pronto", "ok": true}), newer: Some("0.1.0.9"),
-                busy: None, launched: AtomicUsize::new(0) }
+                busy: None, list_down: false, launched: AtomicUsize::new(0) }
         }
     }
 
@@ -221,7 +234,7 @@ mod tests {
         fn automations(&self) -> bool { self.automations }
         fn state(&self) -> crate::update::StateSnapshot { self.state.as_object().cloned().unwrap().into() }
         async fn newer(&self, _channel: &str) -> Result<Option<String>, String> { Ok(self.newer.map(str::to_owned)) }
-        async fn busy(&self) -> Result<Option<Busy>, String> { Ok(self.busy) }
+        async fn busy(&self) -> Result<Option<Busy>, String> { if self.list_down { Err("list_timeout".into()) } else { Ok(self.busy) } }
         async fn launch(&self) -> Result<(), String> { self.launched.fetch_add(1, Ordering::SeqCst); Ok(()) }
     }
 
@@ -279,5 +292,23 @@ mod tests {
         assert_eq!(next(Some(now()), &deferred, later), (Some(now()), RECHECK), "o adiamento conta desde o primeiro");
         assert_eq!(next(Some(now()), &Tick::Launched { version: "0.1.0.9".into() }, later), (None, INTERVAL));
         assert_eq!(next(Some(now()), &Tick::Skipped("em dia".into()), later), (None, INTERVAL));
+    }
+
+    #[tokio::test]
+    async fn update_periodic_unknown_busy_keeps_a_deferral_without_resetting_the_ceiling() {
+        let down = || Fake { list_down: true, ..Fake::default() };
+        assert!(matches!(tick(&down(), now(), Some(now() - chrono::TimeDelta::hours(23))).await, Tick::Deferred(_)), "já adiada, segue adiada");
+        assert!(matches!(tick(&down(), now(), None).await, Tick::Skipped(_)), "sem adiamento, só pula como antes");
+        let (since, wait) = next(Some(now()), &tick(&down(), now(), Some(now())).await, now());
+        assert_eq!((since, wait), (Some(now()), RECHECK), "o teto conta do primeiro adiamento");
+    }
+
+    #[test]
+    fn update_periodic_unreadable_queue_holds_like_a_waiting_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fila.json");
+        assert_eq!(queue_hold(&path, 0.0), None, "sem arquivo, nada espera");
+        std::fs::write(&path, b"{estragado").unwrap();
+        assert_eq!(queue_hold(&path, 0.0), Some(Busy::Queue));
     }
 }
