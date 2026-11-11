@@ -207,7 +207,7 @@ impl LocalTerminalFacts {
         let plugin = self.plugin_facts(target)?;
         let current = plugin_current(&plugin, target.metadata.cut(target.created));
         if let Some(state) = native.as_ref().and_then(|record| native_state(record["status"].as_str()?)) { idle = state == "idle"; }
-        else if current && let Some(state) = plugin["plugin_state"]["state"].as_str().filter(|_| plugin["waiter_open"] == true || plugin["plugin_state"]["age_ms"].as_u64().is_some_and(|age| age <= 90_000)) { idle = state == "idle"; }
+        else if current && let Some(state) = plugin["plugin_state"]["state"].as_str().filter(|_| plugin_alive(&plugin) || plugin["plugin_state"]["age_ms"].as_u64().is_some_and(|age| age <= 90_000)) { idle = state == "idle"; }
         else {
             let (metadata, conversation, created) = (target.metadata.clone(), binding.conversation.clone(), target.created);
             if let Some(state) = tokio::task::spawn_blocking(move || hook_state(&metadata, &conversation, created)).await.map_err(|_| ServiceError("terminal_hook_unavailable"))?? { idle = state == "idle"; }
@@ -352,6 +352,13 @@ fn current_transcript(procs: &dyn ProcessView, metadata: &TerminalMetadata, conv
     if current.is_empty() { return missing("no_transcript_open", None); }
     Ok(())
 }
+/// Plugin vivo (long-poll aberto ou `/pull` recente) segura o último estado, como em `state::facts`: entre dois
+/// `/pull` o long-poll fecha por um instante.
+fn plugin_alive(plugin: &Value) -> bool {
+    plugin["waiter_open"] == true
+        || plugin["heartbeat_age_ms"].as_u64().is_some_and(|age| Duration::from_millis(age) < crate::state::facts::ALIVE)
+}
+
 fn native_state(status: &str) -> Option<&'static str> { match status { "idle" | "shell" => Some("idle"), "busy" => Some("working"), "waiting" => Some("awaiting_input"), _ => None } }
 fn hook_state(metadata: &TerminalMetadata, conversation: &str, created: f64) -> Result<Option<String>, ServiceError> {
     let Some(record) = read_json(&metadata.config_dir.join(".hangar-state").join(format!("{conversation}.json")), "terminal_hook_unavailable")? else { return Ok(None); };
@@ -517,6 +524,14 @@ mod tests {
     }
     /// Sessão de logon deste processo legível e fora da 0 (a dos serviços); nunca fora do Windows.
     fn interactive_session() -> bool { process_session(std::process::id()).is_some_and(|session| session > 0) }
+    #[test]
+    fn a_live_plugin_keeps_an_old_state_between_two_polls() {
+        // Sessão parada há 10 min, entre dois `/pull`: o long-poll fechado não tira o plugin da decisão.
+        assert!(plugin_alive(&json!({"waiter_open": false, "heartbeat_age_ms": 2_000})));
+        assert!(plugin_alive(&json!({"waiter_open": true})));
+        assert!(!plugin_alive(&json!({"waiter_open": false, "heartbeat_age_ms": 60_000})));
+        assert!(!plugin_alive(&json!({"waiter_open": false, "heartbeat_age_ms": null})));
+    }
     #[tokio::test]
     async fn native_then_current_plugin_then_hook_decide_idle() {
         use crate::plugin::Pull;

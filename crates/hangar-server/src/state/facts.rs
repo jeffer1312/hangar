@@ -38,9 +38,17 @@ impl PluginFacts {
         self.waiter_open || self.heartbeat_age_ms.is_some_and(|age| Duration::from_millis(age) < ALIVE)
     }
 
+    /// Plugin vivo segura o último estado sem prazo: entre um `/pull` e o seguinte o long-poll fica fechado por
+    /// um instante, e um `idle` antigo sumir ali deixa a tela valer.
     pub fn state(&self) -> Option<String> {
-        self.plugin_state.as_ref().filter(|state| self.waiter_open || Duration::from_millis(state.age_ms) <= PLUGIN_STATE)
+        self.plugin_state.as_ref().filter(|state| self.alive() || Duration::from_millis(state.age_ms) <= PLUGIN_STATE)
             .map(|state| state.state.clone())
+    }
+
+    /// Há quanto tempo o plugin mandou o estado que `state` devolve.
+    pub fn state_age(&self) -> Option<Duration> {
+        self.plugin_state.as_ref().filter(|state| self.alive() || Duration::from_millis(state.age_ms) <= PLUGIN_STATE)
+            .map(|state| Duration::from_millis(state.age_ms))
     }
 }
 
@@ -172,7 +180,12 @@ impl Received {
 
     /// `plugin_bridge.estado_recente`: sem prazo com o long-poll aberto.
     pub fn plugin_state(&self, now: Instant) -> Option<&PluginState> {
-        self.facts.plugin_state.as_ref().filter(|p| self.facts.waiter_open || self.age(p.age_ms, now) <= PLUGIN_STATE)
+        self.facts.plugin_state.as_ref().filter(|p| self.alive(now) || self.age(p.age_ms, now) <= PLUGIN_STATE)
+    }
+
+    /// Há quanto tempo o plugin mandou o estado que `plugin_state` devolve.
+    pub fn plugin_state_age(&self, now: Instant) -> Option<Duration> {
+        self.plugin_state(now).map(|p| self.age(p.age_ms, now))
     }
 
     /// `plugin_bridge.pergunta_pendente`.
@@ -297,6 +310,20 @@ mod tests {
         let open = Received { facts: Arc::new(StateFacts { waiter_open: true, ..facts(1) }), at: t0 };
         let hour = t0 + Duration::from_secs(3600);
         assert!(open.alive(hour) && open.plugin_state(hour).is_some(), "long-poll aberto não tem prazo");
+    }
+
+    #[test]
+    fn a_live_plugin_keeps_its_old_state_between_two_polls() {
+        // Sessão parada há 10 min: o long-poll fecha por um instante entre um `/pull` e o seguinte.
+        let state = Some(PluginState { state: "idle".into(), reason: None, age_ms: 600_000 });
+        let t0 = Instant::now();
+        let between = Received { facts: Arc::new(StateFacts { plugin_state: state.clone(), heartbeat_age_ms: Some(2_000), ..facts(1) }), at: t0 };
+        assert_eq!(between.plugin_state(t0).map(|p| p.state.as_str()), Some("idle"));
+        let local = PluginFacts { plugin_state: state.clone(), waiter_open: false, heartbeat_age_ms: Some(2_000), question: None, questions: vec![], suggestion: String::new() };
+        assert_eq!(local.state().as_deref(), Some("idle"));
+        // Plugin que sumiu (sem batida recente): o estado velho deixa de valer.
+        let gone = PluginFacts { heartbeat_age_ms: Some(60_000), ..local };
+        assert_eq!(gone.state(), None);
     }
 
     #[test]

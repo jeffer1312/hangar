@@ -44,6 +44,8 @@ pub struct CaptureFailed { pub code: String, pub attempt: Option<u32> }
 pub struct RoundFacts {
     pub alive: bool,
     pub plugin_state: Option<String>,
+    /// Quando o plugin mandou `plugin_state`, em segundos desde a época (o relógio do marcador dos hooks).
+    pub plugin_state_at: Option<f64>,
     /// A pergunta segurada no formato de `pergunta_pendente` (`id`, `questions`, `tool`, `resumo`).
     pub question: Option<Value>,
     pub questions: Vec<Value>,
@@ -70,6 +72,7 @@ impl RoundFacts {
         Self {
             alive: r.alive(now),
             plugin_state: r.plugin_state(now).map(|p| p.state.clone()),
+            plugin_state_at: r.plugin_state_age(now).map(|age| wall_now() - age.as_secs_f64()),
             question: r.question(now).map(|q| json!({"id": q.id, "questions": q.questions, "tool": q.tool, "resumo": q.resumo})),
             questions: Vec::new(), binding: None, native_selector: None, plan_pending: None,
             in_transfer: r.in_transfer(now),
@@ -148,6 +151,15 @@ pub trait Sources: Send + Sync {
     /// Relógio de parede em segundos, o do `ts` do arquivo do hook e do marcador.
     fn wall(&self) -> f64;
 }
+
+/// O marcador dos hooks é reserva do plugin: só decide quando é mais novo que o último estado do plugin (a
+/// mensagem que chega pelo app abre o turno antes de o plugin avisar). Mais velho, o plugin já respondeu depois.
+/// A hora do plugin é a da chegada ao servidor e a do marcador é a da escrita: a folga cobre a entrega.
+fn marker_older_than_plugin(marker_ts: Option<f64>, plugin_at: Option<f64>) -> bool {
+    matches!((marker_ts, plugin_at), (Some(marker), Some(plugin)) if marker < plugin - MARKER_SLACK_S)
+}
+
+const MARKER_SLACK_S: f64 = 1.0;
 
 pub fn wall_now() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
@@ -512,9 +524,10 @@ impl<S: Sources> Monitor<S> {
         }
         let selectors: Vec<_> = facts.questions.iter().filter(|q| q["id"].as_str().is_some_and(|id| id.starts_with("perm:"))).cloned().collect();
         let selector = super::facts::plugin_surfaces(&selectors).ok().and_then(|(question, _)| question.cloned()).or_else(|| facts.question.clone());
+        let hook_state = files.marker.filter(|_| !marker_older_than_plugin(files.marker_ts, facts.plugin_state_at));
         let reducer_facts = ReducerFacts {
             open_question: files.open_question, plugin_question: selector, plugin_state: facts.plugin_state,
-            hook_state: files.marker, hook_grace: Some(HOOK_GRACE), status_line: files.status_line,
+            hook_state, hook_grace: Some(HOOK_GRACE), status_line: files.status_line,
         };
         let (reduced, diagnostic) = terminal_state::reduce_analysis(frame.analysis, std::mem::take(&mut self.mem.reducer), reducer_facts);
         self.mem.reducer = reduced.memory;
@@ -590,6 +603,19 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+
+    #[test]
+    fn the_hook_marker_only_decides_when_newer_than_the_plugin_state() {
+        // Turno acabou: o plugin disse idle depois do último `working` do marcador.
+        assert!(marker_older_than_plugin(Some(100.0), Some(102.0)));
+        // Mensagem do app: o marcador viu o turno novo antes do plugin.
+        assert!(!marker_older_than_plugin(Some(102.0), Some(101.0)));
+        // Marcador escrito pouco antes de o `idle` do plugin chegar ao servidor: a entrega não o descarta.
+        assert!(!marker_older_than_plugin(Some(100.5), Some(101.0)));
+        // Sem uma das horas, o marcador segue como reserva.
+        assert!(!marker_older_than_plugin(Some(100.0), None));
+        assert!(!marker_older_than_plugin(None, Some(101.0)));
+    }
 
     /// Fonte de mentira: um quadro por rodada, repetindo o último quando acabam.
     struct Fake {

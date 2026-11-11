@@ -114,7 +114,8 @@ export function registerState(on: On) {
   });
 
   on("turn.start", async ($, e, next) => {
-    await send($, "working");
+    // Turno de subagente (o de outro plugin, os de fundo) roda com a sessão parada: o fim dele já não conta.
+    if (!e.agentId) await send($, "working");
     return next(e);
   });
 

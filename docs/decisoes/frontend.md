@@ -1356,7 +1356,7 @@ conferiu o que o plano listava. Por isso a regra pede a lista das superfícies n
 lateral (cheia e trilho), abas com a bandeja, seletor e busca no nativo; `SessionList` no PWA;
 lista, barra do tablet e seletor no Expo.
 
-## Nativo: prévia refeita só no fim e transcript inteiro devolvido depois da busca (10/11/2026)
+## Nativo: prévia refeita só no fim (10/11/2026)
 
 Com a resposta chegando, cada passo da animação reprocessava o texto inteiro já visível (plano,
 fecho de marcação pendente, citações e escape). A `PreviewSource` guarda a saída das linhas prontas e
@@ -1364,9 +1364,6 @@ refaz só o fim; o resultado é o da passada completa, e texto que não continua
 zero. Medido em release, com o texto crescendo de 3 em 3 caracteres: resposta de 20 KB de 296 µs
 para 16,4 µs por passo em média; de 1 KB, de 16,1 µs para 3,3 µs.
 
-Ctrl+F e a volta a uma citação carregam o transcript inteiro, e ele ficava na memória até trocar de
-sessão. Dez minutos depois do último uso (`FULL_HISTORY_KEEP`), com a leitura dentro da janela
-normal, os eventos anteriores a ela saem; "Carregar anteriores" os traz de volta. Quem lê lá atrás
-não é tirado do lugar: o corte espera a volta à janela. A espera existe porque o corte imediato
-fazia a busca seguinte baixar e remontar tudo de novo, e velocidade vem antes de memória. No corte,
-as linhas mantidas são medidas outra vez de uma só vez.
+O transcript inteiro que Ctrl+F e a volta a uma citação carregam fica na memória até trocar de
+sessão. Um corte dele 10 minutos depois do último uso entrou em 10/11 e saiu em 11/11: apagava
+linhas e refazia a conversa na frente da pessoa, sem ganho de memória medido.

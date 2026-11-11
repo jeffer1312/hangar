@@ -56,10 +56,13 @@ export function WorkingLine({ label, since }: { label?: string | null; since: nu
   const verbo = lido.text ?? m.native_working_line();
   const tempo = lido.elapsed ?? (since !== null ? formatElapsed(Math.max(0, agora - since) / 1000) : '');
   return (
-    <View style={styles.linha} accessibilityRole="text" accessibilityLiveRegion="polite" accessibilityLabel={verbo}>
+    <View style={styles.linha} accessibilityRole="text" accessibilityLiveRegion="polite"
+      accessibilityLabel={[verbo, tempo, lido.detail].filter(Boolean).join(', ')}>
       <WorkingMark size={16} color={theme.tokens.accent.base} />
       <Text style={[styles.verbo, { color: theme.tokens.text.secondary }]} numberOfLines={1}>{verbo}</Text>
       {tempo ? <Text style={[styles.tempo, { color: theme.tokens.text.muted }]}>{tempo}</Text> : null}
+      {/* Os tokens cedem a linha antes do verbo e do tempo. */}
+      {lido.detail ? <Text style={[styles.detalhe, { color: theme.tokens.text.muted }]} numberOfLines={1}>{lido.detail}</Text> : null}
     </View>
   );
 }
@@ -163,6 +166,8 @@ const styles = StyleSheet.create((theme) => ({
   linha: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], minHeight: 32 },
   verbo: { flexShrink: 1, fontSize: theme.base.text.xs },
   tempo: { flexShrink: 0, fontSize: theme.base.text.xxs, fontVariant: ['tabular-nums'] },
+  // O encolhimento pesa pelo tamanho do texto: o peso alto faz os tokens cederem antes do verbo.
+  detalhe: { flexShrink: 100, minWidth: 0, fontSize: theme.base.text.xxs, fontVariant: ['tabular-nums'] },
   pensamento: { gap: theme.base.space[0.5] },
   cauda: { fontSize: theme.base.text.xs, fontStyle: 'italic', paddingLeft: 23 },
   agentes: { gap: theme.base.space[1] },

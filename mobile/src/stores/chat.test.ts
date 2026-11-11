@@ -386,6 +386,23 @@ test('delta de mod sem base desta conexão expõe erro, conserva vista e reconec
   }
 });
 
+test('tela remontada logo em seguida mantém a conexão e não recarrega a conversa', async () => {
+  _resetChatsForTests(50);
+  const chat = chatStore('srv1', 'sess');
+  chat.retain();
+  await tick();
+  expect(created).toHaveLength(1);
+  const loads = historyCalls;
+  chat.release();
+  chat.retain();
+  await tick();
+  expect(created).toHaveLength(1);
+  expect(created[0].close).not.toHaveBeenCalled();
+  expect(historyCalls).toBe(loads);
+  chat.release();
+  await vi.waitFor(() => expect(created[0].close).toHaveBeenCalled(), { timeout: 5_000 });
+});
+
 test('mods são isolados por servidor e ignoram quadros de fonte fechada', async () => {
   const first = chatStore('srv1', 'sess');
   const other = chatStore('srv2', 'sess');
@@ -570,8 +587,7 @@ test('(c) preview some quando o assistant_msg real chega', async () => {
   expect(chat.use.getState().preview).toBe('pensando…');
 
   created[0].trigger('preview', JSON.stringify({ text: 'pensando mais', md: true, full: true }));
-  await new Promise((r) => setTimeout(r, 60));
-  expect(chat.use.getState().preview).toBe('pensando mais');
+  await vi.waitFor(() => expect(chat.use.getState().preview).toBe('pensando mais'), { timeout: 5_000 });
 
   created[0].trigger(
     'message',

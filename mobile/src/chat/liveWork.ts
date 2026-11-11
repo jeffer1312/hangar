@@ -5,14 +5,18 @@ import type { ChatEvent, SubagentRun } from '@hangar/core';
 // meio do turno, quando o envio que o começou já saiu da janela carregada.
 const STATS = /\s\(([^()]*)\)\s*$/;
 const ELAPSED = /^\d+[hms](?:\s\d+[hms])*$/;
+const TOKENS = /^[↑↓]\s.*\btokens$/;
 
-export function workingLabel(label: string | null | undefined): { text: string | null; elapsed: string | null } {
+export function workingLabel(label: string | null | undefined): { text: string | null; elapsed: string | null; detail: string | null } {
   const raw = label?.trim();
-  if (!raw) return { text: null, elapsed: null };
+  if (!raw) return { text: null, elapsed: null, detail: null };
   const stats = STATS.exec(raw);
-  const first = stats?.[1].split(' · ')[0]?.trim() ?? '';
+  const parts = stats?.[1].split(' · ').map((p) => p.trim()) ?? [];
+  const elapsed = parts[0] && ELAPSED.test(parts[0]) ? parts[0] : null;
   const text = (stats ? raw.slice(0, stats.index) : raw).trim();
-  return { text: text || null, elapsed: ELAPSED.test(first) ? first : null };
+  // Só a contagem de tokens ("↓ 6.0k tokens"), como o `working_tokens` do app de desktop.
+  const detail = parts.find((p) => TOKENS.test(p)) ?? null;
+  return { text: text || null, elapsed, detail };
 }
 
 // Começo do turno (ms epoch): o mais recente entre o último envio gravado e a virada vista ao vivo.
