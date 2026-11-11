@@ -2281,12 +2281,14 @@ async fn probe_that_does_not_restore_still_answers_the_list() {
 // ── Seletor do `/model` no ator ─────────────────────────────────────────────────────────────────────
 /// As capturas da tela (sem `-e`) saem do roteiro do golden, a última fica; as da guarda e o resto vão ao
 /// `Io` da fixture. As teclas só são anotadas.
-struct PickerIo {inner:Arc<Io>,script:Mutex<std::collections::VecDeque<String>>,keys:Mutex<Vec<String>>}
+struct PickerIo {inner:Arc<Io>,script:Mutex<std::collections::VecDeque<String>>,keys:Mutex<Vec<String>>,default_write:Mutex<Option<(std::path::PathBuf,String)>>}
 impl TerminalIo for PickerIo {
     fn command<'a>(&'a self,r:CommandRequest)->IoFuture<'a,CommandOutput> { Box::pin(async move {
         if r.args[0]=="send-keys" {
             let key=r.args.last().unwrap().clone();
-            self.keys.lock().unwrap().push(if key=="\r" {"Enter".into()} else {key});
+            let enter=key=="\r" || key=="Enter";
+            self.keys.lock().unwrap().push(if enter {"Enter".into()} else {key});
+            if enter && let Some((path,contents))=self.default_write.lock().unwrap().take() {std::fs::write(path,contents).unwrap();}
             return Ok(CommandOutput {success:true,stdout:vec![]});
         }
         if r.args[0]=="capture-pane" && !r.args.contains(&"-e".into()) {
@@ -2305,7 +2307,7 @@ fn picker_golden(name:&str)->Value {
 }
 fn picker_actor(f:&Fixture,case:&Value)->(Arc<PickerIo>,hangar_server::runtime::terminal::TerminalHandle) {
     let script=case["panes"].as_array().unwrap().iter().map(|p|p.as_str().unwrap().to_owned()).collect();
-    let io=Arc::new(PickerIo {inner:f.io.clone(),script:Mutex::new(script),keys:Default::default()});
+    let io=Arc::new(PickerIo {inner:f.io.clone(),script:Mutex::new(script),keys:Default::default(),default_write:Default::default()});
     let lease=crate::lease_when_free(&f.target.lease_path);
     let store=Store::open(&f.target.state_path,&f.target.projection_dir,queue::State::new("key",1,"session",vec![])).unwrap();
     let terms=Arc::new(hangar_server::term::Terms::new(hangar_server::term::TermConfig::default()));
@@ -2325,6 +2327,26 @@ async fn model_picker_b20_success_answers_python_json_and_is_journaled() {
     assert_eq!((reply.disposition,&reply.payload),(hangar_server::runtime::protocol::Disposition::Accepted,&case["expect"]["ok"]));
     assert_eq!(f.state()["operations"]["me"]["status"],"accepted");
     h.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn model_picker_accepts_the_full_claude_catalog_id_through_actor() {
+    let f=Fixture::new().await;
+    let settings=f.target.metadata.config_dir.join("settings.json");
+    std::fs::write(&settings,json!({"model":"opus[1m]","unrelated":"before"}).to_string()).unwrap();
+    let idle=picker_golden("session_navigates_and_presses_s")["panes"][0].as_str().unwrap().to_owned();
+    let result=format!("  ⎿  Set model to Fable 5.2 and saved as your default for new sessions\n{idle}");
+    let (io,h)=picker_actor(&f,&json!({"panes":[idle.clone(),idle.clone(),idle,result]}));
+    *io.default_write.lock().unwrap()=Some((settings.clone(),json!({"model":"claude-fable-5-2","unrelated":"after"}).to_string()));
+    let reply=h.control("fable".into(),"set_model_effort".into(),json!({"model":"claude-fable-5-2","scope":"session"})).await;
+    h.stop().await.unwrap();
+    let reply=reply.unwrap();
+    assert_eq!(reply.disposition,hangar_server::runtime::protocol::Disposition::Accepted,"{reply:?}");
+    assert_eq!(reply.payload["scope"],"session");
+    assert_eq!(*io.keys.lock().unwrap(),["/model claude-fable-5-2","Enter"]);
+    let after:Value=serde_json::from_slice(&std::fs::read(settings).unwrap()).unwrap();
+    assert_eq!(after["model"],"opus[1m]");
+    assert_eq!(after["unrelated"],"after");
 }
 
 /// B10/B11: com o teclado emprestado o seletor não digita, e a recusa tem o código do Python.

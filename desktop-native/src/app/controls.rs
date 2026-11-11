@@ -281,17 +281,19 @@ fn only_match(names: &[String], current: &str) -> Option<usize> {
 // Porta de `matchCurrent` do web: a linha de status vence o `active`, que envelhece no picker.
 fn claude_model_current(models: &[(String, bool)], status: &str) -> Option<usize> {
     let active = || models.iter().position(|(_, a)| *a);
-    let status = status.trim().to_lowercase();
+    let normalized = |value: &str| value.to_lowercase().replace("(1m context)", "[1m]").replace("·1m", "[1m]")
+        .chars().filter(|c| !c.is_whitespace()).collect::<String>();
+    let status = normalized(status);
     if status.is_empty() { return active(); }
-    if let Some(i) = models.iter().position(|(id, _)| id.to_lowercase() == status) { return Some(i); }
+    if let Some(i) = models.iter().position(|(id, _)| normalized(id) == status) { return Some(i); }
     let million = status.contains("1m");
     let base = |id: &str| {
-        let id = id.to_lowercase();
+        let id = normalized(id);
         match id.rfind('[') { Some(p) if id.ends_with(']') => id[..p].to_owned(), _ => id }
     };
     let candidates: Vec<usize> = models.iter().enumerate()
         .filter(|(_, (id, _))| id != "default" && !base(id).is_empty() && status.contains(&base(id))).map(|(i, _)| i).collect();
-    candidates.iter().copied().find(|&i| models[i].0.to_lowercase().ends_with("[1m]") == million)
+    candidates.iter().copied().find(|&i| normalized(&models[i].0).ends_with("[1m]") == million)
         .or_else(|| candidates.first().copied()).or_else(active)
 }
 
@@ -553,9 +555,15 @@ impl Hangar {
                 let engine = text(catalog, "kind") == "engine";
                 let models = list(catalog, "models");
                 let ids: Vec<(String, bool)> = models.iter().map(|m| (text(m, "id"), m.get("active").and_then(Value::as_bool) == Some(true))).collect();
+                let labels: Vec<(String, bool)> = models.iter().zip(&ids).map(|(model, (id, _))| {
+                    let mut label = text(model, "name");
+                    if label.is_empty() || id == "default" { label = id.clone(); }
+                    if id.ends_with("[1m]") && !label.to_lowercase().contains("1m") { label.push_str("[1m]"); }
+                    (label, false)
+                }).collect();
                 let confirmed = catalog.pointer("/current/model").and_then(Value::as_str).filter(|_| engine);
                 let on = confirmed.map(|model| ids.iter().position(|(id, _)| id == model || Some(id.as_str()) == claude_context_model(catalog, model)))
-                    .unwrap_or_else(|| claude_model_current(&ids, &current));
+                    .unwrap_or_else(|| claude_model_current(&labels, &current).or_else(|| claude_model_current(&ids, &current)));
                 models.iter().enumerate().map(|(n, m)| {
                     let id = text(m, "id");
                     let name = Some(text(m, "name")).filter(|n| !n.is_empty()).unwrap_or_else(|| id.clone());
