@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use axum::{
-    body::Body,
     http::{HeaderMap, StatusCode, header},
     response::Response,
 };
@@ -81,12 +80,8 @@ fn multipart_file(
     etag: &str,
     ranges: Vec<(u64, u64)>,
 ) -> std::io::Result<Response> {
+    use crate::stream::{Piece, file_stream};
     use ring::rand::SecureRandom;
-    use tokio::io::{AsyncReadExt, AsyncSeekExt};
-    enum Piece {
-        Literal(bytes::Bytes),
-        Data { offset: u64, left: u64 },
-    }
     let mut random = [0u8; 13];
     ring::rand::SystemRandom::new()
         .fill(&mut random)
@@ -106,42 +101,19 @@ fn multipart_file(
             size
         );
         length += prefix.len() as u64 + end - start + 2;
-        pieces.push_back(Piece::Literal(prefix.into()));
+        pieces.push_back(Piece::Bytes(prefix.into()));
         if end > start {
             pieces.push_back(Piece::Data {
                 offset: start,
                 left: end - start,
             });
         }
-        pieces.push_back(Piece::Literal(bytes::Bytes::from_static(b"\r\n")));
+        pieces.push_back(Piece::Bytes(bytes::Bytes::from_static(b"\r\n")));
     }
     let suffix = format!("--{boundary}--");
     length += suffix.len() as u64;
-    pieces.push_back(Piece::Literal(suffix.into()));
-    let stream =
-        futures_util::stream::try_unfold((file, pieces), |(mut file, mut pieces)| async move {
-            match pieces.pop_front() {
-                None => Ok::<_, std::io::Error>(None),
-                Some(Piece::Literal(bytes)) => Ok(Some((bytes, (file, pieces)))),
-                Some(Piece::Data { offset, left }) => {
-                    file.seek(std::io::SeekFrom::Start(offset)).await?;
-                    let mut bytes = vec![0; (left.min(64 * 1024)) as usize];
-                    let count = file.read(&mut bytes).await?;
-                    if count == 0 {
-                        return Err(std::io::ErrorKind::UnexpectedEof.into());
-                    }
-                    bytes.truncate(count);
-                    if left > count as u64 {
-                        pieces.push_front(Piece::Data {
-                            offset: offset + count as u64,
-                            left: left - count as u64,
-                        });
-                    }
-                    Ok(Some((bytes.into(), (file, pieces))))
-                }
-            }
-        });
-    let mut response = Response::new(Body::from_stream(stream));
+    pieces.push_back(Piece::Bytes(suffix.into()));
+    let mut response = Response::new(file_stream(file, pieces));
     *response.status_mut() = StatusCode::PARTIAL_CONTENT;
     for (name, value) in [
         (
