@@ -314,14 +314,18 @@ fn unnumbered_menu(lines: &[&str]) -> Option<TerminalQuestion> {
     Some(TerminalQuestion { question, options })
 }
 
-/// O `*` comum também é um quadro da animação do Claude, mas só vale logo acima da caixa de mensagem: fora
-/// dali é texto. Sem ele, o quadro pulava para o resumo do turno anterior que segue mais acima na tela.
+/// O `*` comum também é um quadro da animação do Claude ("* Precipitating… (2m 12s)"), mas só vale com esse
+/// formato e logo acima da caixa de mensagem: fora disso é texto, como um item de lista. Sem ele, o quadro
+/// pulava para o resumo do turno anterior que segue mais acima na tela. O Claude Code nem sempre limpa a linha
+/// inteira: o que sobra de outro texto fica à direita, depois de uma fileira de espaços, e sai daqui.
 fn live_spinner(lines: &[&str]) -> Option<String> {
+    let ascii = |s: &str| s.strip_prefix("* ").and_then(|rest| rest.split_once(' '))
+        .is_some_and(|(verb, more)| verb.ends_with('…') && more.starts_with('('));
     lines.iter().enumerate().rev().map(|(i, l)| (i, trim(l))).find(|(i, s)| {
         let mut chars = s.chars();
         chars.next().is_some_and(|c| SPINNERS.contains(c)) && chars.next() == Some(' ')
-            || P.ascii_spinner.is_match(s) && lines[i + 1..].iter().find(|l| !trim(l).is_empty()).is_some_and(|l| P.rule.is_match(l))
-    }).map(|(_, s)| String::from(s))
+            || ascii(s) && lines[i + 1..].iter().find(|l| !trim(l).is_empty()).is_some_and(|l| P.rule.is_match(l))
+    }).map(|(_, s)| String::from(s.split("   ").next().unwrap_or(s)))
 }
 
 fn status_line(lines: &[&str]) -> Option<String> {
@@ -741,9 +745,14 @@ mod tests {
             assert_eq!(analysis.state, "working", "{glyph}");
             assert_eq!(analysis.label.as_deref(), Some("Precipitating… (2m 12s · ↓ 9.3k tokens)"), "{glyph}");
         }
-        // Fora do lugar da animação, o `*` segue sendo texto.
-        let pane = format!("{DONE}\n\n● resposta\n* Precipitating… (2m 12s)\nfora\n\n{RULE}\n❯ \n{RULE}\n");
-        assert_eq!(super::analyze(&pane).spinner.as_deref(), Some(DONE));
+        // Resto de outro texto que ficou à direita na mesma linha não entra no rótulo.
+        let pane = format!("● resposta\n\n✶ Thundering… (1m 15s · ↓ 5.3k tokens)                    -n\\n{{RULE}}\\n❯ \\n\");\n\n{RULE}\n❯ \n{RULE}\n");
+        assert_eq!(super::analyze(&pane).label.as_deref(), Some("Thundering… (1m 15s · ↓ 5.3k tokens)"));
+        // Fora do lugar da animação, ou sem o formato dela, o `*` segue sendo texto.
+        for tail in ["* Precipitating… (2m 12s)\nfora", "* item da lista (veja acima)", "* passo seguinte…"] {
+            let pane = format!("{DONE}\n\n● resposta\n{tail}\n\n{RULE}\n❯ \n{RULE}\n");
+            assert_eq!(super::analyze(&pane).spinner.as_deref(), Some(DONE), "{tail}");
+        }
     }
 
     #[test]
