@@ -121,6 +121,13 @@ async fn python_receives_connect_peer_on_pass() {
     let (_, headers) = python.last_hit();
     assert_eq!(headers["x-forwarded-for"], "127.0.0.1");
     assert_eq!(headers["x-forwarded-proto"], "http");
+    // Com `*` um `127.0.0.1` forjado também não chega ao Python como cliente local.
+    let (python, _main, connect, device) = server("*").await;
+    let forged = get(connect, "/api/qualquer").bearer_auth(&device).header("x-forwarded-for", "127.0.0.1");
+    assert_eq!(forged.send().await.unwrap().status(), 200);
+    let (_, headers) = python.last_hit();
+    assert_eq!(headers["x-forwarded-for"], "192.0.2.1");
+    assert_eq!(headers["x-forwarded-proto"], "https");
 }
 
 #[tokio::test]

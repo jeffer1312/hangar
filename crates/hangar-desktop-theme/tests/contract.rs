@@ -337,11 +337,38 @@ async fn desktop_contract_preserves_palette_wallpaper_and_local_http() {
         .to_owned();
     assert!(content_type.starts_with("multipart/byteranges; boundary="));
     let boundary = content_type.split("boundary=").nth(1).unwrap();
+    let length = multiple.headers()["content-length"].to_str().unwrap().to_owned();
     let bytes = to_bytes(multiple.into_body(), 4096).await.unwrap();
     let text = String::from_utf8_lossy(&bytes);
     assert!(text.contains("Content-Range: bytes 0-1/24"));
     assert!(text.contains("Content-Range: bytes 6-7/24"));
     assert!(text.ends_with(&format!("--{boundary}--")));
+    let multipart = |boundary: &str, file: &[u8], ranges: &[(usize, usize)]| {
+        let mut body = Vec::new();
+        for &(start, end) in ranges {
+            body.extend_from_slice(format!("--{boundary}\r\nContent-Type: image/png\r\nContent-Range: bytes {start}-{end}/{}\r\n\r\n", file.len()).as_bytes());
+            body.extend_from_slice(&file[start..=end]);
+            body.extend_from_slice(b"\r\n");
+        }
+        body.extend_from_slice(format!("--{boundary}--").as_bytes());
+        body
+    };
+    let expected = multipart(boundary, b"\x89PNG fingindo ser imagem", &[(0, 1), (6, 7)]);
+    assert_eq!(bytes.as_ref(), expected.as_slice());
+    assert_eq!(length, expected.len().to_string());
+    // Intervalo maior que um bloco de leitura de 64 KiB.
+    let large = (0..200_000u32).map(|i| (i % 251) as u8).collect::<Vec<_>>();
+    fs::write(&image, &large).unwrap();
+    let chunked = request(&app, "/api/desktop/wallpaper", "GET", &[("range", "bytes=10-99999,150000-150009")]).await;
+    assert_eq!(chunked.status(), StatusCode::PARTIAL_CONTENT);
+    let content_type = chunked.headers()["content-type"].to_str().unwrap().to_owned();
+    let boundary = content_type.split("boundary=").nth(1).unwrap();
+    let length = chunked.headers()["content-length"].to_str().unwrap().to_owned();
+    let expected = multipart(boundary, &large, &[(10, 99_999), (150_000, 150_009)]);
+    let bytes = to_bytes(chunked.into_body(), 300_000).await.unwrap();
+    assert_eq!(bytes.as_ref(), expected.as_slice());
+    assert_eq!(length, expected.len().to_string());
+    fs::write(&image, b"\x89PNG fingindo ser imagem").unwrap();
     for method in ["POST", "HEAD"] {
         let response = request(&app, "/api/desktop/palette", method, &[]).await;
         assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
