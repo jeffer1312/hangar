@@ -4433,6 +4433,37 @@ no servidor, contra a regra "módulo novo nasce como crate próprio":
 
 Saem do servidor com as áreas a que pertencem, nessas duas etapas do plano.
 
+## Paleta e papel de parede no Rust (10/11/2026)
+
+**Regra.** `hangar-desktop-theme`, sobre o core, atende `/api/desktop/palette` e
+`/api/desktop/wallpaper`. Dono autenticado e cliente efetivo local são exigidos nos dois;
+proxy e Connect não ganham acesso por chegarem a um socket local. O SCSS Material You é a
+única fonte da paleta. Wallpaper vem do ponteiro do desktop fora do Windows e de HKCU
+`Control Panel\Desktop`, valor `WallPaper`, no Windows. Conteúdo e ponteiro são relidos em
+cada pedido, sem cache de tema/imagem.
+
+**Contrato.** Mantém todos os tokens obrigatórios e as cores extras, o último valor de
+declarações repetidas, BOM inicial no SCSS e UTF-8 com substituição. Paleta incompleta ou
+ausente conserva o tema do app. Wallpaper exige arquivo regular e extensão permitida;
+não passa a validar assinatura. Expansão de usuário conserva o comportamento anterior.
+O último aviso é compartilhado entre os dois recursos: sucesso/ausência de paleta limpa,
+sucesso/ausência de wallpaper não. Ausências retornam os mesmos códigos 404.
+
+**Transporte.** `hangar-http-file` reúne o código de arquivo já usado por workspace e áudio.
+Os consumidores originais o reutilizam sem depender do feature. Imagem do desktop conserva
+`Cache-Control: no-store`, MIME, ETag, Last-Modified e intervalos, sem o 304 de arquivo estático.
+O modo de cache e o sandbox dos arquivos existentes permanecem; o áudio conserva a validação
+de If-Range pelo ETag, e wallpaper aceita também a data conforme o transporte anterior.
+Não há leitor, handlers, guarda local exclusiva, fixtures ou testes Python desse recurso.
+
+**Prova do recorte.** Inventário de 24 comportamentos e 25 casos Python existentes, executados
+como referência antes da remoção. Os recortes reais azul/vermelho foram preservados em fixtures
+Rust. O teste contratual novo falhou com o leitor vazio antes da implementação. Provas focadas
+cobrem fontes, transições de diagnóstico, clientes locais/remotos, cache e intervalos; a tabela
+de propriedade de rotas foi incluída desde o início. Provas aprovadas são reaproveitadas no PR;
+cobertura global fica com o CI. Cabeçalhos de compressão/framing do servidor ficam fora da
+comparação da representação, e a fronteira aleatória multipart é comparada pela estrutura.
+
 ## Plugins do Claude na tela: a CLI oficial na pasta principal (09/11/2026)
 
 A tela de Plugins chama `claude plugin …` (CLI 2.1.319) com a pasta padrão `~/.claude`, sem

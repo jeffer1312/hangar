@@ -8,6 +8,27 @@ use std::{
 mod omp;
 pub use omp::{OmpDirectories, omp_directories, valid_omp_profile};
 
+/// Pasta de um usuário nomeado, consultada pelo mesmo serviço de nomes do sistema.
+#[cfg(unix)]
+#[allow(unsafe_code)] // A ABI de nomes não tem equivalente seguro para outro usuário no std.
+pub fn named_user_home(user: &str) -> Option<PathBuf> {
+    use std::{ffi::{CStr, CString, OsStr}, os::unix::ffi::OsStrExt};
+    let name = CString::new(user).ok()?;
+    let mut size = 1024;
+    loop {
+        let mut storage = vec![0u8; size];
+        let mut record = std::mem::MaybeUninit::<libc::passwd>::uninit();
+        let mut result = std::ptr::null_mut();
+        // Os buffers pertencem à chamada e só são lidos após a confirmação do sistema.
+        let code = unsafe { libc::getpwnam_r(name.as_ptr(), record.as_mut_ptr(), storage.as_mut_ptr().cast(), storage.len(), &mut result) };
+        if code == libc::ERANGE { size = size.checked_mul(2)?; continue; }
+        if code != 0 || result.is_null() { return None; }
+        let record = unsafe { record.assume_init() };
+        if record.pw_dir.is_null() { return None; }
+        return Some(PathBuf::from(OsStr::from_bytes(unsafe { CStr::from_ptr(record.pw_dir) }.to_bytes())));
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Account {
     pub id: String,

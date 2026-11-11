@@ -29,7 +29,7 @@ from app import (atomico, closed_names, diag,
                  loop_monitor, permission_mode, plugin_bridge, procinfo, quem_chama, tmux,
                  uds_messaging)
 from app import groups_bridge, internal_api, list_bridge, migration_status, share_bridge
-from app.auth import require_auth, require_loopback
+from app.auth import require_auth
 from app.send_executor import send_thread as _send_thread
 from app.model_picker import PickerError
 from app.mensagens import erro
@@ -76,7 +76,6 @@ from app.codex_contas_login import CodexContasLogin
 from app.pair import PairLink
 from app.hook_state import hook_state
 from app.deploy import deploy_router
-from app import desktop_palette
 
 _log = logging.getLogger("hangar")
 
@@ -1412,29 +1411,6 @@ async def diag_arquivo():
     return Response(
         content=texto, media_type="application/x-ndjson",
         headers={"Content-Disposition": 'attachment; filename="hangar-uso.jsonl"'})
-
-
-@app.get("/api/desktop/palette", dependencies=[Depends(require_auth), Depends(require_loopback)])
-def desktop_palette_get():
-    # 404 e resposta de negocio, nao erro: e como o front sabe que nao ha rice nesta maquina e
-    # esconde a opcao.
-    p = desktop_palette.ler()
-    if p is None:
-        raise HTTPException(status_code=404, detail=erro("erro_sem_paleta", "sem paleta"))
-    return p
-
-
-@app.get("/api/desktop/wallpaper", dependencies=[Depends(require_auth), Depends(require_loopback)])
-def desktop_wallpaper_get():
-    # A imagem que o rice esta usando agora, pro modo "Vidro" do fundo Desktop desenhar ela DENTRO da
-    # pagina (backdrop-filter so enxerga o que a propria pagina pintou; atras de janela transparente
-    # nao ha pixel nenhum pra virar vidro). 404 = sem rice/sem foto, e o front esconde a opcao.
-    p = desktop_palette.wallpaper()
-    if p is None:
-        raise HTTPException(status_code=404, detail=erro("erro_sem_papel_de_parede", "sem papel de parede"))
-    # Sem cache do navegador: trocar o papel de parede mantem a URL e so muda o conteudo, entao um
-    # 304 deixaria a foto velha na tela ate alguem limpar o cache.
-    return FileResponse(p, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/costs", dependencies=[Depends(require_auth)], response_model=CostReport)
