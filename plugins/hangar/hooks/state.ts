@@ -6,8 +6,13 @@ const MEASURE_TIMEOUT_MS = 2_000;
 
 // O scanner do engine não segue `$` através de um import: o envio fica aqui, e
 // do bridge.ts vem só o endereço.
+// Fica no `$.state` da sessão, que sobrevive à recarga do plugin; a variável do bridge.ts recomeça.
+const LAST = { plugin: "hangar", key: "lastState" } as const;
+
 async function send($: EngineInterface, estado: string, extra: Record<string, unknown> = {}, measure = false) {
   setLastState(estado);
+  // Dentro do `ui.render` (a pergunta desenhada) o engine recusa a escrita: ali fica o estado anterior.
+  await $.state.set(LAST, estado).catch(() => {});
   const p = bridge();
   if (!p) return;
   try {
@@ -100,8 +105,11 @@ function agentLife($: EngineInterface, agentId: string, estado: AgentEstado): Pr
  * Só avisa a transição; quem decide o rótulo continua sendo o backend, que já
  * tem a máquina de estados e as outras fontes (Codex, Pi, Kimi). */
 export function registerState(on: On) {
+  // A atualização do Hangar recarrega o plugin no meio do turno, e a recarga roda o `session.start` de novo:
+  // o estado é o que a sessão já tinha, não `idle`.
   on("session.start", async ($, e, next) => {
-    await send($, "idle", { cwd: await $.session.cwd(), model: await $.session.model() });
+    const { value = "idle" } = await $.state.get(LAST);
+    await send($, value, { cwd: await $.session.cwd(), model: await $.session.model() });
     return next(e);
   });
 

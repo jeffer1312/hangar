@@ -39,6 +39,6 @@ export type VerificarBoard = { now: number; runs: VerificarRun[] };
 
 declare module "claude-code" {
   interface PluginState {
-    hangar: { verificarBoard: VerificarBoard; backgroundShells: BackgroundShell[] };
+    hangar: { verificarBoard: VerificarBoard; backgroundShells: BackgroundShell[]; lastState: string };
   }
 }
