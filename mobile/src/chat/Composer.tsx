@@ -1637,9 +1637,59 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
     };
   }, []);
 
+  // Linha do app de PC: + e microfone sem moldura à esquerda; o chip da sessão e o Enviar
+  // fecham a linha. Com o Orientar, o chip encolhe o nome do modelo mas nada sai, como no PWA.
+  const actions = (
+    <ComposerActions
+      attach={{ onPress: () => setAttachMenuOpen(true), disabled: attachBlocked, busy: uploading }}
+      mic={{ onPress: () => void handleMicPress(), disabled: micBlocked, busy: busyVoice, recording: gravando,
+        styleLabel: dictationStyle, onStyle: () => setStyleMenuOpen(true) }}
+      settings={<SessionSettingsButton serverId={serverId} name={name} provider={provider} headless={headless} openRequest={selectorRequest} />}
+      afterSettings={<>
+        {/* Parar: só o quadrado vermelho, sem círculo em volta, como no PC. */}
+        {showStop ? (
+          <Pressable
+            onPress={confirmStop}
+            disabled={stopping}
+            hitSlop={5}
+            style={({ pressed }) => [styles.roundBtn, pressed && styles.iconBtnPressed, stopping && styles.iconBtnDisabled]}
+            accessibilityLabel={m.composer_parar()}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: stopping, busy: stopping }}
+          >
+            {stopping ? (
+              <ActivityIndicator size="small" color={theme.tokens.status.error} />
+            ) : (
+              <View style={[styles.stopMark, { backgroundColor: theme.tokens.status.error }]} />
+            )}
+          </Pressable>
+        ) : null}
+        {showTextSteer ? (
+          <Pressable
+            onPress={() => void handleSteerText()}
+            disabled={!canSteerText}
+            hitSlop={7}
+            accessibilityRole="button"
+            accessibilityLabel={m.composer_steer_current_text()}
+            accessibilityHint={m.codex_orientar_ajuda()}
+            accessibilityState={{ disabled: !canSteerText, busy: waitingVoiceSend || sending }}
+            style={({ pressed }) => [styles.steerBtn, { backgroundColor: pressed ? theme.tokens.bg.hover : theme.tokens.fillSubtle }, !canSteerText && styles.iconBtnDisabled]}
+          >
+            <Text style={[styles.steerText, { color: theme.tokens.accent.base }]}>{m.codex_orientar()}</Text>
+          </Pressable>
+        ) : null}
+      </>}
+      send={{ visible: showSend, onPress: () => void handleSend(), disabled: !canSubmit,
+        busy: editing ? queueBusy : waitingVoiceSend || sending || uploading, editing, count: filaCount,
+        label: editing ? m.queue_panel_update_aria() : m.composer_enviar_mensagem(),
+        hint: filaCount > 0 ? m.composer_fila_contagem({ n: filaCount }) : undefined }}
+      modeMenu={modeMenu}
+    />
+  );
+
   return (
     <>
-    <ComposerBox focused={focado}>
+    <ComposerBox focused={focado} footer={actions}>
         {/* Faixa de cima da caixa: o que espera a vez no Hangar, as ações por mensagem e o modo de envio. */}
         <QueuePanel panel={queueList} editingId={queueEdit?.entryId ?? null} busy={queueBusy}
           onEdit={handleQueueEdit} onCancelEdit={chat.cancelQueueEdit}
@@ -1756,56 +1806,6 @@ export function Composer({ serverId, name, draft, returned, onReturnedAdopted, s
             onCancelRecording={handleCancelRecording}
           />
 
-        {/* Linha do app de PC: + e microfone sem moldura à esquerda; o chip da sessão e o Enviar
-            fecham a linha. Com o Orientar, o chip encolhe o nome do modelo mas nada sai, como no PWA. */}
-        <ComposerActions
-          attach={{ onPress: () => setAttachMenuOpen(true), disabled: attachBlocked, busy: uploading }}
-          mic={{ onPress: () => void handleMicPress(), disabled: micBlocked, busy: busyVoice, recording: gravando,
-            styleLabel: dictationStyle, onStyle: () => setStyleMenuOpen(true) }}
-          settings={<SessionSettingsButton serverId={serverId} name={name} provider={provider} headless={headless} openRequest={selectorRequest} />}
-          afterSettings={<>
-
-          {/* Parar: só o quadrado vermelho, sem círculo em volta, como no PC. */}
-          {showStop ? (
-            <Pressable
-              onPress={confirmStop}
-              disabled={stopping}
-              hitSlop={5}
-              style={({ pressed }) => [styles.roundBtn, pressed && styles.iconBtnPressed, stopping && styles.iconBtnDisabled]}
-              accessibilityLabel={m.composer_parar()}
-              accessibilityRole="button"
-              accessibilityState={{ disabled: stopping, busy: stopping }}
-            >
-              {stopping ? (
-                <ActivityIndicator size="small" color={theme.tokens.status.error} />
-              ) : (
-                <View style={[styles.stopMark, { backgroundColor: theme.tokens.status.error }]} />
-              )}
-            </Pressable>
-          ) : null}
-
-          {showTextSteer ? (
-            <Pressable
-              onPress={() => void handleSteerText()}
-              disabled={!canSteerText}
-              hitSlop={7}
-              accessibilityRole="button"
-              accessibilityLabel={m.composer_steer_current_text()}
-              accessibilityHint={m.codex_orientar_ajuda()}
-              accessibilityState={{ disabled: !canSteerText, busy: waitingVoiceSend || sending }}
-              style={({ pressed }) => [styles.steerBtn, { backgroundColor: pressed ? theme.tokens.bg.hover : theme.tokens.fillSubtle }, !canSteerText && styles.iconBtnDisabled]}
-            >
-              <Text style={[styles.steerText, { color: theme.tokens.accent.base }]}>{m.codex_orientar()}</Text>
-            </Pressable>
-          ) : null}
-
-          </>}
-          send={{ visible: showSend, onPress: () => void handleSend(), disabled: !canSubmit,
-            busy: editing ? queueBusy : waitingVoiceSend || sending || uploading, editing, count: filaCount,
-            label: editing ? m.queue_panel_update_aria() : m.composer_enviar_mensagem(),
-            hint: filaCount > 0 ? m.composer_fila_contagem({ n: filaCount }) : undefined }}
-          modeMenu={modeMenu}
-        />
 
         {bar && barVersions ? (
           <View style={styles.versionRow}>

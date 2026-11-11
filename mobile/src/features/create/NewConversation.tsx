@@ -443,7 +443,15 @@ export function NewConversation({
 
       <View style={styles.optionPills}>{optionPills}</View>
       {/* Campo em cima, na largura toda; anexo, microfone, chip do provider e Enviar na linha de baixo. */}
-      <ComposerBox focused={focused}>
+      <ComposerBox focused={focused} footer={(
+        <ComposerActions attach={{ onPress: () => setAttachMenuOpen(true), disabled: busy || dictation.gravando }}
+          mic={{ onPress: () => void dictation.toggle(), disabled: dictation.transcribing || busy, busy: dictation.transcribing, showBusy: true,
+            recording: dictation.gravando, styleLabel: dictationStyle, onStyle: () => setStyleMenuOpen(true) }}
+          settings={providerChip}
+          beforeMic={resume ? <View ref={resumeAnchor}><HistoryButton busy={resume.busy}
+            disabled={busy || resume.busy} onPress={() => openSheet('resume', resumeAnchor.current)} /></View> : null}
+          send={{ label: m.nova_conversa_enviar(), disabled: !canSend, busy, showBusy: true, onPress: () => void handleSend() }} />
+      )}>
         {attachment ? <AttachmentPreview attachment={attachment} onRemove={removeAttachment} disabled={busy} /> : null}
         {/* Cinco linhas e rola: o título ocupa o alto, e mais que isso entrava embaixo do teclado. */}
         <ComposerInput ref={input} value={text} onChangeText={setText} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
@@ -459,13 +467,6 @@ export function NewConversation({
             if (files.length > 1) setAttachError(m.nova_conversa_um_anexo());
           }} />
         {dictation.transcribing ? <Text style={styles.meta} accessibilityLiveRegion="polite">{m.composer_transcrevendo_audio()}</Text> : null}
-        <ComposerActions attach={{ onPress: () => setAttachMenuOpen(true), disabled: busy || dictation.gravando }}
-          mic={{ onPress: () => void dictation.toggle(), disabled: dictation.transcribing || busy, busy: dictation.transcribing, showBusy: true,
-            recording: dictation.gravando, styleLabel: dictationStyle, onStyle: () => setStyleMenuOpen(true) }}
-          settings={providerChip}
-          beforeMic={resume ? <View ref={resumeAnchor}><HistoryButton busy={resume.busy}
-            disabled={busy || resume.busy} onPress={() => openSheet('resume', resumeAnchor.current)} /></View> : null}
-          send={{ label: m.nova_conversa_enviar(), disabled: !canSend, busy, showBusy: true, onPress: () => void handleSend() }} />
         {dictation.error ? (
           <View style={styles.errorRow}>
             <Text style={[styles.error, styles.flex]} accessibilityRole="alert">{dictation.error}</Text>

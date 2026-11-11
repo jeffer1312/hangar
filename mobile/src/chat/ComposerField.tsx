@@ -30,13 +30,15 @@ export function ComposerDock({ style, ...props }: ViewProps) {
   return <View {...props} testID="chat-dock" style={[style, { maxHeight: Math.max(96, (availableHeight ?? height) - 96), flexShrink: 1 }]} />;
 }
 
-export function ComposerBox({ focused, children }: { focused: boolean; children: ReactNode }) {
+// `footer`: os botões ficam fora da rolagem, sempre à vista no pé da caixa, por mais que o texto cresça.
+export function ComposerBox({ focused, children, footer }: { focused: boolean; children: ReactNode; footer?: ReactNode }) {
   const { theme } = useUnistyles();
   const accent = hexParaRgb(theme.tokens.accent.base);
   return <Glass variant="chrome" style={[styles.box, focused && accent ? { borderColor: `rgba(${accent.join(',')},0.45)` } : null]}>
-    <ScrollView style={styles.boxScroll} contentContainerStyle={styles.boxContent} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
+    <ScrollView style={styles.boxScroll} contentContainerStyle={footer ? styles.boxContentAbove : styles.boxContent} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
       {children}
     </ScrollView>
+    {footer ? <View style={styles.boxFooter}>{footer}</View> : null}
   </Glass>;
 }
 
@@ -172,6 +174,8 @@ const styles = StyleSheet.create((theme) => ({
   boxScroll: { flexGrow: 0, flexShrink: 1 },
   // Fila, anexos e áudio também precisam ficar alcançáveis quando juntos excedem a área útil.
   boxContent: { paddingHorizontal: theme.base.space[3], paddingTop: theme.base.space[3], paddingBottom: theme.base.space[2], gap: theme.base.space[1] },
+  boxContentAbove: { paddingHorizontal: theme.base.space[3], paddingTop: theme.base.space[3], gap: theme.base.space[1] },
+  boxFooter: { paddingHorizontal: theme.base.space[3], paddingTop: theme.base.space[1], paddingBottom: theme.base.space[2] },
   inputWrap: { flexShrink: 1, minHeight: 40, justifyContent: 'center', paddingHorizontal: theme.base.space[1] },
   inputText: { ...theme.type.body, paddingVertical: theme.base.space[2], paddingHorizontal: theme.base.space[2] },
   shrinkInput: { flexShrink: 1 },
