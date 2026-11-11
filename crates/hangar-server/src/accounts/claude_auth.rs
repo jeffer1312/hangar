@@ -125,11 +125,15 @@ impl AccountService {
             .1;
         for dir in std::env::split_paths(path) {
             if cfg!(windows) {
+                let exe = dir.join("claude.exe");
+                if exe.is_file() {
+                    return Some(vec![exe]);
+                }
                 let package = dir.join("node_modules/@anthropic-ai/claude-code");
-                for exe in [dir.join("claude.exe"), package.join("bin/claude.exe")] {
-                    if exe.is_file() {
-                        return Some(vec![exe]);
-                    }
+                // Sem o postinstall, o `bin/claude.exe` é um script de aviso de poucos bytes.
+                let exe = package.join("bin/claude.exe");
+                if std::fs::metadata(&exe).is_ok_and(|m| m.is_file() && m.len() > 64 * 1024) {
+                    return Some(vec![exe]);
                 }
                 let script = package.join("cli.js");
                 if script.is_file() {
