@@ -7,7 +7,8 @@ use serde_json::{Value, json};
 use hangar_core::pycompat::truthy;
 
 use crate::artifacts::{
-    entries, field, integer, invalid_shape, items, matches_name, read_json, session_dir, value_or,
+    entries, field, integer, invalid_shape, items, matches_name, read_json, safe_id, session_dir,
+    value_or,
 };
 use crate::live::{live_agents, script_name, total_tokens};
 
@@ -65,6 +66,9 @@ pub fn list_workflows(transcript: &Path) -> io::Result<Value> {
 /// # Erros
 /// Retorna erro quando um artefato tem estrutura incompatível com o produtor.
 pub fn get_workflow(transcript: &Path, run_id: &str) -> io::Result<Option<Value>> {
+    if !safe_id(run_id) {
+        return Ok(None);
+    }
     let directory = session_dir(transcript);
     let completion = directory.join("workflows").join(format!("{run_id}.json"));
     if completion.is_file() {

@@ -7,7 +7,8 @@ use serde_json::{Value, json};
 use hangar_core::pycompat::{py, pyjson, truthy};
 
 use crate::artifacts::{
-    field, invalid_shape, items, mapping_or_empty, read_json, read_lines, session_dir, value_or,
+    field, invalid_shape, items, mapping_or_empty, read_json, read_lines, safe_id, session_dir,
+    value_or,
 };
 
 /// Lê estatísticas persistidas, prompt, resultado integral e ferramentas do agente.
@@ -15,6 +16,9 @@ use crate::artifacts::{
 /// # Erros
 /// Retorna erro quando um artefato JSON válido tem estrutura incompatível com o produtor.
 pub fn get_agent(transcript: &Path, run_id: &str, agent_id: &str) -> io::Result<Option<Value>> {
+    if !safe_id(run_id) || !safe_id(agent_id) {
+        return Ok(None);
+    }
     let directory = session_dir(transcript);
     let run = directory.join("subagents/workflows").join(run_id);
     let mut meta = json!({});

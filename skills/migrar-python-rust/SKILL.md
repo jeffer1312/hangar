@@ -24,13 +24,6 @@ condição de modo, teste, dublê, fixture) é perguntada antes de escrever, diz
 basta e o que se perde sem ela. Subagente para e pergunta pela sessão; linha nova no Python sem a
 autorização registrada no `decisoes.md` é defeito na revisão.
 
-**Provas focadas e reaproveitáveis.** Defina antes de executar quais comportamentos, consumidores
-e plataformas mudaram. Durante o desenvolvimento, prove esse recorte e registre comando,
-resultado, código e ambiente. Reaproveite a prova no fechamento e no PR; rode somente o que
-faltar ou tiver sido invalidado por mudança. Bateria completa, workspace inteiro e repetição
-geral antes de publicar exigem pedido explícito do usuário. Instrução específica do usuário
-sobre o escopo das provas prevalece sobre os procedimentos desta skill.
-
 ## 1. Delimitar o caminho inteiro → `escopo.md`
 
 1. Escreva a responsabilidade numa frase ("quem responde GET /api/X e lê as fontes Y").
@@ -144,22 +137,19 @@ commit, decisão) | plataforma`. Mostre a contagem por área e peça a aprovaç�
    escreveu, também sem compilar; a sessão confere o diff dela, sem nova rodada do revisor.
 4. A sessão mescla uma worktree por vez, sem compilar: resolve o conflito e sobe o protocolo
    (regra 7). Rota que dependia da mesclada abre agora.
-5. Só a sessão compila, depois da última mesclagem do lote, para as provas focadas de falha e
-   sucesso abaixo. Compile apenas os alvos necessários, uma vez por versão do código; a compilação
-   do teste já confere os tipos desse alvo e dispensa um `check` equivalente. Execute somente os
-   testes do recorte. Para testes do servidor, compile `cargo-pinned test -p hangar-server --test it
-   --no-run` e rode o binário `deps/it-*` mais novo com os filtros das rotas (o wrapper não repassa
-   filtros depois de `--`). Registre comando, resultado, código e ambiente para reaproveitar a prova:
+5. Só a sessão compila, depois da última mesclagem do lote, em duas provas. Cada prova:
+   `cargo-pinned check -p hangar-server --tests` até não haver erro de compilação, depois
+   `cargo-pinned test -p hangar-server --test it --no-run` e o binário `deps/it-*` mais novo do
+   target comum rodado uma vez, num subshell em `crates/hangar-server`, com os filtros de todas as
+   rotas (o `cargo-pinned` não repassa filtros depois de `--`):
    - **Prova de falha:** numa worktree temporária no commit de antes do lote, só com os arquivos
      de teste novos. Teste novo que passa ali não prova o item e volta à rota; teste que não
      compila contra o código de antes entra no `conferencia.md` como "sem prova de falha".
    - **Prova de sucesso:** na branch mesclada.
 6. Falha volta ao subagente da rota: só as linhas da falha dele, todas de uma vez, corrigidas na
    worktree dele sem compilar. Nova compilação só com as correções de todas as rotas mescladas.
-   Três compilações sem verde: pare e mostre ao usuário. Worktree sai depois da prova de sucesso.
-   No fechamento e no PR, reaproveite as provas aprovadas; execute apenas o que faltar do recorte
-   ou o que uma mudança invalidou. Bateria inteira e workspace completo só com pedido explícito
-   do usuário, nunca por ser push, PR ou migração.
+   Três compilações sem verde: pare e mostre ao usuário. Worktree sai depois da prova de sucesso;
+   a bateria inteira roda uma vez, antes do push.
 
 **Regras de cada item, para o subagente e para a sessão:**
 

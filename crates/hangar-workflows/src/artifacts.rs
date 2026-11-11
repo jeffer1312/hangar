@@ -14,6 +14,11 @@ pub(crate) fn session_dir(transcript: &Path) -> PathBuf {
     transcript.with_file_name(transcript.file_stem().unwrap_or_default())
 }
 
+/// Ids viram nome de arquivo: separador ou `..` sairia da pasta da sessão.
+pub(crate) fn safe_id(id: &str) -> bool {
+    !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 pub(crate) fn entries(directory: &Path) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(directory) else {
         return Vec::new();

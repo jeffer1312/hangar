@@ -464,6 +464,19 @@ fn artifact_filename_case_follows_the_platform_glob() {
     }
 }
 
+#[test]
+fn path_like_ids_never_leave_the_session_folder() {
+    let root = tempfile::tempdir().unwrap();
+    let transcript = transcript(root.path());
+    write(root.path(), "secret.json", json!({"runId": "secret", "workflowProgress": []}));
+    fs::create_dir_all(root.path().join("proj/sess/workflows")).unwrap();
+    for id in ["../secret", "..", "a/b", "a\\b", ""] {
+        assert!(get_workflow(&transcript, id).unwrap().is_none(), "{id}");
+        assert!(get_agent(&transcript, id, "a1").unwrap().is_none(), "{id}");
+        assert!(get_agent(&transcript, "wf_abc", id).unwrap().is_none(), "{id}");
+    }
+}
+
 proptest::proptest! {
     #![proptest_config(proptest::test_runner::Config {
         cases: 32,
