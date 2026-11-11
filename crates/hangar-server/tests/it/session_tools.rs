@@ -470,3 +470,55 @@ async fn session_tools_trailing_slash_redirects_preserve_the_query() {
     assert!(!scene.home.join("result").exists());
     scene.finish().await;
 }
+
+#[tokio::test]
+async fn session_tools_preflight_allows_browser_posts_without_authentication() {
+    if isolated(
+        "session_tools::session_tools_preflight_allows_browser_posts_without_authentication",
+    ) {
+        return;
+    }
+    let scene = Scene::new().await;
+    for operation in ["shell", "open-editor", "open-terminal"] {
+        for suffix in ["", "/"] {
+            let mut request = Request::builder()
+                .method("OPTIONS")
+                .uri(format!("/api/sessions/fixture/{operation}{suffix}"))
+                .header("origin", "https://client.example")
+                .header("access-control-request-method", "POST")
+                .header(
+                    "access-control-request-headers",
+                    "authorization,content-type",
+                )
+                .body(Body::empty())
+                .unwrap();
+            request
+                .extensions_mut()
+                .insert(ConnectInfo::<SocketAddr>("127.0.0.1:1234".parse().unwrap()));
+            let response = scene.app.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "{operation}{suffix}");
+            assert_eq!(response.headers()["access-control-allow-origin"], "*");
+            assert!(
+                response.headers()["access-control-allow-methods"]
+                    .to_str()
+                    .unwrap()
+                    .split(',')
+                    .any(|method| method.trim().eq_ignore_ascii_case("POST"))
+            );
+            let headers = response.headers()["access-control-allow-headers"]
+                .to_str()
+                .unwrap();
+            for required in ["authorization", "content-type"] {
+                assert!(
+                    headers
+                        .split(',')
+                        .any(|header| header.trim().eq_ignore_ascii_case(required)),
+                    "{required}"
+                );
+            }
+        }
+    }
+    assert!(!scene.home.join("create-args").exists());
+    assert!(!scene.home.join("result").exists());
+    scene.finish().await;
+}
