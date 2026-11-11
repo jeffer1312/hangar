@@ -226,32 +226,37 @@ async fn reply(state: Arc<AppState>, peer: SocketAddr, request: Request) -> Resp
         };
     let id = body["id"].as_str().unwrap().to_owned();
     let home = state.accounts.env.home.clone();
-    let saved = tokio::task::spawn_blocking(move || {
-        hangar_opencode_cookie::write(
-            &home,
-            body["id"].as_str().unwrap(),
-            body["workspace_id"].as_str().unwrap(),
-            body["auth_cookie"].as_str().unwrap(),
-        )
-    })
-    .await;
-    match saved {
-        Ok(Ok(defined)) => {
-            if state.accounts.invalidate_quota(&id).await.is_err() {
-                state.diag.report(
-                    "rust.opencode_cookie",
-                    "",
-                    "quota_invalidation_failed",
-                    "cookie gravado; a cota em disco não foi invalidada",
-                );
-            }
-            crate::http_cors::json_guarded(
-                StatusCode::OK,
-                json!({"id":id, "cookie_definido":defined}),
+    // O pedido pode sumir enquanto o arquivo é gravado; a operação termina a invalidação mesmo assim.
+    tokio::spawn(async move {
+        let saved = tokio::task::spawn_blocking(move || {
+            hangar_opencode_cookie::write(
+                &home,
+                body["id"].as_str().unwrap(),
+                body["workspace_id"].as_str().unwrap(),
+                body["auth_cookie"].as_str().unwrap(),
             )
+        })
+        .await;
+        match saved {
+            Ok(Ok(defined)) => {
+                if state.accounts.invalidate_quota(&id).await.is_err() {
+                    state.diag.report(
+                        "rust.opencode_cookie",
+                        "",
+                        "quota_invalidation_failed",
+                        "cookie gravado; a cota em disco não foi invalidada",
+                    );
+                }
+                crate::http_cors::json_guarded(
+                    StatusCode::OK,
+                    json!({"id":id,"cookie_definido":defined}),
+                )
+            }
+            _ => crate::http_cors::internal_error(),
         }
-        _ => crate::http_cors::internal_error(),
-    }
+    })
+    .await
+    .unwrap_or_else(|_| crate::http_cors::internal_error())
 }
 
 async fn read_body(request: Request) -> Result<axum::body::Bytes, Response> {

@@ -16,10 +16,10 @@ static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
 /// Ponte de leitura de sidecar: o nome antigo só vale enquanto o novo não existir.
 pub fn legacy_sidecar_path(new: PathBuf) -> PathBuf {
-    if new.exists() { return new; }
+    if !matches!(new.try_exists(), Ok(false)) { return new; }
     let old = new.with_file_name(new.file_name().and_then(|name| name.to_str()).unwrap_or("")
         .replacen(".hangar-", ".claude-pocket-", 1));
-    if old.exists() { old } else { new }
+    if matches!(old.try_exists(), Ok(false)) { new } else { old }
 }
 
 /// Lê um arquivo que outro escritor troca por `atomic_write`. No Windows quem abre no instante da

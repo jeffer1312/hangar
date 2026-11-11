@@ -109,6 +109,22 @@ fn discarded_python_json_values_do_not_erase_other_credentials() {
 }
 
 #[test]
+#[cfg(unix)]
+fn io_failure_never_replaces_the_existing_cookie_file() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join(".claude")).unwrap();
+    let target = path(root.path());
+    std::fs::write(
+        root.path().join(".claude/.claude-pocket-opencode.json"),
+        r#"{"old":{"workspace_id":"w","auth_cookie":"c"}}"#,
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(&target, &target).unwrap();
+    assert!(write(root.path(), "engine:new", "w", "cookie-exemplo").is_err());
+    assert_eq!(std::fs::read_link(&target).unwrap(), target);
+}
+
+#[test]
 fn write_failure_is_reported_and_does_not_claim_a_saved_cookie() {
     let root = tempfile::tempdir().unwrap();
     std::fs::write(root.path().join(".claude"), "não é diretório").unwrap();

@@ -51,6 +51,8 @@ struct Fixture {
     upstream_calls: Arc<AtomicUsize>,
     quota_path: std::path::PathBuf,
     native_commands: Arc<dyn Commands>,
+    #[cfg(target_os = "linux")]
+    router: Router,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
@@ -98,6 +100,8 @@ impl Fixture {
         state.local_commands = commands;
         let quota_path = state.accounts.quota_path();
         let router = hangar_server::routes::router(Arc::new(state));
+        #[cfg(target_os = "linux")]
+        let handler_router = router.clone();
         let task = tokio::spawn(async move {
             axum::serve(
                 listener,
@@ -112,6 +116,8 @@ impl Fixture {
             upstream_calls,
             quota_path,
             native_commands,
+            #[cfg(target_os = "linux")]
+            router: handler_router,
             tasks: vec![task, upstream_task],
         }
     }
@@ -324,6 +330,97 @@ async fn native_command_keeps_the_operating_system_error_cause() {
         error.raw_os_error().is_some(),
         "perder o errno esconde a causa da falha de instalação"
     );
+    fixture.stop().await;
+}
+
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn cookie_invalidation_finishes_when_the_request_is_cancelled() {
+    if !isolated("cookie_invalidation_finishes_when_the_request_is_cancelled").await {
+        return;
+    }
+    use notify::Watcher;
+    use std::io::Write;
+    use tower::ServiceExt;
+    let fixture = Fixture::start().await;
+    std::fs::create_dir_all(fixture.quota_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &fixture.quota_path,
+        json!({"engine:oc":{"cota":{"estado":"lida"}}}).to_string(),
+    )
+    .unwrap();
+    let watched = fixture.quota_path.canonicalize().unwrap();
+    let (changed, mut changes) = tokio::sync::mpsc::unbounded_channel();
+    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        let _ = changed.send(event);
+    })
+    .unwrap();
+    watcher
+        .watch(
+            watched.parent().unwrap(),
+            notify::RecursiveMode::NonRecursive,
+        )
+        .unwrap();
+    let cookie = hangar_opencode_cookie::path(fixture.home.path());
+    std::fs::create_dir_all(cookie.parent().unwrap()).unwrap();
+    assert!(
+        std::process::Command::new("/usr/bin/mkfifo")
+            .arg(&cookie)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let mut request = axum::http::Request::builder()
+        .method("PUT")
+        .uri("/api/credenciais/cookie")
+        .header("authorization", "Bearer fixture-owner")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({"id":"engine:oc","workspace_id":"new-workspace","auth_cookie":"new-cookie"})
+                .to_string(),
+        ))
+        .unwrap();
+    request.extensions_mut().insert(axum::extract::ConnectInfo(
+        "127.0.0.1:12345".parse::<std::net::SocketAddr>().unwrap(),
+    ));
+    let handler = tokio::spawn(fixture.router.clone().oneshot(request));
+    // Abrir a outra ponta confirma que a gravação já entrou na leitura, que só termina no EOF.
+    let fifo = cookie.clone();
+    let writer =
+        tokio::task::spawn_blocking(move || std::fs::OpenOptions::new().write(true).open(fifo));
+    let mut writer = tokio::time::timeout(Duration::from_secs(60), writer)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    handler.abort();
+    assert!(handler.await.unwrap_err().is_cancelled());
+    writer.write_all(b"{}").unwrap();
+    drop(writer);
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            let event = changes
+                .recv()
+                .await
+                .expect("observador ativo")
+                .expect("evento de arquivo válido");
+            if event.paths.contains(&watched)
+                && matches!(
+                    event.kind,
+                    notify::EventKind::Modify(notify::event::ModifyKind::Name(_))
+                        | notify::EventKind::Create(_)
+                )
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("a invalidação precisa terminar mesmo após cancelar o handler");
+    let cache: Value =
+        serde_json::from_slice(&std::fs::read(&fixture.quota_path).unwrap()).unwrap();
+    assert!(cache.get("engine:oc").is_none());
+    drop(watcher);
     fixture.stop().await;
 }
 

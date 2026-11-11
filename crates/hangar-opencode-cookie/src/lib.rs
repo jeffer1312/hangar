@@ -52,13 +52,12 @@ pub fn read(home: &Path) -> io::Result<Map<String, Value>> {
 /// Grava ou remove uma entrada, preservando as outras e relendo o resultado antes de confirmar.
 ///
 /// # Errors
-/// Retorna erro de trava, criação de diretório, escrita ou troca atômica. Não confirma gravação que falhou.
+/// Retorna erro de leitura, trava, criação de diretório, escrita ou troca atômica. Não confirma gravação que falhou.
 pub fn write(home: &Path, id: &str, workspace: &str, cookie: &str) -> io::Result<bool> {
     let _guard = WRITER
         .lock()
         .map_err(|_| io::Error::other("trava dos cookies indisponível"))?;
-    let mut entries: Map<String, Value> = read(home)
-        .unwrap_or_default()
+    let mut entries: Map<String, Value> = read_for_write(home)?
         .into_iter()
         .map(|(id, entry)| {
             (
@@ -89,5 +88,12 @@ pub fn write(home: &Path, id: &str, workspace: &str, cookie: &str) -> io::Result
     let serialized = codec::dumps_indented_utf8(&value, 1)
         .map_err(|_| io::Error::from(io::ErrorKind::InvalidData))?;
     hangar_core::fs::atomic_write(&target, serialized.as_bytes())?;
-    Ok(read(home).unwrap_or_default().contains_key(id))
+    Ok(read_for_write(home)?.contains_key(id))
+}
+
+fn read_for_write(home: &Path) -> io::Result<Map<String, Value>> {
+    match read(home) {
+        Err(error) if error.kind() == io::ErrorKind::InvalidData => Ok(Map::new()),
+        result => result,
+    }
 }
