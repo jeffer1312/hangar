@@ -93,7 +93,7 @@ struct Patterns {
     rule: Regex, box_bottom: Regex, frame: Regex, footer: Regex,
     login: Regex, composer: Regex, limit: Regex, codex_option: Regex,
     unnumbered: Regex, user: Regex, banner: Regex, warning: Regex, effort: Regex,
-    tool: Regex, finished: Regex, activity: Regex, mcp: Regex,
+    tool: Regex, task_notice: Regex, activity: Regex, mcp: Regex,
     pi_box: Regex, overlay_rule: Regex, todo: Regex, ascii_spinner: Regex,
     subagent: Regex, subagent_body: Regex, digit: Regex, word: Regex, agent_cursor: Regex,
 }
@@ -140,7 +140,8 @@ static P: LazyLock<Patterns> = LazyLock::new(|| {
         // Aviso temporário do nível de esforço, à direita acima da caixa de digitar; o ícone de `high` é ●.
         effort: r(r"^[○◐●◉◈◎] \S+(?: · ultracode)? · /effort\s*$"),
         tool: r(r"^([A-Z][\w-]*\(|(Running|Reading|Writing|Editing|Searching|Listing|Fetching|Updating|Creating|Deleting|Crawling|Downloading|Globbing|Grepping|Waiting|Loading|Compiling|Building|Installing|Ran|Making))"),
-        finished: r(r#"^Agent "[^"]*" finished"#),
+        // Linha que a TUI escreve para cada `<task-notification>`: o resumo dela, não texto do Claude.
+        task_notice: r(r#"^(?:Agent ".*" (?:finished|is waiting|was stopped|failed)|Background (?:command|agent) ".*" (?:completed|failed|was stopped|didn't finish)|Background shell command didn't finish|Monitor (?:event: |".*" (?:stream ended|script failed)))"#),
         activity: r(r"ran \d+ shell commands?\s*$"),
         mcp: r(r"^Calling[^\n]*(…|\.\.\.)\s*$"),
         pi_box: r(r"^\s*[╭╰][─\s]*[╮╯]\s*$"),
@@ -375,8 +376,9 @@ fn tool_header(lines: &[&str], i: usize) -> bool {
 fn preview(lines: &[&str], anchor: Option<&str>, skip: impl Fn(&[&str], usize, &str) -> bool, stop: impl Fn(&str) -> bool) -> String {
     let mut end = lines.iter().rposition(|l| P.rule.is_match(l) || P.overlay_rule.is_match(l) || P.pi_box.is_match(l))
         .unwrap_or(lines.len());
-    if let Some(anchor) = anchor.filter(|a| !a.is_empty()) {
-        end = lines[..end].iter().rposition(|l| l.contains(anchor)).unwrap_or(end);
+    let mut band = lines.len();
+    if let Some(row) = anchor.filter(|a| !a.is_empty()).and_then(|a| lines[..end].iter().rposition(|l| l.contains(a))) {
+        (end, band) = (row, row);
     }
     let begin = lines[..end].iter().enumerate().filter(|(i, l)| P.user.is_match(l) && !(*i > 0 && P.rule.is_match(lines[*i - 1])))
         .map(|(i, _)| i + 1).last().unwrap_or(0);
@@ -394,13 +396,13 @@ fn preview(lines: &[&str], anchor: Option<&str>, skip: impl Fn(&[&str], usize, &
         if P.effort.is_match(s) { continue; }
         let subagent = P.subagent.is_match(body) && lines[i + 1..].iter().find(|l| !trim(l).is_empty())
             .is_some_and(|l| P.subagent_body.is_match(l));
-        if !tool(body) && !mcp(body) && !end_word(&P.finished, body)
+        if !tool(body) && !mcp(body) && !end_word(&P.task_notice, body)
             && !P.todo.is_match(line) && !subagent && !tool_header(lines, i) && !skip(lines, i, body) { start = Some(i); }
     }
     let Some(start) = start else { return String::new(); };
     let first = left(lines[start]);
     let mut out = vec![right(left(first.strip_prefix('●').unwrap_or(first)))];
-    for (j, line) in lines.iter().enumerate().skip(start + 1) {
+    for (j, line) in lines.iter().enumerate().take(band).skip(start + 1) {
         let s = left(line);
         if P.rule.is_match(line) || boundary(line) || P.user.is_match(line) || tool(s)
             || mcp(s) || P.todo.is_match(line) || P.ascii_spinner.is_match(s) || P.effort.is_match(s) || stop(line)
@@ -690,6 +692,36 @@ mod tests {
         assert_eq!(pane_preview("● citou:\n  › Prompt from the hangar plugin\n", None).0, "citou:\n  › Prompt from the hangar plugin");
         assert_eq!(pane_preview(&format!("● resposta\n\n{RELOAD}\n"), None).0, "resposta");
         assert_eq!(pane_preview("● nginx: reloaded (pid 42), tudo certo\n", None).0, "nginx: reloaded (pid 42), tudo certo");
+    }
+
+    const RULE: &str = "────────────────────────────────────────";
+
+    #[test]
+    fn the_mods_band_is_not_part_of_the_reply() {
+        let pane = format!("● resposta\n▾ PR #374 perf(native): stop keeping   [ abrir PR ] [-]\n\n  ✓ ▸ CI 51490cc   7/7 jobs  [ abrir CI ]\n    ━━━━━━━ ━━━━━━━\n{RULE}\n❯ \n{RULE}\n");
+        assert_eq!(pane_preview(&pane, Some("PR #374")).0, "resposta");
+    }
+
+    #[test]
+    fn background_task_notices_are_not_assistant_text() {
+        for notice in [
+            "Background shell command didn't finish before the previous session ended",
+            "Background agent \"revisor\" didn't finish before the previous session ended",
+            "Background command \"Run tests\" completed (exit code 0)",
+            "Background command \"Run tests\" failed with exit code 1",
+            "Background command \"Run tests\" was stopped",
+            "Agent \"revisor\" finished",
+            "Agent \"revisor\" is waiting on its own background work",
+            "Agent \"revisor\" was stopped by Claude",
+            "Agent \"revisor\" failed: Agent terminated early due to an API error",
+            "Monitor event: \"build\"",
+            "Monitor \"build\" stream ended",
+            "Monitor \"build\" script failed (exit 1)",
+        ] {
+            assert_eq!(pane_preview(&format!("● {notice}\n{RULE}\n❯ \n{RULE}\n"), None).0, "", "{notice}");
+            assert_eq!(pane_preview(&format!("● resposta\n\n● {notice}\n{RULE}\n❯ \n{RULE}\n"), None).0, "resposta", "{notice}");
+        }
+        assert_eq!(pane_preview("● Background command line tools are handy.\n", None).0, "Background command line tools are handy.");
     }
     #[test]
     fn other_preview_panes_preserve_provider_contract() {
