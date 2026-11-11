@@ -106,7 +106,7 @@ impl Chat {
                 self.claimed_real.insert(event.id.clone());
             }
         }
-        let Some(at) = given_up_slot(&self.events, &event) else { return };
+        let at = given_up_slot(&self.events, &event);
         if at < self.events.len() {
             self.changed_at(at);
             self.events.insert(at, event);
@@ -293,12 +293,12 @@ impl Chat {
     }
 }
 
-// A fila republica a entrega que desistiu mesmo sendo antiga: ela vai para o horário do envio, não para o fim.
-// Mais velha que o trecho carregado (None) fica de fora; o histórico mais antigo a traz no lugar.
-fn given_up_slot(events: &[ChatEvent], event: &ChatEvent) -> Option<usize> {
-    let Some(sent) = event.queued_ts.filter(|_| event.desistiu == Some(true)) else { return Some(events.len()) };
-    if events.iter().find_map(|e| e.ts).is_some_and(|first| sent < first) { return None; }
-    Some(events.iter().rposition(|e| e.ts.is_some_and(|ts| ts <= sent)).map_or(events.len(), |i| i + 1))
+// A fila republica ao vivo a entrega que desistiu, mesmo antiga: ela vai para o horário do envio, não para o fim.
+// Mais velha que tudo que tem horário fica antes do primeiro, nunca descartada (cópia de `givenUpSlot` do core).
+fn given_up_slot(events: &[ChatEvent], event: &ChatEvent) -> usize {
+    let Some(sent) = event.queued_ts.filter(|_| event.desistiu == Some(true)) else { return events.len() };
+    if let Some(i) = events.iter().rposition(|e| e.ts.is_some_and(|ts| ts <= sent)) { return i + 1; }
+    events.iter().position(|e| e.ts.is_some()).unwrap_or(events.len())
 }
 
 fn preview_matches(preview: &str, committed: &str) -> bool {
@@ -430,8 +430,8 @@ mod tests {
         chat.apply(queued("queued-before-window", 50., true));
         chat.apply(queued("queued-waiting", 150., false));
         let ids: Vec<_> = chat.events.iter().map(|e| e.id.as_str()).collect();
-        assert_eq!(ids, ["a", "queued-gave-up", "b", "c", "queued-waiting"]);
-        assert_eq!(chat.index.get("b"), Some(&2));
+        assert_eq!(ids, ["queued-before-window", "a", "queued-gave-up", "b", "c", "queued-waiting"]);
+        assert_eq!(chat.index.get("b"), Some(&3));
     }
 
     #[test]

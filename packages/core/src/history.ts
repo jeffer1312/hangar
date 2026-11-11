@@ -16,6 +16,21 @@ export function waitsInQueue(e: ChatEvent, provider?: string | null, headless = 
     && (!filaDoProcesso || !e.queued_delivered);
 }
 
+/** A fila republica ao vivo a entrega que desistiu, mesmo antiga: ela vai para o horário do envio, não para o fim. */
+export function givenUpSlot(events: ChatEvent[], ev: ChatEvent): number {
+  const sent = ev.desistiu ? ev.queued_ts : null;
+  if (sent == null) return events.length;
+  let first = -1;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ts = events[i].ts;
+    if (ts == null) continue;
+    if (ts <= sent) return i + 1;
+    first = i;
+  }
+  // Mais velha que tudo que tem horário: antes do primeiro, nunca descartada.
+  return first >= 0 ? first : events.length;
+}
+
 /** A entrega incerta segura a escrita do terminal. */
 export const writeHeld = (problem?: string | null): boolean =>
   problem === 'terminal_input_delivery_unproved' || problem === 'terminal_input_delivery_composer_busy';

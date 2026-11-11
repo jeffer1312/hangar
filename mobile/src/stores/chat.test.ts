@@ -228,7 +228,8 @@ test('bolha que a fila desistiu entra no horário em que foi enviada, não no fi
   source.trigger('message', JSON.stringify(ev({ id: 'queued-gave-up', ts: undefined, queued_ts: 150, desistiu: true })));
   source.trigger('message', JSON.stringify(ev({ id: 'queued-before-window', ts: undefined, queued_ts: 50, desistiu: true })));
   source.trigger('message', JSON.stringify(ev({ id: 'queued-waiting', ts: undefined, queued_ts: 150 })));
-  expect(chat.use.getState().events.map((e) => e.id)).toEqual(['a', 'queued-gave-up', 'b', 'c', 'queued-waiting']);
+  expect(chat.use.getState().events.map((e) => e.id))
+    .toEqual(['queued-before-window', 'a', 'queued-gave-up', 'b', 'c', 'queued-waiting']);
   chat.release();
 });
 

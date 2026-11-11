@@ -37,6 +37,7 @@ import {
   composeWithContextRefs,
   splitContextRefs,
   parseCodexOutput,
+  givenUpSlot,
   type ContextRef,
 } from '@hangar/core';
 import type { ChatEvent, StateEvent, PreviewEvent, AskQuestionPayload, StatsEvent, EventSourceLike, Server, QueuePanel, QueueEdit } from '@hangar/core';
@@ -513,19 +514,17 @@ function criarChatStore(serverId: string, name: string): ChatApi {
       return;
     }
     const at = givenUpSlot(events, ev);
-    if (at < 0) return;
-    if (at < events.length) {
-      publishEvents([...events.slice(0, at), ev, ...events.slice(at)], 'rebuild');
-      return;
+    const inside = at < events.length;
+    const next = inside ? [...events.slice(0, at), ev, ...events.slice(at)] : [...events, ev];
+    if (!inside) {
+      idIndex.set(ev.id, next.length - 1);
+      indexText(ev, next.length - 1);
     }
-    const next = [...events, ev];
-    idIndex.set(ev.id, next.length - 1);
-    indexText(ev, next.length - 1);
     // Reconcilia pending com o evento que acabou de chegar (se for user_msg real)
     const curPending = useChatStore.getState().pending;
     const nextPending = curPending.length ? reconcilePending(curPending, ev) : curPending;
     const pendingPatch = nextPending.length !== curPending.length ? { pending: nextPending } : {};
-    publishEvents(next, removedQueued ? 'replace' : 'append', pendingPatch);
+    publishEvents(next, inside ? 'rebuild' : removedQueued ? 'replace' : 'append', pendingPatch);
     if (ev.kind === 'user_msg') confirmSubmission([ev]);
     if (ev.kind === 'thinking' && useChatStore.getState().pensamento) limparPensamento();
     if (ev.kind === 'tool_use' && useChatStore.getState().ferramenta) limparFerramenta();
@@ -1075,20 +1074,6 @@ export function settleDelivered(serverId: string, name: string, draft: Conversat
     }).catch(() => {});
   }
   chatStore(serverId, name).use.setState((s) => ({ draftUpdate: s.draftUpdate + 1 }));
-}
-
-// A fila republica a entrega que desistiu mesmo sendo antiga: ela vai para o horário do envio, não para o fim.
-// Mais velha que o trecho carregado (-1) fica de fora; o histórico mais antigo a traz no lugar.
-function givenUpSlot(events: ChatEvent[], ev: ChatEvent): number {
-  const sent = ev.desistiu ? ev.queued_ts : null;
-  if (sent == null) return events.length;
-  const first = events.find((e) => e.ts != null)?.ts;
-  if (first != null && sent < first) return -1;
-  for (let i = events.length - 1; i >= 0; i--) {
-    const ts = events[i].ts;
-    if (ts != null && ts <= sent) return i + 1;
-  }
-  return events.length;
 }
 
 function isInputRejected(error: unknown): boolean {

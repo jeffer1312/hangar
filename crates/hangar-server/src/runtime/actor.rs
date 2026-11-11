@@ -866,8 +866,8 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
     let mut end_seen:Option<(u64,f64)> = None;
     // Operações cujo quadro foi entregue ao transporte desta época: na queda, só estas podem ter saído.
     let mut handed:BTreeSet<String> = BTreeSet::new();
-    // Escritas cujo preparo ainda não voltou: nada delas chegou ao fio, o prazo pode devolver a entrada.
-    let mut preparing:BTreeSet<String> = BTreeSet::new();
+    // Escritas cujo preparo ainda não voltou; a trava decide, entre o prazo e o despacho, quem chegou primeiro.
+    let mut preparing:BTreeMap<String,Arc<std::sync::Mutex<WriteGate>>> = BTreeMap::new();
     let mut effects:VecDeque<Effect> = VecDeque::new();
     let mut revision = Revision { value:engine.revision.load(Ordering::Acquire),counter:engine.revision.clone() };
     let mut state_version = 0u64;
@@ -1119,7 +1119,8 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                     // Sem preparo nem vista forçada: os IDs dela nunca entram no diário, então o contador salvo
                     // continua cobrindo todos os que entram. Mantém a ordem das escritas.
                     if volatile { prepared_writes.insert(write_order,(wire,target.generation,Ok(()))); continue; }
-                    preparing.insert(wire.clone());
+                    let gate = Arc::new(std::sync::Mutex::new(WriteGate::Preparing));
+                    preparing.insert(wire.clone(),gate.clone());
                     let queue = queue.clone(); let target = target.clone(); let view = engine.view(); let sample = clock(start);
                     let state_gate = state_gate.clone(); let state_version = state_version;
                     jobs.spawn(async move {
@@ -1137,6 +1138,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                             // Antes de cada escrita no fio a vista vai inteira: o contador dos IDs tem que estar salvo.
                             save_view(&queue,target.generation,sample,&state_gate,state_version,&view,true).await?;
                             let cursor = capture_cursor(&target,&view).await?;
+                            if !gate_dispatch(&gate) { return Err(RuntimeError::new(WRITE_CANCELLED,"prazo venceu no preparo; a entrada voltou para a fila")); }
                             queue.exec(target.generation,&format!("cursor:{wire}"),sample,Action::BindDispatch { id:wire.clone(),cursor:cursor.clone() }).await.map_err(io_failure)?;
                             queue.exec(target.generation,&format!("logical-cursor:{wire}"),sample,Action::BindDispatchIfPrepared { id:logical_id.clone(),cursor }).await.map_err(io_failure)?;
                             queue.exec(target.generation,&format!("dispatch:{wire}"),sample,Action::BeginDispatch { id:wire.clone(),wire_id:wire.clone(),staged:false }).await.map_err(io_failure)?;
@@ -1429,12 +1431,8 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                     }
                 }
                 effects.extend(acknowledgements);
-                // Prazo vencido no preparo já devolveu a entrada: a recusa tardia da fila não põe a sessão em erro.
-                match result {
-                    Err(failure) if ended => tracing::warn!(key=%target.key,session=%target.name,operation=%attempt.logical_id,code=%failure.code,reason=%failure.message,"preparo terminou depois do prazo"),
-                    Err(failure) => enter_error(&mut error,&target,failure),
-                    Ok(()) => {}
-                }
+                // O prazo cancelou no preparo e já devolveu a entrada: não é erro da sessão.
+                if let Err(failure) = result && failure.code != WRITE_CANCELLED { enter_error(&mut error,&target,failure); }
             } else if sid_transition || io.try_send(WireFrame { operation_id:wire,frame:attempt.frame,ephemeral:false,until:None,guard:engine.interaction_guard(&attempt.logical_id)? }).is_err() {
                 effects.extend(engine.apply(EngineInput::WriteAck { operation_id:attempt.logical_id.clone(),outcome:WriteOutcome::NotWritten },clock(start))?);
             } else {
@@ -2945,13 +2943,37 @@ fn rowless(provider:&str,command:&RuntimeCommand) -> bool {
     provider == "codex" && command.kind == OperationKind::Steer && command.payload["entry_id"].as_str().is_none()
 }
 
-fn began_writing(native:&BTreeSet<String>,attempts:&BTreeMap<String,Attempt>,preparing:&BTreeSet<String>,id:&str)->bool {
-    let prefix = format!("{id}:");
-    native.contains(id) || attempts.iter().any(|(wire,attempt)|!preparing.contains(wire)
-        && (attempt.logical_id == id || attempt.logical_id.starts_with(&prefix)))
+const WRITE_CANCELLED:&str = "write_cancelled_before_dispatch";
+
+#[derive(Clone,Copy,PartialEq,Eq,Debug)]
+enum WriteGate { Preparing, Cancelled, Dispatching }
+
+/// O preparo pede a vez de despachar; recusa se o prazo já cancelou a escrita.
+fn gate_dispatch(gate:&std::sync::Mutex<WriteGate>)->bool {
+    let mut state = gate.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if *state == WriteGate::Cancelled { return false; }
+    *state = WriteGate::Dispatching;
+    true
 }
 
-fn defer_unwritten(provider:&str,roots:&mut BTreeMap<String,Pending>,attempts:&BTreeMap<String,Attempt>,native:&BTreeSet<String>,preparing:&BTreeSet<String>,id:&str,error:RuntimeError,effects:&mut VecDeque<Effect>) {
+/// Escrita ainda no preparo é cancelada aqui e não conta: a entrada pode voltar para a fila sem sair em dobro.
+fn began_writing(native:&BTreeSet<String>,attempts:&BTreeMap<String,Attempt>,preparing:&BTreeMap<String,Arc<std::sync::Mutex<WriteGate>>>,id:&str)->bool {
+    let prefix = format!("{id}:");
+    let mut written = native.contains(id);
+    for (wire,attempt) in attempts {
+        if attempt.logical_id != id && !attempt.logical_id.starts_with(&prefix) { continue; }
+        let Some(gate) = preparing.get(wire) else { written = true; continue };
+        let mut state = gate.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        match *state {
+            WriteGate::Preparing => *state = WriteGate::Cancelled,
+            WriteGate::Dispatching => written = true,
+            WriteGate::Cancelled => {}
+        }
+    }
+    written
+}
+
+fn defer_unwritten(provider:&str,roots:&mut BTreeMap<String,Pending>,attempts:&BTreeMap<String,Attempt>,native:&BTreeSet<String>,preparing:&BTreeMap<String,Arc<std::sync::Mutex<WriteGate>>>,id:&str,error:RuntimeError,effects:&mut VecDeque<Effect>) {
     let written = began_writing(native,attempts,preparing,id);
     let input = roots.get(id).is_some_and(|pending|matches!(pending.command.kind,OperationKind::Input | OperationKind::Steer | OperationKind::DispatchAsyncAnswer)
         && !rowless(provider,&pending.command));
@@ -3135,15 +3157,20 @@ mod tests {
         Arc::try_unwrap(queue).ok().unwrap().shutdown().await.unwrap();
     }
     #[test]
-    fn a_write_still_preparing_is_not_written_so_the_deadline_defers_the_entry() {
-        // Caso real: o preparo (vista, cursor do tmux) passou de 30 s; o prazo contou a tentativa como escrita,
-        // respondeu "incerto" e a entrada nunca voltou para a fila.
+    fn deadline_and_dispatch_race_on_the_write_gate() {
         let attempt=|logical:&str|Attempt {logical_id:logical.into(),phase_id:format!("wire:{logical}"),frame:json!({}),order:1,epoch:0,generation:4,volatile:false};
         let attempts=BTreeMap::from([("wire:steer:5b4c".to_owned(),attempt("steer:5b4c"))]);
         let native=BTreeSet::new();
-        let preparing=BTreeSet::from(["wire:steer:5b4c".to_owned()]);
+        let gates=|state|BTreeMap::from([("wire:steer:5b4c".to_owned(),Arc::new(std::sync::Mutex::new(state)))]);
+        // Prazo primeiro: a escrita no preparo não conta, e o preparo não despacha mais.
+        let preparing=gates(WriteGate::Preparing);
         assert!(!began_writing(&native,&attempts,&preparing,"steer"),"tentativa ainda no preparo contou como escrita");
-        assert!(began_writing(&native,&attempts,&BTreeSet::new(),"steer"),"preparo concluído pode ter ido ao fio");
+        assert!(!gate_dispatch(&preparing["wire:steer:5b4c"]),"preparo despachou depois que o prazo devolveu a entrada");
+        // Despacho primeiro: a escrita pode ter ido ao fio.
+        let dispatching=gates(WriteGate::Preparing);
+        assert!(gate_dispatch(&dispatching["wire:steer:5b4c"]));
+        assert!(began_writing(&native,&attempts,&dispatching,"steer"),"escrita já despachando não contou");
+        assert!(began_writing(&native,&attempts,&BTreeMap::new(),"steer"),"preparo concluído pode ter ido ao fio");
         assert!(began_writing(&BTreeSet::from(["steer".to_owned()]),&BTreeMap::new(),&preparing,"steer"));
     }
     #[test]
