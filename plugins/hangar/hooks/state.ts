@@ -12,7 +12,7 @@ const LAST = { plugin: "hangar", key: "lastState" } as const;
 async function send($: EngineInterface, estado: string, extra: Record<string, unknown> = {}, measure = false) {
   setLastState(estado);
   // Dentro do `ui.render` (a pergunta desenhada) o engine recusa a escrita: ali fica o estado anterior.
-  await $.state.set(LAST, estado).catch(() => {});
+  await $.state.set(LAST, estado).catch((err) => $.ui.log(`hangar: estado ${estado} não guardado para a recarga: ${String(err)}`, { to: "debug" }));
   const p = bridge();
   if (!p) return;
   try {
@@ -106,10 +106,10 @@ function agentLife($: EngineInterface, agentId: string, estado: AgentEstado): Pr
  * tem a máquina de estados e as outras fontes (Codex, Pi, Kimi). */
 export function registerState(on: On) {
   // A atualização do Hangar recarrega o plugin no meio do turno, e a recarga roda o `session.start` de novo:
-  // o estado é o que a sessão já tinha, não `idle`.
+  // o turno que corria segue `working`. O resto começa `idle`: depois do `/clear` o último é `fim`.
   on("session.start", async ($, e, next) => {
-    const { value = "idle" } = await $.state.get(LAST);
-    await send($, value, { cwd: await $.session.cwd(), model: await $.session.model() });
+    const { value } = await $.state.get(LAST);
+    await send($, value === "working" ? "working" : "idle", { cwd: await $.session.cwd(), model: await $.session.model() });
     return next(e);
   });
 
