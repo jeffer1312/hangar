@@ -118,7 +118,9 @@ Vale para toda Task que move código para o core ou para outro crate.
    `#[cfg(test)]` usado por testes do servidor (ex.: `runtime::queue::atomic_write_inspected`,
    `queue.rs:1321`, usado por `omp_sync/mechanism_tests.rs:251` e `provider_models/tests_extra.rs`)
    fica atrás de uma feature `test-support` do crate novo, ligada só em `[dev-dependencies]` do
-   servidor. Teste inline que usa só o código movido vai junto; teste que usa o servidor vai para
+   servidor. Teste inline que usa só o código movido vai junto, e o arquivo de `tests/it` do servidor
+   que exercita só o módulo movido também (para o `tests/it/` do crate novo): se ficar no servidor,
+   mexer no crate ainda dispara o `it` grande. Teste que usa o servidor vai para
    `crates/hangar-server/tests/it/` ou para um módulo `#[cfg(test)]` do servidor. Crate novo tem os
    testes em `src/` ou num `tests/it/` único, nunca um executável por arquivo de `tests/`: cada
    executável linka o crate e as dependências dele inteiros (no servidor eram 94, de 180 a 430 MB,
@@ -217,6 +219,101 @@ Leitura honesta: esta fase prova o caminho e para o crescimento do servidor (reg
 `CLAUDE.md`), mas reduz pouco o pico. O ganho real vem de desfazer o nó de 84 módulos na segunda
 fase.
 
+## Testes por módulo: o que sai junto com o crate
+
+Contagem em `f3bc1a639` (origin/main de 11/11/2026), por leitura do texto, sem compilar nem rodar.
+Pedido do Jefferson: a `verificar-local` roda os ~6.300 testes do crate a cada linha mexida, e a
+divisão só alivia isso se o crate que sai levar os testes dele.
+
+- **Tipo 1 (sai junto):** o teste exercita só a lógica do módulo. Conta o `#[test]`/`#[tokio::test]`
+  de `src/` e o de `tests/it` que não sobe nada.
+- **Tipo 2 (fica no `it` do servidor):** o teste, ou um ajudante que ele chama no mesmo arquivo ou
+  nas pastas de apoio do `it`, usa `AppState`, `spawn_server`/`spawn_state`/`serve_mods`,
+  `hangar_server::routes::`, `RuntimeRegistry`, `ListHub`, tmux, psmux, o cano ou um binário do
+  workspace (`CARGO_BIN_EXE`).
+- **Módulo de um arquivo do `it`:** o prefixo do nome do arquivo (`share_gate.rs` → `share`); sem
+  prefixo que case, o módulo de `hangar_server::` mais citado nele.
+- **Usa do servidor:** quantos outros módulos de topo o módulo cita por `crate::`, teste incluído.
+  Conta também módulo que já é só reexportação de outro crate (`transcript`, `diag`), então o número
+  é teto.
+
+| Módulo | Linhas | Tipo 1 (src + it) | Tipo 2 (src + it) | Tipo 1 | Usa do servidor |
+|---|---:|---:|---:|---:|---:|
+| `runtime` | 33.920 | 866 (225 + 641) | 182 (41 + 141) | 83% | 25 |
+| `voice` | 13.169 | 314 (314 + 0) | 13 (0 + 13) | 96% | 8 |
+| `accounts` | 18.019 | 270 (218 + 52) | 113 (11 + 102) | 70% | 16 |
+| `share` | 3.271 | 184 (2 + 182) | 148 (0 + 148) | 55% | 12 |
+| `list` | 12.563 | 180 (142 + 38) | 70 (24 + 46) | 72% | 34 |
+| `session_open` | 12.734 | 180 (180 + 0) | 27 (16 + 11) | 87% | 29 |
+| `costs` | 5.593 | 166 (10 + 156) | 0 (0 + 0) | 100% | 3 |
+| `mods` | 4.000 | 165 (4 + 161) | 63 (0 + 63) | 72% | 7 |
+| `update` | 11.737 | 149 (119 + 30) | 23 (0 + 23) | 87% | 19 |
+| `groups` | 6.943 | 140 (23 + 117) | 131 (0 + 131) | 52% | 15 |
+| `session_write` | 6.362 | 122 (73 + 49) | 88 (2 + 86) | 58% | 28 |
+| `speech` | 7.650 | 114 (113 + 1) | 10 (2 + 8) | 92% | 11 |
+| `state` | 6.506 | 109 (104 + 5) | 14 (13 + 1) | 89% | 16 |
+| `terminal_input` | 1.870 | 103 (4 + 99) | 5 (0 + 5) | 95% | 3 |
+| `search` | 4.411 | 98 (98 + 0) | 21 (1 + 20) | 82% | 17 |
+| `remote_browser` | 2.064 | 66 (5 + 61) | 8 (0 + 8) | 89% | 8 |
+| `connect` | 611 | 64 (0 + 64) | 76 (0 + 76) | 46% | 7 |
+| `plugin` | 2.176 | 54 (43 + 11) | 11 (1 + 10) | 83% | 8 |
+| `pages` | 1.759 | 50 (50 + 0) | 11 (0 + 11) | 82% | 4 |
+| `codex_setup` | 7.306 | 46 (33 + 13) | 2 (2 + 0) | 96% | 17 |
+| `orchestration` | 5.768 | 45 (34 + 11) | 5 (4 + 1) | 90% | 10 |
+| `uploads` | 2.507 | 45 (11 + 34) | 7 (3 + 4) | 87% | 8 |
+| `vault` | 4.799 | 45 (45 + 0) | 22 (22 + 0) | 67% | 8 |
+| `loops` | 2.416 | 44 (44 + 0) | 6 (2 + 4) | 88% | 19 |
+| `side` | 2.718 | 44 (44 + 0) | 4 (4 + 0) | 92% | 18 |
+| `provider_models` | 3.891 | 30 (30 + 0) | 12 (12 + 0) | 71% | 11 |
+| `device_install` | 1.842 | 26 (26 + 0) | 15 (0 + 15) | 63% | 4 |
+| `push` | 2.942 | 26 (26 + 0) | 5 (5 + 0) | 84% | 17 |
+| `diag_report` | 2.050 | 24 (24 + 0) | 11 (5 + 6) | 69% | 9 |
+| `dictation` | 4.218 | 24 (24 + 0) | 41 (0 + 41) | 37% | 13 |
+| `subagents` | 1.825 | 22 (22 + 0) | 0 (0 + 0) | 100% | 2 |
+| `machine_peers` | 3.629 | 19 (3 + 16) | 6 (0 + 6) | 76% | 14 |
+| `transcription` | 1.542 | 17 (17 + 0) | 5 (5 + 0) | 77% | 5 |
+| `config_sync` | 5.543 | 16 (16 + 0) | 1 (1 + 0) | 94% | 21 |
+| `mcp` | 1.604 | 16 (16 + 0) | 21 (0 + 21) | 43% | 12 |
+| `session_media` | 555 | 11 (4 + 7) | 31 (0 + 31) | 26% | 6 |
+| `commands` | 1.628 | 9 (1 + 8) | 6 (0 + 6) | 60% | 6 |
+| `harness_setup` | 3.514 | 9 (1 + 8) | 1 (0 + 1) | 90% | 19 |
+| `archive_list` | 814 | 6 (6 + 0) | 36 (0 + 36) | 14% | 13 |
+| `term` | 1.629 | 6 (6 + 0) | 17 (17 + 0) | 26% | 6 |
+| `worktree_routes` | 715 | 6 (2 + 4) | 42 (1 + 41) | 12% | 8 |
+| `login_guests` | 2.417 | 4 (1 + 3) | 3 (0 + 3) | 57% | 14 |
+| `engines` | 1.951 | 2 (0 + 2) | 6 (0 + 6) | 25% | 13 |
+| `routes` | 1.977 | 1 (1 + 0) | 21 (12 + 9) | 5% | 92 |
+| `workspace_routes` | 852 | 1 (1 + 0) | 49 (0 + 49) | 2% | 11 |
+| `costs_routes` | 443 | 0 (0 + 0) | 50 (0 + 50) | 0% | 2 |
+| outros 72 módulos | 26.863 | 430 (317 + 113) | 260 (20 + 240) | 62% | — |
+| executáveis à parte (22 arquivos) | — | 207 | 45 | 82% | — |
+| **Total** | 253.316 | 4.575 | 1.744 | 72% | |
+
+Total: 6.319 testes. Em `src/` são 2.708 (2.482 do tipo 1), no `tests/it` 3.359 (1.886 do tipo 1 e
+1.473 do tipo 2) e 252 em cerca de 20 executáveis à parte (22 arquivos em `tests/*.rs` e
+`tests/costs_hook`).
+
+O que a tabela mostra:
+
+- **72% dos testes são do tipo 1.** Com tudo extraído, o `it` do servidor fica com 1.744 testes, e
+  não some: é o que sobe servidor, tmux e cano.
+- **1.886 testes do tipo 1 moram no `tests/it` do servidor.** Eles não saem sozinhos: mover o
+  módulo sem levar esses arquivos para o `tests/it` do crate novo deixa a verificação igual. Só os
+  de `src/` saem de graça.
+- **O nó `runtime`/`accounts`/`list`/`session_open`/`session_write`/`state` tem 1.727 testes do
+  tipo 1**, 38% de todos, e `runtime` sozinho tem 866. É onde está o alívio grande e é o corte mais
+  caro. Os arquivos grandes do `runtime` no `it` (`terminal_runtime.rs`, `runtime_claude.rs`) citam
+  `terminal_input`, `mods`, `plugin` e `interactions`: saem quando esses módulos estiverem fora.
+- **Rende pouco na verificação** (quase tudo tipo 2, mexer neles ainda dispara o `it` grande):
+  `workspace_routes` 2%, `routes` 5%, `worktree_routes` 12%, `archive_list` 14%, `session_media`
+  26%, `term` 26%, `dictation` 37%, `mcp` 43%, `connect` 46%. `costs_routes` está em 0% hoje porque
+  os 50 testes dele sobem o servidor; com o `CostsState` da Task 5 podem montar só a rota de custos.
+- **140 testes de `connect` e 36 de `transcript` ainda estão no `it` do servidor**, embora os dois
+  já sejam crate: entram pelo `pub use` do servidor. Os do tipo 1 (64 e 16) podem ir para os crates
+  deles sem extrair código.
+- **Cerca de 20 executáveis à parte ainda linkam o servidor inteiro** (252 testes). `hangar-package` e
+  `hangar-transcript` têm 2 arquivos em `tests/` cada, contra a regra do item 5 do contrato.
+
 ## Ordem e paralelismo
 
 As Tasks são uma cadeia: cada uma usa o que a anterior desceu e move arquivos que a próxima toca.
@@ -231,6 +328,21 @@ próprio: o ganho de memória é nulo e crate com uma responsabilidade tão pequ
 (`rust-crate-architecture`, "Crate or module?"). `orq_storage` vai com `orchestration` na segunda
 fase; `plugin_listener` fica no servidor. Depois do core, a ordem segue o que falta cortar (seção
 "Números conferidos").
+
+**Ordem revista pelos testes (11/11/2026).** Critério: testes do tipo 1 que saem, contra quantos
+módulos do servidor ainda prendem o módulo (seção "Testes por módulo").
+
+1. Nesta fase a ordem fica: Task 5 e 6 (`costs`: 166 do tipo 1, mais os 71 de `tests/costs_hook` e,
+   com o `CostsState`, os 50 de `costs_routes`) e Task 7 (`voice`: 314, todos em `src/`).
+2. Segunda fase, do que rende mais por corte: `terminal_input` (103 testes em 1.870 linhas, usa 3
+   módulos); os pequenos `pages` (50), `permission_control` (35), `subagents` (22) e `tail` (20);
+   `mods` (165); `speech` (114); `remote_browser` (66); `plugin` (54); `orchestration` e `uploads`
+   (45 cada).
+3. `share` (184 de 332) e `groups` (140 de 271): metade fica no `it` de qualquer jeito.
+4. O nó (`runtime` 866, `accounts` 270, `session_open` 180, `list` 180, `session_write` 122,
+   `state` 109): depende da inversão da seção "Adiado" e de `terminal_input`, `mods` e `plugin`
+   já fora.
+5. Sem pressa, porque não aliviam a verificação: os módulos de rota listados acima.
 
 O core é um crate só, com módulos por assunto (`net`, `http`, `pycompat`, `fs`, `process`, `paths`,
 `edge`…). Separar a parte pura num crate próprio não reduz memória; fica para quando houver motivo
@@ -494,6 +606,10 @@ já usa `CostsState` (Task 5).
 - [ ] **Step 1: Conferir** `grep -rnE 'crate::' crates/hangar-server/src/{costs,costs_routes.rs}` →
   só `crate::costs`, `crate::costs_routes` e itens re-exportados do core.
 - [ ] **Step 2: Mover `costs/` e `costs_routes.rs`** para `crates/hangar-costs/` pelo contrato.
+  Vão junto, num `tests/it/` só: `tests/costs_hook/*` (71 testes) e os arquivos do tipo 1 do `it`
+  do servidor (`contract_costs_*`, `costs_*_unit`, `costs_fx`, `costs_origins`,
+  `costs_fast_paths`; 156 testes). Os 50 de `tests/it/costs_routes.rs` vão se montarem só o
+  `CostsState`; os que precisam do servidor inteiro ficam.
 - [ ] **Step 3: Provas comuns** (quando autorizadas), incluindo `tests/costs_hook/*` (31 usos de
   `hangar_server::costs`) e `tests/it/contract_costs_*.rs` (26).
 - [ ] **Step 4: Uso real — verificação manual** Custos e Uso no app.
@@ -627,7 +743,8 @@ Status: ready-for-agent (depois da Task 9)
   da seção "Números conferidos", e a lista de alvos restantes por módulo.
 - [ ] **Step 2: Medir a memória** de um `rustc` do `hangar-server` e de cada crate novo (quando o
   Jefferson autorizar o build) e trocar a tabela de estimativa pelo medido.
-- [ ] **Step 3: Escrever o plano da segunda fase** em `docs/superpowers/plans/`: `speech`,
+- [ ] **Step 3: Escrever o plano da segunda fase** em `docs/superpowers/plans/`, na ordem da seção
+  "Ordem e paralelismo" (revista pelos testes) e refazendo a contagem de "Testes por módulo": `speech`,
   `orchestration` (com `orq_storage`), `remote_browser`, `mods`, e o nó `runtime`/`accounts`/`list`/
   `session_open`/`session_write`/`state` (com a inversão da seção "Adiado"); incluir o PR que
   retira os re-exports do item 1 do contrato.
