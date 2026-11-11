@@ -42,16 +42,23 @@ export function ComposerBox({ focused, children }: { focused: boolean; children:
 
 export const ComposerInput = forwardRef<TextInput, ComponentProps<typeof MultilineInput> & {
   recording: boolean; rms: SharedValue<number>; onCancelRecording: () => void;
-}>(function ComposerInput({ recording, rms, onCancelRecording, ...props }, ref) {
+  // Avisa se o texto passou de uma linha, pela mesma medida que dá a altura.
+  onMultiline?: (multi: boolean) => void;
+}>(function ComposerInput({ recording, rms, onCancelRecording, onMultiline, ...props }, ref) {
   const { theme } = useUnistyles();
   const { height } = useWindowDimensions();
   const availableHeight = useContext(ComposerSpace);
   const maxHeight = Math.max(40, Math.min(props.maxHeight ?? height * 0.4, availableHeight === null ? Infinity : availableHeight * 0.6));
-  const { fontFamily, fontSize, lineHeight, fontWeight, fontStyle, fontVariant, letterSpacing } = NativeStyleSheet.flatten<TextStyle>([
+  const { fontFamily, fontSize, lineHeight, fontWeight, fontStyle, fontVariant, letterSpacing, paddingVertical } = NativeStyleSheet.flatten<TextStyle>([
     styles.inputText, props.mono && { fontFamily: theme.base.fontMono }, props.style,
   ]);
   const [textHeight, setTextHeight] = useState(40);
-  const measureText = useCallback((e: LayoutChangeEvent) => setTextHeight(Math.ceil(e.nativeEvent.layout.height)), []);
+  const oneLine = (lineHeight ?? 22) * 1.5 + 2 * (typeof paddingVertical === 'number' ? paddingVertical : 0);
+  const measureText = useCallback((e: LayoutChangeEvent) => {
+    const h = Math.ceil(e.nativeEvent.layout.height);
+    setTextHeight(h);
+    onMultiline?.(h > oneLine);
+  }, [onMultiline, oneLine]);
   return <View style={[styles.inputWrap, recording && styles.recordingWrap]}>
     {/* O tamanho do input pode não mudar ao receber ditado; a medida precisa independer dele. */}
     <Text style={[styles.inputText, { fontFamily, fontSize, lineHeight, fontWeight, fontStyle, fontVariant, letterSpacing }, styles.measureText]} onLayout={measureText} pointerEvents="none"
@@ -101,8 +108,10 @@ export function modeMenuHandlers(menu: ModeMenu | undefined) {
 }
 
 // `field`: o campo entra na própria fileira ([+] campo [modelo] [mic] [enviar]), que cresce com o texto.
-export function ComposerActions({ attach, mic, send, settings, beforeMic, afterMic, afterSettings, modeMenu, field }: {
+export function ComposerActions({ attach, mic, send, settings, beforeMic, afterMic, afterSettings, modeMenu, field, wide }: {
   field?: ReactNode;
+  // Texto de várias linhas: o campo toma a largura e os botões descem para a linha de baixo.
+  wide?: boolean;
   attach: Action;
   mic: Action & { recording: boolean; styleLabel: string; onStyle: () => void };
   send: Action & { label: string; hint?: string; editing?: boolean; count?: number; visible?: boolean };
@@ -149,9 +158,9 @@ export function ComposerActions({ attach, mic, send, settings, beforeMic, afterM
       </View> : null}
     </Pressable>);
   // Gravando, a onda precisa da largura toda: o campo ocupa a linha e os botões descem para a de baixo.
-  if (field) return <View style={[styles.row, styles.rowField, mic.recording ? ROW_RECORDING : ROW_IDLE]}>
+  if (field) return <View style={[styles.row, styles.rowField, mic.recording || wide ? ROW_WRAP : ROW_IDLE]}>
     {mic.recording ? null : <View style={styles.side}>{attachBtn}</View>}
-    <View style={mic.recording ? FIELD_RECORDING : FIELD_IDLE}>{field}</View>
+    <View style={mic.recording ? FIELD_RECORDING : wide ? FIELD_WIDE : FIELD_IDLE}>{field}</View>
     <View style={styles.side}>{settings}{micGroup}{afterSettings}{sendBtn}</View>
   </View>;
   return <View style={styles.row}>
@@ -167,9 +176,11 @@ export function ComposerActions({ attach, mic, send, settings, beforeMic, afterM
 // Valores simples e as mesmas chaves nos dois estados, sem estilo do unistyles nessas caixas: no
 // aparelho o valor dele vencia o que vinha por cima (o flex: 1 não deixava a onda ocupar a linha) e
 // ficava preso ao parar de gravar (o campo na largura da linha, com os botões fora da tela).
-const ROW_RECORDING = { flexWrap: 'wrap', justifyContent: 'flex-end' } as const;
+const ROW_WRAP = { flexWrap: 'wrap', justifyContent: 'flex-end' } as const;
 const ROW_IDLE = { flexWrap: 'nowrap', justifyContent: 'flex-start' } as const;
 const FIELD_RECORDING = { flexGrow: 0, flexShrink: 0, flexBasis: '100%', minWidth: 0 } as const;
+// 80%: cabe ao lado do anexo e não deixa os botões na mesma linha; o grow completa o resto.
+const FIELD_WIDE = { flexGrow: 1, flexShrink: 1, flexBasis: '80%', minWidth: 0 } as const;
 const FIELD_IDLE = { flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0 } as const;
 
 const SEND_SLOP = 5;

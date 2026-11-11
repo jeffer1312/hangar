@@ -115,6 +115,10 @@ export function NewConversation({
   const issue = useNewConversation((s) => s.issues[serverId] ?? null);
   const busy = useNewConversation((s) => !!s.busy[serverId]);
   const [text, setText] = useState(carried.text);
+  // Passou de uma linha, fica larga até o campo esvaziar: voltar pela largura faria o texto pular.
+  const [wide, setWide] = useState(false);
+  useEffect(() => { if (!text) setWide(false); }, [text]);
+  const onMultiline = useCallback((multi: boolean) => { if (multi) setWide(true); }, []);
   const [attachment, setAttachment] = useState<PickedAttachment | null>(carried.attachment);
   const [attachError, setAttachError] = useState('');
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
@@ -446,7 +450,9 @@ export function NewConversation({
       <ComposerBox focused={focused}>
         {attachment ? <AttachmentPreview attachment={attachment} onRemove={removeAttachment} disabled={busy} /> : null}
         {dictation.transcribing ? <Text style={styles.meta} accessibilityLiveRegion="polite">{m.composer_transcrevendo_audio()}</Text> : null}
-        <ComposerActions field={<ComposerInput ref={input} value={text} onChangeText={setText} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+        {/* Cinco linhas e rola: o título ocupa o alto, e mais que isso entrava embaixo do teclado. */}
+        <ComposerActions wide={wide} field={<ComposerInput ref={input} value={text} onChangeText={setText} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+          maxHeight={FIELD_MAX_HEIGHT} onMultiline={onMultiline}
           placeholder={m.composer_mensagem()} accessibilityLabel={m.nova_conversa_placeholder()}
           editable={!collapsed} autoFocus={!home && (router.canGoBack?.() ?? true)} recording={dictation.gravando} rms={dictation.rms} onCancelRecording={dictation.cancel}
           onPaste={(files, error) => {
@@ -522,6 +528,9 @@ export function NewConversation({
 
 // Fundo transparente: quem pinta é o Background da Screen, então Aparência (Liso, Textura, Luz,
 // Imagem, Transparência) vale aqui como no chat.
+// Cinco linhas do corpo (24) mais o respiro de cima e de baixo do campo.
+const FIELD_MAX_HEIGHT = 24 * 5 + 16;
+
 const styles = StyleSheet.create((theme) => ({
   root: { flex: 1, backgroundColor: 'transparent' },
   keyboard: { flex: 1 },
