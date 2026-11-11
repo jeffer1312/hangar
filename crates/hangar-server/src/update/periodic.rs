@@ -14,8 +14,12 @@ use crate::accounts::environment::AccountEnvironment;
 
 /// O `_AUTO_UPDATE_INTERVALO` do Python.
 pub const INTERVAL: Duration = Duration::from_secs(3600);
+/// Adiado, confere de novo cedo para pegar a janela ociosa.
+pub const RECHECK: Duration = Duration::from_secs(300);
 /// Atualização que falhou segura novas tentativas por 24 h.
 const FAILURE_WINDOW: chrono::TimeDelta = chrono::TimeDelta::hours(24);
+/// Sessão ou fila que nunca param não seguram a atualização para sempre; a entrega incerta segura.
+const DEFER_CEILING: chrono::TimeDelta = chrono::TimeDelta::hours(24);
 
 /// O que um tique pergunta à máquina; o teste troca.
 pub trait Machine {
@@ -25,8 +29,8 @@ pub trait Machine {
     fn state(&self) -> super::StateSnapshot;
     /// A versão publicada quando é mais nova que a instalada.
     fn newer(&self, channel: &str) -> impl Future<Output = Result<Option<String>, String>> + Send;
-    /// Alguma sessão trabalhando agora.
-    fn working(&self) -> impl Future<Output = Result<bool, String>> + Send;
+    /// O que segura a atualização agora (`busy`).
+    fn busy(&self) -> impl Future<Output = Result<Option<Busy>, String>> + Send;
     fn launch(&self) -> impl Future<Output = Result<(), String>> + Send;
 }
 
@@ -34,10 +38,51 @@ pub trait Machine {
 pub enum Tick {
     Launched { version: String },
     Skipped(String),
+    Deferred(String),
 }
 
-/// Um tique. `now` vem de fora (relógio do teste).
-pub async fn tick(machine: &impl Machine, now: chrono::DateTime<chrono::FixedOffset>) -> Tick {
+/// O que segura a atualização, do mais forte ao mais fraco.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Busy { Uncertain, Working, Queue }
+
+impl Busy {
+    pub(crate) fn why(self) -> &'static str {
+        match self { Busy::Uncertain => "entrega incerta", Busy::Working => "sessao trabalhando", Busy::Queue => "fila com mensagem esperando" }
+    }
+}
+
+/// O que segura a atualização nesta máquina; fila ilegível não segura.
+pub async fn busy_now(list: &crate::list::bridge::ListBridge, state: &crate::state::live::StateEnv) -> Result<Option<Busy>, String> {
+    let produced = list.snapshot().await.map_err(|e| e.code.to_owned())?;
+    let working = produced.rows.iter().any(|row| row.state == "working");
+    let Some(registry) = state.runtime.get() else { return Ok(working.then_some(Busy::Working)) };
+    let files = registry.queue_files().await;
+    let queues = tokio::task::spawn_blocking(move || {
+        files.into_values().filter_map(|(_, path, created)| queue_hold(&path, created)).collect::<Vec<_>>()
+    }).await.map_err(|e| e.to_string())?;
+    if queues.contains(&Busy::Uncertain) { return Ok(Some(Busy::Uncertain)); }
+    Ok(if working { Some(Busy::Working) } else { queues.first().copied() })
+}
+
+fn queue_hold(path: &std::path::Path, created: f64) -> Option<Busy> {
+    let bytes = crate::runtime::queue::read_replaced(path).ok()?;
+    let (state, _) = crate::runtime::queue::State::load(&bytes).ok()?;
+    if state.delivery_uncertain() { return Some(Busy::Uncertain); }
+    (!crate::runtime::queue::waiting_ids(&state, created).is_empty()).then_some(Busy::Queue)
+}
+
+type Time = chrono::DateTime<chrono::FixedOffset>;
+
+/// Desde quando está adiado e quanto esperar até o próximo tique.
+pub fn next(since: Option<Time>, outcome: &Tick, now: Time) -> (Option<Time>, Duration) {
+    match outcome {
+        Tick::Deferred(_) => (Some(since.unwrap_or(now)), RECHECK),
+        _ => (None, INTERVAL),
+    }
+}
+
+/// Um tique. `now` vem de fora (relógio do teste); `since` é desde quando a atualização está adiada.
+pub async fn tick(machine: &impl Machine, now: Time, since: Option<Time>) -> Tick {
     let skip = |why: &str| Tick::Skipped(why.to_owned());
     let Some(channel) = machine.package_channel() else { return skip("fora do modo pacote") };
     // Como no motor `git`: o automático segue só a main; canal de teste atualiza pelo botão.
@@ -56,9 +101,12 @@ pub async fn tick(machine: &impl Machine, now: chrono::DateTime<chrono::FixedOff
         Ok(None) => return skip("em dia"),
         Err(e) => return Tick::Skipped(format!("índice ilegível: {e}")),
     };
-    match machine.working().await {
-        Ok(false) => {}
-        Ok(true) => return skip("sessao trabalhando"),
+    match machine.busy().await {
+        Ok(None) => {}
+        Ok(Some(busy)) if busy == Busy::Uncertain || since.is_none_or(|since| now - since < DEFER_CEILING) => {
+            return Tick::Deferred(busy.why().to_owned());
+        }
+        Ok(Some(busy)) => tracing::warn!("update: adiada há 24 h ({}); atualiza assim mesmo", busy.why()),
         Err(e) => return Tick::Skipped(format!("lista indisponível: {e}")),
     }
     match machine.launch().await {
@@ -71,6 +119,7 @@ pub async fn tick(machine: &impl Machine, now: chrono::DateTime<chrono::FixedOff
 pub struct Live {
     pub env: AccountEnvironment,
     pub list: Arc<crate::list::bridge::ListBridge>,
+    pub state: Arc<crate::state::live::StateEnv>,
     pub listen: SocketAddr,
     pub client: reqwest::Client,
     pub runtime: crate::config_sync::runtime::RuntimeConfig,
@@ -107,10 +156,7 @@ impl Machine for Live {
         Ok(entry.map(|e| e.version).filter(|v| manifest.as_ref().is_none_or(|m| *v != m.version)))
     }
 
-    async fn working(&self) -> Result<bool, String> {
-        let produced = self.list.snapshot().await.map_err(|e| e.code.to_owned())?;
-        Ok(produced.rows.iter().any(|row| row.state == "working"))
-    }
+    async fn busy(&self) -> Result<Option<Busy>, String> { busy_now(&self.list, &self.state).await }
 
     async fn launch(&self) -> Result<(), String> {
         let (home, claude) = (self.env.home.clone(), self.env.claude_base.clone());
@@ -128,12 +174,19 @@ impl Machine for Live {
 /// O laço: o primeiro tique depois de um intervalo (nunca na subida). Só o `main` liga.
 pub fn spawn(machine: Live) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let (mut since, mut wait) = (None, INTERVAL);
         loop {
-            tokio::time::sleep(INTERVAL).await;
-            match tick(&machine, chrono::Local::now().fixed_offset()).await {
+            tokio::time::sleep(wait).await;
+            let now = chrono::Local::now().fixed_offset();
+            let outcome = tick(&machine, now, since).await;
+            let first = since.is_none();
+            (since, wait) = next(since, &outcome, now);
+            match outcome {
                 Tick::Launched { version } => tracing::info!(version, "update: atualização automática lançada"),
                 Tick::Skipped(why) if why == "fora do modo pacote" || why == "em dia" => tracing::debug!("update: automático: {why}"),
                 Tick::Skipped(why) => tracing::info!("update: automático pulado: {why}"),
+                Tick::Deferred(why) if first => tracing::info!("update: automático adiado: {why}"),
+                Tick::Deferred(why) => tracing::debug!("update: automático ainda adiado: {why}"),
             }
         }
     })
@@ -152,14 +205,14 @@ mod tests {
         automations: bool,
         state: Value,
         newer: Option<&'static str>,
-        working: bool,
+        busy: Option<Busy>,
         launched: AtomicUsize,
     }
 
     impl Default for Fake {
         fn default() -> Fake {
             Fake { channel: Some("latest"), automations: true, state: json!({"fase": "pronto", "ok": true}), newer: Some("0.1.0.9"),
-                working: false, launched: AtomicUsize::new(0) }
+                busy: None, launched: AtomicUsize::new(0) }
         }
     }
 
@@ -168,27 +221,26 @@ mod tests {
         fn automations(&self) -> bool { self.automations }
         fn state(&self) -> crate::update::StateSnapshot { self.state.as_object().cloned().unwrap().into() }
         async fn newer(&self, _channel: &str) -> Result<Option<String>, String> { Ok(self.newer.map(str::to_owned)) }
-        async fn working(&self) -> Result<bool, String> { Ok(self.working) }
+        async fn busy(&self) -> Result<Option<Busy>, String> { Ok(self.busy) }
         async fn launch(&self) -> Result<(), String> { self.launched.fetch_add(1, Ordering::SeqCst); Ok(()) }
     }
 
     fn now() -> chrono::DateTime<chrono::FixedOffset> { chrono::DateTime::parse_from_rfc3339("2026-10-24T12:00:00-03:00").unwrap() }
 
     async fn launches(fake: Fake) -> usize {
-        tick(&fake, now()).await;
+        tick(&fake, now(), None).await;
         fake.launched.load(Ordering::SeqCst)
     }
 
     #[tokio::test]
     async fn update_periodic_launches_only_with_automations_on_and_a_newer_version() {
         let fake = Fake::default();
-        assert_eq!(tick(&fake, now()).await, Tick::Launched { version: "0.1.0.9".into() });
+        assert_eq!(tick(&fake, now(), None).await, Tick::Launched { version: "0.1.0.9".into() });
         assert_eq!(fake.launched.load(Ordering::SeqCst), 1);
         assert_eq!(launches(Fake { automations: false, ..Fake::default() }).await, 0);
         assert_eq!(launches(Fake { newer: None, ..Fake::default() }).await, 0);
         assert_eq!(launches(Fake { channel: None, ..Fake::default() }).await, 0, "modo desenvolvedor e máquina não migrada");
         assert_eq!(launches(Fake { channel: Some("beta"), ..Fake::default() }).await, 0);
-        assert_eq!(launches(Fake { working: true, ..Fake::default() }).await, 0);
         assert_eq!(launches(Fake { state: json!({"fase": "rodando"}), ..Fake::default() }).await, 0);
     }
 
@@ -198,5 +250,34 @@ mod tests {
         assert_eq!(launches(failed("2026-10-24T08:00:00-03:00")).await, 0, "falhou há 4 h");
         assert_eq!(launches(failed("2026-10-23T11:00:00-03:00")).await, 1, "falhou há 25 h");
         assert_eq!(launches(failed("lixo")).await, 1, "hora ilegível abre, como no Python");
+    }
+
+    #[tokio::test]
+    async fn update_periodic_defers_while_a_session_works_a_queue_waits_or_a_delivery_is_uncertain() {
+        for (busy, why) in [(Busy::Working, "sessao trabalhando"), (Busy::Queue, "fila com mensagem esperando"), (Busy::Uncertain, "entrega incerta")] {
+            let fake = Fake { busy: Some(busy), ..Fake::default() };
+            assert_eq!(tick(&fake, now(), None).await, Tick::Deferred(why.into()));
+            assert_eq!(fake.launched.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn update_periodic_ceiling_releases_work_and_queue_but_not_an_uncertain_delivery() {
+        let run = |busy, hours| async move {
+            tick(&Fake { busy: Some(busy), ..Fake::default() }, now(), Some(now() - chrono::TimeDelta::hours(hours))).await
+        };
+        assert_eq!(run(Busy::Working, 23).await, Tick::Deferred("sessao trabalhando".into()), "adiado há 23 h ainda segura");
+        assert_eq!(run(Busy::Working, 24).await, Tick::Launched { version: "0.1.0.9".into() });
+        assert_eq!(run(Busy::Queue, 25).await, Tick::Launched { version: "0.1.0.9".into() });
+        assert_eq!(run(Busy::Uncertain, 48).await, Tick::Deferred("entrega incerta".into()), "entrega incerta segura sempre");
+    }
+
+    #[test]
+    fn update_periodic_rechecks_every_5_minutes_while_deferred() {
+        let (later, deferred) = (now() + chrono::TimeDelta::minutes(5), Tick::Deferred("sessao trabalhando".into()));
+        assert_eq!(next(None, &deferred, now()), (Some(now()), RECHECK));
+        assert_eq!(next(Some(now()), &deferred, later), (Some(now()), RECHECK), "o adiamento conta desde o primeiro");
+        assert_eq!(next(Some(now()), &Tick::Launched { version: "0.1.0.9".into() }, later), (None, INTERVAL));
+        assert_eq!(next(Some(now()), &Tick::Skipped("em dia".into()), later), (None, INTERVAL));
     }
 }

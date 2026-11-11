@@ -199,6 +199,7 @@ fn terminal_write_barrier_follows_remaining_uncertain_input_and_lifts_after_last
         };
         assert_eq!(store.state().runtime_state["terminal_write_barrier"]["operation_id"],"A");
         assert!(store.state().terminal_write_blocked("sid"));
+        assert!(store.state().delivery_uncertain(),"a atualização automática espera esta entrega");
         if resolution=="confirm" {assert_eq!(confirm(&mut store,&index,"A"),true);}
         else {store.exec(1,"late:A",clock(),Action::Finish {id:"A".into(),status:Status::Accepted,result:json!({"operation_id":"A","disposition":"accepted","payload":{}})}).unwrap();}
         // B continua incerta na mesma conversa: a trava passa para ela.
@@ -207,6 +208,7 @@ fn terminal_write_barrier_follows_remaining_uncertain_input_and_lifts_after_last
         assert_eq!(confirm(&mut store,&index,"B"),true);
         assert!(store.state().runtime_state.get("terminal_write_barrier").is_none(),"{resolution}");
         assert!(!store.state().terminal_write_blocked("sid"));
+        assert!(!store.state().delivery_uncertain(),"{resolution}");
         drop(store);let store=Store::open(&path,dir.path(),State::new("key",1,"session",vec![])).unwrap();
         assert!(!store.state().terminal_write_blocked("sid"));
     }

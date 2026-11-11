@@ -14,7 +14,7 @@ async fn attempt(source:&Live)->Result<(),String> {
     let (code,tail)=source.fetch().await?;
     if code!=0 {source.report(Event::FetchFailed(code,tail));}
     let mut reason=source.reason().await?;
-    if reason.is_none() && source.working().await? {reason=Some("sessao trabalhando".into());}
+    if reason.is_none() {reason=source.busy().await?.map(|busy|busy.why().into());}
     match reason {
         None=>{
             source.report(Event::Launch);
@@ -33,6 +33,7 @@ pub struct Live {
     pub service:super::Service,
     pub runtime:crate::config_sync::runtime::RuntimeConfig,
     pub list:std::sync::Arc<crate::list::bridge::ListBridge>,
+    pub state:std::sync::Arc<crate::state::live::StateEnv>,
     pub port:u16,
 }
 impl Live {
@@ -50,9 +51,7 @@ impl Live {
         let service=self.service.clone();
         tokio::task::spawn_blocking(move||service.auto_reason(&super::releases::HttpSource,Some(&crate::update::platform()),chrono::Local::now().fixed_offset())).await.map_err(|error|error.to_string())?
     }
-    async fn working(&self)->Result<bool,String>{
-        self.list.snapshot().await.map(|snapshot|snapshot.rows.iter().any(|row|row.state=="working")).map_err(|error|error.code.to_owned())
-    }
+    async fn busy(&self)->Result<Option<crate::update::periodic::Busy>,String>{crate::update::periodic::busy_now(&self.list,&self.state).await}
     async fn launch(&self)->Result<Value,String>{
         let service=self.service.clone();let port=self.port;
         tokio::task::spawn_blocking(move||service.start_detached(port,Some("main"),false)).await.map_err(|error|error.to_string())?
