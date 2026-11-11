@@ -785,7 +785,10 @@ impl Hangar {
                                     tr("update_done").replace("{version}", &parse_version(&value).version)
                                 };
                                 self.finish_update(ok, message, cx);
-                                if ok { crate::update::confirm::show_pending(false, window, cx); }
+                                // A releitura do servidor desta máquina vê a versão nova e mostra o que chegou.
+                                if ok && let Some(updater) = cx.try_global::<crate::update::Handle>().map(|handle| handle.0.clone()) {
+                                    updater.update(cx, |updater, cx| updater.refresh(cx));
+                                }
                             }
                             _ => {}
                         }

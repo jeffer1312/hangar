@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-const mocks = vi.hoisted(() => ({ updateAll: vi.fn(), prepare: vi.fn(), notification: vi.fn(), push: vi.fn(), confirm: true,
+const mocks = vi.hoisted(() => ({ updateAll: vi.fn(), prepare: vi.fn(), arrived: vi.fn(), seen: vi.fn(), notification: vi.fn(), push: vi.fn(), confirm: true,
   accept: undefined as Record<string, unknown> | undefined, store: new Map<string, string>() }));
 // A folha "Atualizar?" é rota: abrir responde na hora com a escolha do teste.
 vi.mock('expo-router', async () => {
@@ -19,7 +19,8 @@ vi.mock('react-native-mmkv', () => ({ createMMKV: () => ({
 }) }));
 vi.mock('../../stores/servers', () => ({ useServers: (select: (state: { activeId: string | null }) => unknown) => select({ activeId: 'b' }) }));
 vi.mock('@hangar/core', async (original) => ({ ...await original<typeof import('@hangar/core')>(), updateAll: mocks.updateAll,
-  prepareUpdateAll: (servers: Server[]) => mocks.prepare(servers) }));
+  prepareUpdateAll: (servers: Server[]) => mocks.prepare(servers), getArrivedNews: (server: Server) => mocks.arrived(server),
+  markArrivedSeen: (server: Server, device: string, through: number) => mocks.seen(server, device, through) }));
 vi.mock('react-native', async (original) => ({ ...await original<typeof import('react-native')>(), Platform: { OS: 'ios' } }));
 vi.mock('react-native-keyboard-controller', () => ({ KeyboardAvoidingView: ({ children }: { children: React.ReactNode }) => <div>{children}</div> }));
 vi.mock('expo-haptics', async (original) => ({ ...await original<typeof import('expo-haptics')>(), notificationAsync: mocks.notification }));
@@ -43,6 +44,8 @@ beforeEach(() => {
   mocks.updateAll.mockReset(); mocks.notification.mockReset(); mocks.notification.mockResolvedValue(undefined);
   mocks.push.mockReset(); mocks.confirm = true; mocks.accept = undefined; mocks.store.clear();
   mocks.prepare.mockReset();
+  mocks.arrived.mockReset(); mocks.arrived.mockResolvedValue(null);
+  mocks.seen.mockReset(); mocks.seen.mockResolvedValue({ through: 0 });
   mocks.prepare.mockImplementation(async (servers: Server[]) => ({ run: servers.map((server) => ({ server, notes: null })), failed: [] }));
   el = document.createElement('div'); document.body.appendChild(el); root = createRoot(el);
 });
@@ -160,14 +163,26 @@ describe('atualizar todas as máquinas', () => {
   });
 
   it('servidor ativo atualizado abre "O que chegou para você" ao fechar os resultados', async () => {
-    const { savePendingNews, whatsNewHref } = await import('../updates/pending');
-    savePendingNews(second.id, { cards: [{ id: 'n1', title: 'fixture-news', kind: 'new', text: '', platforms: 'all', try_it: null, animation: null }], fixes: [] });
+    const { peekShownNews, whatsNewHref } = await import('../updates/pending');
+    mocks.arrived.mockResolvedValue({ news: [{ id: 'n1', title: 'fixture-news', kind: 'new', text: '', platforms: 'all', try_it: null, animation: null }], through: 3 });
     mocks.updateAll.mockImplementation(async () => [{ server: second, state: { status: 'atualizado', warnings: [] } }]);
     await render(); await click(m.update_all_button({ n: '2' }));
+    expect(mocks.arrived).toHaveBeenCalledWith(second);
     expect(mocks.push).not.toHaveBeenCalledWith(whatsNewHref(second.id));
     await click(m.sessao_fechar());
-    await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
-    expect(mocks.push).toHaveBeenLastCalledWith(whatsNewHref(second.id));
+    await act(async () => { await vi.waitFor(() => expect(mocks.push).toHaveBeenLastCalledWith(whatsNewHref(second.id))); });
+    expect(peekShownNews(second.id).cards.map((n) => n.id)).toEqual(['n1']);
+  });
+
+  it('servidor ativo sem novidade para o celular não abre nada', async () => {
+    const { whatsNewHref } = await import('../updates/pending');
+    mocks.arrived.mockResolvedValue({ news: [{ id: 'd1', title: 'fixture-desktop', kind: 'new', text: '', platforms: 'desktop', try_it: null, animation: null }], through: 4 });
+    mocks.updateAll.mockImplementation(async () => [{ server: second, state: { status: 'atualizado', warnings: [] } }]);
+    await render(); await click(m.update_all_button({ n: '2' }));
+    await click(m.sessao_fechar());
+    // Lista vazia depois do filtro também marca visto; a marcação é o sinal de que a leitura terminou.
+    await act(async () => { await vi.waitFor(() => expect(mocks.seen).toHaveBeenCalledWith(second, expect.any(String), 4)); });
+    expect(mocks.push).not.toHaveBeenCalledWith(whatsNewHref(second.id));
   });
 
   it('vibra sucesso no resultado concluído', async () => {

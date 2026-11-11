@@ -835,6 +835,9 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .route("/api/migration/status", get(crate::migration_status::status).fallback(pass_any))
         // Novidades e avisos da próxima atualização: só o dono, nunca repassado (o Python não tem a rota).
         .route("/api/update/notes", get(crate::update_notes::route))
+        // O que as atualizações já trouxeram e cada aparelho ainda não viu: só o dono, nunca repassado.
+        .route("/api/update/arrived", get(crate::update_arrived::unseen))
+        .route("/api/update/arrived/seen", axum::routing::post(crate::update_arrived::seen))
         .route("/api/claude/defaults", axum::routing::post(crate::claude_defaults::save).fallback(pass_any))
         .route("/api/session-defaults", axum::routing::get(crate::session_defaults::handle).put(crate::session_defaults::handle))
         // O que já foi visto do tour do nativo: só o dono, nunca repassado (o Python não tem a rota).

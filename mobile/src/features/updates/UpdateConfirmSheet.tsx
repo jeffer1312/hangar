@@ -9,17 +9,17 @@ import { Icon } from '../../ui/Icon';
 import { haptic } from '../../ui/haptics';
 import { Notice } from '../machines/parts';
 import { NewsSections, PrimaryButton, SheetHeader, styles, useNewsTones, useSmallMarkdown } from './WhatsNewSheet';
-import { savePendingNews, type ConfirmRequest, type UpdateAcceptances } from './pending';
+import { type ConfirmRequest, type UpdateAcceptances } from './pending';
 import * as m from '../../paraglide/messages';
 
 // `title` só no "Atualizar todas": os avisos vêm agrupados por máquina.
 // `incomplete`: o servidor não leu os avisos da versão nova; o aceite vai sem `iniciar`.
 type WarningGroup = { server: Server; title?: string; warnings: UpdateWarning[]; incomplete?: boolean };
 // `runnable`: quantas máquinas vão rodar; no "Atualizar todas", só as que leram os avisos.
-type Loaded = { notes: ClientUpdateNotes | null; version: string; from: string; failed: boolean; groups: WarningGroup[]; unreachable: Server[]; runnable: number };
+type Loaded = { notes: ClientUpdateNotes | null; version: string; failed: boolean; groups: WarningGroup[]; unreachable: Server[]; runnable: number };
 
 const loadFailed = (request: ConfirmRequest): Loaded =>
-  ({ notes: null, version: '', from: '', failed: true, groups: [], unreachable: [], runnable: request.machines ? 0 : 1 });
+  ({ notes: null, version: '', failed: true, groups: [], unreachable: [], runnable: request.machines ? 0 : 1 });
 
 async function load(request: ConfirmRequest): Promise<Loaded> {
   const version = await loadVersion(request.server);
@@ -42,13 +42,13 @@ async function load(request: ConfirmRequest): Promise<Loaded> {
       incomplete: entry.notes!.incomplete === true })) };
 }
 
-async function loadVersion(server: Server): Promise<{ version: string; from: string }> {
+async function loadVersion(server: Server): Promise<{ version: string }> {
   // A rota dos avisos não busca no remoto: a consulta com procurar=1 atualiza o alvo antes.
   try {
     const { versao_legivel: v } = await getAtualizacaoEm(server, true);
-    return { from: v?.backend ?? '', version: v?.backend && v.remoto ? `${v.backend} → ${v.remoto}` : '' };
+    return { version: v?.backend && v.remoto ? `${v.backend} → ${v.remoto}` : '' };
   } catch {
-    return { version: '', from: '' }; // sem a linha da versão; os avisos ainda podem vir
+    return { version: '' }; // sem a linha da versão; os avisos ainda podem vir
   }
 }
 
@@ -80,7 +80,6 @@ export function UpdateConfirmSheet({ request, onClose }: { request: ConfirmReque
   const confirm = () => {
     if (blocked) return;
     answered.current = true;
-    savePendingNews(request.server.id, { cards: notes?.cards ?? [], fixes: notes?.fixes ?? [] }, loaded?.from);
     const accept: UpdateAcceptances = Object.fromEntries(groups.map(({ server, warnings, incomplete }) => [server.id, {
       ids: warnings.map((w) => w.id),
       ...(warnings.some((w) => w.choice === 'mode') ? { mode: modes[server.id] ?? 'package' } : {}),
