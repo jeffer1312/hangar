@@ -55,6 +55,8 @@ export async function loadArrivedNews(server: Server): Promise<boolean> {
 }
 
 async function readArrivedNews(server: Server): Promise<boolean> {
+  // Lista pronta que ninguém abriu (a tela que pediu já tinha saído): este gatilho abre.
+  if (shown.has(server.id)) return true;
   let arrived: { news: UpdateNews[]; through: number } | null;
   try { arrived = await getArrivedNews(server, updateDeviceId()); }
   catch (e) {

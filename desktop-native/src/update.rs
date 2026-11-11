@@ -740,13 +740,14 @@ impl Updater {
         cx.spawn(async move |this, cx| {
             let read = task.await.unwrap_or_else(|e| Err(Failure::local(e.to_string())));
             let Ok(open) = this.update(cx, |this, _| this.receive_arrived(read)) else { return };
-            let through = match open {
-                Some((news, through)) => cx.update(|cx| confirm::show_news(news, cx)).then_some(through),
-                None => None,
-            };
+            let shown = open.map(|(news, through)| cx.update(|cx| confirm::show_news(news, cx)).then_some(through));
             let _ = this.update(cx, |this, cx| {
-                // Só com o modal aberto: sem janela, a próxima leitura traz a lista de novo.
-                if let Some(through) = through { this.seen(api, device, through); }
+                // Só com o modal aberto: sem janela, a próxima leitura do estado traz a lista de novo.
+                match shown {
+                    Some(Some(through)) => this.seen(api, device, through),
+                    Some(None) => this.arrived.version = None,
+                    None => {}
+                }
                 if this.arrived.due && !this.busy() { this.show_arrived(cx); }
             });
         }).detach();

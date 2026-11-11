@@ -148,7 +148,10 @@ fn read(path: &Path) -> io::Result<Store> {
     match hangar_core::fs::read_replaced(path) {
         // Ilegível recomeça vazio, senão nenhuma atualização futura seria gravada; só se perde até onde cada aparelho viu.
         Ok(bytes) => Ok(serde_json::from_slice(&bytes).unwrap_or_else(|cause| {
-            tracing::warn!(code = "update_news_unreadable", %cause, path = %path.display(), "update-news.json ilegível; recomeça vazio");
+            let kept = path.with_extension("json.unreadable");
+            let copied = std::fs::write(&kept, &bytes).is_ok();
+            tracing::warn!(code = "update_news_unreadable", %cause, path = %path.display(), copied, kept = %kept.display(),
+                "update-news.json ilegível; recomeça vazio");
             Store::default()
         })),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Store::default()),
