@@ -1740,6 +1740,7 @@ dependencies = [
  "hangar-psmux",
  "hangar-transcript",
  "hangar-update-news",
+ "hangar-workflows",
  "hangar-workspace",
  "http-body-util",
  "hyper",
@@ -1819,6 +1820,19 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tracing",
+]
+
+[[package]]
+name = "hangar-workflows"
+version = "0.1.0"
+dependencies = [
+ "hangar-core",
+ "indexmap",
+ "num-bigint 0.5.1",
+ "proptest",
+ "regex",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
