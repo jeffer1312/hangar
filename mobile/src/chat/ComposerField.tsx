@@ -149,9 +149,9 @@ export function ComposerActions({ attach, mic, send, settings, beforeMic, afterM
       </View> : null}
     </Pressable>);
   // Gravando, a onda precisa da largura toda: o campo ocupa a linha e os botões descem para a de baixo.
-  if (field) return <View style={[styles.row, styles.rowField, mic.recording && styles.rowRecording]}>
+  if (field) return <View style={[styles.row, styles.rowField, mic.recording ? ROW_RECORDING : ROW_IDLE]}>
     {mic.recording ? null : <View style={styles.side}>{attachBtn}</View>}
-    <View style={[styles.spacer, mic.recording && styles.fieldLine]}>{field}</View>
+    <View style={[styles.spacer, mic.recording ? FIELD_RECORDING : FIELD_IDLE]}>{field}</View>
     <View style={styles.side}>{settings}{micGroup}{afterSettings}{sendBtn}</View>
   </View>;
   return <View style={styles.row}>
@@ -163,6 +163,14 @@ export function ComposerActions({ attach, mic, send, settings, beforeMic, afterM
     {sendBtn}
   </View>;
 }
+
+// Os dois estados levam as mesmas chaves, fora do unistyles: no aparelho, a chave tirada ao parar de
+// gravar não voltava ao padrão e o campo ficava na largura da linha, com os botões fora da tela.
+// flexShrink 0 gravando: sem ele o campo é o único filho flexível e o Yoga ignora a base de 100%.
+const ROW_RECORDING = { flexWrap: 'wrap', justifyContent: 'flex-end' } as const;
+const ROW_IDLE = { flexWrap: 'nowrap', justifyContent: 'flex-start' } as const;
+const FIELD_RECORDING = { flexBasis: '100%', flexShrink: 0 } as const;
+const FIELD_IDLE = { flexBasis: 0, flexShrink: 1 } as const;
 
 const SEND_SLOP = 5;
 function withModeMenu(menu: ReturnType<typeof modeMenuHandlers>, ios: boolean, sendDisabled: boolean, button: ReactNode) {
@@ -196,8 +204,6 @@ const styles = StyleSheet.create((theme) => ({
   row: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1.5] },
   // Texto de várias linhas: os botões ficam no pé da caixa.
   rowField: { alignItems: 'flex-end' },
-  rowRecording: { flexWrap: 'wrap', justifyContent: 'flex-end' },
-  fieldLine: { flexBasis: '100%' },
   // A altura de uma linha do campo: os botões ficam no meio dela, no pé da caixa.
   side: { minHeight: 40, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1.5] },
   spacer: { flex: 1, minWidth: 0 },
