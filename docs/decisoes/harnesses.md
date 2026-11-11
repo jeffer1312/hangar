@@ -1072,18 +1072,17 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   Ausência, morte, adoção e limpeza de órfã usam leitura própria do multiplexador; com a ausência já em
   contagem, o retrato da lista é ignorado. Sem lista aberta não há retrato e a vigia lê sozinha. A
   idade do retrato conta do começo da leitura da lista, não da publicação.
-- **O catálogo de comandos da vista mora num arquivo irmão da fila (`runtime/<chave>.commands`), nunca
-  no principal.** Só o `Store` (`queue.rs`: `encode`, `decode`, `persist`) conhece a divisão: em memória
-  a vista segue com `commands` inteiro; no principal fica `commands: null` e o sha256 do irmão em
-  `runtime_state.commands_ref`. O irmão é gravado antes do principal e só quando o catálogo muda; nada
-  crítico sai do principal. Irmão ausente, ilegível ou de outro sha256 abre a fila sem catálogo, com
-  aviso no log. A sessão só pede o catálogo ao Claude quando um processo novo dela sobe (`initialize`);
-  religada ao mesmo processo, segue sem o dela, e a rota de comandos usa a sondagem compartilhada da
-  conta. Quem apaga a fila apaga o irmão (`queue::discard`). Quem lê o arquivo cru sem o `Store`
-  não vê o catálogo. Ver
+- **O catálogo de comandos da vista fica dentro do arquivo da fila (`runtime/<chave>.json`).** O
+  formato com o catálogo num arquivo irmão (`.commands`, `commands_ref`) só é lido (`queue.rs`
+  `decode`): a gravação seguinte o devolve ao principal e apaga o irmão. Ver
   [catálogo de comandos fora do arquivo da fila](#catálogo-de-comandos-fora-do-arquivo-da-fila-10112026).
 
 ## Catálogo de comandos fora do arquivo da fila (10/11/2026)
+
+Desfeito em 11/11: uma revisão independente apontou que irmão ausente ou de outro conteúdo abria a
+sessão sem o catálogo, sem pedi-lo de novo, e o ganho só tinha sido medido em teste. O catálogo voltou
+ao arquivo da fila; o formato com irmão segue legível para as filas gravadas nesse intervalo. O
+registro abaixo é o que valeu entre 10/11 e 11/11.
 
 Cada operação da fila que não é só leitura regrava o arquivo `runtime/<chave>.json` inteiro, com fsync
 do arquivo e da pasta. A vista do Claude sem terminal leva o catálogo de comandos de barra, que não

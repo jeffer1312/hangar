@@ -665,8 +665,12 @@ pub fn reduce_analysis(mut analysis: PaneAnalysis, mut memory: ReducerMemory, fa
         }
     }
     let mut diagnostic = ReducerDiagnostic { before_plugin: analysis.state.clone(), plugin_applied: false, divergence: None };
+    // Sem pergunta na tela nem segurada, `awaiting_input` é o aviso de ociosidade do Claude Code (60 s parado):
+    // a sessão está parada, e o resumo do turno anterior na tela não pode voltar a valer como `working`.
+    let quiet = |s: Option<String>| s.map(|s| if s == "awaiting_input" { "idle".to_owned() } else { s });
+    let (plugin_state, hook_state) = (quiet(facts.plugin_state), quiet(facts.hook_state));
     if matches!(analysis.state.as_str(), "working" | "idle") {
-        if let Some(plugin) = facts.plugin_state.filter(|s| matches!(s.as_str(), "working" | "idle")) {
+        if let Some(plugin) = plugin_state.filter(|s| matches!(s.as_str(), "working" | "idle")) {
             if !(plugin == "idle" && animating) {
                 diagnostic.plugin_applied = true;
                 let seen = (plugin != analysis.state).then(|| (plugin.clone(), analysis.state.clone()));
@@ -679,7 +683,7 @@ pub fn reduce_analysis(mut analysis: PaneAnalysis, mut memory: ReducerMemory, fa
         }
     }
     if matches!(analysis.state.as_str(), "working" | "idle") {
-        match facts.hook_state.as_deref() {
+        match hook_state.as_deref() {
             Some("idle") if analysis.state == "working" && !animating => { analysis.state = "idle".into(); analysis.label = None; }
             Some("working") if analysis.state == "idle" && facts.hook_grace.is_none_or(|g| memory.no_spinner < g) => { analysis.state = "working".into(); }
             _ => {}
@@ -748,6 +752,23 @@ mod tests {
 
     /// Resumo do turno anterior, que o Claude Code deixa na tela com uma tarefa de fundo rodando.
     const DONE: &str = "✻ Cooked for 2m 52s · done 22:55 · 1 monitor still running";
+
+    #[test]
+    fn the_idle_notice_after_a_finished_turn_keeps_the_session_idle() {
+        let pane = format!("● resposta\n\n{DONE}\n\n{RULE}\n❯ \n{RULE}\n");
+        let facts = |plugin: Option<&str>, hook: Option<&str>| super::ReducerFacts {
+            plugin_state: plugin.map(String::from), hook_state: hook.map(String::from), ..Default::default() };
+        for (plugin, hook) in [(Some("awaiting_input"), None), (None, Some("awaiting_input")), (Some("awaiting_input"), Some("awaiting_input"))] {
+            let state = super::reduce(&pane, super::ReducerMemory::default(), facts(plugin, hook));
+            assert_eq!(state.analysis.state, "idle", "{plugin:?} {hook:?}");
+            assert_eq!(state.analysis.label, None, "{plugin:?} {hook:?}");
+        }
+        // Com o turno rodando, o aviso velho não para a sessão.
+        let live = format!("● resposta\n\n✻ Precipitating… (2m 12s)\n\n{RULE}\n❯ \n{RULE}\n");
+        let mut memory = super::reduce(&live.replace("2m 12s", "2m 11s"), super::ReducerMemory::default(), facts(None, None)).memory;
+        memory.held_state = "working".into();
+        assert_eq!(super::reduce(&live, memory, facts(Some("awaiting_input"), None)).analysis.state, "working");
+    }
 
     #[test]
     fn every_frame_of_the_live_spinner_wins_over_the_previous_turn_summary() {

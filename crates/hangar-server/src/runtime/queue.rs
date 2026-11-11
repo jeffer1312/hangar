@@ -141,36 +141,16 @@ fn fingerprint(value: &Value) -> String {
     sha256(&serde_json::to_vec(&sorted(value)).expect("Value tem chaves String e números finitos"))
 }
 
-/// sha256 do arquivo irmão que guarda `runtime_state.view.commands`, gravado no principal no lugar do catálogo.
-/// Só existe no disco: em memória o estado segue com o catálogo inteiro na vista.
+/// Formato que guardava o catálogo de comandos num arquivo irmão: o principal levava o sha256 dele aqui e
+/// `commands: null` na vista. Só é lido; a gravação volta a embutir o catálogo e apaga o irmão.
 const COMMANDS_REF: &str = "commands_ref";
 
-/// O catálogo de comandos da vista mora fora do arquivo da fila: ele não muda entre as operações, e embutido
-/// cada uma o regravava inteiro.
 fn commands_path(state_path: &Path) -> PathBuf { state_path.with_extension("commands") }
 
-/// Bytes do arquivo principal e, havendo catálogo, o sha256 e os bytes dele. No principal a vista fica com
-/// `commands: null`, que o binário anterior lê como "sem catálogo". O estado em memória volta ao que era.
-fn encode(state: &mut State) -> io::Result<(Vec<u8>, Option<(String, Vec<u8>)>)> {
-    let taken = state.runtime_state.get_mut("view").and_then(|view| view.get_mut("commands"))
-        .filter(|commands| !commands.is_null()).map(std::mem::take);
-    let Some(commands) = taken else { return Ok((serde_json::to_vec(state)?, None)) };
-    // ponytail: o catálogo é serializado e resumido a cada gravação, só para saber se mudou; guardar o
-    // último resumo junto de uma cópia para comparar, se isso aparecer no perfil.
-    let catalog = serde_json::to_vec(&commands);
-    let hash = catalog.as_deref().map(sha256).unwrap_or_default();
-    state.runtime_state[COMMANDS_REF] = json!(hash);
-    let main = serde_json::to_vec(state);
-    if let Some(runtime) = state.runtime_state.as_object_mut() { runtime.shift_remove(COMMANDS_REF); }
-    state.runtime_state["view"]["commands"] = commands;
-    Ok((main?, Some((hash, catalog?))))
-}
-
 /// Devolve à vista lida do principal o catálogo do arquivo irmão e diz o sha256 conferido. Irmão ausente,
-/// ilegível ou de outro conteúdo (a queda entre as duas escritas) deixa a vista sem catálogo, e a fila abre
-/// igual: a sessão só o pede de novo quando um processo novo dela sobe. `kept` é o catálogo que a memória
-/// ainda tem: se é o que o principal aponta, volta à vista, e o `None` devolvido faz a gravação seguinte
-/// refazer o irmão.
+/// ilegível ou de outro conteúdo deixa a vista sem catálogo, e a fila abre igual: a sessão só o pede de novo
+/// quando um processo novo dela sobe. `kept` é o catálogo que a memória ainda tem: se é o que o principal
+/// aponta, volta à vista.
 fn decode(state: &mut State, state_path: &Path, kept: Option<&Value>) -> Option<String> {
     let reference = state.runtime_state.as_object_mut()?.shift_remove(COMMANDS_REF)?;
     let view = state.runtime_state.get_mut("view")?.as_object_mut()?;
@@ -192,22 +172,11 @@ fn decode(state: &mut State, state_path: &Path, kept: Option<&Value>) -> Option<
     None
 }
 
-/// Grava o estado: o irmão do catálogo antes, e só quando mudou (`written` é o sha256 do que está lá); o
-/// principal sempre. Vista sem catálogo apaga o irmão depois do principal.
+/// Grava o estado inteiro, catálogo incluído. `written` diz que ainda há irmão do formato antigo: sai depois do
+/// principal, que já leva o catálogo.
 fn persist(state_path: &Path, state: &mut State, written: &mut Option<String>) -> io::Result<()> {
-    let (main, catalog) = encode(state)?;
-    let stale = match catalog {
-        Some((hash, bytes)) => {
-            if written.as_deref() != Some(hash.as_str()) {
-                atomic_write(&commands_path(state_path), &bytes)?;
-                *written = Some(hash);
-            }
-            false
-        }
-        None => written.take().is_some(),
-    };
-    atomic_write(state_path, &main)?;
-    if stale && let Err(error) = std::fs::remove_file(commands_path(state_path)) && error.kind() != io::ErrorKind::NotFound {
+    atomic_write(state_path, &serde_json::to_vec(state)?)?;
+    if written.take().is_some() && let Err(error) = std::fs::remove_file(commands_path(state_path)) && error.kind() != io::ErrorKind::NotFound {
         tracing::warn!(code = "queue_commands_left", io_kind = ?error.kind(), "catálogo de comandos sem vista ficou no disco");
     }
     Ok(())
@@ -1643,9 +1612,10 @@ mod lifecycle_tests {
         let stored=&store.state().operations["call::advance"].payload["state"];
         assert_eq!(stored.as_str().map(str::len),Some(64));
         assert!(!serde_json::to_string(&store.state().operations["call::advance"]).unwrap().contains("/command-0"));
-        // O catálogo aparece uma vez só no disco, e no arquivo irmão: nem o recibo nem o principal o repetem.
+        // O catálogo aparece uma vez só no disco, na vista: o recibo não o repete.
         let count=|file:&Path|String::from_utf8(std::fs::read(file).unwrap()).unwrap().matches("\"/command-0\"").count();
-        assert_eq!((count(&path),count(&path.with_extension("commands"))),(0,1));
+        assert_eq!(count(&path),1);
+        assert!(!path.with_extension("commands").exists());
         assert_eq!(store.exec(4,"advance",clock,advance(json!({"metadata":{"b":2,"a":1},"view":{"commands":commands}}))).unwrap(),json!({"generation":5}));
         assert!(store.exec(4,"advance",clock,advance(json!({"view":{"commands":[]},"metadata":{"a":1,"b":2}}))).is_err());
     }
@@ -1684,101 +1654,37 @@ mod lifecycle_tests {
     fn reopen(dir:&tempfile::TempDir)->Store { Store::open(&dir.path().join("state.json"),dir.path(),State::new("key",5,"session",vec![])).unwrap() }
 
     #[test]
-    fn queue_operations_leave_an_unchanged_command_catalog_out_of_every_write() {
+    fn the_command_catalog_stays_inside_the_queue_file() {
         let dir=tempfile::tempdir().unwrap();
-        let commands=catalog(300);
+        let commands=catalog(20);
         let (path,mut store)=with_catalog(&dir,&commands);
-        let sibling=path.with_extension("commands");
-        let catalog_bytes=std::fs::read(&sibling).expect("o catálogo não foi para o arquivo irmão");
-        assert_eq!(serde_json::from_slice::<Value>(&catalog_bytes).unwrap(),commands);
-        // Marca no irmão: uma operação que o regravasse a apagaria.
-        std::fs::write(&sibling,b"marca").unwrap();
-        let mut written=0;
-        for i in 1..=60u64 {
-            if i%3==0 { append(&mut store,&format!("row-{i}")); } else { store.exec(5,&format!("view:{i}"),CLOCK,view(&commands,i)).unwrap(); }
-            written+=std::fs::metadata(&path).unwrap().len();
-        }
-        assert_eq!(std::fs::read(&sibling).unwrap(),b"marca","operação sem mudança de catálogo regravou o arquivo irmão");
-        let main=std::fs::read_to_string(&path).unwrap();
-        assert!(!main.contains("/command-0"),"o catálogo voltou ao arquivo principal");
-        // Em memória (o que a reabertura e a vista publicada leem) nada muda.
-        assert_eq!(store.state().runtime_state["view"]["commands"],commands);
-        assert!(store.state().runtime_state.get("commands_ref").is_none());
-        let embedded=written+60*catalog_bytes.len() as u64;
-        eprintln!("60 operações, catálogo de {} bytes: arquivo principal {} bytes; gravado {} bytes (antes, com o catálogo embutido: {} bytes)",
-            catalog_bytes.len(),main.len(),written,embedded);
-        assert!(written*3<embedded,"gravado {written} de {embedded}");
+        append(&mut store,"a");
+        assert!(!path.with_extension("commands").exists(),"o catálogo foi para um arquivo à parte");
+        assert!(std::fs::read_to_string(&path).unwrap().contains("/command-0"));
+        drop(store);
+        assert_eq!(reopen(&dir).state().runtime_state["view"]["commands"],commands);
     }
 
     #[test]
-    fn a_state_file_with_the_catalog_inside_loads_whole_and_moves_it_out_on_the_next_write() {
+    fn a_queue_saved_with_the_catalog_apart_opens_whole_and_puts_it_back_inside() {
         let dir=tempfile::tempdir().unwrap();
         let path=dir.path().join("state.json");
         let commands=catalog(20);
+        let bytes=serde_json::to_vec(&commands).unwrap();
         let mut old=State::new("key",5,"session",vec![json!({"id":"a","text":"fica","delivered":false,"ts":1.0})]);
-        old.runtime_state["view"]=json!({"model":"m","commands":commands});
+        old.runtime_state["view"]=json!({"model":"m","commands":null});
+        old.runtime_state[COMMANDS_REF]=json!(sha256(&bytes));
         std::fs::write(&path,serde_json::to_vec(&old).unwrap()).unwrap();
+        std::fs::write(path.with_extension("commands"),&bytes).unwrap();
         let mut store=reopen(&dir);
         assert_eq!(store.state().runtime_state["view"]["commands"],commands);
         append(&mut store,"b");
-        assert!(!std::fs::read_to_string(&path).unwrap().contains("/command-0"),"a gravação seguinte manteve o catálogo no principal");
+        assert!(std::fs::read_to_string(&path).unwrap().contains("/command-0"),"a gravação não devolveu o catálogo ao arquivo da fila");
+        assert!(!path.with_extension("commands").exists(),"o arquivo à parte ficou");
         drop(store);
         let store=reopen(&dir);
         assert_eq!(store.state().runtime_state["view"]["commands"],commands);
         assert_eq!(store.state().rows.len(),2);
-    }
-
-    #[test]
-    fn a_missing_or_damaged_catalog_file_opens_the_queue_without_the_catalog_and_nothing_else_changes() {
-        // Ausente, ilegível e de outro conteúdo (o irmão gravado sem o principal, na queda entre as duas escritas).
-        for damage in [None,Some(&b"{\"lixo\""[..]),Some(&b"[]"[..])] {
-            let dir=tempfile::tempdir().unwrap();
-            let commands=catalog(20);
-            let (path,mut store)=with_catalog(&dir,&commands);
-            append(&mut store,"a");
-            let mut expected=store.state().clone();
-            expected.runtime_state["view"]["commands"]=Value::Null;
-            drop(store);
-            let sibling=path.with_extension("commands");
-            match damage { None=>std::fs::remove_file(&sibling).unwrap(), Some(bytes)=>std::fs::write(&sibling,bytes).unwrap() }
-            let mut store=reopen(&dir);
-            assert_eq!(serde_json::to_value(store.state()).unwrap(),serde_json::to_value(&expected).unwrap(),"{damage:?}");
-            // A sessão sonda o catálogo de novo e a vista seguinte o devolve ao disco.
-            store.exec(5,"view:again",CLOCK,view(&commands,9)).unwrap();
-            assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(&sibling).unwrap()).unwrap(),commands,"{damage:?}");
-            drop(store);
-            assert_eq!(reopen(&dir).state().runtime_state["view"]["commands"],commands,"{damage:?}");
-        }
-    }
-
-    #[test]
-    fn a_failed_main_write_after_a_new_catalog_keeps_the_catalog_the_main_file_points_to() {
-        let dir=tempfile::tempdir().unwrap();
-        let commands=catalog(20);
-        let (path,mut store)=with_catalog(&dir,&commands);
-        // O que a falha deixa: o irmão já com o catálogo novo, o principal apontando o anterior.
-        std::fs::write(path.with_extension("commands"),serde_json::to_vec(&catalog(21)).unwrap()).unwrap();
-        store.fenced=true;
-        store.unfence().unwrap();
-        assert_eq!(store.state().runtime_state["view"]["commands"],commands,"a falha levou o catálogo que a memória ainda tinha");
-        append(&mut store,"a");
-        drop(store);
-        assert_eq!(reopen(&dir).state().runtime_state["view"]["commands"],commands,"a gravação seguinte não devolveu o catálogo ao irmão");
-    }
-
-    #[test]
-    fn a_view_without_a_catalog_and_a_discarded_queue_leave_no_catalog_file() {
-        let dir=tempfile::tempdir().unwrap();
-        let (path,mut store)=with_catalog(&dir,&catalog(20));
-        let sibling=path.with_extension("commands");
-        store.exec(5,"view:none",CLOCK,view(&Value::Null,1)).unwrap();
-        assert!(!sibling.exists(),"vista sem catálogo deixou o arquivo irmão");
-        assert!(!std::fs::read_to_string(&path).unwrap().contains("commands_ref"));
-        store.exec(5,"view:back",CLOCK,view(&catalog(20),2)).unwrap();
-        assert!(sibling.exists());
-        drop(store);
-        discard(&path,dir.path(),true).unwrap();
-        assert!(!path.exists() && !sibling.exists(),"descartar a fila deixou o arquivo irmão");
     }
 }
 

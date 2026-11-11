@@ -483,8 +483,21 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         );
         if (coberto) return; // real já cobre e é o dono -> ignora o sintético
       } else {
-        // Real chegou: remove SÓ a bolha da fila DONA da linha (não todas).
+        // Real chegou: troca SÓ a bolha da fila DONA da linha (não todas), no mesmo lugar dela: a
+        // bolha que já estava na tela não sai nem pula para o fim.
         const dono = donoDaLinha(ev.text, filas.map((f) => f.text));
+        if (dono >= 0 && !idIndex.has(ev.id)) {
+          const qi = filas[dono].i;
+          retiredQueuedIds.add(events[qi].id);
+          const next = events.slice();
+          next[qi] = ev;
+          rebuildIndex(next);
+          const curPending = useChatStore.getState().pending;
+          const nextPending = curPending.length ? reconcilePending(curPending, ev) : curPending;
+          publishEvents(next, 'replace', nextPending.length !== curPending.length ? { pending: nextPending } : {});
+          confirmSubmission([ev]);
+          return;
+        }
         if (dono >= 0) {
           const qi = filas[dono].i;
           retiredQueuedIds.add(events[qi].id);

@@ -151,31 +151,6 @@ const COLUMN: f32 = 780.;
 /// inteira (`HISTORY_PAGE`) custa muito mais em transcript grande. Ela vem logo depois, por baixo.
 const FIRST_PAGE: usize = 60;
 const HISTORY_PAGE: usize = 400;
-/// Eventos de folga acima da primeira linha na tela que o corte do histórico não alcança.
-const TRIM_MARGIN: usize = 40;
-
-/// Quanto o transcript inteiro fica na memória depois do último uso (busca, volta a uma citação): cortado logo, a
-/// busca seguinte baixaria e remontaria tudo de novo.
-const FULL_HISTORY_KEEP: Duration = Duration::from_secs(600);
-
-/// Quantos eventos antigos saem quando o transcript inteiro (busca, volta a uma citação) deixa de ser preciso: fica a
-/// janela normal. `first_visible` é o evento da primeira linha na tela, `None` no fim da conversa. Com ela antes da
-/// janela, ou colada ao começo dela, nada sai: a leitura não é tirada do lugar, e o corte espera a volta ao fim.
-fn history_cut(events: usize, first_visible: Option<usize>) -> usize {
-    let cut = events.saturating_sub(HISTORY_PAGE);
-    if first_visible.is_some_and(|first| first < cut + TRIM_MARGIN) { 0 } else { cut }
-}
-
-/// O evento mais antigo que a linha mostra; a lista de tarefas não é de evento nenhum.
-fn first_event(item: &Item) -> Option<usize> {
-    match item {
-        Item::Event(i) | Item::Orphan(i) => Some(*i),
-        Item::Tool(tool) => Some(tool.call),
-        Item::Group { tools, .. } => tools.first().map(|tool| tool.call),
-        Item::Thinking { parts, .. } => parts.first().copied(),
-        Item::Tasks { .. } => None,
-    }
-}
 
 /// Conexão, máquina e nome da sessão aberta (`session_owner`).
 pub(crate) type SessionOwner = (u64, String, String);
@@ -733,10 +708,6 @@ pub struct Hangar {
     preview_drop_scheduled: bool,
     visible_preview: Preview,
     preview_cache: PreviewSource,
-    /// Desde quando o transcript inteiro está carregado sem uso (`history_trim`).
-    full_history_idle: Option<std::time::Instant>,
-    /// Já há um despertar marcado para o fim desse prazo.
-    full_history_wake: bool,
     preview_tick_epoch: u64,
     preview_tick_scheduled: bool,
     preview_last_tick: Option<Instant>,
@@ -1185,7 +1156,7 @@ impl Hangar {
             list_state, rail_hover: None, follow: Default::default(), row_ids: Vec::new(), row_signatures: Vec::new(), conversation: Default::default(), row_assets: Vec::new(), expanded: HashSet::new(), kept_expanded: HashMap::new(), orq_days: HashSet::new(),
             table_column: HashMap::new(), tables: HashMap::new(), last_message: None, live_clear_epoch: [0; 2], rich: HashMap::new(), prepared: HashMap::new(), cites: CiteCheck::default(), render_tick: 0,
             preview_drop_epoch: 0, preview_drop_scheduled: false,
-            visible_preview: Preview::default(), preview_cache: PreviewSource::default(), full_history_idle: None, full_history_wake: false, preview_tick_epoch: 0, preview_tick_scheduled: false,
+            visible_preview: Preview::default(), preview_cache: PreviewSource::default(), preview_tick_epoch: 0, preview_tick_scheduled: false,
             preview_last_tick: None, preview_carry: 0., preview_deadline: None,
             attachments: HashMap::new(), quotes: Default::default(), mermaid: Default::default(), attach_seq: 0, uploading: HashMap::new(), commands: HashMap::new(), commands_latest: HashMap::new(), commands_seq: 0,
             plugin_question_seen: None,
@@ -1803,30 +1774,6 @@ impl Hangar {
         if let Some(task) = self.history_task.take() { task.abort(); }
         (self.history_limit, self.etag) = (0, None);
         self.load_history(cx);
-    }
-
-    /// Quantos eventos antigos do transcript inteiro já podem sair (`history_cut`); zero enquanto a busca ou a volta
-    /// a uma citação ainda o usam, e por `FULL_HISTORY_KEEP` depois do último uso.
-    fn history_trim(&mut self) -> usize {
-        if self.history_limit != 0 || self.loading || self.find.open || self.quote_flashing() {
-            self.full_history_idle = None;
-            return 0;
-        }
-        if self.full_history_idle.get_or_insert_with(std::time::Instant::now).elapsed() < FULL_HISTORY_KEEP { return 0; }
-        let top = self.list_state.logical_scroll_top().item_ix;
-        let first_visible = self.conversation.items.get(top..).and_then(|rest| rest.iter().find_map(first_event));
-        history_cut(self.chat.events.len(), first_visible)
-    }
-
-    /// Devolve a conversa à janela normal sem mexer no que está na tela; o que saiu volta por "Carregar anteriores".
-    fn trim_history(&mut self, cx: &mut Context<Self>) {
-        let cut = self.history_trim();
-        if cut == 0 { return; }
-        self.chat.drop_oldest(cut);
-        (self.history_limit, self.has_older, self.etag) = (HISTORY_PAGE, true, None);
-        self.sync_rows(cx);
-        self.follow_keep_end();
-        self.redraw(panes::Area::Conversation, cx);
     }
 
     fn load_history(&mut self, cx: &mut Context<Self>) {
@@ -7221,19 +7168,6 @@ impl Hangar {
                         .child(column_box(false).h_full().rounded(px(14.)).border_1().border_color(theme::border())
                             .bg(theme::sheet()).shadow(theme::sheet_shadow())));
                     self.paint_quote_flash(cx);
-                    // Busca fechada ou citação já mostrada: o transcript inteiro sai depois deste desenho.
-                    if self.history_trim() > 0 {
-                        let view = cx.entity().downgrade();
-                        cx.defer(move |cx| { view.update(cx, |this, cx| this.trim_history(cx)).ok(); });
-                    } else if let Some(since) = self.full_history_idle.filter(|since| !self.full_history_wake && since.elapsed() < FULL_HISTORY_KEEP) {
-                        // Conversa parada não é desenhada de novo: sem este despertar o prazo passaria sem ninguém conferir.
-                        self.full_history_wake = true;
-                        let wait = FULL_HISTORY_KEEP.saturating_sub(since.elapsed());
-                        cx.spawn(async move |this, cx| {
-                            cx.background_executor().timer(wait).await;
-                            let _ = this.update(cx, |this, cx| { this.full_history_wake = false; this.redraw(panes::Area::Conversation, cx); });
-                        }).detach();
-                    }
                     let cite_offer = self.render_cite_offer(window, cx);
                     content = content.child(div().relative().flex_1().min_h_0().flex().flex_col()
                         // A seleção numa resposta oferece "Citar" ao soltar o mouse.
@@ -8794,17 +8728,6 @@ mod tests {
         }
         let preview = super::Preview { text: text.into(), md: true, ..Default::default() };
         assert_eq!(super::preview_source(&preview), "Resposta\n");
-    }
-
-    #[test]
-    fn full_history_is_cut_back_to_the_window_only_when_the_reader_is_inside_it() {
-        use super::{history_cut, HISTORY_PAGE, TRIM_MARGIN};
-        let events = HISTORY_PAGE + 600;
-        assert_eq!(history_cut(HISTORY_PAGE, None), 0, "conversa que cabe na janela fica inteira");
-        assert_eq!(history_cut(events, None), 600, "no fim da conversa sai tudo antes da janela");
-        assert_eq!(history_cut(events, Some(600 + TRIM_MARGIN)), 600, "lendo dentro da janela, com a folga");
-        assert_eq!(history_cut(events, Some(600 + TRIM_MARGIN - 1)), 0, "colado ao começo da janela, espera");
-        assert_eq!(history_cut(events, Some(100)), 0, "lendo lá atrás, nada sai");
     }
 
     #[test]

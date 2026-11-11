@@ -54,12 +54,13 @@ export function WorkingLine({ label, since }: { label?: string | null; since: nu
   const agora = useAgora();
   const lido = workingLabel(label);
   const verbo = lido.text ?? m.native_working_line();
-  const tempo = lido.elapsed ?? (since !== null ? formatElapsed(Math.max(0, agora - since) / 1000) : '');
+  const relogio = lido.elapsed ?? (since !== null ? formatElapsed(Math.max(0, agora - since) / 1000) : '');
+  const tempo = [relogio, lido.detail].filter(Boolean).join(' · ');
   return (
     <View style={styles.linha} accessibilityRole="text" accessibilityLiveRegion="polite" accessibilityLabel={verbo}>
       <WorkingMark size={16} color={theme.tokens.accent.base} />
       <Text style={[styles.verbo, { color: theme.tokens.text.secondary }]} numberOfLines={1}>{verbo}</Text>
-      {tempo ? <Text style={[styles.tempo, { color: theme.tokens.text.muted }]}>{tempo}</Text> : null}
+      {tempo ? <Text style={[styles.tempo, { color: theme.tokens.text.muted }]} numberOfLines={1}>{tempo}</Text> : null}
     </View>
   );
 }

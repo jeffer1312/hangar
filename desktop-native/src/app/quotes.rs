@@ -626,9 +626,6 @@ impl Hangar {
         self.redraw(panes::Area::Conversation, cx);
     }
 
-    /// A volta a uma citação ainda procura ou pinta o trecho.
-    pub(super) fn quote_flashing(&self) -> bool { self.quotes.flash.is_some() }
-
     fn quote_gone(&mut self, cx: &mut Context<Self>) {
         let Some(flash) = self.quotes.flash.take() else { return };
         self.action_feedback.insert(flash.key, (tr("ref_quote_gone"), true));

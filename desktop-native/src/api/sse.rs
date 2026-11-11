@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use async_channel::Sender;
 use eventsource_stream::Eventsource;
 use futures::StreamExt;
@@ -18,31 +18,14 @@ pub enum Update {
     Offline(Failure),
 }
 
-/// Espera entre tentativas, dobrando até 30 s. Só o tempo com o fluxo aberto zera a contagem: o prazo de conexão
-/// estourado também dura 10 s, e não é sinal de máquina de volta.
-#[derive(Default)]
-struct Backoff { attempt: u32, up_since: Option<Instant> }
-
-impl Backoff {
-    fn attempt_started(&mut self) { self.up_since = None; }
-    fn stream_opened(&mut self, now: Instant) { self.up_since = Some(now); }
-    fn failed(&mut self, now: Instant, retry_after: Option<u64>) -> u64 {
-        if self.up_since.is_some_and(|since| now.duration_since(since) >= Duration::from_secs(10)) { self.attempt = 0; }
-        let delay = retry_after.map(|seconds| seconds.max(1)).unwrap_or_else(|| (1u64 << self.attempt.min(5)).min(30));
-        self.attempt = self.attempt.saturating_add(1);
-        delay
-    }
-}
-
 pub async fn run(api: Api, name: Option<String>, tx: Sender<Update>) {
     let mut cursor = String::new();
-    let mut backoff = Backoff::default();
+    let mut attempt = 0u32;
     loop {
         super::route::ensure(&api).await;
-        backoff.attempt_started();
+        let connected_at = tokio::time::Instant::now();
         let outcome = async {
             let response = api.stream(name.as_deref(), &cursor).await?;
-            backoff.stream_opened(Instant::now());
             if tx.send(Update::Online).await.is_err() { return Ok(()); }
             let mut events = response.bytes_stream().eventsource();
             let mut wire_id = cursor.clone();
@@ -75,8 +58,11 @@ pub async fn run(api: Api, name: Option<String>, tx: Sender<Update>) {
         super::route::forget(&api);
         // 410 é convite encerrado: tentar de novo não o traz de volta.
         let stop = matches!(failure.status, Some(401 | 403 | 410));
-        let delay = backoff.failed(Instant::now(), failure.retry_after);
+        if connected_at.elapsed() >= Duration::from_secs(10) { attempt = 0; }
+        let delay = failure.retry_after.map(|seconds| seconds.max(1))
+            .unwrap_or_else(|| (1u64 << attempt.min(5)).min(30));
         if tx.send(Update::Offline(failure)).await.is_err() || stop { return; }
+        attempt = attempt.saturating_add(1);
         tokio::time::sleep(Duration::from_secs(delay)).await;
     }
 }
@@ -91,22 +77,6 @@ mod tests {
     use super::*;
     // O glob pode trazer o `test` da gpui, que colide com o atributo padrão; o nome explícito vence o glob.
     use core::prelude::v1::test;
-
-    #[test]
-    fn connect_timeout_keeps_the_wait_growing_and_a_stream_that_held_resets_it() {
-        let mut backoff = Backoff::default();
-        // Máquina desligada: cada tentativa gasta os 10 s do prazo de conexão sem abrir o fluxo.
-        let delays: Vec<u64> = (0..4).map(|_| {
-            backoff.attempt_started();
-            backoff.failed(Instant::now() + Duration::from_secs(10), None)
-        }).collect();
-        assert_eq!(delays, [1, 2, 4, 8]);
-        backoff.attempt_started();
-        let opened = Instant::now();
-        backoff.stream_opened(opened);
-        assert_eq!(backoff.failed(opened + Duration::from_secs(10), None), 1);
-        assert_eq!(backoff.failed(opened + Duration::from_secs(10), Some(0)), 1, "retry_after manda, com piso de 1 s");
-    }
 
     #[test]
     fn cursor_requires_stem_and_decimal_offset() {

@@ -15,7 +15,7 @@ pub const CHOICES: [(BackgroundEffect, &str); 5] = [
 ];
 
 type Entry = ((BackgroundEffect, bool), Arc<RenderImage>);
-// ponytail: só a fonte atual e a variante na tela; trocar de efeito ou de tema refaz a conta.
+// ponytail: só a fonte atual e suas oito variantes; várias imagens simultâneas pediriam teto por bytes.
 static CACHE: Mutex<(Vec<u8>, Vec<Entry>)> = Mutex::new((Vec::new(), Vec::new()));
 
 fn key(effect: BackgroundEffect, light: bool) -> (BackgroundEffect, bool) {
@@ -32,7 +32,7 @@ pub fn load(path: &Path, effect: BackgroundEffect, light: bool) -> Result<Arc<Re
     if cache.0 != bytes { *cache = (bytes, Vec::new()); }
     if let Some((_, image)) = cache.1.iter().find(|(k, _)| *k == key) { return Ok(image.clone()); }
     let image = crate::media::decode(&cache.0, 2560, 2560, Some(key)).ok_or("backdrop_invalid")?;
-    cache.1 = vec![(key, image.clone())];
+    cache.1.push((key, image.clone()));
     Ok(image)
 }
 
@@ -99,7 +99,6 @@ mod tests {
         assert!(shows(&ascii, BackgroundEffect::Ascii, false) && !shows(&ascii, BackgroundEffect::Ascii, true));
         let dither = load(&path, BackgroundEffect::Dither, false).unwrap();
         assert!(shows(&dither, BackgroundEffect::Dither, true));
-        assert!(!shows(&ascii, BackgroundEffect::Ascii, false), "a variante que saiu da tela não fica guardada");
         std::fs::remove_file(path).unwrap();
     }
 
