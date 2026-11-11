@@ -1732,9 +1732,9 @@ $portaBack = Porta-Do-Env 'CP_PORT' 8765
 function Get-Proxy443 {
     # O proxy que a raiz do :443 aponta, ou $null. FILTRA por :443 de propósito: o `Web` do serve
     # status e um mapa "host:porta" -> Handlers, e esta maquina pode ter OUTRO slot publicado — o
-    # preview de projeto usa o 10000 (backend/app/tunnel.py:11). Varrer todos e guardar o ultimo
+    # A prévia de projeto usa o 10000 (crates/hangar-port-preview). Varrer todos e guardar o último
     # `/` faria o proxy do 10000 passar por "ja publica o backend", e o 443 nunca ser configurado.
-    # O mesmo filtro existe em tunnel.py:71-73, e e por isso que ele existe la.
+    # O crate da prévia também filtra o slot; os dois precisam preservar os outros serviços.
     try {
         $sv = (& tailscale serve status --json 2>$null | Out-String | ConvertFrom-Json)
         if ($sv -and $sv.Web) {

@@ -128,21 +128,21 @@ pub async fn capture_bytes(
     }
     let mut tree = match CommandTree::configure_detached(&mut command) {
         Ok(tree) => tree,
-        Err(error) => return Err(CaptureFailure::empty(error_name(&error))),
+        Err(error) => return Err(CaptureFailure::from_io(error)),
     };
     #[cfg(unix)]
     if let Err(error) = configure_strict_exec(command.as_std_mut(), false) {
-        return Err(CaptureFailure::empty(error_name(&error)));
+        return Err(CaptureFailure::from_io(error));
     }
     let mut child = match command.spawn() {
         Ok(child) => child,
-        Err(error) => return Err(CaptureFailure::empty(error_name(&error))),
+        Err(error) => return Err(CaptureFailure::from_io(error)),
     };
     if let Err(error) = tree.attach(&child) {
         let _ = tree.terminate();
         let _ = child.start_kill();
         let _ = child.wait().await;
-        return Err(CaptureFailure::empty(error_name(&error)));
+        return Err(CaptureFailure::from_io(error));
     }
     let (cancel, cancelled) = tokio::sync::oneshot::channel::<()>();
     // O supervisor da captura conserva processo e pipes mesmo se o pedido for cancelado.
@@ -167,23 +167,21 @@ pub async fn capture_bytes(
             };
             tokio::select! {
                 result = tokio::time::timeout(budget,collect) => match result {
-                    Ok(Ok(())) => Ok(()), Ok(Err(error)) => Err(error_name(&error)), Err(_) => Err("timeout".into()),
+                    Ok(Ok(())) => Ok(()), Ok(Err(error)) => Err(CaptureFailure::from_io(error)), Err(_) => Err(CaptureFailure::empty("timeout")),
                 },
-                _ = cancelled => Err("interrompido".into()),
+                _ = cancelled => Err(CaptureFailure::empty("interrompido")),
             }
         };
         if outcome.is_err() {
             terminal_process::finish(&mut tree).await;
         }
         let status = child.wait().await;
-        let status = match outcome.and_then(|()| status.map_err(|error| error_name(&error))) {
+        let status = match outcome.and_then(|()| status.map_err(CaptureFailure::from_io)) {
             Ok(status) => status,
-            Err(kind) => {
-                return Err(CaptureFailure {
-                    kind,
-                    stdout: out,
-                    stderr: err,
-                });
+            Err(mut failure) => {
+                failure.stdout = out;
+                failure.stderr = err;
+                return Err(failure);
             }
         };
         Ok(ByteOutput {
@@ -230,13 +228,19 @@ pub struct ByteOutput {
 #[derive(Clone, Debug)]
 pub struct CaptureFailure {
     pub kind: String,
+    pub io_error: Option<std::sync::Arc<io::Error>>,
     pub stdout: Vec<u8>,
     pub stderr: Vec<u8>,
 }
 impl CaptureFailure {
+    fn from_io(error: io::Error) -> Self {
+        Self { kind: error_name(&error), io_error: Some(std::sync::Arc::new(error)), stdout: vec![], stderr: vec![] }
+    }
+
     fn empty(kind: impl Into<String>) -> Self {
         Self {
             kind: kind.into(),
+            io_error: None,
             stdout: vec![],
             stderr: vec![],
         }
