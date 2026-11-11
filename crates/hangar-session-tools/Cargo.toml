@@ -14,3 +14,4 @@ tempfile.workspace = true
 [dev-dependencies]
 proptest.workspace = true
 libc.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

@@ -337,8 +337,13 @@ mod unix {
         );
     }
 
-    #[tokio::test]
-    async fn early_failure_reports_stderr_or_the_exit_code() {
+    #[test]
+    fn early_failure_reports_stderr_or_the_exit_code() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .start_paused(true)
+            .build()
+            .unwrap();
         for (body, expected) in [
             (
                 "printf '  cannot open display\\n' >&2; exit 7",
@@ -346,11 +351,59 @@ mod unix {
             ),
             ("exit 7", "codigo 7"),
         ] {
-            let fixture = Fixture::new();
+            let fixture = runtime.block_on(async { Fixture::new() });
             fixture.program("kitty", body);
-            let error = external::open("session", &fixture.env, vec![])
-                .await
-                .unwrap_err();
+            let env = fixture.env.clone();
+            let task = runtime.spawn(async move { external::open("session", &env, vec![]).await });
+            // yield_now mantém o executor ocupado para o relógio não avançar antes do filho nascer.
+            let pid = runtime.block_on(async {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                loop {
+                    if let Some(pid) = fs::read_to_string(fixture.root.path().join("pid"))
+                        .ok()
+                        .and_then(|value| value.parse::<libc::id_t>().ok())
+                    {
+                        break pid;
+                    }
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "o emulador falso não iniciou"
+                    );
+                    tokio::task::yield_now().await;
+                }
+            });
+            // Espera o sinal de saída sem recolher: quem verifica o status continua sendo open().
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+                let result = unsafe {
+                    libc::waitid(
+                        libc::P_PID,
+                        pid,
+                        &mut info,
+                        libc::WEXITED | libc::WNOWAIT | libc::WNOHANG,
+                    )
+                };
+                if result == 0 && info.si_signo == libc::SIGCHLD {
+                    break;
+                }
+                if result < 0 {
+                    let error = std::io::Error::last_os_error();
+                    if error.raw_os_error() == Some(libc::ECHILD) {
+                        break;
+                    }
+                    assert_eq!(error.raw_os_error(), Some(libc::EINTR), "{error}");
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "o emulador falso não encerrou"
+                );
+                std::thread::yield_now();
+            }
+            let error = runtime.block_on(async {
+                tokio::time::advance(std::time::Duration::from_millis(300)).await;
+                task.await.unwrap().unwrap_err()
+            });
             assert_eq!(error.status, 503);
             assert_eq!(error.code, "erro_terminal_saiu_cedo");
             assert_eq!(error.params["saida"], expected);
