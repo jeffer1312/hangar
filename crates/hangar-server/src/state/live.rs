@@ -357,6 +357,7 @@ impl Sources for LiveSources {
                     Ok(local) => {
                         facts.alive = local.alive();
                         facts.plugin_state = local.state();
+                        facts.plugin_state_at = local.state_age().map(|age| super::monitor::wall_now() - age.as_secs_f64());
                         facts.questions = local.questions;
                         facts.suggestion = Some(local.suggestion);
                     }

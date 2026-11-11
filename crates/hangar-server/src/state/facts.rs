@@ -42,6 +42,12 @@ impl PluginFacts {
         self.plugin_state.as_ref().filter(|state| self.waiter_open || Duration::from_millis(state.age_ms) <= PLUGIN_STATE)
             .map(|state| state.state.clone())
     }
+
+    /// Há quanto tempo o plugin mandou o estado que `state` devolve.
+    pub fn state_age(&self) -> Option<Duration> {
+        self.plugin_state.as_ref().filter(|state| self.waiter_open || Duration::from_millis(state.age_ms) <= PLUGIN_STATE)
+            .map(|state| Duration::from_millis(state.age_ms))
+    }
 }
 
 #[derive(Clone)]
@@ -173,6 +179,11 @@ impl Received {
     /// `plugin_bridge.estado_recente`: sem prazo com o long-poll aberto.
     pub fn plugin_state(&self, now: Instant) -> Option<&PluginState> {
         self.facts.plugin_state.as_ref().filter(|p| self.facts.waiter_open || self.age(p.age_ms, now) <= PLUGIN_STATE)
+    }
+
+    /// Há quanto tempo o plugin mandou o estado que `plugin_state` devolve.
+    pub fn plugin_state_age(&self, now: Instant) -> Option<Duration> {
+        self.plugin_state(now).map(|p| self.age(p.age_ms, now))
     }
 
     /// `plugin_bridge.pergunta_pendente`.
