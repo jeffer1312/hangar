@@ -154,9 +154,12 @@ pub trait Sources: Send + Sync {
 
 /// O marcador dos hooks é reserva do plugin: só decide quando é mais novo que o último estado do plugin (a
 /// mensagem que chega pelo app abre o turno antes de o plugin avisar). Mais velho, o plugin já respondeu depois.
+/// A hora do plugin é a da chegada ao servidor e a do marcador é a da escrita: a folga cobre a entrega.
 fn marker_older_than_plugin(marker_ts: Option<f64>, plugin_at: Option<f64>) -> bool {
-    matches!((marker_ts, plugin_at), (Some(marker), Some(plugin)) if marker < plugin)
+    matches!((marker_ts, plugin_at), (Some(marker), Some(plugin)) if marker < plugin - MARKER_SLACK_S)
 }
+
+const MARKER_SLACK_S: f64 = 1.0;
 
 pub fn wall_now() -> f64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
@@ -604,9 +607,11 @@ mod tests {
     #[test]
     fn the_hook_marker_only_decides_when_newer_than_the_plugin_state() {
         // Turno acabou: o plugin disse idle depois do último `working` do marcador.
-        assert!(marker_older_than_plugin(Some(100.0), Some(101.0)));
+        assert!(marker_older_than_plugin(Some(100.0), Some(102.0)));
         // Mensagem do app: o marcador viu o turno novo antes do plugin.
         assert!(!marker_older_than_plugin(Some(102.0), Some(101.0)));
+        // Marcador escrito pouco antes de o `idle` do plugin chegar ao servidor: a entrega não o descarta.
+        assert!(!marker_older_than_plugin(Some(100.5), Some(101.0)));
         // Sem uma das horas, o marcador segue como reserva.
         assert!(!marker_older_than_plugin(Some(100.0), None));
         assert!(!marker_older_than_plugin(None, Some(101.0)));
