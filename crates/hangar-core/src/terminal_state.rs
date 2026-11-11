@@ -322,16 +322,21 @@ fn composer_below(lines: &[&str]) -> bool {
 }
 
 /// O `*` comum também é um quadro da animação do Claude ("* Precipitating… (2m 12s)"), mas só vale com esse
-/// formato e logo acima da caixa de mensagem: fora disso é texto, como um item de lista. Sem ele, o quadro
-/// pulava para o resumo do turno anterior que segue mais acima na tela. O Claude Code nem sempre limpa a linha
-/// inteira: o que sobra de outro texto fica à direita, depois de uma fileira de espaços, e sai daqui.
+/// formato e logo acima da caixa de mensagem: fora disso é texto, como um item de lista. Linha com o símbolo
+/// acima de texto mais novo da conversa (`●`) é o resumo de um turno que já acabou e segue na tela enquanto
+/// uma tarefa de fundo roda: não é a linha viva. Sem isso, os quadros que a leitura não reconhece pulavam
+/// para ele. O Claude Code nem sempre limpa a linha inteira: o que sobra de outro texto fica à direita, depois
+/// de uma fileira de espaços, e sai daqui.
 fn live_spinner(lines: &[&str]) -> Option<String> {
     let ascii = |s: &str| s.strip_prefix("* ").and_then(|rest| rest.split_once(' '))
         .is_some_and(|(verb, more)| verb.ends_with('…') && more.starts_with('('));
+    let composer = (0..lines.len()).rev().find(|&i| composer_below(&lines[i..]));
+    let newest_reply = composer.and_then(|top| lines[..top].iter().rposition(|l| trim(l).starts_with('●')));
     lines.iter().enumerate().rev().map(|(i, l)| (i, trim(l))).find(|(i, s)| {
         let mut chars = s.chars();
-        chars.next().is_some_and(|c| SPINNERS.contains(c)) && chars.next() == Some(' ')
-            || ascii(s) && composer_below(&lines[i + 1..])
+        newest_reply.is_none_or(|reply| *i > reply)
+            && (chars.next().is_some_and(|c| SPINNERS.contains(c)) && chars.next() == Some(' ')
+                || ascii(s) && composer_below(&lines[i + 1..]))
     }).map(|(_, s)| String::from(s.split("   ").next().unwrap_or(s)))
 }
 
@@ -752,6 +757,13 @@ mod tests {
             assert_eq!(analysis.state, "working", "{glyph}");
             assert_eq!(analysis.label.as_deref(), Some("Precipitating… (2m 12s · ↓ 9.3k tokens)"), "{glyph}");
         }
+        // Painel de mod entre a linha viva e a caixa: no quadro do `*` não há linha viva reconhecida, e o resumo do
+        // turno anterior, com texto mais novo abaixo dele, não vale no lugar dela.
+        let band = "▸ PR #381 fix(state): keep the Claude working line ✓14 juntado\n? ▸ Terceiro PR (aguardando)";
+        let pane = format!("{DONE}\n\n● resposta nova\n\n* Kerfuffling… (2m 26s · ↓ 4.9k tokens)\n{band}\n\n{RULE}\n❯ \n{RULE}\n");
+        assert_eq!(super::analyze(&pane).spinner, None);
+        let pane = format!("{DONE}\n\n● resposta nova\n\n✻ Kerfuffling… (2m 26s · ↓ 4.9k tokens)\n{band}\n\n{RULE}\n❯ \n{RULE}\n");
+        assert_eq!(super::analyze(&pane).label.as_deref(), Some("Kerfuffling… (2m 26s · ↓ 4.9k tokens)"));
         // Caixa no modo de comando.
         let pane = format!("{DONE}\n\n● resposta\n\n* Precipitating… (2m 12s)\n\n{RULE}\n! ls\n{RULE}\n");
         assert_eq!(super::analyze(&pane).label.as_deref(), Some("Precipitating… (2m 12s)"));
@@ -762,7 +774,7 @@ mod tests {
         for tail in ["* Precipitating… (2m 12s)\nfora", "* item da lista (veja acima)", "* passo seguinte…",
             &format!("* Precipitating… (2m)\n\n{RULE}\nconteúdo da resposta")] {
             let pane = format!("{DONE}\n\n● resposta\n{tail}\n\n{RULE}\n❯ \n{RULE}\n");
-            assert_eq!(super::analyze(&pane).spinner.as_deref(), Some(DONE), "{tail}");
+            assert_eq!(super::analyze(&pane).spinner, None, "{tail}");
         }
     }
 
