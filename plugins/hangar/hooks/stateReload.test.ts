@@ -35,6 +35,24 @@ test("recarregar o plugin no meio do turno não manda idle: repete o último est
   }
 });
 
+test("início de turno de subagente não marca a sessão como trabalhando", async () => {
+  const posts: { estado: string }[] = [];
+  const $ = {
+    http: { fetch: async (_url: string, init: { body: string }) => { posts.push(JSON.parse(init.body)); } },
+    state: { get: async () => ({ value: undefined, version: 0 }), set: async () => ({ isSet: true, version: 1 }) },
+  };
+  setBridge({ url: "http://127.0.0.1:1/api/plugin", token: "t", sessao: "s" });
+  try {
+    const hooks = load();
+    await hooks.get("turn.start")!($, { text: "", turnId: "t1", agentId: "juiz" }, async () => ({}));
+    expect(posts).toEqual([]);
+    await hooks.get("turn.start")!($, { text: "oi", turnId: "t2" }, async () => ({}));
+    expect(posts.map((p) => p.estado)).toEqual(["working"]);
+  } finally {
+    clearBridge();
+  }
+});
+
 test("depois do fim da sessão (o /clear) o session.start seguinte volta a idle", async () => {
   const kept = new Map<string, unknown>();
   const posts: { estado: string }[] = [];
