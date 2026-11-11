@@ -140,8 +140,13 @@ Vale para toda Task que move código para o core ou para outro crate.
 8. **Portões.** CI (`server-jobs.yml:96,99`) roda `cargo test --locked --workspace`. No
    `scripts/verificar-local`, o passo completo também; o rápido (`passo_rust_rapido`) testa só o
    crate mudado quando ele é o `hangar-server` e passa a `--workspace` quando muda outro crate, o
-   que já cobre os crates novos. Código só de Windows (`#[cfg(windows)]`, `scope_prefix` só no
-   Unix) só falha na matriz do CI ou na VM: a prova final da Task inclui o passo Windows.
+   que já cobre os crates novos. Cobre, mas não alivia: com essa regra, mexer num crate novo
+   roda o workspace inteiro, com os dois `rustc` do servidor e o `it` grande, mais do que hoje. O
+   alívio depende de o passo rápido rodar os testes do crate mexido e só o `check` de quem depende
+   dele, com os testes dos dependentes no CI. Essa mudança é da `verificar-local` e a política está
+   em aberto com o Jefferson; este plano só registra a dependência. Código só de Windows
+   (`#[cfg(windows)]`, `scope_prefix` só no Unix) só falha na matriz do CI ou na VM: a prova final
+   da Task inclui o passo Windows.
 9. **Na prática (aprendido nas Tasks 1 e 2).**
    - O que o servidor usa de um item que desce: procurar `modulo::nome` e `modulo::{…nome…}` em
      `src/`, `tests/` e `examples/` do servidor (o CI compila o exemplo `orq_contract`) e confirmar
@@ -224,96 +229,111 @@ fase.
 Contagem em `f3bc1a639` (origin/main de 11/11/2026), por leitura do texto, sem compilar nem rodar.
 As linhas por módulo desta seção são desse commit; as das outras seções são de `0452a7f55`.
 Pedido do Jefferson: a `verificar-local` roda os ~6.300 testes do crate a cada linha mexida, e a
-divisão só alivia isso se o crate que sai levar os testes dele.
+divisão só alivia isso se o crate que sai levar os testes dele. Critério revisto com a sessão que
+mede a `verificar-local`.
 
 - **Tipo 1 (sai junto):** o teste exercita só a lógica do módulo. Conta o `#[test]`/`#[tokio::test]`
   de `src/` e o de `tests/it` que não sobe nada.
-- **Tipo 2 (fica no `it` do servidor):** o teste, ou um ajudante que ele chama no mesmo arquivo ou
+- **Tipo 2b (sai junto, é lento):** sobe processo externo (tmux, psmux, `ProcessMux`, o cano), sem
+  precisar do servidor linkado.
+- **Tipo 2a (fica no `it` do servidor):** o teste, ou um ajudante que ele chama no mesmo arquivo ou
   nas pastas de apoio do `it`, usa `AppState`, `spawn_server`/`spawn_state`/`serve_mods`,
-  `hangar_server::routes::`, `RuntimeRegistry`, `ListHub`, tmux, psmux, o cano ou um binário do
-  workspace (`CARGO_BIN_EXE`).
+  `hangar_server::routes::`, `RuntimeRegistry`, `ListHub` ou `CARGO_BIN_EXE` (que só existe para
+  binário do próprio pacote, aqui o do servidor). Teste que cai nos dois critérios conta como 2a.
 - **Módulo de um arquivo do `it`:** o prefixo do nome do arquivo (`share_gate.rs` → `share`); sem
   prefixo que case, o módulo de `hangar_server::` mais citado nele.
 - **Usa do servidor:** quantos outros módulos de topo o módulo cita por `crate::`, teste incluído.
   Conta também módulo que já é só reexportação de outro crate (`transcript`, `diag`), então o número
   é teto.
+- **Toques em 30 dias:** arquivos do módulo tocados por commit na origin/main
+  (`git log --since="30 days ago" --no-merges --name-only --format= origin/main --
+  crates/hangar-server/src`, agrupado pelo 4º componente do caminho). É o quanto mexer nele dispara
+  a verificação.
 
-| Módulo | Linhas | Tipo 1 (src + it) | Tipo 2 (src + it) | Tipo 1 | Usa do servidor |
-|---|---:|---:|---:|---:|---:|
-| `runtime` | 33.920 | 866 (225 + 641) | 182 (41 + 141) | 83% | 25 |
-| `voice` | 13.169 | 314 (314 + 0) | 13 (0 + 13) | 96% | 8 |
-| `accounts` | 18.019 | 270 (218 + 52) | 113 (11 + 102) | 70% | 16 |
-| `share` | 3.271 | 184 (2 + 182) | 148 (0 + 148) | 55% | 12 |
-| `list` | 12.563 | 180 (142 + 38) | 70 (24 + 46) | 72% | 34 |
-| `session_open` | 12.734 | 180 (180 + 0) | 27 (16 + 11) | 87% | 29 |
-| `costs` | 5.593 | 166 (10 + 156) | 0 (0 + 0) | 100% | 3 |
-| `mods` | 4.000 | 165 (4 + 161) | 63 (0 + 63) | 72% | 7 |
-| `update` | 11.737 | 149 (119 + 30) | 23 (0 + 23) | 87% | 19 |
-| `groups` | 6.943 | 140 (23 + 117) | 131 (0 + 131) | 52% | 15 |
-| `session_write` | 6.362 | 122 (73 + 49) | 88 (2 + 86) | 58% | 28 |
-| `speech` | 7.650 | 114 (113 + 1) | 10 (2 + 8) | 92% | 11 |
-| `state` | 6.506 | 109 (104 + 5) | 14 (13 + 1) | 89% | 16 |
-| `terminal_input` | 1.870 | 103 (4 + 99) | 5 (0 + 5) | 95% | 3 |
-| `search` | 4.411 | 98 (98 + 0) | 21 (1 + 20) | 82% | 17 |
-| `remote_browser` | 2.064 | 66 (5 + 61) | 8 (0 + 8) | 89% | 8 |
-| `connect` | 611 | 64 (0 + 64) | 76 (0 + 76) | 46% | 7 |
-| `plugin` | 2.176 | 54 (43 + 11) | 11 (1 + 10) | 83% | 8 |
-| `pages` | 1.759 | 50 (50 + 0) | 11 (0 + 11) | 82% | 4 |
-| `codex_setup` | 7.306 | 46 (33 + 13) | 2 (2 + 0) | 96% | 17 |
-| `orchestration` | 5.768 | 45 (34 + 11) | 5 (4 + 1) | 90% | 10 |
-| `uploads` | 2.507 | 45 (11 + 34) | 7 (3 + 4) | 87% | 8 |
-| `vault` | 4.799 | 45 (45 + 0) | 22 (22 + 0) | 67% | 8 |
-| `loops` | 2.416 | 44 (44 + 0) | 6 (2 + 4) | 88% | 19 |
-| `side` | 2.718 | 44 (44 + 0) | 4 (4 + 0) | 92% | 18 |
-| `provider_models` | 3.891 | 30 (30 + 0) | 12 (12 + 0) | 71% | 11 |
-| `device_install` | 1.842 | 26 (26 + 0) | 15 (0 + 15) | 63% | 4 |
-| `push` | 2.942 | 26 (26 + 0) | 5 (5 + 0) | 84% | 17 |
-| `diag_report` | 2.050 | 24 (24 + 0) | 11 (5 + 6) | 69% | 9 |
-| `dictation` | 4.218 | 24 (24 + 0) | 41 (0 + 41) | 37% | 13 |
-| `subagents` | 1.825 | 22 (22 + 0) | 0 (0 + 0) | 100% | 2 |
-| `machine_peers` | 3.629 | 19 (3 + 16) | 6 (0 + 6) | 76% | 14 |
-| `transcription` | 1.542 | 17 (17 + 0) | 5 (5 + 0) | 77% | 5 |
-| `config_sync` | 5.543 | 16 (16 + 0) | 1 (1 + 0) | 94% | 21 |
-| `mcp` | 1.604 | 16 (16 + 0) | 21 (0 + 21) | 43% | 12 |
-| `session_media` | 555 | 11 (4 + 7) | 31 (0 + 31) | 26% | 6 |
-| `commands` | 1.628 | 9 (1 + 8) | 6 (0 + 6) | 60% | 6 |
-| `harness_setup` | 3.514 | 9 (1 + 8) | 1 (0 + 1) | 90% | 19 |
-| `archive_list` | 814 | 6 (6 + 0) | 36 (0 + 36) | 14% | 13 |
-| `term` | 1.629 | 6 (6 + 0) | 17 (17 + 0) | 26% | 6 |
-| `worktree_routes` | 715 | 6 (2 + 4) | 42 (1 + 41) | 12% | 8 |
-| `login_guests` | 2.417 | 4 (1 + 3) | 3 (0 + 3) | 57% | 14 |
-| `engines` | 1.951 | 2 (0 + 2) | 6 (0 + 6) | 25% | 13 |
-| `routes` | 1.977 | 1 (1 + 0) | 21 (12 + 9) | 5% | 92 |
-| `workspace_routes` | 852 | 1 (1 + 0) | 49 (0 + 49) | 2% | 11 |
-| `costs_routes` | 443 | 0 (0 + 0) | 50 (0 + 50) | 0% | 2 |
-| outros 72 (módulos menores, `lib.rs`, `main.rs`) | 26.863 | 430 (317 + 113) | 260 (20 + 240) | 62% | — |
-| executáveis à parte (22 arquivos) | — | 207 | 45 | 82% | — |
-| **Total** | 253.316 | 4.575 | 1.744 | 72% | |
+| Módulo | Linhas | Tipo 1 (src + it) | Tipo 2b (src + it) | Tipo 2a (src + it) | Sai junto | Usa do servidor | Toques em 30 dias |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `runtime` | 33.920 | 866 (225 + 641) | 2 (2 + 0) | 180 (39 + 141) | 83% | 25 | 708 |
+| `voice` | 13.169 | 314 (314 + 0) | 0 (0 + 0) | 13 (0 + 13) | 96% | 8 | 111 |
+| `accounts` | 18.019 | 270 (218 + 52) | 8 (8 + 0) | 105 (3 + 102) | 73% | 16 | 234 |
+| `list` | 12.563 | 180 (142 + 38) | 21 (21 + 0) | 49 (3 + 46) | 80% | 34 | 212 |
+| `session_open` | 12.734 | 180 (180 + 0) | 15 (15 + 0) | 12 (1 + 11) | 94% | 29 | 532 |
+| `share` | 3.271 | 184 (2 + 182) | 0 (0 + 0) | 148 (0 + 148) | 55% | 12 | 56 |
+| `mods` | 4.000 | 165 (4 + 161) | 9 (0 + 9) | 54 (0 + 54) | 76% | 7 | 16 |
+| `costs` | 5.593 | 166 (10 + 156) | 0 (0 + 0) | 0 (0 + 0) | 100% | 3 | 13 |
+| `update` | 11.737 | 149 (119 + 30) | 0 (0 + 0) | 23 (0 + 23) | 87% | 19 | 174 |
+| `groups` | 6.943 | 140 (23 + 117) | 0 (0 + 0) | 131 (0 + 131) | 52% | 15 | 179 |
+| `session_write` | 6.362 | 122 (73 + 49) | 0 (0 + 0) | 88 (2 + 86) | 58% | 28 | 234 |
+| `state` | 6.506 | 109 (104 + 5) | 6 (5 + 1) | 8 (8 + 0) | 93% | 16 | 78 |
+| `speech` | 7.650 | 114 (113 + 1) | 0 (0 + 0) | 10 (2 + 8) | 92% | 11 | 96 |
+| `terminal_input` | 1.870 | 103 (4 + 99) | 5 (0 + 5) | 0 (0 + 0) | 100% | 3 | 26 |
+| `search` | 4.411 | 98 (98 + 0) | 0 (0 + 0) | 21 (1 + 20) | 82% | 17 | 124 |
+| `remote_browser` | 2.064 | 66 (5 + 61) | 0 (0 + 0) | 8 (0 + 8) | 89% | 8 | 51 |
+| `connect` | 611 | 64 (0 + 64) | 0 (0 + 0) | 76 (0 + 76) | 46% | 7 | 42 |
+| `plugin` | 2.176 | 54 (43 + 11) | 2 (1 + 1) | 9 (0 + 9) | 86% | 8 | 50 |
+| `pages` | 1.759 | 50 (50 + 0) | 0 (0 + 0) | 11 (0 + 11) | 82% | 4 | 25 |
+| `codex_setup` | 7.306 | 46 (33 + 13) | 0 (0 + 0) | 2 (2 + 0) | 96% | 17 | 235 |
+| `orchestration` | 5.768 | 45 (34 + 11) | 0 (0 + 0) | 5 (4 + 1) | 90% | 10 | 123 |
+| `uploads` | 2.507 | 45 (11 + 34) | 0 (0 + 0) | 7 (3 + 4) | 87% | 8 | 17 |
+| `vault` | 4.799 | 45 (45 + 0) | 0 (0 + 0) | 22 (22 + 0) | 67% | 8 | 108 |
+| `loops` | 2.416 | 44 (44 + 0) | 0 (0 + 0) | 6 (2 + 4) | 88% | 19 | 44 |
+| `side` | 2.718 | 44 (44 + 0) | 0 (0 + 0) | 4 (4 + 0) | 92% | 18 | 39 |
+| `provider_models` | 3.891 | 30 (30 + 0) | 0 (0 + 0) | 12 (12 + 0) | 71% | 11 | 48 |
+| `device_install` | 1.842 | 26 (26 + 0) | 0 (0 + 0) | 15 (0 + 15) | 63% | 4 | 32 |
+| `push` | 2.942 | 26 (26 + 0) | 0 (0 + 0) | 5 (5 + 0) | 84% | 17 | 65 |
+| `diag_report` | 2.050 | 24 (24 + 0) | 0 (0 + 0) | 11 (5 + 6) | 69% | 9 | 40 |
+| `dictation` | 4.218 | 24 (24 + 0) | 0 (0 + 0) | 41 (0 + 41) | 37% | 13 | 50 |
+| `subagents` | 1.825 | 22 (22 + 0) | 0 (0 + 0) | 0 (0 + 0) | 100% | 2 | 18 |
+| `machine_peers` | 3.629 | 19 (3 + 16) | 0 (0 + 0) | 6 (0 + 6) | 76% | 14 | 80 |
+| `transcription` | 1.542 | 17 (17 + 0) | 0 (0 + 0) | 5 (5 + 0) | 77% | 5 | 31 |
+| `config_sync` | 5.543 | 16 (16 + 0) | 0 (0 + 0) | 1 (1 + 0) | 94% | 21 | 104 |
+| `mcp` | 1.604 | 16 (16 + 0) | 0 (0 + 0) | 21 (0 + 21) | 43% | 12 | 63 |
+| `session_media` | 555 | 11 (4 + 7) | 0 (0 + 0) | 31 (0 + 31) | 26% | 6 | 8 |
+| `commands` | 1.628 | 9 (1 + 8) | 0 (0 + 0) | 6 (0 + 6) | 60% | 6 | 7 |
+| `harness_setup` | 3.514 | 9 (1 + 8) | 0 (0 + 0) | 1 (0 + 1) | 90% | 19 | 60 |
+| `term` | 1.629 | 6 (6 + 0) | 2 (2 + 0) | 15 (15 + 0) | 35% | 6 | 9 |
+| `archive_list` | 814 | 6 (6 + 0) | 0 (0 + 0) | 36 (0 + 36) | 14% | 13 | 12 |
+| `worktree_routes` | 715 | 6 (2 + 4) | 0 (0 + 0) | 42 (1 + 41) | 12% | 8 | 9 |
+| `login_guests` | 2.417 | 4 (1 + 3) | 0 (0 + 0) | 3 (0 + 3) | 57% | 14 | 82 |
+| `engines` | 1.951 | 2 (0 + 2) | 0 (0 + 0) | 6 (0 + 6) | 25% | 13 | 31 |
+| `routes` | 1.977 | 1 (1 + 0) | 0 (0 + 0) | 21 (12 + 9) | 5% | 92 | 175 |
+| `workspace_routes` | 852 | 1 (1 + 0) | 0 (0 + 0) | 49 (0 + 49) | 2% | 11 | 17 |
+| `costs_routes` | 443 | 0 (0 + 0) | 0 (0 + 0) | 50 (0 + 50) | 0% | 2 | 3 |
+| outros 72 (módulos menores, `lib.rs`, `main.rs`) | 26.863 | 430 (317 + 113) | 17 (0 + 17) | 243 (20 + 223) | 65% | — | 841 |
+| executáveis à parte (22 arquivos) | — | 207 | 1 | 44 | 83% | — | — |
+| **Total** | 253.316 | 4.575 | 88 | 1.656 | 74% | | 5.398 |
 
-Total: 6.319 testes. Em `src/` são 2.708 (2.482 do tipo 1), no `tests/it` 3.359 (1.886 do tipo 1 e
-1.473 do tipo 2) e 252 em cerca de 20 executáveis à parte (22 arquivos em `tests/*.rs` e
-`tests/costs_hook`).
+Total: 6.319 testes. Saem junto 4.663 (74%): 4.575 do tipo 1 e 88 do 2b. Ficam 1.656 do 2a. Por
+lugar: `src/` tem 2.708 (2.482 + 54 + 172), o `tests/it` tem 3.359 (1.886 + 33 + 1.440) e cerca de
+20 executáveis à parte (22 arquivos em `tests/*.rs` e `tests/costs_hook`) têm 252 (207 + 1 + 44).
 
 O que a tabela mostra:
 
-- **72% dos testes são do tipo 1.** Com tudo extraído, o `it` do servidor fica com 1.744 testes, e
-  não some: é o que sobe servidor, tmux e cano.
-- **1.886 testes do tipo 1 moram no `tests/it` do servidor.** Eles não saem sozinhos: mover o
-  módulo sem levar esses arquivos para o `tests/it` do crate novo deixa a verificação igual. Só os
-  de `src/` saem de graça.
-- **O nó `runtime`/`accounts`/`list`/`session_open`/`session_write`/`state` tem 1.727 testes do
-  tipo 1**, 38% dos 4.575 do tipo 1, e `runtime` sozinho tem 866. É onde está o alívio grande e é o corte mais
-  caro. Os arquivos grandes do `runtime` no `it` (`terminal_runtime.rs`, `runtime_claude.rs`) citam
-  `terminal_input`, `mods`, `plugin` e `interactions`: saem quando esses módulos estiverem fora.
-- **Rende pouco na verificação** (quase tudo tipo 2, mexer neles ainda dispara o `it` grande):
+- **O alívio do dia a dia só chega com o nó** `runtime`/`accounts`/`list`/`session_open`/
+  `session_write`/`state`: ele tem 1.998 dos 5.398 toques de 30 dias (37%) e 1.779 dos 4.663 testes
+  que saem (38%); `runtime` sozinho tem 708 toques e 868 testes. É o corte mais caro. Os arquivos
+  grandes do `runtime` no `it` (`terminal_runtime.rs`, `runtime_claude.rs`) citam `terminal_input`,
+  `mods`, `plugin` e `interactions`: saem quando esses módulos estiverem fora.
+- **1.919 testes que saem moram no `tests/it` do servidor.** Eles não saem sozinhos: mover o módulo
+  sem levar esses arquivos para o `tests/it` do crate novo deixa a verificação igual. Só os de
+  `src/` saem de graça.
+- **Com tudo extraído, o `it` do servidor fica com 1.656 testes**, e não some: é o que precisa do
+  servidor inteiro.
+- **Rende pouco na verificação** (quase tudo 2a, mexer neles ainda dispara o `it` grande):
   `workspace_routes` 2%, `routes` 5%, `worktree_routes` 12%, `archive_list` 14%, `session_media`
-  26%, `term` 26%, `dictation` 37%, `mcp` 43%, `connect` 46%. `costs_routes` está em 0% hoje porque
+  26%, `term` 35%, `dictation` 37%, `mcp` 43%, `connect` 46%. `costs_routes` está em 0% hoje porque
   os 50 testes dele sobem o servidor; com o `CostsState` da Task 5 podem montar só a rota de custos.
 - **140 testes de `connect` e 36 de `transcript` ainda estão no `it` do servidor**, embora os dois
   já sejam crate: entram pelo `pub use` do servidor. Os do tipo 1 (64 e 16) podem ir para os crates
   deles sem extrair código.
-- **Cerca de 20 executáveis à parte ainda linkam o servidor inteiro** (252 testes). `hangar-package` e
-  `hangar-transcript` têm 2 arquivos em `tests/` cada, contra a regra do item 5 do contrato.
+- **Cerca de 20 executáveis à parte ainda linkam o servidor inteiro** (252 testes). `hangar-package`
+  e `hangar-transcript` têm 2 arquivos em `tests/` cada, contra a regra do item 5 do contrato.
+- **Número de testes não é tempo.** Medido em 10/11 pela sessão da `verificar-local`, com 4 threads:
+  o `it` leva 694 s e a lib 138 s. O libtest estável não dá tempo por teste, então não está
+  confirmado que o tempo do `it` é o do tipo 2a. Os lentos que aparecem nos logs:
+  `plugin_loopback::held_routes`, `runtime_queue::state_stays_bounded_with_100kb_replies` e
+  `worktrees::tests`.
+- **A seleção por crate vai render:** 985 de 1.589 commits tocam um módulo só (medido pela mesma
+  sessão; mediana 1, p90 4).
 
 ## Ordem e paralelismo
 
@@ -330,20 +350,25 @@ próprio: o ganho de memória é nulo e crate com uma responsabilidade tão pequ
 fase; `plugin_listener` fica no servidor. Depois do core, a ordem segue o que falta cortar (seção
 "Números conferidos").
 
-**Ordem revista pelos testes (11/11/2026).** Critério: testes do tipo 1 que saem, contra quantos
-módulos do servidor ainda prendem o módulo (seção "Testes por módulo").
+**Ordem revista pelos testes e pela frequência de mudança (11/11/2026).** Seção "Testes por
+módulo". O alívio na verificação só chega com o nó: os primeiros cortes da segunda fase quase não
+mudam o dia a dia e valem como pré-requisito dele.
 
-1. Nesta fase a ordem fica: Task 5 e 6 (`costs`: 166 do tipo 1, mais os 71 de `tests/costs_hook` e,
-   com o `CostsState`, os 50 de `costs_routes`) e Task 7 (`voice`: 314, todos em `src/`).
-2. Segunda fase, do que rende mais por corte: `terminal_input` (103 testes em 1.870 linhas, usa 3
-   módulos); os pequenos `pages` (50), `permission_control` (35), `subagents` (22) e `tail` (20);
-   `mods` (165); `speech` (114); `remote_browser` (66); `plugin` (54); `orchestration` e `uploads`
-   (45 cada).
-3. `share` (184 de 332) e `groups` (140 de 271): metade fica no `it` de qualquer jeito.
-4. O nó (`runtime` 866, `accounts` 270, `session_open` 180, `list` 180, `session_write` 122,
-   `state` 109): depende da inversão da seção "Adiado" e de `terminal_input`, `mods`, `plugin` e
-   `interactions` já fora.
-5. Sem pressa, porque não aliviam a verificação: os módulos de rota listados acima.
+1. Nesta fase a ordem fica: Task 5 e 6 (`costs`: 166 testes, mais os 71 de `tests/costs_hook` e,
+   com o `CostsState`, os 50 de `costs_routes`; 13 toques em 30 dias) e Task 7 (`voice`: 314, todos
+   em `src/`; 111 toques).
+2. Segunda fase, primeiro o que destrava o nó: `terminal_input` (108 testes em 1.870 linhas, usa 3
+   módulos), `interactions` (14), `mods` (174) e `plugin` (56).
+3. Avaliar cedo, na Task 10: `codex_setup` (235 toques, 96% sai, 7.306 linhas) e `update` (174
+   toques, 87% sai, 11.737 linhas). Mudam muito e quase tudo sai; o custo é o que usam do servidor
+   (17 e 19 módulos).
+4. O nó (`runtime` 868, `accounts` 278, `list` 201, `session_open` 195, `session_write` 122,
+   `state` 115): depende da inversão da seção "Adiado" e do item 2.
+5. Depois, porque não destravam o nó e mudam pouco: `speech` (114), `remote_browser` (66),
+   `orchestration` e `uploads` (45 cada) e os pequenos `pages` (50), `permission_control` (35),
+   `subagents` (22) e `tail` (20). `share` (184 de 332) e `groups` (140 de 271) deixam metade no
+   `it` de qualquer jeito.
+6. Sem pressa, porque não aliviam a verificação: os módulos de rota listados na seção de testes.
 
 O core é um crate só, com módulos por assunto (`net`, `http`, `pycompat`, `fs`, `process`, `paths`,
 `edge`…). Separar a parte pura num crate próprio não reduz memória; fica para quando houver motivo
@@ -746,11 +771,11 @@ Status: ready-for-agent (depois da Task 9)
   Jefferson autorizar o build) e trocar a tabela de estimativa pelo medido.
 - [ ] **Step 3: Escrever o plano da segunda fase** em `docs/superpowers/plans/`, na ordem da seção
   "Ordem e paralelismo" (revista pelos testes) e refazendo a contagem de "Testes por módulo":
-  `terminal_input`, `interactions`, os pequenos (`pages`, `permission_control`, `subagents`,
-  `tail`), `mods`, `speech`, `remote_browser`, `plugin`, `orchestration` (com `orq_storage`),
-  `uploads`, depois `share` e `groups`, e por fim o nó `runtime`/`accounts`/`list`/`session_open`/
-  `session_write`/`state` (com a inversão da seção "Adiado"); incluir o PR que retira os
-  re-exports do item 1 do contrato.
+  `terminal_input`, `interactions`, `mods` e `plugin` (destravam o nó); a avaliação de
+  `codex_setup` e `update`; o nó `runtime`/`accounts`/`list`/`session_open`/`session_write`/`state`
+  (com a inversão da seção "Adiado"); depois `speech`, `remote_browser`, `orchestration` (com
+  `orq_storage`), `uploads`, os pequenos (`pages`, `permission_control`, `subagents`, `tail`),
+  `share` e `groups`; incluir o PR que retira os re-exports do item 1 do contrato.
 - [ ] **Step 4: Atualizar a entrada de plataforma.md** com os números medidos.
 
 ## Adiado para a segunda fase
