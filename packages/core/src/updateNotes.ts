@@ -3,7 +3,7 @@ import type { UpdateNews, UpdateNotes, UpdateWarning } from './types';
 export interface ClientUpdateNotes { warnings: UpdateWarning[]; cards: UpdateNews[]; fixes: UpdateNews[] }
 
 /** O que um cliente mostra: novidades dele ou de todos, cartões separados das correções. */
-export function forClient(notes: UpdateNotes, client: 'desktop' | 'mobile'): ClientUpdateNotes {
+export function forClient(notes: Pick<UpdateNotes, 'warnings' | 'news'>, client: 'desktop' | 'mobile'): ClientUpdateNotes {
   const mine = notes.news.filter((n) => n.platforms === client || n.platforms === 'all');
   return {
     warnings: notes.warnings,

@@ -551,7 +551,8 @@ impl Updater {
         cx.notify();
         if install { self.install_app(window, cx); }
         else if !self.all_running && self.survey.rows.iter().any(|r| r.local && matches!(r.status, Status::Updated | Status::UpdatedManual)) {
-            super::confirm::show_pending(false, window, cx);
+            // No meio do lote a releitura do fim da atualização local foi pulada; esta traz o que chegou.
+            self.refresh_server(cx);
         }
     }
 
@@ -1004,7 +1005,8 @@ mod tests {
         let updater = cx.new(|_| Updater { runtime: Arc::new(Runtime::new().unwrap()), client: reqwest::Client::new(), exe: None, exe_stamp: None, offer: None,
             local: None, server: None, server_api: None, server_seq: 0, active: None, active_state: None, active_api: None, active_seq: 0,
             run: Run::Idle, checking: false, checked: None, checked_channel: None, known_channel: None, channel_blocked: None,
-            suspended: false, intent_lock: None, all_servers: vec![entry("local"), entry("remote")], survey: Survey::default(), batch: None, all_running: true });
+            suspended: false, intent_lock: None, all_servers: vec![entry("local"), entry("remote")], survey: Survey::default(), batch: None, all_running: true,
+            arrived: Default::default() });
         updater.update(cx, |this, cx| {
             let machine = Machine::from_entry(&entry("remote"), None);
             this.survey.prepare(&[machine.clone()], HashMap::from([("alias".into(), machine.key.clone())]));
@@ -1024,7 +1026,8 @@ mod tests {
         let mut updater = Updater { runtime: Arc::new(Runtime::new().unwrap()), client: reqwest::Client::new(), exe: None, exe_stamp: None, offer: None,
             local: None, server: None, server_api: None, server_seq: 0, active: None, active_state: None, active_api: None, active_seq: 0,
             run: Run::Idle, checking: false, checked: None, checked_channel: None, known_channel: None, channel_blocked: None,
-            suspended: false, intent_lock: None, all_servers: vec![entry("local"), entry("remote")], survey: Survey::default(), batch: None, all_running: false };
+            suspended: false, intent_lock: None, all_servers: vec![entry("local"), entry("remote")], survey: Survey::default(), batch: None, all_running: false,
+            arrived: Default::default() };
         assert!(!updater.plan().visible());
         assert!(!updater.idle_visible(&updater.plan()));
         updater.survey.rows.push(Row { key: "remote".into(), label: "remote".into(), local: false, status: Status::Available, warnings: vec![] });

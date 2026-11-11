@@ -54,6 +54,8 @@ hangar-workspace = { path = "../hangar-workspace" }
 hangar-psmux.workspace = true
 # Pacote por versão: índice, manifesto e extração conferida (`update/`).
 hangar-package = { path = "../hangar-package" }
+# O que cada atualização trouxe e o que cada aparelho já viu (`update_arrived`).
+hangar-update-news = { path = "../hangar-update-news" }
 regex.workspace = true
 # A guarda conserva lookaround e grupos nomeados aceitos pelo re.search anterior.
 fancy-regex = "=0.20.0"

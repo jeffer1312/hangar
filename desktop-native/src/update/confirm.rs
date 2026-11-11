@@ -1,12 +1,12 @@
 //! Confirmação da atualização com os avisos e as novidades da versão nova, e "O que chegou para você" depois dela.
 
-use std::{cell::Cell, path::PathBuf, rc::Rc, time::Instant};
+use std::{cell::Cell, path::Path, rc::Rc, time::Instant};
 use gpui_kit::{assets::IconName, component::{Sizable, WindowExt, button::*, dialog::DialogFooter, radio::Radio, text::TextView}, prelude::FluentBuilder, *};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
 use crate::{api::{Api, Failure}, app::chrome, i18n::{tr, tr_shared}, theme};
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 pub(crate) struct News {
     id: String,
     title: String,
@@ -19,7 +19,7 @@ pub(crate) struct News {
     try_it: Option<String>,
     #[serde(default)]
     animation: Option<String>,
-    /// A peça da tela onde a novidade mora (`tour::anchors`). A lista guardada pelo binário anterior não tem o campo.
+    /// A peça da tela onde a novidade mora (`tour::anchors`). Servidor anterior ao campo não o manda.
     #[serde(default)]
     anchor: Option<String>,
 }
@@ -167,7 +167,7 @@ pub(crate) async fn load(api: Api) -> (Option<Value>, Notes) {
         Ok(Some(wire)) => {
             notes.warnings = wire.warnings;
             notes.incomplete = wire.incomplete;
-            notes.news = wire.news.into_iter().filter(|n| matches!(n.platforms.as_str(), "desktop" | "all")).collect();
+            notes.news = wire.news.into_iter().filter(for_desktop).collect();
         }
         // Servidor antigo: modal como antes, sem a linha da versão.
         Ok(None) => notes.version = None,
@@ -252,9 +252,6 @@ pub(crate) fn open(window: &mut Window, cx: &mut App, title: String, description
     let (width, height) = if tall { (px(620.).min(window.viewport_size().width * 0.92), window.viewport_size().height * 0.8) } else { (px(360.), px(150.)) };
     chrome::confirm_dialog(window, cx, width, height, None, Rc::new(body), enabled, tr("update_confirm_ok"), None,
         |dialog| dialog.p(px(18.)).rounded(px(14.)), move |window, cx| {
-            let primary = &notes[0];
-            // Sem novidades, apaga a lista de uma confirmação anterior que não chegou a terminar.
-            if primary.news.is_empty() { let _ = take_pending(); } else { save_pending(&primary.server, &primary.news); }
             act(notes.iter().zip(developer.iter()).map(|(n, d)| n.acceptance(d.get())).collect(), window, cx);
             true
         });
@@ -378,7 +375,7 @@ fn stage_slot(id: &str, guess: Pixels, draw: crate::news::NewsAnimation, started
     }, |_, _, _, _| {}).absolute().top_0().left_0().size_full())
 }
 
-/// "O que chegou para você": uma vez, com o que o "Atualizar?" guardou.
+/// "O que chegou para você": uma vez, com o que o servidor diz que chegou.
 fn open_whats_new(items: Vec<News>, show: Option<ShowInApp>, window: &mut Window, cx: &mut App) {
     let fixes_open = Rc::new(Cell::new(false));
     let started = Instant::now();
@@ -396,44 +393,111 @@ fn open_whats_new(items: Vec<News>, show: Option<ShowInApp>, window: &mut Window
     });
 }
 
-#[derive(Deserialize, Serialize)]
-struct Pending { from_native: String, server: String, items: Vec<News> }
+fn for_desktop(news: &News) -> bool { matches!(news.platforms.as_str(), "desktop" | "all") }
 
-fn pending_path() -> Option<PathBuf> { Some(crate::appearance::dir()?.join("novidades-pendentes.json")) }
+/// A resposta de `GET /api/update/arrived`, já só com as novidades do desktop. `Seen`: nada a abrir, só marcar visto.
+#[derive(Debug, PartialEq)]
+pub(super) enum Arrived { Show { news: Vec<News>, through: u64 }, Seen(u64), Already, Absent, Failed(String) }
 
-fn save_pending(server: &str, items: &[News]) {
-    let result = (|| {
-        let path = pending_path().ok_or_else(|| std::io::Error::other("sem pasta de configuração"))?;
-        if let Some(dir) = path.parent() { std::fs::create_dir_all(dir)?; }
-        let tmp = path.with_extension("json.tmp");
-        let pending = Pending { from_native: super::CURRENT.to_owned(), server: server.to_owned(), items: items.to_vec() };
-        std::fs::write(&tmp, serde_json::to_vec(&pending).map_err(std::io::Error::other)?)?;
-        std::fs::rename(&tmp, &path)
-    })();
-    // Sem a lista guardada, só a tela de depois não aparece.
-    if let Err(error) = result { crate::log_line(&format!("novidades pendentes não gravaram: {error}")); }
+/// `last`: o `through` que este processo já tratou; resposta até ele veio de outro gatilho e não abre de novo.
+/// 404/405 = servidor sem a rota: não há o que mostrar.
+pub(super) fn arrived(read: Result<Value, Failure>, last: Option<u64>) -> Arrived {
+    #[derive(Deserialize)]
+    struct Wire { #[serde(default)] news: Vec<News>, through: u64 }
+    match read.map(serde_json::from_value::<Wire>) {
+        Ok(Ok(wire)) if last.is_some_and(|last| wire.through <= last) => Arrived::Already,
+        Ok(Ok(Wire { mut news, through })) => {
+            news.retain(|item| for_desktop(item) && !legacy_shown(&item.id));
+            if news.is_empty() { Arrived::Seen(through) } else { Arrived::Show { news, through } }
+        }
+        Ok(Err(error)) => Arrived::Failed(error.to_string()),
+        Err(error) if matches!(error.status, Some(404 | 405)) => Arrived::Absent,
+        Err(error) => Arrived::Failed(error.detail),
+    }
 }
 
-/// Lê e apaga: a tela aparece uma vez só, mesmo que feche sem ver.
-fn take_pending() -> Option<Pending> {
-    let path = pending_path()?;
-    let bytes = std::fs::read(&path).ok()?;
-    let _ = std::fs::remove_file(&path);
-    serde_json::from_slice(&bytes).ok()
+/// O `device` que o servidor aceita: casar com `hangar_update_news::valid_device` e com a regex do mobile.
+fn valid_device(id: &str) -> bool { (1..=64).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_') }
+
+/// Um id por instalação do app, igual para todos os servidores: criado na primeira vez, lido depois.
+fn device_id_in(dir: &Path) -> std::io::Result<String> {
+    let path = dir.join("device-id");
+    let replace = match std::fs::read_to_string(&path) {
+        Ok(text) if valid_device(text.trim()) => return Ok(text.trim().to_owned()),
+        Ok(_) => true,
+        Err(_) => false,
+    };
+    let mut raw = [0u8; 16];
+    ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut raw).map_err(|_| std::io::Error::other("sem número aleatório"))?;
+    // UUID versão 4.
+    raw[6] = raw[6] & 0x0f | 0x40;
+    raw[8] = raw[8] & 0x3f | 0x80;
+    let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+    let id = format!("{}-{}-{}-{}-{}", &hex[..8], &hex[8..12], &hex[12..16], &hex[16..20], &hex[20..]);
+    std::fs::create_dir_all(dir)?;
+    let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
+    let mut file = options.open(&tmp)?;
+    // O `mode` só vale na criação: um tmp que sobrou levaria o modo antigo ao arquivo no `rename`.
+    #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; file.set_permissions(std::fs::Permissions::from_mode(0o600))?; }
+    std::io::Write::write_all(&mut file, id.as_bytes())?;
+    drop(file);
+    // Sem sobrescrever: duas instâncias abrindo juntas ficam com o id de quem gravou primeiro. Ilegível, ou sistema de
+    // arquivos sem hard link, troca pelo `rename`.
+    let linked = if replace { Err(std::io::ErrorKind::Unsupported.into()) } else { std::fs::hard_link(&tmp, &path) };
+    match linked {
+        Ok(()) => { let _ = std::fs::remove_file(&tmp); Ok(id) }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let _ = std::fs::remove_file(&tmp);
+            let text = std::fs::read_to_string(&path)?;
+            if valid_device(text.trim()) { Ok(text.trim().to_owned()) } else { Err(std::io::Error::other("device-id ilegível")) }
+        }
+        Err(_) => { std::fs::rename(&tmp, &path)?; Ok(id) }
+    }
 }
 
-/// Na abertura: com o mesmo binário de quando foi guardada, a atualização não chegou a trocar o app.
-fn shows_at_startup(pending: &Pending, current: &str) -> bool { pending.from_native != current && !pending.items.is_empty() }
+/// Lido do disco uma vez por processo; falha não fica guardada e tenta de novo no próximo pedido.
+pub(super) fn device_id() -> Option<String> {
+    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    if let Some(id) = ID.get() { return Some(id.clone()); }
+    let id = crate::appearance::dir().ok_or_else(|| std::io::Error::other("sem pasta de configuração")).and_then(|dir| device_id_in(&dir))
+        .map_err(|error| crate::log_line(&format!("update news: id do aparelho: {error}"))).ok()?;
+    Some(ID.get_or_init(|| id).clone())
+}
 
-/// Mostra o que o "Atualizar?" guardou. `require_new_binary` na abertura do app; sem ele, o fluxo terminou neste
-/// processo sem trocar o binário.
-pub(crate) fn show_pending(require_new_binary: bool, window: &mut Window, cx: &mut App) {
-    let shows = |p: &Pending| if require_new_binary { shows_at_startup(p, super::CURRENT) } else { !p.items.is_empty() };
-    let Some(pending) = take_pending().filter(shows) else { return };
-    // Também chamado do `Updater`, que não tem a entidade do app no contexto: ela vem do global.
-    let show = crate::app::Hangar::weak(cx).map(|hangar| -> ShowInApp {
+/// Abre "O que chegou para você" na janela ativa (ou na primeira), com o "Mostrar no app" do app; `false` sem janela.
+pub(super) fn show_news(items: Vec<News>, cx: &mut App) -> bool {
+    let Some(handle) = cx.active_window().or_else(|| cx.windows().first().copied()) else { return false };
+    let show = show_in_app(cx);
+    handle.update(cx, |_, window, cx| open_whats_new(items, show, window, cx)).is_ok()
+}
+
+// Chamado também do `Updater`, que não tem a entidade do app no contexto: ela vem do global.
+fn show_in_app(cx: &App) -> Option<ShowInApp> {
+    crate::app::Hangar::weak(cx).map(|hangar| -> ShowInApp {
         Rc::new(move |note: crate::tour::Note, _: &mut Window, cx: &mut App| { let _ = hangar.update(cx, |this, cx| this.show_news(note, cx)); })
-    });
+    })
+}
+
+/// Ids que a lista antiga já mostrou nesta abertura: a primeira leitura do servidor não os repete.
+static LEGACY_SHOWN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn legacy_shown(id: &str) -> bool { LEGACY_SHOWN.lock().is_ok_and(|ids| ids.iter().any(|shown| shown == id)) }
+
+/// A lista que o "Atualizar?" de um app anterior guardou em `novidades-pendentes.json`: abre uma vez se o app foi
+/// trocado desde então, e o arquivo some. O servidor guarda o que chegou desde esta versão.
+pub(crate) fn show_legacy_pending(window: &mut Window, cx: &mut App) {
+    #[derive(Deserialize)]
+    struct Pending { from_native: String, items: Vec<News> }
+    let Some(path) = crate::appearance::dir().map(|dir| dir.join("novidades-pendentes.json")) else { return };
+    let Ok(bytes) = std::fs::read(&path) else { return };
+    let _ = std::fs::remove_file(&path);
+    let Ok(pending) = serde_json::from_slice::<Pending>(&bytes) else { return };
+    if pending.from_native == super::CURRENT || pending.items.is_empty() { return; }
+    if let Ok(mut ids) = LEGACY_SHOWN.lock() { ids.extend(pending.items.iter().map(|item| item.id.clone())); }
+    let show = show_in_app(cx);
     open_whats_new(pending.items, show, window, cx);
 }
 
@@ -480,20 +544,40 @@ mod tests {
     use core::prelude::v1::test;
 
     #[test]
-    fn startup_shows_only_after_the_binary_changed() {
-        let pending = |from: &str, items: usize| Pending { from_native: from.into(), server: "s".into(), items: (0..items).map(|i| News {
-            id: i.to_string(), title: "t".into(), kind: "new".into(), text: String::new(), platforms: "all".into(), try_it: None, animation: None, anchor: None }).collect() };
-        assert!(shows_at_startup(&pending("1", 1), "2"));
-        assert!(!shows_at_startup(&pending("2", 1), "2"));
-        assert!(!shows_at_startup(&pending("1", 0), "2"));
+    fn arrived_keeps_desktop_news_marks_an_empty_list_and_treats_an_old_server_as_absent() {
+        let item = |id: &str, platforms: &str| serde_json::json!({"id": id, "title": "t", "kind": "new", "platforms": platforms});
+        let read = Ok(serde_json::json!({"news": [item("a", "all"), item("b", "mobile"), item("c", "desktop")], "through": 7}));
+        let Arrived::Show { news, through } = arrived(read, None) else { panic!("com novidade do desktop, abre") };
+        assert_eq!((news.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(), through), (vec!["a", "c"], 7));
+        let only_mobile = Ok(serde_json::json!({"news": [item("b", "mobile")], "through": 8}));
+        assert_eq!(arrived(only_mobile, None), Arrived::Seen(8), "lista vazia depois do filtro: marca visto, não abre");
+        assert_eq!(arrived(Ok(serde_json::json!({"news": [], "through": 3})), None), Arrived::Seen(3), "aparelho novo");
+        let again = Ok(serde_json::json!({"news": [item("a", "all")], "through": 7}));
+        assert_eq!(arrived(again, Some(7)), Arrived::Already, "o mesmo `through` não abre duas vezes no processo");
+        assert_eq!(arrived(Err(refused(Some(404), "Not Found")), None), Arrived::Absent);
+        assert_eq!(arrived(Err(refused(Some(405), "Method Not Allowed")), None), Arrived::Absent);
+        assert!(matches!(arrived(Err(refused(Some(503), "update_arrived_unavailable")), None), Arrived::Failed(_)));
+        assert!(matches!(arrived(Ok(serde_json::json!({"news": []})), None), Arrived::Failed(_)), "sem `through` não marca nada");
     }
 
     #[test]
-    fn pending_from_the_previous_binary_reads_without_anchor_and_only_known_anchors_point() {
-        let old = serde_json::json!({"from_native": "1", "server": "s", "items": [{"id": "a", "title": "t", "kind": "new", "text": "x"}]});
-        let pending: Pending = serde_json::from_value(old).unwrap();
-        assert_eq!(pending.items[0].anchor, None);
-        assert!(pending.items[0].in_app().is_none(), "sem âncora, sem Mostrar no app");
+    fn device_id_is_created_once_and_reused() {
+        let dir = std::env::temp_dir().join(format!("hangar-native-device-id-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let first = device_id_in(&dir).unwrap();
+        assert!(valid_device(&first) && first.len() == 36, "UUID: {first}");
+        assert_eq!(device_id_in(&dir).unwrap(), first);
+        std::fs::write(dir.join("device-id"), "não serve").unwrap();
+        let replaced = device_id_in(&dir).unwrap();
+        assert!(replaced != first && valid_device(&replaced), "id ilegível é trocado por outro");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn news_without_anchor_reads_and_only_known_anchors_point() {
+        let old: News = serde_json::from_value(serde_json::json!({"id": "a", "title": "t", "kind": "new", "text": "x"})).unwrap();
+        assert_eq!(old.anchor, None);
+        assert!(old.in_app().is_none(), "sem âncora, sem Mostrar no app");
 
         let item = |anchor: &str, try_it: Option<&str>| serde_json::from_value::<News>(serde_json::json!({"id": "b", "title": "t",
             "kind": "new", "text": "corpo", "try_it": try_it, "anchor": anchor})).unwrap();

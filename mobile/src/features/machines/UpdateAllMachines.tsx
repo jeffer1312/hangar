@@ -11,7 +11,7 @@ import { MachineRow } from './MachineRows';
 import { haptic } from '../../ui/haptics';
 import { useRouter } from 'expo-router';
 import { useServers } from '../../stores/servers';
-import { clearPendingNews, firstPendingServer, requestUpdateConfirm, whatsNewHref } from '../updates/pending';
+import { loadArrivedNews, requestUpdateConfirm, whatsNewHref } from '../updates/pending';
 import * as m from '../../paraglide/messages';
 
 function statusText(value: UpdateAllState): string {
@@ -71,7 +71,7 @@ export function UpdateAllMachines({ servers, compact = false }: { servers: reado
     // Quem não mostrou os avisos fica fora da rodada: atualizá-la passaria por cima do aceite.
     const targets = (await prepared).run.map((entry) => entry.server);
     // A folha já trava o Atualizar sem máquina para rodar; isto só cobre a corrida.
-    if (!targets.length) { clearPendingNews(notesServer.id); return; }
+    if (!targets.length) return;
     setOpen(true);
     if (round.busy) return;
     setRound({ busy: true, count: targets.length, rows: [], error: '' });
@@ -88,13 +88,12 @@ export function UpdateAllMachines({ servers, compact = false }: { servers: reado
       if (!results.length || results.some((row) => needsAttention(row.state))) haptic.error();
       else haptic.success();
       const done = results.find((row) => row.server.id === notesServer.id);
-      // A folha guardou as novidades da ativa antes de saber se ela rodaria.
-      if (!done || done.state.status === 'em_dia' || done.state.status === 'travado') clearPendingNews(notesServer.id);
       // Abre ao fechar a folha de resultados: por cima dela, no iOS, ficaria escondida e a lista se perderia.
-      if (done && (done.state.status === 'atualizado' || done.state.status === 'atualizado_manual') && firstPendingServer([notesServer.id])) {
+      if (done && (done.state.status === 'atualizado' || done.state.status === 'atualizado_manual')) void loadArrivedNews(notesServer).then((show) => {
+        if (!show) return;
         if (openRef.current) newsAfterClose.current = notesServer.id;
         else router.push(whatsNewHref(notesServer.id));
-      }
+      });
     } catch (cause) {
       setRound({ error: m.update_all_failed({ erro: cause instanceof Error ? cause.message : String(cause) }) });
       haptic.error();

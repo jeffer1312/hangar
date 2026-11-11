@@ -1283,8 +1283,6 @@ impl Hangar {
                 (u.waiting, u.task, u.step) = (false, None, None);
                 if let UpgradeEnd::Done { warnings, .. } = &end { u.warnings.clone_from(warnings); }
                 let failed = if track == Track::DevMode { "dev_mode_failed" } else { "update_failed" };
-                // Trocar o modo desenvolvedor não traz versão nova: nada a mostrar em "O que chegou para você".
-                let done = track != Track::DevMode && matches!(end, UpgradeEnd::Done { .. });
                 match end {
                     UpgradeEnd::Done { manual: true, .. } => u.manual = true,
                     UpgradeEnd::Done { ts, .. } => {
@@ -1298,8 +1296,8 @@ impl Hangar {
                 }
                 // A atualização também troca de modo quando o aceite do aviso da migração a lançou.
                 self.load_dev_mode(cx);
+                // Relê o servidor desta máquina: a versão nova dele mostra o que chegou.
                 self.sync_updater(cx);
-                if done { crate::update::confirm::show_pending(false, window, cx); }
             }
             MachinesReply::Peers(seq, result) => {
                 let parsed = result.map_err(|e| Self::failure(&e)).and_then(|v| parse_peers(&v).ok_or_else(|| tr("invalid_response")));

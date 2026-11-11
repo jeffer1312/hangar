@@ -65,7 +65,7 @@ vi.mock('expo-blur', () => ({ BlurTargetView: ({ children, ref }: { children: Re
   createElement('div', { ref }, children) }));
 vi.mock('../ui/Background', () => ({ Background: () => createElement('div', { 'data-wallpaper': true }) }));
 vi.mock('react-native-url-polyfill/auto', () => ({}));
-vi.mock('../features/updates/pending', () => ({ firstPendingServer: () => null, pendingFrom: () => '', clearPendingNews: () => {}, whatsNewHref: () => '' }));
+vi.mock('../features/updates/pending', () => ({ dropLegacyPendingNews: () => {}, loadArrivedNews: async () => false, whatsNewHref: () => '' }));
 vi.mock('../theme/unistyles', () => ({}));
 vi.mock('../theme/aplicarMaterial', () => ({ aplicarMaterial: () => {} }));
 vi.mock('../net/configureCore', () => ({ configureCore: () => {} }));
