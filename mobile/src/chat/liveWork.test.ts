@@ -5,7 +5,8 @@ import { subagentRunning, turnStart, workingLabel } from './liveWork';
 test('rótulo do terminal: texto, o tempo que o terminal já conta e os tokens', () => {
   expect(workingLabel('Sketching… (6s · esc to interrupt)')).toEqual({ text: 'Sketching…', elapsed: '6s', detail: null });
   expect(workingLabel('Bash: T=$(grep x) | tr … (5m 11s · ↓ 5.5k tokens · thought for 50s)'))
-    .toEqual({ text: 'Bash: T=$(grep x) | tr …', elapsed: '5m 11s', detail: '↓ 5.5k tokens · thought for 50s' });
+    .toEqual({ text: 'Bash: T=$(grep x) | tr …', elapsed: '5m 11s', detail: '↓ 5.5k tokens' });
+  expect(workingLabel('Running… (12s · ctrl+b to run in background)')).toEqual({ text: 'Running…', elapsed: '12s', detail: null });
   expect(workingLabel('Moonwalking… (1m 29s · ↓ 6.0k tokens)')).toEqual({ text: 'Moonwalking…', elapsed: '1m 29s', detail: '↓ 6.0k tokens' });
   expect(workingLabel('Writing tests…')).toEqual({ text: 'Writing tests…', elapsed: null, detail: null });
   expect(workingLabel('Running (esc to interrupt)')).toEqual({ text: 'Running', elapsed: null, detail: null });

@@ -1634,7 +1634,7 @@ impl Hangar {
         self.etag = None;
         self.has_older = false;
         self.rich.clear();
-        self.pages.clear();
+        self.pages.clear(cx);
         // A busca era da conversa anterior.
         self.find.reset();
         row_patch::reset_rows(&mut self.row_ids, &mut self.arrived, &mut self.tree_folds);
@@ -1747,7 +1747,7 @@ impl Hangar {
         self.clear_visible_preview();
         // Sem sessão aberta, nada da conversa anterior fica de pé: textos preparados, páginas e o Chromium delas.
         self.rich.clear();
-        self.pages.clear();
+        self.pages.clear(cx);
         self.sync_rows(cx);
         self.pages.warm(false, window, cx);
         self.error = None;
@@ -2688,7 +2688,7 @@ impl Hangar {
                 self.has_older = false;
                 self.rich.clear();
                 row_patch::reset_rows(&mut self.row_ids, &mut self.arrived, &mut self.tree_folds);
-                self.pages.clear();
+                self.pages.clear(cx);
                 self.list_state.reset(0);
                 self.follow_reset();
                 self.etag = None;
@@ -3821,7 +3821,7 @@ impl Hangar {
         let removed: HashSet<_> = self.row_ids[from..].iter().filter(|id| !kept.contains(id)).cloned().collect();
         // Visões fora da lista (plano, diff do painel) usam linha "__…__" e saem só pelo limite do cache.
         self.rich.retain(|_, rich| !removed.contains(&rich.row) || rich.row.starts_with("__"));
-        self.pages.retain_rows(|row| !removed.contains(row));
+        self.pages.retain_rows(|row| !removed.contains(row), cx);
         for id in removed {
             self.arrived.remove(&id);
             self.tree_folds.remove(&id);

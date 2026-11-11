@@ -665,9 +665,11 @@ pub fn reduce_analysis(mut analysis: PaneAnalysis, mut memory: ReducerMemory, fa
         }
     }
     let mut diagnostic = ReducerDiagnostic { before_plugin: analysis.state.clone(), plugin_applied: false, divergence: None };
-    // Sem pergunta na tela nem segurada, `awaiting_input` é o aviso de ociosidade do Claude Code (60 s parado):
-    // a sessão está parada, e o resumo do turno anterior na tela não pode voltar a valer como `working`.
-    let quiet = |s: Option<String>| s.map(|s| if s == "awaiting_input" { "idle".to_owned() } else { s });
+    // Sem pergunta e sem a linha viva (a do verbo com "…"), `awaiting_input` é o aviso de ociosidade do Claude
+    // Code: a sessão está parada, e o resumo do turno anterior na tela não pode voltar a valer como `working`.
+    // Com a linha viva, é a permissão já respondida e o turno segue: fica como antes, a tela decide.
+    let live = analysis.spinner.as_deref().is_some_and(|s| s.contains('…'));
+    let quiet = |s: Option<String>| s.map(|s| if s == "awaiting_input" && !live { "idle".to_owned() } else { s });
     let (plugin_state, hook_state) = (quiet(facts.plugin_state), quiet(facts.hook_state));
     if matches!(analysis.state.as_str(), "working" | "idle") {
         if let Some(plugin) = plugin_state.filter(|s| matches!(s.as_str(), "working" | "idle")) {
@@ -763,11 +765,12 @@ mod tests {
             assert_eq!(state.analysis.state, "idle", "{plugin:?} {hook:?}");
             assert_eq!(state.analysis.label, None, "{plugin:?} {hook:?}");
         }
-        // Com o turno rodando, o aviso velho não para a sessão.
+        // Permissão respondida e o turno seguindo: a linha viva decide, mesmo na primeira rodada, sem animação vista.
         let live = format!("● resposta\n\n✻ Precipitating… (2m 12s)\n\n{RULE}\n❯ \n{RULE}\n");
-        let mut memory = super::reduce(&live.replace("2m 12s", "2m 11s"), super::ReducerMemory::default(), facts(None, None)).memory;
-        memory.held_state = "working".into();
-        assert_eq!(super::reduce(&live, memory, facts(Some("awaiting_input"), None)).analysis.state, "working");
+        for (plugin, hook) in [(Some("awaiting_input"), None), (None, Some("awaiting_input"))] {
+            let state = super::reduce(&live, super::ReducerMemory::default(), facts(plugin, hook));
+            assert_eq!(state.analysis.state, "working", "{plugin:?} {hook:?}");
+        }
     }
 
     #[test]

@@ -177,8 +177,13 @@ fn decode(state: &mut State, state_path: &Path, kept: Option<&Value>) -> Option<
 /// principal, que já leva o catálogo.
 fn persist(state_path: &Path, state: &mut State, written: &mut Option<String>) -> io::Result<()> {
     atomic_write(state_path, &serde_json::to_vec(state)?)?;
-    if written.take().is_some() && let Err(error) = std::fs::remove_file(commands_path(state_path)) && error.kind() != io::ErrorKind::NotFound {
-        tracing::warn!(code = "queue_commands_left", io_kind = ?error.kind(), "catálogo de comandos sem vista ficou no disco");
+    if written.is_some() {
+        match std::fs::remove_file(commands_path(state_path)) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound =>
+                // Fica marcado: a gravação seguinte tenta apagar de novo.
+                tracing::warn!(code = "queue_commands_left", io_kind = ?error.kind(), "catálogo de comandos antigo ficou no disco"),
+            _ => *written = None,
+        }
     }
     Ok(())
 }

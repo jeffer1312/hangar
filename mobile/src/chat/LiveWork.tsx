@@ -165,7 +165,8 @@ const styles = StyleSheet.create((theme) => ({
   linha: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], minHeight: 32 },
   verbo: { flexShrink: 1, fontSize: theme.base.text.xs },
   tempo: { flexShrink: 0, fontSize: theme.base.text.xxs, fontVariant: ['tabular-nums'] },
-  detalhe: { flexShrink: 2, minWidth: 0, fontSize: theme.base.text.xxs, fontVariant: ['tabular-nums'] },
+  // O encolhimento pesa pelo tamanho do texto: o peso alto faz os tokens cederem antes do verbo.
+  detalhe: { flexShrink: 100, minWidth: 0, fontSize: theme.base.text.xxs, fontVariant: ['tabular-nums'] },
   pensamento: { gap: theme.base.space[0.5] },
   cauda: { fontSize: theme.base.text.xs, fontStyle: 'italic', paddingLeft: 23 },
   agentes: { gap: theme.base.space[1] },
