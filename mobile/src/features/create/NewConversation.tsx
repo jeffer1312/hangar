@@ -115,10 +115,6 @@ export function NewConversation({
   const issue = useNewConversation((s) => s.issues[serverId] ?? null);
   const busy = useNewConversation((s) => !!s.busy[serverId]);
   const [text, setText] = useState(carried.text);
-  // Passou de uma linha, fica larga até o campo esvaziar: voltar pela largura faria o texto pular.
-  const [wide, setWide] = useState(false);
-  useEffect(() => { if (!text) setWide(false); }, [text]);
-  const onMultiline = useCallback((multi: boolean) => { if (multi) setWide(true); }, []);
   const [attachment, setAttachment] = useState<PickedAttachment | null>(carried.attachment);
   const [attachError, setAttachError] = useState('');
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
@@ -446,14 +442,13 @@ export function NewConversation({
       <Animated.View style={!home ? riseStyle : undefined}>
 
       <View style={styles.optionPills}>{optionPills}</View>
-      {/* Uma fileira só: anexo, campo, chip do provider, microfone e Enviar; cresce com o texto. */}
+      {/* Campo em cima, na largura toda; anexo, microfone, chip do provider e Enviar na linha de baixo. */}
       <ComposerBox focused={focused}>
         {attachment ? <AttachmentPreview attachment={attachment} onRemove={removeAttachment} disabled={busy} /> : null}
-        {dictation.transcribing ? <Text style={styles.meta} accessibilityLiveRegion="polite">{m.composer_transcrevendo_audio()}</Text> : null}
         {/* Cinco linhas e rola: o título ocupa o alto, e mais que isso entrava embaixo do teclado. */}
-        <ComposerActions wide={wide} field={<ComposerInput ref={input} value={text} onChangeText={setText} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
-          maxHeight={FIELD_MAX_HEIGHT} onMultiline={onMultiline}
-          placeholder={m.composer_mensagem()} accessibilityLabel={m.nova_conversa_placeholder()}
+        <ComposerInput ref={input} value={text} onChangeText={setText} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+          maxHeight={FIELD_MAX_HEIGHT}
+          placeholder={m.composer_mensagem_para({ nome: providerLabel })} accessibilityLabel={m.nova_conversa_placeholder()}
           editable={!collapsed} autoFocus={!home && (router.canGoBack?.() ?? true)} recording={dictation.gravando} rms={dictation.rms} onCancelRecording={dictation.cancel}
           onPaste={(files, error) => {
             if (busy || dictation.gravando) return;
@@ -462,8 +457,9 @@ export function NewConversation({
             if (!f) return;
             pick(fromPastedFile(f));
             if (files.length > 1) setAttachError(m.nova_conversa_um_anexo());
-          }} />}
-          attach={{ onPress: () => setAttachMenuOpen(true), disabled: busy || dictation.gravando }}
+          }} />
+        {dictation.transcribing ? <Text style={styles.meta} accessibilityLiveRegion="polite">{m.composer_transcrevendo_audio()}</Text> : null}
+        <ComposerActions attach={{ onPress: () => setAttachMenuOpen(true), disabled: busy || dictation.gravando }}
           mic={{ onPress: () => void dictation.toggle(), disabled: dictation.transcribing || busy, busy: dictation.transcribing, showBusy: true,
             recording: dictation.gravando, styleLabel: dictationStyle, onStyle: () => setStyleMenuOpen(true) }}
           settings={providerChip}

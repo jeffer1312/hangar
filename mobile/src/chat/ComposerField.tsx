@@ -42,23 +42,16 @@ export function ComposerBox({ focused, children }: { focused: boolean; children:
 
 export const ComposerInput = forwardRef<TextInput, ComponentProps<typeof MultilineInput> & {
   recording: boolean; rms: SharedValue<number>; onCancelRecording: () => void;
-  // Avisa se o texto passou de uma linha, pela mesma medida que dá a altura.
-  onMultiline?: (multi: boolean) => void;
-}>(function ComposerInput({ recording, rms, onCancelRecording, onMultiline, ...props }, ref) {
+}>(function ComposerInput({ recording, rms, onCancelRecording, ...props }, ref) {
   const { theme } = useUnistyles();
   const { height } = useWindowDimensions();
   const availableHeight = useContext(ComposerSpace);
   const maxHeight = Math.max(40, Math.min(props.maxHeight ?? height * 0.4, availableHeight === null ? Infinity : availableHeight * 0.6));
-  const { fontFamily, fontSize, lineHeight, fontWeight, fontStyle, fontVariant, letterSpacing, paddingVertical } = NativeStyleSheet.flatten<TextStyle>([
+  const { fontFamily, fontSize, lineHeight, fontWeight, fontStyle, fontVariant, letterSpacing } = NativeStyleSheet.flatten<TextStyle>([
     styles.inputText, props.mono && { fontFamily: theme.base.fontMono }, props.style,
   ]);
   const [textHeight, setTextHeight] = useState(40);
-  const oneLine = (lineHeight ?? 22) * 1.5 + 2 * (typeof paddingVertical === 'number' ? paddingVertical : 0);
-  const measureText = useCallback((e: LayoutChangeEvent) => {
-    const h = Math.ceil(e.nativeEvent.layout.height);
-    setTextHeight(h);
-    onMultiline?.(h > oneLine);
-  }, [onMultiline, oneLine]);
+  const measureText = useCallback((e: LayoutChangeEvent) => setTextHeight(Math.ceil(e.nativeEvent.layout.height)), []);
   return <View style={[styles.inputWrap, recording && styles.recordingWrap]}>
     {/* O tamanho do input pode não mudar ao receber ditado; a medida precisa independer dele. */}
     <Text style={[styles.inputText, { fontFamily, fontSize, lineHeight, fontWeight, fontStyle, fontVariant, letterSpacing }, styles.measureText]} onLayout={measureText} pointerEvents="none"
@@ -107,11 +100,7 @@ export function modeMenuHandlers(menu: ModeMenu | undefined) {
   return { pick, openIOS, actions, a11yActions, current: options.find((o) => o.checked)!.mode };
 }
 
-// `field`: o campo entra na própria fileira ([+] campo [modelo] [mic] [enviar]), que cresce com o texto.
-export function ComposerActions({ attach, mic, send, settings, beforeMic, afterMic, afterSettings, modeMenu, field, wide }: {
-  field?: ReactNode;
-  // Texto de várias linhas: o campo toma a largura e os botões descem para a linha de baixo.
-  wide?: boolean;
+export function ComposerActions({ attach, mic, send, settings, beforeMic, afterMic, afterSettings, modeMenu }: {
   attach: Action;
   mic: Action & { recording: boolean; styleLabel: string; onStyle: () => void };
   send: Action & { label: string; hint?: string; editing?: boolean; count?: number; visible?: boolean };
@@ -119,12 +108,15 @@ export function ComposerActions({ attach, mic, send, settings, beforeMic, afterM
 }) {
   const { theme } = useUnistyles();
   const count = send.count ?? 0;
-  // Largura da fileira em pontos: base em porcentagem não é resolvida aqui no aparelho.
-  const [rowWidth, setRowWidth] = useState(0);
-  const measureRow = useCallback((e: LayoutChangeEvent) => setRowWidth(e.nativeEvent.layout.width), []);
   const menu = useMemo(() => modeMenuHandlers(modeMenu), [modeMenu]);
   const ios = Platform.OS === 'ios';
-  const micGroup = <>
+  return <View style={styles.row}>
+    <Pressable onPress={attach.onPress} disabled={attach.disabled} hitSlop={5}
+      accessibilityState={{ disabled: attach.disabled, busy: attach.busy }}
+      style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed, attach.disabled && styles.disabled]}
+      accessibilityLabel={m.composer_adicionar_ao_chat()} accessibilityRole="button">
+      {attach.busy ? <ActivityIndicator size="small" color={theme.tokens.text.secondary} /> : <Icon name="Plus" size={22} color={theme.tokens.text.secondary} />}
+    </Pressable>
     {beforeMic}
     <Pressable onPress={mic.onPress} disabled={mic.disabled} hitSlop={5}
       accessibilityState={{ disabled: mic.disabled, busy: mic.busy }}
@@ -138,14 +130,10 @@ export function ComposerActions({ attach, mic, send, settings, beforeMic, afterM
         : <Icon name={mic.recording ? 'Square' : 'Mic'} size={mic.recording ? 16 : 20} color={mic.recording ? theme.tokens.status.error : theme.tokens.text.secondary} />}
     </Pressable>
     {afterMic}
-  </>;
-  const attachBtn = <Pressable onPress={attach.onPress} disabled={attach.disabled} hitSlop={5}
-    accessibilityState={{ disabled: attach.disabled, busy: attach.busy }}
-    style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed, attach.disabled && styles.disabled]}
-    accessibilityLabel={m.composer_adicionar_ao_chat()} accessibilityRole="button">
-    {attach.busy ? <ActivityIndicator size="small" color={theme.tokens.text.secondary} /> : <Icon name="Plus" size={22} color={theme.tokens.text.secondary} />}
-  </Pressable>;
-  const sendBtn = send.visible === false ? null : withModeMenu(menu, ios, send.disabled, <Pressable
+    <View style={styles.spacer} />
+    {settings}
+    {afterSettings}
+    {send.visible === false ? null : withModeMenu(menu, ios, send.disabled, <Pressable
       onPress={() => { void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); send.onPress(); }}
       disabled={send.disabled} hitSlop={5} accessibilityState={{ disabled: send.disabled, busy: send.busy }}
       // No Android o toque longo é do MenuView; o no-op impede que soltar o dedo vire envio.
@@ -159,35 +147,9 @@ export function ComposerActions({ attach, mic, send, settings, beforeMic, afterM
       {count > 0 ? <View style={[styles.queueBadge, { backgroundColor: theme.tokens.status.warning }]} pointerEvents="none">
         <Text style={[styles.queueBadgeText, { color: theme.tokens.text.inverse }]} maxFontSizeMultiplier={1.4}>{count > 9 ? '9+' : count}</Text>
       </View> : null}
-    </Pressable>);
-  // Gravando, a onda precisa da largura toda: o campo ocupa a linha e os botões descem para a de baixo.
-  // Gravando, o campo toma a fileira; texto longo, tudo menos o anexo. Os botões quebram para baixo.
-  const lined = rowWidth > 0 && (mic.recording || !!wide);
-  const fieldStyle = !lined ? FIELD_IDLE : mic.recording
-    ? { flexGrow: 0, flexShrink: 0, flexBasis: rowWidth, minWidth: 0 }
-    : { flexGrow: 1, flexShrink: 1, flexBasis: rowWidth - ATTACH_SIZE - theme.base.space[1.5] - 1, minWidth: 0 };
-  if (field) return <View onLayout={measureRow} style={[styles.row, styles.rowField, lined ? ROW_WRAP : ROW_IDLE]}>
-    {mic.recording ? null : <View style={styles.side}>{attachBtn}</View>}
-    <View style={fieldStyle}>{field}</View>
-    <View style={styles.side}>{settings}{micGroup}{afterSettings}{sendBtn}</View>
-  </View>;
-  return <View style={styles.row}>
-    {attachBtn}
-    {micGroup}
-    <View style={styles.spacer} />
-    {settings}
-    {afterSettings}
-    {sendBtn}
+    </Pressable>)}
   </View>;
 }
-
-// Valores simples e as mesmas chaves nos dois estados, sem estilo do unistyles nessas caixas: no
-// aparelho o valor dele vencia o que vinha por cima (o flex: 1 não deixava a onda ocupar a linha) e
-// ficava preso ao parar de gravar (o campo na largura da linha, com os botões fora da tela).
-const ROW_WRAP = { flexWrap: 'wrap', justifyContent: 'flex-end' } as const;
-const ROW_IDLE = { flexWrap: 'nowrap', justifyContent: 'flex-start' } as const;
-const ATTACH_SIZE = 34;
-const FIELD_IDLE = { flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0 } as const;
 
 const SEND_SLOP = 5;
 function withModeMenu(menu: ReturnType<typeof modeMenuHandlers>, ios: boolean, sendDisabled: boolean, button: ReactNode) {
@@ -219,10 +181,6 @@ const styles = StyleSheet.create((theme) => ({
   recordingWrap: { minHeight: 92 },
   wave: { justifyContent: 'center', paddingHorizontal: theme.base.space[1] },
   row: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1.5] },
-  // Texto de várias linhas: os botões ficam no pé da caixa.
-  rowField: { alignItems: 'flex-end' },
-  // A altura de uma linha do campo: os botões ficam no meio dela, no pé da caixa.
-  side: { minHeight: 40, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1.5] },
   spacer: { flex: 1, minWidth: 0 },
   iconBtn: { width: 34, height: 34, borderRadius: theme.base.radius.full, alignItems: 'center', justifyContent: 'center' },
   recordingBtn: { width: 44, height: 44 },
