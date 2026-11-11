@@ -569,8 +569,7 @@ test('(c) preview some quando o assistant_msg real chega', async () => {
   expect(chat.use.getState().preview).toBe('pensando…');
 
   created[0].trigger('preview', JSON.stringify({ text: 'pensando mais', md: true, full: true }));
-  await new Promise((r) => setTimeout(r, 60));
-  expect(chat.use.getState().preview).toBe('pensando mais');
+  await vi.waitFor(() => expect(chat.use.getState().preview).toBe('pensando mais'), { timeout: 5_000 });
 
   created[0].trigger(
     'message',
