@@ -442,12 +442,21 @@ export function NewConversation({
       <Animated.View style={!home ? riseStyle : undefined}>
 
       <View style={styles.optionPills}>{optionPills}</View>
-      {/* Uma fileira só: anexo, campo, chip do provider, microfone e Enviar; cresce com o texto. */}
-      <ComposerBox focused={focused}>
+      {/* Campo em cima, na largura toda; anexo, microfone, chip do provider e Enviar na linha de baixo. */}
+      <ComposerBox focused={focused} footer={(
+        <ComposerActions attach={{ onPress: () => setAttachMenuOpen(true), disabled: busy || dictation.gravando }}
+          mic={{ onPress: () => void dictation.toggle(), disabled: dictation.transcribing || busy, busy: dictation.transcribing, showBusy: true,
+            recording: dictation.gravando, styleLabel: dictationStyle, onStyle: () => setStyleMenuOpen(true) }}
+          settings={providerChip}
+          beforeMic={resume ? <View ref={resumeAnchor}><HistoryButton busy={resume.busy}
+            disabled={busy || resume.busy} onPress={() => openSheet('resume', resumeAnchor.current)} /></View> : null}
+          send={{ label: m.nova_conversa_enviar(), disabled: !canSend, busy, showBusy: true, onPress: () => void handleSend() }} />
+      )}>
         {attachment ? <AttachmentPreview attachment={attachment} onRemove={removeAttachment} disabled={busy} /> : null}
-        {dictation.transcribing ? <Text style={styles.meta} accessibilityLiveRegion="polite">{m.composer_transcrevendo_audio()}</Text> : null}
-        <ComposerActions field={<ComposerInput ref={input} value={text} onChangeText={setText} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
-          placeholder={m.composer_mensagem()} accessibilityLabel={m.nova_conversa_placeholder()}
+        {/* Cinco linhas e rola: o título ocupa o alto, e mais que isso entrava embaixo do teclado. */}
+        <ComposerInput ref={input} value={text} onChangeText={setText} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)}
+          maxHeight={FIELD_MAX_HEIGHT}
+          placeholder={m.composer_mensagem_para({ nome: providerLabel })} accessibilityLabel={m.nova_conversa_placeholder()}
           editable={!collapsed} autoFocus={!home && (router.canGoBack?.() ?? true)} recording={dictation.gravando} rms={dictation.rms} onCancelRecording={dictation.cancel}
           onPaste={(files, error) => {
             if (busy || dictation.gravando) return;
@@ -456,14 +465,8 @@ export function NewConversation({
             if (!f) return;
             pick(fromPastedFile(f));
             if (files.length > 1) setAttachError(m.nova_conversa_um_anexo());
-          }} />}
-          attach={{ onPress: () => setAttachMenuOpen(true), disabled: busy || dictation.gravando }}
-          mic={{ onPress: () => void dictation.toggle(), disabled: dictation.transcribing || busy, busy: dictation.transcribing, showBusy: true,
-            recording: dictation.gravando, styleLabel: dictationStyle, onStyle: () => setStyleMenuOpen(true) }}
-          settings={providerChip}
-          beforeMic={resume ? <View ref={resumeAnchor}><HistoryButton busy={resume.busy}
-            disabled={busy || resume.busy} onPress={() => openSheet('resume', resumeAnchor.current)} /></View> : null}
-          send={{ label: m.nova_conversa_enviar(), disabled: !canSend, busy, showBusy: true, onPress: () => void handleSend() }} />
+          }} />
+        {dictation.transcribing ? <Text style={styles.meta} accessibilityLiveRegion="polite">{m.composer_transcrevendo_audio()}</Text> : null}
         {dictation.error ? (
           <View style={styles.errorRow}>
             <Text style={[styles.error, styles.flex]} accessibilityRole="alert">{dictation.error}</Text>
@@ -522,6 +525,9 @@ export function NewConversation({
 
 // Fundo transparente: quem pinta é o Background da Screen, então Aparência (Liso, Textura, Luz,
 // Imagem, Transparência) vale aqui como no chat.
+// Cinco linhas do corpo (24) mais o respiro de cima e de baixo do campo.
+const FIELD_MAX_HEIGHT = 24 * 5 + 16;
+
 const styles = StyleSheet.create((theme) => ({
   root: { flex: 1, backgroundColor: 'transparent' },
   keyboard: { flex: 1 },
