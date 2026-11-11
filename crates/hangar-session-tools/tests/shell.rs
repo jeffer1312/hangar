@@ -21,6 +21,7 @@ struct State {
     warnings: Vec<String>,
     display_fails: bool,
     display_empty: bool,
+    replace_on_display: Option<Session>,
     mark_fails: bool,
     kill_fails: bool,
     create_fails: bool,
@@ -87,6 +88,9 @@ impl Mux for FakeMux {
                         code = 1;
                     } else if !state.display_empty {
                         stdout = state.sessions.get(&target).unwrap().cwd.clone();
+                    }
+                    if let Some(replacement) = state.replace_on_display.take() {
+                        state.sessions.insert(target.clone(), replacement);
                     }
                 }
                 "kill-session" => {
@@ -466,4 +470,34 @@ async fn shell_does_not_probe_or_retry_create_after_scope_timeout() {
             .any(|args| args.starts_with(&["mux".into(), "new-session".into()]))
     );
     assert!(state.sessions.is_empty());
+}
+
+#[tokio::test]
+async fn shell_refuses_replacement_that_loses_hidden_mark_during_directory_read() {
+    for requested in ["/novo", "/antigo"] {
+        let (mux, service) = service(false);
+        existing(&mux, "/antigo", true);
+        mux.0.lock().unwrap().replace_on_display = Some(Session {
+            cwd: "/outra-abertura".into(),
+            hidden: false,
+            running: "trabalho da outra abertura".into(),
+        });
+
+        let result = service.open("agente", requested).await;
+        let state = mux.0.lock().unwrap();
+        let session = &state.sessions["term-agente"];
+        assert_eq!(session.cwd, "/outra-abertura");
+        assert_eq!(session.running, "trabalho da outra abertura");
+        assert!(!session.hidden);
+        assert!(
+            !state
+                .commands
+                .iter()
+                .flatten()
+                .any(|arg| arg == "set-option" || arg == "kill-session")
+        );
+        let error = result.unwrap_err();
+        assert_eq!((error.status, error.code), (409, "erro_sessao_tmux_em_uso"));
+        assert_eq!(error.params["nome"], "term-agente");
+    }
 }

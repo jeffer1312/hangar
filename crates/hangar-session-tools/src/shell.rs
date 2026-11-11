@@ -27,14 +27,7 @@ impl Service {
     pub async fn open(&self, name: &str, cwd: &str) -> Result<Value, crate::Error> {
         let target = format!("term-{name}");
         if self.has(&target).await && !self.hidden(&target).await {
-            return Err(crate::Error {
-                status: 409,
-                code: "erro_sessao_tmux_em_uso",
-                msg: format!(
-                    "ja existe uma sessao tmux chamada '{target}' sem a marca do painel -- pode ser uma sessao sua de mesmo nome, ou o shell deste painel que perdeu a marca. Encerre ou renomeie essa sessao antes de abrir o shell"
-                ),
-                params: json!({"nome": target}),
-            });
+            return Err(occupied(&target));
         }
         let mut created = false;
         if self.has(&target).await {
@@ -55,9 +48,11 @@ impl Service {
             if output.code != Some(0) {
                 self.mux.warning(&format!("não consegui ler o diretório do shell escondido {target:?}; reaproveito sem conferir se ele é de {cwd:?}"));
             }
+            if !self.hidden(&target).await {
+                return Err(occupied(&target));
+            }
             if !old.is_empty()
                 && normalize(old, self.windows) != normalize(cwd, self.windows)
-                && self.hidden(&target).await
                 && !self.kill(&target).await
             {
                 self.mux.warning(&format!("shell escondido {target:?} não saiu; não reaproveito o diretório antigo {old:?}"));
@@ -157,6 +152,17 @@ impl Service {
         };
         self.run(["kill-session", "-t", &target_arg]).await;
         !self.has(target).await
+    }
+}
+
+fn occupied(target: &str) -> crate::Error {
+    crate::Error {
+        status: 409,
+        code: "erro_sessao_tmux_em_uso",
+        msg: format!(
+            "ja existe uma sessao tmux chamada '{target}' sem a marca do painel -- pode ser uma sessao sua de mesmo nome, ou o shell deste painel que perdeu a marca. Encerre ou renomeie essa sessao antes de abrir o shell"
+        ),
+        params: json!({"nome":target}),
     }
 }
 
