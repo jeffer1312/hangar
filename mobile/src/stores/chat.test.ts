@@ -215,6 +215,24 @@ test('ingestão ativa não relê histórico de 5000 eventos para 200 mensagens s
   expect(long).toEqual(short);
 });
 
+test('bolha que a fila desistiu entra no horário em que foi enviada, não no fim', async () => {
+  historyResponses = [[
+    ev({ id: 'a', kind: 'assistant_msg', ts: 100 }),
+    ev({ id: 'b', kind: 'assistant_msg', ts: 200 }),
+    ev({ id: 'c', kind: 'assistant_msg', ts: 300 }),
+  ]];
+  const chat = chatStore('srv1', 'sess');
+  chat.retain();
+  await tick();
+  const source = created[0];
+  source.trigger('message', JSON.stringify(ev({ id: 'queued-gave-up', ts: undefined, queued_ts: 150, desistiu: true })));
+  source.trigger('message', JSON.stringify(ev({ id: 'queued-before-window', ts: undefined, queued_ts: 50, desistiu: true })));
+  source.trigger('message', JSON.stringify(ev({ id: 'queued-waiting', ts: undefined, queued_ts: 150 })));
+  expect(chat.use.getState().events.map((e) => e.id))
+    .toEqual(['queued-before-window', 'a', 'queued-gave-up', 'b', 'c', 'queued-waiting']);
+  chat.release();
+});
+
 test('eventsRevision só conserva a revisão no append e invalida replace, remoção, histórico e reset', async () => {
   historyResponses = [
     [ev({ id: 'tail:1' })],

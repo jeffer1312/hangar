@@ -37,6 +37,7 @@ import {
   composeWithContextRefs,
   splitContextRefs,
   parseCodexOutput,
+  givenUpSlot,
   type ContextRef,
 } from '@hangar/core';
 import type { ChatEvent, StateEvent, PreviewEvent, AskQuestionPayload, StatsEvent, EventSourceLike, Server, QueuePanel, QueueEdit } from '@hangar/core';
@@ -512,14 +513,18 @@ function criarChatStore(serverId: string, name: string): ChatApi {
       publishEvents(next, 'replace');
       return;
     }
-    const next = [...events, ev];
-    idIndex.set(ev.id, next.length - 1);
-    indexText(ev, next.length - 1);
+    const at = givenUpSlot(events, ev);
+    const inside = at < events.length;
+    const next = inside ? [...events.slice(0, at), ev, ...events.slice(at)] : [...events, ev];
+    if (!inside) {
+      idIndex.set(ev.id, next.length - 1);
+      indexText(ev, next.length - 1);
+    }
     // Reconcilia pending com o evento que acabou de chegar (se for user_msg real)
     const curPending = useChatStore.getState().pending;
     const nextPending = curPending.length ? reconcilePending(curPending, ev) : curPending;
     const pendingPatch = nextPending.length !== curPending.length ? { pending: nextPending } : {};
-    publishEvents(next, removedQueued ? 'replace' : 'append', pendingPatch);
+    publishEvents(next, inside ? 'rebuild' : removedQueued ? 'replace' : 'append', pendingPatch);
     if (ev.kind === 'user_msg') confirmSubmission([ev]);
     if (ev.kind === 'thinking' && useChatStore.getState().pensamento) limparPensamento();
     if (ev.kind === 'tool_use' && useChatStore.getState().ferramenta) limparFerramenta();

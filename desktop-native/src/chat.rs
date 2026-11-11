@@ -106,6 +106,13 @@ impl Chat {
                 self.claimed_real.insert(event.id.clone());
             }
         }
+        let at = given_up_slot(&self.events, &event);
+        if at < self.events.len() {
+            self.changed_at(at);
+            self.events.insert(at, event);
+            self.reindex();
+            return;
+        }
         self.settle_live(&event);
         self.changed_at(self.events.len());
         self.index.insert(event.id.clone(), self.events.len());
@@ -286,6 +293,14 @@ impl Chat {
     }
 }
 
+// A fila republica ao vivo a entrega que desistiu, mesmo antiga: ela vai para o horário do envio, não para o fim.
+// Mais velha que tudo que tem horário fica antes do primeiro, nunca descartada (cópia de `givenUpSlot` do core).
+fn given_up_slot(events: &[ChatEvent], event: &ChatEvent) -> usize {
+    let Some(sent) = event.queued_ts.filter(|_| event.desistiu == Some(true)) else { return events.len() };
+    if let Some(i) = events.iter().rposition(|e| e.ts.is_some_and(|ts| ts <= sent)) { return i + 1; }
+    events.iter().position(|e| e.ts.is_some()).unwrap_or(events.len())
+}
+
 fn preview_matches(preview: &str, committed: &str) -> bool {
     if preview.is_empty() || committed.is_empty() { return false; }
     let preview = flatten(preview);
@@ -403,6 +418,20 @@ mod tests {
 
     fn event(kind: &str, id: &str, text: &str) -> ChatEvent {
         ChatEvent { kind: kind.into(), id: id.into(), text: Some(text.into()), ..Default::default() }
+    }
+
+    #[test]
+    fn given_up_bubble_goes_to_its_send_time_not_the_end() {
+        let mut chat = Chat::default();
+        for (id, ts) in [("a", 100.), ("b", 200.), ("c", 300.)] { chat.apply(turn(id, ts, None, None)); }
+        let queued = |id: &str, sent: f64, gave_up: bool| ChatEvent { queued_ts: Some(sent), desistiu: gave_up.then_some(true),
+            ..event("user_msg", id, id) };
+        chat.apply(queued("queued-gave-up", 150., true));
+        chat.apply(queued("queued-before-window", 50., true));
+        chat.apply(queued("queued-waiting", 150., false));
+        let ids: Vec<_> = chat.events.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, ["queued-before-window", "a", "queued-gave-up", "b", "c", "queued-waiting"]);
+        assert_eq!(chat.index.get("b"), Some(&3));
     }
 
     #[test]
