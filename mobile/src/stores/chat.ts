@@ -60,6 +60,8 @@ import { sendWithDelivery, type DeliveryFeedback, type QueueSendMode } from '../
 export const TAIL_FIRST = 400;
 
 const SSE_RETRY_MIN_MS = 3_000;
+// Nos testes a soltura fecha na hora (eles conferem o fechamento logo depois); o teste da espera a liga.
+let releaseGraceMs = process.env.VITEST ? 0 : 1_000;
 // Prazo para o `queue` do retrato chegar depois de a conexão abrir.
 const QUEUE_SNAPSHOT_MS = 3_000;
 const SSE_RETRY_MAX_MS = 30_000;
@@ -210,6 +212,21 @@ function criarChatStore(serverId: string, name: string): ChatApi {
   let retryDelay = SSE_RETRY_MIN_MS;
   let alive = false;
   let refs = 0;
+  let releaseTimer: ReturnType<typeof setTimeout> | null = null;
+  function teardown() {
+    releaseTimer = null;
+    alive = false;
+    histGen++;
+    histAbort?.abort();
+    es?.close();
+    es = null;
+    clearTimeout(retryTimer);
+    clearTimeout(queueAbsentTimer);
+    showDeliveryFeedback(null);
+    if (previewQueued) useChatStore.setState(previewQueued);
+    dropQueuedPreview();
+    // Soltar a tela fecha leituras; POST, ecos e identidade continuam na origem.
+  }
   // Uma geração por carga: resposta velha nunca cai na sessão nova (padrão do Chat.svelte).
   let histGen = 0;
   let histAbort: AbortController | null = null;
@@ -949,6 +966,12 @@ function criarChatStore(serverId: string, name: string): ChatApi {
     },
     retain() {
       refs++;
+      if (refs === 1 && releaseTimer !== null) {
+        // A tela voltou antes de a soltura valer: a conexão e a conversa continuam como estavam.
+        clearTimeout(releaseTimer);
+        releaseTimer = null;
+        return;
+      }
       if (refs === 1) {
         alive = true;
         retryDelay = SSE_RETRY_MIN_MS;
@@ -961,17 +984,9 @@ function criarChatStore(serverId: string, name: string): ChatApi {
       if (refs === 0) return;
       refs--;
       if (refs > 0) return;
-      alive = false;
-      histGen++;
-      histAbort?.abort();
-      es?.close();
-      es = null;
-      clearTimeout(retryTimer);
-      clearTimeout(queueAbsentTimer);
-      showDeliveryFeedback(null);
-      if (previewQueued) useChatStore.setState(previewQueued);
-      dropQueuedPreview();
-      // Soltar a tela fecha leituras; POST, ecos e identidade continuam na origem.
+      // Remontar a tela solta e retém em seguida: fechar na hora reabriria a conexão e recarregaria a conversa.
+      if (releaseGraceMs <= 0) teardown();
+      else releaseTimer = setTimeout(teardown, releaseGraceMs);
     },
     loadOlder,
     retry: () => {
@@ -1180,8 +1195,11 @@ export function setChatsForeground(active: boolean): void {
   for (const api of chats.values()) api.setForeground(active);
 }
 
-export function _resetChatsForTests(): void {
+/** `graceMs`: a espera da soltura nos testes seguintes; zero fecha na hora, como os testes antigos esperam. */
+export function _resetChatsForTests(graceMs = 0): void {
+  releaseGraceMs = 0;
   for (const api of chats.values()) api.release();
   chats.clear();
   foregroundAtual = true;
+  releaseGraceMs = graceMs;
 }

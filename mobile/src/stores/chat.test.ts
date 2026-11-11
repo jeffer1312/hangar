@@ -368,6 +368,24 @@ test('delta de mod sem base desta conexão expõe erro, conserva vista e reconec
   }
 });
 
+test('tela remontada logo em seguida mantém a conexão e não recarrega a conversa', async () => {
+  _resetChatsForTests(50);
+  const chat = chatStore('srv1', 'sess');
+  chat.retain();
+  await tick();
+  expect(created).toHaveLength(1);
+  const loads = historyCalls;
+  chat.release();
+  chat.retain();
+  await tick();
+  expect(created).toHaveLength(1);
+  expect(created[0].close).not.toHaveBeenCalled();
+  expect(historyCalls).toBe(loads);
+  chat.release();
+  await new Promise((r) => setTimeout(r, 80));
+  expect(created[0].close).toHaveBeenCalled();
+});
+
 test('mods são isolados por servidor e ignoram quadros de fonte fechada', async () => {
   const first = chatStore('srv1', 'sess');
   const other = chatStore('srv2', 'sess');
