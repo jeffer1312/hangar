@@ -1249,6 +1249,12 @@ Medido numa VM Windows (tela 1024×768, WebView2), app em build de desenvolvimen
   conversa e voltar solta a textura e reinicia o screencast no mesmo tamanho, e o quadro novo chega
   em 25 ms e é pintado.
 - A altura do quadro vem 1 px menor que a pedida em escala quebrada (719 e 599), nas duas versões.
+- **O reinício espera a parada terminar antes de iniciar** (`restart` em `wry_engine/page.rs`). A
+  WebView2 despacha os comandos de DevTools na ordem, mas a documentação dela avisa que podem ser
+  processados fora dela; o início que passasse à frente da parada seria derrubado por ela, e sem o
+  último quadro guardado o cartão ficaria em branco. Outra colocação ou o `hide` durante a espera
+  desistem do início. Visto na mesma VM (tela 1920×1080): resize do cartão, tela cheia e três cliques
+  de zoom seguidos reiniciaram e receberam quadro (196 ms no resize), sem erro no log.
 
 ## Mensagem esperando mora no painel "Na fila", não na conversa (14/10/2026)
 

@@ -146,24 +146,20 @@ impl Page {
                 position: PhysicalPosition::new(-(pw as i32) - PARK_GAP, 0).into(),
                 size: PhysicalSize::new(pw, ph).into(),
             }) { eprintln!("[pagina] tamanho da WebView2 nao aplicado: {e}"); }
-            // Reiniciar sem parar o anterior a WebView2 recusa ("The parameter is incorrect").
-            if !first { self.cdp.fire("Page.stopScreencast", json!({})); }
             let screencast = json!({"format": "png", "maxWidth": pw, "maxHeight": ph, "everyNthFrame": 1});
-            self.cdp.fire("Page.startScreencast", screencast.clone());
             // Toda colocação nova avança a contagem: um reinício ainda esperando voltaria com o tamanho antigo.
             let turn = self.zoom_turn.get() + 1;
             self.zoom_turn.set(turn);
+            let again = || restart(self.cdp.clone(), self.zoom_turn.clone(), self.visible.clone(), turn, screencast.clone());
+            // Reiniciar sem parar o anterior a WebView2 recusa ("The parameter is incorrect").
+            if first { self.cdp.fire("Page.startScreencast", screencast.clone()); } else { self.executor.spawn(again()).detach(); }
             if self.zoomed.replace(false) {
                 // Página parada: o quadro do reinício pode sair antes da rasterização nova, e nenhum outro chega sozinho.
                 // Reiniciar depois de assentar manda o do zoom final.
-                let (cdp, turns, visible) = (self.cdp.clone(), self.zoom_turn.clone(), self.visible.clone());
-                let timer = self.background.timer(Duration::from_millis(ZOOM_SETTLE_MS));
+                let (timer, settled) = (self.background.timer(Duration::from_millis(ZOOM_SETTLE_MS)), again());
                 self.executor.spawn(async move {
                     timer.await;
-                    if turns.get() == turn && visible.get() {
-                        cdp.fire("Page.stopScreencast", json!({}));
-                        cdp.fire("Page.startScreencast", screencast);
-                    }
+                    settled.await;
                 }).detach();
             }
         }
@@ -222,6 +218,17 @@ impl Page {
 }
 
 const PARK_GAP: i32 = 200;
+
+/// Para o screencast e só depois o inicia: a WebView2 despacha os comandos na ordem, mas pode processá-los fora
+/// dela, e o início que passasse à frente da parada seria derrubado por ela. Vale só para a colocação `turn` e com
+/// a página na tela, antes e depois da espera: outra colocação ou o `hide` no meio desistem do início.
+async fn restart(cdp: Rc<Cdp>, turns: Rc<Cell<u64>>, visible: Rc<Cell<bool>>, turn: u64, screencast: Value) {
+    let current = || turns.get() == turn && visible.get();
+    if !current() { return; }
+    // Parada que falha não segura o início: sem screencast rodando não havia o que parar.
+    if let Err(e) = cdp.call("Page.stopScreencast", json!({})).await { eprintln!("[pagina] parada do screencast falhou: {e}"); }
+    if current() { cdp.fire("Page.startScreencast", screencast); }
+}
 
 /// Escala fixa: a WebView2 não segue o monitor, que a página está fora dele.
 fn rasterize(view: &wry::WebView, scale: f32) {
