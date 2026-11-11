@@ -151,7 +151,7 @@ export function ComposerActions({ attach, mic, send, settings, beforeMic, afterM
   // Gravando, a onda precisa da largura toda: o campo ocupa a linha e os botões descem para a de baixo.
   if (field) return <View style={[styles.row, styles.rowField, mic.recording ? ROW_RECORDING : ROW_IDLE]}>
     {mic.recording ? null : <View style={styles.side}>{attachBtn}</View>}
-    <View style={[styles.spacer, mic.recording ? FIELD_RECORDING : FIELD_IDLE]}>{field}</View>
+    <View style={mic.recording ? FIELD_RECORDING : FIELD_IDLE}>{field}</View>
     <View style={styles.side}>{settings}{micGroup}{afterSettings}{sendBtn}</View>
   </View>;
   return <View style={styles.row}>
@@ -164,13 +164,13 @@ export function ComposerActions({ attach, mic, send, settings, beforeMic, afterM
   </View>;
 }
 
-// Os dois estados levam as mesmas chaves, fora do unistyles: no aparelho, a chave tirada ao parar de
-// gravar não voltava ao padrão e o campo ficava na largura da linha, com os botões fora da tela.
-// flexShrink 0 gravando: sem ele o campo é o único filho flexível e o Yoga ignora a base de 100%.
+// Valores simples e as mesmas chaves nos dois estados, sem estilo do unistyles nessas caixas: no
+// aparelho o valor dele vencia o que vinha por cima (o flex: 1 não deixava a onda ocupar a linha) e
+// ficava preso ao parar de gravar (o campo na largura da linha, com os botões fora da tela).
 const ROW_RECORDING = { flexWrap: 'wrap', justifyContent: 'flex-end' } as const;
 const ROW_IDLE = { flexWrap: 'nowrap', justifyContent: 'flex-start' } as const;
-const FIELD_RECORDING = { flexBasis: '100%', flexShrink: 0 } as const;
-const FIELD_IDLE = { flexBasis: 0, flexShrink: 1 } as const;
+const FIELD_RECORDING = { flexGrow: 0, flexShrink: 0, flexBasis: '100%', minWidth: 0 } as const;
+const FIELD_IDLE = { flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0 } as const;
 
 const SEND_SLOP = 5;
 function withModeMenu(menu: ReturnType<typeof modeMenuHandlers>, ios: boolean, sendDisabled: boolean, button: ReactNode) {
