@@ -13,6 +13,7 @@ test("publica o uso e a janela ao terminar o primeiro turno, com a identidade da
       },
       http: { fetch: async (_url: string, init: { body: string }) => { posts.push(JSON.parse(init.body)); } },
       clock: { sleep: () => new Promise<void>(() => {}) },
+      state: { set: async () => ({ isSet: true, version: 1 }) },
     };
     setBridge({ url: "http://127.0.0.1:1/api/plugin", token: "teste", sessao: "nova" });
     try {
@@ -34,6 +35,7 @@ test("medida que não responde no prazo não segura o idle", async () => {
       session: { id: async () => "conversa", usage: () => new Promise(() => {}) },
       http: { fetch: async (_url: string, init: { body: string }) => { posts.push(JSON.parse(init.body)); } },
       clock: { sleep: async () => {} },
+      state: { set: async () => ({ isSet: true, version: 1 }) },
     };
     setBridge({ url: "http://127.0.0.1:1/api/plugin", token: "teste", sessao: "nova" });
     try {
