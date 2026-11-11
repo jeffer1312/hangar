@@ -153,23 +153,24 @@ fn commands_path(state_path: &Path) -> PathBuf { state_path.with_extension("comm
 /// aponta, volta à vista.
 fn decode(state: &mut State, state_path: &Path, kept: Option<&Value>) -> Option<String> {
     let reference = state.runtime_state.as_object_mut()?.shift_remove(COMMANDS_REF)?;
+    // Havia referência: o irmão, se ainda existir, sai na gravação seguinte, leia-se ele ou não.
+    let hash = reference.as_str().unwrap_or_default().to_owned();
     let view = state.runtime_state.get_mut("view")?.as_object_mut()?;
     // Catálogo embutido ao lado da referência: gravado pelo binário anterior, que não conhece o irmão.
-    if view.get("commands").is_some_and(|commands| !commands.is_null()) { return None; }
-    let hash = reference.as_str()?;
+    if view.get("commands").is_some_and(|commands| !commands.is_null()) { return Some(hash); }
     let commands = read_replaced(&commands_path(state_path)).ok().filter(|bytes| sha256(bytes) == hash)
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
     if let Some(commands) = commands {
         view.insert("commands".into(), commands);
-        return Some(hash.to_owned());
+        return Some(hash);
     }
     // O principal que falhou depois de o irmão trocar ainda aponta o catálogo anterior.
     if let Some(kept) = kept.filter(|kept| serde_json::to_vec(kept).is_ok_and(|bytes| sha256(&bytes) == hash)) {
         view.insert("commands".into(), kept.clone());
-        return None;
+        return Some(hash);
     }
     tracing::warn!(code = "queue_commands_unreadable", key = %state.owner_key, "catálogo de comandos da fila ausente ou de outro conteúdo; a vista fica sem ele");
-    None
+    Some(hash)
 }
 
 /// Grava o estado inteiro, catálogo incluído. `written` diz que ainda há irmão do formato antigo: sai depois do

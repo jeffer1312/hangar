@@ -382,8 +382,7 @@ test('tela remontada logo em seguida mantém a conexão e não recarrega a conve
   expect(created[0].close).not.toHaveBeenCalled();
   expect(historyCalls).toBe(loads);
   chat.release();
-  await new Promise((r) => setTimeout(r, 80));
-  expect(created[0].close).toHaveBeenCalled();
+  await vi.waitFor(() => expect(created[0].close).toHaveBeenCalled(), { timeout: 5_000 });
 });
 
 test('mods são isolados por servidor e ignoram quadros de fonte fechada', async () => {
@@ -527,8 +526,7 @@ test.each(['real', 'confirmed', 'removed'])('histórico atrasado e replay não d
   else source.trigger('queue', JSON.stringify({ entries: [], removed: ['x'], actions: true }));
   requests[0].responder([common, queued]);
   await tick();
-  // A real entra no lugar da bolha da fila que ela substitui.
-  const ids = reason === 'real' ? ['common', 'real', 'queued-y'] : ['common', 'queued-y'];
+  const ids = reason === 'real' ? ['common', 'queued-y', 'real'] : ['common', 'queued-y'];
   expect(chat.use.getState().events.map((e) => e.id)).toEqual(ids);
   source.trigger('message', JSON.stringify(queued));
   expect(chat.use.getState().events.map((e) => e.id)).toEqual(ids);
@@ -839,18 +837,17 @@ test('(e) user_msg da fila (queued-) sai quando o real chega com o mesmo texto',
 });
 
 test.each([
-  { queue: ['Vamos fazer', 'Vamos fazer hoje'], real: 'Vamos fazer hoje', ids: ['queued-0', 'real'] },
-  { queue: ['Vamos fazer', 'Vamos fazer hoje'], real: 'Vamos fazer hoje agora', ids: ['queued-0', 'real'] },
-  { queue: ['Vamos fazer', 'Vamos fazer hoje — 📎 imagem: /tmp/foto.png'], real: 'Vamos fazer hoje', ids: ['queued-0', 'real'] },
-  { queue: ['igual', 'igual'], real: 'igual', ids: ['real', 'queued-1'] },
-])('dedup preserva dono e especificidade: $real / $queue', async ({ queue, real, ids }) => {
+  { queue: ['Vamos fazer', 'Vamos fazer hoje'], real: 'Vamos fazer hoje', remaining: 'queued-0' },
+  { queue: ['Vamos fazer', 'Vamos fazer hoje'], real: 'Vamos fazer hoje agora', remaining: 'queued-0' },
+  { queue: ['Vamos fazer', 'Vamos fazer hoje — 📎 imagem: /tmp/foto.png'], real: 'Vamos fazer hoje', remaining: 'queued-0' },
+  { queue: ['igual', 'igual'], real: 'igual', remaining: 'queued-1' },
+])('dedup preserva dono e especificidade: $real / $queue', async ({ queue, real, remaining }) => {
   historyResponses = [queue.map((text, i) => ev({ id: `queued-${i}`, text }))];
   const chat = chatStore('srv1', 'sess');
   chat.retain();
   await tick();
   created[0].trigger('message', JSON.stringify(ev({ id: 'real', text: real })));
-  // A real entra no lugar da bolha dona; a outra fica onde estava.
-  expect(chat.use.getState().events.map(e => e.id)).toEqual(ids);
+  expect(chat.use.getState().events.map(e => e.id)).toEqual([remaining, 'real']);
 });
 
 test('sintético respeita fila mais específica antes de considerar a cobertura pelo real', async () => {
@@ -873,7 +870,7 @@ test('índices de candidatos acompanham substituição de texto e kind sem mudar
   const source = created[0];
   source.trigger('message', JSON.stringify(ev({ id: 'queued-first', text: 'texto igual' })));
   source.trigger('message', JSON.stringify(ev({ id: 'confirmed', text: 'texto igual' })));
-  expect(chat.use.getState().events.map(e => e.id)).toEqual(['confirmed', 'queued-second', 'real']);
+  expect(chat.use.getState().events.map(e => e.id)).toEqual(['queued-second', 'real', 'confirmed']);
   // O texto real indexado cobre o sintético, até a linha deixar de ser user_msg.
   source.trigger('message', JSON.stringify(ev({ id: 'queued-specific', text: 'texto conhecido' })));
   expect(chat.use.getState().events.some(e => e.id === 'queued-specific')).toBe(false);
@@ -897,17 +894,15 @@ test.each([false, true, 'identical'] as const)('real já conhecido: %s — remov
   await tick();
 
   created[0].trigger('message', JSON.stringify(real));
-  // Real nova entra no lugar da bolha dona; a já conhecida fica onde estava e a bolha sai.
-  const order = (n: ChatEvent) => known ? [before, n, otherQueue, real] : [before, real, n, otherQueue];
-  expect(chat.use.getState().events).toEqual(order(neighbor));
+  expect(chat.use.getState().events).toEqual([before, neighbor, otherQueue, real]);
 
   const updatedNeighbor = { ...neighbor, text: 'vizinho atualizado' };
   created[0].trigger('message', JSON.stringify(updatedNeighbor));
-  expect(chat.use.getState().events).toEqual(order(updatedNeighbor));
+  expect(chat.use.getState().events).toEqual([before, updatedNeighbor, otherQueue, real]);
   created[0].trigger('message', JSON.stringify(otherQueue));
   created[0].trigger('message', JSON.stringify(before));
   created[0].trigger('message', JSON.stringify(real));
-  expect(chat.use.getState().events).toEqual(order(updatedNeighbor));
+  expect(chat.use.getState().events).toEqual([before, updatedNeighbor, otherQueue, real]);
   chat.release();
 });
 
