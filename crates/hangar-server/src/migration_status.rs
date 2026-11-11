@@ -104,7 +104,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
         || crate::push::http::owns_path(path) || crate::machine_peers::owns_http_path(path)
         || crate::session_open::baton::matches(path) || crate::shortcuts::http::matches(path)
         || crate::costs_routes::usage_path(path) || crate::diag::version_matches(method, path)
-        || crate::plugins::matches(path) || workflow
+        || crate::plugins::matches(path) || workflow || hangar_desktop_theme::owns_path(path)
         || matches!(path, "/api/config-sync/apply" | "/api/update-channel") { return true; }
     if *method == Method::GET && matches!(path, "/api/config-sync/manifest" | "/api/config-sync/bundle") { return true; }
     if crate::ui::matches(method, path) || crate::dictation::http::matches(method, path)
@@ -246,6 +246,7 @@ fn share_route(method: &Method, path: &str) -> bool {
 
 /// Um ou mais pedidos reais por área, só para a tabela; a decisão é de `rust_route`.
 const PROBES: &[(&str, &str)] = &[
+    ("GET", "/api/desktop/palette"), ("GET", "/api/desktop/wallpaper"),
     ("GET", "/api/sessions/x/history"), ("GET", "/api/sessions/x/events"),
     ("GET", "/api/sessions/x/workflows"), ("GET", "/api/sessions/x/workflows/wf_x"),
     ("GET", "/api/sessions/x/workflows/wf_x/agents/a1"),

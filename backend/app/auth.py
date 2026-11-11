@@ -189,19 +189,3 @@ def _authenticate_request(request: Request) -> None:
         raise HTTPException(status_code=401, detail=erro("erro_nao_autorizado", "unauthorized"))
     _fails.pop(ip, None)  # acerto limpa a origem na hora
     registrar_acesso(ip, mecanismo, None)
-
-
-def require_loopback(request: Request) -> None:
-    """So responde pra quem esta na propria maquina. Usado pela paleta do desktop, que nao faz
-    sentido no celular: sem isto o iPhone receberia 200 e pintaria com as cores do notebook.
-
-    Nao e defesa contra atacante — a rota ja tem `require_auth` e o segredo e a cor de um papel de
-    parede. E produto: um "nao" claro em vez de um sim errado.
-
-    Sem `request.client` a resposta e NAO. Cuidado herdado do uvicorn: com `proxy_headers=True`
-    (main.py) e `CP_FORWARDED_ALLOW_IPS` alargado, um proxy pode reescrever `request.client.host` —
-    com o padrao (`127.0.0.1`, config.py:133) so um proxy da propria maquina consegue isso.
-    """
-    ip = request.client.host if request.client else None
-    if ip not in _LOOPBACK:
-        raise HTTPException(status_code=403, detail=erro("erro_so_loopback", "so na maquina do backend"))

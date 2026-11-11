@@ -769,6 +769,12 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   `SharedLimiter` aberto segura a trava compartilhada nele; a subida do Rust apaga as órfãs
   (`hangar_auth::sweep_orphans`, só Unix). Pasta sem marcador nunca sai; na dúvida, fica. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#pastas-órfãs-do-contador-de-autenticação-10112026).
+- **Paleta e papel de parede da máquina são do Rust (`hangar-desktop-theme`).** O SCSS Material
+  You e o ponteiro do wallpaper são relidos a cada pedido; no Windows, o ponteiro vem do registro
+  do usuário. As duas rotas `/api/desktop/*` exigem o dono e cliente efetivo local. A imagem
+  conserva `no-store`, metadados e intervalos; não há leitor ou testes Python desse recurso.
+  Transporte compartilhado em `hangar-http-file`. Contrato e provas em
+  [plataforma.md](docs/decisoes/plataforma.md#paleta-e-papel-de-parede-no-rust-10112026).
 - **Workflows são lidos no Rust (`crates/hangar-workflows/`).** Lista, detalhe da execução e
   detalhe do agente leem os artefatos irmãos do transcript a cada pedido, sem cache por nome.
   As mesmas rotas atendem dono e convidados nos roteadores Rust, com as permissões vigentes;

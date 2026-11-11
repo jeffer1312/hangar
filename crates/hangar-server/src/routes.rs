@@ -34,6 +34,7 @@ const COMMENT_EVERY: Duration = Duration::from_secs(15);
 const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct AppState {
+    pub desktop_theme: Arc<hangar_desktop_theme::DesktopTheme>,
     pub startup: crate::startup::Readiness,
     pub startup_producers: Arc<crate::startup::Producers>,
     pub config_sync_context: Option<crate::config_sync::export::Context>,
@@ -257,7 +258,7 @@ impl AppState {
         let vault_requests = Arc::new(crate::vault::requests::Requests::default());
         let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture());
         let search = crate::search::Index::server(accounts.clone());
-        AppState { startup: Default::default(), startup_producers: Arc::default(), settings_snapshot: std::sync::OnceLock::new(), login_guests: Arc::new(crate::login_guests::Service::uninitialized(&accounts.env.home,&accounts.env.claude_base)), accounts, search, claude_p: None, command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, connect: None, preview: None, connect_previews: Arc::default(), connect_preview_reach: Arc::new(crate::share::owner_routes::Reach::preview()), diag,
+        AppState { desktop_theme: Arc::new(hangar_desktop_theme::DesktopTheme::system()), startup: Default::default(), startup_producers: Arc::default(), settings_snapshot: std::sync::OnceLock::new(), login_guests: Arc::new(crate::login_guests::Service::uninitialized(&accounts.env.home,&accounts.env.claude_base)), accounts, search, claude_p: None, command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, connect: None, preview: None, connect_previews: Arc::default(), connect_preview_reach: Arc::new(crate::share::owner_routes::Reach::preview()), diag,
             migration_branch: Arc::default(),
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             login_browser: Arc::default(),
@@ -894,6 +895,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .merge(crate::connect::routes::router())
         // Planos e catálogo de plugins e skills: o dono no Rust; o resto segue ao Python.
         .merge(crate::plans::routes::router())
+        .merge(hangar_desktop_theme::router(hangar_core::edge::Edge { trusted: state.cfg.trusted.clone(), auth: state.auth.clone(), diag: state.diag.clone() }, state.desktop_theme.clone()))
         .route("/api/claude/customizations", get(crate::claude_customizations::catalog_route).fallback(pass_any))
         // Senha do chaveiro: só o dono, nunca repassada; só o preflight do CORS vai ao Python.
         .route("/api/keyring/unlock", axum::routing::post(crate::keyring::unlock_route).options(pass_any))

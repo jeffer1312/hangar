@@ -18,22 +18,7 @@ pub(crate) fn expanded(raw: &str, env: &AccountEnvironment) -> PathBuf {
 }
 
 #[cfg(unix)]
-fn user_home(user: &str) -> Option<PathBuf> {
-    use std::{ffi::{CStr, CString, OsStr}, os::unix::ffi::OsStrExt};
-    let name = CString::new(user).ok()?;
-    let mut size = 1024;
-    loop {
-        let mut storage = vec![0u8; size];
-        let mut record = std::mem::MaybeUninit::<libc::passwd>::uninit();
-        let mut result = std::ptr::null_mut();
-        let code = unsafe { libc::getpwnam_r(name.as_ptr(), record.as_mut_ptr(), storage.as_mut_ptr().cast(), storage.len(), &mut result) };
-        if code == libc::ERANGE { size = size.checked_mul(2)?; continue; }
-        if code != 0 || result.is_null() { return None; }
-        let record = unsafe { record.assume_init() };
-        if record.pw_dir.is_null() { return None; }
-        return Some(PathBuf::from(OsStr::from_bytes(unsafe { CStr::from_ptr(record.pw_dir) }.to_bytes())));
-    }
-}
+use hangar_core::account_env::named_user_home as user_home;
 
 pub(crate) fn roots(st: &AppState) -> Result<Vec<String>, &'static str> {
     let config = crate::config_sync::runtime::RuntimeConfig::from_state(st).map_err(|_| "configuracao")?;
