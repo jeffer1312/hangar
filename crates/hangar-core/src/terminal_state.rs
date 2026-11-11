@@ -314,6 +314,12 @@ fn unnumbered_menu(lines: &[&str]) -> Option<TerminalQuestion> {
     Some(TerminalQuestion { question, options })
 }
 
+/// A caixa de mensagem logo abaixo: a régua e, em seguida, a linha do `❯`. Régua solta numa resposta não conta.
+fn composer_below(lines: &[&str]) -> bool {
+    let mut rest = lines.iter().filter(|l| !trim(l).is_empty());
+    rest.next().is_some_and(|l| P.rule.is_match(l)) && rest.next().is_some_and(|l| trim(l).starts_with('❯'))
+}
+
 /// O `*` comum também é um quadro da animação do Claude ("* Precipitating… (2m 12s)"), mas só vale com esse
 /// formato e logo acima da caixa de mensagem: fora disso é texto, como um item de lista. Sem ele, o quadro
 /// pulava para o resumo do turno anterior que segue mais acima na tela. O Claude Code nem sempre limpa a linha
@@ -324,7 +330,7 @@ fn live_spinner(lines: &[&str]) -> Option<String> {
     lines.iter().enumerate().rev().map(|(i, l)| (i, trim(l))).find(|(i, s)| {
         let mut chars = s.chars();
         chars.next().is_some_and(|c| SPINNERS.contains(c)) && chars.next() == Some(' ')
-            || ascii(s) && lines[i + 1..].iter().find(|l| !trim(l).is_empty()).is_some_and(|l| P.rule.is_match(l))
+            || ascii(s) && composer_below(&lines[i + 1..])
     }).map(|(_, s)| String::from(s.split("   ").next().unwrap_or(s)))
 }
 
@@ -749,7 +755,8 @@ mod tests {
         let pane = format!("● resposta\n\n✶ Thundering… (1m 15s · ↓ 5.3k tokens)                    -n\\n{{RULE}}\\n❯ \\n\");\n\n{RULE}\n❯ \n{RULE}\n");
         assert_eq!(super::analyze(&pane).label.as_deref(), Some("Thundering… (1m 15s · ↓ 5.3k tokens)"));
         // Fora do lugar da animação, ou sem o formato dela, o `*` segue sendo texto.
-        for tail in ["* Precipitating… (2m 12s)\nfora", "* item da lista (veja acima)", "* passo seguinte…"] {
+        for tail in ["* Precipitating… (2m 12s)\nfora", "* item da lista (veja acima)", "* passo seguinte…",
+            &format!("* Precipitating… (2m)\n\n{RULE}\nconteúdo da resposta")] {
             let pane = format!("{DONE}\n\n● resposta\n{tail}\n\n{RULE}\n❯ \n{RULE}\n");
             assert_eq!(super::analyze(&pane).spinner.as_deref(), Some(DONE), "{tail}");
         }
