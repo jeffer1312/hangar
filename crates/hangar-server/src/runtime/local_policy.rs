@@ -432,7 +432,7 @@ fn format_reset(resets_at: f64, now: f64) -> String {
 }
 
 /// `claude-opus-5[1m]` -> `Opus5·1M`; id fora das famílias conhecidas (motor, alias) passa como veio.
-fn model_label(model: &str) -> String {
+pub(crate) fn model_label(model: &str) -> String {
     let mut base = model.trim_matches(py_space);
     let one_m = base.to_lowercase().ends_with("[1m]");
     if one_m { base = &base[..base.char_indices().rev().nth(3).map_or(0, |(at, _)| at)]; }

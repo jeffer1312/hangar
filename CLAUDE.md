@@ -41,7 +41,7 @@ Only terminal sessions use the tmux pane for live **state** and input. Backend p
   ficam em `hangar-transcript`; hooks e guarda do Kimi/Pi são comandos Rust em `provider_hooks/`.
 - `sse.py` — merges the above into the SSE stream. `api.py` — FastAPI routes. `auth.py` — bearer token / `cp_token` cookie.
 - Also: `pqueue.py` (durable input queue), `preview.py` (live in-flight block), `askquestion.py`
-  (native AskUserQuestion stepper), `uploads.py`, `workflows.py`,
+  (native AskUserQuestion stepper), `uploads.py`,
   `model_picker.py`, `config.py`, `hook_installer.py`.
 - `crates/hangar-server/src/commands/` — catálogo de comandos do Claude, sonda compartilhada e
   filtro em processo; o Python só autentica e repassa nas portas que atende.
@@ -354,6 +354,10 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
   quadro é a do processo do Chromium (`--force-device-scale-factor`), nunca a emulada por alvo: as
   páginas têm um Chromium próprio em escala 2, e o painel fica no de escala 1.
   [Medição](docs/decisoes/frontend.md#página-da-conversa-no-linux-quadro-no-tamanho-dele-e-chromium-próprio-em-escala-2-15102026).
+- **Página da conversa no nativo do Windows: o quadro é desenhado em fator inteiro, `ceil(escala × 2)`.**
+  O dobro exato gasta menos pixels e deixa o texto pior em tela a 125%. Textura perdida com o device
+  reinicia o screencast; o último quadro não fica guardado.
+  [Medição](docs/decisoes/frontend.md#quadro-em-fator-inteiro-e-sem-guardar-o-último-quadro-10112026).
 - **Bandeja do nativo: fechar ESCONDE a janela, nunca a destrói, e só com bandeja presente.** A tela
   não sobrevive a fechar e reabrir; quem esconde é `Window::set_hidden`, ajuste nosso no GPUI
   vendorizado, chamado de dentro do `should_close` (por isso ele não toca nos callbacks da
@@ -765,6 +769,17 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   `SharedLimiter` aberto segura a trava compartilhada nele; a subida do Rust apaga as órfãs
   (`hangar_auth::sweep_orphans`, só Unix). Pasta sem marcador nunca sai; na dúvida, fica. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#pastas-órfãs-do-contador-de-autenticação-10112026).
+- **Paleta e papel de parede da máquina são do Rust (`hangar-desktop-theme`).** O SCSS Material
+  You e o ponteiro do wallpaper são relidos a cada pedido; no Windows, o ponteiro vem do registro
+  do usuário. As duas rotas `/api/desktop/*` exigem o dono e cliente efetivo local. A imagem
+  conserva `no-store`, metadados e intervalos; não há leitor ou testes Python desse recurso.
+  Transporte compartilhado em `hangar-http-file`. Contrato e provas em
+  [plataforma.md](docs/decisoes/plataforma.md#paleta-e-papel-de-parede-no-rust-10112026).
+- **Workflows são lidos no Rust (`crates/hangar-workflows/`).** Lista, detalhe da execução e
+  detalhe do agente leem os artefatos irmãos do transcript a cada pedido, sem cache por nome.
+  As mesmas rotas atendem dono e convidados nos roteadores Rust, com as permissões vigentes;
+  não há leitor, handler ou teste Python dessa responsabilidade. Contrato e provas em
+  [plataforma.md](docs/decisoes/plataforma.md#workflows-lidos-no-rust-10112026).
 - **O que ainda passa pelo Python com o Rust de pé (modo `rust`).** Esta lista é o inventário
   vivo: migração que tira um item o apaga daqui no mesmo commit; item novo só entra com o arquivo
   e a linha. Conferir antes de afirmar que algo "é do Rust" ou "ainda é do Python".
@@ -778,7 +793,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
     reconciliação das contas Claude é do Rust, `accounts/claude_config.rs`),
     `accounts/codex-invalidate`, `migration/status` e `ping`.
     Transcrição e organização do ditado leem a configuração efetiva diretamente no Rust.
-  - Partes ainda no Python: transferência Claude→Codex; workflows e runners.
+  - Partes ainda no Python: transferência Claude→Codex e runners.
   - Mods (`press`/`close`/`show`/`input`), `~/.hangar/plugin.json` e `plugin-dir` publicados na
     subida e o download dos preços do models.dev: nada; são do Rust (`mods/`,
     `config_sync/plugin_publish.rs`, `costs/pricing_refresh.rs`).

@@ -1,6 +1,6 @@
 //! Página da conversa no Windows: uma WebView2 própria, estacionada fora da área da janela, que o app pinta pelo
 //! screencast (`paint_surface`) e dirige por CDP, como o Chromium sem janela do Linux.
-use std::{cell::Cell, future::Future, rc::Rc, sync::Arc, time::Duration};
+use std::{cell::{Cell, RefCell}, future::Future, rc::Rc, sync::Arc, time::Duration};
 
 use gpui_kit::*;
 use serde_json::{Value, json};
@@ -16,7 +16,7 @@ pub(super) struct Page {
     pub(super) cdp: Rc<Cdp>,
     pub(super) frames: Arc<Frames>,
     placed: Cell<Option<(Size<Pixels>, f32)>>,
-    visible: Rc<Cell<bool>>,
+    cast: Rc<Cast>,
     pressed: Cell<bool>,
     zoom: Cell<f32>,
     /// O zoom mudou e o próximo `place` agenda o reinício do screencast depois de assentar.
@@ -111,7 +111,9 @@ impl Starter {
                 cdp.fire("Page.screencastFrameAck", json!({"sessionId": id}));
             }
         });
-        let page = Page { cdp, frames, placed: Cell::new(None), visible: Rc::default(), pressed: Cell::new(false), zoom: Cell::new(1.),
+        let cast = Rc::new(Cast { cdp: cdp.clone(), executor: self.executor.clone(), visible: Cell::new(false), wanted: RefCell::default(),
+            running: Cell::new(false), busy: Cell::new(false) });
+        let page = Page { cdp, frames, placed: Cell::new(None), cast, pressed: Cell::new(false), zoom: Cell::new(1.),
             zoomed: Cell::new(false), zoom_turn: Rc::default(), executor: self.executor.clone(), background: self.background.clone(), _acks: acks };
         Ok(Engine {
             view, _context: context, state: Rc::default(), events, placed: Cell::new(None), asleep: Cell::new(false), dead,
@@ -125,10 +127,15 @@ impl Page {
     pub(super) fn place(&self, view: &wry::WebView, bounds: Bounds<Pixels>, window: &mut Window) {
         let scale = window.scale_factor();
         // Desenhada no dobro da tela e reduzida pela GPU: em 1x o texto da página sai borrado ao lado do texto do app.
+        // Arredondado para cima: em fator inteiro a WebView2 desenha as letras mais nítidas do que no dobro exato
+        // (2,5 numa tela a 125%), mesmo com a redução saindo em razão quebrada.
         let frame_scale = (scale * 2.).ceil();
         let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+        // Device perdido leva a textura, e página parada não manda quadro novo: o screencast recomeça como num resize.
+        if self.frames.lost() { self.placed.set(None); }
         let resized = self.placed.get() != Some((bounds.size, scale));
-        let first = !self.visible.replace(true);
+        let first = !self.cast.visible.replace(true);
+        if first { self.frames.show(); }
         if resized || first {
             crate::browser::frames::trace(format_args!("cartão {w}x{h} (primeiro: {first}); screencast reiniciado"));
             self.placed.set(Some((bounds.size, scale)));
@@ -142,24 +149,19 @@ impl Page {
                 position: PhysicalPosition::new(-(pw as i32) - PARK_GAP, 0).into(),
                 size: PhysicalSize::new(pw, ph).into(),
             }) { eprintln!("[pagina] tamanho da WebView2 nao aplicado: {e}"); }
-            // Reiniciar sem parar o anterior a WebView2 recusa ("The parameter is incorrect").
-            if !first { self.cdp.fire("Page.stopScreencast", json!({})); }
             let screencast = json!({"format": "png", "maxWidth": pw, "maxHeight": ph, "everyNthFrame": 1});
-            self.cdp.fire("Page.startScreencast", screencast.clone());
             // Toda colocação nova avança a contagem: um reinício ainda esperando voltaria com o tamanho antigo.
             let turn = self.zoom_turn.get() + 1;
             self.zoom_turn.set(turn);
+            self.cast.request(Some(screencast.clone()));
             if self.zoomed.replace(false) {
                 // Página parada: o quadro do reinício pode sair antes da rasterização nova, e nenhum outro chega sozinho.
                 // Reiniciar depois de assentar manda o do zoom final.
-                let (cdp, turns, visible) = (self.cdp.clone(), self.zoom_turn.clone(), self.visible.clone());
+                let (cast, turns) = (self.cast.clone(), self.zoom_turn.clone());
                 let timer = self.background.timer(Duration::from_millis(ZOOM_SETTLE_MS));
                 self.executor.spawn(async move {
                     timer.await;
-                    if turns.get() == turn && visible.get() {
-                        cdp.fire("Page.stopScreencast", json!({}));
-                        cdp.fire("Page.startScreencast", screencast);
-                    }
+                    if turns.get() == turn && cast.visible.get() { cast.request(Some(screencast)); }
                 }).detach();
             }
         }
@@ -183,8 +185,8 @@ impl Page {
 
     /// Fora da tela: sem screencast e sem a textura na GPU.
     pub(super) fn hide(&self) {
-        if self.visible.replace(false) { self.cdp.fire("Page.stopScreencast", json!({})); }
-        self.frames.clear();
+        if self.cast.visible.replace(false) { self.cast.request(None); }
+        self.frames.hide();
     }
 
     /// O `clickCount` da soltura repete o do aperto: sem ele o Chromium não dispara `dblclick`.
@@ -218,6 +220,51 @@ impl Page {
 }
 
 const PARK_GAP: i32 = 200;
+
+/// O screencast da página: se ela está na tela e com que medida ele foi pedido. Parada e início saem de uma fila
+/// só (`drive`), cada um esperando o anterior terminar: a WebView2 despacha os comandos na ordem, mas pode
+/// processá-los fora dela, e uma parada atrasada derrubaria o início que veio depois.
+struct Cast {
+    cdp: Rc<Cdp>,
+    executor: ForegroundExecutor,
+    visible: Cell<bool>,
+    /// Medida pedida e ainda não aplicada; a mais nova substitui a anterior.
+    wanted: RefCell<Option<Value>>,
+    running: Cell<bool>,
+    busy: Cell<bool>,
+}
+
+impl Cast {
+    /// Pede o screencast com essa medida, reiniciando o que estiver rodando. `None` só acorda a fila: a página saiu
+    /// da tela e o screencast tem de parar.
+    fn request(self: &Rc<Self>, screencast: Option<Value>) {
+        if screencast.is_some() { *self.wanted.borrow_mut() = screencast; }
+        if self.busy.replace(true) { return; }
+        let cast = self.clone();
+        self.executor.spawn(async move {
+            cast.drive().await;
+            cast.busy.set(false);
+        }).detach();
+    }
+
+    async fn drive(&self) {
+        loop {
+            let next = self.wanted.borrow_mut().take();
+            if next.is_none() && (self.visible.get() || !self.running.get()) { return; }
+            // Reiniciar sem parar o anterior a WebView2 recusa ("The parameter is incorrect").
+            if self.running.replace(false) && let Err(e) = self.cdp.call("Page.stopScreencast", json!({})).await {
+                eprintln!("[pagina] parada do screencast falhou: {e}");
+            }
+            let Some(screencast) = next else { continue };
+            // Pedido mais novo, ou página fora da tela, durante a espera: a volta seguinte resolve.
+            if !self.visible.get() || self.wanted.borrow().is_some() { continue; }
+            match self.cdp.call("Page.startScreencast", screencast).await {
+                Ok(_) => self.running.set(true),
+                Err(e) => eprintln!("[pagina] screencast nao iniciou: {e}"),
+            }
+        }
+    }
+}
 
 /// Escala fixa: a WebView2 não segue o monitor, que a página está fora dele.
 fn rasterize(view: &wry::WebView, scale: f32) {

@@ -1,0 +1,21 @@
+[package]
+name = "hangar-http-file"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+hangar-core.workspace = true
+axum.workspace = true
+base64.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+futures-util.workspace = true
+md-5.workspace = true
+mime_guess.workspace = true
+percent-encoding.workspace = true
+ring.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "time", "fs", "signal"] }
+
+[dev-dependencies]
+tempfile.workspace = true

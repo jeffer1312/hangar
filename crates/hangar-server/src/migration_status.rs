@@ -97,12 +97,14 @@ pub fn area_of(path: &str) -> usize {
 /// O Rust atende este pedido do dono sem repassar? Mesma decisão do `routes::router`: as rotas
 /// GET registradas lá, mais os `matches` de Git/arquivos e de worktrees que o `pass_any` consulta.
 pub fn rust_route(method: &Method, path: &str) -> bool {
+    let workflow = path.strip_prefix("/api/sessions/").and_then(|rest| rest.split_once('/'))
+        .is_some_and(|(name, tail)| !name.is_empty() && (tail == "workflows" || tail.starts_with("workflows/")));
     // Essas famílias resolvem também os métodos recusados dentro do Rust.
     if crate::login_guests::owns_path(path) || crate::loops::http::owns_path(path)
         || crate::push::http::owns_path(path) || crate::machine_peers::owns_http_path(path)
         || crate::session_open::baton::matches(path) || crate::shortcuts::http::matches(path)
         || crate::costs_routes::usage_path(path) || crate::diag::version_matches(method, path)
-        || crate::plugins::matches(path)
+        || crate::plugins::matches(path) || workflow || hangar_desktop_theme::owns_path(path)
         || matches!(path, "/api/config-sync/apply" | "/api/update-channel") { return true; }
     if *method == Method::GET && matches!(path, "/api/config-sync/manifest" | "/api/config-sync/bundle") { return true; }
     if crate::ui::matches(method, path) || crate::dictation::http::matches(method, path)
@@ -244,7 +246,10 @@ fn share_route(method: &Method, path: &str) -> bool {
 
 /// Um ou mais pedidos reais por área, só para a tabela; a decisão é de `rust_route`.
 const PROBES: &[(&str, &str)] = &[
+    ("GET", "/api/desktop/palette"), ("GET", "/api/desktop/wallpaper"),
     ("GET", "/api/sessions/x/history"), ("GET", "/api/sessions/x/events"),
+    ("GET", "/api/sessions/x/workflows"), ("GET", "/api/sessions/x/workflows/wf_x"),
+    ("GET", "/api/sessions/x/workflows/wf_x/agents/a1"),
     ("GET", "/api/archive/p/s/history"), ("GET", "/api/archive/p/s/transcript-image/u/0"),
     ("GET", "/api/archive"), ("GET", "/api/archive/recent"), ("GET", "/api/archive/p"), ("GET", "/api/archive-por-cwd"),
     ("GET", "/api/sessions/x/navegador"),

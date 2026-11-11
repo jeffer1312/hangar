@@ -37,6 +37,15 @@ pub(crate) fn device(state: &mut AppState) -> String {
 async fn start(addr: SocketAddr, trusted: &str) -> (Arc<Fake>, SocketAddr, String) {
     let (python, upstream) = spawn_fake().await;
     let mut state = AppState::new(config(upstream, trusted));
+    let home = Arc::new(tempfile::tempdir().unwrap());
+    let generated = home.path().join(".local/state/quickshell/user/generated");
+    std::fs::create_dir_all(&generated).unwrap();
+    std::fs::write(generated.join("material_colors.scss"), include_str!("../../../hangar-desktop-theme/tests/fixtures/blue.scss")).unwrap();
+    state.desktop_theme = Arc::new(hangar_desktop_theme::DesktopTheme::new(
+        Arc::new(move || Ok(home.path().to_path_buf())),
+        Arc::new(|| Err(std::io::ErrorKind::NotFound.into())),
+        Arc::new(|_| {}),
+    ));
     state.connect = Some(addr);
     let token = device(&mut state);
     (python, spawn_state(state).await, token)
@@ -61,12 +70,13 @@ fn mcp(addr: SocketAddr, token: &str) -> reqwest::RequestBuilder {
 
 #[tokio::test]
 async fn local_only_route_is_refused_through_connect() {
-    let (_python, main, connect, device) = server("127.0.0.1").await;
+    let (python, main, connect, device) = server("127.0.0.1").await;
     let path = "/api/desktop/palette";
     assert_eq!(get(main, path).bearer_auth(OWNER).send().await.unwrap().status(), 200, "na máquina a rota responde");
     let refused = get(connect, path).bearer_auth(&device).send().await.unwrap();
     assert_eq!(refused.status(), 403);
     assert!(refused.text().await.unwrap().contains("erro_so_loopback"));
+    assert_eq!(python.hits_to(path), 0);
 }
 
 #[tokio::test]
@@ -75,8 +85,10 @@ async fn forged_forwarded_for_does_not_become_local() {
     for trusted in ["127.0.0.1", "*"] {
         let (python, _main, connect, device) = server(trusted).await;
         let forged = get(connect, "/api/desktop/palette").bearer_auth(&device).header("x-forwarded-for", "127.0.0.1");
-        assert_eq!(forged.send().await.unwrap().status(), 403, "{trusted}");
-        assert_eq!(python.last_hit().1["x-forwarded-for"], hangar_server::devices::CONNECT_PEER, "{trusted}");
+        let refused = forged.send().await.unwrap();
+        assert_eq!(refused.status(), 403, "{trusted}");
+        assert_eq!(refused.json::<serde_json::Value>().await.unwrap()["detail"]["code"], "erro_so_loopback", "{trusted}");
+        assert_eq!(python.hits_to("/api/desktop/palette"), 0, "{trusted}");
         assert_eq!(mcp(connect, &device).header("x-forwarded-for", "127.0.0.1").send().await.unwrap().status(), 403, "{trusted}");
     }
 }
@@ -109,6 +121,13 @@ async fn python_receives_connect_peer_on_pass() {
     let (_, headers) = python.last_hit();
     assert_eq!(headers["x-forwarded-for"], "127.0.0.1");
     assert_eq!(headers["x-forwarded-proto"], "http");
+    // Com `*` um `127.0.0.1` forjado também não chega ao Python como cliente local.
+    let (python, _main, connect, device) = server("*").await;
+    let forged = get(connect, "/api/qualquer").bearer_auth(&device).header("x-forwarded-for", "127.0.0.1");
+    assert_eq!(forged.send().await.unwrap().status(), 200);
+    let (_, headers) = python.last_hit();
+    assert_eq!(headers["x-forwarded-for"], "192.0.2.1");
+    assert_eq!(headers["x-forwarded-proto"], "https");
 }
 
 #[tokio::test]
