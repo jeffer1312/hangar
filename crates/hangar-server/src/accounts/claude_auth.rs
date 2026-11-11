@@ -114,7 +114,8 @@ impl AccountService {
         command.args(&program[1..]);
         Some(command)
     }
-    /// O `claude` do `PATH` da conta como argv: no Windows sem `claude.exe`, o `node.exe` + `cli.js`.
+    /// O `claude` do `PATH` da conta como argv. No Windows a instalação pelo npm deixa no `PATH`
+    /// só o `claude.cmd`: o executável fica no pacote (`bin/claude.exe`; antigo, `node` + `cli.js`).
     pub(crate) fn claude_program(&self) -> Option<Vec<std::path::PathBuf>> {
         let path = &self
             .env
@@ -124,11 +125,13 @@ impl AccountService {
             .1;
         for dir in std::env::split_paths(path) {
             if cfg!(windows) {
-                let exe = dir.join("claude.exe");
-                if exe.is_file() {
-                    return Some(vec![exe]);
+                let package = dir.join("node_modules/@anthropic-ai/claude-code");
+                for exe in [dir.join("claude.exe"), package.join("bin/claude.exe")] {
+                    if exe.is_file() {
+                        return Some(vec![exe]);
+                    }
                 }
-                let script = dir.join("node_modules/@anthropic-ai/claude-code/cli.js");
+                let script = package.join("cli.js");
                 if script.is_file() {
                     let node = std::env::split_paths(path)
                         .map(|dir| dir.join("node.exe"))
