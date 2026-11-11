@@ -41,8 +41,20 @@ function markSeen(server: Server, through: number): void {
   });
 }
 
+// Leitura em curso por servidor: dois gatilhos juntos não abrem a folha duas vezes; o segundo espera e lê de novo.
+const reading = new Map<string, Promise<boolean>>();
+
 /** Lê o que chegou para este aparelho. `true` = há o que mostrar, e quem chamou abre `whatsNewHref`. */
 export async function loadArrivedNews(server: Server): Promise<boolean> {
+  const running = reading.get(server.id);
+  if (running) { await running.catch(() => false); return loadArrivedNews(server); }
+  const read = readArrivedNews(server);
+  reading.set(server.id, read);
+  try { return await read; }
+  finally { if (reading.get(server.id) === read) reading.delete(server.id); }
+}
+
+async function readArrivedNews(server: Server): Promise<boolean> {
   let arrived: { news: UpdateNews[]; through: number } | null;
   try { arrived = await getArrivedNews(server, updateDeviceId()); }
   catch (e) {

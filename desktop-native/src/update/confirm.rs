@@ -453,14 +453,14 @@ pub(super) fn device_id() -> Option<String> {
     Some(ID.get_or_init(|| id).clone())
 }
 
-/// Abre "O que chegou para você" na janela ativa (ou na primeira), com o "Mostrar no app" do app.
-pub(super) fn show_news(items: Vec<News>, cx: &mut App) {
-    let Some(handle) = cx.active_window().or_else(|| cx.windows().first().copied()) else { return };
+/// Abre "O que chegou para você" na janela ativa (ou na primeira), com o "Mostrar no app" do app; `false` sem janela.
+pub(super) fn show_news(items: Vec<News>, cx: &mut App) -> bool {
+    let Some(handle) = cx.active_window().or_else(|| cx.windows().first().copied()) else { return false };
     // Chamado do `Updater`, que não tem a entidade do app no contexto: ela vem do global.
     let show = crate::app::Hangar::weak(cx).map(|hangar| -> ShowInApp {
         Rc::new(move |note: crate::tour::Note, _: &mut Window, cx: &mut App| { let _ = hangar.update(cx, |this, cx| this.show_news(note, cx)); })
     });
-    let _ = handle.update(cx, |_, window, cx| open_whats_new(items, show, window, cx));
+    handle.update(cx, |_, window, cx| open_whats_new(items, show, window, cx)).is_ok()
 }
 
 /// `HANGAR_NATIVE_PREVIEW=update-confirm` e `=whats-new` (build de debug): os dois modais com uma amostra fixa.

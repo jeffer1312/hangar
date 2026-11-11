@@ -89,8 +89,8 @@ async fn blocking<T: Send + 'static>(home: &Path, work: impl FnOnce(&Path) -> io
     tokio::task::spawn_blocking(move || work(&home)).await.map_err(io::Error::other)?
 }
 
-/// `GET /api/update/arrived?device=<id>`: o que o aparelho ainda não viu. Aparelho novo é gravado no
-/// ponto atual, por isso o convidado é recusado antes.
+/// `GET /api/update/arrived?device=<id>`: o que o aparelho ainda não viu. A primeira leitura grava o
+/// aparelho, por isso o convidado é recusado antes.
 pub async fn unseen(State(state): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, request: Request) -> Response {
     if let Err(refused) = owner_gate(&state, peer, &request).await { return refused; }
     let device = Query::<HashMap<String, String>>::try_from_uri(request.uri()).ok()

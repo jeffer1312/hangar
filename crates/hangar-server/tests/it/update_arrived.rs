@@ -150,8 +150,8 @@ async fn update_arrived_bad_device_or_body_is_422() {
 #[tokio::test]
 async fn update_arrived_unreadable_store_is_503() {
     let fixture = Fixture::start().await;
-    std::fs::create_dir_all(fixture.home.path().join(".hangar")).unwrap();
-    std::fs::write(fixture.home.path().join(".hangar/update-news.json"), "broken").unwrap();
+    // Uma pasta no lugar do arquivo: erro de leitura de verdade (conteúdo ilegível recomeça vazio).
+    std::fs::create_dir_all(fixture.home.path().join(".hangar/update-news.json")).unwrap();
     let response = fixture.get("phone-1", true).await;
     assert_eq!(response.status(), 503);
     assert_eq!(code(response).await, "update_arrived_unavailable");

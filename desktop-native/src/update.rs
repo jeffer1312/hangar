@@ -730,38 +730,54 @@ impl Updater {
     /// o desktop).
     fn show_arrived(&mut self, cx: &mut Context<Self>) {
         let Some(api) = self.local.clone() else { return };
-        self.arrived.due = false;
+        // `due` fica de pé: o fim da leitura em curso lê de novo.
         if self.arrived.reading { return; }
         let Some(device) = confirm::device_id() else { return };
+        self.arrived.due = false;
         self.arrived.reading = true;
         let task = { let (api, device) = (api.clone(), device.clone());
             self.runtime.spawn(async move { api.server_read(&["update", "arrived"], &[("device", &device)], 20).await }) };
         cx.spawn(async move |this, cx| {
             let read = task.await.unwrap_or_else(|e| Err(Failure::local(e.to_string())));
-            let open = this.update(cx, |this, _| this.receive_arrived(read, api, device));
-            if let Ok(Some(news)) = open { cx.update(|cx| confirm::show_news(news, cx)); }
+            let Ok(open) = this.update(cx, |this, _| this.receive_arrived(read)) else { return };
+            let through = match open {
+                Some((news, through)) => cx.update(|cx| confirm::show_news(news, cx)).then_some(through),
+                None => None,
+            };
+            let _ = this.update(cx, |this, cx| {
+                // Só com o modal aberto: sem janela, a próxima leitura traz a lista de novo.
+                if let Some(through) = through { this.seen(api, device, through); }
+                if this.arrived.due && !this.busy() { this.show_arrived(cx); }
+            });
         }).detach();
     }
 
-    /// A resposta do `GET`: o que abrir. Marca visto o que veio, mesmo sem nada para o desktop.
-    fn receive_arrived(&mut self, read: Result<Value, Failure>, api: Api, device: String) -> Option<Vec<confirm::News>> {
+    /// A resposta do `GET`: a lista a abrir e o `through` dela. Sem nada para o desktop, já marca visto.
+    fn receive_arrived(&mut self, read: Result<Value, Failure>) -> Option<(Vec<confirm::News>, u64)> {
         self.arrived.reading = false;
-        let (news, through) = match confirm::arrived(read, self.arrived.through) {
-            confirm::Arrived::Show { news, through } => (Some(news), through),
-            confirm::Arrived::Seen(through) => (None, through),
-            confirm::Arrived::Already => return None,
+        match confirm::arrived(read, self.arrived.through) {
+            confirm::Arrived::Show { news, through } => Some((news, through)),
+            confirm::Arrived::Seen(through) => {
+                if let Some(device) = confirm::device_id() && let Some(api) = self.local.clone() { self.seen(api, device, through); }
+                None
+            }
+            confirm::Arrived::Already => None,
             confirm::Arrived::Absent => {
                 crate::log_line("update news: o servidor desta máquina não tem /api/update/arrived");
-                return None;
+                None
             }
             confirm::Arrived::Failed(detail) => {
                 crate::log_line(&format!("update news: leitura do que chegou falhou: {detail}"));
-                return None;
+                // A próxima leitura do estado conta como versão nova e tenta de novo, sem laço aqui.
+                self.arrived.version = None;
+                None
             }
-        };
+        }
+    }
+
+    fn seen(&mut self, api: Api, device: String, through: u64) {
         self.arrived.through = Some(through);
         mark_seen(&self.runtime, api, device, through);
-        news
     }
 
     /// O canal de testes do servidor mudou pela tela: relê o estado e, com ele, a release do app.

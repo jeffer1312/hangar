@@ -13,14 +13,28 @@ fn stored(home: &Path) -> Value { serde_json::from_slice(&std::fs::read(file(hom
 fn ids(news: &[Value]) -> Vec<&str> { news.iter().map(|item| item["id"].as_str().unwrap()).collect() }
 
 #[test]
-fn a_new_device_gets_nothing_and_starts_at_the_current_seq() {
+fn a_new_device_gets_nothing_older_than_24_hours() {
     let home = tempfile::tempdir().unwrap();
-    assert_eq!(record(home.path(), "1", "2", vec![item("a", "A")]).unwrap(), Some(1));
+    std::fs::create_dir_all(home.path().join(".hangar")).unwrap();
+    let old = json!({ "seq": 1, "from": "1", "to": "2", "at": "2026-01-01T00:00:00Z", "news": [item("a", "A")] });
+    std::fs::write(file(home.path()), json!({ "seq": 1, "arrivals": [old], "devices": {} }).to_string()).unwrap();
     let first = unseen(home.path(), "phone").unwrap();
     assert!(first.news.is_empty());
     assert_eq!(first.through, 1);
     assert_eq!(stored(home.path())["devices"]["phone"]["cursor"], 1);
-    // Ainda sem nada novo: continua vazio.
+}
+
+#[test]
+fn a_new_device_gets_what_arrived_in_the_last_24_hours() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join(".hangar")).unwrap();
+    let old = json!({ "seq": 1, "from": "1", "to": "2", "at": "2026-01-01T00:00:00Z", "news": [item("a", "A")] });
+    std::fs::write(file(home.path()), json!({ "seq": 1, "arrivals": [old], "devices": {} }).to_string()).unwrap();
+    record(home.path(), "2", "3", vec![item("b", "B")]).unwrap();
+    let first = unseen(home.path(), "phone").unwrap();
+    assert_eq!(ids(&first.news), ["b"]);
+    assert_eq!(first.through, 2);
+    mark_seen(home.path(), "phone", first.through).unwrap();
     assert!(unseen(home.path(), "phone").unwrap().news.is_empty());
 }
 
@@ -125,16 +139,27 @@ fn only_the_50_most_recently_seen_devices_are_kept() {
 }
 
 #[test]
-fn a_corrupt_file_is_an_error_not_an_empty_list() {
+fn a_corrupt_file_starts_over_and_the_next_record_repairs_it() {
     let home = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(home.path().join(".hangar")).unwrap();
     std::fs::write(file(home.path()), b"{ not json").unwrap();
-    assert!(unseen(home.path(), "phone").is_err());
-    assert!(mark_seen(home.path(), "phone", 1).is_err());
-    assert!(record(home.path(), "1", "2", vec![item("a", "A")]).is_err());
-    assert!(record(home.path(), "1", "2", vec![]).is_err());
-    assert!(known_version(home.path()).is_err());
-    assert_eq!(std::fs::read(file(home.path())).unwrap(), b"{ not json");
+    assert_eq!(known_version(home.path()).unwrap(), None);
+    assert_eq!(record(home.path(), "1", "2", vec![item("a", "A")]).unwrap(), Some(1));
+    assert_eq!(known_version(home.path()).unwrap().as_deref(), Some("2"));
+    assert_eq!(stored(home.path())["seq"], 1);
+}
+
+#[test]
+fn going_back_to_the_previous_version_drops_what_the_new_one_brought() {
+    let home = tempfile::tempdir().unwrap();
+    unseen(home.path(), "phone").unwrap();
+    record(home.path(), "1.4", "1.5", vec![item("a", "A")]).unwrap();
+    record(home.path(), "1.5", "1.4", vec![]).unwrap();
+    assert!(unseen(home.path(), "phone").unwrap().news.is_empty());
+    assert_eq!(known_version(home.path()).unwrap().as_deref(), Some("1.4"));
+    // Instalada de verdade depois, aparece.
+    record(home.path(), "1.4", "1.5", vec![item("a", "A")]).unwrap();
+    assert_eq!(ids(&unseen(home.path(), "phone").unwrap().news), ["a"]);
 }
 
 #[test]

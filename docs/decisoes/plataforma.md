@@ -4356,7 +4356,11 @@ A tela de Plugins chama `claude plugin …` (CLI 2.1.319) com a pasta padrão `~
 **Regra:** o servidor que acabou de subir compara a versão em uso (pacote) ou o `HEAD` (checkout) com a
 última que ele viu em `~/.hangar/update-news.json` e grava ali as novidades que chegaram; cada aparelho
 guarda um cursor no mesmo arquivo e lê `GET /api/update/arrived?device=<id>`, marcando visto por
-`POST /api/update/arrived/seen`. Aparelho que nunca falou com o servidor começa no ponto atual.
+`POST /api/update/arrived/seen`. Aparelho que nunca falou com o servidor recebe só o que chegou nas
+últimas 24 h: na primeira atualização para esta versão todo aparelho é desconhecido, e começando no
+ponto atual ninguém veria o que ela trouxe. Volta para a versão de antes (a nova não ficou de pé) apaga a
+chegada que ela tinha gravado; `update-news.json` ilegível recomeça vazio, com aviso no log, porque
+travado nenhuma atualização futura seria gravada.
 
 **Caso que motivou:** a tela de Plugins chegou pela atualização automática das 08:26 (0.1.0.9940 →
 0.1.0.9967). O clique em "Atualizar?" às 08:59 achou o servidor já na versão nova, a lista de

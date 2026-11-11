@@ -1,6 +1,6 @@
 //! O que cada atualização do servidor trouxe de novidade e até onde cada aparelho já viu, em
-//! `~/.hangar/update-news.json`. Aparelho que aparece pela primeira vez começa no ponto atual: não
-//! recebe o que chegou antes dele.
+//! `~/.hangar/update-news.json`. Aparelho que aparece pela primeira vez recebe só o que chegou nas
+//! últimas 24 h.
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -12,6 +12,7 @@ use serde_json::Value;
 
 const MAX_ARRIVALS: usize = 50;
 const MAX_DEVICES: usize = 50;
+const FIRST_CONTACT_HOURS: i64 = 24;
 
 /// Novidades que o aparelho ainda não viu; `through` é o que ele devolve ao marcar visto.
 #[derive(Debug, Default, Serialize)]
@@ -36,10 +37,12 @@ struct Device { cursor: u64, at: String }
 /// chegada e devolve `None`.
 ///
 /// # Errors
-/// Arquivo ilegível ou falha ao gravar.
+/// Falha ao gravar.
 pub fn record(home: &Path, from: &str, to: &str, news: Vec<Value>) -> io::Result<Option<u64>> {
     update(home, |store| {
         store.version = Some(to.to_owned());
+        // Volta para a versão de antes (a nova não ficou de pé): o que ela trouxe não está instalado.
+        if store.arrivals.last().is_some_and(|last| last.from == to && last.to == from) { store.arrivals.pop(); }
         if news.is_empty() { return None; }
         store.seq += 1;
         store.arrivals.push(Arrival { seq: store.seq, from: from.to_owned(), to: to.to_owned(), at: now(), news });
@@ -50,15 +53,15 @@ pub fn record(home: &Path, from: &str, to: &str, news: Vec<Value>) -> io::Result
 /// A última versão com que o servidor gravou; `None` sem arquivo ou em arquivo anterior ao campo.
 ///
 /// # Errors
-/// Arquivo ilegível.
+/// Falha ao ler o arquivo.
 pub fn known_version(home: &Path) -> io::Result<Option<String>> { Ok(read(&path(home))?.version) }
 
 /// Novidades das chegadas depois do cursor do aparelho, sem id repetido: a chegada mais nova vem
 /// primeiro e vence o id repetido; dentro dela a ordem é a gravada. Aparelho desconhecido é
-/// registrado no `seq` atual e não recebe nada.
+/// registrado antes das chegadas das últimas 24 h (`first_cursor`).
 ///
 /// # Errors
-/// Id de aparelho inválido, arquivo ilegível ou falha ao gravar o aparelho novo.
+/// Id de aparelho inválido ou falha ao gravar o aparelho novo.
 pub fn unseen(home: &Path, device: &str) -> io::Result<Unseen> {
     check(device)?;
     let path = path(home);
@@ -68,9 +71,9 @@ pub fn unseen(home: &Path, device: &str) -> io::Result<Unseen> {
         let _lock = lock(home)?;
         store = read(&path)?;
         if !store.devices.contains_key(device) {
-            store.devices.insert(device.to_owned(), Device { cursor: store.seq, at: now() });
+            let cursor = first_cursor(&store);
+            store.devices.insert(device.to_owned(), Device { cursor, at: now() });
             write(&path, &mut store)?;
-            return Ok(Unseen { news: Vec::new(), through: store.seq });
         }
     }
     let cursor = store.devices[device].cursor;
@@ -90,17 +93,27 @@ pub fn unseen(home: &Path, device: &str) -> io::Result<Unseen> {
 /// Avança o cursor do aparelho até `through` (cortado no `seq`), nunca para trás.
 ///
 /// # Errors
-/// Id de aparelho inválido, arquivo ilegível ou falha ao gravar.
+/// Id de aparelho inválido ou falha ao gravar.
 pub fn mark_seen(home: &Path, device: &str, through: u64) -> io::Result<u64> {
     check(device)?;
     update(home, |store| {
         let target = through.min(store.seq);
-        // Primeiro contato também por aqui começa no ponto atual, como no `unseen`.
-        let entry = store.devices.entry(device.to_owned()).or_insert(Device { cursor: store.seq, at: String::new() });
+        // Primeiro contato também por aqui começa como no `unseen`.
+        let cursor = first_cursor(store);
+        let entry = store.devices.entry(device.to_owned()).or_insert(Device { cursor, at: String::new() });
         entry.cursor = entry.cursor.max(target);
         entry.at = now();
         entry.cursor
     })
+}
+
+/// Onde o aparelho desconhecido começa: no `seq` atual, menos as chegadas das últimas 24 h. Na primeira atualização
+/// todo aparelho é desconhecido, e sem a janela ninguém veria o que ela trouxe.
+fn first_cursor(store: &Store) -> u64 {
+    let since = Utc::now() - chrono::Duration::hours(FIRST_CONTACT_HOURS);
+    store.arrivals.iter()
+        .find(|arrival| DateTime::parse_from_rfc3339(&arrival.at).is_ok_and(|at| at.to_utc() >= since))
+        .map_or(store.seq, |arrival| arrival.seq - 1)
 }
 
 pub fn valid_device(device: &str) -> bool {
@@ -133,7 +146,11 @@ fn lock(home: &Path) -> io::Result<File> {
 
 fn read(path: &Path) -> io::Result<Store> {
     match hangar_core::fs::read_replaced(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error)),
+        // Ilegível recomeça vazio, senão nenhuma atualização futura seria gravada; só se perde até onde cada aparelho viu.
+        Ok(bytes) => Ok(serde_json::from_slice(&bytes).unwrap_or_else(|cause| {
+            tracing::warn!(code = "update_news_unreadable", %cause, path = %path.display(), "update-news.json ilegível; recomeça vazio");
+            Store::default()
+        })),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Store::default()),
         Err(error) => Err(error),
     }

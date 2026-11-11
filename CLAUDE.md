@@ -581,7 +581,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   crate `hangar-update-news`) e grava as novidades novas; nunca o executor da atualização, que roda o
   binário antigo. Nativo e Expo leem `GET /api/update/arrived?device=<id>` na abertura, na troca de
   versão e no fim do "Atualizar?", e marcam visto ao abrir o modal; não há lista local. Aparelho novo
-  começa no ponto atual. Servidor sem a rota (404) não mostra nada. Evidência em
+  recebe só o que chegou nas últimas 24 h. Servidor sem a rota (404) não mostra nada. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#novidades-da-atualização-automática-gravadas-pelo-servidor-novo-10112026).
 - **Busca, Perguntar e Arquivo são do Rust, com um índice de todos os agentes e contas.** A passada
   é por evento de arquivo; palavra inteira vem antes de pedaço (`whole`); o id do trecho é o do
