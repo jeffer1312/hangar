@@ -4464,6 +4464,41 @@ de propriedade de rotas foi incluída desde o início. Provas aprovadas são rea
 cobertura global fica com o CI. Cabeçalhos de compressão/framing do servidor ficam fora da
 comparação da representação, e a fronteira aleatória multipart é comparada pela estrutura.
 
+## Workflows lidos no Rust (10/11/2026)
+
+**Regra.** `hangar-workflows`, sobre `hangar-core`, lê a lista, a execução e o agente dos
+artefatos irmãos do transcript. O servidor só resolve a sessão e liga as três rotas
+`/api/sessions/{name}/workflows`, `/{run_id}` e `/{run_id}/agents/{agent_id}`. As portas do
+dono, do convidado e do Connect conservam seus porteiros; acesso de par somente para
+leitura continua sem workflows, conforme a lista de rotas permitidas do porteiro.
+
+**Contrato.** Cada pedido relê os arquivos, sem cache por nome ou estado a limpar na troca
+de vida. Completion vence a pasta viva; journal e transcript toleram linhas inválidas e
+JSONL não objeto. Preservam-se campos, defaults, ordem, cortes por caracteres Unicode,
+resultado estruturado com indentação e ordem de chaves, e os códigos de ausência da API.
+A descoberta do transcript vem do Rust. Não há repasse ao Python nessas rotas, nem leitor
+ou testes Python conservados para elas; sem Rust, a porta Python usa seu 404/405 padrão.
+Nenhum contrato privado do Supervisor foi alterado.
+
+**Armadilhas preservadas.** Detalhe de agente vivo não recalcula tokens/modelo do transcript;
+completion continua sendo a fonte desses campos. A última chamada sem alvo válido conserva
+o alvo anterior, e resultado e estado fazem leituras separadas do journal. Formato aninhado
+inválido que provocava erro interno não vira sucesso vazio. A seleção de nomes de arquivo
+conserva a sensibilidade a caixa do `pathlib` na plataforma.
+
+**Provas.** O inventário tem 42 comportamentos e mapeia os 12 testes Python removidos para
+testes Rust pela interface pública. A caracterização sobre a base `ed4491fd5` e o leitor
+Rust em release produziram oito respostas idênticas. Os testes cobrem as duas correções
+históricas de estado/alvo/contagem e JSONL não objeto, além de entrada externa sem pânico,
+Unicode, inteiros grandes e releitura após substituir os arquivos. As rotas são conferidas
+num roteador isolado, com descoberta nativa e sem backend Python de pé.
+
+**Medição do leitor.** Duzentas chamadas por operação, mesmos artefatos e sem repetir o lado
+Python: p95 de lista 0,559 → 0,218 ms, execução viva 0,215 → 0,089 ms, agente vivo
+0,233 → 0,044 ms. CPU do recorte 0,170 → aproximadamente 0,06 s; RSS máximo dos processos,
+incluindo runtime, 47.444 → 4.864 KiB. Esses números são dos leitores locais, não da
+latência HTTP ou do servidor inteiro. Runners e projetos continuam fora desta migração.
+
 ## Plugins do Claude na tela: a CLI oficial na pasta principal (09/11/2026)
 
 A tela de Plugins chama `claude plugin …` (CLI 2.1.319) com a pasta padrão `~/.claude`, sem

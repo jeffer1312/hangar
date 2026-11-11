@@ -664,6 +664,9 @@ where H: axum::handler::Handler<T, Arc<AppState>>, T: 'static {
         .route("/api/sessions/events", get(crate::list::hub::events).fallback(fallback.clone()))
         .route("/api/sessions/{name}/history", get(history).fallback(fallback.clone()))
         .route("/api/sessions/{name}/events", get(events).fallback(fallback.clone()))
+        .route("/api/sessions/{name}/workflows", axum::routing::any(workflows))
+        .route("/api/sessions/{name}/workflows/", axum::routing::any(workflows))
+        .route("/api/sessions/{name}/workflows/{*rest}", axum::routing::any(workflows))
         // Interface dos mods: o Rust atende a sessão sem terminal dele; o resto segue ao Python.
         .route("/api/sessions/{name}/plugin/press", axum::routing::post(crate::mods::routes::press).fallback(fallback.clone()))
         .route("/api/sessions/{name}/plugin/close", axum::routing::post(crate::mods::routes::close).fallback(fallback.clone()))
@@ -1001,6 +1004,66 @@ pub(crate) fn client_api_reply() -> Response {
 }
 
 use hangar_core::edge::RequestAuth;
+
+async fn workflows(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    if let Some(response) = hangar_core::http_cors::preflight(req.method(), req.headers()) {
+        return response;
+    }
+    let method = req.method().clone();
+    let headers = req.headers().clone();
+    let mut response = workflows_reply(&st, peer, req).await;
+    hangar_core::http_cors::apply(&headers, &mut response);
+    hangar_core::http_route_response::suppress_head(&method, &mut response);
+    st.diag.report_response("rust.workflows_failed", "", &response, "a leitura do workflow falhou");
+    response
+}
+
+async fn workflows_reply(st: &AppState, peer: SocketAddr, req: Request) -> Response {
+    use hangar_core::http::{detail, json_response};
+    use serde_json::json;
+
+    let path = percent_encoding::percent_decode_str(req.uri().path()).decode_utf8_lossy();
+    let decision = hangar_core::http_contract::resolve(hangar_workflows::ROUTES, req.method().as_str(), &path);
+    let (_, https) = st.cfg.trusted.resolve(peer.ip(), req.headers());
+    if let Some(response) = hangar_core::http_route_response::response(
+        &decision, req.method(), req.uri(), req.headers(), https, &st.cfg.listen.to_string(),
+    ) {
+        return response;
+    }
+    match crate::share::caller::caller(&req) {
+        Some(Caller::Guest(grant)) => {
+            if !crate::share::caller::guest_allowed(req.method(), req.uri().path(), grant) {
+                return detail(StatusCode::FORBIDDEN, "erro_fora_do_convite", "fora da sessão compartilhada", json!({}));
+            }
+        }
+        _ => if let Err(response) = owner_gate(st, peer, &req).await { return response; },
+    }
+    let parts = path.split('/').collect::<Vec<_>>();
+    let name = parts[3];
+    let missing = || detail(StatusCode::NOT_FOUND, "erro_sessao_inexistente", "session or transcript not found", json!({}));
+    let info = match tokio::time::timeout(crate::locate::LOCATE_TIMEOUT, st.info(name)).await {
+        Ok(Ok(Some(info))) => info,
+        Ok(Ok(None)) => return missing(),
+        Ok(Err(error)) => return detail(StatusCode::SERVICE_UNAVAILABLE, error.0, "a descoberta da sessão falhou", json!({})),
+        Err(_) => return detail(StatusCode::SERVICE_UNAVAILABLE, "locate_timeout", "a lista de sessões não respondeu a tempo", json!({})),
+    };
+    let Some(transcript) = info.jsonl.filter(|path| !path.as_os_str().is_empty()) else { return missing() };
+    let run_id = parts.get(5).map(|part| (*part).to_owned());
+    let agent_id = parts.get(7).map(|part| (*part).to_owned());
+    let missing_code = if agent_id.is_some() { "erro_agente_inexistente" } else { "erro_workflow_inexistente" };
+    let missing_message = if agent_id.is_some() { "agent not found" } else { "workflow run not found" };
+    match tokio::task::spawn_blocking(move || {
+        match (run_id, agent_id) {
+            (Some(run), Some(agent)) => hangar_workflows::get_agent(&transcript, &run, &agent),
+            (Some(run), None) => hangar_workflows::get_workflow(&transcript, &run),
+            _ => hangar_workflows::list_workflows(&transcript).map(Some),
+        }
+    }).await {
+        Ok(Ok(Some(value))) => json_response(StatusCode::OK, value),
+        Ok(Ok(None)) => detail(StatusCode::NOT_FOUND, missing_code, missing_message, json!({})),
+        _ => hangar_core::http_cors::internal_error(),
+    }
+}
 
 async fn request_auth(mut req: Request, next: axum::middleware::Next) -> Response {
     // O porteiro externo e o roteador interno compartilham a mesma admissão.

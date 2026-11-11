@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux", "hangar-connect", "hangar-plugins", "hangar-update-news", "hangar-http-file", "hangar-desktop-theme"]
+members = ["hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux", "hangar-connect", "hangar-plugins", "hangar-update-news", "hangar-workflows", "hangar-http-file", "hangar-desktop-theme"]
 
 [workspace.package]
 version = "0.1.0"
@@ -48,6 +48,7 @@ hangar-transcript = { path = "hangar-transcript" }
 hangar-omp-sync = { path = "hangar-omp-sync" }
 hangar-connect = { path = "hangar-connect" }
 hangar-plugins = { path = "hangar-plugins" }
+hangar-workflows = { path = "hangar-workflows" }
 hangar-http-file = { path = "hangar-http-file" }
 hangar-desktop-theme = { path = "hangar-desktop-theme" }
 mime_guess = "=2.0.5"

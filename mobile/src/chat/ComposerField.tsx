@@ -30,13 +30,15 @@ export function ComposerDock({ style, ...props }: ViewProps) {
   return <View {...props} testID="chat-dock" style={[style, { maxHeight: Math.max(96, (availableHeight ?? height) - 96), flexShrink: 1 }]} />;
 }
 
-export function ComposerBox({ focused, children }: { focused: boolean; children: ReactNode }) {
+// `footer`: os botões ficam fora da rolagem, sempre à vista no pé da caixa, por mais que o texto cresça.
+export function ComposerBox({ focused, children, footer }: { focused: boolean; children: ReactNode; footer?: ReactNode }) {
   const { theme } = useUnistyles();
   const accent = hexParaRgb(theme.tokens.accent.base);
   return <Glass variant="chrome" style={[styles.box, focused && accent ? { borderColor: `rgba(${accent.join(',')},0.45)` } : null]}>
-    <ScrollView style={styles.boxScroll} contentContainerStyle={styles.boxContent} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
+    <ScrollView style={styles.boxScroll} contentContainerStyle={footer ? styles.boxContentAbove : styles.boxContent} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
       {children}
     </ScrollView>
+    {footer ? <View style={styles.boxFooter}>{footer}</View> : null}
   </Glass>;
 }
 
@@ -100,9 +102,7 @@ export function modeMenuHandlers(menu: ModeMenu | undefined) {
   return { pick, openIOS, actions, a11yActions, current: options.find((o) => o.checked)!.mode };
 }
 
-// `field`: o campo entra na própria fileira ([+] campo [modelo] [mic] [enviar]), que cresce com o texto.
-export function ComposerActions({ attach, mic, send, settings, beforeMic, afterMic, afterSettings, modeMenu, field }: {
-  field?: ReactNode;
+export function ComposerActions({ attach, mic, send, settings, beforeMic, afterMic, afterSettings, modeMenu }: {
   attach: Action;
   mic: Action & { recording: boolean; styleLabel: string; onStyle: () => void };
   send: Action & { label: string; hint?: string; editing?: boolean; count?: number; visible?: boolean };
@@ -112,7 +112,13 @@ export function ComposerActions({ attach, mic, send, settings, beforeMic, afterM
   const count = send.count ?? 0;
   const menu = useMemo(() => modeMenuHandlers(modeMenu), [modeMenu]);
   const ios = Platform.OS === 'ios';
-  const micGroup = <>
+  return <View style={styles.row}>
+    <Pressable onPress={attach.onPress} disabled={attach.disabled} hitSlop={5}
+      accessibilityState={{ disabled: attach.disabled, busy: attach.busy }}
+      style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed, attach.disabled && styles.disabled]}
+      accessibilityLabel={m.composer_adicionar_ao_chat()} accessibilityRole="button">
+      {attach.busy ? <ActivityIndicator size="small" color={theme.tokens.text.secondary} /> : <Icon name="Plus" size={22} color={theme.tokens.text.secondary} />}
+    </Pressable>
     {beforeMic}
     <Pressable onPress={mic.onPress} disabled={mic.disabled} hitSlop={5}
       accessibilityState={{ disabled: mic.disabled, busy: mic.busy }}
@@ -126,14 +132,10 @@ export function ComposerActions({ attach, mic, send, settings, beforeMic, afterM
         : <Icon name={mic.recording ? 'Square' : 'Mic'} size={mic.recording ? 16 : 20} color={mic.recording ? theme.tokens.status.error : theme.tokens.text.secondary} />}
     </Pressable>
     {afterMic}
-  </>;
-  const attachBtn = <Pressable onPress={attach.onPress} disabled={attach.disabled} hitSlop={5}
-    accessibilityState={{ disabled: attach.disabled, busy: attach.busy }}
-    style={({ pressed }) => [styles.iconBtn, pressed && styles.pressed, attach.disabled && styles.disabled]}
-    accessibilityLabel={m.composer_adicionar_ao_chat()} accessibilityRole="button">
-    {attach.busy ? <ActivityIndicator size="small" color={theme.tokens.text.secondary} /> : <Icon name="Plus" size={22} color={theme.tokens.text.secondary} />}
-  </Pressable>;
-  const sendBtn = send.visible === false ? null : withModeMenu(menu, ios, send.disabled, <Pressable
+    <View style={styles.spacer} />
+    {settings}
+    {afterSettings}
+    {send.visible === false ? null : withModeMenu(menu, ios, send.disabled, <Pressable
       onPress={() => { void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); send.onPress(); }}
       disabled={send.disabled} hitSlop={5} accessibilityState={{ disabled: send.disabled, busy: send.busy }}
       // No Android o toque longo é do MenuView; o no-op impede que soltar o dedo vire envio.
@@ -147,20 +149,7 @@ export function ComposerActions({ attach, mic, send, settings, beforeMic, afterM
       {count > 0 ? <View style={[styles.queueBadge, { backgroundColor: theme.tokens.status.warning }]} pointerEvents="none">
         <Text style={[styles.queueBadgeText, { color: theme.tokens.text.inverse }]} maxFontSizeMultiplier={1.4}>{count > 9 ? '9+' : count}</Text>
       </View> : null}
-    </Pressable>);
-  // Gravando, a onda precisa da largura toda: o campo ocupa a linha e os botões descem para a de baixo.
-  if (field) return <View style={[styles.row, styles.rowField, mic.recording && styles.rowRecording]}>
-    {mic.recording ? null : <View style={styles.side}>{attachBtn}</View>}
-    <View style={mic.recording ? styles.fieldLine : styles.spacer}>{field}</View>
-    <View style={styles.side}>{settings}{micGroup}{afterSettings}{sendBtn}</View>
-  </View>;
-  return <View style={styles.row}>
-    {attachBtn}
-    {micGroup}
-    <View style={styles.spacer} />
-    {settings}
-    {afterSettings}
-    {sendBtn}
+    </Pressable>)}
   </View>;
 }
 
@@ -185,6 +174,8 @@ const styles = StyleSheet.create((theme) => ({
   boxScroll: { flexGrow: 0, flexShrink: 1 },
   // Fila, anexos e áudio também precisam ficar alcançáveis quando juntos excedem a área útil.
   boxContent: { paddingHorizontal: theme.base.space[3], paddingTop: theme.base.space[3], paddingBottom: theme.base.space[2], gap: theme.base.space[1] },
+  boxContentAbove: { paddingHorizontal: theme.base.space[3], paddingTop: theme.base.space[3], gap: theme.base.space[1] },
+  boxFooter: { paddingHorizontal: theme.base.space[3], paddingTop: theme.base.space[1], paddingBottom: theme.base.space[2] },
   inputWrap: { flexShrink: 1, minHeight: 40, justifyContent: 'center', paddingHorizontal: theme.base.space[1] },
   inputText: { ...theme.type.body, paddingVertical: theme.base.space[2], paddingHorizontal: theme.base.space[2] },
   shrinkInput: { flexShrink: 1 },
@@ -194,13 +185,6 @@ const styles = StyleSheet.create((theme) => ({
   recordingWrap: { minHeight: 92 },
   wave: { justifyContent: 'center', paddingHorizontal: theme.base.space[1] },
   row: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1.5] },
-  // Texto de várias linhas: os botões ficam no pé da caixa.
-  rowField: { alignItems: 'flex-end' },
-  rowRecording: { flexWrap: 'wrap', justifyContent: 'flex-end' },
-  // Largura fixa e sem flex: o único filho flexível da fileira fica com base 0 e a linha não quebra.
-  fieldLine: { width: '100%' },
-  // A altura de uma linha do campo: os botões ficam no meio dela, no pé da caixa.
-  side: { minHeight: 40, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1.5] },
   spacer: { flex: 1, minWidth: 0 },
   iconBtn: { width: 34, height: 34, borderRadius: theme.base.radius.full, alignItems: 'center', justifyContent: 'center' },
   recordingBtn: { width: 44, height: 44 },

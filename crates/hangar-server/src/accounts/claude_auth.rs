@@ -114,7 +114,8 @@ impl AccountService {
         command.args(&program[1..]);
         Some(command)
     }
-    /// O `claude` do `PATH` da conta como argv: no Windows sem `claude.exe`, o `node.exe` + `cli.js`.
+    /// O `claude` do `PATH` da conta como argv. No Windows a instalação pelo npm deixa no `PATH`
+    /// só o `claude.cmd`: o executável fica no pacote (`bin/claude.exe`; antigo, `node` + `cli.js`).
     pub(crate) fn claude_program(&self) -> Option<Vec<std::path::PathBuf>> {
         let path = &self
             .env
@@ -128,12 +129,29 @@ impl AccountService {
                 if exe.is_file() {
                     return Some(vec![exe]);
                 }
-                let script = dir.join("node_modules/@anthropic-ai/claude-code/cli.js");
+                // O pacote npm fica em `node_modules` (global) ou ao lado da `.bin` (local). Rodar o
+                // executável dele evita o `cmd.exe` e as aspas do `claude.cmd`.
+                let package = if dir.file_name().is_some_and(|n| n == ".bin") {
+                    dir.with_file_name("@anthropic-ai/claude-code")
+                } else {
+                    dir.join("node_modules/@anthropic-ai/claude-code")
+                };
+                let shim = dir.join("claude.cmd").is_file();
+                let exe = package.join("bin/claude.exe");
+                if shim && native_executable(&exe) {
+                    return Some(vec![exe]);
+                }
+                let script = package.join("cli.js");
                 if script.is_file() {
                     let node = std::env::split_paths(path)
                         .map(|dir| dir.join("node.exe"))
                         .find(|p| p.is_file())?;
                     return Some(vec![node, script]);
+                }
+                // A pasta do `claude.cmd` é a que o terminal rodaria: sem executável nela, outra
+                // instalação mais adiante no `PATH` seria outro `claude`.
+                if shim {
+                    return None;
                 }
             } else if dir.join("claude").is_file() {
                 return Some(vec![dir.join("claude")]);
@@ -429,5 +447,54 @@ fn limit(path: &Path) -> Value {
             json!({"estado":"lido","linha":line,"ts":ts,"idade_s":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64()-ts})
         }
         None => json!({"estado":"sem_leitura","linha":null,"ts":null,"idade_s":null}),
+    }
+}
+
+/// Sem o postinstall, o `bin/claude.exe` do pacote npm é um script de aviso, não um executável.
+fn native_executable(path: &Path) -> bool {
+    use std::io::Read;
+    let mut magic = [0; 2];
+    fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut magic))
+        .is_ok_and(|()| &magic == b"MZ")
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::super::environment::AccountEnvironment;
+    use super::*;
+
+    fn program(path: &[&Path]) -> Option<Vec<std::path::PathBuf>> {
+        let path = std::env::join_paths(path).unwrap().to_string_lossy().into_owned();
+        AccountService::new(AccountEnvironment::from_map(
+            [("HOME".into(), "C:\\".into()), ("PATH".into(), path)].into_iter().collect(),
+        ))
+        .claude_program()
+    }
+
+    #[test]
+    fn npm_install_runs_the_package_exe_from_the_dir_with_claude_cmd() {
+        let root = tempfile::tempdir().unwrap();
+        let global = root.path().join("npm");
+        let local = root.path().join("proj/node_modules/.bin");
+        let stale = root.path().join("stale");
+        for (bin, package) in [
+            (&global, global.join("node_modules/@anthropic-ai/claude-code")),
+            (&local, root.path().join("proj/node_modules/@anthropic-ai/claude-code")),
+        ] {
+            fs::create_dir_all(package.join("bin")).unwrap();
+            fs::create_dir_all(bin).unwrap();
+            fs::write(bin.join("claude.cmd"), "@echo off").unwrap();
+            fs::write(package.join("bin/claude.exe"), b"MZ native").unwrap();
+        }
+        fs::create_dir_all(&stale).unwrap();
+        fs::write(stale.join("claude.exe"), b"MZ old").unwrap();
+        let exe = |dir: &Path| dir.join("node_modules/@anthropic-ai/claude-code/bin/claude.exe");
+
+        assert_eq!(program(&[&global, &stale]), Some(vec![exe(&global)]));
+        assert_eq!(program(&[&local]), Some(vec![exe(&root.path().join("proj"))]));
+
+        fs::write(exe(&global), "echo Error: claude native binary not installed.").unwrap();
+        assert_eq!(program(&[&global, &stale]), None, "o aviso não roda nem cede a outro claude");
     }
 }

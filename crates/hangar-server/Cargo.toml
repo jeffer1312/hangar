@@ -48,6 +48,7 @@ hangar-core.workspace = true
 hangar-transcript.workspace = true
 hangar-omp-sync.workspace = true
 hangar-plugins.workspace = true
+hangar-workflows.workspace = true
 hangar-http-file.workspace = true
 hangar-desktop-theme.workspace = true
 hangar-connect.workspace = true

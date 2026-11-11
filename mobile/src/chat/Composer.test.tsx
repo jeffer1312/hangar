@@ -60,7 +60,7 @@ vi.mock('../features/ditado/dictationRun', () => ({
 }));
 vi.mock('./draftAttachments', () => ({ retainDraftAttachment: async (attachment: unknown) => attachment, removeDraftAttachment: vi.fn() }));
 vi.mock('./ComposerField', () => ({
-  ComposerBox: ({ children }: { children: ReactNode }) => createElement('div', null, children),
+  ComposerBox: ({ children, footer }: { children: ReactNode; footer?: ReactNode }) => createElement('div', null, children, footer),
   ComposerInput: ({ value, onCancelRecording }: { value: string; onCancelRecording?: () => void }) => createElement('div', null,
     createElement('textarea', { value, readOnly: true }),
     onCancelRecording ? createElement('button', { 'aria-label': 'cancel-recording', onClick: onCancelRecording }) : null),

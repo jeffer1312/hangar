@@ -189,7 +189,7 @@ Kimi Code. Setup details, Tailscale, the phone and every feature are in the
         ┌──────────────┬──────────────┬──────────────┬──────────────────┐
    Claude Code       Codex       Pi / omp       Kimi Code      Python em loopback
    JSONL + tmux     app-server   JSONL + ext.    wire.jsonl     transferência C→C,
-   ou sem terminal  + TUI ou     e sidecars     e hooks        workflows e runners
+   ou sem terminal  + TUI ou     e sidecars     e hooks        runners
                     sem terminal
 ```
 
@@ -199,10 +199,10 @@ and Codex run as managed processes with durable sidecars. The CLIs and providers
 still send data according to their own policies.
 
 O backend migra para Rust por responsabilidade. O servidor Rust atende as sessões dos cinco
-agentes, a lista, contas e cotas, anexos, MCP, convidados, transcrição e compartilhamento
+agentes, a lista, contas e cotas, anexos, MCP, convidados, transcrição, workflows e compartilhamento
 (porta 8766, convites e pares externos). Pi, omp e Kimi têm estado, prévia, entrada, perguntas,
 fila, histórico e ciclo de vida inteiros no Rust. O Python conserva a transferência do Claude
-para o Codex, workflows, runners e a reserva reduzida de Claude/Codex quando o Supervisor
+para o Codex, runners e a reserva reduzida de Claude/Codex quando o Supervisor
 desliga o Rust. Sem Rust, a porta de convidados fica fechada. Contratos e limites:
 [contas e anexos](docs/decisoes/accounts-uploads-rust.md).
 

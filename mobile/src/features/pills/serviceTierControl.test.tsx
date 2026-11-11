@@ -200,6 +200,23 @@ describe('Troca de conta na folha de ajustes real', () => {
 });
 
 describe('Modelos na folha de ajustes real', () => {
+  it('oferece o Fable 5.2 pelo identificador completo do catálogo e conserva a escolha', async () => {
+    state.rows[0] = { ...state.rows[0], provider: 'claude', model: 'claude-opus-5-5' };
+    api.models.mockResolvedValue({ kind: 'claude', engine: null, models: [
+      { id: 'opus', name: 'Opus 5.5' },
+      { id: 'claude-fable-5-2', name: 'Fable 5.2' },
+      { id: 'fable', name: 'Fable 5.1' },
+    ] });
+    api.modelWrite.mockResolvedValue({ ok: true, scope: 'session', result: 'Set model to Fable 5.2' });
+    const { container } = await mount('claude', 'a', { which: 'model', n: 1 });
+    const fable = [...container.querySelectorAll<HTMLButtonElement>('[role="radio"]')]
+      .find((button) => button.textContent?.includes('Fable 5.2'));
+    expect(fable).toBeDefined();
+    await act(async () => fable!.click());
+    expect(api.modelWrite).toHaveBeenCalledWith('sess', { model: 'claude-fable-5-2', scope: 'session' }, state.servers[0]);
+    expect(container.querySelector('[aria-label="composer_session_settings"]')?.textContent).toContain('Fable 5.2');
+  });
+
   it.each([
     { key: 'id', items: [{ id: 'a', label: 'A' }, { id: 'b', label: 'B' }] },
     { key: 'hint', items: [{ label: 'Modelo', hint: 'pi/a' }, { label: 'Modelo', hint: 'omp/b' }] },

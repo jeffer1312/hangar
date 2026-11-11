@@ -104,7 +104,8 @@ pub fn normalize(model: Option<&str>, effort: Option<&str>) -> Result<(Option<St
     let keyword = |value: Option<&str>| value.filter(|v| !v.is_empty()).map(|v| trim(v).to_lowercase());
     let (model_kw, effort_kw) = (keyword(model), keyword(effort));
     if model_kw.is_none() && effort_kw.is_none() { return Err("must provide model or effort".into()); }
-    if model_kw.as_deref().is_some_and(|k| !k.is_empty() && !P.keyword.is_match(k)) {
+    if model_kw.as_deref().is_some_and(|k| !k.is_empty() && !P.keyword.is_match(k)
+        && !(k.starts_with("claude-") && crate::session_open::resolve::valid_model(k))) {
         return Err(format!("unknown model {}", py_repr(model.unwrap_or_default())));
     }
     if effort_kw.as_deref().is_some_and(|k| !k.is_empty() && !EFFORT_ORDER.contains(&k)) {
@@ -440,7 +441,17 @@ pub fn result_model(line: &str) -> Option<&str> {
     rest.split(whitespace).find(|part| !part.is_empty())
 }
 
-/// Motores aceitam IDs arbitrários por argumento; o seletor só oferece aliases da Anthropic.
+fn confirms_model(line: &str, model: &str) -> bool {
+    if result_model(line) == Some(model) { return true; }
+    if !model.starts_with("claude-") { return false; }
+    let Some(label) = line.strip_prefix("Set model to ") else { return false; };
+    let label = label.split(" and saved as your default for new sessions").next().unwrap_or(label);
+    let normalized = |value: &str| value.to_lowercase().replace("(1m context)", "·1m")
+        .chars().filter(|c| !whitespace(*c)).collect::<String>();
+    normalized(label) == normalized(&crate::runtime::local_policy::model_label(model))
+}
+
+/// IDs completos vão por argumento: o seletor não oferece todas as versões do catálogo.
 pub async fn drive_engine(driver: &TerminalDriver, model: &str) -> Result<Value, Refusal> {
     let model = normalize_engine(model).map_err(|detail| coded("erro_corpo_invalido", detail))?;
     let model = model.as_str();
@@ -459,7 +470,7 @@ pub async fn drive_engine(driver: &TerminalDriver, model: &str) -> Result<Value,
             return Err(picker.abort(format!("o Claude Code nao aceitou `/model {model}`")).await);
         }
         let result = parse_result_line(&pane);
-        if result.as_deref().and_then(result_model) == Some(model) {
+        if result.as_deref().is_some_and(|line| confirms_model(line, model)) {
             return Ok(json!({"ok":true,"result":result}));
         }
         if Instant::now() >= deadline {
