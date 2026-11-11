@@ -97,7 +97,7 @@ async fn reply(state: Arc<Http>, peer: Option<SocketAddr>, request: Request) -> 
                 "sem paleta",
                 json!({}),
             ),
-            Err(_) => hangar_core::http_cors::internal_error(),
+            Err(_) => failed(&state, "palette_task".into()),
         };
     }
     let path = match tokio::task::spawn_blocking(move || theme.wallpaper()).await {
@@ -110,15 +110,17 @@ async fn reply(state: Arc<Http>, peer: Option<SocketAddr>, request: Request) -> 
                 json!({}),
             );
         }
-        _ => return hangar_core::http_cors::internal_error(),
+        Ok(Err(error)) => return failed(&state, io_code("wallpaper_pointer", &error)),
+        Err(_) => return failed(&state, "wallpaper_task".into()),
     };
     let file = match tokio::fs::File::open(&path).await {
         Ok(file) => file,
-        Err(_) => return hangar_core::http_cors::internal_error(),
+        Err(error) => return failed(&state, io_code("wallpaper_open", &error)),
     };
     let metadata = match file.metadata().await {
         Ok(metadata) if metadata.is_file() => metadata,
-        _ => return hangar_core::http_cors::internal_error(),
+        Ok(_) => return failed(&state, "wallpaper_not_file".into()),
+        Err(error) => return failed(&state, io_code("wallpaper_metadata", &error)),
     };
     let media = mime_guess::from_path(&path)
         .first_or_octet_stream()
@@ -128,7 +130,7 @@ async fn reply(state: Arc<Http>, peer: Option<SocketAddr>, request: Request) -> 
             .await
         {
             Ok(response) => response,
-            Err(_) => return hangar_core::http_cors::internal_error(),
+            Err(error) => return failed(&state, io_code("wallpaper_read", &error)),
         };
     if response.status().is_success() {
         response.headers_mut().insert(
@@ -137,4 +139,14 @@ async fn reply(state: Arc<Http>, peer: Option<SocketAddr>, request: Request) -> 
         );
     }
     response
+}
+
+/// O 500 continua igual; a etapa e o tipo do erro vão ao diário, que antes não via nada.
+fn failed(state: &Http, code: String) -> Response {
+    state.edge.diag.report("rust.desktop_theme_failed", "desktop", &code, "aparência do desktop não lida");
+    hangar_core::http_cors::internal_error()
+}
+
+fn io_code(stage: &str, error: &std::io::Error) -> String {
+    format!("{stage}:{:?}", error.kind())
 }
