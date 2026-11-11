@@ -119,11 +119,28 @@ static MISSES: std::sync::Mutex<Vec<(std::path::PathBuf, &'static str)>> = std::
 static DIRECT_READS: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
 
 /// A conferência é do programa e da pasta de dados, não do `Mux`: quem cria um por pedido a reaproveita.
+type Gates = std::collections::HashMap<GateKey, std::sync::Arc<std::sync::Mutex<Gate>>>;
+static GATES: std::sync::LazyLock<std::sync::Mutex<Gates>> = std::sync::LazyLock::new(Default::default);
+
 fn shared_gate(program: &OsString, dir: &std::path::Path) -> std::sync::Arc<std::sync::Mutex<Gate>> {
-    static GATES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<GateKey, std::sync::Arc<std::sync::Mutex<Gate>>>>> =
-        std::sync::LazyLock::new(Default::default);
     GATES.lock().unwrap_or_else(|e| e.into_inner()).entry((program.clone(), dir.to_path_buf()))
         .or_insert_with(|| std::sync::Arc::new(std::sync::Mutex::new(Gate::Unchecked))).clone()
+}
+
+/// A pasta do psmux cuja leitura direta de `program` está conferida agora para o servidor `base`. A
+/// escrita da entrada só vai direto com isso: o servidor responde `OK` até a alvo errado, e só a
+/// conferência da lista contra o CLI prova que aquele registro é o do programa.
+pub fn verified_direct(program: &std::ffi::OsStr, base: &str) -> Option<std::path::PathBuf> {
+    let gates: Vec<_> = GATES.lock().unwrap_or_else(|e| e.into_inner()).iter()
+        .filter(|((p, _), _)| p.as_os_str() == program).map(|((_, dir), gate)| (dir.clone(), gate.clone())).collect();
+    gates.into_iter().find(|(_, gate)| matches!(&*gate.lock().unwrap_or_else(|e| e.into_inner()),
+        Gate::Verified { servers, at } if at.elapsed() < REVALIDATE && servers.iter().any(|s| s.base == base)))
+        .map(|(dir, _)| dir)
+}
+
+#[cfg(test)]
+pub(crate) fn verify_for_test(program: &str, dir: &std::path::Path, servers: Vec<hangar_psmux::Server>) {
+    *shared_gate(&program.into(), dir).lock().unwrap() = Gate::Verified { servers, at: std::time::Instant::now() };
 }
 
 #[derive(Clone, Debug)]

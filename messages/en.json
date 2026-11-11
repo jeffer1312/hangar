@@ -1647,6 +1647,7 @@
   "queue_steer_not_delivered": "The agent didn't accept it now; the message stays queued",
   "queue_steer_question_open": "Answer the pending permission or question before steering",
   "queue_steer_uncertain": "Couldn't confirm the message arrived; check the conversation before repeating",
+  "queue_steer_delivery_unproved": "An earlier unconfirmed message is holding the queue; discard it to steer this one",
   "composer_session_settings": "Model, level and permission",
   "composer_session_settings_hint": "Opens the model, level and permission choices",
   "composer_mic_style_hint": "Dictation style: {estilo}. Long press to change.",

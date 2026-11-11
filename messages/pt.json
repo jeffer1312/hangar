@@ -1647,6 +1647,7 @@
   "queue_steer_not_delivered": "O agente não aceitou agora; a mensagem continua na fila",
   "queue_steer_question_open": "Responda a permissão ou pergunta pendente antes de orientar",
   "queue_steer_uncertain": "Não deu para confirmar se a mensagem chegou; confira a conversa antes de repetir",
+  "queue_steer_delivery_unproved": "Uma mensagem anterior sem confirmação segura a fila; descarte-a para orientar esta",
   "composer_session_settings": "Modelo, nível e permissão",
   "composer_session_settings_hint": "Abre a escolha de modelo, nível e permissão",
   "composer_mic_style_hint": "Estilo do ditado: {estilo}. Toque longo para trocar.",

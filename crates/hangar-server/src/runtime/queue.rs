@@ -221,6 +221,11 @@ impl State {
         let conversation=Value::from(conversation);
         self.operations.iter().any(|(key,op)|!key.starts_with(CALL_PREFIX) && holds_terminal_write(op,&conversation))
     }
+    /// Alguma entrega sem prova ainda: trocar o servidor agora perderia o que decide se ela chegou.
+    pub fn delivery_uncertain(&self)->bool {
+        self.runtime_state["terminal_write_barrier"].is_object() || !uncertain_entries(self).is_empty()
+            || self.operations.iter().any(|(key,op)|!key.starts_with(CALL_PREFIX) && holds_terminal_write(op,&Value::Null))
+    }
     /// O `GiveUpUnproved` desistiria de alguma entrada agora? Toda ação grava a fila, até a que não muda nada.
     pub fn unproved_due(&self,now:f64,grace:f64)->bool {
         let uncertain=uncertain_entries(self);
@@ -1097,6 +1102,8 @@ fn apply(state: &mut State, action: Action, clock: ClockSample, call_id: &str) -
             for row in &mut state.rows { if Some(row_id(row)) == op.entry_id.as_deref() {
                 row["delivered"] = json!(true);
                 if row.get("dispatched_ts").is_none() { row["dispatched_ts"] = json!(clock.epoch_s); }
+                // O `dispatched_ts` fica da primeira (a prova atrasada dela ainda vale); o prazo da incerta é desta tentativa.
+                row["attempt_ts"] = json!(clock.epoch_s);
             } }
             serde_json::to_value(op)?
         }

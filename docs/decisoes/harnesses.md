@@ -655,7 +655,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   aperta `ctrl+x ctrl+s`, que leva junto o que já estava na fila interna do Claude Code e interrompe
   o turno; parado, ela vai para a frente e sai na entrega comum. As ações do painel (apagar,
   editar, reordenar, Orientar) valem só para a entrada que ainda espera e passam pelo ator da
-  sessão; a que a drenagem já reivindicou responde 409 `queue_entry_gone`. O `/steer` sem corpo
+  sessão; a que a drenagem já reivindicou responde 409 `queue_entry_gone`. Com uma entrega incerta
+  segurando a escrita, o Orientar responde 409 `queue_steer_delivery_unproved` sem tecla nem troca
+  de ordem, e o app manda descartar a incerta. O `/steer` sem corpo
   (chip de app antigo) é o Orientar da primeira que espera; sem nenhuma, promove como antes. Limite:
   `/clear` ou `/resume` digitados direto no terminal no meio do turno trocam o session-id, e a troca
   de vínculo descarta as mensagens que o app segurava. Ver
@@ -669,6 +671,11 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   recusada (`clear_not_applied`, a reabertura não a ergue de novo), a fila segue e a vista avisa.
   O `/clear` nunca é reenviado sozinho. Com o Claude trabalhando ele espera na fila do Claude
   Code, e a trava espera o turno.
+- **O prazo da entrega incerta conta do despacho gravado na linha**, não do primeiro tique do
+  executor: a reabertura troca o executor e não recomeça a espera. É o `attempt_ts`, regravado a
+  cada tentativa; o `dispatched_ts` fica o da primeira, porque a prova atrasada dela ainda vale
+  (`actor.rs`), e numa reentrega daria a incerta nova por vencida na hora. Ver
+  [fila travada numa máquina lenta](#fila-travada-por-entrega-incerta-numa-máquina-lenta-11112026).
 
 - **Comando de barra adiado é erro na tela, nunca 200.** Ele não tem linha na fila e não roda
   depois sozinho (`erro_comando_nao_executado`).
@@ -1082,6 +1089,29 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   conta. Quem apaga a fila apaga o irmão (`queue::discard`). Quem lê o arquivo cru sem o `Store`
   não vê o catálogo. Ver
   [catálogo de comandos fora do arquivo da fila](#catálogo-de-comandos-fora-do-arquivo-da-fila-10112026).
+
+## Fila travada por entrega incerta numa máquina lenta (11/11/2026)
+
+(Relatório `uedvxrgb`, Windows com psmux, servidor 0.1.0.10153.) A Coordenadora ficou com a
+entrada incerta (`input_unproved`, etapa `write`) às 11:06:55 e só desistiu dela às 11:12:53, quase
+6 min depois, com o prazo de 180 s: o relógio vivia só no executor, e a reabertura da sessão em erro
+(`runtime_reopened`, pedida por histórico, SSE ou escrita) criava outro com a contagem zerada. No
+mesmo intervalo o Orientar respondeu 409 `queue_steer_not_delivered` duas vezes (11:09:05,
+11:11:15): com a trava, a drenagem não entrega nada, e o "não aceitou agora" convidava a repetir sem
+efeito. O teste `terminal_runtime_uncertain_deadline_counts_from_the_dispatch_across_reopen` abre o
+executor com uma incerta despachada há 10 min e espera a desistência sem novo prazo;
+`terminal_runtime_steer_entry_behind_an_uncertain_delivery_names_it_without_keys` cobre o código
+novo do Orientar.
+
+Na mesma máquina o texto ficava no composer sem enviar: o `Enter` (outro `tmux.exe`, a 1,1 s cada)
+se perdia, a prova do envio via o texto parado e a entrega virava `submit_unproved`, que a
+desistência não tira com o campo ocupado; a pessoa apagava o campo à mão para a fila andar. Agora,
+passado um quarto das leituras da prova, o campo ainda com exatamente o texto da entrega (compactado,
+sem anexo nem texto a mais, na captura com e sem estilo) e sem pergunta aberta ganha outro `Enter`,
+uma vez, com uma leitura a mais para a prova dele (`terminal_input.rs`, `submit`). Enviado, o Claude
+esvazia o campo, então texto ali é envio que não houve; o que não for só o nosso texto fica com o
+Descartar, como antes. Testes: `terminal_runtime_lost_enter_with_only_our_text_in_the_field_is_pressed_again`,
+`terminal_runtime_lost_enter_is_pressed_again_only_once` e `repeat_enter_tests`.
 
 ## Catálogo de comandos fora do arquivo da fila (10/11/2026)
 
