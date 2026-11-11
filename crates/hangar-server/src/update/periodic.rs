@@ -118,7 +118,12 @@ pub async fn tick(machine: &impl Machine, now: Time, since: Option<Time>) -> Tic
         }
         Ok(Some(busy)) => tracing::warn!("update: adiada há 24 h ({}); atualiza assim mesmo", busy.why()),
         // Já adiada, não saber se a máquina parou não solta nem zera o teto.
-        Err(e) if since.is_some() => return Tick::Deferred(format!("lista indisponível: {e}")),
+        Err(e) if since.is_some() => {
+            if since.is_some_and(|since| now - since >= DEFER_CEILING) && crate::warn_limit::allow(None, "update_deferred_list_down") {
+                tracing::warn!(code = "update_deferred_list_down", "update: adiada há mais de 24 h e a lista não responde ({e}); segue adiada");
+            }
+            return Tick::Deferred(format!("lista indisponível: {e}"));
+        }
         Err(e) => return Tick::Skipped(format!("lista indisponível: {e}")),
     }
     match machine.launch().await {

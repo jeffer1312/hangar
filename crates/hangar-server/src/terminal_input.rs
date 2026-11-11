@@ -1159,7 +1159,13 @@ impl TerminalDriver {
                 if expected.is_none() && !slash && !resent && attempt >= attempts / 4
                     && ComposerSnapshot::parse(&typed).is_some_and(|now| now.only(text))
                     && ComposerSnapshot::parse(&screen).is_some_and(|now| now.only(text)) {
-                    if !self.verify().await.is_ok_and(|facts| !facts.open_question) { continue; }
+                    let blocked = match self.verify().await { Ok(facts) if !facts.open_question => None, Ok(_) => Some("open_question"), Err(e) => Some(e.code) };
+                    if let Some(code) = blocked {
+                        if crate::warn_limit::allow(Some(&self.binding.name), "submit_enter_repeat_blocked") {
+                            tracing::warn!(session = %self.binding.name, code, "o texto seguiu no campo, mas o Enter de novo não saiu");
+                        }
+                        continue;
+                    }
                     resent = true;
                     tracing::info!(code = "submit_enter_repeated", "o texto seguiu no campo depois do Enter; um Enter de novo");
                     if let Err(e) = self.key_inner("Enter").await { return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Submit, e.code); }
