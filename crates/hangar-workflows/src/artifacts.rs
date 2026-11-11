@@ -16,7 +16,7 @@ pub(crate) fn session_dir(transcript: &Path) -> PathBuf {
 
 /// Ids viram nome de arquivo: separador ou `..` sairia da pasta da sessão.
 pub(crate) fn safe_id(id: &str) -> bool {
-    !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    !id.is_empty() && id != "." && id != ".." && id.chars().all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
 pub(crate) fn entries(directory: &Path) -> Vec<PathBuf> {
