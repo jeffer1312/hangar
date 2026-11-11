@@ -316,8 +316,8 @@ O que a tabela mostra:
 - **1.919 testes que saem moram no `tests/it` do servidor.** Eles não saem sozinhos: mover o módulo
   sem levar esses arquivos para o `tests/it` do crate novo deixa a verificação igual. Só os de
   `src/` saem de graça.
-- **Com tudo extraído, o `it` do servidor fica com 1.656 testes**, e não some: é o que precisa do
-  servidor inteiro.
+- **Com tudo extraído, ficam no servidor 1.656 testes**: 1.440 no `it`, 172 em `src/` e 44 em
+  executáveis à parte. Não somem: são os que precisam do servidor inteiro.
 - **Rende pouco na verificação** (quase tudo 2a, mexer neles ainda dispara o `it` grande):
   `workspace_routes` 2%, `routes` 5%, `worktree_routes` 12%, `archive_list` 14%, `session_media`
   26%, `term` 35%, `dictation` 37%, `mcp` 43%, `connect` 46%. `costs_routes` está em 0% hoje porque
@@ -357,8 +357,11 @@ mudam o dia a dia e valem como pré-requisito dele.
 1. Nesta fase a ordem fica: Task 5 e 6 (`costs`: 166 testes, mais os 71 de `tests/costs_hook` e,
    com o `CostsState`, os 50 de `costs_routes`; 13 toques em 30 dias) e Task 7 (`voice`: 314, todos
    em `src/`; 111 toques).
-2. Segunda fase, primeiro o que destrava o nó: `terminal_input` (108 testes em 1.870 linhas, usa 3
-   módulos), `interactions` (14), `mods` (174) e `plugin` (56).
+2. Segunda fase, primeiro o que destrava o nó, nesta ordem: `interactions` (14 testes; usa
+   `runtime` e `session_write`), `terminal_input` (108 testes em 1.870 linhas; usa `interactions`,
+   `state::{ask, permission}` e `session_write::answer`), `mods` (174) e `plugin` (56). Os dois
+   primeiros citam módulos do nó: cada um começa por um commit de corte (Fix A ou Fix B), senão o
+   crate novo dependeria do servidor.
 3. Avaliar cedo, na Task 10: `codex_setup` (235 toques, 96% sai, 7.306 linhas) e `update` (174
    toques, 87% sai, 11.737 linhas). Mudam muito e quase tudo sai; o custo é o que usam do servidor
    (17 e 19 módulos).
@@ -632,9 +635,12 @@ já usa `CostsState` (Task 5).
 - [ ] **Step 1: Conferir** `grep -rnE 'crate::' crates/hangar-server/src/{costs,costs_routes.rs}` →
   só `crate::costs`, `crate::costs_routes` e itens re-exportados do core.
 - [ ] **Step 2: Mover `costs/` e `costs_routes.rs`** para `crates/hangar-costs/` pelo contrato.
-  Vão junto, num `tests/it/` só: `tests/costs_hook/*` (71 testes) e os arquivos do tipo 1 do `it`
-  do servidor (`contract_costs_*`, `costs_*_unit`, `costs_fx`, `costs_origins`,
-  `costs_fast_paths`, `scopes_native`; 156 testes). Os 50 de `tests/it/costs_routes.rs` vão se montarem só o
+  Vão junto, num `tests/it/` só, os arquivos do tipo 1 que hoje estão no `it` do servidor
+  (`contract_costs_*`, `costs_*_unit`, `costs_fx`, `costs_origins`, `costs_fast_paths`,
+  `scopes_native`; 156 testes). `tests/costs_hook/*` (71 testes) vai como `[[test]]` próprio do
+  `hangar-costs`, porque instala o gancho de pânico do processo inteiro (exceção do item 5); antes,
+  `install_panic_hook` (`lib.rs:334`) desce para o core, senão os testes que o chamam ficam no
+  servidor. Os 50 de `tests/it/costs_routes.rs` vão se montarem só o
   `CostsState`; os que precisam do servidor inteiro ficam.
 - [ ] **Step 3: Provas comuns** (quando autorizadas), incluindo `tests/costs_hook/*` (31 usos de
   `hangar_server::costs`) e `tests/it/contract_costs_*.rs` (26).
@@ -771,7 +777,7 @@ Status: ready-for-agent (depois da Task 9)
   Jefferson autorizar o build) e trocar a tabela de estimativa pelo medido.
 - [ ] **Step 3: Escrever o plano da segunda fase** em `docs/superpowers/plans/`, na ordem da seção
   "Ordem e paralelismo" (revista pelos testes) e refazendo a contagem de "Testes por módulo":
-  `terminal_input`, `interactions`, `mods` e `plugin` (destravam o nó); a avaliação de
+  `interactions`, `terminal_input`, `mods` e `plugin` (destravam o nó); a avaliação de
   `codex_setup` e `update`; o nó `runtime`/`accounts`/`list`/`session_open`/`session_write`/`state`
   (com a inversão da seção "Adiado"); depois `speech`, `remote_browser`, `orchestration` (com
   `orq_storage`), `uploads`, os pequenos (`pages`, `permission_control`, `subagents`, `tail`),
