@@ -151,7 +151,7 @@ export function ComposerActions({ attach, mic, send, settings, beforeMic, afterM
   // Gravando, a onda precisa da largura toda: o campo ocupa a linha e os botões descem para a de baixo.
   if (field) return <View style={[styles.row, styles.rowField, mic.recording && styles.rowRecording]}>
     {mic.recording ? null : <View style={styles.side}>{attachBtn}</View>}
-    <View style={mic.recording ? styles.fieldLine : styles.spacer}>{field}</View>
+    <View style={[styles.spacer, mic.recording && styles.fieldLine]}>{field}</View>
     <View style={styles.side}>{settings}{micGroup}{afterSettings}{sendBtn}</View>
   </View>;
   return <View style={styles.row}>
@@ -197,8 +197,7 @@ const styles = StyleSheet.create((theme) => ({
   // Texto de várias linhas: os botões ficam no pé da caixa.
   rowField: { alignItems: 'flex-end' },
   rowRecording: { flexWrap: 'wrap', justifyContent: 'flex-end' },
-  // Largura fixa e sem flex: o único filho flexível da fileira fica com base 0 e a linha não quebra.
-  fieldLine: { width: '100%' },
+  fieldLine: { flexBasis: '100%' },
   // A altura de uma linha do campo: os botões ficam no meio dela, no pé da caixa.
   side: { minHeight: 40, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1.5] },
   spacer: { flex: 1, minWidth: 0 },
