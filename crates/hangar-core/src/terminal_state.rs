@@ -314,10 +314,11 @@ fn unnumbered_menu(lines: &[&str]) -> Option<TerminalQuestion> {
     Some(TerminalQuestion { question, options })
 }
 
-/// A caixa de mensagem logo abaixo: a régua e, em seguida, a linha do `❯`. Régua solta numa resposta não conta.
+/// A caixa de mensagem logo abaixo: a régua e, em seguida, a linha do `❯` (ou do `!` no modo de comando).
+/// Régua solta numa resposta não conta.
 fn composer_below(lines: &[&str]) -> bool {
     let mut rest = lines.iter().filter(|l| !trim(l).is_empty());
-    rest.next().is_some_and(|l| P.rule.is_match(l)) && rest.next().is_some_and(|l| trim(l).starts_with('❯'))
+    rest.next().is_some_and(|l| P.rule.is_match(l)) && rest.next().is_some_and(|l| trim(l).starts_with(['❯', '!']))
 }
 
 /// O `*` comum também é um quadro da animação do Claude ("* Precipitating… (2m 12s)"), mas só vale com esse
@@ -751,6 +752,9 @@ mod tests {
             assert_eq!(analysis.state, "working", "{glyph}");
             assert_eq!(analysis.label.as_deref(), Some("Precipitating… (2m 12s · ↓ 9.3k tokens)"), "{glyph}");
         }
+        // Caixa no modo de comando.
+        let pane = format!("{DONE}\n\n● resposta\n\n* Precipitating… (2m 12s)\n\n{RULE}\n! ls\n{RULE}\n");
+        assert_eq!(super::analyze(&pane).label.as_deref(), Some("Precipitating… (2m 12s)"));
         // Resto de outro texto que ficou à direita na mesma linha não entra no rótulo.
         let pane = format!("● resposta\n\n✶ Thundering… (1m 15s · ↓ 5.3k tokens)                    -n\\n{{RULE}}\\n❯ \\n\");\n\n{RULE}\n❯ \n{RULE}\n");
         assert_eq!(super::analyze(&pane).label.as_deref(), Some("Thundering… (1m 15s · ↓ 5.3k tokens)"));
