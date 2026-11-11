@@ -18,6 +18,9 @@ struct State {
     kill_fails: bool,
     create_fails: bool,
     create_race: bool,
+    scope_lost: bool,
+    scope_rejects_create: bool,
+    scope_timeout: bool,
 }
 #[derive(Default)]
 struct FakeMux(Mutex<State>);
@@ -28,6 +31,13 @@ impl Mux for FakeMux {
         Box::pin(async move {
             let mut state = self.0.lock().unwrap();
             state.commands.push(args.clone());
+            if args == ["scope", "--", "true"] {
+                return Output { code: Some(i32::from(state.scope_lost)), ..Default::default() };
+            }
+            if args.starts_with(&["scope".into(), "--".into()])
+                && (state.scope_lost || state.scope_rejects_create || state.scope_timeout) {
+                return Output { code: if state.scope_timeout { None } else { Some(1) }, ..Default::default() };
+            }
             let start = args.iter().position(|arg| arg == "mux").unwrap() + 1;
             let args = &args[start..];
             let target = args.iter().position(|arg| arg == "-t").map(|i| args[i + 1].trim_start_matches('=').trim_end_matches(':').to_owned()).unwrap_or_default();
@@ -209,4 +219,38 @@ proptest::proptest! {
         let result = runtime.block_on(service.open("agente", &directory));
         proptest::prop_assert!(result.is_ok());
     }
+}
+
+#[tokio::test]
+async fn shell_retries_without_scope_only_when_probe_confirms_scope_lost() {
+    let (mux, service) = service(false);
+    mux.0.lock().unwrap().scope_lost = true;
+    assert_eq!(service.open("agente", "/repo").await.unwrap()["shell"], "term-agente");
+    let state = mux.0.lock().unwrap();
+    assert!(state.sessions["term-agente"].hidden);
+    assert!(state.commands.iter().any(|args| args == &["scope", "--", "true"]));
+    assert!(state.commands.iter().any(|args| args == &["mux", "new-session", "-d", "-s", "term-agente", "-c", "/repo"]));
+    assert!(!state.warnings.is_empty());
+}
+
+#[tokio::test]
+async fn shell_does_not_retry_create_when_scope_probe_succeeds() {
+    let (mux, service) = service(false);
+    mux.0.lock().unwrap().scope_rejects_create = true;
+    assert_eq!(service.open("agente", "/repo").await.unwrap_err().code, "erro_shell_criacao_falhou");
+    let state = mux.0.lock().unwrap();
+    assert!(state.commands.iter().any(|args| args == &["scope", "--", "true"]));
+    assert!(!state.commands.iter().any(|args| args.starts_with(&["mux".into(), "new-session".into()])));
+    assert!(state.sessions.is_empty());
+}
+
+#[tokio::test]
+async fn shell_does_not_probe_or_retry_create_after_scope_timeout() {
+    let (mux, service) = service(false);
+    mux.0.lock().unwrap().scope_timeout = true;
+    assert_eq!(service.open("agente", "/repo").await.unwrap_err().code, "erro_shell_criacao_falhou");
+    let state = mux.0.lock().unwrap();
+    assert!(!state.commands.iter().any(|args| args == &["scope", "--", "true"]));
+    assert!(!state.commands.iter().any(|args| args.starts_with(&["mux".into(), "new-session".into()])));
+    assert!(state.sessions.is_empty());
 }

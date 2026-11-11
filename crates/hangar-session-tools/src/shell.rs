@@ -48,9 +48,8 @@ impl Service {
             }
         }
         if !self.has(&target).await {
-            let mut args = self.mux.scope().await;
-            args.extend([self.program.clone(), "new-session".into(), "-d".into(), "-s".into(), target.clone(), "-c".into(), cwd.into()]);
-            if self.mux.run(args).await.code != Some(0) {
+            let args = vec![self.program.clone(), "new-session".into(), "-d".into(), "-s".into(), target.clone(), "-c".into(), cwd.into()];
+            if self.create(args).await.code != Some(0) {
                 return if self.has(&target).await { Ok(json!({"ok": true, "shell": target})) } else { Err(failed()) };
             }
             created = true;
@@ -61,6 +60,23 @@ impl Service {
             return Err(failed());
         }
         Ok(json!({"ok": true, "shell": target}))
+    }
+
+    async fn create(&self, args: Vec<String>) -> Output {
+        let prefix = self.mux.scope().await;
+        let mut scoped = prefix.clone();
+        scoped.extend(args.iter().cloned());
+        let result = self.mux.run(scoped).await;
+        // Só uma recusa confirmada do escopo permite repetir: timeout pode ter criado o shell.
+        if result.code == Some(1) && !prefix.is_empty() {
+            let mut probe = prefix;
+            probe.push("true".into());
+            if self.mux.run(probe).await.code == Some(1) {
+                self.mux.warning("o escopo do systemd parou de funcionar; criando o shell sem escopo próprio");
+                return self.mux.run(args).await;
+            }
+        }
+        result
     }
 
     async fn run<const N: usize>(&self, args: [&str; N]) -> Output {
