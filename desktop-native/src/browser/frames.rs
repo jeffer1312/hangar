@@ -1,6 +1,7 @@
 //! Quadros do screencast da página da conversa no Windows. Uma thread decodifica o PNG; a textura do device da GPUI é
 //! escrita na thread da interface (o contexto imediato do D3D11 é dela) e pintada com `paint_surface`.
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use base64::Engine as _;
 use gpui_windows::SurfaceTexture;
@@ -15,6 +16,8 @@ pub type Acker = Box<dyn Fn(Value) + Send + Sync>;
 pub struct Frames {
     /// Textura pintada; trocada só quando o tamanho ou o device mudam.
     shown: Mutex<Option<Arc<SurfaceTexture>>>,
+    /// O quadro não virou textura e já foi gasto: página parada não manda outro sozinha.
+    failed: AtomicBool,
     slot: Mutex<Slot>,
     wake: Condvar,
     events: async_channel::Sender<Event>,
@@ -55,7 +58,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> { m.lock().unwrap_or_el
 
 impl Frames {
     pub fn new(events: async_channel::Sender<Event>, ack: Acker) -> Arc<Self> {
-        let frames = Arc::new(Frames { shown: Mutex::new(None), slot: Mutex::default(), wake: Condvar::new(), events, ack });
+        let frames = Arc::new(Frames { shown: Mutex::new(None), failed: AtomicBool::new(false), slot: Mutex::default(), wake: Condvar::new(), events, ack });
         let worker = frames.clone();
         if let Err(e) = std::thread::Builder::new().name("webview2-frames".into()).spawn(move || worker.decode_loop()) {
             eprintln!("[pagina] sem thread para os quadros: {e}");
@@ -111,7 +114,8 @@ impl Frames {
     pub fn commit(&self) -> bool {
         let frame = { let mut slot = lock(&self.slot); let pixels = slot.pixels.take(); if slot.hidden { None } else { pixels } };
         let Some(frame) = frame else { return false };
-        self.upload(&frame)
+        // Falha conta como troca: a conversa redesenha, e o `place` dela vê o `lost` e reinicia o screencast.
+        self.upload(&frame) || self.failed.load(Ordering::Relaxed)
     }
 
     fn upload(&self, (width, height, pixels): &(u32, u32, Vec<u8>)) -> bool {
@@ -121,12 +125,21 @@ impl Frames {
             Some(texture) => (texture, false),
             None => match SurfaceTexture::new(*width, *height) {
                 Ok(texture) => (Arc::new(texture), true),
-                Err(e) => { eprintln!("[pagina] textura da página não criada: {e}"); return false; }
+                Err(e) => {
+                    eprintln!("[pagina] textura da página não criada: {e}");
+                    self.failed.store(true, Ordering::Relaxed);
+                    return false;
+                }
             },
         };
         // Textura nova sem o quadro escrito pintaria vazia: fica a anterior.
-        if let Err(e) = texture.write(pixels) { eprintln!("[pagina] quadro não escrito na textura: {e}"); return false; }
+        if let Err(e) = texture.write(pixels) {
+            eprintln!("[pagina] quadro não escrito na textura: {e}");
+            self.failed.store(true, Ordering::Relaxed);
+            return false;
+        }
         trace(format_args!("escrito na textura (recriada: {replaced})"));
+        self.failed.store(false, Ordering::Relaxed);
         *shown = Some(texture);
         replaced
     }
@@ -139,13 +152,14 @@ impl Frames {
         self.wake.notify_one();
     }
 
-    /// A textura ficou num device que se perdeu? Solta-a e avisa quem pinta, que reinicia o screencast: guardar os
-    /// pixels do último quadro para refazê-la custava um quadro inteiro de memória por página viva.
+    /// A textura ficou num device que se perdeu, ou o último quadro não virou textura? Solta-a e avisa quem pinta, que
+    /// reinicia o screencast: guardar os pixels do último quadro para refazê-la custava um quadro inteiro de memória por
+    /// página viva.
     pub fn lost(&self) -> bool {
         let mut shown = lock(&self.shown);
         let lost = shown.as_ref().is_some_and(|t| !t.is_current());
         if lost { *shown = None; }
-        lost
+        self.failed.swap(false, Ordering::Relaxed) || lost
     }
 
     /// Textura atual, na thread da interface.
