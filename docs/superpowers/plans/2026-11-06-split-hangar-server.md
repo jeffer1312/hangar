@@ -222,6 +222,7 @@ fase.
 ## Testes por módulo: o que sai junto com o crate
 
 Contagem em `f3bc1a639` (origin/main de 11/11/2026), por leitura do texto, sem compilar nem rodar.
+As linhas por módulo desta seção são desse commit; as das outras seções são de `0452a7f55`.
 Pedido do Jefferson: a `verificar-local` roda os ~6.300 testes do crate a cada linha mexida, e a
 divisão só alivia isso se o crate que sai levar os testes dele.
 
@@ -285,7 +286,7 @@ divisão só alivia isso se o crate que sai levar os testes dele.
 | `routes` | 1.977 | 1 (1 + 0) | 21 (12 + 9) | 5% | 92 |
 | `workspace_routes` | 852 | 1 (1 + 0) | 49 (0 + 49) | 2% | 11 |
 | `costs_routes` | 443 | 0 (0 + 0) | 50 (0 + 50) | 0% | 2 |
-| outros 72 módulos | 26.863 | 430 (317 + 113) | 260 (20 + 240) | 62% | — |
+| outros 72 (módulos menores, `lib.rs`, `main.rs`) | 26.863 | 430 (317 + 113) | 260 (20 + 240) | 62% | — |
 | executáveis à parte (22 arquivos) | — | 207 | 45 | 82% | — |
 | **Total** | 253.316 | 4.575 | 1.744 | 72% | |
 
@@ -301,7 +302,7 @@ O que a tabela mostra:
   módulo sem levar esses arquivos para o `tests/it` do crate novo deixa a verificação igual. Só os
   de `src/` saem de graça.
 - **O nó `runtime`/`accounts`/`list`/`session_open`/`session_write`/`state` tem 1.727 testes do
-  tipo 1**, 38% de todos, e `runtime` sozinho tem 866. É onde está o alívio grande e é o corte mais
+  tipo 1**, 38% dos 4.575 do tipo 1, e `runtime` sozinho tem 866. É onde está o alívio grande e é o corte mais
   caro. Os arquivos grandes do `runtime` no `it` (`terminal_runtime.rs`, `runtime_claude.rs`) citam
   `terminal_input`, `mods`, `plugin` e `interactions`: saem quando esses módulos estiverem fora.
 - **Rende pouco na verificação** (quase tudo tipo 2, mexer neles ainda dispara o `it` grande):
@@ -340,8 +341,8 @@ módulos do servidor ainda prendem o módulo (seção "Testes por módulo").
    (45 cada).
 3. `share` (184 de 332) e `groups` (140 de 271): metade fica no `it` de qualquer jeito.
 4. O nó (`runtime` 866, `accounts` 270, `session_open` 180, `list` 180, `session_write` 122,
-   `state` 109): depende da inversão da seção "Adiado" e de `terminal_input`, `mods` e `plugin`
-   já fora.
+   `state` 109): depende da inversão da seção "Adiado" e de `terminal_input`, `mods`, `plugin` e
+   `interactions` já fora.
 5. Sem pressa, porque não aliviam a verificação: os módulos de rota listados acima.
 
 O core é um crate só, com módulos por assunto (`net`, `http`, `pycompat`, `fs`, `process`, `paths`,
@@ -608,7 +609,7 @@ já usa `CostsState` (Task 5).
 - [ ] **Step 2: Mover `costs/` e `costs_routes.rs`** para `crates/hangar-costs/` pelo contrato.
   Vão junto, num `tests/it/` só: `tests/costs_hook/*` (71 testes) e os arquivos do tipo 1 do `it`
   do servidor (`contract_costs_*`, `costs_*_unit`, `costs_fx`, `costs_origins`,
-  `costs_fast_paths`; 156 testes). Os 50 de `tests/it/costs_routes.rs` vão se montarem só o
+  `costs_fast_paths`, `scopes_native`; 156 testes). Os 50 de `tests/it/costs_routes.rs` vão se montarem só o
   `CostsState`; os que precisam do servidor inteiro ficam.
 - [ ] **Step 3: Provas comuns** (quando autorizadas), incluindo `tests/costs_hook/*` (31 usos de
   `hangar_server::costs`) e `tests/it/contract_costs_*.rs` (26).
@@ -744,10 +745,12 @@ Status: ready-for-agent (depois da Task 9)
 - [ ] **Step 2: Medir a memória** de um `rustc` do `hangar-server` e de cada crate novo (quando o
   Jefferson autorizar o build) e trocar a tabela de estimativa pelo medido.
 - [ ] **Step 3: Escrever o plano da segunda fase** em `docs/superpowers/plans/`, na ordem da seção
-  "Ordem e paralelismo" (revista pelos testes) e refazendo a contagem de "Testes por módulo": `speech`,
-  `orchestration` (com `orq_storage`), `remote_browser`, `mods`, e o nó `runtime`/`accounts`/`list`/
-  `session_open`/`session_write`/`state` (com a inversão da seção "Adiado"); incluir o PR que
-  retira os re-exports do item 1 do contrato.
+  "Ordem e paralelismo" (revista pelos testes) e refazendo a contagem de "Testes por módulo":
+  `terminal_input`, `interactions`, os pequenos (`pages`, `permission_control`, `subagents`,
+  `tail`), `mods`, `speech`, `remote_browser`, `plugin`, `orchestration` (com `orq_storage`),
+  `uploads`, depois `share` e `groups`, e por fim o nó `runtime`/`accounts`/`list`/`session_open`/
+  `session_write`/`state` (com a inversão da seção "Adiado"); incluir o PR que retira os
+  re-exports do item 1 do contrato.
 - [ ] **Step 4: Atualizar a entrada de plataforma.md** com os números medidos.
 
 ## Adiado para a segunda fase
