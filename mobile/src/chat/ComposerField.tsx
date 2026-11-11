@@ -119,6 +119,9 @@ export function ComposerActions({ attach, mic, send, settings, beforeMic, afterM
 }) {
   const { theme } = useUnistyles();
   const count = send.count ?? 0;
+  // Largura da fileira em pontos: base em porcentagem não é resolvida aqui no aparelho.
+  const [rowWidth, setRowWidth] = useState(0);
+  const measureRow = useCallback((e: LayoutChangeEvent) => setRowWidth(e.nativeEvent.layout.width), []);
   const menu = useMemo(() => modeMenuHandlers(modeMenu), [modeMenu]);
   const ios = Platform.OS === 'ios';
   const micGroup = <>
@@ -158,9 +161,14 @@ export function ComposerActions({ attach, mic, send, settings, beforeMic, afterM
       </View> : null}
     </Pressable>);
   // Gravando, a onda precisa da largura toda: o campo ocupa a linha e os botões descem para a de baixo.
-  if (field) return <View style={[styles.row, styles.rowField, mic.recording || wide ? ROW_WRAP : ROW_IDLE]}>
+  // Gravando, o campo toma a fileira; texto longo, tudo menos o anexo. Os botões quebram para baixo.
+  const lined = rowWidth > 0 && (mic.recording || !!wide);
+  const fieldStyle = !lined ? FIELD_IDLE : mic.recording
+    ? { flexGrow: 0, flexShrink: 0, flexBasis: rowWidth, minWidth: 0 }
+    : { flexGrow: 1, flexShrink: 1, flexBasis: rowWidth - ATTACH_SIZE - theme.base.space[1.5] - 1, minWidth: 0 };
+  if (field) return <View onLayout={measureRow} style={[styles.row, styles.rowField, lined ? ROW_WRAP : ROW_IDLE]}>
     {mic.recording ? null : <View style={styles.side}>{attachBtn}</View>}
-    <View style={mic.recording ? FIELD_RECORDING : wide ? FIELD_WIDE : FIELD_IDLE}>{field}</View>
+    <View style={fieldStyle}>{field}</View>
     <View style={styles.side}>{settings}{micGroup}{afterSettings}{sendBtn}</View>
   </View>;
   return <View style={styles.row}>
@@ -178,9 +186,7 @@ export function ComposerActions({ attach, mic, send, settings, beforeMic, afterM
 // ficava preso ao parar de gravar (o campo na largura da linha, com os botões fora da tela).
 const ROW_WRAP = { flexWrap: 'wrap', justifyContent: 'flex-end' } as const;
 const ROW_IDLE = { flexWrap: 'nowrap', justifyContent: 'flex-start' } as const;
-const FIELD_RECORDING = { flexGrow: 0, flexShrink: 0, flexBasis: '100%', minWidth: 0 } as const;
-// 80%: cabe ao lado do anexo e não deixa os botões na mesma linha; o grow completa o resto.
-const FIELD_WIDE = { flexGrow: 1, flexShrink: 1, flexBasis: '80%', minWidth: 0 } as const;
+const ATTACH_SIZE = 34;
 const FIELD_IDLE = { flexGrow: 1, flexShrink: 1, flexBasis: 0, minWidth: 0 } as const;
 
 const SEND_SLOP = 5;
