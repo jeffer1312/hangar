@@ -512,6 +512,12 @@ function criarChatStore(serverId: string, name: string): ChatApi {
       publishEvents(next, 'replace');
       return;
     }
+    const at = givenUpSlot(events, ev);
+    if (at < 0) return;
+    if (at < events.length) {
+      publishEvents([...events.slice(0, at), ev, ...events.slice(at)], 'rebuild');
+      return;
+    }
     const next = [...events, ev];
     idIndex.set(ev.id, next.length - 1);
     indexText(ev, next.length - 1);
@@ -1069,6 +1075,20 @@ export function settleDelivered(serverId: string, name: string, draft: Conversat
     }).catch(() => {});
   }
   chatStore(serverId, name).use.setState((s) => ({ draftUpdate: s.draftUpdate + 1 }));
+}
+
+// A fila republica a entrega que desistiu mesmo sendo antiga: ela vai para o horário do envio, não para o fim.
+// Mais velha que o trecho carregado (-1) fica de fora; o histórico mais antigo a traz no lugar.
+function givenUpSlot(events: ChatEvent[], ev: ChatEvent): number {
+  const sent = ev.desistiu ? ev.queued_ts : null;
+  if (sent == null) return events.length;
+  const first = events.find((e) => e.ts != null)?.ts;
+  if (first != null && sent < first) return -1;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ts = events[i].ts;
+    if (ts != null && ts <= sent) return i + 1;
+  }
+  return events.length;
 }
 
 function isInputRejected(error: unknown): boolean {

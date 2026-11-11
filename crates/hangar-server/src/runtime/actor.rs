@@ -866,6 +866,8 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
     let mut end_seen:Option<(u64,f64)> = None;
     // Operações cujo quadro foi entregue ao transporte desta época: na queda, só estas podem ter saído.
     let mut handed:BTreeSet<String> = BTreeSet::new();
+    // Escritas cujo preparo ainda não voltou: nada delas chegou ao fio, o prazo pode devolver a entrada.
+    let mut preparing:BTreeSet<String> = BTreeSet::new();
     let mut effects:VecDeque<Effect> = VecDeque::new();
     let mut revision = Revision { value:engine.revision.load(Ordering::Acquire),counter:engine.revision.clone() };
     let mut state_version = 0u64;
@@ -1100,7 +1102,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                     if message && target.provider == "claude" && engine.view()["alive"] == false {
                         publish(&events,&target,&mut revision,"claude_wake",json!({"conversation":engine.view()["conversation"]}));
                     }
-                    defer_unwritten(&target.provider,&mut roots,&attempts,&native,&id,error,&mut effects)
+                    defer_unwritten(&target.provider,&mut roots,&attempts,&native,&preparing,&id,error,&mut effects)
                 }
             }
         }
@@ -1117,6 +1119,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                     // Sem preparo nem vista forçada: os IDs dela nunca entram no diário, então o contador salvo
                     // continua cobrindo todos os que entram. Mantém a ordem das escritas.
                     if volatile { prepared_writes.insert(write_order,(wire,target.generation,Ok(()))); continue; }
+                    preparing.insert(wire.clone());
                     let queue = queue.clone(); let target = target.clone(); let view = engine.view(); let sample = clock(start);
                     let state_gate = state_gate.clone(); let state_version = state_version;
                     jobs.spawn(async move {
@@ -1426,7 +1429,12 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                     }
                 }
                 effects.extend(acknowledgements);
-                if let Err(failure) = result { enter_error(&mut error,&target,failure); }
+                // Prazo vencido no preparo já devolveu a entrada: a recusa tardia da fila não põe a sessão em erro.
+                match result {
+                    Err(failure) if ended => tracing::warn!(key=%target.key,session=%target.name,operation=%attempt.logical_id,code=%failure.code,reason=%failure.message,"preparo terminou depois do prazo"),
+                    Err(failure) => enter_error(&mut error,&target,failure),
+                    Ok(()) => {}
+                }
             } else if sid_transition || io.try_send(WireFrame { operation_id:wire,frame:attempt.frame,ephemeral:false,until:None,guard:engine.interaction_guard(&attempt.logical_id)? }).is_err() {
                 effects.extend(engine.apply(EngineInput::WriteAck { operation_id:attempt.logical_id.clone(),outcome:WriteOutcome::NotWritten },clock(start))?);
             } else {
@@ -2031,10 +2039,11 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                                     });
                                 } else { pending.ready_to_run = true; }
                             }
-                            Err(error)=>defer_unwritten(&target.provider,&mut roots,&attempts,&native,&id,error,&mut effects),
+                            Err(error)=>defer_unwritten(&target.provider,&mut roots,&attempts,&native,&preparing,&id,error,&mut effects),
                         }
                     }
                     Job::Write { wire,generation,result } => {
+                        preparing.remove(&wire);
                         let attempt = attempts.get(&wire).unwrap();
                         prepared_writes.insert(attempt.order,(wire,generation,result));
                     }
@@ -2460,8 +2469,7 @@ async fn run(mut target:RuntimeTarget,queue:QueueActor,connection:Option<Runtime
                     if pending.result.is_none() && !pending.timed_out && sample.monotonic_s >= pending.deadline {
                         pending.timed_out = true;
                         // Sem escrita começada a entrada não chegou à CLI: volta para a fila em vez de ficar incerta.
-                        let prefix = format!("{id}:");
-                        let written = native.contains(id) || attempts.values().any(|attempt|attempt.logical_id == *id || attempt.logical_id.starts_with(&prefix));
+                        let written = began_writing(&native,&attempts,&preparing,id);
                         let unsent = !written && matches!(pending.command.kind,OperationKind::Input | OperationKind::Steer | OperationKind::DispatchAsyncAnswer)
                             && !rowless(&target.provider,&pending.command);
                         if crate::warn_limit::allow(Some(&target.key),"deadline") {
@@ -2937,9 +2945,14 @@ fn rowless(provider:&str,command:&RuntimeCommand) -> bool {
     provider == "codex" && command.kind == OperationKind::Steer && command.payload["entry_id"].as_str().is_none()
 }
 
-fn defer_unwritten(provider:&str,roots:&mut BTreeMap<String,Pending>,attempts:&BTreeMap<String,Attempt>,native:&BTreeSet<String>,id:&str,error:RuntimeError,effects:&mut VecDeque<Effect>) {
+fn began_writing(native:&BTreeSet<String>,attempts:&BTreeMap<String,Attempt>,preparing:&BTreeSet<String>,id:&str)->bool {
     let prefix = format!("{id}:");
-    let written = native.contains(id) || attempts.values().any(|attempt|attempt.logical_id == id || attempt.logical_id.starts_with(&prefix));
+    native.contains(id) || attempts.iter().any(|(wire,attempt)|!preparing.contains(wire)
+        && (attempt.logical_id == id || attempt.logical_id.starts_with(&prefix)))
+}
+
+fn defer_unwritten(provider:&str,roots:&mut BTreeMap<String,Pending>,attempts:&BTreeMap<String,Attempt>,native:&BTreeSet<String>,preparing:&BTreeSet<String>,id:&str,error:RuntimeError,effects:&mut VecDeque<Effect>) {
+    let written = began_writing(native,attempts,preparing,id);
     let input = roots.get(id).is_some_and(|pending|matches!(pending.command.kind,OperationKind::Input | OperationKind::Steer | OperationKind::DispatchAsyncAnswer)
         && !rowless(provider,&pending.command));
     if written || !input { return fail_root(roots,id,error); }
@@ -3120,6 +3133,18 @@ mod tests {
         let (confirmed,_,_)=confirm_inputs(queue.clone(),receipt,transcript_of(&target,&view),receipt_conversation(&target,&view),5,clock,None).await.unwrap();
         assert_eq!(confirmed,vec!["msg".to_owned()],"a linha da conversa nova não confirmou a entrada");
         Arc::try_unwrap(queue).ok().unwrap().shutdown().await.unwrap();
+    }
+    #[test]
+    fn a_write_still_preparing_is_not_written_so_the_deadline_defers_the_entry() {
+        // Caso real: o preparo (vista, cursor do tmux) passou de 30 s; o prazo contou a tentativa como escrita,
+        // respondeu "incerto" e a entrada nunca voltou para a fila.
+        let attempt=|logical:&str|Attempt {logical_id:logical.into(),phase_id:format!("wire:{logical}"),frame:json!({}),order:1,epoch:0,generation:4,volatile:false};
+        let attempts=BTreeMap::from([("wire:steer:5b4c".to_owned(),attempt("steer:5b4c"))]);
+        let native=BTreeSet::new();
+        let preparing=BTreeSet::from(["wire:steer:5b4c".to_owned()]);
+        assert!(!began_writing(&native,&attempts,&preparing,"steer"),"tentativa ainda no preparo contou como escrita");
+        assert!(began_writing(&native,&attempts,&BTreeSet::new(),"steer"),"preparo concluído pode ter ido ao fio");
+        assert!(began_writing(&BTreeSet::from(["steer".to_owned()]),&BTreeMap::new(),&preparing,"steer"));
     }
     #[test]
     fn sid_b_blocks_claim_before_async_metadata_commit() {
