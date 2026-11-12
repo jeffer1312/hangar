@@ -86,10 +86,12 @@ impl Service {
                 .get_ready(
                     Arc::new(NativeProbe {
                         accounts: accounts.clone(),
-                        cwd: context.cwd.clone(),
+                        // Pasta apagada: a consulta volta à pasta temporária em vez de falhar.
+                        cwd: context.cwd.clone().filter(|cwd| cwd.is_dir()),
                         settings: context.settings.clone(),
                     }),
-                    Some(config_dir.clone()),
+                    // A conta padrão roda sem CLAUDE_CONFIG_DIR, como o pane da sessão.
+                    context.config_dir.clone(),
                 )
                 .await
         } else {

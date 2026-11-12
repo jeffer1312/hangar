@@ -12,6 +12,9 @@ use tokio::time::Instant;
 
 pub type ProbeResult = Result<Vec<Value>, &'static str>;
 
+const FIRST_WAIT: Duration = Duration::from_secs(20);
+const KEPT_CONTEXTS: usize = 64;
+
 pub trait Probe: Send + Sync {
     fn cache_key(&self, config_dir: Option<&Path>) -> String {
         config_dir
@@ -101,7 +104,9 @@ impl Cache {
             return found.commands;
         }
         let mut pending = found.pending?;
-        let result = pending.wait_for(Option::is_some).await.ok()?.clone();
+        // Abaixo do prazo do cliente: consulta lenta entrega a reserva e termina em segundo plano.
+        let waited = tokio::time::timeout(FIRST_WAIT, pending.wait_for(Option::is_some)).await;
+        let result = waited.ok()?.ok()?.clone();
         result?.ok()
     }
 
@@ -239,6 +244,19 @@ impl Cache {
         let _writer = self.writer.lock().unwrap_or_else(|e| e.into_inner());
         let mut cache = read(&self.path);
         cache[key] = json!({"assinatura":signature,"comandos":commands,"em":SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64()});
+        // Cada pasta de sessão vira um contexto: sem teto, o arquivo cresce a cada worktree.
+        if let Some(entries) = cache.as_object_mut()
+            && entries.len() > KEPT_CONTEXTS
+        {
+            let mut ages: Vec<(f64, String)> = entries
+                .iter()
+                .map(|(k, v)| (v["em"].as_f64().unwrap_or(0.0), k.clone()))
+                .collect();
+            ages.sort_by(|a, b| a.0.total_cmp(&b.0));
+            for (_, old) in &ages[..ages.len() - KEPT_CONTEXTS] {
+                entries.remove(old);
+            }
+        }
         std::fs::create_dir_all(self.path.parent().unwrap())?;
         crate::runtime::queue::atomic_write(&self.path, &serde_json::to_vec(&cache)?)
     }

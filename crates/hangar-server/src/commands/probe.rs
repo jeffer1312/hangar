@@ -86,14 +86,7 @@ impl Probe for NativeProbe {
             "skills",
             "commands",
         ] {
-            signature.push(
-                config_dir
-                    .join(path)
-                    .metadata()
-                    .ok()
-                    .and_then(|m| modified(&m).ok())
-                    .unwrap_or_else(|| "-".into()),
-            );
+            watch(&config_dir.join(path), &mut signature);
         }
         if let Some(cwd) = &self.cwd {
             for parent in cwd.ancestors() {
@@ -160,6 +153,7 @@ impl Probe for NativeProbe {
                     "--output-format",
                     "stream-json",
                     "--verbose",
+                    "--no-session-persistence",
                     "--setting-sources",
                     if self.cwd.is_some() {
                         "user,project,local"
