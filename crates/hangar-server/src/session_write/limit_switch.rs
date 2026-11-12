@@ -65,10 +65,19 @@ impl SpentMark {
 
 /// O formato antigo não dizia quando bateu: a data do arquivo é uma referência conservadora.
 pub fn read_spent(file:&std::path::Path) -> SpentAccounts {
-    let Ok(file) = std::fs::File::open(file) else { return Default::default() };
+    let file = match std::fs::File::open(file) {
+        Ok(file)=>file,
+        Err(error) => {
+            if error.kind() != std::io::ErrorKind::NotFound { tracing::warn!(code="limit_spent_read_failed",kind=?error.kind(),"contas gastas ilegíveis; começam vazias"); }
+            return Default::default();
+        },
+    };
     let at = file.metadata().ok().and_then(|m|m.modified().ok())
         .and_then(|at|at.duration_since(std::time::UNIX_EPOCH).ok()).map(|at|at.as_secs_f64());
-    let mut spent:SpentAccounts = serde_json::from_reader(file).unwrap_or_default();
+    let mut spent:SpentAccounts = serde_json::from_reader(file).unwrap_or_else(|error| {
+        tracing::warn!(code="limit_spent_read_failed",error=%error,"contas gastas ilegíveis; começam vazias");
+        Default::default()
+    });
     for mark in spent.values_mut() {
         if let SpentMark::Legacy(until) = *mark {
             // A marca curta antiga também pode ser de login recusado; sem a causa, conserva a proteção.
@@ -87,23 +96,33 @@ impl Spent {
 }
 
 impl Spent {
-    pub fn mark_limit(&self,dir:&str,until:f64,at:f64) {
-        self.store(dir,SpentMark::Recorded {until,at:Some(at)});
+    pub fn mark_limit(&self,dir:&str,until:f64,at:f64,window:&str) {
+        // Só as janelas que a leitura da cota mostra podem ser liberadas por ela; as outras esperam o reset.
+        let recoverable = matches!(window,"five_hour" | "seven_day");
+        self.store(dir,SpentMark::Recorded {until,at:recoverable.then_some(at)},at);
     }
 
-    pub fn mark(&self,dir:&str,until:f64) {
+    pub fn mark(&self,dir:&str,until:f64,now:f64) {
         // Cota disponível não prova que a autenticação voltou a funcionar.
-        self.store(dir,SpentMark::Recorded {until,at:None});
+        self.store(dir,SpentMark::Recorded {until,at:None},now);
     }
 
-    fn store(&self,dir:&str,mark:SpentMark) {
+    fn store(&self,dir:&str,mark:SpentMark,now:f64) {
         let Ok(mut spent) = self.spent.lock() else { return };
-        spent.insert(crate::list::discover::real(dir),mark);
+        let key = crate::list::discover::real(dir);
+        // Marca ainda valendo não encurta o prazo nem perde a proteção do login recusado.
+        let mark = match (spent.get(&key).copied(),mark) {
+            (Some(SpentMark::Recorded {until:old,at:old_at}),SpentMark::Recorded {until,at}) if old > now =>
+                SpentMark::Recorded {until:until.max(old),at:old_at.and(at)},
+            _=>mark,
+        };
+        spent.insert(key,mark);
         let Some(file) = &self.file else { return };
         let saved = file.parent().map_or(Ok(()),std::fs::create_dir_all)
             .and_then(|()|crate::runtime::queue::atomic_write(file,&serde_json::to_vec(&*spent).unwrap_or_default()));
         if let Err(error) = saved { tracing::warn!(code="limit_spent_write_failed",kind=?error.kind(),"conta gasta não gravada; vale até o reinício"); }
     }
+    #[cfg(test)]
     pub fn is_spent(&self,dir:&str,now:f64) -> bool {
         self.blocks(dir,None,now)
     }
@@ -283,14 +302,16 @@ impl Switcher {
         let current = host.account_dir(spec.account.config_dir());
         // Aviso de uma vida que já trocou de conta (o `/conta` passou na frente): a conta de agora não bateu nada.
         if crate::list::discover::real(&host.account_dir(hit.account.as_deref())) != crate::list::discover::real(&current) { return Outcome::Stayed("limit_switch_stale"); }
-        self.spent.mark_limit(&current,hit.limit.resets_at.filter(|reset|*reset > now).unwrap_or(now + UNKNOWN_RESET_S),now);
-        self.move_away(host,&hit.name,&spec,&current,now).await
+        self.spent.mark_limit(&current,hit.limit.resets_at.filter(|reset|*reset > now).unwrap_or(now + UNKNOWN_RESET_S),now,&hit.limit.window);
+        self.move_away(host,&hit.name,&spec,&current).await
     }
 
     /// Leva a sessão à conta logada de mais folga.
-    async fn move_away(&self,host:&dyn Host,name:&str,spec:&SessionSpec,current:&str,now:f64) -> Outcome {
+    async fn move_away(&self,host:&dyn Host,name:&str,spec:&SessionSpec,current:&str) -> Outcome {
         let catalog = match host.catalog() { Ok(catalog)=>catalog, Err(code)=>return Outcome::Failed(code) };
         let quotas = match host.quotas().await { Ok(quotas)=>quotas, Err(code)=>return Outcome::Failed(code) };
+        // Depois da espera: a leitura gravada nela é a mais nova e não pode parecer futura.
+        let now = host.now();
         // O cache da cota ainda mostra "lida" a conta que perdeu o login.
         let quotas:Vec<Value> = quotas.into_iter().filter(|row|row["id"].as_str().and_then(|id|id.strip_prefix("claude:")).is_some_and(|path|host.logged_in(path))).collect();
         let (path,label) = match decide(spec,current,&catalog,&quotas,&self.spent,now) {
@@ -353,8 +374,8 @@ impl Switcher {
                 Err(outcome)=>return Some(outcome),
             }
         }
-        self.spent.mark(&current,now + LOGIN_SPENT_S);
-        Some(self.move_away(host,&hit.name,&spec,&current,now).await)
+        self.spent.mark(&current,now + LOGIN_SPENT_S,now);
+        Some(self.move_away(host,&hit.name,&spec,&current).await)
     }
 
     /// O recado para continuar; `Some` com o código quando ele não saiu.
@@ -618,12 +639,12 @@ mod tests {
         let cat = catalog(&["/a","/b","/c"]);
         // O cache ainda mostra a conta que acabou de bater o limite com folga: ela nunca é destino.
         let quotas = [quota("/a",10.0),quota("/b",40.0),quota("/c",20.0)];
-        spent.mark("/a",2000.0);
+        spent.mark("/a",2000.0,1000.0);
         assert_eq!(decide(&spec(claude("/a")),"/a",&cat,&quotas,&spent,1000.0),Decision::Switch { path:"/c".into(),label:"c".into() });
         // Na conta nova o limite bate de novo: a primeira continua gasta, sobra a outra.
-        spent.mark("/c",2000.0);
+        spent.mark("/c",2000.0,1000.0);
         assert_eq!(decide(&spec(claude("/c")),"/c",&cat,&quotas,&spent,1000.0),Decision::Switch { path:"/b".into(),label:"b".into() });
-        spent.mark("/b",2000.0);
+        spent.mark("/b",2000.0,1000.0);
         assert_eq!(decide(&spec(claude("/b")),"/b",&cat,&quotas,&spent,1000.0),Decision::Stay("limit_switch_no_room"));
         // Passado o reset, as contas voltam a valer, e a de mais folga é a primeira.
         assert_eq!(decide(&spec(claude("/b")),"/b",&cat,&quotas,&spent,2001.0),Decision::Switch { path:"/a".into(),label:"a".into() });
@@ -634,8 +655,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("limit-spent.json");
         let before = Spent::at(file.clone());
-        before.mark("/a",2000.0);
-        before.mark("/b",500.0);
+        before.mark("/a",2000.0,1000.0);
+        before.mark("/b",500.0,1000.0);
         let after = Spent::at(file.clone());
         assert!(after.is_spent("/a",1000.0),"o reinício não devolve a conta esgotada");
         assert!(!after.is_spent("/a",2001.0));
@@ -649,7 +670,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("limit-spent.json");
         let spent = Spent::at(file.clone());
-        spent.mark_limit("/a",5000.0,1000.0);
+        spent.mark_limit("/a",5000.0,1000.0,"five_hour");
         let mut recovered = quota("/a",60.0);
         recovered["ts"] = json!(1500.0);
         let rows = [recovered,quota("/b",80.0)];
@@ -663,7 +684,7 @@ mod tests {
     #[test]
     fn a_failed_refresh_does_not_undo_a_confirmed_quota_recovery() {
         let spent = Spent::default();
-        spent.mark_limit("/a",5000.0,1000.0);
+        spent.mark_limit("/a",5000.0,1000.0,"seven_day");
         let mut recovered = quota("/a",60.0);
         recovered["ts"] = json!(1500.0);
         let mut cache = crate::accounts::quotas::cache::QuotaCache::default();
@@ -677,7 +698,7 @@ mod tests {
     #[test]
     fn stale_unread_or_full_quotas_do_not_clear_the_limit() {
         let spent = Spent::default();
-        spent.mark_limit("/a",5000.0,1000.0);
+        spent.mark_limit("/a",5000.0,1000.0,"five_hour");
         let cat = catalog(&["/a","/b"]);
         let base = quota("/a",60.0);
         for (label,patch) in [
@@ -702,11 +723,47 @@ mod tests {
     #[test]
     fn available_quota_does_not_clear_a_login_refusal() {
         let spent = Spent::default();
-        spent.mark("/a",5000.0);
+        spent.mark("/a",5000.0,1000.0);
         let mut row = quota("/a",60.0);
         row["ts"] = json!(1500.0);
         assert_eq!(decide(&spec(claude("/b")),"/b",&catalog(&["/a","/b"]),&[row,quota("/b",80.0)],&spent,2000.0),
             Decision::Stay("limit_switch_no_room"));
+    }
+
+    #[test]
+    fn a_limit_the_quota_reading_does_not_show_waits_for_its_reset() {
+        let spent = Spent::default();
+        spent.mark_limit("/a",5000.0,1000.0,"overage");
+        let mut row = quota("/a",60.0);
+        row["ts"] = json!(1500.0);
+        let cat = catalog(&["/a","/b"]);
+        assert_eq!(decide(&spec(claude("/b")),"/b",&cat,&[row.clone(),quota("/b",80.0)],&spent,2000.0),
+            Decision::Stay("limit_switch_no_room"));
+        assert_eq!(decide(&spec(claude("/b")),"/b",&cat,&[row,quota("/b",80.0)],&spent,5001.0),
+            Decision::Switch { path:"/a".into(),label:"a".into() });
+    }
+
+    #[test]
+    fn a_new_mark_neither_shortens_a_live_one_nor_clears_a_login_refusal() {
+        let mut row = quota("/a",60.0);
+        row["ts"] = json!(1500.0);
+        let cat = catalog(&["/a","/b"]);
+        let room = |spent:&Spent,now:f64| decide(&spec(claude("/b")),"/b",&cat,&[row.clone(),quota("/b",80.0)],spent,now);
+        // Login recusado e, na mesma hora, outra sessão bate o limite: a leitura com folga não prova o login.
+        let login_then_limit = Spent::default();
+        login_then_limit.mark("/a",4600.0,1000.0);
+        login_then_limit.mark_limit("/a",5000.0,1000.0,"five_hour");
+        assert_eq!(room(&login_then_limit,2000.0),Decision::Stay("limit_switch_no_room"));
+        // A recusa do login não encurta o limite de vários dias para uma hora.
+        let limit_then_login = Spent::default();
+        limit_then_login.mark_limit("/a",9000.0,1000.0,"seven_day");
+        limit_then_login.mark("/a",4600.0,1000.0);
+        assert!(limit_then_login.is_spent("/a",8000.0));
+        // Marca vencida não contamina a nova.
+        let expired = Spent::default();
+        expired.mark("/a",900.0,500.0);
+        expired.mark_limit("/a",5000.0,1000.0,"five_hour");
+        assert_eq!(room(&expired,2000.0),Decision::Switch { path:"/a".into(),label:"a".into() });
     }
 
     #[test]
@@ -730,7 +787,7 @@ mod tests {
         std::fs::File::options().write(true).open(&file).unwrap().set_times(std::fs::FileTimes::new()
             .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1000))).unwrap();
         let spent = Spent::at(file.clone());
-        spent.mark_limit("/b",6000.0,1900.0);
+        spent.mark_limit("/b",6000.0,1900.0,"five_hour");
         let reloaded = Spent::at(file);
         let cat = catalog(&["/a","/b"]);
         for (at,expected) in [(900.0,Decision::Stay("limit_switch_no_room")),

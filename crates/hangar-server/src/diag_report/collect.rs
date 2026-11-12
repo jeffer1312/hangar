@@ -538,6 +538,8 @@ pub(crate) struct AccountFact {
     pub windows: Vec<(String, Option<f64>, Option<f64>)>,
     pub refresh_expires_at: Option<f64>,
     pub spent_until: Option<f64>,
+    /// A marca de limite ainda no prazo foi superada por uma leitura posterior com folga.
+    pub spent_cleared: bool,
     /// Hash do caminho, o `conta_id` das linhas do diário.
     pub account_id: Option<String>,
     pub login: Option<crate::accounts::claude_refresh::LoginFacts>,
@@ -558,7 +560,9 @@ impl AccountFact {
         if let Some(at) = self.refresh_expires_at {
             out += &format!(" · login vence {}{}", when(at), if self.login_expiring(now) { " (perto)" } else { "" });
         }
-        if let Some(until) = self.spent_until.filter(|u| *u > now) { out += &format!(" · gasta até {}", when(until)); }
+        if let Some(until) = self.spent_until.filter(|u| *u > now) {
+            out += &format!(" · {} {}", if self.spent_cleared { "limite gravado, liberado pela leitura; prazo" } else { "gasta até" }, when(until));
+        }
         if let Some(login) = &self.login { out += &format!(" · login: {}", login.summary()); }
         if let Some(id) = &self.account_id { out += &format!(" · conta_id {id}"); }
         out
@@ -573,8 +577,9 @@ fn account_dir(row: &Value) -> Option<&str> {
 /// caminho da casa), o caminho, a assinatura da credencial e os créditos de reset nunca saem.
 pub(crate) fn account_fact(row: &Value, spent: &crate::session_write::limit_switch::SpentAccounts, s: &Scrubber, now:f64) -> AccountFact {
     let dir = account_dir(row);
-    let spent_until = dir.and_then(|dir| spent.get(&crate::list::discover::real(dir)).or_else(|| spent.get(dir)))
-        .and_then(|mark|mark.blocking_until(Some(row),now));
+    let mark = dir.and_then(|dir| spent.get(&crate::list::discover::real(dir)).or_else(|| spent.get(dir)));
+    let spent_until = mark.and_then(|mark| mark.blocking_until(None, now));
+    let spent_cleared = spent_until.is_some() && mark.and_then(|mark| mark.blocking_until(Some(row), now)).is_none();
     let text = |v: &Value, max: usize| clean(s, v.as_str().unwrap_or("?"), max);
     let windows = row["janelas"].as_array().map(|w| w.iter().filter(|w| w["por_modelo"] != true)
         .map(|w| (text(&w["rotulo"], 20), w["pct"].as_f64(), w["reset_ts"].as_f64())).collect()).unwrap_or_default();
@@ -586,6 +591,7 @@ pub(crate) fn account_fact(row: &Value, spent: &crate::session_write::limit_swit
         windows,
         refresh_expires_at: row["refresh_expires_at"].as_f64(),
         spent_until,
+        spent_cleared,
         account_id: None,
         login: None,
     }
