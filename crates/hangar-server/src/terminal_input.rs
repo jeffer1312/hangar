@@ -1172,10 +1172,15 @@ impl TerminalDriver {
                         if let Some(mark) = mark && self.services.transcript_enqueued(mark, text).await.unwrap_or(false) {
                             return DeliveryResult::new(Disposition::Accepted, DeliveryStage::SubmitProof, "submitted_enqueued");
                         }
-                        resent = true;
-                        tracing::info!(code = "submit_enter_repeated", "o texto seguiu no campo depois do Enter; um Enter de novo");
-                        if let Err(e) = self.key_inner("Enter").await { return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Submit, e.code); }
-                        continue;
+                        // A conferência e o transcript cedem a vez: a pessoa pode ter digitado no campo enquanto isso.
+                        let still = self.composer_capture().await.is_ok_and(|(screen, typed)|
+                            ComposerSnapshot::parse(&typed).is_some_and(|now| now.only(text)) && ComposerSnapshot::parse(&screen).is_some_and(|now| now.only(text)));
+                        if still {
+                            resent = true;
+                            tracing::info!(code = "submit_enter_repeated", "o texto seguiu no campo depois do Enter; um Enter de novo");
+                            if let Err(e) = self.key_inner("Enter").await { return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Submit, e.code); }
+                            continue;
+                        }
                     }
                 }
             }

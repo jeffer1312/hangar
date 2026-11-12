@@ -125,8 +125,8 @@ pub async fn tick(machine: &impl Machine, now: Time, since: Option<Time>) -> Tic
         }
         Err(e) => return Tick::Skipped(format!("índice ilegível: {e}")),
     };
-    // Livre antes do índice não vale depois dele: uma sessão pode ter começado durante a busca.
-    let busy = match early { Some(Ok(Some(busy))) => Ok(Some(busy)), _ => machine.busy().await };
+    // A leitura de antes do índice não vale depois dele: durante a busca uma sessão começa ou uma entrega fica incerta.
+    let busy = machine.busy().await;
     match busy {
         Ok(None) => {}
         Ok(Some(busy)) if busy == Busy::Uncertain || since.is_none_or(|since| now - since < DEFER_CEILING) => {
@@ -241,6 +241,8 @@ mod tests {
         busy: Option<Busy>,
         list_down: bool,
         index_down: bool,
+        // Uma entrega fica incerta enquanto o índice é buscado.
+        uncertain_after_index: bool,
         launched: AtomicUsize,
         newer_calls: AtomicUsize,
     }
@@ -248,7 +250,7 @@ mod tests {
     impl Default for Fake {
         fn default() -> Fake {
             Fake { channel: Some("latest"), automations: true, state: json!({"fase": "pronto", "ok": true}), newer: Some("0.1.0.9"),
-                busy: None, list_down: false, index_down: false, launched: AtomicUsize::new(0), newer_calls: AtomicUsize::new(0) }
+                busy: None, list_down: false, index_down: false, uncertain_after_index: false, launched: AtomicUsize::new(0), newer_calls: AtomicUsize::new(0) }
         }
     }
 
@@ -260,7 +262,11 @@ mod tests {
             self.newer_calls.fetch_add(1, Ordering::SeqCst);
             if self.index_down { Err("index_timeout".into()) } else { Ok(self.newer.map(str::to_owned)) }
         }
-        async fn busy(&self) -> Result<Option<Busy>, String> { if self.list_down { Err("list_timeout".into()) } else { Ok(self.busy) } }
+        async fn busy(&self) -> Result<Option<Busy>, String> {
+            if self.list_down { return Err("list_timeout".into()); }
+            if self.uncertain_after_index && self.newer_calls.load(Ordering::SeqCst) > 0 { return Ok(Some(Busy::Uncertain)); }
+            Ok(self.busy)
+        }
         async fn launch(&self) -> Result<(), String> { self.launched.fetch_add(1, Ordering::SeqCst); Ok(()) }
     }
 
@@ -340,12 +346,23 @@ mod tests {
     #[tokio::test]
     async fn update_periodic_unreadable_index_keeps_the_deferral_start() {
         let first = now() - chrono::TimeDelta::hours(23);
-        let down = Fake { index_down: true, busy: Some(Busy::Queue), ..Fake::default() };
+        // Livre agora: o tique chega ao índice, que está fora.
+        let down = Fake { index_down: true, ..Fake::default() };
         let (since, _) = next(Some(first), &tick(&down, now(), Some(first)).await, now());
+        assert_eq!(down.newer_calls.load(Ordering::SeqCst), 1, "foi ao índice");
         assert_eq!(since, Some(first), "índice fora não zera o teto de 24 h");
         let later = now() + chrono::TimeDelta::hours(1);
         let queued = Fake { busy: Some(Busy::Queue), ..Fake::default() };
         assert_eq!(tick(&queued, later, since).await, Tick::Launched { version: "0.1.0.9".into() });
+    }
+
+    #[tokio::test]
+    async fn update_periodic_past_the_ceiling_rereads_busy_after_the_index() {
+        // Passado o teto, o trabalho solta; mas a entrega que ficou incerta durante a busca do índice segura.
+        let first = now() - chrono::TimeDelta::hours(25);
+        let fake = Fake { busy: Some(Busy::Working), uncertain_after_index: true, ..Fake::default() };
+        assert_eq!(tick(&fake, now(), Some(first)).await, Tick::Deferred(Busy::Uncertain.why().to_owned()));
+        assert_eq!(fake.launched.load(Ordering::SeqCst), 0);
     }
 
     #[test]
