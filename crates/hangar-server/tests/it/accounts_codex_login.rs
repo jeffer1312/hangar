@@ -152,7 +152,7 @@ process.stdout.write(JSON.stringify({id:m.id,result})+'\n');});"#;
     let router = Router::new()
         .route(
             "/internal/accounts/codex-invalidate",
-            post(|| async { json!({"ok":true}).to_string() }),
+            post(|| async { axum::http::StatusCode::SERVICE_UNAVAILABLE }),
         );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
