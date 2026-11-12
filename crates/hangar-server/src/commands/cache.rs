@@ -105,8 +105,15 @@ impl Cache {
         }
         let mut pending = found.pending?;
         // Abaixo do prazo do cliente: consulta lenta entrega a reserva e termina em segundo plano.
-        let waited = tokio::time::timeout(FIRST_WAIT, pending.wait_for(Option::is_some)).await;
-        let result = waited.ok()?.ok()?.clone();
+        let Ok(waited) = tokio::time::timeout(FIRST_WAIT, pending.wait_for(Option::is_some)).await
+        else {
+            tracing::warn!(
+                code = "claude_commands_probe_slow",
+                "sondagem do catálogo passou do prazo da primeira abertura; usando a lista de reserva"
+            );
+            return None;
+        };
+        let result = waited.ok()?.clone();
         result?.ok()
     }
 

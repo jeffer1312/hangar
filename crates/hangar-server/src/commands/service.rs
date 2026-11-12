@@ -87,7 +87,16 @@ impl Service {
                     Arc::new(NativeProbe {
                         accounts: accounts.clone(),
                         // Pasta apagada: a consulta volta à pasta temporária em vez de falhar.
-                        cwd: context.cwd.clone().filter(|cwd| cwd.is_dir()),
+                        cwd: context.cwd.clone().filter(|cwd| {
+                            let usable = cwd.is_dir();
+                            if !usable {
+                                tracing::warn!(
+                                    code = "claude_commands_cwd_unavailable",
+                                    "pasta da sessão inacessível; catálogo sem as configurações do projeto"
+                                );
+                            }
+                            usable
+                        }),
                         settings: context.settings.clone(),
                     }),
                     // A conta padrão roda sem CLAUDE_CONFIG_DIR, como o pane da sessão.
