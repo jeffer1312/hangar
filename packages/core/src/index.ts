@@ -84,3 +84,5 @@ export * from './tags';
 export * from './applyToOwnServers';
 export * from './passwordVault';
 export * from './plugins';
+
+export * from './scheduledTasks';

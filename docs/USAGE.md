@@ -739,6 +739,27 @@ O Electron antigo saiu do instalador. Os ajustes de **Aparência** dessa vista:
   estimado por dia, por conta/provedor, por CLI e por projeto. É estimativa com tarifa de API,
   não a fatura do Claude ou do ChatGPT. A cota de cada conta fica em **Contas e provedores**.
 
+### Tarefas agendadas
+
+No app nativo e no app do celular, abra **Configurações > Tarefas agendadas**. Escolha o
+servidor e use **Nova tarefa** para deixar um pedido ao agente. Você pode executar uma vez,
+numa data e horário, nos dias da semana escolhidos ou em intervalos. O formulário mostra o fuso
+da máquina em que a tarefa vai rodar.
+
+Escolha **Nova conversa a cada execução** para definir pasta, agente, conta e modelo. A opção
+de worktree cria uma cópia própria do projeto para cada execução. Em **Uma conversa existente**,
+o pedido usa o agente e a conta daquela conversa e entra na fila se ela estiver ocupada.
+
+A lista permite editar, pausar, ativar, executar agora e excluir uma tarefa. Ela mostra a próxima
+execução, a última tentativa e o acesso à conversa criada. **Pedido enviado** confirma o envio
+ao agente; não significa que ele terminou o trabalho. Excluir a tarefa mantém as conversas já
+criadas, e pausar não interrompe um pedido que o agente já recebeu.
+
+As tarefas pertencem ao servidor e continuam com o app fechado. Se a máquina estiver desligada
+no horário, a tarefa vencida tem uma tentativa quando o servidor volta, sem repetir todos os
+intervalos perdidos. Uma entrega que ficou sem confirmação após uma queda aparece na lista e
+não é reenviada sozinha: confira a conversa antes de usar **Executar agora**.
+
 ### Terminal de verdade
 
 O ícone de terminal no topo do chat abre um **terminal de verdade** — não é uma foto da tela: é a

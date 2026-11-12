@@ -477,7 +477,7 @@ pub(super) fn show_news(items: Vec<News>, cx: &mut App) -> bool {
 // Chamado também do `Updater`, que não tem a entidade do app no contexto: ela vem do global.
 fn show_in_app(cx: &App) -> Option<ShowInApp> {
     crate::app::Hangar::weak(cx).map(|hangar| -> ShowInApp {
-        Rc::new(move |note: crate::tour::Note, _: &mut Window, cx: &mut App| { let _ = hangar.update(cx, |this, cx| this.show_news(note, cx)); })
+        Rc::new(move |note: crate::tour::Note, window: &mut Window, cx: &mut App| { let _ = hangar.update(cx, |this, cx| this.show_news(note, window, cx)); })
     })
 }
 

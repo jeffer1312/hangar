@@ -563,6 +563,8 @@ describe('navegação e ferramentas somente sobre a tela visível', () => {
     expect(instance.handlers.runAction('settings', '../unsafe')).not.toBe(true);
     expect(instance.handlers.runAction('settings', 'voice')).toBe(true);
     expect(navigate).toHaveBeenLastCalledWith({ kind: 'settings', serverId: a.id, section: 'voice' });
+    expect(instance.handlers.runAction('settings', 'scheduled-tasks')).toBe(true);
+    expect(navigate).toHaveBeenLastCalledWith({ kind: 'settings', serverId: a.id, section: 'scheduled-tasks' });
     expect(instance.handlers.runAction('terminal', null)).toBe(true);
     currentChat();
     expect(instance.handlers.runAction('terminal', null)).not.toBe(true);

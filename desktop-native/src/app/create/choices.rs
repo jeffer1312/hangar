@@ -386,6 +386,7 @@ impl NewSession {
         let at = choices.iter().position(|a| a.id == self.engine_account);
         self.engine_account_pick = Some(picker(choices, at, false, |this, account, window, cx| {
             if this.creating || this.engine_account == account { return; }
+            this.scheduled_touch(&["engine_account", "model", "effort", "service_tier", "subagent_model"]);
             this.engine_account = account;
             this.load_models(window, cx);
         }, window, cx));
@@ -595,6 +596,15 @@ impl NewSession {
             (self.model, self.effort) = reloaded_choice(self.catalog(), self.provider, self.proxy_accounts().is_some(),
                 (self.model.clone(), self.effort.clone()), remembered);
         }
+        if self.scheduled && self.models.ok().is_some() && !self.configs.loading && !self.codex.loading && (self.provider != "claude" || self.engine.is_empty() || !self.engines.loading) {
+            if let Some(template) = self.scheduled_template.take().filter(|_| !self.model_choice_touched) {
+                if let Some(model) = template["model"].as_str().filter(|wanted| self.catalog().iter().any(|model| model.value() == *wanted)) { self.model = model.to_owned(); }
+                if let Some(effort) = template["effort"].as_str() { self.effort = effort.to_owned(); }
+                if let Some(subagent) = template["subagent_model"].as_str() { self.subagent = subagent.to_owned(); }
+                if let Some(permission) = template["permission_mode"].as_str() { self.permission = permission.to_owned(); self.permission_touched = true; }
+                self.service_tier = template["service_tier"].as_str().map(str::to_owned);
+            }
+        }
         self.build_model_picks(window, cx);
     }
 
@@ -645,6 +655,7 @@ impl NewSession {
                 .disabled(self.creating || !available)
                 .on_change(cx.listener(|this, on: &bool, _, cx| {
                     if !this.fast_available() { return; }
+                    this.scheduled_touch(&["service_tier"]);
                     this.service_tier = Some(if *on { "priority" } else { "default" }.into());
                     cx.notify();
                 }))))
@@ -660,6 +671,7 @@ impl NewSession {
                 .accessibility_label(tr("create_context_title")).disabled(self.creating || !self.engine_ready())
                 .on_change(cx.listener(|this, on: &bool, window, cx| {
                     if this.creating || !this.engine_ready() || this.provider != "claude" || !this.fast_available() { return; }
+                    this.scheduled_touch(&["model"]);
                     this.model = controls::context_model(&this.model, *on);
                     this.model_choice_touched = true;
                     this.build_model_picks(window, cx);
@@ -684,6 +696,7 @@ impl NewSession {
             .map(ModelOption::value).unwrap_or_else(|| self.model.clone());
         let at = Self::pick_at(&models, &selected);
         self.model_pick = Some(picker(models, at, true, |this, id, window, cx| {
+            this.scheduled_touch(&["model", "effort", "service_tier"]);
             this.model_choice_touched = true;
             this.model = chosen_model(this.catalog(), this.provider, this.proxy_accounts().is_some(), &this.model, &id);
             if !this.fast_available() { this.service_tier = None; }
@@ -694,7 +707,7 @@ impl NewSession {
         let subagents: Vec<ModelChoice> = std::iter::once(ModelChoice { id: String::new(), label: tr("create_subagent_default"), hint: String::new() })
             .chain(self.catalog().iter().filter(|m| m.id != "default").map(|m| ModelChoice { id: m.value(), label: m.label(), hint: String::new() })).collect();
         let at = Self::pick_at(&subagents, &self.subagent);
-        self.subagent_pick = Some(picker(subagents, at, true, |this, id, _, _| { this.model_choice_touched = true; this.subagent = id; }, window, cx));
+        self.subagent_pick = Some(picker(subagents, at, true, |this, id, _, _| { this.scheduled_touch(&["subagent_model"]); this.model_choice_touched = true; this.subagent = id; }, window, cx));
         self.build_effort_pick(window, cx);
         self.build_permission_pick(window, cx);
     }
@@ -703,7 +716,7 @@ impl NewSession {
         let choices: Vec<ModelChoice> = std::iter::once(String::new()).chain(self.levels())
             .map(|n| ModelChoice { label: if n.is_empty() { tr("create_default") } else { n.clone() }, id: n, hint: String::new() }).collect();
         let at = Self::pick_at(&choices, &self.effort);
-        self.effort_pick = Some(picker(choices, at, false, |this, id, _, _| { this.model_choice_touched = true; this.effort = id; }, window, cx));
+        self.effort_pick = Some(picker(choices, at, false, |this, id, _, _| { this.scheduled_touch(&["effort"]); this.model_choice_touched = true; this.effort = id; }, window, cx));
     }
 
     pub(super) fn build_permission_pick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -711,7 +724,7 @@ impl NewSession {
         let choices: Vec<ModelChoice> = std::iter::once(ModelChoice { id: String::new(), label: tr("create_permission_default"), hint: String::new() })
             .chain(modes.iter().map(|m| ModelChoice { id: (*m).into(), label: (*m).into(), hint: String::new() })).collect();
         let at = Self::pick_at(&choices, &self.permission);
-        self.permission_pick = Some(picker(choices, at, false, |this, id, _, _| (this.permission, this.permission_touched) = (id, true), window, cx));
+        self.permission_pick = Some(picker(choices, at, false, |this, id, _, _| { this.scheduled_touch(&["permission_mode"]); (this.permission, this.permission_touched) = (id, true); }, window, cx));
     }
 
     /// A conta Claude com a cota de cada uma na dica ("atual · 5h 42% · 7d 18%").
@@ -765,7 +778,7 @@ impl NewSession {
                 Button::new(SharedString::from(format!("new-chat-provider-{p}"))).ghost().small().selected(self.provider == p)
                     .disabled(!available || self.creating).tooltip(provider_name(p)).accessibility_label(provider_name(p))
                     .child(chrome::provider_glyph(p, 18.))
-                    .on_click(cx.listener(move |this, _, window, cx| this.set_provider(p, window, cx)))
+                    .on_click(cx.listener(move |this, _, window, cx| this.choose_provider(p, window, cx)))
             }));
         let list = match &self.models.value {
             _ if self.models.loading || self.models.value.is_none() => popup::skeleton("new-chat-models", 5).into_any_element(),
@@ -834,6 +847,7 @@ impl NewSession {
         }).collect();
         let at = choices.iter().position(|c| Some(&c.choice.id) == self.config.as_ref());
         self.config_pick = Some(picker(choices, at, false, |this, path, window, cx| {
+            this.scheduled_touch(&["config_dir", "model", "effort", "service_tier", "subagent_model", "permission_mode"]);
             (this.config, this.account_touched) = (Some(path), true);
             this.load_models(window, cx);
         }, window, cx));
@@ -853,6 +867,7 @@ impl NewSession {
         let at = choices.iter().position(|c| c.id == self.engine);
         self.engine_pick = Some(picker(choices, at, false, |this, name, window, cx| {
             if this.creating || this.engine == name { return; }
+            this.scheduled_touch(&["engine", "engine_account", "model", "effort", "service_tier", "subagent_model"]);
             this.engine = name;
             this.model.clear();
             this.effort.clear();
@@ -906,7 +921,9 @@ impl NewSession {
                     key: v.as_ref().and_then(|v| v.pointer("/campos/jev_api_key/definido")).and_then(Value::as_bool).unwrap_or(false),
                     default: v.as_ref().and_then(|v| v.pointer("/campos/jev_padrao/valor")).and_then(Value::as_bool).unwrap_or(false),
                 });
-                if self.jev.finish(seq, jev) { self.jev_on = self.jev.ok().is_some_and(|j| j.default); }
+                if self.jev.finish(seq, jev) && !self.scheduled_changed.contains("jev") {
+                    self.jev_on = self.scheduled_original.as_ref().and_then(|value| value["jev"].as_bool()).unwrap_or_else(|| self.jev.ok().is_some_and(|j| j.default));
+                }
             }
             CreateReply::Quotas(seq, result) => {
                 let list = result.map_err(|e| Hangar::fetch_failure(&e)).and_then(|v| serde_json::from_value(v).map_err(|_| tr("invalid_response")));
@@ -1301,7 +1318,7 @@ impl NewSession {
                     .child(Select::new(p).disabled(busy).accessibility_label(tr("create_subagent"))).child(muted(tr("create_subagent_help")))))
                 .when(jev, |el| el.child(div().flex().flex_col().gap(px(4.))
                     .child(Checkbox::new("create-jev").small().label(tr("create_jev")).checked(self.jev_on).disabled(busy)
-                        .on_click(cx.listener(|this, checked: &bool, _, cx| { this.jev_on = *checked; cx.notify(); })))
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| { this.scheduled_touch(&["jev"]); this.jev_on = *checked; cx.notify(); })))
                     .child(muted(tr("create_jev_help")))))))
     }
 

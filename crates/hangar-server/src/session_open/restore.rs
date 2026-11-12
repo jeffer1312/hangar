@@ -518,7 +518,7 @@ pub(crate) async fn restore_one(host: &super::server::ServerHost, st: &crate::ro
 /// A cada `EVERY`: com outro servidor do multiplexador que o da fotografia (a subida depois do reboot, ou o
 /// tmux que caiu com o Rust de pé), reabre o que ele perdeu; com o mesmo, fotografa. No Windows decide só
 /// na subida (`windows_startup`).
-pub async fn run(st: Arc<crate::routes::AppState>, home: PathBuf, program: std::ffi::OsString) {
+pub async fn run(st: Arc<crate::routes::AppState>, home: PathBuf, program: std::ffi::OsString, readiness:crate::startup::Readiness) {
     let mut snap = read(&home);
     let (mut attempts, mut done) = (std::collections::HashMap::new(), HashSet::new());
     let mut last_count: Option<u64> = None;
@@ -534,12 +534,14 @@ pub async fn run(st: Arc<crate::routes::AppState>, home: PathBuf, program: std::
         let live = st.list.discover(None).await.ok().map(|rows| rows.iter().map(|r| r.name.clone()).collect::<HashSet<String>>());
         if let Some(names) = &live { super::fallen::forget_live(&home, names); }
         if cfg!(windows) && windows.is_none() { windows = windows_startup(current, &snap); }
+        let discovered=live.is_some();
         let same = if cfg!(windows) { windows == Some(false) } else { matches!(current, MuxStart::Started(at) if snap.mux_started == Some(at)) };
         // Restaurando no Windows: volta tudo o que não está vivo, como na subida sem servidor.
         let current = if cfg!(windows) && windows == Some(true) { MuxStart::NoServer } else { current };
         hold(&snap, same);
         match (same, live.and_then(|live| to_restore(&snap, current, &live))) {
             (true, _) => {
+                if discovered && waiting.is_empty() {readiness.finish();}
                 last_count = count;
                 if let Some(alive) = alive(&st, &home, &program, &mut known).await {
                     let mut next = observe(&snap, &alive, now(), snap.mux_started);
@@ -564,6 +566,7 @@ pub async fn run(st: Arc<crate::routes::AppState>, home: PathBuf, program: std::
             // Sem a lista ou sem o multiplexador não se sabe o que existe: nada é reaberto por cima.
             (false, None) => tracing::warn!(code = "session_restore_undecided", "sem a lista ou o multiplexador; o restore espera"),
             (false, Some(_)) if ended_by_itself(&mut snap, last_count.take(), stopping().await) => {
+                readiness.finish();
                 tracing::info!("a última sessão do multiplexador terminou sozinha; nada a restaurar");
                 if let MuxStart::Started(at) = current { snap.mux_started = Some(at); }
                 if let Err(error) = write(&home, &snap) {
@@ -595,6 +598,7 @@ pub async fn run(st: Arc<crate::routes::AppState>, home: PathBuf, program: std::
                         legacy = true;
                         super::legacy_restore::after_restore(&st, &home, &program).await;
                     }
+                    if waiting.is_empty() {readiness.finish();}
                     if cfg!(windows) {
                         windows = Some(false);
                         attempts.clear();
@@ -629,13 +633,13 @@ async fn recheck(st: &crate::routes::AppState, program: &std::ffi::OsStr, waitin
 }
 
 /// A tarefa do restore, com o runtime e as pastas da lista de pé.
-pub fn spawn(st: Arc<crate::routes::AppState>) -> Option<tokio::task::JoinHandle<()>> {
+pub fn spawn(st: Arc<crate::routes::AppState>,readiness:crate::startup::Readiness) -> Option<tokio::task::JoinHandle<()>> {
     let dirs = st.list.env().dirs.clone()?;
     st.state.runtime.get()?;
     let program = st.list.env().capture_program.clone();
     // Antes da primeira rodada da varredura de grupos: até o restore decidir, a fotografia segura os nomes.
     hold(&read(&dirs.home), false);
-    Some(tokio::spawn(run(st, dirs.home, program)))
+    Some(tokio::spawn(run(st, dirs.home, program,readiness)))
 }
 
 #[cfg(test)]

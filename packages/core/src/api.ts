@@ -419,7 +419,7 @@ const SESSION_FILE_TIMEOUT_MS = 60_000;
 
 // O erro leva o `code` e o `envelope` do servidor, como o do `apiFetch`: quem decide pela recusa
 // (nome em uso, conversa já aberta) decide pelo código, não pelo texto.
-async function apiFetchForServer<T>(s: Server, path: string, init?: RequestInit, prazoMs = 8000, probe = false, fetcher?: typeof fetch): Promise<T> {
+export async function apiFetchForServer<T>(s: Server, path: string, init?: RequestInit, prazoMs = 8000, probe = false, fetcher?: typeof fetch): Promise<T> {
   let res: Response;
   // Prazo por PADRAO. Esta funcao fala com OUTRO servidor, e servidor offline atras de VPN nao
   // recusa a conexao — o socket fica pendurado e a promessa nunca resolve (o comentario do

@@ -161,7 +161,7 @@ pub(crate) async fn registry() -> Arc<RuntimeRegistry> {
     Arc::new(RuntimeRegistry::new(policy().await, "secret-test".into(), "instance-test".into()).with_processes(Arc::new(crate::runtime_open::RecipeProcesses("sid-1"))))
 }
 
-async fn open_headless(registry: &RuntimeRegistry, dir: &Path, name: &str, outcome: &'static str) {
+pub(crate) async fn open_headless(registry: &RuntimeRegistry, dir: &Path, name: &str, outcome: &'static str) {
     registry.open(RuntimeTarget { key: format!("k-{name}"), generation: 1, name: name.into(), provider: "claude".into(),
         metadata: json!({"name": name, "headless": true, "session_id": "sid-1", "initialized": true}),
         binding: CanoBinding { pid: 42, escuta: cano(outcome).await, token: "secret-test".into(), versao: 2 },

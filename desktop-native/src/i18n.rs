@@ -12,6 +12,7 @@ pub fn set_language(language: Language) {
         Language::En => true,
     };
     ENGLISH.store(english, Ordering::Relaxed);
+    gpui_kit::component::set_locale(if english { "en" } else { "pt-BR" });
 }
 
 pub fn english() -> bool {
