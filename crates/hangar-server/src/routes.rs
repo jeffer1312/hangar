@@ -1505,9 +1505,12 @@ pub(crate) async fn events(
     };
     // Antes de qualquer repasse: sessão em erro ainda sem transcript também é reaberta.
     if info.is_some() { st.request_reopen(&name); }
-    // Sessão inexistente ou provedor fora do Rust: o Python é o dono.
+    // Todo provedor é do Rust: sem ligação é sessão inexistente ou ainda sem conversa.
     let Some(binding) = info.as_ref().and_then(Binding::from_info) else {
-        return pass(&st, req, &fwd).await;
+        let mut response = hangar_core::http::detail(StatusCode::NOT_FOUND, "erro_sessao_inexistente",
+            "session or transcript not found", serde_json::json!({}));
+        cors(req.headers(), response.headers_mut());
+        return response;
     };
     // A query vence: o app recria o EventSource a cada queda, e objeto novo não manda o cabeçalho.
     let resume = auth::query_param(req.uri().query(), "last_event_id")

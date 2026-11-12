@@ -433,10 +433,12 @@ async fn missing_session_still_reaches_python_404() {
     fake.set_info(Value::Null);
     let r = client().get(format!("http://{srv}/api/sessions/s/history")).bearer_auth(OWNER).send().await.unwrap();
     assert_eq!(r.text().await.unwrap(), "from-python");
+    // O Python não tem `/events`: o Rust responde a sessão inexistente com o código.
     let r = open_events(srv, "s", "", &[]).await;
-    assert_eq!(r.text().await.unwrap(), "from-python");
+    assert_eq!(r.status(), 404);
+    assert_eq!(r.json::<Value>().await.unwrap()["detail"]["code"], "erro_sessao_inexistente");
     assert_eq!(fake.hits_to("/api/sessions/s/history"), 1);
-    assert_eq!(fake.hits_to("/api/sessions/s/events"), 1);
+    assert_eq!(fake.hits_to("/api/sessions/s/events"), 0);
     assert!(fake.diag().is_empty(), "sessão inexistente não é falha");
 }
 
