@@ -163,7 +163,7 @@ async fn reach_dns_fails() -> Reach {
 /// Lojas de convite e de par numa pasta, sem tailscale de verdade (também usada pelos testes de grupo).
 pub(crate) fn share_state(shares: &Path, pair_dir: &Path, clock: Arc<Mutex<f64>>) -> Arc<ShareState> {
     let facts = Arc::new(LifeFacts::default());
-    facts.apply_snapshot(HashMap::new(), HashSet::new());
+    facts.apply_transfer_snapshot(HashMap::new(), HashSet::new());
     Arc::new(ShareState {
         store: ShareStore::open(shares.to_path_buf(), Arc::new(move || *clock.lock().unwrap())),
         pairs: PairStore::open(pair_dir.join("external_pairs.json")),

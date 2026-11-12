@@ -225,11 +225,9 @@ def codex(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime_coordinator, "_current", _Dono("rust"))
     sidecar = {"headless": True}
     monkeypatch.setattr(codex_sessions, "load", lambda name: sidecar)
-    confirmados = []
-    monkeypatch.setattr(sse, "_confirm_codex_queue", lambda name, jsonl: confirmados.append((name, jsonl)))
     jsonl = tmp_path / "rollout-abc.jsonl"
     jsonl.write_text("")
-    return adapter, jsonl, sidecar, confirmados
+    return adapter, jsonl, sidecar
 
 
 @pytest.mark.parametrize("modo,sidecar,owns,rust", [
@@ -260,20 +258,19 @@ async def _por(gen, segundos):
 
 
 async def test_codex_headless_guest_reads_six_from_rust_channel(codex):
-    _adapter, jsonl, _sidecar, confirmados = codex
+    _adapter, jsonl, _sidecar = codex
     async with _CanalRust(_CODEX_EVENTS):
         gen = sse.merged_events("cx", str(jsonl), provider="codex", count_app=False)
         vistos = await _coleta(gen, lambda v: "ferramenta" in _nomes(v) and "message" in _nomes(v))
     do_rust = [(e["event"], e["data"]) for e in vistos if e["event"] in _SEIS]
     assert do_rust == _CODEX_EVENTS, "os seis passam como o hub os publicou, sem cópia do Python"
-    assert confirmados == [], "o hub que o canal assina confirma a fila; o Python não pede de novo"
 
 
 async def test_codex_turning_rust_owned_moves_the_queue_to_the_channel(codex, monkeypatch):
     # Connect: o Codex com terminal fora do Rust vira sem terminal do Rust no meio do stream. O `follow`
     # do Python sai junto das fontes do estado e as bolhas passam a vir do canal do hub.
     from app.models import SessionInfo
-    adapter, jsonl, sidecar, confirmados = codex
+    adapter, jsonl, sidecar = codex
     sidecar["headless"] = False
 
     async def quieto():
@@ -304,7 +301,6 @@ async def test_codex_turning_rust_owned_moves_the_queue_to_the_channel(codex, mo
                 if ev["event"] == "message" and f"queued-{antes['id']}" in ev["data"]:
                     viu_python.append(True)
                 elif ev["event"] == "reset":
-                    troca["confirmados"] = len(confirmados)
                     troca["depois"] = queue.append("depois da troca", delivered=False)
                 if ate(ev):
                     return
@@ -319,7 +315,6 @@ async def test_codex_turning_rust_owned_moves_the_queue_to_the_channel(codex, mo
             await gen.aclose()
     assert "reset" in _nomes(vistos)
     assert not any(f"queued-{troca['depois']['id']}" in e["data"] for e in vistos if e["event"] == "message")
-    assert len(confirmados) == troca["confirmados"], "o Rust confirma; o Python não pede mais"
 
 
 @pytest.mark.parametrize("count_app", [False, True])

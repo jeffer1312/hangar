@@ -1,0 +1,15 @@
+[package]
+name = "hangar-codex-transfer"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+hangar-core.workspace = true
+hangar-conversation-transfer.workspace = true
+serde_json.workspace = true
+ring.workspace = true
+tokio = { workspace = true, features = ["fs", "time"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }

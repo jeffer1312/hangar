@@ -137,7 +137,7 @@ async fn harness() -> H {
         probe.keys.lock().unwrap().insert(name.into(), key.into());
     }
     let facts = Arc::new(LifeFacts::default());
-    facts.apply_snapshot(HashMap::new(), HashSet::new());
+    facts.apply_transfer_snapshot(HashMap::new(), HashSet::new());
     let share = Arc::new(ShareState {
         store: ShareStore::open(dir.path().join("shares.json"), Arc::new(|| 100.0)),
         pairs: PairStore::open(dir.path().join("external_pairs.json")),

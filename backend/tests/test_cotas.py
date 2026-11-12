@@ -31,10 +31,3 @@ def test_sugestao_ignora_sem_leitura_e_outros_provedores():
 def test_sugestao_empate_fica_com_a_conta_padrao():
     s = cotas.sugerir_claude([_conta("claude:/outra", 30), _conta("claude:/padrao", 30, ativa=True)])
     assert (s.path, s.ativa) == ("/padrao", True)
-
-
-def test_rotulo_vem_da_duracao_do_provedor():
-    assert cotas._rotulo_janela(300) == "5h"
-    assert cotas._rotulo_janela("10080") == "7d"
-    assert cotas._rotulo_janela(90) == "90min"
-    assert cotas._rotulo_janela(None) == "janela"

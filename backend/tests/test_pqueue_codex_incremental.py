@@ -90,11 +90,11 @@ def test_cache_limitado_e_separado_por_caminho(tmp_path, monkeypatch):
     for i, path in enumerate(paths):
         path.write_text(line(str(i)))
         assert read(path) == {str(i)}
-    assert set(pqueue._indices) == {(str(p), "codex", 0) for p in paths[1:]}
+    assert set(pqueue._indices) == {(str(p), "codex") for p in paths[1:]}
     monkeypatch.setattr(pqueue, "_INDICE_CHARS", 1)
     paths[2].write_text(line("texto grande"))
     assert read(paths[2]) == {"texto grande"}
-    assert (str(paths[2]), "codex", 0) not in pqueue._indices
+    assert (str(paths[2]), "codex") not in pqueue._indices
 
 
 # Claude: a confirmação roda a cada envio e durante turno longo. Reler o transcript inteiro (MBs)

@@ -1,9 +1,8 @@
 //! Ponte privada dos convites (`/__hangar_server/share`): o Rust é o único dono de `shares.json` e
 //! `external_pairs.json`. O Python pede aqui o que só ele vê acontecer (fechar, renomear, trocar
-//! de modo, transferência, sessão morta, recado do MCP), com o envelope das outras pontes
+//! sessão morta e recado), com o envelope das outras pontes
 //! (`{op, args}` → `{ok, result}` | `{ok: false, error}`). As rotas do dono que chegam pelo
 //! Connect têm caminho privado explícito, nunca um repasse genérico "como dono".
-use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -28,9 +27,6 @@ const MAX_BODY: usize = 1 << 20;
 enum Operation {
     RevokeSession { name: String },
     SetLife { name: String, life: Option<String> },
-    ModeChangeBegin { name: String },
-    ModeChangeEnd { name: String, #[serde(default)] source_life: Option<String> },
-    FactsSnapshot { lives: HashMap<String, String>, changing: HashSet<String> },
     SessionDied { name: String },
     EndPair { local: String, address: String },
     ActiveSessions {},
@@ -43,7 +39,6 @@ fn io_failed(e: std::io::Error) -> Failed {
 }
 
 async fn execute(st: Arc<AppState>, share: Arc<ShareState>, op: Operation) -> Result<Value, Failed> {
-    let facts = share.lives.facts();
     match op {
         Operation::RevokeSession { name } => {
             // Fechar mata a sessão: convite e par dela saem juntos, como no `kill_session`.
@@ -60,14 +55,6 @@ async fn execute(st: Arc<AppState>, share: Arc<ShareState>, op: Operation) -> Re
             }
             Ok(json!({}))
         },
-        Operation::ModeChangeBegin { name } => { facts.begin_mode_change(&name); Ok(json!({})) }
-        Operation::ModeChangeEnd { name, source_life } => {
-            // A transferência que segue incompleta (restauração que falhou) continua valendo.
-            facts.end_mode_change(&name);
-            facts.set_life(&name, source_life);
-            Ok(json!({}))
-        }
-        Operation::FactsSnapshot { lives, changing } => { facts.apply_snapshot(lives, changing); Ok(json!({})) }
         Operation::SessionDied { name } => {
             pair_routes::session_died(st, share, Arc::new(Direct), &name).await;
             Ok(json!({}))

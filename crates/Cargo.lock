@@ -1608,6 +1608,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-codex-transfer"
+version = "0.1.0"
+dependencies = [
+ "hangar-conversation-transfer",
+ "hangar-core",
+ "ring",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "hangar-connect"
 version = "0.1.0"
 dependencies = [
@@ -1631,6 +1643,20 @@ dependencies = [
  "tokio",
  "tracing",
  "zip",
+]
+
+[[package]]
+name = "hangar-conversation-transfer"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "hangar-core",
+ "proptest",
+ "regex",
+ "ring",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -1806,7 +1832,9 @@ dependencies = [
  "hangar-api",
  "hangar-auth",
  "hangar-codex",
+ "hangar-codex-transfer",
  "hangar-connect",
+ "hangar-conversation-transfer",
  "hangar-core",
  "hangar-deploy",
  "hangar-desktop-theme",

@@ -154,21 +154,3 @@ def test_python_mode_answers_unavailable_with_code(rust, monkeypatch, method, ur
     response = TestClient(app).request(method, url, headers=AUTH, content=b"x" if method == "POST" else None)
     assert (response.status_code, response.json()["detail"]["code"]) == (503, "erro_midia_precisa_rust")
     assert _Rust.seen == []
-
-
-def test_transferred_conversation_image_stays_in_python(rust, monkeypatch):
-    from app import api
-    monkeypatch.setattr(api, "_cached_info_sync", lambda name: None)
-    response = TestClient(app).get("/api/sessions/s/transcript-image/transfer:r:claude:u/0", headers=AUTH)
-    assert (response.status_code, response.json()["detail"]["code"]) == (404, "erro_sessao_inexistente")
-    assert _Rust.seen == []
-
-
-def test_transferred_image_never_serves_active_content(rust, monkeypatch):
-    from app import api, conversation_history
-    monkeypatch.setattr(api, "_cached_info_sync", lambda name: SimpleNamespace(jsonl="/x.jsonl", provider="codex", name=name))
-    for media, served in (("text/html", "application/octet-stream"), ("image/svg+xml", "application/octet-stream"),
-                          ("image/JPEG", "image/jpeg")):
-        monkeypatch.setattr(conversation_history, "transcript_image", lambda info, uuid, idx, m=media: (b"img", m))
-        response = TestClient(app).get("/api/sessions/s/transcript-image/transfer:r:claude:u/0", headers=AUTH)
-        assert (response.status_code, response.headers["content-type"], response.headers["x-content-type-options"]) == (200, served, "nosniff")

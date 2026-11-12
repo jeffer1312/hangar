@@ -625,17 +625,6 @@ def test_codex_service_tier_failure_is_not_success(api_client, failure):
     assert response.json()["detail"]["code"] == "erro_codex_controle"
 
 
-def test_codex_service_tier_respects_transfer_guard(api_client):
-    from app import conversation_transfer as transfers
-    fake = _fake_codex_adapter()
-    fake.set_service_tier = AsyncMock()
-    with patch.object(transfers, "require_available", side_effect=transfers.TransferError("session_transfer_busy")), \
-         patch("app.api.get_adapter", return_value=fake):
-        response = api_client.post("/api/sessions/cx/service-tier", headers=_h(), json={"service_tier": "priority"})
-    assert response.status_code == 409
-    fake.set_service_tier.assert_not_awaited()
-
-
 def test_select_route(api_client):
     with patch("app.api.terminal.select") as sel:
         r = api_client.post("/api/sessions/cc/select", json={"option": 2}, headers=_h())

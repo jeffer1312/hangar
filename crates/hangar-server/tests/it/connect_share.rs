@@ -91,7 +91,7 @@ fn env_with(mode: Ts) -> Env {
     state::write(&dir, &linked()).unwrap();
     std::fs::write(gate(&dir), "").unwrap();
     let facts = Arc::new(LifeFacts::default());
-    facts.apply_snapshot(HashMap::new(), HashSet::new());
+    facts.apply_transfer_snapshot(HashMap::new(), HashSet::new());
     let ts = Arc::new(FakeTs { mode, calls: AtomicUsize::new(0) });
     let share = Arc::new(ShareState {
         store: ShareStore::open(dir.join("shares.json"), Arc::new(|| 1_000.0)),

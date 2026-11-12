@@ -1732,7 +1732,7 @@ async fn account_switch_on_asleep_reopens_with_terminal() {
     fx.finish();
 }
 
-/// A transferência para o Codex, que segue ao Python, é recusada na adormecida antes de repassar.
+/// A transferência para o Codex é recusada na adormecida sem chamar o Python.
 #[tokio::test]
 async fn transfer_on_asleep_is_refused() {
     let fx = fixture();
@@ -1743,3 +1743,6 @@ async fn transfer_on_asleep_is_refused() {
     assert_eq!(python.hits_to("/api/sessions/s1/conta"),0,"nada foi ao Python");
     assert!(fx.sidecar_path("s1").exists(),"segue adormecida");
 }
+
+#[path = "conversation_transfer.rs"]
+mod conversation_transfer;
