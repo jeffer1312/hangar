@@ -34,7 +34,7 @@ pub trait Native: Send {
 }
 
 mod preferences;
-pub use preferences::project_preferences;
+pub use preferences::{project_preferences, project_trust_edits};
 
 mod common;
 mod config;

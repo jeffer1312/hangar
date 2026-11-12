@@ -102,8 +102,8 @@ Dados temporais novos deverão declarar sua normalização na Task consumidora.
 `PythonReference` recusa operações de conta com 503 e
 `contract_python_handler_blocked`, guardando um diário separado. Uma resposta
 200 entregue por proxy Python falha em `assert_rust_ownership`. Só
-`bridge.prepare` e `bridge.other_quotas` são
-permitidas nessa conferência. As quatro rotas da ponte Pi/omp aposentada
+`bridge.other_quotas` é permitida nessa conferência; o preparo não usa mais ponte Python.
+As quatro rotas da ponte Pi/omp aposentada
 (`device-propagate`, `/ack`, `/close` e `device-propagate-state`) entram no diário
 como `bridge.propagate_device_login` e reprovam a conferência;
 `/__contract__/secondary-native-only` as recusa antes do handler. Na integração, a instância Rust deve apontar para

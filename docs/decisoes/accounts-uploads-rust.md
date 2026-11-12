@@ -79,8 +79,8 @@ semeadura do `.claude.json` sem `oauthAccount` na criação) é do Rust:
 
 - A abertura de sessão (inclusive a reserva pré-aquecida e o `hangar-server open` com o servidor
   fora) reconcilia em processo sob a guarda da conta, com teto de 120 s que vale para as travas e
-  impede a reconciliação de começar depois dele. A criação pelo app semeia em processo; o
-  `/internal/accounts/prepare` ficou só para o Codex.
+  impede a reconciliação de começar depois dele. A criação pelo app semeia em processo.
+  O preparo Codex também passou ao Rust e a rota privada foi retirada (seção abaixo).
 - O shell chega à mesma regra por `hangar-conta` (lançador Python que só chama `hangar-server
   conta`), com o contrato de sempre: caminho no stdout, avisos `hangar-conta: ` no stderr, saídas
   0/1/2/126. O conserto "Contas" da saúde e a criação pela sincronização entre máquinas chamam esse
@@ -121,6 +121,13 @@ espelhamento e suas fronteiras, e os testes de contas cobrem a coordenação e a
 Também foi aprovada a categoria técnica genérica em `params.error` quando a fronteira de
 escrita de configuração ou adaptação de hooks não conserva a classe da exceção Python.
 O código público que identifica o problema permanece igual.
+
+A preparação conserva o manifesto dos efeitos já concluídos mesmo se uma etapa posterior
+falhar; só a assinatura do cache depende da verificação final. Plugins retirados da fonte
+permanecem gerenciados até confirmar sua ausência ou desativação. O filtro de ambiente ignora
+diferenças de caixa e exclui tokens literais e cabeçalhos de autenticação dos provedores,
+preservando referências a variáveis de ambiente. Caminhos de hooks com `./` são normalizados.
+A confiança de projeto preenche a chave ausente sem substituir uma escolha explícita.
 
 ## Anexos
 

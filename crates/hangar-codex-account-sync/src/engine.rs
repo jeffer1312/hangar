@@ -38,10 +38,24 @@ pub async fn prepare(
         Ok(value) => value,
         Err(_) => return failure("codex_account_state_invalid"),
     };
+    let _guard = match storage::lock(&paths.destination.join(".hangar-integracao.lock")).await {
+        Ok(guard) => guard,
+        Err(error) => {
+            return status(
+                "error",
+                vec![issue(
+                    "codex_account_prepare_failed",
+                    json!({"error":error.kind()}),
+                )],
+                false,
+                None,
+                None,
+            );
+        }
+    };
     let result = async {
-        let _guard = storage::lock(&paths.destination.join(".hangar-integracao.lock")).await?;
         previous = storage::read_state(paths)?;
-        run(paths, force, &previous, native).await
+        run(paths, force, &mut previous, native).await
     }
     .await;
     match result {
@@ -59,6 +73,7 @@ pub async fn prepare(
             };
             let value = status("error", vec![issue(code, params)], false, None, None);
             previous["public"] = value.clone();
+            invalidate_cache(&mut previous);
             let _ = storage::write_state(paths, &previous);
             value
         }
@@ -189,7 +204,7 @@ fn source_config(native: &impl Native, root: &Path, relative: &str) -> Result<Va
 async fn run(
     paths: Paths<'_>,
     force: bool,
-    state: &Value,
+    state: &mut Value,
     native: &mut impl Native,
 ) -> Result<Value, Error> {
     if fs::canonicalize(paths.source).unwrap_or(std::path::absolute(paths.source)?)
@@ -290,6 +305,7 @@ async fn run(
         );
         let mut next = state.clone();
         next["public"] = value.clone();
+        invalidate_cache(&mut next);
         let _ = storage::write_state(paths, &next);
         return Ok(value);
     }
@@ -306,10 +322,7 @@ async fn run(
     let trust = public_state(state)["trust_pending"]
         .as_bool()
         .unwrap_or(false);
-    let mut running = state.clone();
-    running["source_digest"] = json!(source_digest);
-    running["cli_version"] = json!(version);
-    stage(paths, &mut running, &issues, trust, "configuracoes")?;
+    stage(paths, state, &issues, trust, "configuracoes")?;
     let available = files
         .keys()
         .cloned()
@@ -338,6 +351,8 @@ async fn run(
             state.get("config").cloned().unwrap_or(json!({}))
         }
     };
+    state["config"] = config_result.clone();
+    checkpoint(paths, state)?;
     let mut profile_results = serde_json::Map::new();
     for (name, profile) in &source_profiles {
         let result = match resources::safe_destination(paths.destination, name, false) {
@@ -363,7 +378,9 @@ async fn run(
                 state["profiles"].get(name).cloned().unwrap_or(json!({}))
             }
         };
-        profile_results.insert(name.clone(), result);
+        profile_results.insert(name.clone(), result.clone());
+        state["profiles"][name] = result;
+        checkpoint(paths, state)?;
     }
     for (name, old) in object(&state["profiles"]) {
         if source_profiles.contains_key(&name) || !old.is_object() {
@@ -380,8 +397,12 @@ async fn run(
         match result {
             Ok(value) => {
                 if !object(&value["values"]).is_empty() {
-                    profile_results.insert(name, value);
+                    profile_results.insert(name.clone(), value.clone());
+                    state["profiles"][&name] = value;
+                } else if let Some(profiles) = state["profiles"].as_object_mut() {
+                    profiles.remove(&name);
                 }
+                checkpoint(paths, state)?;
             }
             Err(error) => {
                 issues.push(issue(
@@ -392,7 +413,8 @@ async fn run(
             }
         }
     }
-    stage(paths, &mut running, &issues, trust, "recursos")?;
+    state["profiles"] = json!(profile_results);
+    stage(paths, state, &issues, trust, "recursos")?;
     let mut resources = resources::sync(
         &files,
         paths,
@@ -402,6 +424,8 @@ async fn run(
         &mut issues,
         source_issues.is_empty(),
     );
+    state["resources"] = resources.clone();
+    checkpoint(paths, state)?;
     for (name, desired) in overrides {
         if resources.get(&name).is_none() {
             continue;
@@ -416,6 +440,8 @@ async fn run(
             .map_err(|_| Error::Native)?;
         if let Some(raw) = read(&path)? {
             resources[&name]["hash"] = json!(hash(&raw));
+            state["resources"] = resources.clone();
+            checkpoint(paths, state)?;
         }
     }
     let mut plugins = state
@@ -429,13 +455,15 @@ async fn run(
             .iter()
             .any(|key| source[*key].is_object());
     if plugins_configured {
-        stage(paths, &mut running, &issues, trust, "plugins")?;
+        stage(paths, state, &issues, trust, "plugins")?;
         let outcome = native
             .sync_plugins(paths, &plugins)
             .await
             .map_err(|_| Error::Native)?;
         if let Some(manifest) = outcome.get("manifest") {
             plugins = manifest.clone();
+            state["plugins"] = plugins.clone();
+            checkpoint(paths, state)?;
         }
         issues.extend(outcome["issues"].as_array().into_iter().flatten().cloned());
         if let Some(trust) = outcome["trust_pending"].as_bool() {
@@ -524,5 +552,24 @@ fn stage(
     name: &str,
 ) -> Result<(), Error> {
     state["public"] = status("running", issues.to_vec(), trust, Some(name), None);
+    checkpoint(paths, state)
+}
+
+fn invalidate_cache(state: &mut Value) {
+    if let Some(fields) = state.as_object_mut() {
+        for key in [
+            "source_inventory",
+            "destination_inventory",
+            "plugins_checked_at",
+            "plugins_attempted_at",
+        ] {
+            fields.remove(key);
+        }
+    }
+}
+
+fn checkpoint(paths: Paths<'_>, state: &mut Value) -> Result<(), Error> {
+    // O manifesto acompanha efeitos confirmados; a assinatura só volta após a verificação final.
+    invalidate_cache(state);
     storage::write_state(paths, state)
 }

@@ -13,6 +13,8 @@ struct Fake {
     installs: Mutex<Vec<String>>,
     orphan: Mutex<bool>,
     fail_install: bool,
+    failed_plugin_reads: Mutex<std::collections::VecDeque<bool>>,
+    fail_config: bool,
     trust: Option<bool>,
 }
 impl Fake {
@@ -27,6 +29,8 @@ impl Fake {
             installs: Mutex::new(vec![]),
             orphan: Mutex::new(false),
             fail_install: false,
+            failed_plugin_reads: Mutex::new(std::collections::VecDeque::new()),
+            fail_config: false,
             trust: Some(false),
         }
     }
@@ -51,7 +55,21 @@ impl PluginsNative for Fake {
         })
     }
     fn plugins<'a>(&'a self, account: &'a Path) -> BoxFuture<'a, Result<Vec<Value>, NativeError>> {
-        Box::pin(async move { Ok(self.states.lock().unwrap()[account].plugins.clone()) })
+        Box::pin(async move {
+            if self
+                .failed_plugin_reads
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(false)
+            {
+                return Err(NativeError {
+                    kind: "CodexNativoErro".into(),
+                    stderr: String::new(),
+                });
+            }
+            Ok(self.states.lock().unwrap()[account].plugins.clone())
+        })
     }
     fn marketplaces<'a>(
         &'a self,
@@ -130,6 +148,9 @@ impl PluginsNative for Fake {
         plan: &'a mut ConfigPlan<'_>,
     ) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(async move {
+            if self.fail_config {
+                return Err("Escrita recusada pelo Codex".into());
+            }
             let mut config = std::fs::read_to_string(path)
                 .ok()
                 .and_then(|s| serde_json::from_str::<Value>(&s).ok())
@@ -341,6 +362,92 @@ async fn removed_plugin_with_replaced_origin_is_preserved() {
     let result = sync(f.paths(), &old, &fake).await;
     assert!(has(&result, "codex_account_plugin_origin_conflict"));
     assert_eq!(fake.target().plugins[0]["enabled"], true);
+}
+
+async fn removal_retries_after_failure(
+    failed_reads: &[bool],
+    fail_config: bool,
+    remains_enabled: bool,
+) {
+    let f = Fixture::new();
+    let mut fake = f.fake();
+    let plugin = f.plugin();
+    let mut personal = plugin.clone();
+    personal["pluginId"] = json!("personal@market");
+    personal["name"] = json!("personal");
+    fake.set(&f.target, vec![plugin, personal], vec![f.marketplace()]);
+    let path = f.market.to_string_lossy().into_owned();
+    let path = if cfg!(windows) {
+        path.to_lowercase()
+    } else {
+        path
+    };
+    let old = json!({"plugins":{"sample@market":{"version":"1.0.0","enabled":true,"origem":{"type":"local","source":path}}}});
+    *fake.failed_plugin_reads.lock().unwrap() = failed_reads.iter().copied().collect();
+    fake.fail_config = fail_config;
+    let failed = sync(f.paths(), &old, &fake).await;
+    assert_eq!(
+        failed["manifest"]["plugins"]["sample@market"]["origem"],
+        old["plugins"]["sample@market"]["origem"],
+        "A remoção ainda não confirmada precisa conservar a identidade gerenciada"
+    );
+    assert_eq!(
+        fake.target()
+            .plugins
+            .iter()
+            .find(|p| p["pluginId"] == "sample@market")
+            .unwrap()["enabled"],
+        remains_enabled
+    );
+    if fail_config {
+        assert!(has(&failed, "codex_account_plugin_config_failed"));
+    } else if failed_reads.first() == Some(&true) {
+        assert!(has(&failed, "codex_account_plugin_inventory_failed"));
+    }
+    fake.fail_config = false;
+    let retried = sync(f.paths(), &failed["manifest"], &fake).await;
+    assert_eq!(retried["issues"], json!([]));
+    assert_eq!(
+        fake.target()
+            .plugins
+            .iter()
+            .find(|p| p["pluginId"] == "sample@market")
+            .unwrap()["enabled"],
+        false
+    );
+    assert!(
+        retried["manifest"]["plugins"]
+            .get("sample@market")
+            .is_none()
+    );
+    assert_eq!(
+        fake.target()
+            .plugins
+            .iter()
+            .find(|p| p["pluginId"] == "personal@market")
+            .unwrap()["enabled"],
+        true
+    );
+    assert!(
+        retried["manifest"]["plugins"]
+            .get("personal@market")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn removed_plugin_inventory_failure_preserves_manifest_until_retry() {
+    removal_retries_after_failure(&[true, false], false, true).await;
+}
+
+#[tokio::test]
+async fn removed_plugin_disable_failure_preserves_manifest_until_retry() {
+    removal_retries_after_failure(&[], true, true).await;
+}
+
+#[tokio::test]
+async fn removed_plugin_confirmation_failure_preserves_manifest_until_retry() {
+    removal_retries_after_failure(&[false, true], false, false).await;
 }
 #[tokio::test]
 async fn failed_install_preserves_previous_manifest() {

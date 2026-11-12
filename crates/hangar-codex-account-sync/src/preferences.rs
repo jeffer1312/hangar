@@ -80,6 +80,15 @@ fn issue(code: &str, params: Value) -> Value {
     json!({"code":code,"params":params})
 }
 
+/// Planeja a confiança da pasta sem substituir uma escolha explícita da pessoa.
+pub fn project_trust_edits(current: &Value, cwd: &str) -> Vec<Value> {
+    if current.get("projects").and_then(|projects| projects.get(cwd)).and_then(|project| project.get("trust_level")).is_some() {
+        Vec::new()
+    } else {
+        vec![json!({"keyPath":format!("projects.{}.trust_level",json!(cwd)),"value":"trusted","mergeStrategy":"replace"})]
+    }
+}
+
 /// Seleciona preferências herdáveis; identidade e estado privado nunca entram na projeção.
 ///
 /// # Errors
@@ -127,18 +136,14 @@ pub fn project_preferences(source: &Value) -> Result<(Value, Vec<Value>), String
         if key == "shell_environment_policy" {
             if let Some(variables) = projected.get_mut("set").and_then(Value::as_object_mut) {
                 for variable in variables.keys() {
-                    if PROVIDER_ENV.contains(&variable.as_str()) {
+                    if PROVIDER_ENV.contains(&variable.to_ascii_uppercase().as_str()) {
                         issues.push(issue(
                             "codex_account_provider_divergence",
                             json!({"key":variable}),
                         ));
                     }
                 }
-                variables.retain(|name, _| {
-                    !auth_name(name)
-                        && !PROVIDER_ENV.contains(&name.as_str())
-                        && !RUNTIME_ENV.contains(&name.as_str())
-                });
+                variables.retain(|name, _| !excluded(name));
             }
         } else if key == "mcp_servers" {
             if let Some(servers) = projected.as_object_mut() {
@@ -147,7 +152,7 @@ pub fn project_preferences(source: &Value) -> Result<(Value, Vec<Value>), String
                         env.retain(|name, _| {
                             if excluded(name) {
                                 issues.push(issue(
-                                    if RUNTIME_ENV.contains(&name.as_str()) {
+                                    if RUNTIME_ENV.contains(&name.to_ascii_uppercase().as_str()) {
                                         "codex_account_mcp_runtime_excluded"
                                     } else {
                                         "codex_account_mcp_auth_excluded"
@@ -167,6 +172,14 @@ pub fn project_preferences(source: &Value) -> Result<(Value, Vec<Value>), String
         {
             for (provider, config) in providers {
                 if let Some(fields) = config.as_object_mut() {
+                    if let Some(headers) = fields.get_mut("http_headers").and_then(Value::as_object_mut) {
+                        headers.retain(|name, _| {
+                            if matches!(name.to_ascii_lowercase().as_str(), "authorization" | "proxy-authorization") {
+                                issues.push(issue("codex_account_provider_auth_excluded", json!({"provider":provider,"key":format!("http_headers.{name}")})));
+                                false
+                            } else { true }
+                        });
+                    }
                     fields.retain(|name, _| {
                         if [
                             "api_key",
@@ -174,6 +187,7 @@ pub fn project_preferences(source: &Value) -> Result<(Value, Vec<Value>), String
                             "refresh_token",
                             "password",
                             "secret",
+                            "experimental_bearer_token",
                         ]
                         .contains(&name.to_lowercase().as_str())
                         {

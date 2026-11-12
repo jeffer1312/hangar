@@ -64,10 +64,6 @@ pub(super) async fn pretrust(
         return Err("Pasta de trabalho inválida".into());
     }
     let cwd = directory.to_str().ok_or("Pasta de trabalho não é UTF-8")?;
-    let key = format!(
-        "projects.{}.trust_level",
-        serde_json::to_string(cwd).map_err(|e| e.to_string())?
-    );
     let config = account.home.join("config.toml");
     let private = crate::codex_setup::status::root(&service.env.home, &account.home)
         .map_err(|e| e.message)?;
@@ -76,18 +72,7 @@ pub(super) async fn pretrust(
         &config,
         &private.join("backups"),
         &private,
-        |current| {
-            if current
-                .get("projects")
-                .and_then(|p| p.get(cwd))
-                .is_some()
-            {
-                return Ok(Vec::new());
-            }
-            Ok(vec![
-                json!({"keyPath":key,"value":"trusted","mergeStrategy":"replace"}),
-            ])
-        },
+        |current| Ok(hangar_codex_account_sync::project_trust_edits(current, cwd)),
     )
     .await?;
     let raw = std::fs::read_to_string(config).map_err(|e| e.to_string())?;

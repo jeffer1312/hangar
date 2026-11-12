@@ -9,6 +9,19 @@ use std::{
     },
 };
 
+#[tokio::test]
+async fn dot_prefixed_hook_path_is_inherited_without_unmapped_reference() {
+    let f = Fixture::new();
+    f.source("hooks/run.sh", "#!/bin/sh\nexit 0\n");
+    f.source("hooks.json", r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"sh ./hooks/run.sh"}]}]}}"#);
+    let result = prepare(f.paths(), false, false, &mut Cli::default()).await;
+    assert_eq!(result["status"], "ready", "{result}");
+    assert!(!has(&result, "codex_account_unmapped_reference"));
+    let hooks: Value = serde_json::from_slice(&std::fs::read(f.destination.join("hooks.json")).unwrap()).unwrap();
+    let command = hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"].as_str().unwrap();
+    assert!(command.contains(&f.destination.join("hooks/run.sh").display().to_string()));
+}
+
 struct Cli {
     now: f64,
     version: String,

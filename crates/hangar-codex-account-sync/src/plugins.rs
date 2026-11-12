@@ -881,6 +881,8 @@ pub async fn sync(paths: Paths<'_>, previous: &Value, native: &impl PluginsNativ
         .iter()
         .filter(|(id, _)| !source_items.contains_key(*id))
     {
+        // A intenção permanece até o inventário confirmar a desativação ou a ausência.
+        preserve(id, &mut managed);
         if let Some(item) = target_items.get(id) {
             let current = origin(item, paths.home);
             if current.is_some() && current == old_origin(old, paths.home) {
@@ -890,13 +892,32 @@ pub async fn sync(paths: Paths<'_>, previous: &Value, native: &impl PluginsNativ
                     "codex_account_plugin_origin_conflict",
                     json!({"plugin":id}),
                 ));
-                preserve(id, &mut managed);
             }
         }
     }
     write_enabled(&paths, &desired, native, &mut issues).await;
-    if let Ok(items) = native.plugins(paths.destination).await.and_then(plugin_map) {
-        target_items = items;
+    match native.plugins(paths.destination).await.and_then(plugin_map) {
+        Ok(items) => {
+            for (id, old) in previous_plugins
+                .iter()
+                .filter(|(id, _)| !source_items.contains_key(*id))
+            {
+                let confirmed = items.get(id).is_none_or(|item| {
+                    let current = origin(item, paths.home);
+                    item["enabled"] == false
+                        && current.is_some()
+                        && current == old_origin(old, paths.home)
+                });
+                if confirmed {
+                    managed.remove(id);
+                }
+            }
+            target_items = items;
+        }
+        Err(error) => issues.push(issue(
+            "codex_account_plugin_inventory_failed",
+            json!({"error":error.kind}),
+        )),
     }
     for (id, entry) in &mut managed {
         if let Some(enabled) = target_items

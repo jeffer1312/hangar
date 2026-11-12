@@ -243,7 +243,8 @@ pub(crate) fn source_relative(value: &str, source: &Path, home: &Path) -> Option
     } else {
         return None;
     };
-    Some(relative.to_string_lossy().replace('\\', "/"))
+    let normalized: PathBuf = relative.components().filter(|component| !matches!(component, Component::CurDir)).collect();
+    Some(normalized.to_string_lossy().replace('\\', "/"))
 }
 fn map_path(
     value: &str,
