@@ -11,13 +11,21 @@ const ROUTES: &[(&str, &str)] = &[
     ("/api/sessions/{name}/shortcut-shell", "POST"),
     ("/api/sessions/{name}/run-code", "POST"),
     ("/api/hangar-terminals/{id}/restart", "POST"),
+    ("/api/hangar-terminals", "GET"),
+    ("/api/hangar-terminals/{id}/close", "POST"),
+    ("/api/hangar-terminals/{id}/answer", "POST"),
+    ("/api/hangar-terminals/{id}/focus", "POST"),
+    ("/api/sessions/{name}/shortcut-terminals", "GET"),
+    ("/api/sessions/{name}/shortcut-terminals/{id}/close", "POST"),
+    ("/api/sessions/{name}/shortcut-terminals/{id}/answer", "POST"),
 ];
 pub(crate) fn matches(path: &str) -> bool {
     let path = percent_encoding::percent_decode_str(path).decode_utf8_lossy();
     path.strip_prefix("/api/sessions/").and_then(|v|v.split_once('/'))
-        .is_some_and(|(_, tail)| matches!(tail.split('/').next(),Some("project-shortcuts"|"shortcut-shell"|"run-code")))
+        .is_some_and(|(_, tail)| matches!(tail.split('/').next(),Some("project-shortcuts"|"shortcut-shell"|"run-code"|"shortcut-terminals")))
+        || path=="/api/hangar-terminals"
         || path.strip_prefix("/api/hangar-terminals/").and_then(|v|v.split_once('/'))
-            .is_some_and(|(_,tail)|tail.split('/').next()==Some("restart"))
+            .is_some_and(|(_,tail)|matches!(tail.split('/').next(),Some("restart"|"close"|"answer"|"focus")))
 }
 fn unavailable() -> Response {
     super::guest::error(503, "shortcut_context_unavailable", "contexto do terminal indisponível", json!({}))
@@ -81,6 +89,11 @@ async fn inner(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Response {
         if let Err(response)=crate::routes::owner_gate(&st,peer,&req).await { return response; }
         return match super::guest::restart(&st,id.to_owned()).await { Ok(response)|Err(response)=>response };
     }
+    if path=="/api/hangar-terminals" || path.starts_with("/api/hangar-terminals/") {
+        if let Err(response)=crate::routes::owner_gate(&st,peer,&req).await { return response; }
+        let operation=path.strip_prefix("/api/hangar-terminals/").unwrap_or("").to_owned();
+        return super::consumers::hangar(st,req,operation).await;
+    }
     let (name, operation) = path.strip_prefix("/api/sessions/").unwrap().split_once('/').unwrap();
     let name = name.to_owned();
     let operation = operation.to_owned();
@@ -90,7 +103,7 @@ async fn inner(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Response {
         Ok(bytes) => bytes,
         Err(_) => return (StatusCode::BAD_REQUEST, "There was an error parsing the body").into_response(),
     }} else { Bytes::new() };
-    if mutation && crate::http_body_input::is_json(&parts.headers) && !bytes.is_empty() {
+    if mutation && !operation.ends_with("/close") && crate::http_body_input::is_json(&parts.headers) && !bytes.is_empty() {
         match crate::orchestration::body::parse(&bytes) {
             Ok(value) => codec::discard(value),
             Err((status,value)) => return crate::http_cors::json_guarded(status,value),
@@ -120,9 +133,10 @@ async fn inner(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Response {
     let schema = match operation.as_str() {
         "shortcut-shell"=>super::body::Schema::Shell,
         "run-code"=>super::body::Schema::RunCode,
+        _ if operation.ends_with("/answer")=>super::body::Schema::Answer,
         _=>super::body::Schema::Project,
     };
-    let value = if mutation { match super::body::parse(schema,&bytes,req.headers()) {
+    let value = if mutation && !operation.ends_with("/close") { match super::body::parse(schema,&bytes,req.headers()) {
         Ok(value)=>ValueGuard(value), Err(response)=>return response,
     }} else { ValueGuard(Value::Null) };
     let guest = req.extensions().get::<crate::login_guests::gate::Login>().map(|login|login.guest.clone());
@@ -130,6 +144,9 @@ async fn inner(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Response {
     // Cancelar a conexão não libera a transferência enquanto a escrita aceita ainda tem efeitos.
     tokio::spawn(async move {
         let _ingress = ingress;
+        if operation=="shortcut-terminals" || operation.starts_with("shortcut-terminals/") {
+            return super::consumers::execute(&st,&name,operation.strip_prefix("shortcut-terminals/").unwrap_or(""),&value).await;
+        }
         if operation!="project-shortcuts" {
             return match super::guest::execute(&st,guest.as_ref(),is_guest,&name,row,operation=="run-code",&value).await {
                 Ok(response)|Err(response)=>response,

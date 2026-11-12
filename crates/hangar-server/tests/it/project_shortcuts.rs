@@ -1316,3 +1316,7 @@ wait"#;
         .bearer_auth(OWNER).send().await.unwrap(), 200).await, json!({"terminals":[]}));
     println!("{}", json!({"rust_created":[first,global,code],"python_get":observed,"other_owner":other}));
 }
+
+#[cfg(unix)]
+#[path = "shortcut_consumers.rs"]
+mod consumers_tests;

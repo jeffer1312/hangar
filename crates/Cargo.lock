@@ -1783,6 +1783,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-projects"
+version = "0.1.0"
+dependencies = [
+ "hangar-core",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha1_smol",
+ "sysinfo",
+ "tempfile",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "hangar-psmux"
 version = "0.1.0"
 dependencies = [
@@ -1816,6 +1831,7 @@ dependencies = [
  "hangar-package",
  "hangar-plugins",
  "hangar-port-preview",
+ "hangar-projects",
  "hangar-psmux",
  "hangar-session-tools",
  "hangar-transcript",

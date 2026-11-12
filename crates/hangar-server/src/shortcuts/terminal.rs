@@ -380,7 +380,7 @@ impl Service {
             tmux: target,
         }))
     }
-    async fn close_row(&self, row: &Row) -> bool {
+    pub(super) async fn close_row(&self, row: &Row) -> bool {
         if let Some(pid) = row.pid.filter(|p| *p != 0)
             && (row.alive || self.windows)
         {
@@ -394,6 +394,45 @@ impl Service {
         }
         gone
     }
+    pub(super) async fn find(&self, owner: &str, id: &str) -> Result<Option<Row>, Error> {
+        if id.len() != 6 || !id.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f')) { return Ok(None); }
+        Ok(self.rows().await?.into_iter().find(|row|row.owner == owner && row.id == id))
+    }
+
+    pub(super) async fn answer(&self, target: &str, text: &str) -> bool {
+        crate::list::local_shortcuts::forget_target(target);
+        let where_ = format!("={target}:");
+        if !text.is_empty() {
+            let placeholder = self.windows && text.starts_with('-');
+            let text = if placeholder { format!("x{text}") }
+                else if !self.windows { text.strip_suffix(';').map_or_else(||text.to_owned(), |s|format!("{s}\\;")) }
+                else { text.to_owned() };
+            let chars: Vec<_> = text.chars().collect();
+            let mut start = 0;
+            while start < chars.len() {
+                let mut end = if self.windows { (start + 512).min(chars.len()) } else { chars.len() };
+                while self.windows && end < chars.len() && chars[end] == '-' && end-start < 700 { end += 1; }
+                if self.run(["send-keys".into(), "-t".into(), where_.clone(), "-l".into(), "--".into(), chars[start..end].iter().collect()]).await.code != Some(0) { return false; }
+                start = end;
+                if start < chars.len() { tokio::time::sleep(Duration::from_millis(300)).await; }
+            }
+            if placeholder {
+                for key in ["Home", "DC"] {
+                    if self.run(["send-keys".into(), "-t".into(), where_.clone(), key.into()]).await.code != Some(0) { return false; }
+                }
+                let capture=self.run(["capture-pane".into(), "-p".into(), "-t".into(), where_.clone()]).await;
+                let prefix: String=text.chars().take(25).collect();
+                if capture.code==Some(0) && capture.stdout.contains(&prefix) {
+                    tracing::warn!("o terminal não removeu o prefixo auxiliar da resposta");
+                }
+            }
+        }
+        let mut args = vec!["send-keys".into(), "-t".into(), where_];
+        if self.windows { args.push("Enter".into()); }
+        else { args.extend(["-l".into(), "--".into(), "\r".into()]); }
+        self.run(args).await.code == Some(0)
+    }
+
     async fn kill_group(&self, pid: u32) {
         #[cfg(unix)]
         if !self.windows {

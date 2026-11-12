@@ -804,13 +804,14 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
     rotas conservam os clientes existentes; sem Rust, não há lançador Python de reserva. O shell
     continua no multiplexador, com `@cp_hidden`, e usa os fechamentos e renomeações existentes.
     Evidência em [plataforma.md](docs/decisoes/plataforma.md#editor-shell-e-terminal-externo-no-rust-11112026).
-  - Partes ainda no Python: transferência Claude→Codex e runners.
+  - Partes ainda no Python: transferência Claude→Codex.
   - Mods (`press`/`close`/`show`/`input`), `~/.hangar/plugin.json` e `plugin-dir` publicados na
     subida e o download dos preços do models.dev: nada; são do Rust (`mods/`,
     `config_sync/plugin_publish.rs`, `costs/pricing_refresh.rs`).
   - Atalhos de projeto: identidade, GET/PUT, `shortcut-shell`, `run-code` e reinício são do Rust.
-    Lista, fechamento, foco, respostas e WebSocket dos terminais ainda usam os consumidores
-    genéricos Python existentes; não consultam Git. O bastão é montado, opcionalmente reescrito,
+    Lista, fechamento, foco, respostas e WebSocket dos terminais são do Rust, sem consumidores
+    Python. Projetos e runners são do `hangar-projects`, com as mesmas rotas e arquivos de configuração.
+    O bastão é montado, opcionalmente reescrito,
     gravado e entregue ao lançador pelo Rust, sem montador Python.
   - Git, arquivos e administração de worktrees são do Rust, inclusive contexto, validação,
     autorização, criação, exclusão e limpeza automática. O fetch usa credenciais configuradas,

@@ -156,7 +156,7 @@ fn idle_windows(target: &str, pane_pid: u32, screen: &str, children: &ChildrenMa
 }
 
 /// `terminal_prompt.pending_question`: a pergunta que o terminal espera responder.
-async fn pending_question(program: &OsStr, target: &str, pane_pid: Option<u32>, children: &ChildrenMap) -> Option<Value> {
+pub(crate) async fn pending_question(program: &OsStr, target: &str, pane_pid: Option<u32>, children: &ChildrenMap) -> Option<Value> {
     let pane_pid = pane_pid.filter(|p| *p != 0)?;
     if !cfg!(windows) && !reading_tty(pane_pid, children) { return None; }
     let where_ = format!("={target}:");
@@ -176,6 +176,15 @@ async fn pending_question(program: &OsStr, target: &str, pane_pid: Option<u32>, 
     let tail: Vec<&str> = screen[..(y + 1).min(screen.len())].iter().filter(|l| !l.trim().is_empty()).map(|l| l.trim_end()).collect();
     question["screen"] = json!(tail[tail.len().saturating_sub(SCREEN_LINES)..]);
     Some(question)
+}
+
+pub(crate) fn forget_target(target: &str) { last().remove(target); }
+
+pub(crate) fn maintain(rows: &[Row]) {
+    #[cfg(windows)]
+    sweep_orphans(&rows.iter().map(|r| r.id.as_str()).collect());
+    let alive: std::collections::HashSet<&str> = rows.iter().filter(|r|r.alive).map(|r|r.tmux.as_str()).collect();
+    last().retain(|target,_|alive.contains(target.as_str()));
 }
 
 type Reading = Result<String, &'static str>;
@@ -206,11 +215,8 @@ pub async fn list_all(program: &OsString, children: &ChildrenMap, present: bool)
         let out = mux(program, &["list-sessions", "-F", FORMAT]).await.ok_or("shortcuts_mux_unavailable")?;
         if out.status.success() { parse(&String::from_utf8_lossy(&out.stdout), windows_status) } else { Vec::new() }
     } else { Vec::new() };
-    #[cfg(windows)]
-    sweep_orphans(&rows.iter().map(|r| r.id.as_str()).collect());
+    maintain(&rows);
     rows.sort_by(|a, b| (a.created, a.seq, &a.tmux).cmp(&(b.created, b.seq, &b.tmux)));
-    let alive: std::collections::HashSet<&str> = rows.iter().filter(|r| r.alive).map(|r| r.tmux.as_str()).collect();
-    last().retain(|t, _| alive.contains(t.as_str()));
     let mut list = Vec::with_capacity(rows.len());
     for r in &rows {
         let question = if r.alive && r.ask { pending_question(program, &r.tmux, r.pid, children).await } else { None };
