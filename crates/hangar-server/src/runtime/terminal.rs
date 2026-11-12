@@ -1688,7 +1688,7 @@ impl Executor {
         };
         let state=match self.queue.snapshot().await {Ok(state)=>state, Err(_)=>{skip(&self.target.key,"give_up_queue_io","prazo da entrega incerta: fila ilegível, tenta no próximo tique"); return}};
         let owner=state.runtime_state["terminal_write_barrier"]["operation_id"].as_str().map(str::to_owned);
-        let Some(entry)=owner.as_deref().and_then(|id|state.operations.get(id)).and_then(|op|op.entry_id.clone()) else {self.uncertain_since=None; self.composer_read_at=None; self.hold_composer(false).await; return};
+        let Some(entry)=owner.as_deref().and_then(|id|state.operations.get(id)).and_then(|op|op.entry_id.clone()) else {self.uncertain_since=None; self.give_up_retry_at=None; self.composer_read_at=None; self.hold_composer(false).await; return};
         let now=tokio::time::Instant::now();
         // Uma captura do pane a cada poucos segundos basta para o aviso; o tique é mais curto.
         let read_due=self.composer_read_at.is_none_or(|at|now.duration_since(at)>=COMPOSER_READ_EVERY);

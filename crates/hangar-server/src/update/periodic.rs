@@ -125,7 +125,8 @@ pub async fn tick(machine: &impl Machine, now: Time, since: Option<Time>) -> Tic
         }
         Err(e) => return Tick::Skipped(format!("índice ilegível: {e}")),
     };
-    let busy = match early { Some(busy) => busy, None => machine.busy().await };
+    // Livre antes do índice não vale depois dele: uma sessão pode ter começado durante a busca.
+    let busy = match early { Some(Ok(Some(busy))) => Ok(Some(busy)), _ => machine.busy().await };
     match busy {
         Ok(None) => {}
         Ok(Some(busy)) if busy == Busy::Uncertain || since.is_none_or(|since| now - since < DEFER_CEILING) => {
