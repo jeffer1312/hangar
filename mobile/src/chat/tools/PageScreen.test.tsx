@@ -19,6 +19,7 @@ vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn() }));
 vi.mock('expo-blur', () => ({ BlurView: () => null }));
 vi.mock('expo-glass-effect', () => ({ GlassView: () => null, isLiquidGlassAvailable: () => false }));
 vi.mock('../../ui/Icon', () => ({ Icon: () => null }));
+vi.mock('../../stores/aparencia', () => ({ useAparencia: (select: (s: unknown) => unknown) => select({ fundo: 'flat', imagemUri: null }) }));
 import PageScreen from '../../../app/s/[server]/[name]/page';
 import * as m from '../../paraglide/messages';
 

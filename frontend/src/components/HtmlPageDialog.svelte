@@ -195,6 +195,8 @@
     height: min(86dvh, calc(100dvh - 160px)); overflow: auto; overscroll-behavior: contain;
     container-type: size; background: var(--surface-inset);
   }
+  /* Sobre a foto o inset é translúcido e a imagem atravessaria a página: fundo liso, como no cartão. */
+  :global(html:is([data-bg="image"], [data-bg="desktop"])) .stage { background: var(--bg-base); }
   .zoomed { width: 100cqw; height: 100cqh; }
   .stage[hidden], .zoom[hidden] { display: none; }
   .source { container-type: normal; }
