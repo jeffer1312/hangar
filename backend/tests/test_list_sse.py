@@ -12,8 +12,6 @@ def _stub_cached_list(monkeypatch):
     monkeypatch.setattr(sse, "_cached_list", _fc)
     # Refresher unico (singleton): poll rapido pros testes; re-bind por event loop cuida do reset.
     monkeypatch.setattr(sse._list_refresher, "poll", 0.001)
-    # None = nada a mandar de terminais de atalho: os testes de `sessions` nao contam esse evento.
-    monkeypatch.setattr(sse, "_shortcuts_snapshot", lambda: None)
 
 
 class _Info:

@@ -161,13 +161,11 @@ def test_kill_ja_encerrado_pelo_rust_limpa_so_as_lojas_daqui_e_nao_volta_a_ele(t
     reg = SessionRegistry(projects_dir=tmp_path)
     with patch("app.runtime_coordinator.rust_codex_terminal") as rust, \
          patch.object(registry.tmux, "kill_session") as kill_tmux, \
-         patch.object(registry, "shortcut_terminals") as shortcuts, \
          patch("app.list_bridge.forget") as forget_in_rust, \
          patch("app.list_bridge.discover") as list_in_rust:
         assert reg.kill("cx", closed_by_rust=True) == []
     for back_to_rust in (rust, kill_tmux, forget_in_rust, list_in_rust):
         back_to_rust.assert_not_called()
-    shortcuts.close_all.assert_called_once_with("cx")
 
 
 def test_kill_codex_do_rust_recusado_nao_apaga_nada(tmp_path):

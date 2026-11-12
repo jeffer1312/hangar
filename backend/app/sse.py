@@ -408,11 +408,6 @@ def _list_sig(infos) -> str:
     )
 
 
-def _shortcuts_snapshot() -> str | None:
-    from app import shortcut_terminals
-    return json.dumps(shortcut_terminals.list_all(), ensure_ascii=False)
-
-
 class _ListRefresher:
     """UM refresher em background (single-flight, compartilhado por TODAS as conexoes da lista) que
     produz o snapshot de list_with_state no ritmo dele. Desenho (decisao do jefferson): a conexao SSE
@@ -425,10 +420,6 @@ class _ListRefresher:
     def __init__(self, poll: float = 1.5):
         self.poll = poll
         self.data: str | None = None
-        self.shortcuts_data: str | None = None
-        self._sc_task: asyncio.Task | None = None
-        self._sc_started = 0.0
-        self._sc_failing = False
         self.sig: str | None = None
         self.version = 0
         self.errored = False
@@ -446,9 +437,6 @@ class _ListRefresher:
             self._loop = loop
             self._cond = asyncio.Condition()
             self.data = None
-            self.shortcuts_data = None
-            self._sc_task = None
-            self._sc_failing = False
             self.sig = None
             self.version = 0
             self.errored = False
@@ -459,33 +447,6 @@ class _ListRefresher:
             context.run(diag.req_atual.set, "")
             self._task = asyncio.create_task(self._run(), context=context)
 
-    def _launch_shortcuts(self) -> None:
-        # A lista nunca espera terminal de atalho: a leitura roda ao lado da lista, no máximo uma em
-        # voo (thread não cancela; travada, só segura o valor anterior em vez de acumular threads).
-        if self._sc_task is None:
-            self._sc_task = asyncio.create_task(asyncio.to_thread(_shortcuts_snapshot))
-            self._sc_started = time.monotonic()
-        elif not self._sc_task.done() and time.monotonic() - self._sc_started > 5 and not self._sc_failing:
-            self._sc_failing = True
-            _log.warning("terminais de atalho: leitura travada; mantem a anterior")
-
-    def _harvest_shortcuts(self) -> str | None:
-        task = self._sc_task
-        if task is None or not task.done():
-            return self.shortcuts_data
-        self._sc_task = None
-        if task.cancelled():
-            return self.shortcuts_data
-        try:
-            value = task.result()
-        except Exception:
-            # Uma vez por queda, não a cada ciclo.
-            if not self._sc_failing:
-                _log.warning("terminais de atalho: leitura falhou; mantem a anterior", exc_info=True)
-            self._sc_failing = True
-            return self.shortcuts_data
-        self._sc_failing = False
-        return value
 
     async def _produce(self) -> tuple[list, bool]:
         """A lista decorada e se foi o Python que a produziu. Com o Rust dono o retrato é dele
@@ -499,7 +460,6 @@ class _ListRefresher:
 
     async def _run(self):
         while True:
-            self._launch_shortcuts()
             try:
                 started = time.monotonic()
                 infos, ours = await self._produce()
@@ -541,11 +501,8 @@ class _ListRefresher:
             # Só a do Python: a sombra compara o Rust com ela, e o `/api/sessions` pede o retrato
             # do Rust direto a ele.
             self.latest = (started, infos) if ours else None
-            shortcuts = self._harvest_shortcuts()
             # sucesso: emite se a sig mudou OU se estava em erro (pra o front LIMPAR o list_error).
-            # `data`/`sig` só andam quando a assinatura da lista muda: gravar `data` numa mudança que
-            # é só dos terminais reemitiria `sessions` por um `last_activity` que a assinatura ignora.
-            if data is not None or shortcuts != self.shortcuts_data:
+            if data is not None:
                 if self.errored:
                     diag.registrar("lista.recuperada", quantidade=len(infos))
                 async with self._cond:
@@ -553,7 +510,6 @@ class _ListRefresher:
                         self.errored = False
                         self.sig = sig
                         self.data = data
-                    self.shortcuts_data = shortcuts
                     self.version += 1
                     self._cond.notify_all()
             await asyncio.sleep(self.poll)
@@ -568,9 +524,6 @@ class _ListRefresher:
         if self._refs <= 0 and self._task is not None:
             self._task.cancel()
             self._task = None
-            if self._sc_task is not None:
-                self._sc_task.cancel()
-                self._sc_task = None
             self._refs = 0
 
 

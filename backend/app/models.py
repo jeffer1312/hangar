@@ -587,57 +587,5 @@ class CostReport(BaseModel):
     sessoes: list[SessaoCusto] = []
 
 
-class Runner(BaseModel):
-    label: str
-    command: str
-    source: Literal["npm", "make", "stack", "custom"] = "npm"
-    is_dev_guess: bool = False
 
 
-class RunInfo(BaseModel):
-    command: str
-    since: Optional[int] = None
-    # Pane morto (remain-on-exit): o processo saiu mas o log ficou. Distingue "falhou" de
-    # "parado" — sem isto o run que morria logo apos o play sumia sem rastro.
-    exited: bool = False
-    exit_status: Optional[int] = None
-
-
-class ProjectStatus(BaseModel):
-    name: str
-    cwd: str
-    command: str
-    port: Optional[int] = None
-    # external: porta aberta SEM pane nosso — o projeto roda fora do launcher (subido na mao).
-    state: Literal["stopped", "starting", "running", "failed", "external"]
-    since: Optional[int] = None
-    exit_status: Optional[int] = None
-    tmux: str = ""  # sessao no socket dedicado do runner (pro attach de log completo)
-    # Tem stop_command no config — unico jeito de parar um run externo (nao ha pane pra matar).
-    has_stop_command: bool = False
-
-
-class RunnersResponse(BaseModel):
-    detected: list[Runner]
-    custom: list[Runner] = []
-    remembered: Optional[str] = None
-    running: Optional[RunInfo] = None
-
-
-class RunBody(BaseModel):
-    command: str
-
-
-# Tetos só pra um corpo gigante ser recusado antes de parseado inteiro — bem acima do uso real.
-class CustomRunner(BaseModel):
-    label: str = Field(max_length=200)
-    command: str = Field(max_length=200_000)
-
-
-class CustomRunnersBody(BaseModel):
-    commands: list[CustomRunner] = Field(max_length=500)
-
-
-class ShortcutAnswerBody(BaseModel):
-    # Vazio = so Enter (aceita o valor padrao da pergunta).
-    text: str = Field(default="", max_length=4096)
