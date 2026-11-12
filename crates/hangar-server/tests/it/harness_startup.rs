@@ -99,6 +99,21 @@ fn old_format_and_duplicates_collapse_into_one_entry_in_place() {
     assert!(!hooks::sync_hook(&mut data, "Stop", Some(new), None, "state_hook.py"));
 }
 
+/// Filtro novo chega à conta já instalada: o hook sai do bloco de filtro antigo, mesmo dividido com outro.
+#[test]
+fn a_changed_matcher_moves_the_hook_to_its_own_block() {
+    let guard = "\"/x/hangar-server\" guard-tmux";
+    let mut data = json!({"hooks": {"PreToolUse": [
+        {"matcher": "Bash", "hooks": [{"type": "command", "command": "personal --check"}, {"type": "command", "command": guard}]},
+    ]}});
+    assert!(hooks::sync_hook(&mut data, "PreToolUse", Some(guard), Some("Bash|Read|Grep"), "guard-tmux"));
+    assert_eq!(data["hooks"]["PreToolUse"], json!([
+        {"matcher": "Bash", "hooks": [{"type": "command", "command": "personal --check"}]},
+        {"matcher": "Bash|Read|Grep", "hooks": [{"type": "command", "command": guard}]},
+    ]));
+    assert!(!hooks::sync_hook(&mut data, "PreToolUse", Some(guard), Some("Bash|Read|Grep"), "guard-tmux"));
+}
+
 #[test]
 fn broken_settings_are_left_byte_for_byte_and_the_error_returns() {
     for raw in ["{x", "[1]", "{\"hooks\": []}"] {

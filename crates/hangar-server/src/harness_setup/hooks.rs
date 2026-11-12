@@ -104,6 +104,10 @@ pub fn sync_hook(
     let mut changed = false;
     let mut kept = command.is_none();
     events.retain_mut(|block| {
+        // Filtro trocado: o hook sai deste bloco (que pode ser dividido com outro) e nasce num bloco próprio.
+        let moved = command.is_some()
+            && matcher.is_some()
+            && block.get("matcher").and_then(Value::as_str) != matcher;
         let Some(entries) = block.get_mut("hooks").and_then(Value::as_array_mut) else {
             return true;
         };
@@ -112,7 +116,7 @@ pub fn sync_hook(
             if !hook.is_object() || !refers(&hook["command"], script, true) {
                 return true;
             }
-            if kept {
+            if kept || moved {
                 changed = true;
                 return false;
             }
@@ -313,11 +317,12 @@ fn sync_report_selected(
             if enabled("guard_tmux.py") {
                 let command = crate::provider_hooks::command("guard-tmux")?;
                 changed |= sync_hook(&mut data, "PreToolUse", None, Some("Bash"), "guard_tmux.py");
+                // Read, Grep e PowerShell: o guarda também barra a leitura do arquivo do `vault_file`.
                 changed |= sync_hook(
                     &mut data,
                     "PreToolUse",
                     Some(&command),
-                    Some("Bash"),
+                    Some("Bash|PowerShell|Read|Grep"),
                     "guard-tmux",
                 );
             }

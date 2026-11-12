@@ -154,6 +154,75 @@ fn provider_hooks_guard_blocks_both_channels_and_allows_isolated_sockets() {
 }
 
 #[test]
+fn provider_hooks_guard_blocks_reading_vault_files_but_not_passing_the_path() {
+    let root = tempfile::tempdir().unwrap();
+    let linux = "/run/user/1000/hangar/vault-files/abc";
+    let windows = r"C:\Users\eu\AppData\Local\hangar\vault-files\abc";
+    let guard = |payload: Value| {
+        run(root.path(), "guard-tmux", &serde_json::to_vec(&payload).unwrap(), &[("XDG_RUNTIME_DIR", "/run/user/1000")])
+    };
+    let bash = |command: String| json!({"tool_name":"Bash","tool_input":{"command":command}});
+    for payload in [
+        bash(format!("cat {linux}")),
+        bash(format!("wc -c < {linux}")),
+        bash(format!("sha256sum {linux} | cut -c1-8")),
+        bash(format!("bash -c 'head -c 3 {linux}'")),
+        bash(format!("Get-Content {windows}")),
+        bash(format!("powershell -c \"[IO.File]::ReadAllText('{windows}').Length\"")),
+        bash(r#"powershell -c "gc C:\\Users\\eu\\AppData\\Local\\hangar\\vault-files\\abc""#.into()),
+        bash(format!("< {linux} cat")),
+        bash(format!("echo $(<{linux})")),
+        bash(format!("mapfile -t x < {linux}")),
+        bash(format!(": <<< x; cat {linux}")),
+        bash(format!("git commit -m \"$(cat <<'EOF'\nmsg\nEOF\n)\" && cat {linux}")),
+        bash(format!("Select-String -Path {linux} -Pattern .")),
+        bash(format!("grep -o -f {linux} alvo.txt")),
+        bash(r"powershell -c 'sls . C:\Users\eu\AppData\Local\hangar\vault-files\abc'".into()),
+        bash(format!("cmd /c type {windows}")),
+        bash(format!("powershell -NoProfile -ExecutionPolicy Bypass -Command \"gc {windows}\"")),
+        bash(format!("bash -o pipefail -c 'cat {linux}'")),
+        bash(format!("bash <<'EOF'\ncat {linux}\nEOF")),
+        bash(format!("powershell -c \"[IO.File]::ReadLines('{windows}') | Measure-Object -Character\"")),
+        json!({"tool_name":"PowerShell","tool_input":{"command":format!("Get-Content {windows}")}}),
+        bash("cd /run/user/1000/hangar/vault-files && cat *".into()),
+        bash("cd /run/user/1000/hangar && wc -c vault-files/abc".into()),
+        json!({"tool_name":"Read","tool_input":{"file_path":linux}}),
+        json!({"tool_name":"Read","tool_input":{"file_path":"../vault-files/abc"}}),
+        json!({"tool_name":"Grep","tool_input":{"pattern":"x","path":r"C:\Users\eu\AppData\Local\hangar\vault-files"}}),
+        json!({"tool_name":"Grep","tool_input":{"pattern":"x","path":"/run/user/1000/hangar"}}),
+        json!({"tool_name":"Grep","tool_input":{"pattern":"x","path":"/run/user/1000"}}),
+        json!({"tool_name":"Grep","tool_input":{"pattern":"x","glob":"**/vault-files/*"}}),
+    ] {
+        let result = guard(payload.clone());
+        assert_eq!(result.status.code(), Some(2), "{payload}");
+        let output: Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "deny");
+        let reason = output["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap();
+        assert!(reason.contains("vault_file") && reason.contains("bytes"), "{reason}");
+        assert!(!reason.contains("probe-x"), "{reason}");
+    }
+    for payload in [
+        bash(format!("mysql --defaults-extra-file={linux} -e 'select 1'")),
+        bash(format!("curl --netrc-file {windows} https://exemplo.com")),
+        bash(format!("ls -l {linux}")),
+        bash("cat README.md".into()),
+        bash("cat docs/vault-files-notes.md".into()),
+        bash(r#"rg -n "hangar/vault-files" crates"#.into()),
+        bash("grep -rn 'vault-files' docs/".into()),
+        bash("git commit -m \"$(cat <<'EOF'\nfix: guard hangar/vault-files\nEOF\n)\"".into()),
+        bash("cat > notas.md <<'EOF'\n- Read the vault-files folder\nEOF".into()),
+        bash("git commit -m \"guard: [IO.File]::ReadAllText em hangar/vault-files\"".into()),
+        json!({"tool_name":"Read","tool_input":{"file_path":"/home/eu/notas.txt"}}),
+        json!({"tool_name":"Grep","tool_input":{"pattern":"x","path":"/home/eu"}}),
+        json!({"tool_name":"Grep","tool_input":{"pattern":"x","path":"/run"}}),
+    ] {
+        let result = guard(payload.clone());
+        assert!(result.status.success(), "{payload}");
+        assert!(result.stdout.is_empty(), "{payload}");
+    }
+}
+
+#[test]
 fn provider_hooks_installer_migrates_python_preserves_toml_and_backup() {
     use hangar_server::{accounts::environment::AccountEnvironment, harness_setup::kimi_hooks};
     let root = tempfile::tempdir().unwrap();

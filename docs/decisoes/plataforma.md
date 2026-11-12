@@ -4121,6 +4121,21 @@ senha (ou o rótulo do cadastro) e o `servidor::sessao` de quem pede aos provedo
 Web Push); o valor nunca. A cópia diária que falha (máquina da cópia fora, chaveiro trancado) tenta
 de novo em 1 h, não no dia seguinte.
 
+**Windows: a chave no Gerenciador de Credenciais (12/11/2026).** No Windows a chave e o item da
+senha de recuperação são credenciais genéricas do usuário (`hangar/vault-key` e
+`hangar/vault-backup-key`, `CRED_PERSIST_LOCAL_MACHINE`), gravadas por `CredWriteW` e lidas por
+`CredReadW` (`vault/key.rs`, módulo `credman`). A DPAPI as cifra com o login do Windows; o mesmo
+usuário as lê sem prompt, o mesmo limite do `login` aberto no Linux. Não existe estado trancado: a
+credencial abre com a sessão do usuário. A persistência local, e não a `ENTERPRISE`, mantém a chave
+fora do perfil itinerante do domínio. Fora de Linux e Windows (macOS) o cofre segue sem chaveiro.
+Medição (12/11/2026, VM Windows 11, Hangar 0.1.0.10226 com o `hangar-server.exe` desta mudança, tarefa
+`hangar-backend` com logon `Interactive` na sessão RDP): `PUT /api/vault/config {"owner":"self"}` abriu o
+cofre, a senha gravada voltou igual, e depois de matar o servidor o novo processo reabriu o cofre
+(`state: open`) e leu a mesma senha. Por SSH, com chave ou com senha, `CredReadW` responde 1312
+(`ERROR_NO_SUCH_LOGON_SESSION`): esse logon não tem Gerenciador de Credenciais. Servidor subido fora da
+sessão do usuário vê a máquina como sem chaveiro (`KeyError::Unsupported`, não "tente de novo"), e a
+credencial só se confere ou apaga pela sessão gráfica.
+
 **`vault_fill`: o que a árvore de acessibilidade mostra. Medição (30/10/2026, Chromium 149.0.7827.55
 do Playwright, sem janela, perfil temporário):** página com um `input type=text` e dois
 `type=password` (um vazio, um com `value` no HTML); `Input.insertText` em cada um com o foco nele;
@@ -4133,6 +4148,28 @@ de texto do controlador troca a senha preenchida por `••••` (literal, JS
 enquanto o navegador viver, inclusive depois de a página navegar (a marca do nó some; a máscara não).
 **Limite:** o `eval` continua sendo um oráculo para um agente decidido (`value.length`,
 `value.split('')`, trocar o `type` e tirar `shot`); a máscara barra a leitura comum, não essa.
+
+**Arquivo do `vault_file`: o guarda barra a leitura (12/11/2026).** Num teste no Windows, um agente
+pedido a dizer "quantos caracteres o arquivo tem" abriu o arquivo com `[IO.File]::ReadAllText(...).Length`,
+apesar de a descrição da tool dizer para nunca ler. O `hangar-server guard-tmux` (`provider_hooks.rs`)
+agora recusa, com texto próprio: `Read`/`Grep` com caminho ou `glob` na pasta `vault-files` (como
+parte do caminho, relativo ou com barra dupla), `Grep` até dois níveis acima dela (`hangar` ou a pasta
+de execução), e comando `Bash` ou `PowerShell` que passe o caminho a um programa que mostra, mede ou
+copia o conteúdo (`cat`, `wc`, `sha256sum`, `type`, `Get-Content`, `::ReadAll*`, `::ReadLines`,
+`::OpenText`, `StreamReader`), que o redirecione (`< caminho`, `$(<caminho)`) ou que leia depois de um
+`cd`/`Set-Location` para dentro da pasta, inclusive dentro de `sh -c`/`powershell -c`/`cmd /c` (o
+script é conferido cru, com as barras invertidas do Windows) e depois de um heredoc. Passar o caminho
+como argumento a outro programa continua livre, e no `grep`/`rg`/`sed`/`awk`/`Select-String` o
+primeiro operando é o padrão de busca: procurar o texto `vault-files` no código passa, mas o caminho
+num `-Path`/`-f`, ou citado fora do padrão, conta como leitura. No Claude o filtro do hook passa de
+`Bash` a `Bash|PowerShell|Read|Grep`, e o `sync_hook` tira o hook do bloco de filtro antigo, mesmo
+dividido com outro hook, para a conta já instalada receber o filtro novo. O Kimi recebe só a regra do
+`Bash` (o filtro dele continua `Bash`); o Codex fica de fora até o guarda dele sair do
+`guard_tmux.py`. **Limite:** é a lista de leitores óbvios. Passam `sudo -u <usuário> cat`,
+`xargs cat`, `find -exec cat`, laços (`for f in …; do cat $f`), interpretadores (`python -c`,
+`node -e`), curinga que não escreve `vault-files` (`hangar/vault-*`) e busca recursiva na pasta de cima
+pelo shell: um agente decidido lê com outro programa. `Grep` mais de dois níveis acima (a pasta do
+usuário no Windows) também passa, mas o `rg` pula o `AppData`, que é oculto.
 
 ## Busca, Perguntar e Arquivo no Rust (01/11/2026)
 

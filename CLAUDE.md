@@ -692,7 +692,8 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   transcript, evento, diário nem log.** As outras máquinas pedem pelos peers. Senha **pedir
   sempre** só sai com aprovação do dono num cartão; **liberada** sai direto. O agente usa por
   login preenchido no navegador da sessão, comando com variável de ambiente e saída apagada, ou
-  arquivo 0600 de vida curta. Convidado não vê nem aprova. A aprovação não é barreira contra um
+  arquivo 0600 de vida curta. O `guard-tmux` recusa ler esse arquivo (Claude: `Bash|PowerShell|Read|Grep`;
+  Kimi: `Bash`; Codex ainda não). Convidado não vê nem aprova. A aprovação não é barreira contra um
   agente decidido: ele alcança o chaveiro. Decisão e limites em
   [plataforma.md](docs/decisoes/plataforma.md#cofre-de-senhas-uma-máquina-dona-chave-no-chaveiro-uso-aprovado-por-senha-30102026).
 - **Chave secreta nunca vai no argv do `new-session`.** O escopo leva `--description`, e o
