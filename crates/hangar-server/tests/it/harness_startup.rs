@@ -193,7 +193,8 @@ fn pair_context_replaces_the_old_script_in_every_account_and_the_base() {
         "command": format!("\"{}\" pair-context \"{}\" || exit 0", exe.display(), base.join(".hangar-pair").display())}]}]);
     let scanned = AccountService::new(env(root.path(), &[]));
     let listed = AccountService::new(env(root.path(), &[("CP_CLAUDE_CONFIG_DIRS", format!("f:{}", fixed.display()))]));
-    for (service, dirs) in [(&scanned, vec![&base, &marked, &legacy]), (&listed, vec![&base, &fixed])] {
+    // A lista fixa vem antes: no catálogo ela substitui a varredura, e a conta marcada ainda precisa receber.
+    for (service, dirs) in [(&listed, vec![&base, &fixed, &marked]), (&scanned, vec![&base, &marked, &legacy])] {
         hooks::sync_installer(service, &repo, "ensure_pair_hook_installed").unwrap();
         for dir in dirs {
             assert_eq!(read(&dir.join("settings.json"))["hooks"]["SessionStart"], expected, "{}", dir.display());

@@ -1,5 +1,5 @@
 //! Reconciliação dos comandos instalados, preservando a ordem dos hooks pessoais.
-use crate::accounts::AccountService;
+use crate::accounts::{AccountService, Provider};
 use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
@@ -157,12 +157,8 @@ pub fn sync(service: &AccountService, repo: &Path) -> Value {
     sync_report(service, repo).0
 }
 
-pub fn sync_installer(
-    service: &AccountService,
-    repo: &Path,
-    name: &str,
-) -> Result<Value, Vec<String>> {
-    let script = match name {
+fn installer_script(name: &str) -> Option<&'static str> {
+    Some(match name {
         "ensure_askq_hook_installed" => "askq_capture.py",
         "ensure_state_hooks_installed" => "state_hook.py",
         "ensure_preview_hook_installed" => "preview_hook.py",
@@ -170,9 +166,29 @@ pub fn sync_installer(
         "ensure_pair_hook_installed" => "pair-context",
         "ensure_nav_hook_installed" => "nav_hook.py",
         "ensure_guard_hooks_installed" => "guard_tmux.py",
-        _ => return Err(vec!["instalador de hook desconhecido".into()]),
-    };
-    let (changes, errors) = sync_report_selected(service, repo, Some(script));
+        _ => return None,
+    })
+}
+
+pub fn sync_installer(
+    service: &AccountService,
+    repo: &Path,
+    name: &str,
+) -> Result<Value, Vec<String>> {
+    sync_installers(service, repo, &[name])
+}
+
+/// Vários instaladores numa passada: cada `settings.json` é lido e gravado uma vez.
+pub fn sync_installers(
+    service: &AccountService,
+    repo: &Path,
+    names: &[&str],
+) -> Result<Value, Vec<String>> {
+    let scripts = names
+        .iter()
+        .map(|name| installer_script(name).ok_or_else(|| vec!["instalador de hook desconhecido".to_owned()]))
+        .collect::<Result<Vec<_>, _>>()?;
+    let (changes, errors) = sync_report_selected(service, repo, Some(&scripts));
     if errors.is_empty() {
         Ok(changes)
     } else {
@@ -187,14 +203,15 @@ pub(super) fn sync_report(service: &AccountService, repo: &Path) -> (Value, Vec<
 fn sync_report_selected(
     service: &AccountService,
     repo: &Path,
-    selected: Option<&str>,
+    selected: Option<&[&str]>,
 ) -> (Value, Vec<String>) {
-    let enabled = |script: &str| selected.is_none_or(|selected| selected == script);
+    let enabled = |script: &str| selected.is_none_or(|selected| selected.contains(&script));
     let mut errors = Vec::new();
     let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let python = crate::install_root::python_exe(repo, cfg!(windows));
-    // O catálogo, não só as contas marcadas: conta antiga com login e `CP_CLAUDE_CONFIG_DIRS` também recebem.
-    let mut dirs: Vec<_> = service
+    // Catálogo e contas marcadas juntos: conta antiga com login e `CP_CLAUDE_CONFIG_DIRS` (que no
+    // catálogo substitui a varredura) só vêm dele; as `.claude-<id>` do Hangar, do `snapshot`.
+    let catalog: Vec<std::path::PathBuf> = service
         .claude_catalog()
         .map(|rows| {
             rows.as_array()
@@ -206,8 +223,17 @@ fn sync_report_selected(
         .unwrap_or_else(|error| {
             errors.push(format!("descoberta das contas Claude: {error:?}"));
             Vec::new()
-        })
+        });
+    let managed: Vec<std::path::PathBuf> = service
+        .snapshot(Provider::Claude)
+        .map(|accounts| accounts.into_iter().map(|account| account.home).collect())
+        .unwrap_or_else(|error| {
+            errors.push(format!("contas Claude do Hangar: {error:?}"));
+            Vec::new()
+        });
+    let mut dirs: Vec<_> = catalog
         .into_iter()
+        .chain(managed)
         .chain([service.env.claude_base.clone()])
         .collect();
     dirs.sort_by_key(|d| (d.file_name().is_none_or(|n| n != ".claude"), d.clone()));

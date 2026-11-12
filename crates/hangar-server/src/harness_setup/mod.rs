@@ -12,12 +12,6 @@ use std::path::Path;
 pub fn sync_skills(env: &AccountEnvironment, repo: &Path) -> Value {
     skills::rebuild(env, repo, false)
 }
-/// Hooks que a subida confere: os do Claude e, à parte, os do Codex.
-const STARTUP_HOOKS: &[&str] = &[
-    "ensure_askq_hook_installed", "ensure_state_hooks_installed", "ensure_preview_hook_installed",
-    "ensure_subagent_hook_installed", "ensure_pair_hook_installed", "ensure_nav_hook_installed",
-];
-
 /// A cada subida: versão nova de plugin muda o caminho do cache, e checkout ou pacote trocado muda o comando dos hooks.
 pub fn sync_startup(service: &AccountService) {
     let Some(repo) = crate::install_root::root(&service.env.home) else {
@@ -28,10 +22,14 @@ pub fn sync_startup(service: &AccountService) {
     if !report.errors.is_empty() {
         tracing::warn!(code = "harness_startup_skills_failed", errors = ?report.errors, "ponte de skills não conferida na subida");
     }
-    for name in STARTUP_HOOKS {
-        if let Err(errors) = hooks::sync_installer(service, &repo, name) {
-            tracing::warn!(code = "harness_startup_hooks_failed", installer = name, ?errors, "hooks do Claude não conferidos na subida");
-        }
+    // Os do pós-aplicar da configuração compartilhada, menos a trava do tmux, que não é da subida.
+    let names: Vec<&str> = crate::config_sync::after::HOOKS
+        .iter()
+        .copied()
+        .filter(|name| *name != "ensure_guard_hooks_installed")
+        .collect();
+    if let Err(errors) = hooks::sync_installers(service, &repo, &names) {
+        tracing::warn!(code = "harness_startup_hooks_failed", ?errors, "hooks do Claude não conferidos na subida");
     }
     if let Err(error) = codex_hooks::sync(&service.env.codex_default, &repo, cfg!(windows)) {
         tracing::warn!(code = "harness_startup_codex_hooks_failed", %error, "hooks do Codex não conferidos na subida");

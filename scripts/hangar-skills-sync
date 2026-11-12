@@ -18,7 +18,7 @@ setup=$(dirname "$alvo")/hangar-harness-setup
 # ponte sem rastro NENHUM, e a pessoa so notava dias depois que uma skill nova nao aparecia no pi.
 err="${TMPDIR:-/tmp}/hangar-skills-sync.err"
 if [ -x "$setup" ]; then
-  "$setup" skills >/dev/null 2>>"$err" || echo "hangar-harness-setup skills saiu com $?" >>"$err"
+  "$setup" skills --repo "$(dirname "$alvo")/.." >/dev/null 2>>"$err" || echo "hangar-harness-setup skills saiu com $?" >>"$err"
 else
   echo "hangar-harness-setup ausente: $setup" >>"$err"
 fi
