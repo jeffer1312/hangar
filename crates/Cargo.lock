@@ -1665,6 +1665,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-deploy"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "futures-util",
+ "hangar-core",
+ "proptest",
+ "ring",
+ "serde_json",
+ "subtle",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "hangar-desktop-theme"
 version = "0.1.0"
 dependencies = [
@@ -1724,6 +1739,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-opencode-cookie"
+version = "0.1.0"
+dependencies = [
+ "hangar-core",
+ "proptest",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "hangar-package"
 version = "0.1.0"
 dependencies = [
@@ -1743,6 +1768,18 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "hangar-port-preview"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "futures-util",
+ "hangar-core",
+ "proptest",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -1771,11 +1808,14 @@ dependencies = [
  "hangar-codex",
  "hangar-connect",
  "hangar-core",
+ "hangar-deploy",
  "hangar-desktop-theme",
  "hangar-http-file",
  "hangar-omp-sync",
+ "hangar-opencode-cookie",
  "hangar-package",
  "hangar-plugins",
+ "hangar-port-preview",
  "hangar-psmux",
  "hangar-transcript",
  "hangar-update-news",

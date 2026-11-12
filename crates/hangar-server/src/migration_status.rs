@@ -97,6 +97,7 @@ pub fn area_of(path: &str) -> usize {
 /// O Rust atende este pedido do dono sem repassar? Mesma decisão do `routes::router`: as rotas
 /// GET registradas lá, mais os `matches` de Git/arquivos e de worktrees que o `pass_any` consulta.
 pub fn rust_route(method: &Method, path: &str) -> bool {
+    if crate::auxiliary::owns_path(path) { return true; }
     let workflow = path.strip_prefix("/api/sessions/").and_then(|rest| rest.split_once('/'))
         .is_some_and(|(name, tail)| !name.is_empty() && (tail == "workflows" || tail.starts_with("workflows/")));
     // Essas famílias resolvem também os métodos recusados dentro do Rust.

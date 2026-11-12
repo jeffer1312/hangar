@@ -384,7 +384,7 @@ def _worker() -> None:
     from fastapi import FastAPI, Request as HttpRequest
     from fastapi.responses import JSONResponse
     from fastapi.testclient import TestClient
-    from app import api, codex_contas_login, credenciais, account_bridge, dictation_bridge
+    from app import api, codex_contas_login, account_bridge, dictation_bridge
     from app.account_lifecycle import AccountKey
     from types import SimpleNamespace
     from app import internal_api, runtime_coordinator
@@ -488,7 +488,6 @@ def _worker() -> None:
     def claude_auth(path: str):
         from app import account_bridge
         return account_bridge.request_claude("auth", path=path)
-    app.include_router(credenciais.credenciais_router)
 
     async def birth(request):
         return await api.create_session(request)

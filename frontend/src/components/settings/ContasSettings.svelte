@@ -4,7 +4,7 @@
   // depois de a chave de API ter vivido numa tela separada ("Motores") com outro vocabulário: a
   // pergunta "quanto sobrou nessa credencial?" só tinha resposta num dos dois lugares.
   //
-  // Fonte: GET /api/credenciais (backend/app/credenciais.py), que já traz apelido e cota. As
+  // Fonte: GET /api/credenciais (Rust, accounts/credentials.rs), que já traz apelido e cota. As
   // ESCRITAS continuam nas rotas de sempre — /api/claude-configs pra conta, /api/engines pra
   // chave —, porque unificar a tela não pode virar dois donos do mesmo dado no servidor.
   //
@@ -240,7 +240,7 @@ import { apagarConta, accountHolders, type AccountHolders, claudeAccountFolder, 
   let renomeando = $state<string | null>(null);   // id da credencial em edição
   let apelidoTexto = $state('');
   let salvandoApelido = $state(false);
-  // Cookie do painel do OpenCode: ele não tem rota de cota (ver backend/app/opencode_cota.py),
+  // Cookie do painel do OpenCode: ele não tem rota de cota (ver crates/hangar-opencode-cookie),
   // então a leitura é a página do painel. É uma linha do card, só na credencial que aceita —
   // oferecer o campo pra quem tem rota de verdade seria prometer trabalho inútil.
   let cookieDe = $state<string | null>(null);   // id da credencial com o formulário aberto

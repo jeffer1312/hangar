@@ -41,6 +41,7 @@ fn optional(name: &'static str, kind: Kind) -> Field {
 fn schema(name: &str) -> (Vec<Field>, bool) {
     use Kind::*;
     match name {
+        "PreviewBody" => (vec![field("port", IntegerRange(1,65535))], true),
         "PushSubscribeBody" => (vec![field("subscription", StrictDictionary), field("label", Text(1,usize::MAX)), field("serverId", Text(1,usize::MAX)), optional("locale", DefaultText)], true),
         "PushMuteBody" => (vec![field("session", Text(1,usize::MAX)), field("muted", Boolean(false))], true),
         "PushQuietHoursBody" => (vec![optional("start", PlainText),optional("end", PlainText)],true),

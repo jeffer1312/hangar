@@ -53,6 +53,7 @@ pub struct AppState {
     pub transcription_slots: Arc<tokio::sync::Semaphore>,
     pub accounts: crate::accounts::AccountService,
     pub command_catalog: Arc<crate::commands::Service>,
+    pub local_commands: Arc<dyn hangar_core::process::Commands>,
     pub cfg: Config,
     pub auth: Auth,
     pub remote_browser: Arc<crate::remote_browser::layout::Layouts>,
@@ -258,7 +259,7 @@ impl AppState {
         let vault_requests = Arc::new(crate::vault::requests::Requests::default());
         let accounts = crate::accounts::AccountService::new(crate::accounts::environment::AccountEnvironment::capture());
         let search = crate::search::Index::server(accounts.clone());
-        AppState { desktop_theme: Arc::new(hangar_desktop_theme::DesktopTheme::system()), startup: Default::default(), startup_producers: Arc::default(), settings_snapshot: std::sync::OnceLock::new(), login_guests: Arc::new(crate::login_guests::Service::uninitialized(&accounts.env.home,&accounts.env.claude_base)), accounts, search, claude_p: None, command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, connect: None, preview: None, connect_previews: Arc::default(), connect_preview_reach: Arc::new(crate::share::owner_routes::Reach::preview()), diag,
+        AppState { desktop_theme: Arc::new(hangar_desktop_theme::DesktopTheme::system()), local_commands: Arc::new(crate::auxiliary::NativeCommands(accounts.env.clone())), startup: Default::default(), startup_producers: Arc::default(), settings_snapshot: std::sync::OnceLock::new(), login_guests: Arc::new(crate::login_guests::Service::uninitialized(&accounts.env.home,&accounts.env.claude_base)), accounts, search, claude_p: None, command_catalog: Arc::default(), groups, server_id, machine_identity: std::sync::RwLock::new(None), peers: Arc::new(crate::groups::peers_from_env()), auth: Auth::configured(&cfg.auth_token), http, side, cfg, terminal, terminal_address: None, public_v6: None, front: None, connect: None, preview: None, connect_previews: Arc::default(), connect_preview_reach: Arc::new(crate::share::owner_routes::Reach::preview()), diag,
             migration_branch: Arc::default(),
             workspace_slots: Arc::new(tokio::sync::Semaphore::new(4)),
             login_browser: Arc::default(),
@@ -768,6 +769,12 @@ fn router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
 
 fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
     session_routes(pass_any)
+        .route("/api/credenciais/cookie", axum::routing::any(crate::auxiliary::handle))
+        .route("/api/credenciais/cookie/", axum::routing::any(crate::auxiliary::handle))
+        .route("/api/deploy/github-webhook", axum::routing::any(crate::auxiliary::handle))
+        .route("/api/deploy/github-webhook/", axum::routing::any(crate::auxiliary::handle))
+        .route("/api/preview", axum::routing::any(crate::auxiliary::handle))
+        .route("/api/preview/", axum::routing::any(crate::auxiliary::handle))
         .route("/api/me", axum::routing::any(crate::login_guests::route))
         .route("/api/guests", axum::routing::any(crate::login_guests::route))
         .route("/api/guests/{*rest}", axum::routing::any(crate::login_guests::route))
@@ -1164,6 +1171,9 @@ pub(crate) async fn pass_any(
 ) -> Response {
     if crate::speech::http::matches(req.method(), req.uri().path()) {
         return crate::speech::http::public(st, peer, req).await;
+    }
+    if crate::auxiliary::owns_path(req.uri().path()) {
+        return crate::auxiliary::handle(State(st), ConnectInfo(peer), req).await;
     }
     let decoded_path=percent_encoding::percent_decode_str(req.uri().path()).decode_utf8_lossy();
     if crate::worktree_fetch::owns(&decoded_path) {
