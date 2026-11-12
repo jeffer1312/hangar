@@ -110,7 +110,12 @@ pub async fn tick(machine: &impl Machine, now: Time, since: Option<Time>) -> Tic
         Ok(Some(version)) => version,
         Ok(None) => return skip("em dia"),
         // Já adiada, o índice fora não encerra o adiamento nem zera o teto.
-        Err(e) if since.is_some() => return Tick::Deferred(format!("índice ilegível: {e}")),
+        Err(e) if since.is_some() => {
+            if since.is_some_and(|since| now - since >= DEFER_CEILING) && crate::warn_limit::allow(None, "update_deferred_index_down") {
+                tracing::warn!(code = "update_deferred_index_down", "update: adiada há mais de 24 h e o índice não responde ({e}); segue adiada");
+            }
+            return Tick::Deferred(format!("índice ilegível: {e}"));
+        }
         Err(e) => return Tick::Skipped(format!("índice ilegível: {e}")),
     };
     match machine.busy().await {
