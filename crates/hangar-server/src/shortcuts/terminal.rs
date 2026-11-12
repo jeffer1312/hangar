@@ -400,6 +400,11 @@ impl Service {
     }
 
     pub(super) async fn answer(&self, target: &str, text: &str) -> bool {
+        // Duas respostas juntas no mesmo terminal intercalariam texto e Enter.
+        static LOCKS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>> =
+            std::sync::LazyLock::new(Default::default);
+        let lock = LOCKS.lock().unwrap_or_else(|e| e.into_inner()).entry(target.to_owned()).or_default().clone();
+        let _serial = lock.lock().await;
         crate::list::local_shortcuts::forget_target(target);
         let where_ = format!("={target}:");
         if !text.is_empty() {

@@ -83,15 +83,7 @@ fn live_cwd(cwd: &str) -> String {
     }
 }
 
-/// Recusa que quer dizer "não há sessão", não "não sei" (`tmux.py:_run`, `absent`). Fica de fora o
-/// `invalid option: @cp_hidden`: é o formato recusado, e a lista seria desconhecida.
-pub(crate) fn is_absence(stderr: &str) -> bool {
-    // O psmux põe o próprio nome na frente da mensagem.
-    let stderr = stderr.strip_prefix("psmux: ").unwrap_or(stderr);
-    ["no server", "no sessions", "can't find session", "no such session"]
-        .iter().any(|p| stderr.starts_with(p))
-        || (stderr.starts_with("error connecting to ") && stderr.trim_end().ends_with("(No such file or directory)"))
-}
+pub(crate) use hangar_core::terminal_process::mux_absence as is_absence;
 
 pub struct Mux { program: OsString, timeout: Duration, direct: Option<Direct>, revalidate: Duration, direct_budget: Duration, shared: SharedPanes }
 

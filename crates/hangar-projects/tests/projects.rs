@@ -67,10 +67,13 @@ fn legacy_remembered_and_custom_commands_share_the_same_preference_entry() {
         400
     );
 }
+#[cfg(unix)]
 #[tokio::test]
 async fn failed_spawn_keeps_the_command_to_let_the_person_retry() {
     let root = tempfile::tempdir().unwrap();
-    let service = service(root.path());
+    let mut service = service(root.path());
+    let script = r#"case "$*" in *has-session*) echo "can't find session: x" >&2; exit 1;; *new-session*) echo nope >&2; exit 1;; esac"#;
+    service.program = vec!["/bin/sh".into(), "-c".into(), script.into()];
     let cwd = root.path().to_str().unwrap();
     let error = service.start_run(cwd, "npm run dev").await.unwrap_err();
     assert_eq!(error.status, 502);
@@ -115,4 +118,24 @@ async fn multiplexer_gets_only_the_given_environment() {
     let env = std::fs::read_to_string(&out).unwrap();
     assert!(env.contains("ONLY_THIS=1"));
     assert!(!env.lines().any(|l| l.starts_with("HOME=")), "{env}");
+}
+#[test]
+fn unreadable_preferences_are_never_overwritten() {
+    let root = tempfile::tempdir().unwrap();
+    let service = service(root.path());
+    std::fs::write(&service.preferences, "{corrompido").unwrap();
+    let error = service
+        .set_custom_commands("cwd", json!([{"label":"dev","command":"run"}]))
+        .unwrap_err();
+    assert_eq!(error.status, 500);
+    assert_eq!(std::fs::read_to_string(&service.preferences).unwrap(), "{corrompido");
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn stop_without_an_answer_from_the_multiplexer_is_not_success() {
+    let root = tempfile::tempdir().unwrap();
+    let mut service = service(root.path());
+    service.program = vec!["/bin/sh".into(), "-c".into(), "echo boom >&2; exit 1".into()];
+    let error = service.stop_run(root.path().to_str().unwrap()).await.unwrap_err();
+    assert_eq!(error.status, 409);
 }

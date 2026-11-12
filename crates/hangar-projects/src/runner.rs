@@ -4,11 +4,12 @@ use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     path::Path,
-    sync::LazyLock,
+    sync::{LazyLock, Mutex},
     time::Duration,
 };
 static MAKE_TARGET: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"(?m)^([a-zA-Z0-9_-]+):").unwrap());
+static PREFS_WRITE: Mutex<()> = Mutex::new(());
 const MAX_CUSTOM: usize = 500;
 const MAX_LABEL: usize = 200;
 const MAX_COMMAND: usize = 200_000;
@@ -72,16 +73,20 @@ impl Service {
             Err(_) => (false, String::new(), "prazo de 5s esgotado".into()),
         }
     }
-    fn prefs(&self) -> Value {
+    /// Ausente é vazio; ilegível é erro, para uma gravação nunca apagar as outras pastas.
+    fn read_prefs(&self) -> Result<Value, Error> {
         let path = hangar_core::fs::legacy_sidecar_path(self.preferences.clone());
-        std::fs::read(path)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
-            .filter(Value::is_object)
-            .unwrap_or(json!({}))
+        match hangar_core::fs::read_replaced(&path) {
+            Ok(b) => serde_json::from_slice::<Value>(&b)
+                .ok()
+                .filter(Value::is_object)
+                .ok_or_else(|| Error::coded(500, "runner_prefs_unreadable", "preferências dos comandos ilegíveis")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(json!({})),
+            Err(e) => Err(Error::coded(500, "runner_prefs_unreadable", e.to_string())),
+        }
     }
     fn preference(&self, cwd: &str) -> Value {
-        Self::entry(&self.prefs(), cwd)
+        Self::entry(&self.read_prefs().unwrap_or_else(|_| json!({})), cwd)
     }
     fn entry(p: &Value, cwd: &str) -> Value {
         if let Some(s) = p[cwd].as_str() {
@@ -93,7 +98,9 @@ impl Service {
         }
     }
     fn save_pref(&self, cwd: &str, key: &str, value: Value) -> Result<(), Error> {
-        let mut p = self.prefs();
+        // O arquivo é de todas as sessões: duas gravações juntas perderiam uma das mudanças.
+        let _serial = PREFS_WRITE.lock().unwrap_or_else(|e| e.into_inner());
+        let mut p = self.read_prefs()?;
         let mut entry = Self::entry(&p, cwd);
         entry[key] = value;
         p[cwd] = entry;
@@ -163,10 +170,16 @@ impl Service {
         self.save_pref(cwd, "custom", json!(commands))?;
         Ok(self.custom_commands(cwd))
     }
-    async fn exists(&self, name: &str) -> bool {
-        self.mux(vec!["has-session".into(), "-t".into(), format!("={name}")])
-            .await
-            .0
+    /// `None` = o multiplexador não respondeu: nem viva nem parada.
+    async fn exists(&self, name: &str) -> Option<bool> {
+        let (ok, _, error) = self
+            .mux(vec!["has-session".into(), "-t".into(), format!("={name}")])
+            .await;
+        if ok {
+            Some(true)
+        } else {
+            hangar_core::terminal_process::mux_absence(error.trim()).then_some(false)
+        }
     }
     async fn kill_run(&self, name: &str) -> bool {
         self.mux(vec![
@@ -179,7 +192,7 @@ impl Service {
             },
         ])
         .await;
-        if !self.exists(name).await {
+        if self.exists(name).await == Some(false) {
             return true;
         }
         let (_, pids, _) = self
@@ -208,7 +221,7 @@ impl Service {
                 tokio::time::timeout(Duration::from_secs(5), cmd.kill_on_drop(true).output()).await;
         }
         for _ in 0..20 {
-            if !self.exists(name).await {
+            if self.exists(name).await == Some(false) {
                 return true;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;

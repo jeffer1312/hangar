@@ -297,3 +297,13 @@ fn pid_alive_with(pid:i64,probe:impl FnOnce()->io::Result<()>)->io::Result<bool>
     if pid<=0{return Ok(false);}
     match probe(){Ok(())=>Ok(true),Err(error) if error.kind()==io::ErrorKind::NotFound=>Ok(false),Err(error) if error.kind()==io::ErrorKind::PermissionDenied=>Ok(true),Err(error)=>Err(error)}
 }
+
+/// Recusa que quer dizer "não há sessão", não "não sei" (`tmux.py:_run`, `absent`). Fica de fora o
+/// `invalid option: @cp_hidden`: é o formato recusado, e a lista seria desconhecida.
+pub fn mux_absence(stderr: &str) -> bool {
+    // O psmux põe o próprio nome na frente da mensagem.
+    let stderr = stderr.strip_prefix("psmux: ").unwrap_or(stderr);
+    ["no server", "no sessions", "can't find session", "no such session"]
+        .iter().any(|p| stderr.starts_with(p))
+        || (stderr.starts_with("error connecting to ") && stderr.trim_end().ends_with("(No such file or directory)"))
+}
