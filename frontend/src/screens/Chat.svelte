@@ -12,12 +12,13 @@
   import LinkedChildrenBand from '../components/LinkedChildrenBand.svelte';
   import { copyText } from '../lib/clipboard';
   import { openInNewTab } from '../lib/openTab';
+  import { ecoEntregue } from '../lib/ecoPendente';
   import { desktop as janela } from '../lib/desktop.svelte';
   import CiteSelectionPill from '../components/CiteSelectionPill.svelte';
   import CiteReplyDialog from '../components/CiteReplyDialog.svelte';
   import { citeDialog } from '../lib/citeDialog.svelte';
   import { contextRefsKey } from '../lib/contextRefsDraft.svelte';
-  import { attachmentCaption, composeWithContextRefs, splitContextRefs, parseCodexOutput, type ContextRef } from '@hangar/core';
+  import { composeWithContextRefs, splitContextRefs, parseCodexOutput, type ContextRef } from '@hangar/core';
   import { codexSubagentActivityKey, codexSubagentState, projectCodexSubagent } from '@hangar/core';
   import { itemModsCelular, modsCelular, modsNaTela } from '../lib/modsCelular.svelte';
   import { activePaneId, applyPluginUiDelta, closePluginPane, fieldSender, followLocalTab, inputPluginField, isMissingRoute, parsePluginToast, pluginFailureText, parsePluginUi, pressPluginButton, safeHref, showPluginPane, tabFollowsServer, type PluginControl, type PluginInputKind, type PluginSource, type PluginNode as PluginTree, type PluginPane as PluginPaneData, type PluginToast } from '@hangar/core';
@@ -3012,20 +3013,10 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   // entao "msg1\nmsg2" casa tanto "msg1" quanto "msg2". Idempotente (length estabiliza).
   $effect(() => {
     if (pending.length === 0) return;
-    const committed = new Set<string>();
-    for (const e of events) {
-      if (e.kind !== 'user_msg' || !e.text) continue;
-      const t = e.text.trim();
-      committed.add(t);
-      committed.add(attachmentCaption(t));                       // legenda canonica (msg com imagem grava so ela)
-      for (const line of t.split('\n')) committed.add(line.trim());
-    }
-    // Remove o eco quando o texto cru OU a legenda (sem "📎 imagem: <path>") ja commitou. Legenda
-    // vazia (imagem sem texto) nao casa por texto -> cai no solidify do idle, nao trava aqui.
-    const next = pending.filter((p) => {
-      const cap = attachmentCaption(p.text);
-      return !committed.has(p.text.trim()) && !(cap && committed.has(cap));
-    });
+    const userTexts = events.flatMap((e) => e.kind === 'user_msg' && e.text ? [e.text] : []);
+    // Legenda vazia (imagem sem texto) nao casa por texto -> cai no solidify do idle, nao trava aqui.
+    const entregue = ecoEntregue(userTexts);
+    const next = pending.filter((p) => !entregue(p.text));
     if (next.length !== pending.length) pending = next;
   });
 

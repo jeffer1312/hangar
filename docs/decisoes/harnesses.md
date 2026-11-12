@@ -1113,6 +1113,15 @@ esvazia o campo, então texto ali é envio que não houve; o que não for só o 
 Descartar, como antes. Testes: `terminal_runtime_lost_enter_with_only_our_text_in_the_field_is_pressed_again`,
 `terminal_runtime_lost_enter_is_pressed_again_only_once` e `repeat_enter_tests`.
 
+No teste de uso real na VM, uma mensagem de 120 linhas mandada pelo celular com o Claude ocupado
+ficou como pendente para sempre, e as respostas seguintes entravam acima dela. O Claude Code grava
+num `user` só as mensagens que chegam no meio do turno, separadas por `\n`; o servidor confirma bloco
+por bloco, mas o eco local do app só saía com o texto inteiro igual ou igual a uma linha. Agora a
+mensagem também conta como entregue quando aparece inteira, entre quebras de linha, no texto que
+chegou. A regra vale nas três cópias: `mobile/src/chat/pending.ts` (`reconcilePending`),
+`frontend/src/lib/ecoPendente.ts` (`ecoEntregue`, usado pelo `Chat.svelte`) e
+`desktop-native/src/delivery.rs` (`matches_real`).
+
 ## Catálogo de comandos fora do arquivo da fila (10/11/2026)
 
 Cada operação da fila que não é só leitura regrava o arquivo `runtime/<chave>.json` inteiro, com fsync

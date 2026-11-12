@@ -49,6 +49,8 @@ export function reconcilePending(pending: PendingMsg[], incoming: ChatEvent): Pe
     // linha do pending que casa com linha do incoming (multilinha fundida pelo Claude: "a\nb")
     // O pending pode ser 1 linha que faz parte de um incoming multilinha.
     if (pc && lines.includes(pc)) return false;
+    // Mensagens que chegam no meio do turno o Claude grava num `user` só, separadas por quebra de linha.
+    if (`\n${t}\n`.includes(`\n${pt}\n`)) return false;
     return true;
   });
 }

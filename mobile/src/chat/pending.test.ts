@@ -28,6 +28,12 @@ describe('reconcilePending', () => {
     expect(res).toEqual([]);
   });
 
+  test('multilinha que o Claude juntou com outra no meio do turno sai', () => {
+    const pending = [p('T14 linhas\n001 a\n002 b', 'p1'), p('nada a ver\n001 a', 'p2')];
+    const res = reconcilePending(pending, incoming('T14 linhas\n001 a\n002 b\nT14 linhas\n001 a\n002 b'));
+    expect(res.map((x) => x.id)).toEqual(['p2']);
+  });
+
   test('legenda sem marcador casa com pending que tinha marcador', () => {
     const pend = [p('foto — 📎 imagem: /tmp/x.jpg')];
     expect(reconcilePending(pend, incoming('foto'))).toEqual([]);
