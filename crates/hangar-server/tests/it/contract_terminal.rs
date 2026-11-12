@@ -59,8 +59,8 @@ fn effort_notice_above_the_composer_is_not_assistant_text() {
 }
 
 #[test]
-fn terminal_debounce_limits_match_python_state_monitor() {
-    // Os valores do `StateMonitor` do Python, já apagado.
+fn terminal_debounce_limits() {
+    // Quadros calibrados contra o redesenho do Claude Code: mudar pede medição nova, não só o número.
     assert_eq!(STALE_LIMIT, 3);
     assert_eq!(IDLE_DEBOUNCE, 4);
 }

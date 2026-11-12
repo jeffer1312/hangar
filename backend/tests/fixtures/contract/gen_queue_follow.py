@@ -33,7 +33,7 @@ sys.path.insert(0, str(BACKEND))
 from app import pqueue  # noqa: E402
 
 GOLDEN = HERE / "golden"
-SOURCES = ["backend/app/pqueue.py", "backend/app/models.py", "backend/app/sse.py"]
+SOURCES = ["backend/app/pqueue.py", "backend/app/models.py"]
 COMMAND = "uv run python tests/fixtures/contract/gen_queue_follow.py"
 CLOCK = 1_790_000_000.0
 C = CLOCK

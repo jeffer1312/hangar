@@ -102,7 +102,7 @@ def is_overlay(pane_text: str) -> bool:
     # Overlay so-TUI aberto: rodape de navegacao por teclas no FUNDO do pane (ultimas 8 linhas — nao o
     # pane todo, senao a MESMA frase citada na conversa/scrollback dava falso-positivo). Cobre pickers
     # (/model) e paineis (/status, /config, /help) alem do AskUserQuestion. Fonte unica de "overlay"
-    # (StateMonitor e terminal_input.deliverable usam esta).
+    # (terminal_input.deliverable usa esta).
     return bool(_FOOTER_RE.search(_rodape(pane_text.splitlines())))
 
 
@@ -205,8 +205,8 @@ def _live_spinner(pane_text: str) -> Optional[str]:
 
     The live status line sits at the bottom, just above the input box. Completed-turn
     markers ("✻ Worked for 8s") linger ABOVE it in the scrollback and look identical to a
-    live spinner — so we take the bottom-most candidate and let StateMonitor decide
-    live-vs-frozen by whether it animates.
+    live spinner — so we take the bottom-most candidate; telling live from frozen needs
+    two frames.
     """
     for line in reversed(pane_text.splitlines()):
         s = line.strip()
@@ -347,11 +347,11 @@ def classify(pane_text: str) -> tuple[str, Optional[str], Optional[str], Optiona
     """Return (state, label, question, options).
 
     'working' -> label is the live spinner text; 'awaiting_input' -> question +
-    options; otherwise 'idle'. 'dead' is decided by the caller (StateMonitor).
+    options; otherwise 'idle'. Never 'dead': that is the caller's call.
 
     NOTE: a single static pane cannot tell a live spinner from a frozen completed-turn
     marker (both render as "<glyph> <word> for <N>s"). classify reports 'working' for any
-    spinner candidate; StateMonitor downgrades a non-animating one to 'idle'.
+    spinner candidate; a caller that needs the difference compares two frames.
     """
     lines = pane_text.splitlines()
     block = _menu_block(lines)

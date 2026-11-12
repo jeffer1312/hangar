@@ -431,7 +431,7 @@ mod tests {
 
     #[test]
     fn matches_menu_python_golden() {
-        // Captura fixa: o gerador Python saiu; mudança de contrato edita o JSON junto com este teste.
+        // Captura fixa, sem gerador: mudança de contrato edita o JSON junto com este teste.
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend/tests/fixtures/contract/golden/ask_question.json");
         let rows: Vec<Value> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
         assert!(rows.len() >= 15);

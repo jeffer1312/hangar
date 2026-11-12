@@ -1264,7 +1264,7 @@ class CodexAdapter:
         Roda numa task propria, entao uma excecao aqui nao sobe sozinha: ela e repassada aos
         ouvintes (que a levantam no SSE) e o sentinela final sai SEMPRE — sem isso cada ouvinte
         ficava em `fila.get()` pra sempre, com a tela "conectada" e muda."""
-        ouvintes = sess["ouvintes"]   # a lista DESTA bomba: a sucessora ganha outra (ver _state_stream)
+        ouvintes = sess["ouvintes"]   # a lista DESTA bomba: a sucessora ganha outra
 
         def espalhar(ev) -> None:
             for fila in ouvintes:
