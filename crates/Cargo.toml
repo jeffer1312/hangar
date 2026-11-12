@@ -1,12 +1,13 @@
 [workspace]
 resolver = "3"
-members = ["hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux", "hangar-connect", "hangar-plugins", "hangar-update-news", "hangar-workflows", "hangar-http-file", "hangar-desktop-theme", "hangar-opencode-cookie", "hangar-deploy", "hangar-port-preview", "hangar-session-tools"]
+members = ["hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux", "hangar-connect", "hangar-plugins", "hangar-update-news", "hangar-workflows", "hangar-http-file", "hangar-desktop-theme", "hangar-opencode-cookie", "hangar-deploy", "hangar-port-preview", "hangar-session-tools", "hangar-codex-account-sync"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
+hangar-codex-account-sync = { path = "hangar-codex-account-sync" }
 hangar-session-tools = { path = "hangar-session-tools" }
 # Mesmas versões do desktop-native/Cargo.toml: o hangar-api entra nos dois builds.
 serde = { version = "=1.0.229", features = ["derive"] }

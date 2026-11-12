@@ -36,6 +36,11 @@ impl AdminCli {
     pub async fn run(&self,args:Vec<String>,timeout:Duration)->Result<Value,String> {
         self.execute(args,timeout,"").await.map_err(|error|error.message)
     }
+    /// Só o sinal da recusa conhecida atravessa a fronteira; stderr pode conter credenciais.
+    pub(crate) async fn account_sync_command(&self,args:Vec<String>,timeout:Duration)->Result<Value,bool> {
+        const ORPHAN:&str="is already added from a different source";
+        self.execute(args,timeout,ORPHAN).await.map_err(|error|error.stderr.contains(ORPHAN))
+    }
     pub async fn add(&self,id:&str,timeout:Duration)->Result<Value,String> {
         self.run(vec!["plugin".into(),"add".into(),id.into(),"--json".into()],timeout).await
     }

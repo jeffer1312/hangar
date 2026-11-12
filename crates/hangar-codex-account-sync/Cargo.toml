@@ -1,0 +1,20 @@
+[package]
+name = "hangar-codex-account-sync"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+hangar-core.workspace = true
+serde_json.workspace = true
+ring.workspace = true
+reqwest.workspace = true
+regex.workspace = true
+futures-util.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+tempfile.workspace = true
+
+[dev-dependencies]
+toml = { version = "=1.1.7", default-features = false, features = ["parse", "display", "std", "serde", "preserve_order"] }
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
+proptest.workspace = true
