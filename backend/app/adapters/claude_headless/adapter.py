@@ -376,9 +376,6 @@ class ClaudeHeadlessAdapter:
         return self._delivery_locks.setdefault(name, asyncio.Lock())
 
     async def deliverable(self, name: str) -> bool:
-        from app.conversation_transfer import transfer_active
-        if transfer_active(name):
-            return False
 
         # Parada ou subindo: o prompt vai pra fila e a resposta HTTP sai na hora. Quem sobe é o
         # `acordar`, e quem entrega é o fim do `initialize` — nunca o POST esperando os hooks.
@@ -389,9 +386,6 @@ class ClaudeHeadlessAdapter:
 
     def acordar(self, name: str) -> None:
         """Religa a sessão em segundo plano e entrega a fila quando ela estiver pronta."""
-        from app.conversation_transfer import transfer_active
-        if transfer_active(name):
-            return None
         sess = self._sessions.get(name)
         if sess is not None and sess.vivo:
             return
@@ -409,9 +403,6 @@ class ClaudeHeadlessAdapter:
             await self._drenar_fim_de_turno(sess)
 
     async def send_prompt(self, name: str, text: str) -> str:
-        from app.conversation_transfer import transfer_active
-        if transfer_active(name):
-            return "deferred"
 
         sess = await self.ensure_running(name, esperar_pronta=False)
         if sess is None or not await self.deliverable(name):
@@ -433,8 +424,6 @@ class ClaudeHeadlessAdapter:
         return "sent"
 
     async def _escrever_prompt(self, sess: _Sessao, text: str) -> None:
-        from app.conversation_transfer import require_available
-        require_available(sess.name)
         blocos, avisos = await asyncio.to_thread(_blocos_do_prompt, text)
         if text.lstrip().startswith("/"):
             sess.comando_enviado = text.strip()
@@ -451,12 +440,7 @@ class ClaudeHeadlessAdapter:
             await self._nota_local(sess, aviso)
 
     async def drain(self, name: str, path: str) -> int:
-        from app.conversation_transfer import transfer_active
-        if transfer_active(name):
-            return 0
         async with self.delivery_lock(name):
-            if transfer_active(name):
-                return 0
             q = PromptQueue(name)
             if not any(e.get("delivered") is False for e in await asyncio.to_thread(q.load)):
                 return 0
@@ -770,9 +754,8 @@ class ClaudeHeadlessAdapter:
     # snapshot em cano.py e a decisão em docs/decisoes/harnesses.md.
 
     async def ensure_running(self, name: str, *, so_reconectar: bool = False,
-                             esperar_pronta: bool = True, transfer_id: str | None = None,
-                             require_initialize: bool = False) -> _Sessao | None:
-        sess = await self._ligar(name, so_reconectar=so_reconectar, transfer_id=transfer_id)
+                             esperar_pronta: bool = True, require_initialize: bool = False) -> _Sessao | None:
+        sess = await self._ligar(name, so_reconectar=so_reconectar)
         if sess is not None and esperar_pronta:
             await asyncio.wait_for(sess.initialize_done.wait(), _TETO_INIT_S + 5)
             if sess.initialize_ok is False or (require_initialize and sess.initialize_ok is not True) or not sess.vivo:
@@ -782,7 +765,7 @@ class ClaudeHeadlessAdapter:
                 raise RuntimeError("o Claude saiu durante a inicialização")
         return sess
 
-    async def _ligar(self, name: str, *, so_reconectar: bool = False, transfer_id: str | None = None) -> _Sessao | None:
+    async def _ligar(self, name: str, *, so_reconectar: bool = False) -> _Sessao | None:
         from app.runtime_adapter import assert_legacy
         from app.runtime_coordinator import refuse_python_client
         refuse_python_client(name)
@@ -790,11 +773,6 @@ class ClaudeHeadlessAdapter:
         # Um spawn por nome de cada vez: prompt e troca de modelo chegando juntos numa sessão
         # parada subiriam dois `claude` no mesmo .jsonl.
         async with self._spawn_locks.setdefault(name, asyncio.Lock()):
-            from app.conversation_transfer import transfer_for_session, TransferPhase
-            record = transfer_for_session(name)
-            if record and record.phase not in {TransferPhase.COMPLETE, TransferPhase.REJECTED, TransferPhase.ROLLED_BACK}:
-                if not so_reconectar and (transfer_id != record.id or record.phase != TransferPhase.RESTORING):
-                    return None
             sess = self._sessions.get(name)
             if sess is not None and sess.vivo:
                 return sess

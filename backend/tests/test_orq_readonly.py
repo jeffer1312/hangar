@@ -165,32 +165,6 @@ def _protected_pane(monkeypatch, tmp_path, order):
     return reg
 
 
-def test_read_only_transfer_source_is_refused_before_kill(monkeypatch, tmp_path):
-    from app.adapters.claude_headless import sessions
-
-    order = []
-    monkeypatch.setattr(providers_bridge, "local", Mock(side_effect=AssertionError("a origem não reabre protegida")))
-    reg = _protected_pane(monkeypatch, tmp_path, order)
-    transfer_meta = {"session_id": _SID, "cwd": str(tmp_path), "pane_pid": 999, "key": "k", "transfer_id": "t"}
-    with pytest.raises(ValueError, match="recrie com --read-only"):
-        reg.para_headless("review", "manual", transfer_meta=transfer_meta)
-    assert order == [] and not sessions.exists("review")
-
-
-def test_parked_read_only_sidecar_is_not_transferred(monkeypatch, tmp_path):
-    from app import registry
-    from app.adapters.claude_headless import sessions
-    from app.conversation_transfer import TransferError
-    from app.models import SessionInfo
-
-    monkeypatch.setattr(sessions, "_dir", lambda: tmp_path / "hl")
-    sessions.save("review", str(tmp_path), _SID, read_only=True)
-    reg = registry.SessionRegistry(str(tmp_path / "projects"))
-    with pytest.raises(TransferError) as raised:
-        reg.transfer_origin(SessionInfo(name="review", cwd=str(tmp_path), provider="claude", headless=True))
-    assert raised.value.code == "session_transfer_read_only"
-
-
 @pytest.mark.skipif(sys.platform != "linux" or not shutil.which("bash"),
                     reason="stub de curl usa executável POSIX")
 @pytest.mark.parametrize("status", [200, 422])

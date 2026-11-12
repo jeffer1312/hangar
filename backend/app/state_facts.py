@@ -38,10 +38,8 @@ _clock = time.monotonic
 def _facts(name: str) -> dict:
     from app import permission_mode, plugin_bridge
     from app.adapters.claude_headless import sessions
-    from app.conversation_transfer import transfer_active
     out = plugin_bridge.plugin_facts(name)
     out["in_transfer_ms"] = sessions.troca_restante_ms(name)
-    out["transfer_active"] = transfer_active(name)
     out["permission_op"] = permission_mode.operacao_em_curso(name)
     return out
 
@@ -55,7 +53,7 @@ def _key(facts: dict) -> tuple:
             None if question is None else (question["id"], repr(question["questions"]), question["tool"],
                                            question["resumo"]),
             facts["suggestion"], facts["body_columns"], facts["band_anchor"], facts["in_transfer_ms"] > 0,
-            facts["transfer_active"], facts["permission_op"])
+            facts["permission_op"])
 
 
 def snapshot(name: str) -> dict:

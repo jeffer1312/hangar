@@ -27,10 +27,11 @@ pub enum Verdict { Ok, Ended, Unsure }
 struct FactsState {
     lives: HashMap<String, String>,
     changing: HashSet<String>,
+    uncertain: HashSet<String>,
     snapshot: bool,
 }
 
-/// Fatos que só o Python sabe (transferência, troca de modo), empurrados por ele.
+/// Identidade conservada pelo ciclo de vida e pela recuperação das transferências no Rust.
 #[derive(Default)]
 pub struct LifeFacts { state: Mutex<FactsState> }
 
@@ -52,15 +53,20 @@ impl LifeFacts {
     pub fn end_mode_change(&self, name: &str) {
         self.lock().changing.remove(name);
     }
-    /// Fotografia completa: substitui o que foi empurrado antes.
-    pub fn apply_snapshot(&self, lives: HashMap<String, String>, changing: HashSet<String>) {
-        *self.lock() = FactsState { lives, changing, snapshot: true };
+    /// A recuperação da subida conserva somente os convites cuja transferência não pôde ser lida.
+    pub fn apply_transfer_snapshot(&self,lives:HashMap<String,String>,uncertain:HashSet<String>) {
+        let mut state=self.lock();state.lives=lives;state.uncertain.extend(uncertain);state.snapshot=true;
+    }
+    /// A incerteza só sai depois de uma operação explícita conferir novamente o registro da sessão.
+    pub fn set_transfer_uncertain(&self,name:&str,uncertain:bool) {
+        let mut state=self.lock();
+        if uncertain {state.uncertain.insert(name.into());} else {state.uncertain.remove(name);}
     }
     pub fn snapshot_received(&self) -> bool {
         self.lock().snapshot
     }
     pub fn changing_mode(&self, name: &str) -> bool {
-        self.lock().changing.contains(name)
+        let state=self.lock();state.changing.contains(name) || state.uncertain.contains(name)
     }
     fn transfer_life(&self, name: &str) -> Option<String> {
         self.lock().lives.get(name).cloned()
@@ -204,7 +210,7 @@ async fn record_verdict(share: &Share, lives: &Lives) -> Verdict {
     if life.is_some() && life == share.life {
         return Verdict::Ok;
     }
-    // Sem a fotografia do Python, uma transferência em curso parece sessão morta ou renascida.
+    // Sem conferência dos registros duráveis, uma transferência em curso parece sessão morta ou renascida.
     if !facts.snapshot_received() {
         return Verdict::Unsure;
     }
@@ -277,4 +283,40 @@ pub async fn sweep(store: &ShareStore, lives: &Lives) -> std::io::Result<usize> 
             Some((Some(now), _)) => life == Some(now.as_str()),
         }
     })
+}
+
+
+#[cfg(test)]
+mod transfer_uncertainty_tests {
+    use super::*;
+    use crate::share::store::Kind;
+
+    struct Absent;
+    impl LifeProbe for Absent {
+        fn birth<'a>(&'a self,_:&'a str)->BoxFuture<'a,Option<u64>> {Box::pin(async {None})}
+        fn has_session<'a>(&'a self,_:&'a str)->BoxFuture<'a,Option<bool>> {Box::pin(async {Some(false)})}
+        fn sidecar(&self,_:&str)->Option<(String,bool)> {None}
+        fn sidecar_exists(&self,_:&str)->bool {false}
+    }
+
+    #[tokio::test]
+    async fn unreadable_transfer_preserves_only_its_invite_until_explicit_recovery() {
+        let dir=tempfile::tempdir().unwrap();
+        let store=ShareStore::open(dir.path().join("shares.json"),Arc::new(||100.0));
+        let facts=Arc::new(LifeFacts::default());let lives=Lives::new(Arc::new(Absent),facts.clone());
+        let (_,held)=store.create_redeemed("uncertain",Some("k:old".into()),Kind::Share).unwrap();
+        let (_,other)=store.create_redeemed("other",Some("k:old".into()),Kind::Share).unwrap();
+        facts.apply_transfer_snapshot(Default::default(),["uncertain".into()].into());
+        facts.end_mode_change("uncertain");
+        assert_eq!(verdict(&store.lookup_token(&held).unwrap(),Some("uncertain"),&lives).await,Verdict::Unsure);
+        assert_eq!(verdict(&store.lookup_token(&other).unwrap(),Some("other"),&lives).await,Verdict::Ended);
+        sweep(&store,&lives).await.unwrap();
+        assert!(store.active_sessions().contains("uncertain"));
+        assert!(!store.active_sessions().contains("other"));
+        facts.apply_transfer_snapshot(Default::default(),Default::default());
+        assert!(facts.changing_mode("uncertain"),"fotografia de outra rodada não prova recuperação");
+        facts.set_transfer_uncertain("uncertain",false);
+        sweep(&store,&lives).await.unwrap();
+        assert!(!store.active_sessions().contains("uncertain"));
+    }
 }

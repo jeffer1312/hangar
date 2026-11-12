@@ -54,7 +54,7 @@ fn setup(snapshot: bool) -> (Arc<Fake>, Arc<LifeFacts>, Lives) {
     let fake = Arc::new(Fake::default());
     let facts = Arc::new(LifeFacts::default());
     if snapshot {
-        facts.apply_snapshot(HashMap::new(), HashSet::new());
+        facts.apply_transfer_snapshot(HashMap::new(), HashSet::new());
     }
     let lives = Lives::new(fake.clone(), facts.clone());
     (fake, facts, lives)
@@ -151,17 +151,6 @@ async fn transfer_life_pushed_by_python_wins() {
 }
 
 #[tokio::test]
-async fn snapshot_replaces_pushed_facts() {
-    let (fake, facts, lives) = setup(false);
-    fake.mux_says(Some(false));
-    facts.begin_mode_change("dd");
-    facts.apply_snapshot(HashMap::from([("cc".to_string(), "k:L1".to_string())]), HashSet::new());
-    assert!(facts.snapshot_received());
-    assert!(!facts.changing_mode("dd"));
-    assert_eq!(verdict(&cc(), Some("cc"), &lives).await, Verdict::Ok);
-}
-
-#[tokio::test]
 async fn without_snapshot_nothing_but_revoke_ends() {
     let (fake, _, lives) = setup(false);
     fake.key("cc", "OUTRA-VIDA");
@@ -188,7 +177,7 @@ async fn sessionless_route_ok_if_any_record_ok() {
 async fn stale_transfer_life_loses_to_a_new_tmux_birth() {
     // Rust reiniciado com transferência incompleta na fotografia; a sessão renasceu com o mesmo nome.
     let (fake, facts, lives) = setup(false);
-    facts.apply_snapshot(HashMap::from([("cc".to_string(), "k:L1".to_string())]), HashSet::new());
+    facts.apply_transfer_snapshot(HashMap::from([("cc".to_string(), "k:L1".to_string())]), HashSet::new());
     fake.birth_of("cc", 99);
     assert_eq!(verdict(&cc(), Some("cc"), &lives).await, Verdict::Ended);
 }
@@ -211,7 +200,7 @@ async fn verdict_rereads_the_record_before_ending() {
     let (_, token) = store.create_redeemed("cc", Some("k:L1".into()), Kind::Share).unwrap();
     let fake = Arc::new(Fake::default());
     let facts = Arc::new(LifeFacts::default());
-    facts.apply_snapshot(HashMap::new(), HashSet::new());
+    facts.apply_transfer_snapshot(HashMap::new(), HashSet::new());
     let reread = store.clone();
     let lives = Lives::new(fake.clone(), facts).rereading(move |hash| reread.lookup_hash(hash));
     let stale = store.lookup_token(&token).unwrap();

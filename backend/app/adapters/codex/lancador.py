@@ -3,7 +3,7 @@
 Existe separado do `adapter.py` porque TRES processos diferentes precisam concordar nisto e nenhum
 deles pode pagar o preco de importar o adapter (asyncio, websockets, parser do transcript):
 
-- o backend, na retomada do Arquivo e na transferência (`registry.create`, `adopt_imported`); a
+- o backend, na retomada do Arquivo; a
   sessão nova abre no Rust (`session_open/codex.rs`, mesma ordem de flags);
 - `scripts/hangar-codex-tui`, o lancador, que roda no pane a cada abertura de sessao.
 
@@ -43,7 +43,6 @@ def comando_do_lancador(cwd: str, initial_prompt: str | None = None,
                         codex_account: str | None = None,
                         approval: str | None = None, sandbox: str | None = None,
                         tool_output_token_limit: int | None = None,
-                        transfer_id: str | None = None,
                         service_tier: str | None = None) -> list[str]:
     """O comando do pane de uma sessao Codex: o lancador unico, o MESMO nos tres chamadores.
 
@@ -78,9 +77,6 @@ def comando_do_lancador(cwd: str, initial_prompt: str | None = None,
         argv += ["--sandbox", sandbox]
     if tool_output_token_limit is not None:
         argv += tool_output_override(tool_output_token_limit, launcher=True)
-    if transfer_id is not None:
-        import uuid
-        argv += ["--transfer-id", str(uuid.UUID(transfer_id))]
     if initial_prompt:
         argv += ["--prompt", initial_prompt]
     return argv

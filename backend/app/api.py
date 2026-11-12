@@ -203,8 +203,6 @@ async def _lifespan(app: FastAPI):
     # threads (Timer da confirmacao, gatilho de hook). Ver `_drenar`.
     global _loop_servidor
     _loop_servidor = asyncio.get_running_loop()
-    if runtime.mode == "python":
-        _start_transfer_recovery()
     codex_warm_task = asyncio.create_task(get_adapter("codex").watch_sessions())
     codex_contas_login = CodexContasLogin()
     app.state.codex_contas_login = codex_contas_login
@@ -218,8 +216,6 @@ async def _lifespan(app: FastAPI):
         await runtime.close_events()
         costs_sources.cancelar_aquecimento()
         # Claude sem terminal fica vivo no cano: só fecha a conexão; o próximo backend religa.
-        if _transfer_recovery is not None:
-            await asyncio.shield(_transfer_recovery)
         get_adapter(CLAUDE_HEADLESS).desligar_todas()
         codex_warm_task.cancel()
         app.state.codex_auth_aquecer.cancel()
@@ -236,25 +232,6 @@ async def _lifespan(app: FastAPI):
             await prune_task
         except asyncio.CancelledError:
             pass
-
-
-async def _transfer_guard(name: str):
-    from app.conversation_transfer import session_ingress, require_available, TransferError, public_error
-    try:
-        with session_ingress(name):
-            await asyncio.to_thread(require_available, name)
-            yield
-    except TransferError as exc:
-        raise HTTPException(exc.status, detail=public_error(exc)) from None
-
-
-async def _transfer_check(name: str):
-    from app.conversation_transfer import session_ingress, require_available, TransferError, public_error
-    try:
-        with session_ingress(name):
-            await asyncio.to_thread(require_available, name)
-    except TransferError as exc:
-        raise HTTPException(exc.status, detail=public_error(exc)) from None
 
 
 class _RustReply(Exception):
@@ -294,13 +271,6 @@ def _who_asked(request: Request) -> dict:
     origin = request.headers.get("x-forwarded-for") or (request.client.host if request.client else "")
     return {key: value for key, value in (("user-agent", request.headers.get("user-agent")),
             ("x-hangar-req", request.headers.get("x-hangar-req")), ("x-forwarded-for", origin)) if value}
-
-
-def _transfer_send_error(name: str) -> dict | None:
-    from app.conversation_transfer import transfer_active, TransferError, public_error
-    if transfer_active(name):
-        return {"ok": False, "error": public_error(TransferError("session_transfer_busy")), "delivered": False}
-    return None
 
 
 app = FastAPI(title="hangar", lifespan=_lifespan)
@@ -547,7 +517,7 @@ async def _search_without_rust(request: Request, call_next):
 
 
 # Anexos, `/transcribe`, saída de ferramenta e imagem colada no terminal: o dono é o Rust
-# (`uploads`, `session_media`). A imagem de conversa transferida fica aqui, como o histórico dela.
+# (`uploads`, `session_media`).
 _MIDIA = re.compile(r"^/api/sessions/[^/]+/(upload|uploads|uploads/[^/]+|transcribe|bash-output|tool-progress/[^/]+|transcript-image/[^/]+/[^/]+)$")
 
 
@@ -559,7 +529,7 @@ async def _midia_pelo_rust(request: Request, call_next):
     owned = (metodo == "POST" and rota in ("upload", "transcribe", "bash-output")
              or metodo in ("GET", "HEAD") and rota.startswith("uploads")
              or metodo == "GET" and (rota.startswith("tool-progress/")
-                                     or rota.startswith("transcript-image/") and not rota.startswith("transcript-image/transfer:")))
+                                     or rota.startswith("transcript-image/")))
     if not owned:
         return await call_next(request)
     try:
@@ -859,8 +829,6 @@ _loop_servidor: asyncio.AbstractEventLoop | None = None
 
 
 def _drenar(name: str, jsonl: str, provider: str) -> int:
-    if _transfer_send_error(name):
-        return 0
     """Entrega a fila pendente pelo caminho DAQUELE provider.
 
     O `terminal_input.drain` digita no pane, e no Codex isso poria a mensagem do usuario duas vezes
@@ -922,8 +890,6 @@ def _drain_session(name: str) -> None:
 
 
 def _confirm_and_drain(name: str) -> None:
-    if _transfer_send_error(name):
-        return 0
     """Confirmacao de entrega: delivered=True so diz 'send_keys chamado' — a TUI pode ter engolido
     as teclas e a msg sumia com cara de entregue. Confere contra o transcript; engolida ->
     re-enfileira (reconcile) e re-drena. Best-effort, roda em Timer/thread."""
@@ -948,10 +914,8 @@ def _confirm_and_drain(name: str) -> None:
         if not info or not info.jsonl:
             return
         # Fila e confirmação do Codex com terminal são do Rust: gravar na projeção dele seria um segundo escritor.
-        if info.provider == "codex" and not info.headless and runtime_coordinator.rust_owns_codex_terminal():
+        if info.provider == "codex" and not info.headless:
             return
-        from app.conversation_history import confirmation_options
-        confirmation = confirmation_options(name, info.jsonl, info.provider)
         # MID-TURN o prompt entregue ainda pode nao ter virado entrada no transcript (vive na fila
         # interna do Claude Code) — decidir requeue agora arriscaria redigitar mensagem ja recebida.
         # Adia pro proximo ciclo (o turno acabando dispara transicao -> novo timer).
@@ -972,11 +936,11 @@ def _confirm_and_drain(name: str) -> None:
             # gravar o prompt. Sem isto a entrada ficava entregue e calada pra sempre.
             committed, inicio_ts = [], 0.0
         else:
-            committed = committed_user_lines(info.jsonl, info.provider, **confirmation)
+            committed = committed_user_lines(info.jsonl, info.provider)
             inicio_ts = _transcript_start_ts(info.jsonl)
         # Enfileirada na TUI e ainda nao consumida: entregue, mas sem bolha real — segue visivel
         # como bolha da fila em vez de ser confirmada (escondida) pela linha de enqueue.
-        na_fila = fila_interna_pendente(info.jsonl, info.provider, **confirmation)
+        na_fila = fila_interna_pendente(info.jsonl, info.provider)
         if committed is None or inicio_ts is None:
             _log.warning("confirmacao adiada name=%s: transcript ilegivel agora (nada foi "
                          "reenfileirado nem dado por perdido)", name)
@@ -1330,7 +1294,7 @@ async def _rust_leave(name: str, phases: dict) -> list[dict]:
     return out.get("warnings") if isinstance(out.get("warnings"), list) else []
 
 
-@app.delete("/api/sessions/{name}", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
+@app.delete("/api/sessions/{name}", dependencies=[Depends(require_auth)])
 async def kill_session(name: str, by: str | None = None, request: Request = None):
     # 500 quando a sessao SOBREVIVE ao kill — mesmo padrao do /rename logo abaixo, que ja confere e
     # responde 404/500. Antes era {"ok": true} incondicional: o card sumia da UI e a sessao reaparecia
@@ -1401,21 +1365,6 @@ class ModoExecucaoBody(_StrictBody):
 
 @app.post("/api/sessions/{name}/recarregar", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
 async def recarregar_sessao(name: str):
-    """Recarregar a sessão é do Rust (Claude e Codex, com e sem terminal); aqui fica a recuperação da
-    transferência que falhou ao restaurar, que o Python conduz, e a recusa sem o Rust."""
-    from app.conversation_transfer import transfer_for_session, TransferPhase, recover_transfer, TransferError, public_error
-    record = await asyncio.to_thread(transfer_for_session, name)
-    if record and record.phase == TransferPhase.RESTORE_FAILED:
-        operation = asyncio.create_task(_durante_troca(name, recover_transfer(registry, record)))
-        try:
-            return await asyncio.shield(operation)
-        except asyncio.CancelledError:
-            try:
-                await operation
-            finally:
-                raise
-        except TransferError as exc:
-            raise HTTPException(exc.status, detail=public_error(exc)) from None
     info = await _cached_info(name)
     if not info:
         raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessão não encontrada"))
@@ -1449,27 +1398,6 @@ async def _python_owns_headless() -> None:
         _log.warning("claude headless: religação de canos falhou", exc_info=True)
 
 
-_transfer_recovery: asyncio.Task | None = None
-
-
-async def _recover_pending_transfers() -> None:
-    from app.conversation_transfer import list_incomplete, recover_transfer, TransferError
-    for record in await asyncio.to_thread(list_incomplete):
-        try:
-            await _durante_troca(record.name, recover_transfer(registry, record))
-        except TransferError:
-            pass  # A fase durável mantém o erro e a ação Recarregar disponíveis.
-        except Exception:
-            _log.exception("recuperação da transferência de %s falhou", record.name)
-
-
-def _start_transfer_recovery() -> None:
-    """Uma vez por processo, depois que alguém é dono das sessões (Python, ou Rust de pé)."""
-    global _transfer_recovery
-    if _transfer_recovery is None:
-        _transfer_recovery = asyncio.create_task(_recover_pending_transfers())
-
-
 async def _boot_sessions(runtime) -> None:
     """Sessões Claude sem terminal na subida. O cano sobrevive ao restart; só morre aqui o de
     sessão encerrada com o backend fora. Com o Rust esperado, nada mais roda antes do desfecho
@@ -1484,107 +1412,25 @@ async def _boot_sessions(runtime) -> None:
         except Exception:
             _log.warning("claude headless: varredura de canos órfãos falhou", exc_info=True)
 
-    async def after_rust():
-        _start_transfer_recovery()
 
     async def after_python():
         await sweep_orphans()
-        # Cada etapa independe das outras: uma falha não deixa canos sem religar nem transferência parada.
         try:
             await runtime.register_claude_sessions()
         except Exception:
             _log.exception("registro das sessões Claude no Python falhou")
         await _python_owns_headless()
-        _start_transfer_recovery()
 
-    global _transfer_recovery
-    _transfer_recovery = None       # um lifespan novo no mesmo processo (testes) recupera de novo
-    runtime.mode_hooks.update(rust=after_rust, python=after_python)
+    runtime.mode_hooks.update(python=after_python)
     if runtime.mode == "python":
         await sweep_orphans()
         await _python_owns_headless()
-
-
-async def _durante_troca(name: str, troca):
-    """A transferência Claude→Codex (e a recuperação dela) muda a identidade da sessão (sidecar <->
-    pane tmux); sem atualizar, a varredura revogaria o convite de uma sessão que continua viva. O
-    Rust a segura no meio ("não sei", 503)."""
-    if name in share_bridge.changing_mode:
-        return await troca
-    share_bridge.changing_mode.add(name)
-    try:
-        await asyncio.to_thread(share_bridge.mode_change, name, True)
-        from app import runtime_coordinator
-        coordinator = runtime_coordinator.current()
-        if coordinator is not None and coordinator.managed_queue(name):
-            return await coordinator.change(name, lambda: troca)
-        return await troca
-    finally:
-        troca.close()
-        # Também na falha: uma troca que morreu no meio pode já ter mudado a identidade.
-        try:
-            def _move_life():
-                life = session_life(name)
-                share_bridge.set_life(name, life)
-            await asyncio.to_thread(_move_life)
-        finally:
-            share_bridge.changing_mode.discard(name)
-            await asyncio.to_thread(share_bridge.mode_change, name, False)
-            await asyncio.to_thread(_invalidate_lists)
-
-
-class AccountMoveBody(_StrictBody):
-    config_dir: str | None = None
-    credential_id: str | None = None
-    engine_account: str | None = None
-    source_life: str | None = None
-    source_jsonl: str | None = None
-    model: str | None = None
-    effort: str | None = None
-
-    @model_validator(mode="after")
-    def validate_target(self):
-        if sum(v is not None for v in (self.config_dir, self.credential_id, self.engine_account)) != 1:
-            raise ValueError("informe só config_dir, credential_id ou engine_account")
-        if self.engine_account is not None:
-            if self.model_fields_set != {"engine_account"}:
-                raise ValueError("engine_account é o corpo completo da troca de conta ChatGPT")
-            return self
-        if self.config_dir is not None:
-            if self.model_fields_set != {"config_dir"}:
-                raise ValueError("config_dir é o corpo legado completo")
-        else:
-            if not self.credential_id.startswith("codex:") or not self.source_life or not self.source_jsonl:
-                raise ValueError("destino Codex exige identidade e conversa de origem")
-            self.model = self.model.strip() or None if self.model is not None else None
-            self.effort = self.effort.strip() or None if self.effort is not None else None
-        return self
 
 
 @app.get("/api/sessions/{name}/conta", dependencies=[Depends(require_auth)])
 async def contas_destino(name: str):
     """As contas de destino e a troca de conta são do Rust."""
     raise registry_mod.SessionOpenNeedsRust()
-
-
-@app.post("/api/sessions/{name}/conta", dependencies=[Depends(require_auth)])
-async def trocar_conta(name: str, body: AccountMoveBody):
-    """A troca de conta Claude é do Rust; aqui fica a transferência da conversa para o Codex."""
-    if body.credential_id is None:
-        raise registry_mod.SessionOpenNeedsRust()
-    from app.conversation_transfer import transfer_claude_to_codex, TransferError, public_error
-    operation = asyncio.create_task(_durante_troca(name, transfer_claude_to_codex(
-        registry, name, body.credential_id, body.source_life, body.model, body.effort,
-        source_jsonl=body.source_jsonl)))
-    try:
-        return await asyncio.shield(operation)
-    except asyncio.CancelledError:
-        try:
-            await operation
-        finally:
-            raise
-    except TransferError as exc:
-        raise HTTPException(exc.status, detail=public_error(exc)) from None
 
 
 @app.post("/api/sessions/{name}/rename")
@@ -1600,7 +1446,7 @@ class ThenLinkBody(_StrictBody):
     text: str = Field(min_length=1)
 
 
-@app.put("/api/sessions/{name}/then", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
+@app.put("/api/sessions/{name}/then", dependencies=[Depends(require_auth)])
 def set_then_link(name: str, body: ThenLinkBody):
     """Arma o vinculo 'then' (feature #12): quando `name` confirmar idle (turno terminado), `body.text`
     e enviado pra `body.target` -- ver app.chain.ThenLink e app.api._maybe_chain. Um hop so (nao DAG):
@@ -1613,13 +1459,13 @@ def set_then_link(name: str, body: ThenLinkBody):
     return {"ok": True}
 
 
-@app.delete("/api/sessions/{name}/then", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
+@app.delete("/api/sessions/{name}/then", dependencies=[Depends(require_auth)])
 def clear_then_link(name: str):
     ThenLink(name).clear()
     return {"ok": True}
 
 
-@app.delete("/api/sessions/{name}/queue/{entry_id}", dependencies=[Depends(require_auth), Depends(_transfer_guard), Depends(_codex_rust_port)])
+@app.delete("/api/sessions/{name}/queue/{entry_id}", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
 async def descartar_da_fila(name: str, entry_id: str):
     # O botao "descartar" da bolha perdida: a entrada desistida sai da fila e do chat. So o id
     # (a bolha `queued-<id>` do front); `remove` recusa o que ainda esta por entregar.
@@ -1642,7 +1488,7 @@ async def _queue_unavailable():
 for _method, _path in (("PATCH", "/api/sessions/{name}/queue/{entry_id}"), ("POST", "/api/sessions/{name}/queue/reorder"),
                        ("POST", "/api/sessions/{name}/queue/{entry_id}/steer")):
     app.add_api_route(_path, _queue_unavailable, methods=[_method],
-                      dependencies=[Depends(require_auth), Depends(_transfer_guard), Depends(_codex_rust_port)])
+                      dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
 
 
 @app.get("/api/sessions/{name}/history", dependencies=[Depends(require_auth)], response_model=list[ChatEvent])
@@ -1669,10 +1515,9 @@ async def history(request: Request, response: Response, name: str, limit: int | 
     # do cliente, dispensa qualquer regra de "quando invalidar o cache": quem responde e o disco,
     # entao msg deste aparelho, de outro, do terminal, /clear e sessao que continuou trabalhando
     # caem todos no mesmo caminho.
-    from app.conversation_history import HistoryError
     try:
         etag = await asyncio.to_thread(historico_etag, name, info.jsonl, info.provider, limit)
-    except (HistoryError, OSError) as exc:
+    except OSError as exc:
         raise HTTPException(409, detail=erro("session_transfer_history_invalid", "histórico da transferência indisponível")) from exc
     if etag:
         if request.headers.get("if-none-match") == etag:
@@ -1686,7 +1531,7 @@ async def history(request: Request, response: Response, name: str, limit: int | 
     # parse (mesmo da cauda) e CPU/IO sincrono.
     try:
         evs = await asyncio.to_thread(merged_history, name, info.jsonl, info.provider, limit)
-    except (HistoryError, OSError) as exc:
+    except OSError as exc:
         raise HTTPException(409, detail=erro("session_transfer_history_invalid", "histórico da transferência indisponível")) from exc
     # Cauda CRUA de proposito: o corte no 1o
     # user_msg (pra nao desenhar resposta orfa) e preferencia de RENDERIZACAO do card do quadro e vive
@@ -1824,8 +1669,6 @@ def _classe_modo(remetente: str, alvo: str, cfg_alvo: Optional[str],
 
 def _enviar_nativo(name: str, text: str) -> Optional[str]:
     with terminal_input._send_lock(name):
-        if _transfer_send_error(name):
-            return None
         return _send_native_available(name, text)
 
 
@@ -1902,16 +1745,6 @@ def _jsonl_atual(name: str) -> str | None:
         return None
 
 
-def _send_one(name: str, text: str, track_entry: bool = False) -> dict:
-    from app.conversation_transfer import session_ingress, TransferError, public_error
-    try:
-        # A thread conserva a participação mesmo se o await HTTP for cancelado.
-        with session_ingress(name):
-            return _send_one_available(name, text, track_entry)
-    except TransferError as exc:
-        return {"ok": False, "error": public_error(exc), "delivered": False}
-
-
 def _rust_mode(coordinator) -> bool:
     return coordinator is not None and getattr(coordinator, "mode", None) == "rust"
 
@@ -1921,9 +1754,7 @@ def _no_rust_binding_error() -> dict:
     return {"ok": False, "error": erro("erro_envio_falhou", "sessão Claude sem vínculo no Rust"), "delivered": False}
 
 
-def _send_one_available(name: str, text: str, track_entry: bool = False) -> dict:
-    if error := _transfer_send_error(name):
-        return error
+def _send_one(name: str, text: str, track_entry: bool = False) -> dict:
 
     """Sequencia UNICA de envio de prompt: send_prompt + registro na fila duravel + confirmacao/drain.
     Usada pelo /input (uma sessao) e pelo /broadcast (loop por N sessoes) — o broadcast NAO reimplementa
@@ -1965,12 +1796,6 @@ def _send_one_available(name: str, text: str, track_entry: bool = False) -> dict
     try:
         result = "sent" if nativo else terminal.send_prompt(
             name, text, provider, pane_id=pane_id)
-        if result != "sent" and (error := _transfer_send_error(name)):
-            return error
-        if result != "sent" and provider == "claude" and codex_sessions.exists(name):
-            from app.conversation_transfer import TransferError, public_error
-            return {"ok": False, "delivered": False,
-                    "error": public_error(TransferError("session_transfer_source_changed"))}
         # DIAG: correlaciona o send com o jsonl pra onde ESTE nome resolve AGORA -> pega o cross-wire
         # (msg indo pro transcript/terminal errado). Best-effort, nunca quebra o envio.
         try:
@@ -2081,8 +1906,6 @@ async def _send_one_codex(name: str, text: str, *, track_entry: bool = False) ->
         return managed
     source = await _send_thread(codex_sessions.load, name)
     async with get_adapter("codex").delivery_lock(name):
-        if error := _transfer_send_error(name):
-            return error
         current = await _send_thread(codex_sessions.load, name)
         changed = source is not None and (current or {}).get("thread_id") != source.get("thread_id")
         if changed or not await _send_thread(_session_exists, name):
@@ -2091,25 +1914,17 @@ async def _send_one_codex(name: str, text: str, *, track_entry: bool = False) ->
 
 
 async def _enviar(name: str, text: str) -> dict:
-    from app.conversation_transfer import session_ingress, TransferError, public_error
+    operation = asyncio.create_task(_send_available(name, text))
     try:
-        with session_ingress(name):
-            operation = asyncio.create_task(_send_available(name, text))
-            try:
-                return await asyncio.shield(operation)
-            except asyncio.CancelledError:
-                try:
-                    await operation
-                finally:
-                    raise
-    except TransferError as exc:
-        return {"ok": False, "error": public_error(exc), "delivered": False}
+        return await asyncio.shield(operation)
+    except asyncio.CancelledError:
+        try:
+            await operation
+        finally:
+            raise
 
 
 async def _send_available(name: str, text: str) -> dict:
-    if error := _transfer_send_error(name):
-        return error
-
     """Envio comum ramificado por transporte (Codex, Claude sem terminal, pane) — a mesma esteira
     do /input pra quem manda por fora dele (broadcast, grupo, par, orquestração). Nunca levanta."""
     if _provider_of(name) == "codex":
@@ -2129,12 +1944,6 @@ async def _send_one_headless(name: str, text: str, *, track_entry: bool = False)
         return _no_rust_binding_error()
     adapter = get_adapter(CLAUDE_HEADLESS)
     async with adapter.delivery_lock(name):
-        if error := _transfer_send_error(name):
-            return error
-        if not _headless(name):
-            from app.conversation_transfer import TransferError, public_error
-            return {"ok": False, "delivered": False,
-                    "error": public_error(TransferError("session_transfer_source_changed"))}
         if not await asyncio.to_thread(_session_exists, name):
             return {"ok": False, "error": erro("erro_sessao_inexistente", "sessao nao encontrada")}
         # Recado de sessão-irmã vai pelo socket nativo do `claude` filho do cano quando ele existe
@@ -2315,7 +2124,7 @@ def _headless(name: str) -> bool:
     return headless_sessions.exists(name)
 
 
-@app.post("/api/sessions/{name}/input", dependencies=[Depends(require_auth), Depends(_transfer_guard), Depends(_codex_rust_port)])
+@app.post("/api/sessions/{name}/input", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
 async def input_prompt(name: str, body: InputBody):
     # Ramifica por provider: Claude via _send_thread (_send_one e SYNC/bloqueante — tmux), Codex via
     # _send_one_codex (async, app-server). Default "claude" pra qualquer nome nao-Codex.
@@ -2365,7 +2174,7 @@ async def input_prompt(name: str, body: InputBody):
             "native": bool(res.get("native"))}
 
 
-@app.post("/api/sessions/{name}/steer", dependencies=[Depends(require_auth), Depends(_transfer_guard), Depends(_codex_rust_port)])
+@app.post("/api/sessions/{name}/steer", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
 async def steer_session(name: str, body: InputBody | None = None):
     """Orienta o turno do Codex por RPC ou promove a fila da TUI (Kimi: ctrl-s; Claude: ctrl+x ctrl+s)."""
     if not await _send_thread(_session_exists, name):
@@ -2450,7 +2259,7 @@ def _url_pagina_propria(name: str, u: str) -> str:
     return f"http://{listen_addr(host, settings.port)}{u}?token={urllib.parse.quote(settings.auth_token, safe='')}"
 
 
-@app.post("/api/sessions/{name}/nav", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
+@app.post("/api/sessions/{name}/nav", dependencies=[Depends(require_auth)])
 async def abrir_nav_sessao(name: str, body: NavBody):
     """O AGENTE abre o navegador embutido da própria sessão (CLI `hangar-preview open <url>`).
 
@@ -2468,7 +2277,7 @@ async def abrir_nav_sessao(name: str, body: NavBody):
     return {"ok": True}
 
 
-@app.delete("/api/sessions/{name}/nav", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
+@app.delete("/api/sessions/{name}/nav", dependencies=[Depends(require_auth)])
 async def confirmar_nav_sessao(name: str):
     """O shell desktop criou o view da sessão: o marcador 'nav' sai, e nenhuma outra conexão o
     recebe de novo."""
@@ -2539,7 +2348,7 @@ async def _group_route(method: str, name: str, route: str, body: BaseModel | Non
     return _bridge_reply(out)
 
 
-@app.post("/api/sessions/{name}/pair", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
+@app.post("/api/sessions/{name}/pair", dependencies=[Depends(require_auth)])
 async def pair_session(name: str, body: PairBody):
     """Junta `name` e peer(s) num GRUPO de trabalho (une os grupos existentes de todos) e injeta
     em CADA membro o prompt do grupo atualizado — a partir daí trocam recados via hangar-send por
@@ -2552,7 +2361,7 @@ class PairRemoteBody(_StrictBody):
     task: str = ""
 
 
-@app.post("/api/sessions/{name}/pair-remote", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
+@app.post("/api/sessions/{name}/pair-remote", dependencies=[Depends(require_auth)])
 async def pair_remote(name: str, body: PairRemoteBody):
     """Lado RECEPTOR do pareamento cross-server: registra `name` (sessão LOCAL) pareada ao iniciador
     remoto `body.initiator` (srv::nome) e injeta o protocolo. NÃO chama de volta (o iniciador já
@@ -2565,7 +2374,7 @@ class UnpairRemoteBody(_StrictBody):
     peer: str             # 'srv::nome' que saiu do pareamento, na máquina remota
 
 
-@app.post("/api/sessions/{name}/unpair-remote", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
+@app.post("/api/sessions/{name}/unpair-remote", dependencies=[Depends(require_auth)])
 async def unpair_remote(name: str, body: UnpairRemoteBody):
     """`name` (local) tinha um par remoto que saiu — remove o vínculo local e avisa. Idempotente
     (sair de quem não está pareado é no-op). Chamado pelo backend peer no unpair do outro lado."""
@@ -2581,7 +2390,7 @@ class GroupMsgBody(_StrictBody):
     forcar_tmux: bool = False
 
 
-@app.post("/api/sessions/{name}/group-message", dependencies=[Depends(require_auth), Depends(_transfer_check)])
+@app.post("/api/sessions/{name}/group-message", dependencies=[Depends(require_auth)])
 async def group_message(name: str, body: GroupMsgBody):
     """Aviso pro GRUPO todo (hangar-send --group): entrega o texto a CADA companheiro de `name` numa
     tacada, como `[grupo: <name>]`. Unidirecional por contrato (o prompt instrui a NUNCA responder
@@ -2608,7 +2417,7 @@ async def pair_contract_put(name: str, body: PairContractBody):
     return await _group_route("PUT", name, "contract", body)
 
 
-@app.delete("/api/sessions/{name}/pair", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
+@app.delete("/api/sessions/{name}/pair", dependencies=[Depends(require_auth)])
 async def unpair_session(name: str):
     """`name` SAI do grupo (os demais membros continuam entre si; grupo restante de 1 dissolve).
     Avisa quem saiu e quem ficou. Idempotente. Aviso que falhar NÃO refaz o vínculo (fora do grupo
@@ -2698,7 +2507,7 @@ def _falha_do_runtime(e: Exception) -> HTTPException:
     return HTTPException(502, detail=erro("erro_envio_falhou", str(e), erro=str(e)))
 
 
-@app.post("/api/sessions/{name}/select", dependencies=[Depends(require_auth), Depends(_transfer_guard), Depends(_codex_rust_port)])
+@app.post("/api/sessions/{name}/select", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
 def select(name: str, body: SelectBody):
     from app.runtime_terminal import TerminalOutcomeUnknown, route_sync
     info = _cached_info_sync(name)
@@ -2763,7 +2572,7 @@ def select(name: str, body: SelectBody):
     return {"ok": True}
 
 
-@app.post("/api/sessions/{name}/select/submit", dependencies=[Depends(require_auth), Depends(_transfer_guard), Depends(_codex_rust_port)])
+@app.post("/api/sessions/{name}/select/submit", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
 def select_submit(name: str):
     """Envia as opções JÁ MARCADAS de um picker de múltipla escolha.
 
@@ -2812,13 +2621,13 @@ def _convidado(request: Request) -> bool:
     return guest_of(request) is not None
 
 
-@app.post("/api/sessions/{name}/plugin/press", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
+@app.post("/api/sessions/{name}/plugin/press", dependencies=[Depends(require_auth)])
 async def plugin_press(name: str, body: PluginPressBody):
     """Clique num botão que um mod desenhou na faixa ou num painel, pedido pelo app."""
     raise HTTPException(503, detail=_MOD_SEM_RUST)
 
 
-@app.post("/api/sessions/{name}/plugin/close", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
+@app.post("/api/sessions/{name}/plugin/close", dependencies=[Depends(require_auth)])
 async def plugin_close(name: str, body: PluginCloseBody):
     """Fecha um painel de mod pelo `✕` do cabeçalho, pedido pelo app."""
     raise HTTPException(503, detail=_MOD_SEM_RUST)
@@ -2837,7 +2646,7 @@ async def plugin_input(name: str):
         "Nesta sessão, o campo do mod só aceita digitação no terminal ou não está ligado ao app."))
 
 
-@app.post("/api/sessions/{name}/interrupt", dependencies=[Depends(require_auth), Depends(_transfer_guard), Depends(_codex_rust_port)])
+@app.post("/api/sessions/{name}/interrupt", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
 async def interrupt(name: str, clear: bool = False):
     # Codex: interrompe a propria TUI pelo tmux, mantendo celular e terminal no mesmo controlador.
     if _provider_of(name) == "codex":
@@ -2933,7 +2742,7 @@ async def modelos_da_sessao_codex(name: str):
     return {"models": await adapter.list_models(name), "current": current}
 
 
-@app.post("/api/sessions/{name}/model", dependencies=[Depends(require_auth), Depends(_transfer_guard), Depends(_codex_rust_port)])
+@app.post("/api/sessions/{name}/model", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
 async def set_codex_model(name: str, body: CodexModelBody):
     # A thread compartilha a escolha com a TUI, sem reiniciar o processo.
     if _provider_of(name) != "codex":
@@ -2949,7 +2758,7 @@ class CodexServiceTierBody(_StrictBody):
     service_tier: Literal["default", "priority"]
 
 
-@app.post("/api/sessions/{name}/service-tier", dependencies=[Depends(require_auth), Depends(_transfer_guard), Depends(_codex_rust_port)])
+@app.post("/api/sessions/{name}/service-tier", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
 async def set_codex_service_tier(name: str, body: CodexServiceTierBody):
     if _provider_of(name) == "claude":
         # O Fast do Claude reabre a sessão com o tier novo: é do Rust.
@@ -3008,7 +2817,7 @@ async def permissoes_do_codex(name: str):
         raise HTTPException(exc.status, detail=erro("erro_permissao_picker", exc.detail))
 
 
-@app.post("/api/sessions/{name}/codex-permissions", dependencies=[Depends(require_auth), Depends(_transfer_guard), Depends(_codex_rust_port)])
+@app.post("/api/sessions/{name}/codex-permissions", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
 async def trocar_permissao_do_codex(name: str, body: CodexPermissionBody):
     if _codex_sem_terminal(name):
         from app.adapters.codex.sem_terminal import Ocupada
@@ -3031,7 +2840,7 @@ class CodexModeBody(_StrictBody):
     mode: Literal["default", "plan"]
 
 
-@app.post("/api/sessions/{name}/codex/mode", dependencies=[Depends(require_auth), Depends(_transfer_guard), Depends(_codex_rust_port)])
+@app.post("/api/sessions/{name}/codex/mode", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
 async def set_codex_mode(name: str, body: CodexModeBody):
     if _provider_of(name) != "codex":
         raise HTTPException(400, detail=erro("erro_model_so_codex", "model só existe para sessões Codex"))
@@ -3047,7 +2856,7 @@ def _menu_de_implementar_plano(pane: str) -> bool:
                 and menu[1][0].startswith("Yes, implement this plan"))
 
 
-@app.post("/api/sessions/{name}/codex/plan/implement", dependencies=[Depends(require_auth), Depends(_transfer_guard), Depends(_codex_rust_port)])
+@app.post("/api/sessions/{name}/codex/plan/implement", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
 def implementar_plano_codex(name: str):
     if not _session_exists(name):
         raise HTTPException(404, detail=erro(
@@ -3101,7 +2910,7 @@ def pane(name: str, lines: int = 200):
             "scrollback": tmux.pane_scrollback(name)}
 
 
-@app.post("/api/sessions/{name}/keys", dependencies=[Depends(require_auth), Depends(_transfer_guard), Depends(_codex_rust_port)])
+@app.post("/api/sessions/{name}/keys", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
 def keys(name: str, body: KeyBody):
     # Uma tecla de navegacao (allowlist) pro pane — dirige overlays so-TUI a partir do espelho.
     try:
@@ -3115,7 +2924,7 @@ def keys(name: str, body: KeyBody):
     return {"ok": True}
 
 
-@app.post("/api/sessions/{name}/term-input", dependencies=[Depends(require_auth), Depends(_transfer_guard), Depends(_codex_rust_port)])
+@app.post("/api/sessions/{name}/term-input", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
 def term_input(name: str, body: TermInputBody):
     # Terminal interativo (so desktop): manda texto digitado (literal) e/ou uma tecla nomeada pro pane.
     try:
@@ -3202,28 +3011,6 @@ def shortcuts_verify(body: ShortcutVerifyBody):
     return shortcut_transfer.run_checks(body.ids, body.scripts[:50], _shortcut_env())
 
 
-
-
-@app.get("/api/sessions/{name}/transcript-image/{uuid}/{idx}", dependencies=[Depends(require_auth)])
-def transcript_image(name: str, uuid: str, idx: int):
-    # Serve uma imagem colada no TERMINAL (base64 no .jsonl) sob demanda. Decodifica por uuid+idx.
-    info = _cached_info_sync(name)
-    jsonl = info.jsonl if info else None
-    if not jsonl:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
-    from app.conversation_history import transcript_image as conversation_image, HistoryError
-    try:
-        got = conversation_image(info, uuid, idx)
-    except (HistoryError, OSError) as exc:
-        raise HTTPException(409, detail=erro("session_transfer_history_invalid", "histórico da transferência indisponível")) from exc
-    if got is None:
-        raise HTTPException(404, detail=erro("erro_imagem_nao_encontrada", "image not found"))
-    raw, media = got
-    # Só imagem raster passa, como no Rust: SVG executa script e o resto não é imagem.
-    media = media.lower() if media.lower() in {"image/png", "image/jpeg", "image/gif", "image/webp"} else "application/octet-stream"
-    # immutable: o conteudo de um uuid+idx nunca muda -> cache agressivo no cliente.
-    return Response(content=raw, media_type=media, headers={"Cache-Control": "max-age=31536000, immutable",
-                                                            "X-Content-Type-Options": "nosniff"})
 
 
 def _erro_conta_codex(exc: codex_accounts.AccountError) -> HTTPException:
@@ -3401,7 +3188,7 @@ class SkipQuestionBody(_StrictBody):
     interaction_id: str | None = None
 
 
-@app.post("/api/sessions/{name}/question/skip", dependencies=[Depends(require_auth), Depends(_transfer_guard), Depends(_codex_rust_port)])
+@app.post("/api/sessions/{name}/question/skip", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
 def skip_question(name: str, body: SkipQuestionBody):
     if getattr(_cached_info_sync(name), "provider", "claude") != "codex":
         raise HTTPException(409, detail=erro("erro_codex_resposta_invalida", "A pergunta mudou ou não aceita essas respostas. Confira as opções e tente novamente."))
@@ -3420,7 +3207,7 @@ def skip_question(name: str, body: SkipQuestionBody):
     return {"ok": True}
 
 
-@app.post("/api/sessions/{name}/answer", dependencies=[Depends(require_auth), Depends(_transfer_guard), Depends(_codex_rust_port)])
+@app.post("/api/sessions/{name}/answer", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
 def answer(name: str, body: AnswerBody):
     # Dirige o AskUserQuestion tabbed: reproduz as teclas (nav em malha fechada), confere o Review e
     # submete. Input invalido -> 409. Drive falhou (DriveError: nada submetido, sem Escape) ->
@@ -3532,7 +3319,7 @@ class ModelEffortBody(_StrictBody):
     scope: Literal["session", "default"] = "session"
 
 
-@app.post("/api/sessions/{name}/model-effort", dependencies=[Depends(require_auth), Depends(_transfer_guard), Depends(_codex_rust_port)])
+@app.post("/api/sessions/{name}/model-effort", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
 async def model_effort(name: str, body: ModelEffortBody):
     info = await _cached_info(name)
     if info is not None and getattr(info, "provider", "claude") == "claude":
@@ -3672,7 +3459,7 @@ async def permission_modes(name: str, sondar: bool = False):
     return {"current": cur, "modes": modos, "sondavel": cur != "dontAsk",
             "restaurado": restaurado, "previous_non_plan": anterior_nao_plan}
 
-@app.post("/api/sessions/{name}/permission-mode", dependencies=[Depends(require_auth), Depends(_transfer_guard), Depends(_codex_rust_port)])
+@app.post("/api/sessions/{name}/permission-mode", dependencies=[Depends(require_auth), Depends(_codex_rust_port)])
 async def permission_mode_set(name: str, body: PermissionModeBody):
     """Troca o modo de permissão via BTab até casar o alvo (teto 6 teclas).
 

@@ -92,11 +92,6 @@ def perguntar(metodo: str, timeout: float = _TIMEOUT, *,
     `params` fica vazio nas leituras e leva `creditId`/`idempotencyKey` no consumo de uma
     redefinição de cota.
 
-    `timeout` existe porque os dois chamadores esperam coisas diferentes: o catálogo é uma tela que
-    alguém abriu e pode esperar, o poll de cota tem que caber no teto das outras fontes (8s no
-    `cotas._HTTP_TIMEOUT`) — todas as leituras são aguardadas juntas ali, então a mais lenta é quem
-    manda na resposta do `/api/cotas`.
-
     NÃO dá pra usar `subprocess.run(input=...)`: medido em 30/08/2026, com o stdin fechado junto
     com a entrada o app-server responde o `initialize` e SAI (rc=0, 0,25s) sem chegar no segundo
     pedido — a resposta voltava vazia com sucesso aparente. O canal fica aberto até ela chegar.

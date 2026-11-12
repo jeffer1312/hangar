@@ -53,7 +53,7 @@ impl Guests {
     fn new(dir: &Path) -> Self {
         let probe = Arc::new(Probe::default());
         let facts = Arc::new(LifeFacts::default());
-        facts.apply_snapshot(HashMap::new(), HashSet::new());
+        facts.apply_transfer_snapshot(HashMap::new(), HashSet::new());
         let share = Arc::new(ShareState {
             store: ShareStore::open(dir.join("shares.json"), Arc::new(|| 100.0)),
             pairs: PairStore::open(dir.join("external_pairs.json")),

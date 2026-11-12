@@ -116,8 +116,7 @@ def troca_restante_ms(name: str) -> int:
 
 
 def em_troca(name: str) -> bool:
-    from app.conversation_transfer import transfer_active
-    return _trocando.get(name, 0.0) > time.monotonic() or transfer_active(name)
+    return _trocando.get(name, 0.0) > time.monotonic()
 
 
 def update(name: str, **campos) -> dict | None:
