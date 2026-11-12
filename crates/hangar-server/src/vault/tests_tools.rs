@@ -141,6 +141,14 @@ fn a_failed_unlink_is_reported_and_the_rest_still_goes() {
     assert!(files::remove(dir.path(), "nunca-existiu").is_ok());
 }
 
+/// O agente sabe o tamanho sem abrir o arquivo, e a resposta não leva o valor.
+#[test]
+fn the_file_reply_says_the_size_without_the_value() {
+    let reply = files::reply(std::path::Path::new("/x/abc"), "çã1\n");
+    assert_eq!(reply, serde_json::json!({"file": "/x/abc", "bytes": 6, "chars": 4, "ends_with_newline": true}));
+    assert!(!reply.to_string().contains("çã1"));
+}
+
 /// Tudo na pasta como gravado há um minuto: fora da janela em que a varredura poupa.
 fn backdate(dir: &std::path::Path) {
     let old = std::time::SystemTime::now() - Duration::from_secs(60);
@@ -160,6 +168,13 @@ fn a_file_goes_at_close_and_in_the_sweep() {
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(std::fs::metadata(&mine).unwrap().permissions().mode() & 0o777, 0o600);
         assert_eq!(std::fs::metadata(&base).unwrap().permissions().mode() & 0o777, 0o700);
+    }
+    #[cfg(windows)]
+    for path in [&mine, &base] {
+        // Uma ACE só (a do usuário): a herança da pasta de cima não entra. Contar linhas não depende do idioma.
+        let out = std::process::Command::new("icacls").arg(path).output().unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert_eq!(text.lines().filter(|l| l.contains(":(")).count(), 1, "{text}");
     }
     assert_eq!(std::fs::read(&mine).unwrap(), VALUE.as_bytes());
     files::close(&base, "renomeada", Some("k1"));
