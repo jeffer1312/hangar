@@ -1037,7 +1037,8 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         const id = `pending-${pendingSeq++}`;
         // Em idle a mensagem é digitada na hora: o eco atenuado parecia mensagem entrando na fila.
         const solid = useChatStore.getState().stateEvent?.state === 'idle';
-        const afterId = useChatStore.getState().events.findLast((e) => e.kind === 'user_msg')?.id;
+        // A bolha `queued-` da fila durável sai depois, e o registro real chega com outro id.
+        const afterId = useChatStore.getState().events.findLast((e) => e.kind === 'user_msg' && !e.id.startsWith('queued-'))?.id;
         useChatStore.setState((s) => ({ pending: [...s.pending, { id, text: trimmed, solid, afterId }] }));
         try {
           if (mode === 'steer') await steerSession(name, trimmed, target);

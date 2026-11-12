@@ -2980,7 +2980,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     // ("mandei e sumiu"). O dedup abaixo reconcilia contra o evento real em qualquer estado.
     const pendingId: string | null = `pending-${pendingSeq++}`;
     // Em idle a mensagem é digitada na hora: o eco atenuado parecia mensagem entrando na fila.
-    pending = [...pending, { id: pendingId, text, solid: currentState === 'idle', afterId: userMsgs(events).at(-1)?.id }];
+    pending = [...pending, { id: pendingId, text, solid: currentState === 'idle', afterId: userMsgs(events).findLast((m) => !m.id.startsWith('queued-'))?.id }];
     try {
       if (steer && (sessionProvider === 'codex' || sessionHeadless)) {
         await steerSession(sessionName, text, sessionServer());

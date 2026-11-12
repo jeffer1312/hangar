@@ -6,7 +6,8 @@ export function userMsgs(events: ChatEvent[]): { id: string; text: string }[] {
 
 /**
  * O eco local sai quando o transcript traz a mensagem: inteira, pela legenda (sem o "📎 imagem: <path>") ou por uma linha.
- * `afterId` é o último `user_msg` visto no envio: o trecho de várias linhas só confirma em mensagem que chegou depois dele.
+ * `afterId` é o último `user_msg` do transcript visto no envio: o trecho de várias linhas só confirma em mensagem que chegou depois dele.
+ * Ausente da lista, a janela já cortou o começo e tudo o que sobrou é mais novo.
  */
 export function ecoEntregue(userMsgs: { id: string; text: string }[]): (sent: string, afterId?: string) => boolean {
   const forms = new Set<string>();
