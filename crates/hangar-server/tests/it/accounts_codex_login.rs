@@ -366,9 +366,11 @@ async fn sign_out_disconnects_confirms_and_invalidates() {
     let fixture = root.path().join("cli");
     std::fs::create_dir_all(&fixture).unwrap();
     let source = r#"const fs=require('fs'),p=require('path'),home=process.env.CODEX_HOME,out=p.join(home,'logged-out');
+if(process.argv.includes('--version')){process.stdout.write('codex 0.167.0\n');process.exit(0);}
 require('readline').createInterface({input:process.stdin}).on('line', text=>{const m=JSON.parse(text);if(!m.id)return;
 if(m.method==='account/logout'&&!home.endsWith('stuck'))fs.writeFileSync(out,'');
-const result=m.method==='account/read'?{account:fs.existsSync(out)?null:{type:'chatgpt',email:'pessoa@exemplo.com',planType:'plus'}}:{};
+const result=m.method==='account/read'?{account:fs.existsSync(out)?null:{type:'chatgpt',email:'pessoa@exemplo.com',planType:'plus'}}:
+m.method==='model/list'?{data:[{model:fs.existsSync(out)?'disconnected-model':'connected-model'}],nextCursor:null}:{};
 process.stdout.write(JSON.stringify({id:m.id,result})+'\n');});"#;
     let executable = fixture.join("codex");
     crate::write_executable(&executable, format!("#!/usr/bin/env node\n{source}"));
@@ -398,6 +400,9 @@ process.stdout.write(JSON.stringify({id:m.id,result})+'\n');});"#;
     let runtime = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(address, "synthetic".into(), "test".into()));
 
     let account = service.create(Provider::Codex, "work", |_| Ok(())).unwrap();
+    let models = Arc::new(hangar_server::dictation::catalog::Models::default());
+    let slots = tokio::sync::Semaphore::new(1);
+    assert_eq!(models.get(&service, &slots, "codex", &account.home, false).await.unwrap().0[0]["id"], "connected-model");
     assert_eq!(service.read_codex_auth(&account).await["status"], "connected");
     let auth = service
         .sign_out_codex(&account, Some(runtime.clone()), invalidator.clone())
@@ -405,6 +410,7 @@ process.stdout.write(JSON.stringify({id:m.id,result})+'\n');});"#;
         .unwrap();
     assert_eq!(auth["method"], "none");
     assert_eq!(invalidations.load(Ordering::SeqCst), 1);
+    assert_eq!(models.get(&service, &slots, "codex", &account.home, false).await.unwrap().0[0]["id"], "disconnected-model", "catálogo ficou com os modelos do login anterior");
     assert_eq!(service.read_codex_auth(&account).await["status"], "disconnected", "cache Rust ficou com o login antigo");
     let key = AccountKey::new(Provider::Codex, &account.home).unwrap();
     assert!(service.locks.try_acquire(&key, GuardMode::Exclusive).is_ok());
