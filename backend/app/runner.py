@@ -16,13 +16,11 @@ from app.config import settings
 from app.models import Runner, RunInfo
 from app.tmux import _scope_prefix, alvo_de_kill
 
-# O `start_command`/`stop_command` do projeto e uma LINHA DE SHELL escrita pelo usuario ("cd x &&
-# npm run dev"), entao ela precisa de um shell — nao da pra mandar como argv. As duas funcoes
-# abaixo dizem QUAL shell, e existem porque o caminho POSIX nao roda no Windows: medido nesta VM,
-# `exec {SHELL} -lc <cmd>` no pane do psmux NAO executa nada (nem citando o SHELL, que aqui e o
-# bash do Git e tem espaco no caminho), e o `/bin/sh` que o stop chamava simplesmente nao existe
-# (FileNotFoundError [WinError 2]). Medido tambem o que FUNCIONA no Windows: `cmd /c <linha>`
-# executa, no pane e por subprocess, com `&&` e tudo.
+# O comando do run é uma LINHA DE SHELL escrita pelo usuário ("cd x && npm run dev"), então ela
+# precisa de um shell — não dá pra mandar como argv. A função abaixo diz QUAL shell, e existe
+# porque o caminho POSIX não roda no Windows: medido nesta VM, `exec {SHELL} -lc <cmd>` no pane do
+# psmux NÃO executa nada (nem citando o SHELL, que aqui é o bash do Git e tem espaço no caminho).
+# Medido também o que FUNCIONA no Windows: `cmd /c <linha>` executa no pane, com `&&` e tudo.
 #
 # `COMSPEC` e o espelho exato do `SHELL` do POSIX (e o que o proprio `subprocess(shell=True)` usa
 # no Windows), entao os dois ramos tem a mesma forma: variavel de ambiente com um padrao.

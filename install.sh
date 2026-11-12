@@ -49,6 +49,8 @@ for arg in "$@"; do
     # O nome antigo do flag segue aceito: está no histórico de comando de quem já instala assim.
     --no-hangar-send|--no-cp-send)  CPSEND=0 ;;
     --no-frontend) FRONTEND=0 ;;
+    # O painel saiu; o flag segue aceito, sem efeito, pelo mesmo motivo do --no-cp-send.
+    --no-panel)    ;;
     --help|-h)
       # Lida deste próprio case: flag nova entra na ajuda sem lista à parte.
       echo "uso: ./install.sh [flags]   (exemplos no começo do install.sh)"
