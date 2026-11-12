@@ -118,6 +118,10 @@ A assinatura interna do cache muda e provoca uma reconferência no primeiro uso.
 foi aprovada; o manifesto e os arquivos pessoais permanecem. Os testes do novo crate cobrem o
 espelhamento e suas fronteiras, e os testes de contas cobrem a coordenação e a invalidação.
 
+Também foi aprovada a categoria técnica genérica em `params.error` quando a fronteira de
+escrita de configuração ou adaptação de hooks não conserva a classe da exceção Python.
+O código público que identifica o problema permanece igual.
+
 ## Anexos
 
 O Rust atende upload, galeria, download e resolução de áudio pelo cofre existente.
