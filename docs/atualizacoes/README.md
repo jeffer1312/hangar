@@ -81,6 +81,7 @@ Passos marcados:
 | `2026-10-31-links-do-pacote` | atalhos, skills, agentes e bloco do shell que ficaram no checkout voltam ao `current` |
 | `2026-11-07-firewall-portas-windows` | regras `hangar 8765` e `hangar 8766` no Firewall do Windows (Private e Public) |
 | `2026-11-12-atalhos-windows-current` | atalhos do `~/.local/bin` no Windows que apontavam para a pasta da versão voltam ao `current` |
+| `2026-11-12-painel-quickshell-removido` | units do systemd, atalhos e blocos do Hyprland do painel do Quickshell |
 
 Ficam sem o campo, mesmo com comando: os que rodam `install-hangar-send.sh`,
 `install-claude-wrapper.sh`/`setup-windows-wrappers.ps1` ou `registrar-mcp.py` (conteúdo e
@@ -102,7 +103,6 @@ o CI recusam commit que mexa nesses arquivos sem o passo (`scripts/check-passo-d
 |---|---|---|
 | Wrapper do `claude`/`codex` (`scripts/install-claude-wrapper.sh`, `windows-wrappers.ps1`) | `./scripts/install-claude-wrapper.sh` | `powershell -ExecutionPolicy Bypass -File scripts/setup-windows-wrappers.ps1` |
 | `hangar-send`, skills, bloco no CLAUDE.md | `./scripts/install-hangar-send.sh` | `powershell -ExecutionPolicy Bypass -File install.ps1 -Update` |
-| Painel (`install-hangar-panel.sh`) | `./scripts/install-hangar-panel.sh` | idem |
 | Hooks do Claude (`install-hooks.sh`) | `./scripts/install-hooks.sh` | idem |
 | Units do systemd / tarefas agendadas / vigia | `./install.sh --update` | `powershell -ExecutionPolicy Bypass -File install.ps1 -Update` |
 | Statusline | `./install.sh --update` | idem |

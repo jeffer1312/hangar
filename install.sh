@@ -8,7 +8,7 @@
 #   ./install.sh --agentes=codex,pi   # agentes de código a instalar (claude, codex, pi, omp, kimi)
 #   ./install.sh --update        # re-aplica só o que um `git pull` não atualiza sozinho
 #   ./install.sh --no-frontend   # só o backend (o PWA já roda noutro lugar)
-#   ./install.sh --no-wrapper --no-services --no-hangar-send --no-panel   # pula partes
+#   ./install.sh --no-wrapper --no-services --no-hangar-send   # pula partes
 #   ./install.sh --app --tailscale=sim|nao --sem-nativo   # assistente do app nativo: sem perguntas, marcas ##HANGAR-*
 #
 # Os sub-scripts (services-setup.sh, lan-setup.sh, install-hangar-send.sh, ...) continuam
@@ -25,7 +25,7 @@ PACOTE=0
 ENV_FILE=backend/.env
 if [ "$PACOTE" = 1 ] || [ -f "$HOME/.hangar/config/.env" ]; then ENV_FILE="$HOME/.hangar/config/.env"; fi
 
-YES=0; CHECK=0; UPDATE=0; WRAPPER=1; SERVICES=1; CPSEND=1; PANEL=1; FRONTEND=1; AVANCADO=0; AGENTES=''
+YES=0; CHECK=0; UPDATE=0; WRAPPER=1; SERVICES=1; CPSEND=1; FRONTEND=1; AVANCADO=0; AGENTES=''
 APP=0; TAILSCALE=''; SEM_NATIVO=0
 for arg in "$@"; do
   case "$arg" in
@@ -48,8 +48,9 @@ for arg in "$@"; do
     --no-services) SERVICES=0 ;;
     # O nome antigo do flag segue aceito: está no histórico de comando de quem já instala assim.
     --no-hangar-send|--no-cp-send)  CPSEND=0 ;;
-    --no-panel)    PANEL=0 ;;
     --no-frontend) FRONTEND=0 ;;
+    # O painel saiu; o flag segue aceito, sem efeito, pelo mesmo motivo do --no-cp-send.
+    --no-panel)    ;;
     --help|-h)
       # Lida deste próprio case: flag nova entra na ajuda sem lista à parte.
       echo "uso: ./install.sh [flags]   (exemplos no começo do install.sh)"
@@ -1045,9 +1046,9 @@ fi
 
 fi
 
-# ── 7/8 Rodar sozinho + sessões-irmãs + painel ───────────────────────────────
+# ── 7/8 Rodar sozinho + sessões-irmãs ────────────────────────────────────────
 mark_step instalar fazendo
-say "7/8 Serviços, hangar-send e painel"
+say "7/8 Serviços e hangar-send"
 # No --app ninguém vai subir o backend na mão: sem systemd de usuário o assistente não termina.
 if [ "$APP" = 1 ] && [ "$(uname -s)" != Darwin ] && ! systemctl --user show-environment >/dev/null 2>&1; then
   fail_with sem-systemd "sem systemd de usuário nesta máquina — o Hangar não tem como iniciar sozinho"
@@ -1142,25 +1143,6 @@ else
   ask_extra "Instalar a persistência de sessões?" && { ./scripts/tmux-persist-setup.sh || anota_problema "persistência de sessões não instalou"; }
 fi
 
-# Painel flutuante + tray. Só Hyprland com Quickshell (testado no rice end-4/dots-hyprland).
-if ! { command -v qs >/dev/null && pgrep -x Hyprland >/dev/null; }; then
-  nota "painel do desktop: pulado (requer Hyprland + Quickshell)"
-# Detecta pelo SYMLINK, nao pela unit systemd: medido nesta maquina, o painel roda sob `flock`
-# direto (`qs -n -c hangar`) e nao existe hangar-panel.service — checar a unit dava "ausente"
-# num painel instalado e vivo.
-elif [ -e "$HOME/.local/bin/hangar-panel-open" ]; then
-  ok "painel + tray já instalados"
-  # Único passo que NÃO re-roda sozinho: o painel é a única coisa aqui que está VISIVELMENTE
-  # em execução no teu desktop, e a forma como ele sobe pode divergir da que o script gera
-  # (medido: rodando sob flock, sem unit systemd). Re-instalar por conta própria mudaria algo
-  # que funciona, sem pedir. Os arquivos são symlink, então QML e scripts já vêm do git pull.
-  nota "atualizar de propósito (muda como o painel sobe): ./scripts/install-hangar-panel.sh"
-elif [ "$UPDATE" = 1 ]; then
-  :   # não instala coisa nova num --update; isso é decisão, não atualização
-elif [ "$PANEL" = 1 ] && ask_extra "Instalar painel flutuante + tray (SUPER+SHIFT+U)?"; then
-  ./scripts/install-hangar-panel.sh || anota_problema "painel do desktop não instalou"
-fi
-
 # ── Passos de atualização: marcar como já feitos ─────────────────────────────
 # Uma instalação do ZERO já satisfaz todo passo de `docs/atualizacoes/` — eles existem pra levar
 # uma máquina ANTIGA até aqui. Sem esta marca, a primeira vez que essa máquina apertasse Atualizar
@@ -1221,7 +1203,7 @@ fi
 mark_step instalar ok
 mark_step final fazendo
 say "8/8 Checagem de fumaça"
-py_backend -c "from app import api, registry, procinfo, projects" \
+py_backend -c "from app import api, registry, procinfo" \
   && { ok "o backend importa"; mark_item backend-importa ok "o servidor abre"; } \
   || fail "o backend não importa nesta máquina"
 

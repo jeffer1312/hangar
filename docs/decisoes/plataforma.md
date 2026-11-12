@@ -182,8 +182,8 @@ Este
 
 (rename de 25/08/2026).
   O código conhece **um** nome: as pastas de dados são `<config>/.hangar-*`, o cofre do sync é
-  `~/.hangar/`, os comandos são `hangar-send`/`hangar-engine`/`hangar-codex`/`hangar-conta` e
-  `hangar-panel-*`, a instância do quickshell é `hangar`, e o logger é `hangar.*`. Escreva com o
+  `~/.hangar/`, os comandos são `hangar-send`/`hangar-engine`/`hangar-codex`/`hangar-conta`, e o
+  logger é `hangar.*`. Escreva com o
   nome novo; nunca leia o antigo em código novo. O que resta do velho é, todo ele, migração:
   - `backend/app/migracao_sidecars.py`, chamado na **subida** do backend (`main.py`), renomeia
     `.claude-pocket-*` → `.hangar-*` em todo perfil `~/.claude*` e deixa **link** no caminho antigo.

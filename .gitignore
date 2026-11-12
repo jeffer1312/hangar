@@ -13,7 +13,7 @@ backend/.env.lock
 backend/.env.*.tmp
 # peers de outros servidores (hangar-send cross-server) — contém tokens
 backend/peers.json
-# launcher de projetos do painel — caminhos locais desta máquina (molde: projects.json.example)
+# config do antigo launcher de projetos; o arquivo ainda existe nas máquinas que o usavam
 backend/projects.json
 # scripts de start/stop por projeto que NÃO devem morar no repo do projeto (ambiente-only)
 backend/launchers/
@@ -21,7 +21,7 @@ backend/launchers/
 # atômica). O .tmp carrega a malha INTEIRA de tokens enquanto existe — nunca pode ser commitado.
 backend/peers.json.lock
 backend/peers.json.*.tmp
-# Mesmos sidecars pra gravação do projects.json (projects._mutate): flock + escrita atômica.
+# Mesmos sidecars da gravação do antigo projects.json.
 backend/projects.json.lock
 backend/projects.json.*.tmp
 

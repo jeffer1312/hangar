@@ -1,5 +1,0 @@
-#!/usr/bin/env bash
-# Painel nativo: o livro e o transporte pertencem ao Rust.
-set -euo pipefail
-root="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/.." && pwd)"
-exec "$root/scripts/hangar-server-command" panel-data "$@"
