@@ -71,13 +71,11 @@ def test_codex_success_waits_for_identity_and_owns_http(tmp_path):
             assert time.monotonic() < deadline, "sucesso não iniciou confirmação de identidade"
         assert server.request("GET", "/api/codex-contas/alpha/login").json()["status"] == "waiting"
         account = reference.root / ".codex-alpha"
-        assert reference.request("POST", "/__contract__/codex-model-invalidation").json()["homes"] == []
         (account / "identity.json").write_text(json.dumps({
             "type": "chatgpt", "email": "fixture@example.test", "planType": "plus",
         }), encoding="utf-8")
         final = server.wait_status("alpha", "completed")
         assert final == {**attempt, "status": "completed"}
-        assert [Path(home) for home in reference.request("GET", "/__contract__/codex-model-invalidation").json()["homes"]] == [account], "login concluído encaminha a invalidação ao Rust"
         catalog = server.request("GET", "/api/codex-contas").json()
         assert next(row for row in catalog if row["id"] == "alpha")["auth"] == {
             "method": "oauth", "status": "connected", "email": "fixture@example.test", "plan": "plus",
@@ -354,36 +352,6 @@ def test_codex_uncertain_usage_refuses_login_without_cli(tmp_path):
         assert_rust_ownership(reference.calls())
     finally:
         server.close()
-        reference.close()
-
-def test_codex_cache_callback_requires_secret_instance_and_valid_key(tmp_path):
-    from urllib.request import Request
-    from urllib.error import HTTPError
-    reference = PythonReference(tmp_path / "home")
-    def invalidate(body, *, secret="contract-internal", instance="contract-instance"):
-        request = Request(reference.base_url + "/internal/accounts/codex-invalidate",
-                          data=json.dumps(body).encode(), method="POST", headers={
-                              "Content-Type": "application/json",
-                              "x-hangar-internal": secret,
-                              "x-hangar-runtime-instance": instance,
-                          })
-        try:
-            response = reference.opener.open(request, timeout=5)
-        except HTTPError as error:
-            response = error
-        with response:
-            return response.status
-    try:
-        key = {"key": {"provider": "codex", "canonical_home": str(reference.root / ".codex-alpha")}}
-        reference.request("POST", "/__contract__/codex-model-invalidation")
-        assert invalidate(key, secret="wrong") == 404
-        assert invalidate(key, instance="old") == 404
-        assert reference.request("GET", "/__contract__/codex-model-invalidation").json()["homes"] == []
-        assert invalidate({"key": {"provider": "codex", "canonical_home": "relative"}}) == 400
-        assert invalidate({**key, "token": "synthetic"}) == 400
-        assert invalidate(key) == 200
-        assert [Path(home) for home in reference.request("GET", "/__contract__/codex-model-invalidation").json()["homes"]] == [reference.root / ".codex-alpha"]
-    finally:
         reference.close()
 
 def test_codex_native_identity_cache_is_bound_to_auth_files(tmp_path):

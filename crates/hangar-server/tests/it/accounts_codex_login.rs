@@ -100,7 +100,6 @@ async fn http_probe_process() {
 
 #[tokio::test]
 async fn login_deadline_keeps_guard_until_helper_cleanup() {
-    use axum::{Router, routing::post};
     use hangar_server::accounts::{
         AccountKey, AccountService, GuardMode, Provider,
         codex_login::CodexInvalidator, environment::AccountEnvironment,
@@ -149,15 +148,8 @@ process.stdout.write(JSON.stringify({id:m.id,result})+'\n');});"#;
     )
     .unwrap();
     let key = AccountKey::new(Provider::Codex, &account.home).unwrap();
-    let router = Router::new()
-        .route(
-            "/internal/accounts/codex-invalidate",
-            post(|| async { axum::http::StatusCode::SERVICE_UNAVAILABLE }),
-        );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    let invalidator = CodexInvalidator::new(address, "synthetic".into(), "test".into()).unwrap();
+    let address = "127.0.0.1:9".parse().unwrap();
+    let invalidator = CodexInvalidator::new(Arc::default());
     let runtime = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(
         address,
         "synthetic".into(),
@@ -223,7 +215,6 @@ process.stdout.write(JSON.stringify({id:m.id,result})+'\n');});"#;
             .is_err(),
         "shutdown aceitou auxiliar novo"
     );
-    server.abort();
 }
 
 /// Barreira só do teste: segura a leitura real do Pi e confirma o término do writer nativo.
@@ -231,7 +222,8 @@ async fn native_secondary_writer_retains_ownership(start: bool) {
     use axum::{Router, routing::post};
     use hangar_server::accounts::{AccountService, AccountKey, Provider, GuardMode,
         environment::AccountEnvironment,
-        codex_device_login::{DeviceBridge, DeviceLogins, DeviceOAuth}};
+        codex_login::CodexInvalidator,
+        codex_device_login::{DeviceLogins, DeviceOAuth}};
     use serde_json::{Value, json};
     use std::{path::Path, sync::{Arc, Mutex, mpsc}, time::Duration};
     let root = tempfile::tempdir().unwrap();
@@ -251,8 +243,7 @@ async fn native_secondary_writer_retains_ownership(start: bool) {
     let router = Router::new()
         .route("/api/accounts/deviceauth/usercode", post(|| async { json!({"device_auth_id":"fixture","user_code":"fixture","interval":1}).to_string() }))
         .route("/api/accounts/deviceauth/token", post(|| async { json!({"authorization_code":"fixture","code_verifier":"fixture"}).to_string() }))
-        .route("/oauth/token", post(|| async { json!({"access_token":"synthetic","refresh_token":"synthetic","id_token":"","expires_in":1}).to_string() }))
-        .route("/internal/accounts/codex-invalidate", post(|| async { json!({"ok":true}).to_string() }));
+        .route("/oauth/token", post(|| async { json!({"access_token":"synthetic","refresh_token":"synthetic","id_token":"","expires_in":1}).to_string() }));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
@@ -272,11 +263,11 @@ async fn native_secondary_writer_retains_ownership(start: bool) {
     }));
     let key = AccountKey::new(Provider::Codex, &root.path().join(".codex")).unwrap();
     let runtime = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(address,"synthetic".into(),"fixture".into()));
-    let bridge = DeviceBridge::new(address,"synthetic".into(),"fixture".into()).unwrap();
-    let operation = |service: AccountService| { let (runtime, bridge) = (runtime.clone(), bridge.clone());
+    let invalidator = CodexInvalidator::new(Arc::default());
+    let operation = |service: AccountService| { let (runtime, invalidator) = (runtime.clone(), invalidator.clone());
         async move {
-            if start { service.start_device_login(Some(runtime), bridge).await }
-            else { service.propagate_device(Some(runtime), bridge, false).await }
+            if start { service.start_device_login(Some(runtime), invalidator).await }
+            else { service.propagate_device(Some(runtime), invalidator, false).await }
         }};
     let request = tokio::spawn(operation(service.clone()));
     let arrived = tokio::task::spawn_blocking(move || entered.recv_timeout(Duration::from_secs(20))).await.unwrap();
@@ -302,6 +293,7 @@ async fn native_secondary_writer_retains_ownership(start: bool) {
         assert_eq!(tokio::time::timeout(Duration::from_secs(5), cancel).await.unwrap().unwrap().unwrap(), json!({"etapa":"idle"}));
     }
     server.abort();
+    let _ = server.await;
     arrived.expect("o writer nativo não chegou à leitura real do Pi");
     assert!(held, "a perda do pedido liberou a conta antes do writer terminar");
     let code = second.unwrap().unwrap_err().code;
@@ -324,21 +316,19 @@ async fn device_propagation_retains_guard_until_native_secondary_writer_finishes
 
 #[tokio::test]
 async fn device_state_reads_destinations_locally_and_keeps_strict_profile_error() {
-    use hangar_server::accounts::{AccountService, environment::AccountEnvironment, codex_device_login::DeviceBridge};
+    use hangar_server::accounts::{AccountService, environment::AccountEnvironment};
     use serde_json::json;
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(root.path().join(".pi/agent")).unwrap();
     std::fs::write(root.path().join(".pi/agent/auth.json"), r#"{"openai-codex":{"type":"oauth","refresh":"synthetic"}}"#).unwrap();
-    // Nenhum serviço Python escuta aqui: a leitura de estado não pode depender da ponte.
-    let bridge = DeviceBridge::new("127.0.0.1:9".parse().unwrap(), "synthetic".into(), "fixture".into()).unwrap();
     let home = root.path().to_string_lossy().to_string();
     let service = AccountService::new(AccountEnvironment::from_map(
         [("HOME".into(), home.clone()), ("USERPROFILE".into(), home.clone())].into()));
-    let state = service.device_state(&bridge).await.unwrap();
+    let state = service.device_state().await.unwrap();
     assert_eq!(state, json!({"cofre":false,"plano":"","expira_em":null,"codex":false,"pi":true,"omp":false}));
     let strict = AccountService::new(AccountEnvironment::from_map(
         [("HOME".into(), home.clone()), ("USERPROFILE".into(), home), ("OMP_PROFILE".into(), "../fora".into())].into()));
-    let error = strict.device_state(&bridge).await.unwrap_err();
+    let error = strict.device_state().await.unwrap_err();
     assert_eq!((error.status, error.code), (503, "device_bridge_unavailable"));
 }
 
@@ -354,14 +344,12 @@ fn codex_sign_out_route_is_owned() {
 #[cfg(unix)]
 #[tokio::test]
 async fn sign_out_disconnects_confirms_and_invalidates() {
-    use axum::{Router, routing::post};
     use hangar_server::accounts::{
         AccountKey, AccountService, GuardMode, Provider,
         codex_login::CodexInvalidator, environment::AccountEnvironment,
     };
-    use serde_json::json;
     
-    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    use std::sync::Arc;
     let root = tempfile::tempdir().unwrap();
     let fixture = root.path().join("cli");
     std::fs::create_dir_all(&fixture).unwrap();
@@ -383,35 +371,27 @@ process.stdout.write(JSON.stringify({id:m.id,result})+'\n');});"#;
     }
     environment.remove("CODEX_HOME");
     let service = AccountService::new(AccountEnvironment::from_map(environment));
-    let invalidations = Arc::new(AtomicUsize::new(0));
-    let counted = invalidations.clone();
-    let router = Router::new()
-        .route(
-            "/internal/accounts/codex-invalidate",
-            post(move || {
-                counted.fetch_add(1, Ordering::SeqCst);
-                async { json!({"ok":true}).to_string() }
-            }),
-        );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    let invalidator = CodexInvalidator::new(address, "synthetic".into(), "test".into()).unwrap();
+    let address = "127.0.0.1:9".parse().unwrap();
+    let models = Arc::new(hangar_server::dictation::catalog::Models::default());
+    let invalidator = CodexInvalidator::new(models.clone());
     let runtime = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(address, "synthetic".into(), "test".into()));
 
     let account = service.create(Provider::Codex, "work", |_| Ok(())).unwrap();
-    let models = Arc::new(hangar_server::dictation::catalog::Models::default());
     let slots = tokio::sync::Semaphore::new(1);
     assert_eq!(models.get(&service, &slots, "codex", &account.home, false).await.unwrap().0[0]["id"], "connected-model");
+    let untouched = service.create(Provider::Codex, "untouched", |_| Ok(())).unwrap();
+    assert_eq!(models.get(&service, &slots, "codex", &untouched.home, false).await.unwrap().0[0]["id"], "connected-model");
+    // A resposta do CLI muda sem mudar a assinatura: só a invalidação pode expulsar o cache.
+    std::fs::write(untouched.home.join("logged-out"), "").unwrap();
     assert_eq!(service.read_codex_auth(&account).await["status"], "connected");
     let auth = service
         .sign_out_codex(&account, Some(runtime.clone()), invalidator.clone())
         .await
         .unwrap();
     assert_eq!(auth["method"], "none");
-    assert_eq!(invalidations.load(Ordering::SeqCst), 1);
     assert_eq!(models.get(&service, &slots, "codex", &account.home, false).await.unwrap().0[0]["id"], "disconnected-model", "catálogo ficou com os modelos do login anterior");
     assert_eq!(service.read_codex_auth(&account).await["status"], "disconnected", "cache Rust ficou com o login antigo");
+    assert_eq!(models.get(&service, &slots, "codex", &untouched.home, false).await.unwrap().0[0]["id"], "connected-model", "sair de uma conta invalidou o catálogo de outra");
     let key = AccountKey::new(Provider::Codex, &account.home).unwrap();
     assert!(service.locks.try_acquire(&key, GuardMode::Exclusive).is_ok());
 
@@ -421,5 +401,5 @@ process.stdout.write(JSON.stringify({id:m.id,result})+'\n');});"#;
         .await
         .unwrap_err();
     assert_eq!((error.status, error.code), (502, "codex_account_sign_out_unconfirmed"));
-    server.abort();
+    service.codex_readers.close().await;
 }

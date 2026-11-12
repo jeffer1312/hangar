@@ -1,6 +1,6 @@
 """Adaptador dos modelos Codex no Rust; cache, validação e processos pertencem ao servidor."""
 from pathlib import Path
-from app import dictation_bridge, diag
+from app import dictation_bridge
 from app.codex_appserver import CodexAusente, CodexIndisponivel, CodexRecusado, CodexRespostaInvalida
 
 
@@ -23,14 +23,6 @@ def _call(operation: str, payload: dict) -> dict:
         if error.status == 400:
             raise ValueError(error.detail) from None
         raise CodexIndisponivel(error.detail) from None
-
-
-def invalidar(codex_home: str | Path | None = None) -> None:
-    try:
-        _call("invalidate_models", {"home": str(codex_home) if codex_home is not None else None})
-    except CodexIndisponivel:
-        # Sem servidor não há cache local; a assinatura da credencial invalida a próxima leitura.
-        diag.registrar("dictation.catalog_invalidation", "aviso", codigo="dictation_rust_unavailable")
 
 
 def parse(result: dict) -> list[dict]:

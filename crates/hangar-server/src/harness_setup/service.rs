@@ -1,7 +1,7 @@
 //! Saúde e conserto compartilham os mesmos leitores e instaladores, sem fatos Python.
 use super::{health, health_details as details};
 use crate::{
-    accounts::{AccountService, codex_device_login::DeviceBridge},
+    accounts::{AccountService, codex_login::CodexInvalidator},
     cli_probe::Probe,
     runtime::gateway::RuntimeRegistry,
 };
@@ -13,7 +13,7 @@ pub struct Service {
     pub repo: PathBuf,
     pub probe: Probe,
     pub runtime: Option<Arc<RuntimeRegistry>>,
-    pub device: Option<DeviceBridge>,
+    pub device: Option<CodexInvalidator>,
 }
 impl Service {
     pub async fn diagnose(&self) -> Result<Value, String> {

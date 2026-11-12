@@ -34,11 +34,7 @@ async fn inner(state: Arc<AppState>, peer: SocketAddr, request: Request) -> Resp
         return crate::http_cors::internal_error();
     }
     if http::integration_path(&path) { return http::integration(&state,request).await; }
-    let device = crate::accounts::http::bridge(&state).ok().and_then(|bridge| {
-        crate::accounts::codex_device_login::DeviceBridge::new(
-            state.cfg.upstream, state.cfg.internal_secret.clone(), bridge.instance().into(),
-        ).ok()
-    });
+    let device = Some(crate::accounts::codex_login::CodexInvalidator::new(state.dictation_models.clone()));
     let service = Service {
         accounts: state.accounts.clone(),
         repo: crate::config_sync::http::context(&state).roots.hangar.into(),

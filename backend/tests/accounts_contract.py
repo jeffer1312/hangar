@@ -384,7 +384,7 @@ def _worker() -> None:
     from fastapi import FastAPI, Request as HttpRequest
     from fastapi.responses import JSONResponse
     from fastapi.testclient import TestClient
-    from app import api, codex_contas_login, account_bridge, dictation_bridge
+    from app import api, account_bridge
     from app.account_lifecycle import AccountKey
     from types import SimpleNamespace
     from app import internal_api, runtime_coordinator
@@ -445,12 +445,10 @@ def _worker() -> None:
         return [child.pid for child in children if child.poll() is None and "--codex-home" in child.args
                 and AccountKey.new(key.provider, Path(child.args[child.args.index("--codex-home") + 1])) == key]
 
-    service = codex_contas_login.CodexContasLogin()
     app = FastAPI()
     app.add_exception_handler(api.registry_mod.SessionOpenNeedsRust, api._abrir_precisa_do_rust)
     internal_api.set_secret("contract-internal")
     app.include_router(internal_api.router)
-    app.state.codex_contas_login = service
     calls = []
 
     @app.post("/__contract__/claude-owner")
@@ -466,23 +464,6 @@ def _worker() -> None:
         secondary["native_only"] = True
         return {"ok": True}
 
-
-    model_invalidations = []
-    original_catalog_request = dictation_bridge.request
-    def catalog_transport(operation, payload):
-        if operation == "invalidate_models":
-            model_invalidations.append(payload["home"])
-            return {}
-        return original_catalog_request(operation, payload)
-
-    @app.post("/__contract__/codex-model-invalidation")
-    def reset_model_invalidations():
-        model_invalidations.clear()
-        return {"homes": list(model_invalidations)}
-
-    @app.get("/__contract__/codex-model-invalidation")
-    def model_invalidation_calls():
-        return {"homes": list(model_invalidations)}
 
     @app.get("/__contract__/claude-auth")
     def claude_auth(path: str):
@@ -596,16 +577,6 @@ def _worker() -> None:
         instance.instance = body["instance"]
         return {"ok": True}
 
-    @app.post("/__contract__/source-update")
-    def source_update(body: dict):
-        async def update(_force):
-            preparation_entered.set()
-            if body.get("raise"):
-                raise RuntimeError("falha sintética da atualização principal")
-            return body
-        service.atualizar_principal = update
-        return {"ok": True}
-
     @app.get("/__contract__/wait-preparations")
     async def wait_preparations():
         await asyncio.wait_for(preparation_entered.wait(), 20)
@@ -657,8 +628,6 @@ def _worker() -> None:
         return deny_external()
 
     with patch.object(runtime_coordinator, "current", return_value=instance), \
-            patch.object(api.app.state, "codex_contas_login", service, create=True), \
-            patch.object(api, "_codex_require_idle_preparation"), \
             patch.object(api, "_invalidate_lists"), \
             patch.object(codex_contas_sync, "_prepare_account_guarded", side_effect=prepare_at_barrier), \
             patch.object(api.tmux, "has_session", side_effect=lambda name: name in mux and any(child.poll() is None for child in children)), \
@@ -667,10 +636,8 @@ def _worker() -> None:
             patch.object(account_bridge, "terminal_instances", side_effect=lambda: dict(mux) if any(
                 child.poll() is None for child in children) else {}), \
             patch.object(account_bridge, "request_process_uses", side_effect=lambda key, pid: pid in launcher_pids(key)), \
-            patch.object(dictation_bridge, "request", side_effect=catalog_transport), \
             patch("subprocess.Popen", side_effect=deny_external), \
             patch("socket.create_connection", side_effect=private_connection), TestClient(app, client=("127.0.0.1", 32123)) as client:
-        client.portal.call(service.aquecer)
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *args):
                 pass

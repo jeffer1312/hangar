@@ -2,6 +2,7 @@
 use super::{
     AccountGuard, AccountKey, GuardMode, Provider,
     catalog::{Account, AccountError, AccountService},
+    codex_login::CodexInvalidator,
     storage,
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -177,26 +178,6 @@ async fn cancelled(cancel: &mut watch::Receiver<bool>) {
     let _ = cancel.wait_for(|cancelled| *cancelled).await;
 }
 
-/// Só o aviso de invalidação do Codex ainda vai ao Python; Pi/omp não passam por aqui.
-#[derive(Clone)]
-pub struct DeviceBridge {
-    invalidator: super::codex_login::CodexInvalidator,
-}
-impl DeviceBridge {
-    pub fn new(
-        upstream: std::net::SocketAddr,
-        secret: String,
-        instance: String,
-    ) -> Result<Self, AccountError> {
-        if !upstream.ip().is_loopback() || instance.is_empty() {
-            return Err(AccountError::io());
-        }
-        Ok(Self {
-            invalidator: super::codex_login::CodexInvalidator::new(upstream, secret, instance)?,
-        })
-    }
-}
-
 fn vault_path(service: &AccountService) -> std::path::PathBuf {
     service.env.home.join(".hangar/auth/openai-codex.json")
 }
@@ -329,18 +310,18 @@ impl AccountService {
     pub async fn start_device_login(
         &self,
         runtime: Option<Arc<crate::runtime::gateway::RuntimeRegistry>>,
-        bridge: DeviceBridge,
+        invalidator: CodexInvalidator,
     ) -> Result<Value, AccountError> {
         let service = self.clone();
         // O trabalho registrado sobrevive à perda da resposta HTTP de início.
-        tokio::spawn(async move { service.start_device_owned(runtime, bridge).await })
+        tokio::spawn(async move { service.start_device_owned(runtime, invalidator).await })
             .await
             .map_err(|_| AccountError::io())?
     }
     async fn start_device_owned(
         &self,
         runtime: Option<Arc<crate::runtime::gateway::RuntimeRegistry>>,
-        bridge: DeviceBridge,
+        invalidator: CodexInvalidator,
     ) -> Result<Value, AccountError> {
         let _serial = self.device_logins.gate.lock().await;
         if self
@@ -393,7 +374,7 @@ impl AccountService {
                             .propagate_device_guarded(
                                 &account,
                                 &key,
-                                &bridge,
+                                &invalidator,
                                 &tokens,
                                 guard.take().expect("guarda presente"),
                             )
@@ -519,7 +500,7 @@ impl AccountService {
         &self,
         account: &Account,
         key: &AccountKey,
-        bridge: &DeviceBridge,
+        invalidator: &CodexInvalidator,
         tokens: &Value,
         guard: AccountGuard,
     ) -> Value {
@@ -534,12 +515,8 @@ impl AccountService {
             match atomic_json(&account.home.join("auth.json"), &auth) {
                 Ok(()) => {
                     self.codex_auth.invalidate(key);
-                    match bridge.invalidator.invalidate(key).await {
-                        Ok(()) => {
-                            json!({"ok":true,"motivo":account.home.join("auth.json").to_string_lossy()})
-                        }
-                        Err(code) => json!({"ok":false,"motivo":code}),
-                    }
+                    invalidator.invalidate(key);
+                    json!({"ok":true,"motivo":account.home.join("auth.json").to_string_lossy()})
                 }
                 Err(code) => json!({"ok":false,"motivo":code}),
             }
@@ -563,7 +540,7 @@ impl AccountService {
     pub async fn propagate_device(
         &self,
         runtime: Option<Arc<crate::runtime::gateway::RuntimeRegistry>>,
-        bridge: DeviceBridge,
+        invalidator: CodexInvalidator,
         import: bool,
     ) -> Result<Value, AccountError> {
         let (done, _) = watch::channel(false);
@@ -578,7 +555,7 @@ impl AccountService {
         let service = self.clone();
         tokio::spawn(async move {
             let result = service
-                .propagate_device_owned(runtime, bridge, import)
+                .propagate_device_owned(runtime, invalidator, import)
                 .await;
             done.send_replace(true);
             result
@@ -589,7 +566,7 @@ impl AccountService {
     async fn propagate_device_owned(
         &self,
         runtime: Option<Arc<crate::runtime::gateway::RuntimeRegistry>>,
-        bridge: DeviceBridge,
+        invalidator: CodexInvalidator,
         import: bool,
     ) -> Result<Value, AccountError> {
         let (account, key, guard) = self.device_guard(runtime.as_ref()).await?;
@@ -609,7 +586,7 @@ impl AccountService {
         }
         Ok(match saved {
             Some(tokens) => {
-                self.propagate_device_guarded(&account, &key, &bridge, &tokens, guard)
+                self.propagate_device_guarded(&account, &key, &invalidator, &tokens, guard)
                     .await
             }
             None => {
@@ -617,7 +594,7 @@ impl AccountService {
             }
         })
     }
-    pub async fn device_state(&self, _bridge: &DeviceBridge) -> Result<Value, AccountError> {
+    pub async fn device_state(&self) -> Result<Value, AccountError> {
         let (done, _) = watch::channel(false);
         {
             let mut state = self.device_logins.state.lock().unwrap();

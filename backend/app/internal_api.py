@@ -66,28 +66,6 @@ async def _instance_body(request: Request, limit: int, *, modes=None):
     return coordinator, instance, raw
 
 
-@router.post("/accounts/codex-invalidate")
-async def codex_invalidate(request: Request):
-    from pathlib import Path
-    from app.account_lifecycle import AccountKey
-    _, _, raw = await _instance_body(request, 16384)
-    try:
-        body = json.loads(raw)
-        item = body["key"]
-        if set(body) != {"key"} or set(item) != {"provider", "canonical_home"} or item["provider"] != "codex":
-            raise ValueError
-        if not isinstance(item["canonical_home"], str) or not Path(item["canonical_home"]).is_absolute():
-            raise ValueError
-        key = AccountKey.new("codex", Path(item["canonical_home"]))
-    except (KeyError, TypeError, ValueError, OSError):
-        raise HTTPException(400) from None
-    service = getattr(request.app.state, "codex_contas_login", None)
-    if service is None:
-        raise HTTPException(503)
-    service._invalidate_auth(str(key.canonical_home))
-    return {"ok": True}
-
-
 @router.post("/accounts/prepare")
 @router.post("/accounts/prepare/wait")
 async def account_prepare(request: Request):
