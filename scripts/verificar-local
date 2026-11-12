@@ -681,8 +681,9 @@ rodar_passos() {   # $1 = sha, resto = passos; cwd = árvore preparada
         vigia=$!
         wait "$spid"; rc=$?
         kill "$vigia" 2>/dev/null; wait "$vigia" 2>/dev/null
-        # O aviso do memory-scope fica no log do passo, que ninguém abre quando o passo passa.
-        grep -q 'rodando sem teto de memória' "$log" 2>/dev/null && \
+        # O aviso do memory-scope fica no log do passo, que ninguém abre quando o passo passa. O
+        # `shell` roda os testes do próprio verificar-local, que caem nesse aviso sem compilar nada.
+        [[ "$p" != shell ]] && grep -q 'rodando sem teto de memória' "$log" 2>/dev/null && \
             echo "verificar-local: $p compilou sem teto de memória (o systemd do usuário não abriu o grupo)" >&3
         if (( rc == 0 )); then
             dur=$((SECONDS - ini)); resumo+=("ok      $p ${dur}s")
