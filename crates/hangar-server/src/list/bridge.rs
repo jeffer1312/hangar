@@ -1753,7 +1753,7 @@ mod tests {
         while rounds.load(Ordering::SeqCst) < n { tokio::task::yield_now().await; }
     }
 
-    /// Rodada mais lenta que o `SNAPSHOT_TTL` (psmux a 1,2 s por chamada): quem esperou por ela a
+    /// Rodada mais lenta que o `SNAPSHOT_TTL` (psmux lento): quem esperou por ela a
     /// reaproveita, em vez de cada um na fila fazer a sua.
     #[tokio::test(start_paused = true)]
     async fn who_waited_for_a_slow_round_reuses_it() {

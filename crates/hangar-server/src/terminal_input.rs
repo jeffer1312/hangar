@@ -225,13 +225,14 @@ impl ProcessIo {
             Ok(self.run(retry).await?.0)
         })
     }
-    /// No Windows, `send-keys`, `capture-pane` e `display-message` vão direto ao servidor do psmux que a
-    /// lista conferiu: abrir um `tmux.exe` por chamada passa de 1 s numa máquina carregada. `None` segue
-    /// pelo CLI; o que pode ter escrito nunca é repetido por ele.
+    /// No Windows, `send-keys` e `capture-pane` vão direto ao servidor do psmux que a lista conferiu: abrir um
+    /// `tmux.exe` por chamada passa de 1 s numa máquina carregada. O `display-message` fica no CLI: o servidor
+    /// responde OK para alvo que não existe, e é ele que confere a identidade do pane. `None` segue pelo CLI; o
+    /// que pode ter escrito nunca é repetido por ele.
     async fn direct(&self, request: &CommandRequest) -> Option<Result<(CommandOutput, Vec<u8>), IoFailure>> {
         if !cfg!(windows) || !request.stdin.is_empty() { return None; }
         let verb = request.args.first()?.clone();
-        if !matches!(verb.as_str(), "send-keys" | "capture-pane" | "display-message") { return None; }
+        if !matches!(verb.as_str(), "send-keys" | "capture-pane") { return None; }
         let target_at = request.args.iter().position(|arg| arg == "-t")? + 1;
         let target = request.args.get(target_at)?;
         let base = target.strip_prefix('=')?.split(':').next()?.to_owned();
@@ -836,8 +837,9 @@ impl TerminalDriver {
         else { args.push(key.into()); }
         self.effect_guarded(args, vec![], guard).await
     }
-    async fn literal(&self, text: &str) -> Result<(), IoFailure> { self.literal_guarded(text, None).await }
-    async fn literal_guarded(&self, text: &str, mut guard: TextGuard<'_>) -> Result<(), IoFailure> {
+    async fn literal(&self, text: &str) -> Result<(), IoFailure> { self.literal_guarded(text, None, self.direct_ready()).await }
+    /// `direct`: o caminho direto, decidido uma vez por quem escolheu entre ele e o clipboard.
+    async fn literal_guarded(&self, text: &str, mut guard: TextGuard<'_>, direct: bool) -> Result<(), IoFailure> {
         if text.is_empty() { return Ok(()); }
         if !self.binding.windows {
             // O tmux lê o ponto e vírgula final como separador mesmo depois de --.
@@ -846,7 +848,7 @@ impl TerminalDriver {
         }
         let placeholder = text.starts_with('-');
         // Contrabarra pelo CLI chega a menos; com o caminho direto pronto, ela vai só por ele.
-        let direct_only = text.contains('\\') && self.direct_ready();
+        let direct_only = text.contains('\\') && direct;
         let text = if placeholder { format!("x{text}") } else { text.into() };
         let chars: Vec<_> = text.chars().collect();
         let mut start = 0;
@@ -1160,20 +1162,21 @@ impl TerminalDriver {
                     && ComposerSnapshot::parse(&typed).is_some_and(|now| now.only(text))
                     && ComposerSnapshot::parse(&screen).is_some_and(|now| now.only(text)) {
                     let blocked = match self.verify().await { Ok(facts) if !facts.open_question => None, Ok(_) => Some("open_question"), Err(e) => Some(e.code) };
+                    // Barrado, segue para a prova do transcript desta leitura.
                     if let Some(code) = blocked {
                         if crate::warn_limit::allow(Some(&self.binding.name), "submit_enter_repeat_blocked") {
                             tracing::warn!(session = %self.binding.name, code, "o texto seguiu no campo, mas o Enter de novo não saiu");
                         }
+                    } else {
+                        // A tela pode atrasar: o Claude já com o texto na fila dele mandaria a mensagem duas vezes.
+                        if let Some(mark) = mark && self.services.transcript_enqueued(mark, text).await.unwrap_or(false) {
+                            return DeliveryResult::new(Disposition::Accepted, DeliveryStage::SubmitProof, "submitted_enqueued");
+                        }
+                        resent = true;
+                        tracing::info!(code = "submit_enter_repeated", "o texto seguiu no campo depois do Enter; um Enter de novo");
+                        if let Err(e) = self.key_inner("Enter").await { return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Submit, e.code); }
                         continue;
                     }
-                    // A tela pode atrasar: o Claude já com o texto na fila dele mandaria a mensagem duas vezes.
-                    if let Some(mark) = mark && self.services.transcript_enqueued(mark, text).await.unwrap_or(false) {
-                        return DeliveryResult::new(Disposition::Accepted, DeliveryStage::SubmitProof, "submitted_enqueued");
-                    }
-                    resent = true;
-                    tracing::info!(code = "submit_enter_repeated", "o texto seguiu no campo depois do Enter; um Enter de novo");
-                    if let Err(e) = self.key_inner("Enter").await { return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Submit, e.code); }
-                    continue;
                 }
             }
             if let Some(mark) = mark && self.services.transcript_enqueued(mark, text).await.unwrap_or(false) {
@@ -1277,9 +1280,10 @@ impl TerminalDriver {
         }
         // `?` sozinho, digitado com o campo vazio, abre a ajuda de atalhos do Claude e não vira texto; colado, entra.
         let pasted = text.contains('\n') || text == "?";
-        // Várias linhas só pelo clipboard: digitadas, o Claude perde linhas (medido, 74 de 100). Uma linha com
+        // Várias linhas só pelo clipboard: digitadas, o Claude perde linhas. Uma linha com
         // contrabarra vai direto ao servidor quando ele está conferido, sem abrir o PowerShell.
-        let use_clipboard = self.binding.windows && (pasted || (text.contains('\\') && !self.direct_ready()));
+        let direct = self.binding.windows && text.contains('\\') && self.direct_ready();
+        let use_clipboard = self.binding.windows && (pasted || (text.contains('\\') && !direct));
         let clipboard = if use_clipboard { match self.clipboard_lock().await { Ok(lock) => lock, Err(e) => return Self::failed(e, DeliveryStage::Write) } } else { None };
         if refresh_guard || use_clipboard {
             before = match self.refresh_input_guard().await { Ok(b) => b, Err(e) => return Self::failed(e, DeliveryStage::Composer) };
@@ -1287,7 +1291,7 @@ impl TerminalDriver {
         if self.services.writing().await.is_err() { return DeliveryResult::new(Disposition::Deferred, DeliveryStage::Write, "write_journal"); }
         let guard = expected.map(|expected| GuardedText { expected,closed:true,pane:None,input:Some((text,&before)),allow_owned:false });
         let write = if use_clipboard { self.clipboard_guarded(text, guard).await }
-            else if pasted { self.paste_guarded(text, id, guard).await } else { self.literal_guarded(text, guard).await };
+            else if pasted { self.paste_guarded(text, id, guard).await } else { self.literal_guarded(text, guard, direct).await };
         if let Err(e) = write {
             if !e.may_have_written { return Self::failed(e, DeliveryStage::Write); }
             if expected.is_some() { return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Write, "erro_sem_confirmacao_resposta"); }
@@ -1450,7 +1454,7 @@ impl TerminalDriver {
             Err(error) => return Self::interaction_failure(error, false),
         }
         let guard = GuardedText { expected, closed: false, pane: Some(&expected.semantic["pane"]), input: None, allow_owned: false };
-        if let Err(e) = self.literal_guarded(text, Some(guard)).await { return Self::key_failed(e, DeliveryStage::Select, false); }
+        if let Err(e) = self.literal_guarded(text, Some(guard), self.direct_ready()).await { return Self::key_failed(e, DeliveryStage::Select, false); }
         self.settle().await;
         // O rótulo da opção virou o texto: a guarda do menu não serve mais, a prova é a própria linha.
         let typed = match self.capture_inner().await { Ok(s) => s, Err(e) => return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Select, e.code) };
@@ -1722,7 +1726,7 @@ impl TerminalDriver {
                         text_pane
                     } else { None };
                     let guard = expected.map(|expected| GuardedText { expected,closed:false,pane:pane.as_ref(),input:None,allow_owned:false });
-                    if let Err(e) = self.literal_guarded(answer.value.as_deref().unwrap(), guard).await { return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Answer, e.code); }
+                    if let Err(e) = self.literal_guarded(answer.value.as_deref().unwrap(), guard, self.direct_ready()).await { return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Answer, e.code); }
                     self.settle().await;
                     if let Err(e) = self.key_guarded("Enter", guard).await { return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Answer, e.code); }
                 }
@@ -1998,6 +2002,22 @@ mod psmux_direct_tests {
             reader.read_line(&mut auth).unwrap(); reader.read_line(&mut cmd).unwrap();
             if cmd.starts_with("list-panes") { (&stream).write_all(b"OK\nmain\n").unwrap(); }
         })
+    }
+
+    /// O servidor responde OK para alvo que não existe: a conferência de identidade fica com o CLI, que recusa.
+    #[tokio::test]
+    async fn the_pane_identity_check_never_goes_direct() {
+        let dir = tempfile::tempdir().unwrap();
+        let seen = server(dir.path(), "main");
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let listing = hangar_psmux::list_panes(dir.path(), "#{session_name}", until).unwrap();
+        crate::list::mux::verify_for_test("missing-test-mux-3", dir.path(), listing.servers);
+        let io = ProcessIo::default();
+        let request = |verb: &str| CommandRequest { program: "missing-test-mux-3".into(),
+            args: [verb, "-p", "-t", "=main:1.0"].map(String::from).to_vec(), stdin: vec![] };
+        assert!(io.command_direct(request("display-message")).await.unwrap().is_none());
+        assert!(io.command_direct(request("capture-pane")).await.unwrap().is_some());
+        assert_eq!(seen.join().unwrap()[1], "\"capture-pane\" \"-p\" \"-t\" \"=main:1.0\"\n");
     }
 
     #[tokio::test]

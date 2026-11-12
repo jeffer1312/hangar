@@ -17,6 +17,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   sai do handle, como no `procinfo._open_jsonl`).
 - **Multi-linha vai pelo CLIPBOARD**, porque os buffers do psmux cortam no primeiro `\n`. O
   fallback ramifica pelo **código de retorno**, nunca pelo nome do sistema.
+- **`send-keys` e `capture-pane` vão direto ao servidor do psmux** que a lista conferiu
+  (`hangar_psmux::command`), sem abrir o `tmux.exe`. O `display-message` da conferência de identidade
+  fica no CLI: o servidor responde OK para alvo que não existe. Uma linha com contrabarra vai direto,
+  inteira, num comando só (o argv do Windows a estraga pelo CLI); sem o caminho direto, ela vai pelo
+  clipboard. A escolha entre direto e clipboard é feita uma vez por entrega. Ver
+  [Entrada do terminal direto no servidor do psmux](#entrada-do-terminal-direto-no-servidor-do-psmux-11112026).
 - **O composer se lê com `capture-pane -e` também no psmux.** Sem estilo, a sugestão esmaecida
   que o Claude desenha no composer vazio (`❯ Try "…"`) parece texto digitado, e o escritor Rust
   adia toda entrega com `composer_busy`. Medição em

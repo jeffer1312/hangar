@@ -68,7 +68,9 @@ pub async fn busy_now(list: &crate::list::bridge::ListBridge, state: &crate::sta
 /// que o teto de 24 h ainda solta, em vez de reiniciar o servidor no escuro.
 fn queue_hold(path: &std::path::Path, created: f64) -> Option<Busy> {
     let unreadable = |why: String| {
-        tracing::warn!(path = %path.display(), code = "update_queue_unreadable", "update: fila ilegível segura a atualização: {why}");
+        if crate::warn_limit::allow(path.to_str(), "update_queue_unreadable") {
+            tracing::warn!(path = %path.display(), code = "update_queue_unreadable", "update: fila ilegível segura a atualização: {why}");
+        }
         Some(Busy::Queue)
     };
     let bytes = match crate::runtime::queue::read_replaced(path) {
@@ -106,6 +108,11 @@ pub async fn tick(machine: &impl Machine, now: Time, since: Option<Time>) -> Tic
         if at.is_none() { tracing::warn!("update: hora ilegível no estado da atualização; a janela de repetição não segura"); }
         if at.is_some_and(|at| now - at < FAILURE_WINDOW) { return skip("ultima atualizacao falhou"); }
     }
+    // Já adiada, a máquina ainda ocupada responde sem ir ao índice a cada `RECHECK`.
+    let early = if since.is_some() { Some(machine.busy().await) } else { None };
+    if let Some(Ok(Some(busy))) = &early && (*busy == Busy::Uncertain || since.is_none_or(|since| now - since < DEFER_CEILING)) {
+        return Tick::Deferred(busy.why().to_owned());
+    }
     let version = match machine.newer(&channel).await {
         Ok(Some(version)) => version,
         Ok(None) => return skip("em dia"),
@@ -118,7 +125,8 @@ pub async fn tick(machine: &impl Machine, now: Time, since: Option<Time>) -> Tic
         }
         Err(e) => return Tick::Skipped(format!("índice ilegível: {e}")),
     };
-    match machine.busy().await {
+    let busy = match early { Some(busy) => busy, None => machine.busy().await };
+    match busy {
         Ok(None) => {}
         Ok(Some(busy)) if busy == Busy::Uncertain || since.is_none_or(|since| now - since < DEFER_CEILING) => {
             return Tick::Deferred(busy.why().to_owned());
@@ -233,12 +241,13 @@ mod tests {
         list_down: bool,
         index_down: bool,
         launched: AtomicUsize,
+        newer_calls: AtomicUsize,
     }
 
     impl Default for Fake {
         fn default() -> Fake {
             Fake { channel: Some("latest"), automations: true, state: json!({"fase": "pronto", "ok": true}), newer: Some("0.1.0.9"),
-                busy: None, list_down: false, index_down: false, launched: AtomicUsize::new(0) }
+                busy: None, list_down: false, index_down: false, launched: AtomicUsize::new(0), newer_calls: AtomicUsize::new(0) }
         }
     }
 
@@ -247,6 +256,7 @@ mod tests {
         fn automations(&self) -> bool { self.automations }
         fn state(&self) -> crate::update::StateSnapshot { self.state.as_object().cloned().unwrap().into() }
         async fn newer(&self, _channel: &str) -> Result<Option<String>, String> {
+            self.newer_calls.fetch_add(1, Ordering::SeqCst);
             if self.index_down { Err("index_timeout".into()) } else { Ok(self.newer.map(str::to_owned)) }
         }
         async fn busy(&self) -> Result<Option<Busy>, String> { if self.list_down { Err("list_timeout".into()) } else { Ok(self.busy) } }
@@ -316,6 +326,14 @@ mod tests {
         assert!(matches!(tick(&down(), now(), None).await, Tick::Skipped(_)), "sem adiamento, só pula como antes");
         let (since, wait) = next(Some(now()), &tick(&down(), now(), Some(now())).await, now());
         assert_eq!((since, wait), (Some(now()), RECHECK), "o teto conta do primeiro adiamento");
+    }
+
+    #[tokio::test]
+    async fn update_periodic_busy_deferral_does_not_fetch_the_index() {
+        let since = Some(now() - chrono::TimeDelta::hours(1));
+        let busy = Fake { busy: Some(Busy::Working), ..Fake::default() };
+        assert!(matches!(tick(&busy, now(), since).await, Tick::Deferred(_)));
+        assert_eq!(busy.newer_calls.load(Ordering::SeqCst), 0, "ocupada, nem vai ao índice");
     }
 
     #[tokio::test]

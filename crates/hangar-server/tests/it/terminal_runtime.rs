@@ -7,8 +7,8 @@ use std::sync::{Arc,Mutex,atomic::AtomicU64};
 use std::time::Duration;
 use tokio::sync::{broadcast,Notify};
 
-struct Io { native_record:Mutex<Option<(std::path::PathBuf,u32,std::path::PathBuf)>>, idle:Arc<std::sync::atomic::AtomicBool>, ready:Arc<std::sync::atomic::AtomicBool>, native:Arc<std::sync::atomic::AtomicBool>, generation:Arc<AtomicU64>, binding_generation:AtomicU64, capture_error:std::sync::atomic::AtomicBool, calls:Mutex<Vec<CommandRequest>>, text:Mutex<String>, gate:Notify, blocked:std::sync::atomic::AtomicBool, fail_write:std::sync::atomic::AtomicBool, fail_enter:std::sync::atomic::AtomicBool, rotate_enter:std::sync::atomic::AtomicBool, conversation:Arc<Mutex<String>>, socket_calls:Mutex<Vec<Vec<u8>>>, ghost:Mutex<String>, hold_capture:std::sync::atomic::AtomicBool, hold_skip:std::sync::atomic::AtomicUsize, mods_screen:Mutex<Option<String>>, ring_keys:std::sync::atomic::AtomicUsize, ring_returns:std::sync::atomic::AtomicBool, swallow:std::sync::atomic::AtomicBool, footer:std::sync::atomic::AtomicBool, panes:Mutex<Vec<String>>, created:AtomicU64, switch_at:Mutex<Option<(usize,&'static str)>>, projection_at_facts:Mutex<Option<(std::path::PathBuf,Vec<String>)>>, send_now_hint:std::sync::atomic::AtomicBool, drop_enter:std::sync::atomic::AtomicUsize, enqueue_on_drop:Mutex<Option<std::path::PathBuf>>, direct:std::sync::atomic::AtomicBool, direct_calls:Mutex<Vec<CommandRequest>> }
-impl Io { fn new()->Self { Self { projection_at_facts:Mutex::new(None),native_record:Default::default(),idle:Arc::new(std::sync::atomic::AtomicBool::new(true)),ready:Arc::new(std::sync::atomic::AtomicBool::new(true)),native:Default::default(),generation:Arc::new(AtomicU64::new(1)),binding_generation:AtomicU64::new(1),capture_error:Default::default(),calls:Mutex::new(vec![]),text:Mutex::new(String::new()),gate:Notify::new(),blocked:std::sync::atomic::AtomicBool::new(false),fail_write:std::sync::atomic::AtomicBool::new(false),fail_enter:std::sync::atomic::AtomicBool::new(false),rotate_enter:std::sync::atomic::AtomicBool::new(false),conversation:Arc::new(Mutex::new("sid".into())),socket_calls:Mutex::new(vec![]),ghost:Mutex::new(String::new()),hold_capture:std::sync::atomic::AtomicBool::new(false),hold_skip:Default::default(),mods_screen:Mutex::new(None),ring_keys:Default::default(),ring_returns:Default::default(),swallow:Default::default(),footer:Default::default(),panes:Mutex::new(vec![]),created:AtomicU64::new(1),switch_at:Mutex::new(None),send_now_hint:std::sync::atomic::AtomicBool::new(false),drop_enter:Default::default(),enqueue_on_drop:Mutex::new(None),direct:Default::default(),direct_calls:Mutex::new(vec![]) } } }
+struct Io { native_record:Mutex<Option<(std::path::PathBuf,u32,std::path::PathBuf)>>, idle:Arc<std::sync::atomic::AtomicBool>, ready:Arc<std::sync::atomic::AtomicBool>, native:Arc<std::sync::atomic::AtomicBool>, generation:Arc<AtomicU64>, binding_generation:AtomicU64, capture_error:std::sync::atomic::AtomicBool, calls:Mutex<Vec<CommandRequest>>, text:Mutex<String>, gate:Notify, blocked:std::sync::atomic::AtomicBool, fail_write:std::sync::atomic::AtomicBool, fail_enter:std::sync::atomic::AtomicBool, rotate_enter:std::sync::atomic::AtomicBool, conversation:Arc<Mutex<String>>, socket_calls:Mutex<Vec<Vec<u8>>>, ghost:Mutex<String>, hold_capture:std::sync::atomic::AtomicBool, hold_skip:std::sync::atomic::AtomicUsize, mods_screen:Mutex<Option<String>>, ring_keys:std::sync::atomic::AtomicUsize, ring_returns:std::sync::atomic::AtomicBool, swallow:std::sync::atomic::AtomicBool, footer:std::sync::atomic::AtomicBool, panes:Mutex<Vec<String>>, created:AtomicU64, switch_at:Mutex<Option<(usize,&'static str)>>, projection_at_facts:Mutex<Option<(std::path::PathBuf,Vec<String>)>>, send_now_hint:std::sync::atomic::AtomicBool, drop_enter:std::sync::atomic::AtomicUsize, enqueue_on_drop:Mutex<Option<std::path::PathBuf>>, direct:std::sync::atomic::AtomicBool, direct_calls:Mutex<Vec<CommandRequest>>, direct_once:std::sync::atomic::AtomicBool, fail_capture_after_drop:std::sync::atomic::AtomicUsize, capture_countdown:std::sync::atomic::AtomicUsize }
+impl Io { fn new()->Self { Self { projection_at_facts:Mutex::new(None),native_record:Default::default(),idle:Arc::new(std::sync::atomic::AtomicBool::new(true)),ready:Arc::new(std::sync::atomic::AtomicBool::new(true)),native:Default::default(),generation:Arc::new(AtomicU64::new(1)),binding_generation:AtomicU64::new(1),capture_error:Default::default(),calls:Mutex::new(vec![]),text:Mutex::new(String::new()),gate:Notify::new(),blocked:std::sync::atomic::AtomicBool::new(false),fail_write:std::sync::atomic::AtomicBool::new(false),fail_enter:std::sync::atomic::AtomicBool::new(false),rotate_enter:std::sync::atomic::AtomicBool::new(false),conversation:Arc::new(Mutex::new("sid".into())),socket_calls:Mutex::new(vec![]),ghost:Mutex::new(String::new()),hold_capture:std::sync::atomic::AtomicBool::new(false),hold_skip:Default::default(),mods_screen:Mutex::new(None),ring_keys:Default::default(),ring_returns:Default::default(),swallow:Default::default(),footer:Default::default(),panes:Mutex::new(vec![]),created:AtomicU64::new(1),switch_at:Mutex::new(None),send_now_hint:std::sync::atomic::AtomicBool::new(false),drop_enter:Default::default(),enqueue_on_drop:Mutex::new(None),direct:Default::default(),direct_calls:Mutex::new(vec![]),direct_once:Default::default(),fail_capture_after_drop:Default::default(),capture_countdown:Default::default() } } }
 impl Io {
     fn refresh_record(&self) {
         if let Some((path,pid,socket))=&*self.native_record.lock().unwrap() {
@@ -41,6 +41,7 @@ impl TerminalIo for Io {
             // `panes`: telas em sequência, uma por captura; a última fica.
             "capture-pane" if !self.panes.lock().unwrap().is_empty()=>{let mut panes=self.panes.lock().unwrap();(if panes.len()>1 {panes.remove(0)} else {panes[0].clone()}).into_bytes()},
             "capture-pane" if self.capture_error.load(std::sync::atomic::Ordering::Acquire)=>return Err(IoFailure {code:"capture_failed",may_have_written:false}),
+            "capture-pane" if self.capture_countdown.fetch_update(std::sync::atomic::Ordering::SeqCst,std::sync::atomic::Ordering::SeqCst,|n|n.checked_sub(1)).is_ok_and(|n|n==1)=>return Err(IoFailure {code:"capture_failed",may_have_written:false}),
             "capture-pane" if !self.ready.load(std::sync::atomic::Ordering::Acquire)=>b"loading\n".to_vec(),
             // `hold_skip`: capturas que passam antes de segurar (a leitura dos fatos vem antes do despacho).
             "capture-pane" if self.hold_capture.load(std::sync::atomic::Ordering::Acquire) && self.hold_skip.fetch_update(std::sync::atomic::Ordering::SeqCst,std::sync::atomic::Ordering::SeqCst,|n|n.checked_sub(1)).is_err()=>std::future::pending().await,
@@ -70,6 +71,8 @@ impl TerminalIo for Io {
                 let text=r.args.last().unwrap();
                 // `drop_enter`: Enters que o terminal perde (multiplexador lento) e deixam o texto no campo.
                 if text=="\r" && self.drop_enter.fetch_update(std::sync::atomic::Ordering::SeqCst,std::sync::atomic::Ordering::SeqCst,|n|n.checked_sub(1)).is_ok() {
+                    // `fail_capture_after_drop`: a n-ésima captura depois do Enter perdido falha uma vez.
+                    self.capture_countdown.store(self.fail_capture_after_drop.load(std::sync::atomic::Ordering::Acquire),std::sync::atomic::Ordering::Release);
                     // `enqueue_on_drop`: o Claude já pôs o texto na fila dele, mas a tela ainda o mostra no campo.
                     if let Some(path)=self.enqueue_on_drop.lock().unwrap().as_ref() {
                         let line=json!({"type":"queue-operation","operation":"enqueue","content":*self.text.lock().unwrap()});
@@ -96,7 +99,8 @@ impl TerminalIo for Io {
         self.direct_calls.lock().unwrap().push(r.clone());
         self.command(r).await.map(Some)
     }) }
-    fn writes_direct(&self,_:&str,_:&str)->bool { self.direct.load(std::sync::atomic::Ordering::Acquire) }
+    // `direct_once`: a conferência do psmux vence logo depois da primeira pergunta.
+    fn writes_direct(&self,_:&str,_:&str)->bool { self.direct_once.swap(false,std::sync::atomic::Ordering::AcqRel) || self.direct.load(std::sync::atomic::Ordering::Acquire) }
 }
 const WAIT:Duration=Duration::from_secs(10);
 /// Processo do teste que morre junto com ele, inclusive quando uma asserção falha antes do fim.
@@ -863,6 +867,19 @@ async fn terminal_runtime_windows_line_with_backslashes_goes_direct_without_the_
     }
 }
 #[tokio::test]
+async fn terminal_runtime_backslash_line_keeps_the_path_chosen_once_when_the_gate_expires() {
+    // A escolha entre clipboard e direto é uma só: a conferência vencendo no meio não manda a contrabarra ao CLI.
+    let text=format!("DECISAO C:\\Sistemas\\x {}","y".repeat(600));
+    let mut f=Fixture::new().await;
+    f.target.binding.windows=true; f.target.binding.pane="=session:0.0".into();
+    f.io.direct_once.store(true,std::sync::atomic::Ordering::Release); let h=f.start();
+    let _=h.command(f.command("bs1",&text)).await.unwrap();
+    let direct_count=f.io.direct_calls.lock().unwrap().iter().filter(|c|c.args.last().is_some_and(|a|a.contains("Sistemas"))).count();
+    let by_cli=f.io.calls.lock().unwrap().iter().filter(|c|c.args.last().is_some_and(|a|a.contains("Sistemas"))).count()-direct_count;
+    assert_eq!(by_cli,0,"o CLI nunca digita contrabarra");
+    h.stop().await.unwrap();
+}
+#[tokio::test]
 async fn terminal_runtime_text_already_in_claudes_queue_gets_no_second_enter() {
     // A tela ainda mostra o texto, mas o transcript já tem o enqueue: outro Enter mandaria a mensagem de novo.
     let f=Fixture::new().await; f.io.drop_enter.store(1,std::sync::atomic::Ordering::Release);
@@ -871,6 +888,16 @@ async fn terminal_runtime_text_already_in_claudes_queue_gets_no_second_enter() {
     assert_eq!(result.disposition,hangar_server::runtime::protocol::Disposition::Accepted,"{}",result.payload);
     let enters=f.io.calls.lock().unwrap().iter().filter(|c|c.args.last().is_some_and(|a|a=="\r")).count();
     assert_eq!(enters,1,"o transcript já provou o envio");
+    h.stop().await.unwrap();
+}
+#[tokio::test]
+async fn terminal_runtime_blocked_enter_repeat_still_reads_the_transcript_proof() {
+    // O Enter de novo barrado (a conferência falhou nessa leitura) não pula a prova do transcript, que já tem o enqueue.
+    let f=Fixture::new().await; f.io.drop_enter.store(1,std::sync::atomic::Ordering::Release);
+    *f.io.enqueue_on_drop.lock().unwrap()=Some(f.target.transcript.clone());
+    f.io.fail_capture_after_drop.store(3,std::sync::atomic::Ordering::Release); let h=f.start();
+    let result=h.command(f.command("late","Olá de novo")).await.unwrap();
+    assert_eq!(result.disposition,hangar_server::runtime::protocol::Disposition::Accepted,"{}",result.payload);
     h.stop().await.unwrap();
 }
 #[tokio::test]
