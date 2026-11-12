@@ -30,12 +30,10 @@ def env(tmp_path, monkeypatch):
     internal_api.set_secret(SECRET)
     # O clique é do Rust: o Python não clica nada, em modo nenhum.
     pressed = []
-    api.app.dependency_overrides[api._transfer_guard] = lambda: None
     coordinator = RuntimeCoordinator()
     coordinator.instance = "instance-1"
     monkeypatch.setattr(runtime_coordinator, "_current", coordinator)
     yield coordinator, guest_token, pressed
-    api.app.dependency_overrides.pop(api._transfer_guard, None)
     internal_api.set_secret(None)
 
 

@@ -14,7 +14,7 @@ from app import registry as registry_mod
 from app.adapters import CLAUDE_HEADLESS, chave_de, get_adapter
 from app.adapters.preview_push import PushPreviewSource, fonte_ferramenta, fonte_pensamento
 from app.difusor import Difusor
-from app.pqueue import PromptQueue, _transcript_start_ts, committed_user_lines
+from app.pqueue import PromptQueue, _transcript_start_ts
 from app.preview import PreviewBroker, _norm
 from app.models import PreviewEvent, session_key
 from app.live_rate import live_snapshot
@@ -594,28 +594,6 @@ def invalidate_recent_list() -> None:
     _list_invalidated_at = time.monotonic()
 
 
-def _confirm_codex_queue(name: str, jsonl: str) -> None:
-    from app import runtime_coordinator
-    from app.runtime_adapter import run_sync
-    coordinator = runtime_coordinator.current()
-    if coordinator is not None and coordinator.managed_runtime(name):
-        try:
-            run_sync(lambda: coordinator.op(name, {"kind":"confirm"}, uuid.uuid4().hex), coordinator.loop)
-        except runtime_coordinator.TransferInProgress:
-            pass        # posse passando ao Rust: a confirmação fica para a próxima rodada, o stream segue
-        return
-    if runtime_coordinator.rust_owns_codex_terminal():
-        return      # fila e confirmação do Codex são do Rust (projeção dele): o Python nunca grava nela
-    queue = PromptQueue(name)
-    if not any(r.get("delivered") and not r.get("confirmed") for r in queue.load()):
-        return
-    from app.conversation_history import confirmation_options
-    confirmation = confirmation_options(name, jsonl, "codex")
-    committed = committed_user_lines(jsonl, "codex", **confirmation)
-    start = _transcript_start_ts(jsonl)
-    if committed is not None and start is not None:
-        # RPC aceito não prova escrita no rollout; ausência nunca autoriza reenvio.
-        queue.reconcile_delivered(committed, start, time.time(), grace=0, confirm_only=True)
 
 
 # Com o Rust de pé, estes saem do hub: os quatro primeiros do `Monitor` (Claude com terminal), os
@@ -835,18 +813,7 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
         # que e exatamente o que o preview mostra, LIMPA o preview na hora (sem esperar o broker mudar).
         # Recebe o path (em vez de fechar sobre um tailer fixo) pra poder ser recriado no rebind do /clear.
         try:
-            from app.conversation_history import session_transfer, verify_boundary, live_event
-            record = await asyncio.to_thread(session_transfer, name, path, current_provider)
-            if record:
-                offset = await asyncio.to_thread(verify_boundary, record, path)
-                start_offset = max(offset, start_offset or 0)
             async for ev in get_adapter(current_provider).transcript_stream(path, start_offset):
-                if record:
-                    ev = await asyncio.to_thread(live_event, record, path, ev)
-                    if ev is None:
-                        continue
-                if current_provider == "codex" and ev.kind == "user_msg" and not rust_state:
-                    await asyncio.to_thread(_confirm_codex_queue, name, path)
                 if ev.kind == "assistant_msg" and ev.text:
                     committed["text"] = _norm(ev.text)
                     # Com o estado no hub, quem limpa a prévia gravada é ele.
@@ -1085,9 +1052,6 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
 
     # start_offset so vale pro tail INICIAL (veio do Last-Event-ID desta conexao). O rebind do
     # /clear abaixo recria sem ele: o transcript e outro arquivo, o offset antigo nao significa nada.
-    if provider == "codex" and not rust_state:
-        # Confirma antigas antes de a fila ser republicada na reconexão.
-        await asyncio.to_thread(_confirm_codex_queue, name, jsonl)
     tail_task = asyncio.create_task(tail_pump(jsonl, start_offset))
     stats_task = asyncio.create_task(stats_pump(jsonl))
     # Nomeadas porque sao refeitas quando o provider muda no meio do stream (__reprovider__): cada
@@ -1166,8 +1130,6 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
                 ask_q_emitted = False
                 # A fila renasce com as fontes do estado: corte e baixa da conversa nova, como na abertura.
                 start_ts = await asyncio.to_thread(_transcript_start_ts, novo_jsonl) or 0.0
-                if novo_prov == "codex" and not rust_state:
-                    await asyncio.to_thread(_confirm_codex_queue, name, novo_jsonl)
                 tail_task = asyncio.create_task(tail_pump(novo_jsonl))
                 stats_task = asyncio.create_task(stats_pump(novo_jsonl))
                 state_tasks = _fontes_do_estado(novo_prov, rust_state)

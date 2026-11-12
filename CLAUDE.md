@@ -804,7 +804,10 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
     rotas conservam os clientes existentes; sem Rust, não há lançador Python de reserva. O shell
     continua no multiplexador, com `@cp_hidden`, e usa os fechamentos e renomeações existentes.
     Evidência em [plataforma.md](docs/decisoes/plataforma.md#editor-shell-e-terminal-externo-no-rust-11112026).
-  - Partes ainda no Python: transferência Claude→Codex e runners.
+  - Partes ainda no Python: runners.
+  - Confirmação de entregas Codex: somente Rust; a reserva Python não confirma mensagens pelo
+    texto do rollout, que pode conter histórico importado. O SSE Rust aplica a mesma fronteira
+    e os mesmos identificadores compostos do histórico transferido.
   - Mods (`press`/`close`/`show`/`input`), `~/.hangar/plugin.json` e `plugin-dir` publicados na
     subida e o download dos preços do models.dev: nada; são do Rust (`mods/`,
     `config_sync/plugin_publish.rs`, `costs/pricing_refresh.rs`).
@@ -849,8 +852,8 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   Python. Anexos, o `/transcribe` da sessão, a saída ao vivo de ferramenta (`bash-output`,
   `tool-progress`) e a imagem colada no terminal são só do Rust, com a sessão tirada da lista dele:
   as portas do Python autenticam e repassam em fluxo por `/__hangar_server/forwarded`, e no modo
-  `python` respondem 503 `erro_midia_precisa_rust`. Só a imagem de conversa transferida
-  (`transfer:`) segue no Python. Evidência em
+  `python` respondem 503 `erro_midia_precisa_rust`. Imagens de conversa transferida (`transfer:`)
+  também são lidas no Rust, com conferência do snapshot e do vínculo da thread. Evidência em
   [accounts-uploads-rust.md](docs/decisoes/accounts-uploads-rust.md#anexos). O resto, convidado
   incluído, é repassado com `X-Forwarded-For`. A 8766 e a 8768 são do Rust. Sem binário
   (`CP_RUST_SERVER_BIN`, `bin/` da versão do pacote, `crates/target/release`, `~/.hangar/bin`), com `CP_RUST_SERVER=0`, com
@@ -921,7 +924,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   sumiu, vai à conta logada de mais folga; sem nenhuma, avisa `limit_switch_login_lost`. No modo
   `python`, abrir e reabrir respondem 503 com código, sem lançador Python. Exceções que ainda passam
   pelo Python: texto que nasce nele (broadcast que entra pelas portas do Python) acorda Claude/Codex sem terminal pedindo
-  ao Rust, e a transferência Claude→Codex. Decisões e medições em
+  ao Rust. Decisões e medições em
   [plataforma.md](docs/decisoes/plataforma.md#abertura-de-sessão-única-no-rust).
 - **Trocar o nome da sessão é do Rust (`session_rename/`), com desfazer.** Tudo que recusa vem antes
   do primeiro efeito; a troca segura a reserva do nome novo e as portas dos dois nomes; a sessão viva
@@ -949,7 +952,10 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   troca de conversa e sidecar, e toda reabertura pelo spec (`claude_reopen.rs`, `codex_relaunch`):
   terminal↔sem terminal, `/recarregar`, `/conta` com a conta ChatGPT fixa, o modelo e o Fast dela, e
   o bypass; o modo vem do spec e do observado, nunca do rodapé lido na hora. A transferência
-  Claude→Codex (`/conta` com `credential_id`) segue no Python. Todo `DELETE` do dono fecha no Rust,
+  Claude→Codex (`/conta` com `credential_id`) também é do Rust: conversão e registro em
+  `hangar-conversation-transfer`, importação em `hangar-codex-transfer`, ciclo de vida no servidor.
+  A origem só é substituída depois da persistência integral, e falha restaura o Claude; não há
+  motor nem ponte Python da transferência. Todo `DELETE` do dono fecha no Rust,
   pelo nome quando não há entrada (`runtime/close_name.rs`); processo que sobrevive é 500
   `session_kill_unconfirmed`, com fila, sidecar e convite intactos. Python: autorização das portas dele com o repasse acima e, depois do `DELETE`
   concluído no Rust, só a limpeza externa (`share_store`/`sync_tunnel`, `ThenLink`, atalhos,

@@ -175,12 +175,6 @@ class ProtocolMismatch(ValueError):
     """O binário fala outro contrato: religar não adianta, e o motivo tem de dizer isso."""
 
 
-async def _send_snapshot(stopping) -> None:
-    from app import share_bridge
-    if not await asyncio.to_thread(share_bridge.send_snapshot):
-        await share_bridge.send_snapshot_until_sent(stopping)
-
-
 def _runtime_ready(proc, instance: str) -> dict:
     if proc.stdout is None:
         raise ValueError("partida sem cano de resposta")
@@ -373,12 +367,7 @@ class Supervisor:
         self.runtime_secret = None
         self.runtime_transport = None
         self.last_transport = None
-        self._snapshot_retry: asyncio.Task | None = None
 
-    def _cancel_snapshot_retry(self) -> None:
-        if self._snapshot_retry is not None:
-            self._snapshot_retry.cancel()
-            self._snapshot_retry = None
 
     def _env(self) -> dict[str, str]:
         # Import tardio: internal_api puxa o app, que o uvicorn interno já carregou a esta altura.
@@ -419,7 +408,6 @@ class Supervisor:
         global terminal_panel
         terminal_panel = None
         _point_bridges(None, None)
-        self._cancel_snapshot_retry()
         if self.proc is not None:
             from app.runtime_process import cleanup
             await asyncio.to_thread(cleanup, self.proc)
@@ -477,11 +465,7 @@ class Supervisor:
                     _log.error("hangar-server sem owns válido na saúde")
                     diag.registrar("hangar_server.partida", "erro", codigo="capacidade_invalida")
                     return "address"
-                # Pontes ligadas: o Rust recém-subido aprende as trocas de modo e transferências em curso.
                 self.configure_runtime(ready, env["HANGAR_INTERNAL_SECRET"], env["HANGAR_RUNTIME_INSTANCE"], owns)
-                # Sem a fotografia o convidado fica no 503 e a varredura não revoga nada; ela vai
-                # depois das pontes e fora da partida, repetida até o Rust aceitar.
-                self._snapshot_retry = asyncio.create_task(_send_snapshot(self.stopping))
                 return "up"
             await asyncio.sleep(_POLL)
         return "silent"
@@ -554,7 +538,6 @@ class Supervisor:
 
     async def stop(self) -> None:
         _point_bridges(None, None)
-        self._cancel_snapshot_retry()
         proc = self.proc
         if proc is None:
             return

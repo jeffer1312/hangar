@@ -90,7 +90,7 @@ pub trait OpenFacts {
     fn name_in_use(&self, name: &str) -> Result<bool, OpenError>;
     /// Grupo, `then` ou fila de uma sessão antiga com este nome que ninguém vai limpar (servidor fora).
     fn name_has_leftovers(&self, name: &str) -> Result<bool, OpenError>;
-    /// Troca de agente em curso no nome (`conversation_transfer.transfer_active`).
+    /// Troca de agente em curso no nome, confirmada pelo registro durável.
     fn transfer_busy(&self, name: &str) -> Result<bool, OpenError>;
     /// `os.path.realpath(os.path.expanduser(path))`.
     fn real_path(&self, path: &str) -> std::path::PathBuf;

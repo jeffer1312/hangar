@@ -274,29 +274,6 @@ def test_delete_closed_by_the_rust_records_the_closed_name_from_its_transcript(m
     assert "Rust close sent no transcript" in caplog.text
 
 
-def test_published_terminal_with_the_rust_owner_is_left_to_the_watcher(monkeypatch):
-    from types import SimpleNamespace
-    from app.adapters.codex import sessions as codex_sessions
-    from app.adapters.codex.adapter import CodexAdapter
-    adapter = CodexAdapter()
-    closed = []
-
-    class Client:
-        async def close(self):
-            closed.append(True)
-
-    async def verified(client, meta):
-        return {}
-    adapter._adoptions = {"cx": ("tid", Client(), "default")}
-    monkeypatch.setattr(adapter, "_verify_imported_runtime", verified)
-    monkeypatch.setattr(codex_sessions, "load_prepared", lambda name, transfer: {})
-    monkeypatch.setattr(codex_sessions, "publish_prepared", lambda name, transfer: {"headless": False, "thread_id": "t"})
-    monkeypatch.setattr(runtime_coordinator, "rust_owns_codex_terminal", lambda: True)
-    asyncio.run(adapter.publish_imported(SimpleNamespace(name="cx", id="tid")))
-    assert closed == [True], "o cliente da conferência sai"
-    assert "cx" not in adapter._sessions and "cx" not in adapter._adoptions
-
-
 def test_claude_question_reaches_the_rust_whole_and_421_leaves_it_to_python(monkeypatch):
     seen = []
 

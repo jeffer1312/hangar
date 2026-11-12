@@ -1703,8 +1703,6 @@ async def test_preview_timer_failure_keeps_both_state_streams_alive(monkeypatch,
     monkeypatch.setattr(source, "push", push)
     # Sessão anexada sem sidecar: a checagem de transferência perguntaria a época ao tmux, e sem
     # servidor tmux (CI) isso vira um `mux.comando` a mais no diário que este teste conta.
-    from app import conversation_transfer
-    monkeypatch.setattr(conversation_transfer, "transfer_active", lambda name: False)
     from app import diag
     monkeypatch.setattr(diag, "registrar", lambda event, *args, **kwargs: reports.append((event, kwargs)))
     monitors = [adapter.state_monitor(name, lambda: name) for _ in range(2)]
@@ -1751,8 +1749,6 @@ async def test_native_codex_monitor_never_acquires_unused_terminal_observer(monk
     monkeypatch.setattr(codex_adapter.tmux, "_pane_target", lambda name: "%8")
     # Sessão anexada sem sidecar: a checagem de transferência cairia na época do tmux, que não é o
     # assunto deste teste (em produção o sidecar tem `key` e ela nem chega ao tmux).
-    from app import conversation_transfer
-    monkeypatch.setattr(conversation_transfer, "transfer_active", lambda name: False)
     terminal_observer.configure("127.0.0.1:12345", "secret")
     calls = []
     async def request(payload):

@@ -414,15 +414,6 @@ class RuntimeCoordinator:
         for name in list(getattr(codex, "_sessions", ())):
             await codex.release_client(name)
 
-    async def _close_ingress_of_incomplete_transfers(self):
-        """O Rust novo nasce com as portas abertas: troca interrompida precisa delas fechadas até terminar."""
-        from app import conversation_transfer
-        for record in await asyncio.to_thread(conversation_transfer.list_incomplete):
-            try:
-                await self.ingress(record.name, True, held=True)
-                conversation_transfer.hold_gate(record.name)
-            except Exception as exc:
-                _registration_failed("runtime.ingress_failed", record.name, exc, rust_dead=not self._rust_alive())
 
     async def _enter_rust(self):
         """Rust novo de pé: ele adota sozinho na subida o que é dele (canos vivos, fila pendente, terminais
@@ -431,7 +422,6 @@ class RuntimeCoordinator:
         token = _mode_bypass.set(True)
         cancelled = False
         try:
-            await self._close_ingress_of_incomplete_transfers()
             for slot in tuple(self.slots.values()):
                 name = slot.binding.name
                 if self.names.get(name) != slot.binding.key or slot.phase != Phase.Rust:
@@ -1984,14 +1974,6 @@ class RuntimeCoordinator:
                 and ready.get("key") == descriptor["key"] and ready.get("generation") == descriptor["generation"]):
             raise RuntimeError("abertura não corresponde à vida atual")
 
-    def source_view(self, name):
-        """Vista do Rust da sessão aberta nele, ou guardada no `close` da administração em curso."""
-        slot = self.slots.get(self.names.get(name, ""))
-        if slot is None or not (slot.phase == Phase.Rust or slot.change_from_rust):
-            return None
-        if not slot.cache_valid or not isinstance((slot.view or {}).get("view"), dict):
-            raise RuntimeError("estado do runtime indisponível")
-        return copy.deepcopy(slot.view["view"])
 
     async def lifecycle_call(self, name, method, arguments):
         if self.legacy is None:

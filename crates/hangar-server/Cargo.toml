@@ -35,6 +35,8 @@ name = "other_terminal_lifecycle"
 path = "tests/other_terminal_lifecycle.rs"
 
 [dependencies]
+hangar-conversation-transfer.workspace = true
+hangar-codex-transfer.workspace = true
 hangar-session-tools.workspace = true
 hangar-auth = { path = "../hangar-auth" }
 # float_roundtrip: o float lido sai com o mesmo valor que o float() do Python, e o repr bate.
