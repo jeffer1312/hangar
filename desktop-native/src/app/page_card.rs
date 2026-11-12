@@ -782,11 +782,13 @@ impl Hangar {
                 .children(full.then(|| fullscreen_button(&id, cx)))
                 .child(toggle_button(&id, false, cx));
             let picture = match (view.state, image, view.no_image) {
-                (_, _, true) => Some(note(tr_shared("page_no_image", &[]))),
-                (_, Some(image), _) => Some(backed(div().w_full().h(height).child(img(image).size_full().object_fit(ObjectFit::Contain)))),
-                _ => Some(div().w_full().h(height).child(loading())),
+                (_, _, true) => note(tr_shared("page_no_image", &[])),
+                (_, Some(image), _) => div().w_full().h(height).child(img(image).size_full().object_fit(ObjectFit::Contain)),
+                _ => div().w_full().h(height).child(loading()),
             };
-            return v_flex().relative().w_full().gap_1().child(measure).children(picture).child(bar).into_any_element();
+            // Medida dentro do fundo liso, como a da página viva: as duas gravam a mesma largura.
+            let body = backed(div().relative().w_full().child(measure).child(picture));
+            return v_flex().w_full().gap_1().child(body).child(bar).into_any_element();
         }
         #[cfg(any(target_os = "linux", target_os = "windows"))]
         {
