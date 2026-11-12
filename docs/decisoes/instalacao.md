@@ -177,7 +177,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   push, e consulta o PR com prazo de 10 s: sem `gh` ou sem resposta, segue com aviso. PR aberto pelo
   site fica com o CI. O padrão, que as travas exigem, é o rápido: só o ligado aos arquivos mudados
   (de Rust, `cargo check` do workspace com testes e exemplos, e `cargo test` dos crates que não são o
-  `hangar-server`: os testes dele ficam no workflow `Server`, a cada push, e no `--completo`; pytest dos testes
+  `hangar-server`: os testes dele ficam no workflow `Server`, a cada push, e no `--completo`. A
+  `main` não exige esse check: quem mescla confere que o `Server` do último commit do PR terminou
+  verde, e ele aparece entre os checks desse commit; pytest dos testes
   mudados e dos que citam o módulo mudado, a suíte inteira quando muda dependência, conftest ou
   helper; `vitest related` e typecheck só com `.ts`/`.svelte`/mensagens no diff, tudo quando muda
   dependência ou configuração; o nativo inteiro, num target próprio da árvore fixa, porque o custo é
@@ -215,10 +217,14 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   Rust do `--completo` (`HANGAR_VERIFY_BUILD_GB`, padrão 11), o passo espera a memória disponível por
   até `HANGAR_VERIFY_WAIT` segundos (padrão 300) e, sem ela, falha dizendo quanto falta; com outro
   build na trava o prazo não corre. Os planos de backend não esperam: o cargo deles muitas vezes não
-  tem o que compilar. Com o systemd do usuário, o cargo que só compila roda num grupo próprio com o
-  teto do `cargo-pinned` (`MemoryHigh` = disponível menos 2 GB, mínimo 4, lido depois da trava), e
-  verificação morta por fora encerra o grupo inteiro, build incluído; sem ele, roda sem teto e avisa
-  na saída. Quem roda testes fica fora do teto: sob ele, teste de prazo falharia por carga. A
+  tem o que compilar. Com o systemd do usuário, o cargo que só compila roda num grupo próprio com
+  dois limites: o `MemoryHigh` do `cargo-pinned` (disponível menos 2 GB, mínimo 4, lido depois da
+  trava), acima do qual o kernel recolhe a memória do build e o desacelera, sem impedir que ele
+  passe disso; e o teto de verdade, o `MemoryMax` de 70% da RAM com 8 GB de swap do `memory-scope`,
+  que mata o build. Verificação morta por fora encerra o grupo inteiro, build incluído. Quando o
+  systemd do usuário existe e não abre o grupo, o cargo roda sem limite e a saída avisa; em máquina
+  sem `systemd-run` (macOS, CI) ou sem `XDG_RUNTIME_DIR`, roda sem limite e sem aviso. Quem roda
+  testes fica fora desses limites: sob eles, teste de prazo falharia por carga. A
   segunda faixa só abre ao lado da do cargo com a reserva dela sobrando. Evidência em
   [Verificação local leve](#verificação-local-leve-11112026).
 - **Build e teste locais: target comum, binário fixado na worktree, mensagens com carimbo.** Toda
