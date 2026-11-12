@@ -69,12 +69,12 @@ impl Service {
         }
     }
     async fn oauth(&self, import: bool) -> Result<Value, Failure> {
-        let bridge = self
+        let invalidator = self
             .device
             .clone()
             .ok_or_else(|| failed("serviço de autenticação indisponível"))?;
         self.accounts
-            .propagate_device(self.runtime.clone(), bridge, import)
+            .propagate_device(self.runtime.clone(), invalidator, import)
             .await
             .map_err(|e| Failure {
                 code: Some(e.code),

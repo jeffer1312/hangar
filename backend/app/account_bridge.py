@@ -1,11 +1,8 @@
-"""Ponte de contas com o Rust: preparo e pedidos privados. Os fatos de uso
+"""Ponte de contas com o Rust: pedidos privados. Os fatos de uso
 (processos, nascimentos, sidecars) são lidos no Rust, em `accounts/usage.rs`."""
 from __future__ import annotations
 
-from pathlib import Path
 import json
-import os
-import re
 import urllib.error
 import urllib.request
 
@@ -35,112 +32,6 @@ def terminal_instances() -> dict[str, str]:
         return {}
     raise RuntimeError("account_mux_unknown")
 
-
-class PreparationJobs:
-    """Trabalhos de configuração que continuam protegidos quando o chamador desaparece."""
-
-    def __init__(self):
-        self.jobs = {}
-        self.stages = {}
-
-    @staticmethod
-    def validate(body):
-        from app import runtime_coordinator, account_lifecycle, codex_contas
-        coordinator = runtime_coordinator.current()
-        if coordinator is None or coordinator.instance != body["instance"]:
-            raise ValueError("instância de preparo encerrada")
-        key = account_lifecycle.AccountKey.new(body["key"]["provider"], Path(body["key"]["canonical_home"]))
-        name = body["account_id"]
-        if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,31}", name):
-            raise ValueError("conta inválida")
-        expected = codex_contas.resolve_account(name).home if name == "default" else Path.home() / f".codex-{name}"
-        if key != account_lifecycle.AccountKey.new(key.provider, expected) or expected.is_symlink() or not expected.is_dir():
-            raise ValueError("destino inválido")
-        record = account_lifecycle.default_lock_root() / (key.digest + ".prepare.json")
-        if record.is_symlink() or json.loads(record.read_text(encoding="utf-8")) != body:
-            raise ValueError("operação de preparo substituída")
-        if codex_contas.resolve_account(name).home.resolve() != expected.resolve():
-            raise ValueError("conta Codex inválida")
-        cwd = body["cwd"]
-        if cwd is not None and (not isinstance(cwd, str) or not Path(cwd).is_absolute() or not Path(cwd).is_dir()):
-            raise ValueError("pasta de trabalho inválida")
-
-    async def start(self, body):
-        import asyncio
-        if (not isinstance(body, dict) or set(body) != {"operation", "instance", "key", "account_id", "seed", "force", "cwd"}
-                or not isinstance(body["operation"], str) or not re.fullmatch(r"[a-f0-9]{32}", body["operation"])
-                or type(body["seed"]) is not bool or type(body["force"]) is not bool
-                or not isinstance(body["key"], dict) or set(body["key"]) != {"provider", "canonical_home"}):
-            raise ValueError("pedido de preparo inválido")
-        self.validate(body)
-        operation = body["operation"]
-        if operation in self.jobs:
-            previous, task = self.jobs[operation]
-            if previous != body:
-                raise ValueError("operação de preparo divergente")
-            return task.result() if task.done() else self.running()
-        if any(previous["key"] == body["key"] and not task.done() for previous, task in self.jobs.values()):
-            raise ValueError("preparo anterior ainda está vivo")
-        task = asyncio.create_task(self.run(body))
-        self.jobs[operation] = (body, task)
-        return self.running()
-
-    @staticmethod
-    def running(stage=None):
-        return {"status": "running", "trust_pending": False, "issues": [], "etapa": stage}
-
-    async def wait(self, operation):
-        import asyncio
-        job = self.jobs.get(operation)
-        if job is None:
-            return {"status": "unknown", "trust_pending": False, "issues": []}
-        task = job[1]
-        done, _ = await asyncio.wait({task}, timeout=1)
-        if done:
-            return task.result()
-        stage = self.stages.get(operation)
-        if stage is None and job[0]["key"]["provider"] == "codex":
-            from app import codex_contas, codex_contas_sync
-            stage = codex_contas_sync.preparation_status(codex_contas.resolve_account(job[0]["account_id"])).get("etapa")
-        return self.running(stage)
-
-    async def run(self, body):
-        import asyncio
-        from app import account_lifecycle, codex_contas, codex_contas_sync
-        key = account_lifecycle.AccountKey.new(body["key"]["provider"], Path(body["key"]["canonical_home"]))
-
-        async def owned():
-            guard = await asyncio.to_thread(account_lifecycle.acquire, key, account_lifecycle.GuardMode.SHARED)
-            with guard:
-                self.validate(body)
-                account = codex_contas.resolve_account(body["account_id"])
-                if body["cwd"] is not None:
-                    result = codex_contas_sync.preparation_status(account)
-                    if result["status"] not in {"ready", "partial"}:
-                        raise ValueError("conta ainda não está preparada")
-                    async with codex_contas_sync.exclusivo(account.home / ".hangar-integracao.lock"):
-                        self.validate(body)
-                        def trust():
-                            import os
-                            import tomllib
-                            from app.adapters.codex import sessions
-                            sessions.pretrust_cwd(body["cwd"], codex_home=account.home)
-                            config = tomllib.loads((account.home / "config.toml").read_text(encoding="utf-8"))
-                            if config.get("projects", {}).get(os.path.abspath(body["cwd"]), {}).get("trust_level") != "trusted":
-                                raise ValueError("confiança da pasta não foi confirmada")
-                        await account_lifecycle.complete_on_cancel(asyncio.to_thread(trust))
-                    return result
-                result = await codex_contas_sync._prepare_account_guarded(
-                    account, body["force"], validate=lambda: self.validate(body))
-                return result
-        try:
-            return await account_lifecycle.complete_on_cancel(owned())
-        except asyncio.CancelledError:
-            return {"status": "error", "trust_pending": False,
-                    "issues": [{"code": "account_prepare_cancelled", "params": {}}]}
-        except Exception as exc:
-            return {"status": "error", "trust_pending": False,
-                    "issues": [{"code": "codex_account_prepare_failed", "params": {"error": type(exc).__name__}}]}
 
 _preparation_transport = None
 
@@ -193,30 +84,6 @@ def configure_preparation(address, secret):
     _preparation_transport = (address, secret)
 
 
-def request_preparation(account, *, prepare=False, force=False, cwd=None):
-    from app import codex_contas
-    if owner_mode() == "python":
-        return None
-    config = _preparation_transport
-    if config is None:
-        raise codex_contas.AccountError(503, "account_prepare_bridge_unavailable", {})
-    try:
-        result = _post(config, "/__hangar_server/accounts",
-                       {"account_id": account.id, "prepare": prepare, "force": force, "cwd": cwd},
-                       timeout=15, limit=64 * 1024)
-        if not isinstance(result, dict) or result.get("status") not in {"idle", "running", "ready", "partial", "error"}:
-            raise ValueError("resposta de preparo inválida")
-        return result
-    except urllib.error.HTTPError as error:
-        # Recusa do dono não é ponte indisponível: o código dele segue até quem chamou.
-        detail = _error_detail(error, None)
-        if isinstance(detail, dict) and isinstance(detail.get("code"), str):
-            raise codex_contas.AccountError(error.code, detail["code"], detail.get("params") or {}) from None
-        raise codex_contas.AccountError(503, "account_prepare_bridge_unavailable", {}) from None
-    except (OSError, ValueError):
-        raise codex_contas.AccountError(503, "account_prepare_bridge_unavailable", {}) from None
-
-
 def request_process_uses(key: AccountKey, pid: int) -> bool | None:
     """Se o processo usa a conta, pela varredura do Rust; None quando não dá para saber."""
     config = _preparation_transport
@@ -248,29 +115,6 @@ def request_claude(action, *, path):
                      timeout=30, limit=256 * 1024)
     except urllib.error.HTTPError as error:
         raise HTTPException(error.code, detail=_error_detail(error, unavailable)) from None
-    except (OSError, ValueError):
-        raise HTTPException(503, detail=unavailable) from None
-
-
-def request_codex(action, account, *, refresh=False):
-    """Ponte de consumidores internos; pending recusa sem abrir um escritor Python."""
-    from fastapi import HTTPException
-    if owner_mode() == "python":
-        return None
-    unavailable = {"code": "account_auth_bridge_unavailable"}
-    config = _preparation_transport
-    if config is None:
-        raise HTTPException(503, detail=unavailable)
-    try:
-        return _post(config, "/__hangar_server/accounts",
-                     {"action": action, "account_id": account.id, "attempt_id": None, "refresh": refresh},
-                     timeout=45, limit=256 * 1024)
-    except urllib.error.HTTPError as error:
-        detail = _error_detail(error, unavailable)
-        if isinstance(detail, dict) and "code" in detail:
-            from app.codex_contas import AccountError
-            raise AccountError(error.code, detail["code"], detail.get("params", {})) from None
-        raise HTTPException(error.code, detail=detail) from None
     except (OSError, ValueError):
         raise HTTPException(503, detail=unavailable) from None
 
@@ -428,6 +272,3 @@ async def forward_stream(request, *, guest: bool):
     kept = {key.decode(): value.decode("latin-1") for key, value in response.headers
             if key.decode().lower() not in _HOP_BY_HOP}
     return StreamingResponse(chunks(), status_code=response.status_code, headers=kept)
-
-
-preparation_jobs = PreparationJobs()

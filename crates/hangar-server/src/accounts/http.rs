@@ -390,12 +390,7 @@ pub(crate) fn bridge(state: &crate::routes::AppState) -> Result<AccountsBridge, 
         .ok()
         .flatten()
         .ok_or_else(AccountError::io)?;
-    AccountsBridge::new(
-        state.cfg.upstream,
-        state.cfg.internal_secret.clone(),
-        instance,
-    )
-    .map_err(|_| AccountError::io())
+    Ok(AccountsBridge::new(instance))
 }
 
 async fn prepare_response(
@@ -556,11 +551,8 @@ async fn codex_operation(state:&crate::routes::AppState,action:&str,id:&str,atte
             },
             None=>Err(AccountError::io()),
         },
-        "login"=>match bridge(state) {
-            Ok(bridge)=>match super::codex_login::CodexInvalidator::new(state.cfg.upstream,state.cfg.internal_secret.clone(),bridge.instance().into()) {
-                Ok(invalidator)=>state.accounts.start_codex_login(&account,state.state.runtime.get().cloned(),invalidator).await,
-                Err(err)=>Err(err),
-            },Err(err)=>Err(err)},
+        "login"=>state.accounts.start_codex_login(&account,state.state.runtime.get().cloned(),
+            super::codex_login::CodexInvalidator::new(state.dictation_models.clone())).await,
         "cancel"=>state.accounts.cancel_codex_login(&account,attempt_id).await,
         _=>Err(AccountError::io()),
     };
@@ -578,12 +570,7 @@ async fn codex_sign_out_operation(
     id: &str,
 ) -> Result<Value, AccountError> {
     let account = state.accounts.resolve(Provider::Codex, id)?;
-    let bridge = bridge(state)?;
-    let invalidator = super::codex_login::CodexInvalidator::new(
-        state.cfg.upstream,
-        state.cfg.internal_secret.clone(),
-        bridge.instance().into(),
-    )?;
+    let invalidator = super::codex_login::CodexInvalidator::new(state.dictation_models.clone());
     state
         .accounts
         .sign_out_codex(&account, state.state.runtime.get().cloned(), invalidator)
@@ -597,14 +584,12 @@ fn device_matches(method: &Method, path: &str) -> bool {
 async fn device_operation(state: &crate::routes::AppState, action: &str, attempt: Option<&str>) -> Response {
     if action=="status" {return Json(state.accounts.device_logins.status()).into_response();}
     if action=="cancel" {return match state.accounts.device_logins.cancel(attempt).await {Ok(value)=>Json(value).into_response(),Err(err)=>error(err)};}
-    let facts=match bridge(state) {Ok(facts)=>facts,Err(err)=>return error(err)};
-    let bridge=match super::codex_device_login::DeviceBridge::new(state.cfg.upstream,
-        state.cfg.internal_secret.clone(),facts.instance().into()) {Ok(bridge)=>bridge,Err(err)=>return error(err)};
+    let invalidator=super::codex_login::CodexInvalidator::new(state.dictation_models.clone());
     let runtime=state.state.runtime.get().cloned();
     let result=match action {
-        "start"=>state.accounts.start_device_login(runtime,bridge).await,
-        "propagate"|"import"=>state.accounts.propagate_device(runtime,bridge,action=="import").await,
-        "state"=>state.accounts.device_state(&bridge).await,
+        "start"=>state.accounts.start_device_login(runtime,invalidator).await,
+        "propagate"|"import"=>state.accounts.propagate_device(runtime,invalidator,action=="import").await,
+        "state"=>state.accounts.device_state().await,
         _=>Err(AccountError::io()),
     };
     match result {Ok(value)=>Json(value).into_response(),Err(err)=>error(err)}

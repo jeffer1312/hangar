@@ -63,36 +63,10 @@ from app.archive import (archive_cwd, archive_jsonl,
                          list_folders)
 from app.askquestion import clear_pending_askq, read_pending_askq
 from app import codex_contas as codex_accounts
-from app.codex_contas_login import CodexContasLogin
 from app.pair import PairLink
 from app.hook_state import hook_state
 
 _log = logging.getLogger("hangar")
-
-
-def _codex_service():
-    return getattr(app.state, "codex_contas_login", None)
-
-
-def _resolve_codex_account(account_id: str | None):
-    try:
-        return codex_accounts.resolve_account(account_id or "default")
-    except codex_accounts.AccountError as exc:
-        raise HTTPException(exc.status, detail=erro(exc.code, "conta Codex inválida", **exc.params)) from None
-
-
-async def _codex_require_idle_preparation(account, service) -> None:
-    if account.is_default:
-        return
-    if service is None:
-        raise HTTPException(503, detail=erro("codex_account_service_unavailable",
-                                             "serviço de contas Codex indisponível"))
-    # HTTP síncrono ao Rust: no laço, congelaria o backend inteiro até o prazo da ponte.
-    status = await asyncio.to_thread(service.preparation_status, account)
-    if status.get("status") != "ready":
-        _log.warning("conta Codex %s com sincronização %s; pendências: %s",
-                     account.id, status.get("status"),
-                     [issue.get("code") for issue in status.get("issues", [])])
 
 
 class _BodyTooLarge(Exception):
@@ -198,10 +172,6 @@ async def _lifespan(app: FastAPI):
     global _loop_servidor
     _loop_servidor = asyncio.get_running_loop()
     codex_warm_task = asyncio.create_task(get_adapter("codex").watch_sessions())
-    codex_contas_login = CodexContasLogin()
-    app.state.codex_contas_login = codex_contas_login
-    # Referência guardada: task sem dono pode ser coletada no meio.
-    app.state.codex_auth_aquecer = asyncio.create_task(codex_contas_login.aquecer())
     try:
         yield
     finally:
@@ -211,8 +181,7 @@ async def _lifespan(app: FastAPI):
         # Claude sem terminal fica vivo no cano: só fecha a conexão; o próximo backend religa.
         get_adapter(CLAUDE_HEADLESS).desligar_todas()
         codex_warm_task.cancel()
-        app.state.codex_auth_aquecer.cancel()
-        await asyncio.gather(codex_warm_task, app.state.codex_auth_aquecer, return_exceptions=True)
+        await asyncio.gather(codex_warm_task, return_exceptions=True)
         task.cancel()
         loop_monitor_task.cancel()
         prune_task.cancel()

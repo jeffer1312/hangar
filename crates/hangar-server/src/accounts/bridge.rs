@@ -1,13 +1,10 @@
-//! Ponte privada de contas para o Python, e a espera pelos fatos de uso (`usage.rs`).
+//! Identidade da preparação e espera pelos fatos de uso (`usage.rs`).
 pub use super::types::UsageFacts;
-use std::{net::SocketAddr, time::Duration};
+use std::time::Duration;
 
-/// Cliente privado, vinculado à instância.
+/// Identidade do coordenador que publica a operação durável.
 #[derive(Clone)]
 pub struct AccountsBridge {
-    client: reqwest::Client,
-    upstream: SocketAddr,
-    secret: String,
     instance: String,
 }
 
@@ -16,76 +13,8 @@ impl AccountsBridge {
         &self.instance
     }
 
-    async fn prepare_request(
-        &self,
-        suffix: &str,
-        body: serde_json::Value,
-    ) -> Result<serde_json::Value, &'static str> {
-        if !self.upstream.ip().is_loopback() {
-            return Err("account_bridge_address");
-        }
-        let response = self
-            .client
-            .post(format!(
-                "http://{}/internal/accounts/prepare{suffix}",
-                self.upstream
-            ))
-            .header("x-hangar-internal", &self.secret)
-            .header("x-hangar-runtime-instance", &self.instance)
-            .header("content-type", "application/json")
-            .body(body.to_string())
-            .send()
-            .await
-            .map_err(|_| "account_prepare_unavailable")?;
-        if !response.status().is_success() {
-            return Err("account_prepare_rejected");
-        }
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|_| "account_prepare_unavailable")?;
-        let value: serde_json::Value =
-            serde_json::from_slice(&bytes).map_err(|_| "account_prepare_invalid")?;
-        if !matches!(
-            value["status"].as_str(),
-            Some("running" | "ready" | "partial" | "error" | "unknown")
-        ) {
-            return Err("account_prepare_invalid");
-        }
-        Ok(value)
-    }
-    pub async fn preparation_start(
-        &self,
-        request: &super::preparation::PrepareRequest,
-    ) -> Result<serde_json::Value, &'static str> {
-        self.prepare_request(
-            "",
-            serde_json::to_value(request).map_err(|_| "account_prepare_invalid")?,
-        )
-        .await
-    }
-    pub async fn preparation_wait(
-        &self,
-        operation: &str,
-    ) -> Result<serde_json::Value, &'static str> {
-        self.prepare_request("/wait", serde_json::json!({"operation":operation}))
-            .await
-    }
-    pub fn new(
-        upstream: SocketAddr,
-        secret: String,
-        instance: String,
-    ) -> Result<Self, reqwest::Error> {
-        Ok(Self {
-            client: crate::http_client()
-                .no_proxy()
-                .redirect(reqwest::redirect::Policy::none())
-                .timeout(Duration::from_secs(10))
-                .build()?,
-            upstream,
-            secret,
-            instance,
-        })
+    pub fn new(instance: String) -> Self {
+        Self { instance }
     }
 }
 

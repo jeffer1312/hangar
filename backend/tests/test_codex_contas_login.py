@@ -12,7 +12,6 @@ from pathlib import Path
 import pytest
 
 from app import codex_contas as accounts
-from app.codex_contas_login import CodexContasLogin
 from app.codex_importador import CodexNativo
 import codex_contas_apoio
 
@@ -24,11 +23,6 @@ def contas(tmp_path, monkeypatch):
     accounts.default_home().mkdir()
     work = codex_contas_apoio.create_account("work")
     return accounts.Account("default", accounts.default_home(), True), work
-
-
-@pytest.fixture
-def service():
-    return CodexContasLogin()
 
 
 def test_ambiente_da_secundaria_remove_identidade_externa_e_padrao_preserva(contas):

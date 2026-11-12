@@ -64,7 +64,7 @@ pub(super) fn read(path: &Path) -> Result<Value, Error> {
     parse(&raw)
 }
 
-pub(super) fn parse(raw: &str) -> Result<Value, Error> {
+pub(crate) fn parse(raw: &str) -> Result<Value, Error> {
     for salt in 0..32 {
         if let Some(value) = parse_attempt(raw, salt)? {
             return Ok(value);

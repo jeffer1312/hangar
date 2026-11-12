@@ -85,6 +85,16 @@ impl Probe {
             Ok(Some(out)) => Some(out.stdout),
         }
     }
+    /// O preparo de contas aceita somente a versão publicada no stdout da CLI.
+    pub(crate) async fn version_stdout(&self, env: &AccountEnvironment, cli: &str) -> Option<String> {
+        let output = self.raw(env, cli, "--version").await.ok()??;
+        if !output.success { return None; }
+        let line = py_strip(&output.stdout)
+            .split(['\n', '\r', '\u{b}', '\u{c}', '\u{1c}', '\u{1d}', '\u{1e}', '\u{85}', '\u{2028}', '\u{2029}'])
+            .next()?;
+        if line.is_empty() || line.contains('\u{fffd}') { return None; }
+        Some(line.chars().take(80).collect())
+    }
     pub async fn version_text(&self, env: &AccountEnvironment, cli: &str) -> Option<String> {
         match self
             .raw(env, cli, if cli == "tmux" { "-V" } else { "--version" })

@@ -193,23 +193,9 @@ pub async fn exclusive(path: &Path) -> Result<ExclusiveGuard, Error> {
         path.parent()
             .ok_or_else(|| Error::Invalid("lock sem diretório".into()))?,
     )?;
-    let mut options = fs::OpenOptions::new();
-    options.read(true).write(true).create(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let file = options.open(path)?;
-    loop {
-        match file.try_lock() {
-            Ok(()) => return Ok(ExclusiveGuard { file }),
-            Err(fs::TryLockError::WouldBlock) => {
-                tokio::time::sleep(Duration::from_millis(100)).await
-            }
-            Err(fs::TryLockError::Error(e)) => return Err(e.into()),
-        }
-    }
+    Ok(ExclusiveGuard {
+        file: hangar_core::fs::lock_exclusive(path).await?,
+    })
 }
 pub fn remap(value: &Value, old: &Path, new: &Path) -> Value {
     match value {
