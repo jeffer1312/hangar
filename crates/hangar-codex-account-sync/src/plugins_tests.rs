@@ -209,9 +209,11 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("source");
-        let target = dir.path().join("target");
-        let market = dir.path().join("market");
+        // O manifesto real guarda caminhos resolvidos, mesmo com TEMP em um alias Windows.
+        let root = hangar_core::fs::without_verbatim(std::fs::canonicalize(dir.path()).unwrap());
+        let source = root.join("source");
+        let target = root.join("target");
+        let market = root.join("market");
         for p in [&source, &target, &market] {
             std::fs::create_dir_all(p).unwrap();
         }

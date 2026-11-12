@@ -125,8 +125,10 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let directory = tempfile::tempdir().unwrap();
-        let source = directory.path().join(".codex");
-        let destination = directory.path().join(".codex-work");
+        // A identidade persistida é canônica; o nome curto de TEMP não é a chave da conta.
+        let root = hangar_core::fs::without_verbatim(std::fs::canonicalize(directory.path()).unwrap());
+        let source = root.join(".codex");
+        let destination = root.join(".codex-work");
         std::fs::create_dir(&source).unwrap();
         std::fs::create_dir(&destination).unwrap();
         Self {
