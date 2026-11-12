@@ -15,6 +15,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::{Notify, broadcast};
 
 use crate::side::Out;
+use crate::speech::history::transfer_history::LiveContext;
 use crate::transcript::{LineParser, Provider, SKIPPED_LINES};
 
 /// Linhas da cauda de quem conecta sem posição.
@@ -79,7 +80,7 @@ pub fn read_frames(
     parser: &mut LineParser,
     key: &str,
 ) -> std::io::Result<(Vec<Bytes>, u64)> {
-    read_frames_before(path, from, to, parser, key, None)
+    read_frames_before(path, from, to, parser, key, None, None)
 }
 
 fn read_frames_before(
@@ -89,12 +90,14 @@ fn read_frames_before(
     parser: &mut LineParser,
     key: &str,
     emit_before: Option<u64>,
+    transfer: Option<&LiveContext>,
 ) -> std::io::Result<(Vec<Bytes>, u64)> {
     let file = match File::open(path) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), from)),
         Err(e) => return Err(e),
     };
+    let filter=transfer.map(|context|context.filter(path)).transpose()?.flatten();
     let mut reader = BufReader::new(file);
     reader.seek(SeekFrom::Start(from))?;
     let mut frames = Vec::new();
@@ -107,6 +110,9 @@ fn read_frames_before(
         if n == 0 || line.last() != Some(&b'\n') {
             break;
         }
+        if let Some(filter)=&filter && !filter.includes(&line,at)? {
+            at+=n as u64;continue;
+        }
         // Pânico numa linha só pula a linha: sem isto o leitor compartilhado morria e os
         // aparelhos seguiam recebendo ping sem nenhuma mensagem nova.
         let evs = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parser.feed(&line, at))) {
@@ -117,7 +123,9 @@ fn read_frames_before(
                 Vec::new()
             }
         };
-        let evs = evs.into_iter().filter(|event| emit_before.is_none_or(|cut| event.offset.unwrap_or(at) < cut)).collect();
+        let evs = evs.into_iter().filter(|event| emit_before.is_none_or(|cut| event.offset.unwrap_or(at) < cut)).map(|mut event| {
+            if let Some(filter)=&filter {filter.decorate(&mut event);}event
+        }).collect();
         frames.extend(event_frames(evs, key, at)?);
         at += n as u64;
     }
@@ -218,7 +226,7 @@ fn seed_parser(path: &Path, parser: &mut LineParser, from: u64, to: u64, key: &s
 
 /// Cauda de UM aparelho, de onde ele pediu até `cut`, com parser próprio (cada leitor tem o seu).
 /// `resume` só vale com o stem desta sessão e dentro do arquivo; senão, as últimas 200 linhas.
-fn read_backfill(path: &Path, key: &str, provider: Provider, resume: Option<&str>, cut: u64)
+fn read_backfill(path: &Path, key: &str, provider: Provider, resume: Option<&str>, cut: u64, transfer:Option<&LiveContext>)
     -> std::io::Result<(Vec<Bytes>, LineParser, u64)> {
     let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
     let resumed = resume.and_then(|raw| {
@@ -237,12 +245,12 @@ fn read_backfill(path: &Path, key: &str, provider: Provider, resume: Option<&str
     if matches!(provider, Provider::Claude | Provider::ClaudeHeadless) {
         seed_parser(path, &mut parser, crate::transcript::turn_seed_start(path, start), start, key);
     }
-    let (frames, end) = read_frames(path, start, Some(cut), &mut parser, key)?;
+    let (frames, end) = read_frames_before(path, start, Some(cut), &mut parser, key, None, transfer)?;
     Ok((frames, parser, end))
 }
 
 pub fn backfill(path: &Path, key: &str, provider: Provider, resume: Option<&str>, cut: u64) -> Vec<Bytes> {
-    let read = read_backfill(path, key, provider, resume, cut).and_then(|(mut frames, mut parser, end)| {
+    let read = read_backfill(path, key, provider, resume, cut, None).and_then(|(mut frames, mut parser, end)| {
         frames.extend(event_frames(parser.flush(), key, end)?);
         Ok(frames)
     });
@@ -259,8 +267,15 @@ pub async fn backfill_guarded<F: std::future::Future<Output = ()>>(
     path: PathBuf, key: String, provider: Provider, resume: Option<String>, cut: u64,
     wait: impl FnOnce(Duration) -> F,
 ) -> Vec<Bytes> {
-    let (read_path, read_key) = (path.clone(), key.clone());
-    let read = tokio::task::spawn_blocking(move || read_backfill(&read_path, &read_key, provider, resume.as_deref(), cut)).await;
+    backfill_guarded_with_transfer(path,key,provider,resume,cut,wait,None).await
+}
+
+pub(crate) async fn backfill_guarded_with_transfer<F:std::future::Future<Output=()>>(
+    path:PathBuf,key:String,provider:Provider,resume:Option<String>,cut:u64,
+    wait:impl FnOnce(Duration)->F,transfer:Option<LiveContext>,
+)->Vec<Bytes> {
+    let (read_path, read_key, read_transfer) = (path.clone(), key.clone(), transfer.clone());
+    let read = tokio::task::spawn_blocking(move || read_backfill(&read_path, &read_key, provider, resume.as_deref(), cut,read_transfer.as_ref())).await;
     let (mut frames, mut parser, end) = match read {
         Ok(Ok(batch)) => batch,
         Ok(Err(error)) => {
@@ -278,7 +293,7 @@ pub async fn backfill_guarded<F: std::future::Future<Output = ()>>(
     let reread = tokio::task::spawn_blocking(move || {
         // A irmã pode chegar depois do corte. Só a mensagem anterior ao corte pertence à cauda;
         // as mensagens novas já estão no canal ao vivo que o aparelho assinou.
-        let (mut held, end) = read_frames_before(&path, end, None, &mut parser, &read_key, Some(cut))?;
+        let (mut held, end) = read_frames_before(&path, end, None, &mut parser, &read_key, Some(cut),transfer.as_ref())?;
         let pending = parser.flush().into_iter().filter(|event| event.offset.unwrap_or(end) < cut).collect();
         held.extend(event_frames(pending, &read_key, end)?);
         Ok::<_, std::io::Error>(held)
@@ -390,6 +405,7 @@ pub struct TailState {
     pos: Option<u64>,
     parser: LineParser,
     pending: Option<(u64, tokio::time::Instant)>,
+    transfer:Option<LiveContext>,
 }
 
 impl TailState {
@@ -441,7 +457,7 @@ impl TailState {
             let _ = tx.send(Out::Tail(self.generation, reset_frame()));
         }
         let from = self.pos.unwrap_or(0);
-        match read_frames(&self.path, from, None, &mut self.parser, &self.key) {
+        match read_frames_before(&self.path, from, None, &mut self.parser, &self.key, None,self.transfer.as_ref()) {
             Ok((frames, end)) => {
                 self.pos = Some(end);
                 for f in frames {
@@ -502,6 +518,10 @@ impl FileTail {
         watchers: Watchers,
         on_dead: OnDead,
     ) -> Arc<FileTail> {
+        Self::spawn_with_transfer(path,key,provider,generation,tx,watchers,on_dead,None)
+    }
+
+    pub(crate) fn spawn_with_transfer(path:PathBuf,key:String,provider:Provider,generation:u64,tx:broadcast::Sender<Out>,watchers:Watchers,on_dead:OnDead,transfer:Option<LiveContext>)->Arc<FileTail> {
         let state = Arc::new(tokio::sync::Mutex::new(TailState {
             path: path.clone(),
             key,
@@ -510,6 +530,7 @@ impl FileTail {
             pos: None,
             parser: LineParser::new(provider).with_path(&path).with_notices(),
             pending: None,
+            transfer,
         }));
         let task = tokio::spawn(run(path, state.clone(), tx, watchers, on_dead)).abort_handle();
         Arc::new(FileTail { state, task })
@@ -600,6 +621,47 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    #[tokio::test]
+    async fn transferred_tail_filters_imported_rows_and_keeps_composed_ids_in_backfill_and_live() {
+        use serde_json::{Value,json};
+        let dir=tempfile::tempdir().unwrap();let home=dir.path();let owner=home.join("account");
+        std::fs::create_dir_all(&owner).unwrap();
+        let path=owner.join("thread.jsonl");let id="51234567-89ab-4cde-8fab-0123456789ab";
+        let imported=json!({"type":"response_item","payload":{"id":"imported","type":"message","role":"user","content":[{"type":"input_text","text":"origem"}]}});
+        let prefix=format!("{}\n{imported}\n",json!({"type":"session_meta","payload":{"id":"thread"}}));
+        std::fs::write(&path,&prefix).unwrap();
+        let source=home.join("source.jsonl");std::fs::write(&source,b"{}\n").unwrap();
+        let record=json!({"id":id,"name":"session","phase":"complete","source":{"provider":"claude","path":source},
+            "destination_meta":{"codex_home":owner},"boundary":{"thread_id":"thread","rollout_path":path,"min_offset":prefix.len(),
+            "prefix_digest":hangar_conversation_transfer::digest(prefix.as_bytes()),"imported_item_ids":["imported"]}});
+        let base=home.join(".hangar/conversation-transfers");std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(base.join(format!("{id}.json")),record.to_string()).unwrap();
+        let sidecars=crate::runtime::codex_sidecar::dir(home);
+        crate::runtime::codex_sidecar::put(&sidecars,"session",json!({"name":"session","codex_home":owner,"thread_id":"thread","transfer_id":id}).as_object().unwrap()).unwrap();
+        let context=LiveContext{home:home.into(),name:"session".into()};
+        let first=json!({"type":"response_item","payload":{"id":"new","type":"function_call","name":"exec","call_id":"call-new","arguments":"{}"}});
+        let mut file=std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(file,"{imported}\n{first}").unwrap();
+        let cut=complete_end(&path).unwrap();
+        let frames=backfill_guarded_with_transfer(path.clone(),"thread".into(),Provider::Codex,None,cut,tokio::time::sleep,Some(context.clone())).await;
+        let decode=|frames:Vec<Bytes>|frames.into_iter().map(|frame| {
+            let text=std::str::from_utf8(&frame).unwrap();let data=text.lines().find_map(|line|line.strip_prefix("data: ")).unwrap();serde_json::from_str::<Value>(data).unwrap()
+        }).collect::<Vec<_>>();
+        let events=decode(frames);assert_eq!(events.len(),1);
+        assert!(events[0]["id"].as_str().unwrap().starts_with(&format!("transfer:{id}:codex:")));
+        assert_eq!(events[0]["tool_use_id"],format!("transfer:{id}:codex:call-new"));
+        let mut state=TailState{path:path.clone(),key:"thread".into(),provider:Provider::Codex,generation:1,pos:Some(cut),parser:LineParser::new(Provider::Codex),pending:None,transfer:Some(context)};
+        let (tx,mut rx)=broadcast::channel(8);
+        let output=json!({"type":"response_item","payload":{"type":"function_call_output","call_id":"call-new","output":"feito"}});
+        writeln!(file,"{imported}\n{output}").unwrap();
+        assert!(state.poll(&tx));
+        let mut live=Vec::new();while let Ok(Out::Tail(_,frame))=rx.try_recv(){live.push(frame);}
+        let events=decode(live);assert_eq!(events.len(),1);assert_eq!(events[0]["tool_use_id"],format!("transfer:{id}:codex:call-new"));
+        // A fronteira é conferida antes de publicar qualquer evento do lote, também após substituição.
+        let raw=std::fs::read(&path).unwrap();let mut changed=raw.clone();changed[0]=b' ';std::fs::write(&path,changed).unwrap();
+        assert!(!state.poll(&tx));assert!(rx.try_recv().is_err());
+    }
+
     #[test]
     fn pi_cut_keeps_the_pending_user_in_the_live_channel_only() {
         let dir = tempfile::tempdir().unwrap();
@@ -611,7 +673,7 @@ mod tests {
         let (frames, end) = read_frames(&path, 0, None, &mut parser, "k").unwrap();
         assert!(frames.is_empty());
         let mut state = TailState { path, key: "k".into(), provider: Provider::Pi, generation: 1,
-            pos: Some(end), parser, pending: None };
+            pos: Some(end), parser, pending: None, transfer:None };
         assert_eq!(state.cut().unwrap(), 0, "a cauda não repete a mensagem que o produtor ainda publicará");
         assert_eq!(state.pos, Some(end), "o cursor de leitura não volta");
         assert_eq!(state.parser.flush().len(), 1, "o produtor conserva sua mensagem");
@@ -716,6 +778,7 @@ mod tests {
             pos: None,
             parser: LineParser::new(provider),
             pending: None,
+            transfer:None,
         };
         st.cut().unwrap();
         // A regravação do `--resume`: as mesmas linhas com uuid novo e o relógio original.
@@ -769,6 +832,7 @@ mod tests {
             pos: None,
             parser: LineParser::new(Provider::Claude),
             pending: None,
+            transfer:None,
         };
         let (tx, mut rx) = broadcast::channel(64);
         st.poll(&tx);

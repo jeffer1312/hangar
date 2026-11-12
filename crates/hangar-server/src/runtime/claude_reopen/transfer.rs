@@ -392,29 +392,45 @@ impl RuntimeRegistry {
             .map_err(|_| error("session_transfer_source_changed"))
     }
     pub(crate) async fn transfer_blocked(&self, name: &str) -> bool {
+        let records = match store(&self.codex_environment().home).incomplete_for_session(name) {
+            Ok(records) => records,
+            Err(failure) => {
+                tracing::warn!(session=%name,code=%failure.code,"registros desta transferência não puderam ser lidos");
+                return true;
+            }
+        };
+        if records.is_empty() {
+            return false;
+        }
         let key = match self.transfer_key(name).await {
             Ok(key) => key,
             Err(_) => return true,
         };
-        match store(&self.codex_environment().home).list_incomplete() {
-            Ok(records) => records.iter().any(|r| {
-                r.name == name && key.as_ref().is_none_or(|key| r.origin_meta["key"] == *key)
-            }),
-            Err(_) => true,
-        }
+        records
+            .iter()
+            .any(|r| key.as_ref().is_none_or(|key| r.origin_meta["key"] == *key))
     }
     pub(crate) async fn pending_transfer_lives(
         &self,
     ) -> Result<HashMap<String, String>, TransferError> {
         let mut lives = HashMap::new();
-        for record in store(&self.codex_environment().home).list_incomplete()? {
-            if self
-                .transfer_key(&record.name)
-                .await?
-                .as_ref()
-                .is_none_or(|key| record.origin_meta["key"] == *key)
-            {
-                lives.insert(record.name, record.source_life);
+        let scan = store(&self.codex_environment().home).scan_incomplete()?;
+        for id in scan.invalid_ids {
+            tracing::warn!(transfer=%id,code="session_transfer_invalid_record","registro inválido excluído dos fatos de outras sessões");
+        }
+        for record in scan.records {
+            match self.transfer_key(&record.name).await {
+                Ok(key)
+                    if key
+                        .as_ref()
+                        .is_none_or(|key| record.origin_meta["key"] == *key) =>
+                {
+                    lives.insert(record.name, record.source_life);
+                }
+                Ok(_) => {}
+                Err(failure) => {
+                    tracing::warn!(transfer=%record.id,session=%record.name,code=%failure.code,"identidade da transferência não pôde ser conferida")
+                }
             }
         }
         Ok(lives)
@@ -579,7 +595,13 @@ impl RuntimeRegistry {
             Ok(json!({"ok":true,"provider":"codex","conta":request.credential_id,"model":prepared.model,"effort":prepared.effort,"transfer_id":record.id}))
         }.await;
         if let Err(cause) = outcome {
-            record = store.load(&record.id)?.unwrap_or(record);
+            record = match store.load(&record.id) {
+                Ok(saved) => saved.unwrap_or(record),
+                Err(failure) => {
+                    tracing::warn!(transfer=%record.id,code=%failure.code,"registro não pôde ser relido; restauração usa a etapa confirmada em memória");
+                    record
+                }
+            };
             record.error_code = Some(cause.code.clone());
             self.restore_transfer_record(store, &mut record).await?;
             return Err(cause);
@@ -622,9 +644,12 @@ impl RuntimeRegistry {
 
     pub(crate) async fn recover_transfers(&self) {
         let store = store(&self.codex_environment().home);
-        match store.list_incomplete() {
-            Ok(records) => {
-                for record in records {
+        match store.scan_incomplete() {
+            Ok(scan) => {
+                for id in scan.invalid_ids {
+                    tracing::warn!(transfer=%id,code="session_transfer_invalid_record","registro inválido não pôde ser recuperado");
+                }
+                for record in scan.records {
                     if let Err(e) = self.recover_transfer(record).await {
                         tracing::warn!(code=%e.code,"transferência interrompida não pôde ser recuperada");
                     }
@@ -670,17 +695,23 @@ impl RuntimeRegistry {
         record: &mut TransferRecord,
     ) -> Result<(), TransferError> {
         record.phase = TransferPhase::Restoring;
-        store.save(record)?;
+        if let Err(failure) = store.save_recovery(record) {
+            // E/S indisponível não impede tentar salvar a origem; identidade divergente, sim.
+            if failure.code != "session_transfer_history_invalid" {
+                return Err(failure);
+            }
+            tracing::warn!(transfer=%record.id,code=%failure.code,cause=?record.error_code,"etapa de restauração não gravada; origem ainda será recuperada");
+        }
         let restored = self.restore_transfer_inner(store, record).await;
         match restored {
             Ok(()) => {
                 record.phase = TransferPhase::RolledBack;
-                store.save(record)
+                store.save_recovery(record)
             }
             Err(cause) => {
                 record.phase = TransferPhase::RestoreFailed;
                 record.error_code = Some(cause.code.clone());
-                store.save(record)?;
+                store.save_recovery(record)?;
                 Err(error("session_transfer_restore_failed")
                     .with_params(json!({"phase":cause.code})))
             }
@@ -746,10 +777,10 @@ impl RuntimeRegistry {
         {
             return Err(error("session_transfer_source_changed"));
         }
-        if let Some(meta) = super::super::codex_sidecar::load(&super::super::codex_sidecar::path(
+        if let Some(meta) = super::super::codex_sidecar::read(&super::super::codex_sidecar::path(
             &super::super::codex_sidecar::dir(&env.home),
             name,
-        )) {
+        )).map_err(|_| error("session_transfer_import_cleanup_unconfirmed"))? {
             if meta.get("transfer_id").and_then(Value::as_str) != Some(&record.id) {
                 return Err(error("session_transfer_source_changed"));
             }
@@ -776,7 +807,7 @@ impl RuntimeRegistry {
             .ok_or_else(|| error("session_transfer_invalid_record"))?
             .to_owned();
         // Uma parada recusada conserva a origem viva: não abre outra por cima dela.
-        if let Ok(current) = self.claude_current(name, BusyCheck::Refuse, false).await {
+        if let Ok(current) = self.claude_current(name, BusyCheck::Skip, false).await {
             if current.spec.key != spec.key || current.sid != sid {
                 return Err(error("session_transfer_source_changed"));
             }
@@ -945,6 +976,57 @@ mod tests {
             TransferPhase::RestoreFailed
         );
         assert!(runtime.list_snapshots_readonly().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn corrupt_transfer_is_local_and_does_not_prevent_other_recoveries() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let env = crate::accounts::environment::AccountEnvironment::from_map(
+            [("HOME".into(), home.to_string_lossy().into_owned())].into(),
+        );
+        let runtime = RuntimeRegistry::new(
+            "127.0.0.1:9".parse().unwrap(),
+            "fixture".into(),
+            "fixture".into(),
+        )
+        .with_codex_environment(env);
+        let store = store(home);
+        let record = |id: &str, name: &str| TransferRecord {
+            id: id.into(),
+            name: name.into(),
+            source_life: "k:key".into(),
+            phase: TransferPhase::SourceStopped,
+            source: None,
+            origin_meta: json!({"key":"key"}),
+            destination_meta: None,
+            boundary: None,
+            error_code: None,
+        };
+        let broken = record("21234567-89ab-4cde-8fab-0123456789ab", "broken");
+        let healthy = record("31234567-89ab-4cde-8fab-0123456789ab", "recoverable");
+        store.save(&broken).unwrap();
+        store.save(&healthy).unwrap();
+        store
+            .write_runtime(&healthy.id, &json!({"import_launching":true}))
+            .unwrap();
+        std::fs::write(
+            home.join(format!(".hangar/conversation-transfers/{}.json", broken.id)),
+            b"{",
+        )
+        .unwrap();
+        assert!(runtime.transfer_blocked("broken").await);
+        assert!(!runtime.transfer_blocked("unrelated").await);
+        let lives = runtime.pending_transfer_lives().await.unwrap();
+        assert_eq!(lives.get("recoverable").map(String::as_str), Some("k:key"));
+        assert!(!lives.contains_key("broken"));
+        runtime.recover_transfers().await;
+        assert_eq!(
+            store.load(&healthy.id).unwrap().unwrap().phase,
+            TransferPhase::RestoreFailed
+        );
+        assert!(runtime.ingress().held("recoverable"));
+        assert!(!runtime.transfer_blocked("unrelated").await);
     }
 
     #[test]

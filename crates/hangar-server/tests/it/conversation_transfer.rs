@@ -102,7 +102,8 @@ done
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn transfer_route_publishes_imported_thread_and_restores_source_on_import_failure() {
     crate::use_cano_bin();
-    for fail in [false, true] {
+    // O rollback do terminal reutiliza a fixture do ciclo de vida; o destino feliz usa o cano.
+    for (terminal, fail) in [(false, false), (false, true), (true, true)] {
         let fx = fixture();
         let key = "d4".repeat(16);
         let env = transfer_programs(&fx);
@@ -119,12 +120,18 @@ async fn transfer_route_publishes_imported_thread_and_restores_source_on_import_
             json!({"type":"user","uuid":"original-u","parentUuid":null,"message":{"role":"user","content":"Mensagem original integral."}})
         );
         std::fs::write(&source, &original).unwrap();
-        fx.put_sidecar(json!({"name":"s1","provider":"claude","headless":true,"key":key,"cwd":fx.cwd,"session_id":SID,"permission_mode":"acceptEdits","cano":null}));
+        if terminal {
+            terminal_with_spec(&fx, &key);
+        } else {
+            fx.put_sidecar(json!({"name":"s1","provider":"claude","headless":true,"key":key,"cwd":fx.cwd,"session_id":SID,"permission_mode":"acceptEdits","cano":null}));
+        }
+        let original_agent = fx.agent();
         if fail {
             std::fs::write(fx.home.join(".codex/fail-import"), "").unwrap();
         }
         let registry = crate::runtime_open::registry_with(|r| {
             r.with_codex_environment(env.clone())
+                .with_terms(Arc::new(hangar_server::term::Terms::default()))
                 .with_processes(Arc::new(hangar_server::list::procs::SystemProcs::default()))
         })
         .await;
@@ -137,6 +144,13 @@ async fn transfer_route_publishes_imported_thread_and_restores_source_on_import_
             })
             .with_scope_probe(Vec::new),
         ));
+        if terminal {
+            registry
+                .adopt_claude_terminal("s1")
+                .await
+                .map_err(|error| error.code)
+                .unwrap();
+        }
         let (python, upstream) = crate::fake::spawn_fake().await;
         let mut state =
             hangar_server::routes::AppState::new(crate::fake::config(upstream, "127.0.0.1"));
@@ -172,10 +186,23 @@ async fn transfer_route_publishes_imported_thread_and_restores_source_on_import_
                 "session_transfer_native_import_failed"
             );
             assert_eq!(record.phase, TransferPhase::RolledBack);
-            let meta: Value =
-                serde_json::from_slice(&std::fs::read(fx.sidecar_path("s1")).unwrap()).unwrap();
-            assert_eq!(meta["session_id"], SID);
-            assert!(meta["cano"]["pid"].as_u64().is_some());
+            if terminal {
+                assert!(!fx.sidecar_path("s1").exists());
+                let restored = fx.agent().expect("o terminal original voltou");
+                assert_ne!(Some(restored), original_agent);
+                let native: Value = serde_json::from_slice(
+                    &std::fs::read(fx.home.join(format!(".claude/sessions/{restored}.json")))
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(native["sessionId"], SID);
+                assert_eq!(registry.terminal_view("s1").await.unwrap().0, key);
+            } else {
+                let meta: Value =
+                    serde_json::from_slice(&std::fs::read(fx.sidecar_path("s1")).unwrap()).unwrap();
+                assert_eq!(meta["session_id"], SID);
+                assert!(meta["cano"]["pid"].as_u64().is_some());
+            }
         } else {
             assert_eq!(status, 200, "{body}");
             assert_eq!(body["provider"], "codex");
@@ -194,5 +221,6 @@ async fn transfer_route_publishes_imported_thread_and_restores_source_on_import_
             .bearer_auth(crate::fake::OWNER)
             .send()
             .await;
+        fx.finish();
     }
 }

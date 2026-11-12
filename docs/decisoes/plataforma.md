@@ -21,6 +21,12 @@ reserva nem ponte Python dessa responsabilidade. Os testes permanentes concentra
 integridade, identidade, capacidade e persistência; capturas diferenciais temporárias não
 fazem parte do repositório. Não se alega ganho de desempenho.
 
+A confirmação de entrega Codex deixa a reserva Python: texto antigo importado não pode confirmar
+uma mensagem nova. O stream e o backfill Rust excluem a fronteira e os IDs importados e usam o
+namespace do histórico composto. Registro inválido fica isolado à sua sessão; a recuperação
+registra os inválidos e continua nos registros legíveis. Uma restauração conhecida conserva o
+registro corrompido antes de regravar, e nunca sobrescreve outra identidade.
+
 ## Armazenamento das provas de orquestração
 
 A issue #242 relatou centenas de GB de builds e caches dentro do histórico durável das

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import api, runtime_coordinator, sse
+from app import api, runtime_coordinator
 
 
 class Owner:
@@ -103,7 +103,7 @@ def test_send_without_rust_answer_is_uncertain_not_failed(monkeypatch):
     assert result["error"] is None and result["entry_id"] == owner.calls[0][1]
 
 
-@pytest.mark.parametrize("source", ["hook", "drain_session", "turn_end", "codex_confirm"])
+@pytest.mark.parametrize("source", ["hook", "drain_session", "turn_end"])
 def test_background_producers_reach_owner(monkeypatch, source):
     owner = Owner()
     monkeypatch.setattr(runtime_coordinator, "_current", owner)
@@ -111,16 +111,14 @@ def test_background_producers_reach_owner(monkeypatch, source):
     monkeypatch.setattr(api.PromptQueue, "load", lambda *args: pytest.fail("confirmação por texto antigo"))
     async def scenario():
         owner.loop = asyncio.get_running_loop()
-        if source == "codex_confirm":
-            await asyncio.to_thread(sse._confirm_codex_queue, "session", "chat")
-        elif source == "turn_end":
+        if source == "turn_end":
             await asyncio.to_thread(api._confirm_and_drain, "session")
         elif source == "drain_session":
             await asyncio.to_thread(api._drain_session, "session")
         else:
             await asyncio.to_thread(api._drenar, "session", "chat", "claude")
     asyncio.run(scenario())
-    assert [call[0]["kind"] for call in owner.calls] == (["confirm", "drain"] if source == "turn_end" else ["confirm"] if source == "codex_confirm" else ["drain"])
+    assert [call[0]["kind"] for call in owner.calls] == (["confirm", "drain"] if source == "turn_end" else ["drain"])
 
 
 def test_ownership_moving_never_breaks_stream_worker_or_route(monkeypatch):
@@ -133,7 +131,6 @@ def test_ownership_moving_never_breaks_stream_worker_or_route(monkeypatch):
     monkeypatch.setattr(runtime_coordinator, "_current", owner)
     async def scenario():
         owner.loop = asyncio.get_running_loop()
-        assert await asyncio.to_thread(sse._confirm_codex_queue, "session", "chat") is None
         assert await asyncio.to_thread(api._drenar, "session", "chat", "codex") == 0
     asyncio.run(scenario())
     response = asyncio.run(api._ownership_moving(None, runtime_coordinator.TransferInProgress("x")))

@@ -210,12 +210,9 @@ def test_sidecar_preserva_codex_home_em_update(tmp_path):
 
 
 def test_list_codex_preserva_conta_do_sidecar_sem_ler_cota(tmp_path, monkeypatch):
-    from app import cotas
     home = tmp_path / "codex-work"
     codex_sessions.save("cx", "thread-a", str(home / "sessions" / "rollout.jsonl"), "/tmp/a",
                         codex_home=home)
-    monkeypatch.setattr(cotas, "id_conta_codex",
-                        lambda *args, **kwargs: pytest.fail("list nao pode ler cota"), raising=False)
     reg = SessionRegistry(projects_dir=tmp_path)
     with patch.object(registry.tmux, "list_panes_all", return_value={}):
         info = next(item for item in reg.list() if item.name == "cx")

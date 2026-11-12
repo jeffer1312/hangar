@@ -95,6 +95,12 @@ pub struct TransferRecord {
 pub struct Store {
     base: PathBuf,
 }
+
+#[derive(Debug, Default)]
+pub struct IncompleteScan {
+    pub records: Vec<TransferRecord>,
+    pub invalid_ids: Vec<String>,
+}
 impl Store {
     pub fn new(base: PathBuf) -> Self {
         Self { base }
@@ -109,27 +115,7 @@ impl Store {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e.into()),
         };
-        let value: Value = serde_json::from_slice(&raw)?;
-        let fields = [
-            "id",
-            "name",
-            "source_life",
-            "phase",
-            "source",
-            "origin_meta",
-            "destination_meta",
-            "boundary",
-            "error_code",
-        ];
-        let object = value.as_object().ok_or_else(invalid)?;
-        if object.len() != fields.len() || fields.iter().any(|field| !object.contains_key(*field)) {
-            return Err(invalid());
-        }
-        let mut record: TransferRecord = serde_json::from_value(value)?;
-        record.validate()?;
-        if record.id != id {
-            return Err(invalid());
-        }
+        let record = decode_record(&raw, &id)?;
         Ok(Some(record))
     }
     pub fn save(&self, record: &TransferRecord) -> Result<()> {
@@ -160,6 +146,55 @@ impl Store {
         }
         self.save_locked(&record)
     }
+    /// Recupera apenas a operação já conhecida pelo coordenador, preservando o arquivo inválido.
+    /// Erro de leitura ou identidade divergente nunca autoriza substituir o registro.
+    pub fn save_recovery(&self, record: &TransferRecord) -> Result<()> {
+        let mut record = record.clone();
+        record.validate()?;
+        if !matches!(
+            record.phase,
+            TransferPhase::Restoring | TransferPhase::RestoreFailed | TransferPhase::RolledBack
+        ) || !record.origin_meta["key"]
+            .as_str()
+            .is_some_and(|key| !key.is_empty())
+        {
+            return Err(invalid());
+        }
+        let _lock = self.lock()?;
+        let path = self.base.join(format!("{}.json", record.id));
+        let raw = match hangar_core::fs::read_replaced(&path) {
+            Ok(raw) => Some(raw),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
+        if let Some(raw) = raw {
+            // Mesmo um esquema incompleto pode provar que o arquivo já pertence a outra operação.
+            if let Ok(value) = serde_json::from_slice::<Value>(&raw) {
+                for (actual, expected) in [
+                    (&value["id"], json!(record.id)),
+                    (&value["name"], json!(record.name)),
+                    (&value["source_life"], json!(record.source_life)),
+                    (
+                        &value["origin_meta"]["key"],
+                        record.origin_meta["key"].clone(),
+                    ),
+                ] {
+                    if !actual.is_null() && actual != &expected {
+                        return Err(invalid());
+                    }
+                }
+            }
+            if decode_record(&raw, &record.id).is_err() {
+                let quarantine =
+                    self.base
+                        .join("invalid")
+                        .join(format!("{}-{}.json", record.id, digest(&raw)));
+                write_bytes(&quarantine, &raw)?;
+            }
+        }
+        self.save_locked(&record)
+    }
+
     pub fn capture_snapshot(
         &self,
         record: &TransferRecord,
@@ -241,11 +276,12 @@ impl Store {
         for id in self.index_ids("session", name)?.into_iter().rev() {
             if let Some(record) = self.load(&id)? {
                 if record.name == name {
-                    let association = if parked && !record.phase.terminal() {
-                        Some(record.source_life.as_str())
-                    } else {
-                        life
-                    };
+                    let association =
+                        if parked && life.is_none() && meta.is_none() && !record.phase.terminal() {
+                            Some(record.source_life.as_str())
+                        } else {
+                            life
+                        };
                     if record.belongs(association, meta, source_path) {
                         return Ok(Some(record));
                     }
@@ -254,10 +290,34 @@ impl Store {
         }
         Ok(None)
     }
+    /// Consulta só o índice da sessão; corrupção de outra conversa não bloqueia esta.
+    pub fn incomplete_for_session(&self, name: &str) -> Result<Vec<TransferRecord>> {
+        let mut records = Vec::new();
+        for id in self.index_ids("session", name)? {
+            if let Some(record) = self.load(&id)? {
+                if record.name == name && !record.phase.terminal() {
+                    records.push(record);
+                }
+            }
+        }
+        Ok(records)
+    }
+
     pub fn list_incomplete(&self) -> Result<Vec<TransferRecord>> {
+        let scan = self.scan_incomplete()?;
+        if !scan.invalid_ids.is_empty() {
+            return Err(invalid());
+        }
+        Ok(scan.records)
+    }
+
+    /// A recuperação recebe os registros válidos e a identidade de cada arquivo recusado.
+    pub fn scan_incomplete(&self) -> Result<IncompleteScan> {
         let entries = match std::fs::read_dir(&self.base) {
             Ok(v) => v,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(IncompleteScan::default());
+            }
             Err(e) => return Err(e.into()),
         };
         let mut paths = Vec::new();
@@ -268,19 +328,19 @@ impl Store {
             }
         }
         paths.sort();
-        let mut records = Vec::new();
+        let mut scan = IncompleteScan::default();
         for path in paths {
-            if let Some(record) = self.load(
-                path.file_stem()
-                    .and_then(|s| s.to_str())
-                    .ok_or_else(invalid)?,
-            )? {
-                if !record.phase.terminal() {
-                    records.push(record);
-                }
+            let id = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .ok_or_else(invalid)?;
+            match self.load(&id) {
+                Ok(Some(record)) if !record.phase.terminal() => scan.records.push(record),
+                Ok(_) => {}
+                Err(_) => scan.invalid_ids.push(id),
             }
         }
-        Ok(records)
+        Ok(scan)
     }
     pub fn runtime(&self, id: &str) -> Result<Value> {
         Ok(serde_json::from_slice(&hangar_core::fs::read_replaced(
@@ -618,4 +678,29 @@ fn resolve(path: &Path) -> PathBuf {
         }
     }
     result
+}
+
+fn decode_record(raw: &[u8], id: &str) -> Result<TransferRecord> {
+    let value: Value = serde_json::from_slice(raw)?;
+    let fields = [
+        "id",
+        "name",
+        "source_life",
+        "phase",
+        "source",
+        "origin_meta",
+        "destination_meta",
+        "boundary",
+        "error_code",
+    ];
+    let object = value.as_object().ok_or_else(invalid)?;
+    if object.len() != fields.len() || fields.iter().any(|field| !object.contains_key(*field)) {
+        return Err(invalid());
+    }
+    let mut record: TransferRecord = serde_json::from_value(value)?;
+    record.validate()?;
+    if record.id != id {
+        return Err(invalid());
+    }
+    Ok(record)
 }

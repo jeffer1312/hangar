@@ -113,6 +113,22 @@ fn transfer_conversion_rejects_partial_invalid_and_duplicate_json_without_splitt
     ] {
         assert_eq!(convert_bytes(raw).unwrap_err().code, code);
     }
+    for (open, close) in [("[", "]"), ("{\"nested\":", "}")] {
+        let raw = format!("{}0{}\n", open.repeat(10000), close.repeat(10000));
+        assert_eq!(
+            convert_bytes(raw.as_bytes()).unwrap_err().code,
+            "session_transfer_invalid_source_json"
+        );
+    }
+    let brackets = "[{}]\\\"".repeat(200);
+    let raw = format!(
+        "{}\n",
+        json!({"type":"user","uuid":"brackets","parentUuid":null,"message":{"role":"user","content":brackets}})
+    );
+    assert_eq!(
+        convert_bytes(raw.as_bytes()).unwrap().items[0]["content"][0]["text"],
+        brackets
+    );
     for separator in ['\u{2028}', '\u{2029}', '\u{85}'] {
         let content = format!("antes{separator}depois");
         let raw = format!(
@@ -213,6 +229,42 @@ fn transfer_store_keeps_snapshot_private_and_rejects_corruption_or_stale_identit
     assert!(verify_source(source).is_err());
     std::fs::write(store.base().join(format!("{}.json", r.id)), b"null").unwrap();
     assert!(store.load(&r.id).is_err());
+    let mut healthy = r.clone();
+    healthy.id = "00000000-0000-4000-8000-000000000002".into();
+    healthy.name = "healthy".into();
+    store.save(&healthy).unwrap();
+    assert_eq!(
+        store.incomplete_for_session("healthy").unwrap(),
+        vec![healthy.clone()]
+    );
+    assert!(store.incomplete_for_session(&r.name).is_err());
+    assert!(
+        store
+            .incomplete_for_session("unrelated")
+            .unwrap()
+            .is_empty()
+    );
+    let scan = store.scan_incomplete().unwrap();
+    assert_eq!(scan.records, vec![healthy]);
+    assert_eq!(scan.invalid_ids, vec![r.id.clone()]);
+    assert!(store.list_incomplete().is_err());
+    let mut recovery = r.clone();
+    recovery.phase = TransferPhase::Restoring;
+    store.save_recovery(&recovery).unwrap();
+    assert_eq!(store.load(&r.id).unwrap(), Some(recovery.clone()));
+    let preserved = store
+        .base()
+        .join("invalid")
+        .join(format!("{}-{}.json", r.id, digest(b"null")));
+    assert_eq!(std::fs::read(preserved).unwrap(), b"null");
+    let mut other = recovery.clone();
+    other.origin_meta["key"] = json!("another-life");
+    assert!(store.save_recovery(&other).is_err());
+    let record_path = store.base().join(format!("{}.json", r.id));
+    std::fs::remove_file(&record_path).unwrap();
+    std::fs::create_dir(&record_path).unwrap();
+    assert!(store.save_recovery(&recovery).is_err());
+    assert!(record_path.is_dir());
 }
 
 #[test]
@@ -241,6 +293,24 @@ fn transfer_store_association_survives_close_but_not_name_reuse_or_clear() {
                 None,
                 Some(Path::new("/tmp/different.jsonl")),
                 false
+            )
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .for_session(&r.name, Some("k:new"), None, None, true)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .for_session(
+                &r.name,
+                None,
+                Some(&json!({"session_id":"other"})),
+                None,
+                true
             )
             .unwrap()
             .is_none()

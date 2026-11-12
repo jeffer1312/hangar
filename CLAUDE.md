@@ -794,6 +794,9 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
     `accounts/codex-invalidate`, `migration/status` e `ping`.
     Transcrição e organização do ditado leem a configuração efetiva diretamente no Rust.
   - Partes ainda no Python: runners.
+  - Confirmação de entregas Codex: somente Rust; a reserva Python não confirma mensagens pelo
+    texto do rollout, que pode conter histórico importado. O SSE Rust aplica a mesma fronteira
+    e os mesmos identificadores compostos do histórico transferido.
   - Mods (`press`/`close`/`show`/`input`), `~/.hangar/plugin.json` e `plugin-dir` publicados na
     subida e o download dos preços do models.dev: nada; são do Rust (`mods/`,
     `config_sync/plugin_publish.rs`, `costs/pricing_refresh.rs`).

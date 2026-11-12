@@ -3,93 +3,13 @@ import json
 
 import pytest
 
-from app import pqueue, sse
-from app.models import ChatEvent
+from app import pqueue
 
 
-@pytest.mark.parametrize("reconnect", [False, True])
-async def test_codex_confirms_rollout_before_replaying_queue(tmp_path, monkeypatch, reconnect):
-    monkeypatch.setattr(pqueue, "_queue_dir", lambda: tmp_path)
-    queue = pqueue.PromptQueue("codex-queue")
-    queue.append("[de: outra] orientação", delivered=True)
-    queue.append("ainda aguardando", delivered=False)
-    queue.append("RPC aceito, ainda sem escrita", delivered=True)
-    path = tmp_path / "rollout.jsonl"
-    path.write_text("")
-
-    def commit():
-        path.write_text(json.dumps({"type": "response_item", "payload": {
-            "type": "message", "role": "user", "id": "real",
-            "content": [{"type": "input_text", "text": "[de: outra] orientação"}],
-        }}) + "\n")
-
-    class Adapter:
-        async def transcript_stream(self, path, start_offset=None):
-            if not reconnect:
-                commit()
-            yield ChatEvent(kind="user_msg", id="real", text="[de: outra] orientação")
-
-        async def state_monitor(self, name, sid_get):
-            if False:
-                yield
-
-    if reconnect:
-        commit()
-    monkeypatch.setattr(sse, "get_adapter", lambda _: Adapter())
-
-    async def follow(self, min_ts=0, emit_confirmed=False):
-        if reconnect:
-            assert self.load()[0]["confirmed"] is True
-            yield ChatEvent(kind="user_msg", id="queued-old", queued_confirmed=True)
-        await asyncio.Event().wait()
-
-    monkeypatch.setattr(pqueue.PromptQueue, "follow", follow)
-    stream = sse.merged_events("codex-queue", str(path), provider="codex", start_offset=0)
-    received = set()
-    try:
-        async with asyncio.timeout(3):
-            async for event in stream:
-                if event["event"] == "queue_confirmed":
-                    assert json.loads(event["data"])["id"] == "queued-old"
-                    received.add("queue_confirmed")
-                if event["event"] == "message":
-                    assert json.loads(event["data"])["id"] == "real"
-                    received.add("message")
-                if received == ({"message", "queue_confirmed"} if reconnect else {"message"}):
-                    break
-    finally:
-        await stream.aclose()
-    rows = queue.load()
-    assert rows[0]["confirmed"] is True
-    assert rows[1]["delivered"] is False and not rows[1].get("confirmed")
-    assert rows[2]["delivered"] is True and not rows[2].get("confirmed")
-    assert not any(row.get("attempts") or row.get("desistiu") for row in rows)
 
 
-def test_unreadable_rollout_preserves_queue(tmp_path, monkeypatch):
-    monkeypatch.setattr(pqueue, "_queue_dir", lambda: tmp_path)
-    queue = pqueue.PromptQueue("codex-queue")
-    queue.append("entregue", delivered=True)
-    before = queue.path.read_bytes()
-    sse._confirm_codex_queue("codex-queue", str(tmp_path / "missing.jsonl"))
-    assert queue.path.read_bytes() == before
 
 
-def test_rust_owned_codex_queue_is_never_written_by_python(tmp_path, monkeypatch):
-    # A projeção é do Rust: com ele dono do Codex com terminal, o Python não confirma nem reconcilia.
-    from types import SimpleNamespace
-    from app import runtime_coordinator
-    monkeypatch.setattr(pqueue, "_queue_dir", lambda: tmp_path)
-    queue = pqueue.PromptQueue("codex-queue")
-    queue.append("[de: outra] orientação", delivered=True)
-    path = tmp_path / "rollout.jsonl"
-    path.write_text(json.dumps({"type": "response_item", "payload": {"type": "message", "role": "user", "id": "real",
-        "content": [{"type": "input_text", "text": "[de: outra] orientação"}]}}) + "\n")
-    before = queue.path.read_bytes()
-    owner = SimpleNamespace(mode="rust", managed_runtime=lambda name: False, rust_owns=lambda provider, headless: True)
-    monkeypatch.setattr(runtime_coordinator, "_current", owner)
-    sse._confirm_codex_queue("codex-queue", str(path))
-    assert queue.path.read_bytes() == before
 
 
 async def test_api_reserves_uncertain_codex_send_before_rpc_and_never_replays(tmp_path, monkeypatch):
@@ -147,25 +67,6 @@ async def test_cancelled_codex_send_keeps_reserved_entry(tmp_path, monkeypatch):
     assert pqueue.PromptQueue("cancelled-send").load()[0]["delivered"] is True
 
 
-def test_idle_codex_confirmation_does_not_release_unproved_entry(tmp_path, monkeypatch):
-    from types import SimpleNamespace
-    from app import api, runtime_coordinator
-
-    monkeypatch.setattr(runtime_coordinator, "_current", None)
-    monkeypatch.setattr(pqueue, "_queue_dir", lambda: tmp_path)
-    queue = pqueue.PromptQueue("idle-codex")
-    entry = queue.append("RPC sem confirmação", delivered=True, ts=100)
-    path = tmp_path / "rollout.jsonl"
-    path.write_text('{"type":"session_meta","payload":{"id":"thread"},"timestamp":"1970-01-01T00:00:00Z"}\n')
-    monkeypatch.setattr(api, "_cached_info_sync", lambda _: SimpleNamespace(jsonl=str(path), provider="codex"))
-    monkeypatch.setattr(api, "_headless", lambda _: False)
-    monkeypatch.setattr(api.hook_state, "get_state", lambda _: ("idle", 100))
-    monkeypatch.setattr(api, "_agendar_confirmacao", lambda *args: None)
-    monkeypatch.setattr(api, "_drenar", lambda *args: pytest.fail("uma confirmação não pode reenviar"))
-    api._confirm_and_drain("idle-codex")
-    row = queue.load()[0]
-    assert row["id"] == entry["id"] and row["delivered"] is True
-    assert not row.get("confirmed") and not row.get("attempts") and not row.get("desistiu")
 
 
 def test_confirm_and_drain_never_writes_the_projection_of_a_rust_codex_terminal(tmp_path, monkeypatch):

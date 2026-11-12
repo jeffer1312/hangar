@@ -1078,7 +1078,7 @@ def _confirm_and_drain(name: str) -> None:
         if not info or not info.jsonl:
             return
         # Fila e confirmação do Codex com terminal são do Rust: gravar na projeção dele seria um segundo escritor.
-        if info.provider == "codex" and not info.headless and runtime_coordinator.rust_owns_codex_terminal():
+        if info.provider == "codex" and not info.headless:
             return
         # MID-TURN o prompt entregue ainda pode nao ter virado entrada no transcript (vive na fila
         # interna do Claude Code) — decidir requeue agora arriscaria redigitar mensagem ja recebida.
@@ -2078,7 +2078,17 @@ async def _send_one_codex(name: str, text: str, *, track_entry: bool = False) ->
 
 
 async def _enviar(name: str, text: str) -> dict:
+    operation = asyncio.create_task(_send_available(name, text))
+    try:
+        return await asyncio.shield(operation)
+    except asyncio.CancelledError:
+        try:
+            await operation
+        finally:
+            raise
 
+
+async def _send_available(name: str, text: str) -> dict:
     """Envio comum ramificado por transporte (Codex, Claude sem terminal, pane) — a mesma esteira
     do /input pra quem manda por fora dele (broadcast, grupo, par, orquestração). Nunca levanta."""
     if _provider_of(name) == "codex":

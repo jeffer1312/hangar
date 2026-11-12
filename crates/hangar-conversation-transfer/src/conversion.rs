@@ -612,6 +612,31 @@ fn attachment(payload: &Value) -> Result<Vec<Value>> {
 // A leitura em RawValue conserva inteiros arbitrários e permite recusar chaves repetidas antes
 // de construir Value, que por si só conservaria apenas a última ocorrência.
 fn unique_json(text: &str) -> Result<Value> {
+    // Cada RawValue ganha um desserializador novo; o limite precisa valer para a linha inteira.
+    let (mut depth, mut quoted, mut escaped) = (0usize, false, false);
+    for byte in text.bytes() {
+        if quoted {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                quoted = false;
+            }
+        } else {
+            match byte {
+                b'"' => quoted = true,
+                b'{' | b'[' => {
+                    depth += 1;
+                    if depth > 128 {
+                        return Err(TransferError::new("session_transfer_invalid_source_json"));
+                    }
+                }
+                b'}' | b']' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+    }
     fn validate(raw: &serde_json::value::RawValue) -> std::result::Result<(), String> {
         let text = raw.get().trim_start();
         if text.starts_with('{') {

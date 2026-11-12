@@ -11,6 +11,6 @@ pub use conversion::{
 };
 pub use error::TransferError;
 pub use store::{
-    ConversationSource, ImportBoundary, Store, TransferPhase, TransferRecord, canonical_id, digest,
-    map_permission, prepare_origin, verify_source,
+    ConversationSource, ImportBoundary, IncompleteScan, Store, TransferPhase, TransferRecord,
+    canonical_id, digest, map_permission, prepare_origin, verify_source,
 };

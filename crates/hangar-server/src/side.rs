@@ -448,13 +448,19 @@ impl From<Bytes> for Queued {
     }
 }
 
+fn transfer_context(ctx:&SideCtx,name:&str,provider:Provider)->Option<crate::speech::history::transfer_history::LiveContext> {
+    if provider!=Provider::Codex {return None;}
+    let runtime=ctx.runtime.get()?;
+    Some(crate::speech::history::transfer_history::LiveContext{home:runtime.codex_environment().home,name:name.into()})
+}
+
 impl Hub {
     fn start(name: &str, binding: Binding, ctx: SideCtx) -> Arc<Hub> {
         let (tx, _) = broadcast::channel(CHANNEL);
         let owned = ctx.runtime.get().is_some_and(|registry| registry.owns_codex_terminal(name));
         let seed = ctx.shown_problems.get(name);
         let hub = Arc::new_cyclic(|weak| {
-            let tail = FileTail::spawn(
+            let tail = FileTail::spawn_with_transfer(
                 binding.jsonl.clone(),
                 binding.key.clone(),
                 binding.provider,
@@ -462,6 +468,7 @@ impl Hub {
                 tx.clone(),
                 ctx.watchers.clone(),
                 close_on_tail_death(weak.clone(), 0),
+                transfer_context(&ctx,name,binding.provider),
             );
             Hub {
                 name: name.to_string(),
@@ -866,7 +873,7 @@ impl Hub {
         let mut bound = self.bound.lock().unwrap();
         let Some(cur) = bound.as_ref() else { return };
         let generation = cur.generation + 1;
-        let tail = FileTail::spawn(
+        let tail = FileTail::spawn_with_transfer(
             binding.jsonl.clone(),
             binding.key.clone(),
             binding.provider,
@@ -874,6 +881,7 @@ impl Hub {
             self.tx.clone(),
             self.ctx.watchers.clone(),
             close_on_tail_death(Arc::downgrade(self), generation),
+            transfer_context(&self.ctx,&self.name,binding.provider),
         );
         self.start_queue_feed(generation, &binding);
         self.start_stats_feed(generation, &binding);
@@ -1086,7 +1094,7 @@ impl Hub {
                     return None;
                 }
             };
-            let mut frames = tail::backfill_guarded(binding.jsonl, binding.key, binding.provider, resume, cut, tokio::time::sleep).await;
+            let mut frames = tail::backfill_guarded_with_transfer(binding.jsonl, binding.key, binding.provider, resume, cut, tokio::time::sleep,transfer_context(&self.ctx,&self.name,binding.provider)).await;
             if self.bound.lock().unwrap().as_ref().map(|current| current.generation) != Some(b.generation) {
                 continue;
             }

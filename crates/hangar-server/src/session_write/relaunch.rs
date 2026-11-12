@@ -114,7 +114,7 @@ pub async fn reload(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
             Ok(key)=>key,
             Err(error)=>return json_response(StatusCode::CONFLICT,json!({"detail":error.public()})),
         };
-        let pending=crate::runtime::claude_reopen::transfer::store(home).list_incomplete();
+        let pending=crate::runtime::claude_reopen::transfer::store(home).incomplete_for_session(&name);
         match pending {
             Ok(records)=>if let Some(record)=records.into_iter().find(|r|r.name==name && current_key.as_ref().is_none_or(|key|r.origin_meta["key"]==*key)) {
                 let (st2,owned)=(st.clone(),name.clone());

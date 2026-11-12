@@ -792,6 +792,38 @@ pub(crate) fn baton_window(row: &SessionRow, home: &Path, claude: &Path) -> Resu
     }).map_err(|cause| BatonReadError {verification,cause})
 }
 
+/// Associação da sessão ao histórico importado, resolvida uma vez por lote de leitura.
+#[derive(Clone)]
+pub(crate) struct LiveContext { pub home:std::path::PathBuf, pub name:String }
+
+pub(crate) struct LiveFilter { id:String, offset:u64, imported:HashSet<String> }
+impl LiveContext {
+    pub(crate) fn filter(&self,path:&Path)->io::Result<Option<LiveFilter>> {
+        let sidecar=crate::runtime::codex_sidecar::path(&crate::runtime::codex_sidecar::dir(&self.home),&self.name);
+        let Some(meta)=crate::runtime::codex_sidecar::read(&sidecar)? else {return Ok(None)};
+        let owner=meta.get("codex_home").and_then(Value::as_str).map(Path::new);
+        let record=match meta.get("transfer_id").and_then(Value::as_str).filter(|s|!s.is_empty()) {
+            Some(id)=>Some(load_record(&self.home,id)?.ok_or_else(||invalid("O registro da transferência desapareceu."))?),
+            None=>match owner {Some(owner)=>indexed_record(&self.home,owner,&crate::locate::session_key(&path.to_string_lossy()),false)?,None=>None},
+        };
+        let Some(record)=record else {return Ok(None)};
+        let owner=owner.ok_or_else(||invalid("A conta da conversa transferida está indisponível."))?;
+        // Uma conversa nova por /clear não herda a associação antiga conservada no sidecar.
+        if !matches_rollout(&record,path,owner) {return Ok(None)};
+        check_record(&record,path,owner)?;
+        let offset=stable_read(path,|reader,length|check_prefix(reader,length,&record["boundary"]))?;
+        Ok(Some(LiveFilter {id:required(&record,"id")?.into(),offset,imported:imported_ids(&record["boundary"])?.into_iter().map(str::to_owned).collect()}))
+    }
+}
+impl LiveFilter {
+    pub(crate) fn includes(&self,line:&[u8],offset:u64)->io::Result<bool> {
+        if offset<self.offset {return Ok(false)};
+        let row=object(line,"O rollout ativo contém uma linha inválida.")?;
+        Ok(![&row["id"],&row["payload"]["id"]].into_iter().filter_map(Value::as_str).any(|id|self.imported.contains(id)))
+    }
+    pub(crate) fn decorate(&self,event:&mut ChatEvent) {prefix_event(event,&self.id,"codex");}
+}
+
 /// `verify_boundary`: o rollout ainda tem o prefixo importado e a thread da transferência.
 pub(crate) fn verify_boundary(record: &Value, path: &Path, owner_home: &Path) -> io::Result<()> {
     check_record(record, path, owner_home)?;
