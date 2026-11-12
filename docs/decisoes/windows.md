@@ -197,6 +197,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   `%USERPROFILE%\.hangar\current\python\python.exe` (o `hangar-codex-tui` precisa do `websockets`
   dele), e o manifesto se lê por regex: o `ConvertFrom-Json` do 5.1 recusa JSON acima de 2 MB. Regras
   e recusas em [instalacao.md](instalacao.md#pacote-por-versão). Só raciocinado até a prova na VM.
+- **O cofre de senhas no Windows exige o servidor no logon interativo do usuário.** A chave mora no
+  Gerenciador de Credenciais, que não existe em logon por SSH nem em serviço sem perfil
+  (`CredReadW` → 1312): o servidor subido assim vê o cofre como sem chaveiro. A tarefa
+  `hangar-backend` com logon `Interactive` é o que mantém o cofre; mudar o principal dela ou lançar o
+  servidor por SSH tira o cofre da máquina. Medição em
+  [plataforma.md](plataforma.md#cofre-de-senhas-uma-máquina-dona-chave-no-chaveiro-uso-aprovado-por-senha-30102026).
 
 ## Reinício sem início e porta do front (05/11/2026)
 

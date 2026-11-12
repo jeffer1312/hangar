@@ -4109,7 +4109,8 @@ Medição (12/11/2026, VM Windows 11, Hangar 0.1.0.10226 com o `hangar-server.ex
 cofre, a senha gravada voltou igual, e depois de matar o servidor o novo processo reabriu o cofre
 (`state: open`) e leu a mesma senha. Por SSH, com chave ou com senha, `CredReadW` responde 1312
 (`ERROR_NO_SUCH_LOGON_SESSION`): esse logon não tem Gerenciador de Credenciais. Servidor subido fora da
-sessão do usuário vê o cofre como indisponível, e a credencial só se confere ou apaga pela sessão gráfica.
+sessão do usuário vê a máquina como sem chaveiro (`KeyError::Unsupported`, não "tente de novo"), e a
+credencial só se confere ou apaga pela sessão gráfica.
 
 **`vault_fill`: o que a árvore de acessibilidade mostra. Medição (30/10/2026, Chromium 149.0.7827.55
 do Playwright, sem janela, perfil temporário):** página com um `input type=text` e dois

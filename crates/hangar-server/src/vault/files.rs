@@ -1,5 +1,6 @@
-//! Arquivo 0600 com a senha para o agente (`vault_file`), numa pasta 0700 da sessão do usuário que o
-//! reinício da máquina limpa; no Windows, os dois com ACL só do usuário corrente.
+//! Arquivo 0600 com a senha para o agente (`vault_file`), numa pasta 0700 da sessão do usuário, que no
+//! Linux o reinício da máquina limpa. No Windows os dois têm ACL só do usuário corrente, e a pasta
+//! (`%LOCALAPPDATA%`) sobrevive ao reinício: quem apaga é a varredura e o prazo de 24 h.
 //! Cada arquivo tem ao lado um `<id>.json` com a sessão dona: some no
 //! fechamento dela, em 24 h e na varredura (subida e cada `vault_file`) quando a dona saiu da lista.
 use serde::{Deserialize, Serialize};

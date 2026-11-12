@@ -1,6 +1,5 @@
 //! O Gerenciador de Credenciais de verdade, em itens próprios de cada teste que somem no fim.
 use super::key::{self, CredentialManager, KeyError, KeyStore};
-use windows_sys::Win32::Security::Credentials::{CredDeleteW, CRED_TYPE_GENERIC};
 use zeroize::Zeroizing;
 
 struct Items(String);
@@ -11,13 +10,7 @@ impl Items {
 }
 
 impl Drop for Items {
-    fn drop(&mut self) {
-        for kind in ["vault-key", "vault-backup-key"] {
-            let name: Vec<u16> = format!("{}/{kind}", self.0).encode_utf16().chain(Some(0)).collect();
-            // SAFETY: `name` termina em 0 e vive até o fim da chamada.
-            unsafe { CredDeleteW(name.as_ptr(), CRED_TYPE_GENERIC, 0) };
-        }
-    }
+    fn drop(&mut self) { self.store().remove_all() }
 }
 
 #[tokio::test]

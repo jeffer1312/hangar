@@ -10,15 +10,16 @@ pub type Key = Zeroizing<[u8; KEY_LEN]>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyError {
-    /// A coleção `login` está trancada: abre pelo aviso do chaveiro.
+    /// A coleção `login` está trancada: abre pelo aviso do chaveiro. Só no Linux.
     Locked,
     /// Sem item e sem `vault.bin`: ainda não há cofre.
     Absent,
     /// `vault.bin` existe e o item não (ou o item não tem 32 bytes).
     Lost,
-    /// O Secret Service não respondeu ou recusou por outro motivo.
+    /// O chaveiro (Secret Service no Linux, Gerenciador de Credenciais no Windows) não respondeu ou recusou.
     Bus,
-    /// Sistema sem chaveiro para o cofre (fora do Linux e do Windows).
+    /// Sem chaveiro para o cofre: fora do Linux e do Windows, ou logon do Windows sem Gerenciador de
+    /// Credenciais (SSH, serviço sem perfil).
     Unsupported,
 }
 
@@ -298,11 +299,13 @@ pub use credman::CredentialManager;
 mod credman {
     use super::{Key, KeyError, KeyStore, KEY_LEN};
     use futures_util::future::BoxFuture;
-    use windows_sys::Win32::Foundation::{GetLastError, ERROR_NOT_FOUND};
+    use windows_sys::Win32::Foundation::{GetLastError, ERROR_NOT_FOUND, ERROR_NO_SUCH_LOGON_SESSION};
     use windows_sys::Win32::Security::Credentials::{
         CredFree, CredReadW, CredWriteW, CREDENTIALW, CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC,
     };
     use zeroize::{Zeroize, Zeroizing};
+
+    const LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
 
     /// `prefix` separa os itens do teste dos do cofre de verdade.
     pub struct CredentialManager { prefix: String }
@@ -315,13 +318,36 @@ mod credman {
         #[cfg(test)]
         pub fn with_prefix(prefix: String) -> Self { Self { prefix } }
 
+        /// Apaga os dois itens; o teste limpa o que gravou.
+        #[cfg(test)]
+        pub fn remove_all(&self) {
+            for kind in [VAULT_KEY, RECOVERY_KEY] {
+                let target = self.target(kind);
+                // SAFETY: `target` termina em 0 e vive até o fim da chamada.
+                unsafe { windows_sys::Win32::Security::Credentials::CredDeleteW(target.as_ptr(), CRED_TYPE_GENERIC, 0) };
+            }
+        }
+
         fn target(&self, kind: &str) -> Vec<u16> { wide(&format!("{}/{kind}", self.prefix)) }
+    }
+
+    /// Fora do executor e com prazo, como o Secret Service: o serviço de credenciais travado não prende
+    /// a trava do cofre para sempre.
+    async fn blocking<T: Send + 'static>(job: impl FnOnce() -> Result<T, KeyError> + Send + 'static) -> Result<T, KeyError> {
+        match tokio::time::timeout(LIMIT, tokio::task::spawn_blocking(job)).await {
+            Ok(Ok(result)) => result,
+            _ => {
+                tracing::warn!(code = "vault_key_credman", "o Gerenciador de Credenciais não respondeu à chave do cofre");
+                Err(KeyError::Bus)
+            }
+        }
     }
 
     impl KeyStore for CredentialManager {
         fn read(&self) -> BoxFuture<'_, Result<Option<Key>, KeyError>> {
+            let target = self.target(VAULT_KEY);
             Box::pin(async move {
-                let Some(value) = read_item(&self.target(VAULT_KEY))? else { return Ok(None) };
+                let Some(value) = blocking(move || read_item(&target)).await? else { return Ok(None) };
                 if value.len() != KEY_LEN { return Err(KeyError::Lost); }
                 let mut key = Zeroizing::new([0u8; KEY_LEN]);
                 key.copy_from_slice(&value);
@@ -330,15 +356,18 @@ mod credman {
         }
 
         fn write(&self, key: Key) -> BoxFuture<'_, Result<(), KeyError>> {
-            Box::pin(async move { write_item(&self.target(VAULT_KEY), "Hangar: chave do cofre de senhas", &key[..]) })
+            let target = self.target(VAULT_KEY);
+            Box::pin(blocking(move || write_item(&target, "Hangar: chave do cofre de senhas", &key[..])))
         }
 
         fn read_recovery(&self) -> BoxFuture<'_, Result<Option<Zeroizing<Vec<u8>>>, KeyError>> {
-            Box::pin(async move { read_item(&self.target(RECOVERY_KEY)) })
+            let target = self.target(RECOVERY_KEY);
+            Box::pin(blocking(move || read_item(&target)))
         }
 
         fn write_recovery(&self, item: Zeroizing<Vec<u8>>) -> BoxFuture<'_, Result<(), KeyError>> {
-            Box::pin(async move { write_item(&self.target(RECOVERY_KEY), "Hangar: chave da cópia do cofre de senhas", &item) })
+            let target = self.target(RECOVERY_KEY);
+            Box::pin(blocking(move || write_item(&target, "Hangar: chave da cópia do cofre de senhas", &item)))
         }
     }
 
@@ -347,7 +376,12 @@ mod credman {
 
     fn wide(text: &str) -> Vec<u16> { text.encode_utf16().chain(Some(0)).collect() }
 
+    /// Logon sem Gerenciador de Credenciais (SSH, serviço sem perfil) não passa tentando de novo: é falta de chaveiro.
     fn refused(call: &'static str, error: u32) -> KeyError {
+        if error == ERROR_NO_SUCH_LOGON_SESSION {
+            tracing::warn!(code = "vault_key_no_logon_session", call, "este logon do Windows não tem Gerenciador de Credenciais");
+            return KeyError::Unsupported;
+        }
         tracing::warn!(code = "vault_key_credman", call, error, "o Gerenciador de Credenciais recusou");
         KeyError::Bus
     }
