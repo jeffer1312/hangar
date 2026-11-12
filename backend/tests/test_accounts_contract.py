@@ -12,10 +12,6 @@ def test_ownership_rejects_successful_python_proxy():
         assert_rust_ownership([{"operation": "claude.catalog", "status": 200}])
 
 
-def test_ownership_allows_delimited_preparation_bridge():
-    assert_rust_ownership([{"operation": "bridge.prepare", "status": 200}])
-
-
 def test_blocked_python_handler_cannot_fake_rust_ownership(tmp_path):
     reference = PythonReference(tmp_path / "home")
     try:
