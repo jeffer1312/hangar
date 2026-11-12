@@ -842,10 +842,9 @@ impl LiveContext {
 }
 #[cfg(unix)]
 fn file_id(meta:&std::fs::Metadata)->Option<(u64,u64)> {use std::os::unix::fs::MetadataExt;Some((meta.dev(),meta.ino()))}
+// A data de criação não identifica o arquivo: o Windows a herda no arquivo que substitui outro pelo mesmo nome.
 #[cfg(not(unix))]
-fn file_id(meta:&std::fs::Metadata)->Option<(u64,u64)> {
-    meta.created().ok()?.duration_since(std::time::UNIX_EPOCH).ok().map(|d|(d.as_secs(),u64::from(d.subsec_nanos())))
-}
+fn file_id(_meta:&std::fs::Metadata)->Option<(u64,u64)> {None}
 impl LiveFilter {
     pub(crate) fn includes(&self,line:&[u8],offset:u64)->io::Result<bool> {
         if offset<self.offset {return Ok(false)};
