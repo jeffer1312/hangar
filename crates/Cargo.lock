@@ -1822,6 +1822,7 @@ dependencies = [
  "hangar-api",
  "hangar-auth",
  "hangar-codex",
+ "hangar-codex-account-sync",
  "hangar-connect",
  "hangar-core",
  "hangar-deploy",

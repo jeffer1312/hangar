@@ -55,8 +55,6 @@ responde 503 `accounts_need_rust_server`.
 
 Na migração inicial, ficaram no Python os caminhos que o Rust consumia ou ainda não atendia:
 
-- as rotas `/internal` de contas: fatos de uso, preparo das contas Codex e
-  invalidação do catálogo de modelos do Codex;
 - os leitores de cota Codex que a transferência de conversa usa;
 - as escritas de credenciais: apelido, sincronização nos agentes e
   remoção de provedor Kimi.
@@ -103,6 +101,22 @@ semeadura do `.claude.json` sem `oauthAccount` na criação) é do Rust:
   Infinity, inteiro além de 64 bits e caracteres U+10F800–U+10FFFF recusados ou alterados; junction
   do Windows tratada como atalho; conta do `--new` com pasta 0700; sem o binário `hangar-server`,
   `hangar-conta` sai 126.
+
+### Preparação e invalidação Codex sem Python (12/11/2026)
+
+O espelhamento da conta padrão nas adicionais pertence ao `hangar-codex-account-sync`, ligado
+ao coordenador de preparação existente. Configuração, recursos e plugins conservam o manifesto
+gerenciado, as alterações pessoais e a separação de identidade entre contas. O escritor TOML,
+os processos administrativos e a leitura de confiança são os mesmos da integração Codex.
+
+As rotas privadas `accounts/prepare`, `accounts/prepare/wait` e `accounts/codex-invalidate`
+foram retiradas. Depois do login ou logout, a invalidação alcança diretamente o catálogo de
+modelos compartilhado no Rust; não há volta ao Python. A guarda da conta dura até o fim das
+operações nativas; uma operação interrompida não vira sucesso pela ausência de seu executor.
+
+A assinatura interna do cache muda e provoca uma reconferência no primeiro uso. Essa diferença
+foi aprovada; o manifesto e os arquivos pessoais permanecem. Os testes do novo crate cobrem o
+espelhamento e suas fronteiras, e os testes de contas cobrem a coordenação e a invalidação.
 
 ## Anexos
 

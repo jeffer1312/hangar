@@ -1,4 +1,5 @@
-//! O callback conserva sua própria guarda; resposta perdida nunca encerra trabalho vivo.
+//! O preparo conserva a guarda até as operações nativas terminarem, mesmo sem o chamador.
+mod native;
 use super::{
     AccountKey, AccountService, GuardMode, Provider,
     bridge::AccountsBridge,
@@ -13,12 +14,14 @@ use std::{
     time::Duration,
 };
 
-/// As etapas nativas compartilham o serviço do servidor; a herança continua no callback.
+/// As etapas compartilham a integração nativa e a mesma identidade de conta.
 pub trait CodexSetup: Send + Sync {
     fn update(self: Arc<Self>, force: bool) -> futures_util::future::BoxFuture<'static, Result<Value, String>>;
     fn repair(self: Arc<Self>, account: Account) -> futures_util::future::BoxFuture<'static, Result<Option<bool>, String>>;
     fn project(self: Arc<Self>, account: Account, cwd: String) -> futures_util::future::BoxFuture<'static, Result<(), String>>;
     fn status(&self) -> Result<Value, String>;
+    fn inherit(self: Arc<Self>, account: Account, force: bool) -> futures_util::future::BoxFuture<'static, Result<Value, String>>;
+    fn trust_project(self: Arc<Self>, account: Account, cwd: String) -> futures_util::future::BoxFuture<'static, Result<(), String>>;
 }
 impl CodexSetup for crate::codex_setup::service::Service {
     fn update(self: Arc<Self>, force: bool) -> futures_util::future::BoxFuture<'static, Result<Value, String>> {
@@ -39,6 +42,12 @@ impl CodexSetup for crate::codex_setup::service::Service {
         Box::pin(async move { self.prepare_project(&account.home, Path::new(&cwd)).await })
     }
     fn status(&self) -> Result<Value, String> { crate::codex_setup::service::Service::status(self) }
+    fn inherit(self: Arc<Self>, account: Account, force: bool) -> futures_util::future::BoxFuture<'static, Result<Value, String>> {
+        Box::pin(async move { Ok(native::inherit(&self.accounts, &account, force).await) })
+    }
+    fn trust_project(self: Arc<Self>, account: Account, cwd: String) -> futures_util::future::BoxFuture<'static, Result<(), String>> {
+        Box::pin(async move { native::pretrust(&self.accounts, &account, &cwd).await })
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -70,12 +79,6 @@ pub fn running() -> Value {
 }
 pub fn failed(code: &str) -> Value {
     json!({"status":"error","trust_pending":false,"issues":[{"code":code,"params":{}}]})
-}
-fn complete(value: &Value) -> bool {
-    matches!(
-        value["status"].as_str(),
-        Some("ready" | "partial" | "error")
-    )
 }
 
 impl AccountService {
@@ -234,7 +237,12 @@ impl AccountService {
             return failed("account_prepare_invalid");
         };
         if let Some(state) = self.preparations.lock().unwrap().get(&key) {
-            return state.result.clone();
+            let mut result = state.result.clone();
+            if state.running && result["etapa"] != "principal" {
+                let current = self.stored_status(account, &key);
+                if current["status"] == "running" { result["etapa"] = current["etapa"].clone(); }
+            }
+            return result;
         }
         let Ok(path) = self.preparation_path(&key) else {
             return failed("account_prepare_invalid");
@@ -268,21 +276,20 @@ impl AccountService {
                 let (service, bridge, account) = (self.clone(), bridge.clone(), account.clone());
                 tokio::spawn(async move {
                     let _guard = guard;
-                    let mut result = service.finish_callback(&previous, &bridge).await;
-                    if previous.cwd.is_none() {
-                        result = match service.codex_preparation_service().and_then(|setup| setup.status().map_err(|_| AccountError::io())) {
-                            Ok(source) => service.finish_codex_preparation(&account, &source, result).await,
-                            Err(_) => failed("codex_setup_unavailable"),
-                        };
-                    } else if let Some(cwd) = &previous.cwd {
-                        result = service.finish_project_preparation(&account, cwd, result).await;
-                    }
+                    let gate = service.preparation_gate(&key);
+                    let serial = gate.lock().await;
+                    // A ausência da tarefa após reinício não confirma efeitos da operação anterior.
+                    let integration = crate::codex_setup::files::exclusive(&account.home.join(".hangar-integracao.lock")).await;
+                    let result = if integration.is_ok() { failed("account_prepare_interrupted") }
+                        else { failed("account_prepare_state_failed") };
                     let result =
                         if std::fs::remove_file(service.preparation_path(&key).unwrap()).is_err() {
                             failed("account_prepare_state_failed")
                         } else {
                             result
                         };
+                    drop(integration);
+                    drop(serial);
                     service
                         .complete_preparation(&key, &account, &bridge, result, false)
                         .await;
@@ -465,7 +472,7 @@ impl AccountService {
         let gate = self.preparation_gate(&key);
         let _serial = gate.lock().await;
         let path = self.preparation_path(&key)?;
-        // Após reinício, a instância anterior só pode ser consultada, nunca reiniciada.
+        // A trava de arquivo aguarda qualquer escritor da geração anterior antes da nova rodada.
         match std::fs::read(&path) {
             Ok(bytes) => {
                 let previous: PrepareRequest =
@@ -473,7 +480,8 @@ impl AccountService {
                 if previous.key != key || previous.account_id != account.id {
                     return Err(AccountError::io());
                 }
-                self.finish_callback(&previous, bridge).await;
+                let _integration = crate::codex_setup::files::exclusive(&account.home.join(".hangar-integracao.lock"))
+                    .await.map_err(|_| AccountError::io())?;
                 std::fs::remove_file(&path).map_err(|_| AccountError::io())?;
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -502,10 +510,20 @@ impl AccountService {
         if force {
             self.clear_force(&request.key)?;
         }
-        let initial = bridge.preparation_start(&request).await;
-        let result = match initial {
-            Ok(result) if complete(&result) => result,
-            _ => self.finish_callback(&request, bridge).await,
+        if let Some(state) = self.preparations.lock().unwrap().get_mut(&request.key) {
+            state.result["etapa"] = Value::Null;
+        }
+        let setup = self.codex_preparation_service()?;
+        let result = if let Some(cwd) = &request.cwd {
+            let result = self.stored_status(account, &request.key);
+            if matches!(result["status"].as_str(), Some("ready" | "partial")) {
+                match setup.trust_project(account.clone(), cwd.clone()).await {
+                    Ok(()) => result,
+                    Err(_) => failed("codex_account_prepare_failed"),
+                }
+            } else { failed("codex_account_prepare_failed") }
+        } else {
+            setup.inherit(account.clone(), force).await.unwrap_or_else(|_| failed("codex_account_prepare_failed"))
         };
         let result = if let Some(source) = source {
             self.finish_codex_preparation(account, &source, result).await
@@ -513,30 +531,9 @@ impl AccountService {
         let result = if let Some(cwd) = &request.cwd {
             self.finish_project_preparation(account, cwd, result).await
         } else { result };
-        // Revogar antes de liberar a guarda impede uma entrega HTTP atrasada de começar.
+        // Só publica o término depois que o executor nativo encerrou seus processos.
         std::fs::remove_file(&path).map_err(|_| AccountError::io())?;
         Ok(result)
-    }
-    async fn finish_callback(&self, request: &PrepareRequest, bridge: &AccountsBridge) -> Value {
-        loop {
-            match bridge.preparation_wait(&request.operation).await {
-                Ok(result) if complete(&result) => return result,
-                Ok(result) if result["status"] == "unknown" => {
-                    return failed("account_prepare_interrupted");
-                }
-                Ok(result) => {
-                    if let Some(state) = self.preparations.lock().unwrap().get_mut(&request.key) {
-                        state.result = result;
-                    }
-                }
-                Err(_) => {
-                    if let Some(state) = self.preparations.lock().unwrap().get_mut(&request.key) {
-                        state.result = failed("account_prepare_bridge_unavailable");
-                    }
-                    tokio::time::sleep(Duration::from_millis(200)).await;
-                }
-            }
-        }
     }
 }
 

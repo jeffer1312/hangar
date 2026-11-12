@@ -796,9 +796,9 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
     Python no modo `python` de Claude/Codex; o `stats.py` serve esse `/events`. O consumo da orquestração é calculado no Rust.
   - Lista do dono: montada pelo Rust; Pi/omp/Kimi publicam o estado pelos atores em processo,
     e a última resposta vem dos leitores nativos. Não existe `/internal/list/facts`.
-  - Outras perguntas do Rust ao Python (`/internal/*`): `accounts/prepare` (só contas Codex; a
-    reconciliação das contas Claude é do Rust, `accounts/claude_config.rs`),
-    `accounts/codex-invalidate`, `migration/status` e `ping`.
+  - Outras perguntas do Rust ao Python (`/internal/*`): `migration/status` e `ping`.
+    A preparação de contas Codex usa `hangar-codex-account-sync` em processo; a invalidação após
+    login atua diretamente no catálogo Rust. A reconciliação Claude segue em `accounts/claude_config.rs`.
     Transcrição e organização do ditado leem a configuração efetiva diretamente no Rust.
   - Abrir editor, shell separado e terminal externo: do Rust (`hangar-session-tools`). As três
     rotas conservam os clientes existentes; sem Rust, não há lançador Python de reserva. O shell
