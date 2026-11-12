@@ -1379,7 +1379,7 @@ textura de trás.
 
 - **Com imagem ou desktop no fundo, a página fica sobre um fundo liso opaco com 12 px de margem**:
   `page_backdrop` (o `inset` opaco) no nativo, `bg.base` no Expo (cartão e tela cheia, que lá
-  também desenhava a foto atrás) e `--bg-base` no PWA. Com Liso, Textura ou Luz o cartão continua
+  também desenhava a foto atrás) e `--bg-base` no PWA (só na vista de celular, no cartão e na tela cheia). Com Liso, Textura ou Luz o cartão continua
   transparente. No nativo a margem vale para todo cartão, inclusive tema próprio e site: a largura
   medida (`pages.width`) é uma só para todos, e margem em uns e não em outros a faria alternar a
   cada quadro. Mandar a cor opaca em `--background` resolveria sem envoltório, mas o servidor
@@ -1387,8 +1387,9 @@ textura de trás.
 - **Vale para o fundo, não para a Leitura escolhida**: o pedido foi fundo liso sempre que houver
   página sobre imagem ou desktop, mesmo com Leitura Nenhuma ou Folha.
 - **A página usa a fonte da conversa escolhida em Aparência**, não a Geist fixa. Fonte embutida
-  (Geist ou Inter) vai para a página como `@font-face` em base64, uma vez por fonte; instalada, o
-  Chromium acha pelo nome. A Inter entra no app em TTFs estáticos (o GPUI desenha) e na página
-  como `InterVariable.woff2`, um quarto do tamanho dos TTFs.
+  (Geist, Inter ou JetBrains Mono, com o itálico) vai para a página como `@font-face` em base64, uma
+  vez por fonte; instalada, o Chromium acha pelo nome. A Inter entra no app em TTFs estáticos (o
+  GPUI desenha) e na página como `InterVariable.woff2` e `InterVariable-Italic.woff2`, bem menores
+  que os TTFs.
 - Trocar a Geist pela Inter não mudaria a legibilidade: a 14 px as duas quase não se distinguem.
   A Inter é opção de Aparência, não a fonte padrão.

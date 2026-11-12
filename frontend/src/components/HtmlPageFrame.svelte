@@ -104,7 +104,7 @@
 {:else}
 <!-- A altura reservada só vale para a página (e enquanto ela carrega); aviso de erro fica do tamanho do texto. -->
 <div class="page" bind:this={box} style:height={status === 'ready' || status === 'loading' ? `${height}px` : undefined}
-  aria-busy={status === 'loading'}>
+  class:backed={!desktop.atual && (status === 'ready' || status === 'loading')} aria-busy={status === 'loading'}>
   {#if status === 'ready'}
     <!-- Sem allow-same-origin: a página roda em origem opaca, longe do token e do localStorage do app.
          Sem allow-popups: link só abre pela ponte ui/open-link, com gesto do leitor. -->
@@ -130,9 +130,9 @@
 
 <style>
   .page { position: relative; width: 100%; margin-bottom: var(--space-1); background: transparent; }
-  /* Sobre foto ou desktop a página transparente perde a letra na imagem: fundo liso, como no nativo. A altura
-     reservada é a da página, então a margem soma por fora (content-box) e a largura medida já vem sem ela. */
-  :global(html:is([data-bg="image"], [data-bg="desktop"])) .page {
+  /* Sobre a foto a página transparente perde a letra na imagem: fundo liso, como no nativo (só no celular: a web
+     desktop está congelada). A altura reservada é a da página, então a margem soma por fora (content-box). */
+  :global(html[data-bg="image"]) .page.backed {
     box-sizing: content-box; width: auto; padding: 12px; border-radius: 10px; background: var(--bg-base);
   }
   iframe { display: block; width: 100%; height: 100%; border: 0; background: transparent; }

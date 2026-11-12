@@ -5,7 +5,7 @@ import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import { useRouter } from 'expo-router';
 import { frameHeight, pageExpandable, parseHostMessage, reservedHeight, type HtmlPageRef } from '@hangar/core';
 import { useAparencia } from '../../stores/aparencia';
-import { fundoComImagem } from '../../theme/aplicarMaterial';
+import { hasImageBackground } from '../../theme/aplicarMaterial';
 import { toast } from '../../ui/Toast';
 import { Icon } from '../../ui/Icon';
 import * as m from '../../paraglide/messages';
@@ -42,7 +42,7 @@ function LivePageCard({ page, sessionName, serverId }: { page: HtmlPageRef; sess
   const { key, state, doc, reported, setReported, load, params } = usePageDocument(page, sessionName, serverId);
   const { web, applyTheme, touched, openLink } = usePageWebView(params, page.ownTheme);
   // Sobre a foto de fundo a página transparente perde a letra na imagem: ganha um fundo liso, como no nativo.
-  const backed = useAparencia(fundoComImagem);
+  const backed = useAparencia(hasImageBackground);
 
   const onMessage = useCallback((e: WebViewMessageEvent) => {
     const msg = parseHostMessage(e.nativeEvent.data);

@@ -31,7 +31,7 @@ export interface Material {
 }
 
 /** Foto escolhida atrás das caixas (`busy_background` do Rust). */
-export function fundoComImagem(s: { fundo?: Fundo; imagemUri?: string | null }): boolean {
+export function hasImageBackground(s: { fundo?: Fundo; imagemUri?: string | null }): boolean {
   return s.fundo === 'image' && !!s.imagemUri;
 }
 
@@ -39,7 +39,7 @@ export function fundoComImagem(s: { fundo?: Fundo; imagemUri?: string | null }):
 export function leituraEmVigor(s: { leitura?: Leitura; fundo?: Fundo; imagemUri?: string | null }): Exclude<Leitura, 'auto'> {
   const l = s.leitura ?? 'auto';
   if (l !== 'auto') return l;
-  return fundoComImagem(s) ? 'text' : 'none';
+  return hasImageBackground(s) ? 'text' : 'none';
 }
 
 // Deriva SEMPRE dos tokens de fábrica, nunca do tema atual: acumular acento sobre acento faria a

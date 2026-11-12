@@ -340,10 +340,10 @@ fn hex(color: Hsla) -> String {
 /// Script que põe na página uma fonte embutida no app: o Chromium dela só conhece as instaladas, e sem isto cairia na
 /// do sistema, destoando do texto ao lado. Cada fonte entra uma vez por documento.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
-fn font_script(family: &str, faces: &[(&[u8], &str, &str)]) -> String {
+fn font_script(family: &str, faces: &[(&[u8], &str, &str, &str)]) -> String {
     use base64::Engine as _;
-    let css: String = faces.iter().map(|(bytes, format, weight)| format!(
-        "@font-face{{font-family:\"{family}\";font-weight:{weight};src:url(data:font/{format};base64,{})}}",
+    let css: String = faces.iter().map(|(bytes, format, weight, style)| format!(
+        "@font-face{{font-family:\"{family}\";font-weight:{weight};font-style:{style};src:url(data:font/{format};base64,{})}}",
         base64::engine::general_purpose::STANDARD.encode(bytes))).collect();
     let id = serde_json::to_string(&format!("hangar-font-{family}")).unwrap_or_default();
     format!("(()=>{{if(document.getElementById({id}))return;const s=document.createElement('style');s.id={id};s.textContent={};document.head.appendChild(s)}})()",
@@ -352,13 +352,21 @@ fn font_script(family: &str, faces: &[(&[u8], &str, &str)]) -> String {
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 static GEIST_FACES: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| font_script(theme::SANS, &[
-    (include_bytes!("../../assets/fonts/Geist-Regular.ttf"), "ttf", "400"), (include_bytes!("../../assets/fonts/Geist-Medium.ttf"), "ttf", "500"),
-    (include_bytes!("../../assets/fonts/Geist-SemiBold.ttf"), "ttf", "600"), (include_bytes!("../../assets/fonts/Geist-Bold.ttf"), "ttf", "700")]));
+    (include_bytes!("../../assets/fonts/Geist-Regular.ttf"), "ttf", "400", "normal"),
+    (include_bytes!("../../assets/fonts/Geist-Medium.ttf"), "ttf", "500", "normal"),
+    (include_bytes!("../../assets/fonts/Geist-SemiBold.ttf"), "ttf", "600", "normal"),
+    (include_bytes!("../../assets/fonts/Geist-Bold.ttf"), "ttf", "700", "normal"),
+    (include_bytes!("../../assets/fonts/Geist-Italic.ttf"), "ttf", "400", "italic")]));
 
 /// A variável, num arquivo só e menor que os TTFs que o app desenha.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 static INTER_FACES: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| font_script(theme::INTER, &[
-    (include_bytes!("../../assets/fonts/inter/InterVariable.woff2"), "woff2", "100 900")]));
+    (include_bytes!("../../assets/fonts/inter/InterVariable.woff2"), "woff2", "100 900", "normal"),
+    (include_bytes!("../../assets/fonts/inter/InterVariable-Italic.woff2"), "woff2", "100 900", "italic")]));
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+static CODE_MONO_FACES: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| font_script(theme::CODE_MONO, &[
+    (include_bytes!("../../assets/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf"), "ttf", "400", "normal")]));
 
 /// Fonte embutida que a família pede; instalada o Chromium já acha pelo nome.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -366,6 +374,7 @@ fn embedded_faces(family: &str) -> Option<&'static str> {
     match family {
         f if f == theme::SANS => Some(&GEIST_FACES),
         f if f == theme::INTER => Some(&INTER_FACES),
+        f if f == theme::CODE_MONO => Some(&CODE_MONO_FACES),
         _ => None,
     }
 }
@@ -398,7 +407,7 @@ fn theme_script(key: ThemeKey) -> String {
     // A da conversa em Aparência: a página fica na mesma letra da resposta ao lado.
     vars.insert("--font-sans".into(), format!("\"{}\", system-ui, sans-serif", key.font).into());
     vars.insert("--font-mono".into(), format!("\"{}\", ui-monospace, monospace", theme::MONO).into());
-    let params = json!({"theme": if theme::is_dark() { "dark" } else { "light" }, "styles": {"variables": vars}});
+    let params = json!({"theme": if key.dark { "dark" } else { "light" }, "styles": {"variables": vars}});
     format!("window.__hangarApply&&window.__hangarApply({params})")
 }
 
