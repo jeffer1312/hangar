@@ -38,13 +38,6 @@ def _linha_de_shell_no_pane(command: str) -> str:
     return f"exec {shell} -lc {shlex.quote(command)}"
 
 
-def argv_de_shell(command: str) -> list[str]:
-    """argv pra rodar `command` como linha de shell por `subprocess` (e o caminho do stop)."""
-    if os.name == "nt":
-        return [os.environ.get("COMSPEC", "cmd.exe"), "/c", command]
-    return ["/bin/sh", "-lc", command]
-
-
 # nome -> peso pra escolher o melhor palpite de "dev" (so um vence).
 _DEV_RANK = {"dev": 5, "start": 4, "serve": 3, "watch": 2, "run": 1}
 _MAKE_TARGET = re.compile(r"^([a-zA-Z0-9_-]+):", re.MULTILINE)
@@ -204,12 +197,8 @@ class RunnerError(Exception):
 
     Existe porque o modo antigo de errar aqui era o pior possivel: o `new-session` rodava dentro de
     um `except: pass`, com o `rc` nem olhado, entao "nao subiu" e "subiu" terminavam iguais — e o
-    `run_status` logo abaixo devolvia o estado da sessao VELHA como se fosse a nova. E a mesma
-    regra que o `projects.stop` ja escreve pro `stop_command`: orfao invisivel e pior que erro na
-    tela.
-
-    `detail` e texto cru, como o `ProjectError` do painel de projetos, que e por onde estes erros
-    chegam na tela.
+    `run_status` logo abaixo devolvia o estado da sessao VELHA como se fosse a nova. Órfão
+    invisível é pior que erro na tela; `detail` é texto cru, que é como ele chega lá.
     """
 
     def __init__(self, status: int, detail: str):
@@ -323,8 +312,8 @@ def start_run(cwd: str, command: str) -> RunInfo:
 
 
 def stop_run(cwd: str) -> None:
-    """Para o run. Levanta `RunnerError` se a sessao SOBREVIVEU — dizer "parado" com o processo
-    vivo e o mesmo defeito que o `projects.stop` ja combate no `stop_command`."""
+    """Para o run. Levanta `RunnerError` se a sessão SOBREVIVEU: dizer "parado" com o processo
+    vivo seria sucesso falso."""
     name = _slug(cwd)
     if not _matar_run(name):
         raise RunnerError(409, f"o run (sessao {name}) nao morreu — o processo segue rodando")
@@ -332,8 +321,7 @@ def stop_run(cwd: str) -> None:
 
 def all_runs() -> dict[str, RunInfo]:
     """Todos os runs do socket dedicado, por nome de sessao — INCLUSIVE os de pane morto
-    (remain-on-exit), que carregam exited/exit_status. Uma chamada tmux so, pro /api/projects
-    nao pagar um subprocesso por projeto."""
+    (remain-on-exit), que carregam exited/exit_status."""
     cp = _sock(["list-panes", "-a", "-F",
                 "#{session_name}\t#{session_created}\t#{pane_dead}\t#{pane_dead_status}"])
     out: dict[str, RunInfo] = {}

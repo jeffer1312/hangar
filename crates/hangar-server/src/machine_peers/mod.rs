@@ -5,7 +5,6 @@ pub mod pairing;
 pub mod dotenv;
 pub mod network;
 pub mod live_config;
-pub mod panel;
 pub mod store;
 use crate::{
     orchestration::{codec::ValueGuard, truthy},

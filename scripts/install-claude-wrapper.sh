@@ -263,9 +263,7 @@ set -g automatic-rename on
 set -g automatic-rename-format '#{b:pane_current_path}'
 # Terminal/WM title = SESSION NAME, not the cwd basename. Two sessions in the same repo get
 # distinct names (the wrapper appends -2, -3) but share a cwd basename, so a cwd title made them
-# indistinguishable to the window manager. hangar-panel-open needs that title to pick the right window
-# whenever the terminal runs single-instance (`kitty -1`), where every window shares one pid and
-# the pid->window map stops being a key. Session names are unique by construction; cwd is not.
+# indistinguishable to the window manager. Session names are unique by construction; cwd is not.
 set -g set-titles on
 set -g set-titles-string '#S'
 TMUXCONF

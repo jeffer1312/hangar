@@ -102,7 +102,6 @@ o CI recusam commit que mexa nesses arquivos sem o passo (`scripts/check-passo-d
 |---|---|---|
 | Wrapper do `claude`/`codex` (`scripts/install-claude-wrapper.sh`, `windows-wrappers.ps1`) | `./scripts/install-claude-wrapper.sh` | `powershell -ExecutionPolicy Bypass -File scripts/setup-windows-wrappers.ps1` |
 | `hangar-send`, skills, bloco no CLAUDE.md | `./scripts/install-hangar-send.sh` | `powershell -ExecutionPolicy Bypass -File install.ps1 -Update` |
-| Painel (`install-hangar-panel.sh`) | `./scripts/install-hangar-panel.sh` | idem |
 | Hooks do Claude (`install-hooks.sh`) | `./scripts/install-hooks.sh` | idem |
 | Units do systemd / tarefas agendadas / vigia | `./install.sh --update` | `powershell -ExecutionPolicy Bypass -File install.ps1 -Update` |
 | Statusline | `./install.sh --update` | idem |
