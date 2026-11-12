@@ -19,63 +19,18 @@ use tokio::{
     time::Instant,
 };
 
+/// Invalida o catálogo compartilhado antes de publicar o fim da alteração de login.
 #[derive(Clone)]
 pub struct CodexInvalidator {
-    client: reqwest::Client,
-    upstream: std::net::SocketAddr,
-    secret: String,
-    instance: String,
+    models: Arc<crate::dictation::catalog::Models>,
 }
 impl CodexInvalidator {
-    pub fn new(
-        upstream: std::net::SocketAddr,
-        secret: String,
-        instance: String,
-    ) -> Result<Self, AccountError> {
-        if !upstream.ip().is_loopback() || instance.is_empty() {
-            return Err(AccountError::io());
-        }
-        let client = crate::http_client()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(10))
-            .build()
-            .map_err(|_| AccountError::io())?;
-        Ok(Self {
-            client,
-            upstream,
-            secret,
-            instance,
-        })
+    pub fn new(models: Arc<crate::dictation::catalog::Models>) -> Self {
+        Self { models }
     }
-    pub(crate) async fn invalidate(&self, key: &AccountKey) -> Result<(), &'static str> {
-        let response = self
-            .client
-            .post(format!(
-                "http://{}/internal/accounts/codex-invalidate",
-                self.upstream
-            ))
-            .header("x-hangar-internal", &self.secret)
-            .header("x-hangar-runtime-instance", &self.instance)
-            .header("content-type", "application/json")
-            .body(json!({"key":key}).to_string())
-            .send()
-            .await
-            .map_err(|_| "codex_account_cache_invalidation_failed")?;
-        if !response.status().is_success() {
-            return Err("codex_account_cache_invalidation_failed");
-        }
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|_| "codex_account_cache_invalidation_failed")?;
-        if serde_json::from_slice::<Value>(&bytes)
-            .ok()
-            .is_none_or(|value| value["ok"] != true)
-        {
-            return Err("codex_account_cache_invalidation_failed");
-        }
-        Ok(())
+
+    pub(crate) fn invalidate(&self, key: &AccountKey) {
+        self.models.invalidate(Some(&key.canonical_home));
     }
 }
 #[derive(Clone, Default)]
@@ -238,7 +193,7 @@ impl AccountService {
             let mut native = None;
             let mut cancel = worker.cancel.subscribe();
             let deadline = Instant::now() + Duration::from_secs(900);
-            let mut result = tokio::select! {
+            let result = tokio::select! {
                 biased;
                 ()=cancelled(&mut cancel)=>Err("cancelled"),
                 result=tokio::time::timeout_at(deadline,service.run_codex_login(&account,&worker,&mut native))=>result.unwrap_or(Err("codex_account_login_timeout")),
@@ -265,9 +220,7 @@ impl AccountService {
                 helper.close().await;
             }
             service.codex_auth.invalidate(&key);
-            if let Err(code) = invalidator.invalidate(&key).await {
-                result = Err(code);
-            }
+            invalidator.invalidate(&key);
             let mut public = worker.status.borrow().clone();
             public.as_object_mut().unwrap().remove("native_login_id");
             public["status"] = json!(if *worker.cancel.borrow() {
@@ -431,7 +384,7 @@ impl AccountService {
         .unwrap_or_else(|_| Err(failed()));
         native.close().await;
         self.codex_auth.invalidate(&key);
-        let _ = invalidator.invalidate(&key).await;
+        invalidator.invalidate(&key);
         match result? {
             Some(auth) if auth["method"] == "none" => Ok(auth),
             _ => Err(AccountError::codex(

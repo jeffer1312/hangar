@@ -4,7 +4,6 @@ No modo python (sem binário, CP_RUST_SERVER=0, supervisor que desistiu), as rot
 que o Rust atende respondem 503 `accounts_need_rust_server`, e os consumidores internos tratam a
 ponte ausente como "sem cota, sem login conhecido", sem ler credencial nem abrir CLI pelo Python.
 """
-import asyncio
 import json
 import os
 import stat
@@ -17,7 +16,6 @@ from fastapi.testclient import TestClient
 
 from app import codex_contas, conta_estado, contas, cotas, runtime_coordinator
 from app.api import app
-from app.codex_contas_login import CodexContasLogin
 from app.config import list_config_dirs, settings
 
 TOKEN = "t-contas-sem-rust"
@@ -122,20 +120,6 @@ def test_internal_quota_consumers_get_nothing_without_rust(python_owner):
 def test_internal_login_consumers_get_unavailable_without_rust(python_owner):
     [login] = conta_estado.logins(list_config_dirs())
     assert (login.estado, login.loggedIn) == ("indisponivel", None)
-
-
-def test_codex_auth_is_unavailable_without_rust(python_owner):
-    service = CodexContasLogin()
-    account = codex_contas.resolve_account("default")
-    for read in (service.read_auth(account), service.read_auth(account, refresh=True),
-                 service.read_auth_rapido(account)):
-        assert asyncio.run(read)["status"] == "unavailable"
-
-
-def test_codex_auth_without_rust_says_why(python_owner):
-    account = codex_contas.resolve_account("default")
-    auth = asyncio.run(CodexContasLogin().read_auth(account))
-    assert auth["reason"] == "accounts_need_rust_server"
 
 
 def test_device_login_spread_is_refused_without_rust(python_owner):

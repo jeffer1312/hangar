@@ -12,7 +12,7 @@ mod instructions_alias;
 pub(crate) mod instructions_imports;
 mod instructions_lock;
 mod instructions_projects;
-mod instructions_toml;
+pub(crate) mod instructions_toml;
 pub mod normalize;
 pub mod plugins;
 pub mod plugin_selection;

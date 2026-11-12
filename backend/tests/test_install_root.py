@@ -49,7 +49,6 @@ def test_com_current_a_raiz_e_o_link_sem_resolver(home):
 
 @pytest.mark.parametrize("modulo, atributo, relativo", [
     ("app.plugin_bridge", "PLUGINS_ROOT", "plugins"),
-    ("app.codex_contas_plugins", "_REPO", ""),
     ("app.codex_compat", "_REPO", ""),
 ])
 def test_caminho_gravado_fora_do_hangar_aponta_para_o_current(home, monkeypatch, modulo, atributo, relativo):

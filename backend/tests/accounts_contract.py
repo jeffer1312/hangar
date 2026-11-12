@@ -45,7 +45,7 @@ def rust_integration_binary(build_log: Path | None = None) -> Path:
     return _integration_binary
 
 
-_BRIDGE_OPERATIONS = frozenset({"bridge.prepare", "bridge.other_quotas"})
+_BRIDGE_OPERATIONS = frozenset({"bridge.other_quotas"})
 # Rotas da ponte secundária Pi/omp retirada: chamada a qualquer uma é escrita/leitura fora do Rust.
 _RETIRED_SECONDARY_ROUTES = frozenset({
     "/internal/accounts/device-propagate", "/internal/accounts/device-propagate/ack",
@@ -160,21 +160,6 @@ class PythonReference(HttpTransport):
             self.close()
             raise RuntimeError("a referência Python não iniciou; confira worker.log no diretório isolado") from None
 
-    def block(self, name: str):
-        assert self.request("POST", "/__contract__/barrier/" + name).status_code == 200
-        reference = self
-        class RemoteEvent:
-            def __init__(self, action):
-                self.action = action
-            def wait(self, timeout=20):
-                response = reference.request("GET", "/__contract__/barrier/" + name)
-                return response.json()["entered"]
-            def set(self):
-                assert reference.request("POST", "/__contract__/release/" + name).status_code == 200
-        class Barrier:
-            entered = RemoteEvent("entered")
-            release = RemoteEvent("release")
-        return Barrier()
 
     def start_session_async(self, *, provider: str, account_id: str, name="birth"):
         if not hasattr(self, "_executor"):
@@ -384,7 +369,7 @@ def _worker() -> None:
     from fastapi import FastAPI, Request as HttpRequest
     from fastapi.responses import JSONResponse
     from fastapi.testclient import TestClient
-    from app import api, codex_contas_login, account_bridge, dictation_bridge
+    from app import api, account_bridge
     from app.account_lifecycle import AccountKey
     from types import SimpleNamespace
     from app import internal_api, runtime_coordinator
@@ -416,26 +401,10 @@ def _worker() -> None:
         (target / ".hangar-codex-conta").write_text(json.dumps({"version": 1, "id": name}), encoding="utf-8")
         (target / "config.toml").write_text('cli_auth_credentials_store = "file"\n', encoding="utf-8")
 
-    barriers = {}
     secondary = {"native_only": False}
     # Modo explícito: a ponte de contas já lia "python" pela ausência; a de grupos exige o campo.
     instance = SimpleNamespace(instance="contract-instance", legacy=None, managed_queue=lambda name: False,
                                mode="python")
-    preparation_calls = []
-    preparation_entered = asyncio.Event()
-    from app import codex_contas_sync
-    original_prepare = codex_contas_sync._prepare_account_guarded
-    async def prepare_at_barrier(account, force=False, *, validate=None):
-        barrier = barriers.get("account_prepare")
-        if barrier is None:
-            return await original_prepare(account, force, validate=validate)
-        if validate is not None:
-            validate()
-        preparation_calls.append(force)
-        barrier[0].set()
-        if not await asyncio.to_thread(barrier[1].wait, 25):
-            raise RuntimeError("barreira de preparo não foi liberada")
-        return {"status": "ready", "trust_pending": False, "issues": []}
     children = []
     mux = {}
     original_popen = subprocess.Popen
@@ -445,12 +414,10 @@ def _worker() -> None:
         return [child.pid for child in children if child.poll() is None and "--codex-home" in child.args
                 and AccountKey.new(key.provider, Path(child.args[child.args.index("--codex-home") + 1])) == key]
 
-    service = codex_contas_login.CodexContasLogin()
     app = FastAPI()
     app.add_exception_handler(api.registry_mod.SessionOpenNeedsRust, api._abrir_precisa_do_rust)
     internal_api.set_secret("contract-internal")
     app.include_router(internal_api.router)
-    app.state.codex_contas_login = service
     calls = []
 
     @app.post("/__contract__/claude-owner")
@@ -466,23 +433,6 @@ def _worker() -> None:
         secondary["native_only"] = True
         return {"ok": True}
 
-
-    model_invalidations = []
-    original_catalog_request = dictation_bridge.request
-    def catalog_transport(operation, payload):
-        if operation == "invalidate_models":
-            model_invalidations.append(payload["home"])
-            return {}
-        return original_catalog_request(operation, payload)
-
-    @app.post("/__contract__/codex-model-invalidation")
-    def reset_model_invalidations():
-        model_invalidations.clear()
-        return {"homes": list(model_invalidations)}
-
-    @app.get("/__contract__/codex-model-invalidation")
-    def model_invalidation_calls():
-        return {"homes": list(model_invalidations)}
 
     @app.get("/__contract__/claude-auth")
     def claude_auth(path: str):
@@ -522,20 +472,6 @@ def _worker() -> None:
             return subprocess.CompletedProcess(arguments, 0, "", "")
         raise AssertionError(f"comando do multiplexador não previsto: {arguments}")
 
-    @app.post("/__contract__/barrier/{name}")
-    def block(name: str):
-        assert name == "account_prepare"
-        barriers[name] = (threading.Event(), threading.Event())
-        return {"ok": True}
-
-    @app.get("/__contract__/barrier/{name}")
-    def entered(name: str):
-        return {"entered": barriers[name][0].wait(20)}
-
-    @app.post("/__contract__/release/{name}")
-    def release(name: str):
-        barriers[name][1].set()
-        return {"ok": True}
 
     @app.get("/__contract__/usage")
     def usage():
@@ -563,8 +499,6 @@ def _worker() -> None:
 
     @app.post("/__contract__/cleanup")
     def cleanup():
-        for _, release in barriers.values():
-            release.set()
         for child in children:
             if child.poll() is None:
                 child.communicate(b"release\n", timeout=10)
@@ -596,30 +530,6 @@ def _worker() -> None:
         instance.instance = body["instance"]
         return {"ok": True}
 
-    @app.post("/__contract__/source-update")
-    def source_update(body: dict):
-        async def update(_force):
-            preparation_entered.set()
-            if body.get("raise"):
-                raise RuntimeError("falha sintética da atualização principal")
-            return body
-        service.atualizar_principal = update
-        return {"ok": True}
-
-    @app.get("/__contract__/wait-preparations")
-    async def wait_preparations():
-        await asyncio.wait_for(preparation_entered.wait(), 20)
-        jobs = list(account_bridge.preparation_jobs.jobs.values())
-        assert jobs
-        return await jobs[-1][1]
-
-    @app.get("/__contract__/preparation-calls")
-    def preparation_journal():
-        return preparation_calls
-
-    @app.get("/__contract__/preparation-operations")
-    def preparation_operations():
-        return list(account_bridge.preparation_jobs.jobs)
 
     @app.get("/__contract__/calls")
     def journal():
@@ -657,20 +567,15 @@ def _worker() -> None:
         return deny_external()
 
     with patch.object(runtime_coordinator, "current", return_value=instance), \
-            patch.object(api.app.state, "codex_contas_login", service, create=True), \
-            patch.object(api, "_codex_require_idle_preparation"), \
             patch.object(api, "_invalidate_lists"), \
-            patch.object(codex_contas_sync, "_prepare_account_guarded", side_effect=prepare_at_barrier), \
             patch.object(api.tmux, "has_session", side_effect=lambda name: name in mux and any(child.poll() is None for child in children)), \
             patch.object(api.tmux, "_run", side_effect=mux_command), \
             patch.object(api.tmux, "is_hidden", return_value=False), \
             patch.object(account_bridge, "terminal_instances", side_effect=lambda: dict(mux) if any(
                 child.poll() is None for child in children) else {}), \
             patch.object(account_bridge, "request_process_uses", side_effect=lambda key, pid: pid in launcher_pids(key)), \
-            patch.object(dictation_bridge, "request", side_effect=catalog_transport), \
             patch("subprocess.Popen", side_effect=deny_external), \
             patch("socket.create_connection", side_effect=private_connection), TestClient(app, client=("127.0.0.1", 32123)) as client:
-        client.portal.call(service.aquecer)
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *args):
                 pass
@@ -678,14 +583,6 @@ def _worker() -> None:
             def _handle(self):
                 size = int(self.headers.get("Content-Length", "0"))
                 body = self.rfile.read(size) if size else None
-                # Controle fora do loop testado permite liberar a barreira até se ele travar.
-                if self.command == "POST" and self.path.startswith("/__contract__/release/"):
-                    barriers[self.path.rsplit("/", 1)[1]][1].set()
-                    self.send_response(200)
-                    self.send_header("Content-Length", "2")
-                    self.end_headers()
-                    self.wfile.write(b"{}")
-                    return
                 response = client.request(self.command, self.path, content=body,
                                           headers={"Authorization": self.headers.get("Authorization", ""),
                                                    "Content-Type": "application/json",

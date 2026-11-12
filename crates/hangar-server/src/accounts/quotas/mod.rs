@@ -770,8 +770,7 @@ mod tests {
     }
 
     fn bridge() -> AccountsBridge {
-        // Nenhuma volta ao Python nesta leitura: a ponte aponta para porta nenhuma.
-        AccountsBridge::new("127.0.0.1:9".parse().unwrap(), "synthetic".into(), "synthetic".into()).unwrap()
+        AccountsBridge::new("synthetic".into())
     }
 
     fn row<'a>(rows: &'a Value, id: &str) -> Option<&'a Value> {

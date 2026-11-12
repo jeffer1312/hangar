@@ -1608,6 +1608,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-codex-account-sync"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "hangar-core",
+ "proptest",
+ "regex",
+ "reqwest",
+ "ring",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "hangar-codex-transfer"
 version = "0.1.0"
 dependencies = [
@@ -1847,6 +1863,7 @@ dependencies = [
  "hangar-api",
  "hangar-auth",
  "hangar-codex",
+ "hangar-codex-account-sync",
  "hangar-codex-transfer",
  "hangar-connect",
  "hangar-conversation-transfer",

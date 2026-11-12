@@ -77,8 +77,8 @@ Fontes oficiais: [Autenticação](https://learn.chatgpt.com/docs/auth), [Configu
 ## Implementação atual e provas
 
 O fluxo implementado está em [cadastro e origem das contas](../backend/app/codex_contas.py),
-[herança seletiva](../backend/app/codex_contas_sync.py), [login nativo e rotas](../crates/hangar-server/src/accounts/http.rs)
-e [plugins](../backend/app/codex_contas_plugins.py). O
+[herança seletiva](../crates/hangar-codex-account-sync/src/engine.rs), [login nativo e rotas](../crates/hangar-server/src/accounts/http.rs)
+e [plugins](../crates/hangar-codex-account-sync/src/plugins.rs). O
 [guia de uso](USAGE.md#contas-codex-chatgpt) descreve cadastro, seleção e retomada. A prova repetível
 de separação usa o [teste nativo isolado](../backend/tests/test_codex_contas_native.py).
 

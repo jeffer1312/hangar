@@ -55,8 +55,6 @@ responde 503 `accounts_need_rust_server`.
 
 Na migração inicial, ficaram no Python os caminhos que o Rust consumia ou ainda não atendia:
 
-- as rotas `/internal` de contas: fatos de uso, preparo das contas Codex e
-  invalidação do catálogo de modelos do Codex;
 - os leitores de cota Codex que a transferência de conversa usa;
 - as escritas de credenciais: apelido, sincronização nos agentes e
   remoção de provedor Kimi.
@@ -81,8 +79,8 @@ semeadura do `.claude.json` sem `oauthAccount` na criação) é do Rust:
 
 - A abertura de sessão (inclusive a reserva pré-aquecida e o `hangar-server open` com o servidor
   fora) reconcilia em processo sob a guarda da conta, com teto de 120 s que vale para as travas e
-  impede a reconciliação de começar depois dele. A criação pelo app semeia em processo; o
-  `/internal/accounts/prepare` ficou só para o Codex.
+  impede a reconciliação de começar depois dele. A criação pelo app semeia em processo.
+  O preparo Codex também passou ao Rust e a rota privada foi retirada (seção abaixo).
 - O shell chega à mesma regra por `hangar-conta` (lançador Python que só chama `hangar-server
   conta`), com o contrato de sempre: caminho no stdout, avisos `hangar-conta: ` no stderr, saídas
   0/1/2/126. O conserto "Contas" da saúde e a criação pela sincronização entre máquinas chamam esse
@@ -103,6 +101,39 @@ semeadura do `.claude.json` sem `oauthAccount` na criação) é do Rust:
   Infinity, inteiro além de 64 bits e caracteres U+10F800–U+10FFFF recusados ou alterados; junction
   do Windows tratada como atalho; conta do `--new` com pasta 0700; sem o binário `hangar-server`,
   `hangar-conta` sai 126.
+
+### Preparação e invalidação Codex sem Python (12/11/2026)
+
+O espelhamento da conta padrão nas adicionais pertence ao `hangar-codex-account-sync`, ligado
+ao coordenador de preparação existente. Configuração, recursos e plugins conservam o manifesto
+gerenciado, as alterações pessoais e a separação de identidade entre contas. O escritor TOML,
+os processos administrativos e a leitura de confiança são os mesmos da integração Codex.
+
+As rotas privadas `accounts/prepare`, `accounts/prepare/wait` e `accounts/codex-invalidate`
+foram retiradas. Depois do login ou logout, a invalidação alcança diretamente o catálogo de
+modelos compartilhado no Rust; não há volta ao Python. A guarda da conta dura até o fim das
+operações nativas; uma operação interrompida não vira sucesso pela ausência de seu executor.
+
+A assinatura interna do cache muda e provoca uma reconferência no primeiro uso. Essa diferença
+foi aprovada; o manifesto e os arquivos pessoais permanecem. Os testes do novo crate cobrem o
+espelhamento e suas fronteiras, e os testes de contas cobrem a coordenação e a invalidação.
+
+Também foi aprovada a categoria técnica genérica em `params.error` quando a fronteira de
+escrita de configuração ou adaptação de hooks não conserva a classe da exceção Python.
+O código público que identifica o problema permanece igual.
+
+A preparação conserva o manifesto dos efeitos já concluídos mesmo se uma etapa posterior
+falhar; só a assinatura do cache depende da verificação final. Plugins retirados da fonte
+permanecem gerenciados até confirmar sua ausência ou desativação. O filtro de ambiente ignora
+diferenças de caixa e exclui tokens literais e cabeçalhos de autenticação dos provedores,
+preservando referências a variáveis de ambiente. Caminhos de hooks com `./` são normalizados.
+A confiança de projeto preenche a chave ausente sem substituir uma escolha explícita.
+
+Restrições de login e workspace guardam separadamente a observação atual e os valores
+efetivamente escritos pelo Hangar. Ao retirar um perfil da fonte, só estes últimos podem ser
+removidos, e apenas se ainda forem iguais ao valor gravado. Alteração pessoal mantém o registro
+pendente; manifesto antigo sem prova de posse nunca autoriza apagar ou sobrescrever a restrição.
+Uma tentativa de escrita descartada também não transfere sua intenção para a tentativa seguinte.
 
 ## Anexos
 

@@ -1,75 +1,4 @@
-"""A ponte prepara configuração sem herdar autenticação ou liberar trabalho vivo."""
 import json
-import time
-from pathlib import Path
-from types import SimpleNamespace
-
-
-from app import runtime_coordinator
-
-
-from test_codex_contas_sync import isolated, fake_writer
-
-import pytest
-import codex_contas_apoio
-
-@pytest.mark.parametrize("force_pending", [False, True])
-def test_http_python_worker_blocks_delete_after_rust_restart(tmp_path, force_pending):
-    import urllib.request
-    from tests.accounts_contract import PythonReference
-    from tests.test_accounts_catalog import RustCatalog
-    reference = PythonReference(tmp_path)
-    rust = RustCatalog(reference)
-    try:
-        barrier = reference.block("account_prepare")
-        assert rust.request("POST", "/api/codex-contas/alpha/prepare").status_code == 202
-        assert barrier.entered.wait()
-        if force_pending:
-            assert rust.request("POST", "/api/codex-contas/alpha/prepare?forcar=true").status_code == 202
-        assert rust.request("DELETE", "/api/codex-contas/alpha").status_code == 409
-        records = list((tmp_path / ".hangar/account-locks").glob("*.prepare.json"))
-        assert len(records) == 1
-        old_operation = json.loads(records[0].read_text(encoding="utf-8"))
-        rust.close()
-        assert reference.request("POST", "/__contract__/runtime-instance", {"instance": "replacement"}).status_code == 200
-        rust = RustCatalog(reference, instance="replacement")
-        response = rust.request("DELETE", "/api/codex-contas/alpha")
-        assert response.status_code == 409, response.text
-        assert (tmp_path / ".codex-alpha/config.toml").is_file()
-        status = rust.request("GET", "/api/codex-contas/alpha/prepare")
-        assert status.json()["status"] == "running"
-        # Uma entrega da instância morta não inicia um segundo reconciliador.
-        request = urllib.request.Request(reference.base_url + "/internal/accounts/prepare",
-            data=json.dumps(old_operation).encode(), method="POST", headers={
-                "Content-Type": "application/json", "x-hangar-internal": "contract-internal",
-                "x-hangar-runtime-instance": "contract-instance"})
-        import urllib.error
-        try:
-            urllib.request.urlopen(request, timeout=10)
-            raise AssertionError("pedido antigo foi aceito")
-        except urllib.error.HTTPError as error:
-            assert error.code == 404
-        assert reference.request("GET", "/__contract__/preparation-calls").json() == [False]
-        barrier.release.set()
-        request = urllib.request.Request(reference.base_url + "/internal/accounts/prepare/wait",
-            data=json.dumps({"operation": old_operation["operation"]}).encode(), method="POST", headers={
-                "Content-Type": "application/json", "x-hangar-internal": "contract-internal",
-                "x-hangar-runtime-instance": "replacement"})
-        with urllib.request.urlopen(request, timeout=10) as response:
-            assert json.load(response)["status"] == "ready"
-        # O preparo forçado roda uma segunda vez: espera pelo estado, com teto de tempo, não por número de consultas.
-        deadline = time.monotonic() + 30
-        while rust.request("GET", "/api/codex-contas/alpha/prepare").json()["status"] != "ready":
-            if time.monotonic() > deadline:
-                raise AssertionError("a retomada não concluiu o preparo")
-            time.sleep(0.05)
-        assert reference.request("GET", "/__contract__/preparation-calls").json() == ([False, True] if force_pending else [False])
-        assert rust.request("DELETE", "/api/codex-contas/alpha").status_code == 200
-        assert reference.calls() == []
-    finally:
-        reference.request("POST", "/__contract__/cleanup")
-        rust.close()
-        reference.close()
 
 
 def test_http_claude_seed_preserves_configuration_and_does_not_publish_oauth(tmp_path):
@@ -135,55 +64,6 @@ def test_http_claude_validation_preserves_real_python_envelopes(tmp_path):
         rust.close()
         reference.close()
 
-def test_http_pretrust_only_on_explicit_valid_cwd(tmp_path):
-    from tests.accounts_contract import PythonReference
-    from tests.test_accounts_catalog import RustCatalog
-    import urllib.parse
-    reference = PythonReference(tmp_path)
-    rust = RustCatalog(reference)
-    try:
-        project = tmp_path / "project"
-        project.mkdir()
-        target = tmp_path / ".codex"
-        before = set(target.iterdir())
-        assert rust.request("GET", "/api/codex-contas/default/prepare").json()["status"] == "idle"
-        assert rust.request("GET", "/api/codex-contas/default/prepare?cwd=" + urllib.parse.quote(str(project))).json()["status"] == "idle"
-        assert set(target.iterdir()) == before
-        # A confiança da pasta só vale depois do primeiro preparo da conta.
-        from app.codex_contas import PREPARED_MARKER
-        (target / PREPARED_MARKER).write_text('{"version":1}', encoding="utf-8")
-        result = rust.request("GET", "/api/codex-contas/default/prepare?cwd=" + urllib.parse.quote(str(project)))
-        assert result.status_code == 200, result.text
-        assert result.json()["status"] == "ready", result.json()
-        import tomllib
-        data = tomllib.loads((target / "config.toml").read_text(encoding="utf-8"))
-        assert data["projects"][str(project)]["trust_level"] == "trusted"
-        before_text = (target / "config.toml").read_bytes()
-        assert rust.request("GET", "/api/codex-contas/default/prepare?cwd=relative").status_code == 400
-        assert (target / "config.toml").read_bytes() == before_text
-        assert reference.calls() == []
-    finally:
-        rust.close()
-        reference.close()
-
-
-async def test_valid_windows_toml_resource_is_prepared_without_changing_auth(isolated, fake_writer):
-    import tomllib
-    _, source, account = isolated
-    hook = source / "hooks/probe.py"
-    hook.parent.mkdir()
-    hook.write_text("print('ok')", encoding="utf-8")
-    agent = source / "agents/probe.toml"
-    agent.parent.mkdir()
-    agent.write_text("config_file = " + json.dumps(str(hook)) + "\n", encoding="utf-8")
-    (source / "config.toml").write_text('model = "high"\n', encoding="utf-8")
-    (source / "auth.json").write_text('{"token":"synthetic-source"}', encoding="utf-8")
-    (account.home / "auth.json").write_text('{"token":"synthetic-own"}', encoding="utf-8")
-    result = await codex_contas_apoio.prepare_account(account)
-    assert result["status"] == "ready", result
-    data = tomllib.loads((account.home / "agents/probe.toml").read_text(encoding="utf-8"))
-    assert data["config_file"] == str(account.home / "hooks/probe.py")
-    assert json.loads((account.home / "auth.json").read_text(encoding="utf-8")) == {"token": "synthetic-own"}
 
 def test_http_codex_catalog_reads_native_identity_with_real_preparation_status(tmp_path):
     from tests.accounts_contract import FIXTURES, PythonReference, normalize
@@ -203,7 +83,6 @@ def test_http_codex_catalog_reads_native_identity_with_real_preparation_status(t
         assert response.status_code == expected["status"] == 200
         assert normalize(response.json(), root=root) == expected["body"]
         assert upstream.calls() == []
-        assert upstream.request("GET", "/__contract__/preparation-calls").json() == []
     finally:
         rust.close()
         upstream.close()
@@ -225,22 +104,3 @@ def test_http_codex_catalog_matches_empty_settings_with_equivalent_native_transp
     finally:
         rust.close()
         reference.close()
-
-def test_rust_rejection_keeps_its_status_and_code_through_the_bridge(monkeypatch):
-    import io
-    import urllib.error
-    from app import account_bridge, codex_contas
-
-    monkeypatch.setattr(runtime_coordinator, "current", lambda: SimpleNamespace(mode="rust", instance="current"))
-    monkeypatch.setattr(account_bridge, "_preparation_transport", ("127.0.0.1:9", "synthetic"))
-
-    def rejected(*args, **kwargs):
-        body = json.dumps({"detail": {"code": "account_prepare_cwd_invalid", "params": {}, "msg": "pasta"}})
-        raise urllib.error.HTTPError("http://127.0.0.1:9", 400, "Bad Request", {}, io.BytesIO(body.encode()))
-
-    monkeypatch.setattr(account_bridge, "_post", rejected)
-    account = codex_contas.Account("extra", Path("/tmp/extra"), False)
-    with pytest.raises(codex_contas.AccountError) as error:
-        account_bridge.request_preparation(account, cwd="relative")
-    # Recusa do dono não é ponte indisponível: o 400 não pode sugerir tentar de novo.
-    assert (error.value.status, error.value.code) == (400, "account_prepare_cwd_invalid")
