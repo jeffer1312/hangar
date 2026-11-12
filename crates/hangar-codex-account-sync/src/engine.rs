@@ -66,8 +66,8 @@ pub async fn prepare(
 }
 fn destination_paths(state: &Value) -> BTreeSet<String> {
     let mut paths = BTreeSet::from(["config.toml".into()]);
-    paths.extend(object(&state["resources"]).into_keys());
-    paths.extend(object(&state["profiles"]).into_keys());
+    paths.extend(object(&state["resources"]).into_iter().map(|(key, _)| key));
+    paths.extend(object(&state["profiles"]).into_iter().map(|(key, _)| key));
     paths
 }
 fn profile_names(source: &Path) -> Result<BTreeSet<String>, Error> {
@@ -453,7 +453,7 @@ async fn run(
         return Err(Error::Changed);
     }
     let mut final_paths = BTreeSet::from(["config.toml".into()]);
-    final_paths.extend(object(&resources).into_keys());
+    final_paths.extend(object(&resources).into_iter().map(|(key, _)| key));
     final_paths.extend(profile_results.keys().cloned());
     let (destination_digest, destination_snapshot) =
         resources::snapshot(paths.destination, &final_paths, true)?;

@@ -1,5 +1,5 @@
 //! Recursos herdados: caminhos confinados, cópia seletiva e retirada apenas do gerenciado.
-use crate::{Error, Native, Paths, hash, issue, object};
+use crate::{Error, Native, Paths, hash, issue, json_bytes, object};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -512,7 +512,7 @@ pub(crate) fn sync(
             let source_entry = &source_snapshot["files"][relative];
             let target = source_entry["resolved"]
                 .as_str()
-                .filter(|target| {
+                .filter(|_| {
                     relative.starts_with("hooks/") || relative.starts_with(".hangar-hooks/")
                 })
                 .filter(|target| !Path::new(target).starts_with(paths.source))
