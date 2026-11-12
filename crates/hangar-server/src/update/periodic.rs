@@ -19,7 +19,7 @@ pub const RECHECK: Duration = Duration::from_secs(300);
 /// Atualização que falhou segura novas tentativas por 24 h.
 const FAILURE_WINDOW: chrono::TimeDelta = chrono::TimeDelta::hours(24);
 /// Sessão ou fila que nunca param não seguram a atualização para sempre; a entrega incerta segura.
-const DEFER_CEILING: chrono::TimeDelta = chrono::TimeDelta::hours(24);
+pub(crate) const DEFER_CEILING: chrono::TimeDelta = chrono::TimeDelta::hours(24);
 
 /// O que um tique pergunta à máquina; o teste troca.
 pub trait Machine {
@@ -109,6 +109,8 @@ pub async fn tick(machine: &impl Machine, now: Time, since: Option<Time>) -> Tic
     let version = match machine.newer(&channel).await {
         Ok(Some(version)) => version,
         Ok(None) => return skip("em dia"),
+        // Já adiada, o índice fora não encerra o adiamento nem zera o teto.
+        Err(e) if since.is_some() => return Tick::Deferred(format!("índice ilegível: {e}")),
         Err(e) => return Tick::Skipped(format!("índice ilegível: {e}")),
     };
     match machine.busy().await {
@@ -224,13 +226,14 @@ mod tests {
         newer: Option<&'static str>,
         busy: Option<Busy>,
         list_down: bool,
+        index_down: bool,
         launched: AtomicUsize,
     }
 
     impl Default for Fake {
         fn default() -> Fake {
             Fake { channel: Some("latest"), automations: true, state: json!({"fase": "pronto", "ok": true}), newer: Some("0.1.0.9"),
-                busy: None, list_down: false, launched: AtomicUsize::new(0) }
+                busy: None, list_down: false, index_down: false, launched: AtomicUsize::new(0) }
         }
     }
 
@@ -238,7 +241,9 @@ mod tests {
         fn package_channel(&self) -> Option<String> { self.channel.map(str::to_owned) }
         fn automations(&self) -> bool { self.automations }
         fn state(&self) -> crate::update::StateSnapshot { self.state.as_object().cloned().unwrap().into() }
-        async fn newer(&self, _channel: &str) -> Result<Option<String>, String> { Ok(self.newer.map(str::to_owned)) }
+        async fn newer(&self, _channel: &str) -> Result<Option<String>, String> {
+            if self.index_down { Err("index_timeout".into()) } else { Ok(self.newer.map(str::to_owned)) }
+        }
         async fn busy(&self) -> Result<Option<Busy>, String> { if self.list_down { Err("list_timeout".into()) } else { Ok(self.busy) } }
         async fn launch(&self) -> Result<(), String> { self.launched.fetch_add(1, Ordering::SeqCst); Ok(()) }
     }
@@ -306,6 +311,17 @@ mod tests {
         assert!(matches!(tick(&down(), now(), None).await, Tick::Skipped(_)), "sem adiamento, só pula como antes");
         let (since, wait) = next(Some(now()), &tick(&down(), now(), Some(now())).await, now());
         assert_eq!((since, wait), (Some(now()), RECHECK), "o teto conta do primeiro adiamento");
+    }
+
+    #[tokio::test]
+    async fn update_periodic_unreadable_index_keeps_the_deferral_start() {
+        let first = now() - chrono::TimeDelta::hours(23);
+        let down = Fake { index_down: true, busy: Some(Busy::Queue), ..Fake::default() };
+        let (since, _) = next(Some(first), &tick(&down, now(), Some(first)).await, now());
+        assert_eq!(since, Some(first), "índice fora não zera o teto de 24 h");
+        let later = now() + chrono::TimeDelta::hours(1);
+        let queued = Fake { busy: Some(Busy::Queue), ..Fake::default() };
+        assert_eq!(tick(&queued, later, since).await, Tick::Launched { version: "0.1.0.9".into() });
     }
 
     #[test]

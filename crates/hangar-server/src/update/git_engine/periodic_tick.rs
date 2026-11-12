@@ -2,19 +2,31 @@
 use serde_json::Value;
 #[derive(Debug)]
 pub enum Event { FetchFailed(i32,String), Launch, Refused(String), Skipped(String), Failed(String) }
+use crate::update::periodic::Busy;
+type Time=chrono::DateTime<chrono::FixedOffset>;
 pub async fn run(source:&Live) {
     if source.package(){return;}
-    while source.sleep().await.is_ok(){tick(source).await;}
+    let mut since=None;
+    while source.sleep().await.is_ok(){tick(source,&mut since).await;}
 }
-async fn tick(source:&Live) {
-    if let Err(error)=attempt(source).await { source.report(Event::Failed(error)); }
+async fn tick(source:&Live,since:&mut Option<Time>) {
+    if let Err(error)=attempt(source,since).await { source.report(Event::Failed(error)); }
 }
-async fn attempt(source:&Live)->Result<(),String> {
+/// O motivo de adiar, com `since` = desde quando a máquina segura a atualização.
+fn hold(busy:Option<Busy>,since:&mut Option<Time>,now:Time)->Option<String> {
+    let Some(busy)=busy else { *since=None; return None };
+    let first=*since.get_or_insert(now);
+    if busy==Busy::Uncertain || now-first<crate::update::periodic::DEFER_CEILING { return Some(busy.why().into()); }
+    tracing::warn!("auto-update: adiada há 24 h ({}); atualiza assim mesmo",busy.why());
+    *since=None;
+    None
+}
+async fn attempt(source:&Live,since:&mut Option<Time>)->Result<(),String> {
     if !source.enabled(){return Ok(());}
     let (code,tail)=source.fetch().await?;
     if code!=0 {source.report(Event::FetchFailed(code,tail));}
     let mut reason=source.reason().await?;
-    if reason.is_none() {reason=source.busy().await?.map(|busy|busy.why().into());}
+    if reason.is_none() {reason=hold(source.busy().await?,since,chrono::Local::now().fixed_offset());} else {*since=None;}
     match reason {
         None=>{
             source.report(Event::Launch);
@@ -63,4 +75,25 @@ impl Live {
         Event::Skipped(reason)=>tracing::info!("auto-update: pulando ({reason})"),
         Event::Failed(error)=>tracing::error!(%error,"auto-update: tick falhou"),
     }}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn now()->Time {chrono::DateTime::parse_from_rfc3339("2026-10-24T12:00:00-03:00").unwrap()}
+    /// Mesma regra do motor de pacote: fila e sessão trabalhando seguram até 24 h; a entrega incerta, sempre.
+    #[test]
+    fn git_engine_deferral_has_the_same_24h_ceiling() {
+        let mut since=None;
+        assert_eq!(hold(Some(Busy::Queue),&mut since,now()).as_deref(),Some(Busy::Queue.why()));
+        assert_eq!(since,Some(now()),"o adiamento conta do primeiro");
+        let later=now()+chrono::TimeDelta::hours(23);
+        assert!(hold(Some(Busy::Working),&mut since,later).is_some());
+        assert_eq!(since,Some(now()));
+        let day=now()+chrono::TimeDelta::hours(24);
+        assert_eq!(hold(Some(Busy::Working),&mut since.clone(),day),None,"passou de 24 h: atualiza");
+        assert!(hold(Some(Busy::Uncertain),&mut since,now()+chrono::TimeDelta::hours(48)).is_some(),"entrega incerta segura sempre");
+        assert_eq!(hold(None,&mut since,day),None);
+        assert_eq!(since,None,"livre, o adiamento acaba");
+    }
 }

@@ -274,7 +274,7 @@ const MSG_QUEUE_GONE: &str = "A mensagem já saiu da fila.";
 const MSG_QUEUE_TEXT: &str = "A mensagem da fila precisa de texto e não pode começar com /.";
 const MSG_STEER_QUESTION: &str = "Responda a permissão ou pergunta pendente antes de orientar.";
 const MSG_STEER_NOT_DELIVERED: &str = "A sessão não aceitou agora; a mensagem continua na fila.";
-const MSG_STEER_HELD: &str = "Uma mensagem anterior sem confirmação segura a fila; descarte-a para orientar esta.";
+const MSG_STEER_HELD: &str = "Uma mensagem anterior sem confirmação segura a fila. Confira o terminal: se ela ficou no campo de digitação, envie ou apague; depois descarte-a para orientar esta.";
 const MSG_STEER_UNCERTAIN: &str = "Não deu para confirmar se a mensagem chegou; confira a conversa antes de repetir.";
 
 fn queue_gone() -> Answer { (StatusCode::CONFLICT, detail_body("queue_entry_gone", MSG_QUEUE_GONE, json!({}))) }

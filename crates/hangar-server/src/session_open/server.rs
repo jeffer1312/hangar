@@ -264,6 +264,7 @@ impl OpenHost for ServerHost {
     fn release_name<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), OpenError>> {
         Box::pin(async move {
             self.st.list.forget(name);
+            self.st.list.invalidate();
             let (base, owned) = (self.env.claude_base.clone(), name.to_owned());
             if let Err(error) = tokio::task::spawn_blocking(move || forget_queue(&base, &owned)).await
                 .unwrap_or_else(|e| Err(std::io::Error::other(e.to_string()))) {

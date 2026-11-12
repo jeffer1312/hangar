@@ -1166,6 +1166,10 @@ impl TerminalDriver {
                         }
                         continue;
                     }
+                    // A tela pode atrasar: o Claude já com o texto na fila dele mandaria a mensagem duas vezes.
+                    if let Some(mark) = mark && self.services.transcript_enqueued(mark, text).await.unwrap_or(false) {
+                        return DeliveryResult::new(Disposition::Accepted, DeliveryStage::SubmitProof, "submitted_enqueued");
+                    }
                     resent = true;
                     tracing::info!(code = "submit_enter_repeated", "o texto seguiu no campo depois do Enter; um Enter de novo");
                     if let Err(e) = self.key_inner("Enter").await { return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Submit, e.code); }
