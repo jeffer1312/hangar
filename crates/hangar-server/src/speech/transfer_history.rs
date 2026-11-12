@@ -795,7 +795,7 @@ pub(crate) fn baton_window(row: &SessionRow, home: &Path, claude: &Path) -> Resu
 
 /// Associação da sessão ao histórico importado, resolvida uma vez por lote de leitura.
 #[derive(Clone)]
-pub(crate) struct LiveContext { home:std::path::PathBuf, name:String, cache:Arc<Mutex<Option<(PathBuf,(u64,u64),Arc<LiveFilter>)>>> }
+pub(crate) struct LiveContext { home:std::path::PathBuf, name:String, cache:Arc<Mutex<Option<(PathBuf,(u64,u64),u64,Arc<LiveFilter>)>>> }
 
 pub(crate) struct LiveFilter { id:String, offset:u64, imported:HashSet<String> }
 impl LiveContext {
@@ -806,10 +806,14 @@ impl LiveContext {
     pub(crate) fn filter(&self,path:&Path)->io::Result<Option<Arc<LiveFilter>>> {
         let meta=std::fs::metadata(path)?;
         let file=file_id(&meta);
-        if let Some(file)=file && let Some((cached,id,filter))=&*self.cache.lock().unwrap_or_else(|e|e.into_inner())
-            && cached==path && *id==file && meta.len()>=filter.offset {return Ok(Some(filter.clone()));}
+        let len=meta.len();
+        {
+            let mut cache=self.cache.lock().unwrap_or_else(|e|e.into_inner());
+            if let Some(file)=file && let Some((cached,id,seen,filter))=&mut *cache
+                && cached==path && *id==file && len>=*seen {*seen=len;return Ok(Some(filter.clone()));}
+        }
         let filter=self.resolve(path)?.map(Arc::new);
-        if let (Some(file),Some(found))=(file,&filter) {*self.cache.lock().unwrap_or_else(|e|e.into_inner())=Some((path.to_owned(),file,found.clone()));}
+        if let (Some(file),Some(found))=(file,&filter) {*self.cache.lock().unwrap_or_else(|e|e.into_inner())=Some((path.to_owned(),file,len,found.clone()));}
         Ok(filter)
     }
     fn resolve(&self,path:&Path)->io::Result<Option<LiveFilter>> {

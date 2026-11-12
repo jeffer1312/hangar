@@ -614,8 +614,8 @@ impl RuntimeRegistry {
         store.write_runtime(&record.id, &private)?;
         store.save(&record)?;
         let outcome=async {
-            private["source_stopping"]=json!(true);store.write_runtime(&record.id,&private)?;
             self.stop_claude(name,&current,Surface::Terminal).await.map_err(|_|error("session_transfer_source_not_stopped"))?;
+            private["source_stopped"]=json!(true);store.write_runtime(&record.id,&private)?;
             record.phase=TransferPhase::SourceStopped;store.save(&record)?;
             record=store.capture_snapshot(&record,&source,Vec::new())?;
             let context=convert_snapshot(Path::new(&record.source.as_ref().ok_or_else(||error("session_transfer_invalid_record"))?.path))?;
@@ -861,8 +861,8 @@ impl RuntimeRegistry {
                 return Ok(());
             }
         }
-        // Na subida a origem ainda não foi adotada; sem parada iniciada, a raiz viva prova que ela segue.
-        if private["source_stopping"] != true
+        // Na subida a origem ainda não foi adotada; sem parada confirmada, a raiz viva prova que ela segue.
+        if private["source_stopped"] != true
             && let Some(root) = private["root_pid"].as_i64()
             && recorded_alive(&private["processes"], root)?
         {
