@@ -220,7 +220,10 @@ async fn execute(
         async move {
             tokio::task::spawn_blocking(move || f(&service, &cwd))
                 .await
-                .unwrap_or_else(|_| Err(hangar_projects::Error::new(500, "leitura dos comandos falhou")))
+                .unwrap_or_else(|e| {
+                    tracing::error!(error = %e, code = "runner_read_failed", "leitura dos comandos da sessão falhou");
+                    Err(hangar_projects::Error::coded(500, "runner_read_failed", "leitura dos comandos falhou"))
+                })
         }
     };
     match op {
