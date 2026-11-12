@@ -115,7 +115,7 @@ pub async fn reload(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
             Ok(records) if !records.is_empty()=>{
                 let current_key=match runtime.transfer_key(&name).await {
                     Ok(key)=>key,
-                    Err(error)=>return json_response(StatusCode::CONFLICT,json!({"detail":error.public()})),
+                    Err(error)=>{let mut response=json_response(StatusCode::CONFLICT,json!({"detail":error.public()}));cors(req.headers(),response.headers_mut());return response},
                 };
                 if let Some(record)=records.into_iter().find(|r|r.name==name && current_key.as_ref().is_none_or(|key|r.origin_meta["key"]==*key)) {
                 let (st2,owned)=(st.clone(),name.clone());
@@ -127,7 +127,7 @@ pub async fn reload(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
                 }
             },
             Ok(_)=>{},
-            Err(error)=>return json_response(StatusCode::CONFLICT,json!({"detail":error.public()})),
+            Err(error)=>{let mut response=json_response(StatusCode::CONFLICT,json!({"detail":error.public()}));cors(req.headers(),response.headers_mut());return response},
         }
     }
     let st2 = st.clone();
@@ -181,23 +181,16 @@ pub(crate) async fn during_life_change<T>(st:&AppState,name:&str,work:impl Futur
     let Some(share)=st.share.clone() else { return work.await };
     share.lives.facts().begin_mode_change(name);
     let result=work.await;
-    let snapshot=match st.state.runtime.get() {
-        Some(runtime)=>runtime.pending_transfer_snapshot([name.to_owned()].into()).await,
-        None=>Ok((Default::default(),Default::default())),
+    let (life,uncertain)=match st.state.runtime.get() {
+        Some(runtime)=>runtime.pending_transfer_life(name).await,
+        None=>(None,false),
     };
-    match snapshot {
-        Ok((_,uncertain)) if uncertain.contains(name)=>{
-            share.lives.facts().set_transfer_uncertain(name,true);
-            share.lives.facts().end_mode_change(name);
-            return result;
-        },
-        Ok((mut lives,_))=>share.lives.facts().set_life(name,lives.remove(name)),
-        Err(error)=>{
-            share.lives.facts().set_transfer_uncertain(name,true);
-            share.lives.facts().end_mode_change(name);
-            tracing::warn!(session=%name,code=%error.code,"convite conservado enquanto a transferência não puder ser lida");return result;
-        },
+    if uncertain {
+        share.lives.facts().set_transfer_uncertain(name,true);
+        share.lives.facts().end_mode_change(name);
+        return result;
     }
+    share.lives.facts().set_life(name,life);
     if let Some(life)=share.lives.life(name,true).await {
         if let Err(error)=share.store.set_life(name,Some(life.clone())) { tracing::warn!(session=%name,kind=?error.kind(),"convite não acompanhou a vida nova"); }
         let (base,owned)=(st.accounts.env.claude_base.clone(),name.to_owned());

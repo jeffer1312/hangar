@@ -215,16 +215,14 @@ async fn serve_transcript_image(st: &AppState, name: &str, uuid: String, idx: &s
         .filter(|b| fresh.as_ref().is_some_and(|f| !b.changes_at_once(f)))
         .map_or(jsonl, |b| b.jsonl);
     let home=st.accounts.env.home.clone();
-    let owner_home=if uuid.starts_with("transfer:") {
-        match st.list.discover(None).await {
-            Ok(rows)=>rows.iter().find(|r|r.name==name).and_then(|r|r.conta.as_deref()).and_then(|id|id.strip_prefix("codex:").map(PathBuf::from)),
-            Err(_)=>return route_failed(st,headers,"rust.transcript_image_failed",name,"transcript_image_io","a conta da conversa não pôde ser lida"),
-        }
-    } else {None};
+    let session=name.to_owned();
     let found = tokio::task::spawn_blocking(move || {
         if let Some(id)=uuid.strip_prefix("transfer:").and_then(|s|s.split(':').next()) {
             let Some(record)=crate::speech::history::transfer_history::load_record(&home,id)? else {return Ok(None)};
-            let owner=owner_home.ok_or_else(||std::io::Error::other("conta da conversa ausente"))?;
+            // A conta dona vem do sidecar do Codex, como na cauda ao vivo, sem montar a lista inteira.
+            let sidecar=crate::runtime::codex_sidecar::path(&crate::runtime::codex_sidecar::dir(&home),&session);
+            let owner=crate::runtime::codex_sidecar::read(&sidecar)?.and_then(|meta|meta.get("codex_home").and_then(serde_json::Value::as_str).map(PathBuf::from))
+                .ok_or_else(||std::io::Error::other("conta da conversa ausente"))?;
             crate::speech::history::transfer_history::verify_boundary(&record,&jsonl,&owner)?;
             crate::speech::history::transfer_history::historical_image(&record,&uuid,idx)
         } else {find_image(&jsonl,&uuid,idx).map(|image|image.map(|(raw,media)|(raw,media.to_owned())))}

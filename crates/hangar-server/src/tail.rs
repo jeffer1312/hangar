@@ -110,8 +110,13 @@ fn read_frames_before(
         if n == 0 || line.last() != Some(&b'\n') {
             break;
         }
-        if let Some(filter)=&filter && !filter.includes(&line,at)? {
-            at+=n as u64;continue;
+        // O prefixo importado já foi conferido no filtro; linha nova ilegível segue para o parser, que a pula.
+        if let Some(filter)=&filter {
+            match filter.includes(&line,at) {
+                Ok(false)=>{at+=n as u64;continue;},
+                Ok(true)=>{},
+                Err(_)=>tracing::warn!(key,offset=at,"linha do rollout transferido ilegível; fica com o parser"),
+            }
         }
         // Pânico numa linha só pula a linha: sem isto o leitor compartilhado morria e os
         // aparelhos seguiam recebendo ping sem nenhuma mensagem nova.
@@ -457,16 +462,19 @@ impl TailState {
             let _ = tx.send(Out::Tail(self.generation, reset_frame()));
         }
         let from = self.pos.unwrap_or(0);
-        match read_frames_before(&self.path, from, None, &mut self.parser, &self.key, None,self.transfer.as_ref()) {
-            Ok((frames, end)) => {
-                self.pos = Some(end);
-                for f in frames {
-                    let _ = tx.send(Out::Tail(self.generation, f));
+        // Sem bytes novos não há o que ler: nem abrir o arquivo nem conferir a transferência.
+        if meta.len() > from {
+            match read_frames_before(&self.path, from, None, &mut self.parser, &self.key, None,self.transfer.as_ref()) {
+                Ok((frames, end)) => {
+                    self.pos = Some(end);
+                    for f in frames {
+                        let _ = tx.send(Out::Tail(self.generation, f));
+                    }
                 }
-            }
-            Err(e) => {
-                tracing::warn!(key = %self.key, "leitura do transcript falhou: {e}");
-                return false;
+                Err(e) => {
+                    tracing::warn!(key = %self.key, "leitura do transcript falhou: {e}");
+                    return false;
+                }
             }
         }
         let now = tokio::time::Instant::now();
@@ -638,7 +646,7 @@ mod tests {
         std::fs::write(base.join(format!("{id}.json")),record.to_string()).unwrap();
         let sidecars=crate::runtime::codex_sidecar::dir(home);
         crate::runtime::codex_sidecar::put(&sidecars,"session",json!({"name":"session","codex_home":owner,"thread_id":"thread","transfer_id":id}).as_object().unwrap()).unwrap();
-        let context=LiveContext{home:home.into(),name:"session".into()};
+        let context=LiveContext::new(home.into(),"session".into());
         let first=json!({"type":"response_item","payload":{"id":"new","type":"function_call","name":"exec","call_id":"call-new","arguments":"{}"}});
         let mut file=std::fs::OpenOptions::new().append(true).open(&path).unwrap();
         writeln!(file,"{imported}\n{first}").unwrap();
@@ -657,8 +665,13 @@ mod tests {
         assert!(state.poll(&tx));
         let mut live=Vec::new();while let Ok(Out::Tail(_,frame))=rx.try_recv(){live.push(frame);}
         let events=decode(live);assert_eq!(events.len(),1);assert_eq!(events[0]["tool_use_id"],format!("transfer:{id}:codex:call-new"));
+        writeln!(file,"não é json").unwrap();
+        assert!(state.poll(&tx),"linha nova ilegível não prende a cauda");
+        assert_eq!(state.pos,Some(complete_end(&path).unwrap()));
+        while rx.try_recv().is_ok() {}
         // A fronteira é conferida antes de publicar qualquer evento do lote, também após substituição.
-        let raw=std::fs::read(&path).unwrap();let mut changed=raw.clone();changed[0]=b' ';std::fs::write(&path,changed).unwrap();
+        let raw=std::fs::read(&path).unwrap();let mut changed=raw.clone();changed[0]=b' ';changed.extend_from_slice(format!("{output}\n").as_bytes());
+        let replaced=owner.join("thread.jsonl.new");std::fs::write(&replaced,changed).unwrap();std::fs::rename(&replaced,&path).unwrap();
         assert!(!state.poll(&tx));assert!(rx.try_recv().is_err());
     }
 

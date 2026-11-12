@@ -39,6 +39,13 @@ impl Drop for Scene {
 }
 impl Scene {
     async fn new() -> Self {
+        Self::build(false).await
+    }
+    /// Contas e registros duráveis dentro da pasta temporária, nunca no HOME de quem roda o teste.
+    async fn isolated() -> Self {
+        Self::build(true).await
+    }
+    async fn build(isolated: bool) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let (python, upstream) = spawn_fake().await;
         let cfg = Config {
@@ -53,6 +60,11 @@ impl Scene {
         let mut state = AppState::new(cfg);
         state.side.locate = sessions.clone();
         state.hangar_dir = dir.path().join(".hangar");
+        if isolated {
+            let home = dir.path().to_string_lossy().into_owned();
+            state.accounts = hangar_server::accounts::AccountService::new(hangar_server::accounts::environment::AccountEnvironment::from_map(
+                [("HOME".into(), home.clone()), ("USERPROFILE".into(), home)].into()));
+        }
         let runtime = Arc::new(RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(), "s".into(), "i".into()));
         assert!(state.state.runtime.set(runtime.clone()).is_ok());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -233,6 +245,40 @@ async fn transcript_image_of_an_invalid_transfer_is_refused_without_python() {
     assert_eq!(scene.python.hits_to(path), 0);
     let _ = scene.get_raw("/api/sessions/s/transcript-image/u/0").await;
     assert_eq!(scene.python.hits_to("/api/sessions/s/transcript-image/u/0"), 0);
+}
+
+#[tokio::test]
+async fn transcript_image_of_a_complete_transfer_comes_from_the_frozen_source_without_python() {
+    let scene = Scene::isolated().await;
+    let home = scene.dir.path();
+    let owner = home.join("codex-account");
+    std::fs::create_dir_all(&owner).unwrap();
+    let id = "61234567-89ab-4cde-8fab-0123456789ab";
+    let source = home.join("source.jsonl");
+    let frozen = format!("{}\n", json!({"type":"user","uuid":"root","parentUuid":null,"message":{"role":"user","content":[
+        {"type":"image","source":{"type":"base64","media_type":"image/png","data":PNG}}]}}));
+    std::fs::write(&source, &frozen).unwrap();
+    let rollout = owner.join("thread.jsonl");
+    let prefix = format!("{}\n", json!({"type":"session_meta","payload":{"id":"thread"}}));
+    std::fs::write(&rollout, &prefix).unwrap();
+    let digest = hangar_conversation_transfer::digest;
+    let record = json!({"id":id,"name":"s","phase":"complete",
+        "source":{"provider":"claude","path":source,"digest":digest(frozen.as_bytes()),"selected_uuids":["root"]},
+        "destination_meta":{"codex_home":owner},
+        "boundary":{"thread_id":"thread","rollout_path":rollout,"min_offset":prefix.len(),"prefix_digest":digest(prefix.as_bytes()),"imported_item_ids":[]}});
+    let records = home.join(".hangar/conversation-transfers");
+    std::fs::create_dir_all(&records).unwrap();
+    std::fs::write(records.join(format!("{id}.json")), record.to_string()).unwrap();
+    use hangar_server::runtime::codex_sidecar;
+    codex_sidecar::put(&codex_sidecar::dir(home), "s",
+        json!({"name":"s","codex_home":owner,"thread_id":"thread","transfer_id":id}).as_object().unwrap()).unwrap();
+    scene.sessions.0.lock().unwrap().insert("s".into(), info(&rollout, "codex"));
+    let path = format!("/api/sessions/s/transcript-image/transfer:{id}:claude:root/0");
+    let response = scene.get_raw(&path).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["content-type"], "image/png");
+    assert_eq!(response.bytes().await.unwrap().as_ref(), b"\x89PNG\r\n\x1a\n");
+    assert_eq!(scene.python.hits_to(&path), 0);
 }
 
 // --- anexos ---

@@ -3,7 +3,8 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     fs::File,
     io::{self, BufRead, BufReader, Read, Seek, SeekFrom},
-    path::Path,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
 use hangar_api::{chat::ChatEvent, session::SessionRow};
@@ -794,17 +795,36 @@ pub(crate) fn baton_window(row: &SessionRow, home: &Path, claude: &Path) -> Resu
 
 /// Associação da sessão ao histórico importado, resolvida uma vez por lote de leitura.
 #[derive(Clone)]
-pub(crate) struct LiveContext { pub home:std::path::PathBuf, pub name:String }
+pub(crate) struct LiveContext { home:std::path::PathBuf, name:String, cache:Arc<Mutex<Option<(PathBuf,(u64,u64),Option<Arc<LiveFilter>>)>>> }
 
 pub(crate) struct LiveFilter { id:String, offset:u64, imported:HashSet<String> }
 impl LiveContext {
-    pub(crate) fn filter(&self,path:&Path)->io::Result<Option<LiveFilter>> {
+    pub(crate) fn new(home:PathBuf,name:String)->Self { Self {home,name,cache:Default::default()} }
+    /// Resolvido uma vez por arquivo de rollout: o registro concluído e o prefixo importado não mudam
+    /// enquanto o arquivo só cresce. Arquivo substituído ou encolhido refaz; erro não fica guardado.
+    pub(crate) fn filter(&self,path:&Path)->io::Result<Option<Arc<LiveFilter>>> {
+        let meta=std::fs::metadata(path)?;
+        let file=file_id(&meta);
+        if let Some(file)=file && let Some((cached,id,filter))=&*self.cache.lock().unwrap_or_else(|e|e.into_inner())
+            && cached==path && *id==file && filter.as_ref().is_none_or(|f|meta.len()>=f.offset) {return Ok(filter.clone());}
+        let filter=self.resolve(path)?.map(Arc::new);
+        if let Some(file)=file {*self.cache.lock().unwrap_or_else(|e|e.into_inner())=Some((path.to_owned(),file,filter.clone()));}
+        Ok(filter)
+    }
+    fn resolve(&self,path:&Path)->io::Result<Option<LiveFilter>> {
         let sidecar=crate::runtime::codex_sidecar::path(&crate::runtime::codex_sidecar::dir(&self.home),&self.name);
         let Some(meta)=crate::runtime::codex_sidecar::read(&sidecar)? else {return Ok(None)};
         let owner=meta.get("codex_home").and_then(Value::as_str).map(Path::new);
         let record=match meta.get("transfer_id").and_then(Value::as_str).filter(|s|!s.is_empty()) {
             Some(id)=>Some(load_record(&self.home,id)?.ok_or_else(||invalid("O registro da transferência desapareceu."))?),
-            None=>match owner {Some(owner)=>indexed_record(&self.home,owner,&crate::locate::session_key(&path.to_string_lossy()),false)?,None=>None},
+            // Sessão que nunca foi transferida não perde a cauda por um índice ilegível.
+            None=>match owner {
+                Some(owner)=>indexed_record(&self.home,owner,&crate::locate::session_key(&path.to_string_lossy()),false).unwrap_or_else(|error| {
+                    tracing::warn!(session=%self.name,kind=?error.kind(),code="transfer_index_unreadable","índice de transferência ilegível; cauda sem filtro");
+                    None
+                }),
+                None=>None,
+            },
         };
         let Some(record)=record else {return Ok(None)};
         let owner=owner.ok_or_else(||invalid("A conta da conversa transferida está indisponível."))?;
@@ -814,6 +834,12 @@ impl LiveContext {
         let offset=stable_read(path,|reader,length|check_prefix(reader,length,&record["boundary"]))?;
         Ok(Some(LiveFilter {id:required(&record,"id")?.into(),offset,imported:imported_ids(&record["boundary"])?.into_iter().map(str::to_owned).collect()}))
     }
+}
+#[cfg(unix)]
+fn file_id(meta:&std::fs::Metadata)->Option<(u64,u64)> {use std::os::unix::fs::MetadataExt;Some((meta.dev(),meta.ino()))}
+#[cfg(not(unix))]
+fn file_id(meta:&std::fs::Metadata)->Option<(u64,u64)> {
+    meta.created().ok()?.duration_since(std::time::UNIX_EPOCH).ok().map(|d|(d.as_secs(),u64::from(d.subsec_nanos())))
 }
 impl LiveFilter {
     pub(crate) fn includes(&self,line:&[u8],offset:u64)->io::Result<bool> {
@@ -884,5 +910,19 @@ mod citation_index_contract {
         let row:SessionRow=serde_json::from_value(json!({"name":"resumed","provider":"codex","codex_home":owner,
             "jsonl":home.join(format!("rollout-fixture-{thread}.jsonl"))})).unwrap();
         assert_eq!(citation_rows(&row,home).unwrap_err().kind(),io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn unreadable_index_leaves_a_never_transferred_tail_unfiltered() {
+        let dir=tempfile::tempdir().unwrap(); let home=dir.path(); let owner=home.join("codex"); std::fs::create_dir(&owner).unwrap();
+        let thread="019f99de-9572-7221-89c0-80c62f883d44";
+        let path=owner.join(format!("rollout-fixture-{thread}.jsonl")); std::fs::write(&path,b"{}\n").unwrap();
+        assert_eq!(crate::locate::session_key(&path.to_string_lossy()),thread);
+        let key=format!("[{}, {}]",json!(crate::accounts::catalog::resolved(&owner)),json!(thread));
+        let indexes=home.join(".hangar/conversation-transfers/indexes"); std::fs::create_dir_all(&indexes).unwrap();
+        std::fs::write(indexes.join(format!("thread-{}.json",hex_digest(ring::digest::digest(&ring::digest::SHA256,key.as_bytes())))),b"{").unwrap();
+        assert!(indexed_record(home,&owner,thread,false).is_err());
+        crate::runtime::codex_sidecar::put(&crate::runtime::codex_sidecar::dir(home),"session",json!({"name":"session","codex_home":owner}).as_object().unwrap()).unwrap();
+        assert!(LiveContext::new(home.into(),"session".into()).filter(&path).unwrap().is_none());
     }
 }

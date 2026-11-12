@@ -53,11 +53,6 @@ impl LifeFacts {
     pub fn end_mode_change(&self, name: &str) {
         self.lock().changing.remove(name);
     }
-    /// Fotografia completa dos registros duráveis, conferida na subida.
-    pub fn apply_snapshot(&self, lives: HashMap<String, String>, changing: HashSet<String>) {
-        let mut state=self.lock();
-        state.lives=lives;state.changing=changing;state.snapshot=true;
-    }
     /// A recuperação da subida conserva somente os convites cuja transferência não pôde ser lida.
     pub fn apply_transfer_snapshot(&self,lives:HashMap<String,String>,uncertain:HashSet<String>) {
         let mut state=self.lock();state.lives=lives;state.uncertain.extend(uncertain);state.snapshot=true;
@@ -318,7 +313,7 @@ mod transfer_uncertainty_tests {
         sweep(&store,&lives).await.unwrap();
         assert!(store.active_sessions().contains("uncertain"));
         assert!(!store.active_sessions().contains("other"));
-        facts.apply_snapshot(Default::default(),Default::default());
+        facts.apply_transfer_snapshot(Default::default(),Default::default());
         assert!(facts.changing_mode("uncertain"),"fotografia de outra rodada não prova recuperação");
         facts.set_transfer_uncertain("uncertain",false);
         sweep(&store,&lives).await.unwrap();

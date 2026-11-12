@@ -115,6 +115,20 @@ fn command_digest(pid: i64) -> Result<String, TransferError> {
     Ok(digest(command.as_bytes()))
 }
 
+/// O processo `pid` gravado em `value` ainda é o mesmo: mesmo nascimento e mesmo comando.
+fn recorded_alive(value: &Value, pid: i64) -> Result<bool, TransferError> {
+    let identity = &value[pid.to_string()];
+    let birth = identity["started"]
+        .as_f64()
+        .ok_or_else(|| error("session_transfer_invalid_record"))?;
+    if super::super::lifecycle::process_absent(&SystemProcs::default(), pid, birth)
+        .map_err(|_| error("session_transfer_process_identity_unknown"))?
+    {
+        return Ok(false);
+    }
+    Ok(command_digest(pid).ok().as_deref() == identity["command"].as_str())
+}
+
 async fn stop_recorded(value: &Value) -> Result<(), TransferError> {
     let values = value
         .as_object()
@@ -190,8 +204,6 @@ impl ImportClient {
     ) -> Result<Self, TransferError> {
         let store = store(&service.env.home);
         let mut private = store.runtime(&record.id)?;
-        private["import_launching"] = json!(true);
-        store.write_runtime(&record.id, &private)?;
         let mut command = service
             .codex_command()
             .ok_or_else(|| error("session_transfer_native_unavailable"))?;
@@ -220,6 +232,9 @@ impl ImportClient {
         command.env_remove("TMUX").env_remove("TMUX_PANE");
         let mut tree = crate::terminal_process::CommandTree::configure(&mut command)
             .map_err(|_| error("session_transfer_native_unavailable"))?;
+        // Gravado só aqui: daqui em diante um processo pode existir sem identidade registrada.
+        private["import_launching"] = json!(true);
+        store.write_runtime(&record.id, &private)?;
         let (client, mut incoming, mut child) = match Client::spawn_stdio(command) {
             Ok(started) => started,
             Err(_) => {
@@ -237,18 +252,23 @@ impl ImportClient {
             store.write_runtime(&record.id, &private)?;
             return Err(error("session_transfer_native_unavailable"));
         }
-        let pid = child
-            .id()
-            .ok_or_else(|| error("session_transfer_process_identity_unknown"))?;
-        let saved = (|| {
-            private["import_processes"] = processes(i64::from(pid))?;
-            private["import_pid"] = json!(pid);
-            private["import_launching"] = json!(false);
-            store.write_runtime(&record.id, &private)
-        })();
+        let saved = match child.id() {
+            Some(pid) => (|| {
+                private["import_processes"] = processes(i64::from(pid))?;
+                private["import_pid"] = json!(pid);
+                private["import_launching"] = json!(false);
+                store.write_runtime(&record.id, &private)
+            })(),
+            None => Err(error("session_transfer_process_identity_unknown")),
+        };
         if let Err(e) = saved {
             crate::terminal_process::finish(&mut tree).await;
-            let _ = child.wait().await;
+            // Só a espera confirmada prova que nada ficou vivo; sem ela a limpeza segue em aberto.
+            if child.wait().await.is_ok() {
+                private["import_launching"] = json!(false);
+                private["import_stopped"] = json!(true);
+                store.write_runtime(&record.id, &private)?;
+            }
             return Err(e);
         }
         let responder = client.clone();
@@ -329,7 +349,7 @@ async fn check_target(
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|row| row["id"] == id)
+        .filter(|row| row["id"] == id && row["estado"] == "lida")
         .any(|row| {
             row["janelas"]
                 .as_array()
@@ -450,6 +470,19 @@ impl RuntimeRegistry {
         }
         Ok((lives,uncertain))
     }
+    /// Vida de origem da transferência pendente só desta sessão, e se o registro dela ficou sem conferir.
+    /// Sem registro incompleto não consulta o multiplexador.
+    pub(crate) async fn pending_transfer_life(&self,name:&str)->(Option<String>,bool) {
+        let records=match store(&self.codex_environment().home).incomplete_for_session(name) {
+            Ok(records)=>records,
+            Err(failure)=>{tracing::warn!(session=%name,code=%failure.code,"convite conservado até conferir a transferência desta sessão");return (None,true)},
+        };
+        if records.is_empty() {return (None,false);}
+        match self.transfer_key(name).await {
+            Ok(key)=>(records.into_iter().filter(|r|key.as_ref().is_none_or(|key|r.origin_meta["key"]==*key)).last().map(|r|r.source_life),false),
+            Err(failure)=>{tracing::warn!(session=%name,code=%failure.code,"identidade da transferência não pôde ser conferida");(None,true)},
+        }
+    }
     pub(crate) async fn transfer_to_codex(
         &self,
         name: &str,
@@ -465,14 +498,14 @@ impl RuntimeRegistry {
             return Err(error("session_transfer_busy"));
         }
         self.ingress()
-            .hold(name, Duration::from_secs(60))
+            .hold_transfer(name, Duration::from_secs(60))
             .await
             .map_err(|_| error("session_transfer_gate_unavailable").with_status(503))?;
         let result = self
             .transfer_locked(name, request, service, models, &store)
             .await;
         if !self.transfer_blocked(name).await {
-            self.ingress().release(name);
+            self.ingress().release_transfer(name);
         }
         result
     }
@@ -572,9 +605,13 @@ impl RuntimeRegistry {
         private["spec"] = serde_json::to_value(&current.spec)
             .map_err(|_| error("session_transfer_invalid_record"))?;
         private["settings"] = current.settings.clone().unwrap_or(Value::Null);
+        if root > 0 {
+            private["root_pid"] = json!(root);
+        }
         store.write_runtime(&record.id, &private)?;
         store.save(&record)?;
         let outcome=async {
+            private["source_stopping"]=json!(true);store.write_runtime(&record.id,&private)?;
             self.stop_claude(name,&current,Surface::Terminal).await.map_err(|_|error("session_transfer_source_not_stopped"))?;
             record.phase=TransferPhase::SourceStopped;store.save(&record)?;
             record=store.capture_snapshot(&record,&source,Vec::new())?;
@@ -695,12 +732,12 @@ impl RuntimeRegistry {
         // Uma recuperação anterior pode ter conservado a retenção na mesma instância.
         if !self.ingress().held(&record.name) {
             self.ingress()
-                .hold(&record.name, Duration::from_secs(60))
+                .hold_transfer(&record.name, Duration::from_secs(60))
                 .await
                 .map_err(|_| error("session_transfer_gate_unavailable"))?;
         }
         self.restore_transfer_record(&store, &mut record).await?;
-        self.ingress().release(&record.name);
+        self.ingress().release_transfer(&record.name);
         Ok(json!({"ok":true,"provider":"claude","transfer_id":record.id}))
     }
 
@@ -820,6 +857,13 @@ impl RuntimeRegistry {
             if alive {
                 return Ok(());
             }
+        }
+        // Na subida a origem ainda não foi adotada; sem parada iniciada, a raiz viva prova que ela segue.
+        if private["source_stopping"] != true
+            && let Some(root) = private["root_pid"].as_i64()
+            && recorded_alive(&private["processes"], root)?
+        {
+            return Ok(());
         }
         stop_recorded(&private["processes"]).await?;
         let generation = self
@@ -974,6 +1018,86 @@ mod tests {
             TransferPhase::RestoreFailed
         );
         assert!(runtime.list_snapshots_readonly().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn import_that_never_spawned_does_not_block_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        // Sem PATH no ambiente não há `codex`: a importação desiste antes de lançar processo.
+        let service = AccountService::new(crate::accounts::environment::AccountEnvironment::from_map(
+            [("HOME".into(), home.to_string_lossy().into_owned())].into(),
+        ));
+        let record = TransferRecord {
+            id: "41234567-89ab-4cde-8fab-0123456789ab".into(),
+            name: "session".into(),
+            source_life: "k:key".into(),
+            phase: TransferPhase::SourceStopped,
+            source: None,
+            origin_meta: json!({"key":"key"}),
+            destination_meta: None,
+            boundary: None,
+            error_code: None,
+        };
+        let store = store(home);
+        store.save(&record).unwrap();
+        store.prepare_runtime(&record.id, json!({}), json!({})).unwrap();
+        let account = crate::accounts::catalog::Account {
+            id: "default".into(),
+            home: home.join(".codex"),
+            is_default: true,
+        };
+        let failure = ImportClient::open(service, Default::default(), &account, &record, 1)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(failure.code, "session_transfer_native_unavailable");
+        assert!(store.runtime(&record.id).unwrap().get("import_launching").is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn startup_recovery_keeps_a_source_that_was_never_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let env = crate::accounts::environment::AccountEnvironment::from_map(
+            [("HOME".into(), home.to_string_lossy().into_owned())].into(),
+        );
+        let runtime = RuntimeRegistry::new(
+            "127.0.0.1:9".parse().unwrap(),
+            "fixture".into(),
+            "fixture".into(),
+        )
+        .with_codex_environment(env);
+        let mut source = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let root = i64::from(source.id());
+        let origin = json!({"name":"session","provider":"claude","key":"11111111111111111111111111111111","cwd":home,"config_dir":home.join(".claude"),"session_id":"original","jsonl":home.join("original.jsonl"),"headless":true,"permission_mode":"default"});
+        let spec = crate::session_open::record::claude_from_meta(&origin, "session", 1.0).unwrap();
+        let record = TransferRecord {
+            id: "51234567-89ab-4cde-8fab-0123456789ab".into(),
+            name: "session".into(),
+            source_life: format!("k:{}", spec.key),
+            phase: TransferPhase::Preparing,
+            source: None,
+            origin_meta: origin.clone(),
+            destination_meta: None,
+            boundary: None,
+            error_code: None,
+        };
+        let store = store(home);
+        store.save(&record).unwrap();
+        store
+            .prepare_runtime(&record.id, origin, processes(root).unwrap())
+            .unwrap();
+        let mut private = store.runtime(&record.id).unwrap();
+        private["spec"] = serde_json::to_value(spec).unwrap();
+        private["root_pid"] = json!(root);
+        store.write_runtime(&record.id, &private).unwrap();
+        // A sessão ainda não foi adotada: só a identidade gravada da raiz diz que ela segue viva.
+        runtime.recover_transfer(record).await.unwrap();
+        assert!(source.try_wait().unwrap().is_none(), "a origem viva não é encerrada");
+        let _ = source.kill();
+        let _ = source.wait();
     }
 
     #[tokio::test]

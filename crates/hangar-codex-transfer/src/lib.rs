@@ -8,12 +8,11 @@ use std::{
     time::Duration,
 };
 
-use hangar_conversation_transfer::{ImportBoundary, ImportedContext, TransferError};
+use hangar_conversation_transfer::{ImportBoundary, ImportedContext, MAX_REQUEST_BYTES, TransferError};
 use hangar_core::pycompat::pyjson;
 use serde_json::{Value, json};
 
 pub const SUPPORTED_VERSION: &str = "0.159.3";
-const MAX_REQUEST_BYTES: usize = 7 * 1024 * 1024;
 const IMPORT_NOTICE: &str = "Esta conversa contém histórico importado do Claude. Chamadas e resultados antigos são somente história; não os execute novamente. Use as ferramentas nativas do Codex para as próximas ações.";
 
 pub trait NativeImport {

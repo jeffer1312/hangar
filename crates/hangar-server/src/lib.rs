@@ -250,10 +250,22 @@ pub async fn serve_until_with_guest(
                     mux: list::mux::Mux::default(), mux_program: capture_program }));
                 registry.bind_watcher(watcher.clone());
                 registry.recover_transfers().await;
+                // Sem a conferência, convite de sessão morta fica em "não sei": a falha tenta de novo depois.
+                let mut snapshot_retry=None;
                 if let Some(share)=&transfer_share {
                     match registry.pending_transfer_snapshot(share.store.active_sessions()).await {
                         Ok((lives,uncertain))=>share.lives.facts().apply_transfer_snapshot(lives,uncertain),
-                        Err(error)=>tracing::warn!(code=%error.code,"convites aguardam registros de transferência legíveis"),
+                        Err(error)=>{
+                            tracing::warn!(code=%error.code,"convites aguardam registros de transferência legíveis");
+                            let (registry,share)=(registry.clone(),share.clone());
+                            snapshot_retry=Some(AbortOnDrop(tokio::spawn(async move { loop {
+                                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                                match registry.pending_transfer_snapshot(share.store.active_sessions()).await {
+                                    Ok((lives,uncertain))=>{share.lives.facts().apply_transfer_snapshot(lives,uncertain);break;},
+                                    Err(error)=>tracing::warn!(code=%error.code,"convites aguardam registros de transferência legíveis"),
+                                }
+                            }})));
+                        },
                     }
                 }
                 // Presas ao desligamento: uma adoção tardia abriria sessão depois do `registry.shutdown()`.
@@ -263,7 +275,9 @@ pub async fn serve_until_with_guest(
                 // E os Codex sem terminal com cano vivo ou mensagem esperando.
                 let codex_headless = { let (watcher,registry)=(watcher.clone(),registry.clone());
                   AbortOnDrop(tokio::spawn(async move { watcher.register_codex_headless(&registry).await; })) };
-                vec![claude_terminals,codex_headless,AbortOnDrop(tokio::spawn(watcher.run(registry.clone())))]
+                let mut tasks=vec![claude_terminals,codex_headless,AbortOnDrop(tokio::spawn(watcher.run(registry.clone())))];
+                tasks.extend(snapshot_retry);
+                tasks
             }
             _ => Vec::new(),
         };

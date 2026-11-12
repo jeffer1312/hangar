@@ -167,9 +167,11 @@ impl Store {
             Err(cause) => {
                 record.phase = TransferPhase::RestoreFailed;
                 record.error_code = Some(cause.code.clone());
-                self.save_recovery(record)?;
-                Err(TransferError::new("session_transfer_restore_failed")
-                    .with_params(json!({"phase": cause.code})))
+                let mut params = json!({"phase": cause.code});
+                if let Err(failure) = self.save_recovery(record) {
+                    params["save"] = json!(failure.code);
+                }
+                Err(TransferError::new("session_transfer_restore_failed").with_params(params))
             }
         }
     }

@@ -451,7 +451,7 @@ impl From<Bytes> for Queued {
 fn transfer_context(ctx:&SideCtx,name:&str,provider:Provider)->Option<crate::speech::history::transfer_history::LiveContext> {
     if provider!=Provider::Codex {return None;}
     let runtime=ctx.runtime.get()?;
-    Some(crate::speech::history::transfer_history::LiveContext{home:runtime.codex_environment().home,name:name.into()})
+    Some(crate::speech::history::transfer_history::LiveContext::new(runtime.codex_environment().home,name.into()))
 }
 
 impl Hub {

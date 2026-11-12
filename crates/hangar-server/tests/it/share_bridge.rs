@@ -141,7 +141,7 @@ async fn snapshot_releases_the_verdict_and_mode_change_holds_it() {
     let guest = || srv.share.store.lookup_token(&token).unwrap();
     // Sem conferir o registro durável, vida diferente pode ser transferência: "não sei", nunca 410.
     assert_eq!(verdict(&guest(), Some("s"), &srv.share.lives).await, Verdict::Unsure);
-    srv.share.lives.facts().apply_snapshot(Default::default(),["s".into()].into());
+    srv.share.lives.facts().apply_transfer_snapshot(Default::default(),Default::default());srv.share.lives.facts().begin_mode_change("s");
     assert_eq!(verdict(&guest(), Some("s"), &srv.share.lives).await, Verdict::Unsure, "trocando de modo");
     srv.share.lives.facts().end_mode_change("s");srv.share.lives.facts().set_life("s",None);
     assert_eq!(verdict(&guest(), Some("s"), &srv.share.lives).await, Verdict::Ended, "outra vida de verdade");
@@ -150,7 +150,7 @@ async fn snapshot_releases_the_verdict_and_mode_change_holds_it() {
     srv.share.lives.facts().end_mode_change("s");srv.share.lives.facts().set_life("s",None);
     // Transferência em curso quando o Rust subiu (terminal e sidecar sumidos): a vida de origem vale.
     srv.probe.keys.lock().unwrap().clear();
-    srv.share.lives.facts().apply_snapshot([("s".into(),"k:A".into())].into(),Default::default());
+    srv.share.lives.facts().apply_transfer_snapshot([("s".into(),"k:A".into())].into(),Default::default());
     assert_eq!(verdict(&guest(), Some("s"), &srv.share.lives).await, Verdict::Ok);
     srv.share.lives.facts().end_mode_change("s");srv.share.lives.facts().set_life("s",None);
     assert_eq!(verdict(&guest(), Some("s"), &srv.share.lives).await, Verdict::Ended, "o fim da troca solta a vida de origem");
@@ -163,7 +163,7 @@ async fn mode_change_end_keeps_the_transfer_still_incomplete() {
     let srv = server(dir.path(), true).await;
     let (_, token) = srv.share.store.create_redeemed("s", Some("k:A".into()), Kind::Share).unwrap();
     let guest = || srv.share.store.lookup_token(&token).unwrap();
-    srv.share.lives.facts().apply_snapshot([("s".into(),"k:A".into())].into(),Default::default());
+    srv.share.lives.facts().apply_transfer_snapshot([("s".into(),"k:A".into())].into(),Default::default());
     srv.share.lives.facts().begin_mode_change("s");
     srv.share.lives.facts().end_mode_change("s");srv.share.lives.facts().set_life("s",Some("k:A".into()));
     assert_eq!(verdict(&guest(), Some("s"), &srv.share.lives).await, Verdict::Ok);
