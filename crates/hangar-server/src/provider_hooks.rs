@@ -61,26 +61,34 @@ pub fn run(mode: &str) -> ExitCode {
                 )?;
                 Ok(None)
             } else {
-                if value["tool_name"] != "Bash" {
+                let tool = value["tool_name"].as_str().unwrap_or("");
+                if !["Bash", "Read", "Grep"].contains(&tool) {
                     return Ok(None);
                 }
-                let command = match value.get("tool_input") {
+                let input = match value.get("tool_input") {
                     Some(input) if !input.is_object() => return Err("tool_input_not_object"),
-                    Some(input) => &input["command"],
+                    Some(input) => input,
                     None => &Value::Null,
                 };
+                if tool != "Bash" {
+                    let read = ["file_path", "path"].iter().any(|k| input[k].as_str().is_some_and(vault_path));
+                    return Ok(read.then(|| VAULT_DENIED.to_owned()));
+                }
+                let command = &input["command"];
                 if !crate::orchestration::truthy(command) {
                     return Ok(None);
                 }
                 let command = command.as_str().ok_or("command_not_string")?;
-                Ok(dangerous(command, 0))
+                if reads_vault(command, 0) {
+                    return Ok(Some(VAULT_DENIED.to_owned()));
+                }
+                Ok(dangerous(command, 0).map(|reason| format!(
+                    "BLOQUEADO: {reason}.\nPrecisa de tmux limpo para uma sonda? Suba um SERVIDOR SEPARADO com socket próprio:\n  tmux -L probe-x new-session -d -s alvo ...\n  tmux -L probe-x kill-server\nNunca no servidor default, onde vivem as sessões de trabalho (TMUX_TMPDIR não isola: dentro do tmux quem manda é $TMUX).\nPara matar UMA sessão: `tmux kill-session -t '=nome:'`."
+                )))
             }
         });
     match result {
-        Ok(Some(reason)) => {
-            let text = format!(
-                "BLOQUEADO: {reason}.\nPrecisa de tmux limpo para uma sonda? Suba um SERVIDOR SEPARADO com socket próprio:\n  tmux -L probe-x new-session -d -s alvo ...\n  tmux -L probe-x kill-server\nNunca no servidor default, onde vivem as sessões de trabalho (TMUX_TMPDIR não isola: dentro do tmux quem manda é $TMUX).\nPara matar UMA sessão: `tmux kill-session -t '=nome:'`."
-            );
+        Ok(Some(text)) => {
             let _ = writeln!(
                 std::io::stdout().lock(),
                 "{}",
@@ -312,6 +320,42 @@ fn head(tokens: &[String]) -> (&str, &[String]) {
     }
     ("", &[])
 }
+const VAULT_DENIED: &str = "BLOQUEADO: o arquivo do `vault_file` guarda uma senha e não se lê, nem para contar, medir ou tirar hash.\nO tamanho já veio na resposta do `vault_file` (`bytes`, `chars`, `ends_with_newline`). Passe o caminho como argumento ao programa que precisa da senha.";
+
+/// A pasta do `vault_file` (`$XDG_RUNTIME_DIR/hangar/vault-files`, `%LOCALAPPDATA%\hangar\vault-files`) em qualquer barra ou caixa.
+fn vault_path(text: &str) -> bool {
+    text.replace('\\', "/").to_ascii_lowercase().contains("hangar/vault-files")
+}
+
+/// Programas que mostram, medem ou copiam o conteúdo do arquivo que recebem.
+const READERS: &[&str] = &[
+    "cat", "tac", "head", "tail", "less", "more", "bat", "nl", "od", "xxd", "hexdump", "strings",
+    "base64", "wc", "md5sum", "sha1sum", "sha256sum", "sha512sum", "cksum", "b2sum", "grep", "rg",
+    "awk", "sed", "cut", "sort", "uniq", "diff", "cmp", "cp", "type", "get-content", "gc",
+    "select-string", "get-filehash", "format-hex", "certutil",
+];
+
+/// Ler o arquivo, não usá-lo: o caminho como argumento de outro programa passa.
+fn reads_vault(command: &str, depth: u8) -> bool {
+    if !vault_path(command) {
+        return false;
+    }
+    // .NET pelo PowerShell (`[IO.File]::ReadAllText`, `ReadAllBytes`, `ReadAllLines`).
+    if command.to_ascii_lowercase().contains("::readall") {
+        return true;
+    }
+    segments(command).iter().any(|segment| {
+        let words = tokens(segment);
+        let (name, args) = head(&words);
+        let name = name.rsplit(['/', '\\']).next().unwrap_or(name).to_ascii_lowercase();
+        let name = name.strip_suffix(".exe").unwrap_or(&name);
+        if ["sh", "bash", "zsh", "dash", "ksh", "ash", "busybox", "eval", "powershell", "pwsh"].contains(&name) {
+            return depth < 3 && reads_vault(&args.join(" "), depth + 1);
+        }
+        READERS.contains(&name) && vault_path(segment)
+    })
+}
+
 fn dangerous(command: &str, depth: u8) -> Option<String> {
     for segment in segments(command) {
         let words = tokens(&segment);
