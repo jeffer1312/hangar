@@ -156,5 +156,8 @@ async fn silent_absence_like_psmux_counts_as_stopped() {
     let root = tempfile::tempdir().unwrap();
     let mut service = service(root.path());
     service.program = vec!["/bin/sh".into(), "-c".into(), "exit 1".into()];
-    service.stop_run(root.path().to_str().unwrap()).await.unwrap();
+    let cwd = root.path().to_str().unwrap();
+    assert_eq!(service.stop_run(cwd).await.unwrap_err().code, Some("runner_mux_unavailable"));
+    service.windows = true;
+    service.stop_run(cwd).await.unwrap();
 }

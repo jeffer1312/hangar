@@ -183,8 +183,8 @@ impl Service {
         if ok {
             Some(true)
         } else {
-            // O psmux sem a sessão sai com 1 e nada no stderr; prazo e falha ao lançar têm texto.
-            (error.is_empty() || hangar_core::terminal_process::mux_absence(error)).then_some(false)
+            // O psmux sem a sessão sai com 1 e nada no stderr; no tmux, stderr vazio é processo morto.
+            ((self.windows && error.is_empty()) || hangar_core::terminal_process::mux_absence(error)).then_some(false)
         }
     }
     /// A última leitura de `exists` depois de matar: `Some(false)` = parou.
