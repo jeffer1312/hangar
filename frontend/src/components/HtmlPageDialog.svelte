@@ -196,7 +196,7 @@
     container-type: size; background: var(--surface-inset);
   }
   /* Sobre a foto o inset é translúcido e a imagem atravessaria a página: fundo liso, como no cartão. */
-  :global(html[data-bg="image"]) .stage { background: var(--bg-base); }
+  :global(html:is([data-bg="image"], [data-bg="desktop"])) .stage { background: var(--bg-base); }
   .zoomed { width: 100cqw; height: 100cqh; }
   .stage[hidden], .zoom[hidden] { display: none; }
   .source { container-type: normal; }

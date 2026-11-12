@@ -1387,8 +1387,9 @@ textura de trás.
 - **Vale para o fundo, não para a Leitura escolhida**: o pedido foi fundo liso sempre que houver
   página sobre imagem ou desktop, mesmo com Leitura Nenhuma ou Folha.
 - **A página usa a fonte da conversa escolhida em Aparência**, não a Geist fixa. Fonte embutida
-  (Geist, Inter ou JetBrains Mono, com o itálico) vai para a página como `@font-face` em base64, uma
-  vez por fonte; instalada, o Chromium acha pelo nome. A Inter entra no app em TTFs estáticos (o
+  (Geist e Inter com o itálico; JetBrains Mono só a Regular, a mesma que o app embute) vai para a
+  página como `@font-face` em base64, uma vez por fonte; instalada, o Chromium acha pelo nome. A
+  escolha Mono (a Nerd Font instalada) cai na JetBrains Mono embutida quando falta. A Inter entra no app em TTFs estáticos (o
   GPUI desenha) e na página como `InterVariable.woff2` e `InterVariable-Italic.woff2`, bem menores
   que os TTFs.
 - Trocar a Geist pela Inter não mudaria a legibilidade: a 14 px as duas quase não se distinguem.

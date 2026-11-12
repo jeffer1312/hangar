@@ -55,7 +55,7 @@ function LivePageCard({ page, sessionName, serverId }: { page: HtmlPageRef; sess
   }, [key, setReported, openLink]);
 
   const onLayout = useCallback((e: LayoutChangeEvent) => setWidth(e.nativeEvent.layout.width), []);
-  const w = width || screen - 2 * theme.base.space[4];
+  const w = width || screen - 2 * theme.base.space[4] - (backed ? 2 * theme.base.space[3] : 0);
   const height = frameHeight(page, w, reported);
   // Altura fixa pedida pelo agente e conteúdo maior que ela: a página rola por dentro.
   const inside = page.height != null && (reported ?? reservedHeight(page, w)) > height;

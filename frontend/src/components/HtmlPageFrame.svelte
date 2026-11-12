@@ -132,7 +132,7 @@
   .page { position: relative; width: 100%; margin-bottom: var(--space-1); background: transparent; }
   /* Sobre a foto a página transparente perde a letra na imagem: fundo liso, como no nativo (só no celular: a web
      desktop está congelada). A altura reservada é a da página, então a margem soma por fora (content-box). */
-  :global(html[data-bg="image"]) .page.backed {
+  :global(html:is([data-bg="image"], [data-bg="desktop"])) .page.backed {
     box-sizing: content-box; width: auto; padding: 12px; border-radius: 10px; background: var(--bg-base);
   }
   iframe { display: block; width: 100%; height: 100%; border: 0; background: transparent; }

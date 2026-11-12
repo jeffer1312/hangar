@@ -374,19 +374,30 @@ fn embedded_faces(family: &str) -> Option<&'static str> {
     match family {
         f if f == theme::SANS => Some(&GEIST_FACES),
         f if f == theme::INTER => Some(&INTER_FACES),
-        f if f == theme::CODE_MONO => Some(&CODE_MONO_FACES),
+        // A Nerd Font da escolha Mono só existe instalada: sem ela a página cai na JetBrains Mono embutida.
+        f if f == theme::CODE_MONO || f == theme::MONO => Some(&CODE_MONO_FACES),
         _ => None,
     }
 }
 
-/// Cores do app que a página recebe, uma tabela só para a chave e o script. O que o app não tem (`--info`, gráficos)
-/// fica com o padrão do esquema que o servidor guardou na página.
+/// Família da conversa como string CSS: nome de fonte instalada pode trazer aspas ou barra.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
-fn palette() -> [(&'static str, Hsla); 10] {
-    [("--foreground", theme::text()), ("--muted-foreground", theme::muted()), ("--surface", theme::surface()),
-        ("--border", theme::border()), ("--accent", theme::accent()), ("--accent-foreground", theme::on_accent()),
-        ("--danger", theme::danger()), ("--warning", theme::warning()), ("--success", theme::success()),
-        ("--code-background", theme::inset())]
+fn font_stack(family: &str) -> String {
+    let quoted = format!("\"{}\"", family.replace('\\', "\\\\").replace('"', "\\\""));
+    let fallback = if family == theme::MONO { format!(", \"{}\"", theme::CODE_MONO) } else { String::new() };
+    format!("{quoted}{fallback}, system-ui, sans-serif")
+}
+
+/// Variáveis das cores do app que a página recebe, na ordem de `palette`. O que o app não tem (`--info`,
+/// gráficos) fica com o padrão do esquema que o servidor guardou na página.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+const PALETTE_VARS: [&str; 10] = ["--foreground", "--muted-foreground", "--surface", "--border", "--accent",
+    "--accent-foreground", "--danger", "--warning", "--success", "--code-background"];
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn palette() -> [Hsla; 10] {
+    [theme::text(), theme::muted(), theme::surface(), theme::border(), theme::accent(), theme::on_accent(),
+        theme::danger(), theme::warning(), theme::success(), theme::inset()]
 }
 
 /// O que o script do tema lê do app: chave igual, script igual, sem montá-lo a cada quadro.
@@ -396,16 +407,16 @@ pub(super) struct ThemeKey { dark: bool, colors: [Hsla; 10], font: &'static str 
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 fn theme_key() -> ThemeKey {
-    ThemeKey { dark: theme::is_dark(), colors: palette().map(|(_, c)| c), font: crate::appearance::get().font.family() }
+    ThemeKey { dark: theme::is_dark(), colors: palette(), font: crate::appearance::get().font.family() }
 }
 
 /// Script que entrega o tema do app à página, nos nomes de variável da spec.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 fn theme_script(key: ThemeKey) -> String {
-    let mut vars: serde_json::Map<String, Value> = palette().into_iter().map(|(name, c)| (name.to_owned(), hex(c).into())).collect();
+    let mut vars: serde_json::Map<String, Value> = PALETTE_VARS.into_iter().zip(key.colors).map(|(name, c)| (name.to_owned(), hex(c).into())).collect();
     vars.insert("--background".into(), "transparent".into());
     // A da conversa em Aparência: a página fica na mesma letra da resposta ao lado.
-    vars.insert("--font-sans".into(), format!("\"{}\", system-ui, sans-serif", key.font).into());
+    vars.insert("--font-sans".into(), font_stack(key.font).into());
     vars.insert("--font-mono".into(), format!("\"{}\", ui-monospace, monospace", theme::MONO).into());
     let params = json!({"theme": if key.dark { "dark" } else { "light" }, "styles": {"variables": vars}});
     format!("window.__hangarApply&&window.__hangarApply({params})")
@@ -1037,5 +1048,16 @@ mod tests {
         assert_eq!(parse_host(&link("file:///etc/passwd")), None);
         assert_eq!(parse_host(r#"{"method":"ui/other"}"#), None);
         assert_eq!(parse_host("not json"), None);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[test]
+    fn page_font_is_a_valid_css_string_and_mono_falls_back_to_the_embedded() {
+        use super::{embedded_faces, font_stack};
+        assert_eq!(font_stack("Inter"), r#""Inter", system-ui, sans-serif"#);
+        assert_eq!(font_stack(r#"Odd "Q" \ Sans"#), r#""Odd \"Q\" \\ Sans", system-ui, sans-serif"#);
+        assert_eq!(font_stack("JetBrainsMono Nerd Font"), r#""JetBrainsMono Nerd Font", "JetBrains Mono", system-ui, sans-serif"#);
+        assert!(embedded_faces("JetBrainsMono Nerd Font").is_some());
+        assert!(embedded_faces("Some Installed Font").is_none());
     }
 }
