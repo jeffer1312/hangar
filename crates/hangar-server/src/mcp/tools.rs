@@ -830,14 +830,14 @@ impl Tools {
         files::sweep_live(&self.st).await;
         // Tarefa própria: quem desiste da chamada não tira o prazo de um arquivo já gravado.
         let written = tokio::spawn(async move {
-            let path = tokio::task::spawn_blocking(move || files::write(&dir, &key, &name, value.as_bytes())).await
+            let (path, value) = tokio::task::spawn_blocking(move || files::write(&dir, &key, &name, value.as_bytes()).map(|p| (p, value))).await
                 .map_err(|_| "erro_cofre_arquivo: a gravação foi interrompida".to_owned())?
                 .map_err(|e| format!("erro_cofre_arquivo: o arquivo não foi gravado: {e}"))?;
             files::expire_later(path.clone());
-            Ok::<_, String>(path)
+            Ok::<_, String>(files::reply(&path, &value))
         });
-        let path = written.await.map_err(|_| "erro_cofre_arquivo: a gravação foi interrompida".to_owned())??;
-        Ok(dict(json!({"file": path})))
+        let reply = written.await.map_err(|_| "erro_cofre_arquivo: a gravação foi interrompida".to_owned())??;
+        Ok(dict(reply))
     }
 
     /// O host da página do navegador da sessão; só http(s) tem domínio para comparar com a entrada.

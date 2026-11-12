@@ -954,7 +954,7 @@
  },
  {
   "name": "vault_file",
-  "description": "Grava a senha `entry` do cofre num arquivo 0600 numa pasta privada e devolve o caminho em `file`, para programa que lê a senha de arquivo. Pede aprovação ao dono quando a senha exige; espera até 10 min. O arquivo some quando a sessão fecha ou em 24 h. Nunca leia nem mostre o conteúdo dele.",
+  "description": "Grava a senha `entry` do cofre num arquivo só do usuário (0600; ACL própria no Windows) numa pasta privada e devolve o caminho em `file`, para programa que lê a senha de arquivo, e o tamanho em `bytes`, `chars` e `ends_with_newline`. Pede aprovação ao dono quando a senha exige; espera até 10 min. O arquivo some quando a sessão fecha ou em 24 h. Nunca leia nem mostre o conteúdo dele: contar, medir ou tirar hash do conteúdo também é ler, e o tamanho já vem na resposta. Passar o caminho como argumento a outro programa não é ler.",
   "inputSchema": {
    "properties": {
     "entry": {

@@ -1,5 +1,7 @@
-//! Arquivo 0600 com a senha para o agente (`vault_file`), numa pasta 0700 da sessão do usuário que o
-//! reinício da máquina limpa. Cada arquivo tem ao lado um `<id>.json` com a sessão dona: some no
+//! Arquivo 0600 com a senha para o agente (`vault_file`), numa pasta 0700 da sessão do usuário, que no
+//! Linux o reinício da máquina limpa. No Windows os dois têm ACL só do usuário corrente, e a pasta
+//! (`%LOCALAPPDATA%`) sobrevive ao reinício: quem apaga é a varredura e o prazo de 24 h.
+//! Cada arquivo tem ao lado um `<id>.json` com a sessão dona: some no
 //! fechamento dela, em 24 h e na varredura (subida e cada `vault_file`) quando a dona saiu da lista.
 use serde::{Deserialize, Serialize};
 use std::{io::{self, Write}, path::{Path, PathBuf}, time::Duration};
@@ -22,7 +24,11 @@ fn private_file(path: &Path) -> io::Result<std::fs::File> {
     options.write(true).create_new(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    options.open(path)
+    let file = options.open(path)?;
+    // Ainda vazio: a senha só entra depois de o arquivo ficar só do usuário.
+    #[cfg(windows)]
+    hangar_core::private_acl::restrict_path(path, "")?;
+    Ok(file)
 }
 
 /// Cria a pasta e a deixa 0700 (só o dono), também quando ela já existia.
@@ -30,7 +36,14 @@ pub(super) fn private_dir(dir: &Path) -> io::Result<()> {
     std::fs::create_dir_all(dir)?;
     #[cfg(unix)]
     std::fs::set_permissions(dir, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
+    #[cfg(windows)]
+    hangar_core::private_acl::restrict_path(dir, "OICI")?;
     Ok(())
+}
+
+/// A resposta do `vault_file`: o tamanho vem junto para o agente nunca precisar abrir o arquivo.
+pub fn reply(path: &Path, value: &str) -> serde_json::Value {
+    serde_json::json!({"file": path, "bytes": value.len(), "chars": value.chars().count(), "ends_with_newline": value.ends_with('\n')})
 }
 
 /// Gravação em andamento (temporário, ficha antes do arquivo) não é sobra para a varredura.
