@@ -5223,6 +5223,28 @@ retirada de até toda a capacidade da fila numa publicação, impedindo que quad
 membros desse corte ressuscitem suas bolhas. A prova real usa processos dos CLIs e modelo local
 controlado, com três partes e imagem; não depende de Orientar.
 
+## Subagente Claude interrompido sai de "rodando" (12/11/2026)
+
+Um `Agent` de fundo só fecha no chat pelo `<task-notification>` no transcript do pai. Interrompido
+(o arquivo `subagents/agent-<id>.jsonl` termina num `user` "[Request interrupted by user…]"), ele não
+gera aviso, e o cartão ficava "Executando há 9 h" na DELPHI-02. Agora a rota de subagentes lê essa
+marca como fim (`state: "failed"`, `endedAt` da marca; resposta depois dela desfaz). O plugin marca
+`running` no lançamento e só fecha pelo mesmo aviso, então o `running` dele não basta: o registro
+guarda quando ele chegou (`AgentLife.since`), e a interrupção mais nova que isso vence; a retomada pelo
+`SendMessage` grava um `running` novo, posterior à marca, e o agente segue rodando. A causa estava no
+plugin: o `turn.complete` abortado de um agente de fundo era ignorado à espera da task-notification,
+que na interrupção não vem; agora ele grava `failed` (`state.ts`), e a leitura do arquivo fica para
+quando o plugin não está ligado. Os clientes só obedecem `failed`: o plugin grava `finished` também no
+aviso de quem só espera o próprio trabalho de fundo ("is waiting on its own background work"), e esse
+segue vivo. O casamento com o arquivo vai pelo agentId (`agentIdentities`, agora no core e usado pelo
+web também), porque dois agentes com o mesmo prompt não casavam com nenhum. Celular e web tiram da lista de rodando o agente que o servidor deu
+como encerrado (`subagentEnded` no core); no nativo, `pinned_running` faz o mesmo na faixa fixa, e o
+cartão da conversa já seguia o estado do servidor (`effective_agent`). Só nesse sentido: o servidor
+nunca reabre um agente que o transcript deu como terminado. Testes:
+`claude_agent_ending_on_an_interruption_is_reported_ended_until_it_answers_again`,
+`subagentEnded` em `packages/core/src/activity.test.ts` e
+`claude_agent_the_server_reports_ended_leaves_the_running_strip`.
+
 ## Subagentes Codex no painel de atividade (28/10/2026)
 
 O binário instalado `codex-cli 0.165.0` grava os filhos como rollouts próprios com

@@ -42,7 +42,7 @@ function harness(status: () => number | "hang" = () => 200, sleep: () => Promise
   return {
     agents, logs,
     spawn: (agentId: string, background = false) => fire("agent.spawn", { background }, { model: "m", agentId }),
-    done: (agentId: string) => fire("turn.complete", { agentId, answer: "", isAborted: false }),
+    done: (agentId: string, isAborted = false) => fire("turn.complete", { agentId, answer: "", isAborted }),
     sendMessage: (to: string, answer: unknown = { result: "ok" }) => fire("tool.call", { tool: "SendMessage", to }, answer),
     notify: (id: string) => fire("session.append", { origin: { kind: "task-notification" },
       message: { content: `<task-notification><task-id>${id}</task-id><status>completed</status></task-notification>` } }),
@@ -76,6 +76,13 @@ test("o running do spawn não cobre um fim que já saiu", () => withBridge(async
     return { model: "m", agentId: "rapido" };
   });
   expect(h.agents).toEqual(["rapido:finished"]);
+}));
+
+test("segundo plano interrompido: o turn.complete abortado encerra, porque nenhuma notificação vem", () => withBridge(async () => {
+  const h = harness();
+  await h.spawn("bg2", true);
+  await h.done("bg2", true);
+  expect(h.agents).toEqual(["bg2:running", "bg2:failed"]);
 }));
 
 test("segundo plano: a notificação encerra, e depois da retomada o turn.complete encerra", () => withBridge(async () => {
