@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux", "hangar-connect", "hangar-plugins", "hangar-update-news", "hangar-workflows", "hangar-http-file", "hangar-desktop-theme", "hangar-session-tools"]
+members = ["hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux", "hangar-connect", "hangar-plugins", "hangar-update-news", "hangar-workflows", "hangar-http-file", "hangar-desktop-theme", "hangar-opencode-cookie", "hangar-deploy", "hangar-port-preview", "hangar-session-tools"]
 
 [workspace.package]
 version = "0.1.0"
@@ -52,6 +52,9 @@ hangar-plugins = { path = "hangar-plugins" }
 hangar-workflows = { path = "hangar-workflows" }
 hangar-http-file = { path = "hangar-http-file" }
 hangar-desktop-theme = { path = "hangar-desktop-theme" }
+hangar-opencode-cookie = { path = "hangar-opencode-cookie" }
+hangar-deploy = { path = "hangar-deploy" }
+hangar-port-preview = { path = "hangar-port-preview" }
 mime_guess = "=2.0.5"
 serde-saphyr = "=1.3.0"
 base64 = "=0.23.1"

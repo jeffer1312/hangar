@@ -2,6 +2,19 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// Saída capturada de um comando local, sem interpretação de shell.
+pub struct CommandOutput { pub success: bool, pub stdout: String, pub stderr: String }
+
+#[derive(Debug)]
+pub enum CommandError { Timeout, Io(io::Error) }
+
+/// Fronteira dos executáveis externos; a política e os argumentos continuam no consumidor.
+pub trait Commands: Send + Sync {
+    fn run<'a>(&'a self, program: &'a str, args: &'a [&'a str], deadline: std::time::Duration)
+        -> futures_util::future::BoxFuture<'a, Result<CommandOutput, CommandError>>;
+}
+
+
 /// Binário de teste: o `cargo test` põe todos em `target/<perfil>/deps/`, e o teste de integração
 /// compila os crates sem `cfg(test)`. Nele nada pode chegar ao que é da máquina real.
 pub fn cargo_test_binary() -> bool {

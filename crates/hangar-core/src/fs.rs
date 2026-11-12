@@ -1,7 +1,7 @@
 //! Escrita e leitura de arquivo que sobrevivem à troca concorrente, inclusive no Windows.
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Recusa da própria fila: frase fixa, sem caminho nem texto da conversa, então pode ir ao log.
@@ -13,6 +13,14 @@ impl std::error::Error for QueueRefusal {}
 pub fn invalid(message: &'static str) -> io::Error { io::Error::new(io::ErrorKind::InvalidData, QueueRefusal(message)) }
 
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
+
+/// Ponte de leitura de sidecar: o nome antigo só vale enquanto o novo não existir.
+pub fn legacy_sidecar_path(new: PathBuf) -> PathBuf {
+    if !matches!(new.try_exists(), Ok(false)) { return new; }
+    let old = new.with_file_name(new.file_name().and_then(|name| name.to_str()).unwrap_or("")
+        .replacen(".hangar-", ".claude-pocket-", 1));
+    if matches!(old.try_exists(), Ok(false)) { new } else { old }
+}
 
 /// Lê um arquivo que outro escritor troca por `atomic_write`. No Windows quem abre no instante da
 /// troca recebe NotFound ou acesso negado, inclusive na troca POSIX: ausente ou recusado de verdade é o

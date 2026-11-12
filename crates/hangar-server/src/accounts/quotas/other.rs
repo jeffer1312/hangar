@@ -113,15 +113,7 @@ fn shared(env: &AccountEnvironment) -> PathBuf {
 
 /// O nome novo; o antigo `.claude-pocket-*` só quando o novo não existe (no Windows link de
 /// arquivo exige privilégio, e o antigo pode ser o único).
-pub(crate) fn read_path(new: PathBuf) -> PathBuf {
-    if new.exists() {
-        return new;
-    }
-    let old = new.with_file_name(
-        new.file_name().and_then(|n| n.to_str()).unwrap_or("").replacen(".hangar-", ".claude-pocket-", 1),
-    );
-    if old.exists() { old } else { new }
-}
+pub(crate) use hangar_core::fs::legacy_sidecar_path as read_path;
 
 fn env_value<'a>(env: &'a AccountEnvironment, name: &str) -> Option<&'a str> {
     env.base.get(name).map(String::as_str).filter(|v| !v.is_empty())
@@ -246,13 +238,10 @@ pub fn load(env: &AccountEnvironment) -> Config {
             (!alias.is_empty()).then(|| (id, json!(alias)))
         })
         .collect();
-    let filled = |value: &Value| value.as_str().is_some_and(|s| !s.is_empty());
-    let opencode_file =
-        read_file(&read_path(shared(env).join(".hangar-opencode.json")), "opencode_cookies_unreadable", &mut problems);
-    let opencode: Map<String, Value> = json_object(opencode_file, "opencode_cookies_invalid", &mut problems)
-        .into_iter()
-        .filter(|(_, entry)| filled(&entry["workspace_id"]) && filled(&entry["auth_cookie"]))
-        .collect();
+    let opencode = hangar_opencode_cookie::read(&env.home).unwrap_or_else(|error| {
+        problems.push(if error.kind() == std::io::ErrorKind::InvalidData { "opencode_cookies_invalid" } else { "opencode_cookies_unreadable" });
+        Map::new()
+    });
     let engines = engines(env, &mut problems);
 
     let mut sources = vec![];

@@ -61,19 +61,16 @@ from app.costs import report as costs_report, usd_brl as _usd_brl, PERIODOS as _
 from app import costs_sources
 from app import loop as loop_mod
 from app.transcript import last_assistant_text
-from app import tunnel
 from app import runner
 from app import projects
 from app import archive_providers
 from app.archive import (archive_cwd, archive_jsonl,
                          list_folders)
 from app.askquestion import clear_pending_askq, read_pending_askq
-from app import credenciais
 from app import codex_contas as codex_accounts
 from app.codex_contas_login import CodexContasLogin
 from app.pair import PairLink
 from app.hook_state import hook_state
-from app.deploy import deploy_router
 
 _log = logging.getLogger("hangar")
 
@@ -450,7 +447,6 @@ async def _providers_via_rust(request: Request, call_next):
 async def _contas_pelo_rust(request: Request, call_next):
     """Contas e cotas têm um dono só, o Rust."""
     from app import account_bridge
-    # A lista de credenciais é do Rust só no GET exato: apelido, cookie e sincronizar seguem aqui.
     listing = request.method == "GET" and request.url.path == "/api/credenciais"
     if not (listing or request.url.path.startswith(account_bridge.ACCOUNT_PREFIXES)):
         return await call_next(request)
@@ -723,10 +719,8 @@ app.add_middleware(
 )
 # JSON e assets grandes cruzam LAN/VPN; o Starlette exclui `text/event-stream`, sem segurar o SSE.
 app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
-app.include_router(deploy_router)
 # Roteadores por assunto (Task 1 do plano descoberta-e-configuracao): cada Task do lote escreve
 # só no módulo dela. Última edição de api.py deste plano.
-app.include_router(credenciais.credenciais_router)
 app.include_router(plugin_bridge.plugin_router)
 # Convites e par externo são do Rust; aqui só o repasse do dono que chega pelo Connect.
 app.include_router(share_bridge.router)
@@ -3985,36 +3979,6 @@ def _bypass_no_ciclo(name: str) -> bool:
     return any(f in cmd for f in _FLAGS_BYPASS)
 
 
-# ── Preview: expoe um projeto local (porta) via tailscale serve, pro app ver num iframe ──
-# GLOBAL por maquina (nao por sessao): o tunel usa uma porta-slot unica (10000), entao qualquer
-# sessao que ligar o preview compartilha o mesmo slot. O backend que atende E o da maquina onde o
-# projeto roda -> o preview sai da maquina certa sem config extra.
-class PreviewBody(_StrictBody):
-    port: int = Field(ge=1, le=65535)
-
-
-@app.get("/api/preview", dependencies=[Depends(require_auth)])
-def preview_status():
-    try:
-        return tunnel.status()
-    except tunnel.TunnelError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.post("/api/preview", dependencies=[Depends(require_auth)])
-def preview_start(body: PreviewBody):
-    try:
-        return tunnel.start(body.port)
-    except tunnel.TunnelError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.delete("/api/preview", dependencies=[Depends(require_auth)])
-def preview_stop():
-    try:
-        return tunnel.stop()
-    except tunnel.TunnelError as e:
-        raise HTTPException(e.status, e.detail)
 
 
 @app.get("/api/sessions/{name}/navegador", dependencies=[Depends(require_auth)])

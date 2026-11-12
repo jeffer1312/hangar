@@ -731,8 +731,13 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   conferido de fora, e aponta sempre para a 8769; como o do convidado, só entra no Caddyfile com a
   porta aberta por este servidor. `SameSite` não separa as máquinas do Connect: `Origin` de fora é
   recusada, e `Sec-Fetch-Site` de fora também, salvo abrir o site numa aba. Script de service worker é
-  recusado. `backend/app/tunnel.py` segue atendendo o Tailscale. Evidência em
+  recusado. A prévia pelo Tailscale é do crate `hangar-port-preview`, sem caminho Python. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#prévia-de-porta-pelo-connect-a-8769-é-um-listener-próprio-fora-de-hangar_auth-07112026).
+- **Cookie do OpenCode, webhook de deploy e prévia Tailscale são do Rust.** Os crates
+  `hangar-opencode-cookie`, `hangar-deploy` e `hangar-port-preview` atendem os caminhos inteiros;
+  o cookie invalida a cota em processo e a prévia só altera o slot 10000. Não há rotas ou pontes
+  Python dessas responsabilidades. Contrato em
+  [plataforma.md](docs/decisoes/plataforma.md#cookie-deploy-e-prévia-tailscale-no-rust-11112026).
 - **Nada nasce no Python: o objetivo é tirá-lo do projeto.** Rota, ponte, poller, integração e
   qualquer recurso novo vão para o Rust (`crates/`). Sem pedido explícito do usuário, no
   `backend/app/` só se apaga código. Toda linha que ACRESCENTA no Python — lógica, releitura,

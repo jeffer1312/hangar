@@ -2,6 +2,7 @@
 pub mod startup;
 mod session_tools;
 pub mod accounts;
+mod auxiliary;
 pub mod archive_history;
 pub mod archive_list;
 pub mod artifacts;

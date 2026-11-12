@@ -1,0 +1,15 @@
+[package]
+name = "hangar-port-preview"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+hangar-core.workspace = true
+axum.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+futures-util.workspace = true
+proptest.workspace = true

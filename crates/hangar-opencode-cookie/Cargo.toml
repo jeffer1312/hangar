@@ -1,0 +1,13 @@
+[package]
+name = "hangar-opencode-cookie"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+hangar-core.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+proptest.workspace = true

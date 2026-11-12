@@ -3,8 +3,6 @@
 No modo python (sem binário, CP_RUST_SERVER=0, supervisor que desistiu), as rotas de conta e cota
 que o Rust atende respondem 503 `accounts_need_rust_server`, e os consumidores internos tratam a
 ponte ausente como "sem cota, sem login conhecido", sem ler credencial nem abrir CLI pelo Python.
-A lista de credenciais (`GET /api/credenciais`) também é do Rust e responde o mesmo 503; as escritas
-que só existem no Python (apelido, cookie, sincronizar) continuam.
 """
 import asyncio
 import json
@@ -113,11 +111,6 @@ def test_unauthenticated_account_route_is_refused_before_unavailable(python_owne
     assert response.status_code == 401
 
 
-def test_python_only_cookie_keeps_working(python_owner):
-    client = TestClient(app)
-    cookie = client.put("/api/credenciais/cookie", headers=AUTH,
-                        json={"id": "chave:opencode", "workspace_id": "w", "auth_cookie": "c"})
-    assert (cookie.status_code, cookie.json()) == (200, {"id": "chave:opencode", "cookie_definido": True})
 
 
 def test_internal_quota_consumers_get_nothing_without_rust(python_owner):
