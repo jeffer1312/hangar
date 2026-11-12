@@ -176,7 +176,11 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   confere o PR inteiro, desde o ponto em que a ponta saiu da base; a trava `pre-push` confere cada
   push, e consulta o PR com prazo de 10 s: sem `gh` ou sem resposta, segue com aviso. PR aberto pelo
   site fica com o CI. O padrão, que as travas exigem, é o rápido: só o ligado aos arquivos mudados
-  (`cargo test` do `hangar-server`, ou do workspace quando muda crate de base; pytest dos testes
+  (de Rust, `cargo check` do workspace com testes e exemplos, e `cargo test` dos crates que não são o
+  `hangar-server`: os testes dele ficam no workflow `Server`, a cada push, e no `--completo`. A
+  `main` não exige esse check, e ele só dispara quando o push mexe nos caminhos do `server.yml`
+  (`crates/**` e os arquivos de runtime do backend): nesse caso, quem mescla confere que o `Server`
+  do último commit do PR terminou verde, e ele aparece entre os checks desse commit; pytest dos testes
   mudados e dos que citam o módulo mudado, a suíte inteira quando muda dependência, conftest ou
   helper; `vitest related` e typecheck só com `.ts`/`.svelte`/mensagens no diff, tudo quando muda
   dependência ou configuração; o nativo inteiro, num target próprio da árvore fixa, porque o custo é
@@ -205,6 +209,25 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   da árvore verificada. Teste do backend não pode deixar timer, thread que age, `sys.modules`,
   módulo recarregado ou tratador de sinal alterado para o arquivo seguinte: com a suíte repartida, quem paga é o vizinho. Evidência em
   [Verificação local em paralelo](#verificação-local-em-paralelo-09102026).
+- **A verificação não compila sem memória, nem as duas versões do `hangar_server` juntas.** A
+  biblioteca do servidor compila e é conferida duas vezes (normal e de teste): primeiro as de teste
+  (`cargo test --workspace --lib --no-run`, ou `cargo check --workspace --lib --profile test`),
+  depois o resto, sempre com `--workspace` para não trocar o grafo de features (os testes dos crates
+  menores usam `--exclude hangar-server` e guardam uma segunda cópia das dependências que só o
+  servidor configura). Antes de conferir (`HANGAR_VERIFY_CHECK_GB`, padrão 7) e antes do build de
+  Rust do `--completo` (`HANGAR_VERIFY_BUILD_GB`, padrão 11), o passo espera a memória disponível por
+  até `HANGAR_VERIFY_WAIT` segundos (padrão 300) e, sem ela, falha dizendo quanto falta; com outro
+  build na trava o prazo não corre. Os planos de backend não esperam: o cargo deles muitas vezes não
+  tem o que compilar. Com o systemd do usuário, o cargo que só compila roda num grupo próprio com
+  dois limites: o `MemoryHigh` do `cargo-pinned` (disponível menos 2 GB, mínimo 4, lido depois da
+  trava), acima do qual o kernel recolhe a memória do build e o desacelera, sem impedir que ele
+  passe disso; e o teto de verdade, o `MemoryMax` de 70% da RAM com 8 GB de swap do `memory-scope`,
+  que mata o build. Verificação morta por fora encerra o grupo inteiro, build incluído. Quando o
+  systemd do usuário existe e não abre o grupo, o cargo roda sem limite e a saída avisa; em máquina
+  sem `systemd-run` (macOS, CI) ou sem `XDG_RUNTIME_DIR`, roda sem limite e sem aviso. Quem roda
+  testes fica fora desses limites: sob eles, teste de prazo falharia por carga. A
+  segunda faixa só abre ao lado da do cargo com a reserva dela sobrando. Evidência em
+  [Verificação local leve](#verificação-local-leve-11112026).
 - **Build e teste locais: target comum, binário fixado na worktree, mensagens com carimbo.** Toda
   worktree compila no target comum da máquina pelo `scripts/cargo-pinned`, que pega a trava
   `/tmp/hangar-build.lock` e copia os executáveis para o `crates/target` do checkout na mesma trava:
@@ -1122,6 +1145,66 @@ e mobile 139 s na mesma faixa; shell, statusline e pi 8 s. Caminho crítico ≈ 
   release, 1119 s no job). Os jobs que guardam `crates/target` compilam sem incremental e com
   depuração só de linhas, e as chaves ganharam `-v2-`: o `save` só grava quando a chave exata não
   existe, e sem chave nova o cache enxuto nunca seria gravado.
+
+## Verificação local leve (11/11/2026)
+
+A rodada rápida de um commit que mexia em `crates/hangar-server`, `desktop-native` e `mobile` morreu
+três vezes no notebook (12 núcleos, 23 GB, ~9 GB disponíveis com as sessões abertas), e uma delas
+travou a máquina. O passo Rust do rápido rodava `cargo test -p hangar-server`: os ~6.300 testes do
+crate a cada linha mexida.
+
+Medido nos registros de `~/.local/state/hangar-verificacao` (andamento e logs dos passos):
+
+| Rodada | Plano | Compilação | Testes | Passo Rust |
+|---|---|---|---|---|
+| 10/11 15:48, `09decf7e8d` | só `rust_rapido` | 19 min 17 s | ~15 min (`it` 694 s, lib 138 s) | 2.051 s |
+| 10/11 17:34, `816086efcb` | `--workspace`, front ao lado | 140 min 33 s | ~16 min | 9.413 s |
+| 11/11, três tentativas | rust, mobile ao lado | não terminou | — | sem linha de fim |
+
+No último dia: 44 rodadas, 26 passaram, 10 falharam, 8 morreram por fora; o `rust_rapido` levou em
+média 39 min. No GitHub, em 38 dias: 983 execuções do `CI` em PR, mediana de 12 min, 114 falhas; o
+`Server` (testes Rust, a cada push em branch) 289 execuções, mediana de 25 min, 17 falhas. Das
+últimas 11 falhas do `CI` em PR, nenhuma era de Rust (9 no `backend`, 4 no `passos`). A verificação
+local custava mais que o CI que ela poupava.
+
+- **Por que a memória acaba.** O `cargo test` compila a biblioteca do `hangar-server` duas vezes ao
+  mesmo tempo, normal e de teste: 253 mil linhas, 8,5 a 9,3 GB por `rustc` (seção "Build e teste
+  locais rápidos"), ~18 GB juntos. O único teto era o do `memory-scope`, 70% da RAM total, que
+  deixava a verificação tomar 16,6 GB com 9 disponíveis. A checagem de 6 GB da segunda faixa rodava
+  antes de o cargo alocar e sempre passava.
+- **A conferência dobra igual.** `cargo check --workspace --all-targets` na árvore fixa, `-j 4`, com
+  teto de 5 GB (7 GB disponíveis): as ~400 dependências em 76 s; depois os dois `rustc` do
+  `hangar_server` juntos, 3,8 GB o normal e 4,7 GB o de teste (RAM + swap, amostra a cada 2 s de
+  `/proc/<pid>/status`), 8,4 GB somados, ainda subindo depois de 8 min 36 s. A medição não
+  terminou: o Claude Code encerrou o comando, que rodava em segundo plano com a sessão ociosa,
+  porque a memória da máquina ficou crítica. Daí as duas conferências em fila.
+- **Em fila: 230 s e 5,2 GB de pico.** O passo novo no commit `30d2c14218` (o que travou a máquina),
+  com 13,9 GB disponíveis e as dependências já conferidas: 230 s. A biblioteca em modo de teste
+  sozinha, 1 min 41 s e 5,15 GB; depois a normal, 3,89 GB, e o `it`, 2,89 GB, 2 min 07 s. Nunca dois
+  `rustc` do servidor ao mesmo tempo, e a de teste não foi conferida de novo na segunda etapa (o
+  grafo de features é o mesmo). A memória disponível não desceu de 10,2 GB. Os 7 GB do
+  `HANGAR_VERIFY_CHECK_GB` são o pico de um `rustc` mais 2 GB de folga.
+- **Testes dos crates menores: 2 min na primeira vez.** No commit `3b19555a38`, que mexe só no
+  `hangar-workflows`, o passo levou 342 s: as duas conferências, 1 min 39 s e 2 min 01 s; depois os
+  testes sem o servidor, que compilaram 117 crates em 46 s (o outro grafo de features, pela primeira
+  vez) e rodaram 37 executáveis em 74 s. O `target` da árvore fixa foi de 33,1 para 36,6 GB,
+  somando os artefatos de conferência dessa árvore e a segunda cópia das dependências.
+- **Rodada morta sem linha de fim.** Nas três de 11/11 o journal não tem morte por falta de memória
+  (nem do kernel, nem do `systemd-oomd`) e o registro de andamento não tem `fim`: quem mata é quem
+  chamou, com um sinal que não passa por trap. Cada passo é sessão própria (`setsid`), então o build
+  podia seguir vivo com a trava de build; por isso o vigia que encerra o grupo.
+- **Compilar em fila usa o comando do CI.** `cargo test --locked --workspace --lib --no-run` antes do
+  resto é o que o `server-jobs.yml` já faz pelo mesmo motivo; `--workspace` nos dois mantém o grafo
+  de features.
+- **`ionice` não age nesta máquina.** O disco usa `kyber`, e classe de E/S só vale no `bfq`. O
+  `nice` age entre as sessões: dentro de `app.slice` o controlador de CPU não está ligado.
+- **O passo do Windows estava quebrado desde 10/11.** O roteiro vai sozinho para a VM e o
+  `exec bash memory-scope` do topo saía com 127 (provado copiando só o arquivo). Sem o
+  `memory-scope` ao lado, roda direto.
+- **Não entrou:** dividir o alvo com o da pasta de trabalho (o cargo separa os crates do workspace
+  pelo caminho do checkout, e a árvore fixa já tem as dependências: uma linha `Compiling` por
+  rodada); soltar a trava de build durante os testes (o `it` tem testes de prazo que falham sob
+  carga); mais threads no `it` (sem medição).
 
 ## Build Rust e CI menores (09/10/2026)
 

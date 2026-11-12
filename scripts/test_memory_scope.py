@@ -35,6 +35,45 @@ def test_command_runs_in_its_own_capped_scope():
     assert swap_max == str(1 << 30)
 
 
+@pytest.mark.skipif(not _systemd_user(), reason="sem o systemd do usuário")
+def test_memory_high_on_request():
+    result = _run({"HANGAR_BUILD_MEMORY_HIGH": "4G"},
+                  'cat "/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)/memory.high"; exit 7')
+    assert result.returncode == 7, result.stderr
+    assert result.stdout.strip() == str(4 << 30)
+
+
+@pytest.mark.skipif(not _systemd_user(), reason="sem o systemd do usuário")
+def test_available_leaves_room_below_what_is_free():
+    result = _run({"HANGAR_BUILD_MEMORY_HIGH": "available"},
+                  'cat "/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)/memory.high"; exit 7')
+    assert result.returncode == 7, result.stderr
+    available = int(next(line.split()[1] for line in Path("/proc/meminfo").read_text().splitlines()
+                         if line.startswith("MemAvailable:"))) * 1024
+    # Piso de 4 GB; acima dele, abaixo do disponível (com folga para o que mudou entre as leituras).
+    assert 4 << 30 <= int(result.stdout) <= max(4 << 30, available)
+
+
+@pytest.mark.skipif(not _systemd_user(), reason="sem o systemd do usuário")
+def test_bound_to_the_callers_unit_keeps_the_cap():
+    unit = OWN.strip().rsplit("/", 1)[-1]
+    if "/user@" not in OWN or not unit.endswith((".scope", ".service")):
+        pytest.skip("quem roda o teste não está numa unidade do systemd do usuário")
+    result = _run({"HANGAR_BUILD_BIND_TO": unit, "HANGAR_BUILD_MEMORY_HIGH": "4G"},
+                  'g=$(cut -d: -f3 /proc/self/cgroup); echo "$g"; cat "/sys/fs/cgroup$g/memory.high"; exit 7')
+    assert result.returncode == 7, result.stderr
+    cgroup, high = result.stdout.split()
+    assert cgroup != OWN.strip().rsplit(":", 1)[-1]
+    assert high == str(4 << 30)
+
+
+@pytest.mark.skipif(not _systemd_user(), reason="sem o systemd do usuário")
+def test_unit_that_does_not_exist_runs_in_place():
+    result = _run({"HANGAR_BUILD_BIND_TO": "nao-existe-xyz.scope"})
+    assert result.returncode == 7, result.stderr
+    assert result.stdout == OWN
+
+
 def test_without_systemd_runs_in_place(tmp_path):
     (tmp_path / "bash").symlink_to(shutil.which("bash"))
     (tmp_path / "cat").symlink_to(shutil.which("cat"))
