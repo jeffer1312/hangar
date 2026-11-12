@@ -77,23 +77,24 @@ impl Service {
             .entry(accounts.env.home.clone())
             .or_insert_with(|| Arc::new(Cache::new(&accounts.env.home)))
             .clone();
+        let config_dir = context
+            .config_dir
+            .clone()
+            .unwrap_or_else(|| accounts.env.claude_base.clone());
         let cli = if context.cli.is_empty() {
             cache
-                .get(
+                .get_ready(
                     Arc::new(NativeProbe {
                         accounts: accounts.clone(),
+                        cwd: context.cwd.clone(),
+                        settings: context.settings.clone(),
                     }),
-                    context.config_dir.clone(),
+                    Some(config_dir.clone()),
                 )
                 .await
         } else {
             Some(context.cli.clone())
         };
-        let home = accounts.env.home.clone();
-        let config_dir = context
-            .config_dir
-            .clone()
-            .unwrap_or_else(|| accounts.env.claude_base.clone());
         let service = self.clone();
         tokio::task::spawn_blocking(move || {
             let excluded: Vec<String> = if context.terminal {
@@ -119,8 +120,8 @@ impl Service {
                 .catalog
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .compose(
-                    &home,
+                .compose_for_config(
+                    &config_dir,
                     context.cwd.as_deref(),
                     cli.as_deref(),
                     &excluded,

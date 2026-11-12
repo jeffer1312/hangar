@@ -285,6 +285,17 @@ impl Catalog {
         excluded: &[String],
         terminal: bool,
     ) -> Vec<CommandInfo> {
+        self.compose_for_config(&home.join(".claude"), cwd, cli, excluded, terminal)
+    }
+
+    pub fn compose_for_config(
+        &mut self,
+        config_dir: &Path,
+        cwd: Option<&Path>,
+        cli: Option<&[Value]>,
+        excluded: &[String],
+        terminal: bool,
+    ) -> Vec<CommandInfo> {
         let mut raw = builtins();
         let mut project = Vec::new();
         if let Some(cwd) = cwd {
@@ -292,9 +303,9 @@ impl Catalog {
             project.extend(self.scan_skills(&cwd.join(".claude/skills")));
         }
         raw.extend(project.clone());
-        raw.extend(self.scan_commands(&home.join(".claude/commands")));
-        raw.extend(self.scan_skills(&home.join(".claude/skills")));
-        raw.extend(self.scan_plugins(&home.join(".claude/plugins")));
+        raw.extend(self.scan_commands(&config_dir.join("commands")));
+        raw.extend(self.scan_skills(&config_dir.join("skills")));
+        raw.extend(self.scan_plugins(&config_dir.join("plugins")));
         if let Some(cli) = cli {
             let mut local = HashMap::new();
             for item in &raw {

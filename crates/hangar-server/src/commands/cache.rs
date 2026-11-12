@@ -13,6 +13,11 @@ use tokio::time::Instant;
 pub type ProbeResult = Result<Vec<Value>, &'static str>;
 
 pub trait Probe: Send + Sync {
+    fn cache_key(&self, config_dir: Option<&Path>) -> String {
+        config_dir
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
     fn signature(&self, config_dir: Option<&Path>) -> Result<String, &'static str>;
     fn run<'a>(
         &'a self,
@@ -21,10 +26,20 @@ pub trait Probe: Send + Sync {
 }
 
 type Key = (PathBuf, String);
+type Completion = tokio::sync::watch::Receiver<Option<ProbeResult>>;
+enum Status {
+    Running(Completion),
+    Failed(Instant),
+}
 pub struct Cache {
     path: PathBuf,
-    attempts: Mutex<HashMap<Key, Option<Instant>>>,
+    attempts: Mutex<HashMap<Key, Status>>,
     writer: Mutex<()>,
+}
+
+struct Lookup {
+    commands: Option<Vec<Value>>,
+    pending: Option<Completion>,
 }
 
 pub fn valid_commands(value: &Value) -> Vec<Value> {
@@ -72,6 +87,29 @@ impl Cache {
         probe: Arc<dyn Probe>,
         config_dir: Option<PathBuf>,
     ) -> Option<Vec<Value>> {
+        self.lookup(probe, config_dir).await.commands
+    }
+
+    /// A primeira abertura do menu espera a consulta compartilhada, em vez de fixar a reserva.
+    pub async fn get_ready(
+        self: &Arc<Self>,
+        probe: Arc<dyn Probe>,
+        config_dir: Option<PathBuf>,
+    ) -> Option<Vec<Value>> {
+        let found = self.lookup(probe, config_dir).await;
+        if found.commands.is_some() {
+            return found.commands;
+        }
+        let mut pending = found.pending?;
+        let result = pending.wait_for(Option::is_some).await.ok()?.clone();
+        result?.ok()
+    }
+
+    async fn lookup(
+        self: &Arc<Self>,
+        probe: Arc<dyn Probe>,
+        config_dir: Option<PathBuf>,
+    ) -> Lookup {
         let cache = self.clone();
         let runtime = tokio::runtime::Handle::current();
         match tokio::task::spawn_blocking(move || cache.load_or_probe(probe, config_dir, runtime))
@@ -83,7 +121,10 @@ impl Cache {
                     code = "claude_commands_cli_unavailable",
                     "CLI de comandos não encontrada ou ilegível; usando o catálogo de reserva"
                 );
-                None
+                Lookup {
+                    commands: None,
+                    pending: None,
+                }
             }
         }
     }
@@ -93,32 +134,46 @@ impl Cache {
         probe: Arc<dyn Probe>,
         config_dir: Option<PathBuf>,
         runtime: tokio::runtime::Handle,
-    ) -> Result<Option<Vec<Value>>, &'static str> {
+    ) -> Result<Lookup, &'static str> {
         let signature = probe.signature(config_dir.as_deref())?;
         // Uma leitura anterior à gravação não pode registrar outra sonda depois dela.
         let _writer = self.writer.lock().unwrap_or_else(|e| e.into_inner());
         let cache = read(&self.path);
-        let account = config_dir
-            .as_ref()
-            .map(|path| path.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let account = probe.cache_key(config_dir.as_deref());
         let entry = &cache[&account];
         let commands = valid_commands(&entry["comandos"]);
         if entry["assinatura"].as_str() == Some(&signature) && !commands.is_empty() {
-            return Ok(Some(commands));
+            return Ok(Lookup {
+                commands: Some(commands),
+                pending: None,
+            });
         }
         let key = (config_dir.clone().unwrap_or_default(), signature);
+        let (completed, pending) = tokio::sync::watch::channel(None);
         {
             let mut attempts = self.attempts.lock().unwrap_or_else(|e| e.into_inner());
-            if attempts.get(&key).is_some_and(|failed| {
-                failed.is_none_or(|at| at.elapsed() < Duration::from_secs(600))
-            }) {
-                return Ok(None);
+            match attempts.get(&key) {
+                Some(Status::Running(pending)) => {
+                    return Ok(Lookup {
+                        commands: None,
+                        pending: Some(pending.clone()),
+                    });
+                }
+                Some(Status::Failed(at)) if at.elapsed() < Duration::from_secs(600) => {
+                    return Ok(Lookup {
+                        commands: None,
+                        pending: None,
+                    });
+                }
+                _ => {}
             }
-            attempts.insert(key.clone(), None);
+            attempts.insert(key.clone(), Status::Running(pending.clone()));
         }
-        self.start_probe(probe, config_dir, key, runtime);
-        Ok(None)
+        self.start_probe(probe, config_dir, key, runtime, completed, account);
+        Ok(Lookup {
+            commands: None,
+            pending: Some(pending),
+        })
     }
 
     fn start_probe(
@@ -127,6 +182,8 @@ impl Cache {
         config_dir: Option<PathBuf>,
         key: Key,
         runtime: tokio::runtime::Handle,
+        completed: tokio::sync::watch::Sender<Option<ProbeResult>>,
+        scope: String,
     ) {
         let cache = self.clone();
         runtime.spawn(async move {
@@ -135,14 +192,16 @@ impl Cache {
                 cache: cache.clone(),
                 key: key.clone(),
                 completed: false,
+                result: completed,
             };
             let result = match probe.run(config_dir.as_deref()).await {
                 Ok(commands) if !commands.is_empty() => {
                     let count = commands.len();
                     let writing = cache.clone();
                     let signature = key.1.clone();
+                    let saved = commands.clone();
                     let stored = tokio::task::spawn_blocking(move || {
-                        writing.store(config_dir.as_deref(), &signature, commands)
+                        writing.store(&scope, &signature, saved)
                     })
                     .await;
                     match stored {
@@ -153,7 +212,7 @@ impl Cache {
                                 elapsed_ms = started.elapsed().as_millis() as u64,
                                 "catálogo de comandos atualizado"
                             );
-                            Ok(())
+                            Ok(commands)
                         }
                         _ => Err("claude_commands_cache_write_failed"),
                     }
@@ -162,8 +221,8 @@ impl Cache {
                 Err(code) => Err(code),
             };
             let mut attempts = cache.attempts.lock().unwrap_or_else(|e| e.into_inner());
-            if let Err(code) = result {
-                attempts.insert(key, Some(Instant::now()));
+            if let Err(code) = &result {
+                attempts.insert(key, Status::Failed(Instant::now()));
                 tracing::warn!(
                     code,
                     "sondagem do catálogo falhou; usando a lista de reserva"
@@ -171,22 +230,15 @@ impl Cache {
             } else {
                 attempts.remove(&key);
             }
+            attempt.result.send_replace(Some(result));
             attempt.completed = true;
         });
     }
 
-    fn store(
-        &self,
-        config_dir: Option<&Path>,
-        signature: &str,
-        commands: Vec<Value>,
-    ) -> std::io::Result<()> {
+    fn store(&self, key: &str, signature: &str, commands: Vec<Value>) -> std::io::Result<()> {
         let _writer = self.writer.lock().unwrap_or_else(|e| e.into_inner());
         let mut cache = read(&self.path);
-        let key = config_dir
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        cache[&key] = json!({"assinatura":signature,"comandos":commands,"em":SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64()});
+        cache[key] = json!({"assinatura":signature,"comandos":commands,"em":SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64()});
         std::fs::create_dir_all(self.path.parent().unwrap())?;
         crate::runtime::queue::atomic_write(&self.path, &serde_json::to_vec(&cache)?)
     }
@@ -196,6 +248,7 @@ struct Attempt {
     cache: Arc<Cache>,
     key: Key,
     completed: bool,
+    result: tokio::sync::watch::Sender<Option<ProbeResult>>,
 }
 impl Drop for Attempt {
     fn drop(&mut self) {
@@ -204,7 +257,7 @@ impl Drop for Attempt {
                 .attempts
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .insert(self.key.clone(), Some(Instant::now()));
+                .insert(self.key.clone(), Status::Failed(Instant::now()));
             tracing::warn!(
                 code = "claude_commands_probe_interrupted",
                 "sondagem interrompida antes de publicar o catálogo"

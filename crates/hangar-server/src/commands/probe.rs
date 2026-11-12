@@ -4,7 +4,7 @@ use crate::terminal_process::{CommandTree, OwnedTree};
 use serde_json::{Value, json};
 use std::{
     future::Future,
-    path::Path,
+    path::{Path, PathBuf},
     pin::Pin,
     process::Stdio,
     sync::Arc,
@@ -14,9 +14,38 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 pub struct NativeProbe {
     pub accounts: crate::accounts::AccountService,
+    pub cwd: Option<PathBuf>,
+    pub settings: Value,
+}
+
+impl NativeProbe {
+    pub fn new(accounts: crate::accounts::AccountService) -> Self {
+        Self {
+            accounts,
+            cwd: None,
+            settings: Value::Null,
+        }
+    }
+
+    fn plugin_roots(&self) -> Vec<String> {
+        crate::session_open::claude::plugin_roots(&self.accounts.env.home)
+    }
 }
 
 impl Probe for NativeProbe {
+    fn cache_key(&self, config_dir: Option<&Path>) -> String {
+        let context = json!([
+            config_dir.unwrap_or(&self.accounts.env.claude_base),
+            self.cwd,
+            crate::session_open::claude::settings_json(&self.settings),
+            self.plugin_roots(),
+        ]);
+        format!(
+            "session-v1:{}",
+            sha1_smol::Sha1::from(context.to_string()).digest()
+        )
+    }
+
     fn signature(&self, config_dir: Option<&Path>) -> Result<String, &'static str> {
         let command = self
             .accounts
@@ -28,6 +57,7 @@ impl Probe for NativeProbe {
             .metadata()
             .map_err(|_| "claude_commands_cli_unavailable")?;
         let mut signature = vec![
+            self.cache_key(config_dir),
             executable.to_string_lossy().into_owned(),
             modified(&metadata)?,
             metadata.len().to_string(),
@@ -64,6 +94,32 @@ impl Probe for NativeProbe {
                     .and_then(|m| modified(&m).ok())
                     .unwrap_or_else(|| "-".into()),
             );
+        }
+        if let Some(cwd) = &self.cwd {
+            for parent in cwd.ancestors() {
+                for path in ["settings.json", "settings.local.json", "skills", "commands"] {
+                    watch(&parent.join(".claude").join(path), &mut signature);
+                }
+            }
+        }
+        // Restaurar a pasta de um plugin também invalida uma consulta que o encontrou ausente.
+        let registry = std::fs::read(config_dir.join("plugins/installed_plugins.json"))
+            .ok()
+            .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok());
+        for entries in registry
+            .as_ref()
+            .and_then(|v| v["plugins"].as_object())
+            .into_iter()
+            .flat_map(|plugins| plugins.values())
+        {
+            for entry in entries.as_array().into_iter().flatten() {
+                if let Some(root) = entry["installPath"].as_str() {
+                    watch_plugin(Path::new(root), &mut signature);
+                }
+            }
+        }
+        for root in self.plugin_roots() {
+            watch_plugin(Path::new(&root), &mut signature);
         }
         Ok(signature.join("|"))
     }
@@ -105,10 +161,23 @@ impl Probe for NativeProbe {
                     "stream-json",
                     "--verbose",
                     "--setting-sources",
-                    "user",
+                    if self.cwd.is_some() {
+                        "user,project,local"
+                    } else {
+                        "user"
+                    },
                 ])
                 .env_clear()
                 .envs(environment);
+            if !self.settings.is_null() {
+                command.args([
+                    "--settings",
+                    &crate::session_open::claude::settings_json(&self.settings),
+                ]);
+            }
+            for root in self.plugin_roots() {
+                command.args(["--plugin-dir", &root]);
+            }
             let account_dir = config_dir
                 .map(Path::to_owned)
                 .unwrap_or_else(|| self.accounts.env.home.join(".claude"));
@@ -127,11 +196,36 @@ impl Probe for NativeProbe {
             })
             .await
             .map_err(|_| "claude_commands_probe_interrupted")??;
-            let mut process = Process::open(command, guard).await?;
+            let mut process = Process::open(command, guard, self.cwd.as_deref()).await?;
             let result = process.initialize().await;
             process.stop().await;
             result
         })
+    }
+}
+
+fn watch(path: &Path, signature: &mut Vec<String>) {
+    signature.push(path.to_string_lossy().into_owned());
+    signature.push(
+        path.metadata()
+            .ok()
+            .and_then(|m| {
+                modified(&m)
+                    .ok()
+                    .map(|stamp| format!("{stamp}:{}", m.len()))
+            })
+            .unwrap_or_else(|| "-".into()),
+    );
+}
+
+fn watch_plugin(root: &Path, signature: &mut Vec<String>) {
+    signature.push(format!("plugin:{}:{}", root.display(), root.is_dir()));
+    for path in [
+        root.join(".claude-plugin/plugin.json"),
+        root.join("skills"),
+        root.join("commands"),
+    ] {
+        watch(&path, signature);
     }
 }
 
@@ -157,13 +251,15 @@ impl Process {
     async fn open(
         mut command: tokio::process::Command,
         guard: Arc<crate::accounts::AccountGuard>,
+        cwd: Option<&Path>,
     ) -> Result<Self, &'static str> {
-        let directory = tempfile::Builder::new()
-            .prefix("hangar-slash-")
-            .tempdir()
+        let directory = cwd
+            .is_none()
+            .then(|| tempfile::Builder::new().prefix("hangar-slash-").tempdir())
+            .transpose()
             .map_err(|_| "claude_commands_probe_directory")?;
         command
-            .current_dir(directory.path())
+            .current_dir(cwd.unwrap_or_else(|| directory.as_ref().unwrap().path()))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -188,7 +284,7 @@ impl Process {
             child: Some(child),
             tree: Some(tree),
             output,
-            directory: Some(directory),
+            directory,
             guard: Some(guard),
         })
     }

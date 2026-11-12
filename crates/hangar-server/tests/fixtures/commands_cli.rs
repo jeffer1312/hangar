@@ -45,6 +45,13 @@ fn main() {
                 Ok("empty") => {
                     json!({"request_id":request["request_id"],"subtype":"success","response":{"commands":[]}})
                 }
+                Ok("context") => {
+                    let commands = std::fs::read("commands-response.json")
+                        .ok()
+                        .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
+                        .unwrap_or_else(|| json!([{"name":"usage"}]));
+                    json!({"request_id":request["request_id"],"subtype":"success","response":{"commands":commands}})
+                }
                 _ => {
                     json!({"request_id":request["request_id"],"subtype":"success","response":{"commands":[{"name":"usage","description":"Consulta o uso"},"lixo",{},null]}})
                 }
