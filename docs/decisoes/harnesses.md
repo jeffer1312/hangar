@@ -1049,7 +1049,7 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   [entradas juntadas pela CLI](#entradas-juntadas-pela-cli-numa-mensagem-só-14102026).
 
 - **O protocolo de grupo volta depois de `/clear` e compactação pelo `hangar-server pair-context`.**
-  É o comando do `SessionStart` (`startup|resume|clear|compact`) que o `hook_installer.py` grava em
+  É o comando do `SessionStart` (`startup|resume|clear|compact`) que o `harness_setup/hooks.rs` grava em
   cada conta, com a pasta `.hangar-pair` no argv e `|| exit 0`: lê o sidecar e os pares externos do
   disco, sem rede nem token, e responde com o servidor parado. Grupo com par de fora traz as duas
   partes. Só o Claude tem esse gancho: Codex, Pi, omp e Kimi perdem o protocolo ao compactar
@@ -1083,6 +1083,32 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   formato com o catálogo num arquivo irmão (`.commands`, `commands_ref`) só é lido (`queue.rs`
   `decode`): a gravação seguinte o devolve ao principal e apaga o irmão. Ver
   [catálogo de comandos fora do arquivo da fila](#catálogo-de-comandos-fora-do-arquivo-da-fila-10112026).
+- **Hooks do Claude e do Codex e pontes de skills são conferidos na subida do `hangar-server`
+  (`harness_setup::sync_startup`), antes de liberar as rotas.** O Python não instala nada disso.
+  Servidor de ensaio (`CP_RUST_NO_ORPHAN_SWEEP=1`) não grava na máquina. Ver
+  [hooks e skills da subida no Rust](#hooks-e-skills-da-subida-no-rust-12112026).
+
+## Hooks e skills da subida no Rust (12/11/2026)
+
+A subida do backend Python rodava `skill_bridge.rebuild`, os seis `hook_installer.ensure_*` do
+Claude (AskUserQuestion, estado, prévia, subagentes, pareamento, navegador) e o
+`ensure_codex_state_hook_installed` antes de abrir a porta. O Rust já tinha os mesmos instaladores
+(`harness_setup/hooks.rs`, `codex_hooks.rs`, `skills.rs`), usados pela configuração compartilhada,
+pela CLI `harness-setup` e pela abertura de Pi/Kimi, mas não os chamava na própria subida. Agora
+`sync_startup` roda na preparação inicial, depois dos passos de atualização e antes do
+`startup.finish()`: a barreira de prontidão segura toda rota até ele terminar, então o
+`settings.json` continua sem segundo escritor do Hangar nesse começo (o `pensamento.py` dependia
+disso). A raiz é `install_root::root`, a mesma da configuração compartilhada. As pastas do Claude
+saem do catálogo de contas (`claude_catalog`, o par do `list_config_dirs`), não só das contas
+marcadas: o Python também instalava na conta antiga com login e `projects/` e nas pastas de
+`CP_CLAUDE_CONFIG_DIRS`, e o Rust deixava as duas de fora.
+
+Diferenças em relação ao Python, todas na direção do que o Rust já gravava pela configuração
+compartilhada (antes os dois lados trocavam o comando um do outro): o hook `pair-context` usa o
+caminho estável do binário (`persistent_server`), não o da versão; no checkout, o Python do comando
+é o do venv da raiz (`python_exe`), não o `sys.executable` do processo; entradas novas entram na
+ordem do Rust. O `hangar-skills-sync` (largada de Pi/omp/Kimi) passou a chamar
+`hangar-harness-setup skills`.
 
 ## Fila travada por entrega incerta numa máquina lenta (11/11/2026)
 
@@ -1991,7 +2017,7 @@ tarefas dependentes do adapter. Troca de provider não espera os dois polls de c
 exigidos para troca de arquivo: é a identificação inicial da sessão, não uma oscilação.
 O drain resolve o adapter na hora para não enviar teclas à TUI errada.
 
-## Ponte de skills (`app/skill_bridge.py`): o omp descobre sozinho as skills dos outros CLIs (providers `claude`/`claude-plugins`/`agents`); Pi e Kimi leem as pastas da própria config.
+## Ponte de skills (`harness_setup/skills.rs`, antes `app/skill_bridge.py`): o omp descobre sozinho as skills dos outros CLIs (providers `claude`/`claude-plugins`/`agents`); Pi e Kimi leem as pastas da própria config.
 
 Sem a ponte, cada um mantinha uma fazenda de symlinks à mão apontando pro
   cache VERSIONADO dos plugins (`plugins/cache/ecc/ecc/2.2.0/skills/...`): bump de versão =
@@ -2005,9 +2031,9 @@ Sem a ponte, cada um mantinha uma fazenda de symlinks à mão apontando pro
   com o python3 do sistema, regra do `engines.py`); **só mexe em symlink cujo alvo está numa
   fonte conhecida** — arquivo real do usuário ou link à mão pra fora das fontes
   nunca é tocado; config alheia (settings.json do pi, config.toml do kimi) é só CONFERIDA, com
-  aviso quando a ponte não está na lista — nunca editada. Roda na subida do backend e no
-  `install-claude-wrapper.sh` (precedente `migracao_sidecars`: atualizar é `git pull` + restart,
-  installer não é garantido). Standalone: `python3 backend/app/skill_bridge.py [--dry-run]`.
+  aviso quando a ponte não está na lista — nunca editada. Roda na subida do `hangar-server`, na
+  largada de Pi/omp/Kimi (`hangar-skills-sync`) e no `install-claude-wrapper.sh`. Standalone:
+  `scripts/hangar-harness-setup skills`.
   **Ela é a ÚNICA dona das pastas de ponte** (04/09/2026): o `scripts/install-skills-bridge.sh`
   — que o hook `SessionStart` do Claude chama, e que o `claude-hooks-adapter` roda também dentro
   do Pi — tinha uma poda própria, só de plugins, e apagava a cada largada do Pi os 67 links de
@@ -2074,7 +2100,7 @@ quando o GET diz `partial`, e quem decide entre reaproveitar e tentar de novo é
     `~/.codex/hooks/`. O Hangar só faz o que ele não faz: `codex_compat` (rtk, `SessionEnd` ≤ 3s,
     bloco do `AGENTS.md`), a ponte de skills pessoais e os plugins.
   - **Os hooks do PRÓPRIO app não atravessam pelo importador** (`sem_hooks_do_app`): cada harness
-    recebe o `state_hook` pelo instalador dele — `codex_hook_installer.py` no Codex, irmão do do
+    recebe o `state_hook` pelo instalador dele — `harness_setup/codex_hooks.rs` no Codex, irmão do do
     Kimi —, e `adapters/codex/adapter.py` lê esse marcador como segunda fonte de "turno fechou",
     então ele precisa existir mesmo com a integração desligada. Sem o filtro, `askq_capture`,
     `preview_hook`, `pair_hook`, `nav_hook` e `subagent_hook` (que só entendem o stdin do Claude)

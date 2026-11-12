@@ -1,5 +1,5 @@
 //! Reconciliação dos comandos instalados, preservando a ordem dos hooks pessoais.
-use crate::accounts::{AccountService, Provider};
+use crate::accounts::AccountService;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeSet,
@@ -193,14 +193,21 @@ fn sync_report_selected(
     let mut errors = Vec::new();
     let _lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let python = crate::install_root::python_exe(repo, cfg!(windows));
+    // O catálogo, não só as contas marcadas: conta antiga com login e `CP_CLAUDE_CONFIG_DIRS` também recebem.
     let mut dirs: Vec<_> = service
-        .snapshot(Provider::Claude)
+        .claude_catalog()
+        .map(|rows| {
+            rows.as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|row| row["path"].as_str().map(std::path::PathBuf::from))
+                .collect()
+        })
         .unwrap_or_else(|error| {
             errors.push(format!("descoberta das contas Claude: {error:?}"));
             Vec::new()
         })
         .into_iter()
-        .map(|a| a.home)
         .chain([service.env.claude_base.clone()])
         .collect();
     dirs.sort_by_key(|d| (d.file_name().is_none_or(|n| n != ".claude"), d.clone()));

@@ -63,7 +63,7 @@ sync/plugins. Os lançadores e probes também leem o formato. Esses consumidores
 não autorizam escritor Python de cadastro/login com Rust ativo.
 
 Claude também fornece config dir às sessões Pi: `registry.py` escolhe a conta e
-`skill_bridge.py`/`pi_extension_installer.py` usam essa configuração. A proteção da
+`harness_setup/skills.rs` (Rust) e `pi_extension_installer.py` usam essa configuração. A proteção da
 #115 cobre esse uso; migrar o adaptador Pi continua fora do escopo. A linha de
 status lê a cota no módulo de contas do Rust (`AccountService::claude_windows`),
 sem ida ao Python; custos precisam usar o retrato de contas/cotas Rust sem chamada

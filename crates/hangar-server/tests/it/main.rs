@@ -327,6 +327,7 @@ mod worktree_routes;
 mod codex_setup;
 
 mod harness_setup;
+mod harness_startup;
 mod dotenv_config;
 mod value_coercion;
 mod codec_values;

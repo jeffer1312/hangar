@@ -230,6 +230,7 @@ async fn run() {
     let service = hangar_server::update::git_engine::Service::from_state(&state);
     let startup_environment = state.accounts.env.clone();
     let startup_prewarm = state.prewarm.clone();
+    let startup_accounts = state.accounts.clone();
     let _preparation = tokio::spawn(async move {
         match service {
             Ok(service) => match tokio::task::spawn_blocking(move || service.startup_outcome()).await {
@@ -237,6 +238,12 @@ async fn run() {
                 Err(error) => tracing::warn!(code="startup_steps_failed", %error, "preparação inicial interrompida"),
             },
             Err(error) => tracing::warn!(code="startup_config_failed", %error, "preparação inicial sem configuração"),
+        }
+        // Antes de liberar as rotas: o `settings.json` não pode ter dois escritores no começo da vida.
+        // O servidor de ensaio não grava hooks da máquina, como na varredura dos canos.
+        if std::env::var_os("CP_RUST_NO_ORPHAN_SWEEP").is_none_or(|value| value != "1")
+            && tokio::task::spawn_blocking(move || hangar_server::harness_setup::sync_startup(&startup_accounts)).await.is_err() {
+            tracing::warn!(code = "harness_startup_failed", "tarefa dos hooks e skills da subida falhou");
         }
         startup_prewarm.clean_receipts().await;
         hangar_server::startup::prepare_sessions(startup_environment).await;

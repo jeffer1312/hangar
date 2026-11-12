@@ -1,7 +1,6 @@
 """Raiz da instalação: com `~/.hangar/current` (pacote), o que se grava fora do Hangar aponta para o
 `current` sem resolver o link; sem ele, tudo fica como no checkout."""
 import importlib
-import json
 import os
 import sys
 from pathlib import Path
@@ -48,24 +47,7 @@ def test_com_current_a_raiz_e_o_link_sem_resolver(home):
     assert install_root.interpreter() == str(current / PY)
 
 
-def test_hook_gravado_aponta_para_o_current(home, tmp_path, monkeypatch):
-    # O hook_installer monta os comandos na importação: recarrega com o HOME do teste e devolve ao fim.
-    from app import hook_installer
-    current = _pacote(home)
-    try:
-        hi = importlib.reload(hook_installer)
-        settings = tmp_path / "settings.json"
-        assert hi._ensure_event_hook(settings, "Stop", hi._STATE_COMMAND, por_nome=True)
-        comando = json.loads(settings.read_text(encoding="utf-8"))["hooks"]["Stop"][0]["hooks"][0]["command"]
-        assert comando.startswith(f'"{current / PY}" "{current / "backend" / "hooks" / "state_hook.py"}"')
-        assert "versions" not in comando
-    finally:
-        monkeypatch.undo()
-        importlib.reload(hook_installer)
-
-
 @pytest.mark.parametrize("modulo, atributo, relativo", [
-    ("app.skill_bridge", "_REPO", ""),
     ("app.plugin_bridge", "PLUGINS_ROOT", "plugins"),
     ("app.codex_contas_plugins", "_REPO", ""),
     ("app.codex_compat", "_REPO", ""),

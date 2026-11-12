@@ -42,7 +42,7 @@ Only terminal sessions use the tmux pane for live **state** and input. Backend p
 - `sse.py` — merges the above into the SSE stream. `api.py` — FastAPI routes. `auth.py` — bearer token / `cp_token` cookie.
 - Also: `pqueue.py` (durable input queue), `preview.py` (live in-flight block), `askquestion.py`
   (native AskUserQuestion stepper), `uploads.py`,
-  `model_picker.py`, `config.py`, `hook_installer.py`.
+  `model_picker.py`, `config.py`.
 - `crates/hangar-server/src/commands/` — catálogo de comandos do Claude, sonda compartilhada e
   filtro em processo; o Python só autentica e repassa nas portas que atende.
 - `site/` — landing page de `hangar.dev.br` (HTML estático em PT/EN gerado por `site/build.py`,
@@ -395,8 +395,9 @@ registrado, fora do caminho de leitura, para não competir com o que vale hoje.
 ### Harnesses — Claude, Codex, Pi, omp, Kimi → [`docs/decisoes/harnesses.md`](docs/decisoes/harnesses.md)
 
 **Antes de mexer em** `backend/app/adapters/` (claude_headless, codex, kimi, omp, pi), `codex_*.py`,
-`engines.py`, `model_picker.py`, `permission_mode.py`, `skill_bridge.py`, `omp_dirs.py`, `loop.py`,
-`terminal_input.py`, `state.py`, `crates/hangar-server/src/runtime/` (atores Claude/Codex,
+`engines.py`, `model_picker.py`, `permission_mode.py`, `omp_dirs.py`, `loop.py`,
+`terminal_input.py`, `state.py`, `crates/hangar-server/src/harness_setup/`,
+`crates/hangar-server/src/runtime/` (atores Claude/Codex,
 lançamento, relançamento e religação ao mesmo cano em `cano_reconnect.rs`), statusline/prévia, hooks de estado, ou em sessão sem terminal:
 **leia a seção "Regras vigentes" de `docs/decisoes/harnesses.md`**. Cada regra ali já custou um
 bug calado.

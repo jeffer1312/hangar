@@ -14,7 +14,7 @@ Anthropic, que nasceriam pedindo um modelo que a API da Anthropic nao conhece.
 A sessao viva ja aplicou o modelo em memoria (medido: a statusline troca na hora e nao volta), entao
 regravar o valor anterior depois do comando desfaz o vazamento sem desfazer a troca.
 
-Blindagem igual a do hook_installer: arquivo quebrado/estranho a mao NAO e tocado — perder a config
+Blindagem igual a do instalador de hooks (`harness_setup/hooks.rs`): arquivo quebrado/estranho a mao NAO e tocado — perder a config
 do usuario e pior que deixar o default trocado (que ele ve na tela e conserta).
 """
 import json
