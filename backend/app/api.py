@@ -35,9 +35,7 @@ from app import model_args
 from app import registry as registry_mod
 from app.registry import KillFailed, SessionRegistry
 from app.names import sanitize_session_name
-from app.models import (SessionInfo, CreatedSessionInfo, ChatEvent, RunnersResponse, RunBody,
-                        RunInfo, Runner, CustomRunnersBody,
-                        ShortcutAnswerBody, session_key)
+from app.models import SessionInfo, CreatedSessionInfo, ChatEvent, session_key
 from app.pqueue import (PromptQueue, _transcript_start_ts, committed_user_lines,
                         fila_interna_pendente, linha_mais_parecida)
 from app.prune import prune_loop as _prune_loop
@@ -57,7 +55,6 @@ from app.share_life import session_life
 from app import contas, default_model, procinfo
 from app import loop as loop_mod
 from app.transcript import last_assistant_text
-from app import runner
 from app import archive_providers
 from app.archive import (archive_cwd, archive_jsonl,
                          list_folders)
@@ -661,25 +658,8 @@ terminal = TerminalInput()
 @app.websocket("/api/sessions/{name}/term")
 async def term_ws_route(ws: WebSocket, name: str):
     from app import termsock
-    # `?shortcut=<id>`: terminal de atalho DESTA sessao. O alvo tmux sai do dono conferido no
-    # servidor, nunca da query — o id sozinho nao alcanca terminal de outra conversa.
-    ident = ws.query_params.get("shortcut")
     resolve = None
-    if ident is not None:
-        from app import shortcut_terminals
-        resolve = lambda: shortcut_terminals.find(name, ident)   # noqa: E731
     await termsock.term_ws(ws, name, resolve)
-
-
-@app.websocket("/api/hangar-terminals/{ident}/term")
-async def hangar_term_ws_route(ws: WebSocket, ident: str):
-    # Terminal de nenhuma sessao: convidado de sessao compartilhada nunca chega aqui.
-    from app import shortcut_terminals, termsock
-    from app.guest_header import guest_of
-    if guest_of(ws) is not None:
-        await ws.close(code=1008)
-        return
-    await termsock.term_ws(ws, "hangar", lambda: shortcut_terminals.find_hangar(ident))
 
 
 @app.websocket("/api/sessions/{name}/nav-remoto")
@@ -2795,70 +2775,6 @@ def term_input(name: str, body: TermInputBody):
     return {"ok": True}
 
 
-def _session_info_with_cwd(name: str):
-    # Mesmo lookup do upload. 404 se a sessão ou o cwd não existe.
-    info = _cached_info_sync(name)
-    if info is None or not info.cwd:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "sessao nao encontrada"))
-    return info
-
-
-def _session_cwd(name: str) -> str:
-    return _session_info_with_cwd(name).cwd
-
-
-@app.get("/api/sessions/{name}/runners", dependencies=[Depends(require_auth)],
-         response_model=RunnersResponse)
-def list_runners(name: str):
-    cwd = _session_cwd(name)
-    return RunnersResponse(
-        detected=runner.detect_runners(cwd),
-        custom=runner.custom_commands(cwd),
-        remembered=runner.remembered(cwd),
-        running=runner.run_status(cwd),
-    )
-
-
-# POST, nao PUT/PATCH: mesmo motivo do /api/config — proxy na frente do backend ja barrou
-# metodo fora do par GET/POST.
-@app.post("/api/sessions/{name}/runners/custom", dependencies=[Depends(require_auth)],
-          response_model=list[Runner])
-def set_custom_runners(name: str, body: CustomRunnersBody):
-    # A lista vai INTEIRA (add/editar/remover sao a mesma gravacao). Item vazio e recusado aqui,
-    # apontando qual: gravado, ele viraria linha morta descartada calada no proximo GET.
-    cwd = _session_cwd(name)
-    for i, c in enumerate(body.commands, start=1):
-        if not c.label.strip() or not c.command.strip():
-            raise HTTPException(400, detail=erro(
-                "erro_runner_custom", f"comando personalizado {i}: rotulo e comando sao obrigatorios"))
-    runner.set_custom_commands(cwd, [c.model_dump() for c in body.commands])
-    return runner.custom_commands(cwd)
-
-
-@app.post("/api/sessions/{name}/run", dependencies=[Depends(require_auth)],
-          response_model=RunInfo)
-def start_runner(name: str, body: RunBody):
-    # RunnerError = "o play NAO aconteceu" (a sessao velha sobreviveu, ou o new-session falhou).
-    # Antes isso virava 200 com o estado da sessao VELHA dentro; 500 cru tambem nao serve, porque
-    # o texto diz o que houve e a tela do run mostra o detail, igual ao painel de projetos.
-    try:
-        return runner.start_run(_session_cwd(name), body.command)
-    except runner.RunnerError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.post("/api/sessions/{name}/run/stop", dependencies=[Depends(require_auth)])
-def stop_runner(name: str):
-    try:
-        runner.stop_run(_session_cwd(name))
-    except runner.RunnerError as e:
-        raise HTTPException(e.status, e.detail)   # `{"ok": True}` com o processo vivo era mentira
-    return {"ok": True}
-
-
-@app.get("/api/sessions/{name}/run/pane", dependencies=[Depends(require_auth)])
-def runner_pane(name: str):
-    return {"pane": runner.run_pane(_session_cwd(name))}
 
 
 _DISPLAY_VARS = ("DISPLAY", "WAYLAND_DISPLAY", "XDG_CURRENT_DESKTOP", "HYPRLAND_INSTANCE_SIGNATURE")
@@ -2885,88 +2801,8 @@ def _shortcut_env() -> dict[str, str]:
     return env
 
 
-def _focus_hangar_terminal(row: dict | None) -> bool:
-    if not row or not row["alive"] or not row["pid"]:
-        return False
-    from app import window_focus
-    return window_focus.focus_tree(row["pid"], _shortcut_env())
 
 
-@app.get("/api/sessions/{name}/shortcut-terminals", dependencies=[Depends(require_auth)])
-def shortcut_terminals_list(name: str):
-    from app import shortcut_terminals
-    return {"terminals": shortcut_terminals.list_for(name)}
-
-
-def _answer(target: str | None, text: str, missing: HTTPException):
-    # Uma linha so, sem tecla de controle: `\n` viraria dois comandos, `\x03` um Ctrl+C, `\x1b` um Esc.
-    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in text):
-        raise HTTPException(400, detail=erro("erro_shortcut_resposta_invalida", "a resposta e uma linha so"))
-    if target is None:
-        raise missing
-    from app import terminal_prompt
-    if not terminal_prompt.answer(target, text):
-        raise HTTPException(500, detail=erro("erro_shortcut_resposta", "o terminal recusou a resposta"))
-    return {"ok": True}
-
-
-@app.post("/api/sessions/{name}/shortcut-terminals/{ident}/answer", dependencies=[Depends(require_auth)])
-def shortcut_terminal_answer(name: str, ident: str, body: ShortcutAnswerBody):
-    from app import shortcut_terminals
-    return _answer(shortcut_terminals.find(name, ident), body.text,
-                   HTTPException(404, detail=erro("erro_shortcut_terminal_inexistente",
-                                                  "terminal do atalho nao encontrado")))
-
-
-# POST, nao DELETE: o proxy da frente so deixa passar GET/POST.
-@app.post("/api/sessions/{name}/shortcut-terminals/{ident}/close", dependencies=[Depends(require_auth)])
-def shortcut_terminal_close(name: str, ident: str):
-    from app import shortcut_terminals
-    closed = shortcut_terminals.close(name, ident)
-    if closed is None:
-        raise HTTPException(404, detail=erro("erro_shortcut_terminal_inexistente",
-                                             "terminal do atalho nao encontrado"))
-    if not closed:
-        raise HTTPException(500, detail=erro("erro_shortcut_terminal_fechar",
-                                             "o terminal do atalho nao fechou"))
-    return {"ok": True}
-
-
-@app.get("/api/hangar-terminals", dependencies=[Depends(require_auth)])
-def hangar_terminals_list():
-    from app import shortcut_terminals
-    return {"terminals": [t for t in shortcut_terminals.list_all() if not t["owner"]]}
-
-
-def _hangar_404():
-    return HTTPException(404, detail=erro("erro_hangar_terminal_inexistente", "terminal No Hangar nao encontrado"))
-
-
-# POST, nao DELETE: o proxy da frente so deixa passar GET/POST.
-@app.post("/api/hangar-terminals/{ident}/close", dependencies=[Depends(require_auth)])
-def hangar_terminal_close(ident: str):
-    from app import shortcut_terminals
-    closed = shortcut_terminals.close_hangar(ident)
-    if closed is None:
-        raise _hangar_404()
-    if not closed:
-        raise HTTPException(500, detail=erro("erro_hangar_terminal_fechar", "o terminal No Hangar nao fechou"))
-    return {"ok": True}
-
-
-@app.post("/api/hangar-terminals/{ident}/answer", dependencies=[Depends(require_auth)])
-def hangar_terminal_answer(ident: str, body: ShortcutAnswerBody):
-    from app import shortcut_terminals
-    return _answer(shortcut_terminals.find_hangar(ident), body.text, _hangar_404())
-
-
-@app.post("/api/hangar-terminals/{ident}/focus", dependencies=[Depends(require_auth)])
-def hangar_terminal_focus(ident: str):
-    from app import shortcut_terminals
-    row = shortcut_terminals.hangar_row(ident)
-    if row is None:
-        raise _hangar_404()
-    return {"focused": _focus_hangar_terminal(row)}
 
 
 class ShortcutImportBody(BaseModel):
@@ -3007,6 +2843,8 @@ class ShortcutVerifyBody(BaseModel):
 def shortcuts_verify(body: ShortcutVerifyBody):
     from app import shortcut_transfer
     return shortcut_transfer.run_checks(body.ids, body.scripts[:50], _shortcut_env())
+
+
 
 
 def _erro_conta_codex(exc: codex_accounts.AccountError) -> HTTPException:
@@ -3532,8 +3370,6 @@ def _bypass_no_ciclo(name: str) -> bool:
     agent = registry_mod._pid_do_agente((registry._pane_of(name) or {}).get("pid"))
     cmd = " ".join(procinfo._cmdline(agent).split()).replace("--permission-mode=", "--permission-mode ") if agent else ""
     return any(f in cmd for f in _FLAGS_BYPASS)
-
-
 
 
 @app.get("/api/sessions/{name}/navegador", dependencies=[Depends(require_auth)])

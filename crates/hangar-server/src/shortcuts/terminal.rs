@@ -380,7 +380,7 @@ impl Service {
             tmux: target,
         }))
     }
-    async fn close_row(&self, row: &Row) -> bool {
+    pub(super) async fn close_row(&self, row: &Row) -> bool {
         if let Some(pid) = row.pid.filter(|p| *p != 0)
             && (row.alive || self.windows)
         {
@@ -394,6 +394,46 @@ impl Service {
         }
         gone
     }
+    pub(super) async fn find(&self, owner: &str, id: &str) -> Result<Option<Row>, Error> {
+        if id.len() != 6 || !id.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f')) { return Ok(None); }
+        Ok(self.rows().await?.into_iter().find(|row|row.owner == owner && row.id == id))
+    }
+
+    pub(super) async fn answer(&self, target: &str, text: &str) -> bool {
+        // Duas respostas juntas no mesmo terminal intercalariam texto e Enter.
+        static LOCKS: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>> =
+            std::sync::LazyLock::new(Default::default);
+        let lock = LOCKS.lock().unwrap_or_else(|e| e.into_inner()).entry(target.to_owned()).or_default().clone();
+        let _serial = lock.lock().await;
+        crate::list::local_shortcuts::forget_target(target);
+        let where_ = format!("={target}:");
+        if !text.is_empty() {
+            let (pieces, placeholder) = crate::terminal_input::literal_pieces(text, self.windows, false);
+            let text = pieces.concat();
+            let count = pieces.len();
+            for (i, part) in pieces.into_iter().enumerate() {
+                if self.run(["send-keys".into(), "-t".into(), where_.clone(), "-l".into(), "--".into(), part]).await.code != Some(0) { return false; }
+                if i + 1 < count { tokio::time::sleep(Duration::from_millis(300)).await; }
+            }
+            if placeholder {
+                for key in ["Home", "DC"] {
+                    if self.run(["send-keys".into(), "-t".into(), where_.clone(), key.into()]).await.code != Some(0) { return false; }
+                }
+                let capture=self.run(["capture-pane".into(), "-p".into(), "-t".into(), where_.clone()]).await;
+                let prefix: String=text.chars().take(25).collect();
+                // O `x` que sobrou mudaria a resposta: sem Enter.
+                if capture.code==Some(0) && capture.stdout.contains(&prefix) {
+                    tracing::warn!(code = "placeholder_unremoved", "o terminal não removeu o prefixo auxiliar da resposta");
+                    return false;
+                }
+            }
+        }
+        let mut args = vec!["send-keys".into(), "-t".into(), where_];
+        if self.windows { args.push("Enter".into()); }
+        else { args.extend(["-l".into(), "--".into(), "\r".into()]); }
+        self.run(args).await.code == Some(0)
+    }
+
     async fn kill_group(&self, pid: u32) {
         #[cfg(unix)]
         if !self.windows {

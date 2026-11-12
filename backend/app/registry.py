@@ -10,7 +10,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Optional
-from app import diag, shortcut_terminals, tmux
+from app import diag, tmux
 from app import agentpane
 from app import permission_mode as modo_permissao
 from app.config import settings
@@ -1547,7 +1547,6 @@ class SessionRegistry:
         `closed_by_rust`: o Rust já encerrou a sessão (pane, app-server, sidecar, fila, grupo) e
         repassou; só as lojas daqui, sem nenhuma chamada de volta a ele."""
         if closed_by_rust:
-            shortcut_terminals.close_all(name)
             self._forget_local(name)
             ThenLink(name).clear()
             return []
@@ -1569,7 +1568,6 @@ class SessionRegistry:
             except Exception:
                 headless_sessions.restaurar(meta, preserve_process=True)
                 raise
-            shortcut_terminals.close_all(name)
             self._forget(name)
             PromptQueue(name).clear()
             ThenLink(name).clear()
@@ -1589,7 +1587,6 @@ class SessionRegistry:
                 raise KillFailed(name)
             get_adapter("codex").close_sync(name) if rust is None else get_adapter("codex").forget_memory(name)
             self._kill_hidden_shell(name)
-            shortcut_terminals.close_all(name)
             codex_sessions.delete(name)
             self._forget(name)
             PromptQueue(name).clear()
@@ -1607,7 +1604,6 @@ class SessionRegistry:
         if not tmux.kill_session(name):
             raise KillFailed(name)
         self._kill_hidden_shell(name)
-        shortcut_terminals.close_all(name)
         self._forget(name)  # cache invalido: nome pode ser reusado por outra sessao depois
         # Sessao morta nao deixa fila pra tras: senao acumula orfaos e uma futura sessao de mesmo
         # nome herdaria essas entradas como bubble-fantasma (mesmo motivo do clear no create()).

@@ -38,6 +38,7 @@ path = "tests/other_terminal_lifecycle.rs"
 hangar-conversation-transfer.workspace = true
 hangar-codex-transfer.workspace = true
 hangar-session-tools.workspace = true
+hangar-projects.workspace = true
 hangar-auth = { path = "../hangar-auth" }
 # float_roundtrip: o float lido sai com o mesmo valor que o float() do Python, e o repr bate.
 # alloc (aqui, no serde e o signal do tokio): as features que o resto do workspace pede. Sem elas,

@@ -60,18 +60,22 @@ mod posix {
                     "/bin/sleep 60 & echo $! > child.pid; printf out; printf err >&2; wait".into(),
                 ],
                 env,
-                // O estouro precisa vir depois de o `sh` gravar o filho, o que sob carga passa de 350 ms.
-                Duration::from_millis(if cancel { 60000 } else { 2000 }),
+                // O orçamento da captura comporta o mesmo prazo de início do filho, inclusive sob carga.
+                Duration::from_secs(if cancel { 60 } else { 20 }),
                 options(&cwd),
             ));
             // estavel: teto generoso da espera pelo arquivo do filho; a condição encerra antes.
             let started = Instant::now() + Duration::from_secs(20);
-            while !cwd.join("child.pid").is_file() && !task.is_finished() && Instant::now() < started {
+            let pid = loop {
+                // O redirecionamento cria o arquivo antes de o `echo` escrever o PID.
+                let pid = std::fs::read_to_string(cwd.join("child.pid"))
+                    .ok()
+                    .and_then(|value| value.trim().parse::<i32>().ok());
+                if pid.is_some() || task.is_finished() || Instant::now() >= started {
+                    break pid;
+                }
                 tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            let pid = std::fs::read_to_string(cwd.join("child.pid"))
-                .ok()
-                .and_then(|value| value.trim().parse::<i32>().ok());
+            };
             if cancel {
                 task.abort();
                 let _ = task.await;
@@ -96,7 +100,11 @@ mod posix {
             }
             assert!(!survived, "filho sobreviveu ao término");
             // Bem abaixo dos 60 s do filho e do prazo de cancelamento: não esperou nenhum dos dois.
-            assert!(start.elapsed() < Duration::from_secs(30), "levou {:?}", start.elapsed());
+            assert!(
+                start.elapsed() < Duration::from_secs(30),
+                "levou {:?}",
+                start.elapsed()
+            );
         }
     }
 }

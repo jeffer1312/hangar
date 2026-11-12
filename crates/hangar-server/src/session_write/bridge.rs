@@ -180,8 +180,13 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
             }
         }
     }
+    let passed = name.clone();
     let (Some(runtime), true, Some(name)) = (st.state.runtime.get().cloned(), owner, name)
-        else { return vault_files_after(vault_files, crate::routes::pass(&st, req, &fwd).await) };
+        else {
+            let response = crate::routes::pass(&st, req, &fwd).await;
+            if response.status().is_success() && let Some(name) = passed.as_deref() { close_shortcuts(&st, name).await; }
+            return vault_files_after(vault_files, response);
+        };
     // Na janela da subida, a vigia é quem lê o sidecar do Codex: sem ela o fechamento pelo nome deixaria o
     // cano de um Codex sem terminal vivo. Subida que não liga vigia segue pelo nome.
     if let Err(error) = runtime.wait_watcher().await { return close_failed(&st, &name, &error, req.headers()); }
@@ -203,6 +208,8 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
             }
         }
     };
+    // Ainda com o nome reservado: atalho de uma sessão nova com o mesmo nome não pode ser alcançado.
+    if closed.is_ok() { close_shortcuts(&st, &name).await; }
     drop(closing);
     let closed = match closed {
         Ok(closed) => closed,
@@ -345,6 +352,14 @@ async fn after_close(st: &Arc<AppState>, name: &str) -> Option<Value> {
     warning
 }
 
+/// Os terminais de atalho da sessão encerrada, também quando quem encerrou foi o Python.
+async fn close_shortcuts(st: &AppState, name: &str) {
+    for warning in crate::shortcuts::close_for_session(st, name, || Box::pin(async { true })).await {
+        let code = warning["code"].as_str().unwrap_or("shortcut_close_failed");
+        st.diag.report("rust.close_failed", name, code, "terminal de atalho da sessão encerrada não fechou");
+    }
+}
+
 /// O `DELETE` do Claude que entrou pelo Connect (8768): o encerramento da 8765, sem repasse e sem a saída
 /// do grupo, que o Python faz depois com a fase do `orq` já lida (o Rust não pergunta de volta numa chamada
 /// dele). 421 = não é Claude aberto aqui, e o Python segue.
@@ -363,6 +378,7 @@ async fn close_bridged(st: Arc<AppState>, peer: SocketAddr, name: &str, headers:
         None => not_ours(),
         Some(Err(error)) => close_refusal(&error),
         Some(Ok(mut closed)) => {
+            close_shortcuts(&st, name).await;
             if let Some(warning) = after_close(&st, name).await { closed["warning"] = warning; }
             super::json_response(StatusCode::OK, closed)
         }

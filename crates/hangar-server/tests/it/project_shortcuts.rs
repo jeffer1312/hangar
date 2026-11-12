@@ -832,44 +832,12 @@ async fn s01_validation_methods_auth_and_lifecycle_are_native() {
 }
 
 #[cfg(target_os = "linux")]
-fn s01_real_python_private_child() -> bool {
+fn s01_real_terminal_private_child() -> bool {
     use std::{io::Write, process::Command};
-    const TEST: &str = "project_shortcuts::s01_real_python_get_reads_three_rust_terminals_from_private_tmux";
-    if std::env::var("S01_REAL_PYTHON_SANDBOX").as_deref() == Ok("1")
-        || std::env::var("S01_REAL_PYTHON_CHILD").as_deref() == Ok(TEST) { return false; }
-
-    fn copy_source(from: &Path, to: &Path) {
-        let metadata = std::fs::symlink_metadata(from).expect("fonte do checkout ausente");
-        assert!(metadata.is_dir() && !metadata.file_type().is_symlink(), "fonte não é diretório sem links: {}", from.display());
-        std::fs::create_dir_all(to).unwrap();
-        for entry in std::fs::read_dir(from).unwrap() {
-            let entry = entry.unwrap();
-            let kind = entry.file_type().unwrap();
-            let name = entry.file_name();
-            let text = name.to_string_lossy();
-            assert!(!kind.is_symlink(), "link recusado na fonte privada: {}", entry.path().display());
-            assert!(!matches!(text.as_ref(), ".git" | ".env" | "peers.json" | "credentials.json" | "auth.json"
-                | "runtime-config.json" | ".claude" | ".codex" | ".hangar" | ".ssh") && !text.starts_with(".env."),
-                "configuração pessoal recusada na fonte: {}", entry.path().display());
-            if text == "__pycache__" { continue; }
-            if kind.is_dir() { copy_source(&entry.path(), &to.join(&name)); }
-            else {
-                assert!(kind.is_file(), "entrada não regular na fonte: {}", entry.path().display());
-                std::fs::copy(entry.path(), to.join(&name)).unwrap();
-            }
-        }
-    }
-
-    let checkout = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
-    let python = std::env::var_os("S01_TEST_PYTHON").map(PathBuf::from)
-        .unwrap_or_else(|| checkout.join("backend/.venv/bin/python"));
-    assert!(python.is_absolute() && python.is_file(),
-        "Python3.14 do checkout ausente em {}; use apenas override explícito S01_TEST_PYTHON", python.display());
+    const TEST: &str = "project_shortcuts::s01_real_rust_get_reads_three_terminals_from_private_tmux";
+    if std::env::var("S01_REAL_TERMINAL_CHILD").as_deref() == Ok(TEST) { return false; }
     let dir = tempfile::tempdir().unwrap();
     let base = hangar_workspace::real(dir.path());
-    let source = base.join("source");
-    copy_source(&checkout.join("backend/app"), &source.join("backend/app"));
-    copy_source(&checkout.join("messages"), &source.join("messages"));
     let home = base.join("home");
     let tmp = base.join("tmp");
     let runtime = base.join("runtime");
@@ -878,24 +846,21 @@ fn s01_real_python_private_child() -> bool {
         std::fs::create_dir_all(path).unwrap();
     }
     std::fs::write(home.join(".hangar/config/.env"), "").unwrap();
-    std::fs::write(home.join(".hangar/backend-dir"), source.join("backend").to_string_lossy().as_bytes()).unwrap();
     let mux = bin.join("tmux");
     let socket = runtime.join("s01.sock");
     crate::write_executable(&mux, "#!/bin/sh\n[ \"${S01_TMUX_SOCKET:-}\" = \"$S01_CASE_ROOT/runtime/s01.sock\" ] || exit 90\nexec /usr/bin/tmux -S \"$S01_TMUX_SOCKET\" -f /dev/null \"$@\"\n");
     let mut child = Command::new(std::env::current_exe().unwrap());
     child.args(["--exact", TEST, "--nocapture", "--test-threads=1"]).env_clear().current_dir(&base)
-        .env("S01_REAL_PYTHON_CHILD", TEST).env("S01_CASE_ROOT", &base)
-        .env("S01_PYTHON_BACKEND", source.join("backend")).env("S01_PYTHON_EXECUTABLE", &python)
+        .env("S01_REAL_TERMINAL_CHILD", TEST).env("S01_CASE_ROOT", &base)
         .env("S01_REAL_TMUX", &mux).env("S01_TMUX_SOCKET", &socket)
         .env("HOME", &home).env("USERPROFILE", &home).env("TMPDIR", &tmp)
         .env("PATH", format!("{}:/usr/bin:/bin", bin.display())).env("SHELL", "/bin/bash").env("USER", "contract")
         .env("XDG_CONFIG_HOME", home.join(".config")).env("XDG_CACHE_HOME", home.join(".cache"))
         .env("XDG_DATA_HOME", home.join(".local/share")).env("XDG_STATE_HOME", home.join(".local/state"))
         .env("XDG_RUNTIME_DIR", &runtime).env("CLAUDE_CONFIG_DIR", home.join(".claude")).env("CODEX_HOME", home.join(".codex"))
-        .env("CP_AUTH_TOKEN", OWNER).env("CP_RUST_SERVER", "0").env("CP_RUST_NO_ORPHAN_SWEEP", "1").env("NETWORK", "0")
+        .env("CP_AUTH_TOKEN", OWNER).env("CP_RUST_NO_ORPHAN_SWEEP", "1").env("NETWORK", "0")
         .env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_CEILING_DIRECTORIES", &base).env("PYTHONPATH", source.join("backend"))
-        .env("PYTHONNOUSERSITE", "1").env("PYTHONDONTWRITEBYTECODE", "1")
+        .env("GIT_CEILING_DIRECTORIES", &base)
         .env("LANG", "C.UTF-8").env("LC_ALL", "C.UTF-8").env("TZ", "UTC");
     if let Some(value) = std::env::var_os("LD_LIBRARY_PATH") { child.env("LD_LIBRARY_PATH", value); }
     let output = child.output().expect("falha lançando filho privado da prova S01");
@@ -916,47 +881,17 @@ fn s01_real_python_private_child() -> bool {
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-async fn s01_real_python_get_reads_three_rust_terminals_from_private_tmux() {
-    use std::{collections::BTreeMap, io::Write, process::{Command, Stdio}, time::Duration};
-    use tokio::io::AsyncBufReadExt;
+async fn s01_real_rust_get_reads_three_terminals_from_private_tmux() {
+    use std::{collections::BTreeMap, process::Command, time::Duration};
 
-    if s01_real_python_private_child() { return; }
-    let driver = std::env::var("S01_REAL_PYTHON_SANDBOX").as_deref() == Ok("1");
+    if s01_real_terminal_private_child() { return; }
     let case_root = PathBuf::from(std::env::var_os("S01_CASE_ROOT").expect("pasta privada obrigatória"));
-    let backend = PathBuf::from(std::env::var_os("S01_PYTHON_BACKEND").expect("fonte candidata privada obrigatória"));
-    let python = PathBuf::from(std::env::var_os("S01_PYTHON_EXECUTABLE").expect("Python3.14 explícito obrigatório"));
-    let home = PathBuf::from(std::env::var_os("HOME").unwrap());
-    let tmp = PathBuf::from(std::env::var_os("TMPDIR").expect("TMPDIR privado obrigatório"));
+    let home = case_root.join("home");
     let mux = PathBuf::from(std::env::var_os("S01_REAL_TMUX").expect("tmux privado obrigatório"));
     let socket = PathBuf::from(std::env::var_os("S01_TMUX_SOCKET").expect("socket privado obrigatório"));
-    assert!(case_root.is_absolute() && case_root.is_dir());
-    assert_eq!(home, case_root.join("home"));
-    assert_eq!(PathBuf::from(std::env::var_os("USERPROFILE").unwrap()), home);
-    assert_eq!(tmp, case_root.join("tmp"));
     assert_eq!(mux, case_root.join("bin/tmux"));
     assert_eq!(socket, case_root.join("runtime/s01.sock"));
     assert!(mux.is_file() && !socket.exists());
-    assert!(backend.is_absolute() && backend.join("app/api.py").is_file());
-    assert!(python.is_absolute() && python.is_file(), "Python3.14 ausente em {}", python.display());
-    assert_eq!(std::env::var("CP_RUST_SERVER").as_deref(), Ok("0"));
-    assert_eq!(std::env::var("CP_RUST_NO_ORPHAN_SWEEP").as_deref(), Ok("1"));
-    if driver {
-        assert_eq!(case_root, Path::new("/mnt/case"));
-        assert_eq!(backend, Path::new("/mnt/source/backend"));
-        assert_eq!(python, Path::new("/usr/bin/python3.14"));
-        assert_eq!(std::env::var("S01_MAIN_SOURCE_VERIFIED").as_deref(), Ok("1"));
-        for (kind, host) in [("pid", "HOST_PID_NS"), ("net", "HOST_NET_NS"),
-            ("mnt", "HOST_MNT_NS"), ("ipc", "HOST_IPC_NS")] {
-            assert_ne!(std::fs::read_link(format!("/proc/self/ns/{kind}")).unwrap().to_string_lossy(),
-                std::env::var(host).expect("namespace do host obrigatório"));
-        }
-        assert_eq!(std::fs::read_link("/proc/self/ns/pid").unwrap(), std::fs::read_link("/proc/1/ns/pid").unwrap());
-    } else {
-        assert_eq!(std::env::var("S01_REAL_PYTHON_CHILD").as_deref(),
-            Ok("project_shortcuts::s01_real_python_get_reads_three_rust_terminals_from_private_tmux"));
-        assert!(backend.starts_with(&case_root));
-        assert_eq!(PathBuf::from(std::env::var_os("GIT_CEILING_DIRECTORIES").unwrap()), case_root);
-    }
 
     // Mesmo Scene de metadados, sem subir seu upstream falso ou a porta de convidados.
     let dir = tempfile::tempdir().unwrap();
@@ -988,14 +923,7 @@ if [ "$1" = clients ]; then
 else printf '%s' "$3" > '{}'; printf 'ok\n'; fi
 "#,home.join("focus-pid").display(),home.join("focus-pid").display(),home.join("focused").display()));
     environment.insert("HYPRLAND_INSTANCE_SIGNATURE".into(), "s01-fixture".into());
-    let version = Command::new(&python).arg("--version").env_clear().envs(&environment)
-        .current_dir(&backend).output().expect("falha consultando a versão do Python explícito");
-    let version_text = format!("{}{}", String::from_utf8_lossy(&version.stdout), String::from_utf8_lossy(&version.stderr));
-    assert!(version.status.success() && version_text.trim().starts_with("Python 3.14."),
-        "{} deve ser Python3.14: status={}, saída={version_text}", python.display(), version.status);
-    let log = home.join("python-uvicorn.log");
-    let mut output = std::fs::File::create(&log).unwrap();
-    struct Processes { python: std::process::Child, mux: PathBuf, socket: PathBuf }
+    struct Processes { mux: PathBuf, socket: PathBuf }
     impl Drop for Processes {
         fn drop(&mut self) {
             let mut errors = Vec::new();
@@ -1015,14 +943,6 @@ else printf '%s' "$3" > '{}'; printf 'ok\n'; fi
                     Err(error) => errors.push(format!("falha encerrando tmux privado: {error}")),
                 }
             }
-            let running = match self.python.try_wait() {
-                Ok(status) => status.is_none(),
-                Err(error) => { errors.push(format!("falha consultando filho Python: {error}")); true },
-            };
-            if running && let Err(error) = self.python.kill() {
-                errors.push(format!("falha encerrando filho Python: {error}"));
-            }
-            if let Err(error) = self.python.wait() { errors.push(format!("falha recolhendo filho Python: {error}")); }
             if let Some((pid, birth)) = server {
                 let limit = std::time::Instant::now() + Duration::from_secs(10);
                 while hangar_server::terminal_facts::agent_birth(pid) == Some(birth) {
@@ -1043,41 +963,22 @@ else printf '%s' "$3" > '{}'; printf 'ok\n'; fi
             }
         }
     }
-    let mut processes = Processes {
-        python: Command::new(&python)
-            .args(["-m", "uvicorn", "app.api:app", "--lifespan", "off", "--host", "127.0.0.1", "--port", "0",
-                "--no-access-log", "--no-use-colors"])
-            .env_clear().envs(&environment).current_dir(&backend).stdin(Stdio::null())
-            .stdout(output.try_clone().unwrap()).stderr(Stdio::piped()).spawn().unwrap(),
-        mux: mux.clone(), socket,
-    };
-    let stderr: std::os::fd::OwnedFd = processes.python.stderr.take().expect("stderr do uvicorn ausente").into();
-    let stderr = tokio::fs::File::from_std(std::fs::File::from(stderr));
-    let mut lines = tokio::io::BufReader::new(stderr).lines();
-    let upstream = tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            let Some(line) = lines.next_line().await.expect("falha lendo stderr do uvicorn") else {
-                let status = processes.python.try_wait().unwrap();
-                let text = std::fs::read_to_string(&log).unwrap();
-                panic!("uvicorn fechou stderr antes do endereço: status={status:?}; log={text}");
-            };
-            writeln!(output, "{line}").expect("falha gravando log do uvicorn");
-            if let Some(address) = line.split_once("Uvicorn running on http://")
-                .and_then(|(_, tail)| tail.split_whitespace().next())
-                .and_then(|text| text.parse::<std::net::SocketAddr>().ok()) {
-                break address;
-            }
-        }
-    }).await.expect("uvicorn real não ficou pronto; conferir python-uvicorn.log");
-    let response = client().get(format!("http://{upstream}/api/hangar-terminals"))
-        .bearer_auth(OWNER).send().await.expect("GET inicial do Python real falhou");
-    assert_eq!(value(response, 200).await, json!({"terminals":[]}));
-    let (f, state, task) = workspace_fixture::real_python_fixture(&home, &metadata_mux, &mux, upstream, environment).await;
+    let _processes=Processes { mux:mux.clone(),socket };
+    let hits=std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let hit=hits.clone();
+    let trap=axum::Router::new().fallback(move || { let hit=hit.clone(); async move { hit.fetch_add(1,Ordering::Relaxed); axum::http::StatusCode::BAD_GATEWAY } });
+    let listener=tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let unavailable=listener.local_addr().unwrap();
+    let trap_task=tokio::spawn(async move { axum::serve(listener,trap).await.unwrap(); });
+    let (f, state, task) = workspace_fixture::real_terminal_fixture(&home, &metadata_mux, &mux, unavailable, environment).await;
     let runtime = f.runtime.clone();
     let addr = f.addr;
-    let hits = f.hits.clone();
+    let upstream=addr;
     let scene = Scene { _dir:dir, root, repo, wt, home, panes, f };
-    let execution = Execution { scene, addr, tasks:vec![task], hits, runtime, state };
+    let execution = Execution { scene, addr, tasks:vec![task,trap_task], hits, runtime, state };
+    let response = client().get(format!("http://{upstream}/api/hangar-terminals"))
+        .bearer_auth(OWNER).send().await.expect("GET inicial do Rust real falhou");
+    assert_eq!(value(response, 200).await, json!({"terminals":[]}));
     let hold = execution.scene.home.join("hold");
     fifo(&hold);
     let command = "/bin/cat \"$HOME/hold\"".to_owned();
@@ -1309,10 +1210,15 @@ wait"#;
             if row["alive"] == false && row["exit_code"] == 3 { break; }
             tokio::task::yield_now().await;
         }
-    }).await.expect("saída real 3 não chegou à listagem Python");
+    }).await.expect("saída real 3 não chegou à listagem Rust");
     value(client().post(format!("http://{upstream}/api/hangar-terminals/{asking_id}/close"))
         .bearer_auth(OWNER).send().await.unwrap(), 200).await;
     assert_eq!(value(client().get(format!("http://{upstream}/api/hangar-terminals"))
         .bearer_auth(OWNER).send().await.unwrap(), 200).await, json!({"terminals":[]}));
-    println!("{}", json!({"rust_created":[first,global,code],"python_get":observed,"other_owner":other}));
+    assert_eq!(execution.hits.load(Ordering::Relaxed),0,"consumidor não pode recorrer ao Python");
+    println!("{}", json!({"rust_created":[first,global,code],"rust_get":observed,"other_owner":other}));
 }
+
+#[cfg(unix)]
+#[path = "shortcut_consumers.rs"]
+mod consumers_tests;
