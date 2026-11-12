@@ -9,22 +9,23 @@
 # MemoryHigh por padrão: o Node dimensiona o heap pelo menor teto do grupo, e com ele o svelte-check
 # estoura. Quem só compila pede um com HANGAR_BUILD_MEMORY_HIGH (o kernel recolhe primeiro a memória
 # do build; `available` = a regra do cargo-pinned, o disponível agora menos 2 GB, mínimo 4) e, com
-# HANGAR_BUILD_BIND_TO, morre junto com a unidade de quem chamou.
+# HANGAR_BUILD_BIND_TO, morre junto com a unidade de quem chamou. HANGAR_BUILD_WARN_FD repete num
+# descritor aberto o aviso de que o grupo não abriu.
 set -euo pipefail
 
 if [[ -z "${HANGAR_NO_MEMORY_SCOPE:-}" ]] && command -v systemd-run >/dev/null 2>&1; then
     extra=()
-    alto="${HANGAR_BUILD_MEMORY_HIGH:-}"
-    if [[ "$alto" == available ]]; then
+    high="${HANGAR_BUILD_MEMORY_HIGH:-}"
+    if [[ "$high" == available ]]; then
         # Lido aqui, na hora de rodar: quem chama pode ter esperado a trava de build por minutos.
-        livre="$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null || true)"
-        alto=""
-        if [[ -n "$livre" ]]; then
-            alto=$(( livre - 2 * 1048576 )); (( alto < 4 * 1048576 )) && alto=$((4 * 1048576))
-            alto="${alto}K"
+        available="$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null || true)"
+        high=""
+        if [[ -n "$available" ]]; then
+            high=$(( available - 2 * 1048576 )); (( high < 4 * 1048576 )) && high=$((4 * 1048576))
+            high="${high}K"
         fi
     fi
-    [[ -n "$alto" ]] && extra+=(-p MemoryHigh="$alto")
+    [[ -n "$high" ]] && extra+=(-p MemoryHigh="$high")
     # O systemd-run come barra invertida: o `\x2d` dos nomes de unidade vai dobrado.
     [[ -n "${HANGAR_BUILD_BIND_TO:-}" ]] && extra+=(-p BindsTo="${HANGAR_BUILD_BIND_TO//\\/\\\\}")
     # A sonda leva os mesmos parâmetros: unidade que não existe não pode impedir o comando de rodar.
@@ -35,6 +36,9 @@ if [[ -z "${HANGAR_NO_MEMORY_SCOPE:-}" ]] && command -v systemd-run >/dev/null 2
             -p MemorySwapMax="${HANGAR_BUILD_SWAP_MAX:-8G}" \
             "${extra[@]}" -- "$@"
     fi
-    echo "memory-scope: o systemd do usuário não abriu o escopo; rodando sem teto de memória" >&2
+    warning="memory-scope: o systemd do usuário não abriu o escopo; rodando sem teto de memória"
+    echo "$warning" >&2
+    # Quem roda com a saída num log pede o aviso também no canal que a pessoa vê.
+    [[ -z "${HANGAR_BUILD_WARN_FD:-}" ]] || { echo "$warning" >&"$HANGAR_BUILD_WARN_FD"; } 2>/dev/null || true
 fi
 exec "$@"

@@ -24,9 +24,9 @@
 # a segunda faixa: ela espera a primeira terminar, com os mesmos passos.
 #
 # Rust no rápido: só confere se o workspace compila (`cargo check`) e roda os testes dos crates
-# menores; os do hangar-server ficam no CI e no --completo. Antes de compilar, espera a memória
-# disponível (HANGAR_VERIFICAR_CHECK_GB para conferir, HANGAR_VERIFICAR_BUILD_GB para o build do
-# --completo) por até HANGAR_VERIFICAR_ESPERA segundos (padrão 300) e, sem ela, falha dizendo quanto falta.
+# menores; os do hangar-server ficam no CI e no --completo. Antes de conferir, e antes do build de
+# Rust do --completo, espera a memória disponível (HANGAR_VERIFY_CHECK_GB e HANGAR_VERIFY_BUILD_GB)
+# por até HANGAR_VERIFY_WAIT segundos (padrão 300) e, sem ela, falha dizendo quanto falta.
 #
 # A árvore verificada é um clone fixo por máquina, não o checkout de quem chama: compila só o que
 # mudou desde a última verificação, nunca mistura binário de outro checkout e deixa o checkout
@@ -37,10 +37,10 @@ set -uo pipefail
 
 # Sem memória, o systemd-oomd mata a verificação, não a sessão do agente que a chamou. Na VM o
 # roteiro chega sozinho, sem o memory-scope ao lado.
-aqui="$(dirname "$(realpath "$0" 2>/dev/null || echo "$0")")"
-[[ -n "${HANGAR_VERIFY_IN_MEMORY_SCOPE:-}" || ! -f "$aqui/memory-scope" ]] ||
+here="$(dirname "$(realpath "$0" 2>/dev/null || echo "$0")")"
+[[ -n "${HANGAR_VERIFY_IN_MEMORY_SCOPE:-}" || ! -f "$here/memory-scope" ]] ||
     HANGAR_VERIFY_IN_MEMORY_SCOPE=1 HANGAR_VERIFY_CALLER_CGROUP="$(cut -d: -f3 /proc/self/cgroup 2>/dev/null)" \
-        exec bash "$aqui/memory-scope" bash "$0" "$@"
+        exec bash "$here/memory-scope" bash "$0" "$@"
 
 ESTADO="${XDG_STATE_HOME:-$HOME/.local/state}/hangar-verificacao"
 FIXO="${HANGAR_VERIFICAR_ARVORE:-${XDG_CACHE_HOME:-$HOME/.cache}/hangar-verificacao/arvore}"
@@ -48,26 +48,32 @@ FIXO="${HANGAR_VERIFICAR_ARVORE:-${XDG_CACHE_HOME:-$HOME/.cache}/hangar-verifica
 # aqui fora travaria o filho até o prazo.
 TRAVA=/tmp/hangar-verificar-local.lock
 # Cada cargo daqui pega a trava do cargo-pinned: a verificação e as builds das sessões compilavam
-# juntas e levavam a máquina ao swap. Com o systemd do usuário, roda num grupo com a regra de teto
-# do cargo-pinned (disponível menos 2 GB, mínimo 4): passando dele, quem fica lento é o build, não
-# as sessões. O `declare -f` leva a função aos passos. No Git Bash da VM não há flock.
+# juntas e levavam a máquina ao swap. Com o systemd do usuário, quem só compila roda num grupo com a
+# regra de teto do cargo-pinned (disponível menos 2 GB, mínimo 4): passando dele, quem fica lento é
+# o build, não as sessões. O `declare -f` leva a função aos passos. No Git Bash da VM não há flock.
 if command -v flock >/dev/null; then
     cargo() {
-        local teto=()
-        if [[ -n "${HANGAR_VERIFY_RUNTIME:-}" ]]; then
+        local scope=()
+        # Quem roda testes fica fora: sob o teto, teste de prazo falharia por carga, não por defeito.
+        # Sem o memory-scope (o checkout de quem chamou mudou no meio da rodada), o cargo roda direto.
+        if [[ -n "${HANGAR_VERIFY_RUNTIME:-}" && -f "${HANGAR_VERIFY_MEMORY_SCOPE:-}" ]] &&
+            [[ "${1:-}" != test || " $* " == *" --no-run "* ]]; then
             # O HOME vazio do passo não alcança o systemd: o grupo abre com o runtime real, e o cargo
-            # recebe de volta o do passo. O teto é calculado depois da trava, pelo memory-scope.
-            teto=(env XDG_RUNTIME_DIR="$HANGAR_VERIFY_RUNTIME" HANGAR_BUILD_MEMORY_HIGH=available
-                HANGAR_BUILD_BIND_TO="${HANGAR_VERIFY_UNIT:-}" bash "$HANGAR_VERIFY_MEMORY_SCOPE"
-                env -u HANGAR_BUILD_MEMORY_HIGH -u HANGAR_BUILD_BIND_TO XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-}")
+            # recebe de volta o do passo. O teto é calculado depois da trava, pelo memory-scope, que
+            # avisa no canal de andamento (fd 3) quando o grupo não abre.
+            scope=(env XDG_RUNTIME_DIR="$HANGAR_VERIFY_RUNTIME" HANGAR_BUILD_MEMORY_HIGH=available
+                HANGAR_BUILD_BIND_TO="${HANGAR_VERIFY_UNIT:-}" HANGAR_BUILD_WARN_FD=3
+                bash "$HANGAR_VERIFY_MEMORY_SCOPE"
+                env -u HANGAR_BUILD_MEMORY_HIGH -u HANGAR_BUILD_BIND_TO -u HANGAR_BUILD_WARN_FD
+                XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-}")
         fi
-        flock "${HANGAR_BUILD_LOCK:-/tmp/hangar-build.lock}" "${teto[@]}" cargo "$@"
+        flock "${HANGAR_BUILD_LOCK:-/tmp/hangar-build.lock}" "${scope[@]}" cargo "$@"
     }
 fi
 # Memória disponível (GB) que um `cargo check` do workspace e um build do hangar-server pedem.
-MEM_CHECK_GB="${HANGAR_VERIFICAR_CHECK_GB:-7}"
-MEM_BUILD_GB="${HANGAR_VERIFICAR_BUILD_GB:-11}"
-ESPERA="${HANGAR_VERIFICAR_ESPERA:-300}"
+MEM_CHECK_GB="${HANGAR_VERIFY_CHECK_GB:-7}"
+MEM_BUILD_GB="${HANGAR_VERIFY_BUILD_GB:-11}"
+MEMORY_WAIT="${HANGAR_VERIFY_WAIT:-300}"
 VM_GIT=/c/hangar-verificacao/arvore
 VM_WIN='C:/hangar-verificacao'
 
@@ -130,6 +136,7 @@ classificar() {
         case "$f" in
             scripts/shell/*|scripts/test-wrappers.sh|scripts/hangar-engine|scripts/install-claude-wrapper.sh|\
             scripts/verificar-local|scripts/test-verificar-local.sh|scripts/podar-target|scripts/test-podar-target.sh|\
+            scripts/memory-scope|scripts/test_memory_scope.py|\
             scripts/hook-pr-verificado.mjs|scripts/hooks/*) wrap=1 ;;
         esac
         case "$f" in
@@ -174,6 +181,7 @@ classificar_rapido() {
         case "$f" in
             scripts/shell/*|scripts/test-wrappers.sh|scripts/hangar-engine|scripts/install-claude-wrapper.sh|\
             scripts/verificar-local|scripts/test-verificar-local.sh|scripts/podar-target|scripts/test-podar-target.sh|\
+            scripts/memory-scope|scripts/test_memory_scope.py|\
             scripts/hook-pr-verificado.mjs|scripts/hooks/*) wrap=1 ;;
         esac
         case "$f" in scripts/*statusline*) status=1 ;; esac
@@ -254,9 +262,11 @@ passo_preparo() {
     # Os rápidos compilam só o que usam, no próprio passo.
     if [[ "$plano" == *" rust "* || "$plano" == *" backend "* || "$plano" == *" backend_rapido "* ]]; then
         (cd backend && uv sync) || falhou=1
-        esperar_memoria "$MEM_BUILD_GB" || { wait "${pids[@]}"; return 1; }
     fi
     if [[ "$plano" == *" rust "* ]]; then
+        # Só aqui o build é certo e inteiro. Nos planos de backend o cargo muitas vezes não tem o que
+        # compilar: esperar memória ali barraria todo push de Python numa máquina cheia.
+        wait_for_memory "$MEM_BUILD_GB" || { wait "${pids[@]}"; return 1; }
         # A biblioteca do hangar-server compila duas vezes (normal e de teste), e os dois rustc juntos
         # não cabem na memória: primeiro só as de teste, como no server-jobs.yml. Binários, exemplos e
         # testes usam o mesmo grafo de features; trocar o conjunto de pacotes entre comandos fazia o
@@ -353,43 +363,49 @@ passo_pi() { node scripts/test-pi-hangar-state.mjs; }
 mudados() { grep -E "$1" <<< "$ARQUIVOS" || true; }
 
 passo_rust_rapido() {
-    local f outros=0
+    local f others=0
     [[ -n "$(mudados '^crates/')" ]] || { echo "nenhum crate mudou"; return 0; }
     while IFS= read -r f; do
-        case "$f" in crates/hangar-server/*) ;; *) outros=1 ;; esac
+        case "$f" in crates/hangar-server/*) ;; *) others=1 ;; esac
     done <<< "$(mudados '^crates/')"
-    esperar_memoria "$MEM_CHECK_GB" || return 1
+    wait_for_memory "$MEM_CHECK_GB" || return 1
     # Tipos, testes e exemplos do workspace inteiro: crate de base muda quem depende dele. O
     # hangar-server é conferido duas vezes (normal e de teste), cada rustc com alguns GB: primeiro as
     # bibliotecas em modo de teste (`--profile test`), depois o resto, com o mesmo grafo de features.
     (cd crates && cargo check --locked --workspace --lib --profile test && \
         cargo check --locked --workspace --all-targets) || return 1
-    # Os testes do hangar-server (dois rustc de vários GB e ~15 min) são do CI e do --completo.
-    # shortcut: roda os de todos os outros crates, hoje ~1 min; quando a divisão do servidor os
-    # deixar pesados, escolher só o crate mexido e quem depende dele.
-    (( outros )) || return 0
+    # Os testes do hangar-server, com os dois rustc grandes dele, são do CI e do --completo.
+    # shortcut: roda os de todos os outros crates, e sem o servidor o cargo resolve outro grafo de
+    # features (uma segunda cópia das dependências que só ele configura); quando a divisão do
+    # servidor os deixar pesados, escolher só o crate mexido e quem depende dele.
+    (( others )) || return 0
     (cd crates && cargo test --locked --no-fail-fast --workspace --exclude hangar-server)
 }
 
-# Espera a memória disponível chegar a $1 GB, até $ESPERA segundos; sai 1 se não chegar. Compilar sem
-# ela leva a máquina ao swap e a rodada a horas.
-esperar_memoria() {   # $1 = GB
-    local precisa="$1" kb ini=$SECONDS avisou=0
+# Espera a memória disponível chegar a $1 GB, até $MEMORY_WAIT segundos; sai 1 se não chegar.
+# Compilar sem ela leva a máquina ao swap e a rodada a horas.
+wait_for_memory() {   # $1 = GB
+    local needed="$1" kb ini=$SECONDS warned=0 note
     while :; do
         kb="$(awk '/^MemAvailable:/ {print $2}' "${HANGAR_VERIFICAR_MEMINFO:-/proc/meminfo}" 2>/dev/null)"
         # Sem leitura não há o que esperar.
-        [[ -z "$kb" ]] || (( kb >= precisa * 1048576 )) && return 0
+        [[ -z "$kb" ]] || (( kb >= needed * 1048576 )) && return 0
         # Com outro build na trava, quem ocupa a memória é ele, e o cargo daqui esperaria por ele de
         # qualquer jeito: o prazo só conta com a trava livre. Só o código 1 é trava ocupada; erro de
         # abrir o arquivo não pode virar espera sem fim.
         flock -n "${HANGAR_BUILD_LOCK:-/tmp/hangar-build.lock}" true 2>/dev/null
         if (( $? == 1 )); then
             ini=$SECONDS
-        elif (( SECONDS - ini >= ESPERA )); then
-            echo "verificar-local: memória disponível $(( kb / 1048576 )) GB, o build precisa de $precisa GB; feche sessões ou rode depois."
+        elif (( SECONDS - ini >= MEMORY_WAIT )); then
+            echo "verificar-local: memória disponível $(( kb / 1048576 )) GB, o build precisa de $needed GB; feche sessões ou rode depois."
             return 1
         fi
-        (( avisou )) || { echo "verificar-local: esperando memória ($(( kb / 1048576 )) de $precisa GB)…"; avisou=1; }
+        if (( ! warned )); then
+            # No canal de andamento: no log do passo a espera pareceria travamento.
+            note="verificar-local: esperando memória ($(( kb / 1048576 )) de $needed GB)…"
+            { echo "$note" >&3; } 2>/dev/null || echo "$note"
+            warned=1
+        fi
         sleep 15
     done
 }
@@ -591,13 +607,13 @@ rodar_em_faixas() {   # $1 = sha, resto = passos
     done
     (( ${#carga[@]} )) && faixas+=("${carga[*]}")
     (( ${#web[@]} )) && faixas+=("${web[*]}")
-    local i pids=() falhou=0 reserva=0
+    local i pids=() falhou=0 reserve=0
     # A faixa do cargo acabou de abrir e ainda não alocou: a conta da segunda desconta o que ela vai pedir.
-    (( ${#carga[@]} )) && reserva="$MEM_CHECK_GB"
+    (( ${#carga[@]} )) && reserve="$MEM_CHECK_GB"
     for i in "${!faixas[@]}"; do
         # Com a memória curta, a faixa seguinte espera a anterior: os mesmos passos, sem swap.
-        if (( i > 0 )) && memoria_curta "$reserva"; then
-            echo "verificar-local: memória livre abaixo de $(( ${HANGAR_VERIFICAR_MEM_GB:-6} + reserva )) GB, faixa $i espera a anterior" >&3
+        if (( i > 0 )) && memoria_curta "$reserve"; then
+            echo "verificar-local: memória livre abaixo de $(( ${HANGAR_VERIFICAR_MEM_GB:-6} + reserve )) GB, faixa $i espera a anterior" >&3
             for p in "${pids[@]}"; do wait "$p" || falhou=1; done
             pids=()
         fi
@@ -675,16 +691,12 @@ rodar_passos() {   # $1 = sha, resto = passos; cwd = árvore preparada
         echo ">> $SO: $p…" >&3
         ini=$SECONDS
         # setsid no Linux: o passo vira grupo próprio e o vigia mata a árvore inteira.
-        "${LIMPO[@]}" SO="$SO" $SETSID bash -c "$(declare -f); $(declare -p RUNTIME_TESTS PROCESSOS PLANO ARQUIVOS HANGAR_VERIFICAR_BASE MEM_CHECK_GB MEM_BUILD_GB ESPERA); passo_$p" >"$log" 2>&1 &
+        "${LIMPO[@]}" SO="$SO" $SETSID bash -c "$(declare -f); $(declare -p RUNTIME_TESTS PROCESSOS PLANO ARQUIVOS HANGAR_VERIFICAR_BASE MEM_CHECK_GB MEM_BUILD_GB MEMORY_WAIT); passo_$p" >"$log" 2>&1 &
         local spid=$! vigia rc
         vigiar_disco "$spid" "$log" &
         vigia=$!
         wait "$spid"; rc=$?
         kill "$vigia" 2>/dev/null; wait "$vigia" 2>/dev/null
-        # O aviso do memory-scope fica no log do passo, que ninguém abre quando o passo passa. O
-        # `shell` roda os testes do próprio verificar-local, que caem nesse aviso sem compilar nada.
-        [[ "$p" != shell ]] && grep -q 'rodando sem teto de memória' "$log" 2>/dev/null && \
-            echo "verificar-local: $p compilou sem teto de memória (o systemd do usuário não abriu o grupo)" >&3
         if (( rc == 0 )); then
             dur=$((SECONDS - ini)); resumo+=("ok      $p ${dur}s")
         else
@@ -852,8 +864,8 @@ if [[ "${1:-}" == --memoria-curta ]]; then   # uso do teste: --memoria-curta [re
     exit $?
 fi
 
-if [[ "${1:-}" == --esperar-memoria ]]; then   # uso do teste: --esperar-memoria <GB>
-    esperar_memoria "$2"
+if [[ "${1:-}" == --wait-for-memory ]]; then   # uso do teste: --wait-for-memory <GB>
+    wait_for_memory "$2"
     exit $?
 fi
 
@@ -1016,9 +1028,9 @@ trap 'exit 143' TERM
 # Morta por fora (SIGKILL não passa por trap), os passos seguem vivos: cada um é sessão própria, e o
 # build ficaria com a trava e a memória embaixo da tentativa seguinte. O vigia encerra o grupo
 # inteiro quando este processo some; só vale no grupo que o memory-scope abriu, nunca no de quem chamou.
-meu_grupo="$(cut -d: -f3 /proc/self/cgroup 2>/dev/null)"
-if [[ -n "${HANGAR_VERIFY_CALLER_CGROUP:-}" && "$meu_grupo" != "$HANGAR_VERIFY_CALLER_CGROUP" && "$meu_grupo" == *.scope ]]; then
-    export HANGAR_VERIFY_UNIT="${meu_grupo##*/}"
+own_cgroup="$(cut -d: -f3 /proc/self/cgroup 2>/dev/null)"
+if [[ -n "${HANGAR_VERIFY_CALLER_CGROUP:-}" && "$own_cgroup" != "$HANGAR_VERIFY_CALLER_CGROUP" && "$own_cgroup" == *.scope ]]; then
+    export HANGAR_VERIFY_UNIT="${own_cgroup##*/}"
     # `&&`: um tail sem `--pid` sai na hora com erro e não pode derrubar a rodada.
     setsid bash -c 'tail --pid="$1" -f /dev/null && systemctl --user stop "$2"' _ $$ "$HANGAR_VERIFY_UNIT" < /dev/null > /dev/null 2>&1 &
 fi

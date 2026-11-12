@@ -209,13 +209,16 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **A verificação não compila sem memória, nem as duas versões do `hangar_server` juntas.** A
   biblioteca do servidor compila e é conferida duas vezes (normal e de teste): primeiro as de teste
   (`cargo test --workspace --lib --no-run`, ou `cargo check --workspace --lib --profile test`),
-  depois o resto, sempre com `--workspace` para não trocar o grafo de features. Antes de compilar,
-  o passo espera a memória disponível (`HANGAR_VERIFICAR_CHECK_GB`, padrão 7, para conferir;
-  `HANGAR_VERIFICAR_BUILD_GB`, padrão 11, para o build do `--completo`) por até
-  `HANGAR_VERIFICAR_ESPERA` segundos (padrão 300) e, sem ela, falha dizendo quanto falta; com outro
-  build na trava o prazo não corre. Com o systemd do usuário, todo cargo roda num grupo próprio com
-  o teto do `cargo-pinned` (`MemoryHigh` = disponível menos 2 GB, mínimo 4, lido depois da trava), e
-  verificação morta por fora encerra o grupo inteiro, build incluído; sem ele, roda sem teto. A
+  depois o resto, sempre com `--workspace` para não trocar o grafo de features (os testes dos crates
+  menores usam `--exclude hangar-server` e guardam uma segunda cópia das dependências que só o
+  servidor configura). Antes de conferir (`HANGAR_VERIFY_CHECK_GB`, padrão 7) e antes do build de
+  Rust do `--completo` (`HANGAR_VERIFY_BUILD_GB`, padrão 11), o passo espera a memória disponível por
+  até `HANGAR_VERIFY_WAIT` segundos (padrão 300) e, sem ela, falha dizendo quanto falta; com outro
+  build na trava o prazo não corre. Os planos de backend não esperam: o cargo deles muitas vezes não
+  tem o que compilar. Com o systemd do usuário, o cargo que só compila roda num grupo próprio com o
+  teto do `cargo-pinned` (`MemoryHigh` = disponível menos 2 GB, mínimo 4, lido depois da trava), e
+  verificação morta por fora encerra o grupo inteiro, build incluído; sem ele, roda sem teto e avisa
+  na saída. Quem roda testes fica fora do teto: sob ele, teste de prazo falharia por carga. A
   segunda faixa só abre ao lado da do cargo com a reserva dela sobrando. Evidência em
   [Verificação local leve](#verificação-local-leve-11112026).
 - **Build e teste locais: target comum, binário fixado na worktree, mensagens com carimbo.** Toda
@@ -1173,7 +1176,12 @@ local custava mais que o CI que ela poupava.
   sozinha, 1 min 41 s e 5,15 GB; depois a normal, 3,89 GB, e o `it`, 2,89 GB, 2 min 07 s. Nunca dois
   `rustc` do servidor ao mesmo tempo, e a de teste não foi conferida de novo na segunda etapa (o
   grafo de features é o mesmo). A memória disponível não desceu de 10,2 GB. Os 7 GB do
-  `HANGAR_VERIFICAR_CHECK_GB` são o pico de um `rustc` mais 2 GB de folga.
+  `HANGAR_VERIFY_CHECK_GB` são o pico de um `rustc` mais 2 GB de folga.
+- **Testes dos crates menores: 2 min na primeira vez.** No commit `3b19555a38`, que mexe só no
+  `hangar-workflows`, o passo levou 342 s: as duas conferências, 1 min 39 s e 2 min 01 s; depois os
+  testes sem o servidor, que compilaram 117 crates em 46 s (o outro grafo de features, pela primeira
+  vez) e rodaram 37 executáveis em 74 s. O `target` da árvore fixa foi de 33,1 para 36,6 GB,
+  somando os artefatos de conferência dessa árvore e a segunda cópia das dependências.
 - **Rodada morta sem linha de fim.** Nas três de 11/11 o journal não tem morte por falta de memória
   (nem do kernel, nem do `systemd-oomd`) e o registro de andamento não tem `fim`: quem mata é quem
   chamou, com um sinal que não passa por trap. Cada passo é sessão própria (`setsid`), então o build
