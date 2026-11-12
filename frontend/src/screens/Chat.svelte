@@ -1973,7 +1973,8 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   const codexAgentIds = $derived(codexSubagentActivityKey(stateEvent?.codex_subagents));
   const activity = $derived(isCodex ? projectSubagentActivity(transcriptActivity, liveSubagentRuns, undefined, stateEvent?.codex_subagents) : transcriptActivity);
   // No Claude o AgentRun não leva o agentId: sem o mapa, dois agentes de mesmo prompt não casam com nenhum arquivo.
-  const agentIds = $derived(isCodex ? new Map<string, string>() : agentIdentities(events));
+  // Varre a conversa inteira: só quando há agente rodando para casar.
+  const agentIds = $derived(isCodex || !activity.agents.some(agent => agent.running) ? new Map<string, string>() : agentIdentities(events));
   const runningAgents = $derived(activity.agents.filter(agent => agent.running && (!isCodex
     ? !(subagentsLoaded && subagentEnded(matchAgentSubagent(subagentRuns, agent, agentIds)))
     : codexSubagentState(stateEvent?.codex_subagents, agent.agentId, agent.agentPath)?.state === 'running'
