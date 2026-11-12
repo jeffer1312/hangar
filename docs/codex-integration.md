@@ -44,7 +44,7 @@ temporários. O lançador da TUI espera a reconciliação por até 20 segundos e
 quando o prazo estoura, avisando no pane.
 
 Os hooks do próprio Hangar (`backend/hooks/`) não passam pelo importador: o hook de estado do
-Codex é instalado por `backend/app/codex_hook_installer.py` na subida do backend, como no Claude
+Codex é instalado por `crates/hangar-server/src/harness_setup/codex_hooks.rs` na subida do servidor, como no Claude
 e no Kimi, e os demais (prévia, AskUserQuestion, pareamento) são exclusivos do Claude. Numa
 máquina onde o instalador antigo escreveu o `hooks.json`, a primeira reconciliação remove
 exatamente as entradas registradas no espelho `~/.codex/.hangar-hooks.json` (com backup) e o

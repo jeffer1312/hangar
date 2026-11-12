@@ -59,22 +59,10 @@ fn effort_notice_above_the_composer_is_not_assistant_text() {
 }
 
 #[test]
-fn terminal_debounce_limits_match_python_state_monitor() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend/app/state.py");
-    let source = std::fs::read_to_string(path).expect("referência Python deve existir");
-    let class = regex::Regex::new(r"(?m)^class StateMonitor:\r?$").unwrap()
-        .find(&source).expect("classe StateMonitor deve existir");
-    let rest = &source[class.end()..];
-    let end = regex::Regex::new(r"(?m)^(?:class|def) ").unwrap().find(rest)
-        .map_or(rest.len(), |next| next.start());
-    let body = &rest[..end];
-    for (name, rust) in [("STALE_LIMIT", STALE_LIMIT), ("IDLE_DEBOUNCE", IDLE_DEBOUNCE)] {
-        let declaration = regex::Regex::new(&format!(r"(?m)^    {name}[ \t]*=[ \t]*([0-9]+)[ \t]*(?:#.*)?\r?$")).unwrap();
-        let values: Vec<_> = declaration.captures_iter(body).collect();
-        assert_eq!(values.len(), 1, "StateMonitor deve declarar {name} uma vez");
-        let python: u32 = values[0][1].parse().expect("limite Python deve caber em u32");
-        assert_eq!(rust, python, "limite {name} precisa acompanhar a referência Python");
-    }
+fn terminal_debounce_limits() {
+    // Quadros calibrados contra o redesenho do Claude Code: mudar pede medição nova, não só o número.
+    assert_eq!(STALE_LIMIT, 3);
+    assert_eq!(IDLE_DEBOUNCE, 4);
 }
 
 #[test]

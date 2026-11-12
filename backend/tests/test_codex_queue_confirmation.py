@@ -6,12 +6,6 @@ import pytest
 from app import pqueue
 
 
-
-
-
-
-
-
 async def test_api_reserves_uncertain_codex_send_before_rpc_and_never_replays(tmp_path, monkeypatch):
     from app import api
     from app.adapters.codex.adapter import CodexAdapter

@@ -1,11 +1,9 @@
 """Mesclagem identifica hooks pelo matcher e recusa leituras parciais ou inválidas."""
 from copy import deepcopy
-import json
 
 import pytest
 
 from app.codex_arquivos import mesclar_hooks
-from app.codex_hook_installer import ensure_codex_state_hook_installed
 
 
 def _grupo(command, matcher="Bash", **extras):
@@ -58,20 +56,6 @@ def test_hook_nao_command_e_preservado_e_nao_duplica():
     fonte = {"hooks": {"PreToolUse": [prompt]}}
     atual = {"hooks": {"PreToolUse": [pessoal, prompt]}}
     assert mesclar_hooks(atual, fonte, fonte) == atual
-
-
-def test_instalacao_e_reconciliacoes_preservam_indices_dos_hooks(tmp_path):
-    fonte = {"hooks": {"PreToolUse": [_grupo("review"), _grupo("rtk")]}}
-    path = tmp_path / "hooks.json"
-    path.write_text(json.dumps(fonte))
-    ensure_codex_state_hook_installed(tmp_path, windows=False)
-    instalado = json.loads(path.read_text())
-
-    primeira = mesclar_hooks(instalado, fonte, fonte)
-    segunda = mesclar_hooks(primeira, fonte, fonte)
-
-    assert primeira == instalado
-    assert segunda == instalado
 
 
 def test_adicionar_hook_preserva_grupos_existentes_e_indices():

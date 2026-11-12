@@ -205,14 +205,6 @@ def test_rollout_codex_retoma_do_offset(tmp_path, monkeypatch):
     assert cs.custos_do_rollout(arq) == cs._linhas_rollout_codex(arq, None)
 
 
-def test_rollout_sem_indice_devolve_none_e_o_gasto_da_sessao_segue_vazio(tmp_path, monkeypatch):
-    from app import session_cost
-    monkeypatch.setattr(cc, "sincronizar_arquivo", lambda *a, **k: None)
-    arq = tmp_path / "rollout-x.jsonl"
-    assert cs.custos_do_rollout(arq) is None
-    assert session_cost._usage(arq) == ()
-
-
 def test_estado_salvo_que_nao_serve_mais_e_relido_do_zero(tmp_path, monkeypatch):
     """Dobra que despickla mas quebra ao continuar (classe mudou sem subir a versão)."""
     import pickle

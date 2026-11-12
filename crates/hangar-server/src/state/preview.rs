@@ -357,6 +357,7 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
     use tokio::sync::Notify;
 
+    // Captura fixa, sem gerador: mudança de contrato edita o JSON junto com estes testes.
     fn golden() -> Value {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../backend/tests/fixtures/contract/golden/preview.json");
         serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()

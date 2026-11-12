@@ -3,11 +3,8 @@
 comportamento de hoje (tmux, --session-id, hooks) fica intocado."""
 import asyncio
 from pathlib import Path
-from typing import AsyncIterator, Callable
 
 from app.config import settings
-from app.state import StateEvent, StateMonitor
-from app.transcript import ChatEvent, TranscriptTailer
 from app import claude_customizations
 from app import model_args
 from app import plugin_bridge
@@ -37,12 +34,6 @@ def terminal_command(cwd: str | None, session_id: str,
 
 class ClaudeAdapter:
     provider = "claude"
-
-    def transcript_stream(self, path: str, start_offset: int | None = None) -> AsyncIterator[ChatEvent]:
-        return TranscriptTailer(path).follow(start_offset)
-
-    def state_monitor(self, name: str, sid_get: Callable[[], str]) -> AsyncIterator[StateEvent]:
-        return StateMonitor(name, sid_get=sid_get, observe_permission=True, provider="claude").stream()
 
     async def drain(self, name: str, path: str) -> int:
         # ti.drain e sincrono (digita no tty via subprocess tmux) -> thread, como sse.py ja fazia

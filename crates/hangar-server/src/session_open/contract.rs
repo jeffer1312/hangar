@@ -25,7 +25,7 @@ pub fn place(text: &str, root: &Path) -> String {
 /// O `/proc` dos panes do cenário, fora do instantâneo de arquivos do harness.
 fn proc_root(root: &Path) -> PathBuf { root.join(".harness").join("proc-rust") }
 
-/// A `backend/` do cenário: a venv e o `skill_bridge.py` existem sempre, tenha ou não a árvore uma venv.
+/// A `backend/` do cenário: a venv existe sempre, tenha ou não a árvore uma venv.
 fn fake_backend(root: &Path) -> PathBuf { root.join(".harness").join("backend") }
 
 /// O que o lado Python não monta e o Rust lê do disco: os panes do cenário (um `tmux` que só lista e

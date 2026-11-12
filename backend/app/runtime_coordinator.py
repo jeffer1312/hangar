@@ -935,22 +935,11 @@ class RuntimeCoordinator:
                         self._follow_rust_life(slot, event)
                     if type(event.get("generation")) is int and event["generation"] != slot.binding.generation:
                         continue
-                    previous = slot.view.get("revision", -1)
                     if not apply_event(slot, event) or event.get("channel") == "problem":
                         # `problem` também pode ser cosmético (política que falhou): o snapshot diz
                         # se o ator está mesmo em erro, e some com a faixa se não estiver.
                         slot.cache_valid = False
                         self._refresh(slot)
-                    elif event.get("revision", -1) > previous or event.get("channel") == "snapshot":
-                        if event["channel"] == "rate":
-                            from app.live_rate import first_response_report, live_rate, rate_report
-                            if (first := first_response_report(event["data"])) is not None:
-                                live_rate(slot.binding.name).first_response(*first)
-                            elif (report := rate_report(event["data"])) is not None:
-                                live_rate(slot.binding.name).close(*report)
-                            else:
-                                from app import diag
-                                diag.registrar("runtime.rate_invalid", "aviso", sessao=slot.binding.name)
                     self._signal(slot)
                     if event.get("channel") in {"view", "snapshot"}:
                         conversation = (slot.view.get("view") or {}).get("conversation")

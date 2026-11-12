@@ -100,29 +100,6 @@ async def test_compact_refuses_active_turn(chat):
     assert not client.calls
 
 
-async def test_state_stream_follows_replaced_transport(chat, monkeypatch):
-    from app.state import StateEvent
-    adapter, original = chat
-    replacement = Client()
-    async def stream(name):
-        first = adapter._sessions[name]["client"] is original
-        yield StateEvent(session=name, state="idle", headless=first)
-        if first:
-            adapter._sessions[name]["client"] = replacement
-    monkeypatch.setattr(adapter, "_state_stream", stream)
-    states = [event async for event in adapter.state_monitor("sess", lambda: "thread-1")]
-    assert [event.headless for event in states] == [True, False]
-
-
-async def test_state_stream_reports_connection_failure(chat, monkeypatch):
-    from unittest.mock import AsyncMock
-    adapter, _ = chat
-    adapter._sessions.clear()
-    monkeypatch.setattr(adapter, "ensure_running", AsyncMock(side_effect=RuntimeError("sem conexão")))
-    states = [event async for event in adapter.state_monitor("sess", lambda: "thread-1")]
-    assert len(states) == 1 and states[0].state == "dead"
-
-
 async def test_orientar_exige_turno_atual_e_nao_inicia_outro(chat):
     adapter, client = chat
     adapter._sessions["sess"].update(turn_id="turno-1", in_progress=True)
@@ -135,50 +112,6 @@ async def test_orientar_exige_turno_atual_e_nao_inicia_outro(chat):
     with pytest.raises(RuntimeError):
         await adapter.steer("sess", "outra orientação")
     assert all(method != "turn/start" for method, _ in client.calls)
-
-
-async def test_reabrir_stream_recupera_turno_e_permite_orientar(chat):
-    adapter, client = chat
-    snapshot = {"thread": {"id": "thread-1", "status": {"type": "active", "activeFlags": []},
-                           "turns": [{"id": "anterior", "status": "completed"},
-                                     {"id": "atual", "status": "inProgress"}]}}
-    original = client.request
-
-    async def request(method, params):
-        result = await original(method, params)
-        if method != "thread/read":
-            return result
-        thread = dict(snapshot["thread"])
-        if not params["includeTurns"]:
-            thread["turns"] = []
-        return {"thread": thread}
-
-    async def notifications():
-        await asyncio.Event().wait()
-        yield {}
-
-    client.request, client.notifications = request, notifications
-    stream = adapter.state_monitor("sess", lambda: "thread-1")
-    try:
-        first = await anext(stream)
-        assert first.state == "working"
-        assert client.calls[0] == ("thread/read", {"threadId": "thread-1", "includeTurns": False})
-        assert adapter._sessions["sess"].get("turn_id") is None
-        await adapter.steer("sess", "ajuste durante o turno")
-        assert client.calls[-2] == ("thread/read", {"threadId": "thread-1", "includeTurns": True})
-        assert client.calls[-1][1]["expectedTurnId"] == "atual"
-        assert await adapter.deliverable("sess") is False
-        second = adapter.state_monitor("sess", lambda: "thread-1")
-        try:
-            assert (await anext(second)).state == "working"
-            assert [call for call in client.calls if call[0] == "thread/read"][-1] == (
-                "thread/read", {"threadId": "thread-1", "includeTurns": False})
-            assert client.calls[-1] == ("account/rateLimits/read", {})
-            assert adapter._sessions["sess"]["turn_id"] == "atual"
-        finally:
-            await second.aclose()
-    finally:
-        await stream.aclose()
 
 
 async def test_resposta_de_leitura_antiga_nao_reabre_turno_concluido(chat):

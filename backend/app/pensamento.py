@@ -77,8 +77,8 @@ def gravar(valor: bool) -> None:
     Ler-modificar-escrever aqui NAO tem lock proprio, e isso depende de dois fatos — quebrou um
     deles, precisa de lock: (1) o unico chamador e `runtime_config._aplicar_travado`, que ja roda
     sob o `_LOCK` do modulo, entao dois PATCH nao se atropelam; (2) o outro escritor deste arquivo
-    dentro do backend e o `hook_installer`, que roda em `main.main()` ANTES do `uvicorn.run` — ou
-    seja, termina antes de existir requisicao. Escritor de fora (o proprio `claude`, um `/config`)
+    e o `harness_setup::sync_startup` do Rust, que roda na subida do hangar-server ANTES de liberar
+    as rotas — ou seja, termina antes de chegar requisicao. Escritor de fora (o proprio `claude`, um `/config`)
     nenhum lock nosso alcanca; contra ele o que vale e a escrita atomica.
     """
     d = _ler()

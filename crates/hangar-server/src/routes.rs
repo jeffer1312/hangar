@@ -1099,6 +1099,24 @@ pub(crate) fn owner_gate(st: &AppState, peer: SocketAddr, req: &Request)
     hangar_core::edge::owner_gate(&st.cfg.trusted, &st.auth, peer, req)
 }
 
+/// Quem não pode pedir uma rota que o Python não tem mais: a recusa sai daqui, contando a falha de
+/// token, porque o 404 do Python responderia antes de autenticar.
+pub(crate) async fn refuse_without_python(st: &AppState, peer: SocketAddr, req: Request, who: Option<&Caller>) -> Response {
+    let headers = req.headers().clone();
+    // Convidado já decidido por um porteiro não errou token: recusar sem contar falha.
+    let guest = matches!(who.or(crate::share::caller::caller(&req)), Some(Caller::Guest(_)));
+    let mut response = match guest {
+        true => hangar_core::http::detail(StatusCode::FORBIDDEN, "erro_fora_do_convite",
+            "fora da sessão compartilhada", serde_json::json!({})),
+        false => match owner_gate(st, peer, &req).await {
+            Err(response) => response,
+            Ok(fwd) => return pass(st, req, &fwd).await,
+        },
+    };
+    cors(&headers, response.headers_mut());
+    response
+}
+
 pub(crate) fn who(st: &AppState, peer: SocketAddr, req: &Request)
     -> impl std::future::Future<Output = Result<(Forward, Option<Caller>), auth::AuthError>> + Send + use<> {
     hangar_core::edge::who(&st.cfg.trusted, &st.auth, peer, req)
@@ -1502,6 +1520,7 @@ pub(crate) async fn events(
     let (fwd, who) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let name = match path {
         Ok(Path(n)) if req.method() == Method::GET && who.as_ref().is_some_and(|c| c.can(&n, req.method())) => n,
+        Ok(_) if req.method() == Method::GET => return refuse_without_python(&st, peer, req, who.as_ref()).await,
         _ => return pass(&st, req, &fwd).await,
     };
     // Convidado não recebe aviso de mod nem pedido de navegador, e não conta como app do dono.
@@ -1518,9 +1537,12 @@ pub(crate) async fn events(
     };
     // Antes de qualquer repasse: sessão em erro ainda sem transcript também é reaberta.
     if info.is_some() { st.request_reopen(&name); }
-    // Sessão inexistente ou provedor fora do Rust: o Python é o dono.
+    // Todo provedor é do Rust: sem ligação é sessão inexistente ou ainda sem conversa.
     let Some(binding) = info.as_ref().and_then(Binding::from_info) else {
-        return pass(&st, req, &fwd).await;
+        let mut response = hangar_core::http::detail(StatusCode::NOT_FOUND, "erro_sessao_inexistente",
+            "session or transcript not found", serde_json::json!({}));
+        cors(req.headers(), response.headers_mut());
+        return response;
     };
     // A query vence: o app recria o EventSource a cada queda, e objeto novo não manda o cabeçalho.
     let resume = auth::query_param(req.uri().query(), "last_event_id")
