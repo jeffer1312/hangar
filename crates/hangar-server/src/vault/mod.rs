@@ -13,6 +13,8 @@ pub mod store;
 mod tests;
 #[cfg(test)]
 mod tests_backup;
+#[cfg(all(test, windows))]
+mod tests_credman;
 #[cfg(test)]
 mod tests_remote;
 #[cfg(test)]
@@ -186,7 +188,7 @@ pub struct Vault {
 }
 
 impl Vault {
-    pub fn system() -> Self { Self::new(Arc::new(key::SecretService::default())) }
+    pub fn system() -> Self { Self::new(key::system()) }
 
     pub fn new(keys: Arc<dyn KeyStore>) -> Self {
         Self { keys, key: Arc::new(tokio::sync::Mutex::new(None)), config_lock: tokio::sync::Mutex::new(()) }

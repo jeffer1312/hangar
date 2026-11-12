@@ -1,5 +1,6 @@
 //! Chave do cofre: 32 bytes num item da coleção `login` do Secret Service, a mesma que
 //! `keyring.rs` vigia e destranca; sem `login`, na coleção padrão do sistema, que ele não destranca.
+//! No Windows, num item do Gerenciador de Credenciais do usuário.
 //! Chave nova só quando o `vault.bin` não existe: com o arquivo de pé e o item sumido, a chave está perdida, e uma nova esconderia isso cifrando outro cofre vazio.
 use futures_util::future::BoxFuture;
 use zeroize::Zeroizing;
@@ -17,7 +18,7 @@ pub enum KeyError {
     Lost,
     /// O Secret Service não respondeu ou recusou por outro motivo.
     Bus,
-    /// Sistema sem chaveiro para o cofre (fora do Linux).
+    /// Sistema sem chaveiro para o cofre (fora do Linux e do Windows).
     Unsupported,
 }
 
@@ -288,12 +289,129 @@ mod linux {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
-#[derive(Default)]
-pub struct SecretService;
+#[cfg(windows)]
+pub use credman::CredentialManager;
 
-#[cfg(not(target_os = "linux"))]
-impl KeyStore for SecretService {
+/// No Windows a chave mora no Gerenciador de Credenciais do usuário, protegida pela DPAPI: como o
+/// `login` aberto no Linux, qualquer processo do mesmo usuário a lê sem pedir senha.
+#[cfg(windows)]
+mod credman {
+    use super::{Key, KeyError, KeyStore, KEY_LEN};
+    use futures_util::future::BoxFuture;
+    use windows_sys::Win32::Foundation::{GetLastError, ERROR_NOT_FOUND};
+    use windows_sys::Win32::Security::Credentials::{
+        CredFree, CredReadW, CredWriteW, CREDENTIALW, CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC,
+    };
+    use zeroize::{Zeroize, Zeroizing};
+
+    /// `prefix` separa os itens do teste dos do cofre de verdade.
+    pub struct CredentialManager { prefix: String }
+
+    impl Default for CredentialManager {
+        fn default() -> Self { Self { prefix: "hangar".to_owned() } }
+    }
+
+    impl CredentialManager {
+        #[cfg(test)]
+        pub fn with_prefix(prefix: String) -> Self { Self { prefix } }
+
+        fn target(&self, kind: &str) -> Vec<u16> { wide(&format!("{}/{kind}", self.prefix)) }
+    }
+
+    impl KeyStore for CredentialManager {
+        fn read(&self) -> BoxFuture<'_, Result<Option<Key>, KeyError>> {
+            Box::pin(async move {
+                let Some(value) = read_item(&self.target(VAULT_KEY))? else { return Ok(None) };
+                if value.len() != KEY_LEN { return Err(KeyError::Lost); }
+                let mut key = Zeroizing::new([0u8; KEY_LEN]);
+                key.copy_from_slice(&value);
+                Ok(Some(key))
+            })
+        }
+
+        fn write(&self, key: Key) -> BoxFuture<'_, Result<(), KeyError>> {
+            Box::pin(async move { write_item(&self.target(VAULT_KEY), "Hangar: chave do cofre de senhas", &key[..]) })
+        }
+
+        fn read_recovery(&self) -> BoxFuture<'_, Result<Option<Zeroizing<Vec<u8>>>, KeyError>> {
+            Box::pin(async move { read_item(&self.target(RECOVERY_KEY)) })
+        }
+
+        fn write_recovery(&self, item: Zeroizing<Vec<u8>>) -> BoxFuture<'_, Result<(), KeyError>> {
+            Box::pin(async move { write_item(&self.target(RECOVERY_KEY), "Hangar: chave da cópia do cofre de senhas", &item) })
+        }
+    }
+
+    const VAULT_KEY: &str = "vault-key";
+    const RECOVERY_KEY: &str = "vault-backup-key";
+
+    fn wide(text: &str) -> Vec<u16> { text.encode_utf16().chain(Some(0)).collect() }
+
+    fn refused(call: &'static str, error: u32) -> KeyError {
+        tracing::warn!(code = "vault_key_credman", call, error, "o Gerenciador de Credenciais recusou");
+        KeyError::Bus
+    }
+
+    fn read_item(target: &[u16]) -> Result<Option<Zeroizing<Vec<u8>>>, KeyError> {
+        let mut found: *mut CREDENTIALW = std::ptr::null_mut();
+        // SAFETY: `target` termina em 0; `found` só é lido com a chamada bem-sucedida.
+        if unsafe { CredReadW(target.as_ptr(), CRED_TYPE_GENERIC, 0, &mut found) } == 0 {
+            let error = unsafe { GetLastError() };
+            return if error == ERROR_NOT_FOUND { Ok(None) } else { Err(refused("CredReadW", error)) };
+        }
+        // SAFETY: o sistema devolveu um CREDENTIALW válido até o `CredFree`; o blob tem
+        // `CredentialBlobSize` bytes e pode ser nulo quando vazio.
+        unsafe {
+            let credential = &*found;
+            let size = credential.CredentialBlobSize as usize;
+            let mut value = Zeroizing::new(Vec::new());
+            if size > 0 && !credential.CredentialBlob.is_null() {
+                let blob = std::slice::from_raw_parts_mut(credential.CredentialBlob, size);
+                value.extend_from_slice(blob);
+                blob.zeroize();
+            }
+            CredFree(found.cast());
+            Ok(Some(value))
+        }
+    }
+
+    /// `CredWriteW` troca o item de mesmo nome e tipo: o que sobrou sem 32 bytes dá lugar à chave nova.
+    fn write_item(target: &[u16], label: &str, value: &[u8]) -> Result<(), KeyError> {
+        let mut target = target.to_vec();
+        let mut comment = wide(label);
+        let mut user = wide("hangar");
+        let mut blob = Zeroizing::new(value.to_vec());
+        let credential = CREDENTIALW {
+            Type: CRED_TYPE_GENERIC,
+            TargetName: target.as_mut_ptr(),
+            Comment: comment.as_mut_ptr(),
+            CredentialBlobSize: blob.len() as u32,
+            CredentialBlob: blob.as_mut_ptr(),
+            Persist: CRED_PERSIST_LOCAL_MACHINE,
+            UserName: user.as_mut_ptr(),
+            ..Default::default()
+        };
+        // SAFETY: todos os ponteiros apontam para buffers vivos até o fim da chamada.
+        if unsafe { CredWriteW(&credential, 0) } == 0 { return Err(refused("CredWriteW", unsafe { GetLastError() })); }
+        Ok(())
+    }
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+struct NoKeyring;
+
+#[cfg(not(any(target_os = "linux", windows)))]
+impl KeyStore for NoKeyring {
     fn read(&self) -> BoxFuture<'_, Result<Option<Key>, KeyError>> { Box::pin(async { Err(KeyError::Unsupported) }) }
     fn write(&self, _key: Key) -> BoxFuture<'_, Result<(), KeyError>> { Box::pin(async { Err(KeyError::Unsupported) }) }
+}
+
+/// O chaveiro do sistema desta plataforma.
+pub fn system() -> std::sync::Arc<dyn KeyStore> {
+    #[cfg(target_os = "linux")]
+    { std::sync::Arc::new(SecretService::default()) }
+    #[cfg(windows)]
+    { std::sync::Arc::new(CredentialManager::default()) }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    { std::sync::Arc::new(NoKeyring) }
 }
