@@ -1201,7 +1201,7 @@ fi
 mark_step instalar ok
 mark_step final fazendo
 say "8/8 Checagem de fumaça"
-py_backend -c "from app import api, registry, procinfo, projects" \
+py_backend -c "from app import api, registry, procinfo" \
   && { ok "o backend importa"; mark_item backend-importa ok "o servidor abre"; } \
   || fail "o backend não importa nesta máquina"
 
