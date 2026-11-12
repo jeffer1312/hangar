@@ -273,8 +273,9 @@ memory_wait() {   # $1 = MemAvailable em kB ("" = sem a linha), $2 = GB pedidos,
     local f rc; f="$(mktemp)"
     printf 'MemTotal: 24000000 kB\n' > "$f"
     [[ -n "$1" ]] && printf 'MemAvailable: %s kB\n' "$1" >> "$f"
-    # Trava própria: a da máquina pode estar com o build de outra sessão.
-    HANGAR_BUILD_LOCK="$f.lock" HANGAR_VERIFICAR_MEMINFO="$f" HANGAR_VERIFY_WAIT=0 "$V" --wait-for-memory "$2" > "$f.out" 2>&1; rc=$?
+    # Trava própria: a da máquina pode estar com o build de outra sessão. Sem o fd 3: dentro do
+    # passo `shell` ele é o canal de andamento da rodada, e o aviso de espera do teste sairia lá.
+    HANGAR_BUILD_LOCK="$f.lock" HANGAR_VERIFICAR_MEMINFO="$f" HANGAR_VERIFY_WAIT=0 "$V" --wait-for-memory "$2" > "$f.out" 2>&1 3>&-; rc=$?
     [[ "$rc" == "$3" ]] || { echo "FALHOU espera de memória $1 kB para $2 GB: saiu $rc (esperado $3)"; falhou=1; }
     (( $3 == 0 )) || grep -q "precisa de $2 GB" "$f.out" || { echo "FALHOU espera sem dizer quanto falta: $(cat "$f.out")"; falhou=1; }
     rm -f "$f" "$f.out" "$f.lock"
@@ -289,7 +290,7 @@ if command -v flock > /dev/null; then
     ( exec 8> "$f.lock"; flock 8; exec sleep 30 ) &
     holder=$!
     until ! flock -n "$f.lock" true 2> /dev/null; do sleep 0.1; done   # estavel: espera a trava ser pega
-    HANGAR_BUILD_LOCK="$f.lock" HANGAR_VERIFICAR_MEMINFO="$f" HANGAR_VERIFY_WAIT=0 "$V" --wait-for-memory 11 > /dev/null 2>&1 &
+    HANGAR_BUILD_LOCK="$f.lock" HANGAR_VERIFICAR_MEMINFO="$f" HANGAR_VERIFY_WAIT=0 "$V" --wait-for-memory 11 > /dev/null 2>&1 3>&- &
     waiting=$!
     sleep 1   # estavel: só confirma que seguiu esperando; atraso da máquina nunca vira falha
     kill -0 "$waiting" 2> /dev/null || { echo "FALHOU espera desistiu com outro build na trava"; falhou=1; }
