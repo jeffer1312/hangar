@@ -3,7 +3,7 @@
 use std::{
     io::{BufRead, BufReader},
     net::SocketAddr,
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -188,8 +188,7 @@ pub async fn transcript_image(
     req: Request,
 ) -> Response {
     let (fwd, caller) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-    // A imagem de uma conversa transferida é lida pelo Python, como o histórico dela.
-    if !caller.is_some_and(|c| c.can(&name, req.method())) || uuid.starts_with("transfer:") {
+    if !caller.is_some_and(|c| c.can(&name, req.method())) {
         return pass(&st, req, &fwd).await;
     }
     serve_transcript_image(&st, &name, uuid, &idx, req.headers()).await
@@ -215,12 +214,26 @@ async fn serve_transcript_image(st: &AppState, name: &str, uuid: String, idx: &s
     let jsonl = st.side.hubs.bound(name)
         .filter(|b| fresh.as_ref().is_some_and(|f| !b.changes_at_once(f)))
         .map_or(jsonl, |b| b.jsonl);
-    let found = tokio::task::spawn_blocking(move || find_image(&jsonl, &uuid, idx)).await;
+    let home=st.accounts.env.home.clone();
+    let owner_home=if uuid.starts_with("transfer:") {
+        match st.list.discover(None).await {
+            Ok(rows)=>rows.iter().find(|r|r.name==name).and_then(|r|r.conta.as_deref()).and_then(|id|id.strip_prefix("codex:").map(PathBuf::from)),
+            Err(_)=>return route_failed(st,headers,"rust.transcript_image_failed",name,"transcript_image_io","a conta da conversa não pôde ser lida"),
+        }
+    } else {None};
+    let found = tokio::task::spawn_blocking(move || {
+        if let Some(id)=uuid.strip_prefix("transfer:").and_then(|s|s.split(':').next()) {
+            let Some(record)=crate::speech::history::transfer_history::load_record(&home,id)? else {return Ok(None)};
+            let owner=owner_home.ok_or_else(||std::io::Error::other("conta da conversa ausente"))?;
+            crate::speech::history::transfer_history::verify_boundary(&record,&jsonl,&owner)?;
+            crate::speech::history::transfer_history::historical_image(&record,&uuid,idx)
+        } else {find_image(&jsonl,&uuid,idx).map(|image|image.map(|(raw,media)|(raw,media.to_owned())))}
+    }).await;
     match found {
         Ok(Ok(Some((raw, media)))) => {
             let mut response = Response::new(Body::from(raw));
             let headers = response.headers_mut();
-            headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(media));
+            headers.insert(header::CONTENT_TYPE, HeaderValue::from_str(&media).unwrap_or_else(|_|HeaderValue::from_static("application/octet-stream")));
             headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("max-age=31536000, immutable"));
             headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
             response
@@ -503,10 +516,6 @@ pub async fn serve_forwarded(st: &Arc<AppState>, path: &str, req: Request, guest
         (["tool-progress", id], false) if get => serve_tool_progress(st, &name, &decode(id)?, req.headers()).await,
         (["transcript-image", uuid, idx], false) if get => {
             let uuid = decode(uuid)?;
-            // A conversa transferida o Python atende sem repassar.
-            if uuid.starts_with("transfer:") {
-                return None;
-            }
             serve_transcript_image(st, &name, uuid, &decode(idx)?, req.headers()).await
         }
         (["bash-output"], true) => serve_bash_output(st, &name, req).await,

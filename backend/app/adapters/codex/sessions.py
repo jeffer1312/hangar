@@ -240,16 +240,6 @@ def list_all(*, include_incomplete: bool = False) -> list[dict]:
             continue
         if not isinstance(meta, dict):
             continue
-        if not include_incomplete:
-            # A preparação não é uma sessão Codex publicada e não pode ser aquecida.
-            from app.conversation_transfer import TransferPhase, transfer_for_thread, load_transfer
-            record = (load_transfer(meta["transfer_id"]) if meta.get("transfer_id") else
-                      transfer_for_thread(meta["codex_home"], meta["thread_id"])
-                      if meta.get("codex_home") and meta.get("thread_id") else None)
-            if meta.get("transfer_id") and record is None:
-                raise RuntimeError("sidecar aponta para transferência ausente")
-            if record and record.phase != TransferPhase.COMPLETE:
-                continue
         out.append(meta)
     return out
 
@@ -319,68 +309,3 @@ def pretrust_cwd(cwd: str, codex_home: str | Path | None = None) -> None:
             # parada na pergunta de confianca, e sem esta linha nao ha nada no log ligando uma
             # coisa a outra.
             _log.warning("pretrust do codex falhou pra %s: %r", cwd, e)
-
-
-def prepared_path(transfer_id: str) -> Path:
-    import uuid
-    return _dir() / "prepared" / f"{uuid.UUID(transfer_id)}.json"
-
-
-def load_prepared(name: str, transfer_id: str) -> dict | None:
-    """Runtime privado da adoção; nunca participa de list_all nem de descoberta."""
-    path = prepared_path(transfer_id)
-    try:
-        meta = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return None
-    if not isinstance(meta, dict) or meta.get("name") != name or meta.get("transfer_id") != transfer_id:
-        raise ValueError("session_transfer_runtime_identity_changed")
-    return meta
-
-
-def write_prepared(name: str, transfer_id: str, meta: dict) -> None:
-    from app.conversation_transfer import _write_json
-    if meta.get("name") != name or meta.get("transfer_id") != transfer_id:
-        raise ValueError("session_transfer_runtime_identity_changed")
-    with _locked(name):
-        previous = load_prepared(name, transfer_id)
-        if previous and any(previous.get(k) != meta.get(k) for k in ("key", "thread_id", "codex_home")):
-            raise ValueError("session_transfer_runtime_identity_changed")
-        _write_json(prepared_path(transfer_id), meta)
-
-
-def transfer_runtime(name: str, transfer_id: str) -> dict | None:
-    live = load(name)
-    if live and live.get("transfer_id") == transfer_id:
-        return live
-    return load_prepared(name, transfer_id)
-
-
-def update_transfer_runtime(name: str, transfer_id: str, **fields) -> dict:
-    from app.conversation_transfer import _write_json
-    with _locked(name):
-        live = load(name)
-        meta = live if live and live.get("transfer_id") == transfer_id else load_prepared(name, transfer_id)
-        if not meta or any(k in fields and fields[k] != meta.get(k)
-                           for k in ("name", "key", "thread_id", "codex_home", "transfer_id")):
-            raise ValueError("session_transfer_runtime_identity_changed")
-        if "processes" in fields:
-            fields["processes"] = {**meta.get("processes", {}), **fields["processes"]}
-        updated = {**meta, **fields}
-        if meta is live:
-            _write(name, updated)
-        else:
-            _write_json(prepared_path(transfer_id), updated)
-        return updated
-
-
-def publish_prepared(name: str, transfer_id: str) -> dict:
-    with _locked(name):
-        meta = load_prepared(name, transfer_id)
-        if not meta:
-            raise ValueError("session_transfer_runtime_missing")
-        live = load(name)
-        if live and any(live.get(k) != meta.get(k) for k in ("transfer_id", "key", "thread_id")):
-            raise ValueError("session_transfer_runtime_identity_changed")
-        _write(name, meta)
-        return meta

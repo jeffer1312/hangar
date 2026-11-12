@@ -138,10 +138,6 @@ def _codex_conversas(codex_account: str | None = None) -> list[Conversa]:
                 raise
             if owner is None or owner.id != account.id:
                 continue
-            from app.conversation_transfer import transfer_for_thread, TransferPhase
-            transfer = transfer_for_thread(str(owner.home), sid)
-            if transfer and transfer.phase != TransferPhase.COMPLETE:
-                continue
             out.append(Conversa("codex", _cwd_do_cabecalho(f, _codex_cwd), sid, f, _mtime(f),
                                 str(owner.home.resolve(strict=False))))
     return out

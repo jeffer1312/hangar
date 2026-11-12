@@ -139,20 +139,20 @@ async fn snapshot_releases_the_verdict_and_mode_change_holds_it() {
     let (_, token) = srv.share.store.create_redeemed("s", Some("k:A".into()), Kind::Share).unwrap();
     srv.probe.keys.lock().unwrap().insert("s".into(), "B".into());
     let guest = || srv.share.store.lookup_token(&token).unwrap();
-    // Sem a fotografia do Python, vida diferente pode ser transferência: "não sei", nunca 410.
+    // Sem conferir o registro durável, vida diferente pode ser transferência: "não sei", nunca 410.
     assert_eq!(verdict(&guest(), Some("s"), &srv.share.lives).await, Verdict::Unsure);
-    result(&srv, "facts_snapshot", json!({"lives": {}, "changing": ["s"]})).await;
+    srv.share.lives.facts().apply_snapshot(Default::default(),["s".into()].into());
     assert_eq!(verdict(&guest(), Some("s"), &srv.share.lives).await, Verdict::Unsure, "trocando de modo");
-    result(&srv, "mode_change_end", json!({"name": "s"})).await;
+    srv.share.lives.facts().end_mode_change("s");srv.share.lives.facts().set_life("s",None);
     assert_eq!(verdict(&guest(), Some("s"), &srv.share.lives).await, Verdict::Ended, "outra vida de verdade");
-    result(&srv, "mode_change_begin", json!({"name": "s"})).await;
+    srv.share.lives.facts().begin_mode_change("s");
     assert_eq!(verdict(&guest(), Some("s"), &srv.share.lives).await, Verdict::Unsure);
-    result(&srv, "mode_change_end", json!({"name": "s"})).await;
+    srv.share.lives.facts().end_mode_change("s");srv.share.lives.facts().set_life("s",None);
     // Transferência em curso quando o Rust subiu (terminal e sidecar sumidos): a vida de origem vale.
     srv.probe.keys.lock().unwrap().clear();
-    result(&srv, "facts_snapshot", json!({"lives": {"s": "k:A"}, "changing": []})).await;
+    srv.share.lives.facts().apply_snapshot([("s".into(),"k:A".into())].into(),Default::default());
     assert_eq!(verdict(&guest(), Some("s"), &srv.share.lives).await, Verdict::Ok);
-    result(&srv, "mode_change_end", json!({"name": "s"})).await;
+    srv.share.lives.facts().end_mode_change("s");srv.share.lives.facts().set_life("s",None);
     assert_eq!(verdict(&guest(), Some("s"), &srv.share.lives).await, Verdict::Ended, "o fim da troca solta a vida de origem");
 }
 
@@ -163,11 +163,11 @@ async fn mode_change_end_keeps_the_transfer_still_incomplete() {
     let srv = server(dir.path(), true).await;
     let (_, token) = srv.share.store.create_redeemed("s", Some("k:A".into()), Kind::Share).unwrap();
     let guest = || srv.share.store.lookup_token(&token).unwrap();
-    result(&srv, "facts_snapshot", json!({"lives": {"s": "k:A"}, "changing": []})).await;
-    result(&srv, "mode_change_begin", json!({"name": "s"})).await;
-    result(&srv, "mode_change_end", json!({"name": "s", "source_life": "k:A"})).await;
+    srv.share.lives.facts().apply_snapshot([("s".into(),"k:A".into())].into(),Default::default());
+    srv.share.lives.facts().begin_mode_change("s");
+    srv.share.lives.facts().end_mode_change("s");srv.share.lives.facts().set_life("s",Some("k:A".into()));
     assert_eq!(verdict(&guest(), Some("s"), &srv.share.lives).await, Verdict::Ok);
-    result(&srv, "mode_change_end", json!({"name": "s", "source_life": null})).await;
+    srv.share.lives.facts().end_mode_change("s");srv.share.lives.facts().set_life("s",None);
     assert_eq!(verdict(&guest(), Some("s"), &srv.share.lives).await, Verdict::Ended);
 }
 

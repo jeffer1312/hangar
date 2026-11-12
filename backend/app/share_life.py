@@ -18,19 +18,8 @@ def session_life(name: str, *, meta=_UNSET, birth=_UNSET) -> str | None:
                 if meta is _UNSET else (meta,))
     for item in metadata:
         if item and item.get("key"):
-            if item.get("transfer_id"):
-                from app.conversation_transfer import load_transfer, TransferPhase
-                record = load_transfer(item["transfer_id"])
-                if record and record.name == name and record.phase not in {
-                        TransferPhase.COMPLETE, TransferPhase.REJECTED, TransferPhase.ROLLED_BACK}:
-                    return record.source_life
             return f"k:{item['key']}"
     created = _tmux_birth(name) if birth is _UNSET else birth
-    if not created:
-        from app.conversation_transfer import list_incomplete
-        record = next((r for r in list_incomplete() if r.name == name), None)
-        if record:
-            return record.source_life
     return f"t:{created}" if created else None
 
 

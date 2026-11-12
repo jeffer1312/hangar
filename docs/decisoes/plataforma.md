@@ -3,6 +3,24 @@
 Decisões medidas, com data e número. O `CLAUDE.md` carrega a regra;
 a medição que a sustenta mora aqui. Conteúdo movido sem alteração.
 
+## Transferência Claude → Codex no Rust (11/11/2026)
+
+A transferência por `/conta` com `credential_id` deixa de usar o coordenador, o conversor e o
+importador Python. `hangar-conversation-transfer` guarda o registro durável e converte o ramo
+Claude completo; `hangar-codex-transfer` importa pelo app-server sem iniciar inferência. O
+servidor integra esses crates ao ciclo de vida já existente e conduz a recuperação.
+
+Permanecem os registros de `conversation-transfers`, os códigos de erro, os modos de permissão,
+a restrição ao Codex 0.159.3 e a conferência de capacidade, configuração e conteúdo persistido.
+O digest do snapshot e a fronteira do rollout continuam protegendo o histórico e as imagens.
+Falha após parar a origem exige restaurá-la; registro incompleto não autoriza publicar o destino.
+
+Os módulos e testes exclusivos Python saem junto com os consumidores de histórico, guardas e
+recuperação. As imagens `transfer:` usam o leitor Rust existente. Não há implementação de
+reserva nem ponte Python dessa responsabilidade. Os testes permanentes concentram conversão,
+integridade, identidade, capacidade e persistência; capturas diferenciais temporárias não
+fazem parte do repositório. Não se alega ganho de desempenho.
+
 ## Armazenamento das provas de orquestração
 
 A issue #242 relatou centenas de GB de builds e caches dentro do histórico durável das

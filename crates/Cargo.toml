@@ -1,12 +1,14 @@
 [workspace]
 resolver = "3"
-members = ["hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux", "hangar-connect", "hangar-plugins", "hangar-update-news", "hangar-workflows", "hangar-http-file", "hangar-desktop-theme"]
+members = ["hangar-conversation-transfer", "hangar-codex-transfer", "hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux", "hangar-connect", "hangar-plugins", "hangar-update-news", "hangar-workflows", "hangar-http-file", "hangar-desktop-theme"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
+hangar-conversation-transfer = { path = "hangar-conversation-transfer" }
+hangar-codex-transfer = { path = "hangar-codex-transfer" }
 # Mesmas versões do desktop-native/Cargo.toml: o hangar-api entra nos dois builds.
 serde = { version = "=1.0.229", features = ["derive"] }
 # preserve_order: o tool_input reescrito sai com as chaves na ordem do dict do Python.

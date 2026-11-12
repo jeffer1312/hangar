@@ -157,7 +157,6 @@ def test_idle_codex_confirmation_does_not_release_unproved_entry(tmp_path, monke
     entry = queue.append("RPC sem confirmação", delivered=True, ts=100)
     path = tmp_path / "rollout.jsonl"
     path.write_text('{"type":"session_meta","payload":{"id":"thread"},"timestamp":"1970-01-01T00:00:00Z"}\n')
-    monkeypatch.setattr(api, "_transfer_send_error", lambda _: None)
     monkeypatch.setattr(api, "_cached_info_sync", lambda _: SimpleNamespace(jsonl=str(path), provider="codex"))
     monkeypatch.setattr(api, "_headless", lambda _: False)
     monkeypatch.setattr(api.hook_state, "get_state", lambda _: ("idle", 100))

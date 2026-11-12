@@ -84,6 +84,8 @@ impl IngressGates {
     pub fn open(&self, name: &str) { self.reopen(name, false, false) }
     /// Desfaz um `close_exclusive`.
     pub fn open_exclusive(&self, name: &str) { self.reopen(name, false, true) }
+    /// Retenção já instalada pela transferência, inclusive se a restauração falhou.
+    pub(crate) fn held(&self, name:&str)->bool { self.inner.lock().unwrap_or_else(|e|e.into_inner()).get(name).is_some_and(|g|g.holds>0) }
     /// Desfaz um fechamento retido.
     pub fn release(&self, name: &str) { self.reopen(name, true, false) }
     fn reopen(&self, name: &str, held: bool, exclusive: bool) {

@@ -568,9 +568,6 @@ def drain(name: str, jsonl: str, provider: str = "claude") -> int:
     """Entrega ao tty as entradas pendentes (delivered=False) quando o pane volta a aceitar texto.
     Retorna quantas entregou. claim-1-envia-1: um crash entre o claim e o envio deixa NO MAXIMO 1
     entrada 'stranded', nao o lote, e recheca o overlay (via send_prompt) a cada iteracao."""
-    from app.conversation_transfer import transfer_active
-    if transfer_active(name):
-        return 0
     if provider in _SEM_TECLA:
         _log.debug("drain name=%s: provider %s nao entrega por tecla (fila fica pro adapter)",
                    name, provider)
@@ -1122,9 +1119,6 @@ def steer_now(name: str, provider: str) -> bool | str:
 class TerminalInput:
     def send_prompt(self, name: str, text: str, provider: str = "claude",
                     pane_id: str | None = None, msg_id: str | None = None) -> str:
-        from app.conversation_transfer import transfer_active
-        if transfer_active(name):
-            return "deferred"
         text = scrub_surrogates(text)
         # Validacao PRE-envio: input ruim nunca toca a TUI nem entra na fila. \n/\t ok; outros controles nao.
         if any(ord(c) < 32 and c not in "\t\n" for c in text):
@@ -1132,8 +1126,6 @@ class TerminalInput:
         # Serializa por sessao (gate + digitacao + Enter como unidade): sem o lock, envios
         # concorrentes intercalavam teclas no mesmo tty e as mensagens saiam concatenadas.
         with _send_lock(name):
-            if transfer_active(name):
-                return "deferred"
             if provider == "claude":
                 from app.adapters.codex import sessions as codex_sessions
                 if codex_sessions.exists(name):

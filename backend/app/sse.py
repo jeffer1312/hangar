@@ -609,9 +609,7 @@ def _confirm_codex_queue(name: str, jsonl: str) -> None:
     queue = PromptQueue(name)
     if not any(r.get("delivered") and not r.get("confirmed") for r in queue.load()):
         return
-    from app.conversation_history import confirmation_options
-    confirmation = confirmation_options(name, jsonl, "codex")
-    committed = committed_user_lines(jsonl, "codex", **confirmation)
+    committed = committed_user_lines(jsonl, "codex")
     start = _transcript_start_ts(jsonl)
     if committed is not None and start is not None:
         # RPC aceito não prova escrita no rollout; ausência nunca autoriza reenvio.
@@ -835,16 +833,7 @@ async def merged_events(name: str, jsonl: str, provider: str = "claude",
         # que e exatamente o que o preview mostra, LIMPA o preview na hora (sem esperar o broker mudar).
         # Recebe o path (em vez de fechar sobre um tailer fixo) pra poder ser recriado no rebind do /clear.
         try:
-            from app.conversation_history import session_transfer, verify_boundary, live_event
-            record = await asyncio.to_thread(session_transfer, name, path, current_provider)
-            if record:
-                offset = await asyncio.to_thread(verify_boundary, record, path)
-                start_offset = max(offset, start_offset or 0)
             async for ev in get_adapter(current_provider).transcript_stream(path, start_offset):
-                if record:
-                    ev = await asyncio.to_thread(live_event, record, path, ev)
-                    if ev is None:
-                        continue
                 if current_provider == "codex" and ev.kind == "user_msg" and not rust_state:
                     await asyncio.to_thread(_confirm_codex_queue, name, path)
                 if ev.kind == "assistant_msg" and ev.text:

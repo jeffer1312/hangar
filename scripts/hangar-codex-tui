@@ -669,7 +669,6 @@ def main() -> int:
     ap.add_argument("--approval-policy", choices=("never", "on-request"), default=None)
     ap.add_argument("--sandbox", choices=("read-only", "workspace-write", "danger-full-access"), default=None)
     ap.add_argument("--tool-output-token-limit", type=int, default=None)
-    ap.add_argument("--transfer-id", default=None, help=argparse.SUPPRESS)
     # Sobrescritas de config que o servidor decidiu (o 1M padrão); viram `-c` no app-server.
     ap.add_argument("--config", action="append", default=[], help=argparse.SUPPRESS)
     args = ap.parse_args()
@@ -683,38 +682,13 @@ def main() -> int:
     from app.adapters.codex import sessions as codex_sessions
     from app.adapters.codex.lancador import (APPROVAL, NO_UPDATE_CHECK, SANDBOX, PERMISSION_POLICIES,
                                             identity_override, service_tier_override, tool_output_override)
-    launch_key = None
     def runtime():
-        live = codex_sessions.load(args.name)
-        if args.transfer_id and launch_key and live and live.get("key") == launch_key:
-            return live
-        return (codex_sessions.transfer_runtime(args.name, args.transfer_id) if args.transfer_id
-                else live)
+        return codex_sessions.load(args.name)
 
     def update_runtime(**fields):
-        if args.transfer_id:
-            current = runtime() or {}
-            if current.get("transfer_id") != args.transfer_id:
-                with codex_sessions._locked(args.name):
-                    live = codex_sessions.load(args.name)
-                    if not live or live.get("key") != launch_key:
-                        raise RuntimeError("session_transfer_runtime_identity_changed")
-                    updated = {**live, **fields}
-                    codex_sessions._write(args.name, updated)
-                    return updated
-            from app.conversation_transfer import _processes
-            processes = dict(current.get("processes", {}))
-            for field in ("app_pid", "tui_pid", "launcher_pid"):
-                if fields.get(field):
-                    processes.update(_processes(fields[field]))
-            fields["processes"] = processes
-        return (codex_sessions.update_transfer_runtime(args.name, args.transfer_id, **fields)
-                if args.transfer_id else codex_sessions.update(args.name, **fields))
+        return codex_sessions.update(args.name, **fields)
 
     existing = runtime()
-    launch_key = (existing or {}).get("key")
-    if args.transfer_id and (not existing or existing.get("thread_id") != args.resume):
-        ap.error("runtime preparado não pertence à conversa pedida")
     imported_resume = bool(existing and existing.get("transfer_id") and existing.get("thread_id") == args.resume)
     if imported_resume:
         required = ("codex_home", "codex_account", "key", "cwd", "permission_mode")
@@ -846,11 +820,6 @@ def main() -> int:
                                 key=os.environ.get("CP_SESSION_KEY") or None,
                                 service_tier=args.service_tier, **mode_record)
         elif thread_id != previous_thread and thread is not None:
-            if args.transfer_id:
-                from app.conversation_transfer import load_transfer, TransferPhase
-                record = load_transfer(args.transfer_id)
-                if not record or record.phase != TransferPhase.COMPLETE:
-                    raise RuntimeError("session_transfer_unexpected_import_turn")
             codex_sessions.switch_thread(args.name, thread, previous_thread,
                                          endpoint=endpoint, app_pid=servidor.pid)
         previous_thread = thread_id
@@ -949,10 +918,7 @@ def main() -> int:
                     # Vivo sem porta enganaria o `poll()` acima; morto, conta como queda.
                     servidor.kill()
                     continue
-                if args.transfer_id:
-                    update_runtime(app_pid=servidor.pid)
-                else:
-                    codex_sessions.update_app_pid(args.name, servidor.pid)
+                codex_sessions.update_app_pid(args.name, servidor.pid)
                 # A escuta antiga morreu com o socket. Sem uma nova, sessao que caiu antes do
                 # primeiro thread/started nunca ganharia sidecar (update_app_pid e no-op sem ele).
                 escuta = threading.Thread(target=_espera_thread,
@@ -978,14 +944,8 @@ def main() -> int:
         # So apaga o sidecar que e NOSSO: uma sessao recriada com o mesmo nome ja teria reescrito o
         # arquivo, e apagar o dela deixaria a sessao viva invisivel pro app.
         meta = codex_sessions.load(args.name)
-        if meta and meta.get("app_pid") == servidor.pid and (not args.transfer_id or meta.get("key") == launch_key):
-            if args.transfer_id:
-                from app.conversation_transfer import load_transfer, TransferPhase
-                record = load_transfer(args.transfer_id)
-                if record and record.phase == TransferPhase.COMPLETE:
-                    codex_sessions.delete(args.name)
-            else:
-                codex_sessions.delete(args.name)
+        if meta and meta.get("app_pid") == servidor.pid:
+            codex_sessions.delete(args.name)
 
 
 if __name__ == "__main__":

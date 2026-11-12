@@ -294,6 +294,34 @@ fn headless_target(queue_dir:&Path,name:&str,key:&str,generation:u64,meta:&Meta)
 }
 
 impl Watcher {
+    /// Adota uma conversa já importada sob a porta retida pelo coordenador.
+    pub(crate) async fn adopt_transfer(&self, registry:&RuntimeRegistry, name:&str, meta:&Meta) -> Result<(),RuntimeError> {
+        let key=terminal::text(meta,"key").ok_or_else(gone)?;
+        let mode=terminal::text(meta,"collaboration_mode");
+        if meta.get("headless")==Some(&Value::Bool(true)) {
+            self.open_headless(registry,name,key,meta,mode).await
+        } else {
+            let pane=self.terminal_pane(registry,name,key,meta).await?;
+            self.open_terminal(registry,name,key,meta,mode,&pane).await
+        }
+    }
+
+    pub(crate) async fn abort_transfer(&self,registry:&RuntimeRegistry,name:&str,id:&str)->Result<(),RuntimeError> {
+        let Some(meta)=self.load(name).await else {return Ok(())};
+        if terminal::text(&meta,"transfer_id")!=Some(id) {return Err(busy());}
+        let key=terminal::text(&meta,"key").ok_or_else(gone)?;
+        if meta.get("headless")==Some(&Value::Bool(true)) {
+            let generation=self.generation(key,name).await?;
+            let _=registry.close(key,generation).await;
+            if let Some(cano)=meta.get("cano").cloned().and_then(|v|serde_json::from_value::<super::process::Cano>(v).ok()) {
+                let lives=births(vec![i64::from(cano.pid)]).await.map_err(|_|job())?;
+                super::process::kill(&cano,key,&codex_sidecar::dir(&self.cfg.home)).await.map_err(|_|job())?;
+                ensure_absent(lives,&[i64::from(cano.pid)]).await.map_err(|_|job())?;
+            }
+        } else {self.drop_terminal(registry,name,&MuxProcess::new(&self.cfg.mux_program,TIMEOUT)).await?;}
+        codex_sidecar::locked(&codex_sidecar::dir(&self.cfg.home),name,|path|match std::fs::remove_file(path) {Err(e) if e.kind()!=std::io::ErrorKind::NotFound=>Err(e),_=>Ok(())}).map_err(|_|job())
+    }
+
     async fn load(&self,name:&str) -> Option<Meta> {
         let file = codex_sidecar::path(&codex_sidecar::dir(&self.cfg.home),name);
         tokio::task::spawn_blocking(move||codex_sidecar::load(&file)).await.ok().flatten()

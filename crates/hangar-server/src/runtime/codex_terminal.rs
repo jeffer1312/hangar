@@ -216,10 +216,14 @@ pub(super) fn pid(meta:&Map<String,Value>,field:&str) -> Option<u32> { meta.get(
 /// Fora: sem terminal, em preparação, sem app-server (`app_pid` nulo é a troca de modo em curso) e
 /// transferência que ainda não terminou (a regra do `sessions.list_all`).
 pub(super) fn candidate(meta:&Map<String,Value>,home:&Path) -> Option<Candidate> {
+    candidate_for(meta,home,false)
+}
+
+fn candidate_for(meta:&Map<String,Value>,home:&Path,preparing:bool)->Option<Candidate> {
     if meta.get("headless").is_some_and(truthy) || meta.get("launching").is_some_and(truthy) { return None; }
     let (name,endpoint,thread_id) = (text(meta,"name")?.to_owned(),text(meta,"endpoint")?.to_owned(),text(meta,"thread_id")?.to_owned());
     let app_pid = pid(meta,"app_pid")?;
-    if let Some(transfer) = text(meta,"transfer_id") && !transfer_complete(home,transfer) { return None; }
+    if !preparing && let Some(transfer) = text(meta,"transfer_id") && !transfer_complete(home,transfer) { return None; }
     Some(Candidate { name,meta:meta.clone(),endpoint,app_pid,thread_id,key:text(meta,"key").map(str::to_owned),tui_pid:pid(meta,"tui_pid") })
 }
 
@@ -622,7 +626,7 @@ impl Watcher {
             return Some(Err(RuntimeError::new(LEGACY_SIDECAR,"o arquivo da sessão é do desenho antigo, sem o endereço do app-server")));
         }
         if let Some(transfer) = text(&meta,"transfer_id") && let Err(error) = transfer_state(&self.cfg.home,transfer) { return Some(Err(error)); }
-        let Some(c) = candidate(&meta,&self.cfg.home) else {
+        let Some(c) = candidate_for(&meta,&self.cfg.home,registry.ingress().held(name)) else {
             return Some(Err(RuntimeError::new("codex_terminal_not_ready","o Codex com terminal ainda não tem app-server pronto")));
         };
         let panes = match self.cfg.mux.list_panes().await {

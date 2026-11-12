@@ -1,7 +1,7 @@
 //! `POST /modo-execucao` e `/recarregar`: a troca de modo e o reinício rodam no Rust do começo ao fim, o
 //! Codex pela `runtime::codex_relaunch` e o Claude pela reabertura do spec (`runtime::claude_reopen`), com o
 //! corpo e os códigos da rota Python (`api.py`). Sessão que não é de nenhum dos dois (Pi, omp, Kimi) segue
-//! ao Python como chegou, e a transferência por recuperar também.
+//! ao Python como chegou; a recuperação da transferência é do Rust.
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -109,12 +109,27 @@ pub async fn reload(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     let runtime = st.state.runtime.get().cloned();
     let (Some(runtime), true, Some(name)) = (runtime, owner, session_name(req.uri().path()))
         else { return pass(&st, req, &fwd).await };
-    let home = st.list.env().dirs.as_ref().map(|dirs| dirs.home.clone());
+    if let Some(home)=st.list.env().dirs.as_ref().map(|dirs|&dirs.home) {
+        let current_key=match runtime.transfer_key(&name).await {
+            Ok(key)=>key,
+            Err(error)=>return json_response(StatusCode::CONFLICT,json!({"detail":error.public()})),
+        };
+        let pending=crate::runtime::claude_reopen::transfer::store(home).list_incomplete();
+        match pending {
+            Ok(records)=>if let Some(record)=records.into_iter().find(|r|r.name==name && current_key.as_ref().is_none_or(|key|r.origin_meta["key"]==*key)) {
+                let (st2,owned)=(st.clone(),name.clone());
+                let result=tokio::spawn(async move {during_life_change(&st2,&owned,runtime.recover_transfer(record)).await}).await
+                    .unwrap_or_else(|_|Err(hangar_conversation_transfer::TransferError::new("session_transfer_restore_failed")));
+                st.list.invalidate();
+                let mut response=match result {Ok(body)=>json_response(StatusCode::OK,body),Err(error)=>json_response(StatusCode::from_u16(error.status).unwrap_or(StatusCode::CONFLICT),json!({"detail":error.public()}))};
+                cors(req.headers(),response.headers_mut());return response;
+            },
+            Err(error)=>return json_response(StatusCode::CONFLICT,json!({"detail":error.public()})),
+        }
+    }
     let st2 = st.clone();
     let outcome = detached_relaunch(async move {
         if let Some(codex) = runtime.restart_codex(&name).await { return Some(Relaunched::Codex(codex)); }
-        // A transferência que falhou ao restaurar é recuperada pelo Recarregar, no Python que a conduz.
-        if home.as_deref().is_some_and(|home| crate::runtime::codex_relaunch::transfer_open(home, &name, None, None)) { return None; }
         let from_terminal = runtime.claude_headless(&name).await.is_none_or(|headless| !headless);
         let change = SessionChange { reason: ChangeReason::Reload, surface: None, account: None, permission_mode: None,
             model: None, effort: None, service_tier: None };
@@ -163,6 +178,11 @@ pub(crate) async fn during_life_change<T>(st:&AppState,name:&str,work:impl Futur
     let Some(share)=st.share.clone() else { return work.await };
     share.lives.facts().begin_mode_change(name);
     let result=work.await;
+    let lives=match st.state.runtime.get() {Some(runtime)=>runtime.pending_transfer_lives().await,None=>Ok(Default::default())};
+    match lives {
+        Ok(mut lives)=>share.lives.facts().set_life(name,lives.remove(name)),
+        Err(error)=>{tracing::warn!(session=%name,code=%error.code,"convite conservado enquanto a transferência não puder ser lida");return result;},
+    }
     if let Some(life)=share.lives.life(name,true).await {
         if let Err(error)=share.store.set_life(name,Some(life.clone())) { tracing::warn!(session=%name,kind=?error.kind(),"convite não acompanhou a vida nova"); }
         let (base,owned)=(st.accounts.env.claude_base.clone(),name.to_owned());

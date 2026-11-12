@@ -2,7 +2,7 @@
 //! com o mesmo nome, pela reabertura do spec. O processo antigo sai inteiro antes de a conversa mudar de
 //! conta (o `claude` morrendo grava pelo caminho antigo e recriaria o arquivo na origem); a conversa vai
 //! por `rename` (`<sid>.jsonl` e a pasta irmã), e volta se a vida nova não subir. A transferência para o
-//! Codex (`credential_id`) segue ao Python que a conduz.
+//! Codex (`credential_id`) usa o coordenador de transferência do Rust.
 use std::net::SocketAddr;
 use std::path::{Path,PathBuf};
 use std::sync::Arc;
@@ -204,15 +204,27 @@ pub async fn switch_route(State(st):State<Arc<AppState>>,ConnectInfo(peer):Conne
     let (parts,body)=req.into_parts();
     let Ok(bytes)=to_bytes(body,BODY_LIMIT).await else {return too_large(&parts.headers)};
     let asked=target(&bytes);
-    // A transferência é do Python e não conhece a adormecida: ela leria um sidecar sem processo.
+    // A transferência exige uma origem acordada e confirmada.
     if asked==Some(Target::Codex) && runtime.asleep(&name).await.is_some() {
         return reply(Some(&parts.headers),StatusCode::CONFLICT,detail_body("erro_sessao_adormecida",
             "a sessão está adormecida; mande uma mensagem para ela acordar e transfira depois",json!({})));
     }
     let destination=match asked {
         Some(Target::ConfigDir(dir))=>dir,
-        // A transferência para o Codex e o corpo torto seguem ao Python, que os conduz e recusa.
-        Some(Target::Codex) | None=>return forward_whole(&st,parts,bytes,&fwd).await,
+        // A troca de provedor usa a mesma porta exclusiva do ciclo de vida.
+        Some(Target::Codex)=>{
+            let request=match serde_json::from_slice::<crate::runtime::claude_reopen::transfer::Request>(&bytes) {
+                Ok(request) if request.valid()=>request,
+                _=>return super::invalid_body(&parts.headers),
+            };
+            let (st2,owned)=(st.clone(),name.clone());
+            let outcome=tokio::spawn(async move {
+                super::relaunch::during_life_change(&st2,&owned,runtime.transfer_to_codex(&owned,request,st2.accounts.clone(),st2.dictation_models.clone())).await
+            }).await.unwrap_or_else(|_|Err(hangar_conversation_transfer::TransferError::new("session_transfer_failed").with_status(500)));
+            st.list.invalidate();
+            return match outcome {Ok(body)=>reply(Some(&parts.headers),StatusCode::OK,body),Err(error)=>reply(Some(&parts.headers),StatusCode::from_u16(error.status).unwrap_or(StatusCode::CONFLICT),json!({"detail":error.public()}))};
+        },
+        None=>return super::invalid_body(&parts.headers),
         Some(Target::EngineAccount(account))=>return super::engine::account_route(st,runtime,name,account,parts.headers).await,
     };
     let catalog=match st.accounts.claude_catalog() {

@@ -30,7 +30,7 @@ struct FactsState {
     snapshot: bool,
 }
 
-/// Fatos que só o Python sabe (transferência, troca de modo), empurrados por ele.
+/// Identidade conservada pelo ciclo de vida e pela recuperação das transferências no Rust.
 #[derive(Default)]
 pub struct LifeFacts { state: Mutex<FactsState> }
 
@@ -52,7 +52,7 @@ impl LifeFacts {
     pub fn end_mode_change(&self, name: &str) {
         self.lock().changing.remove(name);
     }
-    /// Fotografia completa: substitui o que foi empurrado antes.
+    /// Fotografia completa dos registros duráveis, conferida na subida.
     pub fn apply_snapshot(&self, lives: HashMap<String, String>, changing: HashSet<String>) {
         *self.lock() = FactsState { lives, changing, snapshot: true };
     }

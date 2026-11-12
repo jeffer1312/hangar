@@ -224,12 +224,13 @@ async fn transcript_image_never_serves_active_content_types() {
 }
 
 #[tokio::test]
-async fn transcript_image_of_a_transfer_stays_with_python() {
+async fn transcript_image_of_an_invalid_transfer_is_refused_without_python() {
     let scene = Scene::new().await;
     scene.claude("s", &[image_line("u", "image/png", PNG)]);
     let path = "/api/sessions/s/transcript-image/transfer:rec:claude:u/0";
-    let _ = scene.get_raw(path).await;
-    assert_eq!(scene.python.hits_to(path), 1);
+    let response = scene.get_raw(path).await;
+    assert!(!response.status().is_success());
+    assert_eq!(scene.python.hits_to(path), 0);
     let _ = scene.get_raw("/api/sessions/s/transcript-image/u/0").await;
     assert_eq!(scene.python.hits_to("/api/sessions/s/transcript-image/u/0"), 0);
 }
