@@ -37,9 +37,10 @@ set -uo pipefail
 
 # Sem memória, o systemd-oomd mata a verificação, não a sessão do agente que a chamou. Na VM o
 # roteiro chega sozinho, sem o memory-scope ao lado.
-[[ -n "${HANGAR_VERIFY_IN_MEMORY_SCOPE:-}" || ! -f "$(dirname "$0")/memory-scope" ]] ||
+aqui="$(dirname "$(realpath "$0" 2>/dev/null || echo "$0")")"
+[[ -n "${HANGAR_VERIFY_IN_MEMORY_SCOPE:-}" || ! -f "$aqui/memory-scope" ]] ||
     HANGAR_VERIFY_IN_MEMORY_SCOPE=1 HANGAR_VERIFY_CALLER_CGROUP="$(cut -d: -f3 /proc/self/cgroup 2>/dev/null)" \
-        exec bash "$(dirname "$0")/memory-scope" bash "$0" "$@"
+        exec bash "$aqui/memory-scope" bash "$0" "$@"
 
 ESTADO="${XDG_STATE_HOME:-$HOME/.local/state}/hangar-verificacao"
 FIXO="${HANGAR_VERIFICAR_ARVORE:-${XDG_CACHE_HOME:-$HOME/.cache}/hangar-verificacao/arvore}"
@@ -680,6 +681,9 @@ rodar_passos() {   # $1 = sha, resto = passos; cwd = árvore preparada
         vigia=$!
         wait "$spid"; rc=$?
         kill "$vigia" 2>/dev/null; wait "$vigia" 2>/dev/null
+        # O aviso do memory-scope fica no log do passo, que ninguém abre quando o passo passa.
+        grep -q 'rodando sem teto de memória' "$log" 2>/dev/null && \
+            echo "verificar-local: $p compilou sem teto de memória (o systemd do usuário não abriu o grupo)" >&3
         if (( rc == 0 )); then
             dur=$((SECONDS - ini)); resumo+=("ok      $p ${dur}s")
         else
@@ -1014,7 +1018,8 @@ trap 'exit 143' TERM
 meu_grupo="$(cut -d: -f3 /proc/self/cgroup 2>/dev/null)"
 if [[ -n "${HANGAR_VERIFY_CALLER_CGROUP:-}" && "$meu_grupo" != "$HANGAR_VERIFY_CALLER_CGROUP" && "$meu_grupo" == *.scope ]]; then
     export HANGAR_VERIFY_UNIT="${meu_grupo##*/}"
-    setsid bash -c 'tail --pid="$1" -f /dev/null; systemctl --user stop "$2"' _ $$ "$HANGAR_VERIFY_UNIT" < /dev/null > /dev/null 2>&1 &
+    # `&&`: um tail sem `--pid` sai na hora com erro e não pode derrubar a rodada.
+    setsid bash -c 'tail --pid="$1" -f /dev/null && systemctl --user stop "$2"' _ $$ "$HANGAR_VERIFY_UNIT" < /dev/null > /dev/null 2>&1 &
 fi
 exec 3> >(marcar "$ANDAMENTO" >&2)
 (

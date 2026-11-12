@@ -36,7 +36,7 @@ def test_command_runs_in_its_own_capped_scope():
 
 
 @pytest.mark.skipif(not _systemd_user(), reason="sem o systemd do usuário")
-def test_memory_high_only_on_request():
+def test_memory_high_on_request():
     result = _run({"HANGAR_BUILD_MEMORY_HIGH": "4G"},
                   'cat "/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)/memory.high"; exit 7')
     assert result.returncode == 7, result.stderr
