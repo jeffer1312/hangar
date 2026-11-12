@@ -18,18 +18,56 @@ falhou=0
     python3() { :; }
     pin_auth_pair() { :; }
     omp_de_teste() { :; }
+    esperar_memoria() { printf 'espera %s\n' "$1" >> "$preparation_log"; }
     PLANO='rust backend'
     PROCESSOS=2
     CARGO_BUILD_JOBS=2
+    MEM_BUILD_GB=11
     eval "$(sed -n '/^passo_preparo() {/,/^}/p' "$verifier_path")"
     cd "$preparation_root" || exit 1
     passo_preparo || exit 1
-    [[ "$(cat "$preparation_log")" == 'build --locked --workspace --all-targets' ]] || {
-        echo 'FALHOU: preparo Rust/backend repetiu compilação'
+    # As bibliotecas de teste antes do resto: os dois rustc do hangar-server nunca compilam juntos.
+    [[ "$(cat "$preparation_log")" == $'espera 11\ntest --locked --workspace --lib --no-run\nbuild --locked --workspace --all-targets' ]] || {
+        echo 'FALHOU: preparo Rust/backend não compilou em fila, ou repetiu compilação'
         cat "$preparation_log"
         exit 1
     }
+    # Sem memória o preparo para antes de compilar.
+    : > "$preparation_log"
+    esperar_memoria() { return 1; }
+    passo_preparo && { echo 'FALHOU: preparo compilou sem memória'; exit 1; }
+    [[ ! -s "$preparation_log" ]] || { echo 'FALHOU: preparo chamou o cargo sem memória'; cat "$preparation_log"; exit 1; }
 ) || falhou=1
+
+# Na VM o roteiro é copiado sozinho: sem o memory-scope ao lado, roda direto.
+sozinho="$(mktemp -d)"
+cp "$V" "$sozinho/run.sh"
+saida="$(printf 'crates/hangar-server/src/main.rs\n' | bash "$sozinho/run.sh" --classificar-rapido 2>&1)"
+grep -qx "linux: rust_rapido" <<< "$saida" || { echo "FALHOU roteiro copiado sozinho: \"$saida\""; falhou=1; }
+rm -rf "$sozinho"
+
+# Rust no rápido: confere o workspace; testes só dos crates que não são o hangar-server.
+rust_rapido() {   # $1 = arquivos mudados, $2 = chamadas esperadas do cargo
+    (
+        d="$(mktemp -d)"; trap 'rm -rf "$d"' EXIT
+        mkdir -p "$d/crates"
+        cargo() { printf '%s\n' "$*" >> "$d/cargo.log"; }
+        esperar_memoria() { :; }
+        mudados() { grep -E "$1" <<< "$ARQUIVOS" || true; }
+        ARQUIVOS="$1" MEM_CHECK_GB=6
+        eval "$(sed -n '/^passo_rust_rapido() {/,/^}/p' "$(realpath "$V")")"
+        cd "$d" && passo_rust_rapido > /dev/null || exit 1
+        [[ "$(cat "$d/cargo.log" 2>/dev/null)" == "$2" ]] || { echo "FALHOU rust rápido de \"$1\": $(tr '\n' '|' < "$d/cargo.log")"; exit 1; }
+    ) || falhou=1
+}
+# As bibliotecas em modo de teste antes do resto: as duas conferências do hangar-server em fila.
+confere=$'check --locked --workspace --lib --profile test\ncheck --locked --workspace --all-targets'
+rust_rapido "crates/hangar-server/src/main.rs" "$confere"
+rust_rapido $'crates/hangar-server/src/main.rs\ncrates/hangar-core/src/lib.rs' \
+    "$confere"$'\ntest --locked --no-fail-fast --workspace --exclude hangar-server'
+rust_rapido "crates/Cargo.lock" \
+    "$confere"$'\ntest --locked --no-fail-fast --workspace --exclude hangar-server'
+rust_rapido "frontend/src/b.ts" ""
 caso() {   # $1 = arquivos (um por linha), $2 = linux esperado, $3 = windows esperado
     local saida lin win
     saida="$(printf '%s\n' "$1" | "$V" --classificar)"
@@ -210,6 +248,63 @@ memoria 2000000 "" curta
 memoria 20000000 "" folga
 memoria 2000000 1 folga
 memoria "" "" curta
+# Com a faixa do cargo aberta, a reserva dela entra na conta: 10 GB cobrem 6 mas não 6 + 6.
+reserva() {   # $1 = MemAvailable em kB, $2 = reserva em GB, $3 = curta|folga
+    local f r; f="$(mktemp)"
+    printf 'MemAvailable: %s kB\n' "$1" > "$f"
+    if HANGAR_VERIFICAR_MEMINFO="$f" "$V" --memoria-curta "$2"; then r=curta; else r=folga; fi
+    [[ "$r" == "$3" ]] || { echo "FALHOU memória $1 kB com reserva $2: $r (esperado $3)"; falhou=1; }
+    rm -f "$f"
+}
+reserva 10485760 0 folga
+reserva 10485760 6 curta
+
+# Espera de memória antes de compilar: com folga segue; sem ela, espera o prazo e falha dizendo
+# quanto falta; sem leitura, segue.
+espera() {   # $1 = MemAvailable em kB ("" = sem a linha), $2 = GB pedidos, $3 = código esperado
+    local f rc; f="$(mktemp)"
+    printf 'MemTotal: 24000000 kB\n' > "$f"
+    [[ -n "$1" ]] && printf 'MemAvailable: %s kB\n' "$1" >> "$f"
+    # Trava própria: a da máquina pode estar com o build de outra sessão.
+    HANGAR_BUILD_LOCK="$f.lock" HANGAR_VERIFICAR_MEMINFO="$f" HANGAR_VERIFICAR_ESPERA=0 "$V" --esperar-memoria "$2" > "$f.out" 2>&1; rc=$?
+    [[ "$rc" == "$3" ]] || { echo "FALHOU espera de memória $1 kB para $2 GB: saiu $rc (esperado $3)"; falhou=1; }
+    (( $3 == 0 )) || grep -q "precisa de $2 GB" "$f.out" || { echo "FALHOU espera sem dizer quanto falta: $(cat "$f.out")"; falhou=1; }
+    rm -f "$f" "$f.out" "$f.lock"
+}
+espera 20000000 11 0
+espera 5000000 11 1
+espera "" 11 0
+# Com outro build na trava o prazo não corre: a espera continua em vez de falhar.
+if command -v flock > /dev/null; then
+    f="$(mktemp)"
+    printf 'MemAvailable: 5000000 kB\n' > "$f"
+    ( exec 8> "$f.lock"; flock 8; exec sleep 30 ) &
+    dono=$!
+    until ! flock -n "$f.lock" true 2> /dev/null; do sleep 0.1; done   # estavel: espera o dono pegar a trava
+    HANGAR_BUILD_LOCK="$f.lock" HANGAR_VERIFICAR_MEMINFO="$f" HANGAR_VERIFICAR_ESPERA=0 "$V" --esperar-memoria 11 > /dev/null 2>&1 &
+    esperando=$!
+    sleep 1   # estavel: só confirma que seguiu esperando; atraso da máquina nunca vira falha
+    kill -0 "$esperando" 2> /dev/null || { echo "FALHOU espera desistiu com outro build na trava"; falhou=1; }
+    kill "$esperando" "$dono" 2> /dev/null; wait "$esperando" "$dono" 2> /dev/null
+    rm -f "$f" "$f.lock"
+fi
+
+# A função `cargo` dos passos: argumentos intactos, o runtime do passo devolvido ao cargo e os
+# pedidos de teto fora do ambiente dele. Sem systemd (HANGAR_NO_MEMORY_SCOPE) o comando roda igual.
+if command -v flock > /dev/null; then
+    (
+        d="$(mktemp -d)"; trap 'rm -rf "$d"' EXIT
+        printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$@" "xdg=${XDG_RUNTIME_DIR:-}" "teto=${HANGAR_BUILD_MEMORY_HIGH:-}${HANGAR_BUILD_BIND_TO:-}"\n' > "$d/cargo"
+        chmod +x "$d/cargo"
+        eval "$(sed -n '/^    cargo() {/,/^    }/p' "$V")"
+        export PATH="$d:$PATH" HANGAR_BUILD_LOCK="$d/lock" XDG_RUNTIME_DIR="$d/passo"
+        direto="$(cargo test 'a b' --x)"
+        [[ "$direto" == $'test\na b\n--x\n'"xdg=$d/passo"$'\nteto=' ]] || { echo "FALHOU cargo sem grupo: $direto"; exit 1; }
+        com_teto="$(HANGAR_NO_MEMORY_SCOPE=1 HANGAR_VERIFY_RUNTIME="$d/real" HANGAR_VERIFY_UNIT=x.scope \
+            HANGAR_VERIFY_MEMORY_SCOPE="$(dirname "$(realpath "$V")")/memory-scope" cargo test 'a b' --x)"
+        [[ "$com_teto" == "$direto" ]] || { echo "FALHOU cargo pelo memory-scope: $com_teto"; exit 1; }
+    ) || falhou=1
+fi
 
 # Andamento: repassa tudo e só as linhas de passo vão ao arquivo, com a hora na frente.
 anda="$(mktemp)"
