@@ -126,7 +126,7 @@ fn normalized_manifest(previous: &Value) -> Value {
 
 fn resolved(path: &Path) -> Result<PathBuf, String> {
     if let Ok(path) = std::fs::canonicalize(path) {
-        return Ok(path);
+        return Ok(hangar_core::fs::without_verbatim(path));
     }
     let absolute = std::path::absolute(path).map_err(|e| e.to_string())?;
     let mut tail = Vec::new();
@@ -136,11 +136,23 @@ fn resolved(path: &Path) -> Result<PathBuf, String> {
         tail.push(name.to_owned());
         parent = parent.parent().ok_or("Caminho inválido")?;
     }
-    let mut result = std::fs::canonicalize(parent).map_err(|e| e.to_string())?;
+    let mut result = hangar_core::fs::without_verbatim(
+        std::fs::canonicalize(parent).map_err(|e| e.to_string())?,
+    );
     for name in tail.into_iter().rev() {
         result.push(name);
     }
     Ok(result)
+}
+fn local_identity(path: PathBuf) -> String {
+    let path = hangar_core::fs::without_verbatim(path)
+        .to_string_lossy()
+        .into_owned();
+    if cfg!(windows) {
+        path.replace('/', "\\").to_lowercase()
+    } else {
+        path
+    }
 }
 fn origin(value: &Value, home: &Path) -> Option<(String, String)> {
     let source = value
@@ -172,15 +184,7 @@ fn origin(value: &Value, home: &Path) -> Option<(String, String)> {
         } else {
             PathBuf::from(raw)
         };
-        let path = resolved(&path).ok()?.to_string_lossy().into_owned();
-        return Some((
-            "local".into(),
-            if cfg!(windows) {
-                path.to_lowercase()
-            } else {
-                path
-            },
-        ));
+        return Some(("local".into(), local_identity(resolved(&path).ok()?)));
     }
     if matches!(kind, "git" | "github") {
         let pair = if let Some(raw) = raw.strip_prefix("git@") {
@@ -222,6 +226,9 @@ fn old_origin(value: &Value, home: &Path) -> Option<(String, String)> {
     ) {
         if kind == "local" && bundled_path(raw) {
             return bundled_name(raw, value).map(|n| ("bundled".into(), n));
+        }
+        if kind == "local" {
+            return Some((kind.into(), local_identity(PathBuf::from(raw))));
         }
         return Some((kind.into(), raw.into()));
     }

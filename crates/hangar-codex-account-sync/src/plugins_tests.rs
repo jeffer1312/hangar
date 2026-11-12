@@ -320,10 +320,7 @@ async fn removed_source_disables_only_same_origin_managed_plugin() {
     let f = Fixture::new();
     let fake = f.fake();
     fake.set(&f.target, vec![f.plugin()], vec![f.marketplace()]);
-    let path = std::fs::canonicalize(&f.market)
-        .unwrap()
-        .to_string_lossy()
-        .into_owned();
+    let path = f.market.to_string_lossy().into_owned();
     let path = if cfg!(windows) {
         path.to_lowercase()
     } else {
@@ -509,5 +506,29 @@ proptest::proptest! {
         let result=runtime.block_on(sync(f.paths(),&previous,&fake));
         proptest::prop_assert!(result["manifest"].is_object());
         proptest::prop_assert!(result["issues"].is_array());
+    }
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn removed_plugin_from_python_manifest_matches_windows_native_local_origin() {
+    let f = Fixture::new();
+    let native_path = std::fs::canonicalize(&f.market).unwrap();
+    let legacy_path = hangar_core::fs::without_verbatim(native_path.clone())
+        .to_string_lossy()
+        .to_lowercase();
+    for persisted in [legacy_path, native_path.to_string_lossy().to_uppercase()] {
+        let fake = f.fake();
+        let mut plugin = f.plugin();
+        plugin["marketplaceSource"]["source"] = json!(native_path);
+        fake.set(&f.target, vec![plugin], vec![f.marketplace()]);
+        let previous =
+            json!({"plugins":{"sample@market":{"origem":{"type":"local","source":persisted}}}});
+
+        let result = sync(f.paths(), &previous, &fake).await;
+
+        assert!(!has(&result, "codex_account_plugin_origin_conflict"));
+        assert_eq!(fake.target().plugins[0]["enabled"], false);
+        assert!(fake.installs.lock().unwrap().is_empty());
     }
 }
