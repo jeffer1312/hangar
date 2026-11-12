@@ -223,8 +223,10 @@ fn codex_hooks_append_after_the_existing_groups_and_settle() {
     assert_eq!((&pre[0], &pre[1]), (&review, &rtk));
     assert!(pre[2..].iter().any(|g| hooks::refers(&g["hooks"][0]["command"], "state_hook.py", true)));
     assert!(pre[2..].iter().any(|g| g["matcher"] == "Bash" && hooks::refers(&g["hooks"][0]["command"], "guard_tmux.py", true)));
+    let nav = ours(&data, "UserPromptSubmit", "nav_hook.py");
+    assert_eq!(nav.len(), 1);
     if !windows {
-        assert_eq!(ours(&data, "UserPromptSubmit", "nav_hook.py"), vec![format!("{} || exit 0", command(&repo, "nav_hook.py"))]);
+        assert_eq!(nav, vec![format!("{} || exit 0", command(&repo, "nav_hook.py"))]);
     }
     assert!(codex_hooks::sync(&codex, &repo, windows).unwrap().is_empty());
 }
