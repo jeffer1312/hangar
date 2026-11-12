@@ -610,6 +610,7 @@ fn parse_node(
                     children,
                     spread: false,
                     checked: None,
+                    value: None,
                     span: None,
                 })
             }

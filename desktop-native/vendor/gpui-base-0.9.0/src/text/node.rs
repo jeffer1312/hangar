@@ -79,6 +79,8 @@ pub enum BlockNode {
         spread: bool,
         /// Whether the list item is checked, if None, it's not a checkbox
         checked: Option<bool>,
+        // Modified for Hangar: the number typed for this item, shown instead of start + position.
+        value: Option<u32>,
         span: Option<Span>,
     },
     CodeBlock(CodeBlock),
@@ -1395,6 +1397,7 @@ fn list_selected_source(
         let BlockNode::ListItem {
             children: item_children,
             checked,
+            value,
             ..
         } = child
         else {
@@ -1402,7 +1405,7 @@ fn list_selected_source(
         };
 
         let marker = if ordered {
-            format!("{}. ", ordered_list_ordinal(start, item_ix))
+            format!("{}. ", ordered_list_ordinal(*value, start, item_ix))
         } else {
             "- ".to_string()
         };
@@ -3711,8 +3714,12 @@ impl BlockNode {
                 .iter()
                 .enumerate()
                 .map(|(i, child)| {
+                    let typed = match child {
+                        BlockNode::ListItem { value, .. } => *value,
+                        _ => None,
+                    };
                     let prefix = if *ordered {
-                        format!("{}. ", ordered_list_ordinal(*start, i))
+                        format!("{}. ", ordered_list_ordinal(typed, *start, i))
                     } else {
                         "- ".to_string()
                     };
@@ -3778,6 +3785,7 @@ impl BlockNode {
     fn render_list_item_row(
         content: AnyElement,
         ix: usize,
+        typed: Option<u32>,
         options: NodeRenderOptions,
         checked: Option<bool>,
         style: &TextViewStyle,
@@ -3804,6 +3812,7 @@ impl BlockNode {
                         .refine_style(style.list_style())
                         .child(
                             list_item_prefix(
+                                typed,
                                 ix,
                                 options.list_start,
                                 options.ordered,
@@ -3884,6 +3893,7 @@ impl BlockNode {
                 children,
                 spread,
                 checked,
+                value,
                 ..
             } => {
                 let body = body_font_size(node_cx, window);
@@ -3940,6 +3950,7 @@ impl BlockNode {
                                     items.push(Self::render_list_item_row(
                                         text,
                                         ix,
+                                        *value,
                                         options,
                                         *checked,
                                         &node_cx.style,
@@ -3983,6 +3994,7 @@ impl BlockNode {
                                         items.push(Self::render_list_item_row(
                                             block,
                                             ix,
+                                            *value,
                                             options,
                                             *checked,
                                             &node_cx.style,
@@ -5478,6 +5490,7 @@ mod tests {
             children: vec![BlockNode::Paragraph(selected_paragraph(text))],
             spread: false,
             checked: None,
+            value: None,
             span: None,
         };
         let unselected_item = BlockNode::ListItem {
@@ -5486,6 +5499,7 @@ mod tests {
             ]))],
             spread: false,
             checked: None,
+            value: None,
             span: None,
         };
         let list = BlockNode::List {
@@ -5503,6 +5517,7 @@ mod tests {
             children: vec![BlockNode::Paragraph(selected_paragraph(text))],
             spread: false,
             checked: None,
+            value: None,
             span: None,
         };
         let list = BlockNode::List {
@@ -5568,12 +5583,14 @@ mod tests {
                     children: vec![BlockNode::Paragraph(selected_paragraph("one"))],
                     spread: false,
                     checked: None,
+                    value: None,
                     span: None,
                 },
                 BlockNode::ListItem {
                     children: vec![BlockNode::Paragraph(selected_paragraph("two"))],
                     spread: false,
                     checked: None,
+                    value: None,
                     span: None,
                 },
             ],
@@ -5595,12 +5612,14 @@ mod tests {
                     children: vec![BlockNode::Paragraph(selected_paragraph("three"))],
                     spread: false,
                     checked: None,
+                    value: None,
                     span: None,
                 },
                 BlockNode::ListItem {
                     children: vec![BlockNode::Paragraph(selected_paragraph("four"))],
                     spread: false,
                     checked: None,
+                    value: None,
                     span: None,
                 },
             ],
@@ -5623,12 +5642,14 @@ mod tests {
                     children: vec![BlockNode::Paragraph(selected_paragraph("nested"))],
                     spread: false,
                     checked: None,
+                    value: None,
                     span: None,
                 },
                 BlockNode::ListItem {
                     children: vec![BlockNode::Paragraph(selected_paragraph("again"))],
                     spread: false,
                     checked: None,
+                    value: None,
                     span: None,
                 },
             ],
@@ -5642,12 +5663,14 @@ mod tests {
                     children: vec![BlockNode::Paragraph(selected_paragraph("three")), nested],
                     spread: false,
                     checked: None,
+                    value: None,
                     span: None,
                 },
                 BlockNode::ListItem {
                     children: vec![BlockNode::Paragraph(selected_paragraph("four"))],
                     spread: false,
                     checked: None,
+                    value: None,
                     span: None,
                 },
             ],
@@ -5669,12 +5692,14 @@ mod tests {
                     ],
                     spread: true,
                     checked: None,
+                    value: None,
                     span: None,
                 },
                 BlockNode::ListItem {
                     children: vec![BlockNode::Paragraph(selected_paragraph("four"))],
                     spread: false,
                     checked: None,
+                    value: None,
                     span: None,
                 },
             ],
@@ -5698,6 +5723,7 @@ mod tests {
                 children: vec![BlockNode::Paragraph(selected_paragraph("nested"))],
                 spread: false,
                 checked: None,
+                value: None,
                 span: None,
             }],
         };
@@ -5710,12 +5736,14 @@ mod tests {
                     children: vec![BlockNode::Paragraph(selected_paragraph("one")), nested],
                     spread: false,
                     checked: None,
+                    value: None,
                     span: None,
                 },
                 BlockNode::ListItem {
                     children: vec![BlockNode::Paragraph(selected_paragraph("two"))],
                     spread: false,
                     checked: None,
+                    value: None,
                     span: None,
                 },
             ],
@@ -5737,12 +5765,14 @@ mod tests {
                     children: vec![BlockNode::Paragraph(selected_paragraph("done"))],
                     spread: false,
                     checked: Some(true),
+                    value: None,
                     span: None,
                 },
                 BlockNode::ListItem {
                     children: vec![BlockNode::Paragraph(selected_paragraph("todo"))],
                     spread: false,
                     checked: Some(false),
+                    value: None,
                     span: None,
                 },
             ],
@@ -6198,12 +6228,14 @@ mod tests {
                             children: vec![BlockNode::Paragraph(selected_paragraph("one"))],
                             spread: false,
                             checked: None,
+                            value: None,
                             span: None,
                         },
                         BlockNode::ListItem {
                             children: vec![BlockNode::Paragraph(selected_paragraph("two"))],
                             spread: false,
                             checked: None,
+                            value: None,
                             span: None,
                         },
                     ],
