@@ -332,7 +332,8 @@ function criarChatStore(serverId: string, name: string): ChatApi {
 
   function aplicarEvents(events: ChatEvent[], confirm = true) {
     if (retiredQueuedIds.size) events = events.filter((e) => !retiredQueuedIds.has(e.id));
-    const pending = events.reduce(reconcilePending, useChatStore.getState().pending);
+    const order = new Map(events.map((e, i) => [e.id, i]));
+    const pending = events.reduce((p, e) => reconcilePending(p, e, order), useChatStore.getState().pending);
     publishEvents(events, 'rebuild', { pending });
     if (confirm) confirmSubmission(events);
   }
@@ -1052,7 +1053,9 @@ function criarChatStore(serverId: string, name: string): ChatApi {
         const id = `pending-${pendingSeq++}`;
         // Em idle a mensagem é digitada na hora: o eco atenuado parecia mensagem entrando na fila.
         const solid = useChatStore.getState().stateEvent?.state === 'idle';
-        useChatStore.setState((s) => ({ pending: [...s.pending, { id, text: trimmed, solid }] }));
+        // A bolha `queued-` da fila durável sai depois, e o registro real chega com outro id.
+        const afterId = useChatStore.getState().events.findLast((e) => e.kind === 'user_msg' && !e.id.startsWith('queued-'))?.id;
+        useChatStore.setState((s) => ({ pending: [...s.pending, { id, text: trimmed, solid, afterId }] }));
         try {
           if (mode === 'steer') await steerSession(name, trimmed, target);
           else if (mode) showDeliveryFeedback(await sendWithDelivery(target, name, trimmed, mode));

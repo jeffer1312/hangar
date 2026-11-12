@@ -17,6 +17,12 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   sai do handle, como no `procinfo._open_jsonl`).
 - **Multi-linha vai pelo CLIPBOARD**, porque os buffers do psmux cortam no primeiro `\n`. O
   fallback ramifica pelo **código de retorno**, nunca pelo nome do sistema.
+- **`send-keys` e `capture-pane` vão direto ao servidor do psmux** que a lista conferiu
+  (`hangar_psmux::command`), sem abrir o `tmux.exe`. O `display-message` da conferência de identidade
+  fica no CLI: o servidor responde OK para alvo que não existe. Uma linha com contrabarra vai direto,
+  inteira, num comando só (o argv do Windows a estraga pelo CLI); sem o caminho direto, ela vai pelo
+  clipboard. A escolha entre direto e clipboard é feita uma vez por entrega. Ver
+  [Entrada do terminal direto no servidor do psmux](#entrada-do-terminal-direto-no-servidor-do-psmux-11112026).
 - **O composer se lê com `capture-pane -e` também no psmux.** Sem estilo, a sugestão esmaecida
   que o Claude desenha no composer vazio (`❯ Try "…"`) parece texto digitado, e o escritor Rust
   adia toda entrega com `composer_busy`. Medição em
@@ -172,6 +178,13 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **Atalho `.cmd` em máquina migrada aponta para `%USERPROFILE%\.hangar\current\scripts\…`, nunca
   para o caminho real da versão**, que a poda apaga. `hangar-python.cmd` escolhe o Python do
   pacote, senão o venv, senão o real; `hangar-conta.cmd` e `hangar-engine.cmd` passam por ele.
+  Vale também para os atalhos sem extensão do Git Bash (`/c/Users/…/.hangar/current/scripts/…`).
+  Até 12/11/2026 o `hangar-send`, o `hangar-preview`, o `folha`, o `hangar-mcp-headers.cmd` e os
+  lançadores do Codex saíam do `$raiz`, a pasta da versão de onde o instalador rodou: na DELPHI-02
+  eles ainda chamavam a `0.1.0.9467` com a `0.1.0.10172` instalada, e parariam quando a poda a
+  apagasse. O `install.ps1` usa `$raizAtalhos`/`$shimRootMsys` em todos; o passo
+  `2026-11-12-atalhos-windows-current` regrava os das máquinas já instaladas. Teste:
+  `scripts/test-install-shims-current.ps1`.
 - **Tarefa e vigia reconhecem o pacote pela linha de comando.** O backend é `hangar-server.exe` ou
   `hangar-launcher.exe` com `launch backend`, porque o Python roda do caminho real da versão e não
   da pasta da tarefa; atualização em curso também é `hangar-server.exe` com `update` ou
@@ -1058,3 +1071,40 @@ mora na mesma pasta, e na mesma pasta os dois shells preferem a extensão do PAT
 Agora o instalador grava `python3.cmd` junto do atalho, com o mesmo interpretador. Medido numa
 pasta temporária com os dois arquivos na frente do PATH: PowerShell e `cmd` resolveram e rodaram o
 `python3.cmd` (entrada padrão incluída), e o bash do Git seguiu no atalho `sh`.
+
+## Entrada do terminal direto no servidor do psmux (11/11/2026)
+
+Cada `send-keys`, `capture-pane` e `display-message` da entrada abria um `tmux.exe` (`ProcessIo::run`,
+com o grupo de contenção). Medido na DELPHI-02 (psmux 3.3.8, servidor descartável com `cmd.exe`,
+mediana de 30): parada, `tmux.exe` 16,6 ms para digitar e 15,8 ms para capturar, contra 2,2 e 2,0 ms
+direto; com 8 processos ocupando os 4 núcleos (CPU 100%), 1.070 e 1.112 ms contra 170 e 207 ms. Os
+1,1 s do relatório `uedvxrgb` são o tempo de abrir o processo numa máquina carregada, e uma entrega
+faz várias chamadas (texto, `Enter`, leituras da prova).
+
+Agora essas três vão direto ao servidor da sessão (`hangar_psmux::command`), sem stdin e só com o
+servidor que a lista conferiu contra o CLI nos últimos 30 s (`mux::verified_direct`); fora disso,
+o CLI. O que se aprendeu medindo:
+
+- O `OK` responde só à chave. O comando roda depois que o cliente fecha o envio: fechar a conexão
+  logo depois do `OK` perdeu a 22ª digitação de uma série. Com `shutdown` do envio e leitura até o fim, 200 de
+  200 chegaram, e a resposta sai em ~6 ms em vez dos ~30 ms de esperar o servidor fechar sozinho.
+- O servidor não recusa nada: alvo inexistente (`-t =nada:0.0`), comando desconhecido e tecla
+  inválida voltam `OK`, e o alvo errado digitou na sessão do servidor. O CLI recusa o alvo. Por isso o
+  servidor sai do nome da sessão no `-t` (`=<nome>:…`) e só com a conferência da lista; a identidade
+  do pane continua sendo conferida antes de cada escrita.
+- Todos os argumentos entre aspas (`quote`), inclusive o verbo e as opções, são aceitos. `ESC`, aspas,
+  barras, acentos e tab chegam iguais aos do CLI; `capture-pane -p` e `-p -e` saem iguais byte a byte.
+- Falha antes de escrever (registro, conexão, chave recusada) segue pelo CLI; depois de escrever,
+  `send-keys` vira `may_have_written` e não é repetido, e leitura cai no CLI.
+
+- Texto de uma linha com contrabarra ia pelo clipboard (um `powershell.exe` por envio, 253 ms com a
+  máquina parada) porque o argv do Windows tira contrabarras. Direto, num Claude real (2.1.322,
+  sem hooks, conferido pelo `Ctrl+G` com um editor que só copia o arquivo), 120 a 8000 caracteres
+  chegaram idênticos em 24 de 24, inteiros ou em pedaços de 512. Agora ele vai direto, inteiro, num
+  comando só, sem passar pelo CLI; sem a conferência, o clipboard de antes.
+- Várias linhas continuam no clipboard: digitadas linha a linha com `C-j`, direto, o Claude perdeu
+  74 de 100 e 184 de 600 linhas; o clipboard entregou 100 e 600 inteiras.
+
+Testes `psmux_direct_tests`, `psmux_direct_only_tests` (o programa não existe: a resposta só pode vir
+do servidor falso), `terminal_runtime_windows_line_with_backslashes_goes_direct_without_the_clipboard`
+e os de `hangar-psmux::command`.

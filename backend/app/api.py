@@ -6,9 +6,7 @@ import logging
 import os
 import re
 import secrets
-import shutil
 import subprocess
-import tempfile
 import threading
 import time
 import urllib.parse
@@ -732,142 +730,6 @@ async def nav_ws_route(ws: WebSocket, name: str):
     # abre o navegador que o agente esta dirigindo.
     from app import navsock
     await navsock.nav_ws(ws, name)
-
-
-@app.post("/api/sessions/{name}/shell", dependencies=[Depends(require_auth)])
-def abrir_shell(name: str):
-    # Sessao de shell SEPARADA e ESCONDIDA do app (Task 6) -- ver tmux.new_hidden_shell. Sync (nao
-    # async): mesmo padrao das rotas POST vizinhas (select/answer acima), que resolvem a sessao via
-    # `registry.list()` direto e deixam o FastAPI rodar o handler bloqueante no threadpool.
-    from app import tmux
-    info = _cached_info_sync(name)
-    if info is None:
-        raise HTTPException(status_code=404, detail=erro("erro_sessao_inexistente", "sessao nao existe"))
-    alvo = f"term-{name}"
-    # Achado da revisao (I1, e de novo na rodada 2): `sanitize_session_name` aceita hifen, entao
-    # "term-<nome>" pode ja existir como sessao de TERCEIRO (ex: usuario criou "foo" e depois
-    # "term-foo" na mao). A 1a versao inferia isso de `registry.list()` -- mas a lista TAMBEM
-    # filtra sessao com sidecar Codex de mesmo nome, entao um "term-<nome>" que fosse Codex de
-    # verdade sumia da lista por ESSE motivo, nao por ser nosso, e a inferencia concluia (errado)
-    # que o nome estava livre. Pergunta DIRETA ao tmux (`is_hidden`), nao mais inferida: cobre
-    # Codex tambem, ao custo de 1-2 forks a mais nesta rota de clique unico (nao e o caminho de
-    # poll onde fork por sessao e proibido).
-    if tmux.has_session(alvo) and not tmux.is_hidden(alvo):
-        # L68 da revisao final: o texto NAO afirma mais que a sessao e de terceiro. Ela pode ser o
-        # shell DESTE painel que ficou sem a marca (um `set-option` que falhou por tmux ocupado/
-        # timeout, ver tmux.new_hidden_shell) -- e como este gate recusa ANTES de chamar aquela
-        # funcao, nada se autocorrige sozinho: quem desempata e o usuario.
-        raise HTTPException(status_code=409,
-                            detail=erro("erro_sessao_tmux_em_uso",
-                                        f"ja existe uma sessao tmux chamada {alvo!r} sem a marca do "
-                                        "painel -- pode ser uma sessao sua de mesmo nome, ou o shell "
-                                        "deste painel que perdeu a marca. Encerre ou renomeie essa "
-                                        "sessao antes de abrir o shell", nome=alvo))
-    # O cwd vem do REGISTRY, nunca da query: um `?cwd=/` viraria shell em qualquer lugar do disco.
-    novo = tmux.new_hidden_shell(name, info.cwd or str(Path.home()))
-    if novo is None:
-        raise HTTPException(status_code=500, detail=erro("erro_shell_criacao_falhou", "tmux recusou criar o shell"))
-    return {"ok": True, "shell": novo}
-
-
-# Emuladores de terminal conhecidos, na ordem de preferencia da sonda quando CP_TERMINAL nao esta
-# setado. Cada valor monta o ARGV completo de attach dado o alvo tmux exato ("=nome:" -- NUNCA sem
-# o `=`, senao o tmux cai em prefix-match e abre a sessao errada; o `:` final e a mesma grafia do
-# `attach` do termsock, alinhada na revisao final -- medido nesta maquina que as duas formas
-# anexam igual, e uma operacao so nao pode ter duas grafias numa branch inteira sobre esse
-# detalhe). `wezterm` nao tem `-e`: e
-# `start -- comando`. `gnome-terminal -e` esta deprecado e so aceita UM string; `--` e o substituto.
-_EMULADORES = {
-    "wezterm": lambda alvo: ["wezterm", "start", "--", "tmux", "attach", "-t", alvo],
-    "kitty": lambda alvo: ["kitty", "tmux", "attach", "-t", alvo],
-    "alacritty": lambda alvo: ["alacritty", "-e", "tmux", "attach", "-t", alvo],
-    "konsole": lambda alvo: ["konsole", "-e", "tmux", "attach", "-t", alvo],
-    "gnome-terminal": lambda alvo: ["gnome-terminal", "--", "tmux", "attach", "-t", alvo],
-    "xterm": lambda alvo: ["xterm", "-e", "tmux", "attach", "-t", alvo],
-}
-_ORDEM_PROBE = ["wezterm", "kitty", "alacritty", "konsole", "gnome-terminal", "xterm"]
-
-
-@app.post("/api/sessions/{name}/open-terminal", dependencies=[Depends(require_auth)])
-def abrir_terminal_nativo(name: str):
-    """Abre um emulador de terminal NATIVO (janela propria do SO) anexado a sessao tmux `name` --
-    tanto a do agente quanto a do shell escondido, o alvo e so um nome de sessao tmux. Diferente do
-    painel embutido (termsock/xterm.js): esta janela nao depende do backend pra existir, entao
-    fechar o painel ou reiniciar o servico NAO a desanexa.
-
-    Checa via `tmux.has_session` (nao `registry.list()`): a sessao de shell escondida (Task 6) NAO
-    aparece no registry por design, mas continua um alvo valido pra este botao.
-    """
-    from app import tmux
-    if not tmux.has_session(name):
-        raise HTTPException(status_code=404, detail=erro("erro_sessao_inexistente", "sessao nao existe"))
-    nome_bin = os.environ.get("CP_TERMINAL")
-    if nome_bin:
-        # env checada ANTES do PATH: se o usuario apontou um emulador, e ele que vale -- so falha
-        # se esse binario especifico nao existir ou nao for suportado (dicionario fechado; NAO
-        # inventa um `-e` generico pra emulador desconhecido).
-        if nome_bin not in _EMULADORES or shutil.which(nome_bin) is None:
-            raise HTTPException(status_code=503,
-                                detail=erro("erro_terminal_invalido",
-                                            f"CP_TERMINAL={nome_bin!r} nao encontrado no PATH ou nao "
-                                            "suportado", nome=nome_bin))
-    else:
-        nome_bin = next((n for n in _ORDEM_PROBE if shutil.which(n)), None)
-        if nome_bin is None:
-            raise HTTPException(status_code=503,
-                                detail=erro("erro_terminal_ausente", "nenhum emulador de terminal encontrado no PATH"))
-    args = tmux._scope_prefix() + _EMULADORES[nome_bin](f"={name}:")
-    env = os.environ.copy()
-    wl = tmux._wayland_display()
-    if wl:
-        # sem isto o emulador GUI nao acha o compositor quando o backend roda como servico systemd
-        # (env de boot, sem WAYLAND_DISPLAY) -- mesmo problema que o wl-paste do new_session.
-        env["WAYLAND_DISPLAY"] = wl
-    disp = os.environ.get("DISPLAY")
-    if disp:
-        # Achado da revisao (I5): X11/XWayland precisa de DISPLAY, nao so WAYLAND_DISPLAY -- sem
-        # repassar, um host X11 (ou o servico systemd sem env de sessao grafica) faz o emulador
-        # executar e morrer com "cannot open display" LOGO apos o exec, onde o Popen nao pega nada.
-        env["DISPLAY"] = disp
-    # Arquivo temporario, nao `PIPE` (achado da revisao, rodada 2): a janela que ABRE fica viva
-    # bem alem deste request, e um `PIPE` sem leitor enche os 64KB do buffer do kernel e a
-    # escrita do emulador TRAVA (medido no wezterm, primeiro da sonda, que loga bastante em
-    # stderr) -- mais um fd vazado por clique. Arquivo comum nao tem esse teto.
-    err_file = tempfile.TemporaryFile()
-    try:
-        p = subprocess.Popen(args, env=env, start_new_session=True, stdin=subprocess.DEVNULL,
-                             stdout=subprocess.DEVNULL, stderr=err_file)
-    except OSError as e:
-        err_file.close()
-        raise HTTPException(status_code=503, detail=erro("erro_terminal_abertura_falhou", f"falha ao abrir o emulador de terminal: {e}", erro=str(e)))
-    # Falha aparece, nao some (achado da revisao): o Popen so levanta se o BINARIO nao existe --
-    # sem DISPLAY, com o compositor errado, ou qualquer erro pos-exec, o processo sai sozinho em
-    # poucos ms e o `except OSError` acima nunca ve nada, devolvendo "ok" pra uma janela que nunca
-    # abriu. Espera uma fracao de segundo e confere se ja morreu.
-    time.sleep(0.3)
-    morreu = p.poll()
-    # `morreu != 0`, nao so `morreu is not None` (achado da revisao, rodada 2): sair com rc=0 em
-    # poucos ms e COMPORTAMENTO NORMAL de cliente D-Bus/instancia unica -- `gnome-terminal` (na
-    # sonda) abre no `gnome-terminal-server` e sai 0 na hora; `wezterm start` com GUI ja de pe e
-    # `konsole` reusando instancia fazem o mesmo. Tratar qualquer saida como erro devolvia 503 pra
-    # janela que abriu certo.
-    if morreu is not None and morreu != 0:
-        err_file.seek(0)
-        saida = err_file.read().decode(errors="replace").strip()
-        err_file.close()
-        raise HTTPException(status_code=503,
-                            detail=erro("erro_terminal_saiu_cedo",
-                                        f"emulador de terminal saiu logo apos abrir: "
-                                        f"{saida or f'codigo {morreu}'}",
-                                        saida=saida or f"codigo {morreu}"))
-    err_file.close()   # nosso handle; o filho, se ainda vivo, segue escrevendo no fd dele
-    # Este `Popen` nunca e colhido explicitamente (sem wait(), sem thread de reaper): a janela vive
-    # muito alem deste request e esperar por ela seria travar a rota. Quem colhe e o proprio
-    # `subprocess`, que varre os filhos ja mortos a cada Popen novo — e o backend chama `tmux` o
-    # tempo todo, entao o zumbi some sozinho em segundos. E uma DEPENDENCIA de detalhe interno do
-    # modulo, nao um contrato: se um dia o backend parar de disparar subprocessos com frequencia,
-    # cada clique aqui deixa um zumbi ate o processo reiniciar.
-    return {"ok": True}
 
 
 # Snapshot com TTL de registry.list() pros endpoints request/response QUENTES (history/workflows):
@@ -3372,24 +3234,6 @@ def project_delete(name: str):
         projects.remove(name)
     except projects.ProjectError as e:
         raise HTTPException(e.status, e.detail)
-    return {"ok": True}
-
-
-@app.post("/api/sessions/{name}/open-editor", dependencies=[Depends(require_auth)])
-def open_editor(name: str):
-    # So-desktop: abre o editor na MAQUINA do backend, no cwd da sessao. Binario fixo (settings.editor,
-    # nao input do cliente) + arg unico validado -> sem shell, sem injecao. GUI precisa do DISPLAY/
-    # WAYLAND_DISPLAY do backend (sessao grafica); sob systemd headless pode nao abrir -> 500.
-    cwd = _session_cwd(name)
-    binario = runtime_config.get("editor")
-    # Rastro: com o editor editavel pelo app, um exec silencioso seria o caminho menos auditavel do
-    # backend (o fluxo normal de comando fica gravado no transcript; este nao ficava em lugar nenhum).
-    _log.info("OPEN-EDITOR name=%s bin=%r cwd=%r", name, binario, cwd)
-    try:
-        subprocess.Popen([binario, cwd],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except OSError as e:
-        raise HTTPException(500, detail=erro("erro_editor_falhou", f"editor '{binario}' falhou: {e}", binario=binario, erro=str(e)))
     return {"ok": True}
 
 

@@ -33,6 +33,8 @@ mod push_expo;
 mod artifacts;
 #[cfg(unix)]
 mod workflows;
+#[cfg(unix)]
+mod session_tools;
 mod archive_history;
 mod archive_list;
 mod session_media;

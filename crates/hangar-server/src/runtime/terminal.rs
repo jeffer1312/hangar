@@ -240,6 +240,8 @@ struct Executor {
     modes_cache:Option<Value>,
     /// Dona da trava de escrita e quando ela foi vista pela primeira vez nesta vida do ator (o prazo de desistir).
     uncertain_since:Option<(String,tokio::time::Instant)>,
+    /// Desistência recusada: a próxima tentativa espera, em vez de reler fatos, campo e transcript a cada tique.
+    give_up_retry_at:Option<tokio::time::Instant>,
     /// Teclado emprestado ao Python (administração que digita no pane): id, prazo e o pedido que o abriu.
     loan:Option<(String,tokio::time::Instant,String)>,
     /// Linha da fila que o terminal recusa sem escrever (composer ocupado, tela ilegível): espera
@@ -320,6 +322,7 @@ const START_GRACE:Duration=Duration::from_secs(60);
 /// O `give_up_after` padrão: a prova chega em segundos; minutos sem ela, com o Claude parado, é perda.
 const GIVE_UP_AFTER:Duration=Duration::from_secs(180);
 const COMPOSER_READ_EVERY:Duration=Duration::from_secs(5);
+const GIVE_UP_RETRY:Duration=Duration::from_secs(30);
 /// Sem `/pull` aceito há mais que isso o plugin conta como fora: o `/pull` dura até 25 s e o seguinte sai em 50 ms.
 const PLUGIN_OFF_AFTER:Duration=Duration::from_secs(120);
 
@@ -412,7 +415,7 @@ impl TerminalActor {
         let status=options.status.clone();
         if let Some(sender)=&status { sender.send_replace(Default::default()); }
         let modes_cache=read_modes(&target.state_path);
-        let executor=Executor {batch_blocked:false,target,queue:Arc::new(queue),local,options,events,revision,sequence,receipt,deliverable:false,last_error:None,uncertain:vec![],unprovable:false,mode_unproved:false,modes_cache,uncertain_since:None,loan:None,stall:None,hold:None,hold_checked:false,focus_refused:false,parked:VecDeque::new(),starting:VecDeque::new(),away:None,clear_watch:None,clear_notice:None,footer_misses:None,reconciliation:None,confirm_until:None,confirm_seen:None,
+        let executor=Executor {batch_blocked:false,target,queue:Arc::new(queue),local,options,events,revision,sequence,receipt,deliverable:false,last_error:None,uncertain:vec![],unprovable:false,mode_unproved:false,modes_cache,uncertain_since:None,give_up_retry_at:None,loan:None,stall:None,hold:None,hold_checked:false,focus_refused:false,parked:VecDeque::new(),starting:VecDeque::new(),away:None,clear_watch:None,clear_notice:None,footer_misses:None,reconciliation:None,confirm_until:None,confirm_seen:None,
             unproved_since:None,no_safe_delivery:false,composer_held:false,composer_read_at:None,plugin_alive:None,born:tokio::time::Instant::now(),heal_requested:None,turn_wait:None,diag:policy.diag(),conversation_proved:false};
         let run=executor.run(receiver,closed.clone());
         let task=tokio::spawn(async move {
@@ -1575,6 +1578,10 @@ impl Executor {
         if !super::queue::waiting_ids(&state,self.target.created).contains(&entry) {
             return Ok(reply(id,Disposition::Rejected,json!({"code":"queue_entry_gone","cleanup":"not_needed"})));
         }
+        // A incerta segura toda escrita: a drenagem não levaria esta, e o app aponta o Descartar da que trava.
+        if state.terminal_write_blocked(&self.target.binding.conversation) {
+            return Ok(reply(id,Disposition::Rejected,json!({"code":"queue_steer_delivery_unproved","cleanup":"not_needed"})));
+        }
         let services=self.services("maintenance","maintenance","");
         let facts=services.facts(&self.target.binding).await.map_err(|_|error("terminal_facts"))?;
         if facts.binding!=self.target.binding {return Ok(reply(id,Disposition::Deferred,json!({"code":"queue_steer_not_delivered","cleanup":"not_needed"})));}
@@ -1681,7 +1688,7 @@ impl Executor {
         };
         let state=match self.queue.snapshot().await {Ok(state)=>state, Err(_)=>{skip(&self.target.key,"give_up_queue_io","prazo da entrega incerta: fila ilegível, tenta no próximo tique"); return}};
         let owner=state.runtime_state["terminal_write_barrier"]["operation_id"].as_str().map(str::to_owned);
-        let Some(entry)=owner.as_deref().and_then(|id|state.operations.get(id)).and_then(|op|op.entry_id.clone()) else {self.uncertain_since=None; self.composer_read_at=None; self.hold_composer(false).await; return};
+        let Some(entry)=owner.as_deref().and_then(|id|state.operations.get(id)).and_then(|op|op.entry_id.clone()) else {self.uncertain_since=None; self.give_up_retry_at=None; self.composer_read_at=None; self.hold_composer(false).await; return};
         let now=tokio::time::Instant::now();
         // Uma captura do pane a cada poucos segundos basta para o aviso; o tique é mais curto.
         let read_due=self.composer_read_at.is_none_or(|at|now.duration_since(at)>=COMPOSER_READ_EVERY);
@@ -1689,8 +1696,14 @@ impl Executor {
             self.composer_read_at=Some(now);
             self.read_composer().await;
         }
-        let since=match &self.uncertain_since {Some((seen,at)) if *seen==entry=>*at, _=>{self.uncertain_since=Some((entry,now)); return}};
-        if now.duration_since(since)<self.options.give_up_after {return;}
+        // O prazo conta do despacho gravado: a reabertura troca o executor, e o relógio dele nasceria zerado.
+        let dispatched=state.rows.iter().find(|r|r["id"].as_str()==Some(entry.as_str()))
+            .and_then(|r|["attempt_ts","dispatched_ts","claimed_ts","ts"].iter().find_map(|k|r[*k].as_f64()));
+        let waited=match dispatched {
+            Some(ts)=>Duration::from_secs_f64((sample().epoch_s-ts).max(0.0)),
+            None=>match &self.uncertain_since {Some((seen,at)) if *seen==entry=>now.duration_since(*at), _=>{self.uncertain_since=Some((entry,now)); return}},
+        };
+        if waited<self.options.give_up_after || self.give_up_retry_at.is_some_and(|at|now<at) {return;}
         match self.services("maintenance","maintenance","").facts(&self.target.binding).await {
             Ok(facts) if facts.binding==self.target.binding && facts.idle=>{},
             Ok(_)=>return,
@@ -1706,11 +1719,13 @@ impl Executor {
         let given=self.queue.exec(self.target.generation,&id,sample(),Action::GiveUp {entry_id:entry.clone()}).await;
         self.uncertain_since=None;
         if !matches!(given,Ok(ref done) if *done==json!(true)) {
-            skip(&self.target.key,"give_up_refused","prazo da entrega incerta: a desistência não agiu; o prazo recomeça");
+            self.give_up_retry_at=Some(now+GIVE_UP_RETRY);
+            skip(&self.target.key,"give_up_refused","prazo da entrega incerta: a desistência não agiu; tenta de novo em 30 s");
             return;
         }
+        self.give_up_retry_at=None;
         tracing::warn!(key=%self.target.key,session=%self.target.name,code="delivery_given_up",entry=%entry,
-            waited_s=now.duration_since(since).as_secs(),"entrega incerta sem prova no prazo: desistida, sem reenviar; a fila segue");
+            waited_s=waited.as_secs(),"entrega incerta sem prova no prazo: desistida, sem reenviar; a fila segue");
         self.release_uncertain().await;
         if let Err(failure)=self.publish().await {tracing::warn!(key=%self.target.key,code=%failure.code,"vista da desistência não publicou");}
     }
@@ -1732,7 +1747,7 @@ impl Executor {
         if state.terminal_write_blocked(&self.target.binding.conversation) || self.cleared(&state) {return;}
         let (now,grace)=(sample().epoch_s,self.options.give_up_after.as_secs_f64());
         let due=state.rows.iter().any(|r|r["delivered"]==true && r["confirmed"]!=true && r["desistiu"]!=true && r["papel"]!="assistant" && r["steered"]!=true
-            && ["dispatched_ts","claimed_ts","ts"].iter().find_map(|k|r[*k].as_f64()).unwrap_or(0.0)+grace<=now);
+            && ["attempt_ts","dispatched_ts","claimed_ts","ts"].iter().find_map(|k|r[*k].as_f64()).unwrap_or(0.0)+grace<=now);
         if !due {return;}
         // Parado, o que o Claude tivesse enfileirado já teria virado conversa.
         if !self.services("maintenance","maintenance","").facts(&self.target.binding).await.is_ok_and(|facts|facts.binding==self.target.binding && facts.idle) {return;}

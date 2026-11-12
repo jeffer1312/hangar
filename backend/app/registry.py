@@ -667,10 +667,6 @@ class SessionRegistry:
         # exatamente o "sem id" que a Task 5.5 conserta, reaparecendo por outra porta. QUALQUER pane da
         # sessao com esse cwd conta (superset seguro: sobre-contar so empurra pro caminho <sid>.jsonl
         # direto, nunca pro mtime ambiguo).
-        # Task 6: a sessao de shell ESCONDIDA nasce com o MESMO cwd do agente (new_hidden_shell usa
-        # info.cwd) e SOBREVIVE reatada entre polls -- sem excluir aqui, abrir o shell uma vez faria
-        # a sessao contar "irmao" pra sempre, e o resolve_tracked perderia _newest_after_clear (o
-        # catch-up do /clear) na sessao pra sempre, mesmo sem NENHUMA outra sessao Claude no cwd.
         try:
             return sum(1 for panes in tmux.list_panes_all().values()
                        if not panes[0].get("hidden") and any(p.get("cwd") == cwd for p in panes)) > 1

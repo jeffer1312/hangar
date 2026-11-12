@@ -182,6 +182,8 @@ pub fn matches_real(real: &str, sent: &str) -> bool {
     real == sent || real.lines().any(|line| line.trim() == sent)
         || sent.chars().count() >= 8 && real.lines().any(|line| line.trim().starts_with(sent))
         || legend != sent && !legend.is_empty() && crate::composer::caption(real) == legend
+        // Mensagens que chegam no meio do turno o Claude grava num `user` só, separadas por quebra de linha.
+        || format!("\n{real}\n").contains(&format!("\n{sent}\n"))
 }
 
 #[cfg(test)]
@@ -332,6 +334,17 @@ mod tests {
         tracker.complete(&key("one"), "q", SendOutcome::Queued);
         assert_eq!(tracker.take_unconfirmed(&key("one")), None);
         assert_eq!(tracker.outcome(&key("one")), Some(&SendOutcome::Queued));
+    }
+
+    #[test]
+    fn multiline_text_merged_with_another_in_the_same_turn_confirms() {
+        let sent = "T14 linhas\n001 a\n002 b";
+        let mut tracker = DeliveryTracker::default();
+        tracker.begin(key("one"), sent.into(), HashSet::new());
+        tracker.complete(&key("one"), sent, SendOutcome::Queued);
+        tracker.confirm_real(&key("one"), "real", &format!("{sent}\n{sent}"));
+        assert!(tracker.outcome(&key("one")).is_none());
+        assert!(!matches_real("T14 linhas\n001 a", "T14 linhas\n001"));
     }
 
     #[test]

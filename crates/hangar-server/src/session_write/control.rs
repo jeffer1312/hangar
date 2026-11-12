@@ -274,6 +274,7 @@ const MSG_QUEUE_GONE: &str = "A mensagem já saiu da fila.";
 const MSG_QUEUE_TEXT: &str = "A mensagem da fila precisa de texto e não pode começar com /.";
 const MSG_STEER_QUESTION: &str = "Responda a permissão ou pergunta pendente antes de orientar.";
 const MSG_STEER_NOT_DELIVERED: &str = "A sessão não aceitou agora; a mensagem continua na fila.";
+const MSG_STEER_HELD: &str = "Uma mensagem anterior sem confirmação segura a fila. Confira o terminal: se ela ficou no campo de digitação, envie ou apague; depois descarte-a para orientar esta.";
 const MSG_STEER_UNCERTAIN: &str = "Não deu para confirmar se a mensagem chegou; confira a conversa antes de repetir.";
 
 fn queue_gone() -> Answer { (StatusCode::CONFLICT, detail_body("queue_entry_gone", MSG_QUEUE_GONE, json!({}))) }
@@ -357,6 +358,7 @@ pub(crate) fn queue_steer_terminal(reply: &Result<RuntimeReply, RuntimeError>) -
         }
         (_, Some("queue_entry_gone")) => queue_gone(),
         (_, Some("queue_steer_question_open")) => queue_refused("queue_steer_question_open", MSG_STEER_QUESTION),
+        (_, Some("queue_steer_delivery_unproved")) => queue_refused("queue_steer_delivery_unproved", MSG_STEER_HELD),
         (Disposition::Unknown, _) => queue_refused("queue_steer_uncertain", MSG_STEER_UNCERTAIN),
         _ => queue_refused("queue_steer_not_delivered", MSG_STEER_NOT_DELIVERED),
     }
@@ -742,6 +744,7 @@ mod tests {
         assert_eq!(queue_steer_terminal(&r(Disposition::Rejected, json!({"code":"queue_entry_gone"}))).1["detail"]["code"], "queue_entry_gone");
         assert_eq!(queue_steer_terminal(&r(Disposition::Rejected, json!({"code":"queue_steer_question_open"}))).1["detail"]["code"], "queue_steer_question_open");
         assert_eq!(queue_steer_terminal(&r(Disposition::Unknown, json!({"code":"queue_steer_uncertain"}))).1["detail"]["code"], "queue_steer_uncertain");
+        assert_eq!(queue_steer_terminal(&r(Disposition::Rejected, json!({"code":"queue_steer_delivery_unproved"}))).1["detail"]["code"], "queue_steer_delivery_unproved");
         assert_eq!(queue_steer_terminal(&r(Disposition::Deferred, json!({}))).1["detail"]["code"], "queue_steer_not_delivered");
     }
 

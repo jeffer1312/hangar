@@ -655,7 +655,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   aperta `ctrl+x ctrl+s`, que leva junto o que já estava na fila interna do Claude Code e interrompe
   o turno; parado, ela vai para a frente e sai na entrega comum. As ações do painel (apagar,
   editar, reordenar, Orientar) valem só para a entrada que ainda espera e passam pelo ator da
-  sessão; a que a drenagem já reivindicou responde 409 `queue_entry_gone`. O `/steer` sem corpo
+  sessão; a que a drenagem já reivindicou responde 409 `queue_entry_gone`. Com uma entrega incerta
+  segurando a escrita, o Orientar responde 409 `queue_steer_delivery_unproved` sem tecla nem troca
+  de ordem, e o app manda descartar a incerta. O `/steer` sem corpo
   (chip de app antigo) é o Orientar da primeira que espera; sem nenhuma, promove como antes. Limite:
   `/clear` ou `/resume` digitados direto no terminal no meio do turno trocam o session-id, e a troca
   de vínculo descarta as mensagens que o app segurava. Ver
@@ -669,6 +671,11 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   recusada (`clear_not_applied`, a reabertura não a ergue de novo), a fila segue e a vista avisa.
   O `/clear` nunca é reenviado sozinho. Com o Claude trabalhando ele espera na fila do Claude
   Code, e a trava espera o turno.
+- **O prazo da entrega incerta conta do despacho gravado na linha**, não do primeiro tique do
+  executor: a reabertura troca o executor e não recomeça a espera. É o `attempt_ts`, regravado a
+  cada tentativa; o `dispatched_ts` fica o da primeira, porque a prova atrasada dela ainda vale
+  (`actor.rs`), e numa reentrega daria a incerta nova por vencida na hora. Ver
+  [fila travada numa máquina lenta](#fila-travada-por-entrega-incerta-numa-máquina-lenta-11112026).
 
 - **Comando de barra adiado é erro na tela, nunca 200.** Ele não tem linha na fila e não roda
   depois sozinho (`erro_comando_nao_executado`).
@@ -1076,6 +1083,40 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   formato com o catálogo num arquivo irmão (`.commands`, `commands_ref`) só é lido (`queue.rs`
   `decode`): a gravação seguinte o devolve ao principal e apaga o irmão. Ver
   [catálogo de comandos fora do arquivo da fila](#catálogo-de-comandos-fora-do-arquivo-da-fila-10112026).
+
+## Fila travada por entrega incerta numa máquina lenta (11/11/2026)
+
+(Relatório `uedvxrgb`, Windows com psmux, servidor 0.1.0.10153.) A Coordenadora ficou com a
+entrada incerta (`input_unproved`, etapa `write`) às 11:06:55 e só desistiu dela às 11:12:53, quase
+6 min depois, com o prazo de 180 s: o relógio vivia só no executor, e a reabertura da sessão em erro
+(`runtime_reopened`, pedida por histórico, SSE ou escrita) criava outro com a contagem zerada. No
+mesmo intervalo o Orientar respondeu 409 `queue_steer_not_delivered` duas vezes (11:09:05,
+11:11:15): com a trava, a drenagem não entrega nada, e o "não aceitou agora" convidava a repetir sem
+efeito. O teste `terminal_runtime_uncertain_deadline_counts_from_the_dispatch_across_reopen` abre o
+executor com uma incerta despachada há 10 min e espera a desistência sem novo prazo;
+`terminal_runtime_steer_entry_behind_an_uncertain_delivery_names_it_without_keys` cobre o código
+novo do Orientar.
+
+Na mesma máquina o texto ficava no composer sem enviar: o `Enter` (outro `tmux.exe`, a 1,1 s cada)
+se perdia, a prova do envio via o texto parado e a entrega virava `submit_unproved`, que a
+desistência não tira com o campo ocupado; a pessoa apagava o campo à mão para a fila andar. Agora,
+passado um quarto das leituras da prova, o campo ainda com exatamente o texto da entrega (compactado,
+sem anexo nem texto a mais, na captura com e sem estilo) e sem pergunta aberta ganha outro `Enter`,
+uma vez, com uma leitura a mais para a prova dele (`terminal_input.rs`, `submit`). Enviado, o Claude
+esvazia o campo, então texto ali é envio que não houve; o que não for só o nosso texto fica com o
+Descartar, como antes. Testes: `terminal_runtime_lost_enter_with_only_our_text_in_the_field_is_pressed_again`,
+`terminal_runtime_lost_enter_is_pressed_again_only_once` e `repeat_enter_tests`.
+
+No teste de uso real na VM, uma mensagem de 120 linhas mandada pelo celular com o Claude ocupado
+ficou como pendente para sempre, e as respostas seguintes entravam acima dela. O Claude Code grava
+num `user` só as mensagens que chegam no meio do turno, separadas por `\n`; o servidor confirma bloco
+por bloco, mas o eco local do app só saía com o texto inteiro igual ou igual a uma linha. Agora a
+mensagem também conta como entregue quando aparece inteira, entre quebras de linha, no texto que
+chegou. A regra vale nas três cópias: `mobile/src/chat/pending.ts` (`reconcilePending`),
+`packages/core/src/pendingEcho.ts` (`pendingEchoDelivered`, usado pelo `Chat.svelte`) e
+`desktop-native/src/delivery.rs` (`matches_real`). O trecho só confirma em mensagem que chegou depois
+do envio (`afterId`, o último `user_msg` visto ao enviar; no nativo, os ids de `begin`): sem isso,
+mandar de novo um pedaço de uma mensagem antiga apagaria o eco antes da entrega.
 
 ## Catálogo de comandos fora do arquivo da fila (10/11/2026)
 
@@ -5222,6 +5263,28 @@ chegada posterior, dois consumidores, reconexão e histórico único. O retrato 
 retirada de até toda a capacidade da fila numa publicação, impedindo que quadros atrasados de
 membros desse corte ressuscitem suas bolhas. A prova real usa processos dos CLIs e modelo local
 controlado, com três partes e imagem; não depende de Orientar.
+
+## Subagente Claude interrompido sai de "rodando" (12/11/2026)
+
+Um `Agent` de fundo só fecha no chat pelo `<task-notification>` no transcript do pai. Interrompido
+(o arquivo `subagents/agent-<id>.jsonl` termina num `user` "[Request interrupted by user…]"), ele não
+gera aviso, e o cartão ficava "Executando há 9 h" na DELPHI-02. Agora a rota de subagentes lê essa
+marca como fim (`state: "failed"`, `endedAt` da marca; resposta depois dela desfaz). O plugin marca
+`running` no lançamento e só fecha pelo mesmo aviso, então o `running` dele não basta: o registro
+guarda quando ele chegou (`AgentLife.since`), e a interrupção mais nova que isso vence; a retomada pelo
+`SendMessage` grava um `running` novo, posterior à marca, e o agente segue rodando. A causa estava no
+plugin: o `turn.complete` abortado de um agente de fundo era ignorado à espera da task-notification,
+que na interrupção não vem; agora ele grava `failed` (`state.ts`), e a leitura do arquivo fica para
+quando o plugin não está ligado. Os clientes só obedecem `failed`: o plugin grava `finished` também no
+aviso de quem só espera o próprio trabalho de fundo ("is waiting on its own background work"), e esse
+segue vivo. O casamento com o arquivo vai pelo agentId (`agentIdentities`, agora no core e usado pelo
+web também), porque dois agentes com o mesmo prompt não casavam com nenhum. Celular e web tiram da lista de rodando o agente que o servidor deu
+como encerrado (`subagentEnded` no core); no nativo, `pinned_running` faz o mesmo na faixa fixa, e o
+cartão da conversa já seguia o estado do servidor (`effective_agent`). Só nesse sentido: o servidor
+nunca reabre um agente que o transcript deu como terminado. Testes:
+`claude_agent_ending_on_an_interruption_is_reported_ended_until_it_answers_again`,
+`subagentEnded` em `packages/core/src/activity.test.ts` e
+`claude_agent_the_server_reports_ended_leaves_the_running_strip`.
 
 ## Subagentes Codex no painel de atividade (28/10/2026)
 

@@ -93,7 +93,7 @@ pub(crate) async fn maintenance(state: Arc<crate::routes::AppState>) {
         let _ = tokio::task::spawn_blocking(move || crate::update::dev::note_boot(&home)).await;
         match (crate::http_client().build(),crate::config_sync::runtime::RuntimeConfig::from_state(&state)) {
             (Ok(client),Ok(runtime)) => { crate::update::periodic::spawn(crate::update::periodic::Live {
-                env: state.accounts.env.clone(), list: state.list.clone(), listen: state.cfg.listen, client, runtime }); }
+                env: state.accounts.env.clone(), list: state.list.clone(), state: state.state.clone(), listen: state.cfg.listen, client, runtime }); }
             (Err(e),_) => tracing::warn!("update: verificação periódica sem cliente http: {e}"),
             (_,Err(e)) => tracing::warn!("update: verificação periódica sem configuração: {e}"),
         }

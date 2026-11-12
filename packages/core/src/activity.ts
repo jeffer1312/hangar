@@ -70,6 +70,26 @@ export function matchAgentSubagent(subs: SubagentRun[], agent: Pick<AgentRun, 'i
   return only(prompt => prompt === full) ?? only(prompt => prompt.startsWith(full.slice(0, 400)));
 }
 
+/** O servidor deu o agente como interrompido, que não manda aviso ao transcript do pai. `finished` não conta:
+ *  o plugin o grava também no aviso de quem só espera o próprio trabalho de fundo, e esse segue vivo. */
+export function subagentEnded(sub: SubagentRun | undefined): boolean {
+  return sub?.state === 'failed';
+}
+
+/** tool_use_id do lançamento -> agentId, pelo campo estruturado ou pelo texto "agentId: …" do resultado. */
+export function agentIdentities(events: ChatEvent[]): Map<string, string> {
+  const ids = new Map<string, string>();
+  for (const event of events) {
+    if (event.kind !== 'tool_result' || !event.tool_use_id) continue;
+    const launched = event.bg_agent_id;
+    const id = launched?.startsWith('teammate:')
+      ? event.result?.match(/agent_id:\s*([A-Za-z0-9_-]+)/)?.[1]
+      : launched ?? event.result?.match(/agentId:\s*([A-Za-z0-9_-]+)/)?.[1];
+    if (id) ids.set(event.tool_use_id, id);
+  }
+  return ids;
+}
+
 export function projectSubagentActivity(activity: Activity, subs: SubagentRun[], ids?: Map<string, string>, states?: CodexSubagents): Activity {
   let changed = false;
   const agents = activity.agents.map(agent => {

@@ -275,7 +275,7 @@ fn compaction_matches_python_oracle() {
     // `claimed_ts`/`dispatched_ts` são só do Rust (prazo de desistência sem prova); a poda é a mesma.
     fn strip(value:&mut serde_json::Value) {
         match value {
-            serde_json::Value::Object(map) => { map.remove("claimed_ts"); map.remove("dispatched_ts"); map.values_mut().for_each(strip); }
+            serde_json::Value::Object(map) => { map.remove("claimed_ts"); map.remove("dispatched_ts"); map.remove("attempt_ts"); map.values_mut().for_each(strip); }
             serde_json::Value::Array(items) => items.iter_mut().for_each(strip),
             _ => {},
         }

@@ -128,5 +128,50 @@ pub fn list_panes(dir: &Path, format: &str, deadline: Instant) -> Result<Listing
     Ok(listing)
 }
 
+/// Falha de um comando direto. `written`: o pedido pode ter chegado ao servidor, e repetir pelo CLI
+/// poderia digitar duas vezes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommandFailure { pub code: &'static str, pub written: bool }
+
+/// Um comando do CLI (`send-keys`, `capture-pane`, `display-message`) direto no servidor da sessão
+/// `base`; devolve o que o CLI imprimiria. O `OK` só aceita a chave: o comando roda depois que o envio
+/// fecha, e a conexão largada antes do fim pode perdê-lo. O servidor não recusa alvo nem tecla
+/// desconhecidos, então quem chama confere a sessão.
+pub fn command(dir: &Path, base: &str, args: &[String], deadline: Instant) -> Result<Vec<u8>, CommandFailure> {
+    let before = |code| CommandFailure { code, written: false };
+    let after = |code| CommandFailure { code, written: true };
+    if base.is_empty() || base.contains("__") || base.contains(['/', '\\', '.']) { return Err(before("psmux_direct_registry")); }
+    let read = |name: String| std::fs::read_to_string(dir.join(name)).map_err(|_| before("psmux_direct_registry"));
+    let port: u16 = read(format!("{base}.port"))?.trim().parse().map_err(|_| before("psmux_direct_registry"))?;
+    let key = read(format!("{base}.key"))?;
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let mut stream = TcpStream::connect_timeout(&addr, left(deadline).map_err(|f| before(f.code))?).map_err(|e| before(match io_code(&e) {
+        "psmux_direct_timeout" => "psmux_direct_timeout",
+        _ => "psmux_direct_connect",
+    }))?;
+    let line = args.iter().map(|arg| quote(arg)).collect::<Vec<_>>().join(" ");
+    stream.set_write_timeout(Some(left(deadline).map_err(|f| before(f.code))?)).map_err(|e| before(io_code(&e)))?;
+    stream.write_all(format!("AUTH {}\n{line}\n", key.trim()).as_bytes()).map_err(|e| after(io_code(&e)))?;
+    stream.shutdown(std::net::Shutdown::Write).map_err(|e| after(io_code(&e)))?;
+    let mut reply = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        stream.set_read_timeout(Some(left(deadline).map_err(|f| after(f.code))?)).map_err(|e| after(io_code(&e)))?;
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => reply.extend_from_slice(&chunk[..n]),
+            Err(e) if e.kind() == ErrorKind::Interrupted => {}
+            Err(e) => return Err(after(io_code(&e))),
+        }
+        if reply.len() > MAX_REPLY { return Err(after("psmux_direct_oversized")); }
+    }
+    match reply.strip_prefix(b"OK\n") {
+        Some(body) => Ok(body.to_vec()),
+        // Chave recusada: o comando não rodou.
+        None if reply.starts_with(b"ERROR") => Err(before("psmux_direct_auth")),
+        None => Err(after("psmux_direct_reply")),
+    }
+}
+
 #[cfg(test)]
 mod tests;

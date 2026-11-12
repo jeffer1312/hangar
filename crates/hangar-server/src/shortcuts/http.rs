@@ -24,7 +24,7 @@ fn unavailable() -> Response {
 }
 fn busy() -> Response { crate::session_write::json_response(StatusCode::CONFLICT, crate::session_write::busy_body()) }
 
-async fn rows(st: &Arc<AppState>) -> Result<Vec<SessionRow>, Response> {
+pub(crate) async fn rows(st: &Arc<AppState>) -> Result<Vec<SessionRow>, Response> {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|_|unavailable())?.as_secs_f64();
     let rows = st.list.discover(Some(now)).await.map_err(|_|unavailable())?;
     let home = st.accounts.env.home.clone();
@@ -34,7 +34,7 @@ async fn rows(st: &Arc<AppState>) -> Result<Vec<SessionRow>, Response> {
         Ok(rows.iter().chain(orq.iter()).cloned().collect())
     }).await.map_err(|_|unavailable())?
 }
-async fn blocked(st: &AppState, rows: Vec<SessionRow>, name: &str) -> Result<bool, Response> {
+pub(crate) async fn blocked(st: &AppState, rows: Vec<SessionRow>, name: &str) -> Result<bool, Response> {
     crate::list::local_transfers::transfer_active(st.list.env(), name, rows).await.map_err(|_| unavailable())
 }
 fn find(rows: &[SessionRow], name: &str) -> Option<SessionRow> { rows.iter().find(|row| row.name == name).cloned() }

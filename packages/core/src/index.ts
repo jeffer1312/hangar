@@ -40,6 +40,7 @@ export * from './agruparSessoes';
 export * from './plan';
 export * from './orqTimeline';
 export * from './activity';
+export * from './pendingEcho';
 export * from './statusline';
 export * from './askquestion';
 export * from './optionKind';

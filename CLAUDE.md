@@ -117,7 +117,9 @@ Pedido o completo: `npm run check` na raiz, `vitest` e `pytest` inteiros. **`scr
 abrir PR e ao subir para a `main` ou para branch com PR aberto**: ele roda, numa árvore fixa da
 máquina e em fila única, só o ligado aos arquivos que o commit muda (`--completo`: o que o CI rodaria),
 no Linux e, com arquivo de Windows no diff, na VM (`git config hangar.verificarWindows <host>`, teto de
-10 min), e grava pela árvore cada passo que passou. No Linux os
+10 min), e grava pela árvore cada passo que passou. De Rust o padrão só confere se o workspace
+compila (`cargo check`) e testa os crates menores: os testes do `hangar-server` são do workflow
+`Server` e do `--completo`. No Linux os
 passos rodam em faixas paralelas e o pytest em vários processos: `git config hangar.verificarProcessos <n>`
 (padrão 4; `1` = tudo em fila). O Node é o do `.node-version`, o mesmo do CI: com o `fnm` instalado, o
 script e o `ci-gates.sh` trocam sozinhos; sem ele, o aviso diz que front e mobile podem falhar por isso. O hook do
@@ -798,6 +800,10 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
     reconciliação das contas Claude é do Rust, `accounts/claude_config.rs`),
     `accounts/codex-invalidate`, `migration/status` e `ping`.
     Transcrição e organização do ditado leem a configuração efetiva diretamente no Rust.
+  - Abrir editor, shell separado e terminal externo: do Rust (`hangar-session-tools`). As três
+    rotas conservam os clientes existentes; sem Rust, não há lançador Python de reserva. O shell
+    continua no multiplexador, com `@cp_hidden`, e usa os fechamentos e renomeações existentes.
+    Evidência em [plataforma.md](docs/decisoes/plataforma.md#editor-shell-e-terminal-externo-no-rust-11112026).
   - Partes ainda no Python: runners.
   - Confirmação de entregas Codex: somente Rust; a reserva Python não confirma mensagens pelo
     texto do rollout, que pode conter histórico importado. O SSE Rust aplica a mesma fronteira

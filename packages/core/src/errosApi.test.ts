@@ -72,7 +72,7 @@ describe('recusas do par externo', () => {
 describe('painel da fila', () => {
   it.each([
     'queue_action_unavailable', 'queue_entry_gone', 'queue_steer_not_delivered',
-    'queue_steer_question_open', 'queue_steer_uncertain', 'queue_text_invalid',
+    'queue_steer_question_open', 'queue_steer_uncertain', 'queue_steer_delivery_unproved', 'queue_text_invalid',
   ])('%s vira frase do app, não o texto do servidor', (code) => {
     const texto = formataErro({ code, params: {}, msg: 'texto-do-servidor' });
     expect(texto).not.toBe('texto-do-servidor');

@@ -174,6 +174,17 @@ fn absent_transcript_one_echo_cannot_confirm_two_equal_inputs_after_compact_reop
 }
 
 #[test]
+fn input_being_written_to_the_terminal_holds_the_automatic_update() {
+    let dir=tempfile::tempdir().unwrap();let path=dir.path().join("state");
+    let mut store=Store::open(&path,dir.path(),State::new("key",1,"session",vec![])).unwrap();
+    store.exec(1,"append",clock(),Action::Append {text:"A".into(),delivered:false,ts:None,pre_transcript:false,entry_id:Some("A".into())}).unwrap();
+    store.exec(1,"prepare",clock(),Action::Prepare {id:"A".into(),payload:json!({"kind":"input","payload":{"text":"A","_terminal_generation":1}}),entry_id:Some("A".into())}).unwrap();
+    assert!(!store.state().delivery_uncertain(),"preparada ainda não escreveu nada");
+    store.exec(1,"dispatch",clock(),Action::BeginDispatch {id:"A".into(),wire_id:"terminal:1:A".into(),staged:false}).unwrap();
+    assert!(store.state().delivery_uncertain(),"a escrita em curso pode terminar sem prova depois da troca");
+}
+
+#[test]
 fn terminal_write_barrier_follows_remaining_uncertain_input_and_lifts_after_last() {
     use hangar_server::runtime::receipt::ReceiptIndex;
     for resolution in ["confirm","late_accepted"] {
@@ -199,6 +210,7 @@ fn terminal_write_barrier_follows_remaining_uncertain_input_and_lifts_after_last
         };
         assert_eq!(store.state().runtime_state["terminal_write_barrier"]["operation_id"],"A");
         assert!(store.state().terminal_write_blocked("sid"));
+        assert!(store.state().delivery_uncertain(),"a atualização automática espera esta entrega");
         if resolution=="confirm" {assert_eq!(confirm(&mut store,&index,"A"),true);}
         else {store.exec(1,"late:A",clock(),Action::Finish {id:"A".into(),status:Status::Accepted,result:json!({"operation_id":"A","disposition":"accepted","payload":{}})}).unwrap();}
         // B continua incerta na mesma conversa: a trava passa para ela.
@@ -207,6 +219,7 @@ fn terminal_write_barrier_follows_remaining_uncertain_input_and_lifts_after_last
         assert_eq!(confirm(&mut store,&index,"B"),true);
         assert!(store.state().runtime_state.get("terminal_write_barrier").is_none(),"{resolution}");
         assert!(!store.state().terminal_write_blocked("sid"));
+        assert!(!store.state().delivery_uncertain(),"{resolution}");
         drop(store);let store=Store::open(&path,dir.path(),State::new("key",1,"session",vec![])).unwrap();
         assert!(!store.state().terminal_write_blocked("sid"));
     }
