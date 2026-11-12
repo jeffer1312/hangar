@@ -186,7 +186,7 @@ pub fn sync_installers(
 ) -> Result<Value, Vec<String>> {
     let scripts = names
         .iter()
-        .map(|name| installer_script(name).ok_or_else(|| vec!["instalador de hook desconhecido".to_owned()]))
+        .map(|name| installer_script(name).ok_or_else(|| vec![format!("instalador de hook desconhecido: {name}")]))
         .collect::<Result<Vec<_>, _>>()?;
     let (changes, errors) = sync_report_selected(service, repo, Some(&scripts));
     if errors.is_empty() {
