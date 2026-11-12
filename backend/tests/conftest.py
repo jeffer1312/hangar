@@ -326,29 +326,15 @@ def _reset_sem_agente_avisadas():
 
 
 @pytest.fixture(autouse=True)
-def _reset_pane_frames():
-    # Quadro compartilhado de estado/prévia é por nome: sem limpar, o dublê de um teste responderia
-    # no seguinte que usa o mesmo nome dentro da idade máxima.
-    from app import state
-    state._frames.clear()
-    state._frames_inflight.clear()
-    yield
-    state._frames.clear()
-    state._frames_inflight.clear()
-
-
-@pytest.fixture(autouse=True)
 def _reset_list_snapshot():
     # Endpoints quentes (history/workflows) resolvem a sessao via snapshot com TTL de
     # registry.list() (api._list_snap). Os testes patcham app.api.registry.list POR teste (context
     # manager) -> sem este reset, o snapshot preenchido num teste vazaria pro seguinte dentro do
     # TTL de 1s (fakes de um teste respondendo no outro).
-    from app import api, sse
+    from app import api
     api._list_snap["snap"] = None
-    sse._list_refresher.latest = None
     yield
     api._list_snap["snap"] = None
-    sse._list_refresher.latest = None
 
 
 @pytest.fixture

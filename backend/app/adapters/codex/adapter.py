@@ -17,7 +17,7 @@ import signal
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import AsyncIterator, Callable, Optional
+from typing import Optional
 
 from app.adapters.codex import sem_terminal
 from app.adapters.codex import sessions as codex_sessions
@@ -29,17 +29,14 @@ from app.adapters.codex.lancador import (APPROVAL, CLIENT_INFO, NO_UPDATE_CHECK,
                                           comando_do_lancador, service_tier_override)
 from app.hook_state import hook_state
 from app.models import session_key
-from app.live_rate import live_rate
 from app.procinfo import _argv, pid_vivo
 from app.adapters.preview_push import PushPreviewSource, fonte_pensamento
 from app.adapters.stream_buffer import StreamBuffer, error_frames
-from app.adapters.codex.rollout import parse_rollout_line
 from app import codex_contas, diag
 from app import tmux
 from app.pqueue import PromptQueue
 from app.send_executor import send_thread
 from app.state import StateEvent
-from app.transcript import ChatEvent, TranscriptTailer
 
 _log = logging.getLogger("hangar.codex.adapter")
 
@@ -856,33 +853,6 @@ class CodexAdapter:
     def delivery_lock(self, name: str) -> asyncio.Lock:
         return self._delivery_locks.setdefault(name, asyncio.Lock())
 
-    def transcript_stream(self, path: str, start_offset: int | None = None) -> AsyncIterator[ChatEvent]:
-        # Mesma mecanica de tail (backfill do tail + watch de append) do Claude, so trocando o
-        # parser pro shape do rollout do Codex (snake_case, envelope {type, payload}).
-        # Garante o dir do rollout (~/.codex/sessions/YYYY/MM/DD/): na 1a sessao Codex do dia o
-        # Codex ainda nao criou a pasta do dia quando o SSE abre o tail -> awatch(parent) em
-        # transcript.follow() levantaria FileNotFoundError e derrubaria o SSE inteiro (chat nao
-        # carrega/atualiza). mkdir idempotente fecha essa janela; o Codex grava ali de todo jeito.
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        return TranscriptTailer(path, parse_line=parse_rollout_line).follow(start_offset)
-
-    async def state_monitor(self, name: str, sid_get: Callable[[], str]) -> AsyncIterator[StateEvent]:
-        while True:
-            client = (self._sessions.get(name) or {}).get("client")
-            source = self._state_stream(name)
-            try:
-                async for event in source:
-                    if client is None:
-                        client = (self._sessions.get(name) or {}).get("client")
-                    yield event
-            finally:
-                await source.aclose()
-            lock = self._locks.get(name)
-            current = self._sessions.get(name)
-            # Trocar o transporte encerra a fonte antiga; os ouvintes continuam na mesma sessão.
-            if not (lock and lock.locked()) and (not current or current["client"] is client):
-                return
-
     def snapshot(self, name: str, thread_id: str) -> StateEvent | None:
         """Estado conhecido da thread viva, compartilhado entre a lista e o chat."""
         sess = self._sessions.get(name)
@@ -1040,61 +1010,6 @@ class CodexAdapter:
             raise ValueError("A pergunta já foi respondida ou cancelada.")
         await client.respond(request_id, response(question, answers))
 
-    async def _state_stream(self, name: str) -> AsyncIterator[StateEvent]:
-        try:
-            client = await self.ensure_running(name)
-        except Exception:
-            # resume falhou (app-server indisponivel) -> dead pro front em vez de derrubar o SSE.
-            _log.exception("codex state_monitor: ensure_running falhou name=%s", name)
-            client = None
-        if client is None:
-            # Sessao Codex desconhecida (sem client vivo e sem sidecar) -> "dead" pro front, igual
-            # ao StateMonitor do Claude quando a sessao tmux some.
-            #
-            # A sessao que ainda NAO abriu a thread (a TUI parada num seletor dela) tambem cai aqui,
-            # e quem a cobre e a LISTA: `list_with_state` le o pane dessa sessao so pra achar menu, e
-            # o chat monta os botoes com isso. Foi tentado resolver aqui, caindo no monitor de pane
-            # enquanto nao ha thread, e nao presta: este monitor nunca acabaria sozinho quando a
-            # thread abrisse (o chat ficaria no fallback ate reconectar), e no teste ele roda pra
-            # sempre, porque `has_session` ali e um mock que responde sempre "sim".
-            problema = self._problemas.get(name)
-            yield StateEvent(session=name, state="dead",
-                             problema=problema[0] if problema else None,
-                             problema_detalhe=problema[1] if problema else None)
-            return
-        sess = self._sessions[name]
-        # A fila do app-server tem UM consumidor por sessao (a bomba); cada SSE e um ouvinte que
-        # recebe copia dos StateEvents. Dois consumidores na mesma fila DIVIDIAM os deltas: desktop
-        # e celular no mesmo chat mostravam metade da frase cada um, sobrescrevendo a previa.
-        fila: asyncio.Queue = asyncio.Queue()
-        ouvintes: list[asyncio.Queue] = sess.setdefault("ouvintes", [])
-        ouvintes.append(fila)
-        bomba = self._start_bomba(name, sess)
-        try:
-            # Retrato do que ja se sabe: quem reabre o chat no meio de um turno nao espera a
-            # proxima notification pra ver estado, contexto e limites.
-            try:
-                await self.read_settings(name)
-                await self.read_rate_limits(name)
-            except Exception:
-                _log.warning("codex: não foi possível atualizar os controles de %s", name)
-            yield self._question_state(name, sess)
-            if bomba is not None and bomba.done():
-                erro = sess.get("bomba_error")
-                if erro is not None:
-                    raise erro
-                return
-            while True:
-                ev = await fila.get()
-                if ev is None:
-                    return
-                if isinstance(ev, BaseException):
-                    raise ev     # a bomba quebrou: sobe ate o pump do SSE, que fecha e reconecta
-                yield ev
-        finally:
-            if fila in ouvintes:
-                ouvintes.remove(fila)
-
     @staticmethod
     def _status_line(sess: dict) -> Optional[str]:
         # model-or-default (mesma regra de current_model): sem escolha explicita, mostra o
@@ -1112,7 +1027,7 @@ class CodexAdapter:
         Roda numa task propria, entao uma excecao aqui nao sobe sozinha: ela e repassada aos
         ouvintes (que a levantam no SSE) e o sentinela final sai SEMPRE — sem isso cada ouvinte
         ficava em `fila.get()` pra sempre, com a tela "conectada" e muda."""
-        ouvintes = sess["ouvintes"]   # a lista DESTA bomba: a sucessora ganha outra (ver _state_stream)
+        ouvintes = sess["ouvintes"]   # a lista DESTA bomba: a sucessora ganha outra
 
         def espalhar(ev) -> None:
             for fila in ouvintes:
@@ -1158,7 +1073,6 @@ class CodexAdapter:
         sess["preview_buffer"] = buffer
         try:
             async for notif in client.notifications():
-                received_at = time.monotonic()
                 if self._sessions.get(name) is not sess:
                     return
                 params = notif.get("params") or {}
@@ -1202,15 +1116,6 @@ class CodexAdapter:
                     method == "item/completed" and (params.get("item") or {}).get("type") == "agentMessage"
                     and bool((params.get("item") or {}).get("text"))
                 ))
-                if method == "turn/started":
-                    sess["first_response_start"] = ((params.get("turn") or {}).get("id"), received_at)
-                elif current_turn and bool(mapped.preview_delta):
-                    started = sess.get("first_response_start")
-                    if started is not None and started[0] == params.get("turnId"):
-                        sess.pop("first_response_start")
-                        live_rate(name).first_response(received_at - started[1], sess["thread_id"])
-                elif method == "turn/completed" and current_turn:
-                    sess.pop("first_response_start", None)
                 if method == "turn/started" or mapped.state == "idle":
                     sess.pop("codex_response_started", None)
                 elif response_started:

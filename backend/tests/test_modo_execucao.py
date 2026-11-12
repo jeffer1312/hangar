@@ -1,14 +1,12 @@
 """Origem com terminal da transferência para o Codex saindo do pane (ordem: o pane morre antes do
 sidecar, o que passa de um lado pro outro, a volta quando o sidecar não grava) e a recusa da troca
 de modo, que é do Rust."""
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.adapters.claude_headless import sessions as S
-from app.adapters.claude_headless.adapter import ClaudeHeadlessAdapter
 from app.config import settings
 
 SID = "11111111-1111-1111-1111-111111111111"
@@ -67,22 +65,6 @@ def _pane(reg, tmp_path, monkeypatch, *, mata=True):
         return mata
     monkeypatch.setattr(R.tmux, "kill_session", kill)
     return mortos
-
-
-def test_monitor_sem_terminal_nao_diz_dead_durante_a_troca(tmp_path, monkeypatch):
-    monkeypatch.setattr(S, "_dir", lambda: tmp_path / "hl")
-    monkeypatch.setattr(S, "_trocando", {})
-    S.marcar_troca("hl")
-    ad = ClaudeHeadlessAdapter()
-
-    async def fluxo():
-        gen = ad.state_monitor("hl", lambda: None)
-        with pytest.raises(asyncio.TimeoutError):
-            await asyncio.wait_for(gen.__anext__(), 1.5)
-        S._trocando.clear()
-        gen = ad.state_monitor("hl", lambda: None)
-        assert (await gen.__anext__()).state == "dead"
-    asyncio.run(fluxo())
 
 
 @pytest.fixture

@@ -17,8 +17,9 @@ Only terminal sessions use the tmux pane for live **state** and input. Backend p
 - `registry.py` — SessionRegistry: joins terminal sessions from tmux with durable Claude/Codex
   headless sidecars and their JSONL/rollout history.
 - `transcript.py` — tails `~/.claude/projects/<cwd>/<uuid>.jsonl` (the chat content).
-- `state.py` — classifies live state from `tmux capture-pane`: `working` / `idle` / `awaiting_input` / `dead`
-  (reserva Python de Claude/Codex; o estado de Pi, omp e Kimi é do ator Rust em `runtime/other_terminal/`).
+- `state.py` — classificador do pane (`classify`, menus, banner de limite) que a lista, a
+  entrada e o registry do Python ainda usam; o estado ao vivo é do Rust (`state/monitor.rs`,
+  `runtime/other_terminal/`).
 - `terminal_input.py` + `tmux.py` — input via `tmux send-keys` (prompt / option select via `(n-1)×Down`+`Enter` / `Esc`).
 - `adapters/codex/` — um app-server WebSocket de loopback por sessão Codex; o backend
   consome eventos JSON-RPC enquanto a TUI `codex --remote` da mesma thread roda no tmux.
@@ -26,9 +27,6 @@ Only terminal sessions use the tmux pane for live **state** and input. Backend p
   como filho do mesmo cano do Claude sem terminal, e o backend abre a thread e responde as
   aprovações por cartão. Decisões e armadilhas:
   [`docs/decisoes/harnesses.md`](docs/decisoes/harnesses.md).
-- `difusor.py` — **uma fonte por chave, não uma por conexão**: monitor de estado e
-  acumulador de estatísticas são compartilhados entre os SSE abertos.
-  Por quê e o que quebrou antes: [`docs/decisoes/plataforma.md`](docs/decisoes/plataforma.md).
 - Voz ao vivo — roda no `hangar-server` (`crates/hangar-server/src/voice/`), **disponível em todo
   servidor com Codex instalado e ao menos uma conta Codex**, sem interruptor; o microfone só abre
   quando a pessoa liga a chamada. Uma chamada por
@@ -39,8 +37,9 @@ Only terminal sessions use the tmux pane for live **state** and input. Backend p
 - `crates/hangar-server/src/runtime/other_terminal/` — atores Pi, omp e Kimi: identidade da vida,
   estado, prévia, perguntas, fila, entrada, fechamento e troca de nome. Os leitores estruturados
   ficam em `hangar-transcript`; hooks e guarda do Kimi/Pi são comandos Rust em `provider_hooks/`.
-- `sse.py` — merges the above into the SSE stream. `api.py` — FastAPI routes. `auth.py` — bearer token / `cp_token` cookie.
-- Also: `pqueue.py` (durable input queue), `preview.py` (live in-flight block), `askquestion.py`
+- O SSE do chat (`/events`) é do hub do Rust (`crates/hangar-server/src/side.rs`, uma fonte por
+  chave, não uma por conexão). `api.py` — FastAPI routes. `auth.py` — bearer token / `cp_token` cookie.
+- Also: `pqueue.py` (durable input queue), `askquestion.py`
   (native AskUserQuestion stepper), `uploads.py`,
   `model_picker.py`, `config.py`, `hook_installer.py`.
 - `crates/hangar-server/src/commands/` — catálogo de comandos do Claude, sonda compartilhada e
@@ -792,8 +791,8 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   e a linha. Conferir antes de afirmar que algo "é do Rust" ou "ainda é do Python".
   - Chat dos cinco provedores do dono: nada. `/history`, `/events`, mensagens, estado, prévia, fila, faixa
     `stats` (`stats.rs`), faixa e avisos de mod (`mods`) e pedido de navegador (`nav_requests.rs`)
-    são do hub do Rust, sem conexão ao Python. O `sse.merged_events` só serve o `/events` do próprio
-    Python no modo `python` de Claude/Codex; o `stats.py` serve esse `/events`. O consumo da orquestração é calculado no Rust.
+    são do hub do Rust, sem conexão ao Python. O Python não tem `/events`, `/cost` nem `/nav`: no
+    modo `python` respondem 404. O consumo da orquestração é calculado no Rust.
   - Lista do dono: montada pelo Rust; Pi/omp/Kimi publicam o estado pelos atores em processo,
     e a última resposta vem dos leitores nativos. Não existe `/internal/list/facts`.
   - Outras perguntas do Rust ao Python (`/internal/*`): `accounts/prepare` (só contas Codex; a
@@ -847,7 +846,8 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   custo de sessão Codex, a busca (`/api/search`, com o índice das conversas), o Perguntar
   (`/api/ask-history`) e o Arquivo (`/api/archive*`) com o token do dono, e o terminal real do dono (só pelo
   `?token=`, sem conferir Origin). Custos e uso têm índice próprio
-  (`custos-rust.sqlite3`) no cache local; a faixa `stats` do chat também é do Rust. Contas Claude/Codex e
+  (`custos-rust.sqlite3`) no cache local; a faixa `stats` do chat também é do Rust. `/events`,
+  `/api/costs`, `/api/cotacao` e o custo de sessão não têm rota no Python (404 no modo `python`). Contas Claude/Codex e
   cotas são só do Rust: no modo `python` respondem `accounts_need_rust_server`, sem reserva
   Python. Anexos, o `/transcribe` da sessão, a saída ao vivo de ferramenta (`bash-output`,
   `tool-progress`) e a imagem colada no terminal são só do Rust, com a sessão tirada da lista dele:
@@ -1006,33 +1006,29 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   endereço; o segredo vem do Supervisor em memória após conferir o protocolo. Uma captura canônica
   por rodada, sem grade auxiliar: com o Rust de pé, quem captura o pane de Claude com terminal para o
   estado ao vivo é o `Monitor` (abaixo; modo de permissão, entrega e captura avulsa do push também
-  são do Rust), e a ponte Python do observador (`terminal_observer` →
-  `/__hangar_server/terminal`) ficou sem consumidor, porque o `StateMonitor`/`PreviewBroker` de
-  Claude só roda no modo `python`, com a ponte desligada. Pi, omp e Kimi compartilham a captura
+  são do Rust); o Python não observa pane para estado nem prévia. Pi, omp e Kimi compartilham a captura
   e o estado temporal no ator Rust; Codex conserva estado e prévia nativos. `/clear` ou troca do filho
   descartam leituras antigas; sidecar Claude vazio continua sendo uma resposta; erro de captura
   vira `problema` registrado no diário e no log (não chega à tela), nunca leitura Python.
   Evidência em [plataforma.md](docs/decisoes/plataforma.md#observação-terminal-rust-erro-visível-sem-captura-python).
 - **Estado ao vivo de Claude com terminal é do `Monitor` do Rust no modo `rust`/`pending`, em
   qualquer porta.** Um por hub (`side.rs`), nascido com o primeiro assinante: o `/events` do dono
-  ou o canal privado `/__hangar_server/state/{name}/events`, que o Python lê para quem entrou por
-  ele (login de convidado). Ele publica `state`, `preview`, `ask_question` e `suggest` pelo retrato do hub, com o
+  ou o canal privado `/__hangar_server/state/{name}/events`. Ele publica `state`, `preview`, `ask_question` e `suggest` pelo retrato do hub, com o
   `interaction_id` da pergunta ou permissão em aberto, e drena a fila direto no `RuntimeRegistry`
-  (`LiveSources::deliverable`); o Python não sobe `StateMonitor` nem `PreviewBroker` dessas
-  sessões. Captura em processo
+  (`LiveSources::deliverable`); o Python não tem monitor de estado nem de prévia. Captura em processo
   (`-C`; psmux avulso no Windows), fatos do plugin lidos do `plugin::Store` do Rust; leitura que
   não vem é `problema=state_facts_unavailable`, nunca estado inventado, e esse código vai ao diário
   e ao log, não à tela (portão de saída, regra "Aviso na tela só para ação que falhou"). O `Sources` não tem método com corpo
   padrão: fonte que esquece um não compila. A lista lê o último `state` do `Monitor` vivo
-  (`state/published.rs`) e não captura o pane dessa sessão. No modo `python` tudo roda como antes.
+  (`state/published.rs`) e não captura o pane dessa sessão. No modo `python` não há estado ao vivo.
   Codex (`info.headless`), Claude (provider `ClaudeHeadless`) sem terminal e Codex com terminal
   cujo ator é do Rust (`codex_terminal_owned` em `side.rs`) têm no lugar do `Monitor` o feed do runtime
   (`state/runtime_feed.rs`): o ator escreve vista, erro e prévia num canal em processo
   (`RuntimeRegistry::live`), fora do `/runtime/events`, e o feed publica os seis eventos (os quatro
   mais `pensamento`/`ferramenta`) coalescidos em 150 ms; o Python não os produz nem os repassa. No
   Claude a sugestão sai do `plugin::Store`, e a sessão parada mostra o estado
-  estacionado (linha de status, modo de permissão, `dead` sem sidecar nem troca), tudo no Rust. Só
-  o modo `python` volta a produzi-los. Evidência em
+  estacionado (linha de status, modo de permissão, `dead` sem sidecar nem troca), tudo no Rust; o
+  Python não os produz em nenhum modo. Evidência em
   [plataforma.md](docs/decisoes/plataforma.md#estado-do-claude-sem-terminal-no-feed-do-runtime).
 - **A fila durável ao vivo do chat é do hub do Rust no modo `rust`/`pending`, em qualquer porta.**
   Um produtor por hub e por geração (`queue_feed.rs`) lê a projeção da fila e publica

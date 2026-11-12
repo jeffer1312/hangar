@@ -1,11 +1,9 @@
-import asyncio
 import json
-from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException, Request, Response
 
-from app import auth, diag, sse
+from app import auth, diag
 
 
 SECRET = "segredo-que-nao-pode-aparecer@example.invalid"
@@ -61,32 +59,3 @@ async def test_auth_bloqueio_e_recuperacao_sem_repetir_poll(diario, monkeypatch)
     rows = diario()
     assert [r["detalhe"] for r in rows] == ["token_ausente", "bloqueio_temporario", "acesso_restabelecido"]
     assert "192.0.2.15" not in json.dumps(rows)
-
-
-
-
-@pytest.mark.asyncio
-async def test_pump_sse_registra_causa_fechamento_sem_texto(diario, tmp_path, monkeypatch):
-    async def vazio(*args):
-        return
-        yield
-
-    async def falhar(*args):
-        raise ValueError(SECRET)
-        yield
-
-    adapter = SimpleNamespace(transcript_stream=falhar, state_monitor=lambda *args, **kwargs: vazio())
-    monkeypatch.setattr(sse, "get_adapter", lambda _: adapter)
-    monkeypatch.setattr(sse._ESTADOS, "ouvir", lambda *args: vazio())
-    monkeypatch.setattr(sse.PreviewBroker, "get", lambda *args: SimpleNamespace(subscribe=vazio))
-    monkeypatch.setattr(sse.StatsAccumulator, "compartilhado", lambda *args: None)
-    monkeypatch.setattr(sse.PromptQueue, "follow", lambda *args, **kwargs: vazio())
-    with pytest.raises(ValueError, match=SECRET):
-        async with asyncio.timeout(2):
-            async for _ in sse.merged_events("teste", str(tmp_path / "nao-existe.jsonl")):
-                pass
-    rows = diario()
-    assert [r["evento"] for r in rows] == ["sse.abriu", "sse.pump_falhou", "sse.fechou"]
-    assert rows[1]["etapa"] == "transcript" and rows[1]["erro_tipo"] == "ValueError"
-    assert rows[-1]["detalhe"] == "falha_pump" and rows[-1]["nivel"] == "erro"
-    assert SECRET not in json.dumps(rows)

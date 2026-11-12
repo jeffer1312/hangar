@@ -1,5 +1,5 @@
-"""Registro de providers: sse.py/registry.py pedem o Adapter da sessao por aqui em vez de
-instanciar TranscriptTailer/StateMonitor/terminal_input direto."""
+"""Registro de providers: o registry e a api pedem o Adapter da sessão por aqui em vez de
+instanciar terminal_input direto."""
 from app.adapters.claude import ClaudeAdapter
 from app.adapters.claude_headless import sessions as headless_sessions
 from app.adapters.claude_headless.adapter import CHAVE as CLAUDE_HEADLESS, ClaudeHeadlessAdapter

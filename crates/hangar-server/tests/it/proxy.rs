@@ -254,18 +254,27 @@ async fn origin_limited_by_python_gets_owner_requests_proxied() {
         .await
         .unwrap();
     assert_eq!(r.status(), 429);
-    for path in ["history", "events"] {
-        let r = client()
-            .get(format!("http://{srv}/api/sessions/s/{path}"))
-            .header("x-forwarded-for", ip)
-            .bearer_auth(OWNER)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(r.text().await.unwrap(), "from-python");
-    }
+    let r = client()
+        .get(format!("http://{srv}/api/sessions/s/history"))
+        .header("x-forwarded-for", ip)
+        .bearer_auth(OWNER)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.text().await.unwrap(), "from-python");
+    // `/events` não existe mais no Python: a origem bloqueada recebe o 429 do próprio Rust.
+    let r = client()
+        .get(format!("http://{srv}/api/sessions/s/events"))
+        .header("x-forwarded-for", ip)
+        .bearer_auth(OWNER)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 429);
+    assert_eq!(r.headers()["retry-after"], "30");
+    assert_eq!(r.json::<serde_json::Value>().await.unwrap()["detail"]["code"], "erro_muitas_tentativas");
     assert_eq!(fake.hits_to("/api/sessions/s/history"), 1);
-    assert_eq!(fake.hits_to("/api/sessions/s/events"), 1);
+    assert_eq!(fake.hits_to("/api/sessions/s/events"), 0);
     assert_eq!(fake.info_calls(), 0, "o 429 do Python desliga o atalho dessa origem");
 }
 

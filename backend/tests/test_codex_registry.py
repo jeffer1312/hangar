@@ -358,7 +358,6 @@ def test_argumento_citando_lancador_nao_e_agente(argv):
 
 async def test_preparacao_codex_publica_etapa_atual_sem_cache_anterior(tmp_path, monkeypatch):
     from pathlib import Path
-    from app.sse import _list_sig
 
     reg = SessionRegistry(projects_dir=tmp_path)
     monkeypatch.setattr(reg, "_status_cache", {"cx": (registry.time.monotonic(), "modelo antigo")})
@@ -370,7 +369,6 @@ async def test_preparacao_codex_publica_etapa_atual_sem_cache_anterior(tmp_path,
         (Path(__file__).parent / "fixtures" / "pane_codex_hooks.txt").read_text(),
     ])
     monkeypatch.setattr(registry.tmux, "capture_pane", lambda *args: next(quadros))
-    assinaturas = []
     for estado, etapa in [("working", "Verificando plugins"), ("working", "Instalando plugin"),
                           ("awaiting_input", None)]:
         info = registry.SessionInfo(name="cx", cwd=None, jsonl=None, tracked=False, provider="codex")
@@ -386,11 +384,6 @@ async def test_preparacao_codex_publica_etapa_atual_sem_cache_anterior(tmp_path,
         assert out[0].startup_steps == expected
         assert out[0].status_line is None
         assert "cx" not in reg._jsonl_cache
-        assinaturas.append(_list_sig(out))
-    assert assinaturas[0] != assinaturas[1]
-    same_label = registry.SessionInfo(name="cx", provider="codex", tracked=False,
-                                      startup_steps=["etapa anterior"])
-    assert _list_sig([same_label]) != _list_sig([same_label.model_copy(update={"startup_steps": []})])
     assert out[0].options == ["Review hooks", "Trust all and continue",
                               "Continue without trusting (hooks won't run)"]
 
@@ -406,15 +399,6 @@ async def test_codex_abertura_fatal_nao_fica_trabalhando(tmp_path, monkeypatch, 
     assert out[0].state == ("awaiting_input" if failed else "working")
     assert out[0].problema == ("codex_abertura_falhou" if failed else None)
     assert out[0].label == message
-
-
-def test_git_codex_atualiza_lista_mesmo_sem_novo_turno():
-    from app.sse import _list_sig
-
-    info = registry.SessionInfo(name="cx", provider="codex", branch="main", git_dirty=0)
-    original = _list_sig([info])
-    assert _list_sig([info.model_copy(update={"branch": "fix"})]) != original
-    assert _list_sig([info.model_copy(update={"git_dirty": 1})]) != original
 
 
 def _config_codex(tmp_path, conteudo):
@@ -549,25 +533,6 @@ async def test_ensure_running_double_check_skips_spawn_if_attached_meanwhile(tmp
     assert client is fake_first
 
 
-# --- Dead-detection: state_monitor emite "dead" quando o app-server morre --------------------
-
-async def test_state_monitor_emits_dead_on_client_close():
-    from app.state import StateEvent
-
-    class _DyingClient:
-        closed = False
-
-        async def notifications(self):
-            yield {"method": "turn/started", "params": {}}
-            self.closed = True  # app-server morreu (EOF) apos essa notification
-            return
-
-    adapter = CodexAdapter()
-    adapter.attach("sess", _DyingClient(), "t")
-    events = [ev async for ev in adapter.state_monitor("sess", lambda: "sess")]
-    assert events[-1] == StateEvent(session="sess", state="dead")
-
-
 @pytest.mark.parametrize("headless", [False, True])
 def test_sidecar_save_keeps_transfer_budget_and_key_on_same_thread(tmp_path, headless):
     codex_sessions.save("s", "t", "/tmp/rollout", "/tmp/project", key="original", headless=headless,
@@ -601,16 +566,6 @@ def test_service_tier_old_thread_cannot_update_new_sidecar():
     assert codex_sessions.load("s").get("service_tier") is None
     assert codex_sessions.update_service_tier("s", "new", "default")
     assert codex_sessions.load("s")["service_tier"] == "default"
-
-
-def test_list_signature_changes_when_fast_changes():
-    from app.models import SessionInfo, StateEvent
-    from app.sse import _list_sig
-    info = SessionInfo(name="s", provider="codex", codex_service_tier="default")
-    before = _list_sig([info])
-    info.codex_service_tier = "priority"
-    assert _list_sig([info]) != before
-    assert StateEvent(session="s", state="idle", codex_service_tier="priority").model_dump()["codex_service_tier"] == "priority"
 
 
 @pytest.mark.parametrize("mutation", ["save", "update", "switch_thread"])

@@ -5,7 +5,7 @@ use crate::costs::index::IndexError;
 use crate::costs::py::LocalTs;
 use crate::costs::{CacheKey, codex, report_costs, report_uso, session_cost};
 use crate::costs_failure::FailureReason;
-use crate::routes::{AppState, cors, gate, maybe_gzip, pass, route_failed};
+use crate::routes::{AppState, cors, gate, maybe_gzip, pass, refuse_without_python, route_failed};
 use axum::body::Body;
 use axum::extract::{ConnectInfo, Path, Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
@@ -187,8 +187,11 @@ pub async fn costs(
     request: Request,
 ) -> Response {
     let (forward, owner) = match gate(&state, peer, &request).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-    if !owner || request.method() != Method::GET {
+    if request.method() != Method::GET {
         return pass(&state, request, &forward).await;
+    }
+    if !owner {
+        return refuse_without_python(&state, peer, request, None).await;
     }
     let query = form_urlencoded::parse(request.uri().query().unwrap_or_default().as_bytes()).into_owned().collect();
     let fresh = match crate::query::bool_param(&query, "fresco") {
@@ -271,8 +274,11 @@ pub async fn cotacao(
     request: Request,
 ) -> Response {
     let (forward, owner) = match gate(&state, peer, &request).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-    if !owner || request.method() != Method::GET {
+    if request.method() != Method::GET {
         return pass(&state, request, &forward).await;
+    }
+    if !owner {
+        return refuse_without_python(&state, peer, request, None).await;
     }
     let fx = state.fx.clone();
     let result = blocking(move || {
@@ -300,8 +306,11 @@ pub async fn session_cost(
     request: Request,
 ) -> Response {
     let (forward, who) = match crate::routes::who(&state, peer, &request).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
-    if request.method() != Method::GET || !who.is_some_and(|c| c.can(&name, request.method())) {
+    if request.method() != Method::GET {
         return pass(&state, request, &forward).await;
+    }
+    if !who.as_ref().is_some_and(|c| c.can(&name, request.method())) {
+        return refuse_without_python(&state, peer, request, who.as_ref()).await;
     }
     let result = match state.info(&name).await {
         Err(_) => Err(FailureReason::InfoUnavailable),

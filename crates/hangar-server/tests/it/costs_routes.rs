@@ -643,14 +643,21 @@ async fn unknown_period_is_applied_as_all() {
 }
 
 #[tokio::test]
-async fn missing_or_guest_token_goes_to_python_without_starting_scopes() {
+async fn missing_or_guest_token_is_refused_by_rust_without_starting_scopes() {
     let h = Harness::new(true, false).await;
-    let response = hangar_server::http_client().build().unwrap().get(format!("http://{}/api/costs", h.address)).send().await.unwrap();
-    assert_eq!(response.status(), 401);
-    assert!(h.forwarded("GET", "/api/costs"));
+    for path in ["/api/costs", "/api/cotacao"] {
+        for token in [None, Some("convidado")] {
+            let mut request = hangar_server::http_client().build().unwrap().get(format!("http://{}{path}", h.address));
+            if let Some(token) = token { request = request.bearer_auth(token); }
+            let response = request.send().await.unwrap();
+            assert_eq!(response.status(), 401, "{path} {token:?}");
+            let body: Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
+            assert_eq!(body["detail"]["code"], "erro_nao_autorizado", "{path} {token:?}");
+        }
+        // O Python não tem mais a rota: a recusa não pode depender dele.
+        assert!(!h.forwarded("GET", path));
+    }
     assert_eq!(h.upstream.scope_reads.load(Ordering::SeqCst), 0);
-    let response = hangar_server::http_client().build().unwrap().get(format!("http://{}/api/costs", h.address)).bearer_auth("convidado").send().await.unwrap();
-    assert_eq!(response.status(), 401);
 }
 
 #[tokio::test]
@@ -1001,8 +1008,10 @@ async fn session_cost_owner_gate_methods_and_query_token_preserve_contract() {
         if let Some(token) = token { request = request.bearer_auth(token); }
         let response = request.send().await.unwrap();
         assert_eq!(response.status(), 401);
-        assert_eq!(response.bytes().await.unwrap().len(), 0);
+        let body: Value = serde_json::from_slice(&response.bytes().await.unwrap()).unwrap();
+        assert_eq!(body["detail"]["code"], "erro_nao_autorizado");
     }
+    assert!(!h.forwarded("GET", "/api/sessions/session/cost"));
     assert!(!h.forwarded("GET", "/internal/sessions/session/info"));
     for method in [reqwest::Method::POST, reqwest::Method::HEAD, reqwest::Method::OPTIONS] {
         let response = h.request(method.clone(), "/api/sessions/session/cost").send().await.unwrap();
