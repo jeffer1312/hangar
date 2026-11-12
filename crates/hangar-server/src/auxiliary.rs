@@ -252,7 +252,15 @@ async fn reply(state: Arc<AppState>, peer: SocketAddr, request: Request) -> Resp
                     json!({"id":id,"cookie_definido":defined}),
                 )
             }
-            _ => crate::http_cors::internal_error(),
+            Ok(Err(error)) => {
+                tracing::warn!(code = "opencode_cookie_write_failed", kind = ?error.kind(), "cookie do OpenCode não foi gravado");
+                state.diag.report("rust.opencode_cookie", "", "cookie_write_failed", "cookie do OpenCode não foi gravado");
+                crate::http_cors::internal_error()
+            }
+            Err(_) => {
+                state.diag.report("rust.opencode_cookie", "", "cookie_write_interrupted", "gravação do cookie do OpenCode interrompida");
+                crate::http_cors::internal_error()
+            }
         }
     })
     .await

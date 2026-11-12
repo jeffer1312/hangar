@@ -83,7 +83,7 @@ pub async fn status(commands: &dyn Commands) -> Response {
         Err(()) => return hangar_core::http_cors::internal_error(),
     };
     for (key, config) in web {
-        let Some(host) = key.strip_suffix(":10000") else {
+        let Some(host) = key.strip_suffix(&format!(":{SLOT}")) else {
             continue;
         };
         let Some(config) = config.as_object() else {
@@ -111,7 +111,8 @@ pub async fn status(commands: &dyn Commands) -> Response {
     inactive()
 }
 pub async fn stop(commands: &dyn Commands) -> Response {
-    match call(commands, &["serve", "--https=10000", "off"]).await {
+    let slot = format!("--https={SLOT}");
+    match call(commands, &["serve", &slot, "off"]).await {
         Ok(output)
             if output.success
                 || (output.stdout.clone() + &output.stderr).contains("does not exist") =>

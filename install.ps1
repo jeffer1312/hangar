@@ -1731,8 +1731,8 @@ $portaBack = Porta-Do-Env 'CP_PORT' 8765
 # Le $portaBack/$envFile do escopo do script e grava $script:cpPublicUrl - mesmo contrato de antes.
 function Get-Proxy443 {
     # O proxy que a raiz do :443 aponta, ou $null. FILTRA por :443 de propósito: o `Web` do serve
-    # status e um mapa "host:porta" -> Handlers, e esta maquina pode ter OUTRO slot publicado — o
-    # A prévia de projeto usa o 10000 (crates/hangar-port-preview). Varrer todos e guardar o último
+    # status e um mapa "host:porta" -> Handlers, e esta maquina pode ter OUTRO slot publicado — a
+    # prévia de projeto usa o 10000 (crates/hangar-port-preview). Varrer todos e guardar o último
     # `/` faria o proxy do 10000 passar por "ja publica o backend", e o 443 nunca ser configurado.
     # O crate da prévia também filtra o slot; os dois precisam preservar os outros serviços.
     try {
