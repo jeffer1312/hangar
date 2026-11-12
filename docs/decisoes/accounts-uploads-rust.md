@@ -53,13 +53,19 @@ testes que provavam um caminho que quase nunca roda. A lista de credenciais
 (`GET /api/credenciais`) passou ao Rust em 13/10 e segue a mesma regra: no modo `python`
 responde 503 `accounts_need_rust_server`.
 
-Continua no Python, por ser o que o Rust consome ou o que ele não atende:
+Na migração inicial, ficaram no Python os caminhos que o Rust consumia ou ainda não atendia:
 
 - as rotas `/internal` de contas: fatos de uso, preparo das contas Codex e
   invalidação do catálogo de modelos do Codex;
 - os leitores de cota Codex que a transferência de conversa usa;
-- as escritas de credenciais: apelido, cookie do OpenCode, sincronização nos agentes e
+- as escritas de credenciais: apelido, sincronização nos agentes e
   remoção de provedor Kimi.
+
+Desde 11/11/2026, `PUT /api/credenciais/cookie` grava e remove o cookie pelo crate
+`hangar-opencode-cookie` e invalida somente a cota desse ID dentro do servidor. O arquivo
+compartilhado continua privado desde sua criação, as escritas são serializadas e a falha de
+persistência do cache de cotas não transforma um cookie salvo em falha. Os módulos Python e
+seu roteador foram retirados, sem ponte ou reserva.
 
 Desde 13/10/2026 a lista `GET /api/credenciais` e as cotas de Kimi, CommandCode e OpenCode
 são do Rust, sem pergunta ao Python (ver "Migrar é migrar o caminho inteiro" em

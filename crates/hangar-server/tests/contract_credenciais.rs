@@ -207,11 +207,12 @@ async fn credentials_answer_each_case() {
 }
 
 #[test]
-fn only_the_exact_get_is_rust_owned() {
+fn credentials_list_and_cookie_are_rust_owned() {
     use axum::http::Method;
     use hangar_server::migration_status::rust_route;
     assert!(rust_route(&Method::GET, "/api/credenciais"));
-    for (method, path) in [(Method::PUT, "/api/credenciais/apelido"), (Method::PUT, "/api/credenciais/cookie"),
+    assert!(rust_route(&Method::PUT, "/api/credenciais/cookie"));
+    for (method, path) in [(Method::PUT, "/api/credenciais/apelido"),
         (Method::POST, "/api/credenciais/sincronizar"), (Method::DELETE, "/api/credenciais/kimi/x"),
         (Method::POST, "/api/credenciais")] {
         assert!(!rust_route(&method, path), "{method} {path} deveria seguir ao Python");

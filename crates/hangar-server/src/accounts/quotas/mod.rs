@@ -90,11 +90,7 @@ pub async fn private(
         return StatusCode::BAD_REQUEST.into_response();
     };
     if let Some(id) = body.invalidate {
-        let mut cache = state.accounts.quotas.cache.lock().await;
-        let cache =
-            cache.get_or_insert_with(|| cache::QuotaCache::load(&state.accounts.quota_path()));
-        cache.remove(&id);
-        return match cache.save(&state.accounts.quota_path()) {
+        return match state.accounts.invalidate_quota(&id).await {
             Ok(()) => Json(json!({"ok":true})).into_response(),
             Err(_) => response(Err(AccountError::io())),
         };
@@ -196,6 +192,14 @@ pub fn suggestion(rows: &[Value]) -> Option<Value> {
 }
 
 impl AccountService {
+    pub async fn invalidate_quota(&self, id: &str) -> std::io::Result<()> {
+        let path = self.quota_path();
+        let mut cache = self.quotas.cache.lock().await;
+        let cache = cache.get_or_insert_with(|| cache::QuotaCache::load(&path));
+        cache.remove(id);
+        cache.save(&path)
+    }
+
     pub fn quota_path(&self) -> PathBuf {
         if cfg!(windows) {
             self.env

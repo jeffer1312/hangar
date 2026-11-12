@@ -27,6 +27,31 @@ namespace do histórico composto. Registro inválido fica isolado à sua sessão
 registra os inválidos e continua nos registros legíveis. Uma restauração conhecida conserva o
 registro corrompido antes de regravar, e nunca sobrescreve outra identidade.
 
+## Cookie, deploy e prévia Tailscale no Rust (11/11/2026)
+
+O cookie do OpenCode, o webhook de deploy e as rotas de prévia Tailscale passaram ao Rust, nos
+crates `hangar-opencode-cookie`, `hangar-deploy` e `hangar-port-preview`. Os quatro módulos Python
+foram removidos com suas rotas; não há repasse nem reserva no modo Python.
+
+O cookie conserva o arquivo compartilhado e a leitura do nome antigo apenas enquanto o novo
+não existe. A gravação privada e serializada usa o core, e a invalidação da cota do ID é em
+processo. Falha de persistência do cache não desfaz o cookie salvo. A caracterização encontrou
+que valores JSON descartáveis aceitos pelo Python não podem apagar outras credenciais; o leitor
+compartilhado usa o codec compatível antes de filtrar as entradas.
+
+O webhook continua público por HMAC-SHA256 do corpo cru, desligado sem segredo, e retorna HTTP
+200 no aceite, apesar do comentário Python antigo citar 202. O comando da unit continua
+`systemctl --user start --no-block hangar-deploy.service`, com prazo de 10 segundos. A prévia
+relê o Tailscale a cada pedido e só altera o slot 10000; os comandos têm prazo de 20 segundos.
+O servidor implementa o contrato `Commands` do core usando a captura existente, que conserva
+processo e pipes até o encerramento, inclusive no cancelamento e no Windows.
+
+As provas HTTP usam diretórios temporários e um upstream que acusa qualquer chamada: escrita,
+invalidação, validação, autorização, webhook sem bearer e coerção de porta passaram sem Python.
+Os testes dos crates cobrem os efeitos do arquivo, os argumentos dos comandos e as falhas de
+assinatura, DNS, permissão e prazo. As respostas mantêm os formatos publicados; os textos de
+erro antigos sem acento foram ajustados ao português do projeto.
+
 ## Armazenamento das provas de orquestração
 
 A issue #242 relatou centenas de GB de builds e caches dentro do histórico durável das

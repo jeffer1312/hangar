@@ -1,11 +1,6 @@
-"""Escritas da tela de credenciais (app/credenciais.py) + apelido (app/apelidos.py).
-
-A lista (`GET /api/credenciais`) é do Rust: `crates/hangar-server/tests/contract_credenciais.rs`.
-O apelido escreve num `tmp_path` pela pasta compartilhada.
-"""
 import pytest
 
-from app import apelidos, contas, credenciais, codex_contas
+from app import apelidos, contas, codex_contas
 
 
 @pytest.fixture
@@ -49,31 +44,3 @@ def test_arquivo_ilegivel_nao_derruba(casa):
 def test_apelido_tem_teto_de_tamanho(casa):
     apelidos.definir("a", "x" * 200)
     assert len(apelidos.ler()["a"]) == apelidos._MAX
-
-
-# ------------------------------------------------------------------------------------ cookie
-def test_cookie_novo_invalida_a_cota_do_dono_rust(casa, monkeypatch):
-    """Com o Rust de pé a cota em cache é a dele: limpar só o cache Python deixava o número
-    antigo por até 5 min, logo depois de a pessoa colar o cookie para ver o número aparecer."""
-    from app import account_bridge, opencode_cota
-    pedidos = []
-    monkeypatch.setattr(opencode_cota, "definir_config", lambda *a: None)
-    monkeypatch.setattr(opencode_cota, "ler_configs", lambda: {"chave:opencode": {}})
-    monkeypatch.setattr(account_bridge, "request_quotas", lambda **k: pedidos.append(k) or {"ok": True})
-    credenciais.definir_cookie(credenciais.CookieBody(id="chave:opencode", workspace_id="w", auth_cookie="c"))
-    assert pedidos == [{"invalidate": "chave:opencode"}]
-
-
-def test_cookie_gravado_responde_ok_mesmo_sem_a_ponte_de_cotas(casa, monkeypatch):
-    """A invalidação é um extra: com o cookie já gravado, um 503 da ponte faria a pessoa colar de novo."""
-    from fastapi import HTTPException
-    from app import account_bridge, opencode_cota
-    monkeypatch.setattr(opencode_cota, "definir_config", lambda *a: None)
-    monkeypatch.setattr(opencode_cota, "ler_configs", lambda: {"chave:opencode": {}})
-
-    def sem_ponte(**_):
-        raise HTTPException(503, detail={"code": "quota_bridge_unavailable"})
-
-    monkeypatch.setattr(account_bridge, "request_quotas", sem_ponte)
-    resposta = credenciais.definir_cookie(credenciais.CookieBody(id="chave:opencode", workspace_id="w", auth_cookie="c"))
-    assert resposta == {"id": "chave:opencode", "cookie_definido": True}

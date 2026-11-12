@@ -53,6 +53,9 @@ hangar-plugins.workspace = true
 hangar-workflows.workspace = true
 hangar-http-file.workspace = true
 hangar-desktop-theme.workspace = true
+hangar-opencode-cookie.workspace = true
+hangar-deploy.workspace = true
+hangar-port-preview.workspace = true
 hangar-connect.workspace = true
 toml = { version = "=1.1.7", default-features = false, features = ["parse", "std", "serde", "preserve_order"] }
 hangar-workspace = { path = "../hangar-workspace" }

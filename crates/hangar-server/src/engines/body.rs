@@ -14,6 +14,7 @@ pub enum Schema {
     Management,
     Sync,
     Alias,
+    Cookie,
 }
 #[derive(Clone, Copy)]
 struct Field {
@@ -68,6 +69,11 @@ impl Schema {
             Self::Alias => vec![
                 Field::text("id", true, false, 1, Some(512)),
                 Field::text("apelido", false, false, 0, Some(40)),
+            ],
+            Self::Cookie => vec![
+                Field::text("id", true, false, 1, Some(512)),
+                Field::text("workspace_id", false, false, 0, Some(200)),
+                Field::text("auth_cookie", false, false, 0, Some(4096)),
             ],
         }
     }
