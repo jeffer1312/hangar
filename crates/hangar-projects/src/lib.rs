@@ -8,13 +8,21 @@ use std::{collections::BTreeMap, path::PathBuf};
 #[derive(Debug)]
 pub struct Error {
     pub status: u16,
+    pub code: Option<&'static str>,
     pub detail: String,
 }
 impl Error {
     pub fn new(status: u16, detail: impl Into<String>) -> Self {
         Self {
             status,
+            code: None,
             detail: detail.into(),
+        }
+    }
+    pub fn coded(status: u16, code: &'static str, detail: impl Into<String>) -> Self {
+        Self {
+            code: Some(code),
+            ..Self::new(status, detail)
         }
     }
 }

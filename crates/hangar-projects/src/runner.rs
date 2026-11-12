@@ -1,7 +1,17 @@
 use crate::{Error, Service};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, path::Path, time::Duration};
+use std::{
+    collections::BTreeMap,
+    path::Path,
+    sync::LazyLock,
+    time::Duration,
+};
+static MAKE_TARGET: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"(?m)^([a-zA-Z0-9_-]+):").unwrap());
+const MAX_CUSTOM: usize = 500;
+const MAX_LABEL: usize = 200;
+const MAX_COMMAND: usize = 200_000;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunInfo {
     pub command: String,
@@ -49,6 +59,7 @@ impl Service {
         cmd.args(&self.program[1..])
             .args(["-L", "cppkt-run"])
             .args(args)
+            .env_clear()
             .envs(&self.env)
             .kill_on_drop(true);
         match tokio::time::timeout(Duration::from_secs(5), cmd.output()).await {
@@ -70,7 +81,9 @@ impl Service {
             .unwrap_or(json!({}))
     }
     fn preference(&self, cwd: &str) -> Value {
-        let p = self.prefs();
+        Self::entry(&self.prefs(), cwd)
+    }
+    fn entry(p: &Value, cwd: &str) -> Value {
         if let Some(s) = p[cwd].as_str() {
             json!({"remembered":s,"custom":[]})
         } else if p[cwd].is_object() {
@@ -81,7 +94,7 @@ impl Service {
     }
     fn save_pref(&self, cwd: &str, key: &str, value: Value) -> Result<(), Error> {
         let mut p = self.prefs();
-        let mut entry = self.preference(cwd);
+        let mut entry = Self::entry(&p, cwd);
         entry[key] = value;
         p[cwd] = entry;
         if let Some(parent) = self.preferences.parent() {
@@ -122,13 +135,20 @@ impl Service {
     pub fn set_custom_commands(&self, cwd: &str, commands: Value) -> Result<Vec<Runner>, Error> {
         let commands = commands
             .as_array()
-            .ok_or_else(|| Error::new(422, "commands deve ser uma lista"))?;
+            .ok_or_else(|| Error::coded(422, "erro_corpo_invalido", "commands deve ser uma lista"))?;
+        let over = |v: &Value, key: &str, max: usize| v[key].as_str().is_some_and(|s| s.chars().count() > max);
+        if commands.len() > MAX_CUSTOM
+            || commands.iter().any(|c| over(c, "label", MAX_LABEL) || over(c, "command", MAX_COMMAND))
+        {
+            return Err(Error::coded(422, "erro_corpo_invalido", "comandos personalizados acima do limite"));
+        }
         for (i, c) in commands.iter().enumerate() {
             if c["label"].as_str().is_none_or(|s| s.trim().is_empty())
                 || c["command"].as_str().is_none_or(|s| s.trim().is_empty())
             {
-                return Err(Error::new(
+                return Err(Error::coded(
                     400,
+                    "erro_runner_custom",
                     format!(
                         "comando personalizado {}: rotulo e comando sao obrigatorios",
                         i + 1
@@ -353,10 +373,10 @@ impl Service {
                 }
             }
         }
-        if let Ok(text) = std::fs::read_to_string(cwd.join("Makefile")) {
-            let re = regex::Regex::new(r"(?m)^([a-zA-Z0-9_-]+):").unwrap();
+        if let Ok(bytes) = std::fs::read(cwd.join("Makefile")) {
+            let text = String::from_utf8_lossy(&bytes);
             let mut seen = std::collections::HashSet::new();
-            for c in re.captures_iter(&text) {
+            for c in MAKE_TARGET.captures_iter(&text) {
                 if seen.insert(c[1].to_owned()) {
                     add(c[1].into(), format!("make {}", &c[1]), "make");
                 }

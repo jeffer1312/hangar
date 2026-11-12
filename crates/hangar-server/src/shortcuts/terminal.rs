@@ -403,18 +403,12 @@ impl Service {
         crate::list::local_shortcuts::forget_target(target);
         let where_ = format!("={target}:");
         if !text.is_empty() {
-            let placeholder = self.windows && text.starts_with('-');
-            let text = if placeholder { format!("x{text}") }
-                else if !self.windows { text.strip_suffix(';').map_or_else(||text.to_owned(), |s|format!("{s}\\;")) }
-                else { text.to_owned() };
-            let chars: Vec<_> = text.chars().collect();
-            let mut start = 0;
-            while start < chars.len() {
-                let mut end = if self.windows { (start + 512).min(chars.len()) } else { chars.len() };
-                while self.windows && end < chars.len() && chars[end] == '-' && end-start < 700 { end += 1; }
-                if self.run(["send-keys".into(), "-t".into(), where_.clone(), "-l".into(), "--".into(), chars[start..end].iter().collect()]).await.code != Some(0) { return false; }
-                start = end;
-                if start < chars.len() { tokio::time::sleep(Duration::from_millis(300)).await; }
+            let (pieces, placeholder) = crate::terminal_input::literal_pieces(text, self.windows, false);
+            let text = pieces.concat();
+            let count = pieces.len();
+            for (i, part) in pieces.into_iter().enumerate() {
+                if self.run(["send-keys".into(), "-t".into(), where_.clone(), "-l".into(), "--".into(), part]).await.code != Some(0) { return false; }
+                if i + 1 < count { tokio::time::sleep(Duration::from_millis(300)).await; }
             }
             if placeholder {
                 for key in ["Home", "DC"] {

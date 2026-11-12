@@ -76,3 +76,43 @@ async fn failed_spawn_keeps_the_command_to_let_the_person_retry() {
     assert_eq!(error.status, 502);
     assert_eq!(service.remembered(cwd).as_deref(), Some("npm run dev"));
 }
+#[test]
+fn custom_commands_keep_the_old_body_caps_and_error_codes() {
+    let root = tempfile::tempdir().unwrap();
+    let service = service(root.path());
+    let one = json!({"label":"dev","command":"run"});
+    let too_many = json!(vec![one; 501]);
+    assert_eq!(service.set_custom_commands("cwd", too_many).unwrap_err().status, 422);
+    let long_label = json!([{"label":"é".repeat(201),"command":"run"}]);
+    assert_eq!(service.set_custom_commands("cwd", long_label).unwrap_err().status, 422);
+    let long_command = json!([{"label":"dev","command":"x".repeat(200_001)}]);
+    assert_eq!(service.set_custom_commands("cwd", long_command).unwrap_err().status, 422);
+    let empty = service
+        .set_custom_commands("cwd", json!([{"label":"","command":"run"}]))
+        .unwrap_err();
+    assert_eq!(empty.code, Some("erro_runner_custom"));
+    assert!(service
+        .set_custom_commands("cwd", json!([{"label":"é".repeat(200),"command":"run"}]))
+        .is_ok());
+}
+#[test]
+fn makefile_with_invalid_utf8_still_lists_its_targets() {
+    let root = tempfile::tempdir().unwrap();
+    let service = service(root.path());
+    std::fs::write(root.path().join("Makefile"), b"# configura\xe7\xe3o\ndev:\n\tx\n").unwrap();
+    let runners = service.detect_runners(root.path().to_str().unwrap());
+    assert_eq!(runners.iter().map(|r| r.command.as_str()).collect::<Vec<_>>(), ["make dev"]);
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn multiplexer_gets_only_the_given_environment() {
+    let root = tempfile::tempdir().unwrap();
+    let out = root.path().join("env.txt");
+    let mut service = service(root.path());
+    service.program = vec!["/bin/sh".into(), "-c".into(), format!("env > '{}'", out.display())];
+    service.env = BTreeMap::from([("ONLY_THIS".into(), "1".into())]);
+    service.run_pane(root.path().to_str().unwrap()).await;
+    let env = std::fs::read_to_string(&out).unwrap();
+    assert!(env.contains("ONLY_THIS=1"));
+    assert!(!env.lines().any(|l| l.starts_with("HOME=")), "{env}");
+}

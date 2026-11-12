@@ -25,9 +25,13 @@ pub fn matches(path: &str) -> bool {
         })
 }
 fn error(e: hangar_projects::Error) -> Response {
+    let detail = match e.code {
+        Some(code) => json!({"code":code,"params":{},"msg":e.detail}),
+        None => json!(e.detail),
+    };
     hangar_core::http::json_response(
         StatusCode::from_u16(e.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-        json!({"detail":e.detail}),
+        json!({"detail":detail}),
     )
 }
 async fn service(st: &AppState) -> Result<hangar_projects::Service, Response> {
@@ -49,7 +53,12 @@ async fn service(st: &AppState) -> Result<hangar_projects::Service, Response> {
         scope: tokio::task::spawn_blocking(crate::session_open::terminal::systemd_scope)
             .await
             .unwrap_or_default(),
-        env: env.base.clone(),
+        env: env
+            .base
+            .iter()
+            .filter(|(k, _)| !crate::session_open::terminal::SERVER_SECRETS.contains(&k.as_str()))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
         windows: cfg!(windows),
     })
 }
@@ -128,61 +137,61 @@ async fn inner(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Response {
         }
     };
 
+    let Some(name) = session else {
+        return unavailable();
+    };
+    use crate::shortcuts::http::{blocked, rows};
+    let find = |rows: &[hangar_api::session::SessionRow]| rows.iter().find(|r| r.name == name).cloned();
+    let discovered = match rows(&st).await {
+        Ok(r) => r,
+        Err(r) => return r,
+    };
+    let mut row = find(&discovered);
     let ingress = if method != "GET" && method != "HEAD" {
-        if let Some(name) = &session {
-            let rows = match st.list.discover(None).await {
-                Ok(r) => r,
-                Err(_) => return unavailable(),
-            };
-            match crate::list::local_transfers::transfer_active(
-                st.list.env(),
-                name,
-                rows.as_ref().clone(),
-            )
-            .await
-            {
-                Ok(false) => {}
-                Ok(true) => return busy(),
-                Err(_) => return unavailable(),
-            }
-            let Some(runtime) = st.state.runtime.get() else {
-                return unavailable();
-            };
-            let pass = match runtime.ingress().enter(name, st.write_gate_wait).await {
-                Ok(p) => p,
-                Err(_) => return busy(),
-            };
-            let current = match st.list.discover(None).await {
-                Ok(r) => r,
-                Err(_) => return unavailable(),
-            };
-            if !crate::list::local_transfers::same_life(
-                rows.iter().find(|r| &r.name == name),
-                current.iter().find(|r| &r.name == name),
-            ) {
-                return busy();
-            }
-            match crate::list::local_transfers::transfer_active(
-                st.list.env(),
-                name,
-                current.as_ref().clone(),
-            )
-            .await
-            {
-                Ok(false) => {}
-                Ok(true) => return busy(),
-                Err(_) => return unavailable(),
-            }
-            Some(pass)
-        } else {
-            None
+        match blocked(&st, discovered, &name).await {
+            Ok(false) => {}
+            Ok(true) => return busy(),
+            Err(r) => return r,
         }
+        let Some(runtime) = st.state.runtime.get() else {
+            return unavailable();
+        };
+        let pass = match runtime.ingress().enter(&name, st.write_gate_wait).await {
+            Ok(p) => p,
+            Err(_) => return busy(),
+        };
+        let current = match rows(&st).await {
+            Ok(r) => r,
+            Err(r) => return r,
+        };
+        let next = find(&current);
+        if !crate::list::local_transfers::same_life(row.as_ref(), next.as_ref()) {
+            return busy();
+        }
+        match blocked(&st, current, &name).await {
+            Ok(false) => {}
+            Ok(true) => return busy(),
+            Err(r) => return r,
+        }
+        row = next;
+        Some(pass)
     } else {
         None
     };
+    let Some(cwd) = row.and_then(|r| r.cwd).filter(|s| !s.is_empty()) else {
+        return error(hangar_projects::Error::coded(
+            404,
+            "erro_sessao_inexistente",
+            "sessao nao encontrada",
+        ));
+    };
+    let op = path
+        .strip_prefix("/api/sessions/")
+        .and_then(|p| p.split_once('/'))
+        .map_or_else(String::new, |(_, op)| op.to_owned());
     tokio::spawn(async move {
         let _ingress = ingress;
-        match execute(&st, &service, &path, value).await {
+        match execute(service, &op, cwd, value).await {
             Ok(v) => hangar_core::http::json_response(StatusCode::OK, v),
             Err(e) => error(e),
         }
@@ -200,48 +209,49 @@ fn busy() -> Response {
     crate::session_write::json_response(StatusCode::CONFLICT, crate::session_write::busy_body())
 }
 async fn execute(
-    st: &AppState,
-    service: &hangar_projects::Service,
-    path: &str,
+    service: hangar_projects::Service,
+    op: &str,
+    cwd: String,
     value: Value,
 ) -> Result<Value, hangar_projects::Error> {
-    let (name, op) = path
-        .strip_prefix("/api/sessions/")
-        .unwrap()
-        .split_once('/')
-        .unwrap();
-    let rows = st
-        .list
-        .discover(None)
-        .await
-        .map_err(|_| hangar_projects::Error::new(503, "contexto da sessão indisponível"))?;
-    let cwd = rows
-        .iter()
-        .find(|r| r.name == name)
-        .and_then(|r| r.cwd.as_deref())
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| hangar_projects::Error::new(404, "sessao nao encontrada"))?;
+    // Arquivos do projeto podem estar num disco lento: a leitura sai das threads do runtime.
+    let blocking = |f: Box<dyn FnOnce(&hangar_projects::Service, &str) -> Result<Value, hangar_projects::Error> + Send>| {
+        let (service, cwd) = (service.clone(), cwd.clone());
+        async move {
+            tokio::task::spawn_blocking(move || f(&service, &cwd))
+                .await
+                .unwrap_or_else(|_| Err(hangar_projects::Error::new(500, "leitura dos comandos falhou")))
+        }
+    };
     match op {
-        "runners" => Ok(
-            json!({"detected":service.detect_runners(cwd),"custom":service.custom_commands(cwd),"remembered":service.remembered(cwd),"running":service.run_status(cwd).await}),
-        ),
-        "runners/custom" => Ok(json!(
-            service.set_custom_commands(cwd, value["commands"].clone())?
-        )),
+        "runners" => {
+            let mut out = blocking(Box::new(|s, cwd| {
+                Ok(json!({"detected":s.detect_runners(cwd),"custom":s.custom_commands(cwd),"remembered":s.remembered(cwd)}))
+            }))
+            .await?;
+            out["running"] = json!(service.run_status(&cwd).await);
+            Ok(out)
+        }
+        "runners/custom" => {
+            let commands = value["commands"].clone();
+            blocking(Box::new(move |s, cwd| Ok(json!(s.set_custom_commands(cwd, commands)?)))).await
+        }
         "run" => Ok(json!(
             service
                 .start_run(
-                    cwd,
-                    value["command"]
-                        .as_str()
-                        .ok_or_else(|| hangar_projects::Error::new(422, "command é obrigatório"))?
+                    &cwd,
+                    value["command"].as_str().ok_or_else(|| hangar_projects::Error::coded(
+                        422,
+                        "erro_corpo_invalido",
+                        "command é obrigatório"
+                    ))?
                 )
                 .await?
         )),
         "run/stop" => {
-            service.stop_run(cwd).await?;
+            service.stop_run(&cwd).await?;
             Ok(json!({"ok":true}))
         }
-        _ => Ok(json!({"pane":service.run_pane(cwd).await})),
+        _ => Ok(json!({"pane":service.run_pane(&cwd).await})),
     }
 }

@@ -321,6 +321,24 @@ impl ProcessIo {
         })
     }
 }
+/// Os pedaços de um `send-keys -l` e se o primeiro leva o `x` que protege o `-` inicial (psmux).
+/// `whole` = um pedaço só. O tmux lê o ponto e vírgula final como separador mesmo depois de --.
+pub(crate) fn literal_pieces(text: &str, windows: bool, whole: bool) -> (Vec<String>, bool) {
+    if !windows {
+        return (vec![text.strip_suffix(';').map_or_else(|| text.to_string(), |s| format!("{s}\\;"))], false);
+    }
+    let placeholder = text.starts_with('-');
+    let chars: Vec<char> = if placeholder { format!("x{text}") } else { text.into() }.chars().collect();
+    let piece = if whole { chars.len() } else { 512 };
+    let (mut pieces, mut start) = (Vec::new(), 0);
+    while start < chars.len() {
+        let mut end = (start + piece).min(chars.len());
+        while end < chars.len() && chars[end] == '-' && end - start < 700 { end += 1; }
+        pieces.push(chars[start..end].iter().collect());
+        start = end;
+    }
+    (pieces, placeholder)
+}
 #[derive(Clone)]
 pub struct InputLimits {
     pub settle: Duration,
@@ -842,27 +860,20 @@ impl TerminalDriver {
     async fn literal_guarded(&self, text: &str, mut guard: TextGuard<'_>, direct: bool) -> Result<(), IoFailure> {
         if text.is_empty() { return Ok(()); }
         if !self.binding.windows {
-            // O tmux lê o ponto e vírgula final como separador mesmo depois de --.
-            let text = text.strip_suffix(';').map_or_else(|| text.to_string(), |s| format!("{s}\\;"));
-            return self.effect_guarded(vec!["send-keys".into(), "-t".into(), self.binding.pane.clone(), "-l".into(), "--".into(), text], vec![], guard).await;
+            let (pieces, _) = literal_pieces(text, false, true);
+            return self.effect_guarded(vec!["send-keys".into(), "-t".into(), self.binding.pane.clone(), "-l".into(), "--".into(), pieces.concat()], vec![], guard).await;
         }
-        let placeholder = text.starts_with('-');
         // Contrabarra pelo CLI chega a menos; com o caminho direto pronto, ela vai só por ele.
         let direct_only = text.contains('\\') && direct;
-        let text = if placeholder { format!("x{text}") } else { text.into() };
-        let chars: Vec<_> = text.chars().collect();
-        let mut start = 0;
         // Direto não passa pela linha de comando: vai inteiro, de uma vez, como o clipboard que ele substitui.
-        let piece = if direct_only { chars.len() } else { 512 };
-        while start < chars.len() {
-            let mut end = (start + piece).min(chars.len());
-            while end < chars.len() && chars[end] == '-' && end-start < 700 { end += 1; }
-            let part: String = chars[start..end].iter().collect();
+        let (pieces, placeholder) = literal_pieces(text, true, direct_only);
+        let text = pieces.concat();
+        let count = pieces.len();
+        for (i, part) in pieces.into_iter().enumerate() {
             self.effect_via(vec!["send-keys".into(), "-t".into(), self.binding.pane.clone(), "-l".into(), "--".into(), part], vec![], guard, direct_only).await
-                .map_err(|mut e| { e.may_have_written |= start > 0; e })?;
-            start = end;
+                .map_err(|mut e| { e.may_have_written |= i > 0; e })?;
             if let Some(guard) = guard.as_mut() { guard.allow_owned = true; }
-            if start < chars.len() { tokio::time::sleep(self.limits.slash_settle).await; }
+            if i + 1 < count { tokio::time::sleep(self.limits.slash_settle).await; }
         }
         if placeholder {
             self.key_guarded("Home", guard).await.map_err(|mut e| { e.may_have_written = true; e })?;
