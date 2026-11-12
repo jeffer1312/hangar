@@ -94,8 +94,22 @@ pub fn next(since: Option<Time>, outcome: &Tick, now: Time) -> (Option<Time>, Du
     }
 }
 
-/// Um tique. `now` vem de fora (relógio do teste); `since` é desde quando a atualização está adiada.
-pub async fn tick(machine: &impl Machine, now: Time, since: Option<Time>) -> Tick {
+/// Desde quando a entrega incerta segura a atualização: conta da primeira vez que ela apareceu.
+pub fn next_uncertain(uncertain: Option<Time>, outcome: &Tick, now: Time) -> Option<Time> {
+    match outcome {
+        Tick::Deferred(why) if why == Busy::Uncertain.why() => Some(uncertain.unwrap_or(now)),
+        _ => None,
+    }
+}
+
+/// Um tique com o adiamento e a entrega incerta contados juntos (os testes de antes do teto próprio).
+pub async fn tick(machine: &impl Machine, now: Time, since: Option<Time>) -> Tick { tick_held(machine, now, since, since).await }
+
+/// Um tique. `now` vem de fora (relógio do teste); `since` é desde quando a atualização está adiada, e
+/// `uncertain` desde quando uma entrega incerta a segura.
+pub async fn tick_held(machine: &impl Machine, now: Time, since: Option<Time>, uncertain: Option<Time>) -> Tick {
+    // Segura enquanto o motivo não completou 24 h; a entrega incerta conta da primeira vez que apareceu.
+    let holds = |busy: Busy| (if busy == Busy::Uncertain { uncertain } else { since }).is_none_or(|start| now - start < DEFER_CEILING);
     let skip = |why: &str| Tick::Skipped(why.to_owned());
     let Some(channel) = machine.package_channel() else { return skip("fora do modo pacote") };
     // Como no motor `git`: o automático segue só a main; canal de teste atualiza pelo botão.
@@ -111,7 +125,7 @@ pub async fn tick(machine: &impl Machine, now: Time, since: Option<Time>) -> Tic
     }
     // Já adiada, a máquina ainda ocupada responde sem ir ao índice a cada `RECHECK`.
     let early = if since.is_some() { Some(machine.busy().await) } else { None };
-    if let Some(Ok(Some(busy))) = &early && since.is_none_or(|since| now - since < DEFER_CEILING) {
+    if let Some(Ok(Some(busy))) = &early && holds(*busy) {
         return Tick::Deferred(busy.why().to_owned());
     }
     let version = match machine.newer(&channel).await {
@@ -130,7 +144,7 @@ pub async fn tick(machine: &impl Machine, now: Time, since: Option<Time>) -> Tic
     let busy = machine.busy().await;
     match busy {
         Ok(None) => {}
-        Ok(Some(busy)) if since.is_none_or(|since| now - since < DEFER_CEILING) => {
+        Ok(Some(busy)) if holds(busy) => {
             return Tick::Deferred(busy.why().to_owned());
         }
         Ok(Some(busy)) => tracing::warn!("update: adiada há 24 h ({}); atualiza assim mesmo", busy.why()),
@@ -208,13 +222,14 @@ impl Machine for Live {
 /// O laço: o primeiro tique depois de um intervalo (nunca na subida). Só o `main` liga.
 pub fn spawn(machine: Live) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let (mut since, mut wait) = (None, INTERVAL);
+        let (mut since, mut uncertain, mut wait) = (None, None, INTERVAL);
         loop {
             tokio::time::sleep(wait).await;
             let now = chrono::Local::now().fixed_offset();
-            let outcome = tick(&machine, now, since).await;
+            let outcome = tick_held(&machine, now, since, uncertain).await;
             let first = since.is_none();
             (since, wait) = next(since, &outcome, now);
+            uncertain = next_uncertain(uncertain, &outcome, now);
             match outcome {
                 Tick::Launched { version } => tracing::info!(version, "update: atualização automática lançada"),
                 Tick::Skipped(why) if why == "fora do modo pacote" || why == "em dia" => tracing::debug!("update: automático: {why}"),
@@ -360,12 +375,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn update_periodic_uncertain_counts_its_own_24h_not_the_older_deferral() {
+        // Adiada há 24 h por sessão trabalhando; a entrega que acabou de ficar incerta não solta o reinício.
+        let old = now() - chrono::TimeDelta::hours(24);
+        let fake = Fake { busy: Some(Busy::Uncertain), ..Fake::default() };
+        assert_eq!(tick_held(&fake, now(), Some(old), None).await, Tick::Deferred(Busy::Uncertain.why().to_owned()));
+        assert_eq!(tick_held(&fake, now(), Some(old), Some(now() - chrono::TimeDelta::hours(23))).await, Tick::Deferred(Busy::Uncertain.why().to_owned()));
+        assert_eq!(tick_held(&fake, now(), Some(old), Some(old)).await, Tick::Launched { version: "0.1.0.9".into() });
+        let held = Tick::Deferred(Busy::Uncertain.why().to_owned());
+        assert_eq!(next_uncertain(None, &held, now()), Some(now()), "começa na primeira vez");
+        assert_eq!(next_uncertain(Some(old), &held, now()), Some(old), "segue do começo");
+        assert_eq!(next_uncertain(Some(old), &Tick::Deferred(Busy::Working.why().to_owned()), now()), None, "resolvida, acaba");
+    }
+
+    #[tokio::test]
     async fn update_periodic_past_the_ceiling_rereads_busy_after_the_index() {
         // Livre antes do índice, incerta depois dele: a leitura nova segura a atualização.
         let first = now() - chrono::TimeDelta::hours(23);
         let fake = Fake { uncertain_after_index: true, ..Fake::default() };
         assert_eq!(tick(&fake, now(), Some(first)).await, Tick::Deferred(Busy::Uncertain.why().to_owned()));
         assert_eq!(fake.launched.load(Ordering::SeqCst), 0);
+        // Teto vencido por sessão trabalhando: a incerta nova depois do índice ainda segura.
+        let late = Fake { busy: Some(Busy::Working), uncertain_after_index: true, ..Fake::default() };
+        let old = Some(now() - chrono::TimeDelta::hours(25));
+        assert_eq!(tick_held(&late, now(), old, None).await, Tick::Deferred(Busy::Uncertain.why().to_owned()));
+        assert_eq!(late.launched.load(Ordering::SeqCst), 0);
     }
 
     #[test]

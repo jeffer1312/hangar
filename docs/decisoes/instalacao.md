@@ -310,9 +310,10 @@ desenvolvedor e para a máquina ainda não migrada. Evidência em
   em hora, sem `git`.
 - **A atualização automática espera a máquina parar** (`update/periodic.rs`, `busy_now`): sessão
   trabalhando, fila com mensagem esperando ou entrega sem prova adiam o tique, que reconfere a cada
-  5 min. Depois de 24 h adiada nada mais segura, com aviso no log. A entrega sem prova também solta:
-  a desistência de 180 s normalmente a resolve antes, mas ela não roda com o campo ocupado (placeholder
-  de colagem, rascunho), e sem teto a máquina nunca atualizava. O motor `git` usa a mesma regra.
+  5 min. Depois de 24 h adiada nada mais segura, com aviso no log. A entrega sem prova também solta,
+  mas conta as 24 h dela, da primeira vez que apareceu (`uncertain` em `tick_held`), e não do adiamento
+  que começou por outro motivo: a desistência de 180 s normalmente a resolve antes, mas não roda com o
+  campo ocupado (placeholder de colagem, rascunho), e sem teto a máquina nunca atualizava. O motor `git` usa a mesma regra.
   Origem: relatório uedvxrgb (11/11/2026); o teto da entrega sem prova, decisão de 12/11/2026.
 - **Passo de máquina tem de funcionar com a versão anterior**: a volta não o desfaz. Script,
   skill, hook e atalho chegam com o pacote e deixam de ser passo.

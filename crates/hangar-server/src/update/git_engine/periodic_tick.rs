@@ -6,27 +6,31 @@ use crate::update::periodic::Busy;
 type Time=chrono::DateTime<chrono::FixedOffset>;
 pub async fn run(source:&Live) {
     if source.package(){return;}
-    let mut since=None;
+    let mut since=Held::default();
     while source.sleep().await.is_ok(){tick(source,&mut since).await;}
 }
-async fn tick(source:&Live,since:&mut Option<Time>) {
+/// Desde quando a atualização está adiada e desde quando uma entrega incerta a segura.
+#[derive(Clone,Copy,Debug,Default,PartialEq)]
+struct Held { since:Option<Time>, uncertain:Option<Time> }
+async fn tick(source:&Live,since:&mut Held) {
     if let Err(error)=attempt(source,since).await { source.report(Event::Failed(error)); }
 }
-/// O motivo de adiar, com `since` = desde quando a máquina segura a atualização.
-fn hold(busy:Option<Busy>,since:&mut Option<Time>,now:Time)->Option<String> {
-    let Some(busy)=busy else { *since=None; return None };
-    let first=*since.get_or_insert(now);
-    if now-first<crate::update::periodic::DEFER_CEILING { return Some(busy.why().into()); }
+/// O motivo de adiar. A entrega incerta conta as 24 h dela, da primeira vez que apareceu.
+fn hold(busy:Option<Busy>,held:&mut Held,now:Time)->Option<String> {
+    let Some(busy)=busy else { *held=Held::default(); return None };
+    let first=*held.since.get_or_insert(now);
+    let start=if busy==Busy::Uncertain { *held.uncertain.get_or_insert(now) } else { held.uncertain=None; first };
+    if now-start<crate::update::periodic::DEFER_CEILING { return Some(busy.why().into()); }
     tracing::warn!("auto-update: adiada há 24 h ({}); atualiza assim mesmo",busy.why());
-    *since=None;
+    *held=Held::default();
     None
 }
-async fn attempt(source:&Live,since:&mut Option<Time>)->Result<(),String> {
+async fn attempt(source:&Live,since:&mut Held)->Result<(),String> {
     if !source.enabled(){return Ok(());}
     let (code,tail)=source.fetch().await?;
     if code!=0 {source.report(Event::FetchFailed(code,tail));}
     let mut reason=source.reason().await?;
-    if reason.is_none() {reason=hold(source.busy().await?,since,chrono::Local::now().fixed_offset());} else {*since=None;}
+    if reason.is_none() {reason=hold(source.busy().await?,since,chrono::Local::now().fixed_offset());} else {*since=Held::default();}
     match reason {
         None=>{
             source.report(Event::Launch);
@@ -81,21 +85,24 @@ impl Live {
 mod tests {
     use super::*;
     fn now()->Time {chrono::DateTime::parse_from_rfc3339("2026-10-24T12:00:00-03:00").unwrap()}
-    /// Mesma regra do motor de pacote: fila e sessão trabalhando seguram até 24 h; a entrega incerta, sempre.
+    /// Mesma regra do motor de pacote: 24 h para fila e sessão; a entrega incerta conta as dela.
     #[test]
     fn git_engine_deferral_has_the_same_24h_ceiling() {
-        let mut since=None;
-        assert_eq!(hold(Some(Busy::Queue),&mut since,now()).as_deref(),Some(Busy::Queue.why()));
-        assert_eq!(since,Some(now()),"o adiamento conta do primeiro");
+        let mut held=Held::default();
+        assert_eq!(hold(Some(Busy::Queue),&mut held,now()).as_deref(),Some(Busy::Queue.why()));
+        assert_eq!(held.since,Some(now()),"o adiamento conta do primeiro");
         let later=now()+chrono::TimeDelta::hours(23);
-        assert!(hold(Some(Busy::Working),&mut since,later).is_some());
-        assert_eq!(since,Some(now()));
+        assert!(hold(Some(Busy::Working),&mut held,later).is_some());
         let day=now()+chrono::TimeDelta::hours(24);
-        assert_eq!(hold(Some(Busy::Working),&mut since.clone(),day),None,"passou de 24 h: atualiza");
-        assert!(hold(Some(Busy::Uncertain),&mut since,later).is_some(),"incerta há 23 h segura");
-        assert_eq!(hold(Some(Busy::Uncertain),&mut since,day),None,"incerta há 24 h solta");
-        since=Some(now());
-        assert_eq!(hold(None,&mut since,day),None);
-        assert_eq!(since,None,"livre, o adiamento acaba");
+        assert_eq!(hold(Some(Busy::Working),&mut held.clone(),day),None,"passou de 24 h: atualiza");
+        // Adiada há 24 h por outro motivo, a incerta que acaba de aparecer conta as próprias 24 h.
+        assert!(hold(Some(Busy::Uncertain),&mut held,day).is_some(),"incerta nova segura");
+        assert_eq!(held.uncertain,Some(day));
+        assert!(hold(Some(Busy::Uncertain),&mut held,day+chrono::TimeDelta::hours(23)).is_some(),"incerta há 23 h segura");
+        assert_eq!(hold(Some(Busy::Uncertain),&mut held,day+chrono::TimeDelta::hours(24)),None,"incerta há 24 h solta");
+        assert_eq!(held,Held::default());
+        hold(Some(Busy::Queue),&mut held,now());
+        assert_eq!(hold(None,&mut held,day),None);
+        assert_eq!(held,Held::default(),"livre, o adiamento acaba");
     }
 }
