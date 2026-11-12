@@ -48,7 +48,6 @@ from app.config import settings
 from app.pqueue import PromptQueue
 from app.procinfo import _argv, pid_vivo, taskkill_path
 from app.state import StateEvent
-from app.live_rate import live_rate
 
 _log = logging.getLogger("hangar.claude_headless")
 
@@ -223,7 +222,6 @@ class _Sessao:
         self.tokens_fechados = 0      # output_tokens das mensagens já fechadas do turno
         self.tokens_msg: int | None = None   # output_tokens real da mensagem em voo (message_delta)
         self.tokens_msg_chars = 0     # caracteres da mensagem em voo, até o real chegar
-        self.gen_inicio: float | None = None   # message_start da resposta em voo (tok/s)
         self.pensando_desde: float | None = None
         self.pensou_s = 0.0
         self.compactando = False
@@ -1416,12 +1414,8 @@ class ClaudeHeadlessAdapter:
             real = (e.get("usage") or {}).get("output_tokens")
             if isinstance(real, int):
                 sess.tokens_msg = real
-                if sess.gen_inicio is not None:
-                    live_rate(sess.name).close(real, time.monotonic() - sess.gen_inicio, sess.sid)
-                    sess.gen_inicio = None
         elif kind == "message_start":
             sess.fechar_mensagem()
-            sess.gen_inicio = time.monotonic()
             if sess.turno_inicio is None:
                 sess.iniciar_turno()
             if not sess.in_progress:

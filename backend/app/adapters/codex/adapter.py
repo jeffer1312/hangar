@@ -29,7 +29,6 @@ from app.adapters.codex.lancador import (APPROVAL, CLIENT_INFO, NO_UPDATE_CHECK,
                                           comando_do_lancador, service_tier_override)
 from app.hook_state import hook_state
 from app.models import session_key
-from app.live_rate import live_rate
 from app.procinfo import _argv, pid_vivo
 from app.adapters.preview_push import PushPreviewSource, fonte_pensamento
 from app.adapters.stream_buffer import StreamBuffer, error_frames
@@ -1311,7 +1310,6 @@ class CodexAdapter:
         sess["preview_buffer"] = buffer
         try:
             async for notif in client.notifications():
-                received_at = time.monotonic()
                 if self._sessions.get(name) is not sess:
                     return
                 params = notif.get("params") or {}
@@ -1355,15 +1353,6 @@ class CodexAdapter:
                     method == "item/completed" and (params.get("item") or {}).get("type") == "agentMessage"
                     and bool((params.get("item") or {}).get("text"))
                 ))
-                if method == "turn/started":
-                    sess["first_response_start"] = ((params.get("turn") or {}).get("id"), received_at)
-                elif current_turn and bool(mapped.preview_delta):
-                    started = sess.get("first_response_start")
-                    if started is not None and started[0] == params.get("turnId"):
-                        sess.pop("first_response_start")
-                        live_rate(name).first_response(received_at - started[1], sess["thread_id"])
-                elif method == "turn/completed" and current_turn:
-                    sess.pop("first_response_start", None)
                 if method == "turn/started" or mapped.state == "idle":
                     sess.pop("codex_response_started", None)
                 elif response_started:
