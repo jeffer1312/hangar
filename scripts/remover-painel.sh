@@ -15,12 +15,19 @@ if [ "$(uname -s)" != Linux ]; then
   marca "nao e Linux: nada removido"; exit 0
 fi
 
+# Sem a marca o passo fica pendente e roda de novo na próxima atualização.
+falhou=0
 SD="$HOME/.config/systemd/user"
 for u in hangar-panel.service hangar-panel-tray.service cp-panel.service cp-panel-tray.service; do
   [ -f "$SD/$u" ] || continue
-  systemctl --user disable --now "$u" >/dev/null 2>&1 || true
-  rm -f "$SD/$u"
-  echo "painel: unit $u removida"
+  # A unit só sai depois do disable: apagada antes, a próxima rodada não a acharia para desligar.
+  if systemctl --user disable --now "$u" >/dev/null 2>&1; then
+    rm -f "$SD/$u"
+    echo "painel: unit $u removida"
+  else
+    falhou=1
+    echo "painel: não consegui desligar $u"
+  fi
 done
 command -v systemctl >/dev/null && systemctl --user daemon-reload >/dev/null 2>&1 || true
 # Âncora no início: sem ela o padrão casa qualquer shell cuja linha de comando cite o texto.
@@ -47,9 +54,12 @@ pattern = re.compile(r"\n*" + re.escape(start) + r".*?" + re.escape(end) + r"\n*
 open(path, "w", encoding="utf-8").write(pattern.sub("\n", text))
 PYEOF
 }
-tira_bloco "$HOME/.config/hypr/custom/keybinds.lua" panel-bind
-tira_bloco "$HOME/.config/hypr/custom/execs.lua" panel-exec
+tira_bloco "$HOME/.config/hypr/custom/keybinds.lua" panel-bind || falhou=1
+tira_bloco "$HOME/.config/hypr/custom/execs.lua" panel-exec || falhou=1
 
+if [ "$falhou" = 1 ]; then
+  echo "painel: remoção incompleta, tenta de novo na próxima atualização"; exit 0
+fi
 marca "painel removido"
 echo "painel: concluído"
 exit 0
