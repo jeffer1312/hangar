@@ -4149,6 +4149,28 @@ enquanto o navegador viver, inclusive depois de a página navegar (a marca do n�
 **Limite:** o `eval` continua sendo um oráculo para um agente decidido (`value.length`,
 `value.split('')`, trocar o `type` e tirar `shot`); a máscara barra a leitura comum, não essa.
 
+**Arquivo do `vault_file`: o guarda barra a leitura (12/11/2026).** Num teste no Windows, um agente
+pedido a dizer "quantos caracteres o arquivo tem" abriu o arquivo com `[IO.File]::ReadAllText(...).Length`,
+apesar de a descrição da tool dizer para nunca ler. O `hangar-server guard-tmux` (`provider_hooks.rs`)
+agora recusa, com texto próprio: `Read`/`Grep` com caminho ou `glob` na pasta `vault-files` (como
+parte do caminho, relativo ou com barra dupla), `Grep` até dois níveis acima dela (`hangar` ou a pasta
+de execução), e comando `Bash` ou `PowerShell` que passe o caminho a um programa que mostra, mede ou
+copia o conteúdo (`cat`, `wc`, `sha256sum`, `type`, `Get-Content`, `::ReadAll*`, `::ReadLines`,
+`::OpenText`, `StreamReader`), que o redirecione (`< caminho`, `$(<caminho)`) ou que leia depois de um
+`cd`/`Set-Location` para dentro da pasta, inclusive dentro de `sh -c`/`powershell -c`/`cmd /c` (o
+script é conferido cru, com as barras invertidas do Windows) e depois de um heredoc. Passar o caminho
+como argumento a outro programa continua livre, e no `grep`/`rg`/`sed`/`awk`/`Select-String` o
+primeiro operando é o padrão de busca: procurar o texto `vault-files` no código passa, mas o caminho
+num `-Path`/`-f`, ou citado fora do padrão, conta como leitura. No Claude o filtro do hook passa de
+`Bash` a `Bash|PowerShell|Read|Grep`, e o `sync_hook` tira o hook do bloco de filtro antigo, mesmo
+dividido com outro hook, para a conta já instalada receber o filtro novo. O Kimi recebe só a regra do
+`Bash` (o filtro dele continua `Bash`); o Codex fica de fora até o guarda dele sair do
+`guard_tmux.py`. **Limite:** é a lista de leitores óbvios. Passam `sudo -u <usuário> cat`,
+`xargs cat`, `find -exec cat`, laços (`for f in …; do cat $f`), interpretadores (`python -c`,
+`node -e`), curinga que não escreve `vault-files` (`hangar/vault-*`) e busca recursiva na pasta de cima
+pelo shell: um agente decidido lê com outro programa. `Grep` mais de dois níveis acima (a pasta do
+usuário no Windows) também passa, mas o `rg` pula o `AppData`, que é oculto.
+
 ## Busca, Perguntar e Arquivo no Rust (01/11/2026)
 
 `/api/search`, `/api/search/context`, `/api/ask-history` e `/api/archive*` saíram do Python. O índice

@@ -61,26 +61,36 @@ pub fn run(mode: &str) -> ExitCode {
                 )?;
                 Ok(None)
             } else {
-                if value["tool_name"] != "Bash" {
+                let tool = value["tool_name"].as_str().unwrap_or("");
+                // PowerShell: a tool de shell do Claude Code no Windows, quando ligada.
+                if !["Bash", "PowerShell", "Read", "Grep"].contains(&tool) {
                     return Ok(None);
                 }
-                let command = match value.get("tool_input") {
+                let input = match value.get("tool_input") {
                     Some(input) if !input.is_object() => return Err("tool_input_not_object"),
-                    Some(input) => &input["command"],
+                    Some(input) => input,
                     None => &Value::Null,
                 };
+                if !["Bash", "PowerShell"].contains(&tool) {
+                    let read = ["file_path", "path", "glob"].iter().any(|k| input[k].as_str().is_some_and(vault_path))
+                        || (tool == "Grep" && input["path"].as_str().is_some_and(above_vault));
+                    return Ok(read.then(|| VAULT_DENIED.to_owned()));
+                }
+                let command = &input["command"];
                 if !crate::orchestration::truthy(command) {
                     return Ok(None);
                 }
                 let command = command.as_str().ok_or("command_not_string")?;
-                Ok(dangerous(command, 0))
+                if reads_vault(command, 0, tool == "PowerShell") {
+                    return Ok(Some(VAULT_DENIED.to_owned()));
+                }
+                Ok(dangerous(command, 0).map(|reason| format!(
+                    "BLOQUEADO: {reason}.\nPrecisa de tmux limpo para uma sonda? Suba um SERVIDOR SEPARADO com socket próprio:\n  tmux -L probe-x new-session -d -s alvo ...\n  tmux -L probe-x kill-server\nNunca no servidor default, onde vivem as sessões de trabalho (TMUX_TMPDIR não isola: dentro do tmux quem manda é $TMUX).\nPara matar UMA sessão: `tmux kill-session -t '=nome:'`."
+                )))
             }
         });
     match result {
-        Ok(Some(reason)) => {
-            let text = format!(
-                "BLOQUEADO: {reason}.\nPrecisa de tmux limpo para uma sonda? Suba um SERVIDOR SEPARADO com socket próprio:\n  tmux -L probe-x new-session -d -s alvo ...\n  tmux -L probe-x kill-server\nNunca no servidor default, onde vivem as sessões de trabalho (TMUX_TMPDIR não isola: dentro do tmux quem manda é $TMUX).\nPara matar UMA sessão: `tmux kill-session -t '=nome:'`."
-            );
+        Ok(Some(text)) => {
             let _ = writeln!(
                 std::io::stdout().lock(),
                 "{}",
@@ -312,13 +322,159 @@ fn head(tokens: &[String]) -> (&str, &[String]) {
     }
     ("", &[])
 }
+const VAULT_DENIED: &str = "BLOQUEADO: o arquivo do `vault_file` guarda uma senha e não se lê, nem para contar, medir ou tirar hash.\nO tamanho já veio na resposta do `vault_file` (`bytes`, `chars`, `ends_with_newline`). Passe o caminho como argumento ao programa que precisa da senha.";
+
+/// A pasta do `vault_file` (`$XDG_RUNTIME_DIR/hangar/vault-files`, `%LOCALAPPDATA%\hangar\vault-files`)
+/// como parte de um caminho, absoluto ou relativo, com qualquer barra ou caixa.
+fn vault_path(text: &str) -> bool {
+    vault_hits(text) > 0
+}
+
+/// `Grep` num caminho até dois níveis acima da pasta (`hangar` ou a pasta de execução) a varre inteira.
+fn above_vault(path: &str) -> bool {
+    let norm = |p: &str| p.replace('\\', "/").trim_end_matches('/').to_ascii_lowercase();
+    let path = norm(path);
+    ["XDG_RUNTIME_DIR", "LOCALAPPDATA"].iter().filter_map(|var| std::env::var(var).ok()).filter(|r| !r.is_empty()).any(|root| {
+        let base = format!("{}/hangar/vault-files", norm(&root));
+        !path.is_empty() && base.strip_prefix(&format!("{path}/")).is_some_and(|rest| rest.split('/').count() <= 2)
+    })
+}
+
+/// Programas que mostram, medem ou copiam o conteúdo do arquivo que recebem.
+const READERS: &[&str] = &[
+    "cat", "tac", "head", "tail", "less", "more", "bat", "nl", "od", "xxd", "hexdump", "strings",
+    "base64", "wc", "md5sum", "sha1sum", "sha256sum", "sha512sum", "cksum", "b2sum", "cut", "sort",
+    "uniq", "diff", "cmp", "cp", "type", "get-content", "gc", "get-filehash", "format-hex",
+    "certutil", "mapfile", "readarray", "read",
+];
+/// Leitores cujo primeiro argumento é o padrão de busca, que pode citar a pasta sem ler nada.
+const PATTERN_FIRST: &[&str] = &["grep", "egrep", "rg", "sed", "awk", "select-string", "sls"];
+/// Opções desses leitores cujo valor é um arquivo lido (`-Path`, `grep -f`), não um padrão.
+const FILE_OPTIONS: &[&str] = &["-path", "-literalpath", "-f", "--file", "-filepath"];
+/// Shells cujo argumento é outro comando; os dois guardas entram neles.
+const SHELLS: &[&str] = &["sh", "bash", "zsh", "dash", "ksh", "ash", "busybox", "eval"];
+
+fn vault_hits(text: &str) -> usize {
+    static VAULT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    VAULT
+        .get_or_init(|| regex::Regex::new(r#"(?i)(^|[/\\\s'"=<])vault-files([/\\\s'"*]|$)"#).unwrap())
+        .find_iter(text)
+        .count()
+}
+
+/// O programa do segmento, sem pasta, caixa nem `.exe`.
+fn program(segment: &str) -> String {
+    let words = tokens(segment);
+    let (name, _) = head(&words);
+    let name = name.rsplit(['/', '\\']).next().unwrap_or(name).to_ascii_lowercase();
+    name.strip_suffix(".exe").map(str::to_owned).unwrap_or(name)
+}
+
+fn is_shell(name: &str) -> bool {
+    SHELLS.contains(&name) || ["powershell", "pwsh", "cmd"].contains(&name)
+}
+
+/// O corpo de um heredoc é texto (mensagem, arquivo), salvo quando vai a um shell (`bash <<EOF`): fora
+/// disso sai, e o que vem depois do terminador continua conferido. Here-string (`<<<`) é redirecionamento.
+fn strip_heredocs(command: &str) -> String {
+    static START: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let start_re = START.get_or_init(|| regex::Regex::new(r#"<<(-?)\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?"#).unwrap());
+    let mut text = command.replace("<<<", " < ");
+    let mut from = 0;
+    while let Some(caps) = start_re.captures(&text[from..]) {
+        let whole = caps.get(0).unwrap();
+        let (start, end) = (from + whole.start(), from + whole.end());
+        let (indented, word) = (!caps[1].is_empty(), caps[2].to_owned());
+        let to_shell = segments(&text[..start]).last().is_some_and(|s| is_shell(&program(s)));
+        let body = text[end..].find('\n').map_or(text.len(), |i| end + i + 1);
+        let (mut pos, mut after) = (body, text.len());
+        while pos < text.len() {
+            let line_end = text[pos..].find('\n').map_or(text.len(), |i| pos + i);
+            let line = &text[pos..line_end];
+            if (if indented { line.trim_start_matches('\t') } else { line }) == word {
+                after = line_end;
+                break;
+            }
+            pos = line_end + 1;
+        }
+        if to_shell {
+            text.replace_range(start..end, &" ".repeat(end - start));
+            from = end;
+        } else {
+            let marker_line = text[end..body].to_owned();
+            text.replace_range(start..after, &marker_line);
+            from = start + marker_line.len();
+        }
+    }
+    text
+}
+
+/// O comando que um shell recebe, cru (barras invertidas inteiras): o que vem depois de `-c`, `-Command`,
+/// `-File`, `/c` ou `/k`, mesmo com opções de valor antes (`-ExecutionPolicy Bypass`, `-o pipefail`).
+fn shell_script(segment: &str) -> Option<String> {
+    static SHELL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static FLAG: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let shell = SHELL.get_or_init(|| {
+        regex::Regex::new(r#"(?is)^\s*(?:\S*[/\\])?(sh|bash|zsh|dash|ksh|ash|busybox|eval|powershell|pwsh|cmd)(?:\.exe)?(\s.*)?$"#).unwrap()
+    });
+    let flag = FLAG.get_or_init(|| regex::Regex::new(r#"(?is)^.*?\s(?:-[a-z]*c|-command|-file|/c|/k)\s+(.*)$"#).unwrap());
+    let caps = shell.captures(segment)?;
+    let rest = caps.get(2).map_or("", |m| m.as_str());
+    let script = if caps[1].eq_ignore_ascii_case("eval") { rest.trim() } else { flag.captures(rest)?.get(1)?.as_str().trim() };
+    let unquoted = ['\'', '"'].iter().find_map(|q| script.strip_prefix(*q).and_then(|r| r.strip_suffix(*q)));
+    Some(unquoted.unwrap_or(script).to_owned())
+}
+
+/// Ler o arquivo, não usá-lo: o caminho como argumento de outro programa passa. `pwsh`: o texto é
+/// PowerShell (a tool PowerShell ou o script de um `powershell -c`).
+fn reads_vault(command: &str, depth: u8, pwsh: bool) -> bool {
+    if !vault_path(command) {
+        return false;
+    }
+    // .NET (`[IO.File]::ReadAllText`, `ReadLines`, `OpenText`, `StreamReader`…); fora do PowerShell é só texto.
+    let lower = command.to_ascii_lowercase();
+    if pwsh && ["::readall", "::readlines", "::opentext", "::openread", "streamreader"].iter().any(|m| lower.contains(m)) {
+        return true;
+    }
+    let command = strip_heredocs(command);
+    static REDIRECT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let redirect = REDIRECT.get_or_init(|| regex::Regex::new(r#"(?i)<\s*['"]?[^\s'"]*vault-files"#).unwrap());
+    let mut inside = false;
+    segments(&command).iter().any(|segment| {
+        let words = tokens(segment);
+        let (_, args) = head(&words);
+        let name = program(segment);
+        let name = name.as_str();
+        if is_shell(name) {
+            // O texto cru guarda o caminho do Windows, que `tokens` desfaz; os pedaços pegam o shell atrás de `sudo`/`env`.
+            let inner = ["powershell", "pwsh"].contains(&name);
+            return depth < 3
+                && (shell_script(segment).is_some_and(|s| reads_vault(&s, depth + 1, inner))
+                    || reads_vault(&args.join(" "), depth + 1, inner));
+        }
+        // Entrar na pasta faz `cat *` ler a senha sem citar o caminho.
+        if ["cd", "pushd", "set-location", "sl", "push-location"].contains(&name) {
+            inside |= vault_path(segment);
+            return false;
+        }
+        if redirect.is_match(segment) {
+            return true;
+        }
+        if PATTERN_FIRST.contains(&name) {
+            let file_option = args.windows(2).any(|w| FILE_OPTIONS.contains(&w[0].to_ascii_lowercase().as_str()) && w[1].to_ascii_lowercase().contains("vault-files"));
+            // Mais citações da pasta no texto cru do que no padrão: alguma é arquivo lido.
+            let pattern = args.iter().find(|a| !a.starts_with('-')).map_or(0, |p| vault_hits(p));
+            return inside || file_option || vault_hits(segment) > pattern;
+        }
+        READERS.contains(&name) && (inside || vault_path(segment))
+    })
+}
+
 fn dangerous(command: &str, depth: u8) -> Option<String> {
     for segment in segments(command) {
         let words = tokens(&segment);
         let (name, args) = head(&words);
-        if ["sh", "bash", "zsh", "dash", "ksh", "ash", "busybox", "eval"].contains(&name)
-            && depth < 3
-        {
+        if SHELLS.contains(&name) && depth < 3 {
             let script = if name == "eval" {
                 Some(args.join(" "))
             } else {
