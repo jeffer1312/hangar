@@ -1047,14 +1047,19 @@ fn ast_to_node(source: &str, value: mdast::Node, cx: &mut NodeContext) -> BlockN
             }
         }
         Node::List(list) => {
-            // Modified for Hangar: "1. 3. 7." answers items 1, 3 and 7, so it is shown as typed;
-            // the lazy "1. 1. 1." keeps the automatic count.
-            let typed: Vec<Option<u32>> = list
-                .children
-                .iter()
-                .map(|item| list_item_number(source, item))
-                .collect();
-            let literal = list.ordered && typed.windows(2).any(|pair| pair[0] != pair[1]);
+            // Modified for Hangar: "1. 3. 7." answers items 1, 3 and 7, so a list whose typed
+            // numbers always grow is shown as typed; "1. 1. 1." or "1. 1. 2." keep the automatic count.
+            let typed: Vec<Option<u32>> = if list.ordered {
+                list.children
+                    .iter()
+                    .map(|item| list_item_number(source, item))
+                    .collect()
+            } else {
+                vec![None; list.children.len()]
+            };
+            let literal = list.ordered
+                && typed.iter().all(Option::is_some)
+                && typed.windows(2).all(|pair| pair[0] < pair[1]);
             let children = list
                 .children
                 .into_iter()
@@ -1774,14 +1779,16 @@ mod tests {
     }
 
     #[test]
-    fn ordered_list_keeps_the_typed_numbers_unless_all_repeat() {
-        let mut cx = NodeContext::default();
-        let typed = parse("1. A\n3. B\n7. C", &mut cx).unwrap();
-        assert!(typed.to_markdown().contains("1. A\n3. B\n7. C"));
-
-        let mut cx = NodeContext::default();
-        let lazy = parse("1. A\n1. B\n1. C", &mut cx).unwrap();
-        assert!(lazy.to_markdown().contains("1. A\n2. B\n3. C"));
+    fn ordered_list_keeps_the_typed_numbers_only_when_they_grow() {
+        for (source, shown) in [
+            ("1. A\n3. B\n7. C", "1. A\n3. B\n7. C"),
+            ("1. A\n1. B\n1. C", "1. A\n2. B\n3. C"),
+            ("1. A\n1. B\n2. C", "1. A\n2. B\n3. C"),
+        ] {
+            let mut cx = NodeContext::default();
+            let document = parse(source, &mut cx).unwrap();
+            assert!(document.to_markdown().contains(shown), "{source:?}");
+        }
     }
 
     #[test]

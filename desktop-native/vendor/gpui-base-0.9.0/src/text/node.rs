@@ -1405,7 +1405,7 @@ fn list_selected_source(
         };
 
         let marker = if ordered {
-            format!("{}. ", value.unwrap_or_else(|| ordered_list_ordinal(start, item_ix)))
+            format!("{}. ", ordered_list_ordinal(*value, start, item_ix))
         } else {
             "- ".to_string()
         };
@@ -3719,7 +3719,7 @@ impl BlockNode {
                         _ => None,
                     };
                     let prefix = if *ordered {
-                        format!("{}. ", typed.unwrap_or_else(|| ordered_list_ordinal(*start, i)))
+                        format!("{}. ", ordered_list_ordinal(typed, *start, i))
                     } else {
                         "- ".to_string()
                     };
@@ -3785,6 +3785,7 @@ impl BlockNode {
     fn render_list_item_row(
         content: AnyElement,
         ix: usize,
+        typed: Option<u32>,
         options: NodeRenderOptions,
         checked: Option<bool>,
         style: &TextViewStyle,
@@ -3811,6 +3812,7 @@ impl BlockNode {
                         .refine_style(style.list_style())
                         .child(
                             list_item_prefix(
+                                typed,
                                 ix,
                                 options.list_start,
                                 options.ordered,
@@ -3897,10 +3899,6 @@ impl BlockNode {
                 let body = body_font_size(node_cx, window);
                 // Modified for Hangar: with a fixed marker column, content steps by its width.
                 let indent = node_cx.style.list_marker_width().unwrap_or(body * 1.4);
-                let (marker_ix, marker_options) = match value {
-                    Some(typed) => (0, NodeRenderOptions { list_start: Some(*typed), ..options }),
-                    None => (ix, options),
-                };
                 div()
                     .w_full()
                     .min_w_0()
@@ -3951,8 +3949,9 @@ impl BlockNode {
 
                                     items.push(Self::render_list_item_row(
                                         text,
-                                        marker_ix,
-                                        marker_options,
+                                        ix,
+                                        *value,
+                                        options,
                                         *checked,
                                         &node_cx.style,
                                         window.line_height(),
@@ -3994,8 +3993,9 @@ impl BlockNode {
                                     if child_ix == 0 {
                                         items.push(Self::render_list_item_row(
                                             block,
-                                            marker_ix,
-                                            marker_options,
+                                            ix,
+                                            *value,
+                                            options,
                                             *checked,
                                             &node_cx.style,
                                             window.line_height(),

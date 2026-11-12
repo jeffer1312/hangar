@@ -1,7 +1,7 @@
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-base-0.9.0/MODIFICADO.md gpui-base-0.9.0/MODIFICADO.md
 --- gpui-base-0.9.0/MODIFICADO.md
 +++ gpui-base-0.9.0/MODIFICADO.md
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,60 @@
 +# Cópia modificada do gpui-base 0.9.0
 +
 +Origem: crate `gpui-base` 0.9.0 do crates.io (repositório `longbridge/gpui-kit`), checksum `cff6377e30f0c857681662e7edc7286bf30f5606033390401b0706d7bd930833`, licença Apache-2.0 (`LICENSE-APACHE`).
@@ -38,6 +38,15 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
 +   Motivo: a lista mede cada item como raiz de layout, e a raiz perde a própria margem; sem o invólucro, o `mt`/`mb`
 +   que o app dá ao título (`with_heading`) não ocupava espaço, e o fio embaixo do título do leitor de documentos
 +   encostava no parágrafo seguinte. Estilo sem margem desenha igual.
++
++5. `src/text/format/markdown.rs`, `src/text/node.rs` e `src/text/utils.rs`: lista numerada cujos números digitados
++   sempre crescem (`1. 3. 7.`) mostra esses números, em vez de início + posição. `BlockNode::ListItem` ganha
++   `value` (lido da fonte na posição do item por `list_item_number`), e `ordered_list_ordinal`/`list_item_prefix`
++   recebem esse número; a tela, a cópia da seleção e o `to_markdown` passam pela mesma função. Lista com número
++   repetido ou fora de ordem (`1. 1. 1.`, `1. 1. 2.`) segue a contagem do CommonMark; o parser HTML não lê
++   `<li value>`. Testes: `ordered_list_keeps_the_typed_numbers_only_when_they_grow` (`markdown.rs`) e
++   `test_list_item_prefix` (`utils.rs`).
++   Motivo: quem responde perguntas por número (`1. … 3. … 7. …`) via a bolha renumerar para 1, 2, 3.
 +
 +Removido na 0.7.0: o conserto de `src/text_selection.rs` (participante de view `.cached` reusada varrido no fim do
 +quadro). O kit passou a resolver isso com o `RenderedMarker` guardado no estado do elemento
@@ -665,6 +674,104 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      }
  }
  
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-base-0.9.0/src/text/editor_host.rs gpui-base-0.9.0/src/text/editor_host.rs
+--- gpui-base-0.9.0/src/text/editor_host.rs
++++ gpui-base-0.9.0/src/text/editor_host.rs
+@@ -838,6 +838,7 @@
+                     children: vec![BlockNode::Paragraph(plain("item").with_leaf_key(8))],
+                     spread: false,
+                     checked: None,
++                    value: None,
+                     span: None,
+                 }],
+                 ordered: false,
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-base-0.9.0/src/text/format/html.rs gpui-base-0.9.0/src/text/format/html.rs
+--- gpui-base-0.9.0/src/text/format/html.rs
++++ gpui-base-0.9.0/src/text/format/html.rs
+@@ -610,6 +610,7 @@
+                     children,
+                     spread: false,
+                     checked: None,
++                    value: None,
+                     span: None,
+                 })
+             }
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-base-0.9.0/src/text/format/markdown.rs gpui-base-0.9.0/src/text/format/markdown.rs
+--- gpui-base-0.9.0/src/text/format/markdown.rs
++++ gpui-base-0.9.0/src/text/format/markdown.rs
+@@ -1010,6 +1010,12 @@
+     })
+ }
+ 
++fn list_item_number(source: &str, item: &mdast::Node) -> Option<u32> {
++    let rest = source.get(item.position()?.start.offset..)?.trim_start();
++    let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
++    rest[..end].parse().ok()
++}
++
+ fn ast_to_node(source: &str, value: mdast::Node, cx: &mut NodeContext) -> BlockNode {
+     let span = new_span(value.position().cloned(), cx);
+     let parse_cx = MarkdownParseContext::new(source, cx.offset);
+@@ -1041,10 +1047,30 @@
+             }
+         }
+         Node::List(list) => {
++            // Modified for Hangar: "1. 3. 7." answers items 1, 3 and 7, so a list whose typed
++            // numbers always grow is shown as typed; "1. 1. 1." or "1. 1. 2." keep the automatic count.
++            let typed: Vec<Option<u32>> = if list.ordered {
++                list.children
++                    .iter()
++                    .map(|item| list_item_number(source, item))
++                    .collect()
++            } else {
++                vec![None; list.children.len()]
++            };
++            let literal = list.ordered
++                && typed.iter().all(Option::is_some)
++                && typed.windows(2).all(|pair| pair[0] < pair[1]);
+             let children = list
+                 .children
+                 .into_iter()
+-                .map(|c| ast_to_node(source, c, cx))
++                .zip(typed)
++                .map(|(c, number)| {
++                    let mut node = ast_to_node(source, c, cx);
++                    if literal && let BlockNode::ListItem { value, .. } = &mut node {
++                        *value = number;
++                    }
++                    node
++                })
+                 .collect();
+             BlockNode::List {
+                 ordered: list.ordered,
+@@ -1063,6 +1089,7 @@
+                 children,
+                 spread: val.spread,
+                 checked: val.checked,
++                value: None,
+                 span: new_span(val.position, cx),
+             }
+         }
+@@ -1752,6 +1779,19 @@
+     }
+ 
+     #[test]
++    fn ordered_list_keeps_the_typed_numbers_only_when_they_grow() {
++        for (source, shown) in [
++            ("1. A\n3. B\n7. C", "1. A\n3. B\n7. C"),
++            ("1. A\n1. B\n1. C", "1. A\n2. B\n3. C"),
++            ("1. A\n1. B\n2. C", "1. A\n2. B\n3. C"),
++        ] {
++            let mut cx = NodeContext::default();
++            let document = parse(source, &mut cx).unwrap();
++            assert!(document.to_markdown().contains(shown), "{source:?}");
++        }
++    }
++
++    #[test]
+     fn selected_source_range_maps_fenced_code_nested_in_a_list() {
+         let source = "- ```rust\n  one\n  two\n  ```";
+         assert_eq!(selected_code_range(source, 0..3), Some(12..15));
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-base-0.9.0/src/text/inline_flow.rs gpui-base-0.9.0/src/text/inline_flow.rs
 --- gpui-base-0.9.0/src/text/inline_flow.rs
 +++ gpui-base-0.9.0/src/text/inline_flow.rs
@@ -706,7 +813,33 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-base-0.9.0/src/text/node.rs gpui-base-0.9.0/src/text/node.rs
 --- gpui-base-0.9.0/src/text/node.rs
 +++ gpui-base-0.9.0/src/text/node.rs
-@@ -2040,6 +2040,7 @@
+@@ -79,6 +79,8 @@
+         spread: bool,
+         /// Whether the list item is checked, if None, it's not a checkbox
+         checked: Option<bool>,
++        // Modified for Hangar: the number typed for this item, shown instead of start + position.
++        value: Option<u32>,
+         span: Option<Span>,
+     },
+     CodeBlock(CodeBlock),
+@@ -1395,6 +1397,7 @@
+         let BlockNode::ListItem {
+             children: item_children,
+             checked,
++            value,
+             ..
+         } = child
+         else {
+@@ -1402,7 +1405,7 @@
+         };
+ 
+         let marker = if ordered {
+-            format!("{}. ", ordered_list_ordinal(start, item_ix))
++            format!("{}. ", ordered_list_ordinal(*value, start, item_ix))
+         } else {
+             "- ".to_string()
+         };
+@@ -2040,6 +2043,7 @@
      inline_code: HighlightStyle,
      /// Maxima from ordinary text only. Custom cells may shrink after an update.
      widths: Vec<f32>,
@@ -714,7 +847,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      custom_cells: Vec<(usize, usize)>,
  }
  
-@@ -2563,6 +2564,79 @@
+@@ -2563,6 +2567,79 @@
                      .text_color(style.muted_foreground())
                      .child(lang)
              });
@@ -794,7 +927,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  
          let block = div()
              .w_full()
-@@ -2582,26 +2656,7 @@
+@@ -2582,26 +2659,7 @@
              .line_height(relative(1.6))
              .relative()
              .refine_style(&style.code_block())
@@ -822,7 +955,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          let actions = node_cx.code_block_actions.clone().map(|actions| {
              div()
                  .id("actions")
-@@ -2654,14 +2709,7 @@
+@@ -2654,14 +2712,7 @@
              }
          };
  
@@ -838,7 +971,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      }
  }
  
-@@ -2677,6 +2725,7 @@
+@@ -2677,6 +2728,7 @@
      pub(crate) code_block_highlighter: Option<Arc<CodeBlockHighlighterFn>>,
      pub(crate) table_actions: Option<Arc<TableActionsFn>>,
      pub(crate) image_source: Option<Arc<super::text_view::ImageSourceFn>>,
@@ -846,7 +979,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      pub(crate) link_click_handler: Option<Arc<LinkClickHandlerFn>>,
      pub(crate) markdown_extensions: Arc<MarkdownExtensions>,
      /// This frame's streamed fade-in, when any text is still fading.
-@@ -2694,12 +2743,12 @@
+@@ -2694,12 +2746,12 @@
      fn image_source(&self, image: &ImageNode) -> ImageSource {
          match &self.image_source {
              Some(resolve) => resolve(&image.url),
@@ -861,7 +994,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      }
  
      /// The fade ranges of the text leaf `key`, in its rendered byte space.
-@@ -2789,11 +2838,13 @@
+@@ -2789,11 +2841,13 @@
              strikethrough: style.text.strikethrough,
              ..Default::default()
          });
@@ -879,7 +1012,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                  .unwrap_or_else(|| cx.theme().tokens.typography.mono.clone()),
          );
      }
-@@ -3365,6 +3416,9 @@
+@@ -3365,6 +3419,9 @@
  /// shaped with the runs the cell renders with, plus the cell's padding and
  /// border. Never capped: a cap would clip overflowing text *and* leave it
  /// outside the scrollable width, making it unreachable.
@@ -889,7 +1022,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  fn measure_table_columns(
      table: &Table,
      col_count: usize,
-@@ -3372,6 +3426,17 @@
+@@ -3372,6 +3429,17 @@
      window: &mut Window,
      cx: &mut App,
  ) -> Vec<f32> {
@@ -907,7 +1040,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      let text_styles = TableTextStyles::new(&node_cx.style, window);
      let rem_size = window.rem_size();
      let mono_family = cx.theme().tokens.typography.mono.clone();
-@@ -3390,7 +3455,7 @@
+@@ -3390,7 +3458,7 @@
              .cloned()
      });
      let measured = cached.unwrap_or_else(|| {
@@ -916,7 +1049,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              measure_table_text_columns(table, col_count, &text_styles, node_cx, window, cx);
          let measured = Arc::new(TableColumnWidths {
              text_system: text_system_id(window),
-@@ -3399,6 +3464,7 @@
+@@ -3399,6 +3467,7 @@
              mono_family,
              inline_code,
              widths,
@@ -924,7 +1057,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              custom_cells,
          });
          if let Ok(mut cache) = table.column_widths_cache.0.lock() {
-@@ -3411,6 +3477,7 @@
+@@ -3411,6 +3480,7 @@
      // unchanged. Keep callbacks outside the cache lock and do not retain their
      // widths: a loaded image or a plugin can get narrower as well as wider.
      let mut col_w = measured.widths.clone();
@@ -932,7 +1065,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      for &(row_ix, ix) in &measured.custom_cells {
          let cell = &table.children[row_ix].children[ix];
          let items = cell.children.inline_flow_items(None, &[], &[], node_cx, cx);
-@@ -3424,8 +3491,9 @@
+@@ -3424,8 +3494,9 @@
              0.
          };
          col_w[ix] = col_w[ix].max(f32::from(width) + CELL_PAD_PX + border);
@@ -943,7 +1076,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  }
  
  // The first measurement still visits all ordinary cells. This cache avoids
-@@ -3437,14 +3505,16 @@
+@@ -3437,14 +3508,16 @@
      node_cx: &NodeContext,
      window: &mut Window,
      cx: &mut App,
@@ -962,7 +1095,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                  continue;
              };
              if cell
-@@ -3459,6 +3529,7 @@
+@@ -3459,6 +3532,7 @@
              let text = cell.children.text();
              let highlights = cell.children.inline_highlights(node_cx, cx);
              let mut w = 0.0_f32;
@@ -970,7 +1103,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              let mut line_start = 0;
              for line in text.split('\n') {
                  let start = line_start + (line.len() - line.trim_start().len());
-@@ -3496,8 +3567,29 @@
+@@ -3496,8 +3570,29 @@
                      let runs = text_runs(range.len(), text_style, &highlights);
                      line_w += window
                          .text_system()
@@ -1001,7 +1134,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                  }
                  w = w.max(f32::from(line_w));
              }
-@@ -3509,9 +3601,10 @@
+@@ -3509,9 +3604,10 @@
                  0.
              };
              *slot = slot.max(w + CELL_PAD_PX + border);
@@ -1013,7 +1146,41 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  }
  
  impl Paragraph {
-@@ -3794,7 +3887,8 @@
+@@ -3618,8 +3714,12 @@
+                 .iter()
+                 .enumerate()
+                 .map(|(i, child)| {
++                    let typed = match child {
++                        BlockNode::ListItem { value, .. } => *value,
++                        _ => None,
++                    };
+                     let prefix = if *ordered {
+-                        format!("{}. ", ordered_list_ordinal(*start, i))
++                        format!("{}. ", ordered_list_ordinal(typed, *start, i))
+                     } else {
+                         "- ".to_string()
+                     };
+@@ -3685,6 +3785,7 @@
+     fn render_list_item_row(
+         content: AnyElement,
+         ix: usize,
++        typed: Option<u32>,
+         options: NodeRenderOptions,
+         checked: Option<bool>,
+         style: &TextViewStyle,
+@@ -3711,6 +3812,7 @@
+                         .refine_style(style.list_style())
+                         .child(
+                             list_item_prefix(
++                                typed,
+                                 ix,
+                                 options.list_start,
+                                 options.ordered,
+@@ -3791,10 +3893,12 @@
+                 children,
+                 spread,
+                 checked,
++                value,
                  ..
              } => {
                  let body = body_font_size(node_cx, window);
@@ -1023,7 +1190,23 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                  div()
                      .w_full()
                      .min_w_0()
-@@ -3952,14 +4046,10 @@
+@@ -3846,6 +3950,7 @@
+                                     items.push(Self::render_list_item_row(
+                                         text,
+                                         ix,
++                                        *value,
+                                         options,
+                                         *checked,
+                                         &node_cx.style,
+@@ -3889,6 +3994,7 @@
+                                         items.push(Self::render_list_item_row(
+                                             block,
+                                             ix,
++                                            *value,
+                                             options,
+                                             *checked,
+                                             &node_cx.style,
+@@ -3952,14 +4058,10 @@
          window: &mut Window,
          cx: &mut App,
      ) -> impl IntoElement {
@@ -1042,7 +1225,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          const TABLE_BORDER_PX: f32 = 2.0; // the frame's border_1, left + right
  
          let table = match item {
-@@ -3974,7 +4064,8 @@
+@@ -3974,7 +4076,8 @@
              .map(|row| row.children.len())
              .max()
              .unwrap_or(0);
@@ -1052,7 +1235,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
          let scroll = matches!(style.table().overflow.x, Some(Overflow::Scroll));
          let nowrap = style.table_cell().text.white_space == Some(WhiteSpace::Nowrap);
          let rem_size = window.rem_size();
-@@ -3994,8 +4085,8 @@
+@@ -3994,8 +4097,8 @@
                  let floor = if scroll && nowrap {
                      w
                  } else if scroll {
@@ -1063,7 +1246,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
                          .min(w)
                  } else {
                      w.min(wrap_min_px)
-@@ -4055,7 +4146,12 @@
+@@ -4055,7 +4158,12 @@
                  // shrink-to-fit (their text wrapping), the definite
                  // `w(min_total_w)` keeps the floors once they are reached,
                  // letting the track exceed the viewport and scroll.
@@ -1077,6 +1260,158 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
              )
              .into_any_element()
          } else {
+@@ -5382,6 +5490,7 @@
+             children: vec![BlockNode::Paragraph(selected_paragraph(text))],
+             spread: false,
+             checked: None,
++            value: None,
+             span: None,
+         };
+         let unselected_item = BlockNode::ListItem {
+@@ -5390,6 +5499,7 @@
+             ]))],
+             spread: false,
+             checked: None,
++            value: None,
+             span: None,
+         };
+         let list = BlockNode::List {
+@@ -5407,6 +5517,7 @@
+             children: vec![BlockNode::Paragraph(selected_paragraph(text))],
+             spread: false,
+             checked: None,
++            value: None,
+             span: None,
+         };
+         let list = BlockNode::List {
+@@ -5472,12 +5583,14 @@
+                     children: vec![BlockNode::Paragraph(selected_paragraph("one"))],
+                     spread: false,
+                     checked: None,
++                    value: None,
+                     span: None,
+                 },
+                 BlockNode::ListItem {
+                     children: vec![BlockNode::Paragraph(selected_paragraph("two"))],
+                     spread: false,
+                     checked: None,
++                    value: None,
+                     span: None,
+                 },
+             ],
+@@ -5499,12 +5612,14 @@
+                     children: vec![BlockNode::Paragraph(selected_paragraph("three"))],
+                     spread: false,
+                     checked: None,
++                    value: None,
+                     span: None,
+                 },
+                 BlockNode::ListItem {
+                     children: vec![BlockNode::Paragraph(selected_paragraph("four"))],
+                     spread: false,
+                     checked: None,
++                    value: None,
+                     span: None,
+                 },
+             ],
+@@ -5527,12 +5642,14 @@
+                     children: vec![BlockNode::Paragraph(selected_paragraph("nested"))],
+                     spread: false,
+                     checked: None,
++                    value: None,
+                     span: None,
+                 },
+                 BlockNode::ListItem {
+                     children: vec![BlockNode::Paragraph(selected_paragraph("again"))],
+                     spread: false,
+                     checked: None,
++                    value: None,
+                     span: None,
+                 },
+             ],
+@@ -5546,12 +5663,14 @@
+                     children: vec![BlockNode::Paragraph(selected_paragraph("three")), nested],
+                     spread: false,
+                     checked: None,
++                    value: None,
+                     span: None,
+                 },
+                 BlockNode::ListItem {
+                     children: vec![BlockNode::Paragraph(selected_paragraph("four"))],
+                     spread: false,
+                     checked: None,
++                    value: None,
+                     span: None,
+                 },
+             ],
+@@ -5573,12 +5692,14 @@
+                     ],
+                     spread: true,
+                     checked: None,
++                    value: None,
+                     span: None,
+                 },
+                 BlockNode::ListItem {
+                     children: vec![BlockNode::Paragraph(selected_paragraph("four"))],
+                     spread: false,
+                     checked: None,
++                    value: None,
+                     span: None,
+                 },
+             ],
+@@ -5602,6 +5723,7 @@
+                 children: vec![BlockNode::Paragraph(selected_paragraph("nested"))],
+                 spread: false,
+                 checked: None,
++                value: None,
+                 span: None,
+             }],
+         };
+@@ -5614,12 +5736,14 @@
+                     children: vec![BlockNode::Paragraph(selected_paragraph("one")), nested],
+                     spread: false,
+                     checked: None,
++                    value: None,
+                     span: None,
+                 },
+                 BlockNode::ListItem {
+                     children: vec![BlockNode::Paragraph(selected_paragraph("two"))],
+                     spread: false,
+                     checked: None,
++                    value: None,
+                     span: None,
+                 },
+             ],
+@@ -5641,12 +5765,14 @@
+                     children: vec![BlockNode::Paragraph(selected_paragraph("done"))],
+                     spread: false,
+                     checked: Some(true),
++                    value: None,
+                     span: None,
+                 },
+                 BlockNode::ListItem {
+                     children: vec![BlockNode::Paragraph(selected_paragraph("todo"))],
+                     spread: false,
+                     checked: Some(false),
++                    value: None,
+                     span: None,
+                 },
+             ],
+@@ -6102,12 +6228,14 @@
+                             children: vec![BlockNode::Paragraph(selected_paragraph("one"))],
+                             spread: false,
+                             checked: None,
++                            value: None,
+                             span: None,
+                         },
+                         BlockNode::ListItem {
+                             children: vec![BlockNode::Paragraph(selected_paragraph("two"))],
+                             spread: false,
+                             checked: None,
++                            value: None,
+                             span: None,
+                         },
+                     ],
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-base-0.9.0/src/text/range_highlight.rs gpui-base-0.9.0/src/text/range_highlight.rs
 --- gpui-base-0.9.0/src/text/range_highlight.rs
 +++ gpui-base-0.9.0/src/text/range_highlight.rs
@@ -1502,6 +1837,112 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
      #[test]
      fn plugin_accepts_text_view_plugins_beyond_markdown() {
          let view = TextView::markdown("plugin-test", "").plugin(DummyTextViewPlugin);
+diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-base-0.9.0/src/text/utils.rs gpui-base-0.9.0/src/text/utils.rs
+--- gpui-base-0.9.0/src/text/utils.rs
++++ gpui-base-0.9.0/src/text/utils.rs
+@@ -6,21 +6,25 @@
+ const BULLETS: [&str; 5] = ["•", "◦", "▪", "‣", "⁃"];
+ 
+ /// Returns an ordered-list item's ordinal, defaulting omitted starts to one.
+-pub(super) fn ordered_list_ordinal(start: Option<u32>, ix: usize) -> u32 {
+-    start
+-        .unwrap_or(1)
+-        .saturating_add(u32::try_from(ix).unwrap_or(u32::MAX))
++// Modified for Hangar: a number typed for the item (`typed`) wins over start + position.
++pub(super) fn ordered_list_ordinal(typed: Option<u32>, start: Option<u32>, ix: usize) -> u32 {
++    typed.unwrap_or_else(|| {
++        start
++            .unwrap_or(1)
++            .saturating_add(u32::try_from(ix).unwrap_or(u32::MAX))
++    })
+ }
+ 
+ /// Returns the prefix for a list item.
+ pub(super) fn list_item_prefix(
++    typed: Option<u32>,
+     ix: usize,
+     start: Option<u32>,
+     ordered: bool,
+     depth: usize,
+ ) -> String {
+     if ordered {
+-        let ordinal = ordered_list_ordinal(start, ix);
++        let ordinal = ordered_list_ordinal(typed, start, ix);
+         if depth == 0 || start == Some(0) {
+             return format!("{ordinal}. ");
+         }
+@@ -108,41 +112,44 @@
+                     label.to_ascii_lowercase()
+                 };
+                 let expected = format!("{label}. ");
+-                assert_eq!(list_item_prefix(0, Some(ordinal), true, depth), expected);
++                assert_eq!(list_item_prefix(None, 0, Some(ordinal), true, depth), expected);
+                 assert_eq!(
+-                    list_item_prefix((ordinal - 1) as usize, None, true, depth),
++                    list_item_prefix(None, (ordinal - 1) as usize, None, true, depth),
+                     expected
+                 );
+             }
+         }
+-        assert_eq!(list_item_prefix(1, Some(26), true, 1), "AA. ");
+-        assert_eq!(list_item_prefix(1, Some(26), true, 2), "aa. ");
+-        assert_eq!(list_item_prefix(usize::MAX, Some(1), true, 1), "MWLQKWU. ");
+-        assert_eq!(list_item_prefix(26, Some(1), true, 0), "27. ");
+-        assert_eq!(list_item_prefix(27, Some(0), true, 1), "27. ");
++        assert_eq!(list_item_prefix(None, 1, Some(26), true, 1), "AA. ");
++        assert_eq!(list_item_prefix(None, 1, Some(26), true, 2), "aa. ");
++        assert_eq!(list_item_prefix(None, usize::MAX, Some(1), true, 1), "MWLQKWU. ");
++        assert_eq!(list_item_prefix(None, 26, Some(1), true, 0), "27. ");
++        assert_eq!(list_item_prefix(None, 27, Some(0), true, 1), "27. ");
+     }
+ 
+     #[test]
+     fn test_list_item_prefix() {
+-        assert_eq!(list_item_prefix(0, Some(1), true, 0), "1. ");
+-        assert_eq!(list_item_prefix(1, Some(1), true, 0), "2. ");
+-        assert_eq!(list_item_prefix(2, Some(1), true, 0), "3. ");
+-        assert_eq!(list_item_prefix(10, Some(1), true, 0), "11. ");
+-        assert_eq!(list_item_prefix(0, Some(3), true, 0), "3. ");
+-        assert_eq!(list_item_prefix(1, Some(3), true, 0), "4. ");
+-        assert_eq!(list_item_prefix(0, Some(1), true, 1), "A. ");
+-        assert_eq!(list_item_prefix(1, Some(1), true, 1), "B. ");
+-        assert_eq!(list_item_prefix(0, Some(4), true, 1), "D. ");
+-        assert_eq!(list_item_prefix(1, Some(4), true, 1), "E. ");
+-        assert_eq!(list_item_prefix(0, Some(1), true, 2), "a. ");
+-        assert_eq!(list_item_prefix(1, Some(1), true, 2), "b. ");
+-        assert_eq!(list_item_prefix(6, Some(1), true, 2), "g. ");
+-        assert_eq!(list_item_prefix(0, Some(0), true, 1), "0. ");
+-        assert_eq!(list_item_prefix(1, Some(0), true, 1), "1. ");
+-        assert_eq!(list_item_prefix(0, None, false, 0), "• ");
+-        assert_eq!(list_item_prefix(0, None, false, 1), "◦ ");
+-        assert_eq!(list_item_prefix(0, None, false, 2), "▪ ");
+-        assert_eq!(list_item_prefix(0, None, false, 3), "‣ ");
+-        assert_eq!(list_item_prefix(0, None, false, 4), "⁃ ");
++        assert_eq!(list_item_prefix(None, 0, Some(1), true, 0), "1. ");
++        assert_eq!(list_item_prefix(None, 1, Some(1), true, 0), "2. ");
++        assert_eq!(list_item_prefix(None, 2, Some(1), true, 0), "3. ");
++        assert_eq!(list_item_prefix(None, 10, Some(1), true, 0), "11. ");
++        assert_eq!(list_item_prefix(None, 0, Some(3), true, 0), "3. ");
++        assert_eq!(list_item_prefix(None, 1, Some(3), true, 0), "4. ");
++        assert_eq!(list_item_prefix(None, 0, Some(1), true, 1), "A. ");
++        assert_eq!(list_item_prefix(None, 1, Some(1), true, 1), "B. ");
++        assert_eq!(list_item_prefix(None, 0, Some(4), true, 1), "D. ");
++        assert_eq!(list_item_prefix(None, 1, Some(4), true, 1), "E. ");
++        assert_eq!(list_item_prefix(None, 0, Some(1), true, 2), "a. ");
++        assert_eq!(list_item_prefix(None, 1, Some(1), true, 2), "b. ");
++        assert_eq!(list_item_prefix(None, 6, Some(1), true, 2), "g. ");
++        assert_eq!(list_item_prefix(None, 0, Some(0), true, 1), "0. ");
++        assert_eq!(list_item_prefix(None, 1, Some(0), true, 1), "1. ");
++        assert_eq!(list_item_prefix(None, 0, None, false, 0), "• ");
++        assert_eq!(list_item_prefix(None, 0, None, false, 1), "◦ ");
++        assert_eq!(list_item_prefix(None, 0, None, false, 2), "▪ ");
++        assert_eq!(list_item_prefix(None, 0, None, false, 3), "‣ ");
++        assert_eq!(list_item_prefix(None, 0, None, false, 4), "⁃ ");
++        assert_eq!(list_item_prefix(Some(7), 2, Some(1), true, 0), "7. ");
++        assert_eq!(list_item_prefix(Some(3), 1, Some(1), true, 1), "C. ");
++        assert_eq!(list_item_prefix(Some(1), 1, Some(0), true, 1), "1. ");
+     }
+ }
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-base-0.9.0/src/text_selection.rs gpui-base-0.9.0/src/text_selection.rs
 --- gpui-base-0.9.0/src/text_selection.rs
 +++ gpui-base-0.9.0/src/text_selection.rs
