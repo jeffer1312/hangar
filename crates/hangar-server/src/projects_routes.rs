@@ -1,4 +1,4 @@
-//! Portas do launcher de projetos e dos comandos da sessão.
+//! Portas dos comandos de execução da sessão.
 use crate::routes::AppState;
 use axum::{
     extract::Request,
@@ -8,12 +8,6 @@ use axum::{
 use serde_json::{Value, json};
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 const ROUTES: &[(&str, &str)] = &[
-    ("/api/projects", "GET"),
-    ("/api/projects", "POST"),
-    ("/api/projects/{name}", "DELETE"),
-    ("/api/projects/{name}/start", "POST"),
-    ("/api/projects/{name}/stop", "POST"),
-    ("/api/projects/{name}/pane", "GET"),
     ("/api/sessions/{name}/runners", "GET"),
     ("/api/sessions/{name}/runners/custom", "POST"),
     ("/api/sessions/{name}/run", "POST"),
@@ -21,17 +15,14 @@ const ROUTES: &[(&str, &str)] = &[
     ("/api/sessions/{name}/run/pane", "GET"),
 ];
 pub fn matches(path: &str) -> bool {
-    path == "/api/projects"
-        || path.starts_with("/api/projects/")
-        || path
-            .strip_prefix("/api/sessions/")
-            .and_then(|s| s.split_once('/'))
-            .is_some_and(|(_, op)| {
-                matches!(
-                    op,
-                    "runners" | "runners/custom" | "run" | "run/stop" | "run/pane"
-                )
-            })
+    path.strip_prefix("/api/sessions/")
+        .and_then(|s| s.split_once('/'))
+        .is_some_and(|(_, op)| {
+            matches!(
+                op,
+                "runners" | "runners/custom" | "run" | "run/stop" | "run/pane"
+            )
+        })
 }
 fn error(e: hangar_projects::Error) -> Response {
     hangar_core::http::json_response(
@@ -41,10 +32,6 @@ fn error(e: hangar_projects::Error) -> Response {
 }
 async fn service(st: &AppState) -> Result<hangar_projects::Service, Response> {
     let env = &st.accounts.env;
-    let backend = crate::session_open::cli::backend_dir_for_home(&env.home);
-    let config = hangar_core::user_data::path(&env.home, backend.as_deref(), "projects.json")
-        .map_err(|e| error(hangar_projects::Error::new(500, e.to_string())))?
-        .unwrap_or_else(|| env.home.join(".hangar/config/projects.json"));
     let settings = st
         .settings_snapshot()
         .map_err(|e| error(hangar_projects::Error::new(503, e.to_string())))?;
@@ -54,7 +41,6 @@ async fn service(st: &AppState) -> Result<hangar_projects::Service, Response> {
         .map(PathBuf::from)
         .unwrap_or_else(|| env.claude_base.join("projects"));
     Ok(hangar_projects::Service {
-        config,
         preferences: projects
             .parent()
             .unwrap_or(&projects)
@@ -196,7 +182,7 @@ async fn inner(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Response {
     };
     tokio::spawn(async move {
         let _ingress = ingress;
-        match execute(&st, &service, &path, method.as_str(), value).await {
+        match execute(&st, &service, &path, value).await {
             Ok(v) => hangar_core::http::json_response(StatusCode::OK, v),
             Err(e) => error(e),
         }
@@ -217,55 +203,8 @@ async fn execute(
     st: &AppState,
     service: &hangar_projects::Service,
     path: &str,
-    method: &str,
     value: Value,
 ) -> Result<Value, hangar_projects::Error> {
-    if path == "/api/projects" {
-        if method == "GET" || method == "HEAD" {
-            return Ok(json!(service.list().await?));
-        }
-        let field = |name: &str| {
-            value[name]
-                .as_str()
-                .ok_or_else(|| hangar_projects::Error::new(422, format!("{name} é obrigatório")))
-        };
-        let port = if value["port"].is_null() {
-            None
-        } else {
-            Some(
-                value["port"]
-                    .as_i64()
-                    .or_else(|| value["port"].as_str().and_then(|s| s.parse().ok()))
-                    .ok_or_else(|| hangar_projects::Error::new(422, "port deve ser inteiro"))?,
-            )
-        };
-        return Ok(json!(
-            service
-                .upsert(
-                    field("name")?,
-                    field("cwd")?,
-                    field("command")?,
-                    port,
-                    value["stop_command"].as_str()
-                )
-                .await?
-        ));
-    }
-    if let Some(rest) = path.strip_prefix("/api/projects/") {
-        let (name, op) = rest.split_once('/').unwrap_or((rest, ""));
-        return match op {
-            "start" => Ok(json!(service.start(name).await?)),
-            "stop" => {
-                service.stop(name).await?;
-                Ok(json!({"ok":true}))
-            }
-            "pane" => Ok(json!({"pane":service.pane(name).await?})),
-            _ => {
-                service.remove(name).await?;
-                Ok(json!({"ok":true}))
-            }
-        };
-    }
     let (name, op) = path
         .strip_prefix("/api/sessions/")
         .unwrap()

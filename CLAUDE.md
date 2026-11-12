@@ -812,7 +812,7 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
     `config_sync/plugin_publish.rs`, `costs/pricing_refresh.rs`).
   - Atalhos de projeto: identidade, GET/PUT, `shortcut-shell`, `run-code` e reinício são do Rust.
     Lista, fechamento, foco, respostas e WebSocket dos terminais são do Rust, sem consumidores
-    Python. Projetos e runners são do `hangar-projects`, com as mesmas rotas e arquivos de configuração.
+    Python. Runners por sessão são do `hangar-projects`, com as mesmas rotas e preferências.
     O bastão é montado, opcionalmente reescrito,
     gravado e entregue ao lançador pelo Rust, sem montador Python.
   - Git, arquivos e administração de worktrees são do Rust, inclusive contexto, validação,

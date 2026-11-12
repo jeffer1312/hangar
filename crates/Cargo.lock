@@ -1817,7 +1817,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1_smol",
- "sysinfo",
  "tempfile",
  "tokio",
  "toml",

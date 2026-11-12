@@ -36,14 +36,6 @@ pub fn slug(cwd: &str) -> String {
         &sha1_smol::Sha1::from(cwd).digest().to_string()[..6]
     )
 }
-pub(crate) fn first_token(s: &str) -> String {
-    let s = s.trim();
-    if let Some(s) = s.strip_prefix('"') {
-        s.split('"').next().unwrap_or("").into()
-    } else {
-        s.split_whitespace().next().unwrap_or("").into()
-    }
-}
 impl Service {
     async fn mux(&self, args: Vec<String>) -> (bool, String, String) {
         let Some(program) = self.program.first() else {
