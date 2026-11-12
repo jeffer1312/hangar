@@ -86,7 +86,11 @@ impl Service {
         }
     }
     fn preference(&self, cwd: &str) -> Value {
-        Self::entry(&self.read_prefs().unwrap_or_else(|_| json!({})), cwd)
+        let prefs = self.read_prefs().unwrap_or_else(|e| {
+            tracing::warn!(code = e.code.unwrap_or("runner_prefs_failed"), "preferências dos comandos ilegíveis: {}", e.detail);
+            json!({})
+        });
+        Self::entry(&prefs, cwd)
     }
     fn entry(p: &Value, cwd: &str) -> Value {
         if let Some(s) = p[cwd].as_str() {
@@ -181,7 +185,8 @@ impl Service {
             hangar_core::terminal_process::mux_absence(error.trim()).then_some(false)
         }
     }
-    async fn kill_run(&self, name: &str) -> bool {
+    /// A última leitura de `exists` depois de matar: `Some(false)` = parou.
+    async fn kill_run(&self, name: &str) -> Option<bool> {
         self.mux(vec![
             "kill-session".into(),
             "-t".into(),
@@ -193,7 +198,7 @@ impl Service {
         ])
         .await;
         if self.exists(name).await == Some(false) {
-            return true;
+            return Some(false);
         }
         let (_, pids, _) = self
             .mux(vec![
@@ -220,13 +225,22 @@ impl Service {
             let _ =
                 tokio::time::timeout(Duration::from_secs(5), cmd.kill_on_drop(true).output()).await;
         }
+        let mut last = None;
         for _ in 0..20 {
-            if self.exists(name).await == Some(false) {
-                return true;
+            last = self.exists(name).await;
+            if last == Some(false) {
+                break;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        false
+        last
+    }
+    fn not_stopped(name: &str, state: Option<bool>, what: &str) -> Error {
+        if state.is_none() {
+            Error::coded(503, "runner_mux_unavailable", format!("o multiplexador dos runs nao respondeu (sessao {name}); {what}"))
+        } else {
+            Error::new(409, format!("o run (sessao {name}) nao morreu — o processo segue rodando; {what}"))
+        }
     }
     pub async fn all_runs(&self) -> BTreeMap<String, RunInfo> {
         let (ok, out, _) = self
@@ -262,15 +276,14 @@ impl Service {
         Some(info)
     }
     pub async fn start_run(&self, cwd: &str, command: &str) -> Result<RunInfo, Error> {
-        self.save_pref(cwd, "remembered", json!(command))?;
+        // Lembrar é conveniência: arquivo ilegível não impede o play.
+        if let Err(e) = self.save_pref(cwd, "remembered", json!(command)) {
+            tracing::warn!(code = e.code.unwrap_or("runner_prefs_failed"), "comando do run não ficou lembrado: {}", e.detail);
+        }
         let name = slug(cwd);
-        if !self.kill_run(&name).await {
-            return Err(Error::new(
-                409,
-                format!(
-                    "o run anterior nao morreu (sessao {name}); o novo NAO subiu — o processo antigo segue rodando"
-                ),
-            ));
+        let state = self.kill_run(&name).await;
+        if state != Some(false) {
+            return Err(Self::not_stopped(&name, state, "o novo NAO subiu"));
         }
         self.mux(vec!["start-server".into()]).await;
         self.mux(vec![
@@ -335,13 +348,9 @@ impl Service {
     }
     pub async fn stop_run(&self, cwd: &str) -> Result<(), Error> {
         let name = slug(cwd);
-        if self.kill_run(&name).await {
-            Ok(())
-        } else {
-            Err(Error::new(
-                409,
-                format!("o run (sessao {name}) nao morreu — o processo segue rodando"),
-            ))
+        match self.kill_run(&name).await {
+            Some(false) => Ok(()),
+            state => Err(Self::not_stopped(&name, state, "nada foi parado")),
         }
     }
     pub async fn run_pane(&self, cwd: &str) -> String {

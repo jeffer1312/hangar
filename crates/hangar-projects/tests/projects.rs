@@ -137,5 +137,16 @@ async fn stop_without_an_answer_from_the_multiplexer_is_not_success() {
     let mut service = service(root.path());
     service.program = vec!["/bin/sh".into(), "-c".into(), "echo boom >&2; exit 1".into()];
     let error = service.stop_run(root.path().to_str().unwrap()).await.unwrap_err();
-    assert_eq!(error.status, 409);
+    assert_eq!(error.code, Some("runner_mux_unavailable"));
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn unreadable_preferences_do_not_block_the_play() {
+    let root = tempfile::tempdir().unwrap();
+    let mut service = service(root.path());
+    let script = r#"case "$*" in *has-session*) echo "can't find session: x" >&2; exit 1;; *new-session*) echo nope >&2; exit 1;; esac"#;
+    service.program = vec!["/bin/sh".into(), "-c".into(), script.into()];
+    std::fs::write(&service.preferences, "").unwrap();
+    let error = service.start_run(root.path().to_str().unwrap(), "npm run dev").await.unwrap_err();
+    assert_eq!(error.status, 502);
 }
