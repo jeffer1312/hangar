@@ -1,0 +1,17 @@
+[package]
+name = "hangar-conversation-transfer"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+hangar-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ring.workspace = true
+base64.workspace = true
+regex.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+proptest.workspace = true

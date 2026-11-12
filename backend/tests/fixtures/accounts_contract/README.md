@@ -54,9 +54,9 @@ exige `attempt_id`; falta é 422, tentativa antiga é 409. Os erros preservam
 | Locks de existência fora das pastas apagáveis | Protocolo compartilhado Rust/Python | Mesmo descritor/protocolo, inclusive Windows; não vale mutex interno sozinho |
 
 Leitores de `codex_contas` encontrados por busca e GitNexus na base: adaptadores
-Codex (`adapter`, `appserver`, `sem_terminal`, `transfer`), `api`, `registry`,
+Codex (`adapter`, `appserver`, `sem_terminal`), `api`, `registry`,
 `list_bridge`, `archive`, `archive_providers`, `bastao`, `cliproxy_accounts`,
-`conversation_history`, `conversation_transfer`, `costs_sources`, `cotas`,
+`costs_sources`, `cotas`,
 `credenciais`, `orq_politica`, `config_sync`, `config_sync_paths`, `codex_appserver`,
 `codex_models`, `codex_importador`, serviço/rotas de contas e reconciliadores de
 sync/plugins. Os lançadores e probes também leem o formato. Esses consumidores

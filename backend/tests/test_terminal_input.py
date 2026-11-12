@@ -909,9 +909,7 @@ def test_send_prompt_tui_recem_aberta_lenta_entrega_sem_falso_partial(monkeypatc
 def no_transfer(monkeypatch):
     # As travas de transferencia montam `Path.home()`, que quebra com `os.name` dublado
     # (docs/decisoes/windows.md); aqui elas nao sao o assunto.
-    from app import conversation_transfer
     from app.adapters.codex import sessions as codex_sessions
-    monkeypatch.setattr(conversation_transfer, "transfer_active", lambda _name: False)
     monkeypatch.setattr(codex_sessions, "exists", lambda _name: False)
     # A simulação de os.name testa o clipboard; a trava usa o sistema real do host.
     import threading

@@ -5,6 +5,8 @@
 //! Falha antes de encerrar não muda nada; falha depois volta a sessão pelo spec antigo e o erro sai com
 //! código. O modo vem do spec e do que o Rust observou da sessão, nunca de uma leitura do rodapé feita na
 //! hora: sem modo conhecido, recusa.
+pub(crate) mod transfer;
+
 use super::gateway::RuntimeRegistry;
 use super::protocol::RuntimeError;
 use super::terminal::TerminalTarget;

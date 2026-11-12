@@ -189,19 +189,6 @@ def _sem_orquestracoes_reais(tmp_path_factory):
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _sem_transferencias_reais(tmp_path_factory):
-    # A lista e o aquecimento não podem consultar operações privadas da máquina durante a suíte.
-    from app import conversation_transfer
-    original = conversation_transfer._base
-    pasta = tmp_path_factory.mktemp("conversation-transfers")
-    conversation_transfer._base = lambda: pasta
-    try:
-        yield
-    finally:
-        conversation_transfer._base = original
-
-
-@pytest.fixture(scope="session", autouse=True)
 def _sem_git_dir_no_ambiente_de_teste():
     # git_ops._run passa os.environ inteiro pro subprocess: dentro de um hook (pre-push, p.ex.) o
     # processo herda GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE do git que roda o hook, e qualquer teste

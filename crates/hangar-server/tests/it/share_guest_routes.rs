@@ -59,7 +59,7 @@ fn env() -> Env {
     let c = clock.clone();
     let store = ShareStore::open(dir.path().join("shares.json"), Arc::new(move || *c.lock().unwrap()));
     let facts = Arc::new(LifeFacts::default());
-    facts.apply_snapshot(HashMap::new(), HashSet::new());
+    facts.apply_transfer_snapshot(HashMap::new(), HashSet::new());
     let ts = Arc::new(FakeTs::default());
     let share = Arc::new(ShareState {
         store,

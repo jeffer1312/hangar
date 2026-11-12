@@ -117,7 +117,7 @@ use hangar_core::warn_limit;
 
 /// Versão do contrato com o Python (rotas `/internal`, canal privado do estado, ambiente). O
 /// Python (`RUST_SERVER_PROTOCOL`) recusa um binário de outra versão e atende sozinho.
-pub const INTERNAL_PROTOCOL: u32 = 107;
+pub const INTERNAL_PROTOCOL: u32 = 108;
 
 pub use hangar_core::net::http_client;
 pub(crate) use hangar_core::net::{AbortOnDrop, nodelay};
@@ -224,6 +224,7 @@ pub async fn serve_until_with_guest(
             let runtime_cfg = cfg.clone();
             let dirs = state.list.env().dirs.clone();
             let capture_program = state.list.env().capture_program.clone();
+            let transfer_share = state.share.clone();
             async move {
                 readiness.wait().await;
         // Sem catálogo legível não há janela a fechar; isso não pode impedir o servidor de subir.
@@ -248,6 +249,25 @@ pub async fn serve_until_with_guest(
                     home: dirs.home.clone(), queue_dir: dirs.claude.join(".hangar-queue"),
                     mux: list::mux::Mux::default(), mux_program: capture_program }));
                 registry.bind_watcher(watcher.clone());
+                registry.recover_transfers().await;
+                // Sem a conferência, convite de sessão morta fica em "não sei": a falha tenta de novo depois.
+                let mut snapshot_retry=None;
+                if let Some(share)=&transfer_share {
+                    match registry.pending_transfer_snapshot(share.store.active_sessions()).await {
+                        Ok((lives,uncertain))=>share.lives.facts().apply_transfer_snapshot(lives,uncertain),
+                        Err(error)=>{
+                            tracing::warn!(code=%error.code,"convites aguardam registros de transferência legíveis");
+                            let (registry,share)=(registry.clone(),share.clone());
+                            snapshot_retry=Some(AbortOnDrop(tokio::spawn(async move { loop {
+                                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                                match registry.pending_transfer_snapshot(share.store.active_sessions()).await {
+                                    Ok((lives,uncertain))=>{share.lives.facts().apply_transfer_snapshot(lives,uncertain);break;},
+                                    Err(error)=>tracing::warn!(code=%error.code,"convites aguardam registros de transferência legíveis"),
+                                }
+                            }})));
+                        },
+                    }
+                }
                 // Presas ao desligamento: uma adoção tardia abriria sessão depois do `registry.shutdown()`.
                 // Os Claude com terminal que já tinham fila aqui: o Rust os adota, sem esperar o Python.
                 let claude_terminals = { let (watcher,registry)=(watcher.clone(),registry.clone());
@@ -255,7 +275,9 @@ pub async fn serve_until_with_guest(
                 // E os Codex sem terminal com cano vivo ou mensagem esperando.
                 let codex_headless = { let (watcher,registry)=(watcher.clone(),registry.clone());
                   AbortOnDrop(tokio::spawn(async move { watcher.register_codex_headless(&registry).await; })) };
-                vec![claude_terminals,codex_headless,AbortOnDrop(tokio::spawn(watcher.run(registry.clone())))]
+                let mut tasks=vec![claude_terminals,codex_headless,AbortOnDrop(tokio::spawn(watcher.run(registry.clone())))];
+                tasks.extend(snapshot_retry);
+                tasks
             }
             _ => Vec::new(),
         };

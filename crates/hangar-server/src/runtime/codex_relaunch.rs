@@ -294,6 +294,40 @@ fn headless_target(queue_dir:&Path,name:&str,key:&str,generation:u64,meta:&Meta)
 }
 
 impl Watcher {
+    /// Adota uma conversa já importada sob a porta retida pelo coordenador.
+    pub(crate) async fn adopt_transfer(&self, registry:&RuntimeRegistry, name:&str, meta:&Meta) -> Result<(),RuntimeError> {
+        let key=terminal::text(meta,"key").ok_or_else(gone)?;
+        let mode=terminal::text(meta,"collaboration_mode");
+        if meta.get("headless")==Some(&Value::Bool(true)) {
+            self.open_headless(registry,name,key,meta,mode).await
+        } else {
+            let pane=self.terminal_pane(registry,name,key,meta).await?;
+            self.open_terminal(registry,name,key,meta,mode,&pane).await
+        }
+    }
+
+    pub(crate) async fn abort_transfer(&self,registry:&RuntimeRegistry,name:&str,id:&str)->Result<(),RuntimeError> {
+        let path=codex_sidecar::path(&codex_sidecar::dir(&self.cfg.home),name);
+        let Some(meta)=tokio::task::spawn_blocking(move||codex_sidecar::read(&path)).await.map_err(|_|job())?.map_err(|_|job())? else {return Ok(())};
+        if terminal::text(&meta,"transfer_id")!=Some(id) {return Err(busy());}
+        let key=terminal::text(&meta,"key").ok_or_else(gone)?;
+        // O ator vivo segura a lease da fila; a geração vem da entrada, sem tentar adquiri-la.
+        // Após reinício pode haver só o processo: nesse caso não existe ator para fechar.
+        if registry.has_entry(Some(key),name).await {
+            let snapshots=registry.list_snapshots_readonly().await;
+            let generation=snapshots.get(key).and_then(|s|s["generation"].as_u64()).ok_or_else(gone)?;
+            registry.close(key,generation).await?;
+        }
+        if meta.get("headless")==Some(&Value::Bool(true)) {
+            if let Some(cano)=meta.get("cano").cloned().and_then(|v|serde_json::from_value::<super::process::Cano>(v).ok()) {
+                let lives=births(vec![i64::from(cano.pid)]).await.map_err(|_|job())?;
+                super::process::kill(&cano,key,&codex_sidecar::dir(&self.cfg.home)).await.map_err(|_|job())?;
+                ensure_absent(lives,&[i64::from(cano.pid)]).await.map_err(|_|job())?;
+            }
+        } else {self.drop_terminal(registry,name,&MuxProcess::new(&self.cfg.mux_program,TIMEOUT)).await?;}
+        codex_sidecar::locked(&codex_sidecar::dir(&self.cfg.home),name,|path|match std::fs::remove_file(path) {Err(e) if e.kind()!=std::io::ErrorKind::NotFound=>Err(e),_=>Ok(())}).map_err(|_|job())
+    }
+
     async fn load(&self,name:&str) -> Option<Meta> {
         let file = codex_sidecar::path(&codex_sidecar::dir(&self.cfg.home),name);
         tokio::task::spawn_blocking(move||codex_sidecar::load(&file)).await.ok().flatten()
@@ -1067,6 +1101,21 @@ impl Watcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn abort_transfer_after_restart_cleans_a_sidecar_without_an_adopted_actor() {
+        let home=tempfile::tempdir().unwrap();
+        let env=crate::accounts::environment::AccountEnvironment::from_map([("HOME".into(),home.path().to_string_lossy().into_owned())].into());
+        let runtime=RuntimeRegistry::new("127.0.0.1:9".parse().unwrap(),"fixture".into(),"fixture".into()).with_codex_environment(env);
+        let watcher=Watcher::new(super::super::codex_terminal::WatchConfig {home:home.path().into(),queue_dir:home.path().join("queue"),mux:crate::list::mux::Mux::default(),mux_program:"no-mux-needed".into()});
+        let id="41234567-89ab-4cde-8fab-0123456789ab";
+        let meta=json!({"name":"restoring","key":"33333333333333333333333333333333","headless":true,"transfer_id":id,"cano":null});
+        let dir=codex_sidecar::dir(home.path());
+        codex_sidecar::put(&dir,"restoring",meta.as_object().unwrap()).unwrap();
+        assert!(!runtime.has_entry(None,"restoring").await);
+        watcher.abort_transfer(&runtime,"restoring",id).await.unwrap();
+        assert!(codex_sidecar::read(&codex_sidecar::path(&dir,"restoring")).unwrap().is_none());
+    }
 
     #[test]
     fn only_a_codex_pane_without_sidecar_is_still_opening() {

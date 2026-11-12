@@ -1137,6 +1137,16 @@ pub(crate) fn on_connect_port(req: &Request) -> bool {
 
 
 pub(crate) async fn pass(st: &AppState, mut req: Request, fwd: &Forward) -> Response {
+    let _transfer_pass=if !matches!(*req.method(),Method::GET|Method::HEAD|Method::OPTIONS) {
+        if let (Some(runtime),Some(name))=(st.state.runtime.get(),crate::session_write::session_name(req.uri().path())) {
+            if runtime.transfer_blocked(&name).await {
+                return crate::session_write::json_response(StatusCode::CONFLICT,crate::session_write::busy_body());
+            }
+            match runtime.ingress().enter_forwarded(&name) {
+                Ok(pass)=>Some(pass),Err(_)=>return crate::session_write::json_response(StatusCode::CONFLICT,crate::session_write::busy_body()),
+            }
+        } else {None}
+    } else {None};
     // Pedido da ponte do Codex com terminal nunca volta ao Python: ele trata o que o Rust não atende.
     if req.extensions().get::<crate::session_write::bridge::BridgedOwner>().is_some() { return StatusCode::MISDIRECTED_REQUEST.into_response(); }
     if let Some(grant) = &fwd.guest {

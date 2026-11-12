@@ -104,8 +104,7 @@ _H = {"Authorization": "Bearer secret"}
 def test_reload_route_is_rust_only(cliente, provider):
     from app.models import SessionInfo
     info = SessionInfo(name="s1", cwd="/tmp", provider=provider) if provider else None
-    with patch("app.conversation_transfer.transfer_for_session", return_value=None), \
-         patch("app.api._cached_info", AsyncMock(return_value=info)):
+    with patch("app.api._cached_info", AsyncMock(return_value=info)):
         r = cliente.post("/api/sessions/s1/recarregar", headers=_H)
     code = r.json()["detail"]["code"]
     if provider is None:
@@ -114,5 +113,3 @@ def test_reload_route_is_rust_only(cliente, provider):
         assert r.status_code == 409 and code == "erro_recarregar_so_sem_terminal"
     else:
         assert r.status_code == 503 and code == "session_open_needs_rust_server"
-
-

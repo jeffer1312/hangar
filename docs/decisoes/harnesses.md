@@ -1097,6 +1097,11 @@ executor com uma incerta despachada há 10 min e espera a desistência sem novo 
 `terminal_runtime_steer_entry_behind_an_uncertain_delivery_names_it_without_keys` cobre o código
 novo do Orientar.
 
+Na mesma máquina a rodada da lista passava de 2 s, e achar a sessão (`find_row`) esperava a rodada
+em curso. Agora ela responde da última lista boa (`last_good` em `list/bridge.rs`) enquanto a rodada
+roda, por até 5 s (`LOCATE_STALE`); a frescura conta do fim da rodada. Com 30 s, uma sessão fechada no
+terminal seguia achada por meio minuto, e histórico e retomada operavam nela (decisão de 12/11/2026).
+
 Na mesma máquina o texto ficava no composer sem enviar: o `Enter` (outro `tmux.exe`, a 1,1 s cada)
 se perdia, a prova do envio via o texto parado e a entrega virava `submit_unproved`, que a
 desistência não tira com o campo ocupado; a pessoa apagava o campo à mão para a fila andar. Agora,

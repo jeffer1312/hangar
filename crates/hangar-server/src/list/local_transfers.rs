@@ -1,5 +1,5 @@
-//! Transferência de conversa vista pela lista (`registry._decorate_transfers`): só leitura dos
-//! registros que o `conversation_transfer.py` grava em `~/.hangar/conversation-transfers`.
+//! Transferência de conversa vista pela lista: leitura dos registros duráveis do
+//! `hangar-conversation-transfer`, sem depender do coordenador em execução.
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 

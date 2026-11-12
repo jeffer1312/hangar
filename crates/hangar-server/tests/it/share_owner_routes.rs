@@ -146,7 +146,7 @@ fn env() -> Env {
     let life = Arc::new(FakeLife::default());
     life.births.lock().unwrap().insert("proj".into(), 1);
     let facts = Arc::new(LifeFacts::default());
-    facts.apply_snapshot(HashMap::new(), HashSet::new());
+    facts.apply_transfer_snapshot(HashMap::new(), HashSet::new());
     let ts = Arc::new(FakeTs::default());
     let share = Arc::new(ShareState {
         store,

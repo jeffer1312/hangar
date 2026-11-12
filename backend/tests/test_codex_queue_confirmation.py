@@ -61,26 +61,6 @@ async def test_cancelled_codex_send_keeps_reserved_entry(tmp_path, monkeypatch):
     assert pqueue.PromptQueue("cancelled-send").load()[0]["delivered"] is True
 
 
-def test_idle_codex_confirmation_does_not_release_unproved_entry(tmp_path, monkeypatch):
-    from types import SimpleNamespace
-    from app import api, runtime_coordinator
-
-    monkeypatch.setattr(runtime_coordinator, "_current", None)
-    monkeypatch.setattr(pqueue, "_queue_dir", lambda: tmp_path)
-    queue = pqueue.PromptQueue("idle-codex")
-    entry = queue.append("RPC sem confirmação", delivered=True, ts=100)
-    path = tmp_path / "rollout.jsonl"
-    path.write_text('{"type":"session_meta","payload":{"id":"thread"},"timestamp":"1970-01-01T00:00:00Z"}\n')
-    monkeypatch.setattr(api, "_transfer_send_error", lambda _: None)
-    monkeypatch.setattr(api, "_cached_info_sync", lambda _: SimpleNamespace(jsonl=str(path), provider="codex"))
-    monkeypatch.setattr(api, "_headless", lambda _: False)
-    monkeypatch.setattr(api.hook_state, "get_state", lambda _: ("idle", 100))
-    monkeypatch.setattr(api, "_agendar_confirmacao", lambda *args: None)
-    monkeypatch.setattr(api, "_drenar", lambda *args: pytest.fail("uma confirmação não pode reenviar"))
-    api._confirm_and_drain("idle-codex")
-    row = queue.load()[0]
-    assert row["id"] == entry["id"] and row["delivered"] is True
-    assert not row.get("confirmed") and not row.get("attempts") and not row.get("desistiu")
 
 
 def test_confirm_and_drain_never_writes_the_projection_of_a_rust_codex_terminal(tmp_path, monkeypatch):

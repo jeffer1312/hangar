@@ -1019,9 +1019,6 @@ def install_adapter(cls, provider):
                 return
             coordinator = runtime_coordinator.current()
             if provider == "claude" and coordinator is not None and coordinator.legacy is not None and coordinator.transport is not None:
-                from app.conversation_transfer import transfer_active
-                if transfer_active(name):
-                    return
                 if coordinator.managed_queue(name) and (slot := coordinator.slot(name)).change is not None and coordinator.in_lifecycle(slot):
                     slot.change["relaunch"] = True      # a administração reabre lançando o processo
                     return
