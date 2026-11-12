@@ -1010,6 +1010,12 @@ fn new_span(pos: Option<markdown::unist::Position>, cx: &NodeContext) -> Option<
     })
 }
 
+fn list_item_number(source: &str, item: &mdast::Node) -> Option<u32> {
+    let rest = source.get(item.position()?.start.offset..)?.trim_start();
+    let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+    rest[..end].parse().ok()
+}
+
 fn ast_to_node(source: &str, value: mdast::Node, cx: &mut NodeContext) -> BlockNode {
     let span = new_span(value.position().cloned(), cx);
     let parse_cx = MarkdownParseContext::new(source, cx.offset);
@@ -1041,10 +1047,25 @@ fn ast_to_node(source: &str, value: mdast::Node, cx: &mut NodeContext) -> BlockN
             }
         }
         Node::List(list) => {
+            // Modified for Hangar: "1. 3. 7." answers items 1, 3 and 7, so it is shown as typed;
+            // the lazy "1. 1. 1." keeps the automatic count.
+            let typed: Vec<Option<u32>> = list
+                .children
+                .iter()
+                .map(|item| list_item_number(source, item))
+                .collect();
+            let literal = list.ordered && typed.windows(2).any(|pair| pair[0] != pair[1]);
             let children = list
                 .children
                 .into_iter()
-                .map(|c| ast_to_node(source, c, cx))
+                .zip(typed)
+                .map(|(c, number)| {
+                    let mut node = ast_to_node(source, c, cx);
+                    if literal && let BlockNode::ListItem { value, .. } = &mut node {
+                        *value = number;
+                    }
+                    node
+                })
                 .collect();
             BlockNode::List {
                 ordered: list.ordered,
@@ -1063,6 +1084,7 @@ fn ast_to_node(source: &str, value: mdast::Node, cx: &mut NodeContext) -> BlockN
                 children,
                 spread: val.spread,
                 checked: val.checked,
+                value: None,
                 span: new_span(val.position, cx),
             }
         }
@@ -1749,6 +1771,17 @@ mod tests {
         assert_eq!(selected_code_range(source, 5..6), Some(13..14));
         assert_eq!(selected_code_range(source, 6..7), Some(14..15));
         assert_eq!(selected_code_range(source, 5..7), Some(13..15));
+    }
+
+    #[test]
+    fn ordered_list_keeps_the_typed_numbers_unless_all_repeat() {
+        let mut cx = NodeContext::default();
+        let typed = parse("1. A\n3. B\n7. C", &mut cx).unwrap();
+        assert!(typed.to_markdown().contains("1. A\n3. B\n7. C"));
+
+        let mut cx = NodeContext::default();
+        let lazy = parse("1. A\n1. B\n1. C", &mut cx).unwrap();
+        assert!(lazy.to_markdown().contains("1. A\n2. B\n3. C"));
     }
 
     #[test]
