@@ -16,7 +16,7 @@ async fn tick(source:&Live,since:&mut Option<Time>) {
 fn hold(busy:Option<Busy>,since:&mut Option<Time>,now:Time)->Option<String> {
     let Some(busy)=busy else { *since=None; return None };
     let first=*since.get_or_insert(now);
-    if busy==Busy::Uncertain || now-first<crate::update::periodic::DEFER_CEILING { return Some(busy.why().into()); }
+    if now-first<crate::update::periodic::DEFER_CEILING { return Some(busy.why().into()); }
     tracing::warn!("auto-update: adiada há 24 h ({}); atualiza assim mesmo",busy.why());
     *since=None;
     None
@@ -92,7 +92,9 @@ mod tests {
         assert_eq!(since,Some(now()));
         let day=now()+chrono::TimeDelta::hours(24);
         assert_eq!(hold(Some(Busy::Working),&mut since.clone(),day),None,"passou de 24 h: atualiza");
-        assert!(hold(Some(Busy::Uncertain),&mut since,now()+chrono::TimeDelta::hours(48)).is_some(),"entrega incerta segura sempre");
+        assert!(hold(Some(Busy::Uncertain),&mut since,later).is_some(),"incerta há 23 h segura");
+        assert_eq!(hold(Some(Busy::Uncertain),&mut since,day),None,"incerta há 24 h solta");
+        since=Some(now());
         assert_eq!(hold(None,&mut since,day),None);
         assert_eq!(since,None,"livre, o adiamento acaba");
     }

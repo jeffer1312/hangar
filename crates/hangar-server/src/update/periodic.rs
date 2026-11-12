@@ -18,7 +18,8 @@ pub const INTERVAL: Duration = Duration::from_secs(3600);
 pub const RECHECK: Duration = Duration::from_secs(300);
 /// Atualização que falhou segura novas tentativas por 24 h.
 const FAILURE_WINDOW: chrono::TimeDelta = chrono::TimeDelta::hours(24);
-/// Sessão ou fila que nunca param não seguram a atualização para sempre; a entrega incerta segura.
+/// Nada segura a atualização para sempre: nem sessão ou fila que nunca param, nem a entrega incerta cuja
+/// desistência não roda (campo ocupado por placeholder de colagem ou rascunho).
 pub(crate) const DEFER_CEILING: chrono::TimeDelta = chrono::TimeDelta::hours(24);
 
 /// O que um tique pergunta à máquina; o teste troca.
@@ -110,7 +111,7 @@ pub async fn tick(machine: &impl Machine, now: Time, since: Option<Time>) -> Tic
     }
     // Já adiada, a máquina ainda ocupada responde sem ir ao índice a cada `RECHECK`.
     let early = if since.is_some() { Some(machine.busy().await) } else { None };
-    if let Some(Ok(Some(busy))) = &early && (*busy == Busy::Uncertain || since.is_none_or(|since| now - since < DEFER_CEILING)) {
+    if let Some(Ok(Some(busy))) = &early && since.is_none_or(|since| now - since < DEFER_CEILING) {
         return Tick::Deferred(busy.why().to_owned());
     }
     let version = match machine.newer(&channel).await {
@@ -129,7 +130,7 @@ pub async fn tick(machine: &impl Machine, now: Time, since: Option<Time>) -> Tic
     let busy = machine.busy().await;
     match busy {
         Ok(None) => {}
-        Ok(Some(busy)) if busy == Busy::Uncertain || since.is_none_or(|since| now - since < DEFER_CEILING) => {
+        Ok(Some(busy)) if since.is_none_or(|since| now - since < DEFER_CEILING) => {
             return Tick::Deferred(busy.why().to_owned());
         }
         Ok(Some(busy)) => tracing::warn!("update: adiada há 24 h ({}); atualiza assim mesmo", busy.why()),
@@ -307,14 +308,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_periodic_ceiling_releases_work_and_queue_but_not_an_uncertain_delivery() {
+    async fn update_periodic_ceiling_releases_work_queue_and_a_stuck_uncertain_delivery() {
         let run = |busy, hours| async move {
             tick(&Fake { busy: Some(busy), ..Fake::default() }, now(), Some(now() - chrono::TimeDelta::hours(hours))).await
         };
         assert_eq!(run(Busy::Working, 23).await, Tick::Deferred("sessao trabalhando".into()), "adiado há 23 h ainda segura");
         assert_eq!(run(Busy::Working, 24).await, Tick::Launched { version: "0.1.0.9".into() });
         assert_eq!(run(Busy::Queue, 25).await, Tick::Launched { version: "0.1.0.9".into() });
-        assert_eq!(run(Busy::Uncertain, 48).await, Tick::Deferred("entrega incerta".into()), "entrega incerta segura sempre");
+        assert_eq!(run(Busy::Uncertain, 23).await, Tick::Deferred("entrega incerta".into()), "incerta há 23 h ainda segura");
+        // A desistência não roda com o campo ocupado (placeholder de colagem, rascunho): sem teto a máquina nunca atualizava.
+        assert_eq!(run(Busy::Uncertain, 24).await, Tick::Launched { version: "0.1.0.9".into() }, "incerta há 24 h solta");
     }
 
     #[test]
@@ -358,9 +361,9 @@ mod tests {
 
     #[tokio::test]
     async fn update_periodic_past_the_ceiling_rereads_busy_after_the_index() {
-        // Passado o teto, o trabalho solta; mas a entrega que ficou incerta durante a busca do índice segura.
-        let first = now() - chrono::TimeDelta::hours(25);
-        let fake = Fake { busy: Some(Busy::Working), uncertain_after_index: true, ..Fake::default() };
+        // Livre antes do índice, incerta depois dele: a leitura nova segura a atualização.
+        let first = now() - chrono::TimeDelta::hours(23);
+        let fake = Fake { uncertain_after_index: true, ..Fake::default() };
         assert_eq!(tick(&fake, now(), Some(first)).await, Tick::Deferred(Busy::Uncertain.why().to_owned()));
         assert_eq!(fake.launched.load(Ordering::SeqCst), 0);
     }
