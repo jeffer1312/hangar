@@ -189,7 +189,7 @@ async fn default_account_is_noop_and_missing_source_config_is_empty() {
     );
 }
 #[tokio::test]
-async fn removed_preferences_and_profiles_preserve_personal_edits() {
+async fn removed_profile_with_personal_edits_keeps_files_and_reports_changed_preparation() {
     let f = Fixture::new();
     f.source("config.toml", "model='first'\n");
     f.source("work.config.toml", "model='first'\n");
@@ -209,7 +209,8 @@ async fn removed_preferences_and_profiles_preserve_personal_edits() {
     f.source("config.toml", "");
     std::fs::remove_file(f.source.join("work.config.toml")).unwrap();
     let result = prepare(f.paths(), false, true, &mut cli).await;
-    assert!(has(&result, "codex_account_local_change"));
+    assert_eq!(result["status"], "error");
+    assert!(has(&result, "codex_account_changed_during_prepare"));
     assert_eq!(f.config("config.toml")["model"], "personal");
     assert_eq!(f.config("work.config.toml")["model"], "personal-profile");
 }
@@ -246,7 +247,7 @@ async fn restriction_conflict_stays_local_after_source_removal() {
     assert_eq!(f.config("config.toml")["forced_login_method"], "api");
 }
 #[tokio::test]
-async fn resources_removed_from_source_only_delete_unchanged_managed_files() {
+async fn removed_resources_keep_personal_edits_and_report_changed_preparation() {
     let f = Fixture::new();
     f.source("skills/a/SKILL.md", "managed");
     f.source("skills/b/SKILL.md", "managed");
@@ -259,7 +260,8 @@ async fn resources_removed_from_source_only_delete_unchanged_managed_files() {
     std::fs::remove_file(f.source.join("skills/a/SKILL.md")).unwrap();
     std::fs::remove_file(f.source.join("skills/b/SKILL.md")).unwrap();
     let result = prepare(f.paths(), false, true, &mut cli).await;
-    assert!(has(&result, "codex_account_resource_local_change"));
+    assert_eq!(result["status"], "error");
+    assert!(has(&result, "codex_account_changed_during_prepare"));
     assert_eq!(
         std::fs::read_to_string(f.destination.join("skills/a/SKILL.md")).unwrap(),
         "personal"
