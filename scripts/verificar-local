@@ -348,7 +348,9 @@ passo_nativo() { (cd desktop-native && CARGO_TARGET_DIR="$PWD/target" cargo test
 passo_shell() {
     bash scripts/test-wrappers.sh || return 1
     [[ ! -f scripts/test-verificar-local.sh ]] || bash scripts/test-verificar-local.sh || return 1
-    [[ ! -f scripts/test_memory_scope.py ]] || (cd backend && uv run pytest -q ../scripts/test_memory_scope.py) || return 1
+    # Com o runtime real: com o do passo o systemd não responde e os testes do grupo seriam pulados.
+    [[ ! -f scripts/test_memory_scope.py ]] || (cd backend && XDG_RUNTIME_DIR="${HANGAR_VERIFY_RUNTIME:-${XDG_RUNTIME_DIR:-}}" \
+        uv run pytest -q ../scripts/test_memory_scope.py) || return 1
     [[ ! -f scripts/test-podar-target.sh ]] || bash scripts/test-podar-target.sh
 }
 passo_statusline() {
