@@ -71,7 +71,8 @@ pub fn run(mode: &str) -> ExitCode {
                     None => &Value::Null,
                 };
                 if tool != "Bash" {
-                    let read = ["file_path", "path"].iter().any(|k| input[k].as_str().is_some_and(vault_path));
+                    let read = ["file_path", "path", "glob"].iter().any(|k| input[k].as_str().is_some_and(vault_path))
+                        || (tool == "Grep" && input["path"].as_str().is_some_and(above_vault));
                     return Ok(read.then(|| VAULT_DENIED.to_owned()));
                 }
                 let command = &input["command"];
@@ -322,18 +323,34 @@ fn head(tokens: &[String]) -> (&str, &[String]) {
 }
 const VAULT_DENIED: &str = "BLOQUEADO: o arquivo do `vault_file` guarda uma senha e não se lê, nem para contar, medir ou tirar hash.\nO tamanho já veio na resposta do `vault_file` (`bytes`, `chars`, `ends_with_newline`). Passe o caminho como argumento ao programa que precisa da senha.";
 
-/// A pasta do `vault_file` (`$XDG_RUNTIME_DIR/hangar/vault-files`, `%LOCALAPPDATA%\hangar\vault-files`) em qualquer barra ou caixa.
+/// A pasta do `vault_file` (`$XDG_RUNTIME_DIR/hangar/vault-files`, `%LOCALAPPDATA%\hangar\vault-files`)
+/// como parte de um caminho, absoluto ou relativo, com qualquer barra ou caixa.
 fn vault_path(text: &str) -> bool {
-    text.replace('\\', "/").to_ascii_lowercase().contains("hangar/vault-files")
+    static VAULT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    VAULT
+        .get_or_init(|| regex::Regex::new(r#"(?i)(^|[/\\\s'"=<])vault-files([/\\\s'"*]|$)"#).unwrap())
+        .is_match(text)
+}
+
+/// `Grep` num caminho até dois níveis acima da pasta (`hangar` ou a pasta de execução) a varre inteira.
+fn above_vault(path: &str) -> bool {
+    let norm = |p: &str| p.replace('\\', "/").trim_end_matches('/').to_ascii_lowercase();
+    let path = norm(path);
+    ["XDG_RUNTIME_DIR", "LOCALAPPDATA"].iter().filter_map(|var| std::env::var(var).ok()).filter(|r| !r.is_empty()).any(|root| {
+        let base = format!("{}/hangar/vault-files", norm(&root));
+        !path.is_empty() && base.strip_prefix(&format!("{path}/")).is_some_and(|rest| rest.split('/').count() <= 2)
+    })
 }
 
 /// Programas que mostram, medem ou copiam o conteúdo do arquivo que recebem.
 const READERS: &[&str] = &[
     "cat", "tac", "head", "tail", "less", "more", "bat", "nl", "od", "xxd", "hexdump", "strings",
-    "base64", "wc", "md5sum", "sha1sum", "sha256sum", "sha512sum", "cksum", "b2sum", "grep", "rg",
-    "awk", "sed", "cut", "sort", "uniq", "diff", "cmp", "cp", "type", "get-content", "gc",
-    "select-string", "get-filehash", "format-hex", "certutil",
+    "base64", "wc", "md5sum", "sha1sum", "sha256sum", "sha512sum", "cksum", "b2sum", "cut", "sort",
+    "uniq", "diff", "cmp", "cp", "type", "get-content", "gc", "get-filehash", "format-hex",
+    "certutil", "mapfile", "readarray", "read",
 ];
+/// Leitores cujo primeiro argumento é o padrão de busca, que pode citar a pasta sem ler nada.
+const PATTERN_FIRST: &[&str] = &["grep", "egrep", "rg", "sed", "awk", "select-string", "sls"];
 
 /// Ler o arquivo, não usá-lo: o caminho como argumento de outro programa passa.
 fn reads_vault(command: &str, depth: u8) -> bool {
@@ -344,6 +361,9 @@ fn reads_vault(command: &str, depth: u8) -> bool {
     if command.to_ascii_lowercase().contains("::readall") {
         return true;
     }
+    static REDIRECT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let redirect = REDIRECT.get_or_init(|| regex::Regex::new(r#"(?i)<\s*['"]?[^\s'"]*vault-files"#).unwrap());
+    let mut inside = false;
     segments(command).iter().any(|segment| {
         let words = tokens(segment);
         let (name, args) = head(&words);
@@ -352,7 +372,20 @@ fn reads_vault(command: &str, depth: u8) -> bool {
         if ["sh", "bash", "zsh", "dash", "ksh", "ash", "busybox", "eval", "powershell", "pwsh"].contains(&name) {
             return depth < 3 && reads_vault(&args.join(" "), depth + 1);
         }
-        READERS.contains(&name) && vault_path(segment)
+        // Entrar na pasta faz `cat *` ler a senha sem citar o caminho.
+        if ["cd", "pushd", "set-location", "sl", "push-location"].contains(&name) {
+            inside |= vault_path(segment);
+            return false;
+        }
+        if redirect.is_match(segment) {
+            return true;
+        }
+        if PATTERN_FIRST.contains(&name) {
+            let mut operands = args.iter().filter(|a| !a.starts_with('-'));
+            operands.next();
+            return inside || operands.any(|a| vault_path(a));
+        }
+        READERS.contains(&name) && (inside || vault_path(segment))
     })
 }
 
