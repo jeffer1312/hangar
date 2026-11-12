@@ -32,6 +32,6 @@ def contas(tmp_path, monkeypatch):
 def test_claude_account_routes_need_rust(contas):
     import app.api as api_mod
     client = TestClient(api_mod.app)
-    for r in (client.get("/api/sessions/hl/conta", headers=_H),
-              client.post("/api/sessions/hl/conta", headers=_H, json={"config_dir": contas[1]})):
-        assert r.status_code == 503 and r.json()["detail"]["code"] == "session_open_needs_rust_server"
+    r = client.get("/api/sessions/hl/conta", headers=_H)
+    assert r.status_code == 503 and r.json()["detail"]["code"] == "session_open_needs_rust_server"
+    assert client.post("/api/sessions/hl/conta", headers=_H, json={"config_dir": contas[1]}).status_code == 405
