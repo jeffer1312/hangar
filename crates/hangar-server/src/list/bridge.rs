@@ -39,7 +39,7 @@ pub const DISCOVER_TTL: Duration = Duration::from_secs(1);
 /// Retrato decorado servido sem produzir de novo (`list_sessions` do `api.py`).
 pub const SNAPSHOT_TTL: Duration = Duration::from_secs(2);
 /// Última lista boa que acha a sessão sem esperar a rodada em curso (transcript, pasta e vida mudam pouco).
-const LOCATE_STALE: Duration = Duration::from_secs(30);
+const LOCATE_STALE: Duration = Duration::from_secs(5);
 /// Sessão fora da lista por este tempo perde os caches por nome.
 const FORGET_AFTER: Duration = Duration::from_secs(10);
 /// Rodada da lista mais velha que isto não serve à limpeza das páginas: são vários tiques sem rodada.
