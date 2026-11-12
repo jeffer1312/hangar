@@ -2499,7 +2499,7 @@ if (-not $bash) {
     # Atalhos em maquina migrada vao pelo current do perfil: o caminho real da versao seria podado.
     $raizAtalhos = if (Test-Path -LiteralPath (Join-Path $HOME '.hangar\current')) { '%USERPROFILE%\.hangar\current' } else { $raiz }
     # A mesma raiz na forma /c/... dos atalhos do Git Bash.
-    $rotaAtalhos = $(if (Test-Path -LiteralPath (Join-Path $HOME '.hangar\current')) { Join-Path $HOME '.hangar\current' } else { $raiz }) -replace '\\', '/' -replace '^([A-Za-z]):', '/$1'
+    $shimRootMsys = $(if (Test-Path -LiteralPath (Join-Path $HOME '.hangar\current')) { Join-Path $HOME '.hangar\current' } else { $raiz }) -replace '\\', '/' -replace '^([A-Za-z]):', '/$1'
     # (1b) hangar-python.cmd: gemeo do atalho sem extensao que o install-hangar-send.sh grava. Mesma
     # regra do backend/app/install_root.py: raiz = ~\.hangar\current (pacote) ou esta copia; nela o
     # Python embutido, senao o venv; sem nenhum, o Python real achado acima.
@@ -2633,7 +2633,7 @@ if (-not $bash) {
             $corpoSh = "#!/bin/sh`n" +
                        "# Gerado pelo instalador do hangar (install.ps1 / install-hangar-send.sh).`n" +
                        "PATH='$binMsys':`$PATH; export PATH`n" +
-                       "exec '$pyMsysTui'$a '$rotaAtalhos/scripts/$nome' `"`$@`"`n"
+                       "exec '$pyMsysTui'$a '$shimRootMsys/scripts/$nome' `"`$@`"`n"
             if (Escrever-Lancador $shPath $corpoSh 'sh') { Ok "$nome do ~/.local/bin aponta pro script do repo" }
             else { Ok "$nome do ~/.local/bin ja atualizado" }
         }
@@ -2686,7 +2686,7 @@ if (-not $bash) {
         $corpoCp = "#!/bin/sh`n" +
                    "# Gerado pelo instalador do hangar (install.ps1 / install-hangar-send.sh).`n" +
                    "PATH='$binMsys':`$PATH; export PATH`n" +
-                   "exec '$rotaAtalhos/scripts/hangar-send' `"`$@`"`n"
+                   "exec '$shimRootMsys/scripts/hangar-send' `"`$@`"`n"
         if (Escrever-Lancador $cpSendSh $corpoCp 'sh') {
             Ok 'hangar-send do ~/.local/bin aponta pro script do repo'
         }
@@ -2699,7 +2699,7 @@ if (-not $bash) {
         $corpoPreview = "#!/bin/sh`n" +
                         "# Gerado pelo instalador do hangar (install.ps1 / install-hangar-send.sh).`n" +
                         "PATH='$binMsys':`$PATH; export PATH`n" +
-                        "exec node '$rotaAtalhos/scripts/hangar-preview' `"`$@`"`n"
+                        "exec node '$shimRootMsys/scripts/hangar-preview' `"`$@`"`n"
         if (Escrever-Lancador $cpPreviewSh $corpoPreview 'sh') {
             Ok 'hangar-preview do ~/.local/bin aponta pro script do repo'
         }

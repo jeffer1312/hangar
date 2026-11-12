@@ -120,7 +120,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   import { parentSessionServerId, provideSessionServer } from '../lib/sessionServer';
   import { getIdentificador } from '../lib/peers';
   import { destinoDoRemetente } from '../lib/remetente';
-  import { createActivityFolder, matchAgentSubagent, projectSubagentActivity, subagentEnded } from '@hangar/core';
+  import { agentIdentities, createActivityFolder, matchAgentSubagent, projectSubagentActivity, subagentEnded } from '@hangar/core';
   import type { ChatEvent, StateEvent, StatsEvent, State, SessionInfo, AskQuestionPayload, AnswerItem, Provider, PlanDetail, UploadFile, SessionOpeningExtras, SubagentRun } from '@hangar/core';
   import type { WorkspaceAction } from '../lib/workspaceCommands';
   import { workspaceSessionKey } from '../lib/workspaceCommands';
@@ -1972,8 +1972,10 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   const liveSubagentRuns = $derived(subagentRuns.map(run => projectCodexSubagent(run, stateEvent?.codex_subagents)));
   const codexAgentIds = $derived(codexSubagentActivityKey(stateEvent?.codex_subagents));
   const activity = $derived(isCodex ? projectSubagentActivity(transcriptActivity, liveSubagentRuns, undefined, stateEvent?.codex_subagents) : transcriptActivity);
+  // No Claude o AgentRun não leva o agentId: sem o mapa, dois agentes de mesmo prompt não casam com nenhum arquivo.
+  const agentIds = $derived(isCodex ? new Map<string, string>() : agentIdentities(events));
   const runningAgents = $derived(activity.agents.filter(agent => agent.running && (!isCodex
-    ? !(subagentsLoaded && subagentEnded(matchAgentSubagent(subagentRuns, agent)))
+    ? !(subagentsLoaded && subagentEnded(matchAgentSubagent(subagentRuns, agent, agentIds)))
     : codexSubagentState(stateEvent?.codex_subagents, agent.agentId, agent.agentPath)?.state === 'running'
       || (subagentsLoaded && matchAgentSubagent(subagentRuns, agent)?.state === 'running'))));
   let activityConversation = $state(0);

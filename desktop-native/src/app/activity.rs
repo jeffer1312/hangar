@@ -51,7 +51,8 @@ fn native_running(agent: &AgentRun, subs: &[SubRun], states: Option<&NativeAgent
 /// o interrompido não manda aviso ao pai e ficaria "rodando" para sempre.
 fn pinned_running(codex: bool, agent: &AgentRun, subs: &[SubRun], states: Option<&NativeAgents>, loaded: bool) -> bool {
     if codex { return native_running(agent, subs, states, loaded); }
-    !match_agent(subs, agent).is_some_and(|sub| matches!(sub.state.as_deref(), Some("finished" | "failed")))
+    // Só a interrupção (`failed`): o plugin grava `finished` também em quem só espera o próprio trabalho de fundo.
+    !(loaded && match_agent(subs, agent).is_some_and(|sub| sub.state.as_deref() == Some("failed")))
 }
 
 fn project_native_detail(value: &mut Value, states: Option<&NativeAgents>, id: &str) {
@@ -1873,7 +1874,8 @@ mod tests {
         let agent = parent("t1", "tarefa um", Some("a"), true);
         let with = |state: Option<&str>| vec![SubRun { state: state.map(Into::into), ..sub("a", "tarefa um") }];
         assert!(!pinned_running(false, &agent, &with(Some("failed")), None, true));
-        assert!(!pinned_running(false, &agent, &with(Some("finished")), None, true));
+        assert!(pinned_running(false, &agent, &with(Some("finished")), None, true), "aviso de quem espera o próprio trabalho");
+        assert!(pinned_running(false, &agent, &with(Some("failed")), None, false), "lista ainda não carregada");
         assert!(pinned_running(false, &agent, &with(None), None, true));
         assert!(pinned_running(false, &agent, &[], None, false));
     }

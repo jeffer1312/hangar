@@ -5231,7 +5231,13 @@ gera aviso, e o cartão ficava "Executando há 9 h" na DELPHI-02. Agora a rota d
 marca como fim (`state: "failed"`, `endedAt` da marca; resposta depois dela desfaz). O plugin marca
 `running` no lançamento e só fecha pelo mesmo aviso, então o `running` dele não basta: o registro
 guarda quando ele chegou (`AgentLife.since`), e a interrupção mais nova que isso vence; a retomada pelo
-`SendMessage` grava um `running` novo, posterior à marca, e o agente segue rodando. Celular e web tiram da lista de rodando o agente que o servidor deu
+`SendMessage` grava um `running` novo, posterior à marca, e o agente segue rodando. A causa estava no
+plugin: o `turn.complete` abortado de um agente de fundo era ignorado à espera da task-notification,
+que na interrupção não vem; agora ele grava `failed` (`state.ts`), e a leitura do arquivo fica para
+quando o plugin não está ligado. Os clientes só obedecem `failed`: o plugin grava `finished` também no
+aviso de quem só espera o próprio trabalho de fundo ("is waiting on its own background work"), e esse
+segue vivo. O casamento com o arquivo vai pelo agentId (`agentIdentities`, agora no core e usado pelo
+web também), porque dois agentes com o mesmo prompt não casavam com nenhum. Celular e web tiram da lista de rodando o agente que o servidor deu
 como encerrado (`subagentEnded` no core); no nativo, `pinned_running` faz o mesmo na faixa fixa, e o
 cartão da conversa já seguia o estado do servidor (`effective_agent`). Só nesse sentido: o servidor
 nunca reabre um agente que o transcript deu como terminado. Testes:

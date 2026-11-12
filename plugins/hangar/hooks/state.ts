@@ -123,7 +123,8 @@ export function registerState(on: On) {
     // Fim de subagente não é a sessão parada: o turno principal pode seguir trabalhando.
     if (e.agentId) {
       agentDone(e.agentId, { answer: e.answer, isAborted: e.isAborted });
-      if (!background.has(e.agentId)) await agentLife($, e.agentId, e.isAborted ? "failed" : "finished");
+      // O de fundo termina pela task-notification; interrompido, ela não vem, e o fim é este.
+      if (!background.has(e.agentId) || e.isAborted) await agentLife($, e.agentId, e.isAborted ? "failed" : "finished");
       return next(e);
     }
     await send($, "idle", { motivo: e.reason }, true);

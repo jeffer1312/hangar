@@ -21,7 +21,7 @@ try {
         [scriptblock]::Create($node.Extent.Text.Replace('$HOME', '$fakeHome'))
     }
     . (Get-Assignment '$raizAtalhos')
-    . (Get-Assignment '$rotaAtalhos')
+    . (Get-Assignment '$shimRootMsys')
 
     $version = '0.1.0.1'
     $failures = @()

@@ -355,10 +355,11 @@ describe('activity — plano do Codex', () => {
 
 describe('subagentEnded', () => {
   // Agente interrompido não manda aviso ao pai: só o servidor, lendo o arquivo dele, sabe que acabou.
-  it('o servidor dando o agente como encerrado tira ele de rodando; sem estado ou rodando, não', () => {
+  it('o servidor dando o agente como interrompido tira ele de rodando; finished, rodando ou sem estado, não', () => {
     const base = { agentId: 'a1' } as SubagentRun;
     expect(subagentEnded({ ...base, state: 'failed' })).toBe(true);
-    expect(subagentEnded({ ...base, state: 'finished' })).toBe(true);
+    // O plugin grava finished no aviso "is waiting on its own background work": o agente segue vivo.
+    expect(subagentEnded({ ...base, state: 'finished' })).toBe(false);
     expect(subagentEnded({ ...base, state: 'running' })).toBe(false);
     expect(subagentEnded({ ...base, state: null })).toBe(false);
     expect(subagentEnded(undefined)).toBe(false);

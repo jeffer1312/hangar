@@ -176,7 +176,7 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   Até 12/11/2026 o `hangar-send`, o `hangar-preview`, o `folha`, o `hangar-mcp-headers.cmd` e os
   lançadores do Codex saíam do `$raiz`, a pasta da versão de onde o instalador rodou: na DELPHI-02
   eles ainda chamavam a `0.1.0.9467` com a `0.1.0.10172` instalada, e parariam quando a poda a
-  apagasse. O `install.ps1` usa `$raizAtalhos`/`$rotaAtalhos` em todos; o passo
+  apagasse. O `install.ps1` usa `$raizAtalhos`/`$shimRootMsys` em todos; o passo
   `2026-11-12-atalhos-windows-current` regrava os das máquinas já instaladas. Teste:
   `scripts/test-install-shims-current.ps1`.
 - **Tarefa e vigia reconhecem o pacote pela linha de comando.** O backend é `hangar-server.exe` ou
