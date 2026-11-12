@@ -824,22 +824,6 @@ class RuntimeAdapter:
         result = await runtime_coordinator.current().op(name, {"kind":"drain"}, uuid.uuid4().hex)
         return int(result["sent"])
 
-    async def state_stream(self, name, sid_get):
-        slot = native_slot(name)
-        key, generation, instance = slot.binding.key, slot.binding.generation, runtime_coordinator.current().instance
-        last = -1
-        while True:
-            coordinator = runtime_coordinator.current()
-            if (coordinator.instance != instance or slot.binding.key != key or slot.binding.generation != generation
-                    or slot.phase != runtime_coordinator.Phase.Rust):
-                return
-            slot.changed.clear()
-            revision = slot.view.get("revision", -1)
-            if revision != last or not slot.cache_valid:
-                last = revision
-                yield self.snapshot(name)
-            await slot.changed.wait()
-
     async def dispatch(self, method, name, arguments):
         if method == "ensure_running":
             return await self.ensure_running(name)
@@ -919,10 +903,6 @@ class RuntimeAdapter:
         raise RuntimeError("método exige encaminhamento explícito ao responsável")
 
 
-# ponytail: a posse é conferida por consulta a cada 0,25 s; a fase muda sem aviso único a quem espera.
-_OWNER_POLL_S = 0.25
-
-
 def _hands_over(provider, name):
     """Só sessão sem terminal troca de dono; as outras seguem o monitor direto, sem passo a mais."""
     if provider == "claude":
@@ -930,77 +910,6 @@ def _hands_over(provider, name):
     from app.adapters.codex import sessions
     return bool((sessions.load(name) or {}).get("headless"))
 
-
-def _state_owner(name):
-    """Quem responde pelo estado agora: a sessão aberta no Rust, ou a vista do Python (parada,
-    Codex, Python dono da porta)."""
-    coordinator = runtime_coordinator.current()
-    if coordinator is None or not coordinator.managed_runtime(name):
-        return ("python",)
-    slot = coordinator.slot(name)
-    if slot.binding.headless and slot.phase == runtime_coordinator.Phase.Rust:
-        return ("rust", coordinator.instance, slot.binding.key, slot.binding.generation)
-    return ("python",)
-
-
-async def owner_state_stream(legacy, native, name):
-    """Estado que segue a sessão: aberta no Rust ou não. A troca de fonte não derruba o chat, e o
-    erro de uma fonte cuja sessão acabou de mudar não sobe."""
-    while True:
-        owner = _state_owner(name)
-        source = native() if owner[0] == "rust" else legacy()
-        # Uma tarefa só itera a fonte, e só avança quando o chat pede o próximo: como a iteração
-        # direta. O monitor do Codex guarda estado da própria tarefa entre yields.
-        wanted, items = asyncio.Queue(), asyncio.Queue()
-
-        async def pump(source=source, wanted=wanted, items=items):
-            try:
-                while True:
-                    await wanted.get()
-                    try:
-                        item = await anext(source)
-                    except StopAsyncIteration:
-                        items.put_nowait(("end", None))
-                        return
-                    items.put_nowait(("item", item))
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                items.put_nowait(("error", exc))
-
-        task = asyncio.ensure_future(pump())
-        requested = False
-        try:
-            while True:
-                if not requested:
-                    wanted.put_nowait(None)
-                    requested = True
-                try:
-                    kind, value = await asyncio.wait_for(items.get(), _OWNER_POLL_S)
-                except TimeoutError:
-                    if _state_owner(name) != owner:
-                        break
-                    continue
-                requested = False
-                if kind == "item":
-                    yield value
-                    if _state_owner(name) != owner:
-                        break
-                    continue
-                if _state_owner(name) != owner:
-                    break
-                if kind == "end":
-                    return
-                if isinstance(value, runtime_coordinator.TransferInProgress):
-                    await asyncio.sleep(_OWNER_POLL_S)    # passagem curta que a consulta não viu
-                    break
-                raise value
-        finally:
-            try:
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
-            finally:
-                await source.aclose()
 
 _ASYNC = {"ensure_running", "send_prompt", "deliverable", "drain", "steer", "steer_queue", "interrupt", "select",
     "answer_questions", "set_model", "set_service_tier", "set_permission_mode", "list_models", "read_settings", "read_rate_limits", "set_mode",
@@ -1036,20 +945,13 @@ async def reserve_call(coordinator, original, adapter, method, name, arguments, 
 
 
 def install_adapter(cls, provider):
-    for method in _ASYNC | _SYNC | {"state_monitor"}:
+    for method in _ASYNC | _SYNC:
         original = getattr(cls, method, None)
         if original is None or getattr(original, "runtime_wrapped", False):
             continue
         signature = inspect.signature(original)
         facade = RuntimeAdapter(provider)
-        if method == "state_monitor":
-            @functools.wraps(original)
-            def wrapper(self, name, sid_get, _original=original, _facade=facade):
-                if not _hands_over(_facade.provider, name):
-                    return _original(self, name, sid_get)
-                return owner_state_stream(lambda: _original(self, name, sid_get),
-                                          lambda: _facade.state_stream(name, sid_get), name)
-        elif method in _SYNC:
+        if method in _SYNC:
             @functools.wraps(original)
             def wrapper(self, *args, _original=original, _signature=signature, _method=method, _facade=facade, **kwargs):
                 bound = _signature.bind(self, *args, **kwargs)

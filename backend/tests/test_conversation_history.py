@@ -234,40 +234,18 @@ def test_historical_image_and_file_get_write_keep_authorization_and_digest(joine
     assert client.get(f"/api/sessions/s/transcript-image/{event_id}/0", headers=headers).status_code == 409
 
 
-def test_bad_snapshot_never_confirms_or_discards_queue(joined, monkeypatch):
-    from app import sse
-    queue = pqueue.PromptQueue("s")
-    queue.append("ok", delivered=True)
-    before = queue.path.read_bytes()
-    joined.snapshot.write_bytes(b"corrupt\n")
-    with pytest.raises(history.HistoryError):
-        sse._confirm_codex_queue("s", str(joined.path))
-    assert queue.path.read_bytes() == before
-
-
 def test_replayed_import_after_boundary_cannot_confirm_new_ok(joined):
-    from app import sse
-    queue = pqueue.PromptQueue("s")
-    queue.append("ok", delivered=True)
     with joined.path.open("ab") as fh:
         fh.write(encoded(codex_message("ok", item_id="imported", day=5)))
-    sse._confirm_codex_queue("s", str(joined.path))
-    assert not queue.load()[0].get("confirmed")
     assert "ok" not in pqueue.committed_user_lines(str(joined.path), "codex",
                                                    **history.confirmation_options("s", str(joined.path), "codex"))
 
 
 def test_invalid_active_json_preserves_confirmation_queue(joined):
-    from app import sse
-    queue = pqueue.PromptQueue("s")
-    queue.append("ok", delivered=True)
-    before = queue.path.read_bytes()
     with joined.path.open("ab") as fh:
         fh.write(b"invalid-json\n")
     assert pqueue.committed_user_lines(str(joined.path), "codex",
                                        **history.confirmation_options("s", str(joined.path), "codex")) is None
-    sse._confirm_codex_queue("s", str(joined.path))
-    assert queue.path.read_bytes() == before
     with pytest.raises(history.HistoryError):
         history.composition_etag("s", str(joined.path), "codex", joined.record, None, 1)
 
@@ -292,42 +270,6 @@ def test_prefix_verification_cache_is_invalidated_even_when_mtime_is_restored(jo
         history.verify_boundary(joined.record, joined.path)
 
 
-@pytest.mark.asyncio
-async def test_sse_resume_below_boundary_only_emits_new_source(joined, monkeypatch):
-    import asyncio
-    from app import sse
-    from app.adapters.codex.rollout import parse_rollout_obj
-    starts = []
-    class Adapter:
-        async def transcript_stream(self, path, start_offset=None):
-            starts.append(start_offset)
-            old = parse_rollout_obj(codex_message("ok", item_id="imported", day=1))[0]
-            old.offset = 0
-            yield old
-            new = parse_rollout_obj(codex_message("novo"))[0]
-            new.offset = joined.record.boundary.min_offset
-            yield new
-            await asyncio.Event().wait()
-        async def state_monitor(self, name, sid_get):
-            await asyncio.Event().wait()
-            yield
-    monkeypatch.setattr(sse, "get_adapter", lambda provider: Adapter())
-    stream = sse.merged_events("s", str(joined.path), provider="codex", start_offset=0, count_app=False)
-    try:
-        async with asyncio.timeout(3):
-            async for event in stream:
-                if event["event"] != "message":
-                    continue
-                payload = json.loads(event["data"])
-                assert payload["id"] == compose(joined)[-1].id
-                assert payload["text"] == "novo"
-                assert starts == [joined.record.boundary.min_offset]
-                assert event["id"].endswith(":" + str(joined.record.boundary.min_offset))
-                break
-    finally:
-        await stream.aclose()
-
-
 def test_complete_record_cannot_silently_lose_one_history_source(joined, monkeypatch):
     sources = history.conversation_sources(joined.info)
     assert sources[0] == joined.record.source
@@ -340,7 +282,6 @@ def test_complete_record_cannot_silently_lose_one_history_source(joined, monkeyp
 
 def test_ack_suffix_rewrite_before_anchor_with_restored_mtime_cannot_confirm_new_ok(joined):
     import os
-    from app import sse
     suffix = encoded(codex_message("ok", item_id="real-ok", day=4))
     suffix += encoded(codex_message("padding" * 100, item_id="tail", role="assistant", day=4))
     joined.path.write_bytes(joined.prefix + suffix)
@@ -355,12 +296,7 @@ def test_ack_suffix_rewrite_before_anchor_with_restored_mtime_cannot_confirm_new
     assert joined.path.read_bytes()[-256:] == tail_anchor
     assert joined.path.stat().st_size == before.st_size
     assert joined.path.stat().st_mtime_ns == before.st_mtime_ns
-    queue = pqueue.PromptQueue("s")
-    queue.append("ok", delivered=True)
-    queue_before = queue.path.read_bytes()
-    sse._confirm_codex_queue("s", str(joined.path))
     assert "ok" not in pqueue.committed_user_lines(str(joined.path), "codex", **options)
-    assert queue.path.read_bytes() == queue_before
 
 
 def test_ack_recheck_rejects_suffix_rewrite_during_read_even_with_restored_mtime(joined, monkeypatch):

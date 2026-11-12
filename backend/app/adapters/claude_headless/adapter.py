@@ -36,7 +36,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import AsyncIterator, Callable, Optional
+from typing import Callable, Optional
 
 from app import atomico, claude_customizations, cotas, diag, log_paths, rust_bins
 from app.adapters.claude_headless import cano as cano_mod
@@ -49,7 +49,6 @@ from app.pqueue import PromptQueue
 from app.procinfo import _argv, pid_vivo, taskkill_path
 from app.state import StateEvent
 from app.live_rate import live_rate
-from app.transcript import ChatEvent, TranscriptTailer
 
 _log = logging.getLogger("hangar.claude_headless")
 
@@ -351,13 +350,6 @@ class ClaudeHeadlessAdapter:
         self.apos_entrega: Callable[[str], None] | None = None   # api agenda a confirmação da fila
 
     # ── contrato Adapter ────────────────────────────────────────────────────────────────────
-
-    def transcript_stream(self, path: str, start_offset: int | None = None) -> AsyncIterator[ChatEvent]:
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        return TranscriptTailer(path).follow(start_offset)
-
-    def state_monitor(self, name: str, sid_get: Callable[[], str]) -> AsyncIterator[StateEvent]:
-        return self._state_stream(name)
 
     def transcript_path(self, cwd: str, session_id: str, config_dir: str | None = None) -> str:
         base = (Path(config_dir) / "projects") if config_dir else Path(settings.projects_dir)
@@ -1718,60 +1710,6 @@ class ClaudeHeadlessAdapter:
         if sess is None or not sess.vivo:
             return None
         return self._evento(sess)
-
-    async def _state_stream(self, name: str) -> AsyncIterator[StateEvent]:
-        while True:
-            if not hl_sessions.exists(name):
-                if hl_sessions.em_troca(name):
-                    await asyncio.sleep(1.0)
-                    continue
-                yield StateEvent(session=name, state="dead", headless=True)
-                return
-            sess = self._sessions.get(name)
-            if sess is None or not sess.vivo:
-                # Sessão parada (o processo morre com o backend): ociosa até o próximo prompt
-                # subir outro. Não sobe aqui — abrir o chat não deve custar um processo.
-                meta = hl_sessions.load(name) or {}
-                prob = self.problema_de(name)
-                yield StateEvent(session=name, state="idle", headless=True,
-                                 claude_permission_mode=meta.get("permission_mode"),
-                                 claude_previous_non_plan=meta.get("previous_non_plan"),
-                                 status_line=await asyncio.to_thread(
-                                     _linha_parada, meta, self.transcript_path_de(meta)),
-                                 problema=prob[0] if prob else None,
-                                 problema_detalhe=prob[1] if prob else None)
-                while True:
-                    await asyncio.sleep(1.0)
-                    sess = self._sessions.get(name)
-                    if sess is not None and sess.vivo:
-                        break
-                    if self._problemas.get(name) != prob:
-                        # Subida em segundo plano (acordar) falhou com o chat já aberto: sem
-                        # reemitir, o problema só apareceria numa conexão nova.
-                        break
-                    if not hl_sessions.exists(name):
-                        break   # o laço de fora decide: encerrada, ou só trocando de modo
-                if sess is None or not sess.vivo:
-                    continue
-            last = -1
-            while True:
-                async with sess.cond:
-                    # Turno em voo: tique de 1s, senão o relógio e os tokens do rótulo ficam parados
-                    # entre dois eventos (uma tool longa não emite nada).
-                    try:
-                        await asyncio.wait_for(sess.cond.wait_for(lambda: sess.version != last),
-                                               1.0 if sess.turno_inicio is not None else None)
-                    except TimeoutError:
-                        pass
-                    last = sess.version
-                    ev = self._evento(sess)
-                if ev.state == "dead":
-                    # Processo caiu (ou o backend o matou). Com sidecar, a sessão segue existindo
-                    # e volta ociosa (laço de fora); sem sidecar (kill), morreu de vez.
-                    if self._sessions.get(name) is sess:
-                        self._sessions.pop(name, None)
-                    break
-                yield ev
 
     # ── encerramento ───────────────────────────────────────────────────────────────────────
 

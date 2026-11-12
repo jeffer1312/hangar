@@ -22,7 +22,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import ClientDisconnect
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sse_starlette.sse import EventSourceResponse
 from app import (atomico, closed_names, diag,
                  loop_monitor, permission_mode, plugin_bridge, procinfo, quem_chama, tmux,
                  uds_messaging)
@@ -36,7 +35,7 @@ from app import model_args
 from app import registry as registry_mod
 from app.registry import KillFailed, SessionRegistry
 from app.names import sanitize_session_name
-from app.models import (SessionInfo, CreatedSessionInfo, ChatEvent, CostReport, RunnersResponse, RunBody,
+from app.models import (SessionInfo, CreatedSessionInfo, ChatEvent, RunnersResponse, RunBody,
                         RunInfo, Runner, CustomRunnersBody, ProjectStatus,
                         ShortcutAnswerBody, session_key)
 from app.pqueue import (PromptQueue, _transcript_start_ts, committed_user_lines,
@@ -48,17 +47,14 @@ from app.terminal_input import TerminalInput, drain
 from app.adapters import CLAUDE_HEADLESS, get_adapter
 from app.adapters.claude_headless import sessions as headless_sessions
 from app.adapters.codex import sessions as codex_sessions
-from app.sse import invalidate_recent_list, merged_events, nav_confirmar, nav_pendente
-from app.state import forget_frame, menu_codex
+from app.state import menu_codex
 from app.uploads import MAX_BYTES
 from app.config import (list_config_dirs, _backend_config_base, settings,
-                        automations_enabled, resolve_bind_ip)
+                        automations_enabled)
 from app import runtime_config
 from app.guest_header import guest_of, guest_safe
 from app.share_life import session_life
 from app import contas, default_model, procinfo
-from app.costs import report as costs_report, usd_brl as _usd_brl, PERIODOS as _COST_PERIODOS
-from app import costs_sources
 from app import loop as loop_mod
 from app.transcript import last_assistant_text
 from app import runner
@@ -198,11 +194,7 @@ async def _lifespan(app: FastAPI):
 
     prune_task.add_done_callback(_prune_done)
 
-    # usd_brl() tem cache de 1h e timeout de 3s, e é chamado DENTRO do
-    # montar(). Sem aquecer aqui, o primeiro /api/costs depois de todo restart paga a coleta fria
-    # (657ms medidos) MAIS até 3s de câmbio, contra o AbortSignal.timeout(4000) do cliente.
-    threading.Thread(target=_usd_brl, name="usd-brl-warm", daemon=True).start()
-    # Mesmo motivo, outro caminho: o drain do Codex e assincrono (app-server) e quem o chama sao
+    # O drain do Codex e assincrono (app-server) e quem o chama sao
     # threads (Timer da confirmacao, gatilho de hook). Ver `_drenar`.
     global _loop_servidor
     _loop_servidor = asyncio.get_running_loop()
@@ -219,7 +211,6 @@ async def _lifespan(app: FastAPI):
         diag.registrar("backend.encerrando")
         await runtime.shutdown()
         await runtime.close_events()
-        costs_sources.cancelar_aquecimento()
         # Claude sem terminal fica vivo no cano: só fecha a conexão; o próximo backend religa.
         if _transfer_recovery is not None:
             await asyncio.shield(_transfer_recovery)
@@ -766,7 +757,7 @@ async def nav_ws_route(ws: WebSocket, name: str):
 
 # Snapshot com TTL de registry.list() pros endpoints request/response QUENTES (history/workflows):
 # o mount do board dispara dezenas de /history de uma vez e cada list() fresco e um scan completo
-# de /proc + fork de tmux list-panes. Os loops do SSE leem este mesmo snapshot (sse._cached_list).
+# de /proc + fork de tmux list-panes.
 # Miss por nome (sessao criada ha
 # <1s) -> fallback pro list() fresco, entao o TTL nunca causa 404 falso.
 _LIST_TTL = 1.0
@@ -805,11 +796,10 @@ def _guardar_snap(forcar: bool = False) -> list[SessionInfo]:
 
 
 def _invalidate_lists() -> None:
-    """Descarta o snapshot cru e a lista decorada do refresher: quem pedir /api/sessions depois de
-    uma mudança de membro ou de modo recalcula em vez de ver a sessão como era."""
+    """Descarta o snapshot cru: quem pedir /api/sessions depois de uma mudança de membro ou de modo
+    recalcula em vez de ver a sessão como era."""
     with _list_lock:
         _list_snap["snap"] = None
-    invalidate_recent_list()
     if registry_mod._rust_caches():
         # A mudança já aconteceu: a falha fica no diário (`lista.ponte`), o retrato do Rust vence
         # em 2 s e quem procura a sessão nova pede descoberta mais nova (`newer_than`).
@@ -1271,35 +1261,6 @@ async def diag_arquivo():
         headers={"Content-Disposition": 'attachment; filename="hangar-uso.jsonl"'})
 
 
-@app.get("/api/costs", dependencies=[Depends(require_auth)], response_model=CostReport)
-def costs_endpoint(period: str = "all", fresco: bool = False):
-    # Período inválido cai em "all" em vez de 422: um cliente antigo da malha mandando qualquer
-    # coisa não pode derrubar o custo daquela máquina inteira da soma.
-    # Lista vem de costs.PERIODOS (fonte única com o montar()); "all" fica de fora do dict porque
-    # não tem número de dias, então entra à parte aqui.
-    # `fresco` = botão "Atualizar dados": coleta agora em vez de servir a última leitura.
-    if period not in _COST_PERIODOS and period != "all":
-        period = "all"
-    try:
-        return costs_report(period=period, fresco=fresco)
-    except costs_sources.Aquecendo as e:
-        return _aquecendo(e)
-
-
-@app.get("/api/cotacao", dependencies=[Depends(require_auth)])
-def cotacao_endpoint() -> dict:
-    # Só a cotação, sem o relatório de custos junto: o custo por sessão aparece no painel, no card
-    # do quadro e na folha de uso, e nenhum deles precisa varrer transcript pra saber a taxa.
-    # A coleta em si tem cache de 1h e nunca levanta (costs.usd_brl).
-    return {"usd_brl": _usd_brl()}
-
-
-def _aquecendo(e: costs_sources.Aquecendo) -> JSONResponse:
-    # Primeira leitura do histórico desta subida ainda rodando: a tela mostra o progresso e
-    # pergunta de novo, em vez de esperar 20s e dar a máquina como "não respondeu".
-    return JSONResponse({"aquecendo": True, "lidos": e.lidos, "total": e.total}, status_code=202)
-
-
 def _codex_as_claude_mode(name: str) -> str | None:
     """Modo do Claude equivalente ao da sessão Codex `name` (None se não for Codex)."""
     from app.adapters.codex import sessions as codex_sessions
@@ -1400,7 +1361,6 @@ async def kill_session(name: str, by: str | None = None, request: Request = None
     else:
         _log.info("closed name not recorded for %s: no transcript", name)
     plugin_bridge.esquecer(name)
-    forget_frame(name)
     # O Rust revoga e desliga o túnel; fora do ar, fechar segue e o aviso volta na resposta. Fechada
     # pelo Rust, ele já revogou: perguntar de volta dentro da chamada dele prenderia o pool daqui.
     share_failed = None if closed else await asyncio.to_thread(share_bridge.revoke_session, name)
@@ -1720,18 +1680,6 @@ async def history(request: Request, response: Response, name: str, limit: int | 
     return evs
 
 
-@app.get("/api/sessions/{name}/cost", dependencies=[Depends(require_auth)])
-async def codex_session_cost(name: str):
-    info = await _cached_info(name)
-    if not info or info.provider != "codex" or not info.jsonl:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "Codex session not found"))
-    from app.session_cost import estimate_session_cost
-    try:
-        return await asyncio.to_thread(estimate_session_cost, info.jsonl)
-    except OSError:
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "Codex rollout not found")) from None
-
-
 @app.get("/api/sessions/{name}/peer-address", dependencies=[Depends(require_auth)])
 async def peer_address(name: str):
     """Endereço do inbox nativo desta sessão (cross-session messaging), ou `null`.
@@ -1755,42 +1703,6 @@ async def subagents_pelo_rust(request: Request, name: str, agent_id: str | None 
         raise HTTPException(503, detail=erro("erro_subagentes_precisa_rust",
                                              "o servidor está sem o processo Rust; reinicie o Hangar"))
     return await account_bridge.forward_public(request, "/__hangar_server/subagents")
-
-
-@app.get("/api/sessions/{name}/events", dependencies=[Depends(require_auth)])
-async def events(name: str, request: Request):
-    # handler async -> registry.list() (subprocess tmux) vai pro threadpool pra nao bloquear o loop.
-    sessions = await asyncio.to_thread(registry.list)
-    info = next((s for s in sessions if s.name == name), None)
-    if not info or not info.jsonl:
-        diag.registrar("sse.recusado", "aviso", sessao=name,
-                       detalhe="fora-da-lista" if not info else "sem-transcript")
-        raise HTTPException(404, detail=erro("erro_sessao_inexistente", "session or transcript not found"))
-    # Retomada exata: o id que emitimos no transcript e "<stem-do-jsonl>:<offset-em-bytes>". Chega
-    # por header (Last-Event-ID, que o browser reenvia sozinho quando o MESMO EventSource reconecta)
-    # ou por query param (o app fecha e recria o EventSource no proprio retry, e objeto novo nunca
-    # manda o header -> sem o param a retomada nunca dispararia no uso real).
-    #
-    # O STEM e obrigatorio e tem que bater com o transcript ATUAL: apos um /clear o jsonl e outro
-    # arquivo, e honrar um offset do arquivo antigo daria seek no meio do novo, pulando calado todo
-    # o inicio da conversa. Nao bateu (ou lixo) -> None, e o tail cai no backfill normal.
-    raw = request.query_params.get("last_event_id") or request.headers.get("last-event-id")
-    start_offset = None
-    if raw:
-        stem, _, off = raw.rpartition(":")
-        if stem and stem == session_key(info.jsonl):
-            try:
-                start_offset = int(off)
-            except ValueError:
-                start_offset = None
-    # provider da sessao (SessionInfo.provider, ja marcado por registry.list() -- tmux -> "claude",
-    # sidecar Codex -> "codex") -> merged_events escolhe o Adapter certo (tail do jsonl, monitor de
-    # estado, fonte do preview). Sem isto TODA sessao caia no default "claude" do merged_events e o
-    # SSE do Codex nunca ligava (chat vazio, sem estado ao vivo).
-    return EventSourceResponse(
-        merged_events(name, info.jsonl, provider=info.provider, start_offset=start_offset,
-                      count_app=guest_of(request) is None),
-        send_timeout=30)
 
 
 def _erro_texto(e) -> str:
@@ -2450,52 +2362,6 @@ async def steer_session(name: str, body: InputBody | None = None):
         return {"ok": True, "promoted": False}
     n = await _send_thread(PromptQueue(name).confirm_delivered)
     return {"ok": True, "promoted": True, "confirmed": n}
-
-
-class NavBody(_StrictBody):
-    url: str = Field(min_length=1)
-
-
-_PAGINA_RELATIVA = re.compile(r"^/api/sessions/([^/?#]+)/pages/([A-Za-z0-9_-]{1,128})$")
-
-
-def _url_pagina_propria(name: str, u: str) -> str:
-    """Rascunho de `html_render` vem como caminho sem token: completa com o endereço local do
-    servidor e o token do dono, como os links de arquivo. Outro caminho relativo é recusado."""
-    m = _PAGINA_RELATIVA.match(u)
-    if m is None or urllib.parse.unquote(m.group(1)) != name:
-        raise HTTPException(400, "caminho relativo só vale para página desta sessão")
-    from app.rust_server import listen_addr
-    # Mesmo endereço do pi_inbox: bind em toda interface inclui loopback; IP de LAN só escuta nele.
-    bind = resolve_bind_ip(settings)
-    host = "127.0.0.1" if bind in ("0.0.0.0", "::") else bind
-    return f"http://{listen_addr(host, settings.port)}{u}?token={urllib.parse.quote(settings.auth_token, safe='')}"
-
-
-@app.post("/api/sessions/{name}/nav", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-async def abrir_nav_sessao(name: str, body: NavBody):
-    """O AGENTE abre o navegador embutido da própria sessão (CLI `hangar-preview open <url>`).
-
-    O backend não cria view — quem cria é o shell desktop, avisado pelo evento 'nav' que sai no
-    SSE da sessão E no da lista (este o desktop mantém aberto o tempo todo, então funciona com a
-    sessão fora da tela). O marcador fica até o desktop confirmar (DELETE) ou vencer o prazo."""
-    if not await _send_thread(_session_exists, name):
-        raise HTTPException(404, "sessão não encontrada")
-    u = body.url.strip()
-    if u.startswith("/"):
-        u = _url_pagina_propria(name, u)
-    elif not re.match(r"^https?://", u, re.I):
-        u = "http://" + u
-    await asyncio.to_thread(nav_pendente, name, u)   # grava em disco: fora do loop
-    return {"ok": True}
-
-
-@app.delete("/api/sessions/{name}/nav", dependencies=[Depends(require_auth), Depends(_transfer_guard)])
-async def confirmar_nav_sessao(name: str):
-    """O shell desktop criou o view da sessão: o marcador 'nav' sai, e nenhuma outra conexão o
-    recebe de novo."""
-    await asyncio.to_thread(nav_confirmar, name)
-    return {"ok": True}
 
 
 @app.post("/api/broadcast", dependencies=[Depends(require_auth)])

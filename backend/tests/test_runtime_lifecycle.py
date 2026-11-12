@@ -134,11 +134,11 @@ def test_combined_supervisor_stop_deactivates_without_recover(monkeypatch):
         async def recover(self, name, confirmed_dead, containment=None):
             events.append("recover")
     monkeypatch.setattr(runtime_coordinator, "_current", Coordinator())
-    monkeypatch.setattr(rust_server.terminal_observer, "configure", lambda *args: events.append("terminal"))
+    monkeypatch.setattr("app.list_bridge.configure", lambda *args: events.append("bridges"))
     supervisor = rust_server.Supervisor("fake", "127.0.0.1", 1, 2, "token", "127.0.0.1", lambda: False)
     supervisor.proc = Proc()
     asyncio.run(supervisor.stop())
-    assert events == ["terminal", "pending"]
+    assert events == ["bridges", "pending"]
 
 
 def test_stop_error_is_raised_before_cano_cleanup(monkeypatch):

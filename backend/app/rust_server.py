@@ -26,7 +26,7 @@ from pathlib import Path
 
 import uvicorn
 
-from app import claude_customizations, diag, diag_logging, log_paths, migration_status, rust_bins, terminal_observer
+from app import claude_customizations, diag, diag_logging, log_paths, migration_status, rust_bins
 
 _log = logging.getLogger("hangar.rust_server")
 
@@ -326,10 +326,9 @@ class RuntimeTransport:
 
 
 def _point_bridges(address: str | None, secret: str | None) -> None:
-    """Pontes Python → Rust no endereço privado dele, ou em nada; o observador primeiro, que recusa endereço torto."""
-    from app import account_bridge, costs_sources, groups_bridge, list_bridge, transcription_bridge
-    costs_sources.set_served_by_rust(address is not None)
-    for bridge in (terminal_observer, claude_customizations, list_bridge,
+    """Pontes Python → Rust no endereço privado dele, ou em nada; a lista primeiro, que recusa endereço torto."""
+    from app import account_bridge, groups_bridge, list_bridge, transcription_bridge
+    for bridge in (list_bridge, claude_customizations,
                    groups_bridge, transcription_bridge):
         bridge.configure(address, secret)
     account_bridge.configure_preparation(address, secret)
@@ -695,9 +694,6 @@ async def _take_over(server: uvicorn.Server, serving: asyncio.Task, reason: str,
     _log.error("hangar-server desligado (%s); o Python assume a porta %s", reason, kw["port"])
     diag.registrar("hangar_server.reserva", "erro", codigo=reason)
     migration_status.set_reason(reason)
-    from app import costs_sources
-
-    costs_sources.agendar_aquecimento(0)
     try:
         sock = bind_public()
     except OSError as e:

@@ -137,9 +137,6 @@ class _App:
 
 @pytest.fixture
 def fake_bin(tmp_path, monkeypatch):
-    from app import costs_sources
-    # A reserva do teste não pode agendar uma varredura das contas reais.
-    monkeypatch.setattr(costs_sources, "agendar_aquecimento", lambda delay: None)
     path = tmp_path / "hangar-server"
     source = FAKE.replace("__PROTOCOL__", str(rust_server.RUST_SERVER_PROTOCOL))
     path.write_text(f"#!{sys.executable}\n{source}", encoding="utf-8")
@@ -520,16 +517,6 @@ def test_retry_closes_open_streams_without_an_asgi_error(fake_bin, tmp_path, mon
     assert AppStatus.should_exit is False, "soltar a porta pública não encerra os SSE do processo"
 
 
-def test_rust_up_marks_costs_served_and_takeover_warms_python(fake_bin, tmp_path, events, monkeypatch):
-    from app import costs_sources
-    marks, schedules = [], []
-    monkeypatch.setattr(costs_sources, "set_served_by_rust", marks.append)
-    monkeypatch.setattr(costs_sources, "agendar_aquecimento", schedules.append)
-    _run_until_takeover(fake_bin, tmp_path, monkeypatch, crash=True)
-    assert True in marks and marks[-1] is False
-    assert schedules == [0]
-
-
 def test_child_that_never_answers_is_killed_and_python_takes_over(
         fake_bin, tmp_path, monkeypatch, events, relog):
     monkeypatch.setenv("FAKE_MODE", "mudo")
@@ -884,7 +871,7 @@ def test_invalid_private_address_is_startup_failure(monkeypatch):
 
 def test_terminal_panel_from_rust_health(monkeypatch):
     from types import SimpleNamespace
-    from app import list_bridge, runtime_coordinator, terminal_observer, termsock
+    from app import list_bridge, runtime_coordinator, termsock
     supervisor = _supervisor(lambda: False)
     monkeypatch.setattr(rust_server, "_spawn", lambda binary, env: SimpleNamespace(poll=lambda: None, pid=1))
     monkeypatch.setattr(rust_server, "_runtime_ready", lambda proc, instance: {"type":"runtime_ready",
@@ -909,8 +896,7 @@ def test_terminal_panel_from_rust_health(monkeypatch):
             assert asyncio.run(supervisor._start()) == "address"
     finally:
         internal_api.set_secret(None)
-        for bridge in (terminal_observer, list_bridge):
-            bridge.configure(None, None)
+        list_bridge.configure(None, None)
 
 
 def test_crash_output_keeps_codes_and_drops_the_message(tmp_path):

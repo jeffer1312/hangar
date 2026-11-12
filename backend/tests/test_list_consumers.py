@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from app import list_bridge, prune, registry, runtime_coordinator, sse
+from app import list_bridge, prune, registry, runtime_coordinator
 from app.models import SessionInfo
 from app.registry import SessionRegistry
 

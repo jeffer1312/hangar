@@ -147,15 +147,6 @@ def test_inicio_vazio_nao_esconde_perguntas_do_item_completo():
     assert state.count == 2
 
 
-def test_contagem_invalida_cache_da_lista_mesmo_com_mesma_pergunta():
-    from app.models import SessionInfo
-    from app.sse import _list_sig
-    session = SessionInfo(name="cx", state="working", pending_questions=1, question="Qual cor?")
-    before = _list_sig([session])
-    session.pending_questions = 2
-    assert _list_sig([session]) != before
-
-
 def test_pergunta_pulada_nao_volta_pelo_historico_nem_na_reabertura():
     state = AsyncQuestions("thread")
     state.observe(question())

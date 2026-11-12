@@ -663,53 +663,6 @@ class _Owner:
         return self.target
 
 
-def test_state_stream_never_waits_for_owner(monkeypatch):
-    # Sem passagem de dono: a sessão no meio de um fechamento da administração segue pela vista do
-    # Python, sem espera nem diário de dono preso, e volta à do Rust quando reabre.
-    from app import runtime_adapter
-    from app.runtime_coordinator import Phase
-    monkeypatch.setattr(runtime_adapter, "_OWNER_POLL_S", 0.01)
-    owner = _Owner(Phase.RecoveringPython)
-    monkeypatch.setattr(runtime_coordinator, "_current", owner)
-
-    class Adapter:
-        async def state_monitor(self, name, sid_get):
-            yield "python"
-            await asyncio.Event().wait()
-
-    async def native(self, name, sid_get):
-        yield "rust"
-        await asyncio.Event().wait()
-    monkeypatch.setattr(RuntimeAdapter, "state_stream", native)
-    install_adapter(Adapter, "claude")
-
-    async def scenario():
-        stream = Adapter().state_monitor("session", lambda: None)
-        assert await asyncio.wait_for(anext(stream), 0.5) == "python"
-        owner.target.phase = Phase.Rust
-        assert await asyncio.wait_for(anext(stream), 1) == "rust"
-        await stream.aclose()
-    asyncio.run(scenario())
-
-
-def test_state_monitor_error_without_owner_change_still_surfaces(monkeypatch):
-    from app import runtime_adapter
-    from app.runtime_coordinator import Phase
-    monkeypatch.setattr(runtime_adapter, "_OWNER_POLL_S", 0.01)
-    monkeypatch.setattr(runtime_coordinator, "_current", _Owner(Phase.Python))
-
-    class Adapter:
-        async def state_monitor(self, name, sid_get):
-            raise ValueError("falha real")
-            yield
-    install_adapter(Adapter, "claude")
-
-    async def scenario():
-        with pytest.raises(ValueError):
-            await anext(Adapter().state_monitor("session", lambda: None))
-    asyncio.run(scenario())
-
-
 def test_reads_during_hand_over_use_python_view(monkeypatch):
     # A lista de sessões lia o estado na passagem e dava 500 para todas as sessões.
     from app.runtime_coordinator import Phase

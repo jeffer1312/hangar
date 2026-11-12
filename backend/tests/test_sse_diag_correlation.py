@@ -3,9 +3,8 @@ import asyncio
 import pytest
 from fastapi import Request, Response
 
-from app import diag, sse
+from app import diag
 from app.api import _correlaciona_diag
-from app.difusor import Difusor
 
 
 @pytest.mark.asyncio
@@ -27,29 +26,6 @@ async def test_sse_req_aceito_so_na_rota_certa_e_contexto_restaurado(path, query
             return Response(status_code=200)
         await _correlaciona_diag(request, respond)
         assert diag.req_atual.get() == "anterior"
-    finally:
-        diag.req_atual.reset(previous)
-
-
-@pytest.mark.asyncio
-async def test_produtores_compartilhados_nao_herdam_req_do_primeiro_ouvinte(monkeypatch):
-    seen = []
-    refresher = sse._ListRefresher()
-    async def run():
-        seen.append(diag.req_atual.get())
-    monkeypatch.setattr(refresher, "_run", run)
-    previous = diag.req_atual.set("primeira-conexao")
-    try:
-        refresher._ensure()
-        await refresher._task
-        async def source():
-            seen.append(diag.req_atual.get())
-            yield "quadro"
-        stream = Difusor().ouvir("sessao", source)
-        assert await anext(stream) == "quadro"
-        await stream.aclose()
-        assert seen == ["", ""]
-        assert diag.req_atual.get() == "primeira-conexao"
     finally:
         diag.req_atual.reset(previous)
 

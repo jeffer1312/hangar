@@ -394,36 +394,6 @@ def test_sessao_parada_aceita_na_hora_e_sobe_em_segundo_plano(sidecar, monkeypat
     assert chamadas == [{"esperar_pronta": False}]
 
 
-@pytest.mark.parametrize("stop_fails", [False, True])
-def test_subida_em_segundo_plano_que_falha_aparece_no_chat_ja_aberto(sidecar, monkeypatch, stop_fails):
-    ad = ClaudeHeadlessAdapter()
-    expected = "binário"
-    if stop_fails:
-        saved = S.update("s1", cano={"pid": 4242})
-        expected = "taskkill falhou"
-
-        def fail_stop(sess):
-            raise RuntimeError(expected)
-        monkeypatch.setattr(ad, "_matar", fail_stop)
-
-    async def spawn_quebra(sess, **kw):
-        raise RuntimeError("binário não encontrado: claude")
-    monkeypatch.setattr(ad, "_spawn", spawn_quebra)
-
-    async def fluxo():
-        gen = ad.state_monitor("s1", lambda: None)
-        ev = await gen.__anext__()
-        assert ev.state == "idle" and ev.problema is None and ev.headless
-        ad.acordar("s1")
-        await asyncio.gather(*ad._tarefas)
-        ev = await asyncio.wait_for(gen.__anext__(), 3)
-        assert ev.problema == "headless_nao_subiu" and expected in (ev.problema_detalhe or "")
-        if stop_fails:
-            assert S.load("s1") == saved
-        await gen.aclose()
-    _run(fluxo())
-
-
 def test_contexto_vem_da_ultima_chamada_nao_da_soma_do_turno(adapter):
     # Turno com 3 chamadas de ~70k: o `usage` do result soma as três (210k) e pintava o anel cheio.
     sess = adapter._sessions["s1"]
@@ -801,18 +771,6 @@ def test_interrupt_nega_pendencias_antes(adapter):
     assert tipos == [("control_response", None), ("control_request", "interrupt")]
 
 
-def test_sessao_parada_fica_ociosa_sem_subir_processo(sidecar, monkeypatch):
-    ad = ClaudeHeadlessAdapter()
-    monkeypatch.setattr(ad, "_spawn", lambda sess: (_ for _ in ()).throw(AssertionError("não devia subir")))
-
-    async def fluxo():
-        gen = ad.state_monitor("s1", lambda: None)
-        ev = await gen.__anext__()
-        assert ev.state == "idle" and ev.claude_permission_mode == "manual"
-        await gen.aclose()
-    _run(fluxo())
-
-
 def test_turno_com_erro_vira_problema_e_sucesso_limpa(adapter):
     sess = adapter._sessions["s1"]
 
@@ -867,12 +825,6 @@ def test_processo_caindo_registra_problema_com_stderr(adapter, sidecar):
         assert adapter.problema_de("s1")[0] == "headless_processo_caiu"
         # A faixa do chat só mostra a 1ª linha: o motivo vem antes do rc.
         assert adapter.problema_de("s1")[1] == "Error: not logged in\nrc=3"
-        # Parada, a sessão publica o problema da última vida.
-        adapter._sessions.pop("s1")
-        gen = adapter.state_monitor("s1", lambda: None)
-        ev = await gen.__anext__()
-        assert ev.state == "idle" and ev.problema == "headless_processo_caiu"
-        await gen.aclose()
     _run(fluxo())
 
 
@@ -907,10 +859,6 @@ def test_problema_sobrevive_ao_restart_e_limpa_no_turno_bom(adapter, sidecar):
     assert novo.problema_de("s1") == ("headless_processo_caiu", "rc=143")
 
     async def fluxo():
-        gen = novo.state_monitor("s1", lambda: None)
-        ev = await gen.__anext__()
-        assert ev.state == "idle" and ev.problema == "headless_processo_caiu"
-        await gen.aclose()
         viva = _Sessao("s1", S.load("s1"))
         viva.proc = _Proc()
         novo._sessions["s1"] = viva

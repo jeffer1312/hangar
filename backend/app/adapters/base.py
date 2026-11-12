@@ -1,20 +1,10 @@
-"""Contrato `Adapter`: abstrai as capacidades acopladas ao provider (Claude/Codex/...) — ler
-transcript -> ChatEvent, classificar estado -> StateEvent, e mandar/checar input. `ChatEvent` e
-`StateEvent` sao o contrato IMUTAVEL com o front (definidos em app.models, reexportados por
-app.transcript/app.state); o Adapter troca so a FONTE de cada evento, nunca o shape."""
-from typing import AsyncIterator, Callable, Protocol
-
-from app.transcript import ChatEvent
-from app.state import StateEvent
+"""Contrato `Adapter`: abstrai as capacidades acopladas ao provider (Claude/Codex/...) de mandar e
+checar input."""
+from typing import Protocol
 
 
 class Adapter(Protocol):
     provider: str
-
-    # start_offset: retomada exata via Last-Event-ID do SSE (None = backfill do tail).
-    def transcript_stream(self, path: str, start_offset: int | None = None) -> AsyncIterator[ChatEvent]: ...
-
-    def state_monitor(self, name: str, sid_get: Callable[[], str]) -> AsyncIterator[StateEvent]: ...
 
     async def drain(self, name: str, path: str) -> int: ...
 
