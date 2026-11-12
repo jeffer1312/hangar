@@ -41,6 +41,7 @@ fn unsupported_configured_emulator_is_not_replaced_by_a_probe() {
 mod unix {
     use super::*;
     use std::fs;
+    use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::PermissionsExt;
 
     struct Fixture {
@@ -237,6 +238,11 @@ mod unix {
         fixture.env.insert("DISPLAY".into(), ":72".into());
         fs::write(fixture.root.path().join("wayland-2"), "").unwrap();
         fs::write(fixture.root.path().join("wayland-1.lock"), "").unwrap();
+        fs::write(
+            fixture.root.path().join(std::ffi::OsStr::from_bytes(b"a\xff")),
+            "",
+        )
+        .unwrap();
         external::open(
             "session",
             &fixture.env,

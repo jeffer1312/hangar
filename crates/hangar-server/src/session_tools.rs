@@ -44,15 +44,8 @@ impl shell::Mux for ShellMux {
     fn scope(&self) -> BoxFuture<'_, Vec<String>> {
         self.0.scope()
     }
-    fn warning(&self, message: &str) {
+    fn warning(&self, event: &'static str, message: &str) {
         tracing::warn!("{message}");
-        let event = if message.contains("diretório") && message.contains("não saiu") {
-            "mux.shell_kill_unconfirmed"
-        } else if message.contains("diretório") {
-            "mux.shell_cwd_unreadable"
-        } else {
-            "mux.scope_perdido"
-        };
         crate::diag::record(
             self.0.diary.clone(),
             vec![json!({"evento":event,"nivel":"aviso"})],
@@ -205,21 +198,14 @@ async fn inner(st: Arc<AppState>, peer: SocketAddr, name: String, req: Request) 
                 let Some(cwd) = cwd else {
                     return missing("sessao nao encontrada");
                 };
-                let fallback = match st
-                    .settings_snapshot()
-                    .and_then(|snapshot| snapshot.value("CP_EDITOR"))
-                {
-                    Ok(value) => value.unwrap_or_else(|| "code".into()),
-                    Err(_) => return unavailable(),
+                let Ok(config) = crate::config_sync::runtime::RuntimeConfig::from_state(&st) else {
+                    return unavailable();
                 };
-                let path = st.accounts.env.claude_base.join("runtime-config.json");
-                let binary =
-                    match tokio::task::spawn_blocking(move || editor::configured(&path, &fallback))
-                        .await
-                    {
-                        Ok(binary) => binary,
-                        Err(_) => return unavailable(),
-                    };
+                let binary = match tokio::task::spawn_blocking(move || config.get("editor")).await
+                {
+                    Ok(serde_json::Value::String(binary)) => binary,
+                    _ => return unavailable(),
+                };
                 tracing::info!(session = %name, bin = %binary, cwd = %cwd, "OPEN-EDITOR");
                 editor::open(&binary, &cwd, &env).await
             }

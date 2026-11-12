@@ -1,20 +1,6 @@
-use std::{collections::BTreeMap, path::Path};
+use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
-
-/// A publicação viva vence o ambiente; arquivo ausente ou corrompido conserva o padrão.
-pub fn configured(path: &Path, fallback: &str) -> String {
-    hangar_core::fs::read_replaced(path)
-        .ok()
-        .and_then(|raw| serde_json::from_slice::<Value>(&raw).ok())
-        .and_then(|value| {
-            value
-                .get("editor")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| fallback.into())
-}
 
 pub async fn open(
     binary: &str,

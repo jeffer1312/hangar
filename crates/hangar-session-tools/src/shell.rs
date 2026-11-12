@@ -14,7 +14,7 @@ pub struct Output {
 pub trait Mux: Send + Sync {
     fn run(&self, args: Vec<String>) -> BoxFuture<'_, Output>;
     fn scope(&self) -> BoxFuture<'_, Vec<String>>;
-    fn warning(&self, message: &str);
+    fn warning(&self, event: &'static str, message: &str);
 }
 
 pub struct Service {
@@ -26,11 +26,12 @@ pub struct Service {
 impl Service {
     pub async fn open(&self, name: &str, cwd: &str) -> Result<Value, crate::Error> {
         let target = format!("term-{name}");
-        if self.has(&target).await && !self.hidden(&target).await {
+        let exists = self.has(&target).await;
+        if exists && !self.hidden(&target).await {
             return Err(occupied(&target));
         }
         let mut created = false;
-        if self.has(&target).await {
+        if exists {
             let output = self
                 .run([
                     "display",
@@ -46,7 +47,7 @@ impl Service {
                 ""
             };
             if output.code != Some(0) {
-                self.mux.warning(&format!("não consegui ler o diretório do shell escondido {target:?}; reaproveito sem conferir se ele é de {cwd:?}"));
+                self.mux.warning("mux.shell_cwd_unreadable", &format!("não consegui ler o diretório do shell escondido {target:?}; reaproveito sem conferir se ele é de {cwd:?}"));
             }
             if !self.hidden(&target).await {
                 return Err(occupied(&target));
@@ -55,7 +56,7 @@ impl Service {
                 && normalize(old, self.windows) != normalize(cwd, self.windows)
                 && !self.kill(&target).await
             {
-                self.mux.warning(&format!("shell escondido {target:?} não saiu; não reaproveito o diretório antigo {old:?}"));
+                self.mux.warning("mux.shell_kill_unconfirmed", &format!("shell escondido {target:?} não saiu; não reaproveito o diretório antigo {old:?}"));
                 return Err(failed());
             }
         }
@@ -69,14 +70,15 @@ impl Service {
                 "-c".into(),
                 cwd.into(),
             ];
-            if self.create(args).await.code != Some(0) {
-                return if self.has(&target).await {
-                    Ok(json!({"ok": true, "shell": target}))
-                } else {
-                    Err(failed())
-                };
+            if self.create(args).await.code == Some(0) {
+                created = true;
+            } else if !self.has(&target).await {
+                return Err(failed());
+            } else if self.hidden(&target).await {
+                // Um criador concorrente já marcou o shell dele.
+                return Ok(json!({"ok": true, "shell": target}));
             }
-            created = true;
+            // Timeout pode ter criado o shell sem a marca: marca agora, sem matá-lo se falhar.
         }
         if self
             .run([
@@ -110,6 +112,7 @@ impl Service {
             probe.push("true".into());
             if self.mux.run(probe).await.code == Some(1) {
                 self.mux.warning(
+                    "mux.scope_perdido",
                     "o escopo do systemd parou de funcionar; criando o shell sem escopo próprio",
                 );
                 return self.mux.run(args).await;

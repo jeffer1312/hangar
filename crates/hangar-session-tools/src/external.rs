@@ -168,15 +168,12 @@ fn wayland_display(env: &BTreeMap<String, String>) -> Option<String> {
         return Some(display.clone());
     }
     let directory = env.get("XDG_RUNTIME_DIR")?;
-    let mut names = Vec::new();
-    for entry in std::fs::read_dir(Path::new(directory)).ok()? {
-        let entry = entry.ok()?;
-        let name = entry.file_name().into_string().ok()?;
-        if name.starts_with("wayland-") && !name.ends_with(".lock") {
-            names.push(name);
-        }
-    }
-    names.into_iter().min()
+    std::fs::read_dir(Path::new(directory))
+        .ok()?
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.starts_with("wayland-") && !name.ends_with(".lock"))
+        .min()
 }
 
 fn exit_code(status: std::process::ExitStatus) -> i32 {

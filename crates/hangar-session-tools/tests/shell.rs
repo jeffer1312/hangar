@@ -26,6 +26,7 @@ struct State {
     kill_fails: bool,
     create_fails: bool,
     create_race: bool,
+    create_times_out: bool,
     scope_lost: bool,
     scope_rejects_create: bool,
     scope_timeout: bool,
@@ -36,7 +37,7 @@ impl Mux for FakeMux {
     fn scope(&self) -> BoxFuture<'_, Vec<String>> {
         Box::pin(async { vec!["scope".into(), "--".into()] })
     }
-    fn warning(&self, message: &str) {
+    fn warning(&self, _event: &'static str, message: &str) {
         self.0.lock().unwrap().warnings.push(message.into());
     }
     fn run(&self, args: Vec<String>) -> BoxFuture<'_, Output> {
@@ -113,6 +114,16 @@ impl Mux for FakeMux {
                         code = 1;
                     } else if state.create_fails {
                         code = 1;
+                    } else if state.create_times_out {
+                        state.sessions.insert(
+                            target,
+                            Session {
+                                cwd,
+                                hidden: false,
+                                running: "shell".into(),
+                            },
+                        );
+                        return Output::default();
                     } else {
                         state.sessions.insert(
                             target,
@@ -314,6 +325,14 @@ async fn shell_accepts_concurrent_creator_without_marking_its_shell_again() {
             .flatten()
             .any(|arg| arg == "set-option")
     );
+}
+
+#[tokio::test]
+async fn shell_marks_session_created_despite_creation_timeout() {
+    let (mux, service) = service(false);
+    mux.0.lock().unwrap().create_times_out = true;
+    service.open("agente", "/repo").await.unwrap();
+    assert!(mux.0.lock().unwrap().sessions["term-agente"].hidden);
 }
 
 #[tokio::test]
