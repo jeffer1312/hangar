@@ -204,12 +204,14 @@ pub(super) struct Running {
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 impl Running {
-    /// Entrega o tema do app à página quando ele mudou desde o último envio; o primeiro leva antes as fontes.
+    /// Entrega o tema do app à página quando ele mudou desde o último envio; fonte embutida nova vai antes.
     pub(super) fn push_theme(&mut self) {
         let key = theme_key();
         if self.theme_sent == Some(key) { return; }
-        if self.theme_sent.is_none() { self.engine.evaluate(&APP_FONTS); }
-        self.engine.evaluate(&theme_script());
+        if self.theme_sent.is_none_or(|sent| sent.font != key.font) && let Some(faces) = embedded_faces(key.font) {
+            self.engine.evaluate(faces);
+        }
+        self.engine.evaluate(&theme_script(key));
         self.theme_sent = Some(key);
     }
 }
@@ -335,18 +337,38 @@ fn hex(color: Hsla) -> String {
     if c.a >= 1. { format!("#{:02x}{:02x}{:02x}", ch(c.r), ch(c.g), ch(c.b)) } else { format!("#{:02x}{:02x}{:02x}{:02x}", ch(c.r), ch(c.g), ch(c.b), ch(c.a)) }
 }
 
-/// A fonte do app vem embutida nele, não instalada: sem isto o Chromium da página cai na fonte do sistema, mais fina,
-/// e a página destoa do texto ao lado.
+/// Script que põe na página uma fonte embutida no app: o Chromium dela só conhece as instaladas, e sem isto cairia na
+/// do sistema, destoando do texto ao lado. Cada fonte entra uma vez por documento.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
-pub(super) static APP_FONTS: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+fn font_script(family: &str, faces: &[(&[u8], &str, &str)]) -> String {
     use base64::Engine as _;
-    let face = |bytes: &[u8], weight: u16| format!("@font-face{{font-family:\"{}\";font-weight:{weight};src:url(data:font/ttf;base64,{})}}",
-        theme::SANS, base64::engine::general_purpose::STANDARD.encode(bytes));
-    let css = [face(include_bytes!("../../assets/fonts/Geist-Regular.ttf"), 400), face(include_bytes!("../../assets/fonts/Geist-Medium.ttf"), 500),
-        face(include_bytes!("../../assets/fonts/Geist-SemiBold.ttf"), 600), face(include_bytes!("../../assets/fonts/Geist-Bold.ttf"), 700)].concat();
-    format!("(()=>{{if(document.getElementById('hangar-fonts'))return;const s=document.createElement('style');s.id='hangar-fonts';s.textContent={};document.head.appendChild(s)}})()",
+    let css: String = faces.iter().map(|(bytes, format, weight)| format!(
+        "@font-face{{font-family:\"{family}\";font-weight:{weight};src:url(data:font/{format};base64,{})}}",
+        base64::engine::general_purpose::STANDARD.encode(bytes))).collect();
+    let id = serde_json::to_string(&format!("hangar-font-{family}")).unwrap_or_default();
+    format!("(()=>{{if(document.getElementById({id}))return;const s=document.createElement('style');s.id={id};s.textContent={};document.head.appendChild(s)}})()",
         serde_json::to_string(&css).unwrap_or_default())
-});
+}
+
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+static GEIST_FACES: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| font_script(theme::SANS, &[
+    (include_bytes!("../../assets/fonts/Geist-Regular.ttf"), "ttf", "400"), (include_bytes!("../../assets/fonts/Geist-Medium.ttf"), "ttf", "500"),
+    (include_bytes!("../../assets/fonts/Geist-SemiBold.ttf"), "ttf", "600"), (include_bytes!("../../assets/fonts/Geist-Bold.ttf"), "ttf", "700")]));
+
+/// A variável, num arquivo só e menor que os TTFs que o app desenha.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+static INTER_FACES: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| font_script(theme::INTER, &[
+    (include_bytes!("../../assets/fonts/inter/InterVariable.woff2"), "woff2", "100 900")]));
+
+/// Fonte embutida que a família pede; instalada o Chromium já acha pelo nome.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+fn embedded_faces(family: &str) -> Option<&'static str> {
+    match family {
+        f if f == theme::SANS => Some(&GEIST_FACES),
+        f if f == theme::INTER => Some(&INTER_FACES),
+        _ => None,
+    }
+}
 
 /// Cores do app que a página recebe, uma tabela só para a chave e o script. O que o app não tem (`--info`, gráficos)
 /// fica com o padrão do esquema que o servidor guardou na página.
@@ -361,17 +383,20 @@ fn palette() -> [(&'static str, Hsla); 10] {
 /// O que o script do tema lê do app: chave igual, script igual, sem montá-lo a cada quadro.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 #[derive(Clone, Copy, PartialEq)]
-pub(super) struct ThemeKey { dark: bool, colors: [Hsla; 10] }
+pub(super) struct ThemeKey { dark: bool, colors: [Hsla; 10], font: &'static str }
 
 #[cfg(any(target_os = "linux", target_os = "windows"))]
-fn theme_key() -> ThemeKey { ThemeKey { dark: theme::is_dark(), colors: palette().map(|(_, c)| c) } }
+fn theme_key() -> ThemeKey {
+    ThemeKey { dark: theme::is_dark(), colors: palette().map(|(_, c)| c), font: crate::appearance::get().font.family() }
+}
 
 /// Script que entrega o tema do app à página, nos nomes de variável da spec.
 #[cfg(any(target_os = "linux", target_os = "windows"))]
-fn theme_script() -> String {
+fn theme_script(key: ThemeKey) -> String {
     let mut vars: serde_json::Map<String, Value> = palette().into_iter().map(|(name, c)| (name.to_owned(), hex(c).into())).collect();
     vars.insert("--background".into(), "transparent".into());
-    vars.insert("--font-sans".into(), format!("\"{}\", system-ui, sans-serif", theme::SANS).into());
+    // A da conversa em Aparência: a página fica na mesma letra da resposta ao lado.
+    vars.insert("--font-sans".into(), format!("\"{}\", system-ui, sans-serif", key.font).into());
     vars.insert("--font-mono".into(), format!("\"{}\", ui-monospace, monospace", theme::MONO).into());
     let params = json!({"theme": if theme::is_dark() { "dark" } else { "light" }, "styles": {"variables": vars}});
     format!("window.__hangarApply&&window.__hangarApply({params})")
@@ -758,7 +783,7 @@ impl Hangar {
                 .child(toggle_button(&id, false, cx));
             let picture = match (view.state, image, view.no_image) {
                 (_, _, true) => Some(note(tr_shared("page_no_image", &[]))),
-                (_, Some(image), _) => Some(div().w_full().h(height).child(img(image).size_full().object_fit(ObjectFit::Contain))),
+                (_, Some(image), _) => Some(backed(div().w_full().h(height).child(img(image).size_full().object_fit(ObjectFit::Contain)))),
                 _ => Some(div().w_full().h(height).child(loading())),
             };
             return v_flex().relative().w_full().gap_1().child(measure).children(picture).child(bar).into_any_element();
@@ -838,11 +863,18 @@ impl Hangar {
                 None => h_flex().gap_2().child(div().flex_1().min_w_0().truncate().text_size(px(12.)).text_color(theme::muted()).child(title)),
             };
             let strip = strip.children(full.then(|| fullscreen_button(&id, cx))).child(toggle_button(&id, false, cx));
-            return v_flex().w_full().gap_1().child(strip).child(card).into_any_element();
+            return v_flex().w_full().gap_1().child(strip).child(backed(card)).into_any_element();
         }
         #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         div().w_full().h(height).child(loading()).into_any_element()
     }
+}
+
+/// Sobre imagem ou desktop a página transparente perde a letra na textura: fundo liso com margem. Vale para todo
+/// cartão porque a largura medida (`pages.width`) é uma só.
+fn backed(page: impl IntoElement) -> Div {
+    let on = crate::appearance::get().busy_background();
+    div().w_full().when(on, |el| el.p(px(12.)).rounded(px(10.)).bg(theme::page_backdrop())).child(page)
 }
 
 fn fullscreen_button(id: &str, cx: &mut Context<Hangar>) -> Button {

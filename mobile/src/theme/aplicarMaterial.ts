@@ -30,11 +30,16 @@ export interface Material {
   conversa?: Conversa;
 }
 
+/** Foto escolhida atrás das caixas (`busy_background` do Rust). */
+export function fundoComImagem(s: { fundo?: Fundo; imagemUri?: string | null }): boolean {
+  return s.fundo === 'image' && !!s.imagemUri;
+}
+
 /** Leitura em vigor (`effective_reading` do Rust): a Automática vira Texto só sobre imagem. */
 export function leituraEmVigor(s: { leitura?: Leitura; fundo?: Fundo; imagemUri?: string | null }): Exclude<Leitura, 'auto'> {
   const l = s.leitura ?? 'auto';
   if (l !== 'auto') return l;
-  return s.fundo === 'image' && s.imagemUri ? 'text' : 'none';
+  return fundoComImagem(s) ? 'text' : 'none';
 }
 
 // Deriva SEMPRE dos tokens de fábrica, nunca do tema atual: acumular acento sobre acento faria a

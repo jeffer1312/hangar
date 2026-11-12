@@ -9,6 +9,8 @@ use crate::appearance::{self, Background as Backdrop, BackgroundScope, DesktopTe
 pub const MONO: &str = "JetBrainsMono Nerd Font";
 /// Sans embutida no binário (`assets/fonts`), a "Sistema" das configurações.
 pub const SANS: &str = "Geist";
+/// Também embutida (`assets/fonts/inter`): escolha de Aparência que dispensa instalar.
+pub const INTER: &str = "Inter";
 pub const CODE_MONO: &str = "JetBrains Mono";
 
 /// Guarda a escolha resolvida pelo kit antes de aplicar a preferência de código.
@@ -300,6 +302,8 @@ pub fn boxed() -> Hsla {
     hex(if floating() { c.float_boxed } else { c.boxed }, if see_through() { panel_alpha() * 0.9 } else { 1. })
 }
 pub fn inset() -> Hsla { let c = colors(); hex(c.inset, if see_through() { 0.55 } else { 1. }) }
+/// Fundo liso atrás da página HTML da conversa quando imagem ou desktop aparecem atrás: opaco, como a tela cheia.
+pub fn page_backdrop() -> Hsla { rgb(colors().inset).into() }
 /// Popovers e fundos de realce: sempre opacos, ficam sobre qualquer material.
 pub fn elevated() -> Hsla { rgb(colors().elevated).into() }
 pub fn raised() -> Hsla { rgb(colors().raised).into() }

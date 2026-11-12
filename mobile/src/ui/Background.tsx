@@ -8,6 +8,7 @@ import { useAparencia } from '../stores/aparencia';
 import { toast } from './Toast';
 import * as m from '../paraglide/messages';
 import { transparenciaDe } from '../theme/superficie';
+import { fundoComImagem } from '../theme/aplicarMaterial';
 import { misturar } from '../theme/paleta';
 import { themeDark, themeLight } from '@hangar/core';
 import { failBackgroundEffect, syncBackgroundEffect } from '../features/config/effectImage';
@@ -36,7 +37,7 @@ export function Background() {
   const faixa = base === fabrica
     ? FAIXA[claro ? 'light' : 'dark']
     : [misturar(base, claro ? '#6b5f55' : '#000000', claro ? 0.03 : 0.22), misturar(base, theme.tokens.accent.base, claro ? 0.04 : 0.05)] as const;
-  const comImagem = fundo === 'image' && !!uri;
+  const comImagem = fundoComImagem({ fundo, imagemUri: uri });
   useEffect(() => {
     void syncBackgroundEffect(comImagem ? uri : null, efeito, !claro);
   }, [comImagem, uri, efeito, claro]);

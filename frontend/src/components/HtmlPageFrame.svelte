@@ -130,6 +130,11 @@
 
 <style>
   .page { position: relative; width: 100%; margin-bottom: var(--space-1); background: transparent; }
+  /* Sobre foto ou desktop a página transparente perde a letra na imagem: fundo liso, como no nativo. A altura
+     reservada é a da página, então a margem soma por fora (content-box) e a largura medida já vem sem ela. */
+  :global(html:is([data-bg="image"], [data-bg="desktop"])) .page {
+    box-sizing: content-box; width: auto; padding: 12px; border-radius: 10px; background: var(--bg-base);
+  }
   iframe { display: block; width: 100%; height: 100%; border: 0; background: transparent; }
   .site { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 0; margin-bottom: var(--space-1); }
   .site-title { color: var(--text-primary); font-size: var(--text-sm); font-weight: 600; }

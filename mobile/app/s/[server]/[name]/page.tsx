@@ -10,6 +10,8 @@ import { pageFileName, parseHostMessage, type HtmlPageRef } from '@hangar/core';
 import { canShareFile, shareTextFile } from '../../../../src/features/attachments/mediaCache';
 import { toast } from '../../../../src/ui/Toast';
 import { Screen } from '../../../../src/ui/Screen';
+import { useAparencia } from '../../../../src/stores/aparencia';
+import { fundoComImagem } from '../../../../src/theme/aplicarMaterial';
 import { HeaderBack, useGlassHeader } from '../../../../src/ui/glassHeader';
 import { Icon } from '../../../../src/ui/Icon';
 import { onlyInitial, usePageDocument, usePageWebView } from '../../../../src/chat/tools/pageDocument';
@@ -41,6 +43,9 @@ function Shell({ title, serverId, sessionName, actions, children }:
   const router = useRouter();
   const header = useGlassHeader();
   const headerHeight = useHeaderHeight();
+  const { theme } = useUnistyles();
+  // Sobre a foto de fundo a página transparente perde a letra na imagem: fundo liso, como no cartão.
+  const backed = useAparencia(fundoComImagem);
   const back = useCallback(() => router.replace(`/s/${encodeURIComponent(serverId)}/${encodeURIComponent(sessionName)}` as never), [router, serverId, sessionName]);
   const canGoBack = router.canGoBack();
   const headerOptions = useMemo(() => ({
@@ -52,7 +57,7 @@ function Shell({ title, serverId, sessionName, actions, children }:
   return (
     <Screen edges={EDGES}>
       <Stack.Screen options={headerOptions} />
-      <View style={[styles.flex, { paddingTop: headerHeight }]}>{children}</View>
+      <View style={[styles.flex, { paddingTop: headerHeight }, backed && { backgroundColor: theme.tokens.bg.base }]}>{children}</View>
     </Screen>
   );
 }
