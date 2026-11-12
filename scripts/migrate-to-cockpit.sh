@@ -12,8 +12,7 @@
 #   3b. copia as memórias do projeto pro slug novo (a pasta é chaveada pelo path);
 #   4. troca as units systemd claude-pocket-* pelas claude-cockpit-* (services-setup.sh)
 #      e migra a claude-pocket-deploy.service se existir (servidores com webhook);
-#   5. re-roda install-hangar-send.sh (hangar-send + skills) e, se Hyprland+Quickshell,
-#      install-hangar-panel.sh (painel/tray).
+#   5. re-roda install-hangar-send.sh (hangar-send + skills).
 #
 # NÃO muda (de propósito — são dados/ids internos): ~/.claude/.claude-pocket-pair/,
 # .claude-pocket-uploads/, instância quickshell "claude-pocket", cp-*/CP_*.
@@ -99,11 +98,8 @@ if [[ -f "$SD/claude-pocket-deploy.service" ]]; then
     log "unit de deploy migrada pra claude-cockpit-deploy.service"
 fi
 
-# ── 5. Re-instalar symlinks (hangar-send, skills, painel) ────────────────────────
+# ── 5. Re-instalar symlinks (hangar-send, skills) ────────────────────────
 ./scripts/install-hangar-send.sh
-if command -v qs >/dev/null && pgrep -x Hyprland >/dev/null; then
-    ./scripts/install-hangar-panel.sh
-fi
 
 # ── Verificação ──────────────────────────────────────────────────────────────
 echo

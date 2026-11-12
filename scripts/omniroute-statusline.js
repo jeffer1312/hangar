@@ -417,8 +417,7 @@ process.stdin.on('end', () => {
         // pid no tmp: este script roda a CADA render e ainda faz 4 execFileSync (git×2, tmux,
         // kubectl) com timeout de 1-2s, entao duas invocacoes da MESMA sessao se sobrepoem na
         // pratica. Com nome fixo as duas abririam o mesmo caminho em truncate e o rename podia
-        // promover bytes entrelacados — mesmo furo que scripts/hangar_panel_common.py ja corrigiu
-        // usando nome unico.
+        // promover bytes entrelaçados; o nome único evita.
         const tmp = alvo + '.' + process.pid + '.tmp';
         fs.writeFileSync(tmp, JSON.stringify({
           line: segs.join(sep).replace(/\x1b\[[0-9;:?]*[ -/]*[@-~]/g, ''),

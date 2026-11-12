@@ -36,7 +36,7 @@ new_sandbox() {
   done
   # Sub-scripts do repositório: só registram que foram chamados.
   for t in install-native.sh install-claude-wrapper.sh services-setup.sh install-hangar-send.sh \
-           install-skills-bridge.sh tmux-persist-setup.sh lan-setup.sh install-hangar-panel.sh; do
+           install-skills-bridge.sh tmux-persist-setup.sh lan-setup.sh; do
     printf '#!/bin/sh\necho "$0 $*" >> "%s/log/scripts"\nexit 0\n' "$S" > "$R/scripts/$t"
     chmod +x "$R/scripts/$t"
   done

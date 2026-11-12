@@ -14,8 +14,7 @@
 #   3c. corrige o Icon= do .desktop já instalado, se houver;
 #   4. troca as units systemd claude-cockpit-* pelas hangar-* (services-setup.sh)
 #      e migra a claude-cockpit-deploy.service se existir (servidores com webhook);
-#   5. re-roda install-hangar-send.sh (hangar-send + skills) e, se Hyprland+Quickshell,
-#      install-hangar-panel.sh (painel/tray).
+#   5. re-roda install-hangar-send.sh (hangar-send + skills).
 #
 # PRÉ-REQUISITO: o clone já tem que estar no commit do rename (units chamadas hangar-* no
 # services-setup.sh, manifest com o nome novo). Este script mexe na MÁQUINA, não no conteúdo
@@ -252,16 +251,13 @@ if [[ -f "$SD/claude-cockpit-deploy.service" ]]; then
     log "unit de deploy migrada pra hangar-deploy.service"
 fi
 
-# ── 5. Re-instalar symlinks (hangar-send, wrappers, skills, painel) ──────────────
+# ── 5. Re-instalar symlinks (hangar-send, wrappers, skills) ──────────────
 # O install-claude-wrapper.sh é quem cria ~/.local/bin/hangar-codex e hangar-engine e escreve as funções de
 # shell. Sem ele aqui, os dois symlinks ficam apontando pra pasta antiga: `codex` e qualquer sessão
 # de motor morrem com "command not found" — e nada na migração denunciava, porque a verificação só
 # olhava o hangar-send (medido nesta máquina em 09/08/2026, os dois pendurados no vazio).
 ./scripts/install-claude-wrapper.sh
 ./scripts/install-hangar-send.sh
-if command -v qs >/dev/null && pgrep -x Hyprland >/dev/null; then
-    ./scripts/install-hangar-panel.sh
-fi
 
 # ── Verificação ──────────────────────────────────────────────────────────────
 # FALHA ALTO, e nao com AVISO. Em 09/08/2026 esta verificacao viu o backend fora (units com o path
@@ -321,8 +317,7 @@ fi
 # `command -v` acha o arquivo, e só na hora de executar dá "No such file or directory". `-e` segue o
 # link e responde falso quando o alvo sumiu — é o teste que separa link vivo de link morto.
 for l in hangar-send hangar-codex hangar-engine hangar-conta \
-         cp-send cp-codex cp-engine cp-conta \
-         hangar-panel-open hangar-panel-data hangar-panel-action hangar-panel-tray; do
+         cp-send cp-codex cp-engine cp-conta; do
     [[ -L "$HOME/.local/bin/$l" ]] || continue
     [[ -e "$HOME/.local/bin/$l" ]] && continue
     echo "ERRO: ~/.local/bin/$l aponta pra $(readlink "$HOME/.local/bin/$l"), que não existe" >&2

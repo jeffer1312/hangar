@@ -62,27 +62,23 @@ def _child(home: Path, code: str) -> subprocess.CompletedProcess:
                           text=True, timeout=120)
 
 
-_WIRING = ("from app import projects, vapid_setup\n"
-           "for p in (projects._CONFIG, vapid_setup.ENV):\n"
-           "    print(p)\n")
+_WIRING = "from app import vapid_setup\nprint(vapid_setup.ENV)\n"
 
 
 def test_readers_and_writers_use_the_new_place(tmp_path):
     config = tmp_path / ".hangar" / "config"
     config.mkdir(parents=True)
-    for name in (".env", "peers.json", "projects.json"):
+    for name in (".env", "peers.json"):
         (config / name).write_text("{}" if name.endswith(".json") else "", encoding="utf-8")
     out = _child(tmp_path, _WIRING)
     assert out.returncode == 0, out.stderr
-    assert [Path(line) for line in out.stdout.splitlines()] == [
-        config / "projects.json", config / ".env"]
+    assert [Path(line) for line in out.stdout.splitlines()] == [config / ".env"]
 
 
 def test_unmigrated_machine_keeps_the_backend_files(tmp_path):
     out = _child(tmp_path, _WIRING)
     assert out.returncode == 0, out.stderr
-    assert [Path(line) for line in out.stdout.splitlines()] == [
-        BACKEND / "projects.json", BACKEND / ".env"]
+    assert [Path(line) for line in out.stdout.splitlines()] == [BACKEND / ".env"]
     assert not (tmp_path / ".hangar").exists()
 
 

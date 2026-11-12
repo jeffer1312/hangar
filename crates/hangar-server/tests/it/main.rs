@@ -358,7 +358,6 @@ mod codex_ecc;
 mod peer_file;
 
 mod codex_normalize;
-mod peer_panel;
 mod codex_plugins;
 mod pairing_print;
 

@@ -16,13 +16,11 @@ from app.config import settings
 from app.models import Runner, RunInfo
 from app.tmux import _scope_prefix, alvo_de_kill
 
-# O `start_command`/`stop_command` do projeto e uma LINHA DE SHELL escrita pelo usuario ("cd x &&
-# npm run dev"), entao ela precisa de um shell — nao da pra mandar como argv. As duas funcoes
-# abaixo dizem QUAL shell, e existem porque o caminho POSIX nao roda no Windows: medido nesta VM,
-# `exec {SHELL} -lc <cmd>` no pane do psmux NAO executa nada (nem citando o SHELL, que aqui e o
-# bash do Git e tem espaco no caminho), e o `/bin/sh` que o stop chamava simplesmente nao existe
-# (FileNotFoundError [WinError 2]). Medido tambem o que FUNCIONA no Windows: `cmd /c <linha>`
-# executa, no pane e por subprocess, com `&&` e tudo.
+# O comando do run é uma LINHA DE SHELL escrita pelo usuário ("cd x && npm run dev"), então ela
+# precisa de um shell — não dá pra mandar como argv. A função abaixo diz QUAL shell, e existe
+# porque o caminho POSIX não roda no Windows: medido nesta VM, `exec {SHELL} -lc <cmd>` no pane do
+# psmux NÃO executa nada (nem citando o SHELL, que aqui é o bash do Git e tem espaço no caminho).
+# Medido também o que FUNCIONA no Windows: `cmd /c <linha>` executa no pane, com `&&` e tudo.
 #
 # `COMSPEC` e o espelho exato do `SHELL` do POSIX (e o que o proprio `subprocess(shell=True)` usa
 # no Windows), entao os dois ramos tem a mesma forma: variavel de ambiente com um padrao.
@@ -36,13 +34,6 @@ def _linha_de_shell_no_pane(command: str) -> str:
     shell = os.environ.get("SHELL", "/bin/sh")
     # login shell (-lc) herda env/PATH do projeto; exec faz o comando virar dono do pane.
     return f"exec {shell} -lc {shlex.quote(command)}"
-
-
-def argv_de_shell(command: str) -> list[str]:
-    """argv pra rodar `command` como linha de shell por `subprocess` (e o caminho do stop)."""
-    if os.name == "nt":
-        return [os.environ.get("COMSPEC", "cmd.exe"), "/c", command]
-    return ["/bin/sh", "-lc", command]
 
 
 # nome -> peso pra escolher o melhor palpite de "dev" (so um vence).
@@ -204,12 +195,8 @@ class RunnerError(Exception):
 
     Existe porque o modo antigo de errar aqui era o pior possivel: o `new-session` rodava dentro de
     um `except: pass`, com o `rc` nem olhado, entao "nao subiu" e "subiu" terminavam iguais — e o
-    `run_status` logo abaixo devolvia o estado da sessao VELHA como se fosse a nova. E a mesma
-    regra que o `projects.stop` ja escreve pro `stop_command`: orfao invisivel e pior que erro na
-    tela.
-
-    `detail` e texto cru, como o `ProjectError` do painel de projetos, que e por onde estes erros
-    chegam na tela.
+    `run_status` logo abaixo devolvia o estado da sessao VELHA como se fosse a nova. Órfão
+    invisível é pior que erro na tela; `detail` é texto cru, que é como ele chega lá.
     """
 
     def __init__(self, status: int, detail: str):
@@ -323,8 +310,8 @@ def start_run(cwd: str, command: str) -> RunInfo:
 
 
 def stop_run(cwd: str) -> None:
-    """Para o run. Levanta `RunnerError` se a sessao SOBREVIVEU — dizer "parado" com o processo
-    vivo e o mesmo defeito que o `projects.stop` ja combate no `stop_command`."""
+    """Para o run. Levanta `RunnerError` se a sessão SOBREVIVEU: dizer "parado" com o processo
+    vivo seria sucesso falso."""
     name = _slug(cwd)
     if not _matar_run(name):
         raise RunnerError(409, f"o run (sessao {name}) nao morreu — o processo segue rodando")
@@ -332,8 +319,7 @@ def stop_run(cwd: str) -> None:
 
 def all_runs() -> dict[str, RunInfo]:
     """Todos os runs do socket dedicado, por nome de sessao — INCLUSIVE os de pane morto
-    (remain-on-exit), que carregam exited/exit_status. Uma chamada tmux so, pro /api/projects
-    nao pagar um subprocesso por projeto."""
+    (remain-on-exit), que carregam exited/exit_status."""
     cp = _sock(["list-panes", "-a", "-F",
                 "#{session_name}\t#{session_created}\t#{pane_dead}\t#{pane_dead_status}"])
     out: dict[str, RunInfo] = {}

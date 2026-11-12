@@ -1147,10 +1147,7 @@ confere a branch). Cada papel é uma sessão própria, até em modelos diferente
 dependendo de você. A **`orquestrar-auto`** (só pelo nome) é a mesma esteira com um orquestrador
 sem modelo soltando as Tasks e abrindo executor e revisor; o árbitro só acorda para decidir.
 
-**Painel/tray no desktop (só Hyprland + Quickshell):** painel flutuante de sessões
-(SUPER+SHIFT+U) + ícone na bandeja. O passo 7/8 do `install.sh` oferece quando detecta
-o ambiente; manual: `./scripts/install-hangar-panel.sh`. Nos outros desktops, a bandeja é a do
-próprio app nativo ([App de desktop](#app-de-desktop-nativo)).
+**Bandeja no desktop:** a do próprio app nativo ([App de desktop](#app-de-desktop-nativo)).
 
 ## 6. Sincronização entre aparelhos (opcional)
 

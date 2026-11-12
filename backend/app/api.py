@@ -36,7 +36,7 @@ from app import registry as registry_mod
 from app.registry import KillFailed, SessionRegistry
 from app.names import sanitize_session_name
 from app.models import (SessionInfo, CreatedSessionInfo, ChatEvent, RunnersResponse, RunBody,
-                        RunInfo, Runner, CustomRunnersBody, ProjectStatus,
+                        RunInfo, Runner, CustomRunnersBody,
                         ShortcutAnswerBody, session_key)
 from app.pqueue import (PromptQueue, _transcript_start_ts, committed_user_lines,
                         fila_interna_pendente, linha_mais_parecida)
@@ -58,7 +58,6 @@ from app import contas, default_model, procinfo
 from app import loop as loop_mod
 from app.transcript import last_assistant_text
 from app import runner
-from app import projects
 from app import archive_providers
 from app.archive import (archive_cwd, archive_jsonl,
                          list_folders)
@@ -3039,68 +3038,6 @@ class ShortcutVerifyBody(BaseModel):
 def shortcuts_verify(body: ShortcutVerifyBody):
     from app import shortcut_transfer
     return shortcut_transfer.run_checks(body.ids, body.scripts[:50], _shortcut_env())
-
-
-# --- launcher de projetos (standalone, chaveado pelo projects.json — nao por sessao viva) ----
-
-@app.get("/api/projects", dependencies=[Depends(require_auth)],
-         response_model=list[ProjectStatus])
-def projects_list():
-    try:
-        return projects.list_projects()
-    except projects.ProjectError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.post("/api/projects/{name}/start", dependencies=[Depends(require_auth)],
-          response_model=ProjectStatus)
-def project_start(name: str):
-    try:
-        return projects.start(name)
-    except projects.ProjectError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.post("/api/projects/{name}/stop", dependencies=[Depends(require_auth)])
-def project_stop(name: str):
-    try:
-        projects.stop(name)
-    except projects.ProjectError as e:
-        raise HTTPException(e.status, e.detail)
-    return {"ok": True}
-
-
-@app.get("/api/projects/{name}/pane", dependencies=[Depends(require_auth)])
-def project_pane(name: str):
-    try:
-        return {"pane": projects.pane(name)}
-    except projects.ProjectError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-class ProjectUpsert(BaseModel):
-    name: str
-    cwd: str
-    command: str
-    port: Optional[int] = None          # Pydantic coage "3000" (string do form QML) -> int
-    stop_command: Optional[str] = None
-
-
-@app.post("/api/projects", dependencies=[Depends(require_auth)], response_model=ProjectStatus)
-def project_upsert(body: ProjectUpsert):
-    try:
-        return projects.upsert(body.name, body.cwd, body.command, body.port, body.stop_command)
-    except projects.ProjectError as e:
-        raise HTTPException(e.status, e.detail)
-
-
-@app.delete("/api/projects/{name}", dependencies=[Depends(require_auth)])
-def project_delete(name: str):
-    try:
-        projects.remove(name)
-    except projects.ProjectError as e:
-        raise HTTPException(e.status, e.detail)
-    return {"ok": True}
 
 
 def _erro_conta_codex(exc: codex_accounts.AccountError) -> HTTPException:

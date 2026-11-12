@@ -66,7 +66,7 @@ def registrar_acesso(ip: str, mecanismo: str, motivo: str | None, *, dominio: st
                        codigo="429" if motivo == "bloqueio_temporario" else "401" if motivo else "200",
                        detalhe=motivo or "acesso_restabelecido")
 
-# Loopback e o proprio dono na maquina: hangar-send, hangar-panel e os scripts locais batem aqui o tempo
+# Loopback e o proprio dono na maquina: hangar-send e os scripts locais batem aqui o tempo
 # todo, e quem esta logado ali le o backend/.env sem esforco nenhum — o token nao defende disso.
 # Bloquear loopback so quebraria a ferramenta local. Atras de proxy (tailscale serve, traefik) o
 # IP real chega via X-Forwarded-For, que o uvicorn resolve por CP_FORWARDED_ALLOW_IPS.
