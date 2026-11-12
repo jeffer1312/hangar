@@ -1111,7 +1111,7 @@ pub(crate) async fn pass(st: &AppState, mut req: Request, fwd: &Forward) -> Resp
             if runtime.transfer_blocked(&name).await {
                 return crate::session_write::json_response(StatusCode::CONFLICT,crate::session_write::busy_body());
             }
-            match runtime.ingress().enter(&name,Duration::from_secs(60)).await {
+            match runtime.ingress().enter_forwarded(&name) {
                 Ok(pass)=>Some(pass),Err(_)=>return crate::session_write::json_response(StatusCode::CONFLICT,crate::session_write::busy_body()),
             }
         } else {None}

@@ -110,20 +110,23 @@ pub async fn reload(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
     let (Some(runtime), true, Some(name)) = (runtime, owner, session_name(req.uri().path()))
         else { return pass(&st, req, &fwd).await };
     if let Some(home)=st.list.env().dirs.as_ref().map(|dirs|&dirs.home) {
-        let current_key=match runtime.transfer_key(&name).await {
-            Ok(key)=>key,
-            Err(error)=>return json_response(StatusCode::CONFLICT,json!({"detail":error.public()})),
-        };
         let pending=crate::runtime::claude_reopen::transfer::store(home).incomplete_for_session(&name);
         match pending {
-            Ok(records)=>if let Some(record)=records.into_iter().find(|r|r.name==name && current_key.as_ref().is_none_or(|key|r.origin_meta["key"]==*key)) {
+            Ok(records) if !records.is_empty()=>{
+                let current_key=match runtime.transfer_key(&name).await {
+                    Ok(key)=>key,
+                    Err(error)=>return json_response(StatusCode::CONFLICT,json!({"detail":error.public()})),
+                };
+                if let Some(record)=records.into_iter().find(|r|r.name==name && current_key.as_ref().is_none_or(|key|r.origin_meta["key"]==*key)) {
                 let (st2,owned)=(st.clone(),name.clone());
                 let result=tokio::spawn(async move {during_life_change(&st2,&owned,runtime.recover_transfer(record)).await}).await
                     .unwrap_or_else(|_|Err(hangar_conversation_transfer::TransferError::new("session_transfer_restore_failed")));
                 st.list.invalidate();
                 let mut response=match result {Ok(body)=>json_response(StatusCode::OK,body),Err(error)=>json_response(StatusCode::from_u16(error.status).unwrap_or(StatusCode::CONFLICT),json!({"detail":error.public()}))};
                 cors(req.headers(),response.headers_mut());return response;
+                }
             },
+            Ok(_)=>{},
             Err(error)=>return json_response(StatusCode::CONFLICT,json!({"detail":error.public()})),
         }
     }
@@ -178,10 +181,22 @@ pub(crate) async fn during_life_change<T>(st:&AppState,name:&str,work:impl Futur
     let Some(share)=st.share.clone() else { return work.await };
     share.lives.facts().begin_mode_change(name);
     let result=work.await;
-    let lives=match st.state.runtime.get() {Some(runtime)=>runtime.pending_transfer_lives().await,None=>Ok(Default::default())};
-    match lives {
-        Ok(mut lives)=>share.lives.facts().set_life(name,lives.remove(name)),
-        Err(error)=>{tracing::warn!(session=%name,code=%error.code,"convite conservado enquanto a transferência não puder ser lida");return result;},
+    let snapshot=match st.state.runtime.get() {
+        Some(runtime)=>runtime.pending_transfer_snapshot([name.to_owned()].into()).await,
+        None=>Ok((Default::default(),Default::default())),
+    };
+    match snapshot {
+        Ok((_,uncertain)) if uncertain.contains(name)=>{
+            share.lives.facts().set_transfer_uncertain(name,true);
+            share.lives.facts().end_mode_change(name);
+            return result;
+        },
+        Ok((mut lives,_))=>share.lives.facts().set_life(name,lives.remove(name)),
+        Err(error)=>{
+            share.lives.facts().set_transfer_uncertain(name,true);
+            share.lives.facts().end_mode_change(name);
+            tracing::warn!(session=%name,code=%error.code,"convite conservado enquanto a transferência não puder ser lida");return result;
+        },
     }
     if let Some(life)=share.lives.life(name,true).await {
         if let Err(error)=share.store.set_life(name,Some(life.clone())) { tracing::warn!(session=%name,kind=?error.kind(),"convite não acompanhou a vida nova"); }
@@ -189,6 +204,7 @@ pub(crate) async fn during_life_change<T>(st:&AppState,name:&str,work:impl Futur
         let saved=tokio::task::spawn_blocking(move||crate::session_open::server::guest_set_life(&base,&owned,&life)).await;
         if !matches!(saved,Ok(Ok(()))) { tracing::warn!(session=%name,"dono-convidado não acompanhou a vida nova"); }
     }
+    share.lives.facts().set_transfer_uncertain(name,false);
     share.lives.facts().end_mode_change(name);
     result
 }

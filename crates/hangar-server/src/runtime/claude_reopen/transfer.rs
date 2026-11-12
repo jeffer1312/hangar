@@ -435,6 +435,21 @@ impl RuntimeRegistry {
         }
         Ok(lives)
     }
+    pub(crate) async fn pending_transfer_snapshot(
+        &self,names:std::collections::HashSet<String>,
+    )->Result<(HashMap<String,String>,std::collections::HashSet<String>),TransferError> {
+        let lives=self.pending_transfer_lives().await?;
+        let store=store(&self.codex_environment().home);
+        let mut uncertain=std::collections::HashSet::new();
+        for name in names {
+            let unreadable=match store.incomplete_for_session(&name) {
+                Ok(records)=>!records.is_empty() && self.transfer_key(&name).await.is_err(),
+                Err(failure)=>{tracing::warn!(session=%name,code=%failure.code,"convite conservado até conferir a transferência desta sessão");true},
+            };
+            if unreadable {uncertain.insert(name);}
+        }
+        Ok((lives,uncertain))
+    }
     pub(crate) async fn transfer_to_codex(
         &self,
         name: &str,
@@ -694,28 +709,11 @@ impl RuntimeRegistry {
         store: &Store,
         record: &mut TransferRecord,
     ) -> Result<(), TransferError> {
-        record.phase = TransferPhase::Restoring;
-        if let Err(failure) = store.save_recovery(record) {
-            // E/S indisponível não impede tentar salvar a origem; identidade divergente, sim.
-            if failure.code != "session_transfer_history_invalid" {
-                return Err(failure);
-            }
+        if let Some(failure) = store.begin_restore(record)? {
             tracing::warn!(transfer=%record.id,code=%failure.code,cause=?record.error_code,"etapa de restauração não gravada; origem ainda será recuperada");
         }
         let restored = self.restore_transfer_inner(store, record).await;
-        match restored {
-            Ok(()) => {
-                record.phase = TransferPhase::RolledBack;
-                store.save_recovery(record)
-            }
-            Err(cause) => {
-                record.phase = TransferPhase::RestoreFailed;
-                record.error_code = Some(cause.code.clone());
-                store.save_recovery(record)?;
-                Err(error("session_transfer_restore_failed")
-                    .with_params(json!({"phase":cause.code})))
-            }
-        }
+        store.finish_restore(record, restored)
     }
 
     async fn restore_transfer_inner(
@@ -1020,6 +1018,8 @@ mod tests {
         let lives = runtime.pending_transfer_lives().await.unwrap();
         assert_eq!(lives.get("recoverable").map(String::as_str), Some("k:key"));
         assert!(!lives.contains_key("broken"));
+        let (_,uncertain)=runtime.pending_transfer_snapshot(["broken".into(),"recoverable".into(),"unrelated".into()].into()).await.unwrap();
+        assert_eq!(uncertain,["broken".into()].into());
         runtime.recover_transfers().await;
         assert_eq!(
             store.load(&healthy.id).unwrap().unwrap().phase,

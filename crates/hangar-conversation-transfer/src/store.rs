@@ -146,6 +146,34 @@ impl Store {
         }
         self.save_locked(&record)
     }
+    /// Inicia a restauração; E/S indisponível permite tentar salvar a origem e volta para diagnóstico.
+    /// Identidade divergente continua sendo uma recusa, nunca uma autorização de sobrescrita.
+    pub fn begin_restore(&self, record: &mut TransferRecord) -> Result<Option<TransferError>> {
+        record.phase = TransferPhase::Restoring;
+        match self.save_recovery(record) {
+            Ok(()) => Ok(None),
+            Err(failure) if failure.code == "session_transfer_history_invalid" => Ok(Some(failure)),
+            Err(failure) => Err(failure),
+        }
+    }
+
+    /// Confirma a fase durável depois do efeito de restauração, preservando sua causa pública.
+    pub fn finish_restore(&self, record: &mut TransferRecord, restored: Result<()>) -> Result<()> {
+        match restored {
+            Ok(()) => {
+                record.phase = TransferPhase::RolledBack;
+                self.save_recovery(record)
+            }
+            Err(cause) => {
+                record.phase = TransferPhase::RestoreFailed;
+                record.error_code = Some(cause.code.clone());
+                self.save_recovery(record)?;
+                Err(TransferError::new("session_transfer_restore_failed")
+                    .with_params(json!({"phase": cause.code})))
+            }
+        }
+    }
+
     /// Recupera apenas a operação já conhecida pelo coordenador, preservando o arquivo inválido.
     /// Erro de leitura ou identidade divergente nunca autoriza substituir o registro.
     pub fn save_recovery(&self, record: &TransferRecord) -> Result<()> {

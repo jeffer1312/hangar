@@ -55,6 +55,15 @@ impl IngressGates {
             tokio::time::timeout_at(deadline, closes.changed()).await.map_err(|_| GateClosed)?.map_err(|_| GateClosed)?;
         }
     }
+    /// O repasse já era permitido durante fechamentos comuns; só a transferência o retém.
+    /// Contar o pedido sob a mesma trava faz a transferência esperar o seu término.
+    pub(crate) fn enter_forwarded(&self,name:&str)->Result<IngressPass,GateClosed> {
+        self.with_gate(name,|g| {
+            if g.holds>0 {return Err(GateClosed);}
+            g.passes.send_modify(|n|*n+=1);
+            Ok(IngressPass {gates:self.clone(),name:name.into()})
+        })
+    }
     pub async fn close(&self, name: &str, wait: Duration) -> Result<(), IngressBusy> { self.close_as(name, wait, false, false, false).await.map_err(|_| IngressBusy) }
     /// Fechamento que não passa por cima de um retido: com a troca de conversa em curso, `Held` na hora.
     pub async fn close_unless_held(&self, name: &str, wait: Duration) -> Result<(), CloseRefused> { self.close_as(name, wait, false, true, false).await }
@@ -117,6 +126,23 @@ impl Drop for IngressPass {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn forwarded_requests_ignore_normal_close_but_hold_waits_and_refuses_new_requests() {
+        let gates=IngressGates::default();
+        gates.close("session",Duration::from_secs(1)).await.unwrap();
+        let pass=gates.enter_forwarded("session").unwrap();
+        let held=gates.hold("session",Duration::from_secs(1));
+        tokio::pin!(held);
+        assert!(futures_util::poll!(&mut held).is_pending(),"a transferência espera o repasse já aceito");
+        assert!(gates.enter_forwarded("session").is_err(),"a retenção recusa novos repasses");
+        drop(pass);
+        held.await.unwrap();
+        assert!(gates.enter_forwarded("session").is_err());
+        gates.release("session");
+        assert!(gates.enter_forwarded("session").is_ok(),"o fechamento comum não prende o proxy");
+        gates.open("session");
+    }
 
     #[tokio::test]
     async fn rename_and_conversation_transfer_refuse_each_other() {

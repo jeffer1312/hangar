@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use hangar_conversation_transfer::{
-    ImportBoundary, Store, TransferPhase, TransferRecord, convert_bytes, convert_snapshot, digest,
-    serialized_batches, verify_source,
+    ImportBoundary, Store, TransferError, TransferPhase, TransferRecord, convert_bytes,
+    convert_snapshot, digest, serialized_batches, verify_source,
 };
 use serde_json::{Value, json};
 
@@ -249,21 +249,54 @@ fn transfer_store_keeps_snapshot_private_and_rejects_corruption_or_stale_identit
     assert_eq!(scan.invalid_ids, vec![r.id.clone()]);
     assert!(store.list_incomplete().is_err());
     let mut recovery = r.clone();
-    recovery.phase = TransferPhase::Restoring;
-    store.save_recovery(&recovery).unwrap();
+    assert!(store.begin_restore(&mut recovery).unwrap().is_none());
+    assert_eq!(recovery.phase, TransferPhase::Restoring);
     assert_eq!(store.load(&r.id).unwrap(), Some(recovery.clone()));
     let preserved = store
         .base()
         .join("invalid")
         .join(format!("{}-{}.json", r.id, digest(b"null")));
     assert_eq!(std::fs::read(preserved).unwrap(), b"null");
+    store.finish_restore(&mut recovery, Ok(())).unwrap();
+    assert_eq!(
+        store.load(&r.id).unwrap().unwrap().phase,
+        TransferPhase::RolledBack
+    );
+    assert!(store.begin_restore(&mut recovery).unwrap().is_none());
+    let failure = store
+        .finish_restore(
+            &mut recovery,
+            Err(TransferError::new("session_transfer_source_changed")),
+        )
+        .unwrap_err();
+    assert_eq!(failure.code, "session_transfer_restore_failed");
+    assert_eq!(failure.params["phase"], "session_transfer_source_changed");
+    let saved = store.load(&r.id).unwrap().unwrap();
+    assert_eq!(saved.phase, TransferPhase::RestoreFailed);
+    assert_eq!(
+        saved.error_code.as_deref(),
+        Some("session_transfer_source_changed")
+    );
     let mut other = recovery.clone();
     other.origin_meta["key"] = json!("another-life");
     assert!(store.save_recovery(&other).is_err());
+    assert!(store.begin_restore(&mut other).is_err());
     let record_path = store.base().join(format!("{}.json", r.id));
     std::fs::remove_file(&record_path).unwrap();
     std::fs::create_dir(&record_path).unwrap();
     assert!(store.save_recovery(&recovery).is_err());
+    assert!(record_path.is_dir());
+    assert_eq!(
+        store.begin_restore(&mut recovery).unwrap().unwrap().code,
+        "session_transfer_history_invalid"
+    );
+    assert_eq!(
+        store
+            .finish_restore(&mut recovery, Ok(()))
+            .unwrap_err()
+            .code,
+        "session_transfer_history_invalid"
+    );
     assert!(record_path.is_dir());
 }
 

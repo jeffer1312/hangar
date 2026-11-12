@@ -915,7 +915,7 @@ def test_codex_with_terminal_never_waits_for_the_rust_in_pending(codex_birth, tm
         assert await owner.prepare_session("ct", "codex") is False
         with pytest.raises(RuntimeError, match="sem responsável"):
             await owner.op("ct", {"kind":"drain"}, "op")
-        assert waited == [], "Codex com terminal é do Python até a 5C"
+        assert waited == [], "Codex com terminal não usa o coordenador Python"
         await owner.prepare_session("cx", "codex")
         assert waited, "o sem terminal espera o desfecho do Rust"
     asyncio.run(scenario())

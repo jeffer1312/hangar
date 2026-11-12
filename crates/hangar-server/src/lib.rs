@@ -249,8 +249,8 @@ pub async fn serve_until_with_guest(
                 registry.bind_watcher(watcher.clone());
                 registry.recover_transfers().await;
                 if let Some(share)=&transfer_share {
-                    match registry.pending_transfer_lives().await {
-                        Ok(lives)=>share.lives.facts().apply_snapshot(lives,Default::default()),
+                    match registry.pending_transfer_snapshot(share.store.active_sessions()).await {
+                        Ok((lives,uncertain))=>share.lives.facts().apply_transfer_snapshot(lives,uncertain),
                         Err(error)=>tracing::warn!(code=%error.code,"convites aguardam registros de transferência legíveis"),
                     }
                 }
