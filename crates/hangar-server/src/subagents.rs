@@ -128,14 +128,19 @@ fn headless_lives(map: &Value) -> HashMap<String, AgentLife> {
         };
         let ended_at = v.get("end_time").and_then(Value::as_i64)
             .and_then(chrono::DateTime::from_timestamp_millis).map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
-        Some((id.clone(), AgentLife { state, ended_at }))
+        Some((id.clone(), AgentLife { state, ended_at, since: None }))
     }).collect()
 }
 
 /// `state`, `endedAt`, `canMessage` e `messageBlocked` de um item. No Claude com terminal o estado é o
 /// sinal do plugin (null sem sinal); Kimi e Pi dizem sozinhos que acabaram (`finished`).
 fn decorate(a: &mut Map<String, Value>, life: Option<&AgentLife>, blocked: Option<&str>, problem: Option<&str>) {
+    let instant = |t: Option<&str>| t.and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok());
+    // O `running` do plugin não tem fim quando o agente é interrompido: a interrupção do arquivo, se for mais nova, vence.
+    let interrupted_after = |life: &AgentLife| life.state == AgentState::Running && a.get("state").and_then(Value::as_str) == Some("failed")
+        && instant(a.get("endedAt").and_then(Value::as_str)).zip(instant(life.since.as_deref())).is_some_and(|(ended, since)| ended > since);
     let (state, ended) = match (life, a.get("finished").and_then(Value::as_bool)) {
+        (Some(life), _) if interrupted_after(life) => (json!("failed"), a.get("endedAt").cloned().unwrap_or(Value::Null)),
         (Some(life), _) => (json!(life.state), json!(life.ended_at)),
         (None, Some(true)) => (json!("finished"), a.get("updatedAt").filter(|v| v.as_str().is_some_and(|t| !t.is_empty())).cloned().unwrap_or(Value::Null)),
         (None, Some(false)) => (json!("running"), Value::Null),
@@ -1078,6 +1083,16 @@ mod tests {
         decorate(&mut a, None, None, None);
         assert_eq!((a["state"].clone(), a["endedAt"].clone()), (json!("failed"), json!("2026-10-13T10:01:00Z")));
 
+        // O plugin marcou `running` no lançamento e nenhum aviso de fim veio: a interrupção mais nova vence.
+        let running = |since: &str| AgentLife { state: AgentState::Running, ended_at: None, since: Some(since.into()) };
+        let mut a = list_subagents("claude", &own).remove(0);
+        decorate(&mut a, Some(&running("2026-10-13T10:00:30.000Z")), None, None);
+        assert_eq!((a["state"].clone(), a["endedAt"].clone()), (json!("failed"), json!("2026-10-13T10:01:00Z")));
+        // Retomado pelo SendMessage depois da interrupção e ainda sem resposta: segue rodando.
+        let mut a = list_subagents("claude", &own).remove(0);
+        decorate(&mut a, Some(&running("2026-10-13T10:01:30.000Z")), None, None);
+        assert_eq!((a["state"].clone(), a["endedAt"].clone()), (json!("running"), Value::Null));
+
         append(json!({"type": "assistant", "timestamp": "2026-10-13T10:02:00Z", "message": {"content": [{"type": "text", "text": "retomei"}]}}));
         let mut a = list_subagents("claude", &own).remove(0);
         decorate(&mut a, None, None, None);
@@ -1169,10 +1184,10 @@ mod tests {
         let mut a = item(json!({}));
         decorate(&mut a, None, message_blocked("claude"), None);
         assert_eq!(pick(&a), json!([null, null, true, null]), "Claude com terminal sem sinal ainda");
-        let life = AgentLife { state: AgentState::Finished, ended_at: Some("2026-10-13T10:00:09.000Z".into()) };
+        let life = AgentLife { state: AgentState::Finished, ended_at: Some("2026-10-13T10:00:09.000Z".into()), since: None };
         decorate(&mut a, Some(&life), Some(NO_PLUGIN), None);
         assert_eq!(pick(&a), json!(["finished", "2026-10-13T10:00:09.000Z", false, NO_PLUGIN]));
-        decorate(&mut a, Some(&AgentLife { state: AgentState::Running, ended_at: None }), None, None);
+        decorate(&mut a, Some(&AgentLife { state: AgentState::Running, ended_at: None, since: None }), None, None);
         assert_eq!(pick(&a), json!(["running", null, true, null]));
 
         let mut h = item(json!({"failed": true}));

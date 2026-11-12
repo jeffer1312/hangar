@@ -135,7 +135,13 @@ struct Session {
 #[serde(rename_all = "lowercase")]
 pub enum AgentState { Running, Finished, Failed }
 #[derive(Clone, Debug, PartialEq)]
-pub struct AgentLife { pub state: AgentState, pub ended_at: Option<String> }
+/// `since`: quando o `running` chegou; a interrupção gravada depois dele vence o sinal.
+pub struct AgentLife { pub state: AgentState, pub ended_at: Option<String>, pub since: Option<String> }
+impl AgentLife {
+    pub fn running_now() -> Self {
+        Self { state: AgentState::Running, ended_at: None, since: Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)) }
+    }
+}
 
 /// Resultado de mandar texto a um subagente pelo plugin.
 #[derive(Clone, Debug, PartialEq)]
@@ -598,9 +604,10 @@ impl Store {
         };
         let mut memory = self.memory.lock().map_err(|_| unavailable())?;
         let s = session(&mut memory, binding)?;
-        let ended_at = (state != AgentState::Running).then(|| at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+        let stamp = at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let (ended_at, since) = if state == AgentState::Running { (None, Some(stamp)) } else { (Some(stamp), None) };
         // ponytail: sem teto por conversa; a memória some com a vida da sessão.
-        s.agents.insert(agent_id.to_owned(), AgentLife { state, ended_at });
+        s.agents.insert(agent_id.to_owned(), AgentLife { state, ended_at, since });
         self.notify(&binding.key);
         Ok(())
     }
@@ -641,7 +648,7 @@ impl Store {
             }
             s.agent_outbox.retain(|(queued, _)| *queued != id);
             if reply == AgentSend::Delivered {
-                s.agents.insert(agent_id.to_owned(), AgentLife { state: AgentState::Running, ended_at: None });
+                s.agents.insert(agent_id.to_owned(), AgentLife::running_now());
                 self.notify(&binding.key);
             }
         }
@@ -663,7 +670,7 @@ impl Store {
         if let Some(agent) = orphan {
             tracing::warn!(id, agent = %agent, delivered, reason = reason.as_deref().unwrap_or(""), "confirmação do plugin chegou sem o pedido esperando");
             if delivered {
-                s.agents.insert(agent, AgentLife { state: AgentState::Running, ended_at: None });
+                s.agents.insert(agent, AgentLife::running_now());
                 self.notify(&binding.key);
             }
         }
@@ -1235,11 +1242,12 @@ mod tests {
     fn agent_lifecycle_finishes_fails_and_resume_reopens() {
         let (store, binding) = setup();
         store.record_agent(&binding, "a1", AgentState::Running, None).unwrap();
-        assert_eq!(store.agent_lives(&binding).unwrap()["a1"], AgentLife { state: AgentState::Running, ended_at: None });
+        assert_eq!(store.agent_lives(&binding).unwrap()["a1"].state, AgentState::Running);
         store.record_agent(&binding, "a1", AgentState::Finished, Some(1_791_900_509_038)).unwrap();
         assert_eq!(store.agent_lives(&binding).unwrap()["a1"].ended_at.as_deref(), Some("2026-10-13T14:08:29.038Z"));
         store.record_agent(&binding, "a1", AgentState::Running, None).unwrap();
-        assert_eq!(store.agent_lives(&binding).unwrap()["a1"], AgentLife { state: AgentState::Running, ended_at: None }, "retomada");
+        let resumed = &store.agent_lives(&binding).unwrap()["a1"];
+        assert_eq!((&resumed.state, &resumed.ended_at, resumed.since.is_some()), (&AgentState::Running, &None, true), "retomada");
         store.record_agent(&binding, "a2", AgentState::Failed, None).unwrap();
         assert!(store.agent_lives(&binding).unwrap()["a2"].ended_at.is_some());
         assert_eq!(store.record_agent(&binding, "", AgentState::Running, None).unwrap_err().0, "plugin_body_invalid");

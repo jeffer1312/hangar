@@ -5228,8 +5228,10 @@ controlado, com três partes e imagem; não depende de Orientar.
 Um `Agent` de fundo só fecha no chat pelo `<task-notification>` no transcript do pai. Interrompido
 (o arquivo `subagents/agent-<id>.jsonl` termina num `user` "[Request interrupted by user…]"), ele não
 gera aviso, e o cartão ficava "Executando há 9 h" na DELPHI-02. Agora a rota de subagentes lê essa
-marca como fim (`state: "failed"`, `endedAt` da marca; resposta depois dela desfaz), só quando o
-plugin não deu sinal próprio. Celular e web tiram da lista de rodando o agente que o servidor deu
+marca como fim (`state: "failed"`, `endedAt` da marca; resposta depois dela desfaz). O plugin marca
+`running` no lançamento e só fecha pelo mesmo aviso, então o `running` dele não basta: o registro
+guarda quando ele chegou (`AgentLife.since`), e a interrupção mais nova que isso vence; a retomada pelo
+`SendMessage` grava um `running` novo, posterior à marca, e o agente segue rodando. Celular e web tiram da lista de rodando o agente que o servidor deu
 como encerrado (`subagentEnded` no core); no nativo, `pinned_running` faz o mesmo na faixa fixa, e o
 cartão da conversa já seguia o estado do servidor (`effective_agent`). Só nesse sentido: o servidor
 nunca reabre um agente que o transcript deu como terminado. Testes:
