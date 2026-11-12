@@ -3,6 +3,15 @@ use crate::{Error, Native, Paths, backup, issue, object, project_preferences, re
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, path::Path};
 
+const RESTRICTIONS: &[&str] = &["forced_login_method", "forced_chatgpt_workspace_id"];
+
+fn managed_restrictions(previous: &Value) -> serde_json::Map<String, Value> {
+    object(&previous["managed_restrictions"])
+        .into_iter()
+        .filter(|(key, _)| RESTRICTIONS.contains(&key.as_str()))
+        .collect()
+}
+
 pub(crate) fn merge(current: &Value, desired: &Value, previous: &Value) -> Value {
     let Some(wanted) = desired.as_object() else {
         return desired.clone();
@@ -47,12 +56,17 @@ pub(crate) async fn edit(
         .iter()
         .any(|v| v["code"] == "codex_account_unmapped_reference");
     let old = object(&previous["values"]);
-    let mut managed: BTreeSet<String> = object(&projection).keys().cloned().collect();
-    let mut result = json!({"values":projection,"restrictions":object(&previous["restrictions"])});
+    let authored = managed_restrictions(previous);
+    let issue_start = issues.len();
+    let mut result = json!({});
     let mut plan = |current: &Value| -> Result<Vec<Value>, String> {
         if !current.is_object() {
             return Err("config.toml não é um objeto".into());
         }
+        // Uma tentativa descartada pelo escritor não transfere posse nem autoriza a próxima.
+        issues.truncate(issue_start);
+        let mut managed: BTreeSet<String> = object(&projection).keys().cloned().collect();
+        result = json!({"values":projection,"restrictions":{},"managed_restrictions":authored});
         let mut target = serde_json::Map::new();
         for (key, value) in object(&projection) {
             target.insert(
@@ -96,31 +110,37 @@ pub(crate) async fn edit(
                 }
             }
         }
-        for key in ["forced_login_method", "forced_chatgpt_workspace_id"] {
-            let Some(wanted) = source.get(key) else {
-                if let Some(actual) = current.get(key) {
-                    result["restrictions"][key] = actual.clone();
-                } else {
-                    result["restrictions"]
-                        .as_object_mut()
-                        .map(|v| v.remove(key));
+        for &key in RESTRICTIONS {
+            let actual = current.get(key);
+            let owned = authored.get(key);
+            let locally_changed = actual.is_some() && owned.is_some() && actual != owned;
+            if let Some(actual) = actual {
+                result["restrictions"][key] = actual.clone();
+                if locally_changed {
+                    issues.push(issue("codex_account_local_change", json!({"key":key})));
                 }
+            } else {
+                result["managed_restrictions"]
+                    .as_object_mut()
+                    .map(|values| values.remove(key));
+            }
+            let Some(wanted) = source.get(key) else {
                 continue;
             };
-            let actual = &current[key];
-            let old = &previous["restrictions"][key];
-            if actual.is_null() || actual == wanted || !old.is_null() && actual == old {
+            if actual == Some(wanted) {
+                // Igualdade confirma a observação, mas não prova uma escrita do Hangar.
+                continue;
+            }
+            if actual.is_none() || (owned.is_some() && actual == owned) {
                 target.insert(key.into(), wanted.clone());
                 result["restrictions"][key] = wanted.clone();
+                result["managed_restrictions"][key] = wanted.clone();
                 managed.insert(key.into());
             } else {
                 issues.push(issue(
                     "codex_account_restriction_conflict",
                     json!({"key":key}),
                 ));
-                result["restrictions"]
-                    .as_object_mut()
-                    .map(|v| v.remove(key));
             }
         }
         Ok(edits(current, &Value::Object(target), &managed))
@@ -139,11 +159,19 @@ pub(crate) async fn remove(
     private: &Path,
     issues: &mut Vec<Value>,
 ) -> Result<Value, Error> {
+    let authored = managed_restrictions(previous);
+    let issue_start = issues.len();
     let mut remaining = serde_json::Map::new();
+    let mut remaining_restrictions = serde_json::Map::new();
+    let mut observations = serde_json::Map::new();
     let mut plan = |current: &Value| -> Result<Vec<Value>, String> {
         if !current.is_object() {
             return Err("perfil inválido".into());
         }
+        issues.truncate(issue_start);
+        remaining.clear();
+        remaining_restrictions.clear();
+        observations.clear();
         let mut result = Vec::new();
         for (key, old) in object(&previous["values"]) {
             if let Some(actual) = current.get(&key) {
@@ -152,6 +180,24 @@ pub(crate) async fn remove(
                 } else {
                     issues.push(issue("codex_account_local_change", json!({"key":key})));
                     remaining.insert(key, old);
+                }
+            }
+        }
+        for &key in RESTRICTIONS {
+            let Some(actual) = current.get(key) else {
+                continue;
+            };
+            match authored.get(key) {
+                Some(old) if actual == old => {
+                    result.push(json!({"keyPath":serde_json::to_string(key).unwrap_or_default(),"value":null,"mergeStrategy":"replace"}));
+                }
+                Some(old) => {
+                    issues.push(issue("codex_account_local_change", json!({"key":key})));
+                    remaining_restrictions.insert(key.into(), old.clone());
+                    observations.insert(key.into(), actual.clone());
+                }
+                None => {
+                    observations.insert(key.into(), actual.clone());
                 }
             }
         }
@@ -173,7 +219,9 @@ pub(crate) async fn remove(
         }
         std::fs::remove_file(path)?;
     }
-    Ok(json!({"values":remaining}))
+    Ok(
+        json!({"values":remaining,"restrictions":observations,"managed_restrictions":remaining_restrictions}),
+    )
 }
 pub(crate) fn contains(current: &Value, desired: &Value) -> bool {
     if let Some(values) = desired.as_object() {

@@ -129,6 +129,12 @@ diferenças de caixa e exclui tokens literais e cabeçalhos de autenticação do
 preservando referências a variáveis de ambiente. Caminhos de hooks com `./` são normalizados.
 A confiança de projeto preenche a chave ausente sem substituir uma escolha explícita.
 
+Restrições de login e workspace guardam separadamente a observação atual e os valores
+efetivamente escritos pelo Hangar. Ao retirar um perfil da fonte, só estes últimos podem ser
+removidos, e apenas se ainda forem iguais ao valor gravado. Alteração pessoal mantém o registro
+pendente; manifesto antigo sem prova de posse nunca autoriza apagar ou sobrescrever a restrição.
+Uma tentativa de escrita descartada também não transfere sua intenção para a tentativa seguinte.
+
 ## Anexos
 
 O Rust atende upload, galeria, download e resolução de áudio pelo cofre existente.

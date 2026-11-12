@@ -17,8 +17,11 @@ async fn dot_prefixed_hook_path_is_inherited_without_unmapped_reference() {
     let result = prepare(f.paths(), false, false, &mut Cli::default()).await;
     assert_eq!(result["status"], "ready", "{result}");
     assert!(!has(&result, "codex_account_unmapped_reference"));
-    let hooks: Value = serde_json::from_slice(&std::fs::read(f.destination.join("hooks.json")).unwrap()).unwrap();
-    let command = hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"].as_str().unwrap();
+    let hooks: Value =
+        serde_json::from_slice(&std::fs::read(f.destination.join("hooks.json")).unwrap()).unwrap();
+    let command = hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap();
     assert!(command.contains(&f.destination.join("hooks/run.sh").display().to_string()));
 }
 
@@ -32,6 +35,7 @@ struct Cli {
     trust_checks: Arc<AtomicUsize>,
     fail_plugins: bool,
     change_source: Option<PathBuf>,
+    retry_config: Option<(String, Value)>,
 }
 impl Default for Cli {
     fn default() -> Self {
@@ -45,6 +49,7 @@ impl Default for Cli {
             trust_checks: Arc::new(AtomicUsize::new(0)),
             fail_plugins: false,
             change_source: None,
+            retry_config: None,
         }
     }
 }
@@ -66,7 +71,21 @@ impl Native for Cli {
             } else {
                 json!({})
             };
-            let edits = plan(&value)?;
+            let mut edits = plan(&value)?;
+            if self
+                .retry_config
+                .as_ref()
+                .is_some_and(|(name, _)| path.file_name().is_some_and(|file| file == name.as_str()))
+            {
+                let (_, personal) = self.retry_config.take().unwrap();
+                value = personal;
+                std::fs::write(
+                    path,
+                    toml::to_string(&value).map_err(|error| error.to_string())?,
+                )
+                .map_err(|error| error.to_string())?;
+                edits = plan(&value)?;
+            }
             if !edits.is_empty() {
                 for edit in edits {
                     let key: String = serde_json::from_str(edit["keyPath"].as_str().ok_or("key")?)
@@ -126,7 +145,8 @@ impl Fixture {
     fn new() -> Self {
         let directory = tempfile::tempdir().unwrap();
         // A identidade persistida é canônica; o nome curto de TEMP não é a chave da conta.
-        let root = hangar_core::fs::without_verbatim(std::fs::canonicalize(directory.path()).unwrap());
+        let root =
+            hangar_core::fs::without_verbatim(std::fs::canonicalize(directory.path()).unwrap());
         let source = root.join(".codex");
         let destination = root.join(".codex-work");
         std::fs::create_dir(&source).unwrap();
@@ -767,4 +787,288 @@ async fn external_windows_command_keeps_quoting_and_backslashes() {
     let hooks: Value =
         serde_json::from_slice(&std::fs::read(f.destination.join("hooks.json")).unwrap()).unwrap();
     assert_eq!(hooks["command"], command);
+}
+
+fn account_manifest(fixture: &Fixture) -> (PathBuf, Value) {
+    let directory = std::fs::read_dir(fixture.directory.path().join(".hangar/codex-contas"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let path = directory.join("estado.json");
+    let state = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    (path, state)
+}
+
+#[tokio::test]
+async fn deleting_a_profile_removes_both_restrictions_written_by_inheritance() {
+    let f = Fixture::new();
+    f.source(
+        "work.config.toml",
+        "forced_login_method='chatgpt'\nforced_chatgpt_workspace_id='workspace-source'\n",
+    );
+    let mut cli = Cli::default();
+    assert_eq!(
+        prepare(f.paths(), false, false, &mut cli).await["status"],
+        "ready"
+    );
+    assert_eq!(
+        f.config("work.config.toml")["forced_login_method"],
+        "chatgpt"
+    );
+    assert_eq!(
+        f.config("work.config.toml")["forced_chatgpt_workspace_id"],
+        "workspace-source"
+    );
+
+    std::fs::remove_file(f.source.join("work.config.toml")).unwrap();
+    let removed = prepare(f.paths(), false, true, &mut cli).await;
+
+    assert_eq!(removed["status"], "ready", "{removed}");
+    assert!(!f.destination.join("work.config.toml").exists());
+    assert!(
+        account_manifest(&f).1["profiles"]
+            .get("work.config.toml")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn deleting_a_profile_preserves_preexisting_equal_or_different_restrictions() {
+    for personal in ["workspace-source", "workspace-personal"] {
+        let f = Fixture::new();
+        f.source(
+            "work.config.toml",
+            "forced_login_method='chatgpt'\nforced_chatgpt_workspace_id='workspace-source'\n",
+        );
+        f.target(
+            "work.config.toml",
+            &format!("forced_login_method='chatgpt'\nforced_chatgpt_workspace_id='{personal}'\n"),
+        );
+        let mut cli = Cli::default();
+        let prepared = prepare(f.paths(), false, false, &mut cli).await;
+        assert_eq!(
+            prepared["status"],
+            if personal == "workspace-source" {
+                "ready"
+            } else {
+                "partial"
+            }
+        );
+
+        std::fs::remove_file(f.source.join("work.config.toml")).unwrap();
+        let removed = prepare(f.paths(), false, true, &mut cli).await;
+
+        assert_eq!(removed["status"], "ready", "{removed}");
+        assert_eq!(
+            f.config("work.config.toml")["forced_login_method"],
+            "chatgpt"
+        );
+        assert_eq!(
+            f.config("work.config.toml")["forced_chatgpt_workspace_id"],
+            personal
+        );
+        assert!(
+            account_manifest(&f).1["profiles"]
+                .get("work.config.toml")
+                .is_none()
+        );
+    }
+}
+
+#[tokio::test]
+async fn changed_personal_restriction_keeps_old_ownership_until_it_matches_again() {
+    let f = Fixture::new();
+    f.source(
+        "work.config.toml",
+        "forced_login_method='chatgpt'\nforced_chatgpt_workspace_id='workspace-source'\n",
+    );
+    let mut cli = Cli::default();
+    assert_eq!(
+        prepare(f.paths(), false, false, &mut cli).await["status"],
+        "ready"
+    );
+    f.target("work.config.toml", "cli_auth_credentials_store='file'\nforced_login_method='chatgpt'\nforced_chatgpt_workspace_id='workspace-personal'\n");
+    let updated = prepare(f.paths(), false, true, &mut cli).await;
+    assert_eq!(updated["status"], "partial", "{updated}");
+    assert!(has(&updated, "codex_account_local_change"));
+    assert_eq!(
+        f.config("work.config.toml")["forced_chatgpt_workspace_id"],
+        "workspace-personal"
+    );
+    assert_eq!(
+        account_manifest(&f).1["profiles"]["work.config.toml"]["managed_restrictions"]["forced_chatgpt_workspace_id"],
+        "workspace-source"
+    );
+    std::fs::remove_file(f.source.join("work.config.toml")).unwrap();
+
+    let removed = prepare(f.paths(), false, true, &mut cli).await;
+
+    assert_eq!(removed["status"], "partial", "{removed}");
+    assert!(has(&removed, "codex_account_local_change"));
+    assert!(
+        f.config("work.config.toml")
+            .get("forced_login_method")
+            .is_none()
+    );
+    assert_eq!(
+        f.config("work.config.toml")["forced_chatgpt_workspace_id"],
+        "workspace-personal"
+    );
+    assert_eq!(
+        account_manifest(&f).1["profiles"]["work.config.toml"]["managed_restrictions"],
+        json!({"forced_chatgpt_workspace_id":"workspace-source"})
+    );
+
+    f.target(
+        "work.config.toml",
+        "forced_chatgpt_workspace_id='workspace-source'\n",
+    );
+    let restored = prepare(f.paths(), false, true, &mut cli).await;
+    assert_eq!(restored["status"], "ready", "{restored}");
+    assert!(!f.destination.join("work.config.toml").exists());
+}
+
+#[tokio::test]
+async fn observed_restrictions_do_not_authorize_source_updates_in_account_or_profile() {
+    for file in ["config.toml", "work.config.toml"] {
+        let f = Fixture::new();
+        f.source(
+            file,
+            "forced_login_method='chatgpt'\nforced_chatgpt_workspace_id='workspace-personal'\n",
+        );
+        f.target(
+            file,
+            "forced_login_method='chatgpt'\nforced_chatgpt_workspace_id='workspace-personal'\n",
+        );
+        let mut cli = Cli::default();
+        assert_eq!(
+            prepare(f.paths(), false, false, &mut cli).await["status"],
+            "ready"
+        );
+        f.source(
+            file,
+            "forced_login_method='api'\nforced_chatgpt_workspace_id='workspace-new'\n",
+        );
+
+        let changed = prepare(f.paths(), false, true, &mut cli).await;
+
+        assert_eq!(changed["status"], "partial", "{changed}");
+        assert!(has(&changed, "codex_account_restriction_conflict"));
+        assert_eq!(f.config(file)["forced_login_method"], "chatgpt");
+        assert_eq!(
+            f.config(file)["forced_chatgpt_workspace_id"],
+            "workspace-personal"
+        );
+        let state = account_manifest(&f).1;
+        let manifest = if file == "config.toml" {
+            &state["config"]
+        } else {
+            &state["profiles"][file]
+        };
+        assert_eq!(manifest["managed_restrictions"], json!({}));
+    }
+}
+
+#[tokio::test]
+async fn legacy_restriction_observations_never_gain_ownership_during_update_or_removal() {
+    let f = Fixture::new();
+    f.source(
+        "work.config.toml",
+        "forced_login_method='chatgpt'\nforced_chatgpt_workspace_id='workspace-legacy'\n",
+    );
+    f.target(
+        "work.config.toml",
+        "forced_login_method='chatgpt'\nforced_chatgpt_workspace_id='workspace-legacy'\n",
+    );
+    let mut cli = Cli::default();
+    assert_eq!(
+        prepare(f.paths(), false, false, &mut cli).await["status"],
+        "ready"
+    );
+    let (path, mut state) = account_manifest(&f);
+    state["profiles"]["work.config.toml"]
+        .as_object_mut()
+        .unwrap()
+        .remove("managed_restrictions");
+    std::fs::write(path, serde_json::to_vec(&state).unwrap()).unwrap();
+    f.source(
+        "work.config.toml",
+        "forced_login_method='api'\nforced_chatgpt_workspace_id='workspace-new'\n",
+    );
+
+    let changed = prepare(f.paths(), false, true, &mut cli).await;
+
+    assert_eq!(changed["status"], "partial", "{changed}");
+    assert!(has(&changed, "codex_account_restriction_conflict"));
+    assert_eq!(
+        f.config("work.config.toml")["forced_login_method"],
+        "chatgpt"
+    );
+    assert_eq!(
+        f.config("work.config.toml")["forced_chatgpt_workspace_id"],
+        "workspace-legacy"
+    );
+    std::fs::remove_file(f.source.join("work.config.toml")).unwrap();
+    assert_eq!(
+        prepare(f.paths(), false, true, &mut cli).await["status"],
+        "ready"
+    );
+    assert_eq!(
+        f.config("work.config.toml")["forced_login_method"],
+        "chatgpt"
+    );
+    assert_eq!(
+        f.config("work.config.toml")["forced_chatgpt_workspace_id"],
+        "workspace-legacy"
+    );
+}
+
+#[tokio::test]
+async fn native_retry_does_not_delete_personal_values_or_claim_observed_restrictions() {
+    let f = Fixture::new();
+    f.source("work.config.toml", "model='first'\n");
+    let mut cli = Cli::default();
+    assert_eq!(
+        prepare(f.paths(), false, false, &mut cli).await["status"],
+        "ready"
+    );
+    f.source(
+        "work.config.toml",
+        "forced_chatgpt_workspace_id='workspace-personal'\n",
+    );
+    cli.retry_config = Some((
+        "work.config.toml".into(),
+        json!({
+            "model":"personal",
+            "cli_auth_credentials_store":"file",
+            "forced_chatgpt_workspace_id":"workspace-personal"
+        }),
+    ));
+
+    let retried = prepare(f.paths(), false, true, &mut cli).await;
+
+    assert_eq!(retried["status"], "partial", "{retried}");
+    assert!(has(&retried, "codex_account_local_change"));
+    assert_eq!(f.config("work.config.toml")["model"], "personal");
+    assert_eq!(
+        f.config("work.config.toml")["forced_chatgpt_workspace_id"],
+        "workspace-personal"
+    );
+    assert_eq!(
+        account_manifest(&f).1["profiles"]["work.config.toml"]["managed_restrictions"],
+        json!({})
+    );
+
+    std::fs::remove_file(f.source.join("work.config.toml")).unwrap();
+    assert_eq!(
+        prepare(f.paths(), false, true, &mut cli).await["status"],
+        "ready"
+    );
+    assert_eq!(f.config("work.config.toml")["model"], "personal");
+    assert_eq!(
+        f.config("work.config.toml")["forced_chatgpt_workspace_id"],
+        "workspace-personal"
+    );
 }

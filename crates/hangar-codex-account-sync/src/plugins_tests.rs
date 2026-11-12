@@ -15,6 +15,7 @@ struct Fake {
     fail_install: bool,
     failed_plugin_reads: Mutex<std::collections::VecDeque<bool>>,
     fail_config: bool,
+    reported_version: Option<&'static str>,
     trust: Option<bool>,
 }
 impl Fake {
@@ -31,6 +32,7 @@ impl Fake {
             fail_install: false,
             failed_plugin_reads: Mutex::new(std::collections::VecDeque::new()),
             fail_config: false,
+            reported_version: None,
             trust: Some(false),
         }
     }
@@ -68,7 +70,11 @@ impl PluginsNative for Fake {
                     stderr: String::new(),
                 });
             }
-            Ok(self.states.lock().unwrap()[account].plugins.clone())
+            let mut plugins = self.states.lock().unwrap()[account].plugins.clone();
+            if let Some(version) = self.reported_version {
+                for plugin in &mut plugins { plugin["version"] = json!(version); }
+            }
+            Ok(plugins)
         })
     }
     fn marketplaces<'a>(
@@ -450,6 +456,32 @@ async fn removed_plugin_disable_failure_preserves_manifest_until_retry() {
 #[tokio::test]
 async fn removed_plugin_confirmation_failure_preserves_manifest_until_retry() {
     removal_retries_after_failure(&[false, true], false, false).await;
+}
+
+async fn managed_source_plugin_keeps_ownership(wrong_version: bool) {
+        let f = Fixture::new();
+        let mut fake = f.prepare();
+        let first = sync(f.paths(), &json!({}), &fake).await;
+        assert_eq!(first["issues"], json!([]));
+        if wrong_version { fake.reported_version = Some("0.9.0"); }
+        else { *fake.failed_plugin_reads.lock().unwrap() = [true, false].into(); }
+        let failed = sync(f.paths(), &first["manifest"], &fake).await;
+        assert!(has(&failed, if wrong_version {"codex_account_plugin_version_conflict"} else {"codex_account_plugin_not_installed"}));
+        assert_eq!(failed["manifest"]["plugins"]["sample@market"]["origem"], first["manifest"]["plugins"]["sample@market"]["origem"]);
+        fake.reported_version = None;
+        fake.set(&f.source, vec![], vec![]);
+        let removed = sync(f.paths(), &failed["manifest"], &fake).await;
+        assert_eq!(removed["issues"], json!([]));
+        assert_eq!(fake.target().plugins[0]["enabled"], false);
+        assert!(removed["manifest"]["plugins"].get("sample@market").is_none());
+}
+#[tokio::test]
+async fn managed_source_plugin_keeps_ownership_after_failed_inventory() {
+    managed_source_plugin_keeps_ownership(false).await;
+}
+#[tokio::test]
+async fn managed_source_plugin_keeps_ownership_after_version_conflict() {
+    managed_source_plugin_keeps_ownership(true).await;
 }
 #[tokio::test]
 async fn failed_install_preserves_previous_manifest() {

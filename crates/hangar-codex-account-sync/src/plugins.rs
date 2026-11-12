@@ -824,6 +824,7 @@ pub async fn sync(paths: Paths<'_>, previous: &Value, native: &impl PluginsNativ
                 "codex_account_plugin_not_installed",
                 json!({"plugin":id}),
             ));
+            preserve(id, &mut managed);
             continue;
         };
         if item["version"] != plugin["version"] {
@@ -831,6 +832,7 @@ pub async fn sync(paths: Paths<'_>, previous: &Value, native: &impl PluginsNativ
                 "codex_account_plugin_version_conflict",
                 json!({"plugin":id}),
             ));
+            preserve(id, &mut managed);
             continue;
         }
         let Some(source_origin) = plugin_origin(plugin, paths.home).or_else(|| {

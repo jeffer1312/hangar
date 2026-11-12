@@ -396,7 +396,9 @@ async fn run(
         .await;
         match result {
             Ok(value) => {
-                if !object(&value["values"]).is_empty() {
+                if !object(&value["values"]).is_empty()
+                    || !object(&value["managed_restrictions"]).is_empty()
+                {
                     profile_results.insert(name.clone(), value.clone());
                     state["profiles"][&name] = value;
                 } else if let Some(profiles) = state["profiles"].as_object_mut() {

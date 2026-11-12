@@ -23,7 +23,7 @@ pelo catálogo, nunca concatenando esse rótulo ao caminho de conta.
 | `/api/conta-estado/{label}/login/cancelar` POST | `conta_estado.cancelar_login` | Cliente de login PWA e nativo | Rust |
 | `/api/codex-contas` GET/POST | `codex_contas_api.list_codex_accounts`, `create_codex_account` | Core, `frontend/src/lib/credenciais.ts`, criação/configuração PWA/mobile, nativo, `scripts/hangar-codex` | Rust |
 | `/api/codex-contas/{account_id}` DELETE | `codex_contas_api.delete_codex_account` | Core, PWA/mobile e nativo | Rust |
-| `/api/codex-contas/{account_id}/prepare` GET/POST | `codex_account_preparation`, `prepare_codex_account` | Core, PWA/mobile, nativo `app/harness.rs`, `scripts/hangar-codex-tui` | Rust decide; gancho Python prepara |
+| `/api/codex-contas/{account_id}/prepare` GET/POST | `codex_account_preparation`, `prepare_codex_account` | Core, PWA/mobile, nativo `app/harness.rs`, `scripts/hangar-codex-tui` | Rust decide e prepara |
 | `/api/codex-contas/{account_id}/login` GET/POST/DELETE | `codex_login_status`, `start_codex_login`, `cancel_codex_login` | Core, PWA/mobile, nativo `app/accounts/codex.rs` | Rust |
 | `/api/codex-contas/{account_id}/rate-limit-reset` POST | `consume_rate_limit_reset` | Core e nativo `app/accounts/codex.rs` | Rust |
 | `/api/cotas` GET | `cotas.listar_cotas` | Core, feed de cotas PWA, criação e configuração mobile, nativo Contas/Orq e políticas de sessão | Rust agrega; Python fornece só outros provedores |
@@ -46,7 +46,7 @@ exige `attempt_id`; falta é 422, tentativa antiga é 409. Os erros preservam
 | Catálogo, marcador `.hangar-conta`, marcador `.hangar-codex-conta` v1, cadastro/exclusão | Rust | Leitura pura dos formatos atuais |
 | Autenticação nativa Claude/Codex | CLI chamada pelo serviço Rust | Nenhuma escrita no fluxo migrado |
 | Cofre do device flow, `auth.json` Codex e OAuth Pi/omp | Rust | Escrita e leitura Pi/omp dentro da guarda da conta; o Python só conserva o fluxo sem Rust |
-| `settings.json`, links/cópias, gaveta, plugins, hooks, skills, instruções e preparação | Reconciliadores Python até a frente de integração | Gancho restrito, com conta/operação validadas e lock de existência |
+| `settings.json`, links/cópias, gaveta, plugins, hooks, skills, instruções e preparação | Reconciliadores Rust, com guarda da conta | Nenhuma escrita no fluxo migrado |
 | `cotas-cache.json` (mistura provedores) | Rust, arquivo inteiro | Fornece parcelas de outros provedores; não grava com Rust ativo |
 | `codex-reset-attempts.json` (JSONL, apesar do sufixo) | Rust | Nenhum consumo/escrita no fluxo migrado |
 | Apelidos compartilhados e configuração fixa por ambiente | Contrato existente | Fornece fatos; mudança de apelido continua na rota existente |
@@ -108,7 +108,7 @@ As quatro rotas da ponte Pi/omp aposentada
 como `bridge.propagate_device_login` e reprovam a conferência;
 `/__contract__/secondary-native-only` as recusa antes do handler. Na integração, a instância Rust deve apontar para
 essa referência bloqueada e produzir o contrato esperado sem chamar handlers de
-contas; preparação e outros provedores têm seus próprios diários. A Task 1 prova
+contas; outros provedores têm seu próprio diário, e o preparo roda em processo no Rust. A Task 1 prova
 a sonda, não declara que o Rust já atende contas.
 
 `account-keys.json` fixa a chave de existência nos dois runtimes: SHA-256 de
