@@ -331,12 +331,32 @@ mod credman {
         fn target(&self, kind: &str) -> Vec<u16> { wide(&format!("{}/{kind}", self.prefix)) }
     }
 
+    type Job = Box<dyn FnOnce() + Send>;
+
     /// Fora do executor e com prazo, como o Secret Service: o serviço de credenciais travado não prende
-    /// a trava do cofre para sempre.
+    /// a trava do cofre para sempre. Uma thread só, em fila: a gravação que estourou o prazo ainda roda
+    /// e termina antes da seguinte, que então a lê, e a chave guardada nunca diverge do `vault.bin`.
     async fn blocking<T: Send + 'static>(job: impl FnOnce() -> Result<T, KeyError> + Send + 'static) -> Result<T, KeyError> {
-        match tokio::time::timeout(LIMIT, tokio::task::spawn_blocking(job)).await {
-            Ok(Ok(result)) => result,
-            _ => {
+        static QUEUE: std::sync::OnceLock<std::sync::mpsc::Sender<Job>> = std::sync::OnceLock::new();
+        let queue = QUEUE.get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::channel::<Job>();
+            // Sem a thread o receptor some com o fechamento, e todo pedido sai `Bus`.
+            if let Err(error) = std::thread::Builder::new().name("hangar-credman".into()).spawn(move || rx.into_iter().for_each(|job| job())) {
+                tracing::warn!(code = "vault_key_credman_thread", kind = ?error.kind(), "a fila do Gerenciador de Credenciais não subiu");
+            }
+            tx
+        });
+        let (done, answer) = tokio::sync::oneshot::channel();
+        let sent = queue.send(Box::new(move || {
+            let _ = done.send(job());
+        }));
+        let answer = match sent {
+            Ok(()) => tokio::time::timeout(LIMIT, answer).await.ok().and_then(Result::ok),
+            Err(_) => None,
+        };
+        match answer {
+            Some(result) => result,
+            None => {
                 tracing::warn!(code = "vault_key_credman", "o Gerenciador de Credenciais não respondeu à chave do cofre");
                 Err(KeyError::Bus)
             }
