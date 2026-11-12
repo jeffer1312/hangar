@@ -764,3 +764,22 @@ async fn convidado_de_convite_ve_o_grupo_sem_a_tarefa() {
     let s0 = row(&rows, "s0");
     assert_eq!((&s0["pair_gid"], &s0["pair_peers"], &s0["pair_task"]), (&json!("g1"), &json!([]), &Value::Null));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn guest_outside_its_session_is_refused_without_reaching_python() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = plain_srv(dir.path(), |_| {}).await;
+    codex_session(&srv, dir.path());
+    let t = srv.g.token("s", Kind::Share);
+    // Mais recusas que o teto de falhas (8): se contassem como token errado, a origem travaria.
+    for _ in 0..6 {
+        for path in ["outra/events", "outra/cost"] {
+            let (status, _) = get_json(format!("http://{}/api/sessions/{path}", srv.guest), &t).await;
+            assert_eq!(status, 403, "{path}");
+        }
+    }
+    assert_eq!(srv.python.hits_to("/api/sessions/outra/events"), 0);
+    assert_eq!(srv.python.hits_to("/api/sessions/outra/cost"), 0);
+    let (status, _) = get_json(format!("http://{}/api/sessions/s/cost", srv.guest), &t).await;
+    assert_ne!(status, 429, "o token do convidado segue aberto na própria sessão");
+}
