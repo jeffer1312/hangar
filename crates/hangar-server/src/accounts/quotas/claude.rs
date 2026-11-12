@@ -76,7 +76,10 @@ pub async fn read(client: &reqwest::Client, home: &Path, now: f64) -> Value {
     if windows.is_empty() {
         reading("indisponivel", windows, Some("formato-desconhecido"))
     } else {
-        reading("lida", windows, None)
+        let mut value = reading("lida", windows, None);
+        // Uma consulta já em voo quando o limite bateu ainda pode carregar os números anteriores.
+        value["ts"] = serde_json::json!(now);
+        value
     }
 }
 

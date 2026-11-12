@@ -19,27 +19,96 @@ pub enum Decision { Switch { path:String, label:String }, Stay(&'static str) }
 /// Contas que já bateram o limite, até a janela delas voltar: não são escolhidas de novo nesse prazo.
 /// Gravadas ao lado do cache de cotas: o cache velho depois de um reinício mostraria a conta esgotada com folga.
 #[derive(Default)]
-pub struct Spent { spent:Mutex<BTreeMap<String,f64>>, file:Option<std::path::PathBuf> }
+pub struct Spent { spent:Mutex<SpentAccounts>, file:Option<std::path::PathBuf> }
+
+pub type SpentAccounts = BTreeMap<String,SpentMark>;
+
+#[derive(Clone,Copy,serde::Serialize)]
+#[serde(untagged)]
+pub enum SpentMark {
+    Legacy(f64),
+    Recorded { until:f64, at:Option<f64> },
+}
+
+impl<'de> serde::Deserialize<'de> for SpentMark {
+    fn deserialize<D:serde::Deserializer<'de>>(deserializer:D) -> Result<Self,D::Error> {
+        // O serde_json do servidor conserva precisão arbitrária; o enum untagged não lê seus floats.
+        let raw = <Value as serde::Deserialize>::deserialize(deserializer)?;
+        if let Some(until) = raw.as_f64() { return Ok(Self::Legacy(until)); }
+        let until = raw["until"].as_f64().ok_or_else(||serde::de::Error::custom("prazo de limite inválido"))?;
+        let at = match raw.get("at") {
+            None | Some(Value::Null)=>None,
+            Some(value)=>Some(value.as_f64().ok_or_else(||serde::de::Error::custom("hora de limite inválida"))?),
+        };
+        Ok(Self::Recorded {until,at})
+    }
+}
+
+impl From<f64> for SpentMark {
+    fn from(until:f64) -> Self { Self::Legacy(until) }
+}
+
+impl SpentMark {
+    pub fn blocking_until(self,row:Option<&Value>,now:f64) -> Option<f64> {
+        let (until,at) = match self { Self::Legacy(until)=>(until,None),Self::Recorded{until,at}=>(until,at) };
+        if until <= now { return None; }
+        // A hora é da última leitura boa, inclusive quando uma falha posterior preservou o cache.
+        let recovered = at.zip(row).is_some_and(|(at,row)| {
+            row["estado"] == "lida"
+                && row["ts"].as_f64().is_some_and(|ts|ts > at && ts <= now)
+                && row["janelas"].as_array().is_some_and(|windows|!windows.is_empty()
+                    && windows.iter().all(|w|w["pct"].as_f64().is_some_and(|pct| (0.0..super::account::FULL_PCT).contains(&pct))))
+        });
+        (!recovered).then_some(until)
+    }
+}
+
+/// O formato antigo não dizia quando bateu: a data do arquivo é uma referência conservadora.
+pub fn read_spent(file:&std::path::Path) -> SpentAccounts {
+    let Ok(file) = std::fs::File::open(file) else { return Default::default() };
+    let at = file.metadata().ok().and_then(|m|m.modified().ok())
+        .and_then(|at|at.duration_since(std::time::UNIX_EPOCH).ok()).map(|at|at.as_secs_f64());
+    let mut spent:SpentAccounts = serde_json::from_reader(file).unwrap_or_default();
+    for mark in spent.values_mut() {
+        if let SpentMark::Legacy(until) = *mark {
+            // A marca curta antiga também pode ser de login recusado; sem a causa, conserva a proteção.
+            *mark = SpentMark::Recorded {until,at:at.filter(|at|until > *at + LOGIN_SPENT_S)};
+        }
+    }
+    spent
+}
 
 impl Spent {
     /// Ilegível ou ausente começa vazio: no pior caso a conta esgotada recusa de novo e é marcada outra vez.
     pub fn at(file:std::path::PathBuf) -> Self {
-        let spent = std::fs::read(&file).ok().and_then(|raw|serde_json::from_slice(&raw).ok()).unwrap_or_default();
+        let spent = read_spent(&file);
         Self { spent:Mutex::new(spent),file:Some(file) }
     }
 }
 
 impl Spent {
+    pub fn mark_limit(&self,dir:&str,until:f64,at:f64) {
+        self.store(dir,SpentMark::Recorded {until,at:Some(at)});
+    }
+
     pub fn mark(&self,dir:&str,until:f64) {
+        // Cota disponível não prova que a autenticação voltou a funcionar.
+        self.store(dir,SpentMark::Recorded {until,at:None});
+    }
+
+    fn store(&self,dir:&str,mark:SpentMark) {
         let Ok(mut spent) = self.spent.lock() else { return };
-        spent.insert(crate::list::discover::real(dir),until);
+        spent.insert(crate::list::discover::real(dir),mark);
         let Some(file) = &self.file else { return };
         let saved = file.parent().map_or(Ok(()),std::fs::create_dir_all)
             .and_then(|()|crate::runtime::queue::atomic_write(file,&serde_json::to_vec(&*spent).unwrap_or_default()));
         if let Err(error) = saved { tracing::warn!(code="limit_spent_write_failed",kind=?error.kind(),"conta gasta não gravada; vale até o reinício"); }
     }
     pub fn is_spent(&self,dir:&str,now:f64) -> bool {
-        self.spent.lock().is_ok_and(|spent|spent.get(&crate::list::discover::real(dir)).is_some_and(|until|*until > now))
+        self.blocks(dir,None,now)
+    }
+    fn blocks(&self,dir:&str,row:Option<&Value>,now:f64) -> bool {
+        self.spent.lock().is_ok_and(|spent|spent.get(&crate::list::discover::real(dir)).is_some_and(|mark|mark.blocking_until(row,now).is_some()))
     }
 }
 
@@ -113,7 +182,7 @@ pub fn decide(spec:&SessionSpec,current:&str,catalog:&Value,quotas:&[Value],spen
     let current = crate::list::discover::real(current);
     let rows:Vec<Value> = quotas.iter().filter(|row|row["id"].as_str().and_then(|id|id.strip_prefix("claude:")).is_some_and(|path| {
         let path = crate::list::discover::real(path);
-        path != current && known.contains(&path) && !spent.is_spent(&path,now)
+        path != current && known.contains(&path) && !spent.blocks(&path,Some(row),now)
     })).cloned().collect();
     match crate::accounts::quotas::suggestion(&rows) {
         Some(best) if best["folga"].as_f64().is_some_and(|room|room > 100.0 - super::account::FULL_PCT) =>
@@ -214,7 +283,7 @@ impl Switcher {
         let current = host.account_dir(spec.account.config_dir());
         // Aviso de uma vida que já trocou de conta (o `/conta` passou na frente): a conta de agora não bateu nada.
         if crate::list::discover::real(&host.account_dir(hit.account.as_deref())) != crate::list::discover::real(&current) { return Outcome::Stayed("limit_switch_stale"); }
-        self.spent.mark(&current,hit.limit.resets_at.filter(|reset|*reset > now).unwrap_or(now + UNKNOWN_RESET_S));
+        self.spent.mark_limit(&current,hit.limit.resets_at.filter(|reset|*reset > now).unwrap_or(now + UNKNOWN_RESET_S),now);
         self.move_away(host,&hit.name,&spec,&current,now).await
     }
 
@@ -573,6 +642,103 @@ mod tests {
         assert!(!after.is_spent("/b",1000.0));
         std::fs::write(&file,"não é json").unwrap();
         assert!(!Spent::at(file).is_spent("/a",1000.0),"arquivo ilegível começa vazio");
+    }
+
+    #[test]
+    fn a_new_quota_after_the_limit_returns_the_account_to_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("limit-spent.json");
+        let spent = Spent::at(file.clone());
+        spent.mark_limit("/a",5000.0,1000.0);
+        let mut recovered = quota("/a",60.0);
+        recovered["ts"] = json!(1500.0);
+        let rows = [recovered,quota("/b",80.0)];
+        let cat = catalog(&["/a","/b"]);
+        for spent in [&spent,&Spent::at(file)] {
+            assert_eq!(decide(&spec(claude("/b")),"/b",&cat,&rows,spent,2000.0),
+                Decision::Switch { path:"/a".into(),label:"a".into() });
+        }
+    }
+
+    #[test]
+    fn a_failed_refresh_does_not_undo_a_confirmed_quota_recovery() {
+        let spent = Spent::default();
+        spent.mark_limit("/a",5000.0,1000.0);
+        let mut recovered = quota("/a",60.0);
+        recovered["ts"] = json!(1500.0);
+        let mut cache = crate::accounts::quotas::cache::QuotaCache::default();
+        cache.update("claude:/a",recovered,1500.0);
+        cache.update("claude:/a",json!({"estado":"indisponivel","motivo":"http-429"}),1700.0);
+        let rows = [cache.get("claude:/a").unwrap(),quota("/b",80.0)];
+        assert_eq!(decide(&spec(claude("/b")),"/b",&catalog(&["/a","/b"]),&rows,&spent,2000.0),
+            Decision::Switch { path:"/a".into(),label:"a".into() });
+    }
+
+    #[test]
+    fn stale_unread_or_full_quotas_do_not_clear_the_limit() {
+        let spent = Spent::default();
+        spent.mark_limit("/a",5000.0,1000.0);
+        let cat = catalog(&["/a","/b"]);
+        let base = quota("/a",60.0);
+        for (label,patch) in [
+            ("anterior",json!({"ts":900.0})),
+            ("mesma hora",json!({"ts":1000.0})),
+            ("sem hora",json!({"ts":null})),
+            ("hora futura",json!({"ts":3000.0})),
+            ("login vencido",json!({"ts":1500.0,"estado":"expirada"})),
+            ("cache preservado após 429",json!({"ts":900.0,"motivo":"http-429"})),
+            ("limite geral",json!({"ts":1500.0,"janelas":[{"pct":100.0}]})),
+            ("limite do modelo",json!({"ts":1500.0,"janelas":[{"pct":60.0},{"pct":100.0,"por_modelo":true}]})),
+            ("sem janelas",json!({"ts":1500.0,"janelas":[]})),
+            ("percentual ausente",json!({"ts":1500.0,"janelas":[{}]})),
+        ] {
+            let mut row = base.clone();
+            row.as_object_mut().unwrap().extend(patch.as_object().unwrap().clone());
+            assert_eq!(decide(&spec(claude("/b")),"/b",&cat,&[row,quota("/b",80.0)],&spent,2000.0),
+                Decision::Stay("limit_switch_no_room"),"{label}");
+        }
+    }
+
+    #[test]
+    fn available_quota_does_not_clear_a_login_refusal() {
+        let spent = Spent::default();
+        spent.mark("/a",5000.0);
+        let mut row = quota("/a",60.0);
+        row["ts"] = json!(1500.0);
+        assert_eq!(decide(&spec(claude("/b")),"/b",&catalog(&["/a","/b"]),&[row,quota("/b",80.0)],&spent,2000.0),
+            Decision::Stay("limit_switch_no_room"));
+    }
+
+    #[test]
+    fn available_quota_does_not_clear_a_legacy_login_refusal() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("limit-spent.json");
+        std::fs::write(&file,json!({(crate::list::discover::real("/a")):3000.0}).to_string()).unwrap();
+        std::fs::File::options().write(true).open(&file).unwrap().set_times(std::fs::FileTimes::new()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1000))).unwrap();
+        let mut row = quota("/a",60.0);
+        row["ts"] = json!(1500.0);
+        assert_eq!(decide(&spec(claude("/b")),"/b",&catalog(&["/a","/b"]),&[row,quota("/b",80.0)],&Spent::at(file),2000.0),
+            Decision::Stay("limit_switch_no_room"));
+    }
+
+    #[test]
+    fn legacy_limits_use_the_file_date_and_keep_it_when_another_account_is_marked() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("limit-spent.json");
+        std::fs::write(&file,json!({(crate::list::discover::real("/a")):5000.0}).to_string()).unwrap();
+        std::fs::File::options().write(true).open(&file).unwrap().set_times(std::fs::FileTimes::new()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1000))).unwrap();
+        let spent = Spent::at(file.clone());
+        spent.mark_limit("/b",6000.0,1900.0);
+        let reloaded = Spent::at(file);
+        let cat = catalog(&["/a","/b"]);
+        for (at,expected) in [(900.0,Decision::Stay("limit_switch_no_room")),
+            (1500.0,Decision::Switch { path:"/a".into(),label:"a".into() })] {
+            let mut row = quota("/a",60.0);
+            row["ts"] = json!(at);
+            assert_eq!(decide(&spec(claude("/b")),"/b",&cat,&[row,quota("/b",80.0)],&reloaded,2000.0),expected);
+        }
     }
 
     #[test]

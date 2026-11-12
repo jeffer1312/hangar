@@ -133,8 +133,9 @@ struct FixtureFacts {
     broken_mode: bool, connected: Vec<resolve::CodexLogin>, busy: bool, window: Result<Option<u64>, ()>,
     /// Regra de cota: as linhas depois da leitura de rede (`None` = as mesmas do cache), o
     /// `limit-spent.json`, quantas leituras de rede houve e as contas registradas como desconhecidas.
-    fresh_quotas: Option<Vec<Value>>, spent: std::collections::BTreeMap<String, f64>,
+    fresh_quotas: Option<Vec<Value>>, spent: crate::session_write::limit_switch::SpentAccounts,
     network_reads: std::sync::Mutex<u32>, unknown_quota: std::sync::Mutex<Vec<String>>,
+    now: f64,
     /// Pasta de conta Codex cujo catálogo recusa a escolha do pedido.
     refused_codex_home: Option<String>,
 }
@@ -160,6 +161,7 @@ impl FixtureFacts {
             spent: Default::default(),
             network_reads: Default::default(),
             unknown_quota: Default::default(),
+            now: 0.0,
             refused_codex_home: None,
         }
     }
@@ -237,7 +239,7 @@ impl resolve::OpenFacts for FixtureFacts {
         self.fresh_quotas.clone().unwrap_or_else(cached)
     }
 
-    fn spent_accounts(&self) -> std::collections::BTreeMap<String, f64> { self.spent.clone() }
+    fn spent_accounts(&self) -> crate::session_write::limit_switch::SpentAccounts { self.spent.clone() }
 
     fn quota_unknown(&self, _name: &str, account: &str) { self.unknown_quota.lock().unwrap().push(account.to_owned()); }
 
@@ -312,7 +314,7 @@ impl resolve::OpenFacts for FixtureFacts {
     fn real_path(&self, path: &str) -> std::path::PathBuf { path.into() }
 
     fn new_key(&self) -> String { "k".repeat(32) }
-    fn now(&self) -> f64 { 0.0 }
+    fn now(&self) -> f64 { self.now }
 }
 
 /// O que o cenário lança: argv e `-e` do `new-session`, ou o sidecar da sessão sem terminal.
@@ -3186,7 +3188,7 @@ fn all_exhausted_accounts_pick_the_one_with_most_room() {
 fn a_spent_or_expired_default_account_is_switched() {
     let mut fixture = fixture_named("create_quota_switch");
     fixture["scenario"]["fakes"]["quotas"] = json!([claude_row(".claude", "default", true, "lida", 10.0), claude_row(".claude-b", "b", false, "lida", 20.0)]);
-    let spent = |until: f64| FixtureFacts { spent: [("<ROOT>/home/.claude".to_owned(), until)].into(), ..FixtureFacts::of(&fixture) };
+    let spent = |until: f64| FixtureFacts { spent: [("<ROOT>/home/.claude".to_owned(), until.into())].into(), ..FixtureFacts::of(&fixture) };
     let resolved = open_with(&fixture, &spent(5000.0)).unwrap();
     assert_eq!(resolved.spec.account, Account::Claude { config_dir: "<ROOT>/home/.claude-b".into() });
     assert_eq!(resolved.warnings, ["conta default com 100% de uso; a sessão nasceu em b"]);
@@ -3199,6 +3201,26 @@ fn a_spent_or_expired_default_account_is_switched() {
     fixture["scenario"]["fakes"]["quotas"][0] = expired;
     let resolved = open_with(&fixture, &FixtureFacts::of(&fixture)).unwrap();
     assert_eq!(resolved.spec.account, Account::Claude { config_dir: "<ROOT>/home/.claude-b".into() });
+}
+
+#[test]
+fn an_account_with_quota_after_its_limit_opens_without_switching() {
+    use crate::session_write::limit_switch::SpentMark;
+    for (name,expected) in [("create_quota_switch",Account::Default),
+        ("create_quota_explicit_account_moves",Account::Claude {config_dir:"<ROOT>/home/.claude".into()})] {
+        let mut fixture = fixture_named(name);
+        let mut row = claude_row(".claude","default",true,"lida",60.0);
+        row["ts"] = json!(1500.0);
+        fixture["scenario"]["fakes"]["quotas"] = json!([row,claude_row(".claude-b","b",false,"lida",20.0)]);
+        let facts = FixtureFacts { now:2000.0,
+            spent:[("<ROOT>/home/.claude".into(),SpentMark::Recorded {until:5000.0,at:Some(1000.0)})].into(),
+            ..FixtureFacts::of(&fixture) };
+        let resolved = open_with(&fixture,&facts).unwrap();
+        assert_eq!(resolved.spec.account,expected,"{name}");
+        assert_ne!(resolved.spec.account_source,AccountSource::Quota);
+        assert!(resolved.warnings.is_empty(),"{name}");
+        assert_eq!(*facts.network_reads.lock().unwrap(),0,"{name}");
+    }
 }
 
 /// Codex padrão a 95% ou mais nasce na conta Codex conectada de mais folga.
@@ -3273,11 +3295,11 @@ fn a_full_or_spent_account_is_never_a_destination() {
     assert_eq!(*facts.unknown_quota.lock().unwrap(), ["claude:<ROOT>/home/.claude"]);
 
     fixture["scenario"]["fakes"]["quotas"] = json!([unread, claude_row(".claude-b", "b", false, "lida", 10.0)]);
-    let facts = FixtureFacts { spent: [(b.clone(), 5000.0)].into(), ..FixtureFacts::of(&fixture) };
+    let facts = FixtureFacts { spent: [(b.clone(), 5000.0.into())].into(), ..FixtureFacts::of(&fixture) };
     assert_eq!(open_with(&fixture, &facts).unwrap().spec.account, Account::Default, "desconhecida: a esgotada não é destino");
 
     fixture["scenario"]["fakes"]["quotas"] = json!([claude_row(".claude", "default", true, "lida", 101.0), claude_row(".claude-b", "b", false, "lida", 10.0)]);
-    let facts = FixtureFacts { spent: [(b, 5000.0)].into(), ..FixtureFacts::of(&fixture) };
+    let facts = FixtureFacts { spent: [(b, 5000.0.into())].into(), ..FixtureFacts::of(&fixture) };
     assert_eq!(open_with(&fixture, &facts).unwrap().spec.account, Account::Default, "esgotada: a do limite também não");
 }
 
