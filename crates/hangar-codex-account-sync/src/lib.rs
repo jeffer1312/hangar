@@ -46,10 +46,13 @@ mod storage;
 use common::{Error, blocking, hash, issue, json_bytes, object, public_state, status};
 pub use engine::{preparation_status, prepare};
 
-/// `estado.json` da conta, no mesmo diretório que o preparo grava; `None` se a conta não resolve.
-pub fn state_file(home: &Path, destination: &Path) -> Option<std::path::PathBuf> {
-    storage::private_at(home, destination, false)
-        .ok()
-        .map(|dir| dir.join("estado.json"))
+/// `estado.json` da conta, no mesmo diretório que o preparo grava; `None` se a conta não existe.
+pub fn state_file(home: &Path, destination: &Path) -> std::io::Result<Option<std::path::PathBuf>> {
+    match storage::private_at(home, destination, false) {
+        Ok(dir) => Ok(Some(dir.join("estado.json"))),
+        Err(Error::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(Error::Io(error)) => Err(error),
+        Err(_) => Err(std::io::Error::other("pasta privada da conta inválida")),
+    }
 }
 use storage::{backup, read, replace_link_with_file, write, write_link};

@@ -178,10 +178,10 @@ impl AccountService {
         }
     }
     pub(crate) fn stored_status(&self, account: &Account, key: &AccountKey) -> Value {
-        let paths = [
-            self.result_path(key).ok(),
-            hangar_codex_account_sync::state_file(&self.env.home, &account.home),
-        ];
+        let Ok(state) = hangar_codex_account_sync::state_file(&self.env.home, &account.home) else {
+            return failed("codex_account_state_invalid");
+        };
+        let paths = [self.result_path(key).ok(), state];
         let mut available = Vec::new();
         for path in paths.into_iter().flatten() {
             match std::fs::metadata(&path).and_then(|metadata| metadata.modified()) {

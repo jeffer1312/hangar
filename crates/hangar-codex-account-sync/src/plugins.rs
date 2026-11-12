@@ -276,11 +276,9 @@ fn config(native: &impl PluginsNative, account: &Path) -> Result<Value, String> 
     }
     native.parse_toml(&std::fs::read_to_string(path).map_err(|e| e.to_string())?)
 }
-fn private_dir(paths: &Paths<'_>) -> PathBuf {
-    crate::storage::private(*paths, false).unwrap_or_else(|_| {
-        let digest = hash(paths.destination.to_string_lossy().as_bytes());
-        paths.home.join(".hangar/codex-contas").join(digest)
-    })
+// Mesma pasta do `estado.json`; recusada (link simbólico, caminho que não resolve) vira pendência.
+fn private_dir(paths: &Paths<'_>) -> Result<PathBuf, String> {
+    crate::storage::private(*paths, false).map_err(|_| "Pasta privada da conta inválida".into())
 }
 fn cache_path(account: &Path, item: &Value) -> PathBuf {
     if let Some(raw) = item.pointer("/source/path").and_then(Value::as_str) {
@@ -346,16 +344,19 @@ async fn write_enabled(
             .map(|(id, enabled)| edit(&["plugins", id, "enabled"], json!(enabled)))
             .collect())
     };
-    if native
-        .edit_config(
-            &paths.destination.join("config.toml"),
-            &private.join("backups"),
-            &private,
-            &mut plan,
-        )
-        .await
-        .is_err()
-    {
+    let edited = match &private {
+        Ok(private) => native
+            .edit_config(
+                &paths.destination.join("config.toml"),
+                &private.join("backups"),
+                private,
+                &mut plan,
+            )
+            .await
+            .is_ok(),
+        Err(_) => false,
+    };
+    if !edited {
         issues.push(issue(
             "codex_account_plugin_config_failed",
             json!({"error":"RuntimeError"}),
@@ -475,16 +476,19 @@ async fn materialize(
             edit(&["marketplaces", name, "source"], json!(target_root)),
         ])
     };
-    if native
-        .edit_config(
-            &paths.destination.join("config.toml"),
-            &private.join("backups"),
-            &private,
-            &mut plan,
-        )
-        .await
-        .is_err()
-    {
+    let edited = match &private {
+        Ok(private) => native
+            .edit_config(
+                &paths.destination.join("config.toml"),
+                &private.join("backups"),
+                private,
+                &mut plan,
+            )
+            .await
+            .is_ok(),
+        Err(_) => false,
+    };
+    if !edited {
         issues.push(issue(
             "codex_account_plugin_config_failed",
             json!({"error":"RuntimeError"}),
@@ -613,7 +617,7 @@ async fn ensure_marketplace(
             let backup = (|| -> Result<(), String> {
                 if path.is_file() {
                     let raw = std::fs::read(&path).map_err(|e| e.to_string())?;
-                    let directory = private_dir(paths).join("backups");
+                    let directory = private_dir(paths)?.join("backups");
                     std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
                     let digest = hash(&raw);
                     std::fs::write(directory.join(format!("config.toml.{digest}.bak")), raw)
@@ -854,16 +858,15 @@ pub async fn sync(paths: Paths<'_>, previous: &Value, native: &impl PluginsNativ
             .unwrap_or_else(|| cache_path(paths.destination, item));
         managed.insert(id.clone(),json!({"pluginId":id,"version":plugin["version"],"enabled":plugin["enabled"],"marketplace":market_name(id,plugin),"marketplaceSource":source_info,"origem":{"type":source_origin.0,"source":source_origin.1},"cache_fonte":cache_path(paths.source,plugin),"cache_destino":target_path}));
         let root = cache_path(paths.destination, item);
-        if root.is_dir()
-            && native
-                .adapt_hooks(
-                    paths.destination,
-                    &root,
-                    &private_dir(&paths).join("backups"),
-                )
-                .await
-                .is_err()
-        {
+        let failed = root.is_dir()
+            && match private_dir(&paths) {
+                Ok(private) => native
+                    .adapt_hooks(paths.destination, &root, &private.join("backups"))
+                    .await
+                    .is_err(),
+                Err(_) => true,
+            };
+        if failed {
             issues.push(issue(
                 "codex_account_plugin_hooks_failed",
                 json!({"error":"RuntimeError"}),

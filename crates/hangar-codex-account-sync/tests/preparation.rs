@@ -213,7 +213,9 @@ async fn state_file_is_found_through_a_non_canonical_account_path() {
     assert_eq!(result["status"], "ready");
     let link = f.directory.path().join("conta-por-link");
     std::os::unix::fs::symlink(&f.destination, &link).unwrap();
-    let state = hangar_codex_account_sync::state_file(f.directory.path(), &link).unwrap();
+    let state = hangar_codex_account_sync::state_file(f.directory.path(), &link)
+        .unwrap()
+        .unwrap();
     let saved: Value = serde_json::from_slice(&std::fs::read(state).unwrap()).unwrap();
     assert_eq!(saved["public"]["status"], "ready");
 }
