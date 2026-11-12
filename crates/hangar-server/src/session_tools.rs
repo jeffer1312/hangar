@@ -22,6 +22,13 @@ const ROUTES: &[(&str, &str)] = &[
     ("/api/sessions/{name}/open-terminal", "POST"),
 ];
 
+pub(crate) fn owns_path(path: &str) -> bool {
+    matches!(
+        hangar_core::http_contract::resolve(ROUTES, "POST", path.strip_suffix('/').unwrap_or(path)),
+        hangar_core::http_contract::Decision::Matched
+    )
+}
+
 struct ShellMux(ProcessMux);
 impl shell::Mux for ShellMux {
     fn run(&self, args: Vec<String>) -> BoxFuture<'_, shell::Output> {

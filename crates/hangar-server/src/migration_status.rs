@@ -103,6 +103,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
     if crate::login_guests::owns_path(path) || crate::loops::http::owns_path(path)
         || crate::push::http::owns_path(path) || crate::machine_peers::owns_http_path(path)
         || crate::session_open::baton::matches(path) || crate::shortcuts::http::matches(path)
+        || crate::session_tools::owns_path(path)
         || crate::costs_routes::usage_path(path) || crate::diag::version_matches(method, path)
         || crate::plugins::matches(path) || workflow || hangar_desktop_theme::owns_path(path)
         || matches!(path, "/api/config-sync/apply" | "/api/update-channel") { return true; }
