@@ -341,7 +341,9 @@ mod credman {
         let queue = QUEUE.get_or_init(|| {
             let (tx, rx) = std::sync::mpsc::channel::<Job>();
             // Sem a thread o receptor some com o fechamento, e todo pedido sai `Bus`.
-            if let Err(error) = std::thread::Builder::new().name("hangar-credman".into()).spawn(move || rx.into_iter().for_each(|job| job())) {
+            // Pânico num pedido não derruba a fila: os seguintes continuam atendidos.
+            let worker = move || rx.into_iter().for_each(|job| { let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)); });
+            if let Err(error) = std::thread::Builder::new().name("hangar-credman".into()).spawn(worker) {
                 tracing::warn!(code = "vault_key_credman_thread", kind = ?error.kind(), "a fila do Gerenciador de Credenciais não subiu");
             }
             tx
