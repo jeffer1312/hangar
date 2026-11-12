@@ -70,6 +70,11 @@ export function matchAgentSubagent(subs: SubagentRun[], agent: Pick<AgentRun, 'i
   return only(prompt => prompt === full) ?? only(prompt => prompt.startsWith(full.slice(0, 400)));
 }
 
+/** O servidor já deu o agente como encerrado: o interrompido não manda aviso ao transcript do pai. */
+export function subagentEnded(sub: SubagentRun | undefined): boolean {
+  return sub?.state === 'finished' || sub?.state === 'failed';
+}
+
 export function projectSubagentActivity(activity: Activity, subs: SubagentRun[], ids?: Map<string, string>, states?: CodexSubagents): Activity {
   let changed = false;
   const agents = activity.agents.map(agent => {

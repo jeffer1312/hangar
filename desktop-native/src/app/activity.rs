@@ -47,6 +47,13 @@ fn native_running(agent: &AgentRun, subs: &[SubRun], states: Option<&NativeAgent
     loaded && match_agent(subs, agent).is_some_and(|sub| sub.state.as_deref() == Some("running"))
 }
 
+/// Fora do Codex manda o transcript do pai, menos quando o servidor já deu o subagente como encerrado:
+/// o interrompido não manda aviso ao pai e ficaria "rodando" para sempre.
+fn pinned_running(codex: bool, agent: &AgentRun, subs: &[SubRun], states: Option<&NativeAgents>, loaded: bool) -> bool {
+    if codex { return native_running(agent, subs, states, loaded); }
+    !match_agent(subs, agent).is_some_and(|sub| matches!(sub.state.as_deref(), Some("finished" | "failed")))
+}
+
 fn project_native_detail(value: &mut Value, states: Option<&NativeAgents>, id: &str) {
     if !value.is_object() { return; }
     let Some(state) = states.and_then(|states| native_agent(states, id, value["agentPath"].as_str())) else { return; };
@@ -1157,7 +1164,7 @@ impl ActivityState {
 
 impl Hangar {
     pub(super) fn subagent_pin_running(&self, agent: &AgentRun) -> bool {
-        self.provider().0 != "codex" || native_running(agent, &self.act.subs, self.chat.state.codex_subagents.as_ref(), self.act.count_loaded)
+        pinned_running(self.provider().0 == "codex", agent, &self.act.subs, self.chat.state.codex_subagents.as_ref(), self.act.count_loaded)
     }
 
     pub(super) fn codex_agent_state_note(&self, call: usize) -> Option<String> {
@@ -1857,6 +1864,18 @@ mod tests {
     fn parent(id: &str, prompt: &str, agent_id: Option<&str>, running: bool) -> AgentRun {
         AgentRun { call: 0, id: id.into(), description: String::new(), subagent_type: None, model: None, prompt: Some(prompt.into()),
             running, waiting: false, agent_id: agent_id.map(Into::into), agent_path: None, started_at: None, finished_at: None }
+    }
+
+    /// Interrompido não manda aviso ao pai: fora do Codex, a faixa de rodando aceita o fim que o servidor leu.
+    #[test]
+    fn claude_agent_the_server_reports_ended_leaves_the_running_strip() {
+        use super::pinned_running;
+        let agent = parent("t1", "tarefa um", Some("a"), true);
+        let with = |state: Option<&str>| vec![SubRun { state: state.map(Into::into), ..sub("a", "tarefa um") }];
+        assert!(!pinned_running(false, &agent, &with(Some("failed")), None, true));
+        assert!(!pinned_running(false, &agent, &with(Some("finished")), None, true));
+        assert!(pinned_running(false, &agent, &with(None), None, true));
+        assert!(pinned_running(false, &agent, &[], None, false));
     }
 
     #[test]

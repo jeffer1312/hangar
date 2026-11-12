@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createActivityFolder, rotuloDeComando, matchAgentSubagent, projectSubagentActivity } from './activity';
+import { createActivityFolder, rotuloDeComando, matchAgentSubagent, projectSubagentActivity, subagentEnded } from './activity';
 import type { ChatEvent, SubagentRun } from './types';
 
 let seq = 0;
@@ -350,5 +350,17 @@ describe('activity — plano do Codex', () => {
   it('item sem `step` é descartado em vez de virar linha sem título', () => {
     const s = run([plano([{ step: 'A', status: 'pending' }, { status: 'pending' } as never])]);
     expect(s.tasks.map((t) => t.title)).toEqual(['A']);
+  });
+});
+
+describe('subagentEnded', () => {
+  // Agente interrompido não manda aviso ao pai: só o servidor, lendo o arquivo dele, sabe que acabou.
+  it('o servidor dando o agente como encerrado tira ele de rodando; sem estado ou rodando, não', () => {
+    const base = { agentId: 'a1' } as SubagentRun;
+    expect(subagentEnded({ ...base, state: 'failed' })).toBe(true);
+    expect(subagentEnded({ ...base, state: 'finished' })).toBe(true);
+    expect(subagentEnded({ ...base, state: 'running' })).toBe(false);
+    expect(subagentEnded({ ...base, state: null })).toBe(false);
+    expect(subagentEnded(undefined)).toBe(false);
   });
 });

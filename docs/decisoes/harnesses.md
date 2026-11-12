@@ -5223,6 +5223,20 @@ retirada de até toda a capacidade da fila numa publicação, impedindo que quad
 membros desse corte ressuscitem suas bolhas. A prova real usa processos dos CLIs e modelo local
 controlado, com três partes e imagem; não depende de Orientar.
 
+## Subagente Claude interrompido sai de "rodando" (12/11/2026)
+
+Um `Agent` de fundo só fecha no chat pelo `<task-notification>` no transcript do pai. Interrompido
+(o arquivo `subagents/agent-<id>.jsonl` termina num `user` "[Request interrupted by user…]"), ele não
+gera aviso, e o cartão ficava "Executando há 9 h" na DELPHI-02. Agora a rota de subagentes lê essa
+marca como fim (`state: "failed"`, `endedAt` da marca; resposta depois dela desfaz), só quando o
+plugin não deu sinal próprio. Celular e web tiram da lista de rodando o agente que o servidor deu
+como encerrado (`subagentEnded` no core); no nativo, `pinned_running` faz o mesmo na faixa fixa, e o
+cartão da conversa já seguia o estado do servidor (`effective_agent`). Só nesse sentido: o servidor
+nunca reabre um agente que o transcript deu como terminado. Testes:
+`claude_agent_ending_on_an_interruption_is_reported_ended_until_it_answers_again`,
+`subagentEnded` em `packages/core/src/activity.test.ts` e
+`claude_agent_the_server_reports_ended_leaves_the_running_strip`.
+
 ## Subagentes Codex no painel de atividade (28/10/2026)
 
 O binário instalado `codex-cli 0.165.0` grava os filhos como rollouts próprios com

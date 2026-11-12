@@ -31,7 +31,8 @@ import { SessionProblem, showsSessionProblem } from './SessionProblem';
 import { SessionPickerSheet } from './SessionPickerSheet';
 import { useLiveVoice } from '../features/voice/liveVoiceStore';
 import { PlanActions } from './PlanActions';
-import { askPayloadFromToolUse, codexSubagentState, fetchSessionsForServer, isOrq, matchAgentSubagent, selectOptionForServer, submitSelectedForServer, interrupt, recarregarSessao, implementCodexPlan, setPermissionMode, projectSubagentActivity } from '@hangar/core';
+import { askPayloadFromToolUse, codexSubagentState, fetchSessionsForServer, isOrq, matchAgentSubagent, selectOptionForServer, submitSelectedForServer, interrupt, recarregarSessao, implementCodexPlan, setPermissionMode, projectSubagentActivity, subagentEnded } from '@hangar/core';
+import { agentIdentities } from '../features/activity/agentModel';
 import { createEventProjection } from './eventProjection';
 import type { Provider, SessionInfo } from '@hangar/core';
 import * as m from '../paraglide/messages';
@@ -256,10 +257,12 @@ export function ChatBody({ serverId, name, askFallback, onBack, deepStack, onOpe
       || Object.keys(stateEvent?.codex_subagents ?? {}).length > 0, agentConversation, provider === 'codex', stateEvent?.codex_subagents);
   const activity = useMemo(() => provider === 'codex' ? projectSubagentActivity(transcriptActivity, agentSubagents.subs, undefined, stateEvent?.codex_subagents) : transcriptActivity,
     [provider, transcriptActivity, agentSubagents.subs, stateEvent?.codex_subagents]);
+  const agentIds = useMemo(() => agentIdentities(events), [events, eventsRevision]);
   const agentesRodando = useMemo(() => activity.agents.filter(agent => agent.running && (provider !== 'codex'
-    || codexSubagentState(stateEvent?.codex_subagents, agent.agentId, agent.agentPath)?.state === 'running'
-    || (agentSubagents.loaded && matchAgentSubagent(agentSubagents.subs, agent)?.state === 'running'))),
-  [activity, provider, agentSubagents.loaded, agentSubagents.subs, stateEvent?.codex_subagents]);
+    ? !(agentSubagents.loaded && subagentEnded(matchAgentSubagent(agentSubagents.subs, agent, agentIds)))
+    : codexSubagentState(stateEvent?.codex_subagents, agent.agentId, agent.agentPath)?.state === 'running'
+      || (agentSubagents.loaded && matchAgentSubagent(agentSubagents.subs, agent)?.state === 'running'))),
+  [activity, provider, agentSubagents.loaded, agentSubagents.subs, stateEvent?.codex_subagents, agentIds]);
   const { queuePanel, pendingAsk, proposedPlan, replyPlan } = useMemo(
     () => projectEvents(events, eventsRevision, provider, serverQueue),
     [projectEvents, events, eventsRevision, provider, serverQueue],

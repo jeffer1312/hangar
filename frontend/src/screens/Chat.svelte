@@ -120,7 +120,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   import { parentSessionServerId, provideSessionServer } from '../lib/sessionServer';
   import { getIdentificador } from '../lib/peers';
   import { destinoDoRemetente } from '../lib/remetente';
-  import { createActivityFolder, matchAgentSubagent, projectSubagentActivity } from '@hangar/core';
+  import { createActivityFolder, matchAgentSubagent, projectSubagentActivity, subagentEnded } from '@hangar/core';
   import type { ChatEvent, StateEvent, StatsEvent, State, SessionInfo, AskQuestionPayload, AnswerItem, Provider, PlanDetail, UploadFile, SessionOpeningExtras, SubagentRun } from '@hangar/core';
   import type { WorkspaceAction } from '../lib/workspaceCommands';
   import { workspaceSessionKey } from '../lib/workspaceCommands';
@@ -1973,8 +1973,9 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   const codexAgentIds = $derived(codexSubagentActivityKey(stateEvent?.codex_subagents));
   const activity = $derived(isCodex ? projectSubagentActivity(transcriptActivity, liveSubagentRuns, undefined, stateEvent?.codex_subagents) : transcriptActivity);
   const runningAgents = $derived(activity.agents.filter(agent => agent.running && (!isCodex
-    || codexSubagentState(stateEvent?.codex_subagents, agent.agentId, agent.agentPath)?.state === 'running'
-    || (subagentsLoaded && matchAgentSubagent(subagentRuns, agent)?.state === 'running'))));
+    ? !(subagentsLoaded && subagentEnded(matchAgentSubagent(subagentRuns, agent)))
+    : codexSubagentState(stateEvent?.codex_subagents, agent.agentId, agent.agentPath)?.state === 'running'
+      || (subagentsLoaded && matchAgentSubagent(subagentRuns, agent)?.state === 'running'))));
   let activityConversation = $state(0);
   // O shell de fundo conta junto: pro app "o que está rodando aqui" é uma coisa só. O terminal já
   // mostrava ("5 shells still running") e o app não mostrava nada.
