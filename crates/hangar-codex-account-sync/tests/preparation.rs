@@ -14,6 +14,9 @@ struct Cli {
     version: String,
     plugins: Arc<AtomicUsize>,
     pending: bool,
+    trust_unknown: bool,
+    parses: Arc<AtomicUsize>,
+    trust_checks: Arc<AtomicUsize>,
     fail_plugins: bool,
     change_source: Option<PathBuf>,
 }
@@ -24,6 +27,9 @@ impl Default for Cli {
             version: "test".into(),
             plugins: Arc::new(AtomicUsize::new(0)),
             pending: false,
+            trust_unknown: false,
+            parses: Arc::new(AtomicUsize::new(0)),
+            trust_checks: Arc::new(AtomicUsize::new(0)),
             fail_plugins: false,
             change_source: None,
         }
@@ -31,6 +37,7 @@ impl Default for Cli {
 }
 impl Native for Cli {
     fn parse_toml(&self, raw: &str) -> Result<Value, String> {
+        self.parses.fetch_add(1, Ordering::SeqCst);
         toml::from_str(raw).map_err(|e| e.to_string())
     }
     fn edit_config<'a>(
@@ -81,7 +88,14 @@ impl Native for Cli {
         })
     }
     fn check_trust(&mut self) -> BoxFuture<'_, Result<Option<bool>, String>> {
-        Box::pin(async move { Ok(Some(self.pending)) })
+        Box::pin(async move {
+            self.trust_checks.fetch_add(1, Ordering::SeqCst);
+            Ok(if self.trust_unknown {
+                None
+            } else {
+                Some(self.pending)
+            })
+        })
     }
     fn cli_version(&mut self, _force: bool) -> BoxFuture<'_, Result<String, String>> {
         Box::pin(async move { Ok(self.version.clone()) })
@@ -554,4 +568,186 @@ async fn legacy_uploads_inside_skills_are_ignored() {
     let result = prepare(f.paths(), false, false, &mut Cli::default()).await;
     assert_eq!(result["status"], "ready");
     assert!(!f.destination.join("skills/test/.hangar-uploads").exists());
+}
+
+#[tokio::test]
+async fn cached_unknown_trust_stays_pending_and_partial_without_reinstalling() {
+    let f = Fixture::new();
+    f.source("config.toml", "[plugins.sample]\nenabled=true\n");
+    let mut cli = Cli {
+        pending: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        prepare(f.paths(), false, false, &mut cli).await["trust_pending"],
+        true
+    );
+    cli.trust_unknown = true;
+    let pending = prepare(f.paths(), false, false, &mut cli).await;
+    assert_eq!(pending["status"], "partial");
+    assert_eq!(pending["trust_pending"], true);
+    assert!(has(&pending, "codex_account_plugin_trust_unavailable"));
+    assert_eq!(cli.plugins.load(Ordering::SeqCst), 1);
+    cli.trust_unknown = false;
+    cli.pending = false;
+    let confirmed = prepare(f.paths(), false, false, &mut cli).await;
+    assert_eq!(confirmed["status"], "ready");
+    assert_eq!(confirmed["trust_pending"], false);
+    assert!(!has(&confirmed, "codex_account_plugin_trust_unavailable"));
+    assert_eq!(cli.plugins.load(Ordering::SeqCst), 1);
+}
+#[tokio::test]
+async fn unchanged_preparation_does_not_reparse_or_reinstall() {
+    let f = Fixture::new();
+    f.source("config.toml", "model='sample'\n");
+    f.source("agents/sample.toml", "model='sample'\n");
+    f.source("skills/sample/SKILL.md", "instructions");
+    let mut cli = Cli::default();
+    let first = prepare(f.paths(), false, false, &mut cli).await;
+    assert_eq!(first["status"], "ready");
+    let parses = cli.parses.load(Ordering::SeqCst);
+    assert!(parses > 0);
+    let second = prepare(f.paths(), false, false, &mut cli).await;
+    assert_eq!(second, first);
+    assert_eq!(cli.parses.load(Ordering::SeqCst), parses);
+    assert_eq!(cli.plugins.load(Ordering::SeqCst), 0);
+}
+#[tokio::test]
+async fn plugin_failure_is_cached_and_informational_mcp_exclusions_remain_visible() {
+    let f = Fixture::new();
+    f.source("config.toml","[plugins.sample]\nenabled=true\n[mcp_servers.test.env]\nCODEX_HOME='private'\nJEV_API_KEY='third-party'\n");
+    let mut cli = Cli {
+        fail_plugins: true,
+        ..Default::default()
+    };
+    let first = prepare(f.paths(), false, false, &mut cli).await;
+    assert_eq!(first["status"], "partial");
+    assert!(has(&first, "codex_account_mcp_runtime_excluded"));
+    let second = prepare(f.paths(), false, false, &mut cli).await;
+    assert_eq!(second, first);
+    assert_eq!(cli.plugins.load(Ordering::SeqCst), 1);
+    assert_eq!(cli.trust_checks.load(Ordering::SeqCst), 0);
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn chmod_only_change_updates_managed_resource_and_preserves_private_modes() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    f.source("hooks/run.sh", "#!/bin/sh\n");
+    let source = f.source.join("hooks/run.sh");
+    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut cli = Cli::default();
+    assert_eq!(
+        prepare(f.paths(), false, false, &mut cli).await["status"],
+        "ready"
+    );
+    let destination = f.destination.join("hooks/run.sh");
+    assert_ne!(
+        std::fs::metadata(&destination)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o100,
+        0
+    );
+    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(
+        prepare(f.paths(), false, false, &mut cli).await["status"],
+        "ready"
+    );
+    assert_eq!(
+        std::fs::metadata(destination).unwrap().permissions().mode() & 0o100,
+        0
+    );
+    let states = f.directory.path().join(".hangar/codex-contas");
+    let state = std::fs::read_dir(states)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    assert_eq!(
+        std::fs::metadata(&state).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        std::fs::metadata(state.join("estado.json"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn linked_agent_directory_requires_only_agent_markdown_without_readme() {
+    use std::os::unix::fs::symlink;
+    for entry in ["README.md", "random.json"] {
+        let f = Fixture::new();
+        let external = f.directory.path().join("external");
+        std::fs::create_dir(&external).unwrap();
+        std::fs::write(external.join("agent.md"), "agent").unwrap();
+        std::fs::write(external.join(entry), "other").unwrap();
+        std::fs::create_dir(f.source.join("agents")).unwrap();
+        symlink(&external, f.source.join("agents/linked")).unwrap();
+        let result = prepare(f.paths(), false, false, &mut Cli::default()).await;
+        assert!(has(&result, "codex_account_source_broad_link"));
+        assert!(!f.destination.join("agents/linked/agent.md").exists());
+    }
+    let f = Fixture::new();
+    let external = f.directory.path().join("external");
+    std::fs::create_dir(&external).unwrap();
+    std::fs::write(external.join("agent.md"), "agent").unwrap();
+    std::fs::create_dir(f.source.join("agents")).unwrap();
+    symlink(&external, f.source.join("agents/linked")).unwrap();
+    assert_eq!(
+        prepare(f.paths(), false, false, &mut Cli::default()).await["status"],
+        "ready"
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.destination.join("agents/linked/agent.md")).unwrap(),
+        "agent"
+    );
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn source_config_link_and_personal_destination_hook_link_are_not_adopted() {
+    use std::os::unix::fs::symlink;
+    let f = Fixture::new();
+    f.source("config.toml", "model='shared'\n");
+    std::fs::create_dir(f.source.join("agents")).unwrap();
+    symlink(
+        f.source.join("config.toml"),
+        f.source.join("agents/config.md"),
+    )
+    .unwrap();
+    f.source("hooks/run.sh", "source");
+    let personal = f.directory.path().join("personal.sh");
+    std::fs::write(&personal, "personal").unwrap();
+    std::fs::create_dir(f.destination.join("hooks")).unwrap();
+    symlink(&personal, f.destination.join("hooks/run.sh")).unwrap();
+    let result = prepare(f.paths(), false, false, &mut Cli::default()).await;
+    assert!(has(&result, "codex_account_source_forbidden"));
+    assert!(has(&result, "codex_account_path_conflict"));
+    assert!(!f.destination.join("agents/config.md").exists());
+    assert_eq!(
+        std::fs::read_link(f.destination.join("hooks/run.sh")).unwrap(),
+        personal
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.destination.join("hooks/run.sh")).unwrap(),
+        "personal"
+    );
+}
+#[tokio::test]
+async fn external_windows_command_keeps_quoting_and_backslashes() {
+    let f = Fixture::new();
+    let command = r#""C:\Program Files\Tools\hook.exe" --arg "C:\external\settings.json""#;
+    f.source("hooks.json", &json!({"command":command}).to_string());
+    let result = prepare(f.paths(), false, false, &mut Cli::default()).await;
+    assert_eq!(result["status"], "ready");
+    let hooks: Value =
+        serde_json::from_slice(&std::fs::read(f.destination.join("hooks.json")).unwrap()).unwrap();
+    assert_eq!(hooks["command"], command);
 }

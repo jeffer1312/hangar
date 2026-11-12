@@ -484,3 +484,30 @@ async fn bundled_identity_and_legacy_manifest_survive_checkout_changes() {
     assert_eq!(result["issues"], json!([]));
     assert_eq!(fake.target().plugins[0]["enabled"], false);
 }
+
+fn external_json() -> impl proptest::strategy::Strategy<Value = Value> {
+    use proptest::prelude::*;
+    prop_oneof![
+        Just(Value::Null),
+        any::<bool>().prop_map(Value::Bool),
+        any::<i64>().prop_map(|n| json!(n)),
+        ".{0,48}".prop_map(Value::String)
+    ]
+    .prop_recursive(3, 24, 6, |inner| {
+        prop_oneof![
+            proptest::collection::vec(inner.clone(), 0..6).prop_map(Value::Array),
+            proptest::collection::btree_map(".{0,24}", inner, 0..6)
+                .prop_map(|map| Value::Object(map.into_iter().collect()))
+        ]
+    })
+}
+proptest::proptest! {
+    #[test]
+    fn external_plugin_inventory_and_manifest_never_panic(entry in external_json(), previous in external_json()) {
+        let f=Fixture::new();let fake=f.fake();fake.set(&f.source,vec![entry],vec![]);
+        let runtime=tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let result=runtime.block_on(sync(f.paths(),&previous,&fake));
+        proptest::prop_assert!(result["manifest"].is_object());
+        proptest::prop_assert!(result["issues"].is_array());
+    }
+}
