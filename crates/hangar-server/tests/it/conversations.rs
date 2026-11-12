@@ -278,14 +278,17 @@ async fn same_name_with_new_transcript_never_serves_the_dead_one() {
 }
 
 #[tokio::test]
-async fn events_without_owner_token_goes_to_python() {
+async fn events_without_owner_token_is_refused_by_rust() {
     let (_dir, _jsonl, _offs, fake, srv) = setup(0..1, "sess-h").await;
     let r = client()
         .get(format!("http://{srv}/api/sessions/s/events?token=errado"))
         .send()
         .await
         .unwrap();
-    assert_eq!(r.text().await.unwrap(), "from-python");
+    // O Python não tem `/events`: o 401 com código, e a falha contada, saem do Rust.
+    assert_eq!(r.status(), 401);
+    assert_eq!(r.json::<Value>().await.unwrap()["detail"]["code"], "erro_nao_autorizado");
+    assert_eq!(fake.hits_to("/api/sessions/s/events"), 0);
     assert_eq!(fake.info_calls(), 0);
 
     // Controle: o token do dono abre o stream no Rust, que consulta a rota interna.

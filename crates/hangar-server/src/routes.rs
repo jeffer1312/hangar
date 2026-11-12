@@ -1099,6 +1099,22 @@ pub(crate) fn owner_gate(st: &AppState, peer: SocketAddr, req: &Request)
     hangar_core::edge::owner_gate(&st.cfg.trusted, &st.auth, peer, req)
 }
 
+/// Quem não pode pedir uma rota que o Python não tem mais: a recusa sai daqui, contando a falha de
+/// token, porque o 404 do Python responderia antes de autenticar.
+pub(crate) async fn refuse_without_python(st: &AppState, peer: SocketAddr, req: Request, who: Option<&Caller>) -> Response {
+    let headers = req.headers().clone();
+    let mut response = match who {
+        Some(Caller::Guest(_)) => hangar_core::http::detail(StatusCode::FORBIDDEN, "erro_fora_do_convite",
+            "fora da sessão compartilhada", serde_json::json!({})),
+        _ => match owner_gate(st, peer, &req).await {
+            Err(response) => response,
+            Ok(fwd) => return pass(st, req, &fwd).await,
+        },
+    };
+    cors(&headers, response.headers_mut());
+    response
+}
+
 pub(crate) fn who(st: &AppState, peer: SocketAddr, req: &Request)
     -> impl std::future::Future<Output = Result<(Forward, Option<Caller>), auth::AuthError>> + Send + use<> {
     hangar_core::edge::who(&st.cfg.trusted, &st.auth, peer, req)
@@ -1489,6 +1505,7 @@ pub(crate) async fn events(
     let (fwd, who) = match who(&st, peer, &req).await { Ok(value) => value, Err(e) => return crate::auth::unavailable(e) };
     let name = match path {
         Ok(Path(n)) if req.method() == Method::GET && who.as_ref().is_some_and(|c| c.can(&n, req.method())) => n,
+        Ok(_) if req.method() == Method::GET => return refuse_without_python(&st, peer, req, who.as_ref()).await,
         _ => return pass(&st, req, &fwd).await,
     };
     // Convidado não recebe aviso de mod nem pedido de navegador, e não conta como app do dono.

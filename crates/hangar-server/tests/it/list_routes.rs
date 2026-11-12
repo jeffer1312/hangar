@@ -64,6 +64,20 @@ async fn error_then_recovery_reemits_same_list() {
     fake::wait_until(move || python.diag().iter().any(|d| d["evento"] == "rust.list_failed" && d["codigo"] == "mux_unavailable")).await;
 }
 
+/// O Python não tem mais `/nav`: token errado recebe o 401 do Rust, que conta a falha.
+#[tokio::test(flavor = "multi_thread")]
+async fn nav_without_owner_token_is_refused_by_rust() {
+    let dir = tempfile::tempdir().unwrap();
+    let srv = server(dir.path(), 1).await;
+    for method in [reqwest::Method::POST, reqwest::Method::DELETE] {
+        let r = client().request(method.clone(), format!("http://{}/api/sessions/s0/nav", srv.addr)).bearer_auth("errado")
+            .json(&json!({"url": "127.0.0.1:5173/"})).send().await.unwrap();
+        assert_eq!(r.status(), 401, "{method}");
+        assert_eq!(r.json::<Value>().await.unwrap()["detail"]["code"], "erro_nao_autorizado", "{method}");
+    }
+    assert_eq!(srv.python.hits_to("/api/sessions/s0/nav"), 0);
+}
+
 /// O navegador pedido sai uma vez em cada lista aberta, nunca de novo no tique seguinte.
 #[tokio::test(flavor = "multi_thread")]
 async fn nav_once_per_client() {
