@@ -164,6 +164,11 @@ pub enum WriteOutcome { Written, NotWritten, Unknown }
 pub trait TerminalIo: Send + Sync {
     fn command<'a>(&'a self, request: CommandRequest) -> IoFuture<'a, CommandOutput>;
     fn socket<'a>(&'a self, descriptor: &'a NativeMessage, envelope: Vec<u8>) -> IoFuture<'a, WriteOutcome>;
+    /// O comando vai direto ao servidor do multiplexador, que recebe o texto como foi escrito; o CLI no
+    /// Windows tira contrabarras (escape do argv). `None`: sem esse caminho agora.
+    fn command_direct<'a>(&'a self, _request: CommandRequest) -> IoFuture<'a, Option<CommandOutput>> { Box::pin(async { Ok(None) }) }
+    /// `command_direct` serviria a sessão `name` do programa `program` agora.
+    fn writes_direct(&self, _program: &str, _name: &str) -> bool { false }
 }
 #[derive(Clone)]
 pub struct ProcessIo { pub command_timeout: Duration, pub socket_timeout: Duration }
@@ -200,6 +205,12 @@ impl TerminalIo for ProcessIo {
         self.command_guarded(request, || Box::pin(async { Ok(()) }))
     }
     fn socket<'a>(&'a self, descriptor: &'a NativeMessage, envelope: Vec<u8>) -> IoFuture<'a, WriteOutcome> { self.socket_inner(descriptor, envelope) }
+    fn command_direct<'a>(&'a self, request: CommandRequest) -> IoFuture<'a, Option<CommandOutput>> {
+        Box::pin(async move { self.direct(&request).await.transpose().map(|done| done.map(|(output, _)| output)) })
+    }
+    fn writes_direct(&self, program: &str, name: &str) -> bool {
+        cfg!(windows) && crate::list::mux::verified_direct(std::ffi::OsStr::new(program), name).is_some()
+    }
 }
 impl ProcessIo {
     /// Cada tentativa reconfere a guarda, inclusive a reserva do observador somente de leitura.
@@ -214,7 +225,36 @@ impl ProcessIo {
             Ok(self.run(retry).await?.0)
         })
     }
+    /// No Windows, `send-keys` e `capture-pane` vão direto ao servidor do psmux que a lista conferiu: abrir um
+    /// `tmux.exe` por chamada passa de 1 s numa máquina carregada. O `display-message` fica no CLI: o servidor
+    /// responde OK para alvo que não existe, e é ele que confere a identidade do pane. `None` segue pelo CLI; o
+    /// que pode ter escrito nunca é repetido por ele.
+    async fn direct(&self, request: &CommandRequest) -> Option<Result<(CommandOutput, Vec<u8>), IoFailure>> {
+        if !cfg!(windows) || !request.stdin.is_empty() { return None; }
+        let verb = request.args.first()?.clone();
+        if !matches!(verb.as_str(), "send-keys" | "capture-pane") { return None; }
+        let target_at = request.args.iter().position(|arg| arg == "-t")? + 1;
+        let target = request.args.get(target_at)?;
+        let base = target.strip_prefix('=')?.split(':').next()?.to_owned();
+        let dir = crate::list::mux::verified_direct(std::ffi::OsStr::new(&request.program), &base)?;
+        let (args, deadline) = (request.args.clone(), std::time::Instant::now() + self.command_timeout);
+        let done = tokio::task::spawn_blocking(move || hangar_psmux::command(&dir, &base, &args, deadline)).await;
+        let typed = verb == "send-keys";
+        match done {
+            Ok(Ok(stdout)) => Some(Ok((CommandOutput { success: true, stdout }, Vec::new()))),
+            Ok(Err(failure)) if typed && failure.written => Some(Err(IoFailure { code: failure.code, may_have_written: true })),
+            Ok(Err(failure)) => {
+                if crate::warn_limit::allow(Some(&request.args[target_at]), failure.code) {
+                    tracing::warn!(code = failure.code, session = %request.args[target_at], %verb, "psmux direto falhou antes de escrever; o comando segue pelo CLI");
+                }
+                None
+            }
+            Err(_) if typed => Some(Err(IoFailure { code: "psmux_direct_panicked", may_have_written: true })),
+            Err(_) => None,
+        }
+    }
     async fn run(&self, request: CommandRequest) -> Result<(CommandOutput, Vec<u8>), IoFailure> {
+        if let Some(done) = self.direct(&request).await { return done; }
         {
             use std::process::Stdio;
             let mut command=child_command(request.program);
@@ -369,6 +409,8 @@ impl ComposerSnapshot {
         let tail: String = text.trim().rsplit('\n').next().unwrap_or("").trim().chars().rev().take(40).collect::<String>().chars().rev().collect();
         if [head, tail].iter().map(|s| compact(s)).any(|s| s.chars().count() >= 12 && visible.contains(&s)) { Proof::Present } else { Proof::Absent }
     }
+    /// O campo tem exatamente `text` e mais nada (nem anexo): só então um Enter de novo não leva texto alheio.
+    fn only(&self, text: &str) -> bool { self.placeholders.is_empty() && !self.is_empty() && compact(&self.content) == compact(text) }
     fn owned(&self, text: &str, before: &Self) -> bool {
         if self.typed(text, before) == compact(text) { return true; }
         let mut residual = self.content.clone();
@@ -600,6 +642,9 @@ impl TerminalDriver {
         Ok(CommandRequest { program: program.clone(), args: prefix.iter().cloned().chain(args).collect(), stdin })
     }
     async fn raw(&self, args: Vec<String>, stdin: Vec<u8>) -> Result<CommandOutput, IoFailure> { self.io.command(self.request(args, stdin)?).await }
+    fn direct_ready(&self) -> bool {
+        self.binding.windows && self.binding.mux_argv.first().is_some_and(|program| self.io.writes_direct(program, &self.binding.name))
+    }
     async fn facts(&self) -> Result<InputFacts, IoFailure> {
         // Falha da pergunta conserva a causa; o resto continua sendo "terminal indisponível".
         let facts = self.services.facts(&self.binding).await.map_err(|error| IoFailure {
@@ -655,11 +700,17 @@ impl TerminalDriver {
         self.check_source(guard.expected, guard.closed).map_err(failure)
     }
     async fn effect_guarded(&self, args: Vec<String>, stdin: Vec<u8>, guard: TextGuard<'_>) -> Result<(), IoFailure> {
+        self.effect_via(args, stdin, guard, false).await
+    }
+    /// `direct_only`: sem o caminho direto, nada sai (o CLI entregaria outro texto).
+    async fn effect_via(&self, args: Vec<String>, stdin: Vec<u8>, guard: TextGuard<'_>, direct_only: bool) -> Result<(), IoFailure> {
         if self.controls && guard.is_none() { self.verify_pane().await?; } else {
             let facts = self.verify().await?;
             self.check_text_guard(guard, facts.screen.as_deref()).await?;
         }
-        let output = self.raw(args, stdin).await?;
+        let output = if direct_only {
+            self.io.command_direct(self.request(args, stdin)?).await?.ok_or(IoFailure { code: "mux_direct_unavailable", may_have_written: false })?
+        } else { self.raw(args, stdin).await? };
         if !output.success { return Err(IoFailure { code: "mux_effect_failed", may_have_written: true }); }
         Ok(())
     }
@@ -786,8 +837,9 @@ impl TerminalDriver {
         else { args.push(key.into()); }
         self.effect_guarded(args, vec![], guard).await
     }
-    async fn literal(&self, text: &str) -> Result<(), IoFailure> { self.literal_guarded(text, None).await }
-    async fn literal_guarded(&self, text: &str, mut guard: TextGuard<'_>) -> Result<(), IoFailure> {
+    async fn literal(&self, text: &str) -> Result<(), IoFailure> { self.literal_guarded(text, None, self.direct_ready()).await }
+    /// `direct`: o caminho direto, decidido uma vez por quem escolheu entre ele e o clipboard.
+    async fn literal_guarded(&self, text: &str, mut guard: TextGuard<'_>, direct: bool) -> Result<(), IoFailure> {
         if text.is_empty() { return Ok(()); }
         if !self.binding.windows {
             // O tmux lê o ponto e vírgula final como separador mesmo depois de --.
@@ -795,14 +847,18 @@ impl TerminalDriver {
             return self.effect_guarded(vec!["send-keys".into(), "-t".into(), self.binding.pane.clone(), "-l".into(), "--".into(), text], vec![], guard).await;
         }
         let placeholder = text.starts_with('-');
+        // Contrabarra pelo CLI chega a menos; com o caminho direto pronto, ela vai só por ele.
+        let direct_only = text.contains('\\') && direct;
         let text = if placeholder { format!("x{text}") } else { text.into() };
         let chars: Vec<_> = text.chars().collect();
         let mut start = 0;
+        // Direto não passa pela linha de comando: vai inteiro, de uma vez, como o clipboard que ele substitui.
+        let piece = if direct_only { chars.len() } else { 512 };
         while start < chars.len() {
-            let mut end = (start + 512).min(chars.len());
+            let mut end = (start + piece).min(chars.len());
             while end < chars.len() && chars[end] == '-' && end-start < 700 { end += 1; }
             let part: String = chars[start..end].iter().collect();
-            self.effect_guarded(vec!["send-keys".into(), "-t".into(), self.binding.pane.clone(), "-l".into(), "--".into(), part], vec![], guard).await
+            self.effect_via(vec!["send-keys".into(), "-t".into(), self.binding.pane.clone(), "-l".into(), "--".into(), part], vec![], guard, direct_only).await
                 .map_err(|mut e| { e.may_have_written |= start > 0; e })?;
             start = end;
             if let Some(guard) = guard.as_mut() { guard.allow_owned = true; }
@@ -1060,7 +1116,11 @@ impl TerminalDriver {
         // Composer ainda com o texto logo após o Enter só reprova esta leitura: a seguinte espera o `settle`.
         // Barra espera antes: o menu de sugestões ainda na tela pediria um segundo Enter antes do primeiro valer.
         let slash = text.trim_start().starts_with('/');
-        for attempt in 0..self.limits.proof_attempts.max(1) {
+        let attempts = self.limits.proof_attempts.max(1);
+        let (mut resent, mut next) = (false, 0);
+        // O Enter repetido ganha uma leitura a mais para a prova dele.
+        while next < attempts + usize::from(resent) {
+            let attempt = next; next += 1;
             if attempt > 0 || slash { self.settle().await; }
             // Antes do segundo Enter da barra: com os hooks rodando o composer ainda mostra o comando.
             if expected.is_none() && self.services.prompt_started(since, text).await.unwrap_or(false) {
@@ -1094,6 +1154,36 @@ impl TerminalDriver {
                     if !slash_selected && ComposerSnapshot::parse(&typed).is_some_and(|now| now.owned(text, before)) {
                         slash_selected = true;
                         if let Err(e) = self.key_inner("Enter").await { return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Submit, e.code); }
+                    }
+                }
+                // Enter perdido (multiplexador lento): o campo ainda só com o nosso texto ganha outro Enter, uma vez.
+                // Mandado, o Claude esvazia o campo; texto ali é envio que não houve, e nada alheio vai junto.
+                if expected.is_none() && !slash && !resent && attempt >= attempts / 4
+                    && ComposerSnapshot::parse(&typed).is_some_and(|now| now.only(text))
+                    && ComposerSnapshot::parse(&screen).is_some_and(|now| now.only(text)) {
+                    let blocked = match self.verify().await { Ok(facts) if !facts.open_question => None, Ok(_) => Some("open_question"), Err(e) => Some(e.code) };
+                    // Barrado, segue para a prova do transcript desta leitura.
+                    if let Some(code) = blocked {
+                        if crate::warn_limit::allow(Some(&self.binding.name), "submit_enter_repeat_blocked") {
+                            tracing::warn!(session = %self.binding.name, code, "o texto seguiu no campo, mas o Enter de novo não saiu");
+                        }
+                    } else {
+                        // A tela pode atrasar: o Claude já com o texto na fila dele mandaria a mensagem duas vezes.
+                        if let Some(mark) = mark && self.services.transcript_enqueued(mark, text).await.unwrap_or(false) {
+                            return DeliveryResult::new(Disposition::Accepted, DeliveryStage::SubmitProof, "submitted_enqueued");
+                        }
+                        // A conferência e o transcript cedem a vez: a pessoa pode ter digitado no campo enquanto isso.
+                        let still = match self.composer_capture().await {
+                            Ok((screen, typed)) => ComposerSnapshot::parse(&typed).is_some_and(|now| now.only(text))
+                                && ComposerSnapshot::parse(&screen).is_some_and(|now| now.only(text)),
+                            Err(e) => { last_error = Some(e.code); false }
+                        };
+                        if still {
+                            resent = true;
+                            tracing::info!(code = "submit_enter_repeated", "o texto seguiu no campo depois do Enter; um Enter de novo");
+                            if let Err(e) = self.key_inner("Enter").await { return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Submit, e.code); }
+                            continue;
+                        }
                     }
                 }
             }
@@ -1198,7 +1288,10 @@ impl TerminalDriver {
         }
         // `?` sozinho, digitado com o campo vazio, abre a ajuda de atalhos do Claude e não vira texto; colado, entra.
         let pasted = text.contains('\n') || text == "?";
-        let use_clipboard = self.binding.windows && (pasted || text.contains('\\'));
+        // Várias linhas só pelo clipboard: digitadas, o Claude perde linhas. Uma linha com
+        // contrabarra vai direto ao servidor quando ele está conferido, sem abrir o PowerShell.
+        let direct = self.binding.windows && text.contains('\\') && self.direct_ready();
+        let use_clipboard = self.binding.windows && (pasted || (text.contains('\\') && !direct));
         let clipboard = if use_clipboard { match self.clipboard_lock().await { Ok(lock) => lock, Err(e) => return Self::failed(e, DeliveryStage::Write) } } else { None };
         if refresh_guard || use_clipboard {
             before = match self.refresh_input_guard().await { Ok(b) => b, Err(e) => return Self::failed(e, DeliveryStage::Composer) };
@@ -1206,7 +1299,7 @@ impl TerminalDriver {
         if self.services.writing().await.is_err() { return DeliveryResult::new(Disposition::Deferred, DeliveryStage::Write, "write_journal"); }
         let guard = expected.map(|expected| GuardedText { expected,closed:true,pane:None,input:Some((text,&before)),allow_owned:false });
         let write = if use_clipboard { self.clipboard_guarded(text, guard).await }
-            else if pasted { self.paste_guarded(text, id, guard).await } else { self.literal_guarded(text, guard).await };
+            else if pasted { self.paste_guarded(text, id, guard).await } else { self.literal_guarded(text, guard, direct).await };
         if let Err(e) = write {
             if !e.may_have_written { return Self::failed(e, DeliveryStage::Write); }
             if expected.is_some() { return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Write, "erro_sem_confirmacao_resposta"); }
@@ -1369,7 +1462,7 @@ impl TerminalDriver {
             Err(error) => return Self::interaction_failure(error, false),
         }
         let guard = GuardedText { expected, closed: false, pane: Some(&expected.semantic["pane"]), input: None, allow_owned: false };
-        if let Err(e) = self.literal_guarded(text, Some(guard)).await { return Self::key_failed(e, DeliveryStage::Select, false); }
+        if let Err(e) = self.literal_guarded(text, Some(guard), self.direct_ready()).await { return Self::key_failed(e, DeliveryStage::Select, false); }
         self.settle().await;
         // O rótulo da opção virou o texto: a guarda do menu não serve mais, a prova é a própria linha.
         let typed = match self.capture_inner().await { Ok(s) => s, Err(e) => return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Select, e.code) };
@@ -1641,7 +1734,7 @@ impl TerminalDriver {
                         text_pane
                     } else { None };
                     let guard = expected.map(|expected| GuardedText { expected,closed:false,pane:pane.as_ref(),input:None,allow_owned:false });
-                    if let Err(e) = self.literal_guarded(answer.value.as_deref().unwrap(), guard).await { return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Answer, e.code); }
+                    if let Err(e) = self.literal_guarded(answer.value.as_deref().unwrap(), guard, self.direct_ready()).await { return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Answer, e.code); }
                     self.settle().await;
                     if let Err(e) = self.key_guarded("Enter", guard).await { return DeliveryResult::new(Disposition::Unknown, DeliveryStage::Answer, e.code); }
                 }
@@ -1866,5 +1959,119 @@ mod enqueued_tests {
     fn a_tool_result_with_the_same_text_proves_nothing() {
         let file = transcript(&[r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"oi"}]}}"#]);
         assert!(!enqueued_since(file.path(), 0, "oi"));
+    }
+}
+#[cfg(test)]
+mod repeat_enter_tests {
+    use super::ComposerSnapshot;
+    fn field(content: &str) -> ComposerSnapshot {
+        ComposerSnapshot::parse(&format!("{rule}\n❯ {content}\n{rule}\n", rule = "─".repeat(32))).unwrap()
+    }
+    #[test]
+    fn only_our_exact_text_allows_another_enter() {
+        assert!(field("Olá de novo").only("Olá de novo"));
+        assert!(field("Olá   de\nnovo").only("Olá de novo"), "quebra e espaço do desenho não contam");
+        assert!(!field("Olá de novo e mais").only("Olá de novo"), "texto da pessoa junto");
+        assert!(!field("Olá").only("Olá de novo"), "pedaço");
+        assert!(!field("Olá de novo [Image #1]").only("Olá de novo"), "anexo junto");
+        assert!(!field("").only("Olá de novo"));
+    }
+}
+#[cfg(all(test, windows))]
+mod psmux_direct_tests {
+    use super::{CommandRequest, ProcessIo, TerminalIo};
+    use std::io::{BufRead, BufReader, Write};
+
+    /// Servidor de sessão falso: responde ao `list-panes` da conferência e a um comando.
+    fn server(dir: &std::path::Path, base: &str) -> std::thread::JoinHandle<Vec<String>> {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        std::fs::write(dir.join(format!("{base}.port")), listener.local_addr().unwrap().port().to_string()).unwrap();
+        std::fs::write(dir.join(format!("{base}.key")), "k").unwrap();
+        std::thread::spawn(move || (0..2).map(|_| {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let (mut auth, mut cmd) = (String::new(), String::new());
+            reader.read_line(&mut auth).unwrap(); reader.read_line(&mut cmd).unwrap();
+            let body = if cmd.starts_with("list-panes") { "main\n" } else { "saida\n\n" };
+            (&stream).write_all(format!("OK\n{body}").as_bytes()).unwrap();
+            cmd
+        }).collect())
+    }
+
+    /// Servidor que aceita a chave e cai depois de receber o comando: ele pode ter rodado.
+    fn dropping_server(dir: &std::path::Path, base: &str) -> std::thread::JoinHandle<()> {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        std::fs::write(dir.join(format!("{base}.port")), listener.local_addr().unwrap().port().to_string()).unwrap();
+        std::fs::write(dir.join(format!("{base}.key")), "k").unwrap();
+        std::thread::spawn(move || for _ in 0..2 {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let (mut auth, mut cmd) = (String::new(), String::new());
+            reader.read_line(&mut auth).unwrap(); reader.read_line(&mut cmd).unwrap();
+            if cmd.starts_with("list-panes") { (&stream).write_all(b"OK\nmain\n").unwrap(); }
+        })
+    }
+
+    /// O servidor responde OK para alvo que não existe: a conferência de identidade fica com o CLI, que recusa.
+    #[tokio::test]
+    async fn the_pane_identity_check_never_goes_direct() {
+        let dir = tempfile::tempdir().unwrap();
+        let seen = server(dir.path(), "main");
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let listing = hangar_psmux::list_panes(dir.path(), "#{session_name}", until).unwrap();
+        crate::list::mux::verify_for_test("missing-test-mux-3", dir.path(), listing.servers);
+        let io = ProcessIo::default();
+        let request = |verb: &str| CommandRequest { program: "missing-test-mux-3".into(),
+            args: [verb, "-p", "-t", "=main:1.0"].map(String::from).to_vec(), stdin: vec![] };
+        assert!(io.command_direct(request("display-message")).await.unwrap().is_none());
+        assert!(io.command_direct(request("capture-pane")).await.unwrap().is_some());
+        assert_eq!(seen.join().unwrap()[1], "\"capture-pane\" \"-p\" \"-t\" \"=main:1.0\"\n");
+    }
+
+    #[tokio::test]
+    async fn typing_that_may_have_reached_the_server_is_never_repeated_by_the_cli() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = dropping_server(dir.path(), "main");
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let listing = hangar_psmux::list_panes(dir.path(), "#{session_name}", until).unwrap();
+        crate::list::mux::verify_for_test("missing-test-mux-2", dir.path(), listing.servers);
+        let request = CommandRequest { program: "missing-test-mux-2".into(),
+            args: ["send-keys", "-t", "=main:0.0", "-l", "--", "oi"].map(String::from).to_vec(), stdin: vec![] };
+        // O CLI ausente daria spawn_failed: o erro é do caminho direto, marcado como talvez escrito.
+        let failure = ProcessIo::default().command(request).await.unwrap_err();
+        assert!(failure.code.starts_with("psmux_direct") && failure.may_have_written, "{failure:?}");
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_verified_session_is_driven_without_opening_the_program() {
+        let dir = tempfile::tempdir().unwrap();
+        let seen = server(dir.path(), "main");
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let listing = hangar_psmux::list_panes(dir.path(), "#{session_name}", until).unwrap();
+        crate::list::mux::verify_for_test("missing-test-mux", dir.path(), listing.servers);
+        let io = ProcessIo::default();
+        let request = |target: &str| CommandRequest { program: "missing-test-mux".into(),
+            args: ["capture-pane", "-p", "-t", target].map(String::from).to_vec(), stdin: vec![] };
+        // O programa não existe: a resposta só pode ter vindo do servidor.
+        let out = io.command(request("=main:0.0")).await.unwrap();
+        assert!(out.success);
+        assert_eq!(out.stdout, b"saida\n\n");
+        assert_eq!(seen.join().unwrap()[1], "\"capture-pane\" \"-p\" \"-t\" \"=main:0.0\"\n");
+        let other = io.command(request("=outra:0.0")).await.unwrap_err();
+        assert_eq!(other.code, "spawn_failed", "sessão fora da conferência segue pelo CLI");
+    }
+}
+#[cfg(all(test, windows))]
+mod psmux_direct_only_tests {
+    use super::{CommandRequest, ProcessIo, TerminalIo};
+    #[tokio::test]
+    async fn an_unverified_session_has_no_direct_path_and_never_falls_to_the_cli() {
+        let io = ProcessIo::default();
+        let request = CommandRequest { program: "missing-test-mux".into(),
+            args: ["send-keys", "-t", "=nunca-conferida:0.0", "-l", "--", "a"].map(String::from).to_vec(), stdin: vec![] };
+        assert!(!io.writes_direct("missing-test-mux", "nunca-conferida"));
+        // Sem caminho direto, nada roda: o CLI ausente daria spawn_failed.
+        assert!(io.command_direct(request).await.unwrap().is_none());
     }
 }

@@ -5,6 +5,8 @@ export interface PendingMsg {
   id: string;
   text: string;
   solid?: boolean;
+  /** Último `user_msg` visto no envio: o trecho de várias linhas só confirma em mensagem que chegou depois dele. */
+  afterId?: string;
 }
 
 // Legenda canônica: sem o marcador "📎 imagem:/arquivo: `path`" + "—" que liga.
@@ -25,7 +27,8 @@ export function sameMessage(sent: string, incoming: string): boolean {
 // Regra de dedup do Chat.svelte: texto normalizado + legenda + linha.
 // - idempotente: chamar duas vezes com o mesmo incoming não muda nada além da 1ª.
 // - preserva ordem do pending remanescente.
-export function reconcilePending(pending: PendingMsg[], incoming: ChatEvent): PendingMsg[] {
+// `order` (posição de cada evento) vem na reconstrução, que repassa o histórico inteiro; ao vivo o evento é sempre novo.
+export function reconcilePending(pending: PendingMsg[], incoming: ChatEvent, order?: Map<string, number>): PendingMsg[] {
   if (incoming.kind !== 'user_msg' || !incoming.text) return pending;
   const t = incoming.text.trim();
   if (!t) return pending;
@@ -49,6 +52,10 @@ export function reconcilePending(pending: PendingMsg[], incoming: ChatEvent): Pe
     // linha do pending que casa com linha do incoming (multilinha fundida pelo Claude: "a\nb")
     // O pending pode ser 1 linha que faz parte de um incoming multilinha.
     if (pc && lines.includes(pc)) return false;
+    // Mensagens que chegam no meio do turno o Claude grava num `user` só, separadas por quebra de linha.
+    const after = p.afterId === undefined ? undefined : order?.get(p.afterId);
+    const newer = after === undefined || (order?.get(incoming.id) ?? Infinity) > after;
+    if (newer && pt.includes('\n') && `\n${t}\n`.includes(`\n${pt}\n`)) return false;
     return true;
   });
 }

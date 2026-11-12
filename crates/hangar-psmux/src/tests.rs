@@ -147,3 +147,43 @@ fn data_dir_follows_the_cli_resolution() {
     assert_eq!(data_dir(vars(vec![("PSMUX_DATA_DIR", "relativa".into()), ("USERPROFILE", home)])), None);
     assert_eq!(data_dir(vars(vec![])), None);
 }
+
+#[test]
+fn a_command_reaches_its_session_quoted_and_returns_the_cli_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let (port, seen) = server("k", Reply::Answer("linha\n\n\nfim\n"));
+    register(dir.path(), "main", port, "k");
+    let args: Vec<String> = ["capture-pane", "-p", "-t", "=main:0.0", "-S", "-200"].map(String::from).to_vec();
+    assert_eq!(command(dir.path(), "main", &args, soon(2000)), Ok(b"linha\n\n\nfim\n".to_vec()), "linhas em branco ficam, como no CLI");
+    let seen = seen.join().unwrap();
+    assert_eq!(seen[1], "\"capture-pane\" \"-p\" \"-t\" \"=main:0.0\" \"-S\" \"-200\"\n");
+}
+
+#[test]
+fn a_refused_key_never_ran_the_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let (port, seen) = server("certa", Reply::Answer(""));
+    register(dir.path(), "main", port, "errada");
+    let args = vec!["send-keys".to_owned(), "-t".into(), "=main:0.0".into(), "Enter".into()];
+    assert_eq!(command(dir.path(), "main", &args, soon(2000)), Err(CommandFailure { code: "psmux_direct_auth", written: false }));
+    seen.join().unwrap();
+}
+
+#[test]
+fn a_silent_server_may_have_run_the_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let (port, seen) = server("k", Reply::Silent);
+    register(dir.path(), "main", port, "k");
+    let args = vec!["send-keys".to_owned(), "-t".into(), "=main:0.0".into(), "Enter".into()];
+    assert_eq!(command(dir.path(), "main", &args, soon(100)), Err(CommandFailure { code: "psmux_direct_timeout", written: true }));
+    seen.join().unwrap();
+}
+
+#[test]
+fn a_session_outside_the_registry_is_not_tried() {
+    let dir = tempfile::tempdir().unwrap();
+    let args = vec!["send-keys".to_owned()];
+    for base in ["", "ns__other", "..\\x", "nada"] {
+        assert_eq!(command(dir.path(), base, &args, soon(500)), Err(CommandFailure { code: "psmux_direct_registry", written: false }), "{base}");
+    }
+}

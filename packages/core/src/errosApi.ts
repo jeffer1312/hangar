@@ -632,6 +632,7 @@ const ERROS: Record<string, (params: Parametros) => string> = {
   queue_steer_not_delivered: () => m.queue_steer_not_delivered(),
   queue_steer_question_open: () => m.queue_steer_question_open(),
   queue_steer_uncertain: () => m.queue_steer_uncertain(),
+  queue_steer_delivery_unproved: () => m.queue_steer_delivery_unproved(),
   queue_text_invalid: () => m.queue_text_invalid(),
   // Abertura, reabertura e ciclo de vida da sessão no Rust (session_open, session_write, runtime).
   codex_terminal_starting: () => m.codex_terminal_starting(),

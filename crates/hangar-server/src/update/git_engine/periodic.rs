@@ -17,7 +17,7 @@ pub fn spawn(st:&crate::routes::AppState){if matches!(crate::update::http::mode(
  let runtime=match crate::config_sync::runtime::RuntimeConfig::from_state(st){Ok(runtime)=>runtime,Err(error)=>{tracing::warn!(code="update_auto_config_failed",%error,"atualização periódica sem preferências");return;}};
  let list=st.list.clone();let port=st.cfg.listen.port();
  let fetch=service.clone();tokio::spawn(async move{loop{let service=fetch.clone();let result=tokio::task::spawn_blocking(move||service.git(&["fetch","origin"],120)).await;match result{Ok(Ok(_))=>{},Ok(Err(error))=>tracing::debug!(%error,"fetch periodico falhou"),Err(error)=>tracing::debug!(%error,"fetch periodico falhou")};tokio::time::sleep(Duration::from_secs(1800)).await;}});
- let live=super::periodic_tick::Live{service,runtime,list,port};
+ let live=super::periodic_tick::Live{service,runtime,list,state:st.state.clone(),port};
  tokio::spawn(async move{super::periodic_tick::run(&live).await;});
 }
 

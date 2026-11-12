@@ -17,7 +17,7 @@
   import CiteReplyDialog from '../components/CiteReplyDialog.svelte';
   import { citeDialog } from '../lib/citeDialog.svelte';
   import { contextRefsKey } from '../lib/contextRefsDraft.svelte';
-  import { attachmentCaption, composeWithContextRefs, splitContextRefs, parseCodexOutput, type ContextRef } from '@hangar/core';
+  import { composeWithContextRefs, pendingEchoDelivered, splitContextRefs, parseCodexOutput, userMessages, type ContextRef } from '@hangar/core';
   import { codexSubagentActivityKey, codexSubagentState, projectCodexSubagent } from '@hangar/core';
   import { itemModsCelular, modsCelular, modsNaTela } from '../lib/modsCelular.svelte';
   import { activePaneId, applyPluginUiDelta, closePluginPane, fieldSender, followLocalTab, inputPluginField, isMissingRoute, parsePluginToast, pluginFailureText, parsePluginUi, pressPluginButton, safeHref, showPluginPane, tabFollowsServer, type PluginControl, type PluginInputKind, type PluginSource, type PluginNode as PluginTree, type PluginPane as PluginPaneData, type PluginToast } from '@hangar/core';
@@ -427,7 +427,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   // Conexão aberta sem o evento `queue` no retrato (a sessão voltou ao Python): a lista antiga do servidor sai.
   let queueAbsentTimer: ReturnType<typeof setTimeout> | undefined;
   let screenEl: HTMLElement | undefined = $state();
-  let pending = $state<{ id: string; text: string; solid?: boolean }[]>([]);
+  let pending = $state<{ id: string; text: string; solid?: boolean; afterId?: string }[]>([]);
   // Draft do composer (bindable): o interrupt devolve a msg pendente aqui pra editar e reenviar.
   // PERSISTIDO por sessao no localStorage: o iOS mata/recarrega o PWA em background e o texto
   // digitado evaporava (ir buscar algo noutro app = perder o rascunho); trocar de sessao remonta
@@ -2983,7 +2983,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     // ("mandei e sumiu"). O dedup abaixo reconcilia contra o evento real em qualquer estado.
     const pendingId: string | null = `pending-${pendingSeq++}`;
     // Em idle a mensagem é digitada na hora: o eco atenuado parecia mensagem entrando na fila.
-    pending = [...pending, { id: pendingId, text, solid: currentState === 'idle' }];
+    pending = [...pending, { id: pendingId, text, solid: currentState === 'idle', afterId: userMessages(events).findLast((m) => !m.id.startsWith('queued-'))?.id }];
     try {
       if (steer && (sessionProvider === 'codex' || sessionHeadless)) {
         await steerSession(sessionName, text, sessionServer());
@@ -3016,20 +3016,9 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   // entao "msg1\nmsg2" casa tanto "msg1" quanto "msg2". Idempotente (length estabiliza).
   $effect(() => {
     if (pending.length === 0) return;
-    const committed = new Set<string>();
-    for (const e of events) {
-      if (e.kind !== 'user_msg' || !e.text) continue;
-      const t = e.text.trim();
-      committed.add(t);
-      committed.add(attachmentCaption(t));                       // legenda canonica (msg com imagem grava so ela)
-      for (const line of t.split('\n')) committed.add(line.trim());
-    }
-    // Remove o eco quando o texto cru OU a legenda (sem "📎 imagem: <path>") ja commitou. Legenda
-    // vazia (imagem sem texto) nao casa por texto -> cai no solidify do idle, nao trava aqui.
-    const next = pending.filter((p) => {
-      const cap = attachmentCaption(p.text);
-      return !committed.has(p.text.trim()) && !(cap && committed.has(cap));
-    });
+    // Legenda vazia (imagem sem texto) nao casa por texto -> cai no solidify do idle, nao trava aqui.
+    const entregue = pendingEchoDelivered(userMessages(events));
+    const next = pending.filter((p) => !entregue(p.text, p.afterId));
     if (next.length !== pending.length) pending = next;
   });
 

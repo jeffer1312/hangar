@@ -196,6 +196,12 @@ impl State {
         let conversation=Value::from(conversation);
         self.operations.iter().any(|(key,op)|!key.starts_with(CALL_PREFIX) && holds_terminal_write(op,&conversation))
     }
+    /// Alguma entrega sem prova ainda: trocar o servidor agora perderia o que decide se ela chegou.
+    pub fn delivery_uncertain(&self)->bool {
+        self.runtime_state["terminal_write_barrier"].is_object() || !uncertain_entries(self).is_empty()
+            || self.operations.iter().any(|(key,op)|!key.starts_with(CALL_PREFIX) && (holds_terminal_write(op,&Value::Null)
+                || op.status==Status::Dispatching && op.entry_id.is_some() && op.payload["kind"]=="input"))
+    }
     /// O `GiveUpUnproved` desistiria de alguma entrada agora? Toda ação grava a fila, até a que não muda nada.
     pub fn unproved_due(&self,now:f64,grace:f64)->bool {
         let uncertain=uncertain_entries(self);
@@ -605,7 +611,8 @@ fn unproved_since(operations:&BTreeMap<String,Operation>,uncertain:&BTreeSet<Str
     // Escrita em curso: o desfecho é do ator.
     if operations.iter().any(|(key, op)| !key.starts_with(CALL_PREFIX) && op.entry_id.as_deref() == Some(id)
         && op.status == Status::Dispatching) { return None; }
-    Some(["dispatched_ts","claimed_ts","ts"].iter().find_map(|key| row[*key].as_f64()).unwrap_or(0.0))
+    // O prazo é da tentativa: a reenviada não herda o relógio do primeiro despacho.
+    Some(["attempt_ts","dispatched_ts","claimed_ts","ts"].iter().find_map(|key| row[*key].as_f64()).unwrap_or(0.0))
 }
 
 fn terminal_input(state:&State,op:&Operation)->bool {
@@ -1072,6 +1079,8 @@ fn apply(state: &mut State, action: Action, clock: ClockSample, call_id: &str) -
             for row in &mut state.rows { if Some(row_id(row)) == op.entry_id.as_deref() {
                 row["delivered"] = json!(true);
                 if row.get("dispatched_ts").is_none() { row["dispatched_ts"] = json!(clock.epoch_s); }
+                // O `dispatched_ts` fica da primeira (a prova atrasada dela ainda vale); o prazo da incerta é desta tentativa.
+                row["attempt_ts"] = json!(clock.epoch_s);
             } }
             serde_json::to_value(op)?
         }
@@ -1551,6 +1560,23 @@ mod headless_delivery_tests {
         assert!(row(&store,"late")["desistiu"].is_null() && row(&store,"writing")["desistiu"].is_null());
         assert_eq!(store.state().operations["lost"].status,Status::Rejected,"a incerta desistida não segura mais o descarte");
         assert_eq!(store.exec(1,"remove",clock(171.0),Action::Remove { entry_id:"lost".into() }).unwrap(),json!(true));
+    }
+
+    #[test]
+    fn give_up_counts_from_the_last_attempt_of_a_resent_entry() {
+        let dir=tempfile::tempdir().unwrap(); let mut store=store(&dir);
+        append(&mut store,"again",10.0);
+        store.exec(1,"prepare:1",clock(100.0),Action::Prepare { id:"try1".into(),payload:json!({"kind":"input"}),entry_id:Some("again".into()) }).unwrap();
+        store.exec(1,"begin:1",clock(100.0),Action::BeginDispatch { id:"try1".into(),wire_id:"w1".into(),staged:false }).unwrap();
+        store.exec(1,"finish:1",clock(100.0),Action::Finish { id:"try1".into(),status:Status::Deferred,result:json!({}) }).unwrap();
+        store.exec(1,"prepare:2",clock(200.0),Action::Prepare { id:"try2".into(),payload:json!({"kind":"input"}),entry_id:Some("again".into()) }).unwrap();
+        store.exec(1,"begin:2",clock(200.0),Action::BeginDispatch { id:"try2".into(),wire_id:"w2".into(),staged:false }).unwrap();
+        store.exec(1,"finish:2",clock(200.0),Action::Finish { id:"try2".into(),status:Status::Accepted,result:json!({}) }).unwrap();
+        // Aceita agora sem prova: o prazo é desta tentativa, não da primeira.
+        let outcome=store.exec(1,"give-up",clock(220.0),Action::GiveUpUnproved { now:220.0,grace:60.0 }).unwrap();
+        assert_eq!(outcome["given_up"],json!([]),"{outcome}");
+        assert!(!store.state().unproved_due(220.0,60.0));
+        assert!(store.state().unproved_due(260.0,60.0));
     }
 }
 

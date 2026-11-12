@@ -38,6 +38,8 @@ use crate::routes::AppState;
 pub const DISCOVER_TTL: Duration = Duration::from_secs(1);
 /// Retrato decorado servido sem produzir de novo (`list_sessions` do `api.py`).
 pub const SNAPSHOT_TTL: Duration = Duration::from_secs(2);
+/// Última lista boa que acha a sessão sem esperar a rodada em curso (transcript, pasta e vida mudam pouco).
+const LOCATE_STALE: Duration = Duration::from_secs(30);
 /// Sessão fora da lista por este tempo perde os caches por nome.
 const FORGET_AFTER: Duration = Duration::from_secs(10);
 /// Rodada da lista mais velha que isto não serve à limpeza das páginas: são vários tiques sem rodada.
@@ -116,7 +118,7 @@ struct Discovery { at: Instant, wall: f64, epoch: u64,
     fresh: bool, rows: Arc<Vec<SessionRow>>, agent_pids: Arc<HashMap<String, u32>>,
     panes: Arc<Vec<Pane>>, children: Arc<ChildrenMap> }
 
-struct Snapshot { at: Instant, epoch: u64, produced: Produced,
+struct Snapshot { at: tokio::time::Instant, epoch: u64, produced: Produced,
     /// Entradas da produção, para a rodada parcial; `None` quando nenhuma lista do dono está aberta.
     round: Option<Arc<Round>> }
 
@@ -259,6 +261,8 @@ pub struct ListBridge {
     /// Trava assíncrona = um por vez: quem chega durante a varredura espera e reaproveita o resultado.
     discovery: tokio::sync::Mutex<Option<Discovery>>,
     snapshot: tokio::sync::Mutex<Option<Snapshot>>,
+    /// Linhas da última produção boa, fora da trava: achar a sessão não espera a rodada em curso.
+    last_good: Mutex<Option<(tokio::time::Instant, u64, Arc<Vec<SessionRow>>)>>,
     git_running: Arc<Mutex<std::collections::HashSet<String>>>,
     git_slots: Arc<tokio::sync::Semaphore>,
     epoch: AtomicU64,
@@ -276,6 +280,8 @@ pub struct ListBridge {
     problem_hold_ms: std::sync::atomic::AtomicU64,
     #[cfg(test)]
     test_plugins: Mutex<Option<BTreeMap<String, Result<crate::state::facts::PluginReading, String>>>>,
+    #[cfg(test)]
+    test_round: Mutex<Option<Arc<dyn Fn() -> futures_util::future::BoxFuture<'static, Result<Produced, ListError>> + Send + Sync>>>,
     /// Transcripts da última rodada do dono, para a limpeza das páginas; `None` = rodada incerta.
     live_jsonl: Mutex<Option<(Instant, HashSet<String>)>>,
     /// Pedidos de navegador do agente: a lista os publica, e sessão que acaba ou troca de nome os leva junto.
@@ -304,12 +310,13 @@ impl ListBridge {
         Self { nav, keyring: Arc::new(crate::keyring::Keyring::system()), tags: Default::default(), env: Arc::new(env), local: Mutex::default(), shortcuts: Default::default(), facts, caches, runtime: std::sync::OnceLock::new(),
             shares: std::sync::OnceLock::new(), owner_clients: AtomicU32::new(0), seen: Mutex::default(),
             discovery: tokio::sync::Mutex::new(None),
-            snapshot: tokio::sync::Mutex::new(None), git_running: Arc::default(),
+            snapshot: tokio::sync::Mutex::new(None), last_good: Mutex::default(), git_running: Arc::default(),
             git_slots: Arc::new(tokio::sync::Semaphore::new(GIT_SLOTS)), epoch: AtomicU64::new(0),
             state_facts: Arc::default(), demoted, published: Arc::default(), live_jsonl: Mutex::default(),
             plugin_runtime: std::sync::OnceLock::new(), plugin_projection: Mutex::default(), problems: Mutex::default(), shown: Arc::default(),
             problem_hold_ms: std::sync::atomic::AtomicU64::new(if cfg!(test) { 0 } else { crate::problem_gate::HOLD.as_millis() as u64 }),
             #[cfg(test)] test_plugins: Mutex::default(),
+            #[cfg(test)] test_round: Mutex::default(),
         }
     }
 
@@ -465,6 +472,9 @@ impl ListBridge {
     /// ausência não prova nada e volta `list_facts_unknown`.
     pub async fn find_row(&self, name: &str) -> Result<Option<SessionRow>, ListError> {
         let found = |rows: &[SessionRow]| rows.iter().find(|r| r.name == name).cloned();
+        if self.snapshot.try_lock().is_err() && let Some(row) = self.recent_row(name) {
+            return Ok(Some(row));
+        }
         if let Some(row) = found(&self.snapshot().await?.rows) {
             return Ok(Some(row));
         }
@@ -474,6 +484,12 @@ impl ListBridge {
             None if produced.facts.unknown => Err(fail("list_facts_unknown", "fatos da lista indisponíveis")),
             None => Ok(None),
         }
+    }
+
+    fn recent_row(&self, name: &str) -> Option<SessionRow> {
+        let epoch = self.epoch.load(Ordering::SeqCst);
+        lock(&self.last_good).as_ref().filter(|(at, seen, _)| *seen == epoch && at.elapsed() < LOCATE_STALE)
+            .and_then(|(_, _, rows)| rows.iter().find(|r| r.name == name).cloned())
     }
 
     /// `registry.list()`. `newer_than` (época em s) é a sessão criada há menos de 1 s: só vale uma
@@ -534,7 +550,8 @@ impl ListBridge {
         self.flush_notes();
         // Junto da descoberta guardada: se esta falhasse antes daqui, a marca descreveria panes que ninguém usa.
         lock(&self.local).panes_partial = partial;
-        *slot = Some(Discovery { at, wall, epoch, fresh: newer_than.is_some(), rows: rows.clone(), agent_pids: agent_pids.clone(),
+        // A validade conta do fim da descoberta: no psmux lento ela passa do `DISCOVER_TTL`, e quem esperou refaria.
+        *slot = Some(Discovery { at: Instant::now(), wall, epoch, fresh: newer_than.is_some(), rows: rows.clone(), agent_pids: agent_pids.clone(),
             panes: panes.clone(), children: children.clone() });
         Ok((rows, agent_pids, panes, children))
     }
@@ -556,9 +573,10 @@ impl ListBridge {
         if let Some(s) = slot.as_ref().filter(|s| !fresh && s.epoch == epoch && s.at.elapsed() < SNAPSHOT_TTL) {
             return Ok(s.produced.clone());
         }
-        let at = Instant::now();
         let input = ProduceFacts { owner_clients: self.owner_clients.load(Ordering::Relaxed) };
-        let done = self.produce_round(&input).await;
+        let done = self.round(&input).await;
+        // Do fim da rodada: mais lenta que o `SNAPSHOT_TTL`, quem esperou por ela a refaria.
+        let at = tokio::time::Instant::now();
         // A rodada parcial só parte da última produção que deu certo: sobre uma anterior, publicaria
         // lista velha por cima do erro.
         let failed = done.as_ref().map_or(true, |(p, _)| p.facts.unknown);
@@ -566,9 +584,16 @@ impl ListBridge {
         let (produced, round) = done?;
         // Sem fatos ainda não é retrato: guardado, o Python que acabou de responder esperaria 2 s.
         if !produced.facts.unknown {
+            *lock(&self.last_good) = Some((at, epoch, produced.rows.clone()));
             *slot = Some(Snapshot { at, epoch, produced: produced.clone(), round });
         }
         Ok(produced)
+    }
+
+    async fn round(&self, input: &ProduceFacts) -> Result<(Produced, Option<Arc<Round>>), ListError> {
+        #[cfg(test)]
+        { let fake = lock(&self.test_round).clone(); if let Some(fake) = fake { return fake().await.map(|p| (p, None)); } }
+        self.produce_round(input).await
     }
 
     /// Rodada acordada por arquivo: relê os marcadores e o registro nativo e reclassifica só as
@@ -1704,6 +1729,69 @@ mod tests {
         assert_eq!(bridge.state_facts.get("s1").unwrap().facts.seq, 4);
         assert!(serde_json::from_value::<Operation>(json!({"op": "state.facts", "args": {"name": "s1", "facts": {"seq": 3}}})).is_err(),
             "fato incompleto é recusado, nunca vazio");
+    }
+
+    /// Rodada falsa que conta as vezes e só termina quando o teste solta uma licença.
+    fn gated_bridge(names: &[&str]) -> (Arc<ListBridge>, Arc<AtomicU32>, Arc<tokio::sync::Semaphore>) {
+        let bridge = Arc::new(ListBridge::new(ListEnv { mux: Mux::default(), capture_program: "missing-test-mux".into(),
+            procs: Arc::new(procs::SystemProcs::default()), dirs: None }, FactsClient::new("127.0.0.1:9".parse().unwrap(), "s".into())));
+        let (rounds, gate) = (Arc::new(AtomicU32::new(0)), Arc::new(tokio::sync::Semaphore::new(0)));
+        let rows: Vec<SessionRow> = names.iter().map(|n| serde_json::from_value(json!({"name": n, "provider": "claude"})).unwrap()).collect();
+        let (r, g) = (rounds.clone(), gate.clone());
+        *lock(&bridge.test_round) = Some(Arc::new(move || {
+            let (r, g, rows) = (r.clone(), g.clone(), rows.clone());
+            Box::pin(async move {
+                r.fetch_add(1, Ordering::SeqCst);
+                g.acquire().await.unwrap().forget();
+                Ok(Produced { rows: Arc::new(rows), facts: Arc::new(ListFacts { unknown: false, ..Default::default() }), facts_ok: true })
+            })
+        }));
+        (bridge, rounds, gate)
+    }
+
+    async fn until_rounds(rounds: &AtomicU32, n: u32) {
+        while rounds.load(Ordering::SeqCst) < n { tokio::task::yield_now().await; }
+    }
+
+    /// Rodada mais lenta que o `SNAPSHOT_TTL` (psmux lento): quem esperou por ela a
+    /// reaproveita, em vez de cada um na fila fazer a sua.
+    #[tokio::test(start_paused = true)]
+    async fn who_waited_for_a_slow_round_reuses_it() {
+        let (bridge, rounds, gate) = gated_bridge(&["a"]);
+        let first = tokio::spawn({ let b = bridge.clone(); async move { b.snapshot().await } });
+        until_rounds(&rounds, 1).await;
+        let second = tokio::spawn({ let b = bridge.clone(); async move { b.snapshot().await } });
+        for _ in 0..10 { tokio::task::yield_now().await; }
+        tokio::time::advance(SNAPSHOT_TTL + Duration::from_secs(1)).await;
+        gate.add_permits(2);
+        assert!(first.await.unwrap().is_ok() && second.await.unwrap().is_ok());
+        assert_eq!(rounds.load(Ordering::SeqCst), 1, "uma rodada para os dois que pediram");
+    }
+
+    /// Com uma rodada em curso, achar a sessão usa a última lista boa recente sem esperar; nome
+    /// ausente, lista invalidada ou velha demais esperam a rodada.
+    #[tokio::test(start_paused = true)]
+    async fn find_row_answers_from_the_last_good_list_during_a_round() {
+        let (bridge, rounds, gate) = gated_bridge(&["a"]);
+        gate.add_permits(1);
+        bridge.snapshot().await.unwrap();
+        tokio::time::advance(SNAPSHOT_TTL + Duration::from_secs(1)).await;
+        let tick = tokio::spawn({ let b = bridge.clone(); async move { b.refresh().await } });
+        until_rounds(&rounds, 2).await;
+        let wait = Duration::from_millis(100);
+        let row = tokio::time::timeout(wait, bridge.find_row("a")).await.expect("não espera a rodada em curso").unwrap();
+        assert_eq!(row.map(|r| r.name).as_deref(), Some("a"));
+        assert!(tokio::time::timeout(wait, bridge.find_row("b")).await.is_err(), "nome ausente espera a rodada nova");
+        tokio::time::advance(LOCATE_STALE).await;
+        assert!(tokio::time::timeout(wait, bridge.find_row("a")).await.is_err(), "lista velha demais não serve");
+        gate.add_permits(1);
+        tick.await.unwrap().unwrap();
+        bridge.invalidate();
+        let held = tokio::spawn({ let b = bridge.clone(); async move { b.refresh().await } });
+        until_rounds(&rounds, 3).await;
+        assert!(tokio::time::timeout(wait, bridge.find_row("a")).await.is_err(), "invalidada, a lista de antes não serve");
+        gate.add_permits(10);
+        held.await.unwrap().unwrap();
     }
 
     #[test]
