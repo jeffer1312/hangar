@@ -212,7 +212,9 @@ fn codex_hooks_append_after_the_existing_groups_and_settle() {
     let rtk = json!({"matcher": "Bash", "hooks": [{"type": "command", "command": "rtk"}]});
     fs::write(codex.join("hooks.json"), json!({"hooks": {"PreToolUse": [review, rtk]}}).to_string()).unwrap();
     let repo = root.path().join("repo");
-    let touched = codex_hooks::sync(&codex, &repo, false).unwrap();
+    // A plataforma da máquina, como na subida: o Python do venv sai dela, não do argumento.
+    let windows = cfg!(windows);
+    let touched = codex_hooks::sync(&codex, &repo, windows).unwrap();
     for event in ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"] {
         assert!(touched.iter().any(|e| e == event), "{event}");
     }
@@ -221,8 +223,10 @@ fn codex_hooks_append_after_the_existing_groups_and_settle() {
     assert_eq!((&pre[0], &pre[1]), (&review, &rtk));
     assert!(pre[2..].iter().any(|g| hooks::refers(&g["hooks"][0]["command"], "state_hook.py", true)));
     assert!(pre[2..].iter().any(|g| g["matcher"] == "Bash" && hooks::refers(&g["hooks"][0]["command"], "guard_tmux.py", true)));
-    assert_eq!(ours(&data, "UserPromptSubmit", "nav_hook.py"), vec![format!("{} || exit 0", command(&repo, "nav_hook.py"))]);
-    assert!(codex_hooks::sync(&codex, &repo, false).unwrap().is_empty());
+    if !windows {
+        assert_eq!(ours(&data, "UserPromptSubmit", "nav_hook.py"), vec![format!("{} || exit 0", command(&repo, "nav_hook.py"))]);
+    }
+    assert!(codex_hooks::sync(&codex, &repo, windows).unwrap().is_empty());
 }
 
 #[cfg(unix)]
