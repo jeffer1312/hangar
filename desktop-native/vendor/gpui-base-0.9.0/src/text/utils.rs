@@ -25,7 +25,7 @@ pub(super) fn list_item_prefix(
 ) -> String {
     if ordered {
         let ordinal = ordered_list_ordinal(typed, start, ix);
-        if depth == 0 || start == Some(0) {
+        if depth == 0 || start == Some(0) || typed.is_some() {
             return format!("{ordinal}. ");
         }
 
@@ -149,7 +149,7 @@ mod tests {
         assert_eq!(list_item_prefix(None, 0, None, false, 3), "‣ ");
         assert_eq!(list_item_prefix(None, 0, None, false, 4), "⁃ ");
         assert_eq!(list_item_prefix(Some(7), 2, Some(1), true, 0), "7. ");
-        assert_eq!(list_item_prefix(Some(3), 1, Some(1), true, 1), "C. ");
+        assert_eq!(list_item_prefix(Some(3), 1, Some(1), true, 1), "3. ");
         assert_eq!(list_item_prefix(Some(1), 1, Some(0), true, 1), "1. ");
     }
 }

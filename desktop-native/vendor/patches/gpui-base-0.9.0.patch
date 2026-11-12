@@ -1840,7 +1840,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
 diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig gpui-base-0.9.0/src/text/utils.rs gpui-base-0.9.0/src/text/utils.rs
 --- gpui-base-0.9.0/src/text/utils.rs
 +++ gpui-base-0.9.0/src/text/utils.rs
-@@ -6,21 +6,25 @@
+@@ -6,22 +6,26 @@
  const BULLETS: [&str; 5] = ["•", "◦", "▪", "‣", "⁃"];
  
  /// Returns an ordered-list item's ordinal, defaulting omitted starts to one.
@@ -1867,10 +1867,12 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
  ) -> String {
      if ordered {
 -        let ordinal = ordered_list_ordinal(start, ix);
+-        if depth == 0 || start == Some(0) {
 +        let ordinal = ordered_list_ordinal(typed, start, ix);
-         if depth == 0 || start == Some(0) {
++        if depth == 0 || start == Some(0) || typed.is_some() {
              return format!("{ordinal}. ");
          }
+ 
 @@ -108,41 +112,44 @@
                      label.to_ascii_lowercase()
                  };
@@ -1939,7 +1941,7 @@ diff -ruN -x .cargo_vcs_info.json -x .cargo-ok -x Cargo.lock -x Cargo.toml.orig 
 +        assert_eq!(list_item_prefix(None, 0, None, false, 3), "‣ ");
 +        assert_eq!(list_item_prefix(None, 0, None, false, 4), "⁃ ");
 +        assert_eq!(list_item_prefix(Some(7), 2, Some(1), true, 0), "7. ");
-+        assert_eq!(list_item_prefix(Some(3), 1, Some(1), true, 1), "C. ");
++        assert_eq!(list_item_prefix(Some(3), 1, Some(1), true, 1), "3. ");
 +        assert_eq!(list_item_prefix(Some(1), 1, Some(0), true, 1), "1. ");
      }
  }

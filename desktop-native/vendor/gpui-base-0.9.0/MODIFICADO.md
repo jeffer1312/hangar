@@ -36,7 +36,7 @@ Mudanças, todas marcadas com "Modified for Hangar":
    encostava no parágrafo seguinte. Estilo sem margem desenha igual.
 
 5. `src/text/format/markdown.rs`, `src/text/node.rs` e `src/text/utils.rs`: lista numerada cujos números digitados
-   sempre crescem (`1. 3. 7.`) mostra esses números, em vez de início + posição. `BlockNode::ListItem` ganha
+   sempre crescem (`1. 3. 7.`) mostra esses números, em vez de início + posição, em dígitos também na sublista. `BlockNode::ListItem` ganha
    `value` (lido da fonte na posição do item por `list_item_number`), e `ordered_list_ordinal`/`list_item_prefix`
    recebem esse número; a tela, a cópia da seleção e o `to_markdown` passam pela mesma função. Lista com número
    repetido ou fora de ordem (`1. 1. 1.`, `1. 1. 2.`) segue a contagem do CommonMark; o parser HTML não lê
