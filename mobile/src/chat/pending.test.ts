@@ -34,6 +34,14 @@ describe('reconcilePending', () => {
     expect(res.map((x) => x.id)).toEqual(['p2']);
   });
 
+  test('na reconstrução, trecho de mensagem anterior ao envio não confirma; a que chegou depois confirma', () => {
+    const antes = incoming('lista\n- a\n- b\nfim', 'u0');
+    const pend = [{ id: 'p1', text: '- a\n- b', afterId: 'u0' }];
+    const order = new Map([['u0', 0], ['u1', 1]]);
+    expect(reconcilePending(pend, antes, order)).toEqual(pend);
+    expect(reconcilePending(pend, incoming('outra\n- a\n- b', 'u1'), order)).toEqual([]);
+  });
+
   test('legenda sem marcador casa com pending que tinha marcador', () => {
     const pend = [p('foto — 📎 imagem: /tmp/x.jpg')];
     expect(reconcilePending(pend, incoming('foto'))).toEqual([]);

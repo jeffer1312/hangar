@@ -12,7 +12,7 @@
   import LinkedChildrenBand from '../components/LinkedChildrenBand.svelte';
   import { copyText } from '../lib/clipboard';
   import { openInNewTab } from '../lib/openTab';
-  import { ecoEntregue } from '../lib/ecoPendente';
+  import { ecoEntregue, userMsgs } from '../lib/ecoPendente';
   import { desktop as janela } from '../lib/desktop.svelte';
   import CiteSelectionPill from '../components/CiteSelectionPill.svelte';
   import CiteReplyDialog from '../components/CiteReplyDialog.svelte';
@@ -428,7 +428,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   // Conexão aberta sem o evento `queue` no retrato (a sessão voltou ao Python): a lista antiga do servidor sai.
   let queueAbsentTimer: ReturnType<typeof setTimeout> | undefined;
   let screenEl: HTMLElement | undefined = $state();
-  let pending = $state<{ id: string; text: string; solid?: boolean }[]>([]);
+  let pending = $state<{ id: string; text: string; solid?: boolean; afterId?: string }[]>([]);
   // Draft do composer (bindable): o interrupt devolve a msg pendente aqui pra editar e reenviar.
   // PERSISTIDO por sessao no localStorage: o iOS mata/recarrega o PWA em background e o texto
   // digitado evaporava (ir buscar algo noutro app = perder o rascunho); trocar de sessao remonta
@@ -2980,7 +2980,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     // ("mandei e sumiu"). O dedup abaixo reconcilia contra o evento real em qualquer estado.
     const pendingId: string | null = `pending-${pendingSeq++}`;
     // Em idle a mensagem é digitada na hora: o eco atenuado parecia mensagem entrando na fila.
-    pending = [...pending, { id: pendingId, text, solid: currentState === 'idle' }];
+    pending = [...pending, { id: pendingId, text, solid: currentState === 'idle', afterId: userMsgs(events).at(-1)?.id }];
     try {
       if (steer && (sessionProvider === 'codex' || sessionHeadless)) {
         await steerSession(sessionName, text, sessionServer());
@@ -3013,10 +3013,9 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   // entao "msg1\nmsg2" casa tanto "msg1" quanto "msg2". Idempotente (length estabiliza).
   $effect(() => {
     if (pending.length === 0) return;
-    const userTexts = events.flatMap((e) => e.kind === 'user_msg' && e.text ? [e.text] : []);
     // Legenda vazia (imagem sem texto) nao casa por texto -> cai no solidify do idle, nao trava aqui.
-    const entregue = ecoEntregue(userTexts);
-    const next = pending.filter((p) => !entregue(p.text));
+    const entregue = ecoEntregue(userMsgs(events));
+    const next = pending.filter((p) => !entregue(p.text, p.afterId));
     if (next.length !== pending.length) pending = next;
   });
 

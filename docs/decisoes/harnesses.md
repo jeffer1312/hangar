@@ -1120,7 +1120,9 @@ por bloco, mas o eco local do app só saía com o texto inteiro igual ou igual a
 mensagem também conta como entregue quando aparece inteira, entre quebras de linha, no texto que
 chegou. A regra vale nas três cópias: `mobile/src/chat/pending.ts` (`reconcilePending`),
 `frontend/src/lib/ecoPendente.ts` (`ecoEntregue`, usado pelo `Chat.svelte`) e
-`desktop-native/src/delivery.rs` (`matches_real`).
+`desktop-native/src/delivery.rs` (`matches_real`). O trecho só confirma em mensagem que chegou depois
+do envio (`afterId`, o último `user_msg` visto ao enviar; no nativo, os ids de `begin`): sem isso,
+mandar de novo um pedaço de uma mensagem antiga apagaria o eco antes da entrega.
 
 ## Catálogo de comandos fora do arquivo da fila (10/11/2026)
 
