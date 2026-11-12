@@ -34,11 +34,16 @@ fn table() -> Vec<Case> {
     assert_eq!(rows.len(), 22);
     rows.into_iter()
         .map(|mut row| {
-            let expected = row["expected"].as_array().unwrap().iter().flat_map(|item| match item.as_str() {
-                Some("@base") => base.clone(),
-                Some(name) => vec![base.iter().find(|c| c["name"] == name).unwrap().clone()],
-                None => vec![item.clone()],
-            }).collect();
+            let expected = row["expected"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|item| match item.as_str() {
+                    Some("@base") => base.clone(),
+                    Some(name) => vec![base.iter().find(|c| c["name"] == name).unwrap().clone()],
+                    None => vec![item.clone()],
+                })
+                .collect();
             row["expected"] = Value::Array(expected);
             serde_json::from_value(row).unwrap()
         })
@@ -157,7 +162,10 @@ fn native_probe(root: &Path, mode: &str) -> hangar_server::commands::probe::Nati
     } else {
         "claude"
     });
-    crate::copy_executable(std::path::Path::new(env!("CARGO_BIN_EXE_hangar-commands-fixture")), &target);
+    crate::copy_executable(
+        std::path::Path::new(env!("CARGO_BIN_EXE_hangar-commands-fixture")),
+        &target,
+    );
     let mut env = std::collections::BTreeMap::from([
         ("PATH".into(), bin.to_string_lossy().into_owned()),
         ("HOME".into(), root.to_string_lossy().into_owned()),
@@ -179,9 +187,182 @@ fn native_probe(root: &Path, mode: &str) -> hangar_server::commands::probe::Nati
     ] {
         env.insert(name.into(), "fixture".into());
     }
-    hangar_server::commands::probe::NativeProbe {
-        accounts: AccountService::new(AccountEnvironment::from_map(env)),
+    hangar_server::commands::probe::NativeProbe::new(AccountService::new(
+        AccountEnvironment::from_map(env),
+    ))
+}
+
+#[tokio::test]
+async fn commands_terminal_probe_reads_the_session_project() {
+    use hangar_server::commands::{Context, Service};
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    let account = root.path().join("account");
+    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(&account).unwrap();
+    let plugin = root.path().join("session-plugin");
+    fs::create_dir_all(plugin.join("commands")).unwrap();
+    fs::write(
+        plugin.join("commands/help.md"),
+        "---\ndescription: Descrição da conta selecionada\n---\n",
+    )
+    .unwrap();
+    fs::create_dir_all(account.join("plugins")).unwrap();
+    fs::write(
+        account.join("plugins/installed_plugins.json"),
+        serde_json::json!({"plugins":{"pmedico@market":[{"installPath":plugin}]}}).to_string(),
+    )
+    .unwrap();
+    fs::create_dir_all(root.path().join(".hangar")).unwrap();
+    fs::write(
+        root.path().join(".hangar/plugin-dir"),
+        plugin.to_string_lossy().as_bytes(),
+    )
+    .unwrap();
+    fs::write(
+        project.join("commands-response.json"),
+        r#"[{"name":"pmedico:help"}]"#,
+    )
+    .unwrap();
+    let accounts = native_probe(root.path(), "context").accounts;
+    let service = Arc::new(Service::default());
+    let context = || Context {
+        cwd: Some(project.clone()),
+        config_dir: Some(account.clone()),
+        settings: serde_json::json!({"enabledPlugins":{"pmedico@market":true}}),
+        ..Default::default()
+    };
+    let commands = tokio::time::timeout(Duration::from_secs(10), service.list(accounts, context()))
+        .await
+        .expect("a consulta da CLI precisa terminar")
+        .unwrap();
+    assert!(
+        commands
+            .iter()
+            .any(|command| command.name == "pmedico:help"),
+        "o catálogo do Hangar omitiu o plugin que a CLI carrega no projeto"
+    );
+    assert_eq!(
+        commands
+            .iter()
+            .find(|command| command.name == "pmedico:help")
+            .unwrap()
+            .description
+            .as_deref(),
+        Some("Descrição da conta selecionada")
+    );
+    let record: Value =
+        serde_json::from_slice(&fs::read(root.path().join("record.json")).unwrap()).unwrap();
+    assert_eq!(record["cwd"], serde_json::json!(project));
+    assert_eq!(record["config_dir"], serde_json::json!(account));
+    let args: Vec<String> = serde_json::from_value(record["args"].clone()).unwrap();
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["--setting-sources", "user,project,local"])
+    );
+    assert!(
+        args.windows(2)
+            .any(|pair| pair[0] == "--plugin-dir" && Path::new(&pair[1]) == plugin)
+    );
+    let settings = args
+        .windows(2)
+        .find(|pair| pair[0] == "--settings")
+        .expect("escolhas da sessão");
+    assert_eq!(
+        serde_json::from_str::<Value>(&settings[1]).unwrap()["enabledPlugins"]["pmedico@market"],
+        true
+    );
+}
+
+#[tokio::test]
+async fn commands_first_menu_waits_and_reuses_each_project_catalog() {
+    use hangar_server::commands::{Context, Service};
+    let root = tempfile::tempdir().unwrap();
+    let account = root.path().join("account");
+    fs::create_dir_all(&account).unwrap();
+    let accounts = native_probe(root.path(), "context").accounts;
+    let service = Arc::new(Service::default());
+    for name in ["first", "second"] {
+        let project = root.path().join(name);
+        fs::create_dir_all(&project).unwrap();
+        fs::write(
+            project.join("commands-response.json"),
+            serde_json::json!([{"name":format!("{name}:help")}]).to_string(),
+        )
+        .unwrap();
+        let commands = tokio::time::timeout(
+            Duration::from_secs(10),
+            service.list(
+                accounts.clone(),
+                Context {
+                    cwd: Some(project.clone()),
+                    config_dir: Some(account.clone()),
+                    ..Default::default()
+                },
+            ),
+        )
+        .await
+        .expect("a primeira abertura precisa receber o catálogo da CLI")
+        .unwrap();
+        assert!(
+            commands
+                .iter()
+                .any(|command| command.name == format!("{name}:help"))
+        );
+        fs::remove_file(project.join("commands-response.json")).unwrap();
     }
+    let restarted = Arc::new(Service::default());
+    for name in ["first", "second"] {
+        let commands = restarted
+            .list(
+                accounts.clone(),
+                Context {
+                    cwd: Some(root.path().join(name)),
+                    config_dir: Some(account.clone()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            commands
+                .iter()
+                .any(|command| command.name == format!("{name}:help")),
+            "o cache do outro projeto não pode substituir {name}"
+        );
+        assert!(!commands.iter().any(|command| command.source == "plugin" && command.name != format!("{name}:help")));
+    }
+}
+
+#[test]
+fn commands_signature_tracks_session_choices_project_settings_and_restored_plugins() {
+    let root = tempfile::tempdir().unwrap();
+    let account = root.path().join("account");
+    let project = root.path().join("project");
+    let plugin = root.path().join("plugin");
+    fs::create_dir_all(account.join("plugins")).unwrap();
+    fs::create_dir_all(project.join(".claude")).unwrap();
+    fs::write(
+        account.join("plugins/installed_plugins.json"),
+        serde_json::json!({"plugins":{"pmedico@market":[{"installPath":plugin}]}}).to_string(),
+    )
+    .unwrap();
+    let mut probe = native_probe(root.path(), "context");
+    probe.cwd = Some(project.clone());
+    let before = probe.signature(Some(&account)).unwrap();
+    let key = probe.cache_key(Some(&account));
+    fs::write(
+        project.join(".claude/settings.local.json"),
+        r#"{"enabledPlugins":{"pmedico@market":true}}"#,
+    )
+    .unwrap();
+    let changed = probe.signature(Some(&account)).unwrap();
+    assert_ne!(before, changed);
+    fs::create_dir_all(&plugin).unwrap();
+    assert_ne!(changed, probe.signature(Some(&account)).unwrap());
+    probe.settings = serde_json::json!({"enabledPlugins":{"pmedico@market":false}});
+    assert_ne!(key, probe.cache_key(Some(&account)));
+    assert_ne!(probe.cache_key(Some(&account)), probe.cache_key(None));
 }
 
 #[tokio::test]

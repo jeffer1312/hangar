@@ -1,13 +1,37 @@
 //! Medição isolada do catálogo e prova do initialize com o Claude instalado.
 use hangar_server::{
     accounts::{AccountService, environment::AccountEnvironment},
-    commands::{Catalog, cache::Probe, probe::NativeProbe},
+    commands::{Catalog, Context, Service, cache::Probe, probe::NativeProbe},
 };
 use serde_json::json;
 use std::time::Instant;
 
 #[tokio::main]
 async fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).is_some_and(|arg| arg == "--context") {
+        let [_, _, home, account, cwd] = args.as_slice() else {
+            eprintln!("Uso: commands-probe --context <home> <conta> <projeto>");
+            std::process::exit(2);
+        };
+        let mut env: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+        env.insert("HOME".into(), home.clone());
+        env.insert("USERPROFILE".into(), home.clone());
+        let accounts = AccountService::new(AccountEnvironment::from_map(env));
+        let commands = std::sync::Arc::new(Service::default())
+            .list(
+                accounts,
+                Context {
+                    cwd: Some(cwd.into()),
+                    config_dir: Some(account.into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("o catálogo da sessão precisa estar disponível");
+        println!("{}", serde_json::to_string(&commands).unwrap());
+        return;
+    }
     if std::env::args().any(|arg| arg == "--native") {
         let account = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -15,9 +39,7 @@ async fn main() {
             r#"{"disableAllHooks":true}"#,
         )
         .unwrap();
-        let probe = NativeProbe {
-            accounts: AccountService::new(AccountEnvironment::capture()),
-        };
+        let probe = NativeProbe::new(AccountService::new(AccountEnvironment::capture()));
         let started = Instant::now();
         match probe.run(Some(account.path())).await {
             Ok(commands) => println!(

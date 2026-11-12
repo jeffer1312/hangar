@@ -77,23 +77,35 @@ impl Service {
             .entry(accounts.env.home.clone())
             .or_insert_with(|| Arc::new(Cache::new(&accounts.env.home)))
             .clone();
+        let config_dir = context
+            .config_dir
+            .clone()
+            .unwrap_or_else(|| accounts.env.claude_base.clone());
         let cli = if context.cli.is_empty() {
             cache
-                .get(
+                .get_ready(
                     Arc::new(NativeProbe {
                         accounts: accounts.clone(),
+                        // Pasta apagada: a consulta volta à pasta temporária em vez de falhar.
+                        cwd: context.cwd.clone().filter(|cwd| {
+                            let usable = cwd.is_dir();
+                            if !usable {
+                                tracing::warn!(
+                                    code = "claude_commands_cwd_unavailable",
+                                    "pasta da sessão inacessível; catálogo sem as configurações do projeto"
+                                );
+                            }
+                            usable
+                        }),
+                        settings: context.settings.clone(),
                     }),
+                    // A conta padrão roda sem CLAUDE_CONFIG_DIR, como o pane da sessão.
                     context.config_dir.clone(),
                 )
                 .await
         } else {
             Some(context.cli.clone())
         };
-        let home = accounts.env.home.clone();
-        let config_dir = context
-            .config_dir
-            .clone()
-            .unwrap_or_else(|| accounts.env.claude_base.clone());
         let service = self.clone();
         tokio::task::spawn_blocking(move || {
             let excluded: Vec<String> = if context.terminal {
@@ -119,8 +131,8 @@ impl Service {
                 .catalog
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .compose(
-                    &home,
+                .compose_for_config(
+                    &config_dir,
                     context.cwd.as_deref(),
                     cli.as_deref(),
                     &excluded,
