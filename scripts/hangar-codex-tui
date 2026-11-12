@@ -942,10 +942,8 @@ def main() -> int:
             escuta.join(timeout=5)
         erros.close()
         # So apaga o sidecar que e NOSSO: uma sessao recriada com o mesmo nome ja teria reescrito o
-        # arquivo, e apagar o dela deixaria a sessao viva invisivel pro app.
-        meta = codex_sessions.load(args.name)
-        if meta and meta.get("app_pid") == servidor.pid:
-            codex_sessions.delete(args.name)
+        # arquivo, e apagar o dela deixaria a sessao viva invisivel pro app. Conferido sob a trava.
+        codex_sessions.delete_if(args.name, app_pid=servidor.pid)
 
 
 if __name__ == "__main__":
