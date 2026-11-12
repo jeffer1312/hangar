@@ -62,7 +62,8 @@ pub fn run(mode: &str) -> ExitCode {
                 Ok(None)
             } else {
                 let tool = value["tool_name"].as_str().unwrap_or("");
-                if !["Bash", "Read", "Grep"].contains(&tool) {
+                // PowerShell: a tool de shell do Claude Code no Windows, quando ligada.
+                if !["Bash", "PowerShell", "Read", "Grep"].contains(&tool) {
                     return Ok(None);
                 }
                 let input = match value.get("tool_input") {
@@ -70,7 +71,7 @@ pub fn run(mode: &str) -> ExitCode {
                     Some(input) => input,
                     None => &Value::Null,
                 };
-                if tool != "Bash" {
+                if !["Bash", "PowerShell"].contains(&tool) {
                     let read = ["file_path", "path", "glob"].iter().any(|k| input[k].as_str().is_some_and(vault_path))
                         || (tool == "Grep" && input["path"].as_str().is_some_and(above_vault));
                     return Ok(read.then(|| VAULT_DENIED.to_owned()));
@@ -326,10 +327,7 @@ const VAULT_DENIED: &str = "BLOQUEADO: o arquivo do `vault_file` guarda uma senh
 /// A pasta do `vault_file` (`$XDG_RUNTIME_DIR/hangar/vault-files`, `%LOCALAPPDATA%\hangar\vault-files`)
 /// como parte de um caminho, absoluto ou relativo, com qualquer barra ou caixa.
 fn vault_path(text: &str) -> bool {
-    static VAULT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    VAULT
-        .get_or_init(|| regex::Regex::new(r#"(?i)(^|[/\\\s'"=<])vault-files([/\\\s'"*]|$)"#).unwrap())
-        .is_match(text)
+    vault_hits(text) > 0
 }
 
 /// `Grep` num caminho até dois níveis acima da pasta (`hangar` ou a pasta de execução) a varre inteira.
@@ -351,26 +349,54 @@ const READERS: &[&str] = &[
 ];
 /// Leitores cujo primeiro argumento é o padrão de busca, que pode citar a pasta sem ler nada.
 const PATTERN_FIRST: &[&str] = &["grep", "egrep", "rg", "sed", "awk", "select-string", "sls"];
+/// Opções desses leitores cujo valor é um arquivo lido (`-Path`, `grep -f`), não um padrão.
+const FILE_OPTIONS: &[&str] = &["-path", "-literalpath", "-f", "--file", "-filepath"];
+/// Shells cujo argumento é outro comando; os dois guardas entram neles.
+const SHELLS: &[&str] = &["sh", "bash", "zsh", "dash", "ksh", "ash", "busybox", "eval"];
+
+fn vault_hits(text: &str) -> usize {
+    static VAULT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    VAULT
+        .get_or_init(|| regex::Regex::new(r#"(?i)(^|[/\\\s'"=<])vault-files([/\\\s'"*]|$)"#).unwrap())
+        .find_iter(text)
+        .count()
+}
+
+/// O comando que um shell recebe, cru (barras invertidas inteiras), sem o nome nem as opções.
+fn shell_script(segment: &str) -> Option<String> {
+    static SCRIPT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let script = SCRIPT.get_or_init(|| {
+        regex::Regex::new(r#"(?is)^\s*(?:\S*[/\\])?(?:sh|bash|zsh|dash|ksh|ash|busybox|eval|powershell|pwsh|cmd)(?:\.exe)?(?:\s+[-/]\S*)*\s+(.*)$"#).unwrap()
+    });
+    let rest = script.captures(segment)?.get(1)?.as_str().trim();
+    let unquoted = ['\'', '"'].iter().find_map(|q| rest.strip_prefix(*q).and_then(|r| r.strip_suffix(*q)));
+    Some(unquoted.unwrap_or(rest).to_owned())
+}
 
 /// Ler o arquivo, não usá-lo: o caminho como argumento de outro programa passa.
 fn reads_vault(command: &str, depth: u8) -> bool {
     if !vault_path(command) {
         return false;
     }
-    // .NET pelo PowerShell (`[IO.File]::ReadAllText`, `ReadAllBytes`, `ReadAllLines`).
-    if command.to_ascii_lowercase().contains("::readall") {
+    // .NET pelo PowerShell (`[IO.File]::ReadAllText`, `ReadLines`, `OpenText`, `StreamReader`…).
+    let lower = command.to_ascii_lowercase();
+    if ["::readall", "::readlines", "::opentext", "::openread", "streamreader"].iter().any(|m| lower.contains(m)) {
         return true;
     }
+    // `segments` para no primeiro `<<` (o corpo de um heredoc não é comando); aqui o que vem depois também conta.
+    let command = command.replace("<<", "  ");
     static REDIRECT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let redirect = REDIRECT.get_or_init(|| regex::Regex::new(r#"(?i)<\s*['"]?[^\s'"]*vault-files"#).unwrap());
     let mut inside = false;
-    segments(command).iter().any(|segment| {
+    segments(&command).iter().any(|segment| {
         let words = tokens(segment);
         let (name, args) = head(&words);
         let name = name.rsplit(['/', '\\']).next().unwrap_or(name).to_ascii_lowercase();
         let name = name.strip_suffix(".exe").unwrap_or(&name);
-        if ["sh", "bash", "zsh", "dash", "ksh", "ash", "busybox", "eval", "powershell", "pwsh"].contains(&name) {
-            return depth < 3 && reads_vault(&args.join(" "), depth + 1);
+        if SHELLS.contains(&name) || ["powershell", "pwsh", "cmd"].contains(&name) {
+            // O texto cru guarda o caminho do Windows, que `tokens` desfaz; os pedaços pegam o shell atrás de `sudo`/`env`.
+            return depth < 3
+                && (shell_script(segment).is_some_and(|s| reads_vault(&s, depth + 1)) || reads_vault(&args.join(" "), depth + 1));
         }
         // Entrar na pasta faz `cat *` ler a senha sem citar o caminho.
         if ["cd", "pushd", "set-location", "sl", "push-location"].contains(&name) {
@@ -381,9 +407,10 @@ fn reads_vault(command: &str, depth: u8) -> bool {
             return true;
         }
         if PATTERN_FIRST.contains(&name) {
-            let mut operands = args.iter().filter(|a| !a.starts_with('-'));
-            operands.next();
-            return inside || operands.any(|a| vault_path(a));
+            let file_option = args.windows(2).any(|w| FILE_OPTIONS.contains(&w[0].to_ascii_lowercase().as_str()) && w[1].to_ascii_lowercase().contains("vault-files"));
+            // Mais citações da pasta no texto cru do que no padrão: alguma é arquivo lido.
+            let pattern = args.iter().find(|a| !a.starts_with('-')).map_or(0, |p| vault_hits(p));
+            return inside || file_option || vault_hits(segment) > pattern;
         }
         READERS.contains(&name) && (inside || vault_path(segment))
     })
@@ -393,9 +420,7 @@ fn dangerous(command: &str, depth: u8) -> Option<String> {
     for segment in segments(command) {
         let words = tokens(&segment);
         let (name, args) = head(&words);
-        if ["sh", "bash", "zsh", "dash", "ksh", "ash", "busybox", "eval"].contains(&name)
-            && depth < 3
-        {
+        if SHELLS.contains(&name) && depth < 3 {
             let script = if name == "eval" {
                 Some(args.join(" "))
             } else {

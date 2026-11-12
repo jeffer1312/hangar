@@ -317,12 +317,12 @@ fn sync_report_selected(
             if enabled("guard_tmux.py") {
                 let command = crate::provider_hooks::command("guard-tmux")?;
                 changed |= sync_hook(&mut data, "PreToolUse", None, Some("Bash"), "guard_tmux.py");
-                // Read e Grep: o guarda também barra a leitura do arquivo do `vault_file`.
+                // Read, Grep e PowerShell: o guarda também barra a leitura do arquivo do `vault_file`.
                 changed |= sync_hook(
                     &mut data,
                     "PreToolUse",
                     Some(&command),
-                    Some("Bash|Read|Grep"),
+                    Some("Bash|PowerShell|Read|Grep"),
                     "guard-tmux",
                 );
             }
