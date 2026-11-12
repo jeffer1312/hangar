@@ -1373,5 +1373,3 @@ def test_input_codex_exception_do_adapter_vira_envelope(api_client):
     d = r.json()["detail"]
     assert d["code"] == "erro_envio_falhou"
     assert d["params"]["erro"] == "adapter broken"
-
-

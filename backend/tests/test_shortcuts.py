@@ -78,5 +78,3 @@ def test_shell_only_fields_are_validated():
     with pytest.raises(ValueError, match="runs_in"):
         rc.validate_shortcut_item(
             {"id": "y", "type": "send_text", "label": "L", "text": "t", "runs_in": "hangar"}, "w")
-
-

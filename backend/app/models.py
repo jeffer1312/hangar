@@ -585,7 +585,3 @@ class CostReport(BaseModel):
     usd_brl: Optional[float] = None
     combos: list[ComboRow] = []
     sessoes: list[SessaoCusto] = []
-
-
-
-
