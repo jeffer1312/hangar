@@ -116,7 +116,11 @@ async fn other(ports: HashSet<i64>) -> BTreeMap<i64, (bool, Option<String>)> {
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
         .unwrap_or_default();
     let mut system = sysinfo::System::new();
-    system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+    system.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::All,
+        true,
+        sysinfo::ProcessRefreshKind::nothing().with_cwd(sysinfo::UpdateKind::Always),
+    );
     for port in ports {
         let mut found = None;
         if cfg!(windows) {

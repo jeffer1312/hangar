@@ -189,9 +189,9 @@ async fn serve_policy(mut state: hangar_server::routes::AppState, home: &std::pa
     (owner_addr, Policy { guest:guest_addr, login, share })
 }
 
-// A costura com o Python real não sobe o upstream falso nem o servidor de convidados.
+// A prova com tmux real usa metadados fixos e mantém o transporte dentro do Rust.
 #[cfg(target_os = "linux")]
-pub async fn real_python_fixture(
+pub async fn real_terminal_fixture(
     home: &std::path::Path,
     metadata_mux: &std::path::Path,
     terminal_mux: &std::path::Path,
@@ -213,7 +213,7 @@ pub async fn real_python_fixture(
     state.list = Arc::new(hangar_server::list::bridge::ListBridge::new(env,
         hangar_server::list::facts::FactsClient::new(upstream, SECRET.into())));
     let runtime = Arc::new(hangar_server::runtime::gateway::RuntimeRegistry::new(
-        upstream, SECRET.into(), "s01-real-python".into()).with_codex_environment(state.accounts.env.clone()));
+        upstream, SECRET.into(), "s01-real-terminal".into()).with_codex_environment(state.accounts.env.clone()));
     assert!(state.state.runtime.set(runtime.clone()).is_ok());
     state.side.locate = Arc::new(hangar_server::locate::ListLocate { list:state.list.clone() });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
