@@ -81,7 +81,7 @@ pub fn run(mode: &str) -> ExitCode {
                     return Ok(None);
                 }
                 let command = command.as_str().ok_or("command_not_string")?;
-                if reads_vault(command, 0) {
+                if reads_vault(command, 0, tool == "PowerShell") {
                     return Ok(Some(VAULT_DENIED.to_owned()));
                 }
                 Ok(dangerous(command, 0).map(|reason| format!(
@@ -362,41 +362,95 @@ fn vault_hits(text: &str) -> usize {
         .count()
 }
 
-/// O comando que um shell recebe, cru (barras invertidas inteiras), sem o nome nem as opções.
-fn shell_script(segment: &str) -> Option<String> {
-    static SCRIPT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let script = SCRIPT.get_or_init(|| {
-        regex::Regex::new(r#"(?is)^\s*(?:\S*[/\\])?(?:sh|bash|zsh|dash|ksh|ash|busybox|eval|powershell|pwsh|cmd)(?:\.exe)?(?:\s+[-/]\S*)*\s+(.*)$"#).unwrap()
-    });
-    let rest = script.captures(segment)?.get(1)?.as_str().trim();
-    let unquoted = ['\'', '"'].iter().find_map(|q| rest.strip_prefix(*q).and_then(|r| r.strip_suffix(*q)));
-    Some(unquoted.unwrap_or(rest).to_owned())
+/// O programa do segmento, sem pasta, caixa nem `.exe`.
+fn program(segment: &str) -> String {
+    let words = tokens(segment);
+    let (name, _) = head(&words);
+    let name = name.rsplit(['/', '\\']).next().unwrap_or(name).to_ascii_lowercase();
+    name.strip_suffix(".exe").map(str::to_owned).unwrap_or(name)
 }
 
-/// Ler o arquivo, não usá-lo: o caminho como argumento de outro programa passa.
-fn reads_vault(command: &str, depth: u8) -> bool {
+fn is_shell(name: &str) -> bool {
+    SHELLS.contains(&name) || ["powershell", "pwsh", "cmd"].contains(&name)
+}
+
+/// O corpo de um heredoc é texto (mensagem, arquivo), salvo quando vai a um shell (`bash <<EOF`): fora
+/// disso sai, e o que vem depois do terminador continua conferido. Here-string (`<<<`) é redirecionamento.
+fn strip_heredocs(command: &str) -> String {
+    static START: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let start_re = START.get_or_init(|| regex::Regex::new(r#"<<(-?)\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?"#).unwrap());
+    let mut text = command.replace("<<<", " < ");
+    let mut from = 0;
+    while let Some(caps) = start_re.captures(&text[from..]) {
+        let whole = caps.get(0).unwrap();
+        let (start, end) = (from + whole.start(), from + whole.end());
+        let (indented, word) = (!caps[1].is_empty(), caps[2].to_owned());
+        let to_shell = segments(&text[..start]).last().is_some_and(|s| is_shell(&program(s)));
+        let body = text[end..].find('\n').map_or(text.len(), |i| end + i + 1);
+        let (mut pos, mut after) = (body, text.len());
+        while pos < text.len() {
+            let line_end = text[pos..].find('\n').map_or(text.len(), |i| pos + i);
+            let line = &text[pos..line_end];
+            if (if indented { line.trim_start_matches('\t') } else { line }) == word {
+                after = line_end;
+                break;
+            }
+            pos = line_end + 1;
+        }
+        if to_shell {
+            text.replace_range(start..end, &" ".repeat(end - start));
+            from = end;
+        } else {
+            let marker_line = text[end..body].to_owned();
+            text.replace_range(start..after, &marker_line);
+            from = start + marker_line.len();
+        }
+    }
+    text
+}
+
+/// O comando que um shell recebe, cru (barras invertidas inteiras): o que vem depois de `-c`, `-Command`,
+/// `-File`, `/c` ou `/k`, mesmo com opções de valor antes (`-ExecutionPolicy Bypass`, `-o pipefail`).
+fn shell_script(segment: &str) -> Option<String> {
+    static SHELL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static FLAG: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let shell = SHELL.get_or_init(|| {
+        regex::Regex::new(r#"(?is)^\s*(?:\S*[/\\])?(sh|bash|zsh|dash|ksh|ash|busybox|eval|powershell|pwsh|cmd)(?:\.exe)?(\s.*)?$"#).unwrap()
+    });
+    let flag = FLAG.get_or_init(|| regex::Regex::new(r#"(?is)^.*?\s(?:-[a-z]*c|-command|-file|/c|/k)\s+(.*)$"#).unwrap());
+    let caps = shell.captures(segment)?;
+    let rest = caps.get(2).map_or("", |m| m.as_str());
+    let script = if caps[1].eq_ignore_ascii_case("eval") { rest.trim() } else { flag.captures(rest)?.get(1)?.as_str().trim() };
+    let unquoted = ['\'', '"'].iter().find_map(|q| script.strip_prefix(*q).and_then(|r| r.strip_suffix(*q)));
+    Some(unquoted.unwrap_or(script).to_owned())
+}
+
+/// Ler o arquivo, não usá-lo: o caminho como argumento de outro programa passa. `pwsh`: o texto é
+/// PowerShell (a tool PowerShell ou o script de um `powershell -c`).
+fn reads_vault(command: &str, depth: u8, pwsh: bool) -> bool {
     if !vault_path(command) {
         return false;
     }
-    // .NET pelo PowerShell (`[IO.File]::ReadAllText`, `ReadLines`, `OpenText`, `StreamReader`…).
+    // .NET (`[IO.File]::ReadAllText`, `ReadLines`, `OpenText`, `StreamReader`…); fora do PowerShell é só texto.
     let lower = command.to_ascii_lowercase();
-    if ["::readall", "::readlines", "::opentext", "::openread", "streamreader"].iter().any(|m| lower.contains(m)) {
+    if pwsh && ["::readall", "::readlines", "::opentext", "::openread", "streamreader"].iter().any(|m| lower.contains(m)) {
         return true;
     }
-    // `segments` para no primeiro `<<` (o corpo de um heredoc não é comando); aqui o que vem depois também conta.
-    let command = command.replace("<<", "  ");
+    let command = strip_heredocs(command);
     static REDIRECT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let redirect = REDIRECT.get_or_init(|| regex::Regex::new(r#"(?i)<\s*['"]?[^\s'"]*vault-files"#).unwrap());
     let mut inside = false;
     segments(&command).iter().any(|segment| {
         let words = tokens(segment);
-        let (name, args) = head(&words);
-        let name = name.rsplit(['/', '\\']).next().unwrap_or(name).to_ascii_lowercase();
-        let name = name.strip_suffix(".exe").unwrap_or(&name);
-        if SHELLS.contains(&name) || ["powershell", "pwsh", "cmd"].contains(&name) {
+        let (_, args) = head(&words);
+        let name = program(segment);
+        let name = name.as_str();
+        if is_shell(name) {
             // O texto cru guarda o caminho do Windows, que `tokens` desfaz; os pedaços pegam o shell atrás de `sudo`/`env`.
+            let inner = ["powershell", "pwsh"].contains(&name);
             return depth < 3
-                && (shell_script(segment).is_some_and(|s| reads_vault(&s, depth + 1)) || reads_vault(&args.join(" "), depth + 1));
+                && (shell_script(segment).is_some_and(|s| reads_vault(&s, depth + 1, inner))
+                    || reads_vault(&args.join(" "), depth + 1, inner));
         }
         // Entrar na pasta faz `cat *` ler a senha sem citar o caminho.
         if ["cd", "pushd", "set-location", "sl", "push-location"].contains(&name) {
