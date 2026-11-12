@@ -1103,10 +1103,12 @@ pub(crate) fn owner_gate(st: &AppState, peer: SocketAddr, req: &Request)
 /// token, porque o 404 do Python responderia antes de autenticar.
 pub(crate) async fn refuse_without_python(st: &AppState, peer: SocketAddr, req: Request, who: Option<&Caller>) -> Response {
     let headers = req.headers().clone();
-    let mut response = match who {
-        Some(Caller::Guest(_)) => hangar_core::http::detail(StatusCode::FORBIDDEN, "erro_fora_do_convite",
+    // Convidado já decidido por um porteiro não errou token: recusar sem contar falha.
+    let guest = matches!(who.or(crate::share::caller::caller(&req)), Some(Caller::Guest(_)));
+    let mut response = match guest {
+        true => hangar_core::http::detail(StatusCode::FORBIDDEN, "erro_fora_do_convite",
             "fora da sessão compartilhada", serde_json::json!({})),
-        _ => match owner_gate(st, peer, &req).await {
+        false => match owner_gate(st, peer, &req).await {
             Err(response) => response,
             Ok(fwd) => return pass(st, req, &fwd).await,
         },
