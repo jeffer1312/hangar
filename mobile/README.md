@@ -42,11 +42,11 @@ o hook `eas-build-post-install` compila as duas antes do bundle; sem a do core o
 |---|---|---|
 | `preview` | uso diário: APK Android e iOS ad hoc, instalação interna, sem Metro | caminho de instalação deste README |
 | `development` | `developmentClient: true`, carrega o JS do Metro | iPhone sem conta paga: ver "iPhone com Apple ID gratuito" |
-| `production` | loja, canal OTA `production` | sem `eas submit` ou publicação em loja |
+| `production` | loja (Android: teste fechado), canal OTA `preview` | `eas submit --platform android --id <build>` envia à faixa `alpha` com a chave em `~/.config/hangar/play-service-account.json` (conta de serviço `eas-submit` do projeto Google Cloud `hangar-play`) |
 
 ## Atualizações OTA (EAS Update)
 
-O Release do GitHub e os builds EAS `preview` recebem o canal `preview`; EAS `production` usa `production`.
+O Release do GitHub e os builds EAS `preview` e `production` recebem o canal `preview`.
 Instale primeiro um binário novo com `expo-updates`; o app já instalado sem ele não recebe OTA.
 Publique a partir de uma árvore com uma instalação só, a mesma do workflow Mobile OTA:
 `rm -rf mobile/node_modules` e, na raiz, `npm ci --workspace=@hangar/core --workspace=mobile`.
