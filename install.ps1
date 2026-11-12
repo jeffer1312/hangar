@@ -2498,6 +2498,8 @@ if (-not $bash) {
 
     # Atalhos em maquina migrada vao pelo current do perfil: o caminho real da versao seria podado.
     $raizAtalhos = if (Test-Path -LiteralPath (Join-Path $HOME '.hangar\current')) { '%USERPROFILE%\.hangar\current' } else { $raiz }
+    # A mesma raiz na forma /c/... dos atalhos do Git Bash.
+    $rotaAtalhos = $(if (Test-Path -LiteralPath (Join-Path $HOME '.hangar\current')) { Join-Path $HOME '.hangar\current' } else { $raiz }) -replace '\\', '/' -replace '^([A-Za-z]):', '/$1'
     # (1b) hangar-python.cmd: gemeo do atalho sem extensao que o install-hangar-send.sh grava. Mesma
     # regra do backend/app/install_root.py: raiz = ~\.hangar\current (pacote) ou esta copia; nela o
     # Python embutido, senao o venv; sem nenhum, o Python real achado acima.
@@ -2529,7 +2531,7 @@ if (-not $bash) {
     # alcancado - medido, o install-hangar-send.sh falhava mesmo com o atalho correto no lugar.
     $conteudo = "@echo off`r`n" +
                 "set `"PATH=%USERPROFILE%\.local\bin;%PATH%`"`r`n" +
-                "`"$bash`" `"$raiz\scripts\hangar-send`" %*`r`n"
+                "`"$bash`" `"$raizAtalhos\scripts\hangar-send`" %*`r`n"
     if (Escrever-Lancador $lancador $conteudo 'cmd') { Ok "lancador hangar-send.cmd criado em $binUsuario" }
     else { Ok 'lancador hangar-send.cmd ja atualizado' }
 
@@ -2574,7 +2576,7 @@ if (-not $bash) {
     $lancadorPreview = Join-Path $binUsuario 'hangar-preview.cmd'
     $conteudoPreview = "@echo off`r`n" +
                        "set `"PATH=%USERPROFILE%\.local\bin;%PATH%`"`r`n" +
-                       "node `"$raiz\scripts\hangar-preview`" %*`r`n"
+                       "node `"$raizAtalhos\scripts\hangar-preview`" %*`r`n"
     if (Escrever-Lancador $lancadorPreview $conteudoPreview 'cmd') { Ok "lancador hangar-preview.cmd criado em $binUsuario" }
     else { Ok 'lancador hangar-preview.cmd ja atualizado' }
 
@@ -2582,7 +2584,7 @@ if (-not $bash) {
     $lancadorFolha = Join-Path $binUsuario 'folha.cmd'
     $conteudoFolha = "@echo off`r`n" +
                      "set `"PATH=%USERPROFILE%\.local\bin;%PATH%`"`r`n" +
-                     "node `"$raiz\scripts\folha`" %*`r`n"
+                     "node `"$raizAtalhos\scripts\folha`" %*`r`n"
     if (Escrever-Lancador $lancadorFolha $conteudoFolha 'cmd') { Ok "lancador folha.cmd criado em $binUsuario" }
     else { Ok 'lancador folha.cmd ja atualizado' }
 
@@ -2592,7 +2594,7 @@ if (-not $bash) {
     $lancadorMcp = Join-Path $binUsuario 'hangar-mcp-headers.cmd'
     $conteudoMcp = "@echo off`r`n" +
                    "set `"PATH=%USERPROFILE%\.local\bin;%PATH%`"`r`n" +
-                   "`"$bash`" `"$raiz\scripts\hangar-mcp-headers.sh`" %*`r`n"
+                   "`"$bash`" `"$raizAtalhos\scripts\hangar-mcp-headers.sh`" %*`r`n"
     if (Escrever-Lancador $lancadorMcp $conteudoMcp 'cmd') { Ok "lancador hangar-mcp-headers.cmd criado em $binUsuario" }
     else { Ok 'lancador hangar-mcp-headers.cmd ja atualizado' }
 
@@ -2607,9 +2609,6 @@ if (-not $bash) {
     # procura `backend/.venv/bin/python` - layout POSIX, inexistente no Windows -, entao quem
     # escolhe o interpretador tem de ser este instalador. O `hangar-codex` fica no python do
     # sistema: ele so importa stdlib.
-    # `$rota` (forma /c/... do repo) so e calculada mais abaixo, no trecho do hangar-send —
-    # usar ela aqui gerava shim apontando pra `/scripts/...`. Calculo a minha.
-    $rotaRepo = ($raiz -replace '\\', '/') -replace '^([A-Za-z]):', '/$1'
     $pyTui = Join-Path $raiz 'backend\.venv\Scripts\python.exe'
     $argTui = ''
     if (-not (Test-Path $pyTui)) { $pyTui = $pyExe; $argTui = $arg }
@@ -2622,7 +2621,7 @@ if (-not $bash) {
             $cmdPath = Join-Path $binUsuario "$nome.cmd"
             $corpo = "@echo off`r`n" +
                      "set `"PATH=%USERPROFILE%\.local\bin;%PATH%`"`r`n" +
-                     "`"$py`"$a `"$raiz\scripts\$nome`" %*`r`n"
+                     "`"$py`"$a `"$raizAtalhos\scripts\$nome`" %*`r`n"
             if (Escrever-Lancador $cmdPath $corpo 'cmd') { Ok "lancador $nome.cmd criado em $binUsuario" }
             else { Ok "lancador $nome.cmd ja atualizado" }
             # Shim sh pro Git Bash, mesma razao do hangar-send/hangar-preview: o `ln -s` de la
@@ -2634,7 +2633,7 @@ if (-not $bash) {
             $corpoSh = "#!/bin/sh`n" +
                        "# Gerado pelo instalador do hangar (install.ps1 / install-hangar-send.sh).`n" +
                        "PATH='$binMsys':`$PATH; export PATH`n" +
-                       "exec '$pyMsysTui'$a '$rotaRepo/scripts/$nome' `"`$@`"`n"
+                       "exec '$pyMsysTui'$a '$rotaAtalhos/scripts/$nome' `"`$@`"`n"
             if (Escrever-Lancador $shPath $corpoSh 'sh') { Ok "$nome do ~/.local/bin aponta pro script do repo" }
             else { Ok "$nome do ~/.local/bin ja atualizado" }
         }
@@ -2687,7 +2686,7 @@ if (-not $bash) {
         $corpoCp = "#!/bin/sh`n" +
                    "# Gerado pelo instalador do hangar (install.ps1 / install-hangar-send.sh).`n" +
                    "PATH='$binMsys':`$PATH; export PATH`n" +
-                   "exec '$rota/scripts/hangar-send' `"`$@`"`n"
+                   "exec '$rotaAtalhos/scripts/hangar-send' `"`$@`"`n"
         if (Escrever-Lancador $cpSendSh $corpoCp 'sh') {
             Ok 'hangar-send do ~/.local/bin aponta pro script do repo'
         }
@@ -2700,7 +2699,7 @@ if (-not $bash) {
         $corpoPreview = "#!/bin/sh`n" +
                         "# Gerado pelo instalador do hangar (install.ps1 / install-hangar-send.sh).`n" +
                         "PATH='$binMsys':`$PATH; export PATH`n" +
-                        "exec node '$rota/scripts/hangar-preview' `"`$@`"`n"
+                        "exec node '$rotaAtalhos/scripts/hangar-preview' `"`$@`"`n"
         if (Escrever-Lancador $cpPreviewSh $corpoPreview 'sh') {
             Ok 'hangar-preview do ~/.local/bin aponta pro script do repo'
         }
