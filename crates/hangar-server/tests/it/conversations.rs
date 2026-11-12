@@ -216,7 +216,7 @@ async fn reading_without_transcript_keeps_the_conversation() {
 }
 
 #[tokio::test]
-async fn provider_outside_rust_resets_and_next_connection_goes_to_python() {
+async fn provider_outside_rust_resets_and_next_connection_is_not_found() {
     let (_dir, jsonl, _offs, fake, srv) = setup(0..1, "sess-f").await;
     let mut a = sse(open_events(srv, "s", "", &[]).await);
     messages(&mut a, 1).await;
@@ -227,8 +227,11 @@ async fn provider_outside_rust_resets_and_next_connection_goes_to_python() {
     next_named(&mut a, "reset").await;
     assert!(stream_ends(&mut a).await);
 
+    // O Python não tem `/events`: provedor que o Rust não liga é sessão que não existe.
     let r = open_events(srv, "s", "", &[]).await;
-    assert_eq!(r.text().await.unwrap(), "from-python");
+    assert_eq!(r.status(), 404);
+    assert_eq!(r.json::<Value>().await.unwrap()["detail"]["code"], "erro_sessao_inexistente");
+    assert_eq!(fake.hits_to("/api/sessions/s/events"), 0);
 }
 
 #[tokio::test]
