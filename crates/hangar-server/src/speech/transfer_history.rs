@@ -795,20 +795,21 @@ pub(crate) fn baton_window(row: &SessionRow, home: &Path, claude: &Path) -> Resu
 
 /// Associação da sessão ao histórico importado, resolvida uma vez por lote de leitura.
 #[derive(Clone)]
-pub(crate) struct LiveContext { home:std::path::PathBuf, name:String, cache:Arc<Mutex<Option<(PathBuf,(u64,u64),Option<Arc<LiveFilter>>)>>> }
+pub(crate) struct LiveContext { home:std::path::PathBuf, name:String, cache:Arc<Mutex<Option<(PathBuf,(u64,u64),Arc<LiveFilter>)>>> }
 
 pub(crate) struct LiveFilter { id:String, offset:u64, imported:HashSet<String> }
 impl LiveContext {
     pub(crate) fn new(home:PathBuf,name:String)->Self { Self {home,name,cache:Default::default()} }
     /// Resolvido uma vez por arquivo de rollout: o registro concluído e o prefixo importado não mudam
-    /// enquanto o arquivo só cresce. Arquivo substituído ou encolhido refaz; erro não fica guardado.
+    /// enquanto o arquivo só cresce. Arquivo substituído ou encolhido refaz. Só o filtro achado fica
+    /// guardado: a ausência pode ser o sidecar ou o registro ainda não gravados.
     pub(crate) fn filter(&self,path:&Path)->io::Result<Option<Arc<LiveFilter>>> {
         let meta=std::fs::metadata(path)?;
         let file=file_id(&meta);
         if let Some(file)=file && let Some((cached,id,filter))=&*self.cache.lock().unwrap_or_else(|e|e.into_inner())
-            && cached==path && *id==file && filter.as_ref().is_none_or(|f|meta.len()>=f.offset) {return Ok(filter.clone());}
+            && cached==path && *id==file && meta.len()>=filter.offset {return Ok(Some(filter.clone()));}
         let filter=self.resolve(path)?.map(Arc::new);
-        if let Some(file)=file {*self.cache.lock().unwrap_or_else(|e|e.into_inner())=Some((path.to_owned(),file,filter.clone()));}
+        if let (Some(file),Some(found))=(file,&filter) {*self.cache.lock().unwrap_or_else(|e|e.into_inner())=Some((path.to_owned(),file,found.clone()));}
         Ok(filter)
     }
     fn resolve(&self,path:&Path)->io::Result<Option<LiveFilter>> {

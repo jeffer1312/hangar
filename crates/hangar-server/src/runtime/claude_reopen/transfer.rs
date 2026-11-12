@@ -246,10 +246,11 @@ impl ImportClient {
         };
         if tree.attach(&child).is_err() {
             let _ = child.start_kill();
-            let _ = child.wait().await;
-            private["import_launching"] = json!(false);
-            private["import_stopped"] = json!(true);
-            store.write_runtime(&record.id, &private)?;
+            if child.wait().await.is_ok() {
+                private["import_launching"] = json!(false);
+                private["import_stopped"] = json!(true);
+                store.write_runtime(&record.id, &private)?;
+            }
             return Err(error("session_transfer_native_unavailable"));
         }
         let saved = match child.id() {
@@ -267,7 +268,9 @@ impl ImportClient {
             if child.wait().await.is_ok() {
                 private["import_launching"] = json!(false);
                 private["import_stopped"] = json!(true);
-                store.write_runtime(&record.id, &private)?;
+                if let Err(write) = store.write_runtime(&record.id, &private) {
+                    tracing::warn!(transfer=%record.id,code=%write.code,"importador parado sem registro gravado");
+                }
             }
             return Err(e);
         }

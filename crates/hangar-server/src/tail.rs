@@ -115,7 +115,7 @@ fn read_frames_before(
             match filter.includes(&line,at) {
                 Ok(false)=>{at+=n as u64;continue;},
                 Ok(true)=>{},
-                Err(_)=>tracing::warn!(key,offset=at,"linha do rollout transferido ilegível; fica com o parser"),
+                Err(_)=>tracing::warn!(key,offset=at,code="transfer_active_line_invalid","linha do rollout transferido ilegível; fica com o parser"),
             }
         }
         // Pânico numa linha só pula a linha: sem isto o leitor compartilhado morria e os
