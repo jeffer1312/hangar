@@ -1,6 +1,7 @@
-import { attachmentCaption, type ChatEvent } from '@hangar/core';
+import { attachmentCaption } from './covers';
+import type { ChatEvent } from './types';
 
-export function userMsgs(events: ChatEvent[]): { id: string; text: string }[] {
+export function userMessages(events: ChatEvent[]): { id: string; text: string }[] {
   return events.flatMap((e) => e.kind === 'user_msg' && e.text ? [{ id: e.id, text: e.text }] : []);
 }
 
@@ -9,7 +10,7 @@ export function userMsgs(events: ChatEvent[]): { id: string; text: string }[] {
  * `afterId` é o último `user_msg` do transcript visto no envio: o trecho de várias linhas só confirma em mensagem que chegou depois dele.
  * Ausente da lista, a janela já cortou o começo e tudo o que sobrou é mais novo.
  */
-export function ecoEntregue(userMsgs: { id: string; text: string }[]): (sent: string, afterId?: string) => boolean {
+export function pendingEchoDelivered(userMsgs: { id: string; text: string }[]): (sent: string, afterId?: string) => boolean {
   const forms = new Set<string>();
   const blocks: { at: number; text: string }[] = [];
   const position = new Map<string, number>();

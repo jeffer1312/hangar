@@ -12,13 +12,12 @@
   import LinkedChildrenBand from '../components/LinkedChildrenBand.svelte';
   import { copyText } from '../lib/clipboard';
   import { openInNewTab } from '../lib/openTab';
-  import { ecoEntregue, userMsgs } from '../lib/ecoPendente';
   import { desktop as janela } from '../lib/desktop.svelte';
   import CiteSelectionPill from '../components/CiteSelectionPill.svelte';
   import CiteReplyDialog from '../components/CiteReplyDialog.svelte';
   import { citeDialog } from '../lib/citeDialog.svelte';
   import { contextRefsKey } from '../lib/contextRefsDraft.svelte';
-  import { composeWithContextRefs, splitContextRefs, parseCodexOutput, type ContextRef } from '@hangar/core';
+  import { composeWithContextRefs, pendingEchoDelivered, splitContextRefs, parseCodexOutput, userMessages, type ContextRef } from '@hangar/core';
   import { codexSubagentActivityKey, codexSubagentState, projectCodexSubagent } from '@hangar/core';
   import { itemModsCelular, modsCelular, modsNaTela } from '../lib/modsCelular.svelte';
   import { activePaneId, applyPluginUiDelta, closePluginPane, fieldSender, followLocalTab, inputPluginField, isMissingRoute, parsePluginToast, pluginFailureText, parsePluginUi, pressPluginButton, safeHref, showPluginPane, tabFollowsServer, type PluginControl, type PluginInputKind, type PluginSource, type PluginNode as PluginTree, type PluginPane as PluginPaneData, type PluginToast } from '@hangar/core';
@@ -2980,7 +2979,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
     // ("mandei e sumiu"). O dedup abaixo reconcilia contra o evento real em qualquer estado.
     const pendingId: string | null = `pending-${pendingSeq++}`;
     // Em idle a mensagem é digitada na hora: o eco atenuado parecia mensagem entrando na fila.
-    pending = [...pending, { id: pendingId, text, solid: currentState === 'idle', afterId: userMsgs(events).findLast((m) => !m.id.startsWith('queued-'))?.id }];
+    pending = [...pending, { id: pendingId, text, solid: currentState === 'idle', afterId: userMessages(events).findLast((m) => !m.id.startsWith('queued-'))?.id }];
     try {
       if (steer && (sessionProvider === 'codex' || sessionHeadless)) {
         await steerSession(sessionName, text, sessionServer());
@@ -3014,7 +3013,7 @@ import ShareSessionSheet from '../components/ShareSessionSheet.svelte';
   $effect(() => {
     if (pending.length === 0) return;
     // Legenda vazia (imagem sem texto) nao casa por texto -> cai no solidify do idle, nao trava aqui.
-    const entregue = ecoEntregue(userMsgs(events));
+    const entregue = pendingEchoDelivered(userMessages(events));
     const next = pending.filter((p) => !entregue(p.text, p.afterId));
     if (next.length !== pending.length) pending = next;
   });
