@@ -65,14 +65,6 @@ if __name__ == "__main__":
 import uvicorn
 
 from app.config import settings, resolve_bind_ip, list_config_dirs, _backend_config_base
-from app.hook_installer import (
-    ensure_askq_hook_installed,
-    ensure_nav_hook_installed,
-    ensure_pair_hook_installed,
-    ensure_preview_hook_installed,
-    ensure_subagent_hook_installed,
-    ensure_state_hooks_installed,
-)
 from app import migracao_sidecars, resilient_accept, rust_server
 from app.hook_state import hook_state
 
@@ -175,24 +167,6 @@ def main():
         computer_control.migrate_jev()
     except Exception as e:                            # noqa: BLE001 — nunca derruba a subida
         print(f"[hangar] AVISO: configuração do Jev não chegou ao Computer Use ({e})")
-    # Ponte de skills (pi/kimi/codex) — rebuilda as fazendas de symlinks a partir das fontes do
-    # Claude. Aqui e no installer: bump de versão de plugin muda o caminho do cache e link velho
-    # fica pendurado; fail-soft como os hooks, um erro aqui não pode impedir o backend de subir.
-    try:
-        from app import skill_bridge
-        skill_bridge.rebuild(log=lambda m: print(f"[hangar] {m}"))
-    except Exception as e:                            # noqa: BLE001 — nunca derruba a subida
-        print(f"[hangar] AVISO: ponte de skills falhou ({e}); o app segue subindo")
-    # Instala (idempotente, fail-soft) os hooks de estado e de AskUserQuestion.
-    ensure_askq_hook_installed()
-    ensure_state_hooks_installed()
-    ensure_preview_hook_installed()
-    ensure_subagent_hook_installed()
-    ensure_pair_hook_installed()
-    ensure_nav_hook_installed()
-    # E pro Codex (hooks.json do ~/.codex) — ver app/codex_hook_installer.py.
-    from app.codex_hook_installer import ensure_codex_state_hook_installed
-    ensure_codex_state_hook_installed()
     hook_state.load_existing(_state_dirs)
     # Windows: cliente que aborta no meio do accept nao pode fechar o listener (ver o modulo).
     resilient_accept.install()

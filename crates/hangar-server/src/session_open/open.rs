@@ -32,7 +32,7 @@ pub trait OpenHost: Send + Sync {
     fn bridge(&self) -> Option<PluginBridge>;
     /// `projects` da conta do servidor.
     fn server_projects(&self) -> PathBuf;
-    /// A pasta `backend/` do Hangar (a venv e o `skill_bridge.py`).
+    /// A pasta `backend/` do Hangar (a venv).
     fn backend_dir(&self) -> Option<PathBuf>;
     fn run(&self, argv: Vec<String>, timeout: Duration) -> BoxFuture<'_, MuxOutput>;
     /// A operação `prepare` das escolhas de plugins e skills; devolve o `{"settings": …}`.

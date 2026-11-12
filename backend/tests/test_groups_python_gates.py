@@ -1,12 +1,10 @@
-"""O que dos grupos fica no Python depois da migração: instalador do hook, ponte num sentido, leitores
+"""O que dos grupos fica no Python depois da migração: ponte num sentido, leitores
 da lista e o fechamento que o Rust já fez. Fecha linhas da `conferencia.md` da Task 6."""
 import asyncio
 import json
 import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -28,22 +26,6 @@ def journal(monkeypatch):
     got = []
     monkeypatch.setattr(diag, "registrar", lambda evento, nivel="ok", **campos: got.append((evento, nivel, campos)))
     return got
-
-
-def test_pair_hook_reaches_every_account_and_the_base(tmp_path, monkeypatch):
-    """HOOK-13: cada conta e a base do backend ganham o hook."""
-    from app import hook_installer as hi, rust_bins
-    dirs = [tmp_path / "conta-a", tmp_path / "conta-b", tmp_path / "base"]
-    for d in dirs:
-        d.mkdir()
-        (d / "settings.json").write_text("{}")
-    monkeypatch.setattr(rust_bins, "find_bin", lambda name, env: Path("/b/hangar-server"))
-    monkeypatch.setattr(hi, "list_config_dirs", lambda **_: [SimpleNamespace(path=str(d)) for d in dirs[:2]])
-    monkeypatch.setattr(hi, "_backend_config_base", lambda: dirs[2])
-    assert sorted(hi.ensure_pair_hook_installed()) == sorted(str(d) for d in dirs)
-    for d in dirs:
-        [block] = json.loads((d / "settings.json").read_text())["hooks"]["SessionStart"]
-        assert "pair-context" in block["hooks"][0]["command"], d
 
 
 def _serve(reply):

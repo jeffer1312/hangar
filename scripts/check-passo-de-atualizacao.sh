@@ -45,7 +45,7 @@ esac
 # O que muda a MÁQUINA, não o código que o backend serve. Testes e o próprio hook ficam de fora:
 # os hooks entram pelo core.hooksPath (mudança vale no próprio checkout, sem instalar nada).
 relevantes="$(printf '%s\n' "$arquivos" | grep -E \
-    '^(install\.(sh|ps1)|scripts/[^/]+\.(sh|ps1|py|mjs|cjs|js|fish)|hooks/.*|backend/app/[a-z_]*installer\.py|backend/app/hook_installer\.py)$' \
+    '^(install\.(sh|ps1)|scripts/[^/]+\.(sh|ps1|py|mjs|cjs|js|fish)|hooks/.*|backend/app/[a-z_]*installer\.py)$' \
     | grep -Ev '^scripts/(hooks/|test-|check-passo-de-atualizacao\.sh)' \
     | grep -Ev '\.test\.(mjs|cjs|js)$' || true)"
 # Skill nova só chega a quem atualiza pelo link que o instalador cria; editar uma existente não precisa.
