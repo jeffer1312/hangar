@@ -1343,6 +1343,9 @@ pub(crate) async fn pass_any(
     if crate::worktree_routes::matches(req.method(), req.uri().path()) {
         return crate::worktree_routes::route(st, peer, req).await;
     }
+    if crate::reviews::matches(req.method(), req.uri().path()) {
+        return crate::reviews::route(st, peer, req).await;
+    }
     if crate::workspace_routes::matches(req.method(), req.uri().path()) {
         return crate::workspace_routes::public(st, peer, req).await;
     }

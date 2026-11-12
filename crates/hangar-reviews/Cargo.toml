@@ -1,0 +1,18 @@
+[package]
+name = "hangar-reviews"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+hangar-core.workspace = true
+hangar-workspace = { path = "../hangar-workspace" }
+serde = { workspace = true, features = ["alloc"] }
+serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "time", "fs", "signal"] }
+chrono.workspace = true
+percent-encoding.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

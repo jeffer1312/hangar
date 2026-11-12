@@ -568,7 +568,7 @@ impl Hangar {
         }
     }
 
-    fn worktree_sources(&self) -> Vec<(String, String, Api)> {
+    pub(super) fn worktree_sources(&self) -> Vec<(String, String, Api)> {
         let mut sources: Vec<_> = self.servers.iter().filter(|s| !s.disabled && !s.invite && !s.ephemeral)
             .filter_map(|s| {
                 let key = super::servers::norm(&s.address);
@@ -609,6 +609,7 @@ impl Hangar {
         if self.connection_dialog { return; }
         self.close_settings(window, cx);
         self.close_costs(window, cx);
+        self.close_reviews(window, cx);
         self.close_popups();
         self.command_panel = false;
         self.worktrees.view = Some(());

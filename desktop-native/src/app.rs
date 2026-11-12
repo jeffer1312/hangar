@@ -85,6 +85,8 @@ pub(crate) use voice_ui::{call_actions, call_footer, call_header, call_status, e
 pub(crate) use rename_suggest::{Strip as RenameStrip, rename_strip};
 pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command, request_pair};
 pub(crate) use create::{base_button, base_row, quiet_button, worktree_field_label, worktree_warning};
+pub(crate) use reviews::{Comment as ReviewComment, Summary as ReviewSummary, Thread as ReviewThread,
+    row_view as review_row_view, thread_actions as review_thread_actions, thread_box as review_thread_box, thread_buttons as review_thread_buttons};
 pub(crate) use connect::device_card;
 pub(crate) use settings::{setting_row, settings_box};
 pub(crate) use plugins::{plugin_meta, plugin_name, plugin_switch, plugin_update_button, reopen_notice as plugins_reopen_notice,
@@ -115,6 +117,7 @@ mod tree;
 mod find;
 mod costs;
 mod worktrees;
+mod reviews;
 mod artifacts;
 mod stats;
 mod search;
@@ -128,7 +131,7 @@ pub(crate) mod setup;
 pub(crate) const ASKPASS_CODE_ENV: &str = "HANGAR_ASKPASS_CODE";
 
 actions!(hangar, [FocusComposer, OpenSettings, CopyLastReply, FocusSettingsSearch, FindProjectFile, FindProjectText, NextSession, PreviousSession, ToggleDictation, NewChat, NewChatNoProject, OpenNewSession, CloseSession, RenameSession, OpenCosts, OpenSearch,
-    ToggleSidebar, CyclePermission, OpenWorktrees, CycleToolLook, CycleNavigation]);
+    ToggleSidebar, CyclePermission, OpenWorktrees, OpenReviews, CycleToolLook, CycleNavigation]);
 
 const LIVE_THINKING: &str = "__thinking__";
 const LIVE_TOOL: &str = "__tool__";
@@ -845,6 +848,7 @@ pub struct Hangar {
     // Custos e Estatísticas de uso: página própria por cima da janela, fora das Configurações.
     costs: costs::Costs,
     worktrees: worktrees::Worktrees,
+    reviews: reviews::Reviews,
     artifacts: artifacts::Artifacts,
     usage_stats: stats::UsageStats,
     // Paleta "Buscar conversas" (Ctrl+K).
@@ -1173,7 +1177,7 @@ impl Hangar {
             device: device::Device::new(window, cx), accounts: accounts::Accounts::default(), orchestration: orchestration::Orchestration::default(), orq_history: None, orq_history_serial: 0, home_usage: Default::default(), recents: Default::default(), reopen: None, shortcuts: shortcuts::Shortcuts::default(),
             worktree_settings: worktree_settings::WorktreeSettings::default(), auto_hide: Default::default(),
             server_config: server_config::ServerConfig::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), connect: connect::Connect::default(), connect_notices: connect::Notices::default(), devices: devices::Devices::default(), shared: shared_config::SharedConfig::default(), machines: machines::Machines::default(),
-            costs: Default::default(), worktrees: Default::default(), artifacts: Default::default(), usage_stats: Default::default(), search: Default::default(), topbar: Default::default(), computer: computer::Computer::default(), new_session: None, sidebar, machines_tray,
+            costs: Default::default(), worktrees: Default::default(), reviews: Default::default(), artifacts: Default::default(), usage_stats: Default::default(), search: Default::default(), topbar: Default::default(), computer: computer::Computer::default(), new_session: None, sidebar, machines_tray,
             terminal: None, terminal_serial: 0,
             system_notifications: SystemNotifications::default(),
             window_tray: window_tray::WindowTray::new(tray_tx), presence: Default::default(),
@@ -1365,6 +1369,11 @@ impl Hangar {
     }
 
     /// Conexão da máquina da sessão aberta; sem sessão de outra máquina, a do servidor ativo.
+    /// Alguma página ocupa a janela (Configurações fora do modo ao vivo, Custos, Worktrees, Revisões).
+    pub(super) fn page_open(&self) -> bool {
+        self.settings.is_some() && !self.settings_live() || self.costs.view.is_some() || self.worktrees.view.is_some() || self.reviews.view.is_some()
+    }
+
     pub(super) fn session_api(&self) -> Option<Api> { self.open_api.clone().or_else(|| self.api.clone()) }
 
     pub(super) fn session_server(&self) -> Option<String> { self.open_api.as_ref().map(Api::identity).or_else(|| self.server.clone()) }
@@ -1459,6 +1468,7 @@ impl Hangar {
             });
             self.costs_reconnected(cx);
             self.worktrees_reconnected(cx);
+            self.reviews_reconnected(cx);
             self.search_reconnected(cx);
             self.refresh_default_account(cx);
             self.schedule_account_refresh(cx);
@@ -5105,6 +5115,8 @@ impl Hangar {
             .border_1().border_color(theme::border_strong()).text_size(px(12.5)).text_color(theme::muted())
             .child(chrome::small_icon(IconName::List, 14., theme::faint())).child(chip));
         let session = self.selected.clone().filter(|_| readable);
+        // A revisão da branch (PR ou MR), quando o servidor acha uma: o chip abre a aba dela no git.
+        let review_chip = if session.is_some() { self.review_chip(cx) } else { None };
         let cache = crate::chat::last_cache(&self.chat.events).filter(|_| readable);
         let footer = (repo.is_some() || ctx_pct.is_some() || session.is_some() || cache.is_some()).then(|| {
             let branch = status.as_ref().and_then(|s| s.branch.clone()).or_else(|| session.as_ref().and_then(|s| s.branch.clone())).unwrap_or_default();
@@ -5166,6 +5178,7 @@ impl Hangar {
             div().pt(px(7.)).px(px(6.)).flex().flex_wrap().items_center().gap(px(6.)).gap_y(px(2.)).text_xs().text_color(theme::faint())
                 .children(session.as_ref().map(|s| self.render_group_chips(s, cx)))
                 .child(place)
+                .children(review_chip)
                 .children(self.render_artifacts_button(cx))
                 .child(div().flex_1())
                 .child(usage)
@@ -7901,14 +7914,15 @@ impl Render for Hangar {
         // Página de Configurações ocupa a janela; a caixa ao vivo deixa a janela da conversa por baixo.
         let page = self.settings.filter(|_| !self.settings_ui.live);
         let costs_page = self.costs.view.is_some();
-        let worktrees_page = self.worktrees.view.is_some();
+        // Worktrees e Revisões: páginas por cima da conversa, sem a lista ao lado.
+        let tool_page = self.worktrees.view.is_some() || self.reviews.view.is_some();
         let navigation = appearance::get().navigation;
         let (tabs, bottom_tabs) = (navigation.tabs(), navigation == appearance::Navigation::BottomTabs);
-        let cutout = chat_background && page.is_none() && !costs_page && !worktrees_page && (desktop_window || floating);
+        let cutout = chat_background && page.is_none() && !costs_page && !tool_page && (desktop_window || floating);
         let chat_bounds = std::rc::Rc::new(std::cell::Cell::new(Bounds::<Pixels>::default()));
         // Colados com barra lateral, ela sobe até o topo e a barra do app começa na borda dela, como no Zeron. O fundo
         // do chat passa a ser da coluna que junta a barra e o chat, para a barra ter a cor dele.
-        let beside_sidebar = !floating && !tabs && page.is_none() && !costs_page && !worktrees_page;
+        let beside_sidebar = !floating && !tabs && page.is_none() && !costs_page && !tool_page;
         let chat_fill = |el: Div, this: &Self, window: &Window| el
             .when(chat_background, |el| el.bg(theme::window_fill()))
             .when(cutout, |el| {
@@ -7985,7 +7999,7 @@ impl Render for Hangar {
             .children(self.render_vault_float(cx));
         // Visor de arquivos expandido: sem a lista de sessões e sem o painel direito.
         let files_expanded = self.files_expanded();
-        let list_hidden = page.is_some() || costs_page || worktrees_page || files_expanded;
+        let list_hidden = page.is_some() || costs_page || tool_page || files_expanded;
         // Lista fora da tela (página, abas, trilho, outro agrupamento): as posições guardadas envelhecem, e na volta ela
         // deslizaria do lugar antigo. Esquecidas, ela volta parada.
         if list_hidden || tabs || !Self::by_machine() || (self.rail() && self.rail_progress().is_none()) { self.sidebar.flip.borrow_mut().clear(); }
@@ -8109,7 +8123,7 @@ impl Render for Hangar {
             }))
             .on_action(cx.listener(|this, action: &keyboard::RunShortcut, window, cx| this.run_keyboard_shortcut(action, window, cx)))
             .on_action(cx.listener(|this, _: &FocusComposer, window, cx| {
-                let page_open = this.settings.is_some() && !this.settings_live() || this.costs.view.is_some() || this.worktrees.view.is_some();
+                let page_open = this.page_open();
                 if !this.connection_dialog && !page_open && (this.selected.as_ref().is_some_and(SessionInfo::takes_messages)
                     || this.selected.is_none() && this.api.is_some()) {
                     this.composer.update(cx, |input, cx| input.focus(window, cx));
@@ -8120,6 +8134,7 @@ impl Render for Hangar {
             }))
             .on_action(cx.listener(|this, _: &OpenCosts, window, cx| this.toggle_costs(window, cx)))
             .on_action(cx.listener(|this, _: &OpenWorktrees, window, cx| this.toggle_worktrees(window, cx)))
+            .on_action(cx.listener(|this, _: &OpenReviews, window, cx| this.toggle_reviews(window, cx)))
             .on_action(cx.listener(|this, _: &OpenSearch, window, cx| this.toggle_search(window, cx)))
             .on_action(cx.listener(|this, _: &FocusSettingsSearch, window, cx| this.focus_search(window, cx)))
             .on_action(cx.listener(|this, _: &FindProjectFile, window, cx| this.find_project_files(false, window, cx)))
@@ -8193,6 +8208,7 @@ impl Render for Hangar {
                 if this.shortcuts_escape(window, cx) { cx.stop_propagation(); return; }
                 if this.costs_escape(window, cx) { cx.stop_propagation(); return; }
                 if this.worktrees.view.is_some() { this.close_worktrees(window, cx); cx.stop_propagation(); return; }
+                if this.reviews.view.is_some() { this.close_reviews(window, cx); cx.stop_propagation(); return; }
                 // O painel preso a um botão é a camada de cima: fecha antes de arquivos e terminal, e o foco volta ao campo.
                 // Com a página de configurações aberta nenhum painel está na tela; a flag das pastas fica para quando ela fechar.
                 if (this.settings.is_none() || this.settings_live()) && this.close_popups() {
@@ -8258,9 +8274,10 @@ impl Render for Hangar {
             // A barra do app fica acima de tudo, inclusive das páginas, de ponta a ponta; soltos, a margem é só dos painéis.
             .flex_col()
             .children(topbar)
-            .child(div().w_full().flex_1().min_h_0().flex().when(floating && page.is_none() && !costs_page && !worktrees_page, |el| el.p(px(10.)).gap(px(10.)))
+            .child(div().w_full().flex_1().min_h_0().flex().when(floating && page.is_none() && !costs_page && !tool_page, |el| el.p(px(10.)).gap(px(10.)))
                 .map(|el| match (page, nav) {
-                _ if worktrees_page => el.child(self.render_worktrees(window, cx)),
+                _ if self.reviews.view.is_some() => el.child(self.render_reviews(cx)),
+                _ if self.worktrees.view.is_some() => el.child(self.render_worktrees(window, cx)),
                 _ if costs_page => el.child(self.render_costs(window, cx)),
                 (Some(page), _) => el.child(self.render_settings(page, window, cx)),
                 // Abas: a faixa em cima (ou embaixo), a conversa e o painel do outro lado, sem barra lateral.

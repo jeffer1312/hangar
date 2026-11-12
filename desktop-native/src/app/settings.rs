@@ -492,6 +492,7 @@ impl Hangar {
         self.keyboard.cancel_edit();
         self.costs.view = None;
         (self.worktrees.view, self.worktrees.open) = (None, None);
+        self.reviews.view = None;
         self.settings = Some(page);
         // O Cofre relê a cada abertura, e a senha revelada não passa para a próxima.
         self.vault_page = None;

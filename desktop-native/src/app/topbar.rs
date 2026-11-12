@@ -100,6 +100,12 @@ impl Hangar {
             .selected(self.worktrees.view.is_some()).disabled(!online)
             .accessibility_label(tr_shared("worktrees_titulo", &[])).tooltip_with_action(tr_shared("worktrees_titulo", &[]), &OpenWorktrees, None)
             .on_click(cx.listener(|this, _, window, cx| this.toggle_worktrees(window, cx)));
+        let reviews = Button::new("topbar-reviews").custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::muted())
+                .hover(theme::hover()).active(theme::hover()))
+            .icon(chrome::small_icon(IconName::GitPullRequest, 16., theme::muted())).size(px(28.)).rounded(px(6.))
+            .selected(self.reviews.view.is_some()).disabled(!online)
+            .accessibility_label(tr("review_title")).tooltip(tr("review_title"))
+            .on_click(cx.listener(|this, _, window, cx| this.toggle_reviews(window, cx)));
         // A conta da sessão em foco, como a pílula de cota do web: glifo, anel e "44% 5h · nome"; clique abre o cartão de contas.
         let proxy = self.has_proxy_session();
         let account = self.focused_account().or_else(|| proxy.then(|| ("codex".into(), tr("create_proxy_choose_account"), None)))
@@ -145,7 +151,7 @@ impl Hangar {
                 .on_click(cx.listener(|this, _, window, cx| this.open_settings(settings::Page::Servers, window, cx)))
         });
         // Colada, a barra continua a lateral que está embaixo dela: a de conversas tem superfície própria.
-        let page_open = settings_open || self.costs.view.is_some() || self.worktrees.view.is_some();
+        let page_open = self.page_open();
         let wall = if !page_open && appearance::get().navigation == appearance::Navigation::Conversations { theme::conversation_sidebar().0 }
             else { theme::chrome() };
         let bar = div().id("topbar").w_full().flex_shrink_0().flex().items_center().gap(px(8.))
@@ -186,6 +192,7 @@ impl Hangar {
                         .tooltip(tr_shared("orq_history_title", &[])).accessibility_label(tr_shared("orq_history_title", &[]))
                         .on_click(cx.listener(|this, _, window, cx| this.open_orq_history(window, cx)))))
                     .child(control(worktrees))
+                    .child(popup::anchor(control(reviews), crate::tour::anchors::TOPBAR_REVIEWS))
                     .child(control(pill))
                     .children(outdated.map(control))
                     .children(updater.map(control))

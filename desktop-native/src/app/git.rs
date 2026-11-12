@@ -71,7 +71,7 @@ impl Source {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-enum Pane { #[default] Changes, History, Commit }
+enum Pane { #[default] Changes, History, Commit, Review }
 
 /// Os três botões de sincronização do cabeçalho.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,11 +116,11 @@ fn repo(branches: &Value, files: &Value) -> Repo {
 pub(super) enum Kind { Add, Del, Context, Meta }
 
 #[derive(Clone, Debug)]
-enum Body { Notice(SharedString), Hunk(SharedString), Line { kind: Kind, old: Option<u32>, new: Option<u32>, text: SharedString } }
+pub(super) enum Body { Notice(SharedString), Hunk(SharedString), Line { kind: Kind, old: Option<u32>, new: Option<u32>, text: SharedString } }
 
 /// Um arquivo do patch: o caminho, as linhas já numeradas e as contas.
 #[derive(Clone, Debug, Default)]
-struct Patch { path: String, body: Vec<Body>, added: usize, removed: usize, created: bool, deleted: bool }
+pub(super) struct Patch { path: String, pub(super) body: Vec<Body>, added: usize, removed: usize, created: bool, deleted: bool }
 
 /// `@@ -a,b +c,d @@` → primeiras linhas antiga e nova.
 fn hunk_start(line: &str) -> Option<(u32, u32)> {
@@ -132,7 +132,7 @@ fn hunk_start(line: &str) -> Option<(u32, u32)> {
 }
 
 /// O `git diff`/`git show` em arquivos, como o `parse_patch` do Zeron: cabeçalhos viram avisos, hunks numeram as linhas.
-fn parse_patch(text: &str) -> Vec<Patch> {
+pub(super) fn parse_patch(text: &str) -> Vec<Patch> {
     let mut files: Vec<Patch> = Vec::new();
     let (mut old, mut new, mut in_hunk) = (0u32, 0u32, false);
     let clean = |s: &str| SharedString::from(s.replace('\t', "    "));
@@ -210,13 +210,13 @@ impl Review {
     }
 }
 
-fn hunk_row(text: &SharedString) -> AnyElement {
+pub(super) fn hunk_row(text: &SharedString) -> AnyElement {
     div().h(px(HUNK_H)).w_full().flex_none().flex().items_center().px_4().bg(theme::accent().opacity(0.06))
         .font_family(theme::MONO).text_size(px(11.)).text_color(theme::faint()).whitespace_nowrap().overflow_hidden()
         .child(text.clone()).into_any_element()
 }
 
-fn notice_row(text: SharedString, color: Hsla) -> AnyElement {
+pub(super) fn notice_row(text: SharedString, color: Hsla) -> AnyElement {
     div().h(px(NOTICE_H)).w_full().flex_none().flex().items_center().px_4().text_size(px(11.)).text_color(color).child(text).into_any_element()
 }
 
@@ -355,6 +355,8 @@ pub(super) struct GitPanel {
     expand: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
     /// Painel de sessão: o servidor (que fecha worktree) e a página de worktrees aberta numa pasta.
     others: Option<(Api, Rc<dyn Fn(String, &mut Window, &mut App)>)>,
+    /// A revisão (PR ou MR) da branch, só no diálogo grande.
+    review: Option<Entity<super::reviews::ReviewView>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -376,7 +378,7 @@ impl GitPanel {
         Self {
             source, runtime, name, title, pane: Pane::default(), repo: Remote::default(), work: Review::new(), round: 0, chosen: HashSet::new(),
             seen: HashSet::new(), message, amend: false, busy: None, error: None, output: None, log: Remote::default(), log_limit: LOG_PAGE,
-            ahead_behind: (None, None), opened: None, picker: false, branch_query, branch_error: None, expand, others: None, _subscriptions: subscriptions,
+            ahead_behind: (None, None), opened: None, picker: false, branch_query, branch_error: None, expand, others: None, review: None, _subscriptions: subscriptions,
         }
     }
 
@@ -1215,18 +1217,28 @@ impl Render for GitPanel {
             Tab::new().label(tr("git_changes")).prefix(chrome::small_icon(IconName::List, 12., theme::muted())).when_some(changes, |tab, n| tab.suffix(count(n))),
             Tab::new().label(tr("git_history")).prefix(chrome::small_icon(IconName::GitBranch, 12., theme::muted())),
         ];
+        let mut panes = vec![Pane::Changes, Pane::History];
+        if self.review.is_some() {
+            tabs.push(Tab::new().label(tr("review_tab")).prefix(chrome::small_icon(IconName::GitPullRequest, 12., theme::muted())));
+            panes.push(Pane::Review);
+        }
         if let Some(opened) = self.opened.as_ref() {
+            panes.push(Pane::Commit);
             tabs.push(Tab::new().label(opened.commit.short.clone()).prefix(chrome::small_icon(IconName::Hash, 12., theme::muted()))
                 .suffix(Button::new("git-commit-close").ghost().xsmall().icon(IconName::Close).accessibility_label(tr("git_commit_close"))
                     .on_click(cx.listener(|this, _, _, cx| { cx.stop_propagation(); this.close_commit(cx); }))));
         }
-        let selected = match self.pane { Pane::Changes => 0, Pane::History => 1, Pane::Commit => 2 };
+        let selected = panes.iter().position(|p| *p == self.pane).unwrap_or(0);
         let bar = TabBar::new("git-tabs").underline().small().selected_index(selected).children(tabs)
-            .on_click(cx.listener(|this, index: &usize, window, cx| {
-                let pane = match index { 0 => Pane::Changes, 1 => Pane::History, _ => Pane::Commit };
+            .on_click(cx.listener(move |this, index: &usize, window, cx| {
+                let pane = panes.get(*index).copied().unwrap_or(Pane::Changes);
                 this.set_pane(pane, window, cx);
             }));
         let body = match (&self.repo.value, self.pane) {
+            (_, Pane::Review) => match self.review.clone() {
+                Some(view) => div().id("git-review").size_full().p_3().child(view).into_any_element(),
+                None => div().into_any_element(),
+            },
             (_, Pane::History) => self.render_history(cx),
             (_, Pane::Commit) => self.render_commit(cx),
             (None, _) => popup::skeleton("git-loading", 6).into_any_element(),
@@ -1252,7 +1264,7 @@ impl Render for GitPanel {
 
 impl Hangar {
     /// O git da sessão aberta, lido do disco ou pelas rotas; `expand` faz dele a lista estreita da aba.
-    fn new_git_panel(&self, expand: Option<Rc<dyn Fn(&mut Window, &mut App)>>, window: &mut Window, cx: &mut Context<Self>) -> Option<Entity<GitPanel>> {
+    fn new_git_panel(&mut self, expand: Option<Rc<dyn Fn(&mut Window, &mut App)>>, window: &mut Window, cx: &mut Context<Self>) -> Option<Entity<GitPanel>> {
         let (Some(api), Some(session)) = (self.session_api(), self.selected.clone()) else { return None };
         let dir = session.git_dir();
         let title = folder_name(&session).unwrap_or_else(|| session.name.clone());
@@ -1265,8 +1277,9 @@ impl Hangar {
         let open: Rc<dyn Fn(String, &mut Window, &mut App)> =
             Rc::new(move |path, window, cx| { let _ = weak.update(cx, |this, cx| this.open_worktree(path, window, cx)); });
         // ponytail: a página de worktrees é a do servidor ativo; sessão de outra máquina abre a página dele quando fizer falta.
+        let review = if expand.is_none() { self.branch_review_view(cx) } else { None };
         let panel = cx.new(|cx| GitPanel::new(source, runtime, session.name.clone(), title, expand, window, cx));
-        panel.update(cx, |panel, cx| { panel.others = Some((server, open)); panel.load(window, cx) });
+        panel.update(cx, |panel, cx| { panel.others = Some((server, open)); panel.review = review; panel.load(window, cx) });
         Some(panel)
     }
 
@@ -1274,6 +1287,11 @@ impl Hangar {
     /// painel direito fica como a vista curta.
     pub(super) fn open_git_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_git_dialog(Pane::Changes, window, cx);
+    }
+
+    /// O chip da revisão na faixa abre o mesmo diálogo, na aba dela.
+    pub(super) fn open_git_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_git_dialog(Pane::Review, window, cx);
     }
 
     /// A aba Git do painel é a vista curta, sem histórico; o histórico só existe no diálogo grande.

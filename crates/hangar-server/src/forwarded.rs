@@ -77,6 +77,8 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
         Owned::Nav
     } else if crate::worktree_routes::matches(&method, &path) {
         Owned::Worktrees
+    } else if crate::reviews::matches(&method, &path) {
+        Owned::Reviews
     } else if crate::plans::routes::matches(&method, &path) {
         Owned::Plans
     } else if let Some((project, sid)) = archive_resume(&method, &path) {
@@ -129,6 +131,7 @@ pub async fn private(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connect
         Owned::BrowserUrl(guest) => crate::remote_browser::url::serve_forwarded(&st, req, guest).await,
         Owned::Nav => crate::nav_requests::serve(&st, req).await,
         Owned::Worktrees => crate::worktree_routes::serve_forwarded(st, peer, req, guest).await,
+        Owned::Reviews => crate::reviews::serve_forwarded(st, peer, req, guest).await,
         Owned::Plans => crate::plans::routes::serve(&st, req).await,
         Owned::ArchiveResume(project, sid) => {
             let Ok(bytes) = axum::body::to_bytes(req.into_body(), crate::session_write::BODY_LIMIT).await else {
@@ -162,4 +165,4 @@ fn live_resume(method: &Method, path: &str) -> Option<String> {
 }
 
 /// As rotas do Rust que aceitam o repasse.
-enum Owned { Read(String, bool, bool), OrchestrationGuard(String), Models, Orchestration, OmpSync, Groups(bool), Conductor, Catalog, SessionDefaults, PushExpo, Commands, Mermaid, Prewarm, Nav, BrowserUrl(bool), Plans, Worktrees, JevDelivery, ClientApi, ArchiveResume(String, String), Resume(String), Media(String, bool) }
+enum Owned { Read(String, bool, bool), OrchestrationGuard(String), Models, Orchestration, OmpSync, Groups(bool), Conductor, Catalog, SessionDefaults, PushExpo, Commands, Mermaid, Prewarm, Nav, BrowserUrl(bool), Plans, Worktrees, Reviews, JevDelivery, ClientApi, ArchiveResume(String, String), Resume(String), Media(String, bool) }

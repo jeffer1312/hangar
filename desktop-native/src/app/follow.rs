@@ -235,7 +235,7 @@ impl Hangar {
     /// As teclas de página valem só com a conversa na tela: sem página, busca, seletor ou diálogo por cima. O seletor de
     /// modelo tem lista longa própria, que precisa delas.
     pub(super) fn chat_keys_apply(&self, window: &mut Window, cx: &mut App) -> bool {
-        let page_open = self.settings.is_some() && !self.settings_live() || self.costs.view.is_some() || self.worktrees.view.is_some();
+        let page_open = self.page_open();
         !page_open && !self.search.open && !self.connection_dialog && !self.controls.picker_open() && self.selected.is_some()
             && !window.has_active_dialog(cx)
     }

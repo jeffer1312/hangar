@@ -220,7 +220,7 @@ impl Hangar {
         // A lista do chip "N no Hangar" também vale em qualquer tela: o chip mora na barra de sessões.
         if self.hangar_open { return Some(Floating::Hangar); }
         if self.machines_tray.open && appearance::get().navigation.tabs() && !page && self.costs.view.is_none()
-            && self.worktrees.view.is_none() && !self.files_expanded() { return Some(Floating::Machines); }
+            && self.worktrees.view.is_none() && self.reviews.view.is_none() && !self.files_expanded() { return Some(Floating::Machines); }
         // O painel da voz também: a pílula mora na barra do topo. Sem a pílula, não há onde prendê-lo.
         if self.voice.open && (self.voice.enabled || self.voice.call.is_some()) { return Some(Floating::Voice); }
         if let Some(menu) = self.new_chat_folders.get().filter(|_| !page && self.selected.is_none() && self.api.is_some()) {
