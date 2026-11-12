@@ -178,21 +178,9 @@ impl AccountService {
         }
     }
     pub(crate) fn stored_status(&self, account: &Account, key: &AccountKey) -> Value {
-        let home = account.home.to_string_lossy();
-        let digest: String = ring::digest::digest(&ring::digest::SHA256, home.as_bytes())
-            .as_ref()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
         let paths = [
             self.result_path(key).ok(),
-            Some(
-                self.env
-                    .home
-                    .join(".hangar/codex-contas")
-                    .join(digest)
-                    .join("estado.json"),
-            ),
+            hangar_codex_account_sync::state_file(&self.env.home, &account.home),
         ];
         let mut available = Vec::new();
         for path in paths.into_iter().flatten() {
@@ -487,11 +475,13 @@ impl AccountService {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(_) => return Err(AccountError::io()),
         }
+        // Obtido antes de gravar `prepare.json`: sem o serviço, nenhuma operação fica registrada.
+        let setup = self.codex_preparation_service()?;
         let source = if cwd.is_none() {
             if let Some(state) = self.preparations.lock().unwrap().get_mut(&key) {
                 state.result["etapa"] = json!("principal");
             }
-            Some(self.codex_preparation_service()?.update(force).await
+            Some(setup.clone().update(force).await
                 .map_err(|_| AccountError::io())?)
         } else { None };
         let request = PrepareRequest {
@@ -513,7 +503,6 @@ impl AccountService {
         if let Some(state) = self.preparations.lock().unwrap().get_mut(&request.key) {
             state.result["etapa"] = Value::Null;
         }
-        let setup = self.codex_preparation_service()?;
         let result = if let Some(cwd) = &request.cwd {
             let result = self.stored_status(account, &request.key);
             if matches!(result["status"].as_str(), Some("ready" | "partial")) {

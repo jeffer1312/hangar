@@ -92,6 +92,22 @@ fn atomic_write_inner(path:&Path,bytes:&[u8],before:impl FnOnce(&File)->io::Resu
     result
 }
 
+/// Trava exclusiva do arquivo (flock/LockFileEx), esperando quem a segura. Todo escritor da mesma
+/// trava passa por aqui, para que os lados se excluam pelo mesmo mecanismo. Soltar é do chamador.
+pub async fn lock_exclusive(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
+    let file = options.open(path)?;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(std::fs::TryLockError::WouldBlock) => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
+            Err(std::fs::TryLockError::Error(error)) => return Err(error),
+        }
+    }
+}
+
 /// O `canonicalize` do Windows devolve `\\?\C:\...`; o Python escreve `C:\...`, e a conta da sessão
 /// (`claude:<pasta>`) precisa bater letra a letra com o id da credencial que ele monta.
 pub fn without_verbatim(path: std::path::PathBuf) -> std::path::PathBuf {

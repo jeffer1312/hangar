@@ -1297,7 +1297,7 @@ esac
         std::fs::write(&marker,b"{\"version\":1}").unwrap();assert!(marker.is_file());
         assert_eq!(serde_json::from_slice::<Value>(&std::fs::read(&prepared).unwrap()).unwrap()["status"],"ready");
         assert!(!accounts.locks.sidecar(&key,"prepare.json").unwrap().exists() && !accounts.locks.sidecar(&key,"prepare-force.json").unwrap().exists());
-        let bridge=hangar_server::accounts::bridge::AccountsBridge::new(h.fixture.addr,crate::fake::SECRET.into(),"workspace-fixture".into()).unwrap();
+        let bridge=hangar_server::accounts::bridge::AccountsBridge::new("workspace-fixture".into());
         assert_eq!(accounts.preparation_status(&account,&bridge).await["status"],"ready");
         let rows=h.fixture.list.discover(Some(f64::MAX)).await.unwrap();
         let origin=rows.iter().find(|row|row.name=="fixture").expect("origem Codex viva na descoberta nativa");

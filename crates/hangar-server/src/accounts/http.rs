@@ -390,12 +390,7 @@ pub(crate) fn bridge(state: &crate::routes::AppState) -> Result<AccountsBridge, 
         .ok()
         .flatten()
         .ok_or_else(AccountError::io)?;
-    AccountsBridge::new(
-        state.cfg.upstream,
-        state.cfg.internal_secret.clone(),
-        instance,
-    )
-    .map_err(|_| AccountError::io())
+    Ok(AccountsBridge::new(instance))
 }
 
 async fn prepare_response(

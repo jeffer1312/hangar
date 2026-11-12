@@ -20,7 +20,6 @@ use std::{
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const CONFIG_TIMEOUT: Duration = Duration::from_secs(60);
-const ORPHAN: &str = "is already added from a different source";
 
 struct Adapter {
     env: AccountEnvironment,
@@ -97,7 +96,7 @@ fn native_error() -> NativeError {
 }
 
 impl Adapter {
-    fn cli(&self, account: &Path) -> AdminCli {
+    fn admin_cli(&self, account: &Path) -> AdminCli {
         AdminCli::new(self.env.clone(), &self.env.home, account)
     }
     async fn read_trust(&self, account: &Path, approve: bool) -> Result<Option<bool>, String> {
@@ -192,7 +191,7 @@ impl Native for Adapter {
 impl PluginsNative for Adapter {
     fn inventory<'a>(&'a self, account: &'a Path) -> BoxFuture<'a, Result<Inventory, NativeError>> {
         Box::pin(async move {
-            let cli = self.cli(account);
+            let cli = self.admin_cli(account);
             let (plugins, marketplaces) = futures_util::join!(
                 cli.plugins(COMMAND_TIMEOUT),
                 cli.marketplaces(COMMAND_TIMEOUT)
@@ -206,7 +205,7 @@ impl PluginsNative for Adapter {
     }
     fn plugins<'a>(&'a self, account: &'a Path) -> BoxFuture<'a, Result<Vec<Value>, NativeError>> {
         Box::pin(async move {
-            let cli = self.cli(account);
+            let cli = self.admin_cli(account);
             let result = cli.plugins(COMMAND_TIMEOUT).await;
             cli.close().await.map_err(|_| native_error())?;
             result.map_err(|_| native_error())
@@ -217,7 +216,7 @@ impl PluginsNative for Adapter {
         account: &'a Path,
     ) -> BoxFuture<'a, Result<Vec<Value>, NativeError>> {
         Box::pin(async move {
-            let cli = self.cli(account);
+            let cli = self.admin_cli(account);
             let result = cli.marketplaces(COMMAND_TIMEOUT).await;
             cli.close().await.map_err(|_| native_error())?;
             result.map_err(|_| native_error())
@@ -229,14 +228,18 @@ impl PluginsNative for Adapter {
         args: &'a [String],
     ) -> BoxFuture<'a, Result<Value, NativeError>> {
         Box::pin(async move {
-            let cli = self.cli(account);
+            let cli = self.admin_cli(account);
             let result = cli
                 .account_sync_command(args.to_vec(), COMMAND_TIMEOUT)
                 .await;
             cli.close().await.map_err(|_| native_error())?;
             result.map_err(|orphan| NativeError {
                 kind: "CodexNativoErro".into(),
-                stderr: if orphan { ORPHAN.into() } else { String::new() },
+                stderr: if orphan {
+                    hangar_codex_account_sync::plugins::ORPHAN_MARKETPLACE.into()
+                } else {
+                    String::new()
+                },
             })
         })
     }
@@ -246,7 +249,7 @@ impl PluginsNative for Adapter {
         id: &'a str,
     ) -> BoxFuture<'a, Result<Value, NativeError>> {
         Box::pin(async move {
-            let cli = self.cli(account);
+            let cli = self.admin_cli(account);
             let result = cli.add(id, COMMAND_TIMEOUT).await;
             cli.close().await.map_err(|_| native_error())?;
             result.map_err(|_| native_error())
@@ -353,10 +356,8 @@ async fn version(env: &AccountEnvironment, force: bool) -> String {
             signatures.insert(key, signature);
         }
     }
-    let version = probe.version_stdout(env, "codex").await.unwrap_or_default();
-    if version.is_empty() || version.contains('\u{fffd}') {
-        "indisponível".into()
-    } else {
-        version.chars().take(80).collect()
-    }
+    probe
+        .version_stdout(env, "codex")
+        .await
+        .unwrap_or_else(|| "indisponível".into())
 }

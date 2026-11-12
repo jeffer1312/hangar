@@ -45,4 +45,11 @@ mod storage;
 
 use common::{Error, blocking, hash, issue, json_bytes, object, public_state, status};
 pub use engine::{preparation_status, prepare};
+
+/// `estado.json` da conta, no mesmo diretório que o preparo grava; `None` se a conta não resolve.
+pub fn state_file(home: &Path, destination: &Path) -> Option<std::path::PathBuf> {
+    storage::private_at(home, destination, false)
+        .ok()
+        .map(|dir| dir.join("estado.json"))
+}
 use storage::{backup, read, replace_link_with_file, write, write_link};

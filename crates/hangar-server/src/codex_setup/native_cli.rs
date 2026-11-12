@@ -38,7 +38,7 @@ impl AdminCli {
     }
     /// Só o sinal da recusa conhecida atravessa a fronteira; stderr pode conter credenciais.
     pub(crate) async fn account_sync_command(&self,args:Vec<String>,timeout:Duration)->Result<Value,bool> {
-        const ORPHAN:&str="is already added from a different source";
+        use hangar_codex_account_sync::plugins::ORPHAN_MARKETPLACE as ORPHAN;
         self.execute(args,timeout,ORPHAN).await.map_err(|error|error.stderr.contains(ORPHAN))
     }
     pub async fn add(&self,id:&str,timeout:Duration)->Result<Value,String> {

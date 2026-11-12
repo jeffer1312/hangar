@@ -1,15 +1,15 @@
 //! Replica apenas os plugins gerenciados pela conta de origem.
-use crate::Paths;
+use crate::{Paths, hash, issue};
 use serde_json::{Map, Value, json};
 use std::{
     collections::BTreeMap,
-    future::Future,
     path::{Path, PathBuf},
-    pin::Pin,
 };
 
-pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-pub type ConfigPlan<'a> = dyn FnMut(&Value) -> Result<Vec<Value>, String> + Send + 'a;
+pub use crate::ConfigPlan;
+pub use futures_util::future::BoxFuture;
+/// Trecho do stderr do Codex quando o marketplace já existe com outra origem.
+pub const ORPHAN_MARKETPLACE: &str = "is already added from a different source";
 
 #[derive(Debug, Clone)]
 pub struct NativeError {
@@ -60,9 +60,6 @@ pub trait PluginsNative: Sync {
     ) -> BoxFuture<'a, Result<Option<bool>, String>>;
 }
 
-fn issue(code: &str, params: Value) -> Value {
-    json!({"code":code,"params":params})
-}
 fn text<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
     value
         .get(field)
@@ -280,16 +277,10 @@ fn config(native: &impl PluginsNative, account: &Path) -> Result<Value, String> 
     native.parse_toml(&std::fs::read_to_string(path).map_err(|e| e.to_string())?)
 }
 fn private_dir(paths: &Paths<'_>) -> PathBuf {
-    let destination = resolved(paths.destination).unwrap_or_else(|_| paths.destination.to_owned());
-    let digest = hash(destination.to_string_lossy().as_bytes());
-    paths.home.join(".hangar/codex-contas").join(digest)
-}
-fn hash(bytes: &[u8]) -> String {
-    ring::digest::digest(&ring::digest::SHA256, bytes)
-        .as_ref()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    crate::storage::private(*paths, false).unwrap_or_else(|_| {
+        let digest = hash(paths.destination.to_string_lossy().as_bytes());
+        paths.home.join(".hangar/codex-contas").join(digest)
+    })
 }
 fn cache_path(account: &Path, item: &Value) -> PathBuf {
     if let Some(raw) = item.pointer("/source/path").and_then(Value::as_str) {
@@ -610,7 +601,7 @@ async fn ensure_marketplace(
     let mut added = native.cli(paths.destination, &args).await;
     if added.as_ref().is_err_and(|e| {
         e.stderr
-            .contains("is already added from a different source")
+            .contains(ORPHAN_MARKETPLACE)
     }) {
         let undeclared = config(native, paths.destination)
             .ok()

@@ -15,9 +15,12 @@ pub(crate) fn read(path: &Path) -> Result<Option<Vec<u8>>, Error> {
     }
 }
 pub(crate) fn private(paths: Paths<'_>, create: bool) -> Result<PathBuf, Error> {
-    let destination = hangar_core::fs::without_verbatim(fs::canonicalize(paths.destination)?);
+    private_at(paths.home, paths.destination, create)
+}
+pub(crate) fn private_at(home: &Path, destination: &Path, create: bool) -> Result<PathBuf, Error> {
+    let destination = hangar_core::fs::without_verbatim(fs::canonicalize(destination)?);
     let key = hash(destination.to_string_lossy().as_bytes());
-    let mut path = paths.home.to_owned();
+    let mut path = home.to_owned();
     for part in [".hangar", "codex-contas", &key] {
         path.push(part);
         if path.is_symlink() {
@@ -186,21 +189,5 @@ pub(crate) async fn lock(path: &Path) -> Result<Guard, Error> {
     if path.is_symlink() {
         return Err(Error::Invalid);
     }
-    let mut options = fs::OpenOptions::new();
-    options.read(true).write(true).create(true).truncate(false);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let file = options.open(path)?;
-    loop {
-        match file.try_lock() {
-            Ok(()) => return Ok(Guard(file)),
-            Err(fs::TryLockError::WouldBlock) => {
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await
-            }
-            Err(fs::TryLockError::Error(e)) => return Err(e.into()),
-        }
-    }
+    Ok(Guard(hangar_core::fs::lock_exclusive(path).await?))
 }

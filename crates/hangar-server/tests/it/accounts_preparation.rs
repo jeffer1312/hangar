@@ -105,13 +105,7 @@ fn environment(root: &Path) -> AccountEnvironment {
     )
 }
 fn bridge() -> AccountsBridge {
-    // Sem servidor nesta porta: o preparo não pode depender de callback HTTP.
-    AccountsBridge::new(
-        "127.0.0.1:1".parse().unwrap(),
-        "synthetic".into(),
-        "instance".into(),
-    )
-    .unwrap()
+    AccountsBridge::new("instance".into())
 }
 async fn settled(service: &AccountService, account: &Account, bridge: &AccountsBridge) -> Value {
     let key = AccountKey::new(Provider::Codex, &account.home).unwrap();

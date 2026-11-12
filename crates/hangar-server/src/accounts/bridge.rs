@@ -1,6 +1,6 @@
 //! Identidade da preparação e espera pelos fatos de uso (`usage.rs`).
 pub use super::types::UsageFacts;
-use std::{net::SocketAddr, time::Duration};
+use std::time::Duration;
 
 /// Identidade do coordenador que publica a operação durável.
 #[derive(Clone)]
@@ -13,14 +13,8 @@ impl AccountsBridge {
         &self.instance
     }
 
-    pub fn new(
-        _upstream: SocketAddr,
-        _secret: String,
-        instance: String,
-    ) -> Result<Self, reqwest::Error> {
-        Ok(Self {
-            instance,
-        })
+    pub fn new(instance: String) -> Self {
+        Self { instance }
     }
 }
 

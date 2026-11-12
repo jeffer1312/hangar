@@ -205,6 +205,18 @@ async fn inherits_preferences_without_copying_identity_or_runtime() {
         "personal"
     );
 }
+#[cfg(unix)]
+#[tokio::test]
+async fn state_file_is_found_through_a_non_canonical_account_path() {
+    let f = Fixture::new();
+    let result = prepare(f.paths(), false, false, &mut Cli::default()).await;
+    assert_eq!(result["status"], "ready");
+    let link = f.directory.path().join("conta-por-link");
+    std::os::unix::fs::symlink(&f.destination, &link).unwrap();
+    let state = hangar_codex_account_sync::state_file(f.directory.path(), &link).unwrap();
+    let saved: Value = serde_json::from_slice(&std::fs::read(state).unwrap()).unwrap();
+    assert_eq!(saved["public"]["status"], "ready");
+}
 #[tokio::test]
 async fn default_account_is_noop_and_missing_source_config_is_empty() {
     let f = Fixture::new();
