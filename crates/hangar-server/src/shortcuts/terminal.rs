@@ -421,8 +421,10 @@ impl Service {
                 }
                 let capture=self.run(["capture-pane".into(), "-p".into(), "-t".into(), where_.clone()]).await;
                 let prefix: String=text.chars().take(25).collect();
+                // O `x` que sobrou mudaria a resposta: sem Enter.
                 if capture.code==Some(0) && capture.stdout.contains(&prefix) {
-                    tracing::warn!("o terminal não removeu o prefixo auxiliar da resposta");
+                    tracing::warn!(code = "placeholder_unremoved", "o terminal não removeu o prefixo auxiliar da resposta");
+                    return false;
                 }
             }
         }

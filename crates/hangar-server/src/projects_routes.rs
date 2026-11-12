@@ -18,8 +18,9 @@ pub fn matches(path: &str) -> bool {
     path.strip_prefix("/api/sessions/")
         .and_then(|s| s.split_once('/'))
         .is_some_and(|(_, op)| {
+            // Com barra final também: o contrato da rota responde o redirecionamento.
             matches!(
-                op,
+                op.strip_suffix('/').unwrap_or(op),
                 "runners" | "runners/custom" | "run" | "run/stop" | "run/pane"
             )
         })
@@ -256,5 +257,15 @@ async fn execute(
             Ok(json!({"ok":true}))
         }
         _ => Ok(json!({"pane":service.run_pane(&cwd).await})),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn runner_routes_with_a_trailing_slash_stay_in_rust() {
+        assert!(super::matches("/api/sessions/demo/runners/"));
+        assert!(super::matches("/api/sessions/demo/run/stop/"));
+        assert!(!super::matches("/api/sessions/demo/runners/x"));
     }
 }

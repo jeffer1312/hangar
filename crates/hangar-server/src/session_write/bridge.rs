@@ -208,6 +208,8 @@ pub async fn delete(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectI
             }
         }
     };
+    // Ainda com o nome reservado: atalho de uma sessão nova com o mesmo nome não pode ser alcançado.
+    if closed.is_ok() { close_shortcuts(&st, &name).await; }
     drop(closing);
     let closed = match closed {
         Ok(closed) => closed,
@@ -345,7 +347,6 @@ async fn after_close(st: &Arc<AppState>, name: &str) -> Option<Value> {
     if let Err(error) = crate::loops::store(st).forget(name) {
         tracing::error!(session = %name, code = "loop_forget_failed", kind = ?error.kind(), "loop da sessão encerrada não saiu");
     }
-    close_shortcuts(st, name).await;
     st.list.forget(name);
     st.list.invalidate();
     warning
@@ -377,6 +378,7 @@ async fn close_bridged(st: Arc<AppState>, peer: SocketAddr, name: &str, headers:
         None => not_ours(),
         Some(Err(error)) => close_refusal(&error),
         Some(Ok(mut closed)) => {
+            close_shortcuts(&st, name).await;
             if let Some(warning) = after_close(&st, name).await { closed["warning"] = warning; }
             super::json_response(StatusCode::OK, closed)
         }

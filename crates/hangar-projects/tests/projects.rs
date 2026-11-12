@@ -150,3 +150,11 @@ async fn unreadable_preferences_do_not_block_the_play() {
     let error = service.start_run(root.path().to_str().unwrap(), "npm run dev").await.unwrap_err();
     assert_eq!(error.status, 502);
 }
+#[cfg(unix)]
+#[tokio::test]
+async fn silent_absence_like_psmux_counts_as_stopped() {
+    let root = tempfile::tempdir().unwrap();
+    let mut service = service(root.path());
+    service.program = vec!["/bin/sh".into(), "-c".into(), "exit 1".into()];
+    service.stop_run(root.path().to_str().unwrap()).await.unwrap();
+}

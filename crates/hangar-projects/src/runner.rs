@@ -179,10 +179,12 @@ impl Service {
         let (ok, _, error) = self
             .mux(vec!["has-session".into(), "-t".into(), format!("={name}")])
             .await;
+        let error = error.trim();
         if ok {
             Some(true)
         } else {
-            hangar_core::terminal_process::mux_absence(error.trim()).then_some(false)
+            // O psmux sem a sessão sai com 1 e nada no stderr; prazo e falha ao lançar têm texto.
+            (error.is_empty() || hangar_core::terminal_process::mux_absence(error)).then_some(false)
         }
     }
     /// A última leitura de `exists` depois de matar: `Some(false)` = parou.
@@ -270,15 +272,27 @@ impl Service {
         }
         result
     }
+    /// O arquivo de preferências fora das threads do runtime: o `atomic_write` espera o disco.
+    async fn prefs_io<T: Send + 'static>(
+        &self,
+        cwd: &str,
+        f: impl FnOnce(&Service, &str) -> T + Send + 'static,
+    ) -> Option<T> {
+        let (service, cwd) = (self.clone(), cwd.to_owned());
+        tokio::task::spawn_blocking(move || f(&service, &cwd)).await.ok()
+    }
     pub async fn run_status(&self, cwd: &str) -> Option<RunInfo> {
         let mut info = self.all_runs().await.remove(&slug(cwd))?;
-        info.command = self.remembered(cwd).unwrap_or_default();
+        info.command = self.prefs_io(cwd, |s, cwd| s.remembered(cwd)).await.flatten().unwrap_or_default();
         Some(info)
     }
     pub async fn start_run(&self, cwd: &str, command: &str) -> Result<RunInfo, Error> {
         // Lembrar é conveniência: arquivo ilegível não impede o play.
-        if let Err(e) = self.save_pref(cwd, "remembered", json!(command)) {
-            tracing::warn!(code = e.code.unwrap_or("runner_prefs_failed"), "comando do run não ficou lembrado: {}", e.detail);
+        let value = json!(command);
+        match self.prefs_io(cwd, move |s, cwd| s.save_pref(cwd, "remembered", value)).await {
+            Some(Ok(())) => {}
+            Some(Err(e)) => tracing::warn!(code = e.code.unwrap_or("runner_prefs_failed"), "comando do run não ficou lembrado: {}", e.detail),
+            None => tracing::warn!(code = "runner_prefs_failed", "gravação do comando do run não terminou"),
         }
         let name = slug(cwd);
         let state = self.kill_run(&name).await;

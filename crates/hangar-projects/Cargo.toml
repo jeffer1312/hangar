@@ -8,7 +8,7 @@ publish = false
 hangar-core.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
-tokio = { workspace = true, features = ["process", "time"] }
+tokio = { workspace = true, features = ["process", "time", "rt"] }
 sha1_smol.workspace = true
 regex.workspace = true
 tracing.workspace = true
