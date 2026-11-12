@@ -178,8 +178,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   site fica com o CI. O padrão, que as travas exigem, é o rápido: só o ligado aos arquivos mudados
   (de Rust, `cargo check` do workspace com testes e exemplos, e `cargo test` dos crates que não são o
   `hangar-server`: os testes dele ficam no workflow `Server`, a cada push, e no `--completo`. A
-  `main` não exige esse check: quem mescla confere que o `Server` do último commit do PR terminou
-  verde, e ele aparece entre os checks desse commit; pytest dos testes
+  `main` não exige esse check, e ele só dispara quando o push mexe nos caminhos do `server.yml`
+  (`crates/**` e os arquivos de runtime do backend): nesse caso, quem mescla confere que o `Server`
+  do último commit do PR terminou verde, e ele aparece entre os checks desse commit; pytest dos testes
   mudados e dos que citam o módulo mudado, a suíte inteira quando muda dependência, conftest ou
   helper; `vitest related` e typecheck só com `.ts`/`.svelte`/mensagens no diff, tudo quando muda
   dependência ou configuração; o nativo inteiro, num target próprio da árvore fixa, porque o custo é
