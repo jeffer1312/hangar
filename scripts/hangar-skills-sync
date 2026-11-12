@@ -16,5 +16,10 @@ setup=$(dirname "$alvo")/hangar-harness-setup
 
 # stdout no lixo, mas o stderr vai pra um arquivo: engolir os dois deixava este o unico caminho da
 # ponte sem rastro NENHUM, e a pessoa so notava dias depois que uma skill nova nao aparecia no pi.
-[ -x "$setup" ] && "$setup" skills >/dev/null 2>>"${TMPDIR:-/tmp}/hangar-skills-sync.err"
+err="${TMPDIR:-/tmp}/hangar-skills-sync.err"
+if [ -x "$setup" ]; then
+  "$setup" skills >/dev/null 2>>"$err" || echo "hangar-harness-setup skills saiu com $?" >>"$err"
+else
+  echo "hangar-harness-setup ausente: $setup" >>"$err"
+fi
 exit 0

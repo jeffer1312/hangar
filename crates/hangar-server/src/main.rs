@@ -242,8 +242,8 @@ async fn run() {
         // Antes de liberar as rotas: o `settings.json` não pode ter dois escritores no começo da vida.
         // O servidor de ensaio não grava hooks da máquina, como na varredura dos canos.
         if std::env::var_os("CP_RUST_NO_ORPHAN_SWEEP").is_none_or(|value| value != "1")
-            && tokio::task::spawn_blocking(move || hangar_server::harness_setup::sync_startup(&startup_accounts)).await.is_err() {
-            tracing::warn!(code = "harness_startup_failed", "tarefa dos hooks e skills da subida falhou");
+            && let Err(error) = tokio::task::spawn_blocking(move || hangar_server::harness_setup::sync_startup(&startup_accounts)).await {
+            tracing::warn!(code = "harness_startup_failed", %error, "tarefa dos hooks e skills da subida falhou");
         }
         startup_prewarm.clean_receipts().await;
         hangar_server::startup::prepare_sessions(startup_environment).await;

@@ -24,7 +24,10 @@ pub fn sync_startup(service: &AccountService) {
         tracing::warn!(code = "harness_startup_no_root", "raiz da instalação não encontrada; hooks e skills não conferidos na subida");
         return;
     };
-    skills::rebuild_report(&service.env, &repo, false);
+    let report = skills::rebuild_report(&service.env, &repo, false);
+    if !report.errors.is_empty() {
+        tracing::warn!(code = "harness_startup_skills_failed", errors = ?report.errors, "ponte de skills não conferida na subida");
+    }
     for name in STARTUP_HOOKS {
         if let Err(errors) = hooks::sync_installer(service, &repo, name) {
             tracing::warn!(code = "harness_startup_hooks_failed", installer = name, ?errors, "hooks do Claude não conferidos na subida");
