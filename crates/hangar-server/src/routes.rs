@@ -153,8 +153,8 @@ pub struct AppState {
     pub connectors: Arc<hangar_connectors::Host>,
     /// Mission Control (`hangar-mission`): etapas, vínculos e evidências em `~/.hangar/mission/`.
     pub mission: Arc<hangar_mission::Store>,
-    /// Avisos do Mission Control à sessão, pela rota de entrada; o roteador entra quando fica pronto.
-    pub mission_notify: Arc<crate::mission_notify::RouterNotify>,
+    /// Avisos do Mission Control à sessão, pelo handler da rota de entrada; o estado entra quando o roteador nasce.
+    pub mission_notify: Arc<crate::mission_notify::SessionNotify>,
 }
 
 impl AppState {
@@ -230,7 +230,7 @@ impl AppState {
                       list_env: crate::list::bridge::ListEnv) -> AppState {
         crate::transcript::set_orq_parser(crate::orchestration::timeline::parse_obj);
         let http = proxy::client();
-        let mission_notify = Arc::new(crate::mission_notify::RouterNotify { router: Default::default(), token: cfg.auth_token.clone() });
+        let mission_notify = Arc::new(crate::mission_notify::SessionNotify { state: Default::default() });
         let mods = crate::mods::state::Mods::default();
         let interactions = Arc::new(crate::interactions::InteractionStore::default());
         let plugin = Arc::new(crate::plugin::Store::new(interactions.clone()));
@@ -790,7 +790,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 
 fn router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
     let api = public_routes(state.clone(), pair);
-    let _ = state.mission_notify.router.set(api.clone());
+    let _ = state.mission_notify.state.set(Arc::downgrade(&state));
     // O MCP chama as tools pelas mesmas rotas que o `hangar-send` chama: o roteador público inteiro.
     api.clone().merge(crate::mcp::router(state.clone(), api))
         .layer(axum::middleware::from_fn_with_state(state.clone(), crate::login_guests::gate::guard))
