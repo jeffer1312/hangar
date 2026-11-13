@@ -108,7 +108,9 @@ export function MessageList({
   const detail = useRef<ToolDetailHandle>(null);
   const pref = useAparencia((s) => s.pensamentoTools);
   const look = useAparencia((s) => s.ferramentas);
-  const preserveExpansion = preserveToolGroupPosition || look === 'terminal' || look === 'claudeDesktop';
+  // Terminal e Claude Desktop agrupam toda sequência de chamadas e guardam o grupo aberto.
+  const everyRun = look === 'terminal' || look === 'claudeDesktop';
+  const preserveExpansion = preserveToolGroupPosition || everyRun;
   const tarefasLigadas = useAparencia((s) => s.tarefas);
   const folha = useAparencia((s) => (s.leitura === 'sheet' ? s.solidezFolha : null));
   const { theme } = useUnistyles();
@@ -116,7 +118,7 @@ export function MessageList({
   const [boxWidth, setBoxWidth] = useState<number | null>(null);
   const previous = useRef<ConversationProjection | null>(null);
   const projection = projectConversation(previous.current, {
-    events, eventsRevision, pref, merge: look === 'tree', terminal: look === 'terminal', desktop: look === 'claudeDesktop', tasksEnabled: tarefasLigadas,
+    events, eventsRevision, pref, merge: look === 'tree', everyRun, tasksEnabled: tarefasLigadas,
     pagesEnabled: !!sessionName, running: new Set(agentesRodando.map((a) => a.id)), queuePanel,
   });
   // Render descartado ou repetido não publica o seu cache nem modifica o snapshot anterior.

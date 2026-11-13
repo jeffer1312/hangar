@@ -14,9 +14,8 @@ export interface ProjectionInput {
   eventsRevision?: number;
   pref: PensamentoTools;
   merge: boolean;
-  terminal?: boolean;
-  /** Claude Desktop: toda sequência vira grupo, como no Terminal. */
-  desktop?: boolean;
+  /** Terminal e Claude Desktop: toda sequência de chamadas vira grupo, mesmo com uma só. */
+  everyRun?: boolean;
   tasksEnabled: boolean;
   pagesEnabled: boolean;
   running: ReadonlySet<string>;
@@ -55,7 +54,7 @@ const resultOf = (results: Map<string, ChatEvent>) => (ev: ChatEvent) => results
 const emptyGroup = (): GroupState => ({ mode: null, count: 0, first: '' });
 
 function configKey(input: ProjectionInput): string {
-  return JSON.stringify([input.pref, input.merge, !!input.terminal, !!input.desktop, input.tasksEnabled, input.pagesEnabled,
+  return JSON.stringify([input.pref, input.merge, !!input.everyRun, input.tasksEnabled, input.pagesEnabled,
     [...input.running].sort(), input.queuePanel?.entries.map((e) => e.id).sort() ?? []]);
 }
 
@@ -72,7 +71,7 @@ function sameRow(a: MessageRow, b: MessageRow, results: Map<string, ChatEvent>, 
 
 /** A revisão igual autoriza apenas a cauda; sem ela, um array novo é uma substituição. */
 export function projectConversation(before: ConversationProjection | null, input: ProjectionInput): ConversationProjection {
-  const everyRun = !!input.terminal || !!input.desktop;
+  const everyRun = !!input.everyRun;
   const groupMin = everyRun ? 1 : 3;
   const config = configKey(input);
   if (before && before.events === input.events && before.revision === input.eventsRevision && before.config === config) return before;

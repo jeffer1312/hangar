@@ -873,9 +873,9 @@ export function toolGroupLabel(names: (string | null | undefined)[]): string {
   return names.every((n) => (n ?? m.formato_tool_generico()) === first) ? first : m.lista_ferramentas();
 }
 
-type FamiliaTool = 'leu' | 'buscou' | 'editou' | 'criou' | 'rodou' | 'outra';
+export type FamiliaTool = 'leu' | 'buscou' | 'editou' | 'criou' | 'rodou' | 'outra';
 
-function familiaTool(nome: string | null | undefined): FamiliaTool {
+export function familiaTool(nome: string | null | undefined): FamiliaTool {
   switch (nome) {
     case 'Read': case 'NotebookRead': return 'leu';
     case 'Grep': case 'Glob': case 'WebSearch': case 'WebFetch': return 'buscou';

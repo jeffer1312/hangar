@@ -1,11 +1,13 @@
-import { memo, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { nomeFerramenta, summarizeToolInput, toolPhase, type ChatEvent } from '@hangar/core';
 import { Icon } from '../../ui/Icon';
 import { callTarget } from './fold';
-import { desktopFamily, desktopSummary, exitCode } from './desktopLook';
+import { desktopFamily, desktopSummary } from './desktopLook';
+import { ExitCodeLine } from './ExitCodeLine';
 import * as m from '../../paraglide/messages';
+import { useSelectableToggle } from './useSelectableToggle';
 
 const SHOWN_CALLS = 40;
 const VERB: Record<ReturnType<typeof desktopFamily>, () => string> = {
@@ -26,14 +28,13 @@ type Props = {
 const DesktopCall = memo(function DesktopCall({ use, result, onExpand }: { use: ChatEvent; result: ChatEvent | null; onExpand?: () => void }) {
   const { theme } = useUnistyles();
   const [open, setOpen] = useState(false);
-  const selecting = useRef(false);
   const family = desktopFamily(use.tool_name);
   const summary = summarizeToolInput(use.tool_name, use.tool_input);
   const target = family === 'outra' ? [nomeFerramenta(use.tool_name), summary].filter(Boolean).join(' ') : callTarget(use.tool_name, summary);
   const failed = toolPhase(result) === 'error';
-  const code = exitCode(result?.result);
   const command = use.tool_input?.['command'];
   const toggle = () => { if (!open) onExpand?.(); setOpen((value) => !value); };
+  const bodyPress = useSelectableToggle(toggle);
   return <View>
     <Pressable onPress={toggle} style={({ pressed }) => [styles.row, pressed && { backgroundColor: theme.tokens.bg.hover }]}
       accessibilityRole="button" accessibilityState={{ expanded: open }}
@@ -44,15 +45,11 @@ const DesktopCall = memo(function DesktopCall({ use, result, onExpand }: { use: 
       <Icon name={open ? 'ChevronDown' : 'ChevronRight'} size={14} color={theme.tokens.text.muted} />
     </Pressable>
     {open ? (
-      // Toque fecha, toque longo seleciona: sem a guarda, soltar a seleção fechava o bloco.
-      <Pressable style={styles.body} accessible={false}
-        onPressIn={() => { selecting.current = false; }}
-        onLongPress={() => { selecting.current = true; }}
-        onPress={() => { if (!selecting.current) toggle(); }}>
+      <Pressable style={styles.body} accessible={false} {...bodyPress}>
         <Text style={[styles.code, { borderColor: theme.tokens.border.subtle, color: theme.tokens.text.primary }]} selectable>
           {typeof command === 'string' ? command : JSON.stringify(use.tool_input ?? {}, null, 2)}
         </Text>
-        {code !== null ? <Text style={[styles.exit, { color: theme.tokens.status.warning }]}>{m.ferr_desktop_codigo_saida({ n: code })}</Text> : null}
+        <ExitCodeLine output={result?.result} />
         {result?.result ? <Text style={[styles.mono, { color: theme.tokens.text.secondary }]} selectable>{result.result}</Text> : null}
       </Pressable>
     ) : null}
@@ -64,7 +61,7 @@ const DesktopRun = memo(function DesktopRun({ calls, resultOf, onExpand }: { cal
   const { theme } = useUnistyles();
   const [open, setOpen] = useState(false);
   const [shown, setShown] = useState(SHOWN_CALLS);
-  const title = desktopSummary(calls, resultOf);
+  const title = useMemo(() => desktopSummary(calls, resultOf), [calls, resultOf]);
   return <View style={styles.run}>
     <Pressable onPress={() => { if (!open) onExpand?.(); setOpen((value) => !value); }}
       style={({ pressed }) => [styles.head, pressed && { backgroundColor: theme.tokens.bg.hover }]}
@@ -87,21 +84,39 @@ const DesktopRun = memo(function DesktopRun({ calls, resultOf, onExpand }: { cal
 
 /** Estilo Claude Desktop: cada sequência de chamadas vira uma linha recolhida; pensamento e Agent cortam. */
 export const DesktopToolGroup = memo(function DesktopToolGroup({ parts, resultOf, onExpand, renderOther }: Props) {
+  // Trecho que cresce não recria as sequências anteriores: cada uma mantém o mesmo array de chamadas.
+  const previousRuns = useRef(new Map<string, ChatEvent[]>());
   const blocks = useMemo(() => {
     const out: Array<{ run: ChatEvent[] } | { other: ChatEvent }> = [];
+    const runs = new Map<string, ChatEvent[]>();
+    const close = (run: ChatEvent[]) => {
+      if (!run.length) return;
+      const before = previousRuns.current.get(run[0].id);
+      const kept = before && before.length === run.length && before.every((call, i) => call === run[i]) ? before : run;
+      runs.set(run[0].id, kept);
+      out.push({ run: kept });
+    };
     let run: ChatEvent[] = [];
     for (const part of parts) {
       if (part.kind === 'tool_use' && part.tool_name !== 'Agent') { run.push(part); continue; }
-      if (run.length) out.push({ run });
+      close(run);
       run = [];
       out.push({ other: part });
     }
-    if (run.length) out.push({ run });
+    close(run);
+    previousRuns.current = runs;
     return out;
   }, [parts]);
   return <View style={styles.group}>{blocks.map((block) => 'run' in block
     ? <DesktopRun key={block.run[0].id} calls={block.run} resultOf={resultOf} onExpand={onExpand} />
     : <View key={block.other.id}>{renderOther?.(block.other)}</View>)}</View>;
+});
+
+/** Chamada solta fora de grupo: a mesma linha de resumo, com uma chamada só. */
+export const DesktopToolCall = memo(function DesktopToolCall({ use, result, onExpand }: { use: ChatEvent; result: ChatEvent | null; onExpand?: () => void }) {
+  const parts = useMemo(() => [use], [use]);
+  const resultOf = useCallback(() => result, [result]);
+  return <DesktopToolGroup parts={parts} resultOf={resultOf} onExpand={onExpand} />;
 });
 
 const styles = StyleSheet.create((theme) => ({
@@ -116,6 +131,5 @@ const styles = StyleSheet.create((theme) => ({
   target: { flexShrink: 1, minWidth: 0, fontSize: theme.base.text.xs },
   body: { paddingHorizontal: theme.base.space[3], paddingBottom: theme.base.space[3], gap: theme.base.space[2] },
   code: { ...theme.type.mono, borderWidth: 1, borderRadius: theme.base.radius.xs, padding: theme.base.space[2] },
-  exit: { fontSize: theme.base.text.xs },
   mono: { ...theme.type.mono },
 }));

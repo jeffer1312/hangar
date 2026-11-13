@@ -103,6 +103,19 @@ it('Terminal recolhe pelo corpo sem tomar o toque longo usado para selecionar', 
   } finally { act(() => root.unmount()); }
 });
 
+it('Terminal aberto mostra o código de saída acima da saída', () => {
+  const use: ChatEvent = { id: 'shell', kind: 'tool_use', tool_name: 'Bash', tool_input: { command: 'false' } };
+  const result: ChatEvent = { id: 'output', kind: 'tool_result', result: 'Exit code 1\nboom', is_error: true };
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  try {
+    act(() => root.render(createElement(ToolCard, { use, result, look: 'terminal', onPress: vi.fn() })));
+    act(() => container.querySelector('button')!.click());
+    // Em inglês a etiqueta repete a primeira linha da saída: a prova é ela logo antes do texto cru.
+    expect(container.textContent).toContain(`${m.ferr_desktop_codigo_saida({ n: 1 })}${result.result}`);
+  } finally { act(() => root.unmount()); }
+});
+
 it('Terminal corta Write em dez linhas, limita a expansão e permite ver o restante separado', () => {
   const use: ChatEvent = { id: 'write', kind: 'tool_use', tool_name: 'Write', tool_input: { file_path: '/repo/large.ts',
     content: Array.from({ length: 450 }, (_, i) => `line-${i + 1}`).join('\n') } };

@@ -1,17 +1,12 @@
-import { nomeFerramenta, toolPhase, toolVerbo, type ChatEvent } from '@hangar/core';
+import { familiaTool, nomeFerramenta, toolPhase, type ChatEvent } from '@hangar/core';
 import * as m from '../../paraglide/messages';
 
 export type DesktopFamily = 'web' | 'ferramentas' | 'rodou' | 'leu' | 'editou' | 'criou' | 'buscou' | 'outra';
 
-// A família vem do `toolVerbo` do core: comparar com o verbo de uma ferramenta conhecida segue o
-// core sem copiar a tabela dele.
-const SAMPLE = { rodou: 'Bash', leu: 'Read', editou: 'Edit', criou: 'Write', buscou: 'Grep' } as const;
-
 export function desktopFamily(name: string | null | undefined): DesktopFamily {
   if (name === 'WebSearch' || name === 'WebFetch') return 'web';
   if (name === 'ToolSearch') return 'ferramentas';
-  const verb = toolVerbo(name);
-  return (Object.keys(SAMPLE) as Array<keyof typeof SAMPLE>).find((family) => toolVerbo(SAMPLE[family]) === verb) ?? 'outra';
+  return familiaTool(name);
 }
 
 function phrase(family: DesktopFamily, n: number, nome: string): string {

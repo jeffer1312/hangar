@@ -194,7 +194,6 @@ export function createActivityFolder(): ActivityFolder {
   // que nenhuma notificação fecha, e a ferramenta ficaria "rodando" pra sempre.
   let shells: Omit<ShellRun, 'running'>[] = [];
   let bgPendente = new Set<string>();
-  let shellTaskIds = new Map<string, string>();
   // agentId cujo FIM chegou ANTES de o launch ser mapeado (ex: a troca de transcript no /clear reordena
   // o fold, ou o launch cai num transcript e o fim no outro). Sem isto o par nao fechava e o agente
   // ficava "rodando" pra sempre. Guardado aqui e resolvido quando o launch aparecer -> pareamento
@@ -285,7 +284,8 @@ export function createActivityFolder(): ActivityFolder {
         const bg = r.match(/Command running in background with ID:\s*([A-Za-z0-9_-]+)/);
         if (bg) {
           bgAgent.set(bg[1], e.tool_use_id);
-          shellTaskIds.set(e.tool_use_id, bg[1]);
+          const shell = shells.find((s) => s.id === e.tool_use_id);
+          if (shell) shell.taskId = bg[1];
           if (completedIds.delete(bg[1])) resulted.add(e.tool_use_id);
           return;   // foi pro fundo: quem fecha e a <task-notification>
         }
@@ -476,7 +476,6 @@ export function createActivityFolder(): ActivityFolder {
     waiting = new Set();
     shells = [];
     bgPendente = new Set();
-    shellTaskIds = new Map();
     for (const e of events) push(e);
   }
 
@@ -496,7 +495,7 @@ export function createActivityFolder(): ActivityFolder {
     runs.sort((a, b) => Number(b.running) - Number(a.running));
     // Shell de fundo: enquanto o tool_use nao tiver a notificacao de fim, esta rodando. Mesmo
     // criterio do Agent em background, e pelo mesmo caminho (`resulted`).
-    const shellRuns: ShellRun[] = shells.map((s) => ({ ...s, running: !resulted.has(s.id), ...(shellTaskIds.has(s.id) && { taskId: shellTaskIds.get(s.id) }) }));
+    const shellRuns: ShellRun[] = shells.map((s) => ({ ...s, running: !resulted.has(s.id) }));
     shellRuns.sort((a, b) => Number(b.running) - Number(a.running));
     const done = tasks.filter((t) => t.status === 'completed').length;
     const inProgress = tasks.filter((t) => t.status === 'in_progress').length;

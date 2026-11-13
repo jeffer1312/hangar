@@ -182,6 +182,51 @@ it('■ recusado pelo servidor volta a linha e mostra o texto do código', async
   expect(stopButton(el)).not.toBeNull();
 });
 
+it('■ também nas seções da Árvore: shell, agente e subagente rodando, com o mesmo parando', async () => {
+  data.activity = { ...data.activity, runningAgents: 1, runningShells: 1,
+    agents: [{ id: 'call-cpu', kind: 'agent', description: 'diag-cpu', running: true, agentId: 'ag-cpu' }],
+    shells: [{ id: 'call-sh', command: 'npm run dev', rotulo: 'npm run dev', running: true, taskId: 'bg1' }] };
+  const running: SubagentRun = { agentId: 'ag-sub', agentType: null, prompt: 'diag-sub', startedAt: '2026-11-13T08:00:00Z',
+    updatedAt: new Date().toISOString(), endedAt: null, mtime: 0, toolCalls: 1, tools: [], recent: [], lastText: '', state: 'running' };
+  const { getSubagents, stopTask } = await import('@hangar/core');
+  vi.mocked(getSubagents).mockResolvedValue([running]);
+  vi.mocked(stopTask).mockClear();
+  try {
+    const el = await mount();
+    const button = (title: string) => el.querySelector<HTMLElement>(`[aria-label="${m.atividade_desktop_parar()}: ${title}"]`);
+    expect(button('diag-cpu')).not.toBeNull();
+    expect(button('diag-sub')).not.toBeNull();
+    expect(stopButton(el)).not.toBeNull();
+    await act(async () => stopButton(el)!.click());
+    expect(stopTask).toHaveBeenCalledWith('sess', 'bg1', data.server);
+    expect(el.textContent).toContain(m.atividade_parando());
+    expect(stopButton(el)).toBeNull();
+    await act(async () => button('diag-cpu')!.click());
+    expect(stopTask).toHaveBeenCalledWith('sess', 'ag-cpu', data.server);
+  } finally {
+    vi.mocked(getSubagents).mockResolvedValue([]);
+  }
+});
+
+it('■ fica fora do convidado só de leitura e do Codex', async () => {
+  data.activity = { ...data.activity, runningShells: 1,
+    shells: [{ id: 'call-sh', command: 'npm run dev', rotulo: 'npm run dev', running: true, taskId: 'bg1' }] };
+  const { useSessions } = await import('../../stores/sessions');
+  const before = useSessions.getState().rows;
+  for (const row of [{ provider: 'codex' }, { provider: 'claude', guest_kind: 'pair' }]) {
+    useSessions.setState({ rows: [{ serverId: 'a', name: 'sess', ...row }] as never });
+    try {
+      const el = await mount();
+      expect(el.textContent).toContain('npm run dev');
+      expect(stopButton(el)).toBeNull();
+      await act(async () => root!.unmount());
+      root = undefined;
+    } finally {
+      useSessions.setState({ rows: before });
+    }
+  }
+});
+
 it('shell sem id de fundo não ganha ■', async () => {
   data.ferramentas = 'claudeDesktop';
   data.activity = { ...data.activity, runningShells: 1,

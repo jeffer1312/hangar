@@ -16,7 +16,7 @@ const plainRows = (rows: ConversationProjection['data']) => rows.map((row) => {
   return plain;
 });
 
-describe.each([[true, false, false], [false, false, false], [false, true, false], [false, false, true]])('contrato do agrupamento, árvore=%s, terminal=%s, desktop=%s', (merge, terminal, desktop) => {
+describe.each([[true, false], [false, false], [false, true]])('contrato do agrupamento, árvore=%s, toda sequência=%s', (merge, everyRun) => {
   it.each(['nada', 'busca', 'tudo'] as const)('preserva cada prefixo com preferência %s', (pref) => {
     const events: ChatEvent[] = [
       message('a'), { id: 'thought', kind: 'thinking', text: 'reason' }, tool('load', 'ToolSearch'),
@@ -27,9 +27,9 @@ describe.each([[true, false, false], [false, false, false], [false, true, false]
     let state: ConversationProjection | null = null;
     for (let n = 1; n <= events.length; n++) {
       const prefix = events.slice(0, n);
-      state = projectConversation(state, input(prefix, { merge, pref, terminal, desktop }));
+      state = projectConversation(state, input(prefix, { merge, pref, everyRun }));
       const results = new Map(prefix.filter((ev) => ev.kind === 'tool_result').map((ev) => [ev.tool_use_id, ev]));
-      const expected = foldConversation(agruparConversa(prefix, { entraNoPensamento: (name) => entraNoPensamento(pref, name), groupMin: terminal || desktop ? 1 : 3 }), merge,
+      const expected = foldConversation(agruparConversa(prefix, { entraNoPensamento: (name) => entraNoPensamento(pref, name), groupMin: everyRun ? 1 : 3 }), merge,
         (ev) => { const r = results.get(ev.tool_use_id); return r && !r.is_error ? htmlPageFromResult(ev.tool_name, r.result) : null; });
       expect(plainRows(state.data), `prefix=${n}`).toEqual(expected);
       for (const row of state.data) if (row.type === 'fold') expect(summaryTitle(row.summary!)).toBe(foldTitle(row.parts));
@@ -39,12 +39,12 @@ describe.each([[true, false, false], [false, false, false], [false, true, false]
 
 it('Claude Desktop agrupa sequência de uma chamada e o Agent corta o grupo', () => {
   const events = [message('a'), tool('one'), message('b'), tool('t1'), tool('agent', 'Agent'), tool('t2'), tool('t3')];
-  const rows = projectConversation(null, input(events, { merge: false, desktop: true })).data;
+  const rows = projectConversation(null, input(events, { merge: false, everyRun: true })).data;
   expect(rows.map((row) => row.type === 'fold' ? [row.source, row.parts.map((p) => p.id)] : row.id)).toEqual([
     'a', ['group', ['one']], 'b', ['group', ['t1']], ['tool', ['agent']], ['group', ['t2', 't3']],
   ]);
   expect(projectConversation(null, input(events, { merge: false })).config)
-    .not.toBe(projectConversation(null, input(events, { merge: false, desktop: true })).config);
+    .not.toBe(projectConversation(null, input(events, { merge: false, everyRun: true })).config);
 });
 
 it('chaves duplicadas continuam únicas inclusive quando um sufixo existe no transcript', () => {

@@ -1,4 +1,4 @@
-import { memo, useState } from 'react';
+import { memo, useCallback, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { ChatEvent } from '@hangar/core';
@@ -47,14 +47,16 @@ export const ToolGroup = memo(function ToolGroup({
   const aberto = (chips && calls <= CHIPS_ABERTO_ATE) !== virado;
   const [tudo, setTudo] = useState(false);
   const falhas = failedLabel(folded.failures);
-
-  if (look === 'terminal') return <TerminalToolGroup parts={parts} resultOf={resultOf} onExpand={onExpand} onOpen={onAbrir} pluginServers={pluginServers} />;
-
-  const linha = (p: ChatEvent) =>
+  // No Claude Desktop só pensamento e Agent passam por aqui (as chamadas viram a linha de resumo),
+  // e os dois se desenham como na Árvore.
+  const cardLook: Ferramentas = look === 'claudeDesktop' ? 'tree' : look;
+  // Estável entre renders: o DesktopToolGroup a recebe como prop e fica em `memo`.
+  const linha = useCallback((p: ChatEvent) =>
     p.kind === 'thinking'
       ? <ThinkingBlock key={p.id} ev={p} />
-      : <ToolCard key={p.id} use={p} result={resultOf(p)} onPress={onAbrir} look={look === 'claudeDesktop' ? 'tree' : look} />;
-  // Pensamento e Agent seguem como na Árvore; as chamadas viram a linha do Claude Desktop.
+      : <ToolCard key={p.id} use={p} result={resultOf(p)} onPress={onAbrir} look={cardLook} />, [resultOf, onAbrir, cardLook]);
+
+  if (look === 'terminal') return <TerminalToolGroup parts={parts} resultOf={resultOf} onExpand={onExpand} onOpen={onAbrir} pluginServers={pluginServers} />;
   if (look === 'claudeDesktop') return <DesktopToolGroup parts={parts} resultOf={resultOf} onExpand={onExpand} renderOther={linha} />;
   // Tabela dos Chips: caixa com borda e divisória entre as linhas (chip_table do Rust).
   const tabela = (ls: ChatEvent[]) => (

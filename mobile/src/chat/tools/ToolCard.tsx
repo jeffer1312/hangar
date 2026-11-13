@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo } from 'react';
+import { memo } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { nomeFerramenta, summarizeToolInput, summarizeToolResult, toolPhase, toolVerbo, type ChatEvent } from '@hangar/core';
@@ -6,7 +6,7 @@ import { callTarget } from './fold';
 import type { Ferramentas } from '../../stores/aparencia';
 import { Icon } from '../../ui/Icon';
 import { TerminalTool } from './TerminalTool';
-import { DesktopToolGroup } from './DesktopToolGroup';
+import { DesktopToolCall } from './DesktopToolGroup';
 import * as m from '../../paraglide/messages';
 
 // Uma chamada como linha, no desenho escolhido em Aparência › Chamadas de ferramenta:
@@ -41,11 +41,9 @@ export const ToolCard = memo(function ToolCard({
   const cor = falhou ? theme.tokens.status.warning : theme.tokens.text.muted;
   const erro = falhou ? summarizeToolResult(result, use.tool_name) : '';
   const rodando = escrevendo ? m.tool_fase_escrevendo() : m.estado_em_execucao();
-  const desktopParts = useMemo(() => [use], [use]);
-  const desktopResult = useCallback(() => result ?? null, [result]);
 
   // Claude Desktop: chamada solta vira a mesma linha de resumo; o Agent fica na linha da Árvore.
-  if (look === 'claudeDesktop' && use.tool_name !== 'Agent') return <DesktopToolGroup parts={desktopParts} resultOf={desktopResult} onExpand={onExpand} />;
+  if (look === 'claudeDesktop' && use.tool_name !== 'Agent') return <DesktopToolCall use={use} result={result ?? null} onExpand={onExpand} />;
 
   if (look === 'terminal') return <TerminalTool use={use} result={result} escrevendo={escrevendo} onExpand={onExpand} onOpen={onPress} />;
 
