@@ -73,8 +73,10 @@ async fn reply(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Response {
             };
             let state = st.clone();
             blocking(&st, move |paths| {
-                let config = crate::config_sync::runtime::RuntimeConfig::from_state(&state).map_err(setup::Error::io)?;
-                setup::save(paths, &facts(&state)?, &config.jev_aux(), &body)
+                let config = || crate::config_sync::runtime::RuntimeConfig::from_state(&state).map_err(setup::Error::io);
+                // O env do Jev relido sob a trava: o que a página Jev gravou no meio não volta atrás.
+                let jev = || -> Result<_, setup::Error> { Ok(config()?.jev_env()) };
+                setup::save(paths, &facts(&state)?, &config()?.jev_aux(), &body, jev)
             })
             .await
         }

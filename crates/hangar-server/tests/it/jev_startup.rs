@@ -584,6 +584,26 @@ fn jev_25_env_that_is_not_an_object() {
     assert!(home.failures().contains(&"chave".to_owned()));
 }
 
+// JEV-18: `.claude.json` com o surrogate solto que o Claude Code grava e chave diferente da do Jev, sem
+// marca: a chave antiga vai para a lista de trocadas antes de o repasse sobrescrevê-la, e a migração
+// conclui (o leitor estrito pulava a origem e a chave se perdia calada).
+#[test]
+fn jev_18_lone_surrogate_file_keeps_the_replaced_key() {
+    let home = Home::new();
+    home.text(MAIN, r#"{"a": "x\ud800", "mcpServers": {"hangar-computer-control": {"command": "c", "env": {"TYPESAFE_API_KEY": "velha"}}}}"#);
+    home.put(RUNTIME, &json!({"jev_api_key": "pagina"}));
+    home.start();
+    assert!(home.failures().is_empty(), "{:?}", home.failures());
+    assert!(home.exists(MARKER));
+    let mut kept = Map::new();
+    kept.insert(home.source(MAIN), json!(["velha"]));
+    assert_eq!(home.json(OLD_KEYS), Value::Object(kept));
+    let text = String::from_utf8(home.bytes(MAIN)).expect("utf-8");
+    assert!(text.contains(r#""a": "x\ud800""#), "{text}");
+    let data = hangar_core::pycompat::pyjson::loads_lossless(&text).expect("json");
+    assert_eq!(data["mcpServers"]["hangar-computer-control"]["env"]["TYPESAFE_API_KEY"], "pagina");
+}
+
 fn json_text() -> impl proptest::strategy::Strategy<Value = String> {
     use proptest::prelude::*;
     prop_oneof![

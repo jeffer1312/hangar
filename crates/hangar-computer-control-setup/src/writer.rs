@@ -18,44 +18,53 @@ const JEV_VARS: [&str; 7] =
     ["TYPESAFE_API_KEY", "JEV_ENDPOINT", "JEV_MODEL", "LLM_PROXY_URL", "LLM_MODEL", "LLM_EFFORT", "LLM_PROXY_KEY"];
 const LLM_VARS: [&str; 4] = ["LLM_PROXY_URL", "LLM_MODEL", "LLM_EFFORT", "LLM_PROXY_KEY"];
 
-/// O que ligar grava: o programa do MCP, o alvo padrão e o env do Jev já resolvido.
+/// O que ligar grava: o programa do MCP e o alvo padrão. O env do Jev é lido depois da trava.
 #[derive(Clone, Debug)]
 pub struct Entry {
     pub command: String,
     pub agent_config: String,
-    pub jev: Map<String, Value>,
 }
 
 /// Liga: a entrada vai ao principal e a cada conta com `.claude.json` não vazio. Alvo padrão, pasta dos
 /// alvos e Jev são trocados; o resto do env da entrada conhecida é de quem montou o MCP e fica (o
 /// `VIRTUAL_ENV` vazio de propósito impede herdar o venv), menos `PYTHONPATH`. Gerenciada vazia = ausente.
-pub fn write_entry(paths: &Paths, entry: &Entry) -> Result<(), Error> {
+/// `jev` roda já sob a trava: um repasse do Jev no meio nunca é desfeito pelo env lido antes.
+pub fn write_entry(
+    paths: &Paths,
+    entry: &Entry,
+    jev: impl FnOnce() -> Result<Map<String, Value>, Error>,
+) -> Result<(), Error> {
     let _locks = lock_all(paths)?;
     let files = read_entries(paths)?;
+    for file in &files {
+        checked_servers(&file.path, &file.data)?;
+    }
     let active = files.first().and_then(|file| file.entry.clone());
     let enabled = active.is_some();
     let known = known_from(paths, active)?;
     let previous = crate::state::env_of(known.as_ref(), paths, enabled)?;
+    let jev = jev()?;
     let mut managed = Map::new();
     managed.insert("HCC_AGENT_CONFIG".into(), json!(entry.agent_config));
     managed.insert("HCC_AGENTS_DIR".into(), json!(paths.targets_dir().to_string_lossy()));
     for key in JEV_VARS {
-        managed.insert(key.into(), entry.jev.get(key).cloned().unwrap_or_else(|| json!("")));
+        managed.insert(key.into(), jev.get(key).cloned().unwrap_or_else(|| json!("")));
     }
     let mut env: Map<String, Value> =
         previous.into_iter().filter(|(key, _)| !managed.contains_key(key) && key != "PYTHONPATH").collect();
     env.extend(managed.into_iter().filter(|(_, value)| truthy(value)));
     let wanted = json!({"command": entry.command, "args": [], "env": env});
     let main = paths.main_file();
+    let mut written = Written::default();
     for file in files {
         let account = file.path != main;
         // Conta nunca aberta (vazia ou `{}`) ganha a entrada pelo espelho na primeira reconciliação.
         if account && file.data.is_empty() {
             continue;
         }
-        update(&file.path, false, |bytes| {
+        let wrote = update(&file.path, false, |bytes| {
             let mut data = parsed(&file.path, bytes, account)?;
-            entry_of(&file.path, &data)?;
+            checked_servers(&file.path, &data)?;
             if (account && data.is_empty()) || data.get("mcpServers").and_then(|s| s.get(NAME)) == Some(&wanted) {
                 return Ok(None);
             }
@@ -65,7 +74,8 @@ pub fn write_entry(paths: &Paths, entry: &Entry) -> Result<(), Error> {
             }
             servers[NAME] = wanted.clone();
             Ok(Some(data))
-        })?;
+        });
+        written.note(&file.path, wrote)?;
     }
     Ok(())
 }
@@ -74,51 +84,105 @@ pub fn write_entry(paths: &Paths, entry: &Entry) -> Result<(), Error> {
 pub fn remove_entry(paths: &Paths) -> Result<(), Error> {
     let _locks = lock_all(paths)?;
     let files = read_entries(paths)?;
+    for file in &files {
+        checked_servers(&file.path, &file.data)?;
+    }
+    let mut written = Written::default();
     if let Some(active) = files.first().and_then(|file| file.entry.clone()) {
         // A guardada é só a cópia da última entrada ativa: não precisa ser lida.
-        update(&paths.parked_file(), true, |_| Ok(Some(active.clone())))?;
+        let parked = paths.parked_file();
+        written.note(&parked, update(&parked, true, |_| Ok(Some(active.clone()))))?;
     }
     let main = paths.main_file();
     for file in files {
         let account = file.path != main;
-        update(&file.path, false, |bytes| {
+        let wrote = update(&file.path, false, |bytes| {
             let mut data = parsed(&file.path, bytes, account)?;
-            entry_of(&file.path, &data)?;
+            checked_servers(&file.path, &data)?;
             let removed = match data.get_mut("mcpServers") {
                 Some(Value::Object(servers)) => servers.shift_remove(NAME).is_some(),
                 _ => false,
             };
             Ok(removed.then_some(data))
-        })?;
+        });
+        written.note(&file.path, wrote)?;
     }
     Ok(())
 }
 
 /// Leva o env do Jev às entradas ativas e à guardada, sem ligar nada nem mexer no resto do env. Lê e
-/// valida tudo antes da primeira gravação; a guardada vai antes das contas.
+/// valida tudo (guardada incluída) antes da primeira gravação; a guardada vai antes das contas.
 pub fn sync_jev(paths: &Paths, jev: &Map<String, Value>) -> Result<(), Error> {
     let _locks = lock_all(paths)?;
+    let main = paths.main_file();
     let mut pending = Vec::new();
     for path in paths.config_files() {
-        let file = read_entry(path, false)?;
+        let account = path != main;
+        let file = read_entry(path, account)?;
         if let Some(entry) = &file.entry {
             let env = env_in(entry, &file.path)?;
             if with_jev(&env, jev) != env {
-                keep_old_llm(paths, &file.path, &env, jev)?;
-                pending.push(file.path);
+                pending.push((file.path, env));
             }
         }
     }
-    publish_jev(paths, &paths.parked_file(), false, jev)?;
-    for path in pending {
-        publish_jev(paths, &path, true, jev)?;
+    let parked = paths.parked_file();
+    if let Some(entry) = crate::files::parked_entry(paths)? {
+        env_in(&entry, &parked)?;
+    }
+    for (path, env) in &pending {
+        keep_old_llm(paths, path, env, jev)?;
+    }
+    let mut written = Written::default();
+    written.note(&parked, publish_jev(paths, &parked, false, jev))?;
+    for (path, _) in pending {
+        let wrote = publish_jev(paths, &path, path != main, jev);
+        written.note(&path, wrote)?;
     }
     Ok(())
 }
 
-fn publish_jev(paths: &Paths, path: &Path, active: bool, jev: &Map<String, Value>) -> Result<(), Error> {
+/// Arquivos já gravados na rodada: uma falha no meio diz quais ficaram com a mudança.
+#[derive(Default)]
+struct Written(Vec<String>);
+
+impl Written {
+    fn note(&mut self, path: &Path, result: Result<bool, Error>) -> Result<(), Error> {
+        match result {
+            Ok(true) => {
+                self.0.push(path.to_string_lossy().into_owned());
+                Ok(())
+            }
+            Ok(false) => Ok(()),
+            Err(mut error) if !self.0.is_empty() => {
+                error.msg = format!("{}; já gravados antes da falha: {}", error.msg, self.0.join(", "));
+                if let Some(params) = error.params.as_object_mut() {
+                    params.insert("written".into(), json!(self.0));
+                }
+                Err(error)
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
+/// Só `null` vale como `mcpServers` ausente: qualquer outro valor que não é objeto recusa antes de gravar.
+fn checked_servers(path: &Path, data: &Map<String, Value>) -> Result<(), Error> {
+    match data.get("mcpServers") {
+        None | Some(Value::Null | Value::Object(_)) => Ok(()),
+        Some(_) => Err(Error::read(
+            path,
+            "mcpServers inválido",
+            format!("mcpServers em {} não é um objeto JSON", path.display()),
+        )),
+    }
+}
+
+/// `account`: conta de 0 bytes vale `{}`, como no PUT.
+fn publish_jev(paths: &Paths, path: &Path, account: bool, jev: &Map<String, Value>) -> Result<bool, Error> {
+    let active = path != paths.parked_file().as_path();
     update(path, !active, |bytes| {
-        let mut data = parsed(path, bytes, false)?;
+        let mut data = parsed(path, bytes, account)?;
         let entry = if active { entry_of(path, &data)? } else { (!data.is_empty()).then(|| data.clone()) };
         let Some(mut entry) = entry else {
             return Ok(None);
@@ -181,6 +245,7 @@ fn keep_old_llm(paths: &Paths, source: &Path, old: &Map<String, Value>, new: &Ma
         previous.insert(source.clone(), Value::Object(old.clone()));
         Ok(Some(previous))
     })
+    .map(drop)
 }
 
 /// Trava, em ordem fixa, todo arquivo que um escritor desta entrada toca: duas gravações nunca se cruzam.
@@ -201,23 +266,23 @@ fn lock_all(paths: &Paths) -> Result<Vec<ConfigLock>, Error> {
         .collect()
 }
 
-/// Relê o arquivo, monta o conteúdo novo e grava se ele não mudou no meio; `None` não grava. Detecta a
-/// mudança vista durante a montagem; contra quem não usa a trava não é CAS.
+/// Relê o arquivo, monta o conteúdo novo e grava se ele não mudou no meio; `None` não grava. Diz se
+/// gravou. Detecta a mudança vista durante a montagem; contra quem não usa a trava não é CAS.
 fn update(
     path: &Path,
     private: bool,
     mut build: impl FnMut(Option<&[u8]>) -> Result<Option<Map<String, Value>>, Error>,
-) -> Result<(), Error> {
+) -> Result<bool, Error> {
     for _ in 0..3 {
         let link = std::fs::read_link(path).ok();
         let raw = read_raw(path)?;
         let Some(data) = build(raw.as_deref())? else {
-            return Ok(());
+            return Ok(false);
         };
         if read_raw(path)? != raw {
             continue;
         }
-        return write_json(path, data, private, raw.as_deref(), link.as_deref());
+        return write_json(path, data, private, raw.as_deref(), link.as_deref()).map(|()| true);
     }
     Err(Error::io(format!("Arquivo continua mudando: {}; tentar novamente", path.display())))
 }
@@ -361,14 +426,157 @@ mod tests {
         assert_eq!(std::fs::read(saved).unwrap(), br#"{"external":"preserved"}"#);
     }
 
+    fn with_account(home: &Path) -> Paths {
+        std::fs::create_dir_all(home.join("acc")).unwrap();
+        Paths::new(home.to_owned(), vec![home.join("acc")])
+    }
+
+    fn entry() -> Entry {
+        Entry { command: "/bin/hcu".into(), agent_config: String::new() }
+    }
+
+    fn active() -> &'static str {
+        r#"{"mcpServers":{"hangar-computer-control":{"command":"c","env":{"LOCAL":"1"}}}}"#
+    }
+
+    fn recovered(dir: &Path) -> PathBuf {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.file_name().unwrap().to_string_lossy().starts_with(".hangar-recovery-"))
+            .expect("versão deslocada retida")
+    }
+
+    /// D2.7 no repasse do Jev: conta com `.claude.json` de 0 bytes é pulada, não derruba o resto.
+    #[test]
+    fn jev_skips_an_empty_account_file() {
+        let home = tempfile::tempdir().unwrap();
+        let paths = with_account(home.path());
+        std::fs::write(paths.main_file(), active()).unwrap();
+        std::fs::write(home.path().join("acc/.claude.json"), b"").unwrap();
+        sync_jev(&paths, &jev()).unwrap();
+        let main = std::fs::read_to_string(paths.main_file()).unwrap();
+        assert!(main.contains("fixture-key"), "{main}");
+        assert_eq!(std::fs::read(home.path().join("acc/.claude.json")).unwrap(), b"");
+    }
+
+    /// O modelo antigo só é guardado depois de tudo validado: guardada inválida não deixa backup.
+    #[test]
+    fn jev_keeps_the_old_model_only_after_validating_everything() {
+        let home = tempfile::tempdir().unwrap();
+        let paths = paths(home.path());
+        std::fs::write(paths.main_file(), r#"{"mcpServers":{"hangar-computer-control":{"command":"c","env":{"LLM_MODEL":"velho"}}}}"#).unwrap();
+        std::fs::create_dir_all(paths.parked_file().parent().unwrap()).unwrap();
+        std::fs::write(paths.parked_file(), br#"{"env":"invalid"}"#).unwrap();
+        let jev = Map::from_iter([("LLM_MODEL".to_owned(), json!("novo"))]);
+        assert!(sync_jev(&paths, &jev).is_err());
+        assert!(!paths.old_llm_file().exists());
+    }
+
+    /// O env do Jev é pedido com a trava já tomada.
+    #[test]
+    fn jev_env_is_read_under_the_lock() {
+        let home = tempfile::tempdir().unwrap();
+        let paths = paths(home.path());
+        let lock = hangar_core::config_lock::lock_path(&paths.main_file());
+        write_entry(&paths, &entry(), || {
+            assert!(lock.is_dir(), "trava ausente ao ler o Jev");
+            Ok(jev())
+        })
+        .unwrap();
+        assert!(!lock.exists());
+        assert!(std::fs::read_to_string(paths.main_file()).unwrap().contains("fixture-key"));
+    }
+
+    /// Falha no meio: o erro diz quais arquivos já foram gravados.
+    #[test]
+    fn write_entry_failure_midway_lists_what_was_written() {
+        let home = tempfile::tempdir().unwrap();
+        let paths = with_account(home.path());
+        let account = home.path().join("acc/.claude.json");
+        std::fs::write(paths.main_file(), b"{}").unwrap();
+        std::fs::write(&account, br#"{"x":1}"#).unwrap();
+        let swapped = account.clone();
+        let error = race::with(
+            &paths.main_file(),
+            move || {
+                std::fs::remove_file(&swapped).unwrap();
+                std::fs::create_dir(&swapped).unwrap();
+            },
+            || write_entry(&paths, &entry(), || Ok(Map::new())),
+        )
+        .unwrap_err();
+        assert_eq!(error.params["written"], json!([paths.main_file().to_string_lossy()]), "{}", error.params);
+        assert!(std::fs::read_to_string(paths.main_file()).unwrap().contains(NAME));
+    }
+
+    #[test]
+    fn remove_entry_failure_midway_lists_the_parked_and_written_files() {
+        let home = tempfile::tempdir().unwrap();
+        let paths = with_account(home.path());
+        let account = home.path().join("acc/.claude.json");
+        std::fs::write(paths.main_file(), active()).unwrap();
+        std::fs::write(&account, active()).unwrap();
+        let swapped = account.clone();
+        let error = race::with(
+            &paths.main_file(),
+            move || {
+                std::fs::remove_file(&swapped).unwrap();
+                std::fs::create_dir(&swapped).unwrap();
+            },
+            || remove_entry(&paths),
+        )
+        .unwrap_err();
+        let written = json!([paths.parked_file().to_string_lossy(), paths.main_file().to_string_lossy()]);
+        assert_eq!(error.params["written"], written, "{}", error.params);
+        assert!(!std::fs::read_to_string(paths.main_file()).unwrap().contains(NAME));
+    }
+
+    /// Escrita alheia no último instante antes de ligar: retida, nunca sobrescrita calada.
+    #[test]
+    fn write_entry_retains_an_external_last_moment_write() {
+        let home = tempfile::tempdir().unwrap();
+        let paths = paths(home.path());
+        std::fs::write(paths.main_file(), b"{}").unwrap();
+        let outside = paths.main_file();
+        let error = race::with(
+            &paths.main_file(),
+            move || std::fs::write(outside, br#"{"external":true}"#).unwrap(),
+            || write_entry(&paths, &entry(), || Ok(Map::new())),
+        )
+        .unwrap_err();
+        let saved = recovered(home.path());
+        assert!(error.msg.contains(saved.to_str().unwrap()), "{}", error.msg);
+        assert_eq!(std::fs::read(saved).unwrap(), br#"{"external":true}"#);
+    }
+
+    /// Idem ao desligar: a guardada já gravada aparece no erro.
+    #[test]
+    fn remove_entry_retains_an_external_last_moment_write() {
+        let home = tempfile::tempdir().unwrap();
+        let paths = paths(home.path());
+        std::fs::write(paths.main_file(), active()).unwrap();
+        let outside = paths.main_file();
+        let error = race::with(
+            &paths.main_file(),
+            move || std::fs::write(outside, br#"{"external":true}"#).unwrap(),
+            || remove_entry(&paths),
+        )
+        .unwrap_err();
+        let saved = recovered(home.path());
+        assert!(error.msg.contains(saved.to_str().unwrap()), "{}", error.msg);
+        assert_eq!(std::fs::read(saved).unwrap(), br#"{"external":true}"#);
+        assert_eq!(error.params["written"], json!([paths.parked_file().to_string_lossy()]), "{}", error.params);
+    }
+
     /// O surrogate solto que o Claude Code grava volta igual depois da troca da entrada.
     #[test]
     fn lone_surrogate_is_written_back() {
         let home = tempfile::tempdir().unwrap();
         let paths = paths(home.path());
         std::fs::write(paths.main_file(), r#"{"a": "x\ud800y"}"#).unwrap();
-        let entry = Entry { command: "/bin/hcu".into(), agent_config: String::new(), jev: Map::new() };
-        write_entry(&paths, &entry).unwrap();
+        let entry = Entry { command: "/bin/hcu".into(), agent_config: String::new() };
+        write_entry(&paths, &entry, || Ok(Map::new())).unwrap();
         let text = std::fs::read_to_string(paths.main_file()).unwrap();
         assert!(text.contains(r#""a": "x\ud800y""#), "{text}");
         assert!(text.contains(NAME), "{text}");

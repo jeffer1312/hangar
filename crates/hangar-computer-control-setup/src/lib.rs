@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-pub use files::{FileEntry, known_entry, read_entries};
+pub use files::{FileEntry, known_entry, parked_entry, read_entries, read_entry};
 pub use save::{Aux, Mode, SaveRequest, save};
 pub use ssh::{ssh_hosts, test_host, windows_setup};
 pub use state::{Facts, state};

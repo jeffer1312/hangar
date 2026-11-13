@@ -34,12 +34,17 @@ pub(crate) fn known_from(paths: &Paths, active: Option<Map<String, Value>>) -> R
     if active.is_some() {
         return Ok(active);
     }
+    parked_entry(paths)
+}
+
+/// A entrada guardada ao desligar (`None` = não há).
+pub fn parked_entry(paths: &Paths) -> Result<Option<Map<String, Value>>, Error> {
     let parked = read_object(&paths.parked_file(), false)?;
     Ok((!parked.is_empty()).then_some(parked))
 }
 
 /// Conta com arquivo de 0 bytes vale `{}`, como conta nunca aberta; o principal vazio é erro.
-pub(crate) fn read_entry(path: PathBuf, account: bool) -> Result<FileEntry, Error> {
+pub fn read_entry(path: PathBuf, account: bool) -> Result<FileEntry, Error> {
     let data = read_object(&path, account)?;
     let entry = entry_of(&path, &data)?;
     Ok(FileEntry { path, data, entry })
@@ -60,7 +65,8 @@ pub(crate) fn entry_of(path: &Path, data: &Map<String, Value>) -> Result<Option<
 
 /// Ausente = `{}`; ilegível, JSON inválido ou não objeto = `erro_computer_control_read`.
 pub(crate) fn read_object(path: &Path, empty_ok: bool) -> Result<Map<String, Value>, Error> {
-    let bytes = match std::fs::read(path) {
+    // O Claude Code troca o arquivo por rename: no Windows a leitura no meio da troca falha por um instante.
+    let bytes = match hangar_core::fs::read_replaced(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Map::new()),
         Err(error) => return Err(unreadable(path, &error)),

@@ -2,7 +2,7 @@
 use std::path::Path;
 
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Map, Value, json};
 
 use hangar_core::pycompat::truthy;
 
@@ -53,8 +53,15 @@ pub struct Aux {
     pub effort: String,
 }
 
-/// Grava (ligado) ou tira (desligado) a entrada em todos os `.claude.json`.
-pub fn save(paths: &Paths, facts: &Facts, aux: &Aux, body: &SaveRequest) -> Result<(), Error> {
+/// Grava (ligado) ou tira (desligado) a entrada em todos os `.claude.json`. `jev` dá o env do Jev e é
+/// lido já sob a trava (ver `write_entry`).
+pub fn save(
+    paths: &Paths,
+    facts: &Facts,
+    aux: &Aux,
+    body: &SaveRequest,
+    jev: impl FnOnce() -> Result<Map<String, Value>, Error>,
+) -> Result<(), Error> {
     if body.jev_key.as_deref().is_some_and(|key| !key.trim().is_empty()) {
         return Err(Error::plain(400, "erro_computer_control_jev_key_moved", "a chave do Jev do Computer Use agora é a da página Jev"));
     }
@@ -86,11 +93,8 @@ pub fn save(paths: &Paths, facts: &Facts, aux: &Aux, body: &SaveRequest) -> Resu
         });
     }
     reject_own_model(body, aux, &facts.cliproxy_keys)?;
-    write_entry(paths, &Entry {
-        command: paths.binary().to_string_lossy().into_owned(),
-        agent_config: agent.to_owned(),
-        jev: facts.jev.clone(),
-    })
+    let entry = Entry { command: paths.binary().to_string_lossy().into_owned(), agent_config: agent.to_owned() };
+    write_entry(paths, &entry, jev)
 }
 
 /// Modelo diferente do auxiliar sumiria calado: volta erro com os campos, na ordem do corpo.
@@ -153,7 +157,7 @@ mod tests {
                 let raw = json!({"enabled": enabled, "mode": mode, "agent_config": agent, "llm_model": model,
                     "llm_url": url, "jev_key": jev_key, "use_cliproxy_key": cliproxy});
                 let body: SaveRequest = serde_json::from_value(raw).unwrap();
-                let _ = save(&paths, &Facts::default(), &Aux::default(), &body);
+                let _ = save(&paths, &Facts::default(), &Aux::default(), &body, || Ok(Map::new()));
             }
         }
     }

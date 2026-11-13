@@ -8,7 +8,6 @@ use crate::orchestration::truthy;
 use hangar_computer_control_setup as setup;
 use serde_json::{Map, Value, json};
 use std::path::Path;
-pub(super) const NAME: &str = setup::NAME;
 const LLM: [&str; 4] = ["LLM_PROXY_URL", "LLM_MODEL", "LLM_EFFORT", "LLM_PROXY_KEY"];
 
 pub(super) fn env_of(entry: &Map<String, Value>, path: &Path) -> Result<Map<String, Value>, String> {
@@ -89,10 +88,6 @@ impl RuntimeConfig {
             .filter(|home| crate::accounts::catalog::resolved(home) != default)
             .collect();
         Ok(setup::Paths::new(self.env.home.clone(), accounts))
-    }
-    /// `~/.claude.json` e o de cada outra conta que já tem um.
-    pub(super) fn computer_use_files(&self) -> Result<Vec<std::path::PathBuf>, String> {
-        Ok(self.computer_use_paths()?.config_files())
     }
     pub fn sync_jev(&self) -> Result<(), String> {
         setup::sync_jev(&self.computer_use_paths()?, &self.jev_env()).map_err(|e| e.msg)

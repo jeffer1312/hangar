@@ -4,18 +4,18 @@ use std::{collections::BTreeSet, path::Path};
 use serde_json::{Map, Value, json};
 
 use super::{
-    jev::{NAME, env_of, write},
+    jev::{env_of, write},
     legacy::{AUX, read_object, text},
     runtime::RuntimeConfig,
 };
 use crate::accounts::environment::AccountEnvironment;
 use crate::orchestration::truthy;
+use hangar_computer_control_setup as setup;
 
 /// Código da falha no diário e no log; a subida segue.
 pub const FAILURE: &str = "jev_startup_migration_failed";
 const MARKER: &str = ".hangar/jev-migrated";
 const OLD_KEYS: &str = ".hangar/jev-chave-antiga-computer-use.json";
-const PARKED: &str = ".hangar/computer-control.json";
 const KEY: &str = "TYPESAFE_API_KEY";
 
 impl RuntimeConfig {
@@ -100,14 +100,16 @@ impl RuntimeConfig {
         self.get("jev_api_key").as_str().unwrap_or("").trim().to_owned()
     }
 
-    /// `env` da entrada ativa no `~/.claude.json`, senão da guardada.
+    /// `env` da entrada ativa no `~/.claude.json`, senão da guardada. Lido pelo leitor do Computer Use,
+    /// o mesmo do escritor: um arquivo que ele grava nunca fica ilegível aqui.
     fn known_env(&self) -> Result<Map<String, Value>, String> {
-        let main = self.env.home.join(".claude.json");
-        match entry_in(&main)? {
-            Some(entry) => env_of(&entry, &main),
+        let paths = setup::Paths::new(self.env.home.clone(), Vec::new());
+        let main = setup::read_entries(&paths).map_err(|e| e.msg)?.into_iter().next().and_then(|file| file.entry);
+        match main {
+            Some(entry) => env_of(&entry, &paths.main_file()),
             None => {
-                let parked = self.env.home.join(PARKED);
-                env_of(&read_object(&parked)?, &parked)
+                let parked = setup::parked_entry(&paths).map_err(|e| e.msg)?.unwrap_or_default();
+                env_of(&parked, &paths.parked_file())
             }
         }
     }
@@ -117,18 +119,23 @@ impl RuntimeConfig {
         if new.is_empty() {
             return Ok(());
         }
-        // Origem ilegível fica de fora: o repasse recusa o mesmo arquivo antes de gravar qualquer um.
-        let mut sources: Vec<(std::path::PathBuf, Map<String, Value>)> = self
-            .computer_use_files()
-            .unwrap_or_default()
+        // Origem ilegível fica de fora: o leitor é o mesmo do repasse, que recusa o mesmo arquivo antes de
+        // gravar qualquer um; nenhuma chave é trocada sem a antiga guardada.
+        let paths = self
+            .computer_use_paths()
+            .unwrap_or_else(|_| setup::Paths::new(self.env.home.clone(), Vec::new()));
+        let main = paths.main_file();
+        let mut sources: Vec<(std::path::PathBuf, Map<String, Value>)> = paths
+            .config_files()
             .into_iter()
-            .filter_map(|path| entry_in(&path).ok().flatten().map(|entry| (path, entry)))
+            .filter_map(|path| {
+                let account = path != main;
+                let file = setup::read_entry(path, account).ok()?;
+                file.entry.map(|entry| (file.path, entry))
+            })
             .collect();
-        let parked = self.env.home.join(PARKED);
-        if let Ok(entry) = read_object(&parked)
-            && !entry.is_empty()
-        {
-            sources.push((parked, entry));
+        if let Ok(Some(entry)) = setup::parked_entry(&paths) {
+            sources.push((paths.parked_file(), entry));
         }
         let replaced: Vec<(String, Value)> = sources
             .iter()
@@ -191,19 +198,6 @@ pub fn keep_old_keys(file: &Path, replaced: &[(String, Value)]) -> Result<bool, 
         write(file, kept, true, raw.as_deref(), link.as_deref())?;
     }
     Ok(changed)
-}
-
-/// A entrada do MCP num `.claude.json`; `mcpServers` que não é objeto é erro, como no repasse.
-fn entry_in(path: &Path) -> Result<Option<Map<String, Value>>, String> {
-    let data = read_object(path)?;
-    let servers = data.get("mcpServers").filter(|value| truthy(value));
-    if servers.is_some_and(|value| !value.is_object()) {
-        return Err(format!("mcpServers em {} não é um objeto JSON", path.display()));
-    }
-    Ok(servers
-        .and_then(|value| value.get(NAME))
-        .and_then(Value::as_object)
-        .cloned())
 }
 
 fn string_key(env: &Map<String, Value>) -> Option<String> {

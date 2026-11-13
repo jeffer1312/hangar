@@ -506,6 +506,43 @@ async fn d2_4_put_takes_the_claude_lock() {
     assert_eq!(status, StatusCode::OK, "{body}");
 }
 
+/// D2.4: a trava de uma conta ocupada também recusa sem gravar nada, nem o principal.
+#[tokio::test]
+async fn d2_4_put_takes_the_account_lock() {
+    let s = Scene::new().await;
+    s.r2();
+    let lock = hangar_core::config_lock::lock_config(&s.home.join(".claude-x/.claude.json")).unwrap();
+    let before = s.snapshot();
+    let got = s.put(on()).await;
+    assert_eq!(got.0, StatusCode::INTERNAL_SERVER_ERROR, "{}", got.1);
+    assert_eq!(got.1["detail"]["code"], "erro_computer_control_io", "{}", got.1);
+    assert_eq!(s.snapshot(), before);
+    drop(lock);
+}
+
+/// ROT-16, D2.1: só `null` vale como `mcpServers` ausente; `[]`, `0` e `""` recusam sem gravar,
+/// no principal ou numa conta, ao ligar e ao desligar.
+#[tokio::test]
+async fn d2_1_only_null_mcp_servers_counts_as_absent() {
+    let s = Scene::new().await;
+    s.r2();
+    for servers in ["[]", "0", "\"\""] {
+        s.write(".claude.json", format!(r#"{{"mcpServers": {servers}}}"#));
+        let params = json!({"file": "«HOME»/.claude.json", "error": "mcpServers inválido"});
+        s.refused(on(), 500, "erro_computer_control_read", params.clone()).await;
+        s.refused(json!({"enabled": false}), 500, "erro_computer_control_read", params).await;
+    }
+    s.write(".claude.json", MAIN);
+    s.write(".claude-x/.claude.json", r#"{"mcpServers": ""}"#);
+    s.refused(on(), 500, "erro_computer_control_read",
+        json!({"file": "«HOME»/.claude-x/.claude.json", "error": "mcpServers inválido"})).await;
+    s.write(".claude-x/.claude.json", ACCOUNT_X);
+    s.write(".claude.json", r#"{"mcpServers": null, "a": 1}"#);
+    let (status, body) = s.put(on()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(s.json_at(".claude.json"), s.h(json!({"mcpServers": {"hangar-computer-control": entry(full_env())}, "a": 1})));
+}
+
 /// Escritor único: o repasse do Jev do `/api/config` (`RuntimeConfig::sync_jev`) e a migração da subida
 /// (R5) gravam pelo escritor do crate, que lê o surrogate solto que o Claude Code grava e o devolve igual
 /// (o gravador antigo do servidor recusava esse arquivo).
