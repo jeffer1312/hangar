@@ -91,7 +91,7 @@ pub fn save(
     }
     reject_own_model(body, aux, &facts.cliproxy_keys)?;
     let entry = Entry { command: paths.binary().to_string_lossy().into_owned(), agent_config: agent.to_owned() };
-    write_entry(paths, &entry, jev).map(drop)
+    write_entry(paths, &entry, jev)
 }
 
 /// Modelo diferente do auxiliar sumiria calado: volta erro com os campos, na ordem do corpo.

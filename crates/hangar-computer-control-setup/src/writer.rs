@@ -29,12 +29,11 @@ pub struct Entry {
 /// alvos e Jev são trocados; o resto do env da entrada conhecida é de quem montou o MCP e fica (o
 /// `VIRTUAL_ENV` vazio de propósito impede herdar o venv), menos `PYTHONPATH`. Gerenciada vazia = ausente.
 /// `jev` roda já sob a trava: um repasse do Jev no meio nunca é desfeito pelo env lido antes.
-/// Diz se gravou: entrada já igual em todo arquivo não grava nada.
 pub fn write_entry(
     paths: &Paths,
     entry: &Entry,
     jev: impl FnOnce() -> Result<Map<String, Value>, Error>,
-) -> Result<bool, Error> {
+) -> Result<(), Error> {
     let _locks = lock_all(paths)?;
     let files = read_entries(paths)?;
     for file in &files {
@@ -44,16 +43,7 @@ pub fn write_entry(
     let enabled = active.is_some();
     let known = known_from(paths, active)?;
     let previous = crate::state::env_of(known.as_ref(), paths, enabled)?;
-    let jev = jev()?;
-    let mut managed = Map::new();
-    managed.insert("HCC_AGENT_CONFIG".into(), json!(entry.agent_config));
-    managed.insert("HCC_AGENTS_DIR".into(), json!(paths.targets_dir().to_string_lossy()));
-    for key in JEV_VARS {
-        managed.insert(key.into(), jev.get(key).cloned().unwrap_or_else(|| json!("")));
-    }
-    let mut env: Map<String, Value> =
-        previous.into_iter().filter(|(key, _)| !managed.contains_key(key) && key != "PYTHONPATH").collect();
-    env.extend(managed.into_iter().filter(|(_, value)| truthy(value)));
+    let env = managed_env(paths, &entry.agent_config, previous, &jev()?);
     let wanted = json!({"command": entry.command, "args": [], "env": env});
     let main = paths.main_file();
     let mut written = Written::default();
@@ -78,7 +68,89 @@ pub fn write_entry(
         });
         written.note(&file.path, wrote)?;
     }
-    Ok(!written.0.is_empty())
+    Ok(())
+}
+
+/// O env que ligar grava: alvo padrão, pasta dos alvos e Jev trocados; o resto de `previous` fica, menos
+/// `PYTHONPATH`. Gerenciada vazia = ausente.
+fn managed_env(paths: &Paths, agent_config: &str, previous: Map<String, Value>, jev: &Map<String, Value>) -> Map<String, Value> {
+    let mut managed = Map::new();
+    managed.insert("HCC_AGENT_CONFIG".into(), json!(agent_config));
+    managed.insert("HCC_AGENTS_DIR".into(), json!(paths.targets_dir().to_string_lossy()));
+    for key in JEV_VARS {
+        managed.insert(key.into(), jev.get(key).cloned().unwrap_or_else(|| json!("")));
+    }
+    let mut env: Map<String, Value> =
+        previous.into_iter().filter(|(key, _)| !managed.contains_key(key) && key != "PYTHONPATH").collect();
+    env.extend(managed.into_iter().filter(|(_, value)| truthy(value)));
+    env
+}
+
+/// O registro sozinho, decidido inteiro sob a trava: um desligar que chega antes nunca é desfeito.
+/// Principal sem a entrada: registra só sem a guardada (desligado à mão) e com alvo (`target`) ou
+/// Hyprland. Entrada que já roda o binário do pacote fica intocada; com outro programa vira o binário,
+/// com o env dela. Conta aberta sem a entrada recebe a do principal. `None` = não registra; senão, se gravou.
+pub(crate) fn register_entry(
+    paths: &Paths,
+    target: Option<String>,
+    hyprland: impl FnOnce() -> bool,
+    jev: impl FnOnce() -> Result<Map<String, Value>, Error>,
+) -> Result<Option<bool>, Error> {
+    let _locks = lock_all(paths)?;
+    let files = read_entries(paths)?;
+    for file in &files {
+        checked_servers(&file.path, &file.data)?;
+    }
+    let active = files.first().and_then(|file| file.entry.clone());
+    if active.is_none() && (crate::files::parked_entry(paths)?.is_some() || (target.is_none() && !hyprland())) {
+        return Ok(None);
+    }
+    let binary = paths.binary().to_string_lossy().into_owned();
+    let package = |entry: &Map<String, Value>| entry.get("command").and_then(Value::as_str) == Some(binary.as_str());
+    let main = paths.main_file();
+    let opened = |file: &crate::FileEntry| file.path == main || !file.data.is_empty();
+    if files.iter().filter(|file| opened(*file)).all(|file| file.entry.as_ref().is_some_and(|entry| package(entry))) {
+        return Ok(Some(false));
+    }
+    let jev = jev()?;
+    let rewrite = |entry: &Map<String, Value>, path: &Path| -> Result<Value, Error> {
+        let env = env_in(entry, path)?;
+        let agent = env.get("HCC_AGENT_CONFIG").and_then(Value::as_str).map(str::to_owned);
+        let agent = agent.or_else(|| target.clone()).unwrap_or_default();
+        Ok(json!({"command": binary, "args": [], "env": managed_env(paths, &agent, env, &jev)}))
+    };
+    let main_entry = match &active {
+        Some(entry) if package(entry) => Value::Object(entry.clone()),
+        Some(entry) => rewrite(entry, &main)?,
+        None => rewrite(&Map::new(), &main)?,
+    };
+    let mut written = Written::default();
+    for file in files {
+        let account = file.path != main;
+        if !opened(&file) {
+            continue;
+        }
+        let wrote = update(&file.path, false, |bytes| {
+            let mut data = parsed(&file.path, bytes, account)?;
+            checked_servers(&file.path, &data)?;
+            if account && data.is_empty() {
+                return Ok(None);
+            }
+            let next = match entry_of(&file.path, &data)? {
+                Some(entry) if package(&entry) => return Ok(None),
+                Some(entry) => rewrite(&entry, &file.path)?,
+                None => main_entry.clone(),
+            };
+            let servers = data.entry("mcpServers").or_insert_with(|| json!({}));
+            if !servers.is_object() {
+                *servers = json!({});
+            }
+            servers[NAME] = next;
+            Ok(Some(data))
+        });
+        written.note(&file.path, wrote)?;
+    }
+    Ok(Some(!written.0.is_empty()))
 }
 
 /// Desliga: guarda a entrada ativa (0600, a marca de "desligado à mão") e tira a chave de todo arquivo que a tem.

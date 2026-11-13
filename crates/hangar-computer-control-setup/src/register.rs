@@ -5,8 +5,8 @@ use std::path::Path;
 
 use serde_json::{Map, Value, json};
 
-use crate::files::{installed, parked_entry, read_entry};
-use crate::writer::{Entry, write_entry};
+use crate::files::installed;
+use crate::writer::register_entry;
 use crate::{Error, Paths, targets};
 
 const FAILED: &str = "computer_control_register_failed";
@@ -47,28 +47,15 @@ fn register_on(
     if !supported || !installed(paths)? {
         return Ok(Registered::Skipped);
     }
-    let main = read_entry(paths.main_file(), false)?;
-    let agent_config = match &main.entry {
-        // Ligada: o alvo padrão escolhido na tela fica.
-        Some(active) => match active.get("env").and_then(|env| env.get("HCC_AGENT_CONFIG")).and_then(Value::as_str) {
-            Some(agent) => agent.to_owned(),
-            None => first_target(paths).unwrap_or_default(),
-        },
-        None => {
-            if parked_entry(paths)?.is_some() {
-                return Ok(Registered::Skipped);
-            }
-            match first_target(paths) {
-                Some(agent) => agent,
-                // O alvo `linux` automático do Hyprland não tem arquivo: alvo padrão vazio.
-                None if hyprland() => String::new(),
-                None => return Ok(Registered::Skipped),
-            }
-        }
-    };
-    let entry = Entry { command: paths.binary().to_string_lossy().into_owned(), agent_config };
-    let wrote = write_entry(paths, &entry, jev)?;
-    Ok(if wrote { Registered::Written } else { Registered::Unchanged })
+    // Desligar no meio daqui até a trava: a decisão abaixo, toda sob a trava, já o vê.
+    #[cfg(test)]
+    crate::writer::race::fire(&paths.parked_file());
+    // O alvo `linux` automático do Hyprland não tem arquivo: alvo padrão vazio.
+    Ok(match register_entry(paths, first_target(paths), hyprland, jev)? {
+        None => Registered::Skipped,
+        Some(false) => Registered::Unchanged,
+        Some(true) => Registered::Written,
+    })
 }
 
 fn first_target(paths: &Paths) -> Option<String> {
@@ -82,13 +69,24 @@ pub fn hyprland_found() -> bool {
         && hyprland_running(&hangar_core::display_env::for_launch(|key| std::env::var(key).ok().filter(|v| !v.is_empty())))
 }
 
-/// A assinatura do Hyprland aponta para uma instância que existe em `$XDG_RUNTIME_DIR/hypr`.
+/// A instância do Hyprland da assinatura atende no socket dela: pasta que sobrou de uma instância morta
+/// não conta.
 pub fn hyprland_running(vars: &[(String, String)]) -> bool {
     let get = |key: &str| vars.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str()).filter(|v| !v.is_empty());
     match (get("HYPRLAND_INSTANCE_SIGNATURE"), get("XDG_RUNTIME_DIR")) {
-        (Some(signature), Some(runtime)) => Path::new(runtime).join("hypr").join(signature).is_dir(),
+        (Some(signature), Some(runtime)) => answers(&Path::new(runtime).join("hypr").join(signature).join(".socket.sock")),
         _ => false,
     }
+}
+
+#[cfg(unix)]
+fn answers(socket: &Path) -> bool {
+    std::os::unix::net::UnixStream::connect(socket).is_ok()
+}
+
+#[cfg(not(unix))]
+fn answers(_socket: &Path) -> bool {
+    false
 }
 
 #[cfg(test)]
@@ -308,17 +306,75 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn hyprland_needs_a_live_instance() {
         let run = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(run.path().join("hypr/abc_1")).unwrap();
         let vars = |signature: &str| {
             vec![("HYPRLAND_INSTANCE_SIGNATURE".to_owned(), signature.to_owned()),
                 ("XDG_RUNTIME_DIR".to_owned(), run.path().to_string_lossy().into_owned())]
         };
-        assert!(hyprland_running(&vars("abc_1")));
-        assert!(!hyprland_running(&vars("morta_2")), "instância que não existe mais");
+        std::fs::create_dir_all(run.path().join("hypr/viva_1")).unwrap();
+        let _listener = std::os::unix::net::UnixListener::bind(run.path().join("hypr/viva_1/.socket.sock")).unwrap();
+        assert!(hyprland_running(&vars("viva_1")));
+        std::fs::create_dir_all(run.path().join("hypr/pasta_2")).unwrap();
+        assert!(!hyprland_running(&vars("pasta_2")), "pasta velha sem socket");
+        std::fs::create_dir_all(run.path().join("hypr/morta_3")).unwrap();
+        drop(std::os::unix::net::UnixListener::bind(run.path().join("hypr/morta_3/.socket.sock")).unwrap());
+        assert!(!hyprland_running(&vars("morta_3")), "socket que ficou sem ninguém escutando");
+        assert!(!hyprland_running(&vars("nenhuma_4")));
         assert!(!hyprland_running(&vars("")));
-        assert!(!hyprland_running(&[("HYPRLAND_INSTANCE_SIGNATURE".to_owned(), "abc_1".to_owned())]), "sem pasta de runtime");
+        assert!(!hyprland_running(&[("HYPRLAND_INSTANCE_SIGNATURE".to_owned(), "viva_1".to_owned())]), "sem pasta de runtime");
+    }
+
+    /// Pasta de uma instância morta não é Hyprland: sem alvo, nada é registrado.
+    #[test]
+    fn a_stale_hyprland_folder_registers_nothing() {
+        let home = Home::new();
+        let run = home.dir.path().join("run");
+        std::fs::create_dir_all(run.join("hypr/morta_1")).unwrap();
+        let vars = vec![("HYPRLAND_INSTANCE_SIGNATURE".to_owned(), "morta_1".to_owned()),
+            ("XDG_RUNTIME_DIR".to_owned(), run.to_string_lossy().into_owned())];
+        assert_eq!(register(&home.paths, || hyprland_running(&vars), || Ok(jev()), None).unwrap(), Registered::Skipped);
+        assert!(!home.paths.main_file().exists());
+    }
+
+    /// Um desligar que chega depois das conferências de fora da trava e antes da gravação vence: nada volta.
+    #[test]
+    fn turning_off_just_before_the_lock_is_not_undone() {
+        let home = Home::new();
+        home.target("a");
+        assert_eq!(home.run(false).unwrap(), Registered::Written);
+        let paths = home.paths.clone();
+        let outcome = crate::writer::race::with(
+            &home.paths.parked_file(),
+            move || crate::remove_entry(&paths).unwrap(),
+            || home.run(true),
+        );
+        assert_eq!(outcome.unwrap(), Registered::Skipped);
+        assert_eq!(home.main_entry(), None);
+        assert_eq!(home.entry(&home.dir.path().join("acc/.claude.json")), None);
+        assert!(home.paths.parked_file().is_file());
+    }
+
+    /// Entrada que já roda o binário do pacote fica intocada: `args`, campo extra e o alvo próprio de
+    /// cada conta. Conta aberta sem a entrada recebe a do principal como está.
+    #[test]
+    fn a_package_entry_is_left_as_the_user_made_it() {
+        let home = Home::new();
+        home.target("a");
+        let main = json!({"command": home.binary(), "args": ["--verbose"], "type": "stdio", "env": {"HCC_AGENT_CONFIG": "/alvos/b-agent.json"}});
+        std::fs::write(home.paths.main_file(), json!({"mcpServers": {NAME: main.clone()}}).to_string()).unwrap();
+        let own = json!({"command": home.binary(), "env": {"HCC_AGENT_CONFIG": "/alvos/c-agent.json"}});
+        std::fs::write(home.dir.path().join("acc/.claude.json"), json!({"mcpServers": {NAME: own.clone()}}).to_string()).unwrap();
+        let before = std::fs::read(home.paths.main_file()).unwrap();
+        assert_eq!(home.run(false).unwrap(), Registered::Unchanged);
+        assert_eq!(std::fs::read(home.paths.main_file()).unwrap(), before);
+        assert_eq!(home.entry(&home.dir.path().join("acc/.claude.json")), Some(own));
+
+        std::fs::write(home.dir.path().join("acc/.claude.json"), br#"{"x": 1}"#).unwrap();
+        assert_eq!(home.run(false).unwrap(), Registered::Written);
+        assert_eq!(std::fs::read(home.paths.main_file()).unwrap(), before);
+        assert_eq!(home.entry(&home.dir.path().join("acc/.claude.json")), Some(main));
     }
 
     proptest! {
