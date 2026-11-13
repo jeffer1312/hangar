@@ -624,6 +624,7 @@ impl Hangar {
         let Some(entry) = self.servers.iter_mut().find(|s| s.id == entry_id) else { return false };
         let old = servers::norm(&entry.address);
         (entry.address, entry.token, entry.label, entry.disabled) = (found.base.clone(), found.token.clone(), label, false);
+        servers::clear_connect_refusal(entry);
         self.servers_changed(cx);
         self.reopen_edited(&[old, key.clone()], &key, window, cx);
         true

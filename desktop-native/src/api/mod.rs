@@ -106,11 +106,17 @@ pub struct Api { client: Authed, plain: Client, base: Url, token: String }
 struct Authed { owner: Client, identity: String }
 
 impl Authed {
-    fn pick(&self, url: &Url) -> Client { route::device_client(&self.identity, url).unwrap_or_else(|| self.owner.clone()) }
-    fn get(&self, url: Url) -> reqwest::RequestBuilder { self.pick(&url).get(url) }
-    fn post(&self, url: Url) -> reqwest::RequestBuilder { self.pick(&url).post(url) }
-    fn delete(&self, url: Url) -> reqwest::RequestBuilder { self.pick(&url).delete(url) }
-    fn request(&self, method: Method, url: Url) -> reqwest::RequestBuilder { self.pick(&url).request(method, url) }
+    fn get(&self, url: Url) -> reqwest::RequestBuilder { self.request(Method::GET, url) }
+    fn post(&self, url: Url) -> reqwest::RequestBuilder { self.request(Method::POST, url) }
+    fn delete(&self, url: Url) -> reqwest::RequestBuilder { self.request(Method::DELETE, url) }
+    fn request(&self, method: Method, url: Url) -> reqwest::RequestBuilder {
+        match route::credential(&self.identity, &url) {
+            route::Credential::Owner => self.owner.request(method, url),
+            route::Credential::Device(client, _) => client.request(method, url),
+            // A senha do dono nunca vai ao Connect: o pedido falha no `send`, sem abrir conexão.
+            route::Credential::Blocked => self.owner.request(method, route::blocked_url()),
+        }
+    }
 }
 
 /// Cliente que leva `token` em todo pedido, sem seguir redirecionamento.

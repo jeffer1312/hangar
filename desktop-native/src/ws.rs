@@ -170,7 +170,8 @@ fn text_url(api: &Api, path: &str, token: &str) -> url::Url {
     url.path_segments_mut().expect("validated HTTP base").pop_if_empty()
         .extend(path.split('/').filter(|part| !part.is_empty()));
     url.set_query((!query.is_empty()).then_some(query));
-    let token = api.socket_token(&url, token);
+    // Connect sem credencial de aparelho: URL sem host, o aperto de mão falha no app e a senha não sai.
+    let Some(token) = api.socket_token(&url, token) else { return crate::api::route::blocked_url() };
     url.query_pairs_mut().append_pair("token", &token);
     url
 }
@@ -184,7 +185,7 @@ fn terminal_url(api: &Api, session: &str, shortcut: Option<&str>, hangar: bool, 
             .extend(["api", "hangar-terminals", id, "term"]);
         url
     } else { api.endpoint(Some(session), Some("term")) };
-    let token = api.socket_token(&url, token);
+    let Some(token) = api.socket_token(&url, token) else { return crate::api::route::blocked_url() };
     url.query_pairs_mut().append_pair("token", &token)
         .append_pair("cols", &cols.to_string()).append_pair("rows", &rows.to_string());
     if let (false, Some(id)) = (hangar, shortcut) { url.query_pairs_mut().append_pair("shortcut", id); }
@@ -424,6 +425,12 @@ mod tests {
         let cdp = text_url(&api, "/api/sessions/pm-1/nav-remoto?x=1", "owner");
         assert_eq!((cdp.host_str(), token(cdp.clone()).as_deref()), (Some("casa.socket.hangar.dev.br"), Some("device-secret")));
         assert_eq!(cdp.query_pairs().filter(|(k, _)| k == "token").count(), 1, "um token só na URL");
+        // Revogada a credencial, o socket para o Connect não leva a senha do dono: a URL nem tem para onde ir.
+        route::refused_at(&url::Url::parse("https://casa.socket.hangar.dev.br/api/voice").unwrap());
+        route::route_to(&api, url::Url::parse("https://casa.socket.hangar.dev.br/").unwrap());
+        for refused in [text_url(&api, "/api/voice", "owner"), terminal_url(&api, "pm-1", None, false, "owner", 80, 24)] {
+            assert_eq!((refused.host_str(), token(refused.clone())), (None, None));
+        }
     }
 
     #[tokio::test]

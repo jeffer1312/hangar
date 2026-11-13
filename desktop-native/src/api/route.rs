@@ -39,9 +39,35 @@ struct Known {
     route: Option<Url>,
     deciding: Arc<tokio::sync::Mutex<()>>,
     connect: Option<(ConnectRoute, Client)>,
+    /// Todo endereço do Connect que esta máquina já teve: a senha do dono nunca vai a eles, nem depois da recusa.
+    connect_origins: Vec<String>,
     refused: bool,
     enrolling: bool,
 }
+
+/// Quem leva a credencial a uma URL da máquina.
+pub(super) enum Credential {
+    Owner,
+    /// Cliente e token da credencial de aparelho.
+    Device(Client, String),
+    /// Endereço do Connect sem credencial de aparelho: o pedido falha no app, sem sair.
+    Blocked,
+}
+
+/// Escolha da credencial para `url` na máquina `identity`, a mesma para HTTP (`Authed`) e socket (`socket_token`).
+pub(super) fn credential(identity: &str, url: &Url) -> Credential {
+    with(|t| {
+        let Some(known) = t.get(identity) else { return Credential::Owner };
+        match &known.connect {
+            Some((c, client)) if same_origin(&c.url, url) => Credential::Device(client.clone(), c.token.clone()),
+            _ if known.connect_origins.iter().any(|origin| same_origin(origin, url)) => Credential::Blocked,
+            _ => Credential::Owner,
+        }
+    })
+}
+
+/// URL sem host: o reqwest recusa antes de abrir conexão, então nada sai do app.
+pub(crate) fn blocked_url() -> Url { Url::parse("hangar-blocked:connect-refused").expect("URL fixa") }
 
 static TABLE: LazyLock<Mutex<HashMap<String, Known>>> = LazyLock::new(Default::default);
 type Notify = Box<dyn Fn(String, Learned) + Send + Sync>;
@@ -69,6 +95,7 @@ fn same_origin(stored: &str, url: &Url) -> bool { Url::parse(stored).is_ok_and(|
 fn set_connect(known: &mut Known, connect: Option<(ConnectRoute, Client)>) {
     let stale = matches!((&known.connect, &known.route), (Some((old, _)), Some(route)) if same_origin(&old.url, route));
     if stale { known.route = None; }
+    if let Some((c, _)) = &connect && !known.connect_origins.contains(&c.url) { known.connect_origins.push(c.url.clone()); }
     known.connect = connect;
 }
 
@@ -100,9 +127,11 @@ pub fn forget(api: &Api) {
     with(|t| if let Some(known) = t.get_mut(api.base.as_str()) { known.route = None; });
 }
 
-/// O cliente com a credencial de aparelho quando `url` é o endereço do Connect da máquina `identity`.
-pub(super) fn device_client(identity: &str, url: &Url) -> Option<Client> {
-    with(|t| t.get(identity)?.connect.as_ref().filter(|(c, _)| same_origin(&c.url, url)).map(|(_, client)| client.clone()))
+/// O dono trocou o endereço ou o token da máquina: a recusa do Connect deixa de valer e a credencial pode ser pedida
+/// de novo na próxima decisão.
+pub fn reset_refused(address: &str) {
+    let Some(key) = key(address) else { return };
+    with(|t| if let Some(known) = t.get_mut(&key) { known.refused = false; known.enrolling = false; });
 }
 
 /// 401 vindo do endereço do Connect: a credencial de aparelho foi revogada.
@@ -124,11 +153,14 @@ impl Api {
         with(|t| t.get(self.base.as_str()).and_then(|known| known.route.clone())).unwrap_or_else(|| self.base.clone())
     }
 
-    /// Credencial que vai na URL de um socket para `url`: a de aparelho na origem do Connect, senão `owner`, como o
-    /// cliente HTTP (`Authed`).
-    pub(crate) fn socket_token(&self, url: &Url, owner: &str) -> String {
-        with(|t| t.get(self.base.as_str())?.connect.as_ref().filter(|(c, _)| same_origin(&c.url, url)).map(|(c, _)| c.token.clone()))
-            .unwrap_or_else(|| owner.trim().to_owned())
+    /// Credencial que vai na URL de um socket para `url`, pela mesma escolha do cliente HTTP (`Authed`). `None`: endereço
+    /// do Connect sem credencial de aparelho, onde a senha do dono nunca vai.
+    pub(crate) fn socket_token(&self, url: &Url, owner: &str) -> Option<String> {
+        match credential(self.base.as_str(), url) {
+            Credential::Owner => Some(owner.trim().to_owned()),
+            Credential::Device(_, token) => Some(token),
+            Credential::Blocked => None,
+        }
     }
 }
 
@@ -310,12 +342,16 @@ fn store(identity: &str, connect: ConnectRoute) {
         crate::log_line(&format!("connect: credencial de aparelho de {identity} com formato inválido, não guardada"));
         return;
     };
-    with(|t| {
+    let stored = with(|t| {
         let known = t.entry(identity.to_owned()).or_default();
         known.enrolling = false;
+        // Pedido que terminou depois do 401 não desfaz a recusa.
+        if known.refused { return false; }
         set_connect(known, Some((connect.clone(), client)));
+        true
     });
-    notify(identity.to_owned(), Learned::Connect(connect));
+    if stored { notify(identity.to_owned(), Learned::Connect(connect)); }
+    else { crate::log_line(&format!("connect: credencial de aparelho de {identity} chegou depois da recusa e foi descartada")); }
 }
 
 /// `POST /api/connect/devices/self` com a senha do dono, como o `upgradeToDevice` do Expo. Recusa não é tentada de novo
@@ -522,7 +558,55 @@ mod tests {
         let api = Api::new(&closed().await, "owner").unwrap();
         let identity = api.identity();
         seed(&identity, false, None, Some(&connect_route(&closed().await)), false);
-        assert!(device_client(&identity, &api.base).is_none());
+        assert!(matches!(credential(&identity, &api.base), Credential::Owner));
+        assert_eq!(api.socket_token(&api.base, " owner ").as_deref(), Some("owner"));
+    }
+
+    #[tokio::test]
+    async fn owner_secret_never_reaches_a_refused_connect_origin() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let counted = hits.clone();
+        let (connect, server) = serve(move |_| { counted.fetch_add(1, Ordering::SeqCst); (200, json!([]), 0) }).await;
+        let api = Api::new(&closed().await, "owner").unwrap();
+        let identity = api.identity();
+        seed(&identity, false, None, Some(&connect_route(&connect)), false);
+        // URL calculada antes da recusa, como a de um SSE ou socket já aberto.
+        let late = Url::parse(&format!("{connect}/api/sessions")).unwrap();
+        refused_at(&late);
+        assert!(matches!(credential(&identity, &late), Credential::Blocked));
+        assert_eq!(api.socket_token(&late, "owner"), None);
+        assert!(api.client.get(late.clone()).send().await.is_err());
+        assert!(api.client.request(reqwest::Method::POST, late).send().await.is_err());
+        server.abort();
+        assert_eq!(hits.load(Ordering::SeqCst), 0, "nada sai para o Connect sem credencial de aparelho");
+    }
+
+    #[tokio::test]
+    async fn enroll_that_finishes_after_the_refusal_is_discarded() {
+        let (saved, server) = serve(|req| match (req.method.as_str(), req.path()) {
+            ("GET", "/api/alcance") => (200, json!({"connect": "https://late.jeff.hangar.dev.br"}), 0),
+            ("POST", "/api/connect/devices/self") => (200, json!({"device_id": "dev-late", "token": "late"}), 300),
+            _ => (404, json!({}), 0),
+        }).await;
+        let api = Api::new(&saved, "owner").unwrap();
+        let identity = api.identity();
+        seed(&identity, false, Some(&Lan { url: String::new(), id: "casa".into() }), None, false);
+        let pending = tokio::spawn(refresh_connect(api.clone()));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        // O 401 chega enquanto a emissão ainda espera a resposta.
+        seed(&identity, false, None, None, true);
+        pending.await.unwrap();
+        server.abort();
+        assert!(with(|t| t.get(&identity).is_some_and(|k| k.connect.is_none() && k.refused)));
+    }
+
+    #[tokio::test]
+    async fn owner_edit_lifts_the_refusal() {
+        let api = Api::new(&closed().await, "owner").unwrap();
+        let identity = api.identity();
+        seed(&identity, false, None, None, true);
+        reset_refused(&identity);
+        assert!(with(|t| t.get(&identity).is_some_and(|k| !k.refused && !k.enrolling)));
     }
 
     #[tokio::test]

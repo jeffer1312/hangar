@@ -1078,9 +1078,18 @@ impl Hangar {
         cx.subscribe(&command_search, |this, _, _: &InputEvent, cx| this.redraw(panes::Area::Bottom, cx)).detach();
         let (tx, rx) = async_channel::bounded::<Envelope>(256);
         let learned = tx.clone();
-        // ponytail: fila cheia perde o aviso; a rede local e o Connect são reaprendidos na próxima decisão.
         api::route::on_learned(format!("Hangar desktop {}", invite::device_label()), move |address, learned_route| {
-            let _ = learned.try_send(Envelope { connection: 0, selection: None, payload: Payload::Route(address, learned_route) });
+            let envelope = Envelope { connection: 0, selection: None, payload: Payload::Route(address, learned_route) };
+            // Direto mantém a ordem com o 401 que vem atrás; com a fila cheia, espera vaga: a recusa do Connect não pode
+            // se perder, senão a próxima abertura manda a credencial revogada de novo.
+            if let Err(async_channel::TrySendError::Full(envelope)) = learned.try_send(envelope) {
+                let learned = learned.clone();
+                match tokio::runtime::Handle::try_current() {
+                    Ok(runtime) => { runtime.spawn(async move { let _ = learned.send(envelope).await; }); }
+                    // Fora do runtime pode ser a própria thread que esvazia a fila: espera em outra.
+                    Err(_) => { std::thread::spawn(move || { let _ = learned.send_blocking(envelope); }); }
+                }
+            }
         });
         cx.spawn_in(window, async move |this, cx| {
             while let Ok(envelope) = rx.recv().await {
