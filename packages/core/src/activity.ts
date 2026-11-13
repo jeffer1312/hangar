@@ -121,7 +121,7 @@ export interface ShellRun {
   description?: string;
   ts?: number;       // quando começou (epoch s), pro rótulo de tempo decorrido na folha
   running: boolean;  // sem a notificação de fim = ainda rodando
-  taskId?: string;   // id de fundo ("Command running in background with ID:"): é o que parar a tarefa pede
+  taskId?: string;   // id de fundo que o resultado do Bash anuncia: é o que parar a tarefa pede
 }
 
 // Encanamento de shell que não diz NADA sobre o que o comando faz, e ocupa a linha inteira numa
