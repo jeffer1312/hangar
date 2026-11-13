@@ -189,10 +189,50 @@ fn storage_update_refuses_a_new_past_once_but_keeps_editing_the_unchanged_one() 
     );
     let mut renamed = request;
     renamed.name = "Histórica".into();
+    // O mesmo instante escrito em outro fuso, como o desktop reenvia.
+    renamed.schedule = Schedule::Once {
+        at: "2026-11-12T10:00:00-03:00".into(),
+    };
     let edited = store
         .update(&task.id, renamed, task.revision, later, &Utc)
         .unwrap();
     assert_eq!(edited.input.name, "Histórica");
+}
+#[test]
+fn storage_manual_run_before_the_once_date_keeps_the_scheduled_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("tasks.sqlite")).unwrap();
+    let now = at("2026-11-12T12:00:00Z");
+    let mut request = input();
+    request.schedule = Schedule::Once {
+        at: "2026-11-13T08:00:00Z".into(),
+    };
+    let task = store.create(request, now, &Utc).unwrap();
+    let scheduled = task.next_run_at.clone();
+    assert!(scheduled.is_some());
+    store.reserve(&task.id, now, &Utc, true).unwrap();
+    assert_eq!(store.list().unwrap()[0].next_run_at, scheduled);
+}
+#[test]
+fn storage_failed_new_conversation_without_session_drops_the_reserved_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("tasks.sqlite")).unwrap();
+    let now = at("2026-11-12T12:00:00Z");
+    let task = store.create(input(), now, &Utc).unwrap();
+    let attempt = store.reserve(&task.id, now, &Utc, true).unwrap();
+    assert!(
+        store
+            .finish(
+                &attempt,
+                Outcome {
+                    status: Status::Failed,
+                    error: Some("abertura recusada".into()),
+                    session: None,
+                },
+            )
+            .unwrap()
+    );
+    assert_eq!(store.list().unwrap()[0].last_session, None);
 }
 #[test]
 fn storage_uncertain_result_without_session_keeps_the_reserved_name() {

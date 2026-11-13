@@ -136,10 +136,11 @@ impl Store {
             let mut task = read(tx, id)?;
             check_revision(&task, revision)?;
             // Tarefa única já passada continua editável enquanto a data não muda.
-            if task.input.schedule != input.schedule {
+            let rescheduled = !same_schedule(&task.input.schedule, &input.schedule);
+            if rescheduled {
                 require_future_once(&input, now)?;
             }
-            if task.input.schedule != input.schedule || task.input.enabled != input.enabled {
+            if rescheduled || task.input.enabled != input.enabled {
                 task.next_run_at = scheduled(&input, now, zone)?;
             }
             task.input = input;
@@ -216,6 +217,11 @@ impl Store {
             task.revision += 1;
             // A próxima ocorrência parte da volta do servidor; intervalos perdidos não formam uma fila.
             task.next_run_at = match task.input.schedule {
+                // "Executar agora" antes da data não cancela a execução marcada.
+                Schedule::Once { .. } if manual => task
+                    .next_run_at
+                    .take()
+                    .filter(|at| parse_instant(at).is_ok_and(|at| at > now)),
                 Schedule::Once { .. } => None,
                 _ => scheduled(&task.input, now, zone)?,
             };
@@ -253,9 +259,13 @@ impl Store {
             }
             task.last_status = outcome.status;
             task.last_error = outcome.error.map(|s| s.chars().take(512).collect());
-            // Resultado sem sessão conserva a que a reserva gravou.
+            // Resultado sem sessão conserva a que a reserva gravou, salvo a conversa nova que comprovadamente não abriu.
             if outcome.session.is_some() {
                 task.last_session = outcome.session;
+            } else if outcome.status == Status::Failed
+                && matches!(task.input.target, Target::New { .. })
+            {
+                task.last_session = None;
             }
             task.attempt = None;
             task.revision += 1;
@@ -305,6 +315,15 @@ fn scheduled<T: TimeZone>(
         Ok(next_run(&input.schedule, now, zone)?.map(|at| at.to_rfc3339()))
     } else {
         Ok(None)
+    }
+}
+/// Os clientes escrevem o mesmo instante com fusos e frações diferentes: compara o instante, não o texto.
+fn same_schedule(a: &Schedule, b: &Schedule) -> bool {
+    match (a, b) {
+        (Schedule::Once { at: a }, Schedule::Once { at: b }) => {
+            a == b || matches!((parse_instant(a), parse_instant(b)), (Ok(a), Ok(b)) if a == b)
+        }
+        _ => a == b,
     }
 }
 fn require_future_once(input: &TaskInput, now: DateTime<Utc>) -> Result<(), Error> {
@@ -369,7 +388,7 @@ pub(crate) fn repeated(task: Task, input: &TaskInput) -> Result<Task, Error> {
         && stored.name == input.name
         && stored.prompt == input.prompt
         && stored.enabled == input.enabled
-        && stored.schedule == input.schedule
+        && same_schedule(&stored.schedule, &input.schedule)
     {
         Ok(task)
     } else {

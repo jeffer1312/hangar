@@ -517,6 +517,13 @@ async fn send_bound_target(st:&AppState,name:&str,key:&str,conversation:Option<&
 }
 
 async fn queue_bound_input(st:&AppState,runtime:&crate::runtime::gateway::RuntimeRegistry,name:&str,key:&str,conversation:Option<&str>,text:&str,opening:bool)->(StatusCode,Value) {
+    if !opening {
+        // Mesmo caminho do `/input`: o acordar segura a porta, e a fila da adormecida não espera por ela.
+        if let Some(changed)=conversation_changed(st,name,conversation).await {return changed;}
+        let current=match runtime.asleep(name).await {Some(mark)=>Some(mark.key),None=>runtime.writable(name).await.map(|target|target.key)};
+        if current.as_deref()!=Some(key) {return bound_life_changed();}
+        return queue_while_asleep(st,name,key,text).await;
+    }
     let held=match runtime.ingress().enter(name,st.write_gate_wait).await {
         Ok(held)=>held,
         Err(_)=>return (StatusCode::CONFLICT,busy_body()),
@@ -528,29 +535,17 @@ async fn queue_bound_input(st:&AppState,runtime:&crate::runtime::gateway::Runtim
         return result;
     }
     if let Some(changed)=conversation_changed(st,name,conversation).await {drop(held);return changed;}
-    let result=if opening {
-        let other=runtime.other_opening_key(name).await;
-        let current=match &other {Some(key)=>Some(key.clone()),None=>runtime.codex_opening(name).await.and_then(Result::ok)};
-        if current.as_deref()!=Some(key) {drop(held);return bound_life_changed();}
-        // Mesma regra do `/input` com a conversa abrindo: `/clear` e `/compact` esperam a conversa.
-        if other.is_none() && (is_codex_clear("codex",text) || is_codex_compact("codex",text)) {
-            drop(held);
-            let error=crate::runtime::codex_relaunch::starting();
-            return (StatusCode::CONFLICT,detail_body(&error.code,&error.message,json!({})));
-        }
-        if other.is_some() {runtime.queue_other_opening(name,key,text,&random_hex(16)).await.map(|_| ())}
-        else {runtime.queue_codex_opening(name,key,text).await}
-    } else {
-        // Comando de barra não tem linha na fila da adormecida: só a vida nova o executa, como no `/input`.
-        if !queued(text) {
-            drop(held);
-            let error=crate::runtime::gateway::asleep_waking();
-            return (StatusCode::CONFLICT,detail_body(&error.code,&error.message,json!({})));
-        }
-        let current=runtime.asleep(name).await.map(|mark|mark.key);
-        if current.as_deref()!=Some(key) {drop(held);return bound_life_changed();}
-        runtime.queue_asleep(name,key,text).await
-    };
+    let other=runtime.other_opening_key(name).await;
+    let current=match &other {Some(key)=>Some(key.clone()),None=>runtime.codex_opening(name).await.and_then(Result::ok)};
+    if current.as_deref()!=Some(key) {drop(held);return bound_life_changed();}
+    // Mesma regra do `/input` com a conversa abrindo: `/clear` e `/compact` esperam a conversa.
+    if other.is_none() && (is_codex_clear("codex",text) || is_codex_compact("codex",text)) {
+        drop(held);
+        let error=crate::runtime::codex_relaunch::starting();
+        return (StatusCode::CONFLICT,detail_body(&error.code,&error.message,json!({})));
+    }
+    let result=if other.is_some() {runtime.queue_other_opening(name,key,text,&random_hex(16)).await.map(|_| ())}
+    else {runtime.queue_codex_opening(name,key,text).await};
     drop(held);
     match result {
         Ok(())=>{

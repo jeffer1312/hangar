@@ -62,9 +62,15 @@ impl Engine {
         {
             return crate::store::repeated(task, &input);
         }
-        input.target = self.host.prepare_target(input.target).await?;
+        self.prepare(&mut input).await?;
         self.store
             .create_with_request(input, request_id, self.now(), &self.timezone)
+    }
+    async fn prepare(&self, input: &mut TaskInput) -> Result<(), Error> {
+        unbind_clear(input);
+        input.target = self.host.prepare_target(input.target.clone()).await?;
+        unbind_clear(input);
+        Ok(())
     }
     pub async fn update(
         &self,
@@ -72,7 +78,7 @@ impl Engine {
         mut input: TaskInput,
         revision: u64,
     ) -> Result<Task, Error> {
-        input.target = self.host.prepare_target(input.target).await?;
+        self.prepare(&mut input).await?;
         self.store
             .update(id, input, revision, self.now(), &self.timezone)
     }
@@ -96,5 +102,14 @@ impl Engine {
                 }
             }
         }
+    }
+}
+
+/// O `/clear` agendado troca a conversa a cada execução: o vínculo fica só na vida da sessão.
+fn unbind_clear(input: &mut TaskInput) {
+    if input.prompt.split_whitespace().next() == Some("/clear")
+        && let Target::Session { conversation, .. } = &mut input.target
+    {
+        *conversation = None;
     }
 }

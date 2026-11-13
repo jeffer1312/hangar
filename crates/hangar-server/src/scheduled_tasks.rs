@@ -201,16 +201,16 @@ impl Host for SessionHost {
                         Ok(info) => info.map(|info| info.session_key).filter(|id| !id.is_empty()),
                         Err(_) => return Err(Error::unavailable()),
                     };
-                    if expected_conversation
-                        .as_ref()
-                        .is_some_and(|expected| Some(expected) != conversation.as_ref())
+                    // Sem conversa achada (adormecida, abrindo) não há prova de troca: o vínculo gravado fica.
+                    if let (Some(expected), Some(current)) = (&expected_conversation, &conversation)
+                        && expected != current
                     {
                         return Err(changed_life());
                     }
                     Ok(Target::Session {
                         name,
                         session_key: Some(key),
-                        conversation,
+                        conversation: conversation.or(expected_conversation),
                     })
                 }
             }
@@ -227,14 +227,11 @@ impl Host for SessionHost {
                     session_key: Some(key),
                     conversation,
                 } => {
-                    // A tarefa que é o próprio `/clear` troca a conversa a cada execução.
-                    let clears =
-                        attempt.task.input.prompt.split_whitespace().next() == Some("/clear");
                     let (status, body) = crate::session_write::input::write_bound_input(
                         &state,
                         name,
                         key,
-                        conversation.as_deref().filter(|_| !clears),
+                        conversation.as_deref(),
                         &attempt.task.input.prompt,
                     )
                     .await;
