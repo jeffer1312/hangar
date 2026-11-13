@@ -57,6 +57,13 @@ async fn pagina(State(api): State<Arc<Api>>, headers: HeaderMap, RawQuery(query)
     hangar_core::http::json_response(StatusCode::OK, json!({"itens": items, "total": 3, "pagina": page, "tamanho": 2}))
 }
 
+async fn fluxo(State(api): State<Arc<Api>>, headers: HeaderMap) -> Response {
+    if !authorized(&api, &headers) { return StatusCode::UNAUTHORIZED.into_response(); }
+    let to = |id: i64, nome: &str, categoria: &str| json!({"id": id * 10, "nome": "t", "destino": {"id": id, "nome": nome, "categoria": categoria}});
+    hangar_core::http::json_response(StatusCode::OK, json!([to(1, "Criado", "a_fazer"), to(3, "Em Progresso", "em_andamento"),
+        to(5, "Sem Testes", "concluido"), to(3, "Em Progresso", "em_andamento")]))
+}
+
 async fn detalhe(State(api): State<Arc<Api>>, headers: HeaderMap, UrlPath(chave): UrlPath<String>) -> Response {
     if !authorized(&api, &headers) { return StatusCode::UNAUTHORIZED.into_response(); }
     if chave != "PM-101" { return hangar_core::http::json_response(StatusCode::NOT_FOUND, json!({"erro": "PM não encontrada"})); }
@@ -79,6 +86,7 @@ impl Bench {
         let app = axum::Router::new()
             .route("/api/eu", axum::routing::get(eu))
             .route("/api/pms/pagina", axum::routing::get(pagina))
+            .route("/api/fluxo", axum::routing::get(fluxo))
             .route("/api/pms/{chave}", axum::routing::get(detalhe))
             .with_state(api.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -120,7 +128,7 @@ fn write_token(dir: &std::path::Path, token: &str) {
     std::fs::write(file, json!({"HELP_TOKEN": token, "_atualizado_em": {"HELP_TOKEN": "2026-11-12T12:00:00+00:00"}}).to_string()).unwrap();
 }
 
-fn query(text: &str) -> Filter { Filter { query: Some(text.into()), assignee: None } }
+fn query(text: &str) -> Filter { Filter { query: Some(text.into()), ..Filter::default() } }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn list_maps_help_fields_to_the_contract() {
@@ -156,9 +164,9 @@ async fn cursor_walks_pages_and_is_bound_to_the_filters() {
 #[tokio::test(flavor = "multi_thread")]
 async fn assignee_me_becomes_the_login_of_the_token_owner() {
     let bench = Bench::new(Some("token-ficticio")).await;
-    bench.list(Filter { query: None, assignee: Some("me".into()) }, None).await.unwrap();
+    bench.list(Filter { assignee: Some("me".into()), ..Filter::default() }, None).await.unwrap();
     assert!(bench.last_query().contains(&("responsaveis".into(), "maria".into())));
-    bench.list(Filter { query: None, assignee: Some("joao".into()) }, None).await.unwrap();
+    bench.list(Filter { assignee: Some("joao".into()), ..Filter::default() }, None).await.unwrap();
     assert!(bench.last_query().contains(&("responsaveis".into(), "joao".into())));
 }
 
@@ -190,4 +198,18 @@ async fn redirect_is_refused_instead_of_followed() {
     let bench = Bench::new(Some("token-ficticio")).await;
     let error = bench.list(query("redireciona"), None).await.unwrap_err();
     assert_eq!(error.code(), "unavailable");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn state_filter_becomes_the_status_ids_of_the_help_categories() {
+    let bench = Bench::new(Some("token-ficticio")).await;
+    bench.list(Filter { state: Some("open".into()), ..Filter::default() }, None).await.unwrap();
+    let sent: Vec<String> = bench.last_query().into_iter().filter(|(k, _)| k == "status_ids").map(|(_, v)| v).collect();
+    assert_eq!(sent, ["1", "3"], "a fazer e em andamento, sem repetir");
+    bench.list(Filter { state: Some("done".into()), ..Filter::default() }, None).await.unwrap();
+    let sent: Vec<String> = bench.last_query().into_iter().filter(|(k, _)| k == "status_ids").map(|(_, v)| v).collect();
+    assert_eq!(sent, ["5"]);
+    let first = bench.list(Filter { state: Some("open".into()), ..Filter::default() }, None).await.unwrap();
+    let crossed = bench.list(Filter::default(), first.next_cursor).await;
+    assert!(matches!(crossed, Err(hangar_connectors::CallError::Connector(ref e)) if e.code == hangar_connectors::protocol::ErrorCode::InvalidCursor), "o cursor guarda o estado pedido");
 }

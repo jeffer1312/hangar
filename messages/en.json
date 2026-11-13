@@ -10895,5 +10895,6 @@
   "native_mission_stages_save": "Save stages",
   "native_mission_stages_title": "Work stages",
   "native_mission_waiting_you": "{etapa}: awaits your approval",
-  "native_mission_evidence_not_openable": "This file type does not open from the app; the evidence stays on the server."
+  "native_mission_evidence_not_openable": "This file type does not open from the app; the evidence stays on the server.",
+  "native_mission_show_done": "Done ones"
 }
