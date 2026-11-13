@@ -36,14 +36,9 @@ pub const READ_ONLY_MSG: &str = "sessão read-only só roda no terminal protegid
 
 const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
-/// Herdadas do backend subido de dentro de outra sessão (ou dele mesmo), dariam a esta o pane, o motor,
-/// a ponte, o subagente, o Jev, o portão de hooks ou o segredo de outra.
-const DROPPED: [&str; 22] = ["TMUX", "TMUX_PANE", "CP_ENGINE_ACCOUNT", "CP_ENGINE_CREDENTIAL_ID", "CP_ENGINE_ACCOUNT_BASE_URL",
-    "CP_ENGINE_SERVICE_TIER", "HANGAR_PLUGIN_URL", "HANGAR_PLUGIN_TOKEN", "CLAUDE_CODE_SUBAGENT_MODEL",
-    "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS", "TYPESAFE_API_KEY", "JEV_ENDPOINT", "JEV_MODEL", "JEV_TEXTO_BASE_URL",
-    "JEV_TEXTO_API_KEY", "JEV_TEXTO_MODELO", "JEV_TEXTO_CMD", "JEV_AUX_BASE_URL", "JEV_AUX_API_KEY", "JEV_AUX_MODELO",
-    "JEV_AUX_ESFORCO", "CP_AUTH_TOKEN"];
-const SECRETS: [&str; 3] = ["HANGAR_INTERNAL_SECRET", "HANGAR_RUNTIME_INSTANCE", "HANGAR_AUTH_CONTEXT"];
+/// Do backend subido de dentro de um pane: dariam a esta o pane de outra. O resto que não passa é o
+/// mesmo do terminal (`NOT_INHERITED` e `SERVER_SECRETS`).
+const DROPPED: [&str; 2] = ["TMUX", "TMUX_PANE"];
 
 fn refused(code: &str, message: &str) -> RuntimeError { RuntimeError::new(code, message) }
 
@@ -157,7 +152,8 @@ pub fn plan(spec: &SessionSpec, meta: &Value, ctx: &Context) -> Result<Launch, R
 
     let mut env = ctx.env.base.clone();
     // As do terminal também: servidor subido de dentro de uma sessão de motor daria o proxy dela a esta.
-    for name in DROPPED.iter().chain(SECRETS.iter()).chain(crate::session_open::terminal::NOT_INHERITED.iter()) { env.remove(*name); }
+    use crate::session_open::terminal::{NOT_INHERITED, SERVER_SECRETS};
+    for name in DROPPED.iter().chain(&SERVER_SECRETS).chain(&NOT_INHERITED) { env.remove(*name); }
     env.extend(ctx.display.iter().cloned());
     let key = &spec.key;
     env.insert("CP_SESSION_NAME".into(), spec.name.clone());
