@@ -1672,6 +1672,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-connectors"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "hangar-core",
+ "libc",
+ "percent-encoding",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha1_smol",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "hangar-conversation-transfer"
 version = "0.1.0"
 dependencies = [

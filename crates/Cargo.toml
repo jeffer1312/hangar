@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["hangar-scheduled-tasks", "hangar-conversation-transfer", "hangar-codex-transfer", "hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux", "hangar-connect", "hangar-plugins", "hangar-update-news", "hangar-workflows", "hangar-http-file", "hangar-desktop-theme", "hangar-opencode-cookie", "hangar-deploy", "hangar-port-preview", "hangar-session-tools", "hangar-codex-account-sync", "hangar-projects", "hangar-reviews", "hangar-docs"]
+members = ["hangar-scheduled-tasks", "hangar-conversation-transfer", "hangar-codex-transfer", "hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux", "hangar-connect", "hangar-plugins", "hangar-update-news", "hangar-workflows", "hangar-http-file", "hangar-desktop-theme", "hangar-opencode-cookie", "hangar-deploy", "hangar-port-preview", "hangar-session-tools", "hangar-codex-account-sync", "hangar-projects", "hangar-reviews", "hangar-docs", "hangar-connectors"]
 
 [workspace.package]
 version = "0.1.0"
@@ -13,6 +13,7 @@ hangar-scheduled-tasks = { path = "hangar-scheduled-tasks" }
 hangar-projects = { path = "hangar-projects" }
 hangar-reviews = { path = "hangar-reviews" }
 hangar-docs = { path = "hangar-docs" }
+hangar-connectors = { path = "hangar-connectors" }
 hangar-codex-account-sync = { path = "hangar-codex-account-sync" }
 hangar-conversation-transfer = { path = "hangar-conversation-transfer" }
 hangar-codex-transfer = { path = "hangar-codex-transfer" }
