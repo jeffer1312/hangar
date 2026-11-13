@@ -58,12 +58,21 @@ const DesktopCall = memo(function DesktopCall({ use, result, onExpand }: { use: 
 
 /** Sequência de chamadas: a linha cinza com o resumo e, aberta, o cartão com uma linha por chamada. */
 const DesktopRun = memo(function DesktopRun({ calls, resultOf, onExpand }: { calls: ChatEvent[]; resultOf: Props['resultOf']; onExpand?: () => void }) {
-  const { theme } = useUnistyles();
   const [open, setOpen] = useState(false);
   const [shown, setShown] = useState(SHOWN_CALLS);
+  return <DesktopRunView calls={calls} resultOf={resultOf} onExpand={onExpand} open={open} shown={shown}
+    onToggle={() => { if (!open) onExpand?.(); setOpen((value) => !value); }}
+    onMore={() => { onExpand?.(); setShown((n) => n + SHOWN_CALLS); }} />;
+});
+
+/** A sequência desenhada com o estado de fora: a conversa guarda o aberto; a novidade o anima. */
+export function DesktopRunView({ calls, resultOf, onExpand, open, shown = SHOWN_CALLS, onToggle, onMore }: {
+  calls: ChatEvent[]; resultOf: Props['resultOf']; onExpand?: () => void; open: boolean; shown?: number; onToggle?: () => void; onMore?: () => void;
+}) {
+  const { theme } = useUnistyles();
   const title = useMemo(() => desktopSummary(calls, resultOf), [calls, resultOf]);
   return <View style={styles.run}>
-    <Pressable onPress={() => { if (!open) onExpand?.(); setOpen((value) => !value); }}
+    <Pressable onPress={onToggle}
       style={({ pressed }) => [styles.head, pressed && { backgroundColor: theme.tokens.bg.hover }]}
       accessibilityRole="button" accessibilityLabel={title} accessibilityState={{ expanded: open }}>
       <Text style={[styles.title, { color: theme.tokens.text.muted }]} numberOfLines={2}>{title}</Text>
@@ -75,12 +84,12 @@ const DesktopRun = memo(function DesktopRun({ calls, resultOf, onExpand }: { cal
           <DesktopCall use={call} result={resultOf(call)} onExpand={onExpand} />
         </View>
       ))}
-      {shown < calls.length ? <Pressable style={styles.row} accessibilityRole="button" onPress={() => { onExpand?.(); setShown((n) => n + SHOWN_CALLS); }}>
+      {shown < calls.length ? <Pressable style={styles.row} accessibilityRole="button" onPress={onMore}>
         <Text style={[styles.verb, { color: theme.tokens.text.secondary }]}>{m.tool_mostrar_mais_linhas({ n: calls.length - shown })}</Text>
       </Pressable> : null}
     </View> : null}
   </View>;
-});
+}
 
 /** Estilo Claude Desktop: cada sequência de chamadas vira uma linha recolhida; pensamento e Agent cortam. */
 export const DesktopToolGroup = memo(function DesktopToolGroup({ parts, resultOf, onExpand, renderOther }: Props) {

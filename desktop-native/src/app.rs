@@ -81,6 +81,7 @@ mod servers;
 pub(crate) use servers::{ServerEntry, new_id as new_server_id};
 // Partes de vista que a miniatura das novidades (`crate::news`) também desenha.
 pub(crate) use rows::{agent_card, agent_clock};
+pub(crate) use desktop_look::{call_button as desktop_call_button, desktop_summary, group_block as desktop_group_block, summary_button as desktop_summary_button};
 pub(crate) use session_tabs::{PlateMark, PlateSegment, plate, tab_frame, tab_title, with_context_ring};
 pub(crate) use tags::{account_icon, machine_icon};
 pub(crate) use voice_ui::{call_actions, call_footer, call_header, call_status, equalizer as voice_equalizer, mute_button, speech_pause_button, stop_button};

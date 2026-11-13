@@ -20,7 +20,7 @@ fn family(name: Option<&str>) -> (&'static str, String) {
 /// Resumo do grupo: uma frase por família, na ordem em que cada uma aparece, as falhas na frase da família e as que
 /// ainda rodam no fim ("Executou 4 comandos (2 falhas)", "Carregou ferramentas, Pesquisou na web 1 vez"). Cada chamada
 /// vem como (chamada, falhou, rodando).
-pub(super) fn desktop_summary<'a>(calls: impl IntoIterator<Item = (&'a ChatEvent, bool, bool)>) -> String {
+pub(crate) fn desktop_summary<'a>(calls: impl IntoIterator<Item = (&'a ChatEvent, bool, bool)>) -> String {
     let mut families: Vec<((&'static str, String), usize, usize)> = Vec::new();
     let mut live = 0;
     for (call, failed, running) in calls {
@@ -58,7 +58,7 @@ pub(super) fn exit_code_line(output: &str) -> Option<Div> {
 }
 
 /// O grupo: a linha do resumo e, aberto, o cartão com uma linha por chamada.
-pub(super) fn group_block(header: Button, open: bool, rows: Vec<AnyElement>) -> AnyElement {
+pub(crate) fn group_block(header: Button, open: bool, rows: Vec<AnyElement>) -> AnyElement {
     div().flex().flex_col().gap_1().child(div().flex().min_w_0().child(header))
         .when(open, |el| el.child(super::rows::chip_table(rows))).into_any_element()
 }
@@ -71,7 +71,7 @@ pub(super) fn call_block(line: Button, body: Option<Div>) -> AnyElement {
 fn chevron(open: bool) -> Icon { chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 13., theme::faint()) }
 
 /// A linha cinza do grupo, com o chevron logo depois do texto. Quem chama liga o clique.
-pub(super) fn summary_button(id: String, summary: String, open: bool, cx: &App) -> Button {
+pub(crate) fn summary_button(id: String, summary: String, open: bool, cx: &App) -> Button {
     Button::new(SharedString::from(id))
         .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::muted()).hover(theme::hover()).active(theme::hover()))
         .h(px(28.)).px(px(6.)).toggled(open).accessibility_label(summary.clone())
@@ -81,7 +81,7 @@ pub(super) fn summary_button(id: String, summary: String, open: bool, cx: &App) 
 }
 
 /// Uma chamada no cartão: verbo cinza, alvo, "Falhou" e o chevron logo depois. Quem chama liga o clique.
-pub(super) fn call_button(id: String, call: &ChatEvent, failed: bool, open: bool, cx: &App) -> Button {
+pub(crate) fn call_button(id: String, call: &ChatEvent, failed: bool, open: bool, cx: &App) -> Button {
     let (root, name) = family(call.tool_name.as_deref());
     let verb = crate::i18n::tr_shared(&format!("ferr_desktop_linha_{root}"), &[]);
     let target = if root == "outra" { name } else { super::rows::chip_text(call) };

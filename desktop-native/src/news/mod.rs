@@ -6,6 +6,7 @@ mod codex_activity;
 mod compact_idle;
 mod composer_history;
 mod connect_approval;
+mod desktop_tool_look;
 mod dictation_pill;
 mod login_browser;
 mod no_project;
@@ -73,6 +74,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "plugins-do-claude" => Some(plugins::render),
         "revisoes-pr-mr" => Some(reviews::render),
         "scheduled-tasks" => Some(scheduled_tasks::render),
+        "estilo-claude-desktop" => Some(desktop_tool_look::render),
         _ => None,
     }
 }
