@@ -120,14 +120,9 @@ async fn execute(st: &Arc<AppState>, opts: &Options, run_id: &str) -> Result<(),
     prune_runs(&paths.runs());
     let scrub = |t: &str| hangar_dream::secrets::scrub(t).into_owned();
 
-    let since = state
-        .projects
-        .values()
-        .filter(|p| p.enabled)
-        .map(|p| p.last_dream_at)
-        .collect::<Option<Vec<_>>>()
-        .and_then(|times| times.into_iter().min())
-        .unwrap_or(now - Duration::days(budget::FIRST_DREAM_DAYS));
+    // Janela fixa: um projeto que nunca sonhou não aparece no estado, e a data de outro projeto
+    // esconderia as sessões dele. O que já foi lido sai por projeto, em `dream_one`.
+    let since = now - Duration::days(budget::FIRST_DREAM_DAYS);
     let mut sessions = collect_sessions(st, &me, since).await?;
     resolve_roots(st, &mut state, &mut sessions);
     let groups = group(&state, sessions);
@@ -269,6 +264,10 @@ async fn dream_one(ctx: &Ctx<'_>, state: &mut State, pid: &str, ps: &ProjectStat
     for (machine, s) in &list {
         places.insert((machine.clone(), s.root.clone().unwrap_or_default()));
         let cursor_key = format!("{machine}/{}", s.path);
+        // Já lida e sem mudança desde o último sonho do projeto: nem relê o arquivo.
+        if ps.last_dream_at.is_some_and(|t| s.mtime <= t) && state.cursors.contains_key(&cursor_key) {
+            continue;
+        }
         let from = state.cursors.get(&cursor_key).copied().unwrap_or(0);
         let rendered = if machine == ctx.me {
             let Some(provider) = hangar_transcript::Provider::parse(&s.provider) else { continue };
