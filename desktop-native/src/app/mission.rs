@@ -89,8 +89,9 @@ struct Board {
     tickets: Vec<Ticket>,
     next_cursor: Option<String>,
     total: Option<u64>,
-    /// Busca que gerou a página: o cursor só vale com ela.
+    /// Busca e escolha de concluídos que geraram a página: o cursor só vale com elas.
     query: String,
+    done: bool,
 }
 
 /// Pedido de Iniciar à espera da sessão nova: só a criação seguinte, com a mensagem que começa pelo texto
@@ -129,6 +130,8 @@ pub(super) struct Mission {
     changes: Option<Entity<TextareaState>>,
     /// Editor das etapas, aberto no lugar das colunas.
     stages_editor: Option<Entity<TextareaState>>,
+    /// Com concluídos: sem ele, só os tickets abertos vêm do conector (os mais recentes costumam estar concluídos).
+    show_done: bool,
 }
 
 fn failure_text(error: &Failure) -> String {
@@ -283,9 +286,12 @@ impl Hangar {
         let Some(api) = self.api.clone() else { return };
         let server = api.identity();
         let same = self.mission.server.as_deref() == Some(server.as_str());
-        let page = more.then(|| self.mission_board().and_then(|b| Some((b.next_cursor.clone()?, b.query.clone())))).flatten();
+        let page = more.then(|| self.mission_board().and_then(|b| Some((b.next_cursor.clone()?, b.query.clone(), b.done)))).flatten();
         if more && page.is_none() { return; }
-        let (cursor, query) = match page { Some((cursor, query)) => (Some(cursor), query), None => (None, self.mission_query(cx)) };
+        let (cursor, query, done) = match page {
+            Some((cursor, query, done)) => (Some(cursor), query, done),
+            None => (None, self.mission_query(cx), self.mission.show_done),
+        };
         if !same {
             (self.mission.connector, self.mission.selected, self.mission.detail, self.mission.board) = (None, None, None, None);
             for image in self.mission.thumbs.drain().filter_map(|(_, image)| image) { cx.drop_image(image, Some(window)); }
@@ -305,6 +311,7 @@ impl Hangar {
             let Some(id) = chosen else { return Ok((connectors, work, None)) };
             let mut params = vec![("assignee", "me".to_owned()), ("limit", PAGE.to_owned())];
             if !query.is_empty() { params.push(("query", query)); }
+            if !done { params.push(("state", "open".to_owned())); }
             if let Some(cursor) = cursor { params.push(("cursor", cursor)); }
             let params: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, v.as_str())).collect();
             let page = api.server_read(&["connectors", &id, "tickets"], &params, 45).await?;
@@ -320,7 +327,7 @@ impl Hangar {
                 Err(error) => this.mission.board = Some(Err(failure_text(&error))),
                 Ok((connectors, work, None)) => {
                     this.mission.connector = None;
-                    this.mission.board = Some(Ok(Board { connectors, work, tickets: Vec::new(), next_cursor: None, total: None, query: used }));
+                    this.mission.board = Some(Ok(Board { connectors, work, tickets: Vec::new(), next_cursor: None, total: None, query: used, done }));
                 }
                 Ok((connectors, work, Some((id, page)))) => {
                     let mut tickets = page.items;
@@ -330,7 +337,7 @@ impl Hangar {
                         tickets = board.tickets.into_iter().chain(tickets).collect();
                     }
                     this.mission.connector = Some(id);
-                    this.mission.board = Some(Ok(Board { connectors, work, tickets, next_cursor: page.next_cursor, total: page.total, query: used }));
+                    this.mission.board = Some(Ok(Board { connectors, work, tickets, next_cursor: page.next_cursor, total: page.total, query: used, done }));
                     this.load_thumbs(window, cx);
                 }
             }
@@ -605,6 +612,10 @@ impl Hangar {
             } else { this.edit_stages(window, cx) }));
         let header = self.costs_header(tr("mission_title"), |this, window, cx| this.close_mission(window, cx),
             search.into_iter().chain(chooser).chain([
+                Button::new("mission-show-done").ghost().small().icon(IconName::Check).label(tr("mission_show_done"))
+                    .selected(self.mission.show_done).disabled(loading)
+                    .on_click(cx.listener(|this, _, window, cx| { this.mission.show_done = !this.mission.show_done; this.load_mission(false, window, cx); }))
+                    .into_any_element(),
                 stages.into_any_element(),
                 Button::new("mission-refresh").outline().small().label(tr_shared("custos_atualizar", &[])).loading(loading).disabled(loading)
                     .on_click(cx.listener(|this, _, window, cx| this.load_mission(false, window, cx))).into_any_element(),

@@ -57,7 +57,13 @@ pub struct Filter {
     /// `me` ou o ID opaco de uma pessoa no fornecedor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignee: Option<String>,
+    /// `open` (a fazer e em andamento) ou `done` (concluído e cancelado); ausente, todos.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
 }
+
+/// Valores aceitos em `filter.state`.
+pub const STATES: [&str; 2] = ["open", "done"];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -91,6 +97,9 @@ impl ListParams {
 
     fn normalize(&mut self) -> Result<(), String> {
         if !(1..=MAX_LIMIT).contains(&self.limit) { return Err(format!("limit fora de 1..={MAX_LIMIT}")); }
+        if let Some(state) = self.filter.state.as_deref() && !STATES.contains(&state) {
+            return Err(format!("state precisa ser {}", STATES.join(" ou ")));
+        }
         for (field, value) in [("query", &mut self.filter.query), ("assignee", &mut self.filter.assignee), ("cursor", &mut self.cursor)] {
             if let Some(text) = value.as_deref() {
                 bounded(field, text, true)?;
@@ -102,7 +111,7 @@ impl ListParams {
 }
 
 impl ListParams {
-    /// Pares nome/valor da URL ou das opções do CLI: `query`, `assignee`, `limit` e `cursor`.
+    /// Pares nome/valor da URL ou das opções do CLI: `query`, `assignee`, `state`, `limit` e `cursor`.
     /// Nome desconhecido é `invalid_params`, nunca ignorado.
     pub fn from_pairs<K: AsRef<str>, V: Into<String>>(pairs: impl IntoIterator<Item = (K, V)>) -> Result<Self, ConnectorError> {
         let mut params = ListParams { filter: Filter::default(), limit: DEFAULT_LIMIT, cursor: None };
@@ -111,6 +120,7 @@ impl ListParams {
             match name.as_ref() {
                 "query" => params.filter.query = Some(value),
                 "assignee" => params.filter.assignee = Some(value),
+                "state" => params.filter.state = Some(value),
                 "cursor" => params.cursor = Some(value),
                 "limit" => params.limit = value.parse().map_err(|_| ConnectorError::invalid_params("limit precisa ser número"))?,
                 other => return Err(ConnectorError::invalid_params(format!("filtro desconhecido: {other}"))),

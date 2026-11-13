@@ -13,7 +13,7 @@ pub const USAGE: &str = "uso: hangar-server connectors [--registry <arquivo>] <c
   list                       lista os cadastrados, sem iniciar processos
   enable <id> | disable <id> liga ou desliga (desligar encerra o processo)
   remove <id>                encerra e remove
-  tickets <id> [--query T] [--assignee me|ID] [--limit N] [--cursor C]
+  tickets <id> [--query T] [--assignee me|ID] [--state open|done] [--limit N] [--cursor C]
   ticket <id> <ticket_id>
 Sem --registry, fala com o servidor desta máquina e usa o host dele.";
 
@@ -48,7 +48,7 @@ fn parse(args: &[String]) -> Result<Command, Failure> {
         [verb, id, options @ ..] if verb == "tickets" => {
             if let [.., last] = options && options.len() % 2 != 0 { return Err(Failure::usage(format!("{last} sem valor"))); }
             let pairs = options.chunks(2).map(|pair| match pair[0].strip_prefix("--") {
-                Some(name @ ("query" | "assignee" | "limit" | "cursor")) => Ok((name.to_owned(), pair[1].clone())),
+                Some(name @ ("query" | "assignee" | "state" | "limit" | "cursor")) => Ok((name.to_owned(), pair[1].clone())),
                 _ => Err(Failure::usage(format!("opção desconhecida: {}", pair[0]))),
             }).collect::<Result<Vec<_>, _>>()?;
             Command::Tickets(id.clone(), ListParams::from_pairs(pairs).map_err(invalid)?)
@@ -116,6 +116,7 @@ async fn remote(base: &str, token: &str, command: Command) -> Result<Value, Fail
             query.append_pair("limit", &params.limit.to_string());
             if let Some(value) = &params.filter.query { query.append_pair("query", value); }
             if let Some(value) = &params.filter.assignee { query.append_pair("assignee", value); }
+            if let Some(value) = &params.filter.state { query.append_pair("state", value); }
             if let Some(value) = &params.cursor { query.append_pair("cursor", value); }
             client.get(format!("{base}/api/connectors/{}/tickets?{}", segment(&id), query.finish()))
         }

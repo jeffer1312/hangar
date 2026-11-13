@@ -12,8 +12,9 @@ Pedido:
 { "filter": { "query": "impressão", "assignee": "me" }, "limit": 20, "cursor": null }
 ```
 
-- `query` e `assignee` são opcionais. `assignee` é `me` ou o `id` opaco de uma pessoa, o mesmo que
-  o conector devolve em `assignee.id`.
+- `query`, `assignee` e `state` são opcionais. `assignee` é `me` ou o `id` opaco de uma pessoa, o
+  mesmo que o conector devolve em `assignee.id`. `state` é `open` (categorias `todo`, `in_progress` e
+  `unknown`) ou `done` (`done` e `canceled`); ausente, todos.
 - `limit` vai de 1 a 100.
 - Filtro que o fornecedor não oferece é `invalid_params`, nunca ignorado.
 - O cursor é opaco para o Hangar e vale só para os mesmos filtros: cursor de outra consulta é
