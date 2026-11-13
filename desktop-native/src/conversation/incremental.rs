@@ -297,6 +297,10 @@ impl ActivityFold {
                         if let Some(at) = self.finished_early.remove(shell) {
                             changed |= super::record_completion(&mut self.resulted, id.to_owned(), at);
                         }
+                        if let Some(run) = self.shells.iter_mut().find(|s| s.id == id) {
+                            run.task_id = Some(shell.to_owned());
+                            changed = true;
+                        }
                         self.background.insert(shell.to_owned(), id.to_owned());
                         return changed;
                     }
@@ -371,7 +375,7 @@ impl ActivityFold {
                         self.shell_calls.insert(id.to_owned());
                         let command = text("command").unwrap_or_default();
                         self.shells.push(ShellRun { id: id.to_owned(), label: command_label(&command), command,
-                            description: text("description"), ts: event.ts, running: false });
+                            description: text("description"), ts: event.ts, running: false, task_id: None });
                         true
                     }
                     _ => false,

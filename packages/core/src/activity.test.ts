@@ -241,6 +241,7 @@ describe('activity — shells de fundo', () => {
     f.reset([bash('tb1', 'uv run pytest -q'), bashOk('tb1', 'bxyz')]);
     expect(f.snapshot().runningShells).toBe(1);
     expect(f.snapshot().shells[0].command).toBe('uv run pytest -q');
+    expect(f.snapshot().shells[0].taskId).toBe('bxyz');
     f.push(done('bxyz'));
     expect(f.snapshot().runningShells).toBe(0);
     expect(f.snapshot().shells[0].running).toBe(false);

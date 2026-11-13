@@ -8,6 +8,7 @@ import { toast } from '../../ui/Toast';
 import { useServers } from '../../stores/servers';
 import { EditDiff } from './EditDiff';
 import { toolIcon } from './toolIcon';
+import { ExitCodeLine } from './ExitCodeLine';
 import * as m from '../../paraglide/messages';
 
 export interface ToolDetailHandle { abrir: (use: ChatEvent) => void }
@@ -104,6 +105,7 @@ export const ToolDetailSheet = forwardRef<ToolDetailHandle, { resultOf: (use: Ch
               {pendente && erroVivo ? (
                 <Text style={[styles.arquivo, { color: theme.tokens.text.muted }]}>{m.tool_saida_ao_vivo()} · {m.quiet_erro_carregar()}: {erroVivo}</Text>
               ) : null}
+              <ExitCodeLine output={result?.result} />
               {result?.result
                 ? <Text style={[styles.mono, { color: fase === 'error' ? theme.tokens.status.error : theme.tokens.text.primary }]} selectable>{result.result}</Text>
                 : <Text style={[styles.mono, { color: fase === 'error' ? theme.tokens.status.error : theme.tokens.text.muted }]}>{desfecho}</Text>}

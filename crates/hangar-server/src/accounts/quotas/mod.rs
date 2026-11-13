@@ -173,6 +173,7 @@ pub fn suggestion(rows: &[Value]) -> Option<Value> {
             let usage = row["janelas"]
                 .as_array()?
                 .iter()
+                .filter(|w| w["por_modelo"] != true)
                 .filter_map(|w| w["pct"].as_f64())
                 .reduce(f64::max)?;
             Some((100.0 - usage, row["ativa"] == true, row))
@@ -964,5 +965,15 @@ mod tests {
         let result = suggestion(&rows).unwrap();
         assert_eq!(result["id"], "claude:second");
         assert_eq!(result["folga"], 10.0);
+    }
+    #[test]
+    fn suggestion_ignores_a_model_window() {
+        let rows = vec![
+            json!({"id":"claude:general","provedor":"claude","estado":"lida","ativa":true,"janelas":[{"pct":60}]}),
+            json!({"id":"claude:model","provedor":"claude","estado":"lida","ativa":false,"janelas":[{"pct":30},{"pct":99,"por_modelo":true}]}),
+        ];
+        let result = suggestion(&rows).unwrap();
+        assert_eq!(result["id"], "claude:model");
+        assert_eq!(result["folga"], 70.0);
     }
 }

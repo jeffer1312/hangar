@@ -3361,6 +3361,9 @@ defeitos achados nele (todos consertados no Rust, decisão do usuário) estão n
     para a de cota lida abaixo dos 95% e de mais folga, com aviso; nenhuma assim, fica;
   - destino só com leitura atual (`lida`), e conta no limite (100% ou `limit-spent.json` valendo)
     nunca é destino;
+  - o uso da conta é a maior das janelas gerais (5h, 7d); a janela de um modelo (`por_modelo`, como a
+    do Fable) não entra, na abertura nem na escolha de destino (`quotas::suggestion`): ela só trava
+    aquele modelo. Em 13/11, uma conta com 53% nos 7 dias foi tratada como cheia;
   - no Codex, a troca só acontece se a conta de destino aceitar o modelo, o esforço e o Fast
     pedidos; se não aceitar, a sessão fica na pedida, e a troca nunca faz a abertura falhar. A
     retomada do Arquivo (`account_bound`) não troca. A conta escolhida pelo convidado não troca;
@@ -3767,7 +3770,12 @@ terminal pela lista, porque o aviso do plugin chega antes de o Claude gravar a l
 resolve token velho na memória com um bom no disco, então a primeira recusa com login no disco reabre
 na mesma conta e manda o recado para continuar. A segunda em 10 min, ou o login já apagado, leva a
 sessão à conta logada de mais folga; a conta recusada fica fora dos destinos por 1 h, para duas contas
-recusadas não revezarem sem fim. A escolha também lê o login no disco: o cache da cota mostra "lida"
+recusadas não revezarem sem fim. Credencial recusada (`authentication_failed`, `api_401`) guarda a
+hora da recusa (`login` em `limit-spent.json`) e sai antes da hora quando a credencial da conta é
+regravada depois dela com token (login refeito pela tela ou pelo `/login`, ou renovação que deu
+certo): a abertura, a escolha de destino e o diagnóstico conferem isso pelo `relogin_at`. Conta
+suspensa ou fora da organização espera a hora inteira, e marca juntada a um limite também. No macOS
+a credencial mora no Keychain: lá a marca espera a hora. A escolha também lê o login no disco: o cache da cota mostra "lida"
 a conta que acabou de perdê-lo. Sem destino, a linha mostra `limit_switch_login_lost`. Vale a escolha
 de conta da pessoa: como no limite, ela é trocada e o diário registra `explicit_account`. Sessão em
 motor não muda de conta.

@@ -6,7 +6,7 @@ import {
   projectKey, projectLabel, encodeCompareIds, parseCompareIds, latestAssistantEvent, resetsIn, relativeTime,
   clusterByPair, railLabel, sortSessions, bubblesFromTail, ctxWindow, fileKind, fmtBytes, providerName, providerTag, isOrq,
   untrackedReason,
-  summarizeText, summarizeToolInput, summarizeToolResult, toolPhase, toolGroupLabel, toolGroupCounts, toolGroupTitulo, splitTerminalRun, terminalFoldKind, terminalFoldTitle, toolVerbo,
+  summarizeText, summarizeToolInput, summarizeToolResult, toolPhase, toolGroupLabel, toolGroupCounts, toolGroupTitulo, splitTerminalRun, terminalFoldKind, terminalFoldTitle, toolVerbo, familiaTool,
   rotuloEstado,
   splitTodoBlock, parseImageMessage, parseCanal, parseRealtimeDelegation, parsePeerMessage, basename,
   parseFilePaths, hideAttachmentPaths, codeCitation, separarComando, nomeFerramenta, terminalFileTool, terminalToolName,
@@ -754,6 +754,8 @@ describe('summarizeToolInput', () => {
     expect(summarizeToolInput('Read', { file_path: '/tmp/x.ts' })).toBe('/tmp/x.ts');
     expect(summarizeToolInput('Write', { path: '/tmp/y.ts' })).toBe('/tmp/y.ts');
     expect(summarizeToolInput('Bash', { command: 'npm test' })).toBe('npm test');
+    expect(summarizeToolInput('PowerShell', { description: 'Listar', command: 'Get-ChildItem' })).toBe('Get-ChildItem');
+    expect(familiaTool('PowerShell')).toBe('rodou');
     // `exec` é o Bash do Codex. O comando sai do código pelo backend; sem ele, sobra o código —
     // que é o que foi executado, e é melhor que uma linha em branco.
     expect(summarizeToolInput('exec', { command: 'echo oi', code: 'const r = await tools…' }))

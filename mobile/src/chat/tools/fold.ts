@@ -64,7 +64,7 @@ function family(name: string | null | undefined): number {
     case 'Grep': case 'Glob': case 'WebSearch': case 'WebFetch': return 1;
     case 'Edit': case 'MultiEdit': case 'NotebookEdit': return 2;
     case 'Write': return 3;
-    case 'Bash': case 'exec': case 'exec_command': return 4;
+    case 'Bash': case 'PowerShell': case 'exec': case 'exec_command': return 4;
     default: return 5;
   }
 }

@@ -71,6 +71,8 @@ pub enum OperationKind {
     SetMode, SkipQuestion, Restart, OpenTerminal, Reload, Cwd, Detach, RefreshHooks,
     /// Codex: encerra um comando que ficou rodando (`thread/backgroundTerminals/terminate`).
     TerminateTerminal,
+    /// Claude: para uma tarefa (subagente ou shell em fundo) pelo `stop_task` da CLI.
+    StopTask,
     ReadSubagent, SubagentMessage,
     /// Interna: só o ator a cria, a partir da entrada reservada que a fila devolveu.
     DispatchAsyncAnswer,

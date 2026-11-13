@@ -14,6 +14,10 @@ vi.mock('react-native', async (original) => {
   return { ...native, Pressable: vi.fn(native.Pressable) };
 });
 
+vi.mock('./desktopLook', async (original) => {
+  const look = await original<typeof import('./desktopLook')>();
+  return { ...look, desktopSummary: vi.fn(look.desktopSummary) };
+});
 vi.mock('react-native-enriched-markdown', () => ({ EnrichedMarkdownText: () => null }));
 vi.mock('expo-file-system', () => ({}));
 vi.mock('expo-clipboard', () => ({}));
@@ -100,6 +104,19 @@ it('Terminal recolhe pelo corpo sem tomar o toque longo usado para selecionar', 
     expect(container.textContent).toContain('second-output-line');
     act(() => { body!.onPressIn?.({} as never); body!.onPress?.({} as never); });
     expect(container.textContent).not.toContain('second-output-line');
+  } finally { act(() => root.unmount()); }
+});
+
+it('Terminal aberto mostra o código de saída acima da saída', () => {
+  const use: ChatEvent = { id: 'shell', kind: 'tool_use', tool_name: 'Bash', tool_input: { command: 'false' } };
+  const result: ChatEvent = { id: 'output', kind: 'tool_result', result: 'Exit code 1\nboom', is_error: true };
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  try {
+    act(() => root.render(createElement(ToolCard, { use, result, look: 'terminal', onPress: vi.fn() })));
+    act(() => container.querySelector('button')!.click());
+    // Em inglês a etiqueta repete a primeira linha da saída: a prova é ela logo antes do texto cru.
+    expect(container.textContent).toContain(`${m.ferr_desktop_codigo_saida({ n: 1 })}${result.result}`);
   } finally { act(() => root.unmount()); }
 });
 
@@ -209,6 +226,112 @@ it('trecho recolhido com 5000 chamadas e 200 appends não reconta o histórico',
     expect(container.querySelectorAll('button')).toHaveLength(1);
     expect(container.textContent).toContain('5200');
     expect(deltaReads).toBeLessThan(200 * 100);
+  } finally {
+    act(() => root.unmount());
+  }
+});
+
+it('Claude Desktop nasce recolhido e abre cartão, falha e código de saída', () => {
+  const bash = (id: string): ChatEvent => ({ id, kind: 'tool_use', tool_use_id: id, tool_name: 'Bash', tool_input: { command: `run-${id}` } });
+  const results: Record<string, ChatEvent> = {
+    ok: { id: 'r-ok', kind: 'tool_result', tool_use_id: 'ok', result: 'done' },
+    bad: { id: 'r-bad', kind: 'tool_result', tool_use_id: 'bad', result: 'Exit code 1\nboom', is_error: true },
+  };
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  const onExpand = vi.fn();
+  try {
+    act(() => root.render(createElement(ToolGroup, { parts: [bash('ok'), bash('bad')], resultOf: (t) => results[t.id] ?? null, onAbrir: () => {}, onExpand, look: 'claudeDesktop' })));
+    expect(container.textContent).toBe(`${m.ferr_desktop_rodou({ n: 2 })} ${m.ferr_desktop_falhas_1()}`);
+    act(() => container.querySelector('button')!.click());
+    expect(onExpand).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain('run-ok');
+    expect(container.textContent).toContain(m.formato_tool_falhou());
+    const failed = [...container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label')?.includes('run-bad'))!;
+    act(() => failed.click());
+    expect(container.textContent).toContain(m.ferr_desktop_codigo_saida({ n: 1 }));
+    expect(container.textContent).toContain('boom');
+  } finally {
+    act(() => root.unmount());
+  }
+});
+
+it('Claude Desktop abre o detalhe da chamada, no grupo e solta, para ver a saída ao vivo', () => {
+  const use: ChatEvent = { id: 'live', kind: 'tool_use', tool_use_id: 'live', tool_name: 'Bash', tool_input: { command: 'npm run build' } };
+  const openCall = (container: HTMLElement) => {
+    act(() => container.querySelector('button')!.click());
+    act(() => [...container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label')?.includes('npm run build'))!.click());
+    const detail = [...container.querySelectorAll('button')].find((b) => b.textContent === m.tool_ver_separado());
+    expect(detail).toBeDefined();
+    act(() => detail!.click());
+  };
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  const onAbrir = vi.fn(), onPress = vi.fn();
+  try {
+    act(() => root.render(createElement(ToolGroup, { parts: [use], resultOf: () => null, onAbrir, look: 'claudeDesktop' })));
+    openCall(container);
+    expect(onAbrir).toHaveBeenCalledExactlyOnceWith(use);
+    act(() => root.render(createElement(ToolCard, { use, result: null, onPress, look: 'claudeDesktop' })));
+    openCall(container);
+    expect(onPress).toHaveBeenCalledExactlyOnceWith(use);
+  } finally {
+    act(() => root.unmount());
+  }
+});
+
+it('Claude Desktop corta a saída aberta no limite do Terminal e deixa o resto para ver separado', () => {
+  const use: ChatEvent = { id: 'big', kind: 'tool_use', tool_use_id: 'big', tool_name: 'Bash', tool_input: { command: 'seq 450' } };
+  const result: ChatEvent = { id: 'r-big', kind: 'tool_result', tool_use_id: 'big', result: Array.from({ length: 450 }, (_, i) => `<out-${i + 1}>`).join('\n') };
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  const onAbrir = vi.fn();
+  try {
+    act(() => root.render(createElement(ToolGroup, { parts: [use], resultOf: () => result, onAbrir, look: 'claudeDesktop' })));
+    act(() => container.querySelector('button')!.click());
+    act(() => [...container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label')?.includes('seq 450'))!.click());
+    expect(container.textContent).toContain('<out-400>');
+    expect(container.textContent).not.toContain('<out-401>');
+    expect(container.textContent).toContain(m.term_mais_linhas({ n: 50 }));
+    act(() => [...container.querySelectorAll('button')].find((b) => b.textContent === m.tool_ver_separado())!.click());
+    expect(onAbrir).toHaveBeenCalledExactlyOnceWith(use);
+  } finally {
+    act(() => root.unmount());
+  }
+});
+
+it('Claude Desktop: render descartado não publica o cache das sequências', async () => {
+  const { startTransition, Suspense } = await import('react');
+  const { desktopSummary } = await import('./desktopLook');
+  const bash = (id: string): ChatEvent => ({ id, kind: 'tool_use', tool_use_id: id, tool_name: 'Bash', tool_input: { command: id } });
+  const [one, two] = [bash('one'), bash('two')];
+  const resultOf = () => null, onAbrir = () => {};
+  const never = new Promise<never>(() => {});
+  const Suspends = () => { throw never; };
+  const view = (parts: ChatEvent[], suspend: boolean) => createElement(Suspense, { fallback: null },
+    createElement(ToolGroup, { parts, resultOf, onAbrir, look: 'claudeDesktop' }), suspend ? createElement(Suspends) : null);
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(view([one, two], false)));
+    // Transição que suspende é descartada: o cache de [one] não pode substituir o de [one, two].
+    await act(async () => startTransition(() => root.render(view([one], true))));
+    vi.mocked(desktopSummary).mockClear();
+    await act(async () => root.render(view([one, two], false)));
+    expect(desktopSummary).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
+it('Claude Desktop: chamada solta sendo escrita diz escrevendo, não em execução', () => {
+  const use: ChatEvent = { id: 'w', kind: 'tool_use', tool_use_id: 'w', tool_name: 'Bash', tool_input: { command: 'ls' } };
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  try {
+    act(() => root.render(createElement(ToolCard, { use, result: null, onPress: () => {}, look: 'claudeDesktop', escrevendo: true })));
+    expect(container.textContent).toContain(m.ferr_desktop_escrevendo({ n: 1 }));
+    expect(container.textContent).not.toContain(m.ferr_desktop_executando({ n: 1 }));
   } finally {
     act(() => root.unmount());
   }

@@ -102,6 +102,8 @@ pub(crate) async fn admit(st: &Arc<AppState>, peer: SocketAddr, req: Request, ro
         Write::Rust(_, _) if !shaped => Err(invalid_body(&parts.headers)),
         Write::Rust(pass_in, target) => Ok((Ctx { st: st.clone(), name, target, _pass: pass_in, parts }, bytes)),
         Write::Unowned if route == WriteRoute::Input => Err(input::unowned_response(st, &name, peer, &parts.headers, &bytes).await),
+        // O Python não tem a rota de parar: sem agente do Rust no nome, a recusa é a mesma do Codex.
+        Write::Unowned if route == WriteRoute::StopTask => Err(control::stop_unowned(&parts.headers)),
         Write::Unowned | Write::Python => Err(forward_whole(st, parts, bytes, &fwd).await),
         Write::Busy => {
             let mut response = json_response(StatusCode::CONFLICT, busy_body());

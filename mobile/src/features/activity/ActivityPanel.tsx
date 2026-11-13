@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactElement } from 'react';
+import { AccessibilityInfo, ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { codexSubagentActivityKey, codexSubagentState, formatElapsed, getSubagents, getWorkflow, getWorkflowAgent, getWorkflows, projectSubagentActivity, projectCodexSubagent, isCodexAgentSpawn } from '@hangar/core';
+import { codexSubagentActivityKey, codexSubagentState, formatElapsed, getSubagents, getWorkflow, getWorkflowAgent, getWorkflows, projectSubagentActivity, projectCodexSubagent, isCodexAgentSpawn, stopTask } from '@hangar/core';
 import type { AgentRun, CodexCommand, ShellVivo, SubagentRun, WorkflowDetail, WorkflowAgentDetail, WorkflowSummary } from '@hangar/core';
 import { chatStore } from '../../stores/chat';
 import { useServers } from '../../stores/servers';
@@ -18,12 +18,17 @@ import { SubagentLive, subagentProblemText, subagentStatus } from './SubagentLiv
 import * as m from '../../paraglide/messages';
 import { superficie } from '../../theme/superficie';
 import { HeaderBack } from '../../ui/glassHeader';
-import { Icon } from '../../ui/Icon';
+import { Icon, type IconName } from '../../ui/Icon';
+import { useAparencia } from '../../stores/aparencia';
+import { haptic } from '../../ui/haptics';
+import { toast } from '../../ui/Toast';
 import { CodexCommands } from './CodexCommands';
 
 type Level = 'list' | 'workflow' | 'agent' | 'subagent';
 const EMPTY_SHELLS: ShellVivo[] = [];
 const EMPTY_COMMANDS: CodexCommand[] = [];
+// O 202 do servidor não prova a parada: só a tarefa sumir da lista. Sem isso neste prazo, a linha volta.
+const STOP_CONFIRM_MS = 15_000;
 
 interface Props {
   serverId: string;
@@ -47,6 +52,7 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
   const commands = chat.use((s) => s.stateEvent?.codex_commands) ?? EMPTY_COMMANDS;
   const nativeStates = chat.use((s) => s.stateEvent?.codex_subagents);
   const readOnly = useSessions(state => state.rows.find(row => row.serverId === serverId && row.name === name)?.guest_kind === 'pair');
+  const provider = useSessions(state => state.rows.find(row => row.serverId === serverId && row.name === name)?.provider);
   const transcriptActivity = useActivity(events, eventsRevision);
   const agentIds = useMemo(() => agentIdentities(events), [events, eventsRevision]);
   // Relógio do "há N" dos shells enquanto o painel está visível.
@@ -68,11 +74,17 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
   const nativeSubagents = nativeStates !== undefined || events.some(event => event.kind === 'tool_use' && isCodexAgentSpawn(event.tool_name ?? ''))
     || subs.some(sub => !!sub.agentPath);
   const nativeIds = codexSubagentActivityKey(nativeStates);
-  const activity = projectSubagentActivity(transcriptActivity, subs, agentIds, nativeStates);
+  const activity = useMemo(() => projectSubagentActivity(transcriptActivity, subs, agentIds, nativeStates), [transcriptActivity, subs, agentIds, nativeStates]);
   const listLoading = !currentList || ((list.workflowLoading || list.subLoading) && workflows.length === 0 && subs.length === 0);
   const workflowListError = currentList ? list.workflowError : '';
   const subError = currentList ? list.subError : '';
   const [olderOpen, setOlderOpen] = useState(false);
+  // Claude Desktop: subagentes e shells numa seção só, e os terminados atrás de uma linha.
+  const desktop = useAparencia((s) => s.ferramentas) === 'claudeDesktop';
+  const [finishedOpen, setFinishedOpen] = useState(false);
+  // Uma tarefa está parando enquanto tem prazo de confirmação; o mapa é a fonte, e mudá-lo pede um render.
+  const stopTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const [, rerender] = useReducer((n: number) => n + 1, 0);
   const [wfLoading, setWfLoading] = useState(false);
   const [detail, setDetail] = useState<WorkflowDetail | null>(null);
   const [agentDetail, setAgentDetail] = useState<WorkflowAgentDetail | null>(null);
@@ -182,35 +194,54 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
     return () => clearInterval(timer);
   }, [focused, level, nativeSubagents, refreshSubs]);
 
-  const matchSub = useCallback((agent: AgentRun) => matchAgentSubagent(subs, agent, agentIds), [subs, agentIds]);
+  // O TaskStop do Claude só para tarefa de fundo: o Agent de primeiro plano recusaria em silêncio.
+  const backgroundCalls = useMemo(() => new Set(events.filter((event) => event.kind === 'tool_use' && event.tool_name === 'Agent'
+    && event.tool_input?.['run_in_background'] === true).map((event) => event.tool_use_id)), [events, eventsRevision]);
+  // Casar agente e subagente compara prompts inteiros: uma vez por agente, e o id da tarefa junto.
+  const agentInfo = useMemo(() => {
+    const byAgent = new Map<AgentRun, { sub: SubagentRun | undefined; taskId: string | undefined }>();
+    const parentRunning = new Map<string, boolean>();
+    const stoppable = new Set<string>();
+    for (const call of backgroundCalls) {
+      const id = call && agentIds.get(call);
+      if (id) stoppable.add(id);
+    }
+    for (const a of activity.agents) {
+      const sub = matchAgentSubagent(subs, a, agentIds);
+      // Só o id do lançamento: o casamento por prompt pode achar uma execução anterior de prompt igual.
+      const taskId = backgroundCalls.has(a.id) ? a.agentId ?? agentIds.get(a.id) : undefined;
+      if (taskId) stoppable.add(taskId);
+      byAgent.set(a, { sub, taskId });
+      if (sub && !parentRunning.has(sub.agentId)) parentRunning.set(sub.agentId, a.running);
+    }
+    return { byAgent, parentRunning, stoppable };
+  }, [activity, subs, agentIds, backgroundCalls]);
 
-  function parentRunning(agentId: string): boolean | null {
-    const parent = activity.agents.find((a) => matchSub(a)?.agentId === agentId);
-    return parent ? parent.running : null;
-  }
-
-  const subRows = subs.map((run) => ({
-    run,
-    status: subagentStatus(run, parentRunning(run.agentId), agora * 1000),
-    at: Date.parse(run.endedAt ?? '') || Date.parse(run.updatedAt) || run.mtime * 1000,
-  }));
-  const runningAgents = activity.agents.filter((a) => {
-    if (a.kind !== 'agent' || !a.running) return false;
-    const sub = matchSub(a);
-    if (nativeSubagents && codexSubagentState(nativeStates, a.agentId ?? agentIds.get(a.id), a.agentPath)?.state !== 'running' && sub?.state !== 'running') return false;
-    return !sub || subRows.find((row) => row.run.agentId === sub.agentId)?.status === 'running';
-  });
-  const shown = new Set(runningAgents.map((a) => matchSub(a)?.agentId));
-  const runningSubs = subRows.filter((row) => row.status === 'running' && !shown.has(row.run.agentId));
+  const { subRows, runningAgents, runningSubs } = useMemo(() => {
+    const subRows = subs.map((run) => ({
+      run,
+      status: subagentStatus(run, agentInfo.parentRunning.get(run.agentId) ?? null, agora * 1000),
+      at: Date.parse(run.endedAt ?? '') || Date.parse(run.updatedAt) || run.mtime * 1000,
+    }));
+    const runningAgents = activity.agents.filter((a) => {
+      if (a.kind !== 'agent' || !a.running) return false;
+      const sub = agentInfo.byAgent.get(a)?.sub;
+      if (nativeSubagents && codexSubagentState(nativeStates, a.agentId ?? agentIds.get(a.id), a.agentPath)?.state !== 'running' && sub?.state !== 'running') return false;
+      return !sub || subRows.find((row) => row.run.agentId === sub.agentId)?.status === 'running';
+    });
+    const shown = new Set(runningAgents.map((a) => agentInfo.byAgent.get(a)?.sub?.agentId));
+    const runningSubs = subRows.filter((row) => row.status === 'running' && !shown.has(row.run.agentId));
+    return { subRows, runningAgents, runningSubs };
+  }, [subs, activity, agentInfo, agora, nativeSubagents, nativeStates, agentIds]);
   const uncertainSubs = subRows.filter((row) => row.status === 'silent' || row.status === 'unknown');
   const finishedSubs = subRows.filter((row) => row.status === 'finished' || row.status === 'failed');
   const midnight = new Date(agora * 1000).setHours(0, 0, 0, 0);
   const olderSubs = finishedSubs.filter((row) => row.at < midnight);
   const recentSubs = finishedSubs.filter((row) => !(row.at < midnight));
   const runningCount = runningAgents.length + runningSubs.length;
-  const shellsVivos = activity.shells.filter((s2) => s2.running);
+  const shellsVivos = useMemo(() => activity.shells.filter((s2) => s2.running), [activity]);
   const ha = (desde: number) => m.atividade_shell_ha({ t: formatElapsed(agora - desde) });
-  const paiRodando = subAgentId ? parentRunning(subAgentId) : null;
+  const paiRodando = subAgentId ? agentInfo.parentRunning.get(subAgentId) ?? null : null;
 
   function tituloDoSub(s2: SubagentRun): string {
     const linhas = (s2.prompt ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
@@ -228,7 +259,7 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
     } else if (status === 'finished') {
       endedLabel = clock ? m.atividade_terminou({ h: clock }) : m.atividade_sub_concluido();
     }
-    return (
+    return withStop(
       <Pressable key={run.agentId} onPress={() => abrirDoDisco(run)} style={[styles.agentRow, styles.agentOpenable, ended && styles.concluido]} accessibilityRole="button">
         <View style={styles.agentBody}>
           <View style={styles.agentHead}>
@@ -245,9 +276,121 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
           {run.problema ? <Text style={[styles.err, { color: theme.tokens.status.warning }]} accessibilityRole="alert">{subagentProblemText(run.problema)}</Text> : null}
         </View>
         <Icon name="ChevronRight" size={18} color={theme.tokens.text.muted} />
+      </Pressable>,
+      run.agentId, (status === 'running' && agentInfo.stoppable.has(run.agentId)) || stopTimers.current.has(run.agentId) ? run.agentId : undefined, tituloDoSub(run),
+    );
+  }
+
+  // ■ só no Claude: o servidor recusa o resto (`erro_parar_so_claude`), e o Codex tem os comandos dele.
+  const canStop = !readOnly && !nativeSubagents && (!provider || provider === 'claude');
+  const liveTaskIds = useMemo(() => new Set([
+    ...runningAgents.map((a) => agentInfo.byAgent.get(a)?.taskId),
+    ...runningSubs.map(({ run }) => run.agentId),
+    ...shellsVivos.map((s2) => s2.taskId),
+  ].filter((id): id is string => typeof id === 'string')), [runningAgents, runningSubs, shellsVivos, agentInfo]);
+  // Lista recarregando vem vazia: a tarefa sumir dela só prova a parada com os subagentes lidos.
+  // Lista que falhou também vem vazia: sumir dela não prova que a tarefa parou.
+  const subsReady = currentList && !list.subLoading && !list.subError;
+
+  const endStop = useCallback((taskId: string) => {
+    if (!stopTimers.current.has(taskId)) return;
+    clearTimeout(stopTimers.current.get(taskId));
+    stopTimers.current.delete(taskId);
+    rerender();
+  }, []);
+  // A tarefa terminou ou saiu da lista: a parada se confirmou e a linha some com ela.
+  useEffect(() => {
+    for (const taskId of [...stopTimers.current.keys()]) {
+      if (liveTaskIds.has(taskId)) continue;
+      // Shell: o fim lido no transcript basta, sem depender da lista de subagentes.
+      if (activity.shells.some((s2) => s2.taskId === taskId && !s2.running)) { endStop(taskId); continue; }
+      if (!subsReady) continue;
+      // Subagente que só ficou silencioso ou ilegível segue listado e não parou.
+      const row = subRows.find((item) => item.run.agentId === taskId);
+      if (!row || row.status === 'finished' || row.status === 'failed') endStop(taskId);
+    }
+  }, [liveTaskIds, subsReady, subRows, activity, endStop]);
+  useEffect(() => () => {
+    for (const timer of stopTimers.current.values()) clearTimeout(timer);
+    stopTimers.current.clear();
+  }, [listKey]);
+
+  async function stop(taskId: string) {
+    if (!server || stopTimers.current.has(taskId)) return;
+    haptic.selection();
+    const timer = setTimeout(() => {
+      endStop(taskId);
+      toast.erro(m.atividade_parar_sem_confirmacao());
+    }, STOP_CONFIRM_MS);
+    stopTimers.current.set(taskId, timer);
+    rerender();
+    // A região ao vivo não anuncia texto recém-montado com garantia; o anúncio explícito vale nos dois sistemas.
+    AccessibilityInfo.announceForAccessibility(m.atividade_parando());
+    try {
+      await stopTask(name, taskId, server);
+    } catch (error) {
+      // O prazo é a identidade da tentativa: recusa atrasada de uma anterior não encerra a atual.
+      if (stopTimers.current.get(taskId) !== timer) return;
+      endStop(taskId);
+      toast.erro(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  function taskRow(key: string, icon: IconName, title: string, since: number | null, onPress?: () => void, taskId?: string) {
+    const stopping = !!taskId && stopTimers.current.has(taskId);
+    return (
+      <View key={key} style={styles.taskRow}>
+        <Pressable onPress={onPress} disabled={!onPress} style={styles.taskOpen}
+          accessibilityRole={onPress ? 'button' : undefined} accessibilityLabel={title}
+          accessibilityState={stopping ? { busy: true } : undefined}>
+          <Icon name={icon} size={16} color={theme.tokens.text.muted} />
+          <Text style={[styles.taskName, { color: theme.tokens.text.primary }]} numberOfLines={1}>{title}</Text>
+          {stopping ? <Text style={[styles.taskTime, { color: theme.tokens.text.muted }]} accessibilityLiveRegion="polite">{m.atividade_parando()}</Text>
+            : since !== null && Number.isFinite(since) ? <Text style={[styles.taskTime, { color: theme.tokens.text.muted }]}>{formatElapsed(agora - since)}</Text> : null}
+        </Pressable>
+        {stopButton(taskId, title)}
+      </View>
+    );
+  }
+
+  // ■ de uma tarefa rodando; parando, nenhum: quem diz "Parando…" é a linha.
+  function stopButton(taskId: string | undefined, title: string) {
+    if (!canStop || !taskId || stopTimers.current.has(taskId)) return null;
+    return (
+      <Pressable onPress={() => void stop(taskId)} style={styles.stop} accessibilityRole="button"
+        accessibilityLabel={`${m.atividade_desktop_parar()}: ${title}`}>
+        <View style={[styles.stopGlyph, { backgroundColor: theme.tokens.text.primary }]} />
       </Pressable>
     );
   }
+
+  // Linha das seções de sempre com o ■ ou o "Parando…" à direita; sem tarefa a parar, fica como era.
+  function withStop(row: ReactElement, key: string, taskId: string | undefined, title: string) {
+    const stopping = !!taskId && stopTimers.current.has(taskId);
+    const button = stopButton(taskId, title);
+    if (!stopping && !button) return row;
+    return (
+      <View key={key} style={styles.taskRow} accessibilityState={stopping ? { busy: true } : undefined}>
+        <View style={styles.grow}>{row}</View>
+        {stopping ? <Text style={[styles.taskTime, { color: theme.tokens.text.muted }]} accessibilityLiveRegion="polite">{m.atividade_parando()}</Text> : button}
+      </View>
+    );
+  }
+
+  const finishedList = (
+    <>
+      {recentSubs.map(renderSub)}
+      {olderSubs.length > 0 ? (
+        <>
+          <Pressable onPress={() => setOlderOpen((value) => !value)} accessibilityRole="button" accessibilityState={{ expanded: olderOpen }} style={styles.olderToggle}>
+            <Icon name={olderOpen ? 'ChevronDown' : 'ChevronRight'} size={18} color={theme.tokens.text.muted} />
+            <Text style={[styles.label, { color: theme.tokens.text.muted }]}>{m.atividade_grupo_antigos({ n: olderSubs.length })}</Text>
+          </Pressable>
+          {olderOpen ? olderSubs.map(renderSub) : null}
+        </>
+      ) : null}
+    </>
+  );
 
   async function openWorkflow(rid: string) {
     const g = ++genWf.current;
@@ -372,15 +515,39 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
               </View>
             ) : null}
 
-            {runningAgents.length > 0 || runningSubs.length > 0 ? (
+            {desktop && (runningCount > 0 || shellsVivos.length > 0 || finishedSubs.length > 0) ? (
+              <View style={styles.section}>
+                <Text style={[styles.label, { color: theme.tokens.text.muted }]}>{m.atividade_desktop_titulo()}</Text>
+                {runningAgents.map((a) => {
+                  const info = agentInfo.byAgent.get(a);
+                  const sub = info?.sub;
+                  return taskRow(a.id, 'Diamond', a.description, sub ? Date.parse(sub.startedAt) / 1000 : null, sub ? () => openSubagent(sub, a.description) : undefined,
+                    info?.taskId);
+                })}
+                {runningSubs.map(({ run }) => taskRow(run.agentId, 'Diamond', tituloDoSub(run), Date.parse(run.startedAt) / 1000, () => abrirDoDisco(run),
+                  agentInfo.stoppable.has(run.agentId) ? run.agentId : undefined))}
+                {shellsVivos.map((s2) => taskRow(s2.id, 'Terminal', s2.description || s2.rotulo, s2.ts ?? null, undefined, s2.taskId))}
+                {finishedSubs.length > 0 ? (
+                  <Pressable onPress={() => setFinishedOpen((value) => !value)} style={styles.taskOpen} accessibilityRole="button"
+                    accessibilityLabel={m.atividade_desktop_finalizadas({ n: finishedSubs.length })} accessibilityState={{ expanded: finishedOpen }}>
+                    <Icon name="Diamond" size={16} color={theme.tokens.text.muted} />
+                    <Text style={[styles.taskName, { color: theme.tokens.text.secondary }]}>{m.atividade_desktop_finalizadas({ n: finishedSubs.length })}</Text>
+                  </Pressable>
+                ) : null}
+                {finishedOpen ? finishedList : null}
+              </View>
+            ) : null}
+
+            {!desktop && (runningAgents.length > 0 || runningSubs.length > 0) ? (
               <View style={styles.section}>
                 <Text style={[styles.label, { color: theme.tokens.text.muted }]}>{m.atividade_grupo_rodando({ n: runningCount })}</Text>
                 {runningAgents.map((a) => {
-                  const sub = matchSub(a);
+                  const info = agentInfo.byAgent.get(a);
+                  const sub = info?.sub;
                   const model = agentModel(a, sub);
                   const isButton = !!sub;
                   const Row = isButton ? Pressable : View;
-                  return (
+                  return withStop(
                     // @ts-ignore — Pressable/View condicionais
                     <Row
                       key={a.id}
@@ -406,7 +573,8 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
                         {sub?.problema ? <Text style={[styles.err, { color: theme.tokens.status.warning }]} accessibilityRole="alert">{subagentProblemText(sub.problema)}</Text> : null}
                       </View>
                       {sub ? <Icon name="ChevronRight" size={18} color={theme.tokens.text.muted} /> : null}
-                    </Row>
+                    </Row>,
+                    a.id, info?.taskId, a.description,
                   );
                 })}
                 {runningSubs.map(renderSub)}
@@ -420,30 +588,21 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
               </View>
             ) : null}
 
-            {finishedSubs.length > 0 ? (
+            {!desktop && finishedSubs.length > 0 ? (
               <View style={styles.section}>
                 <Text style={[styles.label, { color: theme.tokens.text.muted }]}>{m.atividade_grupo_terminados({ n: finishedSubs.length })}</Text>
-                {recentSubs.map(renderSub)}
-                {olderSubs.length > 0 ? (
-                  <>
-                    <Pressable onPress={() => setOlderOpen((value) => !value)} accessibilityRole="button" accessibilityState={{ expanded: olderOpen }} style={styles.olderToggle}>
-                      <Icon name={olderOpen ? 'ChevronDown' : 'ChevronRight'} size={18} color={theme.tokens.text.muted} />
-                      <Text style={[styles.label, { color: theme.tokens.text.muted }]}>{m.atividade_grupo_antigos({ n: olderSubs.length })}</Text>
-                    </Pressable>
-                    {olderOpen ? olderSubs.map(renderSub) : null}
-                  </>
-                ) : null}
+                {finishedList}
               </View>
             ) : null}
 
             {/* Shells de fundo que ainda rodam: o terminal diz "N shells still running", aqui diz qual.
                 Sem toque: a saída de cada um volta pro chat quando ele termina. */}
-            {shellsVivos.length > 0 ? (
+            {!desktop && shellsVivos.length > 0 ? (
               <View style={styles.section}>
                 <Text style={[styles.label, { color: theme.tokens.text.muted }]}>
                   {m.atividade_shells()} <Text style={{ color: theme.tokens.accent.base }}>{m.atividade_shells_rodando({ n: shellsVivos.length })}</Text>
                 </Text>
-                {shellsVivos.map((s2) => (
+                {shellsVivos.map((s2) => withStop(
                   <View key={s2.id} style={styles.agentRow} accessible accessibilityLabel={s2.command}>
                     <ActivityIndicator size="small" color={theme.tokens.accent.base} />
                     <View style={styles.agentBody}>
@@ -454,7 +613,8 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
                         </Text>
                       ) : null}
                     </View>
-                  </View>
+                  </View>,
+                  s2.id, s2.taskId, s2.description || s2.rotulo,
                 ))}
               </View>
             ) : null}
@@ -553,5 +713,12 @@ const styles = StyleSheet.create((theme) => ({
   agentNow: { fontFamily: theme.base.fontMono, fontSize: theme.base.text.xxxs },
   shellCmd: { fontFamily: theme.base.fontMono, fontSize: theme.base.text.xs },
   concluido: { opacity: 0.6 },
+  taskRow: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1] },
+  taskOpen: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], minHeight: 44 },
+  grow: { flex: 1, minWidth: 0 },
+  stop: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  stopGlyph: { width: 10, height: 10, borderRadius: theme.base.space[0.5] },
+  taskName: { flex: 1, minWidth: 0, fontSize: theme.base.text.sm },
+  taskTime: { fontSize: theme.base.text.xs, fontVariant: ['tabular-nums'] },
   error: { fontSize: theme.base.text.sm, textAlign: 'center', padding: theme.base.space[4] },
 }));

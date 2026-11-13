@@ -751,7 +751,7 @@ export function summarizeToolInput(
     return parts.length ? `${p} (${parts.join(', ')})` : p;
   }
   if (name === 'Write' || name === 'Edit') return summarizeText(one('file_path') || one('path'), TOOL_MAX);
-  if (name === 'Bash') return summarizeText(one('command'), TOOL_MAX);
+  if (name === 'Bash' || name === 'PowerShell') return summarizeText(one('command'), TOOL_MAX);
   // O Bash do Codex. O comando não vem pronto: o backend o extrai do código JavaScript da chamada
   // e só o entrega quando conseguiu — sem extração sobra o código, que é o que foi executado de
   // verdade. Nunca uma linha vazia. Os três nomes porque o Codex embrulha tudo num `exec` e o
@@ -861,7 +861,7 @@ export function summarizeToolResult(
   if (!raw) return m.formato_tool_pronto();
   const n = raw.split('\n').length;
   const linhas = n === 1 ? m.formato_linha_1() : m.formato_linhas({ n });
-  if (toolName === 'Bash' || toolName === 'BashOutput') return `${m.formato_tool_pronto()} (${linhas})`;
+  if (toolName === 'Bash' || toolName === 'BashOutput' || toolName === 'PowerShell') return `${m.formato_tool_pronto()} (${linhas})`;
   if (toolName === 'Read') return n === 1 ? m.formato_linhas_carregadas_1() : m.formato_linhas_carregadas({ n });
   return n === 1 ? m.formato_linhas_retornadas_1() : m.formato_linhas_retornadas({ n });
 }
@@ -873,15 +873,15 @@ export function toolGroupLabel(names: (string | null | undefined)[]): string {
   return names.every((n) => (n ?? m.formato_tool_generico()) === first) ? first : m.lista_ferramentas();
 }
 
-type FamiliaTool = 'leu' | 'buscou' | 'editou' | 'criou' | 'rodou' | 'outra';
+export type FamiliaTool = 'leu' | 'buscou' | 'editou' | 'criou' | 'rodou' | 'outra';
 
-function familiaTool(nome: string | null | undefined): FamiliaTool {
+export function familiaTool(nome: string | null | undefined): FamiliaTool {
   switch (nome) {
     case 'Read': case 'NotebookRead': return 'leu';
     case 'Grep': case 'Glob': case 'WebSearch': case 'WebFetch': return 'buscou';
     case 'Edit': case 'MultiEdit': case 'NotebookEdit': return 'editou';
     case 'Write': return 'criou';
-    case 'Bash': case 'exec': case 'exec_command': return 'rodou';
+    case 'Bash': case 'PowerShell': case 'exec': case 'exec_command': return 'rodou';
     default: return 'outra';
   }
 }
@@ -976,7 +976,7 @@ export function separarComando(cmd: string, { pipes = false } = {}): string[] {
 export function toolGroupTitulo(tools: { tool_name?: string | null; tool_input?: Record<string, unknown> | null }[]): string {
   for (let i = tools.length - 1; i >= 0; i--) {
     const d = tools[i].tool_input?.['description'];
-    if (tools[i].tool_name === 'Bash' && typeof d === 'string' && d.trim()) return d.trim();
+    if ((tools[i].tool_name === 'Bash' || tools[i].tool_name === 'PowerShell') && typeof d === 'string' && d.trim()) return d.trim();
   }
   const n: Record<FamiliaTool, number> = { leu: 0, buscou: 0, editou: 0, criou: 0, rodou: 0, outra: 0 };
   for (const t of tools) n[familiaTool(t.tool_name)]++;

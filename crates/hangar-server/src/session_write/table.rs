@@ -45,6 +45,8 @@ pub enum WriteRoute {
     CodexControl,
     /// `/codex-permissions`: como `CodexControl`, e a única que atende o sem terminal caído (`route_write`).
     CodexPermission,
+    /// Parar uma tarefa do Claude: o Rust responde por todo provedor, sem rota no Python.
+    StopTask,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,6 +55,7 @@ pub enum Owner { Rust, Python }
 /// Claude e Codex, com e sem terminal, são do Rust. Entrada doente não muda o dono: `route_write`
 /// recusa com código, e o Python nunca relança nem responde por ela.
 pub fn decide(route: WriteRoute, provider: Provider, terminal: bool) -> Owner {
+    if route == WriteRoute::StopTask { return Owner::Rust; }
     if !terminal && matches!(provider,Provider::Pi|Provider::Omp|Provider::Kimi) {return Owner::Python;}
     match route {
         WriteRoute::CodexControl | WriteRoute::CodexPermission if provider == Provider::Claude => Owner::Python,
@@ -86,7 +89,7 @@ pub(crate) fn body_ok(route: WriteRoute, body: &Bytes) -> bool {
     match route {
         Input | Select | Answer | Keys | TermInput | QueueEdit | QueueReorder => object(),
         Steer | SelectSubmit | QueueSteer => body.is_empty() || object(),
-        Interrupt | QueueRemove | CodexControl | CodexPermission => true,
+        Interrupt | QueueRemove | CodexControl | CodexPermission | StopTask => true,
     }
 }
 

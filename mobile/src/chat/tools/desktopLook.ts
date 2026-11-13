@@ -1,0 +1,54 @@
+import { familiaTool, nomeFerramenta, toolPhase, type ChatEvent } from '@hangar/core';
+import * as m from '../../paraglide/messages';
+
+export type DesktopFamily = 'web' | 'ferramentas' | 'rodou' | 'leu' | 'editou' | 'criou' | 'buscou' | 'outra';
+
+export function desktopFamily(name: string | null | undefined): DesktopFamily {
+  if (name === 'WebSearch' || name === 'WebFetch') return 'web';
+  if (name === 'ToolSearch') return 'ferramentas';
+  return familiaTool(name);
+}
+
+function phrase(family: DesktopFamily, n: number, name: string): string {
+  switch (family) {
+    case 'rodou': return n === 1 ? m.ferr_desktop_rodou_1() : m.ferr_desktop_rodou({ n });
+    case 'leu': return n === 1 ? m.ferr_desktop_leu_1() : m.ferr_desktop_leu({ n });
+    case 'editou': return n === 1 ? m.ferr_desktop_editou_1() : m.ferr_desktop_editou({ n });
+    case 'criou': return n === 1 ? m.ferr_desktop_criou_1() : m.ferr_desktop_criou({ n });
+    case 'buscou': return n === 1 ? m.ferr_desktop_buscou_1() : m.ferr_desktop_buscou({ n });
+    case 'web': return n === 1 ? m.ferr_desktop_web_1() : m.ferr_desktop_web({ n });
+    case 'ferramentas': return m.ferr_desktop_ferramentas();
+    case 'outra': return n === 1 ? m.ferr_desktop_outra_1({ nome: name }) : m.ferr_desktop_outra({ nome: name, n });
+  }
+}
+
+/** "Executou 4 comandos (2 falhas), Leu 1 arquivo, 1 em execução": famílias na ordem em que aparecem.
+ *  `writing`: o pedido ainda está sendo escrito pelo modelo, então o que não tem resultado não roda ainda. */
+export function desktopSummary(calls: ChatEvent[], resultOf: (call: ChatEvent) => ChatEvent | null, writing = false): string {
+  const groups = new Map<string, { family: DesktopFamily; name: string; n: number; failed: number }>();
+  let running = 0;
+  for (const call of calls) {
+    const family = desktopFamily(call.tool_name);
+    const name = family === 'outra' ? nomeFerramenta(call.tool_name) : '';
+    const key = `${family}:${name}`;
+    const group = groups.get(key) ?? { family, name, n: 0, failed: 0 };
+    groups.set(key, group);
+    group.n++;
+    const phase = toolPhase(resultOf(call));
+    if (phase === 'error') group.failed++;
+    else if (phase === 'pending') running++;
+  }
+  const parts = [...groups.values()].map(({ family, name, n, failed }) => {
+    const text = phrase(family, n, name);
+    return failed ? `${text} ${failed === 1 ? m.ferr_desktop_falhas_1() : m.ferr_desktop_falhas({ n: failed })}` : text;
+  });
+  if (running) parts.push(writing ? m.ferr_desktop_escrevendo({ n: running }) : m.ferr_desktop_executando({ n: running }));
+  return parts.join(', ');
+}
+
+/** `Exit code N` na primeira linha não vazia do resultado; qualquer outra forma, nada. */
+export function exitCode(text: string | null | undefined): number | null {
+  const first = (text ?? '').split('\n').find((line) => line.trim())?.trim() ?? '';
+  const match = /^Exit code (-?\d+)$/.exec(first);
+  return match ? Number(match[1]) : null;
+}

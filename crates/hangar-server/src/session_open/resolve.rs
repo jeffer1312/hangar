@@ -477,6 +477,8 @@ fn quota_usage(row: Option<&Value>, spent: Option<&SpentMark>, now: f64) -> Opti
     let read = row.filter(|row| row["estado"] == "lida" || row["ts"].is_number())
         // Janela que já virou (reset no passado) recomeçou do zero; a leitura guardada ficaria 100% para sempre.
         .and_then(|row| row["janelas"].as_array()?.iter()
+            // A janela de um modelo só trava aquele modelo; a conta vale pelas gerais.
+            .filter(|w| w["por_modelo"] != true)
             .filter_map(|w| if w["reset_ts"].as_f64().is_some_and(|r| r <= now) { Some(0.) } else { w["pct"].as_f64() })
             .reduce(f64::max));
     read.into_iter().chain(spent.and_then(|mark|mark.blocking_until(row,now)).map(|_| 100.0)).reduce(f64::max)
