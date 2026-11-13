@@ -493,9 +493,10 @@ fn bound_life_changed()->(StatusCode,Value) {
 /// O `/clear` troca a conversa e conserva a chave: a tarefa vinculada à conversa antiga não escreve na nova.
 async fn conversation_changed(st:&AppState,name:&str,expected:Option<&str>)->Option<(StatusCode,Value)> {
     let expected=expected?;
-    match st.side.locate.info(name).await {
-        Ok(Some(info)) if info.session_key==expected => None,
-        Ok(_) => Some(bound_life_changed()),
+    // Sem conversa achada (adormecida, abrindo) não há prova de troca: o `/clear` deixa outra conversa, não nenhuma.
+    match tokio::time::timeout(crate::locate::LOCATE_TIMEOUT,st.side.info(name)).await.unwrap_or(Err(crate::locate::InfoFailed("locate_timeout"))) {
+        Ok(Some(info)) if !info.session_key.is_empty() && info.session_key!=expected => Some(bound_life_changed()),
+        Ok(_) => None,
         Err(failed) => Some((StatusCode::SERVICE_UNAVAILABLE,detail_body(failed.0,"Não foi possível conferir a conversa da sessão.",json!({})))),
     }
 }

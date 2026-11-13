@@ -34,10 +34,15 @@ impl Store {
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|_| Error::unavailable())?;
-        if tx
-            .prepare("SELECT request_id FROM scheduled_tasks LIMIT 0")
-            .is_err()
-        {
+        let has_request_id = tx
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('scheduled_tasks') WHERE name = 'request_id'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|_| Error::unavailable())?
+            > 0;
+        if !has_request_id {
             tx.execute_batch("ALTER TABLE scheduled_tasks ADD COLUMN request_id TEXT;")
                 .map_err(|_| Error::unavailable())?;
         }

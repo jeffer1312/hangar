@@ -191,7 +191,13 @@ impl Host for SessionHost {
                     {
                         return Err(changed_life());
                     }
-                    let conversation = match state.side.locate.info(&name).await {
+                    let conversation = match tokio::time::timeout(
+                        crate::locate::LOCATE_TIMEOUT,
+                        state.side.info(&name),
+                    )
+                    .await
+                    .unwrap_or(Err(crate::locate::InfoFailed("locate_timeout")))
+                    {
                         Ok(info) => info.map(|info| info.session_key).filter(|id| !id.is_empty()),
                         Err(_) => return Err(Error::unavailable()),
                     };
