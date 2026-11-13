@@ -1,0 +1,22 @@
+[package]
+name = "hangar-shortcut-transfer"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Mesmas features do hangar-server: sem elas o target guarda outra cópia de cada dependência.
+[dependencies]
+hangar-core.workspace = true
+axum.workspace = true
+# Lookaround das regras de segredo; mesma versão do hangar-server.
+fancy-regex = "=0.20.0"
+form_urlencoded.workspace = true
+percent-encoding.workspace = true
+regex.workspace = true
+serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "time", "fs", "signal"] }
+tracing.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true

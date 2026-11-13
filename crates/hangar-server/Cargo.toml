@@ -59,6 +59,7 @@ hangar-plugins.workspace = true
 hangar-workflows.workspace = true
 hangar-http-file.workspace = true
 hangar-desktop-theme.workspace = true
+hangar-shortcut-transfer.workspace = true
 hangar-opencode-cookie.workspace = true
 hangar-deploy.workspace = true
 hangar-port-preview.workspace = true

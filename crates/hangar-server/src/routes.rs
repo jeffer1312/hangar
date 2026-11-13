@@ -914,6 +914,8 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         // Planos e catálogo de plugins e skills: o dono no Rust; o resto segue ao Python.
         .merge(crate::plans::routes::router())
         .merge(hangar_desktop_theme::router(hangar_core::edge::Edge { trusted: state.cfg.trusted.clone(), auth: state.auth.clone(), diag: state.diag.clone() }, state.desktop_theme.clone()))
+        // Exportar, importar e verificar atalhos: só o dono, nunca repassados (o Python não tem as rotas).
+        .merge(hangar_shortcut_transfer::router(hangar_core::edge::Edge { trusted: state.cfg.trusted.clone(), auth: state.auth.clone(), diag: state.diag.clone() }, Arc::new(crate::shortcut_transfer::ServerHost(state.clone()))))
         .route("/api/claude/customizations", get(crate::claude_customizations::catalog_route).fallback(pass_any))
         // Senha do chaveiro: só o dono, nunca repassada; só o preflight do CORS vai ao Python.
         .route("/api/keyring/unlock", axum::routing::post(crate::keyring::unlock_route).options(pass_any))

@@ -226,6 +226,31 @@ impl RuntimeConfig {
         }
         Ok(current.into_map())
     }
+    /// Desfaz a gravação de `shortcuts` de uma importação, só se a chave ainda é a que ela gravou:
+    /// outro campo ou gravação posterior permanece. O arquivo volta ao modo de antes; se não existia
+    /// e ficou vazio, sai (e a pasta, se esta gravação a criou).
+    pub fn undo_shortcuts(&self, serialized:&str, before:Option<&Value>, mode:Option<u32>, parent_existed:bool)->Result<(),RuntimeError> {
+        let _guard=WRITES.lock().unwrap_or_else(|e|e.into_inner());
+        // Ilegível não é a gravação desta importação, que sai sempre em JSON válido.
+        let Ok(mut current)=read_for_write(&self.path) else { return Ok(()); };
+        let ours=json!(serialized);
+        if current.get("shortcuts")!=Some(&ours) || before==Some(&ours) { return Ok(()); }
+        match before {
+            Some(value)=>current.insert("shortcuts".into(),codec::clone_value(value)),
+            None=>{ if let Some(value)=current.shift_remove("shortcuts"){codec::discard(value);} }
+        }
+        if mode.is_none() && current.is_empty() {
+            std::fs::remove_file(&self.path).map_err(|e|RuntimeError::io(&e,StorageOperation::Write))?;
+            CACHE.lock().unwrap_or_else(|e|e.into_inner()).remove(&self.path);
+            if !parent_existed && let Some(parent)=self.path.parent() { let _=std::fs::remove_dir(parent); }
+            return Ok(());
+        }
+        write_values(&self.path,&current)?;
+        if let Some(mode)=mode {
+            super::files::chmod(&self.path,mode).map_err(|e|RuntimeError::io(&e,StorageOperation::Write))?;
+        }
+        Ok(())
+    }
     fn write_thinking(&self,value:bool)->Result<(),RuntimeError> {
         let mut data=self.thinking().ok_or("mostrar_pensamento: settings.json ilegível — não mexi nele")?;
         if data.get("showThinkingSummaries").is_some_and(|v|truthy(v)==value) {return Ok(());}
