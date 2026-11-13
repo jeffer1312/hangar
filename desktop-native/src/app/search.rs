@@ -745,6 +745,7 @@ impl Hangar {
         self.close_search(window, cx);
         self.close_costs(window, cx);
         self.close_worktrees(window, cx);
+        self.close_reviews(window, cx);
         self.close_settings(window, cx);
         self.open_target(target, window, cx);
     }

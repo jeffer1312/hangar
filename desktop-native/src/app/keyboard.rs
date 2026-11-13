@@ -674,7 +674,7 @@ impl Hangar {
 
     pub(super) fn run_keyboard_shortcut(&mut self, action: &RunShortcut, window: &mut Window, cx: &mut Context<Self>) {
         if self.keyboard.shortcut_running || self.keyboard.is_editing() || self.connection_dialog || window.has_active_dialog(cx)
-            || (self.settings.is_some() && !self.settings_live()) || self.costs.view.is_some() || self.worktrees.view.is_some() { return; }
+            || self.page_open() { return; }
         let (Some(key), Some(api)) = (self.selected_key(), self.session_api()) else { return; };
         if servers::norm(&key.server) != action.server {
             window.push_notification(Notification::warning(tr("keyboard_wrong_server")), cx);

@@ -1857,6 +1857,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-reviews"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hangar-core",
+ "hangar-workspace",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "hangar-scheduled-tasks"
 version = "0.1.0"
 dependencies = [
@@ -1904,6 +1919,7 @@ dependencies = [
  "hangar-port-preview",
  "hangar-projects",
  "hangar-psmux",
+ "hangar-reviews",
  "hangar-scheduled-tasks",
  "hangar-session-tools",
  "hangar-transcript",

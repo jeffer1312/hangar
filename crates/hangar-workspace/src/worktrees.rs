@@ -905,6 +905,16 @@ fn scan_repositories(locations: &[String], roots: &[String]) -> Discovery {
     scan
 }
 
+/// A pasta principal de cada pasta de trabalho, pelo caminho real e sem repetir: o mesmo repo por um symlink
+/// apareceria duas vezes.
+pub fn main_repos<'a>(dirs: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut mains = dirs.into_iter().filter_map(repo_root_of)
+        .map(|root| text(&real(Path::new(&main_repo_of(&root))))).collect::<Vec<_>>();
+    mains.sort();
+    mains.dedup();
+    mains
+}
+
 /// Repositórios autorizados, inclusive quando já não há conversa recente deles.
 pub fn discover_repositories(roots: &[String]) -> Discovery {
     let mut locations = roots.to_vec();
@@ -963,12 +973,7 @@ pub fn list_all(
     } else {
         Discovery::default()
     };
-    let mut mains = wanted
-        .into_iter()
-        .filter_map(repo_root_of)
-        // realpath: o mesmo repo por um symlink apareceria duas vezes.
-        .map(|root| text(&real(Path::new(&main_repo_of(&root)))))
-        .collect::<Vec<_>>();
+    let mut mains = main_repos(wanted);
     mains.extend(discovery.repos);
     mains.sort();
     mains.dedup();

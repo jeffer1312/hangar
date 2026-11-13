@@ -868,6 +868,7 @@ impl Hangar {
         if self.connection_dialog { return; }
         self.close_settings(window, cx);
         self.close_worktrees(window, cx);
+        self.close_reviews(window, cx);
         self.close_popups();
         self.command_panel = false;
         self.show_costs_view(View::Costs, window, cx);

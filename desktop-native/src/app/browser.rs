@@ -2124,7 +2124,7 @@ impl Hangar {
             || window.has_active_dialog(cx) || window.has_active_sheet(cx) || !window.notifications(cx).is_empty());
         let in_view = self.side_width(window).is_some() && !self.files_expanded()
             && !self.side_menu_shown() && !self.subagent_tab_open() && self.side_tab() == SideTab::Browser
-            && self.settings.is_none() && self.costs.view.is_none() && self.worktrees.view.is_none();
+            && self.settings.is_none() && self.costs.view.is_none() && self.worktrees.view.is_none() && self.reviews.view.is_none();
         (in_view && !covered, in_view && covered)
     }
 

@@ -23,9 +23,11 @@ pub const RAIL: &str = "message-rail";
 pub const COMPOSER_GIT: &str = "composer-git";
 pub const SCHEDULED_TASKS: &str = "scheduled-tasks";
 pub const PICK_ELEMENT: &str = "browser-pick";
+/// O ícone de Revisões (PR e MR) na barra do topo.
+pub const TOPBAR_REVIEWS: &str = "topbar-reviews";
 
 pub const ALL: &[&str] = &[NEW_SESSION, TOPBAR_SEARCH, TOPBAR_PRESENCE, COMPOSER, COMPOSER_ACCOUNT, DICTATION_TOGGLE, CTL_MODE,
-    QUEUE_PANEL, SESSION_ROW, CITE, TAB_KIDS, RENAME_APPLY, RAIL, COMPOSER_GIT, PICK_ELEMENT, SCHEDULED_TASKS];
+    QUEUE_PANEL, SESSION_ROW, CITE, TAB_KIDS, RENAME_APPLY, RAIL, COMPOSER_GIT, PICK_ELEMENT, SCHEDULED_TASKS, TOPBAR_REVIEWS];
 
 /// A linha (ou aba) da sessão `name` da máquina `server`, em qualquer modo de navegação.
 pub fn session_row(server: &str, name: &str) -> String { format!("{SESSION_ROW}:{server}::{name}") }

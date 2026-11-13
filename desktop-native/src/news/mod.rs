@@ -21,6 +21,7 @@ mod speech_pause;
 mod session_vault;
 mod tour;
 mod worktree_fresh;
+mod reviews;
 
 use std::{cell::Cell, time::{Duration, Instant}};
 use gpui_kit::*;
@@ -70,6 +71,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "worktree-atualizada" => Some(worktree_fresh::render),
         "compactar-parada" => Some(compact_idle::render),
         "plugins-do-claude" => Some(plugins::render),
+        "revisoes-pr-mr" => Some(reviews::render),
         "scheduled-tasks" => Some(scheduled_tasks::render),
         _ => None,
     }

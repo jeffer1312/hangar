@@ -16,7 +16,7 @@ impl Hangar {
     fn session_numbers_allowed(&self, window: &mut Window, cx: &mut App) -> bool {
         window.is_window_active() && !self.connection_dialog && !window.has_active_dialog(cx)
             && (self.settings.is_none() || self.settings_live()) && self.costs.view.is_none()
-            && self.worktrees.view.is_none() && !self.search.open && self.sidebar.editing.is_none()
+            && self.worktrees.view.is_none() && self.reviews.view.is_none() && !self.search.open && self.sidebar.editing.is_none()
             && !self.keyboard.is_editing()
     }
 

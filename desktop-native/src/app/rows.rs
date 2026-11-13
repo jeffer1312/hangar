@@ -23,7 +23,7 @@ fn verb(name: Option<&str>) -> String {
 }
 
 /// Plural de uma contagem pela chave `<key>_1` / `<key>` com `{n}`.
-fn counted(key: &str, n: usize) -> String {
+pub(super) fn counted(key: &str, n: usize) -> String {
     if n == 1 { tr(&format!("{key}_1")) } else { tr(key).replace("{n}", &n.to_string()) }
 }
 

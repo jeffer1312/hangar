@@ -605,6 +605,7 @@ impl Hangar {
         // Custos, worktrees e o arquivo expandido tomam o lugar da barra e escondem a bandeja.
         self.close_costs(window, cx);
         self.close_worktrees(window, cx);
+        self.close_reviews(window, cx);
         self.restore_files();
         // Com abas não há barra; as ocultas moram no fim de cada coluna da bandeja das máquinas.
         if appearance::get().navigation.tabs() { self.open_machines_tray(window, cx); }
