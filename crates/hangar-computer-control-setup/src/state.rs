@@ -31,7 +31,14 @@ pub fn state(paths: &Paths, facts: &Facts) -> Result<Value, Error> {
     let exe = paths.exe();
     let exe_size = std::fs::metadata(&exe).ok().filter(|m| m.is_file()).map(|m| m.len());
     let binary = paths.binary().is_file();
-    let jev = |key: &str| facts.jev.get(key).and_then(Value::as_str).unwrap_or("").to_owned();
+    // Binário ausente depois de uma instalação automática que falhou é bloqueio real: a tela mostra.
+    let install_error = (crate::supported() && !binary).then(|| crate::install::install_error(paths)).flatten();
+    let unavailable = match (crate::supported(), &install_error) {
+        (false, _) => json!("platform"),
+        (true, Some(_)) => json!("install_failed"),
+        (true, None) => Value::Null,
+    };
+    let jev =|key: &str| facts.jev.get(key).and_then(Value::as_str).unwrap_or("").to_owned();
     let (llm_key, jev_key) = (jev("LLM_PROXY_KEY"), jev("TYPESAFE_API_KEY"));
     let mut files = vec![json!({"path": main.path.to_string_lossy(), "enabled": enabled})];
     for path in paths.config_files().into_iter().skip(1) {
@@ -45,7 +52,7 @@ pub fn state(paths: &Paths, facts: &Facts) -> Result<Value, Error> {
         "mode": "package",
         "installed_tag": install.get("tag").cloned().unwrap_or_else(|| json!("")),
         "package_exists": truthy(install.get("tag").unwrap_or(&Value::Null)) && exe_size.is_some() && binary,
-        "unavailable": if crate::supported() { Value::Null } else { json!("platform") },
+        "unavailable": unavailable,
         "targets": targets,
         "ssh_hosts": ssh_hosts(paths),
         "local_available": cfg!(windows) || (crate::supported() && binary),
@@ -74,6 +81,9 @@ pub fn state(paths: &Paths, facts: &Facts) -> Result<Value, Error> {
         },
         "files": files,
     });
+    if let Some(code) = install_error {
+        out["install_error"] = json!(code);
+    }
     // Surrogate solto lido dos arquivos sai como U+FFFD, como no Python.
     if let Some(map) = out.as_object_mut() {
         py::scrub_map(map);
