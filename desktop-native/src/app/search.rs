@@ -786,6 +786,7 @@ impl Hangar {
                         this.close_search(window, cx);
                         this.close_costs(window, cx);
                         this.close_worktrees(window, cx);
+                        this.close_mission(window, cx);
                         this.close_settings(window, cx);
                         let readable = session.readable();
                         // Nasceu em outra máquina: entra na lista guardada dela, senão a leitura que chega primeiro a fecharia.
