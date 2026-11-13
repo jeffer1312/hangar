@@ -18,7 +18,9 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **Multi-linha vai pelo CLIPBOARD**, porque os buffers do psmux cortam no primeiro `\n`. O
   fallback ramifica pelo **código de retorno**, nunca pelo nome do sistema.
 - **`send-keys` e `capture-pane` vão direto ao servidor do psmux** que a lista conferiu
-  (`hangar_psmux::command`), sem abrir o `tmux.exe`. O `display-message` da conferência de identidade
+  (`hangar_psmux::command`), sem abrir o `tmux.exe`. Vale do psmux 3.3.8 para cima
+  (`hangar_psmux::MIN_VERSION`), nunca uma lista de compilações: quem garante é a conferência contra
+  o CLI, e versão abaixo segue pelo CLI. O `display-message` da conferência de identidade
   fica no CLI: o servidor responde OK para alvo que não existe. Uma linha com contrabarra vai direto,
   inteira, num comando só (o argv do Windows a estraga pelo CLI); sem o caminho direto, ela vai pelo
   clipboard. A escolha entre direto e clipboard é feita uma vez por entrega. Ver
@@ -1114,3 +1116,12 @@ o CLI. O que se aprendeu medindo:
 Testes `psmux_direct_tests`, `psmux_direct_only_tests` (o programa não existe: a resposta só pode vir
 do servidor falso), `terminal_runtime_windows_line_with_backslashes_goes_direct_without_the_clipboard`
 e os de `hangar-psmux::command`.
+
+## Caminho direto do psmux por versão mínima (13/11/2026)
+
+A lista aceitava duas compilações exatas (`66cf613` e `20aa1d7`). Num notebook com
+`psmux 3.3.8 (8c9ef12 2026-10-03)`, compilação entre as duas, o caminho direto nunca ligou
+(`psmux_direct_version` a cada minuto no `hangar-server.log`). Medido lá com 5 sessões, 5 min por
+cenário: ~103 `tmux.exe` por minuto antes e ~103 depois da captura direta, porque a captura usa a
+mesma conferência da lista. Agora vale qualquer versão a partir da 3.3.8: a conferência byte a byte
+contra o CLI e o retorno ao CLI na falha já protegem uma versão nova que mude a conversa.
