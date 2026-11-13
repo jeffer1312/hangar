@@ -424,7 +424,7 @@ pub(crate) fn load_records(paths: &Paths, run_id: &str) -> Result<Vec<RunRecord>
     }
     let entries = std::fs::read_dir(record_dir(paths, run_id)).map_err(|_| "dream_run_not_found".to_string())?;
     let mut out = Vec::new();
-    for entry in entries.flatten() {
+    for entry in entries.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "json")) {
         let bytes = std::fs::read(entry.path()).map_err(|e| format!("dream_io: {e}"))?;
         out.push(serde_json::from_slice(&bytes).map_err(|e| format!("dream_io: {e}"))?);
     }
@@ -482,6 +482,10 @@ async fn user_pass(ctx: &Ctx<'_>, state: &mut State) -> Result<(), String> {
     if let Some(dir) = target.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("dream_io: {e}"))?;
     }
+    // A versão de antes fica no registro da rodada, como a memória dos projetos.
+    let record = record_dir(ctx.paths, ctx.run_id);
+    std::fs::create_dir_all(&record).map_err(|e| format!("dream_io: {e}"))?;
+    hangar_core::fs::atomic_write(&record.join("memoria-do-usuario.antes.md"), current.as_bytes()).map_err(|e| format!("dream_io: {e}"))?;
     hangar_core::fs::atomic_write(&target, outcome.content.as_bytes()).map_err(|e| format!("dream_io: {e}"))?;
     for peer in st.peers.enabled_ids() {
         if let Err(e) = peers::user_put(st, &peer, &outcome.content, ctx.me).await {
