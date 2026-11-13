@@ -702,8 +702,7 @@ async fn stop_task_on_codex_is_409_only_claude() {
 
 #[tokio::test]
 async fn stop_task_on_a_name_without_rust_owner_is_409_only_claude_not_python() {
-    let (_python_dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
-    let (python, server) = serve(registry).await;
+    let (python, server) = serve(registry().await).await;
     let (status, body) = send(server, "POST", "shell-cru/tasks/bserqfwvd/stop", "").await;
     assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_parar_so_claude")), "{body}");
     assert_eq!(python.hits_to("/api/sessions/shell-cru/tasks/bserqfwvd/stop"), 0);

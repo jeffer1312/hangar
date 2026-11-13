@@ -529,11 +529,12 @@ impl ActivityPanel {
         self.settle_stops(now) | changed
     }
 
-    /// A parada provada sai da espera, e o aviso de uma tarefa que já saiu da lista some com ela.
+    /// A parada provada sai da espera, e o aviso da tarefa some quando o fim dela se prova.
     fn settle_stops(&mut self, now: f64) -> bool {
         let listed = listed_tasks(&self.lines);
         let proven: Vec<String> = self.stopping.iter().filter(|task| self.stop_proven(task, &listed, now)).cloned().collect();
-        let note_gone = self.stop_note.as_ref().is_some_and(|(task, _)| !listed.contains(task.as_str()));
+        // Só a parada provada leva o aviso: com a lista falhando a tarefa some de `listed` sem ter parado.
+        let note_gone = self.stop_note.as_ref().is_some_and(|(task, _)| self.stop_proven(task, &listed, now));
         for task in &proven { self.stopping.remove(task); }
         if note_gone { self.stop_note = None; }
         !proven.is_empty() || note_gone
@@ -2216,6 +2217,8 @@ mod tests {
             assert!(!unconfirmed(panel, "gone", cx));
             panel.failed = true;
             assert!(unconfirmed(panel, "gone", cx), "lista que falhou não prova a parada");
+            panel.prepare();
+            assert!(stop_note(panel).is_some(), "o aviso fica até a parada se provar");
             assert!(!unconfirmed(panel, "bg", cx), "o shell se prova pelo transcript");
             (panel.failed, panel.loading) = (false, true);
             assert!(unconfirmed(panel, "gone", cx), "lista recarregando não prova a parada");
