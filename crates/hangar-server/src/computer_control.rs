@@ -25,10 +25,23 @@ struct TestHostBody {
 
 pub(crate) fn matches(method: &Method, path: &str) -> bool {
     matches!(
-        (method.as_str(), path),
+        (method.as_str(), normalized(path).as_str()),
         ("GET", "/api/computer-control" | "/api/computer-control/windows-setup")
             | ("POST", "/api/computer-control/targets" | "/api/computer-control/test-host")
     )
+}
+
+/// O caminho como o uvicorn o veria (`%2F` decodificado, `//` juntos): variação de escrita não pode
+/// levar ao Python, que não confere o dono.
+fn normalized(path: &str) -> String {
+    let decoded = crate::workspace_http::decoded(path);
+    let mut out = String::with_capacity(decoded.len());
+    for c in decoded.chars() {
+        if !(c == '/' && out.ends_with('/')) {
+            out.push(c);
+        }
+    }
+    out
 }
 
 pub(crate) async fn route(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Response {
@@ -51,9 +64,7 @@ async fn reply(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Response {
     }
     let headers = req.headers().clone();
     let env = st.accounts.env.clone();
-    let ssh = crate::cli_probe::resolve_program("ssh", &env);
-    let base = env.base.clone();
-    let path = req.uri().path().to_owned();
+    let path = normalized(req.uri().path());
     let result = match path.as_str() {
         "/api/computer-control" => blocking(&st, |_| Ok(())).await,
         "/api/computer-control/targets" => {
@@ -66,14 +77,20 @@ async fn reply(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Response {
             let Some(body) = body::<TestHostBody>(req).await else {
                 return crate::session_write::invalid_body(&headers);
             };
-            setup::test_host(&body.host, &body.proxy_command, ssh.as_deref(), &base).await
+            match ssh_program(&env).await {
+                Ok(ssh) => setup::test_host(&body.host, &body.proxy_command, ssh.as_deref(), &env.base).await,
+                Err(e) => Err(e),
+            }
         }
         _ => {
             // Vários `host`: vale o último, como no FastAPI.
             let host = form_urlencoded::parse(req.uri().query().unwrap_or("").as_bytes())
                 .filter(|(k, _)| k == "host").last().map(|(_, v)| v.into_owned()).unwrap_or_default();
             let paths = setup::Paths::new(env.home.clone(), Vec::new());
-            setup::windows_setup(&paths, &host, ssh.as_deref(), &base).await
+            match ssh_program(&env).await {
+                Ok(ssh) => setup::windows_setup(&paths, &host, ssh.as_deref(), &env.base).await,
+                Err(e) => Err(e),
+            }
         }
     };
     match result {
@@ -96,6 +113,12 @@ async fn blocking(
     })
     .await
     .map_err(setup::Error::io)?
+}
+
+/// O `ssh` pelo PATH do servidor, como o `shutil.which`; a busca olha disco, então fora do executor.
+async fn ssh_program(env: &crate::accounts::environment::AccountEnvironment) -> Result<Option<std::path::PathBuf>, setup::Error> {
+    let env = env.clone();
+    tokio::task::spawn_blocking(move || crate::cli_probe::resolve_program("ssh", &env)).await.map_err(setup::Error::io)
 }
 
 /// A mesma lista de contas do `sync_jev`: as do catálogo, menos a pasta padrão.

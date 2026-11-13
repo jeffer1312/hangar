@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use axum::body::{Body, to_bytes};
@@ -53,23 +54,80 @@ struct Scene {
     home: PathBuf,
     bin: PathBuf,
     app: axum::Router,
+    /// Pedidos que chegaram ao Python dublê (responde 418 "from-python").
+    hits: Arc<AtomicUsize>,
+    upstream: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for Scene {
+    fn drop(&mut self) {
+        self.upstream.abort();
+    }
 }
 
 impl Scene {
-    fn new() -> Self {
+    async fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
         let home = root.path().join("home");
         let bin = root.path().join("bin");
         std::fs::create_dir_all(home.join(".claude")).unwrap();
         std::fs::create_dir_all(&bin).unwrap();
-        let mut state = AppState::new(config(crate::refused_address(), ""));
+        let hits = Arc::new(AtomicUsize::new(0));
+        let seen = hits.clone();
+        let python = axum::Router::new().fallback(move || {
+            let seen = seen.clone();
+            async move {
+                seen.fetch_add(1, Ordering::SeqCst);
+                (StatusCode::IM_A_TEAPOT, "from-python")
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_address = listener.local_addr().unwrap();
+        let upstream = tokio::spawn(async move { axum::serve(listener, python).await.unwrap() });
+        let mut state = AppState::new(config(upstream_address, ""));
         state.accounts = AccountService::new(AccountEnvironment::from_map(BTreeMap::from([
             ("HOME".into(), home.to_string_lossy().into_owned()),
             ("USERPROFILE".into(), home.to_string_lossy().into_owned()),
             ("PATH".into(), bin.to_string_lossy().into_owned()),
+            // A autoridade do servidor está no ambiente dele; o ssh filho não pode herdá-la.
+            ("CP_AUTH_TOKEN".into(), "nao-pode-vazar".into()),
+            ("HANGAR_INTERNAL_SECRET".into(), "nao-pode-vazar".into()),
         ])));
         let app = router(Arc::new(state));
-        Self { root, home, bin, app }
+        Self { root, home, bin, app, hits, upstream }
+    }
+
+    fn hits(&self) -> usize {
+        self.hits.load(Ordering::SeqCst)
+    }
+
+    fn pid_file(&self, name: &str) -> PathBuf {
+        self.root.path().join(name)
+    }
+
+    /// `ssh` falso que deixa um filho dormindo no grupo e fica preso: anota os dois pids.
+    fn hanging_ssh(&self) {
+        self.ssh(&format!(
+            "/bin/sleep 300 &\nprintf '%s' $! > '{}'\nprintf '%s' $$ > '{}'\nexec /bin/sleep 300",
+            self.pid_file("child.pid").display(),
+            self.pid_file("main.pid").display()
+        ));
+    }
+
+    /// O ssh e o filho que ele deixou morreram (zumbi conta como morto).
+    async fn assert_group_dead(&self) {
+        for name in ["main.pid", "child.pid"] {
+            let pid = std::fs::read_to_string(self.pid_file(name)).unwrap();
+            let mut alive = true;
+            for _ in 0..50 {
+                alive = process_alive(pid.trim());
+                if !alive {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            assert!(!alive, "{name} ({pid}) sobreviveu ao prazo");
+        }
     }
 
     fn write(&self, rel: &str, bytes: impl AsRef<[u8]>) {
@@ -183,6 +241,16 @@ impl Scene {
     }
 }
 
+fn process_alive(pid: &str) -> bool {
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Err(_) => false,
+        Ok(stat) => !matches!(
+            stat.rsplit_once(')').and_then(|(_, tail)| tail.split_whitespace().next()),
+            Some("Z" | "X" | "x")
+        ),
+    }
+}
+
 fn without_running(mut body: Value) -> Value {
     if let Some(cliproxy) = body.get_mut("cliproxy").and_then(Value::as_object_mut) {
         cliproxy.remove("running");
@@ -264,14 +332,50 @@ impl Scene {
 /// ROT-06, ROT-13, ROT-23, ROT-41, ROT-42, ROT-45, ROT-47, ROT-51, D1.2, D1.5 (r1-get-vazio).
 #[tokio::test]
 async fn rot06_get_empty_home() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     assert_eq!(s.get().await, (StatusCode::OK, s.h(empty_state())));
+    assert_eq!(s.hits(), 0, "o GET não pode ir ao Python");
+}
+
+/// Surrogate solto que o Claude Code grava (`\ud800`) é lido como no Python e sai como U+FFFD.
+#[tokio::test]
+async fn get_reads_lone_surrogate() {
+    let s = Scene::new().await;
+    s.write(".claude.json", r#"{"a": "\ud800", "mcpServers": {"hangar-computer-control": {"command": "x", "env": {"HCC_AGENT_CONFIG": "/alvo-\ud800.json"}}}}"#);
+    assert_eq!(s.get().await, (StatusCode::OK, s.h(merged(empty_state(), json!({
+        "enabled": true,
+        "agent_config": "/alvo-\u{fffd}.json",
+        "files": [{"path": "«HOME»/.claude.json", "enabled": true}]
+    })))));
+}
+
+/// `PUT` e `/install` ainda são do Python (Tasks 6 e 7): o Rust repassa.
+#[tokio::test]
+async fn put_and_install_still_go_to_python() {
+    let s = Scene::new().await;
+    assert_eq!(s.call("PUT", "/api/computer-control", Some(json!({"enabled": false}))).await.0, StatusCode::IM_A_TEAPOT);
+    assert_eq!(s.call("POST", "/api/computer-control/install", None).await.0, StatusCode::IM_A_TEAPOT);
+    assert_eq!(s.hits(), 2);
+}
+
+/// D1.1: `%2F` no caminho não escapa da conferência do dono.
+#[tokio::test]
+async fn guest_cannot_reach_python_by_encoding_the_path() {
+    let s = Scene::new().await;
+    s.installed();
+    for uri in ["/api/computer-control%2Ftargets", "/api%2Fcomputer-control/targets"] {
+        let got = s.call_as("POST", uri, Some(json!({"project_dir": "", "name": "vm", "host": "vm"})), Who::Guest).await;
+        assert_eq!(got.0, StatusCode::FORBIDDEN, "{uri}");
+        assert_eq!(got.1["detail"]["code"], "erro_fora_do_convite", "{uri}");
+    }
+    assert_eq!(s.hits(), 0);
+    assert!(s.read(".hangar/computer-control/targets/vm-agent.json").is_none());
 }
 
 /// ROT-22..25, ROT-41, ROT-42, ROT-44, ROT-45, ROT-47..49, ROT-51, JEV-26, HIS-04, HIS-69, D1.8 (r1-get-completo).
 #[tokio::test]
 async fn rot22_get_complete_package_targets_accounts_and_jev() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     let entry = json!({"command": "«HOME»/.hangar/computer-control/hangar-computer-control", "args": [], "env": {
         "HCC_AGENT_CONFIG": "«HOME»/.hangar/computer-control/targets/delphi-02-agent.json",
         "HCC_AGENTS_DIR": "«HOME»/.hangar/computer-control/targets",
@@ -348,7 +452,7 @@ async fn rot22_get_complete_package_targets_accounts_and_jev() {
 /// ROT-40, JEV-26, HIS-62 (r1-get-cauda-chave-7-e-8): 7 caracteres não mostram nada, 8 mostram os 4 finais.
 #[tokio::test]
 async fn rot40_key_tails() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.write(".claude/runtime-config.json", "{\n  \"jev_api_key\": \"1234567\",\n  \"jev_aux_base_url\": \"http://x/v1\",\n  \"jev_aux_modelo\": \"m\",\n  \"jev_aux_api_key\": \"abcd5678\"\n}");
     assert_eq!(s.get().await.1, s.h(merged(empty_state(), json!({
         "llm_url": "http://x/v1/chat/completions", "llm_model": "m", "llm_key_set": true, "llm_key_tail": "5678",
@@ -359,7 +463,7 @@ async fn rot40_key_tails() {
 /// ROT-46, D1.2, D1.4 (r1-get-checkout-local): o checkout em ~/Projetos não vira modo local.
 #[tokio::test]
 async fn rot46_local_checkout_is_ignored() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.write("Projetos/hangar-computer-control/alvo-agent.json", "{}");
     s.write("Projetos/hangar-computer-control/target/release/hangar-computer-control", "bin");
     assert_eq!(s.get().await, (StatusCode::OK, s.h(empty_state())));
@@ -368,7 +472,7 @@ async fn rot46_local_checkout_is_ignored() {
 /// ROT-50, HIS-64 (r1-get-cliproxy): chaves do config.yaml, binário no PATH, chave do auxiliar é do CLIProxy.
 #[tokio::test]
 async fn rot50_cliproxy() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.write(".claude/runtime-config.json", "{\n  \"jev_aux_base_url\": \"http://127.0.0.1:8317/v1\",\n  \"jev_aux_modelo\": \"m\",\n  \"jev_aux_api_key\": \"k#1\"\n}");
     s.write(".cli-proxy-api/config.yaml", "port: 8317\naccess:\n  api-keys:\n    - \"k#1\"\n    - k2\napi-keys:\n  - name: provedor\n");
     crate::write_executable(&s.bin.join("cli-proxy-api"), "#!/bin/sh\n");
@@ -381,7 +485,7 @@ async fn rot50_cliproxy() {
 /// ROT-14, ROT-52 (r1-get-conta-json-invalido): um `.claude.json` de conta ilegível derruba o GET.
 #[tokio::test]
 async fn rot52_account_invalid_json() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.account(".claude-x", 0);
     s.write(".claude-x/.claude.json", "{quebrado");
     s.write(".claude.json", "{\"numStartups\": 3}");
@@ -392,7 +496,7 @@ async fn rot52_account_invalid_json() {
 /// ROT-16, B3 (r1-get-conta-mcpservers-nao-objeto): `mcpServers: []` é falso, vale ausente.
 #[tokio::test]
 async fn rot16_account_mcpservers_empty_list_is_absent() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.account(".claude-x", 0);
     s.write(".claude-x/.claude.json", "{\"mcpServers\": []}");
     s.write(".claude.json", "{\"numStartups\": 3}");
@@ -405,7 +509,7 @@ async fn rot16_account_mcpservers_empty_list_is_absent() {
 /// ROT-76, D2.7 (r1-get-conta-vazia-texto): conta com 0 bytes vale `{}` (o Python dava 500).
 #[tokio::test]
 async fn rot76_account_empty_file_counts_as_unopened() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.account(".claude-x", 0);
     s.write(".claude-x/.claude.json", "");
     s.write(".claude.json", "{\"numStartups\": 3}");
@@ -418,7 +522,7 @@ async fn rot76_account_empty_file_counts_as_unopened() {
 /// ROT-04, D1.9 (r1-get-entrada-env-nao-objeto): `env` lista vira 500 com código, não texto cru.
 #[tokio::test]
 async fn rot04_entry_env_not_object() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.json_file(".claude.json", json!({"mcpServers": {"hangar-computer-control": {
         "command": "«HOME»/.hangar/computer-control/hangar-computer-control", "env": ["x"]}}}));
     let (status, body) = s.get().await;
@@ -429,7 +533,7 @@ async fn rot04_entry_env_not_object() {
 /// ROT-16, ROT-45 (r1-get-entrada-nao-objeto): entrada texto conta como ausente.
 #[tokio::test]
 async fn rot45_entry_not_object_is_absent() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.write(".claude.json", "{\"mcpServers\": {\"hangar-computer-control\": \"x\"}}");
     assert_eq!(s.get().await, (StatusCode::OK, s.h(empty_state())));
 }
@@ -437,7 +541,7 @@ async fn rot45_entry_not_object_is_absent() {
 /// JEV-28, ROT-14 (r1-get-guardada-invalida).
 #[tokio::test]
 async fn jev28_parked_invalid_json() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.write(".hangar/computer-control.json", "[1,");
     s.assert_error(&s.get().await, 500, "erro_computer_control_read",
         json!({"file": "«HOME»/.hangar/computer-control.json", "error": "JSON ou encoding inválido"}));
@@ -446,7 +550,7 @@ async fn jev28_parked_invalid_json() {
 /// ROT-20, ROT-48 (r1-get-guardada): desligado, o alvo padrão vem da entrada guardada.
 #[tokio::test]
 async fn rot48_parked_entry_gives_agent_config() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.write(".claude.json", "{\"numStartups\": 3}");
     s.json_file(".hangar/computer-control.json", json!({"command": "«HOME»/.hangar/computer-control/hangar-computer-control",
         "args": [], "env": {"HCC_AGENT_CONFIG": "/outro/alvo-agent.json"}}));
@@ -460,7 +564,7 @@ async fn rot48_parked_entry_gives_agent_config() {
 /// ROT-14, ROT-47 (r1-get-install-json-invalido).
 #[tokio::test]
 async fn rot47_install_json_invalid() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.write(".hangar/computer-control/install.json", "{tag");
     s.assert_error(&s.get().await, 500, "erro_computer_control_read",
         json!({"file": "«HOME»/.hangar/computer-control/install.json", "error": "JSON ou encoding inválido"}));
@@ -469,7 +573,7 @@ async fn rot47_install_json_invalid() {
 /// ROT-49 (r1-get-jev-openrouter-e-query): chave sk-or- vai ao OpenRouter; a query do auxiliar fica no fim.
 #[tokio::test]
 async fn rot49_jev_openrouter_and_aux_query() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.write(".claude/runtime-config.json", "{\n  \"jev_api_key\": \"sk-or-abcdefgh\",\n  \"jev_aux_base_url\": \"https://x.azure.com/openai/v1?api-version=2024-02-01\",\n  \"jev_aux_modelo\": \"gpt\",\n  \"jev_aux_esforco\": \"\",\n  \"jev_aux_api_key\": \"\"\n}");
     assert_eq!(s.get().await.1, s.h(merged(empty_state(), json!({
         "llm_url": "https://x.azure.com/openai/v1/chat/completions?api-version=2024-02-01", "llm_model": "gpt",
@@ -481,7 +585,7 @@ async fn rot49_jev_openrouter_and_aux_query() {
 /// ROT-14, ROT-52, HIS-57 (r1-get-main-json-invalido).
 #[tokio::test]
 async fn his57_main_invalid_json() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.write(".claude.json", "{invalido");
     s.assert_error(&s.get().await, 500, "erro_computer_control_read",
         json!({"file": "«HOME»/.claude.json", "error": "JSON ou encoding inválido"}));
@@ -490,7 +594,7 @@ async fn his57_main_invalid_json() {
 /// ROT-15 (r1-get-main-nao-objeto).
 #[tokio::test]
 async fn rot15_main_not_object() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.write(".claude.json", "[]");
     s.assert_error(&s.get().await, 500, "erro_computer_control_read", json!({"file": "«HOME»/.claude.json", "error": ""}));
 }
@@ -499,7 +603,7 @@ async fn rot15_main_not_object() {
 #[tokio::test]
 async fn rot14_main_unreadable() {
     use std::os::unix::fs::PermissionsExt;
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.write(".claude.json", "{}");
     std::fs::set_permissions(s.home.join(".claude.json"), std::fs::Permissions::from_mode(0o000)).unwrap();
     if std::fs::read(s.home.join(".claude.json")).is_ok() {
@@ -512,7 +616,7 @@ async fn rot14_main_unreadable() {
 /// ROT-14 (r1-get-main-utf8-invalido).
 #[tokio::test]
 async fn rot14_main_invalid_utf8() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.write(".claude.json", b"{\"a\": \"\xff\"}");
     s.assert_error(&s.get().await, 500, "erro_computer_control_read",
         json!({"file": "«HOME»/.claude.json", "error": "JSON ou encoding inválido"}));
@@ -521,7 +625,7 @@ async fn rot14_main_invalid_utf8() {
 /// ROT-14 (r1-get-main-vazio-texto): o principal com 0 bytes continua erro.
 #[tokio::test]
 async fn rot14_main_empty_file() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.write(".claude.json", "");
     s.assert_error(&s.get().await, 500, "erro_computer_control_read",
         json!({"file": "«HOME»/.claude.json", "error": "JSON ou encoding inválido"}));
@@ -530,7 +634,7 @@ async fn rot14_main_empty_file() {
 /// ROT-16, HIS-57 (r1-get-mcpservers-nao-objeto).
 #[tokio::test]
 async fn rot16_main_mcpservers_not_object() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.write(".claude.json", "{\"mcpServers\": \"x\"}");
     s.assert_error(&s.get().await, 500, "erro_computer_control_read",
         json!({"file": "«HOME»/.claude.json", "error": "mcpServers inválido"}));
@@ -539,7 +643,7 @@ async fn rot16_main_mcpservers_not_object() {
 /// ROT-16 (r1-get-mcpservers-nulo): `null` vale ausente.
 #[tokio::test]
 async fn rot16_main_mcpservers_null() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.write(".claude.json", "{\"mcpServers\": null}");
     assert_eq!(s.get().await, (StatusCode::OK, s.h(empty_state())));
 }
@@ -547,7 +651,7 @@ async fn rot16_main_mcpservers_null() {
 /// ROT-47, D1.3 (r1-get-pacote-uvx): `uvx` gravado não conta como pacote.
 #[tokio::test]
 async fn rot47_uvx_package_does_not_count() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.write(".hangar/computer-control/install.json", "{\n  \"tag\": \"v1.0.0\",\n  \"uvx\": \"/bin/uvx\"\n}");
     std::fs::create_dir_all(s.home.join(".hangar/computer-control/targets")).unwrap();
     s.write(".hangar/computer-control/windows-agent.exe", "MZ-agente-falso");
@@ -560,7 +664,7 @@ async fn rot47_uvx_package_does_not_count() {
 /// ROT-01, D1.1 (r1-get-sem-token, r1-alvo-sem-token): sem token, 401 nas quatro rotas.
 #[tokio::test]
 async fn rot01_without_token_is_401() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.installed();
     for (method, uri, body) in [
         ("GET", "/api/computer-control", None),
@@ -577,7 +681,7 @@ async fn rot01_without_token_is_401() {
 /// ROT-01, D1.1: o convidado recebe 403 da própria rota, nas quatro.
 #[tokio::test]
 async fn rot01_guest_is_403() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.installed();
     s.ssh("printf 'ok\\n'");
     for (method, uri, body) in [
@@ -597,7 +701,7 @@ async fn rot01_guest_is_403() {
 /// ROT-43 (r1-get-ssh-config-diretorio): `~/.ssh/config` ilegível = lista vazia.
 #[tokio::test]
 async fn rot43_ssh_config_directory() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     std::fs::create_dir_all(s.home.join(".ssh/config")).unwrap();
     assert_eq!(s.get().await, (StatusCode::OK, s.h(empty_state())));
 }
@@ -605,7 +709,7 @@ async fn rot43_ssh_config_directory() {
 /// ROT-43, HIS-66 (r1-get-ssh-config-variantes): maiúsculas, vários por linha, sem coringa, sem repetir.
 #[tokio::test]
 async fn rot43_ssh_config_variants() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.write(".ssh/config", b"Host a b\nhost c\n  HOST\td\nHost *\nHost e*.x f? !g h\nHost a\nHostName nao-conta\nMatch host x\n  Host  i\xffj\nHost\n#Host k\n");
     assert_eq!(s.get().await.1["ssh_hosts"], json!(["a", "b", "c", "d", "h", "i\u{fffd}j"]));
 }
@@ -613,7 +717,7 @@ async fn rot43_ssh_config_variants() {
 /// ROT-05: o teste SSH lento não segura a leitura do estado.
 #[tokio::test]
 async fn rot05_slow_ssh_does_not_block_get() {
-    let s = Arc::new(Scene::new());
+    let s = Arc::new(Scene::new().await);
     s.ssh("/bin/sleep 3; printf 'ok\\n'");
     let slow = {
         let s = s.clone();
@@ -632,7 +736,7 @@ async fn rot05_slow_ssh_does_not_block_get() {
 /// ROT-09, ROT-32, ROT-35, ROT-36, ROT-37, HIS-05 (r1-alvo-ssh-completo).
 #[tokio::test]
 async fn rot32_create_ssh_target() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.installed();
     let got = s.target(json!({"project_dir": "", "name": "delphi-03", "transport": "ssh", "host": "delphi-03",
         "proxy_command": "  ssh -W %h:%p salto  ", "request_timeout": 40})).await;
@@ -641,12 +745,13 @@ async fn rot32_create_ssh_target() {
         "{\n  \"transport\": \"ssh\",\n  \"host\": \"delphi-03\",\n  \"agent_path\": \"«HOME»/.hangar/computer-control/windows-agent.exe\",\n  \"proxy_command\": \"ssh -W %h:%p salto\",\n  \"request_timeout\": 40\n}\n");
     // ROT-37: a resposta é o estado inteiro, o mesmo do GET.
     assert_eq!(s.get().await.1, got.1);
+    assert_eq!(s.hits(), 0, "criar alvo não pode ir ao Python");
 }
 
 /// ROT-02 (r1-alvo-campo-desconhecido).
 #[tokio::test]
 async fn rot02_target_unknown_field_is_422() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.installed();
     assert_eq!(s.target(json!({"project_dir": "", "name": "vm", "host": "vm", "extra": 1})).await.0, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(s.read(".hangar/computer-control/targets/vm-agent.json").is_none());
@@ -655,7 +760,7 @@ async fn rot02_target_unknown_field_is_422() {
 /// ROT-29, ROT-03, HIS-06 (r1-alvo-existe).
 #[tokio::test]
 async fn rot29_target_exists() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.installed();
     s.write(".hangar/computer-control/targets/delphi-03-agent.json", "{\n  \"transport\": \"ssh\"\n}\n");
     let got = s.target(json!({"project_dir": "", "name": "delphi-03", "host": "x"})).await;
@@ -663,10 +768,33 @@ async fn rot29_target_exists() {
     s.assert_file(".hangar/computer-control/targets/delphi-03-agent.json", "{\n  \"transport\": \"ssh\"\n}\n");
 }
 
+/// Dois POSTs do mesmo alvo ao mesmo tempo: um grava inteiro, o outro recebe 409, sem sobra de temporário.
+#[tokio::test]
+async fn concurrent_targets_one_wins() {
+    let s = Scene::new().await;
+    s.installed();
+    for _ in 0..5 {
+        let _ = std::fs::remove_file(s.home.join(".hangar/computer-control/targets/vm-agent.json"));
+        let (a, b) = tokio::join!(
+            s.target(json!({"project_dir": "", "name": "vm", "host": "a"})),
+            s.target(json!({"project_dir": "", "name": "vm", "host": "b"})),
+        );
+        let mut statuses = [a.0.as_u16(), b.0.as_u16()];
+        statuses.sort();
+        assert_eq!(statuses, [200, 409], "{} / {}", a.1, b.1);
+        let winner = if a.0 == StatusCode::OK { &a.1 } else { &b.1 };
+        let host = winner["targets"][0]["host"].as_str().unwrap().to_owned();
+        s.assert_file(".hangar/computer-control/targets/vm-agent.json", &ssh_file(&host));
+        let names: Vec<String> = std::fs::read_dir(s.home.join(".hangar/computer-control/targets")).unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, ["vm-agent.json".to_owned()]);
+    }
+}
+
 /// ROT-39 (r1-alvo-host-espaco, -host-quebra-linha-interna, -host-vazio), HIS-66 (r1-alvo-host-traco).
 #[tokio::test]
 async fn rot39_target_host_refused() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.installed();
     for host in [json!("a b"), json!("abc\ndef"), json!("-oProxyCommand=evil"), Value::Null] {
         let mut body = json!({"project_dir": "", "name": "vm"});
@@ -681,7 +809,7 @@ async fn rot39_target_host_refused() {
 /// ROT-27, ROT-39 (r1-alvo-host-nao-ascii): o nome sai do host, mas o host é recusado.
 #[tokio::test]
 async fn rot27_target_non_ascii_host() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.installed();
     let got = s.target(json!({"project_dir": "", "name": "", "host": "Usuário@Máquina"})).await;
     s.assert_error(&got, 400, "erro_computer_control_target_host", json!({}));
@@ -691,7 +819,7 @@ async fn rot27_target_non_ascii_host() {
 /// ROT-39 (r1-alvo-host-quebra-linha-final): "abc\n" é aparado e passa.
 #[tokio::test]
 async fn rot39_target_host_trailing_newline() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.installed();
     let got = s.target(json!({"project_dir": "", "name": "vm", "host": "abc\n"})).await;
     assert_eq!(got, (StatusCode::OK, s.h(with_ssh_target(installed_state(), "vm", "abc"))));
@@ -701,7 +829,7 @@ async fn rot39_target_host_trailing_newline() {
 /// ROT-34, HIS-38 (r1-alvo-local-com-binario): local no Linux roda `[binário, "agent"]` com prazo 15.
 #[tokio::test]
 async fn his38_create_local_target() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.installed();
     let got = s.target(json!({"project_dir": "", "name": "este", "transport": "local"})).await;
     let path = "«HOME»/.hangar/computer-control/targets/este-agent.json";
@@ -716,7 +844,7 @@ async fn his38_create_local_target() {
 /// ROT-35 (r1-alvo-local-prazo-30): o prazo do corpo vence o 15 do local.
 #[tokio::test]
 async fn rot35_local_target_timeout_from_body() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.installed();
     assert_eq!(s.target(json!({"project_dir": "", "name": "este", "transport": "local", "request_timeout": 30})).await.0, StatusCode::OK);
     s.assert_file(".hangar/computer-control/targets/este-agent.json",
@@ -726,7 +854,7 @@ async fn rot35_local_target_timeout_from_body() {
 /// ROT-34, HIS-07 (r1-alvo-local-sem-binario).
 #[tokio::test]
 async fn his07_local_target_without_binary() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.write(".hangar/computer-control/install.json", "{\n  \"tag\": \"v2.0.0\"\n}");
     std::fs::create_dir_all(s.home.join(".hangar/computer-control/targets")).unwrap();
     s.write(".hangar/computer-control/windows-agent.exe", "MZ-agente-falso");
@@ -738,7 +866,7 @@ async fn his07_local_target_without_binary() {
 /// ROT-28 (r1-alvo-local-sem-nome): local sem nome não ganha nome automático.
 #[tokio::test]
 async fn rot28_local_target_without_name() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.installed();
     let got = s.target(json!({"project_dir": "", "name": "", "transport": "local"})).await;
     s.assert_error(&got, 400, "erro_computer_control_target_name", json!({}));
@@ -747,7 +875,7 @@ async fn rot28_local_target_without_name() {
 /// ROT-26 (r1-alvo-nome-41, -nome-42, -nome-comeca-hifen, -nome-invalido-espaco, -nome-quebra-linha).
 #[tokio::test]
 async fn rot26_target_name_rule() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.installed();
     for name in ["a".repeat(42), "-x".into(), "Bad Name".into()] {
         let got = s.target(json!({"project_dir": "", "name": name, "host": "h"})).await;
@@ -763,7 +891,7 @@ async fn rot26_target_name_rule() {
 /// ROT-27 (r1-alvo-nome-do-host, -41, -espacos, -hifen-no-corte, -varios-arroba).
 #[tokio::test]
 async fn rot27_target_name_from_host() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.installed();
     for (host, name) in [
         ("Administrator@DELPHI-03", "delphi-03"),
@@ -783,7 +911,7 @@ async fn rot27_target_name_from_host() {
 /// ROT-26, ROT-27 (r1-alvo-nome-do-host-vazio): host só de símbolos dá nome vazio.
 #[tokio::test]
 async fn rot27_target_name_from_symbol_host() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.installed();
     let got = s.target(json!({"project_dir": "", "name": "", "host": "___"})).await;
     s.assert_error(&got, 400, "erro_computer_control_target_name", json!({}));
@@ -792,7 +920,7 @@ async fn rot27_target_name_from_symbol_host() {
 /// ROT-09 (r1-alvo-prazo-0, -prazo-601, -sem-nome-campo, -sem-project-dir, -transporte-invalido).
 #[tokio::test]
 async fn rot09_target_body_validation() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.installed();
     for body in [
         json!({"project_dir": "", "name": "vm", "host": "vm", "request_timeout": 0}),
@@ -809,7 +937,7 @@ async fn rot09_target_body_validation() {
 /// ROT-35 (r1-alvo-prazo-nulo): `null` não grava prazo.
 #[tokio::test]
 async fn rot35_target_null_timeout() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.installed();
     assert_eq!(s.target(json!({"project_dir": "", "name": "vm", "host": "vm", "request_timeout": null})).await.0, StatusCode::OK);
     s.assert_file(".hangar/computer-control/targets/vm-agent.json", &ssh_file("vm"));
@@ -818,7 +946,7 @@ async fn rot35_target_null_timeout() {
 /// D1.6 (r1-alvo-project-dir-ignorado): `project_dir` não escolhe a pasta.
 #[tokio::test]
 async fn d16_target_project_dir_ignored() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.installed();
     let got = s.target(s.h(json!({"project_dir": "«HOME»/outro", "name": "vm", "host": "vm"}))).await;
     assert_eq!(got, (StatusCode::OK, s.h(with_ssh_target(installed_state(), "vm", "vm"))));
@@ -829,7 +957,7 @@ async fn d16_target_project_dir_ignored() {
 /// ROT-32, ROT-36 (r1-alvo-proxy-nao-ascii): JSON com indentação 2, não-ASCII escapado, newline final.
 #[tokio::test]
 async fn rot36_target_file_escapes_non_ascii() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.installed();
     assert_eq!(s.target(json!({"project_dir": "", "name": "vm", "host": "vm", "proxy_command": "ssh -W %h:%p salto-ção"})).await.0, StatusCode::OK);
     s.assert_file(".hangar/computer-control/targets/vm-agent.json",
@@ -839,7 +967,7 @@ async fn rot36_target_file_escapes_non_ascii() {
 /// ROT-30, B1, D1.6 (r1-alvo-sem-pasta): sem `targets/`, a pasta nasce (o Python dava 400).
 #[tokio::test]
 async fn rot30_target_creates_missing_folder() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     let got = s.target(json!({"project_dir": "", "name": "vm", "host": "vm"})).await;
     assert_eq!(got, (StatusCode::OK, s.h(with_ssh_target(empty_state(), "vm", "vm"))));
     s.assert_file(".hangar/computer-control/targets/vm-agent.json", &ssh_file("vm"));
@@ -850,18 +978,19 @@ async fn rot30_target_creates_missing_folder() {
 /// ROT-10, ROT-53, ROT-54, HIS-67 (r1-teste-ok): argv do ssh com accept-new, stdin vazio.
 #[tokio::test]
 async fn rot53_test_host_ok() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     // stdin vazio: o `read` acha o fim na hora; herdado, poderia ler algo ou ficar preso.
     s.ssh("if read -r line; then exit 9; fi; printf 'ok\\n'");
     assert_eq!(s.test_host(json!({"host": "delphi-02"})).await, (StatusCode::OK, json!({"ok": true, "detail": ""})));
     assert_eq!(s.ssh_argv(), [s.ssh_path().as_str(), "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", "-o",
         "StrictHostKeyChecking=accept-new", "--", "delphi-02", "echo", "ok"]);
+    assert_eq!(s.hits(), 0, "o teste SSH não pode ir ao Python");
 }
 
 /// ROT-53, ROT-58 (r1-teste-proxy-e-espacos): host e proxy aparados no argv.
 #[tokio::test]
 async fn rot53_test_host_proxy_trimmed() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.ssh("printf 'ok\\n'");
     let got = s.test_host(json!({"host": "  delphi-02  ", "proxy_command": "  ssh -W %h:%p salto  "})).await;
     assert_eq!(got, (StatusCode::OK, json!({"ok": true, "detail": ""})));
@@ -872,7 +1001,7 @@ async fn rot53_test_host_proxy_trimmed() {
 /// ROT-57 (r1-teste-bytes-invalidos, -codigo-sem-saida, -ok-com-codigo-1, -ok-substring, -sem-ok).
 #[tokio::test]
 async fn rot57_test_host_outcomes() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     for (body, expected) in [
         ("printf 'falhou \\377\\376 fim' >&2; exit 1", json!({"ok": false, "detail": "falhou \u{fffd}\u{fffd} fim"})),
         ("exit 3", json!({"ok": false, "detail": "saiu com 3"})),
@@ -888,7 +1017,7 @@ async fn rot57_test_host_outcomes() {
 /// ROT-57 (r1-teste-stderr-longo): os últimos 400 code points do stderr aparado.
 #[tokio::test]
 async fn rot57_test_host_long_stderr() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.ssh(&format!("printf '%s' '{}\n  ' >&2; exit 255", "falha é ".repeat(100)));
     let got = s.test_host(json!({"host": "h"})).await;
     assert_eq!(got, (StatusCode::OK, json!({"ok": false, "detail": " falha é".repeat(50)})));
@@ -897,7 +1026,7 @@ async fn rot57_test_host_long_stderr() {
 /// ROT-58, ROT-39 (r1-teste-host-invalido).
 #[tokio::test]
 async fn rot58_test_host_invalid_host() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.ssh("printf 'ok'");
     s.assert_error(&s.test_host(json!({"host": "-x"})).await, 400, "erro_computer_control_target_host", json!({}));
     assert!(s.ssh_argv().is_empty());
@@ -906,7 +1035,7 @@ async fn rot58_test_host_invalid_host() {
 /// ROT-02, ROT-10 (r1-teste-campo-a-mais, r1-teste-sem-host).
 #[tokio::test]
 async fn rot10_test_host_body_validation() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.ssh("printf 'ok'");
     assert_eq!(s.test_host(json!({"host": "h", "x": 1})).await.0, StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(s.test_host(json!({"proxy_command": ""})).await.0, StatusCode::UNPROCESSABLE_ENTITY);
@@ -916,19 +1045,33 @@ async fn rot10_test_host_body_validation() {
 /// ROT-55, HIS-59 (r1-teste-sem-ssh): sem ssh no PATH é 200 com `ok: false`.
 #[tokio::test]
 async fn his59_test_host_without_ssh() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     assert_eq!(s.test_host(json!({"host": "h"})).await, (StatusCode::OK, json!({"ok": false, "detail": "ssh não encontrado neste servidor"})));
 }
 
-/// ROT-56 (r1-teste-prazo): prazo total de 20 s.
+/// ROT-56 (r1-teste-prazo): no prazo de 20 s cai o ssh e o que ele deixou no grupo.
 #[tokio::test]
 async fn rot56_test_host_deadline() {
-    let s = Scene::new();
-    s.ssh("exec /bin/sleep 25");
+    let s = Scene::new().await;
+    s.hanging_ssh();
     let started = Instant::now();
     assert_eq!(s.test_host(json!({"host": "h"})).await, (StatusCode::OK, json!({"ok": false, "detail": "sem resposta em 20 s"})));
-    let elapsed = started.elapsed();
-    assert!(elapsed >= Duration::from_secs(19) && elapsed < Duration::from_secs(24), "{elapsed:?}");
+    assert!(started.elapsed() < Duration::from_secs(60));
+    s.assert_group_dead().await;
+}
+
+/// O ssh filho não herda a autoridade do servidor (`PRIVATE_ENV_KEYS`), mas recebe o PATH dele.
+#[tokio::test]
+async fn ssh_child_environment_without_server_secrets() {
+    let s = Scene::new().await;
+    let seen = s.root.path().join("ssh-env");
+    s.ssh(&format!(
+        "printf '%s\\n' \"${{CP_AUTH_TOKEN-ausente}}\" \"${{HANGAR_INTERNAL_SECRET-ausente}}\" \"$PATH\" > '{}'\nprintf 'ok\\n'",
+        seen.display()
+    ));
+    assert_eq!(s.test_host(json!({"host": "h"})).await, (StatusCode::OK, json!({"ok": true, "detail": ""})));
+    let lines: Vec<String> = std::fs::read_to_string(&seen).unwrap().lines().map(str::to_owned).collect();
+    assert_eq!(lines, ["ausente".to_owned(), "ausente".to_owned(), s.bin.to_string_lossy().into_owned()]);
 }
 
 // ── GET /api/computer-control/windows-setup ──────────────────────────────────────────────────
@@ -936,17 +1079,18 @@ async fn rot56_test_host_deadline() {
 /// ROT-11, ROT-59, ROT-60, ROT-64, ROT-65, HIS-68 (r1-windows-host-vazio): texto idêntico ao do Python.
 #[tokio::test]
 async fn rot64_windows_setup_prompt() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.write(".ssh/id_ed25519.pub", KEY);
     s.ssh(RESOLVED);
     assert_eq!(s.windows("?host=").await, (StatusCode::OK, json!({"prompt": PROMPT_ADMINISTRATOR, "user": "administrator"})));
     assert_eq!(s.ssh_argv(), [s.ssh_path().as_str(), "-G", "--", "novo-windows"]);
+    assert_eq!(s.hits(), 0, "preparar o Windows não pode ir ao Python");
 }
 
 /// ROT-11, ROT-59 (r1-windows-sem-query): sem `host` também vira `novo-windows`.
 #[tokio::test]
 async fn rot59_windows_setup_without_query() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.write(".ssh/id_ed25519.pub", KEY);
     s.ssh(RESOLVED);
     assert_eq!(s.windows("").await, (StatusCode::OK, json!({"prompt": PROMPT_ADMINISTRATOR, "user": "administrator"})));
@@ -956,7 +1100,7 @@ async fn rot59_windows_setup_without_query() {
 /// ROT-59, ROT-39 (r1-windows-host-aparado, r1-windows-host-invalido).
 #[tokio::test]
 async fn rot59_windows_setup_host_checked() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.write(".ssh/id_ed25519.pub", KEY);
     s.ssh(RESOLVED);
     assert_eq!(s.windows("?host=%20%20delphi-02%20%20").await.0, StatusCode::OK);
@@ -969,7 +1113,7 @@ async fn rot59_windows_setup_host_checked() {
 /// ROT-60 (r1-windows-identidade-absoluta, r1-windows-varias-identidades): primeira `identityfile` com `.pub`, primeiro `user`.
 #[tokio::test]
 async fn rot60_windows_setup_identity() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.write(".ssh/id_ed25519.pub", KEY);
     s.write(".ssh/id_x.pub", "ssh-rsa XXX\n");
     s.ssh(&format!("printf 'identityfile {}/.ssh/id_ed25519\\n'", s.home.display()));
@@ -987,7 +1131,7 @@ async fn rot60_windows_setup_identity() {
 /// ROT-62 (r1-windows-sem-chave), ROT-61 (r1-windows-sem-ssh, r1-windows-ssh-falha).
 #[tokio::test]
 async fn rot62_windows_setup_without_key() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.ssh(RESOLVED);
     s.assert_error(&s.windows("?host=h").await, 400, "erro_computer_control_no_ssh_key", json!({}));
     s.write(".ssh/id_ed25519.pub", KEY);
@@ -997,22 +1141,22 @@ async fn rot62_windows_setup_without_key() {
     s.assert_error(&s.windows("?host=h").await, 400, "erro_computer_control_no_ssh_key", json!({}));
 }
 
-/// ROT-61 (r1-windows-ssh-prazo): `ssh -G` com prazo de 10 s.
+/// ROT-61 (r1-windows-ssh-prazo): no prazo de 10 s do `ssh -G` cai o grupo inteiro.
 #[tokio::test]
 async fn rot61_windows_setup_resolve_deadline() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.write(".ssh/id_ed25519.pub", KEY);
-    s.ssh("exec /bin/sleep 15");
+    s.hanging_ssh();
     let started = Instant::now();
     s.assert_error(&s.windows("?host=h").await, 400, "erro_computer_control_no_ssh_key", json!({}));
-    let elapsed = started.elapsed();
-    assert!(elapsed >= Duration::from_secs(9) && elapsed < Duration::from_secs(14), "{elapsed:?}");
+    assert!(started.elapsed() < Duration::from_secs(60));
+    s.assert_group_dead().await;
 }
 
 /// ROT-65 (r1-windows-sem-usuario), ROT-63 (r1-windows-usuario-explicito).
 #[tokio::test]
 async fn rot63_windows_setup_user_line() {
-    let s = Scene::new();
+    let s = Scene::new().await;
     s.write(".ssh/id_ed25519.pub", KEY);
     s.ssh("printf 'identityfile ~/.ssh/id_ed25519\\n'");
     let got = s.windows("?host=h").await;

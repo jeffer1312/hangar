@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use serde_json::{Map, Value, json};
 
-use hangar_core::pycompat::truthy;
+use hangar_core::pycompat::{py, truthy};
 
 use crate::files::{known_from, read_entry, read_object};
 use crate::{Error, Paths, ssh_hosts, targets};
@@ -39,7 +39,7 @@ pub fn state(paths: &Paths, facts: &Facts) -> Result<Value, Error> {
         files.push(json!({"path": account.path.to_string_lossy(), "enabled": account.entry.is_some()}));
     }
     let default_agent = agents.first().cloned().unwrap_or_else(|| json!(""));
-    Ok(json!({
+    let mut out = json!({
         // O exe sai DAQUI até para o alvo remoto (copiado na 1ª conexão): sem ele, nenhum alvo funciona.
         "agent_exe": {"path": exe.to_string_lossy(), "exists": exe_size.is_some(), "size": exe_size.unwrap_or(0)},
         "mode": "package",
@@ -73,7 +73,12 @@ pub fn state(paths: &Paths, facts: &Facts) -> Result<Value, Error> {
             "key_is_cliproxy": !llm_key.is_empty() && facts.cliproxy_keys.contains(&llm_key),
         },
         "files": files,
-    }))
+    });
+    // Surrogate solto lido dos arquivos sai como U+FFFD, como no Python.
+    if let Some(map) = out.as_object_mut() {
+        py::scrub_map(map);
+    }
+    Ok(out)
 }
 
 /// `env` falso vale `{}`; verdadeiro e não objeto é erro com código (o Python caía em 500 cru).

@@ -1,4 +1,6 @@
 //! Alvos: cada `<nome>-agent.json` de `targets/` é uma máquina que o MCP alcança.
+use std::collections::hash_map::RandomState;
+use std::hash::BuildHasher;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -59,8 +61,11 @@ pub fn targets(paths: &Paths) -> Vec<Value> {
     names.sort();
     names.into_iter().map(|file| {
         let path = paths.targets_dir().join(&file);
-        let cfg = std::fs::read(&path).ok().and_then(|bytes| files::parse(&bytes))
-            .and_then(|v| v.as_object().cloned()).unwrap_or_default();
+        let mut cfg = match std::fs::read(&path).ok().and_then(|bytes| files::parse(&bytes)) {
+            Some(Value::Object(cfg)) => cfg,
+            _ => Map::new(),
+        };
+        py::scrub_map(&mut cfg);
         let transport = cfg.get("transport").cloned().unwrap_or_else(|| json!("local"));
         // Por SSH só há agente de Windows; o local é o sistema desta máquina.
         let os = if transport == "ssh" || cfg!(windows) { "windows" } else { "linux" };
@@ -90,8 +95,7 @@ pub fn create_target(paths: &Paths, request: &TargetRequest) -> Result<(), Error
     let dir = paths.targets_dir();
     let path = dir.join(format!("{name}{SUFFIX}"));
     if path.exists() {
-        return Err(Error { status: 409, code: "erro_computer_control_target_exists",
-            msg: format!("o alvo {name} já existe"), params: json!({"name": name}) });
+        return Err(exists(&name));
     }
     let mut cfg = Map::new();
     if local {
@@ -121,12 +125,22 @@ pub fn create_target(paths: &Paths, request: &TargetRequest) -> Result<(), Error
     }
     std::fs::create_dir_all(&dir).map_err(|e| Error::at(&dir, &e))?;
     let text = pyjson::dumps_indent(&Value::Object(cfg), 2, true) + "\n";
-    let temp = dir.join(format!("{name}{SUFFIX}.{}.tmp", std::process::id()));
-    let written = std::fs::write(&temp, text).and_then(|()| hangar_core::fs::replace(&temp, &path));
-    written.map_err(|e| {
-        let _ = std::fs::remove_file(&temp);
-        Error::at(&path, &e)
-    })
+    // Temporário com sufixo aleatório e `hard_link`, que falha se o alvo já existe: de dois pedidos
+    // iguais ao mesmo tempo, um grava inteiro e o outro recebe 409.
+    let suffix = BuildHasher::hash_one(&RandomState::new(), std::process::id());
+    let temp = dir.join(format!(".{name}{SUFFIX}.{suffix:016x}.tmp"));
+    let linked = std::fs::write(&temp, text).and_then(|()| std::fs::hard_link(&temp, &path));
+    let _ = std::fs::remove_file(&temp);
+    match linked {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(exists(&name)),
+        Err(e) => Err(Error::at(&path, &e)),
+    }
+}
+
+fn exists(name: &str) -> Error {
+    Error { status: 409, code: "erro_computer_control_target_exists", msg: format!("o alvo {name} já existe"),
+        params: json!({"name": name}) }
 }
 
 /// Host aparado e conferido inteiro.

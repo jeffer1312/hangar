@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
-use hangar_core::pycompat::truthy;
+use hangar_core::pycompat::{pyjson, truthy};
 
 use crate::{Error, NAME, Paths};
 
@@ -76,9 +76,11 @@ pub(crate) fn read_object(path: &Path, empty_ok: bool) -> Result<Map<String, Val
     }
 }
 
-/// UTF-8 estrito e JSON, como o `json.loads(read_text())` do Python.
+/// UTF-8 estrito e JSON, como o `json.loads(read_text())` do Python, que aceita o surrogate solto
+/// (`\ud800`) que o Claude Code grava. Ele fica como marcador no valor (quem regrava devolve o
+/// original); o que vai à tela passa por `py::scrub_*`.
 pub(crate) fn parse(bytes: &[u8]) -> Option<Value> {
-    serde_json::from_str(std::str::from_utf8(bytes).ok()?).ok()
+    pyjson::loads_lossless(std::str::from_utf8(bytes).ok()?)
 }
 
 #[cfg(test)]
@@ -103,5 +105,13 @@ mod tests {
             std::fs::write(&path, format!("{{\"mcpServers\": {text}}}")).unwrap();
             let _ = read_entry(path, account);
         }
+    }
+
+    #[test]
+    fn claude_json_with_lone_surrogate_is_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".claude.json");
+        std::fs::write(&path, r#"{"a": "\ud800", "mcpServers": {"x\udc00": {}}}"#).unwrap();
+        assert!(read_entry(path, true).is_ok());
     }
 }

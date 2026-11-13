@@ -102,13 +102,19 @@ async fn identity(paths: &Paths, host: &str, ssh: Option<&Path>, env: &BTreeMap<
     let Some(ssh) = ssh else { return Ok(Default::default()) };
     let args = ["-G".to_owned(), "--".to_owned(), host.to_owned()];
     let Ok(out) = run(ssh, &args, env, RESOLVE_DEADLINE).await else { return Ok(Default::default()) };
+    let home = paths.home.clone();
+    tokio::task::spawn_blocking(move || identity_of(&out.stdout, &home)).await.map_err(Error::io)?
+}
+
+/// Primeira linha `user`; primeira `identityfile` cujo `.pub` existe. Lê disco: fora do executor.
+fn identity_of(stdout: &str, home: &Path) -> Result<(String, String), Error> {
     let (mut user, mut key) = (String::new(), String::new());
-    for line in py::splitlines(&out.stdout) {
+    for line in py::splitlines(stdout) {
         let (name, value) = line.split_once(' ').unwrap_or((line, ""));
         if name == "user" && user.is_empty() {
             user = py::strip(value).to_owned();
         } else if name == "identityfile" && key.is_empty() {
-            let public = format!("{}.pub", expand_user(py::strip(value), &paths.home));
+            let public = format!("{}.pub", expand_user(py::strip(value), home));
             let public = Path::new(&public);
             if public.is_file() {
                 let bytes = std::fs::read(public).map_err(|e| Error::at(public, &e))?;
@@ -137,13 +143,25 @@ async fn run(program: &Path, args: &[String], env: &BTreeMap<String, String>, de
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
-    let output = match tokio::time::timeout(deadline, command.output()).await {
-        Err(_) => return Err(RunError::Timeout),
-        Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => return Err(RunError::Missing),
-        Ok(Err(error)) => return Err(RunError::Other(error)),
-        Ok(Ok(output)) => output,
+    // Grupo próprio: no prazo cai o ssh e o que ele abriu (ProxyCommand e afins), não só ele.
+    #[cfg(unix)]
+    let mut tree = hangar_core::terminal_process::CommandTree::configure(&mut command).map_err(RunError::Other)?;
+    let child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Err(RunError::Missing),
+        Err(error) => return Err(RunError::Other(error)),
     };
-    Ok(Output { code: exit_code(&output.status), stdout: text(&output.stdout), stderr: text(&output.stderr) })
+    #[cfg(unix)]
+    tree.attach(&child).map_err(RunError::Other)?;
+    match tokio::time::timeout(deadline, child.wait_with_output()).await {
+        Ok(Ok(output)) => Ok(Output { code: exit_code(&output.status), stdout: text(&output.stdout), stderr: text(&output.stderr) }),
+        Ok(Err(error)) => Err(RunError::Other(error)),
+        Err(_) => {
+            #[cfg(unix)]
+            hangar_core::terminal_process::finish(&mut tree).await;
+            Err(RunError::Timeout)
+        }
+    }
 }
 
 /// Morto por sinal vira negativo, como o `returncode` do Python.
