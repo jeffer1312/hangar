@@ -221,7 +221,7 @@ pub(super) fn header_arg(name: Option<&str>, input: Option<&serde_json::Map<Stri
 
 fn count(one: &str, many: &str, n: usize) -> String { count_with(one, many, n, &[]) }
 
-fn count_with(one: &str, many: &str, n: usize, extra: &[(&str, &str)]) -> String {
+pub(super) fn count_with(one: &str, many: &str, n: usize, extra: &[(&str, &str)]) -> String {
     let n_text = n.to_string();
     let params: Vec<(&str, &str)> = std::iter::once(("n", n_text.as_str())).chain(extra.iter().copied()).collect();
     crate::i18n::tr_shared(if n == 1 { one } else { many }, &params)

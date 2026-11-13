@@ -582,12 +582,8 @@ impl ActivityPanel {
         match result {
             Err(failure) => {
                 self.stopping.remove(task);
-                self.stop_note = Some(match (&failure.code, failure.status) {
-                    // Frase com parâmetro (o `erro_envio_falhou`) fica com o texto do servidor.
-                    (Some(code), _) => crate::i18n::tr_web(code, &HashMap::new()).filter(|text| !text.contains('{')).unwrap_or(failure.detail),
-                    (None, None) => tr(&failure.detail),
-                    (None, Some(_)) => failure.detail,
-                });
+                // Sem resposta do servidor, o `detail` é a chave da frase; com resposta, já é a frase traduzida.
+                self.stop_note = Some(if failure.status.is_none() { tr(&failure.detail) } else { failure.detail });
             }
             Ok(_) => {
                 let task = task.to_owned();
@@ -603,7 +599,10 @@ impl ActivityPanel {
     /// Passado o prazo, a tarefa que ainda aparece rodando não parou: a linha volta com o aviso.
     fn stop_unconfirmed(&mut self, task: &str, cx: &mut Context<Self>) {
         if !self.stopping.remove(task) { return; }
-        if background_rows(&self.lines).iter().any(|row| row.task.as_deref() == Some(task)) {
+        let lines = &self.lines;
+        let mut tasks = lines.agents.iter().filter_map(|a| a.task.as_deref()).chain(lines.running.iter().map(|s| s.key.as_str()))
+            .chain(lines.shells.iter().filter_map(|s| s.task.as_deref()));
+        if tasks.any(|t| t == task) {
             self.stop_note = Some(web("atividade_parar_sem_confirmacao"));
         }
         cx.notify();
@@ -905,7 +904,8 @@ fn warning_text(text: String) -> AnyElement {
     div().font_family(theme::MONO).text_size(px(10.)).text_color(theme::warning()).child(text).into_any_element()
 }
 
-fn shell_row(prefix: &str, line: &ShellLine) -> AnyElement {
+/// `stop`: o ■ do shell de fundo que dá para parar.
+fn shell_row(prefix: &str, line: &ShellLine, stop: Option<AnyElement>) -> AnyElement {
     let raw = line.raw.clone();
     div().id(SharedString::from(format!("{prefix}-{}", line.key))).flex().items_start().gap_2()
         .tooltip(move |window, cx| Tooltip::new(raw.clone()).build(window, cx))
@@ -913,6 +913,7 @@ fn shell_row(prefix: &str, line: &ShellLine) -> AnyElement {
         .child(div().flex_1().min_w_0().flex().flex_col().gap(px(3.))
             .child(div().font_family(theme::MONO).text_sm().text_color(theme::text()).line_clamp(2).child(line.label.clone()))
             .when(!line.now.is_empty(), |el| el.child(now_text(line.now.clone()))))
+        .children(stop)
         .into_any_element()
 }
 
@@ -938,10 +939,20 @@ fn finished_label(lines: &Lines) -> Option<String> {
     (n > 0).then(|| web_with("atividade_desktop_finalizadas", "n", n.to_string()))
 }
 
+/// O ◇ do subagente, na largura dos ícones da lista.
+fn diamond() -> Div { div().w(px(14.)).flex_shrink_0().text_center().text_sm().text_color(theme::muted()).child("◇") }
+
+fn chevron(open: bool) -> Icon { chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 14., theme::faint()) }
+
+/// Linha que abre e fecha uma lista ("Finalizadas", "Mais antigos"); quem chama põe o conteúdo e o clique.
+fn toggle_row(id: &'static str, label: String) -> Stateful<Div> {
+    div().id(id).flex().items_center().mx(px(-8.)).px(px(8.)).rounded(px(8.))
+        .cursor_pointer().hover(|el| el.bg(theme::hover())).role(Role::Button).aria_label(label)
+}
+
 /// Ícone, nome cortado numa linha e o tempo desde o começo, que corre pintado fora da view.
 fn background_line(row: &BackgroundRow, marks: &super::panes::MarkPlaces, stop: Option<AnyElement>) -> Div {
-    let icon = if row.shell { chrome::small_icon(IconName::SquareTerminal, 14., theme::muted()).into_any_element() }
-        else { div().w(px(14.)).flex_shrink_0().text_center().text_sm().text_color(theme::muted()).child("◇").into_any_element() };
+    let icon = if row.shell { chrome::small_icon(IconName::SquareTerminal, 14., theme::muted()).into_any_element() } else { diamond().into_any_element() };
     div().h(px(22.)).flex().items_center().gap_2().min_w_0()
         .child(icon)
         .child(div().flex_1().min_w_0().truncate().text_sm().text_color(theme::text()).child(row.name.clone()))
@@ -995,6 +1006,53 @@ impl ActivityPanel {
         Some(group.into_any_element())
     }
 
+    /// "Tarefas em segundo plano" do estilo Claude Desktop: subagentes e shells rodando, cada um com o ■, e as
+    /// finalizadas atrás de uma linha que abre.
+    fn render_background(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<Div> {
+        let lines = &self.lines;
+        let background = background_rows(lines);
+        let finished = finished_label(lines);
+        if background.is_empty() && finished.is_none() { return None; }
+        let mut group = section(web("atividade_desktop_titulo"), None);
+        for row in &background {
+            let stop = self.stop_control(row.task.as_deref(), &row.key, &row.name, cx);
+            let line = background_line(row, &self.marks, stop);
+            group = group.child(match &row.open {
+                Some(sub) => openable(format!("act-bg-{}", row.key), sub.clone(), row.name.clone(), line, window, cx),
+                None => {
+                    let raw = row.raw.clone();
+                    line.id(SharedString::from(format!("act-bg-{}", row.key)))
+                        .tooltip(move |window, cx| Tooltip::new(raw.clone()).build(window, cx)).into_any_element()
+                }
+            });
+        }
+        if let Some(label) = finished {
+            let open = self.finished_open;
+            group = group.child(toggle_row("act-finished", label.clone()).h(px(30.)).gap_2()
+                .child(diamond())
+                .child(div().flex_1().min_w_0().truncate().text_sm().text_color(theme::text()).child(label))
+                .child(chevron(open))
+                .on_click(cx.listener(|this, _, _, cx| { this.finished_open = !this.finished_open; cx.notify(); })));
+            if open { group = group.children(lines.finished.iter().chain(&lines.older).map(|s| sub_row(s, None, window, cx))); }
+        }
+        if let Some(note) = &self.stop_note { group = group.child(warning_line(note.clone())); }
+        Some(group)
+    }
+
+    /// O ■ de uma tarefa que dá para parar, ou "Parando…" enquanto o feed não mostra o fim; nada para quem não pode.
+    fn stop_control(&self, task: Option<&str>, key: &str, name: &str, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let task = task.filter(|_| self.claude && !self.read_only)?.to_owned();
+        if self.stopping.contains(&task) {
+            return Some(div().flex_shrink_0().text_xs().text_color(theme::faint()).child(web("atividade_parando")).into_any_element());
+        }
+        let label = format!("{}: {name}", web("atividade_desktop_parar"));
+        Some(Button::new(SharedString::from(format!("act-bg-stop-{key}"))).ghost().xsmall().accessibility_label(label)
+            .tooltip(web("atividade_desktop_parar"))
+            .child(div().size(px(9.)).rounded(px(2.)).bg(theme::text()))
+            .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); this.stop_task(task.clone(), cx); }))
+            .into_any_element())
+    }
+
     /// Views guardadas dentro desta, que redesenham junto na troca de aba (`side_tab_in`).
     pub(super) fn views(&self) -> Vec<EntityId> { vec![self.conversation.entity_id()] }
 }
@@ -1011,100 +1069,59 @@ impl Render for ActivityPanel {
         }
         if let Some(notice) = &self.notice { body = body.child(warning_line(notice.clone())); }
         if let Some(code) = self.subs.iter().find_map(|s| s.problem.as_deref()) { body = body.child(warning_line(web(code))); }
-        let sub_row = |s: &OrphanLine, window: &mut Window, cx: &mut Context<Self>| {
-            let content = div().flex().flex_col().gap(px(3.)).when(s.done && !s.failed, |el| el.opacity(0.6))
-                .child(div().flex().items_center().gap_1().min_w_0()
-                    .child(div().min_w_0().truncate().text_sm().text_color(theme::text()).child(s.title.clone()))
-                    .when_some(s.tag.clone(), |el, t| el.child(tag(t, false))))
-                .child(if s.failed { warning_text(s.now.clone()) } else { now_text(s.now.clone()) });
-            openable(format!("act-orphan-{}", s.key), s.key.clone(), s.title.clone(), content, window, cx)
-        };
-        let desktop = crate::appearance::get().tool_look == crate::appearance::ToolLook::ClaudeDesktop;
-        let finished = finished_label(lines).filter(|_| desktop);
-        let background = if desktop { background_rows(lines) } else { Vec::new() };
-        if !background.is_empty() || finished.is_some() {
-            let mut group = section(web("atividade_desktop_titulo"), None);
-            for row in &background {
-                let stop = row.task.clone().filter(|_| self.claude && !self.read_only).map(|task| {
-                    if self.stopping.contains(&task) {
-                        return div().flex_shrink_0().text_xs().text_color(theme::faint()).child(web("atividade_parando")).into_any_element();
+        let uncertain = (!lines.uncertain.is_empty()).then(|| section(web("atividade_subagentes"), None)
+            .children(lines.uncertain.iter().map(|sub| sub_row(sub, None, window, cx))));
+        if crate::appearance::get().tool_look == crate::appearance::ToolLook::ClaudeDesktop {
+            body = body.children(self.render_background(window, cx)).children(uncertain);
+        } else {
+            if !lines.agents.is_empty() || !lines.running.is_empty() {
+                let mut rows: Vec<AnyElement> = lines.agents.iter().map(|a| {
+                    let content = div().flex().items_start().gap_2().child(spinning(format!("act-agent-spin-{}", a.key)))
+                        .child(div().flex_1().min_w_0().flex().flex_col().gap(px(3.))
+                            .child(div().flex().items_center().gap_1().min_w_0()
+                                .child(div().min_w_0().truncate().text_sm().text_color(theme::text()).child(a.description.clone()))
+                                .children(a.tags.iter().map(|(t, muted)| tag(t.clone(), *muted))))
+                            .when_some(a.now.clone(), |el, now| el.child(now_text(now))))
+                        .children(self.stop_control(a.task.as_deref(), &format!("agent-{}", a.key), &a.description, cx));
+                    // Só abre quem casou com o disco; o resto é informação.
+                    match &a.sub {
+                        Some(sub) => openable(format!("act-agent-{}", a.key), sub.clone(), a.description.clone(), content, window, cx),
+                        None => content.into_any_element(),
                     }
-                    let label = format!("{}: {}", web("atividade_desktop_parar"), row.name);
-                    Button::new(SharedString::from(format!("act-bg-stop-{}", row.key))).ghost().xsmall().accessibility_label(label)
-                        .tooltip(web("atividade_desktop_parar"))
-                        .child(div().size(px(9.)).rounded(px(2.)).bg(theme::text()))
-                        .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); this.stop_task(task.clone(), cx); }))
-                        .into_any_element()
-                });
-                let line = background_line(row, &self.marks, stop);
-                group = group.child(match &row.open {
-                    Some(sub) => openable(format!("act-bg-{}", row.key), sub.clone(), row.name.clone(), line, window, cx),
-                    None => {
-                        let raw = row.raw.clone();
-                        line.id(SharedString::from(format!("act-bg-{}", row.key)))
-                            .tooltip(move |window, cx| Tooltip::new(raw.clone()).build(window, cx)).into_any_element()
-                    }
-                });
+                }).collect();
+                rows.extend(lines.running.iter().map(|s| {
+                    let stop = self.stop_control(Some(s.key.as_str()),&format!("sub-{}", s.key), &s.title, cx);
+                    sub_row(s, stop, window, cx)
+                }));
+                // Os sem notícia (`done` na seção Rodando) aparecem aqui, mas não contam como rodando.
+                let count = (lines.agents.len() + lines.running.iter().filter(|s| !s.done).count()).to_string();
+                body = body.child(section(web_with("atividade_grupo_rodando", "n", count), None).children(rows));
             }
-            if let Some(label) = finished {
-                let open = self.finished_open;
-                group = group.child(div().id("act-finished").h(px(30.)).flex().items_center().gap_2().mx(px(-8.)).px(px(8.)).rounded(px(8.))
-                    .cursor_pointer().hover(|el| el.bg(theme::hover())).role(Role::Button).aria_label(label.clone())
-                    .child(div().w(px(14.)).flex_shrink_0().text_center().text_sm().text_color(theme::muted()).child("◇"))
-                    .child(div().flex_1().min_w_0().truncate().text_sm().text_color(theme::text()).child(label))
-                    .child(chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 14., theme::faint()))
-                    .on_click(cx.listener(|this, _, _, cx| { this.finished_open = !this.finished_open; cx.notify(); })));
-                if open { group = group.children(lines.finished.iter().chain(&lines.older).map(|s| sub_row(s, window, cx))); }
-            }
-            if let Some(note) = &self.stop_note { group = group.child(warning_line(note.clone())); }
-            body = body.child(group);
-        }
-        if !desktop && (!lines.agents.is_empty() || !lines.running.is_empty()) {
-            let mut rows: Vec<AnyElement> = lines.agents.iter().map(|a| {
-                let content = div().flex().items_start().gap_2().child(spinning(format!("act-agent-spin-{}", a.key)))
-                    .child(div().flex_1().min_w_0().flex().flex_col().gap(px(3.))
-                        .child(div().flex().items_center().gap_1().min_w_0()
-                            .child(div().min_w_0().truncate().text_sm().text_color(theme::text()).child(a.description.clone()))
-                            .children(a.tags.iter().map(|(t, muted)| tag(t.clone(), *muted))))
-                        .when_some(a.now.clone(), |el, now| el.child(now_text(now))));
-                // Só abre quem casou com o disco; o resto é informação.
-                match &a.sub {
-                    Some(sub) => openable(format!("act-agent-{}", a.key), sub.clone(), a.description.clone(), content, window, cx),
-                    None => content.into_any_element(),
+            if !lines.finished.is_empty() || !lines.older.is_empty() {
+                let rows: Vec<AnyElement> = lines.finished.iter().map(|s| sub_row(s, None, window, cx)).collect();
+                let count = (lines.finished.len() + lines.older.len()).to_string();
+                let mut group = section(web_with("atividade_grupo_terminados", "n", count), None).children(rows);
+                if !lines.older.is_empty() {
+                    let open = self.older_open;
+                    let label = web_with("atividade_grupo_antigos", "n", lines.older.len().to_string());
+                    group = group.child(toggle_row("act-older", label.clone()).gap_1().py(px(4.))
+                        .child(chevron(open))
+                        .child(chrome::section_label(label))
+                        .on_click(cx.listener(|this, _, _, cx| { this.older_open = !this.older_open; cx.notify(); })));
+                    if open { group = group.children(lines.older.iter().map(|s| sub_row(s, None, window, cx))); }
                 }
-            }).collect();
-            rows.extend(lines.running.iter().map(|s| sub_row(s, window, cx)));
-            // Os sem notícia (`done` na seção Rodando) aparecem aqui, mas não contam como rodando.
-            let count = (lines.agents.len() + lines.running.iter().filter(|s| !s.done).count()).to_string();
-            body = body.child(section(web_with("atividade_grupo_rodando", "n", count), None).children(rows));
-        }
-        if !desktop && (!lines.finished.is_empty() || !lines.older.is_empty()) {
-            let rows: Vec<AnyElement> = lines.finished.iter().map(|s| sub_row(s, window, cx)).collect();
-            let count = (lines.finished.len() + lines.older.len()).to_string();
-            let mut group = section(web_with("atividade_grupo_terminados", "n", count), None).children(rows);
-            if !lines.older.is_empty() {
-                let open = self.older_open;
-                let label = web_with("atividade_grupo_antigos", "n", lines.older.len().to_string());
-                group = group.child(div().id("act-older").flex().items_center().gap_1().mx(px(-8.)).px(px(8.)).py(px(4.)).rounded(px(8.))
-                    .cursor_pointer().hover(|el| el.bg(theme::hover())).role(Role::Button).aria_label(label.clone())
-                    .child(chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 14., theme::faint()))
-                    .child(chrome::section_label(label))
-                    .on_click(cx.listener(|this, _, _, cx| { this.older_open = !this.older_open; cx.notify(); })));
-                if open { group = group.children(lines.older.iter().map(|s| sub_row(s, window, cx))); }
+                body = body.child(group);
             }
-            body = body.child(group);
-        }
-        if !lines.uncertain.is_empty() {
-            body = body.child(section(web("atividade_subagentes"), None)
-                .children(lines.uncertain.iter().map(|sub| sub_row(sub, window, cx))));
-        }
-        if !desktop && !lines.shells.is_empty() {
-            body = body.child(section(web("atividade_shells"), Some(lines.shells.len()))
-                .children(lines.shells.iter().map(|s| shell_row("act-shell", s))));
+            body = body.children(uncertain);
+            if !lines.shells.is_empty() {
+                body = body.child(section(web("atividade_shells"), Some(lines.shells.len()))
+                    .children(lines.shells.iter().map(|s| shell_row("act-shell", s, self.stop_control(s.task.as_deref(), &format!("shell-{}", s.key), &s.label, cx)))));
+            }
+            if let Some(note) = &self.stop_note { body = body.child(warning_line(note.clone())); }
         }
         if !lines.processes.is_empty() {
             body = body.child(section(web("atividade_processos"), Some(lines.processes.len()))
-                .children(lines.processes.iter().map(|p| shell_row("act-proc", p))));
+                .children(lines.processes.iter().map(|p| shell_row("act-proc", p, None))));
         }
         body = body.when_some(commands, |body, commands| body.child(commands));
         if !lines.tasks.is_empty() {
@@ -1127,6 +1144,20 @@ impl Render for ActivityPanel {
         }
         div().id("activity-scroll").size_full().overflow_y_scroll().track_scroll(&self.scroll).child(body).into_any_element()
     }
+}
+
+/// Subagente lido do disco: título, etiqueta e o que faz agora, e o ■ quando roda; o clique abre a conversa dele.
+fn sub_row(s: &OrphanLine, stop: Option<AnyElement>, window: &mut Window, cx: &mut Context<ActivityPanel>) -> AnyElement {
+    let content = div().flex().flex_col().gap(px(3.)).when(s.done && !s.failed, |el| el.opacity(0.6))
+        .child(div().flex().items_center().gap_1().min_w_0()
+            .child(div().min_w_0().truncate().text_sm().text_color(theme::text()).child(s.title.clone()))
+            .when_some(s.tag.clone(), |el, t| el.child(tag(t, false))))
+        .child(if s.failed { warning_text(s.now.clone()) } else { now_text(s.now.clone()) });
+    let content = match stop {
+        Some(stop) => div().flex().items_start().gap_2().child(content.flex_1().min_w_0()).child(stop),
+        None => content,
+    };
+    openable(format!("act-orphan-{}", s.key), s.key.clone(), s.title.clone(), content, window, cx)
 }
 
 fn warning_line(text: String) -> AnyElement {
@@ -2045,7 +2076,9 @@ mod tests {
             let key = super::SessionKey { server: "server-b".into(), name: "session".into(), jsonl: "thread-1".into() };
             panel.key = Some(key.clone());
             panel.stopping.insert("bg1".into());
-            let refused = super::Failure { status: Some(409), code: Some("erro_parar_plugin_antigo".into()), ..super::Failure::local("x") };
+            // O `detail` chega já traduzido pelo `failure_detail` da API.
+            let refused = super::Failure { status: Some(409), code: Some("erro_parar_plugin_antigo".into()),
+                ..super::Failure::local(super::web("erro_parar_plugin_antigo")) };
             panel.receive_task_stopped(&key, "bg1", Err(refused), cx);
             assert!(panel.stopping.is_empty());
             assert_eq!(panel.stop_note, Some(super::web("erro_parar_plugin_antigo")));
@@ -2061,6 +2094,31 @@ mod tests {
             assert!(panel.stopping.is_empty());
             assert_eq!(panel.stop_note, Some(super::web("atividade_parar_sem_confirmacao")));
         });
+    }
+
+    /// Fora do Claude Desktop o ■ e o "Parando…" ficam nas linhas de sempre (os testes rodam no Clássico).
+    #[gpui::test]
+    fn classic_rows_offer_the_stop_control(cx: &mut gpui::TestAppContext) {
+        crate::i18n::english_in_this_thread(false);
+        cx.update(gpui_kit::init);
+        let (panel, cx) = cx.add_window_view(|window, cx| { window.retain_a11y_tree(true); super::ActivityPanel::new(cx) });
+        panel.update(cx, |panel, cx| {
+            panel.claude = true;
+            panel.activity.shells = vec![crate::conversation::ShellRun { id: "s2".into(), command: "sleep 99".into(), label: "sleep 99".into(),
+                description: None, ts: None, running: true, task_id: Some("bg2".into()) }];
+            panel.prepare();
+            cx.notify();
+        });
+        let snapshot = |cx: &mut gpui::VisualTestContext| {
+            cx.run_until_parked();
+            cx.update(|window, cx| { let _ = window.draw(cx); window.a11y_snapshot(None).unwrap() })
+        };
+        let stop = format!("{}: sleep 99", super::web("atividade_desktop_parar"));
+        let shown = snapshot(cx);
+        assert!(shown.contains(&stop), "{shown}");
+        panel.update(cx, |panel, cx| { panel.stopping.insert("bg2".into()); cx.notify(); });
+        let shown = snapshot(cx);
+        assert!(!shown.contains(&stop) && shown.contains(&super::web("atividade_parando")), "{shown}");
     }
 
     #[test]

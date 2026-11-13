@@ -3,10 +3,7 @@
 //! própria: a chegada de uma resposta igual não pede quadro, e uma diferente só remede as linhas que mudaram.
 use super::*;
 
-fn chips() -> bool { appearance::get().tool_look == appearance::ToolLook::Chips }
-fn tree() -> bool { appearance::get().tool_look == appearance::ToolLook::Tree }
 fn terminal() -> bool { appearance::get().tool_look == appearance::ToolLook::Terminal }
-fn desktop() -> bool { appearance::get().tool_look == appearance::ToolLook::ClaudeDesktop }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Tone { Muted, Accent, Warning }
@@ -266,9 +263,14 @@ impl SubConversation {
 
     fn render_tool(&mut self, tool: &ToolRow, cx: &mut Context<Self>) -> AnyElement {
         // Nos Chips, a conversa do subagente segue o desenho da principal, como o `MessageList` do detalhe no web.
-        if chips() && !tool.orphan { return super::rows::chip_box().child(self.render_chip(tool, cx)).into_any_element(); }
-        if terminal() && !tool.orphan { return self.render_terminal_tool(tool, cx); }
-        if desktop() && !tool.orphan { return super::rows::chip_box().child(self.render_desktop_call(tool, cx)).into_any_element(); }
+        if !tool.orphan {
+            match appearance::get().tool_look {
+                appearance::ToolLook::Chips => return super::rows::chip_box().child(self.render_chip(tool, cx)).into_any_element(),
+                appearance::ToolLook::Terminal => return self.render_terminal_tool(tool, cx),
+                appearance::ToolLook::ClaudeDesktop => return super::rows::chip_box().child(self.render_desktop_call(tool, cx)).into_any_element(),
+                appearance::ToolLook::Classic | appearance::ToolLook::Tree => {}
+            }
+        }
         let error = tool.tone == Tone::Warning;
         let header = self.header(&tool.key, cx)
             .accessibility_label(format!("{}: {}. {}", tool.name, tool.summary, tool.status))
@@ -286,22 +288,21 @@ impl SubConversation {
         let key = tool.key.clone();
         let line = super::desktop_look::call_button(format!("sub-desktop-{}", tool.key), &self.events[tool.call], tool.tone == Tone::Warning, open, cx)
             .on_click(cx.listener(move |this, _, _, cx| this.toggle(key.clone(), cx)));
-        let body = open.then(|| self.tool_body(tool, cx).px(px(12.)));
-        div().flex().flex_col().child(line).children(body).into_any_element()
+        let body = open.then(|| self.tool_body(tool, cx));
+        super::desktop_look::call_block(line, body)
     }
 
     /// Grupo no estilo Claude Desktop, como `Hangar::render_desktop_group`: a linha do resumo e, aberto, o cartão.
     fn render_desktop_group(&mut self, id: &str, tools: &[ToolRow], cx: &mut Context<Self>) -> AnyElement {
-        let calls: Vec<Tool> = tools.iter().map(|t| Tool { call: t.call, result: t.result }).collect();
-        let running: HashSet<usize> = tools.iter().filter(|t| t.result.is_none() && t.tone == Tone::Accent).map(|t| t.call).collect();
-        let summary = super::desktop_look::desktop_summary(&self.events, &calls, |t| running.contains(&t.call));
+        let events = &self.events;
+        let summary = super::desktop_look::desktop_summary(tools.iter().map(|t| (&events[t.call],
+            t.result.is_some_and(|i| events[i].is_error == Some(true)), t.result.is_none() && t.tone == Tone::Accent)));
         let open = self.expanded.contains(id);
         let toggle = id.to_owned();
         let header = super::desktop_look::summary_button(format!("sub-desktop-{id}"), summary, open, cx)
             .on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle.clone(), cx)));
         let rows: Vec<AnyElement> = if open { tools.iter().map(|t| self.render_desktop_call(t, cx)).collect() } else { Vec::new() };
-        div().flex().flex_col().gap_1().child(div().flex().min_w_0().child(header))
-            .when(open, |el| el.child(super::rows::chip_table(rows))).into_any_element()
+        super::desktop_look::group_block(header, open, rows)
     }
 
     /// Uma chamada nos Chips: a linha da tabela e, aberta, a entrada e o resultado.
@@ -356,8 +357,7 @@ impl SubConversation {
             Some(_) if has_diff && !error => body,
             Some(i) => {
                 let output = self.events[i].result.clone().unwrap_or_default();
-                let code = desktop().then(|| super::desktop_look::exit_code(&output)).flatten();
-                body.when_some(code, |el, code| el.child(super::desktop_look::exit_code_line(code)))
+                body.children(super::desktop_look::exit_code_line(&output))
                     .child(self.detail(format!("{}:result", tool.key), output, tr("tool_output"), error, cx))
             }
             None => body.child(div().text_sm().text_color(theme::muted()).child(tool.status.clone())),
@@ -480,42 +480,44 @@ impl SubConversation {
                     .into_any_element()
             }
             Row::Tool(tool) => self.render_tool(&tool, cx),
-            // A conversa do subagente é lida depois: o grupo da Árvore abre só no clique.
-            Row::Group { id, tools, .. } if tree() => {
-                let calls: Vec<Tool> = tools.iter().map(|t| Tool { call: t.call, result: t.result }).collect();
-                let thinking = |t: &ToolRow| self.events[t.call].kind == "thinking";
-                let failed = tools.iter().filter(|t| !thinking(t) && t.tone == Tone::Warning).count();
-                let running = tools.iter().any(|t| !thinking(t) && t.result.is_none() && t.tone == Tone::Accent);
-                let running = running.then(|| div().flex_shrink_0().text_color(theme::faint()).child(tr("chip_running")).into_any_element());
-                let header = super::rows::tree_header(self.header(&id, cx), super::rows::tree_title(&self.events, &calls), failed, running, None);
-                let lines: Vec<AnyElement> = if self.expanded.contains(&id) {
-                    tools.iter().enumerate().map(|(n, t)| self.render_tree_part(t, n + 1 == tools.len(), cx)).collect()
-                } else { Vec::new() };
-                div().flex().flex_col().child(header).children(lines).into_any_element()
-            }
-            Row::Group { tools, .. } if terminal() => self.render_terminal_group(&tools, cx),
-            Row::Group { id, tools, .. } if desktop() => self.render_desktop_group(&id, &tools, cx),
-            Row::Group { id, tools, .. } if chips() => {
-                let open = super::rows::chip_group_open(tools.len(), self.expanded.contains(&id));
-                let calls: Vec<Tool> = tools.iter().map(|t| Tool { call: t.call, result: t.result }).collect();
-                let running = tools.iter().any(|t| t.result.is_none() && t.tone == Tone::Accent);
-                let toggle = id.clone();
-                let button = Button::new(SharedString::from(format!("sub-toggle-{id}"))).ghost().small().w_full().toggled(open)
-                    .icon(if open { IconName::ChevronDown } else { IconName::ChevronRight });
-                let header = super::rows::chip_group_header(button, &self.events, &calls, running, |_| false)
-                    .on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle.clone(), cx)));
-                let rows: Vec<AnyElement> = if open { tools.iter().map(|t| self.render_chip(t, cx)).collect() } else { Vec::new() };
-                div().flex().flex_col().gap_1().child(header).when(open, |el| el.child(super::rows::chip_table(rows))).into_any_element()
-            }
-            Row::Group { id, label, summary, status, tone, tools } => {
-                let open = self.expanded.contains(&id);
-                let header = self.header(&id, cx).accessibility_label(format!("{label}: {summary}. {status}"))
-                    .child(div().flex_shrink_0().font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(label))
-                    .child(div().flex_1().min_w_0().truncate().text_color(theme::muted()).child(summary))
-                    .child(div().flex_shrink_0().text_color(tone.color()).child(status));
-                let children: Vec<AnyElement> = if open { tools.iter().map(|t| self.render_tool(t, cx)).collect() } else { Vec::new() };
-                div().flex().flex_col().child(header).when(open, |el| el.child(div().flex().flex_col().pl_5().children(children))).into_any_element()
-            }
+            Row::Group { id, label, summary, status, tone, tools } => match appearance::get().tool_look {
+                // A conversa do subagente é lida depois: o grupo da Árvore abre só no clique.
+                appearance::ToolLook::Tree => {
+                    let calls: Vec<Tool> = tools.iter().map(|t| Tool { call: t.call, result: t.result }).collect();
+                    let thinking = |t: &ToolRow| self.events[t.call].kind == "thinking";
+                    let failed = tools.iter().filter(|t| !thinking(t) && t.tone == Tone::Warning).count();
+                    let running = tools.iter().any(|t| !thinking(t) && t.result.is_none() && t.tone == Tone::Accent);
+                    let running = running.then(|| div().flex_shrink_0().text_color(theme::faint()).child(tr("chip_running")).into_any_element());
+                    let header = super::rows::tree_header(self.header(&id, cx), super::rows::tree_title(&self.events, &calls), failed, running, None);
+                    let lines: Vec<AnyElement> = if self.expanded.contains(&id) {
+                        tools.iter().enumerate().map(|(n, t)| self.render_tree_part(t, n + 1 == tools.len(), cx)).collect()
+                    } else { Vec::new() };
+                    div().flex().flex_col().child(header).children(lines).into_any_element()
+                }
+                appearance::ToolLook::Terminal => self.render_terminal_group(&tools, cx),
+                appearance::ToolLook::ClaudeDesktop => self.render_desktop_group(&id, &tools, cx),
+                appearance::ToolLook::Chips => {
+                    let open = super::rows::chip_group_open(tools.len(), self.expanded.contains(&id));
+                    let calls: Vec<Tool> = tools.iter().map(|t| Tool { call: t.call, result: t.result }).collect();
+                    let running = tools.iter().any(|t| t.result.is_none() && t.tone == Tone::Accent);
+                    let toggle = id.clone();
+                    let button = Button::new(SharedString::from(format!("sub-toggle-{id}"))).ghost().small().w_full().toggled(open)
+                        .icon(if open { IconName::ChevronDown } else { IconName::ChevronRight });
+                    let header = super::rows::chip_group_header(button, &self.events, &calls, running, |_| false)
+                        .on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle.clone(), cx)));
+                    let rows: Vec<AnyElement> = if open { tools.iter().map(|t| self.render_chip(t, cx)).collect() } else { Vec::new() };
+                    div().flex().flex_col().gap_1().child(header).when(open, |el| el.child(super::rows::chip_table(rows))).into_any_element()
+                }
+                appearance::ToolLook::Classic => {
+                    let open = self.expanded.contains(&id);
+                    let header = self.header(&id, cx).accessibility_label(format!("{label}: {summary}. {status}"))
+                        .child(div().flex_shrink_0().font_weight(FontWeight::SEMIBOLD).text_color(theme::text()).child(label))
+                        .child(div().flex_1().min_w_0().truncate().text_color(theme::muted()).child(summary))
+                        .child(div().flex_shrink_0().text_color(tone.color()).child(status));
+                    let children: Vec<AnyElement> = if open { tools.iter().map(|t| self.render_tool(t, cx)).collect() } else { Vec::new() };
+                    div().flex().flex_col().child(header).when(open, |el| el.child(div().flex().flex_col().pl_5().children(children))).into_any_element()
+                }
+            },
             Row::Thinking { id, summary, count, parts } => {
                 let open = self.expanded.contains(&id);
                 let header = self.header(&id, cx).accessibility_label(format!("{}: {summary}", tr("thinking")))
@@ -572,6 +574,24 @@ mod tests {
         let rows = prepare(&events, false, None);
         assert_eq!((tone(&rows, "a"), tone(&rows, "b")), (Some(Tone::Muted), Some(Tone::Accent)));
         assert_eq!(tone(&prepare(&events, true, None), "b"), Some(Tone::Muted));
+    }
+
+    /// O código de saída aparece acima da saída aberta em toda pele (os testes rodam no Clássico).
+    #[gpui::test]
+    fn classic_open_call_shows_the_exit_code(cx: &mut gpui::TestAppContext) {
+        crate::i18n::english_in_this_thread(false);
+        cx.update(gpui_kit::init);
+        let (view, cx) = cx.add_window_view(|window, _| { window.retain_a11y_tree(true); super::SubConversation::new() });
+        view.update(cx, |view, cx| {
+            let mut result = event("tool_result", "r1", None, Some("u1"));
+            (result.is_error, result.result) = (Some(true), Some("Exit code 1\nerro".into()));
+            view.set_events(vec![event("tool_use", "u1", Some("Bash"), Some("u1")), result], true, None, cx);
+            view.expanded.insert("u1".into());
+        });
+        cx.run_until_parked();
+        let shown = cx.update(|window, cx| { let _ = window.draw(cx); window.a11y_snapshot(None).unwrap() });
+        assert!(shown.contains("erro"), "a saída aberta precisa aparecer: {shown}");
+        assert!(shown.contains(&crate::i18n::tr_shared("ferr_desktop_codigo_saida", &[("n", "1")])), "{shown}");
     }
 }
 

@@ -4145,9 +4145,12 @@ impl Hangar {
 
     fn render_tool(&mut self, tool: Tool, row: &str, cx: &mut Context<Self>) -> AnyElement {
         if let Some(card) = self.render_agent_card(tool, cx) { return card; }
-        if appearance::get().tool_look == appearance::ToolLook::Chips { return self.render_single_chip(tool, row, cx); }
-        if appearance::get().tool_look == appearance::ToolLook::Terminal { return self.render_terminal_tool(tool, row, cx); }
-        if appearance::get().tool_look == appearance::ToolLook::ClaudeDesktop { return self.render_desktop_tool(tool, row, cx); }
+        match appearance::get().tool_look {
+            appearance::ToolLook::Chips => return self.render_single_chip(tool, row, cx),
+            appearance::ToolLook::Terminal => return self.render_terminal_tool(tool, row, cx),
+            appearance::ToolLook::ClaudeDesktop => return self.render_desktop_tool(tool, row, cx),
+            appearance::ToolLook::Classic | appearance::ToolLook::Tree => {}
+        }
         let call = &self.chat.events[tool.call];
         let key = call.id.clone();
         let name = call.tool_name.clone().unwrap_or_else(|| tr("tool"));
@@ -4200,9 +4203,9 @@ impl Hangar {
             Some(_) if has_diff && !error => body,
             Some(i) => {
                 let result_key = format!("{key}:result");
-                let code = (look == appearance::ToolLook::ClaudeDesktop).then(|| self.chat.events[i].result.as_deref().and_then(desktop_look::exit_code)).flatten();
+                let code = self.chat.events[i].result.as_deref().and_then(desktop_look::exit_code_line);
                 let result = self.prepared_detail(&result_key, || self.chat.events[i].result.clone().unwrap_or_default());
-                body.when_some(code, |el, code| el.child(desktop_look::exit_code_line(code)))
+                body.children(code)
                     .child(self.detail(row, &result_key, result, tr("tool_output"), tr("copy_result"), error, cx))
             }
             None => body.child(div().text_sm().text_color(theme::muted()).child(self.tool_status(tool).0)),
@@ -4300,10 +4303,13 @@ impl Hangar {
     }
 
     fn render_group(&mut self, row: &str, tools: &[Tool], cx: &mut Context<Self>) -> AnyElement {
-        if appearance::get().tool_look == appearance::ToolLook::Chips { return self.render_chip_group(row, tools, cx); }
-        if appearance::get().tool_look == appearance::ToolLook::Tree { return self.render_tree_group(row, tools, cx); }
-        if appearance::get().tool_look == appearance::ToolLook::Terminal { return self.render_terminal_group(row, tools, cx); }
-        if appearance::get().tool_look == appearance::ToolLook::ClaudeDesktop { return self.render_desktop_group(row, tools, cx); }
+        match appearance::get().tool_look {
+            appearance::ToolLook::Chips => return self.render_chip_group(row, tools, cx),
+            appearance::ToolLook::Tree => return self.render_tree_group(row, tools, cx),
+            appearance::ToolLook::Terminal => return self.render_terminal_group(row, tools, cx),
+            appearance::ToolLook::ClaudeDesktop => return self.render_desktop_group(row, tools, cx),
+            appearance::ToolLook::Classic => {}
+        }
         let events = &self.chat.events;
         let names: Vec<String> = tools.iter().map(|t| events[t.call].tool_name.clone().unwrap_or_else(|| tr("tool"))).collect();
         let mut distinct = names.clone();

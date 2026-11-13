@@ -3,75 +3,69 @@
 use super::*;
 use crate::conversation::Family;
 
-/// Família da chamada no resumo: a do modo Chips, com a busca na web e o carregador de ferramentas à parte, e as outras
-/// ferramentas separadas pelo nome.
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum Kind { Run, Read, Edit, Create, Search, Web, Tools, Other(String) }
-
-fn kind(name: Option<&str>) -> Kind {
-    match name {
-        Some("WebSearch" | "WebFetch") => Kind::Web,
-        Some("ToolSearch") => Kind::Tools,
+/// Família da chamada: a raiz das chaves (`ferr_desktop_<raiz>` no resumo, `ferr_desktop_linha_<raiz>` na linha) e, nas
+/// outras ferramentas, o nome, que separa uma da outra. É a do modo Chips, com a web e o carregador de ferramentas à parte.
+fn family(name: Option<&str>) -> (&'static str, String) {
+    let root = match name {
+        Some("WebSearch" | "WebFetch") => "web",
+        Some("ToolSearch") => "ferramentas",
         _ => match conversation::family(name) {
-            Family::Run => Kind::Run, Family::Read => Kind::Read, Family::Edit => Kind::Edit,
-            Family::Create => Kind::Create, Family::Search => Kind::Search,
-            Family::Other => Kind::Other(name.map(conversation::tool_display_name).unwrap_or_else(|| tr("tool"))),
+            Family::Run => "rodou", Family::Read => "leu", Family::Edit => "editou", Family::Create => "criou", Family::Search => "buscou",
+            Family::Other => return ("outra", name.map(conversation::tool_display_name).unwrap_or_else(|| tr("tool"))),
         },
-    }
-}
-
-/// Raiz das chaves da família: `ferr_desktop_<raiz>` no resumo, `ferr_desktop_linha_<raiz>` na linha da chamada.
-fn root(kind: &Kind) -> &'static str {
-    match kind {
-        Kind::Run => "rodou", Kind::Read => "leu", Kind::Edit => "editou", Kind::Create => "criou",
-        Kind::Search => "buscou", Kind::Web => "web", Kind::Tools => "ferramentas", Kind::Other(_) => "outra",
-    }
-}
-
-fn words(key: &str, params: &[(&str, &str)]) -> String { crate::i18n::tr_shared(key, params) }
-
-/// Plural pela chave `<key>_1` / `<key>`, com `{n}` e `{nome}`.
-fn counted(key: &str, n: usize, name: &str) -> String {
-    let n_text = n.to_string();
-    let params = [("n", n_text.as_str()), ("nome", name)];
-    if n == 1 { words(&format!("{key}_1"), &params) } else { words(key, &params) }
+    };
+    (root, String::new())
 }
 
 /// Resumo do grupo: uma frase por família, na ordem em que cada uma aparece, as falhas na frase da família e as que
-/// ainda rodam no fim ("Executou 4 comandos (2 falhas)", "Carregou ferramentas, Pesquisou na web 1 vez").
-pub(super) fn desktop_summary(events: &[ChatEvent], tools: &[Tool], running: impl Fn(&Tool) -> bool) -> String {
-    let mut families: Vec<(Kind, usize, usize)> = Vec::new();
-    for tool in tools {
-        let kind = kind(events[tool.call].tool_name.as_deref());
-        let failed = usize::from(tool.result.is_some_and(|i| events[i].is_error == Some(true)));
-        match families.iter_mut().find(|(k, ..)| *k == kind) {
+/// ainda rodam no fim ("Executou 4 comandos (2 falhas)", "Carregou ferramentas, Pesquisou na web 1 vez"). Cada chamada
+/// vem como (chamada, falhou, rodando).
+pub(super) fn desktop_summary<'a>(calls: impl IntoIterator<Item = (&'a ChatEvent, bool, bool)>) -> String {
+    let mut families: Vec<((&'static str, String), usize, usize)> = Vec::new();
+    let mut live = 0;
+    for (call, failed, running) in calls {
+        let key = family(call.tool_name.as_deref());
+        let failed = usize::from(failed);
+        live += usize::from(running);
+        match families.iter_mut().find(|(k, ..)| *k == key) {
             Some((_, n, f)) => { *n += 1; *f += failed; }
-            None => families.push((kind, 1, failed)),
+            None => families.push((key, 1, failed)),
         }
     }
-    let mut parts: Vec<String> = families.iter().map(|(kind, n, failed)| {
-        let key = format!("ferr_desktop_{}", root(kind));
-        let name = match kind { Kind::Other(name) => name.as_str(), _ => "" };
-        let mut phrase = if *kind == Kind::Tools { words(&key, &[]) } else { counted(&key, *n, name) };
-        if *failed > 0 { phrase.push(' '); phrase.push_str(&counted("ferr_desktop_falhas", *failed, "")); }
+    let mut parts: Vec<String> = families.iter().map(|((root, name), n, failed)| {
+        let key = format!("ferr_desktop_{root}");
+        let mut phrase = if *root == "ferramentas" { crate::i18n::tr_shared(&key, &[]) }
+            else { super::terminal_look::count_with(&format!("{key}_1"), &key, *n, &[("nome", name.as_str())]) };
+        if *failed > 0 { phrase.push(' '); phrase.push_str(&super::terminal_look::count_with("ferr_desktop_falhas_1", "ferr_desktop_falhas", *failed, &[])); }
         phrase
     }).collect();
-    let live = tools.iter().filter(|t| running(t)).count();
-    if live > 0 { parts.push(words("ferr_desktop_executando", &[("n", &live.to_string())])); }
+    if live > 0 { parts.push(crate::i18n::tr_shared("ferr_desktop_executando", &[("n", &live.to_string())])); }
     parts.join(", ")
 }
 
 /// `Exit code N` na primeira linha não vazia do resultado, como o Claude Code escreve a saída de um comando que falhou.
-pub(super) fn exit_code(output: &str) -> Option<i32> {
+fn exit_code(output: &str) -> Option<i32> {
     let number = output.lines().map(str::trim).find(|l| !l.is_empty())?.strip_prefix("Exit code ")?;
-    let digits = number.strip_prefix('-').unwrap_or(number);
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) { return None; }
-    number.parse().ok()
+    // O `parse` aceita "+1"; o Claude Code nunca escreve o sinal.
+    number.parse().ok().filter(|_| !number.starts_with('+'))
 }
 
-/// "Código de saída N" acima da saída aberta.
-pub(super) fn exit_code_line(code: i32) -> Div {
-    div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::warning()).child(words("ferr_desktop_codigo_saida", &[("n", &code.to_string())]))
+/// "Código de saída N" acima da saída aberta, em toda pele; saída sem o código, nada.
+pub(super) fn exit_code_line(output: &str) -> Option<Div> {
+    let code = exit_code(output)?;
+    Some(div().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(theme::warning())
+        .child(crate::i18n::tr_shared("ferr_desktop_codigo_saida", &[("n", &code.to_string())])))
+}
+
+/// O grupo: a linha do resumo e, aberto, o cartão com uma linha por chamada.
+pub(super) fn group_block(header: Button, open: bool, rows: Vec<AnyElement>) -> AnyElement {
+    div().flex().flex_col().gap_1().child(div().flex().min_w_0().child(header))
+        .when(open, |el| el.child(super::rows::chip_table(rows))).into_any_element()
+}
+
+/// Uma chamada do cartão: a linha e, aberta, o corpo.
+pub(super) fn call_block(line: Button, body: Option<Div>) -> AnyElement {
+    div().flex().flex_col().child(line).children(body.map(|body| body.px(px(12.)))).into_any_element()
 }
 
 fn chevron(open: bool) -> Icon { chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 13., theme::faint()) }
@@ -88,9 +82,9 @@ pub(super) fn summary_button(id: String, summary: String, open: bool, cx: &App) 
 
 /// Uma chamada no cartão: verbo cinza, alvo, "Falhou" e o chevron logo depois. Quem chama liga o clique.
 pub(super) fn call_button(id: String, call: &ChatEvent, failed: bool, open: bool, cx: &App) -> Button {
-    let kind = kind(call.tool_name.as_deref());
-    let verb = words(&format!("ferr_desktop_linha_{}", root(&kind)), &[]);
-    let target = match &kind { Kind::Other(name) => name.clone(), _ => super::rows::chip_text(call) };
+    let (root, name) = family(call.tool_name.as_deref());
+    let verb = crate::i18n::tr_shared(&format!("ferr_desktop_linha_{root}"), &[]);
+    let target = if root == "outra" { name } else { super::rows::chip_text(call) };
     let failed = failed.then(|| super::activity::web("formato_tool_falhou"));
     Button::new(SharedString::from(id))
         .custom(ButtonCustomVariant::new(cx).color(transparent_black()).foreground(theme::text()).hover(theme::hover()).active(theme::hover()))
@@ -108,14 +102,15 @@ impl Hangar {
     /// Grupo no estilo Claude Desktop: a linha do resumo e, aberto, o cartão. Nasce fechado: a chave ausente do
     /// `expanded` é o fechado.
     pub(super) fn render_desktop_group(&mut self, row: &str, tools: &[Tool], cx: &mut Context<Self>) -> AnyElement {
-        let summary = desktop_summary(&self.chat.events, tools, |t| t.result.is_none() && self.running(t.call));
+        let events = &self.chat.events;
+        let summary = desktop_summary(tools.iter().map(|t| (&events[t.call], t.result.is_some_and(|i| events[i].is_error == Some(true)),
+            t.result.is_none() && self.running(t.call))));
         let open = self.expanded.contains(row);
         let toggle_key = row.to_owned();
         let header = summary_button(format!("desktop-{row}"), summary, open, cx)
             .on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle_key.clone(), cx)));
         let rows: Vec<AnyElement> = if open { tools.iter().map(|&tool| self.render_desktop_call(tool, row, cx)).collect() } else { Vec::new() };
-        div().flex().flex_col().gap_1().child(div().flex().min_w_0().child(header))
-            .when(open, |el| el.child(super::rows::chip_table(rows))).into_any_element()
+        group_block(header, open, rows)
     }
 
     /// Chamada solta (dentro do pensamento): a mesma linha, num cartão de uma linha.
@@ -133,8 +128,8 @@ impl Hangar {
         let toggle_key = key.clone();
         let line = call_button(format!("desktop-{key}"), call, failed, open, cx)
             .on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle_key.clone(), cx)));
-        let body = open.then(|| self.tool_body(tool, row, cx).px(px(12.)));
-        div().flex().flex_col().child(line).children(body).into_any_element()
+        let body = open.then(|| self.tool_body(tool, row, cx));
+        call_block(line, body)
     }
 }
 
@@ -162,7 +157,7 @@ mod tests {
             let done = outcome.map(|error| { events.push(result(&id, error)); events.len() - 1 });
             tools.push(Tool { call: at, result: done });
         }
-        desktop_summary(&events, &tools, |t| t.result.is_none())
+        desktop_summary(tools.iter().map(|t| (&events[t.call], t.result.is_some_and(|i| events[i].is_error == Some(true)), t.result.is_none())))
     }
 
     #[test]
