@@ -390,6 +390,9 @@ async fn undo(st: &Arc<AppState>, run_id: &str, project: Option<&str>) -> Respon
                         None => state.cursors.remove(key),
                     };
                 }
+                for record in &restored {
+                    state.projects.entry(record.project.clone()).or_default().last_dream_at = record.last_dream_before;
+                }
                 if let Err(e) = state.save(&Paths::of(st).state()) {
                     return failure(&format!("dream_io: {e}"));
                 }

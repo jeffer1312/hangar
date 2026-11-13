@@ -58,6 +58,9 @@ pub struct RunRecord {
     /// próximo sonho não relê o que foi desfeito.
     #[serde(default)]
     pub cursors_before: BTreeMap<String, Option<usize>>,
+    /// O último sonho do projeto antes desta rodada: o inventário só pega conversa mexida depois dele.
+    #[serde(default)]
+    pub last_dream_before: Option<DateTime<Utc>>,
 }
 
 /// Solta a marca de rodada em andamento mesmo se a tarefa cair no meio.
@@ -380,7 +383,15 @@ async fn dream_one(ctx: &Ctx<'_>, state: &mut State, pid: &str, ps: &ProjectStat
     }
     let cost = spent.key_usd + spent.account_usd;
     let cursors_before = picked.iter().map(|i| (pieces[*i].cursor_key.clone(), state.cursors.get(&pieces[*i].cursor_key).copied())).collect();
-    let record = RunRecord { run_id: ctx.run_id.into(), project: pid.into(), at: ctx.now, cost_usd: cost, places: changes, cursors_before };
+    let record = RunRecord {
+        run_id: ctx.run_id.into(),
+        project: pid.into(),
+        at: ctx.now,
+        cost_usd: cost,
+        places: changes,
+        cursors_before,
+        last_dream_before: ps.last_dream_at,
+    };
     save_record(ctx.paths, &record)?;
 
     // Nenhuma pasta gravada: o que foi lido volta na próxima noite.
