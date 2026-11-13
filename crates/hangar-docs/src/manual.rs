@@ -1,5 +1,5 @@
 //! O manual: `docs/manual/<id>.md`, agrupados nas abas fixas, lido de uma vez.
-use crate::{frontmatter, history, is_note_file, platforms, valid_article_id};
+use crate::{at, frontmatter, history, is_note_file, platforms, valid_article_id};
 use serde_json::{Value, json};
 use std::io;
 use std::path::Path;
@@ -20,18 +20,18 @@ struct Article {
     body: String,
 }
 
-/// Sem título, com categoria ou `onde` desconhecidos, o artigo fica fora.
-fn parse(id: &str, text: &str) -> Option<Article> {
+/// Sem título, com categoria ou `onde` desconhecidos, o artigo fica fora; o `Err` diz o motivo.
+fn parse(id: &str, text: &str) -> Result<Article, &'static str> {
     // Editor do Windows salva com BOM, e com ele o `---` da primeira linha não casa.
     let (f, body) = frontmatter(text.strip_prefix('\u{feff}').unwrap_or(text));
     let opt = |k: &str| f.get(k).filter(|v| !v.is_empty()).cloned();
-    Some(Article {
+    Ok(Article {
         id: id.to_owned(),
-        title: opt("titulo")?,
-        category: CATEGORIES.iter().position(|c| f.get("categoria").is_some_and(|v| v == c))?,
+        title: opt("titulo").ok_or("sem titulo")?,
+        category: CATEGORIES.iter().position(|c| f.get("categoria").is_some_and(|v| v == c)).ok_or("categoria invalida")?,
         summary: opt("resumo").unwrap_or_default(),
         icon: opt("icone"),
-        platforms: platforms(f.get("onde"))?,
+        platforms: platforms(f.get("onde")).ok_or("onde invalido")?,
         // Sem `ordem` legível, vai para o fim da aba.
         order: f.get("ordem").and_then(|o| o.parse().ok()).unwrap_or(i64::MAX),
         anchor: opt("ancora"),
@@ -47,13 +47,18 @@ fn parse(id: &str, text: &str) -> Option<Article> {
 /// `docs/manual` ou `docs/novidades` ausente (raiz errada) ou falha ao listar ou ler um arquivo.
 pub fn manual(root: &Path, os: &str) -> io::Result<Value> {
     let mut articles = Vec::new();
-    for entry in std::fs::read_dir(root.join("docs").join("manual"))? {
-        let entry = entry?;
-        if !entry.file_type()?.is_file() { continue; }
+    let dir = root.join("docs").join("manual");
+    for entry in std::fs::read_dir(&dir).map_err(at(&dir))? {
+        let entry = entry.map_err(at(&dir))?;
+        let path = entry.path();
+        if !entry.file_type().map_err(at(&path))?.is_file() { continue; }
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else { continue };
         let id = name.trim_end_matches(".md");
         if !is_note_file(&name) || !valid_article_id(id) { continue; }
-        if let Some(article) = parse(id, &std::fs::read_to_string(entry.path())?) { articles.push(article); }
+        match parse(id, &std::fs::read_to_string(&path).map_err(at(&path))?) {
+            Ok(article) => articles.push(article),
+            Err(reason) => tracing::warn!(file = %path.display(), reason, "artigo do manual fora do formato; fica fora do manual"),
+        }
     }
     articles.sort_by(|a, b| (a.category, a.order, &a.id).cmp(&(b.category, b.order, &b.id)));
     let news = history(root, os)?;

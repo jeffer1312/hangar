@@ -110,7 +110,10 @@ pub(super) fn for_desktop(platforms: &str) -> bool { matches!(platforms, "deskto
 fn parse_news(value: Value) -> Result<Vec<NewsItem>, String> {
     #[derive(Deserialize)]
     struct Wire { news: Vec<NewsItem> }
-    let Wire { mut news } = serde_json::from_value(value).map_err(|_| tr("invalid_response"))?;
+    let Wire { mut news } = serde_json::from_value(value).map_err(|error| {
+        crate::log_line(&format!("atualizações: resposta das novidades fora do formato: {error}"));
+        tr("invalid_response")
+    })?;
     news.retain(|item| for_desktop(&item.platforms));
     Ok(news)
 }
@@ -118,7 +121,10 @@ fn parse_news(value: Value) -> Result<Vec<NewsItem>, String> {
 fn parse_manual(value: Value) -> Result<Vec<Category>, String> {
     #[derive(Deserialize)]
     struct Wire { categories: Vec<Category> }
-    let Wire { mut categories } = serde_json::from_value(value).map_err(|_| tr("invalid_response"))?;
+    let Wire { mut categories } = serde_json::from_value(value).map_err(|error| {
+        crate::log_line(&format!("manual: resposta do manual fora do formato: {error}"));
+        tr("invalid_response")
+    })?;
     for category in &mut categories { category.articles.retain(|article| for_desktop(&article.platforms)); }
     categories.retain(|category| !category.articles.is_empty());
     Ok(categories)

@@ -26,18 +26,19 @@ export function UpdatesManualAnimation({ width }: { width: number }) {
   const c = useSettingsColors();
   const md = useMemo(() => mkMarkdownStyle(theme), [theme]);
   const stage = useRef<View>(null);
-  const window = useWindowDimensions();
+  const screen = useWindowDimensions();
   const [visible, setVisible] = useState(false);
   const focused = useIsFocused();
   const [active, setActive] = useState(AppState.currentState === 'active');
   useEffect(() => { const sub = AppState.addEventListener('change', (state) => setActive(state === 'active')); return () => sub.remove(); }, []);
   useEffect(() => {
-    if (!focused || !active) return;
-    const check = () => stage.current?.measureInWindow((_x, y, _w, height) => setVisible(height > 0 && y < window.height && y + height > 0));
+    // Movimento reduzido deixa a animação parada de todo jeito: não há o que medir.
+    if (!focused || !active || reduced) return;
+    const check = () => stage.current?.measureInWindow((_x, y, _w, height) => setVisible(height > 0 && y < screen.height && y + height > 0));
     check();
     const timer = setInterval(check, 500);
     return () => clearInterval(timer);
-  }, [focused, active, window.height]);
+  }, [focused, active, reduced, screen.height]);
   // Parada: a lista por dia com a novidade ainda não vista.
   const still = reduced || !active || !focused || !visible;
   const page = useScriptStep(STEPS, CYCLE, 0, still) >= 2.6;

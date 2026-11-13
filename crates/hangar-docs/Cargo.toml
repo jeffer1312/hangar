@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 chrono = { workspace = true }
 serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
+tracing = { workspace = true }
 # Tirar acento do título da seção do manual; mesma versão do hangar-server.
 unicode-normalization = "=0.1.25"
 

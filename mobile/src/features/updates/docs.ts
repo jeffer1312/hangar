@@ -29,14 +29,20 @@ function readManualDisk(serverId: string): Manual | undefined {
 }
 
 function cached<T>(kind: Kind, serverId: string): T | undefined {
-  const hit = memory[kind].get(serverId) ?? (kind === 'manual' ? readManualDisk(serverId) : undefined);
-  return hit as T | undefined;
+  const hit = memory[kind].get(serverId);
+  if (hit || kind === 'news') return hit as T | undefined;
+  const disk = readManualDisk(serverId);
+  if (disk) memory.manual.set(serverId, disk);
+  return disk as T | undefined;
 }
 
 function store(kind: Kind, serverId: string, data: NewsHistory | Manual) {
   if (kind === 'news') { memory.news.set(serverId, data as NewsHistory); return; }
   memory.manual.set(serverId, data as Manual);
-  try { prefs.set(manualKey(serverId), JSON.stringify(data)); } catch { /* só não abre sem rede */ }
+  try {
+    const json = JSON.stringify(data);
+    if (prefs.getString(manualKey(serverId)) !== json) prefs.set(manualKey(serverId), json);
+  } catch { /* só não abre sem rede */ }
 }
 
 function errorText(e: unknown): string {
@@ -56,16 +62,24 @@ function useDoc<T extends NewsHistory | Manual>(server: Server | null, kind: Kin
   useEffect(() => {
     if (!server) return;
     const hit = cached<T>(kind, server.id);
-    setState(hit ? { status: 'ok', data: hit } : { status: 'loading' });
+    // Mesmo objeto guardado: o estado anterior volta e os useMemo da tela não recalculam.
+    setState((p) => (hit
+      ? (p.status === 'ok' && p.data === hit ? p : { status: 'ok', data: hit })
+      : (p.status === 'loading' ? p : { status: 'loading' })));
     if (hit && !refresh) return;
     let alive = true;
     const load = (kind === 'news' ? getNewsHistory(server) : getManual(server)) as Promise<T | null>;
     load.then((data) => {
       if (!alive) return;
-      if (data === null) { setState({ status: 'outdated' }); return; }
+      // Servidor antigo: como na falha, o guardado na tela continua.
+      if (data === null) { if (!hit) setState({ status: 'outdated' }); return; }
       store(kind, server.id, data);
       setState({ status: 'ok', data });
     }).catch((e: unknown) => {
+      if (hit) {
+        const code = (e as { code?: string } | null)?.code ?? 'docs_refresh_failed';
+        registrarDiag({ evento: 'docs.refresh_failed', nivel: 'aviso', codigo: code, detalhe: `${kind}: ${e instanceof Error ? e.message : String(e)}` });
+      }
       // Com o guardado na tela, a falha da releitura não apaga o que a pessoa está lendo.
       if (alive && !hit) setState({ status: 'error', message: errorText(e) });
     });
@@ -115,7 +129,9 @@ export function useDocsEntry(server: Server | null): { visible: boolean; count: 
       const count = arrived && !seen ? arrived.news.filter((n) => forPhone(n.platforms)).length : 0;
       setProbe({ id: server.id, forbidden: false, count });
     }).catch((e: unknown) => {
-      if (alive) setProbe({ id: server.id, forbidden: (e as { status?: number }).status === 403, count: 0 });
+      const forbidden = (e as { status?: number } | null)?.status === 403;
+      if (!forbidden) registrarDiag({ evento: 'update.arrived_failed', nivel: 'aviso', codigo: 'update_arrived_failed', detalhe: e instanceof Error ? e.message : String(e) });
+      if (alive) setProbe({ id: server.id, forbidden, count: 0 });
     });
     return () => { alive = false; };
   }, [server?.id, server?.baseUrl, server?.token, server?.invite]));

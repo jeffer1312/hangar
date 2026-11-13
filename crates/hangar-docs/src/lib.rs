@@ -9,6 +9,13 @@ pub use manual::{manual, slug};
 pub use news::{date_from_id, has_more, history, history_item, news_item, summary};
 
 use std::collections::HashMap;
+use std::io;
+use std::path::Path;
+
+/// Põe o caminho na frente do erro de E/S: a rota registra só o erro, e sem isto o log não diz qual arquivo falhou.
+fn at(path: &Path) -> impl FnOnce(io::Error) -> io::Error + '_ {
+    move |e| io::Error::new(e.kind(), format!("{}: {e}", path.display()))
+}
 
 /// Espelho do `_frontmatter` de `backend/app/atualizacoes.py`: `chave: valor` entre `---`.
 #[must_use]

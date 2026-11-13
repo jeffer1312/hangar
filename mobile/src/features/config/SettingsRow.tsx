@@ -21,7 +21,7 @@ type Props = {
   /** Peças na linha do título, antes e depois dele (bolinha de não visto, selo). */
   titleBefore?: ReactNode;
   titleAfter?: ReactNode;
-  /** Rótulo do toque quando o título sozinho não diz tudo (o selo fica fora do texto). */
+  /** Rótulo da linha (com ou sem toque) quando o título sozinho não diz tudo (o selo fica fora do texto). */
   accessibilityLabel?: string;
 };
 
@@ -65,7 +65,8 @@ export function SettingsRow({ title, description, icon, onPress, onLongPress, ch
             {head}
           </Pressable>
         ) : (
-          <View style={styles.head}>{head}</View>
+          // Sem toque, o rótulo dado ainda vale: o bloco ícone+título vira um nó só com ele.
+          <View style={styles.head} accessible={accessibilityLabel ? true : undefined} accessibilityLabel={accessibilityLabel}>{head}</View>
         )}
         {right}
       </View>

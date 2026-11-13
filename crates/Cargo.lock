@@ -1757,6 +1757,7 @@ dependencies = [
  "chrono",
  "serde_json",
  "tempfile",
+ "tracing",
  "unicode-normalization",
 ]
 

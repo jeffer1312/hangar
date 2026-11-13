@@ -1,5 +1,5 @@
 //! Novidades: o cartão do aviso da atualização e o histórico completo.
-use crate::{frontmatter, is_note_file, platforms, valid_article_id};
+use crate::{at, frontmatter, is_note_file, platforms, valid_article_id};
 use serde_json::{Value, json};
 use std::io;
 use std::path::Path;
@@ -16,36 +16,52 @@ fn for_system(field: Option<&String>, os: &str) -> Option<bool> {
 /// (novo, melhoria, correção). `os`: o sistema da máquina, nos nomes do `std::env::consts::OS`.
 #[must_use]
 pub fn news_item(id: &str, text: &str, os: &str) -> Option<(u8, Value)> {
+    checked_item(id, text, os).ok().flatten()
+}
+
+/// `Ok(None)`: a novidade é de outro sistema. `Err`: o arquivo está fora do formato, com o motivo.
+fn checked_item(id: &str, text: &str, os: &str) -> Result<Option<(u8, Value)>, &'static str> {
     let (f, body) = frontmatter(text);
-    let title = f.get("titulo").filter(|t| !t.is_empty())?;
-    if !for_system(f.get("sistema"), os)? { return None; }
-    let (rank, kind) = match f.get("tipo").map(String::as_str)? { "novo" => (0, "new"), "melhoria" => (1, "improvement"), "correcao" => (2, "fix"), _ => return None };
-    let platforms = platforms(f.get("onde"))?;
+    let title = f.get("titulo").filter(|t| !t.is_empty()).ok_or("sem titulo")?;
+    if !for_system(f.get("sistema"), os).ok_or("sistema invalido")? { return Ok(None); }
+    let (rank, kind) = match f.get("tipo").map(String::as_str) {
+        Some("novo") => (0, "new"), Some("melhoria") => (1, "improvement"), Some("correcao") => (2, "fix"), _ => return Err("tipo invalido"),
+    };
+    let platforms = platforms(f.get("onde")).ok_or("onde invalido")?;
     let opt = |k: &str| f.get(k).filter(|v| !v.is_empty()).cloned();
     // Correção não ganha animação: não há gesto novo a mostrar.
     let animation = if kind == "fix" { None } else { opt("animacao") };
     let mut item = json!({"id": id, "title": title, "kind": kind, "text": body, "platforms": platforms, "try_it": opt("experimente"), "animation": animation});
     // Ausente sai sem a chave: o JSON de quem não usa o campo continua o de antes.
     if let Some(anchor) = opt("ancora") { item["anchor"] = Value::String(anchor); }
-    Some((rank, item))
+    Ok(Some((rank, item)))
 }
 
 /// O item do histórico: o de `news_item` mais `date`, `summary`, `more` e, quando o artigo
 /// `root/docs/manual/<manual>.md` existe, `manual`. Sem data no nome, fica fora.
 #[must_use]
 pub fn history_item(root: &Path, id: &str, text: &str, os: &str) -> Option<(u8, Value)> {
-    let date = date_from_id(id)?;
-    let (rank, mut item) = news_item(id, text, os)?;
+    history_entry(root, id, text, os).ok().flatten()
+}
+
+/// O `history_item` com o motivo do descarte, como o `checked_item`.
+fn history_entry(root: &Path, id: &str, text: &str, os: &str) -> Result<Option<(u8, Value)>, &'static str> {
+    let date = date_from_id(id).ok_or("sem data no nome")?;
+    let Some((rank, mut item)) = checked_item(id, text, os)? else { return Ok(None) };
     let body = item["text"].as_str().unwrap_or_default().to_owned();
     item["date"] = date.into();
     item["summary"] = summary(&body).into();
     item["more"] = has_more(&body).into();
     let (fields, _) = frontmatter(text);
     let manual = root.join("docs").join("manual");
-    if let Some(article) = fields.get("manual").filter(|m| valid_article_id(m) && manual.join(format!("{m}.md")).is_file()) {
-        item["manual"] = article.as_str().into();
+    if let Some(article) = fields.get("manual").filter(|m| !m.is_empty()) {
+        if valid_article_id(article) && manual.join(format!("{article}.md")).is_file() {
+            item["manual"] = article.as_str().into();
+        } else {
+            tracing::warn!(id, manual = %article, "novidade aponta para artigo do manual inexistente ou de id invalido; fica sem o link");
+        }
     }
-    Some((rank, item))
+    Ok(Some((rank, item)))
 }
 
 /// O primeiro parágrafo do corpo: o texto até a primeira linha em branco.
@@ -79,15 +95,19 @@ pub fn date_from_id(id: &str) -> Option<&str> {
 /// Pasta ausente (raiz errada) ou falha ao listar ou ler um arquivo.
 pub fn history(root: &Path, os: &str) -> io::Result<Vec<Value>> {
     let mut news = Vec::new();
-    for entry in std::fs::read_dir(root.join("docs").join("novidades"))? {
-        let entry = entry?;
-        if !entry.file_type()?.is_file() { continue; }
+    let dir = root.join("docs").join("novidades");
+    for entry in std::fs::read_dir(&dir).map_err(at(&dir))? {
+        let entry = entry.map_err(at(&dir))?;
+        let path = entry.path();
+        if !entry.file_type().map_err(at(&path))?.is_file() { continue; }
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else { continue };
         if !is_note_file(&name) { continue; }
         let id = name.trim_end_matches(".md");
         if date_from_id(id).is_none() { continue; }
-        if let Some((rank, item)) = history_item(root, id, &std::fs::read_to_string(entry.path())?, os) {
-            news.push((item["date"].as_str().unwrap_or_default().to_owned(), rank, id.to_owned(), item));
+        match history_entry(root, id, &std::fs::read_to_string(&path).map_err(at(&path))?, os) {
+            Ok(Some((rank, item))) => news.push((item["date"].as_str().unwrap_or_default().to_owned(), rank, id.to_owned(), item)),
+            Ok(None) => {}
+            Err(reason) => tracing::warn!(file = %path.display(), reason, "novidade fora do formato; fica fora do historico"),
         }
     }
     news.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then_with(|| a.2.cmp(&b.2)));

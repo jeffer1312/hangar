@@ -1,13 +1,12 @@
 import { memo } from 'react';
 import { Text, TextInput, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import * as Lucide from 'lucide-react-native';
 import type { ManualCategoryId, Server, UpdateNewsKind } from '@hangar/core';
 import { useSettingsColors, withAlpha } from '../config/colors';
 import { InfoNotice } from '../config/InfoNotice';
 import { Pill } from '../config/PageHeader';
 import { Notice } from '../machines/parts';
-import { Icon, type IconName } from '../../ui/Icon';
+import { Icon, isIconName, type IconName } from '../../ui/Icon';
 import { useSessions } from '../../stores/sessions';
 import type { DocState } from './docs';
 import * as m from '../../paraglide/messages';
@@ -26,7 +25,7 @@ export const KindPill = memo(function KindPill({ kind }: { kind: UpdateNewsKind 
 /** O artigo traz o nome Lucide em kebab-case; nome que o pacote não tem cai no livro, nunca no ícone de alerta. */
 export function articleIcon(name: string | null): IconName {
   const pascal = (name ?? '').split('-').map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join('');
-  return pascal && pascal in Lucide ? pascal as IconName : 'BookOpen';
+  return isIconName(pascal) ? pascal : 'BookOpen';
 }
 
 export const categoryLabel = (id: ManualCategoryId) => ({
@@ -84,8 +83,9 @@ const styles = StyleSheet.create((theme) => ({
   dot: { width: 8, height: 8, borderRadius: theme.base.radius.full },
   server: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1.5], paddingHorizontal: theme.base.space[1] },
   serverText: { flexShrink: 1, fontSize: theme.base.text.xs },
-  search: { height: 40, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], paddingHorizontal: theme.base.space[2], borderWidth: 1, borderRadius: theme.base.radius.sm },
-  searchInput: { flex: 1, height: 40, fontSize: theme.base.text.sm, padding: 0 },
+  // 44 pt: alvo de toque mínimo do iOS.
+  search: { minHeight: theme.base.space[10] + theme.base.space[1], flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], paddingHorizontal: theme.base.space[2], borderWidth: 1, borderRadius: theme.base.radius.sm },
+  searchInput: { flex: 1, alignSelf: 'stretch', fontSize: theme.base.text.sm, padding: 0 },
   error: { gap: theme.base.space[2] },
   retry: { flexDirection: 'row' },
   empty: { paddingHorizontal: theme.base.space[2], paddingVertical: theme.base.space[2], fontSize: theme.base.text.xs },

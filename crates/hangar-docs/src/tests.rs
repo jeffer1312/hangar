@@ -97,6 +97,28 @@ fn missing_folders_are_errors() {
     assert_eq!(history(tmp.path(), "linux").unwrap(), Vec::<serde_json::Value>::new());
 }
 
+/// O log da rota só tem o erro: ele precisa dizer qual pasta faltou.
+#[test]
+fn io_errors_name_the_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let error = history(tmp.path(), "linux").unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    assert!(error.to_string().contains(&tmp.path().join("docs").join("novidades").display().to_string()), "{error}");
+    assert!(manual(tmp.path(), "linux").unwrap_err().to_string().contains("manual"));
+}
+
+/// Arquivo fora do formato some do resultado sem derrubar a lista; o motivo vai ao log.
+#[test]
+fn malformed_files_are_left_out() {
+    let tmp = root();
+    let root = tmp.path();
+    write(root, "docs/novidades/2026-01-01-tipo.md", &news("outro", "", "X."));
+    write(root, "docs/novidades/2026-01-02-sistema.md", &news("novo", "sistema: beos\n", "X."));
+    write(root, "docs/manual/sem-categoria.md", &article("nenhuma", "1", "X."));
+    assert_eq!(history(root, "linux").unwrap(), Vec::<serde_json::Value>::new());
+    assert_eq!(manual(root, "linux").unwrap(), json!({"categories": []}));
+}
+
 #[test]
 fn manual_keeps_fixed_tab_order_and_drops_bad_articles() {
     let tmp = root();
