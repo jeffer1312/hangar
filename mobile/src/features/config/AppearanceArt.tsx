@@ -38,7 +38,7 @@ export function ReadingArt({ leitura }: { leitura: Leitura }) {
   );
 }
 
-/** Chamadas de ferramenta: linhas com marca (Clássico), pílulas (Chips) ou tronco (Árvore). */
+/** Chamadas de ferramenta: linhas com marca (Clássico), pílulas (Chips), tronco (Árvore) ou resumo e cartão (Claude Desktop). */
 export function ToolsArt({ look }: { look: Ferramentas }) {
   const { theme } = useUnistyles();
   const c = useSettingsColors();
@@ -54,6 +54,18 @@ export function ToolsArt({ look }: { look: Ferramentas }) {
         {[theme.tokens.status.error, theme.tokens.status.success].map((color) => (
           <View key={color} style={[styles.diff, { backgroundColor: color, opacity: 0.45 }]} />
         ))}
+      </View>
+    );
+  }
+  if (look === 'claudeDesktop') {
+    return (
+      <View style={[styles.pad, styles.col5]}>
+        {bar('65%')}
+        <View style={[styles.card, { borderColor: tom }]}>
+          {(['70%', '50%'] as const).map((w, i) => (
+            <View key={w} style={[styles.cardRow, i > 0 && { borderTopWidth: 1, borderTopColor: tom }]}>{bar(w)}</View>
+          ))}
+        </View>
       </View>
     );
   }
@@ -110,4 +122,6 @@ const styles = StyleSheet.create({
   dot: { width: 6, height: 6, borderRadius: 3 },
   diff: { marginLeft: 11, height: 5, width: '70%', borderRadius: 2 },
   flex: { flex: 1 },
+  card: { borderWidth: 1, borderRadius: 4, opacity: 0.7 },
+  cardRow: { paddingHorizontal: 5, paddingVertical: 4 },
 });

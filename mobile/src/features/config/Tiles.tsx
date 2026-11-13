@@ -42,7 +42,7 @@ export function Tiles<T extends string>({
               <View style={[styles.art, { backgroundColor: c.inset }]}>{art(o.v)}</View>
               <View style={styles.caption}>
                 {on ? <Icon name="Check" size={13} color={c.accent} /> : null}
-                <Text style={[styles.captionText, { color: on ? c.text : c.muted, fontWeight: on ? '500' : '400' }]} numberOfLines={1}>
+                <Text style={[styles.captionText, { color: on ? c.text : c.muted, fontWeight: on ? '500' : '400' }]} numberOfLines={2}>
                   {o.label}
                 </Text>
               </View>
@@ -63,5 +63,5 @@ const styles = StyleSheet.create((theme) => ({
   button: { padding: theme.base.space[1], borderRadius: theme.base.radius.sm, gap: theme.base.space[1.5] },
   art: { height: 56, borderRadius: theme.base.radius.sm, overflow: 'hidden' },
   caption: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: theme.base.space[1] },
-  captionText: { fontSize: theme.base.text.xs, flexShrink: 1 },
+  captionText: { fontSize: theme.base.text.xs, flexShrink: 1, textAlign: 'center' },
 }));

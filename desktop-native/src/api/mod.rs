@@ -272,8 +272,10 @@ fn failure_detail(body: Option<Value>, status: u16) -> String {
                 let params = std::collections::HashMap::from([("comando".to_owned(), param("comando")), ("motivo".to_owned(), param("motivo"))]);
                 if let Some(message) = crate::i18n::tr_web("erro_comando_nao_executado", &params) { return Some(message); }
             }
-            // Pergunta sem identidade, trocada ou ilegível: a frase do web no idioma do app, não o `msg` do servidor.
-            if let Some(code) = fields.get("code").and_then(Value::as_str).filter(|code| code.starts_with("claude_") || code.starts_with("erro_interacao_")) {
+            // Pergunta sem identidade, trocada ou ilegível e parada de tarefa recusada: a frase do web no idioma do app,
+            // não o `msg` do servidor.
+            if let Some(code) = fields.get("code").and_then(Value::as_str)
+                .filter(|code| code.starts_with("claude_") || code.starts_with("erro_interacao_") || code.starts_with("erro_parar_")) {
                 if let Some(message) = crate::i18n::tr_web(code, &std::collections::HashMap::new()) { return Some(message); }
             }
             // Custos e uso no Rust (503 do dono único): a frase do web pelo código, que já traz o código.
@@ -1240,7 +1242,8 @@ mod tests {
 
     #[test]
     fn interaction_errors_use_the_shared_phrase_not_the_server_message() {
-        for code in ["erro_interacao_sem_identidade", "erro_interacao_desatualizada", "erro_interacao_indisponivel"] {
+        for code in ["erro_interacao_sem_identidade", "erro_interacao_desatualizada", "erro_interacao_indisponivel",
+            "erro_parar_so_claude", "erro_parar_plugin_antigo", "erro_parar_sem_plugin"] {
             let message = failure_detail(Some(json!({"detail": {"code": code, "params": {}, "msg": "frase fixa do servidor"}})), 409);
             assert_eq!(message, crate::i18n::tr_web(code, &Default::default()).unwrap(), "{code}");
         }

@@ -20,7 +20,7 @@ export type Idioma = 'system' | 'pt' | 'en';
 /** Leitura do Rust: o que segura o texto da conversa sobre o fundo. */
 export type Leitura = 'auto' | 'none' | 'text' | 'sheet';
 /** Como a chamada de ferramenta aparece na conversa (ToolLook do Rust). */
-export type Ferramentas = 'classic' | 'chips' | 'tree' | 'terminal';
+export type Ferramentas = 'classic' | 'chips' | 'tree' | 'terminal' | 'claudeDesktop';
 export type DestaquePergunta = 'accent' | 'amber';
 /** Gaveta da tela inicial: sessões agrupadas ou conversas (vivas e fechadas) por recência. */
 export type Organizar = 'sessions' | 'conversations';
@@ -30,7 +30,7 @@ const FUNDOS: Fundo[] = ['flat', 'texture', 'aurora', 'image'];
 const IDIOMAS: Idioma[] = ['system', 'pt', 'en'];
 const PALETAS: Paleta[] = ['classic', 'neutral'];
 const LEITURAS: Leitura[] = ['auto', 'none', 'text', 'sheet'];
-const FERRAMENTAS: Ferramentas[] = ['classic', 'chips', 'tree', 'terminal'];
+const FERRAMENTAS: Ferramentas[] = ['classic', 'chips', 'tree', 'terminal', 'claudeDesktop'];
 const DESTAQUES: DestaquePergunta[] = ['accent', 'amber'];
 const AGRUPAR: GroupBy[] = ['none', 'server', 'project'];
 const ORGANIZAR: Organizar[] = ['sessions', 'conversations'];

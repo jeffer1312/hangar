@@ -4193,6 +4193,11 @@ export function terminateCodexCommand(name: string, processId: string, server?: 
   });
 }
 
+/** Para um subagente (`agent_id`) ou shell de fundo do Claude. 202 `pending`: a confirmação vem pelo estado da tarefa. */
+export function stopTask(name: string, taskId: string, server?: Server | null): Promise<{ pending: boolean }> {
+  return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/tasks/${encodeURIComponent(taskId)}/stop`, { method: 'POST' });
+}
+
 export function implementCodexPlan(name: string, server?: Server | null): Promise<void> {
   return sessionFetch(server, `/api/sessions/${encodeURIComponent(name)}/codex/plan/implement`, {
     method: 'POST',

@@ -400,11 +400,7 @@ impl Hangar {
     pub(super) fn sync_tab_preview_rows(&mut self, cx: &mut Context<Self>) {
         let a = appearance::get();
         let stable = self.chat.take_unsynced();
-        let delta = self.conversation.update(&self.chat.events, stable, conversation::View {
-            thinking: a.thinking_tools, tasks: a.task_list,
-            merge_thinking: a.tool_look == appearance::ToolLook::Tree,
-            every_run_groups: a.tool_look == appearance::ToolLook::Terminal,
-        });
+        let delta = self.conversation.update(&self.chat.events, stable, conversation::View::for_look(a.tool_look, a.thinking_tools, a.task_list));
         self.sync_row_ids(Some(delta), cx);
     }
 

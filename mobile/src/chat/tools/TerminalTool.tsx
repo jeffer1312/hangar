@@ -1,4 +1,4 @@
-import { memo, useMemo, useRef, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
@@ -7,8 +7,16 @@ import {
   type ChatEvent, type NumberedDiff, type NumberedLine,
 } from '@hangar/core';
 import * as m from '../../paraglide/messages';
+import { useSelectableToggle } from './useSelectableToggle';
+import { ExitCodeLine } from './ExitCodeLine';
 
 const MAX_LINES = 400;
+
+/** Um Text com milhares de linhas trava a thread da interface: o resto se lê no detalhe da chamada. */
+export function headLines(text: string, max = MAX_LINES): { text: string; hidden: number } {
+  const lines = text.split('\n');
+  return lines.length <= max ? { text, hidden: 0 } : { text: lines.slice(0, max).join('\n'), hidden: lines.length - max };
+}
 const basename = (path: string) => path.split(/[\\/]/).pop() ?? path;
 const tint = (color: string, alpha: number) => {
   const rgb = hexParaRgb(color);
@@ -45,7 +53,6 @@ export const TerminalTool = memo(function TerminalTool({ use, result, escrevendo
 }) {
   const { theme } = useUnistyles();
   const [open, setOpen] = useState(false);
-  const selecting = useRef(false);
   const phase = toolPhase(result ?? null);
   const failed = phase === 'error';
   const path = extractFilePath(use.tool_input) || String(use.tool_input?.['notebook_path'] ?? '');
@@ -64,6 +71,7 @@ export const TerminalTool = memo(function TerminalTool({ use, result, escrevendo
   const outcome = diff && result ? editSummary(diff, created, arg)
     : escrevendo ? m.tool_fase_escrevendo() : phase === 'pending' ? m.estado_em_execucao() : summarizeToolResult(result, use.tool_name);
   const toggle = () => { if (!open) onExpand?.(); setOpen((value) => !value); };
+  const bodyPress = useSelectableToggle(toggle);
   const header = <View style={styles.header}>
     <View style={[styles.dot, { backgroundColor: dot }]} />
     <Text style={styles.mono}><Text style={styles.name}>{name}</Text>{`(${arg})`}</Text>
@@ -108,13 +116,11 @@ export const TerminalTool = memo(function TerminalTool({ use, result, escrevendo
           {open && expandable ? <Pressable onPress={toggle} style={styles.control} accessibilityRole="button"><Text style={styles.muted}>{m.term_recolher()}</Text></Pressable> : null}
         </View>
       ) : open ? (
-        <Pressable style={styles.body} accessible={false}
-          onPressIn={() => { selecting.current = false; }}
-          onLongPress={() => { selecting.current = true; }}
-          onPress={() => { if (!selecting.current) toggle(); }}>
+        <Pressable style={styles.body} accessible={false} {...bodyPress}>
           <Text style={styles.muted}>{m.native_tool_input()}</Text>
           <Text style={styles.mono} selectable>{JSON.stringify(use.tool_input ?? {}, null, 2)}</Text>
           <Text style={styles.muted}>{m.tool_saida()}</Text>
+          <ExitCodeLine output={result?.result} />
           <Text style={[styles.mono, failed && { color: theme.tokens.status.error }]} selectable>{result?.result || outcome}</Text>
         </Pressable>
       ) : null}

@@ -66,6 +66,9 @@ fn art_tools(look: ToolLook) -> Div {
         ToolLook::Terminal => base.flex().flex_col().gap(px(5.))
             .child(div().flex().items_center().gap(px(5.)).child(div().size(px(6.)).flex_shrink_0().rounded_full().bg(theme::success())).child(bar(0.5)))
             .children([theme::removed(), theme::success()].map(|c| div().ml(px(11.)).h(px(5.)).w(relative(0.7)).rounded(px(2.)).bg(c.opacity(0.45)))),
+        ToolLook::ClaudeDesktop => base.flex().flex_col().gap(px(5.)).child(bar(0.5))
+            .child(div().rounded(px(4.)).border_1().border_color(tone).flex().flex_col()
+                .children([0.6, 0.45].map(|w| div().px(px(4.)).py(px(3.)).child(bar(w))))),
     }
 }
 
@@ -85,6 +88,23 @@ fn art_navigation(navigation: Navigation) -> Div {
         }
         Navigation::Conversations => base.child(div().w(relative(0.38)).h_full().bg(strip).p(px(6.)).child(bars(theme::faint(), &[1.0, 0.8, 0.65, 0.75]))),
     }
+}
+
+/// Prévia do estilo Claude Desktop com as peças da conversa: a linha do resumo aberta no cartão, uma chamada com "Falhou".
+fn desktop_sample(cx: &App) -> Div {
+    let call = |n: usize, name: &str, key: &str, value: &str| {
+        let mut input = serde_json::Map::new();
+        input.insert(key.into(), serde_json::Value::String(value.into()));
+        ChatEvent { kind: "tool_use".into(), id: format!("settings-desktop-{n}"), tool_name: Some(name.into()), tool_input: Some(input), ..Default::default() }
+    };
+    let calls = [(call(0, "Read", "file_path", "src/settings.rs"), false), (call(1, "Bash", "command", "cargo build"), true)];
+    let summary = crate::app::desktop_summary(calls.iter().map(|(call, failed)| (call, *failed, false)));
+    let header = crate::app::desktop_summary_button("settings-desktop-summary".into(), summary, true, cx).tab_stop(false);
+    let rows = calls.iter().map(|(call, failed)| crate::app::desktop_call_button(format!("settings-{}", call.id), call, *failed, false, cx)
+        .tab_stop(false).into_any_element()).collect();
+    // Amostra só leitura: nada aqui dentro recebe o mouse.
+    div().relative().child(crate::app::desktop_group_block(header, true, rows))
+        .child(div().absolute().top_0().left_0().size_full().block_mouse_except_scroll())
 }
 
 /// Escolha em miniaturas: mesma regra do `segments` (`available`, `locked`, `off_note`), com o desenho de cada opção.
@@ -110,7 +130,8 @@ fn tiles(id: &'static str, labels: &[String], arts: Vec<Div>, selected: usize, a
                         .child(div().w_full().flex().items_center().justify_center().gap(px(4.)).text_size(px(12.5))
                             .text_color(if on { theme::text() } else { theme::muted() }).when(on, |el| el.font_weight(FontWeight::MEDIUM))
                             .when(on && !live, |el| el.child(chrome::small_icon(IconName::Check, 13., theme::accent())))
-                            .child(div().min_w_0().truncate().child(label.clone()))))
+                            // Rótulo longo ("Claude Desktop" com o ✓) quebra em duas linhas em vez de cortar.
+                            .child(div().min_w_0().whitespace_normal().text_center().line_clamp(2).text_ellipsis().child(label.clone()))))
                     .on_click(cx.listener(move |this, _, window, cx| if enabled && !on { pick(this, n, window, cx) })))
         }))
 }
@@ -211,7 +232,7 @@ impl Hangar {
     }
 
     /// Chamadas de ferramenta no estilo escolhido, a lista de tarefas e a tabela: onde a seção Conversa aparece.
-    fn tools_sample(&self, a: &Appearance) -> Div {
+    fn tools_sample(&self, a: &Appearance, cx: &App) -> Div {
         let calls = [(IconName::FileText, tr("settings_sample_read")), (IconName::SquareTerminal, tr("settings_sample_ran")),
             (IconName::Pencil, tr("settings_sample_edited"))];
         let eyebrow = |key: &str| div().text_size(px(11.5)).font_weight(FontWeight::SEMIBOLD).text_color(theme::faint()).child(tr(key));
@@ -229,6 +250,7 @@ impl Hangar {
             ToolLook::Terminal => div().flex().flex_col().gap(px(7.)).children(calls.map(|(_, label)| div().flex().items_center().gap(px(8.))
                 .font_family(theme::MONO).text_size(px(12.5)).text_color(theme::muted())
                 .child(div().size(px(7.)).flex_shrink_0().rounded_full().bg(theme::success())).child(label))),
+            ToolLook::ClaudeDesktop => desktop_sample(cx),
         };
         let table = div().flex().gap(px(10.)).items_end()
             .child(div().flex_1().flex().flex_col().gap(px(5.)).children((0..3).map(|_| div().flex().gap(px(5.))
@@ -252,7 +274,7 @@ impl Hangar {
         let section = self.settings_ui.preview.unwrap_or(SECTIONS[0]);
         let window_colors = if a.theme == ThemeMode::Desktop { theme::desktop_thumbnail() } else { theme::thumbnail(a.palette, theme::is_dark()) };
         let sample = match section {
-            "settings_conversation_group" => self.tools_sample(&a),
+            "settings_conversation_group" => self.tools_sample(&a, cx),
             "settings_reading_group" => div().flex().flex_col().gap(px(12.)).child(div().h(px(120.)).child(art_reading(a.reading))).child(self.conversation_sample()),
             "settings_sidebar_group" => div().h(px(140.)).child(art_navigation(a.navigation)),
             "settings_text_group" => self.conversation_sample(),
@@ -570,11 +592,12 @@ impl Hangar {
             .child(self.slider_line("settings_column", None, Knob::Column, true, &a, false, cx));
 
         const THINKING: [ThinkingTools; 3] = [ThinkingTools::None, ThinkingTools::Search, ThinkingTools::All];
-        const LOOKS: [ToolLook; 4] = [ToolLook::Classic, ToolLook::Chips, ToolLook::Tree, ToolLook::Terminal];
+        const LOOKS: [ToolLook; 5] = [ToolLook::Classic, ToolLook::Chips, ToolLook::Tree, ToolLook::Terminal, ToolLook::ClaudeDesktop];
         // Na Árvore o raciocínio já entra no grupo com todas as chamadas: a escolha do pensamento fica sem efeito.
         let thinking_on = a.tool_look != ToolLook::Tree;
         let terminal_look = a.tool_look == ToolLook::Terminal;
-        let tool_calls = tiles("tool-calls", &[tr("settings_tool_calls_classic"), tr("settings_tool_calls_chips"), tr("settings_tool_calls_tree"), tr("settings_tool_calls_terminal")],
+        let tool_calls = tiles("tool-calls", &[tr("settings_tool_calls_classic"), tr("settings_tool_calls_chips"), tr("settings_tool_calls_tree"), tr("settings_tool_calls_terminal"),
+            tr("settings_tool_calls_claude_desktop")],
             Vec::from(LOOKS.map(art_tools)), LOOKS.iter().position(|l| *l == a.tool_look).unwrap_or(0), LOOKS.len(), false, tr("settings_next_version"), live,
             |this: &mut Hangar, index, _: &mut Window, cx| { let mut next = appearance::get(); next.tool_look = LOOKS[index]; this.apply_appearance(next, true, cx); }, cx);
         let conversation_body = div().pb(px(4.))

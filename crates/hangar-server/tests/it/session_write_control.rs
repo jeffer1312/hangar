@@ -662,3 +662,48 @@ fn invalid_codex_option_is_a_bad_answer_not_a_failure_to_answer() {
     let (status, _) = select_headless_answer(&Err(RuntimeError::new("codex_command", "runtime sem terminal indisponível")));
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "falha de envio continua 503");
 }
+
+// ── parar uma tarefa (subagente ou shell em fundo) ───────────────────────────────────────────────
+
+#[tokio::test]
+async fn headless_stop_task_writes_the_stop_task_control_to_the_cano() {
+    let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
+    let sink = open_headless(&registry, dir.path(), "s").await;
+    let (python, server) = serve(registry).await;
+    let (status, body) = send(server, "POST", "s/tasks/a85258e41e374c2ea/stop", "").await;
+    assert_eq!((status, &body), (202, &json!({"pending": true})));
+    let frames: Vec<Value> = sink.lock().unwrap().iter().filter_map(|e| serde_json::from_str(e["frame"].as_str()?).ok()).collect();
+    let stop = frames.iter().find(|frame| frame["request"]["subtype"] == "stop_task").expect("stop_task no cano");
+    assert_eq!((&stop["type"], &stop["request"]["task_id"]), (&json!("control_request"), &json!("a85258e41e374c2ea")));
+    assert_eq!(python.hits_to("/api/sessions/s/tasks/a85258e41e374c2ea/stop"), 0);
+}
+
+#[tokio::test]
+async fn stop_task_with_an_invalid_id_is_422_and_reaches_nothing() {
+    let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
+    let sink = open_headless(&registry, dir.path(), "s").await;
+    let (_python, server) = serve(registry).await;
+    for id in ["a.b", "a%20b", &"x".repeat(65)] {
+        let (status, body) = send(server, "POST", &format!("s/tasks/{id}/stop"), "").await;
+        assert_eq!((status, body["detail"]["code"].as_str()), (422, Some("erro_corpo_invalido")), "{id}: {body}");
+    }
+    assert!(!sink.lock().unwrap().iter().any(|e| e.to_string().contains("stop_task")));
+}
+
+#[tokio::test]
+async fn stop_task_on_codex_is_409_only_claude() {
+    let (dir, registry) = (tempfile::tempdir().unwrap(), registry().await);
+    crate::groups_deliver::open_codex_headless(&registry, dir.path(), "c", Default::default()).await;
+    let (python, server) = serve(registry).await;
+    let (status, body) = send(server, "POST", "c/tasks/bserqfwvd/stop", "").await;
+    assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_parar_so_claude")), "{body}");
+    assert_eq!(python.hits_to("/api/sessions/c/tasks/bserqfwvd/stop"), 0);
+}
+
+#[tokio::test]
+async fn stop_task_on_a_name_without_rust_owner_is_409_only_claude_not_python() {
+    let (python, server) = serve(registry().await).await;
+    let (status, body) = send(server, "POST", "shell-cru/tasks/bserqfwvd/stop", "").await;
+    assert_eq!((status, body["detail"]["code"].as_str()), (409, Some("erro_parar_so_claude")), "{body}");
+    assert_eq!(python.hits_to("/api/sessions/shell-cru/tasks/bserqfwvd/stop"), 0);
+}

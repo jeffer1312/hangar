@@ -1092,6 +1092,29 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   (`harness_setup::sync_startup`), antes de liberar as rotas.** O Python não instala nada disso.
   Servidor de ensaio (`CP_RUST_NO_ORPHAN_SWEEP=1`) não grava na máquina. Ver
   [hooks e skills da subida no Rust](#hooks-e-skills-da-subida-no-rust-12112026).
+- **Parar tarefa do Claude (subagente ou shell em fundo) é `stop_task` sem terminal e `TaskStop` pelo
+  plugin com terminal.** A rota `POST /api/sessions/{nome}/tasks/{id}/stop` só manda o pedido e responde
+  202 `{"pending":true}`. O `success` da CLI e o aceite do `TaskStop` não confirmam nada: id inventado
+  também recebe `success`. Só o `task_updated` (`killed`) ou o `task_notification` (`stopped`) daquele id
+  prova a parada. Matar pelo pid não é caminho: a árvore de processos muda de um sistema para outro e o
+  modelo não fica sabendo. Ver [parar tarefa do Claude](#parar-tarefa-do-claude-13112026).
+
+## Parar tarefa do Claude (13/11/2026)
+
+O ■ da aba Atividade precisava de uma ação no servidor. Medido com a CLI 2.1.323 em `claude -p
+--input-format stream-json` (modelo haiku): `{"type":"control_request","request":{"subtype":"stop_task",
+"task_id":…}}` parou o shell em fundo `bserqfwvd` e o subagente em fundo `a85258e41e374c2ea`, cada um com
+`task_updated {status:"killed"}` e `task_notification {status:"stopped"}`. Um id inventado também
+respondeu `success`. O subagente em primeiro plano (`is_backgrounded:false`, `ac6a7f40d1b3017b0`) também
+parou: o `stop_task` 5 s depois do `task_started` trouxe os dois eventos na hora, o `Agent` voltou com
+`[Request interrupted by user for tool use]` (`is_error`) e o turno do pai seguiu até `end_turn`. Por
+isso o ■ vale para subagente em primeiro e em segundo plano.
+
+Com terminal, o pedido vai pelo `/pull` do plugin no modo `stop_task` (como o `agent_message`): o plugin
+chama `TaskStop` e registra o resultado no próprio log de depuração. Plugin que não
+declarou o modo recebe 409 `erro_parar_plugin_antigo`; sem plugin vivo, 409 `erro_parar_sem_plugin`.
+Codex segue no `codex/terminate`; Codex e os outros provedores recebem 409 `erro_parar_so_claude` nesta
+rota, respondido pelo Rust, sem passar pelo Python.
 
 ## Conta padrão do Claude sem terminal sem CLAUDE_CONFIG_DIR (13/11/2026)
 
