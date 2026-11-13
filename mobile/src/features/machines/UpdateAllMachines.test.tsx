@@ -163,7 +163,7 @@ describe('atualizar todas as máquinas', () => {
   });
 
   it('servidor ativo atualizado abre "O que chegou para você" ao fechar os resultados', async () => {
-    const { peekShownNews, whatsNewHref } = await import('../updates/pending');
+    const { peekShownNews, markShownNews, whatsNewHref } = await import('../updates/pending');
     mocks.arrived.mockResolvedValue({ news: [{ id: 'n1', title: 'fixture-news', kind: 'new', text: '', platforms: 'all', try_it: null, animation: null }], through: 3 });
     mocks.updateAll.mockImplementation(async () => [{ server: second, state: { status: 'atualizado', warnings: [] } }]);
     await render(); await click(m.update_all_button({ n: '2' }));
@@ -172,6 +172,8 @@ describe('atualizar todas as máquinas', () => {
     await click(m.sessao_fechar());
     await act(async () => { await vi.waitFor(() => expect(mocks.push).toHaveBeenLastCalledWith(whatsNewHref(second.id))); });
     expect(peekShownNews(second.id).cards.map((n) => n.id)).toEqual(['n1']);
+    // A rota é falsa: a folha abriria e consumiria a lista, que senão fica para o teste seguinte.
+    markShownNews(second.id);
   });
 
   it('servidor ativo sem novidade para o celular não abre nada', async () => {
