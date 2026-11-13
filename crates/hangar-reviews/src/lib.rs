@@ -67,7 +67,7 @@ pub fn known(roots: &[String], cwds: &[String], sessions: Vec<(String, String)>,
         repos.sort();
         repos.dedup();
         for repo in repos {
-            if let Some(remote) = hosts::repo_remote(Path::new(&repo)) { *hosts.entry(remote.host).or_default() += 1; }
+            for host in hosts::repo_hosts(Path::new(&repo)) { *hosts.entry(host).or_default() += 1; }
         }
     }
     let mut by_branch: HashMap<(String, String, String), Vec<String>> = HashMap::new();

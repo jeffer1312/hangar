@@ -57,9 +57,6 @@ fn n(v: &Value, key: &str) -> Option<u64> {
     v.get(key).and_then(|x| x.as_u64().or_else(|| x.as_str().and_then(|s| s.parse().ok())))
 }
 
-fn array(v: Result<Value, Failure>) -> Vec<Value> {
-    match v { Ok(Value::Array(a)) => a, _ => Vec::new() }
-}
 
 /// Aprovação no vocabulário do contrato, a partir do estado de merge e das aprovações que faltam.
 fn approval_of(detailed: &str, left: Option<u64>, approved: bool) -> String {
@@ -131,7 +128,7 @@ async fn connection(host: &str, name: &str) -> Result<Vec<Value>, Failure> {
         let page = data.pointer("/currentUser/page").filter(|p| !p.is_null())
             .ok_or_else(|| Failure::new("invalid_response", "lista de merge requests ilegível"))?;
         nodes.extend(page.get("nodes").and_then(Value::as_array).into_iter().flatten().cloned());
-        match model::next_page(Some(page)) { Some(next) => after = Some(next), None => return Ok(nodes) }
+        match model::advance(Some(page), after.as_deref())? { Some(next) => after = Some(next), None => return Ok(nodes) }
     }
 }
 
@@ -157,7 +154,10 @@ pub async fn detail(host: &str, repo: &str, iid: u64, viewer: &str) -> Result<De
     if mr.get("iid").is_none() { return Err(Failure::new("not_found", "merge request não encontrado")); }
     let (approvals, discussions, diffs) = (approvals?, discussions?, diffs?);
     let pipeline = mr.get("head_pipeline").filter(|p| !p.is_null());
-    let jobs = jobs(host, repo, pipeline.and_then(|p| n(p, "id")), s(&mr, &["sha"])).await;
+    // MR de fork pode rodar o pipeline no projeto de origem: os jobs são pedidos ao projeto do pipeline, os status do commit
+    // ao projeto onde o commit está.
+    let project = |id: Option<u64>| id.map_or_else(|| encode(repo), |id| id.to_string());
+    let jobs = jobs(host, pipeline.map(|p| (project(n(p, "project_id")), n(p, "id"))), &project(n(&mr, "source_project_id")), s(&mr, &["sha"])).await?;
     let files = model::files(diffs.iter().map(|d| {
         let raw = s(d, &["diff"]);
         let (additions, deletions) = count(raw);
@@ -240,18 +240,30 @@ async fn source_project(host: &str, repo: &str, mr: &Value) -> Result<String, Fa
 
 /// As etapas do pipeline. Pipeline externo (Jenkins e afins) não tem jobs no GitLab: as etapas são os status do commit,
 /// pedidos junto para não somar uma ida a mais.
-async fn jobs(host: &str, repo: &str, pipeline: Option<u64>, sha: &str) -> Vec<Job> {
-    let jobs_path = pipeline.map(|id| format!("projects/{}/pipelines/{id}/jobs?per_page=100", encode(repo)));
+/// `pipeline` é o projeto (id ou caminho codificado) e o id do pipeline; `commit_project`, o projeto do commit.
+async fn jobs(host: &str, pipeline: Option<(String, Option<u64>)>, commit_project: &str, sha: &str) -> Result<Vec<Job>, Failure> {
+    let jobs_path = pipeline.and_then(|(project, id)| Some(format!("projects/{project}/pipelines/{}/jobs?per_page=100", id?)));
     let status_path = (!sha.is_empty() && sha.chars().all(|c| c.is_ascii_hexdigit()))
-        .then(|| format!("projects/{}/repository/commits/{sha}/statuses?per_page=100", encode(repo)));
-    let read = |path: Option<String>| async move { match path { Some(p) => array(api(host, "GET", &p, &[], cli::READ).await), None => Vec::new() } };
+        .then(|| format!("projects/{commit_project}/repository/commits/{sha}/statuses?per_page=100"));
+    // Pipeline num fork que a conta não lê (403, 404) fica sem etapas, como no próprio GitLab; o resto do detalhe vale.
+    let read = |path: Option<String>| async move {
+        let Some(path) = path else { return Ok(Vec::new()) };
+        match api_pages(host, &path).await {
+            Err(e) if e.message.contains("403") || e.message.contains("404") => {
+                tracing::warn!(host = %host, "revisões: etapas do pipeline sem leitura");
+                Ok(Vec::new())
+            }
+            read => read,
+        }
+    };
     let (jobs, statuses) = tokio::join!(read(jobs_path), read(status_path));
+    let jobs = jobs?;
     if !jobs.is_empty() {
-        return jobs.iter().rev().map(|j| Job { name: s(j, &["name"]).to_owned(), status: model::job_status(s(j, &["status"])),
-            duration: j.get("duration").and_then(Value::as_f64).map(|d| d.round() as u64) }).collect();
+        return Ok(jobs.iter().rev().map(|j| Job { name: s(j, &["name"]).to_owned(), status: model::job_status(s(j, &["status"])),
+            duration: j.get("duration").and_then(Value::as_f64).map(|d| d.round() as u64) }).collect());
     }
-    statuses.iter().map(|j| Job { name: s(j, &["name"]).to_owned(), status: model::job_status(s(j, &["status"])),
-        duration: model::span(s(j, &["started_at"]), s(j, &["finished_at"])) }).collect()
+    Ok(statuses?.iter().map(|j| Job { name: s(j, &["name"]).to_owned(), status: model::job_status(s(j, &["status"])),
+        duration: model::span(s(j, &["started_at"]), s(j, &["finished_at"])) }).collect())
 }
 
 fn count(diff: &str) -> (u32, u32) {

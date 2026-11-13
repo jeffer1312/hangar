@@ -1023,7 +1023,10 @@ impl Hangar {
 
     fn review_row(&self, item: &Summary, cx: &mut Context<Self>) -> AnyElement {
         let clicked = item.clone();
+        // Focável, a GPUI entrega Enter e Espaço como clique.
         row_view(item).cursor_pointer().hover(|el| el.bg(theme::hover()))
+            .focusable().tab_stop(true).role(Role::Button).aria_label(item.title.clone())
+            .focus_visible(|el| el.bg(theme::hover()))
             .on_click(cx.listener(move |this, _, _, cx| this.open_review_item(&clicked, cx)))
             .into_any_element()
     }

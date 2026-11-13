@@ -763,9 +763,11 @@ impl GitPanel {
             }
         }, window, cx, |this, (kind, text), window, cx| {
             this.busy = None;
+            // Só o checkout feito troca a branch: stash ou checkout recusado deixa a revisão e os rascunhos dela.
+            let switched = matches!(kind, NotificationType::Success);
             window.push_notification(git_note(&this.name, kind, text), cx);
             this.load(window, cx);
-            this.reload_review(cx);
+            if switched { this.reload_review(cx); }
         });
         cx.notify();
     }

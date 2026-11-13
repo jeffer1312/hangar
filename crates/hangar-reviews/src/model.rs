@@ -136,6 +136,14 @@ pub fn next_page(connection: Option<&Value>) -> Option<String> {
     info.get("endCursor").and_then(Value::as_str).map(str::to_owned)
 }
 
+/// O cursor seguinte de um laço de páginas; o mesmo cursor de novo repetiria a página para sempre.
+pub fn advance(connection: Option<&Value>, sent: Option<&str>) -> Result<Option<String>, crate::Failure> {
+    match next_page(connection) {
+        Some(next) if Some(next.as_str()) == sent => Err(crate::Failure::new("invalid_response", "a paginação do provedor não avançou")),
+        next => Ok(next),
+    }
+}
+
 /// Segundos desde a época de um instante RFC 3339.
 fn stamp(text: &str) -> Option<i64> { chrono::DateTime::parse_from_rfc3339(text).ok().map(|t| t.timestamp()) }
 
@@ -247,6 +255,9 @@ mod tests {
         assert_eq!(next_page(Some(&more)).as_deref(), Some("c2"));
         assert_eq!(next_page(Some(&done)), None);
         assert_eq!(next_page(None), None);
+        assert_eq!(advance(Some(&more), Some("c1")).unwrap().as_deref(), Some("c2"));
+        assert_eq!(advance(Some(&more), Some("c2")).unwrap_err().code, "invalid_response");
+        assert_eq!(advance(Some(&done), Some("c3")).unwrap(), None);
     }
 
     #[test]

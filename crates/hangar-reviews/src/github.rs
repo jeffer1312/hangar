@@ -14,7 +14,12 @@ const FRAGMENT: &str = r#"fragment pr on PullRequest {
 }"#;
 
 const THREAD: &str = r#"fragment thread on PullRequestReviewThread { id isResolved path line originalLine
-  comments(first: 50) { nodes { author { login __typename } body diffHunk createdAt } } }"#;
+  comments(first: 100) { pageInfo { hasNextPage endCursor } nodes { ...comment } } }"#;
+const COMMENT: &str = r#"fragment comment on PullRequestReviewComment { author { login __typename } body diffHunk createdAt }"#;
+
+const COMMENTS: &str = r#"query($id: ID!, $after: String!) { node(id: $id) { ... on PullRequestReviewThread {
+  comments(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { ...comment } }
+} } }"#;
 
 const SEARCH: &str = r#"query($q: String!, $after: String) {
   search(query: $q, type: ISSUE, first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { ...pr } }
@@ -82,6 +87,7 @@ async fn graphql(host: &str, query: &str, vars: &[Var<'_>], timeout: std::time::
     let mut query = query.to_owned();
     if query.contains("...pr") { query = format!("{query}\n{FRAGMENT}"); }
     if query.contains("...thread") { query = format!("{query}\n{THREAD}"); }
+    if query.contains("...comment") { query = format!("{query}\n{COMMENT}"); }
     let mut args = vec!["api".into(), "--hostname".into(), host.to_owned(), "graphql".into(), "-f".into(), format!("query={query}")];
     for var in vars {
         match var {
@@ -168,7 +174,7 @@ async fn search(host: &str, q: &str) -> Result<Vec<Value>, Failure> {
         let mut data = graphql(host, SEARCH, &vars, cli::READ).await?;
         let mut page = data.get_mut("search").map(Value::take).filter(|p| !p.is_null())
             .ok_or_else(|| Failure::new("invalid_response", "busca de pull requests ilegível"))?;
-        after = model::next_page(Some(&page));
+        after = model::advance(Some(&page), after.as_deref())?;
         if let Some(Value::Array(found)) = page.get_mut("nodes").map(Value::take) { nodes.extend(found); }
         if after.is_none() { return Ok(nodes); }
     }
@@ -192,9 +198,24 @@ async fn more_threads(host: &str, owner: &str, name: &str, number: u64, mut afte
         let page = data.pointer("/repository/pullRequest/reviewThreads").filter(|p| !p.is_null())
             .ok_or_else(|| Failure::new("invalid_response", "threads do pull request ilegíveis"))?;
         nodes.extend(page.get("nodes").and_then(Value::as_array).into_iter().flatten().cloned());
-        let page = Some(page);
-        match model::next_page(page) { Some(next) => after = next, None => return Ok(nodes) }
+        match model::advance(Some(page), Some(&after))? { Some(next) => after = next, None => return Ok(nodes) }
     }
+}
+
+/// Completa os comentários de uma thread que passou da primeira página.
+async fn all_comments(host: &str, thread: &mut Value) -> Result<(), Failure> {
+    let Some(mut after) = model::next_page(thread.get("comments")) else { return Ok(()) };
+    let id = s(thread, &["id"]).to_owned();
+    let mut more = Vec::new();
+    loop {
+        let data = graphql(host, COMMENTS, &[Var::Text("id", &id), Var::Text("after", &after)], cli::READ).await?;
+        let page = data.pointer("/node/comments").filter(|p| !p.is_null())
+            .ok_or_else(|| Failure::new("invalid_response", "comentários da thread ilegíveis"))?;
+        more.extend(page.get("nodes").and_then(Value::as_array).into_iter().flatten().cloned());
+        match model::advance(Some(page), Some(&after))? { Some(next) => after = next, None => break }
+    }
+    if let Some(Value::Array(nodes)) = thread.pointer_mut("/comments/nodes") { nodes.extend(more); }
+    Ok(())
 }
 
 pub async fn detail(host: &str, repo: &str, number: u64) -> Result<Detail, Failure> {
@@ -226,10 +247,10 @@ pub async fn detail(host: &str, repo: &str, number: u64) -> Result<Detail, Failu
 
     let jobs = pr.pointer("/checks/nodes/0/commit/statusCheckRollup/contexts/nodes").and_then(Value::as_array).into_iter().flatten()
         .filter_map(job).collect();
-    let mut threads: Vec<Thread> = pr.pointer("/threads/nodes").and_then(Value::as_array).into_iter().flatten().map(thread).collect();
-    if let Some(after) = model::next_page(pr.get("threads")) {
-        threads.extend(more_threads(host, owner, name, number, after).await?.iter().map(thread));
-    }
+    let mut nodes: Vec<Value> = pr.pointer("/threads/nodes").and_then(Value::as_array).cloned().unwrap_or_default();
+    if let Some(after) = model::next_page(pr.get("threads")) { nodes.extend(more_threads(host, owner, name, number, after).await?); }
+    for node in &mut nodes { all_comments(host, node).await?; }
+    let threads: Vec<Thread> = nodes.iter().map(thread).collect();
     summary.open_threads = Some(threads.iter().filter(|t| !t.resolved).count() as u32);
     let activity = pr.pointer("/timelineItems/nodes").and_then(Value::as_array).into_iter().flatten().rev().filter_map(activity).collect();
     let files = model::pages(&files?, "gh")?;

@@ -97,10 +97,13 @@ fn git_dirs(root: &Path) -> Option<(PathBuf, PathBuf)> {
 
 fn read_config(common: &Path) -> Option<Config> { std::fs::read_to_string(common.join("config")).ok().map(|t| parse_config(&t)) }
 
-/// O remote de um repositório (o de `origin`, senão o primeiro).
-pub fn repo_remote(repo: &Path) -> Option<Remote> {
-    let (_, common) = git_dirs(repo)?;
-    read_config(&common)?.remote_for(None)
+/// Os hosts de todos os remotes de um repositório, cada um uma vez: um `upstream` noutro provedor também é um host a ler.
+pub fn repo_hosts(repo: &Path) -> Vec<String> {
+    let Some(config) = git_dirs(repo).and_then(|(_, common)| read_config(&common)) else { return Vec::new() };
+    let mut hosts: Vec<String> = config.remotes.iter().filter_map(|(_, url)| parse_remote(url)).map(|r| r.host).collect();
+    hosts.sort();
+    hosts.dedup();
+    hosts
 }
 
 /// A branch de uma pasta de trabalho (worktree ou principal, ou subpasta delas), o remote dela e, nessa ordem, os
@@ -220,7 +223,9 @@ mod tests {
         let found = branch_remote(&wt.join("sub")).unwrap();
         assert_eq!((found.head, found.branch), (Remote { host: "gitlab.example.com".into(), repo: "g/p".into() }, "feat/x".into()));
         assert_eq!(branch_remote(&main).map(|b| b.branch), Some("main".into()));
-        assert_eq!(repo_remote(&wt), r("gitlab.example.com", "g/p"));
+        assert_eq!(repo_hosts(&wt), vec!["gitlab.example.com".to_owned()]);
+        std::fs::write(main.join(".git/config"), "[remote \"origin\"]\n\turl = https://gitlab.example.com/g/p.git\n[remote \"up\"]\n\turl = git@github.com:a/b.git\n[remote \"fork\"]\n\turl = https://gitlab.example.com/me/p.git\n").unwrap();
+        assert_eq!(repo_hosts(&main), vec!["github.com".to_owned(), "gitlab.example.com".to_owned()]);
     }
 
     #[test]
