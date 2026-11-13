@@ -31,6 +31,7 @@ const DEVICE: Page[] = [
 // O diário é do servidor escolhido no seletor, não do aparelho.
 const SERVER: Page[] = [
   { route: '/config/scheduled-tasks', icon: 'Clock', title: m.scheduled_title, rows: [m.scheduled_new, m.scheduled_when] },
+  { route: '/config/memoria', icon: 'Brain', title: m.dream_title, rows: [m.dream_machine, m.dream_projects, m.dream_suggestions] },
   { route: '/config/usage-log', icon: 'FileText', title: m.native_settings_page_diary, rows: [] },
   { route: '/config/maquinas', icon: 'Server', title: m.native_settings_page_servers,
     rows: [m.sessao_adicionar_servidor, m.config_maquinas_testar] },
