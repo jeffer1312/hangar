@@ -105,6 +105,7 @@ pub(crate) mod workspace_http;
 pub mod uploads;
 pub use hangar_core::user_data;
 pub mod connectors_cli;
+pub mod mission_notify;
 pub mod machine_peers;
 pub mod install_root;
 pub mod update;

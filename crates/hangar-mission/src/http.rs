@@ -15,13 +15,29 @@ use std::sync::Arc;
 
 const MAX_BODY: usize = 256 * 1024;
 
-struct Http { edge: Edge, store: Arc<Store> }
+/// Entrega de texto a uma sessão (a mesma entrada que o dono usa). O servidor a implementa; falha não desfaz a mudança.
+pub trait Notify: Send + Sync + 'static {
+    fn send(&self, session: String, text: String) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+}
 
-pub fn router<S: Clone + Send + Sync + 'static>(edge: Edge, store: Arc<Store>) -> Router<S> {
+struct Http { edge: Edge, store: Arc<Store>, notify: Arc<dyn Notify> }
+
+pub fn router<S: Clone + Send + Sync + 'static>(edge: Edge, store: Arc<Store>, notify: Arc<dyn Notify>) -> Router<S> {
     Router::new()
         .route("/api/mission", axum::routing::any(public))
         .route("/api/mission/{*rest}", axum::routing::any(public))
-        .with_state(Arc::new(Http { edge, store }))
+        .with_state(Arc::new(Http { edge, store, notify }))
+}
+
+/// O que a sessão ligada recebe: como informar etapa e evidências.
+fn linked_notice(key: &str) -> String {
+    format!("[painel: Mission Control] Esta sessão trabalha o ticket {key}. Ao mudar de etapa, informe pela tool `mission` do MCP \
+hangar (sem argumentos ela mostra o ticket e as etapas). Na validação, anexe as evidências de funcionamento (prints, vídeos, \
+relatórios) pela mesma tool e aguarde a aprovação do dono antes de seguir.")
+}
+
+fn notify(state: &Http, session: Option<&str>, text: String) {
+    if let Some(session) = session { tokio::spawn(state.notify.send(session.to_owned(), text)); }
 }
 
 async fn public(
@@ -62,7 +78,7 @@ struct StagesBody { stages: Vec<crate::model::Stage> }
 async fn blocking<T: Send + 'static>(state: &Http, work: impl FnOnce(&Store) -> Result<T, Error> + Send + 'static) -> Result<T, Error> {
     let store = state.store.clone();
     tokio::task::spawn_blocking(move || work(&store)).await
-        .unwrap_or_else(|_| Err(Error { kind: Kind::Unavailable, code: "mission_unavailable", message: "tarefa interrompida".into() }))
+        .unwrap_or_else(|_| Err(Error::new(Kind::Unavailable, "mission_unavailable", "tarefa interrompida")))
 }
 
 async fn reply(state: &Http, peer: Option<SocketAddr>, request: Request) -> Response {
@@ -78,17 +94,15 @@ async fn reply(state: &Http, peer: Option<SocketAddr>, request: Request) -> Resp
         Ok(item) => json_response(StatusCode::OK, json!({"item": item})),
         Err(error) => failure(&error),
     };
+    let snapshot = |result: Result<crate::model::Snapshot, Error>| match result {
+        Ok(snapshot) => json_response(StatusCode::OK, json!(snapshot)),
+        Err(error) => failure(&error),
+    };
     match (method, &segments[..]) {
-        (Method::GET, ["api", "mission"]) => match blocking(state, |store| store.snapshot()).await {
-            Ok(snapshot) => json_response(StatusCode::OK, json!(snapshot)),
-            Err(error) => failure(&error),
-        },
+        (Method::GET, ["api", "mission"]) => snapshot(blocking(state, |store| store.snapshot()).await),
         (Method::PUT, ["api", "mission", "stages"]) => {
             let body: StagesBody = match body(request).await { Ok(body) => body, Err(response) => return response };
-            match blocking(state, move |store| store.set_stages(body.stages)).await {
-                Ok(snapshot) => json_response(StatusCode::OK, json!(snapshot)),
-                Err(error) => failure(&error),
-            }
+            snapshot(blocking(state, move |store| store.set_stages(body.stages)).await)
         }
         (Method::POST, ["api", "mission", "report"]) => {
             let body: ReportBody = match body(request).await { Ok(body) => body, Err(response) => return response };
@@ -112,20 +126,37 @@ async fn reply(state: &Http, peer: Option<SocketAddr>, request: Request) -> Resp
             match (method, rest) {
                 (Method::PUT, []) => {
                     let link: Link = match body(request).await { Ok(body) => body, Err(response) => return response };
-                    item(blocking(state, move |store| store.link(&connector, &ticket, link)).await)
+                    let linked = blocking(state, move |store| store.link(&connector, &ticket, link)).await;
+                    if let Ok((linked, true)) = &linked { notify(state, linked.session.as_deref(), linked_notice(&linked.key)); }
+                    item(linked.map(|(linked, _)| linked))
                 }
                 (Method::PATCH, []) => {
                     let change: OwnerChange = match body(request).await { Ok(body) => body, Err(response) => return response };
-                    item(blocking(state, move |store| store.owner_change(&connector, &ticket, change)).await)
+                    let note = match &change { OwnerChange::Changes { note, .. } => Some(note.clone()), _ => None };
+                    let changed = blocking(state, move |store| {
+                        let item = store.owner_change(&connector, &ticket, change)?;
+                        let stages = store.snapshot()?.stages;
+                        Ok((item, stages))
+                    }).await;
+                    // O pedido de ajustes vai à sessão só depois de gravado, com o nome da etapa recusada.
+                    if let (Ok((changed, stages)), Some(note)) = (&changed, note) {
+                        let refused = changed.history.last().and_then(|e| e.stage.as_deref())
+                            .and_then(|id| stages.iter().find(|s| s.id == id)).map_or("", |s| s.name.as_str());
+                        notify(state, changed.session.as_deref(), format!("Ajustes pedidos pelo dono no ticket {}, na etapa {refused}: {note}", changed.key));
+                    }
+                    item(changed.map(|(changed, _)| changed))
                 }
                 (Method::DELETE, []) => item(blocking(state, move |store| store.remove(&connector, &ticket)).await),
                 (Method::POST, ["evidence"]) => {
+                    if let Some(refused) = hangar_core::http_body_limit::precheck_with_limit(request.headers(), crate::store::MAX_UPLOAD_BYTES) {
+                        return refused;
+                    }
                     let mut name = String::new();
                     let mut caption = String::new();
                     for (key, value) in form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes()) {
                         match key.as_ref() { "name" => name = value.into_owned(), "caption" => caption = value.into_owned(), _ => {} }
                     }
-                    let Ok(bytes) = to_bytes(request.into_body(), crate::store::MAX_EVIDENCE_BYTES as usize).await else {
+                    let Ok(bytes) = to_bytes(request.into_body(), crate::store::MAX_UPLOAD_BYTES).await else {
                         return detail(StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large", "evidência grande demais", json!({}));
                     };
                     item(blocking(state, move |store| store.add_owner_evidence(&connector, &ticket, &name, &bytes, &caption)).await)

@@ -7,13 +7,23 @@ use hangar_core::diag::DiagClient;
 use hangar_core::edge::Edge;
 use hangar_mission::Store;
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
+
+#[derive(Default)]
+struct Notices(Mutex<Vec<(String, String)>>);
+
+impl hangar_mission::http::Notify for Notices {
+    fn send(&self, session: String, text: String) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        self.0.lock().unwrap().push((session, text));
+        Box::pin(async {})
+    }
+}
 
 const TOKEN: &str = "dono-da-prova";
 const ITEM: &str = "/api/mission/items/help/PM%3A1%2F2";
 
-struct Bench { dir: tempfile::TempDir, app: axum::Router }
+struct Bench { dir: tempfile::TempDir, app: axum::Router, notices: Arc<Notices> }
 
 impl Bench {
     fn new() -> Self {
@@ -23,8 +33,9 @@ impl Bench {
             auth: Auth::configured(TOKEN),
             diag: DiagClient::new("127.0.0.1:9".parse().unwrap(), String::new()).with_diary(Some(dir.path().join("diary"))),
         };
-        let app = hangar_mission::http::router::<()>(edge, Arc::new(Store::new(dir.path().join("mission"))));
-        Self { dir, app }
+        let notices = Arc::new(Notices::default());
+        let app = hangar_mission::http::router::<()>(edge, Arc::new(Store::new(dir.path().join("mission"))), notices.clone());
+        Self { dir, app, notices }
     }
 
     async fn raw(&self, method: &str, uri: &str, token: Option<&str>, body: Body) -> (StatusCode, Vec<u8>, Option<String>) {
@@ -48,6 +59,16 @@ impl Bench {
         let (status, body) = self.send("PUT", ITEM, Some(json!({"key": "PM-1", "title": "Imprimir", "url": "https://help.invalid/pm/PM-1", "session": session}))).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         body["item"].clone()
+    }
+
+    /// Os avisos saem numa tarefa à parte: espera até chegarem `n`.
+    async fn notices(&self, n: usize) -> Vec<(String, String)> {
+        for _ in 0..200 {
+            let seen = self.notices.0.lock().unwrap().clone();
+            if seen.len() >= n { return seen; }
+            tokio::task::yield_now().await;
+        }
+        self.notices.0.lock().unwrap().clone()
     }
 
     fn file(&self, name: &str, bytes: &[u8]) -> String {
@@ -163,4 +184,69 @@ async fn one_session_one_ticket_and_custom_stages_drop_what_left() {
         let (status, body) = bench.send("PUT", "/api/mission/stages", Some(bad)).await;
         assert_eq!((status, body["detail"]["code"].clone()), (StatusCode::BAD_REQUEST, json!("invalid_params")));
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn linking_and_requested_changes_reach_the_session_only_when_saved() {
+    let bench = Bench::new();
+    bench.link("pm-1").await;
+    bench.link("pm-1").await;
+    let notices = bench.notices(1).await;
+    assert_eq!(notices.len(), 1, "religar a mesma sessão não repete o aviso");
+    assert!(notices[0].0 == "pm-1" && notices[0].1.contains("PM-1") && notices[0].1.contains("`mission`"), "{notices:?}");
+
+    // Etapa só deduzida na tela: o dono aprova e recusa a etapa que viu.
+    let (status, body) = bench.send("PATCH", ITEM, Some(json!({"action": "changes", "note": "falta o print"}))).await;
+    assert_eq!((status, body["detail"]["code"].clone()), (StatusCode::BAD_REQUEST, json!("invalid_params")));
+    assert_eq!(bench.notices(2).await.len(), 1, "recusa sem gravar não manda nada");
+    let (status, body) = bench.send("PATCH", ITEM, Some(json!({"action": "approve", "stage": "validacao"}))).await;
+    assert_eq!((status, body["item"]["stage"].clone()), (StatusCode::OK, json!("entrega")), "{body}");
+    let (status, body) = bench.send("PATCH", ITEM, Some(json!({"action": "changes", "note": "o vídeo cortou", "stage": "revisao"}))).await;
+    assert_eq!((status, body["item"]["stage"].clone()), (StatusCode::OK, json!("validacao")), "a etapa gravada vence a mostrada");
+    let notices = bench.notices(2).await;
+    assert_eq!(notices[1], ("pm-1".to_owned(), "Ajustes pedidos pelo dono no ticket PM-1, na etapa Entrega: o vídeo cortou".to_owned()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failing_batch_leaves_no_copy_and_same_names_never_collide() {
+    let bench = Bench::new();
+    bench.link("pm-1").await;
+    let (a, b) = (bench.dir.path().join("a"), bench.dir.path().join("b"));
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::create_dir_all(&b).unwrap();
+    std::fs::write(a.join("tela.png"), b"primeira").unwrap();
+    std::fs::write(b.join("tela.png"), b"segunda").unwrap();
+    let missing = bench.dir.path().join("sumiu.png");
+
+    let (status, _) = bench.send("POST", "/api/mission/report", Some(json!({"session": "pm-1",
+        "evidence": [{"path": a.join("tela.png")}, {"path": missing}]}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let dir = bench.dir.path().join("mission/evidence");
+    assert_eq!(std::fs::read_dir(&dir).map_or(0, |d| d.count()), 0, "a cópia do primeiro sai com a falha do segundo");
+
+    let (status, body) = bench.send("POST", "/api/mission/report", Some(json!({"session": "pm-1",
+        "evidence": [{"path": a.join("tela.png")}, {"path": b.join("tela.png")}]}))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let ids: Vec<String> = body["item"]["evidence"].as_array().unwrap().iter().map(|e| e["id"].as_str().unwrap().to_owned()).collect();
+    assert_ne!(ids[0], ids[1]);
+    for (id, expected) in ids.iter().zip([&b"primeira"[..], &b"segunda"[..]]) {
+        let (_, bytes, _) = bench.raw("GET", &format!("/api/mission/evidence/{id}"), Some(TOKEN), Body::empty()).await;
+        assert_eq!(bytes, expected);
+    }
+    let (status, body) = bench.send("POST", "/api/mission/report", Some(json!({"session": "outra", "evidence": [{"path": a.join("tela.png")}]}))).await;
+    assert_eq!((status, body["detail"]["code"].clone()), (StatusCode::NOT_FOUND, json!("mission_session_not_linked")));
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "sessão sem ticket não copia nada");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_agent_going_back_before_a_gate_closes_it() {
+    let bench = Bench::new();
+    bench.link("pm-1").await;
+    let report = |stage: &str| json!({"session": "pm-1", "stage": stage});
+    bench.send("POST", "/api/mission/report", Some(report("validacao"))).await;
+    bench.send("PATCH", ITEM, Some(json!({"action": "approve"}))).await;
+    let (status, body) = bench.send("POST", "/api/mission/report", Some(report("execucao"))).await;
+    assert_eq!((status, body["item"]["approved"].clone()), (StatusCode::OK, json!([])), "{body}");
+    let (status, body) = bench.send("POST", "/api/mission/report", Some(report("entrega"))).await;
+    assert_eq!((status, body["detail"]["code"].clone()), (StatusCode::CONFLICT, json!("mission_gate_pending")));
 }
