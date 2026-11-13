@@ -205,6 +205,9 @@ pub struct SessionInfo {
     /// Task em andamento do plano que a sessão executa, e o total delas.
     pub plan_task: Option<u32>,
     pub plan_task_total: Option<u32>,
+    /// Passos feitos e total do plano inteiro.
+    pub plan_done: Option<u32>,
+    pub plan_total: Option<u32>,
     /// Como o convidado vê esta sessão: "pair" = só leitura.
     #[serde(default)] pub guest_kind: Option<String>,
     /// Par com a sessão de outra pessoa (outra máquina, outro usuário).

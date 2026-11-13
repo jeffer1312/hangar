@@ -120,6 +120,7 @@ mod shared_config;
 mod tree;
 mod find;
 mod costs;
+mod mission;
 mod worktrees;
 mod reviews;
 mod artifacts;
@@ -134,7 +135,7 @@ pub(crate) mod setup;
 /// Variável do ambiente do script com o código de uso único do askpass (`setup::askpass`).
 pub(crate) const ASKPASS_CODE_ENV: &str = "HANGAR_ASKPASS_CODE";
 
-actions!(hangar, [FocusComposer, OpenSettings, CopyLastReply, FocusSettingsSearch, FindProjectFile, FindProjectText, NextSession, PreviousSession, ToggleDictation, NewChat, NewChatNoProject, OpenNewSession, CloseSession, RenameSession, OpenCosts, OpenSearch,
+actions!(hangar, [FocusComposer, OpenSettings, CopyLastReply, FocusSettingsSearch, FindProjectFile, FindProjectText, NextSession, PreviousSession, ToggleDictation, NewChat, NewChatNoProject, OpenNewSession, CloseSession, RenameSession, OpenCosts, OpenMission, OpenSearch,
     ToggleSidebar, CyclePermission, OpenWorktrees, OpenReviews, CycleToolLook, CycleNavigation]);
 
 const LIVE_THINKING: &str = "__thinking__";
@@ -857,6 +858,7 @@ pub struct Hangar {
     costs: costs::Costs,
     worktrees: worktrees::Worktrees,
     reviews: reviews::Reviews,
+    mission: mission::Mission,
     artifacts: artifacts::Artifacts,
     usage_stats: stats::UsageStats,
     // Paleta "Buscar conversas" (Ctrl+K).
@@ -1194,7 +1196,7 @@ impl Hangar {
             device: device::Device::new(window, cx), accounts: accounts::Accounts::default(), orchestration: orchestration::Orchestration::default(), orq_history: None, orq_history_serial: 0, home_usage: Default::default(), recents: Default::default(), reopen: None, shortcuts: shortcuts::Shortcuts::default(),
             worktree_settings: worktree_settings::WorktreeSettings::default(), auto_hide: Default::default(),
             server_config: server_config::ServerConfig::default(), scheduled: scheduled::Scheduled::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), connect: connect::Connect::default(), connect_notices: connect::Notices::default(), devices: devices::Devices::default(), shared: shared_config::SharedConfig::default(), machines: machines::Machines::default(),
-            costs: Default::default(), worktrees: Default::default(), reviews: Default::default(), artifacts: Default::default(), usage_stats: Default::default(), search: Default::default(), topbar: Default::default(), computer: computer::Computer::default(), new_session: None, sidebar, machines_tray,
+            costs: Default::default(), worktrees: Default::default(), reviews: Default::default(), mission: Default::default(), artifacts: Default::default(), usage_stats: Default::default(), search: Default::default(), topbar: Default::default(), computer: computer::Computer::default(), new_session: None, sidebar, machines_tray,
             terminal: None, terminal_serial: 0,
             system_notifications: SystemNotifications::default(),
             window_tray: window_tray::WindowTray::new(tray_tx), presence: Default::default(),
@@ -1386,9 +1388,10 @@ impl Hangar {
     }
 
     /// Conexão da máquina da sessão aberta; sem sessão de outra máquina, a do servidor ativo.
-    /// Alguma página ocupa a janela (Configurações fora do modo ao vivo, Custos, Worktrees, Revisões).
+    /// Alguma página ocupa a janela (Configurações fora do modo ao vivo, Custos, Worktrees, Revisões, Mission Control).
     pub(super) fn page_open(&self) -> bool {
         self.settings.is_some() && !self.settings_live() || self.costs.view.is_some() || self.worktrees.view.is_some() || self.reviews.view.is_some()
+            || self.mission.open
     }
 
     pub(super) fn session_api(&self) -> Option<Api> { self.open_api.clone().or_else(|| self.api.clone()) }
@@ -7962,8 +7965,8 @@ impl Render for Hangar {
         // Página de Configurações ocupa a janela; a caixa ao vivo deixa a janela da conversa por baixo.
         let page = self.settings.filter(|_| !self.settings_ui.live);
         let costs_page = self.costs.view.is_some();
-        // Worktrees e Revisões: páginas por cima da conversa, sem a lista ao lado.
-        let tool_page = self.worktrees.view.is_some() || self.reviews.view.is_some();
+        // Worktrees, Revisões e Mission Control: páginas por cima da conversa, sem a lista ao lado.
+        let tool_page = self.worktrees.view.is_some() || self.reviews.view.is_some() || self.mission.open;
         let navigation = appearance::get().navigation;
         let (tabs, bottom_tabs) = (navigation.tabs(), navigation == appearance::Navigation::BottomTabs);
         let cutout = chat_background && page.is_none() && !costs_page && !tool_page && (desktop_window || floating);
@@ -8181,6 +8184,7 @@ impl Render for Hangar {
                 if !this.connection_dialog { this.open_settings(settings::Page::Appearance, window, cx); }
             }))
             .on_action(cx.listener(|this, _: &OpenCosts, window, cx| this.toggle_costs(window, cx)))
+            .on_action(cx.listener(|this, _: &OpenMission, window, cx| this.toggle_mission(window, cx)))
             .on_action(cx.listener(|this, _: &OpenWorktrees, window, cx| this.toggle_worktrees(window, cx)))
             .on_action(cx.listener(|this, _: &OpenReviews, window, cx| this.toggle_reviews(window, cx)))
             .on_action(cx.listener(|this, _: &OpenSearch, window, cx| this.toggle_search(window, cx)))
@@ -8257,6 +8261,7 @@ impl Render for Hangar {
                 if this.costs_escape(window, cx) { cx.stop_propagation(); return; }
                 if this.worktrees.view.is_some() { this.close_worktrees(window, cx); cx.stop_propagation(); return; }
                 if this.reviews.view.is_some() { this.close_reviews(window, cx); cx.stop_propagation(); return; }
+                if this.mission.open { this.close_mission(window, cx); cx.stop_propagation(); return; }
                 // O painel preso a um botão é a camada de cima: fecha antes de arquivos e terminal, e o foco volta ao campo.
                 // Com a página de configurações aberta nenhum painel está na tela; a flag das pastas fica para quando ela fechar.
                 if (this.settings.is_none() || this.settings_live()) && this.close_popups() {
@@ -8327,6 +8332,7 @@ impl Render for Hangar {
                 _ if self.reviews.view.is_some() => el.child(self.render_reviews(cx)),
                 _ if self.worktrees.view.is_some() => el.child(self.render_worktrees(window, cx)),
                 _ if costs_page => el.child(self.render_costs(window, cx)),
+                _ if self.mission.open => el.child(self.render_mission(window, cx)),
                 (Some(page), _) => el.child(self.render_settings(page, window, cx)),
                 // Abas: a faixa em cima (ou embaixo), a conversa e o painel do outro lado, sem barra lateral.
                 (None, Some(bar)) if tabs => {

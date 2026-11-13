@@ -3237,6 +3237,10 @@ impl Hangar {
             return;
         };
         self.tour_event(crate::tour::TourEvent::SessionCreated, cx);
+        {
+            let server = entity.read(cx).link.api.identity();
+            self.mission_session_created(&server, &session.name, first.as_ref().map(|(_, text, ..)| text.as_str()), window, cx);
+        }
         // A mensagem enviada da tela sem sessão segue na conversa da sessão nova; a chegada já começou no Enviar.
         let opening = if compact { self.opening.take() } else { None };
         // Criar não desfaz a escolha de outra conversa feita enquanto o pedido estava em voo.
