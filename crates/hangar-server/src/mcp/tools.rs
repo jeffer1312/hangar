@@ -305,7 +305,7 @@ struct Check { estado: String, #[serde(default)] sessao: String }
 struct MissionEvidence { caminho: String, #[serde(default)] legenda: String }
 
 #[derive(Deserialize)]
-struct Mission { etapa: Option<String>, nota: Option<String>, evidencias: Option<Vec<MissionEvidence>>, #[serde(default)] sessao: String }
+struct Mission { etapa: Option<String>, nota: Option<String>, #[serde(default)] evidencias: Vec<MissionEvidence>, #[serde(default)] sessao: String }
 
 /// Argumento do verbo: texto ou número, como o `list[str | int]` do Python.
 fn verb_args(raw: Option<&[Value]>) -> Result<Vec<String>, String> {
@@ -513,10 +513,7 @@ impl Tools {
         };
         if (200..300).contains(&status) { return Ok(dict(value)); }
         // O código vai na frente: `erro_contrato_mudou` é o sinal de ler de novo antes de gravar.
-        Err(match value["detail"]["code"].as_str() {
-            Some(code) => format!("{code}: {}", detail(status, &value)),
-            None => detail(status, &value),
-        })
+        Err(coded(status, &value))
     }
 
     async fn new_session(&self, headers: &HeaderMap, mut a: NewSession) -> Outcome {
@@ -594,10 +591,10 @@ impl Tools {
     /// Sem nada a informar, lê; com etapa, nota ou evidências, relata. As duas pelas rotas do Mission Control.
     async fn mission(&self, headers: &HeaderMap, a: Mission) -> Outcome {
         let me = self.me(headers, &a.sessao).await?;
-        let evidence = a.evidencias.unwrap_or_default();
+        let evidence = a.evidencias;
         if a.etapa.is_none() && a.nota.is_none() && evidence.is_empty() {
             let (status, value) = self.route(Method::GET, "/api/mission", None).await;
-            if !(200..300).contains(&status) { return Err(mission_error(status, &value)); }
+            if !(200..300).contains(&status) { return Err(coded(status, &value)); }
             let item = value["items"].as_array().and_then(|items| items.iter().find(|i| i["session"] == me.as_str())).cloned();
             let Some(item) = item else {
                 return Err("mission_session_not_linked: esta sessão não está ligada a um ticket do Mission Control".into());
@@ -607,7 +604,7 @@ impl Tools {
         let evidence: Vec<Value> = evidence.into_iter().map(|e| json!({"path": e.caminho, "caption": e.legenda})).collect();
         let body = json!({"session": me, "stage": a.etapa, "note": a.nota, "evidence": evidence});
         let (status, value) = self.route_from(Some(&me), Method::POST, "/api/mission/report", Some(body)).await;
-        if (200..300).contains(&status) { Ok(dict(value)) } else { Err(mission_error(status, &value)) }
+        if (200..300).contains(&status) { Ok(dict(value)) } else { Err(coded(status, &value)) }
     }
 
     async fn html_render(&self, headers: &HeaderMap, a: HtmlRender) -> Outcome {
@@ -1102,8 +1099,8 @@ mod tests {
     }
 }
 
-/// O código na frente: o agente decide pelo `mission_gate_pending` ou `mission_session_not_linked`.
-fn mission_error(status: u16, value: &Value) -> String {
+/// O código na frente, quando a rota deu um: o agente decide por ele (`erro_contrato_mudou`, `mission_gate_pending`).
+fn coded(status: u16, value: &Value) -> String {
     match value["detail"]["code"].as_str() {
         Some(code) => format!("{code}: {}", detail(status, value)),
         None => detail(status, value),

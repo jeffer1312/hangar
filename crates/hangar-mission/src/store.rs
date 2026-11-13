@@ -8,8 +8,10 @@ use std::path::{Path, PathBuf};
 const FORMAT_VERSION: u32 = 1;
 const MAX_STAGES: usize = 12;
 const MAX_EVIDENCE: usize = 200;
-/// Teto de um arquivo de evidência: cabe um vídeo curto de funcionamento.
-pub const MAX_EVIDENCE_BYTES: u64 = 512 * 1024 * 1024;
+/// Teto de um arquivo que a sessão anexa pelo caminho: cabe um vídeo curto de funcionamento.
+const MAX_EVIDENCE_BYTES: u64 = 512 * 1024 * 1024;
+/// Teto do envio do dono pelo app, que passa inteiro pela memória (o mesmo do anexo do app).
+pub const MAX_UPLOAD_BYTES: usize = 100 * 1024 * 1024;
 const MAX_TEXT: usize = 4000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,10 +21,19 @@ pub enum Kind { Invalid, NotFound, Gate, Unavailable }
 pub struct Error { pub kind: Kind, pub code: &'static str, pub message: String }
 
 impl Error {
-    fn new(kind: Kind, code: &'static str, message: impl Into<String>) -> Self { Self { kind, code, message: message.into() } }
+    pub(crate) fn new(kind: Kind, code: &'static str, message: impl Into<String>) -> Self { Self { kind, code, message: message.into() } }
     pub fn invalid(message: impl Into<String>) -> Self { Self::new(Kind::Invalid, "invalid_params", message) }
     fn io(action: &str, error: &io::Error) -> Self { Self::new(Kind::Unavailable, "mission_unavailable", format!("{action}: {:?}", error.kind())) }
     fn item_not_found() -> Self { Self::new(Kind::NotFound, "mission_item_not_found", "ticket sem registro no Mission Control") }
+    fn evidence_not_found() -> Self { Self::new(Kind::NotFound, "mission_evidence_not_found", "evidência não encontrada") }
+    fn not_linked() -> Self {
+        Self::new(Kind::NotFound, "mission_session_not_linked", "esta sessão não está ligada a um ticket do Mission Control")
+    }
+    fn gate(stage: &Stage) -> Self {
+        Self::new(Kind::Gate, "mission_gate_pending",
+            format!("a etapa {} espera a aprovação do dono no Mission Control; anexe as evidências e aguarde", stage.name))
+    }
+    fn too_much_evidence() -> Self { Self::invalid(format!("no máximo {MAX_EVIDENCE} evidências por ticket")) }
 }
 
 impl std::fmt::Display for Error {
@@ -41,6 +52,12 @@ impl Default for File {
     fn default() -> Self { Self { version: FORMAT_VERSION, stages: default_stages(), items: Vec::new() } }
 }
 
+impl File {
+    fn item_mut(&mut self, connector: &str, ticket_id: &str) -> Result<&mut Item, Error> {
+        self.items.iter_mut().find(|i| i.connector == connector && i.ticket_id == ticket_id).ok_or_else(Error::item_not_found)
+    }
+}
+
 /// Ticket que a sessão vai trabalhar, com o que mostrar dele sem perguntar ao conector.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -51,16 +68,24 @@ pub struct Link {
     pub session: String,
 }
 
-/// Mudança feita pelo dono na tela.
+/// Mudança feita pelo dono na tela. Em `approve` e `changes`, `stage` é a etapa que a tela mostrava:
+/// ela vale quando o ticket ainda não tem etapa gravada (a tela a deduziu pelo status ou pelo plano).
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum OwnerChange {
     /// Põe o ticket numa etapa, sem portão: o dono decide.
     Stage { stage: String },
     /// Aprova a etapa com portão em que o ticket está e o leva à seguinte.
-    Approve,
-    /// Recusa a etapa atual com o motivo: volta à anterior e desfaz a aprovação dela.
-    Changes { note: String },
+    Approve {
+        #[serde(default)]
+        stage: Option<String>,
+    },
+    /// Recusa a etapa atual com o motivo: volta à anterior e desfaz as aprovações daí em diante.
+    Changes {
+        note: String,
+        #[serde(default)]
+        stage: Option<String>,
+    },
     /// Validação entregue: o ticket sai das etapas.
     Delivered {
         #[serde(default)]
@@ -71,7 +96,6 @@ pub enum OwnerChange {
 }
 
 /// O que a sessão informa pela tool `mission`.
-#[derive(Clone, Debug, Default)]
 pub struct Report {
     pub stage: Option<String>,
     pub note: Option<String>,
@@ -92,13 +116,8 @@ fn valid_stage_id(id: &str) -> bool {
     matches!(chars.next(), Some('a'..='z')) && id.len() <= 32 && chars.all(|c| matches!(c, 'a'..='z' | '0'..='9' | '-'))
 }
 
-/// Mesmo formato dos nomes de sessão do Hangar.
-pub fn valid_session(name: &str) -> bool {
-    (1..=64).contains(&name.len()) && name.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
-}
-
 /// Tipo pelo nome: só imagem, vídeo, PDF e texto viram evidência.
-pub fn evidence_mime(name: &str) -> Option<&'static str> {
+fn evidence_mime(name: &str) -> Option<&'static str> {
     let ext = Path::new(name).extension()?.to_str()?.to_ascii_lowercase();
     Some(match ext.as_str() {
         "png" => "image/png",
@@ -121,6 +140,26 @@ fn event(kind: EventKind, by: &str, stage: Option<&str>, note: Option<&str>) -> 
 /// Primeira etapa com portão antes de `target` ainda sem aprovação.
 fn pending_gate<'a>(stages: &'a [Stage], item: &Item, target: usize) -> Option<&'a Stage> {
     stages[..target].iter().find(|stage| stage.gate && !item.approved.contains(&stage.id))
+}
+
+/// Volta à etapa `index`: o portão dela e os seguintes fecham de novo.
+fn reopen_from(stages: &[Stage], item: &mut Item, index: usize) {
+    let kept: HashSet<&str> = stages[..index].iter().map(|s| s.id.as_str()).collect();
+    item.approved.retain(|id| kept.contains(id.as_str()));
+}
+
+fn stage_index(stages: &[Stage], id: &str) -> Result<usize, Error> {
+    stages.iter().position(|s| s.id == id).ok_or_else(|| Error::invalid(format!(
+        "etapa desconhecida: {id}; as etapas são {}", stages.iter().map(|s| s.id.as_str()).collect::<Vec<_>>().join(", "))))
+}
+
+/// Cópias feitas antes da trava: saem se a mudança não for gravada.
+struct Staged<'a> { store: &'a Store, ids: Vec<String>, kept: bool }
+
+impl Drop for Staged<'_> {
+    fn drop(&mut self) {
+        if !self.kept { for id in &self.ids { self.store.drop_evidence(id); } }
+    }
 }
 
 impl Store {
@@ -149,38 +188,36 @@ impl Store {
                 item.approved.retain(|id| known.contains(id.as_str()));
             }
             file.stages = stages;
-            Ok((Snapshot { stages: file.stages.clone(), items: file.items.clone() }, true))
+            Ok(Snapshot { stages: file.stages.clone(), items: file.items.clone() })
         })
     }
 
     /// Liga o ticket à sessão. A sessão sai de outro ticket em que estivesse: uma sessão, um ticket.
-    pub fn link(&self, connector: &str, ticket_id: &str, link: Link) -> Result<Item, Error> {
+    /// `true` junto do item quando a sessão é nova para o ticket (quem chama a avisa).
+    pub fn link(&self, connector: &str, ticket_id: &str, link: Link) -> Result<(Item, bool), Error> {
         text("key", &link.key, 1024, false)?;
         text("title", &link.title, 4096, true)?;
         text("url", &link.url, 4096, false)?;
-        if !valid_session(&link.session) { return Err(Error::invalid("nome de sessão fora do formato")); }
+        if !hangar_core::ids::valid_session_name(&link.session) { return Err(Error::invalid("nome de sessão fora do formato")); }
         self.update(|file| {
             for other in file.items.iter_mut().filter(|i| i.session.as_deref() == Some(link.session.as_str())) {
                 if other.connector != connector || other.ticket_id != ticket_id { other.session = None; }
             }
-            let index = match file.items.iter().position(|i| i.connector == connector && i.ticket_id == ticket_id) {
-                Some(index) => index,
-                None => {
-                    file.items.push(Item {
-                        connector: connector.to_owned(), ticket_id: ticket_id.to_owned(), key: String::new(), title: String::new(),
-                        url: String::new(), session: None, stage: None, approved: Vec::new(), history: Vec::new(),
-                        evidence: Vec::new(), delivered_at: None,
-                    });
-                    file.items.len() - 1
-                }
-            };
-            let item = &mut file.items[index];
+            if file.item_mut(connector, ticket_id).is_err() {
+                file.items.push(Item {
+                    connector: connector.to_owned(), ticket_id: ticket_id.to_owned(), key: String::new(), title: String::new(),
+                    url: String::new(), session: None, stage: None, approved: Vec::new(), history: Vec::new(),
+                    evidence: Vec::new(), delivered_at: None,
+                });
+            }
+            let item = file.item_mut(connector, ticket_id)?;
             (item.key, item.title, item.url) = (link.key, link.title, link.url);
-            if item.session.as_deref() != Some(link.session.as_str()) {
+            let fresh = item.session.as_deref() != Some(link.session.as_str());
+            if fresh {
                 item.history.push(event(EventKind::Linked, "dono", None, Some(&link.session)));
                 item.session = Some(link.session);
             }
-            Ok((item.clone(), true))
+            Ok((item.clone(), fresh))
         })
     }
 
@@ -188,145 +225,149 @@ impl Store {
     pub fn remove(&self, connector: &str, ticket_id: &str) -> Result<Item, Error> {
         let item = self.update(|file| {
             let index = file.items.iter().position(|i| i.connector == connector && i.ticket_id == ticket_id).ok_or_else(Error::item_not_found)?;
-            Ok((file.items.remove(index), true))
+            Ok(file.items.remove(index))
         })?;
-        for evidence in &item.evidence { let _ = std::fs::remove_file(self.evidence_path(&evidence.id)); }
+        for evidence in &item.evidence { self.drop_evidence(&evidence.id); }
         Ok(item)
     }
 
     pub fn owner_change(&self, connector: &str, ticket_id: &str, change: OwnerChange) -> Result<Item, Error> {
         self.update(|file| {
-            let stages = file.stages.clone();
-            let item = file.items.iter_mut().find(|i| i.connector == connector && i.ticket_id == ticket_id).ok_or_else(Error::item_not_found)?;
-            let current = item.stage.as_deref().and_then(|id| stages.iter().position(|s| s.id == id));
+            let File { stages, items, .. } = file;
+            let item = items.iter_mut().find(|i| i.connector == connector && i.ticket_id == ticket_id).ok_or_else(Error::item_not_found)?;
+            // A etapa gravada vence; sem ela, a que a tela mostrava.
+            let current = |item: &Item, shown: Option<&str>| -> Result<Option<usize>, Error> {
+                match item.stage.as_deref().or(shown) {
+                    Some(id) => stage_index(stages, id).map(Some),
+                    None => Ok(None),
+                }
+            };
             match change {
                 OwnerChange::Stage { stage } => {
-                    if !stages.iter().any(|s| s.id == stage) { return Err(Error::invalid(format!("etapa desconhecida: {stage}"))); }
+                    stage_index(stages, &stage)?;
                     item.history.push(event(EventKind::Stage, "dono", Some(&stage), None));
                     (item.stage, item.delivered_at) = (Some(stage), None);
                 }
-                OwnerChange::Approve => {
-                    let Some(index) = current.filter(|i| stages[*i].gate) else {
+                OwnerChange::Approve { stage } => {
+                    let Some(index) = current(item, stage.as_deref())?.filter(|i| stages[*i].gate) else {
                         return Err(Error::invalid("o ticket não está numa etapa com portão"));
                     };
                     let stage = &stages[index];
                     if !item.approved.contains(&stage.id) { item.approved.push(stage.id.clone()); }
                     item.history.push(event(EventKind::Approved, "dono", Some(&stage.id), None));
-                    if let Some(next) = stages.get(index + 1) {
-                        item.history.push(event(EventKind::Stage, "dono", Some(&next.id), None));
-                        item.stage = Some(next.id.clone());
-                    }
+                    let next = stages.get(index + 1).unwrap_or(stage);
+                    if next.id != stage.id { item.history.push(event(EventKind::Stage, "dono", Some(&next.id), None)); }
+                    item.stage = Some(next.id.clone());
                 }
-                OwnerChange::Changes { note } => {
+                OwnerChange::Changes { note, stage } => {
                     text("note", &note, MAX_TEXT, false)?;
-                    let Some(index) = current else { return Err(Error::invalid("o ticket não tem etapa para recusar")) };
-                    let back_index = index.saturating_sub(1);
-                    let back = &stages[back_index];
-                    // Voltar desfaz toda aprovação daí em diante: o portão para onde o ticket volta fecha de novo.
-                    let kept: HashSet<&str> = stages[..back_index].iter().map(|s| s.id.as_str()).collect();
-                    item.approved.retain(|id| kept.contains(id.as_str()));
+                    let Some(index) = current(item, stage.as_deref())? else { return Err(Error::invalid("o ticket não tem etapa para recusar")) };
+                    let back = index.saturating_sub(1);
+                    reopen_from(stages, item, back);
                     item.history.push(event(EventKind::Changes, "dono", Some(&stages[index].id), Some(&note)));
-                    item.stage = Some(back.id.clone());
-                    item.delivered_at = None;
+                    (item.stage, item.delivered_at) = (Some(stages[back].id.clone()), None);
                 }
                 OwnerChange::Delivered { note } => {
                     if let Some(note) = &note { text("note", note, MAX_TEXT, true)?; }
-                    if let Some(gate) = pending_gate(&stages, item, stages.len()) {
-                        return Err(Error::new(Kind::Gate, "mission_gate_pending", format!("falta aprovar a etapa {}", gate.name)));
-                    }
+                    if let Some(gate) = pending_gate(stages, item, stages.len()) { return Err(Error::gate(gate)); }
                     item.history.push(event(EventKind::Delivered, "dono", None, note.as_deref()));
                     item.delivered_at = Some(now());
                 }
                 OwnerChange::Reset => { (item.stage, item.delivered_at) = (None, None); }
             }
-            Ok((item.clone(), true))
+            Ok(item.clone())
         })
     }
 
-    /// Relato da sessão: etapa, nota e evidências. O agente não passa de etapa com portão sem aprovação.
+    /// Relato da sessão: etapa, nota e evidências. O agente não passa de etapa com portão sem aprovação, e voltar
+    /// para antes de um portão o fecha de novo.
     pub fn report(&self, session: &str, report: Report) -> Result<Item, Error> {
         if let Some(note) = &report.note { text("note", note, MAX_TEXT, true)?; }
-        let mut staged = Vec::new();
+        for (_, caption) in &report.evidence { text("caption", caption, 500, true)?; }
+        // Antes de copiar: sessão sem ticket ou ticket cheio não ocupam disco.
+        let linked = self.read()?.items.into_iter().find(|i| i.session.as_deref() == Some(session)).ok_or_else(Error::not_linked)?;
+        if linked.evidence.len() + report.evidence.len() > MAX_EVIDENCE { return Err(Error::too_much_evidence()); }
+        let mut staged = Staged { store: self, ids: Vec::new(), kept: false };
+        let mut copies = Vec::new();
         for (path, caption) in &report.evidence {
-            text("caption", caption, 500, true)?;
-            staged.push((self.stage_evidence(path)?, caption.clone()));
+            let evidence = self.stage_evidence(path)?;
+            staged.ids.push(evidence.id.clone());
+            copies.push(Evidence { caption: caption.clone(), by: session.to_owned(), ..evidence });
         }
-        let outcome = self.update(|file| {
-            let stages = file.stages.clone();
-            let item = file.items.iter_mut().find(|i| i.session.as_deref() == Some(session)).ok_or_else(|| Error::new(Kind::NotFound,
-                "mission_session_not_linked", "esta sessão não está ligada a um ticket do Mission Control"))?;
-            if let Some(stage) = &report.stage {
-                let target = stages.iter().position(|s| &s.id == stage).ok_or_else(|| Error::invalid(format!(
-                    "etapa desconhecida: {stage}; as etapas são {}", stages.iter().map(|s| s.id.as_str()).collect::<Vec<_>>().join(", "))))?;
-                if let Some(gate) = pending_gate(&stages, item, target) {
-                    return Err(Error::new(Kind::Gate, "mission_gate_pending",
-                        format!("a etapa {} espera a aprovação do dono no Mission Control; anexe as evidências e aguarde", gate.name)));
-                }
-                if item.stage.as_deref() != Some(stage.as_str()) {
-                    item.history.push(event(EventKind::Stage, session, Some(stage), report.note.as_deref()));
+        let item = self.update(|file| {
+            let File { stages, items, .. } = file;
+            let item = items.iter_mut().find(|i| i.session.as_deref() == Some(session)).ok_or_else(Error::not_linked)?;
+            let note = report.note.as_deref().filter(|n| !n.trim().is_empty());
+            match &report.stage {
+                Some(stage) if item.stage.as_deref() != Some(stage.as_str()) => {
+                    let target = stage_index(stages, stage)?;
+                    if let Some(gate) = pending_gate(stages, item, target) { return Err(Error::gate(gate)); }
+                    reopen_from(stages, item, target);
+                    item.history.push(event(EventKind::Stage, session, Some(stage), note));
                     item.stage = Some(stage.clone());
-                } else if let Some(note) = report.note.as_deref().filter(|n| !n.trim().is_empty()) {
-                    item.history.push(event(EventKind::Note, session, Some(stage), Some(note)));
                 }
-            } else if let Some(note) = report.note.as_deref().filter(|n| !n.trim().is_empty()) {
-                item.history.push(event(EventKind::Note, session, item.stage.as_deref(), Some(note)));
+                _ => if let Some(note) = note { item.history.push(event(EventKind::Note, session, item.stage.as_deref(), Some(note))); },
             }
-            if item.evidence.len() + staged.len() > MAX_EVIDENCE { return Err(Error::invalid(format!("no máximo {MAX_EVIDENCE} evidências por ticket"))); }
-            for (evidence, caption) in &staged {
-                let evidence = Evidence { caption: caption.clone(), by: session.to_owned(), ..evidence.clone() };
+            if item.evidence.len() + copies.len() > MAX_EVIDENCE { return Err(Error::too_much_evidence()); }
+            for evidence in copies {
                 item.history.push(event(EventKind::Evidence, session, item.stage.as_deref(), Some(&evidence.name)));
                 item.evidence.push(evidence);
             }
-            Ok((item.clone(), true))
-        });
-        // Recusado: as cópias feitas antes da trava não ficam órfãs.
-        if outcome.is_err() { for (evidence, _) in &staged { let _ = std::fs::remove_file(self.evidence_path(&evidence.id)); } }
-        outcome
+            Ok(item.clone())
+        })?;
+        staged.kept = true;
+        Ok(item)
     }
 
     /// Evidência enviada pelo dono (bytes já lidos), no ticket.
     pub fn add_owner_evidence(&self, connector: &str, ticket_id: &str, name: &str, bytes: &[u8], caption: &str) -> Result<Item, Error> {
         text("caption", caption, 500, true)?;
         let evidence = self.store_bytes(name, bytes)?;
-        let outcome = self.update(|file| {
-            let item = file.items.iter_mut().find(|i| i.connector == connector && i.ticket_id == ticket_id).ok_or_else(Error::item_not_found)?;
-            if item.evidence.len() >= MAX_EVIDENCE { return Err(Error::invalid(format!("no máximo {MAX_EVIDENCE} evidências por ticket"))); }
-            let evidence = Evidence { caption: caption.to_owned(), by: "dono".into(), ..evidence.clone() };
+        let mut staged = Staged { store: self, ids: vec![evidence.id.clone()], kept: false };
+        let item = self.update(|file| {
+            let item = file.item_mut(connector, ticket_id)?;
+            if item.evidence.len() >= MAX_EVIDENCE { return Err(Error::too_much_evidence()); }
             item.history.push(event(EventKind::Evidence, "dono", item.stage.as_deref(), Some(&evidence.name)));
-            item.evidence.push(evidence);
-            Ok((item.clone(), true))
-        });
-        if outcome.is_err() { let _ = std::fs::remove_file(self.evidence_path(&evidence.id)); }
-        outcome
+            item.evidence.push(Evidence { caption: caption.to_owned(), by: "dono".into(), ..evidence });
+            Ok(item.clone())
+        })?;
+        staged.kept = true;
+        Ok(item)
     }
 
     pub fn remove_evidence(&self, connector: &str, ticket_id: &str, id: &str) -> Result<Item, Error> {
         let item = self.update(|file| {
-            let item = file.items.iter_mut().find(|i| i.connector == connector && i.ticket_id == ticket_id).ok_or_else(Error::item_not_found)?;
-            let index = item.evidence.iter().position(|e| e.id == id).ok_or_else(|| Error::new(Kind::NotFound, "mission_evidence_not_found", "evidência não encontrada"))?;
+            let item = file.item_mut(connector, ticket_id)?;
+            let index = item.evidence.iter().position(|e| e.id == id).ok_or_else(Error::evidence_not_found)?;
             item.evidence.remove(index);
-            Ok((item.clone(), true))
+            Ok(item.clone())
         })?;
-        let _ = std::fs::remove_file(self.evidence_path(id));
+        self.drop_evidence(id);
         Ok(item)
     }
 
-    /// Arquivo e tipo de uma evidência registrada.
+    /// Arquivo e tipo de uma evidência registrada. O id só vira caminho depois de achado no registro.
     pub fn evidence_file(&self, id: &str) -> Result<(PathBuf, Evidence), Error> {
         let file = self.read()?;
-        let evidence = file.items.iter().flat_map(|i| i.evidence.iter()).find(|e| e.id == id).cloned()
-            .ok_or_else(|| Error::new(Kind::NotFound, "mission_evidence_not_found", "evidência não encontrada"))?;
+        let evidence = file.items.iter().flat_map(|i| i.evidence.iter()).find(|e| e.id == id).cloned().ok_or_else(Error::evidence_not_found)?;
         Ok((self.evidence_path(id), evidence))
     }
 
     fn evidence_path(&self, id: &str) -> PathBuf { self.evidence_dir.join(id) }
 
+    fn drop_evidence(&self, id: &str) { let _ = std::fs::remove_file(self.evidence_path(id)); }
+
     fn new_evidence(&self, name: &str, size: u64) -> Result<Evidence, Error> {
         let mime = evidence_mime(name).ok_or_else(|| Error::invalid(format!("{name}: só imagem, vídeo, PDF ou texto")))?;
         if size > MAX_EVIDENCE_BYTES { return Err(Error::invalid(format!("{name}: acima de {} MiB", MAX_EVIDENCE_BYTES / 1024 / 1024))); }
         std::fs::create_dir_all(&self.evidence_dir).map_err(|e| Error::io("pasta das evidências", &e))?;
-        let id = sha1_smol::Sha1::from(format!("{name}\0{}\0{}", now(), std::process::id())).digest().to_string()[..20].to_owned();
-        Ok(Evidence { id, name: name.to_owned(), mime: mime.to_owned(), size, caption: String::new(), at: now(), by: String::new() })
+        Ok(Evidence { id: hangar_core::ids::random_hex(12), name: name.to_owned(), mime: mime.to_owned(), size, caption: String::new(), at: now(), by: String::new() })
+    }
+
+    /// Arquivo novo da evidência; nunca sobrescreve outro.
+    fn create(&self, evidence: &Evidence) -> Result<std::fs::File, Error> {
+        std::fs::OpenOptions::new().write(true).create_new(true).open(self.evidence_path(&evidence.id))
+            .map_err(|e| Error::io("arquivo da evidência", &e))
     }
 
     /// Copia o arquivo da sessão para a pasta das evidências: apagar o original depois não tira a prova.
@@ -336,7 +377,9 @@ impl Store {
         if !meta.is_file() { return Err(Error::invalid(format!("{}: não é arquivo", path.display()))); }
         let name = path.file_name().and_then(|n| n.to_str()).ok_or_else(|| Error::invalid("nome de arquivo inválido"))?;
         let evidence = self.new_evidence(name, meta.len())?;
-        std::fs::copy(path, self.evidence_path(&evidence.id)).map_err(|e| Error::io("cópia da evidência", &e))?;
+        let mut target = self.create(&evidence)?;
+        let copied = std::fs::File::open(path).and_then(|mut source| io::copy(&mut source, &mut target));
+        if let Err(error) = copied { self.drop_evidence(&evidence.id); return Err(Error::io("cópia da evidência", &error)); }
         Ok(evidence)
     }
 
@@ -344,7 +387,8 @@ impl Store {
         let name = Path::new(name).file_name().and_then(|n| n.to_str()).ok_or_else(|| Error::invalid("nome de arquivo inválido"))?;
         text("name", name, 240, false)?;
         let evidence = self.new_evidence(name, bytes.len() as u64)?;
-        hangar_core::fs::atomic_write(&self.evidence_path(&evidence.id), bytes).map_err(|e| Error::io("gravação da evidência", &e))?;
+        let written = self.create(&evidence).and_then(|mut file| io::Write::write_all(&mut file, bytes).map_err(|e| Error::io("gravação da evidência", &e)));
+        if let Err(error) = written { self.drop_evidence(&evidence.id); return Err(error); }
         Ok(evidence)
     }
 
@@ -362,16 +406,15 @@ impl Store {
         Ok(file)
     }
 
-    fn update<T>(&self, change: impl FnOnce(&mut File) -> Result<(T, bool), Error>) -> Result<T, Error> {
+    /// Lê, muda e regrava sob a trava; mudança recusada não grava nada.
+    fn update<T>(&self, change: impl FnOnce(&mut File) -> Result<T, Error>) -> Result<T, Error> {
         let parent = self.path.parent().ok_or_else(|| Error::new(Kind::Unavailable, "mission_unavailable", "sem pasta"))?;
         std::fs::create_dir_all(parent).map_err(|e| Error::io("pasta do Mission Control", &e))?;
         let _lock = hangar_core::fs::lock_file(&self.path.with_extension("lock")).map_err(|e| Error::io("trava do Mission Control", &e))?;
         let mut file = self.read()?;
-        let (value, changed) = change(&mut file)?;
-        if changed {
-            let bytes = serde_json::to_vec_pretty(&file).map_err(|_| Error::new(Kind::Unavailable, "mission_unavailable", "não serializou"))?;
-            hangar_core::fs::atomic_write(&self.path, &bytes).map_err(|e| Error::io("gravação do Mission Control", &e))?;
-        }
+        let value = change(&mut file)?;
+        let bytes = serde_json::to_vec_pretty(&file).map_err(|_| Error::new(Kind::Unavailable, "mission_unavailable", "não serializou"))?;
+        hangar_core::fs::atomic_write(&self.path, &bytes).map_err(|e| Error::io("gravação do Mission Control", &e))?;
         Ok(value)
     }
 }

@@ -84,7 +84,7 @@ pub struct Item {
     pub delivered_at: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Snapshot {
     pub stages: Vec<Stage>,
     pub items: Vec<Item>,

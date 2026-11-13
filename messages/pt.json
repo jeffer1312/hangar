@@ -10725,11 +10725,8 @@
   "native_mission_plan_task": "Task {n} de {total}",
   "native_mission_plan_progress": "Progresso do plano",
   "native_mission_adopt": "Ligar ao ticket",
-  "native_mission_agent_notice": "[painel: Mission Control] Esta sessão trabalha o ticket {key}. Ao mudar de etapa, informe pela tool `mission` do MCP hangar (sem argumentos ela mostra o ticket e as etapas). Na validação, anexe as evidências de funcionamento (prints, vídeos, relatórios) pela mesma tool e aguarde a aprovação do dono antes de seguir.",
   "native_mission_approve": "Aprovar",
-  "native_mission_cancel": "Cancelar",
   "native_mission_changes": "Pedir ajustes",
-  "native_mission_changes_message": "Ajustes pedidos pelo dono no ticket {key}, na etapa {etapa}: {nota}",
   "native_mission_changes_placeholder": "O que precisa mudar?",
   "native_mission_changes_send": "Enviar à sessão",
   "native_mission_delivered": "Marcar como entregue",
@@ -10764,5 +10761,6 @@
   "native_mission_stages_none": "Escreva ao menos uma etapa.",
   "native_mission_stages_save": "Salvar etapas",
   "native_mission_stages_title": "Etapas do trabalho",
-  "native_mission_waiting_you": "{etapa}: espera sua aprovação"
+  "native_mission_waiting_you": "{etapa}: espera sua aprovação",
+  "native_mission_evidence_not_openable": "Este tipo de arquivo não abre pelo app; a evidência continua no servidor."
 }

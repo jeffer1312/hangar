@@ -1800,7 +1800,6 @@ dependencies = [
  "percent-encoding",
  "serde",
  "serde_json",
- "sha1_smol",
  "tempfile",
  "tokio",
  "tower",

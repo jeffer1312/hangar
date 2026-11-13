@@ -153,6 +153,8 @@ pub struct AppState {
     pub connectors: Arc<hangar_connectors::Host>,
     /// Mission Control (`hangar-mission`): etapas, vínculos e evidências em `~/.hangar/mission/`.
     pub mission: Arc<hangar_mission::Store>,
+    /// Avisos do Mission Control à sessão, pela rota de entrada; o roteador entra quando fica pronto.
+    pub mission_notify: Arc<crate::mission_notify::RouterNotify>,
 }
 
 impl AppState {
@@ -218,6 +220,7 @@ impl AppState {
                       list_env: crate::list::bridge::ListEnv) -> AppState {
         crate::transcript::set_orq_parser(crate::orchestration::timeline::parse_obj);
         let http = proxy::client();
+        let mission_notify = Arc::new(crate::mission_notify::RouterNotify { router: Default::default(), token: cfg.auth_token.clone() });
         let mods = crate::mods::state::Mods::default();
         let interactions = Arc::new(crate::interactions::InteractionStore::default());
         let plugin = Arc::new(crate::plugin::Store::new(interactions.clone()));
@@ -295,6 +298,7 @@ impl AppState {
             claude_plugins: Arc::default(),
             connectors: hangar_connectors::Host::new(hangar_connectors::registry::Registry::new(hangar_dir.join("connectors.json")), Default::default()),
             mission: Arc::new(hangar_mission::Store::new(hangar_dir.join("mission"))),
+            mission_notify,
             hangar_dir, device_install,
             upload_naming: Default::default(),
             origins: std::sync::Mutex::new(indexmap::IndexMap::new()),
@@ -772,6 +776,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 
 fn router_with(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router {
     let api = public_routes(state.clone(), pair);
+    let _ = state.mission_notify.router.set(api.clone());
     // O MCP chama as tools pelas mesmas rotas que o `hangar-send` chama: o roteador público inteiro.
     api.clone().merge(crate::mcp::router(state.clone(), api))
         .layer(axum::middleware::from_fn_with_state(state.clone(), crate::login_guests::gate::guard))
@@ -922,7 +927,7 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         .merge(hangar_desktop_theme::router(hangar_core::edge::Edge { trusted: state.cfg.trusted.clone(), auth: state.auth.clone(), diag: state.diag.clone() }, state.desktop_theme.clone()))
         // Conectores: só o dono, nunca repassados (o Python não tem as rotas).
         .merge(hangar_connectors::http::router(hangar_core::edge::Edge { trusted: state.cfg.trusted.clone(), auth: state.auth.clone(), diag: state.diag.clone() }, state.connectors.clone()))
-        .merge(hangar_mission::http::router(hangar_core::edge::Edge { trusted: state.cfg.trusted.clone(), auth: state.auth.clone(), diag: state.diag.clone() }, state.mission.clone()))
+        .merge(hangar_mission::http::router(hangar_core::edge::Edge { trusted: state.cfg.trusted.clone(), auth: state.auth.clone(), diag: state.diag.clone() }, state.mission.clone(), state.mission_notify.clone()))
         .route("/api/claude/customizations", get(crate::claude_customizations::catalog_route).fallback(pass_any))
         // Senha do chaveiro: só o dono, nunca repassada; só o preflight do CORS vai ao Python.
         .route("/api/keyring/unlock", axum::routing::post(crate::keyring::unlock_route).options(pass_any))

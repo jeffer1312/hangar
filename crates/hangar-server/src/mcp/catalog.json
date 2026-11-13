@@ -1045,33 +1045,26 @@
      "title": "Nota"
     },
     "evidencias": {
-     "anyOf": [
-      {
-       "type": "array",
-       "items": {
-        "type": "object",
-        "properties": {
-         "caminho": {
-          "type": "string",
-          "title": "Caminho"
-         },
-         "legenda": {
-          "type": "string",
-          "title": "Legenda",
-          "default": ""
-         }
-        },
-        "required": [
-         "caminho"
-        ]
+     "default": [],
+     "items": {
+      "type": "object",
+      "properties": {
+       "caminho": {
+        "type": "string",
+        "title": "Caminho"
+       },
+       "legenda": {
+        "type": "string",
+        "title": "Legenda",
+        "default": ""
        }
       },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null,
-     "title": "Evidencias"
+      "required": [
+       "caminho"
+      ]
+     },
+     "title": "Evidencias",
+     "type": "array"
     },
     "sessao": {
      "default": "",
