@@ -30,6 +30,30 @@ pub enum Learned {
     Connect(ConnectRoute),
     /// 401 pelo Connect: o dono revogou a credencial, que não é pedida de novo sozinha.
     ConnectRefused,
+    /// Rota decidida: a tela que diz o caminho redesenha.
+    Route,
+}
+
+/// Por onde a chamada sai, para a tela dizer o caminho em uso.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteKind { Here, Local, Tailscale, Saved, Connect }
+
+/// O caminho que este app usa até a máquina. `None`: ainda não decidido (conectando de novo).
+pub fn route_kind(address: &str) -> Option<RouteKind> {
+    let key = key(address)?;
+    with(|t| {
+        let known = t.get(&key)?;
+        let route = known.route.as_ref()?;
+        Some(match route.host() {
+            Some(url::Host::Ipv4(ip)) if ip.is_loopback() => RouteKind::Here,
+            Some(url::Host::Ipv6(ip)) if ip.is_loopback() => RouteKind::Here,
+            Some(url::Host::Domain(name)) if name.eq_ignore_ascii_case("localhost") => RouteKind::Here,
+            _ if known.lan.as_ref().and_then(lan_url).as_ref() == Some(route) => RouteKind::Local,
+            _ if known.connect_origins.iter().any(|origin| same_origin(origin, route)) => RouteKind::Connect,
+            Some(url::Host::Domain(name)) if name.to_ascii_lowercase().ends_with(".ts.net") => RouteKind::Tailscale,
+            _ => RouteKind::Saved,
+        })
+    })
 }
 
 #[derive(Default)]
@@ -178,13 +202,17 @@ pub async fn ensure(api: &Api) {
         known.route.is_none().then(|| (known.invite || api.is_loopback(), known.deciding.clone()))
     }) else { return };
     // Convite e esta própria máquina: o endereço salvo já é o caminho.
-    if skip { return set_route(&key, api.base.clone()); }
+    if skip {
+        set_route(&key, api.base.clone());
+        return notify(key, Learned::Route);
+    }
     // Lista e conversas da mesma máquina reconectam juntas: uma decide, as outras aproveitam.
     let _turn = gate.lock().await;
     let Some((saved, connect)) = with(|t| t.get(&key).filter(|k| k.route.is_none())
         .map(|k| (k.lan.clone(), k.connect.as_ref().map(|(c, _)| c.clone())))) else { return };
     let route = decide(api, saved, connect).await;
     set_route(&key, route);
+    notify(key, Learned::Route);
     // Máquina com Connect ganha a credencial de aparelho; endereço novo do Connect fica guardado.
     tokio::spawn(refresh_connect(api.clone()));
 }
@@ -651,6 +679,28 @@ mod tests {
         server.abort();
         assert_eq!(posts.load(Ordering::SeqCst), 0);
         assert!(with(|t| t.get(&identity).is_some_and(|k| k.connect.is_none())));
+    }
+
+    #[tokio::test]
+    async fn route_kind_names_the_path_in_use() {
+        let saved = "https://casa-kind.tail1.ts.net";
+        assert_eq!(route_kind(saved), None, "sem rota decidida não há caminho a dizer");
+        let lan = Lan { url: "http://192.168.50.7:8765".into(), id: "casa".into() };
+        let connect = connect_route("https://casa-kind.jeff.hangar.dev.br");
+        seed(saved, false, Some(&lan), Some(&connect), false);
+        let identity = key(saved).unwrap();
+        set_route(&identity, route_of(saved));
+        assert_eq!(route_kind(saved), Some(RouteKind::Tailscale));
+        set_route(&identity, route_of(&lan.url));
+        assert_eq!(route_kind(saved), Some(RouteKind::Local));
+        set_route(&identity, route_of(&connect.url));
+        assert_eq!(route_kind(saved), Some(RouteKind::Connect));
+        let other = "https://casa-kind.example.com/";
+        set_route(&key(other).unwrap(), route_of(other));
+        assert_eq!(route_kind(other), Some(RouteKind::Saved));
+        let here = "http://localhost:1";
+        set_route(&key(here).unwrap(), route_of(here));
+        assert_eq!(route_kind(here), Some(RouteKind::Here));
     }
 
     #[test]

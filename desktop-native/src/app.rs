@@ -1901,6 +1901,8 @@ impl Hangar {
                     api::route::Learned::Lan(lan) => self.remember_lan(&address, lan),
                     api::route::Learned::Connect(connect) => self.remember_connect(&address, connect),
                     api::route::Learned::ConnectRefused => self.connect_refused(&address, window, cx),
+                    // A página Servidores diz o caminho em uso.
+                    api::route::Learned::Route => cx.notify(),
                 }
                 return;
             }

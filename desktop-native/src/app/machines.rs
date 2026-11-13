@@ -12,6 +12,7 @@ use crate::update::confirm::Launch;
 use add::{AddMachine, Found};
 use pair::Pair;
 use super::server_config::chip;
+use crate::api::route::{RouteKind, route_kind};
 use super::settings::{section_head, settings_box, Page};
 use gpui_kit::component::{WindowExt, switch::Switch, tooltip::Tooltip};
 
@@ -169,10 +170,26 @@ fn valid_id(id: &str) -> bool {
 
 fn id_hint() -> String { tr("machines_id_hint").replace("{exemplos}", "casa, notebook") }
 
+/// Por onde este app chega à máquina.
+fn app_route(kind: RouteKind) -> String {
+    tr(match kind { RouteKind::Here => "machines_route_here", RouteKind::Local => "machines_route_local",
+        RouteKind::Tailscale => "machines_route_tailscale", RouteKind::Saved => "machines_route_saved", RouteKind::Connect => "machines_route_connect" })
+}
+
+/// Por onde o servidor conectado chegou a ela: ele só distingue o endereço salvo do Connect.
+fn server_route(kind: RouteKind) -> Option<String> {
+    match kind {
+        RouteKind::Saved => Some(tr("machines_route_server_saved")),
+        RouteKind::Connect => Some(tr("machines_route_server_connect")),
+        _ => None,
+    }
+}
+
 /// Uma outra máquina do `peers.json` deste servidor, como `/api/peers` a devolve. O token vem mascarado e não é lido: o que
-/// este aparelho usa para falar com ela é o da entrada guardada aqui.
+/// este aparelho usa para falar com ela é o da entrada guardada aqui. `route`: por onde o servidor chegou a ela da última
+/// vez que funcionou (`Saved` ou `Connect`); ausente quando ele ainda não sabe.
 #[derive(Clone, Debug)]
-struct Peer { id: String, url: String, enabled: bool }
+struct Peer { id: String, url: String, enabled: bool, route: Option<RouteKind> }
 
 /// Por que uma entrada deste aparelho não disse o identificador (`MotivoSemId` do web): fora do ar e token recusado se
 /// consertam de jeitos diferentes. `Empty` é "respondeu", com ou sem nome.
@@ -248,7 +265,9 @@ fn join_lines(servers: &[ServerEntry], ids: &HashMap<String, Option<String>>, re
 
 fn parse_peers(value: &Value) -> Option<Vec<Peer>> {
     value.as_array()?.iter().map(|p| Some(Peer { id: p.get("id")?.as_str()?.to_owned(), url: p.get("base_url")?.as_str()?.to_owned(),
-        enabled: p.get("enabled").and_then(Value::as_bool).unwrap_or(true) })).collect()
+        enabled: p.get("enabled").and_then(Value::as_bool).unwrap_or(true),
+        route: match p.get("route").and_then(Value::as_str) { Some("saved") => Some(RouteKind::Saved), Some("connect") => Some(RouteKind::Connect), _ => None } }))
+        .collect()
 }
 
 /// A ida (este servidor → ela), medida pelo servidor em `/api/peers/check`.
@@ -1494,7 +1513,15 @@ impl Hangar {
         cx.notify();
     }
 
-    /// O resumo do cartão deste servidor: o endereço que responde mais rápido, e o farol dele.
+    /// O resumo do cartão deste servidor: por onde este app chega a ele. A medição da própria máquina fica no detalhe.
+    fn app_route_summary(&self) -> (String, Light) {
+        match self.api.as_ref().filter(|_| self.list_online).and_then(|api| route_kind(&api.identity())) {
+            Some(kind) => (app_route(kind), Light::Ok),
+            None => (tr("machines_testing"), Light::Test),
+        }
+    }
+
+    /// O resumo do detalhe deste servidor: o endereço que responde mais rápido, e o farol dele.
     fn reach_summary(&self) -> (String, Light) {
         match &self.machines.reach.value {
             _ if self.machines.reach.loading => (tr("machines_testing"), Light::Test),
@@ -1553,7 +1580,7 @@ impl Hangar {
         let open_key = open_line.as_ref().map(|l| l.open_key().to_owned());
 
         let m = &self.machines;
-        let (summary, light) = self.reach_summary();
+        let (summary, light) = self.app_route_summary();
         let id = m.id_loaded().to_owned();
         let name = self.server_label(cx);
         let no_id = m.id.ok().is_some_and(String::is_empty);
@@ -1675,6 +1702,12 @@ impl Hangar {
         let (name, label) = (line.name.clone(), line.name.clone());
         let chip = line.ident.clone().filter(|ident| *ident != name);
         let repeated = (line.entries.len() > 1).then(|| tr("machines_row_saved_times").replace("{n}", &line.entries.len().to_string()));
+        // Só de quem responde: guardada aqui, o caminho deste app; só no servidor, o último que o servidor usou.
+        let route = match row {
+            Row::Shown => line.entry.as_ref().and_then(|e| route_kind(&e.address)).map(app_route),
+            Row::NoToken => line.peer.as_ref().and_then(|p| p.route).and_then(server_route),
+            _ => None,
+        };
         let invite = line.entry.as_ref().is_some_and(|e| e.invite);
         let update = cx.try_global::<crate::update::Handle>().and_then(|handle|
             line.entries.iter().find_map(|entry| handle.0.read(cx).machine_entry_update_text(&entry.id)));
@@ -1685,7 +1718,8 @@ impl Hangar {
             .custom(ButtonCustomVariant::new(cx).color(if selected { theme::accent_dim() } else { transparent_black() })
                 .foreground(theme::text()).hover(theme::hover()).active(theme::hover()))
             .w_full().h_auto().min_h(px(60.)).px(px(12.)).py(px(10.)).rounded(px(10.))
-            .accessibility_label([Some(tr("machines_open").replace("{nome}", &name)), chip.clone(), Some(phrase.clone()), repeated.clone(), update.clone()]
+            .accessibility_label([Some(tr("machines_open").replace("{nome}", &name)), chip.clone(), Some(phrase.clone()), route.clone(), repeated.clone(),
+                update.clone()]
                 .into_iter().flatten().collect::<Vec<_>>().join(". "))
             .child(div().w_full().flex().items_center().gap(px(12.))
                 .child(tile(face, 38., theme::raised(), Some(dot)))
@@ -1694,6 +1728,7 @@ impl Hangar {
                         .when_some(chip, |el, chip| el.child(div().px(px(8.)).rounded_full().border_1().border_color(theme::border())
                             .font_family(theme::MONO).text_size(px(11.)).text_color(theme::muted()).child(chip))))
                     .child(div().text_size(px(12.5)).text_color(color).whitespace_normal().child(phrase))
+                    .when_some(route, |el, text| el.child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(text)))
                     .when_some(update, |el, text| el.child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(text)))
                     .when_some(repeated, |el, text| el.child(div().text_size(px(12.5)).text_color(theme::warning()).child(text))))
                 .when(!silent, |el| el.child(chrome::small_icon(IconName::ChevronRight, 16., if selected { theme::accent_text() } else { theme::muted() }))));
@@ -2371,7 +2406,7 @@ impl RenderOnce for FocusOnClick {
 #[cfg(test)]
 mod tests {
     use super::{Back, Card, Check, Kind, Light, Line, Peer, Reach, Reason, Row, ServerEntry, card_state, collapsed, host_key, join_lines, parse_going,
-        parse_peers, parse_reach, row_state, update_warnings, valid_id, web_ui_value, Machines};
+        parse_peers, parse_reach, row_state, update_warnings, valid_id, web_ui_value, Machines, RouteKind};
     use std::collections::HashMap;
     use crate::{api::Failure, i18n::tr};
 
@@ -2486,7 +2521,7 @@ mod tests {
     fn entry(id: &str, address: &str, disabled: bool) -> ServerEntry {
         ServerEntry { id: id.into(), label: id.into(), address: address.into(), token: "t".into(), disabled, invite: false, lan: None, connect: None, connect_refused: false, ephemeral: false }
     }
-    fn peer(id: &str, url: &str, enabled: bool) -> Peer { Peer { id: id.into(), url: url.into(), enabled } }
+    fn peer(id: &str, url: &str, enabled: bool) -> Peer { Peer { id: id.into(), url: url.into(), enabled, route: None } }
     fn check(going: &str, back: Option<Back>) -> Check {
         Check { going: Some(parse_going(&serde_json::json!({"estado": going}))), back, ..Check::default() }
     }
@@ -2543,9 +2578,12 @@ mod tests {
         assert_eq!(row_state(&line(saved(), Some(Reason::Empty), Some(peer("casa", "x", false))), None), Row::Off);
         assert!(!collapsed(Row::OffHere) && !collapsed(Row::NoToken));
         // Lista do servidor: `enabled` ausente é ligada, como no backend.
-        let list = parse_peers(&serde_json::json!([{"id": "a", "base_url": "http://a"}, {"id": "b", "base_url": "http://b", "enabled": false}]))
+        let list = parse_peers(&serde_json::json!([{"id": "a", "base_url": "http://a", "route": "connect"},
+            {"id": "b", "base_url": "http://b", "enabled": false, "route": "saved"}, {"id": "c", "base_url": "http://c", "route": "outro"}]))
             .expect("formato do /api/peers");
-        assert_eq!(list.iter().map(|p| p.enabled).collect::<Vec<_>>(), [true, false]);
+        assert_eq!(list.iter().map(|p| p.enabled).collect::<Vec<_>>(), [true, false, true]);
+        // Caminho do servidor até ela: só os dois que ele conhece; o resto é "não sabe".
+        assert_eq!(list.iter().map(|p| p.route).collect::<Vec<_>>(), [Some(RouteKind::Connect), Some(RouteKind::Saved), None]);
     }
 
     #[test]
