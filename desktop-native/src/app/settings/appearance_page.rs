@@ -172,15 +172,9 @@ impl Hangar {
     /// Atalhos para as seções: a página é longa e a busca só acha uma linha por vez. Mora fora da rolagem, sempre à vista.
     pub(in crate::app) fn section_tabs(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let current = self.settings_ui.jump;
-        div().id("appearance-sections").max_w_full().flex().gap(px(4.)).p(px(3.)).rounded(px(10.)).border_1()
-            .border_color(theme::border()).bg(theme::inset()).overflow_x_scroll()
+        tab_strip("appearance-sections")
             .children(SECTIONS.map(|key| {
-                let on = current == Some(key);
-                Button::new(SharedString::from(format!("appearance-jump-{key}")))
-                    .custom(ButtonCustomVariant::new(cx).color(if on { theme::accent_dim() } else { transparent_black() })
-                        .foreground(if on { theme::accent_text() } else { theme::muted() }).hover(theme::hover()).active(theme::hover()))
-                    .small().h(px(28.)).px(px(11.)).rounded(px(7.)).flex_shrink_0().label(tr(key))
-                    .when(on, |el| el.bg(theme::accent_dim()))
+                strip_tab(SharedString::from(format!("appearance-jump-{key}")), tr(key), current == Some(key), cx)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.settings_ui.hit = None;
                         this.settings_ui.jump = Some(key);

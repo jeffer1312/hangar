@@ -14,6 +14,7 @@ import { RenameSuggestionAnimation } from './RenameSuggestionAnimation';
 import { SleepHiddenAnimation } from './SleepHiddenAnimation';
 import { SessionVaultAnimation } from './SessionVaultAnimation';
 import { TagsPlateAnimation } from './TagsPlateAnimation';
+import { UpdatesManualAnimation } from './UpdatesManualAnimation';
 import { VaultAnimation } from './VaultAnimation';
 import { WorktreeFreshAnimation } from './WorktreeFreshAnimation';
 
@@ -21,6 +22,7 @@ import { WorktreeFreshAnimation } from './WorktreeFreshAnimation';
 const animations: Record<string, ComponentType<{ width: number }>> = {
   'scheduled-tasks': ScheduledTasksAnimation,
   'adormecer-ocultas': SleepHiddenAnimation,
+  'atualizacoes-e-manual': UpdatesManualAnimation,
   'branch-no-celular': FolderBranchAnimation,
   'cofre-de-senhas': VaultAnimation,
   'codex-atividade': CodexActivityAnimation,

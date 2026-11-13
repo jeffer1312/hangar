@@ -357,7 +357,7 @@ impl News {
 /// O lugar da animação no cartão, medido a cada quadro para o seguinte: a largura real (o Dialog encolhe em janela
 /// pequena) substitui `guess`, e fora da área visível do modal a animação não é montada — fica só a altura dela, sem
 /// marcar redesenho da janela.
-fn stage_slot(id: &str, guess: Pixels, draw: crate::news::NewsAnimation, started: Instant, window: &mut Window, cx: &mut App) -> Div {
+pub(crate) fn stage_slot(id: &str, guess: Pixels, draw: crate::news::NewsAnimation, started: Instant, window: &mut Window, cx: &mut App) -> Div {
     let measured = window.use_keyed_state(SharedString::from(format!("news-stage-{id}")), cx,
         |_, _| Rc::new(Cell::new(None::<(bool, Size<Pixels>)>))).read(cx).clone();
     let slot = div().relative().w_full();
@@ -459,7 +459,7 @@ fn device_id_in(dir: &Path) -> std::io::Result<String> {
 }
 
 /// Lido do disco uma vez por processo; falha não fica guardada e tenta de novo no próximo pedido.
-pub(super) fn device_id() -> Option<String> {
+pub(crate) fn device_id() -> Option<String> {
     static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     if let Some(id) = ID.get() { return Some(id.clone()); }
     let id = crate::appearance::dir().ok_or_else(|| std::io::Error::other("sem pasta de configuração")).and_then(|dir| device_id_in(&dir))

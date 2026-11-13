@@ -10,9 +10,13 @@ import { useSettingsColors } from '../../src/features/config/colors';
 import { Icon, type IconName } from '../../src/ui/Icon';
 import { ownServers, useServers } from '../../src/stores/servers';
 import { useSessions } from '../../src/stores/sessions';
+import { useDocsEntry } from '../../src/features/updates/docs';
 import * as m from '../../src/paraglide/messages';
 
 type Page = { route: string; icon: IconName; title: () => string; rows: Array<() => string> };
+
+const UPDATES = '/config/atualizacoes';
+const MANUAL = '/config/manual';
 
 // Ordem e ícones do Rust (settings.rs), sem as páginas só de desktop. `rows` são os
 // títulos de linha que a busca acha, que só abre a página.
@@ -25,6 +29,9 @@ const DEVICE: Page[] = [
   // Vale para todas as máquinas próprias de uma vez: por isso fica fora do grupo do servidor escolhido.
   { route: '/config/sessions', icon: 'EyeOff', title: m.settings_sessions_title, rows: [m.session_auto_hide_label] },
   { route: '/connect', icon: 'Cloud', title: m.connect_title, rows: [m.connect_password_title, m.connect_end_sessions] },
+  // Leem o servidor ativo, mas são do aparelho: o filtro é o do celular.
+  { route: UPDATES, icon: 'Sparkles', title: m.updates_history_title, rows: [] },
+  { route: MANUAL, icon: 'BookOpen', title: m.manual_title, rows: [] },
   { route: '/config/sobre', icon: 'Info', title: m.native_settings_page_about,
     rows: [m.atualizar_versao, m.config_sobre_servidor, m.atualizar_versao_servidor] },
 ];
@@ -53,10 +60,10 @@ const SERVER: Page[] = [
   { route: '/config/advanced', icon: 'SlidersHorizontal', title: m.native_settings_page_advanced, rows: [] },
 ];
 
-function search(query: string) {
+function search(query: string, device: Page[]) {
   const q = fold(query.trim());
   const found: Array<{ key: string; route: string; label: string }> = [];
-  for (const p of [...DEVICE, ...SERVER]) {
+  for (const p of [...device, ...SERVER]) {
     const title = p.title();
     if (fold(title).includes(q)) found.push({ key: p.route, route: p.route, label: title });
     for (const row of p.rows) {
@@ -73,8 +80,11 @@ export default function ConfigIndex() {
   const c = useSettingsColors();
   const [query, setQuery] = useState('');
   const open = (route: string) => router.push(route as never);
+  const docs = useDocsEntry(useServers((s) => s.active()));
+  const device = docs.visible ? DEVICE : DEVICE.filter((p) => p.route !== UPDATES && p.route !== MANUAL);
+  const newBadge = docs.count === 1 ? m.updates_history_new_one() : docs.count > 1 ? m.updates_history_new_count({ n: String(docs.count) }) : undefined;
   const searching = query.trim() !== '';
-  const found = searching ? search(query) : [];
+  const found = searching ? search(query, device) : [];
 
   return (
     <Pagina>
@@ -105,7 +115,8 @@ export default function ConfigIndex() {
       ) : (
         <View style={styles.list}>
           <SettingsMenuGroup title={m.native_settings_group_device()} />
-          {DEVICE.map((p) => <SettingsMenuItem key={p.route} icon={p.icon} label={p.title()} onPress={() => open(p.route)} />)}
+          {device.map((p) => <SettingsMenuItem key={p.route} icon={p.icon} label={p.title()}
+            badge={p.route === UPDATES ? newBadge : undefined} onPress={() => open(p.route)} />)}
           <SettingsMenuGroup title={m.native_settings_group_server()} right={<ServerPicker />} />
           {SERVER.map((p) => <SettingsMenuItem key={p.route} icon={p.icon} label={p.title()} onPress={() => open(p.route)} />)}
         </View>

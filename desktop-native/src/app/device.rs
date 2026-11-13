@@ -379,6 +379,8 @@ impl Hangar {
             Page::Scheduled => self.scheduled_opened(cx),
             Page::Worktrees => self.worktree_settings_opened(cx),
             Page::Sessions => self.auto_hide_opened(cx),
+            Page::Updates => self.updates_opened(cx),
+            Page::Manual => self.manual_opened(cx),
             Page::Shortcuts => self.shortcuts_opened(cx),
             Page::Harnesses => self.harness_opened(cx),
             Page::Voice | Page::Jev | Page::Notifications | Page::Attachments | Page::Advanced => self.server_config_opened(page, cx),

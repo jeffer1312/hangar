@@ -1751,6 +1751,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-docs"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde_json",
+ "tempfile",
+ "unicode-normalization",
+]
+
+[[package]]
 name = "hangar-http-file"
 version = "0.1.0"
 dependencies = [
@@ -1911,6 +1921,7 @@ dependencies = [
  "hangar-core",
  "hangar-deploy",
  "hangar-desktop-theme",
+ "hangar-docs",
  "hangar-http-file",
  "hangar-omp-sync",
  "hangar-opencode-cookie",

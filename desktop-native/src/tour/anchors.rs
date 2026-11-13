@@ -41,12 +41,14 @@ mod tests {
         assert_eq!(session_row("notebook", "hangar"), "session-row:notebook::hangar");
     }
 
-    /// O `ancora:` do frontmatter de cada novidade aponta para uma âncora que o app registra.
+    /// O `ancora:` do frontmatter de cada novidade e de cada artigo do Manual aponta para uma âncora que o app registra.
     #[test]
     fn every_news_anchor_is_known() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/novidades");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut unknown = Vec::new();
-        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+        // O Manual pode ainda não existir num checkout; as novidades sempre existem.
+        let manual = std::fs::read_dir(root.join("../docs/manual")).into_iter().flatten();
+        for entry in std::fs::read_dir(root.join("../docs/novidades")).unwrap().chain(manual).flatten() {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("md") { continue; }
             let text = std::fs::read_to_string(&path).unwrap();

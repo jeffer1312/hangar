@@ -27,6 +27,7 @@ mod machine_peers;
 mod update_process;
 mod tour_progress;
 mod update_arrived;
+mod docs_routes;
 mod auxiliary_routes;
 #[cfg(unix)]
 mod plugins;

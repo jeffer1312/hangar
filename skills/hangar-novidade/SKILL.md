@@ -65,6 +65,11 @@ A seta ↑ na caixa de mensagem traz de volta as mensagens que você já mandou 
 - `titulo` diz o que a pessoa ganha ("Histórico do que você digitou"), não o nome técnico
   ("TextareaState com histórico").
 - Corpo: 1 a 3 frases em português do dia a dia, sem nome de arquivo, função ou sigla interna.
+- O primeiro parágrafo é o resumo da lista de Atualizações: ele sozinho diz o que a pessoa ganha.
+  Detalhe vai em parágrafos seguintes, depois de uma linha em branco; com eles (ou com animação), a
+  linha abre uma página com o texto todo.
+- `manual`: quando um artigo de `docs/manual/` explica o recurso, o id dele (nome do arquivo sem
+  `.md`); vira "Ler no manual". Sem artigo, omita.
 - `experimente`: uma ação concreta, onde clicar ou o que apertar. Sem ação possível, omita.
 - `animacao`: obrigatório em `novo`, com o nome registrado no passo 4; em `melhoria`, só quando houver
   animação; `correcao` nunca leva.

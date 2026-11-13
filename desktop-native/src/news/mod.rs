@@ -20,6 +20,7 @@ mod sleep_hidden;
 mod speech_pause;
 mod session_vault;
 mod tour;
+mod updates_manual;
 mod worktree_fresh;
 mod reviews;
 
@@ -73,6 +74,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "plugins-do-claude" => Some(plugins::render),
         "revisoes-pr-mr" => Some(reviews::render),
         "scheduled-tasks" => Some(scheduled_tasks::render),
+        "atualizacoes-e-manual" => Some(updates_manual::render),
         _ => None,
     }
 }

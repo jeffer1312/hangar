@@ -1,0 +1,143 @@
+<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Expo — Atualizações e Manual</title><style>
+html,body{margin:0;background:#141217;color:#ecebef;font:17px/1.35 -apple-system,"SF Pro Text",Inter,system-ui,sans-serif}
+*{box-sizing:border-box}
+.bar{display:flex;gap:6px;flex-wrap:wrap;padding:8px 2px 12px;font-size:13px}
+.bar button{font:inherit;padding:6px 11px;border-radius:8px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.04);color:#cfcbd8;cursor:pointer}
+.bar button.on{background:#ecebef;color:#18161c;font-weight:600}
+.phones{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start}
+.cap{font-size:12px;color:#8e8a98;margin:0 0 6px 4px}
+.phone{width:393px;height:780px;border-radius:44px;border:1px solid rgba(255,255,255,.12);overflow:hidden;position:relative;
+ background:linear-gradient(rgba(22,21,27,.9),rgba(22,21,27,.94)),url(/home/jefferson/Imagens/Wallpapers/1295870.jpg) center/cover}
+.status{height:50px;display:flex;justify-content:space-between;align-items:flex-end;padding:0 34px 6px 52px;font-weight:600;font-size:16px}
+.nav{height:62px;display:flex;align-items:center;padding:0 16px;border-bottom:1px solid rgba(255,255,255,.07);background:rgba(36,35,42,.6);position:relative}
+.back{height:44px;border-radius:22px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.1);display:flex;align-items:center;gap:6px;padding:0 16px 0 12px;font-size:20px;cursor:pointer}
+.back svg{width:20px;height:20px}
+.back.round{width:44px;padding:0;justify-content:center;color:#8f8cff}
+.nav .t{position:absolute;left:0;right:0;text-align:center;font-weight:600;font-size:19px;pointer-events:none}
+.scroll{position:absolute;top:112px;bottom:0;left:0;right:0;overflow:auto;padding:12px 12px 40px}
+.search{display:flex;align-items:center;gap:10px;border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:10px 12px;color:#9a97a3;font-size:16px;margin:0 0 6px}
+.search svg{width:18px;height:18px}
+.lbl{font-size:14px;color:#a5a2ad;margin:18px 8px 6px;display:flex;justify-content:space-between;align-items:center}
+.lbl b{color:#ecebef;font-weight:500}
+.mrow{display:flex;align-items:center;gap:14px;padding:13px 8px;font-size:17px;cursor:pointer}
+.mrow svg{width:22px;height:22px;opacity:.85}
+.badge{margin-left:auto;font-size:12px;font-weight:600;color:#1b1a20;background:#b9b3ff;border-radius:999px;padding:2px 8px}
+.ptitle{font-size:22px;font-weight:600;margin:6px 4px 4px}
+.psub{font-size:15px;color:#a5a2ad;margin:0 4px 12px}
+.card{border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.035);border-radius:14px;margin:0 0 14px;overflow:hidden}
+.chead{display:flex;align-items:center;gap:12px;padding:12px 14px;border-bottom:1px solid rgba(255,255,255,.07);font-size:16px;font-weight:500}
+.tile{width:32px;height:32px;border-radius:9px;background:rgba(143,140,255,.14);display:grid;place-items:center;flex:none}
+.tile svg{width:17px;height:17px}
+.row{display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border-bottom:1px solid rgba(255,255,255,.07)}
+.row:last-child{border:0}
+.row.tap{cursor:pointer;align-items:center}
+.rt{font-size:16px;font-weight:500}
+.rd{font-size:14px;color:#a5a2ad;margin-top:2px}
+.chev{margin-left:auto;color:#77737f;font-size:22px;line-height:1;flex:none}
+.pill{display:inline-block;font-size:11px;font-weight:600;border-radius:999px;padding:1px 7px;margin-left:6px;vertical-align:2px}
+.k-novo{background:rgba(110,214,150,.16);color:#7fdca1}.k-melhoria{background:rgba(130,165,255,.16);color:#9db5ff}.k-correcao{background:rgba(232,186,96,.16);color:#e9c27a}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#b9b3ff;margin-right:6px;vertical-align:2px}
+.chips{display:flex;gap:6px;overflow-x:auto;padding:4px 2px 4px;margin-bottom:4px}
+.chip{flex:none;font-size:14px;padding:6px 12px;border-radius:999px;border:1px solid rgba(255,255,255,.12);color:#c8c5cf;cursor:pointer}
+.chip.on{background:#ecebef;color:#18161c;border-color:#ecebef;font-weight:600}
+.hero{height:190px;border-radius:12px;background:linear-gradient(135deg,rgba(255,255,255,.1),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.08);display:grid;place-items:center;color:#8e8a98;font-size:13px;margin:12px 0}
+.body{font-size:16px;color:#d6d3dc;margin:0 4px 10px}
+.try{font-size:15px;color:#a5a2ad;margin:0 4px 12px}.try b{color:#ecebef;font-weight:500}
+.btn{display:inline-flex;gap:8px;align-items:center;font-size:15px;color:#8f8cff;border:1px solid rgba(143,140,255,.35);border-radius:12px;padding:9px 14px;margin:2px 4px 0;cursor:pointer}
+.btn svg{width:17px;height:17px}
+.toc{border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.035);border-radius:12px;margin:4px 0 14px}
+.toc .h{display:flex;justify-content:space-between;padding:11px 14px;font-size:15px;cursor:pointer}
+.toc .h span{color:#a5a2ad}
+.toc .it{padding:8px 14px 8px 26px;font-size:15px;color:#8f8cff;border-top:1px solid rgba(255,255,255,.06);cursor:pointer}
+.art h3{font-size:18px;margin:20px 4px 6px}
+.art p{font-size:16px;color:#d6d3dc;margin:0 4px 8px}
+.code{font:14px ui-monospace,monospace;background:rgba(255,255,255,.08);border-radius:5px;padding:1px 5px}
+.srv{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:#a5a2ad;margin:0 4px 8px}
+.srv i{width:8px;height:8px;border-radius:50%;background:#3fc56b;display:inline-block}
+</style></head><body>
+<div class="bar" id="bar"></div>
+<div class="phones"><div><p class="cap" id="cap"></p><div class="phone" id="phone"></div></div></div>
+<script>
+const P={
+globe:'<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/>',
+palette:'<circle cx="13.5" cy="6.5" r="1"/><circle cx="17.5" cy="10.5" r="1"/><circle cx="8.5" cy="7.5" r="1"/><circle cx="6.5" cy="12.5" r="1"/><path d="M12 2a10 10 0 0 0 0 20c1 0 1.5-.8 1.5-1.6 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1 0-.9.7-1.6 1.6-1.6h1.9A5.8 5.8 0 0 0 22 11c0-5-4.5-9-10-9z"/>',
+eyeoff:'<path d="M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.1A10 10 0 0 1 12 5c6 0 10 7 10 7a17 17 0 0 1-3.2 3.9M6.6 6.6C3.9 8.4 2 12 2 12s4 7 10 7a9.7 9.7 0 0 0 5.4-1.6"/>',
+cloud:'<path d="M17.5 19H9a7 7 0 1 1 6.7-9h1.8a4.5 4.5 0 1 1 0 9z"/>',
+info:'<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
+spark:'<path d="M12 3l1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2z"/>',
+book:'<path d="M2 4h7a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H2zM22 4h-7a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h8z"/>',
+clock:'<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+file:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h6"/>',
+server:'<rect x="2" y="3" width="20" height="8" rx="2"/><rect x="2" y="13" width="20" height="8" rx="2"/><path d="M6 7h.01M6 17h.01"/>',
+search:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
+left:'<path d="M15 18l-6-6 6-6"/>',
+phone:'<rect x="6" y="2" width="12" height="20" rx="2"/><path d="M12 18h.01"/>',
+chat:'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+user:'<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+users:'<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M16 3.1a4 4 0 0 1 0 7.8M22 21a7 7 0 0 0-5-6.7"/>',
+key:'<circle cx="7.5" cy="15.5" r="5.5"/><path d="M11.5 11.5L21 2M16 7l3 3"/>',
+mic:'<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10a7 7 0 0 1-14 0M12 17v5"/>',
+alert:'<circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/>',
+box:'<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
+wrench:'<path d="M14.7 6.3a4 4 0 0 0 5 5L22 14l-8 8-2.3-2.3a4 4 0 0 0-5-5L2 10l8-8z"/>'};
+const svg=(n,c)=>`<svg viewBox="0 0 24 24" fill="none" stroke="${c||'currentColor'}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${P[n]}</svg>`;
+const K={novo:'Novo',melhoria:'Melhoria',correcao:'Correção'};
+const N=[
+{d:'12',w:'quinta',t:'Pedidos na hora certa',k:'novo',x:'Agende um pedido para uma sessão e ele é enviado no horário escolhido, mesmo com o app fechado.',tr:'Configurações › Tarefas agendadas.',u:1,m:'tarefas-agendadas'},
+{d:'12',w:'quinta',t:'Páginas legíveis sobre a foto de fundo e fonte Inter',k:'melhoria',x:'As páginas da conversa ganham fundo próprio quando há foto.'},
+{d:'12',w:'quinta',t:'Conta Claude disponível depois do reset',k:'correcao',x:'Depois de redefinir o limite, a conta com cota volta a receber conversas.'},
+{d:'10',w:'terça',t:'Resumo de uso menor no celular',k:'melhoria',x:'O resumo de uso ocupa menos espaço na tela.'},
+{d:'10',w:'terça',t:'Troca de modelos do Claude Code',k:'correcao',x:'Modelos chamados pelo nome completo podem ser escolhidos.'},
+{d:'09',w:'segunda',t:'Plugins do Claude sem abrir o terminal',k:'novo',x:'Instale, ligue e remova plugins pela tela de Configurações.',tr:'Configurações › Plugins.'},
+{d:'07',w:'sábado',t:'Seu computador no celular, sem VPN',k:'novo',x:'Entre com a conta do Hangar Connect e escolha a máquina: o pedido aparece no computador e você aprova.',tr:'Toque em "Entrar com o Hangar Connect".',m:'conectar-celular'}];
+const CATS=[['comecar','Começar'],['sessoes','Sessões'],['ferramentas','Ferramentas'],['problemas','Problemas']];
+const A=[
+{id:'conectar-celular',c:'comecar',t:'Conectar o celular',s:'Pelo Hangar Connect, pelo QR ou pelo Tailscale.',i:'phone',sec:['Pelo Hangar Connect','Pelo QR, na mesma rede ou no Tailscale','Com usuário e senha','Quando não conecta']},
+{id:'primeira-conversa',c:'comecar',t:'Primeira conversa',s:'Onde o agente trabalha, conta e modelo.',i:'chat',sec:['Abrir uma conversa','Conta e modelo','Responder o agente']},
+{id:'contas-e-provedores',c:'comecar',t:'Contas e provedores',s:'Claude, Codex e a troca automática de conta.',i:'user',sec:['Ver as contas','Qual conta a conversa usa']},
+{id:'varios-agentes',c:'sessoes',t:'Vários agentes ao mesmo tempo',s:'Grupos e recados entre conversas.',i:'users',sec:['Juntar conversas num grupo','Sair do grupo']},
+{id:'tarefas-agendadas',c:'sessoes',t:'Tarefas agendadas',s:'Pedidos que saem sozinhos no horário.',i:'clock',sec:['Criar uma tarefa','Com a máquina desligada']},
+{id:'cofre-de-senhas',c:'ferramentas',t:'Cofre de senhas',s:'Senhas e tokens que o agente usa sem ver.',i:'key',sec:['Guardar uma senha','Aprovar no celular']},
+{id:'ditado-e-voz',c:'ferramentas',t:'Ditado e voz',s:'Falar em vez de digitar.',i:'mic',sec:['Ditar uma mensagem','Voz ao vivo']},
+{id:'sessao-parada',c:'problemas',t:'Sessão parada ou sem resposta',s:'O que olhar antes de reabrir.',i:'alert',sec:['Ela espera você','Limite de uso','Mandar um relatório']}];
+let scr='config',filt='todos',sel=0,cat='comecar',art=0,tocOpen=false,stack=[];
+const SCR=[['config','1 · Configurações'],['atual','2 · Atualizações'],['novidade','3 · Novidade'],['manual','4 · Manual'],['artigo','5 · Artigo']];
+const CAP={config:'Configurações › Este aparelho ganha Atualizações (com o número de novas) e Manual, antes de Sobre.',atual:'Lista por dia em cartões agrupados. "›" só onde há página; as outras linhas mostram o resumo.',novidade:'Página da novidade: animação, texto inteiro, Experimente e "Ler no manual".',manual:'Abas de categoria roláveis, busca no texto inteiro, artigos em cartão, últimas atualizações.',artigo:'"Nesta página" abre a lista de seções no topo e rola até a escolhida.'};
+const pill=k=>`<span class="pill k-${k}">${K[k]}</span>`;
+const nav=(title,back,round)=>`<div class="nav">${round?`<div class="back round" data-go="${back}">${svg('left')}</div><div class="t">${title}</div>`:`<div class="back" data-go="${back}">${svg('left')}${title}</div>`}</div>`;
+const status='<div class="status"><span>11:04</span><span>▮▮▮ ◠ ▭</span></div>';
+function config(){
+ const it=(n,i,go,b)=>`<div class="mrow" ${go?`data-go="${go}"`:''}>${svg(i)}${n}${b?`<span class="badge">${b}</span>`:''}</div>`;
+ return status+nav('Configurações','config',1)+`<div class="scroll"><div class="search">${svg('search')}Buscar um ajuste</div><div class="lbl">Este aparelho</div>
+ ${it('Geral','globe')}${it('Aparência','palette')}${it('Sessões','eyeoff')}${it('Hangar Connect','cloud')}${it('Atualizações','spark','atual','2 novas')}${it('Manual','book','manual')}${it('Sobre','info')}
+ <div class="lbl">Servidor<b><span class="srv" style="margin:0"><i></i>notebook-jefferson ⌄</span></b></div>${it('Tarefas agendadas','clock')}${it('Diário de uso','file')}${it('Servidores','server')}</div>`}
+function atual(){
+ const vis=N.filter(n=>filt==='todos'||n.k===filt);const days=[...new Set(vis.map(n=>n.d))];
+ return status+nav('Configurações','config')+`<div class="scroll"><div class="ptitle">Atualizações</div><div class="psub">O que mudou no Hangar, do mais novo para o mais antigo.</div><div class="srv"><i></i>notebook-jefferson</div>
+ <div class="search">${svg('search')}Buscar nas atualizações</div>
+ <div class="chips">${[['todos','Tudo'],['novo','Novos'],['melhoria','Melhorias'],['correcao','Correções']].map(([f,l])=>`<span class="chip ${filt===f?'on':''}" data-f="${f}">${l}</span>`).join('')}</div>
+ ${days.map(d=>{const its=vis.filter(n=>n.d===d);return `<div class="lbl">${+d} de novembro · ${its[0].w}</div><div class="card">${its.map(n=>n.k==='novo'?`<div class="row tap" data-n="${N.indexOf(n)}"><div class="rt">${n.u?'<span class="dot"></span>':''}${n.t}${pill(n.k)}</div><span class="chev">›</span></div>`:`<div class="row"><div><div class="rt">${n.t}${pill(n.k)}</div><div class="rd">${n.x}</div></div></div>`).join('')}</div>`}).join('')||'<div class="psub">Nada deste tipo ainda.</div>'}</div>`}
+function novidade(){const n=N[sel];
+ return status+nav('Atualizações','atual')+`<div class="scroll"><div class="psub" style="margin-bottom:2px">${+n.d} de novembro de 2026 · ${n.w}</div><div class="ptitle">${n.t}${pill(n.k)}</div>
+ ${n.k==='novo'?'<div class="hero">animação real do recurso (animations.ts)</div>':''}<div class="body">${n.x}</div>${n.tr?`<div class="try"><b>Experimente:</b> ${n.tr}</div>`:''}
+ ${n.m?`<div class="btn" data-a="${A.findIndex(a=>a.id===n.m)}">${svg('book')}Ler no manual</div>`:''}</div>`}
+function manual(){
+ return status+nav('Configurações','config')+`<div class="scroll"><div class="ptitle">Manual</div><div class="psub">Como usar cada parte do Hangar, por tarefa.</div>
+ <div class="search">${svg('search')}Buscar no manual</div>
+ <div class="chips">${CATS.map(([c,l])=>`<span class="chip ${cat===c?'on':''}" data-c="${c}">${l}</span>`).join('')}</div>
+ <div class="card" style="margin-top:8px">${A.filter(a=>a.c===cat).map(a=>`<div class="row tap" data-a="${A.indexOf(a)}"><div class="tile">${svg(a.i,'#8f8cff')}</div><div><div class="rt">${a.t}</div><div class="rd">${a.s}</div></div><span class="chev">›</span></div>`).join('')}</div>
+ <div class="lbl">Últimas atualizações</div><div class="card">${N.filter(n=>n.k==='novo').slice(0,3).map(n=>`<div class="row tap" data-n="${N.indexOf(n)}"><div><div class="rt">${n.t}</div><div class="rd">${+n.d} de novembro</div></div><span class="chev">›</span></div>`).join('')}</div></div>`}
+function artigo(){const a=A[art];const label=CATS.find(c=>c[0]===a.c)[1];const news=N.filter(n=>n.m===a.id);
+ return status+nav('Manual','manual')+`<div class="scroll art"><div class="psub" style="margin-bottom:2px">${label}</div><div class="ptitle">${a.t}</div><div class="psub">${a.s}</div>
+ <div class="toc"><div class="h" data-toc="1">Nesta página <span>${tocOpen?'⌃':'⌄'}</span></div>${tocOpen?a.sec.map((s,i)=>`<div class="it" data-sec="${i}">${s}</div>`).join(''):''}</div>
+ ${a.sec.map((s,i)=>`<h3 id="sec-${i}">${s}</h3><p>${i===0?'No computador, abra <span class="code">Configurações › Connect</span> e entre com a sua conta. No celular, toque em "Entrar com o Hangar Connect" e escolha a máquina.':'Texto da seção, em markdown, como o artigo escrito em docs/manual.'}</p>`).join('')}
+ ${news.length?`<div class="lbl">Mudou recentemente</div><div class="card">${news.map(n=>`<div class="row tap" data-n="${N.indexOf(n)}"><div><div class="rt">${n.t}</div><div class="rd">${+n.d} de novembro</div></div><span class="chev">›</span></div>`).join('')}</div>`:''}</div>`}
+function render(){
+ document.getElementById('bar').innerHTML=SCR.map(([s,l])=>`<button class="${scr===s?'on':''}" data-go="${s}">${l}</button>`).join('');
+ document.getElementById('cap').textContent=CAP[scr];
+ document.getElementById('phone').innerHTML={config,atual,novidade,manual,artigo}[scr]();}
+document.addEventListener('click',e=>{const t=e.target.closest('[data-go],[data-f],[data-n],[data-c],[data-a],[data-toc],[data-sec]');if(!t)return;const s=t.dataset;
+ if(s.sec!==undefined){const el=document.getElementById('sec-'+s.sec);tocOpen=false;render();const el2=document.getElementById('sec-'+s.sec);el2&&el2.scrollIntoView({block:'start'});return}
+ if(s.go)scr=s.go;if(s.f)filt=s.f;if(s.n!==undefined){sel=+s.n;scr='novidade'}if(s.c)cat=s.c;if(s.a!==undefined){art=+s.a;scr='artigo';tocOpen=false}if(s.toc)tocOpen=!tocOpen;render()});
+render();
+</script></body></html>

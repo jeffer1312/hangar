@@ -34,7 +34,7 @@ MANIFEST_MAX = 4 << 20
 OSES = {"linux-x86_64": ("x86_64-manylinux_2_28", ""), "windows-x86_64": ("x86_64-pc-windows-msvc", ".exe")}
 # Os instaladores vão juntos: a instalação nova roda o do `current`, em modo pacote (sem git, uv nem build).
 TREES = ["backend/app", "backend/hooks", "resources", "scripts", "skills", "plugins", "shell", "messages",
-         "docs/atualizacoes", "docs/novidades", "docs/tmux.conf.windows.example", "docs/tmux.conf.example",
+         "docs/atualizacoes", "docs/novidades", "docs/manual", "docs/tmux.conf.windows.example", "docs/tmux.conf.example",
          "VERSION", "install.sh", "install.ps1"]
 # Testes, provas, medições e ferramentas de quem desenvolve: rodam do checkout (modo desenvolvedor).
 EXCLUDE = [
@@ -223,7 +223,7 @@ def file_shas(root: Path) -> dict[str, str]:
 
 
 def frontmatter(text: str) -> tuple[dict, str]:
-    """O `frontmatter` do crates/hangar-server/src/update_notes: linhas como o `str::lines` do Rust."""
+    """O `frontmatter` do crates/hangar-docs: linhas como o `str::lines` do Rust."""
     lines = text.split("\n")
     if lines and lines[-1] == "":
         lines.pop()
@@ -254,7 +254,7 @@ SYSTEMS = {"linux", "windows", "macos"}
 
 
 def _for_system(value: str, system: str):
-    """O `for_system` do crates/hangar-server/src/update_notes: vazio = todos; nome desconhecido = None."""
+    """O `for_system` do crates/hangar-docs: vazio = todos; nome desconhecido = None."""
     names = value.replace(",", " ").split()
     if not set(names) <= SYSTEMS:
         return None
@@ -263,7 +263,8 @@ def _for_system(value: str, system: str):
 
 def notes(root: Path, os_name: str) -> dict:
     """Avisos e novidades da versão, no formato do `GET /api/update/notes`. As regras são as do
-    crates/hangar-server/src/update_notes (casos comuns em fixtures.json); aviso só de passo destrutivo
+    crates/hangar-server/src/update_notes e, nas novidades, do `news_item` do crates/hangar-docs
+    (casos comuns em fixtures.json); aviso só de passo destrutivo
     de máquina que o steps.rs roda neste sistema: comando com prova, e comando para este sistema."""
     own = "comando_windows" if os_name.startswith("windows") else "comando_posix"
     warnings = []
@@ -287,7 +288,7 @@ def notes(root: Path, os_name: str) -> dict:
                 "try_it": f.get("experimente") or None,
                 "animation": None if kind == "fix" else f.get("animacao") or None}
         if f.get("ancora"):
-            item["anchor"] = f["ancora"]  # ausente sai sem a chave, como no update_notes do Rust
+            item["anchor"] = f["ancora"]  # ausente sai sem a chave, como no news_item do hangar-docs
         news.append(item)
     order = list(kinds.values())
     news.sort(key=lambda n: (order.index(n["kind"]), n["id"]))

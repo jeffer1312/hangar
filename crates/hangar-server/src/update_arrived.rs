@@ -57,9 +57,9 @@ fn package_news(current: &Path, previous: &Path) -> io::Result<Vec<Value>> {
     for entry in entries {
         let entry = entry?;
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else { continue };
-        if !crate::update_notes::is_note_file(&name) || old.join(&name).exists() { continue; }
+        if !hangar_docs::is_note_file(&name) || old.join(&name).exists() { continue; }
         let id = name.trim_end_matches(".md");
-        if let Some((rank, item)) = crate::update_notes::news_item(id, &std::fs::read_to_string(entry.path())?, std::env::consts::OS) {
+        if let Some((rank, item)) = hangar_docs::news_item(id, &std::fs::read_to_string(entry.path())?, std::env::consts::OS) {
             news.push((rank, id.to_owned(), item));
         }
     }

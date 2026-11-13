@@ -1183,5 +1183,31 @@ export interface UpdateNews {
   try_it: string | null;
   animation: string | null;
 }
+/** Item do histórico de novidades (`GET /api/news`); `summary` é o 1º parágrafo de `text`. */
+export interface NewsHistoryItem extends UpdateNews {
+  date: string;
+  summary: string;
+  more: boolean;
+  anchor?: string;
+  /** Id do artigo do manual ligado a esta novidade. */
+  manual?: string;
+}
+export interface NewsHistory { news: NewsHistoryItem[] }
+export interface ManualSection { id: string; title: string; markdown: string }
+export interface ManualArticle {
+  id: string;
+  title: string;
+  summary: string;
+  /** Nome do ícone Lucide. */
+  icon: string | null;
+  platforms: UpdateNewsPlatforms;
+  anchor?: string;
+  intro: string;
+  sections: ManualSection[];
+  news: { id: string; date: string; title: string }[];
+}
+export type ManualCategoryId = 'comecar' | 'sessoes' | 'ferramentas' | 'problemas';
+export interface ManualCategory { id: ManualCategoryId; articles: ManualArticle[] }
+export interface Manual { categories: ManualCategory[] }
 /** `incomplete`: o servidor não leu os avisos da versão nova (só o da migração, que é local). */
 export interface UpdateNotes { target: string; warnings: UpdateWarning[]; news: UpdateNews[]; incomplete?: boolean }

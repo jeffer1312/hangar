@@ -35,7 +35,7 @@ const shown = new Map<string, ShownNews>();
 // `servidor:through` já oferecido nesta abertura do app: abrir, voltar ao primeiro plano e o fim do clique não repetem a folha.
 const offered = new Set<string>();
 
-function markSeen(server: Server, through: number): void {
+export function markSeen(server: Server, through: number): void {
   markArrivedSeen(server, updateDeviceId(), through).catch((e: unknown) => {
     registrarDiag({ evento: 'update.arrived_seen_failed', nivel: 'aviso', codigo: 'update_arrived_seen_failed', detalhe: e instanceof Error ? e.message : String(e) });
   });
