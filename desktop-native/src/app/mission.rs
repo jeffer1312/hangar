@@ -50,10 +50,18 @@ struct Detail {
 
 struct DetailView { detail: Detail, view: Entity<TextViewState> }
 
-struct Board { connectors: Vec<Connector>, items: Vec<Ticket>, next_cursor: Option<String>, total: Option<u64> }
+struct Board {
+    connectors: Vec<Connector>,
+    items: Vec<Ticket>,
+    next_cursor: Option<String>,
+    total: Option<u64>,
+    /// Busca que gerou a página: o cursor só vale com ela.
+    query: String,
+}
 
-/// Pedido de Iniciar à espera da sessão nova: só o envio que cita o ticket o liga.
-struct PendingStart { server: String, connector: String, ticket: String, key: String }
+/// Pedido de Iniciar à espera da sessão nova: só a criação seguinte, com a mensagem que começa pelo texto
+/// posto no campo, liga o ticket.
+struct PendingStart { server: String, connector: String, ticket: String, prompt: String }
 
 #[derive(Default)]
 pub(super) struct Mission {
@@ -140,13 +148,16 @@ impl Hangar {
         let Some(api) = self.api.clone() else { return };
         let server = api.identity();
         let same = self.mission.server.as_deref() == Some(server.as_str());
-        let cursor = more.then(|| self.mission.board.as_ref().and_then(|b| b.as_ref().ok()).and_then(|b| b.next_cursor.clone())).flatten();
-        if more && cursor.is_none() { return; }
-        if !same { (self.mission.connector, self.mission.selected, self.mission.detail) = (None, None, None); }
+        let page = more.then(|| self.mission.board.as_ref().and_then(|b| b.as_ref().ok())
+            .and_then(|b| Some((b.next_cursor.clone()?, b.query.clone())))).flatten();
+        if more && page.is_none() { return; }
+        let (cursor, query) = match page { Some((cursor, query)) => (Some(cursor), query), None => (None, self.mission_query(cx)) };
+        if !same { (self.mission.connector, self.mission.selected, self.mission.detail, self.mission.board) = (None, None, None, None); }
         self.mission.seq += 1;
         let seq = self.mission.seq;
         (self.mission.loading, self.mission.more, self.mission.server) = (!more, more, Some(server));
-        let (wanted, query) = (self.mission.connector.clone(), self.mission_query(cx));
+        let wanted = self.mission.connector.clone();
+        let used = query.clone();
         let request = async move {
             let catalog = api.server_read(&["connectors"], &[], 15).await?;
             let connectors: Vec<Connector> = serde_json::from_value(catalog["connectors"].clone()).map_err(|_| Failure::local("invalid_response"))?;
@@ -162,16 +173,16 @@ impl Hangar {
             let page: TicketPage = serde_json::from_value(page).map_err(|_| Failure::local("invalid_response"))?;
             Ok((connectors, Some((id, page))))
         };
-        run(&self.runtime, request, window, cx, move |this: &mut Hangar, result, _, _| {
+        run(&self.runtime, request, window, cx, move |this: &mut Hangar, result, window, cx| {
             if this.mission.seq != seq { return; }
             (this.mission.loading, this.mission.more) = (false, false);
             match result {
-                Err(error) => {
-                    if !more { this.mission.board = Some(Err(failure_text(&error))); }
-                }
+                // A falha do "Carregar mais" não apaga o que já está na tela.
+                Err(error) if more => window.push_notification(Notification::error(failure_text(&error)), cx),
+                Err(error) => this.mission.board = Some(Err(failure_text(&error))),
                 Ok((connectors, None)) => {
                     this.mission.connector = None;
-                    this.mission.board = Some(Ok(Board { connectors, items: Vec::new(), next_cursor: None, total: None }));
+                    this.mission.board = Some(Ok(Board { connectors, items: Vec::new(), next_cursor: None, total: None, query: used }));
                 }
                 Ok((connectors, Some((id, page)))) => {
                     let mut items = page.items;
@@ -181,7 +192,7 @@ impl Hangar {
                         items = board.items.into_iter().chain(items).collect();
                     }
                     this.mission.connector = Some(id);
-                    this.mission.board = Some(Ok(Board { connectors, items, next_cursor: page.next_cursor, total: page.total }));
+                    this.mission.board = Some(Ok(Board { connectors, items, next_cursor: page.next_cursor, total: page.total, query: used }));
                 }
             }
         });
@@ -228,20 +239,24 @@ impl Hangar {
         let ticket = &view.detail.ticket;
         let prompt = view.detail.start_prompt.clone()
             .unwrap_or_else(|| tr("mission_default_prompt").replace("{key}", &ticket.key).replace("{title}", &ticket.title).replace("{url}", &ticket.url));
-        self.mission.pending = Some(PendingStart { server, connector, ticket: ticket.id.clone(), key: ticket.key.clone() });
+        let ticket = ticket.id.clone();
+        if self.create_blocked(window, cx) { return; }
         self.close_mission(window, cx);
         self.go_home(window, cx);
-        self.composer.update(cx, |input, cx| { input.set_value(prompt, window, cx); input.focus(window, cx); });
+        // O rascunho que já estava na tela de nova conversa fica, depois do pedido do ticket.
+        let draft = self.composer.read(cx).value().trim().to_owned();
+        let text = if draft.is_empty() { prompt.clone() } else { format!("{prompt}\n\n{draft}") };
+        self.composer.update(cx, |input, cx| { input.set_value(text, window, cx); input.focus(window, cx); });
+        self.mission.pending = Some(PendingStart { server, connector, ticket, prompt });
         window.push_notification(Notification::info(tr("mission_start_hint")), cx);
     }
 
     /// Volta da criação: a sessão nascida do Iniciar, com a mensagem que cita o ticket, é ligada a ele no servidor.
     pub(super) fn mission_session_created(&mut self, server: &str, session: &str, first: Option<&str>, window: &mut Window, cx: &mut Context<Self>) {
-        let matches = self.mission.pending.as_ref()
-            .is_some_and(|p| p.server == server && first.is_some_and(|text| text.contains(&p.key)));
-        if !matches { return; }
+        // Qualquer criação encerra o pedido: só a primeira depois do Iniciar pode ser a dele.
         let Some(start) = self.mission.pending.take() else { return };
-        let Some(api) = self.api.clone().filter(|api| api.identity() == server) else { return };
+        if start.server != server || !first.is_some_and(|text| text.trim_start().starts_with(start.prompt.trim())) { return; }
+        let Some(api) = self.api_for(server) else { return };
         let body = json!({"session": session});
         let request = async move {
             api.server_send(reqwest::Method::PUT, &["connectors", &start.connector, "links", &start.ticket], Some(body), 15).await
@@ -278,7 +293,7 @@ impl Hangar {
 
     pub(super) fn render_mission(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         // Outro servidor ativo: o que está na tela era do anterior.
-        if self.api.as_ref().map(|api| api.identity()) != self.mission.server && !self.mission.loading {
+        if self.api.as_ref().map(|api| api.identity()) != self.mission.server {
             self.load_mission(false, window, cx);
         }
         let loading = self.mission.loading;

@@ -504,6 +504,7 @@ impl Hangar {
         self.costs.view = None;
         (self.worktrees.view, self.worktrees.open) = (None, None);
         self.close_reviews(window, cx);
+        self.mission.open = false;
         // A navegação entre páginas também passa por aqui; o que é por abertura só roda saindo de fechadas.
         let opening = self.settings.replace(page).is_none();
         // O Cofre relê a cada abertura, e a senha revelada não passa para a próxima.
