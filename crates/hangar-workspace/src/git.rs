@@ -1594,10 +1594,13 @@ mod task3_cache {
         crate::execute(if diff {crate::Operation::GitDiffstat {cwd:Some(root.to_string_lossy().into_owned())}}
             else {crate::Operation::GitSummary {cwd:Some(root.to_string_lossy().into_owned())}}).unwrap()
     }
+    /// Regrava o Git falso dentro do filho: ele roda um teste só, ninguém cria processo enquanto o arquivo está aberto,
+    /// e o PATH dele só tem `bin/` (sem o `install` do `write_test_executable`).
     fn shim(path:&Path) {
-        fs::write(path,"#!/bin/sh\nprintf 'call\\n' >> \"$HANGAR_TASK3_CACHE_ROOT/calls\"\nprintf index > \"$HANGAR_TASK3_CACHE_ROOT/.git/index\"\nmode=$(cat \"$HANGAR_TASK3_CACHE_ROOT/mode\")\n[ \"$mode\" != broken ] || exit 1\ncase \"$*\" in *--numstat*)\n[ \"$mode\" != unborn ] || { printf \"fatal: ambiguous argument 'HEAD': unknown revision\\n\" >&2; exit 128; }\nprintf '10\\t2\\ta.py\\n3\\t0\\tdir/b.py\\n-\\t-\\timg.png\\n';;\n*) printf '## main...origin/main [ahead 2, behind 1]\\n M a.py\\n';;\nesac\n").unwrap();
+        fs::write(path,SHIM).unwrap();
         fs::set_permissions(path,fs::Permissions::from_mode(0o755)).unwrap();
     }
+    const SHIM:&str="#!/bin/sh\nprintf 'call\\n' >> \"$HANGAR_TASK3_CACHE_ROOT/calls\"\nprintf index > \"$HANGAR_TASK3_CACHE_ROOT/.git/index\"\nmode=$(cat \"$HANGAR_TASK3_CACHE_ROOT/mode\")\n[ \"$mode\" != broken ] || exit 1\ncase \"$*\" in *--numstat*)\n[ \"$mode\" != unborn ] || { printf \"fatal: ambiguous argument 'HEAD': unknown revision\\n\" >&2; exit 128; }\nprintf '10\\t2\\ta.py\\n3\\t0\\tdir/b.py\\n-\\t-\\timg.png\\n';;\n*) printf '## main...origin/main [ahead 2, behind 1]\\n M a.py\\n';;\nesac\n";
 
     #[test]
     fn public_operations_preserve_native_cache_deadlines_fingerprints_and_last_good_result() {
@@ -1639,7 +1642,7 @@ mod task3_cache {
         let dir=tempfile::tempdir().unwrap(); let root=dir.path();
         fs::create_dir_all(root.join(".git/refs/heads")).unwrap(); fs::create_dir(root.join("bin")).unwrap();
         fs::write(root.join(".git/HEAD"),"ref: refs/heads/main\n").unwrap(); fs::write(root.join(".git/refs/heads/main"),"0".repeat(40)).unwrap(); fs::write(root.join(".git/index"),"index").unwrap();
-        fs::write(root.join("mode"),"good").unwrap(); shim(&root.join("bin/git"));
+        fs::write(root.join("mode"),"good").unwrap(); crate::write_test_executable(&root.join("bin/git"),SHIM);
         // O programa auxiliar cat fica no PATH privado; o Git real continua inacessível nessa prova.
         std::os::unix::fs::symlink("/bin/cat",root.join("bin/cat")).unwrap();
         let child=Command::new(std::env::current_exe().unwrap()).args(["--exact",TEST,"--nocapture"])

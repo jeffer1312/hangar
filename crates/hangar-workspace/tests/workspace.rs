@@ -2,6 +2,18 @@ use hangar_workspace::{Operation, execute};
 use serde_json::{Value, json};
 use std::{fs, process::Command};
 
+/// Grava um executável sem abrir o arquivo para escrita neste processo: quem grava é um `install` à parte.
+/// Gravado aqui, um filho de outro teste nascido nesse instante herdaria o descritor de escrita, e rodar o
+/// arquivo daria "Text file busy" (ETXTBSY).
+#[cfg(unix)]
+fn write_executable(path: &std::path::Path, content: impl AsRef<[u8]>) {
+    let source = path.with_extension("conteudo");
+    fs::write(&source, content).unwrap();
+    let status = Command::new("install").arg("-m").arg("755").arg(&source).arg(path).status().unwrap();
+    assert!(status.success(), "install não gravou {}", path.display());
+    fs::remove_file(&source).unwrap();
+}
+
 fn git(dir: &std::path::Path, args: &[&str]) {
     let out = Command::new("git")
         .arg("-C")
@@ -718,15 +730,15 @@ mod task3_contract {
     #[cfg(unix)]
     #[test]
     fn separate_repositories_do_not_share_the_summary_wait() {
-        use std::{io::Write,os::unix::fs::PermissionsExt,sync::mpsc,time::Duration};
+        use std::{io::Write,sync::mpsc,time::Duration};
         let dir=tempfile::tempdir().unwrap(); let root=dir.path(); let slow=root.join("slow"); let fast=root.join("fast"); repo(&slow); repo(&fast);
         let fifo=root.join("release"); assert!(Command::new("mkfifo").arg(&fifo).status().unwrap().success());
         let mut release=fs::OpenOptions::new().read(true).write(true).open(&fifo).unwrap();
         let marker=root.join("started"); let hook=slow.join(".git/hooks/fsmonitor");
         assert!(Command::new("mkfifo").arg(&marker).status().unwrap().success());
         let ready=fs::OpenOptions::new().read(true).write(true).open(&marker).unwrap();
-        fs::write(&hook,format!("#!/bin/sh\nprintf ready > '{}'\nIFS= read -r value < '{}'\nprintf 'token\\000'\n",marker.display(),fifo.display())).unwrap();
-        fs::set_permissions(&hook,fs::Permissions::from_mode(0o755)).unwrap(); g(&slow,&["config","core.fsmonitor",hook.to_str().unwrap()]);
+        write_executable(&hook,format!("#!/bin/sh\nprintf ready > '{}'\nIFS= read -r value < '{}'\nprintf 'token\\000'\n",marker.display(),fifo.display()));
+        g(&slow,&["config","core.fsmonitor",hook.to_str().unwrap()]);
         let slow_thread=std::thread::spawn(move || hangar_workspace::git::summary(slow.to_str(),false));
         use std::os::fd::AsRawFd;
         let mut event=libc::pollfd { fd:ready.as_raw_fd(),events:libc::POLLIN,revents:0 };
@@ -742,7 +754,6 @@ mod task3_contract {
     #[cfg(unix)]
     #[test]
     fn selected_commit_reads_status_at_most_twice_not_once_per_path() {
-        use std::os::unix::fs::PermissionsExt;
         const TEST:&str="task3_contract::selected_commit_reads_status_at_most_twice_not_once_per_path";
         if let Some(root)=std::env::var_os("HANGAR_TASK3_STATUS_ROOT") {
             let root=Path::new(&root);
@@ -757,8 +768,7 @@ mod task3_contract {
         for n in 0..8 {fs::write(root.join(format!("seleção-{n}.txt")),"selecionado").unwrap();}
         let bin=dir.path().join("bin"); fs::create_dir(&bin).unwrap();
         let shim=bin.join("git");
-        fs::write(&shim,"#!/bin/sh\nfor arg in \"$@\"; do if [ \"$arg\" = status ]; then printf 'status\\n' >> \"$HANGAR_TASK3_STATUS_COUNT\"; fi; done\nexec /usr/bin/git \"$@\"\n").unwrap();
-        fs::set_permissions(&shim,fs::Permissions::from_mode(0o755)).unwrap();
+        write_executable(&shim,"#!/bin/sh\nfor arg in \"$@\"; do if [ \"$arg\" = status ]; then printf 'status\\n' >> \"$HANGAR_TASK3_STATUS_COUNT\"; fi; done\nexec /usr/bin/git \"$@\"\n");
         let path=std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap()))).unwrap();
         let child=Command::new(std::env::current_exe().unwrap()).args(["--exact",TEST,"--nocapture"])
             .env("PATH",path).env("HANGAR_TASK3_STATUS_ROOT",root).env("HANGAR_TASK3_STATUS_COUNT",dir.path().join("status-count")).output().unwrap();
@@ -768,7 +778,6 @@ mod task3_contract {
     #[cfg(unix)]
     #[test]
     fn remaining_quote_path_preserves_names_and_controls_filename_emitting_commands() {
-        use std::os::unix::fs::PermissionsExt;
         const TEST:&str="task3_contract::remaining_quote_path_preserves_names_and_controls_filename_emitting_commands";
         const NAME:&str="sessão \"citada\".txt";
         if let Some(root)=std::env::var_os("HANGAR_TASK3_ARGV_ROOT") {
@@ -784,7 +793,7 @@ mod task3_contract {
         }
         let dir=tempfile::tempdir().unwrap(); let root=dir.path().join("repo"); repo(&root); fs::write(root.join(NAME),"needle\n").unwrap();
         let bin=dir.path().join("bin"); fs::create_dir(&bin).unwrap(); let shim=bin.join("git");
-        fs::write(&shim,"#!/bin/sh\nprintf '\\036' >> \"$HANGAR_TASK3_ARGV_TRACE\"\nprintf '%s\\000' \"$@\" >> \"$HANGAR_TASK3_ARGV_TRACE\"\nexec /usr/bin/git \"$@\"\n").unwrap(); fs::set_permissions(shim,fs::Permissions::from_mode(0o755)).unwrap();
+        write_executable(&shim,"#!/bin/sh\nprintf '\\036' >> \"$HANGAR_TASK3_ARGV_TRACE\"\nprintf '%s\\000' \"$@\" >> \"$HANGAR_TASK3_ARGV_TRACE\"\nexec /usr/bin/git \"$@\"\n");
         let path=std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap()))).unwrap();
         let child=Command::new(std::env::current_exe().unwrap()).args(["--exact",TEST,"--nocapture"])
             .env("PATH",path).env("HANGAR_TASK3_ARGV_ROOT",root).env("HANGAR_TASK3_ARGV_TRACE",dir.path().join("argv")).output().unwrap();
@@ -794,10 +803,9 @@ mod task3_contract {
     #[cfg(unix)]
     #[test]
     fn process_keeps_arguments_credentials_environment_and_closed_stdin_without_a_shell() {
-        use std::{os::unix::fs::PermissionsExt,time::Duration};
+        use std::time::Duration;
         let dir=tempfile::tempdir().unwrap(); let script=dir.path().join("command");
-        fs::write(&script,"#!/bin/sh\nprintf '%s\\n' \"$GIT_OPTIONAL_LOCKS\" \"$GIT_TERMINAL_PROMPT\" \"$CUSTOM_CREDENTIAL_CONFIG\" \"$1\"\nif IFS= read -r unexpected; then exit 17; fi\n").unwrap();
-        fs::set_permissions(&script,fs::Permissions::from_mode(0o755)).unwrap();
+        write_executable(&script,"#!/bin/sh\nprintf '%s\\n' \"$GIT_OPTIONAL_LOCKS\" \"$GIT_TERMINAL_PROMPT\" \"$CUSTOM_CREDENTIAL_CONFIG\" \"$1\"\nif IFS= read -r unexpected; then exit 17; fi\n");
         let output=hangar_workspace::process::run_program(Command::new(script).arg("literal; touch must-not-exist")
             .current_dir(dir.path()).env("CUSTOM_CREDENTIAL_CONFIG","configured-by-owner"),Duration::from_secs(5)).unwrap();
         assert_eq!(output.code,0); assert_eq!(output.stdout,"0\n0\nconfigured-by-owner\nliteral; touch must-not-exist\n"); assert!(!dir.path().join("must-not-exist").exists());

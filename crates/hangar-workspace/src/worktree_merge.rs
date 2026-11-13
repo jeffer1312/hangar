@@ -553,19 +553,16 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn github_cli_reads_with_explicit_repository_and_bounded_process() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let program = dir.path().join("fake-gh");
         let arguments = dir.path().join("arguments");
-        std::fs::write(
+        crate::write_test_executable(
             &program,
             format!(
                 "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nprintf '%s' '[]'\n",
                 arguments.display()
             ),
-        )
-        .unwrap();
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        );
         let cli = GitHubCli::new(program);
         assert_eq!(cli.pull_requests("acme/project", "feature").unwrap(), "[]");
         let arguments = std::fs::read_to_string(arguments).unwrap();
@@ -639,15 +636,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn github_cli_rejects_oversized_output_and_ends_a_stuck_process() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let program = dir.path().join("fake-gh");
-        std::fs::write(
+        crate::write_test_executable(
             &program,
             "#!/bin/sh\ndd if=/dev/zero bs=1048577 count=1 2>/dev/null\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        );
         let mut cli = GitHubCli::new(&program);
         assert_eq!(
             cli.pull_requests("acme/project", "feature"),
