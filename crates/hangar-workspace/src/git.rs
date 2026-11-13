@@ -489,6 +489,8 @@ fn create_worktree_in(
     let text = target.to_string_lossy();
     // A branch só remota vira local (`--track -b`); desfazer apaga as duas que nasceram aqui.
     let branch_created = new_branch || !local.iter().any(|b| b == branch);
+    // O `local` não vê a branch que divide o nome com uma tag (sai `heads/x`): só a ref diz se ela já existia.
+    let had_branch = local_branch(cwd, branch);
     let created = if new_branch {
         let from = if local.iter().any(|b| b == start.as_str()) {
             start.clone()
@@ -498,24 +500,29 @@ fn create_worktree_in(
             remote_ref(cwd, &start)?
         };
         // Sem --no-track a branch nova herdaria o upstream da base: o pull puxaria a base.
-        command(
-            cwd,
-            &["worktree", "add", "--no-track", "-b", branch, &text, &from],
-        )?
+        add_worktree(cwd, &["--no-track", "-b", branch, &text, &from])
     } else if local.iter().any(|b| b == branch) {
-        command(cwd, &["worktree", "add", &text, branch])?
+        add_worktree(cwd, &[&text, branch])
     } else {
         let remote = remote_ref(cwd, branch)?;
-        command(
-            cwd,
-            &["worktree", "add", "--track", "-b", branch, &text, &remote],
-        )?
+        add_worktree(cwd, &["--track", "-b", branch, &text, &remote])
     };
-    if created.code != 0 {
-        return Err(error(
-            409,
-            scrub(&created.reason("não consegui criar a worktree")),
-        ));
+    let failed = match &created {
+        Ok(out) => out.code != 0,
+        Err(_) => true,
+    };
+    if failed {
+        // O git desfaz a pasta da worktree que falhou, mas deixa a branch do `-b`: a nova
+        // tentativa com o mesmo nome esbarraria em "já existe uma branch".
+        if branch_created && !had_branch && local_branch(cwd, branch)
+            && !command(cwd, &["branch", "-D", branch]).is_ok_and(|o| o.code == 0)
+        {
+            tracing::warn!(code = "worktree_branch_not_dropped", "branch da worktree que falhou não apagada");
+        }
+        return Err(match created {
+            Ok(out) => error(409, scrub(&out.reason("não consegui criar a worktree"))),
+            Err(e) => e,
+        });
     }
     if new_branch {
         // A worktree já existe: falha em registrar a base só fica no log.
@@ -639,6 +646,16 @@ pub fn copy_ignored(repo: &Path, target: &Path) -> Vec<String> {
         }
     }
     copied
+}
+/// `git worktree add` sem prazo, como o `remove_worktree`: matar o checkout no meio deixa a worktree pela
+/// metade. O longpaths vale só aqui: a pasta da worktree soma ao caminho e passa dos 260 do Windows.
+fn add_worktree(cwd: &Path, args: &[&str]) -> Result<Output> {
+    crate::process::run_program_to_completion(
+        crate::process::git_command(None).arg("-C").arg(cwd).args(["-c", "core.longpaths=true", "worktree", "add"]).args(args),
+    )
+}
+fn local_branch(cwd: &Path, branch: &str) -> bool {
+    command(cwd, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_ok_and(|o| o.code == 0)
 }
 pub fn remove_worktree(cwd: &Path, path: &str, force: bool) -> Result<Value> {
     // Sem longpaths o Git do Windows para no primeiro caminho >260 (node_modules), mas apaga o
