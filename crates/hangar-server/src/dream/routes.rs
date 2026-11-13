@@ -375,6 +375,28 @@ async fn undo(st: &Arc<AppState>, run_id: &str, project: Option<&str>) -> Respon
             results.push(json!({"project": record.project, "machine": place.machine, "root": place.root, "ok": result.is_ok(), "error": result.err()}));
         }
     }
+    // O que a rodada leu volta a ser novo: o próximo sonho relê o que foi desfeito.
+    let restored: Vec<&round::RunRecord> = records
+        .iter()
+        .filter(|r| project.map_or(true, |p| p == r.project))
+        .filter(|r| results.iter().any(|x| x["project"] == r.project.as_str() && x["ok"] == true))
+        .collect();
+    if !restored.is_empty() {
+        match load_state(st) {
+            Ok(mut state) => {
+                for (key, before) in restored.iter().flat_map(|r| &r.cursors_before) {
+                    match before {
+                        Some(n) => state.cursors.insert(key.clone(), *n),
+                        None => state.cursors.remove(key),
+                    };
+                }
+                if let Err(e) = state.save(&Paths::of(st).state()) {
+                    return failure(&format!("dream_io: {e}"));
+                }
+            }
+            Err(e) => return failure(&e),
+        }
+    }
     ok(json!({"results": results}))
 }
 
