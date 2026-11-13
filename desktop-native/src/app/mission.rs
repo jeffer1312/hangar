@@ -4,6 +4,7 @@ use super::*;
 use super::costs::{empty_state, error_state, loading_state, note_box, page_frame};
 use super::device::size_text;
 use super::linked_children::{state_label, tone};
+use super::reviews::{BranchReview, Summary as Review, fetch_branch, pill, pipeline_label, status_color};
 use gpui_kit::component::progress::Progress;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -103,7 +104,7 @@ enum Lane { Inbox, Stage(usize), Done }
 
 /// De onde veio a etapa do ticket, para a tela dizer.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Source { Reported, Status, Plan, None }
+enum Source { Reported, Status, Review, Plan, None }
 
 #[derive(Default)]
 pub(super) struct Mission {
@@ -132,6 +133,11 @@ pub(super) struct Mission {
     stages_editor: Option<Entity<TextareaState>>,
     /// Com concluídos: sem ele, só os tickets abertos vêm do conector (os mais recentes costumam estar concluídos).
     show_done: bool,
+    /// PRs e MRs abertos da máquina (`/api/reviews`), para achar o do ticket pela branch quando não há sessão ligada.
+    reviews: Option<Vec<Review>>,
+    reviews_seq: u64,
+    /// Revisão da branch de cada sessão do ticket, pelo nome da sessão: `None` enquanto chega.
+    branch_reviews: HashMap<String, Option<BranchReview>>,
 }
 
 fn failure_text(error: &Failure) -> String {
@@ -148,15 +154,15 @@ fn ago(at: &str) -> Option<String> {
     Some(super::side::ago(super::side::now_seconds() - at.timestamp() as f64))
 }
 
+/// O texto é a chave ou começa por ela seguida de separador: `PM-1` não casa com `PM-12`.
+fn starts_with_key(text: &str, key: &str) -> bool {
+    text.to_ascii_lowercase().strip_prefix(&key.to_ascii_lowercase()).is_some_and(|rest| rest.is_empty() || rest.starts_with(['-', '_', '.', ' ', '/']))
+}
+
 /// A sessão é da PM quando a branch é a chave ou o nome começa por ela (`PM-1`, `PM-1-Coordenadora`), como o
-/// plugin Promedico identifica a PM; `PM-1` não casa com `PM-12`.
+/// plugin Promedico identifica a PM.
 fn named_after(session: &SessionInfo, key: &str) -> bool {
-    let key = key.to_ascii_lowercase();
-    let starts = |text: &str| {
-        let text = text.to_ascii_lowercase();
-        text.strip_prefix(&key).is_some_and(|rest| rest.is_empty() || rest.starts_with(['-', '_', '.', ' ']))
-    };
-    session.branch.as_deref().is_some_and(|branch| branch.eq_ignore_ascii_case(&key)) || starts(&session.name)
+    session.branch.as_deref().is_some_and(|branch| branch.eq_ignore_ascii_case(key)) || starts_with_key(&session.name, key)
 }
 
 /// Texto das etapas para editar: uma por linha, `Nome | portão | Status, Status`.
@@ -210,11 +216,14 @@ struct TicketView<'a> {
     stage: Option<&'a Stage>,
     /// Etapa com portão em que o ticket espera o dono.
     waiting: Option<&'a Stage>,
+    /// O PR ou MR da branch do ticket.
+    review: Option<&'a Review>,
 }
 
 /// Coluna do ticket e de onde veio: concluído na origem ou entregue vence; depois a etapa informada, a que o status de
-/// origem indica e, com sessão viva, a dedução pelo plano dela.
-fn lane_of(stages: &[Stage], ticket: &Ticket, item: Option<&Item>, session: Option<&SessionInfo>) -> (Lane, Source) {
+/// origem indica, a do MR da branch (aberto: Revisão; mesclado: a etapa seguinte) e, com sessão viva, a dedução pelo
+/// plano dela.
+fn lane_of(stages: &[Stage], ticket: &Ticket, item: Option<&Item>, session: Option<&SessionInfo>, review: Option<&Review>) -> (Lane, Source) {
     if matches!(ticket.status.category.as_str(), "done" | "canceled") || item.is_some_and(|i| i.delivered_at.is_some()) {
         return (Lane::Done, Source::Status);
     }
@@ -223,6 +232,11 @@ fn lane_of(stages: &[Stage], ticket: &Ticket, item: Option<&Item>, session: Opti
     }
     if let Some(index) = stages.iter().position(|s| s.statuses.iter().any(|status| status.eq_ignore_ascii_case(&ticket.status.name))) {
         return (Lane::Stage(index), Source::Status);
+    }
+    if let Some(review) = review.filter(|r| matches!(r.state.as_str(), "open" | "merged")) && !stages.is_empty() {
+        let at = stages.iter().position(|s| s.id == "revisao").unwrap_or(2.min(stages.len() - 1));
+        let index = if review.state == "merged" { (at + 1).min(stages.len() - 1) } else { at };
+        return (Lane::Stage(index), Source::Review);
     }
     let Some(session) = session.filter(|s| s.state != "dead") else { return (Lane::Inbox, Source::None) };
     // Sem plano, plano em andamento e plano concluído: as etapas padrão, ou a posição delas numa lista própria.
@@ -339,6 +353,7 @@ impl Hangar {
                     this.mission.connector = Some(id);
                     this.mission.board = Some(Ok(Board { connectors, work, tickets, next_cursor: page.next_cursor, total: page.total, query: used, done }));
                     this.load_thumbs(window, cx);
+                    this.load_mission_reviews(!more, cx);
                 }
             }
         });
@@ -391,6 +406,8 @@ impl Hangar {
     fn select_ticket(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
         let (Some(api), Some(connector)) = (self.api.clone(), self.mission.connector.clone()) else { return };
         (self.mission.selected, self.mission.detail, self.mission.changes) = (Some(id.clone()), None, None);
+        // A sessão pode ter nascido ou mudado de branch depois da leitura: a revisão dela que falta é pedida agora.
+        self.load_mission_reviews(false, cx);
         self.mission.detail_seq += 1;
         let seq = self.mission.detail_seq;
         self.load_thumbs(window, cx);
@@ -428,10 +445,75 @@ impl Hangar {
         let item = self.mission_item(&ticket.id);
         let linked = self.ticket_session(ticket, item);
         let stages = self.mission_board().map_or(&[][..], |b| b.work.stages.as_slice());
-        let (lane, source) = lane_of(stages, ticket, item, linked.as_ref().and_then(|l| l.session));
+        let review = self.ticket_review(ticket, linked.as_ref());
+        let (lane, source) = lane_of(stages, ticket, item, linked.as_ref().and_then(|l| l.session), review);
         let stage = match lane { Lane::Stage(index) => stages.get(index), _ => None };
         let waiting = stage.filter(|stage| stage.gate && !item.is_some_and(|item| item.approved.contains(&stage.id)));
-        TicketView { item, linked, lane, source, stage, waiting }
+        TicketView { item, linked, lane, source, stage, waiting, review }
+    }
+
+    /// O PR ou MR do ticket: o da branch da sessão dele e, sem esse, o aberto da máquina cuja branch leva a chave ou
+    /// que tem a sessão nela.
+    fn ticket_review<'a>(&'a self, ticket: &Ticket, linked: Option<&Linked>) -> Option<&'a Review> {
+        if let Some(found) = linked.and_then(|l| self.mission.branch_reviews.get(l.name)?.as_ref()?.summary.as_ref()) {
+            return Some(found);
+        }
+        let list = self.mission.reviews.as_deref()?;
+        linked.and_then(|l| list.iter().find(|r| r.sessions.iter().any(|s| s == l.name)))
+            .or_else(|| list.iter().find(|r| starts_with_key(&r.source, &ticket.key)))
+    }
+
+    /// Relê os PRs e MRs da máquina (com `fresh`, também as revisões já pedidas) e pede a da branch de cada sessão dos
+    /// tickets na tela que ainda falta. Sem `gh`/`glab` com login nela, a lista vem vazia e o detalhe diz por quê.
+    fn load_mission_reviews(&mut self, fresh: bool, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
+        if fresh { self.refresh_mission_reviews(api, cx); }
+        let sessions: Vec<(String, String)> = self.mission_board().map(|board| board.tickets.iter().filter_map(|ticket| {
+            let session = self.ticket_session(ticket, self.mission_item(&ticket.id))?.session?;
+            Some((session.name.clone(), session.git_dir()?.to_owned()))
+        }).collect()).unwrap_or_default();
+        for (name, dir) in sessions { self.fetch_mission_branch(name, dir, cx); }
+    }
+
+    fn refresh_mission_reviews(&mut self, api: Api, cx: &mut Context<Self>) {
+        self.mission.reviews_seq += 1;
+        let seq = self.mission.reviews_seq;
+        self.mission.branch_reviews.clear();
+        let server = super::servers::norm(&api.identity());
+        let listing = api;
+        let job = self.runtime.spawn(async move { listing.server_read(&["reviews"], &[], 120).await });
+        cx.spawn(async move |this, cx| {
+            let found = job.await.ok().and_then(Result::ok)
+                .and_then(|mut value| serde_json::from_value::<Vec<Review>>(value["reviews"].take()).ok());
+            let _ = this.update(cx, |this, cx| {
+                if this.mission.reviews_seq != seq { return; }
+                this.mission.reviews = Some(found.unwrap_or_default().into_iter().map(|r| Review { server: server.clone(), ..r }).collect());
+                cx.notify();
+            });
+        }).detach();
+    }
+
+    fn fetch_mission_branch(&mut self, name: String, dir: String, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
+        if self.mission.branch_reviews.contains_key(&name) { return; }
+        self.mission.branch_reviews.insert(name.clone(), None);
+        let (seq, server) = (self.mission.reviews_seq, super::servers::norm(&api.identity()));
+        let job = fetch_branch(&self.runtime, api, dir, true);
+        cx.spawn(async move |this, cx| {
+            let found = job.await.ok().and_then(Result::ok);
+            let _ = this.update(cx, |this, cx| {
+                if this.mission.reviews_seq != seq { return; }
+                match found {
+                    Some(mut branch) => {
+                        if let Some(summary) = branch.summary.as_mut() { summary.server = server; }
+                        this.mission.branch_reviews.insert(name, Some(branch));
+                    }
+                    // Falhou: sai do mapa para a próxima leitura tentar de novo.
+                    None => { this.mission.branch_reviews.remove(&name); }
+                }
+                cx.notify();
+            });
+        }).detach();
     }
 
     /// Iniciar: a tela de nova conversa com a primeira mensagem do conector no campo. A pessoa escolhe a pasta e envia;
@@ -725,6 +807,7 @@ impl Hangar {
                     .max_w(px(120.)).child(ticket.status.name.clone())))
             .child(div().text_size(px(13.)).line_height(relative(1.35)).whitespace_normal().line_clamp(3).child(ticket.title.clone()))
             .children(session)
+            .children(view.review.map(review_line))
             .children(waiting.map(|stage| div().text_size(px(11.5)).text_color(theme::warning()).child(tr("mission_waiting_you").replace("{etapa}", &stage))))
             .on_click(cx.listener(move |this, _, window, cx| this.select_ticket(id.clone(), window, cx)))
             .into_any_element()
@@ -799,6 +882,7 @@ impl Hangar {
         let source_text = match tv.source {
             Source::Reported => tr("mission_source_reported"),
             Source::Status => tr("mission_source_status"),
+            Source::Review => tr("mission_source_review"),
             Source::Plan => tr("mission_source_plan"),
             Source::None => String::new(),
         };
@@ -849,6 +933,7 @@ impl Hangar {
             None => note_box(tr("mission_session_gone").replace("{name}", name), theme::muted()),
         });
 
+        let review = self.render_ticket_review(&tv, cx);
         let evidence = self.render_evidence(item, cx);
         let history = item.filter(|i| !i.history.is_empty()).map(|i| render_history(i, stages));
         let description = if view.detail.description_markdown.trim().is_empty() {
@@ -867,9 +952,55 @@ impl Hangar {
             .child(actions)
             .children(gate)
             .children(session)
+            .children(review)
             .child(evidence)
             .children(history)
             .child(div().border_t_1().border_color(theme::border()).pt(px(12.)).child(description))
+    }
+
+    /// O PR ou MR do ticket com o estado, o pipeline e as threads, e os botões para abrir na página de Revisões ou no
+    /// site. Sem revisão, diz o que a busca achou na branch da sessão (nenhuma, ou sem login no `gh`/`glab`).
+    fn render_ticket_review(&self, tv: &TicketView, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let head = |title: String| div().flex().items_center().gap(px(6.))
+            .child(chrome::small_icon(IconName::GitPullRequest, 14., theme::muted()))
+            .child(div().font_weight(FontWeight::SEMIBOLD).child(title));
+        let Some(review) = tv.review else {
+            let branch = tv.linked.as_ref().and_then(|l| self.mission.branch_reviews.get(l.name)?.as_ref())?;
+            let text = match branch.state.as_str() {
+                "none" => tr("mission_review_none").replace("{branch}", &branch.branch),
+                "no_login" | "cli_missing" => tr("mission_review_no_login").replace("{cli}", branch.cli.as_deref().unwrap_or("gh/glab")),
+                _ => return None,
+            };
+            return Some(div().flex().flex_col().gap(px(6.)).child(head(tr("mission_review_title")))
+                .child(div().text_size(px(12.5)).text_color(theme::faint()).child(text)).into_any_element());
+        };
+        let kind = if review.gitlab() { tr("review_kind_mr") } else { tr("review_kind_pr") };
+        let state = match (review.state.as_str(), review.draft) {
+            ("merged", _) => pill(tr("review_state_merged"), theme::success(), false),
+            ("closed", _) => pill(tr("review_state_closed"), theme::faint(), false),
+            (_, true) => pill(tr("review_state_draft"), theme::faint(), false),
+            _ => pill(tr("review_state_open"), theme::accent(), false),
+        };
+        let open = review.open_threads.unwrap_or(0) as usize;
+        let pills = div().flex().flex_wrap().gap(px(6.))
+            .child(state)
+            .child(pill(pipeline_label(review.pipeline.as_deref()), status_color(review.pipeline.as_deref()), true))
+            .when(open > 0, |el| el.child(pill(super::rows::counted("review_threads_open", open), theme::warning(), false)))
+            .when(review.conflicts == Some(true), |el| el.child(pill(tr("review_conflict_short"), theme::danger(), false)));
+        let (item, url) = (review.clone(), review.url.clone());
+        let site = if review.gitlab() { "GitLab" } else { "GitHub" };
+        Some(div().p(px(12.)).rounded(px(10.)).border_1().border_color(theme::border()).flex().flex_col().gap(px(8.))
+            .child(head(format!("{kind} {}", review.number_label())))
+            .child(div().text_size(px(13.)).child(review.title.clone()))
+            .child(div().font_family(theme::MONO).text_size(px(11.5)).text_color(theme::faint()).truncate()
+                .child(format!("{} · {} → {}", review.repo, review.source, review.target)))
+            .child(pills)
+            .child(div().flex().flex_wrap().gap(px(8.))
+                .child(Button::new("mission-review-open").outline().small().icon(IconName::GitPullRequest).label(tr("mission_review_open"))
+                    .on_click(cx.listener(move |this, _, window, cx| this.open_review_from_mission(&item, window, cx))))
+                .child(Button::new("mission-review-web").ghost().small().icon(IconName::ExternalLink).label(tr("review_open_web").replace("{site}", site))
+                    .on_click(move |_, window, cx| super::links::open_link(&url, true, window, cx))))
+            .into_any_element())
     }
 
     fn render_evidence(&self, item: Option<&Item>, cx: &mut Context<Self>) -> AnyElement {
@@ -939,6 +1070,24 @@ fn render_history(item: &Item, stages: &[Stage]) -> Div {
         .children(rows)
 }
 
+/// O MR no cartão: número, pipeline, threads abertas e, quando não está aberto, o estado.
+fn review_line(review: &Review) -> Div {
+    let kind = if review.gitlab() { tr("review_kind_mr") } else { tr("review_kind_pr") };
+    let open = review.open_threads.unwrap_or(0) as usize;
+    let state = match review.state.as_str() {
+        "merged" => Some((tr("review_state_merged"), theme::success())),
+        "closed" => Some((tr("review_state_closed"), theme::faint())),
+        _ if review.draft => Some((tr("review_state_draft"), theme::faint())),
+        _ => None,
+    };
+    div().flex().items_center().gap(px(5.)).text_size(px(11.5)).min_w_0()
+        .child(chrome::small_icon(IconName::GitPullRequest, 12., theme::muted()))
+        .child(div().text_color(theme::muted()).child(format!("{kind} {}", review.number_label())))
+        .child(div().size(px(6.)).flex_shrink_0().rounded_full().bg(status_color(review.pipeline.as_deref())))
+        .children(state.map(|(text, color)| div().text_color(color).child(text)))
+        .when(open > 0, |el| el.child(div().text_color(theme::warning()).truncate().child(super::rows::counted("review_threads_open", open))))
+}
+
 /// Estado da sessão e, com plano, a Task em andamento e a barra do que já foi feito.
 fn session_line(session: &SessionInfo) -> Div {
     let tone = tone(session.display_state());
@@ -974,6 +1123,18 @@ mod tests {
         assert!(named_after(&session("hangar", Some("PM-19816")), "PM-19816"));
         assert!(!named_after(&session("PM-198160", None), "PM-19816"));
         assert!(!named_after(&session("hangar", Some("PM-198160")), "PM-19816"));
+    }
+
+    #[test]
+    fn branch_review_moves_the_ticket_to_review_and_merged_one_stage_after() {
+        let stages = vec![stage("planejamento", "Planejamento"), stage("execucao", "Execução"), stage("revisao", "Revisão"), stage("validacao", "Validação")];
+        let ticket = Ticket { id: "1".into(), key: "PM-1".into(), title: String::new(), url: String::new(),
+            status: Status { name: "Em andamento".into(), category: "in_progress".into() }, assignee: None, updated_at: None };
+        let review = |state: &str| Review { state: state.into(), ..Default::default() };
+        assert!(lane_of(&stages, &ticket, None, None, Some(&review("open"))) == (Lane::Stage(2), Source::Review));
+        assert!(lane_of(&stages, &ticket, None, None, Some(&review("merged"))) == (Lane::Stage(3), Source::Review));
+        assert!(lane_of(&stages, &ticket, None, None, Some(&review("closed"))) == (Lane::Inbox, Source::None), "fechado sem merge não conta");
+        assert!(starts_with_key("pm-1-ajuste", "PM-1") && starts_with_key("PM-1/x", "PM-1") && !starts_with_key("PM-12", "PM-1"));
     }
 
     #[test]
