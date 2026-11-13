@@ -20,7 +20,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
 - **`send-keys` e `capture-pane` vão direto ao servidor do psmux** que a lista conferiu
   (`hangar_psmux::command`), sem abrir o `tmux.exe`. Vale do psmux 3.3.8 para cima
   (`hangar_psmux::MIN_VERSION`), nunca uma lista de compilações: quem garante é a conferência contra
-  o CLI, e versão abaixo segue pelo CLI. O `display-message` da conferência de identidade
+  o CLI, e versão abaixo segue pelo CLI. Os terminais de atalho (`list-sessions`, cursor e tela da
+  pergunta) também vão direto. O `display-message` da conferência de identidade
   fica no CLI: o servidor responde OK para alvo que não existe. Uma linha com contrabarra vai direto,
   inteira, num comando só (o argv do Windows a estraga pelo CLI); sem o caminho direto, ela vai pelo
   clipboard. A escolha entre direto e clipboard é feita uma vez por entrega. Ver
@@ -1130,3 +1131,10 @@ Medido no mesmo notebook depois da troca (versão 0.1.0.10376, 3 sessões de car
 `tmux.exe` por minuto de ~103 para ~49 trabalhando e ~45 parado; CPU dos servidores do psmux de
 3,2%/2,6% para 1,6%/0,9% de um núcleo; `psmux_direct_version` sumiu do log. O ganho junta a lista
 e a captura direta, que só ligaram juntas. Os ~45 por minuto restantes são `tmux.exe` fora da captura.
+
+O que sobrava, contado na DELPHI-02 pelo evento 4688 do Windows (90 s, linha de comando): fora o
+`capture-pane`, 37 por minuto de `list-sessions -F` dos terminais de atalho, que no Windows rodava a
+cada rodada da lista mesmo sem atalho, e 37 por minuto de `display -p` do cursor de um atalho com
+pergunta. Agora o `list-sessions` só roda com sessão de atalho nos panes da rodada e vai direto a cada
+servidor (no psmux cada sessão tem o seu e responde só a linha dela, igual à do CLI); `display` e
+`capture-pane` da pergunta também vão direto. Sem conferência, o CLI de antes.

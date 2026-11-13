@@ -12,6 +12,9 @@ use super::procs::ChildrenMap;
 pub(crate) const PREFIX: &str = "shortcut-";
 pub(crate) const FORMAT: &str = "#{session_name}\t#{@cp_shortcut_owner}\t#{@cp_shortcut_id}\t#{session_created}\t#{pane_dead}\t#{pane_dead_status}\t#{pane_pid}\t#{@cp_shortcut_seq}\t#{@cp_shortcut_key}\t#{@cp_shortcut_origin}\t#{@cp_shortcut_ask}\t#{@cp_shortcut_label}";
 const MUX_TIMEOUT: Duration = Duration::from_secs(5);
+/// Servidor calado não come o prazo do CLI que vem depois.
+#[cfg(windows)]
+const DIRECT_TIMEOUT: Duration = Duration::from_secs(2);
 const TTY_WAITS: [&str; 2] = ["wait_woken", "n_tty_read"];
 const SCREEN_LINES: usize = 6;
 /// Windows: tela e CPU parados por pelo menos isto entre duas leituras contam como pergunta.
@@ -84,6 +87,28 @@ async fn mux(program: &OsStr, args: &[&str]) -> Option<std::process::Output> {
     let mut command = crate::terminal_input::child_command(program);
     command.args(args).stdin(std::process::Stdio::null()).kill_on_drop(true);
     tokio::time::timeout(MUX_TIMEOUT, command.output()).await.ok()?.ok()
+}
+
+/// Leitura no servidor do psmux da sessão que a lista conferiu, sem abrir o `tmux.exe`. `None` = sem
+/// conferência ou falhou: vale o CLI.
+#[cfg(windows)]
+async fn direct(program: &OsStr, session: &str, args: &[&str]) -> Option<String> {
+    let dir = super::mux::verified_direct(program, session)?;
+    let (base, args) = (session.to_owned(), args.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>());
+    let deadline = std::time::Instant::now() + DIRECT_TIMEOUT;
+    let stdout = tokio::task::spawn_blocking(move || hangar_psmux::command(&dir, &base, &args, deadline)).await.ok()?.ok()?;
+    let text = String::from_utf8_lossy(&stdout).into_owned();
+    (!text.starts_with("ERROR: ")).then_some(text)
+}
+
+#[cfg(not(windows))]
+async fn direct(_: &OsStr, _: &str, _: &[&str]) -> Option<String> { None }
+
+/// Comando de leitura na sessão: direto quando dá, senão o CLI. `(sucesso, saída)`.
+async fn read(program: &OsStr, session: &str, args: &[&str]) -> Option<(bool, String)> {
+    if let Some(text) = direct(program, session, args).await { return Some((true, text)); }
+    let out = mux(program, args).await?;
+    Some((out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned()))
 }
 
 /// `terminal_prompt.parse_prompt`: a linha termina em `:` ou `?`; `[padrão]` no fim é o valor sugerido.
@@ -160,12 +185,11 @@ pub(crate) async fn pending_question(program: &OsStr, target: &str, pane_pid: Op
     let pane_pid = pane_pid.filter(|p| *p != 0)?;
     if !cfg!(windows) && !reading_tty(pane_pid, children) { return None; }
     let where_ = format!("={target}:");
-    let out = mux(program, &["display", "-p", "-t", &where_, "#{cursor_y},#{pane_width}"]).await?;
-    let text = String::from_utf8_lossy(&out.stdout);
+    let (ok, text) = read(program, target, &["display", "-p", "-t", &where_, "#{cursor_y},#{pane_width}"]).await?;
     let (y, width) = text.trim().split_once(',')?;
     let (y, width) = (digits(y)? as usize, digits(width)? as usize);
-    if !out.status.success() { return None; }
-    let raw = mux(program, &["capture-pane", "-p", "-t", &where_]).await.map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    if !ok { return None; }
+    let raw = read(program, target, &["capture-pane", "-p", "-t", &where_]).await.map(|(_, text)| text).unwrap_or_default();
     let screen: Vec<&str> = raw.split('\n').collect();
     let Some(mut question) = parse_prompt(&logical_line(&screen, y, width)) else {
         last().remove(target);
@@ -185,6 +209,24 @@ pub(crate) fn maintain(rows: &[Row]) {
     sweep_orphans(&rows.iter().map(|r| r.id.as_str()).collect());
     let alive: std::collections::HashSet<&str> = rows.iter().filter(|r|r.alive).map(|r|r.tmux.as_str()).collect();
     last().retain(|target,_|alive.contains(target.as_str()));
+}
+
+/// O `list-sessions` dos atalhos. `sessions` são as sessões de atalho que os panes da rodada mostraram;
+/// `None` = os panes não provam a ausência e só o multiplexador responde. Nenhuma = nada a ler.
+async fn read_sessions(program: &OsStr, sessions: Option<Vec<String>>) -> Result<Option<String>, &'static str> {
+    if sessions.as_ref().is_some_and(Vec::is_empty) { return Ok(None); }
+    let args = ["list-sessions", "-F", FORMAT];
+    // No psmux cada sessão tem servidor próprio, que responde só a linha dela.
+    if let Some(sessions) = &sessions {
+        let mut text = Some(String::new());
+        for session in sessions {
+            let Some(line) = direct(program, session, &args).await else { text = None; break };
+            text.as_mut().map(|t| t.push_str(&line));
+        }
+        if text.is_some() { return Ok(text); }
+    }
+    let out = mux(program, &args).await.ok_or("shortcuts_mux_unavailable")?;
+    Ok(Some(if out.status.success() { String::from_utf8_lossy(&out.stdout).into_owned() } else { String::new() }))
 }
 
 type Reading = Result<String, &'static str>;
@@ -209,12 +251,11 @@ impl Refresher {
 
 /// `list_all` em JSON: todos os terminais de atalho, do mais antigo ao mais novo. `Err` = o
 /// multiplexador não respondeu (lista vazia apagaria as abas e as perguntas).
-pub async fn list_all(program: &OsString, children: &ChildrenMap, present: bool) -> Result<String, &'static str> {
-    // `present` falso = quem chama já viu que não há sessão de atalho: o resto corre igual, sem abrir o multiplexador.
-    let mut rows = if present {
-        let out = mux(program, &["list-sessions", "-F", FORMAT]).await.ok_or("shortcuts_mux_unavailable")?;
-        if out.status.success() { parse(&String::from_utf8_lossy(&out.stdout), windows_status) } else { Vec::new() }
-    } else { Vec::new() };
+pub async fn list_all(program: &OsString, children: &ChildrenMap, sessions: Option<Vec<String>>) -> Result<String, &'static str> {
+    let mut rows = match read_sessions(program, sessions).await? {
+        Some(text) => parse(&text, windows_status),
+        None => Vec::new(),
+    };
     maintain(&rows);
     rows.sort_by(|a, b| (a.created, a.seq, &a.tmux).cmp(&(b.created, b.seq, &b.tmux)));
     let mut list = Vec::with_capacity(rows.len());
@@ -272,5 +313,83 @@ mod tests {
         assert!(r.round(|| async { Ok("a".to_owned()) }).is_none());
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert_eq!(r.round(|| async { Ok("b".to_owned()) }), Some(Ok("a".to_owned())), "a rodada colhe a leitura que terminou");
+    }
+}
+
+#[cfg(test)]
+mod direct_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn no_shortcut_in_the_panes_reads_nothing() {
+        // O programa não existe: abrir o CLI daria erro.
+        assert_eq!(read_sessions(OsStr::new("missing-shortcut-mux"), Some(Vec::new())).await, Ok(None));
+    }
+
+    #[tokio::test]
+    async fn an_unproved_round_still_asks_the_program() {
+        assert_eq!(read_sessions(OsStr::new("missing-shortcut-mux"), None).await, Err("shortcuts_mux_unavailable"));
+    }
+}
+
+#[cfg(all(test, windows))]
+mod psmux_direct_tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Write};
+
+    /// Servidor de sessão falso: responde à conferência da lista e, depois, a cada comando com o que `reply` der.
+    fn server(dir: &std::path::Path, base: &str, calls: usize, reply: fn(&str) -> &'static str) -> std::thread::JoinHandle<Vec<String>> {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        std::fs::write(dir.join(format!("{base}.port")), listener.local_addr().unwrap().port().to_string()).unwrap();
+        std::fs::write(dir.join(format!("{base}.key")), "k").unwrap();
+        let name = base.to_owned();
+        listener.set_nonblocking(true).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        // Quem não vier dentro do teto não chegou: o teste falha na asserção, sem travar no `join`.
+        let accept = move || loop {
+            match listener.accept() {
+                Ok((stream, _)) => { stream.set_nonblocking(false).unwrap(); return Some(stream); }
+                Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)), // estavel: espera de conexão com teto
+                Err(_) => return None,
+            }
+        };
+        std::thread::spawn(move || (0..calls + 1).map_while(|_| {
+            let stream = accept()?;
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let (mut auth, mut cmd) = (String::new(), String::new());
+            reader.read_line(&mut auth).unwrap(); reader.read_line(&mut cmd).unwrap();
+            let body = if cmd.starts_with("\"list-panes\"") || cmd.starts_with("list-panes") { format!("{name}\n") } else { reply(&cmd).to_owned() };
+            (&stream).write_all(format!("OK\n{body}").as_bytes()).unwrap();
+            Some(cmd)
+        }).collect())
+    }
+
+    fn verify(program: &str, dir: &std::path::Path) {
+        let until = Instant::now() + Duration::from_secs(5);
+        let listing = hangar_psmux::list_panes(dir, "#{session_name}", until).unwrap();
+        crate::list::mux::verify_for_test(program, dir, listing.servers);
+    }
+
+    #[tokio::test]
+    async fn verified_shortcut_sessions_are_listed_without_the_program() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = server(dir.path(), "shortcut-a", 1, |_| "shortcut-a\t\tab12cd\t100\t0\t\t4242\t2\tk\to\t0\tA\n");
+        let b = server(dir.path(), "shortcut-b", 1, |_| "shortcut-b\t\tcd34ef\t101\t0\t\t4243\t3\tk\to\t0\tB\n");
+        verify("missing-shortcut-mux-2", dir.path());
+        let sessions = vec!["shortcut-a".to_owned(), "shortcut-b".to_owned()];
+        let text = read_sessions(OsStr::new("missing-shortcut-mux-2"), Some(sessions)).await.unwrap().unwrap();
+        assert_eq!(parse(&text, |_| (true, None)).iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["ab12cd", "cd34ef"]);
+        assert!(a.join().unwrap().get(1).is_some_and(|cmd| cmd.starts_with("\"list-sessions\"")));
+        b.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_pending_question_reads_the_screen_without_the_program() {
+        let dir = tempfile::tempdir().unwrap();
+        let seen = server(dir.path(), "shortcut-q", 2, |cmd| if cmd.starts_with("\"display\"") { "0,80\n" } else { "Nome do projeto:\n" });
+        verify("missing-shortcut-mux-3", dir.path());
+        pending_question(OsStr::new("missing-shortcut-mux-3"), "shortcut-q", Some(4242), &ChildrenMap::new()).await;
+        let cmds = seen.join().unwrap();
+        assert!(cmds.len() == 3 && cmds[1].starts_with("\"display\"") && cmds[2].starts_with("\"capture-pane\""), "{cmds:?}");
     }
 }
