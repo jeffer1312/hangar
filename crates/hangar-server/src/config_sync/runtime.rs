@@ -226,13 +226,33 @@ impl RuntimeConfig {
         }
         Ok(current.into_map())
     }
+    /// Lê o valor efetivo de `shortcuts`, passa a `change` e grava o texto devolvido, tudo sob a
+    /// trava de escrita: outra gravação no meio não se perde. Devolve o valor de `shortcuts` no
+    /// arquivo antes da gravação, o modo do arquivo (`None` = não existia) e se a pasta existia.
+    /// `Ok(Err(_))` = `change` recusou e nada foi gravado.
+    pub fn update_shortcuts<E>(&self, change:impl FnOnce(&Value)->Result<String,E>)->Result<Result<(Option<Value>,Option<u32>,bool),E>,RuntimeError> {
+        let _guard=WRITES.lock().unwrap_or_else(|e|e.into_inner());
+        let parent_existed=self.path.parent().is_some_and(std::path::Path::exists);
+        let mode=match std::fs::metadata(&self.path) {
+            Ok(_)=>Some(super::files::mode(&self.path).map_err(|e|RuntimeError::io(&e,StorageOperation::Read))?),
+            Err(e) if e.kind()==std::io::ErrorKind::NotFound=>None,
+            Err(e)=>return Err(RuntimeError::io(&e,StorageOperation::Read)),
+        };
+        let mut current=read_for_write(&self.path)?;
+        let before=current.get("shortcuts").map(codec::clone_value);
+        let effective=ValueGuard(self.effective("shortcuts",&current));
+        let serialized=match change(&effective.0) { Ok(text)=>text, Err(refused)=>return Ok(Err(refused)) };
+        current.insert("shortcuts".into(),preferences::coerce("shortcuts",&json!(serialized))?);
+        write_values(&self.path,&current)?;
+        Ok(Ok((before,mode,parent_existed)))
+    }
     /// Desfaz a gravação de `shortcuts` de uma importação, só se a chave ainda é a que ela gravou:
     /// outro campo ou gravação posterior permanece. O arquivo volta ao modo de antes; se não existia
     /// e ficou vazio, sai (e a pasta, se esta gravação a criou).
     pub fn undo_shortcuts(&self, serialized:&str, before:Option<&Value>, mode:Option<u32>, parent_existed:bool)->Result<(),RuntimeError> {
         let _guard=WRITES.lock().unwrap_or_else(|e|e.into_inner());
-        // Ilegível não é a gravação desta importação, que sai sempre em JSON válido.
-        let Ok(mut current)=read_for_write(&self.path) else { return Ok(()); };
+        // Ilegível não dá para conferir nem restaurar: a falha vai para a mensagem do import.
+        let mut current=read_for_write(&self.path)?;
         let ours=json!(serialized);
         if current.get("shortcuts")!=Some(&ours) || before==Some(&ours) { return Ok(()); }
         match before {

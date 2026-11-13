@@ -162,7 +162,7 @@ pub fn import(host: &dyn Host, request: ImportRequest) -> Result<Value, Error> {
         }
     }
     let (merged, added, replaced) = merge(current(host)?, &incoming);
-    host.validate(&pyjson::dumps_unicode(&Value::Array(merged.clone()), false)).map_err(Error::Invalid)?;
+    host.validate(&pyjson::dumps_unicode(&Value::Array(merged), false)).map_err(Error::Invalid)?;
     let mut found = placeholders(&incoming);
     found.extend(placeholders(&script_items));
     let verify: Vec<Value> = incoming.iter().filter(|item| item.get("verify").is_some_and(truthy)).map(|item| item["id"].clone()).collect();
@@ -206,26 +206,46 @@ pub fn import(host: &dyn Host, request: ImportRequest) -> Result<Value, Error> {
         }
     }
     if apply {
-        save(host, &machine, &scripts, &pyjson::dumps_unicode(&Value::Array(merged), false))?;
+        // A contagem vale a da junção gravada, refeita sob a trava sobre a lista daquele instante.
+        let (added, replaced) = save(host, &machine, &scripts, &incoming)?;
+        result.insert("added".into(), json!(added));
+        result.insert("replaced".into(), json!(replaced));
     }
     Ok(Value::Object(result))
 }
 
-fn save(host: &dyn Host, machine: &Machine, scripts: &[Script], serialized: &str) -> Result<(), Error> {
-    if scripts.is_empty() {
-        return host.save(serialized);
-    }
-    let mut before: Option<Snapshot> = None;
-    let written = scripts::apply_files(&machine.home, scripts, || {
-        before = Some(host.snapshot()?);
-        host.save(serialized)
-    });
-    let Err(message) = written else { return Ok(()) };
-    // Só desfaz a gravação desta importação; outro campo ou gravação posterior permanece.
-    if let Some(before) = &before {
-        if host.undo(serialized, before).is_err() {
-            return Err(Error::Invalid(format!("{message}; restauração dos atalhos na configuração falhou")));
+/// Grava os scripts e depois a junção com a lista salva, lida e gravada numa seção só da trava da
+/// configuração; falha desfaz os scripts e, se a lista chegou a ser gravada, a lista.
+fn save(host: &dyn Host, machine: &Machine, scripts: &[Script], incoming: &[Value]) -> Result<(usize, usize), Error> {
+    let mut counts = (0, 0);
+    let mut written: Option<(String, Snapshot)> = None;
+    let mut write = || -> Result<(), Error> {
+        let mut serialized = String::new();
+        let (before, result) = host.update(&mut |current| {
+            let (merged, added, replaced) = merge(list(current), incoming);
+            let text = pyjson::dumps_unicode(&Value::Array(merged), false);
+            host.validate(&text).map_err(Error::Invalid)?;
+            counts = (added, replaced);
+            serialized.clone_from(&text);
+            Ok(text)
+        });
+        if let Some(before) = before {
+            written = Some((serialized, before));
         }
+        result
+    };
+    if scripts.is_empty() {
+        write()?;
+        return Ok(counts);
+    }
+    let outcome = scripts::apply_files(&machine.home, scripts, write);
+    let Err(message) = outcome else { return Ok(counts) };
+    // Só desfaz a gravação desta importação; outro campo ou gravação posterior permanece.
+    if let Some((serialized, before)) = &written
+        && let Err(reason) = host.undo(serialized, before)
+    {
+        tracing::warn!(code = "shortcut_import_undo_failed", "{reason}");
+        return Err(Error::Invalid(format!("{message}; restauração dos atalhos na configuração falhou")));
     }
     Err(Error::Invalid(message))
 }
@@ -369,13 +389,17 @@ fn merge(current: Vec<Value>, incoming: &[Value]) -> (Vec<Value>, usize, usize) 
 
 /// A lista salva; vazia, JSON inválido ou não-lista contam como nenhum atalho.
 pub(crate) fn current(host: &dyn Host) -> Result<Vec<Value>, Error> {
-    Ok(match host.shortcuts()? {
-        Value::String(raw) if !raw.is_empty() => match serde_json::from_str(&raw) {
+    Ok(list(&host.shortcuts()?))
+}
+
+fn list(value: &Value) -> Vec<Value> {
+    match value {
+        Value::String(raw) if !raw.is_empty() => match serde_json::from_str(raw) {
             Ok(Value::Array(items)) => items,
             _ => Vec::new(),
         },
         _ => Vec::new(),
-    })
+    }
 }
 
 pub(crate) fn id_of(item: &Value) -> Option<&str> {

@@ -1,12 +1,11 @@
 //! `GET /api/shortcuts/export`, `POST /api/shortcuts/import` e `POST /api/shortcuts/verify`: só o dono.
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::{ConnectInfo, Request, State};
-use axum::http::{StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::http::StatusCode;
+use axum::response::Response;
 use serde_json::{Map, Value, json};
 
 use hangar_core::edge::Edge;
@@ -30,8 +29,27 @@ struct Http {
     host: Arc<dyn Host>,
 }
 
+/// O caminho cru é das três rotas, também escrito com `%2F` ou com barra repetida.
 pub fn owns_path(path: &str) -> bool {
+    let path = normalized(path);
     BASES.iter().any(|base| path == *base || path.strip_prefix(base).is_some_and(|tail| tail.starts_with('/')))
+}
+
+/// Para quem achou o pedido fora do roteador (caminho com `%2F` ou `//`): o mesmo tratamento.
+pub async fn handle(edge: Edge, host: Arc<dyn Host>, peer: Option<SocketAddr>, request: Request) -> Response {
+    serve(Arc::new(Http { edge, host }), peer, request).await
+}
+
+/// Decodificado e sem barra repetida: `/api//shortcuts%2Fexport` é `/api/shortcuts/export`.
+fn normalized(path: &str) -> String {
+    let decoded = percent_encoding::percent_decode_str(path).decode_utf8_lossy();
+    let mut out = String::with_capacity(decoded.len());
+    for c in decoded.chars() {
+        if !(c == '/' && out.ends_with('/')) {
+            out.push(c);
+        }
+    }
+    out
 }
 
 pub fn router<S: Clone + Send + Sync + 'static>(edge: Edge, host: Arc<dyn Host>) -> Router<S> {
@@ -50,19 +68,23 @@ async fn public(
     peer: Result<ConnectInfo<SocketAddr>, axum::extract::rejection::ExtensionRejection>,
     request: Request,
 ) -> Response {
+    serve(state, peer.ok().map(|peer| peer.0), request).await
+}
+
+async fn serve(state: Arc<Http>, peer: Option<SocketAddr>, request: Request) -> Response {
     if let Some(response) = hangar_core::http_cors::preflight(request.method(), request.headers()) {
         return response;
     }
     let method = request.method().clone();
     let headers = request.headers().clone();
-    let mut response = reply(state, peer.ok().map(|peer| peer.0), request).await;
+    let mut response = reply(state, peer, request).await;
     hangar_core::http_cors::apply(&headers, &mut response);
     hangar_core::http_route_response::suppress_head(&method, &mut response);
     response
 }
 
 async fn reply(state: Arc<Http>, peer: Option<SocketAddr>, request: Request) -> Response {
-    let path = percent_encoding::percent_decode_str(request.uri().path()).decode_utf8_lossy().into_owned();
+    let path = normalized(request.uri().path());
     let socket = peer.unwrap_or_else(|| "0.0.0.0:0".parse().expect("endereço estático válido"));
     let (_, https) = state.edge.trusted.resolve(socket.ip(), request.headers());
     let decision = hangar_core::http_contract::resolve(ROUTES, request.method().as_str(), &path);
@@ -99,10 +121,12 @@ async fn reply(state: Arc<Http>, peer: Option<SocketAddr>, request: Request) -> 
 async fn export_route(state: Arc<Http>, query: Option<&str>) -> Response {
     let pairs: Vec<(String, String)> =
         form_urlencoded::parse(query.unwrap_or("").as_bytes()).map(|(k, v)| (k.into_owned(), v.into_owned())).collect();
-    let single: HashMap<String, String> = pairs.iter().cloned().collect();
-    let include_scripts = match hangar_core::query::bool_param_or(&single, "include_scripts", true) {
-        Ok(value) => value,
-        Err(response) => return *response,
+    // Parâmetro repetido vale o último, como no FastAPI; fora do `bool` do pydantic é 422 (D7.2).
+    let include = pairs.iter().rev().find(|(key, _)| key == "include_scripts").map(|(_, value)| value.as_str());
+    let include_scripts = match include.map(hangar_core::query::fastapi_bool) {
+        None => true,
+        Some(Some(value)) => value,
+        Some(None) => return invalid_body(),
     };
     let ids: Vec<String> = pairs.into_iter().filter(|(key, _)| key == "ids").map(|(_, value)| value).collect();
     // Sem `ids` exporta todos; `ids=` sozinho é a seleção vazia.
@@ -224,12 +248,10 @@ fn invalid_body() -> Response {
     )
 }
 
-/// Falha do disco no export e no import: o mesmo 500 sem código que essas rotas sempre deram.
-fn internal(code: &'static str, message: &str) -> Response {
-    tracing::warn!(code, "{message}");
-    let mut response = (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response();
-    response.headers_mut().insert(header::CONTENT_TYPE, header::HeaderValue::from_static("text/plain; charset=utf-8"));
-    response
+/// Falha do disco no export e no import: 500 com código, como os outros erros da rota.
+fn internal(origin: &'static str, message: &str) -> Response {
+    tracing::warn!(code = "erro_shortcut_io", origin, "{message}");
+    detail(StatusCode::INTERNAL_SERVER_ERROR, "erro_shortcut_io", message, json!({"motivo": message}))
 }
 
 fn verify_failed(message: &str) -> Response {

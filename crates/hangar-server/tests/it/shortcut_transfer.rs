@@ -182,15 +182,12 @@ impl Host for Injected {
     fn validate(&self, text: &str) -> Result<(), String> {
         self.inner.validate(text)
     }
-    fn snapshot(&self) -> Result<Snapshot, Error> {
-        self.inner.snapshot()
-    }
-    fn save(&self, serialized: &str) -> Result<(), Error> {
+    fn update(&self, change: &mut dyn FnMut(&Value) -> Result<String, Error>) -> (Option<Snapshot>, Result<(), Error>) {
         self.saved.store(true, Ordering::SeqCst);
-        self.inner.save(serialized)?;
-        match &self.after_save {
-            Some(after) => after(&self.inner.machine().home),
-            None => Ok(()),
+        let (before, result) = self.inner.update(change);
+        match (&self.after_save, result) {
+            (Some(after), Ok(())) => (before, after(&self.inner.machine().home)),
+            (_, result) => (before, result),
         }
     }
     fn undo(&self, serialized: &str, before: &Snapshot) -> Result<(), String> {
@@ -202,6 +199,30 @@ impl Host for Injected {
     }
     fn login_path(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = String> + Send + 'static>> {
         self.inner.login_path()
+    }
+}
+
+/// O servidor com a leitura da configuração quebrada (disco).
+struct Broken(ServerHost);
+
+impl Host for Broken {
+    fn machine(&self) -> Machine {
+        self.0.machine()
+    }
+    fn shortcuts(&self) -> Result<Value, Error> {
+        Err(Error::Io("disco".into()))
+    }
+    fn validate(&self, text: &str) -> Result<(), String> {
+        self.0.validate(text)
+    }
+    fn update(&self, change: &mut dyn FnMut(&Value) -> Result<String, Error>) -> (Option<Snapshot>, Result<(), Error>) {
+        self.0.update(change)
+    }
+    fn undo(&self, serialized: &str, before: &Snapshot) -> Result<(), String> {
+        self.0.undo(serialized, before)
+    }
+    fn login_path(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = String> + Send + 'static>> {
+        self.0.login_path()
     }
 }
 
@@ -386,6 +407,38 @@ fn scrub_table_matches_the_python() {
     }
 }
 
+/// Classes do `re` do Python: `\s` cobre \x1c-\x1f, `\w` cobre `²` e não cobre marca combinante, e o
+/// `\b` segue esse `\w`. Esperado tirado do `scrub` do Python (ponta `7ef9011ba`).
+#[test]
+fn scrub_uses_python_regex_classes() {
+    let token = fake("gsk_");
+    let cases: Vec<(String, String, Vec<&str>)> = vec![
+        ("PASSWORD=abc\u{1f}def".into(), "PASSWORD=⟦SEGREDO:PASSWORD⟧\u{1f}def".into(), vec!["PASSWORD"]),
+        ("e\u{301}PASSWORD=abc".into(), "e\u{301}PASSWORD=⟦SEGREDO:PASSWORD⟧".into(), vec!["PASSWORD"]),
+        ("\u{b2}PASSWORD=abc".into(), "\u{b2}PASSWORD=abc".into(), vec![]),
+        (format!("echo \u{b2}{token}"), format!("echo \u{b2}{token}"), vec![]),
+        (format!("echo \u{301}{token}"), "echo \u{301}⟦SEGREDO:token⟧".into(), vec!["token"]),
+        ("sshpass\u{1f}-p hunter2".into(), "sshpass\u{1f}-p ⟦SEGREDO:senha⟧".into(), vec!["senha"]),
+        ("set\u{1c}PASS abc".into(), "set\u{1c}PASS ⟦SEGREDO:PASS⟧".into(), vec!["PASS"]),
+        ("x\u{b2}/p:abc".into(), "x\u{b2}/p:abc".into(), vec![]),
+        ("cli --token\u{1f}abc".into(), "cli --token\u{1f}⟦SEGREDO:token⟧".into(), vec!["token"]),
+    ];
+    for (text, out, names) in cases {
+        let (scrubbed, found) = scrub(&text, false, true);
+        assert_eq!(scrubbed, out, "{text:?}");
+        assert_eq!(found, names, "{text:?}");
+    }
+}
+
+/// Script de ~100 KB com aspa aberta depois de `NOME=`: o Python varre normal; o teto de
+/// retrocesso do fancy-regex não pode transformar o texto inteiro em segredo.
+#[test]
+fn scrub_handles_a_100_kb_script_like_python() {
+    let text = format!("#!/bin/sh\nPASSWORD=\"{}\nTOKEN=abc\n", "a".repeat(100_000));
+    let expected = format!("#!/bin/sh\nPASSWORD=\"{}\nTOKEN=⟦SEGREDO:TOKEN⟧\n", "a".repeat(100_000));
+    assert_eq!(scrub(&text, false, true), (expected, vec!["TOKEN".to_owned()]));
+}
+
 /// ATA-31: o primeiro marcador ainda sem valor; texto ausente = nenhum.
 #[test]
 fn has_placeholder_names_the_first_missing_secret() {
@@ -511,8 +564,47 @@ async fn export_selection_rules() {
     assert_eq!(scene.export("?ids=").await, (200, empty));
     // D7.3: o Python dava `detail` texto cru; o Rust dá o envelope com código.
     assert_eq!(scene.export("?ids=nao-existe").await, (400, invalid("erro_shortcut_export_invalido", "seleção contém atalho desconhecido")));
-    // D7.2: só o status é comparado (o Python dava o 422 do FastAPI).
-    assert_eq!(scene.export("?include_scripts=talvez").await.0, 422);
+    // D7.2: o Python dava o 422 do FastAPI; o Rust dá o envelope com código.
+    let invalid_body = json!({"detail": {"code": "erro_corpo_invalido", "params": {}, "msg": "Pedido em formato inválido para esta rota; nada foi alterado."}});
+    assert_eq!(scene.export("?include_scripts=talvez").await, (422, invalid_body));
+}
+
+/// D7.1 e ATA-01: caminho com `%2F` ou barra repetida escapa do roteador, mas segue no Rust:
+/// convidado recebe 403, o dono recebe o export, e nada vai ao Python (o upstream recusa conexão).
+#[tokio::test(flavor = "multi_thread")]
+async fn escaped_paths_stay_in_rust() {
+    let scene = Scene::new();
+    scene.save(json!([{"id": "rel", "type": "send_text", "label": "Rel", "text": "/relatorio-pm"}]));
+    let forbidden = json!({"detail": {"code": "erro_fora_do_convite", "params": {}, "msg": "fora da sessão compartilhada"}});
+    let exported = json!({"version": 2, "shortcuts": [{"id": "rel", "type": "send_text", "label": "Rel", "text": "/relatorio-pm"}], "scripts": [], "warnings": [], "removed": 0});
+    for uri in ["/api/shortcuts%2Fexport", "/api//shortcuts/export", "/api/shortcuts%2fexport?include_scripts=false"] {
+        assert_eq!(scene.send("GET", uri, None, true, true).await, (403, forbidden.clone()), "{uri}");
+        assert_eq!(scene.send("GET", uri, None, true, false).await, (200, exported.clone()), "{uri}");
+    }
+    for uri in ["/api/shortcuts%2Fverify", "/api//shortcuts//import"] {
+        let body = Some(Body::from(json!({"ids": []}).to_string()));
+        assert_eq!(scene.send("POST", uri, body, true, true).await, (403, forbidden.clone()), "{uri}");
+    }
+}
+
+/// Decisão A: falha de disco no export e no import é 500 com código `erro_shortcut_io`.
+#[tokio::test(flavor = "multi_thread")]
+async fn disk_failures_answer_500_with_code() {
+    let scene = Scene::new();
+    let state = &scene.state;
+    let expected = json!({"detail": {"code": "erro_shortcut_io", "params": {"motivo": "disco"}, "msg": "disco"}});
+    for (method, uri, body) in [("GET", "/api/shortcuts/export", None), ("POST", "/api/shortcuts/import", Some(json!({"data": []})))] {
+        let edge = hangar_core::edge::Edge { trusted: state.cfg.trusted.clone(), auth: state.auth.clone(), diag: state.diag.clone() };
+        let mut builder = Request::builder().method(method).uri(uri).header("authorization", format!("Bearer {OWNER}"));
+        if body.is_some() {
+            builder = builder.header("content-type", "application/json");
+        }
+        let request = builder.body(body.map_or_else(Body::empty, |b| Body::from(b.to_string()))).unwrap();
+        let response = hangar_shortcut_transfer::handle(edge, Arc::new(Broken(scene.host())), Some("127.0.0.1:1234".parse().unwrap()), request).await;
+        let status = response.status().as_u16();
+        let value: Value = serde_json::from_slice(&to_bytes(response.into_body(), 1 << 20).await.unwrap()).unwrap();
+        assert_eq!((status, value), (500, expected.clone()), "{uri}");
+    }
 }
 
 /// ATA-34 (r7-export-prefixo-script).
@@ -1220,6 +1312,49 @@ async fn import_failure_after_save_keeps_a_later_shortcuts_write() {
     assert!(!scene.home.join(".local/bin/demo").exists());
 }
 
+/// ATA-88: dois imports ao mesmo tempo; a leitura e a gravação da lista são uma seção só da trava,
+/// então nenhum perde o atalho do outro.
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_imports_keep_every_shortcut() {
+    let scene = Scene::new();
+    scene.save(json!([{"id": "old", "type": "send_text", "label": "Old", "text": "old"}]));
+    let host = scene.host();
+    std::thread::scope(|threads| {
+        for i in 0..8 {
+            let host = &host;
+            threads.spawn(move || {
+                let data = json!([{"id": format!("t{i}"), "type": "send_text", "label": format!("T{i}"), "text": "x"}]);
+                let response = hangar_shortcut_transfer::import(host, request(data, true, json!({}))).unwrap();
+                assert_eq!((response["added"].clone(), response["replaced"].clone()), (json!(1), json!(0)));
+            });
+        }
+    });
+    let saved: Vec<Value> = serde_json::from_str(&scene.saved()).unwrap();
+    let mut ids: Vec<String> = saved.iter().map(|item| item["id"].as_str().unwrap().to_owned()).collect();
+    ids.sort();
+    let mut expected: Vec<String> = (0..8).map(|i| format!("t{i}")).chain(["old".to_owned()]).collect();
+    expected.sort();
+    assert_eq!(ids, expected);
+}
+
+/// Item 8 da revisão: configuração ilegível na hora de desfazer não é "restaurado"; a mensagem diz
+/// que a restauração dos atalhos falhou.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn import_undo_over_unreadable_config_is_reported() {
+    let scene = Scene::new();
+    scene.save(json!([{"id": "old", "type": "send_text", "label": "Old", "text": "old"}]));
+    let config = scene.config_path();
+    let mut host = Injected::new(&scene);
+    host.after_save = Some(Box::new(move |_: &Path| {
+        std::fs::write(&config, "{ilegível").unwrap();
+        Err(Error::Io("failed after write".into()))
+    }));
+    let result = hangar_shortcut_transfer::import(&host, request(bundle("echo ok", ".local/bin/demo", true), true, json!({})));
+    assert_eq!(result, Err(Error::Invalid(format!("{RESTORED}; restauração dos atalhos na configuração falhou"))));
+    assert!(!scene.home.join(".local/bin/demo").exists());
+}
+
 /// ATA-87: desfazer a configuração que falha acrescenta o sufixo do Python.
 #[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
@@ -1403,16 +1538,6 @@ async fn verify_timeout_kills_the_whole_group() {
 /// D7.5: erro inesperado do verify vira `Io`, que a rota responde 500 `erro_shortcut_verify_io`.
 #[tokio::test(flavor = "multi_thread")]
 async fn verify_unexpected_failure_is_an_io_error() {
-    struct Broken(ServerHost);
-    impl Host for Broken {
-        fn machine(&self) -> Machine { self.0.machine() }
-        fn shortcuts(&self) -> Result<Value, Error> { Err(Error::Io("disco".into())) }
-        fn validate(&self, text: &str) -> Result<(), String> { self.0.validate(text) }
-        fn snapshot(&self) -> Result<Snapshot, Error> { self.0.snapshot() }
-        fn save(&self, serialized: &str) -> Result<(), Error> { self.0.save(serialized) }
-        fn undo(&self, serialized: &str, before: &Snapshot) -> Result<(), String> { self.0.undo(serialized, before) }
-        fn login_path(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = String> + Send + 'static>> { self.0.login_path() }
-    }
     let scene = Scene::new();
     let result = hangar_shortcut_transfer::run_checks(&Broken(scene.host()), &["a".into()], &[], std::time::Duration::from_secs(1)).await;
     assert_eq!(result, Err(Error::Io("disco".into())));

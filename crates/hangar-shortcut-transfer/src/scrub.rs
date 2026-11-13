@@ -9,10 +9,17 @@ const FISH_SINGLE: &str = r"'(?:\\.|[^'\\])*'";
 const DOUBLE: &str = r#""(?:\\.|[^"\\])*""#;
 const BACKTICK: &str = r"`(?:\\.|[^`\\])*`";
 const PARENS: &str = r"\((?:[^()\\]|\\.|\([^()]*\))*\)";
-const BARE: &str = r#"[^\s"'\\;|&()`]+"#;
+const BARE: &str = r#"[^«s»"'\\;|&()`]+"#;
 // Fora do shell (Python, JS) o valor nu também para em `,`, `]` e `}`.
-const LITERAL_BARE: &str = r#"[^\s"'\\;|&()`,\]}]+"#;
+const LITERAL_BARE: &str = r#"[^«s»"'\\;|&()`,\]}]+"#;
 const MARK_ANY: &str = r"⟦SEGREDO:([A-Za-z0-9_.-]+)⟧";
+// As classes do `re` do Python: `\s` inclui \x1c-\x1f; `\w` é letra, número (com `²`) ou `_`, sem
+// marca combinante. Nos padrões, `«s»`/`«w»` são o miolo da classe, `«S»`/`«W»` a classe inteira,
+// `«<»` o `\b` antes de uma letra e `«>»` o `\b` depois dela.
+const PY_SPACE: &str = r"\s\x1c-\x1f";
+const PY_WORD: &str = r"\p{L}\p{N}_";
+// Script de 128 KiB faz o retrocesso passar do padrão do fancy-regex (1 milhão); o `re` não tem teto.
+const BACKTRACK_LIMIT: usize = 200_000_000;
 
 const SECRET_WORDS: [&str; 7] = ["secret", "token", "password", "senha", "_key", "apikey", "private"];
 const FLAG_NAMES: [(&str, &str); 10] = [
@@ -52,14 +59,14 @@ static RULES: LazyLock<[Vec<Rule>; 3]> =
     LazyLock::new(|| [rules(Dialect::Bash), rules(Dialect::Fish), rules(Dialect::Literal)]);
 static FISH_SET: LazyLock<Rule> = LazyLock::new(|| Rule {
     regex: compile(&format!(
-        r"\bset\s+(?:-[a-zA-Z]+\s+)*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s+{}",
+        r"«<»set«S»+(?:-[a-zA-Z]+«S»+)*(?P<name>[A-Za-z_][A-Za-z0-9_]*)«S»+{}",
         value(FISH_SINGLE, BARE)
     )),
     kind: Kind::FishSet,
 });
 static TOKEN: LazyLock<Regex> = LazyLock::new(|| {
     compile(concat!(
-        r"\b(?:gsk_[A-Za-z0-9]{20,}|sk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}",
+        r"«<»(?:gsk_[A-Za-z0-9]{20,}|sk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}",
         r"|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}",
         r"|AKIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})"
     ))
@@ -69,7 +76,7 @@ static PLACEHOLDER_FULL: LazyLock<regex::Regex> = LazyLock::new(|| plain(&format
 static QUOTED_BASH: LazyLock<regex::Regex> = LazyLock::new(|| plain(&format!(r"\A(?:{SINGLE}|{DOUBLE})\z")));
 static QUOTED_FISH: LazyLock<regex::Regex> = LazyLock::new(|| plain(&format!(r"\A(?:{FISH_SINGLE}|{DOUBLE})\z")));
 static VARIABLE: LazyLock<regex::Regex> =
-    LazyLock::new(|| plain(r"\A(?:\$[A-Za-z_]\w*|\$\{[A-Za-z_]\w*\})\z"));
+    LazyLock::new(|| plain(&python_classes(r"\A(?:\$[A-Za-z_]«W»*|\$\{[A-Za-z_]«W»*\})\z")));
 static SUBSTITUTION: LazyLock<regex::Regex> = LazyLock::new(|| plain(&format!(r"\A(?:\${PARENS}|{BACKTICK})\z")));
 static PARENS_FULL: LazyLock<regex::Regex> = LazyLock::new(|| plain(&format!(r"\A(?:{PARENS})\z")));
 static PASS_WORD: LazyLock<regex::Regex> = LazyLock::new(|| plain(r"(?i)(?:^|_)pass(?:$|_)"));
@@ -217,18 +224,19 @@ fn rules(dialect: Dialect) -> Vec<Rule> {
     let v = value(single, bare);
     // Os nomes mais longos primeiro: `--password` não pode casar como `--pass`.
     let flags = "client-secret|access-token|auth-token|password|api-key|passwd|apikey|secret|token|pass";
-    let env_start = if dialect == Dialect::Literal { r"(?<![\w])\$?" } else { r"(?<![\w$])" };
+    let env_start = if dialect == Dialect::Literal { r"(?<![«w»])\$?" } else { r"(?<![«w»$])" };
     let rule = |pattern: String, kind: Kind| Rule { regex: compile(&pattern), kind };
     vec![
-        rule(format!(r"(?<![\w/])/(?:p|password):{v}"), Kind::Fixed("senha")),
-        rule(format!(r"(?<![\w-])--(?P<flag>{flags})(?:=|\s+){v}"), Kind::Flag),
-        rule(format!(r"\bsshpass\s+(?:-\w+\s+)*?-p\s*{v}"), Kind::Fixed("senha")),
+        rule(format!(r"(?<![«w»/])/(?:p|password):{v}"), Kind::Fixed("senha")),
+        rule(format!(r"(?<![«w»-])--(?P<flag>{flags})(?:=|«S»+){v}"), Kind::Flag),
+        rule(format!(r"«<»sshpass«S»+(?:-«W»+«S»+)*?-p«S»*{v}"), Kind::Fixed("senha")),
+        // O `«>»` em cada alternativa deixa o `mysqldump` ser tentado depois do `mysql`, como no `re`.
         rule(
-            format!(r"\b(?:mysql|mysqldump|mysqladmin|mariadb|mariadb-dump)\b[^\n|;&]*?\s-p{v}"),
+            format!(r"«<»(?:mysql«>»|mysqldump«>»|mysqladmin«>»|mariadb«>»|mariadb-dump«>»)[^\n|;&]*?«S»-p{v}"),
             Kind::Fixed("senha"),
         ),
-        rule(format!(r"(?i)\bAuthorization:\s*(?:Bearer|Basic|Token)\s+{v}"), Kind::Fixed("token")),
-        rule(r"(?i)\b[a-z][a-z0-9+.-]*://[^\s:/@]+:(?P<v>[^\s@/]+)@".to_owned(), Kind::Fixed("senha")),
+        rule(format!(r"(?i)«<»Authorization:«S»*(?:Bearer|Basic|Token)«S»+{v}"), Kind::Fixed("token")),
+        rule(r"(?i)«<»[a-z][a-z0-9+.-]*://[^«s»:/@]+:(?P<v>[^«s»@/]+)@".to_owned(), Kind::Fixed("senha")),
         rule(
             format!(r"{env_start}(?P<name>[A-Za-z_][A-Za-z0-9_]*)[ \t]*=(?![=>])[ \t]*{v}"),
             Kind::Env,
@@ -241,7 +249,22 @@ fn value(single: &str, bare: &str) -> String {
 }
 
 fn compile(pattern: &str) -> Regex {
-    Regex::new(pattern).expect("regra de segredo constante")
+    fancy_regex::RegexBuilder::new(&python_classes(pattern))
+        .backtrack_limit(BACKTRACK_LIMIT)
+        .build()
+        .expect("regra de segredo constante")
+}
+
+/// Troca as marcas `«…»` dos padrões pelas classes do `re` do Python.
+pub(crate) fn python_classes(pattern: &str) -> String {
+    let word = format!("[{PY_WORD}]");
+    pattern
+        .replace("«<»", &format!("(?<!{word})"))
+        .replace("«>»", &format!("(?!{word})"))
+        .replace("«S»", &format!("[{PY_SPACE}]"))
+        .replace("«s»", PY_SPACE)
+        .replace("«W»", &word)
+        .replace("«w»", PY_WORD)
 }
 
 fn plain(pattern: &str) -> regex::Regex {

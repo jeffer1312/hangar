@@ -36,13 +36,14 @@ const COMPOSITE: &str = "Sintaxe composta precisa de conferência manual das dep
 const SYNTAX: &str = "Sintaxe de shell não reconhecida; dependências exigem conferência manual.";
 const LIMIT: &str = "Limite de avisos atingido; confira as demais dependências manualmente.";
 
-static FISH_SHEBANG: LazyLock<regex::Regex> = LazyLock::new(|| plain(r"(?:^|[/\s])fish(?:\s|$)"));
+// Classes do `re` do Python (ver `scrub::python_classes`); `cat` sem palavra depois é o `cat\b`.
+static FISH_SHEBANG: LazyLock<regex::Regex> = LazyLock::new(|| plain(r"(?:^|[/«s»])fish(?:«S»|$)"));
 static OTHER_SHEBANG: LazyLock<regex::Regex> =
-    LazyLock::new(|| plain(r"(?:^|[/\s])(?:python[\d.]*|node|ruby|perl)(?:\s|$)"));
-static ASSIGNMENT: LazyLock<regex::Regex> = LazyLock::new(|| plain(r"^[A-Za-z_]\w*="));
-static DYNAMIC_SYNTAX: LazyLock<regex::Regex> = LazyLock::new(|| plain(r"(?:\$\(|`|\(\s*cat\b)"));
-static WORD: LazyLock<regex::Regex> = LazyLock::new(|| plain(r#"[^\s"'();]+"#));
-static LITERAL_PATH: LazyLock<regex::Regex> = LazyLock::new(|| plain(r"\A(?:/|~/|\$HOME/|\$\{HOME\}/)?[\w./-]+\z"));
+    LazyLock::new(|| plain(r"(?:^|[/«s»])(?:python[\d.]*|node|ruby|perl)(?:«S»|$)"));
+static ASSIGNMENT: LazyLock<regex::Regex> = LazyLock::new(|| plain(r"^[A-Za-z_]«W»*="));
+static DYNAMIC_SYNTAX: LazyLock<regex::Regex> = LazyLock::new(|| plain(r"(?:\$\(|`|\(«S»*cat(?:[^«w»]|$))"));
+static WORD: LazyLock<regex::Regex> = LazyLock::new(|| plain(r#"[^«s»"'();]+"#));
+static LITERAL_PATH: LazyLock<regex::Regex> = LazyLock::new(|| plain(r"\A(?:/|~/|\$HOME/|\$\{HOME\}/)?[«w»./-]+\z"));
 
 /// Script do pacote já conferido, com o destino nesta máquina.
 #[derive(Clone, Debug)]
@@ -592,5 +593,5 @@ fn relative_to(path: &str, base: &str) -> Option<String> {
 }
 
 fn plain(pattern: &str) -> regex::Regex {
-    regex::Regex::new(pattern).expect("expressão constante")
+    regex::Regex::new(&crate::scrub::python_classes(pattern)).expect("expressão constante")
 }

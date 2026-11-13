@@ -11,7 +11,7 @@ mod transfer;
 mod verify;
 
 pub use host::{Error, Host, Machine, Snapshot};
-pub use http::{ROUTES, owns_path, router};
+pub use http::{ROUTES, handle, owns_path, router};
 pub use lexer::{LexError, split_line};
 pub use scrub::{has_placeholder, scrub};
 pub use transfer::{ImportRequest, export, import};

@@ -4,7 +4,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use serde_json::{Map, Value, json};
+use serde_json::Value;
 
 use hangar_shortcut_transfer::{Error, Host, Machine, Snapshot};
 
@@ -39,26 +39,17 @@ impl Host for ServerHost {
         crate::config_sync::preferences::validate_shortcuts(text)
     }
 
-    fn snapshot(&self) -> Result<Snapshot, Error> {
-        let config = self.config()?;
-        let mode = match std::fs::metadata(&config.path) {
-            Ok(_) => Some(crate::config_sync::files::mode(&config.path).map_err(|e| Error::Io(e.to_string()))?),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => return Err(Error::Io(error.to_string())),
+    fn update(&self, change: &mut dyn FnMut(&Value) -> Result<String, Error>) -> (Option<Snapshot>, Result<(), Error>) {
+        let config = match self.config() {
+            Ok(config) => config,
+            Err(error) => return (None, Err(error)),
         };
-        Ok(Snapshot {
-            shortcuts: config.read().get("shortcuts").cloned(),
-            mode,
-            parent_existed: config.path.parent().is_some_and(std::path::Path::exists),
-        })
-    }
-
-    fn save(&self, serialized: &str) -> Result<(), Error> {
-        let changes: Map<String, Value> = [("shortcuts".to_owned(), json!(serialized))].into_iter().collect();
-        match self.config()?.apply_checked(&changes, &Default::default()) {
-            Ok(_) => Ok(()),
-            Err(error) if error.is_validation() => Err(Error::Invalid(error.message)),
-            Err(error) => Err(Error::Io(error.message)),
+        // Leitura, junção e gravação na mesma seção da trava `WRITES` da configuração.
+        match config.update_shortcuts(|current| change(current)) {
+            Ok(Ok((shortcuts, mode, parent_existed))) => (Some(Snapshot { shortcuts, mode, parent_existed }), Ok(())),
+            Ok(Err(refused)) => (None, Err(refused)),
+            Err(error) if error.is_validation() => (None, Err(Error::Invalid(error.message))),
+            Err(error) => (None, Err(Error::Io(error.message))),
         }
     }
 

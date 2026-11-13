@@ -145,14 +145,22 @@ async fn run(command: &str, env: &BTreeMap<String, String>, home: &Path, shell: 
         Ok(child) => child,
         Err(error) => return Ok(Outcome { code: None, output: spawn_message(&error, &argv[0]), error: Some("spawn") }),
     };
-    tree.attach(&child)?;
+    if let Err(error) = tree.attach(&child) {
+        // Sem a árvore presa, ninguém mataria o filho depois: ele sai agora.
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+        return Err(error);
+    }
     let (code, error) = match tokio::time::timeout(timeout, child.wait()).await {
         Ok(status) => (exit_code(status?), None),
         Err(_) => {
             // Matar só o shell deixaria os filhos dele rodando sem dono.
             if let Err(error) = tree.terminate() {
                 tracing::warn!(code = "shortcut_verify_kill_failed", io_kind = ?error.kind(), "verify: o grupo do comando não recebeu o sinal");
+                let _ = child.start_kill();
             }
+            // Só segue quando o grupo inteiro acabou; o líder fica zumbi até o `wait` abaixo.
+            hangar_core::terminal_process::finish(&mut tree).await;
             child.wait().await?;
             (None, Some("timeout"))
         }

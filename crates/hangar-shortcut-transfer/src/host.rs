@@ -48,14 +48,12 @@ pub trait Host: Send + Sync + 'static {
     /// # Errors
     /// A mensagem da recusa.
     fn validate(&self, text: &str) -> Result<(), String>;
-    /// # Errors
-    /// Arquivo de configuração ilegível.
-    fn snapshot(&self) -> Result<Snapshot, Error>;
-    /// Grava só a chave `shortcuts`.
+    /// Numa seção só da trava de escrita da configuração: lê o valor efetivo de `shortcuts`, passa a
+    /// `change` e grava o texto que ele devolve. Outra gravação no meio não se perde.
     ///
-    /// # Errors
-    /// `Invalid` para valor recusado, `Io` para falha de disco.
-    fn save(&self, serialized: &str) -> Result<(), Error>;
+    /// Devolve o estado de antes, lido na mesma seção, sempre que a gravação aconteceu (inclusive
+    /// quando algo falhou depois dela), e o resultado: `Invalid` para valor recusado, `Io` para disco.
+    fn update(&self, change: &mut dyn FnMut(&Value) -> Result<String, Error>) -> (Option<Snapshot>, Result<(), Error>);
     /// Volta `shortcuts` ao `before` só se a chave ainda é `serialized`; devolve o modo do arquivo.
     ///
     /// # Errors

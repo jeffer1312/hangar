@@ -1217,6 +1217,11 @@ pub(crate) async fn pass_any(
         return crate::auxiliary::handle(State(st), ConnectInfo(peer), req).await;
     }
     let decoded_path=percent_encoding::percent_decode_str(req.uri().path()).decode_utf8_lossy();
+    // `%2F` ou `//` escapam do roteador: os atalhos continuam do Rust, nunca do Python.
+    if hangar_shortcut_transfer::owns_path(req.uri().path()) {
+        let edge=hangar_core::edge::Edge { trusted: st.cfg.trusted.clone(), auth: st.auth.clone(), diag: st.diag.clone() };
+        return hangar_shortcut_transfer::handle(edge,Arc::new(crate::shortcut_transfer::ServerHost(st.clone())),Some(peer),req).await;
+    }
     if crate::worktree_fetch::owns(&decoded_path) {
         return crate::worktree_fetch::route(st,peer,req).await;
     }
