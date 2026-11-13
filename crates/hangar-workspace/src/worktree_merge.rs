@@ -647,7 +647,7 @@ mod tests {
             cli.pull_requests("acme/project", "feature"),
             Err("worktree_merge_response_too_large")
         );
-        std::fs::write(&program, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        crate::write_test_executable(&program, "#!/bin/sh\nexec sleep 30\n");
         cli.timeout = Duration::from_millis(200);
         assert_eq!(
             cli.pull_requests("acme/project", "feature"),
