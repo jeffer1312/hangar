@@ -24,6 +24,7 @@ pub mod json_envelope;
 pub mod log_rotate;
 pub mod net;
 pub mod orq_codec;
+pub mod path_markers;
 pub mod paths;
 // Descritor de segurança do Windows: chamadas de `windows-sys`.
 #[cfg(windows)]
