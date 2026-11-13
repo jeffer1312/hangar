@@ -29,16 +29,21 @@ pub async fn inventory(st: &AppState, machine: &str, since: Option<DateTime<Utc>
 pub async fn transcript(st: &AppState, machine: &str, path: &str, from: usize) -> Result<(Vec<String>, usize), String> {
     let mut parts = Vec::new();
     let mut part = 0;
+    // A primeira resposta fixa até onde ler; as outras partes param no mesmo evento.
+    let mut until: Option<u64> = None;
     loop {
-        let url = format!("/api/dream/transcript?path={}&from={from}&part={part}", enc(path));
+        let to = until.map(|u| format!("&to={u}")).unwrap_or_default();
+        let url = format!("/api/dream/transcript?path={}&from={from}&part={part}{to}", enc(path));
         let value = st.peers.call(machine, Method::GET, &url, None).await.map_err(|e| failed(machine, e))?.unwrap_or(Value::Null);
         let total = value["parts"].as_u64().unwrap_or(0) as usize;
+        let end = value["end_event"].as_u64().unwrap_or(from as u64);
+        until.get_or_insert(end);
         if let Some(text) = value["text"].as_str() {
             parts.push(text.to_string());
         }
         part += 1;
         if part >= total {
-            return Ok((parts, value["end_event"].as_u64().unwrap_or(from as u64) as usize));
+            return Ok((parts, until.unwrap_or(end) as usize));
         }
     }
 }

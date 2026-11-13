@@ -58,6 +58,8 @@ pub enum ModelError {
     Budget { cost_usd: f64 },
     /// Limite de uso da conta.
     Limited,
+    /// A chamada passou do prazo e foi morta; conta como gasto o teto que ela tinha.
+    Timeout { cost_usd: f64 },
     Other(String),
 }
 
@@ -79,6 +81,7 @@ impl fmt::Display for DreamError {
             Self::Model(ModelError::NoCredit) => write!(f, "dream_no_credit"),
             Self::Model(ModelError::Budget { .. }) => write!(f, "dream_budget_exhausted"),
             Self::Model(ModelError::Limited) => write!(f, "dream_account_limited"),
+            Self::Model(ModelError::Timeout { .. }) => write!(f, "dream_timeout"),
             Self::Model(ModelError::Other(e)) => write!(f, "dream_model_failed: {e}"),
             Self::Rejected(why) => write!(f, "dream_rejected: {why}"),
             Self::Io(e) => write!(f, "dream_io: {e}"),
@@ -175,9 +178,10 @@ impl<'a> Payer<'a> {
                         }
                     }
                 }
-                Err(ModelError::Budget { cost_usd }) => {
+                Err(e) if matches!(e, ModelError::Budget { .. } | ModelError::Timeout { .. }) => {
+                    let (ModelError::Budget { cost_usd } | ModelError::Timeout { cost_usd }) = e else { unreachable!() };
                     self.ledger.lock().unwrap().add(&auth, cost_usd);
-                    return Err(DreamError::Model(ModelError::Budget { cost_usd }));
+                    return Err(DreamError::Model(e));
                 }
                 Err(e) => return Err(DreamError::Model(e)),
             }

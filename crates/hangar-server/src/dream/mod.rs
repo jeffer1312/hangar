@@ -44,7 +44,7 @@ impl Paths {
 
 /// Id desta máquina no `servidor::sessao`; sem id, `local`.
 pub(crate) fn this_machine(st: &AppState) -> String {
-    let id = st.groups.as_ref().map_or_else(|| st.server_id.clone(), |g| g.server_id());
+    let id = st.current_server_id();
     if id.is_empty() { "local".into() } else { id }
 }
 
@@ -77,10 +77,22 @@ pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
                 () = WAKE.notified() => continue,
             }
             if let Err(e) = round::run(&st, round::Options::nightly()).await {
-                st.diag.record_line(serde_json::json!({"evento": "dream.round_failed", "nivel": "aviso", "motivo": e}));
+                st.diag.record_line(serde_json::json!({"evento": "dream.round_failed", "nivel": "aviso", "codigo": code_of(&e)}));
+                // Sem isto a próxima espera sai zero (o horário conta da rodada anterior) e o laço gira.
+                tokio::select! {
+                    () = tokio::time::sleep(RETRY_AFTER_FAILURE) => {}
+                    () = WAKE.notified() => {}
+                }
             }
         }
     })
+}
+
+const RETRY_AFTER_FAILURE: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// Só o código (`dream_xxx`) vai ao diário e ao estado: o detalhe pode trazer texto da conversa.
+pub(crate) fn code_of(error: &str) -> String {
+    error.split(':').next().unwrap_or("dream_failed").trim().to_string()
 }
 
 /// Quanto falta para o próximo sonho; `None` = esta máquina não sonha (desligado ou outra escolhida).
@@ -89,7 +101,10 @@ fn next_wait(st: &AppState) -> Option<std::time::Duration> {
     if !config.enabled || config.machine != this_machine(st) {
         return None;
     }
-    let zone = iana_time_zone::get_timezone().ok()?.parse::<chrono_tz::Tz>().ok()?;
+    let Some(zone) = iana_time_zone::get_timezone().ok().and_then(|z| z.parse::<chrono_tz::Tz>().ok()) else {
+        st.diag.report("dream.no_timezone", "", "dream_no_timezone", "fuso da máquina ilegível; o sonho noturno não agenda");
+        return None;
+    };
     let schedule = hangar_scheduled_tasks::Schedule::Weekly { time: config.hour.clone(), weekdays: (0..7).collect() };
     let last = load_state(st).ok().and_then(|s| s.last_round_at).unwrap_or_else(|| Utc::now() - chrono::Duration::days(1));
     let next = hangar_scheduled_tasks::next_run(&schedule, last, &zone).ok()??;

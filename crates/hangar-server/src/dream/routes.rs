@@ -387,7 +387,13 @@ fn from_dreamer(st: &AppState, from: &str) -> Result<(), Response> {
 }
 
 async fn serve_inventory(st: &Arc<AppState>, query: &HashMap<String, String>) -> Response {
-    let since = query.get("since").and_then(|s| DateTime::parse_from_rfc3339(s).ok()).map(|t| t.with_timezone(&Utc));
+    let since = match query.get("since").filter(|s| !s.is_empty()) {
+        None => None,
+        Some(s) => match DateTime::parse_from_rfc3339(s) {
+            Ok(t) => Some(t.with_timezone(&Utc)),
+            Err(_) => return error(422, "erro_corpo_invalido", "since inválido"),
+        },
+    };
     let index = st.search.path().to_owned();
     match tokio::task::spawn_blocking(move || inventory::local_sessions(&index, since)).await {
         Ok(Ok(sessions)) => ok(json!({"machine": this_machine(st), "sessions": sessions})),
@@ -405,6 +411,7 @@ async fn serve_transcript(st: &Arc<AppState>, query: &HashMap<String, String>) -
     ) else {
         return error(422, "erro_corpo_invalido", "path, from e part obrigatórios");
     };
+    let until = query.get("to").and_then(|v| v.parse::<usize>().ok());
     let index = st.search.path().to_owned();
     let env = st.accounts.env.clone();
     let machine = this_machine(st);
@@ -414,7 +421,7 @@ async fn serve_transcript(st: &Arc<AppState>, query: &HashMap<String, String>) -
         let Some(provider) = provider.as_deref().and_then(hangar_transcript::Provider::parse) else { return Ok(None) };
         let scrubber = crate::diag_report::Scrubber::for_env(&env);
         let session = Path::new(&path).file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let r = render::render(provider, Path::new(&path), from, &Header { session: &session, machine: &machine }, &|t| scrubber.scrub(t).into_owned())
+        let r = render::render(provider, Path::new(&path), from, until, &Header { session: &session, machine: &machine }, &|t| scrubber.scrub(t).into_owned())
             .map_err(|e| format!("dream_io: {e}"))?;
         Ok(Some((r.parts, r.end_event)))
     })

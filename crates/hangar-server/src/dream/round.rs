@@ -89,7 +89,7 @@ pub(crate) fn start(st: &Arc<AppState>, opts: Options) -> Result<String, String>
     tokio::spawn(async move {
         let _guard = guard;
         if let Err(e) = execute(&st, &opts, &id).await {
-            st.diag.record_line(json!({"evento": "dream.round_failed", "nivel": "aviso", "run_id": id, "motivo": e}));
+            st.diag.record_line(json!({"evento": "dream.round_failed", "nivel": "aviso", "run_id": id, "codigo": super::code_of(&e)}));
         }
     });
     Ok(run_id)
@@ -141,8 +141,8 @@ async fn execute(st: &Arc<AppState>, opts: &Options, run_id: &str) -> Result<(),
         match dream_one(&ctx, &mut state, &pid, &ps, list, opts.forced).await {
             Ok(done) => dreamt |= done,
             Err(e) => {
-                st.diag.record_line(json!({"evento": "dream.project_failed", "nivel": "aviso", "projeto": pid, "motivo": e}));
-                state.projects.entry(pid.clone()).or_default().last_error = Some(e);
+                st.diag.record_line(json!({"evento": "dream.project_failed", "nivel": "aviso", "projeto": pid, "codigo": super::code_of(&e)}));
+                state.projects.entry(pid.clone()).or_default().last_error = Some(super::code_of(&e));
             }
         }
         state.save(&paths.state()).map_err(|e| format!("dream_state_unwritable: {e}"))?;
@@ -150,7 +150,7 @@ async fn execute(st: &Arc<AppState>, opts: &Options, run_id: &str) -> Result<(),
     if dreamt || (opts.forced && opts.project.is_none()) {
         let ctx = Ctx { st, config: &config, me: &me, run_id, now, accounts: &accounts, account_dirs: &account_dirs, scrub: &scrub, paths: &paths };
         if let Err(e) = user_pass(&ctx, &mut state).await {
-            st.diag.record_line(json!({"evento": "dream.user_failed", "nivel": "aviso", "motivo": e}));
+            st.diag.record_line(json!({"evento": "dream.user_failed", "nivel": "aviso", "codigo": super::code_of(&e)}));
         }
     }
     if !opts.forced {
@@ -180,7 +180,7 @@ async fn collect_sessions(st: &AppState, me: &str, since: DateTime<Utc>) -> Resu
     for peer in st.peers.enabled_ids() {
         match peers::inventory(st, &peer, Some(since)).await {
             Ok(list) => all.extend(list.into_iter().map(|s| (peer.clone(), s))),
-            Err(e) => st.diag.record_line(json!({"evento": "dream.peer_unreachable", "nivel": "aviso", "maquina": peer, "motivo": e})),
+            Err(e) => st.diag.record_line(json!({"evento": "dream.peer_unreachable", "nivel": "aviso", "maquina": peer, "codigo": super::code_of(&e)})),
         }
     }
     Ok(all)
@@ -268,7 +268,7 @@ async fn dream_one(ctx: &Ctx<'_>, state: &mut State, pid: &str, ps: &ProjectStat
             let Some(provider) = hangar_transcript::Provider::parse(&s.provider) else { continue };
             let session = Path::new(&s.path).file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             // Lê o arquivo inteiro: sai do executor sem copiar o limpador, que é emprestado.
-            tokio::task::block_in_place(|| render::render(provider, Path::new(&s.path), from, &Header { session: &session, machine: ctx.me }, ctx.scrub))
+            tokio::task::block_in_place(|| render::render(provider, Path::new(&s.path), from, None, &Header { session: &session, machine: ctx.me }, ctx.scrub))
                 .map(|r| (r.parts, r.end_event))
                 .map_err(|e| e.to_string())
         } else {
@@ -281,7 +281,7 @@ async fn dream_one(ctx: &Ctx<'_>, state: &mut State, pid: &str, ps: &ProjectStat
                 }
             }
             Ok((parts, end)) => pieces.push(Piece { cursor_key, mtime: s.mtime, parts, end }),
-            Err(e) => st.diag.record_line(json!({"evento": "dream.transcript_failed", "nivel": "aviso", "maquina": machine, "motivo": e})),
+            Err(e) => st.diag.record_line(json!({"evento": "dream.transcript_failed", "nivel": "aviso", "maquina": machine, "codigo": super::code_of(&e)})),
         }
     }
     if pieces.is_empty() || (pieces.len() < 3 && !forced) {
@@ -312,7 +312,7 @@ async fn dream_one(ctx: &Ctx<'_>, state: &mut State, pid: &str, ps: &ProjectStat
         } else {
             match peers::memory_get(st, machine, root).await {
                 Ok(snap) => snapshots.push((place(machine, root, None, snap.files), snap.digest)),
-                Err(e) => st.diag.record_line(json!({"evento": "dream.peer_unreachable", "nivel": "aviso", "maquina": machine, "motivo": e})),
+                Err(e) => st.diag.record_line(json!({"evento": "dream.peer_unreachable", "nivel": "aviso", "maquina": machine, "codigo": super::code_of(&e)})),
             }
         }
     }
@@ -379,8 +379,11 @@ async fn dream_one(ctx: &Ctx<'_>, state: &mut State, pid: &str, ps: &ProjectStat
     let record = RunRecord { run_id: ctx.run_id.into(), project: pid.into(), at: ctx.now, cost_usd: cost, places: changes };
     save_record(ctx.paths, &record)?;
 
-    for i in &picked {
-        state.cursors.insert(pieces[*i].cursor_key.clone(), pieces[*i].end);
+    // Nenhuma pasta gravada: o que foi lido volta na próxima noite.
+    if record.places.iter().any(|p| p.written) {
+        for i in &picked {
+            state.cursors.insert(pieces[*i].cursor_key.clone(), pieces[*i].end);
+        }
     }
     let failed: Vec<String> = record.places.iter().filter(|p| !p.written).map(|p| p.machine.clone()).collect();
     let entry = state.projects.entry(pid.into()).or_default();
@@ -455,7 +458,10 @@ async fn user_pass(ctx: &Ctx<'_>, state: &mut State) -> Result<(), String> {
     let current = std::fs::read_to_string(&target).unwrap_or_default();
     let limits = Limits { project_cap_usd: ctx.config.project_cap_usd, month_cap_usd: ctx.config.month_cap_usd };
     let month = state.month_at(ctx.now).clone();
-    let (auth, cap) = match budget::decide(Mode::Key, !ctx.config.api_key.is_empty(), &month, &limits, ctx.accounts) {
+    // Quem pôs todos os projetos na conta não quer a chave gasta na passada do usuário.
+    let enabled: Vec<&ProjectState> = state.projects.values().filter(|p| p.enabled).collect();
+    let mode = if !enabled.is_empty() && enabled.iter().all(|p| p.mode == Mode::Account) { Mode::Account } else { Mode::Key };
+    let (auth, cap) = match budget::decide(mode, !ctx.config.api_key.is_empty(), &month, &limits, ctx.accounts) {
         Plan::Key { cap_usd } => (Auth::Key, cap_usd),
         Plan::Account { dir, cap_usd } => (Auth::Account(dir), cap_usd),
         Plan::Skip(_) => return Err("dream_no_budget".into()),
@@ -480,7 +486,7 @@ async fn user_pass(ctx: &Ctx<'_>, state: &mut State) -> Result<(), String> {
     hangar_core::fs::atomic_write(&target, outcome.content.as_bytes()).map_err(|e| format!("dream_io: {e}"))?;
     for peer in st.peers.enabled_ids() {
         if let Err(e) = peers::user_put(st, &peer, &outcome.content, ctx.me).await {
-            st.diag.record_line(json!({"evento": "dream.peer_unreachable", "nivel": "aviso", "maquina": peer, "motivo": e}));
+            st.diag.record_line(json!({"evento": "dream.peer_unreachable", "nivel": "aviso", "maquina": peer, "codigo": super::code_of(&e)}));
         }
     }
     state.suggestions = outcome.suggestions;

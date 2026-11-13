@@ -19,16 +19,29 @@ pub struct ClaudeModel {
 impl Model for ClaudeModel {
     fn call<'a>(&'a self, call: Call<'a>) -> BoxFut<'a, Result<Reply, ModelError>> {
         Box::pin(async move {
-            let out = self.run(&call).await.map_err(ModelError::Other)?;
-            classify(&out)
+            let out = match self.run(&call).await {
+                Ok(out) => out,
+                Err(Failure::Timeout) => return Err(ModelError::Timeout { cost_usd: call.budget_usd }),
+                Err(Failure::Start(e)) => return Err(ModelError::Other(e)),
+            };
+            // A chave só vai no ambiente; se o CLI a ecoar num erro, ela não sai daqui.
+            classify(&out).map_err(|e| match e {
+                ModelError::Other(text) if !self.api_key.is_empty() => ModelError::Other(text.replace(&self.api_key, "[chave]")),
+                other => other,
+            })
         })
     }
 }
 
+enum Failure {
+    Start(String),
+    Timeout,
+}
+
 impl ClaudeModel {
-    async fn run(&self, call: &Call<'_>) -> Result<crate::claude_p::Output, String> {
+    async fn run(&self, call: &Call<'_>) -> Result<crate::claude_p::Output, Failure> {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let Some(mut command) = self.accounts.claude_command() else { return Err("claude CLI não encontrado".into()) };
+        let Some(mut command) = self.accounts.claude_command() else { return Err(Failure::Start("claude CLI não encontrado".into())) };
         command
             .args(["-p", "--model", call.model, "--output-format", "json", "--max-budget-usd"])
             .arg(format!("{:.4}", call.budget_usd))
@@ -53,14 +66,14 @@ impl ClaudeModel {
         match &call.auth {
             Auth::Key => {
                 // Pasta de conta vazia: a chamada nunca cai no login de uma conta.
-                _empty_config = tempfile::Builder::new().prefix("hangar-dream-cfg-").tempdir().map_err(|e| e.to_string())?;
+                _empty_config = tempfile::Builder::new().prefix("hangar-dream-cfg-").tempdir().map_err(|e| Failure::Start(e.to_string()))?;
                 command.env("ANTHROPIC_API_KEY", &self.api_key).env("CLAUDE_CONFIG_DIR", _empty_config.path());
             }
             Auth::Account(dir) => {
                 command.env("CLAUDE_CONFIG_DIR", dir);
             }
         }
-        let failed = |e: std::io::Error| format!("claude -p falhou ao iniciar: {}", e.kind());
+        let failed = |e: std::io::Error| Failure::Start(format!("claude -p falhou ao iniciar: {}", e.kind()));
         let mut tree = crate::terminal_process::CommandTree::configure(&mut command).map_err(failed)?;
         let mut child = command.spawn().map_err(failed)?;
         if let Err(e) = tree.attach(&child) {
@@ -90,11 +103,11 @@ impl ClaudeModel {
             }),
             Ok((Err(e), _, _)) => {
                 let _ = child.wait().await;
-                Err(format!("claude -p falhou ao ler a saída: {}", e.kind()))
+                Err(Failure::Start(format!("claude -p falhou ao ler a saída: {}", e.kind())))
             }
             Err(_) => {
                 let _ = child.wait().await;
-                Err(format!("claude -p excedeu {} min", CALL_TIMEOUT.as_secs() / 60))
+                Err(Failure::Timeout)
             }
         }
     }
@@ -107,10 +120,11 @@ fn classify(out: &crate::claude_p::Output) -> Result<Reply, ModelError> {
     let text = result.as_ref().and_then(|r| r["result"].as_str()).unwrap_or("").to_string();
     let errors = result.as_ref().map(|r| r["errors"].to_string()).unwrap_or_default();
     let all = format!("{text}\n{errors}\n{}", out.stderr);
+    // Sucesso primeiro: uma resposta boa pode citar "credit balance too low" de uma transcrição.
     match result.as_ref() {
+        Some(r) if r["is_error"] == false && out.code == 0 => Ok(Reply { cost_usd: cost, text }),
         Some(r) if r["subtype"] == "error_max_budget_usd" => Err(ModelError::Budget { cost_usd: cost }),
         _ if NO_CREDIT.is_match(&all) => Err(ModelError::NoCredit),
-        Some(r) if r["is_error"] == false && out.code == 0 => Ok(Reply { cost_usd: cost, text }),
         _ if crate::claude_p::limited(out) => Err(ModelError::Limited),
         _ => Err(ModelError::Other(last_line(&all))),
     }
