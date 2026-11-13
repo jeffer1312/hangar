@@ -99,13 +99,41 @@ async fn reply(state: &Http, peer: Option<SocketAddr>, request: Request) -> Resp
         (Method::GET, ["api", "connectors", id, "tickets", ticket_id]) => {
             let params = match GetParams::new(*ticket_id) { Ok(params) => params, Err(error) => return call_error(&error.into()) };
             match state.host.get_ticket(id, params).await {
-                Ok(detail) => json_response(StatusCode::OK, with_fetched_at(json!(detail))),
+                Ok(detail) => {
+                    let mut value = with_fetched_at(json!(detail));
+                    // Lido depois da chamada, que já conferiu o cadastro: falhar aqui só tira a sugestão.
+                    if let Some(prompt) = state.host.entry(id).ok().and_then(|entry| entry.start_prompt_for(&detail.summary)) {
+                        value["start_prompt"] = json!(prompt);
+                    }
+                    json_response(StatusCode::OK, value)
+                }
                 Err(error) => call_error(&error),
             }
         }
+        (Method::PUT, ["api", "connectors", id, "links", ticket_id]) => {
+            let body = match body(request).await { Ok(body) => body, Err(response) => return response };
+            let Some(session) = body.get("session").and_then(Value::as_str).filter(|name| valid_session(name)) else {
+                return detail(StatusCode::BAD_REQUEST, "invalid_params", "corpo precisa de \"session\": nome de sessão", json!({}));
+            };
+            link(state, id, ticket_id, Some(session))
+        }
+        (Method::DELETE, ["api", "connectors", id, "links", ticket_id]) => link(state, id, ticket_id, None),
         (_, ["api", "connectors", ..]) if segments.len() <= 5 => detail(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed", "método não aceito nesta rota", json!({})),
         _ => detail(StatusCode::NOT_FOUND, "not_found", "rota desconhecida", json!({})),
     }
+}
+
+fn link(state: &Http, id: &str, ticket_id: &str, session: Option<&str>) -> Response {
+    if let Err(error) = GetParams::new(ticket_id) { return call_error(&error.into()); }
+    match state.host.link(id, ticket_id, session) {
+        Ok(entry) => json_response(StatusCode::OK, json!({"connector": entry})),
+        Err(error) => admin_error(&error),
+    }
+}
+
+/// Mesmo formato dos nomes de sessão do Hangar.
+fn valid_session(name: &str) -> bool {
+    (1..=64).contains(&name.len()) && name.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
 }
 
 async fn body(request: Request) -> Result<Value, Response> {

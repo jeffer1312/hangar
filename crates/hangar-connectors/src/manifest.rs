@@ -1,6 +1,7 @@
 //! Manifesto de um conector: identidade, capacidades e o comando, sem segredo nem shell.
 use crate::error::{AdminError, AdminKind};
 use crate::protocol::{CAPABILITIES, MANIFEST_VERSION, PROTOCOL_VERSION};
+use crate::work_tracking::TicketSummary;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -17,6 +18,8 @@ struct Raw {
     protocol_version: u32,
     capabilities: BTreeMap<String, u32>,
     command: Vec<String>,
+    #[serde(default)]
+    start_prompt: Option<String>,
 }
 
 /// Manifesto conferido, com o executável relativo já resolvido contra a pasta do manifesto.
@@ -31,6 +34,10 @@ pub struct Manifest {
     pub command: Vec<String>,
     /// Pasta de trabalho do processo: a do manifesto.
     pub cwd: PathBuf,
+    /// Primeira mensagem da sessão aberta a partir de um ticket, com `{key}`, `{id}`, `{title}` e
+    /// `{url}` trocados pelos campos dele. Sem ela, o cliente propõe um texto próprio.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_prompt: Option<String>,
 }
 
 /// `id`: de 1 a 64 caracteres, minúsculas, dígitos e hífen, começando por letra.
@@ -94,11 +101,40 @@ impl Manifest {
         if raw.command.iter().any(|part| part.is_empty() || part.contains('\0') || part.len() > 4096) {
             return Err(AdminError::invalid("item de command vazio, com NUL ou longo demais"));
         }
+        if let Some(prompt) = &raw.start_prompt { text("start_prompt", prompt, 4096)?; }
         let mut command = raw.command;
         command[0] = resolve_program(&command[0], dir);
         Ok(Self {
             id: raw.id, name: raw.name, version: raw.version, protocol_version: raw.protocol_version,
-            capabilities: raw.capabilities, command, cwd: dir.to_path_buf(),
+            capabilities: raw.capabilities, command, cwd: dir.to_path_buf(), start_prompt: raw.start_prompt,
         })
+    }
+
+    /// `start_prompt` preenchido com os campos do ticket, numa passada só: o texto de um campo
+    /// nunca é relido como marcador.
+    pub fn start_prompt_for(&self, ticket: &TicketSummary) -> Option<String> {
+        let template = self.start_prompt.as_deref()?;
+        let mut out = String::with_capacity(template.len() + 64);
+        let mut rest = template;
+        while let Some(open) = rest.find('{') {
+            out.push_str(&rest[..open]);
+            let tail = &rest[open..];
+            let field = tail.find('}').and_then(|close| {
+                let value = match &tail[1..close] {
+                    "key" => &ticket.key,
+                    "id" => &ticket.id,
+                    "title" => &ticket.title,
+                    "url" => &ticket.url,
+                    _ => return None,
+                };
+                Some((value, close + 1))
+            });
+            match field {
+                Some((value, used)) => { out.push_str(value); rest = &tail[used..]; }
+                None => { out.push('{'); rest = &tail[1..]; }
+            }
+        }
+        out.push_str(rest);
+        Some(out)
     }
 }

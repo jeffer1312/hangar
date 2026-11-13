@@ -22,7 +22,8 @@ interface nem à abertura de sessões.
   "version": "0.1.0",
   "protocol_version": 1,
   "capabilities": { "work_tracking": 1 },
-  "command": ["./bin/hangar-help-test-connector"]
+  "command": ["./bin/hangar-help-test-connector"],
+  "start_prompt": "/pmedico:iniciar-pm {key}"
 }
 ```
 
@@ -31,6 +32,9 @@ interface nem à abertura de sessões.
   Programa relativo com separador de caminho (`./bin/x`) parte da pasta do manifesto; nome simples
   (`node`) usa o PATH do servidor. A pasta do manifesto é a pasta de trabalho do processo, então os
   arquivos relativos dos argumentos também partem dela.
+- `start_prompt` (opcional): primeira mensagem da sessão que o Mission Control abre a partir de um
+  ticket. `{key}`, `{id}`, `{title}` e `{url}` viram os campos do ticket, numa passada só; marcador
+  desconhecido fica como está. Sem ele, o app propõe um texto com a chave, o título e o link.
 - Campo fora desta lista é recusado: o manifesto não leva token, segredo, código de shell nem
   comando de instalação. A configuração do fornecedor é do próprio conector.
 
@@ -66,6 +70,14 @@ e um conector mínimo em JavaScript ([`examples/connectors/`](../../examples/con
 - O conector roda com os direitos do dono, sem sandbox, mas não herda a senha do Hangar nem o
   segredo interno do servidor.
 
+## Mission Control
+
+No app nativo, o botão de painel da barra do topo (ou `Ctrl+Alt+M`) abre os tickets do conector em
+três colunas: A fazer, Em andamento e Concluído. Concluído vem do status do fornecedor; um ticket com
+sessão ligada e viva vai para Em andamento. O card mostra o estado da sessão e o progresso do plano
+dela. No detalhe, Iniciar sessão leva à tela de nova conversa com o `start_prompt` no campo; a sessão
+que nascer com essa mensagem fica ligada ao ticket.
+
 ## Administração
 
 Rotas exclusivas do dono (convidado e token errado são recusados antes de ler o corpo):
@@ -77,7 +89,12 @@ Rotas exclusivas do dono (convidado e token errado são recusados antes de ler o
 | PATCH | `/api/connectors/{id}` | `{"enabled": false}` desliga e encerra |
 | DELETE | `/api/connectors/{id}` | Para e remove |
 | GET | `/api/connectors/{id}/tickets` | `query`, `assignee`, `limit` (padrão 20), `cursor` |
-| GET | `/api/connectors/{id}/tickets/{ticket_id}` | Detalhe; o ID vai codificado como um componente |
+| GET | `/api/connectors/{id}/tickets/{ticket_id}` | Detalhe, com `start_prompt` já preenchido quando o manifesto o tem; o ID vai codificado como um componente |
+| PUT | `/api/connectors/{id}/links/{ticket_id}` | `{"session": "<nome>"}` liga o ticket à sessão aberta para ele |
+| DELETE | `/api/connectors/{id}/links/{ticket_id}` | Desfaz o vínculo |
+
+Os vínculos ficam no catálogo, no campo `links` de cada conector (ticket → nome da sessão), e saem
+com ele. São do dono, não do fornecedor: nada vai ao sistema de origem.
 
 Erros saem como `{"detail": {"code": "...", "msg": "..."}}`. Falta de login no fornecedor
 (`auth_required`, `permission_denied`) volta 424, nunca 401, para não parecer senha do Hangar errada.
