@@ -320,29 +320,62 @@ async fn a_refused_connect_credential_marks_the_entry() {
     assert_eq!(client.route("lab"), None);
 }
 
-/// O 5xx do proxy prova que o Connect conecta: ele segue à frente. Só a falha de conexão nele o tira.
-#[tokio::test]
-async fn a_proxy_error_keeps_connect_in_front_and_only_a_connect_failure_drops_it() {
-    use std::sync::atomic::{AtomicU16, Ordering};
-    let answer = Arc::new(AtomicU16::new(200));
-    let current = answer.clone();
-    let connect = serve(Router::new().route("/x", any(move || {
-        let current = current.clone();
-        async move { js(StatusCode::from_u16(current.load(Ordering::Relaxed)).unwrap(), json!({"via": "connect"})) }
+/// Um `(status, corpo)` trocável no meio do teste, como o Connect de outra máquina.
+async fn switchable(status: u16, body: &'static str) -> (Arc<Mutex<(u16, &'static str)>>, Arc<Mutex<usize>>, SocketAddr) {
+    let (answer, hits) = (Arc::new(Mutex::new((status, body))), Arc::new(Mutex::new(0usize)));
+    let (current, count) = (answer.clone(), hits.clone());
+    let addr = serve(Router::new().route("/x", any(move || {
+        let (current, count) = (current.clone(), count.clone());
+        async move {
+            *count.lock().unwrap() += 1;
+            let (status, body) = *current.lock().unwrap();
+            Response::builder().status(status).header("content-type", "application/json").body(axum::body::Body::from(body)).unwrap()
+        }
     }))).await;
+    (answer, hits, addr)
+}
+
+/// O 502 do próprio Hangar (com corpo) prova que o pedido chegou: o Connect segue à frente e nada é repetido.
+/// Só a falha de conexão nele o tira.
+#[tokio::test]
+async fn a_hangar_error_through_connect_keeps_it_in_front_and_only_a_connect_failure_drops_it() {
+    let (answer, _, connect) = switchable(200, r#"{"via":"connect"}"#).await;
     let closed = format!("http://{}", crate::refused_address());
     let dir = tempfile::tempdir().unwrap();
     let client = routed(dir.path(), &closed, &format!("http://{connect}"));
     client.call("lab", reqwest::Method::GET, "/x", None).await.unwrap();
     assert_eq!(client.route("lab"), Some(Route::Connect));
-    answer.store(502, Ordering::Relaxed);
+    *answer.lock().unwrap() = (502, r#"{"detail":{"code":"claude_plugins_failed","params":{},"msg":"não"}}"#);
+    let (saved_seen, saved) = counting("saved", StatusCode::OK).await;
+    write_routed(&dir.path().join("peers.json"), &format!("http://{saved}"), &format!("http://{connect}"));
     let err = client.call("lab", reqwest::Method::GET, "/x", None).await.unwrap_err();
     assert!(matches!(err, PeerError::Refused { status: 502, .. }), "{err:?}");
+    assert!(saved_seen.lock().unwrap().is_empty(), "o Hangar de lá recebeu o pedido: nada de segunda entrega");
     assert_eq!(client.route("lab"), Some(Route::Connect), "a próxima chamada não paga o prazo de conexão do endereço salvo");
     // O Connect nem conecta e o endereço salvo voltou: ele atende e passa à frente.
-    let (saved_seen, saved) = counting("saved", StatusCode::OK).await;
     write_routed(&dir.path().join("peers.json"), &format!("http://{saved}"), &closed);
     assert_eq!(client.call("lab", reqwest::Method::GET, "/x", None).await.unwrap(), Some(json!({"via": "saved"})));
     assert_eq!(saved_seen.lock().unwrap().len(), 1);
     assert_eq!(client.route("lab"), Some(Route::Saved));
+}
+
+/// O Caddy de lá sem alcançar o Hangar responde 502 de corpo vazio: o pedido não chegou, então o endereço salvo
+/// (o Tailscale de volta) é tentado uma vez e passa à frente.
+#[tokio::test]
+async fn an_empty_502_from_the_connect_proxy_falls_back_to_the_saved_address() {
+    let (answer, connect_hits, connect) = switchable(200, r#"{"via":"connect"}"#).await;
+    let closed = format!("http://{}", crate::refused_address());
+    let dir = tempfile::tempdir().unwrap();
+    let client = routed(dir.path(), &closed, &format!("http://{connect}"));
+    client.call("lab", reqwest::Method::GET, "/x", None).await.unwrap();
+    assert_eq!(client.route("lab"), Some(Route::Connect));
+    *answer.lock().unwrap() = (502, "");
+    let (saved_seen, saved) = counting("saved", StatusCode::OK).await;
+    write_routed(&dir.path().join("peers.json"), &format!("http://{saved}"), &format!("http://{connect}"));
+    assert_eq!(client.call("lab", reqwest::Method::POST, "/x", Some(&json!({}))).await.unwrap(), Some(json!({"via": "saved"})));
+    assert_eq!((*connect_hits.lock().unwrap(), saved_seen.lock().unwrap().len()), (2, 1));
+    assert_eq!(client.route("lab"), Some(Route::Saved));
+    // Já com o endereço salvo à frente, o Connect não é mais chamado.
+    client.call("lab", reqwest::Method::GET, "/x", None).await.unwrap();
+    assert_eq!(*connect_hits.lock().unwrap(), 2);
 }

@@ -224,9 +224,14 @@ impl PeerClient {
         if self.route(server) == Some(Route::Connect) { vec![connect, saved] } else { vec![saved, connect] }
     }
 
-    /// `None`: tentar o próximo caminho. Só quando o pedido nem saiu (falha de conexão) ou o Connect recusou a
-    /// credencial; prazo de leitura ou outra resposta faria recado e cofre chegarem em dobro.
+    /// `None`: tentar o próximo caminho. Só quando o pedido não chegou ao Hangar de lá (falha de conexão, ou o
+    /// proxy do Connect sem alcançá-lo) ou o Connect recusou a credencial; prazo de leitura ou outra resposta
+    /// faria recado e cofre chegarem em dobro.
     async fn after<T>(&self, server: &str, route: Route, last: bool, outcome: Result<T, Failed>) -> Option<Result<T, PeerError>> {
+        let outcome = match outcome {
+            Err(Failed { error, .. }) if route == Route::Connect && proxy_unreached(&error) => Err(Failed { error, unsent: true }),
+            other => other,
+        };
         match outcome {
             Ok(value) => { self.remember(server, Some(route)); Some(Ok(value)) }
             Err(Failed { unsent: true, error }) => {
@@ -402,6 +407,13 @@ impl PeerClient {
             _ => Ok(answer),
         }
     }
+}
+
+/// 502 de corpo vazio é o Caddy de lá sem alcançar a 8768: é a resposta padrão dele, sem `handle_errors`
+/// no Caddyfile. Os 502 do próprio Hangar sempre levam corpo (JSON com código, ou o texto do repasse ao Python).
+/// O `frps` e o `frpc` fora derrubam o TLS, que já é falha de conexão.
+fn proxy_unreached(error: &PeerError) -> bool {
+    matches!(error, PeerError::Refused { status: 502, detail: Value::String(text) } if text.trim().is_empty())
 }
 
 /// Erro de uma tentativa; `unsent`: a conexão nem abriu (DNS, recusada, prazo de conexão), nada chegou lá.
