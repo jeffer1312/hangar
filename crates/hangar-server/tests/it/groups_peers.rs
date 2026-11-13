@@ -319,3 +319,30 @@ async fn a_refused_connect_credential_marks_the_entry() {
     assert_eq!(saved["lab"]["base_url"], format!("http://{}", crate::refused_address()).as_str());
     assert_eq!(client.route("lab"), None);
 }
+
+/// O 5xx do proxy prova que o Connect conecta: ele segue à frente. Só a falha de conexão nele o tira.
+#[tokio::test]
+async fn a_proxy_error_keeps_connect_in_front_and_only_a_connect_failure_drops_it() {
+    use std::sync::atomic::{AtomicU16, Ordering};
+    let answer = Arc::new(AtomicU16::new(200));
+    let current = answer.clone();
+    let connect = serve(Router::new().route("/x", any(move || {
+        let current = current.clone();
+        async move { js(StatusCode::from_u16(current.load(Ordering::Relaxed)).unwrap(), json!({"via": "connect"})) }
+    }))).await;
+    let closed = format!("http://{}", crate::refused_address());
+    let dir = tempfile::tempdir().unwrap();
+    let client = routed(dir.path(), &closed, &format!("http://{connect}"));
+    client.call("lab", reqwest::Method::GET, "/x", None).await.unwrap();
+    assert_eq!(client.route("lab"), Some(Route::Connect));
+    answer.store(502, Ordering::Relaxed);
+    let err = client.call("lab", reqwest::Method::GET, "/x", None).await.unwrap_err();
+    assert!(matches!(err, PeerError::Refused { status: 502, .. }), "{err:?}");
+    assert_eq!(client.route("lab"), Some(Route::Connect), "a próxima chamada não paga o prazo de conexão do endereço salvo");
+    // O Connect nem conecta e o endereço salvo voltou: ele atende e passa à frente.
+    let (saved_seen, saved) = counting("saved", StatusCode::OK).await;
+    write_routed(&dir.path().join("peers.json"), &format!("http://{saved}"), &closed);
+    assert_eq!(client.call("lab", reqwest::Method::GET, "/x", None).await.unwrap(), Some(json!({"via": "saved"})));
+    assert_eq!(saved_seen.lock().unwrap().len(), 1);
+    assert_eq!(client.route("lab"), Some(Route::Saved));
+}

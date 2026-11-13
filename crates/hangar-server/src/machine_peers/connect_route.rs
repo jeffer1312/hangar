@@ -1,17 +1,23 @@
 //! O Connect como caminho a mais das máquinas que já estão no `peers.json`. Corre por evento (Connect
 //! ligado aqui, lista da conta lida, máquina gravada pelo dono), nunca por varredura periódica.
-use std::collections::HashSet;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use reqwest::Method;
 use serde_json::{Value, json};
 
 use super::Service;
+use super::network::revoke_device;
 use super::store::Book;
 use crate::connect::peers::{AccountMachine, account_machines, on_connect_host};
-use crate::groups::peers::{PeerBook, PeerClient, PeerError};
+use crate::groups::peers::{PeerError, client, request};
 use crate::routes::AppState;
+
+/// Máquina que falhou espera isto antes do próximo evento tentar de novo: abrir a tela do Connect não
+/// repete a chamada nem enche o diário.
+const COOLDOWN: Duration = Duration::from_secs(600);
 
 /// Connect ligado nesta máquina ou máquina gravada pelo dono: a lista da conta só é lida se houver o que fazer.
 pub fn spawn(st: &Arc<AppState>) {
@@ -30,8 +36,11 @@ async fn run(st: Arc<AppState>, machines: Option<Vec<AccountMachine>>) {
     };
     // Sem ligação aqui não há conta para conferir o endereço de lá.
     let Ok(Some(linked)) = st.connect_supervisor.read_linked().await else { return };
-    let (store, link) = (service.store.clone(), format!("https://{}", linked.host));
-    let ids = tokio::task::spawn_blocking(move || candidates(&store.tolerant(), Some(&link))).await.unwrap_or_default();
+    let link = format!("https://{}", linked.host);
+    let (store, read_link) = (service.store.clone(), link.clone());
+    let mut ids = tokio::task::spawn_blocking(move || candidates(&store.tolerant(), Some(&read_link))).await.unwrap_or_default();
+    let now = Instant::now();
+    ids.retain(|id| !cooling(&(service.store.path.clone(), id.clone()), now));
     if ids.is_empty() {
         return;
     }
@@ -45,13 +54,17 @@ async fn run(st: Arc<AppState>, machines: Option<Vec<AccountMachine>>) {
     let machines = Arc::new(machines);
     for id in ids {
         let Some(slot) = Slot::claim(&service.store.path, &id) else { continue };
-        let (st, service, machines) = (st.clone(), service.clone(), machines.clone());
+        let (st, service, machines, link) = (st.clone(), service.clone(), machines.clone(), link.clone());
         tokio::spawn(async move {
-            let _slot = slot;
-            if let Err((code, detail)) = enroll(&service, &id, &machines).await {
-                tracing::warn!(code = "connect.peer_route_failed", reason = code, peer = %id, "o Connect não virou caminho de '{id}': {detail}");
-                report(&st, &id, code, "o Connect não virou caminho da máquina");
+            match enroll(&service, &id, &link, &machines).await {
+                Ok(()) => forget(&slot.0),
+                Err((code, detail)) => {
+                    note_failure(slot.0.clone(), Instant::now());
+                    tracing::warn!(code = "connect.peer_route_failed", reason = code, peer = %id, "o Connect não virou caminho de '{id}': {detail}");
+                    report(&st, &id, code, "o Connect não virou caminho da máquina");
+                }
             }
+            drop(slot);
         });
     }
 }
@@ -59,17 +72,42 @@ async fn run(st: Arc<AppState>, machines: Option<Vec<AccountMachine>>) {
 /// Entradas salvas pelo dono, ativas, ainda sem o Connect e sem recusa. Com a marca `connect` ou endereço já
 /// no Connect não há caminho a somar.
 fn candidates(book: &Book, link: Option<&str>) -> Vec<String> {
+    book.into_iter().filter(|(_, entry)| candidate(entry, link)).map(|(id, _)| id.clone()).collect()
+}
+
+fn candidate(entry: &Value, link: Option<&str>) -> bool {
     let filled = |value: &Value| value.as_str().is_some_and(|text| !text.is_empty());
-    book.into_iter()
-        .filter(|(_, entry)| entry.is_object() && entry["enabled"] != false && entry["connect"] != true
-            && entry["connect_refused"] != true && entry.get("connect_url").is_none() && filled(&entry["token"])
-            && entry["base_url"].as_str().is_some_and(|url| !url.is_empty() && !on_connect_host(link, url)))
-        .map(|(id, _)| id.clone())
-        .collect()
+    entry.is_object() && entry["enabled"] != false && entry["connect"] != true
+        && entry["connect_refused"] != true && entry.get("connect_url").is_none() && filled(&entry["token"])
+        && entry["base_url"].as_str().is_some_and(|url| !url.is_empty() && !on_connect_host(link, url))
+}
+
+type Key = (PathBuf, String);
+
+fn failures() -> &'static Mutex<HashMap<Key, Instant>> {
+    static FAILED: OnceLock<Mutex<HashMap<Key, Instant>>> = OnceLock::new();
+    FAILED.get_or_init(Mutex::default)
+}
+
+fn cooling(key: &Key, now: Instant) -> bool {
+    failures().lock().unwrap_or_else(|e| e.into_inner()).get(key).is_some_and(|at| now.saturating_duration_since(*at) < COOLDOWN)
+}
+
+fn note_failure(key: Key, now: Instant) {
+    failures().lock().unwrap_or_else(|e| e.into_inner()).insert(key, now);
+}
+
+fn forget(key: &Key) {
+    failures().lock().unwrap_or_else(|e| e.into_inner()).remove(key);
+}
+
+/// O dono acabou de gravar a máquina: a espera da falha anterior não vale para o que ele corrigiu.
+pub fn forget_failure(path: &Path, id: &str) {
+    forget(&(path.to_path_buf(), id.to_owned()));
 }
 
 /// Uma emissão por máquina e por arquivo: dois eventos juntos emitiriam duas credenciais lá.
-struct Slot((PathBuf, String));
+struct Slot(Key);
 
 fn running() -> &'static Mutex<HashSet<(PathBuf, String)>> {
     static RUNNING: OnceLock<Mutex<HashSet<(PathBuf, String)>>> = OnceLock::new();
@@ -91,11 +129,24 @@ impl Drop for Slot {
 
 type Failure = (&'static str, String);
 
-async fn enroll(service: &Service, id: &str, machines: &[AccountMachine]) -> Result<(), Failure> {
-    // Sem o Connect: as duas chamadas levam a senha do dono, que só vai pelo endereço salvo.
-    let client = PeerClient::new(PeerBook::new(Some(service.store.path.clone())));
+async fn enroll(service: &Service, id: &str, link: &str, machines: &[AccountMachine]) -> Result<(), Failure> {
+    // Relida dentro da vez desta máquina: outro evento pode ter acabado de gravar o caminho ou a recusa.
+    let (store, key) = (service.store.clone(), id.to_owned());
+    let entry = tokio::task::spawn_blocking(move || store.tolerant().get(&key).cloned()).await.ok().flatten().unwrap_or_default();
+    if !candidate(&entry, Some(link)) {
+        return Ok(());
+    }
+    let (Some(base), Some(owner)) = (entry["base_url"].as_str(), entry["token"].as_str()) else { return Ok(()) };
+    let (base, owner) = (base.trim_end_matches('/').to_owned(), owner.to_owned());
+    // Sem o Connect e sem redirect: as duas chamadas levam a senha do dono, que só vai pelo endereço salvo.
+    let http = client(crate::http_client().redirect(reqwest::redirect::Policy::none()))
+        .map_err(|e| ("connect_peer_unreachable", format!("cliente HTTP indisponível: {e}")))?;
     let failed = |e: PeerError| (code_of(&e), e.text(id));
-    let state = client.call(id, Method::GET, "/api/connect", None).await.map_err(failed)?.unwrap_or_default();
+    let call = |method: Method, path: &str, body: Option<Value>| {
+        let (http, url, owner) = (http.clone(), format!("{base}{path}"), owner.clone());
+        async move { request(&http, id, &url, Some(&owner), method, body.as_ref()).await.map(|(_, value)| value.unwrap_or_default()) }
+    };
+    let state = call(Method::GET, "/api/connect", None).await.map_err(failed)?;
     // Fora do Connect lá não é falha: o próximo evento confere de novo.
     let Some(host) = state["host"].as_str().filter(|host| !host.is_empty()) else { return Ok(()) };
     // O endereço gravado é o da lista da conta, nunca o que a outra máquina disse.
@@ -104,24 +155,26 @@ async fn enroll(service: &Service, id: &str, machines: &[AccountMachine]) -> Res
     };
     let url = format!("https://{}", machine.host);
     let body = json!({"device_name": format!("máquina {}", service.identity())});
-    let issued = client.call(id, Method::POST, "/api/connect/devices/self", Some(&body)).await.map_err(failed)?.unwrap_or_default();
+    let issued = call(Method::POST, "/api/connect/devices/self", Some(body)).await.map_err(failed)?;
     let (Some(device), Some(token)) = (issued["device_id"].as_str(), issued["token"].as_str()) else {
         return Err(("connect_peer_invalid_reply", format!("'{id}' não devolveu a credencial de aparelho")));
     };
-    let (store, key, device_id, token) = (service.store.clone(), id.to_owned(), device.to_owned(), token.to_owned());
-    let saved = tokio::task::spawn_blocking(move || store.set_connect_route(&key, &url, &token, &device_id)).await;
+    let (store, key, device_id, saved_token, saved_url) = (service.store.clone(), id.to_owned(), device.to_owned(), token.to_owned(), url.clone());
+    let saved = tokio::task::spawn_blocking(move || store.set_connect_route(&key, &saved_url, &saved_token, &device_id)).await;
     let failure = match saved {
-        Ok(Ok(())) => return Ok(()),
+        Ok(Ok(previous)) => {
+            // Caminho que já estava lá foi substituído: o aparelho dele se revoga pelo próprio Connect.
+            if let Some(old) = previous {
+                revoke_device(&old.id, None, Some((old.url, old.token)), &old.device).await;
+            }
+            return Ok(());
+        }
         Ok(Err(e)) => (e.code, e.msg),
         Err(_) => ("peers_response_failed", "a gravação foi interrompida".to_owned()),
     };
     // Sem gravar aqui (entrada apagada ou recusada no meio), a credencial emitida lá ficaria valendo sem dono.
-    if super::store::valid_device(device) {
-        match client.call(id, Method::DELETE, &format!("/api/connect/devices/{device}"), None).await {
-            Ok(_) | Err(PeerError::Refused { status: 404, .. }) => {}
-            Err(e) => tracing::warn!(code = "connect.peer_revoke_failed", peer = id, device = %device, "o aparelho do Connect ficou valendo na outra máquina: {}", e.text(id)),
-        }
-    }
+    // O endereço e as duas credenciais já estão à mão: a entrada pode nem existir mais.
+    revoke_device(id, Some((base, owner)), Some((url, token.to_owned())), device).await;
     Err(failure)
 }
 
@@ -180,14 +233,30 @@ mod tests {
                 "connect_token": "aparelho", "connect_device": "abc"},
             "casa": {"base_url": "http://100.64.0.9:8765", "token": "senha"},
         }).to_string()).unwrap();
-        let client = PeerClient::new(PeerBook::new(Some(path.clone()))).with_connect_route();
-        client.call("note", Method::GET, "/x", None).await.unwrap();
+        use crate::groups::peers::{PeerBook, PeerClient};
+        let peers = PeerClient::new(PeerBook::new(Some(path.clone()))).with_connect_route();
+        peers.call("note", Method::GET, "/x", None).await.unwrap();
         let mut rows = super::super::store::Store::new(path).list();
-        super::super::with_routes(&client, &mut rows);
+        super::super::with_routes(&peers, &mut rows);
         assert_eq!(rows[0]["id"], "casa");
         assert!(rows[0].get("route").is_none(), "sem chamada desde a subida, o caminho fica de fora");
         assert_eq!(rows[1]["route"], "connect");
         assert!(rows[1].get("connect_token").is_none() && !rows.to_string().contains("aparelho"), "a credencial não sai na lista");
+    }
+
+    /// Máquina que falhou fica 10 min sem nova tentativa, salvo o dono gravá-la de novo.
+    #[test]
+    fn a_failed_machine_waits_the_cooldown_unless_the_owner_saves_it() {
+        let path = std::path::Path::new("/tmp/peers-cooldown-test.json");
+        let key = (path.to_path_buf(), "note".to_owned());
+        let failed_at = Instant::now();
+        assert!(!cooling(&key, failed_at));
+        note_failure(key.clone(), failed_at);
+        assert!(cooling(&key, failed_at + Duration::from_secs(60)));
+        assert!(!cooling(&key, failed_at + COOLDOWN + Duration::from_secs(1)));
+        assert!(!cooling(&(path.to_path_buf(), "outra".to_owned()), failed_at));
+        forget_failure(path, "note");
+        assert!(!cooling(&key, failed_at));
     }
 
     #[test]

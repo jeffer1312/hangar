@@ -205,7 +205,7 @@ impl PeerClient {
     /// Aceita o Connect da entrada quando o endereço salvo não conecta.
     pub fn with_connect_route(mut self) -> Self { self.connect_route = true; self }
 
-    /// O último caminho que atendeu `server` com 2xx; `None` sem chamada boa desde a subida ou depois de uma falha.
+    /// O último caminho que atendeu `server` com 2xx; `None` sem chamada boa desde a subida ou depois de uma falha de conexão no Connect.
     pub fn route(&self, server: &str) -> Option<Route> { self.routes.lock().unwrap_or_else(|e| e.into_inner()).get(server).copied() }
 
     fn remember(&self, server: &str, route: Option<Route>) {
@@ -230,19 +230,17 @@ impl PeerClient {
         match outcome {
             Ok(value) => { self.remember(server, Some(route)); Some(Ok(value)) }
             Err(Failed { unsent: true, error }) => {
-                if !last { return None; }
-                self.remember(server, None);
-                Some(Err(error))
+                // Só a falha de conexão tira o Connect da frente.
+                if route == Route::Connect || last { self.remember(server, None); }
+                if last { Some(Err(error)) } else { None }
             }
             Err(Failed { error: error @ PeerError::Refused { status: 401, .. }, .. }) if route == Route::Connect => {
                 self.refuse_connect(server).await;
                 if last { Some(Err(error)) } else { None }
             }
-            Err(Failed { error, .. }) => {
-                // Connect que falhou não fica à frente: a próxima chamada volta a começar pelo endereço salvo.
-                if route == Route::Connect { self.remember(server, None); }
-                Some(Err(error))
-            }
+            // Resposta HTTP (o 5xx do proxy incluído) prova que o caminho conecta: ele segue à frente, e a
+            // próxima chamada não paga de novo o prazo de conexão do endereço salvo.
+            Err(Failed { error, .. }) => Some(Err(error)),
         }
     }
 

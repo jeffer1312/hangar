@@ -84,6 +84,11 @@ impl Store {
     /// vem do corpo, e o app que só registra um par não tem o token trocado. Aparelho não muda o
     /// endereço de um par. Só o dono muda, e mudar desfaz a marca.
     pub fn put_from(&self, body: &Value, device: Option<&str>) -> Result<Value, Error> {
+        self.put_with_route(body, device).map(|(rows, _)| rows)
+    }
+    /// Como `put_from`, devolvendo o caminho do Connect que saiu porque o dono mudou o endereço: quem chama
+    /// revoga o aparelho dele, que é da máquina antiga.
+    pub fn put_with_route(&self, body: &Value, device: Option<&str>) -> Result<(Value, Option<OldRoute>), Error> {
         let empty=Value::String(String::new());
         let id = body.get("id").filter(|v|truthy(v)).unwrap_or(&empty);
         valid_id(&id)?;
@@ -107,6 +112,7 @@ impl Store {
             return Err(Error::invalid("texto contém Unicode inválido"));
         }
         let address = base.trim_end_matches('/');
+        let mut moved = None;
         self.change(|data| {
             let same_address = data.get(id).and_then(|known|known["base_url"].as_str()).map(|known|known==address);
             if device.is_some() && same_address==Some(false) {
@@ -117,6 +123,14 @@ impl Store {
                 Some(other)=>{codec::discard(other);Map::new()},
                 None=>Map::new(),
             };
+            if device.is_none() {
+                // Outro endereço pode ser outra máquina: o Connect da antiga sai, e o próximo evento emite o certo.
+                if same_address==Some(false) {moved=take_route(&mut entry,id);}
+                // Senha nova é o dono religando de propósito; aparelho nunca desfaz a recusa.
+                if entry.get("token").and_then(Value::as_str).is_some_and(|known|known!=token) {
+                    if let Some(previous)=entry.remove("connect_refused"){codec::discard(previous);}
+                }
+            }
             replace(&mut entry,"base_url",json!(address));
             replace(&mut entry,"token",json!(token));
             if let Some(web) = web
@@ -134,27 +148,30 @@ impl Store {
             }
             if let Some(previous)=data.insert(id.into(), Value::Object(entry)){codec::discard(previous);}
             Ok(list(data))
-        })
+        }).map(|rows| (rows, moved))
     }
     /// O Connect como caminho a mais de um par já salvo. Só código do servidor chama: nenhum corpo HTTP
     /// chega aqui, porque um aparelho que gravasse isso levaria as chamadas para onde quisesse.
-    /// Nunca mexe no `base_url` nem no `token`.
-    pub fn set_connect_route(&self, id: &str, url: &str, token: &str, device: &str) -> Result<(), Error> {
+    /// Nunca mexe no `base_url` nem no `token`. Devolve o caminho que foi substituído: o aparelho dele
+    /// ficaria valendo lá, e quem chama o revoga.
+    pub fn set_connect_route(&self, id: &str, url: &str, token: &str, device: &str) -> Result<Option<OldRoute>, Error> {
         let url = url.trim().trim_end_matches('/');
         if !(url.starts_with("http://") || url.starts_with("https://")) || token.trim().is_empty() || !valid_device(device) {
             return Err(Error::invalid("caminho do Connect incompleto"));
         }
+        let mut previous = None;
         self.change(|data| {
             let entry = saved_peer(data, id)?;
             // Recusado pelo dono: nada religa sozinho.
             if entry.get("connect_refused") == Some(&Value::Bool(true)) {
                 return Err(Error { status: 409, code: "peers_connect_refused", msg: format!("o Connect de '{id}' foi recusado") });
             }
+            previous = take_route(entry, id).filter(|old| old.device != device);
             replace(entry, "connect_url", json!(url));
             replace(entry, "connect_token", json!(token.trim()));
             replace(entry, "connect_device", json!(device));
             Ok(Value::Null)
-        }).map(drop)
+        }).map(|_| previous)
     }
     /// Tira o caminho do Connect. `refused`: marca para nada religar sozinho; só o dono desfaz a marca.
     pub fn clear_connect_route(&self, id: &str, refused: bool) -> Result<(), Error> {
@@ -289,6 +306,19 @@ fn unknown(id: &str) -> Error {
     Error::missing(format!("servidor '{id}' não está no peers.json"))
 }
 const CONNECT_ROUTE: [&str; 3] = ["connect_url", "connect_token", "connect_device"];
+/// Caminho do Connect que saiu de uma entrada: o aparelho dele segue valendo lá até ser revogado.
+#[derive(Debug, PartialEq, Eq)]
+pub struct OldRoute { pub id: String, pub url: String, pub token: String, pub device: String }
+/// Tira os três campos; devolve o caminho só se der para revogá-lo.
+fn take_route(entry: &mut Map<String, Value>, id: &str) -> Option<OldRoute> {
+    let mut field = |key: &str| match entry.remove(key) {
+        Some(Value::String(text)) => Some(text),
+        Some(other) => { codec::discard(other); None }
+        None => None,
+    };
+    let (url, token, device) = (field("connect_url"), field("connect_token"), field("connect_device"));
+    Some(OldRoute { id: id.to_owned(), url: url?, token: token?, device: device.filter(|device| valid_device(device))? })
+}
 fn saved_peer<'a>(data: &'a mut Map<String, Value>, id: &str) -> Result<&'a mut Map<String, Value>, Error> {
     data.get_mut(id).filter(|v| truthy(&v["base_url"])).and_then(Value::as_object_mut).ok_or_else(|| unknown(id))
 }
@@ -495,19 +525,48 @@ mod connect_route_tests {
         assert_eq!(saved(&store)["note"]["connect_refused"], true, "só o dono desfaz a recusa");
     }
 
+    /// Outro endereço pode ser outra máquina: o dono mudando tira o Connect da antiga e devolve o aparelho a revogar.
     #[test]
-    fn the_route_survives_the_owner_changing_the_address_and_a_device_still_cannot() {
+    fn the_owner_moving_the_address_drops_the_route_and_a_device_still_cannot_move_it() {
         let (_dir, store) = store_with(tailscale());
         store.set_connect_route("note", "https://note.acme.hangar.dev.br", "aparelho", "abc").unwrap();
         let moved = json!({"id": "note", "base_url": "http://100.64.0.9:8765", "token": "senha-de-note"});
         assert_eq!(store.put_from(&moved, Some("celular")).unwrap_err().code, "peers_other_address");
-        store.put(&moved).unwrap();
+        assert_eq!(saved(&store)["note"]["connect_url"], "https://note.acme.hangar.dev.br");
+        let (_, old) = store.put_with_route(&moved, None).unwrap();
+        assert_eq!(old, Some(OldRoute { id: "note".into(), url: "https://note.acme.hangar.dev.br".into(), token: "aparelho".into(), device: "abc".into() }));
+        assert_eq!(saved(&store)["note"], json!({"base_url": "http://100.64.0.9:8765", "token": "senha-de-note"}));
+        // Mesmo endereço: o caminho fica, e o corpo nunca o grava.
+        store.set_connect_route("note", "https://note.acme.hangar.dev.br", "aparelho", "abc").unwrap();
+        let planted = json!({"id": "note", "base_url": "http://100.64.0.9:8765", "token": "senha-de-note", "connect_url": "https://evil.test",
+            "connect_token": "x", "connect_device": "def"});
+        assert_eq!(store.put_with_route(&planted, None).unwrap().1, None);
         let entry = saved(&store)["note"].clone();
-        assert_eq!(entry["base_url"], "http://100.64.0.9:8765");
-        assert_eq!(entry["connect_url"], "https://note.acme.hangar.dev.br");
-        let planted = json!({"id": "note", "base_url": "http://100.64.0.9:8765", "token": "x", "connect_url": "https://evil.test",
-            "connect_token": "x", "connect_device": "abc"});
-        store.put(&planted).unwrap();
-        assert_eq!(saved(&store)["note"]["connect_url"], "https://note.acme.hangar.dev.br", "o corpo nunca grava o caminho");
+        assert_eq!((entry["connect_url"].as_str(), entry["connect_device"].as_str()), (Some("https://note.acme.hangar.dev.br"), Some("abc")), "o corpo nunca grava o caminho");
+    }
+
+    #[test]
+    fn replacing_a_route_hands_back_the_previous_device() {
+        let (_dir, store) = store_with(tailscale());
+        assert_eq!(store.set_connect_route("note", "https://note.acme.hangar.dev.br", "aparelho", "abc").unwrap(), None);
+        let previous = store.set_connect_route("note", "https://note.acme.hangar.dev.br", "outro", "def").unwrap();
+        assert_eq!(previous, Some(OldRoute { id: "note".into(), url: "https://note.acme.hangar.dev.br".into(), token: "aparelho".into(), device: "abc".into() }));
+        assert_eq!(saved(&store)["note"]["connect_device"], "def");
+    }
+
+    /// Senha nova gravada pelo dono desfaz a recusa; a mesma senha ou um aparelho, nunca.
+    #[test]
+    fn only_the_owner_saving_a_new_password_lifts_the_refusal() {
+        let (_dir, store) = store_with(tailscale());
+        store.clear_connect_route("note", true).unwrap();
+        let same = json!({"id": "note", "base_url": "https://note.tail.ts.net", "token": "senha-de-note"});
+        store.put(&same).unwrap();
+        assert_eq!(saved(&store)["note"]["connect_refused"], true, "a mesma senha não desfaz");
+        let new = json!({"id": "note", "base_url": "https://note.tail.ts.net", "token": "senha-nova"});
+        store.put_from(&new, Some("celular")).unwrap();
+        assert_eq!(saved(&store)["note"]["connect_refused"], true, "aparelho não desfaz");
+        let newer = json!({"id": "note", "base_url": "https://note.tail.ts.net", "token": "senha-mais-nova"});
+        store.put(&newer).unwrap();
+        assert!(saved(&store)["note"].get("connect_refused").is_none());
     }
 }

@@ -464,7 +464,8 @@ async fn handle_inner(
         Err(e) => e.response(),
     }
 }
-/// `route`: o caminho da última chamada desta máquina que a outra atendeu com 2xx; sem chamada assim, fica de fora.
+/// `route`: o caminho da última chamada desta máquina que a outra atendeu com 2xx; fica de fora sem chamada assim
+/// ou depois de o Connect nem conectar.
 fn with_routes(peers: &crate::groups::peers::PeerClient, rows: &mut Value) {
     for row in rows.as_array_mut().into_iter().flatten() {
         if let Some(route) = row["id"].as_str().and_then(|id| peers.route(id)) {
@@ -543,6 +544,21 @@ pub async fn dispatch(
             Ok(network::announce(&service, "").await)
         }
         ("GET", "/api/peers/descobrir") => network::discover(&service).await,
+        ("POST", "/api/peers") => {
+            let (store, device) = (service.store.clone(), service.device_caller.clone());
+            let id = body["id"].as_str().map(str::to_owned);
+            let (rows, moved) = tokio::task::spawn_blocking(move || store.put_with_route(&body, device.as_deref()))
+                .await
+                .map_err(|_| Error::unavailable())??;
+            if service.device_caller.is_none() && let Some(id) = id {
+                connect_route::forget_failure(&service.store.path, &id);
+            }
+            // Endereço novo pode ser outra máquina: o aparelho da antiga sai pelo Connect dela, sem segurar a resposta.
+            if let Some(old) = moved {
+                tokio::spawn(async move { network::revoke_device(&old.id, None, Some((old.url, old.token)), &old.device).await });
+            }
+            Ok(rows)
+        }
         ("GET", "/api/alcance") => Ok(network::reach(&service).await),
         ("GET", "/api/alcance/pareamento") => network::pairing(&service, q("endereco")).await,
         _ => {
@@ -554,7 +570,6 @@ pub async fn dispatch(
             let path = path.to_owned();
             tokio::task::spawn_blocking(move || match (method.as_str(), path.as_str()) {
                 ("GET", "/api/peers") => Ok(service.store.list()),
-                ("POST", "/api/peers") => service.store.put_from(&body,service.device_caller.as_deref()),
                 ("GET", "/api/peers/app-list") => service.store.app_list(),
                 ("PUT", "/api/peers/app-list") => service.store.app_write(&body),
                 _ => {
