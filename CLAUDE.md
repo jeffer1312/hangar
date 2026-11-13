@@ -600,6 +600,10 @@ criação de sessão sob escopo do systemd ou no pacote por versão (`crates/han
   nunca repassadas; credencial do fornecedor é do conector, nunca do manifesto. Guia em
   [`docs/connectors/`](docs/connectors/README.md); evidência em
   [plataforma.md](docs/decisoes/plataforma.md#conectores-de-trabalho-host-rust-e-processo-externo-por-capacidade-12112026).
+- **Mission Control (`hangar-mission`) guarda etapa, vínculo, portão e evidências; o ticket é do
+  conector, e nada volta ao sistema de origem.** A sessão ligada informa etapa e anexa evidências pela
+  tool `mission` (rota `/api/mission/report`); etapa com portão só é passada com a aprovação do dono,
+  e voltar desfaz as aprovações daí em diante. Guia em [`docs/mission/`](docs/mission/README.md).
 - **Busca, Perguntar e Arquivo são do Rust, com um índice de todos os agentes e contas.** A passada
   é por evento de arquivo; palavra inteira vem antes de pedaço (`whole`); o id do trecho é o do
   histórico. Sem Rust, 503 `erro_busca_precisa_rust`. Evidência em
