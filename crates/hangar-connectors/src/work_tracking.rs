@@ -12,6 +12,8 @@ pub const VERSION: u32 = 1;
 pub const LIST: &str = "work_tracking.list";
 pub const GET: &str = "work_tracking.get";
 pub const MAX_LIMIT: u32 = 100;
+/// Tamanho de página quando o pedido não diz.
+pub const DEFAULT_LIMIT: u32 = 20;
 const MAX_TEXT: usize = 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,13 +101,44 @@ impl ListParams {
     }
 }
 
+impl ListParams {
+    /// Pares nome/valor da URL ou das opções do CLI: `query`, `assignee`, `limit` e `cursor`.
+    /// Nome desconhecido é `invalid_params`, nunca ignorado.
+    pub fn from_pairs<K: AsRef<str>, V: Into<String>>(pairs: impl IntoIterator<Item = (K, V)>) -> Result<Self, ConnectorError> {
+        let mut params = ListParams { filter: Filter::default(), limit: DEFAULT_LIMIT, cursor: None };
+        for (name, value) in pairs {
+            let value = value.into();
+            match name.as_ref() {
+                "query" => params.filter.query = Some(value),
+                "assignee" => params.filter.assignee = Some(value),
+                "cursor" => params.cursor = Some(value),
+                "limit" => params.limit = value.parse().map_err(|_| ConnectorError::invalid_params("limit precisa ser número"))?,
+                other => return Err(ConnectorError::invalid_params(format!("filtro desconhecido: {other}"))),
+            }
+        }
+        params.normalize().map_err(ConnectorError::invalid_params)?;
+        Ok(params)
+    }
+}
+
 impl GetParams {
-    pub fn from_value(value: Value) -> Result<Self, ConnectorError> {
-        let params: GetParams = serde_json::from_value(value)
-            .map_err(|error| ConnectorError::invalid_params(format!("pedido de detalhe inválido: {error}")))?;
+    pub fn new(ticket_id: impl Into<String>) -> Result<Self, ConnectorError> {
+        let params = GetParams { ticket_id: ticket_id.into() };
         bounded("ticket_id", &params.ticket_id, false).map_err(ConnectorError::invalid_params)?;
         Ok(params)
     }
+
+    pub fn from_value(value: Value) -> Result<Self, ConnectorError> {
+        let params: GetParams = serde_json::from_value(value)
+            .map_err(|error| ConnectorError::invalid_params(format!("pedido de detalhe inválido: {error}")))?;
+        Self::new(params.ticket_id)
+    }
+}
+
+/// Instante da leitura pelo relógio do host, acrescentado à lista e ao detalhe.
+pub fn with_fetched_at(mut value: Value) -> Value {
+    value["fetched_at"] = serde_json::json!(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+    value
 }
 
 fn absolute_http(url: &str) -> bool {

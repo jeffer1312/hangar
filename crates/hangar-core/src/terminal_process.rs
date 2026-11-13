@@ -21,6 +21,26 @@ pub fn detach_launch(command: &mut Command) {
     let _ = command;
 }
 
+/// Linux: o filho recebe SIGKILL quando o servidor morre, mesmo sem limpeza. Vale só para o filho
+/// direto; a árvore inteira sai pelo `finish`. No Windows quem leva o filho junto é o Job do `CommandTree`.
+#[cfg(target_os = "linux")]
+pub fn die_with_parent(command: &mut Command) {
+    let parent = std::process::id() as libc::pid_t;
+    // SAFETY: entre o fork e o exec só há chamadas que o fork permite.
+    unsafe {
+        command.pre_exec(move || {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            // Pai morto antes do `prctl`: o sinal nunca viria.
+            if libc::getppid() != parent { return Err(io::Error::from_raw_os_error(libc::ESRCH)); }
+            Ok(())
+        });
+    }
+}
+#[cfg(not(target_os = "linux"))]
+pub fn die_with_parent(_command: &mut Command) {}
+
 /// Permissão de execução para o usuário do processo, como `os.access(path, os.X_OK)`.
 #[cfg(unix)]
 pub fn can_execute(path: &std::path::Path) -> bool {

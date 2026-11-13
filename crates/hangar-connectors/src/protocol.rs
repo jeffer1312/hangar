@@ -32,12 +32,6 @@ pub enum ErrorCode {
 }
 
 impl ErrorCode {
-    pub const ALL: [ErrorCode; 11] = [
-        ErrorCode::InvalidParams, ErrorCode::UnsupportedCapability, ErrorCode::UnsupportedVersion,
-        ErrorCode::InvalidCursor, ErrorCode::AuthRequired, ErrorCode::PermissionDenied, ErrorCode::NotFound,
-        ErrorCode::Unavailable, ErrorCode::Timeout, ErrorCode::ProtocolError, ErrorCode::PayloadTooLarge,
-    ];
-
     pub fn as_str(self) -> &'static str {
         match self {
             ErrorCode::InvalidParams => "invalid_params",
@@ -54,7 +48,8 @@ impl ErrorCode {
         }
     }
 
-    pub fn parse(text: &str) -> Option<ErrorCode> { ErrorCode::ALL.into_iter().find(|code| code.as_str() == text) }
+    /// O nome vem do `serde(rename_all)`: uma fonte só para ida e volta.
+    pub fn parse(text: &str) -> Option<ErrorCode> { serde_json::from_value(Value::String(text.to_owned())).ok() }
 
     /// Código numérico do JSON-RPC para quem escreve o conector; o tipado vai em `data.code`.
     pub fn rpc_code(self) -> i64 {

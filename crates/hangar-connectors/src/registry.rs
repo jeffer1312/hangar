@@ -1,6 +1,6 @@
 //! Catálogo de conectores do servidor (`~/.hangar/connectors.json`): privado, trocado de forma
 //! atômica sob trava. Nenhuma operação daqui inicia processo.
-use crate::error::AdminError;
+use crate::error::{AdminError, AdminKind};
 use crate::manifest::Manifest;
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
@@ -32,11 +32,6 @@ pub struct Registry { path: PathBuf }
 impl Registry {
     pub fn new(path: PathBuf) -> Self { Self { path } }
 
-    /// O catálogo do servidor: `<home>/.hangar/connectors.json`.
-    pub fn default_path(home: &Path) -> PathBuf { home.join(".hangar").join("connectors.json") }
-
-    pub fn path(&self) -> &Path { &self.path }
-
     pub fn list(&self) -> Result<Vec<Entry>, AdminError> { Ok(self.read()?.connectors) }
 
     pub fn get(&self, id: &str) -> Result<Entry, AdminError> {
@@ -51,7 +46,7 @@ impl Registry {
                 return if existing.manifest == manifest {
                     Ok((existing.clone(), false))
                 } else {
-                    Err(AdminError::new("connector_exists", format!("já existe outro conector {:?}; remova antes de cadastrar outro", manifest.id)))
+                    Err(AdminError::new(AdminKind::ConnectorExists, format!("já existe outro conector {:?}; remova antes de cadastrar outro", manifest.id)))
                 };
             }
             let entry = Entry { manifest, enabled: true };
@@ -84,21 +79,21 @@ impl Registry {
             Err(error) => return Err(AdminError::io("leitura do catálogo", &error)),
         };
         let file: CatalogFile = serde_json::from_slice(&bytes)
-            .map_err(|_| AdminError::new("registry_invalid", "catálogo de conectores ilegível"))?;
+            .map_err(|_| AdminError::new(AdminKind::RegistryInvalid, "catálogo de conectores ilegível"))?;
         if file.version != FORMAT_VERSION {
-            return Err(AdminError::new("registry_invalid", format!("catálogo na versão {} desconhecida", file.version)));
+            return Err(AdminError::new(AdminKind::RegistryInvalid, format!("catálogo na versão {} desconhecida", file.version)));
         }
         Ok(file)
     }
 
     fn update<T>(&self, change: impl FnOnce(&mut CatalogFile) -> Result<(T, bool), AdminError>) -> Result<T, AdminError> {
-        let parent = self.path.parent().ok_or_else(|| AdminError::new("registry_unavailable", "catálogo sem pasta"))?;
+        let parent = self.path.parent().ok_or_else(|| AdminError::new(AdminKind::RegistryUnavailable, "catálogo sem pasta"))?;
         std::fs::create_dir_all(parent).map_err(|error| AdminError::io("pasta do catálogo", &error))?;
         let _lock = lock(&self.path.with_extension("lock")).map_err(|error| AdminError::io("trava do catálogo", &error))?;
         let mut file = self.read()?;
         let (value, changed) = change(&mut file)?;
         if changed {
-            let bytes = serde_json::to_vec_pretty(&file).map_err(|_| AdminError::new("registry_unavailable", "catálogo não serializou"))?;
+            let bytes = serde_json::to_vec_pretty(&file).map_err(|_| AdminError::new(AdminKind::RegistryUnavailable, "catálogo não serializou"))?;
             hangar_core::fs::atomic_write(&self.path, &bytes).map_err(|error| AdminError::io("gravação do catálogo", &error))?;
         }
         Ok(value)
