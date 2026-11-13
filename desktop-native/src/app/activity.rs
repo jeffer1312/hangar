@@ -424,6 +424,8 @@ pub(super) struct ActivityPanel {
     claude: bool,
     /// Tarefas com a parada pedida, esperando o feed mostrar o fim.
     stopping: HashSet<String>,
+    /// Muda a cada troca de sessão: o prazo de uma parada anterior não mexe na parada nova da mesma tarefa.
+    stop_epoch: u64,
     stop_note: Option<String>,
     /// O compositor do subagente: nasce no primeiro desenho do detalhe (o campo pede a janela).
     input: Option<(Entity<TextareaState>, Subscription)>,
@@ -442,7 +444,7 @@ impl ActivityPanel {
             command_error: None, command_view: None, read_only: false,
             loading: false, failed: false, lines: Lines::default(), clock: None, scroll: ScrollHandle::new(), opened: None, detail_seq: 0,
             poll: None, notice: None, pending: None, conversation: cx.new(|_| SubConversation::new()), back_focus: cx.focus_handle().tab_stop(true),
-            marks: Default::default(), tab_id: None, older_open: false, finished_open: false, claude: false, stopping: HashSet::new(), stop_note: None, input: None, sending: false, send_seq: 0, send_error: None,
+            marks: Default::default(), tab_id: None, older_open: false, finished_open: false, claude: false, stopping: HashSet::new(), stop_epoch: 0, stop_note: None, input: None, sending: false, send_seq: 0, send_error: None,
             clear_input: false, placeholder: String::new() }
     }
 
@@ -586,10 +588,10 @@ impl ActivityPanel {
                 self.stop_note = Some(if failure.status.is_none() { tr(&failure.detail) } else { failure.detail });
             }
             Ok(_) => {
-                let task = task.to_owned();
+                let (task, epoch) = (task.to_owned(), self.stop_epoch);
                 cx.spawn(async move |this, cx| {
                     cx.background_executor().timer(STOP_CONFIRM).await;
-                    let _ = this.update(cx, |this, cx| this.stop_unconfirmed(&task, cx));
+                    let _ = this.update(cx, |this, cx| this.stop_unconfirmed(&task, epoch, cx));
                 }).detach();
             }
         }
@@ -597,8 +599,8 @@ impl ActivityPanel {
     }
 
     /// Passado o prazo, a tarefa que ainda aparece rodando não parou: a linha volta com o aviso.
-    fn stop_unconfirmed(&mut self, task: &str, cx: &mut Context<Self>) {
-        if !self.stopping.remove(task) { return; }
+    fn stop_unconfirmed(&mut self, task: &str, epoch: u64, cx: &mut Context<Self>) {
+        if epoch != self.stop_epoch || !self.stopping.remove(task) { return; }
         let lines = &self.lines;
         let mut tasks = lines.agents.iter().filter_map(|a| a.task.as_deref()).chain(lines.running.iter().map(|s| s.key.as_str()))
             .chain(lines.shells.iter().filter_map(|s| s.task.as_deref()));
@@ -657,7 +659,7 @@ impl ActivityPanel {
             if other {
                 self.close_detail(cx); (self.notice, self.pending) = (None, None);
                 self.command_open = None; self.command_pending.clear(); self.command_error = None; self.command_view = None;
-                self.stopping.clear(); self.stop_note = None;
+                self.stopping.clear(); self.stop_epoch += 1; self.stop_note = None;
             }
             self.key = Some(key);
             self.link = Some(link);
@@ -2088,11 +2090,17 @@ mod tests {
             panel.prepare();
             panel.stopping.extend(["bg2".to_owned(), "bg3".to_owned()]);
             panel.stop_note = None;
-            panel.stop_unconfirmed("bg3", cx);
+            panel.stop_unconfirmed("bg3", panel.stop_epoch, cx);
             assert_eq!((panel.stopping.contains("bg3"), panel.stop_note.clone()), (false, None));
-            panel.stop_unconfirmed("bg2", cx);
+            panel.stop_unconfirmed("bg2", panel.stop_epoch, cx);
             assert!(panel.stopping.is_empty());
             assert_eq!(panel.stop_note, Some(super::web("atividade_parar_sem_confirmacao")));
+            // O prazo de uma parada de antes da troca de sessão não desfaz a parada nova da mesma tarefa.
+            panel.stopping.insert("bg2".into());
+            let before = panel.stop_epoch;
+            panel.stop_epoch += 1;
+            panel.stop_unconfirmed("bg2", before, cx);
+            assert!(panel.stopping.contains("bg2"));
         });
     }
 
