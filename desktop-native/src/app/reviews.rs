@@ -38,8 +38,8 @@ pub(crate) struct Summary {
 
 impl Summary {
     fn key(&self) -> String { format!("{}/{}#{}", self.host, self.repo, self.number) }
-    fn gitlab(&self) -> bool { self.provider == "gitlab" }
-    fn number_label(&self) -> String { format!("{}{}", if self.gitlab() { "!" } else { "#" }, self.number) }
+    pub(super) fn gitlab(&self) -> bool { self.provider == "gitlab" }
+    pub(super) fn number_label(&self) -> String { format!("{}{}", if self.gitlab() { "!" } else { "#" }, self.number) }
     /// Pede a atenção da pessoa: pediram a revisão dela, ou é dela e tem pipeline falho, conflito ou thread aberta.
     fn needs_attention(&self) -> bool {
         self.state == "open" && (self.review_requested && !self.mine || self.pipeline.as_deref() == Some("failed")
@@ -107,7 +107,7 @@ pub(super) struct Detail {
 /// A revisão da branch de uma pasta: o estado da busca e, quando há, o detalhe.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
-pub(super) struct BranchReview { state: String, host: String, branch: String, cli: Option<String>, summary: Option<Summary>, review: Option<Detail> }
+pub(super) struct BranchReview { pub(super) state: String, host: String, pub(super) branch: String, pub(super) cli: Option<String>, pub(super) summary: Option<Summary>, review: Option<Detail> }
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
@@ -124,7 +124,7 @@ fn blocker_text(code: &str) -> String {
     if text == key { tr("review_block_blocked") } else { text }
 }
 
-fn pipeline_label(status: Option<&str>) -> String {
+pub(super) fn pipeline_label(status: Option<&str>) -> String {
     tr(match status {
         Some("success") => "review_pipeline_success",
         Some("failed") => "review_pipeline_failed",
@@ -136,7 +136,7 @@ fn pipeline_label(status: Option<&str>) -> String {
     })
 }
 
-fn status_color(status: Option<&str>) -> Hsla {
+pub(super) fn status_color(status: Option<&str>) -> Hsla {
     match status {
         Some("success") => theme::success(),
         Some("failed") => theme::danger(),
@@ -146,7 +146,7 @@ fn status_color(status: Option<&str>) -> Hsla {
 }
 
 /// Pílula de estado: ponto e texto na cor dele, contorno discreto.
-fn pill(text: String, color: Hsla, dot: bool) -> Div {
+pub(super) fn pill(text: String, color: Hsla, dot: bool) -> Div {
     div().flex_shrink_0().h(px(20.)).px(px(8.)).flex().items_center().gap(px(5.)).rounded_full().border_1().border_color(color.opacity(0.4))
         .text_size(px(11.5)).text_color(color).whitespace_nowrap()
         .when(dot, |el| el.child(div().size(px(6.)).rounded_full().bg(color)))
@@ -331,7 +331,7 @@ fn prepared(mut data: BranchReview) -> Rc<BranchReview> {
 }
 
 /// A revisão da branch de uma pasta; `summary` pede só o resumo (o chip), sem o detalhe.
-fn fetch_branch(runtime: &Runtime, api: Api, dir: String, summary: bool) -> tokio::task::JoinHandle<Result<BranchReview, Failure>> {
+pub(super) fn fetch_branch(runtime: &Runtime, api: Api, dir: String, summary: bool) -> tokio::task::JoinHandle<Result<BranchReview, Failure>> {
     runtime.spawn(async move {
         let query: &[(&str, &str)] = if summary { &[("path", &dir), ("summary", "1")] } else { &[("path", &dir)] };
         api.server_read(&["reviews", "branch"], query, 60).await
@@ -876,11 +876,25 @@ impl Hangar {
     }
 
     fn open_review_item(&mut self, item: &Summary, cx: &mut Context<Self>) {
+        let weak = cx.entity().downgrade();
+        let back: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_, cx| { let _ = weak.update(cx, |this, cx| { this.reviews.open = None; cx.notify(); }); });
+        self.open_review_item_with(item, back, cx);
+    }
+
+    /// A revisão do ticket aberta pelo Mission Control: a página de Revisões com ela, e o voltar devolve ao painel.
+    pub(super) fn open_review_from_mission(&mut self, item: &Summary, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_reviews(window, cx);
+        let weak = cx.entity().downgrade();
+        let back: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |window, cx| {
+            let _ = weak.update(cx, |this, cx| { this.reviews.open = None; this.open_mission(window, cx); });
+        });
+        self.open_review_item_with(item, back, cx);
+    }
+
+    fn open_review_item_with(&mut self, item: &Summary, back: Rc<dyn Fn(&mut Window, &mut App)>, cx: &mut Context<Self>) {
         let Some(api) = self.worktree_sources().into_iter().find(|(k, _, _)| k == &item.server).map(|(_, _, api)| api) else { return };
         let target = Target::Item { host: item.host.clone(), repo: item.repo.clone(), number: item.number };
         let send = self.review_send_fn(cx);
-        let weak = cx.entity().downgrade();
-        let back: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(move |_, cx| { let _ = weak.update(cx, |this, cx| { this.reviews.open = None; cx.notify(); }); });
         let changed = self.review_changed_fn(None, cx);
         let view = cx.new(|_| ReviewView::new(api, item.server.clone(), self.runtime.clone(), target, send, changed).with_back(back));
         view.update(cx, |view, cx| view.load(cx));
