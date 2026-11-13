@@ -979,6 +979,8 @@ impl Hangar {
             .aria_label(tr("review_search")).prefix(chrome::small_icon(IconName::Search, 13., theme::faint())).into_any_element());
         let header = self.costs_header(tr("review_title"), |this, window, cx| this.close_reviews(window, cx),
             search.into_iter().chain([
+                chrome::icon_button("reviews-access", IconName::Settings, tr("review_hosts_title"), cx)
+                    .on_click(cx.listener(|this, _, window, cx| this.open_review_hosts(window, cx))).into_any_element(),
                 Button::new("reviews-refresh").outline().small().label(tr("review_refresh")).loading(loading).disabled(loading)
                     .on_click(cx.listener(|this, _, _, cx| { this.reviews.chips.clear(); this.load_reviews(cx); })).into_any_element(),
             ]).collect(), cx);
@@ -996,7 +998,7 @@ impl Hangar {
 
     fn render_review_list(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let machines = &self.reviews.machines;
-        if machines.is_empty() || machines.values().all(|m| m.loading && m.listing.is_none()) {
+        if machines.is_empty() || machines.values().all(|m| m.listing.is_none()) && machines.values().any(|m| m.loading) {
             return loading_state().into_any_element();
         }
         let query = self.reviews.search.as_ref().map(|i| i.read(cx).value().trim().to_lowercase()).unwrap_or_default();
@@ -1025,10 +1027,9 @@ impl Hangar {
                         }))
                 })));
         let mut list = div().flex().flex_col().gap(px(2.));
-        let errors: Vec<(String, String)> = machines.values().filter_map(|m| m.error.clone().map(|e| (m.label.clone(), e))).collect();
-        let host_errors: Vec<HostRow> = machines.values().flat_map(|m| m.listing.iter().flat_map(|l| l.hosts.iter().filter(|h| h.state == "error").cloned())).collect();
         if items.is_empty() {
-            list = list.child(empty_state(if query.is_empty() && filter == Filter::All && host_filter.is_none() { tr("review_list_empty") } else { tr("review_list_filtered") }));
+            list = list.child(empty_state(if machines.values().all(|m| m.listing.is_none()) { tr("review_list_unavailable") }
+                else if query.is_empty() && filter == Filter::All && host_filter.is_none() { tr("review_list_empty") } else { tr("review_list_filtered") }));
         } else {
             let (attention, rest): (Vec<_>, Vec<_>) = items.into_iter().partition(Summary::needs_attention);
             for (title, group) in [(tr("review_group_attention"), attention), (tr("review_group_other"), rest)] {
@@ -1039,11 +1040,7 @@ impl Hangar {
         }
         div().flex().flex_col().gap(px(10.))
             .child(filters)
-            .children(errors.into_iter().map(|(label, e): (String, String)| super::costs::note_box(tr("review_machine_error").replace("{maquina}", &label).replace("{erro}", &e), theme::warning())))
-            .children(host_errors.into_iter().map(|h| super::costs::note_box(tr("review_host_error").replace("{host}", &h.host)
-                .replace("{erro}", h.error.as_deref().unwrap_or("")), theme::warning())))
             .child(list)
-            .child(self.render_review_hosts())
             .into_any_element()
     }
 
@@ -1057,26 +1054,42 @@ impl Hangar {
             .into_any_element()
     }
 
-    /// Os hosts que a máquina achou nos repositórios e quem atende cada um: é o que substitui uma configuração.
+    fn open_review_hosts(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let hangar = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let content = hangar.upgrade().map(|h| h.read(cx).render_review_hosts());
+            popup::dialog(dialog).w(px(720.)).title(tr("review_hosts_title")).children(content)
+        });
+    }
+
+    /// O acesso fica fora da lista de revisões; o diálogo lê a mesma resposta já carregada.
     fn render_review_hosts(&self) -> AnyElement {
-        let rows: Vec<HostRow> = self.reviews.machines.values().flat_map(|m| m.listing.iter().flat_map(|l| l.hosts.clone())).collect();
-        if rows.is_empty() { return div().into_any_element(); }
-        div().mt(px(16.)).pt(px(12.)).border_t_1().border_color(theme::border()).flex().flex_col().gap(px(6.))
-            .child(div().text_size(px(12.)).font_weight(FontWeight::SEMIBOLD).text_color(theme::muted()).child(tr("review_hosts_title")))
-            .children(rows.into_iter().map(|h| {
-                let (text, color) = match h.state.as_str() {
-                    "ok" => (format!("{} · {}", h.cli.clone().unwrap_or_default(), h.user.clone().unwrap_or_default()), theme::success()),
-                    "no_login" => (tr("review_host_no_login").replace("{comando}", &format!("{} auth login --hostname {}", h.cli.clone().unwrap_or_default(), h.host)), theme::warning()),
-                    "cli_missing" => (tr("review_host_cli_missing").replace("{cli}", &h.cli.clone().unwrap_or_default()), theme::warning()),
-                    "error" => (tr("review_host_failed"), theme::danger()),
-                    _ => (tr("review_host_unknown"), theme::faint()),
-                };
-                div().flex().items_center().gap(px(10.)).text_size(px(12.))
-                    .child(div().w(px(220.)).flex_shrink_0().truncate().font_family(theme::MONO).text_color(theme::text()).child(h.host.clone()))
-                    .child(div().w(px(110.)).flex_shrink_0().text_color(theme::faint()).child(if h.repos == 1 { tr("review_host_repo") } else { tr("review_host_repos").replace("{n}", &h.repos.to_string()) }))
-                    .child(div().flex_1().min_w_0().whitespace_normal().text_color(color).child(text))
+        div().id("review-hosts").max_h(px(420.)).overflow_y_scroll().flex().flex_col().gap(px(20.))
+            .child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal().child(tr("review_hosts_hint")))
+            .children(self.reviews.machines.values().map(|machine| {
+                let rows = machine.listing.as_ref().map(|l| l.hosts.as_slice()).unwrap_or_default();
+                div().flex().flex_col().gap(px(8.))
+                    .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child(machine.label.clone()))
+                    .when_some(machine.error.clone(), |el, e| el.child(div().text_size(px(12.5)).text_color(theme::muted()).whitespace_normal()
+                        .child(tr("review_machine_error").replace("{maquina}", &machine.label).replace("{erro}", &e))))
+                    .when(machine.loading, |el| el.child(loading_state()))
+                    .when(!machine.loading && machine.error.is_none() && rows.is_empty(), |el| el.child(empty_state(tr("review_hosts_empty"))))
+                    .children(rows.iter().map(|h| {
+                        let (text, color) = match h.state.as_str() {
+                            "ok" => (format!("{} · {}", h.cli.clone().unwrap_or_default(), h.user.clone().unwrap_or_default()), theme::success()),
+                            "no_login" => (tr("review_host_no_login").replace("{comando}", &format!("{} auth login --hostname {}", h.cli.clone().unwrap_or_default(), h.host)), theme::warning()),
+                            "cli_missing" => (tr("review_host_cli_missing").replace("{cli}", &h.cli.clone().unwrap_or_default()), theme::warning()),
+                            "error" => (tr("review_host_failed"), theme::danger()),
+                            _ => (tr("review_host_unknown"), theme::faint()),
+                        };
+                        div().flex().flex_col().gap(px(3.)).text_size(px(12.))
+                            .child(div().flex().items_center().gap(px(10.))
+                                .child(div().flex_1().min_w_0().truncate().text_color(theme::text()).child(h.host.clone()))
+                                .child(div().flex_shrink_0().text_color(theme::faint()).child(if h.repos == 1 { tr("review_host_repo") } else { tr("review_host_repos").replace("{n}", &h.repos.to_string()) })))
+                            .child(div().whitespace_normal().text_color(color).child(text))
+                            .when_some(h.error.clone(), |el, error| el.child(div().text_color(theme::muted()).whitespace_normal().child(error)))
+                    }))
             }))
-            .child(div().text_size(px(11.5)).text_color(theme::faint()).whitespace_normal().child(tr("review_hosts_hint")))
             .into_any_element()
     }
 }

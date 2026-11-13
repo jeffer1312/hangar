@@ -344,6 +344,11 @@ fn merge_state(detailed: &str, summary: &Summary, can_merge: bool, auto_enabled:
         "checking" | "unchecked" | "preparing" | "" => vec!["checking"],
         _ => vec!["blocked"],
     };
+    // Sem exigir CI nas regras do projeto, o GitLab pode dizer `mergeable` enquanto o pipeline ainda roda.
+    if summary.state == "open" && matches!(summary.pipeline.as_deref(), Some("running" | "pending"))
+        && !blockers.contains(&"pipeline_running") {
+        blockers.push("pipeline_running");
+    }
     if summary.state == "open" && !can_merge && !blockers.contains(&"not_open") { blockers.push("not_allowed"); }
     let waiting = |b: &&str| matches!(*b, "pipeline_running" | "checking");
     Merge {
@@ -413,9 +418,10 @@ mod tests {
         let m = merge_state("ci_must_pass", &open(), true, false);
         assert_eq!(m.blockers, vec!["pipeline_running"]);
         assert!(m.can_auto && !m.can_merge);
-        let m = merge_state("mergeable", &open(), true, false);
+        let ready = Summary { pipeline: Some("success".into()), ..open() };
+        let m = merge_state("mergeable", &ready, true, false);
         assert!(m.can_merge && m.blockers.is_empty());
-        let m = merge_state("mergeable", &open(), false, false);
+        let m = merge_state("mergeable", &ready, false, false);
         assert_eq!(m.blockers, vec!["not_allowed"]);
         let m = merge_state("discussions_not_resolved", &open(), true, false);
         assert!(!m.can_auto);
