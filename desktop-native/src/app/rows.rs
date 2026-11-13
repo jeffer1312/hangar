@@ -28,7 +28,7 @@ pub(super) fn counted(key: &str, n: usize) -> String {
 }
 
 /// O que vai no chip: o nome do arquivo nas ferramentas de arquivo, o resumo da entrada nas demais.
-fn chip_text(event: &ChatEvent) -> String {
+pub(super) fn chip_text(event: &ChatEvent) -> String {
     let summary = conversation::summarize_input(event.tool_name.as_deref(), event.tool_input.as_ref());
     match conversation::family(event.tool_name.as_deref()) {
         Family::Read | Family::Edit | Family::Create => summary.rsplit('/').next().unwrap_or(&summary).to_owned(),

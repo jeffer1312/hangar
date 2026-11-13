@@ -1,5 +1,5 @@
 use super::Incremental;
-use crate::{api::dto::ChatEvent, appearance::ThinkingTools, conversation::{self, Item, View}};
+use crate::{api::dto::ChatEvent, appearance::{ThinkingTools, ToolLook}, conversation::{self, Item, View}};
 use serde_json::{Value, json};
 use std::collections::HashSet;
 
@@ -279,9 +279,8 @@ fn teammate_woken_by_send_message_runs_again_and_ignores_the_late_idle() {
 fn views() -> Vec<View> {
     [ThinkingTools::None, ThinkingTools::Search, ThinkingTools::All].into_iter().flat_map(|thinking| {
         [false, true].into_iter().flat_map(move |tasks| {
-            [(false, false), (true, false), (false, true)].into_iter().map(move |(merge_thinking, every_run_groups)| {
-                View { thinking, tasks, merge_thinking, every_run_groups }
-            })
+            [ToolLook::Classic, ToolLook::Tree, ToolLook::Terminal, ToolLook::ClaudeDesktop].into_iter()
+                .map(move |look| View::for_look(look, thinking, tasks))
         })
     }).collect()
 }

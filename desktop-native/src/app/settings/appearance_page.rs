@@ -66,6 +66,9 @@ fn art_tools(look: ToolLook) -> Div {
         ToolLook::Terminal => base.flex().flex_col().gap(px(5.))
             .child(div().flex().items_center().gap(px(5.)).child(div().size(px(6.)).flex_shrink_0().rounded_full().bg(theme::success())).child(bar(0.5)))
             .children([theme::removed(), theme::success()].map(|c| div().ml(px(11.)).h(px(5.)).w(relative(0.7)).rounded(px(2.)).bg(c.opacity(0.45)))),
+        ToolLook::ClaudeDesktop => base.flex().flex_col().gap(px(5.)).child(bar(0.5))
+            .child(div().rounded(px(4.)).border_1().border_color(tone).flex().flex_col()
+                .children([0.6, 0.45].map(|w| div().px(px(4.)).py(px(3.)).child(bar(w))))),
     }
 }
 
@@ -229,6 +232,11 @@ impl Hangar {
             ToolLook::Terminal => div().flex().flex_col().gap(px(7.)).children(calls.map(|(_, label)| div().flex().items_center().gap(px(8.))
                 .font_family(theme::MONO).text_size(px(12.5)).text_color(theme::muted())
                 .child(div().size(px(7.)).flex_shrink_0().rounded_full().bg(theme::success())).child(label))),
+            ToolLook::ClaudeDesktop => div().flex().flex_col().gap(px(6.))
+                .child(div().flex().items_center().gap(px(4.)).text_size(px(13.)).text_color(theme::muted())
+                    .child(tr("settings_sample_calls")).child(chrome::small_icon(IconName::ChevronDown, 13., theme::faint())))
+                .child(crate::app::rows::chip_table(calls.map(|(_, label)| div().px(px(12.)).py(px(7.)).text_size(px(13.))
+                    .text_color(theme::muted()).child(label).into_any_element()).into())),
         };
         let table = div().flex().gap(px(10.)).items_end()
             .child(div().flex_1().flex().flex_col().gap(px(5.)).children((0..3).map(|_| div().flex().gap(px(5.))
@@ -570,11 +578,12 @@ impl Hangar {
             .child(self.slider_line("settings_column", None, Knob::Column, true, &a, false, cx));
 
         const THINKING: [ThinkingTools; 3] = [ThinkingTools::None, ThinkingTools::Search, ThinkingTools::All];
-        const LOOKS: [ToolLook; 4] = [ToolLook::Classic, ToolLook::Chips, ToolLook::Tree, ToolLook::Terminal];
+        const LOOKS: [ToolLook; 5] = [ToolLook::Classic, ToolLook::Chips, ToolLook::Tree, ToolLook::Terminal, ToolLook::ClaudeDesktop];
         // Na Árvore o raciocínio já entra no grupo com todas as chamadas: a escolha do pensamento fica sem efeito.
         let thinking_on = a.tool_look != ToolLook::Tree;
         let terminal_look = a.tool_look == ToolLook::Terminal;
-        let tool_calls = tiles("tool-calls", &[tr("settings_tool_calls_classic"), tr("settings_tool_calls_chips"), tr("settings_tool_calls_tree"), tr("settings_tool_calls_terminal")],
+        let tool_calls = tiles("tool-calls", &[tr("settings_tool_calls_classic"), tr("settings_tool_calls_chips"), tr("settings_tool_calls_tree"), tr("settings_tool_calls_terminal"),
+            tr("settings_tool_calls_claude_desktop")],
             Vec::from(LOOKS.map(art_tools)), LOOKS.iter().position(|l| *l == a.tool_look).unwrap_or(0), LOOKS.len(), false, tr("settings_next_version"), live,
             |this: &mut Hangar, index, _: &mut Window, cx| { let mut next = appearance::get(); next.tool_look = LOOKS[index]; this.apply_appearance(next, true, cx); }, cx);
         let conversation_body = div().pb(px(4.))

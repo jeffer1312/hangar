@@ -6,6 +6,7 @@ use super::*;
 fn chips() -> bool { appearance::get().tool_look == appearance::ToolLook::Chips }
 fn tree() -> bool { appearance::get().tool_look == appearance::ToolLook::Tree }
 fn terminal() -> bool { appearance::get().tool_look == appearance::ToolLook::Terminal }
+fn desktop() -> bool { appearance::get().tool_look == appearance::ToolLook::ClaudeDesktop }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Tone { Muted, Accent, Warning }
@@ -74,7 +75,8 @@ fn tool_row(events: &[ChatEvent], call: usize, result: Option<usize>, finished: 
 fn prepare(events: &[ChatEvent], finished: bool, started: Option<f64>) -> Vec<Row> {
     let prompt = events.iter().position(|e| e.kind == "user_msg");
     // ponytail: sem o cartão de tarefas (`task_list`); as chamadas de tarefa aparecem como chamadas comuns.
-    let view = conversation::View { thinking: appearance::get().thinking_tools, tasks: false, merge_thinking: tree(), every_run_groups: terminal() };
+    let a = appearance::get();
+    let view = conversation::View::for_look(a.tool_look, a.thinking_tools, false);
     let items = conversation::build(events, view, &HashSet::new());
     let paired = conversation::pair_results(events).0;
     let last = events.iter().rposition(|e| e.kind == "assistant_msg" || e.kind == "user_msg");
@@ -266,6 +268,7 @@ impl SubConversation {
         // Nos Chips, a conversa do subagente segue o desenho da principal, como o `MessageList` do detalhe no web.
         if chips() && !tool.orphan { return super::rows::chip_box().child(self.render_chip(tool, cx)).into_any_element(); }
         if terminal() && !tool.orphan { return self.render_terminal_tool(tool, cx); }
+        if desktop() && !tool.orphan { return super::rows::chip_box().child(self.render_desktop_call(tool, cx)).into_any_element(); }
         let error = tool.tone == Tone::Warning;
         let header = self.header(&tool.key, cx)
             .accessibility_label(format!("{}: {}. {}", tool.name, tool.summary, tool.status))
@@ -275,6 +278,30 @@ impl SubConversation {
         if !self.expanded.contains(&tool.key) { return header.into_any_element(); }
         let body = self.tool_body(tool, cx).pl_6();
         div().flex().flex_col().child(header).child(body).into_any_element()
+    }
+
+    /// Uma chamada no estilo Claude Desktop, como `Hangar::render_desktop_call`.
+    fn render_desktop_call(&mut self, tool: &ToolRow, cx: &mut Context<Self>) -> AnyElement {
+        let open = self.expanded.contains(&tool.key);
+        let key = tool.key.clone();
+        let line = super::desktop_look::call_button(format!("sub-desktop-{}", tool.key), &self.events[tool.call], tool.tone == Tone::Warning, open, cx)
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle(key.clone(), cx)));
+        let body = open.then(|| self.tool_body(tool, cx).px(px(12.)));
+        div().flex().flex_col().child(line).children(body).into_any_element()
+    }
+
+    /// Grupo no estilo Claude Desktop, como `Hangar::render_desktop_group`: a linha do resumo e, aberto, o cartão.
+    fn render_desktop_group(&mut self, id: &str, tools: &[ToolRow], cx: &mut Context<Self>) -> AnyElement {
+        let calls: Vec<Tool> = tools.iter().map(|t| Tool { call: t.call, result: t.result }).collect();
+        let running: HashSet<usize> = tools.iter().filter(|t| t.result.is_none() && t.tone == Tone::Accent).map(|t| t.call).collect();
+        let summary = super::desktop_look::desktop_summary(&self.events, &calls, |t| running.contains(&t.call));
+        let open = self.expanded.contains(id);
+        let toggle = id.to_owned();
+        let header = super::desktop_look::summary_button(format!("sub-desktop-{id}"), summary, open, cx)
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle.clone(), cx)));
+        let rows: Vec<AnyElement> = if open { tools.iter().map(|t| self.render_desktop_call(t, cx)).collect() } else { Vec::new() };
+        div().flex().flex_col().gap_1().child(div().flex().min_w_0().child(header))
+            .when(open, |el| el.child(super::rows::chip_table(rows))).into_any_element()
     }
 
     /// Uma chamada nos Chips: a linha da tabela e, aberta, a entrada e o resultado.
@@ -329,7 +356,9 @@ impl SubConversation {
             Some(_) if has_diff && !error => body,
             Some(i) => {
                 let output = self.events[i].result.clone().unwrap_or_default();
-                body.child(self.detail(format!("{}:result", tool.key), output, tr("tool_output"), error, cx))
+                let code = desktop().then(|| super::desktop_look::exit_code(&output)).flatten();
+                body.when_some(code, |el, code| el.child(super::desktop_look::exit_code_line(code)))
+                    .child(self.detail(format!("{}:result", tool.key), output, tr("tool_output"), error, cx))
             }
             None => body.child(div().text_sm().text_color(theme::muted()).child(tool.status.clone())),
         };
@@ -465,6 +494,7 @@ impl SubConversation {
                 div().flex().flex_col().child(header).children(lines).into_any_element()
             }
             Row::Group { tools, .. } if terminal() => self.render_terminal_group(&tools, cx),
+            Row::Group { id, tools, .. } if desktop() => self.render_desktop_group(&id, &tools, cx),
             Row::Group { id, tools, .. } if chips() => {
                 let open = super::rows::chip_group_open(tools.len(), self.expanded.contains(&id));
                 let calls: Vec<Tool> = tools.iter().map(|t| Tool { call: t.call, result: t.result }).collect();

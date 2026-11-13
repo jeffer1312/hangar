@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use serde_json::{Map, Value};
-use crate::{api::dto::ChatEvent, appearance::ThinkingTools};
+use crate::{api::dto::ChatEvent, appearance::{ThinkingTools, ToolLook}};
 
 pub mod incremental;
 
@@ -25,6 +25,13 @@ pub struct View { pub thinking: ThinkingTools, pub tasks: bool, pub merge_thinki
 
 impl Default for View {
     fn default() -> Self { Self { thinking: ThinkingTools::Search, tasks: false, merge_thinking: false, every_run_groups: false } }
+}
+
+impl View {
+    /// As linhas que cada visual de ferramentas pede; a conversa principal, a prévia da aba e o subagente montam por aqui.
+    pub fn for_look(look: ToolLook, thinking: ThinkingTools, tasks: bool) -> Self {
+        Self { thinking, tasks, merge_thinking: look == ToolLook::Tree, every_run_groups: matches!(look, ToolLook::Terminal | ToolLook::ClaudeDesktop) }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -282,7 +289,9 @@ impl AgentRun {
 
 /// Bash com `run_in_background: true`: o comando cru e o rótulo sem o encanamento.
 #[derive(Clone, Debug, PartialEq)]
-pub struct ShellRun { pub id: String, pub command: String, pub label: String, pub description: Option<String>, pub ts: Option<f64>, pub running: bool }
+/// `task_id`: o id de fundo que o resultado devolve ("Command running in background with ID:"), o que a parada pede.
+pub struct ShellRun { pub id: String, pub command: String, pub label: String, pub description: Option<String>, pub ts: Option<f64>, pub running: bool,
+    pub task_id: Option<String> }
 
 /// Tarefa da aba Atividade: TaskCreate/TaskUpdate/TaskStop pelo número sequencial, ou a lista inteira do último
 /// TodoWrite/`update_plan`, como o fold do web (não o da lista de tarefas da conversa, que lê o id no resultado).
@@ -371,7 +380,7 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
     let mut agent_ids: HashMap<&str, &str> = HashMap::new();
     let mut agent_descs: HashMap<&str, String> = HashMap::new();
     let mut agents = Vec::new();
-    let mut shells = Vec::new();
+    let mut shells: Vec<ShellRun> = Vec::new();
     // Tarefas pelo número sequencial do TaskCreate; o `bool` marca a apagada. A lista do último TodoWrite vence.
     let mut created: Vec<(ActivityTask, bool)> = Vec::new();
     let mut whole: Option<Vec<(ActivityTask, bool)>> = None;
@@ -445,6 +454,7 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
                 if shell_pending.remove(id) {
                     if let Some(shell) = word_after(text, "Command running in background with ID:") {
                         if let Some(at) = finished_early.remove(shell) { record_completion(&mut resulted, id, at); }
+                        if let Some(run) = shells.iter_mut().find(|s| s.id == id) { run.task_id = Some(shell.to_owned()); }
                         background.insert(shell.to_owned(), id);
                         continue;
                     }
@@ -525,7 +535,7 @@ pub fn fold_activity(events: &[ChatEvent]) -> Activity {
                         shell_pending.insert(id);
                         let command = text("command").unwrap_or_default();
                         shells.push(ShellRun { id: id.to_owned(), label: command_label(&command), command,
-                            description: text("description"), ts: event.ts, running: false });
+                            description: text("description"), ts: event.ts, running: false, task_id: None });
                     }
                     _ => {}
                 }
@@ -829,6 +839,21 @@ mod tests {
     }
 
     #[test]
+    fn desktop_groups_runs_of_any_size_and_agent_splits() {
+        let events = vec![call("a", "1", "Bash"), call("b", "2", "Read"), call("g", "3", "Agent"), call("c", "4", "Grep"),
+            ev("thinking", "t"), call("d", "5", "Bash")];
+        let tool = |call| Tool { call, result: None };
+        let view = View::for_look(crate::appearance::ToolLook::ClaudeDesktop, ThinkingTools::Search, false);
+        assert_eq!(super::build(&events, view, &HashSet::new()), vec![
+            Item::Group { id: "g-a".into(), tools: vec![tool(0), tool(1)] },
+            Item::Tool(tool(2)),
+            Item::Group { id: "g-c".into(), tools: vec![tool(3)] },
+            Item::Thinking { id: "p-t".into(), parts: vec![4] },
+            Item::Group { id: "g-d".into(), tools: vec![tool(5)] },
+        ]);
+    }
+
+    #[test]
     fn agent_calls_never_join_a_group_in_any_look() {
         let events = vec![call("a", "1", "Bash"), call("b", "2", "Read"), call("g", "3", "Agent"), call("c", "4", "Grep"),
             call("d", "5", "Grep"), call("e", "6", "Grep")];
@@ -1063,8 +1088,8 @@ mod tests {
             answered("r3", "s3", "Command running in background with ID: bg9"),
         ];
         let activity = fold_activity(&events);
-        let shells: Vec<(&str, &str, bool)> = activity.shells.iter().map(|s| (s.id.as_str(), s.label.as_str(), s.running)).collect();
-        assert_eq!(shells, vec![("s1", "cargo build", true), ("s2", "sleep 9", false)]);
+        let shells: Vec<(&str, &str, bool, Option<&str>)> = activity.shells.iter().map(|s| (s.id.as_str(), s.label.as_str(), s.running, s.task_id.as_deref())).collect();
+        assert_eq!(shells, vec![("s1", "cargo build", true, Some("bg1")), ("s2", "sleep 9", false, None)]);
         let mut ended = events.clone();
         ended.push(result("x", "task:bg1"));
         assert!(fold_activity(&ended).shells.iter().all(|s| !s.running));

@@ -30,6 +30,7 @@ mod row_patch;
 mod landing;
 mod edits;
 mod terminal_look;
+mod desktop_look;
 mod git;
 mod grouping;
 mod group_sheet;
@@ -3709,11 +3710,7 @@ impl Hangar {
         let stable = self.chat.take_unsynced();
         self.conversation.require_agent_states(self.provider().0 == "codex");
         self.conversation.set_agent_states(self.codex_agent_states());
-        let delta = self.conversation.update(&self.chat.events, stable, conversation::View {
-            thinking: a.thinking_tools, tasks: a.task_list,
-            merge_thinking: a.tool_look == appearance::ToolLook::Tree,
-            every_run_groups: a.tool_look == appearance::ToolLook::Terminal,
-        });
+        let delta = self.conversation.update(&self.chat.events, stable, conversation::View::for_look(a.tool_look, a.thinking_tools, a.task_list));
         if delta.activity_changed { self.sync_activity(cx); }
         self.orq_days = if self.selected.as_ref().is_some_and(SessionInfo::orq) { orq_timeline::day_starts(self.chat.events.iter().filter(|event| event.orq.is_some())) } else { HashSet::new() };
         api::open_trace(|| format!("sync_rows built {} items, {} rows unchanged", self.conversation.items.len(), delta.from));
@@ -4150,6 +4147,7 @@ impl Hangar {
         if let Some(card) = self.render_agent_card(tool, cx) { return card; }
         if appearance::get().tool_look == appearance::ToolLook::Chips { return self.render_single_chip(tool, row, cx); }
         if appearance::get().tool_look == appearance::ToolLook::Terminal { return self.render_terminal_tool(tool, row, cx); }
+        if appearance::get().tool_look == appearance::ToolLook::ClaudeDesktop { return self.render_desktop_tool(tool, row, cx); }
         let call = &self.chat.events[tool.call];
         let key = call.id.clone();
         let name = call.tool_name.clone().unwrap_or_else(|| tr("tool"));
@@ -4202,8 +4200,10 @@ impl Hangar {
             Some(_) if has_diff && !error => body,
             Some(i) => {
                 let result_key = format!("{key}:result");
+                let code = (look == appearance::ToolLook::ClaudeDesktop).then(|| self.chat.events[i].result.as_deref().and_then(desktop_look::exit_code)).flatten();
                 let result = self.prepared_detail(&result_key, || self.chat.events[i].result.clone().unwrap_or_default());
-                body.child(self.detail(row, &result_key, result, tr("tool_output"), tr("copy_result"), error, cx))
+                body.when_some(code, |el, code| el.child(desktop_look::exit_code_line(code)))
+                    .child(self.detail(row, &result_key, result, tr("tool_output"), tr("copy_result"), error, cx))
             }
             None => body.child(div().text_sm().text_color(theme::muted()).child(self.tool_status(tool).0)),
         }
@@ -4303,6 +4303,7 @@ impl Hangar {
         if appearance::get().tool_look == appearance::ToolLook::Chips { return self.render_chip_group(row, tools, cx); }
         if appearance::get().tool_look == appearance::ToolLook::Tree { return self.render_tree_group(row, tools, cx); }
         if appearance::get().tool_look == appearance::ToolLook::Terminal { return self.render_terminal_group(row, tools, cx); }
+        if appearance::get().tool_look == appearance::ToolLook::ClaudeDesktop { return self.render_desktop_group(row, tools, cx); }
         let events = &self.chat.events;
         let names: Vec<String> = tools.iter().map(|t| events[t.call].tool_name.clone().unwrap_or_else(|| tr("tool"))).collect();
         let mut distinct = names.clone();
@@ -8158,7 +8159,7 @@ impl Render for Hangar {
             .on_action(cx.listener(|this, _: &CycleToolLook, _, cx| {
                 use appearance::ToolLook::*;
                 let mut next = appearance::get();
-                next.tool_look = match next.tool_look { Classic => Chips, Chips => Tree, Tree => Terminal, Terminal => Classic };
+                next.tool_look = match next.tool_look { Classic => Chips, Chips => Tree, Tree => Terminal, Terminal => ClaudeDesktop, ClaudeDesktop => Classic };
                 this.apply_appearance(next, true, cx);
             }))
             .on_action(cx.listener(|this, _: &CycleNavigation, _, cx| {
