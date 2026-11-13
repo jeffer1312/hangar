@@ -1,9 +1,11 @@
-import type { ReactNode } from 'react';
+import { memo, type ReactNode } from 'react';
 import { Pressable, Text, TextInput, View, type TextInputProps } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { routeKind, type RouteKind, type Server } from '@hangar/core';
 import { Icon } from '../../ui/Icon';
 import { SectionCard } from '../config/SectionCard';
 import { useSettingsColors } from '../config/colors';
+import * as m from '../../paraglide/messages';
 
 export type MachineView = 'edit' | 'connection' | 'discover' | 'remote' | 'advanced' | 'identity' | 'terminal' | 'diagnostics' | 'peers' | 'maintenance' | 'tag';
 
@@ -46,6 +48,27 @@ export function MachineRow({ title, accessibilityLabel, value, description, onPr
     style={({ pressed }) => [...style, pressed && { backgroundColor: c.hover }]}>{content}</Pressable>
     : <View style={style}>{content}</View>;
 }
+
+const ROUTE_LABELS: Record<RouteKind, () => string> = {
+  local: m.mobile_machines_route_local,
+  tailscale: m.mobile_machines_route_tailscale,
+  saved: m.mobile_machines_route_saved,
+  connect: m.mobile_machines_route_connect,
+};
+
+export const routeLabel = (server: Server) => ROUTE_LABELS[routeKind(server)]();
+
+// Só props primitivas e `onOpen` estável: a lista redesenha a cada evento de qualquer servidor.
+export const MachineListRow = memo(function MachineListRow({ id, onOpen, ...row }: {
+  id: string;
+  title: string;
+  value?: string;
+  valueTone?: 'success' | 'error';
+  description?: string;
+  onOpen: (id: string) => void;
+}) {
+  return <MachineRow {...row} onPress={() => onOpen(id)} />;
+});
 
 export function MachineField({ label, stacked = false, ...props }: TextInputProps & { label: string; stacked?: boolean }) {
   const c = useSettingsColors();

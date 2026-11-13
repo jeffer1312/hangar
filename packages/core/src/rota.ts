@@ -34,6 +34,23 @@ export function baseOf(s: Server): string {
   return requiresRouteProof(s) ? UNCONFIRMED_BASE : s.baseUrl;
 }
 
+export type RouteKind = 'local' | 'tailscale' | 'saved' | 'connect';
+
+const trimSlash = (url: string) => url.replace(/\/+$/, '');
+const isTailnetUrl = (url: string) => {
+  try { return new URL(url).hostname.toLowerCase().endsWith('.ts.net'); } catch { return false; }
+};
+
+/** Caminho em uso, para a tela dizer por onde o app chega à máquina. */
+export function routeKind(s: Server): RouteKind {
+  const base = trimSlash(baseOf(s));
+  const isBase = (url?: string) => !!url && trimSlash(url) === base;
+  if (isBase(s.lan?.url)) return 'local';
+  if (isBase(s.remote?.url)) return 'tailscale';
+  if (isBase(s.connect?.url)) return 'connect';
+  return isTailnetUrl(s.baseUrl) ? 'tailscale' : 'saved';
+}
+
 export function rotaDecidida(id: string, server?: Server): boolean {
   const route = rotas.get(id);
   return !!route && (!server || route.connection === connectionKey(server));
