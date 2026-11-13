@@ -4815,3 +4815,35 @@ recusar); o prompt do cookbook reescrevia o `name:` de cada nota para o nome do 
 identificador do Claude Code e fica); e o Desfazer não voltava o cursor das sessões nem a data do último
 sonho, então o sonho seguinte não relia o que foi desfeito. A passada do usuário nasce desligada
 (`user_memory`): o arquivo global entra em toda sessão e a pessoa liga depois de ler o que ele gera.
+
+## Conectores de trabalho: host Rust e processo externo por capacidade (12/11/2026)
+
+Issue #408. Base do Mission Control do Hangar: ler tickets de sistemas externos sem que o servidor
+conheça o fornecedor.
+
+- **Processo externo, linguagem livre.** O conector é um programa do dono, executado sem shell pelo
+  vetor `command` do manifesto, com JSON-RPC 2.0 por linha no stdin/stdout. A mesma prova passou com
+  o conector Rust do Help e com um conector JavaScript de IDs que não parecem PM
+  (`examples/connectors/`): o host não depende da linguagem nem do formato da chave.
+- **Capacidade explícita.** `work_tracking/v1` é só leitura (`list`, `get`). Manifesto com capacidade
+  desconhecida, versão diferente ou campo extra (token, por exemplo) é recusado; `initialize` com
+  `id` ou capacidades diferentes do manifesto também. Ação, evento ou início de sessão entra como
+  capacidade nova, nunca como método solto.
+- **Vida sob demanda.** Cadastrar e listar não lançam nada. O primeiro pedido lança; 60 s sem pedido
+  encerram. Desligar e remover cancelam o pedido em andamento e terminam a árvore (grupo de processo
+  no Unix, Job no Windows, pelo `CommandTree` do core); remover só apaga o registro depois da parada.
+  IDs de pedido são únicos no servidor, então resposta atrasada de uma vida morta não resolve pedido
+  novo; prazo esgotado mata a vida em vez de reaproveitá-la.
+- **Credencial do fornecedor fica com o conector.** O conector de teste do Help relê, a cada consulta,
+  o token que o plugin Promedico já guarda (mesmas pastas e fusão por data do plugin, depois o
+  `settings.json`, depois o ambiente). Falta ou recusa de login é `auth_required`, que a rota devolve
+  como 424, nunca 401, para o cliente não confundir com a senha do Hangar.
+- **Filtro de responsável do Help é por login.** `GET /api/pms/pagina?responsaveis=` recebe login
+  (como o CLI do plugin faz), não o `id` de `/api/eu`. Por isso o conector publica `assignee.id` como o
+  login: o ID devolvido volta como filtro sem tradução.
+- **Medição.** Conector do Help em release: 6,3 MiB de RSS depois do `initialize`, 10,0 MiB depois de
+  listar 100 PMs reais e abrir uma. Sem pedido, nenhum processo de conector existe: o teste de
+  ociosidade confirma o fim do PID após a janela.
+- **Sem sandbox nesta entrega.** O conector roda com os direitos do dono; só a autoridade do servidor
+  (`PRIVATE_ENV_KEYS`) é tirada do ambiente.
+
