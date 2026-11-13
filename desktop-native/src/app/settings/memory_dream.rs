@@ -1057,7 +1057,8 @@ fn file_changes(place: &Place) -> Vec<(String, &'static str)> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    // Nomes explícitos: o `super::*` traz um `test` do gpui que encobre o `#[test]` padrão.
+    use super::{cap, error_text, file_changes, tr_shared, valid_hour, Place};
 
     #[test]
     fn hour_and_cap_validation() {

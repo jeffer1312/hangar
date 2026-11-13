@@ -111,8 +111,7 @@ async fn execute(st: &Arc<AppState>, opts: &Options, run_id: &str) -> Result<(),
     let mut state = load_state(st)?;
     let now = Utc::now();
     prune_runs(&paths.runs());
-    let scrubber = crate::diag_report::Scrubber::for_env(&st.accounts.env);
-    let scrub = move |t: &str| scrubber.scrub(t).into_owned();
+    let scrub = |t: &str| hangar_dream::secrets::scrub(t).into_owned();
 
     let since = state
         .projects

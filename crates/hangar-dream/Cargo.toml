@@ -15,6 +15,7 @@ serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unboun
 sha1_smol.workspace = true
 chrono = { workspace = true, features = ["serde"] }
 futures-util.workspace = true
+regex.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -7,4 +7,5 @@ pub mod memory;
 pub mod project;
 pub mod render;
 pub mod run;
+pub mod secrets;
 pub mod state;

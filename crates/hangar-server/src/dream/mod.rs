@@ -91,7 +91,12 @@ pub fn spawn(st: Arc<AppState>) -> tokio::task::JoinHandle<()> {
 const RETRY_AFTER_FAILURE: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
 /// Só o código (`dream_xxx`) vai ao diário e ao estado: o detalhe pode trazer texto da conversa.
+/// A recusa da conferência é exceção: o motivo é nosso (arquivo, contagem) e sem ele não se sabe o que
+/// recusou.
 pub(crate) fn code_of(error: &str) -> String {
+    if error.starts_with("dream_rejected:") {
+        return error.chars().take(240).collect();
+    }
     error.split(':').next().unwrap_or("dream_failed").trim().to_string()
 }
 

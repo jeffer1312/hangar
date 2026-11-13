@@ -278,10 +278,8 @@ fn collect(workdir: &Path, scrub: &dyn Fn(&str) -> String) -> Result<(BTreeMap<S
             retired += 1;
             continue;
         }
-        if scrub(&content) != content {
-            return Err(DreamError::Rejected(format!("segredo em {name}")));
-        }
-        files.insert(name, content);
+        // Credencial que escapou do prompt sai da nota; o resto da rodada vale.
+        files.insert(name, scrub(&content));
     }
     let index = files.get(INDEX).ok_or_else(|| DreamError::Rejected("MEMORY.md ausente".into()))?;
     if index.lines().count() > INDEX_MAX_LINES || index.len() > INDEX_MAX_BYTES {
@@ -320,9 +318,7 @@ pub async fn dream_user(job: &UserJob<'_>, payer: &Payer<'_>, model: &dyn Model)
     if content.lines().count() > USER_MEMORY_MAX_LINES {
         return Err(DreamError::Rejected(format!("{USER_MEMORY_FILE} com {} linhas", content.lines().count())));
     }
-    if (job.scrub)(&content) != content {
-        return Err(DreamError::Rejected(format!("segredo em {USER_MEMORY_FILE}")));
-    }
+    let content = (job.scrub)(&content);
     let suggestions = match fs::read_to_string(job.workdir.join("suggestions.json")) {
         Ok(raw) => serde_json::from_str(&raw).map_err(|e| DreamError::Rejected(format!("suggestions.json: {e}")))?,
         Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
@@ -469,9 +465,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn secret_in_a_note_is_rejected() {
-        let why = rejected_by(|w| fs::write(w.join("memory").join("deploy.md"), "token sk-ant-abc").unwrap()).await;
-        assert!(why.contains("segredo"), "{why}");
+    async fn secret_in_a_note_is_redacted_and_the_round_stands() {
+        let tmp = tempfile::tempdir().unwrap();
+        let model = fake(|call, _| {
+            agents(call);
+            if call.model == ORGANIZER_MODEL {
+                fs::write(call.workdir.join("memory").join("deploy.md"), "token sk-ant-abc").unwrap();
+            }
+            ok(0.1)
+        });
+        let none = || None;
+        let payer = Payer::new(Auth::Key, &none);
+        let (base, inputs) = (base(), inputs());
+        let job = Job { workdir: tmp.path(), base: &base, inputs: &inputs, cap_usd: 15.0, scrub: &redact };
+        let out = dream_project(&job, &payer, &model).await.unwrap();
+        assert_eq!(out.files["deploy.md"], "token [chave]abc");
     }
 
     #[tokio::test]

@@ -10,7 +10,6 @@ use gpui_kit::component::{color_picker::{ColorPicker, ColorPickerEvent, ColorPic
     IndexPath, select::{Select, SelectEvent, SelectState}, searchable_list::{SearchableListItem, SearchableVec}};
 
 mod appearance_page;
-#[path = "memory_dream.rs"]
 mod memory_dream;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

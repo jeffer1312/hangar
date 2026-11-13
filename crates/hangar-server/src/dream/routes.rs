@@ -414,15 +414,13 @@ async fn serve_transcript(st: &Arc<AppState>, query: &HashMap<String, String>) -
     };
     let until = query.get("to").and_then(|v| v.parse::<usize>().ok());
     let index = st.search.path().to_owned();
-    let env = st.accounts.env.clone();
     let machine = this_machine(st);
     let result = tokio::task::spawn_blocking(move || -> Result<Option<(Vec<String>, usize)>, String> {
         let conn = rusqlite::Connection::open_with_flags(&index, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e| format!("dream_index_unavailable: {e}"))?;
         let provider: Option<String> = conn.query_row("SELECT provider FROM files WHERE path=?1", [&path], |r| r.get(0)).ok();
         let Some(provider) = provider.as_deref().and_then(hangar_transcript::Provider::parse) else { return Ok(None) };
-        let scrubber = crate::diag_report::Scrubber::for_env(&env);
         let session = Path::new(&path).file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let r = render::render(provider, Path::new(&path), from, until, &Header { session: &session, machine: &machine }, &|t| scrubber.scrub(t).into_owned())
+        let r = render::render(provider, Path::new(&path), from, until, &Header { session: &session, machine: &machine }, &|t| hangar_dream::secrets::scrub(t).into_owned())
             .map_err(|e| format!("dream_io: {e}"))?;
         Ok(Some((r.parts, r.end_event)))
     })
