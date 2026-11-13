@@ -44,6 +44,7 @@ const MSG_COMPOSER_BUSY: &str = "Há texto no campo do terminal: apague ou envie
 const MSG_STOP_ONLY_CLAUDE: &str = "Só tarefas do Claude podem ser paradas por aqui.";
 const MSG_STOP_OLD_PLUGIN: &str = "O plugin desta sessão é anterior ao Parar; reabra a sessão.";
 const MSG_STOP_NO_PLUGIN: &str = "O plugin desta sessão não está ligado ao Hangar agora.";
+const MSG_STOP_LATE: &str = "O pedido de parar esperou demais para sair e não foi entregue; tente de novo.";
 const MSG_COMPOSER_UNREAD: &str = "Não deu para ler o campo do terminal agora; tente de novo";
 
 fn ok() -> Answer { (StatusCode::OK, json!({"ok": true})) }
@@ -467,14 +468,21 @@ pub async fn stop_task(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conne
     // A validade do pedido conta do clique: a admissão pode esperar a porta por até 30 s.
     let arrived = std::time::Instant::now();
     let task_id = req.uri().path().rsplit('/').nth(1).unwrap_or_default().to_owned();
+    // Id malformado não espera a porta nem acorda sessão adormecida.
+    if task_id.is_empty() || task_id.len() > 64 || !task_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+        return invalid_body(req.headers());
+    }
     let (ctx, _) = match admit(&st, peer, req, WriteRoute::StopTask).await {
         Ok(admitted) => admitted,
         Err(response) => return response,
     };
-    if task_id.is_empty() || task_id.len() > 64 || !task_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
-        return invalid_body(ctx.headers());
-    }
+    // Passado o prazo, a tela já desfez o "parando": entregar agora pararia a tarefa depois de dizer que não parou.
+    let late = arrived.elapsed() > crate::plugin::STOP_TASK_FRESH;
     let result = match &ctx.target.handle {
+        EntryHandle::Headless(_) | EntryHandle::Terminal { .. } if ctx.target.provider == "claude" && late => {
+            tracing::warn!(session = %ctx.name, task_id, "stop_task chegou depois do prazo e não foi entregue");
+            failure("erro_parar_atrasado", MSG_STOP_LATE, json!({}))
+        },
         EntryHandle::Headless(_) if ctx.target.provider == "claude" => stop_headless_answer(&ctx.target.handle.command(RuntimeCommand {
             operation_id: random_hex(16), kind: OperationKind::StopTask, payload: json!({"task_id": task_id}) }).await),
         EntryHandle::Terminal { .. } if ctx.target.provider == "claude" => stop_via_plugin(&ctx, &task_id, arrived).await,
@@ -506,6 +514,13 @@ async fn stop_via_plugin(ctx: &Ctx, task_id: &str, arrived: std::time::Instant) 
 }
 
 fn stop_pending() -> Answer { (StatusCode::ACCEPTED, json!({"pending": true})) }
+
+pub(super) fn stop_unowned(headers: &axum::http::HeaderMap) -> Response {
+    let (status, body) = failure("erro_parar_so_claude", MSG_STOP_ONLY_CLAUDE, json!({}));
+    let mut response = json_response(status, body);
+    cors(headers, response.headers_mut());
+    response
+}
 
 fn stop_headless_answer(sent: &Result<RuntimeReply, RuntimeError>) -> Answer {
     match sent {

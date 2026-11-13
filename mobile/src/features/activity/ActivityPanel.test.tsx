@@ -54,7 +54,13 @@ beforeEach(() => {
   data.activity = { tasks: [], agents: [], shells: [], total: 0, done: 0, inProgress: 0, runningAgents: 0, runningShells: 0 };
   data.workflows = [];
   data.ferramentas = 'tree';
+  data.events = [];
 });
+// O ■ de agente pede o lançamento de fundo no transcript: o TaskStop só para tarefa de fundo.
+const backgroundLaunch = (call: string, agentId: string): ChatEvent[] => [
+  { id: call, kind: 'tool_use', tool_use_id: call, tool_name: 'Agent', tool_input: { run_in_background: true } },
+  { id: `r-${call}`, kind: 'tool_result', tool_use_id: call, bg_agent_id: agentId, result: 'Async agent launched' },
+];
 afterEach(async () => {
   if (root) await act(async () => root!.unmount());
   root = undefined;
@@ -173,6 +179,7 @@ it('■ só encerra o parando pela ausência da tarefa depois que a lista carreg
   data.ferramentas = 'claudeDesktop';
   data.activity = { ...data.activity, runningAgents: 1,
     agents: [{ id: 'call-cpu', kind: 'agent', description: 'diag-cpu', running: true, agentId: 'ag-cpu' }] };
+  data.events = backgroundLaunch('call-cpu', 'ag-cpu');
   const { getSubagents } = await import('@hangar/core');
   let loadSubs: (subs: SubagentRun[]) => void = () => {};
   vi.mocked(getSubagents).mockImplementationOnce(() => new Promise((resolve) => { loadSubs = resolve; }));
@@ -223,6 +230,7 @@ it('■ também nas seções da Árvore: shell, agente e subagente rodando, com 
     shells: [{ id: 'call-sh', command: 'npm run dev', rotulo: 'npm run dev', running: true, taskId: 'bg1' }] };
   const running: SubagentRun = { agentId: 'ag-sub', agentType: null, prompt: 'diag-sub', startedAt: '2026-11-13T08:00:00Z',
     updatedAt: new Date().toISOString(), endedAt: null, mtime: 0, toolCalls: 1, tools: [], recent: [], lastText: '', state: 'running' };
+  data.events = [...backgroundLaunch('call-cpu', 'ag-cpu'), ...backgroundLaunch('call-sub', 'ag-sub')];
   const { getSubagents, stopTask } = await import('@hangar/core');
   vi.mocked(getSubagents).mockResolvedValue([running]);
   vi.mocked(stopTask).mockClear();
@@ -262,6 +270,38 @@ it('■ fica fora do convidado só de leitura e do Codex', async () => {
   }
 });
 
+it('■ só em Agent de fundo: nem no de primeiro plano nem no subagente sem lançamento de fundo', async () => {
+  const sub = (agentId: string, prompt: string): SubagentRun => ({ agentId, agentType: null, prompt, startedAt: '2026-11-13T08:00:00Z',
+    updatedAt: new Date().toISOString(), endedAt: null, mtime: 0, toolCalls: 1, tools: [], recent: [], lastText: '', state: 'running' });
+  const launch = (id: string, background: boolean): ChatEvent => ({ id, kind: 'tool_use', tool_use_id: id, tool_name: 'Agent',
+    tool_input: { description: id, prompt: id, ...(background ? { run_in_background: true } : {}) } });
+  data.events = [launch('call-fg', false), launch('call-bg', true), launch('call-bg2', true),
+    { id: 'r-bg', kind: 'tool_result', tool_use_id: 'call-bg', bg_agent_id: 'ag-bg', result: 'Async agent launched' },
+    { id: 'r-bg2', kind: 'tool_result', tool_use_id: 'call-bg2', bg_agent_id: 'ag-bg2', result: 'Async agent launched' }];
+  data.activity = { ...data.activity, runningAgents: 2, agents: [
+    { id: 'call-fg', kind: 'agent', description: 'diag-fg', prompt: 'diag-fg', running: true },
+    { id: 'call-bg', kind: 'agent', description: 'diag-bg', running: true },
+  ] };
+  const { getSubagents } = await import('@hangar/core');
+  vi.mocked(getSubagents).mockResolvedValue([sub('ag-fg', 'diag-fg'), sub('ag-bg2', 'diag-bg2'), sub('ag-orphan', 'diag-orphan')]);
+  try {
+    for (const look of ['tree', 'claudeDesktop']) {
+      data.ferramentas = look;
+      const el = await mount();
+      const button = (title: string) => el.querySelector(`[aria-label="${m.atividade_desktop_parar()}: ${title}"]`);
+      for (const title of ['diag-fg', 'diag-bg', 'diag-bg2', 'diag-orphan']) expect(el.textContent).toContain(title);
+      expect(button('diag-bg')).not.toBeNull();
+      expect(button('diag-bg2')).not.toBeNull();
+      expect(button('diag-fg')).toBeNull();
+      expect(button('diag-orphan')).toBeNull();
+      await act(async () => root!.unmount());
+      root = undefined;
+    }
+  } finally {
+    vi.mocked(getSubagents).mockResolvedValue([]);
+  }
+});
+
 it('shell sem id de fundo não ganha ■', async () => {
   data.ferramentas = 'claudeDesktop';
   data.activity = { ...data.activity, runningShells: 1,
@@ -292,6 +332,7 @@ it('■ de shell se confirma pelo transcript mesmo com a lista de subagentes fal
 it('■ de subagente que só ficou sem estado legível continua parando e avisa em 15 s', async () => {
   const running: SubagentRun = { agentId: 'ag-sub', agentType: null, prompt: 'diag-sub', startedAt: '2026-11-13T08:00:00Z',
     updatedAt: new Date().toISOString(), endedAt: null, mtime: 0, toolCalls: 1, tools: [], recent: [], lastText: '' };
+  data.events = backgroundLaunch('call-sub', 'ag-sub');
   const { getSubagents } = await import('@hangar/core');
   vi.mocked(getSubagents).mockResolvedValue([running]);
   toastErro.mockClear();

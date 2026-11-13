@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { nomeFerramenta, summarizeToolInput, toolPhase, type ChatEvent } from '@hangar/core';
@@ -6,6 +6,7 @@ import { Icon } from '../../ui/Icon';
 import { callTarget } from './fold';
 import { desktopFamily, desktopSummary } from './desktopLook';
 import { ExitCodeLine } from './ExitCodeLine';
+import { headLines } from './TerminalTool';
 import * as m from '../../paraglide/messages';
 import { useSelectableToggle } from './useSelectableToggle';
 
@@ -37,6 +38,7 @@ const DesktopCall = memo(function DesktopCall({ use, result, onExpand, onOpen }:
   const target = family === 'outra' ? [nomeFerramenta(use.tool_name), summary].filter(Boolean).join(' ') : callTarget(use.tool_name, summary);
   const failed = toolPhase(result) === 'error';
   const command = use.tool_input?.['command'];
+  const output = useMemo(() => open && result?.result ? headLines(result.result) : null, [open, result?.result]);
   const toggle = () => { if (!open) onExpand?.(); setOpen((value) => !value); };
   const bodyPress = useSelectableToggle(toggle);
   return <View>
@@ -54,7 +56,8 @@ const DesktopCall = memo(function DesktopCall({ use, result, onExpand, onOpen }:
           {typeof command === 'string' ? command : JSON.stringify(use.tool_input ?? {}, null, 2)}
         </Text>
         <ExitCodeLine output={result?.result} />
-        {result?.result ? <Text style={[styles.mono, { color: theme.tokens.text.secondary }]} selectable>{result.result}</Text> : null}
+        {output ? <Text style={[styles.mono, { color: theme.tokens.text.secondary }]} selectable>{output.text}</Text> : null}
+        {output?.hidden ? <Text style={[styles.verb, { color: theme.tokens.text.muted }]}>{m.term_mais_linhas({ n: output.hidden })}</Text> : null}
         {onOpen ? <Pressable onPress={() => onOpen(use)} style={styles.open} accessibilityRole="button">
           <Text style={[styles.verb, { color: theme.tokens.text.secondary }]}>{m.tool_ver_separado()}</Text>
         </Pressable> : null}
@@ -103,7 +106,7 @@ export function DesktopRunView({ calls, resultOf, onExpand, onOpen, writing = fa
 export const DesktopToolGroup = memo(function DesktopToolGroup({ parts, resultOf, onExpand, onOpen, writing, renderOther }: Props) {
   // Trecho que cresce não recria as sequências anteriores: cada uma mantém o mesmo array de chamadas.
   const previousRuns = useRef(new Map<string, ChatEvent[]>());
-  const blocks = useMemo(() => {
+  const { blocks, runs } = useMemo(() => {
     const out: Array<{ run: ChatEvent[] } | { other: ChatEvent }> = [];
     const runs = new Map<string, ChatEvent[]>();
     const close = (run: ChatEvent[]) => {
@@ -121,9 +124,10 @@ export const DesktopToolGroup = memo(function DesktopToolGroup({ parts, resultOf
       out.push({ other: part });
     }
     close(run);
-    previousRuns.current = runs;
-    return out;
+    return { blocks: out, runs };
   }, [parts]);
+  // Render descartado ou repetido não publica o seu cache.
+  useLayoutEffect(() => { previousRuns.current = runs; }, [runs]);
   return <View style={styles.group}>{blocks.map((block) => 'run' in block
     ? <DesktopRun key={block.run[0].id} calls={block.run} resultOf={resultOf} onExpand={onExpand} onOpen={onOpen} writing={writing} />
     : <View key={block.other.id}>{renderOther?.(block.other)}</View>)}</View>;

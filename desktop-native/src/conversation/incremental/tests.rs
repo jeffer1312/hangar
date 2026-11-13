@@ -219,6 +219,7 @@ fn background_agent_stopped_by_the_user_ends_by_its_description() {
     let mut fold = super::ActivityFold::default();
     for (i, ev) in events.iter().enumerate() { fold.push(i, ev); }
     assert!(!fold.snapshot().agents[0].running);
+    assert!(fold.snapshot().agents[0].background);
     assert_eq!(fold.snapshot(), conversation::fold_activity(&events));
 }
 

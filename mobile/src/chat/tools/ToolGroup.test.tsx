@@ -14,6 +14,10 @@ vi.mock('react-native', async (original) => {
   return { ...native, Pressable: vi.fn(native.Pressable) };
 });
 
+vi.mock('./desktopLook', async (original) => {
+  const look = await original<typeof import('./desktopLook')>();
+  return { ...look, desktopSummary: vi.fn(look.desktopSummary) };
+});
 vi.mock('react-native-enriched-markdown', () => ({ EnrichedMarkdownText: () => null }));
 vi.mock('expo-file-system', () => ({}));
 vi.mock('expo-clipboard', () => ({}));
@@ -273,6 +277,50 @@ it('Claude Desktop abre o detalhe da chamada, no grupo e solta, para ver a saíd
     expect(onPress).toHaveBeenCalledExactlyOnceWith(use);
   } finally {
     act(() => root.unmount());
+  }
+});
+
+it('Claude Desktop corta a saída aberta no limite do Terminal e deixa o resto para ver separado', () => {
+  const use: ChatEvent = { id: 'big', kind: 'tool_use', tool_use_id: 'big', tool_name: 'Bash', tool_input: { command: 'seq 450' } };
+  const result: ChatEvent = { id: 'r-big', kind: 'tool_result', tool_use_id: 'big', result: Array.from({ length: 450 }, (_, i) => `<out-${i + 1}>`).join('\n') };
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  const onAbrir = vi.fn();
+  try {
+    act(() => root.render(createElement(ToolGroup, { parts: [use], resultOf: () => result, onAbrir, look: 'claudeDesktop' })));
+    act(() => container.querySelector('button')!.click());
+    act(() => [...container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label')?.includes('seq 450'))!.click());
+    expect(container.textContent).toContain('<out-400>');
+    expect(container.textContent).not.toContain('<out-401>');
+    expect(container.textContent).toContain(m.term_mais_linhas({ n: 50 }));
+    act(() => [...container.querySelectorAll('button')].find((b) => b.textContent === m.tool_ver_separado())!.click());
+    expect(onAbrir).toHaveBeenCalledExactlyOnceWith(use);
+  } finally {
+    act(() => root.unmount());
+  }
+});
+
+it('Claude Desktop: render descartado não publica o cache das sequências', async () => {
+  const { startTransition, Suspense } = await import('react');
+  const { desktopSummary } = await import('./desktopLook');
+  const bash = (id: string): ChatEvent => ({ id, kind: 'tool_use', tool_use_id: id, tool_name: 'Bash', tool_input: { command: id } });
+  const [one, two] = [bash('one'), bash('two')];
+  const resultOf = () => null, onAbrir = () => {};
+  const never = new Promise<never>(() => {});
+  const Suspends = () => { throw never; };
+  const view = (parts: ChatEvent[], suspend: boolean) => createElement(Suspense, { fallback: null },
+    createElement(ToolGroup, { parts, resultOf, onAbrir, look: 'claudeDesktop' }), suspend ? createElement(Suspends) : null);
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(view([one, two], false)));
+    // Transição que suspende é descartada: o cache de [one] não pode substituir o de [one, two].
+    await act(async () => startTransition(() => root.render(view([one], true))));
+    vi.mocked(desktopSummary).mockClear();
+    await act(async () => root.render(view([one, two], false)));
+    expect(desktopSummary).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => root.unmount());
   }
 });
 

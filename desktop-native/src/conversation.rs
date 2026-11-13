@@ -251,6 +251,8 @@ pub struct AgentRun {
     pub agent_path: Option<String>,
     pub started_at: Option<f64>,
     pub finished_at: Option<f64>,
+    /// Lançado com `run_in_background: true`: só esse o TaskStop do Claude Code para.
+    pub background: bool,
 }
 
 fn codex_agent_identity(text: &str) -> (Option<String>, Option<String>) {
@@ -275,7 +277,8 @@ fn agent_run(event: &ChatEvent, call: usize, id: &str) -> AgentRun {
     let prompt = text(if codex { "message" } else { "prompt" })
         .filter(|prompt| !codex || !prompt.starts_with("gAAAA"));
     AgentRun { call, id: id.to_owned(), description, subagent_type: text(if codex { "agent_type" } else { "subagent_type" }),
-        model: text("model"), prompt, running: false, waiting: false, agent_id: None, agent_path: None, started_at: event.ts, finished_at: None }
+        model: text("model"), prompt, running: false, waiting: false, agent_id: None, agent_path: None, started_at: event.ts, finished_at: None,
+        background: event.tool_input.as_ref().and_then(|v| v.get("run_in_background")).and_then(Value::as_bool) == Some(true) }
 }
 
 impl AgentRun {

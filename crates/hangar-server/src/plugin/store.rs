@@ -27,7 +27,7 @@ const AGENT_LATE_KEPT: usize = 32;
 pub const STOP_TASK_MODE: &str = "stop_task";
 /// Abaixo dos 15 s em que o app desfaz o "parando" (contados do clique, antes da fila): pedido mais velho
 /// que chegasse ao plugin pararia a tarefa depois de a tela dizer que não parou.
-const STOP_TASK_FRESH: Duration = Duration::from_secs(10);
+pub const STOP_TASK_FRESH: Duration = Duration::from_secs(10);
 
 fn question_visible(interrupted: bool, poll_open: bool, age: Duration) -> bool {
     !interrupted && age <= ALIVE && (poll_open || age <= NO_POLL)

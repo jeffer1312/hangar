@@ -354,9 +354,10 @@ fn calls_line(sub: &SubRun) -> String {
 
 #[derive(Clone, Debug, PartialEq)]
 struct AgentLine { key: String, description: String, tags: Vec<(String, bool)>, now: Option<String>, sub: Option<String>, since: Option<f64>,
-    task: Option<String> }
+    task: Option<String>, background: bool }
+/// `background`: lançado por um Agent em segundo plano, o único que o ■ consegue parar.
 #[derive(Clone, Debug, PartialEq)]
-struct OrphanLine { key: String, title: String, tag: Option<String>, now: String, done: bool, failed: bool, since: Option<f64> }
+struct OrphanLine { key: String, title: String, tag: Option<String>, now: String, done: bool, failed: bool, since: Option<f64>, background: bool }
 #[derive(Clone, Debug, PartialEq)]
 struct ShellLine { key: String, label: String, raw: String, now: String, since: Option<f64>, task: Option<String> }
 #[derive(Clone, Debug, PartialEq)]
@@ -426,7 +427,8 @@ pub(super) struct ActivityPanel {
     stopping: HashSet<String>,
     /// Muda a cada troca de sessão: o prazo de uma parada anterior não mexe na parada nova da mesma tarefa.
     stop_epoch: u64,
-    stop_note: Option<String>,
+    /// O aviso de uma parada e a tarefa dele: some quando ela sai da lista.
+    stop_note: Option<(String, String)>,
     /// O compositor do subagente: nasce no primeiro desenho do detalhe (o campo pede a janela).
     input: Option<(Entity<TextareaState>, Subscription)>,
     sending: bool,
@@ -461,7 +463,7 @@ impl ActivityPanel {
             if let Some(t) = &a.subagent_type { tags.push((t.clone(), false)); }
             if let Some(m) = match sub { Some(sub) => sub.model.clone(), None => a.model.clone() } { tags.push((m, true)); }
             AgentLine { key: a.id.clone(), description: a.description.clone(), tags, now: sub.map(calls_line), sub: sub.map(|s| s.agent_id.clone()),
-                since: a.started_at.or(sub.and_then(|s| s.started)), task: a.agent_id.clone().or(sub.map(|s| s.agent_id.clone())) }
+                since: a.started_at.or(sub.and_then(|s| s.started)), task: a.agent_id.clone().or(sub.map(|s| s.agent_id.clone())), background: a.background }
         }).collect();
         // Quem já está na linha de um Agent rodando não se repete entre os subagentes rodando.
         let shown: HashSet<String> = self.activity.agents.iter().filter(live)
@@ -475,6 +477,7 @@ impl ActivityPanel {
             // Ilegível não diz "0 chamadas": os campos vêm zerados porque o registro não foi lido.
             let calls = if s.unreadable { web("atividade_sub_ilegivel") } else { calls_line(s) };
             let line = OrphanLine { key: s.agent_id.clone(), title: sub_title(&self.subs, s), tag: s.agent_type.clone(), done: ended.is_some() || silent.is_some(), failed, since: s.started,
+                background: parent_of(&self.activity.agents, &self.subs, s).is_some_and(|a| a.background),
                 now: match (ended, silent) {
                     (None, Some(at)) => format!("{} · {calls}", web_with("atividade_sem_noticia", "t", interval(now - at))),
                     (None, None) if status == SubStatus::Unknown => web("atividade_estado_indisponivel"),
@@ -521,9 +524,29 @@ impl ActivityPanel {
         // O subagente parado vira terminado com o tempo: o relógio da aba relê.
         timed |= !running.is_empty();
         let lines = Lines { agents, running, finished, older: older_lines, uncertain, shells, processes, tasks, timed };
-        if lines == self.lines { return false; }
+        let changed = lines != self.lines;
         self.lines = lines;
-        true
+        self.settle_stops(now) | changed
+    }
+
+    /// A parada provada sai da espera, e o aviso de uma tarefa que já saiu da lista some com ela.
+    fn settle_stops(&mut self, now: f64) -> bool {
+        let listed = listed_tasks(&self.lines);
+        let proven: Vec<String> = self.stopping.iter().filter(|task| self.stop_proven(task, &listed, now)).cloned().collect();
+        let note_gone = self.stop_note.as_ref().is_some_and(|(task, _)| !listed.contains(task.as_str()));
+        for task in &proven { self.stopping.remove(task); }
+        if note_gone { self.stop_note = None; }
+        !proven.is_empty() || note_gone
+    }
+
+    /// O shell se prova pelo fim no transcript; o subagente só com a lista lida, saindo dela ou terminando: lista
+    /// recarregando ou que falhou não prova nada, e o silencioso ou de estado indisponível segue listado sem ter parado.
+    fn stop_proven(&self, task: &str, listed: &HashSet<&str>, now: f64) -> bool {
+        let (activity, subs, ready) = (&self.activity, &self.subs, !self.loading && !self.failed);
+        !listed.contains(task) && (
+            activity.shells.iter().any(|s| s.task_id.as_deref() == Some(task) && !s.running)
+            || ready && subs.iter().find(|s| s.agent_id == task)
+                .is_none_or(|s| matches!(sub_status(&activity.agents, subs, s, now), SubStatus::Finished(_) | SubStatus::Failed(_))))
     }
 
     /// Conversa e estado novos da sessão aberta: a view só redesenha se a lista mudou.
@@ -587,7 +610,7 @@ impl ActivityPanel {
             Err(failure) => {
                 self.stopping.remove(task);
                 // Sem resposta do servidor, o `detail` é a chave da frase; com resposta, já é a frase traduzida.
-                self.stop_note = Some(if failure.status.is_none() { tr(&failure.detail) } else { failure.detail });
+                self.stop_note = Some((task.to_owned(), if failure.status.is_none() { tr(&failure.detail) } else { failure.detail }));
             }
             Ok(_) => {
                 let task = task.to_owned();
@@ -600,14 +623,11 @@ impl ActivityPanel {
         cx.notify();
     }
 
-    /// Passado o prazo, a tarefa que ainda aparece rodando não parou: a linha volta com o aviso.
+    /// Passado o prazo, a tarefa sem fim provado não parou: a linha volta com o aviso.
     fn stop_unconfirmed(&mut self, task: &str, epoch: u64, cx: &mut Context<Self>) {
         if epoch != self.stop_epoch || !self.stopping.remove(task) { return; }
-        let lines = &self.lines;
-        let mut tasks = lines.agents.iter().filter_map(|a| a.task.as_deref()).chain(lines.running.iter().map(|s| s.key.as_str()))
-            .chain(lines.shells.iter().filter_map(|s| s.task.as_deref()));
-        if tasks.any(|t| t == task) {
-            self.stop_note = Some(web("atividade_parar_sem_confirmacao"));
+        if !self.stop_proven(task, &listed_tasks(&self.lines), now_seconds()) {
+            self.stop_note = Some((task.to_owned(), web("atividade_parar_sem_confirmacao")));
         }
         cx.notify();
     }
@@ -929,12 +949,19 @@ struct BackgroundRow { key: String, shell: bool, name: String, raw: String, sinc
 
 fn background_rows(lines: &Lines) -> Vec<BackgroundRow> {
     let agents = lines.agents.iter().map(|a| BackgroundRow { key: format!("agent-{}", a.key), shell: false, name: a.description.clone(),
-        raw: a.description.clone(), since: a.since, open: a.sub.clone(), task: a.task.clone() });
+        raw: a.description.clone(), since: a.since, open: a.sub.clone(), task: a.task.clone().filter(|_| a.background) });
     let subs = lines.running.iter().map(|s| BackgroundRow { key: format!("sub-{}", s.key), shell: false, name: s.title.clone(),
-        raw: s.title.clone(), since: s.since, open: Some(s.key.clone()), task: Some(s.key.clone()) });
+        raw: s.title.clone(), since: s.since, open: Some(s.key.clone()), task: Some(s.key.clone()).filter(|_| s.background) });
     let shells = lines.shells.iter().map(|s| BackgroundRow { key: format!("shell-{}", s.key), shell: true, name: s.label.clone(),
         raw: s.raw.clone(), since: s.since, open: None, task: s.task.clone() });
     agents.chain(subs).chain(shells).collect()
+}
+
+/// O id de parada de toda tarefa que a lista ainda mostra: Agent, subagente rodando ou incerto, shell.
+fn listed_tasks(lines: &Lines) -> HashSet<&str> {
+    lines.agents.iter().filter_map(|a| a.task.as_deref())
+        .chain(lines.running.iter().chain(&lines.uncertain).map(|s| s.key.as_str()))
+        .chain(lines.shells.iter().filter_map(|s| s.task.as_deref())).collect()
 }
 
 /// "Finalizadas: N", com os de antes de hoje que a seção Terminados também conta.
@@ -1050,7 +1077,7 @@ impl ActivityPanel {
                 .child(chevron(open)));
             if open { group = group.children(lines.finished.iter().chain(&lines.older).map(|s| sub_row(s, None, window, cx))); }
         }
-        if let Some(note) = &self.stop_note { group = group.child(warning_line(note.clone())); }
+        if let Some((_, note)) = &self.stop_note { group = group.child(warning_line(note.clone())); }
         Some(group)
     }
 
@@ -1097,7 +1124,7 @@ impl Render for ActivityPanel {
                                 .child(div().min_w_0().truncate().text_sm().text_color(theme::text()).child(a.description.clone()))
                                 .children(a.tags.iter().map(|(t, muted)| tag(t.clone(), *muted))))
                             .when_some(a.now.clone(), |el, now| el.child(now_text(now))))
-                        .children(self.stop_control(a.task.as_deref(), &format!("agent-{}", a.key), &a.description, cx));
+                        .children(self.stop_control(a.task.as_deref().filter(|_| a.background), &format!("agent-{}", a.key), &a.description, cx));
                     // Só abre quem casou com o disco; o resto é informação.
                     match &a.sub {
                         Some(sub) => openable(format!("act-agent-{}", a.key), sub.clone(), a.description.clone(), content, window, cx),
@@ -1105,7 +1132,7 @@ impl Render for ActivityPanel {
                     }
                 }).collect();
                 rows.extend(lines.running.iter().map(|s| {
-                    let stop = self.stop_control(Some(s.key.as_str()),&format!("sub-{}", s.key), &s.title, cx);
+                    let stop = self.stop_control(Some(s.key.as_str()).filter(|_| s.background), &format!("sub-{}", s.key), &s.title, cx);
                     sub_row(s, stop, window, cx)
                 }));
                 // Os sem notícia (`done` na seção Rodando) aparecem aqui, mas não contam como rodando.
@@ -1131,7 +1158,7 @@ impl Render for ActivityPanel {
                 body = body.child(section(web("atividade_shells"), Some(lines.shells.len()))
                     .children(lines.shells.iter().map(|s| shell_row("act-shell", s, self.stop_control(s.task.as_deref(), &format!("shell-{}", s.key), &s.label, cx)))));
             }
-            if let Some(note) = &self.stop_note { body = body.child(warning_line(note.clone())); }
+            if let Some((_, note)) = &self.stop_note { body = body.child(warning_line(note.clone())); }
         }
         if !lines.processes.is_empty() {
             body = body.child(section(web("atividade_processos"), Some(lines.processes.len()))
@@ -1869,7 +1896,7 @@ mod tests {
     #[test]
     fn codex_history_waits_for_proven_state_and_late_detail_cannot_reopen_finished_child() {
         let agent = AgentRun { call: 0, id: "spawn".into(), description: "review".into(), subagent_type: None,
-            model: None, prompt: None, running: true, waiting: false, agent_id: None, agent_path: Some("/root/review".into()), started_at: None, finished_at: None };
+            model: None, prompt: None, running: true, waiting: false, agent_id: None, agent_path: Some("/root/review".into()), started_at: None, finished_at: None, background: false };
         assert!(!super::native_running(&agent, &[], None, false));
         let mut states = super::NativeAgents::from([("child".into(), super::CodexSubagent {
             agent_path: Some("/root/review".into()), state: Some("finished".into()), ended_at: Some(1000.), ..Default::default()
@@ -2095,7 +2122,7 @@ mod tests {
                 ..super::Failure::local(super::web("erro_parar_plugin_antigo")) };
             panel.receive_task_stopped(&key, "bg1", panel.stop_epoch, Err(refused), cx);
             assert!(panel.stopping.is_empty());
-            assert_eq!(panel.stop_note, Some(super::web("erro_parar_plugin_antigo")));
+            assert_eq!(panel.stop_note, Some(("bg1".into(), super::web("erro_parar_plugin_antigo"))));
             // Sem mudança no feed, a linha volta e diz que não houve confirmação; a que sumiu só sai da espera.
             panel.activity.shells = vec![crate::conversation::ShellRun { id: "s2".into(), command: "sleep 99".into(), label: "sleep 99".into(),
                 description: None, ts: None, running: true, task_id: Some("bg2".into()) }];
@@ -2103,10 +2130,10 @@ mod tests {
             panel.stopping.extend(["bg2".to_owned(), "bg3".to_owned()]);
             panel.stop_note = None;
             panel.stop_unconfirmed("bg3", panel.stop_epoch, cx);
-            assert_eq!((panel.stopping.contains("bg3"), panel.stop_note.clone()), (false, None));
+            assert_eq!((panel.stopping.contains("bg3"), stop_note(panel)), (false, None));
             panel.stop_unconfirmed("bg2", panel.stop_epoch, cx);
             assert!(panel.stopping.is_empty());
-            assert_eq!(panel.stop_note, Some(super::web("atividade_parar_sem_confirmacao")));
+            assert_eq!(panel.stop_note, Some(("bg2".into(), super::web("atividade_parar_sem_confirmacao"))));
             // O prazo de uma parada de antes da troca de sessão não desfaz a parada nova da mesma tarefa.
             panel.stopping.insert("bg2".into());
             let before = panel.stop_epoch;
@@ -2116,7 +2143,7 @@ mod tests {
             // Nem a resposta HTTP daquele pedido antigo: recusa ou aceite não mexem na espera nova.
             panel.stop_note = None;
             panel.receive_task_stopped(&key, "bg2", before, Err(super::Failure::local("old")), cx);
-            assert_eq!((panel.stopping.contains("bg2"), panel.stop_note.clone()), (true, None));
+            assert_eq!((panel.stopping.contains("bg2"), stop_note(panel)), (true, None));
         });
     }
 
@@ -2127,7 +2154,7 @@ mod tests {
         cx.update(gpui_kit::init);
         let (panel, cx) = cx.add_window_view(|_, cx| super::ActivityPanel::new(cx));
         panel.update(cx, |panel, cx| {
-            panel.lines.older = vec![super::OrphanLine { key: "old".into(), title: "old work".into(), tag: None, now: String::new(), done: true, failed: false, since: None }];
+            panel.lines.older = vec![super::OrphanLine { key: "old".into(), title: "old work".into(), tag: None, now: String::new(), done: true, failed: false, since: None, background: false }];
             cx.notify();
         });
         cx.run_until_parked();
@@ -2163,6 +2190,73 @@ mod tests {
         assert!(!shown.contains(&stop) && shown.contains(&super::web("atividade_parando")), "{shown}");
     }
 
+    fn stop_note(panel: &super::ActivityPanel) -> Option<String> { panel.stop_note.clone().map(|(_, note)| note) }
+
+    /// Pede a parada de `task` e deixa o prazo vencer: `true` quando a linha volta com o aviso de sem confirmação.
+    fn unconfirmed(panel: &mut super::ActivityPanel, task: &str, cx: &mut gpui::Context<super::ActivityPanel>) -> bool {
+        panel.stop_note = None;
+        panel.stopping.insert(task.into());
+        panel.stop_unconfirmed(task, panel.stop_epoch, cx);
+        stop_note(panel).is_some()
+    }
+
+    #[gpui::test]
+    fn task_stop_is_proven_by_a_shell_end_or_by_a_loaded_subagent_list(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        crate::i18n::english_in_this_thread(false);
+        let panel = cx.new(super::ActivityPanel::new);
+        panel.update(cx, |panel, cx| {
+            panel.subs = vec![SubRun { problem: Some("erro_subagente_estado_indisponivel".into()), ..sub("u", "ilegível") },
+                SubRun { state: Some("finished".into()), ..sub("f", "terminou") }];
+            panel.activity.shells = vec![crate::conversation::ShellRun { id: "s1".into(), command: "sleep 9".into(), label: "sleep 9".into(),
+                description: None, ts: None, running: false, task_id: Some("bg".into()) }];
+            panel.prepare();
+            assert!(unconfirmed(panel, "u", cx), "estado indisponível segue listado e não parou");
+            assert!(!unconfirmed(panel, "f", cx));
+            assert!(!unconfirmed(panel, "gone", cx));
+            panel.failed = true;
+            assert!(unconfirmed(panel, "gone", cx), "lista que falhou não prova a parada");
+            assert!(!unconfirmed(panel, "bg", cx), "o shell se prova pelo transcript");
+            (panel.failed, panel.loading) = (false, true);
+            assert!(unconfirmed(panel, "gone", cx), "lista recarregando não prova a parada");
+        });
+    }
+
+    #[gpui::test]
+    fn stop_note_leaves_with_the_task_it_is_about(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        crate::i18n::english_in_this_thread(false);
+        let panel = cx.new(super::ActivityPanel::new);
+        panel.update(cx, |panel, cx| {
+            panel.activity.shells = vec![crate::conversation::ShellRun { id: "s2".into(), command: "sleep 99".into(), label: "sleep 99".into(),
+                description: None, ts: None, running: true, task_id: Some("bg2".into()) }];
+            panel.prepare();
+            assert!(unconfirmed(panel, "bg2", cx));
+            panel.prepare();
+            assert!(stop_note(panel).is_some(), "a tarefa segue rodando");
+            panel.activity.shells[0].running = false;
+            panel.prepare();
+            assert_eq!(stop_note(panel), None);
+        });
+    }
+
+    /// O TaskStop do Claude Code para só o que roda em segundo plano: Agent de primeiro plano e subagente sem um Agent
+    /// de fundo que o lançou ficam sem o ■.
+    #[gpui::test]
+    fn only_background_tasks_offer_the_stop(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        let panel = cx.new(super::ActivityPanel::new);
+        panel.update(cx, |panel, _| {
+            panel.activity.agents = vec![AgentRun { background: true, ..parent("t1", "tarefa um", Some("a"), true) }, parent("t2", "tarefa dois", Some("b"), true)];
+            panel.activity.shells = vec![crate::conversation::ShellRun { id: "s1".into(), command: "sleep 9".into(), label: "sleep 9".into(),
+                description: None, ts: None, running: true, task_id: Some("bg".into()) }];
+            panel.subs = vec![sub("a", "tarefa um"), sub("b", "tarefa dois"), sub("c", "tarefa três")];
+            panel.prepare();
+            let rows: Vec<_> = super::background_rows(&panel.lines).into_iter().map(|r| (r.key, r.task)).collect();
+            assert_eq!(rows, [("agent-t1".into(), Some("a".into())), ("agent-t2".into(), None), ("sub-c".into(), None), ("shell-s1".into(), Some("bg".into()))]);
+        });
+    }
+
     #[test]
     fn a_full_page_may_have_older_events_and_the_next_asks_one_page_more() {
         assert!(has_older(DETAIL_PAGE, DETAIL_PAGE));
@@ -2192,7 +2286,7 @@ mod tests {
 
     fn parent(id: &str, prompt: &str, agent_id: Option<&str>, running: bool) -> AgentRun {
         AgentRun { call: 0, id: id.into(), description: String::new(), subagent_type: None, model: None, prompt: Some(prompt.into()),
-            running, waiting: false, agent_id: agent_id.map(Into::into), agent_path: None, started_at: None, finished_at: None }
+            running, waiting: false, agent_id: agent_id.map(Into::into), agent_path: None, started_at: None, finished_at: None, background: false }
     }
 
     /// Interrompido não manda aviso ao pai: fora do Codex, a faixa de rodando aceita o fim que o servidor leu.

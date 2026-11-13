@@ -11,6 +11,12 @@ import { useSelectableToggle } from './useSelectableToggle';
 import { ExitCodeLine } from './ExitCodeLine';
 
 const MAX_LINES = 400;
+
+/** Um Text com milhares de linhas trava a thread da interface: o resto se lê no detalhe da chamada. */
+export function headLines(text: string, max = MAX_LINES): { text: string; hidden: number } {
+  const lines = text.split('\n');
+  return lines.length <= max ? { text, hidden: 0 } : { text: lines.slice(0, max).join('\n'), hidden: lines.length - max };
+}
 const basename = (path: string) => path.split(/[\\/]/).pop() ?? path;
 const tint = (color: string, alpha: number) => {
   const rgb = hexParaRgb(color);

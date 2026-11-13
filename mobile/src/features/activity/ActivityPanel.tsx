@@ -194,17 +194,27 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
     return () => clearInterval(timer);
   }, [focused, level, nativeSubagents, refreshSubs]);
 
+  // O TaskStop do Claude só para tarefa de fundo: o Agent de primeiro plano recusaria em silêncio.
+  const backgroundCalls = useMemo(() => new Set(events.filter((event) => event.kind === 'tool_use' && event.tool_name === 'Agent'
+    && event.tool_input?.['run_in_background'] === true).map((event) => event.tool_use_id)), [events, eventsRevision]);
   // Casar agente e subagente compara prompts inteiros: uma vez por agente, e o id da tarefa junto.
   const agentInfo = useMemo(() => {
     const byAgent = new Map<AgentRun, { sub: SubagentRun | undefined; taskId: string | undefined }>();
     const parentRunning = new Map<string, boolean>();
+    const stoppable = new Set<string>();
+    for (const call of backgroundCalls) {
+      const id = call && agentIds.get(call);
+      if (id) stoppable.add(id);
+    }
     for (const a of activity.agents) {
       const sub = matchAgentSubagent(subs, a, agentIds);
-      byAgent.set(a, { sub, taskId: a.agentId ?? agentIds.get(a.id) ?? sub?.agentId });
+      const taskId = backgroundCalls.has(a.id) ? a.agentId ?? agentIds.get(a.id) ?? sub?.agentId : undefined;
+      if (taskId) stoppable.add(taskId);
+      byAgent.set(a, { sub, taskId });
       if (sub && !parentRunning.has(sub.agentId)) parentRunning.set(sub.agentId, a.running);
     }
-    return { byAgent, parentRunning };
-  }, [activity, subs, agentIds]);
+    return { byAgent, parentRunning, stoppable };
+  }, [activity, subs, agentIds, backgroundCalls]);
 
   const { subRows, runningAgents, runningSubs } = useMemo(() => {
     const subRows = subs.map((run) => ({
@@ -266,7 +276,7 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
         </View>
         <Icon name="ChevronRight" size={18} color={theme.tokens.text.muted} />
       </Pressable>,
-      run.agentId, status === 'running' || stopTimers.current.has(run.agentId) ? run.agentId : undefined, tituloDoSub(run),
+      run.agentId, (status === 'running' && agentInfo.stoppable.has(run.agentId)) || stopTimers.current.has(run.agentId) ? run.agentId : undefined, tituloDoSub(run),
     );
   }
 
@@ -326,15 +336,15 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
   }
 
   function taskRow(key: string, icon: IconName, title: string, since: number | null, onPress?: () => void, taskId?: string) {
-    const parando = !!taskId && stopTimers.current.has(taskId);
+    const stopping = !!taskId && stopTimers.current.has(taskId);
     return (
       <View key={key} style={styles.taskRow}>
         <Pressable onPress={onPress} disabled={!onPress} style={styles.taskOpen}
           accessibilityRole={onPress ? 'button' : undefined} accessibilityLabel={title}
-          accessibilityState={parando ? { busy: true } : undefined}>
+          accessibilityState={stopping ? { busy: true } : undefined}>
           <Icon name={icon} size={16} color={theme.tokens.text.muted} />
           <Text style={[styles.taskName, { color: theme.tokens.text.primary }]} numberOfLines={1}>{title}</Text>
-          {parando ? <Text style={[styles.taskTime, { color: theme.tokens.text.muted }]} accessibilityLiveRegion="polite">{m.atividade_parando()}</Text>
+          {stopping ? <Text style={[styles.taskTime, { color: theme.tokens.text.muted }]} accessibilityLiveRegion="polite">{m.atividade_parando()}</Text>
             : since !== null && Number.isFinite(since) ? <Text style={[styles.taskTime, { color: theme.tokens.text.muted }]}>{formatElapsed(agora - since)}</Text> : null}
         </Pressable>
         {stopButton(taskId, title)}
@@ -355,13 +365,13 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
 
   // Linha das seções de sempre com o ■ ou o "Parando…" à direita; sem tarefa a parar, fica como era.
   function withStop(row: ReactElement, key: string, taskId: string | undefined, title: string) {
-    const parando = !!taskId && stopTimers.current.has(taskId);
+    const stopping = !!taskId && stopTimers.current.has(taskId);
     const button = stopButton(taskId, title);
-    if (!parando && !button) return row;
+    if (!stopping && !button) return row;
     return (
-      <View key={key} style={styles.taskRow} accessibilityState={parando ? { busy: true } : undefined}>
+      <View key={key} style={styles.taskRow} accessibilityState={stopping ? { busy: true } : undefined}>
         <View style={styles.grow}>{row}</View>
-        {parando ? <Text style={[styles.taskTime, { color: theme.tokens.text.muted }]} accessibilityLiveRegion="polite">{m.atividade_parando()}</Text> : button}
+        {stopping ? <Text style={[styles.taskTime, { color: theme.tokens.text.muted }]} accessibilityLiveRegion="polite">{m.atividade_parando()}</Text> : button}
       </View>
     );
   }
@@ -513,7 +523,8 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
                   return taskRow(a.id, 'Diamond', a.description, sub ? Date.parse(sub.startedAt) / 1000 : null, sub ? () => openSubagent(sub, a.description) : undefined,
                     info?.taskId);
                 })}
-                {runningSubs.map(({ run }) => taskRow(run.agentId, 'Diamond', tituloDoSub(run), Date.parse(run.startedAt) / 1000, () => abrirDoDisco(run), run.agentId))}
+                {runningSubs.map(({ run }) => taskRow(run.agentId, 'Diamond', tituloDoSub(run), Date.parse(run.startedAt) / 1000, () => abrirDoDisco(run),
+                  agentInfo.stoppable.has(run.agentId) ? run.agentId : undefined))}
                 {shellsVivos.map((s2) => taskRow(s2.id, 'Terminal', s2.description || s2.rotulo, s2.ts ?? null, undefined, s2.taskId))}
                 {finishedSubs.length > 0 ? (
                   <Pressable onPress={() => setFinishedOpen((value) => !value)} style={styles.taskOpen} accessibilityRole="button"
