@@ -735,3 +735,85 @@ async fn removing_a_connect_marked_peer_does_not_try_to_revoke() {
     assert_eq!(delete_peer(&w.a).await, 200);
     assert!(w.b.store.verify(token.as_bytes()).is_some());
 }
+
+/// Outra máquina já salva pelo Tailscale: diz em que host do Connect está e emite aparelho para quem tem a senha dela.
+async fn saved_machine(host: String) -> (Arc<Mutex<Vec<(String, Value)>>>, String) {
+    let seen: Arc<Mutex<Vec<(String, Value)>>> = Arc::default();
+    let owner = |headers: &HeaderMap| headers.get(header::AUTHORIZATION).is_some_and(|value| value.as_bytes() == b"Bearer senha-de-b");
+    let (state_log, enroll_log) = (seen.clone(), seen.clone());
+    let app = axum::Router::new()
+        .route("/api/connect", get(move |headers: HeaderMap| {
+            let (log, host) = (state_log.clone(), host.clone());
+            async move {
+                if !owner(&headers) { return (StatusCode::UNAUTHORIZED, String::new()); }
+                log.lock().unwrap().push(("state".into(), Value::Null));
+                (StatusCode::OK, json!({"enabled": true, "running": true, "host": host, "error": null}).to_string())
+            }
+        }))
+        .route("/api/connect/devices/self", post(move |headers: HeaderMap, body: Bytes| {
+            let log = enroll_log.clone();
+            async move {
+                if !owner(&headers) { return (StatusCode::UNAUTHORIZED, String::new()); }
+                log.lock().unwrap().push(("enroll".into(), serde_json::from_slice(&body).unwrap()));
+                (StatusCode::OK, json!({"device_id": "0a1b2c3d4e5f", "token": "aparelho-de-b"}).to_string())
+            }
+        }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (seen, format!("http://{addr}"))
+}
+
+async fn owner_saves(a: &Machine, id: &str, base_url: &str) {
+    let saved = client().post(format!("http://{}/api/peers", a.main)).bearer_auth(OWNER).header("content-type", "application/json")
+        .body(json!({"id": id, "base_url": base_url, "token": "senha-de-b"}).to_string()).send().await.unwrap();
+    assert_eq!(saved.status(), 200);
+}
+
+/// Máquina salva pelo Tailscale com outro nome: o Connect entra junto, sem tirar o endereço salvo.
+#[tokio::test]
+async fn a_saved_machine_gains_the_connect_route_by_itself() {
+    let w = world().await;
+    let (seen, url) = saved_machine(host_of("pc-b")).await;
+    owner_saves(&w.a, "notebook-jefferson", &url).await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while peers_of(&w.a)["notebook-jefferson"]["connect_url"].is_null() {
+        assert!(Instant::now() < deadline, "o caminho do Connect não chegou: {}", peers_of(&w.a));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let entry = peers_of(&w.a)["notebook-jefferson"].clone();
+    assert_eq!(entry["base_url"], url.as_str());
+    assert_eq!(entry["token"], "senha-de-b");
+    assert_eq!(entry["connect_url"], format!("https://{}", host_of("pc-b")).as_str());
+    assert_eq!((entry["connect_token"].as_str(), entry["connect_device"].as_str()), (Some("aparelho-de-b"), Some("0a1b2c3d4e5f")));
+    let enrolls: Vec<Value> = seen.lock().unwrap().iter().filter(|(kind, _)| kind == "enroll").map(|(_, body)| body.clone()).collect();
+    assert_eq!(enrolls, vec![json!({"device_name": "máquina pc-a"})], "uma credencial só, com o nome desta máquina");
+}
+
+/// A outra máquina diz estar num host que não é desta conta: nada é emitido nem gravado.
+#[tokio::test]
+async fn a_host_outside_the_account_is_refused() {
+    let w = world().await;
+    let (seen, url) = saved_machine("intruso.outra.hangar.dev.br".to_owned()).await;
+    owner_saves(&w.a, "notebook-jefferson", &url).await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while seen.lock().unwrap().is_empty() {
+        assert!(Instant::now() < deadline, "a outra máquina nem foi consultada");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(seen.lock().unwrap().iter().all(|(kind, _)| kind == "state"), "nenhum aparelho emitido lá");
+    assert!(peers_of(&w.a)["notebook-jefferson"].get("connect_url").is_none());
+}
+
+/// O anúncio leva a senha do dono no corpo: com o endereço salvo fechado, ele falha e nunca tenta o Connect.
+#[tokio::test]
+async fn announce_never_falls_back_to_the_connect_route() {
+    let w = world().await;
+    let (seen, url) = recorder().await;
+    write_peers(&w.a, &json!({"pc-b": {"base_url": format!("http://127.0.0.1:{}", free_port()), "token": OWNER,
+        "connect_url": url, "connect_token": "aparelho-de-b", "connect_device": "abc"}}));
+    let rows = network::announce(&linked_service(&w.a), "").await;
+    assert_eq!(rows[0]["estado"], "falhou", "{rows}");
+    assert!(seen.lock().unwrap().is_empty(), "nada chegou pelo Connect");
+}

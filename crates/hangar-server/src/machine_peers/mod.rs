@@ -1,5 +1,6 @@
 //! Máquinas do dono, lista dos apps e alcance, sem passagem pelo backend Python.
 pub mod cli;
+pub mod connect_route;
 pub mod doctor;
 pub mod pairing;
 pub mod dotenv;
@@ -446,6 +447,9 @@ async fn handle_inner(
         Ok(mut value) => {
             use crate::orchestration::codec;
             if device_caller && path=="/api/peers/app-list" {store::mask_app_tokens(&mut value);}
+            // Gravada pelo dono (ou anunciada por outra máquina com a senha): pode ganhar o Connect.
+            if method==Method::POST && path=="/api/peers" && !device_caller {connect_route::spawn(&st);}
+            if method==Method::GET && path=="/api/peers" {with_routes(&st.peers,&mut value);}
             if codec::contains_surrogate(&value){codec::discard(value);crate::http_cors::internal_error()}
             else{codec::response(StatusCode::OK,codec::normalize_response(value))}
         },
@@ -458,6 +462,14 @@ async fn handle_inner(
             ),
         ),
         Err(e) => e.response(),
+    }
+}
+/// `route`: o caminho da última chamada desta máquina que a outra atendeu com 2xx; sem chamada assim, fica de fora.
+fn with_routes(peers: &crate::groups::peers::PeerClient, rows: &mut Value) {
+    for row in rows.as_array_mut().into_iter().flatten() {
+        if let Some(route) = row["id"].as_str().and_then(|id| peers.route(id)) {
+            row["route"] = json!(route.name());
+        }
     }
 }
 /// Em HTTP/2 o host vem na `:authority`, não no cabeçalho.
