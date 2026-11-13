@@ -443,6 +443,10 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   motivo vai no `state` (`recarregar_motivo`: a marca do `mcpServers` + `settings.json` gravada
   na subida mudou — nunca mtime do `.claude.json`, que o Claude Code reescreve a toda hora) e a
   tela só oferece o botão com motivo; no menu ele fica sempre.
+- **A conta padrão do Claude sobe sem `CLAUDE_CONFIG_DIR`, com e sem terminal.** Com a variável o
+  CLI lê `~/.claude/.claude.json`, sem o MCP `hangar`. Uma regra só,
+  `terminal::config_dir_to_export`, decide a variável, o arquivo da pré-confiança e o da marca de
+  recarga. Ver [conta padrão sem a variável](#conta-padrão-do-claude-sem-terminal-sem-claude_config_dir-13112026).
 - **O catálogo de comandos do Claude é do Rust, com e sem terminal.** Composição, scans,
   filtros e a sonda compartilhada ficam em `commands/`; convidado e Connect só passam pela
   autorização das suas portas. A sonda usa o contexto da sessão, que também separa o cache;
@@ -1088,6 +1092,20 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   (`harness_setup::sync_startup`), antes de liberar as rotas.** O Python não instala nada disso.
   Servidor de ensaio (`CP_RUST_NO_ORPHAN_SWEEP=1`) não grava na máquina. Ver
   [hooks e skills da subida no Rust](#hooks-e-skills-da-subida-no-rust-12112026).
+
+## Conta padrão do Claude sem terminal sem CLAUDE_CONFIG_DIR (13/11/2026)
+
+Desde a subida do sem terminal pelo Rust (03734f0d4, 16/10), `claude_launch::plan` exportava
+`CLAUDE_CONFIG_DIR` também para a conta padrão. O CLI então lia `~/.claude/.claude.json`, que não
+tem `mcpServers`; o `hangar` só existe em `~/.claude.json` (`registrar-mcp.py`, espelho
+`mirror_claude_json` das contas `~/.claude-<nome>`). Prova: a sessão `hangar-3`, sem terminal na
+conta padrão, rodava com a variável e `claude mcp list` não mostrava o `hangar`. A pré-confiança já
+gravava em `~/.claude.json` pela regra do terminal, então a sessão gravava num arquivo e lia de
+outro. A marca de recarga (`local_policy::config_stamp`) lia o mesmo arquivo errado e nunca
+acusaria o MCP registrado. Os dois `.claude.json` tinham o mesmo `oauthAccount` (e-mail, conta,
+organização) e o token vem de `~/.claude/.credentials.json` nos dois casos: a conta efetiva não
+muda. Sessão viva da conta padrão ganha o MCP ao recarregar, e a marca nova acusa o motivo
+`config`. O `claude -p` efêmero (`claude_p.rs`) já passava `None` na padrão e roda sem MCP.
 
 ## Hooks e skills da subida no Rust (12/11/2026)
 
