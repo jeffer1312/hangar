@@ -74,8 +74,8 @@ pub fn known(roots: &[String], cwds: &[String], sessions: Vec<(String, String)>,
     let mut session_dirs = Vec::new();
     for (name, dir) in sessions {
         session_dirs.push(hangar_workspace::real(Path::new(&dir)));
-        if let Some((remote, branch)) = hosts::branch_remote(Path::new(&dir)) {
-            let names = by_branch.entry((remote.host, remote.repo.to_ascii_lowercase(), branch)).or_default();
+        if let Some(found) = hosts::branch_remote(Path::new(&dir)) {
+            let names = by_branch.entry((found.head.host, found.head.repo.to_ascii_lowercase(), found.branch)).or_default();
             if !names.contains(&name) { names.push(name); }
         }
     }
@@ -83,8 +83,9 @@ pub fn known(roots: &[String], cwds: &[String], sessions: Vec<(String, String)>,
 }
 
 impl Known {
+    /// As sessões na branch de origem, no repositório de onde ela vem (o fork, quando é de fork).
     fn attach(&self, item: &mut Summary) {
-        item.sessions = self.sessions.get(&(item.host.clone(), item.repo.to_ascii_lowercase(), item.source.clone())).cloned().unwrap_or_default();
+        item.sessions = self.sessions.get(&(item.host.clone(), item.source_repo.to_ascii_lowercase(), item.source.clone())).cloned().unwrap_or_default();
     }
 }
 
@@ -154,8 +155,9 @@ pub struct BranchState {
 pub async fn branch(known: &Known, dir: &Path, summary_only: bool) -> Result<BranchState, Failure> {
     let probe = dir.to_path_buf();
     let found = tokio::task::spawn_blocking(move || hosts::branch_remote(&probe)).await.ok().flatten();
-    let Some((Remote { host, repo }, branch)) = found else { return Ok(BranchState { state: "no_remote", ..Default::default() }) };
-    let mut out = BranchState { host, repo, branch, ..Default::default() };
+    let Some(hosts::BranchRemote { head: Remote { host, repo: head_repo }, branch, targets }) = found
+        else { return Ok(BranchState { state: "no_remote", ..Default::default() }) };
+    let mut out = BranchState { host, repo: head_repo.clone(), branch, ..Default::default() };
     let (cli, user) = match hosts::access(&out.host).await {
         Access::Unknown => { out.state = "unsupported"; return Ok(out); }
         Access::NoLogin { cli, installed } => {
@@ -165,10 +167,21 @@ pub async fn branch(known: &Known, dir: &Path, summary_only: bool) -> Result<Bra
         Access::Ok { cli, user } => (cli, user),
     };
     out.cli = Some(cli.program());
-    let summary = match cli {
-        Cli::Gh => github::branch(&out.host, &out.repo, &out.branch).await?,
-        Cli::Glab => gitlab::branch(&out.host, &out.repo, &out.branch).await?,
-    };
+    let mut summary = None;
+    for (index, target) in targets.iter().enumerate() {
+        let found = match cli {
+            Cli::Gh => github::branch(&out.host, &target.repo, &out.branch, &head_repo).await,
+            Cli::Glab => gitlab::branch(&out.host, &target.repo, &out.branch, &head_repo).await,
+        };
+        summary = match found {
+            Ok(found) => found,
+            // O repositório da branch responde pela busca; outro remote do host (um `upstream` antigo, sem acesso) só se
+            // procura de passagem.
+            Err(e) if index > 0 => { tracing::warn!(host = %out.host, repo = %target.repo, code = e.code, "revisões: remote extra sem leitura"); None }
+            Err(e) => return Err(e),
+        };
+        if summary.is_some() { out.repo = target.repo.clone(); break; }
+    }
     let Some(mut summary) = summary else { out.state = "none"; return Ok(out) };
     out.state = "ok";
     if !summary_only {

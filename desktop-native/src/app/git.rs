@@ -765,8 +765,14 @@ impl GitPanel {
             this.busy = None;
             window.push_notification(git_note(&this.name, kind, text), cx);
             this.load(window, cx);
+            this.reload_review(cx);
         });
         cx.notify();
+    }
+
+    /// A revisão da aba é a da branch da pasta: trocou a branch, ela é relida.
+    fn reload_review(&self, cx: &mut Context<Self>) {
+        if let Some(view) = self.review.clone() { view.update(cx, |view, cx| view.reload(cx)); }
     }
 
     /// Cria a partir da atual e já troca (`switch -c`): muda a branch sem mexer na árvore, então não pede stash.
@@ -780,6 +786,7 @@ impl GitPanel {
                     this.picker = false;
                     window.push_notification(git_note(&this.name, NotificationType::Success, tr("git_branch_created").replace("{n}", &branch)), cx);
                     this.load(window, cx);
+                    this.reload_review(cx);
                 }
                 Err(error) => this.branch_error = Some(failure(&error)),
             }

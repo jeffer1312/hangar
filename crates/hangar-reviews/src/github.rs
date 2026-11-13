@@ -8,21 +8,30 @@ use serde_json::Value;
 /// Campos de um PR para a lista e o chip.
 const FRAGMENT: &str = r#"fragment pr on PullRequest {
   number title url isDraft headRefName baseRefName mergeable reviewDecision state
-  author { login } repository { nameWithOwner }
+  author { login } repository { nameWithOwner } headRepository { nameWithOwner }
   commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
-  reviewThreads(first: 100) { nodes { isResolved } }
+  reviewThreads(first: 100) { pageInfo { hasNextPage } nodes { isResolved } }
 }"#;
 
-const LIST: &str = r#"query($mine: String!, $review: String!) {
-  mine: search(query: $mine, type: ISSUE, first: 50) { nodes { ...pr } }
-  review: search(query: $review, type: ISSUE, first: 50) { nodes { ...pr } }
+const THREAD: &str = r#"fragment thread on PullRequestReviewThread { id isResolved path line originalLine
+  comments(first: 50) { nodes { author { login __typename } body diffHunk createdAt } } }"#;
+
+const SEARCH: &str = r#"query($q: String!, $after: String) {
+  search(query: $q, type: ISSUE, first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { ...pr } }
 }"#;
 
+/// Os PRs abertos da branch; o do fork certo sai do filtro pelo repositório de origem.
 const BRANCH: &str = r#"query($owner: String!, $name: String!, $branch: String!) {
   viewer { login }
   repository(owner: $owner, name: $name) {
-    pullRequests(headRefName: $branch, states: [OPEN], first: 1, orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { ...pr } }
+    pullRequests(headRefName: $branch, states: [OPEN], first: 20, orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { ...pr } }
   }
+}"#;
+
+const THREADS: &str = r#"query($owner: String!, $name: String!, $number: Int!, $after: String!) {
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+    reviewThreads(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { ...thread } }
+  } }
 }"#;
 
 const DETAIL: &str = r#"query($owner: String!, $name: String!, $number: Int!) {
@@ -39,8 +48,7 @@ const DETAIL: &str = r#"query($owner: String!, $name: String!, $number: Int!) {
         ... on CheckRun { name status conclusion startedAt completedAt }
         ... on StatusContext { context state }
       } } } } } }
-      threads: reviewThreads(first: 100) { nodes { id isResolved path line originalLine
-        comments(first: 50) { nodes { author { login __typename } body diffHunk createdAt } } } }
+      threads: reviewThreads(first: 100) { pageInfo { hasNextPage endCursor } nodes { ...thread } }
       timelineItems(last: 30, itemTypes: [PULL_REQUEST_COMMIT, PULL_REQUEST_REVIEW, ISSUE_COMMENT, MERGED_EVENT,
           REVIEW_REQUESTED_EVENT, READY_FOR_REVIEW_EVENT, HEAD_REF_FORCE_PUSHED_EVENT, CLOSED_EVENT, REOPENED_EVENT]) {
         nodes { __typename
@@ -70,7 +78,10 @@ const METHODS: &str = r#"query($owner: String!, $name: String!) {
 enum Var<'a> { Text(&'a str, &'a str), Int(&'a str, u64) }
 
 async fn graphql(host: &str, query: &str, vars: &[Var<'_>], timeout: std::time::Duration) -> Result<Value, Failure> {
-    let query = if query.contains("...pr") { format!("{query}\n{FRAGMENT}") } else { query.to_owned() };
+    // Fragmento declarado e não usado é erro no GraphQL: só vai o que a consulta usa.
+    let mut query = query.to_owned();
+    if query.contains("...pr") { query = format!("{query}\n{FRAGMENT}"); }
+    if query.contains("...thread") { query = format!("{query}\n{THREAD}"); }
     let mut args = vec!["api".into(), "--hostname".into(), host.to_owned(), "graphql".into(), "-f".into(), format!("query={query}")];
     for var in vars {
         match var {
@@ -96,12 +107,16 @@ fn state_of(raw: &str) -> String {
 
 fn summary(host: &str, pr: &Value, user: &str) -> Option<Summary> {
     let number = pr.get("number")?.as_u64()?;
-    let threads = pr.pointer("/reviewThreads/nodes").and_then(Value::as_array);
+    // Com mais de uma página de threads a contagem da lista não fecha: fica desconhecida, e o detalhe conta todas.
+    let threads = pr.pointer("/reviewThreads/nodes").and_then(Value::as_array)
+        .filter(|_| pr.pointer("/reviewThreads/pageInfo/hasNextPage").and_then(Value::as_bool) != Some(true));
     let author = s(pr, &["author", "login"]).to_owned();
+    let repo = s(pr, &["repository", "nameWithOwner"]).to_owned();
+    let source_repo = Some(s(pr, &["headRepository", "nameWithOwner"])).filter(|r| !r.is_empty()).map_or_else(|| repo.clone(), str::to_owned);
     Some(Summary {
         provider: Provider::Github,
         host: host.to_owned(),
-        repo: s(pr, &["repository", "nameWithOwner"]).to_owned(),
+        repo,
         number,
         url: s(pr, &["url"]).to_owned(),
         title: s(pr, &["title"]).to_owned(),
@@ -111,6 +126,7 @@ fn summary(host: &str, pr: &Value, user: &str) -> Option<Summary> {
         draft: pr.get("isDraft").and_then(Value::as_bool).unwrap_or(false),
         state: state_of(s(pr, &["state"])),
         source: s(pr, &["headRefName"]).to_owned(),
+        source_repo,
         target: s(pr, &["baseRefName"]).to_owned(),
         // O resumo `PENDING` quer dizer que algum check ainda roda; "na fila" fica para o check isolado.
         pipeline: match pr.pointer("/commits/nodes/0/commit/statusCheckRollup/state").and_then(Value::as_str) {
@@ -126,13 +142,13 @@ fn summary(host: &str, pr: &Value, user: &str) -> Option<Summary> {
 
 /// Os PRs abertos da conta e os que pedem a revisão dela.
 pub async fn list(host: &str, user: &str) -> Result<Vec<Summary>, Failure> {
-    let data = graphql(host, LIST, &[
-        Var::Text("mine", "is:pr is:open author:@me archived:false"),
-        Var::Text("review", "is:pr is:open review-requested:@me archived:false"),
-    ], cli::READ).await?;
+    let (mine, review) = tokio::join!(
+        search(host, "is:pr is:open author:@me archived:false"),
+        search(host, "is:pr is:open review-requested:@me archived:false"),
+    );
     let mut out: Vec<Summary> = Vec::new();
-    for (key, review) in [("mine", false), ("review", true)] {
-        for pr in data.pointer(&format!("/{key}/nodes")).and_then(Value::as_array).into_iter().flatten() {
+    for (nodes, review) in [(mine?, false), (review?, true)] {
+        for pr in &nodes {
             let Some(mut item) = summary(host, pr, user) else { continue };
             item.review_requested = review;
             if let Some(found) = out.iter_mut().find(|o| o.url == item.url) { found.review_requested |= review; }
@@ -142,18 +158,49 @@ pub async fn list(host: &str, user: &str) -> Result<Vec<Summary>, Failure> {
     Ok(out)
 }
 
-/// O PR aberto da branch, resumido, numa chamada só.
-pub async fn branch(host: &str, repo: &str, branch: &str) -> Result<Option<Summary>, Failure> {
+/// Todas as páginas de uma busca de PRs.
+async fn search(host: &str, q: &str) -> Result<Vec<Value>, Failure> {
+    let mut nodes = Vec::new();
+    let mut after: Option<String> = None;
+    loop {
+        let mut vars = vec![Var::Text("q", q)];
+        if let Some(cursor) = &after { vars.push(Var::Text("after", cursor)); }
+        let mut data = graphql(host, SEARCH, &vars, cli::READ).await?;
+        let mut page = data.get_mut("search").map(Value::take).filter(|p| !p.is_null())
+            .ok_or_else(|| Failure::new("invalid_response", "busca de pull requests ilegível"))?;
+        after = model::next_page(Some(&page));
+        if let Some(Value::Array(found)) = page.get_mut("nodes").map(Value::take) { nodes.extend(found); }
+        if after.is_none() { return Ok(nodes); }
+    }
+}
+
+/// O PR aberto da branch no repositório `repo`, vindo de `source_repo` (o próprio `repo`, ou o fork).
+pub async fn branch(host: &str, repo: &str, branch: &str, source_repo: &str) -> Result<Option<Summary>, Failure> {
     let (owner, name) = owner_name(repo)?;
     let data = graphql(host, BRANCH, &[Var::Text("owner", owner), Var::Text("name", name), Var::Text("branch", branch)], cli::READ).await?;
     let viewer = s(&data, &["viewer", "login"]).to_owned();
-    Ok(data.pointer("/repository/pullRequests/nodes/0").and_then(|pr| summary(host, pr, &viewer)))
+    Ok(data.pointer("/repository/pullRequests/nodes").and_then(Value::as_array).into_iter().flatten()
+        .filter_map(|pr| summary(host, pr, &viewer)).find(|pr| pr.source_repo.eq_ignore_ascii_case(source_repo)))
+}
+
+/// As threads depois da primeira página, que veio junto do detalhe.
+async fn more_threads(host: &str, owner: &str, name: &str, number: u64, mut after: String) -> Result<Vec<Value>, Failure> {
+    let mut nodes = Vec::new();
+    loop {
+        let data = graphql(host, THREADS, &[Var::Text("owner", owner), Var::Text("name", name), Var::Int("number", number),
+            Var::Text("after", &after)], cli::READ).await?;
+        let page = data.pointer("/repository/pullRequest/reviewThreads").filter(|p| !p.is_null())
+            .ok_or_else(|| Failure::new("invalid_response", "threads do pull request ilegíveis"))?;
+        nodes.extend(page.get("nodes").and_then(Value::as_array).into_iter().flatten().cloned());
+        let page = Some(page);
+        match model::next_page(page) { Some(next) => after = next, None => return Ok(nodes) }
+    }
 }
 
 pub async fn detail(host: &str, repo: &str, number: u64) -> Result<Detail, Failure> {
     let (owner, name) = owner_name(repo)?;
     let vars = [Var::Text("owner", owner), Var::Text("name", name), Var::Int("number", number)];
-    let files_args = vec!["api".into(), "--hostname".into(), host.to_owned(),
+    let files_args = vec!["api".into(), "--hostname".into(), host.to_owned(), "--paginate".into(),
         format!("repos/{owner}/{name}/pulls/{number}/files?per_page=100")];
     let (data, files) = tokio::join!(graphql(host, DETAIL, &vars, cli::READ), cli::run(Cli::Gh, files_args, cli::READ));
     let mut data = data?;
@@ -179,10 +226,13 @@ pub async fn detail(host: &str, repo: &str, number: u64) -> Result<Detail, Failu
 
     let jobs = pr.pointer("/checks/nodes/0/commit/statusCheckRollup/contexts/nodes").and_then(Value::as_array).into_iter().flatten()
         .filter_map(job).collect();
-    let threads = pr.pointer("/threads/nodes").and_then(Value::as_array).into_iter().flatten().map(thread).collect();
+    let mut threads: Vec<Thread> = pr.pointer("/threads/nodes").and_then(Value::as_array).into_iter().flatten().map(thread).collect();
+    if let Some(after) = model::next_page(pr.get("threads")) {
+        threads.extend(more_threads(host, owner, name, number, after).await?.iter().map(thread));
+    }
+    summary.open_threads = Some(threads.iter().filter(|t| !t.resolved).count() as u32);
     let activity = pr.pointer("/timelineItems/nodes").and_then(Value::as_array).into_iter().flatten().rev().filter_map(activity).collect();
-    let files = files.ok().and_then(|out| serde_json::from_str::<Value>(&out).ok()).and_then(|v| match v { Value::Array(a) => Some(a), _ => None })
-        .unwrap_or_default();
+    let files = model::pages(&files?, "gh")?;
     let files = model::files(files.iter().map(|f| (s(f, &["filename"]).to_owned(), num(f, "additions"), num(f, "deletions"), s(f, &["patch"]).to_owned())));
 
     let can_write = matches!(s(&repository, &["viewerPermission"]), "ADMIN" | "MAINTAIN" | "WRITE");
@@ -339,6 +389,17 @@ mod tests {
         assert_eq!(item.open_threads, Some(1));
         assert_eq!(item.conflicts, Some(false));
         assert_eq!((item.source.as_str(), item.target.as_str()), ("feat/x", "main"));
+    }
+
+    #[test]
+    fn summary_knows_the_fork_and_when_the_thread_count_is_partial() {
+        let mut p = pr();
+        assert_eq!(summary("github.com", &p, "ana").unwrap().source_repo, "a/b");
+        p["headRepository"] = json!({"nameWithOwner": "ana/b"});
+        p["reviewThreads"]["pageInfo"] = json!({"hasNextPage": true});
+        let item = summary("github.com", &p, "ana").unwrap();
+        assert_eq!((item.repo.as_str(), item.source_repo.as_str()), ("a/b", "ana/b"));
+        assert_eq!(item.open_threads, None);
     }
 
     #[test]

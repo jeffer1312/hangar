@@ -179,9 +179,52 @@ fn readable_body(body: &str) -> String {
             None => break,
         }
     }
-    let text = strip_tags(&out).lines().map(str::trim_end).collect::<Vec<_>>().join("\n");
+    let text = strip_tags_outside_code(&out).lines().map(str::trim_end).collect::<Vec<_>>().join("\n");
     let text = text.trim();
     if text.is_empty() { body.trim().to_owned() } else { text.to_owned() }
+}
+
+/// `strip_tags` só na prosa: bloco cercado (```, ~~~) e trecho entre crases ficam como vieram, com o `<div>` que mostram.
+fn strip_tags_outside_code(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut prose = String::new();
+    let mut fence: Option<char> = None;
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        let marker = if trimmed.starts_with("```") { Some('`') } else if trimmed.starts_with("~~~") { Some('~') } else { None };
+        match (fence, marker) {
+            (None, Some(m)) => { out.push_str(&strip_inline(&std::mem::take(&mut prose))); out.push_str(line); fence = Some(m); }
+            (Some(f), Some(m)) if f == m => { out.push_str(line); fence = None; }
+            (Some(_), _) => out.push_str(line),
+            (None, None) => prose.push_str(line),
+        }
+    }
+    out.push_str(&strip_inline(&prose));
+    out
+}
+
+/// Fora de bloco cercado: o código em linha fecha com a mesma quantidade de crases que abriu; sem fechamento, é texto.
+fn strip_inline(text: &str) -> String {
+    let run = |s: &str| s.bytes().take_while(|b| *b == b'`').count();
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('`') {
+        let n = run(&rest[at..]);
+        let after = &rest[at + n..];
+        let mut close = None;
+        let mut i = 0;
+        while let Some(found) = after[i..].find('`') {
+            let m = run(&after[i + found..]);
+            if m == n { close = Some(i + found); break; }
+            i += found + m;
+        }
+        match close {
+            Some(end) => { out.push_str(&strip_tags(&rest[..at])); out.push_str(&rest[at..at + n + end + n]); rest = &after[end + n..]; }
+            None => { out.push_str(&strip_tags(&rest[..at + n])); rest = after; }
+        }
+    }
+    out.push_str(&strip_tags(rest));
+    out
 }
 
 /// Tira `<img>`, `<b>`, `<sub>`… e as de fechamento; `<br>` e `<p>` viram quebra. Outro `<` (genéricos, setas) fica.
@@ -262,6 +305,10 @@ pub(super) struct ReviewView {
     jobs_open: bool,
     open_files: HashSet<usize>,
     reply: Option<(String, Entity<TextareaState>)>,
+    /// Respostas começadas em outras threads: abrir outra não joga fora o texto, voltar a ela o devolve.
+    drafts: HashMap<String, Entity<TextareaState>>,
+    /// Sobe a cada troca de branch: ação que volta de uma geração anterior era de outra revisão.
+    generation: u64,
     reply_error: Option<String>,
     busy: Option<&'static str>,
     error: Option<String>,
@@ -295,7 +342,7 @@ fn fetch_branch(runtime: &Runtime, api: Api, dir: String, summary: bool) -> toki
 impl ReviewView {
     pub(super) fn new(api: Api, server: String, runtime: Arc<Runtime>, target: Target, send: SendFn, changed: ChangedFn) -> Self {
         Self { api, server, runtime, target, data: Remote::default(), sub: Sub::default(), show_resolved: false, jobs_open: false,
-            open_files: HashSet::new(), reply: None, reply_error: None, busy: None, error: None, send, back: None, changed, after_action: false }
+            open_files: HashSet::new(), reply: None, drafts: HashMap::new(), generation: 0, reply_error: None, busy: None, error: None, send, back: None, changed, after_action: false }
     }
 
     pub(super) fn with_back(mut self, back: Rc<dyn Fn(&mut Window, &mut App)>) -> Self { self.back = Some(back); self }
@@ -315,13 +362,23 @@ impl ReviewView {
             let result = job.await.unwrap_or_else(|_| Err(Failure::local("connection_failed")));
             let _ = this.update(cx, |this, cx| {
                 if !this.data.finish(seq, result.map(prepared).map_err(|e| failure_text(&e))) { return; }
-                if std::mem::take(&mut this.after_action) && let Some(summary) = this.detail().map(|d| d.summary.clone()) {
+                if std::mem::take(&mut this.after_action) && let Some(summary) = this.detail().map(|d| Summary { server: this.server.clone(), ..d.summary.clone() }) {
                     (this.changed.clone())(&summary, cx);
                 }
                 cx.notify();
             });
         }).detach();
         cx.notify();
+    }
+
+    /// A branch da pasta mudou: some o detalhe da anterior (as ações dependem dele), e a resposta em voo dela é descartada.
+    pub(super) fn reload(&mut self, cx: &mut Context<Self>) {
+        self.data.reset();
+        self.generation += 1;
+        (self.reply, self.reply_error, self.error, self.after_action) = (None, None, None, false);
+        self.drafts.clear();
+        self.open_files.clear();
+        self.load(cx);
     }
 
     fn detail(&self) -> Option<&Detail> { self.data.ok().and_then(|b| b.review.as_ref()) }
@@ -331,7 +388,7 @@ impl ReviewView {
         if self.busy.is_some() { return; }
         self.busy = Some(action);
         self.error = None;
-        let api = self.api.clone();
+        let (api, generation) = (self.api.clone(), self.generation);
         let mut payload = json!({"host": summary.host, "repo": summary.repo, "number": summary.number, "action": action});
         if let Some(thread) = thread { payload["thread"] = json!(thread); }
         if let Some(body) = body { payload["body"] = json!(body); }
@@ -340,6 +397,8 @@ impl ReviewView {
             let result = job.await.unwrap_or_else(|_| Err(Failure::local("connection_failed")));
             let _ = this.update(cx, |this, cx| {
                 this.busy = None;
+                // A branch trocou no meio: a resposta é da revisão anterior e não mexe na que está aberta.
+                if this.generation != generation { cx.notify(); return; }
                 match result {
                     Ok(_) => {
                         if action == "reply" { this.reply = None; }
@@ -366,7 +425,9 @@ impl ReviewView {
     }
 
     fn open_reply(&mut self, thread: String, window: &mut Window, cx: &mut Context<Self>) {
-        let state = cx.new(|cx| TextareaState::new(window, cx).auto_grow(2, 8).placeholder(tr("review_reply_placeholder")));
+        if let Some((id, state)) = self.reply.take() { self.drafts.insert(id, state); }
+        let state = self.drafts.remove(&thread)
+            .unwrap_or_else(|| cx.new(|cx| TextareaState::new(window, cx).auto_grow(2, 8).placeholder(tr("review_reply_placeholder"))));
         state.update(cx, |input, cx| input.focus(window, cx));
         self.reply = Some((thread, state));
         self.reply_error = None;
@@ -828,7 +889,10 @@ impl Hangar {
             let chip = chip.clone();
             let _ = weak.update(cx, |this, cx| {
                 for item in this.reviews.machines.values_mut().flat_map(|m| m.listing.iter_mut().flat_map(|l| l.reviews.iter_mut())) {
-                    if item.url == summary.url { *item = Summary { server: item.server.clone(), ..summary.clone() }; }
+                    // As sessões são da máquina da linha: a resposta de outra não sabe das dela.
+                    if item.url != summary.url { continue; }
+                    let sessions = if item.server == summary.server { summary.sessions.clone() } else { std::mem::take(&mut item.sessions) };
+                    *item = Summary { server: item.server.clone(), sessions, ..summary.clone() };
                 }
                 for (key, (_, value)) in this.reviews.chips.iter_mut() {
                     if chip.as_ref() == Some(key) || value.as_ref().is_some_and(|v| v.url == summary.url) { *value = Some(summary.clone()); }
@@ -911,7 +975,9 @@ impl Hangar {
         }
         let query = self.reviews.search.as_ref().map(|i| i.read(cx).value().trim().to_lowercase()).unwrap_or_default();
         let all = self.all_reviews();
-        let hosts: Vec<String> = { let mut h: Vec<String> = all.iter().map(|r| r.host.clone()).collect(); h.sort(); h.dedup(); h };
+        // O host escolhido fica entre os botões mesmo sem revisões dele na leitura nova: é por ele que se desfaz o filtro.
+        let host_filter = self.reviews.host_filter.clone();
+        let hosts: Vec<String> = { let mut h: Vec<String> = all.iter().map(|r| r.host.clone()).chain(host_filter.clone()).collect(); h.sort(); h.dedup(); h };
         let filter = self.reviews.filter;
         let items: Vec<Summary> = all.into_iter()
             .filter(|r| self.reviews.host_filter.as_ref().is_none_or(|h| &r.host == h))
@@ -923,7 +989,7 @@ impl Hangar {
             .children([(Filter::All, tr("review_filter_all")), (Filter::Attention, tr("review_filter_attention")), (Filter::Mine, tr("review_filter_mine")),
                 (Filter::Requested, tr("review_filter_requested"))].into_iter().map(|(f, label)| chip(format!("reviews-filter-{label}"), label, filter == f)
                 .on_click(cx.listener(move |this, _, _, cx| { this.reviews.filter = f; cx.notify(); }))))
-            .when(hosts.len() > 1, |el| el.child(div().w(px(1.)).h(px(18.)).mx_1().bg(theme::border()))
+            .when(hosts.len() > 1 || host_filter.is_some(), |el| el.child(div().w(px(1.)).h(px(18.)).mx_1().bg(theme::border()))
                 .children(hosts.into_iter().map(|host| {
                     let on = self.reviews.host_filter.as_deref() == Some(host.as_str());
                     chip(format!("reviews-host-{host}"), host.clone(), on)
@@ -936,7 +1002,7 @@ impl Hangar {
         let errors: Vec<(String, String)> = machines.values().filter_map(|m| m.error.clone().map(|e| (m.label.clone(), e))).collect();
         let host_errors: Vec<HostRow> = machines.values().flat_map(|m| m.listing.iter().flat_map(|l| l.hosts.iter().filter(|h| h.state == "error").cloned())).collect();
         if items.is_empty() {
-            list = list.child(empty_state(if query.is_empty() && filter == Filter::All { tr("review_list_empty") } else { tr("review_list_filtered") }));
+            list = list.child(empty_state(if query.is_empty() && filter == Filter::All && host_filter.is_none() { tr("review_list_empty") } else { tr("review_list_filtered") }));
         } else {
             let (attention, rest): (Vec<_>, Vec<_>) = items.into_iter().partition(Summary::needs_attention);
             for (title, group) in [(tr("review_group_attention"), attention), (tr("review_group_other"), rest)] {
@@ -1000,6 +1066,13 @@ mod tests {
         let rabbit = "<picture><img src=\"x.svg\" width=\"16\"></picture> Minor · <b>Meça</b> o cartão<br>Vec<String> e a -> b";
         assert_eq!(readable_body(rabbit), "Minor · Meça o cartão\nVec<String> e a -> b");
         assert_eq!(image_text("![Testes](https://x/t.svg) ![Menor](https://x/m.svg) fim ![sem fim"), "Testes Menor fim ![sem fim");
+    }
+
+    #[test]
+    fn html_inside_markdown_code_is_kept() {
+        assert_eq!(readable_body("Troque `<div>` por ``<span>` ``, <b>já</b>."), "Troque `<div>` por ``<span>` ``, já.");
+        let fenced = "Assim:\n```html\n<div><span>x</span></div>\n```\n<b>fim</b> `sem fecho <i>a</i>";
+        assert_eq!(readable_body(fenced), "Assim:\n```html\n<div><span>x</span></div>\n```\nfim `sem fecho a");
     }
 
     #[test]

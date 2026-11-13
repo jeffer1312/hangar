@@ -8,18 +8,20 @@ use serde_json::Value;
 /// Campos de um MR para a lista e o chip.
 const FRAGMENT: &str = r#"fragment mr on MergeRequest {
   iid title webUrl draft sourceBranch targetBranch conflicts detailedMergeStatus approved approvalsLeft
-  resolvableDiscussionsCount resolvedDiscussionsCount headPipeline { status } project { fullPath } author { username }
+  resolvableDiscussionsCount resolvedDiscussionsCount headPipeline { status } project { fullPath } sourceProject { fullPath }
+  author { username }
 }"#;
 
-const LIST: &str = r#"{ currentUser {
-  authored: authoredMergeRequests(state: opened, first: 50) { nodes { ...mr } }
-  assigned: assignedMergeRequests(state: opened, first: 50) { nodes { ...mr } }
-  review: reviewRequestedMergeRequests(state: opened, first: 50) { nodes { ...mr } }
-} }"#;
+/// Uma das listas da conta (`authoredMergeRequests`, `assignedMergeRequests`, `reviewRequestedMergeRequests`), uma página.
+fn list_query(connection: &str) -> String {
+    format!("query($after: String) {{ currentUser {{ page: {connection}(state: opened, first: 100, after: $after) {{
+  pageInfo {{ hasNextPage endCursor }} nodes {{ ...mr }} }} }} }}")
+}
 
+/// Os MRs abertos da branch; o do fork certo sai do filtro pelo projeto de origem.
 const BRANCH: &str = r#"query($repo: ID!, $branch: String!) {
   currentUser { username }
-  project(fullPath: $repo) { mergeRequests(sourceBranches: [$branch], state: opened, first: 1) { nodes { ...mr } } }
+  project(fullPath: $repo) { mergeRequests(sourceBranches: [$branch], state: opened, first: 20) { nodes { ...mr } } }
 }"#;
 
 /// Um segmento de caminho da API: tudo fora do não reservado do RFC 3986 vai codificado (a `/` do projeto também).
@@ -45,6 +47,12 @@ async fn graphql(host: &str, query: &str, vars: &[(&str, &str)]) -> Result<Value
     model::graphql_data(&cli::run(Cli::Glab, args, cli::READ).await?, "glab")
 }
 
+/// Todas as páginas de uma leitura REST que devolve lista.
+async fn api_pages(host: &str, path: &str) -> Result<Vec<Value>, Failure> {
+    let args = vec!["api".into(), "--hostname".into(), host.to_owned(), "--paginate".into(), path.to_owned()];
+    model::pages(&cli::run(Cli::Glab, args, cli::READ).await?, "glab")
+}
+
 fn n(v: &Value, key: &str) -> Option<u64> {
     v.get(key).and_then(|x| x.as_u64().or_else(|| x.as_str().and_then(|s| s.parse().ok())))
 }
@@ -65,10 +73,12 @@ fn summary(host: &str, mr: &Value, user: &str) -> Option<Summary> {
     let resolvable = n(mr, "resolvableDiscussionsCount");
     let resolved = n(mr, "resolvedDiscussionsCount");
     let author = s(mr, &["author", "username"]).to_owned();
+    let repo = s(mr, &["project", "fullPath"]).to_owned();
+    let source_repo = Some(s(mr, &["sourceProject", "fullPath"])).filter(|r| !r.is_empty()).map_or_else(|| repo.clone(), str::to_owned);
     Some(Summary {
         provider: Provider::Gitlab,
         host: host.to_owned(),
-        repo: s(mr, &["project", "fullPath"]).to_owned(),
+        repo,
         number: n(mr, "iid")?,
         url: s(mr, &["webUrl"]).to_owned(),
         title: s(mr, &["title"]).to_owned(),
@@ -78,6 +88,7 @@ fn summary(host: &str, mr: &Value, user: &str) -> Option<Summary> {
         draft: mr.get("draft").and_then(Value::as_bool).unwrap_or(false),
         state: "open".into(),
         source: s(mr, &["sourceBranch"]).to_owned(),
+        source_repo,
         target: s(mr, &["targetBranch"]).to_owned(),
         pipeline: model::pipeline_status(s(mr, &["headPipeline", "status"])),
         open_threads: resolvable.map(|r| r.saturating_sub(resolved.unwrap_or(0)) as u32),
@@ -88,14 +99,18 @@ fn summary(host: &str, mr: &Value, user: &str) -> Option<Summary> {
 
 /// Os MRs abertos da conta (autor ou responsável) e os que pedem a revisão dela.
 pub async fn list(host: &str, user: &str) -> Result<Vec<Summary>, Failure> {
-    let data = graphql(host, LIST, &[]).await?;
+    let (authored, assigned, review) = tokio::join!(
+        connection(host, "authoredMergeRequests"),
+        connection(host, "assignedMergeRequests"),
+        connection(host, "reviewRequestedMergeRequests"),
+    );
     let mut out: Vec<Summary> = Vec::new();
-    for (key, review) in [("authored", false), ("assigned", false), ("review", true)] {
-        for mr in data.pointer(&format!("/currentUser/{key}/nodes")).and_then(Value::as_array).into_iter().flatten() {
+    for (nodes, assigned, review) in [(authored?, false, false), (assigned?, true, false), (review?, false, true)] {
+        for mr in &nodes {
             let Some(mut item) = summary(host, mr, user) else { continue };
             item.review_requested = review;
             // Responsável conta como seu: no GitLab o MR aberto por um bot costuma ter o autor da branch como responsável.
-            item.mine = item.mine || key == "assigned";
+            item.mine = item.mine || assigned;
             if let Some(found) = out.iter_mut().find(|o| o.url == item.url) {
                 found.review_requested |= item.review_requested;
                 found.mine |= item.mine;
@@ -105,11 +120,27 @@ pub async fn list(host: &str, user: &str) -> Result<Vec<Summary>, Failure> {
     Ok(out)
 }
 
-/// O MR aberto da branch, resumido, numa chamada só.
-pub async fn branch(host: &str, repo: &str, branch: &str) -> Result<Option<Summary>, Failure> {
+/// Todas as páginas de uma lista da conta.
+async fn connection(host: &str, name: &str) -> Result<Vec<Value>, Failure> {
+    let query = list_query(name);
+    let mut nodes = Vec::new();
+    let mut after: Option<String> = None;
+    loop {
+        let vars: Vec<(&str, &str)> = after.as_deref().map(|cursor| ("after", cursor)).into_iter().collect();
+        let data = graphql(host, &query, &vars).await?;
+        let page = data.pointer("/currentUser/page").filter(|p| !p.is_null())
+            .ok_or_else(|| Failure::new("invalid_response", "lista de merge requests ilegível"))?;
+        nodes.extend(page.get("nodes").and_then(Value::as_array).into_iter().flatten().cloned());
+        match model::next_page(Some(page)) { Some(next) => after = Some(next), None => return Ok(nodes) }
+    }
+}
+
+/// O MR aberto da branch no projeto `repo`, vindo de `source_repo` (o próprio `repo`, ou o fork).
+pub async fn branch(host: &str, repo: &str, branch: &str, source_repo: &str) -> Result<Option<Summary>, Failure> {
     let data = graphql(host, BRANCH, &[("repo", repo), ("branch", branch)]).await?;
     let user = s(&data, &["currentUser", "username"]).to_owned();
-    Ok(data.pointer("/project/mergeRequests/nodes/0").and_then(|mr| summary(host, mr, &user)))
+    Ok(data.pointer("/project/mergeRequests/nodes").and_then(Value::as_array).into_iter().flatten()
+        .filter_map(|mr| summary(host, mr, &user)).find(|mr| mr.source_repo.eq_ignore_ascii_case(source_repo)))
 }
 
 pub async fn detail(host: &str, repo: &str, iid: u64, viewer: &str) -> Result<Detail, Failure> {
@@ -119,13 +150,12 @@ pub async fn detail(host: &str, repo: &str, iid: u64, viewer: &str) -> Result<De
     let (mr, approvals, discussions, diffs) = tokio::join!(
         api(host, "GET", &paths[0], &[], cli::READ),
         api(host, "GET", &paths[1], &[], cli::READ),
-        api(host, "GET", &paths[2], &[], cli::READ),
-        api(host, "GET", &paths[3], &[], cli::READ),
+        api_pages(host, &paths[2]),
+        api_pages(host, &paths[3]),
     );
     let mr = mr?;
     if mr.get("iid").is_none() { return Err(Failure::new("not_found", "merge request não encontrado")); }
-    let approvals = approvals.unwrap_or(Value::Null);
-    let (discussions, diffs) = (array(discussions), array(diffs));
+    let (approvals, discussions, diffs) = (approvals?, discussions?, diffs?);
     let pipeline = mr.get("head_pipeline").filter(|p| !p.is_null());
     let jobs = jobs(host, repo, pipeline.and_then(|p| n(p, "id")), s(&mr, &["sha"])).await;
     let files = model::files(diffs.iter().map(|d| {
@@ -179,6 +209,7 @@ pub async fn detail(host: &str, repo: &str, iid: u64, viewer: &str) -> Result<De
         draft: mr.get("draft").and_then(Value::as_bool).unwrap_or(false),
         state: state.into(),
         source: s(&mr, &["source_branch"]).to_owned(),
+        source_repo: source_project(host, repo, &mr).await?,
         target: s(&mr, &["target_branch"]).to_owned(),
         pipeline: pipeline.and_then(|p| model::pipeline_status(s(p, &["status"]))),
         open_threads: Some(threads.iter().filter(|t| !t.resolved).count() as u32),
@@ -190,6 +221,21 @@ pub async fn detail(host: &str, repo: &str, iid: u64, viewer: &str) -> Result<De
         || mr.get("auto_merge_enabled").and_then(Value::as_bool).unwrap_or(false);
     let merge = merge_state(&detailed, &summary, can_merge, auto_enabled);
     Ok(Detail { summary, behind: n(&mr, "diverged_commits_count"), approvals, merge, jobs, threads, files, activity })
+}
+
+/// O caminho do projeto de origem: o REST só dá o id, e só o MR de fork pede a ida a mais. Fork que a conta não pode ler
+/// (403, 404) fica com o projeto de destino: só as sessões da branch deixam de aparecer. Outra falha é falha do detalhe.
+async fn source_project(host: &str, repo: &str, mr: &Value) -> Result<String, Failure> {
+    let (Some(source), Some(target)) = (n(mr, "source_project_id"), n(mr, "project_id")) else { return Ok(repo.to_owned()) };
+    if source == target { return Ok(repo.to_owned()); }
+    match api(host, "GET", &format!("projects/{source}"), &[], cli::READ).await {
+        Ok(project) => Ok(Some(s(&project, &["path_with_namespace"])).filter(|p| !p.is_empty()).unwrap_or(repo).to_owned()),
+        Err(e) if e.message.contains("403") || e.message.contains("404") => {
+            tracing::warn!(host = %host, source, "revisões: fork do MR sem leitura, sessões pelo projeto de destino");
+            Ok(repo.to_owned())
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// As etapas do pipeline. Pipeline externo (Jenkins e afins) não tem jobs no GitLab: as etapas são os status do commit,

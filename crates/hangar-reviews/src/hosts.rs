@@ -71,6 +71,16 @@ impl Config {
         let wanted = branch.and_then(|b| self.branches.get(b)).filter(|r| *r != ".").map(String::as_str).unwrap_or("origin");
         self.remotes.iter().find(|(n, _)| n == wanted).or_else(|| self.remotes.first()).and_then(|(_, url)| parse_remote(url))
     }
+
+    /// Onde procurar a revisão de uma branch que vem de `head`: o próprio `head` e os outros repositórios do mesmo host
+    /// (a revisão de um fork mora no projeto de destino, num outro remote).
+    fn targets(&self, head: &Remote) -> Vec<Remote> {
+        let mut out = vec![head.clone()];
+        for remote in self.remotes.iter().filter_map(|(_, url)| parse_remote(url)) {
+            if remote.host == head.host && !out.iter().any(|o| o.repo.eq_ignore_ascii_case(&remote.repo)) { out.push(remote); }
+        }
+        out
+    }
 }
 
 /// A pasta do git de uma pasta de trabalho e a pasta comum (a do `config`): iguais no checkout principal, diferentes
@@ -93,14 +103,18 @@ pub fn repo_remote(repo: &Path) -> Option<Remote> {
     read_config(&common)?.remote_for(None)
 }
 
-/// A branch e o remote dela numa pasta de trabalho (worktree ou principal, ou subpasta delas).
-pub fn branch_remote(dir: &Path) -> Option<(Remote, String)> {
+/// A branch de uma pasta de trabalho (worktree ou principal, ou subpasta delas), o remote dela e, nessa ordem, os
+/// repositórios onde a revisão dela pode estar.
+pub struct BranchRemote { pub head: Remote, pub branch: String, pub targets: Vec<Remote> }
+
+pub fn branch_remote(dir: &Path) -> Option<BranchRemote> {
     let root = PathBuf::from(hangar_workspace::worktrees::repo_root_of(&dir.to_string_lossy())?);
     let (gitdir, common) = git_dirs(&root)?;
     let head = std::fs::read_to_string(gitdir.join("HEAD")).ok()?;
     let branch = head.trim().strip_prefix("ref: refs/heads/").filter(|b| !b.is_empty())?.to_owned();
-    let remote = read_config(&common)?.remote_for(Some(&branch))?;
-    Some((remote, branch))
+    let config = read_config(&common)?;
+    let head = config.remote_for(Some(&branch))?;
+    Some(BranchRemote { targets: config.targets(&head), head, branch })
 }
 
 /// Quem atende um host e com que conta.
@@ -188,6 +202,8 @@ mod tests {
         assert_eq!(config.remote_for(Some("feat")), r("github.com", "c/d"));
         assert_eq!(config.remote_for(Some("main")), r("github.com", "a/b"));
         assert_eq!(config.remote_for(None), r("github.com", "a/b"));
+        let fork = Remote { host: "github.com".into(), repo: "c/d".into() };
+        assert_eq!(config.targets(&fork), vec![fork.clone(), Remote { host: "github.com".into(), repo: "a/b".into() }]);
     }
 
     #[test]
@@ -201,8 +217,9 @@ mod tests {
         std::fs::write(main.join(".git/worktrees/wt/HEAD"), "ref: refs/heads/feat/x\n").unwrap();
         std::fs::write(main.join(".git/worktrees/wt/commondir"), "../..\n").unwrap();
         std::fs::write(wt.join(".git"), format!("gitdir: {}\n", main.join(".git/worktrees/wt").display())).unwrap();
-        assert_eq!(branch_remote(&wt.join("sub")), Some((Remote { host: "gitlab.example.com".into(), repo: "g/p".into() }, "feat/x".into())));
-        assert_eq!(branch_remote(&main).map(|(_, b)| b), Some("main".into()));
+        let found = branch_remote(&wt.join("sub")).unwrap();
+        assert_eq!((found.head, found.branch), (Remote { host: "gitlab.example.com".into(), repo: "g/p".into() }, "feat/x".into()));
+        assert_eq!(branch_remote(&main).map(|b| b.branch), Some("main".into()));
         assert_eq!(repo_remote(&wt), r("gitlab.example.com", "g/p"));
     }
 

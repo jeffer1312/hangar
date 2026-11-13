@@ -23,6 +23,8 @@ pub struct Summary {
     /// `open`, `merged` ou `closed`.
     pub state: String,
     pub source: String,
+    /// Repositório de onde vem a branch: o fork, quando a revisão é de um fork; sem como saber, o próprio `repo`.
+    pub source_repo: String,
     pub target: String,
     /// `success`, `failed`, `running`, `pending`, `canceled`, `skipped`; sem pipeline, ausente.
     pub pipeline: Option<String>,
@@ -111,6 +113,27 @@ pub fn graphql_data(out: &str, cli: &str) -> Result<Value, crate::Failure> {
         return Err(crate::Failure::new("provider_error", msg));
     }
     Ok(value.get_mut("data").map(Value::take).unwrap_or(Value::Null))
+}
+
+/// Os itens de todas as páginas de uma leitura REST com `--paginate`: o `gh` junta num array só, o `glab` manda um
+/// array por página.
+pub fn pages(out: &str, cli: &str) -> Result<Vec<Value>, crate::Failure> {
+    let invalid = || crate::Failure::new("invalid_response", format!("resposta do {cli} ilegível"));
+    let mut items = Vec::new();
+    for page in serde_json::Deserializer::from_str(out).into_iter::<Value>() {
+        match page.map_err(|_| invalid())? {
+            Value::Array(a) => items.extend(a),
+            _ => return Err(invalid()),
+        }
+    }
+    Ok(items)
+}
+
+/// O cursor da próxima página de uma conexão GraphQL, quando há.
+pub fn next_page(connection: Option<&Value>) -> Option<String> {
+    let info = connection?.get("pageInfo")?;
+    info.get("hasNextPage").and_then(Value::as_bool).filter(|more| *more)?;
+    info.get("endCursor").and_then(Value::as_str).map(str::to_owned)
 }
 
 /// Segundos desde a época de um instante RFC 3339.
@@ -206,6 +229,24 @@ mod tests {
         let list = files((0..12).map(|n| (format!("f{n}"), 1, 0, big.clone())));
         assert!(list[0].patch.len() <= PATCH_MAX + 4);
         assert!(list.iter().map(|f| f.patch.len()).sum::<usize>() <= PATCHES_MAX + 12 * 4);
+    }
+
+    #[test]
+    fn pages_join_one_array_or_one_per_page() {
+        assert_eq!(pages("[1,2,3]", "gh").unwrap().len(), 3);
+        assert_eq!(pages("[1,2][3]\n[4]", "glab").unwrap().len(), 4);
+        assert_eq!(pages("", "glab").unwrap().len(), 0);
+        assert_eq!(pages(r#"{"message": "404"}"#, "glab").unwrap_err().code, "invalid_response");
+        assert_eq!(pages("[1,", "gh").unwrap_err().code, "invalid_response");
+    }
+
+    #[test]
+    fn next_page_only_when_the_provider_says_there_is_more() {
+        let more = serde_json::json!({"pageInfo": {"hasNextPage": true, "endCursor": "c2"}});
+        let done = serde_json::json!({"pageInfo": {"hasNextPage": false, "endCursor": "c3"}});
+        assert_eq!(next_page(Some(&more)).as_deref(), Some("c2"));
+        assert_eq!(next_page(Some(&done)), None);
+        assert_eq!(next_page(None), None);
     }
 
     #[test]
