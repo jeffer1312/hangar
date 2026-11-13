@@ -8,7 +8,7 @@ import { Pagina } from '../../../src/features/config/Pagina';
 import { Pill } from '../../../src/features/config/PageHeader';
 import { useSettingsColors } from '../../../src/features/config/colors';
 import { animationFor } from '../../../src/features/updates/animations';
-import { dayLabel, useNewsHistory } from '../../../src/features/updates/docs';
+import { dayLabel, forPhone, useNewsHistory } from '../../../src/features/updates/docs';
 import { DocStatus, EmptyText, KindPill } from '../../../src/features/updates/DocParts';
 import { useServers } from '../../../src/stores/servers';
 import * as m from '../../../src/paraglide/messages';
@@ -22,7 +22,7 @@ export default function NewsPage() {
   const server = useServers((s) => s.active());
   const [state, retry] = useNewsHistory(server, false);
   const md = useMemo(() => mkMarkdownStyle(theme), [theme]);
-  const item = state.status === 'ok' ? state.data.news.find((n) => n.id === id) : undefined;
+  const item = state.status === 'ok' ? state.data.news.find((n) => n.id === id && forPhone(n.platforms)) : undefined;
   const Animation = animationFor(item?.animation ?? null);
   const back = <Stack.Screen options={{ headerBackTitle: m.updates_history_title() }} />;
 

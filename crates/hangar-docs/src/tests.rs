@@ -119,6 +119,20 @@ fn malformed_files_are_left_out() {
     assert_eq!(manual(root, "linux").unwrap(), json!({"categories": []}));
 }
 
+/// Um arquivo ilegível (aqui, UTF-8 inválido) some do resultado; o resto continua saindo.
+#[test]
+fn unreadable_files_are_skipped() {
+    let tmp = root();
+    let root = tmp.path();
+    std::fs::write(root.join("docs/novidades/2026-01-01-ruim.md"), b"---\ntitulo: \xff\xfe\n---\n").unwrap();
+    std::fs::write(root.join("docs/manual/ruim.md"), b"\xff\xfe").unwrap();
+    write(root, "docs/novidades/2026-01-02-boa.md", &news("novo", "", "X."));
+    write(root, "docs/manual/bom.md", &article("comecar", "1", "x"));
+    let ids: Vec<serde_json::Value> = history(root, "linux").unwrap().iter().map(|n| n["id"].clone()).collect();
+    assert_eq!(ids, vec![json!("2026-01-02-boa")]);
+    assert_eq!(manual(root, "linux").unwrap()["categories"][0]["articles"].as_array().unwrap().iter().map(|a| a["id"].clone()).collect::<Vec<_>>(), vec![json!("bom")]);
+}
+
 #[test]
 fn manual_keeps_fixed_tab_order_and_drops_bad_articles() {
     let tmp = root();
@@ -155,7 +169,8 @@ fn article_with_intro_sections_and_linked_news() {
              {"id": "primeiro-passo", "title": "Primeiro passo", "markdown": "Faça.\n\n```md\n## Não conta\n```\n\n### Nem esta"},
              {"id": "ja-esta", "title": "Já está", "markdown": "Pronto."},
          ],
-         "news": [{"id": "2026-01-05-nova", "date": "2026-01-05", "title": "T melhoria"}, {"id": "2026-01-01-velha", "date": "2026-01-01", "title": "T novo"}]},
+         "news": [{"id": "2026-01-05-nova", "date": "2026-01-05", "title": "T melhoria", "platforms": "all"},
+                  {"id": "2026-01-01-velha", "date": "2026-01-01", "title": "T novo", "platforms": "all"}]},
         {"id": "simples", "title": "Artigo 9", "summary": "R", "icon": "book", "platforms": "desktop", "intro": "Sem seção.",
          "sections": [], "news": []},
     ]}]}));

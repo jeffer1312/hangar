@@ -11,7 +11,7 @@ import { SectionCard } from '../../../src/features/config/SectionCard';
 import { SettingsMenuGroup } from '../../../src/features/config/SettingsMenu';
 import { SettingsRow } from '../../../src/features/config/SettingsRow';
 import { useSettingsColors } from '../../../src/features/config/colors';
-import { shortDay, useManual } from '../../../src/features/updates/docs';
+import { forPhone, shortDay, useManual } from '../../../src/features/updates/docs';
 import { DocStatus, EmptyText, categoryLabel } from '../../../src/features/updates/DocParts';
 import { Icon } from '../../../src/ui/Icon';
 import { useServers } from '../../../src/stores/servers';
@@ -41,6 +41,7 @@ export default function ArticlePage() {
   if (state.status !== 'ok') return <Pagina>{back}<DocStatus state={state} onRetry={retry} /></Pagina>;
   if (!found) return <Pagina>{back}<EmptyText text={m.manual_not_found()} /></Pagina>;
   const { article, category } = found;
+  const news = article.news.filter((n) => forPhone(n.platforms));
 
   const scrollTo = (sectionId: string) => {
     const y = offsets.current.get(sectionId);
@@ -83,11 +84,11 @@ export default function ArticlePage() {
           <EnrichedMarkdownText markdown={s.markdown} markdownStyle={md} flavor="github" />
         </View>
       ))}
-      {article.news.length ? (
+      {news.length ? (
         <View>
           <SettingsMenuGroup title={m.manual_changed()} />
           <SectionCard>
-            {article.news.map((n) => (
+            {news.map((n) => (
               <SettingsRow key={n.id} title={n.title} description={shortDay(n.date)}
                 onPress={() => router.push({ pathname: '/config/atualizacoes/[id]', params: { id: n.id } } as never)} />
             ))}

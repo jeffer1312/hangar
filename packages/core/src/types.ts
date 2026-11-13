@@ -1204,7 +1204,7 @@ export interface ManualArticle {
   anchor?: string;
   intro: string;
   sections: ManualSection[];
-  news: { id: string; date: string; title: string }[];
+  news: { id: string; date: string; title: string; platforms: UpdateNewsPlatforms }[];
 }
 export type ManualCategoryId = 'comecar' | 'sessoes' | 'ferramentas' | 'problemas';
 export interface ManualCategory { id: ManualCategoryId; articles: ManualArticle[] }

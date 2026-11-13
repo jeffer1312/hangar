@@ -1,6 +1,7 @@
 //! Novidades: o cartão do aviso da atualização e o histórico completo.
 use crate::{at, frontmatter, is_note_file, platforms, valid_article_id};
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::io;
 use std::path::Path;
 
@@ -16,12 +17,12 @@ fn for_system(field: Option<&String>, os: &str) -> Option<bool> {
 /// (novo, melhoria, correção). `os`: o sistema da máquina, nos nomes do `std::env::consts::OS`.
 #[must_use]
 pub fn news_item(id: &str, text: &str, os: &str) -> Option<(u8, Value)> {
-    checked_item(id, text, os).ok().flatten()
+    let (f, body) = frontmatter(text);
+    checked_item(id, &f, body, os).ok().flatten()
 }
 
 /// `Ok(None)`: a novidade é de outro sistema. `Err`: o arquivo está fora do formato, com o motivo.
-fn checked_item(id: &str, text: &str, os: &str) -> Result<Option<(u8, Value)>, &'static str> {
-    let (f, body) = frontmatter(text);
+fn checked_item(id: &str, f: &HashMap<String, String>, body: String, os: &str) -> Result<Option<(u8, Value)>, &'static str> {
     let title = f.get("titulo").filter(|t| !t.is_empty()).ok_or("sem titulo")?;
     if !for_system(f.get("sistema"), os).ok_or("sistema invalido")? { return Ok(None); }
     let (rank, kind) = match f.get("tipo").map(String::as_str) {
@@ -47,12 +48,12 @@ pub fn history_item(root: &Path, id: &str, text: &str, os: &str) -> Option<(u8, 
 /// O `history_item` com o motivo do descarte, como o `checked_item`.
 fn history_entry(root: &Path, id: &str, text: &str, os: &str) -> Result<Option<(u8, Value)>, &'static str> {
     let date = date_from_id(id).ok_or("sem data no nome")?;
-    let Some((rank, mut item)) = checked_item(id, text, os)? else { return Ok(None) };
+    let (fields, body) = frontmatter(text);
+    let Some((rank, mut item)) = checked_item(id, &fields, body, os)? else { return Ok(None) };
     let body = item["text"].as_str().unwrap_or_default().to_owned();
     item["date"] = date.into();
     item["summary"] = summary(&body).into();
     item["more"] = has_more(&body).into();
-    let (fields, _) = frontmatter(text);
     let manual = root.join("docs").join("manual");
     if let Some(article) = fields.get("manual").filter(|m| !m.is_empty()) {
         if valid_article_id(article) && manual.join(format!("{article}.md")).is_file() {
@@ -92,7 +93,7 @@ pub fn date_from_id(id: &str) -> Option<&str> {
 /// novo, melhoria e correção, depois o id.
 ///
 /// # Errors
-/// Pasta ausente (raiz errada) ou falha ao listar ou ler um arquivo.
+/// Pasta ausente (raiz errada) ou falha ao listar a pasta. Arquivo ilegível fica fora, com aviso no log.
 pub fn history(root: &Path, os: &str) -> io::Result<Vec<Value>> {
     let mut news = Vec::new();
     let dir = root.join("docs").join("novidades");
@@ -104,7 +105,12 @@ pub fn history(root: &Path, os: &str) -> io::Result<Vec<Value>> {
         if !is_note_file(&name) { continue; }
         let id = name.trim_end_matches(".md");
         if date_from_id(id).is_none() { continue; }
-        match history_entry(root, id, &std::fs::read_to_string(&path).map_err(at(&path))?, os) {
+        // Um arquivo ilegível (UTF-8 inválido, permissão) não derruba o histórico nem o manual.
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) => { tracing::warn!(file = %path.display(), %error, "novidade ilegivel; fica fora do historico"); continue; }
+        };
+        match history_entry(root, id, &text, os) {
             Ok(Some((rank, item))) => news.push((item["date"].as_str().unwrap_or_default().to_owned(), rank, id.to_owned(), item)),
             Ok(None) => {}
             Err(reason) => tracing::warn!(file = %path.display(), reason, "novidade fora do formato; fica fora do historico"),

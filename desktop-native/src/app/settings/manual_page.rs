@@ -118,9 +118,8 @@ impl Hangar {
                 .child(guide::markdown_block(format!("manual-{}-{}", article.id, section.id), section.markdown.clone()))
                 .when(here, |el| el.child(reveal_here(scroll.clone(), reveal.clone()))));
         }
-        // Só as novidades que o desktop mostra: as outras não têm página aqui.
-        let known = |id: &str| self.guide.news.ok().is_none_or(|news| news.iter().any(|item| item.id == id));
-        let changed: Vec<_> = article.news.iter().filter(|item| known(item.id.as_str())).cloned().collect();
+        // `parse_manual` já deixou só as novidades que o desktop mostra.
+        let changed = article.news.clone();
         if !changed.is_empty() {
             let mut group = settings_box();
             for item in &changed { group = group.child(self.news_link(&item.id, &item.date, &item.title, "manual-changed", cx)); }

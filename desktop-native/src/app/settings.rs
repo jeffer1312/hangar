@@ -107,9 +107,6 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
         ("settings_tray", Some("settings_tray_desc")), ("settings_chrome_autofill", Some("settings_chrome_autofill_desc")),
         ("settings_full_chrome", Some("settings_full_chrome_desc"))]),
     (Page::Sessions, &[("settings_auto_hide_label", None), ("settings_sleep_title", Some("settings_sleep_hint"))]),
-    (Page::Updates, &[("updates_filter_new", Some("updates_lead")), ("updates_filter_improvements", None), ("updates_filter_fixes", None)]),
-    (Page::Manual, &[("manual_category_comecar", Some("manual_lead")), ("manual_category_sessoes", None), ("manual_category_ferramentas", None),
-        ("manual_category_problemas", None)]),
     (Page::Diary, &[("settings_diary_rules", Some("settings_diary_rule_private")), ("settings_diary_download", Some("settings_diary_rule_local")),
         ("settings_diary_recent", None)]),
     (Page::About, &[("settings_about_app", None), ("settings_about_server", None), ("settings_about_update", Some("settings_about_update_desc")),
@@ -507,7 +504,8 @@ impl Hangar {
         self.costs.view = None;
         (self.worktrees.view, self.worktrees.open) = (None, None);
         self.close_reviews(window, cx);
-        self.settings = Some(page);
+        // A navegação entre páginas também passa por aqui; o que é por abertura só roda saindo de fechadas.
+        let opening = self.settings.replace(page).is_none();
         // O Cofre relê a cada abertura, e a senha revelada não passa para a próxima.
         self.vault_page = None;
         self.plugins_page = None;
@@ -523,7 +521,8 @@ impl Hangar {
         self.close_controls();
         self.command_panel = false;
         self.close_recent();
-        self.guide_settings_opened(cx);
+        // Na troca de página, as bolinhas do que chegou ficam até a próxima abertura.
+        if opening { self.guide_settings_opened(cx); }
         self.settings_opened(page, cx);
         cx.notify();
     }

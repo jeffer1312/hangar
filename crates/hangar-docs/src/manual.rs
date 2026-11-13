@@ -44,7 +44,8 @@ fn parse(id: &str, text: &str) -> Result<Article, &'static str> {
 /// para `os`, mais nova primeiro).
 ///
 /// # Errors
-/// `docs/manual` ou `docs/novidades` ausente (raiz errada) ou falha ao listar ou ler um arquivo.
+/// `docs/manual` ou `docs/novidades` ausente (raiz errada) ou falha ao listar uma delas. Arquivo
+/// ilegível fica fora, com aviso no log.
 pub fn manual(root: &Path, os: &str) -> io::Result<Value> {
     let mut articles = Vec::new();
     let dir = root.join("docs").join("manual");
@@ -55,7 +56,11 @@ pub fn manual(root: &Path, os: &str) -> io::Result<Value> {
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else { continue };
         let id = name.trim_end_matches(".md");
         if !is_note_file(&name) || !valid_article_id(id) { continue; }
-        match parse(id, &std::fs::read_to_string(&path).map_err(at(&path))?) {
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) => { tracing::warn!(file = %path.display(), %error, "artigo do manual ilegivel; fica fora do manual"); continue; }
+        };
+        match parse(id, &text) {
             Ok(article) => articles.push(article),
             Err(reason) => tracing::warn!(file = %path.display(), reason, "artigo do manual fora do formato; fica fora do manual"),
         }
@@ -72,7 +77,7 @@ pub fn manual(root: &Path, os: &str) -> io::Result<Value> {
 fn article_json(article: &Article, news: &[Value]) -> Value {
     let (intro, sections) = split_sections(&article.body);
     let news: Vec<Value> = news.iter().filter(|n| n["manual"] == article.id.as_str())
-        .map(|n| json!({"id": n["id"], "date": n["date"], "title": n["title"]}))
+        .map(|n| json!({"id": n["id"], "date": n["date"], "title": n["title"], "platforms": n["platforms"]}))
         .collect();
     // Dois títulos iguais não podem dar o mesmo id: "Nesta página" rolaria sempre para o primeiro.
     let mut seen: Vec<String> = Vec::new();

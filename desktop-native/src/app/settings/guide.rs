@@ -39,7 +39,7 @@ pub(super) struct NewsItem {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
-pub(super) struct NewsRef { pub(super) id: String, pub(super) date: String, pub(super) title: String }
+pub(super) struct NewsRef { pub(super) id: String, pub(super) date: String, pub(super) title: String, #[serde(default)] pub(super) platforms: String }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub(super) struct Section { pub(super) id: String, pub(super) title: String, #[serde(default)] pub(super) markdown: String }
@@ -125,7 +125,11 @@ fn parse_manual(value: Value) -> Result<Vec<Category>, String> {
         crate::log_line(&format!("manual: resposta do manual fora do formato: {error}"));
         tr("invalid_response")
     })?;
-    for category in &mut categories { category.articles.retain(|article| for_desktop(&article.platforms)); }
+    for category in &mut categories {
+        category.articles.retain(|article| for_desktop(&article.platforms));
+        // As novidades só do celular não têm página aqui.
+        for article in &mut category.articles { article.news.retain(|item| for_desktop(&item.platforms)); }
+    }
     categories.retain(|category| !category.articles.is_empty());
     Ok(categories)
 }
@@ -471,9 +475,14 @@ mod tests {
         let value = serde_json::json!({"categories": [
             {"id": "comecar", "articles": [{"id": "x", "title": "Conectar", "platforms": "mobile"}]},
             {"id": "ferramentas", "articles": [{"id": "cofre", "title": "Cofre", "platforms": "all",
-                "sections": [{"id": "s", "title": "Guardar", "markdown": "Toque em **Nova senha**."}]}]}]});
+                "sections": [{"id": "s", "title": "Guardar", "markdown": "Toque em **Nova senha**."}],
+                "news": [{"id": "n1", "date": "2026-11-12", "title": "t", "platforms": "mobile"},
+                         {"id": "n2", "date": "2026-11-12", "title": "t", "platforms": "desktop"},
+                         {"id": "n3", "date": "2026-11-12", "title": "t", "platforms": "all"}]}]}]});
         let categories = parse_manual(value).unwrap();
         assert_eq!(categories.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["ferramentas"], "categoria sem artigo do desktop sai");
+        let news: Vec<&str> = categories[0].articles[0].news.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(news, ["n2", "n3"], "\"Mudou recentemente\" sem a novidade só do celular, mesmo sem o histórico carregado");
         assert_eq!(manual_matches(&categories, "nova senha").len(), 1);
         assert!(manual_matches(&categories, "tailscale").is_empty());
     }

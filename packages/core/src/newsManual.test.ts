@@ -11,7 +11,7 @@ const news = { news: [{ id: '2026-11-12-scheduled-tasks', date: '2026-11-12', ti
   platforms: 'all', summary: 's', text: 's\n\nmais', more: true, try_it: null, animation: null, manual: 'agendar' }] };
 const manual = { categories: [{ id: 'comecar', articles: [{ id: 'agendar', title: 'Agendar', summary: 's', icon: 'clock',
   platforms: 'all', intro: 'i', sections: [{ id: 'a', title: 'A', markdown: 'm' }],
-  news: [{ id: '2026-11-12-scheduled-tasks', date: '2026-11-12', title: 'Tarefas' }] }] }] };
+  news: [{ id: '2026-11-12-scheduled-tasks', date: '2026-11-12', title: 'Tarefas', platforms: 'all' }] }] }] };
 
 describe.each([
   ['getNewsHistory', getNewsHistory, '/api/news', news],
