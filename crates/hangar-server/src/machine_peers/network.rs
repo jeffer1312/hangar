@@ -358,6 +358,20 @@ pub async fn announce(s: &Service, old: &str) -> Value {
     }
     json!(rows)
 }
+/// O aparelho do caminho do Connect mora na outra máquina: revogado lá pelo endereço salvo, com a
+/// senha do dono dela. Fora do ar, a remoção daqui segue; sem nova tentativa.
+pub async fn revoke_connect_device(s: &Service, id: &str) {
+    let entries = s.store.tolerant();
+    // Com a marca, o `token` é aparelho, e aparelho não revoga o que não aprovou.
+    let Some(device) = entries.get(id).filter(|entry| entry["connect"] != true)
+        .and_then(|entry| entry["connect_device"].as_str()).filter(|device| super::store::valid_device(device)).map(str::to_owned) else { return };
+    drop(entries);
+    let client = crate::groups::peers::PeerClient::new(crate::groups::peers::PeerBook::new(Some(s.store.path.clone())));
+    match client.call(id, reqwest::Method::DELETE, &format!("/api/connect/devices/{device}"), None).await {
+        Ok(_) | Err(crate::groups::peers::PeerError::Refused { status: 404, .. }) => {}
+        Err(e) => tracing::warn!(code = "connect.peer_revoke_failed", peer = id, device = %device, "o aparelho do Connect ficou valendo na outra máquina: {}", e.text(id)),
+    }
+}
 pub fn qr_svg(url: &str) -> Result<String, Error> {
     let qr = qrcode::QrCode::new(url.as_bytes())
         .map_err(|_| Error::invalid("endereço de pareamento longo demais"))?;

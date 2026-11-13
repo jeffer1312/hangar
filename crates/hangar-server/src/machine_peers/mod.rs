@@ -534,6 +534,10 @@ pub async fn dispatch(
         ("GET", "/api/alcance") => Ok(network::reach(&service).await),
         ("GET", "/api/alcance/pareamento") => network::pairing(&service, q("endereco")).await,
         _ => {
+            // Antes de apagar: a revogação lê o endereço e a senha na própria entrada.
+            if *method == Method::DELETE && let Some(id) = path.strip_prefix("/api/peers/") {
+                network::revoke_connect_device(&service, id).await;
+            }
             let method = method.clone();
             let path = path.to_owned();
             tokio::task::spawn_blocking(move || match (method.as_str(), path.as_str()) {

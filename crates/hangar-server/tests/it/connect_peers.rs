@@ -682,3 +682,56 @@ async fn only_the_owner_outside_connect_starts_a_link() {
     assert_eq!(link_row(&w.a, "pc-b").await, Value::Null);
     assert_eq!(start_link(&w.a, "pc-a").await.status(), 400, "consigo mesma não");
 }
+
+/// Par salvo pelo Tailscale com outro nome: o caminho do Connect somado já conta como adicionado.
+#[tokio::test]
+async fn account_machines_mark_a_peer_added_by_its_connect_route() {
+    let w = world().await;
+    write_peers(&w.a, &json!({"notebook-jefferson": {"base_url": "https://notebook.tail.ts.net", "token": "senha-de-b"}}));
+    assert_eq!(account_list(&w.a).await.1["machines"][0]["added"], false);
+    write_peers(&w.a, &json!({"notebook-jefferson": {"base_url": "https://notebook.tail.ts.net", "token": "senha-de-b",
+        "connect_url": format!("https://{}", host_of("pc-b")), "connect_token": "aparelho", "connect_device": "abc"}}));
+    assert_eq!(account_list(&w.a).await.1["machines"][0]["added"], true);
+}
+
+fn with_route(base_url: &str, token: &str, device: &str) -> Value {
+    json!({"pc-b": {"base_url": base_url, "token": token, "connect_url": format!("https://{}", host_of("pc-b")),
+        "connect_token": "aparelho-de-b", "connect_device": device}})
+}
+
+async fn delete_peer(a: &Machine) -> u16 {
+    client().delete(format!("http://{}/api/peers/pc-b", a.main)).bearer_auth(OWNER).send().await.unwrap().status().as_u16()
+}
+
+#[tokio::test]
+async fn removing_a_peer_revokes_its_connect_device_on_the_other_machine() {
+    let w = world().await;
+    let (device, token) = w.b.store.enroll("pc-a").unwrap();
+    write_peers(&w.a, &with_route(&format!("http://{}", w.b.main), OWNER, &device));
+    assert_eq!(delete_peer(&w.a).await, 200);
+    assert!(peers_of(&w.a).get("pc-b").is_none());
+    assert!(w.b.store.verify(token.as_bytes()).is_none(), "revogado pela senha do dono de lá");
+}
+
+#[tokio::test]
+async fn removing_a_peer_still_deletes_when_the_other_machine_is_away() {
+    let w = world().await;
+    let (device, token) = w.b.store.enroll("pc-a").unwrap();
+    write_peers(&w.a, &with_route(&format!("http://127.0.0.1:{}", free_port()), OWNER, &device));
+    assert_eq!(delete_peer(&w.a).await, 200);
+    assert!(peers_of(&w.a).get("pc-b").is_none());
+    assert!(w.b.store.verify(token.as_bytes()).is_some());
+}
+
+/// Com a marca `connect`, o `token` salvo é um aparelho de lá: a revogação nem é tentada. A senha no
+/// lugar dele aqui só mostra que nenhuma chamada saiu.
+#[tokio::test]
+async fn removing_a_connect_marked_peer_does_not_try_to_revoke() {
+    let w = world().await;
+    let (device, token) = w.b.store.enroll("pc-a").unwrap();
+    let mut peers = with_route(&format!("http://{}", w.b.main), OWNER, &device);
+    peers["pc-b"]["connect"] = json!(true);
+    write_peers(&w.a, &peers);
+    assert_eq!(delete_peer(&w.a).await, 200);
+    assert!(w.b.store.verify(token.as_bytes()).is_some());
+}
