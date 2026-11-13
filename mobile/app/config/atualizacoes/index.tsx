@@ -29,7 +29,7 @@ export default function Updates() {
   const router = useRouter();
   const server = useServers((s) => s.active());
   const [state, retry] = useNewsHistory(server, true);
-  const unseen = useUnseenNews(server);
+  const unseen = useUnseenNews(server, state.status === 'ok');
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const mine = useMemo(() => (state.status === 'ok' ? state.data.news.filter((n) => forPhone(n.platforms)) : []), [state]);

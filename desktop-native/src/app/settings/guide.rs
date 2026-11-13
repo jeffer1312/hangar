@@ -315,7 +315,7 @@ impl Hangar {
         self.guide_read(async move { api.server_read(&["news"], &[], 20).await }, cx, move |this, result, _| {
             if this.guide.server != server { return; }
             let value = this.guide_result(result, "news_unavailable").and_then(parse_news);
-            this.guide.news.finish(seq, value);
+            if this.guide.news.finish(seq, value) { this.guide_mark_seen(); }
         });
         cx.notify();
     }
@@ -355,7 +355,8 @@ impl Hangar {
 
     /// Com a página Atualizações aberta, o que chegou passa a visto no servidor; as bolinhas ficam até a próxima abertura.
     fn guide_mark_seen(&mut self) {
-        if self.settings != Some(Page::Updates) || self.guide.unread.is_empty() { return; }
+        // Só com a lista na tela: com servidor antigo ou erro de leitura, o "O que chegou" continua valendo.
+        if self.settings != Some(Page::Updates) || self.guide.unread.is_empty() || self.guide.news.ok().is_none() { return; }
         let (Some(through), Some(api)) = (self.guide.through, self.guide.api.clone()) else { return };
         if self.guide.seen == Some(through) { return; }
         let Some(device) = crate::update::confirm::device_id() else { return };

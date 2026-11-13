@@ -82,10 +82,11 @@ export const useManual = (server: Server | null, refresh: boolean) => useDoc<Man
 const seenThrough = new Map<string, number>();
 
 /** Ids que chegaram e o aparelho não tinha visto; abrir a tela marca tudo visto, e a bolinha fica até sair. */
-export function useUnseenNews(server: Server | null): ReadonlySet<string> {
+export function useUnseenNews(server: Server | null, listShown: boolean): ReadonlySet<string> {
   const [ids, setIds] = useState<ReadonlySet<string>>(() => new Set());
   useEffect(() => {
-    if (!server) return;
+    // Só marca visto com a lista na tela: com servidor antigo ou erro de leitura, a folha do que chegou continua valendo.
+    if (!server || !listShown) return;
     let alive = true;
     getArrivedNews(server, updateDeviceId()).then((arrived) => {
       if (!alive || !arrived || !Number.isSafeInteger(arrived.through)) return;
@@ -98,7 +99,7 @@ export function useUnseenNews(server: Server | null): ReadonlySet<string> {
       registrarDiag({ evento: 'update.arrived_failed', nivel: 'aviso', codigo: 'update_arrived_failed', detalhe: e instanceof Error ? e.message : String(e) });
     });
     return () => { alive = false; };
-  }, [server?.id, server?.baseUrl, server?.token]);
+  }, [server?.id, server?.baseUrl, server?.token, listShown]);
   return ids;
 }
 
