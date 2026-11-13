@@ -170,7 +170,8 @@ fn text_url(api: &Api, path: &str, token: &str) -> url::Url {
     url.path_segments_mut().expect("validated HTTP base").pop_if_empty()
         .extend(path.split('/').filter(|part| !part.is_empty()));
     url.set_query((!query.is_empty()).then_some(query));
-    url.query_pairs_mut().append_pair("token", token.trim());
+    let token = api.socket_token(&url, token);
+    url.query_pairs_mut().append_pair("token", &token);
     url
 }
 
@@ -183,7 +184,8 @@ fn terminal_url(api: &Api, session: &str, shortcut: Option<&str>, hangar: bool, 
             .extend(["api", "hangar-terminals", id, "term"]);
         url
     } else { api.endpoint(Some(session), Some("term")) };
-    url.query_pairs_mut().append_pair("token", token.trim())
+    let token = api.socket_token(&url, token);
+    url.query_pairs_mut().append_pair("token", &token)
         .append_pair("cols", &cols.to_string()).append_pair("rows", &rows.to_string());
     if let (false, Some(id)) = (hangar, shortcut) { url.query_pairs_mut().append_pair("shortcut", id); }
     url
@@ -219,11 +221,14 @@ async fn handshake(url: url::Url) -> Result<reqwest::Upgraded, Error> {
         url::Host::Ipv6(ip) => ip.is_loopback(),
     }) { builder = builder.no_proxy(); }
     let client = builder.build().map_err(|_| Error::Network)?;
+    let target = url.clone();
     // Nunca transportar erros do reqwest: eles podem conter a URL autenticada.
     timeout(Duration::from_secs(10), async {
         let response = client.get(url).header(header::UPGRADE, "websocket").header(header::CONNECTION, "Upgrade")
             .header(header::SEC_WEBSOCKET_VERSION, "13").header(header::SEC_WEBSOCKET_KEY, &key)
             .send().await.map_err(|_| Error::Network)?;
+        // Só a recusa HTTP do aperto de mão diz "credencial revogada"; fechamento depois de aberto não.
+        if response.status() == StatusCode::UNAUTHORIZED { crate::api::route::refused_at(&target); }
         check_handshake(response.status(), response.headers(), &key)?;
         response.upgrade().await.map_err(|_| Error::Network)
     }).await.map_err(|_| Error::Network)?
@@ -400,6 +405,25 @@ mod tests {
         assert_eq!(path(terminal_url(&api, "pm-1", Some("ab12"), false, "tok", 80, 24)),
             ("/api/sessions/pm-1/term".to_owned(), "token=tok&cols=80&rows=24&shortcut=ab12".to_owned()));
         assert_eq!(path(terminal_url(&api, "pm-1", None, false, "tok", 80, 24)).0, "/api/sessions/pm-1/term");
+    }
+
+    #[test]
+    fn sockets_over_connect_carry_the_device_credential_and_others_the_owner_secret() {
+        use crate::api::route::{self, ConnectRoute};
+        let api = Api::new("http://socket-route-test.invalid:8765", "owner").unwrap();
+        let connect = ConnectRoute { url: "https://casa.socket.hangar.dev.br".into(), id: "casa".into(), device_id: "dev-1".into(), token: "device-secret".into() };
+        route::seed(&api.identity(), false, None, Some(&connect), false);
+        let token = |url: url::Url| url.query_pairs().find(|(k, _)| k == "token").map(|(_, v)| v.into_owned());
+        // Sem decisão, a rota é o endereço salvo: senha do dono.
+        assert_eq!(token(terminal_url(&api, "pm-1", None, false, "owner", 80, 24)).as_deref(), Some("owner"));
+        assert_eq!(token(text_url(&api, "/api/voice", "owner")).as_deref(), Some("owner"));
+        route::route_to(&api, url::Url::parse("https://casa.socket.hangar.dev.br/").unwrap());
+        assert_eq!(token(terminal_url(&api, "pm-1", Some("ab12"), true, "owner", 80, 24)).as_deref(), Some("device-secret"));
+        assert_eq!(token(terminal_url(&api, "pm-1", None, false, "owner", 80, 24)).as_deref(), Some("device-secret"));
+        assert_eq!(token(text_url(&api, "/api/voice", "owner")).as_deref(), Some("device-secret"));
+        let cdp = text_url(&api, "/api/sessions/pm-1/nav-remoto?x=1", "owner");
+        assert_eq!((cdp.host_str(), token(cdp.clone()).as_deref()), (Some("casa.socket.hangar.dev.br"), Some("device-secret")));
+        assert_eq!(cdp.query_pairs().filter(|(k, _)| k == "token").count(), 1, "um token só na URL");
     }
 
     #[tokio::test]

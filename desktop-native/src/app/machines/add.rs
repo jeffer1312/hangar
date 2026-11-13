@@ -342,7 +342,7 @@ impl AddMachine {
         let messages = !own_id.is_empty() && self.messages;
         if !messages && !self.follow { self.error = Some(tr("machines_add_error_none")); cx.notify(); return; }
         if messages && found.id.is_empty() { self.error = Some(tr("machines_add_error_no_id")); cx.notify(); return; }
-        let entry = ServerEntry { id: servers::new_id(), label, address: found.base.clone(), token: found.token.clone(), disabled: false, invite: false, lan: None, ephemeral: false };
+        let entry = ServerEntry { id: servers::new_id(), label, address: found.base.clone(), token: found.token.clone(), disabled: false, invite: false, lan: None, connect: None, connect_refused: false, ephemeral: false };
         if self.follow && !retry &&!hangar.update(cx, |hangar, cx| hangar.save_machine(entry, window, cx)) {
             self.error = Some(tr("machines_add_error_invite"));
             cx.notify();
@@ -689,7 +689,7 @@ mod tests {
     #[test]
     fn saving_updates_the_same_address_and_never_an_invite() {
         let entry = |address: &str, token: &str, invite: bool| ServerEntry { id: token.into(), label: token.into(), address: address.into(),
-            token: token.into(), disabled: true, invite, lan: None, ephemeral: false };
+            token: token.into(), disabled: true, invite, lan: None, connect: None, connect_refused: false, ephemeral: false };
         let mut list = vec![entry("http://casa:8765", "old", false), entry("https://h:8443", "guest", true)];
         assert!(place_machine(&mut list, ServerEntry { disabled: false, ..entry("http://CASA:8765/", "new", false) }));
         assert_eq!((list.len(), list[0].token.as_str(), list[0].disabled), (2, "new", false));

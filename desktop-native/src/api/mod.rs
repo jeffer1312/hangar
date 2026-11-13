@@ -99,7 +99,30 @@ pub fn mermaid_failure(status: u16, message: String) -> MermaidReply {
 
 // `plain` busca mídia de terceiros: nunca leva o token do servidor.
 #[derive(Clone)]
-pub struct Api { client: Client, plain: Client, base: Url, token: String }
+pub struct Api { client: Authed, plain: Client, base: Url, token: String }
+
+/// Cliente com a senha do dono. Pedido à origem do Connect sai com a credencial de aparelho: lá a senha é recusada.
+#[derive(Clone)]
+struct Authed { owner: Client, identity: String }
+
+impl Authed {
+    fn pick(&self, url: &Url) -> Client { route::device_client(&self.identity, url).unwrap_or_else(|| self.owner.clone()) }
+    fn get(&self, url: Url) -> reqwest::RequestBuilder { self.pick(&url).get(url) }
+    fn post(&self, url: Url) -> reqwest::RequestBuilder { self.pick(&url).post(url) }
+    fn delete(&self, url: Url) -> reqwest::RequestBuilder { self.pick(&url).delete(url) }
+    fn request(&self, method: Method, url: Url) -> reqwest::RequestBuilder { self.pick(&url).request(method, url) }
+}
+
+/// Cliente que leva `token` em todo pedido, sem seguir redirecionamento.
+fn bearer_client(token: &str) -> Result<Client, Failure> {
+    let mut value = header::HeaderValue::from_str(&format!("Bearer {}", token.trim()))
+        .map_err(|_| Failure::local("invalid_token"))?;
+    value.set_sensitive(true);
+    let mut headers = header::HeaderMap::new();
+    headers.insert(header::AUTHORIZATION, value);
+    Client::builder().default_headers(headers).connect_timeout(Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none()).build().map_err(|_| Failure::local("network_error"))
+}
 
 /// Escolha capturada antes do ditado; a resposta não troca seu modo, modelo ou destino.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -316,13 +339,7 @@ impl Api {
             return Err(Failure::local("invalid_url"));
         }
         if !base.path().ends_with('/') { base.set_path(&format!("{}/", base.path())); }
-        let mut value = header::HeaderValue::from_str(&format!("Bearer {}", token.trim()))
-            .map_err(|_| Failure::local("invalid_token"))?;
-        value.set_sensitive(true);
-        let mut headers = header::HeaderMap::new();
-        headers.insert(header::AUTHORIZATION, value);
-        let client = Client::builder().default_headers(headers).connect_timeout(Duration::from_secs(10))
-            .redirect(reqwest::redirect::Policy::none()).build().map_err(|_| Failure::local("network_error"))?;
+        let client = Authed { owner: bearer_client(token)?, identity: base.as_str().to_owned() };
         let plain = Client::builder().connect_timeout(Duration::from_secs(10)).redirect(reqwest::redirect::Policy::limited(3))
             .build().map_err(|_| Failure::local("network_error"))?;
         Ok(Self { client, plain, base, token: token.trim().to_owned() })
@@ -357,6 +374,7 @@ impl Api {
         let body = response.json::<Value>().await.ok();
         let code = envelope_code(body.as_ref());
         recent::record(method, &url, status, code.as_deref());
+        if status == 401 { route::refused_at(&url); }
         let detail = failure_detail(body, status);
         Err(Failure { status: Some(status), detail: detail.chars().take(500).collect(), retry_after, uncertain: post && status >= 500, code })
     }
@@ -536,7 +554,7 @@ impl Api {
     // Bytes de um anexo: do cofre, de caminho citado ou de imagem do transcript, autenticados; remoto, sem token.
     pub async fn fetch(&self, name: &str, source: &Source) -> Result<Vec<u8>, Failure> {
         let mut url = self.endpoint(Some(name), None);
-        let mut client = &self.client;
+        let mut remote = false;
         match source {
             Source::Upload(file) => { url.path_segments_mut().expect("validated HTTP base").extend(["uploads", file]); }
             Source::Cited(path) | Source::Workspace(path) => {
@@ -547,11 +565,12 @@ impl Api {
             Source::Transcript(id, index) => { url.path_segments_mut().expect("validated HTTP base").extend(["transcript-image", id, &index.to_string()]); }
             Source::Remote(address) => {
                 url = Url::parse(address).ok().filter(|url| matches!(url.scheme(), "http" | "https")).ok_or_else(|| Failure::local("invalid_url"))?;
-                client = &self.plain;
+                remote = true;
             }
             Source::Memory(_, bytes) => return Ok(bytes.0.to_vec()),
         }
-        let r = client.get(url).timeout(Duration::from_secs(UPLOAD_SECONDS)).send().await.map_err(|_| Failure::transport(false))?;
+        let request = if remote { self.plain.get(url) } else { self.client.get(url) };
+        let r = request.timeout(Duration::from_secs(UPLOAD_SECONDS)).send().await.map_err(|_| Failure::transport(false))?;
         // Erro de terceiro não tem o corpo lido: nem memória, nem texto escolhido por ele na tela.
         if matches!(source, Source::Remote(_)) && !r.status().is_success() {
             let status = r.status().as_u16();

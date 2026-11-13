@@ -1326,7 +1326,7 @@ impl Hangar {
                 self.machines.adopting = None;
                 match result {
                     Ok(token) => {
-                        self.merge_servers(vec![ServerEntry { id: servers::new_id(), label: peer_id.clone(), address: url.clone(), token, disabled: false, invite: false, lan: None, ephemeral: false }], cx);
+                        self.merge_servers(vec![ServerEntry { id: servers::new_id(), label: peer_id.clone(), address: url.clone(), token, disabled: false, invite: false, lan: None, connect: None, connect_refused: false, ephemeral: false }], cx);
                         // O nome já foi conferido no teste: a linha casa com o registro sem esperar outra leitura.
                         if let Some(entry) = self.servers.iter().find(|s| servers::norm(&s.address) == servers::norm(&url)) {
                             self.machines.ids.insert(entry.id.clone(), Some(peer_id.clone()));
@@ -2484,7 +2484,7 @@ mod tests {
     }
 
     fn entry(id: &str, address: &str, disabled: bool) -> ServerEntry {
-        ServerEntry { id: id.into(), label: id.into(), address: address.into(), token: "t".into(), disabled, invite: false, lan: None, ephemeral: false }
+        ServerEntry { id: id.into(), label: id.into(), address: address.into(), token: "t".into(), disabled, invite: false, lan: None, connect: None, connect_refused: false, ephemeral: false }
     }
     fn peer(id: &str, url: &str, enabled: bool) -> Peer { Peer { id: id.into(), url: url.into(), enabled } }
     fn check(going: &str, back: Option<Back>) -> Check {

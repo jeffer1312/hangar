@@ -244,7 +244,7 @@ fn servers(list: Option<&str>, origin: &str) -> Vec<crate::app::ServerEntry> {
         Some(crate::app::ServerEntry { id: text("id").unwrap_or_else(crate::app::new_server_id), label: text("label").unwrap_or_default(),
             address, token, disabled: s.get("disabled").and_then(Value::as_bool) == Some(true),
             // O web marca o servidor de convite; sem a marca ele chamaria rotas do servidor inteiro e levaria 403.
-            invite: s.get("invite").and_then(Value::as_bool) == Some(true), lan: None, ephemeral: false })
+            invite: s.get("invite").and_then(Value::as_bool) == Some(true), lan: None, connect: None, connect_refused: false, ephemeral: false })
     }).collect()
 }
 
