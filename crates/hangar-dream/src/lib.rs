@@ -2,6 +2,7 @@
 //! Nada aqui depende do `hangar-server`: o modelo e a limpeza de segredos entram de fora.
 
 pub mod budget;
+pub mod config;
 pub mod memory;
 pub mod project;
 pub mod render;

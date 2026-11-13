@@ -80,6 +80,9 @@ pub struct State {
     pub month: Month,
     #[serde(default)]
     pub suggestions: Vec<Suggestion>,
+    /// Última rodada noturna: o relógio conta o próximo horário a partir dela, mesmo depois de reiniciar.
+    #[serde(default)]
+    pub last_round_at: Option<DateTime<Utc>>,
 }
 
 impl State {

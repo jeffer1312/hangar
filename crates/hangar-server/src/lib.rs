@@ -113,6 +113,7 @@ pub mod plans;
 mod forwarded;
 pub mod worktree_routes;
 pub mod reviews;
+pub mod dream;
 mod worktree_context;
 mod worktree_fetch;
 pub mod worktree_policy;
