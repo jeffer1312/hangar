@@ -24,12 +24,10 @@ impl Host for ProofHost {
     fn prepare_target(&self, target: Target) -> HostFuture<'_, Result<Target, Error>> {
         Box::pin(async move {
             Ok(match target {
-                Target::Session {
-                    name,
-                    session_key: _,
-                } => Target::Session {
+                Target::Session { name, .. } => Target::Session {
                     name,
                     session_key: Some("proof-life".into()),
+                    conversation: None,
                 },
                 other => other,
             })

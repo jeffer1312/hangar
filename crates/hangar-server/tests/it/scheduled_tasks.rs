@@ -214,6 +214,7 @@ async fn scheduled_routes_bound_writer_refuses_another_life_before_queueing() {
         &state,
         "same-name",
         "previous-life",
+        None,
         "Revise.",
     )
     .await;
@@ -223,10 +224,95 @@ async fn scheduled_routes_bound_writer_refuses_another_life_before_queueing() {
         &state,
         "same-name",
         "k-same-name",
+        None,
         "Revise.",
     )
     .await;
     assert_eq!(status, 200);
+}
+
+/// A descoberta diz qual conversa a sessão mostra agora (a do `/clear`, na mesma chave).
+struct CurrentConversation(&'static str);
+impl hangar_server::locate::Locate for CurrentConversation {
+    fn info<'a>(
+        &'a self,
+        _name: &'a str,
+    ) -> hangar_server::locate::BoxFuture<
+        'a,
+        Result<Option<hangar_server::transcript::InternalInfo>, hangar_server::locate::InfoFailed>,
+    > {
+        Box::pin(async move {
+            Ok(Some(
+                serde_json::from_value(json!({"provider":"claude-headless","session_key":self.0}))
+                    .unwrap(),
+            ))
+        })
+    }
+}
+
+#[tokio::test]
+async fn scheduled_routes_bound_writer_refuses_the_conversation_after_clear_in_the_same_life() {
+    let directory = tempfile::tempdir().unwrap();
+    let registry = crate::session_write_input::registry().await;
+    crate::session_write_input::open_headless(&registry, directory.path(), "same-name", "written")
+        .await;
+    let mut state = AppState::new(Config {
+        listen: "127.0.0.1:0".parse().unwrap(),
+        upstream: crate::refused_address(),
+        internal_secret: "fixture-internal".into(),
+        auth_token: "fixture-owner".into(),
+        log_path: None,
+        trusted: TrustedHosts::parse("127.0.0.1"),
+    });
+    state.side.locate = Arc::new(CurrentConversation("after-clear"));
+    assert!(state.state.runtime.set(registry).is_ok());
+    let (status, body) = hangar_server::session_write::input::write_bound_input(
+        &state,
+        "same-name",
+        "k-same-name",
+        Some("before-clear"),
+        "Revise.",
+    )
+    .await;
+    assert_eq!(status, 409);
+    assert_eq!(body["detail"]["code"], "scheduled_session_changed");
+    let (status, _) = hangar_server::session_write::input::write_bound_input(
+        &state,
+        "same-name",
+        "k-same-name",
+        Some("after-clear"),
+        "Revise.",
+    )
+    .await;
+    assert_eq!(status, 200);
+}
+
+#[tokio::test]
+async fn scheduled_routes_create_with_the_same_request_id_returns_the_first_task() {
+    let fixture = Fixture::start().await;
+    let mut body = fixture.input();
+    body["request_id"] = json!("desktop-req_01");
+    let first = fixture
+        .request(reqwest::Method::POST, "", Some(body.clone()))
+        .await;
+    assert_eq!(first.status(), 201);
+    let first: Value = serde_json::from_slice(&first.bytes().await.unwrap()).unwrap();
+    let again = fixture.request(reqwest::Method::POST, "", Some(body)).await;
+    assert_eq!(again.status(), 201);
+    let again: Value = serde_json::from_slice(&again.bytes().await.unwrap()).unwrap();
+    assert_eq!(again["id"], first["id"]);
+    let list = fixture.request(reqwest::Method::GET, "", None).await;
+    let list: Value = serde_json::from_slice(&list.bytes().await.unwrap()).unwrap();
+    assert_eq!(list["tasks"].as_array().unwrap().len(), 1);
+    let mut invalid = fixture.input();
+    invalid["request_id"] = json!("não vale");
+    assert_eq!(
+        fixture
+            .request(reqwest::Method::POST, "", Some(invalid))
+            .await
+            .status(),
+        400
+    );
 }
 
 #[tokio::test]
@@ -398,6 +484,7 @@ async fn scheduled_regression_bound_sleep_queue_cannot_bypass_a_closed_ingress()
         &state,
         "sleeping",
         "old-life",
+        None,
         "Não escreva depois do fechamento.",
     )
     .await;

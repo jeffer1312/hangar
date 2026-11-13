@@ -20,6 +20,7 @@ let host: HTMLDivElement;
 let fetchMock: MockInstance<typeof globalThis.fetch>;
 let writes: ScheduledTaskInput[];
 let write: (input: ScheduledTaskInput) => Promise<Response>;
+let providers: Record<string, { disponivel: boolean; default?: boolean }>;
 const originalServers = useServers.getState();
 const close = vi.fn();
 const reload = vi.fn();
@@ -30,12 +31,13 @@ beforeEach(() => {
   useServers.setState({ servers: [server], activeId: server.id });
   configureApi({ getBaseUrl: () => server.baseUrl, getToken: () => server.token, onUnauthorized() {}, origin: null, createEventSource: vi.fn() });
   close.mockReset(); reload.mockReset(); writes = [];
+  providers = { codex: { default: true, disponivel: true }, claude: { disponivel: true } };
   write = async (input) => json({ ...task, ...input, revision: 4 });
   fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
     const path = new URL(String(url)).pathname;
     expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer owner');
     if (path === '/api/sessions') return json([{ name: 'destino', state: 'idle' }]);
-    if (path === '/api/providers') return json({ codex: { default: true, disponivel: true }, claude: { disponivel: true } });
+    if (path === '/api/providers') return json(providers);
     if (path === '/api/model-options') return json({ models: [{ id: 'model-default', name: 'modelo-catalogo' }], default: 'model-default' });
     if (path === '/api/session-defaults') return json({ defaults: null });
     if (path === '/api/codex-contas') return json([]);
@@ -86,6 +88,14 @@ it('resolve o provedor padrão da máquina e salva o agente que o formulário mo
   expect(urls).toContain('https://example.test/api/codex-contas');
   expect(writes).toHaveLength(1);
   expect(writes[0]).toMatchObject({ target: { kind: 'new', launch: { cwd: '/projeto', provider: 'codex' }, worktree: false } });
+});
+
+it('sem padrão marcado e com o Claude indisponível escolhe o primeiro agente disponível', async () => {
+  providers = { claude: { disponivel: false }, pi: { disponivel: false }, codex: { disponivel: true }, kimi: { disponivel: true } };
+  await mount({ ...task, target: { kind: 'new', launch: { cwd: '/projeto' }, worktree: false } });
+  expect(host.textContent).toContain('Codex');
+  await act(async () => save().click());
+  expect(writes[0]).toMatchObject({ target: { kind: 'new', launch: { cwd: '/projeto', provider: 'codex' } } });
 });
 
 it('edita o nome de Once encerrado preservando o offset e os segundos originais', async () => {

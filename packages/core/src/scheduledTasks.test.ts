@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { configureApi, _resetApiEnvForTests } from './apiEnv';
-import { createScheduledTask, deleteScheduledTask, getScheduledTasks, runScheduledTask, setScheduledTaskEnabled, updateScheduledTask, validateScheduledTask, taskDateToInstant, taskDateParts, type ScheduledTaskInput } from './scheduledTasks';
+import { createScheduledTask, deleteScheduledTask, getScheduledTasks, runScheduledTask, setScheduledTaskEnabled, updateScheduledTask, validateScheduledTask, taskDateToInstant, taskDateParts, reuseUnchangedTasks, type ScheduledTask, type ScheduledTaskInput } from './scheduledTasks';
 
 const server = { id: 'test', label: 'Servidor', baseUrl: 'https://tasks.test', token: 'owner' };
 const input: ScheduledTaskInput = { name: 'revisar', prompt: 'revisar projeto', enabled: true,
@@ -16,6 +16,7 @@ it('envia revisão e identidade da conversa sem perder o servidor escolhido', as
   const calls = [
     [() => getScheduledTasks(server), 'GET', '/api/scheduled-tasks', undefined],
     [() => createScheduledTask(server, input), 'POST', '/api/scheduled-tasks', input],
+    [() => createScheduledTask(server, { ...input, request_id: 'pedido-1' }), 'POST', '/api/scheduled-tasks', { ...input, request_id: 'pedido-1' }],
     [() => updateScheduledTask(server, 'a/b', 8, input), 'PUT', '/api/scheduled-tasks/a%2Fb', { ...input, revision: 8 }],
     [() => setScheduledTaskEnabled(server, 'a/b', 9, false), 'PATCH', '/api/scheduled-tasks/a%2Fb/enabled', { enabled: false, revision: 9 }],
     [() => runScheduledTask(server, 'a/b'), 'POST', '/api/scheduled-tasks/a%2Fb/run', undefined],
@@ -69,4 +70,15 @@ it('permite conservar Once encerrado na edição e recusa criar ou mudar para ou
   expect(validateScheduledTask(renamed, now)).toBe('date');
   expect(validateScheduledTask({ ...renamed, schedule: { kind: 'once', at: '2027-11-02T09:00:37-03:00' } }, now, original)).toBe('date');
   expect(validateScheduledTask({ ...renamed, schedule: { kind: 'once', at: '2027-11-13T09:00:00-03:00' } }, now, original)).toBeNull();
+});
+
+it('mantém o mesmo objeto para a tarefa que não mudou e troca só a que mudou', () => {
+  const base: ScheduledTask = { ...input, id: 'a', revision: 1, next_run_at: null, last_run_at: null, last_status: 'never', last_error: null, last_session: null };
+  const prev = [base, { ...base, id: 'b' }];
+  const next = reuseUnchangedTasks(prev, [{ ...base }, { ...base, id: 'b', last_status: 'sent' }, { ...base, id: 'c' }]);
+  expect(next[0]).toBe(prev[0]);
+  expect(next[1]).not.toBe(prev[1]);
+  expect(next[1].last_status).toBe('sent');
+  expect(next[2].id).toBe('c');
+  expect(reuseUnchangedTasks(undefined, prev)).toEqual(prev);
 });

@@ -20,7 +20,8 @@ use crate::session_open::{OpenCaller, SessionOpenRequest};
 
 #[derive(Default)]
 pub struct Service {
-    engine: OnceCell<Result<Arc<Engine>, Error>>,
+    /// Só a abertura que deu certo fica guardada: a que falhou tenta de novo no próximo pedido.
+    engine: OnceCell<Arc<Engine>>,
     dispatch: std::sync::OnceLock<DispatchHandle>,
 }
 impl Service {
@@ -32,14 +33,14 @@ impl Service {
     }
     pub fn from_engine(engine: Arc<Engine>) -> Self {
         Self {
-            engine: OnceCell::new_with(Some(Ok(engine))),
+            engine: OnceCell::new_with(Some(engine)),
             dispatch: std::sync::OnceLock::new(),
         }
     }
 
     async fn engine(&self, state: &Arc<AppState>) -> Result<Arc<Engine>, Error> {
         self.engine
-            .get_or_init(|| async {
+            .get_or_try_init(|| async {
                 let home = state.accounts.env.home.clone();
                 let (store, timezone) = tokio::task::spawn_blocking(move || {
                     let timezone = iana_time_zone::get_timezone()
@@ -53,7 +54,7 @@ impl Service {
                 })
                 .await
                 .map_err(|_| Error::unavailable())??;
-                Ok(Arc::new(Engine::new(
+                Ok::<_, Error>(Arc::new(Engine::new(
                     Arc::new(store),
                     timezone,
                     Arc::new(SessionHost(Arc::downgrade(state))),
@@ -61,7 +62,7 @@ impl Service {
                 )))
             })
             .await
-            .clone()
+            .cloned()
     }
 }
 
@@ -76,17 +77,23 @@ pub(crate) fn spawn(
 pub async fn run_after_restoration(state: Arc<AppState>, restoration: crate::startup::Readiness) {
     state.startup.wait().await;
     restoration.wait().await;
-    let engine = match state.scheduled_tasks.engine(&state).await {
-        Ok(engine) => engine,
-        Err(error) => {
-            tracing::warn!(code = error.code, "agendador indisponível");
-            return;
+    // Falha de abertura ou recuperação pode ser passageira (disco, trava do SQLite): o despachante
+    // só nasce depois da recuperação, então a subida insiste com espera crescente.
+    let mut wait = std::time::Duration::from_secs(1);
+    let engine = loop {
+        let ready = match state.scheduled_tasks.engine(&state).await {
+            Ok(engine) => engine.store.recover().map(|()| engine),
+            Err(error) => Err(error),
+        };
+        match ready {
+            Ok(engine) => break engine,
+            Err(error) => {
+                tracing::warn!(code = error.code, "agendador indisponível; nova tentativa");
+                tokio::time::sleep(wait).await;
+                wait = (wait * 2).min(std::time::Duration::from_secs(60));
+            }
         }
     };
-    if let Err(error) = engine.store.recover() {
-        tracing::warn!(code = error.code, "recuperação do agendador falhou");
-        return;
-    }
     let automatic = match state
         .settings_snapshot()
         .and_then(|s| s.value("CP_AUTOMACOES"))
@@ -130,7 +137,11 @@ impl Host for SessionHost {
                         base,
                     })
                 }
-                Target::Session { name, session_key } => {
+                Target::Session {
+                    name,
+                    session_key,
+                    conversation: expected_conversation,
+                } => {
                     if name.is_empty()
                         || name.len() > 64
                         || !name
@@ -180,9 +191,20 @@ impl Host for SessionHost {
                     {
                         return Err(changed_life());
                     }
+                    let conversation = match state.side.locate.info(&name).await {
+                        Ok(info) => info.map(|info| info.session_key).filter(|id| !id.is_empty()),
+                        Err(_) => return Err(Error::unavailable()),
+                    };
+                    if expected_conversation
+                        .as_ref()
+                        .is_some_and(|expected| Some(expected) != conversation.as_ref())
+                    {
+                        return Err(changed_life());
+                    }
                     Ok(Target::Session {
                         name,
                         session_key: Some(key),
+                        conversation,
                     })
                 }
             }
@@ -197,11 +219,16 @@ impl Host for SessionHost {
                 Target::Session {
                     name,
                     session_key: Some(key),
+                    conversation,
                 } => {
+                    // A tarefa que é o próprio `/clear` troca a conversa a cada execução.
+                    let clears =
+                        attempt.task.input.prompt.split_whitespace().next() == Some("/clear");
                     let (status, body) = crate::session_write::input::write_bound_input(
                         &state,
                         name,
                         key,
+                        conversation.as_deref().filter(|_| !clears),
                         &attempt.task.input.prompt,
                     )
                     .await;
@@ -350,7 +377,7 @@ fn changed_life() -> Error {
     Error {
         status: 409,
         code: "scheduled_session_changed",
-        message: "A sessão de destino foi encerrada ou recriada. Escolha o destino novamente."
+        message: "A sessão de destino foi encerrada, recriada ou começou outra conversa. Escolha o destino novamente."
             .into(),
     }
 }
@@ -537,10 +564,19 @@ async fn inner(
     } else {
         0
     };
+    // Só a criação usa o request_id; na edição ele é ignorado.
+    let request_id = match body.as_object_mut().and_then(|b| b.remove("request_id")) {
+        None => None,
+        Some(Value::String(id)) => Some(id),
+        Some(_) if method == Method::POST => return Err(Error::request_id()),
+        Some(_) => None,
+    };
     let input: TaskInput = serde_json::from_value(body)
         .map_err(|_| Error::invalid("Informe todos os campos da tarefa no formato esperado."))?;
     let task = if method == Method::POST {
-        engine.create(input).await?
+        engine
+            .create_with_request(input, request_id.as_deref())
+            .await?
     } else {
         engine
             .update(id.as_deref().unwrap_or_default(), input, revision)

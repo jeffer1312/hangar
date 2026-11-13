@@ -123,6 +123,11 @@ impl Hangar {
             page
         };
         page.update(cx, |page, cx| {
+            // Outro token no mesmo endereço: o que foi lido com o anterior não vale, e a leitura recomeça.
+            if !page.api.same_credential(&current_api) {
+                (page.snapshot, page.sessions, page.error, page.notice) = (None, None, None, None);
+                page.refresh = true;
+            }
             page.api = current_api.clone();
             page.connection = connection;
             if let Some(draft) = &page.draft {
@@ -175,9 +180,10 @@ impl TaskPage {
         run(
             &self.runtime,
             async move {
-                let tasks = api.server_read(&["scheduled-tasks"], &[], 20).await;
-                let sessions = api.server_read(&["sessions"], &[], 20).await;
-                Ok((tasks, sessions))
+                Ok(tokio::join!(
+                    api.server_read(&["scheduled-tasks"], &[], 20),
+                    api.server_read(&["sessions"], &[], 20)
+                ))
             },
             window,
             cx,

@@ -24,12 +24,26 @@ impl Store {
             options.mode(0o600);
         }
         options.open(path).map_err(|_| Error::unavailable())?;
-        let connection = Connection::open(path).map_err(|_| Error::unavailable())?;
+        let mut connection = Connection::open(path).map_err(|_| Error::unavailable())?;
         connection
             .busy_timeout(std::time::Duration::from_secs(2))
             .map_err(|_| Error::unavailable())?;
         connection.execute_batch("PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS scheduled_tasks (id TEXT PRIMARY KEY, body TEXT NOT NULL);")
             .map_err(|_| Error::unavailable())?;
+        // Arquivo criado antes do request_id ganha a coluna; a trava evita duas aberturas somando a mesma.
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| Error::unavailable())?;
+        if tx
+            .prepare("SELECT request_id FROM scheduled_tasks LIMIT 0")
+            .is_err()
+        {
+            tx.execute_batch("ALTER TABLE scheduled_tasks ADD COLUMN request_id TEXT;")
+                .map_err(|_| Error::unavailable())?;
+        }
+        tx.execute_batch("CREATE UNIQUE INDEX IF NOT EXISTS scheduled_tasks_request_id ON scheduled_tasks(request_id) WHERE request_id IS NOT NULL;")
+            .map_err(|_| Error::unavailable())?;
+        tx.commit().map_err(|_| Error::unavailable())?;
         Ok(Self {
             connection: Mutex::new(connection),
         })
@@ -46,26 +60,46 @@ impl Store {
         now: DateTime<Utc>,
         zone: &T,
     ) -> Result<Task, Error> {
-        validate(&input)?;
-        if let Schedule::Once { at } = &input.schedule
-            && parse_instant(at)? <= now
-        {
-            return Err(Error::invalid(
-                "Escolha uma data futura para executar uma vez.",
-            ));
+        self.create_with_request(input, None, now, zone)
+    }
+
+    /// A tarefa já criada com este `request_id`.
+    pub fn find_request(&self, request_id: &str) -> Result<Option<Task>, Error> {
+        validate_request_id(request_id)?;
+        let connection = self.connection.lock().map_err(|_| Error::unavailable())?;
+        read_request(&connection, request_id)
+    }
+
+    /// Resposta perdida não duplica: o mesmo `request_id` devolve a tarefa que ele já criou.
+    pub fn create_with_request<T: TimeZone>(
+        &self,
+        input: TaskInput,
+        request_id: Option<&str>,
+        now: DateTime<Utc>,
+        zone: &T,
+    ) -> Result<Task, Error> {
+        if let Some(request_id) = request_id {
+            validate_request_id(request_id)?;
         }
-        let task = Task {
-            id: hangar_core::ids::random_hex(16),
-            revision: 1,
-            next_run_at: scheduled(&input, now, zone)?,
-            input,
-            last_run_at: None,
-            last_status: Status::Never,
-            last_error: None,
-            last_session: None,
-            attempt: None,
-        };
         self.transaction(|tx| {
+            if let Some(request_id) = request_id
+                && let Some(task) = read_request(tx, request_id)?
+            {
+                return Ok(task);
+            }
+            validate(&input)?;
+            require_future_once(&input, now)?;
+            let task = Task {
+                id: hangar_core::ids::random_hex(16),
+                revision: 1,
+                next_run_at: scheduled(&input, now, zone)?,
+                input,
+                last_run_at: None,
+                last_status: Status::Never,
+                last_error: None,
+                last_session: None,
+                attempt: None,
+            };
             let count: i64 = tx
                 .query_row("SELECT COUNT(*) FROM scheduled_tasks", [], |row| row.get(0))
                 .map_err(|_| Error::unavailable())?;
@@ -73,7 +107,14 @@ impl Store {
                 return Err(Error::invalid("O servidor já tem 256 tarefas."));
             }
             write(tx, &task)?;
-            Ok(task.clone())
+            if let Some(request_id) = request_id {
+                tx.execute(
+                    "UPDATE scheduled_tasks SET request_id=?2 WHERE id=?1",
+                    params![task.id, request_id],
+                )
+                .map_err(|_| Error::unavailable())?;
+            }
+            Ok(task)
         })
     }
 
@@ -89,6 +130,10 @@ impl Store {
         self.transaction(|tx| {
             let mut task = read(tx, id)?;
             check_revision(&task, revision)?;
+            // Tarefa única já passada continua editável enquanto a data não muda.
+            if task.input.schedule != input.schedule {
+                require_future_once(&input, now)?;
+            }
             if task.input.schedule != input.schedule || task.input.enabled != input.enabled {
                 task.next_run_at = scheduled(&input, now, zone)?;
             }
@@ -203,7 +248,10 @@ impl Store {
             }
             task.last_status = outcome.status;
             task.last_error = outcome.error.map(|s| s.chars().take(512).collect());
-            task.last_session = outcome.session;
+            // Resultado sem sessão conserva a que a reserva gravou.
+            if outcome.session.is_some() {
+                task.last_session = outcome.session;
+            }
             task.attempt = None;
             task.revision += 1;
             write(tx, &task)?;
@@ -253,6 +301,39 @@ fn scheduled<T: TimeZone>(
     } else {
         Ok(None)
     }
+}
+fn require_future_once(input: &TaskInput, now: DateTime<Utc>) -> Result<(), Error> {
+    if let Schedule::Once { at } = &input.schedule
+        && parse_instant(at)? <= now
+    {
+        return Err(Error::invalid(
+            "Escolha uma data futura para executar uma vez.",
+        ));
+    }
+    Ok(())
+}
+fn validate_request_id(request_id: &str) -> Result<(), Error> {
+    if request_id.is_empty()
+        || request_id.len() > 64
+        || !request_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
+        return Err(Error::request_id());
+    }
+    Ok(())
+}
+fn read_request(connection: &Connection, request_id: &str) -> Result<Option<Task>, Error> {
+    let body: Option<String> = connection
+        .query_row(
+            "SELECT body FROM scheduled_tasks WHERE request_id=?1",
+            [request_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| Error::unavailable())?;
+    body.map(|body| serde_json::from_str(&body).map_err(|_| Error::unavailable()))
+        .transpose()
 }
 fn check_revision(task: &Task, revision: u64) -> Result<(), Error> {
     if task.revision == revision {
@@ -310,7 +391,11 @@ fn validate(input: &TaskInput) -> Result<(), Error> {
     }
     validate_schedule(&input.schedule)?;
     match &input.target {
-        Target::Session { name, session_key } => {
+        Target::Session {
+            name,
+            session_key,
+            conversation,
+        } => {
             if name.is_empty()
                 || name.len() > 64
                 || !name
@@ -319,6 +404,9 @@ fn validate(input: &TaskInput) -> Result<(), Error> {
                 || session_key
                     .as_ref()
                     .is_none_or(|key| key.is_empty() || key.len() > 128)
+                || conversation
+                    .as_ref()
+                    .is_some_and(|id| id.is_empty() || id.len() > 256 || id.contains('\0'))
             {
                 return Err(Error::invalid(
                     "O destino precisa de uma sessão viva e sua identidade.",

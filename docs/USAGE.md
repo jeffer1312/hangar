@@ -748,7 +748,8 @@ da máquina em que a tarefa vai rodar.
 
 Escolha **Nova conversa a cada execução** para definir pasta, agente, conta e modelo. A opção
 de worktree cria uma cópia própria do projeto para cada execução. Em **Uma conversa existente**,
-o pedido usa o agente e a conta daquela conversa e entra na fila se ela estiver ocupada.
+o pedido usa o agente e a conta daquela conversa e entra na fila se ela estiver ocupada. Se a
+sessão for encerrada ou começar outra conversa (`/clear`), a tarefa não envia e pede um novo destino.
 
 A lista permite editar, pausar, ativar, executar agora e excluir uma tarefa. Ela mostra a próxima
 execução, a última tentativa e o acesso à conversa criada. **Pedido enviado** confirma o envio

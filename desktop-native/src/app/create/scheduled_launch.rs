@@ -21,6 +21,12 @@ pub(super) const FIELDS: [&str; 16] = [
     "headless",
 ];
 
+/// O que trocar de provider pode redefinir. `read_only` fica de fora: o editor não tem controle dele e o corpo de
+/// abertura nunca o leva, então marcá-lo apagaria a restrição da tarefa.
+pub(super) fn provider_fields() -> Vec<&'static str> {
+    FIELDS.into_iter().filter(|field| *field != "read_only").collect()
+}
+
 pub(super) fn merge(
     original: Option<&Value>,
     current: Value,
@@ -51,7 +57,7 @@ pub(super) fn merge(
 
 #[cfg(test)]
 mod tests {
-    use super::merge;
+    use super::{merge, provider_fields};
     use serde_json::json;
     use std::collections::HashSet;
 
@@ -83,6 +89,17 @@ mod tests {
                 &HashSet::from(["omp_profile", "jev"])
             ),
             json!({"cwd":"/workspace/app", "provider":"omp", "jev":false, "read_only":true})
+        );
+    }
+
+    #[test]
+    fn changing_provider_keeps_read_only() {
+        let original = json!({"cwd":"/workspace/app", "provider":"claude", "model":"sonnet", "read_only":true});
+        let current = json!({"cwd":"/workspace/app", "provider":"pi"});
+        let changed: HashSet<&'static str> = provider_fields().into_iter().collect();
+        assert_eq!(
+            merge(Some(&original), current, &changed),
+            json!({"cwd":"/workspace/app", "provider":"pi", "read_only":true})
         );
     }
 

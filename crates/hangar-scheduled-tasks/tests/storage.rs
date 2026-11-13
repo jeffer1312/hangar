@@ -165,3 +165,98 @@ fn storage_internal_launch_fields_are_never_persisted() {
     }
     assert!(store.list().unwrap().is_empty());
 }
+#[test]
+fn storage_update_refuses_a_new_past_once_but_keeps_editing_the_unchanged_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("tasks.sqlite")).unwrap();
+    let now = at("2026-11-12T12:00:00Z");
+    let mut request = input();
+    request.schedule = Schedule::Once {
+        at: "2026-11-12T13:00:00Z".into(),
+    };
+    let task = store.create(request.clone(), now, &Utc).unwrap();
+    let later = at("2026-11-13T12:00:00Z");
+    let mut past = request.clone();
+    past.schedule = Schedule::Once {
+        at: "2026-11-13T11:00:00Z".into(),
+    };
+    assert_eq!(
+        store
+            .update(&task.id, past, task.revision, later, &Utc)
+            .unwrap_err()
+            .status,
+        400
+    );
+    let mut renamed = request;
+    renamed.name = "Histórica".into();
+    let edited = store
+        .update(&task.id, renamed, task.revision, later, &Utc)
+        .unwrap();
+    assert_eq!(edited.input.name, "Histórica");
+}
+#[test]
+fn storage_uncertain_result_without_session_keeps_the_reserved_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("tasks.sqlite")).unwrap();
+    let now = at("2026-11-12T12:00:00Z");
+    let task = store.create(input(), now, &Utc).unwrap();
+    let attempt = store.reserve(&task.id, now, &Utc, true).unwrap();
+    assert!(
+        store
+            .finish(
+                &attempt,
+                Outcome {
+                    status: Status::Uncertain,
+                    error: Some("sem resposta".into()),
+                    session: None,
+                },
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        store.list().unwrap()[0].last_session.as_deref(),
+        Some(attempt.session_name.as_str())
+    );
+}
+#[test]
+fn storage_repeated_request_id_returns_the_first_task_even_on_an_old_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks.sqlite");
+    // Arquivo do formato anterior, sem a coluna request_id.
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch("CREATE TABLE scheduled_tasks (id TEXT PRIMARY KEY, body TEXT NOT NULL);")
+        .unwrap();
+    let now = at("2026-11-12T12:00:00Z");
+    let store = Store::open(&path).unwrap();
+    let first = store
+        .create_with_request(input(), Some("req-1"), now, &Utc)
+        .unwrap();
+    let mut changed = input();
+    changed.name = "Outra".into();
+    let again = store
+        .create_with_request(changed, Some("req-1"), now, &Utc)
+        .unwrap();
+    assert_eq!(again.id, first.id);
+    assert_eq!(again.input.name, first.input.name);
+    assert_eq!(store.list().unwrap().len(), 1);
+    assert_eq!(store.find_request("req-1").unwrap().unwrap().id, first.id);
+    store
+        .create_with_request(input(), Some("req-2"), now, &Utc)
+        .unwrap();
+    store.create(input(), now, &Utc).unwrap();
+    assert_eq!(store.list().unwrap().len(), 3);
+    let long = "a".repeat(65);
+    for invalid in ["", "com espaço", long.as_str()] {
+        assert_eq!(
+            store
+                .create_with_request(input(), Some(invalid), now, &Utc)
+                .unwrap_err()
+                .status,
+            400
+        );
+    }
+    drop(store);
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.find_request("req-1").unwrap().unwrap().id, first.id);
+}

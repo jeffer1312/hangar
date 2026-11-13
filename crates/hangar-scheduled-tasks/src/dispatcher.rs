@@ -1,10 +1,11 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::mpsc;
-use tokio::task::JoinSet;
+use tokio::task::{Id, JoinSet};
 
-use crate::{Attempt, Engine, Error};
+use crate::{Attempt, Engine, Error, Outcome, Status};
 
 #[derive(Clone)]
 pub struct DispatchHandle {
@@ -45,18 +46,19 @@ impl Dispatcher {
     }
     pub async fn run(mut self) {
         let mut children = JoinSet::new();
+        let mut attempts = HashMap::new();
         let mut tick = tokio::time::interval(Duration::from_secs(1));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
-                attempt=self.receiver.recv() => match attempt {Some(attempt)=>self.spawn(&mut children,attempt),None=>break},
+                attempt=self.receiver.recv() => match attempt {Some(attempt)=>self.spawn(&mut children,&mut attempts,attempt),None=>break},
                 _=tick.tick(), if self.automatic => {
                     match self.engine.store.list() {
                         Ok(tasks)=>for task in tasks {
                             let due=task.next_run_at.as_deref().and_then(|at|chrono::DateTime::parse_from_rfc3339(at).ok()).is_some_and(|at|at.with_timezone(&chrono::Utc)<=self.engine.now());
                             if task.input.enabled && due {
                                 match self.engine.reserve(&task.id,false) {
-                                    Ok(attempt)=>self.spawn(&mut children,attempt),
+                                    Ok(attempt)=>self.spawn(&mut children,&mut attempts,attempt),
                                     Err(error) if error.status==409 || error.status==404=>{},
                                     Err(error)=>tracing::warn!(code=error.code,"reserva da tarefa agendada indisponível"),
                                 }
@@ -65,21 +67,41 @@ impl Dispatcher {
                         Err(error)=>tracing::warn!(code=error.code,"leitura das tarefas agendadas indisponível"),
                     }
                 }
-                result=children.join_next(), if !children.is_empty() => {
-                    if let Some(Err(_))=result { tracing::warn!(code="scheduled_dispatch_interrupted","envio agendado interrompido; reserva conservada"); }
-                }
+                result=children.join_next_with_id(), if !children.is_empty() => match result {
+                    Some(Ok((id,())))=>{ attempts.remove(&id); }
+                    Some(Err(error))=>{
+                        tracing::warn!(code="scheduled_dispatch_interrupted","envio agendado interrompido; tentativa marcada como incerta");
+                        if let Some(attempt)=attempts.remove(&error.id()) { self.interrupted(&attempt); }
+                    }
+                    None=>{}
+                },
             }
         }
     }
-    fn spawn(&self, children: &mut JoinSet<()>, attempt: Attempt) {
+    fn spawn(&self, children: &mut JoinSet<()>, attempts: &mut HashMap<Id, Attempt>, attempt: Attempt) {
         let engine = self.engine.clone();
-        children.spawn(async move {
-            if let Err(error) = engine.dispatch(attempt).await {
-                tracing::warn!(
-                    code = error.code,
-                    "resultado da tarefa agendada não gravado; reserva conservada"
-                );
-            }
-        });
+        let child = attempt.clone();
+        let id = children
+            .spawn(async move {
+                if let Err(error) = engine.dispatch(child).await {
+                    tracing::warn!(
+                        code = error.code,
+                        "resultado da tarefa agendada não gravado; reserva conservada"
+                    );
+                }
+            })
+            .id();
+        attempts.insert(id, attempt);
+    }
+    /// O envio parou no meio (pânico do host): sem prova de entrega, a reserva sai como incerta.
+    fn interrupted(&self, attempt: &Attempt) {
+        let outcome = Outcome {
+            status: Status::Uncertain,
+            error: Some("O envio foi interrompido. Confira a conversa antes de repetir.".into()),
+            session: None,
+        };
+        if let Err(error) = self.engine.store.finish(attempt, outcome) {
+            tracing::warn!(code = error.code, "resultado do envio interrompido não gravado");
+        }
     }
 }

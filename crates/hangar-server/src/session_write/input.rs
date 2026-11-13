@@ -276,7 +276,7 @@ async fn send_with_receipt(st: &AppState, name: &str, target: &WriteTarget, text
     let params = Params { text, steer, terminal: target.terminal, codex: target.provider == "codex", operation_id: &operation_id };
     let sent = target.handle.command(RuntimeCommand { operation_id: operation_id.clone(), kind: OperationKind::Input,
         payload: json!({"text": text, "pre_transcript": false}) }).await;
-    let uncertain = include_uncertain && sent.as_ref().is_ok_and(|reply|reply.disposition == Disposition::Unknown);
+    let uncertain = include_uncertain && unproven(&sent);
     let (sent, diary) = classify(&params, &sent);
     report(st, name, diary);
     let mut steered = false;
@@ -452,19 +452,34 @@ pub async fn deliver_reply(st: &AppState, name: &str, text: &str) -> (StatusCode
     write_input(st, name, text, false).await
 }
 
-/// Entrada de automação vinculada à vida da sessão; toda escrita conserva o ingresso até terminar.
-pub async fn write_bound_input(st: &AppState, name: &str, key: &str, text: &str) -> (StatusCode, Value) {
+/// Entregue ou não, ninguém confirmou: o ator saiu depois de receber, o motor não respondeu, ou o `/clear`
+/// do Codex já foi digitado sem a conversa nova aparecer.
+fn unproven(sent: &Result<RuntimeReply, RuntimeError>) -> bool {
+    match sent {
+        Ok(reply) => reply.disposition == Disposition::Unknown,
+        Err(error) => error.code == crate::runtime::protocol::REPLY_LOST || error.code == super::codex::CLEAR_UNCONFIRMED,
+    }
+}
+
+fn with_receipt((status, mut body): (StatusCode, Value), uncertain: bool) -> (StatusCode, Value) {
+    if uncertain { body["uncertain"] = json!(true); }
+    (status, body)
+}
+
+/// Entrada de automação vinculada à vida e à conversa da sessão; toda escrita conserva o ingresso até terminar.
+/// `conversation` ausente: tarefa sem conversa conhecida na criação, só a vida é conferida.
+pub async fn write_bound_input(st: &AppState, name: &str, key: &str, conversation: Option<&str>, text: &str) -> (StatusCode, Value) {
     let Some(runtime) = st.state.runtime.get() else {
         return (StatusCode::SERVICE_UNAVAILABLE, detail_body("scheduled_runtime_unavailable", "O servidor ainda não abriu as sessões.", json!({})));
     };
     match route_write(runtime, name, WriteRoute::Input, st.write_gate_wait).await {
         Write::Rust(held, target) => {
-            let result=send_bound_target(st,name,key,text,&target).await;
+            let result=send_bound_target(st,name,key,conversation,text,&target).await;
             drop(held);
             result
         }
-        Write::Asleep(found) if found == key => queue_bound_input(st,runtime,name,key,text,false).await,
-        Write::Opening(found) if found == key => queue_bound_input(st,runtime,name,key,text,true).await,
+        Write::Asleep(found) if found == key => queue_bound_input(st,runtime,name,key,conversation,text,false).await,
+        Write::Opening(found) if found == key => queue_bound_input(st,runtime,name,key,conversation,text,true).await,
         Write::Busy => (StatusCode::CONFLICT,busy_body()),
         Write::Failed(error) => (super::failed_status(&error),detail_body(&error.code,&error.message,json!({}))),
         _ => bound_life_changed(),
@@ -472,35 +487,65 @@ pub async fn write_bound_input(st: &AppState, name: &str, key: &str, text: &str)
 }
 
 fn bound_life_changed()->(StatusCode,Value) {
-    (StatusCode::CONFLICT,detail_body("scheduled_session_changed","A sessão de destino foi encerrada ou recriada.",json!({})))
+    (StatusCode::CONFLICT,detail_body("scheduled_session_changed","A sessão de destino foi encerrada, recriada ou começou outra conversa.",json!({})))
 }
 
-async fn send_bound_target(st:&AppState,name:&str,key:&str,text:&str,target:&WriteTarget)->(StatusCode,Value) {
-    if target.key!=key {bound_life_changed()}
-    else if !target.healthy {(StatusCode::SERVICE_UNAVAILABLE,detail_body("runtime_unhealthy","A sessão está com problema no Rust.",json!({})))}
-    else if is_codex_clear(&target.provider,text) {super::codex::clear(target,text,Some(st.term.clone())).await}
-    else if is_codex_compact(&target.provider,text) {super::codex::compact(target,text).await}
+/// O `/clear` troca a conversa e conserva a chave: a tarefa vinculada à conversa antiga não escreve na nova.
+async fn conversation_changed(st:&AppState,name:&str,expected:Option<&str>)->Option<(StatusCode,Value)> {
+    let expected=expected?;
+    match st.side.locate.info(name).await {
+        Ok(Some(info)) if info.session_key==expected => None,
+        Ok(_) => Some(bound_life_changed()),
+        Err(failed) => Some((StatusCode::SERVICE_UNAVAILABLE,detail_body(failed.0,"Não foi possível conferir a conversa da sessão.",json!({})))),
+    }
+}
+
+async fn send_bound_target(st:&AppState,name:&str,key:&str,conversation:Option<&str>,text:&str,target:&WriteTarget)->(StatusCode,Value) {
+    if target.key!=key {return bound_life_changed();}
+    if let Some(changed)=conversation_changed(st,name,conversation).await {return changed;}
+    if !target.healthy {(StatusCode::SERVICE_UNAVAILABLE,detail_body("runtime_unhealthy","A sessão está com problema no Rust.",json!({})))}
+    else if is_codex_clear(&target.provider,text) {
+        let sent=super::codex::clear_conversation(target,text,Some(st.term.clone())).await;
+        with_receipt(super::codex::compact_answer(&sent),unproven(&sent))
+    }
+    else if is_codex_compact(&target.provider,text) {
+        let sent=super::codex::compact_sent(target,text).await;
+        with_receipt(super::codex::compact_answer(&sent),unproven(&sent))
+    }
     else {send_with_receipt(st,name,target,text,false,None,true).await}
 }
 
-async fn queue_bound_input(st:&AppState,runtime:&crate::runtime::gateway::RuntimeRegistry,name:&str,key:&str,text:&str,opening:bool)->(StatusCode,Value) {
+async fn queue_bound_input(st:&AppState,runtime:&crate::runtime::gateway::RuntimeRegistry,name:&str,key:&str,conversation:Option<&str>,text:&str,opening:bool)->(StatusCode,Value) {
     let held=match runtime.ingress().enter(name,st.write_gate_wait).await {
         Ok(held)=>held,
         Err(_)=>return (StatusCode::CONFLICT,busy_body()),
     };
     // A adoção pode ter terminado enquanto esperávamos a porta; a entrada nova precisa da mesma chave.
     if let Some(target)=runtime.writable(name).await {
-        let result=send_bound_target(st,name,key,text,&target).await;
+        let result=send_bound_target(st,name,key,conversation,text,&target).await;
         drop(held);
         return result;
     }
+    if let Some(changed)=conversation_changed(st,name,conversation).await {drop(held);return changed;}
     let result=if opening {
         let other=runtime.other_opening_key(name).await;
         let current=match &other {Some(key)=>Some(key.clone()),None=>runtime.codex_opening(name).await.and_then(Result::ok)};
         if current.as_deref()!=Some(key) {drop(held);return bound_life_changed();}
+        // Mesma regra do `/input` com a conversa abrindo: `/clear` e `/compact` esperam a conversa.
+        if other.is_none() && (is_codex_clear("codex",text) || is_codex_compact("codex",text)) {
+            drop(held);
+            let error=crate::runtime::codex_relaunch::starting();
+            return (StatusCode::CONFLICT,detail_body(&error.code,&error.message,json!({})));
+        }
         if other.is_some() {runtime.queue_other_opening(name,key,text,&random_hex(16)).await.map(|_| ())}
         else {runtime.queue_codex_opening(name,key,text).await}
     } else {
+        // Comando de barra não tem linha na fila da adormecida: só a vida nova o executa, como no `/input`.
+        if !queued(text) {
+            drop(held);
+            let error=crate::runtime::gateway::asleep_waking();
+            return (StatusCode::CONFLICT,detail_body(&error.code,&error.message,json!({})));
+        }
         let current=runtime.asleep(name).await.map(|mark|mark.key);
         if current.as_deref()!=Some(key) {drop(held);return bound_life_changed();}
         runtime.queue_asleep(name,key,text).await

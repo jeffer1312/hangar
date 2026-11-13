@@ -10526,7 +10526,7 @@
   "scheduled_invalid_days": "Choose at least one day of the week.",
   "scheduled_invalid_interval": "Use an interval of at least 1 minute.",
   "scheduled_invalid_date": "Choose a valid future date and time.",
-  "scheduled_unavailable_session": "The target conversation was closed or recreated. Choose a conversation again.",
+  "scheduled_unavailable_session": "The target conversation was closed, recreated or cleared with /clear. Choose a conversation again.",
   "scheduled_discard_title": "Discard changes?",
   "scheduled_discard_body": "Changes to this task have not been saved.",
   "scheduled_discard": "Discard",

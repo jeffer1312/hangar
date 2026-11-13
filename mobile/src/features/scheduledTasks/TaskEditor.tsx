@@ -80,7 +80,8 @@ export function TaskEditor({ server, timezone, task, onSave, onClose, onReload, 
         if (!alive) return;
         setProbe(providers);
         if (!launch.provider) {
-          const preferred = SESSION_PROVIDERS.find((p) => providers[p]?.default && providers[p]?.disponivel) ?? 'claude';
+          const preferred = SESSION_PROVIDERS.find((p) => providers[p]?.default && providers[p]?.disponivel)
+            ?? SESSION_PROVIDERS.find((p) => providers[p]?.disponivel) ?? 'claude';
           setLaunch((old) => ({ ...old, provider: preferred }));
           return;
         }

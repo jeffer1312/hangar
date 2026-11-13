@@ -10526,7 +10526,7 @@
   "scheduled_invalid_days": "Escolha pelo menos um dia da semana.",
   "scheduled_invalid_interval": "Use um intervalo de pelo menos 1 minuto.",
   "scheduled_invalid_date": "Escolha uma data e um horário válidos no futuro.",
-  "scheduled_unavailable_session": "A conversa de destino foi encerrada ou recriada. Escolha uma conversa novamente.",
+  "scheduled_unavailable_session": "A conversa de destino foi encerrada, recriada ou limpa com /clear. Escolha uma conversa novamente.",
   "scheduled_discard_title": "Descartar alterações?",
   "scheduled_discard_body": "As alterações desta tarefa ainda não foram salvas.",
   "scheduled_discard": "Descartar",

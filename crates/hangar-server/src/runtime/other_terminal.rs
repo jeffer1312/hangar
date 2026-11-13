@@ -704,7 +704,7 @@ impl OtherHandle {
             })
             .await
             .map_err(|_| failed("runtime_closed"))?;
-        rx.await.map_err(|_| failed("runtime_closed"))?
+        rx.await.map_err(|_| failed(super::protocol::REPLY_LOST))?
     }
     pub async fn queue(&self, id: String, action: Action) -> Result<Value, RuntimeError> {
         let (response, rx) = oneshot::channel();

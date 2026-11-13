@@ -1006,7 +1006,8 @@ impl NewSession {
     fn load_codex(&mut self, cx: &mut Context<Self>) {
         // O número continua do anterior: resposta da ida passada ao Codex não passa por desta.
         let seq = self.codex.start();
-        if !self.is_transfer() { self.codex_account.clear(); }
+        // A tarefa agendada abre na conta que ela usa: a resposta seleciona essa, não a padrão.
+        if !self.is_transfer() && !self.scheduled { self.codex_account.clear(); }
         self.codex_pick = None;
         self.request(cx, move |api, send| Box::pin(async move { send(CreateReply::Codex(seq, api.server_read(&["codex-contas"], &[], 30).await)).await }));
     }
@@ -1106,7 +1107,7 @@ impl NewSession {
 
     /// Trocar de provider preserva o modo escolhido e relê as opções e permissões dele.
     fn choose_provider(&mut self, provider: &'static str, window: &mut Window, cx: &mut Context<Self>) {
-        if provider != self.provider { self.scheduled_touch(&scheduled_launch::FIELDS); }
+        if provider != self.provider { self.scheduled_touch(&scheduled_launch::provider_fields()); }
         self.set_provider(provider, window, cx);
     }
 

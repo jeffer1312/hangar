@@ -12,6 +12,8 @@ pub(in crate::app) struct Editor {
     tx: async_channel::Sender<Envelope>,
     pub(super) connection: u64,
     pub(super) id: Option<String>,
+    /// Tarefa nova: o mesmo pedido em cada nova tentativa, para uma criação sem resposta não virar duas tarefas.
+    request_id: Option<String>,
     revision: u64,
     name: Entity<InputState>,
     prompt: Entity<TextareaState>,
@@ -126,6 +128,7 @@ impl Editor {
             tx,
             connection,
             id: task.as_ref().map(|t| t.id.clone()),
+            request_id: task.is_none().then(crate::app::accounts::idempotency_key),
             revision: task.as_ref().map_or(0, |t| t.revision),
             name,
             prompt,
@@ -219,6 +222,8 @@ impl Editor {
         let mut body = json!({"name":name, "prompt":prompt, "enabled":self.enabled,"schedule":schedule,"target":self.target});
         if self.id.is_some() {
             body["revision"] = json!(self.revision);
+        } else if let Some(request_id) = &self.request_id {
+            body["request_id"] = json!(request_id);
         }
         Ok(body)
     }

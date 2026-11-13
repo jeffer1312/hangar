@@ -3,7 +3,7 @@ import type { Server } from './servers';
 
 export type TaskSchedule = { kind: 'once'; at: string } | { kind: 'weekly'; time: string; weekdays: number[] } | { kind: 'interval'; minutes: number };
 export type TaskLaunch = Omit<CreateSessionBody, 'name' | 'prewarm' | 'remember_provider' | 'branch' | 'new_branch' | 'base'>;
-export type TaskTarget = { kind: 'new'; launch: TaskLaunch; worktree: boolean; base?: string } | { kind: 'session'; name: string; session_key?: string };
+export type TaskTarget = { kind: 'new'; launch: TaskLaunch; worktree: boolean; base?: string } | { kind: 'session'; name: string; session_key?: string; conversation?: string };
 export interface ScheduledTaskInput { name: string; prompt: string; enabled: boolean; schedule: TaskSchedule; target: TaskTarget }
 export interface ScheduledTask extends ScheduledTaskInput {
   id: string; revision: number; next_run_at: string | null; last_run_at: string | null;
@@ -14,11 +14,21 @@ export interface ScheduledTasksList { tasks: ScheduledTask[]; server_time: strin
 const root = '/api/scheduled-tasks';
 const taskPath = (id: string) => `${root}/${encodeURIComponent(id)}`;
 export const getScheduledTasks = (server: Server) => apiFetchForServer<ScheduledTasksList>(server, root);
-export const createScheduledTask = (server: Server, input: ScheduledTaskInput) => apiFetchForServer<ScheduledTask>(server, root, { method: 'POST', body: JSON.stringify(input) });
+/** `request_id` repetido devolve a tarefa já criada: a nova tentativa após resposta perdida não duplica. */
+export const createScheduledTask = (server: Server, input: ScheduledTaskInput & { request_id?: string }) => apiFetchForServer<ScheduledTask>(server, root, { method: 'POST', body: JSON.stringify(input) });
 export const updateScheduledTask = (server: Server, id: string, revision: number, input: ScheduledTaskInput) => apiFetchForServer<ScheduledTask>(server, taskPath(id), { method: 'PUT', body: JSON.stringify({ ...input, revision }) });
 export const setScheduledTaskEnabled = (server: Server, id: string, revision: number, enabled: boolean) => apiFetchForServer<ScheduledTask>(server, `${taskPath(id)}/enabled`, { method: 'PATCH', body: JSON.stringify({ enabled, revision }) });
 export const runScheduledTask = (server: Server, id: string) => apiFetchForServer<{ ok: true }>(server, `${taskPath(id)}/run`, { method: 'POST' });
 export const deleteScheduledTask = (server: Server, id: string, revision: number) => apiFetchForServer<void>(server, `${taskPath(id)}?revision=${revision}`, { method: 'DELETE' });
+
+// Cada leitura traz a lista inteira: sem reaproveitar o que não mudou, toda linha ganha objeto novo e o memo não segura nada.
+export function reuseUnchangedTasks(prev: readonly ScheduledTask[] | undefined, next: ScheduledTask[]): ScheduledTask[] {
+  const old = new Map(prev?.map((task) => [task.id, task]));
+  return next.map((task) => {
+    const kept = old.get(task.id);
+    return kept && JSON.stringify(kept) === JSON.stringify(task) ? kept : task;
+  });
+}
 
 export type TaskValidation = 'name' | 'prompt' | 'days' | 'time' | 'interval' | 'date' | 'folder' | 'session';
 const validTime = (time: string) => /^([01]\d|2[0-3]):[0-5]\d$/.test(time);

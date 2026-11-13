@@ -48,9 +48,23 @@ impl Engine {
     pub fn now(&self) -> DateTime<Utc> {
         self.clock.now()
     }
-    pub async fn create(&self, mut input: TaskInput) -> Result<Task, Error> {
+    pub async fn create(&self, input: TaskInput) -> Result<Task, Error> {
+        self.create_with_request(input, None).await
+    }
+    /// A repetição responde antes de conferir o destino, que pode ter mudado desde a primeira criação.
+    pub async fn create_with_request(
+        &self,
+        mut input: TaskInput,
+        request_id: Option<&str>,
+    ) -> Result<Task, Error> {
+        if let Some(request_id) = request_id
+            && let Some(task) = self.store.find_request(request_id)?
+        {
+            return Ok(task);
+        }
         input.target = self.host.prepare_target(input.target).await?;
-        self.store.create(input, self.now(), &self.timezone)
+        self.store
+            .create_with_request(input, request_id, self.now(), &self.timezone)
     }
     pub async fn update(
         &self,

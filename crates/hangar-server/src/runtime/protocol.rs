@@ -283,6 +283,10 @@ impl CanoSnapshot {
     }
 }
 
+/// O ator recebeu o comando e saiu sem responder: o efeito pode ter acontecido. Ator que já tinha
+/// saído antes do envio continua `runtime_closed`.
+pub const REPLY_LOST: &str = "runtime_reply_lost";
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RuntimeError {
     pub code: String,

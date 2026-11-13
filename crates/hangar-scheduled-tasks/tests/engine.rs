@@ -79,3 +79,63 @@ async fn engine_transport_uncertainty_is_not_resent_and_new_occurrences_collapse
         Some("2026-11-12T21:05:00+00:00")
     );
 }
+struct PanickingHost;
+impl Host for PanickingHost {
+    fn prepare_target(&self, target: Target) -> HostFuture<'_, Result<Target, Error>> {
+        Box::pin(async move { Ok(target) })
+    }
+    fn dispatch(&self, attempt: Attempt) -> HostFuture<'_, Outcome> {
+        Box::pin(async move {
+            assert!(attempt.id.is_empty(), "host interrompido");
+            Outcome {
+                status: Status::Sent,
+                error: None,
+                session: None,
+            }
+        })
+    }
+}
+#[tokio::test]
+async fn dispatcher_panicking_host_releases_the_reservation_as_uncertain() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Arc::new(Store::open(&directory.path().join("tasks.sqlite")).unwrap());
+    let now = DateTime::parse_from_rfc3339("2026-11-12T12:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let engine = Arc::new(Engine::new(
+        store,
+        chrono_tz::UTC,
+        Arc::new(PanickingHost),
+        Arc::new(FixedClock(Mutex::new(now))),
+    ));
+    let task = engine
+        .create(TaskInput {
+            name: "Revisão".into(),
+            prompt: "Revise o projeto.".into(),
+            enabled: true,
+            schedule: Schedule::Interval { minutes: 5 },
+            target: Target::New {
+                launch: serde_json::json!({"cwd":"/project"}),
+                worktree: false,
+                base: None,
+            },
+        })
+        .await
+        .unwrap();
+    let (handle, dispatcher) = hangar_scheduled_tasks::Dispatcher::new(engine.clone(), false);
+    let worker = tokio::spawn(dispatcher.run());
+    handle.run_now(&task.id).unwrap();
+    let mut row = engine.store.list().unwrap().remove(0);
+    for _ in 0..500 {
+        if row.last_status != Status::Dispatching {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        row = engine.store.list().unwrap().remove(0);
+    }
+    assert_eq!(row.last_status, Status::Uncertain);
+    assert!(row.last_session.is_some_and(|name| name.starts_with("task-")));
+    // Sem reserva presa: a próxima execução manual é aceita.
+    handle.run_now(&task.id).unwrap();
+    worker.abort();
+}

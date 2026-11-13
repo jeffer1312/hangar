@@ -16,6 +16,9 @@ pub enum Target {
         name: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         session_key: Option<String>,
+        /// A conversa da sessão quando a tarefa foi vinculada: o `/clear` troca a conversa e conserva a chave.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        conversation: Option<String>,
     },
 }
 
@@ -86,6 +89,13 @@ impl Error {
             status: 400,
             code: "scheduled_task_invalid",
             message: message.into(),
+        }
+    }
+    pub fn request_id() -> Self {
+        Self {
+            status: 400,
+            code: "scheduled_task_invalid",
+            message: "O request_id deve ter de 1 a 64 letras, números, _ ou -.".into(),
         }
     }
     pub fn unavailable() -> Self {
