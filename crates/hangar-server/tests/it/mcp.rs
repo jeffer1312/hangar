@@ -61,6 +61,7 @@ async fn scene_built(groups: bool, peers: Option<hangar_server::groups::peers::P
     state.side.locate = Arc::new(hangar_server::locate::ListLocate { list });
     state.pages = Arc::new(hangar_server::pages::store::Store::new(root.join("paginas")));
     state.chromium = || None;
+    state.mission = Arc::new(hangar_mission::Store::new(root.join("mission")));
     if let Some(peers) = peers { state.peers = Arc::new(peers); }
     if groups {
         use hangar_server::groups::{orq::PythonOrq, service::GroupService, store::PairDir};
@@ -593,4 +594,31 @@ async fn browser_open_with_a_dead_desktop_server_fails_at_once() {
     assert!(started.elapsed() < std::time::Duration::from_secs(10), "esperou {:?}", started.elapsed());
     let verb = mcp.call("browser", json!({"verbo": "snapshot"})).await;
     assert!(failed(&verb) && first_text(&verb).contains(&format!("pid {dead}")), "{verb}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mission_reads_and_reports_as_the_linked_caller() {
+    let s = scene().await;
+    let mut mcp = Mcp::open(s.addr, &[("x-hangar-pane", "%7")]).await;
+    let unlinked = mcp.call("mission", json!({})).await;
+    assert!(failed(&unlinked) && first_text(&unlinked).starts_with("mission_session_not_linked"), "{unlinked}");
+
+    let linked = client().put(format!("http://{}/api/mission/items/help/PM-7", s.addr)).bearer_auth(OWNER)
+        .json(&json!({"key": "PM-7", "title": "Tela", "url": "https://help.invalid/pm/PM-7", "session": "beta"})).send().await.unwrap();
+    assert_eq!(linked.status(), 200);
+    let read = mcp.call("mission", json!({})).await;
+    assert!(!failed(&read), "{read}");
+    assert_eq!(read["structuredContent"]["item"]["key"], "PM-7");
+    assert_eq!(read["structuredContent"]["stages"][3]["gate"], true);
+
+    let shot = s.home.join("tela.png");
+    std::fs::write(&shot, b"png").unwrap();
+    let reported = mcp.call("mission", json!({"etapa": "validacao", "nota": "pronto para conferir",
+        "evidencias": [{"caminho": shot, "legenda": "botão novo"}]})).await;
+    assert!(!failed(&reported), "{reported}");
+    assert_eq!(reported["structuredContent"]["item"]["stage"], "validacao");
+    assert_eq!(reported["structuredContent"]["item"]["evidence"][0]["by"], "beta");
+    let gated = mcp.call("mission", json!({"etapa": "entrega"})).await;
+    assert!(failed(&gated) && first_text(&gated).starts_with("mission_gate_pending"), "{gated}");
+    assert_eq!(s.python.hits_to("/api/mission/report"), 0, "o Mission Control não vai ao Python");
 }

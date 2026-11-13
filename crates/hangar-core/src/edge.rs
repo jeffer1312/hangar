@@ -62,6 +62,23 @@ impl Edge {
     pub fn forward_for(&self, peer: SocketAddr, req: &Request) -> Forward {
         forward_for(&self.trusted, peer, req)
     }
+    /// Só o dono passa. Convidado autenticado recebe 403 com `refused` (código e frase), sem contar
+    /// falha de senha; token errado e indisponibilidade saem como no `gate`.
+    pub fn owner_only(&self, peer: SocketAddr, req: &Request, refused: (&'static str, &'static str))
+        -> impl Future<Output = Result<(), Response>> + Send + use<> {
+        // Os dois portões leem o pedido agora; nada roda antes do `await`.
+        let (gate, owner) = (self.gate(peer, req), self.owner_gate(peer, req));
+        async move {
+            match gate.await {
+                Ok((_, true)) => Ok(()),
+                Ok((_, false)) => match owner.await {
+                    Ok(_) => Err(crate::http::detail(StatusCode::FORBIDDEN, refused.0, refused.1, serde_json::json!({}))),
+                    Err(response) => Err(response),
+                },
+                Err(error) => Err(crate::auth::unavailable(error)),
+            }
+        }
+    }
     pub fn route_failed(&self, req: &HeaderMap, event: &'static str, name: &str, code: &'static str, reason: &'static str) -> Response {
         route_failed(&self.diag, req, event, name, code, reason)
     }

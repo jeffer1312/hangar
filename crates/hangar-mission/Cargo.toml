@@ -1,0 +1,24 @@
+[package]
+name = "hangar-mission"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+# Mesmas features do hangar-server: sem elas, compilar este crate sozinho guarda outra cópia de cada
+# dependência no target (ver o comentário do serde_json em hangar-server/Cargo.toml).
+[dependencies]
+hangar-core.workspace = true
+hangar-http-file.workspace = true
+axum = { workspace = true }
+chrono = { workspace = true }
+form_urlencoded = { workspace = true }
+percent-encoding = { workspace = true }
+serde = { workspace = true, features = ["alloc"] }
+serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
+sha1_smol.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "time", "fs", "signal"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile.workspace = true
+tower = { version = "=0.5.3", default-features = false, features = ["util"] }
