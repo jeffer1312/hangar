@@ -220,8 +220,11 @@ impl Store {
                 OwnerChange::Changes { note } => {
                     text("note", &note, MAX_TEXT, false)?;
                     let Some(index) = current else { return Err(Error::invalid("o ticket não tem etapa para recusar")) };
-                    let back = &stages[index.saturating_sub(1)];
-                    item.approved.retain(|id| id != &stages[index].id);
+                    let back_index = index.saturating_sub(1);
+                    let back = &stages[back_index];
+                    // Voltar desfaz toda aprovação daí em diante: o portão para onde o ticket volta fecha de novo.
+                    let kept: HashSet<&str> = stages[..back_index].iter().map(|s| s.id.as_str()).collect();
+                    item.approved.retain(|id| kept.contains(id.as_str()));
                     item.history.push(event(EventKind::Changes, "dono", Some(&stages[index].id), Some(&note)));
                     item.stage = Some(back.id.clone());
                     item.delivered_at = None;
