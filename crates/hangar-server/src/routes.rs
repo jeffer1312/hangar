@@ -149,6 +149,8 @@ pub struct AppState {
     pub vault_requests: Arc<crate::vault::requests::Requests>,
     /// Cadeado das mudanças em plugins do Claude e o último `check` bem-sucedido.
     pub claude_plugins: Arc<crate::plugins::Service>,
+    /// Host dos conectores (`hangar-connectors`): catálogo em `~/.hangar/connectors.json`, processos sob demanda.
+    pub connectors: Arc<hangar_connectors::Host>,
 }
 
 impl AppState {
@@ -289,6 +291,7 @@ impl AppState {
             hub: Arc::new(crate::list::hub::ListHub::with_vault(vault_requests.feed())),
             vault_requests,
             claude_plugins: Arc::default(),
+            connectors: hangar_connectors::Host::new(hangar_connectors::registry::Registry::new(hangar_dir.join("connectors.json")), Default::default()),
             hangar_dir, device_install,
             upload_naming: Default::default(),
             origins: std::sync::Mutex::new(indexmap::IndexMap::new()),
@@ -914,6 +917,8 @@ fn public_routes(state: Arc<AppState>, pair: Option<&Arc<PairState>>) -> Router 
         // Planos e catálogo de plugins e skills: o dono no Rust; o resto segue ao Python.
         .merge(crate::plans::routes::router())
         .merge(hangar_desktop_theme::router(hangar_core::edge::Edge { trusted: state.cfg.trusted.clone(), auth: state.auth.clone(), diag: state.diag.clone() }, state.desktop_theme.clone()))
+        // Conectores: só o dono, nunca repassados (o Python não tem as rotas).
+        .merge(hangar_connectors::http::router(hangar_core::edge::Edge { trusted: state.cfg.trusted.clone(), auth: state.auth.clone(), diag: state.diag.clone() }, state.connectors.clone()))
         .route("/api/claude/customizations", get(crate::claude_customizations::catalog_route).fallback(pass_any))
         // Senha do chaveiro: só o dono, nunca repassada; só o preflight do CORS vai ao Python.
         .route("/api/keyring/unlock", axum::routing::post(crate::keyring::unlock_route).options(pass_any))

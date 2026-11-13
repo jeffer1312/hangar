@@ -15,6 +15,10 @@ fn main() -> std::process::ExitCode {
     if args.first().map(String::as_str) == Some("usage") {
         return hangar_server::usage_cli::cli(&args[1..]);
     }
+    // Conectores: pelo servidor em execução ou, com `--registry`, num host isolado.
+    if args.first().map(String::as_str) == Some("connectors") {
+        return hangar_server::connectors_cli::cli(&args[1..]);
+    }
     if args.first().map(String::as_str) == Some("peers") {
         return hangar_server::machine_peers::cli::cli(&args[1..]);
     }
