@@ -18,14 +18,23 @@ pub(crate) fn spawn(state: Arc<AppState>) {
         let github = setup::Github::default();
         let paths = setup::Paths::new(state.accounts.env.home.clone(), Vec::new());
         let diary = crate::diag::diary_dir_in(&state.accounts.env);
-        let _ = setup::install_if_missing(&paths, &http, &github, diary.as_deref()).await;
+        swapped(setup::install_if_missing(&paths, &http, &github, diary.as_deref()).await);
         loop {
             tokio::time::sleep(INTERVAL).await;
-            if let Ok(setup::Swapped::No) = setup::install_if_missing(&paths, &http, &github, diary.as_deref()).await {
-                let _ = setup::update_tick(&paths, &http, &github, &policy(&state), diary.as_deref()).await;
-            }
+            let outcome = match setup::install_if_missing(&paths, &http, &github, diary.as_deref()).await {
+                Ok(setup::Swapped::No) => setup::update_tick(&paths, &http, &github, &policy(&state), diary.as_deref()).await,
+                other => other,
+            };
+            swapped(outcome);
         }
     });
+}
+
+/// Todo binário novo do pacote, instalado ou trocado, passa por aqui.
+fn swapped(outcome: Result<setup::Swapped, setup::Error>) {
+    if let Ok(setup::Swapped::Yes { tag }) = outcome {
+        tracing::info!(tag = %tag, "Computer Use: binário do pacote em {tag}");
+    }
 }
 
 /// Os portões da atualização automática do Hangar, lidos a cada tique.

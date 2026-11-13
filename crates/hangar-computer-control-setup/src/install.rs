@@ -23,7 +23,14 @@ const NO_BINARY: &str = "computer_control_release_sem_binario";
 const DISK_FAILED: &str = "computer_control_install_io_failed";
 const NEWS_FAILED: &str = "computer_control_news_failed";
 const TAG_INCOMPARABLE: &str = "computer_control_tag_incomparavel";
+const TAG_INVALID: &str = "computer_control_tag_invalida";
+const ASSET_INVALID: &str = "computer_control_asset_invalido";
+/// Teto de cada pedido ao GitHub: release e assets.
+const MAX_BODY: u64 = 256 << 20;
 
+// A tag vai para a URL e para o id da novidade.
+static TAG: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\Av?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?\z").expect("regex fixa"));
 // O `\s` do Python cobre também `\x1c-\x1f`.
 static WRAPPED_AGENT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"exec[\s\x1c-\x1f]+[^\s\x1c-\x1f]*python[\d.]*[\s\x1c-\x1f]+[^\s\x1c-\x1f]*linux_agent\.py").expect("regex fixa")
@@ -73,12 +80,24 @@ impl Default for Github {
     }
 }
 
-/// Na subida e a cada tique, em qualquer modo e canal: instala quando o binário ou o exe faltam.
+/// Na subida e no começo de cada tique, em qualquer modo e canal: limpa as sobras de trocas
+/// anteriores e instala quando falta um arquivo que a plataforma usa.
 ///
 /// # Errors
 /// Rede, GitHub, release sem binário ou disco; já gravada no diário e em `install-error.json`.
 pub async fn install_if_missing(paths: &Paths, http: &reqwest::Client, github: &Github, diary: Option<&Path>) -> Result<Swapped, Error> {
-    if !crate::supported() || (paths.binary().is_file() && paths.exe().is_file()) {
+    if !crate::supported() {
+        return Ok(Swapped::No);
+    }
+    let present = {
+        let paths = paths.clone();
+        off_thread(move || {
+            tidy(&paths);
+            required(&paths).iter().all(|path| path.is_file())
+        })
+        .await?
+    };
+    if present {
         return Ok(Swapped::No);
     }
     let outcome = latest(paths, http, github, false).await;
@@ -150,6 +169,14 @@ async fn latest(paths: &Paths, http: &reqwest::Client, github: &Github, only_if_
     let release = parse_release(&get(http, &url, RELEASE_TIMEOUT).await?).ok_or_else(|| {
         Error { status: 502, code: RELEASE_FAILED, msg: "a release mais recente veio sem tag".into(), params: json!({"error": "sem tag_name"}) }
     })?;
+    if !TAG.is_match(&release.tag) {
+        return Err(Error {
+            status: 502,
+            code: TAG_INVALID,
+            msg: format!("a release mais recente veio com a tag inválida {:?}", release.tag),
+            params: json!({"tag": release.tag}),
+        });
+    }
     if only_if_newer && let Some(installed) = &before {
         match newer(&release.tag, installed) {
             Some(true) => {}
@@ -172,21 +199,48 @@ async fn latest(paths: &Paths, http: &reqwest::Client, github: &Github, only_if_
             params: json!({"tag": release.tag}),
         });
     }
-    let asset = |name: &str| format!("{}/{REPO}/releases/download/{}/{name}", github.download, release.tag);
-    let mut downloads = vec![(paths.exe(), get(http, &asset(EXE_ASSET), ASSET_TIMEOUT).await?)];
+    let mut downloads = vec![(paths.exe(), asset(http, github, &release.tag, EXE_ASSET, b"MZ").await?)];
     if !cfg!(windows) {
-        downloads.push((paths.binary(), get(http, &asset(LINUX_ASSET), ASSET_TIMEOUT).await?));
+        downloads.push((paths.binary(), asset(http, github, &release.tag, LINUX_ASSET, b"\x7fELF").await?));
     }
     let (paths, tag) = (paths.clone(), release.tag.clone());
     let skipped = off_thread(move || put_in_place(&paths, downloads, &tag)).await??;
     Ok(Some(Done { tag: release.tag, body: release.body, before, skipped }))
 }
 
-/// O `_get` do Python: os mesmos cabeçalhos em todo pedido; HTTP de erro é falha.
+/// Os arquivos que a plataforma usa: no Windows o exe é o próprio MCP (`Paths::binary`).
+fn required(paths: &Paths) -> Vec<PathBuf> {
+    if cfg!(windows) { vec![paths.exe()] } else { vec![paths.binary(), paths.exe()] }
+}
+
+/// Um asset da release, conferido pelo começo do arquivo: página de erro com 200 ou corpo vazio
+/// nunca toma o lugar do executável.
+async fn asset(http: &reqwest::Client, github: &Github, tag: &str, name: &str, magic: &[u8]) -> Result<Vec<u8>, Error> {
+    let url = format!("{}/{REPO}/releases/download/{tag}/{name}", github.download);
+    let bytes = get(http, &url, ASSET_TIMEOUT).await?;
+    if !bytes.starts_with(magic) {
+        return Err(Error {
+            status: 502,
+            code: ASSET_INVALID,
+            msg: format!("{url} não é um executável ({} bytes)", bytes.len()),
+            params: json!({"asset": name, "size": bytes.len()}),
+        });
+    }
+    Ok(bytes)
+}
+
+/// O `_get` do Python: os mesmos cabeçalhos em todo pedido; HTTP de erro é falha. Corpo acima de
+/// `MAX_BODY` é recusado, pelo `Content-Length` ou durante a leitura.
 async fn get(http: &reqwest::Client, url: &str, timeout: Duration) -> Result<Vec<u8>, Error> {
     let failed = |msg: String, error: String| Error { status: 502, code: RELEASE_FAILED, msg, params: json!({"error": error}) };
     let network = |error: reqwest::Error| failed(format!("não consegui baixar {url}: {error}"), error.to_string());
-    let response = http
+    let too_big = || Error {
+        status: 502,
+        code: ASSET_INVALID,
+        msg: format!("{url} passa de {} MiB", MAX_BODY >> 20),
+        params: json!({"error": "corpo grande demais"}),
+    };
+    let mut response = http
         .get(url)
         .header(reqwest::header::USER_AGENT, "hangar")
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
@@ -198,7 +252,17 @@ async fn get(http: &reqwest::Client, url: &str, timeout: Duration) -> Result<Vec
     if !response.status().is_success() {
         return Err(failed(format!("o GitHub respondeu {status} em {url}"), format!("HTTP {status}")));
     }
-    Ok(response.bytes().await.map_err(network)?.to_vec())
+    if response.content_length().is_some_and(|length| length > MAX_BODY) {
+        return Err(too_big());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(network)? {
+        if (body.len() + chunk.len()) as u64 > MAX_BODY {
+            return Err(too_big());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 /// Tag, corpo e se há o binário Linux; sem `tag_name` texto não vazio é `None`.
@@ -231,7 +295,8 @@ fn put_in_place(paths: &Paths, downloads: Vec<(PathBuf, Vec<u8>)>, tag: &str) ->
     std::fs::create_dir_all(&dir).map_err(|e| disk(&dir, &e))?;
     let mut staged = Vec::new();
     for (path, bytes) in downloads {
-        match stage(&path, &bytes) {
+        let executable = !cfg!(windows) && path == paths.binary();
+        match stage(&path, &bytes, executable) {
             Ok(temp) => staged.push((temp, path)),
             Err(error) => {
                 for (temp, _) in &staged {
@@ -255,20 +320,35 @@ fn put_in_place(paths: &Paths, downloads: Vec<(PathBuf, Vec<u8>)>, tag: &str) ->
     written
 }
 
-/// Temporário ao lado do destino, já com o modo final: o binário Linux sai executável.
-fn stage(path: &Path, bytes: &[u8]) -> std::io::Result<PathBuf> {
+/// Temporário novo (nome aleatório, nunca reaproveitado) ao lado do destino, gravado no disco antes
+/// da troca e já com o modo final.
+#[cfg_attr(not(unix), allow(unused_variables))]
+fn stage(path: &Path, bytes: &[u8], executable: bool) -> std::io::Result<PathBuf> {
+    use std::io::Write;
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let temp = path.with_file_name(format!(".{name}.novo-{}", std::process::id()));
-    let written = std::fs::write(&temp, bytes).and_then(|()| {
+    let temp = path.with_file_name(format!(".{name}.novo-{}", random_hex()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        if executable {
+            options.mode(0o755);
+        }
+    }
+    let mut file = options.open(&temp)?;
+    let written = file.write_all(bytes).and_then(|()| {
+        // O `mode` da abertura passa pelo umask; o binário sai 0755 exato.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            if !path.to_string_lossy().ends_with(EXE_ASSET) {
-                std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o755))?;
+            if executable {
+                file.set_permissions(std::fs::Permissions::from_mode(0o755))?;
             }
         }
-        Ok(())
+        file.sync_all()
     });
+    drop(file);
     if let Err(error) = written {
         let _ = std::fs::remove_file(&temp);
         return Err(error);
@@ -276,46 +356,83 @@ fn stage(path: &Path, bytes: &[u8]) -> std::io::Result<PathBuf> {
     Ok(temp)
 }
 
-/// Cada arquivo: o em uso vira `<arquivo>.anterior` (renomear funciona com o processo vivo, até no
-/// Windows, onde substituir o exe em uso falha) e o novo toma o lugar. Falha desfaz os já trocados.
-fn swap_all(staged: &[(PathBuf, PathBuf)]) -> Result<Vec<(PathBuf, bool)>, Error> {
+/// Cada arquivo: o em uso vai para o lado (renomear funciona com o processo vivo, até no Windows,
+/// onde substituir o exe em uso falha) e o novo toma o lugar. Falha desfaz os já trocados.
+fn swap_all(staged: &[(PathBuf, PathBuf)]) -> Result<Vec<(PathBuf, Option<PathBuf>)>, Error> {
     let mut done = Vec::new();
     for (index, (temp, path)) in staged.iter().enumerate() {
-        let had_old = path.is_file();
-        let moved = if had_old { hangar_core::fs::replace(path, &previous(path)) } else { Ok(()) };
-        let placed = moved.and_then(|()| {
-            hangar_core::fs::replace(temp, path).inspect_err(|_| {
-                if had_old {
-                    let _ = hangar_core::fs::replace(&previous(path), path);
-                }
-            })
+        let aside = if path.is_file() { set_aside(path).map(Some) } else { Ok(None) };
+        let placed = aside.and_then(|aside| {
+            hangar_core::fs::replace(temp, path)
+                .inspect_err(|_| {
+                    if let Some(aside) = &aside {
+                        let _ = hangar_core::fs::replace(aside, path);
+                    }
+                })
+                .map(|()| aside)
         });
-        if let Err(error) = placed {
-            for (temp, _) in &staged[index..] {
-                let _ = std::fs::remove_file(temp);
+        match placed {
+            Ok(aside) => done.push((path.clone(), aside)),
+            Err(error) => {
+                for (temp, _) in &staged[index..] {
+                    let _ = std::fs::remove_file(temp);
+                }
+                undo(&done);
+                return Err(disk(path, &error));
             }
-            undo(&done);
-            return Err(disk(path, &error));
         }
-        done.push((path.clone(), had_old));
     }
     Ok(done)
 }
 
+/// Move o arquivo em uso para `<arquivo>.anterior`, a única cópia guardada. Se a de antes não sai
+/// (no Windows, exe de uma sessão ainda aberta), vai para um nome único que o `tidy` apaga depois.
+fn set_aside(path: &Path) -> std::io::Result<PathBuf> {
+    let previous = suffixed(path, ".anterior");
+    let target = match std::fs::remove_file(&previous) {
+        Ok(()) => previous,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => previous,
+        Err(_) => suffixed(path, &format!(".anterior-{}", random_hex())),
+    };
+    hangar_core::fs::replace(path, &target)?;
+    Ok(target)
+}
+
 /// Devolve a versão de antes; o arquivo que não existia sai.
-fn undo(swapped: &[(PathBuf, bool)]) {
-    for (path, had_old) in swapped.iter().rev() {
-        let restored = if *had_old { hangar_core::fs::replace(&previous(path), path) } else { std::fs::remove_file(path) };
+fn undo(swapped: &[(PathBuf, Option<PathBuf>)]) {
+    for (path, aside) in swapped.iter().rev() {
+        let restored = match aside {
+            Some(aside) => hangar_core::fs::replace(aside, path),
+            None => std::fs::remove_file(path),
+        };
         if let Err(error) = restored {
             tracing::warn!(code = DISK_FAILED, path = %path.display(), %error, "Computer Use: versão anterior não voltou");
         }
     }
 }
 
-fn previous(path: &Path) -> PathBuf {
+/// Sobras de um tique interrompido (`.<arquivo>.novo-*`) e cópias `.anterior-*` postas de lado.
+/// A que ainda está em uso não sai e fica para o próximo tique.
+fn tidy(paths: &Paths) {
+    let Ok(listing) = std::fs::read_dir(paths.install_dir()) else { return };
+    for entry in listing.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if (name.starts_with('.') && name.contains(".novo-")) || name.contains(".anterior-") {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+fn suffixed(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
-    name.push(".anterior");
+    name.push(suffix);
     PathBuf::from(name)
+}
+
+fn random_hex() -> String {
+    use std::hash::BuildHasher;
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    format!("{:016x}", std::collections::hash_map::RandomState::new().hash_one((std::process::id(), nanos)))
 }
 
 /// O `_migrated` do Python em cada alvo: só regrava o que mudou. Ilegível, que não regravou ou que
@@ -506,6 +623,25 @@ mod tests {
         }
         let release = parse_release(br#"{"tag_name": "v1", "body": null, "assets": [{"name": "hangar-computer-control-linux-x86_64"}]}"#);
         assert_eq!(release, Some(Release { tag: "v1".into(), body: String::new(), linux: true }));
+    }
+
+    #[test]
+    fn required_files_follow_the_platform() {
+        let paths = Paths::new(PathBuf::from("/h"), Vec::new());
+        #[cfg(windows)]
+        assert_eq!(required(&paths), [paths.exe()]);
+        #[cfg(not(windows))]
+        assert_eq!(required(&paths), [paths.binary(), paths.exe()]);
+    }
+
+    #[test]
+    fn tag_accepts_only_versions() {
+        for tag in ["v0.7.0", "0.7.0", "v1.2.3-rc.1", "v1.2.3+build-5", "v10.20.30"] {
+            assert!(TAG.is_match(tag), "{tag}");
+        }
+        for tag in ["", "nightly", "v1.2", "v1.2.3/../x", "v1.2.3?x", "v1.2.3-", "v1.2.3 ", "v1.2.3\n", "v١.2.3", "33c5fbf"] {
+            assert!(!TAG.is_match(tag), "{tag:?}");
+        }
     }
 
     #[test]

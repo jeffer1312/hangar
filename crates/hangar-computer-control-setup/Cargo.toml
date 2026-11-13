@@ -11,7 +11,7 @@ regex.workspace = true
 # Mesmas features do hangar-core: sem elas, compilar este crate sozinho guarda outra cópia do reqwest.
 reqwest = { workspace = true, features = ["rustls", "multipart"] }
 semver.workspace = true
-serde ={ workspace = true, features = ["alloc"] }
+serde = { workspace = true, features = ["alloc"] }
 serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
 tokio = { workspace = true, features = ["rt", "macros", "process", "time"] }
 tracing = { workspace = true }

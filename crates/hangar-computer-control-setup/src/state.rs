@@ -38,7 +38,7 @@ pub fn state(paths: &Paths, facts: &Facts) -> Result<Value, Error> {
         (true, Some(_)) => json!("install_failed"),
         (true, None) => Value::Null,
     };
-    let jev =|key: &str| facts.jev.get(key).and_then(Value::as_str).unwrap_or("").to_owned();
+    let jev = |key: &str| facts.jev.get(key).and_then(Value::as_str).unwrap_or("").to_owned();
     let (llm_key, jev_key) = (jev("LLM_PROXY_KEY"), jev("TYPESAFE_API_KEY"));
     let mut files = vec![json!({"path": main.path.to_string_lossy(), "enabled": enabled})];
     for path in paths.config_files().into_iter().skip(1) {

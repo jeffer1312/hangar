@@ -73,12 +73,25 @@ impl Scene {
         served.clear();
         served.insert(format!("/{REPO}/releases/download/{tag}/{EXE}"), format!("MZ-{tag}").into_bytes());
         if linux {
-            served.insert(format!("/{REPO}/releases/download/{tag}/{LINUX}"), format!("ELF-{tag}").into_bytes());
+            served.insert(format!("/{REPO}/releases/download/{tag}/{LINUX}"), format!("\x7fELF-{tag}").into_bytes());
         }
     }
 
     fn unpublish_asset(&self, tag: &str, name: &str) {
         self.fake.assets.lock().unwrap().remove(&format!("/{REPO}/releases/download/{tag}/{name}"));
+    }
+
+    /// Troca o que o asset devolve com 200.
+    fn serve_asset(&self, tag: &str, name: &str, bytes: &[u8]) {
+        self.fake.assets.lock().unwrap().insert(format!("/{REPO}/releases/download/{tag}/{name}"), bytes.to_vec());
+    }
+
+    fn names_in_dir(&self) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(self.dir()).unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
     }
 
     fn requests(&self) -> Vec<String> {
@@ -100,7 +113,7 @@ impl Scene {
     /// Pacote `tag` já instalado como o Python deixava.
     fn installed(&self, tag: &str) {
         std::fs::create_dir_all(self.paths.targets_dir()).unwrap();
-        std::fs::write(self.paths.binary(), format!("ELF-{tag}")).unwrap();
+        std::fs::write(self.paths.binary(), format!("\x7fELF-{tag}")).unwrap();
         std::fs::write(self.paths.exe(), format!("MZ-{tag}")).unwrap();
         std::fs::write(self.paths.install_json(), format!("{{\n  \"tag\": \"{tag}\"\n}}")).unwrap();
     }
@@ -166,7 +179,7 @@ mod linux {
         let s = Scene::new().await;
         s.publish("v0.7.0", "", true);
         assert_eq!(s.install().await.unwrap(), Swapped::Yes { tag: "v0.7.0".into() });
-        assert_eq!(s.read(&s.paths.binary()).as_deref(), Some("ELF-v0.7.0"));
+        assert_eq!(s.read(&s.paths.binary()).as_deref(), Some("\x7fELF-v0.7.0"));
         assert_eq!(s.read(&s.paths.exe()).as_deref(), Some("MZ-v0.7.0"));
         assert_eq!(s.read(&s.paths.install_json()).as_deref(), Some("{\n  \"tag\": \"v0.7.0\"\n}"));
         assert!(s.paths.targets_dir().is_dir());
@@ -196,7 +209,7 @@ mod linux {
         s.publish("v0.7.0", "", true);
         assert_eq!(s.install().await.unwrap(), Swapped::No);
         assert!(s.requests().is_empty());
-        assert_eq!(s.read(&s.paths.binary()).as_deref(), Some("ELF-v0.6.0"));
+        assert_eq!(s.read(&s.paths.binary()).as_deref(), Some("\x7fELF-v0.6.0"));
     }
 
     /// D3.2: só o exe faltando já instala, mesmo fora do modo pacote (sem portão).
@@ -260,7 +273,7 @@ mod linux {
         s.installed("v0.6.0");
         s.publish("v0.7.0", "", false);
         assert_eq!(s.update(&latest_policy()).await.unwrap_err().code, "computer_control_release_sem_binario");
-        assert_eq!(s.read(&s.paths.binary()).as_deref(), Some("ELF-v0.6.0"));
+        assert_eq!(s.read(&s.paths.binary()).as_deref(), Some("\x7fELF-v0.6.0"));
         assert_eq!(s.read(&s.paths.install_json()).as_deref(), Some("{\n  \"tag\": \"v0.6.0\"\n}"));
         assert!(!s.paths.install_error_file().exists(), "falha da atualização não é bloqueio: binário existe");
     }
@@ -277,7 +290,7 @@ mod linux {
             let error = s.update(&latest_policy()).await.unwrap_err();
             assert_eq!(error.code, "computer_control_release_failed", "{missing}");
             assert!(error.msg.contains("o GitHub respondeu 404"), "{}", error.msg);
-            assert_eq!(s.read(&s.paths.binary()).as_deref(), Some("ELF-v0.6.0"));
+            assert_eq!(s.read(&s.paths.binary()).as_deref(), Some("\x7fELF-v0.6.0"));
             assert_eq!(s.read(&s.paths.exe()).as_deref(), Some("MZ-v0.6.0"));
             assert_eq!(s.read(&s.paths.install_json()).as_deref(), Some("{\n  \"tag\": \"v0.6.0\"\n}"));
             let leftovers: Vec<String> = std::fs::read_dir(s.dir()).unwrap()
@@ -307,7 +320,7 @@ mod linux {
         s.publish("v0.6.0", "", true);
         assert_eq!(s.update(&latest_policy()).await.unwrap(), Swapped::No);
         assert_eq!(s.requests().len(), 1, "mesma tag: só a consulta da release");
-        assert_eq!(s.read(&s.paths.binary()).as_deref(), Some("ELF-v0.6.0"));
+        assert_eq!(s.read(&s.paths.binary()).as_deref(), Some("\x7fELF-v0.6.0"));
         s.publish("v0.7.0", "", true);
         assert_eq!(s.update(&latest_policy()).await.unwrap(), Swapped::Yes { tag: "v0.7.0".into() });
         assert_eq!(s.read(&s.paths.install_json()).as_deref(), Some("{\n  \"tag\": \"v0.7.0\"\n}"));
@@ -329,16 +342,17 @@ mod linux {
             s.publish(release, "", true);
             let expected = if swaps { Swapped::Yes { tag: release.into() } } else { Swapped::No };
             assert_eq!(s.update(&latest_policy()).await.unwrap(), expected, "{installed} -> {release}");
-            let binary = if swaps { format!("ELF-{release}") } else { format!("ELF-{installed}") };
+            let binary = if swaps { format!("\x7fELF-{release}") } else { format!("\x7fELF-{installed}") };
             assert_eq!(s.read(&s.paths.binary()), Some(binary), "{installed} -> {release}");
             assert!(s.diary_codes().is_empty());
         }
 
+        // Build própria marcada com um hash de commit: não é versão.
         let s = Scene::new().await;
-        s.installed("v0.7.0");
-        s.publish("nightly", "", true);
+        s.installed("33c5fbf");
+        s.publish("v0.8.0", "", true);
         assert_eq!(s.update(&latest_policy()).await.unwrap_err().code, "computer_control_tag_incomparavel");
-        assert_eq!(s.read(&s.paths.binary()).as_deref(), Some("ELF-v0.7.0"));
+        assert_eq!(s.read(&s.paths.binary()).as_deref(), Some("\x7fELF-33c5fbf"));
         assert_eq!(s.diary_codes(), ["computer_control_tag_incomparavel"]);
         assert_eq!(s.requests().len(), 1, "nada baixado");
 
@@ -348,7 +362,68 @@ mod linux {
         s.publish("v0.8.0", "", true);
         assert_eq!(s.update(&latest_policy()).await.unwrap(), Swapped::No);
         assert!(s.requests().is_empty(), "build própria: nem consulta");
-        assert_eq!(s.read(&s.paths.binary()).as_deref(), Some("ELF-v0.7.0"));
+        assert_eq!(s.read(&s.paths.binary()).as_deref(), Some("\x7fELF-v0.7.0"));
+    }
+
+    /// Tag fora de `vX.Y.Z[-+…]` não entra na URL nem na novidade: nada baixado, diário com código,
+    /// na instalação e na atualização.
+    #[tokio::test]
+    async fn an_invalid_release_tag_downloads_nothing() {
+        for tag in ["nightly", "v1.0.0/../x", "v1.0.0?a=b", "1.0"] {
+            let s = Scene::new().await;
+            s.publish(tag, "", true);
+            assert_eq!(s.install().await.unwrap_err().code, "computer_control_tag_invalida", "{tag}");
+            assert_eq!(s.requests().len(), 1, "{tag}");
+            assert!(!s.paths.exe().exists());
+            s.installed("v0.6.0");
+            assert_eq!(s.update(&latest_policy()).await.unwrap_err().code, "computer_control_tag_invalida", "{tag}");
+            assert_eq!(s.read(&s.paths.binary()).as_deref(), Some("\x7fELF-v0.6.0"));
+            assert_eq!(s.diary_codes(), ["computer_control_tag_invalida", "computer_control_tag_invalida"]);
+        }
+    }
+
+    /// Página HTML com 200 ou corpo vazio no lugar de um asset: recusado antes da troca, diário com
+    /// código e a instalação de antes inteira.
+    #[tokio::test]
+    async fn an_asset_that_is_not_an_executable_is_refused() {
+        for (name, bytes) in [(EXE, &b"<!DOCTYPE html><html>rate limit</html>"[..]), (LINUX, &b"<html></html>"[..]), (EXE, &b""[..]), (LINUX, &b""[..])] {
+            let s = Scene::new().await;
+            s.installed("v0.6.0");
+            s.publish("v0.7.0", "", true);
+            s.serve_asset("v0.7.0", name, bytes);
+            let error = s.update(&latest_policy()).await.unwrap_err();
+            assert_eq!(error.code, "computer_control_asset_invalido", "{name} {bytes:?}");
+            assert_eq!(s.read(&s.paths.binary()).as_deref(), Some("\x7fELF-v0.6.0"));
+            assert_eq!(s.read(&s.paths.exe()).as_deref(), Some("MZ-v0.6.0"));
+            assert_eq!(s.read(&s.paths.install_json()).as_deref(), Some("{\n  \"tag\": \"v0.6.0\"\n}"));
+            assert_eq!(s.names_in_dir(), ["hangar-computer-control", "install.json", "targets", "windows-agent.exe"]);
+            assert_eq!(s.diary_codes(), ["computer_control_asset_invalido"]);
+        }
+    }
+
+    /// `.anterior` que não sai (no Windows, exe ainda em uso; aqui, uma pasta) não trava a troca: a
+    /// versão de antes vai para `.anterior-<aleatório>`. O começo do tique seguinte apaga os
+    /// `.anterior-*` e os temporários `.*.novo-*` que der; o que não sai fica.
+    #[tokio::test]
+    async fn a_stuck_anterior_gets_a_unique_name_and_leftovers_are_tidied() {
+        let s = Scene::new().await;
+        s.installed("v0.6.0");
+        let stuck = s.dir().join("hangar-computer-control.anterior");
+        std::fs::create_dir_all(stuck.join("em-uso")).unwrap();
+        s.publish("v0.7.0", "", true);
+        assert_eq!(s.update(&latest_policy()).await.unwrap(), Swapped::Yes { tag: "v0.7.0".into() });
+        let aside: Vec<String> = s.names_in_dir().into_iter().filter(|n| n.starts_with("hangar-computer-control.anterior-")).collect();
+        assert_eq!(aside.len(), 1, "{:?}", s.names_in_dir());
+        assert_eq!(s.read(&s.dir().join(&aside[0])).as_deref(), Some("\x7fELF-v0.6.0"));
+        assert!(stuck.is_dir());
+
+        std::fs::write(s.dir().join(".hangar-computer-control.novo-0123456789abcdef"), "pela metade").unwrap();
+        std::fs::create_dir_all(s.dir().join("windows-agent.exe.anterior-em-uso").join("x")).unwrap();
+        assert_eq!(s.install().await.unwrap(), Swapped::No);
+        assert_eq!(s.names_in_dir(), [
+            "hangar-computer-control", "hangar-computer-control.anterior", "install.json", "targets",
+            "windows-agent.exe", "windows-agent.exe.anterior", "windows-agent.exe.anterior-em-uso",
+        ]);
     }
 
     /// D3.4, D3.5: troca com um processo vivo rodando o binário velho; o processo não cai, o novo
@@ -364,12 +439,12 @@ mod linux {
         s.publish("v0.7.0", "", true);
         assert_eq!(s.update(&latest_policy()).await.unwrap(), Swapped::Yes { tag: "v0.7.0".into() });
         assert!(live.try_wait().unwrap().is_none(), "o processo do hcu caiu na troca");
-        assert_eq!(s.read(&s.paths.binary()).as_deref(), Some("ELF-v0.7.0"));
+        assert_eq!(s.read(&s.paths.binary()).as_deref(), Some("\x7fELF-v0.7.0"));
         assert_eq!(std::fs::read(s.dir().join("hangar-computer-control.anterior")).unwrap(), old);
         assert_eq!(s.read(&s.dir().join("windows-agent.exe.anterior")).as_deref(), Some("MZ-v0.6.0"));
         s.publish("v0.8.0", "", true);
         s.update(&latest_policy()).await.unwrap();
-        assert_eq!(s.read(&s.dir().join("hangar-computer-control.anterior")).as_deref(), Some("ELF-v0.7.0"));
+        assert_eq!(s.read(&s.dir().join("hangar-computer-control.anterior")).as_deref(), Some("\x7fELF-v0.7.0"));
         let anteriores = std::fs::read_dir(s.dir()).unwrap()
             .filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().ends_with(".anterior")).count();
         assert_eq!(anteriores, 2, "um `.anterior` por arquivo");
@@ -433,6 +508,21 @@ mod linux {
         assert_eq!(skipped[0]["alvos"], "d-custom-agent.json, e-quebrado-agent.json");
         assert_eq!(skipped[0]["evento"], "computer_control.migracao");
     }
+}
+
+/// No Windows o exe é o próprio MCP: com ele no lugar a instalação está completa, nada é
+/// reinstalado a cada tique e a falha antiga não aparece na tela.
+#[cfg(windows)]
+#[tokio::test]
+async fn windows_the_exe_alone_is_a_complete_install() {
+    let s = Scene::new().await;
+    std::fs::create_dir_all(s.dir()).unwrap();
+    std::fs::write(s.paths.exe(), "MZ-v0.6.0").unwrap();
+    std::fs::write(s.paths.install_error_file(), r#"{"code": "computer_control_release_failed"}"#).unwrap();
+    s.publish("v0.7.0", "", true);
+    assert_eq!(s.install().await.unwrap(), Swapped::No);
+    assert!(s.requests().is_empty());
+    assert_eq!(state_of(&s.paths)["unavailable"], Value::Null);
 }
 
 /// D3.7: macOS e Linux fora do x86_64 não baixam nada nem criam arquivo.
