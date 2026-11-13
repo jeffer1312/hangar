@@ -208,7 +208,8 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
     }
     for (const a of activity.agents) {
       const sub = matchAgentSubagent(subs, a, agentIds);
-      const taskId = backgroundCalls.has(a.id) ? a.agentId ?? agentIds.get(a.id) ?? sub?.agentId : undefined;
+      // Só o id do lançamento: o casamento por prompt pode achar uma execução anterior de prompt igual.
+      const taskId = backgroundCalls.has(a.id) ? a.agentId ?? agentIds.get(a.id) : undefined;
       if (taskId) stoppable.add(taskId);
       byAgent.set(a, { sub, taskId });
       if (sub && !parentRunning.has(sub.agentId)) parentRunning.set(sub.agentId, a.running);

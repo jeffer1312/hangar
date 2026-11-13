@@ -302,6 +302,25 @@ it('■ só em Agent de fundo: nem no de primeiro plano nem no subagente sem lan
   }
 });
 
+it('■ de Agent de fundo espera o id do lançamento, sem herdar o de um subagente anterior de prompt igual', async () => {
+  const old: SubagentRun = { agentId: 'ag-old', agentType: null, prompt: 'mesma tarefa', startedAt: '2026-11-13T08:00:00Z',
+    updatedAt: new Date().toISOString(), endedAt: null, mtime: 0, toolCalls: 1, tools: [], recent: [], lastText: '', state: 'running' };
+  data.events = [{ id: 'call-new', kind: 'tool_use', tool_use_id: 'call-new', tool_name: 'Agent',
+    tool_input: { description: 'nova', prompt: 'mesma tarefa', run_in_background: true } }];
+  data.activity = { ...data.activity, runningAgents: 1, agents: [
+    { id: 'call-new', kind: 'agent', description: 'nova', prompt: 'mesma tarefa', running: true },
+  ] };
+  const { getSubagents } = await import('@hangar/core');
+  vi.mocked(getSubagents).mockResolvedValue([old]);
+  try {
+    const el = await mount();
+    expect(el.textContent).toContain('nova');
+    expect(el.querySelector(`[aria-label="${m.atividade_desktop_parar()}: nova"]`)).toBeNull();
+  } finally {
+    vi.mocked(getSubagents).mockResolvedValue([]);
+  }
+});
+
 it('shell sem id de fundo não ganha ■', async () => {
   data.ferramentas = 'claudeDesktop';
   data.activity = { ...data.activity, runningShells: 1,

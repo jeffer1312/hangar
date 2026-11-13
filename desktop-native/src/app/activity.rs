@@ -463,7 +463,8 @@ impl ActivityPanel {
             if let Some(t) = &a.subagent_type { tags.push((t.clone(), false)); }
             if let Some(m) = match sub { Some(sub) => sub.model.clone(), None => a.model.clone() } { tags.push((m, true)); }
             AgentLine { key: a.id.clone(), description: a.description.clone(), tags, now: sub.map(calls_line), sub: sub.map(|s| s.agent_id.clone()),
-                since: a.started_at.or(sub.and_then(|s| s.started)), task: a.agent_id.clone().or(sub.map(|s| s.agent_id.clone())), background: a.background }
+                // Só o id do lançamento: o casamento por prompt pode achar uma execução anterior de prompt igual.
+                since: a.started_at.or(sub.and_then(|s| s.started)), task: a.agent_id.clone(), background: a.background }
         }).collect();
         // Quem já está na linha de um Agent rodando não se repete entre os subagentes rodando.
         let shown: HashSet<String> = self.activity.agents.iter().filter(live)
@@ -2241,6 +2242,19 @@ mod tests {
             panel.activity.shells[0].running = false;
             panel.prepare();
             assert_eq!(stop_note(panel), None);
+        });
+    }
+
+    #[gpui::test]
+    fn a_background_agent_waits_for_its_launch_id_instead_of_an_older_run_with_the_same_prompt(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        let panel = cx.new(super::ActivityPanel::new);
+        panel.update(cx, |panel, _| {
+            panel.activity.agents = vec![AgentRun { background: true, ..parent("t1", "mesma tarefa", None, true) }];
+            panel.subs = vec![sub("old", "mesma tarefa")];
+            panel.prepare();
+            let rows: Vec<_> = super::background_rows(&panel.lines).into_iter().map(|r| (r.key, r.task)).collect();
+            assert_eq!(rows, [("agent-t1".into(), None)]);
         });
     }
 
