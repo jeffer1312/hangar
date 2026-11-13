@@ -234,6 +234,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
         || crate::plans::routes::matches(method, path) || crate::share_reach::matches(method, path) || share_route(method, path)
         || crate::workspace_routes::matches(method, path) || crate::worktree_routes::matches(method, path)
         || crate::reviews::matches(method, path)
+        || crate::computer_control::matches(method, path)
 }
 
 /// Convites e par externo do dono (`share::owner_routes`, `share::pair_routes`).

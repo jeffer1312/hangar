@@ -1,0 +1,16 @@
+[package]
+name = "hangar-computer-control-setup"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+hangar-core.workspace = true
+regex.workspace = true
+serde = { workspace = true, features = ["alloc"] }
+serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
+tokio = { workspace = true, features = ["rt", "macros", "process", "time"] }
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true
