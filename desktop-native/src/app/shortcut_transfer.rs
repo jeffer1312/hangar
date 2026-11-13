@@ -1,4 +1,4 @@
-//! Exportar e importar os atalhos sem credencial: o backend (`/api/shortcuts/export` e `/import`, `app/shortcut_transfer.py`)
+//! Exportar e importar os atalhos sem credencial: o backend (`/api/shortcuts/export` e `/import`, crate `hangar-shortcut-transfer`)
 //! troca cada senha por `⟦SEGREDO:<nome>⟧` na saída e, na entrada, preenche os valores que a pessoa digitou. Aqui fica
 //! a seleção do pacote, a prévia dos arquivos e o formulário mascarado dos marcadores.
 use super::*;

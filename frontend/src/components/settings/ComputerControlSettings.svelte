@@ -2,7 +2,7 @@
   import type { Server } from '../../lib/auth';
   // Endereço, não frase: é o mesmo texto em qualquer idioma.
   import { getComputerControl, saveComputerControl, createComputerControlTarget,
-    installComputerControl, testComputerControlHost, getComputerControlWindowsSetup,
+    testComputerControlHost, getComputerControlWindowsSetup,
     type ComputerControlState, type ComputerControlTarget } from '../../lib/credenciais';
   import EscopoChip from './EscopoChip.svelte';
   import { copyText } from '../../lib/clipboard';
@@ -22,27 +22,6 @@
 
   const targetLabel = (t: ComputerControlTarget) =>
     `${t.name} · ${t.transport === 'local' ? m.computer_control_target_local() : t.host}`;
-
-  let installing = $state(false);
-  let installError = $state('');
-  async function install() {
-    if (installing) return;
-    installing = true;
-    installError = '';
-    savedMessage = '';
-    try {
-      const r = await installComputerControl(apiTarget);
-      fill(r);
-      savedMessage = m.computer_control_installed({ tag: current?.installed_tag ?? '' });
-      if (r.migration_skipped?.length) {
-        installError = m.computer_control_migration_skipped({ files: r.migration_skipped.join(', ') });
-      }
-    } catch (e) {
-      installError = e instanceof Error ? e.message : String(e);
-    } finally {
-      installing = false;
-    }
-  }
 
   // Formulário de alvo novo: vira um <nome>-agent.json na pasta dos alvos.
   let showNewTarget = $state(false);
@@ -186,13 +165,18 @@
   {:else}
     <div class="install">
       <p class="status">
-        {!current.package_exists && current.mode !== 'local' ? m.computer_control_not_installed()
+        {current.unavailable === 'platform' ? m.computer_control_unavailable_platform()
+          : !current.package_exists && current.mode !== 'local' ? m.computer_control_not_installed()
           : current.mode === 'package'
           ? m.computer_control_mode_package({ tag: current.installed_tag })
           : m.computer_control_mode_local({ dir: current.project_dir })}
       </p>
-      <p class="hint">{!current.package_exists && current.mode !== 'local' ? m.computer_control_install_hint()
-        : current.mode === 'package' ? m.computer_control_mode_package_hint() : m.computer_control_mode_local_hint()}</p>
+      {#if current.unavailable === 'install_failed'}
+        <p class="err" role="alert">{m.computer_control_install_failed({ code: current.install_error ?? '' })}</p>
+      {:else if current.unavailable !== 'platform'}
+        <p class="hint">{!current.package_exists && current.mode !== 'local' ? m.computer_control_install_hint()
+          : current.mode === 'package' ? m.computer_control_mode_package_hint() : m.computer_control_mode_local_hint()}</p>
+      {/if}
       {#if current.agent_exe.exists}
         <p class="hint">{m.computer_control_agent_ok({ path: current.agent_exe.path, mb: (current.agent_exe.size / 1048576).toFixed(1) })}</p>
       {:else if current.package_exists || current.mode === 'local'}
@@ -202,20 +186,14 @@
             : m.computer_control_agent_missing_local({ path: current.agent_exe.path })}
         </p>
       {/if}
-      <button type="button" class="action" onclick={install} disabled={installing || saving} aria-busy={installing}>
-        {installing ? m.computer_control_installing()
-          : current.package_exists ? m.computer_control_update() : m.computer_control_install()}
-      </button>
       {#if savedMessage}<p class="status" role="status">{savedMessage}</p>{/if}
-      {#if current.package_exists && !current.targets.length}<p class="hint">{m.computer_control_install_next()}</p>{/if}
-      {#if installError}<p class="err" role="alert">{installError}</p>{/if}
     </div>
 
     <!-- Chave em campo de texto mascarado por CSS, não type="password": com campo de senha no form o
          gerenciador do navegador ignora o autocomplete e enfia e-mail e senha salvos nos campos. -->
     <form onsubmit={save} autocomplete="off">
       <label class="check">
-        <input type="checkbox" bind:checked={enabled} disabled={saving || installing || (!enabled && (!current.targets.length || (current.mode === 'package' && !current.package_exists)))} />
+        <input type="checkbox" bind:checked={enabled} disabled={saving || (!enabled && (!current.targets.length || (current.mode === 'package' && !current.package_exists)))} />
         <span>{m.computer_control_enable()}</span>
       </label>
       <p class="hint">{m.computer_control_enable_hint()}</p>
@@ -228,14 +206,14 @@
       <label for="cc-agent">{m.computer_control_target()}</label>
       <div class="row">
         {#if current.targets.length}
-          <select id="cc-agent" bind:value={agentConfig} disabled={saving || installing}>
+          <select id="cc-agent" bind:value={agentConfig} disabled={saving}>
             {#each current.targets as t (t.path)}<option value={t.path}>{targetLabel(t)}</option>{/each}
           </select>
         {:else}
-          <input id="cc-agent" name="cc-agent" autocomplete="off" bind:value={agentConfig} disabled={saving || installing} spellcheck="false" />
+          <input id="cc-agent" name="cc-agent" autocomplete="off" bind:value={agentConfig} disabled={saving} spellcheck="false" />
         {/if}
         <button type="button" onclick={() => (showNewTarget = !showNewTarget)} aria-expanded={showNewTarget}
-                disabled={saving || installing || (current.mode === 'package' && !current.package_exists)}>{m.computer_control_new_target()}</button>
+                disabled={saving || (current.mode === 'package' && !current.package_exists)}>{m.computer_control_new_target()}</button>
       </div>
       <p class="hint">{current.targets.length ? m.computer_control_target_hint() : m.computer_control_target_empty()}</p>
 
@@ -324,7 +302,7 @@
           : m.browser_jev_cu_aux_missing()}</p>
       </div>
 
-      <button class="action primary" type="submit" disabled={saving || installing || (enabled && (!agentConfig || (current.mode === 'package' && !current.package_exists)))} aria-busy={saving}>
+      <button class="action primary" type="submit" disabled={saving || (enabled && (!agentConfig || (current.mode === 'package' && !current.package_exists)))} aria-busy={saving}>
         {saving ? m.computer_control_saving() : m.computer_control_save()}
       </button>
     </form>
@@ -368,7 +346,6 @@
     display: flex; flex-direction: column; gap: var(--space-1);
     padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
   }
-  .install .action { margin-top: var(--space-2); }
   .new-target {
     display: flex; flex-direction: column; gap: var(--space-2);
     padding: var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
