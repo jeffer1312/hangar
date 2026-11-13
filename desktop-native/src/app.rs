@@ -3742,10 +3742,11 @@ impl Hangar {
         let opening = self.opening_row_shown();
         let queue = self.chat.queue_panel();
         let events = &self.chat.events;
-        let (mut ids, mut signatures): (Vec<String>, Vec<String>) = self.conversation.items[from..].iter().map(|item| {
+        let (mut ids, mut signatures): (Vec<String>, Vec<String>) = self.conversation.items[from..].iter().enumerate().map(|(n, item)| {
             let id = item.id(events);
             let day = matches!(item, Item::Event(_)) && self.orq_days.contains(&id);
             let signature = if day { format!("day{}", signature(item, events)) } else { signature(item, events) };
+            let signature = if after_card(&self.conversation.items, events, from + n) { format!("card{signature}") } else { signature };
             // Entrar ou sair do painel muda a altura da linha sem mudar o evento.
             let signature = if crate::queue_panel::hidden(&id, &queue) { format!("queued{signature}") } else { signature };
             (id, signature)
@@ -3997,7 +3998,7 @@ impl Hangar {
         };
         if self.tree_motion { motion::request_frame(window, cx); }
         let message = id == PREVIEW || id == landing::OPENING || matches!(self.conversation.items.get(index), Some(Item::Event(_)));
-        let row = row_frame(inner, message);
+        let row = row_frame(inner, message).when(after_card(&self.conversation.items, &self.chat.events, index), |el| el.pt(px(8.)));
         // Pede quadro só para a área da conversa, e só enquanto a linha entra; rolar até ela depois não a anima de novo.
         let entering = self.arrived.get(&id).map(|at| motion::FADE_IN.raw(*at)).filter(|raw| *raw < 1. && !cx.reduce_motion());
         let row = match entering {
@@ -5633,6 +5634,16 @@ fn chat_text_runnable(view: &Entity<TextViewState>, cx: &App, runner: Option<Wea
 const ROW_GROUP: &str = "message-row";
 
 /// Recuo e coluna de uma linha da conversa; mensagem tem mais ar em cima e embaixo.
+/// Linha logo depois de um cartão de subagente que não é outro cartão: o cartão tem borda, e sem respiro a linha encosta
+/// nele. Entra na assinatura da linha, para a altura medida acompanhar quando o cartão chega antes dela.
+fn after_card(items: &[Item], events: &[ChatEvent], index: usize) -> bool {
+    let card = |item: Option<&Item>| matches!(item, Some(Item::Tool(t)) if {
+        let name = events[t.call].tool_name.as_deref();
+        conversation::is_agent_call(name) || conversation::is_page_call(name)
+    });
+    index > 0 && items.get(index).is_some() && card(items.get(index - 1)) && !card(items.get(index))
+}
+
 fn row_frame(inner: AnyElement, message: bool) -> Div {
     div().w_full().px(px(16.)).when(message, |el| el.py(px(8.))).when(!message, |el| el.py(px(2.)))
         .flex().justify_center()
@@ -8739,6 +8750,17 @@ mod tests {
         assert!(!super::sends_files(&read));
         assert_eq!(super::tool_file_refs(&read), vec![(Source::Cited("/tmp/a/print.png".into()), "print.png".into(), true)]);
         assert!(super::tool_file_refs(&call("Bash", serde_json::json!({"command": "ls /tmp/a/print.png"}))).is_empty());
+    }
+
+    #[test]
+    fn row_after_an_agent_card_gets_room_but_the_next_card_does_not() {
+        let call = |name: &str| ChatEvent { kind: "tool_use".into(), tool_name: Some(name.into()), ..Default::default() };
+        let events = vec![call("Agent"), call("Agent"), ChatEvent { kind: "thinking".into(), ..Default::default() }, call("Bash")];
+        use crate::conversation::{Item, Tool};
+        let tool = |call| Item::Tool(Tool { call, result: None });
+        let items = vec![tool(0), tool(1), Item::Thinking { id: "p".into(), parts: vec![2] }, tool(3)];
+        let room: Vec<bool> = (0..5).map(|i| super::after_card(&items, &events, i)).collect();
+        assert_eq!(room, [false, false, true, false, false]);
     }
 
     #[test]

@@ -167,6 +167,11 @@ mod tests {
     }
 
     #[test]
+    fn desktop_summary_counts_powershell_as_command() {
+        assert_eq!(summary(&[("PowerShell", Some(true))]), "Executou 1 comando (1 falha)");
+    }
+
+    #[test]
     fn desktop_summary_keeps_the_order_families_first_appear() {
         assert_eq!(summary(&[("ToolSearch", Some(false)), ("WebSearch", Some(false))]), "Carregou ferramentas, Pesquisou na web 1 vez");
     }

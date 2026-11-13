@@ -646,7 +646,7 @@ pub fn family(name: Option<&str>) -> Family {
         "Grep" | "Glob" | "WebSearch" | "WebFetch" | "ToolSearch" => Family::Search,
         "Edit" | "MultiEdit" | "NotebookEdit" => Family::Edit,
         "Write" => Family::Create,
-        "Bash" | "exec" | "exec_command" => Family::Run,
+        "Bash" | "PowerShell" | "exec" | "exec_command" => Family::Run,
         _ => Family::Other,
     }
 }
@@ -697,7 +697,7 @@ pub fn summarize_input(name: Option<&str>, input: Option<&Map<String, Value>>) -
     }
     let found = match name.unwrap_or("") {
         "Read" | "Write" | "Edit" | "MultiEdit" | "NotebookEdit" => first(&["file_path", "path", "notebook_path"]),
-        "Bash" | "BashOutput" => first(&["command"]),
+        "Bash" | "BashOutput" | "PowerShell" => first(&["command"]),
         "exec" | "exec_command" | "write_stdin" => first(&["command", "cmd", "code"]),
         "Grep" | "Glob" => {
             let pattern = text("pattern");
@@ -984,6 +984,8 @@ mod tests {
     #[test]
     fn summaries_pick_salient_field() {
         assert_eq!(summarize_input(Some("Bash"), json!({"command": "ls   -la\n/tmp"}).as_object()), "ls -la /tmp");
+        assert_eq!(summarize_input(Some("PowerShell"), json!({"description": "Listar", "command": "Get-ChildItem"}).as_object()), "Get-ChildItem");
+        assert_eq!(family(Some("PowerShell")), Family::Run);
         assert_eq!(summarize_input(Some("Grep"), json!({"pattern": "foo", "path": "src"}).as_object()), "\"foo\" src");
         assert_eq!(summarize_input(Some("mcp_x"), json!({"other": 3}).as_object()), "3");
         for name in ["spawn_agent", "collaboration.spawn_agent", "multi_agent.spawn_agent", "functions.spawn_agent"] {
