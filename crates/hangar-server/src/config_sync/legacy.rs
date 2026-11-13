@@ -16,7 +16,7 @@ pub fn read_object(path:&Path)->Result<Map<String,Value>,String> {
     value.as_object().cloned().ok_or_else(||format!("{} não é um objeto JSON",path.display()))
 }
 
-fn text(value:Option<&Value>)->String {
+pub(super) fn text(value:Option<&Value>)->String {
     match value.filter(|v|truthy(v)) {
         Some(Value::String(value))=>value.trim().into(),
         Some(value)=>crate::orchestration::codec::python_string(value).trim().into(),

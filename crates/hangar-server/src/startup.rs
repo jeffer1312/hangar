@@ -71,6 +71,15 @@ pub(crate) async fn maintenance(state: Arc<crate::routes::AppState>) {
     }
     // `~/.hangar/plugin.json` e `plugin-dir`: a sessão aberta fora do Hangar e o lançador acham a ponte por eles.
     tokio::spawn(crate::config_sync::plugin_publish::publish_for_state(state.clone()));
+    // Migração do Jev: uma vez por subida, sem segurar a subida; falha vai ao diário.
+    {
+        let env = state.accounts.env.clone();
+        let runtime = crate::config_sync::runtime::RuntimeConfig::from_state(&state);
+        tokio::task::spawn_blocking(move || match runtime {
+            Ok(runtime) => runtime.startup_jev_migration(),
+            Err(error) => crate::config_sync::jev_startup::report(&env, "configuracao", &error),
+        });
+    }
     {
         use crate::costs::pricing_refresh::{PricingRefresh, URL};
         let _ = PricingRefresh::start(crate::costs::pricing::default_dir(), URL, PricingRefresh::offline());

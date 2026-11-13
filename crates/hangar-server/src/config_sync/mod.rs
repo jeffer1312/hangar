@@ -12,6 +12,7 @@ pub mod files;
 pub mod http;
 pub mod install;
 pub mod jev;
+pub mod jev_startup;
 pub mod legacy;
 pub mod metadata;
 pub mod paths;

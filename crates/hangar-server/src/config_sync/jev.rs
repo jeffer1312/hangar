@@ -6,7 +6,7 @@ use super::{
 use crate::orchestration::truthy;
 use serde_json::{Map, Value, json};
 use std::path::Path;
-const NAME: &str = "hangar-computer-control";
+pub(super) const NAME: &str = "hangar-computer-control";
 const LLM: [&str; 4] = ["LLM_PROXY_URL", "LLM_MODEL", "LLM_EFFORT", "LLM_PROXY_KEY"];
 const REPLACED: [&str; 7] = [
     "TYPESAFE_API_KEY",
@@ -18,14 +18,14 @@ const REPLACED: [&str; 7] = [
     "LLM_EFFORT",
 ];
 
-fn env_of(entry: &Map<String, Value>, path: &Path) -> Result<Map<String, Value>, String> {
+pub(super) fn env_of(entry: &Map<String, Value>, path: &Path) -> Result<Map<String, Value>, String> {
     match entry.get("env").filter(|v| truthy(v)) {
         None => Ok(Map::new()),
         Some(Value::Object(env)) => Ok(env.clone()),
         _ => Err(format!("env em {} não é um objeto JSON", path.display())),
     }
 }
-fn write(
+pub(super) fn write(
     path: &Path,
     data: Map<String, Value>,
     private: bool,
@@ -118,8 +118,8 @@ impl RuntimeConfig {
         previous.insert(source, json!(old));
         write(&backup, previous, true, raw.as_deref(), link.as_deref())
     }
-    pub fn sync_jev(&self) -> Result<(), String> {
-        let jev = self.jev_env();
+    /// `~/.claude.json` e o de cada outra conta que já tem um.
+    pub(super) fn computer_use_files(&self) -> Result<Vec<std::path::PathBuf>, String> {
         let service = crate::accounts::AccountService::new(self.env.clone());
         let mut paths = vec![self.env.home.join(".claude.json")];
         let default = crate::accounts::catalog::resolved(&self.env.home.join(".claude"));
@@ -129,6 +129,11 @@ impl RuntimeConfig {
                 paths.push(path);
             }
         }
+        Ok(paths)
+    }
+    pub fn sync_jev(&self) -> Result<(), String> {
+        let jev = self.jev_env();
+        let paths = self.computer_use_files()?;
         // Todos os documentos são lidos sob a mesma trava dos demais escritores participantes.
         // A ordem evita inversão de travas entre duas publicações; editores externos não participam.
         let mut locked_paths = paths.clone();
