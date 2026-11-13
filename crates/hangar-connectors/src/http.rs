@@ -43,14 +43,8 @@ async fn public(
 
 async fn reply(state: &Http, peer: Option<SocketAddr>, request: Request) -> Response {
     let socket = peer.unwrap_or_else(|| "0.0.0.0:0".parse().expect("endereço estático válido"));
-    match state.edge.gate(socket, &request).await {
-        Ok((_, true)) => {}
-        Ok((_, false)) => match state.edge.owner_gate(socket, &request).await {
-            // Autenticado, mas não é o dono (convidado): recusa sem contar falha de senha.
-            Ok(_) => return detail(StatusCode::FORBIDDEN, "connectors_owner_only", "só o dono administra e consulta conectores", json!({})),
-            Err(response) => return response,
-        },
-        Err(error) => return hangar_core::auth::unavailable(error),
+    if let Err(response) = state.edge.owner_only(socket, &request, ("connectors_owner_only", "só o dono administra e consulta conectores")).await {
+        return response;
     }
     let segments: Vec<String> = request.uri().path().trim_start_matches('/').split('/')
         .map(|part| percent_encoding::percent_decode_str(part).decode_utf8_lossy().into_owned()).collect();
@@ -110,30 +104,9 @@ async fn reply(state: &Http, peer: Option<SocketAddr>, request: Request) -> Resp
                 Err(error) => call_error(&error),
             }
         }
-        (Method::PUT, ["api", "connectors", id, "links", ticket_id]) => {
-            let body = match body(request).await { Ok(body) => body, Err(response) => return response };
-            let Some(session) = body.get("session").and_then(Value::as_str).filter(|name| valid_session(name)) else {
-                return detail(StatusCode::BAD_REQUEST, "invalid_params", "corpo precisa de \"session\": nome de sessão", json!({}));
-            };
-            link(state, id, ticket_id, Some(session))
-        }
-        (Method::DELETE, ["api", "connectors", id, "links", ticket_id]) => link(state, id, ticket_id, None),
         (_, ["api", "connectors", ..]) if segments.len() <= 5 => detail(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed", "método não aceito nesta rota", json!({})),
         _ => detail(StatusCode::NOT_FOUND, "not_found", "rota desconhecida", json!({})),
     }
-}
-
-fn link(state: &Http, id: &str, ticket_id: &str, session: Option<&str>) -> Response {
-    if let Err(error) = GetParams::new(ticket_id) { return call_error(&error.into()); }
-    match state.host.link(id, ticket_id, session) {
-        Ok(entry) => json_response(StatusCode::OK, json!({"connector": entry})),
-        Err(error) => admin_error(&error),
-    }
-}
-
-/// Mesmo formato dos nomes de sessão do Hangar.
-fn valid_session(name: &str) -> bool {
-    (1..=64).contains(&name.len()) && name.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
 }
 
 async fn body(request: Request) -> Result<Value, Response> {

@@ -301,6 +301,12 @@ fn fifteen() -> i64 { 15 }
 #[derive(Deserialize)]
 struct Check { estado: String, #[serde(default)] sessao: String }
 
+#[derive(Deserialize)]
+struct MissionEvidence { caminho: String, #[serde(default)] legenda: String }
+
+#[derive(Deserialize)]
+struct Mission { etapa: Option<String>, nota: Option<String>, evidencias: Option<Vec<MissionEvidence>>, #[serde(default)] sessao: String }
+
 /// Argumento do verbo: texto ou número, como o `list[str | int]` do Python.
 fn verb_args(raw: Option<&[Value]>) -> Result<Vec<String>, String> {
     raw.unwrap_or_default().iter().map(|a| match a {
@@ -354,6 +360,7 @@ impl Tools {
             "browser_goal" => match args(name, raw) { Ok(a) => self.browser_goal(headers, a).await, Err(e) => Err(e) },
             "browser_check" => match args(name, raw) { Ok(a) => self.browser_check(headers, a).await, Err(e) => Err(e) },
             "request_secret" => match args(name, raw) { Ok(a) => self.request_secret(headers, a).await, Err(e) => Err(e) },
+            "mission" => match args(name, raw) { Ok(a) => self.mission(headers, a).await, Err(e) => Err(e) },
             "vault_list" => self.vault_list(headers).await,
             "vault_exec" => match args(name, raw) { Ok(a) => self.vault_exec(headers, a).await, Err(e) => Err(e) },
             "vault_file" => match args(name, raw) { Ok(a) => self.vault_file(headers, a).await, Err(e) => Err(e) },
@@ -582,6 +589,25 @@ impl Tools {
         self.ok(Method::POST, &format!("/api/sessions/{}/nav", segment(&me)), Some(json!({"url": a.url}))).await?;
         let ready = nav::wait_ready(&self.http, &home, &me, since, before.as_deref(), &a.url).await.map_err(|e| e.0)?;
         Ok(dict(json!({"ok": true, "url": ready})))
+    }
+
+    /// Sem nada a informar, lê; com etapa, nota ou evidências, relata. As duas pelas rotas do Mission Control.
+    async fn mission(&self, headers: &HeaderMap, a: Mission) -> Outcome {
+        let me = self.me(headers, &a.sessao).await?;
+        let evidence = a.evidencias.unwrap_or_default();
+        if a.etapa.is_none() && a.nota.is_none() && evidence.is_empty() {
+            let (status, value) = self.route(Method::GET, "/api/mission", None).await;
+            if !(200..300).contains(&status) { return Err(mission_error(status, &value)); }
+            let item = value["items"].as_array().and_then(|items| items.iter().find(|i| i["session"] == me.as_str())).cloned();
+            let Some(item) = item else {
+                return Err("mission_session_not_linked: esta sessão não está ligada a um ticket do Mission Control".into());
+            };
+            return Ok(dict(json!({"item": item, "stages": value["stages"]})));
+        }
+        let evidence: Vec<Value> = evidence.into_iter().map(|e| json!({"path": e.caminho, "caption": e.legenda})).collect();
+        let body = json!({"session": me, "stage": a.etapa, "note": a.nota, "evidence": evidence});
+        let (status, value) = self.route_from(Some(&me), Method::POST, "/api/mission/report", Some(body)).await;
+        if (200..300).contains(&status) { Ok(dict(value)) } else { Err(mission_error(status, &value)) }
     }
 
     async fn html_render(&self, headers: &HeaderMap, a: HtmlRender) -> Outcome {
@@ -1073,5 +1099,13 @@ mod tests {
             assert_eq!(out.get("server").and_then(Value::as_str), server);
         }
         assert!(resumed(&json!({"name": "s", "avisos": []}), None).structured_content.unwrap().get("avisos").is_none());
+    }
+}
+
+/// O código na frente: o agente decide pelo `mission_gate_pending` ou `mission_session_not_linked`.
+fn mission_error(status: u16, value: &Value) -> String {
+    match value["detail"]["code"].as_str() {
+        Some(code) => format!("{code}: {}", detail(status, value)),
+        None => detail(status, value),
     }
 }

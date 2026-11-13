@@ -184,3 +184,14 @@ mod replaced_read_tests {
         assert_eq!(std::fs::read(&path).unwrap(), b"novo");
     }
 }
+
+/// Trava exclusiva de um arquivo de trava (criado privado), solta quando o `File` sai de escopo.
+/// Serve de exclusão entre processos para quem lê, muda e regrava um JSON com `atomic_write`.
+pub fn lock_file(path: &Path) -> io::Result<File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).append(true).create(true);
+    #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
+    let file = options.open(path)?;
+    file.lock()?;
+    Ok(file)
+}
