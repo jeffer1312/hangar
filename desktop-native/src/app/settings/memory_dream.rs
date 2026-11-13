@@ -255,6 +255,7 @@ impl DreamPage {
                         this.config = Some(config);
                         this.status = Some(status);
                         this.show_config(window, cx);
+                        this.load_status(window, cx);
                     }
                     Ok((Err(error), _) | (_, Err(error))) | Err(error) => this.error = Some(Hangar::fetch_failure(&error)),
                 }
@@ -280,12 +281,49 @@ impl DreamPage {
             },
             window,
             cx,
-            |this, result: Result<Vec<(usize, Option<Config>)>, Failure>, _, _| {
+            |this, result: Result<Vec<(usize, Option<Config>)>, Failure>, window, cx| {
                 for (n, config) in result.unwrap_or_default() {
                     if let Some(target) = this.targets.get_mut(n) {
                         target.config = config;
                     }
                 }
+                this.load_status(window, cx);
+            },
+        );
+    }
+
+    /// A máquina que sonha guarda o estado: projetos, rodadas, Sonhar agora e Desfazer vão para ela.
+    /// Enquanto as outras máquinas não responderam, vale a ativa.
+    fn dreamer_api(&self) -> Api {
+        let machine = self.config.as_ref().map(|c| c.machine.as_str()).unwrap_or("");
+        self.targets
+            .iter()
+            .find(|t| !machine.is_empty() && t.config.as_ref().is_some_and(|c| c.this_machine == machine))
+            .and_then(|t| t.api.clone())
+            .unwrap_or_else(|| self.api.clone())
+    }
+
+    /// Projetos da máquina que sonha, quando ela não é a ativa (a ativa já veio no `load`).
+    fn load_status(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let api = self.dreamer_api();
+        if api.identity() == self.api.identity() {
+            return;
+        }
+        let seq = self.load_seq;
+        run(
+            &self.runtime,
+            async move { Ok(parse::<Status>(api.server_read(&["dream", "status"], &[], 20).await)) },
+            window,
+            cx,
+            move |this, result: Result<_, Failure>, _, cx| {
+                if seq != this.load_seq {
+                    return;
+                }
+                match result {
+                    Ok(Ok(status)) => this.status = Some(status),
+                    Ok(Err(error)) | Err(error) => this.error = Some(Hangar::fetch_failure(&error)),
+                }
+                cx.notify();
             },
         );
     }
@@ -448,7 +486,7 @@ impl DreamPage {
         if !self.busy.insert(busy.clone()) {
             return;
         }
-        let api = self.api.clone();
+        let api = self.dreamer_api();
         run(
             &self.runtime,
             async move {
@@ -510,7 +548,7 @@ impl DreamPage {
     }
 
     fn open_changes(&mut self, run_id: String, project: String, window: &mut Window, cx: &mut Context<Self>) {
-        let (api, runtime) = (self.api.clone(), self.runtime.clone());
+        let (api, runtime) = (self.dreamer_api(), self.runtime.clone());
         let labels = self
             .targets
             .iter()
@@ -1020,7 +1058,8 @@ fn error_text(code: &str) -> String {
 
 fn failure_text(error: &Failure) -> String {
     match error.code.as_deref() {
-        Some(code) if code.starts_with("dream_") => error_text(code),
+        // A mensagem traz o detalhe (`dream_memory_changed: vps, notebook`); o código sozinho o perde.
+        Some(code) if code.starts_with("dream_") => error_text(Some(error.detail.as_str()).filter(|d| d.starts_with(code)).unwrap_or(code)),
         _ => Hangar::fetch_failure(error),
     }
 }
