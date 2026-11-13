@@ -481,7 +481,7 @@ impl Hangar {
                 if !self.can_send() || self.delivery.pending(&key) || self.uploading.contains_key(&key) {
                     self.action_feedback.insert(key, (tr("shortcut_busy"), true));
                 } else {
-                    let known = self.known_user_ids();
+                    let known = self.known_event_ids();
                     self.deliver(key, text, String::new(), false, known, None, cx);
                 }
             }

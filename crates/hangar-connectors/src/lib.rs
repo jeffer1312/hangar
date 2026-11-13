@@ -10,6 +10,7 @@ mod process;
 pub mod protocol;
 pub mod registry;
 pub mod rpc;
+pub mod work_actions;
 pub mod work_tracking;
 
 pub use error::{AdminError, AdminKind, CallError};

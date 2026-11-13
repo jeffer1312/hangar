@@ -1,11 +1,12 @@
-# Mission Control
+# Tickets
 
 Painel do app nativo que acompanha cada ticket de um conector (`work_tracking`) pelas etapas do
 trabalho do agente. O botão de painel da barra do topo, ou `Ctrl+Alt+M`, abre a página.
 
 O que mora onde:
 
-- O ticket (título, status, descrição) é do sistema de origem, lido pelo conector. Nada é escrito lá.
+- O ticket (título, status, descrição) é do sistema de origem, lido pelo conector. As ações acionam
+  o fluxo do plugin, que continua responsável pelas mudanças no sistema de origem.
 - Etapas, vínculo com a sessão, aprovações, evidências e histórico são do Hangar, no crate
   `hangar-mission`, em `~/.hangar/mission/` do servidor (`mission.json` e a pasta `evidence/`).
 
@@ -22,9 +23,25 @@ caminho de uma PM no plugin Promedico:
 | Validação | `validacao` | sim | |
 | Entrega | `entrega` | | |
 
-O botão Etapas troca a lista. Uma etapa por linha, `Nome | portão | Status, Status`. O nome igual ao
-de uma etapa existente mantém o `id` dela; etapa que sai deixa de valer nos tickets, que voltam a ser
-deduzidos.
+O botão Etapas abre um formulário com a lista à esquerda e os campos da etapa selecionada à
+direita. É possível adicionar, renomear, reordenar e remover etapas, exigir aprovação, associar
+ações do conector e informar os status de origem, um por linha. Renomear e reordenar preservam o
+`id`. Cancelar descarta a edição inteira. Etapas removidas deixam de valer nos tickets; a dedução
+por plano ou revisão exige o ID correspondente, sem escolher uma coluna pela posição.
+
+A busca, a origem e a escolha de repositório ou pasta ficam à esquerda do board. Iniciar e
+Executar etapa usam essa escolha e os padrões de criação do servidor. Várias ações associadas à
+etapa abrem uma escolha; cancelar não cria sessão nem envia mensagem. O detalhe tem alça de
+largura, ajuste pelo teclado e opção de ampliar. A aba Conversa reutiliza o chat, as perguntas e a
+aprovação do plano da sessão vinculada. Somente a conversa selecionada abre um stream; trocar de
+ticket conserva o rascunho e encerra o acompanhamento anterior.
+
+Cada etapa também pode guardar `prompt` opcional (até 4.000 bytes) e `actions`, um mapa do ID do
+conector para os IDs das ações escolhidas. Campos ausentes em um pedido antigo preservam a
+configuração atual; para limpar, envie `prompt: ""` e `actions: {}` explicitamente. A identidade
+`id` continua igual ao renomear ou reordenar. O registro em disco aceita a versão 1 e grava a versão 2
+na próxima mudança, sob a mesma trava e troca atômica; um servidor antigo recusa essa versão em vez
+de descartar os campos novos. Tickets, histórico e evidências são preservados.
 
 A coluna de cada ticket, nesta ordem:
 
@@ -48,14 +65,16 @@ no CLI do host, o detalhe diz isso no lugar do MR.
 
 ## Sessão do ticket
 
-O Iniciar abre a tela de nova conversa com o `start_prompt` do conector no campo. A primeira sessão
-criada depois dele, cuja mensagem começa por esse texto, fica ligada ao ticket. Todo vínculo novo faz o
-servidor mandar à sessão, pela rota de entrada dela, um aviso `[painel: Mission Control]` explicando a
-tool `mission`.
+O Iniciar usa a pasta e as opções escolhidas à esquerda, num modal sobre o próprio board. A sessão
+é associada ao ticket antes da primeira ação. Executar etapa envia a ação do conector com o prompt
+opcional; havendo várias ações, a pessoa escolhe uma. A conversa, as perguntas e o plano ficam no
+detalhe do ticket, com os mesmos controles da conversa principal. Arrastar ou Mover para apenas
+registra a etapa, sem executar prompt nem abrir sessão.
 
 Sem vínculo, o painel acha a sessão viva cuja branch é a chave do ticket ou cujo nome começa por ela
-(`PM-19816`, `PM-19816-Coordenadora`), como o plugin Promedico identifica a PM. "Ligar ao ticket"
-grava o vínculo e passa a valer a tool. Uma sessão fica ligada a um ticket só.
+(`PM-19816`, `PM-19816-Coordenadora`), como o plugin Promedico identifica a PM. Associar a sessão
+detectada grava o vínculo e passa a valer a tool. Uma sessão fica ligada a um ticket só. A associação
+manual avisa a sessão pelo painel Tickets e explica a tool `mission`.
 
 ## Portão e evidências
 
@@ -95,5 +114,56 @@ Rotas só do dono, nunca repassadas ao Python:
 | DELETE | `/api/mission/items/{conector}/{ticket}/evidence/{id}` | Tira uma evidência |
 | GET | `/api/mission/evidence/{id}` | O arquivo, com faixas (vídeo) |
 | POST | `/api/mission/report` | `{"session", "stage", "note", "evidence": [{"path", "caption"}]}`, o que a tool chama |
+| POST | `/api/mission/actions` | Solicita a ação de uma etapa; devolve o recibo da tentativa |
+| GET | `/api/mission/actions/{tentativa}` | Sessão e resultado guardados |
+| GET | `/api/mission/actions?connector=&ticket_id=` | Última tentativa (`attempt`) e última solicitação de execução (`execution`) |
 
 O ID do ticket vai codificado como um componente do caminho.
+
+## Despacho de ações
+
+O catálogo vem de [`work_actions/v1`](../connectors/work-actions-v1.md). O servidor relê a etapa,
+o ticket e o catálogo antes de qualquer efeito. A escolha leva a impressão que foi mostrada:
+
+```json
+{
+  "attempt": "0123456789abcdef0123456789abcdef",
+  "connector": "help",
+  "ticket_id": "PM-123",
+  "stage": "planejamento",
+  "action": "start-pm",
+  "fingerprint": "impressão devolvida pelo catálogo",
+  "open": {"cwd": "/workspace/projeto", "provider": "claude"}
+}
+```
+
+`attempt` é uma identidade aleatória de 32 caracteres hexadecimais minúsculos. Repetir o mesmo
+pedido devolve o mesmo recibo; usar essa identidade com outro pedido é `ticket_action_conflict`.
+O trabalho continua mesmo se o cliente desconectar e tem prazo de 90 segundos. Estados:
+`preparing`, `opening`, `sending`, `sent`, `queued`, `recorded`, `failed` e `uncertain`.
+`sent` e `queued` confirmam somente a aceitação da mensagem, sem declarar a skill concluída.
+`recorded` registra uma etapa sem mensagem ou um movimento para a etapa em que o ticket já está.
+
+Arrastar e Mover para enviam `execute: false`: registram a escolha do dono, mesmo que a etapa tenha
+ações e prompt. Não leem o catálogo de ações nem abrem sessão. Executar usa `execute: true`
+(padrão quando omitido). O movimento manual não apaga uma execução anterior incerta: seu recibo
+continua separado e precisa ser conferido antes de repetir um comando.
+
+O campo `open` conserva as opções do lançador único e os padrões do servidor. Nome, primeira
+mensagem, criadora e preparação de branch não vêm desse campo: o dispatcher escolhe o nome,
+associa o ticket e só então envia; a skill continua responsável pelo fluxo do projeto. Sessão já
+vinculada é reutilizada, conferindo vida e conversa durante a escrita. A troca do nome mantém
+o vínculo. Uma ação não toma a sessão de outro ticket.
+
+O comando da ação e o prompt opcional formam uma mensagem normal, que pode entrar na fila.
+Sem `work_actions`, o `start_prompt` continua disponível no primeiro início. Sem ação nem prompt,
+o servidor registra a etapa sem abrir sessão. Uma escolha ausente ou antiga é recusada;
+etapas com portão mantêm suas exigências de aprovação. Relato novo do agente não é regredido
+pela confirmação do envio.
+
+`repeat: true` executa explicitamente de novo na mesma etapa. Resultado incerto nunca é
+reenviado sozinho: confira a conversa antes de um novo pedido com `confirm_retry: true`.
+Uma abertura incompleta pode recuperar sua sessão guardada, desde que a identidade continue
+válida e ela não tenha sido associada a outro ticket. O recibo fica em `ticket-actions/` no
+diretório de dados do Hangar. Se a gravação falhar após um efeito, o processo conserva o resultado
+incerto para consulta; após reiniciar, uma tentativa durável ainda em andamento também é incerta.

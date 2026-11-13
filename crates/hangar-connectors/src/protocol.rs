@@ -11,7 +11,10 @@ pub const INITIALIZE: &str = "initialize";
 pub const SHUTDOWN: &str = "shutdown";
 
 /// Capacidades conhecidas e a versão de cada uma que o host entende.
-pub const CAPABILITIES: [(&str, u32); 1] = [(crate::work_tracking::CAPABILITY, crate::work_tracking::VERSION)];
+pub const CAPABILITIES: [(&str, u32); 2] = [
+    (crate::work_tracking::CAPABILITY, crate::work_tracking::VERSION),
+    (crate::work_actions::CAPABILITY, crate::work_actions::VERSION),
+];
 
 /// Erros públicos do contrato. O nome em `snake_case` é o que viaja em `error.data.code` e nas
 /// respostas HTTP.

@@ -8,7 +8,8 @@ encerrado.
 
 ```bash
 cd crates
-cargo build -p hangar-server -p hangar-connectors --bin hangar-help-test-connector
+cargo build -p hangar-server
+cargo build -p hangar-help-connector --bin hangar-help-test-connector
 REG=$(mktemp -d)/connectors.json
 target/debug/hangar-server connectors --registry "$REG" add ../examples/connectors/work_tracking.json
 target/debug/hangar-server connectors --registry "$REG" tickets js-demo --limit 2
@@ -55,7 +56,8 @@ Argumentos opcionais do binário: `--id` (padrão `help-test`), `--help-url` (pa
 ## Em outra máquina
 
 1. Na máquina de teste, com o checkout na branch e o Hangar parado ou não, compile para o sistema
-   dela: `cargo build --release -p hangar-server -p hangar-connectors --bin hangar-help-test-connector`
+   dela: `cargo build --release -p hangar-server` e, para usar a casca de teste,
+   `cargo build --release -p hangar-help-connector --bin hangar-help-test-connector`
    em `crates/`.
 2. Confira o login do plugin Promedico **naquela máquina**. Token não se copia entre máquinas.
 3. Prove primeiro no host isolado (seção acima), com o manifesto do Help: `tickets help-test
@@ -66,3 +68,14 @@ Argumentos opcionais do binário: `--id` (padrão `help-test`), `--help-url` (pa
 5. Volta: `hangar-server connectors remove help-test`, apagar `~/.hangar/connectors.json` se quiser
    zerar, e voltar o checkout para a branch anterior pelo mesmo caminho usado para trocar. O catálogo
    não altera nada fora dele.
+
+## Perfil do Help fornecido pelo Hangar
+
+O servidor distribuído inclui `hangar-server help-connector`, que oferece leitura e o catálogo de
+ações do plugin Promedico. O host reconhece o executável legado `hangar-help-test-connector` com
+os argumentos documentados e deriva o perfil efetivo em memória, usando o executável do servidor
+atual. Preserva ID, argumentos, pasta, prompt de início e estado ligado ou desligado.
+
+O arquivo cadastrado não é reescrito: voltar ao servidor anterior recupera o comando original.
+Executáveis personalizados, argumentos desconhecidos e capacidades fora desse perfil continuam
+com o manifesto cadastrado. Nenhuma credencial vai para o catálogo ou para a linha de comando.

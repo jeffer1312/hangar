@@ -11,3 +11,10 @@ pub fn random_hex(bytes: usize) -> String {
 pub fn valid_session_name(name: &str) -> bool {
     (1..=64).contains(&name.len()) && name.bytes().all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
 }
+
+/// Identidade textual de configuração: letra minúscula inicial, seguida de letras, números ou hífen.
+pub fn valid_slug(value: &str, max: usize) -> bool {
+    let mut bytes = value.bytes();
+    value.len() <= max && bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
+        && bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}

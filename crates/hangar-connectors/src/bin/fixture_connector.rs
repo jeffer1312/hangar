@@ -54,6 +54,11 @@ async fn main() {
             continue;
         }
         if has("--wrong-id", &method) { rid = json!(rid.as_u64().unwrap_or(0) + 1_000_000); }
+        if method=="initialize" && one("--strict-initialize").is_some()
+            && request["params"].as_object().is_some_and(|params|params.keys().any(|key|!matches!(key.as_str(),"protocol_version"|"host"))) {
+            let reply=protocol::failure(&rid,&ConnectorError::invalid_params("parâmetro de inicialização desconhecido"));
+            rpc::write_message(&mut stdout,&reply).await.unwrap();continue;
+        }
         let failure = options.get("--fail").and_then(|values| values.iter().find_map(|value| {
             let (name, code) = value.split_once('=')?;
             (name == method).then(|| ErrorCode::parse(code)).flatten()
@@ -63,8 +68,11 @@ async fn main() {
         } else {
             match method.as_str() {
                 "initialize" => protocol::success(&rid, json!({
-                    "protocol_version": 1, "id": one("--claim-id").unwrap_or_else(|| id.clone()), "capabilities": {"work_tracking": 1}
+                    "protocol_version": 1, "id": one("--claim-id").unwrap_or_else(|| id.clone()),
+                    "capabilities": if one("--actions").is_some() { json!({"work_tracking": 1, "work_actions": 1}) } else { json!({"work_tracking": 1}) }
                 })),
+                "work_actions.list" => protocol::success(&rid, json!({"actions": [{"id": "plan", "label": "Planejar o ticket",
+                    "description": "Preparar o trabalho", "prompt_template": "/iniciar {key}", "stage": "planejamento"}]})),
                 "work_tracking.list" => {
                     let page: u32 = request["params"]["cursor"].as_str().and_then(|c| c.strip_prefix("pagina-")).and_then(|n| n.parse().ok()).unwrap_or(1);
                     let limit = request["params"]["limit"].as_u64().unwrap_or(1).min(3) as u32;
@@ -76,6 +84,9 @@ async fn main() {
                 "work_tracking.get" => {
                     let ticket_id = request["params"]["ticket_id"].as_str().unwrap_or("").to_owned();
                     let mut detail = ticket(&ticket_id, "Detalhe de prova");
+                    if let Some(size)=one("--detail-url-size").and_then(|n|n.parse::<usize>().ok()) {
+                        detail["url"]=json!(format!("https://example.invalid/{}","x".repeat(size.min(16384))));
+                    }
                     detail["description_markdown"] = json!("**negrito** e `código`");
                     protocol::success(&rid, detail)
                 }

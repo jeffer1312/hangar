@@ -4,8 +4,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 
-const FORMAT_VERSION: u32 = 1;
+const FORMAT_VERSION: u32 = 2;
 const MAX_STAGES: usize = 12;
 const MAX_EVIDENCE: usize = 200;
 /// Teto de um arquivo que a sessão anexa pelo caminho: cabe um vídeo curto de funcionamento.
@@ -24,14 +25,14 @@ impl Error {
     pub(crate) fn new(kind: Kind, code: &'static str, message: impl Into<String>) -> Self { Self { kind, code, message: message.into() } }
     pub fn invalid(message: impl Into<String>) -> Self { Self::new(Kind::Invalid, "invalid_params", message) }
     fn io(action: &str, error: &io::Error) -> Self { Self::new(Kind::Unavailable, "mission_unavailable", format!("{action}: {:?}", error.kind())) }
-    fn item_not_found() -> Self { Self::new(Kind::NotFound, "mission_item_not_found", "ticket sem registro no Mission Control") }
+    fn item_not_found() -> Self { Self::new(Kind::NotFound, "mission_item_not_found", "ticket sem registro no painel de tickets") }
     fn evidence_not_found() -> Self { Self::new(Kind::NotFound, "mission_evidence_not_found", "evidência não encontrada") }
     fn not_linked() -> Self {
-        Self::new(Kind::NotFound, "mission_session_not_linked", "esta sessão não está ligada a um ticket do Mission Control")
+        Self::new(Kind::NotFound, "mission_session_not_linked", "esta sessão não está ligada a um ticket")
     }
     fn gate(stage: &Stage) -> Self {
         Self::new(Kind::Gate, "mission_gate_pending",
-            format!("a etapa {} espera a aprovação do dono no Mission Control; anexe as evidências e aguarde", stage.name))
+            format!("a etapa {} espera a aprovação do dono no painel de tickets; anexe as evidências e aguarde", stage.name))
     }
     fn too_much_evidence() -> Self { Self::invalid(format!("no máximo {MAX_EVIDENCE} evidências por ticket")) }
 }
@@ -56,6 +57,17 @@ impl File {
     fn item_mut(&mut self, connector: &str, ticket_id: &str) -> Result<&mut Item, Error> {
         self.items.iter_mut().find(|i| i.connector == connector && i.ticket_id == ticket_id).ok_or_else(Error::item_not_found)
     }
+
+    fn upsert(&mut self, connector: &str, ticket_id: &str, ticket: TicketMetadata) -> Result<&mut Item, Error> {
+        if !self.items.iter().any(|i| i.connector == connector && i.ticket_id == ticket_id) {
+            self.items.push(Item { connector: connector.to_owned(), ticket_id: ticket_id.to_owned(), key: String::new(),
+                title: String::new(), url: String::new(), session: None, session_key: None, conversation: None, stage: None, approved: Vec::new(),
+                history: Vec::new(), evidence: Vec::new(), delivered_at: None });
+        }
+        let item = self.item_mut(connector, ticket_id)?;
+        (item.key, item.title, item.url) = (ticket.key, ticket.title, ticket.url);
+        Ok(item)
+    }
 }
 
 /// Ticket que a sessão vai trabalhar, com o que mostrar dele sem perguntar ao conector.
@@ -66,6 +78,18 @@ pub struct Link {
     pub title: String,
     pub url: String,
     pub session: String,
+}
+
+pub struct TicketMetadata { pub key: String, pub title: String, pub url: String }
+
+impl TicketMetadata {
+    pub fn validate(&self) -> Result<(),Error> {metadata_valid(self)}
+}
+
+fn metadata_valid(ticket: &TicketMetadata) -> Result<(), Error> {
+    text("key", &ticket.key, 1024, false)?;
+    text("title", &ticket.title, 4096, true)?;
+    text("url", &ticket.url, 4096, false)
 }
 
 /// Mudança feita pelo dono na tela. Em `approve` e `changes`, `stage` é a etapa que a tela mostrava:
@@ -102,7 +126,15 @@ pub struct Report {
     pub evidence: Vec<(PathBuf, String)>,
 }
 
-pub struct Store { path: PathBuf, evidence_dir: PathBuf }
+pub struct Store { path: PathBuf, evidence_dir: PathBuf, actions: Mutex<HashSet<(String, String)>> }
+
+pub struct ActionGuard<'a> { store: &'a Store, key: (String, String) }
+
+impl Drop for ActionGuard<'_> {
+    fn drop(&mut self) { self.store.actions.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.key); }
+}
+
+fn action_busy() -> Error { Error::new(Kind::Gate, "mission_action_busy", "aguarde a ação do ticket terminar antes de alterar o vínculo ou as etapas") }
 
 fn text(field: &str, value: &str, max: usize, empty_ok: bool) -> Result<(), Error> {
     if (!empty_ok && value.trim().is_empty()) || value.len() > max || value.contains('\0') {
@@ -112,8 +144,7 @@ fn text(field: &str, value: &str, max: usize, empty_ok: bool) -> Result<(), Erro
 }
 
 fn valid_stage_id(id: &str) -> bool {
-    let mut chars = id.chars();
-    matches!(chars.next(), Some('a'..='z')) && id.len() <= 32 && chars.all(|c| matches!(c, 'a'..='z' | '0'..='9' | '-'))
+    hangar_core::ids::valid_slug(id, 32)
 }
 
 /// Tipo pelo nome: só imagem, vídeo, PDF e texto viram evidência.
@@ -139,7 +170,11 @@ fn event(kind: EventKind, by: &str, stage: Option<&str>, note: Option<&str>) -> 
 
 /// Primeira etapa com portão antes de `target` ainda sem aprovação.
 fn pending_gate<'a>(stages: &'a [Stage], item: &Item, target: usize) -> Option<&'a Stage> {
-    stages[..target].iter().find(|stage| stage.gate && !item.approved.contains(&stage.id))
+    gate_before(stages, &item.approved, target)
+}
+
+fn gate_before<'a>(stages: &'a [Stage], approved: &[String], target: usize) -> Option<&'a Stage> {
+    stages[..target].iter().find(|stage| stage.gate && !approved.contains(&stage.id))
 }
 
 /// Volta à etapa `index`: o portão dela e os seguintes fecham de novo.
@@ -164,14 +199,104 @@ impl Drop for Staged<'_> {
 
 impl Store {
     /// `dir` guarda o `mission.json` e a pasta `evidence/`.
-    pub fn new(dir: PathBuf) -> Self { Self { path: dir.join("mission.json"), evidence_dir: dir.join("evidence") } }
+    pub fn new(dir: PathBuf) -> Self { Self { path: dir.join("mission.json"), evidence_dir: dir.join("evidence"), actions: Mutex::default() } }
+
+    pub fn begin_action(&self, connector: &str, ticket_id: &str) -> Result<ActionGuard<'_>, Error> {
+        if !hangar_core::ids::valid_slug(connector, 64) { return Err(Error::invalid("conector fora do formato")); }
+        text("ticket_id", ticket_id, 1024, false)?;
+        let key = (connector.to_owned(), ticket_id.to_owned());
+        let mut active = self.actions.lock().unwrap_or_else(|e| e.into_inner());
+        if !active.insert(key.clone()) { return Err(action_busy()); }
+        Ok(ActionGuard { store: self, key })
+    }
+
+    pub fn action_stage(&self, action: &ActionGuard<'_>, stage: &str) -> Result<(Stage, Option<Item>), Error> {
+        let _active = self.mutation(&action.key.0, &action.key.1, Some(action))?;
+        let file = self.read()?;
+        let index = stage_index(&file.stages, stage)?;
+        let item = file.items.iter().find(|i| i.connector == action.key.0 && i.ticket_id == action.key.1).cloned();
+        if let Some(gate) = gate_before(&file.stages, item.as_ref().map(|i| i.approved.as_slice()).unwrap_or_default(), index) {
+            return Err(Error::gate(gate));
+        }
+        Ok((file.stages[index].clone(), item))
+    }
+
+    pub fn link_action(&self, action: &ActionGuard<'_>, link: Link) -> Result<(Item, bool), Error> {
+        self.link_with_action(&action.key.0, &action.key.1, link, Some(action),None)
+    }
+
+    pub fn link_bound_action(&self, action: &ActionGuard<'_>, link: Link, key: &str, conversation: Option<&str>) -> Result<(Item,bool), Error> {
+        text("session_key",key,1024,false)?;
+        if let Some(value) = conversation {text("conversation",value,1024,false)?;}
+        self.link_with_action(&action.key.0,&action.key.1,link,Some(action),Some((key,conversation)))
+    }
+
+    pub fn track_action(&self, action: &ActionGuard<'_>, ticket: TicketMetadata) -> Result<Item, Error> {
+        metadata_valid(&ticket)?;
+        let _active = self.mutation(&action.key.0, &action.key.1, Some(action))?;
+        self.update(|file| file.upsert(&action.key.0, &action.key.1, ticket).cloned())
+    }
+
+    pub fn commit_action(&self, action: &ActionGuard<'_>, stage: &str, history: usize, note: &str) -> Result<Item, Error> {
+        self.commit_stage(action,stage,Some(history),note)
+    }
+
+    fn commit_stage(&self,action: &ActionGuard<'_>,stage: &str,history: Option<usize>,note: &str) -> Result<Item,Error> {
+        text("note", note, MAX_TEXT, false)?;
+        let _active = self.mutation(&action.key.0, &action.key.1, Some(action))?;
+        self.update(|file| {
+            let target = stage_index(&file.stages, stage)?;
+            let item = file.items.iter_mut().find(|i| i.connector == action.key.0 && i.ticket_id == action.key.1).ok_or_else(Error::item_not_found)?;
+            let reported = match history {
+                Some(history)=>item.history.get(history..).ok_or_else(||Error::invalid("histórico da ação desatualizado"))?
+                    .iter().any(|event|event.kind==EventKind::Stage),
+                None=>false,
+            };
+            if !reported {
+                if let Some(gate) = pending_gate(&file.stages, item, target) { return Err(Error::gate(gate)); }
+                reopen_from(&file.stages, item, target);
+                item.history.push(event(EventKind::Stage, "dono", Some(stage), Some(note)));
+                item.stage = Some(stage.to_owned());
+                item.delivered_at = None;
+            } else {
+                item.history.push(event(EventKind::Note, "dono", item.stage.as_deref(), Some(note)));
+            }
+            Ok(item.clone())
+        })
+    }
+
+    pub fn move_action(&self,action: &ActionGuard<'_>,stage: &str) -> Result<Item,Error> {
+        self.commit_stage(action,stage,None,"Etapa escolhida pelo dono, sem executar ação.")
+    }
+
+    fn mutation(&self, connector: &str, ticket_id: &str, action: Option<&ActionGuard<'_>>) -> Result<MutexGuard<'_, HashSet<(String, String)>>, Error> {
+        let owns = action.is_some_and(|a| std::ptr::eq(a.store, self) && a.key.0 == connector && a.key.1 == ticket_id);
+        if action.is_some() && !owns { return Err(Error::invalid("reserva de ação inválida")); }
+        let active = self.actions.lock().unwrap_or_else(|e| e.into_inner());
+        if !owns && active.iter().any(|(c, t)| c == connector && t == ticket_id) { return Err(action_busy()); }
+        Ok(active)
+    }
 
     pub fn snapshot(&self) -> Result<Snapshot, Error> {
         let file = self.read()?;
         Ok(Snapshot { stages: file.stages, items: file.items })
     }
 
+    pub fn rename_session(&self,old: &str,new: &str) -> Result<bool,Error> {
+        if !hangar_core::ids::valid_session_name(old) || !hangar_core::ids::valid_session_name(new) {return Err(Error::invalid("nome da sessão inválido"));}
+        let _active=self.actions.lock().unwrap_or_else(|e|e.into_inner());
+        self.update(|file| {
+            let mut changed=false;
+            for item in file.items.iter_mut().filter(|item|item.session.as_deref()==Some(old)) {
+                item.session=Some(new.to_owned());changed=true;
+            }
+            Ok(changed)
+        })
+    }
+
     pub fn set_stages(&self, stages: Vec<Stage>) -> Result<Snapshot, Error> {
+        let active = self.actions.lock().unwrap_or_else(|e| e.into_inner());
+        if !active.is_empty() { return Err(action_busy()); }
         if stages.is_empty() || stages.len() > MAX_STAGES { return Err(Error::invalid(format!("de 1 a {MAX_STAGES} etapas"))); }
         let mut seen = HashSet::new();
         for stage in &stages {
@@ -179,8 +304,28 @@ impl Store {
             if !seen.insert(stage.id.as_str()) { return Err(Error::invalid(format!("etapa repetida: {}", stage.id))); }
             text("name", &stage.name, 60, false)?;
             for status in &stage.statuses { text("statuses", status, 120, false)?; }
+            if let Some(prompt) = &stage.prompt { text("prompt", prompt, MAX_TEXT, true)?; }
+            if let Some(connectors) = &stage.actions {
+                if connectors.len() > 64 { return Err(Error::invalid("no máximo 64 conectores por etapa")); }
+                for (connector, actions) in connectors {
+                    if !hangar_core::ids::valid_slug(connector, 64) { return Err(Error::invalid("id do conector fora do formato")); }
+                    if actions.len() > 64 { return Err(Error::invalid("no máximo 64 ações por conector na etapa")); }
+                    let mut ids = HashSet::new();
+                    if actions.iter().any(|id| !hangar_core::ids::valid_slug(id, 64) || !ids.insert(id)) {
+                        return Err(Error::invalid("id de ação inválido ou repetido"));
+                    }
+                }
+            }
         }
         self.update(|file| {
+            let mut stages = stages;
+            // Um cliente antigo não conhece estes campos; omiti-los não apaga a configuração.
+            for stage in &mut stages {
+                if let Some(old) = file.stages.iter().find(|old| old.id == stage.id) {
+                    if stage.prompt.is_none() { stage.prompt = old.prompt.clone(); }
+                    if stage.actions.is_none() { stage.actions = old.actions.clone(); }
+                }
+            }
             let known: HashSet<&str> = stages.iter().map(|s| s.id.as_str()).collect();
             // Etapa que saiu deixa de valer nos tickets: eles voltam a ser deduzidos.
             for item in &mut file.items {
@@ -195,34 +340,38 @@ impl Store {
     /// Liga o ticket à sessão. A sessão sai de outro ticket em que estivesse: uma sessão, um ticket.
     /// `true` junto do item quando a sessão é nova para o ticket (quem chama a avisa).
     pub fn link(&self, connector: &str, ticket_id: &str, link: Link) -> Result<(Item, bool), Error> {
-        text("key", &link.key, 1024, false)?;
-        text("title", &link.title, 4096, true)?;
-        text("url", &link.url, 4096, false)?;
+        self.link_with_action(connector, ticket_id, link, None,None)
+    }
+
+    fn link_with_action(&self, connector: &str, ticket_id: &str, link: Link, action: Option<&ActionGuard<'_>>, binding: Option<(&str,Option<&str>)>) -> Result<(Item, bool), Error> {
+        let ticket = TicketMetadata { key: link.key, title: link.title, url: link.url };
+        metadata_valid(&ticket)?;
         if !hangar_core::ids::valid_session_name(&link.session) { return Err(Error::invalid("nome de sessão fora do formato")); }
+        let active = self.mutation(connector, ticket_id, action)?;
         self.update(|file| {
-            for other in file.items.iter_mut().filter(|i| i.session.as_deref() == Some(link.session.as_str())) {
-                if other.connector != connector || other.ticket_id != ticket_id { other.session = None; }
+            for other in file.items.iter_mut().filter(|i| i.session.as_deref() == Some(link.session.as_str()) || binding.is_some_and(|(key,_)|i.session_key.as_deref()==Some(key))) {
+                if action.is_some() && (other.connector!=connector || other.ticket_id!=ticket_id) {
+                    return Err(Error::new(Kind::Gate,"ticket_session_assigned","a sessão já está associada a outro ticket"));
+                }
+                if (other.connector != connector || other.ticket_id != ticket_id)
+                    && active.iter().any(|(c, t)| c == &other.connector && t == &other.ticket_id) { return Err(action_busy()); }
+                if other.connector != connector || other.ticket_id != ticket_id { other.session = None; other.session_key=None; other.conversation=None; }
             }
-            if file.item_mut(connector, ticket_id).is_err() {
-                file.items.push(Item {
-                    connector: connector.to_owned(), ticket_id: ticket_id.to_owned(), key: String::new(), title: String::new(),
-                    url: String::new(), session: None, stage: None, approved: Vec::new(), history: Vec::new(),
-                    evidence: Vec::new(), delivered_at: None,
-                });
-            }
-            let item = file.item_mut(connector, ticket_id)?;
-            (item.key, item.title, item.url) = (link.key, link.title, link.url);
+            let item = file.upsert(connector, ticket_id, ticket)?;
             let fresh = item.session.as_deref() != Some(link.session.as_str());
             if fresh {
                 item.history.push(event(EventKind::Linked, "dono", None, Some(&link.session)));
                 item.session = Some(link.session);
             }
+            item.session_key=binding.map(|(key,_)|key.to_owned());
+            item.conversation=binding.and_then(|(_,conversation)|conversation.map(str::to_owned));
             Ok((item.clone(), fresh))
         })
     }
 
     /// Esquece o ticket, com as evidências dele.
     pub fn remove(&self, connector: &str, ticket_id: &str) -> Result<Item, Error> {
+        let _active = self.mutation(connector, ticket_id, None)?;
         let item = self.update(|file| {
             let index = file.items.iter().position(|i| i.connector == connector && i.ticket_id == ticket_id).ok_or_else(Error::item_not_found)?;
             Ok(file.items.remove(index))
@@ -232,6 +381,7 @@ impl Store {
     }
 
     pub fn owner_change(&self, connector: &str, ticket_id: &str, change: OwnerChange) -> Result<Item, Error> {
+        let _active = self.mutation(connector, ticket_id, None)?;
         self.update(|file| {
             let File { stages, items, .. } = file;
             let item = items.iter_mut().find(|i| i.connector == connector && i.ticket_id == ticket_id).ok_or_else(Error::item_not_found)?;
@@ -396,10 +546,11 @@ impl Store {
         let bytes = match hangar_core::fs::read_replaced(&self.path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(File::default()),
-            Err(error) => return Err(Error::io("leitura do Mission Control", &error)),
+            Err(error) => return Err(Error::io("leitura dos tickets", &error)),
         };
-        let file: File = serde_json::from_slice(&bytes)
+        let mut file: File = serde_json::from_slice(&bytes)
             .map_err(|_| Error::new(Kind::Unavailable, "mission_unreadable", "mission.json ilegível"))?;
+        if file.version == 1 { file.version = FORMAT_VERSION; }
         if file.version != FORMAT_VERSION {
             return Err(Error::new(Kind::Unavailable, "mission_unreadable", format!("mission.json na versão {} desconhecida", file.version)));
         }
@@ -409,12 +560,12 @@ impl Store {
     /// Lê, muda e regrava sob a trava; mudança recusada não grava nada.
     fn update<T>(&self, change: impl FnOnce(&mut File) -> Result<T, Error>) -> Result<T, Error> {
         let parent = self.path.parent().ok_or_else(|| Error::new(Kind::Unavailable, "mission_unavailable", "sem pasta"))?;
-        std::fs::create_dir_all(parent).map_err(|e| Error::io("pasta do Mission Control", &e))?;
-        let _lock = hangar_core::fs::lock_file(&self.path.with_extension("lock")).map_err(|e| Error::io("trava do Mission Control", &e))?;
+        std::fs::create_dir_all(parent).map_err(|e| Error::io("pasta dos tickets", &e))?;
+        let _lock = hangar_core::fs::lock_file(&self.path.with_extension("lock")).map_err(|e| Error::io("trava dos tickets", &e))?;
         let mut file = self.read()?;
         let value = change(&mut file)?;
         let bytes = serde_json::to_vec_pretty(&file).map_err(|_| Error::new(Kind::Unavailable, "mission_unavailable", "não serializou"))?;
-        hangar_core::fs::atomic_write(&self.path, &bytes).map_err(|e| Error::io("gravação do Mission Control", &e))?;
+        hangar_core::fs::atomic_write(&self.path, &bytes).map_err(|e| Error::io("gravação dos tickets", &e))?;
         Ok(value)
     }
 }

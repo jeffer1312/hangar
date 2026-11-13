@@ -10,6 +10,7 @@ O host não conhece fornecedor. Ele conhece o manifesto, o transporte e o contra
 interface nem à abertura de sessões.
 
 - [Contrato `work_tracking/v1`](work-tracking-v1.md)
+- [Catálogo de ações `work_actions/v1`](work-actions-v1.md)
 - [Testar um conector](testing.md), inclusive em outra máquina
 
 ## Manifesto
@@ -38,7 +39,7 @@ interface nem à abertura de sessões.
 - Campo fora desta lista é recusado: o manifesto não leva token, segredo, código de shell nem
   comando de instalação. A configuração do fornecedor é do próprio conector.
 
-Exemplos: o conector de teste do Help (binário Rust, `crates/hangar-connectors/src/bin/help_test_connector/`)
+Exemplos: o conector do Help (Rust, `crates/hangar-help-connector/`)
 e um conector mínimo em JavaScript ([`examples/connectors/`](../../examples/connectors/)), com
 `"command": ["node", "./work_tracking.mjs"]`.
 
@@ -47,9 +48,12 @@ e um conector mínimo em JavaScript ([`examples/connectors/`](../../examples/con
 - JSON-RPC 2.0, uma mensagem UTF-8 por linha. O stdout é só do protocolo; log vai ao stderr (o host
   o descarta).
 - O host abre a vida com `initialize` (`{"protocol_version": 1, "host": {"name": "hangar"}}`). O
+  pedido também informa `capabilities`, com as capacidades declaradas no manifesto, para o conector
+  ativar as extensões opcionais que o dono cadastrou. O
   conector responde `{"protocol_version": 1, "id": "<id do manifesto>", "capabilities": {...}}`;
   versão, `id` ou capacidades diferentes do manifesto recusam o conector.
-- Métodos desta versão: `initialize`, `work_tracking.list`, `work_tracking.get` e `shutdown`. Um
+- Métodos: `initialize`, `work_tracking.list`, `work_tracking.get`, o catálogo opcional
+  `work_actions.list` e `shutdown`. Um
   pedido por vez; responda cada um com o mesmo `id`.
 - Erro: `{"code": <número>, "message": "...", "data": {"code": "<código>"}}`. Códigos:
   `invalid_params`, `unsupported_capability`, `unsupported_version`, `invalid_cursor`,

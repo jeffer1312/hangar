@@ -1,5 +1,13 @@
 //! Linha da lista de sessões (`SessionInfo`, backend/app/models.py:73).
 use serde::{Deserialize, Serialize};
+/// A geração pertence à vida observada; arquivos e specs continuam pertencendo à chave.
+pub fn runtime_key(lifecycle: Option<&str>) -> Option<&str> {
+    let key=lifecycle?.strip_prefix("k:")?;
+    if let Some((owner,generation))=key.rsplit_once(":g:")
+        && owner.len()==32 && owner.bytes().all(|byte|byte.is_ascii_hexdigit())
+        && generation.parse::<u64>().is_ok_and(|generation|generation>0) {return Some(owner);}
+    Some(key)
+}
 use serde_json::{Map, Value};
 
 /// Contexto da sessão Claude lido do transcript, em tokens.

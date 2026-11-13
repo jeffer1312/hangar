@@ -1,6 +1,6 @@
 //! Prévia da sessão sobre a aba: com o mouse parado na aba, o chat dela abre por cima, desenhado pelo mesmo código do chat
 //! principal (conversa, faixa de baixo e compositor), para ler, rolar e responder sem trocar de sessão. A conversa vem do
-//! `/history` em consulta enquanto a prévia está aberta, nunca de um SSE por aba.
+//! `/history` na prévia de aba; em Tickets, usa o stream apenas da conversa selecionada.
 //!
 //! O código do chat lê os campos da sessão aberta direto do `Hangar`. A prévia guarda os dela num pacote
 //! (`ConversationSlot`) e o troca com os do `Hangar` só durante o desenho dela e durante um clique ou tecla dentro dela;
@@ -33,6 +33,7 @@ conversation_slot! {
     loading: bool,
     history_started: bool,
     history_installed: bool,
+    pending_chat: Vec<ChatUpdate>,
     history_limit: usize,
     has_older: bool,
     error: Option<String>,
@@ -96,7 +97,7 @@ impl ConversationSlot {
     pub(super) fn new(session: SessionInfo, api: Option<Api>, composer: Entity<TextareaState>, window: &Window) -> Self {
         Self {
             selected: Some(session), open_api: api, chat: Chat::default(), chat_online: true, loading: true, history_started: true,
-            history_installed: false, history_limit: EVENTS, has_older: false, error: None,
+            history_installed: false, pending_chat: Vec::new(), history_limit: EVENTS, has_older: false, error: None,
             list_state: ListState::new(0, ListAlignment::Bottom, px(300.)).hold_tail(px(160.)), rail_hover: None, follow: Default::default(),
             row_ids: Vec::new(), row_signatures: Vec::new(), conversation: Default::default(), row_assets: Vec::new(),
             expanded: HashSet::new(), orq_days: HashSet::new(), table_column: HashMap::new(), tables: HashMap::new(), last_message: None,
@@ -122,7 +123,8 @@ impl ConversationSlot {
 }
 
 pub(super) enum TabPreviewReply {
-    History(u64, Result<api::History, Failure>),
+    History(u64, u64, Result<api::History, Failure>),
+    Live(u64, Update),
     Wallpaper(Result<Option<Arc<RenderImage>>, Failure>),
 }
 
@@ -134,8 +136,13 @@ fn wallpaper_window() -> bool {
 }
 
 pub(super) struct TabPreview {
+    embedded: bool,
+    server: String,
+    binding: SessionInfo,
+    blocked: bool,
     target: Target,
     seq: u64,
+    history_epoch: u64,
     /// `None` enquanto o pacote está dentro do `Hangar` (desenho ou evento da prévia).
     slot: Option<ConversationSlot>,
     etag: Option<String>,
@@ -155,10 +162,71 @@ pub(super) struct TabPreview {
     mode_read: bool,
     _composer: Subscription,
     _mention: Subscription,
-    _poll: Task<()>,
+    _poll: Option<Task<()>>,
+    _events: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for TabPreview {
+    fn drop(&mut self) {if let Some(task)=self._events.take() {task.abort();}}
+}
+
+impl TabPreview {
+    fn session_key(&self) -> Option<SessionKey> {
+        SessionKey::new(&self.server, self.slot.as_ref()?.selected.as_ref()?)
+    }
 }
 
 impl Hangar {
+    pub(super) fn with_bound_conversation(&mut self,key: &SessionKey,cx: &mut Context<Self>,action: impl FnOnce(&mut Self,&mut Context<Self>)) {
+        let owner=self.tab_preview.as_ref().and_then(TabPreview::session_key);
+        let current=self.delivery.current(key.clone());
+        if owner.as_ref()==Some(&current) {self.with_tab_preview_slot(cx,action);} else {action(self,cx);}
+    }
+
+    pub(super) fn embedded_conversation(&self) -> bool {self.tab_preview.as_ref().is_some_and(|p|p.embedded)}
+
+    pub(super) fn open_embedded_conversation(&mut self,target: Target,window: &mut Window,cx: &mut Context<Self>) {
+        if self.tab_preview.as_ref().is_some_and(|p|p.embedded && p.target==target && !p.blocked) {
+            if self.tab_preview.as_ref().is_some_and(|p|p.error.is_some()) { self.retry_preview_history(cx); }
+            return;
+        }
+        self.close_tab_preview(cx);
+        self.open_tab_preview(target.clone(),window,cx);
+        let Some(api)=self.machine_api(&target.server) else {return;};
+        if let Some(preview)=self.tab_preview.as_mut() {
+            preview.embedded=true;
+            preview._poll=None;
+            let (seq,connection,tx)=(preview.seq,self.connection,self.tx.clone());
+            preview._events=Some(self.runtime.spawn(super::forward_stream_to(api,Some(target.name),connection,None,tx,
+                move |update|Payload::TabPreview(TabPreviewReply::Live(seq,update)))));
+        }
+        self.fetch_tab_preview(cx);
+    }
+
+    pub(super) fn apply_preview_update(&mut self,update: ChatUpdate,cx: &mut Context<Self>) {
+        match update {
+            ChatUpdate::Message(event)=>{self.confirm_chat_message(&event);self.chat.apply(event);}
+            ChatUpdate::Preview(preview)=>{self.chat.update_preview(preview);self.visible_preview=self.chat.preview.clone();}
+            ChatUpdate::State(state)=>{self.chat.update_state(state);if self.chat.ask.is_none() {self.ask_form=AskForm::default();}}
+            ChatUpdate::Question(ask)=>{if self.chat.update_ask(ask) {self.ask_form=AskForm::default();}}
+            ChatUpdate::Thinking(text)=>{self.chat.update_live_thinking(text);}
+            ChatUpdate::LiveTool(tool)=>{if let Some(tool)=tool {self.chat.update_live_tool(tool);} else {self.chat.live_tool=None;}}
+            ChatUpdate::CommandOutput(output)=>self.chat.command_output=output,
+            ChatUpdate::Reset=>{},
+        }
+        if self.chat.preview.text.is_empty() {self.visible_preview=Preview::default();}
+        self.sync_tab_preview_rows(cx);
+    }
+
+    fn reset_preview_history(&mut self,window: &Window,cx: &mut Context<Self>) {
+        let Some(preview)=self.tab_preview.as_mut() else {return;};
+        let Some(slot)=preview.slot.take() else {return;};
+        let Some(session)=slot.selected else {return;};
+        preview.slot=Some(ConversationSlot::new(session,slot.open_api,slot.composer,window));
+        preview.history_epoch+=1;
+        (preview.busy,preview.loaded,preview.etag)=(false,false,None);
+        self.fetch_tab_preview(cx);
+    }
     /// Roda `f` com a conversa da prévia no lugar da principal e destroca antes de devolver.
     pub(super) fn with_tab_preview_slot<R>(&mut self, cx: &mut Context<Self>, f: impl FnOnce(&mut Self, &mut Context<Self>) -> R) -> Option<R> {
         let mut slot = self.tab_preview.as_mut()?.slot.take()?;
@@ -222,7 +290,7 @@ impl Hangar {
     /// Painel do compositor aberto pela prévia: o da raiz é desenhado com a conversa dela.
     pub(super) fn tab_preview_owns_popup(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(slot) = self.tab_preview.as_ref().and_then(|p| p.slot.as_ref()) else { return false; };
-        if slot.command_panel || slot.context_card || slot.recent.is_some() { return true; }
+        if slot.command_panel || slot.context_card || slot.recent.is_some() || slot.plan_review.is_expanded() { return true; }
         let Some(open) = self.ctl_snapshot() else { return false; };
         let key = self.with_tab_preview_slot(cx, |this, _| this.selected_key()).flatten();
         key.as_ref() == Some(open.session())
@@ -236,6 +304,12 @@ impl Hangar {
             .capture_any_mouse_down(cx.listener(|this, _, window, cx| this.enter_tab_preview_event(window, cx)))
             .capture_any_mouse_up(cx.listener(|this, _, window, cx| this.enter_tab_preview_event(window, cx)))
             .child(popup).into_any_element())
+    }
+
+    pub(super) fn render_owned_plan_review_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let expanded = self.with_tab_preview_slot(cx, |this, _| this.plan_review.is_expanded()).unwrap_or(false);
+        if !expanded { return self.render_plan_review_overlay(window, cx); }
+        self.with_tab_preview_slot(cx, |this, cx| this.render_plan_review_overlay(window, cx)).flatten()
     }
 
     /// Foco no campo só segura a prévia depois que a pessoa clicou ou digitou nela: foco que chegou sozinho não conta.
@@ -253,6 +327,7 @@ impl Hangar {
 
     /// Roda do mouse ou clique na faixa: a prévia sai e só volta depois de mexer e parar sobre uma aba.
     pub(super) fn cancel_tab_hover(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.embedded_conversation() {return;}
         self.tab_hover_epoch += 1;
         self.tab_hover = None;
         if !self.tab_preview.as_ref().is_some_and(|p| !p.hovered) { return; }
@@ -264,6 +339,7 @@ impl Hangar {
     /// A aba sob o mouse na faixa mudou (`None`: saiu das abas). Pela posição, não por entrar e sair de cada aba: o que é
     /// pintado por cima da aba (o avatar animado) não a faz perder o mouse, e voltar à mesma aba depois de fechar reabre.
     pub(super) fn tab_pointer(&mut self, target: Option<Target>, window: &mut Window, cx: &mut Context<Self>) {
+        if self.embedded_conversation() {return;}
         if !appearance::get().tab_preview { return; }
         self.tab_hover_moved = Instant::now();
         if self.tab_hover == target { return; }
@@ -304,6 +380,7 @@ impl Hangar {
     }
 
     fn schedule_tab_preview_close(&mut self, epoch: u64, window: &mut Window, cx: &mut Context<Self>) {
+        if self.embedded_conversation() {return;}
         if self.tab_preview.is_none() { return; }
         // Segurada (texto, painel ou ditado da prévia), confere de novo: fecha assim que soltar, com o mouse ainda fora.
         cx.spawn_in(window, async move |this, cx| loop {
@@ -323,6 +400,11 @@ impl Hangar {
     pub(super) fn close_tab_preview(&mut self, cx: &mut Context<Self>) {
         // Fechar no meio de um evento da prévia: a principal volta antes, e o pacote da prévia sai com ela.
         self.leave_tab_preview_event();
+        if let Some(preview)=self.tab_preview.as_ref() && let Some(slot)=preview.slot.as_ref()
+            && let Some(key)=preview.session_key() {
+            let draft=slot.composer.read(cx).value().to_string();
+            if draft.trim().is_empty() {self.drafts.remove(&key);} else {self.drafts.insert(key,draft);}
+        }
         if self.tab_preview.take().is_some() { cx.notify(); }
     }
 
@@ -331,11 +413,16 @@ impl Hangar {
         self.leave_tab_preview_event();
         // Como a principal: `open_api` só existe para sessão de outra máquina.
         let api = (!self.is_active_key(&target.server)).then(|| self.machine_api(&target.server)).flatten();
+        let server=self.machine_api(&target.server).map(|api|api.identity()).unwrap_or_else(||target.server.clone());
         let composer = cx.new(|cx| TextareaState::new(window, cx).auto_grow(1, 10).submit_on_enter(true));
+        if let Some(draft)=SessionKey::new(&server,&session).and_then(|key|self.drafts.get(&key).cloned()) {
+            composer.update(cx,|input,cx|input.set_value(draft,window,cx));
+        }
         let composer_sub = cx.subscribe_in(&composer, window, |this, _, event: &InputEvent, window, cx| {
             this.in_tab_preview_slot(cx, |this, cx| this.composer_event(event, window, cx));
         });
         let mention = cx.observe(&composer, |this, _, cx| { this.in_tab_preview_slot(cx, |this, cx| this.refresh_mention(cx)); });
+        let binding = session.clone();
         let slot = ConversationSlot::new(session, api, composer, window);
         self.tab_preview_seq += 1;
         let poll = cx.spawn(async move |this, cx| loop {
@@ -343,9 +430,13 @@ impl Hangar {
             cx.background_executor().timer(POLL_EVERY).await;
         });
         self.tab_preview = Some(TabPreview {
+            embedded:false,
+            server,
+            binding, blocked:false,
+            history_epoch:0,
             target, seq: self.tab_preview_seq, slot: Some(slot), etag: None, loaded: false, busy: false, error: None, hovered: false, engaged: false,
             limit: EVENTS, older_armed: false, older_anchor: None, mode_read: false,
-            _composer: composer_sub, _mention: mention, _poll: poll,
+            _composer: composer_sub, _mention: mention, _poll: Some(poll), _events:None,
         });
         self.load_tab_preview_wallpaper();
         cx.notify();
@@ -379,8 +470,9 @@ impl Hangar {
 
     /// Uma batida da consulta; com um pedido em voo, a batida não pede outro.
     fn fetch_tab_preview(&mut self, cx: &mut Context<Self>) {
-        let Some((target, seq, etag, limit)) = self.tab_preview.as_ref().filter(|p| !p.busy)
-            .map(|p| (p.target.clone(), p.seq, p.etag.clone(), p.limit)) else { return; };
+        if !self.validate_preview_binding() { return; }
+        let Some((target, seq, epoch, etag, limit)) = self.tab_preview.as_ref().filter(|p| !p.busy && !p.blocked)
+            .map(|p| (p.target.clone(), p.seq, p.history_epoch, p.etag.clone(), p.limit)) else { return; };
         let Some(api) = self.machine_api(&target.server) else {
             let error = self.machine_error(&target.server);
             if let Some(preview) = self.tab_preview.as_mut() { (preview.error, preview.loaded) = (Some(error), true); }
@@ -391,8 +483,37 @@ impl Hangar {
         let (connection, tx) = (self.connection, self.tx.clone());
         self.runtime.spawn(async move {
             let result = api.history(&target.name, limit, etag.as_deref()).await;
-            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::TabPreview(TabPreviewReply::History(seq, result)) }).await;
+            let _ = tx.send(Envelope { connection, selection: None, payload: Payload::TabPreview(TabPreviewReply::History(seq, epoch, result)) }).await;
         });
+    }
+
+    fn retry_preview_history(&mut self, cx: &mut Context<Self>) {
+        if let Some(preview) = self.tab_preview.as_mut().filter(|p| !p.busy && !p.blocked) {
+            preview.error = None;
+            preview.loaded = false;
+            preview.etag = None;
+        }
+        self.fetch_tab_preview(cx);
+        cx.notify();
+    }
+
+    fn validate_preview_binding(&mut self) -> bool {
+        let Some(preview) = self.tab_preview.as_ref() else { return false; };
+        if preview.blocked { return false; }
+        let valid = self.target_session(&preview.target).is_some_and(|session| {
+            match preview.binding.lifecycle_id.as_ref() {
+                Some(life) => session.lifecycle_id.as_ref() == Some(life),
+                None => session.jsonl == preview.binding.jsonl && session.provider == preview.binding.provider,
+            }
+        });
+        if !valid && let Some(preview) = self.tab_preview.as_mut() {
+            preview.blocked = true;
+            preview.loaded = true;
+            preview.error = Some(tr("request_changed"));
+            if let Some(slot) = preview.slot.as_mut() { slot.chat_online = false; }
+            if let Some(task) = preview._events.take() { task.abort(); }
+        }
+        valid
     }
 
     /// As linhas da conversa da prévia pelo mesmo caminho da principal, sem o que é da sessão aberta (Atividade,
@@ -402,11 +523,35 @@ impl Hangar {
         let stable = self.chat.take_unsynced();
         let delta = self.conversation.update(&self.chat.events, stable, conversation::View::for_look(a.tool_look, a.thinking_tools, a.task_list));
         self.sync_row_ids(Some(delta), cx);
+        self.sync_transcript_question();
     }
 
-    pub(super) fn receive_tab_preview(&mut self, reply: TabPreviewReply, cx: &mut Context<Self>) {
-        let (seq, result) = match reply {
-            TabPreviewReply::History(seq, result) => (seq, result),
+    pub(super) fn receive_tab_preview(&mut self, reply: TabPreviewReply, window: &mut Window, cx: &mut Context<Self>) {
+        let (seq, epoch, result) = match reply {
+            TabPreviewReply::History(seq, epoch, result) => (seq, epoch, result),
+            TabPreviewReply::Live(seq,update)=> {
+                if self.tab_preview.as_ref().is_none_or(|p|p.seq!=seq) {return;}
+                if !self.validate_preview_binding() { cx.notify(); return; }
+                match update {
+                    Update::Online=>{
+                        let installed=self.with_tab_preview_slot(cx,|this,_|{this.chat_online=true;this.history_installed}).unwrap_or(false);
+                        if installed {if let Some(preview)=self.tab_preview.as_mut() {preview.error=None;}}
+                        else {self.fetch_tab_preview(cx);}
+                    }
+                    Update::Offline(error)=>{
+                        if let Some(preview)=self.tab_preview.as_mut().filter(|p|!p.loaded) {preview.error=Some(Hangar::fetch_failure(&error));}
+                        self.with_tab_preview_slot(cx,|this,_|this.chat_online=false);
+                    }
+                    Update::Frame(frame)=>{
+                        if frame.event=="reset" {self.reset_preview_history(window,cx);let _=frame.applied.send(true);}
+                        else {
+                            let applied=self.with_tab_preview_slot(cx,|this,cx|this.accept_chat_frame(&frame.event,frame.data,window,cx).0).unwrap_or(false);
+                            let _=frame.applied.send(applied);
+                        }
+                    }
+                }
+                cx.notify();return;
+            }
             TabPreviewReply::Wallpaper(result) => {
                 self.tab_preview_wallpaper_loading = false;
                 // Sem a foto, a prévia fica no fundo cheio do tema; o motivo vai ao log, a tela não muda por ele.
@@ -418,27 +563,37 @@ impl Hangar {
                 return;
             }
         };
+        if !self.validate_preview_binding() { cx.notify(); return; }
         let Some(target) = self.tab_preview.as_ref().map(|p| p.target.clone()) else { return; };
         let session = self.target_session(&target).cloned();
         let Some(preview) = self.tab_preview.as_mut() else { return; };
-        if seq != preview.seq { return; }
+        if seq != preview.seq || epoch!=preview.history_epoch { return; }
         preview.busy = false;
         match result {
             Ok(history) => {
                 (preview.etag, preview.error, preview.loaded) = (history.etag, None, true);
-                let (limit, anchor) = (preview.limit, preview.older_anchor.take());
+                let (limit, anchor,embedded) = (preview.limit, preview.older_anchor.take(),preview.embedded);
                 let read_mode = !std::mem::replace(&mut preview.mode_read, true);
                 // A lista é a fonte do estado ao vivo da sessão (trabalhando, aguardando), sem SSE próprio.
                 let mode = self.with_tab_preview_slot(cx, |this, cx| {
                     if let Some(session) = session {
-                        this.chat.state.state = session.state.clone();
+                        if let Some(old) = this.selected.clone() { this.follow_transcript(&old, &session, cx); }
+                        if !embedded {
+                            this.chat.update_state(api::dto::SessionState {session:session.name.clone(),state:session.state.clone(),
+                                question:session.question.clone(),options:session.options.clone(),interaction_id:session.interaction_id.clone(),
+                                problema:session.problema.clone(),label:session.label.clone(),..Default::default()});
+                            let ask=session.ask_form.as_ref().and_then(|raw|serde_json::from_value(raw.clone()).ok().map(|payload|Ask::new(payload,raw)));
+                            if this.chat.update_ask(ask) {this.ask_form=AskForm::default();}
+                        }
                         this.selected = Some(session);
                     }
                     if let Some(events) = history.events {
                         this.has_older = events.len() >= limit;
+                        if let Some(key) = this.selected_key() { this.delivery.confirm_history(&key, &events); }
                         this.chat.merge_history(events);
                     }
                     (this.loading, this.history_installed) = (false, true);
+                    for update in std::mem::take(&mut this.pending_chat) {this.apply_preview_update(update,cx);}
                     this.sync_tab_preview_rows(cx);
                     // Página anterior chegou: a linha que estava no topo continua na tela.
                     if let Some(index) = anchor.and_then(|id| this.row_ids.iter().position(|row| *row == id)) {
@@ -494,21 +649,62 @@ impl Hangar {
             .into_any_element())
     }
 
+    fn render_preview_body(&mut self,cx: &mut Context<Self>) -> AnyElement {
+        let faint=|text: String|div().size_full().flex().items_center().justify_center().text_sm().text_color(theme::faint()).child(text).into_any_element();
+        match self.tab_preview.as_ref().map(|p|(p.loaded,p.error.clone())) {
+            None|Some((false,_))=>faint(tr("loading")),
+            Some((true,Some(error)))=>div().size_full().p_4().flex().flex_col().items_start().gap_3().text_sm().text_color(theme::warning()).child(error)
+                .when(self.tab_preview.as_ref().is_some_and(|p|!p.blocked),|el|el.child(Button::new("tickets-history-retry").outline().small().label(tr("retry"))
+                    .on_click(cx.listener(|this,_,_,cx|this.retry_preview_history(cx))))).into_any_element(),
+            Some((true,None))=>self.render_tab_preview_conversation(cx).unwrap_or_else(||faint(tr("loading"))),
+        }
+    }
+
+    fn preview_event_surface(&self,cx: &mut Context<Self>) -> Stateful<Div> {
+        div().id("preview-events").relative().overflow_hidden().flex().flex_col()
+            .capture_any_mouse_down(cx.listener(|this,_,window,cx| {
+                if let Some(preview)=this.tab_preview.as_mut() {preview.engaged=true;}
+                this.enter_tab_preview_event(window,cx);
+            }))
+            .capture_any_mouse_up(cx.listener(|this,_,window,cx|this.enter_tab_preview_event(window,cx)))
+            .capture_key_down(cx.listener(|this,event: &KeyDownEvent,window,cx| {
+                if event.keystroke.key=="escape" && !this.tab_preview_owns_popup(cx) {
+                    if this.embedded_conversation() {this.mission.conversation=false;} else {this.close_tab_preview(cx);}
+                    cx.stop_propagation();cx.notify();return;
+                }
+                if let Some(preview)=this.tab_preview.as_mut() {preview.engaged=true;}
+                this.enter_tab_preview_event(window,cx);
+            }))
+    }
+
+    pub(super) fn render_embedded_conversation(&mut self,window: &mut Window,cx: &mut Context<Self>) -> AnyElement {
+        if self.validate_preview_binding() {
+            let session=self.tab_preview.as_ref().and_then(|preview|self.target_session(&preview.target)).cloned();
+            if let Some(session)=session {
+                self.with_tab_preview_slot(cx,|this,cx| {
+                    if let Some(old)=this.selected.clone() {this.follow_transcript(&old,&session,cx);}
+                    this.selected=Some(session);
+                });
+            }
+        }
+        let body=self.render_preview_body(cx);
+        let bottom=self.with_tab_preview_slot(cx,|this,cx|this.render_bottom_content(window,cx));
+        self.preview_event_surface(cx).size_full()
+            .child(div().relative().flex_1().min_h_0().child(body))
+            .children(bottom.map(|area|div().flex_shrink_0().child(area))).into_any_element()
+    }
+
     pub(super) fn render_tab_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.embedded_conversation() {return None;}
         if !appearance::get().tab_preview { return None; }
         // Diálogo aberto (o visor de imagem que a prévia abriu, por exemplo): a prévia, por cima de tudo, o esconderia.
         if window.has_active_dialog(cx) { return None; }
         let preview = self.tab_preview.as_ref()?;
-        let (target, loaded, error) = (preview.target.clone(), preview.loaded, preview.error.clone());
+        let target=preview.target.clone();
         let (left, top, bottom) = self.tab_anchor(&target)?;
         let below = appearance::get().navigation != appearance::Navigation::BottomTabs;
 
-        let faint = |text: String| div().size_full().flex().items_center().justify_center().text_sm().text_color(theme::faint()).child(text).into_any_element();
-        let body = match (loaded, error) {
-            (false, _) => faint(tr("loading")),
-            (true, Some(error)) => div().size_full().p_4().text_sm().text_color(theme::warning()).child(error).into_any_element(),
-            (true, None) => self.render_tab_preview_conversation(cx).unwrap_or_else(|| faint(tr("loading"))),
-        };
+        let body=self.render_preview_body(cx);
         // A mesma faixa de baixo do chat (barra do plano, perguntas, fila, compositor), com a conversa da prévia no lugar.
         let bottom_area = self.with_tab_preview_slot(cx, |this, cx| this.render_bottom_content(window, cx));
 
@@ -532,24 +728,10 @@ impl Hangar {
                 .child(self.grain_layer(size(width, height))),
             None => div().absolute().inset_0().bg(theme::background().alpha(1.)),
         };
-        let content = div().id("tab-preview").relative().w(width).h(height).flex().flex_col().overflow_hidden()
+        let content = self.preview_event_surface(cx).id("tab-preview").w(width).h(height)
             .rounded(px(14.)).border_1().border_color(theme::glass_border()).shadow(theme::popover_shadow())
             .occlude()
             .child(backdrop)
-            .capture_any_mouse_down(cx.listener(|this, _, window, cx| {
-                if let Some(preview) = this.tab_preview.as_mut() { preview.engaged = true; }
-                this.enter_tab_preview_event(window, cx);
-            }))
-            .capture_any_mouse_up(cx.listener(|this, _, window, cx| this.enter_tab_preview_event(window, cx)))
-            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape" && !this.tab_preview_owns_popup(cx) {
-                    this.close_tab_preview(cx);
-                    cx.stop_propagation();
-                    return;
-                }
-                if let Some(preview) = this.tab_preview.as_mut() { preview.engaged = true; }
-                this.enter_tab_preview_event(window, cx);
-            }))
             .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
                 if let Some(preview) = this.tab_preview.as_mut() { preview.hovered = *hovered; }
                 this.tab_hover_epoch += 1;

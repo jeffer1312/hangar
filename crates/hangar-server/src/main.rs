@@ -19,6 +19,9 @@ fn main() -> std::process::ExitCode {
     if args.first().map(String::as_str) == Some("connectors") {
         return hangar_server::connectors_cli::cli(&args[1..]);
     }
+    if args.first().map(String::as_str)==Some("help-connector") {
+        return hangar_help_connector::cli(&args[1..]);
+    }
     if args.first().map(String::as_str) == Some("peers") {
         return hangar_server::machine_peers::cli::cli(&args[1..]);
     }

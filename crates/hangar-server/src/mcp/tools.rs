@@ -588,7 +588,7 @@ impl Tools {
         Ok(dict(json!({"ok": true, "url": ready})))
     }
 
-    /// Sem nada a informar, lê; com etapa, nota ou evidências, relata. As duas pelas rotas do Mission Control.
+    /// Sem nada a informar, lê; com etapa, nota ou evidências, relata. As duas pelas rotas de Tickets.
     async fn mission(&self, headers: &HeaderMap, a: Mission) -> Outcome {
         let me = self.me(headers, &a.sessao).await?;
         let evidence = a.evidencias;
@@ -597,7 +597,7 @@ impl Tools {
             if !(200..300).contains(&status) { return Err(coded(status, &value)); }
             let item = value["items"].as_array().and_then(|items| items.iter().find(|i| i["session"] == me.as_str())).cloned();
             let Some(item) = item else {
-                return Err("mission_session_not_linked: esta sessão não está ligada a um ticket do Mission Control".into());
+                return Err("mission_session_not_linked: esta sessão não está ligada a um ticket".into());
             };
             return Ok(dict(json!({"item": item, "stages": value["stages"]})));
         }

@@ -31,7 +31,7 @@ tela desconhecida com várias ações: browser_goal, quando a sessão tem o Jev.
 Falar com outra sessão: sessions, send, group, pair; abrir ou fechar: new_session, close_session; parar o turno de uma filha ligada: interrupt; \
 ler ou gravar o contrato do grupo: contract. \
 Senha nunca no chat: request_secret ou vault_* (vault_list, vault_fill, vault_exec, vault_file). \
-Sessão ligada a um ticket do Mission Control: mission (etapa do trabalho, nota e evidências de validação, como prints e vídeos).";
+Sessão ligada a um ticket: mission (etapa do trabalho, nota e evidências de validação, como prints e vídeos).";
 
 static CATALOG: LazyLock<Vec<Tool>> = LazyLock::new(|| {
     serde_json::from_str(include_str!("catalog.json")).expect("catalog.json é o catálogo do MCP")

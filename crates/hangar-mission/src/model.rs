@@ -1,6 +1,7 @@
-//! O que o Mission Control guarda por servidor: as etapas do trabalho e, por ticket, a sessão ligada,
+//! O que Tickets guarda por servidor: as etapas do trabalho e, por ticket, a sessão ligada,
 //! a etapa, o histórico, as aprovações e as evidências.
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Etapa do trabalho. Com `gate`, o agente não passa dela sem a aprovação do dono.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -12,11 +13,17 @@ pub struct Stage {
     /// Nomes de status do sistema de origem que indicam esta etapa (ex.: "Revisão de Código").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub statuses: Vec<String>,
+    /// Instruções opcionais acrescentadas à ação enviada para a sessão.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// IDs das ações escolhidas, separados pelo conector que as oferece.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actions: Option<BTreeMap<String, Vec<String>>>,
 }
 
 impl Stage {
     fn new(id: &str, name: &str, gate: bool, statuses: &[&str]) -> Self {
-        Self { id: id.into(), name: name.into(), gate, statuses: statuses.iter().map(|s| (*s).to_owned()).collect() }
+        Self { id: id.into(), name: name.into(), gate, statuses: statuses.iter().map(|s| (*s).to_owned()).collect(), prompt: None, actions: None }
     }
 }
 
@@ -70,6 +77,10 @@ pub struct Item {
     pub url: String,
     #[serde(default)]
     pub session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation: Option<String>,
     /// Etapa informada pelo agente ou escolhida pelo dono; sem ela, o cliente deduz pelo plano da sessão.
     #[serde(default)]
     pub stage: Option<String>,

@@ -90,14 +90,34 @@ async fn reply(state: &Http, peer: Option<SocketAddr>, request: Request) -> Resp
                 Err(error) => call_error(&error),
             }
         }
+        (Method::GET, ["api", "connectors", id, "actions"]) => {
+            let mut ticket = None;
+            for (key, value) in form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes()) {
+                if key != "ticket_id" || ticket.is_some() {
+                    return call_error(&crate::protocol::ConnectorError::invalid_params("informe somente ticket_id").into());
+                }
+                ticket = Some(value.into_owned());
+            }
+            let params = match GetParams::new(ticket.unwrap_or_default()) {
+                Ok(params) => params,
+                Err(error) => return call_error(&error.into()),
+            };
+            match state.host.list_actions(id, params).await {
+                Ok(actions) => json_response(StatusCode::OK, json!({"actions": actions})),
+                Err(error) => call_error(&error),
+            }
+        }
         (Method::GET, ["api", "connectors", id, "tickets", ticket_id]) => {
             let params = match GetParams::new(*ticket_id) { Ok(params) => params, Err(error) => return call_error(&error.into()) };
             match state.host.get_ticket(id, params).await {
                 Ok(detail) => {
                     let mut value = with_fetched_at(json!(detail));
-                    // Lido depois da chamada, que já conferiu o cadastro: falhar aqui só tira a sugestão.
-                    if let Some(prompt) = state.host.entry(id).ok().and_then(|entry| entry.start_prompt_for(&detail.summary)) {
-                        value["start_prompt"] = json!(prompt);
+                    if let Ok(entry) = state.host.entry(id) {
+                        match entry.start_prompt_for(&detail.summary) {
+                            Ok(Some(prompt)) => value["start_prompt"] = json!(prompt),
+                            Ok(None) => {}
+                            Err(error) => return call_error(&error.into()),
+                        }
                     }
                     json_response(StatusCode::OK, value)
                 }

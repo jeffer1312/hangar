@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use crate::api::dto::SessionInfo;
+use crate::api::dto::{SessionInfo,ChatEvent};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct SessionKey {
@@ -163,6 +163,17 @@ impl DeliveryTracker {
         else if matches!(record.outcome.as_ref(), Some(SendOutcome::Delivered | SendOutcome::Queued)) { self.records.remove(key); }
     }
 
+    pub fn confirm_history(&mut self, key: &SessionKey, events: &[ChatEvent]) {
+        let Some(record) = self.records.get(key) else { return; };
+        // Uma página antiga com o mesmo texto não confirma um envio novo.
+        let Some(frontier) = events.iter().rposition(|event| record.known.contains(&event.id)) else { return; };
+        for event in &events[frontier + 1..] {
+            if event.kind == "user_msg" && let Some(text) = event.text.as_deref() {
+                self.confirm_real(key, &event.id, text);
+            }
+        }
+    }
+
 
     /// Texto digitado agora no terminal que a conversa ainda não mostrou: é o que a interrupção devolve.
     /// O que foi para a fila durável (`Queued`) não está no campo do terminal e segue entregue por ela.
@@ -265,6 +276,18 @@ mod tests {
         assert!(tracker.complete(&key("one"), "hello", SendOutcome::Delivered));
         assert!(!tracker.pending(&key("one")));
         assert!(tracker.outcome(&key("one")).is_none());
+    }
+
+    #[test]
+    fn ticket_delivery_history_confirms_only_messages_after_the_known_frontier() {
+        let mut tracker=DeliveryTracker::default();
+        tracker.begin(key("ticket"),"hello".into(),HashSet::from(["known-assistant".into()]));
+        tracker.complete(&key("ticket"),"hello",SendOutcome::Delivered);
+        let event=|id: &str,kind: &str,text: &str|ChatEvent {id:id.into(),kind:kind.into(),text:Some(text.into()),..Default::default()};
+        tracker.confirm_history(&key("ticket"),&[event("older-user","user_msg","hello")]);
+        assert!(tracker.outcome(&key("ticket")).is_some(),"uma página antiga não confirma o envio novo");
+        tracker.confirm_history(&key("ticket"),&[event("older-user","user_msg","hello"),event("known-assistant","assistant_msg","anterior"),event("actual-user","user_msg","hello")]);
+        assert!(tracker.outcome(&key("ticket")).is_none(),"a mensagem nova já está no histórico");
     }
 
     #[test]

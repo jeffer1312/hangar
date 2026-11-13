@@ -203,6 +203,7 @@ fn choose_codex_account(accounts: &[CodexAccount], requested: Option<&str>) -> O
 
 enum SessionDialogPurpose {
     Create,
+    Tickets,
     TransferClaudeToCodex { target: Target, source_life: String, source_jsonl: String },
 }
 
@@ -1315,6 +1316,14 @@ impl NewSession {
             if self.omp.read(cx).value().to_string() != self.scheduled_original.as_ref().and_then(|value| value["omp_profile"].as_str()).unwrap_or_default() { changed.insert("omp_profile"); }
             if self.scheduled_original.as_ref().and_then(|value| value["cwd"].as_str()) != Some(cwd.as_str()) { changed.insert("cwd"); }
             let launch = scheduled_launch::merge(self.scheduled_original.as_ref(), self.open_body("", &cwd, "", cx), &changed);
+            if matches!(self.purpose,SessionDialogPurpose::Tickets) {
+                self.creating=true;
+                let (tx,connection,server,dialog)=(self.link.tx.clone(),self.link.connection,self.link.api.identity(),cx.entity_id());
+                self.link.runtime.spawn(async move {
+                    let _=tx.send(Envelope {connection,selection:None,payload:Payload::Tickets(super::mission::Reply::Launch {server,dialog,options:launch})}).await;
+                });
+                return;
+            }
             let mut target = json!({"kind":"new", "launch":launch, "worktree":self.new_branch});
             let base = self.chosen_base();
             if self.new_branch && !base.is_empty() { target["base"] = json!(base); }
@@ -2151,12 +2160,12 @@ impl NewSession {
                 .child(div().font_family(theme::MONO).text_size(px(11.5)).text_color(theme::muted()).whitespace_normal().child(path.to_owned())));
         let head = div().flex().flex_col().gap(px(8.)).child(destination)
             .when(checking, |el| el.child(div().id("create-checking").role(Role::Status).child(muted(tr("create_checking")))))
-            .when(!checking && self.same_folder, |el| el.child(div().id("create-same-folder").role(Role::Status).child(muted(tr("create_same_folder")))));
+            .when(!self.scheduled && !checking && self.same_folder, |el| el.child(div().id("create-same-folder").role(Role::Status).child(muted(tr("create_same_folder")))));
         let field = |title: String, control: AnyElement| div().flex().flex_col().gap(px(6.)).child(label(title)).child(control).into_any_element();
         // Retomar pelo proxy recebe modelo; nome, modo, esforço e permissão continuam fora desse pedido.
         let session = [
             (fresh && !self.scheduled).then(|| field(tr("create_name"), Input::new(&self.name).disabled(busy).aria_label(tr("create_name")).into_any_element())),
-            (fresh && self.baton.is_none()).then(|| self.render_branch_field(cx)).flatten(),
+            (fresh && self.baton.is_none() && !matches!(self.purpose,SessionDialogPurpose::Tickets)).then(|| self.render_branch_field(cx)).flatten(),
             Some(div().flex().flex_col().gap(px(6.)).child(label(tr("create_provider"))).child(providers)
                 .when_some(probe_error, |el, error| el.child(muted(tr("create_probe_failed").replace("{erro}", &error))
                     .id("create-probe-error").role(Role::Alert)))
@@ -2936,7 +2945,7 @@ impl Render for NewSession {
                     .child(div().size(px(60.)).rounded_full().bg(theme::accent_dim()).border_1().border_color(theme::accent_focus())
                         .flex().items_center().justify_center().child(chrome::small_icon(IconName::FolderOpen, 26., theme::accent()))))
                 .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(tr("create_empty_title")))
-                .child(div().max_w(px(320.)).text_center().text_sm().text_color(theme::muted()).whitespace_normal().child(tr("create_empty_sub"))),
+                .child(div().max_w(px(320.)).text_center().text_sm().text_color(theme::muted()).whitespace_normal().child(tr(if self.scheduled {"mission_folder_hint"} else {"create_empty_sub"}))),
         };
         div().h(height).w_full().flex().child(self.render_left(cx)).child(right)
     }
@@ -2944,12 +2953,23 @@ impl Render for NewSession {
 
 impl Hangar {
     pub(super) fn open_scheduled_launch(&mut self, api: Api, window: &mut Window, cx: &mut Context<Self>) {
+        let previous = self.scheduled.chooser.as_ref().and_then(WeakEntity::upgrade).map(|editor| editor.read(cx).target.clone());
+        self.open_launch_picker(api,previous,false,window,cx);
+    }
+
+    pub(super) fn open_ticket_launch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(api)=self.api.clone() else {return};
+        let previous=self.mission.launch_options.clone().map(|launch|json!({"launch":launch}));
+        self.open_launch_picker(api,previous,true,window,cx);
+    }
+
+    fn open_launch_picker(&mut self, api: Api, previous: Option<Value>, tickets: bool, window: &mut Window, cx: &mut Context<Self>) {
         let link = Link { api, runtime: self.runtime.clone(), tx: self.tx.clone(), connection: self.connection,
             servers: Vec::new(), servers_rev: self.servers_rev };
-        let previous = self.scheduled.chooser.as_ref().and_then(WeakEntity::upgrade).map(|editor| editor.read(cx).target.clone());
         let dialog = cx.new(|cx| {
             let mut view = NewSession::new(link, None, window, cx);
             view.scheduled = true;
+            if tickets {view.purpose=SessionDialogPurpose::Tickets;}
             if let Some(target) = previous {
                 let launch = target["launch"].clone();
                 if let Some(provider) = launch["provider"].as_str().and_then(|p| PROVIDERS.iter().copied().find(|known| *known == p)) {
@@ -2979,10 +2999,12 @@ impl Hangar {
         window.open_dialog(cx, move |d, _, cx| {
             let weak = weak.clone();
             let busy = dialog.read(cx).creating;
-            popup::dialog(d).w(width).margin_top(px(DIALOG_TOP)).title(tr_shared("scheduled_advanced", &[])).keyboard(!busy).close_button(!busy)
+            let closed_view=dialog.clone();
+            popup::dialog(d).w(width).margin_top(px(DIALOG_TOP)).title(if tickets {tr("mission_folder_options")} else {tr_shared("scheduled_advanced", &[])}).keyboard(!busy).close_button(!busy)
                 .child(dialog.clone()).overlay_closable(false).on_ok(enter_to_focused)
-                .on_close(move |_, _, cx| { let _ = weak.update(cx, |this, cx| { this.new_session = None;
-                    if let Some(editor) = this.scheduled.chooser.take() { let _ = editor.update(cx, |editor, cx| { editor.choosing = false; cx.notify(); }); }
+                .on_close(move |_, _, cx| { let submitted=closed_view.read(cx).creating; let _ = weak.update(cx, |this, cx| { this.new_session = None;
+                    if tickets && !submitted {this.cancel_ticket_action();}
+                    if !tickets { if let Some(editor) = this.scheduled.chooser.take() { let _ = editor.update(cx, |editor, cx| { editor.choosing = false; cx.notify(); }); } }
                     cx.notify(); }); })
         });
     }
@@ -3237,10 +3259,6 @@ impl Hangar {
             return;
         };
         self.tour_event(crate::tour::TourEvent::SessionCreated, cx);
-        {
-            let server = entity.read(cx).link.api.identity();
-            self.mission_session_created(&server, &session.name, first.as_ref().map(|(_, text, ..)| text.as_str()), window, cx);
-        }
         // A mensagem enviada da tela sem sessão segue na conversa da sessão nova; a chegada já começou no Enviar.
         let opening = if compact { self.opening.take() } else { None };
         // Criar não desfaz a escolha de outra conversa feita enquanto o pedido estava em voo.

@@ -61,6 +61,57 @@ fn manifest_refuses_unsupported_versions_and_capabilities() {
 }
 
 #[test]
+fn work_actions_capability_is_explicit_and_versioned() {
+    let mut value = valid();
+    value["capabilities"] = json!({"work_tracking": 1, "work_actions": 1});
+    let parsed = manifest(value.clone()).expect("a capacidade de ações deve ser reconhecida");
+    assert_eq!(parsed.capabilities.get("work_actions"), Some(&1));
+    value["capabilities"]["work_actions"] = json!(2);
+    assert_eq!(manifest(value).unwrap_err(), "unsupported_version");
+    let mut value = valid();
+    value["capabilities"] = json!({"work_actions": 1});
+    assert_eq!(manifest(value).unwrap_err(), "unsupported_capability");
+}
+
+#[test]
+fn work_actions_catalog_refuses_ambiguous_or_unbounded_descriptors() {
+    use hangar_connectors::work_actions::Catalog;
+    let action = json!({"id": "start-pm", "label": "Iniciar PM", "prompt_template": "/iniciar {key}", "stage": "planejamento"});
+    let mut invalid = Vec::new();
+    invalid.push(json!({"actions": [action.clone(), action.clone()]}));
+    for (field, value) in [("id", json!("../comando")), ("label", json!(" ")), ("prompt_template", json!("x\u{0000}y")),
+        ("prompt_template", json!("x".repeat(4097))), ("description", json!("x".repeat(1001))), ("stage", json!("x".repeat(33)))] {
+        let mut item = action.clone();
+        item[field] = value;
+        invalid.push(json!({"actions": [item]}));
+    }
+    invalid.push(json!({"actions": (0..65).map(|i| json!({"id": format!("action-{i}"), "label": "Ação", "prompt_template": "Executar"})).collect::<Vec<_>>()}));
+    for payload in invalid {
+        let error = Catalog::from_connector(payload).expect_err("o catálogo precisa recusar descritores inválidos");
+        assert_eq!(error.code, ErrorCode::ProtocolError);
+    }
+}
+
+#[test]
+fn work_actions_rendering_is_one_pass_and_caps_the_expanded_message() {
+    use hangar_connectors::work_actions::Catalog;
+    let mut ticket = summary("t-1");
+    ticket["key"] = json!("{url}");
+    ticket["description_markdown"] = json!("");
+    let detail = TicketDetail::from_connector(ticket.clone()).unwrap();
+    let catalog = || Catalog::from_connector(json!({"actions": [{"id": "start", "label": "Iniciar", "prompt_template": "{key} {url}"}]})).unwrap();
+    let action = catalog().actions.remove(0).resolve(&detail.summary).unwrap();
+    assert_eq!(action.prompt, "{url} https://exemplo.invalid/t/7");
+    let mut changed = detail.summary.clone();
+    changed.key = "Outra chave".into();
+    assert_ne!(catalog().actions.remove(0).resolve(&changed).unwrap().fingerprint, action.fingerprint);
+    ticket["key"] = json!("k".repeat(1024));
+    let detail = TicketDetail::from_connector(ticket).unwrap();
+    let mut catalog = Catalog::from_connector(json!({"actions": [{"id": "start", "label": "Iniciar", "prompt_template": "{key}".repeat(800)}]})).unwrap();
+    assert!(matches!(catalog.actions.remove(0).resolve(&detail.summary), Err(error) if error.code == ErrorCode::ProtocolError));
+}
+
+#[test]
 fn manifest_refuses_invalid_ids_and_empty_command() {
     for id in ["Help", "1help", "help_test", "", &"a".repeat(65)] {
         let mut value = valid();
@@ -145,10 +196,10 @@ fn start_prompt_fills_ticket_fields_once_and_keeps_unknown_braces() {
     ticket["title"] = json!("{key} no título");
     let ticket: hangar_connectors::work_tracking::TicketSummary = serde_json::from_value(ticket).unwrap();
     assert_eq!(
-        parsed.start_prompt_for(&ticket).as_deref(),
+        parsed.start_prompt_for(&ticket).unwrap().as_deref(),
         Some("/iniciar OPS·7 {key} no título {nada} https://exemplo.invalid/t/7"),
     );
-    assert_eq!(manifest(valid()).unwrap().start_prompt_for(&ticket), None, "sem modelo, sem sugestão");
+    assert_eq!(manifest(valid()).unwrap().start_prompt_for(&ticket).unwrap(), None, "sem modelo, sem sugestão");
     let mut empty = valid();
     empty["start_prompt"] = json!("  ");
     assert_eq!(manifest(empty).unwrap_err(), "manifest_invalid");
