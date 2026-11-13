@@ -315,8 +315,9 @@ impl Mux {
             // É a versão do programa chamado; a dos servidores vivos fica provada só pela comparação.
             // Tem o orçamento da leitura direta: um `-V` lento não tira o prazo do CLI.
             let (_, probe) = direct_window(tokio::time::Instant::now(), deadline, self.direct_budget);
-            let code = match self.version_until(probe).await {
-                Some(v) if hangar_psmux::known_version(&v) => None,
+            let version = self.version_until(probe).await;
+            let code = match &version {
+                Some(v) if hangar_psmux::known_version(v) => None,
                 Some(_) => Some("psmux_direct_version"),
                 None => Some("psmux_direct_version_unread"),
             };
@@ -324,7 +325,8 @@ impl Mux {
             direct.set(gate.clone());
             if let Some(code) = code {
                 if crate::warn_limit::allow(None, code) {
-                    tracing::warn!(code, "psmux: versão do programa não conferida; a lista segue pelo CLI");
+                    let version = version.as_deref().map(|v| v.split_whitespace().collect::<Vec<_>>().join(" "));
+                    tracing::warn!(code, ?version, "psmux: versão do programa não conferida; a lista segue pelo CLI");
                 }
                 return DirectRead::Skip;
             }
