@@ -38,8 +38,9 @@ A coluna de cada ticket, nesta ordem:
 ## Sessão do ticket
 
 O Iniciar abre a tela de nova conversa com o `start_prompt` do conector no campo. A primeira sessão
-criada depois dele, cuja mensagem começa por esse texto, fica ligada ao ticket e recebe um aviso
-`[painel: Mission Control]` explicando a tool `mission`.
+criada depois dele, cuja mensagem começa por esse texto, fica ligada ao ticket. Todo vínculo novo faz o
+servidor mandar à sessão, pela rota de entrada dela, um aviso `[painel: Mission Control]` explicando a
+tool `mission`.
 
 Sem vínculo, o painel acha a sessão viva cuja branch é a chave do ticket ou cujo nome começa por ela
 (`PM-19816`, `PM-19816-Coordenadora`), como o plugin Promedico identifica a PM. "Ligar ao ticket"
@@ -56,11 +57,14 @@ A sessão ligada informa a etapa e anexa evidências pela tool `mission` do MCP 
 
 Sem argumentos, a tool devolve o ticket ligado e as etapas. Evidência é imagem, vídeo, PDF ou texto
 (`png`, `jpg`, `gif`, `webp`, `mp4`, `webm`, `mov`, `pdf`, `txt`, `md`, `log`), até 512 MiB; o
-servidor copia o arquivo, então o original pode sair. O dono também anexa pelo painel.
+servidor copia o arquivo, então o original pode sair. Um lote com um item recusado não guarda nenhum.
+O dono também anexa pelo painel, até 100 MiB por arquivo.
 
 Etapa com portão espera o dono: a sessão entra nela, mas não passa adiante (`mission_gate_pending`)
-até a aprovação. No painel, Aprovar leva o ticket à etapa seguinte; Pedir ajustes volta uma etapa,
-desfaz as aprovações daí em diante e manda o motivo à sessão como mensagem.
+até a aprovação, e voltar para antes de um portão o fecha de novo. No painel, Aprovar leva o ticket à
+etapa seguinte; Pedir ajustes volta uma etapa, desfaz as aprovações daí em diante e, depois de gravado,
+o servidor manda o motivo à sessão ligada. Os dois levam a etapa que a tela mostra, que vale quando o
+ticket ainda não tem etapa gravada (deduzida pelo status ou pelo plano).
 
 As evidências ficam no Hangar e não vão para o sistema de origem: o fluxo do plugin Promedico não
 sobe registros de execução nem evidências na PM.
@@ -74,7 +78,7 @@ Rotas só do dono, nunca repassadas ao Python:
 | GET | `/api/mission` | `{stages, items}` |
 | PUT | `/api/mission/stages` | `{"stages": [{"id", "name", "gate", "statuses"}]}` |
 | PUT | `/api/mission/items/{conector}/{ticket}` | `{"key", "title", "url", "session"}` liga a sessão |
-| PATCH | `/api/mission/items/{conector}/{ticket}` | `{"action": "stage", "stage"}`, `approve`, `{"action": "changes", "note"}`, `delivered`, `reset` |
+| PATCH | `/api/mission/items/{conector}/{ticket}` | `{"action": "stage", "stage"}`, `{"action": "approve", "stage"?}`, `{"action": "changes", "note", "stage"?}`, `delivered`, `reset` |
 | DELETE | `/api/mission/items/{conector}/{ticket}` | Esquece o registro e as evidências |
 | POST | `/api/mission/items/{conector}/{ticket}/evidence?name=&caption=` | Bytes do arquivo |
 | DELETE | `/api/mission/items/{conector}/{ticket}/evidence/{id}` | Tira uma evidência |

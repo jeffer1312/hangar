@@ -10858,11 +10858,8 @@
   "native_mission_plan_task": "Task {n} of {total}",
   "native_mission_plan_progress": "Plan progress",
   "native_mission_adopt": "Link to ticket",
-  "native_mission_agent_notice": "[painel: Mission Control] This session works on ticket {key}. When the work moves to another stage, report it with the `mission` tool of the hangar MCP (without arguments it shows the ticket and the stages). At validation, attach the evidence that it works (screenshots, videos, reports) with the same tool and wait for the owner's approval before moving on.",
   "native_mission_approve": "Approve",
-  "native_mission_cancel": "Cancel",
   "native_mission_changes": "Request changes",
-  "native_mission_changes_message": "Changes requested by the owner on ticket {key}, at stage {etapa}: {nota}",
   "native_mission_changes_placeholder": "What needs to change?",
   "native_mission_changes_send": "Send to session",
   "native_mission_delivered": "Mark as delivered",
@@ -10897,5 +10894,6 @@
   "native_mission_stages_none": "Write at least one stage.",
   "native_mission_stages_save": "Save stages",
   "native_mission_stages_title": "Work stages",
-  "native_mission_waiting_you": "{etapa}: awaits your approval"
+  "native_mission_waiting_you": "{etapa}: awaits your approval",
+  "native_mission_evidence_not_openable": "This file type does not open from the app; the evidence stays on the server."
 }

@@ -117,6 +117,8 @@ pub(super) struct Mission {
     selected: Option<String>,
     detail: Option<Result<DetailView, String>>,
     detail_seq: u64,
+    /// Releituras das etapas e registros: a resposta mais nova vence.
+    work_seq: u64,
     busy: bool,
     pending: Option<PendingStart>,
     query: Option<Entity<InputState>>,
@@ -165,13 +167,9 @@ fn stages_text(stages: &[Stage]) -> String {
     }).collect::<Vec<_>>().join("\n")
 }
 
+/// `id` de etapa a partir do nome: a mesma dobra de acentos das worktrees, começando por letra e com até 32 bytes.
 fn slug(name: &str) -> String {
-    let plain: String = name.to_lowercase().chars().map(|c| match c {
-        'á' | 'à' | 'â' | 'ã' | 'ä' => 'a', 'é' | 'è' | 'ê' | 'ë' => 'e', 'í' | 'ì' | 'î' | 'ï' => 'i',
-        'ó' | 'ò' | 'ô' | 'õ' | 'ö' => 'o', 'ú' | 'ù' | 'û' | 'ü' => 'u', 'ç' => 'c',
-        c if c.is_ascii_alphanumeric() => c, _ => '-',
-    }).collect();
-    let mut id = plain.split('-').filter(|part| !part.is_empty()).collect::<Vec<_>>().join("-");
+    let mut id = super::worktrees::slug(name);
     if !id.starts_with(|c: char| c.is_ascii_lowercase()) { id = format!("e-{id}"); }
     id.chars().take(32).collect::<String>().trim_end_matches('-').to_owned()
 }
@@ -196,6 +194,42 @@ fn parse_stages(text: &str, current: &[Stage]) -> Result<Vec<Value>, String> {
     }
     if stages.is_empty() { return Err(tr("mission_stages_none")); }
     Ok(stages)
+}
+
+struct Linked<'a> { name: &'a str, session: Option<&'a SessionInfo>, stored: bool }
+
+struct TicketView<'a> {
+    item: Option<&'a Item>,
+    linked: Option<Linked<'a>>,
+    lane: Lane,
+    source: Source,
+    /// Etapa da coluna, quando é uma etapa (não Entrada nem Concluído).
+    stage: Option<&'a Stage>,
+    /// Etapa com portão em que o ticket espera o dono.
+    waiting: Option<&'a Stage>,
+}
+
+/// Coluna do ticket e de onde veio: concluído na origem ou entregue vence; depois a etapa informada, a que o status de
+/// origem indica e, com sessão viva, a dedução pelo plano dela.
+fn lane_of(stages: &[Stage], ticket: &Ticket, item: Option<&Item>, session: Option<&SessionInfo>) -> (Lane, Source) {
+    if matches!(ticket.status.category.as_str(), "done" | "canceled") || item.is_some_and(|i| i.delivered_at.is_some()) {
+        return (Lane::Done, Source::Status);
+    }
+    if let Some(index) = item.and_then(|i| i.stage.as_deref()).and_then(|id| stages.iter().position(|s| s.id == id)) {
+        return (Lane::Stage(index), Source::Reported);
+    }
+    if let Some(index) = stages.iter().position(|s| s.statuses.iter().any(|status| status.eq_ignore_ascii_case(&ticket.status.name))) {
+        return (Lane::Stage(index), Source::Status);
+    }
+    let Some(session) = session.filter(|s| s.state != "dead") else { return (Lane::Inbox, Source::None) };
+    // Sem plano, plano em andamento e plano concluído: as etapas padrão, ou a posição delas numa lista própria.
+    let (id, position) = match (session.plan_done, session.plan_total.filter(|t| *t > 0)) {
+        (Some(done), Some(total)) if done >= total => ("revisao", 2),
+        (_, Some(_)) => ("execucao", 1),
+        _ => ("planejamento", 0),
+    };
+    let index = stages.iter().position(|s| s.id == id).unwrap_or(position.min(stages.len().saturating_sub(1)));
+    if stages.is_empty() { (Lane::Inbox, Source::None) } else { (Lane::Stage(index), Source::Plan) }
 }
 
 impl Board {
@@ -254,7 +288,7 @@ impl Hangar {
         let (cursor, query) = match page { Some((cursor, query)) => (Some(cursor), query), None => (None, self.mission_query(cx)) };
         if !same {
             (self.mission.connector, self.mission.selected, self.mission.detail, self.mission.board) = (None, None, None, None);
-            self.mission.thumbs.clear();
+            for image in self.mission.thumbs.drain().filter_map(|(_, image)| image) { cx.drop_image(image, Some(window)); }
         }
         self.mission.seq += 1;
         let seq = self.mission.seq;
@@ -307,13 +341,14 @@ impl Hangar {
     /// Relê só as etapas e os registros (depois de aprovar, mover ou anexar), sem pedir os tickets de novo.
     fn reload_work(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(api) = self.api.clone() else { return };
-        let seq = self.mission.seq;
+        let (seq, work_seq) = (self.mission.seq, self.mission.work_seq + 1);
+        self.mission.work_seq = work_seq;
         let request = async move {
             let work = api.server_read(&["mission"], &[], 15).await?;
             serde_json::from_value::<Work>(work).map_err(|_| Failure::local("invalid_response"))
         };
         run(&self.runtime, request, window, cx, move |this: &mut Hangar, result, window, cx| {
-            if this.mission.seq != seq { return; }
+            if this.mission.seq != seq || this.mission.work_seq != work_seq { return; }
             match result {
                 Ok(work) => if let Some(Ok(board)) = this.mission.board.as_mut() { board.work = work; this.load_thumbs(window, cx); },
                 Err(error) => window.push_notification(Notification::error(failure_text(&error)), cx),
@@ -333,7 +368,7 @@ impl Hangar {
             let fetch = id.clone();
             let request = async move {
                 let bytes = api.server_bytes(&["mission", "evidence", &fetch], 60).await?;
-                Ok(crate::media::thumbnail(&bytes))
+                Ok(tokio::task::spawn_blocking(move || crate::media::thumbnail(&bytes)).await.ok().flatten())
             };
             run(&self.runtime, request, window, cx, move |this: &mut Hangar, result: Result<Option<Arc<RenderImage>>, Failure>, _, _| {
                 this.mission.thumbs.insert(id, result.ok().flatten());
@@ -373,41 +408,23 @@ impl Hangar {
     }
 
     /// Sessão do ticket: a ligada pelo Iniciar ou, sem ela, a viva que leva a chave na branch ou no nome.
-    /// `(nome, sessão na lista, ligada)`.
-    fn ticket_session<'a>(&'a self, ticket: &'a Ticket) -> Option<(&'a str, Option<&'a SessionInfo>, bool)> {
-        if let Some(name) = self.mission_item(&ticket.id).and_then(|item| item.session.as_deref()) {
-            return Some((name, self.sessions.iter().find(|s| s.name == name), true));
+    fn ticket_session<'a>(&'a self, ticket: &'a Ticket, item: Option<&'a Item>) -> Option<Linked<'a>> {
+        if let Some(name) = item.and_then(|item| item.session.as_deref()) {
+            return Some(Linked { name, session: self.sessions.iter().find(|s| s.name == name), stored: true });
         }
-        self.sessions.iter().find(|s| s.state != "dead" && named_after(s, &ticket.key)).map(|s| (s.name.as_str(), Some(s), false))
+        self.sessions.iter().find(|s| s.state != "dead" && named_after(s, &ticket.key))
+            .map(|s| Linked { name: s.name.as_str(), session: Some(s), stored: false })
     }
 
-    /// Coluna do ticket e de onde veio: concluído na origem ou entregue vence; depois a etapa informada, a que o
-    /// status de origem indica e, com sessão viva, a dedução pelo plano dela.
-    fn lane(&self, ticket: &Ticket) -> (Lane, Source) {
-        let Some(board) = self.mission_board() else { return (Lane::Inbox, Source::None) };
-        let stages = &board.work.stages;
+    /// Tudo o que a tela mostra de um ticket, calculado uma vez por quadro.
+    fn ticket_view<'a>(&'a self, ticket: &'a Ticket) -> TicketView<'a> {
         let item = self.mission_item(&ticket.id);
-        if matches!(ticket.status.category.as_str(), "done" | "canceled") || item.is_some_and(|i| i.delivered_at.is_some()) {
-            return (Lane::Done, Source::Status);
-        }
-        if let Some(index) = item.and_then(|i| i.stage.as_deref()).and_then(|id| stages.iter().position(|s| s.id == id)) {
-            return (Lane::Stage(index), Source::Reported);
-        }
-        if let Some(index) = stages.iter().position(|s| s.statuses.iter().any(|status| status.eq_ignore_ascii_case(&ticket.status.name))) {
-            return (Lane::Stage(index), Source::Status);
-        }
-        let last = stages.len().saturating_sub(1);
-        match self.ticket_session(ticket).and_then(|(_, session, _)| session).filter(|s| s.state != "dead") {
-            Some(session) => {
-                let index = match (session.plan_done, session.plan_total.filter(|t| *t > 0)) {
-                    (Some(done), Some(total)) if done >= total => 2,
-                    (_, Some(_)) => 1,
-                    _ => 0,
-                };
-                (Lane::Stage(index.min(last)), Source::Plan)
-            }
-            None => (Lane::Inbox, Source::None),
-        }
+        let linked = self.ticket_session(ticket, item);
+        let stages = self.mission_board().map_or(&[][..], |b| b.work.stages.as_slice());
+        let (lane, source) = lane_of(stages, ticket, item, linked.as_ref().and_then(|l| l.session));
+        let stage = match lane { Lane::Stage(index) => stages.get(index), _ => None };
+        let waiting = stage.filter(|stage| stage.gate && !item.is_some_and(|item| item.approved.contains(&stage.id)));
+        TicketView { item, linked, lane, source, stage, waiting }
     }
 
     /// Iniciar: a tela de nova conversa com a primeira mensagem do conector no campo. A pessoa escolhe a pasta e envia;
@@ -429,8 +446,8 @@ impl Hangar {
         window.push_notification(Notification::info(tr("mission_start_hint")), cx);
     }
 
-    /// Volta da criação: a sessão nascida do Iniciar, com a mensagem do ticket, fica ligada a ele no servidor e recebe o
-    /// aviso de que pode informar etapa e evidências pela tool `mission`.
+    /// Volta da criação: a sessão nascida do Iniciar, com a mensagem do ticket, fica ligada a ele no servidor, que a
+    /// avisa da tool `mission`.
     pub(super) fn mission_session_created(&mut self, server: &str, session: &str, first: Option<&str>, window: &mut Window, cx: &mut Context<Self>) {
         // Qualquer criação encerra o pedido: só a primeira depois do Iniciar pode ser a dele.
         let Some(start) = self.mission.pending.take() else { return };
@@ -441,12 +458,8 @@ impl Hangar {
 
     fn link_session(&mut self, api: Api, connector: String, ticket: Ticket, session: String, window: &mut Window, cx: &mut Context<Self>) {
         let body = json!({"key": ticket.key, "title": ticket.title, "url": ticket.url, "session": session});
-        let notice = tr("mission_agent_notice").replace("{key}", &ticket.key);
         let request = async move {
-            api.server_send(reqwest::Method::PUT, &["mission", "items", &connector, &ticket.id], Some(body), 15).await?;
-            // O aviso vai depois do vínculo: a tool já acha o ticket quando o agente a chamar.
-            let _ = api.send(&session, &notice).await;
-            Ok(())
+            api.server_send(reqwest::Method::PUT, &["mission", "items", &connector, &ticket.id], Some(body), 15).await.map(|_| ())
         };
         run(&self.runtime, request, window, cx, |this: &mut Hangar, result: Result<(), Failure>, window, cx| match result {
             Ok(()) => if this.mission.open { this.reload_work(window, cx) },
@@ -454,19 +467,34 @@ impl Hangar {
         });
     }
 
-    /// Mudança do dono no registro do ticket aberto (`PATCH`), e a releitura.
-    fn mission_change(&mut self, body: Value, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(api), Some(connector), Some(ticket)) = (self.api.clone(), self.mission.connector.clone(), self.mission.selected.clone()) else { return };
+    /// Pedido do dono ao Mission Control, com o botão ocupado enquanto vai; no sucesso, `done` e a releitura.
+    fn mission_send(&mut self, method: reqwest::Method, path: Vec<String>, body: Option<Value>,
+        done: impl FnOnce(&mut Hangar) + 'static, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(api) = self.api.clone() else { return };
         self.mission.busy = true;
-        let request = async move { api.server_send(reqwest::Method::PATCH, &["mission", "items", &connector, &ticket], Some(body), 15).await };
-        run(&self.runtime, request, window, cx, |this: &mut Hangar, result, window, cx| {
+        let request = async move {
+            let path: Vec<&str> = path.iter().map(String::as_str).collect();
+            api.server_send(method, &path, body, 15).await
+        };
+        run(&self.runtime, request, window, cx, move |this: &mut Hangar, result, window, cx| {
             this.mission.busy = false;
             match result {
-                Ok(_) => this.reload_work(window, cx),
+                Ok(_) => { done(this); this.reload_work(window, cx); }
                 Err(error) => window.push_notification(Notification::error(failure_text(&error)), cx),
             }
         });
         cx.notify();
+    }
+
+    /// Caminho do registro do ticket aberto: `mission/items/{conector}/{ticket}`.
+    fn item_path(&self) -> Option<Vec<String>> {
+        Some(vec!["mission".into(), "items".into(), self.mission.connector.clone()?, self.mission.selected.clone()?])
+    }
+
+    /// Mudança do dono no registro do ticket aberto (`PATCH`).
+    fn mission_change(&mut self, body: Value, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(path) = self.item_path() else { return };
+        self.mission_send(reqwest::Method::PATCH, path, Some(body), |_| {}, window, cx);
     }
 
     /// Ligar à tela uma sessão detectada pela chave: a partir daí ela usa a tool e aparece mesmo com outro nome.
@@ -478,36 +506,17 @@ impl Hangar {
 
     /// Esquecer o ticket: vínculo, etapa e evidências saem.
     fn forget_ticket(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(api), Some(connector), Some(ticket)) = (self.api.clone(), self.mission.connector.clone(), self.mission.selected.clone()) else { return };
-        self.mission.busy = true;
-        let request = async move { api.server_send(reqwest::Method::DELETE, &["mission", "items", &connector, &ticket], None, 15).await };
-        run(&self.runtime, request, window, cx, |this: &mut Hangar, result, window, cx| {
-            this.mission.busy = false;
-            match result {
-                Ok(_) => this.reload_work(window, cx),
-                Err(error) => window.push_notification(Notification::error(failure_text(&error)), cx),
-            }
-        });
-        cx.notify();
+        let Some(path) = self.item_path() else { return };
+        self.mission_send(reqwest::Method::DELETE, path, None, |_| {}, window, cx);
     }
 
-    /// Pedir ajustes: a etapa volta, e o motivo vai à sessão como mensagem.
-    fn send_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(input) = self.mission.changes.clone() else { return };
+    /// Pedir ajustes: a etapa volta, e o servidor manda o motivo à sessão ligada. O texto só sai do campo gravado.
+    fn send_changes(&mut self, stage: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(input), Some(path)) = (self.mission.changes.clone(), self.item_path()) else { return };
         let note = input.read(cx).value().trim().to_owned();
         if note.is_empty() { return; }
-        let ticket = self.mission.selected.clone().and_then(|id| self.mission_board()?.tickets.iter().find(|t| t.id == id).cloned());
-        let session = ticket.as_ref().and_then(|t| self.ticket_session(t)).map(|(name, _, _)| name.to_owned());
-        let stage = ticket.as_ref().and_then(|t| match self.lane(t).0 {
-            Lane::Stage(index) => self.mission_board().and_then(|b| b.work.stages.get(index)).map(|s| s.name.clone()),
-            _ => None,
-        }).unwrap_or_default();
-        self.mission_change(json!({"action": "changes", "note": note}), window, cx);
-        self.mission.changes = None;
-        if let (Some(api), Some(session), Some(ticket)) = (self.api.clone(), session, ticket) {
-            let text = tr("mission_changes_message").replace("{key}", &ticket.key).replace("{etapa}", &stage).replace("{nota}", &note);
-            self.runtime.spawn(async move { let _ = api.send(&session, &text).await; });
-        }
+        self.mission_send(reqwest::Method::PATCH, path, Some(json!({"action": "changes", "note": note, "stage": stage})),
+            |this| this.mission.changes = None, window, cx);
     }
 
     /// Anexar uma evidência do disco desta máquina ao ticket aberto.
@@ -534,14 +543,20 @@ impl Hangar {
     /// Abre a evidência no programa do sistema: baixa para a pasta privada e entrega o caminho.
     fn open_evidence(&mut self, id: String, name: String, window: &mut Window, cx: &mut Context<Self>) {
         let Some(api) = self.api.clone() else { return };
+        // O nome vem do servidor: o cliente confere sozinho, como no abrir de anexo, antes de entregar ao sistema.
+        let safe = composer::safe_name(&name);
+        if !composer::openable(&safe) {
+            window.push_notification(Notification::warning(tr("mission_evidence_not_openable")), cx);
+            return;
+        }
         let request = async move {
             let bytes = api.server_bytes(&["mission", "evidence", &id], 300).await?;
-            let path = private_copy(&name).map_err(|_| Failure::local("save_failed"))?;
+            let path = private_copy(&safe).map_err(|_| Failure::local("save_failed"))?;
             tokio::fs::write(&path, bytes).await.map_err(|_| Failure::local("save_failed"))?;
             Ok(path)
         };
         run(&self.runtime, request, window, cx, |_: &mut Hangar, result: Result<PathBuf, Failure>, window, cx| match result {
-            Ok(path) => cx.open_url(&format!("file://{}", path.display())),
+            Ok(path) => cx.open_with_system(&path),
             Err(error) => window.push_notification(Notification::error(failure_text(&error)), cx),
         });
     }
@@ -563,21 +578,13 @@ impl Hangar {
     }
 
     fn save_stages(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(api), Some(editor), Some(board)) = (self.api.clone(), self.mission.stages_editor.clone(), self.mission_board()) else { return };
+        let (Some(editor), Some(board)) = (self.mission.stages_editor.clone(), self.mission_board()) else { return };
         let stages = match parse_stages(&editor.read(cx).value(), &board.work.stages) {
             Ok(stages) => stages,
             Err(error) => { window.push_notification(Notification::warning(error), cx); return; }
         };
-        self.mission.busy = true;
-        let request = async move { api.server_send(reqwest::Method::PUT, &["mission", "stages"], Some(json!({"stages": stages})), 15).await };
-        run(&self.runtime, request, window, cx, |this: &mut Hangar, result, window, cx| {
-            this.mission.busy = false;
-            match result {
-                Ok(_) => { this.mission.stages_editor = None; this.reload_work(window, cx); }
-                Err(error) => window.push_notification(Notification::error(failure_text(&error)), cx),
-            }
-        });
-        cx.notify();
+        self.mission_send(reqwest::Method::PUT, vec!["mission".into(), "stages".into()], Some(json!({"stages": stages})),
+            |this| this.mission.stages_editor = None, window, cx);
     }
 
     // ── Desenho ─────────────────────────────────────────────────────────────
@@ -603,7 +610,7 @@ impl Hangar {
                     .on_click(cx.listener(|this, _, window, cx| this.load_mission(false, window, cx))).into_any_element(),
             ]).collect(), cx);
         let body = if self.mission.stages_editor.is_some() { self.render_stages_editor(cx) } else { self.render_mission_body(cx) };
-        let panel = self.mission.selected.clone().filter(|_| self.mission.stages_editor.is_none()).map(|id| self.render_mission_detail(&id, cx));
+        let panel = self.mission.selected.clone().filter(|_| self.mission.stages_editor.is_none()).map(|_| self.render_mission_detail(cx));
         page_frame(div().size_full().flex().flex_col().child(header)
             .child(div().flex_1().min_h_0().flex().child(body).children(panel)))
     }
@@ -631,7 +638,7 @@ impl Hangar {
                 .child(div().flex().gap(px(8.))
                     .child(Button::new("mission-stages-save").primary().small().label(tr("mission_stages_save")).loading(self.mission.busy)
                         .disabled(self.mission.busy).on_click(cx.listener(|this, _, window, cx| this.save_stages(window, cx))))
-                    .child(Button::new("mission-stages-cancel").ghost().small().label(tr("mission_cancel"))
+                    .child(Button::new("mission-stages-cancel").ghost().small().label(tr("cancel"))
                         .on_click(cx.listener(|this, _, _, cx| { this.mission.stages_editor = None; cx.notify(); })))))
             .into_any_element()
     }
@@ -651,23 +658,24 @@ impl Hangar {
                 .child(empty_state(text)).into_any_element());
         }
         let stages = &board.work.stages;
-        let mut lanes: Vec<(String, Lane, Vec<&Ticket>)> = std::iter::once((tr("mission_inbox"), Lane::Inbox, Vec::new()))
+        let mut lanes: Vec<(String, Lane, Vec<(&Ticket, TicketView)>)> = std::iter::once((tr("mission_inbox"), Lane::Inbox, Vec::new()))
             .chain(stages.iter().enumerate().map(|(n, s)| (s.name.clone(), Lane::Stage(n), Vec::new())))
             .chain(std::iter::once((tr("mission_done"), Lane::Done, Vec::new()))).collect();
         for ticket in &board.tickets {
-            let lane = self.lane(ticket).0;
-            if let Some((_, _, list)) = lanes.iter_mut().find(|(_, l, _)| *l == lane) { list.push(ticket); }
+            let view = self.ticket_view(ticket);
+            if let Some((_, _, list)) = lanes.iter_mut().find(|(_, l, _)| *l == view.lane) { list.push((ticket, view)); }
         }
         let gates: HashSet<usize> = stages.iter().enumerate().filter(|(_, s)| s.gate).map(|(n, _)| n).collect();
         let columns = div().id("mission-lanes").flex_1().min_h_0().overflow_x_scroll().flex().gap(px(12.))
             .children(lanes.into_iter().enumerate().map(|(n, (title, lane, items))| {
-                let cards: Vec<AnyElement> = items.iter().map(|ticket| self.render_mission_card(ticket, cx)).collect();
+                let count = items.len();
+                let cards: Vec<AnyElement> = items.into_iter().map(|(ticket, view)| self.render_mission_card(ticket, view, cx)).collect();
                 let gate = matches!(lane, Lane::Stage(index) if gates.contains(&index));
                 div().w(px(250.)).flex_shrink_0().h_full().flex().flex_col().rounded(px(12.)).bg(theme::inset())
                     .child(div().px(px(12.)).py(px(10.)).flex().items_center().gap(px(6.))
                         .when(gate, |el| el.child(chrome::small_icon(IconName::ShieldCheck, 13., theme::warning())))
                         .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).truncate().child(title))
-                        .child(div().text_size(px(12.)).text_color(theme::faint()).child(items.len().to_string())))
+                        .child(div().text_size(px(12.)).text_color(theme::faint()).child(count.to_string())))
                     .child(div().id(SharedString::from(format!("mission-lane-{n}"))).flex_1().min_h_0().overflow_y_scroll().px(px(8.)).pb(px(8.))
                         .flex().flex_col().gap(px(8.))
                         .when(cards.is_empty(), |el| el.child(empty_state(tr("mission_empty_column"))))
@@ -683,23 +691,15 @@ impl Hangar {
         frame(div().flex_1().min_h_0().flex().flex_col().gap(px(10.)).child(columns).child(footer).into_any_element())
     }
 
-    /// Etapa com portão em que o ticket espera o dono.
-    fn awaiting_owner(&self, ticket: &Ticket) -> Option<String> {
-        let Lane::Stage(index) = self.lane(ticket).0 else { return None };
-        let stage = self.mission_board()?.work.stages.get(index)?;
-        let approved = self.mission_item(&ticket.id).is_some_and(|item| item.approved.contains(&stage.id));
-        (stage.gate && !approved).then(|| stage.name.clone())
-    }
-
-    fn render_mission_card(&self, ticket: &Ticket, cx: &mut Context<Self>) -> AnyElement {
+    fn render_mission_card(&self, ticket: &Ticket, view: TicketView, cx: &mut Context<Self>) -> AnyElement {
         let selected = self.mission.selected.as_deref() == Some(ticket.id.as_str());
         let id = ticket.id.clone();
-        let session = self.ticket_session(ticket).map(|(name, session, _)| match session {
+        let session = view.linked.as_ref().map(|linked| match linked.session {
             Some(session) => session_line(session),
-            None => div().text_size(px(11.5)).text_color(theme::faint()).truncate().child(tr("mission_session_gone").replace("{name}", name)),
+            None => div().text_size(px(11.5)).text_color(theme::faint()).truncate().child(tr("mission_session_gone").replace("{name}", linked.name)),
         });
-        let evidence = self.mission_item(&ticket.id).map_or(0, |item| item.evidence.len());
-        let waiting = self.awaiting_owner(ticket);
+        let evidence = view.item.map_or(0, |item| item.evidence.len());
+        let waiting = view.waiting.map(|stage| stage.name.clone());
         div().id(SharedString::from(format!("mission-card-{}", ticket.id))).w_full().p(px(10.)).rounded(px(10.)).border_1()
             .border_color(if selected { theme::accent() } else if waiting.is_some() { theme::warning().alpha(0.6) } else { theme::border() })
             .bg(theme::boxed()).cursor_pointer()
@@ -719,7 +719,7 @@ impl Hangar {
             .into_any_element()
     }
 
-    fn render_mission_detail(&self, id: &str, cx: &mut Context<Self>) -> Stateful<Div> {
+    fn render_mission_detail(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let close = Button::new("mission-detail-close").ghost().small().icon(IconName::Close).accessibility_label(tr("close"))
             .on_click(cx.listener(|this, _, _, cx| { (this.mission.selected, this.mission.detail, this.mission.changes) = (None, None, None); cx.notify(); }));
         let panel = div().id("mission-detail").w(px(480.)).flex_shrink_0().h_full().overflow_y_scroll().border_l_1().border_color(theme::border())
@@ -730,23 +730,22 @@ impl Hangar {
             Some(Ok(view)) => view,
         };
         let ticket = &view.detail.ticket;
-        let link = self.ticket_session(ticket);
-        let item = self.mission_item(id);
-        let stages = self.mission_board().map(|b| b.work.stages.clone()).unwrap_or_default();
-        let (lane, source) = self.lane(ticket);
+        let tv = self.ticket_view(ticket);
+        let item = tv.item;
+        let stages = self.mission_board().map_or(&[][..], |b| b.work.stages.as_slice());
         let meta = [Some(ticket.status.name.clone()), ticket.assignee.as_ref().map(|a| a.name.clone()),
             ticket.updated_at.as_deref().and_then(ago)].into_iter().flatten().collect::<Vec<_>>().join(" · ");
         let url = ticket.url.clone();
         let busy = self.mission.busy;
 
         let mut actions = div().flex().flex_wrap().gap(px(8.));
-        match link {
-            Some((name, Some(_), linked)) => {
-                let open = name.to_owned();
+        match &tv.linked {
+            Some(Linked { name, session: Some(_), stored }) => {
+                let open = (*name).to_owned();
                 actions = actions.child(Button::new("mission-open-session").primary().small().icon(IconName::MessageSquare).label(tr("mission_open_session"))
                     .on_click(cx.listener(move |this, _, window, cx| this.open_linked(open.clone(), window, cx))));
-                if !linked {
-                    let adopt = name.to_owned();
+                if !stored {
+                    let adopt = (*name).to_owned();
                     actions = actions.child(Button::new("mission-adopt").outline().small().icon(IconName::Link).label(tr("mission_adopt"))
                         .disabled(busy).on_click(cx.listener(move |this, _, window, cx| this.adopt_session(adopt.clone(), window, cx))));
                 }
@@ -760,7 +759,7 @@ impl Hangar {
             .on_click(move |_, window, cx| super::links::open_link(&url, true, window, cx)));
         if item.is_some() {
             let weak = cx.entity().downgrade();
-            let menu_stages = stages.clone();
+            let menu_stages = stages.to_vec();
             actions = actions.child(Button::new("mission-move").ghost().small().label(tr("mission_move")).icon(IconName::ChevronDown).disabled(busy)
                 .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _, _| {
                     let pick = |body: Value| {
@@ -781,12 +780,12 @@ impl Hangar {
                 .on_click(cx.listener(|this, _, window, cx| this.forget_ticket(window, cx))));
         }
 
-        let stage_name = match lane {
-            Lane::Stage(index) => stages.get(index).map(|s| s.name.clone()).unwrap_or_default(),
-            Lane::Done => tr("mission_done"),
-            Lane::Inbox => tr("mission_inbox"),
+        let stage_name = match (tv.lane, tv.stage) {
+            (_, Some(stage)) => stage.name.clone(),
+            (Lane::Done, _) => tr("mission_done"),
+            _ => tr("mission_inbox"),
         };
-        let source_text = match source {
+        let source_text = match tv.source {
             Source::Reported => tr("mission_source_reported"),
             Source::Status => tr("mission_source_status"),
             Source::Plan => tr("mission_source_plan"),
@@ -797,7 +796,10 @@ impl Hangar {
             .child(div().font_weight(FontWeight::SEMIBOLD).child(stage_name))
             .when(!source_text.is_empty(), |el| el.child(div().text_color(theme::faint()).child(format!("· {source_text}"))));
 
-        let gate = self.awaiting_owner(ticket).filter(|_| item.is_some()).map(|stage| {
+        // A aprovação e o pedido de ajustes levam a etapa que a tela mostra: deduzida, o servidor ainda não a tem.
+        let shown = tv.stage.map(|stage| stage.id.clone());
+        let gate = tv.waiting.filter(|_| item.is_some()).map(|stage| {
+            let stage = &stage.name;
             let mut block = div().p(px(12.)).rounded(px(10.)).border_1().border_color(theme::warning().alpha(0.5)).flex().flex_col().gap(px(8.))
                 .child(div().flex().items_center().gap(px(6.)).text_color(theme::warning())
                     .child(chrome::small_icon(IconName::ShieldCheck, 14., theme::warning()))
@@ -808,14 +810,14 @@ impl Hangar {
                     block = block.child(Textarea::new(&input).aria_label(tr("mission_changes")))
                         .child(div().flex().gap(px(8.))
                             .child(Button::new("mission-changes-send").primary().small().label(tr("mission_changes_send")).disabled(busy)
-                                .on_click(cx.listener(|this, _, window, cx| this.send_changes(window, cx))))
-                            .child(Button::new("mission-changes-cancel").ghost().small().label(tr("mission_cancel"))
+                                .on_click(cx.listener({ let shown = shown.clone(); move |this, _, window, cx| this.send_changes(shown.clone(), window, cx) })))
+                            .child(Button::new("mission-changes-cancel").ghost().small().label(tr("cancel"))
                                 .on_click(cx.listener(|this, _, _, cx| { this.mission.changes = None; cx.notify(); }))));
                 }
                 None => {
                     block = block.child(div().flex().gap(px(8.))
                         .child(Button::new("mission-approve").primary().small().icon(IconName::Check).label(tr("mission_approve")).loading(busy).disabled(busy)
-                            .on_click(cx.listener(|this, _, window, cx| this.mission_change(json!({"action": "approve"}), window, cx))))
+                            .on_click(cx.listener({ let shown = shown.clone(); move |this, _, window, cx| this.mission_change(json!({"action": "approve", "stage": shown}), window, cx) })))
                         .child(Button::new("mission-changes").outline().small().label(tr("mission_changes")).disabled(busy)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 let input = cx.new(|cx| TextareaState::new(window, cx).auto_grow(2, 6).placeholder(tr("mission_changes_placeholder")));
@@ -828,16 +830,16 @@ impl Hangar {
             block
         });
 
-        let session = link.map(|(name, session, linked)| match session {
+        let session = tv.linked.as_ref().map(|&Linked { name, session, stored }| match session {
             Some(session) => div().p(px(10.)).rounded(px(10.)).bg(theme::inset()).flex().flex_col().gap(px(4.))
                 .child(div().text_size(px(12.)).text_color(theme::muted())
-                    .child(tr(if linked { "mission_session" } else { "mission_session_detected" }).replace("{name}", name)))
+                    .child(tr(if stored { "mission_session" } else { "mission_session_detected" }).replace("{name}", name)))
                 .child(session_line(session)),
             None => note_box(tr("mission_session_gone").replace("{name}", name), theme::muted()),
         });
 
         let evidence = self.render_evidence(item, cx);
-        let history = item.map(|item| render_history(item, &stages)).filter(|_| item.is_some_and(|i| !i.history.is_empty()));
+        let history = item.filter(|i| !i.history.is_empty()).map(|i| render_history(i, stages));
         let description = if view.detail.description_markdown.trim().is_empty() {
             div().text_color(theme::faint()).child(tr("mission_no_description")).into_any_element()
         } else {
@@ -860,7 +862,7 @@ impl Hangar {
     }
 
     fn render_evidence(&self, item: Option<&Item>, cx: &mut Context<Self>) -> AnyElement {
-        let list = item.map(|item| item.evidence.clone()).unwrap_or_default();
+        let list = item.map_or(&[][..], |item| item.evidence.as_slice());
         let head = div().flex().items_center().gap(px(8.))
             .child(div().font_weight(FontWeight::SEMIBOLD).child(tr("mission_evidence")))
             .child(div().text_size(px(12.)).text_color(theme::faint()).child(list.len().to_string()))
@@ -874,7 +876,7 @@ impl Hangar {
         if list.is_empty() {
             return section.child(div().text_size(px(12.5)).text_color(theme::faint()).child(tr("mission_evidence_empty"))).into_any_element();
         }
-        let tiles = list.into_iter().rev().map(|evidence| {
+        let tiles = list.iter().rev().map(|evidence| {
             let (id, name) = (evidence.id.clone(), evidence.name.clone());
             let thumb = self.mission.thumbs.get(&evidence.id).cloned().flatten();
             let icon = if evidence.mime.starts_with("video/") { IconName::Video } else if evidence.mime.starts_with("image/") { IconName::Image } else { IconName::File };
@@ -903,11 +905,12 @@ impl Hangar {
 fn render_history(item: &Item, stages: &[Stage]) -> Div {
     let name = |id: &str| stages.iter().find(|s| s.id == id).map_or_else(|| id.to_owned(), |s| s.name.clone());
     let rows = item.history.iter().rev().take(30).map(|event| {
+        let stage = event.stage.as_deref().map(name).unwrap_or_default();
         let what = match event.kind.as_str() {
             "linked" => tr("mission_event_linked").replace("{nota}", event.note.as_deref().unwrap_or_default()),
-            "stage" => tr("mission_event_stage").replace("{etapa}", &event.stage.as_deref().map(name).unwrap_or_default()),
-            "approved" => tr("mission_event_approved").replace("{etapa}", &event.stage.as_deref().map(name).unwrap_or_default()),
-            "changes" => tr("mission_event_changes").replace("{etapa}", &event.stage.as_deref().map(name).unwrap_or_default()),
+            "stage" => tr("mission_event_stage").replace("{etapa}", &stage),
+            "approved" => tr("mission_event_approved").replace("{etapa}", &stage),
+            "changes" => tr("mission_event_changes").replace("{etapa}", &stage),
             "evidence" => tr("mission_event_evidence").replace("{nota}", event.note.as_deref().unwrap_or_default()),
             "delivered" => tr("mission_event_delivered"),
             _ => tr("mission_event_note"),

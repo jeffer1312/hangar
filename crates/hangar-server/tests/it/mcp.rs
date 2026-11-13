@@ -606,6 +606,12 @@ async fn mission_reads_and_reports_as_the_linked_caller() {
     let linked = client().put(format!("http://{}/api/mission/items/help/PM-7", s.addr)).bearer_auth(OWNER)
         .json(&json!({"key": "PM-7", "title": "Tela", "url": "https://help.invalid/pm/PM-7", "session": "beta"})).send().await.unwrap();
     assert_eq!(linked.status(), 200);
+    // O aviso do vínculo entra pela rota de entrada da sessão, numa tarefa à parte.
+    for _ in 0..100 {
+        if s.python.hits_to("/api/sessions/beta/input") > 0 { break; }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(s.python.hits_to("/api/sessions/beta/input"), 1, "a sessão ligada recebe o aviso da tool");
     let read = mcp.call("mission", json!({})).await;
     assert!(!failed(&read), "{read}");
     assert_eq!(read["structuredContent"]["item"]["key"], "PM-7");
