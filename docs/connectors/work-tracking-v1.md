@@ -42,10 +42,11 @@ quando não há). Comentários, histórico e anexos não entram.
 
 ## Respostas HTTP
 
-O host acrescenta `fetched_at` (RFC 3339, relógio do servidor) à lista e ao detalhe.
+O host acrescenta `fetched_at` (RFC 3339, relógio do servidor) à lista e ao detalhe, e ao detalhe
+também `start_prompt`, quando o manifesto o declara. Os dois são do host, não do conector.
 
 ## Fora desta versão
 
-Atualização é uma nova leitura: não há poller, eventos, ações, transições nem início de sessão a
-partir do ticket. O status do ticket é do fornecedor; atividade do agente e etapas do plano são fatos
+Atualização é uma nova leitura: não há poller, eventos, ações nem transições. Iniciar uma sessão a
+partir do ticket é do Hangar (o vínculo fica no catálogo do servidor), não do conector. O status do ticket é do fornecedor; atividade do agente e etapas do plano são fatos
 do Hangar, separados. Ampliação futura entra como capacidade nova e explícita no manifesto.
