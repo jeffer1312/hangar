@@ -226,14 +226,19 @@ test("o espaço que lança ainda tenta restaurar", async () => {
   expect(c.box.text).toBe("ls");
 });
 
-test("com terminal: o `/pull` declara stop_task, chama o TaskStop com o id e confirma ao Hangar", {}, async ($, on) => {
+test("com terminal: o `/pull` declara stop_task, chama o TaskStop com o id e registra o resultado no log", {}, async ($, on) => {
   const relogio = mock.clock(on, { now: 1_000_000 });
   const env: Record<string, string> = {
     HANGAR_PLUGIN_URL: "http://127.0.0.1:1/api/plugin", HANGAR_PLUGIN_TOKEN: "tok", CP_SESSION_NAME: "sessao-h",
   };
   const posts: { path: string; body: Record<string, unknown> }[] = [];
   const paradas: unknown[] = [];
+  const logs: string[] = [];
   const respostas = ['{"text":null,"stop_task":{"task_id":"bserqfwvd"}}'];
+  on("ui.log", ($, e) => {
+    logs.push(e.text);
+    return { value: undefined } as never;
+  });
   on("env.get", ($, e) => ({ value: env[e.name] }));
   on("session.start", ($, e) => ({ cwd: e.cwd }));
   on("session.cwd", () => ({ value: "/tmp" }));
@@ -256,7 +261,6 @@ test("com terminal: o `/pull` declara stop_task, chama o TaskStop com o id e con
 
   expect(posts.find((p) => p.path === "pull")?.body.modos).toContain("stop_task");
   expect(paradas).toEqual([expect.objectContaining({ tool: "TaskStop", task_id: "bserqfwvd" })]);
-  expect(posts.filter((p) => p.path === "task-stopped").map((p) => p.body)).toEqual([
-    { sessao: "sessao-h", token: "tok", taskId: "bserqfwvd", isStopped: true },
-  ]);
+  expect(posts.map((p) => p.path)).not.toContain("task-stopped");
+  expect(logs).toContain("hangar: TaskStop aceito para bserqfwvd");
 });

@@ -1107,7 +1107,7 @@ parou: o `stop_task` 5 s depois do `task_started` trouxe os dois eventos na hora
 isso o ■ vale para subagente em primeiro e em segundo plano.
 
 Com terminal, o pedido vai pelo `/pull` do plugin no modo `stop_task` (como o `agent_message`): o plugin
-chama `TaskStop` e informa o resultado em `/api/plugin/task-stopped`, que só vai para o log. Plugin que não
+chama `TaskStop` e registra o resultado no próprio log de depuração. Plugin que não
 declarou o modo recebe 409 `erro_parar_plugin_antigo`; sem plugin vivo, 409 `erro_parar_sem_plugin`.
 Codex segue no `codex/terminate`; Codex e os outros provedores recebem 409 `erro_parar_so_claude` nesta
 rota, respondido pelo Rust, sem passar pelo Python.

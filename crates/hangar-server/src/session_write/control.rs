@@ -496,7 +496,7 @@ async fn stop_via_plugin(ctx: &Ctx, task_id: &str) -> Answer {
 
 fn stop_pending() -> Answer { (StatusCode::ACCEPTED, json!({"pending": true})) }
 
-pub fn stop_headless_answer(sent: &Result<RuntimeReply, RuntimeError>) -> Answer {
+fn stop_headless_answer(sent: &Result<RuntimeReply, RuntimeError>) -> Answer {
     match sent {
         Ok(reply) if reply.disposition == Disposition::Accepted => stop_pending(),
         Ok(_) => runtime_failed(&RuntimeError::new("stop_task_unconfirmed", MSG_CONTROL_UNCONFIRMED)),

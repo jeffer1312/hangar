@@ -166,26 +166,17 @@ export async function deliverAgentMessage($: Pick<EngineInterface, "session" | "
 }
 
 /** O `TaskStop` do próprio Claude Code, pedido pelo ■ do app. O ok dele não prova a parada: quem prova é o
- *  estado da tarefa que o app já acompanha; a confirmação só registra no Hangar o que o TaskStop disse. */
-export async function stopTask($: Pick<EngineInterface, "tool" | "http" | "ui">, ponte: Bridge, taskId: string): Promise<void> {
-  let isStopped = false;
+ *  estado da tarefa que o app já acompanha; o que o TaskStop disse só vai ao log. */
+export async function stopTask($: Pick<EngineInterface, "tool" | "ui">, taskId: string): Promise<void> {
   let reason: string | undefined;
   try {
     const r = await $.tool.call({ tool: "TaskStop", task_id: taskId });
-    isStopped = r.deny === undefined && !r.isError;
-    if (!isStopped) reason = r.deny === undefined ? "o TaskStop respondeu com erro" : String(r.deny);
+    if (r.deny !== undefined) reason = String(r.deny);
+    else if (r.isError) reason = "o TaskStop respondeu com erro";
   } catch (err) {
     reason = String(err);
   }
-  try {
-    await $.http.fetch(`${ponte.url}/task-stopped`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ sessao: ponte.sessao, token: ponte.token, taskId, isStopped, ...(reason === undefined ? {} : { reason }) }),
-    });
-  } catch (err) {
-    $.ui.log(`hangar: confirmação da parada de ${taskId} não chegou: ${String(err)}`, { to: "debug" });
-  }
+  $.ui.log(reason === undefined ? `hangar: TaskStop aceito para ${taskId}` : `hangar: TaskStop recusado para ${taskId}: ${reason}`, { to: "debug" });
 }
 
 /** `discovered`: a ponte veio do `whoami`, e não do ambiente do lançamento. */
@@ -217,7 +208,7 @@ async function pull($: EngineInterface, ponte: Bridge, discovered = false) {
       if (agent_message) {
         await deliverAgentMessage($, ponte, agent_message);
       } else if (stop_task) {
-        await stopTask($, ponte, stop_task.task_id);
+        await stopTask($, stop_task.task_id);
       } else if (modo === "focus") {
         let ok = false;
         try {
