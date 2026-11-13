@@ -356,6 +356,39 @@ mod tests {
         assert!(home.paths.parked_file().is_file());
     }
 
+    /// Tirada por fora do Hangar (`claude mcp remove`, sem guardada) fica fora; o PUT de ligar religa.
+    #[test]
+    fn removed_outside_hangar_stays_out_until_the_screen_turns_it_on() {
+        let home = Home::new();
+        let target = home.target("a");
+        assert_eq!(home.run(true).unwrap(), Registered::Written);
+        assert!(home.paths.registered_marker().is_file());
+        std::fs::write(home.paths.main_file(), br#"{"mcpServers": {}}"#).unwrap();
+        assert_eq!(home.run(true).unwrap(), Registered::Skipped);
+        assert_eq!(std::fs::read(home.paths.main_file()).unwrap(), br#"{"mcpServers": {}}"#);
+        assert!(!home.paths.parked_file().exists());
+
+        let body: crate::SaveRequest = serde_json::from_value(json!({"enabled": true, "agent_config": target})).unwrap();
+        crate::save(&home.paths, &crate::Facts::default(), &crate::Aux::default(), &body, || Ok(jev())).unwrap();
+        assert_eq!(home.main_entry().unwrap()["command"], json!(home.binary()));
+        assert!(home.paths.registered_marker().is_file());
+        assert_eq!(home.run(false).unwrap(), Registered::Unchanged);
+    }
+
+    /// Máquina com a entrada ativa de antes da marca: a passada só grava a marca.
+    #[test]
+    fn an_active_entry_without_the_marker_only_gets_the_marker() {
+        let home = Home::new();
+        let entry = json!({"command": home.binary(), "args": [], "env": {"HCC_AGENT_CONFIG": "/alvos/d-agent.json"}});
+        let file = json!({"mcpServers": {NAME: entry.clone()}}).to_string();
+        std::fs::write(home.paths.main_file(), &file).unwrap();
+        std::fs::write(home.dir.path().join("acc/.claude.json"), &file).unwrap();
+        assert_eq!(home.run(false).unwrap(), Registered::Unchanged);
+        assert!(home.paths.registered_marker().is_file());
+        assert_eq!(std::fs::read_to_string(home.paths.main_file()).unwrap(), file);
+        assert_eq!(std::fs::read_to_string(home.dir.path().join("acc/.claude.json")).unwrap(), file);
+    }
+
     /// Entrada que já roda o binário do pacote fica intocada: `args`, campo extra e o alvo próprio de
     /// cada conta. Conta aberta sem a entrada recebe a do principal como está.
     #[test]

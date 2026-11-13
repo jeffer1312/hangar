@@ -68,7 +68,21 @@ pub fn write_entry(
         });
         written.note(&file.path, wrote)?;
     }
-    Ok(())
+    // Religar pela tela também é o Hangar ligando: a marca fica.
+    written.note(&paths.registered_marker(), mark(paths))
+}
+
+/// A marca de que o Hangar já ligou o MCP, gravada sob a trava se faltar; diz se gravou.
+fn mark(paths: &Paths) -> Result<bool, Error> {
+    let marker = paths.registered_marker();
+    if marker.exists() {
+        return Ok(false);
+    }
+    if let Some(parent) = marker.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| Error::at(parent, &e))?;
+    }
+    std::fs::write(&marker, b"").map_err(|e| Error::at(&marker, &e))?;
+    Ok(true)
 }
 
 /// O env que ligar grava: alvo padrão, pasta dos alvos e Jev trocados; o resto de `previous` fica, menos
@@ -87,9 +101,11 @@ fn managed_env(paths: &Paths, agent_config: &str, previous: Map<String, Value>, 
 }
 
 /// O registro sozinho, decidido inteiro sob a trava: um desligar que chega antes nunca é desfeito.
-/// Principal sem a entrada: registra só sem a guardada (desligado à mão) e com alvo (`target`) ou
-/// Hyprland. Entrada que já roda o binário do pacote fica intocada; com outro programa vira o binário,
-/// com o env dela. Conta aberta sem a entrada recebe a do principal. `None` = não registra; senão, se gravou.
+/// Principal sem a entrada: registra só sem a guardada e sem a marca (com qualquer uma das duas ela foi
+/// desligada ou tirada à mão) e com alvo (`target`) ou Hyprland. Entrada que já roda o binário do pacote
+/// fica intocada; com outro programa vira o binário, com o env dela. Conta aberta sem a entrada recebe a
+/// do principal. Com a entrada no principal, a marca é gravada se faltar. `None` = não registra; senão,
+/// se gravou alguma entrada.
 pub(crate) fn register_entry(
     paths: &Paths,
     target: Option<String>,
@@ -102,7 +118,10 @@ pub(crate) fn register_entry(
         checked_servers(&file.path, &file.data)?;
     }
     let active = files.first().and_then(|file| file.entry.clone());
-    if active.is_none() && (crate::files::parked_entry(paths)?.is_some() || (target.is_none() && !hyprland())) {
+    let off = || -> Result<bool, Error> {
+        Ok(crate::files::parked_entry(paths)?.is_some() || paths.registered_marker().exists())
+    };
+    if active.is_none() && (off()? || (target.is_none() && !hyprland())) {
         return Ok(None);
     }
     let binary = paths.binary().to_string_lossy().into_owned();
@@ -110,6 +129,8 @@ pub(crate) fn register_entry(
     let main = paths.main_file();
     let opened = |file: &crate::FileEntry| file.path == main || !file.data.is_empty();
     if files.iter().filter(|file| opened(*file)).all(|file| file.entry.as_ref().is_some_and(|entry| package(entry))) {
+        // Entrada ativa de antes da marca (ligada à mão ou por versão antiga): só a marca entra.
+        mark(paths)?;
         return Ok(Some(false));
     }
     let jev = jev()?;
@@ -150,7 +171,10 @@ pub(crate) fn register_entry(
         });
         written.note(&file.path, wrote)?;
     }
-    Ok(Some(!written.0.is_empty()))
+    let wrote = !written.0.is_empty();
+    // Só depois das entradas: a marca sem a entrada leria como tirada à mão.
+    written.note(&paths.registered_marker(), mark(paths))?;
+    Ok(Some(wrote))
 }
 
 /// Desliga: guarda a entrada ativa (0600, a marca de "desligado à mão") e tira a chave de todo arquivo que a tem.

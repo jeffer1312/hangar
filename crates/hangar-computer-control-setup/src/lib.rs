@@ -100,6 +100,10 @@ impl Paths {
     pub fn install_json(&self) -> PathBuf {
         self.install_dir().join("install.json")
     }
+    /// Marca de que o Hangar já ligou o MCP no principal: sem a entrada lá, ela foi tirada à mão.
+    pub fn registered_marker(&self) -> PathBuf {
+        self.install_dir().join("registered")
+    }
     /// A última instalação automática que falhou; some quando uma dá certo.
     pub fn install_error_file(&self) -> PathBuf {
         self.install_dir().join("install-error.json")
