@@ -5,6 +5,7 @@ mod customizations;
 mod folder_git;
 mod prewarm;
 mod resume;
+mod scheduled_launch;
 #[cfg(test)]
 mod default_tests;
 
@@ -490,6 +491,10 @@ pub(in crate::app) struct NewSession {
     purpose: SessionDialogPurpose,
     transfer_blocked: bool,
     compact: bool,
+    scheduled: bool,
+    scheduled_template: Option<Value>,
+    scheduled_original: Option<Value>,
+    scheduled_changed: HashSet<&'static str>,
     menu: Rc<std::cell::Cell<Option<Menu>>>,
     /// A busca dos menus de lista (máquina, modelo, conta, branch); a pasta usa a `query` da lista de pastas.
     menu_query: Entity<InputState>,
@@ -706,7 +711,7 @@ impl NewSession {
         };
         let prewarm = prewarm::Reserve::new(link.runtime.clone());
         let mut dialog = Self {
-            link, purpose: SessionDialogPurpose::Create, transfer_blocked: false, compact: false, menu: Default::default(), menu_query, servers: Remote::default(),
+            link, purpose: SessionDialogPurpose::Create, transfer_blocked: false, compact: false, scheduled: false, scheduled_template: None, scheduled_original: None, scheduled_changed: HashSet::new(), menu: Default::default(), menu_query, servers: Remote::default(),
             roots: Remote::default(), root: None, dir: String::new(), scan: Remote::default(), folders: Vec::new(),
             folder_active: None, folder_scroll: UniformListScrollHandle::new(), root_scans: Vec::new(), search_all, search_error, query, picked: None, picked_query: String::new(), picked_dir: String::new(), enter_repeat: false, create_when_ready: false,
             checkout: Remote::default(), branch: String::new(), worktrees: Remote::default(), existing: None, picking: false, agents_open: false, base_open: false,
@@ -1001,7 +1006,8 @@ impl NewSession {
     fn load_codex(&mut self, cx: &mut Context<Self>) {
         // O número continua do anterior: resposta da ida passada ao Codex não passa por desta.
         let seq = self.codex.start();
-        if !self.is_transfer() { self.codex_account.clear(); }
+        // A tarefa agendada abre na conta que ela usa: a resposta seleciona essa, não a padrão.
+        if !self.is_transfer() && !self.scheduled { self.codex_account.clear(); }
         self.codex_pick = None;
         self.request(cx, move |api, send| Box::pin(async move { send(CreateReply::Codex(seq, api.server_read(&["codex-contas"], &[], 30).await)).await }));
     }
@@ -1053,6 +1059,7 @@ impl NewSession {
     /// Escolher a pasta lê as sessões: o nome sugerido não pode repetir, e a pasta com sessão ganha o aviso.
     fn pick(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
         if self.creating { return; }
+        self.scheduled_touch(&["cwd"]);
         // A escolhida vira a realçada: um realce velho de antes da escolha não rouba o Enter seguinte.
         (self.folder_active, self.picked, self.error, self.same_folder) = (Some(path.clone()), Some(path), None, false);
         (self.picked_query, self.picked_dir, self.create_when_ready) = (self.query.read(cx).value().to_string(), self.dir.clone(), false);
@@ -1099,6 +1106,11 @@ impl NewSession {
     }
 
     /// Trocar de provider preserva o modo escolhido e relê as opções e permissões dele.
+    fn choose_provider(&mut self, provider: &'static str, window: &mut Window, cx: &mut Context<Self>) {
+        if provider != self.provider { self.scheduled_touch(&scheduled_launch::provider_fields()); }
+        self.set_provider(provider, window, cx);
+    }
+
     fn set_provider(&mut self, provider: &'static str, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_transfer() || self.creating { return; }
         self.provider_touched = true;
@@ -1119,6 +1131,7 @@ impl NewSession {
 
     fn set_headless(&mut self, headless: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.headless_saving || self.creating || (self.jev.loading && self.headless_owner.is_none()) { return; }
+        self.scheduled_touch(&["headless"]);
         self.headless = headless;
         self.headless_touched = true;
         self.build_permission_pick(window, cx);
@@ -1228,15 +1241,17 @@ impl NewSession {
         };
         self.root = Some(root.clone());
         self.scan_dir(root.path, cx);
+        let location = self.scheduled.then(|| (self.new_branch, self.base.clone()));
         self.pick(folder, window, cx);
+        if let Some((worktree, base)) = location { self.new_branch = worktree; self.base = base; }
         self.existing = existing;
         cx.notify();
     }
 
     pub(super) fn can_create(&self, cx: &App) -> bool {
-        !self.is_transfer() && self.defaults_ready && !self.default_saving && !self.customizations.is_open() && !self.creating && !self.headless_saving && !self.jev.loading && self.picked.is_some() && !self.sessions.loading && (self.compact || !self.name.read(cx).value().trim().is_empty())
+        !self.is_transfer() && self.defaults_ready && !self.default_saving && !self.customizations.is_open() && !self.creating && !self.headless_saving && !self.jev.loading && self.picked.is_some() && !self.sessions.loading && (self.scheduled || self.compact || !self.name.read(cx).value().trim().is_empty())
             && self.provider_ready() == Some(true) && self.codex_ready() && self.engine_ready() && !(self.provider == "codex" && self.context_busy)
-            && !self.checkout.loading && !self.typed_branch_taken(cx)
+            && !self.checkout.loading && (self.scheduled || !self.typed_branch_taken(cx))
             && (!self.compact || ((self.provider != "claude" || (!self.configs.loading && self.configs.ok().is_some_and(|list| !list.is_empty())))
                 && !self.models.loading && self.models.ok().is_some()))
     }
@@ -1282,8 +1297,34 @@ impl NewSession {
         body
     }
 
+    pub(super) fn scheduled_touch(&mut self, fields: &[&'static str]) {
+        if self.scheduled {
+            self.scheduled_changed.extend(fields.iter().copied());
+            if fields.iter().any(|field| matches!(*field, "provider" | "model" | "effort" | "config_dir" | "codex_account" | "engine" | "engine_account" | "subagent_model" | "permission_mode" | "service_tier")) {
+                self.scheduled_template = None;
+            }
+        }
+    }
+
     pub(super) fn create(&mut self, first: Option<(u64, String, Vec<FirstFile>)>, cx: &mut Context<Self>) {
         if !self.can_create(cx) || self.compact != first.is_some() { return; }
+        if self.scheduled {
+            let Some(cwd) = self.picked.clone() else { return };
+            let cwd = self.existing.clone().filter(|_| !self.new_branch).unwrap_or(cwd);
+            let mut changed = self.scheduled_changed.clone();
+            if self.omp.read(cx).value().to_string() != self.scheduled_original.as_ref().and_then(|value| value["omp_profile"].as_str()).unwrap_or_default() { changed.insert("omp_profile"); }
+            if self.scheduled_original.as_ref().and_then(|value| value["cwd"].as_str()) != Some(cwd.as_str()) { changed.insert("cwd"); }
+            let launch = scheduled_launch::merge(self.scheduled_original.as_ref(), self.open_body("", &cwd, "", cx), &changed);
+            let mut target = json!({"kind":"new", "launch":launch, "worktree":self.new_branch});
+            let base = self.chosen_base();
+            if self.new_branch && !base.is_empty() { target["base"] = json!(base); }
+            self.creating = true;
+            let tx = self.link.tx.clone(); let connection = self.link.connection;
+            self.link.runtime.spawn(async move {
+                let _ = tx.send(Envelope { connection, selection: None, payload: Payload::Scheduled(super::scheduled::Reply::Launch(target)) }).await;
+            });
+            return;
+        }
         let Some(cwd) = self.picked.clone() else { return };
         // Worktree que já existe: a sessão nasce dentro dela, sem pedir worktree nova.
         let cwd = self.existing.clone().filter(|_| !self.new_branch).unwrap_or(cwd);
@@ -1495,7 +1536,8 @@ impl NewSession {
                 let list = result.map_err(|e| Hangar::fetch_failure(&e))
                     .and_then(|v| serde_json::from_value::<Vec<ConfigDir>>(v).map_err(|_| tr("invalid_response")));
                 if !self.configs.finish(seq, list) { return None; }
-                self.config = self.fallback_config();
+                self.config = self.config.clone().filter(|path| self.scheduled && self.configs.ok().is_some_and(|list| list.iter().any(|c| &c.path == path)))
+                    .or_else(|| self.fallback_config());
                 self.leave_exhausted_account();
                 self.build_config_pick(window, cx);
                 // Lista que falhou também pede o catálogo: sem conta, o backend usa a padrão.
@@ -1524,11 +1566,12 @@ impl NewSession {
                     .and_then(|v| serde_json::from_value::<Vec<CodexAccount>>(v).map_err(|_| tr("invalid_response")));
                 if !self.codex.finish(seq, list) { return None; }
                 let list = self.codex.ok().cloned().unwrap_or_default();
-                let at = choose_codex_account(&list, self.is_transfer().then_some(self.codex_account.as_str()));
+                let at = choose_codex_account(&list, (self.is_transfer() || (self.scheduled && !self.codex_account.is_empty())).then_some(self.codex_account.as_str()));
                 if !self.is_transfer() { self.codex_account = at.map(|n| list[n].id.clone()).unwrap_or_default(); }
                 let choices = list.iter().map(|a| ModelChoice { id: a.id.clone(), label: a.name.clone(), hint: a.hint() }).collect();
                 self.codex_pick = Some(picker(choices, at, false, |this, id, window, cx| {
                     if this.creating { return; }
+                    this.scheduled_touch(&["codex_account", "model", "effort", "service_tier", "subagent_model", "permission_mode"]);
                     this.codex_account = id;
                     this.error = None;
                     this.load_models(window, cx);
@@ -1827,7 +1870,7 @@ impl NewSession {
     /// A ação do botão do formulário, também a do Enter: retoma a conversa escolhida ou cria. Com o nome sugerido ainda
     /// chegando, a criação espera por ele em vez de o Enter se perder.
     fn submit(&mut self, cx: &mut Context<Self>) {
-        if self.target().is_some() { return self.resume(cx); }
+        if !self.scheduled && self.target().is_some() { return self.resume(cx); }
         if self.can_create(cx) { self.create(None, cx); }
         else if self.sessions.loading && !self.creating { self.create_when_ready = true; }
     }
@@ -2005,7 +2048,7 @@ impl NewSession {
                 .child(div().flex_1().min_w_0().child(Input::new(&self.manual).small().font_family(theme::MONO).aria_label(tr("create_path_aria"))))
                 .child(Button::new("create-use-typed").outline().small().label(tr("create_use")).disabled(!manual_ready || self.creating)
                     .on_click(cx.listener(|this, _, window, cx| this.use_typed(window, cx))))));
-        let title = div().text_xl().font_weight(FontWeight::SEMIBOLD).child(tr(if self.baton.is_some() { "create_baton_title" } else { "create_title" }));
+        let title = div().text_xl().font_weight(FontWeight::SEMIBOLD).child(if self.scheduled { tr_shared("scheduled_folder", &[]) } else { tr(if self.baton.is_some() { "create_baton_title" } else { "create_title" }) });
         let column = div().w(relative(0.45)).flex_shrink_0().h_full().min_h_0().pr(px(20.)).border_r_1().border_color(theme::border()).flex().flex_col()
             .gap(px(14.)).child(match &self.baton {
                 Some(b) => div().flex().flex_col().gap(px(4.)).child(title)
@@ -2069,13 +2112,13 @@ impl NewSession {
                     .disabled(!available || busy).accessibility_label(provider_name(p))
                     .child(div().flex().items_center().gap(px(6.)).text_sm().when(on, |el| el.font_weight(FontWeight::MEDIUM))
                         .child(chrome::provider_glyph(p, 16.)).child(provider_name(p)))
-                    .on_click(cx.listener(move |this, _, window, cx| this.set_provider(p, window, cx)))
+                    .on_click(cx.listener(move |this, _, window, cx| this.choose_provider(p, window, cx)))
             }));
         let target = self.target().cloned();
         let fresh = target.is_none();
         let claude = (self.provider == "claude").then(|| self.render_claude_account(cx));
         let codex = (self.provider == "codex").then(|| self.render_codex_account(cx));
-        let modes = (fresh && matches!(self.provider, "claude" | "codex")).then(|| {
+        let modes = (!self.scheduled && fresh && matches!(self.provider, "claude" | "codex")).then(|| {
             let codex = self.provider == "codex";
             let inherited = self.headless_inherited();
             let mode = |id: &'static str, on: bool, title: String, beta: bool, summary: String, headless: bool| {
@@ -2112,7 +2155,7 @@ impl NewSession {
         let field = |title: String, control: AnyElement| div().flex().flex_col().gap(px(6.)).child(label(title)).child(control).into_any_element();
         // Retomar pelo proxy recebe modelo; nome, modo, esforço e permissão continuam fora desse pedido.
         let session = [
-            fresh.then(|| field(tr("create_name"), Input::new(&self.name).disabled(busy).aria_label(tr("create_name")).into_any_element())),
+            (fresh && !self.scheduled).then(|| field(tr("create_name"), Input::new(&self.name).disabled(busy).aria_label(tr("create_name")).into_any_element())),
             (fresh && self.baton.is_none()).then(|| self.render_branch_field(cx)).flatten(),
             Some(div().flex().flex_col().gap(px(6.)).child(label(tr("create_provider"))).child(providers)
                 .when_some(probe_error, |el, error| el.child(muted(tr("create_probe_failed").replace("{erro}", &error))
@@ -2125,7 +2168,7 @@ impl NewSession {
         ];
         let run = [
             modes.map(IntoElement::into_any_element),
-            self.render_resume(cx).map(IntoElement::into_any_element),
+            (!self.scheduled).then(|| self.render_resume(cx)).flatten().map(IntoElement::into_any_element),
             (fresh && self.provider == "omp").then(|| self.render_omp().into_any_element()),
             self.render_baton(cx).map(IntoElement::into_any_element),
         ];
@@ -2133,9 +2176,9 @@ impl NewSession {
             (fresh || self.proxy_accounts().is_some()).then(|| self.render_trio(!fresh)).flatten().map(IntoElement::into_any_element),
             fresh.then(|| self.render_fast_choice(cx)).flatten().map(IntoElement::into_any_element),
             self.render_engine_context(cx).map(IntoElement::into_any_element),
-            fresh.then(|| self.render_default_check(cx)).flatten().map(IntoElement::into_any_element),
+            (fresh && !self.scheduled).then(|| self.render_default_check(cx)).flatten().map(IntoElement::into_any_element),
             (fresh && self.provider == "codex").then(|| self.render_context(cx).into_any_element()),
-            self.render_customizations_row(cx).map(IntoElement::into_any_element),
+            (!self.scheduled).then(|| self.render_customizations_row(cx)).flatten().map(IntoElement::into_any_element),
             self.render_more(cx).map(IntoElement::into_any_element),
         ];
         let groups = [("create_group_session", session.into_iter().flatten().collect()), ("create_group_run", run.into_iter().flatten().collect()),
@@ -2151,7 +2194,7 @@ impl NewSession {
             Some(c) => Button::new("create-resume-submit").primary().large().w_full().label(self.resume_label(c)).loading(busy).disabled(busy || !self.resume_ready())
                 .on_click(cx.listener(|this, _, _, cx| this.submit(cx))),
             None => Button::new("create-submit").primary().large().w_full()
-                .label(tr(if busy { "create_creating" } else if self.baton.is_some() { "create_baton_submit" } else { "create_submit" }))
+                .label(if self.scheduled { tr_shared("scheduled_save", &[]) } else { tr(if busy { "create_creating" } else if self.baton.is_some() { "create_baton_submit" } else { "create_submit" }) })
                 .loading(busy).disabled(!can && !busy).on_click(cx.listener(|this, _, _, cx| this.submit(cx))),
         };
         let footer = div().flex_shrink_0().pt(px(12.)).border_t_1().border_color(theme::border()).flex().flex_col().gap(px(8.))
@@ -2632,8 +2675,8 @@ impl NewSession {
         let Some(Some(checkout)) = self.checkout.ok() else { return div().children(self.render_git_head(cx)).into_any_element() };
         if self.picking { return self.render_existing_menu(query, cx); }
         if self.git_branching() { return self.render_git_branches(cx); }
-        let git_head = self.render_git_head(cx);
-        let git_entry = self.render_git_branch_entry(cx);
+        let git_head = (!self.scheduled).then(|| self.render_git_head(cx)).flatten();
+        let git_entry = (!self.scheduled).then(|| self.render_git_branch_entry(cx)).flatten();
         let current = checkout.current.clone().unwrap_or_else(|| tr("create_checkout_current"));
         // Worktree nova: de uma branch nova (`new_branch`) ou de uma que já existe (`branch`).
         let fresh = self.new_branch || !self.branch.is_empty();
@@ -2651,7 +2694,7 @@ impl NewSession {
                 cx.notify();
             }));
         // O menu fica aberto: de onde parte, o nome e a pasta da worktree nova aparecem logo abaixo.
-        let new = menu_row_with("new-chat-branch-new", fresh, tr_shared("worktree_menu_nova", &[]), String::new(),
+        let new = menu_row_with("new-chat-branch-new", fresh, tr_shared(if self.scheduled { "scheduled_worktree" } else { "worktree_menu_nova" }, &[]), String::new(),
                 below(tr_shared("worktree_menu_nova_dica", &[])))
             .disabled(self.creating)
             .on_click(cx.listener(|this, _, window, cx| {
@@ -2661,7 +2704,7 @@ impl NewSession {
                 // O campo guarda o que foi digitado antes de trocar de opção: vale de novo a mesma regra.
                 let typed = this.new_branch_name.read(cx).value().trim().to_owned();
                 this.apply_typed_branch(typed);
-                this.new_branch_name.update(cx, |input, cx| input.focus(window, cx));
+                if !this.scheduled { this.new_branch_name.update(cx, |input, cx| input.focus(window, cx)); }
                 cx.notify();
             }));
         let summary = match self.worktrees.ok() {
@@ -2750,9 +2793,9 @@ impl NewSession {
                 .on_click(cx.listener(|this, _, _, cx| { this.base_open = !this.base_open; cx.notify(); })))))
             .when(!bases.is_empty(), |el| el.child(Self::menu_list("new-chat-base-list", bases)))
             .children(left_out.map(worktree_warning))
-            .child(line().child(label("worktree_menu_branch"))
-                .child(div().flex_1().min_w_0().child(Input::new(&self.new_branch_name).small().aria_label(tr_shared("worktree_nome_branch", &[])))))
-            .children(notice.map(worktree_warning))
+            .when(!self.scheduled, |el| el.child(line().child(label("worktree_menu_branch"))
+                .child(div().flex_1().min_w_0().child(Input::new(&self.new_branch_name).small().aria_label(tr_shared("worktree_nome_branch", &[]))))))
+            .children(notice.filter(|_| !self.scheduled).map(worktree_warning))
             .children(folder.map(|path| line().child(label("worktree_menu_pasta_destino"))
                 .child(div().flex_1().min_w_0().text_xs().text_color(theme::muted()).whitespace_normal().child(path))))
             .when(checkout.dirty, |el| el.child(div().text_xs().text_color(theme::muted()).whitespace_normal().child(tr("create_checkout_dirty"))))
@@ -2900,6 +2943,50 @@ impl Render for NewSession {
 }
 
 impl Hangar {
+    pub(super) fn open_scheduled_launch(&mut self, api: Api, window: &mut Window, cx: &mut Context<Self>) {
+        let link = Link { api, runtime: self.runtime.clone(), tx: self.tx.clone(), connection: self.connection,
+            servers: Vec::new(), servers_rev: self.servers_rev };
+        let previous = self.scheduled.chooser.as_ref().and_then(WeakEntity::upgrade).map(|editor| editor.read(cx).target.clone());
+        let dialog = cx.new(|cx| {
+            let mut view = NewSession::new(link, None, window, cx);
+            view.scheduled = true;
+            if let Some(target) = previous {
+                let launch = target["launch"].clone();
+                if let Some(provider) = launch["provider"].as_str().and_then(|p| PROVIDERS.iter().copied().find(|known| *known == p)) {
+                    view.provider = provider;
+                    view.provider_touched = true;
+                }
+                view.scheduled_original = launch["cwd"].as_str().filter(|cwd| !cwd.is_empty()).map(|_| launch.clone());
+                view.omp.update(cx, |input, cx| input.set_value(launch["omp_profile"].as_str().unwrap_or_default(), window, cx));
+                view.jev_on = launch["jev"].as_bool().unwrap_or(false);
+                view.config = launch["config_dir"].as_str().map(str::to_owned);
+                view.account_touched = view.config.is_some();
+                view.codex_account = launch["codex_account"].as_str().unwrap_or_default().to_owned();
+                view.engine = launch["engine"].as_str().unwrap_or_default().to_owned();
+                view.engine_account = launch["engine_account"].as_str().unwrap_or_default().to_owned();
+                if let Some(headless) = launch["headless"].as_bool() { view.headless = headless; view.headless_touched = true; }
+                if let Some(folder) = launch["cwd"].as_str() { view.preset = Some((folder.to_owned(), None)); }
+                view.new_branch = target["worktree"].as_bool().unwrap_or(false);
+                view.base = target["base"].as_str().unwrap_or_default().to_owned();
+                view.scheduled_template = launch.is_object().then_some(launch);
+            }
+            view.load(window, cx);
+            view
+        });
+        self.new_session = Some(dialog.clone());
+        let weak = cx.entity().downgrade();
+        let width = (window.viewport_size().width * 0.94).min(px(1320.));
+        window.open_dialog(cx, move |d, _, cx| {
+            let weak = weak.clone();
+            let busy = dialog.read(cx).creating;
+            popup::dialog(d).w(width).margin_top(px(DIALOG_TOP)).title(tr_shared("scheduled_advanced", &[])).keyboard(!busy).close_button(!busy)
+                .child(dialog.clone()).overlay_closable(false).on_ok(enter_to_focused)
+                .on_close(move |_, _, cx| { let _ = weak.update(cx, |this, cx| { this.new_session = None;
+                    if let Some(editor) = this.scheduled.chooser.take() { let _ = editor.update(cx, |editor, cx| { editor.choosing = false; cx.notify(); }); }
+                    cx.notify(); }); })
+        });
+    }
+
     pub(super) fn open_transfer(&mut self, target: Target, source_life: String, source_jsonl: String, account: String,
         window: &mut Window, cx: &mut Context<Self>) {
         if self.new_session.as_ref().is_some_and(|d| d.read(cx).creating) { return; }

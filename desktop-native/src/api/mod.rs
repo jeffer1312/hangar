@@ -331,6 +331,9 @@ impl Api {
     /// O endereço salvo, mesmo quando os pedidos vão pela rede local (`route`).
     pub fn identity(&self) -> String { self.base.as_str().to_owned() }
 
+    /// Mesmo endereço e mesmo token, sem expor o token a quem compara.
+    pub fn same_credential(&self, other: &Api) -> bool { self.base == other.base && self.token == other.token }
+
     pub fn endpoint(&self, session: Option<&str>, action: Option<&str>) -> Url {
         let mut url = self.route();
         let mut parts = url.path_segments_mut().expect("validated HTTP base");
@@ -1120,6 +1123,14 @@ mod tests {
         let python = json!({"detail": {"code": "share_needs_rust_server", "msg": "x"}});
         assert!(matches!(share_refusal(404, &python), Some(ShareFailure::NeedsRust)));
         assert!(matches!(share_refusal(405, &json!({"detail": "Method Not Allowed"})), Some(ShareFailure::NeedsRust)));
+    }
+
+    #[test]
+    fn same_credential_needs_address_and_token() {
+        let api = Api::new("http://127.0.0.1:8765", "fixture-a").unwrap();
+        assert!(api.same_credential(&Api::new("http://127.0.0.1:8765/", " fixture-a ").unwrap()));
+        assert!(!api.same_credential(&Api::new("http://127.0.0.1:8765", "fixture-b").unwrap()));
+        assert!(!api.same_credential(&Api::new("http://127.0.0.2:8765", "fixture-a").unwrap()));
     }
 
     #[test]

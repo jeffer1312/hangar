@@ -6,7 +6,7 @@ const VALID = /^[A-Za-z0-9-]{1,64}$/;
 
 let deviceId: string | null = null;
 
-function newId(): string {
+export function newId(): string {
   const uuid = globalThis.crypto?.randomUUID?.();
   if (uuid) return uuid;
   return Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join('');

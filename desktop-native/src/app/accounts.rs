@@ -15,6 +15,7 @@ use codex::{CodexFlow, CodexReply, ResetOffer, ResetTry};
 use keys::{CookieForm, EngineForm, KeysReply};
 pub(super) use keys::ModelChoice;
 pub(crate) use actions::{login_heading, target_row};
+pub(crate) use codex::idempotency_key;
 use super::settings::{Page, segments, settings_box};
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use gpui_kit::component::menu::DropdownMenu;

@@ -503,7 +503,7 @@ impl RuntimeHandle {
         if self.closed.load(Ordering::Acquire) { return Err(failure("runtime_stopping")); }
         let (response,receive) = oneshot::channel();
         self.sender.send(Message::Command { command,response,from_queue:false,generation:self.generation }).await.map_err(|_|self.gone("runtime_closed"))?;
-        receive.await.map_err(|_|self.gone("runtime_closed"))?
+        receive.await.map_err(|_|self.gone(super::protocol::REPLY_LOST))?
     }
     pub async fn queue(&self,call_id:String,action:Action) -> Result<Value,RuntimeError> {
         let (response,receive) = oneshot::channel();

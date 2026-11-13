@@ -155,9 +155,16 @@ pub fn compact_answer(sent: &Result<RuntimeReply, RuntimeError>) -> Answer {
 
 /// O `/compact` do Codex com terminal é controle do motor (`thread/compact/start`), nunca texto na fila.
 pub(super) async fn compact(target: &crate::runtime::gateway::WriteTarget, text: &str) -> Answer {
-    if text.trim() != "/compact" { return compact_answer(&Err(RuntimeError::new("codex_command", MSG_COMPACT_ARGS))); }
-    compact_answer(&target.handle.command(RuntimeCommand { operation_id: random_hex(16), kind: OperationKind::Compact, payload: json!({}) }).await)
+    compact_answer(&compact_sent(target, text).await)
 }
+
+pub(super) async fn compact_sent(target: &crate::runtime::gateway::WriteTarget, text: &str) -> Result<RuntimeReply, RuntimeError> {
+    if text.trim() != "/compact" { return Err(RuntimeError::new("codex_command", MSG_COMPACT_ARGS)); }
+    target.handle.command(RuntimeCommand { operation_id: random_hex(16), kind: OperationKind::Compact, payload: json!({}) }).await
+}
+
+/// O `/clear` já foi digitado no terminal e a conversa nova não se confirmou: pode ter trocado.
+pub(super) const CLEAR_UNCONFIRMED: &str = "codex_clear_unconfirmed";
 
 /// A conversa nova não pode levar nem descartar uma mensagem que ainda espera na fila.
 pub(super) async fn clear(target: &crate::runtime::gateway::WriteTarget, text: &str, panels: Option<Arc<crate::term::Terms>>) -> Answer {
@@ -165,7 +172,7 @@ pub(super) async fn clear(target: &crate::runtime::gateway::WriteTarget, text: &
     compact_answer(&sent)
 }
 
-async fn clear_conversation(target: &crate::runtime::gateway::WriteTarget, text: &str, panels: Option<Arc<crate::term::Terms>>) -> Result<RuntimeReply, RuntimeError> {
+pub(super) async fn clear_conversation(target: &crate::runtime::gateway::WriteTarget, text: &str, panels: Option<Arc<crate::term::Terms>>) -> Result<RuntimeReply, RuntimeError> {
     let failed = |message:&str|RuntimeError::new("codex_clear", message);
     if text.trim() != "/clear" { return Err(failed("O /clear do Codex não aceita argumentos.")); }
     let handle = match &target.handle {
@@ -185,12 +192,13 @@ async fn clear_conversation(target: &crate::runtime::gateway::WriteTarget, text:
         let driver = crate::runtime::codex_terminal::pane_driver(&target.terminal, cell.pane_serial(), panels);
         crate::permission_control::codex_clear(&driver).await?;
         let until = tokio::time::Instant::now() + Duration::from_secs(10);
+        let unconfirmed = || RuntimeError::new(CLEAR_UNCONFIRMED, "Não foi possível confirmar a conversa nova. Confira a sessão antes de repetir o /clear.");
         loop {
-            let current = handle.view().await?;
+            let current = handle.view().await.map_err(|_| unconfirmed())?;
             if current["thread_id"].as_str().is_some_and(|id|!id.is_empty()) && current["thread_id"] != before["thread_id"] {
                 return Ok(RuntimeReply { operation_id:String::new(), disposition:Disposition::Accepted, payload:json!({}) });
             }
-            if tokio::time::Instant::now() >= until { return Err(failed("Não foi possível confirmar a conversa nova. Confira a sessão antes de repetir o /clear.")); }
+            if tokio::time::Instant::now() >= until { return Err(unconfirmed()); }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }

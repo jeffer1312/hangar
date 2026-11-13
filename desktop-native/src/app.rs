@@ -70,6 +70,7 @@ mod files;
 mod settings;
 mod mention;
 mod server_config;
+mod scheduled;
 mod worktree_settings;
 mod auto_hide;
 mod invite;
@@ -86,6 +87,7 @@ pub(crate) use rename_suggest::{Strip as RenameStrip, rename_strip};
 pub(crate) use vault_requests::{approve_body, approve_title, request_button, request_card, request_command, request_pair};
 pub(crate) use create::{base_button, base_row, quiet_button, worktree_field_label, worktree_warning};
 pub(crate) use connect::device_card;
+pub(crate) use scheduled::{row_frame as scheduled_row_frame, row_text as scheduled_row_text};
 pub(crate) use settings::{setting_row, settings_box};
 pub(crate) use plugins::{plugin_meta, plugin_name, plugin_switch, plugin_update_button, reopen_notice as plugins_reopen_notice,
     row_box as plugin_row_box, text_block as plugin_text_block};
@@ -371,6 +373,7 @@ enum Payload {
     Harness(harness::HarnessReply),
     // Notificações e Anexos: rascunho do servidor e horas silenciosas da conexão atual.
     ServerConfig(server_config::ServerConfigReply),
+    Scheduled(scheduled::Reply),
     WorktreeSettings(worktree_settings::WorktreeSettingsReply),
     Sync(sync::SyncReply),
     Connect(connect::ConnectReply),
@@ -834,6 +837,7 @@ pub struct Hangar {
     session_picker: session_picker::SessionPicker,
     harness: harness::Harnesses,
     server_config: server_config::ServerConfig,
+    scheduled: scheduled::Scheduled,
     worktree_settings: worktree_settings::WorktreeSettings,
     auto_hide: auto_hide::AutoHidePage,
     sync: sync::Sync,
@@ -1172,7 +1176,7 @@ impl Hangar {
             palette_seq: 0, backdrop_seq: 0, backdrop_pending: false, backdrop: None, backdrop_note: None, backdrop_busy: None, grain: crate::media::grain(),
             device: device::Device::new(window, cx), accounts: accounts::Accounts::default(), orchestration: orchestration::Orchestration::default(), orq_history: None, orq_history_serial: 0, home_usage: Default::default(), recents: Default::default(), reopen: None, shortcuts: shortcuts::Shortcuts::default(),
             worktree_settings: worktree_settings::WorktreeSettings::default(), auto_hide: Default::default(),
-            server_config: server_config::ServerConfig::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), connect: connect::Connect::default(), connect_notices: connect::Notices::default(), devices: devices::Devices::default(), shared: shared_config::SharedConfig::default(), machines: machines::Machines::default(),
+            server_config: server_config::ServerConfig::default(), scheduled: scheduled::Scheduled::default(), harness: harness::Harnesses::default(), sync: sync::Sync::default(), connect: connect::Connect::default(), connect_notices: connect::Notices::default(), devices: devices::Devices::default(), shared: shared_config::SharedConfig::default(), machines: machines::Machines::default(),
             costs: Default::default(), worktrees: Default::default(), artifacts: Default::default(), usage_stats: Default::default(), search: Default::default(), topbar: Default::default(), computer: computer::Computer::default(), new_session: None, sidebar, machines_tray,
             terminal: None, terminal_serial: 0,
             system_notifications: SystemNotifications::default(),
@@ -2189,6 +2193,7 @@ impl Hangar {
             Payload::Shortcuts(reply) => { self.receive_shortcuts(reply, window, cx); return; }
             Payload::Harness(reply) => { self.receive_harness(reply, cx); return; }
             Payload::WorktreeSettings(reply) => { self.receive_worktree_settings(reply, window, cx); return; }
+            Payload::Scheduled(reply) => { self.receive_scheduled(reply, window, cx); return; }
             Payload::ServerConfig(reply) => {
                 // A configuração gravada é da ativa: só vale para os avisos quando a conversa aberta é dela.
                 if matches!(&reply, server_config::ServerConfigReply::QuietSaved(..) | server_config::ServerConfigReply::Saved(..))
@@ -7724,7 +7729,8 @@ impl Hangar {
     pub(crate) fn weak(cx: &App) -> Option<WeakEntity<Hangar>> { cx.try_global::<links::Owner>().map(|owner| owner.0.clone()) }
 
     /// "Mostrar no app" do modal de novidades: o balão aponta a peça por cima do tour.
-    pub(crate) fn show_news(&mut self, note: crate::tour::Note, cx: &mut Context<Self>) {
+    pub(crate) fn show_news(&mut self, note: crate::tour::Note, window: &mut Window, cx: &mut Context<Self>) {
+        if note.anchor == crate::tour::anchors::SCHEDULED_TASKS { self.open_settings(settings::Page::Scheduled, window, cx); }
         self.tour.show_news(note);
         cx.notify();
     }

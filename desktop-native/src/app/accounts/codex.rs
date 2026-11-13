@@ -135,7 +135,7 @@ fn imported(p: Preparation) -> Imported {
 }
 
 /// Chave idempotente no formato UUID v4 (o servidor exige UUID). Aleatória o bastante para não repetir entre tentativas.
-fn idempotency_key() -> String {
+pub(crate) fn idempotency_key() -> String {
     use std::hash::{BuildHasher, Hasher};
     let half = |salt: u64| {
         let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();

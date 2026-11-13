@@ -111,7 +111,7 @@ impl NewSession {
     /// O pedido de reserva das escolhas atuais, ou `None` quando elas não admitem reserva (só Claude sem terminal, sem motor e
     /// sem worktree a criar).
     pub(super) fn prewarm_want(&self, cx: &App) -> Option<Want> {
-        if self.provider != "claude" || !self.headless || !self.engine.is_empty() || self.baton.is_some() || self.is_transfer()
+        if self.scheduled || self.provider != "claude" || !self.headless || !self.engine.is_empty() || self.baton.is_some() || self.is_transfer()
             || self.new_branch || !self.branch.is_empty() || self.target().is_some() { return None; }
         let picked = self.picked.clone()?;
         let cwd = self.existing.clone().unwrap_or(picked);
