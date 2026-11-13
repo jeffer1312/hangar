@@ -14,14 +14,14 @@ mod appearance_page;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Page {
     General, Appearance, Sessions, Diary, About, Migration,
-    Servers, Sync, Connect, Devices, SharedConfig, Accounts, Plugins, Vault, Orchestration, Harnesses, Voice, Jev, Windows, Notifications, Shortcuts, Attachments, Worktrees, Advanced,
+    Servers, Sync, Connect, Devices, SharedConfig, Accounts, Plugins, Scheduled, Vault, Orchestration, Harnesses, Voice, Jev, Windows, Notifications, Shortcuts, Attachments, Worktrees, Advanced,
 }
 
 impl Page {
     // Sessões fica no geral: a configuração vale para todas as máquinas, sem seletor.
     const DEVICE: [Page; 4] = [Page::General, Page::Appearance, Page::Sessions, Page::About];
     // O diário é do servidor escolhido no seletor ("O registro de uso de <servidor>"), não do aparelho.
-    const SERVER: [Page; 19] = [Page::Diary, Page::Servers, Page::Sync, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Plugins, Page::Vault, Page::Orchestration, Page::Harnesses,
+    const SERVER: [Page; 20] = [Page::Diary, Page::Servers, Page::Sync, Page::Connect, Page::Devices, Page::SharedConfig, Page::Accounts, Page::Plugins, Page::Scheduled, Page::Vault, Page::Orchestration, Page::Harnesses,
         Page::Voice, Page::Jev, Page::Windows, Page::Notifications, Page::Shortcuts, Page::Attachments, Page::Worktrees, Page::Advanced];
 
     /// As seções da navegação, na ordem dela; a voz abre uma pelo `key`.
@@ -36,7 +36,7 @@ impl Page {
     pub(super) fn key(self) -> &'static str {
         match self {
             Page::General => "general", Page::Appearance => "appearance", Page::Sessions => "sessions", Page::Diary => "diary", Page::About => "about", Page::Migration => "migration",
-            Page::Servers => "servers", Page::Sync => "sync", Page::Connect => "connect", Page::Devices => "devices", Page::SharedConfig => "shared_config", Page::Accounts => "accounts", Page::Plugins => "plugins", Page::Vault => "vault", Page::Orchestration => "orchestration",
+            Page::Servers => "servers", Page::Sync => "sync", Page::Connect => "connect", Page::Devices => "devices", Page::SharedConfig => "shared_config", Page::Accounts => "accounts", Page::Plugins => "plugins", Page::Scheduled => "scheduled", Page::Vault => "vault", Page::Orchestration => "orchestration",
             Page::Harnesses => "harnesses", Page::Voice => "voice", Page::Jev => "jev", Page::Windows => "windows", Page::Notifications => "notifications",
             Page::Shortcuts => "shortcuts", Page::Attachments => "attachments", Page::Worktrees => "worktrees", Page::Advanced => "advanced",
         }
@@ -46,7 +46,7 @@ impl Page {
         match self {
             Page::General => IconName::Globe, Page::Appearance => IconName::Palette, Page::Sessions => IconName::EyeOff, Page::Diary => IconName::FileText,
             Page::About => IconName::Info, Page::Migration => IconName::Activity, Page::Servers => IconName::Server, Page::Sync => IconName::RefreshCw, Page::Connect => IconName::Globe, Page::Devices => IconName::Smartphone, Page::SharedConfig => IconName::Layers,
-            Page::Accounts => IconName::User, Page::Plugins => IconName::Package, Page::Vault => IconName::KeyRound, Page::Orchestration => IconName::Users, Page::Harnesses => IconName::Activity,
+            Page::Accounts => IconName::User, Page::Plugins => IconName::Package, Page::Scheduled => IconName::Clock, Page::Vault => IconName::KeyRound, Page::Orchestration => IconName::Users, Page::Harnesses => IconName::Activity,
             Page::Voice => IconName::Mic, Page::Jev => IconName::Zap, Page::Windows => IconName::Monitor, Page::Notifications => IconName::Bell,
             Page::Shortcuts => IconName::Keyboard, Page::Attachments => IconName::Paperclip, Page::Worktrees => IconName::GitBranch, Page::Advanced => IconName::SlidersHorizontal,
         }
@@ -54,6 +54,7 @@ impl Page {
 
     pub(super) fn title(self) -> String {
         // O nome é o do web: uma frase, um dicionário.
+        if self == Page::Scheduled { return tr_shared("scheduled_title", &[]); }
         if self == Page::Jev { return tr_shared("jev_title", &[]); }
         if self == Page::SharedConfig { return tr_shared("shared_config_title", &[]); }
         if self == Page::Migration { return tr_shared("migration_title", &[]); }
@@ -827,6 +828,7 @@ impl Hangar {
                     .child(chrome::small_icon(page_item.icon(), 16., if on { theme::text() } else { theme::faint() }))
                     .child(div().text_size(px(13.5)).child(page_item.title())))
                 .on_click(cx.listener(move |this, _, window, cx| this.open_settings(page_item, window, cx)))
+                .map(|button| div().when(page_item == Page::Scheduled, |el| popup::anchor(el, crate::tour::anchors::SCHEDULED_TASKS)).child(button))
         };
         let searching = !self.settings_ui.search.read(cx).value().trim().is_empty();
         let group = |label: String| div().px(px(10.)).pt(px(12.)).pb(px(6.)).flex().items_center().gap_2()
@@ -874,6 +876,7 @@ impl Hangar {
             Page::Accounts => self.render_accounts(accounts_wide, window, cx),
             Page::Vault => self.render_vault(window, cx),
             Page::Plugins => self.render_plugins(window, cx),
+            Page::Scheduled => self.render_scheduled(window, cx),
             Page::Orchestration => self.render_orchestration(cx),
             Page::Shortcuts => self.render_shortcuts_page(cx),
             Page::Worktrees => self.render_worktree_settings(window, cx),

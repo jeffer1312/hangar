@@ -6,6 +6,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde::Serialize;
 use serde_json::{Value, json};
+use crate::session_write::limit_switch::{SpentAccounts,SpentMark};
 
 use super::{Account, AccountSource, AgentProvider, OpenError, PermissionMode, SPEC_VERSION, ServiceTier, SessionOpenRequest,
     SessionSpec, Surface, WorktreeSpec};
@@ -64,8 +65,8 @@ pub trait OpenFacts {
     /// Linhas de cota das contas Claude e Codex: do cache, ou depois de uma leitura curta da rede
     /// (`network`, prazo de 5 s; estourado, o que o cache tiver).
     fn quotas(&self, network: bool) -> Vec<Value>;
-    /// `limit-spent.json`: pasta de conta Claude → até quando o limite que ela bateu vale.
-    fn spent_accounts(&self) -> std::collections::BTreeMap<String, f64>;
+    /// `limit-spent.json`: pasta de conta Claude → prazo e momento do limite que ela bateu.
+    fn spent_accounts(&self) -> SpentAccounts;
     /// A abertura seguiu sem saber a cota da conta: vai ao log e ao diário, nunca à tela.
     fn quota_unknown(&self, name: &str, account: &str);
     /// A pasta com `~` expandido, se ela existe.
@@ -471,18 +472,18 @@ struct QuotaAccount {
 enum QuotaCheck { Room, Unknown { current: QuotaAccount, best: Option<QuotaAccount> }, Exhausted { current: QuotaAccount, best: Option<QuotaAccount> } }
 
 /// Uso conhecido: a janela mais cheia da leitura (a guardada de antes do token vencer também vale) e
-/// 100% enquanto o limite que a troca automática gravou não volta.
-fn quota_usage(row: Option<&Value>, spent_until: Option<f64>, now: f64) -> Option<f64> {
+/// 100% enquanto a marca do limite não foi superada por uma leitura posterior com folga.
+fn quota_usage(row: Option<&Value>, spent: Option<&SpentMark>, now: f64) -> Option<f64> {
     let read = row.filter(|row| row["estado"] == "lida" || row["ts"].is_number())
         // Janela que já virou (reset no passado) recomeçou do zero; a leitura guardada ficaria 100% para sempre.
         .and_then(|row| row["janelas"].as_array()?.iter()
             .filter_map(|w| if w["reset_ts"].as_f64().is_some_and(|r| r <= now) { Some(0.) } else { w["pct"].as_f64() })
             .reduce(f64::max));
-    read.into_iter().chain(spent_until.filter(|until| *until > now).map(|_| 100.0)).reduce(f64::max)
+    read.into_iter().chain(spent.and_then(|mark|mark.blocking_until(row,now)).map(|_| 100.0)).reduce(f64::max)
 }
 
 /// A conta atual e as outras do mesmo provedor; `None` = conta que a regra não alcança (Codex sem pasta).
-fn quota_accounts(provider: AgentProvider, current: Option<&str>, rows: &[Value], spent: &std::collections::BTreeMap<String, f64>,
+fn quota_accounts(provider: AgentProvider, current: Option<&str>, rows: &[Value], spent: &SpentAccounts,
                   facts: &dyn OpenFacts) -> Option<(QuotaAccount, Vec<QuotaAccount>)> {
     let now = facts.now();
     let read = |row: Option<&Value>| row.is_some_and(|row| row["estado"] == "lida");
@@ -501,10 +502,10 @@ fn quota_accounts(provider: AgentProvider, current: Option<&str>, rows: &[Value]
             .filter_map(|login| account(&login.id)).collect();
         return Some((account(current)?, others));
     }
-    let spent_until = |path: &str| spent.iter().find(|(dir, _)| same_dir(dir, path)).map(|(_, until)| *until);
+    let spent_mark = |path: &str| spent.iter().find(|(dir, _)| same_dir(dir, path)).map(|(_, mark)| mark);
     let account = |row: &Value| -> Option<QuotaAccount> {
         let path = row["id"].as_str()?.strip_prefix("claude:")?;
-        Some(QuotaAccount { id: row["id"].as_str()?.to_owned(), label: label(Some(row), path), usage: quota_usage(Some(row), spent_until(path), now),
+        Some(QuotaAccount { id: row["id"].as_str()?.to_owned(), label: label(Some(row), path), usage: quota_usage(Some(row), spent_mark(path), now),
             read: read(Some(row)), active: row["ativa"] == true, choice: path.to_owned() })
     };
     let claude: Vec<QuotaAccount> = rows.iter().filter(|row| row["provedor"] == "claude").filter_map(account).collect();
@@ -517,7 +518,7 @@ fn quota_accounts(provider: AgentProvider, current: Option<&str>, rows: &[Value]
         let dir = current.unwrap_or_default();
         let named = if dir.is_empty() { "padrão" } else { dir };
         QuotaAccount { id: format!("claude:{named}"), label: named.to_owned(),
-            usage: quota_usage(None, current.and_then(spent_until), now), read: false, active: current.is_none(),
+            usage: quota_usage(None, current.and_then(spent_mark), now), read: false, active: current.is_none(),
             choice: dir.to_owned() }
     });
     Some((current, others))
@@ -527,7 +528,7 @@ fn quota_accounts(provider: AgentProvider, current: Option<&str>, rows: &[Value]
 /// substitui (a ativa no empate), desde que tenha mais folga que ela, mesmo acima dos 95%; no lugar
 /// da desconhecida, só uma abaixo dos 95%.
 fn quota_verdict(provider: AgentProvider, current: Option<&str>, rows: &[Value],
-                 spent: &std::collections::BTreeMap<String, f64>, facts: &dyn OpenFacts) -> QuotaCheck {
+                 spent: &SpentAccounts, facts: &dyn OpenFacts) -> QuotaCheck {
     let Some((current, others)) = quota_accounts(provider, current, rows, spent, facts) else { return QuotaCheck::Room };
     if current.usage.is_some_and(|usage| usage < QUOTA_LIMIT) {
         return QuotaCheck::Room;

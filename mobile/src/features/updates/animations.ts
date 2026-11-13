@@ -1,3 +1,4 @@
+import { ScheduledTasksAnimation } from './ScheduledTasksAnimation';
 import type { ComponentType } from 'react';
 import { AutoReportAnimation } from './AutoReportAnimation';
 import { CodexActivityAnimation } from './CodexActivityAnimation';
@@ -18,6 +19,7 @@ import { WorktreeFreshAnimation } from './WorktreeFreshAnimation';
 
 // Miniaturas feitas dos componentes reais (ex.: src/chat/ComposerField.tsx) entram aqui pelo nome da novidade.
 const animations: Record<string, ComponentType<{ width: number }>> = {
+  'scheduled-tasks': ScheduledTasksAnimation,
   'adormecer-ocultas': SleepHiddenAnimation,
   'branch-no-celular': FolderBranchAnimation,
   'cofre-de-senhas': VaultAnimation,

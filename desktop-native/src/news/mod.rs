@@ -11,6 +11,7 @@ mod login_browser;
 mod no_project;
 mod password_vault;
 mod plugins;
+mod scheduled_tasks;
 mod hide_from_list;
 mod image_reveal;
 mod rename_suggestion;
@@ -71,6 +72,7 @@ pub fn animation(name: &str) -> Option<NewsAnimation> {
         "compactar-parada" => Some(compact_idle::render),
         "plugins-do-claude" => Some(plugins::render),
         "revisoes-pr-mr" => Some(reviews::render),
+        "scheduled-tasks" => Some(scheduled_tasks::render),
         _ => None,
     }
 }

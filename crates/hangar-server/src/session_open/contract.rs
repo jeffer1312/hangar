@@ -166,7 +166,7 @@ impl OpenFacts for Facts {
         }
         self.quotas.iter().filter(|row| matches!(row["provedor"].as_str(), Some("claude" | "codex"))).cloned().collect()
     }
-    fn spent_accounts(&self) -> BTreeMap<String, f64> { BTreeMap::new() }
+    fn spent_accounts(&self) -> crate::session_write::limit_switch::SpentAccounts { BTreeMap::new() }
     // O Python não registrava cota desconhecida; o diário do harness segue o dele.
     fn quota_unknown(&self, _name: &str, _account: &str) {}
     fn existing_dir(&self, cwd: &str) -> Option<String> { self.local.existing_dir(cwd) }

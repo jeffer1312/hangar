@@ -3324,7 +3324,8 @@ defeitos achados nele (todos consertados no Rust, decisão do usuário) estão n
   memória volta a poder levar a sessão junto.
 - **Limite de uso troca de conta sozinho (Claude).** Sinal pelo transcript (com terminal) ou pelo
   stream-json (sem terminal), nunca pelo pane. A fila fica segura até a troca terminar; o recado de
-  continuar vai à frente na fila durável; conta gasta fica marcada até o reset (`limit-spent.json`);
+  continuar vai à frente na fila durável; conta gasta fica marcada até o reset (`limit-spent.json`)
+  ou até uma leitura posterior confirmar folga. Cache anterior ao limite continua bloqueado;
   sem conta com folga, a sessão para e mostra `limit_switch_no_room`. Codex: só a detecção; o
   `rateLimitExceeded` é throttle temporário e não conta como limite.
 - **O Python saiu.** `backend/app` desde `601bc62a0`: +605/−4524. Sem lançador Python e sem reserva:
@@ -4677,3 +4678,25 @@ Evidência: testes públicos do crate para reuso, colisão, falhas e processos; 
 redirecionamento e ausência de chamadas ao Python. A caracterização do Python e o diferencial
 do shell ficam nos artefatos locais da migração. As provas com emulador falso verificam argumentos,
 ambiente e saída do processo; não comprovam uma janela gráfica real nem medem desempenho.
+
+## Reset extraordinário libera a conta Claude marcada como esgotada (12/11/2026)
+
+Uma conta com 60% de uso semanal ainda era tratada como 100% na abertura e excluída da
+troca automática: o reset extraordinário tinha devolvido a cota antes do prazo guardado em
+`limit-spent.json`. O percentual exibido estava certo; o bloqueio antigo prevalecia sem
+comparar quando cada informação foi observada.
+
+A marca guarda o prazo e o momento em que o limite foi detectado. A abertura, a escolha de
+destino durante uma conversa e o diagnóstico usam a mesma reconciliação: leitura posterior,
+com janelas legíveis e abaixo do limite de admissão, libera a conta. A consulta Claude é
+datada no início, para uma requisição que já estava em voo não substituir um limite mais novo.
+Cache anterior, cota desconhecida, login vencido e janela ainda cheia conservam o bloqueio.
+A recusa de autenticação continua separada: cota disponível não comprova login recuperado.
+
+O formato anterior guarda só o prazo; a data do arquivo serve de referência conservadora.
+Marca antiga com até uma hora de duração pode ter vindo de recusa de login e conserva o bloqueio.
+As marcas normalizadas mantêm sua referência quando outra conta é gravada. Uma falha posterior
+de rede não desfaz a recuperação já comprovada pela última leitura boa preservada no cache. As provas de
+regressão cobrem a decisão de abertura, a rotação, o reinício e o formato anterior, com
+arquivos temporários e relógio controlado. O reparo local removeu somente a marca antiga;
+uma sessão criada pelo Hangar abriu na conta pedida antes e depois de reiniciar o serviço.

@@ -93,7 +93,7 @@ impl TerminalHandle {
     pub async fn control(&self,id:String,kind:String,payload:Value)->Result<RuntimeReply,RuntimeError> {
         if self.closed.load(Ordering::Acquire) {return Err(error("runtime_stopping"));}
         let (response,receive)=oneshot::channel(); self.sender.send(Message::Command {id,kind,payload,response}).await.map_err(|_|error("runtime_closed"))?;
-        receive.await.map_err(|_|error("runtime_closed"))?
+        receive.await.map_err(|_|error(super::protocol::REPLY_LOST))?
     }
     pub async fn queue(&self,id:String,action:Action)->Result<Value,RuntimeError> {
         if self.closed.load(Ordering::Acquire) {return Err(error("runtime_stopping"));}

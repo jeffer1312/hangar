@@ -122,10 +122,13 @@ impl AssetSource for AppAssets {
     }
 }
 
-const FONTS: [&[u8]; 6] = [
+const FONTS: [&[u8]; 11] = [
     include_bytes!("../assets/fonts/Geist-Regular.ttf"), include_bytes!("../assets/fonts/Geist-Medium.ttf"),
     include_bytes!("../assets/fonts/Geist-SemiBold.ttf"), include_bytes!("../assets/fonts/Geist-Bold.ttf"),
     include_bytes!("../assets/fonts/Geist-Italic.ttf"),
+    include_bytes!("../assets/fonts/inter/Inter-Regular.ttf"), include_bytes!("../assets/fonts/inter/Inter-Medium.ttf"),
+    include_bytes!("../assets/fonts/inter/Inter-SemiBold.ttf"), include_bytes!("../assets/fonts/inter/Inter-Bold.ttf"),
+    include_bytes!("../assets/fonts/inter/Inter-Italic.ttf"),
     include_bytes!("../assets/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf"),
 ];
 

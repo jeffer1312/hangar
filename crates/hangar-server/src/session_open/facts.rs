@@ -406,10 +406,9 @@ impl OpenFacts for LocalFacts {
             .filter(|row| matches!(row["provedor"].as_str(), Some("claude" | "codex"))).cloned().collect()
     }
 
-    fn spent_accounts(&self) -> BTreeMap<String, f64> {
+    fn spent_accounts(&self) -> crate::session_write::limit_switch::SpentAccounts {
         // O mesmo arquivo da troca automática por limite (`limit_switch::Spent`); ilegível = nenhuma.
-        std::fs::read(self.accounts.quota_path().with_file_name("limit-spent.json")).ok()
-            .and_then(|raw| serde_json::from_slice(&raw).ok()).unwrap_or_default()
+        crate::session_write::limit_switch::read_spent(&self.accounts.quota_path().with_file_name("limit-spent.json"))
     }
 
     fn quota_unknown(&self, name: &str, account: &str) {

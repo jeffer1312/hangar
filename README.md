@@ -214,6 +214,13 @@ desktop app), `frontend/` (Svelte PWA), `mobile/` (Expo app, in development), `p
 `items` com referências de artefatos Claude (`id`, `url`, `title` e `version` opcional).
 A consulta é passiva e não publica conteúdo.
 
+**Tarefas por horário (Rust, somente o dono):** `GET /api/scheduled-tasks` lista as tarefas e o
+fuso do servidor; `POST` cria (o `request_id` opcional faz a repetição devolver a mesma tarefa)
+e `PUT /api/scheduled-tasks/{id}` edita com revisão. A mesma tarefa
+oferece `PATCH /enabled`, `POST /run` e `DELETE` para ativar/pausar, executar agora e excluir.
+O app nativo e o app do celular apresentam a lista e o editor em Configurações > Tarefas agendadas.
+Veja [os horários, destinos e a retomada](docs/USAGE.md#tarefas-agendadas).
+
 ## Security model
 
 Treat Hangar like a remote shell: whoever holds the token drives your agents with your user's

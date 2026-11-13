@@ -63,7 +63,7 @@ const callable = (server: Server) => !server.invite && !server.inviteEnded && !s
 const inCall = (view: LiveVoiceView) => view.phase === 'connecting' || view.phase === 'live';
 const errorCode = (error: unknown) => typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string' ? error.code : 'connection_lost';
 const errorText = (error: unknown) => motivoDoServidor(error) ?? (error instanceof Error && 'status' in error && typeof error.status === 'number' ? error.message : m.native_network_error());
-const CONFIG_SECTIONS = new Set(['geral', 'aparencia', 'usage-log', 'sobre', 'maquinas', 'sync', 'shared-config',
+const CONFIG_SECTIONS = new Set(['scheduled-tasks', 'geral', 'aparencia', 'usage-log', 'sobre', 'maquinas', 'sync', 'shared-config',
   'contas', 'orchestration', 'harnesses', 'voice', 'jev', 'notifications', 'shortcuts', 'attachments', 'worktrees', 'advanced']);
 
 function normalizedUrl(value: string | null | undefined): string | null {

@@ -445,7 +445,8 @@ só aponta para cá); a medição que sustenta cada uma mora na entrada de mesmo
   tela só oferece o botão com motivo; no menu ele fica sempre.
 - **O catálogo de comandos do Claude é do Rust, com e sem terminal.** Composição, scans,
   filtros e a sonda compartilhada ficam em `commands/`; convidado e Connect só passam pela
-  autorização das suas portas. `/reload-plugins` entra na reserva e permanece sem terminal,
+  autorização das suas portas. A sonda usa o contexto da sessão, que também separa o cache;
+  a primeira abertura espera o resultado compartilhado. `/reload-plugins` entra na reserva e permanece sem terminal,
   mesmo quando o CLI o anuncia como exclusivo da TUI. A recarga desse comando não aplica
   alterações de servidores MCP dos plugins em sessões sem terminal. Ver
   [catálogo de comandos e reload-plugins](#catálogo-de-comandos-e-reload-plugins).
@@ -5249,11 +5250,22 @@ pares ordenados, aliases e merges. Erro de construção em campo não consumido 
 cabeçalho inteiro. Inteiros têm precisão arbitrária, pois componentes sexagesimais podem se
 anular. A limpeza textual conserva os separadores U+001C a U+001F tratados por `str.split()`.
 
-A sonda não envia prompt: usa `control_request initialize`, em pasta temporária, com as
-configurações da conta. Há uma execução por conta/assinatura, teto de 120 s, espera de 600 s
-após falha e o mesmo formato do cache persistente. O processo e os hooks filhos ficam contidos
+A sonda não envia prompt: usa `control_request initialize`, com a pasta, a conta, as escolhas
+de plugins e skills e os `--plugin-dir` da sessão. Sem pasta de sessão, usa um diretório temporário
+e só as configurações da conta. Há uma execução por contexto/assinatura, teto de 120 s e espera de
+600 s após falha. O processo e os hooks filhos ficam contidos
 no grupo Unix ou no Job do Windows até terminar. O exemplo `commands-probe` mede a composição;
 `--native` confere o initialize do CLI instalado sem consumir um turno de conversa.
+
+(12/11/2026.) Consultar em pasta temporária com `--setting-sources user` omitia os comandos de
+plugins habilitados pelo projeto, embora estivessem no `/` do terminal. Uma instalação de prova
+com Claude real devolveu zero comandos do plugin nessa consulta e `pmedico:help` na pasta do
+projeto, com `user,project,local`. A conta, a pasta, as escolhas da sessão e os diretórios dos
+plugins agora identificam o cache; configurações de projeto e a volta de uma pasta de plugin
+invalidam sua assinatura. A primeira abertura espera a consulta compartilhada terminar, para
+não fixar a lista de reserva no menu. O cache de outro projeto não substitui o dela. O exemplo
+`commands-probe --context <home> <conta> <projeto>` publica o catálogo desse contexto em JSON,
+sem abrir uma sessão de conversa ou enviar prompt.
 
 No Windows, a caracterização também conserva a extensão sem distinção de caixa e a ordem do
 `WindowsPath`, que decide os metadados de nomes repetidos. A prova do prazo expôs outro detalhe:

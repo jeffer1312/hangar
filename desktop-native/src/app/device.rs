@@ -376,6 +376,7 @@ impl Hangar {
             }
             Page::Accounts => self.accounts_opened(cx),
             Page::Orchestration => self.orchestration_opened(cx),
+            Page::Scheduled => self.scheduled_opened(cx),
             Page::Worktrees => self.worktree_settings_opened(cx),
             Page::Sessions => self.auto_hide_opened(cx),
             Page::Shortcuts => self.shortcuts_opened(cx),

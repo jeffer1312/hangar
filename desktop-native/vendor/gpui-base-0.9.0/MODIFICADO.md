@@ -35,6 +35,15 @@ Mudanças, todas marcadas com "Modified for Hangar":
    que o app dá ao título (`with_heading`) não ocupava espaço, e o fio embaixo do título do leitor de documentos
    encostava no parágrafo seguinte. Estilo sem margem desenha igual.
 
+5. `src/text/format/markdown.rs`, `src/text/node.rs` e `src/text/utils.rs`: lista numerada cujos números digitados
+   sempre crescem (`1. 3. 7.`) mostra esses números, em vez de início + posição, em dígitos também na sublista. `BlockNode::ListItem` ganha
+   `value` (lido da fonte na posição do item por `list_item_number`), e `ordered_list_ordinal`/`list_item_prefix`
+   recebem esse número; a tela, a cópia da seleção e o `to_markdown` passam pela mesma função. Lista com número
+   repetido ou fora de ordem (`1. 1. 1.`, `1. 1. 2.`) segue a contagem do CommonMark; o parser HTML não lê
+   `<li value>`. Testes: `ordered_list_keeps_the_typed_numbers_only_when_they_grow` (`markdown.rs`) e
+   `test_list_item_prefix` (`utils.rs`).
+   Motivo: quem responde perguntas por número (`1. … 3. … 7. …`) via a bolha renumerar para 1, 2, 3.
+
 Removido na 0.7.0: o conserto de `src/text_selection.rs` (participante de view `.cached` reusada varrido no fim do
 quadro). O kit passou a resolver isso com o `RenderedMarker` guardado no estado do elemento
 (`text_selection.rs:206-245`), então o arquivo voltou ao original.
