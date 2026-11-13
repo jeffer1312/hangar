@@ -1,6 +1,7 @@
 """Roda um comando segurando uma trava exclusiva de arquivo: o `flock` de quem não tem `flock` (Git Bash).
 
 Uso: run-locked.py <arquivo-da-trava> <comando> [args...]
+     run-locked.py <arquivo-da-trava>   segura a trava, imprime `locked` e espera a entrada fechar
 O sistema solta a trava quando o processo morre, então ela nunca fica presa por uma build interrompida.
 """
 import os
@@ -33,6 +34,10 @@ def main():
     path, *command = sys.argv[1:]
     lock = hold(path)
     try:
+        if not command:
+            print("locked", flush=True)
+            sys.stdin.read()
+            return 0
         return subprocess.call(command)
     finally:
         lock.close()
