@@ -1639,7 +1639,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn t4_core_reflog_read_failure_cannot_prove_merge() {
-        use std::os::unix::fs::PermissionsExt;
         if std::env::var_os("HANGAR_T4_REFLOG_FAILURE").is_none() {
             let dir = tempfile::tempdir().unwrap();
             let bin = dir.path().join("bin");
@@ -1649,8 +1648,7 @@ mod tests {
             let git = std::env::split_paths(&std::env::var_os("PATH").unwrap()).map(|path| path.join("git"))
                 .find(|path| path.is_file()).unwrap().canonicalize().unwrap();
             let wrapper = bin.join("git");
-            std::fs::write(&wrapper, format!("#!/bin/sh\nfor arg do\n  if [ \"$arg\" = reflog ]; then printf '%s\\n' 'Falha ao ler o reflog' >&2; exit 128; fi\ndone\nexec '{}' \"$@\"\n", git.to_string_lossy().replace('\'', "'\\''"))).unwrap();
-            std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+            crate::write_test_executable(&wrapper, format!("#!/bin/sh\nfor arg do\n  if [ \"$arg\" = reflog ]; then printf '%s\\n' 'Falha ao ler o reflog' >&2; exit 128; fi\ndone\nexec '{}' \"$@\"\n", git.to_string_lossy().replace('\'', "'\\''")));
             let child = std::process::Command::new(std::env::current_exe().unwrap())
                 .args(["--exact", "worktrees::tests::t4_core_reflog_read_failure_cannot_prove_merge"])
                 .env("HANGAR_T4_REFLOG_FAILURE", "1")
@@ -1671,7 +1669,6 @@ mod tests {
 
     #[cfg(unix)]
     fn t4_timeout_process(name: &str, command: &str) -> bool {
-        use std::os::unix::fs::PermissionsExt;
         if std::env::var("HANGAR_T4_TIMEOUT_TEST").as_deref() == Ok(name) { return false; }
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("bin");
@@ -1685,8 +1682,7 @@ mod tests {
         let git = std::env::split_paths(&std::env::var_os("PATH").unwrap()).map(|path| path.join("git"))
             .find(|path| path.is_file()).unwrap().canonicalize().unwrap();
         let wrapper = bin.join("git");
-        std::fs::write(&wrapper, format!("#!/bin/sh\nif [ -e '{}' ]; then\n  for arg do\n    if [ \"$arg\" = '{command}' ]; then IFS= read -r line < '{}'; exit 0; fi\n  done\nfi\nexec '{}' \"$@\"\n", marker.display(), fifo.display(), git.to_string_lossy().replace('\'', "'\\''"))).unwrap();
-        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        crate::write_test_executable(&wrapper, format!("#!/bin/sh\nif [ -e '{}' ]; then\n  for arg do\n    if [ \"$arg\" = '{command}' ]; then IFS= read -r line < '{}'; exit 0; fi\n  done\nfi\nexec '{}' \"$@\"\n", marker.display(), fifo.display(), git.to_string_lossy().replace('\'', "'\\''")));
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", &format!("worktrees::tests::{name}")])
             .env("HANGAR_T4_TIMEOUT_TEST", name).env("HANGAR_T4_TIMEOUT_MARKER", marker)
