@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactElement } from 'react';
-import { AccessibilityInfo, ActivityIndicator, Platform, Pressable, ScrollView, Text, View } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { codexSubagentActivityKey, codexSubagentState, formatElapsed, getSubagents, getWorkflow, getWorkflowAgent, getWorkflows, projectSubagentActivity, projectCodexSubagent, isCodexAgentSpawn, stopTask } from '@hangar/core';
@@ -278,7 +278,8 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
     ...shellsVivos.map((s2) => s2.taskId),
   ].filter((id): id is string => typeof id === 'string')), [runningAgents, runningSubs, shellsVivos, agentInfo]);
   // Lista recarregando vem vazia: a tarefa sumir dela só prova a parada com os subagentes lidos.
-  const subsReady = currentList && !list.subLoading;
+  // Lista que falhou também vem vazia: sumir dela não prova que a tarefa parou.
+  const subsReady = currentList && !list.subLoading && !list.subError;
 
   const endStop = useCallback((taskId: string) => {
     if (!stopTimers.current.has(taskId)) return;
@@ -304,8 +305,8 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
       toast.erro(m.atividade_parar_sem_confirmacao());
     }, STOP_CONFIRM_MS));
     rerender();
-    // O iOS não lê `accessibilityLiveRegion`; no Android a linha anuncia sozinha.
-    if (Platform.OS === 'ios') AccessibilityInfo.announceForAccessibility(m.atividade_parando());
+    // A região ao vivo não anuncia texto recém-montado com garantia; o anúncio explícito vale nos dois sistemas.
+    AccessibilityInfo.announceForAccessibility(m.atividade_parando());
     try {
       await stopTask(name, taskId, server);
     } catch (error) {
@@ -318,9 +319,10 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
   function taskRow(key: string, icon: IconName, title: string, since: number | null, onPress?: () => void, taskId?: string) {
     const parando = !!taskId && stopTimers.current.has(taskId);
     return (
-      <View key={key} style={styles.taskRow} accessibilityState={parando ? { busy: true } : undefined}>
+      <View key={key} style={styles.taskRow}>
         <Pressable onPress={onPress} disabled={!onPress} style={styles.taskOpen}
-          accessibilityRole={onPress ? 'button' : undefined} accessibilityLabel={title}>
+          accessibilityRole={onPress ? 'button' : undefined} accessibilityLabel={title}
+          accessibilityState={parando ? { busy: true } : undefined}>
           <Icon name={icon} size={16} color={theme.tokens.text.muted} />
           <Text style={[styles.taskName, { color: theme.tokens.text.primary }]} numberOfLines={1}>{title}</Text>
           {parando ? <Text style={[styles.taskTime, { color: theme.tokens.text.muted }]} accessibilityLiveRegion="polite">{m.atividade_parando()}</Text>

@@ -56,4 +56,5 @@ export const Appearance = { setColorScheme: (_s: 'light' | 'dark' | 'unspecified
 export const AccessibilityInfo = {
   isReduceTransparencyEnabled: () => Promise.resolve(false),
   addEventListener: () => ({ remove: () => {} }),
+  announceForAccessibility: () => {},
 };

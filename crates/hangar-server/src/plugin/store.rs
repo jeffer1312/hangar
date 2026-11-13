@@ -25,8 +25,9 @@ pub const AGENT_MESSAGE_MODE: &str = "agent_message";
 const AGENT_LATE_KEPT: usize = 32;
 /// O modo que o plugin declara no `/pull` quando sabe parar uma tarefa (subagente ou shell) pelo `TaskStop`.
 pub const STOP_TASK_MODE: &str = "stop_task";
-/// O app desfaz o "parando" depois disso: pedido mais velho que chegasse ao plugin pararia a tarefa sem aviso.
-const STOP_TASK_FRESH: Duration = Duration::from_secs(15);
+/// Abaixo dos 15 s em que o app desfaz o "parando" (contados do clique, antes da fila): pedido mais velho
+/// que chegasse ao plugin pararia a tarefa depois de a tela dizer que não parou.
+const STOP_TASK_FRESH: Duration = Duration::from_secs(10);
 
 fn question_visible(interrupted: bool, poll_open: bool, age: Duration) -> bool {
     !interrupted && age <= ALIVE && (poll_open || age <= NO_POLL)
