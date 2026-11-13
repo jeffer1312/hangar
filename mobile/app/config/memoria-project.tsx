@@ -40,7 +40,7 @@ export default function MemoriaProject() {
         <MachineRow title={status?.running ? m.dream_running() : m.dream_run_now()} action disabled={busy || !!status?.running || !dreamer}
           onPress={() => { if (dreamer) void d.act(() => startDream(dreamer, project.id)); }} />
         {project.last_run_id ? <TapRow title={m.dream_changes()}
-          onPress={() => router.push({ pathname: '/config/memoria-run', params: { run: project.last_run_id } } as never)} /> : null}
+          onPress={() => router.push({ pathname: '/config/memoria-run', params: { run: project.last_run_id, project: project.id } } as never)} /> : null}
       </MachineGroup>
     </> : null}
   </Pagina>;

@@ -13,7 +13,7 @@ import { useDream } from '../../src/features/dream/useDream';
 import * as m from '../../src/paraglide/messages';
 
 export default function MemoriaRun() {
-  const { run: runId } = useLocalSearchParams<{ run: string }>();
+  const { run: runId, project } = useLocalSearchParams<{ run: string; project?: string }>();
   const d = useDream();
   const { dreamer, status } = d;
   const [run, setRun] = useState<DreamRun | null>(null);
@@ -26,13 +26,13 @@ export default function MemoriaRun() {
     return () => { live = false; };
   }, [dreamer, runId]);
   useEffect(load, [load]);
-  // Desfazer volta a rodada inteira, por isso a tela mostra todos os projetos dela.
+  // Aberta de um projeto, a tela e o Desfazer ficam só nele; a rodada da noite cobre vários.
   const undo = () => {
     if (!dreamer || !runId) return;
     Alert.alert(m.dream_undo(), undefined, [
       { text: m.comum_cancelar(), style: 'cancel' },
       { text: m.dream_undo(), style: 'destructive', onPress: () => void d.act(async () => {
-        const { results } = await undoDreamRun(dreamer, runId);
+        const { results } = await undoDreamRun(dreamer, runId, project);
         const failed = results.filter((r) => !r.ok).map((r) => m.dream_undo_failed({ machine: d.labelOf(r.machine) }));
         return failed.length ? failed.join('\n') : undefined;
       }, m.dream_undo_done()) },
@@ -47,7 +47,7 @@ export default function MemoriaRun() {
     </MachineGroup></> : null}
     {!run && !failure ? <InfoNotice text={m.comum_carregando()} /> : null}
     {run ? <>
-      {run.projects.map((p) => <SectionCard key={p.project} icon="Folder" title={status?.projects.find((s) => s.id === p.project)?.name ?? p.project}
+      {run.projects.filter((p) => !project || p.project === project).map((p) => <SectionCard key={p.project} icon="Folder" title={status?.projects.find((s) => s.id === p.project)?.name ?? p.project}
         subtitle={dreamLastText(p.at, p.cost_usd)}>
         {p.places.map((place) => {
           const changes = dreamFileChanges(place.before, place.after);

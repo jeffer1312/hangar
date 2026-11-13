@@ -39,7 +39,9 @@ export const putDreamConfig = (server: Server, patch: DreamConfigPatch) => apiFe
 export const getDreamStatus = (server: Server) => apiFetchForServer<DreamStatus>(server, '/api/dream/status');
 export const startDream = (server: Server, project?: string) => apiFetchForServer<{ run_id: string }>(server, '/api/dream/run', json('POST', project ? { project } : {}));
 export const getDreamRun = (server: Server, runId: string) => apiFetchForServer<DreamRun>(server, `/api/dream/runs/${encodeURIComponent(runId)}`);
-export const undoDreamRun = (server: Server, runId: string) => apiFetchForServer<{ results: DreamUndoResult[] }>(server, `/api/dream/runs/${encodeURIComponent(runId)}/undo`, { method: 'POST' });
+/** Com `project`, só aquele projeto volta: a rodada da noite cobre vários. */
+export const undoDreamRun = (server: Server, runId: string, project?: string) => apiFetchForServer<{ results: DreamUndoResult[] }>(server,
+  `/api/dream/runs/${encodeURIComponent(runId)}/undo${project ? `?project=${encodeURIComponent(project)}` : ''}`, { method: 'POST' });
 export const putDreamProject = (server: Server, id: string, patch: DreamProjectPatch) => apiFetchForServer<{ ok: true }>(server, `/api/dream/project?id=${encodeURIComponent(id)}`, json('PUT', patch));
 export const dismissDreamSuggestion = (server: Server, index: number) => apiFetchForServer<{ ok: true }>(server, '/api/dream/suggestions/dismiss', json('POST', { index }));
 

@@ -89,7 +89,7 @@ async fn route_inner(st: Arc<AppState>, peer: std::net::SocketAddr, req: Request
         ("PUT", "/api/dream/user-memory") => receive_user_memory(&st, req).await,
         ("GET", p) if p.starts_with("/api/dream/runs/") => run_detail(&st, &p["/api/dream/runs/".len()..]),
         ("POST", p) if p.starts_with("/api/dream/runs/") && p.ends_with("/undo") => {
-            undo(&st, &p["/api/dream/runs/".len()..p.len() - "/undo".len()]).await
+            undo(&st, &p["/api/dream/runs/".len()..p.len() - "/undo".len()], query.get("project").map(String::as_str)).await
         }
         _ => error(404, "not_found", "rota do sonho desconhecida"),
     }
@@ -351,14 +351,15 @@ fn run_detail(st: &AppState, run_id: &str) -> Response {
 }
 
 /// Grava a memória de antes onde a rodada gravou, só se a pasta ainda for a que a rodada deixou.
-async fn undo(st: &Arc<AppState>, run_id: &str) -> Response {
+/// Com `project`, só aquele projeto volta: a rodada da noite cobre vários.
+async fn undo(st: &Arc<AppState>, run_id: &str, project: Option<&str>) -> Response {
     let records = match round::load_records(&Paths::of(st), run_id) {
         Ok(r) => r,
         Err(e) => return failure(&e),
     };
     let me = this_machine(st);
     let mut results = Vec::new();
-    for record in &records {
+    for record in records.iter().filter(|r| project.map_or(true, |p| p == r.project)) {
         for place in record.places.iter().filter(|p| p.written) {
             let expect = memory::digest(&place.after);
             let result = match &place.dir {

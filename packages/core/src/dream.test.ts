@@ -21,6 +21,7 @@ it('chama cada rota no servidor escolhido com o token dele', async () => {
     [() => startDream(server, 'git:x/y'), 'POST', '/api/dream/run', { project: 'git:x/y' }],
     [() => getDreamRun(server, 'r/1'), 'GET', '/api/dream/runs/r%2F1', undefined],
     [() => undoDreamRun(server, 'r/1'), 'POST', '/api/dream/runs/r%2F1/undo', undefined],
+    [() => undoDreamRun(server, 'r/1', 'git:x/y'), 'POST', '/api/dream/runs/r%2F1/undo?project=git%3Ax%2Fy', undefined],
     [() => putDreamProject(server, 'dir:vps/a b', { alias_of: 'git:x' }), 'PUT', '/api/dream/project?id=dir%3Avps%2Fa%20b', { alias_of: 'git:x' }],
     [() => dismissDreamSuggestion(server, 2), 'POST', '/api/dream/suggestions/dismiss', { index: 2 }],
   ] as const;
