@@ -444,14 +444,8 @@ fn create_worktree_in(
     if !repo.starts_with(&root) {
         return Err(error(400, "repositório fora da raiz autorizada"));
     }
-    let info = branches(cwd)?;
-    let local = info["branches"].as_array().unwrap();
-    let known = |b: &str| {
-        local
-            .iter()
-            .chain(info["remotes"].as_array().unwrap())
-            .any(|x| x == b)
-    };
+    let (local, remotes, current) = refs(cwd)?;
+    let known = |b: &str| local.iter().chain(&remotes).any(|x| x == b);
     let mut start = String::new();
     if new_branch {
         if !branch_name_ok(cwd, branch)? {
@@ -462,7 +456,7 @@ fn create_worktree_in(
         }
         start = base
             .filter(|b| !b.is_empty())
-            .or(info["current"].as_str())
+            .or(current.as_deref())
             .unwrap_or_default()
             .to_owned();
         if start.is_empty() || !(known(&start) || tracking_ref(cwd, &start)?.is_some()) {
@@ -472,7 +466,7 @@ fn create_worktree_in(
         if !known(branch) {
             return Err(error(400, "branch inexistente"));
         }
-        if info["current"] == branch {
+        if current.as_deref() == Some(branch) {
             return Ok(Worktree { path: cwd.to_string_lossy().into_owned(), created: false, branch_created: false });
         }
     }
@@ -524,8 +518,35 @@ fn create_worktree_in(
             tracing::warn!("hangar-base da branch nova não gravada");
         }
     }
-    copy_ignored(&main_root(cwd, &repo, &root), &target);
+    copy_ignored(&main, &target);
     Ok(Worktree { path: text.into_owned(), created: true, branch_created })
+}
+/// As branches que a criação confere, num `git` só: cada processo custa caro no Windows carregado,
+/// e o `branches()` da tela ainda roda `status` e `worktree list`, que aqui não servem.
+fn refs(cwd: &Path) -> Result<(Vec<String>, Vec<String>, Option<String>)> {
+    let out = checked(
+        cwd,
+        &["for-each-ref", "--format=%(HEAD)%00%(refname)", "refs/heads", "refs/remotes"],
+        409,
+    )?;
+    let (mut local, mut remote_refs, mut current) = (Vec::new(), Vec::new(), None);
+    for line in out.stdout.lines() {
+        let Some((head, name)) = line.split_once('\0') else { continue };
+        if let Some(branch) = name.strip_prefix("refs/heads/") {
+            if head == "*" {
+                current = Some(branch.to_owned());
+            }
+            local.push(branch.to_owned());
+        } else if let Some((_, branch)) = name.strip_prefix("refs/remotes/").and_then(|r| r.split_once('/')) {
+            remote_refs.push(branch.to_owned());
+        }
+    }
+    let mut seen = HashSet::new();
+    let remotes = remote_refs
+        .into_iter()
+        .filter(|b| b != "HEAD" && !local.contains(b) && seen.insert(b.clone()))
+        .collect();
+    Ok((local, remotes, current))
 }
 /// `create_branch_worktree`: a pasta leva o nome da branch (`stem`, já saneado); ocupada, ganha
 /// `-2`, `-3`… até `-99`. Só a pasta ocupada provoca nova tentativa.
