@@ -610,6 +610,7 @@ impl Hangar {
         self.close_settings(window, cx);
         self.close_costs(window, cx);
         self.close_reviews(window, cx);
+        self.close_mission(window, cx);
         self.close_popups();
         self.command_panel = false;
         self.worktrees.view = Some(());
