@@ -393,7 +393,7 @@ fn private_fields_never_reach_the_report() {
         "estado": "lida", "janelas": [{"rotulo": "5h", "pct": 95.0, "reset_ts": 1_793_200_000.0, "por_modelo": false}],
         "credential_signature": [1, 2, 3], "reset_credits": "CREDITO_SECRETO", "token": "TOKEN_SECRETO",
         "refresh_expires_at": 1_793_150_000.0,
-    }), &[("/home/fulano/.claude-x".to_owned(), 4_000_000_000.0)].into(), &s);
+    }), &[("/home/fulano/.claude-x".to_owned(), 4_000_000_000.0.into())].into(), &s, 1_793_150_000.0);
     let mut input = input();
     input.text = Some(concat!("veja /home/fulano/x com Bearer abc123 e sk-", "ant-api03-AAAABBBBCCCC1234").into());
     let body = assemble(&facts(vec![entry(Local::now(), 1)], vec![session], vec![account]), &input, &scrubber(), BODY_MAX);
@@ -414,7 +414,7 @@ fn private_fields_never_reach_the_report() {
 #[test]
 fn a_login_the_cli_erased_heads_the_report_with_its_account() {
     let mut account = collect::account_fact(&json!({"id": "claude:/home/fulano/.claude-x", "label": "fulano@exemplo.com",
-        "provedor": "claude", "ativa": true, "estado": "lida"}), &Default::default(), &scrubber());
+        "provedor": "claude", "ativa": true, "estado": "lida"}), &Default::default(), &scrubber(), 1_793_150_000.0);
     account.account_id = Some("9aac3174e59ffcd3".into());
     account.login = Some(crate::accounts::claude_refresh::LoginFacts { stored: "arquivo", has_access: false, has_refresh: false,
         cleared: true, expires_at: None, refresh_expires_at: None, ended: None, written_at: Some(1_793_150_000.0) });
