@@ -6,7 +6,7 @@ use serde_json::{Map, Value, json};
 
 use hangar_core::pycompat::{py, truthy};
 
-use crate::files::{known_from, read_entry, read_object};
+use crate::files::{installed_with, known_from, read_entry, read_object};
 use crate::{Error, Paths, ssh_hosts, targets};
 
 const PRESET_URL: &str = "http://127.0.0.1:8317/v1/chat/completions";
@@ -51,7 +51,7 @@ pub fn state(paths: &Paths, facts: &Facts) -> Result<Value, Error> {
         "agent_exe": {"path": exe.to_string_lossy(), "exists": exe_size.is_some(), "size": exe_size.unwrap_or(0)},
         "mode": "package",
         "installed_tag": install.get("tag").cloned().unwrap_or_else(|| json!("")),
-        "package_exists": truthy(install.get("tag").unwrap_or(&Value::Null)) && exe_size.is_some() && binary,
+        "package_exists": installed_with(paths, &install) && exe_size.is_some(),
         "unavailable": unavailable,
         "targets": targets,
         "ssh_hosts": ssh_hosts(paths),

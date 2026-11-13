@@ -5,7 +5,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value, json};
 
-use crate::files::{parked_entry, read_entry};
+use crate::files::{installed, parked_entry, read_entry};
 use crate::writer::{Entry, write_entry};
 use crate::{Error, Paths, targets};
 
@@ -44,7 +44,7 @@ fn register_on(
     hyprland: impl FnOnce() -> bool,
     jev: impl FnOnce() -> Result<Map<String, Value>, Error>,
 ) -> Result<Registered, Error> {
-    if !supported || !paths.binary().is_file() {
+    if !supported || !installed(paths)? {
         return Ok(Registered::Skipped);
     }
     let main = read_entry(paths.main_file(), false)?;
@@ -104,12 +104,14 @@ mod tests {
     }
 
     impl Home {
-        /// Binário do pacote presente e uma conta aberta (`acc`) e outra nunca aberta (`vazia`).
+        /// Pacote instalado (`install.json` com tag e binário) e uma conta aberta (`acc`) e outra nunca
+        /// aberta (`vazia`).
         fn new() -> Self {
             let dir = tempfile::tempdir().unwrap();
             let paths = Paths::new(dir.path().to_owned(), vec![dir.path().join("acc"), dir.path().join("vazia")]);
             std::fs::create_dir_all(paths.targets_dir()).unwrap();
             std::fs::write(paths.binary(), b"\x7fELF").unwrap();
+            std::fs::write(paths.install_json(), br#"{"tag": "v2.0.0"}"#).unwrap();
             std::fs::create_dir_all(dir.path().join("acc")).unwrap();
             std::fs::write(dir.path().join("acc/.claude.json"), br#"{"x": 1}"#).unwrap();
             std::fs::create_dir_all(dir.path().join("vazia")).unwrap();
@@ -196,6 +198,26 @@ mod tests {
         std::fs::remove_file(home.paths.binary()).unwrap();
         assert_eq!(home.run(true).unwrap(), Registered::Skipped);
         assert!(!home.paths.main_file().exists());
+    }
+
+    /// Mesma regra de "instalado" do PUT: binário sem `install.json` com tag nem registra nem liga.
+    #[test]
+    fn a_binary_without_install_json_neither_registers_nor_turns_on_by_put() {
+        for install in [None, Some(&br#"{"tag": ""}"#[..])] {
+            let home = Home::new();
+            let target = home.target("a");
+            match install {
+                None => std::fs::remove_file(home.paths.install_json()).unwrap(),
+                Some(bytes) => std::fs::write(home.paths.install_json(), bytes).unwrap(),
+            }
+            assert_eq!(home.run(true).unwrap(), Registered::Skipped);
+            assert!(!home.paths.main_file().exists());
+            let body: crate::SaveRequest = serde_json::from_value(json!({"enabled": true, "agent_config": target})).unwrap();
+            let refused =
+                crate::save(&home.paths, &crate::Facts::default(), &crate::Aux::default(), &body, || Ok(jev())).unwrap_err();
+            assert_eq!((refused.status, refused.code), (400, "erro_computer_control_not_installed"));
+            assert!(!home.paths.main_file().exists());
+        }
     }
 
     /// D4.1, 1B refinado: ausente no principal e guardada = desligado à mão, fica desligado.

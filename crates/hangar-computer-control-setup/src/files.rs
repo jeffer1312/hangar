@@ -43,6 +43,17 @@ pub fn parked_entry(paths: &Paths) -> Result<Option<Map<String, Value>>, Error> 
     Ok((!parked.is_empty()).then_some(parked))
 }
 
+/// O pacote está instalado: `install.json` com tag e o binário do MCP. A mesma regra para ligar pelo
+/// `PUT`, registrar sozinho e o `package_exists` da tela. `install.json` ilegível é erro.
+pub fn installed(paths: &Paths) -> Result<bool, Error> {
+    Ok(installed_with(paths, &read_object(&paths.install_json(), false)?))
+}
+
+/// `installed` com o `install.json` já lido.
+pub(crate) fn installed_with(paths: &Paths, install: &Map<String, Value>) -> bool {
+    install.get("tag").is_some_and(truthy) && paths.binary().is_file()
+}
+
 /// Conta com arquivo de 0 bytes vale `{}`, como conta nunca aberta; o principal vazio é erro.
 pub fn read_entry(path: PathBuf, account: bool) -> Result<FileEntry, Error> {
     let data = read_object(&path, account)?;

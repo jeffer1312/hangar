@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-pub use files::{FileEntry, known_entry, parked_entry, read_entries, read_entry};
+pub use files::{FileEntry, installed, known_entry, parked_entry, read_entries, read_entry};
 pub use install::{Github, Policy, REPO, Swapped, install_if_missing, update_tick};
 pub use register::{Registered, hyprland_found, hyprland_running, register};
 pub use save::{Aux, Mode, SaveRequest, save};

@@ -4,9 +4,7 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use hangar_core::pycompat::truthy;
-
-use crate::files::{known_from, read_entry, read_object};
+use crate::files::{installed, known_from, read_entry};
 use crate::writer::{Entry, remove_entry, write_entry};
 use crate::{Error, Facts, Paths};
 
@@ -79,8 +77,7 @@ pub fn save(
     // Na ordem do Python, para o mesmo arquivo ruim aparecer primeiro.
     let main = read_entry(paths.main_file(), false)?;
     known_from(paths, main.entry)?;
-    let install = read_object(&paths.install_json(), false)?;
-    if !(install.get("tag").is_some_and(|tag| truthy(tag)) && paths.binary().is_file()) {
+    if !installed(paths)? {
         return Err(Error::plain(400, "erro_computer_control_not_installed", "instale a versão publicada antes de usar esse modo"));
     }
     let agent = body.agent_config.trim();

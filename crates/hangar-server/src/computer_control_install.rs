@@ -127,6 +127,7 @@ mod tests {
         let paths = setup::Paths::new(home.path().to_owned(), Vec::new());
         std::fs::create_dir_all(paths.targets_dir()).unwrap();
         std::fs::write(paths.binary(), b"\x7fELF").unwrap();
+        std::fs::write(paths.install_json(), br#"{"tag": "v2.0.0"}"#).unwrap();
         let target = paths.targets_dir().join("vm-agent.json");
         std::fs::write(&target, br#"{"transport": "ssh", "host": "vm"}"#).unwrap();
         swapped(&state(home.path()), Ok(setup::Swapped::Yes { tag: "v2.0.0".into() })).await;
