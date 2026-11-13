@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["hangar-scheduled-tasks", "hangar-conversation-transfer", "hangar-codex-transfer", "hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux", "hangar-connect", "hangar-plugins", "hangar-update-news", "hangar-workflows", "hangar-http-file", "hangar-desktop-theme", "hangar-opencode-cookie", "hangar-deploy", "hangar-port-preview", "hangar-session-tools", "hangar-codex-account-sync", "hangar-projects", "hangar-reviews"]
+members = ["hangar-scheduled-tasks", "hangar-conversation-transfer", "hangar-codex-transfer", "hangar-auth", "hangar-api", "hangar-core", "hangar-transcript", "hangar-omp-sync", "hangar-server", "hangar-cano", "hangar-workspace", "hangar-codex", "hangar-package", "hangar-psmux", "hangar-connect", "hangar-plugins", "hangar-update-news", "hangar-workflows", "hangar-http-file", "hangar-desktop-theme", "hangar-opencode-cookie", "hangar-deploy", "hangar-port-preview", "hangar-session-tools", "hangar-codex-account-sync", "hangar-projects", "hangar-reviews", "hangar-computer-control-setup", "hangar-shortcut-transfer"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,6 +12,7 @@ iana-time-zone = "=0.1.65"
 hangar-scheduled-tasks = { path = "hangar-scheduled-tasks" }
 hangar-projects = { path = "hangar-projects" }
 hangar-reviews = { path = "hangar-reviews" }
+hangar-computer-control-setup = { path = "hangar-computer-control-setup" }
 hangar-codex-account-sync = { path = "hangar-codex-account-sync" }
 hangar-conversation-transfer = { path = "hangar-conversation-transfer" }
 hangar-codex-transfer = { path = "hangar-codex-transfer" }
@@ -60,10 +61,13 @@ hangar-plugins = { path = "hangar-plugins" }
 hangar-workflows = { path = "hangar-workflows" }
 hangar-http-file = { path = "hangar-http-file" }
 hangar-desktop-theme = { path = "hangar-desktop-theme" }
+hangar-shortcut-transfer = { path = "hangar-shortcut-transfer" }
 hangar-opencode-cookie = { path = "hangar-opencode-cookie" }
 hangar-deploy = { path = "hangar-deploy" }
 hangar-port-preview = { path = "hangar-port-preview" }
 mime_guess = "=2.0.5"
+# A mesma versão que o lockfile já tinha por dependência de build.
+semver = "=1.0.28"
 serde-saphyr = "=1.3.0"
 base64 = "=0.23.1"
 proptest = "=1.12.0"

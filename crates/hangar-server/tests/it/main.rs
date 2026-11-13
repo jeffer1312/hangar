@@ -34,6 +34,9 @@ mod push_expo;
 mod artifacts;
 #[cfg(unix)]
 mod workflows;
+// As capturas do Python são de Linux x86_64 (caminhos, `local_available`, `unavailable`).
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod computer_control;
 #[cfg(unix)]
 mod session_tools;
 mod archive_history;
@@ -73,6 +76,7 @@ mod sink;
 #[cfg(unix)]
 mod voice_support;
 mod workspace_fixture;
+mod shortcut_transfer;
 
 /// Pedido de uma rota do app num servidor falso. Qualquer processo da máquina pode sondar uma porta de
 /// loopback nova (um detector de servidor local manda `HEAD /`): o falso não conta o que não é rota.
@@ -433,3 +437,5 @@ fn physical_tempdir() -> tempfile::TempDir {
 mod native_setup_cli;
 
 mod scopes_native;
+
+mod jev_startup;

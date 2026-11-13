@@ -113,6 +113,8 @@ pub mod plans;
 mod forwarded;
 pub mod worktree_routes;
 pub mod reviews;
+mod computer_control;
+mod computer_control_install;
 mod worktree_context;
 mod worktree_fetch;
 pub mod worktree_policy;
@@ -454,6 +456,7 @@ pub mod migration_branch;
 pub mod login_guests;
 
 pub mod shortcuts;
+pub mod shortcut_transfer;
 
 pub mod engines;
 pub use hangar_core::http_body_input;
