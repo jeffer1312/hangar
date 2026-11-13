@@ -8,7 +8,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Duration, Utc};
 use hangar_dream::budget::{self, Candidate, Limits, Plan};
 use hangar_dream::config::Config;
-use hangar_dream::memory::{self, Snapshot};
+use hangar_dream::memory;
 use hangar_dream::project::sanitize;
 use hangar_dream::render::{self, Header};
 use hangar_dream::run::{self, Auth, Input};

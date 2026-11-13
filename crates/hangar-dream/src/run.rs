@@ -224,14 +224,17 @@ pub async fn dream_project(job: &Job<'_>, payer: &Payer<'_>, model: &dyn Model) 
         fs::write(inputs.join(&input.name), &input.text)?;
     }
     let cap = job.cap_usd;
-    let results: Vec<Result<Reply, DreamError>> = stream::iter(job.inputs)
-        .map(|input| {
+    // Montadas antes e em caixa: um `map` que devolve bloco async deixa o futuro sem `Send` provável
+    // dentro do `tokio::spawn` do servidor.
+    let calls: Vec<BoxFut<'_, Result<Reply, DreamError>>> = job
+        .inputs
+        .iter()
+        .map(|input| -> BoxFut<'_, Result<Reply, DreamError>> {
             let prompt = ANALYZER.replace("{input}", &format!("inputs/{}", input.name));
-            async move { payer.call(model, ANALYZER_MODEL, &prompt, job.workdir, |spent| analyzer_call_cap(cap, spent)).await }
+            Box::pin(async move { payer.call(model, ANALYZER_MODEL, &prompt, job.workdir, move |spent| analyzer_call_cap(cap, spent)).await })
         })
-        .buffer_unordered(MAX_PARALLEL)
-        .collect()
-        .await;
+        .collect();
+    let results: Vec<Result<Reply, DreamError>> = stream::iter(calls).buffer_unordered(MAX_PARALLEL).collect().await;
     if let Some(err) = results.into_iter().find_map(Result::err) {
         return Err(err);
     }
