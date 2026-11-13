@@ -7,7 +7,7 @@ use crate::protocol::ErrorCode;
 use crate::registry::{Entry, Registry};
 use crate::work_tracking::{self, GetParams, ListParams, ListResult, TicketDetail};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -50,6 +50,15 @@ struct Slot {
     reaper: AtomicBool,
 }
 
+impl Slot {
+    /// Fim de uma vida já tirada do slot (com a vez segurada por quem chama).
+    async fn end(&self, life: Option<Life>, grace: Duration) {
+        let Some(life) = life else { return };
+        self.running.store(false, Ordering::Release);
+        life.shutdown(grace).await;
+    }
+}
+
 pub struct Host {
     registry: Registry,
     options: HostOptions,
@@ -60,8 +69,6 @@ impl Host {
     pub fn new(registry: Registry, options: HostOptions) -> Arc<Self> {
         Arc::new(Self { registry, options, slots: Mutex::default() })
     }
-
-    pub fn registry(&self) -> &Registry { &self.registry }
 
     fn slot(&self, id: &str) -> Arc<Slot> {
         self.slots.lock().unwrap_or_else(|e| e.into_inner()).entry(id.to_owned()).or_default().clone()
@@ -99,35 +106,26 @@ impl Host {
     /// Fim do host: cancela os pedidos e termina todas as árvores.
     pub async fn shutdown(&self) {
         let ids: Vec<String> = self.slots.lock().unwrap_or_else(|e| e.into_inner()).keys().cloned().collect();
-        for id in ids { self.stop(&id).await; }
+        // Juntos: cada parada pode esperar o prazo de saída inteiro.
+        futures_util::future::join_all(ids.iter().map(|id| self.stop(id))).await;
     }
 
     async fn stop(&self, id: &str) {
         let Some(slot) = self.existing_slot(id) else { return };
         slot.cancel.send_modify(|epoch| *epoch += 1);
         let mut life = slot.life.lock().await;
-        if let Some(life) = life.take() { life.shutdown(self.options.exit_grace).await; }
-        slot.running.store(false, Ordering::Release);
+        slot.end(life.take(), self.options.exit_grace).await;
     }
 
     pub async fn list_tickets(self: &Arc<Self>, id: &str, params: ListParams) -> Result<ListResult, CallError> {
         let limit = params.limit;
-        let params = serde_json::to_value(&params).map_err(|_| CallError::connector(ErrorCode::InvalidParams, "pedido não serializou"))?;
-        let value = self.call(id, work_tracking::CAPABILITY, work_tracking::LIST, params).await?;
+        let value = self.call(id, work_tracking::CAPABILITY, work_tracking::LIST, json!(params)).await?;
         Ok(ListResult::from_connector(value, limit)?)
     }
 
     pub async fn get_ticket(self: &Arc<Self>, id: &str, params: GetParams) -> Result<TicketDetail, CallError> {
-        let params = serde_json::to_value(&params).map_err(|_| CallError::connector(ErrorCode::InvalidParams, "pedido não serializou"))?;
-        let value = self.call(id, work_tracking::CAPABILITY, work_tracking::GET, params).await?;
+        let value = self.call(id, work_tracking::CAPABILITY, work_tracking::GET, json!(params)).await?;
         Ok(TicketDetail::from_connector(value)?)
-    }
-
-    /// PID da vida atual, para diagnóstico e provas; não inicia nada.
-    pub async fn pid(&self, id: &str) -> Option<u32> {
-        let slot = self.existing_slot(id)?;
-        let life = slot.life.lock().await;
-        life.as_ref().and_then(Life::pid)
     }
 
     async fn call(self: &Arc<Self>, id: &str, capability: &str, method: &str, params: Value) -> Result<Value, CallError> {
@@ -163,10 +161,8 @@ impl Host {
         let mut guard = slot.life.lock().await;
         // Relido na vez: desligar ou remover enquanto esperava vale para este pedido.
         let entry = self.usable(id, capability)?;
-        if let Some(life) = guard.take_if(|life| life.poisoned || life.manifest != entry.manifest) {
-            slot.running.store(false, Ordering::Release);
-            life.shutdown(self.options.exit_grace).await;
-        }
+        let stale = guard.take_if(|life| life.poisoned || life.manifest != entry.manifest);
+        slot.end(stale, self.options.exit_grace).await;
         if guard.is_none() {
             *guard = Some(Life::start(&entry.manifest, self.options.init_timeout, self.options.exit_grace).await?);
             slot.running.store(true, Ordering::Release);
@@ -179,10 +175,7 @@ impl Host {
                 Ok(reply?)
             }
             Err(error) => {
-                if let Some(life) = guard.take() {
-                    slot.running.store(false, Ordering::Release);
-                    life.shutdown(self.options.exit_grace).await;
-                }
+                slot.end(guard.take(), self.options.exit_grace).await;
                 Err(error.into())
             }
         }
@@ -193,10 +186,7 @@ impl Host {
         let (slot, grace) = (slot.clone(), self.options.exit_grace);
         tokio::spawn(async move {
             let mut guard = slot.life.lock().await;
-            if let Some(life) = guard.take_if(|life| life.poisoned) {
-                slot.running.store(false, Ordering::Release);
-                life.shutdown(grace).await;
-            }
+            slot.end(guard.take_if(|life| life.poisoned), grace).await;
         });
     }
 
@@ -211,10 +201,7 @@ impl Host {
                 let mut guard = slot.life.lock().await;
                 let last = slot.last_used.lock().unwrap_or_else(|e| e.into_inner()).unwrap_or_else(Instant::now);
                 if last + idle > Instant::now() { continue; }
-                if let Some(life) = guard.take() {
-                    slot.running.store(false, Ordering::Release);
-                    life.shutdown(grace).await;
-                }
+                slot.end(guard.take(), grace).await;
                 slot.reaper.store(false, Ordering::Release);
                 return;
             }

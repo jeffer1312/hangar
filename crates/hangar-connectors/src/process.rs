@@ -13,10 +13,20 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 /// IDs nunca se repetem no servidor: resposta atrasada de outra vida não casa com pedido novo.
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
+/// O processo e a árvore dele. Só sai da `Life` para terminar.
+struct Owned { child: Child, tree: CommandTree }
+
+impl Owned {
+    async fn finish(mut self) {
+        hangar_core::terminal_process::finish(&mut self.tree).await;
+        let _ = self.child.wait().await;
+    }
+}
+
 pub(crate) struct Life {
     pub(crate) manifest: Manifest,
-    child: Child,
-    tree: CommandTree,
+    /// `None` só depois que o fim da árvore já foi entregue a uma tarefa própria.
+    owned: Option<Owned>,
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
     /// Pedido em andamento ou transporte quebrado: a vida não pode receber outro pedido.
@@ -36,7 +46,7 @@ impl Life {
         // O conector é código do dono, mas não herda a autoridade do servidor.
         for key in PRIVATE_ENV_KEYS { command.env_remove(key); }
         let mut tree = CommandTree::configure(&mut command).map_err(|error| unavailable(format!("contenção do conector falhou: {:?}", error.kind())))?;
-        die_with_parent(&mut command);
+        hangar_core::terminal_process::die_with_parent(&mut command);
         let mut child = command.spawn().map_err(|error| unavailable(format!("conector não iniciou: {:?}", error.kind())))?;
         if let Err(error) = tree.attach(&child) {
             let _ = child.start_kill();
@@ -47,7 +57,7 @@ impl Life {
             let _ = child.start_kill();
             return Err(unavailable("conector sem entrada ou saída"));
         };
-        let mut life = Life { manifest: manifest.clone(), child, tree, stdin: Some(stdin), stdout: BufReader::new(stdout), poisoned: true };
+        let mut life = Life { manifest: manifest.clone(), owned: Some(Owned { child, tree }), stdin: Some(stdin), stdout: BufReader::new(stdout), poisoned: true };
         let outcome = match tokio::time::timeout(init_timeout, life.initialize()).await {
             Ok(outcome) => outcome,
             Err(_) => Err(ConnectorError::new(ErrorCode::Timeout, "conector não respondeu à negociação no prazo")),
@@ -100,31 +110,24 @@ impl Life {
             if !self.poisoned { let _ = self.request(protocol::SHUTDOWN, json!({})).await; }
             self.stdin = None;
             // Sem recolher o líder: o zumbi segura o número do grupo até o fim da árvore.
-            let _ = hangar_core::terminal_process::leader_exited(&mut self.child).await;
+            if let Some(owned) = self.owned.as_mut() { let _ = hangar_core::terminal_process::leader_exited(&mut owned.child).await; }
         };
         let _ = tokio::time::timeout(grace, polite).await;
-        hangar_core::terminal_process::finish(&mut self.tree).await;
-        let _ = self.child.wait().await;
+        // Em tarefa própria: quem espera pode ser cancelado (prazo, desligar) sem deixar a árvore viva.
+        if let Some(owned) = self.owned.take() { let _ = tokio::spawn(owned.finish()).await; }
     }
 
-    pub(crate) fn pid(&self) -> Option<u32> { self.child.id() }
 }
 
-#[cfg(target_os = "linux")]
-fn die_with_parent(command: &mut Command) {
-    let parent = std::process::id() as libc::pid_t;
-    // SAFETY: entre o fork e o exec só há chamadas que o fork permite.
-    unsafe {
-        command.pre_exec(move || {
-            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            if libc::getppid() != parent { return Err(std::io::Error::from_raw_os_error(libc::ESRCH)); }
-            Ok(())
-        });
+/// Vida descartada sem `shutdown` (pedido cancelado na negociação ou no próprio encerramento): a
+/// árvore termina numa tarefa à parte. O `kill_on_drop` sozinho levaria só o processo líder.
+impl Drop for Life {
+    fn drop(&mut self) {
+        let Some(mut owned) = self.owned.take() else { return };
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => { runtime.spawn(owned.finish()); }
+            Err(_) => { let _ = owned.child.start_kill(); }
+        }
     }
 }
 
-// No Windows quem leva o filho junto é o Job do `CommandTree`.
-#[cfg(not(target_os = "linux"))]
-fn die_with_parent(_command: &mut Command) {}

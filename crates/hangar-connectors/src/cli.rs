@@ -3,7 +3,7 @@
 //! de saída diferente de zero.
 use crate::host::Host;
 use crate::manifest::Manifest;
-use crate::work_tracking::{Filter, GetParams, ListParams};
+use crate::work_tracking::{GetParams, ListParams, with_fetched_at};
 use crate::{AdminError, CallError};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -38,38 +38,27 @@ impl From<AdminError> for Failure { fn from(error: AdminError) -> Self { Self { 
 impl From<CallError> for Failure { fn from(error: CallError) -> Self { Self { code: error.code().into(), message: error.message(), exit: 1 } } }
 
 fn parse(args: &[String]) -> Result<Command, Failure> {
-    let arg = |index: usize, name: &str| args.get(index).cloned().ok_or_else(|| Failure::usage(format!("falta <{name}>\n{USAGE}")));
-    let command = match args.first().map(String::as_str) {
-        Some("add") => Command::Add(arg(1, "manifesto")?),
-        Some("list") => Command::List,
-        Some("enable") => Command::Enable(arg(1, "id")?, true),
-        Some("disable") => Command::Enable(arg(1, "id")?, false),
-        Some("remove") => Command::Remove(arg(1, "id")?),
-        Some("ticket") => Command::Ticket(arg(1, "id")?, arg(2, "ticket_id")?),
-        Some("tickets") => {
-            let id = arg(1, "id")?;
-            let (mut filter, mut limit, mut cursor) = (Filter::default(), 20u32, None);
-            let mut rest = args[2..].iter();
-            while let Some(flag) = rest.next() {
-                let value = rest.next().cloned().ok_or_else(|| Failure::usage(format!("{flag} sem valor")))?;
-                match flag.as_str() {
-                    "--query" => filter.query = Some(value),
-                    "--assignee" => filter.assignee = Some(value),
-                    "--cursor" => cursor = Some(value),
-                    "--limit" => limit = value.parse().map_err(|_| Failure::usage("--limit precisa ser número"))?,
-                    other => return Err(Failure::usage(format!("opção desconhecida: {other}"))),
-                }
-            }
-            let params = ListParams::from_value(json!(ListParams { filter, limit, cursor }))
-                .map_err(|error| Failure { code: error.code.as_str().into(), message: error.message, exit: 2 })?;
-            Command::Tickets(id, params)
+    let command = match args {
+        [verb, path] if verb == "add" => Command::Add(path.clone()),
+        [verb] if verb == "list" => Command::List,
+        [verb, id] if verb == "enable" => Command::Enable(id.clone(), true),
+        [verb, id] if verb == "disable" => Command::Enable(id.clone(), false),
+        [verb, id] if verb == "remove" => Command::Remove(id.clone()),
+        [verb, id, ticket_id] if verb == "ticket" => Command::Ticket(id.clone(), ticket_id.clone()),
+        [verb, id, options @ ..] if verb == "tickets" => {
+            if let [.., last] = options && options.len() % 2 != 0 { return Err(Failure::usage(format!("{last} sem valor"))); }
+            let pairs = options.chunks(2).map(|pair| match pair[0].strip_prefix("--") {
+                Some(name @ ("query" | "assignee" | "limit" | "cursor")) => Ok((name.to_owned(), pair[1].clone())),
+                _ => Err(Failure::usage(format!("opção desconhecida: {}", pair[0]))),
+            }).collect::<Result<Vec<_>, _>>()?;
+            Command::Tickets(id.clone(), ListParams::from_pairs(pairs).map_err(invalid)?)
         }
         _ => return Err(Failure::usage(USAGE)),
     };
-    let expected = match &command { Command::List => 1, Command::Ticket(..) => 3, Command::Tickets(..) => args.len(), _ => 2 };
-    if args.len() != expected { return Err(Failure::usage(format!("argumentos a mais\n{USAGE}"))); }
     Ok(command)
 }
+
+fn invalid(error: crate::protocol::ConnectorError) -> Failure { Failure { code: error.code.as_str().into(), message: error.message, exit: 2 } }
 
 /// Executa e devolve o código de saída; JSON no stdout, erro em JSON no stderr.
 pub async fn run(target: &Target, args: &[String]) -> u8 {
@@ -89,21 +78,16 @@ pub async fn run(target: &Target, args: &[String]) -> u8 {
     }
 }
 
-fn fetched(mut value: Value) -> Value {
-    value["fetched_at"] = json!(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
-    value
-}
-
 async fn local(host: &Arc<Host>, command: Command) -> Result<Value, Failure> {
     Ok(match command {
         Command::Add(path) => json!({"connector": host.add(Manifest::load(std::path::Path::new(&path))?)?}),
         Command::List => json!({"connectors": host.list()?}),
         Command::Enable(id, enabled) => json!({"connector": host.set_enabled(&id, enabled).await?}),
         Command::Remove(id) => json!({"connector": host.remove(&id).await?}),
-        Command::Tickets(id, params) => fetched(json!(host.list_tickets(&id, params).await?)),
+        Command::Tickets(id, params) => with_fetched_at(json!(host.list_tickets(&id, params).await?)),
         Command::Ticket(id, ticket_id) => {
-            let params = GetParams::from_value(json!({"ticket_id": ticket_id})).map_err(CallError::from)?;
-            fetched(json!(host.get_ticket(&id, params).await?))
+            let params = GetParams::new(ticket_id).map_err(CallError::from)?;
+            with_fetched_at(json!(host.get_ticket(&id, params).await?))
         }
     })
 }
@@ -116,7 +100,7 @@ fn segment(text: &str) -> String { percent_encoding::utf8_percent_encode(text, p
 
 async fn remote(base: &str, token: &str, command: Command) -> Result<Value, Failure> {
     let base = base.trim_end_matches('/');
-    let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none())
+    let client = hangar_core::net::http_client().redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(120)).build()
         .map_err(|_| Failure { code: "client_unavailable".into(), message: "cliente HTTP não iniciou".into(), exit: 3 })?;
     let request = match command {

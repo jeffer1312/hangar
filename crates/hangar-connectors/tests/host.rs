@@ -184,3 +184,21 @@ async fn arguments_and_folder_with_spaces_reach_the_connector_intact() {
     let result = bench.host.list_tickets("espacos", params(1)).await.unwrap();
     assert_eq!(result.items[0].title, "título com espaço e 'aspas' \"duplas\"");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn disable_during_negotiation_still_ends_the_whole_tree() {
+    let bench = Bench::new(HostOptions { exit_grace: Duration::from_millis(300), ..HostOptions::default() });
+    let grandchild = bench.path("neto");
+    bench.add("negociando", &["--pid-file", bench.path("pids").to_str().unwrap(), "--grandchild", grandchild.to_str().unwrap(), "--hang", "initialize", "--ignore-shutdown"]);
+    let host = bench.host.clone();
+    let pending = tokio::spawn(async move { host.list_tickets("negociando", params(1)).await });
+    while bench.lives("pids").is_empty() || !grandchild.exists() || std::fs::read_to_string(&grandchild).unwrap().is_empty() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let grandchild: u32 = std::fs::read_to_string(&grandchild).unwrap().parse().unwrap();
+    bench.host.set_enabled("negociando", false).await.unwrap();
+    let error = tokio::time::timeout(Duration::from_secs(5), pending).await.unwrap().unwrap().unwrap_err();
+    assert_eq!(error.code(), "unavailable");
+    gone(bench.lives("pids")[0]).await;
+    gone(grandchild).await;
+}

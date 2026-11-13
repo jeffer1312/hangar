@@ -62,13 +62,13 @@ async fn main() -> std::process::ExitCode {
                 capabilities.insert(work_tracking::CAPABILITY.into(), json!(work_tracking::VERSION));
                 Ok(json!({"protocol_version": protocol::PROTOCOL_VERSION, "id": options.id, "capabilities": capabilities}))
             }
-            work_tracking::LIST => match &mut help {
-                Ok(help) => match ListParams::from_value(params) { Ok(params) => help.list(params).await, Err(error) => Err(error) },
-                Err(error) => Err(error.clone()),
+            work_tracking::LIST => match (help.as_mut().map_err(|error| error.clone()), ListParams::from_value(params)) {
+                (Ok(help), Ok(params)) => help.list(params).await,
+                (Err(error), _) | (_, Err(error)) => Err(error),
             },
-            work_tracking::GET => match &mut help {
-                Ok(help) => match GetParams::from_value(params) { Ok(params) => help.get_ticket(params).await, Err(error) => Err(error) },
-                Err(error) => Err(error.clone()),
+            work_tracking::GET => match (help.as_mut().map_err(|error| error.clone()), GetParams::from_value(params)) {
+                (Ok(help), Ok(params)) => help.get_ticket(params).await,
+                (Err(error), _) | (_, Err(error)) => Err(error),
             },
             protocol::SHUTDOWN => {
                 let _ = rpc::write_message(&mut stdout, &protocol::success(&id, Value::Null)).await;

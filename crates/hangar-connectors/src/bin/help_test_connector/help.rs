@@ -26,7 +26,7 @@ impl Help {
         if base.scheme() != "https" && !(base.scheme() == "http" && loopback) {
             return Err(error(ErrorCode::InvalidParams, "o Help precisa de HTTPS (HTTP só no loopback, para teste)"));
         }
-        let client = reqwest::Client::builder()
+        let client = hangar_core::net::http_client()
             // Nunca levar o Authorization para outro endereço.
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(20))
@@ -94,7 +94,7 @@ impl Help {
         };
         Ok(json!({
             "items": summaries,
-            "next_cursor": next.then(|| cursor(page + 1, params.limit, &filters)),
+            "next_cursor": next.then(|| page.checked_add(1).map(|next| cursor(next, params.limit, &filters))).flatten(),
             "total": total,
         }))
     }
@@ -102,6 +102,8 @@ impl Help {
     pub async fn get_ticket(&mut self, params: GetParams) -> Result<Value, ConnectorError> {
         let token = self.token()?;
         let key = params.ticket_id;
+        // `.`/`..` virariam segmento de ponto na URL e sairiam de `/api/pms/`.
+        if matches!(key.trim(), "." | "..") { return Err(error(ErrorCode::NotFound, "não encontrado no Help")); }
         let path = format!("/api/pms/{}", percent_encoding::utf8_percent_encode(&key, percent_encoding::NON_ALPHANUMERIC));
         let value = self.get(&token, &path, &[]).await?;
         let mut detail = self.summary(&value)?;

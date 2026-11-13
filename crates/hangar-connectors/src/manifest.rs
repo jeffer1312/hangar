@@ -1,5 +1,5 @@
 //! Manifesto de um conector: identidade, capacidades e o comando, sem segredo nem shell.
-use crate::error::AdminError;
+use crate::error::{AdminError, AdminKind};
 use crate::protocol::{CAPABILITIES, MANIFEST_VERSION, PROTOCOL_VERSION};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -63,7 +63,7 @@ impl Manifest {
     /// Lê o arquivo do manifesto; a pasta dele vira a pasta de trabalho.
     pub fn load(path: &Path) -> Result<Self, AdminError> {
         let path = std::path::absolute(path).map_err(|error| AdminError::io("caminho do manifesto", &error))?;
-        let bytes = std::fs::read(&path).map_err(|error| AdminError::new("manifest_unreadable", format!("manifesto ilegível: {:?}", error.kind())))?;
+        let bytes = std::fs::read(&path).map_err(|error| AdminError::new(AdminKind::ManifestUnreadable, format!("manifesto ilegível: {:?}", error.kind())))?;
         let dir = path.parent().ok_or_else(|| AdminError::invalid("manifesto sem pasta"))?;
         Self::parse(&bytes, dir)
     }
@@ -72,10 +72,10 @@ impl Manifest {
         if bytes.len() > MAX_MANIFEST_BYTES { return Err(AdminError::invalid("manifesto acima de 64 KiB")); }
         let raw: Raw = serde_json::from_slice(bytes).map_err(|error| AdminError::invalid(format!("manifesto inválido: {error}")))?;
         if raw.manifest_version != MANIFEST_VERSION {
-            return Err(AdminError::new("unsupported_version", format!("manifest_version {} não suportado", raw.manifest_version)));
+            return Err(AdminError::new(AdminKind::UnsupportedVersion, format!("manifest_version {} não suportado", raw.manifest_version)));
         }
         if raw.protocol_version != PROTOCOL_VERSION {
-            return Err(AdminError::new("unsupported_version", format!("protocol_version {} não suportado", raw.protocol_version)));
+            return Err(AdminError::new(AdminKind::UnsupportedVersion, format!("protocol_version {} não suportado", raw.protocol_version)));
         }
         if !valid_id(&raw.id) { return Err(AdminError::invalid("id fora do formato [a-z][a-z0-9-]{0,63}")); }
         text("name", &raw.name, 200)?;
@@ -83,9 +83,9 @@ impl Manifest {
         if raw.capabilities.is_empty() { return Err(AdminError::invalid("nenhuma capacidade declarada")); }
         for (name, version) in &raw.capabilities {
             match CAPABILITIES.iter().find(|(known, _)| known == name) {
-                None => return Err(AdminError::new("unsupported_capability", format!("capacidade desconhecida: {name}"))),
+                None => return Err(AdminError::new(AdminKind::UnsupportedCapability, format!("capacidade desconhecida: {name}"))),
                 Some((_, supported)) if supported != version => {
-                    return Err(AdminError::new("unsupported_version", format!("{name} versão {version} não suportada")));
+                    return Err(AdminError::new(AdminKind::UnsupportedVersion, format!("{name} versão {version} não suportada")));
                 }
                 Some(_) => {}
             }
