@@ -744,7 +744,7 @@ impl Render for ReviewView {
 struct MachineReviews { label: String, listing: Option<Listing>, loading: bool, error: Option<String> }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
-enum Filter { #[default] All, Attention, Mine, Requested }
+enum Filter { #[default] All, Attention, Requested }
 
 #[derive(Default)]
 pub(super) struct Reviews {
@@ -1009,12 +1009,12 @@ impl Hangar {
         let filter = self.reviews.filter;
         let items: Vec<Summary> = all.into_iter()
             .filter(|r| self.reviews.host_filter.as_ref().is_none_or(|h| &r.host == h))
-            .filter(|r| match filter { Filter::All => true, Filter::Attention => r.needs_attention(), Filter::Mine => r.mine, Filter::Requested => r.review_requested })
+            .filter(|r| match filter { Filter::All => true, Filter::Attention => r.needs_attention(), Filter::Requested => r.review_requested })
             .filter(|r| query.is_empty() || format!("{} {} {} {}", r.title, r.repo, r.number_label(), r.source).to_lowercase().contains(&query))
             .collect();
         let chip = |id: String, label: String, on: bool| Button::new(SharedString::from(id)).small().map(|b| if on { b } else { b.ghost() }).selected(on).label(label);
         let filters = div().flex().items_center().gap(px(6.)).flex_wrap()
-            .children([(Filter::All, tr("review_filter_all")), (Filter::Attention, tr("review_filter_attention")), (Filter::Mine, tr("review_filter_mine")),
+            .children([(Filter::All, tr("review_filter_all")), (Filter::Attention, tr("review_filter_attention")),
                 (Filter::Requested, tr("review_filter_requested"))].into_iter().map(|(f, label)| chip(format!("reviews-filter-{label}"), label, filter == f)
                 .on_click(cx.listener(move |this, _, _, cx| { this.reviews.filter = f; cx.notify(); }))))
             .when(hosts.len() > 1 || host_filter.is_some(), |el| el.child(div().w(px(1.)).h(px(18.)).mx_1().bg(theme::border()))
