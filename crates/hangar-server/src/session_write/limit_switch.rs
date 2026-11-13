@@ -146,8 +146,8 @@ impl Spent {
         self.blocks(dir,None,now)
     }
     fn blocks(&self,dir:&str,row:Option<&Value>,now:f64) -> bool {
-        self.spent.lock().is_ok_and(|spent|spent.get(&crate::list::discover::real(dir))
-            .is_some_and(|mark|mark.blocking_until(row,now).is_some() && !mark.relogged(relogin_at(dir))))
+        let mark = self.spent.lock().ok().and_then(|spent|spent.get(&crate::list::discover::real(dir)).copied());
+        mark.is_some_and(|mark|mark.blocking_until(row,now).is_some() && !mark.relogged(relogin_at(dir)))
     }
 }
 
