@@ -114,6 +114,7 @@ mod forwarded;
 pub mod worktree_routes;
 pub mod reviews;
 mod computer_control;
+mod computer_control_install;
 mod worktree_context;
 mod worktree_fetch;
 pub mod worktree_policy;

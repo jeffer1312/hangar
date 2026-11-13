@@ -52,14 +52,7 @@ impl TargetRequest {
 
 /// Os alvos em ordem de nome de arquivo. Ilegível ou não objeto aparece mesmo assim, como local.
 pub fn targets(paths: &Paths) -> Vec<Value> {
-    let Ok(listing) = std::fs::read_dir(paths.targets_dir()) else { return Vec::new() };
-    let mut names: Vec<String> = listing
-        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
-        // Mesmo recorte do glob do Python: oculto fica fora.
-        .filter(|name| name.ends_with(SUFFIX) && !name.starts_with('.'))
-        .collect();
-    names.sort();
-    names.into_iter().map(|file| {
+    target_files(paths).into_iter().map(|file| {
         let path = paths.targets_dir().join(&file);
         let mut cfg = match std::fs::read(&path).ok().and_then(|bytes| files::parse(&bytes)) {
             Some(Value::Object(cfg)) => cfg,
@@ -136,6 +129,18 @@ pub fn create_target(paths: &Paths, request: &TargetRequest) -> Result<(), Error
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(exists(&name)),
         Err(e) => Err(Error::at(&path, &e)),
     }
+}
+
+/// Os `<nome>-agent.json` de `targets/`, em ordem de nome.
+pub(crate) fn target_files(paths: &Paths) -> Vec<String> {
+    let Ok(listing) = std::fs::read_dir(paths.targets_dir()) else { return Vec::new() };
+    let mut names: Vec<String> = listing
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        // Mesmo recorte do glob do Python: oculto fica fora.
+        .filter(|name| name.ends_with(SUFFIX) && !name.starts_with('.'))
+        .collect();
+    names.sort();
+    names
 }
 
 fn exists(name: &str) -> Error {

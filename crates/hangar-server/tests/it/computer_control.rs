@@ -349,12 +349,33 @@ async fn get_reads_lone_surrogate() {
     })))));
 }
 
-/// `/install` ainda é do Python (Task 7): o Rust repassa.
+/// ROT-08, D3.1: `/install` responde 410 "atualize o app" sem tocar o disco nem ir ao Python; o
+/// convidado recebe 403 e quem não tem token 401 (D1.1).
 #[tokio::test]
-async fn install_still_goes_to_python() {
+async fn rot08_install_is_gone_and_touches_nothing() {
     let s = Scene::new().await;
-    assert_eq!(s.call("POST", "/api/computer-control/install", None).await.0, StatusCode::IM_A_TEAPOT);
-    assert_eq!(s.hits(), 1);
+    let got = s.call("POST", "/api/computer-control/install", None).await;
+    s.assert_error(&got, 410, "erro_computer_control_update_app", json!({}));
+    let guest = s.call_as("POST", "/api/computer-control/install", None, Who::Guest).await;
+    assert_eq!((guest.0, guest.1["detail"]["code"].as_str()), (StatusCode::FORBIDDEN, Some("erro_fora_do_convite")));
+    let nobody = s.call_as("POST", "/api/computer-control/install", None, Who::Nobody).await;
+    assert_eq!(nobody.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(s.hits(), 0);
+    assert!(!s.home.join(".hangar/computer-control").exists(), "nada criado");
+}
+
+/// D1.5, D3.6: binário ausente depois de uma instalação automática que falhou aparece como
+/// `install_failed` com o código; com o binário no lugar, a falha antiga não aparece.
+#[tokio::test]
+async fn d1_5_failed_install_shows_until_the_binary_exists() {
+    let s = Scene::new().await;
+    s.write(".hangar/computer-control/install-error.json", r#"{"code": "computer_control_release_failed", "msg": "o GitHub respondeu 503"}"#);
+    assert_eq!(s.get().await, (StatusCode::OK, s.h(merged(empty_state(), json!({
+        "unavailable": "install_failed",
+        "install_error": "computer_control_release_failed"
+    })))));
+    s.installed();
+    assert_eq!(s.get().await, (StatusCode::OK, s.h(installed_state())));
 }
 
 #[path = "computer_control_put.rs"]

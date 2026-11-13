@@ -1,9 +1,10 @@
-//! Computer Use (MCP `hangar-computer-control`): caminhos, leitura dos `.claude.json`, alvos, SSH e o
-//! escritor único da entrada do MCP (ligar, desligar e o repasse do Jev).
+//! Computer Use (MCP `hangar-computer-control`): caminhos, leitura dos `.claude.json`, alvos, SSH, o
+//! escritor único da entrada do MCP (ligar, desligar e o repasse do Jev) e a instalação/atualização do binário.
 //! Nada aqui lê `$HOME` nem a lista de contas: o servidor passa os dois em `Paths`.
 #![forbid(unsafe_code)]
 
 mod files;
+mod install;
 mod save;
 mod ssh;
 mod state;
@@ -15,6 +16,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 pub use files::{FileEntry, known_entry, parked_entry, read_entries, read_entry};
+pub use install::{Github, Policy, REPO, Swapped, install_if_missing, update_tick};
 pub use save::{Aux, Mode, SaveRequest, save};
 pub use ssh::{ssh_hosts, test_host, windows_setup};
 pub use state::{Facts, state};
@@ -94,6 +96,10 @@ impl Paths {
     }
     pub fn install_json(&self) -> PathBuf {
         self.install_dir().join("install.json")
+    }
+    /// A última instalação automática que falhou; some quando uma dá certo.
+    pub fn install_error_file(&self) -> PathBuf {
+        self.install_dir().join("install-error.json")
     }
     pub fn exe(&self) -> PathBuf {
         self.install_dir().join("windows-agent.exe")

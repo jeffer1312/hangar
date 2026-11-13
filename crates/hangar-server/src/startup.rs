@@ -80,6 +80,8 @@ pub(crate) async fn maintenance(state: Arc<crate::routes::AppState>) {
             Err(error) => crate::config_sync::jev_startup::report(&env, "configuracao", &error),
         });
     }
+    // Computer Use: instala o hcu se faltar e o atualiza de hora em hora, sem segurar a subida.
+    crate::computer_control_install::spawn(state.clone());
     {
         use crate::costs::pricing_refresh::{PricingRefresh, URL};
         let _ = PricingRefresh::start(crate::costs::pricing::default_dir(), URL, PricingRefresh::offline());

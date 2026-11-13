@@ -1649,13 +1649,18 @@ dependencies = [
 name = "hangar-computer-control-setup"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "hangar-core",
+ "hangar-update-news",
  "proptest",
  "regex",
+ "reqwest",
+ "semver",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
