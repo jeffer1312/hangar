@@ -39,14 +39,18 @@ pub fn render(
     each_event(provider, path, |event| {
         seen += 1;
         if seen > from_event {
-            if let Some(block) = block_of(&event) {
+            if let Some(block) = block_of(&event, scrub) {
                 first_ts = first_ts.or(event.ts);
                 blocks.push(scrub(&block));
             }
         }
         true
     })?;
+    // Mensagem da pessoa no Claude não traz `ts`: sem nenhum, vale a data do arquivo.
+    let file_ts = || std::fs::metadata(path).and_then(|m| m.modified()).ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs_f64());
     let date = first_ts
+        .or_else(file_ts)
         .and_then(|ts| chrono::DateTime::<chrono::Utc>::from_timestamp(ts as i64, 0))
         .map(|d| d.format("%Y-%m-%d").to_string())
         .unwrap_or_default();
@@ -54,14 +58,15 @@ pub fn render(
     Ok(Rendered { parts: split(&head, &blocks), end_event: seen })
 }
 
-fn block_of(event: &ChatEvent) -> Option<String> {
+fn block_of(event: &ChatEvent, scrub: &dyn Fn(&str) -> String) -> Option<String> {
     let (label, body) = match event.kind {
         ChatKind::UserMsg => ("USER:".to_string(), event.text.clone()?),
         ChatKind::AssistantMsg => ("AGENT:".to_string(), event.text.clone()?),
         ChatKind::ToolUse => {
             let name = event.tool_name.as_deref().unwrap_or("?");
             let input = event.tool_input.as_ref().map(|m| serde_json::Value::Object(m.clone()).to_string()).unwrap_or_default();
-            (format!("TOOL CALL {name}:"), cut(&input, TOOL_INPUT_CHARS))
+            // Limpa antes de cortar: chave cortada ao meio não é reconhecida depois.
+            (format!("TOOL CALL {name}:"), cut(&scrub(&input), TOOL_INPUT_CHARS))
         }
         _ => return None,
     };

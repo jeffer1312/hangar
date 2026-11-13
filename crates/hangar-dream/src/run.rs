@@ -108,6 +108,8 @@ struct Ledger {
     auth: Auth,
     key_usd: f64,
     account_usd: f64,
+    /// A chave acabou e não havia conta: as outras chamadas não perguntam de novo.
+    no_account: bool,
 }
 
 impl Ledger {
@@ -128,7 +130,7 @@ pub struct Spent {
 
 impl<'a> Payer<'a> {
     pub fn new(auth: Auth, on_no_credit: &'a (dyn Fn() -> Option<Auth> + Sync)) -> Self {
-        Self { ledger: Mutex::new(Ledger { auth, key_usd: 0.0, account_usd: 0.0 }), on_no_credit }
+        Self { ledger: Mutex::new(Ledger { auth, key_usd: 0.0, account_usd: 0.0, no_account: false }), on_no_credit }
     }
 
     pub fn spent(&self) -> Spent {
@@ -164,7 +166,13 @@ impl<'a> Payer<'a> {
                     let mut l = self.ledger.lock().unwrap();
                     // Outra chamada pode já ter trocado; só a primeira pergunta pela conta.
                     if l.auth == Auth::Key {
-                        l.auth = (self.on_no_credit)().ok_or(DreamError::Model(ModelError::NoCredit))?;
+                        match (!l.no_account).then(|| (self.on_no_credit)()).flatten() {
+                            Some(account) => l.auth = account,
+                            None => {
+                                l.no_account = true;
+                                return Err(DreamError::Model(ModelError::NoCredit));
+                            }
+                        }
                     }
                 }
                 Err(ModelError::Budget { cost_usd }) => {
@@ -206,6 +214,9 @@ pub async fn dream_project(job: &Job<'_>, payer: &Payer<'_>, model: &dyn Model) 
         fs::write(mem.join(name), content)?;
     }
     for input in job.inputs {
+        if !valid_input_name(&input.name) {
+            return Err(DreamError::Rejected(format!("nome inválido na entrada: {}", input.name)));
+        }
         fs::write(inputs.join(&input.name), &input.text)?;
     }
     let cap = job.cap_usd;
@@ -229,8 +240,16 @@ pub async fn dream_project(job: &Job<'_>, payer: &Payer<'_>, model: &dyn Model) 
     Ok(Outcome { files, retired, organizer_reply: reply.text })
 }
 
+/// Nome montado a partir de dados de outras máquinas: só `[A-Za-z0-9._-]`, sem começar por ponto.
+pub fn valid_input_name(name: &str) -> bool {
+    !name.is_empty() && !name.starts_with('.') && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+}
+
 /// Confere o que os agentes deixaram. Qualquer coisa fora do formato recusa a rodada inteira.
 fn collect(workdir: &Path, scrub: &dyn Fn(&str) -> String) -> Result<(BTreeMap<String, String>, usize), DreamError> {
+    if !fs::symlink_metadata(workdir.join("memory"))?.is_dir() {
+        return Err(DreamError::Rejected("memory/ não é uma pasta".into()));
+    }
     for entry in fs::read_dir(workdir)? {
         let name = entry?.file_name().to_string_lossy().into_owned();
         if name != "memory" && name != "inputs" {

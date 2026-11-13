@@ -1,10 +1,11 @@
 //! Ler e gravar a pasta `memory/` sem perder nota de quem escreveu durante a rodada.
 //! A trava é a mesma do auto-dream nativo do Claude Code: os dois nunca consolidam juntos.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
-use std::io;
-use std::path::Path;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, SystemTime};
 
 use hangar_core::fs::atomic_write;
@@ -109,30 +110,61 @@ pub fn write(dir: &Path, files: &BTreeMap<String, String>, expect_digest: &str) 
     result
 }
 
+/// Pastas que este processo está gravando: o PID no arquivo é o mesmo para duas gravações daqui.
+static HELD: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(Default::default);
+
 struct Lock<'a> {
     dir: &'a Path,
+    key: PathBuf,
     previous: Option<SystemTime>,
 }
 
 impl<'a> Lock<'a> {
     fn acquire(dir: &'a Path) -> Result<Self, WriteError> {
-        let path = dir.join(LOCK);
-        let previous = fs::metadata(&path).and_then(|m| m.modified()).ok();
-        if let Some(mtime) = previous {
-            let fresh = SystemTime::now().duration_since(mtime).map_or(true, |age| age < LOCK_STALE);
-            let pid = fs::read_to_string(&path).ok().and_then(|s| s.trim().parse::<u32>().ok());
-            let holder_alive = pid.is_some_and(|p| pid_alive(p).unwrap_or(true));
-            if fresh && holder_alive {
-                return Err(WriteError::Locked);
+        let key = fs::canonicalize(dir)?;
+        if !HELD.lock().unwrap_or_else(|e| e.into_inner()).insert(key.clone()) {
+            return Err(WriteError::Locked);
+        }
+        let lock = Self { dir, key, previous: None };
+        match lock.take() {
+            Ok(previous) => Ok(Self { previous, ..lock }),
+            Err(e) => {
+                HELD.lock().unwrap_or_else(|e| e.into_inner()).remove(&lock.key);
+                Err(e)
             }
         }
-        atomic_write(&path, std::process::id().to_string().as_bytes())?;
-        Ok(Self { dir, previous })
+    }
+
+    fn take(&self) -> Result<Option<SystemTime>, WriteError> {
+        let path = self.dir.join(LOCK);
+        let pid = std::process::id().to_string();
+        // Sem trava: criar com `create_new` fecha a corrida com o nativo.
+        match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                file.write_all(pid.as_bytes())?;
+                return Ok(None);
+            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e.into()),
+        }
+        let previous = fs::metadata(&path).and_then(|m| m.modified()).ok();
+        let fresh = previous.is_some_and(|mtime| SystemTime::now().duration_since(mtime).map_or(true, |age| age < LOCK_STALE));
+        let holder = fs::read_to_string(&path).ok().and_then(|s| s.trim().parse::<u32>().ok());
+        if fresh && holder.is_some_and(|p| pid_alive(p).unwrap_or(true)) {
+            return Err(WriteError::Locked);
+        }
+        atomic_write(&path, pid.as_bytes())?;
+        // Quem assumiu a trava velha junto com outro processo vê o PID dele e desiste.
+        if fs::read_to_string(&path)?.trim() != pid {
+            return Err(WriteError::Locked);
+        }
+        Ok(previous)
     }
 
     /// Como o nativo: conteúdo vazio solta a trava e o mtime guarda a última consolidação; na falha o
     /// mtime volta ao de antes.
     fn release(self, done: bool) {
+        HELD.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.key);
         let path = self.dir.join(LOCK);
         match (done, self.previous) {
             (false, None) => {

@@ -58,9 +58,22 @@ impl ProjectId {
     }
 }
 
-/// Nome da pasta em `projects/`, como o Claude Code: todo caractere fora de `[A-Za-z0-9]` vira `-`.
+/// Nome da pasta em `projects/`, como o Claude Code: cada unidade UTF-16 fora de `[A-Za-z0-9]` vira
+/// `-` (um emoji vira dois).
+/// shortcut: o Claude Code encurta com hash os nomes acima de 200 caracteres e isto não; caminho tão
+/// longo aponta para outra pasta. Ler o algoritmo no binário se aparecer um caso.
 pub fn sanitize(path: &str) -> String {
-    path.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect()
+    let mut out = String::with_capacity(path.len());
+    for c in path.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+        } else {
+            for _ in 0..c.len_utf16() {
+                out.push('-');
+            }
+        }
+    }
+    out
 }
 
 pub fn memory_dir(claude_base: &Path, root: &Path) -> PathBuf {
@@ -77,7 +90,8 @@ pub fn canonical_root(cwd: &Path) -> Option<PathBuf> {
     if common.file_name().is_some_and(|n| n == ".git") {
         common.parent().map(Path::to_path_buf)
     } else {
-        Some(common)
+        // Submódulo (`.git/modules/x`) ou git-dir fora do lugar: a raiz é a da árvore de trabalho.
+        git(cwd, &["rev-parse", "--show-toplevel"]).map(PathBuf::from)
     }
 }
 
@@ -88,7 +102,7 @@ pub fn project_of(root: &Path) -> ProjectId {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Option<String> {
-    let out = Command::new("git").arg("-C").arg(dir).args(args).output().ok()?;
+    let out = Command::new("git").arg("-C").arg(dir).args(args).env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").output().ok()?;
     if !out.status.success() {
         return None;
     }
@@ -131,6 +145,7 @@ mod tests {
             "-home-jefferson--hangar-worktrees-hangar-dreaming"
         );
         assert_eq!(sanitize("/home/jefferson/Área de trabalho"), "-home-jefferson--rea-de-trabalho");
+        assert_eq!(sanitize("/a/🚀"), "-a---");
     }
 
     #[test]
