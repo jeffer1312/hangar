@@ -89,10 +89,6 @@ impl Host {
 
     pub fn entry(&self, id: &str) -> Result<Entry, AdminError> { self.registry.get(id) }
 
-    /// Vínculo ticket → sessão; não inicia processo nem consulta o fornecedor.
-    pub fn link(&self, id: &str, ticket_id: &str, session: Option<&str>) -> Result<Entry, AdminError> {
-        self.registry.link(id, ticket_id, session)
-    }
 
     /// Ligar só marca; desligar também cancela o pedido em andamento e termina a árvore.
     pub async fn set_enabled(&self, id: &str, enabled: bool) -> Result<Entry, AdminError> {

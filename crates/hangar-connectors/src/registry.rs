@@ -3,10 +3,8 @@
 use crate::error::{AdminError, AdminKind};
 use crate::manifest::Manifest;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::fs::{File, OpenOptions};
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const FORMAT_VERSION: u32 = 1;
 
@@ -15,9 +13,6 @@ pub struct Entry {
     #[serde(flatten)]
     pub manifest: Manifest,
     pub enabled: bool,
-    /// Ticket → nome da sessão aberta para ele. Vínculo do dono, não do fornecedor: sai com o conector.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub links: BTreeMap<String, String>,
 }
 
 impl std::ops::Deref for Entry {
@@ -53,7 +48,7 @@ impl Registry {
                     Err(AdminError::new(AdminKind::ConnectorExists, format!("já existe outro conector {:?}; remova antes de cadastrar outro", manifest.id)))
                 };
             }
-            let entry = Entry { manifest, enabled: true, links: BTreeMap::new() };
+            let entry = Entry { manifest, enabled: true };
             file.connectors.push(entry.clone());
             file.connectors.sort_by(|a, b| a.id.cmp(&b.id));
             Ok((entry, true))
@@ -65,18 +60,6 @@ impl Registry {
             let entry = file.connectors.iter_mut().find(|entry| entry.id == id).ok_or_else(|| AdminError::not_found(id))?;
             let changed = entry.enabled != enabled;
             entry.enabled = enabled;
-            Ok((entry.clone(), changed))
-        })
-    }
-
-    /// Liga o ticket a uma sessão, ou desfaz com `None`.
-    pub fn link(&self, id: &str, ticket_id: &str, session: Option<&str>) -> Result<Entry, AdminError> {
-        self.update(|file| {
-            let entry = file.connectors.iter_mut().find(|entry| entry.id == id).ok_or_else(|| AdminError::not_found(id))?;
-            let changed = match session {
-                Some(session) => entry.links.insert(ticket_id.to_owned(), session.to_owned()).as_deref() != Some(session),
-                None => entry.links.remove(ticket_id).is_some(),
-            };
             Ok((entry.clone(), changed))
         })
     }
@@ -105,7 +88,7 @@ impl Registry {
     fn update<T>(&self, change: impl FnOnce(&mut CatalogFile) -> Result<(T, bool), AdminError>) -> Result<T, AdminError> {
         let parent = self.path.parent().ok_or_else(|| AdminError::new(AdminKind::RegistryUnavailable, "catálogo sem pasta"))?;
         std::fs::create_dir_all(parent).map_err(|error| AdminError::io("pasta do catálogo", &error))?;
-        let _lock = lock(&self.path.with_extension("lock")).map_err(|error| AdminError::io("trava do catálogo", &error))?;
+        let _lock = hangar_core::fs::lock_file(&self.path.with_extension("lock")).map_err(|error| AdminError::io("trava do catálogo", &error))?;
         let mut file = self.read()?;
         let (value, changed) = change(&mut file)?;
         if changed {
@@ -116,11 +99,3 @@ impl Registry {
     }
 }
 
-fn lock(path: &Path) -> io::Result<File> {
-    let mut options = OpenOptions::new();
-    options.read(true).append(true).create(true);
-    #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
-    let file = options.open(path)?;
-    file.lock()?;
-    Ok(file)
-}

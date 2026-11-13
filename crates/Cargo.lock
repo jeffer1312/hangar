@@ -1835,6 +1835,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-mission"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "form_urlencoded",
+ "hangar-core",
+ "hangar-http-file",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "sha1_smol",
+ "tempfile",
+ "tokio",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "hangar-omp-sync"
 version = "0.1.0"
 dependencies = [
@@ -1985,6 +2004,7 @@ dependencies = [
  "hangar-docs",
  "hangar-dream",
  "hangar-http-file",
+ "hangar-mission",
  "hangar-omp-sync",
  "hangar-opencode-cookie",
  "hangar-package",
