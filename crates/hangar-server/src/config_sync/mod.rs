@@ -15,7 +15,7 @@ pub mod jev;
 pub mod jev_startup;
 pub mod legacy;
 pub mod metadata;
-pub mod paths;
+pub use hangar_core::path_markers as paths;
 pub mod plugin_publish;
 pub mod preferences;
 #[cfg(test)]

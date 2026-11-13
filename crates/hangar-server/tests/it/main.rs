@@ -76,6 +76,7 @@ mod sink;
 #[cfg(unix)]
 mod voice_support;
 mod workspace_fixture;
+mod shortcut_transfer;
 
 /// Pedido de uma rota do app num servidor falso. Qualquer processo da máquina pode sondar uma porta de
 /// loopback nova (um detector de servidor local manda `HEAD /`): o falso não conta o que não é rota.

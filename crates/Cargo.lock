@@ -1936,6 +1936,7 @@ dependencies = [
  "hangar-reviews",
  "hangar-scheduled-tasks",
  "hangar-session-tools",
+ "hangar-shortcut-transfer",
  "hangar-transcript",
  "hangar-update-news",
  "hangar-workflows",
@@ -2004,6 +2005,23 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "hangar-shortcut-transfer"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "fancy-regex",
+ "form_urlencoded",
+ "hangar-core",
+ "libc",
+ "percent-encoding",
+ "regex",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

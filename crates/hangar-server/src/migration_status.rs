@@ -108,6 +108,7 @@ pub fn rust_route(method: &Method, path: &str) -> bool {
         || crate::session_tools::owns_path(path)
         || crate::costs_routes::usage_path(path) || crate::diag::version_matches(method, path)
         || crate::plugins::matches(path) || workflow || hangar_desktop_theme::owns_path(path)
+        || hangar_shortcut_transfer::owns_path(path)
         || matches!(path, "/api/config-sync/apply" | "/api/update-channel") { return true; }
     if *method == Method::GET && matches!(path, "/api/config-sync/manifest" | "/api/config-sync/bundle") { return true; }
     if crate::ui::matches(method, path) || crate::dictation::http::matches(method, path)
