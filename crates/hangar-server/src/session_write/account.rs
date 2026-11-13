@@ -34,7 +34,7 @@ pub fn targets(catalog:&Value,quotas:&[Value],current:Option<&str>,login:impl Fn
         let path=row["path"].as_str()?;
         if current.is_some_and(|current|same(current,path)) {return None;}
         let read=quotas.iter().find(|q|q["estado"]=="lida" && q["id"].as_str().and_then(|id|id.strip_prefix("claude:")).is_some_and(|p|same(p,path)));
-        let pct=read.and_then(|q|q["janelas"].as_array()?.iter().filter_map(|w|w["pct"].as_f64()).reduce(f64::max));
+        let pct=read.and_then(|q|q["janelas"].as_array()?.iter().filter(|w|w["por_modelo"]!=true).filter_map(|w|w["pct"].as_f64()).reduce(f64::max));
         Some(json!({"path":path,"label":row["label"],"pct":pct,"low":pct.is_some_and(|p|p>=LOW_PCT),"full":pct.is_some_and(|p|p>=FULL_PCT),"login":login(path)}))
     }).collect();
     out.sort_by(|a,b|{
@@ -324,6 +324,14 @@ mod tests {
         assert_eq!(order,["/b","/c","/d","/a"]);
         assert_eq!((out[1]["low"].as_bool(),out[1]["full"].as_bool()),(Some(true),Some(false)));
         assert_eq!((out[3]["full"].as_bool(),out[2]["pct"].is_null()),(Some(true),true));
+    }
+
+    #[test]
+    fn a_full_model_window_does_not_make_a_target_full() {
+        let catalog=json!([{"path":"/a","label":"a"}]);
+        let quotas=[json!({"id":"claude:/a","estado":"lida","janelas":[{"pct":53.0},{"pct":99.0,"por_modelo":true}]})];
+        let out=targets(&catalog,&quotas,None,|_|true);
+        assert_eq!((out[0]["pct"].as_f64(),out[0]["low"].as_bool(),out[0]["full"].as_bool()),(Some(53.0),Some(false),Some(false)));
     }
 
     /// Conta sem login não serve de destino: vem marcada e vai para o fim, junto das cheias.

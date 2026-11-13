@@ -408,7 +408,8 @@ impl OpenFacts for LocalFacts {
 
     fn spent_accounts(&self) -> crate::session_write::limit_switch::SpentAccounts {
         // O mesmo arquivo da troca automática por limite (`limit_switch::Spent`); ilegível = nenhuma.
-        crate::session_write::limit_switch::read_spent(&self.accounts.quota_path().with_file_name("limit-spent.json"))
+        crate::session_write::limit_switch::without_relogged(
+            crate::session_write::limit_switch::read_spent(&self.accounts.quota_path().with_file_name("limit-spent.json")))
     }
 
     fn quota_unknown(&self, name: &str, account: &str) {
