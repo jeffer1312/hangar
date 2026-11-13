@@ -4,11 +4,6 @@ version.workspace = true
 edition.workspace = true
 publish = false
 
-# O conector de teste do Help: um programa à parte, que o host só conhece pelo manifesto.
-[[bin]]
-name = "hangar-help-test-connector"
-path = "src/bin/help_test_connector/main.rs"
-
 # Conector de prova dos testes do host (`CARGO_BIN_EXE_*` só existe para binários).
 [[bin]]
 name = "hangar-fixture-connector"
@@ -31,5 +26,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-
 tracing = { workspace = true }
 
 [dev-dependencies]
+hangar-ticket-actions.workspace = true
+hangar-mission.workspace = true
 tempfile.workspace = true
 tower = { version = "=0.5.3", default-features = false, features = ["util"] }

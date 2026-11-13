@@ -1,4 +1,4 @@
-//! Rotas do dono do Mission Control. Autenticação antes de ler corpo ou arquivo.
+//! Rotas dos tickets do dono. Autenticação antes de ler corpo ou arquivo.
 use crate::store::{Error, Kind, Link, OwnerChange, Report, Store};
 use axum::Router;
 use axum::body::to_bytes;
@@ -31,7 +31,7 @@ pub fn router<S: Clone + Send + Sync + 'static>(edge: Edge, store: Arc<Store>, n
 
 /// O que a sessão ligada recebe: como informar etapa e evidências.
 fn linked_notice(key: &str) -> String {
-    format!("[painel: Mission Control] Esta sessão trabalha o ticket {key}. Ao mudar de etapa, informe pela tool `mission` do MCP \
+    format!("[painel: Tickets] Esta sessão trabalha o ticket {key}. Ao mudar de etapa, informe pela tool `mission` do MCP \
 hangar (sem argumentos ela mostra o ticket e as etapas). Na validação, anexe as evidências de funcionamento (prints, vídeos, \
 relatórios) pela mesma tool e aguarde a aprovação do dono antes de seguir.")
 }
@@ -83,7 +83,7 @@ async fn blocking<T: Send + 'static>(state: &Http, work: impl FnOnce(&Store) -> 
 
 async fn reply(state: &Http, peer: Option<SocketAddr>, request: Request) -> Response {
     let socket = peer.unwrap_or_else(|| "0.0.0.0:0".parse().expect("endereço estático válido"));
-    if let Err(response) = state.edge.owner_only(socket, &request, ("mission_owner_only", "só o dono usa o Mission Control")).await {
+    if let Err(response) = state.edge.owner_only(socket, &request, ("mission_owner_only", "só o dono administra os tickets")).await {
         return response;
     }
     let segments: Vec<String> = request.uri().path().trim_start_matches('/').split('/')

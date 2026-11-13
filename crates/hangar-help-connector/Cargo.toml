@@ -1,0 +1,24 @@
+[package]
+name = "hangar-help-connector"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "hangar-help-test-connector"
+path = "src/main.rs"
+
+[dependencies]
+hangar-core.workspace = true
+hangar-connectors.workspace = true
+chrono.workspace = true
+percent-encoding.workspace = true
+sha1_smol.workspace = true
+serde_json = { workspace = true, features = ["float_roundtrip", "alloc", "unbounded_depth", "arbitrary_precision", "raw_value"] }
+reqwest = { workspace = true, features = ["rustls", "multipart"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "process", "sync", "time", "fs", "signal"] }
+
+[dev-dependencies]
+axum.workspace = true
+tempfile.workspace = true
+form_urlencoded.workspace = true

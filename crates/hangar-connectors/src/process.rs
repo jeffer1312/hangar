@@ -69,7 +69,11 @@ impl Life {
     }
 
     async fn initialize(&mut self) -> Result<(), ConnectorError> {
-        let value = self.request(protocol::INITIALIZE, protocol::initialize_params()).await??;
+        let mut params = protocol::initialize_params();
+        if self.manifest.capabilities.contains_key(crate::work_actions::CAPABILITY) {
+            params["capabilities"] = json!(self.manifest.capabilities);
+        }
+        let value = self.request(protocol::INITIALIZE, params).await??;
         let result: InitializeResult = serde_json::from_value(value)
             .map_err(|_| ConnectorError::protocol("resposta de initialize fora do contrato"))?;
         if result.protocol_version != PROTOCOL_VERSION {

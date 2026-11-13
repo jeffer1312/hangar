@@ -1,4 +1,4 @@
-//! Mission Control: os tickets dos conectores do servidor ativo em colunas por etapa do trabalho, cada um com a
+//! Tickets: os tickets dos conectores do servidor ativo em colunas por etapa do trabalho, cada um com a
 //! sessão que o trabalha, o portão do dono, as evidências de validação e o histórico (`/api/mission`).
 use super::*;
 use super::costs::{empty_state, error_state, loading_state, note_box, page_frame};
@@ -9,7 +9,13 @@ use gpui_kit::component::progress::Progress;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
+mod actions;
+mod layout;
+mod stages;
+
 const PAGE: &str = "60";
+
+pub(super) enum Reply { Launch {server: String, dialog: EntityId, options: Value} }
 
 #[derive(Clone, Deserialize)]
 struct Connector {
@@ -45,10 +51,9 @@ struct Detail {
     #[serde(flatten)]
     ticket: Ticket,
     description_markdown: String,
-    start_prompt: Option<String>,
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, serde::Serialize)]
 struct Stage {
     id: String,
     name: String,
@@ -56,6 +61,10 @@ struct Stage {
     gate: bool,
     #[serde(default)]
     statuses: Vec<String>,
+    #[serde(default)]
+    prompt: Option<String>,
+    #[serde(default)]
+    actions: Option<BTreeMap<String,Vec<String>>>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -69,6 +78,8 @@ struct Item {
     connector: String,
     ticket_id: String,
     session: Option<String>,
+    #[serde(default)]
+    session_key: Option<String>,
     stage: Option<String>,
     #[serde(default)]
     approved: Vec<String>,
@@ -95,10 +106,6 @@ struct Board {
     done: bool,
 }
 
-/// Pedido de Iniciar à espera da sessão nova: só a criação seguinte, com a mensagem que começa pelo texto
-/// posto no campo, liga o ticket.
-struct PendingStart { server: String, connector: String, ticket: Ticket, prompt: String }
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Lane { Inbox, Stage(usize), Done }
 
@@ -109,6 +116,19 @@ enum Source { Reported, Status, Review, Plan, None }
 #[derive(Default)]
 pub(super) struct Mission {
     pub(super) open: bool,
+    pub(super) launch_options: Option<Value>,
+    pub(super) conversation: bool,
+    dispatch_seq: u64,
+    action_pending: Option<actions::Pending>,
+    receipts: HashMap<String,actions::Receipt>,
+    execution_receipts: HashMap<String,actions::Receipt>,
+    dispatching: HashSet<String>,
+    detail_expanded: bool,
+    detail_resize: Option<(f32,f32)>,
+    detail_focus: Option<FocusHandle>,
+    lanes_scroll: ScrollHandle,
+    drag_edge: i8,
+    drag_scroll: Option<Task<()>>,
     /// Servidor de onde veio o que está na tela.
     server: Option<String>,
     connector: Option<String>,
@@ -122,15 +142,14 @@ pub(super) struct Mission {
     /// Releituras das etapas e registros: a resposta mais nova vence.
     work_seq: u64,
     busy: bool,
-    pending: Option<PendingStart>,
     query: Option<Entity<InputState>>,
     _query_events: Option<Subscription>,
     /// Miniaturas das evidências de imagem: `None` enquanto chega ou quando não decodificou.
     thumbs: HashMap<String, Option<Arc<RenderImage>>>,
     /// Campo do "Pedir ajustes", aberto no detalhe.
     changes: Option<Entity<TextareaState>>,
-    /// Editor das etapas, aberto no lugar das colunas.
-    stages_editor: Option<Entity<TextareaState>>,
+    stages_editor: Option<stages::Editor>,
+    stages_editor_seq: u64,
     /// Com concluídos: sem ele, só os tickets abertos vêm do conector (os mais recentes costumam estar concluídos).
     show_done: bool,
     /// PRs e MRs abertos da máquina (`/api/reviews`), para achar o do ticket pela branch quando não há sessão ligada.
@@ -165,46 +184,6 @@ fn named_after(session: &SessionInfo, key: &str) -> bool {
     session.branch.as_deref().is_some_and(|branch| branch.eq_ignore_ascii_case(key)) || starts_with_key(&session.name, key)
 }
 
-/// Texto das etapas para editar: uma por linha, `Nome | portão | Status, Status`.
-fn stages_text(stages: &[Stage]) -> String {
-    stages.iter().map(|stage| {
-        let gate = if stage.gate { tr("mission_gate_word") } else { String::new() };
-        let mut line = stage.name.clone();
-        if stage.gate || !stage.statuses.is_empty() { line.push_str(&format!(" | {gate}")); }
-        if !stage.statuses.is_empty() { line.push_str(&format!(" | {}", stage.statuses.join(", "))); }
-        line
-    }).collect::<Vec<_>>().join("\n")
-}
-
-/// `id` de etapa a partir do nome: a mesma dobra de acentos das worktrees, começando por letra e com até 32 bytes.
-fn slug(name: &str) -> String {
-    let mut id = super::worktrees::slug(name);
-    if !id.starts_with(|c: char| c.is_ascii_lowercase()) { id = format!("e-{id}"); }
-    id.chars().take(32).collect::<String>().trim_end_matches('-').to_owned()
-}
-
-/// Lê o texto do editor; o nome igual ao de uma etapa existente mantém o `id` dela (e o que está nos tickets).
-fn parse_stages(text: &str, current: &[Stage]) -> Result<Vec<Value>, String> {
-    let gate_words = ["portão", "portao", "gate"];
-    let mut used = HashSet::new();
-    let mut stages = Vec::new();
-    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
-        let mut parts = line.split('|').map(str::trim);
-        let name = parts.next().unwrap_or_default().to_owned();
-        if name.is_empty() { return Err(tr("mission_stages_empty_name")); }
-        let gate = parts.next().is_some_and(|flag| gate_words.iter().any(|word| flag.eq_ignore_ascii_case(word)));
-        let statuses: Vec<String> = parts.next().map(|list| list.split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect())
-            .unwrap_or_default();
-        let base = current.iter().find(|stage| stage.name.eq_ignore_ascii_case(&name)).map(|stage| stage.id.clone()).unwrap_or_else(|| slug(&name));
-        let mut id = base.clone();
-        let mut n = 2;
-        while !used.insert(id.clone()) { id = format!("{}-{n}", base.chars().take(29).collect::<String>()); n += 1; }
-        stages.push(json!({"id": id, "name": name, "gate": gate, "statuses": statuses}));
-    }
-    if stages.is_empty() { return Err(tr("mission_stages_none")); }
-    Ok(stages)
-}
-
 struct Linked<'a> { name: &'a str, session: Option<&'a SessionInfo>, stored: bool }
 
 struct TicketView<'a> {
@@ -233,20 +212,19 @@ fn lane_of(stages: &[Stage], ticket: &Ticket, item: Option<&Item>, session: Opti
     if let Some(index) = stages.iter().position(|s| s.statuses.iter().any(|status| status.eq_ignore_ascii_case(&ticket.status.name))) {
         return (Lane::Stage(index), Source::Status);
     }
-    if let Some(review) = review.filter(|r| matches!(r.state.as_str(), "open" | "merged")) && !stages.is_empty() {
-        let at = stages.iter().position(|s| s.id == "revisao").unwrap_or(2.min(stages.len() - 1));
+    if let Some(review) = review.filter(|r| matches!(r.state.as_str(), "open" | "merged"))
+        && let Some(at) = stages.iter().position(|s| s.id == "revisao") {
         let index = if review.state == "merged" { (at + 1).min(stages.len() - 1) } else { at };
         return (Lane::Stage(index), Source::Review);
     }
     let Some(session) = session.filter(|s| s.state != "dead") else { return (Lane::Inbox, Source::None) };
     // Sem plano, plano em andamento e plano concluído: as etapas padrão, ou a posição delas numa lista própria.
-    let (id, position) = match (session.plan_done, session.plan_total.filter(|t| *t > 0)) {
-        (Some(done), Some(total)) if done >= total => ("revisao", 2),
-        (_, Some(_)) => ("execucao", 1),
-        _ => ("planejamento", 0),
+    let id = match (session.plan_done, session.plan_total.filter(|t| *t > 0)) {
+        (Some(done), Some(total)) if done >= total => "revisao",
+        (_, Some(_)) => "execucao",
+        _ => "planejamento",
     };
-    let index = stages.iter().position(|s| s.id == id).unwrap_or(position.min(stages.len().saturating_sub(1)));
-    if stages.is_empty() { (Lane::Inbox, Source::None) } else { (Lane::Stage(index), Source::Plan) }
+    stages.iter().position(|s| s.id == id).map_or((Lane::Inbox, Source::None), |index|(Lane::Stage(index), Source::Plan))
 }
 
 impl Board {
@@ -256,6 +234,24 @@ impl Board {
 }
 
 impl Hangar {
+
+
+    fn mission_busy(&self) -> bool {self.mission.busy || !self.mission.dispatching.is_empty()}
+
+    pub(super) fn receive_tickets(&mut self, reply: Reply, window: &mut Window, cx: &mut Context<Self>) {
+        match reply {
+            Reply::Launch {server,dialog,options} => {
+                if self.new_session.as_ref().map(Entity::entity_id)!=Some(dialog) {return;}
+                self.new_session=None;
+                window.close_dialog(cx);
+                if self.mission.open && self.mission.server.as_deref()==Some(&server) {
+                    self.mission.launch_options=Some(options);
+                    self.continue_ticket_action(window,cx);
+                }
+                cx.notify();
+            }
+        }
+    }
     pub(super) fn toggle_mission(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.mission.open { self.close_mission(window, cx) } else { self.open_mission(window, cx) }
     }
@@ -269,6 +265,7 @@ impl Hangar {
         self.close_popups();
         self.command_panel = false;
         self.mission.open = true;
+        if self.mission.detail_focus.is_none() {self.mission.detail_focus=Some(cx.focus_handle());}
         if self.mission.query.is_none() {
             let input = cx.new(|cx| InputState::new(window, cx).placeholder(tr("mission_search")).clean_on_escape());
             self.mission._query_events = Some(cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
@@ -283,6 +280,15 @@ impl Hangar {
 
     pub(super) fn close_mission(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if std::mem::take(&mut self.mission.open) {
+            if self.mission.stages_editor.is_some() {window.close_dialog(cx);}
+            self.mission.detail_resize=None;
+            self.mission.drag_edge=0;
+            self.mission.drag_scroll=None;
+            self.mission.dispatch_seq+=1;
+            self.mission.dispatching.clear();
+            self.mission.action_pending=None;
+            if self.embedded_conversation() {self.close_tab_preview(cx);}
+            self.mission.conversation=false;
             (self.mission.changes, self.mission.stages_editor) = (None, None);
             self.root_focus.focus(window, cx);
             cx.notify();
@@ -307,11 +313,20 @@ impl Hangar {
             None => (None, self.mission_query(cx), self.mission.show_done),
         };
         if !same {
+            if self.mission.stages_editor.is_some() {window.close_dialog(cx);self.mission.stages_editor=None;}
+            self.mission.launch_options=None;
+            self.mission.action_pending=None;
+            self.mission.receipts.clear();
+            self.mission.execution_receipts.clear();
+            self.mission.dispatching.clear();
+            self.mission.dispatch_seq+=1;
+            self.mission.busy=false;
             (self.mission.connector, self.mission.selected, self.mission.detail, self.mission.board) = (None, None, None, None);
             for image in self.mission.thumbs.drain().filter_map(|(_, image)| image) { cx.drop_image(image, Some(window)); }
         }
         self.mission.seq += 1;
         let seq = self.mission.seq;
+        let work_seq=self.mission.work_seq;
         (self.mission.loading, self.mission.more, self.mission.server) = (!more, more, Some(server));
         let wanted = self.mission.connector.clone();
         let used = query.clone();
@@ -335,6 +350,10 @@ impl Hangar {
         run(&self.runtime, request, window, cx, move |this: &mut Hangar, result, window, cx| {
             if this.mission.seq != seq { return; }
             (this.mission.loading, this.mission.more) = (false, false);
+            let result=result.map(|(connectors,work,page)| {
+                let work=if this.mission.work_seq>work_seq {this.mission_board().map(|board|board.work.clone()).unwrap_or(work)} else {work};
+                (connectors,work,page)
+            });
             match result {
                 // A falha do "Carregar mais" não apaga o que já está na tela.
                 Err(error) if more => window.push_notification(Notification::error(failure_text(&error)), cx),
@@ -373,7 +392,7 @@ impl Hangar {
             if this.mission.seq != seq || this.mission.work_seq != work_seq { return; }
             match result {
                 Ok(work) => if let Some(Ok(board)) = this.mission.board.as_mut() { board.work = work; this.load_thumbs(window, cx); },
-                Err(error) => window.push_notification(Notification::error(failure_text(&error)), cx),
+                Err(error) => eprintln!("leitura das etapas do ticket falhou: {}",error.code.as_deref().unwrap_or("network")),
             }
         });
     }
@@ -399,17 +418,32 @@ impl Hangar {
     }
 
     fn choose_connector(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mission.connector.as_deref()==Some(&id) {return;}
+        if self.embedded_conversation() {self.close_tab_preview(cx);}
+        self.mission.conversation=false;
+        self.mission.dispatch_seq+=1;
+        self.mission.action_pending=None;
+        self.mission.receipts.clear();
+        self.mission.execution_receipts.clear();
+        self.mission.dispatching.clear();
+        self.mission.busy=false;
         (self.mission.connector, self.mission.selected, self.mission.detail, self.mission.changes) = (Some(id), None, None, None);
         self.load_mission(false, window, cx);
     }
 
     fn select_ticket(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mission.selected.as_deref()!=Some(&id) {
+            self.cancel_ticket_action();
+            if self.embedded_conversation() {self.close_tab_preview(cx);}
+            self.mission.conversation=false;
+        }
         let (Some(api), Some(connector)) = (self.api.clone(), self.mission.connector.clone()) else { return };
         (self.mission.selected, self.mission.detail, self.mission.changes) = (Some(id.clone()), None, None);
         // A sessão pode ter nascido ou mudado de branch depois da leitura: a revisão dela que falta é pedida agora.
         self.load_mission_reviews(false, cx);
         self.mission.detail_seq += 1;
         let seq = self.mission.detail_seq;
+        self.load_ticket_receipt(api.clone(),connector.clone(),id.clone(),window,cx);
         self.load_thumbs(window, cx);
         let request = async move {
             let value = api.server_read(&["connectors", &connector, "tickets", &id], &[], 45).await?;
@@ -434,7 +468,12 @@ impl Hangar {
     /// Sessão do ticket: a ligada pelo Iniciar ou, sem ela, a viva que leva a chave na branch ou no nome.
     fn ticket_session<'a>(&'a self, ticket: &'a Ticket, item: Option<&'a Item>) -> Option<Linked<'a>> {
         if let Some(name) = item.and_then(|item| item.session.as_deref()) {
-            return Some(Linked { name, session: self.sessions.iter().find(|s| s.name == name), stored: true });
+            let expected=item.and_then(|item|item.session_key.as_deref());
+            let session=self.sessions.iter().find(|s|match expected {
+                Some(key)=>hangar_api::session::runtime_key(s.lifecycle_id.as_deref())==Some(key),
+                None=>s.name==name,
+            });
+            return Some(Linked { name:session.map(|s|s.name.as_str()).unwrap_or(name), session, stored: true });
         }
         self.sessions.iter().find(|s| s.state != "dead" && named_after(s, &ticket.key))
             .map(|s| Linked { name: s.name.as_str(), session: Some(s), stored: false })
@@ -519,30 +558,10 @@ impl Hangar {
     /// Iniciar: a tela de nova conversa com a primeira mensagem do conector no campo. A pessoa escolhe a pasta e envia;
     /// a sessão que nascer com essa mensagem fica ligada ao ticket.
     fn start_ticket(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(Ok(view)), Some(connector), Some(server)) = (&self.mission.detail, self.mission.connector.clone(), self.mission.server.clone())
-            else { return };
-        let ticket = view.detail.ticket.clone();
-        let prompt = view.detail.start_prompt.clone()
-            .unwrap_or_else(|| tr("mission_default_prompt").replace("{key}", &ticket.key).replace("{title}", &ticket.title).replace("{url}", &ticket.url));
-        if self.create_blocked(window, cx) { return; }
-        self.close_mission(window, cx);
-        self.go_home(window, cx);
-        // O rascunho que já estava na tela de nova conversa fica, depois do pedido do ticket.
-        let draft = self.composer.read(cx).value().trim().to_owned();
-        let text = if draft.is_empty() { prompt.clone() } else { format!("{prompt}\n\n{draft}") };
-        self.composer.update(cx, |input, cx| { input.set_value(text, window, cx); input.focus(window, cx); });
-        self.mission.pending = Some(PendingStart { server, connector, ticket, prompt });
-        window.push_notification(Notification::info(tr("mission_start_hint")), cx);
-    }
-
-    /// Volta da criação: a sessão nascida do Iniciar, com a mensagem do ticket, fica ligada a ele no servidor, que a
-    /// avisa da tool `mission`.
-    pub(super) fn mission_session_created(&mut self, server: &str, session: &str, first: Option<&str>, window: &mut Window, cx: &mut Context<Self>) {
-        // Qualquer criação encerra o pedido: só a primeira depois do Iniciar pode ser a dele.
-        let Some(start) = self.mission.pending.take() else { return };
-        if start.server != server || !first.is_some_and(|text| text.trim_start().starts_with(start.prompt.trim())) { return; }
-        let Some(api) = self.api_for(server) else { return };
-        self.link_session(api, start.connector, start.ticket, session.to_owned(), window, cx);
+        let (Some(Ok(view)),Some(board))=(&self.mission.detail,self.mission_board()) else {return;};
+        let ticket=view.detail.ticket.id.clone();
+        let stage=self.ticket_view(&view.detail.ticket).stage.or_else(||board.work.stages.first()).map(|stage|stage.id.clone());
+        if let Some(stage)=stage {self.request_ticket_action(ticket,stage,true,window,cx);}
     }
 
     fn link_session(&mut self, api: Api, connector: String, ticket: Ticket, session: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -556,16 +575,19 @@ impl Hangar {
         });
     }
 
-    /// Pedido do dono ao Mission Control, com o botão ocupado enquanto vai; no sucesso, `done` e a releitura.
+    /// Pedido do dono ao board, com o botão ocupado enquanto vai; no sucesso, `done` e a releitura.
     fn mission_send(&mut self, method: reqwest::Method, path: Vec<String>, body: Option<Value>,
         done: impl FnOnce(&mut Hangar) + 'static, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mission_busy() {return;}
         let Some(api) = self.api.clone() else { return };
+        let (server,seq)=(api.identity(),self.mission.dispatch_seq);
         self.mission.busy = true;
         let request = async move {
             let path: Vec<&str> = path.iter().map(String::as_str).collect();
             api.server_send(method, &path, body, 15).await
         };
         run(&self.runtime, request, window, cx, move |this: &mut Hangar, result, window, cx| {
+            if this.mission.server.as_deref()!=Some(&server) || this.mission.dispatch_seq!=seq {return;}
             this.mission.busy = false;
             match result {
                 Ok(_) => { done(this); this.reload_work(window, cx); }
@@ -651,29 +673,10 @@ impl Hangar {
     }
 
     fn open_linked(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(session) = self.sessions.iter().find(|s| s.name == name).cloned() else { return };
         let Some(server) = self.mission.server.clone() else { return };
-        self.close_mission(window, cx);
-        self.select_on(&servers::norm(&server), session, window, cx);
-    }
-
-    fn edit_stages(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(board) = self.mission_board() else { return };
-        let text = stages_text(&board.work.stages);
-        let editor = cx.new(|cx| TextareaState::new(window, cx).auto_grow(6, 16));
-        editor.update(cx, |input, cx| input.set_value(text, window, cx));
-        self.mission.stages_editor = Some(editor);
+        self.open_embedded_conversation(sidebar::Target::new(&servers::norm(&server),&name),window,cx);
+        self.mission.conversation=self.embedded_conversation();
         cx.notify();
-    }
-
-    fn save_stages(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(editor), Some(board)) = (self.mission.stages_editor.clone(), self.mission_board()) else { return };
-        let stages = match parse_stages(&editor.read(cx).value(), &board.work.stages) {
-            Ok(stages) => stages,
-            Err(error) => { window.push_notification(Notification::warning(error), cx); return; }
-        };
-        self.mission_send(reqwest::Method::PUT, vec!["mission".into(), "stages".into()], Some(json!({"stages": stages})),
-            |this| this.mission.stages_editor = None, window, cx);
     }
 
     // ── Desenho ─────────────────────────────────────────────────────────────
@@ -684,16 +687,14 @@ impl Hangar {
             self.load_mission(false, window, cx);
         }
         let loading = self.mission.loading;
-        let search = self.mission.query.clone().map(|input| Input::new(&input).small().w(px(240.)).cleanable(true)
+        let search = self.mission.query.clone().map(|input| Input::new(&input).small().w_full().cleanable(true)
             .aria_label(tr("mission_search")).prefix(chrome::small_icon(IconName::Search, 13., theme::faint())).into_any_element());
         let chooser = self.render_mission_connectors(cx);
         let stages = Button::new("mission-stages").ghost().small().icon(IconName::Settings2).label(tr("mission_stages"))
-            .selected(self.mission.stages_editor.is_some()).disabled(self.mission_board().is_none())
-            .on_click(cx.listener(|this, _, window, cx| if this.mission.stages_editor.is_some() {
-                this.mission.stages_editor = None; cx.notify();
-            } else { this.edit_stages(window, cx) }));
+            .selected(self.mission.stages_editor.is_some()).disabled(self.mission_board().is_none() || self.mission_busy())
+            .on_click(cx.listener(|this, _, window, cx|this.edit_stages(window,cx)));
         let header = self.costs_header(tr("mission_title"), |this, window, cx| this.close_mission(window, cx),
-            search.into_iter().chain(chooser).chain([
+            vec![
                 Button::new("mission-show-done").ghost().small().icon(IconName::Check).label(tr("mission_show_done"))
                     .selected(self.mission.show_done).disabled(loading)
                     .on_click(cx.listener(|this, _, window, cx| { this.mission.show_done = !this.mission.show_done; this.load_mission(false, window, cx); }))
@@ -701,18 +702,30 @@ impl Hangar {
                 stages.into_any_element(),
                 Button::new("mission-refresh").outline().small().label(tr_shared("custos_atualizar", &[])).loading(loading).disabled(loading)
                     .on_click(cx.listener(|this, _, window, cx| this.load_mission(false, window, cx))).into_any_element(),
-            ]).collect(), cx);
-        let body = if self.mission.stages_editor.is_some() { self.render_stages_editor(cx) } else { self.render_mission_body(cx) };
-        let panel = self.mission.selected.clone().filter(|_| self.mission.stages_editor.is_none()).map(|_| self.render_mission_detail(cx));
+            ], cx);
+        let expanded=self.mission.detail_expanded && self.mission.selected.is_some();
+        let body = (!expanded).then(||self.render_mission_body(window,cx));
+        let panel = self.mission.selected.clone().map(|_| self.render_ticket_panel(window,cx));
+        let folder=self.mission.launch_options.as_ref().and_then(|options|options["cwd"].as_str()).map(str::to_owned);
+        let controls=div().id("tickets-controls").w(px(220.)).flex_shrink_0().h_full().overflow_y_scroll().border_r_1().border_color(theme::border())
+            .p(px(12.)).flex().flex_col().gap(px(16.))
+            .child(div().flex().flex_col().gap(px(6.)).child(div().text_xs().text_color(theme::muted()).child(tr("mission_search"))).children(search))
+            .when_some(chooser,|el,chooser|el.child(div().flex().flex_col().gap(px(6.))
+                .child(div().text_xs().text_color(theme::muted()).child(tr("mission_origin"))).child(chooser)))
+            .child(div().flex().flex_col().gap(px(6.))
+                .child(div().text_xs().text_color(theme::muted()).child(tr("mission_folder")))
+                .when_some(folder,|el,path|el.child(div().text_xs().whitespace_normal().child(path)))
+                .child(Button::new("tickets-folder").outline().small().w_full().icon(IconName::FolderOpen).label(tr("mission_folder_options"))
+                    .on_click(cx.listener(|this,_,window,cx|this.open_ticket_launch(window,cx)))));
         page_frame(div().size_full().flex().flex_col().child(header)
-            .child(div().flex_1().min_h_0().flex().child(body).children(panel)))
+            .child(div().flex_1().min_h_0().flex().child(controls).children(body).children(panel)))
     }
 
     fn render_mission_connectors(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let board = self.mission_board()?;
         let usable: Vec<&Connector> = board.connectors.iter().filter(|c| c.enabled && c.capabilities.contains_key("work_tracking")).collect();
-        if usable.len() < 2 { return None; }
-        Some(div().flex().gap(px(4.)).children(usable.into_iter().map(|c| {
+        if usable.is_empty() { return None; }
+        Some(div().flex().flex_col().gap(px(4.)).children(usable.into_iter().map(|c| {
             let id = c.id.clone();
             Button::new(SharedString::from(format!("mission-connector-{}", c.id))).small().ghost().label(c.name.clone())
                 .selected(Some(&c.id) == self.mission.connector.as_ref())
@@ -720,23 +733,7 @@ impl Hangar {
         })).into_any_element())
     }
 
-    fn render_stages_editor(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(editor) = self.mission.stages_editor.clone() else { return div().into_any_element() };
-        div().flex_1().min_w_0().h_full().overflow_hidden().flex().justify_center().child(
-            div().id("mission-stages-editor").w_full().max_w(px(760.)).h_full().overflow_y_scroll().px(px(24.)).pt(px(20.)).pb(px(40.))
-                .flex().flex_col().gap(px(14.))
-                .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).child(tr("mission_stages_title")))
-                .child(div().text_size(px(13.)).text_color(theme::muted()).whitespace_normal().child(tr("mission_stages_hint")))
-                .child(div().font_family(theme::MONO).child(Textarea::new(&editor).aria_label(tr("mission_stages_title"))))
-                .child(div().flex().gap(px(8.))
-                    .child(Button::new("mission-stages-save").primary().small().label(tr("mission_stages_save")).loading(self.mission.busy)
-                        .disabled(self.mission.busy).on_click(cx.listener(|this, _, window, cx| this.save_stages(window, cx))))
-                    .child(Button::new("mission-stages-cancel").ghost().small().label(tr("cancel"))
-                        .on_click(cx.listener(|this, _, _, cx| { this.mission.stages_editor = None; cx.notify(); })))))
-            .into_any_element()
-    }
-
-    fn render_mission_body(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_mission_body(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let frame = |content: AnyElement| div().flex_1().min_w_0().h_full().px(px(20.)).pt(px(16.)).pb(px(12.)).flex().flex_col().gap(px(12.))
             .child(content).into_any_element();
         let board = match &self.mission.board {
@@ -759,12 +756,25 @@ impl Hangar {
             if let Some((_, _, list)) = lanes.iter_mut().find(|(_, l, _)| *l == view.lane) { list.push((ticket, view)); }
         }
         let gates: HashSet<usize> = stages.iter().enumerate().filter(|(_, s)| s.gate).map(|(n, _)| n).collect();
-        let columns = div().id("mission-lanes").flex_1().min_h_0().overflow_x_scroll().flex().gap(px(12.))
+        let available=(f32::from(window.viewport_size().width)-220.-40.
+            -if self.mission.selected.is_some() {self.ticket_detail_width(window)} else {0.}).max(250.);
+        let visible=((available+12.)/262.).floor().max(1.);
+        let lane_width=(available+12.)/visible-12.;
+        let columns = div().id("mission-lanes").flex_1().min_h_0().overflow_x_scroll().track_scroll(&self.mission.lanes_scroll).flex().gap(px(12.))
+            .on_drag_move(cx.listener(|this,event: &DragMoveEvent<layout::TicketDrag>,_,cx|this.ticket_drag_scroll(event,cx)))
             .children(lanes.into_iter().enumerate().map(|(n, (title, lane, items))| {
                 let count = items.len();
                 let cards: Vec<AnyElement> = items.into_iter().map(|(ticket, view)| self.render_mission_card(ticket, view, cx)).collect();
                 let gate = matches!(lane, Lane::Stage(index) if gates.contains(&index));
-                div().w(px(250.)).flex_shrink_0().h_full().flex().flex_col().rounded(px(12.)).bg(theme::inset())
+                let target=match lane {Lane::Stage(index)=>Some(stages[index].id.clone()),_=>None};
+                div().id(SharedString::from(format!("tickets-column-{n}"))).w(px(lane_width)).flex_shrink_0().h_full().flex().flex_col().rounded(px(12.)).bg(theme::inset())
+                    .when_some(target,|el,target|el.drag_over::<layout::TicketDrag>(|style,_,_,_|style.bg(theme::accent_dim()))
+                        .on_drop(cx.listener(move |this,drag: &layout::TicketDrag,window,cx| {
+                            this.mission.drag_edge=0;this.mission.drag_scroll=None;
+                            if this.mission.server.as_deref()==Some(&drag.server) && this.mission.connector.as_deref()==Some(&drag.connector) {
+                                this.request_ticket_move(drag.ticket.clone(),target.clone(),window,cx);
+                            }
+                        })))
                     .child(div().px(px(12.)).py(px(10.)).flex().items_center().gap(px(6.))
                         .when(gate, |el| el.child(chrome::small_icon(IconName::ShieldCheck, 13., theme::warning())))
                         .child(div().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).truncate().child(title))
@@ -793,34 +803,63 @@ impl Hangar {
         });
         let evidence = view.item.map_or(0, |item| item.evidence.len());
         let waiting = view.waiting.map(|stage| stage.name.clone());
-        div().id(SharedString::from(format!("mission-card-{}", ticket.id))).w_full().p(px(10.)).rounded(px(10.)).border_1()
-            .border_color(if selected { theme::accent() } else if waiting.is_some() { theme::warning().alpha(0.6) } else { theme::border() })
-            .bg(theme::boxed()).cursor_pointer()
-            .hover(|s| s.border_color(theme::accent().alpha(0.5)))
-            .flex().flex_col().gap(px(6.))
-            .child(div().flex().items_center().gap(px(6.))
-                .child(div().font_family(theme::MONO).text_size(px(11.5)).text_color(theme::muted()).child(ticket.key.clone()))
-                .child(div().flex_1())
-                .when(evidence > 0, |el| el.child(div().flex().items_center().gap(px(3.)).text_size(px(11.)).text_color(theme::muted())
-                    .child(chrome::small_icon(IconName::Image, 12., theme::muted())).child(evidence.to_string())))
-                .child(div().px(px(6.)).py(px(1.)).rounded(px(6.)).bg(theme::inset()).text_size(px(11.)).text_color(theme::muted()).truncate()
-                    .max_w(px(120.)).child(ticket.status.name.clone())))
-            .child(div().text_size(px(13.)).line_height(relative(1.35)).whitespace_normal().line_clamp(3).child(ticket.title.clone()))
+        let drag=layout::TicketDrag {server:self.mission.server.clone().unwrap_or_default(),connector:self.mission.connector.clone().unwrap_or_default(),ticket:ticket.id.clone(),label:format!("{} · {}",ticket.key,ticket.title)};
+        ticket_card_view(format!("mission-card-{}", ticket.id),ticket.key.clone(),ticket.title.clone(),ticket.status.name.clone(),selected,waiting.is_some(),evidence)
+            .cursor_pointer().hover(|s| s.border_color(theme::accent().alpha(0.5)))
             .children(session)
             .children(view.review.map(review_line))
             .children(waiting.map(|stage| div().text_size(px(11.5)).text_color(theme::warning()).child(tr("mission_waiting_you").replace("{etapa}", &stage))))
             .on_click(cx.listener(move |this, _, window, cx| this.select_ticket(id.clone(), window, cx)))
+            .when(!self.mission_busy(),|el|el.on_drag(drag,|drag,_,_,cx|cx.new(|_|layout::TicketDragChip {label:drag.label.clone()})))
             .into_any_element()
     }
 
+    fn close_ticket_detail(&mut self,cx: &mut Context<Self>) {
+        if self.embedded_conversation() {self.close_tab_preview(cx);}
+        self.mission.conversation=false;
+        self.mission.detail_resize=None;
+        (self.mission.selected,self.mission.detail,self.mission.changes)=(None,None,None);
+        cx.notify();
+    }
+
+    fn render_ticket_panel(&mut self,window: &mut Window,cx: &mut Context<Self>) -> AnyElement {
+        let linked=self.mission.detail.as_ref().and_then(|view|view.as_ref().ok())
+            .and_then(|view|self.ticket_view(&view.detail.ticket).linked)
+            .filter(|linked|linked.session.is_some_and(|session|session.state!="dead")).map(|linked|linked.name.to_owned());
+        let conversation=self.mission.conversation;
+        let width=self.ticket_detail_width(window);
+        let expanded=self.mission.detail_expanded;
+        if conversation && !self.embedded_conversation() && let Some(name)=linked.clone() {self.open_linked(name,window,cx);}
+        let body=if conversation {self.render_embedded_conversation(window,cx)} else {self.render_mission_detail(cx).w_full().border_0().into_any_element()};
+        let mut header=div().flex_shrink_0().p(px(8.)).flex().flex_wrap().items_center().gap(px(6.)).border_b_1().border_color(theme::border())
+                .child(Button::new("tickets-details").ghost().small().label(tr("mission_details")).selected(!conversation)
+                    .on_click(cx.listener(|this,_,_,cx|{this.mission.conversation=false;cx.notify();})))
+                .child(Button::new("tickets-conversation").ghost().small().label(tr("mission_open_session")).selected(conversation).disabled(linked.is_none())
+                    .on_click(cx.listener(move |this,_,window,cx|{if let Some(name)=linked.clone() {this.open_linked(name,window,cx);}})))
+                .child(div().flex_1());
+        if !expanded && width>=420. {
+            header=header.child(Button::new("tickets-detail-narrower").ghost().small().icon(IconName::ChevronRight).accessibility_label(tr("mission_detail_narrower"))
+                .on_click(cx.listener(|this,_,window,cx|{let width=this.ticket_detail_width(window);this.change_ticket_width(width-80.,true,window,cx);})))
+                .child(Button::new("tickets-detail-wider").ghost().small().icon(IconName::ChevronLeft).accessibility_label(tr("mission_detail_wider"))
+                    .on_click(cx.listener(|this,_,window,cx|{let width=this.ticket_detail_width(window);this.change_ticket_width(width+80.,true,window,cx);})));
+        }
+        header=header.child(Button::new("tickets-detail-expand").ghost().small().icon(if expanded {IconName::Minimize} else {IconName::Maximize})
+                    .accessibility_label(tr(if expanded {"mission_detail_restore"} else {"mission_detail_expand"}))
+                    .on_click(cx.listener(|this,_,_,cx|{this.mission.detail_expanded=!this.mission.detail_expanded;cx.notify();})))
+                .child(Button::new("tickets-conversation-close").ghost().small().icon(IconName::Close).accessibility_label(tr("close"))
+                    .on_click(cx.listener(|this,_,_,cx|this.close_ticket_detail(cx))));
+        div().id("tickets-detail-panel").relative().w(px(width)).flex_shrink_0().h_full().min_h_0().border_l_1().border_color(theme::border()).flex().flex_col()
+            .child(header)
+            .child(div().relative().flex_1().min_h_0().overflow_hidden().child(body))
+            .children((!expanded).then(||self.ticket_resize_handle(width,cx))).into_any_element()
+    }
+
     fn render_mission_detail(&self, cx: &mut Context<Self>) -> Stateful<Div> {
-        let close = Button::new("mission-detail-close").ghost().small().icon(IconName::Close).accessibility_label(tr("close"))
-            .on_click(cx.listener(|this, _, _, cx| { (this.mission.selected, this.mission.detail, this.mission.changes) = (None, None, None); cx.notify(); }));
-        let panel = div().id("mission-detail").w(px(480.)).flex_shrink_0().h_full().overflow_y_scroll().border_l_1().border_color(theme::border())
+        let panel = div().id("mission-detail").relative().w(px(480.)).flex_shrink_0().h_full().overflow_y_scroll().border_l_1().border_color(theme::border())
             .p(px(16.)).flex().flex_col().gap(px(14.)).text_size(px(13.)).whitespace_normal();
         let view = match &self.mission.detail {
-            None => return panel.child(div().flex().justify_end().child(close)).child(loading_state()),
-            Some(Err(error)) => return panel.child(div().flex().justify_end().child(close)).child(note_box(error.clone(), theme::warning())),
+            None => return panel.child(loading_state()),
+            Some(Err(error)) => return panel.child(note_box(error.clone(), theme::warning())),
             Some(Ok(view)) => view,
         };
         let ticket = &view.detail.ticket;
@@ -830,50 +869,69 @@ impl Hangar {
         let meta = [Some(ticket.status.name.clone()), ticket.assignee.as_ref().map(|a| a.name.clone()),
             ticket.updated_at.as_deref().and_then(ago)].into_iter().flatten().collect::<Vec<_>>().join(" · ");
         let url = ticket.url.clone();
-        let busy = self.mission.busy;
+        let busy = self.mission_busy();
 
-        let mut actions = div().flex().flex_wrap().gap(px(8.));
+        let mut primary = div().flex().flex_wrap().gap(px(8.));
+        let mut actions = div().flex().flex_wrap().gap(px(4.));
         match &tv.linked {
             Some(Linked { name, session: Some(_), stored }) => {
                 let open = (*name).to_owned();
-                actions = actions.child(Button::new("mission-open-session").primary().small().icon(IconName::MessageSquare).label(tr("mission_open_session"))
+                primary = primary.child(Button::new("mission-open-session").primary().small().icon(IconName::MessageSquare).label(tr("mission_open_session"))
                     .on_click(cx.listener(move |this, _, window, cx| this.open_linked(open.clone(), window, cx))));
                 if !stored {
                     let adopt = (*name).to_owned();
-                    actions = actions.child(Button::new("mission-adopt").outline().small().icon(IconName::Link).label(tr("mission_adopt"))
+                    primary = primary.child(Button::new("mission-adopt").outline().small().icon(IconName::Link).label(tr("mission_adopt").replace("{name}", name))
                         .disabled(busy).on_click(cx.listener(move |this, _, window, cx| this.adopt_session(adopt.clone(), window, cx))));
                 }
             }
             _ => {
-                actions = actions.child(Button::new("mission-start").primary().small().icon(IconName::Play).label(tr("mission_start"))
+                primary = primary.child(Button::new("mission-start").primary().small().icon(IconName::Play).label(tr("mission_start"))
                     .on_click(cx.listener(|this, _, window, cx| this.start_ticket(window, cx))));
             }
         }
-        actions = actions.child(Button::new("mission-source").outline().small().icon(IconName::ExternalLink).label(tr("mission_open_source"))
+        actions = actions.child(Button::new("mission-source").ghost().small().icon(IconName::ExternalLink).label(tr("mission_open_source"))
             .on_click(move |_, window, cx| super::links::open_link(&url, true, window, cx)));
-        if item.is_some() {
+        if !stages.is_empty() {
             let weak = cx.entity().downgrade();
             let menu_stages = stages.to_vec();
+            let ticket_id=ticket.id.clone();
+            let context=(self.mission.server.clone(),self.mission.connector.clone());
+            let recorded=item.is_some();
             actions = actions.child(Button::new("mission-move").ghost().small().label(tr("mission_move")).icon(IconName::ChevronDown).disabled(busy)
                 .dropdown_menu_with_anchor(Anchor::TopLeft, move |menu, _, _| {
                     let pick = |body: Value| {
                         let weak = weak.clone();
+                        let ticket_id=ticket_id.clone();let context=context.clone();
                         move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
-                            let _ = weak.update(cx, |this, cx| this.mission_change(body.clone(), window, cx));
+                            let _ = weak.update(cx, |this, cx| {
+                                if (this.mission.server.clone(),this.mission.connector.clone())!=context {return;}
+                                if body["action"]=="stage" {
+                                    if let Some(stage)=body["stage"].as_str() {this.request_ticket_move(ticket_id.clone(),stage.to_owned(),window,cx);}
+                                } else {this.mission_change(body.clone(),window,cx);}
+                            });
                         }
                     };
                     let mut menu = sidebar::menu_style(menu).min_w(px(220.));
                     for stage in &menu_stages {
                         menu = menu.item(PopupMenuItem::new(stage.name.clone()).on_click(pick(json!({"action": "stage", "stage": stage.id}))));
                     }
+                    if !recorded {return menu;}
                     menu.separator()
                         .item(PopupMenuItem::new(tr("mission_delivered")).on_click(pick(json!({"action": "delivered"}))))
                         .item(PopupMenuItem::new(tr("mission_reset")).on_click(pick(json!({"action": "reset"}))))
                 }));
+        }
+        if item.is_some() {
             actions = actions.child(Button::new("mission-forget").ghost().small().label(tr("mission_forget")).disabled(busy)
                 .on_click(cx.listener(|this, _, window, cx| this.forget_ticket(window, cx))));
         }
+        if tv.linked.is_some() && let Some(stage)=tv.stage {
+            let (ticket,stage)=(ticket.id.clone(),stage.id.clone());
+            primary=primary.child(Button::new("tickets-run-stage").outline().small().icon(IconName::Play).label(tr("mission_action_run")).disabled(busy)
+                .on_click(cx.listener(move |this,_,window,cx|this.request_ticket_action(ticket.clone(),stage.clone(),true,window,cx))));
+        }
 
+        let actions = div().flex().flex_col().gap(px(8.)).child(primary).child(actions);
         let stage_name = match (tv.lane, tv.stage) {
             (_, Some(stage)) => stage.name.clone(),
             (Lane::Done, _) => tr("mission_done"),
@@ -947,9 +1005,10 @@ impl Hangar {
                     .child(div().font_family(theme::MONO).text_size(px(12.)).text_color(theme::muted()).child(ticket.key.clone()))
                     .child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(ticket.title.clone()))
                     .child(div().text_size(px(12.)).text_color(theme::muted()).child(meta)))
-                .child(close))
+                )
             .child(stage_line)
             .child(actions)
+            .children(self.render_ticket_receipt())
             .children(gate)
             .children(session)
             .children(review)
@@ -1044,6 +1103,19 @@ impl Hangar {
     }
 }
 
+pub(crate) fn ticket_card_view(id: String,key: String,title: String,status: String,selected: bool,waiting: bool,evidence: usize) -> Stateful<Div> {
+    div().id(SharedString::from(id)).w_full().p(px(10.)).rounded(px(10.)).border_1()
+        .border_color(if selected {theme::accent()} else if waiting {theme::warning().alpha(0.6)} else {theme::border()})
+        .bg(theme::boxed()).flex().flex_col().gap(px(6.))
+        .child(div().flex().items_center().gap(px(6.))
+            .child(div().font_family(theme::MONO).text_size(px(11.5)).text_color(theme::muted()).child(key))
+            .child(div().flex_1())
+            .when(evidence>0,|el|el.child(div().flex().items_center().gap(px(3.)).text_size(px(11.)).text_color(theme::muted())
+                .child(chrome::small_icon(IconName::Image,12.,theme::muted())).child(evidence.to_string())))
+            .child(div().px(px(6.)).py(px(1.)).rounded(px(6.)).bg(theme::inset()).text_size(px(11.)).text_color(theme::muted()).truncate().max_w(px(120.)).child(status)))
+        .child(div().text_size(px(13.)).line_height(relative(1.35)).whitespace_normal().line_clamp(3).child(title))
+}
+
 fn render_history(item: &Item, stages: &[Stage]) -> Div {
     let name = |id: &str| stages.iter().find(|s| s.id == id).map_or_else(|| id.to_owned(), |s| s.name.clone());
     let rows = item.history.iter().rev().take(30).map(|event| {
@@ -1113,7 +1185,7 @@ mod tests {
     // O glob traz o `test` da gpui, que colide com o atributo padrão; o nome explícito vence o glob.
     use core::prelude::v1::test;
 
-    fn stage(id: &str, name: &str) -> Stage { Stage { id: id.into(), name: name.into(), gate: false, statuses: Vec::new() } }
+    fn stage(id: &str, name: &str) -> Stage { Stage { id: id.into(), name: name.into(), gate: false, statuses: Vec::new(), prompt:None, actions:None } }
 
     #[test]
     fn session_named_after_the_key_but_not_a_longer_one() {
@@ -1137,18 +1209,4 @@ mod tests {
         assert!(starts_with_key("pm-1-ajuste", "PM-1") && starts_with_key("PM-1/x", "PM-1") && !starts_with_key("PM-12", "PM-1"));
     }
 
-    #[test]
-    fn stages_text_round_trips_and_keeps_known_ids() {
-        let current = vec![Stage { gate: true, statuses: vec!["Revisão de Código".into()], ..stage("revisao", "Revisão") }, stage("x", "Teste")];
-        let text = stages_text(&current);
-        let parsed = parse_stages(&format!("{text}\nConferência do cliente | | Em Testes, Resolvido\nÚltima etapa"), &current).unwrap();
-        assert_eq!((parsed[0]["id"].as_str(), parsed[0]["gate"].as_bool(), parsed[0]["statuses"][0].as_str()),
-            (Some("revisao"), Some(true), Some("Revisão de Código")));
-        assert_eq!(parsed[1]["id"], "x");
-        assert_eq!((parsed[2]["id"].as_str(), parsed[2]["gate"].as_bool(), parsed[2]["statuses"][1].as_str()),
-            (Some("conferencia-do-cliente"), Some(false), Some("Resolvido")));
-        assert_eq!(parsed[3]["id"], "ultima-etapa");
-        assert!(parse_stages("  \n ", &current).is_err());
-        assert_eq!(parse_stages("A\na", &[]).unwrap()[1]["id"], "a-2", "nome repetido ganha id próprio");
-    }
 }

@@ -1,4 +1,4 @@
-//! Conector de teste do Help (`work_tracking/v1`, só leitura). Fala JSON-RPC no stdin/stdout;
+//! Conector do Help: leitura de tickets e perfil do fluxo do plugin. Fala JSON-RPC no stdin/stdout;
 //! nada além do protocolo vai ao stdout.
 //!
 //! Argumentos: `--id <id>` (padrão `help-test`, igual ao do manifesto), `--help-url <url>` (padrão
@@ -6,23 +6,25 @@
 //! as pastas do plugin Promedico) e `--claude-config-dir <pasta>` (padrão `CLAUDE_CONFIG_DIR`).
 mod credential;
 mod help;
+pub mod provided;
 
 use hangar_connectors::protocol::{self, ConnectorError, ErrorCode};
 use hangar_connectors::rpc;
 use hangar_connectors::work_tracking::{self, GetParams, ListParams};
+use hangar_connectors::work_actions;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use tokio::io::BufReader;
 
 struct Options { id: String, url: String, credentials: credential::Sources }
 
-fn options() -> Result<Options, String> {
+fn options(args: &[String]) -> Result<Options, String> {
     let mut options = Options {
         id: "help-test".into(),
         url: std::env::var("PMEDICO_HELP_URL").ok().filter(|url| !url.is_empty()).unwrap_or_else(|| help::DEFAULT_URL.into()),
         credentials: credential::Sources::default(),
     };
-    let mut args = std::env::args().skip(1);
+    let mut args = args.iter().cloned();
     while let Some(flag) = args.next() {
         let value = args.next().ok_or_else(|| format!("{flag} sem valor"))?;
         match flag.as_str() {
@@ -36,9 +38,15 @@ fn options() -> Result<Options, String> {
     Ok(options)
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> std::process::ExitCode {
-    let options = match options() {
+pub fn cli(args: &[String]) -> std::process::ExitCode {
+    match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(runtime)=>runtime.block_on(serve(args)),
+        Err(_)=>{eprintln!("hangar-help-connector: não foi possível iniciar o runtime");1.into()}
+    }
+}
+
+pub async fn serve(args: &[String]) -> std::process::ExitCode {
+    let options = match options(args) {
         Ok(options) => options,
         Err(message) => { eprintln!("hangar-help-test-connector: {message}"); return 2.into(); }
     };
@@ -46,6 +54,7 @@ async fn main() -> std::process::ExitCode {
     let mut help = help::Help::new(&options.url, options.credentials.clone());
     let mut stdin = BufReader::new(tokio::io::stdin());
     let mut stdout = tokio::io::stdout();
+    let mut actions_enabled = false;
     loop {
         let line = match rpc::read_message(&mut stdin).await {
             Ok(Some(line)) => line,
@@ -60,6 +69,8 @@ async fn main() -> std::process::ExitCode {
             protocol::INITIALIZE => {
                 let mut capabilities = serde_json::Map::new();
                 capabilities.insert(work_tracking::CAPABILITY.into(), json!(work_tracking::VERSION));
+                actions_enabled = params["capabilities"][work_actions::CAPABILITY] == work_actions::VERSION;
+                if actions_enabled { capabilities.insert(work_actions::CAPABILITY.into(), json!(work_actions::VERSION)); }
                 Ok(json!({"protocol_version": protocol::PROTOCOL_VERSION, "id": options.id, "capabilities": capabilities}))
             }
             work_tracking::LIST => match (help.as_mut().map_err(|error| error.clone()), ListParams::from_value(params)) {
@@ -70,6 +81,7 @@ async fn main() -> std::process::ExitCode {
                 (Ok(help), Ok(params)) => help.get_ticket(params).await,
                 (Err(error), _) | (_, Err(error)) => Err(error),
             },
+            work_actions::LIST if actions_enabled => GetParams::from_value(params).map(|_| help_actions()),
             protocol::SHUTDOWN => {
                 let _ = rpc::write_message(&mut stdout, &protocol::success(&id, Value::Null)).await;
                 return 0.into();
@@ -82,4 +94,21 @@ async fn main() -> std::process::ExitCode {
         };
         if rpc::write_message(&mut stdout, &response).await.is_err() { return 1.into(); }
     }
+}
+
+fn help_actions() -> Value {
+    json!({"actions": [
+        {"id": "start-pm", "label": "Iniciar PM e planejar", "description": "Preparar a PM e iniciar as perguntas do planejamento.",
+            "prompt_template": "/pmedico:iniciar-pm {key}", "stage": "planejamento"},
+        {"id": "execute-plan", "label": "Executar o plano aprovado", "description": "Continuar o trabalho com as decisões e a modalidade de execução já escolhidas.",
+            "prompt_template": "Execute o plano aprovado da {key}, preservando as decisões e a modalidade de execução escolhida.", "stage": "execucao"},
+        {"id": "send-review", "label": "Enviar para revisão de código", "description": "Conferir, compilar, revisar, publicar e transicionar pelo plugin.",
+            "prompt_template": "/pmedico:iniciar-revisao-pm {key}", "stage": "revisao"},
+        {"id": "follow-review", "label": "Acompanhar revisão do MR", "description": "Tratar as threads e acompanhar o MR que já existe.",
+            "prompt_template": "/pmedico:iniciar-review-auto", "stage": "revisao"},
+        {"id": "show-validation", "label": "Apresentar validação", "description": "Reunir evidências para a aprovação do dono.",
+            "prompt_template": "Apresente as evidências de funcionamento da {key} no Hangar e aguarde a aprovação do dono antes de seguir.", "stage": "validacao"},
+        {"id": "finish-pm", "label": "Finalizar PM depois do merge", "description": "Conferir o merge e finalizar a PM pelo processo do plugin.",
+            "prompt_template": "/pmedico:finalizar-pm {key}", "stage": "entrega"}
+    ]})
 }

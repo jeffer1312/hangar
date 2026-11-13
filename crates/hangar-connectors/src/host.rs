@@ -6,6 +6,7 @@ use crate::process::Life;
 use crate::protocol::ErrorCode;
 use crate::registry::{Entry, Registry};
 use crate::work_tracking::{self, GetParams, ListParams, ListResult, TicketDetail};
+use crate::work_actions::{self, Catalog, ResolvedAction};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -13,6 +14,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::time::Instant;
+
+/// Deriva o manifesto efetivo de um driver fornecido pelo aplicativo, sem mudar o cadastro.
+/// O resultado mantém a identidade e deve passar pela validação de Manifest.
+pub trait ManifestResolver: Send+Sync {
+    fn resolve(&self,registered: &Manifest) -> Result<Option<Manifest>,AdminError>;
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct HostOptions {
@@ -63,11 +70,24 @@ pub struct Host {
     registry: Registry,
     options: HostOptions,
     slots: Mutex<HashMap<String, Arc<Slot>>>,
+    resolver: Option<Arc<dyn ManifestResolver>>,
 }
 
 impl Host {
     pub fn new(registry: Registry, options: HostOptions) -> Arc<Self> {
-        Arc::new(Self { registry, options, slots: Mutex::default() })
+        Arc::new(Self { registry, options, slots: Mutex::default(), resolver:None })
+    }
+
+    pub fn with_resolver(registry: Registry,options: HostOptions,resolver: Arc<dyn ManifestResolver>) -> Arc<Self> {
+        Arc::new(Self {registry,options,slots:Mutex::default(),resolver:Some(resolver)})
+    }
+
+    fn resolved(&self,mut entry: Entry) -> Result<Entry,AdminError> {
+        if let Some(resolver)=self.resolver.as_ref() && let Some(manifest)=resolver.resolve(&entry.manifest)? {
+            if manifest.id!=entry.id {return Err(AdminError::invalid("o driver fornecido não pode mudar a identidade do conector"));}
+            entry.manifest=manifest;
+        }
+        Ok(entry)
     }
 
     fn slot(&self, id: &str) -> Arc<Slot> {
@@ -79,22 +99,23 @@ impl Host {
     }
 
     pub fn list(&self) -> Result<Vec<ConnectorStatus>, AdminError> {
-        Ok(self.registry.list()?.into_iter().map(|entry| {
+        self.registry.list()?.into_iter().map(|entry| {
+            let entry=self.resolved(entry)?;
             let running = self.existing_slot(&entry.id).is_some_and(|slot| slot.running.load(Ordering::Acquire));
-            ConnectorStatus { entry, running }
-        }).collect())
+            Ok(ConnectorStatus { entry, running })
+        }).collect()
     }
 
-    pub fn add(&self, manifest: Manifest) -> Result<Entry, AdminError> { self.registry.add(manifest) }
+    pub fn add(&self, manifest: Manifest) -> Result<Entry, AdminError> {self.resolved(self.registry.add(manifest)?)}
 
-    pub fn entry(&self, id: &str) -> Result<Entry, AdminError> { self.registry.get(id) }
+    pub fn entry(&self, id: &str) -> Result<Entry, AdminError> {self.resolved(self.registry.get(id)?)}
 
 
     /// Ligar só marca; desligar também cancela o pedido em andamento e termina a árvore.
     pub async fn set_enabled(&self, id: &str, enabled: bool) -> Result<Entry, AdminError> {
         let entry = self.registry.set_enabled(id, enabled)?;
         if !enabled { self.stop(id).await; }
-        Ok(entry)
+        self.resolved(entry)
     }
 
     /// Remove depois de confirmar a parada.
@@ -131,6 +152,14 @@ impl Host {
         Ok(TicketDetail::from_connector(value)?)
     }
 
+    pub async fn list_actions(self: &Arc<Self>, id: &str, params: GetParams) -> Result<Vec<ResolvedAction>, CallError> {
+        self.usable(id, work_actions::CAPABILITY)?;
+        let ticket = self.get_ticket(id, params.clone()).await?;
+        let value = self.call(id, work_actions::CAPABILITY, work_actions::LIST, json!(params)).await?;
+        Ok(Catalog::from_connector(value)?.actions.into_iter()
+            .map(|action| action.resolve(&ticket.summary)).collect::<Result<_, _>>()?)
+    }
+
     async fn call(self: &Arc<Self>, id: &str, capability: &str, method: &str, params: Value) -> Result<Value, CallError> {
         self.usable(id, capability)?;
         let slot = self.slot(id);
@@ -152,7 +181,7 @@ impl Host {
     }
 
     fn usable(&self, id: &str, capability: &str) -> Result<Entry, CallError> {
-        let entry = self.registry.get(id)?;
+        let entry = self.entry(id)?;
         if !entry.enabled { return Err(CallError::Disabled(id.to_owned())); }
         if !entry.capabilities.contains_key(capability) {
             return Err(CallError::connector(ErrorCode::UnsupportedCapability, format!("o conector não oferece {capability}")));

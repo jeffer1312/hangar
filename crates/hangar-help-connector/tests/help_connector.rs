@@ -75,12 +75,21 @@ async fn detalhe(State(api): State<Arc<Api>>, headers: HeaderMap, UrlPath(chave)
 
 struct Bench { dir: tempfile::TempDir, api: Arc<Api>, base: String, host: Arc<Host>, server: tokio::task::JoinHandle<()> }
 
-static ENVIRONMENT: std::sync::Once = std::sync::Once::new();
+fn isolated(name: &str) -> bool {
+    if std::env::var_os("HANGAR_HELP_TEST_CHILD").is_some() { return false; }
+    // O conector herda o ambiente: cada cenário roda sem credenciais do processo executor.
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command.env_clear().env("HANGAR_HELP_TEST_CHILD", "1").args(["--exact", name, "--nocapture"]);
+    for key in ["SystemRoot", "WINDIR", "PATH", "TMP", "TEMP", "TMPDIR"] {
+        if let Some(value) = std::env::var_os(key) { command.env(key, value); }
+    }
+    let output = command.output().unwrap();
+    assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    true
+}
 
 impl Bench {
     async fn new(token: Option<&str>) -> Self {
-        // O ambiente do teste não pode emprestar um token real ao conector.
-        ENVIRONMENT.call_once(|| unsafe { std::env::remove_var("HELP_TOKEN"); std::env::remove_var("PMEDICO_HELP_URL"); });
         let api = Arc::new(Api::default());
         api.accepted.lock().unwrap().extend(["token-ficticio".to_owned(), "token-novo".to_owned()]);
         let app = axum::Router::new()
@@ -132,6 +141,7 @@ fn query(text: &str) -> Filter { Filter { query: Some(text.into()), ..Filter::de
 
 #[tokio::test(flavor = "multi_thread")]
 async fn list_maps_help_fields_to_the_contract() {
+    if isolated("list_maps_help_fields_to_the_contract") { return; }
     let bench = Bench::new(Some("token-ficticio")).await;
     let page = bench.list(query("impressão"), None).await.unwrap();
     assert_eq!(bench.last_query(), [("pagina".into(), "1".into()), ("tamanho".into(), "2".into()), ("busca".into(), "impressão".into())]);
@@ -150,6 +160,7 @@ async fn list_maps_help_fields_to_the_contract() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn cursor_walks_pages_and_is_bound_to_the_filters() {
+    if isolated("cursor_walks_pages_and_is_bound_to_the_filters") { return; }
     let bench = Bench::new(Some("token-ficticio")).await;
     let first = bench.list(query("impressão"), None).await.unwrap();
     let second = bench.list(query("impressão"), first.next_cursor.clone()).await.unwrap();
@@ -163,6 +174,7 @@ async fn cursor_walks_pages_and_is_bound_to_the_filters() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn assignee_me_becomes_the_login_of_the_token_owner() {
+    if isolated("assignee_me_becomes_the_login_of_the_token_owner") { return; }
     let bench = Bench::new(Some("token-ficticio")).await;
     bench.list(Filter { assignee: Some("me".into()), ..Filter::default() }, None).await.unwrap();
     assert!(bench.last_query().contains(&("responsaveis".into(), "maria".into())));
@@ -172,6 +184,7 @@ async fn assignee_me_becomes_the_login_of_the_token_owner() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn detail_brings_markdown_and_nothing_else() {
+    if isolated("detail_brings_markdown_and_nothing_else") { return; }
     let bench = Bench::new(Some("token-ficticio")).await;
     let detail = bench.host.get_ticket("help-test", GetParams { ticket_id: "PM-101".into() }).await.unwrap();
     assert_eq!(detail.description_markdown, "## Passos\n\n1. Abrir a **tela**\n2. Imprimir");
@@ -183,6 +196,7 @@ async fn detail_brings_markdown_and_nothing_else() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn missing_or_refused_token_is_auth_required_and_new_login_applies_without_restart() {
+    if isolated("missing_or_refused_token_is_auth_required_and_new_login_applies_without_restart") { return; }
     let bench = Bench::new(None).await;
     assert_eq!(bench.list(query("x"), None).await.unwrap_err().code(), "auth_required");
     assert!(bench.api.tokens.lock().unwrap().is_empty(), "sem token, nenhum pedido sai");
@@ -195,6 +209,7 @@ async fn missing_or_refused_token_is_auth_required_and_new_login_applies_without
 
 #[tokio::test(flavor = "multi_thread")]
 async fn redirect_is_refused_instead_of_followed() {
+    if isolated("redirect_is_refused_instead_of_followed") { return; }
     let bench = Bench::new(Some("token-ficticio")).await;
     let error = bench.list(query("redireciona"), None).await.unwrap_err();
     assert_eq!(error.code(), "unavailable");
@@ -202,6 +217,7 @@ async fn redirect_is_refused_instead_of_followed() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn state_filter_becomes_the_status_ids_of_the_help_categories() {
+    if isolated("state_filter_becomes_the_status_ids_of_the_help_categories") { return; }
     let bench = Bench::new(Some("token-ficticio")).await;
     bench.list(Filter { state: Some("open".into()), ..Filter::default() }, None).await.unwrap();
     let sent: Vec<String> = bench.last_query().into_iter().filter(|(k, _)| k == "status_ids").map(|(_, v)| v).collect();

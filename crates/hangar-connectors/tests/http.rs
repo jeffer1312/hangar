@@ -139,3 +139,46 @@ async fn detail_carries_the_filled_start_prompt() {
     let (status, body) = bench.send("GET", "/api/connectors/prova/tickets/t-1", Some(TOKEN), None).await;
     assert_eq!((status, body["start_prompt"].clone()), (StatusCode::OK, json!("/iniciar #t-1")), "{body}");
 }
+
+#[tokio::test(flavor="multi_thread")]
+async fn work_actions_negotiation_keeps_legacy_initialize_parameters_unchanged() {
+    let bench=Bench::new();
+    let manifest=bench.manifest("legacy",&["--strict-initialize","yes"]);
+    let (status,body)=bench.send("POST","/api/connectors",Some(TOKEN),Some(json!({"manifest":manifest}))).await;
+    assert_eq!(status,StatusCode::CREATED,"{body}");
+    let (status,body)=bench.send("GET","/api/connectors/legacy/tickets?limit=1",Some(TOKEN),None).await;
+    assert_eq!(status,StatusCode::OK,"{body}");
+    assert!(body["items"].is_array());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn work_actions_are_read_through_the_declared_capability_and_filled_with_the_ticket() {
+    let bench = Bench::new();
+    let manifest = bench.manifest_with("actions", &["--actions", "yes"], json!({"capabilities": {"work_tracking": 1, "work_actions": 1}}));
+    let (status, body) = bench.send("POST", "/api/connectors", Some(TOKEN), Some(json!({"manifest": manifest}))).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let (status, body) = bench.send("GET", "/api/connectors/actions/actions?ticket_id=t-1", Some(TOKEN), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let action = body["actions"].as_array().unwrap().iter().find(|a| a["id"] == "plan").unwrap();
+    assert_eq!(action["prompt"], json!("/iniciar #t-1"));
+    assert_eq!(action["stage"], json!("planejamento"));
+    assert!(action["fingerprint"].as_str().is_some_and(|f| !f.is_empty()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn work_actions_require_the_owner_and_a_declared_capability_before_starting_a_process() {
+    let bench = Bench::new();
+    let manifest = bench.manifest("reading", &[]);
+    bench.send("POST", "/api/connectors", Some(TOKEN), Some(json!({"manifest": manifest}))).await;
+    for token in [None, Some("errado")] {
+        let (status, _) = bench.send("GET", "/api/connectors/reading/actions?ticket_id=x", token, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+    let (status, body) = bench.send("GET", "/api/connectors/reading/actions?ticket_id=x", Some(TOKEN), None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["detail"]["code"], json!("unsupported_capability"));
+    let (status, body) = bench.send("GET", "/api/connectors/reading/actions?other=x", Some(TOKEN), None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["detail"]["code"], json!("invalid_params"));
+    assert!(!bench.host.list().unwrap().iter().any(|connector| connector.running));
+}

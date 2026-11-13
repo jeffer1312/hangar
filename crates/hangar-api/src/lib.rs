@@ -9,4 +9,4 @@ pub mod state;
 pub mod workspace;
 
 /// Versão da API que o servidor fala; o app nativo compilado exige essa mesma. Suba ao mudar o que o app consome.
-pub const CLIENT_API: u32 = 11;
+pub const CLIENT_API: u32 = 12;

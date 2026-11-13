@@ -92,6 +92,89 @@ async fn empty_server_offers_the_default_stages_and_refuses_strangers() {
     }
 }
 
+#[tokio::test]
+async fn stage_workflow_prompt_is_optional_and_survives_a_round_trip() {
+    let bench = Bench::new();
+    let (_, current) = bench.send("GET", "/api/mission", None).await;
+    let mut stages = current["stages"].clone();
+    stages[0]["prompt"] = json!("Confira o fluxo atual antes de propor a implementação.");
+    let (status, body) = bench.send("PUT", "/api/mission/stages", Some(json!({"stages": stages}))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, stored) = bench.send("GET", "/api/mission", None).await;
+    assert_eq!(stored["stages"][0]["prompt"], json!("Confira o fluxo atual antes de propor a implementação."));
+    assert!(stored["stages"][1].get("prompt").is_none_or(Value::is_null));
+}
+
+#[tokio::test]
+async fn stage_workflow_configuration_survives_rename_reorder_and_an_older_client() {
+    let bench = Bench::new();
+    let (_, current) = bench.send("GET", "/api/mission", None).await;
+    let mut configured = current["stages"].clone();
+    configured[0]["prompt"] = json!("Confira o fluxo atual.");
+    configured[0]["actions"] = json!({"help": ["start-pm"]});
+    let (status, _) = bench.send("PUT", "/api/mission/stages", Some(json!({"stages": configured}))).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, stored) = bench.send("GET", "/api/mission", None).await;
+    assert_eq!(stored["stages"][0]["actions"]["help"], json!(["start-pm"]));
+    let mut older = current["stages"].as_array().unwrap().clone();
+    older[0]["name"] = json!("Entendimento");
+    older.swap(0, 1);
+    let (status, body) = bench.send("PUT", "/api/mission/stages", Some(json!({"stages": older}))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let stage = body["stages"].as_array().unwrap().iter().find(|s| s["id"] == "planejamento").unwrap();
+    assert_eq!(stage["name"], json!("Entendimento"));
+    assert_eq!(stage["prompt"], json!("Confira o fluxo atual."));
+    assert_eq!(stage["actions"]["help"], json!(["start-pm"]));
+}
+
+#[tokio::test]
+async fn stage_workflow_config_rejects_invalid_values_and_can_be_cleared_explicitly() {
+    let bench = Bench::new();
+    let (_, current) = bench.send("GET", "/api/mission", None).await;
+    let mut stages = current["stages"].clone();
+    stages[0]["prompt"] = json!("Instrução opcional.");
+    stages[0]["actions"] = json!({"help": ["start-pm"]});
+    bench.send("PUT", "/api/mission/stages", Some(json!({"stages": stages}))).await;
+    for (field, invalid) in [("prompt", json!("x".repeat(4001))), ("prompt", json!("a\u{0000}b")),
+        ("actions", json!({"../conector": ["start-pm"]})), ("actions", json!({"help": ["../acao"]})),
+        ("actions", json!({"help": ["start-pm", "start-pm"]}))] {
+        let mut bad = stages.clone();
+        bad[0][field] = invalid;
+        let (status, _) = bench.send("PUT", "/api/mission/stages", Some(json!({"stages": bad}))).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "campo {field}");
+    }
+    let (_, stored) = bench.send("GET", "/api/mission", None).await;
+    assert_eq!(stored["stages"][0]["prompt"], json!("Instrução opcional."));
+    stages[0]["prompt"] = json!("");
+    stages[0]["actions"] = json!({});
+    let (status, cleared) = bench.send("PUT", "/api/mission/stages", Some(json!({"stages": stages}))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(cleared["stages"][0]["prompt"].as_str().unwrap_or_default().is_empty());
+    assert_eq!(cleared["stages"][0]["actions"], json!({}));
+}
+
+#[tokio::test]
+async fn stage_workflow_migrates_the_legacy_file_without_losing_ticket_history() {
+    let bench = Bench::new();
+    bench.link("pm-1").await;
+    let path = bench.dir.path().join("mission/mission.json");
+    let mut legacy: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    legacy["version"] = json!(1);
+    std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let (status, snapshot) = bench.send("GET", "/api/mission", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let mut stages = snapshot["stages"].clone();
+    stages[0]["prompt"] = json!("Contexto opcional.");
+    let (status, _) = bench.send("PUT", "/api/mission/stages", Some(json!({"stages": stages}))).await;
+    assert_eq!(status, StatusCode::OK);
+    let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["version"], json!(2), "o marcador impede que um servidor antigo descarte campos novos");
+    let (_, snapshot) = bench.send("GET", "/api/mission", None).await;
+    let item = snapshot["items"].as_array().unwrap().iter().find(|i| i["session"] == "pm-1").unwrap();
+    assert_eq!(item["key"], json!("PM-1"));
+    assert!(item["history"].as_array().unwrap().iter().any(|event| event["kind"] == "linked"));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn the_agent_moves_stages_but_waits_for_the_owner_at_the_gate() {
     let bench = Bench::new();

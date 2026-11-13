@@ -1,6 +1,6 @@
 //! Manifesto de um conector: identidade, capacidades e o comando, sem segredo nem shell.
 use crate::error::{AdminError, AdminKind};
-use crate::protocol::{CAPABILITIES, MANIFEST_VERSION, PROTOCOL_VERSION};
+use crate::protocol::{CAPABILITIES, ConnectorError, MANIFEST_VERSION, PROTOCOL_VERSION};
 use crate::work_tracking::TicketSummary;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -42,10 +42,7 @@ pub struct Manifest {
 
 /// `id`: de 1 a 64 caracteres, minúsculas, dígitos e hífen, começando por letra.
 pub fn valid_id(id: &str) -> bool {
-    let mut chars = id.chars();
-    matches!(chars.next(), Some('a'..='z'))
-        && id.len() <= 64
-        && chars.all(|c| matches!(c, 'a'..='z' | '0'..='9' | '-'))
+    hangar_core::ids::valid_slug(id, 64)
 }
 
 fn text(field: &str, value: &str, max: usize) -> Result<(), AdminError> {
@@ -97,6 +94,9 @@ impl Manifest {
                 Some(_) => {}
             }
         }
+        if raw.capabilities.contains_key("work_actions") && !raw.capabilities.contains_key("work_tracking") {
+            return Err(AdminError::new(AdminKind::UnsupportedCapability, "work_actions exige work_tracking para preencher os dados do ticket"));
+        }
         if raw.command.is_empty() { return Err(AdminError::invalid("command vazio")); }
         if raw.command.iter().any(|part| part.is_empty() || part.contains('\0') || part.len() > 4096) {
             return Err(AdminError::invalid("item de command vazio, com NUL ou longo demais"));
@@ -112,29 +112,40 @@ impl Manifest {
 
     /// `start_prompt` preenchido com os campos do ticket, numa passada só: o texto de um campo
     /// nunca é relido como marcador.
-    pub fn start_prompt_for(&self, ticket: &TicketSummary) -> Option<String> {
-        let template = self.start_prompt.as_deref()?;
-        let mut out = String::with_capacity(template.len() + 64);
-        let mut rest = template;
-        while let Some(open) = rest.find('{') {
-            out.push_str(&rest[..open]);
-            let tail = &rest[open..];
-            let field = tail.find('}').and_then(|close| {
-                let value = match &tail[1..close] {
-                    "key" => &ticket.key,
-                    "id" => &ticket.id,
-                    "title" => &ticket.title,
-                    "url" => &ticket.url,
-                    _ => return None,
-                };
-                Some((value, close + 1))
-            });
-            match field {
-                Some((value, used)) => { out.push_str(value); rest = &tail[used..]; }
-                None => { out.push('{'); rest = &tail[1..]; }
-            }
-        }
-        out.push_str(rest);
-        Some(out)
+    pub fn start_prompt_for(&self, ticket: &TicketSummary) -> Result<Option<String>, ConnectorError> {
+        self.start_prompt.as_deref().map(|template| render_prompt(template, ticket)).transpose()
     }
+}
+
+pub(crate) fn render_prompt(template: &str, ticket: &TicketSummary) -> Result<String, ConnectorError> {
+    let mut out = String::with_capacity(template.len().min(64 * 1024));
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        append_prompt(&mut out, &rest[..open])?;
+        let tail = &rest[open..];
+        let field = tail.find('}').and_then(|close| {
+            let value = match &tail[1..close] {
+                "key" => &ticket.key,
+                "id" => &ticket.id,
+                "title" => &ticket.title,
+                "url" => &ticket.url,
+                _ => return None,
+            };
+            Some((value, close + 1))
+        });
+        match field {
+            Some((value, used)) => { append_prompt(&mut out, value)?; rest = &tail[used..]; }
+            None => { append_prompt(&mut out, "{")?; rest = &tail[1..]; }
+        }
+    }
+    append_prompt(&mut out, rest)?;
+    Ok(out)
+}
+
+fn append_prompt(out: &mut String, text: &str) -> Result<(), ConnectorError> {
+    if text.len() > (64 * 1024usize).saturating_sub(out.len()) {
+        return Err(ConnectorError::protocol("prompt expandido acima de 64 KiB"));
+    }
+    out.push_str(text);
+    Ok(())
 }
