@@ -1125,3 +1125,8 @@ A lista aceitava duas compilações exatas (`66cf613` e `20aa1d7`). Num notebook
 cenário: ~103 `tmux.exe` por minuto antes e ~103 depois da captura direta, porque a captura usa a
 mesma conferência da lista. Agora vale qualquer versão a partir da 3.3.8: a conferência byte a byte
 contra o CLI e o retorno ao CLI na falha já protegem uma versão nova que mude a conversa.
+
+Medido no mesmo notebook depois da troca (versão 0.1.0.10376, 3 sessões de carga, 5 min por cenário):
+`tmux.exe` por minuto de ~103 para ~49 trabalhando e ~45 parado; CPU dos servidores do psmux de
+3,2%/2,6% para 1,6%/0,9% de um núcleo; `psmux_direct_version` sumiu do log. O ganho junta a lista
+e a captura direta, que só ligaram juntas. Os ~45 por minuto restantes são `tmux.exe` fora da captura.
