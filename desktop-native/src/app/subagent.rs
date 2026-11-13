@@ -136,10 +136,18 @@ fn prepare(events: &[ChatEvent], finished: bool, started: Option<f64>) -> Vec<Ro
 }
 
 /// A linha dona da chave: id igual, senão o id mais longo seguido de `:` — o backend dá `U`, `U:1`, `U:2`… às partes da
-/// mesma mensagem, e `U:1:input` é da linha `U:1`, não da `U`.
+/// mesma mensagem, e `U:1:input` é da linha `U:1`, não da `U`. A chamada (e o pensamento) dentro de um grupo ou bloco de
+/// pensamento tem a chave dela, não a do bloco: a linha dona é a do bloco.
 fn owner(rows: &[Row], key: &str) -> Option<usize> {
-    rows.iter().enumerate().filter(|(_, r)| key.strip_prefix(r.id()).is_some_and(|rest| rest.is_empty() || rest.starts_with(':')))
-        .max_by_key(|(_, r)| r.id().len()).map(|(i, _)| i)
+    let owns = |id: &str| key.strip_prefix(id).is_some_and(|rest| rest.is_empty() || rest.starts_with(':'));
+    rows.iter().enumerate().filter_map(|(i, r)| {
+        let inner: Vec<&str> = match r {
+            Row::Group { tools, .. } => tools.iter().map(|t| t.key.as_str()).collect(),
+            Row::Thinking { parts, .. } => parts.iter().map(|p| match p { Part::Thought(key, _) => key.as_str(), Part::Tool(t) => t.key.as_str() }).collect(),
+            _ => Vec::new(),
+        };
+        std::iter::once(r.id()).chain(inner).filter(|id| owns(id)).map(str::len).max().map(|len| (i, len))
+    }).max_by_key(|&(_, len)| len).map(|(i, _)| i)
 }
 
 /// Eventos mais antigos entraram na frente: o id do primeiro de antes, onde a rolagem fica presa.
@@ -232,13 +240,6 @@ impl SubConversation {
     fn toggle(&mut self, key: String, cx: &mut Context<Self>) {
         if !self.expanded.remove(&key) { self.expanded.insert(key.clone()); }
         self.remeasure(&key);
-        // Chamada aberta dentro de um grupo ou pensamento: a linha é a do bloco.
-        let probe = key.strip_suffix(":fold").unwrap_or(&key);
-        if let Some(i) = self.rows.iter().position(|r| match r {
-            Row::Group { tools, .. } => tools.iter().any(|t| t.key == probe),
-            Row::Thinking { parts, .. } => parts.iter().any(|p| matches!(p, Part::Tool(t) if t.key == key)),
-            _ => false,
-        }) { self.list.remeasure_items(i..i + 1); }
         cx.notify();
     }
 
@@ -543,7 +544,7 @@ impl SubConversation {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChatEvent, Row, Tone, owner, prepare, prepended_anchor};
+    use super::{ChatEvent, Part, Row, Tone, ToolRow, owner, prepare, prepended_anchor};
 
     #[test]
     fn older_events_in_front_anchor_the_previous_first_event_and_a_sliding_window_does_not() {
@@ -559,6 +560,18 @@ mod tests {
         let rows: Vec<Row> = ["U", "U:1", "U:10"].iter().map(|id| Row::Message { id: (*id).into(), markdown: String::new(), user: false, label: None, at: None }).collect();
         assert_eq!((owner(&rows, "U"), owner(&rows, "U:1"), owner(&rows, "U:1:input"), owner(&rows, "U:10:result")), (Some(0), Some(1), Some(1), Some(2)));
         assert_eq!((owner(&rows, "U:2:input"), owner(&rows, "V")), (Some(0), None));
+    }
+
+    #[test]
+    fn a_call_inside_a_group_or_a_thought_belongs_to_the_block_row() {
+        let tool = |key: &str| ToolRow { key: key.into(), call: 0, result: None, orphan: false, name: String::new(), summary: String::new(),
+            status: String::new(), tone: Tone::Muted };
+        let rows = vec![
+            Row::Message { id: "m".into(), markdown: String::new(), user: false, label: None, at: None },
+            Row::Group { id: "g-u1".into(), label: String::new(), summary: String::new(), status: String::new(), tone: Tone::Muted, tools: vec![tool("u1")] },
+            Row::Thinking { id: "t-th".into(), summary: String::new(), count: None, parts: vec![Part::Thought("th:thought".into(), String::new()), Part::Tool(tool("u2"))] },
+        ];
+        assert_eq!((owner(&rows, "u1:result"), owner(&rows, "u2:input"), owner(&rows, "th:thought")), (Some(1), Some(2), Some(2)));
     }
 
     fn event(kind: &str, id: &str, tool: Option<&str>, key: Option<&str>) -> ChatEvent {

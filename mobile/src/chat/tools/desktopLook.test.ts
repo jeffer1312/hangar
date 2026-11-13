@@ -32,6 +32,11 @@ describe('desktopSummary', () => {
       .toBe(`${m.ferr_desktop_rodou({ n: 2 })}, ${m.ferr_desktop_executando({ n: 1 })}`);
   });
 
+  it('pedido ainda sendo escrito soma como escrevendo, não em execução', () => {
+    expect(desktopSummary([call('a', 'Bash')], () => null, true))
+      .toBe(`${m.ferr_desktop_rodou_1()}, ${m.ferr_desktop_escrevendo({ n: 1 })}`);
+  });
+
   it('ferramenta de fora usa o nome de exibição', () => {
     expect(summary([call('a', 'mcp__hangar__sessions'), call('b', 'mcp__hangar__sessions')], [done('a'), done('b')]))
       .toBe(m.ferr_desktop_outra({ nome: 'hangar · sessions', n: 2 }));

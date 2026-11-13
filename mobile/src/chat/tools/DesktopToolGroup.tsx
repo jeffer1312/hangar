@@ -20,12 +20,16 @@ type Props = {
   parts: ChatEvent[];
   resultOf: (tool: ChatEvent) => ChatEvent | null;
   onExpand?: () => void;
+  /** Abre o detalhe da chamada: é lá que a saída de um Bash ainda rodando é lida ao vivo. */
+  onOpen?: (tool: ChatEvent) => void;
+  /** Pedido ainda sendo escrito pelo modelo: o resumo diz escrevendo, não em execução. */
+  writing?: boolean;
   /** Pensamento e Agent ficam como nos outros estilos: quem desenha é o ToolGroup. */
   renderOther?: (part: ChatEvent) => ReactNode;
 };
 
 /** Uma chamada: verbo apagado, alvo, `Falhou` e, aberta, o comando, o código de saída e a saída. */
-const DesktopCall = memo(function DesktopCall({ use, result, onExpand }: { use: ChatEvent; result: ChatEvent | null; onExpand?: () => void }) {
+const DesktopCall = memo(function DesktopCall({ use, result, onExpand, onOpen }: { use: ChatEvent; result: ChatEvent | null; onExpand?: () => void; onOpen?: Props['onOpen'] }) {
   const { theme } = useUnistyles();
   const [open, setOpen] = useState(false);
   const family = desktopFamily(use.tool_name);
@@ -51,26 +55,30 @@ const DesktopCall = memo(function DesktopCall({ use, result, onExpand }: { use: 
         </Text>
         <ExitCodeLine output={result?.result} />
         {result?.result ? <Text style={[styles.mono, { color: theme.tokens.text.secondary }]} selectable>{result.result}</Text> : null}
+        {onOpen ? <Pressable onPress={() => onOpen(use)} style={styles.open} accessibilityRole="button">
+          <Text style={[styles.verb, { color: theme.tokens.text.secondary }]}>{m.tool_ver_separado()}</Text>
+        </Pressable> : null}
       </Pressable>
     ) : null}
   </View>;
 });
 
 /** Sequência de chamadas: a linha cinza com o resumo e, aberta, o cartão com uma linha por chamada. */
-const DesktopRun = memo(function DesktopRun({ calls, resultOf, onExpand }: { calls: ChatEvent[]; resultOf: Props['resultOf']; onExpand?: () => void }) {
+const DesktopRun = memo(function DesktopRun({ calls, resultOf, onExpand, onOpen, writing }: { calls: ChatEvent[]; resultOf: Props['resultOf']; onExpand?: () => void; onOpen?: Props['onOpen']; writing?: boolean }) {
   const [open, setOpen] = useState(false);
   const [shown, setShown] = useState(SHOWN_CALLS);
-  return <DesktopRunView calls={calls} resultOf={resultOf} onExpand={onExpand} open={open} shown={shown}
+  return <DesktopRunView calls={calls} resultOf={resultOf} onExpand={onExpand} onOpen={onOpen} writing={writing} open={open} shown={shown}
     onToggle={() => { if (!open) onExpand?.(); setOpen((value) => !value); }}
     onMore={() => { onExpand?.(); setShown((n) => n + SHOWN_CALLS); }} />;
 });
 
 /** A sequência desenhada com o estado de fora: a conversa guarda o aberto; a novidade o anima. */
-export function DesktopRunView({ calls, resultOf, onExpand, open, shown = SHOWN_CALLS, onToggle, onMore }: {
-  calls: ChatEvent[]; resultOf: Props['resultOf']; onExpand?: () => void; open: boolean; shown?: number; onToggle?: () => void; onMore?: () => void;
+export function DesktopRunView({ calls, resultOf, onExpand, onOpen, writing = false, open, shown = SHOWN_CALLS, onToggle, onMore }: {
+  calls: ChatEvent[]; resultOf: Props['resultOf']; onExpand?: () => void; onOpen?: Props['onOpen']; writing?: boolean;
+  open: boolean; shown?: number; onToggle?: () => void; onMore?: () => void;
 }) {
   const { theme } = useUnistyles();
-  const title = useMemo(() => desktopSummary(calls, resultOf), [calls, resultOf]);
+  const title = useMemo(() => desktopSummary(calls, resultOf, writing), [calls, resultOf, writing]);
   return <View style={styles.run}>
     <Pressable onPress={onToggle}
       style={({ pressed }) => [styles.head, pressed && { backgroundColor: theme.tokens.bg.hover }]}
@@ -81,7 +89,7 @@ export function DesktopRunView({ calls, resultOf, onExpand, open, shown = SHOWN_
     {open ? <View style={[styles.card, { borderColor: theme.tokens.border.subtle }]}>
       {calls.slice(0, shown).map((call, i) => (
         <View key={call.id} style={i > 0 ? { borderTopWidth: 1, borderTopColor: theme.tokens.border.subtle } : undefined}>
-          <DesktopCall use={call} result={resultOf(call)} onExpand={onExpand} />
+          <DesktopCall use={call} result={resultOf(call)} onExpand={onExpand} onOpen={onOpen} />
         </View>
       ))}
       {shown < calls.length ? <Pressable style={styles.row} accessibilityRole="button" onPress={onMore}>
@@ -92,7 +100,7 @@ export function DesktopRunView({ calls, resultOf, onExpand, open, shown = SHOWN_
 }
 
 /** Estilo Claude Desktop: cada sequência de chamadas vira uma linha recolhida; pensamento e Agent cortam. */
-export const DesktopToolGroup = memo(function DesktopToolGroup({ parts, resultOf, onExpand, renderOther }: Props) {
+export const DesktopToolGroup = memo(function DesktopToolGroup({ parts, resultOf, onExpand, onOpen, writing, renderOther }: Props) {
   // Trecho que cresce não recria as sequências anteriores: cada uma mantém o mesmo array de chamadas.
   const previousRuns = useRef(new Map<string, ChatEvent[]>());
   const blocks = useMemo(() => {
@@ -117,15 +125,17 @@ export const DesktopToolGroup = memo(function DesktopToolGroup({ parts, resultOf
     return out;
   }, [parts]);
   return <View style={styles.group}>{blocks.map((block) => 'run' in block
-    ? <DesktopRun key={block.run[0].id} calls={block.run} resultOf={resultOf} onExpand={onExpand} />
+    ? <DesktopRun key={block.run[0].id} calls={block.run} resultOf={resultOf} onExpand={onExpand} onOpen={onOpen} writing={writing} />
     : <View key={block.other.id}>{renderOther?.(block.other)}</View>)}</View>;
 });
 
 /** Chamada solta fora de grupo: a mesma linha de resumo, com uma chamada só. */
-export const DesktopToolCall = memo(function DesktopToolCall({ use, result, onExpand }: { use: ChatEvent; result: ChatEvent | null; onExpand?: () => void }) {
+export const DesktopToolCall = memo(function DesktopToolCall({ use, result, onExpand, onOpen, writing }: {
+  use: ChatEvent; result: ChatEvent | null; onExpand?: () => void; onOpen?: Props['onOpen']; writing?: boolean;
+}) {
   const parts = useMemo(() => [use], [use]);
   const resultOf = useCallback(() => result, [result]);
-  return <DesktopToolGroup parts={parts} resultOf={resultOf} onExpand={onExpand} />;
+  return <DesktopToolGroup parts={parts} resultOf={resultOf} onExpand={onExpand} onOpen={onOpen} writing={writing} />;
 });
 
 const styles = StyleSheet.create((theme) => ({
@@ -141,4 +151,5 @@ const styles = StyleSheet.create((theme) => ({
   body: { paddingHorizontal: theme.base.space[3], paddingBottom: theme.base.space[3], gap: theme.base.space[2] },
   code: { ...theme.type.mono, borderWidth: 1, borderRadius: theme.base.radius.xs, padding: theme.base.space[2] },
   mono: { ...theme.type.mono },
+  open: { minHeight: 44, justifyContent: 'center', alignSelf: 'flex-start' },
 }));

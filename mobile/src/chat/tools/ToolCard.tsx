@@ -43,7 +43,7 @@ export const ToolCard = memo(function ToolCard({
   const rodando = escrevendo ? m.tool_fase_escrevendo() : m.estado_em_execucao();
 
   // Claude Desktop: chamada solta vira a mesma linha de resumo; o Agent fica na linha da Árvore.
-  if (look === 'claudeDesktop' && use.tool_name !== 'Agent') return <DesktopToolCall use={use} result={result ?? null} onExpand={onExpand} />;
+  if (look === 'claudeDesktop' && use.tool_name !== 'Agent') return <DesktopToolCall use={use} result={result ?? null} onExpand={onExpand} onOpen={onPress} writing={escrevendo} />;
 
   if (look === 'terminal') return <TerminalTool use={use} result={result} escrevendo={escrevendo} onExpand={onExpand} onOpen={onPress} />;
 

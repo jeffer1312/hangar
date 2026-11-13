@@ -57,7 +57,7 @@ export const ToolGroup = memo(function ToolGroup({
       : <ToolCard key={p.id} use={p} result={resultOf(p)} onPress={onAbrir} look={cardLook} />, [resultOf, onAbrir, cardLook]);
 
   if (look === 'terminal') return <TerminalToolGroup parts={parts} resultOf={resultOf} onExpand={onExpand} onOpen={onAbrir} pluginServers={pluginServers} />;
-  if (look === 'claudeDesktop') return <DesktopToolGroup parts={parts} resultOf={resultOf} onExpand={onExpand} renderOther={linha} />;
+  if (look === 'claudeDesktop') return <DesktopToolGroup parts={parts} resultOf={resultOf} onExpand={onExpand} onOpen={onAbrir} renderOther={linha} />;
   // Tabela dos Chips: caixa com borda e divisória entre as linhas (chip_table do Rust).
   const tabela = (ls: ChatEvent[]) => (
     <View style={[styles.tabela, { borderColor: theme.tokens.border.subtle }]}>

@@ -22,8 +22,9 @@ function phrase(family: DesktopFamily, n: number, nome: string): string {
   }
 }
 
-/** "Executou 4 comandos (2 falhas), Leu 1 arquivo, 1 em execução": famílias na ordem em que aparecem. */
-export function desktopSummary(calls: ChatEvent[], resultOf: (call: ChatEvent) => ChatEvent | null): string {
+/** "Executou 4 comandos (2 falhas), Leu 1 arquivo, 1 em execução": famílias na ordem em que aparecem.
+ *  `writing`: o pedido ainda está sendo escrito pelo modelo, então o que não tem resultado não roda ainda. */
+export function desktopSummary(calls: ChatEvent[], resultOf: (call: ChatEvent) => ChatEvent | null, writing = false): string {
   const groups = new Map<string, { family: DesktopFamily; nome: string; n: number; failed: number }>();
   let running = 0;
   for (const call of calls) {
@@ -41,7 +42,7 @@ export function desktopSummary(calls: ChatEvent[], resultOf: (call: ChatEvent) =
     const text = phrase(family, n, nome);
     return failed ? `${text} ${failed === 1 ? m.ferr_desktop_falhas_1() : m.ferr_desktop_falhas({ n: failed })}` : text;
   });
-  if (running) parts.push(m.ferr_desktop_executando({ n: running }));
+  if (running) parts.push(writing ? m.ferr_desktop_escrevendo({ n: running }) : m.ferr_desktop_executando({ n: running }));
   return parts.join(', ');
 }
 

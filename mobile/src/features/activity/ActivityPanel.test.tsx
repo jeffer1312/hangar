@@ -270,3 +270,67 @@ it('shell sem id de fundo não ganha ■', async () => {
   expect(el.textContent).toContain('npm run dev');
   expect(stopButton(el)).toBeNull();
 });
+
+it('■ de shell se confirma pelo transcript mesmo com a lista de subagentes falhando', async () => {
+  data.ferramentas = 'claudeDesktop';
+  const shell = { id: 'call-sh', command: 'npm run dev', rotulo: 'npm run dev', running: true, taskId: 'bg1' };
+  data.activity = { ...data.activity, runningShells: 1, shells: [shell] };
+  const { getSubagents } = await import('@hangar/core');
+  vi.mocked(getSubagents).mockRejectedValueOnce(new Error('offline'));
+  toastErro.mockClear();
+  const el = await mount();
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  await act(async () => stopButton(el)!.click());
+  expect(el.textContent).toContain(m.atividade_parando());
+  data.activity = { ...data.activity, runningShells: 0, shells: [{ ...shell, running: false }] };
+  await act(async () => root!.render(createElement(ActivityPanel, { serverId: 'a', name: 'sess', focused: true })));
+  expect(el.textContent).not.toContain(m.atividade_parando());
+  await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+  expect(toastErro).not.toHaveBeenCalled();
+});
+
+it('■ de subagente que só ficou sem estado legível continua parando e avisa em 15 s', async () => {
+  const running: SubagentRun = { agentId: 'ag-sub', agentType: null, prompt: 'diag-sub', startedAt: '2026-11-13T08:00:00Z',
+    updatedAt: new Date().toISOString(), endedAt: null, mtime: 0, toolCalls: 1, tools: [], recent: [], lastText: '' };
+  const { getSubagents } = await import('@hangar/core');
+  vi.mocked(getSubagents).mockResolvedValue([running]);
+  toastErro.mockClear();
+  try {
+    const el = await mount();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const button = () => el.querySelector<HTMLElement>(`[aria-label="${m.atividade_desktop_parar()}: diag-sub"]`);
+    await act(async () => button()!.click());
+    expect(el.textContent).toContain(m.atividade_parando());
+    // Sem estado legível o subagente sai dos rodando, mas segue listado: isso não prova a parada.
+    vi.mocked(getSubagents).mockResolvedValue([{ ...running, problema: 'erro_subagente_estado_indisponivel' }]);
+    data.activity = { ...data.activity, agents: [{ id: 'call-x', kind: 'agent', description: 'outro', running: false }] };
+    await act(async () => root!.render(createElement(ActivityPanel, { serverId: 'a', name: 'sess', focused: true })));
+    expect(el.textContent).toContain(m.erro_subagente_estado_indisponivel());
+    expect(el.textContent).toContain(m.atividade_parando());
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+    expect(toastErro).toHaveBeenCalledWith(m.atividade_parar_sem_confirmacao());
+  } finally {
+    vi.mocked(getSubagents).mockResolvedValue([]);
+  }
+});
+
+it('■ recusa atrasada de uma tentativa anterior não encerra a tentativa nova', async () => {
+  data.ferramentas = 'claudeDesktop';
+  data.activity = { ...data.activity, runningShells: 1,
+    shells: [{ id: 'call-sh', command: 'npm run dev', rotulo: 'npm run dev', running: true, taskId: 'bg1' }] };
+  const { stopTask } = await import('@hangar/core');
+  let rejectFirst: (error: Error) => void = () => {};
+  vi.mocked(stopTask).mockImplementationOnce(() => new Promise((_, reject) => { rejectFirst = reject; }));
+  vi.mocked(stopTask).mockImplementationOnce(() => new Promise(() => {}));
+  toastErro.mockClear();
+  const el = await mount();
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  await act(async () => stopButton(el)!.click());
+  await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+  expect(toastErro).toHaveBeenCalledWith(m.atividade_parar_sem_confirmacao());
+  await act(async () => stopButton(el)!.click());
+  expect(el.textContent).toContain(m.atividade_parando());
+  await act(async () => { rejectFirst(new Error('antiga')); });
+  expect(el.textContent).toContain(m.atividade_parando());
+  expect(toastErro).not.toHaveBeenCalledWith('antiga');
+});

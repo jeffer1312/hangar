@@ -2295,6 +2295,7 @@
   "ferr_desktop_falhas_1": "(1 failed)",
   "ferr_desktop_falhas": "({n} failed)",
   "ferr_desktop_executando": "{n} running",
+  "ferr_desktop_escrevendo": "{n} writing",
   "ferr_desktop_linha_rodou": "Ran",
   "ferr_desktop_linha_leu": "Read",
   "ferr_desktop_linha_editou": "Edited",

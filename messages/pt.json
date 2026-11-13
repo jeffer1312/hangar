@@ -2295,6 +2295,7 @@
   "ferr_desktop_falhas_1": "(1 falha)",
   "ferr_desktop_falhas": "({n} falhas)",
   "ferr_desktop_executando": "{n} em execução",
+  "ferr_desktop_escrevendo": "{n} escrevendo",
   "ferr_desktop_linha_rodou": "Executou",
   "ferr_desktop_linha_leu": "Leu",
   "ferr_desktop_linha_editou": "Editou",

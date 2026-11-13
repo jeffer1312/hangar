@@ -251,3 +251,40 @@ it('Claude Desktop nasce recolhido e abre cartão, falha e código de saída', (
     act(() => root.unmount());
   }
 });
+
+it('Claude Desktop abre o detalhe da chamada, no grupo e solta, para ver a saída ao vivo', () => {
+  const use: ChatEvent = { id: 'live', kind: 'tool_use', tool_use_id: 'live', tool_name: 'Bash', tool_input: { command: 'npm run build' } };
+  const openCall = (container: HTMLElement) => {
+    act(() => container.querySelector('button')!.click());
+    act(() => [...container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label')?.includes('npm run build'))!.click());
+    const detail = [...container.querySelectorAll('button')].find((b) => b.textContent === m.tool_ver_separado());
+    expect(detail).toBeDefined();
+    act(() => detail!.click());
+  };
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  const onAbrir = vi.fn(), onPress = vi.fn();
+  try {
+    act(() => root.render(createElement(ToolGroup, { parts: [use], resultOf: () => null, onAbrir, look: 'claudeDesktop' })));
+    openCall(container);
+    expect(onAbrir).toHaveBeenCalledExactlyOnceWith(use);
+    act(() => root.render(createElement(ToolCard, { use, result: null, onPress, look: 'claudeDesktop' })));
+    openCall(container);
+    expect(onPress).toHaveBeenCalledExactlyOnceWith(use);
+  } finally {
+    act(() => root.unmount());
+  }
+});
+
+it('Claude Desktop: chamada solta sendo escrita diz escrevendo, não em execução', () => {
+  const use: ChatEvent = { id: 'w', kind: 'tool_use', tool_use_id: 'w', tool_name: 'Bash', tool_input: { command: 'ls' } };
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  try {
+    act(() => root.render(createElement(ToolCard, { use, result: null, onPress: () => {}, look: 'claudeDesktop', escrevendo: true })));
+    expect(container.textContent).toContain(m.ferr_desktop_escrevendo({ n: 1 }));
+    expect(container.textContent).not.toContain(m.ferr_desktop_executando({ n: 1 }));
+  } finally {
+    act(() => root.unmount());
+  }
+});

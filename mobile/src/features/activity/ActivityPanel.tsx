@@ -266,7 +266,7 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
         </View>
         <Icon name="ChevronRight" size={18} color={theme.tokens.text.muted} />
       </Pressable>,
-      run.agentId, status === 'running' ? run.agentId : undefined, tituloDoSub(run),
+      run.agentId, status === 'running' || stopTimers.current.has(run.agentId) ? run.agentId : undefined, tituloDoSub(run),
     );
   }
 
@@ -287,11 +287,18 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
     stopTimers.current.delete(taskId);
     rerender();
   }, []);
-  // A tarefa saiu da lista: a parada se confirmou e a linha some com ela.
+  // A tarefa terminou ou saiu da lista: a parada se confirmou e a linha some com ela.
   useEffect(() => {
-    if (!subsReady) return;
-    for (const taskId of [...stopTimers.current.keys()]) if (!liveTaskIds.has(taskId)) endStop(taskId);
-  }, [liveTaskIds, subsReady, endStop]);
+    for (const taskId of [...stopTimers.current.keys()]) {
+      if (liveTaskIds.has(taskId)) continue;
+      // Shell: o fim lido no transcript basta, sem depender da lista de subagentes.
+      if (activity.shells.some((s2) => s2.taskId === taskId && !s2.running)) { endStop(taskId); continue; }
+      if (!subsReady) continue;
+      // Subagente que só ficou silencioso ou ilegível segue listado e não parou.
+      const row = subRows.find((item) => item.run.agentId === taskId);
+      if (!row || row.status === 'finished' || row.status === 'failed') endStop(taskId);
+    }
+  }, [liveTaskIds, subsReady, subRows, activity, endStop]);
   useEffect(() => () => {
     for (const timer of stopTimers.current.values()) clearTimeout(timer);
     stopTimers.current.clear();
@@ -300,17 +307,19 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
   async function stop(taskId: string) {
     if (!server || stopTimers.current.has(taskId)) return;
     haptic.selection();
-    stopTimers.current.set(taskId, setTimeout(() => {
+    const timer = setTimeout(() => {
       endStop(taskId);
       toast.erro(m.atividade_parar_sem_confirmacao());
-    }, STOP_CONFIRM_MS));
+    }, STOP_CONFIRM_MS);
+    stopTimers.current.set(taskId, timer);
     rerender();
     // A região ao vivo não anuncia texto recém-montado com garantia; o anúncio explícito vale nos dois sistemas.
     AccessibilityInfo.announceForAccessibility(m.atividade_parando());
     try {
       await stopTask(name, taskId, server);
     } catch (error) {
-      if (!stopTimers.current.has(taskId)) return;
+      // O prazo é a identidade da tentativa: recusa atrasada de uma anterior não encerra a atual.
+      if (stopTimers.current.get(taskId) !== timer) return;
       endStop(taskId);
       toast.erro(error instanceof Error ? error.message : String(error));
     }

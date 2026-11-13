@@ -100,8 +100,8 @@ pub(super) enum ActivityReply {
     /// Resposta do envio de mensagem ao subagente: a aba (nenhuma = o detalhe da lista) e o número do envio.
     Sent(Option<u64>, u64, Result<Value, Failure>),
     CommandStopped(SessionKey, String, Result<Value, Failure>),
-    /// Resposta do pedido de parar a tarefa (subagente ou shell do Claude), pelo id dela.
-    TaskStopped(SessionKey, String, Result<Value, Failure>),
+    /// Resposta do pedido de parar a tarefa (subagente ou shell do Claude), pelo id dela e a época do pedido.
+    TaskStopped(SessionKey, String, u64, Result<Value, Failure>),
 }
 
 /// Um subagente do disco (`GET …/subagents`), só com o que a lista mostra e casa.
@@ -571,16 +571,18 @@ impl ActivityPanel {
         let (Some(link), Some(key)) = (self.link.clone(), self.key.clone()) else { return; };
         self.stopping.insert(task.clone());
         self.stop_note = None;
+        let epoch = self.stop_epoch;
         link.runtime.spawn(async move {
             let result = link.api.act(&key.name, &["tasks", &task, "stop"], None, false, 15).await;
-            let _ = link.tx.send(Envelope { connection: link.connection, selection: None, payload: Payload::Activity(ActivityReply::TaskStopped(key, task, result)) }).await;
+            let _ = link.tx.send(Envelope { connection: link.connection, selection: None, payload: Payload::Activity(ActivityReply::TaskStopped(key, task, epoch, result)) }).await;
         });
         cx.notify();
     }
 
     /// O servidor só aceita o pedido (202): quem confirma é o feed. Recusa volta a linha e mostra o motivo.
-    fn receive_task_stopped(&mut self, key: &SessionKey, task: &str, result: Result<Value, Failure>, cx: &mut Context<Self>) {
-        if self.key.as_ref() != Some(key) || !self.stopping.contains(task) { return; }
+    /// Resposta de um pedido de antes da troca de sessão (outra época) não mexe na parada nova da mesma tarefa.
+    fn receive_task_stopped(&mut self, key: &SessionKey, task: &str, epoch: u64, result: Result<Value, Failure>, cx: &mut Context<Self>) {
+        if self.key.as_ref() != Some(key) || epoch != self.stop_epoch || !self.stopping.contains(task) { return; }
         match result {
             Err(failure) => {
                 self.stopping.remove(task);
@@ -588,7 +590,7 @@ impl ActivityPanel {
                 self.stop_note = Some(if failure.status.is_none() { tr(&failure.detail) } else { failure.detail });
             }
             Ok(_) => {
-                let (task, epoch) = (task.to_owned(), self.stop_epoch);
+                let task = task.to_owned();
                 cx.spawn(async move |this, cx| {
                     cx.background_executor().timer(STOP_CONFIRM).await;
                     let _ = this.update(cx, |this, cx| this.stop_unconfirmed(&task, epoch, cx));
@@ -946,10 +948,22 @@ fn diamond() -> Div { div().w(px(14.)).flex_shrink_0().text_center().text_sm().t
 
 fn chevron(open: bool) -> Icon { chrome::small_icon(if open { IconName::ChevronDown } else { IconName::ChevronRight }, 14., theme::faint()) }
 
-/// Linha que abre e fecha uma lista ("Finalizadas", "Mais antigos"); quem chama põe o conteúdo e o clique.
-fn toggle_row(id: &'static str, label: String) -> Stateful<Div> {
-    div().id(id).flex().items_center().mx(px(-8.)).px(px(8.)).rounded(px(8.))
-        .cursor_pointer().hover(|el| el.bg(theme::hover())).role(Role::Button).aria_label(label)
+/// Linha que abre e fecha uma lista ("Finalizadas", "Mais antigos"): clique, ou Enter e espaço com o foco do Tab, como
+/// o `openable`; quem chama põe o conteúdo.
+fn toggle_row(id: &'static str, label: String, toggle: fn(&mut ActivityPanel), window: &mut Window, cx: &mut Context<ActivityPanel>) -> Stateful<Div> {
+    let focus = window.use_keyed_state(SharedString::from(format!("{id}-focus")), cx, |_, cx| cx.focus_handle().tab_stop(true)).read(cx).clone();
+    div().id(id).track_focus(&focus).flex().items_center().mx(px(-8.)).px(px(8.)).rounded(px(8.))
+        .cursor_pointer().hover(|el| el.bg(theme::hover()))
+        .when(focus.is_focused(window), |el| el.focus_ring_style(window, cx))
+        .role(Role::Button).aria_label(label)
+        .on_click(cx.listener(move |this, _, _, cx| { toggle(this); cx.notify(); }))
+        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                toggle(this);
+                cx.notify();
+                cx.stop_propagation();
+            }
+        }))
 }
 
 /// Ícone, nome cortado numa linha e o tempo desde o começo, que corre pintado fora da view.
@@ -1030,11 +1044,10 @@ impl ActivityPanel {
         }
         if let Some(label) = finished {
             let open = self.finished_open;
-            group = group.child(toggle_row("act-finished", label.clone()).h(px(30.)).gap_2()
+            group = group.child(toggle_row("act-finished", label.clone(), |this| this.finished_open = !this.finished_open, window, cx).h(px(30.)).gap_2()
                 .child(diamond())
                 .child(div().flex_1().min_w_0().truncate().text_sm().text_color(theme::text()).child(label))
-                .child(chevron(open))
-                .on_click(cx.listener(|this, _, _, cx| { this.finished_open = !this.finished_open; cx.notify(); })));
+                .child(chevron(open)));
             if open { group = group.children(lines.finished.iter().chain(&lines.older).map(|s| sub_row(s, None, window, cx))); }
         }
         if let Some(note) = &self.stop_note { group = group.child(warning_line(note.clone())); }
@@ -1106,10 +1119,9 @@ impl Render for ActivityPanel {
                 if !lines.older.is_empty() {
                     let open = self.older_open;
                     let label = web_with("atividade_grupo_antigos", "n", lines.older.len().to_string());
-                    group = group.child(toggle_row("act-older", label.clone()).gap_1().py(px(4.))
+                    group = group.child(toggle_row("act-older", label.clone(), |this| this.older_open = !this.older_open, window, cx).gap_1().py(px(4.))
                         .child(chevron(open))
-                        .child(chrome::section_label(label))
-                        .on_click(cx.listener(|this, _, _, cx| { this.older_open = !this.older_open; cx.notify(); })));
+                        .child(chrome::section_label(label)));
                     if open { group = group.children(lines.older.iter().map(|s| sub_row(s, None, window, cx))); }
                 }
                 body = body.child(group);
@@ -1547,7 +1559,7 @@ impl Hangar {
             }
             ActivityReply::List(seq, result) => self.act.view.update(cx, |view, cx| view.receive(seq, result, cx)),
             ActivityReply::CommandStopped(key, id, result) => self.act.view.update(cx, |view, cx| view.receive_command_stopped(&key, &id, result, cx)),
-            ActivityReply::TaskStopped(key, id, result) => self.act.view.update(cx, |view, cx| view.receive_task_stopped(&key, &id, result, cx)),
+            ActivityReply::TaskStopped(key, id, epoch, result) => self.act.view.update(cx, |view, cx| view.receive_task_stopped(&key, &id, epoch, result, cx)),
             ActivityReply::Detail(seq, result) => self.act.view.update(cx, |view, cx| view.receive_detail(seq, result, cx)),
             ActivityReply::Sent(None, seq, result) => self.act.view.update(cx, |view, cx| view.receive_sent(seq, result, cx)),
             ActivityReply::Sent(Some(id), seq, result) => {
@@ -2060,7 +2072,7 @@ mod tests {
         });
         let reply = runtime.block_on(async { tokio::time::timeout(super::Duration::from_secs(3), rx.recv()).await.unwrap().unwrap() });
         match reply.payload {
-            super::Payload::Activity(super::ActivityReply::TaskStopped(reply_key, id, result)) => {
+            super::Payload::Activity(super::ActivityReply::TaskStopped(reply_key, id, _, result)) => {
                 assert_eq!((reply_key, id.as_str()), (key, "bg1"));
                 assert_eq!(result.unwrap(), serde_json::json!({"pending": true}));
             }
@@ -2081,7 +2093,7 @@ mod tests {
             // O `detail` chega já traduzido pelo `failure_detail` da API.
             let refused = super::Failure { status: Some(409), code: Some("erro_parar_plugin_antigo".into()),
                 ..super::Failure::local(super::web("erro_parar_plugin_antigo")) };
-            panel.receive_task_stopped(&key, "bg1", Err(refused), cx);
+            panel.receive_task_stopped(&key, "bg1", panel.stop_epoch, Err(refused), cx);
             assert!(panel.stopping.is_empty());
             assert_eq!(panel.stop_note, Some(super::web("erro_parar_plugin_antigo")));
             // Sem mudança no feed, a linha volta e diz que não houve confirmação; a que sumiu só sai da espera.
@@ -2101,7 +2113,29 @@ mod tests {
             panel.stop_epoch += 1;
             panel.stop_unconfirmed("bg2", before, cx);
             assert!(panel.stopping.contains("bg2"));
+            // Nem a resposta HTTP daquele pedido antigo: recusa ou aceite não mexem na espera nova.
+            panel.stop_note = None;
+            panel.receive_task_stopped(&key, "bg2", before, Err(super::Failure::local("old")), cx);
+            assert_eq!((panel.stopping.contains("bg2"), panel.stop_note.clone()), (true, None));
         });
+    }
+
+    /// "Mais antigos" entra no Tab e abre e fecha com Enter e espaço.
+    #[gpui::test]
+    fn older_toggle_takes_focus_and_opens_with_the_keyboard(cx: &mut gpui::TestAppContext) {
+        crate::i18n::english_in_this_thread(false);
+        cx.update(gpui_kit::init);
+        let (panel, cx) = cx.add_window_view(|_, cx| super::ActivityPanel::new(cx));
+        panel.update(cx, |panel, cx| {
+            panel.lines.older = vec![super::OrphanLine { key: "old".into(), title: "old work".into(), tag: None, now: String::new(), done: true, failed: false, since: None }];
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| { let _ = window.draw(cx); window.focus_next(cx); });
+        cx.simulate_keystrokes("enter");
+        assert!(panel.read_with(cx, |panel, _| panel.older_open));
+        cx.simulate_keystrokes("space");
+        assert!(!panel.read_with(cx, |panel, _| panel.older_open));
     }
 
     /// Fora do Claude Desktop o ■ e o "Parando…" ficam nas linhas de sempre (os testes rodam no Clássico).
