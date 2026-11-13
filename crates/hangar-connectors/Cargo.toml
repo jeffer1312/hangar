@@ -20,6 +20,7 @@ path = "src/bin/fixture_connector.rs"
 hangar-core.workspace = true
 axum = { workspace = true }
 chrono = { workspace = true }
+form_urlencoded = { workspace = true }
 percent-encoding = { workspace = true }
 reqwest = { workspace = true, features = ["rustls", "multipart"] }
 serde = { workspace = true, features = ["alloc"] }
@@ -33,3 +34,4 @@ libc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+tower = { version = "=0.5.3", default-features = false, features = ["util"] }
