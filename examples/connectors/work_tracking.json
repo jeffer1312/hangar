@@ -1,0 +1,9 @@
+{
+  "manifest_version": 1,
+  "id": "js-demo",
+  "name": "Exemplo em JavaScript",
+  "version": "0.1.0",
+  "protocol_version": 1,
+  "capabilities": { "work_tracking": 1 },
+  "command": ["node", "./work_tracking.mjs"]
+}
