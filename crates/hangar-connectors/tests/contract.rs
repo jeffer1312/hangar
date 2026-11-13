@@ -85,6 +85,9 @@ fn list_params_check_limit_and_refuse_unknown_filters() {
     }
     let error = ListParams::from_value(json!({"limit": 5, "filter": {"jql": "project = X"}})).unwrap_err();
     assert_eq!(error.code, ErrorCode::InvalidParams);
+    assert_eq!(ListParams::from_value(json!({"limit": 5, "filter": {"state": "open"}})).unwrap().filter.state.as_deref(), Some("open"));
+    let error = ListParams::from_pairs([("state", "aberto")]).unwrap_err();
+    assert_eq!(error.code, ErrorCode::InvalidParams, "só open ou done");
 }
 
 fn summary(id: &str) -> serde_json::Value {

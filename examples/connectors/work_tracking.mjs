@@ -23,9 +23,9 @@ function fail(code, message) {
 }
 
 function list({ filter = {}, limit, cursor = null }) {
-  const unknown = Object.keys(filter).filter((name) => !["query", "assignee"].includes(name));
+  const unknown = Object.keys(filter).filter((name) => !["query", "assignee", "state"].includes(name));
   if (unknown.length) fail("invalid_params", `filtro desconhecido: ${unknown.join(", ")}`);
-  const tag = JSON.stringify([filter.query ?? null, filter.assignee ?? null, limit]);
+  const tag = JSON.stringify([filter.query ?? null, filter.assignee ?? null, filter.state ?? null, limit]);
   let start = 0;
   if (cursor !== null) {
     const [offset, bound] = cursor.split("|");
@@ -35,7 +35,8 @@ function list({ filter = {}, limit, cursor = null }) {
   const me = "u:42";
   const matches = TICKETS.filter((ticket) =>
     (!filter.query || ticket.title.toLowerCase().includes(filter.query.toLowerCase()))
-    && (!filter.assignee || ticket.assignee?.id === (filter.assignee === "me" ? me : filter.assignee)));
+    && (!filter.assignee || ticket.assignee?.id === (filter.assignee === "me" ? me : filter.assignee))
+    && (!filter.state || (filter.state === "done") === ["done", "canceled"].includes(ticket.status.category)));
   const items = matches.slice(start, start + limit).map(summary);
   const next = start + limit < matches.length ? `${start + limit}|${tag}` : null;
   return { items, next_cursor: next, total: matches.length };

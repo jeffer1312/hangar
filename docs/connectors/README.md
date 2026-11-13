@@ -85,7 +85,7 @@ Rotas exclusivas do dono (convidado e token errado são recusados antes de ler o
 | POST | `/api/connectors` | `{"manifest": "<caminho absoluto no servidor>"}` |
 | PATCH | `/api/connectors/{id}` | `{"enabled": false}` desliga e encerra |
 | DELETE | `/api/connectors/{id}` | Para e remove |
-| GET | `/api/connectors/{id}/tickets` | `query`, `assignee`, `limit` (padrão 20), `cursor` |
+| GET | `/api/connectors/{id}/tickets` | `query`, `assignee`, `state` (`open` ou `done`), `limit` (padrão 20), `cursor` |
 | GET | `/api/connectors/{id}/tickets/{ticket_id}` | Detalhe, com `start_prompt` já preenchido quando o manifesto o tem; o ID vai codificado como um componente |
 
 Erros saem como `{"detail": {"code": "...", "msg": "..."}}`. Falta de login no fornecedor

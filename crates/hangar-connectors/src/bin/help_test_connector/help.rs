@@ -13,6 +13,8 @@ pub struct Help {
     credentials: Sources,
     /// Login de `me`, junto do token que o descobriu.
     me: Option<(String, String)>,
+    /// Status do fluxo do Help (`id`, categoria), junto do token que os leu.
+    statuses: Option<(String, Vec<(i64, String)>)>,
 }
 
 fn error(code: ErrorCode, message: impl Into<String>) -> ConnectorError { ConnectorError::new(code, message) }
@@ -32,7 +34,7 @@ impl Help {
             .timeout(Duration::from_secs(20))
             .build()
             .map_err(|_| error(ErrorCode::Unavailable, "cliente HTTP não iniciou"))?;
-        Ok(Self { base, client, credentials, me: None })
+        Ok(Self { base, client, credentials, me: None, statuses: None })
     }
 
     fn token(&self) -> Result<String, ConnectorError> {
@@ -69,6 +71,24 @@ impl Help {
         Ok(login)
     }
 
+    /// IDs dos status das categorias do Help que valem para `state`: `open` é a fazer e em andamento.
+    async fn state_ids(&mut self, token: &str, state: &str) -> Result<Vec<i64>, ConnectorError> {
+        if self.statuses.as_ref().is_none_or(|(known, _)| known != token) {
+            let flow = self.get(token, "/api/fluxo", &[]).await?;
+            let mut statuses: Vec<(i64, String)> = flow.as_array().into_iter().flatten()
+                .filter_map(|transition| {
+                    let target = transition.get("destino")?;
+                    Some((target.get("id")?.as_i64()?, target.get("categoria")?.as_str()?.to_owned()))
+                }).collect();
+            statuses.sort();
+            statuses.dedup();
+            if statuses.is_empty() { return Err(error(ErrorCode::ProtocolError, "o fluxo do Help veio sem status")); }
+            self.statuses = Some((token.to_owned(), statuses));
+        }
+        let wanted: &[&str] = if state == "open" { &["a_fazer", "em_andamento"] } else { &["concluido"] };
+        Ok(self.statuses.iter().flat_map(|(_, all)| all).filter(|(_, category)| wanted.contains(&category.as_str())).map(|(id, _)| *id).collect())
+    }
+
     pub async fn list(&mut self, params: ListParams) -> Result<Value, ConnectorError> {
         let token = self.token()?;
         let filters = filter_hash(&params);
@@ -82,6 +102,9 @@ impl Help {
             // O filtro do Help recebe login: `me` vira o login de quem consulta.
             let login = if assignee == "me" { self.me(&token).await? } else { assignee.clone() };
             query.push(("responsaveis", login));
+        }
+        if let Some(state) = &params.filter.state {
+            for id in self.state_ids(&token, state).await? { query.push(("status_ids", id.to_string())); }
         }
         let value = self.get(&token, "/api/pms/pagina", &query).await?;
         let items = value.get("itens").and_then(Value::as_array).ok_or_else(|| error(ErrorCode::ProtocolError, "lista do Help sem itens"))?;
@@ -151,7 +174,7 @@ impl Help {
 
 /// O cursor vale só para os mesmos filtros e o mesmo tamanho de página.
 fn filter_hash(params: &ListParams) -> String {
-    let source = json!([params.filter.query, params.filter.assignee, params.limit]).to_string();
+    let source = json!([params.filter.query, params.filter.assignee, params.filter.state, params.limit]).to_string();
     sha1_smol::Sha1::from(source).digest().to_string()[..12].to_owned()
 }
 

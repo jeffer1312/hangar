@@ -10947,5 +10947,6 @@
   "native_mission_stages_save": "Salvar etapas",
   "native_mission_stages_title": "Etapas do trabalho",
   "native_mission_waiting_you": "{etapa}: espera sua aprovação",
-  "native_mission_evidence_not_openable": "Este tipo de arquivo não abre pelo app; a evidência continua no servidor."
+  "native_mission_evidence_not_openable": "Este tipo de arquivo não abre pelo app; a evidência continua no servidor.",
+  "native_mission_show_done": "Concluídos"
 }
