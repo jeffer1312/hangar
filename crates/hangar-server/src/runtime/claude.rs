@@ -928,6 +928,12 @@ impl ClaudeEngine {
                             payload:json!({"error":response["error"],"permission_boot_rejected":waiter.subtype=="set_permission_mode" && waiter.payload["mode"]=="bypassPermissions"}) });
                     }
                     self.changed(effects,true);
+                } else if response["subtype"] == "error" {
+                    // `interrupt` e `stop_task` respondem na escrita: a recusa da CLI chega sem quem espere.
+                    let wire = self.wires.iter().find(|(_,wire)|wire.request_id.as_ref() == Some(&id));
+                    tracing::warn!(request_id = ?id, operation_id = wire.map(|(op,_)|op.as_str()).unwrap_or(""),
+                        kind = wire.map(|(_,wire)|wire.kind.as_str()).unwrap_or(""), error = %response["error"],
+                        "a CLI recusou um pedido de controle que já não tinha quem esperasse");
                 }
             }
             "system" => {

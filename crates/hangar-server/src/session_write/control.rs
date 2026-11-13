@@ -485,12 +485,21 @@ pub async fn stop_task(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conne
 async fn stop_via_plugin(ctx: &Ctx, task_id: &str) -> Answer {
     use crate::plugin::TaskStop;
     let Some(runtime) = ctx.st.state.runtime.get() else { return interaction_failure(InteractionError::Unavailable) };
-    let Ok(binding) = runtime.interaction_binding(&ctx.name).await else { return interaction_failure(InteractionError::Unavailable) };
+    let binding = match runtime.interaction_binding(&ctx.name).await {
+        Ok(binding) => binding,
+        Err(error) => {
+            tracing::warn!(session = %ctx.name, task_id, ?error, "stop_task sem vínculo da conversa");
+            return interaction_failure(InteractionError::Unavailable);
+        },
+    };
     match ctx.st.plugin.stop_task(&binding, task_id, std::time::Instant::now()) {
         Ok(TaskStop::Queued) => stop_pending(),
         Ok(TaskStop::OldPlugin) => failure("erro_parar_plugin_antigo", MSG_STOP_OLD_PLUGIN, json!({})),
         Ok(TaskStop::NoPlugin) => failure("erro_parar_sem_plugin", MSG_STOP_NO_PLUGIN, json!({})),
-        Err(_) => interaction_failure(InteractionError::Unavailable),
+        Err(error) => {
+            tracing::warn!(session = %ctx.name, task_id, error = error.0, "stop_task não entrou na fila do plugin");
+            interaction_failure(InteractionError::Unavailable)
+        },
     }
 }
 

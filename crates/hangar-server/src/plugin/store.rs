@@ -25,6 +25,8 @@ pub const AGENT_MESSAGE_MODE: &str = "agent_message";
 const AGENT_LATE_KEPT: usize = 32;
 /// O modo que o plugin declara no `/pull` quando sabe parar uma tarefa (subagente ou shell) pelo `TaskStop`.
 pub const STOP_TASK_MODE: &str = "stop_task";
+/// O app desfaz o "parando" depois disso: pedido mais velho que chegasse ao plugin pararia a tarefa sem aviso.
+const STOP_TASK_FRESH: Duration = Duration::from_secs(15);
 
 fn question_visible(interrupted: bool, poll_open: bool, age: Duration) -> bool {
     !interrupted && age <= ALIVE && (poll_open || age <= NO_POLL)
@@ -125,7 +127,7 @@ struct Session {
     /// Pedidos que passaram do prazo sem resposta: a confirmação ainda pode chegar.
     agent_late: VecDeque<(String, String)>,
     /// O que espera o próximo `/pull`: texto a subagente e pedido de `stop_task`.
-    agent_outbox: VecDeque<(String, Value)>,
+    agent_outbox: VecDeque<(String, Value, Instant)>,
     agent_next: u64,
     /// O último `session.end` do plugin (`fim`): o estado seguinte não o apaga.
     ended: Option<Instant>,
@@ -279,7 +281,11 @@ impl Store {
         let modes = if pull.modos.is_empty() { HashSet::from(["fill".to_owned()]) } else { pull.modos.into_iter().collect() };
         s.owner = Some(Owner { instance: pull.instance, modes, seen: now, pulled: now });
         if s.state.is_none() { s.state = pull.estado.map(|state| (now, state, None)); }
-        if let Some((_, payload)) = s.agent_outbox.pop_front() {
+        while let Some((id, payload, queued)) = s.agent_outbox.pop_front() {
+            if payload.get("stop_task").is_some() && now.saturating_duration_since(queued) > STOP_TASK_FRESH {
+                tracing::warn!(task_id = %id, "pedido de stop_task venceu na fila sem /pull que o levasse");
+                continue;
+            }
             s.heartbeat = Some(now);
             return Ok(Poll::ready(payload));
         }
@@ -641,7 +647,7 @@ impl Store {
             let payload = json!({"text":null,"agent_message":{"id":id,"to":agent_id,"text":text}});
             let (sender, receiver) = oneshot::channel();
             s.agent_waits.insert(id.clone(), (agent_id.to_owned(), sender));
-            if !s.waiter.as_mut().is_some_and(|w| w.send(payload.clone())) { s.agent_outbox.push_back((id.clone(), payload)); }
+            if !s.waiter.as_mut().is_some_and(|w| w.send(payload.clone())) { s.agent_outbox.push_back((id.clone(), payload, Instant::now())); }
             (id, receiver)
         };
         let reply = tokio::time::timeout(AGENT_SEND, receiver).await;
@@ -652,7 +658,7 @@ impl Store {
                 s.agent_late.push_back((id.clone(), agent_id.to_owned()));
                 if s.agent_late.len() > AGENT_LATE_KEPT { s.agent_late.pop_front(); }
             }
-            s.agent_outbox.retain(|(queued, _)| *queued != id);
+            s.agent_outbox.retain(|(queued, ..)| *queued != id);
             if reply == AgentSend::Delivered {
                 s.agents.insert(agent_id.to_owned(), AgentLife::running_now());
                 self.notify(&binding.key);
@@ -668,7 +674,8 @@ impl Store {
         if memory.stopping { return Ok(TaskStop::NoPlugin); }
         let s = session(&mut memory, binding)?;
         let payload = json!({"text":null,"stop_task":{"task_id":task_id}});
-        if !s.waiter.as_mut().is_some_and(|w| w.send(payload.clone())) { s.agent_outbox.push_back((task_id.to_owned(), payload)); }
+        s.agent_outbox.retain(|(queued, ..)| queued != task_id);
+        if !s.waiter.as_mut().is_some_and(|w| w.send(payload.clone())) { s.agent_outbox.push_back((task_id.to_owned(), payload, now)); }
         Ok(TaskStop::Queued)
     }
     pub fn agent_sent(&self, binding: &InteractionBinding, id: &str, delivered: bool, reason: Option<String>) -> Result<(), ServiceError> {
@@ -1381,6 +1388,27 @@ mod tests {
         assert_eq!(store.stop_task(&binding, "a85258e41e374c2ea", Instant::now()).unwrap(), TaskStop::Queued);
         let next = store.begin_pull(&binding, stop_pull(), Instant::now()).unwrap();
         assert_eq!(next.wait().await["stop_task"]["task_id"], "a85258e41e374c2ea");
+    }
+
+    #[tokio::test]
+    async fn stop_task_older_than_the_app_revert_is_not_delivered() {
+        let (store, binding) = setup();
+        let start = Instant::now();
+        drop(store.begin_pull(&binding, stop_pull(), start).unwrap());
+        assert_eq!(store.stop_task(&binding, "old", start).unwrap(), TaskStop::Queued);
+        let next = store.begin_pull(&binding, stop_pull(), start + STOP_TASK_FRESH + Duration::from_secs(1)).unwrap();
+        assert!(next.wait().now_or_never().is_none(), "o app já desfez o parando: a tarefa não para sem aviso");
+    }
+
+    #[tokio::test]
+    async fn repeated_stop_task_for_the_same_task_is_queued_once() {
+        let (store, binding) = setup();
+        drop(store.begin_pull(&binding, stop_pull(), Instant::now()).unwrap());
+        store.stop_task(&binding, "t", Instant::now()).unwrap();
+        store.stop_task(&binding, "t", Instant::now()).unwrap();
+        assert_eq!(store.begin_pull(&binding, stop_pull(), Instant::now()).unwrap().wait().await["stop_task"]["task_id"], "t");
+        let next = store.begin_pull(&binding, stop_pull(), Instant::now()).unwrap();
+        assert!(next.wait().now_or_never().is_none(), "o segundo toque não vira um segundo TaskStop");
     }
 
     #[test]
