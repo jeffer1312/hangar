@@ -1,0 +1,319 @@
+//! Registro sozinho do MCP: com máquina-alvo e o binário do pacote, a entrada nasce ligada em todas as
+//! contas; desligada à mão (ausente no principal e guardada) fica desligada. Entrada ativa com outro
+//! programa (checkout, `uvx`, `servidor_mcp.py`) passa para o binário do pacote com o mesmo env.
+use std::path::Path;
+
+use serde_json::{Map, Value, json};
+
+use crate::files::{parked_entry, read_entry};
+use crate::writer::{Entry, write_entry};
+use crate::{Error, Paths, targets};
+
+const FAILED: &str = "computer_control_register_failed";
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Registered {
+    /// Plataforma sem release, binário ausente, sem alvo ou desligado à mão: nada gravado.
+    Skipped,
+    /// A entrada já estava igual em todo arquivo.
+    Unchanged,
+    Written,
+}
+
+/// Roda na subida, no relógio de 1 h, depois de criar alvo e depois de trocar o binário. `hyprland` só é
+/// perguntado sem alvo cadastrado; `jev` dá o env do Jev, lido sob a trava. Falha vai ao diário com código.
+pub fn register(
+    paths: &Paths,
+    hyprland: impl FnOnce() -> bool,
+    jev: impl FnOnce() -> Result<Map<String, Value>, Error>,
+    diary: Option<&Path>,
+) -> Result<Registered, Error> {
+    let outcome = register_on(paths, crate::supported(), hyprland, jev);
+    if let Err(error) = &outcome {
+        tracing::warn!(code = FAILED, erro = error.code, msg = %error.msg, "Computer Use: registro do MCP falhou");
+        let line = json!({"evento": "computer_control.registrar", "nivel": "erro", "codigo": FAILED,
+            "erro": error.code, "detalhe": error.msg});
+        hangar_core::diag::record_blocking(diary, &[line], "computer control");
+    }
+    outcome
+}
+
+fn register_on(
+    paths: &Paths,
+    supported: bool,
+    hyprland: impl FnOnce() -> bool,
+    jev: impl FnOnce() -> Result<Map<String, Value>, Error>,
+) -> Result<Registered, Error> {
+    if !supported || !paths.binary().is_file() {
+        return Ok(Registered::Skipped);
+    }
+    let main = read_entry(paths.main_file(), false)?;
+    let agent_config = match &main.entry {
+        // Ligada: o alvo padrão escolhido na tela fica.
+        Some(active) => match active.get("env").and_then(|env| env.get("HCC_AGENT_CONFIG")).and_then(Value::as_str) {
+            Some(agent) => agent.to_owned(),
+            None => first_target(paths).unwrap_or_default(),
+        },
+        None => {
+            if parked_entry(paths)?.is_some() {
+                return Ok(Registered::Skipped);
+            }
+            match first_target(paths) {
+                Some(agent) => agent,
+                // O alvo `linux` automático do Hyprland não tem arquivo: alvo padrão vazio.
+                None if hyprland() => String::new(),
+                None => return Ok(Registered::Skipped),
+            }
+        }
+    };
+    let entry = Entry { command: paths.binary().to_string_lossy().into_owned(), agent_config };
+    let wrote = write_entry(paths, &entry, jev)?;
+    Ok(if wrote { Registered::Written } else { Registered::Unchanged })
+}
+
+fn first_target(paths: &Paths) -> Option<String> {
+    let file = targets::target_files(paths).into_iter().next()?;
+    Some(paths.targets_dir().join(file).to_string_lossy().into_owned())
+}
+
+/// Há Hyprland vivo, mesmo com o servidor nascido antes do login gráfico (sem a variável no ambiente).
+pub fn hyprland_found() -> bool {
+    cfg!(target_os = "linux")
+        && hyprland_running(&hangar_core::display_env::for_launch(|key| std::env::var(key).ok().filter(|v| !v.is_empty())))
+}
+
+/// A assinatura do Hyprland aponta para uma instância que existe em `$XDG_RUNTIME_DIR/hypr`.
+pub fn hyprland_running(vars: &[(String, String)]) -> bool {
+    let get = |key: &str| vars.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str()).filter(|v| !v.is_empty());
+    match (get("HYPRLAND_INSTANCE_SIGNATURE"), get("XDG_RUNTIME_DIR")) {
+        (Some(signature), Some(runtime)) => Path::new(runtime).join("hypr").join(signature).is_dir(),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::*;
+    use crate::NAME;
+
+    struct Home {
+        dir: tempfile::TempDir,
+        paths: Paths,
+    }
+
+    impl Home {
+        /// Binário do pacote presente e uma conta aberta (`acc`) e outra nunca aberta (`vazia`).
+        fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let paths = Paths::new(dir.path().to_owned(), vec![dir.path().join("acc"), dir.path().join("vazia")]);
+            std::fs::create_dir_all(paths.targets_dir()).unwrap();
+            std::fs::write(paths.binary(), b"\x7fELF").unwrap();
+            std::fs::create_dir_all(dir.path().join("acc")).unwrap();
+            std::fs::write(dir.path().join("acc/.claude.json"), br#"{"x": 1}"#).unwrap();
+            std::fs::create_dir_all(dir.path().join("vazia")).unwrap();
+            std::fs::write(dir.path().join("vazia/.claude.json"), b"").unwrap();
+            Self { dir, paths }
+        }
+
+        fn target(&self, name: &str) -> String {
+            let path = self.paths.targets_dir().join(format!("{name}-agent.json"));
+            std::fs::write(&path, br#"{"transport": "ssh", "host": "h"}"#).unwrap();
+            path.to_string_lossy().into_owned()
+        }
+
+        fn run(&self, hyprland: bool) -> Result<Registered, Error> {
+            register(&self.paths, || hyprland, || Ok(jev()), Some(&self.diary()))
+        }
+
+        fn diary(&self) -> std::path::PathBuf {
+            self.dir.path().join("diario")
+        }
+
+        fn entry(&self, file: &Path) -> Option<Value> {
+            let text = std::fs::read_to_string(file).ok()?;
+            let data: Value = serde_json::from_str(&text).unwrap();
+            data.get("mcpServers").and_then(|s| s.get(NAME)).cloned()
+        }
+
+        fn main_entry(&self) -> Option<Value> {
+            self.entry(&self.paths.main_file())
+        }
+
+        fn binary(&self) -> String {
+            self.paths.binary().to_string_lossy().into_owned()
+        }
+
+        fn agents_dir(&self) -> String {
+            self.paths.targets_dir().to_string_lossy().into_owned()
+        }
+    }
+
+    fn jev() -> Map<String, Value> {
+        Map::from_iter([("TYPESAFE_API_KEY".to_owned(), json!("fixture-key"))])
+    }
+
+    /// D4.1: sem alvo e sem Hyprland, nada.
+    #[test]
+    fn without_target_nothing_is_registered() {
+        let home = Home::new();
+        assert_eq!(home.run(false).unwrap(), Registered::Skipped);
+        assert!(!home.paths.main_file().exists());
+    }
+
+    /// D4.1, ROT-38: alvo em `targets/` liga em todas as contas abertas, com o primeiro alvo como padrão;
+    /// o Hyprland nem é perguntado.
+    #[test]
+    fn a_target_file_registers_in_every_opened_account() {
+        let home = Home::new();
+        home.target("b");
+        let first = home.target("a");
+        let outcome = register(&home.paths, || -> bool { panic!("Hyprland perguntado com alvo") }, || Ok(jev()), None).unwrap();
+        assert_eq!(outcome, Registered::Written);
+        let wanted = json!({"command": home.binary(), "args": [], "env": {
+            "HCC_AGENT_CONFIG": first, "HCC_AGENTS_DIR": home.agents_dir(), "TYPESAFE_API_KEY": "fixture-key"}});
+        assert_eq!(home.main_entry(), Some(wanted.clone()));
+        assert_eq!(home.entry(&home.dir.path().join("acc/.claude.json")), Some(wanted));
+        assert_eq!(std::fs::read(home.dir.path().join("vazia/.claude.json")).unwrap(), b"", "conta nunca aberta fica com o espelho");
+    }
+
+    /// D4.1, P1: só o alvo `linux` automático do Hyprland liga, com alvo padrão vazio.
+    #[test]
+    fn hyprland_alone_registers_with_an_empty_default_target() {
+        let home = Home::new();
+        assert_eq!(home.run(true).unwrap(), Registered::Written);
+        let wanted = json!({"command": home.binary(), "args": [], "env": {
+            "HCC_AGENTS_DIR": home.agents_dir(), "TYPESAFE_API_KEY": "fixture-key"}});
+        assert_eq!(home.main_entry(), Some(wanted));
+    }
+
+    /// D4.1: sem o binário do pacote, nada, nem com alvo.
+    #[test]
+    fn without_the_package_binary_nothing_is_registered() {
+        let home = Home::new();
+        home.target("a");
+        std::fs::remove_file(home.paths.binary()).unwrap();
+        assert_eq!(home.run(true).unwrap(), Registered::Skipped);
+        assert!(!home.paths.main_file().exists());
+    }
+
+    /// D4.1, 1B refinado: ausente no principal e guardada = desligado à mão, fica desligado.
+    #[test]
+    fn turned_off_by_hand_stays_off() {
+        let home = Home::new();
+        home.target("a");
+        std::fs::write(home.paths.main_file(), br#"{"mcpServers": {"outro": {"command": "x"}}}"#).unwrap();
+        std::fs::create_dir_all(home.paths.parked_file().parent().unwrap()).unwrap();
+        std::fs::write(home.paths.parked_file(), br#"{"command": "/velho", "env": {}}"#).unwrap();
+        let before = std::fs::read(home.paths.main_file()).unwrap();
+        assert_eq!(home.run(true).unwrap(), Registered::Skipped);
+        assert_eq!(std::fs::read(home.paths.main_file()).unwrap(), before);
+        assert_eq!(home.entry(&home.dir.path().join("acc/.claude.json")), None);
+    }
+
+    /// Idempotente: a segunda passada não grava; a guardada antiga não desliga uma entrada ativa.
+    #[test]
+    fn an_equal_entry_is_not_written_again() {
+        let home = Home::new();
+        home.target("a");
+        assert_eq!(home.run(false).unwrap(), Registered::Written);
+        std::fs::create_dir_all(home.paths.parked_file().parent().unwrap()).unwrap();
+        std::fs::write(home.paths.parked_file(), br#"{"command": "/velho"}"#).unwrap();
+        let main = std::fs::read(home.paths.main_file()).unwrap();
+        let account = std::fs::read(home.dir.path().join("acc/.claude.json")).unwrap();
+        assert_eq!(home.run(false).unwrap(), Registered::Unchanged);
+        assert_eq!(std::fs::read(home.paths.main_file()).unwrap(), main);
+        assert_eq!(std::fs::read(home.dir.path().join("acc/.claude.json")).unwrap(), account);
+    }
+
+    /// D4.2, ROT-75, HIS-26: entrada ativa com outro programa vira o binário do pacote; o alvo padrão e o
+    /// env alheio ficam, `PYTHONPATH` sai. Vale mesmo sem alvo cadastrado.
+    #[test]
+    fn an_active_entry_with_another_program_is_rewritten_keeping_env() {
+        for (command, args) in [
+            ("/home/x/Projetos/hangar-computer-control/target/release/hangar-computer-control", json!([])),
+            ("uvx", json!(["--from", "git+https://github.com/jeffer1312/hangar-computer-control", "hcc"])),
+            ("/home/x/Projetos/hangar-computer-control/.venv/bin/python", json!(["servidor_mcp.py"])),
+        ] {
+            let home = Home::new();
+            let old = json!({"mcpServers": {"outro": {"command": "y"}, NAME: {"command": command, "args": args, "env": {
+                "HCC_AGENT_CONFIG": "/alvos/vm-agent.json", "VIRTUAL_ENV": "", "MEU": "fica", "PYTHONPATH": "/sai"}}}});
+            std::fs::write(home.paths.main_file(), old.to_string()).unwrap();
+            assert_eq!(home.run(false).unwrap(), Registered::Written, "{command}");
+            let entry = home.main_entry().unwrap();
+            assert_eq!(entry["command"], json!(home.binary()));
+            assert_eq!(entry["args"], json!([]));
+            assert_eq!(entry["env"], json!({"VIRTUAL_ENV": "", "MEU": "fica", "HCC_AGENT_CONFIG": "/alvos/vm-agent.json",
+                "HCC_AGENTS_DIR": home.agents_dir(), "TYPESAFE_API_KEY": "fixture-key"}));
+            let data: Value = serde_json::from_str(&std::fs::read_to_string(home.paths.main_file()).unwrap()).unwrap();
+            assert_eq!(data["mcpServers"]["outro"], json!({"command": "y"}));
+        }
+    }
+
+    /// D4.2, HIS-27: sem o binário do pacote, a entrada ativa antiga fica como está.
+    #[test]
+    fn an_active_entry_stays_when_the_binary_is_missing() {
+        let home = Home::new();
+        std::fs::remove_file(home.paths.binary()).unwrap();
+        let old = json!({"mcpServers": {NAME: {"command": "uvx", "args": ["hcc"], "env": {"PYTHONPATH": "/p"}}}}).to_string();
+        std::fs::write(home.paths.main_file(), &old).unwrap();
+        assert_eq!(home.run(true).unwrap(), Registered::Skipped);
+        assert_eq!(std::fs::read_to_string(home.paths.main_file()).unwrap(), old);
+    }
+
+    /// D4.4, P5: plataforma sem release nunca registra, nem com alvo, binário e Hyprland.
+    #[test]
+    fn an_unsupported_platform_never_registers() {
+        let home = Home::new();
+        home.target("a");
+        assert_eq!(register_on(&home.paths, false, || true, || Ok(jev())).unwrap(), Registered::Skipped);
+        assert!(!home.paths.main_file().exists());
+    }
+
+    /// Falha vai ao diário com código, e nada é gravado.
+    #[test]
+    fn a_failure_goes_to_the_diary() {
+        let home = Home::new();
+        home.target("a");
+        std::fs::write(home.paths.main_file(), b"{quebrado").unwrap();
+        assert_eq!(home.run(false).unwrap_err().code, "erro_computer_control_read");
+        assert_eq!(std::fs::read(home.paths.main_file()).unwrap(), b"{quebrado");
+        let lines: Vec<Value> = std::fs::read_dir(home.diary()).unwrap()
+            .flat_map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect::<Vec<Value>>())
+            .collect();
+        assert!(lines.iter().any(|line| line["codigo"] == FAILED && line["erro"] == "erro_computer_control_read"), "{lines:?}");
+    }
+
+    #[test]
+    fn hyprland_needs_a_live_instance() {
+        let run = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(run.path().join("hypr/abc_1")).unwrap();
+        let vars = |signature: &str| {
+            vec![("HYPRLAND_INSTANCE_SIGNATURE".to_owned(), signature.to_owned()),
+                ("XDG_RUNTIME_DIR".to_owned(), run.path().to_string_lossy().into_owned())]
+        };
+        assert!(hyprland_running(&vars("abc_1")));
+        assert!(!hyprland_running(&vars("morta_2")), "instância que não existe mais");
+        assert!(!hyprland_running(&vars("")));
+        assert!(!hyprland_running(&[("HYPRLAND_INSTANCE_SIGNATURE".to_owned(), "abc_1".to_owned())]), "sem pasta de runtime");
+    }
+
+    proptest! {
+        /// Qualquer `.claude.json` principal: registra ou volta erro sem tocar no arquivo, nunca pânico.
+        #[test]
+        fn any_main_file_registers_or_leaves_it_intact(bytes in proptest::collection::vec(any::<u8>(), 0..200)) {
+            let home = Home::new();
+            home.target("a");
+            std::fs::write(home.paths.main_file(), &bytes).unwrap();
+            if register(&home.paths, || false, || Ok(jev()), None).is_err() {
+                prop_assert_eq!(std::fs::read(home.paths.main_file()).unwrap(), bytes);
+            }
+        }
+
+        #[test]
+        fn hyprland_reader_never_panics(signature in "\\PC{0,40}", runtime in "\\PC{0,40}") {
+            let _ = hyprland_running(&[("HYPRLAND_INSTANCE_SIGNATURE".into(), signature), ("XDG_RUNTIME_DIR".into(), runtime)]);
+        }
+    }
+}

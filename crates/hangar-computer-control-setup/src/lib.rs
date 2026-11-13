@@ -1,10 +1,12 @@
 //! Computer Use (MCP `hangar-computer-control`): caminhos, leitura dos `.claude.json`, alvos, SSH, o
-//! escritor único da entrada do MCP (ligar, desligar e o repasse do Jev) e a instalação/atualização do binário.
+//! escritor único da entrada do MCP (ligar, desligar e o repasse do Jev), o registro sozinho e a
+//! instalação/atualização do binário.
 //! Nada aqui lê `$HOME` nem a lista de contas: o servidor passa os dois em `Paths`.
 #![forbid(unsafe_code)]
 
 mod files;
 mod install;
+mod register;
 mod save;
 mod ssh;
 mod state;
@@ -17,6 +19,7 @@ use serde_json::{Value, json};
 
 pub use files::{FileEntry, known_entry, parked_entry, read_entries, read_entry};
 pub use install::{Github, Policy, REPO, Swapped, install_if_missing, update_tick};
+pub use register::{Registered, hyprland_found, hyprland_running, register};
 pub use save::{Aux, Mode, SaveRequest, save};
 pub use ssh::{ssh_hosts, test_host, windows_setup};
 pub use state::{Facts, state};

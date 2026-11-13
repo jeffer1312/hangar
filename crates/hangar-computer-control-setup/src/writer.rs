@@ -29,11 +29,12 @@ pub struct Entry {
 /// alvos e Jev são trocados; o resto do env da entrada conhecida é de quem montou o MCP e fica (o
 /// `VIRTUAL_ENV` vazio de propósito impede herdar o venv), menos `PYTHONPATH`. Gerenciada vazia = ausente.
 /// `jev` roda já sob a trava: um repasse do Jev no meio nunca é desfeito pelo env lido antes.
+/// Diz se gravou: entrada já igual em todo arquivo não grava nada.
 pub fn write_entry(
     paths: &Paths,
     entry: &Entry,
     jev: impl FnOnce() -> Result<Map<String, Value>, Error>,
-) -> Result<(), Error> {
+) -> Result<bool, Error> {
     let _locks = lock_all(paths)?;
     let files = read_entries(paths)?;
     for file in &files {
@@ -77,7 +78,7 @@ pub fn write_entry(
         });
         written.note(&file.path, wrote)?;
     }
-    Ok(())
+    Ok(!written.0.is_empty())
 }
 
 /// Desliga: guarda a entrada ativa (0600, a marca de "desligado à mão") e tira a chave de todo arquivo que a tem.

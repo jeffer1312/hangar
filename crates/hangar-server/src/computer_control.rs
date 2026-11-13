@@ -90,7 +90,14 @@ async fn reply(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Response {
             let Some(body) = body::<setup::TargetRequest>(req).await.filter(setup::TargetRequest::valid) else {
                 return crate::session_write::invalid_body(&headers);
             };
-            blocking(&st, move |paths| setup::create_target(paths, &body)).await
+            let state = st.clone();
+            blocking(&st, move |paths| {
+                setup::create_target(paths, &body)?;
+                // Alvo novo liga o MCP sozinho; falha do registro vai ao diário, não à resposta.
+                crate::computer_control_install::register_in(&state, paths);
+                Ok(())
+            })
+            .await
         }
         "/api/computer-control/test-host" => {
             let Some(body) = body::<TestHostBody>(req).await else {
@@ -141,7 +148,7 @@ async fn ssh_program(env: &crate::accounts::environment::AccountEnvironment) -> 
 }
 
 /// A mesma lista de contas do `sync_jev`: as do catálogo, menos a pasta padrão.
-fn paths(st: &AppState) -> Result<setup::Paths, setup::Error> {
+pub(crate) fn paths(st: &AppState) -> Result<setup::Paths, setup::Error> {
     let env = &st.accounts.env;
     let default = crate::accounts::catalog::resolved(&env.home.join(".claude"));
     let accounts = st.accounts.claude_accounts().map_err(|e| setup::Error::io(e.message))?

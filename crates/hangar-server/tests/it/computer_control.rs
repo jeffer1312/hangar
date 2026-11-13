@@ -316,6 +316,11 @@ fn with_ssh_target(base: Value, name: &str, host: &str) -> Value {
     }))
 }
 
+/// ROT-38 (D4.1): com o binário do pacote, criar alvo liga o MCP sozinho e a resposta já mostra.
+fn registered(base: Value) -> Value {
+    merged(base, json!({"enabled": true, "files": [{"path": "«HOME»/.claude.json", "enabled": true}]}))
+}
+
 fn ssh_file(host: &str) -> String {
     format!("{{\n  \"transport\": \"ssh\",\n  \"host\": \"{host}\",\n  \"agent_path\": \"«HOME»/.hangar/computer-control/windows-agent.exe\"\n}}\n")
 }
@@ -763,12 +768,34 @@ async fn rot32_create_ssh_target() {
     s.installed();
     let got = s.target(json!({"project_dir": "", "name": "delphi-03", "transport": "ssh", "host": "delphi-03",
         "proxy_command": "  ssh -W %h:%p salto  ", "request_timeout": 40})).await;
-    assert_eq!(got, (StatusCode::OK, s.h(with_ssh_target(installed_state(), "delphi-03", "delphi-03"))));
+    assert_eq!(got, (StatusCode::OK, s.h(registered(with_ssh_target(installed_state(), "delphi-03", "delphi-03")))));
     s.assert_file(".hangar/computer-control/targets/delphi-03-agent.json",
         "{\n  \"transport\": \"ssh\",\n  \"host\": \"delphi-03\",\n  \"agent_path\": \"«HOME»/.hangar/computer-control/windows-agent.exe\",\n  \"proxy_command\": \"ssh -W %h:%p salto\",\n  \"request_timeout\": 40\n}\n");
     // ROT-37: a resposta é o estado inteiro, o mesmo do GET.
     assert_eq!(s.get().await.1, got.1);
     assert_eq!(s.hits(), 0, "criar alvo não pode ir ao Python");
+}
+
+/// ROT-38, D4.1: o alvo criado pela rota liga o MCP com o binário do pacote e o alvo como padrão;
+/// desligado à mão (ausente no principal e guardado) continua desligado.
+#[tokio::test]
+async fn rot38_created_target_registers_the_mcp_unless_turned_off_by_hand() {
+    let s = Scene::new().await;
+    s.installed();
+    assert_eq!(s.target(json!({"project_dir": "", "name": "vm", "host": "vm"})).await.0, StatusCode::OK);
+    let main: Value = serde_json::from_str(&s.read(".claude.json").unwrap()).unwrap();
+    assert_eq!(main["mcpServers"]["hangar-computer-control"], s.h(json!({
+        "command": "«HOME»/.hangar/computer-control/hangar-computer-control", "args": [], "env": {
+            "HCC_AGENT_CONFIG": "«HOME»/.hangar/computer-control/targets/vm-agent.json",
+            "HCC_AGENTS_DIR": "«HOME»/.hangar/computer-control/targets"}})));
+
+    let off = Scene::new().await;
+    off.installed();
+    off.write(".claude.json", "{}");
+    off.write(".hangar/computer-control.json", "{\"command\": \"/velho\"}");
+    let got = off.target(json!({"project_dir": "", "name": "vm", "host": "vm"})).await;
+    assert_eq!(got, (StatusCode::OK, off.h(with_ssh_target(installed_state(), "vm", "vm"))));
+    assert_eq!(off.read(".claude.json").as_deref(), Some("{}"));
 }
 
 /// ROT-02 (r1-alvo-campo-desconhecido).
@@ -845,7 +872,7 @@ async fn rot39_target_host_trailing_newline() {
     let s = Scene::new().await;
     s.installed();
     let got = s.target(json!({"project_dir": "", "name": "vm", "host": "abc\n"})).await;
-    assert_eq!(got, (StatusCode::OK, s.h(with_ssh_target(installed_state(), "vm", "abc"))));
+    assert_eq!(got, (StatusCode::OK, s.h(registered(with_ssh_target(installed_state(), "vm", "abc")))));
     s.assert_file(".hangar/computer-control/targets/vm-agent.json", &ssh_file("abc"));
 }
 
@@ -856,10 +883,10 @@ async fn his38_create_local_target() {
     s.installed();
     let got = s.target(json!({"project_dir": "", "name": "este", "transport": "local"})).await;
     let path = "«HOME»/.hangar/computer-control/targets/este-agent.json";
-    assert_eq!(got, (StatusCode::OK, s.h(merged(installed_state(), json!({
+    assert_eq!(got, (StatusCode::OK, s.h(registered(merged(installed_state(), json!({
         "targets": [{"name": "este", "path": path, "transport": "local", "host": "", "os": "linux"}],
         "agent_config": path, "agent_configs": [path]
-    })))));
+    }))))));
     s.assert_file(".hangar/computer-control/targets/este-agent.json",
         "{\n  \"transport\": \"local\",\n  \"command\": [\n    \"«HOME»/.hangar/computer-control/hangar-computer-control\",\n    \"agent\"\n  ],\n  \"request_timeout\": 15\n}\n");
 }
@@ -972,7 +999,7 @@ async fn d16_target_project_dir_ignored() {
     let s = Scene::new().await;
     s.installed();
     let got = s.target(s.h(json!({"project_dir": "«HOME»/outro", "name": "vm", "host": "vm"}))).await;
-    assert_eq!(got, (StatusCode::OK, s.h(with_ssh_target(installed_state(), "vm", "vm"))));
+    assert_eq!(got, (StatusCode::OK, s.h(registered(with_ssh_target(installed_state(), "vm", "vm")))));
     s.assert_file(".hangar/computer-control/targets/vm-agent.json", &ssh_file("vm"));
     assert!(!s.home.join("outro").exists());
 }
