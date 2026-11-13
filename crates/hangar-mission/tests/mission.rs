@@ -91,6 +91,9 @@ async fn the_agent_moves_stages_but_waits_for_the_owner_at_the_gate() {
     let (status, body) = bench.send("PATCH", ITEM, Some(json!({"action": "changes", "note": "o print não mostra o botão"}))).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["item"]["stage"], json!("validacao"), "recusar volta uma etapa");
+    assert_eq!(body["item"]["approved"], json!([]), "voltar para o portão fecha o portão");
+    let (status, body) = bench.send("POST", "/api/mission/report", Some(report("entrega"))).await;
+    assert_eq!((status, body["detail"]["code"].clone()), (StatusCode::CONFLICT, json!("mission_gate_pending")), "{body}");
     let (status, body) = bench.send("PATCH", ITEM, Some(json!({"action": "changes", "note": "ainda falta"}))).await;
     assert_eq!((status, body["item"]["stage"].clone(), body["item"]["approved"].clone()), (StatusCode::OK, json!("revisao"), json!([])));
 
