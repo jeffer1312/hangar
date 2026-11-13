@@ -678,7 +678,8 @@ impl ActivityPanel {
             // Aba que volta a aparecer relê do zero, como o web, que desmonta a lista ao trocar de aba; resposta da
             // sessão anterior não entra na desta.
             self.seq += 1;
-            (self.subs, self.failed, self.loading) = (Vec::new(), false, false);
+            // Carregando até a releitura voltar: a lista vazia de agora não prova parada nenhuma.
+            (self.subs, self.failed, self.loading) = (Vec::new(), false, true);
             if other {
                 self.close_detail(cx); (self.notice, self.pending) = (None, None);
                 self.command_open = None; self.command_pending.clear(); self.command_error = None; self.command_view = None;
