@@ -31,9 +31,20 @@ A coluna de cada ticket, nesta ordem:
 1. Concluído, se o status de origem é da categoria concluída ou se o dono marcou a entrega.
 2. A etapa informada pela sessão (tool `mission`) ou escolhida pelo dono (Mover para).
 3. A etapa cujo `statuses` contém o status de origem.
-4. Com sessão viva, a dedução pelo plano dela: sem plano, a primeira etapa; plano em andamento, a
+4. Com PR ou MR na branch do ticket: aberto, a etapa `revisao` (sem ela, a terceira); mesclado, a
+   seguinte. Fechado sem merge não conta.
+5. Com sessão viva, a dedução pelo plano dela: sem plano, a primeira etapa; plano em andamento, a
    segunda; plano concluído, a terceira.
-5. Sem nada disso, Entrada.
+6. Sem nada disso, Entrada.
+
+## Merge request do ticket
+
+O painel usa a API das Revisões (`/api/reviews`), com o `gh` ou o `glab` logado na máquina do
+servidor. O PR ou MR do ticket é o da branch da sessão dele (`/api/reviews/branch`) e, sem esse, o
+aberto da máquina cuja branch de origem começa pela chave (`PM-19816`, `PM-19816-ajuste`) ou que tem
+a sessão nela. O cartão mostra o número, o pipeline e as threads abertas; o detalhe mostra também o
+estado e os conflitos e abre a revisão na página de Revisões, cujo voltar devolve ao painel. Sem login
+no CLI do host, o detalhe diz isso no lugar do MR.
 
 ## Sessão do ticket
 
