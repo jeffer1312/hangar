@@ -72,11 +72,8 @@ e um conector mínimo em JavaScript ([`examples/connectors/`](../../examples/con
 
 ## Mission Control
 
-No app nativo, o botão de painel da barra do topo (ou `Ctrl+Alt+M`) abre os tickets do conector em
-três colunas: A fazer, Em andamento e Concluído. Concluído vem do status do fornecedor; um ticket com
-sessão ligada e viva vai para Em andamento. O card mostra o estado da sessão e o progresso do plano
-dela. No detalhe, Iniciar sessão leva à tela de nova conversa com o `start_prompt` no campo; a sessão
-que nascer com essa mensagem fica ligada ao ticket.
+O painel do app nativo que acompanha os tickets pelas etapas do trabalho:
+[`docs/mission/`](../mission/README.md).
 
 ## Administração
 
@@ -90,11 +87,6 @@ Rotas exclusivas do dono (convidado e token errado são recusados antes de ler o
 | DELETE | `/api/connectors/{id}` | Para e remove |
 | GET | `/api/connectors/{id}/tickets` | `query`, `assignee`, `limit` (padrão 20), `cursor` |
 | GET | `/api/connectors/{id}/tickets/{ticket_id}` | Detalhe, com `start_prompt` já preenchido quando o manifesto o tem; o ID vai codificado como um componente |
-| PUT | `/api/connectors/{id}/links/{ticket_id}` | `{"session": "<nome>"}` liga o ticket à sessão aberta para ele |
-| DELETE | `/api/connectors/{id}/links/{ticket_id}` | Desfaz o vínculo |
-
-Os vínculos ficam no catálogo, no campo `links` de cada conector (ticket → nome da sessão), e saem
-com ele. São do dono, não do fornecedor: nada vai ao sistema de origem.
 
 Erros saem como `{"detail": {"code": "...", "msg": "..."}}`. Falta de login no fornecedor
 (`auth_required`, `permission_denied`) volta 424, nunca 401, para não parecer senha do Hangar errada.

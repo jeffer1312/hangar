@@ -4732,3 +4732,26 @@ conheça o fornecedor.
 - **Sem sandbox nesta entrega.** O conector roda com os direitos do dono; só a autoridade do servidor
   (`PRIVATE_ENV_KEYS`) é tirada do ambiente.
 
+## Mission Control: etapas, portão do dono e evidências no Hangar (13/11/2026)
+
+Issue #408. O painel que usa os conectores.
+
+- **O que é do Hangar e o que é da origem.** Título, status e descrição vêm do conector a cada
+  leitura. Etapa, sessão ligada, aprovações, evidências e histórico ficam em `hangar-mission`
+  (`~/.hangar/mission/`), sem cópia do ticket além de chave, título e link para mostrar. O conector
+  continua só leitura.
+- **Etapas padrão tiradas do fluxo do plugin Promedico** (iniciar-pm e plano, execução, revisão do MR,
+  validação, entrega) e configuráveis por servidor. O plugin não grava em lugar estável a etapa de
+  uma PM: a única marca fora da sessão é o status no Help (Revisão de Código depois do push) e o plano.
+  Por isso a coluna vem, nesta ordem, do relato da sessão, do status de origem mapeado na etapa e do
+  plano da sessão.
+- **Portão do dono.** Como o quality gate do Mission Control da builderz-labs (aprovação antes do
+  done), a etapa com portão só é passada com aprovação. Pedir ajustes desfaz as aprovações a partir da
+  etapa para onde o ticket volta; sem isso, voltar ao portão o deixava aberto (achado da revisão de
+  segurança do commit).
+- **Evidências ficam no Hangar.** O `finalizar_pm` do plugin proíbe subir registros de execução e
+  evidências na PM (caso de 58 anexos), então a validação com prints e vídeos é entregue ao dono no
+  painel, e nada sobe ao Help.
+- **Sessão achada pela chave.** Como o plugin, a sessão da PM é a da branch `PM-XXXXX` ou a de nome que
+  começa pela chave; ligar no painel grava o vínculo e libera a tool. Uma sessão, um ticket.
+

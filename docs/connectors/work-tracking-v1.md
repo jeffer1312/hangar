@@ -47,6 +47,6 @@ também `start_prompt`, quando o manifesto o declara. Os dois são do host, não
 
 ## Fora desta versão
 
-Atualização é uma nova leitura: não há poller, eventos, ações nem transições. Iniciar uma sessão a
-partir do ticket é do Hangar (o vínculo fica no catálogo do servidor), não do conector. O status do ticket é do fornecedor; atividade do agente e etapas do plano são fatos
+Atualização é uma nova leitura: não há poller, eventos, ações nem transições. Etapas, vínculo com a
+sessão e evidências são do Hangar ([Mission Control](../mission/README.md)), não do conector. O status do ticket é do fornecedor; atividade do agente e etapas do plano são fatos
 do Hangar, separados. Ampliação futura entra como capacidade nova e explícita no manifesto.
