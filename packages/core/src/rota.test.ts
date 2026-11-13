@@ -516,6 +516,8 @@ describe('rota do Connect', () => {
     it('classifies the saved address by its host', () => {
       expect(routeKind({ ...srv(), baseUrl: TS })).toBe('tailscale');
       expect(routeKind({ ...srv(), baseUrl: 'https://pc.example' })).toBe('saved');
+      expect(routeKind({ ...srv(), baseUrl: 'https://100.64.0.2:8443' })).toBe('tailscale');
+      expect(routeKind({ ...srv(), baseUrl: 'https://100.128.0.1:8443' })).toBe('saved');
     });
 
     it('ignores a trailing slash when comparing addresses', () => {

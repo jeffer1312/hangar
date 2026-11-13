@@ -4,6 +4,7 @@ import { apiEnv } from './apiEnv';
 import { registrar as registrarDiag } from './diag';
 import { hmacSha256Hex, sha256Hex } from './hmac';
 import type { LanInfo, Server } from './servers';
+import { tailscaleHost } from './share';
 
 // Rede local responde em poucos ms; fora dela o IP não existe ou é outra máquina.
 const PRAZO_LAN_MS = 800;
@@ -37,9 +38,6 @@ export function baseOf(s: Server): string {
 export type RouteKind = 'local' | 'tailscale' | 'saved' | 'connect';
 
 const trimSlash = (url: string) => url.replace(/\/+$/, '');
-const isTailnetUrl = (url: string) => {
-  try { return new URL(url).hostname.toLowerCase().endsWith('.ts.net'); } catch { return false; }
-};
 
 /** Caminho em uso, para a tela dizer por onde o app chega à máquina. */
 export function routeKind(s: Server): RouteKind {
@@ -48,7 +46,7 @@ export function routeKind(s: Server): RouteKind {
   if (isBase(s.lan?.url)) return 'local';
   if (isBase(s.remote?.url)) return 'tailscale';
   if (isBase(s.connect?.url)) return 'connect';
-  return isTailnetUrl(s.baseUrl) ? 'tailscale' : 'saved';
+  return tailscaleHost(s.baseUrl) !== null ? 'tailscale' : 'saved';
 }
 
 export function rotaDecidida(id: string, server?: Server): boolean {

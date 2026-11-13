@@ -456,7 +456,7 @@ mod tests {
 
     #[test]
     fn upsert_matches_same_machine_and_keeps_label() {
-        let entry = |label: &str, address: &str, token: &str| ServerEntry { id: "x".into(), label: label.into(), address: address.into(), token: token.into(), disabled: false, invite: false, lan: None, connect: None, connect_refused: false, ephemeral: false };
+        let entry = |label: &str, address: &str, token: &str| ServerEntry { id: "x".into(), label: label.into(), address: address.into(), token: token.into(), disabled: false, invite: false, lan: None, ephemeral: false, ..Default::default() };
         let mut list = vec![entry("PC", "http://127.0.0.1:8765", "a")];
         upsert(&mut list, entry("", "http://127.0.0.1:8765/", "b"));
         upsert(&mut list, entry("notebook", "https://notebook.ts.net", "c"));
@@ -479,10 +479,10 @@ mod tests {
     #[test]
     fn invite_flag_survives_the_plain_upsert_of_the_first_connection() {
         let mut list = vec![ServerEntry { id: "i".into(), label: "Convite · Jefferson".into(), address: "https://h:8443".into(),
-            token: "g".into(), disabled: false, invite: true, lan: None, connect: None, connect_refused: false, ephemeral: false }];
+            token: "g".into(), disabled: false, invite: true, lan: None, ephemeral: false, ..Default::default() }];
         // O `Sessions(Ok)` da conexão faz upsert sem a marca: ela não pode cair.
         upsert(&mut list, ServerEntry { id: "x".into(), label: String::new(), address: "https://h:8443/".into(),
-            token: "g".into(), disabled: false, invite: false, lan: None, connect: None, connect_refused: false, ephemeral: false });
+            token: "g".into(), disabled: false, invite: false, lan: None, ephemeral: false, ..Default::default() });
         assert!(list[0].invite);
         let old: ServerEntry = serde_json::from_str(r#"{"id":"a","label":"PC","address":"http://127.0.0.1:8765","token":"t"}"#).unwrap();
         assert!(!old.invite);

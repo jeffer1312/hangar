@@ -41,32 +41,57 @@ pub enum RouteKind { Here, Local, Tailscale, Saved, Connect }
 /// O caminho que este app usa até a máquina. `None`: ainda não decidido (conectando de novo).
 pub fn route_kind(address: &str) -> Option<RouteKind> {
     let key = key(address)?;
-    with(|t| {
-        let known = t.get(&key)?;
-        let route = known.route.as_ref()?;
-        Some(match route.host() {
-            Some(url::Host::Ipv4(ip)) if ip.is_loopback() => RouteKind::Here,
-            Some(url::Host::Ipv6(ip)) if ip.is_loopback() => RouteKind::Here,
-            Some(url::Host::Domain(name)) if name.eq_ignore_ascii_case("localhost") => RouteKind::Here,
-            _ if known.lan.as_ref().and_then(lan_url).as_ref() == Some(route) => RouteKind::Local,
-            _ if known.connect_origins.iter().any(|origin| same_origin(origin, route)) => RouteKind::Connect,
-            Some(url::Host::Domain(name)) if name.to_ascii_lowercase().ends_with(".ts.net") => RouteKind::Tailscale,
-            _ => RouteKind::Saved,
-        })
-    })
+    with(|t| t.get(&key)?.route.as_ref().map(|(_, kind)| *kind))
+}
+
+/// Nome da tailnet ou faixa 100.64.0.0/10: costuma depender do Tailscale ligado neste aparelho.
+pub(crate) fn tailscale_host(base: &str) -> Option<String> {
+    let url = Url::parse(base).ok()?;
+    let tailscale = match url.host()? {
+        url::Host::Domain(name) => name.ends_with(".ts.net"),
+        url::Host::Ipv4(ip) => ip.octets()[0] == 100 && (64..=127).contains(&ip.octets()[1]),
+        url::Host::Ipv6(_) => false,
+    };
+    tailscale.then(|| url.host_str().unwrap_or_default().to_owned())
+}
+
+fn kind_of(known: &Known, route: &Url) -> RouteKind {
+    match route.host() {
+        Some(url::Host::Ipv4(ip)) if ip.is_loopback() => RouteKind::Here,
+        Some(url::Host::Ipv6(ip)) if ip.is_loopback() => RouteKind::Here,
+        Some(url::Host::Domain(name)) if name.eq_ignore_ascii_case("localhost") => RouteKind::Here,
+        _ if known.lan.as_ref().and_then(lan_url).as_ref() == Some(route) => RouteKind::Local,
+        _ if known.connect_origins.contains(&route.origin()) => RouteKind::Connect,
+        _ if tailscale_host(route.as_str()).is_some() => RouteKind::Tailscale,
+        _ => RouteKind::Saved,
+    }
+}
+
+/// A credencial de aparelho do Connect desta máquina.
+#[derive(Default)]
+enum ConnectState {
+    #[default]
+    Idle,
+    /// Pedido de credencial em curso.
+    Enrolling,
+    /// Credencial em uso. A origem fica lida porque `credential` a compara em todo pedido.
+    Active(ConnectRoute, Client, url::Origin),
+    /// 401 pelo Connect: o dono revogou a credencial. Só a edição do dono (`reset_refused`) tira daqui.
+    Refused,
 }
 
 #[derive(Default)]
 struct Known {
     invite: bool,
     lan: Option<Lan>,
-    route: Option<Url>,
+    /// O caminho vai junto porque a tela o lê a cada quadro.
+    route: Option<(Url, RouteKind)>,
     deciding: Arc<tokio::sync::Mutex<()>>,
-    connect: Option<(ConnectRoute, Client)>,
+    connect: ConnectState,
     /// Todo endereço do Connect que esta máquina já teve: a senha do dono nunca vai a eles, nem depois da recusa.
-    connect_origins: Vec<String>,
-    refused: bool,
-    enrolling: bool,
+    connect_origins: Vec<url::Origin>,
+    /// Id da máquina com que o `/api/alcance` já foi lido nesta execução: ele varre o alcance inteiro no servidor.
+    connect_checked: Option<String>,
 }
 
 /// Quem leva a credencial a uma URL da máquina.
@@ -80,11 +105,12 @@ pub(super) enum Credential {
 
 /// Escolha da credencial para `url` na máquina `identity`, a mesma para HTTP (`Authed`) e socket (`socket_token`).
 pub(super) fn credential(identity: &str, url: &Url) -> Credential {
+    let origin = url.origin();
     with(|t| {
         let Some(known) = t.get(identity) else { return Credential::Owner };
         match &known.connect {
-            Some((c, client)) if same_origin(&c.url, url) => Credential::Device(client.clone(), c.token.clone()),
-            _ if known.connect_origins.iter().any(|origin| same_origin(origin, url)) => Credential::Blocked,
+            ConnectState::Active(c, client, own) if *own == origin => Credential::Device(client.clone(), c.token.clone()),
+            _ if known.connect_origins.contains(&origin) => Credential::Blocked,
             _ => Credential::Owner,
         }
     })
@@ -113,13 +139,17 @@ fn key(address: &str) -> Option<String> {
     Some(url.into())
 }
 
-fn same_origin(stored: &str, url: &Url) -> bool { Url::parse(stored).is_ok_and(|s| s.origin() == url.origin()) }
+/// Credencial em uso. Endereço que não é URL ganha origem opaca, que não casa com pedido nenhum.
+fn active(connect: ConnectRoute, client: Client) -> ConnectState {
+    let origin = Url::parse(&connect.url).map(|url| url.origin()).unwrap_or_else(|_| url::Origin::new_opaque());
+    ConnectState::Active(connect, client, origin)
+}
 
-/// Troca a credencial do Connect. A rota que passava pelo endereço antigo é decidida de novo.
-fn set_connect(known: &mut Known, connect: Option<(ConnectRoute, Client)>) {
-    let stale = matches!((&known.connect, &known.route), (Some((old, _)), Some(route)) if same_origin(&old.url, route));
+/// Troca o estado do Connect. A rota que passava pelo endereço antigo é decidida de novo.
+fn set_connect(known: &mut Known, connect: ConnectState) {
+    let stale = matches!((&known.connect, &known.route), (ConnectState::Active(_, _, old), Some((route, _))) if *old == route.origin());
     if stale { known.route = None; }
-    if let Some((c, _)) = &connect && !known.connect_origins.contains(&c.url) { known.connect_origins.push(c.url.clone()); }
+    if let ConnectState::Active(_, _, origin) = &connect && !known.connect_origins.contains(origin) { known.connect_origins.push(origin.clone()); }
     known.connect = connect;
 }
 
@@ -127,15 +157,14 @@ fn set_connect(known: &mut Known, connect: Option<(ConnectRoute, Client)>) {
 /// aprendida aqui não é desfeita pelo arquivo que ainda não a gravou.
 pub fn seed(address: &str, invite: bool, lan: Option<&Lan>, connect: Option<&ConnectRoute>, refused: bool) {
     let Some(key) = key(address) else { return };
-    let changed = connect.filter(|c| with(|t| t.get(&key).and_then(|k| k.connect.as_ref()).map(|(known, _)| known) != Some(*c)));
+    let changed = connect.filter(|c| with(|t| !matches!(t.get(&key).map(|k| &k.connect), Some(ConnectState::Active(known, ..)) if known == *c)));
     let client = changed.and_then(|c| super::bearer_client(&c.token).ok());
     with(|t| {
         let known = t.entry(key).or_default();
         known.invite = invite;
         if known.lan.is_none() { known.lan = lan.cloned(); }
-        known.refused |= refused;
-        if known.refused { set_connect(known, None); }
-        else if let (Some(connect), Some(client)) = (changed, client) { set_connect(known, Some((connect.clone(), client))); }
+        if refused || matches!(known.connect, ConnectState::Refused) { set_connect(known, ConnectState::Refused); }
+        else if let (Some(connect), Some(client)) = (changed, client) { set_connect(known, active(connect.clone(), client)); }
     });
 }
 
@@ -155,16 +184,20 @@ pub fn forget(api: &Api) {
 /// de novo na próxima decisão.
 pub fn reset_refused(address: &str) {
     let Some(key) = key(address) else { return };
-    with(|t| if let Some(known) = t.get_mut(&key) { known.refused = false; known.enrolling = false; });
+    with(|t| if let Some(known) = t.get_mut(&key) {
+        if matches!(known.connect, ConnectState::Refused | ConnectState::Enrolling) { known.connect = ConnectState::Idle; }
+        known.connect_checked = None;
+    });
 }
 
 /// 401 vindo do endereço do Connect: a credencial de aparelho foi revogada.
 pub(crate) fn refused_at(url: &Url) {
     // As rotas do próprio Connect respondem 401 na porta dele mesmo com credencial válida.
     if url.path().contains("/api/connect/") { return; }
+    let origin = url.origin();
     let keys: Vec<String> = with(|t| t.iter_mut()
-        .filter(|(_, k)| k.connect.as_ref().is_some_and(|(c, _)| same_origin(&c.url, url)))
-        .map(|(key, k)| { set_connect(k, None); k.refused = true; key.clone() }).collect());
+        .filter(|(_, k)| matches!(&k.connect, ConnectState::Active(_, _, own) if *own == origin))
+        .map(|(key, k)| { set_connect(k, ConnectState::Refused); key.clone() }).collect());
     for key in keys {
         crate::log_line(&format!("connect: credencial de aparelho recusada (401) para {key}; o Connect sai dos caminhos dela"));
         notify(key, Learned::ConnectRefused);
@@ -174,7 +207,7 @@ pub(crate) fn refused_at(url: &Url) {
 impl Api {
     /// Base dos pedidos: a rota decidida ou, sem decisão, o endereço salvo.
     pub(crate) fn route(&self) -> Url {
-        with(|t| t.get(self.base.as_str()).and_then(|known| known.route.clone())).unwrap_or_else(|| self.base.clone())
+        with(|t| t.get(self.base.as_str()).and_then(|known| known.route.as_ref().map(|(url, _)| url.clone()))).unwrap_or_else(|| self.base.clone())
     }
 
     /// Credencial que vai na URL de um socket para `url`, pela mesma escolha do cliente HTTP (`Authed`). `None`: endereço
@@ -192,7 +225,13 @@ impl Api {
 #[cfg(test)]
 pub(crate) fn route_to(api: &Api, route: Url) { set_route(&api.identity(), route); }
 
-fn set_route(key: &str, route: Url) { with(|t| t.entry(key.to_owned()).or_default().route = Some(route)); }
+fn set_route(key: &str, route: Url) {
+    with(|t| {
+        let known = t.entry(key.to_owned()).or_default();
+        let kind = kind_of(known, &route);
+        known.route = Some((route, kind));
+    });
+}
 
 /// Decide a rota antes de conectar. Nunca falha: sem resposta, fica o endereço salvo.
 pub async fn ensure(api: &Api) {
@@ -208,8 +247,10 @@ pub async fn ensure(api: &Api) {
     }
     // Lista e conversas da mesma máquina reconectam juntas: uma decide, as outras aproveitam.
     let _turn = gate.lock().await;
-    let Some((saved, connect)) = with(|t| t.get(&key).filter(|k| k.route.is_none())
-        .map(|k| (k.lan.clone(), k.connect.as_ref().map(|(c, _)| c.clone())))) else { return };
+    let Some((saved, connect)) = with(|t| t.get(&key).filter(|k| k.route.is_none()).map(|k| {
+        let connect = match &k.connect { ConnectState::Active(c, ..) => Some(c.clone()), _ => None };
+        (k.lan.clone(), connect)
+    })) else { return };
     let route = decide(api, saved, connect).await;
     set_route(&key, route);
     notify(key, Learned::Route);
@@ -257,10 +298,18 @@ async fn decide(api: &Api, saved: Option<Lan>, connect: Option<ConnectRoute>) ->
         Some(took) => lan_took <= took,
         None => !saved_answered.load(Ordering::SeqCst),
     });
-    if let Some(route) = wins { return route; }
+    // Prova que já perdeu sai: não fica batendo no Connect até o prazo dela.
+    if let Some(route) = wins {
+        if let Some(proof) = &connect_proof { proof.abort(); }
+        return route;
+    }
     let (Some((url, _)), Some(proof)) = (connect, connect_proof) else { return api.base.clone() };
     let saved_ok = match saved_task { Some(task) => task.await.unwrap_or(false), None => saved_took.is_some() };
-    if !saved_ok && proof.await.unwrap_or(false) { url } else { api.base.clone() }
+    if saved_ok {
+        proof.abort();
+        return api.base.clone();
+    }
+    if proof.await.unwrap_or(false) { url } else { api.base.clone() }
 }
 
 fn lan_url(lan: &Lan) -> Option<Url> {
@@ -347,19 +396,25 @@ fn connect_announced(raw: &str) -> Option<String> {
 }
 
 /// Depois de decidir: máquina que anuncia o Connect e ainda não deu credencial a este app emite uma; a que já deu e
-/// mudou de endereço tem o novo guardado (o `decide` prova antes de usar).
+/// mudou de identificador tem o endereço relido (o `decide` prova antes de usar). Uma leitura por execução e por
+/// identificador.
 async fn refresh_connect(api: Api) {
     let identity = api.identity();
-    let Some((id, current)) = with(|t| t.get(&identity).and_then(|k| {
+    let Some((id, current)) = with(|t| t.get_mut(&identity).and_then(|k| {
         let id = k.lan.as_ref().map(|l| l.id.clone()).filter(|id| !id.is_empty())?;
-        let current = k.connect.as_ref().map(|(c, _)| c.clone());
-        (current.is_some() || !(k.refused || k.enrolling)).then_some((id, current))
+        if k.connect_checked.as_ref() == Some(&id) { return None; }
+        let current = match &k.connect {
+            ConnectState::Idle => None,
+            ConnectState::Active(c, ..) if c.id != id => Some(c.clone()),
+            _ => return None,
+        };
+        k.connect_checked = Some(id.clone());
+        Some((id, current))
     })) else { return };
     let Some(url) = announced(&api).await else { return };
     // Endereço salvo que já é o do Connect: não há outro caminho para guardar.
     if key(&url).as_deref() == Some(identity.as_str()) { return; }
     match current {
-        Some(c) if c.url == url && c.id == id => {}
         Some(c) => store(&identity, ConnectRoute { url, id, ..c }),
         None => enroll(&api, &identity, url, id).await,
     }
@@ -372,10 +427,9 @@ fn store(identity: &str, connect: ConnectRoute) {
     };
     let stored = with(|t| {
         let known = t.entry(identity.to_owned()).or_default();
-        known.enrolling = false;
         // Pedido que terminou depois do 401 não desfaz a recusa.
-        if known.refused { return false; }
-        set_connect(known, Some((connect.clone(), client)));
+        if matches!(known.connect, ConnectState::Refused) { return false; }
+        set_connect(known, active(connect.clone(), client));
         true
     });
     if stored { notify(identity.to_owned(), Learned::Connect(connect)); }
@@ -387,13 +441,18 @@ fn store(identity: &str, connect: ConnectRoute) {
 async fn enroll(api: &Api, identity: &str, url: String, id: String) {
     let go = with(|t| {
         let known = t.entry(identity.to_owned()).or_default();
-        let go = !(known.enrolling || known.refused || known.connect.is_some());
-        if go { known.enrolling = true; }
+        let go = matches!(known.connect, ConnectState::Idle);
+        if go { known.connect = ConnectState::Enrolling; }
         go
     });
     if !go { return; }
     let failed = |retry: bool, why: &str| {
-        if retry { with(|t| if let Some(known) = t.get_mut(identity) { known.enrolling = false; }); }
+        if retry {
+            with(|t| if let Some(known) = t.get_mut(identity) {
+                if matches!(known.connect, ConnectState::Enrolling) { known.connect = ConnectState::Idle; }
+                known.connect_checked = None;
+            });
+        }
         crate::log_line(&format!("connect: credencial de aparelho não emitida por {identity}: {why}"));
     };
     let mut target = api.route();
@@ -497,6 +556,15 @@ mod tests {
 
     fn route_of(url: &str) -> Url { Url::parse(&key(url).unwrap()).unwrap() }
 
+    fn state(identity: &str) -> Option<&'static str> {
+        with(|t| t.get(identity).map(|k| match k.connect {
+            ConnectState::Idle => "idle",
+            ConnectState::Enrolling => "enrolling",
+            ConnectState::Active(..) => "active",
+            ConnectState::Refused => "refused",
+        }))
+    }
+
     #[tokio::test]
     async fn connect_wins_only_when_lan_and_saved_fail() {
         let (connect, server) = serve(|req| match req.path() {
@@ -564,11 +632,11 @@ mod tests {
         server.abort();
         assert_eq!(error.status, Some(401));
         assert_eq!(*seen.lock().unwrap(), vec!["device-secret".to_owned()], "a senha do dono nunca vai ao Connect");
-        let (connect_left, refused, route) = with(|t| t.get(&identity).map(|k| (k.connect.is_some(), k.refused, k.route.clone()))).unwrap();
-        assert!(!connect_left && refused && route.is_none());
+        assert_eq!(state(&identity), Some("refused"));
+        assert!(with(|t| t.get(&identity).is_some_and(|k| k.route.is_none())));
         // O arquivo ainda sem a recusa não a desfaz.
         seed(&identity, false, None, Some(&connect_route(&connect)), false);
-        assert!(with(|t| t.get(&identity).is_some_and(|k| k.connect.is_none() && k.refused)));
+        assert_eq!(state(&identity), Some("refused"));
     }
 
     #[tokio::test]
@@ -578,7 +646,7 @@ mod tests {
         let identity = api.identity();
         seed(&identity, false, None, Some(&connect_route(&connect)), false);
         refused_at(&Url::parse(&format!("{connect}/api/connect/state")).unwrap());
-        assert!(with(|t| t.get(&identity).is_some_and(|k| k.connect.is_some() && !k.refused)));
+        assert_eq!(state(&identity), Some("active"));
     }
 
     #[tokio::test]
@@ -625,7 +693,7 @@ mod tests {
         seed(&identity, false, None, None, true);
         pending.await.unwrap();
         server.abort();
-        assert!(with(|t| t.get(&identity).is_some_and(|k| k.connect.is_none() && k.refused)));
+        assert_eq!(state(&identity), Some("refused"));
     }
 
     #[tokio::test]
@@ -634,7 +702,29 @@ mod tests {
         let identity = api.identity();
         seed(&identity, false, None, None, true);
         reset_refused(&identity);
-        assert!(with(|t| t.get(&identity).is_some_and(|k| !k.refused && !k.enrolling)));
+        assert_eq!(state(&identity), Some("idle"));
+    }
+
+    #[tokio::test]
+    async fn connect_address_is_read_once_per_machine_id() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let counted = reads.clone();
+        let (saved, server) = serve(move |req| match req.path() {
+            "/api/alcance" => { counted.fetch_add(1, Ordering::SeqCst); (200, json!({"connect": null}), 0) }
+            _ => (404, json!({}), 0),
+        }).await;
+        let api = Api::new(&saved, "owner").unwrap();
+        let identity = api.identity();
+        seed(&identity, false, Some(&Lan { url: String::new(), id: "casa".into() }), None, false);
+        refresh_connect(api.clone()).await;
+        // Outra reconexão da mesma máquina não varre o alcance de novo.
+        refresh_connect(api.clone()).await;
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
+        // Edição do dono libera uma nova leitura.
+        reset_refused(&identity);
+        refresh_connect(api.clone()).await;
+        server.abort();
+        assert_eq!(reads.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
@@ -660,7 +750,7 @@ mod tests {
         refresh_connect(api.clone()).await;
         server.abort();
         assert_eq!(posts.load(Ordering::SeqCst), 1);
-        let stored = with(|t| t.get(&identity).and_then(|k| k.connect.as_ref().map(|(c, _)| c.clone())));
+        let stored = with(|t| t.get(&identity).and_then(|k| match &k.connect { ConnectState::Active(c, ..) => Some(c.clone()), _ => None }));
         assert_eq!(stored, Some(ConnectRoute { url: "https://casa.jeff.hangar.dev.br".into(), id: "casa".into(), device_id: "dev-9".into(), token: "issued".into() }));
     }
 
@@ -678,7 +768,7 @@ mod tests {
         refresh_connect(api).await;
         server.abort();
         assert_eq!(posts.load(Ordering::SeqCst), 0);
-        assert!(with(|t| t.get(&identity).is_some_and(|k| k.connect.is_none())));
+        assert_eq!(state(&identity), Some("refused"));
     }
 
     #[tokio::test]
@@ -701,6 +791,10 @@ mod tests {
         let here = "http://localhost:1";
         set_route(&key(here).unwrap(), route_of(here));
         assert_eq!(route_kind(here), Some(RouteKind::Here));
+        // Endereço da faixa do Tailscale, sem nome `.ts.net`.
+        let cgnat = "http://100.64.0.2:8765";
+        set_route(&key(cgnat).unwrap(), route_of(cgnat));
+        assert_eq!(route_kind(cgnat), Some(RouteKind::Tailscale));
     }
 
     #[test]

@@ -1045,7 +1045,7 @@ impl Hangar {
         if let Some((address, token)) = &saved
             && !known_servers.iter().any(|s| servers::norm(&s.address) == servers::norm(address)) {
             known_servers.insert(0, servers::ServerEntry { id: servers::new_id(), label: servers::default_label(address),
-                address: address.clone(), token: token.clone(), disabled: false, invite: false, lan: None, connect: None, connect_refused: false, ephemeral: false });
+                address: address.clone(), token: token.clone(), disabled: false, invite: false, lan: None, ephemeral: false, ..Default::default() });
         }
         let (saved_address, saved_token) = saved.clone().unwrap_or_else(|| ("http://127.0.0.1:8765".into(), String::new()));
         let address = cx.new(|cx| InputState::new(window, cx).default_value(saved_address).placeholder(tr("server")));
@@ -1969,7 +1969,7 @@ impl Hangar {
                 if let Some((address, token)) = self.unsaved_connection.take() {
                     let known = self.servers.iter().any(|s| servers::norm(&s.address) == servers::norm(&address));
                     let label = if known { String::new() } else { servers::default_label(&address) };
-                    servers::upsert(&mut self.servers, servers::ServerEntry { id: servers::new_id(), label, address, token, disabled: false, invite: false, lan: None, connect: None, connect_refused: false, ephemeral: false });
+                    servers::upsert(&mut self.servers, servers::ServerEntry { id: servers::new_id(), label, address, token, disabled: false, invite: false, lan: None, ephemeral: false, ..Default::default() });
                     // Disco fora da thread da janela; só a falha volta.
                     self.persist_servers();
                     self.sync_updater(cx);

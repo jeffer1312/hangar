@@ -18,7 +18,7 @@ pub(super) fn reconcile_pair_entries(list: &mut Vec<servers::ServerEntry>, pairs
                 if s.token != p.token { pending.push((s.address.clone(), s.token.clone(), p.token.clone())); }
             }
             None => list.push(servers::ServerEntry { id: servers::new_id(), label: tr_shared("native_par_rotulo", &[("dono", &p.owner)]),
-                address: p.address.clone(), token: p.token.clone(), disabled: false, invite: true, lan: None, connect: None, connect_refused: false, ephemeral: true }),
+                address: p.address.clone(), token: p.token.clone(), disabled: false, invite: true, lan: None, ephemeral: true, ..Default::default() }),
         }
     }
     pending

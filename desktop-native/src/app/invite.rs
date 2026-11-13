@@ -161,7 +161,7 @@ impl Hangar {
         let key = servers::norm(&redeemed.address);
         self.invite_ended.remove(&key);
         let entry = servers::ServerEntry { id: servers::new_id(), label: tr_shared("convite_rotulo", &[("dono", &redeemed.owner)]),
-            address: redeemed.address, token: redeemed.token, disabled: false, invite: true, lan: None, connect: None, connect_refused: false, ephemeral: false };
+            address: redeemed.address, token: redeemed.token, disabled: false, invite: true, lan: None, ephemeral: false, ..Default::default() };
         // Um servidor próprio pode ter entrado na lista enquanto o resgate corria: ele fica intacto.
         if !place_invite(&mut self.servers, entry) {
             window.push_notification(Notification::warning(tr("invite_own_server")), cx);
@@ -233,7 +233,7 @@ mod tests {
     use core::prelude::v1::test;
 
     fn entry(id: &str, label: &str, address: &str, token: &str, invite: bool) -> servers::ServerEntry {
-        servers::ServerEntry { id: id.into(), label: label.into(), address: address.into(), token: token.into(), disabled: false, invite, lan: None, connect: None, connect_refused: false, ephemeral: false }
+        servers::ServerEntry { id: id.into(), label: label.into(), address: address.into(), token: token.into(), disabled: false, invite, lan: None, ephemeral: false, ..Default::default() }
     }
 
     #[test]
