@@ -1,10 +1,10 @@
 //! Rotas do dono para os conectores. A autenticação vem antes de ler corpo, manifesto ou comando;
 //! convidado e token errado nunca chegam ao host.
-use crate::error::{AdminError, CallError};
+use crate::error::{AdminError, AdminKind, CallError};
 use crate::host::Host;
 use crate::manifest::Manifest;
 use crate::protocol::ErrorCode;
-use crate::work_tracking::{Filter, GetParams, ListParams};
+use crate::work_tracking::{GetParams, ListParams, with_fetched_at};
 use axum::Router;
 use axum::body::to_bytes;
 use axum::extract::{ConnectInfo, Request, State};
@@ -89,14 +89,15 @@ async fn reply(state: &Http, peer: Option<SocketAddr>, request: Request) -> Resp
             Err(error) => admin_error(&error),
         },
         (Method::GET, ["api", "connectors", id, "tickets"]) => {
-            let params = match list_params(request.uri().query()) { Ok(params) => params, Err(error) => return call_error(&error) };
+            let pairs = form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes());
+            let params = match ListParams::from_pairs(pairs) { Ok(params) => params, Err(error) => return call_error(&error.into()) };
             match state.host.list_tickets(id, params).await {
                 Ok(result) => json_response(StatusCode::OK, with_fetched_at(json!(result))),
                 Err(error) => call_error(&error),
             }
         }
         (Method::GET, ["api", "connectors", id, "tickets", ticket_id]) => {
-            let params = match GetParams::from_value(json!({"ticket_id": ticket_id})) { Ok(params) => params, Err(error) => return call_error(&error.into()) };
+            let params = match GetParams::new(*ticket_id) { Ok(params) => params, Err(error) => return call_error(&error.into()) };
             match state.host.get_ticket(id, params).await {
                 Ok(detail) => json_response(StatusCode::OK, with_fetched_at(json!(detail))),
                 Err(error) => call_error(&error),
@@ -114,33 +115,12 @@ async fn body(request: Request) -> Result<Value, Response> {
         .ok_or_else(|| detail(StatusCode::BAD_REQUEST, "invalid_params", "corpo precisa ser um objeto JSON", json!({})))
 }
 
-/// `query`, `assignee`, `limit` (padrão 20) e `cursor`; parâmetro desconhecido é recusado.
-fn list_params(query: Option<&str>) -> Result<ListParams, CallError> {
-    let mut filter = Filter::default();
-    let (mut limit, mut cursor) = (20u32, None);
-    for (name, value) in form_urlencoded::parse(query.unwrap_or("").as_bytes()) {
-        match name.as_ref() {
-            "query" => filter.query = Some(value.into_owned()),
-            "assignee" => filter.assignee = Some(value.into_owned()),
-            "cursor" => cursor = Some(value.into_owned()),
-            "limit" => limit = value.parse().map_err(|_| CallError::connector(ErrorCode::InvalidParams, "limit precisa ser número"))?,
-            other => return Err(CallError::connector(ErrorCode::InvalidParams, format!("filtro desconhecido: {other}"))),
-        }
-    }
-    Ok(ListParams::from_value(json!(ListParams { filter, limit, cursor }))?)
-}
-
-fn with_fetched_at(mut value: Value) -> Value {
-    value["fetched_at"] = json!(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
-    value
-}
-
 fn admin_error(error: &AdminError) -> Response {
-    let status = match error.code() {
-        "connector_not_found" => StatusCode::NOT_FOUND,
-        "connector_exists" => StatusCode::CONFLICT,
-        "registry_invalid" | "registry_unavailable" => StatusCode::SERVICE_UNAVAILABLE,
-        _ => StatusCode::BAD_REQUEST,
+    let status = match error.kind {
+        AdminKind::ConnectorNotFound => StatusCode::NOT_FOUND,
+        AdminKind::ConnectorExists => StatusCode::CONFLICT,
+        AdminKind::RegistryInvalid | AdminKind::RegistryUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+        AdminKind::ManifestInvalid | AdminKind::ManifestUnreadable | AdminKind::UnsupportedVersion | AdminKind::UnsupportedCapability => StatusCode::BAD_REQUEST,
     };
     detail(status, error.code(), &error.message, json!({}))
 }

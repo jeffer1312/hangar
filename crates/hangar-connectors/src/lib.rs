@@ -12,5 +12,5 @@ pub mod registry;
 pub mod rpc;
 pub mod work_tracking;
 
-pub use error::{AdminError, CallError};
+pub use error::{AdminError, AdminKind, CallError};
 pub use host::{Host, HostOptions};

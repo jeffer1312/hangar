@@ -1,25 +1,52 @@
 //! Erros de administração (cadastro, catálogo) e de chamada pelo host.
 use crate::protocol::{ConnectorError, ErrorCode};
 
-/// Recusa do cadastro ou do catálogo. `code` é estável e vai às respostas HTTP e ao CLI.
+/// Tipo de recusa do cadastro ou do catálogo; `as_str` é o código estável das respostas e do CLI.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AdminKind {
+    ManifestInvalid,
+    ManifestUnreadable,
+    UnsupportedVersion,
+    UnsupportedCapability,
+    ConnectorExists,
+    ConnectorNotFound,
+    RegistryInvalid,
+    RegistryUnavailable,
+}
+
+impl AdminKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AdminKind::ManifestInvalid => "manifest_invalid",
+            AdminKind::ManifestUnreadable => "manifest_unreadable",
+            AdminKind::UnsupportedVersion => "unsupported_version",
+            AdminKind::UnsupportedCapability => "unsupported_capability",
+            AdminKind::ConnectorExists => "connector_exists",
+            AdminKind::ConnectorNotFound => "connector_not_found",
+            AdminKind::RegistryInvalid => "registry_invalid",
+            AdminKind::RegistryUnavailable => "registry_unavailable",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AdminError {
-    code: &'static str,
+    pub kind: AdminKind,
     pub message: String,
 }
 
 impl AdminError {
-    pub fn new(code: &'static str, message: impl Into<String>) -> Self { Self { code, message: message.into() } }
-    pub fn invalid(message: impl Into<String>) -> Self { Self::new("manifest_invalid", message) }
-    pub fn not_found(id: &str) -> Self { Self::new("connector_not_found", format!("conector {id:?} não cadastrado")) }
+    pub fn new(kind: AdminKind, message: impl Into<String>) -> Self { Self { kind, message: message.into() } }
+    pub fn invalid(message: impl Into<String>) -> Self { Self::new(AdminKind::ManifestInvalid, message) }
+    pub fn not_found(id: &str) -> Self { Self::new(AdminKind::ConnectorNotFound, format!("conector {id:?} não cadastrado")) }
     pub fn io(action: &str, error: &std::io::Error) -> Self {
-        Self::new("registry_unavailable", format!("{action}: {:?}", error.kind()))
+        Self::new(AdminKind::RegistryUnavailable, format!("{action}: {:?}", error.kind()))
     }
-    pub fn code(&self) -> &'static str { self.code }
+    pub fn code(&self) -> &'static str { self.kind.as_str() }
 }
 
 impl std::fmt::Display for AdminError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}: {}", self.code, self.message) }
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}: {}", self.code(), self.message) }
 }
 
 impl std::error::Error for AdminError {}

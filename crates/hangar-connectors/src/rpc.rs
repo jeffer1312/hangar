@@ -6,10 +6,7 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWrite, AsyncWriteExt};
 /// Lê uma mensagem (sem o `\n`). `None` é o fim limpo da entrada; linha pela metade no fim é
 /// mensagem truncada, e linha acima do teto é recusada sem ser cortada.
 pub async fn read_message<R: AsyncBufRead + Unpin>(reader: &mut R) -> Result<Option<Vec<u8>>, ConnectorError> {
-    read_message_limited(reader, MAX_MESSAGE_BYTES).await
-}
-
-pub async fn read_message_limited<R: AsyncBufRead + Unpin>(reader: &mut R, limit: usize) -> Result<Option<Vec<u8>>, ConnectorError> {
+    let limit = MAX_MESSAGE_BYTES;
     let mut line = Vec::new();
     loop {
         let buffer = reader.fill_buf().await
