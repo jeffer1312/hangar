@@ -579,7 +579,8 @@ pub(crate) fn account_fact(row: &Value, spent: &crate::session_write::limit_swit
     let dir = account_dir(row);
     let mark = dir.and_then(|dir| spent.get(&crate::list::discover::real(dir)).or_else(|| spent.get(dir)));
     let spent_until = mark.and_then(|mark| mark.blocking_until(None, now));
-    let spent_cleared = spent_until.is_some() && mark.and_then(|mark| mark.blocking_until(Some(row), now)).is_none();
+    let spent_cleared = spent_until.is_some() && mark.is_some_and(|mark| mark.blocking_until(Some(row), now).is_none()
+        || dir.is_some_and(|dir| mark.relogged(|| crate::session_write::limit_switch::relogin_at(dir))));
     let text = |v: &Value, max: usize| clean(s, v.as_str().unwrap_or("?"), max);
     let windows = row["janelas"].as_array().map(|w| w.iter().filter(|w| w["por_modelo"] != true)
         .map(|w| (text(&w["rotulo"], 20), w["pct"].as_f64(), w["reset_ts"].as_f64())).collect()).unwrap_or_default();

@@ -3203,6 +3203,18 @@ fn a_spent_or_expired_default_account_is_switched() {
     assert_eq!(resolved.spec.account, Account::Claude { config_dir: "<ROOT>/home/.claude-b".into() });
 }
 
+/// A janela de um modelo cheia não tira a conta: a regra dos 95% vale pelas janelas gerais.
+#[test]
+fn a_full_model_window_does_not_switch_the_account() {
+    let mut fixture = fixture_named("create_quota_switch");
+    let mut model_full = claude_row(".claude", "default", true, "lida", 50.0);
+    model_full["janelas"].as_array_mut().unwrap().push(json!({"rotulo": "Fable", "pct": 97.0, "por_modelo": true}));
+    fixture["scenario"]["fakes"]["quotas"] = json!([model_full, claude_row(".claude-b", "b", false, "lida", 20.0)]);
+    let resolved = open_with(&fixture, &FixtureFacts::of(&fixture)).unwrap();
+    assert_eq!(resolved.spec.account, Account::Default);
+    assert!(resolved.warnings.is_empty());
+}
+
 #[test]
 fn an_account_with_quota_after_its_limit_opens_without_switching() {
     use crate::session_write::limit_switch::SpentMark;
@@ -3213,7 +3225,7 @@ fn an_account_with_quota_after_its_limit_opens_without_switching() {
         row["ts"] = json!(1500.0);
         fixture["scenario"]["fakes"]["quotas"] = json!([row,claude_row(".claude-b","b",false,"lida",20.0)]);
         let facts = FixtureFacts { now:2000.0,
-            spent:[("<ROOT>/home/.claude".into(),SpentMark::Recorded {until:5000.0,at:Some(1000.0)})].into(),
+            spent:[("<ROOT>/home/.claude".into(),SpentMark::Recorded {until:5000.0,at:Some(1000.0),login:None})].into(),
             ..FixtureFacts::of(&fixture) };
         let resolved = open_with(&fixture,&facts).unwrap();
         assert_eq!(resolved.spec.account,expected,"{name}");
