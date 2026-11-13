@@ -27,6 +27,10 @@ vi.mock('expo-secure-store', () => ({ getItemAsync: vi.fn(async () => null), set
 vi.mock('expo-blur', async () => ({ BlurTargetView: (await import('react-native')).View }));
 vi.mock('expo-linear-gradient', async () => ({ LinearGradient: (await import('react-native')).View }));
 vi.mock('expo-file-system', () => ({ Directory: class {}, File: class {}, Paths: { cache: '/tmp' } }));
+vi.mock('react-native-mmkv', () => ({ createMMKV: () => {
+  const store = new Map<string, string>();
+  return { getString: (k: string) => store.get(k), set: (k: string, v: string) => { store.set(k, v); }, remove: (k: string) => { store.delete(k); } };
+} }));
 vi.mock('sonner-native', () => ({ toast: { error: vi.fn(), success: vi.fn() }, Toaster: () => null }));
 vi.mock('../../stores/aparencia', async () => {
   const { create } = await import('zustand');
