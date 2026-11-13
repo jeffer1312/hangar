@@ -174,6 +174,7 @@ pub fn plan(spec: &SessionSpec, meta: &Value, ctx: &Context) -> Result<Launch, R
     env.insert("HANGAR_CANO_OWNER".into(), ctx.env.home.to_string_lossy().into_owned());
     // A conta padrão vai sem a variável, como no terminal: com ela o CLI lê `~/.claude/.claude.json`, sem o MCP `hangar`.
     let server = ctx.env.base.get("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()).map(String::as_str);
+    env.remove("CLAUDE_CONFIG_DIR");
     if let Some(dir) = crate::session_open::terminal::config_dir_to_export(server, &ctx.env.home.join(".claude"), cfg!(windows), spec.account.config_dir()) {
         env.insert("CLAUDE_CONFIG_DIR".into(), dir);
     }
@@ -350,6 +351,9 @@ mod tests {
         let mut server = case.server_env();
         assert_eq!(launch(&server, &format!("{home}/.claude")), None);
         assert_eq!(launch(&server, &format!("{home}/.claude/")), None, "a mesma pasta com barra no fim");
+        server.insert("CLAUDE_CONFIG_DIR".into(), String::new());
+        assert_eq!(launch(&server, &format!("{home}/.claude")), None, "vazia no servidor não chega ao CLI");
+        server.remove("CLAUDE_CONFIG_DIR");
         assert_eq!(launch(&server, &format!("{home}/.claude-b")).as_deref(), Some(format!("{home}/.claude-b").as_str()));
         server.insert("CLAUDE_CONFIG_DIR".into(), format!("{home}/outra"));
         assert_eq!(launch(&server, &format!("{home}/.claude")).as_deref(), Some(format!("{home}/.claude").as_str()),
