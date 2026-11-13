@@ -176,34 +176,43 @@ impl TaskPage {
         let seq = self.load_seq;
         self.loading = true;
         self.error = None;
+        // As sessões só servem ao editor: a lista de tarefas não espera a leitura delas.
         let api = self.api.clone();
         run(
             &self.runtime,
-            async move {
-                Ok(tokio::join!(
-                    api.server_read(&["scheduled-tasks"], &[], 20),
-                    api.server_read(&["sessions"], &[], 20)
-                ))
-            },
+            async move { Ok(api.server_read(&["sessions"], &[], 20).await) },
             window,
             cx,
             move |this, result, _, _| {
                 if seq != this.load_seq {
                     return;
                 }
-                let (tasks, sessions) = match result {
-                    Ok(pair) => pair,
+                this.sessions = Some(match result {
+                    Ok(sessions) => sessions.map_err(|e| failure(&e)).and_then(|v| {
+                        serde_json::from_value(v).map_err(|_| tr("invalid_response"))
+                    }),
+                    Err(error) => Err(failure(&error)),
+                });
+            },
+        );
+        let api = self.api.clone();
+        run(
+            &self.runtime,
+            async move { Ok(api.server_read(&["scheduled-tasks"], &[], 20).await) },
+            window,
+            cx,
+            move |this, result, _, _| {
+                if seq != this.load_seq {
+                    return;
+                }
+                this.loading = false;
+                let tasks = match result {
+                    Ok(tasks) => tasks,
                     Err(error) => {
-                        this.loading = false;
                         this.error = Some(failure(&error));
                         return;
                     }
                 };
-                this.loading = false;
-                this.sessions =
-                    Some(sessions.map_err(|e| failure(&e)).and_then(|v| {
-                        serde_json::from_value(v).map_err(|_| tr("invalid_response"))
-                    }));
                 match tasks.and_then(|v| {
                     serde_json::from_value::<Snapshot>(v)
                         .map_err(|_| Failure::local(tr("invalid_response")))

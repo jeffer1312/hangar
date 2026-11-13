@@ -112,6 +112,14 @@ impl Error {
             message: "A tarefa não existe mais.".into(),
         }
     }
+    pub(crate) fn request_conflict() -> Self {
+        Self {
+            status: 409,
+            code: "scheduled_request_conflict",
+            message: "Esta criação já foi gravada com outro conteúdo. Atualize a lista e edite a tarefa criada."
+                .into(),
+        }
+    }
     pub(crate) fn conflict() -> Self {
         Self {
             status: 409,

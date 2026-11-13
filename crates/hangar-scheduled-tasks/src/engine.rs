@@ -60,7 +60,7 @@ impl Engine {
         if let Some(request_id) = request_id
             && let Some(task) = self.store.find_request(request_id)?
         {
-            return Ok(task);
+            return crate::store::repeated(task, &input);
         }
         input.target = self.host.prepare_target(input.target).await?;
         self.store
@@ -79,8 +79,22 @@ impl Engine {
     pub fn reserve(&self, id: &str, manual: bool) -> Result<Attempt, Error> {
         self.store.reserve(id, self.now(), &self.timezone, manual)
     }
-    pub async fn dispatch(&self, attempt: Attempt) -> Result<bool, Error> {
+    pub async fn dispatch(&self, attempt: Attempt) -> bool {
         let outcome = self.host.dispatch(attempt.clone()).await;
-        self.store.finish(&attempt, outcome)
+        self.finish(&attempt, outcome).await
+    }
+    /// O envio já aconteceu: falha do armazenamento repete só a gravação, senão a reserva prende a tarefa.
+    pub async fn finish(&self, attempt: &Attempt, outcome: Outcome) -> bool {
+        let mut wait = std::time::Duration::from_secs(1);
+        loop {
+            match self.store.finish(attempt, outcome.clone()) {
+                Ok(saved) => return saved,
+                Err(error) => {
+                    tracing::warn!(code = error.code, "resultado da tarefa agendada não gravado; nova tentativa");
+                    tokio::time::sleep(wait).await;
+                    wait = (wait * 2).min(std::time::Duration::from_secs(60));
+                }
+            }
+        }
     }
 }

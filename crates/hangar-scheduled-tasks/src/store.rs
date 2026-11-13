@@ -68,7 +68,7 @@ impl Store {
         self.create_with_request(input, None, now, zone)
     }
 
-    /// A tarefa já criada com este `request_id`.
+    /// A tarefa já criada com este `request_id`; a resposta passa por `repeated`.
     pub fn find_request(&self, request_id: &str) -> Result<Option<Task>, Error> {
         validate_request_id(request_id)?;
         let connection = self.connection.lock().map_err(|_| Error::unavailable())?;
@@ -90,7 +90,7 @@ impl Store {
             if let Some(request_id) = request_id
                 && let Some(task) = read_request(tx, request_id)?
             {
-                return Ok(task);
+                return repeated(task, &input);
             }
             validate(&input)?;
             require_future_once(&input, now)?;
@@ -345,6 +345,35 @@ fn check_revision(task: &Task, revision: u64) -> Result<(), Error> {
         Ok(())
     } else {
         Err(Error::conflict())
+    }
+}
+/// A repetição só devolve a tarefa do mesmo pedido; a sessão preparada ganhou chave e conversa que o cliente não manda.
+pub(crate) fn repeated(task: Task, input: &TaskInput) -> Result<Task, Error> {
+    let stored = &task.input;
+    let target = match (&stored.target, &input.target) {
+        (
+            Target::Session {
+                name: a,
+                session_key: key_a,
+                ..
+            },
+            Target::Session {
+                name: b,
+                session_key: key_b,
+                ..
+            },
+        ) => a == b && (key_b.is_none() || key_a == key_b),
+        (a, b) => a == b,
+    };
+    if target
+        && stored.name == input.name
+        && stored.prompt == input.prompt
+        && stored.enabled == input.enabled
+        && stored.schedule == input.schedule
+    {
+        Ok(task)
+    } else {
+        Err(Error::request_conflict())
     }
 }
 fn read(connection: &Connection, id: &str) -> Result<Task, Error> {

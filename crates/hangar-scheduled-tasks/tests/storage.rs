@@ -232,13 +232,19 @@ fn storage_repeated_request_id_returns_the_first_task_even_on_an_old_file() {
     let first = store
         .create_with_request(input(), Some("req-1"), now, &Utc)
         .unwrap();
-    let mut changed = input();
-    changed.name = "Outra".into();
     let again = store
-        .create_with_request(changed, Some("req-1"), now, &Utc)
+        .create_with_request(input(), Some("req-1"), now, &Utc)
         .unwrap();
     assert_eq!(again.id, first.id);
-    assert_eq!(again.input.name, first.input.name);
+    let mut changed = input();
+    changed.name = "Outra".into();
+    let conflict = store
+        .create_with_request(changed, Some("req-1"), now, &Utc)
+        .unwrap_err();
+    assert_eq!(
+        (conflict.status, conflict.code),
+        (409, "scheduled_request_conflict")
+    );
     assert_eq!(store.list().unwrap().len(), 1);
     assert_eq!(store.find_request("req-1").unwrap().unwrap().id, first.id);
     store

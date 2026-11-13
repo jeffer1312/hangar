@@ -83,12 +83,7 @@ impl Dispatcher {
         let child = attempt.clone();
         let id = children
             .spawn(async move {
-                if let Err(error) = engine.dispatch(child).await {
-                    tracing::warn!(
-                        code = error.code,
-                        "resultado da tarefa agendada não gravado; reserva conservada"
-                    );
-                }
+                engine.dispatch(child).await;
             })
             .id();
         attempts.insert(id, attempt);
@@ -100,8 +95,10 @@ impl Dispatcher {
             error: Some("O envio foi interrompido. Confira a conversa antes de repetir.".into()),
             session: None,
         };
-        if let Err(error) = self.engine.store.finish(attempt, outcome) {
-            tracing::warn!(code = error.code, "resultado do envio interrompido não gravado");
-        }
+        let engine = self.engine.clone();
+        let attempt = attempt.clone();
+        tokio::spawn(async move {
+            engine.finish(&attempt, outcome).await;
+        });
     }
 }

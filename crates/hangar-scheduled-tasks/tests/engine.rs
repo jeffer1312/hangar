@@ -63,7 +63,7 @@ async fn engine_transport_uncertainty_is_not_resent_and_new_occurrences_collapse
         .unwrap();
     *clock.0.lock().unwrap() = now + chrono::Duration::hours(8);
     let attempt = engine.reserve(&task.id, false).unwrap();
-    engine.dispatch(attempt).await.unwrap();
+    assert!(engine.dispatch(attempt).await);
     assert_eq!(host.calls.lock().unwrap().len(), 1);
     assert_eq!(
         engine.store.list().unwrap()[0].last_status,
@@ -72,7 +72,7 @@ async fn engine_transport_uncertainty_is_not_resent_and_new_occurrences_collapse
     assert!(engine.reserve(&task.id, false).is_err());
     *clock.0.lock().unwrap() = now + chrono::Duration::hours(9);
     let attempt = engine.reserve(&task.id, false).unwrap();
-    engine.dispatch(attempt).await.unwrap();
+    assert!(engine.dispatch(attempt).await);
     assert_eq!(host.calls.lock().unwrap().len(), 2);
     assert_eq!(
         engine.store.list().unwrap()[0].next_run_at.as_deref(),
