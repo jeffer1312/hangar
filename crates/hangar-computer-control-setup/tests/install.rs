@@ -313,6 +313,44 @@ mod linux {
         assert_eq!(s.read(&s.paths.install_json()).as_deref(), Some("{\n  \"tag\": \"v0.7.0\"\n}"));
     }
 
+    /// D3.3 com P6: só release MAIS NOVA troca. Mais velha, igual ou pré-release da instalada não
+    /// trocam; tag incomparável não troca e vai ao diário; `install.json` sem tag é build própria.
+    #[tokio::test]
+    async fn p6_only_a_newer_release_swaps() {
+        for (installed, release, swaps) in [
+            ("v0.7.0", "v0.6.0", false),
+            ("v0.7.0", "v0.7.0", false),
+            ("v0.8.0", "v0.8.0-rc.1", false),
+            ("v0.8.0-rc.1", "v0.8.0", true),
+            ("v0.9.0", "v0.10.0", true),
+        ] {
+            let s = Scene::new().await;
+            s.installed(installed);
+            s.publish(release, "", true);
+            let expected = if swaps { Swapped::Yes { tag: release.into() } } else { Swapped::No };
+            assert_eq!(s.update(&latest_policy()).await.unwrap(), expected, "{installed} -> {release}");
+            let binary = if swaps { format!("ELF-{release}") } else { format!("ELF-{installed}") };
+            assert_eq!(s.read(&s.paths.binary()), Some(binary), "{installed} -> {release}");
+            assert!(s.diary_codes().is_empty());
+        }
+
+        let s = Scene::new().await;
+        s.installed("v0.7.0");
+        s.publish("nightly", "", true);
+        assert_eq!(s.update(&latest_policy()).await.unwrap_err().code, "computer_control_tag_incomparavel");
+        assert_eq!(s.read(&s.paths.binary()).as_deref(), Some("ELF-v0.7.0"));
+        assert_eq!(s.diary_codes(), ["computer_control_tag_incomparavel"]);
+        assert_eq!(s.requests().len(), 1, "nada baixado");
+
+        let s = Scene::new().await;
+        s.installed("v0.7.0");
+        std::fs::write(s.paths.install_json(), "{}").unwrap();
+        s.publish("v0.8.0", "", true);
+        assert_eq!(s.update(&latest_policy()).await.unwrap(), Swapped::No);
+        assert!(s.requests().is_empty(), "build própria: nem consulta");
+        assert_eq!(s.read(&s.paths.binary()).as_deref(), Some("ELF-v0.7.0"));
+    }
+
     /// D3.4, D3.5: troca com um processo vivo rodando o binário velho; o processo não cai, o novo
     /// toma o lugar e o velho fica como `.anterior` (um só, sobrescrito a cada troca).
     #[tokio::test]

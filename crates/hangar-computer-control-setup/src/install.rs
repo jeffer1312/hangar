@@ -22,6 +22,7 @@ const RELEASE_FAILED: &str = "computer_control_release_failed";
 const NO_BINARY: &str = "computer_control_release_sem_binario";
 const DISK_FAILED: &str = "computer_control_install_io_failed";
 const NEWS_FAILED: &str = "computer_control_news_failed";
+const TAG_INCOMPARABLE: &str = "computer_control_tag_incomparavel";
 
 // O `\s` do Python cobre também `\x1c-\x1f`.
 static WRAPPED_AGENT: LazyLock<Regex> = LazyLock::new(|| {
@@ -99,7 +100,7 @@ pub async fn install_if_missing(paths: &Paths, http: &reqwest::Client, github: &
 }
 
 /// O tique de hora em hora: com automações ligadas, modo pacote e canal `latest`, troca o binário
-/// quando a tag da release difere da do `install.json`, mesmo com processo do hcu vivo.
+/// quando a release é mais nova que a do `install.json`, mesmo com processo do hcu vivo.
 ///
 /// # Errors
 /// Rede, GitHub, release sem binário ou disco; já gravada no diário.
@@ -135,18 +136,33 @@ pub(crate) fn install_error(paths: &Paths) -> Option<String> {
     value.get("code")?.as_str().map(str::to_owned)
 }
 
-/// Baixa a release mais recente e a põe no lugar. `only_if_different`: tag igual à instalada não troca.
-async fn latest(paths: &Paths, http: &reqwest::Client, github: &Github, only_if_different: bool) -> Result<Option<Done>, Error> {
-    let url = format!("{}/repos/{REPO}/releases/latest", github.api);
-    let release = parse_release(&get(http, &url, RELEASE_TIMEOUT).await?).ok_or_else(|| {
-        Error { status: 502, code: RELEASE_FAILED, msg: "a release mais recente veio sem tag".into(), params: json!({"error": "sem tag_name"}) }
-    })?;
+/// Baixa a release mais recente e a põe no lugar. `only_if_newer`: só troca por release mais nova
+/// que a do `install.json`; sem tag lá é build própria e fica.
+async fn latest(paths: &Paths, http: &reqwest::Client, github: &Github, only_if_newer: bool) -> Result<Option<Done>, Error> {
     let before = {
         let paths = paths.clone();
         off_thread(move || installed_tag(&paths)).await?
     };
-    if only_if_different && before.as_deref() == Some(release.tag.as_str()) {
+    if only_if_newer && before.is_none() {
         return Ok(None);
+    }
+    let url = format!("{}/repos/{REPO}/releases/latest", github.api);
+    let release = parse_release(&get(http, &url, RELEASE_TIMEOUT).await?).ok_or_else(|| {
+        Error { status: 502, code: RELEASE_FAILED, msg: "a release mais recente veio sem tag".into(), params: json!({"error": "sem tag_name"}) }
+    })?;
+    if only_if_newer && let Some(installed) = &before {
+        match newer(&release.tag, installed) {
+            Some(true) => {}
+            Some(false) => return Ok(None),
+            None => {
+                return Err(Error {
+                    status: 502,
+                    code: TAG_INCOMPARABLE,
+                    msg: format!("não dá para comparar a release {} com a instalada {installed}", release.tag),
+                    params: json!({"tag": release.tag, "installed": installed}),
+                });
+            }
+        }
     }
     if !release.linux {
         return Err(Error {
@@ -195,6 +211,14 @@ fn parse_release(bytes: &[u8]) -> Option<Release> {
         .and_then(Value::as_array)
         .is_some_and(|assets| assets.iter().any(|asset| asset.get("name").and_then(Value::as_str) == Some(LINUX_ASSET)));
     Some(Release { tag, body, linux })
+}
+
+/// `vX.Y.Z` por versão semântica (pré-release antes da final); `None` quando um lado não é versão.
+fn newer(release: &str, installed: &str) -> Option<bool> {
+    let parse = |tag: &str| semver::Version::parse(tag.strip_prefix('v').unwrap_or(tag)).ok();
+    // A metadata de build (`+…`) não conta, e `Prerelease` vazia é maior que qualquer pré-release.
+    let key = |v: semver::Version| (v.major, v.minor, v.patch, v.pre);
+    Some(key(parse(release)?) > key(parse(installed)?))
 }
 
 fn installed_tag(paths: &Paths) -> Option<String> {
@@ -464,6 +488,11 @@ mod tests {
         }
 
         #[test]
+        fn newer_never_panics(release in "\\PC{0,30}", installed in "\\PC{0,30}") {
+            let _ = newer(&release, &installed);
+        }
+
+        #[test]
         fn shell_quote_is_safe_for_any_text(text in "\\PC{0,40}") {
             let quoted = shell_quote(&text);
             prop_assert!(!quoted.is_empty());
@@ -477,6 +506,22 @@ mod tests {
         }
         let release = parse_release(br#"{"tag_name": "v1", "body": null, "assets": [{"name": "hangar-computer-control-linux-x86_64"}]}"#);
         assert_eq!(release, Some(Release { tag: "v1".into(), body: String::new(), linux: true }));
+    }
+
+    #[test]
+    fn newer_compares_semantic_versions() {
+        assert_eq!(newer("v0.10.0", "v0.9.9"), Some(true));
+        assert_eq!(newer("v0.7.0", "v0.7.0"), Some(false));
+        assert_eq!(newer("v0.6.9", "v0.7.0"), Some(false));
+        assert_eq!(newer("v0.8.0", "v0.8.0-rc.1"), Some(true));
+        assert_eq!(newer("v0.8.0-rc.1", "v0.8.0"), Some(false));
+        assert_eq!(newer("v0.8.0-rc.2", "v0.8.0-rc.1"), Some(true));
+        assert_eq!(newer("v0.8.0-rc.1", "v0.7.0"), Some(true));
+        assert_eq!(newer("v0.8.0+build.2", "v0.8.0+build.1"), Some(false));
+        assert_eq!(newer("0.8.0", "v0.7.0"), Some(true));
+        assert_eq!(newer("nightly", "v0.7.0"), None);
+        assert_eq!(newer("v0.8.0", "33c5fbf"), None);
+        assert_eq!(newer("v0.8", "v0.7.0"), None);
     }
 
     #[test]
