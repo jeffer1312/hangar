@@ -34,6 +34,9 @@ mod push_expo;
 mod artifacts;
 #[cfg(unix)]
 mod workflows;
+// As capturas do Python são de Linux x86_64 (caminhos, `local_available`, `unavailable`).
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod computer_control;
 #[cfg(unix)]
 mod session_tools;
 mod archive_history;

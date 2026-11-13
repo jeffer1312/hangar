@@ -48,7 +48,7 @@ fn write(
     .map_err(|e| e.to_string())
 }
 impl RuntimeConfig {
-    fn jev_env(&self) -> Map<String, Value> {
+    pub(crate) fn jev_env(&self) -> Map<String, Value> {
         let mut output = Map::new();
         let key = self
             .get("jev_api_key")
