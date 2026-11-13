@@ -493,9 +493,10 @@ fn create_worktree_in(
     // checkout para no meio. Fica no repositório porque todo git rodado depois na worktree precisa.
     #[cfg(windows)]
     if command(cwd, &["config", "--get", "core.longpaths"]).is_ok_and(|o| o.code == 1)
-        && !command(cwd, &["config", "--local", "core.longpaths", "true"]).is_ok_and(|o| o.code == 0)
+        && !command(cwd, &["config", "--local", "core.longpaths", "true"])
+            .is_ok_and(|o| o.code == 0)
     {
-        tracing::warn!("core.longpaths não gravado no repositório");
+        tracing::warn!(code = "worktree_longpaths_not_set", "core.longpaths não gravado no repositório");
     }
     let created = if new_branch {
         let from = if local.iter().any(|b| b == start.as_str()) {
@@ -522,8 +523,12 @@ fn create_worktree_in(
     if created.code != 0 {
         // O git desfaz a pasta da worktree que falhou, mas deixa a branch do `-b`: a nova
         // tentativa com o mesmo nome esbarraria em "já existe uma branch".
-        if branch_created && !command(cwd, &["branch", "-D", branch]).is_ok_and(|o| o.code == 0) {
-            tracing::warn!("branch da worktree que falhou não apagada");
+        let ok = |args: &[&str]| command(cwd, args).is_ok_and(|o| o.code == 0);
+        if branch_created
+            && ok(&["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")])
+            && !ok(&["branch", "-D", branch])
+        {
+            tracing::warn!(code = "worktree_branch_not_dropped", "branch da worktree que falhou não apagada");
         }
         return Err(error(
             409,
