@@ -41,16 +41,21 @@ pub(crate) fn known_from(paths: &Paths, active: Option<Map<String, Value>>) -> R
 /// Conta com arquivo de 0 bytes vale `{}`, como conta nunca aberta; o principal vazio é erro.
 pub(crate) fn read_entry(path: PathBuf, account: bool) -> Result<FileEntry, Error> {
     let data = read_object(&path, account)?;
+    let entry = entry_of(&path, &data)?;
+    Ok(FileEntry { path, data, entry })
+}
+
+/// A entrada do MCP num `.claude.json` já lido; `mcpServers` verdadeiro e não objeto é erro.
+pub(crate) fn entry_of(path: &Path, data: &Map<String, Value>) -> Result<Option<Map<String, Value>>, Error> {
     let servers = data.get("mcpServers").filter(|v| truthy(v));
     if servers.is_some_and(|v| !v.is_object()) {
         return Err(Error::read(
-            &path,
+            path,
             "mcpServers inválido",
             format!("mcpServers em {} não é um objeto JSON", path.display()),
         ));
     }
-    let entry = servers.and_then(|v| v.get(NAME)).and_then(Value::as_object).cloned();
-    Ok(FileEntry { path, data, entry })
+    Ok(servers.and_then(|v| v.get(NAME)).and_then(Value::as_object).cloned())
 }
 
 /// Ausente = `{}`; ilegível, JSON inválido ou não objeto = `erro_computer_control_read`.
@@ -58,15 +63,22 @@ pub(crate) fn read_object(path: &Path, empty_ok: bool) -> Result<Map<String, Val
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Map::new()),
-        Err(error) => {
-            let error = crate::strerror(&error);
-            return Err(Error::read(path, &error, format!("não consegui ler {}: {error}", path.display())));
-        }
+        Err(error) => return Err(unreadable(path, &error)),
     };
+    object_of(path, &bytes, empty_ok)
+}
+
+pub(crate) fn unreadable(path: &Path, error: &std::io::Error) -> Error {
+    let error = crate::strerror(error);
+    Error::read(path, &error, format!("não consegui ler {}: {error}", path.display()))
+}
+
+/// O objeto JSON de um arquivo já lido, com os mesmos erros de `read_object`.
+pub(crate) fn object_of(path: &Path, bytes: &[u8], empty_ok: bool) -> Result<Map<String, Value>, Error> {
     if empty_ok && bytes.is_empty() {
         return Ok(Map::new());
     }
-    match parse(&bytes) {
+    match parse(bytes) {
         Some(Value::Object(data)) => Ok(data),
         Some(_) => Err(Error::read(path, "", format!("{} não é um objeto JSON", path.display()))),
         None => {

@@ -82,7 +82,7 @@ pub fn state(paths: &Paths, facts: &Facts) -> Result<Value, Error> {
 }
 
 /// `env` falso vale `{}`; verdadeiro e não objeto é erro com código (o Python caía em 500 cru).
-fn env_of(entry: Option<&Map<String, Value>>, paths: &Paths, active: bool) -> Result<Map<String, Value>, Error> {
+pub(crate) fn env_of(entry: Option<&Map<String, Value>>, paths: &Paths, active: bool) -> Result<Map<String, Value>, Error> {
     match entry.and_then(|e| e.get("env")).filter(|v| truthy(v)) {
         None => Ok(Map::new()),
         Some(Value::Object(env)) => Ok(env.clone()),

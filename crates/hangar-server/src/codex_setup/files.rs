@@ -1,8 +1,12 @@
 //! Escritas comparadas e backups restritos; uma colisão conserva o arquivo externo.
 use crate::accounts::environment::AccountEnvironment;
-#[path="files_replace.rs"]
-mod replacement;
-pub(crate) fn replace_preserving(source:&std::path::Path,target:&std::path::Path,expected:Option<&[u8]>,link:Option<&std::path::Path>)->Result<(),Error>{replacement::replace(source,target,expected,link)}
+pub(crate) fn replace_preserving(source:&std::path::Path,target:&std::path::Path,expected:Option<&[u8]>,link:Option<&std::path::Path>)->Result<(),Error>{
+    hangar_core::fs_replace::replace(source,target,expected,link).map_err(|error| match error {
+        hangar_core::fs_replace::Error::Io(e) => Error::Io(e),
+        hangar_core::fs_replace::Error::Changed(e) => Error::Changed(e),
+        hangar_core::fs_replace::Error::Displaced(e) => Error::Displaced(e),
+    })
+}
 use serde_json::{Value, json};
 
 use std::{

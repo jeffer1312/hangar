@@ -1,20 +1,25 @@
-//! Computer Use (MCP `hangar-computer-control`): caminhos, leitura dos `.claude.json`, alvos e SSH.
+//! Computer Use (MCP `hangar-computer-control`): caminhos, leitura dos `.claude.json`, alvos, SSH e o
+//! escritor único da entrada do MCP (ligar, desligar e o repasse do Jev).
 //! Nada aqui lê `$HOME` nem a lista de contas: o servidor passa os dois em `Paths`.
 #![forbid(unsafe_code)]
 
 mod files;
+mod save;
 mod ssh;
 mod state;
 mod targets;
+mod writer;
 
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
 pub use files::{FileEntry, known_entry, read_entries};
+pub use save::{Aux, Mode, SaveRequest, save};
 pub use ssh::{ssh_hosts, test_host, windows_setup};
 pub use state::{Facts, state};
 pub use targets::{TargetRequest, Transport, create_target, targets};
+pub use writer::{Entry, remove_entry, sync_jev, write_entry, write_json};
 
 /// Nome da entrada em `mcpServers` e do binário.
 pub const NAME: &str = "hangar-computer-control";
@@ -76,6 +81,10 @@ impl Paths {
     /// Entrada guardada ao desligar: a marca de "desligado à mão".
     pub fn parked_file(&self) -> PathBuf {
         self.home.join(".hangar").join("computer-control.json")
+    }
+    /// O modelo do Computer Use de antes do auxiliar do Jev, por arquivo de origem.
+    pub fn old_llm_file(&self) -> PathBuf {
+        self.home.join(".hangar").join("computer-use-llm-antigo.json")
     }
     pub fn install_dir(&self) -> PathBuf {
         self.home.join(".hangar").join("computer-control")

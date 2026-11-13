@@ -349,14 +349,16 @@ async fn get_reads_lone_surrogate() {
     })))));
 }
 
-/// `PUT` e `/install` ainda são do Python (Tasks 6 e 7): o Rust repassa.
+/// `/install` ainda é do Python (Task 7): o Rust repassa.
 #[tokio::test]
-async fn put_and_install_still_go_to_python() {
+async fn install_still_goes_to_python() {
     let s = Scene::new().await;
-    assert_eq!(s.call("PUT", "/api/computer-control", Some(json!({"enabled": false}))).await.0, StatusCode::IM_A_TEAPOT);
     assert_eq!(s.call("POST", "/api/computer-control/install", None).await.0, StatusCode::IM_A_TEAPOT);
-    assert_eq!(s.hits(), 2);
+    assert_eq!(s.hits(), 1);
 }
+
+#[path = "computer_control_put.rs"]
+mod put;
 
 /// D1.1: `%2F` no caminho não escapa da conferência do dono.
 #[tokio::test]

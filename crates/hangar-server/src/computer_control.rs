@@ -1,5 +1,5 @@
 //! Rotas do Computer Use (`crates/hangar-computer-control-setup`): só o dono, conferido aqui; o
-//! convidado recebe 403. `PUT` e `/install` ainda seguem ao Python.
+//! convidado recebe 403. `/install` ainda segue ao Python.
 use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
@@ -27,6 +27,7 @@ pub(crate) fn matches(method: &Method, path: &str) -> bool {
     matches!(
         (method.as_str(), normalized(path).as_str()),
         ("GET", "/api/computer-control" | "/api/computer-control/windows-setup")
+            | ("PUT", "/api/computer-control")
             | ("POST", "/api/computer-control/targets" | "/api/computer-control/test-host")
     )
 }
@@ -66,6 +67,17 @@ async fn reply(st: Arc<AppState>, peer: SocketAddr, req: Request) -> Response {
     let env = st.accounts.env.clone();
     let path = normalized(req.uri().path());
     let result = match path.as_str() {
+        "/api/computer-control" if *req.method() == Method::PUT => {
+            let Some(body) = body::<setup::SaveRequest>(req).await else {
+                return crate::session_write::invalid_body(&headers);
+            };
+            let state = st.clone();
+            blocking(&st, move |paths| {
+                let config = crate::config_sync::runtime::RuntimeConfig::from_state(&state).map_err(setup::Error::io)?;
+                setup::save(paths, &facts(&state)?, &config.jev_aux(), &body)
+            })
+            .await
+        }
         "/api/computer-control" => blocking(&st, |_| Ok(())).await,
         "/api/computer-control/targets" => {
             let Some(body) = body::<setup::TargetRequest>(req).await.filter(setup::TargetRequest::valid) else {

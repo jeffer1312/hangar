@@ -1,8 +1,31 @@
 //! A troca conserva a versão deslocada; conflito não tenta desfazer sobre uma terceira escrita.
-use super::Error;
 use std::{fs, io, path::Path};
 
-pub(super) fn replace(source: &Path, target: &Path, expected: Option<&[u8]>, link: Option<&Path>) -> Result<(), Error> {
+#[derive(Debug)]
+pub enum Error {
+    Io(io::Error),
+    /// O destino mudou antes da troca; nada foi gravado.
+    Changed(String),
+    /// A versão que saiu do lugar não era a esperada e ficou guardada no caminho da mensagem.
+    Displaced(String),
+}
+impl From<io::Error> for Error {
+    fn from(e: io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "{e}"),
+            Self::Changed(e) | Self::Displaced(e) => write!(f, "{e}"),
+        }
+    }
+}
+impl std::error::Error for Error {}
+
+/// Põe `source` no lugar de `target` só se o que sai de lá for `expected` (e o link `link`).
+pub fn replace(source: &Path, target: &Path, expected: Option<&[u8]>, link: Option<&Path>) -> Result<(), Error> {
     if expected.is_none() && link.is_none() {
         return move_new(source,target).map_err(|error| if error.kind()==io::ErrorKind::AlreadyExists {
             Error::Changed(format!("Arquivo criado durante a integração: {}",target.display()))
