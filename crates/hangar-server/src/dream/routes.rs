@@ -246,7 +246,9 @@ async fn status(st: &Arc<AppState>) -> Response {
             list.push(machine);
         }
     }
-    let ids: std::collections::BTreeSet<&String> = state.projects.keys().chain(machines.keys()).collect();
+    // O projeto juntado a outro some da lista: as sessões dele já contam no destino.
+    let ids: std::collections::BTreeSet<&String> =
+        state.projects.keys().chain(machines.keys()).filter(|id| !state.aliases.contains_key(*id)).collect();
     let projects: Vec<Value> = ids
         .into_iter()
         .map(|id| {
@@ -381,10 +383,15 @@ async fn undo(st: &Arc<AppState>, run_id: &str, project: Option<&str>) -> Respon
         }
     }
     // O que a rodada leu volta a ser novo: o próximo sonho relê o que foi desfeito.
+    // Só projeto que voltou em todos os lugares relê as sessões; com um lugar falhando a memória
+    // ficaria meio antes, meio depois.
     let restored: Vec<&round::RunRecord> = records
         .iter()
         .filter(|r| project.map_or(true, |p| p == r.project))
-        .filter(|r| results.iter().any(|x| x["project"] == r.project.as_str() && x["ok"] == true))
+        .filter(|r| {
+            let mine: Vec<&Value> = results.iter().filter(|x| x["project"] == r.project.as_str()).collect();
+            !mine.is_empty() && mine.iter().all(|x| x["ok"] == true)
+        })
         .collect();
     if !restored.is_empty() {
         match load_state(st) {
@@ -405,7 +412,32 @@ async fn undo(st: &Arc<AppState>, run_id: &str, project: Option<&str>) -> Respon
             Err(e) => return failure(&e),
         }
     }
+    if project.is_none() {
+        if let Some(result) = undo_user_memory(st, run_id, &me).await {
+            results.push(result);
+        }
+    }
+    if results.is_empty() {
+        return failure("dream_run_not_found: nada a desfazer nesta rodada");
+    }
     ok(json!({"results": results}))
+}
+
+/// O arquivo global volta ao de antes da rodada, aqui e nos peers, só se ainda for o que ela gravou.
+async fn undo_user_memory(st: &Arc<AppState>, run_id: &str, me: &str) -> Option<Value> {
+    let dir = round::record_dir(&Paths::of(st), run_id);
+    let before = std::fs::read_to_string(dir.join(round::USER_BEFORE)).ok()?;
+    let after = std::fs::read_to_string(dir.join(round::USER_AFTER)).ok()?;
+    let target = st.accounts.env.claude_base.join(USER_MEMORY_PATH);
+    let current = std::fs::read_to_string(&target).unwrap_or_default();
+    if current != after {
+        return Some(json!({"project": "user-memory", "machine": me, "root": "", "ok": false, "error": "dream_memory_changed"}));
+    }
+    let written = if before.is_empty() { std::fs::remove_file(&target) } else { hangar_core::fs::atomic_write(&target, before.as_bytes()) };
+    for peer in st.peers.enabled_ids() {
+        let _ = peers::user_put(st, &peer, &before, me).await;
+    }
+    Some(json!({"project": "user-memory", "machine": me, "root": "", "ok": written.is_ok(), "error": written.err().map(|e| e.to_string())}))
 }
 
 /// Peer: só a máquina registrada aqui como a que sonha grava memória nesta.

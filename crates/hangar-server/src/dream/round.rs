@@ -22,6 +22,9 @@ use crate::routes::AppState;
 
 const RUNS_KEPT_DAYS: u64 = 30;
 pub const USER_MEMORY_PATH: &str = "rules/memoria-do-usuario.md";
+/// O arquivo global de antes e de depois da rodada: o Desfazer só volta se ninguém mexeu depois.
+pub const USER_BEFORE: &str = "memoria-do-usuario.antes.md";
+pub const USER_AFTER: &str = "memoria-do-usuario.depois.md";
 
 pub(crate) struct Options {
     pub project: Option<String>,
@@ -500,7 +503,8 @@ async fn user_pass(ctx: &Ctx<'_>, state: &mut State) -> Result<(), String> {
     // A versão de antes fica no registro da rodada, como a memória dos projetos.
     let record = record_dir(ctx.paths, ctx.run_id);
     std::fs::create_dir_all(&record).map_err(|e| format!("dream_io: {e}"))?;
-    hangar_core::fs::atomic_write(&record.join("memoria-do-usuario.antes.md"), current.as_bytes()).map_err(|e| format!("dream_io: {e}"))?;
+    hangar_core::fs::atomic_write(&record.join(USER_BEFORE), current.as_bytes()).map_err(|e| format!("dream_io: {e}"))?;
+    hangar_core::fs::atomic_write(&record.join(USER_AFTER), outcome.content.as_bytes()).map_err(|e| format!("dream_io: {e}"))?;
     hangar_core::fs::atomic_write(&target, outcome.content.as_bytes()).map_err(|e| format!("dream_io: {e}"))?;
     for peer in st.peers.enabled_ids() {
         if let Err(e) = peers::user_put(st, &peer, &outcome.content, ctx.me).await {
