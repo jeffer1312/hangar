@@ -249,7 +249,9 @@ pub async fn act(mut a: Action) -> Result<(), Failure> {
     };
     done.map_err(|e| {
         if e.message.contains("401") || e.message.to_ascii_lowercase().contains("auth") { hosts::forget(host); }
-        Failure::new("action_failed", e.message)
+        // Só a recusa do provedor vira `action_failed`; CLI ausente, repositório inválido e método de merge mantêm o código.
+        let code = if matches!(e.code, "cli_failed" | "provider_error" | "invalid_response") { "action_failed" } else { e.code };
+        Failure::new(code, e.message)
     })
 }
 

@@ -104,15 +104,21 @@ pub fn text<'a>(v: &'a Value, path: &[&str]) -> &'a str {
     path.iter().try_fold(v, |v, k| v.get(*k)).and_then(Value::as_str).unwrap_or("")
 }
 
-/// O `data` de uma resposta GraphQL; `errors` vira falha com as mensagens do provedor.
-pub fn graphql_data(out: &str, cli: &str) -> Result<Value, crate::Failure> {
+/// O `data` de uma resposta GraphQL; `errors` vira falha com as mensagens do provedor. Com `partial` (a busca de PRs, onde
+/// uma organização com SAML só some do resultado), o que veio vale e o erro vai ao log, desde que algum campo de `data`
+/// tenha vindo preenchido.
+pub fn graphql_data(out: &str, cli: &str, partial: bool) -> Result<Value, crate::Failure> {
     let mut value: Value = serde_json::from_str(out)
         .map_err(|_| crate::Failure::new("invalid_response", format!("resposta do {cli} ilegível")))?;
+    let data = value.get_mut("data").map(Value::take).unwrap_or(Value::Null);
     if let Some(errors) = value.get("errors").and_then(Value::as_array).filter(|e| !e.is_empty()) {
         let msg = errors.iter().filter_map(|e| e.get("message").and_then(Value::as_str)).collect::<Vec<_>>().join("; ");
-        return Err(crate::Failure::new("provider_error", msg));
+        if !partial || !data.as_object().is_some_and(|fields| fields.values().any(|v| !v.is_null())) {
+            return Err(crate::Failure::new("provider_error", msg));
+        }
+        tracing::warn!(cli, erro = %msg, "revisões: resposta GraphQL parcial");
     }
-    Ok(value.get_mut("data").map(Value::take).unwrap_or(Value::Null))
+    Ok(data)
 }
 
 /// Os itens de todas as páginas de uma leitura REST com `--paginate`: o `gh` junta num array só, o `glab` manda um
@@ -262,8 +268,11 @@ mod tests {
 
     #[test]
     fn graphql_errors_become_failures() {
-        assert_eq!(graphql_data(r#"{"data": {"a": 1}}"#, "gh").unwrap()["a"], 1);
-        assert_eq!(graphql_data(r#"{"errors": [{"message": "ruim"}]}"#, "gh").unwrap_err().message, "ruim");
+        assert_eq!(graphql_data(r#"{"data": {"a": 1}}"#, "gh", false).unwrap()["a"], 1);
+        assert_eq!(graphql_data(r#"{"errors": [{"message": "ruim"}]}"#, "gh", false).unwrap_err().message, "ruim");
+        assert_eq!(graphql_data(r#"{"data": null, "errors": [{"message": "ruim"}]}"#, "gh", true).unwrap_err().code, "provider_error");
+        assert_eq!(graphql_data(r#"{"data": {"a": 2}, "errors": [{"message": "SAML"}]}"#, "gh", true).unwrap()["a"], 2);
+        assert_eq!(graphql_data(r#"{"data": {"viewer": {}, "repository": null}, "errors": [{"message": "x"}]}"#, "gh", false).unwrap_err().code, "provider_error");
         assert_eq!(span("2026-11-12T10:00:00Z", "2026-11-12T10:01:30Z"), Some(90));
     }
 }

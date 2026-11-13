@@ -357,6 +357,8 @@ pub(super) struct GitPanel {
     others: Option<(Api, Rc<dyn Fn(String, &mut Window, &mut App)>)>,
     /// A revisão (PR ou MR) da branch, só no diálogo grande.
     review: Option<Entity<super::reviews::ReviewView>>,
+    /// Trocou a branch: o chip da faixa desta pasta é esquecido.
+    forget_chip: Option<Rc<dyn Fn(&mut App)>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -378,7 +380,7 @@ impl GitPanel {
         Self {
             source, runtime, name, title, pane: Pane::default(), repo: Remote::default(), work: Review::new(), round: 0, chosen: HashSet::new(),
             seen: HashSet::new(), message, amend: false, busy: None, error: None, output: None, log: Remote::default(), log_limit: LOG_PAGE,
-            ahead_behind: (None, None), opened: None, picker: false, branch_query, branch_error: None, expand, others: None, review: None, _subscriptions: subscriptions,
+            ahead_behind: (None, None), opened: None, picker: false, branch_query, branch_error: None, expand, others: None, review: None, forget_chip: None, _subscriptions: subscriptions,
         }
     }
 
@@ -467,6 +469,7 @@ impl GitPanel {
     fn set_pane(&mut self, pane: Pane, window: &mut Window, cx: &mut Context<Self>) {
         self.pane = pane;
         if pane == Pane::History && self.log.value.is_none() && !self.log.loading { self.load_log(window, cx); }
+        if pane == Pane::Review && let Some(view) = self.review.clone() { view.update(cx, |view, cx| view.show(cx)); }
         cx.notify();
     }
 
@@ -772,9 +775,11 @@ impl GitPanel {
         cx.notify();
     }
 
-    /// A revisão da aba é a da branch da pasta: trocou a branch, ela é relida.
+    /// A revisão da aba e o chip são os da branch da pasta: trocou a branch, os dois são relidos (a aba só se estiver à vista).
     fn reload_review(&self, cx: &mut Context<Self>) {
-        if let Some(view) = self.review.clone() { view.update(cx, |view, cx| view.reload(cx)); }
+        if let Some(forget) = self.forget_chip.clone() { forget(cx); }
+        let shown = self.pane == Pane::Review;
+        if let Some(view) = self.review.clone() { view.update(cx, |view, cx| { view.branch_changed(cx); if shown { view.show(cx); } }); }
     }
 
     /// Cria a partir da atual e já troca (`switch -c`): muda a branch sem mexer na árvore, então não pede stash.
@@ -1281,6 +1286,10 @@ impl Hangar {
         // Servidor nesta máquina e a pasta existe aqui: o git roda direto no disco, pela pasta real da sessão.
         let here = dir.filter(|_| api.is_loopback()).and_then(|dir| self.local_dirs.get(dir).cloned().flatten());
         let server = api.clone();
+        let forget_chip = dir.map(|dir| {
+            let (weak, key) = (cx.entity().downgrade(), (super::servers::norm(&api.identity()), dir.to_owned()));
+            Rc::new(move |cx: &mut App| { let _ = weak.update(cx, |this, cx| this.forget_review_chip(&key, cx)); }) as Rc<dyn Fn(&mut App)>
+        });
         let source = match here { Some(cwd) => Source::Local(Arc::new(cwd)), None => Source::Remote(api, session.name.clone()) };
         let weak = cx.entity().downgrade();
         let open: Rc<dyn Fn(String, &mut Window, &mut App)> =
@@ -1288,7 +1297,7 @@ impl Hangar {
         // ponytail: a página de worktrees é a do servidor ativo; sessão de outra máquina abre a página dele quando fizer falta.
         let review = if expand.is_none() { self.branch_review_view(cx) } else { None };
         let panel = cx.new(|cx| GitPanel::new(source, runtime, session.name.clone(), title, expand, window, cx));
-        panel.update(cx, |panel, cx| { panel.others = Some((server, open)); panel.review = review; panel.load(window, cx) });
+        panel.update(cx, |panel, cx| { panel.others = Some((server, open)); panel.review = review; panel.forget_chip = forget_chip; panel.load(window, cx) });
         Some(panel)
     }
 

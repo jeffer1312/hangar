@@ -17,7 +17,17 @@ const THREAD: &str = r#"fragment thread on PullRequestReviewThread { id isResolv
   comments(first: 100) { pageInfo { hasNextPage endCursor } nodes { ...comment } } }"#;
 const COMMENT: &str = r#"fragment comment on PullRequestReviewComment { author { login __typename } body diffHunk createdAt }"#;
 
-const COMMENTS: &str = r#"query($id: ID!, $after: String!) { node(id: $id) { ... on PullRequestReviewThread {
+const CHECK: &str = r#"fragment check on StatusCheckRollupContext { __typename
+  ... on CheckRun { name status conclusion startedAt completedAt }
+  ... on StatusContext { context state } }"#;
+
+const CHECKS: &str = r#"query($owner: String!, $name: String!, $number: Int!, $after: String!) {
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) { commits(last: 1) { nodes { commit { statusCheckRollup {
+    contexts(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { ...check } }
+  } } } } } }
+}"#;
+
+const COMMENTS: &str =r#"query($id: ID!, $after: String!) { node(id: $id) { ... on PullRequestReviewThread {
   comments(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { ...comment } }
 } } }"#;
 
@@ -48,11 +58,8 @@ const DETAIL: &str = r#"query($owner: String!, $name: String!, $number: Int!) {
       autoMergeRequest { enabledAt }
       reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } ... on Team { name } } } }
       latestOpinionatedReviews(first: 30) { nodes { author { login } state } }
-      checks: commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 80) { nodes {
-        __typename
-        ... on CheckRun { name status conclusion startedAt completedAt }
-        ... on StatusContext { context state }
-      } } } } } }
+      checks: commits(last: 1) { nodes { commit { statusCheckRollup {
+        contexts(first: 100) { pageInfo { hasNextPage endCursor } nodes { ...check } } } } } }
       threads: reviewThreads(first: 100) { pageInfo { hasNextPage endCursor } nodes { ...thread } }
       timelineItems(last: 30, itemTypes: [PULL_REQUEST_COMMIT, PULL_REQUEST_REVIEW, ISSUE_COMMENT, MERGED_EVENT,
           REVIEW_REQUESTED_EVENT, READY_FOR_REVIEW_EVENT, HEAD_REF_FORCE_PUSHED_EVENT, CLOSED_EVENT, REOPENED_EVENT]) {
@@ -83,11 +90,14 @@ const METHODS: &str = r#"query($owner: String!, $name: String!) {
 enum Var<'a> { Text(&'a str, &'a str), Int(&'a str, u64) }
 
 async fn graphql(host: &str, query: &str, vars: &[Var<'_>], timeout: std::time::Duration) -> Result<Value, Failure> {
+    // Só a busca aceita resposta parcial (organização com SAML some do resultado); o resto falha com o erro do provedor.
+    let partial = query == SEARCH;
     // Fragmento declarado e não usado é erro no GraphQL: só vai o que a consulta usa.
     let mut query = query.to_owned();
     if query.contains("...pr") { query = format!("{query}\n{FRAGMENT}"); }
     if query.contains("...thread") { query = format!("{query}\n{THREAD}"); }
     if query.contains("...comment") { query = format!("{query}\n{COMMENT}"); }
+    if query.contains("...check") { query = format!("{query}\n{CHECK}"); }
     let mut args = vec!["api".into(), "--hostname".into(), host.to_owned(), "graphql".into(), "-f".into(), format!("query={query}")];
     for var in vars {
         match var {
@@ -95,7 +105,7 @@ async fn graphql(host: &str, query: &str, vars: &[Var<'_>], timeout: std::time::
             Var::Int(k, v) => { args.push("-F".into()); args.push(format!("{k}={v}")); }
         }
     }
-    model::graphql_data(&cli::run(Cli::Gh, args, timeout).await?, "gh")
+    model::graphql_data(&cli::run(Cli::Gh, args, timeout).await?, "gh", partial)
 }
 
 fn owner_name(repo: &str) -> Result<(&str, &str), Failure> {
@@ -189,14 +199,14 @@ pub async fn branch(host: &str, repo: &str, branch: &str, source_repo: &str) -> 
         .filter_map(|pr| summary(host, pr, &viewer)).find(|pr| pr.source_repo.eq_ignore_ascii_case(source_repo)))
 }
 
-/// As threads depois da primeira página, que veio junto do detalhe.
-async fn more_threads(host: &str, owner: &str, name: &str, number: u64, mut after: String) -> Result<Vec<Value>, Failure> {
+/// As páginas de uma conexão do PR depois da primeira, que veio junto do detalhe (`query` pede a conexão em `at`).
+async fn more_pages(host: &str, query: &str, at: &str, (owner, name, number): (&str, &str, u64), mut after: String) -> Result<Vec<Value>, Failure> {
     let mut nodes = Vec::new();
     loop {
-        let data = graphql(host, THREADS, &[Var::Text("owner", owner), Var::Text("name", name), Var::Int("number", number),
+        let data = graphql(host, query, &[Var::Text("owner", owner), Var::Text("name", name), Var::Int("number", number),
             Var::Text("after", &after)], cli::READ).await?;
-        let page = data.pointer("/repository/pullRequest/reviewThreads").filter(|p| !p.is_null())
-            .ok_or_else(|| Failure::new("invalid_response", "threads do pull request ilegíveis"))?;
+        let page = data.pointer(at).filter(|p| !p.is_null())
+            .ok_or_else(|| Failure::new("invalid_response", "página do pull request ilegível"))?;
         nodes.extend(page.get("nodes").and_then(Value::as_array).into_iter().flatten().cloned());
         match model::advance(Some(page), Some(&after))? { Some(next) => after = next, None => return Ok(nodes) }
     }
@@ -242,13 +252,19 @@ pub async fn detail(host: &str, repo: &str, number: u64) -> Result<Detail, Failu
         need: None,
         by: reviews.iter().filter(|r| s(r, &["state"]) == "APPROVED").map(|r| s(r, &["author", "login"]).to_owned()).collect(),
         requested,
-        can_approve: summary.state == "open" && !pr.get("viewerDidAuthor").and_then(Value::as_bool).unwrap_or(false),
+        can_approve: summary.state == "open" && !pr.get("viewerDidAuthor").and_then(Value::as_bool).unwrap_or(false)
+            && !reviews.iter().any(|r| s(r, &["state"]) == "APPROVED" && s(r, &["author", "login"]).eq_ignore_ascii_case(&viewer)),
     };
 
-    let jobs = pr.pointer("/checks/nodes/0/commit/statusCheckRollup/contexts/nodes").and_then(Value::as_array).into_iter().flatten()
-        .filter_map(job).collect();
+    let id = (owner, name, number);
+    let contexts = pr.pointer("/checks/nodes/0/commit/statusCheckRollup/contexts");
+    let mut checks: Vec<Value> = contexts.and_then(|c| c.get("nodes")).and_then(Value::as_array).cloned().unwrap_or_default();
+    if let Some(after) = model::next_page(contexts) {
+        checks.extend(more_pages(host, CHECKS, "/repository/pullRequest/commits/nodes/0/commit/statusCheckRollup/contexts", id, after).await?);
+    }
+    let jobs = checks.iter().filter_map(job).collect();
     let mut nodes: Vec<Value> = pr.pointer("/threads/nodes").and_then(Value::as_array).cloned().unwrap_or_default();
-    if let Some(after) = model::next_page(pr.get("threads")) { nodes.extend(more_threads(host, owner, name, number, after).await?); }
+    if let Some(after) = model::next_page(pr.get("threads")) { nodes.extend(more_pages(host, THREADS, "/repository/pullRequest/reviewThreads", id, after).await?); }
     for node in &mut nodes { all_comments(host, node).await?; }
     let threads: Vec<Thread> = nodes.iter().map(thread).collect();
     summary.open_threads = Some(threads.iter().filter(|t| !t.resolved).count() as u32);
@@ -353,10 +369,11 @@ fn merge_state(pr: &Value, summary: &Summary, approvals: &Approvals, can_write: 
         if !can_write { blockers.push("not_allowed"); }
     }
     let waiting = |b: &&str| matches!(*b, "pipeline_running" | "approval_required" | "checking");
+    let auto_enabled = pr.get("autoMergeRequest").is_some_and(|v| !v.is_null());
     Merge {
         can_merge: blockers.is_empty(),
-        can_auto: auto_allowed && can_write && !blockers.is_empty() && blockers.iter().all(waiting),
-        auto_enabled: pr.get("autoMergeRequest").is_some_and(|v| !v.is_null()),
+        can_auto: auto_allowed && can_write && !auto_enabled && !blockers.is_empty() && blockers.iter().all(waiting),
+        auto_enabled,
         blockers,
     }
 }

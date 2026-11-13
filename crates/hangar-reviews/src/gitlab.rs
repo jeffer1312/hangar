@@ -44,7 +44,7 @@ async fn api(host: &str, method: &str, path: &str, fields: &[(&str, &str)], time
 async fn graphql(host: &str, query: &str, vars: &[(&str, &str)]) -> Result<Value, Failure> {
     let mut args = vec!["api".into(), "--hostname".into(), host.to_owned(), "graphql".into(), "-f".into(), format!("query={query}\n{FRAGMENT}")];
     for (k, v) in vars { args.push("-f".into()); args.push(format!("{k}={v}")); }
-    model::graphql_data(&cli::run(Cli::Glab, args, cli::READ).await?, "glab")
+    model::graphql_data(&cli::run(Cli::Glab, args, cli::READ).await?, "glab", false)
 }
 
 /// Todas as páginas de uma leitura REST que devolve lista.
@@ -266,11 +266,10 @@ async fn jobs(host: &str, pipeline: Option<(String, Option<u64>)>, commit_projec
         duration: model::span(s(j, &["started_at"]), s(j, &["finished_at"])) }).collect())
 }
 
+/// Conta a partir do primeiro `@@`: antes dele só há cabeçalho, depois `---`/`+++` são linhas (um `-- comentário` removido).
 fn count(diff: &str) -> (u32, u32) {
-    diff.lines().fold((0, 0), |(a, d), l| {
-        if l.starts_with('+') && !l.starts_with("+++") { (a + 1, d) }
-        else if l.starts_with('-') && !l.starts_with("---") { (a, d + 1) }
-        else { (a, d) }
+    diff.lines().skip_while(|l| !l.starts_with("@@")).fold((0, 0), |(a, d), l| {
+        if l.starts_with('+') { (a + 1, d) } else if l.starts_with('-') { (a, d + 1) } else { (a, d) }
     })
 }
 
@@ -329,7 +328,8 @@ fn thread(discussion: &Value, notes: &[Value], diffs: &[Value]) -> Thread {
 
 /// O que impede mesclar, pelo `detailed_merge_status` do GitLab.
 fn merge_state(detailed: &str, summary: &Summary, can_merge: bool, auto_enabled: bool) -> Merge {
-    let pipeline_blocker = || if summary.pipeline.as_deref() == Some("failed") { "pipeline_failed" } else { "pipeline_running" };
+    // Só pipeline que ainda roda é espera; cancelado, pulado ou ausente não vai passar sozinho, e o auto-merge ficaria preso.
+    let pipeline_blocker = || if matches!(summary.pipeline.as_deref(), Some("running" | "pending")) { "pipeline_running" } else { "pipeline_failed" };
     let mut blockers: Vec<&'static str> = match detailed {
         "mergeable" => Vec::new(),
         "not_open" => vec!["not_open"],
@@ -419,6 +419,9 @@ mod tests {
         assert_eq!(m.blockers, vec!["not_allowed"]);
         let m = merge_state("discussions_not_resolved", &open(), true, false);
         assert!(!m.can_auto);
+        let canceled = summary("h", &json!({"iid": 1, "project": {"fullPath": "a/b"}, "headPipeline": {"status": "CANCELED"}}), "u").unwrap();
+        let m = merge_state("ci_must_pass", &canceled, true, false);
+        assert!(m.blockers == vec!["pipeline_failed"] && !m.can_auto);
         let m = merge_state("ci_still_running", &open(), true, true);
         assert!(!m.can_auto && m.auto_enabled);
     }
@@ -426,5 +429,6 @@ mod tests {
     #[test]
     fn diff_counts_ignore_headers() {
         assert_eq!(count("--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n+c\n"), (2, 1));
+        assert_eq!(count("@@ -1,2 +1,1 @@\n--- nota\n-- outra\n+++i;\n"), (1, 2));
     }
 }

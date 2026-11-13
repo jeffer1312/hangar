@@ -40,9 +40,10 @@ pub fn parse_remote(url: &str) -> Option<Remote> {
     Some(Remote { host, repo })
 }
 
-/// O que interessa do `config` do git: a URL de cada remote e o remote de cada branch.
+/// O que interessa do `config` do git: a URL de cada remote, o remote de cada branch (nome ou, depois de um
+/// `gh pr checkout` de fork, a própria URL) e a branch remota que ela segue (`merge`).
 #[derive(Debug, Default, PartialEq)]
-pub struct Config { pub remotes: Vec<(String, String)>, pub branches: HashMap<String, String> }
+pub struct Config { pub remotes: Vec<(String, String)>, pub branches: HashMap<String, String>, pub merges: HashMap<String, String> }
 
 pub fn parse_config(text: &str) -> Config {
     enum Section { Remote(String), Branch(String), Other }
@@ -59,6 +60,7 @@ pub fn parse_config(text: &str) -> Config {
         match (&section, key.trim().to_ascii_lowercase().as_str()) {
             (Section::Remote(name), "url") if !config.remotes.iter().any(|(n, _)| n == name) => config.remotes.push((name.clone(), value)),
             (Section::Branch(name), "remote") => { config.branches.insert(name.clone(), value); }
+            (Section::Branch(name), "merge") => { config.merges.insert(name.clone(), value); }
             _ => {}
         }
     }
@@ -69,7 +71,16 @@ impl Config {
     /// O remote de uma branch (o dela, senão `origin`, senão o primeiro).
     fn remote_for(&self, branch: Option<&str>) -> Option<Remote> {
         let wanted = branch.and_then(|b| self.branches.get(b)).filter(|r| *r != ".").map(String::as_str).unwrap_or("origin");
-        self.remotes.iter().find(|(n, _)| n == wanted).or_else(|| self.remotes.first()).and_then(|(_, url)| parse_remote(url))
+        if let Some((_, url)) = self.remotes.iter().find(|(n, _)| n == wanted) { return parse_remote(url); }
+        parse_remote(wanted).or_else(|| self.remotes.first().and_then(|(_, url)| parse_remote(url)))
+    }
+
+    /// O nome da branch no remote. Só a branch de `gh pr checkout` de fork (remote gravado como URL) tem o nome do PR no
+    /// `merge`; nas outras ele é a base de onde saiu (`checkout -b feat origin/main` grava `main`) e vale o nome local.
+    fn upstream_branch(&self, branch: &str) -> String {
+        let from_url = self.branches.get(branch).is_some_and(|r| !self.remotes.iter().any(|(n, _)| n == r) && parse_remote(r).is_some());
+        self.merges.get(branch).filter(|_| from_url).and_then(|m| m.strip_prefix("refs/heads/")).filter(|m| !m.is_empty())
+            .unwrap_or(branch).to_owned()
     }
 
     /// Onde procurar a revisão de uma branch que vem de `head`: o próprio `head` e os outros repositórios do mesmo host
@@ -106,8 +117,8 @@ pub fn repo_hosts(repo: &Path) -> Vec<String> {
     hosts
 }
 
-/// A branch de uma pasta de trabalho (worktree ou principal, ou subpasta delas), o remote dela e, nessa ordem, os
-/// repositórios onde a revisão dela pode estar.
+/// A branch de uma pasta de trabalho (worktree ou principal, ou subpasta delas) com o nome que tem no remote, o remote
+/// dela e, nessa ordem, os repositórios onde a revisão dela pode estar.
 pub struct BranchRemote { pub head: Remote, pub branch: String, pub targets: Vec<Remote> }
 
 pub fn branch_remote(dir: &Path) -> Option<BranchRemote> {
@@ -117,7 +128,7 @@ pub fn branch_remote(dir: &Path) -> Option<BranchRemote> {
     let branch = head.trim().strip_prefix("ref: refs/heads/").filter(|b| !b.is_empty())?.to_owned();
     let config = read_config(&common)?;
     let head = config.remote_for(Some(&branch))?;
-    Some(BranchRemote { targets: config.targets(&head), head, branch })
+    Some(BranchRemote { targets: config.targets(&head), head, branch: config.upstream_branch(&branch) })
 }
 
 /// Quem atende um host e com que conta.
@@ -205,6 +216,12 @@ mod tests {
         assert_eq!(config.remote_for(Some("feat")), r("github.com", "c/d"));
         assert_eq!(config.remote_for(Some("main")), r("github.com", "a/b"));
         assert_eq!(config.remote_for(None), r("github.com", "a/b"));
+        // `gh pr checkout` de fork grava a URL no lugar do nome do remote, e a branch local pode ter outro nome.
+        let checkout = parse_config(&format!("{text}[branch \"pr-9\"]\n\tremote = https://github.com/e/f.git\n\tmerge = refs/heads/feat-x\n"));
+        assert_eq!(checkout.remote_for(Some("pr-9")), r("github.com", "e/f"));
+        assert_eq!((checkout.upstream_branch("pr-9"), checkout.upstream_branch("main")), ("feat-x".into(), "main".into()));
+        let based = parse_config(&format!("{text}[branch \"nova\"]\n\tremote = origin\n\tmerge = refs/heads/main\n"));
+        assert_eq!(based.upstream_branch("nova"), "nova");
         let fork = Remote { host: "github.com".into(), repo: "c/d".into() };
         assert_eq!(config.targets(&fork), vec![fork.clone(), Remote { host: "github.com".into(), repo: "a/b".into() }]);
     }

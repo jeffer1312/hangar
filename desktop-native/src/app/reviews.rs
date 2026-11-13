@@ -371,14 +371,20 @@ impl ReviewView {
         cx.notify();
     }
 
+    /// Lê na primeira vez que aparece: abrir o diálogo do git sem ir à aba não roda gh/glab no servidor.
+    pub(super) fn show(&mut self, cx: &mut Context<Self>) {
+        if self.data.value.is_none() && !self.data.loading { self.load(cx); }
+    }
+
     /// A branch da pasta mudou: some o detalhe da anterior (as ações dependem dele), e a resposta em voo dela é descartada.
-    pub(super) fn reload(&mut self, cx: &mut Context<Self>) {
+    /// Volta ao não lido; quem mostra a aba chama `show`.
+    pub(super) fn branch_changed(&mut self, cx: &mut Context<Self>) {
         self.data.reset();
         self.generation += 1;
         (self.reply, self.reply_error, self.error, self.after_action) = (None, None, None, false);
         self.drafts.clear();
         self.open_files.clear();
-        self.load(cx);
+        cx.notify();
     }
 
     fn detail(&self) -> Option<&Detail> { self.data.ok().and_then(|b| b.review.as_ref()) }
@@ -909,9 +915,12 @@ impl Hangar {
         let server = super::servers::norm(&api.identity());
         let send = self.review_send_fn(cx);
         let changed = self.review_changed_fn(Some((server.clone(), dir.clone())), cx);
-        let view = cx.new(|_| ReviewView::new(api, server, self.runtime.clone(), Target::Branch(dir), send, changed));
-        view.update(cx, |view, cx| view.load(cx));
-        Some(view)
+        Some(cx.new(|_| ReviewView::new(api, server, self.runtime.clone(), Target::Branch(dir), send, changed)))
+    }
+
+    /// A branch da pasta trocou: o chip dela é pedido de novo no próximo desenho, sem mostrar o da anterior.
+    pub(super) fn forget_review_chip(&mut self, key: &(String, String), cx: &mut Context<Self>) {
+        if self.reviews.chips.remove(key).is_some() { cx.notify(); }
     }
 
     /// O chip da faixa: pede o resumo da revisão da branch da sessão aberta quando o pedido anterior venceu.
@@ -921,13 +930,15 @@ impl Hangar {
         let key = (super::servers::norm(&api.identity()), dir);
         if self.reviews.chips.get(&key).is_none_or(|(at, _)| at.elapsed() > CHIP_TTL) {
             let previous = self.reviews.chips.remove(&key).and_then(|(_, v)| v);
-            self.reviews.chips.insert(key.clone(), (Instant::now(), previous));
+            let asked = Instant::now();
+            self.reviews.chips.insert(key.clone(), (asked, previous));
             let job = fetch_branch(&self.runtime, api, key.1.clone(), true);
             let k = key.clone();
             cx.spawn(async move |this, cx| {
                 let summary = job.await.ok().and_then(Result::ok).and_then(|b| b.summary);
                 let _ = this.update(cx, |this, cx| {
-                    if let Some((_, value)) = this.reviews.chips.get_mut(&k) { *value = summary; }
+                    // Entrada trocada (a branch mudou e pediu de novo): esta resposta pode ser da branch anterior.
+                    if let Some((at, value)) = this.reviews.chips.get_mut(&k) && *at == asked { *value = summary; }
                     cx.notify();
                 });
             }).detach();
