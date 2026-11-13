@@ -132,3 +132,21 @@ fn ticket_detail_requires_markdown_description() {
     assert_eq!(parsed.description_markdown, "## Passos\n- um");
     assert_eq!(parsed.summary.key, "OPS·7");
 }
+
+#[test]
+fn start_prompt_fills_ticket_fields_once_and_keeps_unknown_braces() {
+    let mut value = valid();
+    value["start_prompt"] = json!("/iniciar {key} {title} {nada} {url}");
+    let parsed = manifest(value).unwrap();
+    let mut ticket = summary("t-1");
+    ticket["title"] = json!("{key} no título");
+    let ticket: hangar_connectors::work_tracking::TicketSummary = serde_json::from_value(ticket).unwrap();
+    assert_eq!(
+        parsed.start_prompt_for(&ticket).as_deref(),
+        Some("/iniciar OPS·7 {key} no título {nada} https://exemplo.invalid/t/7"),
+    );
+    assert_eq!(manifest(valid()).unwrap().start_prompt_for(&ticket), None, "sem modelo, sem sugestão");
+    let mut empty = valid();
+    empty["start_prompt"] = json!("  ");
+    assert_eq!(manifest(empty).unwrap_err(), "manifest_invalid");
+}
