@@ -628,3 +628,14 @@ async fn mission_reads_and_reports_as_the_linked_caller() {
     assert!(failed(&gated) && first_text(&gated).starts_with("mission_gate_pending"), "{gated}");
     assert_eq!(s.python.hits_to("/api/mission/report"), 0, "o Mission Control não vai ao Python");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_router_does_not_keep_the_state_alive() {
+    // O entregador de avisos do Mission Control mora no estado; prender o roteador nele seguraria o estado (e os
+    // arquivos abertos) depois do fim do servidor.
+    let state = Arc::new(AppState::new(fake::config("127.0.0.1:9".parse().unwrap(), "127.0.0.1")));
+    let before = Arc::strong_count(&state);
+    let app = router(state.clone());
+    drop(app);
+    assert_eq!(Arc::strong_count(&state), before);
+}
