@@ -23,6 +23,10 @@ pub struct Config {
     /// Id do servidor que sonha por todos; igual em todas as máquinas.
     #[serde(default)]
     pub machine: String,
+    /// A passada que escreve `~/.claude/rules/memoria-do-usuario.md`, lido por toda sessão: nasce
+    /// desligada, a pessoa liga depois de ler o que ela gera.
+    #[serde(default)]
+    pub user_memory: bool,
 }
 
 fn default_hour() -> String {
@@ -35,7 +39,15 @@ fn default_project_cap() -> f64 {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { enabled: false, api_key: String::new(), hour: default_hour(), project_cap_usd: default_project_cap(), month_cap_usd: None, machine: String::new() }
+        Self {
+            enabled: false,
+            api_key: String::new(),
+            hour: default_hour(),
+            project_cap_usd: default_project_cap(),
+            month_cap_usd: None,
+            machine: String::new(),
+            user_memory: false,
+        }
     }
 }
 

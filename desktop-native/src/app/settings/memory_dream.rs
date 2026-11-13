@@ -22,6 +22,8 @@ struct Config {
     #[serde(default)]
     machine: String,
     #[serde(default)]
+    user_memory: bool,
+    #[serde(default)]
     this_machine: String,
 }
 
@@ -779,6 +781,11 @@ impl Render for DreamPage {
             .disabled(busy_config)
             .accessibility_label(t("dream_enabled"))
             .on_click(cx.listener(|this, on: &bool, window, cx| this.save(json!({ "enabled": *on }), None, window, cx)));
+        let user_memory = Switch::new("dream-user-memory")
+            .checked(config.user_memory)
+            .disabled(busy_config)
+            .accessibility_label(t("dream_user_memory"))
+            .on_click(cx.listener(|this, on: &bool, window, cx| this.save(json!({ "user_memory": *on }), None, window, cx)));
         // Quem falhou ao gravar e quem ainda aponta para outra máquina: as duas não seguem a escolha.
         let mut unconfirmed = self.unconfirmed.clone();
         for target in &self.targets {
@@ -799,6 +806,7 @@ impl Render for DreamPage {
         let spent = tr_shared("dream_month_value", &[("key", &key_spent), ("account", &usd(status.month.account_usd))]);
         let settings = settings_box()
             .child(setting_row(false, IconName::Moon, t("dream_enabled"), div().child(t("dream_enabled_hint")), true, enabled.into_any_element()))
+            .child(setting_row(false, IconName::User, t("dream_user_memory"), div().child(t("dream_user_memory_hint")), true, user_memory.into_any_element()))
             .child(setting_row(false, IconName::Server, t("dream_machine"), machine_desc, true, self.machine_picker(&config, cx)))
             .child(setting_row(false, IconName::Key, t("dream_key"), self.described(Some("dream_key_hint"), Field::Key), true,
                 self.field_control(Field::Key, 220., "dream_key")))

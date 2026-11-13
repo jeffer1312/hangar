@@ -151,6 +151,7 @@ fn config_json(st: &AppState, config: &Config) -> Value {
         "project_cap_usd": config.project_cap_usd,
         "month_cap_usd": config.month_cap_usd,
         "machine": config.machine,
+        "user_memory": config.user_memory,
         "this_machine": this_machine(st),
     })
 }
@@ -171,6 +172,7 @@ struct ConfigPatch {
     #[serde(default, with = "double_option")]
     month_cap_usd: Option<Option<f64>>,
     machine: Option<String>,
+    user_memory: Option<bool>,
 }
 
 mod double_option {
@@ -207,6 +209,9 @@ async fn put_config(st: &Arc<AppState>, req: Request) -> Response {
     }
     if let Some(v) = patch.machine {
         config.machine = v;
+    }
+    if let Some(v) = patch.user_memory {
+        config.user_memory = v;
     }
     if let Err(field) = config.validate() {
         return hangar_core::http::detail(StatusCode::UNPROCESSABLE_ENTITY, "dream_invalid_config", "valor inválido", json!({"field": field}));

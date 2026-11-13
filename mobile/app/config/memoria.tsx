@@ -48,6 +48,8 @@ export default function Memoria() {
     {config && status ? <>
       <MachineGroup>
         <SwitchRow title={m.dream_enabled()} description={m.dream_enabled_hint()} value={config.enabled} disabled={busy} onChange={(enabled) => put({ enabled })} />
+        <SwitchRow title={m.dream_user_memory()} description={m.dream_user_memory_hint()} value={config.user_memory} disabled={busy}
+          onChange={(user_memory) => put({ user_memory })} />
         <PickerRow title={m.dream_machine()} description={m.dream_machine_hint()} disabled={busy}
           value={config.machine ? d.labelOf(config.machine) : '—'} error={unconfirmed.join('\n') || undefined}
           options={servers.map((s) => ({ id: s.id, title: s.label, selected: !!config.machine && configs[s.id]?.this_machine === config.machine, disabled: !configs[s.id] }))}

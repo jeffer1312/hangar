@@ -4744,3 +4744,12 @@ Anthropic), com passagem para a conta Claude de mais folga abaixo de 70% na sema
 de analisador recusa a rodada e a memória fica intacta; a memória de antes fica 30 dias no registro
 da rodada e serve o Desfazer, por projeto. Limite conhecido: nas outras máquinas só a pasta principal
 do projeto é gravada, não as pastas próprias de contas.
+
+Prova real (13/11/2026, `chat-suporte-web`, 1 sessão curta, 13 notas): US$ 0,08–0,12 por rodada do
+projeto e ~US$ 0,18 da passada do usuário (Sonnet). Três defeitos só apareceram no uso real e foram
+corrigidos: o limpador do relatório de problema trocava caminho, IP e hash e fazia a conferência recusar
+nota legítima (o sonho tem limpador próprio, só de credenciais, que apaga a credencial em vez de
+recusar); o prompt do cookbook reescrevia o `name:` de cada nota para o nome do arquivo (o `name` é o
+identificador do Claude Code e fica); e o Desfazer não voltava o cursor das sessões nem a data do último
+sonho, então o sonho seguinte não relia o que foi desfeito. A passada do usuário nasce desligada
+(`user_memory`): o arquivo global entra em toda sessão e a pessoa liga depois de ler o que ele gera.

@@ -10706,6 +10706,8 @@
   "dream_lead": "Every night one machine rereads each project's new conversations and fixes Claude's memory: it checks every note, marks what went stale, merges duplicates and rebuilds the index.",
   "dream_enabled": "Dream every night",
   "dream_enabled_hint": "Only the machine chosen below dreams, for all of them.",
+  "dream_user_memory": "User memory",
+  "dream_user_memory_hint": "Gathers the preferences repeated across projects into a global file (~/.claude/rules/memoria-do-usuario.md). Every session reads that file; read what it produces before leaving it on.",
   "dream_machine": "Dreaming machine",
   "dream_machine_hint": "It holds the key, fetches the other machines' conversations and sends back the merged memory.",
   "dream_machine_unconfirmed": "{server} did not confirm the choice",

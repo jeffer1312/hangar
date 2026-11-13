@@ -146,7 +146,7 @@ const PAGE_ROWS: &[(Page, &[(&str, Option<&str>)])] = &[
         ("server_jev_aux_endpoint", Some("server_jev_aux_endpoint_help")), ("server_jev_aux_key", Some("server_jev_aux_key_help")),
         ("server_jev_aux_model", Some("server_jev_aux_model_help")), ("server_jev_aux_effort", Some("server_jev_aux_effort_help")),
         ("server_jev_provider", Some("server_jev_provider_help"))]),
-    (Page::Memory, &[("dream_enabled", Some("dream_enabled_hint")), ("dream_machine", Some("dream_machine_hint")),
+    (Page::Memory, &[("dream_enabled", Some("dream_enabled_hint")), ("dream_user_memory", Some("dream_user_memory_hint")),("dream_machine", Some("dream_machine_hint")),
         ("dream_key", Some("dream_key_hint")), ("dream_hour", None), ("dream_project_cap", Some("dream_project_cap_hint")),
         ("dream_month_cap", Some("dream_month_cap_hint")), ("dream_month_spent", None), ("dream_projects", None),
         ("dream_suggestions", Some("dream_suggestions_hint"))]),

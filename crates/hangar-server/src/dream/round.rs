@@ -153,7 +153,7 @@ async fn execute(st: &Arc<AppState>, opts: &Options, run_id: &str) -> Result<(),
         }
         state.save(&paths.state()).map_err(|e| format!("dream_state_unwritable: {e}"))?;
     }
-    if dreamt || (opts.forced && opts.project.is_none()) {
+    if config.user_memory && (dreamt || (opts.forced && opts.project.is_none())) {
         let ctx = Ctx { st, config: &config, me: &me, run_id, now, accounts: &accounts, account_dirs: &account_dirs, scrub: &scrub, paths: &paths };
         if let Err(e) = user_pass(&ctx, &mut state).await {
             st.diag.record_line(json!({"evento": "dream.user_failed", "nivel": "aviso", "codigo": super::code_of(&e)}));

@@ -10706,6 +10706,8 @@
   "dream_lead": "Toda noite uma máquina relê as conversas novas de cada projeto e corrige a memória do Claude: confere cada nota, marca o que ficou velho, junta as repetidas e refaz o índice.",
   "dream_enabled": "Sonhar toda noite",
   "dream_enabled_hint": "Só a máquina escolhida abaixo sonha, por todas.",
+  "dream_user_memory": "Memória do usuário",
+  "dream_user_memory_hint": "Junta num arquivo global (~/.claude/rules/memoria-do-usuario.md) as preferências que se repetem entre projetos. Toda sessão lê esse arquivo; leia o que ele gera antes de deixar ligado.",
   "dream_machine": "Máquina que sonha",
   "dream_machine_hint": "Ela guarda a chave, busca as conversas das outras máquinas e devolve a memória consolidada.",
   "dream_machine_unconfirmed": "{server} não confirmou a escolha",

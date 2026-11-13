@@ -12,6 +12,8 @@ export interface DreamConfig {
   month_cap_usd: number | null;
   /** Id da máquina que sonha, o mesmo em todas. */
   machine: string;
+  /** Passada que escreve o arquivo global de preferências; nasce desligada. */
+  user_memory: boolean;
   /** Id deste servidor, para casar a escolha com a lista de servidores do app. */
   this_machine: string;
 }
