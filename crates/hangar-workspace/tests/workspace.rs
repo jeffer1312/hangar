@@ -316,8 +316,10 @@ fn a_failed_worktree_add_keeps_a_branch_that_already_existed() {
 #[test]
 fn a_failed_worktree_add_drops_the_branch_it_created() {
     use hangar_workspace::git::create_branch_worktree;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
     let (_base, root, repo, worktrees) = failing_add_repo();
+    // Root escreve na pasta 0o555 e o add não falha: não há como provocar a falha por permissão.
+    if fs::metadata(&repo).unwrap().uid() == 0 { return; }
     let parent = worktrees.join("repo");
     fs::create_dir_all(&parent).unwrap();
     fs::set_permissions(&parent, fs::Permissions::from_mode(0o555)).unwrap();
