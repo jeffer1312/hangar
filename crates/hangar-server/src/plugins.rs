@@ -327,18 +327,18 @@ impl RepairHost for Repair {
         let (level, code, detail) = match &outcome.result {
             Ok(_) if outcome.fixed => {
                 tracing::info!(code = "plugins_repaired", plugin, "plugins: pasta de instalação sumiu, plugin reinstalado");
-                ("aviso", "reinstalado", String::new())
+                ("aviso", "reinstalled", String::new())
             }
             Ok(_) => {
                 tracing::warn!(code = "plugins_repair_failed", plugin, "plugins: reinstalado pela CLI, mas a pasta não foi confirmada");
-                ("erro", "pasta_nao_confirmada", String::new())
+                ("erro", "folder_not_confirmed", String::new())
             }
             Err(error) => {
                 tracing::warn!(code = "plugins_repair_failed", plugin, %error, "plugins: pasta de instalação sumiu e a reinstalação falhou");
                 ("erro", error.code(), error.message().unwrap_or_default().chars().take(300).collect())
             }
         };
-        self.0.diag.record_line(json!({"evento": "plugins.reparo", "nivel": level, "codigo": code, "plugin": plugin, "detalhe": detail}));
+        self.0.diag.record_line(json!({"evento": "plugins.repair", "nivel": level, "codigo": code, "plugin": plugin, "detalhe": detail}));
     }
 }
 

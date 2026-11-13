@@ -25,8 +25,10 @@ const SETTLE: Duration = Duration::from_secs(30);
 /// A pasta pode sumir sem o registro mudar.
 const PERIOD: Duration = Duration::from_secs(5 * 60);
 /// Plugin cuja pasta a reinstalação não trouxe só é tentado de novo depois disto, para não rodar a
-/// CLI em laço (a própria reinstalação regrava o registro e acorda o observador).
+/// CLI em laço (a própria reinstalação regrava o registro e acorda o observador). A espera dobra a
+/// cada falha seguida, até [`RETRY_MAX`]: marketplace removido ou plugin que pede revisão não voltam sozinhos.
 const RETRY_AFTER: Duration = Duration::from_secs(30 * 60);
+const RETRY_MAX: Duration = Duration::from_secs(24 * 60 * 60);
 
 pub trait RepairHost {
     /// Plugins ligados com instalação de usuário sem pasta; `None` quando a leitura falhou.
@@ -48,11 +50,12 @@ pub struct Outcome {
 pub async fn run(host: impl RepairHost, plugins_dir: PathBuf) {
     let (changes, mut changed) = watch::channel(());
     // O emissor original fica vivo aqui: sem observador, o `changed()` só espera o período.
-    let _watcher = watch_registry(&plugins_dir, changes.clone());
+    let watcher = watch_registry(&plugins_dir, changes.clone());
     let mut repairer = Repairer::default();
     let mut woken = true;
     loop {
-        if woken {
+        // Sem observador nenhuma conferência sabe se a CLI acabou de gravar: todas esperam.
+        if woken || watcher.is_none() {
             settle(&mut changed, SETTLE).await;
         }
         for outcome in repairer.pass(&host, Instant::now()).await {
@@ -83,9 +86,10 @@ fn watch_registry(dir: &Path, changes: watch::Sender<()>) -> Option<RecommendedW
     watcher.inspect_err(|error| tracing::warn!(code = "plugins_repair_watch_failed", %error, "plugins: sem observador do registro")).ok()
 }
 
+/// Quando falhou por último e quantas vezes seguidas.
 #[derive(Default)]
 struct Repairer {
-    failed: HashMap<String, Instant>,
+    failed: HashMap<String, (Instant, u32)>,
 }
 
 impl Repairer {
@@ -95,7 +99,7 @@ impl Repairer {
         let Some(missing) = host.missing().await else { return vec![] };
         let mut attempts = Vec::new();
         for id in missing {
-            if self.failed.get(id.as_str()).is_some_and(|at| now.duration_since(*at) < RETRY_AFTER) {
+            if self.failed.get(id.as_str()).is_some_and(|(at, times)| now.duration_since(*at) < retry_after(*times)) {
                 continue;
             }
             if let Some(result) = host.reinstall(&id).await {
@@ -113,12 +117,17 @@ impl Repairer {
                 if fixed {
                     self.failed.remove(id.as_str());
                 } else {
-                    self.failed.insert(id.as_str().to_owned(), now);
+                    let times = self.failed.get(id.as_str()).map_or(1, |(_, times)| times + 1);
+                    self.failed.insert(id.as_str().to_owned(), (now, times));
                 }
                 Outcome { id, result, fixed }
             })
             .collect()
     }
+}
+
+fn retry_after(times: u32) -> Duration {
+    RETRY_AFTER.saturating_mul(1 << times.saturating_sub(1).min(16)).min(RETRY_MAX)
 }
 
 #[cfg(test)]
@@ -204,6 +213,19 @@ mod tests {
         let start = Instant::now();
         assert!(repairer.pass(&failing, start).await[0].result.is_err());
         assert!(repairer.pass(&failing, start + Duration::from_secs(60)).await.is_empty());
+        // A segunda falha seguida dobra a espera.
+        let second = start + RETRY_AFTER;
+        assert_eq!(repairer.pass(&failing, second).await.len(), 1);
+        assert!(repairer.pass(&failing, second + RETRY_AFTER).await.is_empty());
+        assert_eq!(repairer.pass(&failing, second + 2 * RETRY_AFTER).await.len(), 1);
+        assert_eq!(failing.installs(), 3);
+    }
+
+    #[test]
+    fn the_wait_doubles_up_to_a_day() {
+        assert_eq!(retry_after(1), RETRY_AFTER);
+        assert_eq!(retry_after(2), 2 * RETRY_AFTER);
+        assert_eq!(retry_after(40), RETRY_MAX);
     }
 
     #[tokio::test(start_paused = true)]
