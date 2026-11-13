@@ -1,7 +1,10 @@
 """run-locked.py: o segundo comando só começa depois que o primeiro solta a trava."""
+import os
 from pathlib import Path
 import subprocess
 import sys
+
+import pytest
 
 SCRIPT = Path(__file__).with_name("run-locked.py")
 
@@ -30,6 +33,25 @@ def test_without_command_the_lock_is_held_until_stdin_closes(tmp_path):
     holder.stdin.close()
     assert holder.wait(timeout=60) == 0 and waiter.wait(timeout=60) == 0
     assert log.read_text() == "ab"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="o flock do Linux não passa por aqui")
+def test_killing_the_lock_holder_kills_the_command(tmp_path):
+    import ctypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.restype = ctypes.c_void_p
+    child = "import os,time; print(os.getpid(), flush=True); time.sleep(120)"
+    holder = subprocess.Popen([sys.executable, str(SCRIPT), str(tmp_path / "x.lock"), sys.executable, "-c", child],
+                              stdout=subprocess.PIPE, text=True)
+    pid = int(holder.stdout.readline())
+    handle = kernel.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+    assert handle, "o comando não abriu"
+    try:
+        holder.kill()
+        holder.wait(timeout=60)
+        assert kernel.WaitForSingleObject(ctypes.c_void_p(handle), 30_000) == 0, "o comando sobreviveu sem a trava"
+    finally:
+        kernel.CloseHandle(ctypes.c_void_p(handle))
 
 
 def test_exit_code_of_the_command_is_returned(tmp_path):

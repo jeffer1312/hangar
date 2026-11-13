@@ -241,6 +241,9 @@ impl ProcessIo {
         let done = tokio::task::spawn_blocking(move || hangar_psmux::command(&dir, &base, &args, deadline)).await;
         let typed = verb == "send-keys";
         match done {
+            // Alvo que sumiu: o servidor responde OK com o erro e não executa nada.
+            Ok(Ok(stdout)) if stdout.starts_with(b"ERROR: can't find ") =>
+                Some(Err(IoFailure { code: "psmux_direct_refused", may_have_written: false })),
             Ok(Ok(stdout)) => Some(Ok((CommandOutput { success: true, stdout }, Vec::new()))),
             Ok(Err(failure)) if typed && failure.written => Some(Err(IoFailure { code: failure.code, may_have_written: true })),
             Ok(Err(failure)) => {
@@ -1994,7 +1997,9 @@ mod psmux_direct_tests {
     use std::io::{BufRead, BufReader, Write};
 
     /// Servidor de sessão falso: responde ao `list-panes` da conferência e a um comando.
-    fn server(dir: &std::path::Path, base: &str) -> std::thread::JoinHandle<Vec<String>> {
+    fn server(dir: &std::path::Path, base: &str) -> std::thread::JoinHandle<Vec<String>> { server_with(dir, base, "saida\n\n") }
+
+    fn server_with(dir: &std::path::Path, base: &str, reply: &'static str) -> std::thread::JoinHandle<Vec<String>> {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         std::fs::write(dir.join(format!("{base}.port")), listener.local_addr().unwrap().port().to_string()).unwrap();
         std::fs::write(dir.join(format!("{base}.key")), "k").unwrap();
@@ -2003,7 +2008,7 @@ mod psmux_direct_tests {
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let (mut auth, mut cmd) = (String::new(), String::new());
             reader.read_line(&mut auth).unwrap(); reader.read_line(&mut cmd).unwrap();
-            let body = if cmd.starts_with("list-panes") { "main\n" } else { "saida\n\n" };
+            let body = if cmd.starts_with("list-panes") { "main\n" } else { reply };
             (&stream).write_all(format!("OK\n{body}").as_bytes()).unwrap();
             cmd
         }).collect())
@@ -2052,6 +2057,21 @@ mod psmux_direct_tests {
         let failure = ProcessIo::default().command(request).await.unwrap_err();
         assert!(failure.code.starts_with("psmux_direct") && failure.may_have_written, "{failure:?}");
         server.join().unwrap();
+    }
+
+    /// Pane que sumiu: o servidor responde OK com o erro e não executa; quem recusa é o CLI.
+    #[tokio::test]
+    async fn a_missing_pane_reply_is_not_a_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let seen = server_with(dir.path(), "main", "ERROR: can't find pane: 7\n");
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let listing = hangar_psmux::list_panes(dir.path(), "#{session_name}", until).unwrap();
+        crate::list::mux::verify_for_test("missing-test-mux-4", dir.path(), listing.servers);
+        let request = CommandRequest { program: "missing-test-mux-4".into(),
+            args: ["send-keys", "-t", "=main:0.7", "-l", "--", "oi"].map(String::from).to_vec(), stdin: vec![] };
+        let failure = ProcessIo::default().command(request).await.unwrap_err();
+        assert_eq!((failure.code, failure.may_have_written), ("psmux_direct_refused", false));
+        seen.join().unwrap();
     }
 
     #[tokio::test]
