@@ -1,5 +1,6 @@
 //! Outras máquinas do mesmo dono: leitura do livro e transporte autenticado.
 use std::collections::HashMap;
+use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -94,12 +95,11 @@ impl PeerBook {
     }
 }
 
-fn cfg(entry: &Value) -> Option<PeerCfg> {
-    let entry = entry.as_object()?;
+fn cfg(value: &Value) -> Option<PeerCfg> {
+    let entry = value.as_object()?;
     let field = |k: &str| entry.get(k).and_then(Value::as_str).filter(|v| !v.is_empty());
-    // Com a marca `connect` o próprio `base_url` já é o Connect, e o `token` é aparelho.
     let connect = match (field("connect_url"), field("connect_token")) {
-        (Some(url), Some(token)) if entry.get("connect") != Some(&Value::Bool(true)) =>
+        (Some(url), Some(token)) if !crate::machine_peers::store::is_device_entry(value) =>
             Some(ConnectRoute { url: url.trim_end_matches('/').to_owned(), token: token.to_owned() }),
         _ => None,
     };
@@ -149,11 +149,12 @@ struct Operation {
     context: DiagnosticContext,
     id: String,
     started: std::time::Instant,
-    cause: Option<&'static str>,
+    /// Mutex: a operação vai por referência compartilhada a cada tentativa de caminho.
+    cause: Mutex<Option<&'static str>>,
 }
 impl Operation {
     fn new(context: &DiagnosticContext) -> Self {
-        let value=Self {context:context.clone(),id:crate::mods::state::random_hex(8),started:std::time::Instant::now(),cause:None};
+        let value=Self {context:context.clone(),id:crate::mods::state::random_hex(8),started:std::time::Instant::now(),cause:Mutex::new(None)};
         value.emit(serde_json::json!({"evento":"peer.chamar.inicio","nivel":"ok"}));
         value
     }
@@ -162,16 +163,16 @@ impl Operation {
         event["operacao"]=Value::String(self.id.clone());
         crate::diag::record_blocking(Some(&self.context.directory), &[event], "chamada de peer");
     }
-    fn result(&mut self, method: &reqwest::Method, status: Option<u16>, failure: Option<(&'static str,&'static str)>) {
+    fn result(&self, method: &reqwest::Method, status: Option<u16>, failure: Option<(&'static str,&'static str)>) {
         let method=match method.as_str(){"GET"|"POST"|"PUT"|"PATCH"|"DELETE"=>method.as_str(),_=>"outro"};
         let mut event=serde_json::json!({"evento":if failure.is_some(){"peer.falhou"}else{"peer.respondeu"},"nivel":if failure.is_some(){"erro"}else{"ok"},"etapa":method,"ms":self.started.elapsed().as_millis() as u64});
         if let Some(status)=status {event["codigo"]=Value::String(status.to_string());}
-        if let Some((detail,kind))=failure {event["detalhe"]=Value::String(detail.into());event["erro_tipo"]=Value::String(kind.into());self.cause=Some(kind);}
+        if let Some((detail,kind))=failure {event["detalhe"]=Value::String(detail.into());event["erro_tipo"]=Value::String(kind.into());*self.cause.lock().unwrap_or_else(|e| e.into_inner())=Some(kind);}
         self.emit(event);
     }
     fn finish(&self, failed: bool) {
         let mut event=serde_json::json!({"evento":"peer.chamar.fim","nivel":if failed{"erro"}else{"ok"},"codigo":if failed{"excecao"}else{"retornou"},"ms":self.started.elapsed().as_millis() as u64});
-        if failed {event["erro_tipo"]=Value::String("PeerError".into());if let Some(cause)=self.cause {event["causa_tipo"]=Value::String(cause.into());}}
+        if failed {event["erro_tipo"]=Value::String("PeerError".into());if let Some(cause)=*self.cause.lock().unwrap_or_else(|e| e.into_inner()) {event["causa_tipo"]=Value::String(cause.into());}}
         self.emit(event);
     }
 }
@@ -224,28 +225,44 @@ impl PeerClient {
         if self.route(server) == Some(Route::Connect) { vec![connect, saved] } else { vec![saved, connect] }
     }
 
-    /// `None`: tentar o próximo caminho. Só quando o pedido não chegou ao Hangar de lá (falha de conexão, ou o
+    /// Uma tentativa por caminho, em ordem, até um decidir; sem decisão, volta o erro do último.
+    async fn over_routes<'a, T, Fut>(&self, server: &str, cfg: &'a PeerCfg, mut once: impl FnMut(usize, Route, &'a str, &'a str) -> Fut)
+        -> Result<T, PeerError>
+    where Fut: Future<Output = Result<T, Failed>> {
+        let attempts = self.attempts(server, cfg);
+        let last = attempts.len() - 1;
+        let mut failure = PeerError::Unknown;
+        for (at, (route, base, token)) in attempts.into_iter().enumerate() {
+            match self.after(server, route, at == last, once(at, route, base, token).await).await {
+                ControlFlow::Break(result) => return result,
+                ControlFlow::Continue(error) => failure = error,
+            }
+        }
+        Err(failure)
+    }
+
+    /// `Continue`: tentar o próximo caminho. Só quando o pedido não chegou ao Hangar de lá (falha de conexão, ou o
     /// proxy do Connect sem alcançá-lo) ou o Connect recusou a credencial; prazo de leitura ou outra resposta
     /// faria recado e cofre chegarem em dobro.
-    async fn after<T>(&self, server: &str, route: Route, last: bool, outcome: Result<T, Failed>) -> Option<Result<T, PeerError>> {
+    async fn after<T>(&self, server: &str, route: Route, last: bool, outcome: Result<T, Failed>) -> ControlFlow<Result<T, PeerError>, PeerError> {
         let outcome = match outcome {
             Err(Failed { error, .. }) if route == Route::Connect && proxy_unreached(&error) => Err(Failed { error, unsent: true }),
             other => other,
         };
         match outcome {
-            Ok(value) => { self.remember(server, Some(route)); Some(Ok(value)) }
+            Ok(value) => { self.remember(server, Some(route)); ControlFlow::Break(Ok(value)) }
             Err(Failed { unsent: true, error }) => {
                 // Só a falha de conexão tira o Connect da frente.
                 if route == Route::Connect || last { self.remember(server, None); }
-                if last { Some(Err(error)) } else { None }
+                ControlFlow::Continue(error)
             }
             Err(Failed { error: error @ PeerError::Refused { status: 401, .. }, .. }) if route == Route::Connect => {
                 self.refuse_connect(server).await;
-                if last { Some(Err(error)) } else { None }
+                ControlFlow::Continue(error)
             }
             // Resposta HTTP (o 5xx do proxy incluído) prova que o caminho conecta: ele segue à frente, e a
             // próxima chamada não paga de novo o prazo de conexão do endereço salvo.
-            Err(Failed { error, .. }) => Some(Err(error)),
+            Err(Failed { error, .. }) => ControlFlow::Break(Err(error)),
         }
     }
 
@@ -307,19 +324,19 @@ impl PeerClient {
 
     async fn send(&self, agent: Option<&str>, waiting: bool, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>)
         -> Result<(u16, Option<Value>), PeerError> {
-        let mut operation=self.diagnostics.as_ref().map(Operation::new);
-        let result=self.send_inner(agent,waiting,server,method,path,body,operation.as_mut()).await;
+        let operation=self.diagnostics.as_ref().map(Operation::new);
+        let result=self.send_inner(agent,waiting,server,method,path,body,operation.as_ref()).await;
         if let Some(operation)=operation {operation.finish(result.is_err());}
         result
     }
 
-    async fn send_inner(&self, agent: Option<&str>, waiting: bool, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>, mut operation:Option<&mut Operation>)
+    async fn send_inner(&self, agent: Option<&str>, waiting: bool, server: &str, method: reqwest::Method, path: &str, body: Option<&Value>, operation:Option<&Operation>)
         -> Result<(u16, Option<Value>), PeerError> {
         let book = self.book.clone();
         let key = server.to_owned();
         let cfg = tokio::task::spawn_blocking(move || book.get(&key)).await.ok().flatten();
         let Some(cfg)=cfg else {
-            if let Some(operation)=operation.as_mut(){operation.emit(serde_json::json!({"evento":"peer.recusado","nivel":"erro","etapa":method.as_str(),"detalhe":"configuracao_ausente_ou_incompleta"}));}
+            if let Some(operation)=operation{operation.emit(serde_json::json!({"evento":"peer.recusado","nivel":"erro","etapa":method.as_str(),"detalhe":"configuracao_ausente_ou_incompleta"}));}
             return Err(PeerError::Unknown);
         };
         let (slot, read, total) = if waiting { (&self.waiting, OWNER_WAIT_TIMEOUT, OWNER_WAIT_TIMEOUT) } else { (&self.http, READ_TIMEOUT, TOTAL_TIMEOUT) };
@@ -331,16 +348,13 @@ impl PeerClient {
                 slot.get_or_init(|| built)
             }
         };
-        let attempts = self.attempts(server, &cfg);
-        let last = attempts.len() - 1;
-        for (at, (route, base, token)) in attempts.into_iter().enumerate() {
-            if at > 0 && let Some(operation) = operation.as_mut() {
+        self.over_routes(server, &cfg, |at, route, base, token| {
+            if at > 0 && let Some(operation) = operation {
                 operation.emit(serde_json::json!({"evento":"peer.outro_caminho","nivel":"aviso","etapa":route.name()}));
             }
-            let outcome = request_observed(agent, http, server, &format!("{base}{path}"), Some(token), method.clone(), body, operation.as_deref_mut()).await;
-            if let Some(result) = self.after(server, route, at == last, outcome).await { return result; }
-        }
-        Err(PeerError::Unknown)
+            let (url, method) = (format!("{base}{path}"), method.clone());
+            async move { request_observed(agent, http, server, &url, Some(token), method, body, operation).await }
+        }).await
     }
 
     /// Como `call`, sem redirect e com o corpo 2xx cru em `Zeroizing` até `limit`: a resposta pode levar
@@ -365,13 +379,10 @@ impl PeerClient {
         let kind = body.as_ref().map_or("application/json", |(_, kind)| *kind);
         // `Bytes` divide o mesmo buffer entre as tentativas: a senha não ganha cópia.
         let body = body.map(|(body, _)| bytes::Bytes::from(body));
-        let attempts = self.attempts(server, &cfg);
-        let last = attempts.len() - 1;
-        for (at, (route, base, token)) in attempts.into_iter().enumerate() {
-            let outcome = secret_once(http, server, &format!("{base}{path}"), token, method.clone(), kind, body.clone(), limit).await;
-            if let Some(result) = self.after(server, route, at == last, outcome).await { return result; }
-        }
-        Err(PeerError::Unknown)
+        self.over_routes(server, &cfg, |_, _, base, token| {
+            let (url, method, body) = (format!("{base}{path}"), method.clone(), body.clone());
+            async move { secret_once(http, server, &url, token, method, kind, body, limit).await }
+        }).await
     }
 
     /// `call_group` de um pedido à dona que espera outras máquinas (`op: join`, `op: message`), com
@@ -474,14 +485,14 @@ pub(crate) async fn request(http: &reqwest::Client, label: &str, url: &str, toke
     request_observed(None,http,label,url,token,method,body,None).await.map_err(|failed| failed.error)
 }
 async fn request_observed(agent: Option<&str>, http: &reqwest::Client, label: &str, url: &str, token: Option<&str>, method: reqwest::Method,
-    body:Option<&Value>, mut operation:Option<&mut Operation>)->Result<(u16,Option<Value>),Failed> {
+    body:Option<&Value>, operation:Option<&Operation>)->Result<(u16,Option<Value>),Failed> {
     let mut req = http.request(method.clone(), url).header(reqwest::header::CONTENT_TYPE, "application/json");
     if let Some(agent) = agent { req = req.header(reqwest::header::USER_AGENT, agent); }
-    if let Some(operation)=operation.as_ref() && !operation.context.request.is_empty(){req=req.header("x-hangar-req",&operation.context.request);}
+    if let Some(operation)=operation &&!operation.context.request.is_empty(){req=req.header("x-hangar-req",&operation.context.request);}
     if let Some(token) = token.filter(|t| !t.is_empty()) { req = req.bearer_auth(token); }
     if let Some(body) = body { req = req.body(body.to_string()); }
     let mut resp = req.send().await.map_err(|e| {
-        if let Some(operation)=operation.as_mut(){operation.result(&method,None,Some(("transporte_resultado_incerto",transport_kind(&e))));}
+        if let Some(operation)=operation{operation.result(&method,None,Some(("transporte_resultado_incerto",transport_kind(&e))));}
         Failed::from_send(label, &e)
     })?;
     let status = resp.status();
@@ -493,13 +504,13 @@ async fn request_observed(agent: Option<&str>, http: &reqwest::Client, label: &s
                 if raw.len() > MAX_BODY {
                     // A recusa ainda se lê pelo primeiro 1 MiB; o sucesso grande é incerto.
                     if !status.is_success() { raw.truncate(MAX_BODY); break; }
-                    if let Some(operation)=operation.as_mut(){operation.result(&method,None,Some(("transporte_resultado_incerto","OSError")));}
+                    if let Some(operation)=operation{operation.result(&method,None,Some(("transporte_resultado_incerto","OSError")));}
                     return Err(Failed::sent(PeerError::Transport(TOO_LARGE.into())));
                 }
             }
             Ok(None) => break,
             Err(e) if status.is_success() => {
-                if let Some(operation)=operation.as_mut(){operation.result(&method,None,Some(("transporte_resultado_incerto",transport_kind(&e))));}
+                if let Some(operation)=operation{operation.result(&method,None,Some(("transporte_resultado_incerto",transport_kind(&e))));}
                 return Err(Failed::sent(transport(label, &e)));
             },
             Err(_) => break,
@@ -507,7 +518,7 @@ async fn request_observed(agent: Option<&str>, http: &reqwest::Client, label: &s
     }
     let text = String::from_utf8_lossy(&raw);
     if !status.is_success() {
-        if let Some(operation)=operation.as_mut(){operation.result(&method,Some(status.as_u16()),Some(("http_recusado","HTTPError")));}
+        if let Some(operation)=operation{operation.result(&method,Some(status.as_u16()),Some(("http_recusado","HTTPError")));}
         let detail = match serde_json::from_str::<Value>(&text) {
             Ok(Value::Object(mut map)) => map.remove("detail").unwrap_or_else(|| Value::String(text.clone().into_owned())),
             _ => Value::String(text.into_owned()),
@@ -517,7 +528,7 @@ async fn request_observed(agent: Option<&str>, http: &reqwest::Client, label: &s
     let result=if text.trim().is_empty(){Ok((status.as_u16(),None))}else{
         serde_json::from_str(&text).map(|v| (status.as_u16(), Some(v))).map_err(|e| PeerError::Transport(format!("{label} respondeu corpo ilegível: {e}")))
     };
-    if let Some(operation)=operation.as_mut(){operation.result(&method,Some(status.as_u16()),result.as_ref().err().map(|_|("resposta_json_ilegivel","JSONDecodeError")));}
+    if let Some(operation)=operation{operation.result(&method,Some(status.as_u16()),result.as_ref().err().map(|_|("resposta_json_ilegivel","JSONDecodeError")));}
     result.map_err(Failed::sent)
 }
 

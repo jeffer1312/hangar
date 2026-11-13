@@ -1,8 +1,8 @@
 //! O Connect como caminho a mais das máquinas que já estão no `peers.json`. Corre por evento (Connect
 //! ligado aqui, lista da conta lida, máquina gravada pelo dono), nunca por varredura periódica.
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use reqwest::Method;
@@ -10,23 +10,19 @@ use serde_json::{Value, json};
 
 use super::Service;
 use super::network::revoke_device;
-use super::store::Book;
+use super::store::{Book, is_device_entry};
 use crate::connect::peers::{AccountMachine, account_machines, on_connect_host};
-use crate::groups::peers::{PeerError, client, request};
+use crate::groups::peers::PeerError;
 use crate::routes::AppState;
 
-/// Máquina que falhou espera isto antes do próximo evento tentar de novo: abrir a tela do Connect não
-/// repete a chamada nem enche o diário.
+/// Máquina que falhou ou que disse estar fora do Connect espera isto antes do próximo evento tentar de
+/// novo: abrir a tela do Connect não repete a chamada nem enche o diário.
 const COOLDOWN: Duration = Duration::from_secs(600);
 
-/// Connect ligado nesta máquina ou máquina gravada pelo dono: a lista da conta só é lida se houver o que fazer.
-pub fn spawn(st: &Arc<AppState>) {
-    tokio::spawn(run(st.clone(), None));
-}
-
-/// A tela acabou de ler a lista da conta.
-pub fn spawn_with(st: &Arc<AppState>, machines: Vec<AccountMachine>) {
-    tokio::spawn(run(st.clone(), Some(machines)));
+/// Connect ligado nesta máquina, máquina gravada pelo dono ou a tela que acabou de ler a lista da conta
+/// (`machines`). Sem ela, a lista só é lida se houver o que fazer.
+pub fn spawn(st: &Arc<AppState>, machines: Option<Vec<AccountMachine>>) {
+    tokio::spawn(run(st.clone(), machines));
 }
 
 async fn run(st: Arc<AppState>, machines: Option<Vec<AccountMachine>>) {
@@ -40,7 +36,7 @@ async fn run(st: Arc<AppState>, machines: Option<Vec<AccountMachine>>) {
     let (store, read_link) = (service.store.clone(), link.clone());
     let mut ids = tokio::task::spawn_blocking(move || candidates(&store.tolerant(), Some(&read_link))).await.unwrap_or_default();
     let now = Instant::now();
-    ids.retain(|id| !cooling(&(service.store.path.clone(), id.clone()), now));
+    ids.retain(|id| !busy(&key(&service.store.path, id), now));
     if ids.is_empty() {
         return;
     }
@@ -57,14 +53,14 @@ async fn run(st: Arc<AppState>, machines: Option<Vec<AccountMachine>>) {
         let (st, service, machines, link) = (st.clone(), service.clone(), machines.clone(), link.clone());
         tokio::spawn(async move {
             match enroll(&service, &id, &link, &machines).await {
-                Ok(()) => forget(&slot.0),
+                Ok(Enrolled::Done) => slot.end(None),
+                Ok(Enrolled::Absent) => slot.end(Some(Instant::now())),
                 Err((code, detail)) => {
-                    note_failure(slot.0.clone(), Instant::now());
+                    slot.end(Some(Instant::now()));
                     tracing::warn!(code = "connect.peer_route_failed", reason = code, peer = %id, "o Connect não virou caminho de '{id}': {detail}");
                     report(&st, &id, code, "o Connect não virou caminho da máquina");
                 }
             }
-            drop(slot);
         });
     }
 }
@@ -77,78 +73,106 @@ fn candidates(book: &Book, link: Option<&str>) -> Vec<String> {
 
 fn candidate(entry: &Value, link: Option<&str>) -> bool {
     let filled = |value: &Value| value.as_str().is_some_and(|text| !text.is_empty());
-    entry.is_object() && entry["enabled"] != false && entry["connect"] != true
+    entry.is_object() && entry["enabled"] != false && !is_device_entry(entry)
         && entry["connect_refused"] != true && entry.get("connect_url").is_none() && filled(&entry["token"])
         && entry["base_url"].as_str().is_some_and(|url| !url.is_empty() && !on_connect_host(link, url))
 }
 
+/// Máquina e arquivo.
 type Key = (PathBuf, String);
 
-fn failures() -> &'static Mutex<HashMap<Key, Instant>> {
-    static FAILED: OnceLock<Mutex<HashMap<Key, Instant>>> = OnceLock::new();
-    FAILED.get_or_init(Mutex::default)
+fn key(path: &Path, id: &str) -> Key {
+    (path.to_path_buf(), id.to_owned())
 }
 
-fn cooling(key: &Key, now: Instant) -> bool {
-    failures().lock().unwrap_or_else(|e| e.into_inner()).get(key).is_some_and(|at| now.saturating_duration_since(*at) < COOLDOWN)
+/// Uma emissão por vez (dois eventos juntos emitiriam duas credenciais lá) e a espera depois dela.
+enum State { Running, FailedAt(Instant) }
+
+impl State {
+    fn busy(&self, now: Instant) -> bool {
+        match self {
+            State::Running => true,
+            State::FailedAt(at) => now.saturating_duration_since(*at) < COOLDOWN,
+        }
+    }
 }
 
-fn note_failure(key: Key, now: Instant) {
-    failures().lock().unwrap_or_else(|e| e.into_inner()).insert(key, now);
+fn states() -> MutexGuard<'static, HashMap<Key, State>> {
+    static STATES: OnceLock<Mutex<HashMap<Key, State>>> = OnceLock::new();
+    STATES.get_or_init(Mutex::default).lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn forget(key: &Key) {
-    failures().lock().unwrap_or_else(|e| e.into_inner()).remove(key);
+/// Em curso ou ainda na espera.
+fn busy(key: &Key, now: Instant) -> bool {
+    states().get(key).is_some_and(|state| state.busy(now))
 }
 
-/// O dono acabou de gravar a máquina: a espera da falha anterior não vale para o que ele corrigiu.
+/// O dono acabou de gravar a máquina: a espera anterior não vale para o que ele corrigiu. A vez em curso segue.
 pub fn forget_failure(path: &Path, id: &str) {
-    forget(&(path.to_path_buf(), id.to_owned()));
+    let (mut states, key) = (states(), key(path, id));
+    if matches!(states.get(&key), Some(State::FailedAt(_))) {
+        states.remove(&key);
+    }
 }
 
-/// Uma emissão por máquina e por arquivo: dois eventos juntos emitiriam duas credenciais lá.
+/// A vez de uma máquina; sair sem `end` (tarefa cancelada) a solta sem espera.
 struct Slot(Key);
 
-fn running() -> &'static Mutex<HashSet<(PathBuf, String)>> {
-    static RUNNING: OnceLock<Mutex<HashSet<(PathBuf, String)>>> = OnceLock::new();
-    RUNNING.get_or_init(Mutex::default)
-}
-
 impl Slot {
-    fn claim(path: &std::path::Path, id: &str) -> Option<Self> {
-        let key = (path.to_path_buf(), id.to_owned());
-        running().lock().unwrap_or_else(|e| e.into_inner()).insert(key.clone()).then(|| Self(key))
+    /// Conferida de novo sob a trava: entre o filtro do `run` e aqui, outra vez pode ter acabado em falha.
+    fn claim(path: &Path, id: &str) -> Option<Self> {
+        let (mut states, key) = (states(), key(path, id));
+        if states.get(&key).is_some_and(|state| state.busy(Instant::now())) {
+            return None;
+        }
+        states.insert(key.clone(), State::Running);
+        Some(Self(key))
+    }
+
+    /// `failed_at`: a máquina espera o `COOLDOWN` a partir dali.
+    fn end(self, failed_at: Option<Instant>) {
+        if let Some(at) = failed_at {
+            states().insert(self.0.clone(), State::FailedAt(at));
+        }
     }
 }
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        running().lock().unwrap_or_else(|e| e.into_inner()).remove(&self.0);
+        let mut states = states();
+        if matches!(states.get(&self.0), Some(State::Running)) {
+            states.remove(&self.0);
+        }
     }
 }
 
 type Failure = (&'static str, String);
 
-async fn enroll(service: &Service, id: &str, link: &str, machines: &[AccountMachine]) -> Result<(), Failure> {
+/// Fim sem falha da vez de uma máquina.
+enum Enrolled {
+    /// Caminho gravado, ou a entrada já não precisa dele.
+    Done,
+    /// Lá não está no Connect: não é falha, mas espera como uma, senão cada tela e gravação perguntaria de novo.
+    Absent,
+}
+
+async fn enroll(service: &Service, id: &str, link: &str, machines: &[AccountMachine]) -> Result<Enrolled, Failure> {
     // Relida dentro da vez desta máquina: outro evento pode ter acabado de gravar o caminho ou a recusa.
     let (store, key) = (service.store.clone(), id.to_owned());
     let entry = tokio::task::spawn_blocking(move || store.tolerant().get(&key).cloned()).await.ok().flatten().unwrap_or_default();
     if !candidate(&entry, Some(link)) {
-        return Ok(());
+        return Ok(Enrolled::Done);
     }
-    let (Some(base), Some(owner)) = (entry["base_url"].as_str(), entry["token"].as_str()) else { return Ok(()) };
+    let (Some(base), Some(owner)) = (entry["base_url"].as_str(), entry["token"].as_str()) else { return Ok(Enrolled::Done) };
     let (base, owner) = (base.trim_end_matches('/').to_owned(), owner.to_owned());
-    // Sem o Connect e sem redirect: as duas chamadas levam a senha do dono, que só vai pelo endereço salvo.
-    let http = client(crate::http_client().redirect(reqwest::redirect::Policy::none()))
-        .map_err(|e| ("connect_peer_unreachable", format!("cliente HTTP indisponível: {e}")))?;
     let failed = |e: PeerError| (code_of(&e), e.text(id));
-    let call = |method: Method, path: &str, body: Option<Value>| {
-        let (http, url, owner) = (http.clone(), format!("{base}{path}"), owner.clone());
-        async move { request(&http, id, &url, Some(&owner), method, body.as_ref()).await.map(|(_, value)| value.unwrap_or_default()) }
+    // Pelo endereço salvo e sem redirect (`pairs::call`): as duas chamadas levam a senha do dono.
+    let call = |method: Method, path: &'static str, body: Option<Value>| {
+        let (base, owner) = (base.clone(), owner.clone());
+        async move { crate::share::pairs::call(&base, Some(&owner), method, path, body.as_ref()).await.map(|(_, value)| value.unwrap_or_default()) }
     };
     let state = call(Method::GET, "/api/connect", None).await.map_err(failed)?;
-    // Fora do Connect lá não é falha: o próximo evento confere de novo.
-    let Some(host) = state["host"].as_str().filter(|host| !host.is_empty()) else { return Ok(()) };
+    let Some(host) = state["host"].as_str().filter(|host| !host.is_empty()) else { return Ok(Enrolled::Absent) };
     // O endereço gravado é o da lista da conta, nunca o que a outra máquina disse.
     let Some(machine) = machines.iter().find(|machine| machine.host.eq_ignore_ascii_case(host)) else {
         return Err(("connect_peer_host_outside_account", format!("'{id}' diz estar no Connect em {host}, que não é desta conta")));
@@ -165,9 +189,9 @@ async fn enroll(service: &Service, id: &str, link: &str, machines: &[AccountMach
         Ok(Ok(previous)) => {
             // Caminho que já estava lá foi substituído: o aparelho dele se revoga pelo próprio Connect.
             if let Some(old) = previous {
-                revoke_device(&old.id, None, Some((old.url, old.token)), &old.device).await;
+                old.revoke().await;
             }
-            return Ok(());
+            return Ok(Enrolled::Done);
         }
         Ok(Err(e)) => (e.code, e.msg),
         Err(_) => ("peers_response_failed", "a gravação foi interrompida".to_owned()),
@@ -244,26 +268,31 @@ mod tests {
         assert!(rows[1].get("connect_token").is_none() && !rows.to_string().contains("aparelho"), "a credencial não sai na lista");
     }
 
-    /// Máquina que falhou fica 10 min sem nova tentativa, salvo o dono gravá-la de novo.
+    /// Máquina que falhou (ou disse estar fora do Connect) fica 10 min sem nova tentativa, salvo o dono gravá-la de novo.
     #[test]
     fn a_failed_machine_waits_the_cooldown_unless_the_owner_saves_it() {
-        let path = std::path::Path::new("/tmp/peers-cooldown-test.json");
-        let key = (path.to_path_buf(), "note".to_owned());
+        let path = Path::new("/tmp/peers-cooldown-test.json");
+        let note = key(path, "note");
         let failed_at = Instant::now();
-        assert!(!cooling(&key, failed_at));
-        note_failure(key.clone(), failed_at);
-        assert!(cooling(&key, failed_at + Duration::from_secs(60)));
-        assert!(!cooling(&key, failed_at + COOLDOWN + Duration::from_secs(1)));
-        assert!(!cooling(&(path.to_path_buf(), "outra".to_owned()), failed_at));
+        assert!(!busy(&note, failed_at));
+        Slot::claim(path, "note").unwrap().end(Some(failed_at));
+        assert!(busy(&note, failed_at + Duration::from_secs(60)));
+        assert!(Slot::claim(path, "note").is_none(), "na espera, a vez não é dada");
+        assert!(!busy(&note, failed_at + COOLDOWN + Duration::from_secs(1)));
+        assert!(!busy(&key(path, "outra"), failed_at));
         forget_failure(path, "note");
-        assert!(!cooling(&key, failed_at));
+        assert!(!busy(&note, failed_at));
+        Slot::claim(path, "note").unwrap().end(None);
+        assert!(!busy(&note, Instant::now()), "a vez que terminou bem não deixa espera");
     }
 
     #[test]
     fn a_second_claim_waits_for_the_first_to_end() {
-        let path = std::path::Path::new("/tmp/peers-slot-test.json");
+        let path = Path::new("/tmp/peers-slot-test.json");
         let first = Slot::claim(path, "note").unwrap();
         assert!(Slot::claim(path, "note").is_none());
+        forget_failure(path, "note");
+        assert!(Slot::claim(path, "note").is_none(), "gravar a máquina não solta a vez em curso");
         assert!(Slot::claim(path, "outra").is_some());
         drop(first);
         assert!(Slot::claim(path, "note").is_some());

@@ -448,7 +448,7 @@ async fn handle_inner(
             use crate::orchestration::codec;
             if device_caller && path=="/api/peers/app-list" {store::mask_app_tokens(&mut value);}
             // Gravada pelo dono (ou anunciada por outra máquina com a senha): pode ganhar o Connect.
-            if method==Method::POST && path=="/api/peers" && !device_caller {connect_route::spawn(&st);}
+            if method==Method::POST && path=="/api/peers" && !device_caller {connect_route::spawn(&st, None);}
             if method==Method::GET && path=="/api/peers" {with_routes(&st.peers,&mut value);}
             if codec::contains_surrogate(&value){codec::discard(value);crate::http_cors::internal_error()}
             else{codec::response(StatusCode::OK,codec::normalize_response(value))}
@@ -555,17 +555,13 @@ pub async fn dispatch(
             }
             // Endereço novo pode ser outra máquina: o aparelho da antiga sai pelo Connect dela, sem segurar a resposta.
             if let Some(old) = moved {
-                tokio::spawn(async move { network::revoke_device(&old.id, None, Some((old.url, old.token)), &old.device).await });
+                tokio::spawn(old.revoke());
             }
             Ok(rows)
         }
         ("GET", "/api/alcance") => Ok(network::reach(&service).await),
         ("GET", "/api/alcance/pareamento") => network::pairing(&service, q("endereco")).await,
         _ => {
-            // Antes de apagar: a revogação lê o endereço e a senha na própria entrada.
-            if *method == Method::DELETE && let Some(id) = path.strip_prefix("/api/peers/") {
-                network::revoke_connect_device(&service, id).await;
-            }
             let method = method.clone();
             let path = path.to_owned();
             tokio::task::spawn_blocking(move || match (method.as_str(), path.as_str()) {
@@ -588,7 +584,12 @@ pub async fn dispatch(
                     {
                         service.store.token(id)
                     } else if method == Method::DELETE {
-                        service.remove_peer(&decoded)
+                        // Lida antes de apagar: a revogação usa o endereço e a senha da própria entrada.
+                        let revoke = network::connect_device_revoke(&service, decoded);
+                        let rows = service.remove_peer(decoded)?;
+                        // Fora do ar lá, a remoção daqui não espera.
+                        if let Some(revoke) = revoke { tokio::spawn(revoke); }
+                        Ok(rows)
                     } else {
                         Err(Error {
                             status: 405,

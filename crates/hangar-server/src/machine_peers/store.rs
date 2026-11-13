@@ -322,6 +322,11 @@ fn take_route(entry: &mut Map<String, Value>, id: &str) -> Option<OldRoute> {
 fn saved_peer<'a>(data: &'a mut Map<String, Value>, id: &str) -> Result<&'a mut Map<String, Value>, Error> {
     data.get_mut(id).filter(|v| truthy(&v["base_url"])).and_then(Value::as_object_mut).ok_or_else(|| unknown(id))
 }
+/// Par gravado pelo Connect (marca `connect`): o `base_url` já é o Connect e o `token` é credencial de
+/// aparelho, não a senha do dono de lá.
+pub fn is_device_entry(entry: &Value) -> bool {
+    entry["connect"] == true
+}
 /// O id entra no caminho da revogação na outra máquina: só o formato que ela emite.
 pub fn valid_device(device: &str) -> bool {
     (1..=64).contains(&device.len()) && device.chars().all(|c| c.is_ascii_alphanumeric())

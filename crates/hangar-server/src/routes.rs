@@ -399,7 +399,7 @@ pub async fn serve_with_guest(listener: TcpListener, mut state: AppState, guest:
     let _vault_files = crate::AbortOnDrop(tokio::spawn(crate::vault::files::sweep_at_start()));
     let _auto_report = crate::AbortOnDrop(crate::diag_report::auto::spawn(state.clone()));
     // O Connect gravado volta junto com o servidor: é o evento "Connect ligado" da subida.
-    crate::machine_peers::connect_route::spawn(&state);
+    crate::machine_peers::connect_route::spawn(&state, None);
     // Abortada na saída: a tarefa segura o estado do servidor, que sobreviveria a ele.
     // As sessões com terminal que o multiplexador perdeu voltam pelo spec; antes da varredura de grupos, que
     // conta como vivos os nomes à espera dele.

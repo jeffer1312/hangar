@@ -219,7 +219,7 @@ async fn link(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<So
     let outcome = tokio::spawn(async move {
         let linked = supervisor.link(body).await;
         // Connect ligado agora: as máquinas já salvas ganham o caminho por ele.
-        if linked.is_ok() { crate::machine_peers::connect_route::spawn(&state); }
+        if linked.is_ok() { crate::machine_peers::connect_route::spawn(&state, None); }
         linked
     }).await;
     finished(&st, &headers, outcome)
@@ -307,7 +307,7 @@ async fn account_list(State(st): State<Arc<AppState>>, ConnectInfo(peer): Connec
         Ok(machines) => machines,
         Err(failure) => return error(&headers, failure.status, failure.code, &failure.msg),
     };
-    crate::machine_peers::connect_route::spawn_with(&st, machines.clone());
+    crate::machine_peers::connect_route::spawn(&st, Some(machines.clone()));
     let store = match crate::machine_peers::Service::from_state(&st) {
         Ok(service) => service.store,
         Err(failure) => return error(&headers, StatusCode::SERVICE_UNAVAILABLE, failure.code, &failure.msg),

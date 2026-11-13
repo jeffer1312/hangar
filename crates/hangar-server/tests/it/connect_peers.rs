@@ -710,7 +710,8 @@ async fn removing_a_peer_revokes_its_connect_device_on_the_other_machine() {
     write_peers(&w.a, &with_route(&format!("http://{}", w.b.main), OWNER, &device));
     assert_eq!(delete_peer(&w.a).await, 200);
     assert!(peers_of(&w.a).get("pc-b").is_none());
-    assert!(w.b.store.verify(token.as_bytes()).is_none(), "revogado pela senha do dono de lá");
+    // A revogação roda depois da resposta.
+    wait_for("o aparelho não foi revogado pela senha do dono de lá", || w.b.store.verify(token.as_bytes()).is_none()).await;
 }
 
 #[tokio::test]
@@ -736,6 +737,8 @@ async fn removing_a_connect_marked_peer_does_not_try_to_revoke() {
     peers["pc-b"]["connect"] = json!(true);
     write_peers(&w.a, &peers);
     assert_eq!(delete_peer(&w.a).await, 200);
+    // A revogação roda depois da resposta: o prazo deixa ela chegar, se fosse sair.
+    tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(w.b.store.verify(token.as_bytes()).is_some());
 }
 
@@ -827,6 +830,22 @@ async fn a_host_outside_the_account_is_refused() {
     assert!(peers_of(&w.a)["notebook-jefferson"].get("connect_url").is_none());
 }
 
+/// Fora do Connect lá não é falha, mas espera como uma: a tela da conta não pergunta de novo; o dono
+/// gravando a máquina, sim.
+#[tokio::test]
+async fn a_machine_outside_connect_waits_until_the_owner_saves_it_again() {
+    let w = world().await;
+    let (seen, url) = saved_machine(String::new()).await;
+    owner_saves(&w.a, "notebook-jefferson", &url).await;
+    wait_for("a outra máquina nem foi consultada", || seen.lock().unwrap().len() == 1).await;
+    client().get(format!("http://{}/api/connect/machines", w.a.main)).bearer_auth(OWNER).send().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(seen.lock().unwrap().len(), 1, "a tela da conta perguntou de novo");
+    owner_saves(&w.a, "notebook-jefferson", &url).await;
+    wait_for("a gravação do dono não perguntou de novo", || seen.lock().unwrap().len() == 2).await;
+    assert!(seen.lock().unwrap().iter().all(|(kind, _)| kind == "state"), "nenhum aparelho emitido lá");
+}
+
 /// O anúncio leva a senha do dono no corpo: com o endereço salvo fechado, ele falha e nunca tenta o Connect.
 #[tokio::test]
 async fn announce_never_falls_back_to_the_connect_route() {
@@ -884,7 +903,7 @@ async fn removing_a_peer_revokes_through_connect_when_the_saved_address_is_down(
         "connect_url": format!("http://{}", w.b.connect), "connect_token": token, "connect_device": device}}));
     assert_eq!(delete_peer(&w.a).await, 200);
     assert!(peers_of(&w.a).get("pc-b").is_none());
-    assert!(w.b.store.verify(token.as_bytes()).is_none(), "revogado pelo Connect");
+    wait_for("o aparelho não foi revogado pelo Connect", || w.b.store.verify(token.as_bytes()).is_none()).await;
 }
 
 /// O dono põe o nome em outro endereço: o Connect da máquina antiga sai, e o aparelho dela é revogado lá.
