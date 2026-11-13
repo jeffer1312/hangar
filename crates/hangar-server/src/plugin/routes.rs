@@ -74,6 +74,7 @@ pub fn router<S: Clone + Send + Sync + 'static>(state: Arc<RouteState>) -> Route
         .route("/api/plugin/rate", post(rate))
         .route("/api/plugin/agent", post(agent))
         .route("/api/plugin/agent-sent", post(agent_sent))
+        .route("/api/plugin/task-stopped", post(task_stopped))
         .layer(DefaultBodyLimit::disable())
         .with_state(state)
 }
@@ -115,6 +116,9 @@ struct AgentEvent { agent_id: String, estado: AgentState, at: Option<i64> }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AgentSent { id: String, is_delivered: bool, reason: Option<String> }
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskStopped { task_id: String, is_stopped: bool, reason: Option<String> }
 #[derive(Deserialize)]
 struct Rate { tokens: u64, seconds: f64, session_id: String }
 
@@ -346,6 +350,15 @@ async fn agent_sent(State(st): State<Arc<RouteState>>, Json(body): Json<Envelope
     let identity = match admit(&st, &body).await { Ok(identity) => identity, Err(error) => return fail(error) };
     let AgentSent { id, is_delivered, reason } = body.body;
     match st.store.agent_sent(&identity.binding, &id, is_delivered, reason) { Ok(()) => ok(), Err(error) => fail(error) }
+}
+/// O que o `TaskStop` respondeu ao `stop_task` do `/pull`. Só fica no log: o aceite não prova a parada,
+/// quem prova é o estado da tarefa.
+async fn task_stopped(State(st): State<Arc<RouteState>>, Json(body): Json<Envelope<TaskStopped>>) -> Response {
+    let identity = match admit(&st, &body).await { Ok(identity) => identity, Err(error) => return fail(error) };
+    let TaskStopped { task_id, is_stopped, reason } = body.body;
+    if is_stopped { tracing::info!(session = %identity.name, task_id, "TaskStop aceito pelo Claude Code"); }
+    else { tracing::warn!(session = %identity.name, task_id, reason = reason.as_deref().unwrap_or(""), "TaskStop recusado pelo Claude Code"); }
+    ok()
 }
 async fn rate(State(st): State<Arc<RouteState>>, Json(body): Json<Envelope<Rate>>) -> Response {
     if body.body.tokens == 0 || body.body.tokens > 1_000_000 || !body.body.seconds.is_finite() || body.body.seconds <= 0.0 || body.body.seconds > 3600.0 {

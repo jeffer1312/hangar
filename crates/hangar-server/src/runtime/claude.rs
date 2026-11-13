@@ -738,6 +738,12 @@ impl ClaudeEngine {
                 self.idle_compact.tried |= self.idle_compact.auto;
                 self.local_command(operation_id,"/compact",&mut effects);
             }
+            OperationKind::StopTask => {
+                let task_id = payload["task_id"].as_str().filter(|id|!id.is_empty()).ok_or_else(||error("task_id não informado"))?;
+                self.control(operation_id.clone(),"stop_task",json!({"task_id":task_id}),&mut effects);
+                // O `success` da CLI não prova a parada (id inventado também o recebe): responde na escrita.
+                if let Some(wire) = self.wires.get_mut(&operation_id) { wire.kind = "stop_task".into(); }
+            }
             OperationKind::Cwd => effects.push(Effect::Reply { operation_id,disposition:Disposition::Accepted,payload:self.metadata["cwd"].clone() }),
             OperationKind::Detach => effects.push(Effect::Stop { reason:"detach".into() }),
             _ => return Err(error("operação exige a barreira de lifecycle ou não é suportada pelo Claude")),
@@ -817,7 +823,7 @@ impl ClaudeEngine {
         if wire.kind == "effort" && outcome == WriteOutcome::Written { return; }
         let kind = wire.kind.clone();
         let request_id = wire.request_id.clone();
-        if kind == "interrupt" && let Some(id) = &request_id { self.waiters.remove(id); }
+        if matches!(kind.as_str(),"interrupt" | "stop_task") && let Some(id) = &request_id { self.waiters.remove(id); }
         let disposition = match outcome { WriteOutcome::Written => Disposition::Accepted,
             WriteOutcome::NotWritten => Disposition::Rejected,WriteOutcome::Unknown => Disposition::Unknown };
         wire.final_result = outcome != WriteOutcome::Unknown;

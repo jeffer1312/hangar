@@ -688,6 +688,7 @@ where H: axum::handler::Handler<T, Arc<AppState>>, T: 'static {
         .route("/api/jev/delivery", get(crate::session_write::delivery_timing::availability).fallback(fallback.clone()))
         .route("/api/sessions/{name}/steer", axum::routing::post(crate::session_write::input::steer).fallback(fallback.clone()))
         .route("/api/sessions/{name}/interrupt", axum::routing::post(crate::session_write::control::interrupt).fallback(fallback.clone()))
+        .route("/api/sessions/{name}/tasks/{task_id}/stop", axum::routing::post(crate::session_write::control::stop_task).fallback(fallback.clone()))
         .route("/api/sessions/{name}/select", axum::routing::post(crate::session_write::control::select).fallback(fallback.clone()))
         .route("/api/sessions/{name}/select/submit", axum::routing::post(crate::session_write::control::select_submit).fallback(fallback.clone()))
         .route("/api/sessions/{name}/answer", axum::routing::post(crate::session_write::answer::answer).fallback(fallback.clone()))

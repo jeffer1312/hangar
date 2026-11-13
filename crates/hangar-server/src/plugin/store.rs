@@ -23,6 +23,8 @@ const AGENT_SEND: Duration = Duration::from_secs(15);
 /// O modo que o plugin declara no `/pull` quando sabe entregar texto a um subagente.
 pub const AGENT_MESSAGE_MODE: &str = "agent_message";
 const AGENT_LATE_KEPT: usize = 32;
+/// O modo que o plugin declara no `/pull` quando sabe parar uma tarefa (subagente ou shell) pelo `TaskStop`.
+pub const STOP_TASK_MODE: &str = "stop_task";
 
 fn question_visible(interrupted: bool, poll_open: bool, age: Duration) -> bool {
     !interrupted && age <= ALIVE && (poll_open || age <= NO_POLL)
@@ -122,6 +124,7 @@ struct Session {
     agent_waits: HashMap<String, (String, oneshot::Sender<AgentSend>)>,
     /// Pedidos que passaram do prazo sem resposta: a confirmação ainda pode chegar.
     agent_late: VecDeque<(String, String)>,
+    /// O que espera o próximo `/pull`: texto a subagente e pedido de `stop_task`.
     agent_outbox: VecDeque<(String, Value)>,
     agent_next: u64,
     /// O último `session.end` do plugin (`fim`): o estado seguinte não o apaga.
@@ -146,6 +149,9 @@ impl AgentLife {
 /// Resultado de mandar texto a um subagente pelo plugin.
 #[derive(Clone, Debug, PartialEq)]
 pub enum AgentSend { Delivered, Refused(String), NoPlugin, NoAnswer }
+/// `Queued`: o pedido saiu pelo `/pull`; a parada só se prova pelo estado da tarefa.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TaskStop { Queued, NoPlugin, OldPlugin }
 
 /// Aviso do `ExitPlanMode`: o hook não segura, o diálogo do terminal é que responde.
 #[derive(Clone, Debug, PartialEq)]
@@ -653,6 +659,17 @@ impl Store {
             }
         }
         Ok(reply)
+    }
+    /// Entrega pelo `/pull` aberto (ou o próximo) sem esperar: o `TaskStop` aceito não prova a parada.
+    pub fn stop_task(&self, binding: &InteractionBinding, task_id: &str, now: Instant) -> Result<TaskStop, ServiceError> {
+        if !self.alive(binding, now)? { return Ok(TaskStop::NoPlugin); }
+        if !self.declared_modes(binding)?.contains(STOP_TASK_MODE) { return Ok(TaskStop::OldPlugin); }
+        let mut memory = self.memory.lock().map_err(|_| unavailable())?;
+        if memory.stopping { return Ok(TaskStop::NoPlugin); }
+        let s = session(&mut memory, binding)?;
+        let payload = json!({"text":null,"stop_task":{"task_id":task_id}});
+        if !s.waiter.as_mut().is_some_and(|w| w.send(payload.clone())) { s.agent_outbox.push_back((task_id.to_owned(), payload)); }
+        Ok(TaskStop::Queued)
     }
     pub fn agent_sent(&self, binding: &InteractionBinding, id: &str, delivered: bool, reason: Option<String>) -> Result<(), ServiceError> {
         let mut memory = self.memory.lock().map_err(|_| unavailable())?;
@@ -1349,6 +1366,29 @@ mod tests {
         store.agent_sent(&binding, &msg_id(&got), true, None).unwrap();
         assert_eq!(store.agent_lives(&binding).unwrap()["a1"].state, AgentState::Running, "chegou depois do 504, mas chegou");
         store.agent_sent(&binding, "agent-msg-9", true, None).unwrap();
+    }
+
+    fn stop_pull() -> Pull { let mut p = pull("i"); p.modos.push(STOP_TASK_MODE.into()); p }
+
+    #[tokio::test]
+    async fn stop_task_goes_through_the_open_pull_of_a_plugin_that_declared_it() {
+        let (store, binding) = setup();
+        let poll = store.begin_pull(&binding, stop_pull(), Instant::now()).unwrap();
+        assert_eq!(store.stop_task(&binding, "bserqfwvd", Instant::now()).unwrap(), TaskStop::Queued);
+        let got = poll.wait().await;
+        assert_eq!((&got["stop_task"], &got["text"]), (&json!({"task_id":"bserqfwvd"}), &Value::Null), "plugin antigo não confunde com prompt");
+        // Entre um `/pull` e o seguinte o pedido espera o próximo.
+        assert_eq!(store.stop_task(&binding, "a85258e41e374c2ea", Instant::now()).unwrap(), TaskStop::Queued);
+        let next = store.begin_pull(&binding, stop_pull(), Instant::now()).unwrap();
+        assert_eq!(next.wait().await["stop_task"]["task_id"], "a85258e41e374c2ea");
+    }
+
+    #[test]
+    fn stop_task_needs_a_plugin_that_declared_it() {
+        let (store, binding) = setup();
+        assert_eq!(store.stop_task(&binding, "t", Instant::now()).unwrap(), TaskStop::NoPlugin);
+        let _poll = store.begin_pull(&binding, pull("i"), Instant::now()).unwrap();
+        assert_eq!(store.stop_task(&binding, "t", Instant::now()).unwrap(), TaskStop::OldPlugin);
     }
 
     #[test]

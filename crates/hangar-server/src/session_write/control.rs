@@ -41,6 +41,9 @@ const MSG_NO_PERMISSION: &str = "nenhum pedido de permissão pendente";
 const MSG_NOT_IN_QUEUE: &str = "entrada não está na fila";
 const GIVE_UP_COMPOSER_BUSY_CODE: &str = "erro_fila_campo_ocupado";
 const MSG_COMPOSER_BUSY: &str = "Há texto no campo do terminal: apague ou envie para a fila andar";
+const MSG_STOP_ONLY_CLAUDE: &str = "Só tarefas do Claude podem ser paradas por aqui.";
+const MSG_STOP_OLD_PLUGIN: &str = "O plugin desta sessão é anterior ao Parar; reabra a sessão.";
+const MSG_STOP_NO_PLUGIN: &str = "O plugin desta sessão não está ligado ao Hangar agora.";
 const MSG_COMPOSER_UNREAD: &str = "Não deu para ler o campo do terminal agora; tente de novo";
 
 fn ok() -> Answer { (StatusCode::OK, json!({"ok": true})) }
@@ -456,6 +459,49 @@ pub async fn interrupt(State(st): State<Arc<AppState>>, ConnectInfo(peer): Conne
         }
     };
     answer(&ctx, result)
+}
+
+/// `POST …/tasks/{task_id}/stop`: o pedido de parar sai; a prova é o `task_updated`/`task_notification`
+/// do id no feed da tarefa, nunca esta resposta.
+pub async fn stop_task(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {
+    let task_id = req.uri().path().rsplit('/').nth(1).unwrap_or_default().to_owned();
+    let (ctx, _) = match admit(&st, peer, req, WriteRoute::StopTask).await {
+        Ok(admitted) => admitted,
+        Err(response) => return response,
+    };
+    if task_id.is_empty() || task_id.len() > 64 || !task_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') {
+        return invalid_body(ctx.headers());
+    }
+    let result = match &ctx.target.handle {
+        EntryHandle::Headless(_) if ctx.target.provider == "claude" => stop_headless_answer(&ctx.target.handle.command(RuntimeCommand {
+            operation_id: random_hex(16), kind: OperationKind::StopTask, payload: json!({"task_id": task_id}) }).await),
+        EntryHandle::Terminal { .. } if ctx.target.provider == "claude" => stop_via_plugin(&ctx, &task_id).await,
+        _ => failure("erro_parar_so_claude", MSG_STOP_ONLY_CLAUDE, json!({})),
+    };
+    answer(&ctx, result)
+}
+
+/// Com terminal o pedido vai ao `TaskStop` pelo `/pull` do plugin, que o Hangar não espera.
+async fn stop_via_plugin(ctx: &Ctx, task_id: &str) -> Answer {
+    use crate::plugin::TaskStop;
+    let Some(runtime) = ctx.st.state.runtime.get() else { return interaction_failure(InteractionError::Unavailable) };
+    let Ok(binding) = runtime.interaction_binding(&ctx.name).await else { return interaction_failure(InteractionError::Unavailable) };
+    match ctx.st.plugin.stop_task(&binding, task_id, std::time::Instant::now()) {
+        Ok(TaskStop::Queued) => stop_pending(),
+        Ok(TaskStop::OldPlugin) => failure("erro_parar_plugin_antigo", MSG_STOP_OLD_PLUGIN, json!({})),
+        Ok(TaskStop::NoPlugin) => failure("erro_parar_sem_plugin", MSG_STOP_NO_PLUGIN, json!({})),
+        Err(_) => interaction_failure(InteractionError::Unavailable),
+    }
+}
+
+fn stop_pending() -> Answer { (StatusCode::ACCEPTED, json!({"pending": true})) }
+
+pub fn stop_headless_answer(sent: &Result<RuntimeReply, RuntimeError>) -> Answer {
+    match sent {
+        Ok(reply) if reply.disposition == Disposition::Accepted => stop_pending(),
+        Ok(_) => runtime_failed(&RuntimeError::new("stop_task_unconfirmed", MSG_CONTROL_UNCONFIRMED)),
+        Err(error) => runtime_failed(error),
+    }
 }
 
 pub async fn keys(State(st): State<Arc<AppState>>, ConnectInfo(peer): ConnectInfo<SocketAddr>, req: Request) -> Response {

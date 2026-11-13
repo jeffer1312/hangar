@@ -165,6 +165,29 @@ export async function deliverAgentMessage($: Pick<EngineInterface, "session" | "
   $.ui.log(`hangar: confirmação da mensagem ${msg.id} ao subagente ${msg.to} não chegou (${sent.isDelivered ? "entregue" : "recusada"}): ${failure}`, { to: "debug" });
 }
 
+/** O `TaskStop` do próprio Claude Code, pedido pelo ■ do app. O ok dele não prova a parada: quem prova é o
+ *  estado da tarefa que o app já acompanha; a confirmação só registra no Hangar o que o TaskStop disse. */
+export async function stopTask($: Pick<EngineInterface, "tool" | "http" | "ui">, ponte: Bridge, taskId: string): Promise<void> {
+  let isStopped = false;
+  let reason: string | undefined;
+  try {
+    const r = await $.tool.call({ tool: "TaskStop", task_id: taskId });
+    isStopped = r.deny === undefined && !r.isError;
+    if (!isStopped) reason = r.deny === undefined ? "o TaskStop respondeu com erro" : String(r.deny);
+  } catch (err) {
+    reason = String(err);
+  }
+  try {
+    await $.http.fetch(`${ponte.url}/task-stopped`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessao: ponte.sessao, token: ponte.token, taskId, isStopped, ...(reason === undefined ? {} : { reason }) }),
+    });
+  } catch (err) {
+    $.ui.log(`hangar: confirmação da parada de ${taskId} não chegou: ${String(err)}`, { to: "debug" });
+  }
+}
+
 /** `discovered`: a ponte veio do `whoami`, e não do ambiente do lançamento. */
 async function pull($: EngineInterface, ponte: Bridge, discovered = false) {
   let espera = REARM_MS;
@@ -175,7 +198,7 @@ async function pull($: EngineInterface, ponte: Bridge, discovered = false) {
       // A conversa vai a cada poll: o `/clear` troca o id sem `session.start`, e o backend só
       // entrega à conversa que ele acompanha (um segundo `claude` no mesmo pane recebe 409).
       body: JSON.stringify({
-        sessao: ponte.sessao, token: ponte.token, instance: instance(), modos: ["fill", "user", "receipt_v2", "focus", "agent_message"], estado: lastState(),
+        sessao: ponte.sessao, token: ponte.token, instance: instance(), modos: ["fill", "user", "receipt_v2", "focus", "agent_message", "stop_task"], estado: lastState(),
         session_id: await $.session.id(),
       }),
     });
@@ -184,15 +207,17 @@ async function pull($: EngineInterface, ponte: Bridge, discovered = false) {
     if (r.status === 409) clearBridge();
     else if (r.status === 200) setBridge(ponte);
     if (r.status === 200) {
-      const { text, modo, faixa, publication_id, generation, session_id, agent_message } = JSON.parse(r.text) as {
+      const { text, modo, faixa, publication_id, generation, session_id, agent_message, stop_task } = JSON.parse(r.text) as {
         text?: string | null; modo?: string; faixa?: boolean; publication_id?: string; generation?: number; session_id?: string;
-        agent_message?: { id: string; to: string; text: string };
+        agent_message?: { id: string; to: string; text: string }; stop_task?: { task_id: string };
       };
       if (faixa === false) askResend();
       const receipt = { publication_id, generation };
       // A resposta com texto para um subagente não traz prompt: nada abaixo vale para ela.
       if (agent_message) {
         await deliverAgentMessage($, ponte, agent_message);
+      } else if (stop_task) {
+        await stopTask($, ponte, stop_task.task_id);
       } else if (modo === "focus") {
         let ok = false;
         try {
