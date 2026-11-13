@@ -282,6 +282,51 @@ fn undoing_a_worktree_deletes_only_the_branch_it_created() {
     assert!(!local("nova"));
 }
 
+fn failing_add_repo() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+    let base = tempfile::tempdir().unwrap();
+    let root = hangar_workspace::simplify(base.path().canonicalize().unwrap());
+    let repo = root.join("repo");
+    fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "--allow-empty", "-m", "a"]);
+    let worktrees = root.join("worktrees");
+    (base, root, repo, worktrees)
+}
+
+fn local_branch(repo: &std::path::Path, name: &str) -> bool {
+    Command::new("git").arg("-C").arg(repo).args(["rev-parse", "--verify", "--quiet", &format!("refs/heads/{name}")])
+        .status().unwrap().success()
+}
+
+/// A branch que divide o nome com uma tag sai como `heads/x` na lista e passa pela checagem; o `-b` falha, e a
+/// limpeza da falha não pode apagar a branch que já era do usuário.
+#[test]
+fn a_failed_worktree_add_keeps_a_branch_that_already_existed() {
+    use hangar_workspace::git::create_branch_worktree;
+    let (_base, root, repo, worktrees) = failing_add_repo();
+    git(&repo, &["branch", "v1"]);
+    git(&repo, &["tag", "v1"]);
+    assert!(create_branch_worktree(&repo, "v1", "v1", &root, true, None, &worktrees).is_err());
+    assert!(local_branch(&repo, "v1"), "a branch do usuário fica");
+}
+
+/// O git desfaz a pasta da worktree que falhou, mas deixa a branch do `-b`: sem limpar, a nova tentativa com o mesmo
+/// nome esbarra em "já existe uma branch".
+#[cfg(unix)]
+#[test]
+fn a_failed_worktree_add_drops_the_branch_it_created() {
+    use hangar_workspace::git::create_branch_worktree;
+    use std::os::unix::fs::PermissionsExt;
+    let (_base, root, repo, worktrees) = failing_add_repo();
+    let parent = worktrees.join("repo");
+    fs::create_dir_all(&parent).unwrap();
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o555)).unwrap();
+    let made = create_branch_worktree(&repo, "nova", "nova", &root, true, None, &worktrees);
+    fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(made.is_err(), "{made:?}");
+    assert!(!local_branch(&repo, "nova"), "a branch criada pela tentativa sai");
+}
+
 mod task3_contract {
     use super::*;
 
