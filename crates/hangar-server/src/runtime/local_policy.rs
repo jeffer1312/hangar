@@ -134,6 +134,27 @@ pub(super) fn image_receipt(text:&str,content:&Value) -> Option<String> {
 mod batch_tests {
     use super::*;
 
+    /// A marca lê o `.claude.json` que o CLI lê: na conta padrão sem a variável, o da home.
+    #[test]
+    fn stamp_of_the_default_account_follows_the_home_claude_json() {
+        let home = tempfile::tempdir().unwrap();
+        let (config, other) = (home.path().join(".claude"), home.path().join(".claude-b"));
+        for dir in [&config, &other] { std::fs::create_dir_all(dir).unwrap(); }
+        let stamp = |server: Option<&str>, dir: &Path| stamp_in(home.path(), server, Some(&dir.to_string_lossy())).unwrap();
+        let (default, account) = (stamp(None, &config), stamp(None, &other));
+        std::fs::write(home.path().join(".claude.json"), r#"{"mcpServers":{"hangar":{}}}"#).unwrap();
+        assert_ne!(stamp(None, &config), default, "MCP novo no ~/.claude.json muda a marca da padrão");
+        assert_eq!(stamp(None, &other), account, "outra conta não lê o da home");
+        let server = other.to_string_lossy();
+        let (before, inside) = (stamp(Some(&server), &config), stamp(None, &config));
+        std::fs::write(config.join(".claude.json"), r#"{"mcpServers":{"x":{}}}"#).unwrap();
+        assert_eq!(stamp(None, &config), inside, "sem a variável o da pasta não conta");
+        assert_ne!(stamp(Some(&server), &config), before, "servidor com a variável: a pasta é exportada e o dela conta");
+        let unset = stamp_in(home.path(), Some(&server), None).unwrap();
+        std::fs::write(other.join(".claude.json"), r#"{"mcpServers":{"y":{}}}"#).unwrap();
+        assert_ne!(stamp_in(home.path(), Some(&server), None).unwrap(), unset, "sem conta, a pasta do servidor");
+    }
+
     #[test]
     fn english_attachment_marker_is_read_like_the_portuguese_one() {
         // O web grava o marcador no idioma da tela de quem enviou.
@@ -646,16 +667,26 @@ fn read_text(path: &Path) -> Result<Option<String>, RuntimeError> {
 /// Impressão do que o `claude -p` lê ao nascer: só o `mcpServers` do `.claude.json` e o
 /// `settings.json` inteiro. Ilegível é erro: "não li" não pode virar "mudou" nem "não mudou".
 pub(crate) fn config_stamp(config_dir: Option<&str>) -> Result<String, RuntimeError> {
-    let home = || std::env::home_dir().ok_or_else(|| error("policy_input"));
+    // estavel: código de produção; o teste chama `stamp_in` com home temporária.
+    let home = std::env::home_dir().ok_or_else(|| error("policy_input"))?;
+    let server = std::env::var("CLAUDE_CONFIG_DIR").ok().filter(|v| !v.is_empty());
+    stamp_in(&home, server.as_deref(), config_dir)
+}
+
+fn stamp_in(home: &Path, server: Option<&str>, config_dir: Option<&str>) -> Result<String, RuntimeError> {
     let root = match config_dir {
-        Some("~") => home()?,
-        Some(dir) if dir.starts_with("~/") => home()?.join(&dir[2..]),
+        Some("~") => home.to_path_buf(),
+        Some(dir) if dir.starts_with("~/") => home.join(&dir[2..]),
         // `~usuario` e `~\…` o Python resolve de outro jeito; ler outro caminho calado daria marca errada.
         Some(dir) if dir.starts_with('~') => return Err(error("policy_input")),
         Some(dir) => Path::new(dir).to_path_buf(),
-        None => home()?.join(".claude"),
+        None => server.map_or_else(|| home.join(".claude"), std::path::PathBuf::from),
     };
-    let mcp = match read_text(&root.join(".claude.json"))? {
+    // O `.claude.json` que o CLI lê: sem a variável (conta padrão), o da home.
+    let exported = crate::session_open::terminal::config_dir_to_export(server, &home.join(".claude"), cfg!(windows),
+        Some(&root.to_string_lossy()));
+    let claude_json = if exported.is_some() { root.join(".claude.json") } else { home.join(".claude.json") };
+    let mcp = match read_text(&claude_json)? {
         Some(text) => match crate::transcript::pyjson::loads_lossless(&text) {
             Some(Value::Object(fields)) => fields.get("mcpServers").cloned().unwrap_or(Value::Null),
             Some(_) => Value::Null,

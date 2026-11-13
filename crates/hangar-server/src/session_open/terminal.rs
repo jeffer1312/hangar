@@ -108,9 +108,13 @@ fn same_dir(a: &str, b: &Path, windows: bool) -> bool {
 /// O `-e CLAUDE_CONFIG_DIR` vai quando a conta não é a padrão ou o servidor tem a variável (omitir
 /// não apagaria a herança). A padrão é a ausência: exportar `~/.claude` faz o CLI ler outro `.claude.json`.
 pub fn exports_config_dir(env: &TerminalEnv, config_dir: Option<&str>) -> Option<String> {
-    let chosen = config_dir.map(str::to_owned).or_else(|| env.server_config_dir.clone())
-        .unwrap_or_else(|| env.default_config_dir.to_string_lossy().into_owned());
-    (env.server_config_dir.is_some() || !same_dir(&chosen, &env.default_config_dir, env.windows)).then_some(chosen)
+    config_dir_to_export(env.server_config_dir.as_deref(), &env.default_config_dir, env.windows, config_dir)
+}
+
+/// A regra de `exports_config_dir` sem o resto do ambiente do terminal: vale também para o sem terminal.
+pub fn config_dir_to_export(server: Option<&str>, default: &Path, windows: bool, config_dir: Option<&str>) -> Option<String> {
+    let chosen = config_dir.or(server).map_or_else(|| default.to_string_lossy().into_owned(), str::to_owned);
+    (server.is_some() || !same_dir(&chosen, default, windows)).then_some(chosen)
 }
 
 /// `join_cmd`: o argv numa string só, no dialeto do multiplexador (POSIX: `shlex.join`; psmux:

@@ -27,6 +27,8 @@ pub struct Context<'a> {
     pub engine_route: Option<&'a EngineRoute>,
     /// O motor e o modelo aceitam Fast (`cliproxy.supports_fast`).
     pub fast: bool,
+    /// As variáveis de tela (`display_env::for_launch`), as mesmas do pane com terminal.
+    pub display: &'a [(String, String)],
 }
 
 /// `ad._SO_TERMINAL_PROTEGIDO`.
@@ -154,7 +156,9 @@ pub fn plan(spec: &SessionSpec, meta: &Value, ctx: &Context) -> Result<Launch, R
     program.extend(claude);
 
     let mut env = ctx.env.base.clone();
-    for name in DROPPED.iter().chain(SECRETS.iter()) { env.remove(*name); }
+    // As do terminal também: servidor subido de dentro de uma sessão de motor daria o proxy dela a esta.
+    for name in DROPPED.iter().chain(SECRETS.iter()).chain(crate::session_open::terminal::NOT_INHERITED.iter()) { env.remove(*name); }
+    env.extend(ctx.display.iter().cloned());
     let key = &spec.key;
     env.insert("CP_SESSION_NAME".into(), spec.name.clone());
     env.insert("CP_PROVIDER".into(), "claude".into());
@@ -168,7 +172,11 @@ pub fn plan(spec: &SessionSpec, meta: &Value, ctx: &Context) -> Result<Launch, R
     env.insert("CP_SESSION_KEY".into(), key.clone());
     env.insert("HANGAR_CANO_KEY".into(), key.clone());
     env.insert("HANGAR_CANO_OWNER".into(), ctx.env.home.to_string_lossy().into_owned());
-    if let Some(dir) = spec.account.config_dir() { env.insert("CLAUDE_CONFIG_DIR".into(), dir.into()); }
+    // A conta padrão vai sem a variável, como no terminal: com ela o CLI lê `~/.claude/.claude.json`, sem o MCP `hangar`.
+    let server = ctx.env.base.get("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()).map(String::as_str);
+    if let Some(dir) = crate::session_open::terminal::config_dir_to_export(server, &ctx.env.home.join(".claude"), cfg!(windows), spec.account.config_dir()) {
+        env.insert("CLAUDE_CONFIG_DIR".into(), dir);
+    }
     if let Some(model) = &spec.subagent_model { env.insert("CLAUDE_CODE_SUBAGENT_MODEL".into(), model.clone()); }
     env.extend(crate::session_open::claude::jev_pairs(spec.jev, ctx.runtime_config));
     if hooks { env.insert("CLAUDE_CODE_ENABLE_FUNCTION_HOOKS".into(), "1".into()); }
@@ -227,7 +235,8 @@ pub fn plan_for(env: &AccountEnvironment, bridge: Option<&PluginBridge>, spec: &
         _ => None,
     };
     let fast = spec.service_tier.is_some() && facts.supports_fast(engine, spec.model.as_deref());
-    plan(spec, meta, &Context { env, runtime_config: &config, plugin_roots: &roots, bridge, engine_route: route.as_ref(), fast })
+    let display = crate::display_env::for_launch(|name| env.base.get(name).filter(|v| !v.is_empty()).cloned());
+    plan(spec, meta, &Context { env, runtime_config: &config, plugin_roots: &roots, bridge, engine_route: route.as_ref(), fast, display: &display })
 }
 
 #[cfg(test)]
@@ -286,7 +295,7 @@ mod tests {
         // Na forma do cenário (`<REPO>/plugins/...`), com `/`.
         let roots = ["hangar", "github-actions"].map(|p| format!("{}/plugins/{p}", case.repo.display()));
         let bridge = PluginBridge { port: 8765, secret: "hso-token".into() };
-        let ctx = Context { env: &env, runtime_config: runtime, plugin_roots: &roots, bridge: Some(&bridge), engine_route: None, fast: false };
+        let ctx = Context { env: &env, runtime_config: runtime, plugin_roots: &roots, bridge: Some(&bridge), engine_route: None, fast: false, display: &[] };
         plan(&case.spec(), &case.meta(), &ctx).unwrap()
     }
 
@@ -324,6 +333,46 @@ mod tests {
         }
     }
 
+    /// A conta padrão (`~/.claude`) sobe sem `CLAUDE_CONFIG_DIR`: com a variável o CLI lê
+    /// `~/.claude/.claude.json`, que não tem o MCP `hangar`. A variável do servidor continua valendo.
+    #[test]
+    fn default_account_launches_without_config_dir_like_the_terminal() {
+        let case = case("create_claude_headless_then_launch");
+        let roots: [String; 0] = [];
+        let launch = |server: &BTreeMap<String, String>, config_dir: &str| {
+            let env = AccountEnvironment::from_map(server.clone());
+            let ctx = Context { env: &env, runtime_config: &json!({}), plugin_roots: &roots, bridge: None, engine_route: None, fast: false, display: &[] };
+            let mut spec = case.spec();
+            spec.account = Account::Claude { config_dir: config_dir.to_owned() };
+            plan(&spec, &case.meta(), &ctx).unwrap().env.get("CLAUDE_CONFIG_DIR").cloned()
+        };
+        let home = format!("{}/home", case.root.display());
+        let mut server = case.server_env();
+        assert_eq!(launch(&server, &format!("{home}/.claude")), None);
+        assert_eq!(launch(&server, &format!("{home}/.claude/")), None, "a mesma pasta com barra no fim");
+        assert_eq!(launch(&server, &format!("{home}/.claude-b")).as_deref(), Some(format!("{home}/.claude-b").as_str()));
+        server.insert("CLAUDE_CONFIG_DIR".into(), format!("{home}/outra"));
+        assert_eq!(launch(&server, &format!("{home}/.claude")).as_deref(), Some(format!("{home}/.claude").as_str()),
+            "servidor com a variável: omitir herdaria a dele");
+    }
+
+    /// O ambiente segue o do pane com terminal: nada do motor do servidor chega à sessão, e as variáveis
+    /// de tela achadas entram.
+    #[test]
+    fn launch_drops_what_the_terminal_drops_and_takes_the_display() {
+        let case = case("create_claude_headless_then_launch");
+        let mut server = case.server_env();
+        for (key, value) in [("ANTHROPIC_BASE_URL", "http://proxy"), ("ANTHROPIC_AUTH_TOKEN", "segredo"), ("CP_ENGINE", "kimi")] {
+            server.insert(key.into(), value.into());
+        }
+        let env = AccountEnvironment::from_map(server);
+        let display = [("WAYLAND_DISPLAY".to_owned(), "wayland-1".to_owned())];
+        let ctx = Context { env: &env, runtime_config: &json!({}), plugin_roots: &[], bridge: None, engine_route: None, fast: false, display: &display };
+        let launch = plan(&case.spec(), &case.meta(), &ctx).unwrap();
+        for key in ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "CP_ENGINE"] { assert!(!launch.env.contains_key(key), "{key}"); }
+        assert_eq!(launch.env.get("WAYLAND_DISPLAY").map(String::as_str), Some("wayland-1"));
+    }
+
     #[test]
     fn existing_transcript_resumes_and_keeps_the_mode() {
         let case = case("create_claude_headless_then_launch");
@@ -348,7 +397,7 @@ mod tests {
         let env = AccountEnvironment::from_map(case.server_env());
         let roots = [case.repo.join("plugins/hangar").to_string_lossy().into_owned()];
         let bridge = PluginBridge { port: 8765, secret: "hso-token".into() };
-        let ctx = Context { env: &env, runtime_config: &json!({}), plugin_roots: &roots, bridge: Some(&bridge), engine_route: None, fast: false };
+        let ctx = Context { env: &env, runtime_config: &json!({}), plugin_roots: &roots, bridge: Some(&bridge), engine_route: None, fast: false, display: &[] };
         let spec = crate::session_open::record::claude_live(&case.root.join("home"), &meta, "s1").unwrap();
         let launch = plan(&spec, &meta, &ctx).unwrap();
         assert!(launch.program.windows(2).any(|w| w == ["--permission-mode", "bypassPermissions"]));
@@ -367,7 +416,7 @@ mod tests {
         meta["previous_non_plan"] = json!("bypassPermissions");
         let meta = relaunch_meta(meta, &case.sid, "plan", &json!(null), &json!(null));
         let env = AccountEnvironment::from_map(case.server_env());
-        let ctx = Context { env: &env, runtime_config: &json!({}), plugin_roots: &[], bridge: None, engine_route: None, fast: false };
+        let ctx = Context { env: &env, runtime_config: &json!({}), plugin_roots: &[], bridge: None, engine_route: None, fast: false, display: &[] };
         let spec = crate::session_open::record::claude_live(&case.root.join("home"), &meta, "s1").unwrap();
         let program = plan(&spec, &meta, &ctx).unwrap().program;
         let engine: Vec<&str> = program.iter().take_while(|a| *a != "--").map(String::as_str).collect();
@@ -383,7 +432,7 @@ mod tests {
     fn permanent_launch_failures_are_told_apart_from_passing_ones() {
         let case = case("create_claude_headless_then_launch");
         let env = AccountEnvironment::from_map(case.server_env());
-        let ctx = Context { env: &env, runtime_config: &json!({}), plugin_roots: &[], bridge: None, engine_route: None, fast: false };
+        let ctx = Context { env: &env, runtime_config: &json!({}), plugin_roots: &[], bridge: None, engine_route: None, fast: false, display: &[] };
         let mut spec = case.spec();
         spec.permission_mode = None;
         assert!(permanent(&plan(&spec, &case.meta(), &ctx).unwrap_err().code));
@@ -396,7 +445,7 @@ mod tests {
     fn absent_mode_uses_the_account_default_and_unknown_is_refused() {
         let case = case("create_claude_headless_then_launch");
         let env = AccountEnvironment::from_map(case.server_env());
-        let ctx = Context { env: &env, runtime_config: &json!({}), plugin_roots: &[], bridge: None, engine_route: None, fast: false };
+        let ctx = Context { env: &env, runtime_config: &json!({}), plugin_roots: &[], bridge: None, engine_route: None, fast: false, display: &[] };
         let mut meta = case.meta();
         meta.as_object_mut().unwrap().remove("permission_mode");
         let mode_of = |meta: &Value| {
@@ -416,7 +465,7 @@ mod tests {
     fn unknown_mode_read_only_and_priority_without_fast_are_refused() {
         let case = case("create_claude_headless_then_launch");
         let env = AccountEnvironment::from_map(case.server_env());
-        let ctx = Context { env: &env, runtime_config: &json!({}), plugin_roots: &[], bridge: None, engine_route: None, fast: false };
+        let ctx = Context { env: &env, runtime_config: &json!({}), plugin_roots: &[], bridge: None, engine_route: None, fast: false, display: &[] };
         let mut spec = case.spec();
         spec.permission_mode = None;
         assert_eq!(plan(&spec, &case.meta(), &ctx).unwrap_err().code, "launch_permission_mode");
