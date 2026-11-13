@@ -939,8 +939,8 @@ pub(crate) enum PluginFinding {
 }
 
 /// Plugin ligado no `settings.json` da conta sem instalação no compartilhado: avisa, nunca instala
-/// (instalar escreveria no compartilhado a partir de uma conta). A pasta sumida o `plugins_repair`
-/// reinstala pela pasta principal.
+/// (instalar escreveria no compartilhado a partir de uma conta). A pasta sumida o reparo de
+/// `hangar_plugins::repair` reinstala pela pasta principal.
 pub(crate) fn check_plugins(home: &Path, dir: &Path) -> Result<Vec<String>> {
     Ok(plugin_findings(home, dir)?.into_iter().map(|finding| match finding {
         PluginFinding::Unreadable(warning) => warning,

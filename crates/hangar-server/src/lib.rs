@@ -66,7 +66,6 @@ pub mod tags;
 pub mod tour_progress;
 pub mod update_arrived;
 pub mod plugins;
-mod plugins_repair;
 pub mod push;
 pub mod push_expo;
 pub mod session_media;

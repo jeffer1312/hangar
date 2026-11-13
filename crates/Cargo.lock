@@ -1817,9 +1817,12 @@ name = "hangar-plugins"
 version = "0.1.0"
 dependencies = [
  "hangar-core",
+ "notify",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

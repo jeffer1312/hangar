@@ -16,7 +16,10 @@ use hangar_plugins::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use hangar_plugins::repair::{Outcome, RepairHost};
+
 use crate::{
+    accounts::claude_config::{PluginFinding, plugin_findings},
     accounts::environment::AccountEnvironment,
     command_capture::{CaptureOptions, capture_bytes},
     config_sync::bundle::Error as EditError,
@@ -295,11 +298,62 @@ async fn plugin_op(
     .await
 }
 
-/// Reinstalação pedida pelo próprio servidor (`plugins_repair`): espera a vez no mesmo cadeado das
-/// mudanças da tela, em vez de recusar como elas.
-pub(crate) async fn reinstall(st: Arc<AppState>, id: PluginId) -> Result<OperationResult, PluginsError> {
-    let _guard = st.claude_plugins.busy.lock().await;
-    Plugins::new(Runner::new(&st)).install(&id).await
+/// Liga o reparo do plugin cuja pasta de instalação sumiu (`hangar_plugins::repair`) à pasta principal.
+pub(crate) fn spawn_repair(state: Arc<AppState>) {
+    let plugins_dir = state.accounts.env.home.join(".claude").join("plugins");
+    tokio::spawn(hangar_plugins::repair::run(Repair(state), plugins_dir));
+}
+
+struct Repair(Arc<AppState>);
+
+impl RepairHost for Repair {
+    async fn missing(&self) -> Option<Vec<PluginId>> {
+        let home = self.0.accounts.env.home.clone();
+        tokio::task::spawn_blocking(move || missing_installs(&home)).await.ok().flatten()
+    }
+
+    /// Espera a vez no mesmo cadeado das mudanças da tela, em vez de recusar como elas, e confere de
+    /// novo com ele: o usuário pode ter removido o plugin depois da leitura.
+    async fn reinstall(&self, id: &PluginId) -> Option<Result<OperationResult, PluginsError>> {
+        let _guard = self.0.claude_plugins.busy.lock().await;
+        if !self.missing().await?.contains(id) {
+            return None;
+        }
+        Some(Plugins::new(Runner::new(&self.0)).install(id).await)
+    }
+
+    fn record(&self, outcome: &Outcome) {
+        let plugin = outcome.id.as_str();
+        let (level, code, detail) = match &outcome.result {
+            Ok(_) if outcome.fixed => {
+                tracing::info!(code = "plugins_repaired", plugin, "plugins: pasta de instalação sumiu, plugin reinstalado");
+                ("aviso", "reinstalado", String::new())
+            }
+            Ok(_) => {
+                tracing::warn!(code = "plugins_repair_failed", plugin, "plugins: reinstalado pela CLI, mas a pasta não foi confirmada");
+                ("erro", "pasta_nao_confirmada", String::new())
+            }
+            Err(error) => {
+                tracing::warn!(code = "plugins_repair_failed", plugin, %error, "plugins: pasta de instalação sumiu e a reinstalação falhou");
+                ("erro", error.code(), error.message().unwrap_or_default().chars().take(300).collect())
+            }
+        };
+        self.0.diag.record_line(json!({"evento": "plugins.reparo", "nivel": level, "codigo": code, "plugin": plugin, "detalhe": detail}));
+    }
+}
+
+/// Plugins ligados no principal com instalação de usuário sem pasta. Os de projeto ficam de fora: a
+/// reinstalação roda na home, com escopo de usuário. Registro ou `settings.json` ilegível é `None`.
+fn missing_installs(home: &Path) -> Option<Vec<PluginId>> {
+    let mut ids = Vec::new();
+    for finding in plugin_findings(home, &home.join(".claude")).ok()? {
+        match finding {
+            PluginFinding::Unreadable(_) => return None,
+            PluginFinding::FolderGone { id, user: true, .. } => ids.extend(id.parse().ok()),
+            _ => {}
+        }
+    }
+    Some(ids)
 }
 
 /// Uma mudança por servidor. Ela roda numa tarefa própria que leva o cadeado: o cliente que cai
@@ -492,4 +546,44 @@ fn failure(status: StatusCode, code: &str, message: Option<&str>) -> Response {
 /// O Rust responde a família inteira, inclusive o método recusado (405): nada vai ao Python.
 pub fn matches(path: &str) -> bool {
     path == "/api/plugins" || path.starts_with("/api/plugins/")
+}
+
+#[cfg(test)]
+mod repair_tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn only_enabled_user_installs_whose_folder_is_gone() {
+        let root = tempfile::tempdir().unwrap();
+        let claude = root.path().join(".claude");
+        let present = claude.join("plugins/cache/m/presente/1");
+        fs::create_dir_all(&present).unwrap();
+        let gone = claude.join("plugins/cache/m/sumido/2");
+        let registry = json!({"version": 2, "plugins": {
+            "sumido@m": [{"scope": "user", "installPath": gone}],
+            "presente@m": [{"scope": "user", "installPath": present}],
+            "desligado@m": [{"scope": "user", "installPath": gone}],
+            "projeto@m": [{"scope": "project", "projectPath": "/x", "installPath": gone}],
+            "fora@m": [{"scope": "user", "installPath": gone}],
+        }});
+        fs::write(claude.join("plugins/installed_plugins.json"), registry.to_string()).unwrap();
+        let settings = json!({"enabledPlugins": {
+            "sumido@m": true, "presente@m": true, "desligado@m": false, "projeto@m": true,
+        }});
+        fs::write(claude.join("settings.json"), settings.to_string()).unwrap();
+        assert_eq!(missing_installs(root.path()), Some(vec!["sumido@m".parse().unwrap()]));
+    }
+
+    #[test]
+    fn unreadable_files_are_not_an_empty_list() {
+        let root = tempfile::tempdir().unwrap();
+        let claude = root.path().join(".claude");
+        fs::create_dir_all(claude.join("plugins")).unwrap();
+        fs::write(claude.join("settings.json"), "{quebrado").unwrap();
+        assert_eq!(missing_installs(root.path()), None);
+        fs::write(claude.join("settings.json"), json!({"enabledPlugins": {"a@m": true}}).to_string()).unwrap();
+        fs::write(claude.join("plugins/installed_plugins.json"), "{quebrado").unwrap();
+        assert_eq!(missing_installs(root.path()), None);
+    }
 }

@@ -71,7 +71,7 @@ pub(crate) async fn maintenance(state: Arc<crate::routes::AppState>) {
     }
     // `~/.hangar/plugin.json` e `plugin-dir`: a sessão aberta fora do Hangar e o lançador acham a ponte por eles.
     tokio::spawn(crate::config_sync::plugin_publish::publish_for_state(state.clone()));
-    crate::plugins_repair::spawn(state.clone());
+    crate::plugins::spawn_repair(state.clone());
     {
         use crate::costs::pricing_refresh::{PricingRefresh, URL};
         let _ = PricingRefresh::start(crate::costs::pricing::default_dir(), URL, PricingRefresh::offline());
