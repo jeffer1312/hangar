@@ -63,9 +63,9 @@ impl SpentMark {
     }
 
     /// Login refeito depois da recusa libera a marca que só ela pôs; limite que estendeu o prazo segue valendo.
-    pub fn relogged(self,written:Option<f64>) -> bool {
-        matches!(self,Self::Recorded{until,login:Some(refused),..}
-            if until <= refused + LOGIN_SPENT_S && written.is_some_and(|written|written > refused))
+    pub fn relogged(self,written:impl FnOnce()->Option<f64>) -> bool {
+        let Self::Recorded{until,login:Some(refused),..} = self else { return false };
+        until <= refused + LOGIN_SPENT_S && written().is_some_and(|written|written > refused)
     }
 }
 
@@ -78,7 +78,7 @@ pub fn relogin_at(dir:&str) -> Option<f64> {
 
 /// As marcas que ainda valem: a de login recusado sai quando o login foi refeito depois dela.
 pub fn without_relogged(spent:SpentAccounts) -> SpentAccounts {
-    spent.into_iter().filter(|(dir,mark)|!mark.relogged(relogin_at(dir))).collect()
+    spent.into_iter().filter(|(dir,mark)|!mark.relogged(||relogin_at(dir))).collect()
 }
 
 /// O formato antigo não dizia quando bateu: a data do arquivo é uma referência conservadora.
@@ -121,18 +121,23 @@ impl Spent {
     }
 
     pub fn mark(&self,dir:&str,until:f64,now:f64) {
-        // Cota disponível não prova que a autenticação voltou a funcionar; credencial regravada depois, sim.
+        // Cota disponível não prova que a autenticação voltou a funcionar.
+        self.store(dir,SpentMark::Recorded {until,at:None,login:None},now);
+    }
+
+    /// Credencial recusada: a credencial regravada depois, com token, prova o login de volta.
+    pub fn mark_login(&self,dir:&str,until:f64,now:f64) {
         self.store(dir,SpentMark::Recorded {until,at:None,login:Some(now)},now);
     }
 
     fn store(&self,dir:&str,mark:SpentMark,now:f64) {
         let Ok(mut spent) = self.spent.lock() else { return };
         let key = crate::list::discover::real(dir);
-        // Marca ainda valendo não encurta o prazo nem perde a proteção do login recusado; recusa sobre um
-        // limite ainda valendo não vira marca que o login refeito libera.
+        // Marca ainda valendo não encurta o prazo nem perde a proteção do login recusado; junta com um
+        // limite, o login refeito não a libera.
         let mark = match (spent.get(&key).copied(),mark) {
             (Some(SpentMark::Recorded {until:old,at:old_at,login:old_login}),SpentMark::Recorded {until,at,login}) if old > now =>
-                SpentMark::Recorded {until:until.max(old),at:old_at.and(at),login:old_login.map(|old|login.map_or(old,|new|old.max(new)))},
+                SpentMark::Recorded {until:until.max(old),at:old_at.and(at),login:old_login.zip(login).map(|(old,new)|old.max(new))},
             _=>mark,
         };
         spent.insert(key,mark);
@@ -147,7 +152,7 @@ impl Spent {
     }
     fn blocks(&self,dir:&str,row:Option<&Value>,now:f64) -> bool {
         let mark = self.spent.lock().ok().and_then(|spent|spent.get(&crate::list::discover::real(dir)).copied());
-        mark.is_some_and(|mark|mark.blocking_until(row,now).is_some() && !mark.relogged(relogin_at(dir)))
+        mark.is_some_and(|mark|mark.blocking_until(row,now).is_some() && !mark.relogged(||relogin_at(dir)))
     }
 }
 
@@ -394,7 +399,12 @@ impl Switcher {
                 Err(outcome)=>return Some(outcome),
             }
         }
-        self.spent.mark(&current,now + LOGIN_SPENT_S,now);
+        // Conta suspensa ou fora da organização não volta com login refeito nem com token renovado.
+        if matches!(hit.code.as_str(),"authentication_failed" | "api_401") {
+            self.spent.mark_login(&current,now + LOGIN_SPENT_S,now);
+        } else {
+            self.spent.mark(&current,now + LOGIN_SPENT_S,now);
+        }
         Some(self.move_away(host,&hit.name,&spec,&current).await)
     }
 
@@ -695,22 +705,30 @@ mod tests {
         let file = home.path().join("limit-spent.json");
         let refused = written - 1.0;
         let before = Spent::at(file.clone());
-        before.mark(&dir,refused + LOGIN_SPENT_S,refused);
+        before.mark_login(&dir,refused + LOGIN_SPENT_S,refused);
         assert!(!before.is_spent(&dir,written),"login refeito depois da recusa libera a conta");
         assert!(without_relogged(read_spent(&file)).is_empty(),"a abertura lê o mesmo do arquivo");
 
+        let suspended = Spent::default();
+        suspended.mark(&dir,refused + LOGIN_SPENT_S,refused);
+        assert!(suspended.is_spent(&dir,written),"conta suspensa não volta com a credencial regravada");
+
         let after = Spent::default();
-        after.mark(&dir,written + 1.0 + LOGIN_SPENT_S,written + 1.0);
+        after.mark_login(&dir,written + 1.0 + LOGIN_SPENT_S,written + 1.0);
         assert!(after.is_spent(&dir,written + 2.0),"credencial anterior à recusa não prova o login");
 
         let limit_too = Spent::default();
-        limit_too.mark(&dir,refused + LOGIN_SPENT_S,refused);
+        limit_too.mark_login(&dir,refused + LOGIN_SPENT_S,refused);
         limit_too.mark_limit(&dir,written + UNKNOWN_RESET_S,refused,"overage");
         assert!(limit_too.is_spent(&dir,written),"limite que estendeu o prazo segue valendo");
         let limit_first = Spent::default();
         limit_first.mark_limit(&dir,refused + 60.0,refused - 10.0,"overage");
-        limit_first.mark(&dir,refused + LOGIN_SPENT_S,refused);
+        limit_first.mark_login(&dir,refused + LOGIN_SPENT_S,refused);
         assert!(limit_first.is_spent(&dir,written),"limite curto anterior à recusa segue valendo");
+        let limit_after = Spent::default();
+        limit_after.mark_login(&dir,refused + LOGIN_SPENT_S,refused);
+        limit_after.mark_limit(&dir,written + 60.0,written,"overage");
+        assert!(limit_after.is_spent(&dir,written),"limite curto depois da recusa segue valendo");
 
         // No macOS a credencial mora no Keychain e o arquivo não diz que o login acabou.
         if !cfg!(target_os = "macos") {

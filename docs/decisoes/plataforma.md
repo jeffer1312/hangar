@@ -3770,10 +3770,12 @@ terminal pela lista, porque o aviso do plugin chega antes de o Claude gravar a l
 resolve token velho na memória com um bom no disco, então a primeira recusa com login no disco reabre
 na mesma conta e manda o recado para continuar. A segunda em 10 min, ou o login já apagado, leva a
 sessão à conta logada de mais folga; a conta recusada fica fora dos destinos por 1 h, para duas contas
-recusadas não revezarem sem fim. A marca guarda a hora da recusa (`login` em `limit-spent.json`) e sai
-antes da hora quando a credencial da conta é regravada depois dela com token (login refeito pela tela
-ou pelo `/login`, ou renovação): a abertura, a escolha de destino e o diagnóstico conferem isso pelo
-`relogin_at`. Limite que estendeu o prazo da marca continua valendo. A escolha também lê o login no disco: o cache da cota mostra "lida"
+recusadas não revezarem sem fim. Credencial recusada (`authentication_failed`, `api_401`) guarda a
+hora da recusa (`login` em `limit-spent.json`) e sai antes da hora quando a credencial da conta é
+regravada depois dela com token (login refeito pela tela ou pelo `/login`, ou renovação que deu
+certo): a abertura, a escolha de destino e o diagnóstico conferem isso pelo `relogin_at`. Conta
+suspensa ou fora da organização espera a hora inteira, e marca juntada a um limite também. No macOS
+a credencial mora no Keychain: lá a marca espera a hora. A escolha também lê o login no disco: o cache da cota mostra "lida"
 a conta que acabou de perdê-lo. Sem destino, a linha mostra `limit_switch_login_lost`. Vale a escolha
 de conta da pessoa: como no limite, ela é trocada e o diário registra `explicit_account`. Sessão em
 motor não muda de conta.
