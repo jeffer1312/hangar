@@ -489,6 +489,14 @@ fn create_worktree_in(
     let text = target.to_string_lossy();
     // A branch só remota vira local (`--track -b`); desfazer apaga as duas que nasceram aqui.
     let branch_created = new_branch || !local.iter().any(|b| b == branch);
+    // A pasta da worktree soma ao caminho dos arquivos e passa dos 260 do Windows; sem longpaths o
+    // checkout para no meio. Fica no repositório porque todo git rodado depois na worktree precisa.
+    #[cfg(windows)]
+    if command(cwd, &["config", "--get", "core.longpaths"]).is_ok_and(|o| o.code == 1)
+        && !command(cwd, &["config", "--local", "core.longpaths", "true"]).is_ok_and(|o| o.code == 0)
+    {
+        tracing::warn!("core.longpaths não gravado no repositório");
+    }
     let created = if new_branch {
         let from = if local.iter().any(|b| b == start.as_str()) {
             start.clone()
@@ -512,6 +520,11 @@ fn create_worktree_in(
         )?
     };
     if created.code != 0 {
+        // O git desfaz a pasta da worktree que falhou, mas deixa a branch do `-b`: a nova
+        // tentativa com o mesmo nome esbarraria em "já existe uma branch".
+        if branch_created && !command(cwd, &["branch", "-D", branch]).is_ok_and(|o| o.code == 0) {
+            tracing::warn!("branch da worktree que falhou não apagada");
+        }
         return Err(error(
             409,
             scrub(&created.reason("não consegui criar a worktree")),
