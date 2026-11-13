@@ -58,7 +58,7 @@ pub async fn run(host: impl RepairHost, plugins_dir: PathBuf) {
         if woken || watcher.is_none() {
             settle(&mut changed, SETTLE).await;
         }
-        for outcome in repairer.pass(&host, Instant::now()).await {
+        for outcome in repairer.pass(&host, Instant::now).await {
             host.record(&outcome);
         }
         woken = tokio::time::timeout(PERIOD, changed.changed()).await.is_ok();
@@ -94,12 +94,14 @@ struct Repairer {
 
 impl Repairer {
     /// Reinstala um por vez, pulando o que não voltou há menos de [`RETRY_AFTER`], e confere as
-    /// pastas numa releitura só no fim.
-    async fn pass(&mut self, host: &impl RepairHost, now: Instant) -> Vec<Outcome> {
+    /// pastas numa releitura só no fim. O relógio é lido a cada decisão e no fim das tentativas: a
+    /// espera conta do término da tentativa, não do começo da passada, que pode ter esperado o
+    /// cadeado e outras reinstalações.
+    async fn pass(&mut self, host: &impl RepairHost, clock: impl Fn() -> Instant) -> Vec<Outcome> {
         let Some(missing) = host.missing().await else { return vec![] };
         let mut attempts = Vec::new();
         for id in missing {
-            if self.failed.get(id.as_str()).is_some_and(|(at, times)| now.duration_since(*at) < retry_after(*times)) {
+            if self.failed.get(id.as_str()).is_some_and(|(at, times)| clock().duration_since(*at) < retry_after(*times)) {
                 continue;
             }
             if let Some(result) = host.reinstall(&id).await {
@@ -110,6 +112,7 @@ impl Repairer {
             return vec![];
         }
         let left = host.missing().await;
+        let done = clock();
         attempts
             .into_iter()
             .map(|(id, result)| {
@@ -118,7 +121,7 @@ impl Repairer {
                     self.failed.remove(id.as_str());
                 } else {
                     let times = self.failed.get(id.as_str()).map_or(1, |(_, times)| times + 1);
-                    self.failed.insert(id.as_str().to_owned(), (now, times));
+                    self.failed.insert(id.as_str().to_owned(), (done, times));
                 }
                 Outcome { id, result, fixed }
             })
@@ -149,14 +152,30 @@ mod tests {
         needed: bool,
         result: fn() -> Result<OperationResult, PluginsError>,
         installs: Mutex<usize>,
+        /// O relógio da passada; cada reinstalação o adianta em `takes`.
+        clock: Mutex<Instant>,
+        takes: Duration,
     }
 
     impl Fake {
         fn new(reads: Vec<Option<Vec<PluginId>>>) -> Self {
-            Self { reads: Mutex::new(reads), needed: true, result: ok, installs: Mutex::new(0) }
+            Self {
+                reads: Mutex::new(reads),
+                needed: true,
+                result: ok,
+                installs: Mutex::new(0),
+                clock: Mutex::new(Instant::now()),
+                takes: Duration::ZERO,
+            }
         }
         fn installs(&self) -> usize {
             *self.installs.lock().unwrap()
+        }
+        fn now(&self) -> Instant {
+            *self.clock.lock().unwrap()
+        }
+        fn advance(&self, by: Duration) {
+            *self.clock.lock().unwrap() += by;
         }
     }
 
@@ -170,6 +189,7 @@ mod tests {
                 return None;
             }
             *self.installs.lock().unwrap() += 1;
+            self.advance(self.takes);
             Some((self.result)())
         }
         fn record(&self, _: &Outcome) {}
@@ -180,11 +200,11 @@ mod tests {
         let mut repairer = Repairer::default();
         let start = Instant::now();
         let stuck = Fake::new(vec![Some(vec![id("a@m")])]);
-        assert!(!repairer.pass(&stuck, start).await[0].fixed);
-        assert!(repairer.pass(&stuck, start + Duration::from_secs(60)).await.is_empty());
+        assert!(!repairer.pass(&stuck, || start).await[0].fixed);
+        assert!(repairer.pass(&stuck, || start + Duration::from_secs(60)).await.is_empty());
         assert_eq!(stuck.installs(), 1);
         let back = Fake::new(vec![Some(vec![id("a@m")]), Some(vec![])]);
-        assert!(repairer.pass(&back, start + RETRY_AFTER).await[0].fixed);
+        assert!(repairer.pass(&back, || start + RETRY_AFTER).await[0].fixed);
         assert!(repairer.failed.is_empty());
     }
 
@@ -192,17 +212,17 @@ mod tests {
     async fn a_failed_read_neither_repairs_nor_confirms() {
         let mut repairer = Repairer::default();
         let unreadable = Fake::new(vec![None]);
-        assert!(repairer.pass(&unreadable, Instant::now()).await.is_empty());
+        assert!(repairer.pass(&unreadable, Instant::now).await.is_empty());
         assert_eq!(unreadable.installs(), 0);
         let reread_fails = Fake::new(vec![Some(vec![id("a@m")]), None]);
-        assert!(!repairer.pass(&reread_fails, Instant::now()).await[0].fixed);
+        assert!(!repairer.pass(&reread_fails, Instant::now).await[0].fixed);
     }
 
     #[tokio::test]
     async fn a_plugin_no_longer_needed_under_the_lock_is_not_counted() {
         let mut repairer = Repairer::default();
         let gone = Fake { needed: false, ..Fake::new(vec![Some(vec![id("a@m")])]) };
-        assert!(repairer.pass(&gone, Instant::now()).await.is_empty());
+        assert!(repairer.pass(&gone, Instant::now).await.is_empty());
         assert!(repairer.failed.is_empty());
     }
 
@@ -211,14 +231,31 @@ mod tests {
         let mut repairer = Repairer::default();
         let failing = Fake { result: || Err(PluginsError::CliTimeout), ..Fake::new(vec![Some(vec![id("a@m")])]) };
         let start = Instant::now();
-        assert!(repairer.pass(&failing, start).await[0].result.is_err());
-        assert!(repairer.pass(&failing, start + Duration::from_secs(60)).await.is_empty());
+        assert!(repairer.pass(&failing, || start).await[0].result.is_err());
+        assert!(repairer.pass(&failing, || start + Duration::from_secs(60)).await.is_empty());
         // A segunda falha seguida dobra a espera.
         let second = start + RETRY_AFTER;
-        assert_eq!(repairer.pass(&failing, second).await.len(), 1);
-        assert!(repairer.pass(&failing, second + RETRY_AFTER).await.is_empty());
-        assert_eq!(repairer.pass(&failing, second + 2 * RETRY_AFTER).await.len(), 1);
+        assert_eq!(repairer.pass(&failing, || second).await.len(), 1);
+        assert!(repairer.pass(&failing, || second + RETRY_AFTER).await.is_empty());
+        assert_eq!(repairer.pass(&failing, || second + 2 * RETRY_AFTER).await.len(), 1);
         assert_eq!(failing.installs(), 3);
+    }
+
+    #[tokio::test]
+    async fn the_wait_counts_from_the_end_of_a_long_reinstall() {
+        let mut repairer = Repairer::default();
+        let slow = Fake {
+            result: || Err(PluginsError::CliTimeout),
+            takes: RETRY_AFTER + Duration::from_secs(60),
+            ..Fake::new(vec![Some(vec![id("a@m")])])
+        };
+        assert!(repairer.pass(&slow, || slow.now()).await[0].result.is_err());
+        let done = slow.now();
+        slow.advance(Duration::from_secs(30));
+        assert!(repairer.pass(&slow, || slow.now()).await.is_empty(), "tentou de novo 30 s depois do fim da tentativa");
+        assert_eq!(slow.installs(), 1);
+        *slow.clock.lock().unwrap() = done + RETRY_AFTER;
+        assert_eq!(repairer.pass(&slow, || slow.now()).await.len(), 1);
     }
 
     #[test]
