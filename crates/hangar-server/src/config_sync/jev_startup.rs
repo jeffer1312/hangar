@@ -36,7 +36,7 @@ impl RuntimeConfig {
         if AUX.iter().any(|key| current.contains_key(*key)) {
             return Ok(());
         }
-        let legacy: Map<String, Value> = self
+        let mut legacy: Map<String, Value> = self
             .legacy_aux(&current, true)?
             .into_iter()
             .filter(|(_, value)| truthy(value))
@@ -44,9 +44,25 @@ impl RuntimeConfig {
         if legacy.is_empty() {
             return Ok(());
         }
-        // Gravar o auxiliar repassa o Jev ao MCP.
-        self.keep_replaced_keys(&self.jev_key())?;
+        // Gravar o auxiliar repassa o Jev ao MCP: com a página vazia, o repasse apagaria a chave que
+        // a etapa seguinte ainda ia migrar. Ela vira a do Jev na mesma gravação.
+        let key = match self.unmigrated_mcp_key()? {
+            Some(key) => {
+                legacy.insert("jev_api_key".into(), json!(key));
+                key
+            }
+            None => self.jev_key(),
+        };
+        self.keep_replaced_keys(&key)?;
         self.apply(&legacy, &BTreeSet::new()).map(drop)
+    }
+
+    /// A chave do MCP que a migração única ainda vai levar ao Jev: sem marca e com a página vazia.
+    fn unmigrated_mcp_key(&self) -> Result<Option<String>, String> {
+        if self.env.home.join(MARKER).exists() || !text(Some(&self.get("jev_api_key"))).is_empty() {
+            return Ok(None);
+        }
+        Ok(string_key(&self.known_env()?))
     }
 
     /// A chave que só existia no MCP ou no `settings.json` vira a do Jev, uma vez; depois o MCP recebe o Jev.

@@ -192,6 +192,32 @@ fn jev_20_written_aux_is_left_alone() {
     assert!(home.exists(MARKER));
 }
 
+// JEV-20 + JEV-17 (decisão do usuário, corrige o Python): auxiliar antigo, página vazia e chave só no MCP.
+// O repasse do auxiliar não apaga a chave: ela vira a do Jev, e a da conta trocada fica guardada (D5.2).
+#[test]
+fn jev_20_publishing_the_old_aux_keeps_the_mcp_only_key() {
+    let home = Home::new();
+    let llm = json!({"LLM_PROXY_URL": "https://b/v1/chat/completions", "LLM_MODEL": "mb"});
+    let mut main = llm.clone();
+    main["TYPESAFE_API_KEY"] = json!("chave-mcp");
+    let mut account = llm.clone();
+    account["TYPESAFE_API_KEY"] = json!("B-conta");
+    home.main(main);
+    home.account(account);
+    home.start();
+    assert_eq!(
+        home.json(RUNTIME),
+        json!({"jev_aux_base_url": "https://b/v1", "jev_aux_modelo": "mb", "jev_api_key": "chave-mcp"})
+    );
+    assert_eq!(home.json(MAIN), home.main_doc(with_jev(llm.clone(), "chave-mcp")));
+    assert_eq!(home.json(ACCOUNT), home.account_doc(with_jev(llm, "chave-mcp")));
+    let mut kept = Map::new();
+    kept.insert(home.account_source(), json!(["B-conta"]));
+    assert_eq!(home.json(OLD_KEYS), Value::Object(kept));
+    assert!(home.exists(MARKER));
+    assert!(home.failures().is_empty());
+}
+
 // HIS-41 (r5-aux-legado-mcp-completo): navegador só com endereço, MCP completo: vale o do Computer Use inteiro.
 #[test]
 fn his_41_browser_with_only_an_address_keeps_the_whole_computer_use_model() {
