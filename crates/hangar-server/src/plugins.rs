@@ -295,6 +295,13 @@ async fn plugin_op(
     .await
 }
 
+/// Reinstalação pedida pelo próprio servidor (`plugins_repair`): espera a vez no mesmo cadeado das
+/// mudanças da tela, em vez de recusar como elas.
+pub(crate) async fn reinstall(st: Arc<AppState>, id: PluginId) -> Result<OperationResult, PluginsError> {
+    let _guard = st.claude_plugins.busy.lock().await;
+    Plugins::new(Runner::new(&st)).install(&id).await
+}
+
 /// Uma mudança por servidor. Ela roda numa tarefa própria que leva o cadeado: o cliente que cai
 /// não mata a CLI pela metade (a captura encerra o filho quando quem espera desiste).
 async fn mutate<F, Fut>(st: Arc<AppState>, change: F) -> Reply

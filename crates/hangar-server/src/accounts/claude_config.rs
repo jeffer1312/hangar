@@ -929,9 +929,30 @@ fn mirror_claude_json(home: &Path, dir: &Path) -> Result<Option<String>> {
     Ok((!undone.is_empty()).then(|| format!(".claude.json: o principal sobrescreveu os MCP {} na cópia desta conta", undone.join(", "))))
 }
 
+/// O que a conferência dos plugins ligados achou de errado no registro compartilhado.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PluginFinding {
+    Unreadable(String),
+    NotRegistered(String),
+    /// `user` diz se alguma das instalações sem pasta é de escopo de usuário.
+    FolderGone { id: String, paths: Vec<String>, user: bool },
+}
+
 /// Plugin ligado no `settings.json` da conta sem instalação no compartilhado: avisa, nunca instala
-/// (instalar escreveria no compartilhado a partir de uma conta).
+/// (instalar escreveria no compartilhado a partir de uma conta). A pasta sumida o `plugins_repair`
+/// reinstala pela pasta principal.
 pub(crate) fn check_plugins(home: &Path, dir: &Path) -> Result<Vec<String>> {
+    Ok(plugin_findings(home, dir)?.into_iter().map(|finding| match finding {
+        PluginFinding::Unreadable(warning) => warning,
+        PluginFinding::NotRegistered(name) => format!("plugin {name} está ligado no settings.json mas não consta em installed_plugins.json — \
+            reinstalar: claude plugin install {name}"),
+        PluginFinding::FolderGone { id, paths, .. } => {
+            format!("plugin {id} consta instalado mas a pasta sumiu ({}) — reinstalar: claude plugin install {id}", paths.join(", "))
+        }
+    }).collect())
+}
+
+pub(crate) fn plugin_findings(home: &Path, dir: &Path) -> Result<Vec<PluginFinding>> {
     let Some(settings) = read_json(&dir.join("settings.json"))
         .map_err(|e| refused(format!("não consegui ler o settings.json da conta: {e}")))? else { return Ok(vec![]) };
     let Value::Object(settings) = settings else {
@@ -945,39 +966,41 @@ pub(crate) fn check_plugins(home: &Path, dir: &Path) -> Result<Vec<String>> {
     let registry = home.join(".claude").join("plugins").join("installed_plugins.json");
     let malformed = || refused(format!("plugins: {} fora do formato esperado — não dá pra conferir os plugins", registry.display()));
     let installed = match read_json(&registry) {
-        Err(e) => return Ok(vec![format!("plugins: não consegui ler {}: {e}", registry.display())]),
+        Err(e) => return Ok(vec![PluginFinding::Unreadable(format!("plugins: não consegui ler {}: {e}", registry.display()))]),
         Ok(None) => Value::Object(Map::new()),
         Ok(Some(Value::Object(data))) => data.get("plugins").filter(|v| py::truthy(Some(v))).cloned().unwrap_or_else(|| json!({})),
         Ok(Some(_)) => return Err(malformed()),
     };
     let mut names: Vec<(&String, &Value)> = enabled.iter().collect();
     names.sort_by(|a, b| py_order(a.0, b.0));
-    let mut warnings = Vec::new();
+    let mut findings = Vec::new();
     for (name, on) in names {
         if !py::truthy(Some(on)) { continue; }
         let Value::Object(installed) = &installed else { return Err(malformed()) };
         let Some(entries) = installed.get(name).filter(|v| py::truthy(Some(v))) else {
-            warnings.push(format!("plugin {name} está ligado no settings.json mas não consta em installed_plugins.json — \
-                reinstalar: claude plugin install {name}"));
+            findings.push(PluginFinding::NotRegistered(name.clone()));
             continue;
         };
         let Value::Array(entries) = entries else { return Err(malformed()) };
-        let mut missing = Vec::new();
+        let (mut paths, mut user) = (Vec::new(), false);
         for entry in entries {
             let Value::Object(entry) = entry else { return Err(malformed()) };
-            match entry.get("installPath") {
-                Some(Value::String(path)) if !path.is_empty() => if !is_dir(Path::new(path)) { missing.push(path.clone()) },
-                path if !py::truthy(path) => missing.push(py::py_str(path.unwrap_or(&Value::Null))),
+            let gone = match entry.get("installPath") {
+                Some(Value::String(path)) if !path.is_empty() => (!is_dir(Path::new(path))).then(|| path.clone()),
+                path if !py::truthy(path) => Some(py::py_str(path.unwrap_or(&Value::Null))),
                 // `Path(5)`: o Python levantava TypeError cru.
                 _ => return Err(malformed()),
+            };
+            if let Some(path) = gone {
+                user |= entry.get("scope").and_then(Value::as_str) == Some("user");
+                paths.push(path);
             }
         }
-        if !missing.is_empty() {
-            warnings.push(format!("plugin {name} consta instalado mas a pasta sumiu ({}) — reinstalar: claude plugin install {name}",
-                missing.join(", ")));
+        if !paths.is_empty() {
+            findings.push(PluginFinding::FolderGone { id: name.clone(), paths, user });
         }
     }
-    Ok(warnings)
+    Ok(findings)
 }
 
 const PLUGIN_REGISTRY: [&str; 2] = ["installed_plugins.json", "known_marketplaces.json"];
