@@ -159,12 +159,47 @@ it('■ para o shell do Claude, mostra parando e volta com aviso sem confirmaç�
   expect(stopTask).toHaveBeenCalledWith('sess', 'bg1', data.server);
   expect(el.textContent).toContain(m.atividade_parando());
   expect(stopButton(el)).toBeNull();
+  expect(el.querySelector('[aria-busy="true"]')?.textContent).toContain('npm run dev');
+  expect(el.querySelector('[accessibilityliveregion="polite"]')?.textContent).toBe(m.atividade_parando());
   await act(async () => { await vi.advanceTimersByTimeAsync(14_000); });
   expect(el.textContent).toContain(m.atividade_parando());
   await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
   expect(el.textContent).not.toContain(m.atividade_parando());
   expect(stopButton(el)).not.toBeNull();
   expect(toastErro).toHaveBeenCalledWith(m.atividade_parar_sem_confirmacao());
+});
+
+it('■ só encerra o parando pela ausência da tarefa depois que a lista carregou', async () => {
+  data.ferramentas = 'claudeDesktop';
+  data.activity = { ...data.activity, runningAgents: 1,
+    agents: [{ id: 'call-cpu', kind: 'agent', description: 'diag-cpu', running: true, agentId: 'ag-cpu' }] };
+  const { getSubagents } = await import('@hangar/core');
+  let loadSubs: (subs: SubagentRun[]) => void = () => {};
+  vi.mocked(getSubagents).mockImplementationOnce(() => new Promise((resolve) => { loadSubs = resolve; }));
+  toastErro.mockClear();
+  const el = await mount();
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  const button = () => el.querySelector<HTMLElement>(`[aria-label="${m.atividade_desktop_parar()}: diag-cpu"]`);
+  await act(async () => button()!.click());
+  expect(el.textContent).toContain(m.atividade_parando());
+  const agents = data.activity.agents;
+  const rerenderWith = async (list: typeof agents) => {
+    data.activity = { ...data.activity, runningAgents: list.length, agents: list };
+    await act(async () => root!.render(createElement(ActivityPanel, { serverId: 'a', name: 'sess', focused: true })));
+  };
+  // Lista ainda carregando: a tarefa some do conjunto, mas isso não prova a parada.
+  await rerenderWith([]);
+  await rerenderWith(agents);
+  expect(el.textContent).toContain(m.atividade_parando());
+  expect(button()).toBeNull();
+  // Lista carregada e a tarefa fora dela: a parada se confirmou.
+  await rerenderWith([]);
+  await act(async () => { loadSubs([]); });
+  await rerenderWith(agents);
+  expect(el.textContent).not.toContain(m.atividade_parando());
+  expect(button()).not.toBeNull();
+  await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+  expect(toastErro).not.toHaveBeenCalled();
 });
 
 it('■ recusado pelo servidor volta a linha e mostra o texto do código', async () => {

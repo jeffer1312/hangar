@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactElement } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { codexSubagentActivityKey, codexSubagentState, formatElapsed, getSubagents, getWorkflow, getWorkflowAgent, getWorkflows, projectSubagentActivity, projectCodexSubagent, isCodexAgentSpawn, stopTask } from '@hangar/core';
@@ -276,7 +276,9 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
     ...runningAgents.map((a) => agentInfo.byAgent.get(a)?.taskId),
     ...runningSubs.map(({ run }) => run.agentId),
     ...shellsVivos.map((s2) => s2.taskId),
-  ]), [runningAgents, runningSubs, shellsVivos, agentInfo]);
+  ].filter((id): id is string => typeof id === 'string')), [runningAgents, runningSubs, shellsVivos, agentInfo]);
+  // Lista recarregando vem vazia: a tarefa sumir dela só prova a parada com os subagentes lidos.
+  const subsReady = currentList && !list.subLoading;
 
   const endStop = useCallback((taskId: string) => {
     if (!stopTimers.current.has(taskId)) return;
@@ -286,8 +288,9 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
   }, []);
   // A tarefa saiu da lista: a parada se confirmou e a linha some com ela.
   useEffect(() => {
+    if (!subsReady) return;
     for (const taskId of [...stopTimers.current.keys()]) if (!liveTaskIds.has(taskId)) endStop(taskId);
-  }, [liveTaskIds, endStop]);
+  }, [liveTaskIds, subsReady, endStop]);
   useEffect(() => () => {
     for (const timer of stopTimers.current.values()) clearTimeout(timer);
     stopTimers.current.clear();
@@ -301,6 +304,8 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
       toast.erro(m.atividade_parar_sem_confirmacao());
     }, STOP_CONFIRM_MS));
     rerender();
+    // O iOS não lê `accessibilityLiveRegion`; no Android a linha anuncia sozinha.
+    if (Platform.OS === 'ios') AccessibilityInfo.announceForAccessibility(m.atividade_parando());
     try {
       await stopTask(name, taskId, server);
     } catch (error) {
@@ -313,12 +318,12 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
   function taskRow(key: string, icon: IconName, title: string, since: number | null, onPress?: () => void, taskId?: string) {
     const parando = !!taskId && stopTimers.current.has(taskId);
     return (
-      <View key={key} style={styles.taskRow}>
+      <View key={key} style={styles.taskRow} accessibilityState={parando ? { busy: true } : undefined}>
         <Pressable onPress={onPress} disabled={!onPress} style={styles.taskOpen}
           accessibilityRole={onPress ? 'button' : undefined} accessibilityLabel={title}>
           <Icon name={icon} size={16} color={theme.tokens.text.muted} />
           <Text style={[styles.taskName, { color: theme.tokens.text.primary }]} numberOfLines={1}>{title}</Text>
-          {parando ? <Text style={[styles.taskTime, { color: theme.tokens.text.muted }]}>{m.atividade_parando()}</Text>
+          {parando ? <Text style={[styles.taskTime, { color: theme.tokens.text.muted }]} accessibilityLiveRegion="polite">{m.atividade_parando()}</Text>
             : since !== null && Number.isFinite(since) ? <Text style={[styles.taskTime, { color: theme.tokens.text.muted }]}>{formatElapsed(agora - since)}</Text> : null}
         </Pressable>
         {stopButton(taskId, title)}
@@ -343,9 +348,9 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
     const button = stopButton(taskId, title);
     if (!parando && !button) return row;
     return (
-      <View key={key} style={styles.taskRow}>
+      <View key={key} style={styles.taskRow} accessibilityState={parando ? { busy: true } : undefined}>
         <View style={styles.grow}>{row}</View>
-        {parando ? <Text style={[styles.taskTime, { color: theme.tokens.text.muted }]}>{m.atividade_parando()}</Text> : button}
+        {parando ? <Text style={[styles.taskTime, { color: theme.tokens.text.muted }]} accessibilityLiveRegion="polite">{m.atividade_parando()}</Text> : button}
       </View>
     );
   }
