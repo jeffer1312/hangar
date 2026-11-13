@@ -5,6 +5,7 @@ import type { ChatEvent } from '@hangar/core';
 import { Icon } from '../../ui/Icon';
 import { ToolCard } from './ToolCard';
 import { TerminalToolGroup } from './TerminalToolGroup';
+import { DesktopToolGroup } from './DesktopToolGroup';
 import { ThinkingBlock } from '../ThinkingBlock';
 import { appendFoldSummary, failedLabel, summaryTitle, type FoldSummary } from './fold';
 import type { Ferramentas } from '../../stores/aparencia';
@@ -52,7 +53,9 @@ export const ToolGroup = memo(function ToolGroup({
   const linha = (p: ChatEvent) =>
     p.kind === 'thinking'
       ? <ThinkingBlock key={p.id} ev={p} />
-      : <ToolCard key={p.id} use={p} result={resultOf(p)} onPress={onAbrir} look={look} />;
+      : <ToolCard key={p.id} use={p} result={resultOf(p)} onPress={onAbrir} look={look === 'claudeDesktop' ? 'tree' : look} />;
+  // Pensamento e Agent seguem como na Árvore; as chamadas viram a linha do Claude Desktop.
+  if (look === 'claudeDesktop') return <DesktopToolGroup parts={parts} resultOf={resultOf} onExpand={onExpand} renderOther={linha} />;
   // Tabela dos Chips: caixa com borda e divisória entre as linhas (chip_table do Rust).
   const tabela = (ls: ChatEvent[]) => (
     <View style={[styles.tabela, { borderColor: theme.tokens.border.subtle }]}>

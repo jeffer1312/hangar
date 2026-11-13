@@ -137,6 +137,7 @@ export default function Aparencia() {
     { v: 'chips', label: m.native_settings_tool_calls_chips() },
     { v: 'tree', label: m.native_settings_tool_calls_tree() },
     { v: 'terminal', label: m.native_settings_tool_calls_terminal(), aria: m.config_aparencia_terminal_aria() },
+    { v: 'claudeDesktop', label: m.native_settings_tool_calls_claude_desktop() },
   ];
   const TAREFAS: ReadonlyArray<Option<'off' | 'on'>> = [
     { v: 'off', label: m.native_settings_task_list_hide() },

@@ -2,7 +2,7 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { Activity, ChatEvent, Server, WorkflowSummary } from '@hangar/core';
+import type { Activity, ChatEvent, Server, SubagentRun, WorkflowSummary } from '@hangar/core';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const data = vi.hoisted(() => ({
@@ -10,7 +10,9 @@ const data = vi.hoisted(() => ({
   server: { id: 'a', label: 'A', baseUrl: 'https://a.test', token: 'token-a' } as Server,
   events: [] as ChatEvent[],
   workflows: [] as WorkflowSummary[],
+  ferramentas: 'tree',
 }));
+vi.mock('../../stores/aparencia', () => ({ useAparencia: (select: (state: unknown) => unknown) => select({ ferramentas: data.ferramentas }) }));
 vi.mock('./useActivity', () => ({ useActivity: () => data.activity }));
 vi.mock('../../stores/chat', () => ({ chatStore: () => ({
   use: (select: (state: { events: ChatEvent[]; eventsRevision: number; stateEvent: null }) => unknown) =>
@@ -22,7 +24,10 @@ vi.mock('@hangar/core', async (original) => ({
   getWorkflows: vi.fn(async () => data.workflows),
   getWorkflow: vi.fn().mockResolvedValue(null),
   getSubagents: vi.fn().mockResolvedValue([]),
+  stopTask: vi.fn(async () => ({ pending: true })),
 }));
+const toastErro = vi.hoisted(() => vi.fn());
+vi.mock('../../ui/Toast', () => ({ toast: { erro: toastErro } }));
 vi.mock('expo-router', () => ({
   Stack: { Screen: () => null },
 }));
@@ -48,6 +53,7 @@ async function mount(onBackRequest?: (handler: () => boolean) => void) {
 beforeEach(() => {
   data.activity = { tasks: [], agents: [], shells: [], total: 0, done: 0, inProgress: 0, runningAgents: 0, runningShells: 0 };
   data.workflows = [];
+  data.ferramentas = 'tree';
 });
 afterEach(async () => {
   if (root) await act(async () => root!.unmount());
@@ -107,4 +113,80 @@ it('consome o voltar só no detalhe e libera o handler ao desmontar', async () =
   await act(async () => root!.unmount());
   root = undefined;
   expect(back()).toBe(false);
+});
+
+it('Claude Desktop junta subagentes e shells em Tarefas em segundo plano e recolhe as finalizadas', async () => {
+  data.ferramentas = 'claudeDesktop';
+  data.activity = { ...data.activity, runningAgents: 2, runningShells: 1,
+    agents: [
+      { id: 'call-cpu', kind: 'agent', description: 'diag-cpu', running: true },
+      { id: 'call-disk', kind: 'agent', description: 'diag-disk', running: true },
+    ],
+    shells: [{ id: 'call-sh', command: 'npm run dev', rotulo: 'npm run dev', running: true }] };
+  const finished: SubagentRun = { agentId: 'done-1', agentType: null, prompt: 'diag-services', startedAt: '2026-11-13T08:00:00Z',
+    updatedAt: '2026-11-13T08:05:00Z', endedAt: new Date().toISOString(), mtime: 0, toolCalls: 3, tools: [], recent: [], lastText: '', state: 'finished' };
+  const { getSubagents } = await import('@hangar/core');
+  vi.mocked(getSubagents).mockResolvedValue([finished]);
+  try {
+    const el = await mount();
+    expect(el.textContent).toContain(m.atividade_desktop_titulo());
+    for (const name of ['diag-cpu', 'diag-disk', 'npm run dev']) expect(el.textContent).toContain(name);
+    expect(el.textContent).not.toContain(m.atividade_grupo_rodando({ n: 2 }));
+    expect(el.textContent).not.toContain(m.atividade_shells());
+    expect(el.textContent).not.toContain('diag-services');
+    const more = el.querySelector<HTMLElement>(`[aria-label="${m.atividade_desktop_finalizadas({ n: 1 })}"]`);
+    expect(more).not.toBeNull();
+    await act(async () => more!.click());
+    expect(el.textContent).toContain('diag-services');
+  } finally {
+    vi.mocked(getSubagents).mockResolvedValue([]);
+  }
+});
+
+const stopButton = (el: HTMLElement) => el.querySelector<HTMLElement>(`[aria-label="${m.atividade_desktop_parar()}: npm run dev"]`);
+
+it('■ para o shell do Claude, mostra parando e volta com aviso sem confirmação em 15 s', async () => {
+  data.ferramentas = 'claudeDesktop';
+  data.activity = { ...data.activity, runningShells: 1,
+    shells: [{ id: 'call-sh', command: 'npm run dev', rotulo: 'npm run dev', running: true, taskId: 'bg1' }] };
+  const { stopTask } = await import('@hangar/core');
+  vi.mocked(stopTask).mockClear();
+  toastErro.mockClear();
+  const el = await mount();
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  expect(stopButton(el)).not.toBeNull();
+  await act(async () => stopButton(el)!.click());
+  expect(stopTask).toHaveBeenCalledWith('sess', 'bg1', data.server);
+  expect(el.textContent).toContain(m.atividade_parando());
+  expect(stopButton(el)).toBeNull();
+  await act(async () => { await vi.advanceTimersByTimeAsync(14_000); });
+  expect(el.textContent).toContain(m.atividade_parando());
+  await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+  expect(el.textContent).not.toContain(m.atividade_parando());
+  expect(stopButton(el)).not.toBeNull();
+  expect(toastErro).toHaveBeenCalledWith(m.atividade_parar_sem_confirmacao());
+});
+
+it('■ recusado pelo servidor volta a linha e mostra o texto do código', async () => {
+  data.ferramentas = 'claudeDesktop';
+  data.activity = { ...data.activity, runningShells: 1,
+    shells: [{ id: 'call-sh', command: 'npm run dev', rotulo: 'npm run dev', running: true, taskId: 'bg1' }] };
+  const { stopTask } = await import('@hangar/core');
+  vi.mocked(stopTask).mockRejectedValueOnce(Object.assign(new Error(m.erro_parar_sem_plugin()), { status: 409, code: 'erro_parar_sem_plugin' }));
+  toastErro.mockClear();
+  const el = await mount();
+  expect(stopButton(el)).not.toBeNull();
+  await act(async () => stopButton(el)!.click());
+  expect(toastErro).toHaveBeenCalledWith(m.erro_parar_sem_plugin());
+  expect(el.textContent).not.toContain(m.atividade_parando());
+  expect(stopButton(el)).not.toBeNull();
+});
+
+it('shell sem id de fundo não ganha ■', async () => {
+  data.ferramentas = 'claudeDesktop';
+  data.activity = { ...data.activity, runningShells: 1,
+    shells: [{ id: 'call-sh', command: 'npm run dev', rotulo: 'npm run dev', running: true }] };
+  const el = await mount();
+  expect(el.textContent).toContain('npm run dev');
+  expect(stopButton(el)).toBeNull();
 });

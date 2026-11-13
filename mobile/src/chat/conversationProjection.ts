@@ -15,6 +15,8 @@ export interface ProjectionInput {
   pref: PensamentoTools;
   merge: boolean;
   terminal?: boolean;
+  /** Claude Desktop: toda sequência vira grupo, como no Terminal. */
+  desktop?: boolean;
   tasksEnabled: boolean;
   pagesEnabled: boolean;
   running: ReadonlySet<string>;
@@ -53,7 +55,7 @@ const resultOf = (results: Map<string, ChatEvent>) => (ev: ChatEvent) => results
 const emptyGroup = (): GroupState => ({ mode: null, count: 0, first: '' });
 
 function configKey(input: ProjectionInput): string {
-  return JSON.stringify([input.pref, input.merge, !!input.terminal, input.tasksEnabled, input.pagesEnabled,
+  return JSON.stringify([input.pref, input.merge, !!input.terminal, !!input.desktop, input.tasksEnabled, input.pagesEnabled,
     [...input.running].sort(), input.queuePanel?.entries.map((e) => e.id).sort() ?? []]);
 }
 
@@ -70,7 +72,8 @@ function sameRow(a: MessageRow, b: MessageRow, results: Map<string, ChatEvent>, 
 
 /** A revisão igual autoriza apenas a cauda; sem ela, um array novo é uma substituição. */
 export function projectConversation(before: ConversationProjection | null, input: ProjectionInput): ConversationProjection {
-  const groupMin = input.terminal ? 1 : 3;
+  const everyRun = !!input.terminal || !!input.desktop;
+  const groupMin = everyRun ? 1 : 3;
   const config = configKey(input);
   if (before && before.events === input.events && before.revision === input.eventsRevision && before.config === config) return before;
   const append = !!before && before.config === config && input.eventsRevision !== undefined
@@ -168,7 +171,7 @@ export function projectConversation(before: ConversationProjection | null, input
       const extend = g.mode === 'run';
       if (!extend) { g.first = ev.id; g.count = 0; }
       g.count++;
-      if (!input.merge && extend && g.count === 3 && !input.terminal) {
+      if (!input.merge && extend && g.count === 3 && !everyRun) {
         const first = rows[rows.length - 2], second = rows[rows.length - 1];
         if (first.type === 'fold' && second.type === 'fold') {
           const left = first.summary!, right = second.summary!;
@@ -186,7 +189,7 @@ export function projectConversation(before: ConversationProjection | null, input
         }
       } else {
         const index = addFold(ev, g.count >= groupMin ? `g-${g.first}` : ev.id, g.count >= groupMin ? 'group' : 'tool', extend && g.count > groupMin);
-        if (input.merge && !input.terminal && g.count === 3 && rows[index].id === `f-${g.first}`) {
+        if (input.merge && !everyRun && g.count === 3 && rows[index].id === `f-${g.first}`) {
           rows[index].id = `f-g-${g.first}`;
         }
       }

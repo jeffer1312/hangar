@@ -213,3 +213,28 @@ it('trecho recolhido com 5000 chamadas e 200 appends não reconta o histórico',
     act(() => root.unmount());
   }
 });
+
+it('Claude Desktop nasce recolhido e abre cartão, falha e código de saída', () => {
+  const bash = (id: string): ChatEvent => ({ id, kind: 'tool_use', tool_use_id: id, tool_name: 'Bash', tool_input: { command: `run-${id}` } });
+  const results: Record<string, ChatEvent> = {
+    ok: { id: 'r-ok', kind: 'tool_result', tool_use_id: 'ok', result: 'done' },
+    bad: { id: 'r-bad', kind: 'tool_result', tool_use_id: 'bad', result: 'Exit code 1\nboom', is_error: true },
+  };
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  const onExpand = vi.fn();
+  try {
+    act(() => root.render(createElement(ToolGroup, { parts: [bash('ok'), bash('bad')], resultOf: (t) => results[t.id] ?? null, onAbrir: () => {}, onExpand, look: 'claudeDesktop' })));
+    expect(container.textContent).toBe(`${m.ferr_desktop_rodou({ n: 2 })} ${m.ferr_desktop_falhas_1()}`);
+    act(() => container.querySelector('button')!.click());
+    expect(onExpand).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain('run-ok');
+    expect(container.textContent).toContain(m.formato_tool_falhou());
+    const failed = [...container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label')?.includes('run-bad'))!;
+    act(() => failed.click());
+    expect(container.textContent).toContain(m.ferr_desktop_codigo_saida({ n: 1 }));
+    expect(container.textContent).toContain('boom');
+  } finally {
+    act(() => root.unmount());
+  }
+});

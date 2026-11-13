@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { codexSubagentActivityKey, codexSubagentState, formatElapsed, getSubagents, getWorkflow, getWorkflowAgent, getWorkflows, projectSubagentActivity, projectCodexSubagent, isCodexAgentSpawn } from '@hangar/core';
+import { codexSubagentActivityKey, codexSubagentState, formatElapsed, getSubagents, getWorkflow, getWorkflowAgent, getWorkflows, projectSubagentActivity, projectCodexSubagent, isCodexAgentSpawn, stopTask } from '@hangar/core';
 import type { AgentRun, CodexCommand, ShellVivo, SubagentRun, WorkflowDetail, WorkflowAgentDetail, WorkflowSummary } from '@hangar/core';
 import { chatStore } from '../../stores/chat';
 import { useServers } from '../../stores/servers';
@@ -18,12 +18,17 @@ import { SubagentLive, subagentProblemText, subagentStatus } from './SubagentLiv
 import * as m from '../../paraglide/messages';
 import { superficie } from '../../theme/superficie';
 import { HeaderBack } from '../../ui/glassHeader';
-import { Icon } from '../../ui/Icon';
+import { Icon, type IconName } from '../../ui/Icon';
+import { useAparencia } from '../../stores/aparencia';
+import { haptic } from '../../ui/haptics';
+import { toast } from '../../ui/Toast';
 import { CodexCommands } from './CodexCommands';
 
 type Level = 'list' | 'workflow' | 'agent' | 'subagent';
 const EMPTY_SHELLS: ShellVivo[] = [];
 const EMPTY_COMMANDS: CodexCommand[] = [];
+// O 202 do servidor não prova a parada: só a tarefa sumir da lista. Sem isso neste prazo, a linha volta.
+const STOP_CONFIRM_MS = 15_000;
 
 interface Props {
   serverId: string;
@@ -47,6 +52,7 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
   const commands = chat.use((s) => s.stateEvent?.codex_commands) ?? EMPTY_COMMANDS;
   const nativeStates = chat.use((s) => s.stateEvent?.codex_subagents);
   const readOnly = useSessions(state => state.rows.find(row => row.serverId === serverId && row.name === name)?.guest_kind === 'pair');
+  const provider = useSessions(state => state.rows.find(row => row.serverId === serverId && row.name === name)?.provider);
   const transcriptActivity = useActivity(events, eventsRevision);
   const agentIds = useMemo(() => agentIdentities(events), [events, eventsRevision]);
   // Relógio do "há N" dos shells enquanto o painel está visível.
@@ -73,6 +79,11 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
   const workflowListError = currentList ? list.workflowError : '';
   const subError = currentList ? list.subError : '';
   const [olderOpen, setOlderOpen] = useState(false);
+  // Claude Desktop: subagentes e shells numa seção só, e os terminados atrás de uma linha.
+  const desktop = useAparencia((s) => s.ferramentas) === 'claudeDesktop';
+  const [finishedOpen, setFinishedOpen] = useState(false);
+  const [stopping, setStopping] = useState<ReadonlySet<string>>(new Set());
+  const stopTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const [wfLoading, setWfLoading] = useState(false);
   const [detail, setDetail] = useState<WorkflowDetail | null>(null);
   const [agentDetail, setAgentDetail] = useState<WorkflowAgentDetail | null>(null);
@@ -249,6 +260,88 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
     );
   }
 
+  // ■ só no Claude: o servidor recusa o resto (`erro_parar_so_claude`), e o Codex tem os comandos dele.
+  const canStop = !readOnly && !nativeSubagents && (!provider || provider === 'claude');
+  const runningTaskIds = [
+    ...runningAgents.map((a) => a.agentId ?? agentIds.get(a.id) ?? matchSub(a)?.agentId),
+    ...runningSubs.map(({ run }) => run.agentId),
+    ...shellsVivos.map((s2) => s2.taskId),
+  ].filter((id): id is string => !!id);
+  const runningTaskKey = runningTaskIds.join(' ');
+
+  const endStop = useCallback((taskId: string) => {
+    clearTimeout(stopTimers.current.get(taskId));
+    stopTimers.current.delete(taskId);
+    setStopping((current) => {
+      if (!current.has(taskId)) return current;
+      const next = new Set(current);
+      next.delete(taskId);
+      return next;
+    });
+  }, []);
+  // A tarefa saiu da lista: a parada se confirmou e a linha some com ela.
+  useEffect(() => {
+    const live = new Set(runningTaskKey.split(' '));
+    for (const taskId of [...stopTimers.current.keys()]) if (!live.has(taskId)) endStop(taskId);
+  }, [runningTaskKey, endStop]);
+  useEffect(() => () => {
+    for (const timer of stopTimers.current.values()) clearTimeout(timer);
+    stopTimers.current.clear();
+  }, [listKey]);
+
+  async function stop(taskId: string) {
+    if (!server || stopTimers.current.has(taskId)) return;
+    haptic.selection();
+    setStopping((current) => new Set(current).add(taskId));
+    stopTimers.current.set(taskId, setTimeout(() => {
+      endStop(taskId);
+      toast.erro(m.atividade_parar_sem_confirmacao());
+    }, STOP_CONFIRM_MS));
+    try {
+      await stopTask(name, taskId, server);
+    } catch (error) {
+      if (!stopTimers.current.has(taskId)) return;
+      endStop(taskId);
+      toast.erro(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  function taskRow(key: string, icon: IconName, title: string, since: number | null, onPress?: () => void, taskId?: string) {
+    const parando = !!taskId && stopping.has(taskId);
+    return (
+      <View key={key} style={styles.taskRow}>
+        <Pressable onPress={onPress} disabled={!onPress} style={styles.taskOpen}
+          accessibilityRole={onPress ? 'button' : undefined} accessibilityLabel={title}>
+          <Icon name={icon} size={16} color={theme.tokens.text.muted} />
+          <Text style={[styles.taskName, { color: theme.tokens.text.primary }]} numberOfLines={1}>{title}</Text>
+          {parando ? <Text style={[styles.taskTime, { color: theme.tokens.text.muted }]}>{m.atividade_parando()}</Text>
+            : since !== null && Number.isFinite(since) ? <Text style={[styles.taskTime, { color: theme.tokens.text.muted }]}>{formatElapsed(agora - since)}</Text> : null}
+        </Pressable>
+        {canStop && taskId && !parando ? (
+          <Pressable onPress={() => void stop(taskId)} style={styles.stop} accessibilityRole="button"
+            accessibilityLabel={`${m.atividade_desktop_parar()}: ${title}`}>
+            <View style={[styles.stopGlyph, { backgroundColor: theme.tokens.text.primary }]} />
+          </Pressable>
+        ) : null}
+      </View>
+    );
+  }
+
+  const finishedList = (
+    <>
+      {recentSubs.map(renderSub)}
+      {olderSubs.length > 0 ? (
+        <>
+          <Pressable onPress={() => setOlderOpen((value) => !value)} accessibilityRole="button" accessibilityState={{ expanded: olderOpen }} style={styles.olderToggle}>
+            <Icon name={olderOpen ? 'ChevronDown' : 'ChevronRight'} size={18} color={theme.tokens.text.muted} />
+            <Text style={[styles.label, { color: theme.tokens.text.muted }]}>{m.atividade_grupo_antigos({ n: olderSubs.length })}</Text>
+          </Pressable>
+          {olderOpen ? olderSubs.map(renderSub) : null}
+        </>
+      ) : null}
+    </>
+  );
+
   async function openWorkflow(rid: string) {
     const g = ++genWf.current;
     setRunId(rid);
@@ -372,7 +465,28 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
               </View>
             ) : null}
 
-            {runningAgents.length > 0 || runningSubs.length > 0 ? (
+            {desktop && (runningCount > 0 || shellsVivos.length > 0 || finishedSubs.length > 0) ? (
+              <View style={styles.section}>
+                <Text style={[styles.label, { color: theme.tokens.text.muted }]}>{m.atividade_desktop_titulo()}</Text>
+                {runningAgents.map((a) => {
+                  const sub = matchSub(a);
+                  return taskRow(a.id, 'Diamond', a.description, sub ? Date.parse(sub.startedAt) / 1000 : null, sub ? () => openSubagent(sub, a.description) : undefined,
+                    a.agentId ?? agentIds.get(a.id) ?? sub?.agentId);
+                })}
+                {runningSubs.map(({ run }) => taskRow(run.agentId, 'Diamond', tituloDoSub(run), Date.parse(run.startedAt) / 1000, () => abrirDoDisco(run), run.agentId))}
+                {shellsVivos.map((s2) => taskRow(s2.id, 'Terminal', s2.description || s2.rotulo, s2.ts ?? null, undefined, s2.taskId))}
+                {finishedSubs.length > 0 ? (
+                  <Pressable onPress={() => setFinishedOpen((value) => !value)} style={styles.taskOpen} accessibilityRole="button"
+                    accessibilityLabel={m.atividade_desktop_finalizadas({ n: finishedSubs.length })} accessibilityState={{ expanded: finishedOpen }}>
+                    <Icon name="Diamond" size={16} color={theme.tokens.text.muted} />
+                    <Text style={[styles.taskName, { color: theme.tokens.text.secondary }]}>{m.atividade_desktop_finalizadas({ n: finishedSubs.length })}</Text>
+                  </Pressable>
+                ) : null}
+                {finishedOpen ? finishedList : null}
+              </View>
+            ) : null}
+
+            {!desktop && (runningAgents.length > 0 || runningSubs.length > 0) ? (
               <View style={styles.section}>
                 <Text style={[styles.label, { color: theme.tokens.text.muted }]}>{m.atividade_grupo_rodando({ n: runningCount })}</Text>
                 {runningAgents.map((a) => {
@@ -420,25 +534,16 @@ export function ActivityPanel({ serverId, name, focused, onBackRequest, onClose 
               </View>
             ) : null}
 
-            {finishedSubs.length > 0 ? (
+            {!desktop && finishedSubs.length > 0 ? (
               <View style={styles.section}>
                 <Text style={[styles.label, { color: theme.tokens.text.muted }]}>{m.atividade_grupo_terminados({ n: finishedSubs.length })}</Text>
-                {recentSubs.map(renderSub)}
-                {olderSubs.length > 0 ? (
-                  <>
-                    <Pressable onPress={() => setOlderOpen((value) => !value)} accessibilityRole="button" accessibilityState={{ expanded: olderOpen }} style={styles.olderToggle}>
-                      <Icon name={olderOpen ? 'ChevronDown' : 'ChevronRight'} size={18} color={theme.tokens.text.muted} />
-                      <Text style={[styles.label, { color: theme.tokens.text.muted }]}>{m.atividade_grupo_antigos({ n: olderSubs.length })}</Text>
-                    </Pressable>
-                    {olderOpen ? olderSubs.map(renderSub) : null}
-                  </>
-                ) : null}
+                {finishedList}
               </View>
             ) : null}
 
             {/* Shells de fundo que ainda rodam: o terminal diz "N shells still running", aqui diz qual.
                 Sem toque: a saída de cada um volta pro chat quando ele termina. */}
-            {shellsVivos.length > 0 ? (
+            {!desktop && shellsVivos.length > 0 ? (
               <View style={styles.section}>
                 <Text style={[styles.label, { color: theme.tokens.text.muted }]}>
                   {m.atividade_shells()} <Text style={{ color: theme.tokens.accent.base }}>{m.atividade_shells_rodando({ n: shellsVivos.length })}</Text>
@@ -553,5 +658,11 @@ const styles = StyleSheet.create((theme) => ({
   agentNow: { fontFamily: theme.base.fontMono, fontSize: theme.base.text.xxxs },
   shellCmd: { fontFamily: theme.base.fontMono, fontSize: theme.base.text.xs },
   concluido: { opacity: 0.6 },
+  taskRow: { flexDirection: 'row', alignItems: 'center', gap: theme.base.space[1] },
+  taskOpen: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: theme.base.space[2], minHeight: 44 },
+  stop: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  stopGlyph: { width: 10, height: 10, borderRadius: theme.base.space[0.5] },
+  taskName: { flex: 1, minWidth: 0, fontSize: theme.base.text.sm },
+  taskTime: { fontSize: theme.base.text.xs, fontVariant: ['tabular-nums'] },
   error: { fontSize: theme.base.text.sm, textAlign: 'center', padding: theme.base.space[4] },
 }));
