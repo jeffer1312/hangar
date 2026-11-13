@@ -517,13 +517,6 @@ async fn send_bound_target(st:&AppState,name:&str,key:&str,conversation:Option<&
 }
 
 async fn queue_bound_input(st:&AppState,runtime:&crate::runtime::gateway::RuntimeRegistry,name:&str,key:&str,conversation:Option<&str>,text:&str,opening:bool)->(StatusCode,Value) {
-    if !opening {
-        // Mesmo caminho do `/input`: o acordar segura a porta, e a fila da adormecida não espera por ela.
-        if let Some(changed)=conversation_changed(st,name,conversation).await {return changed;}
-        let current=match runtime.asleep(name).await {Some(mark)=>Some(mark.key),None=>runtime.writable(name).await.map(|target|target.key)};
-        if current.as_deref()!=Some(key) {return bound_life_changed();}
-        return queue_while_asleep(st,name,key,text).await;
-    }
     let held=match runtime.ingress().enter(name,st.write_gate_wait).await {
         Ok(held)=>held,
         Err(_)=>return (StatusCode::CONFLICT,busy_body()),
@@ -535,6 +528,14 @@ async fn queue_bound_input(st:&AppState,runtime:&crate::runtime::gateway::Runtim
         return result;
     }
     if let Some(changed)=conversation_changed(st,name,conversation).await {drop(held);return changed;}
+    if !opening {
+        let current=runtime.asleep(name).await.map(|mark|mark.key);
+        if current.as_deref()!=Some(key) {drop(held);return bound_life_changed();}
+        // O mesmo enfileiramento do `/input`: recusa comando de barra e cai na fila da vida nova que já pegou a dela.
+        let result=queue_while_asleep(st,name,key,text).await;
+        drop(held);
+        return result;
+    }
     let other=runtime.other_opening_key(name).await;
     let current=match &other {Some(key)=>Some(key.clone()),None=>runtime.codex_opening(name).await.and_then(Result::ok)};
     if current.as_deref()!=Some(key) {drop(held);return bound_life_changed();}
