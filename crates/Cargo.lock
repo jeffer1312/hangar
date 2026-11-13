@@ -1759,6 +1759,7 @@ dependencies = [
  "hangar-api",
  "hangar-core",
  "hangar-transcript",
+ "regex",
  "serde",
  "serde_json",
  "sha1_smol",
