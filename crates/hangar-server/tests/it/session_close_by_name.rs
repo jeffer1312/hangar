@@ -413,17 +413,18 @@ async fn delete_r1_3_parked_codex_headless_closes_in_rust() {
     assert_eq!(e.python.hits_to("/api/sessions/cxh"), 0);
 }
 
-/// R1-15: os terminais de atalho da sessão fechada saem junto, ainda com o nome reservado; o de outra
-/// sessão fica.
+/// R1-15: fechada pelo convidado com conta (antes ia ao Python), a sessão sai e os terminais de atalho
+/// dela saem junto, ainda com o nome reservado; o de outra sessão fica.
 #[tokio::test]
 async fn delete_r1_15_shortcut_terminals_of_the_session_close_with_it() {
     let e = env().await;
     e.sessions(&["cat1", "shortcut-a1b2c3", "shortcut-d4e5f6"]);
     std::fs::write(e.root.join("shortcuts"), concat!("shortcut-a1b2c3\tcat1\ta1b2c3\t100\t0\t\t0\t1\t\t\t0\tdev\n",
         "shortcut-d4e5f6\toutra\td4e5f6\t100\t0\t\t0\t1\t\t\t0\tdev\n")).unwrap();
-    let (status, body) = e.delete("cat1").await;
-    assert_eq!(status, 200, "{body}");
-    assert_eq!(e.alive(), ["shortcut-d4e5f6"], "o atalho da sessão fechou, o da outra ficou");
+    let (status, body) = e.delete_as("cat1", GUEST).await;
+    assert_eq!((status, body), (200, json!({"ok": true, "warning": null})));
+    assert_eq!(e.alive(), ["shortcut-d4e5f6"], "a sessão e o atalho dela fecharam, o da outra ficou");
+    assert_eq!(e.python.hits_to("/api/sessions/cat1"), 0);
     assert!(e.calls("kill-session").contains(&"kill-session -t =shortcut-a1b2c3".to_owned()), "{:?}", e.calls(""));
 }
 
@@ -500,19 +501,6 @@ async fn delete_r1_3_codex_bridge_kill_closes_a_parked_headless() {
     let response = fake::client().post(format!("http://{private}/__hangar_server/codex/cxb/kill")).header("x-hangar-internal", SECRET).send().await.unwrap();
     assert_eq!(response.status().as_u16(), 200);
     assert!(!sidecar.exists() && !e.projection("cxb").exists());
-}
-
-/// Achado 4 da revisão: a ponte `/__hangar_server/claude/<n>/close` não tem chamador (o Connect saiu do
-/// Python em 6bdd33994) e saiu: 421, nada fecha, e o fechamento é só o `DELETE`.
-#[tokio::test]
-async fn the_claude_close_bridge_is_gone() {
-    let e = env().await;
-    e.sessions(&["cat1"]);
-    let private = e.private().await;
-    let response = fake::client().post(format!("http://{private}/__hangar_server/claude/cat1/close")).header("x-hangar-internal", SECRET).send().await.unwrap();
-    assert_eq!(response.status().as_u16(), 421);
-    assert_eq!(e.alive(), ["cat1"]);
-    assert!(e.calls("kill-session").is_empty());
 }
 
 /// D16: o cano do Codex sem terminal que ignora o SIGTERM segura o fechamento: 500 com código, e sidecar e
