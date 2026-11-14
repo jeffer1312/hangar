@@ -5664,6 +5664,7 @@
   "native_news_review_sample_comment": "O upload roda em série; com muitas faturas o pedido passa do tempo limite. Envie em paralelo, com um limite.",
   "native_review_title": "Revisões",
   "native_review_tab": "Revisão",
+  "native_review_group_repositories": "Repositórios do grupo",
   "native_review_search": "Filtrar por título, repositório ou branch",
   "native_review_refresh": "Atualizar",
   "native_review_all": "Todas",

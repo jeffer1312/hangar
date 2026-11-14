@@ -5664,6 +5664,7 @@
   "native_news_review_sample_comment": "The upload runs one at a time; with many invoices the request times out. Send them in parallel, with a limit.",
   "native_review_title": "Reviews",
   "native_review_tab": "Review",
+  "native_review_group_repositories": "Group repositories",
   "native_review_search": "Filter by title, repository or branch",
   "native_review_refresh": "Refresh",
   "native_review_all": "All",

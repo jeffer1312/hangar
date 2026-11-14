@@ -290,6 +290,59 @@ pub(super) type SendFn = Rc<dyn Fn(SendThreads, &mut Window, &mut App)>;
 #[derive(Clone)]
 pub(super) enum Target { Branch(String), Item { host: String, repo: String, number: u64 } }
 
+/// Mantém o grupo canônico, a máquina da pasta e a sessão aberta primeiro; a mesma pasta só precisa de uma revisão.
+fn review_repositories(origin: &super::sidebar::Target, rows: &[super::grouping::Row<'_>], ids: &HashMap<String, String>) -> Vec<(super::sidebar::Target, String)> {
+    use super::grouping::{Member, global_groups};
+    use super::sidebar::Target;
+    let members = global_groups(rows, ids).into_iter().find(|group| group.members.iter().any(|member| {
+        matches!(member, Member::Here { server, name } if server == &origin.server && name == &origin.name)
+    })).map(|group| group.members).unwrap_or_default();
+    let mut repositories = Vec::new();
+    for row in rows.iter().filter(|row| row.server == origin.server && row.session.name == origin.name)
+        .chain(rows.iter().filter(|row| members.iter().any(|member| {
+            matches!(member, Member::Here { server, name } if server == row.server && name == &row.session.name)
+        }))) {
+        let Some(dir) = row.session.git_dir().filter(|dir| !dir.is_empty()) else { continue };
+        if !repositories.iter().any(|(target, path): &(Target, String)| target.server == row.server && path == dir) {
+            repositories.push((Target::new(row.server, &row.session.name), dir.to_owned()));
+        }
+    }
+    repositories
+}
+
+/// Cada repositório conserva seu detalhe e seus rascunhos; só o escolhido faz a primeira leitura.
+pub(super) struct BranchReviews {
+    branches: Vec<(String, Entity<ReviewView>)>,
+    selected: usize,
+    origin: Option<usize>,
+}
+
+impl BranchReviews {
+    pub(super) fn show(&mut self, cx: &mut Context<Self>) {
+        if let Some((_, view)) = self.branches.get(self.selected) { view.update(cx, |view, cx| view.show(cx)); }
+    }
+
+    pub(super) fn branch_changed(&mut self, cx: &mut Context<Self>) {
+        // O seletor de branch do Git altera apenas a pasta da sessão que abriu o diálogo.
+        if let Some((_, view)) = self.origin.and_then(|index| self.branches.get(index)) { view.update(cx, |view, cx| view.branch_changed(cx)); }
+    }
+}
+
+impl Render for BranchReviews {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().flex().flex_col().gap_3()
+            .when(self.branches.len() > 1, |el| el.child(div().flex_shrink_0().flex().flex_col().gap_1()
+                .child(div().text_xs().text_color(theme::muted()).child(tr("review_group_repositories")))
+                .child(div().id("review-repositories").max_h(px(96.)).overflow_y_scroll().flex().flex_wrap().gap_1()
+                    .children(self.branches.iter().enumerate().map(|(index, (label, _))| {
+                        Button::new(SharedString::from(format!("review-repository-{index}"))).outline().small()
+                            .label(label.clone()).toggled(self.selected == index)
+                            .on_click(cx.listener(move |this, _, _, cx| { this.selected = index; this.show(cx); cx.notify(); }))
+                    })))))
+            .child(div().flex_1().min_h_0().child(self.branches[self.selected].1.clone()))
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 enum Sub { #[default] Threads, Files, Activity }
 
@@ -924,13 +977,31 @@ impl Hangar {
     }
 
     /// A vista da revisão da branch de uma sessão, para a aba do git.
-    pub(super) fn branch_review_view(&mut self, cx: &mut Context<Self>) -> Option<Entity<ReviewView>> {
-        let (api, session) = (self.session_api()?, self.selected.clone()?);
-        let dir = session.git_dir()?.to_owned();
-        let server = super::servers::norm(&api.identity());
+    pub(super) fn branch_review_view(&mut self, cx: &mut Context<Self>) -> Option<Entity<BranchReviews>> {
+        let origin = self.selected_target()?;
+        let session = self.selected.as_ref()?;
+        let machines = self.group_machines();
+        let mut rows = vec![super::grouping::Row { server: &origin.server, session, invite: self.invite_target(&origin) }];
+        for server in &machines {
+            for session in self.sessions_of(server) {
+                if server != &origin.server || session.name != origin.name {
+                    rows.push(super::grouping::Row { server, session, invite: false });
+                }
+            }
+        }
+        let repositories = review_repositories(&origin, &rows, &self.identities());
         let send = self.review_send_fn(cx);
-        let changed = self.review_changed_fn(Some((server.clone(), dir.clone())), cx);
-        Some(cx.new(|_| ReviewView::new(api, server, self.runtime.clone(), Target::Branch(dir), send, changed)))
+        let mut branches = Vec::new();
+        let mut origin_index = None;
+        for (target, dir) in repositories {
+            let Some(api) = self.machine_api(&target.server) else { continue };
+            if target == origin { origin_index = Some(branches.len()); }
+            let label = if target.server == origin.server { target.name.clone() } else { format!("{} · {}", target.name, self.machine_label(&target.server, cx)) };
+            let changed = self.review_changed_fn(Some((target.server.clone(), dir.clone())), cx);
+            let view = cx.new(|_| ReviewView::new(api, target.server, self.runtime.clone(), Target::Branch(dir), send.clone(), changed));
+            branches.push((label, view));
+        }
+        if branches.is_empty() { None } else { Some(cx.new(|_| BranchReviews { branches, selected: 0, origin: origin_index })) }
     }
 
     /// A branch da pasta trocou: o chip dela é pedido de novo no próximo desenho, sem mostrar o da anterior.
@@ -1097,6 +1168,33 @@ impl Hangar {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conversation_repositories_follow_the_group_across_machines() {
+        use super::super::grouping::Row;
+        use super::super::sidebar::Target;
+        let session = |name: &str, dir: &str, gid: &str, owner: &str| SessionInfo {
+            name: name.into(), cwd: Some("/checkout".into()), git_cwd: Some(dir.into()),
+            pair_gid: Some(gid.into()), pair_owner: Some(owner.into()), ..Default::default()
+        };
+        let coordinator = session("coordinator", "/workspace/server", "work", "one");
+        let duplicate = session("server", "/workspace/server", "work", "one");
+        let client = session("client", "/workspace/client", "work", "one");
+        let remote = session("client", "/workspace/client", "work", "one");
+        let unrelated = session("unrelated", "/workspace/other", "work", "two");
+        let rows = [Row { server: "a", session: &coordinator, invite: false }, Row { server: "a", session: &duplicate, invite: false },
+            Row { server: "a", session: &client, invite: false }, Row { server: "b", session: &remote, invite: false },
+            Row { server: "b", session: &unrelated, invite: false }];
+        let ids = HashMap::from([("a".into(), "one".into()), ("b".into(), "two".into())]);
+        assert_eq!(review_repositories(&Target::new("a", "coordinator"), &rows, &ids), vec![
+            (Target::new("a", "coordinator"), "/workspace/server".into()),
+            (Target::new("a", "client"), "/workspace/client".into()),
+            (Target::new("b", "client"), "/workspace/client".into()),
+        ]);
+        let standalone = session("solo", "/workspace/solo", "", "");
+        assert_eq!(review_repositories(&Target::new("a", "solo"), &[Row { server: "a", session: &standalone, invite: false }], &ids),
+            vec![(Target::new("a", "solo"), "/workspace/solo".into())]);
+    }
     // O glob traz o `test` da gpui, que colide com o atributo padrão; o nome explícito vence o glob.
     use core::prelude::v1::test;
 
