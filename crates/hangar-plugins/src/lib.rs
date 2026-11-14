@@ -6,6 +6,7 @@ mod details;
 mod disk;
 mod model;
 mod ops;
+pub mod repair;
 
 pub use cli::{CliError, CliOutput, CliRunner};
 pub use disk::{AutoUpdateError, apply_auto_update, read_state};

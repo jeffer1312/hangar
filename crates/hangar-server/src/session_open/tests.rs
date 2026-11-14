@@ -2477,6 +2477,8 @@ fn the_terminal_command_stops_a_stuck_reconciliation_at_the_limit() {
         let resolved = runtime.block_on(contract::resolve_request(&scenario, &root, env, request)).unwrap();
         runtime.block_on(open::open_session(&host, resolved, &OpenCaller::Owner))
     };
+    // O comando sai depois do host, como no `cli::run`.
+    drop(host);
     assert!(!released.load(std::sync::atomic::Ordering::SeqCst), "o comando esperou a trava presa para terminar");
     let error = opened.err().expect("a reconciliação presa devia recusar");
     assert_eq!((error.status, error.code), (500, Some("erro_conta_reconciliacao_falhou")), "{:?}", error.body());

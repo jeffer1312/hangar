@@ -3,6 +3,8 @@
 //! o servidor a adota quando voltar, pela varredura de sempre.
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
@@ -26,7 +28,7 @@ pub fn dotenv(text: &str) -> BTreeMap<String, String> {
 }
 
 pub struct LocalHost { home: PathBuf, env: BTreeMap<String, String>, terminal: TerminalEnv, mux: ProcessMux, bridge: Option<PluginBridge>,
-    reconcile_limit: Duration }
+    reconcile_limit: Duration, diary_writes: Mutex<Vec<JoinHandle<()>>> }
 
 impl LocalHost {
     /// `env`: o ambiente que o servidor teria; `bridge`: a porta e o token do `.env` dele, para a
@@ -34,11 +36,24 @@ impl LocalHost {
     pub fn new(env: BTreeMap<String, String>, bridge: Option<PluginBridge>) -> Self {
         let accounts = crate::accounts::environment::AccountEnvironment::from_map(env.clone());
         let terminal = TerminalEnv::local(&accounts.home, &env);
-        Self { home: accounts.home, env, terminal, mux: ProcessMux::default(), bridge, reconcile_limit: super::open::RECONCILE_LIMIT }
+        Self { home: accounts.home, env, terminal, mux: ProcessMux::default(), bridge, reconcile_limit: super::open::RECONCILE_LIMIT,
+            diary_writes: Mutex::default() }
     }
 
     #[cfg(test)]
-    pub(crate) fn with_reconcile_limit(self, reconcile_limit: Duration) -> Self { Self { reconcile_limit, ..self } }
+    pub(crate) fn with_reconcile_limit(mut self, reconcile_limit: Duration) -> Self {
+        self.reconcile_limit = reconcile_limit;
+        self
+    }
+}
+
+/// O comando sai depois do host: as gravações do diário terminam antes. O `spawn_blocking` não
+/// servia, porque o runtime cancela a tarefa de bloqueio que ainda não começou quando ele cai.
+impl Drop for LocalHost {
+    fn drop(&mut self) {
+        let writes = std::mem::take(self.diary_writes.get_mut().unwrap_or_else(PoisonError::into_inner));
+        for write in writes { let _ = write.join(); }
+    }
 }
 
 impl OpenHost for LocalHost {
@@ -82,11 +97,12 @@ impl OpenHost for LocalHost {
         })
     }
     fn diary(&self, _events: Vec<Value>) {}
-    /// No arquivo dos comandos de conta, fora do runtime: a trava do diário pode esperar até 5 s. O runtime
-    /// espera a tarefa ao terminar, então o evento chega ao disco antes de o comando sair.
+    /// No arquivo dos comandos de conta, numa thread própria: a trava do diário pode esperar até 5 s. O
+    /// `Drop` espera a thread, então o evento chega ao disco antes de o comando sair.
     fn account_diary(&self, events: Vec<Value>) {
         let env = crate::accounts::environment::AccountEnvironment::from_map(self.env.clone());
-        tokio::task::spawn_blocking(move || crate::accounts::claude_config::write_cli_diary(&env, &events));
+        let write = std::thread::spawn(move || crate::accounts::claude_config::write_cli_diary(&env, &events));
+        self.diary_writes.lock().unwrap_or_else(PoisonError::into_inner).push(write);
     }
     fn reconcile_limit(&self) -> Duration { self.reconcile_limit }
     fn new_session_id(&self) -> String { super::open::uuid4(&crate::mods::state::random_hex(16)) }
