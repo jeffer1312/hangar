@@ -439,3 +439,9 @@ mod native_setup_cli;
 mod scopes_native;
 
 mod jev_startup;
+
+mod jev_page;
+
+mod cliproxy_keys;
+
+mod shortcut_transfer_gaps;
