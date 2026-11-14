@@ -207,7 +207,10 @@ async fn enroll(service: &Service, id: &str, link: &str, machines: &[AccountMach
     // dono. O endereço e as duas credenciais já estão à mão: a entrada pode nem existir mais.
     revoke_device(id, Some((base, owner)), Some((url, token.to_owned())), device).await;
     // Entrada trocada não é falha desta máquina: sem a espera, o próximo evento já emite para o endereço novo.
-    if failure.0 == "peers_entry_changed" { return Ok(Enrolled::Done); }
+    if failure.0 == "peers_entry_changed" {
+        tracing::info!(code = "connect.peer_route_entry_changed", peer = id, "a entrada mudou durante a emissão: o aparelho emitido foi revogado e o próximo evento emite para o endereço novo");
+        return Ok(Enrolled::Done);
+    }
     Err(failure)
 }
 

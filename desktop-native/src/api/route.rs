@@ -403,7 +403,9 @@ async fn announced(api: &Api) -> Result<Option<String>, ()> {
     let r = api.client.get(url).timeout(SAVED_TIMEOUT).send().await.map_err(drop)?;
     if r.status().is_server_error() { return Err(()); }
     if !r.status().is_success() { return Ok(None); }
-    Ok(r.json::<Value>().await.ok().and_then(|body| connect_announced(body.get("connect")?.as_str()?)))
+    // Corpo cortado é rede, não resposta; JSON ilegível é resposta sem Connect.
+    let body = r.bytes().await.map_err(drop)?;
+    Ok(serde_json::from_slice::<Value>(&body).ok().and_then(|body| connect_announced(body.get("connect")?.as_str()?)))
 }
 
 fn connect_announced(raw: &str) -> Option<String> {
